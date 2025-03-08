@@ -322,11 +322,19 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         std::lock_guard<std::mutex> lock(input_method_mutex);
         if (input_method)
         {
-            // 기본 마우스 이동
-            input_method->move(static_cast<int>(movement[0]), static_cast<int>(movement[1]));
+            // easynorecoil이 켜져 있으면 y축 방향(아래쪽)으로 추가 이동
+            int moveX = static_cast<int>(movement[0]);
+            int moveY = static_cast<int>(movement[1]);
             
-            // 에임봇 사용 시 추가 반동 제어는 제거
-            // 허공과 적을 쏠 때 일관된 반동 제어를 위해 handleEasyNoRecoil만 사용
+            if (config.easynorecoil && shooting.load() && zooming.load())
+            {
+                // Add recoil compensation to vertical movement
+                int recoil_compensation = static_cast<int>(config.easynorecoilstrength);
+                moveY += recoil_compensation;
+            }
+            
+            // 기본 마우스 이동 적용
+            input_method->move(moveX, moveY);
         }
     }
 
