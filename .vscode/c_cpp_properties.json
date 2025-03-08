@@ -1,0 +1,29 @@
+{
+    "configurations": [
+        {
+            "name": "Win32",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.3/include",
+                "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.2/include",
+                "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.1/include",
+                "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.0/include",
+                "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.8/include",
+                "C:/opencv/build/include",
+                "C:/opencv-cuda/build/include"
+            ],
+            "defines": [
+                "_DEBUG",
+                "UNICODE",
+                "_UNICODE",
+                "HAVE_CUDA"
+            ],
+            "windowsSdkVersion": "10.0.22621.0",
+            "compilerPath": "cl.exe",
+            "cStandard": "c17",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "windows-msvc-x64"
+        }
+    ],
+    "version": 4
+} 
