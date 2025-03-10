@@ -338,19 +338,13 @@ void MouseThread::moveMouse(const AimbotTarget &target) {
     double center_x_local = center_x;
     double center_y_local = center_y;
     
-    // 대상 위치 가져오기
-    double target_x = target.x;
-    double target_y = target.y;
-    
+    // 대상 위치 가져오기 - 바운딩 박스의 중앙 좌표로 계산
+    double target_x = target.x + target.w / 2; // 중앙 X 좌표 계산
+    double target_y = target.y + target.h / 2; // 중앙 Y 좌표 계산
+        
     // 화면 중앙에서 타겟까지의 오차 계산
     double error_x = target_x - center_x_local;
     double error_y = target_y - center_y_local;
-    
-    // 대상이 이미 중앙에 있는 경우 조기 종료 (성능 최적화)
-    const double dead_zone = config.dead_zone; // Config에서 직접 데드존 값 읽기
-    if (std::abs(error_x) < dead_zone && std::abs(error_y) < dead_zone) {
-        return;
-    }
     
     // 첫 번째 탐지인 경우 예측 초기화
     if (!target_detected.load()) {
@@ -389,11 +383,6 @@ void MouseThread::moveMouse(const AimbotTarget &target) {
         dx /= bScope_multiplier;
         dy /= bScope_multiplier;
     }
-    
-    // 오버슈트 방지를 위한 이동량 제한
-    const double max_move = config.max_movement; // Config에서 직접 최대 이동량 읽기
-    dx = std::clamp(dx, -max_move, max_move);
-    dy = std::clamp(dy, -max_move, max_move);
     
     // 정수로 반올림하여 마우스 오차 최소화
     int dx_int = static_cast<int>(std::round(dx));
