@@ -73,8 +73,6 @@ bool Config::loadConfig(const std::string& filename)
         easynorecoilstrength = 0.0f;
         norecoil_step = 5.0f;
         input_method = "WIN32";
-        dead_zone = 2.0f;
-        max_movement = 20.0f;
 
         // PID Controller
         kp = 0.5f;
@@ -206,8 +204,6 @@ bool Config::loadConfig(const std::string& filename)
     easynorecoilstrength = (float)get_double("easynorecoilstrength", 0.0);
     norecoil_step = (float)get_double("norecoil_step", 5.0);
     input_method = get_string("input_method", "WIN32");
-    dead_zone = (float)get_double("dead_zone", 2.0);
-    max_movement = (float)get_double("max_movement", 20.0);
 
     // PID Controller
     kp = (float)get_double("kp", 0.5);
@@ -326,8 +322,6 @@ bool Config::saveConfig(const std::string& filename)
         << std::fixed << std::setprecision(1)
         << "easynorecoilstrength = " << easynorecoilstrength << "\n"
         << "norecoil_step = " << norecoil_step << "\n"
-        << "dead_zone = " << dead_zone << "\n"
-        << "max_movement = " << max_movement << "\n"
         << "# WIN32, GHUB, ARDUINO\n"
         << "input_method = " << input_method << "\n\n"
         << "# PID Controller\n"
