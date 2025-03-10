@@ -17,6 +17,26 @@ void draw_mouse()
     ImGui::SliderFloat("Sensitivity", &config.sensitivity, 0.1f, 10.0f, "%.1f");
     ImGui::SliderInt("FOV X", &config.fovX, 60, 120);
     ImGui::SliderInt("FOV Y", &config.fovY, 40, 100);
+    
+    // 데드존 설정 추가
+    if (ImGui::SliderFloat("Dead Zone", &config.dead_zone, 0.0f, 10.0f, "%.1f"))
+    {
+        config.saveConfig();
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Mouse won't move if the target is within this pixel distance from center");
+    }
+    
+    // 최대 이동량 설정 추가
+    if (ImGui::SliderFloat("Max Movement", &config.max_movement, 5.0f, 50.0f, "%.1f"))
+    {
+        config.saveConfig();
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Maximum pixels the mouse can move in a single frame (prevents overshooting)");
+    }
 
     ImGui::Separator();
     ImGui::Text("PID Controller Settings");

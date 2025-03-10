@@ -107,6 +107,7 @@ void initializeInputMethod()
     globalMouseThread->setInputMethod(std::move(input_method));
 }
 
+// 노리코일 처리를 위한 함수 복원
 void handleEasyNoRecoil(MouseThread &mouseThread)
 {
     if (config.easynorecoil && shooting.load() && zooming.load())
@@ -118,30 +119,57 @@ void handleEasyNoRecoil(MouseThread &mouseThread)
 void mouseThreadFunction(MouseThread &mouseThread)
 {
     int lastDetectionVersion = -1;
-
-    std::chrono::milliseconds timeout(30);
-
+    
+    // 스레드 대기 시간 최적화 (ms)
+    constexpr auto idle_timeout = std::chrono::milliseconds(30);
+    constexpr auto active_timeout = std::chrono::milliseconds(5);
+    
+    // 활성 상태 트래킹
+    bool is_active = false;
+    auto last_active_time = std::chrono::steady_clock::now();
+    
     while (!shouldExit)
     {
+        // 적절한 대기 시간 선택 (활성/비활성)
+        auto timeout = is_active ? active_timeout : idle_timeout;
+        
         std::vector<cv::Rect> boxes;
         std::vector<int> classes;
-
-        std::unique_lock<std::mutex> lock(detector.detectionMutex);
-
-        detector.detectionCV.wait_for(lock, timeout, [&]()
-                                      { return detector.detectionVersion > lastDetectionVersion || shouldExit; });
-
-        if (shouldExit)
-            break;
-
-        if (detector.detectionVersion <= lastDetectionVersion)
-            continue;
-
-        lastDetectionVersion = detector.detectionVersion;
-
-        boxes = detector.detectedBoxes;
-        classes = detector.detectedClasses;
-
+        
+        {
+            // 탐지 결과에 대한 락 (최소화)
+            std::unique_lock<std::mutex> lock(detector.detectionMutex);
+            
+            // 새 프레임이 준비되거나 종료 신호가 올 때까지 대기
+            detector.detectionCV.wait_for(lock, timeout, [&]() {
+                return detector.detectionVersion > lastDetectionVersion || shouldExit;
+            });
+            
+            // 종료 검사
+            if (shouldExit)
+                break;
+                
+            // 새 프레임이 없으면 계속
+            if (detector.detectionVersion <= lastDetectionVersion) {
+                // 비활성 상태 체크
+                if (is_active && std::chrono::steady_clock::now() - last_active_time > std::chrono::milliseconds(300)) {
+                    is_active = false;
+                }
+                
+                // 반동 제어는 계속 적용
+                handleEasyNoRecoil(mouseThread);
+                
+                continue;
+            }
+            
+            // 새 탐지 프레임 처리
+            lastDetectionVersion = detector.detectionVersion;
+            
+            boxes = detector.detectedBoxes;
+            classes = detector.detectedClasses;
+        }
+        
+        // 모드 변경 감지 시 설정 업데이트
         if (input_method_changed.load())
         {
             initializeInputMethod();
@@ -169,14 +197,18 @@ void mouseThreadFunction(MouseThread &mouseThread)
             detection_resolution_changed.store(false);
         }
 
+        // 타겟 찾기
         AimbotTarget *target = sortTargets(boxes, classes, config.detection_resolution, config.detection_resolution, config.disable_headshot);
-
-        if (aiming)
+        
+        if (aiming.load())
         {
             if (target)
             {
+                is_active = true;
+                last_active_time = std::chrono::steady_clock::now();
+                
                 mouseThread.moveMouse(*target);
-
+                
                 if (config.auto_shoot)
                 {
                     mouseThread.pressMouse(*target);
@@ -197,9 +229,11 @@ void mouseThreadFunction(MouseThread &mouseThread)
                 mouseThread.releaseMouse();
             }
         }
-
+        
+        // 반동 제어 처리
         handleEasyNoRecoil(mouseThread);
-
+        
+        // 예측 초기화 검사
         mouseThread.checkAndResetPredictions();
         delete target;
     }

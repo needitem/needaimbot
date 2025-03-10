@@ -9,6 +9,7 @@
 #include <shared_mutex>
 #include <memory>
 #include <functional>
+#include <chrono>  // 시간 측정을 위한 헤더 추가
 
 #include "AimbotTarget.h"
 #include "SerialConnection.h"
@@ -44,7 +45,8 @@ private:
     double kd;  // 미분 게인: 오차 변화율에 대한 반응 (큰 값 = 빠른 정지, 작은 값 = 부드러운 감속)
     Eigen::Vector2d prev_error;  // 이전 오차 (미분항 계산용)
     Eigen::Vector2d integral;    // 누적 오차 (적분항 계산용)
-    double last_time;  // 이전 계산 시간 (dt 계산용)
+    Eigen::Vector2d derivative;  // 변화율 저장 (미분항)
+    std::chrono::steady_clock::time_point last_time_point;  // 이전 계산 시간 (dt 계산용)
 
 public:
     PIDController2D(double kp, double ki, double kd);
