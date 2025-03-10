@@ -24,9 +24,6 @@ extern std::atomic<bool> detectionPaused;
 
 extern MouseThread* globalMouseThread;
 
-const float OFFSET_STEP = 0.01f;
-const float NORECOIL_STEP = 5.0f;
-
 // Arrow key vectors
 const std::vector<std::string> upArrowKeys = { "UpArrow" };
 const std::vector<std::string> downArrowKeys = { "DownArrow" };
@@ -145,12 +142,12 @@ void keyboardListener()
             if (shiftKey)
             {
                 // Shift + Up Arrow: Decrease head offset
-                config.head_y_offset = std::max(0.0f, config.head_y_offset - OFFSET_STEP);
+                config.head_y_offset = std::max(0.0f, config.head_y_offset - config.offset_step);
             }
             else
             {
                 // Up Arrow: Decrease body offset
-                config.body_y_offset = std::max(0.0f, config.body_y_offset - OFFSET_STEP);
+                config.body_y_offset = std::max(0.0f, config.body_y_offset - config.offset_step);
             }
         }
         if (downArrow && !prevDownArrow)
@@ -158,12 +155,12 @@ void keyboardListener()
             if (shiftKey)
             {
                 // Shift + Down Arrow: Increase head offset
-                config.head_y_offset = std::min(1.0f, config.head_y_offset + OFFSET_STEP);
+                config.head_y_offset = std::min(1.0f, config.head_y_offset + config.offset_step);
             }
             else
             {
                 // Down Arrow: Increase body offset
-                config.body_y_offset = std::min(1.0f, config.body_y_offset + OFFSET_STEP);
+                config.body_y_offset = std::min(1.0f, config.body_y_offset + config.offset_step);
             }
         }
 
@@ -171,12 +168,12 @@ void keyboardListener()
         // Adjust norecoil strength based on left and right arrow keys
         if (leftArrow && !prevLeftArrow)
         {
-            config.easynorecoilstrength = std::max(0.1f, config.easynorecoilstrength - NORECOIL_STEP);
+            config.easynorecoilstrength = std::max(0.1f, config.easynorecoilstrength - config.norecoil_step);
         }
 
         if (rightArrow && !prevRightArrow)
         {
-            config.easynorecoilstrength = std::min(500.0f, config.easynorecoilstrength + NORECOIL_STEP);
+            config.easynorecoilstrength = std::min(500.0f, config.easynorecoilstrength + config.norecoil_step);
         }
         
         // Update previous key states
