@@ -41,14 +41,38 @@ void draw_mouse()
     ImGui::Separator();
     ImGui::Text("PID Controller Settings");
     ImGui::SliderFloat("Proportional (Kp)", &config.kp, 0.0f, 3.0f, "%.3f");
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Affects the immediate response to the error. Higher values make aiming more responsive but can cause overshooting. Directly proportional to how far the cursor is from the target.");
+    }
     ImGui::SliderFloat("Integral (Ki)", &config.ki, 0.0f, 5.0f, "%.3f");
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Accounts for accumulated error over time. Higher values help eliminate persistent offset but can cause oscillation. Useful for overcoming small, consistent tracking errors.");
+    }
     ImGui::SliderFloat("Derivative (Kd)", &config.kd, 0.0f, 1.0f, "%.3f");
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Predicts future error based on rate of change. Higher values add dampening to reduce overshooting and stabilize aiming. Acts as a braking mechanism for the aim.");
+    }
 
     ImGui::Separator();
     ImGui::Text("Kalman Filter Settings");
     ImGui::SliderFloat("Process Noise (Q)", &config.process_noise_q, 0.001f, 5.0f, "%.3f");
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Represents the uncertainty in the process model. Higher values make the filter more responsive to new measurements but noisier. Lower values make aim smoother but less responsive to sudden changes.");
+    }
     ImGui::SliderFloat("Measurement Noise (R)", &config.measurement_noise_r, 0.001f, 1.0f, "%.3f");
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Represents noise in the measurements. Higher values make the filter trust measurements less, resulting in smoother but potentially slower aiming. Lower values increase responsiveness but may cause jitter.");
+    }
     ImGui::SliderFloat("Estimation Error (P)", &config.estimation_error_p, 0.001f, 10.0f, "%.3f");
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Initial uncertainty in the state estimate. Higher values cause the filter to give more weight to initial measurements. Affects how quickly the filter converges to stable tracking.");
+    }
 
     ImGui::Separator();
 
