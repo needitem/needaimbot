@@ -35,6 +35,8 @@ public:
     float easynorecoilstrength;
     float norecoil_step;  // Step size for adjusting norecoil strength
     std::string input_method; // "WIN32", "GHUB", "ARDUINO"
+    float dead_zone;      // 데드존: 마우스를 움직이지 않는 최소 오차 (픽셀)
+    float max_movement;   // 최대 마우스 이동량 제한 (오버슈트 방지)
 
     // PID Controller
     float kp;
