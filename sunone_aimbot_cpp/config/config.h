@@ -21,6 +21,7 @@ public:
     bool disable_headshot;
     float body_y_offset;
     float head_y_offset;
+    float offset_step;  // Step size for adjusting offsets
     bool ignore_third_person;
     bool shooting_range_targets;
     bool auto_aim;
@@ -32,6 +33,7 @@ public:
     int fovY;
     bool easynorecoil;
     float easynorecoilstrength;
+    float norecoil_step;  // Step size for adjusting norecoil strength
     std::string input_method; // "WIN32", "GHUB", "ARDUINO"
 
     // PID Controller

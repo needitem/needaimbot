@@ -59,6 +59,7 @@ bool Config::loadConfig(const std::string& filename)
         disable_headshot = false;
         body_y_offset = 0.15f;
         head_y_offset = 0.05f;
+        offset_step = 0.01f;
         ignore_third_person = false;
         shooting_range_targets = false;
         auto_aim = false;
@@ -70,6 +71,7 @@ bool Config::loadConfig(const std::string& filename)
         fovY = 50;
         easynorecoil = false;
         easynorecoilstrength = 0.0f;
+        norecoil_step = 5.0f;
         input_method = "WIN32";
 
         // PID Controller
@@ -188,6 +190,7 @@ bool Config::loadConfig(const std::string& filename)
     disable_headshot = get_bool("disable_headshot", false);
     body_y_offset = (float)get_double("body_y_offset", 0.15);
     head_y_offset = (float)get_double("head_y_offset", 0.05);
+    offset_step = (float)get_double("offset_step", 0.01);
     ignore_third_person = get_bool("ignore_third_person", false);
     shooting_range_targets = get_bool("shooting_range_targets", false);
     auto_aim = get_bool("auto_aim", false);
@@ -199,6 +202,7 @@ bool Config::loadConfig(const std::string& filename)
     fovY = get_long("fovY", 50);
     easynorecoil = get_bool("easynorecoil", false);
     easynorecoilstrength = (float)get_double("easynorecoilstrength", 0.0);
+    norecoil_step = (float)get_double("norecoil_step", 5.0);
     input_method = get_string("input_method", "WIN32");
 
     // PID Controller
@@ -302,6 +306,7 @@ bool Config::saveConfig(const std::string& filename)
         << std::fixed << std::setprecision(2)
         << "body_y_offset = " << body_y_offset << "\n"
         << "head_y_offset = " << head_y_offset << "\n"
+        << "offset_step = " << offset_step << "\n"
         << "ignore_third_person = " << (ignore_third_person ? "true" : "false") << "\n"
         << "shooting_range_targets = " << (shooting_range_targets ? "true" : "false") << "\n"
         << "auto_aim = " << (auto_aim ? "true" : "false") << "\n\n";
@@ -316,6 +321,7 @@ bool Config::saveConfig(const std::string& filename)
         << "easynorecoil = " << (easynorecoil ? "true" : "false") << "\n"
         << std::fixed << std::setprecision(1)
         << "easynorecoilstrength = " << easynorecoilstrength << "\n"
+        << "norecoil_step = " << norecoil_step << "\n"
         << "# WIN32, GHUB, ARDUINO\n"
         << "input_method = " << input_method << "\n\n"
         << "# PID Controller\n"

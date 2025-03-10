@@ -37,7 +37,16 @@ void draw_mouse()
     if (config.easynorecoil)
     {
         ImGui::SliderFloat("No Recoil Strength", &config.easynorecoilstrength, 0.1f, 500.0f, "%.1f");
-        ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Left/Right Arrow keys: Adjust recoil strength by 10");
+        if (ImGui::InputFloat("No Recoil Step", &config.norecoil_step, 0.0f, 0.0f, "%.1f"))
+        {
+            config.norecoil_step = std::max(0.1f, std::min(config.norecoil_step, 50.0f));
+            config.saveConfig();
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Step size for adjusting no recoil strength with left/right arrow keys (0.1 - 50.0)");
+        }
+        ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Left/Right Arrow keys: Adjust recoil strength");
         
         if (config.easynorecoilstrength >= 100.0f)
         {
