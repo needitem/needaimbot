@@ -107,8 +107,8 @@ void initializeInputMethod()
     globalMouseThread->setInputMethod(std::move(input_method));
 }
 
-// 노리코일 처리를 위한 함수 복원
-void handleEasyNoRecoil(MouseThread &mouseThread)
+// 노리코일 처리를 위한 함수 복원 - 인라인화로 함수 호출 오버헤드 감소
+inline void handleEasyNoRecoil(MouseThread &mouseThread)
 {
     if (config.easynorecoil && shooting.load() && zooming.load())
     {
@@ -128,16 +128,27 @@ void mouseThreadFunction(MouseThread &mouseThread)
     bool is_active = false;
     auto last_active_time = std::chrono::steady_clock::now();
     
+    // 메모리 할당 최소화를 위한 정적 객체 선언
+    static std::vector<cv::Rect> boxes;
+    static std::vector<int> classes;
+    static AimbotTarget staticTarget(0, 0, 0, 0, 0); // 재사용 가능한 타겟 객체
+    
+    // 프레임 카운터 추가 (시간 측정 최적화)
+    const int FRAMES_BETWEEN_TIME_CHECK = 10;
+    int frame_counter = 0;
+    
     while (!shouldExit)
     {
         // 적절한 대기 시간 선택 (활성/비활성)
         auto timeout = is_active ? active_timeout : idle_timeout;
         
-        std::vector<cv::Rect> boxes;
-        std::vector<int> classes;
+        // 스레드 제어 상태 한 번에 로드 (원자적 읽기 최소화)
+        bool is_aiming = aiming.load();
+        bool auto_shooting = config.auto_shoot;
         
+        bool newFrameAvailable = false;
         {
-            // 탐지 결과에 대한 락 (최소화)
+            // 탐지 결과에 대한 락 (최소화) - 필요한 데이터만 빠르게 복사
             std::unique_lock<std::mutex> lock(detector.detectionMutex);
             
             // 새 프레임이 준비되거나 종료 신호가 올 때까지 대기
@@ -149,35 +160,46 @@ void mouseThreadFunction(MouseThread &mouseThread)
             if (shouldExit)
                 break;
                 
-            // 새 프레임이 없으면 계속
-            if (detector.detectionVersion <= lastDetectionVersion) {
-                // 비활성 상태 체크
-                if (is_active && std::chrono::steady_clock::now() - last_active_time > std::chrono::milliseconds(300)) {
-                    is_active = false;
+            // 새 프레임이 있으면 데이터 복사
+            if (detector.detectionVersion > lastDetectionVersion) {
+                newFrameAvailable = true;
+                lastDetectionVersion = detector.detectionVersion;
+                
+                // 메모리 재할당을 방지하기 위해 미리 용량 예약
+                if (boxes.capacity() < detector.detectedBoxes.size()) {
+                    boxes.reserve(detector.detectedBoxes.size() + 10); // 여유 공간 확보
+                }
+                if (classes.capacity() < detector.detectedClasses.size()) {
+                    classes.reserve(detector.detectedClasses.size() + 10);
                 }
                 
-                // 반동 제어는 계속 적용
-                handleEasyNoRecoil(mouseThread);
-                
-                continue;
+                boxes = detector.detectedBoxes;
+                classes = detector.detectedClasses;
+            }
+        } // 락 즉시 해제
+        
+        // 새 프레임이 없으면 반동 제어만 수행하고 계속
+        if (!newFrameAvailable) {
+            // 비활성 상태 체크 (빈도 제한)
+            if (is_active && (++frame_counter >= FRAMES_BETWEEN_TIME_CHECK)) {
+                frame_counter = 0;
+                if (std::chrono::steady_clock::now() - last_active_time > std::chrono::milliseconds(300)) {
+                    is_active = false;
+                }
             }
             
-            // 새 탐지 프레임 처리
-            lastDetectionVersion = detector.detectionVersion;
-            
-            boxes = detector.detectedBoxes;
-            classes = detector.detectedClasses;
+            // 반동 제어는 계속 적용
+            handleEasyNoRecoil(mouseThread);
+            continue;
         }
         
-        // 모드 변경 감지 시 설정 업데이트
-        if (input_method_changed.load())
-        {
+        // 설정 변경 감지 및 처리 (최적화: 조건 체크 후 처리)
+        if (input_method_changed.load()) {
             initializeInputMethod();
             input_method_changed.store(false);
         }
 
-        if (detection_resolution_changed.load())
-        {
+        if (detection_resolution_changed.load()) {
             {
                 std::lock_guard<std::mutex> lock(configMutex);
                 mouseThread.updateConfig(
@@ -197,37 +219,29 @@ void mouseThreadFunction(MouseThread &mouseThread)
             detection_resolution_changed.store(false);
         }
 
-        // 타겟 찾기
+        // 타겟 찾기 (정적 객체 대신 기존 인터페이스 유지)
         AimbotTarget *target = sortTargets(boxes, classes, config.detection_resolution, config.detection_resolution, config.disable_headshot);
         
-        if (aiming.load())
-        {
-            if (target)
-            {
-                is_active = true;
+        // 조건 체크 최적화 (조건 통합)
+        bool has_target = (target != nullptr);
+        
+        // 조준 및 발사 로직 단순화
+        if (is_aiming && has_target) {
+            is_active = true;
+            
+            // 시간 측정 빈도 제한
+            if (++frame_counter >= FRAMES_BETWEEN_TIME_CHECK) {
+                frame_counter = 0;
                 last_active_time = std::chrono::steady_clock::now();
-                
-                mouseThread.moveMouse(*target);
-                
-                if (config.auto_shoot)
-                {
-                    mouseThread.pressMouse(*target);
-                }
             }
-            else
-            {
-                if (config.auto_shoot)
-                {
-                    mouseThread.releaseMouse();
-                }
+            
+            mouseThread.moveMouse(*target);
+            
+            if (auto_shooting) {
+                mouseThread.pressMouse(*target);
             }
-        }
-        else
-        {
-            if (config.auto_shoot)
-            {
-                mouseThread.releaseMouse();
-            }
+        } else if (auto_shooting) {
+            mouseThread.releaseMouse();
         }
         
         // 반동 제어 처리
@@ -237,6 +251,33 @@ void mouseThreadFunction(MouseThread &mouseThread)
         mouseThread.checkAndResetPredictions();
         delete target;
     }
+}
+
+// 모델 로딩 중복 코드를 하나의 함수로 통합
+bool loadAndValidateModel(std::string& modelName, const std::vector<std::string>& availableModels) {
+    if (modelName.empty() && !availableModels.empty()) {
+        modelName = availableModels[0];
+        config.saveConfig();
+        std::cout << "[MAIN] No AI model specified in config. Loaded first available model: " << modelName << std::endl;
+        return true;
+    }
+    
+    std::string modelPath = "models/" + modelName;
+    if (!std::filesystem::exists(modelPath)) {
+        std::cerr << "[MAIN] Specified model does not exist: " << modelPath << std::endl;
+
+        if (!availableModels.empty()) {
+            modelName = availableModels[0];
+            config.saveConfig();
+            std::cout << "[MAIN] Loaded first available model: " << modelName << std::endl;
+            return true;
+        } else {
+            std::cerr << "[MAIN] No models found in 'models' directory." << std::endl;
+            return false;
+        }
+    }
+    
+    return true;
 }
 
 int main()
@@ -267,27 +308,7 @@ int main()
             return -1;
         }
 
-        std::string modelPath = "models/" + config.ai_model;
-        if (!std::filesystem::exists(modelPath))
-        {
-            std::cerr << "[MAIN] Specified model does not exist: " << modelPath << std::endl;
-
-            std::vector<std::string> modelFiles = getModelFiles();
-
-            if (!modelFiles.empty())
-            {
-                config.ai_model = modelFiles[0];
-                config.saveConfig();
-                std::cout << "[MAIN] Loaded first available model: " << config.ai_model << std::endl;
-            }
-            else
-            {
-                std::cerr << "[MAIN] No models found in 'models' directory." << std::endl;
-                std::cin.get();
-                return -1;
-            }
-        }
-
+        // 입력 방식 초기화 코드 간소화
         if (config.input_method == "ARDUINO")
         {
             arduinoSerial = new SerialConnection(config.arduino_port, config.arduino_baudrate);
@@ -321,43 +342,11 @@ int main()
 
         globalMouseThread = &mouseThread;
 
+        // 모델 로딩 로직을 통합 함수로 대체
         std::vector<std::string> availableModels = getAvailableModels();
-
-        if (!config.ai_model.empty())
-        {
-            std::string modelPath = "models/" + config.ai_model;
-            if (!std::filesystem::exists(modelPath))
-            {
-                std::cerr << "[MAIN] Specified model does not exist: " << modelPath << std::endl;
-
-                if (!availableModels.empty())
-                {
-                    config.ai_model = availableModels[0];
-                    config.saveConfig("config.ini");
-                    std::cout << "[MAIN] Loaded first available model: " << config.ai_model << std::endl;
-                }
-                else
-                {
-                    std::cerr << "[MAIN] No models found in 'models' directory." << std::endl;
-                    std::cin.get();
-                    return -1;
-                }
-            }
-        }
-        else
-        {
-            if (!availableModels.empty())
-            {
-                config.ai_model = availableModels[0];
-                config.saveConfig();
-                std::cout << "[MAIN] No AI model specified in config. Loaded first available model: " << config.ai_model << std::endl;
-            }
-            else
-            {
-                std::cerr << "[MAIN] No AI models found in 'models' directory." << std::endl;
-                std::cin.get();
-                return -1;
-            }
+        if (!loadAndValidateModel(config.ai_model, availableModels)) {
+            std::cin.get();
+            return -1;
         }
 
         detector.initialize("models/" + config.ai_model);
