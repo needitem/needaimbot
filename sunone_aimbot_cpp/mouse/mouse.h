@@ -46,6 +46,7 @@ private:
     Eigen::Vector2d prev_error;  // 이전 오차 (미분항 계산용)
     Eigen::Vector2d integral;    // 누적 오차 (적분항 계산용)
     Eigen::Vector2d derivative;  // 변화율 저장 (미분항)
+    Eigen::Vector2d prev_derivative; // 이전 미분값 (미분항 필터링용)
     std::chrono::steady_clock::time_point last_time_point;  // 이전 계산 시간 (dt 계산용)
 
 public:
