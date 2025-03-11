@@ -90,6 +90,7 @@ void PIDController2D::reset()
     prev_error = Eigen::Vector2d::Zero();               // 이전 오차 초기화
     integral = Eigen::Vector2d::Zero();                 // 적분항 초기화
     derivative = Eigen::Vector2d::Zero();               // 미분항 초기화
+    prev_derivative = Eigen::Vector2d::Zero();          // 이전 미분항 초기화
     last_time_point = std::chrono::steady_clock::now(); // 시간 초기화
 }
 
