@@ -30,47 +30,66 @@ PIDController2D::PIDController2D(double kp, double ki, double kd)
 
 Eigen::Vector2d PIDController2D::calculate(const Eigen::Vector2d &error)
 {
-    // 시간 간격 계산 - std::chrono 사용으로 최적화
     auto now = std::chrono::steady_clock::now();
     double dt = std::chrono::duration<double>(now - last_time_point).count();
-    
-    // 시간 간격 제한 (너무 큰 dt는 불안정성 유발)
-    dt = std::min(dt, 0.1);
-    
+    dt = std::min(dt, 0.1); // 시간 간격 제한
+
     last_time_point = now;
 
-    // SIMD 최적화를 위한 벡터 연산 개선
-    if (dt > 0.0001) {  // 0으로 나누기 방지
-        // 적분항 업데이트 (오차의 누적) - 적분 항 제한 추가
-        integral += error * dt;
-        
-        // 적분 항 제한 (anti-windup)
-        const double max_integral = 50.0;
-        if (integral.x() > max_integral) integral.x() = max_integral;
-        else if (integral.x() < -max_integral) integral.x() = -max_integral;
-        
-        if (integral.y() > max_integral) integral.y() = max_integral;
-        else if (integral.y() < -max_integral) integral.y() = -max_integral;
-        
-        // 미분항 계산 (변화율)
-        derivative = (error - prev_error) / dt;
+    // 시간 기반 게인 조정 (50ms 간격)
+    static auto last_gain_update = now;
+    static double cached_kp = kp;
+    static double cached_kd = kd;
+
+    double time_since_update = std::chrono::duration<double>(now - last_gain_update).count();
+    if (time_since_update >= 0.05) // 50ms
+    {
+        last_gain_update = now;
+        double error_magnitude = error.norm();
+
+        // 부드러운 게인 보간
+        double target_kp = kp * (1.0 + std::min(error_magnitude / 150.0, 0.3));
+        double target_kd = kd * (1.0 + std::min(error_magnitude / 300.0, 0.2));
+
+        // 선형 보간으로 부드럽게 변경
+        double alpha = std::min(time_since_update * 10.0, 1.0); // 최대 100ms에 걸쳐 완전히 변경
+        cached_kp = cached_kp * (1.0 - alpha) + target_kp * alpha;
+        cached_kd = cached_kd * (1.0 - alpha) + target_kd * alpha;
     }
-    else {
+
+    if (dt > 0.0001)
+    {
+        // 적분항 업데이트 - 간단한 제한
+        integral += error * dt;
+
+        // 적분 항 제한 - 단순화된 버전
+        const double max_integral = 50.0;
+        integral.x() = std::clamp(integral.x(), -max_integral, max_integral);
+        integral.y() = std::clamp(integral.y(), -max_integral, max_integral);
+
+        // 미분항 계산 및 필터링 - 더 안정적인 필터링
+        derivative = (error - prev_error) / dt;
+        static const double alpha = 0.8; // 더 강한 필터링
+        derivative = derivative * alpha + prev_derivative * (1.0 - alpha);
+        prev_derivative = derivative;
+    }
+    else
+    {
         derivative.setZero();
     }
 
-    // PID 출력 계산 - 한 번의 연산으로 처리
-    Eigen::Vector2d output = kp * error + ki * integral + kd * derivative;
-    
-    prev_error = error;  // 다음 계산을 위해 현재 오차 저장
+    // 캐시된 게인으로 PID 출력 계산
+    Eigen::Vector2d output = cached_kp * error + ki * integral + cached_kd * derivative;
+
+    prev_error = error;
     return output;
 }
 
 void PIDController2D::reset()
 {
-    prev_error = Eigen::Vector2d::Zero();  // 이전 오차 초기화
-    integral = Eigen::Vector2d::Zero();    // 적분항 초기화
-    derivative = Eigen::Vector2d::Zero();  // 미분항 초기화
+    prev_error = Eigen::Vector2d::Zero();               // 이전 오차 초기화
+    integral = Eigen::Vector2d::Zero();                 // 적분항 초기화
+    derivative = Eigen::Vector2d::Zero();               // 미분항 초기화
     last_time_point = std::chrono::steady_clock::now(); // 시간 초기화
 }
 
@@ -82,51 +101,56 @@ void PIDController2D::updateParameters(double kp, double ki, double kd)
 }
 
 // 칼만 필터 구현
-KalmanFilter2D::KalmanFilter2D(double process_noise_q, double measurement_noise_r) {
+KalmanFilter2D::KalmanFilter2D(double process_noise_q, double measurement_noise_r)
+{
     // 상태 전이 행렬 초기화
     A = Eigen::Matrix<double, 6, 6>::Identity();
-    
+
     // 측정 행렬 초기화 (위치만 측정)
     H = Eigen::Matrix<double, 2, 6>::Zero();
-    H(0,0) = 1.0;  // x 위치
-    H(1,1) = 1.0;  // y 위치
-    
+    H(0, 0) = 1.0; // x 위치
+    H(1, 1) = 1.0; // y 위치
+
     // 노이즈 매트릭스 초기화
     Q = Eigen::Matrix<double, 6, 6>::Identity() * process_noise_q;
     R = Eigen::Matrix2d::Identity() * measurement_noise_r;
     P = Eigen::Matrix<double, 6, 6>::Identity();
-    
+
     x = Eigen::Matrix<double, 6, 1>::Zero();
 }
 
-void KalmanFilter2D::predict(double dt) {
+void KalmanFilter2D::predict(double dt)
+{
     // dt에 따른 상태 전이 행렬 업데이트
-    A(0,2) = dt;      // x = x + vx*dt + 0.5*ax*dt^2
-    A(0,4) = 0.5*dt*dt;
-    A(1,3) = dt;      // y = y + vy*dt + 0.5*ay*dt^2
-    A(1,5) = 0.5*dt*dt;
-    A(2,4) = dt;      // vx = vx + ax*dt
-    A(3,5) = dt;      // vy = vy + ay*dt
+    A(0, 2) = dt; // x = x + vx*dt + 0.5*ax*dt^2
+    A(0, 4) = 0.5 * dt * dt;
+    A(1, 3) = dt; // y = y + vy*dt + 0.5*ay*dt^2
+    A(1, 5) = 0.5 * dt * dt;
+    A(2, 4) = dt; // vx = vx + ax*dt
+    A(3, 5) = dt; // vy = vy + ay*dt
 
     x = A * x;
     P = A * P * A.transpose() + Q;
 }
 
-void KalmanFilter2D::update(const Eigen::Vector2d& measurement) {
+void KalmanFilter2D::update(const Eigen::Vector2d &measurement)
+{
     Eigen::Matrix2d S = H * P * H.transpose() + R;
     Eigen::Matrix<double, 6, 2> K = P * H.transpose() * S.inverse();
-    
+
     Eigen::Vector2d y = measurement - H * x;
     x = x + K * y;
     P = (Eigen::Matrix<double, 6, 6>::Identity() - K * H) * P;
 }
 
-void KalmanFilter2D::reset() {
+void KalmanFilter2D::reset()
+{
     x = Eigen::Matrix<double, 6, 1>::Zero();
     P = Eigen::Matrix<double, 6, 6>::Identity();
 }
 
-void KalmanFilter2D::updateParameters(double process_noise_q, double measurement_noise_r) {
+void KalmanFilter2D::updateParameters(double process_noise_q, double measurement_noise_r)
+{
     Q = Eigen::Matrix<double, 6, 6>::Identity() * process_noise_q;
     R = Eigen::Matrix2d::Identity() * measurement_noise_r;
 }
@@ -176,7 +200,7 @@ MouseThread::MouseThread(
     {
         input_method = std::make_unique<Win32InputMethod>();
     }
-    
+
     last_prediction_time = std::chrono::steady_clock::now();
 }
 
@@ -209,44 +233,55 @@ void MouseThread::updateConfig(
     pid_controller->updateParameters(kp, ki, kd);
 }
 
-Eigen::Vector2d MouseThread::predictTargetPosition(double target_x, double target_y) {
+Eigen::Vector2d MouseThread::predictTargetPosition(double target_x, double target_y)
+{
     auto current_time = std::chrono::steady_clock::now();
     double dt = std::chrono::duration<double>(current_time - last_prediction_time).count();
-    dt = std::min(dt, 0.1); // 너무 긴 시간 간격은 제한
-    
+    dt = std::min(dt, 0.1);
+
     last_prediction_time = current_time;
-    
-    // 대상이 탐지되지 않았으면 칼만 필터 예측만 수행
-    if (!target_detected.load()) {
+
+    if (!target_detected.load())
+    {
         kalman_filter->predict(dt);
         return Eigen::Vector2d(kalman_filter->getState()(0, 0), kalman_filter->getState()(1, 0));
     }
-    
-    // 칼만 필터 시간 스텝 예측
+
     kalman_filter->predict(dt);
-    
-    // 측정값 업데이트
+
     Eigen::Vector2d measurement(target_x, target_y);
     kalman_filter->update(measurement);
-    
-    // 현재 상태 벡터에서 위치, 속도, 가속도 추출
-    const auto& state = kalman_filter->getState();
+
+    const auto &state = kalman_filter->getState();
     double pos_x = state(0, 0);
     double pos_y = state(1, 0);
     double vel_x = state(2, 0);
     double vel_y = state(3, 0);
-    double acc_x = state(4, 0);
-    double acc_y = state(5, 0);
-    
-    // 미래 위치 예측 (dt * 예측 시간 조정 계수)
-    // 반응성과 안정성의 밸런스를 위한 계수
-    constexpr double prediction_factor = 0.05;
-    double prediction_time = dt * prediction_factor;
-    
-    // x = x0 + v*t + 0.5*a*t^2 공식 사용
-    double future_x = pos_x + vel_x * prediction_time + 0.5 * acc_x * prediction_time * prediction_time;
-    double future_y = pos_y + vel_y * prediction_time + 0.5 * acc_y * prediction_time * prediction_time;
-    
+
+    // 단순화된 속도 계산 (hypot 대신 sqrt 사용)
+    double velocity = std::sqrt(vel_x * vel_x + vel_y * vel_y);
+
+    // 단순화된 예측 시간 조정
+    constexpr double base_prediction_factor = 0.05;
+    double prediction_time;
+
+    if (velocity < 300.0)
+    {
+        prediction_time = dt * base_prediction_factor;
+    }
+    else if (velocity < 600.0)
+    {
+        prediction_time = dt * base_prediction_factor * 1.3;
+    }
+    else
+    {
+        prediction_time = dt * base_prediction_factor * 1.5;
+    }
+
+    // 선형 예측만 사용 (가속도 제외)
+    double future_x = pos_x + vel_x * prediction_time;
+    double future_y = pos_y + vel_y * prediction_time;
+
     target_detected.store(true);
     return Eigen::Vector2d(future_x, future_y);
 }
@@ -255,50 +290,55 @@ Eigen::Vector2d MouseThread::calculateMovement(const Eigen::Vector2d &target_pos
 {
     // Calculate error directly
     Eigen::Vector2d error(target_pos[0] - center_x, target_pos[1] - center_y);
-    
+
     // Calculate PID output
     Eigen::Vector2d pid_output = pid_controller->calculate(error);
-    
+
     // Scale output with FOV and sensitivity
     double fov_scale_x = fov_x / screen_width;
     double fov_scale_y = fov_y / screen_height;
     double sens_scale = dpi * (1.0 / mouse_sensitivity) / 360.0;
-    
+
     return Eigen::Vector2d(
         pid_output[0] * fov_scale_x * sens_scale,
-        pid_output[1] * fov_scale_y * sens_scale
-    );
+        pid_output[1] * fov_scale_y * sens_scale);
 }
 
 bool MouseThread::checkTargetInScope(double target_x, double target_y, double target_w, double target_h, double reduction_factor)
 {
-    // Fast path: first check if the target center is within reasonable bounds
-    double center_target_x = target_x + target_w / 2;
-    double center_target_y = target_y + target_h / 2;
+    // SIMD 최적화된 중심점 계산
+    __m128d target_dims = _mm_set_pd(target_h, target_w);
+    __m128d half = _mm_set1_pd(0.5);
+    __m128d target_pos = _mm_set_pd(target_y, target_x);
+    __m128d target_center = _mm_add_pd(target_pos, _mm_mul_pd(target_dims, half));
 
-    // Quick check against screen center with a margin
-    double dx = std::abs(center_target_x - center_x);
-    double dy = std::abs(center_target_y - center_y);
+    // 화면 중심과의 차이 계산
+    __m128d screen_center = _mm_set_pd(center_y, center_x);
+    __m128d diff = _mm_sub_pd(target_center, screen_center);
+    __m128d abs_diff = _mm_andnot_pd(_mm_set1_pd(-0.0), diff);
 
-    // If center is far away, avoid more complex calculations
-    if (dx > screen_width / 4 || dy > screen_height / 4)
+    // 빠른 경계 검사
+    double max_diff_x = _mm_cvtsd_f64(abs_diff);
+    double max_diff_y = _mm_cvtsd_f64(_mm_unpackhi_pd(abs_diff, abs_diff));
+
+    if (max_diff_x > screen_width * 0.25 || max_diff_y > screen_height * 0.25)
     {
         return false;
     }
 
-    // More precise check using the reduced target dimensions
-    double reduced_w = target_w * reduction_factor;
-    double reduced_h = target_h * reduction_factor;
+    // 축소된 타겟 크기 계산
+    __m128d reduced_dims = _mm_mul_pd(target_dims, _mm_set1_pd(reduction_factor * 0.5));
 
-    // Fast AABB check using pre-calculated boundaries
-    double min_x = center_target_x - reduced_w / 2;
-    double max_x = center_target_x + reduced_w / 2;
-    double min_y = center_target_y - reduced_h / 2;
-    double max_y = center_target_y + reduced_h / 2;
+    // 경계 검사
+    __m128d min_bound = _mm_sub_pd(target_center, reduced_dims);
+    __m128d max_bound = _mm_add_pd(target_center, reduced_dims);
 
-    // Check if screen center is within the reduced target bounds
-    return (center_x >= min_x && center_x <= max_x &&
-            center_y >= min_y && center_y <= max_y);
+    // 화면 중심이 축소된 타겟 영역 내에 있는지 확인
+    __m128d compare_min = _mm_cmpge_pd(screen_center, min_bound);
+    __m128d compare_max = _mm_cmple_pd(screen_center, max_bound);
+    __m128d result = _mm_and_pd(compare_min, compare_max);
+
+    return _mm_movemask_pd(result) == 0x3;
 }
 
 double MouseThread::calculateTargetDistance(const AimbotTarget &target) const
@@ -333,70 +373,86 @@ AimbotTarget *MouseThread::findClosestTarget(const std::vector<AimbotTarget> &ta
     return closest;
 }
 
-void MouseThread::moveMouse(const AimbotTarget &target) {
-    // 잠금 없이 로컬 변수에 값 복사 (스레드 안전성 개선)
-    double center_x_local = center_x;
-    double center_y_local = center_y;
-    
-    // 대상 위치 가져오기 - 바운딩 박스의 중앙 좌표로 계산
-    double target_x = target.x + target.w / 2; // 중앙 X 좌표 계산
-    double target_y = target.y + target.h / 2; // 중앙 Y 좌표 계산
-        
-    // 화면 중앙에서 타겟까지의 오차 계산
-    double error_x = target_x - center_x_local;
-    double error_y = target_y - center_y_local;
-    
+void MouseThread::moveMouse(const AimbotTarget &target)
+{
+    // 자주 사용되는 값들을 로컬에 캐시
+    const double local_center_x = center_x;
+    const double local_center_y = center_y;
+    const double local_fov_x = fov_x;
+    const double local_fov_y = fov_y;
+    const double local_sensitivity = mouse_sensitivity;
+    const double local_dpi = dpi;
+
+    // SIMD 최적화를 위한 데이터 정렬
+    alignas(16) double target_data[2] = {
+        target.x + target.w * 0.5,
+        target.y + target.h * 0.5};
+
+    // SIMD를 사용한 오차 계산
+    __m128d target_pos = _mm_load_pd(target_data);
+    __m128d center_pos = _mm_set_pd(local_center_y, local_center_x);
+    __m128d error_vec = _mm_sub_pd(target_pos, center_pos);
+
+    double error_x = _mm_cvtsd_f64(error_vec);
+    double error_y = _mm_cvtsd_f64(_mm_unpackhi_pd(error_vec, error_vec));
+
     // 첫 번째 탐지인 경우 예측 초기화
-    if (!target_detected.load()) {
+    if (!target_detected.load())
+    {
         resetPrediction();
-        // 기본 윈도우 중앙 좌표로 상태 초기화
-        Eigen::Vector2d measurement(target_x, target_y);
+        Eigen::Vector2d measurement(target_data[0], target_data[1]);
         kalman_filter->update(measurement);
     }
-    
+
     // 대상 위치 예측
-    Eigen::Vector2d predicted = predictTargetPosition(target_x, target_y);
-    
-    // 수정된 오차 계산 (중앙과 예측 위치 사이)
-    error_x = predicted.x() - center_x_local;
-    error_y = predicted.y() - center_y_local;
-    
-    // 성능 측정 콜백 사용
-    if (tracking_errors) {
+    Eigen::Vector2d predicted = predictTargetPosition(target_data[0], target_data[1]);
+
+    // 수정된 오차 계산
+    error_x = predicted.x() - local_center_x;
+    error_y = predicted.y() - local_center_y;
+
+    // 성능 측정 콜백
+    if (tracking_errors)
+    {
         std::lock_guard<std::mutex> lock(callback_mutex);
-        if (error_callback) {
+        if (error_callback)
+        {
             error_callback(error_x, error_y);
         }
     }
-    
+
     // PID 컨트롤러에 오차 입력
     Eigen::Vector2d error(error_x, error_y);
     Eigen::Vector2d pid_output = pid_controller->calculate(error);
-    
-    // 마우스 이동 크기를 게임 설정에 맞게 변환
-    // 화면상 거리(픽셀) -> 마우스 움직임(미크론) -> 윈도우 좌표
-    double dx = (pid_output.x() / 360.0) * (fov_x / mouse_sensitivity) * (1000.0 / dpi);
-    double dy = (pid_output.y() / 360.0) * (fov_y / mouse_sensitivity) * (1000.0 / dpi);
-    
+
+    // 마우스 이동 계산 최적화
+    __m128d pid_vec = _mm_set_pd(pid_output.y(), pid_output.x());
+    __m128d scale_vec = _mm_set_pd(
+        (local_fov_y / 360.0) * (1000.0 / (local_sensitivity * local_dpi)),
+        (local_fov_x / 360.0) * (1000.0 / (local_sensitivity * local_dpi)));
+    __m128d move_vec = _mm_mul_pd(pid_vec, scale_vec);
+
     // 스코프 배율 적용
-    if (bScope_multiplier > 1.0f) {
-        dx /= bScope_multiplier;
-        dy /= bScope_multiplier;
+    if (bScope_multiplier > 1.0f)
+    {
+        __m128d scope_vec = _mm_set1_pd(1.0 / bScope_multiplier);
+        move_vec = _mm_mul_pd(move_vec, scope_vec);
     }
-    
-    // 정수로 반올림하여 마우스 오차 최소화
-    int dx_int = static_cast<int>(std::round(dx));
-    int dy_int = static_cast<int>(std::round(dy));
-    
+
+    // 정수로 반올림
+    int dx_int = static_cast<int>(std::round(_mm_cvtsd_f64(move_vec)));
+    int dy_int = static_cast<int>(std::round(_mm_cvtsd_f64(_mm_unpackhi_pd(move_vec, move_vec))));
+
     // 실제 마우스 이동 (0이 아닌 경우에만)
-    if (dx_int != 0 || dy_int != 0) {
+    if (dx_int != 0 || dy_int != 0)
+    {
         std::lock_guard<std::mutex> lock(input_method_mutex);
-        if (input_method && input_method->isValid()) {
+        if (input_method && input_method->isValid())
+        {
             input_method->move(dx_int, dy_int);
         }
     }
-    
-    // 타겟 시간 업데이트
+
     last_target_time = std::chrono::steady_clock::now();
 }
 
@@ -475,7 +531,7 @@ void MouseThread::applyRecoilCompensation(float strength)
     }
 }
 
-void MouseThread::enableErrorTracking(const ErrorTrackingCallback& callback)
+void MouseThread::enableErrorTracking(const ErrorTrackingCallback &callback)
 {
     std::lock_guard<std::mutex> lock(callback_mutex);
     error_callback = callback;
