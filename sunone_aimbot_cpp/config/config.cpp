@@ -78,6 +78,14 @@ bool Config::loadConfig(const std::string& filename)
         kp = 0.5f;
         ki = 0.0f;
         kd = 0.1f;
+        
+        // Separated X/Y PID Controllers
+        kp_x = 0.5f;  // 초기값은 공통 값과 동일하게 설정
+        ki_x = 0.0f;
+        kd_x = 0.1f;
+        kp_y = 0.4f;  // Y축은 약간 낮게 설정 (과도한 하향 조준 방지)
+        ki_y = 0.0f;
+        kd_y = 0.15f; // Y축은 미분 게인을 약간 높게 설정 (더 빠른 감속)
 
         // Kalman Filter
         process_noise_q = 0.01f;
@@ -210,6 +218,14 @@ bool Config::loadConfig(const std::string& filename)
     ki = (float)get_double("ki", 0.0);
     kd = (float)get_double("kd", 0.1);
 
+    // Separated X/Y PID Controllers
+    kp_x = (float)get_double("kp_x", 0.5);
+    ki_x = (float)get_double("ki_x", 0.0);
+    kd_x = (float)get_double("kd_x", 0.1);
+    kp_y = (float)get_double("kp_y", 0.4);
+    ki_y = (float)get_double("ki_y", 0.0);
+    kd_y = (float)get_double("kd_y", 0.15);
+
     // Kalman Filter
     process_noise_q = (float)get_double("process_noise_q", 0.01);
     measurement_noise_r = (float)get_double("measurement_noise_r", 0.1);
@@ -330,6 +346,14 @@ bool Config::saveConfig(const std::string& filename)
         << "ki = " << ki << "\n"
         << "kd = " << kd << "\n"
         << std::fixed << std::setprecision(1)
+
+        << "# Separated X/Y PID Controllers\n"
+        << "kp_x = " << kp_x << "\n"
+        << "ki_x = " << ki_x << "\n"
+        << "kd_x = " << kd_x << "\n"
+        << "kp_y = " << kp_y << "\n"
+        << "ki_y = " << ki_y << "\n"
+        << "kd_y = " << kd_y << "\n\n"
 
         << "# Kalman Filter\n"
         << std::fixed << std::setprecision(3)

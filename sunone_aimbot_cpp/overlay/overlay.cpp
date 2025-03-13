@@ -283,6 +283,14 @@ void OverlayThread()
     float prev_easynorecoilstrength = config.easynorecoilstrength;
 
     // PID Controller
+    float prev_kp_x = config.kp_x;
+    float prev_ki_x = config.ki_x;
+    float prev_kd_x = config.kd_x;
+    float prev_kp_y = config.kp_y;
+    float prev_ki_y = config.ki_y;
+    float prev_kd_y = config.kd_y;
+    
+    // 레거시 PID 컨트롤러 (호환성 유지)
     float prev_kp = config.kp;
     float prev_ki = config.ki;
     float prev_kd = config.kd;
@@ -449,9 +457,12 @@ void OverlayThread()
                             config.sensitivity,
                             config.fovX,
                             config.fovY,
-                            config.kp,
-                            config.ki,
-                            config.kd,
+                            config.kp_x,
+                            config.ki_x,
+                            config.kd_x,
+                            config.kp_y,
+                            config.ki_y,
+                            config.kd_y,
                             config.process_noise_q,
                             config.measurement_noise_r,
                             config.auto_shoot,
@@ -511,9 +522,12 @@ void OverlayThread()
                         prev_sensitivity != config.sensitivity ||
                         prev_fovX != config.fovX ||
                         prev_fovY != config.fovY ||
-                        prev_kp != config.kp ||
-                        prev_ki != config.ki ||
-                        prev_kd != config.kd ||
+                        prev_kp_x != config.kp_x ||
+                        prev_ki_x != config.ki_x ||
+                        prev_kd_x != config.kd_x ||
+                        prev_kp_y != config.kp_y ||
+                        prev_ki_y != config.ki_y ||
+                        prev_kd_y != config.kd_y ||
                         prev_process_noise_q != config.process_noise_q ||
                         prev_measurement_noise_r != config.measurement_noise_r)
                     {
@@ -521,9 +535,12 @@ void OverlayThread()
                         prev_sensitivity = config.sensitivity;
                         prev_fovX = config.fovX;
                         prev_fovY = config.fovY;
-                        prev_kp = config.kp;
-                        prev_ki = config.ki;
-                        prev_kd = config.kd;
+                        prev_kp_x = config.kp_x;
+                        prev_ki_x = config.ki_x;
+                        prev_kd_x = config.kd_x;
+                        prev_kp_y = config.kp_y;
+                        prev_ki_y = config.ki_y;
+                        prev_kd_y = config.kd_y;
                         prev_process_noise_q = config.process_noise_q;
                         prev_measurement_noise_r = config.measurement_noise_r;
 
@@ -533,9 +550,12 @@ void OverlayThread()
                             config.sensitivity,
                             config.fovX,
                             config.fovY,
-                            config.kp,
-                            config.ki,
-                            config.kd,
+                            config.kp_x,
+                            config.ki_x,
+                            config.kd_x,
+                            config.kp_y,
+                            config.ki_y,
+                            config.kd_y,
                             config.process_noise_q,
                             config.measurement_noise_r,
                             config.auto_shoot,
@@ -557,9 +577,12 @@ void OverlayThread()
                             config.sensitivity,
                             config.fovX,
                             config.fovY,
-                            config.kp,
-                            config.ki,
-                            config.kd,
+                            config.kp_x,
+                            config.ki_x,
+                            config.kd_x,
+                            config.kp_y,
+                            config.ki_y,
+                            config.kd_y,
                             config.process_noise_q,
                             config.measurement_noise_r,
                             config.auto_shoot,

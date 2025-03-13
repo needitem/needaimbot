@@ -59,20 +59,82 @@ void draw_mouse()
     
     ImGui::Separator();
     ImGui::Text("PID Controller Settings");
-    ImGui::SliderFloat("Proportional (Kp)", &config.kp, 0.0f, 3.0f, "%.3f");
-    if (ImGui::IsItemHovered())
+    
+    // X-axis PID Settings
+    if (ImGui::CollapsingHeader("Horizontal (X-axis) PID", ImGuiTreeNodeFlags_DefaultOpen))
     {
-        SetWrappedTooltip("Affects the immediate response to the error. Higher values make aiming more responsive but can cause overshooting. Directly proportional to how far the cursor is from the target.");
+        ImGui::SliderFloat("Proportional X (Kp)", &config.kp_x, 0.0f, 3.0f, "%.3f");
+        if (ImGui::IsItemHovered())
+        {
+            SetWrappedTooltip("Affects the immediate horizontal response. Higher values make aiming more responsive but can cause overshooting.");
+        }
+        ImGui::SliderFloat("Integral X (Ki)", &config.ki_x, 0.0f, 5.0f, "%.3f");
+        if (ImGui::IsItemHovered())
+        {
+            SetWrappedTooltip("Accounts for accumulated horizontal error over time. Higher values help eliminate persistent offset but can cause oscillation.");
+        }
+        ImGui::SliderFloat("Derivative X (Kd)", &config.kd_x, 0.0f, 1.0f, "%.3f");
+        if (ImGui::IsItemHovered())
+        {
+            SetWrappedTooltip("Predicts future horizontal error based on rate of change. Higher values add dampening to reduce overshooting.");
+        }
     }
-    ImGui::SliderFloat("Integral (Ki)", &config.ki, 0.0f, 5.0f, "%.3f");
-    if (ImGui::IsItemHovered())
+    
+    // Y-axis PID Settings
+    if (ImGui::CollapsingHeader("Vertical (Y-axis) PID", ImGuiTreeNodeFlags_DefaultOpen))
     {
-        SetWrappedTooltip("Accounts for accumulated error over time. Higher values help eliminate persistent offset but can cause oscillation. Useful for overcoming small, consistent tracking errors.");
+        ImGui::SliderFloat("Proportional Y (Kp)", &config.kp_y, 0.0f, 3.0f, "%.3f");
+        if (ImGui::IsItemHovered())
+        {
+            SetWrappedTooltip("Affects the immediate vertical response. Higher values make aiming more responsive but can cause overshooting.");
+        }
+        ImGui::SliderFloat("Integral Y (Ki)", &config.ki_y, 0.0f, 5.0f, "%.3f");
+        if (ImGui::IsItemHovered())
+        {
+            SetWrappedTooltip("Accounts for accumulated vertical error over time. Higher values help eliminate persistent offset but can cause oscillation.");
+        }
+        ImGui::SliderFloat("Derivative Y (Kd)", &config.kd_y, 0.0f, 1.0f, "%.3f");
+        if (ImGui::IsItemHovered())
+        {
+            SetWrappedTooltip("Predicts future vertical error based on rate of change. Higher values add dampening to reduce overshooting.");
+        }
     }
-    ImGui::SliderFloat("Derivative (Kd)", &config.kd, 0.0f, 1.0f, "%.3f");
-    if (ImGui::IsItemHovered())
+    
+    // Legacy combined PID settings (for backward compatibility)
+    if (ImGui::CollapsingHeader("Combined PID (Legacy)"))
     {
-        SetWrappedTooltip("Predicts future error based on rate of change. Higher values add dampening to reduce overshooting and stabilize aiming. Acts as a braking mechanism for the aim.");
+        if (ImGui::SliderFloat("Proportional (Kp)", &config.kp, 0.0f, 3.0f, "%.3f"))
+        {
+            // Sync legacy value to both axes if user adjusts it
+            config.kp_x = config.kp;
+            config.kp_y = config.kp;
+        }
+        if (ImGui::IsItemHovered())
+        {
+            SetWrappedTooltip("Legacy setting that affects both axes. Prefer using the separate X and Y controls above.");
+        }
+        
+        if (ImGui::SliderFloat("Integral (Ki)", &config.ki, 0.0f, 5.0f, "%.3f"))
+        {
+            // Sync legacy value to both axes
+            config.ki_x = config.ki;
+            config.ki_y = config.ki;
+        }
+        if (ImGui::IsItemHovered())
+        {
+            SetWrappedTooltip("Legacy setting that affects both axes. Prefer using the separate X and Y controls above.");
+        }
+        
+        if (ImGui::SliderFloat("Derivative (Kd)", &config.kd, 0.0f, 1.0f, "%.3f"))
+        {
+            // Sync legacy value to both axes
+            config.kd_x = config.kd;
+            config.kd_y = config.kd;
+        }
+        if (ImGui::IsItemHovered())
+        {
+            SetWrappedTooltip("Legacy setting that affects both axes. Prefer using the separate X and Y controls above.");
+        }
     }
 
     ImGui::Separator();
