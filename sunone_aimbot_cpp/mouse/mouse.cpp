@@ -36,40 +36,55 @@ Eigen::Vector2d PIDController2D::calculate(const Eigen::Vector2d &error)
 
     last_time_point = now;
 
-    // 시간 기반 게인 조정 (50ms 간격)
+    // 시간 기반 게인 조정 (30ms 간격으로 변경 - 더 빠른 업데이트)
     static auto last_gain_update = now;
     static double cached_kp = kp;
+    static double cached_ki = ki; // ki도 동적 조정에 포함
     static double cached_kd = kd;
 
     double time_since_update = std::chrono::duration<double>(now - last_gain_update).count();
-    if (time_since_update >= 0.05) // 50ms
+    if (time_since_update >= 0.03) // 30ms로 속도 향상
     {
         last_gain_update = now;
         double error_magnitude = error.norm();
 
-        // 부드러운 게인 보간
-        double target_kp = kp * (1.0 + std::min(error_magnitude / 150.0, 0.3));
-        double target_kd = kd * (1.0 + std::min(error_magnitude / 300.0, 0.2));
+        // 오차 크기에 따른 더 적극적인 게인 조정
+        double target_kp = kp * (1.0 + std::min(error_magnitude / 100.0, 0.6)); // 더 강한 비례 반응
+        double target_ki = ki * (1.0 - std::min(error_magnitude / 400.0, 0.8)); // 오차가 크면 적분 효과 감소
+        double target_kd = kd * (1.0 + std::min(error_magnitude / 200.0, 0.4)); // 더 강한 미분 반응
 
-        // 선형 보간으로 부드럽게 변경
-        double alpha = std::min(time_since_update * 10.0, 1.0); // 최대 100ms에 걸쳐 완전히 변경
+        // 빠른 보간으로 신속하게 변경
+        double alpha = std::min(time_since_update * 15.0, 1.0); // 최대 67ms에 걸쳐 완전히 변경
         cached_kp = cached_kp * (1.0 - alpha) + target_kp * alpha;
+        cached_ki = cached_ki * (1.0 - alpha) + target_ki * alpha;
         cached_kd = cached_kd * (1.0 - alpha) + target_kd * alpha;
     }
 
     if (dt > 0.0001)
     {
-        // 적분항 업데이트 - 간단한 제한
-        integral += error * dt;
+        // 적분항 업데이트 - 오차 크기에 따른 적분 제한
+        double error_norm = error.norm();
+        double integral_factor = 1.0;
+        
+        // 오차가 크면 적분 효과 감소 (과도한 누적 방지)
+        if (error_norm > 100.0) {
+            integral_factor = 100.0 / error_norm;
+        }
+        
+        integral += error * dt * integral_factor;
 
-        // 적분 항 제한 - 단순화된 버전
-        const double max_integral = 50.0;
+        // 적분 항 제한 - 동적 제한
+        const double max_integral = error_norm > 200.0 ? 30.0 : 80.0;
         integral.x() = std::clamp(integral.x(), -max_integral, max_integral);
         integral.y() = std::clamp(integral.y(), -max_integral, max_integral);
 
-        // 미분항 계산 및 필터링 - 더 안정적인 필터링
+        // 미분항 계산 및 필터링 - 더 빠른 변화 감지용 필터
         derivative = (error - prev_error) / dt;
-        static const double alpha = 0.8; // 더 강한 필터링
+        
+        // 고속 움직임에 대한 적응형 필터링
+        double derivative_norm = derivative.norm();
+        double alpha = derivative_norm > 500.0 ? 0.7 : 0.85; // 빠른 변화 시 필터링 감소
+        
         derivative = derivative * alpha + prev_derivative * (1.0 - alpha);
         prev_derivative = derivative;
     }
@@ -79,7 +94,14 @@ Eigen::Vector2d PIDController2D::calculate(const Eigen::Vector2d &error)
     }
 
     // 캐시된 게인으로 PID 출력 계산
-    Eigen::Vector2d output = cached_kp * error + ki * integral + cached_kd * derivative;
+    Eigen::Vector2d output = cached_kp * error + cached_ki * integral + cached_kd * derivative;
+
+    // 출력 제한 - 너무 급격한 움직임 방지
+    double output_norm = output.norm();
+    const double max_output = 1500.0;
+    if (output_norm > max_output) {
+        output *= (max_output / output_norm);
+    }
 
     prev_error = error;
     return output;
@@ -112,8 +134,15 @@ KalmanFilter2D::KalmanFilter2D(double process_noise_q, double measurement_noise_
     H(0, 0) = 1.0; // x 위치
     H(1, 1) = 1.0; // y 위치
 
-    // 노이즈 매트릭스 초기화
+    // 노이즈 매트릭스 초기화 - 위치, 속도, 가속도에 다른 노이즈 값 적용
     Q = Eigen::Matrix<double, 6, 6>::Identity() * process_noise_q;
+    
+    // 급격한 움직임에 더 민감하게 반응하도록 속도와 가속도 노이즈 증가
+    Q(2, 2) = process_noise_q * 2.5; // vx에 대한 프로세스 노이즈 증가
+    Q(3, 3) = process_noise_q * 2.5; // vy에 대한 프로세스 노이즈 증가
+    Q(4, 4) = process_noise_q * 4.0; // ax에 대한 프로세스 노이즈 증가
+    Q(5, 5) = process_noise_q * 4.0; // ay에 대한 프로세스 노이즈 증가
+    
     R = Eigen::Matrix2d::Identity() * measurement_noise_r;
     P = Eigen::Matrix<double, 6, 6>::Identity();
 
@@ -152,7 +181,15 @@ void KalmanFilter2D::reset()
 
 void KalmanFilter2D::updateParameters(double process_noise_q, double measurement_noise_r)
 {
+    // 기본 노이즈 업데이트
     Q = Eigen::Matrix<double, 6, 6>::Identity() * process_noise_q;
+    
+    // 급격한 움직임에 더 민감하게 반응하도록 속도와 가속도 노이즈 증가
+    Q(2, 2) = process_noise_q * 2.5; // vx에 대한 프로세스 노이즈 증가
+    Q(3, 3) = process_noise_q * 2.5; // vy에 대한 프로세스 노이즈 증가
+    Q(4, 4) = process_noise_q * 4.0; // ax에 대한 프로세스 노이즈 증가
+    Q(5, 5) = process_noise_q * 4.0; // ay에 대한 프로세스 노이즈 증가
+    
     R = Eigen::Matrix2d::Identity() * measurement_noise_r;
 }
 
@@ -258,30 +295,58 @@ Eigen::Vector2d MouseThread::predictTargetPosition(double target_x, double targe
     double pos_y = state(1, 0);
     double vel_x = state(2, 0);
     double vel_y = state(3, 0);
+    double acc_x = state(4, 0);
+    double acc_y = state(5, 0);
 
-    // 단순화된 속도 계산 (hypot 대신 sqrt 사용)
+    // 빠른 움직임을 더 잘 감지하기 위한 속도 및 가속도 계산
     double velocity = std::sqrt(vel_x * vel_x + vel_y * vel_y);
+    double acceleration = std::sqrt(acc_x * acc_x + acc_y * acc_y);
 
-    // 단순화된 예측 시간 조정
-    constexpr double base_prediction_factor = 0.05;
+    // 속도에 따른 예측 시간 조정 (이전보다 더 적극적으로)
+    constexpr double base_prediction_factor = 0.07; // 기본값 증가
     double prediction_time;
 
-    if (velocity < 300.0)
+    // 속도와 가속도에 따른 예측 시간 동적 조정 - 급격히 빠른 움직임에 더 빠르게 반응
+    if (velocity < 200.0)
     {
         prediction_time = dt * base_prediction_factor;
     }
-    else if (velocity < 600.0)
-    {
-        prediction_time = dt * base_prediction_factor * 1.3;
-    }
-    else
+    else if (velocity < 500.0)
     {
         prediction_time = dt * base_prediction_factor * 1.5;
     }
+    else if (velocity < 800.0)
+    {
+        prediction_time = dt * base_prediction_factor * 2.0;
+    }
+    else
+    {
+        // 매우 빠른 움직임에 대한 더 적극적인 예측
+        prediction_time = dt * base_prediction_factor * 2.5;
+    }
 
-    // 선형 예측만 사용 (가속도 제외)
-    double future_x = pos_x + vel_x * prediction_time;
-    double future_y = pos_y + vel_y * prediction_time;
+    // 가속도를 고려한 이차 예측 (고속 움직임에 더 정확함)
+    double future_x = pos_x + vel_x * prediction_time + 0.5 * acc_x * prediction_time * prediction_time;
+    double future_y = pos_y + vel_y * prediction_time + 0.5 * acc_y * prediction_time * prediction_time;
+
+    // 급격한 방향 전환 감지 및 보정
+    static Eigen::Vector2d prev_velocity(0, 0);
+    Eigen::Vector2d current_velocity(vel_x, vel_y);
+    
+    if (prev_velocity.norm() > 0 && current_velocity.norm() > 200.0) {
+        double angle_change = std::acos(
+            std::clamp(prev_velocity.dot(current_velocity) / (prev_velocity.norm() * current_velocity.norm()), -1.0, 1.0)
+        );
+        
+        // 급격한 방향 전환 시 예측을 덜 적극적으로 조정
+        if (angle_change > 0.5) { // ~30도 이상 변화 감지
+            double reduction_factor = std::max(0.3, 1.0 - angle_change / 3.14);
+            future_x = pos_x + vel_x * prediction_time * reduction_factor;
+            future_y = pos_y + vel_y * prediction_time * reduction_factor;
+        }
+    }
+    
+    prev_velocity = current_velocity;
 
     target_detected.store(true);
     return Eigen::Vector2d(future_x, future_y);
@@ -502,7 +567,8 @@ void MouseThread::checkAndResetPredictions()
         const auto current_time = std::chrono::steady_clock::now();
         const double elapsed = std::chrono::duration<double>(current_time - last_target_time).count();
 
-        if (elapsed > 0.25) // 250ms timeout
+        // 타겟 손실 감지 시간을 250ms에서 150ms로 줄임 - 더 빠른 새 타겟 획득
+        if (elapsed > 0.15) // 150ms timeout
         {
             resetPrediction();
             target_detected = false;

@@ -1,0 +1,25 @@
+[33m3440b8b[m update readme
+[1mdiff --git a/README.md b/README.md[m
+[1mindex fcfa52a..0564064 100644[m
+[1m--- a/README.md[m
+[1m+++ b/README.md[m
+[36m@@ -1,17 +1,7 @@[m
+ <div align="center">[m
+ [m
+[31m-# Sunone Aimbot C++[m
+[31m-[m
+[31m-[![C++](https://img.shields.io/badge/C%2B%2B-17-blue)](https://github.com/SunOner/sunone_aimbot_cpp)[m
+[31m-[![License MIT](https://badgen.net/github/license/SunOner/sunone_aimbot_cpp)](https://github.com/SunOner/sunone_aimbot_cpp/blob/main/LICENSE)[m
+[31m-[![GitHub stars](https://img.shields.io/github/stars/SunOner/sunone_aimbot_cpp?color=ffb500)](https://github.com/SunOner/sunone_aimbot_cpp)[m
+[31m-[![Discord server](https://badgen.net/discord/online-members/sunone)](https://discord.gg/sunone)[m
+[31m-[m
+[31m-  <p>[m
+[31m-    <a href="https://github.com/SunOner/sunone_aimbot_cpp/releases" target="_blank">[m
+[31m-      <img width="75%" src="https://github.com/SunOner/sunone_aimbot/blob/main/media/one.gif">[m
+[31m-    </a>[m
+[31m-  </p>[m
+[32m+[m[32m# needaimbot C++[m
+[32m+[m
+ </div>[m
+ [m
+ - **This project is actively being developed thanks to the people who support on [Boosty](https://boosty.to/sunone) and [Patreon](https://www.patreon.com/sunone). By providing active support, you receive enhanced AI models.**[m
