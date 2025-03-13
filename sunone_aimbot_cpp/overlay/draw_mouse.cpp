@@ -11,29 +11,68 @@
 
 std::string ghub_version = get_ghub_version();
 
+// Helper function to show a tooltip with word wrapping and prevention of screen cutoff
+void SetWrappedTooltip(const char* text) 
+{
+    ImGui::BeginTooltip();
+    
+    // Get window size and position
+    ImVec2 window_size = ImGui::GetIO().DisplaySize;
+    ImVec2 mouse_pos = ImGui::GetMousePos();
+    
+    // Calculate max width for tooltip (use 50% of screen width)
+    float max_width = window_size.x * 0.5f;
+    
+    // Set text wrapping
+    ImGui::PushTextWrapPos(max_width);
+    ImGui::TextUnformatted(text);
+    ImGui::PopTextWrapPos();
+    
+    ImGui::EndTooltip();
+}
+
 void draw_mouse()
 {
     ImGui::SliderInt("DPI", &config.dpi, 800, 5000);
+    if (ImGui::IsItemHovered())
+    {
+        SetWrappedTooltip("Mouse DPI (Dots Per Inch). Higher values increase mouse sensitivity.");
+    }
+    
     ImGui::SliderFloat("Sensitivity", &config.sensitivity, 0.1f, 10.0f, "%.1f");
+    if (ImGui::IsItemHovered())
+    {
+        SetWrappedTooltip("Adjusts how sensitive the aiming is. Higher values result in larger movements.");
+    }
+    
     ImGui::SliderInt("FOV X", &config.fovX, 60, 120);
+    if (ImGui::IsItemHovered())
+    {
+        SetWrappedTooltip("Horizontal Field of View in degrees. Should match your game's settings.");
+    }
+    
     ImGui::SliderInt("FOV Y", &config.fovY, 40, 100);
+    if (ImGui::IsItemHovered())
+    {
+        SetWrappedTooltip("Vertical Field of View in degrees. Should match your game's settings.");
+    }
     
     ImGui::Separator();
     ImGui::Text("PID Controller Settings");
     ImGui::SliderFloat("Proportional (Kp)", &config.kp, 0.0f, 3.0f, "%.3f");
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Affects the immediate response to the error. Higher values make aiming more responsive but can cause overshooting. Directly proportional to how far the cursor is from the target.");
+        SetWrappedTooltip("Affects the immediate response to the error. Higher values make aiming more responsive but can cause overshooting. Directly proportional to how far the cursor is from the target.");
     }
     ImGui::SliderFloat("Integral (Ki)", &config.ki, 0.0f, 5.0f, "%.3f");
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Accounts for accumulated error over time. Higher values help eliminate persistent offset but can cause oscillation. Useful for overcoming small, consistent tracking errors.");
+        SetWrappedTooltip("Accounts for accumulated error over time. Higher values help eliminate persistent offset but can cause oscillation. Useful for overcoming small, consistent tracking errors.");
     }
     ImGui::SliderFloat("Derivative (Kd)", &config.kd, 0.0f, 1.0f, "%.3f");
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Predicts future error based on rate of change. Higher values add dampening to reduce overshooting and stabilize aiming. Acts as a braking mechanism for the aim.");
+        SetWrappedTooltip("Predicts future error based on rate of change. Higher values add dampening to reduce overshooting and stabilize aiming. Acts as a braking mechanism for the aim.");
     }
 
     ImGui::Separator();
@@ -41,23 +80,28 @@ void draw_mouse()
     ImGui::SliderFloat("Process Noise (Q)", &config.process_noise_q, 0.001f, 5.0f, "%.3f");
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Represents the uncertainty in the process model. Higher values make the filter more responsive to new measurements but noisier. Lower values make aim smoother but less responsive to sudden changes.");
+        SetWrappedTooltip("Represents the uncertainty in the process model. Higher values make the filter more responsive to new measurements but noisier. Lower values make aim smoother but less responsive to sudden changes.");
     }
     ImGui::SliderFloat("Measurement Noise (R)", &config.measurement_noise_r, 0.001f, 1.0f, "%.3f");
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Represents noise in the measurements. Higher values make the filter trust measurements less, resulting in smoother but potentially slower aiming. Lower values increase responsiveness but may cause jitter.");
+        SetWrappedTooltip("Represents noise in the measurements. Higher values make the filter trust measurements less, resulting in smoother but potentially slower aiming. Lower values increase responsiveness but may cause jitter.");
     }
     ImGui::SliderFloat("Estimation Error (P)", &config.estimation_error_p, 0.001f, 10.0f, "%.3f");
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Initial uncertainty in the state estimate. Higher values cause the filter to give more weight to initial measurements. Affects how quickly the filter converges to stable tracking.");
+        SetWrappedTooltip("Initial uncertainty in the state estimate. Higher values cause the filter to give more weight to initial measurements. Affects how quickly the filter converges to stable tracking.");
     }
 
     ImGui::Separator();
 
     // No recoil settings
     ImGui::Checkbox("Easy No Recoil", &config.easynorecoil);
+    if (ImGui::IsItemHovered())
+    {
+        SetWrappedTooltip("Enables automatic recoil compensation. Adjust the strength to match your game's recoil patterns.");
+    }
+    
     if (config.easynorecoil)
     {
         ImGui::SliderFloat("No Recoil Strength", &config.easynorecoilstrength, 0.1f, 500.0f, "%.1f");
@@ -68,7 +112,7 @@ void draw_mouse()
         }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("Step size for adjusting no recoil strength with left/right arrow keys (0.1 - 50.0)");
+            SetWrappedTooltip("Step size for adjusting no recoil strength with left/right arrow keys (0.1 - 50.0)");
         }
         ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Left/Right Arrow keys: Adjust recoil strength");
         
@@ -81,9 +125,18 @@ void draw_mouse()
     ImGui::Separator();
 
     ImGui::Checkbox("Auto Shoot", &config.auto_shoot);
+    if (ImGui::IsItemHovered())
+    {
+        SetWrappedTooltip("Automatically fires when aiming at a target. Use with caution as this may be detected in some games.");
+    }
+    
     if (config.auto_shoot)
     {
         ImGui::SliderFloat("bScope Multiplier", &config.bScope_multiplier, 0.5f, 2.0f, "%.1f");
+        if (ImGui::IsItemHovered())
+        {
+            SetWrappedTooltip("Adjusts aiming when using scoped weapons. Lower values for more precise scopes.");
+        }
     }
 
     // INPUT METHODS
@@ -117,6 +170,11 @@ void draw_mouse()
             config.saveConfig();
             input_method_changed.store(true);
         }
+    }
+    
+    if (ImGui::IsItemHovered())
+    {
+        SetWrappedTooltip("Select method for mouse control. Each method has different compatibility with games.");
     }
 
     if (config.input_method == "ARDUINO")
@@ -162,6 +220,10 @@ void draw_mouse()
             config.saveConfig();
             input_method_changed.store(true);
         }
+        if (ImGui::IsItemHovered())
+        {
+            SetWrappedTooltip("Select the COM port your Arduino is connected to. Check Device Manager if unsure.");
+        }
 
         std::vector<int> baud_rate_list = { 9600, 19200, 38400, 57600, 115200 };
         std::vector<std::string> baud_rate_str_list;
@@ -193,16 +255,29 @@ void draw_mouse()
             config.saveConfig();
             input_method_changed.store(true);
         }
+        if (ImGui::IsItemHovered())
+        {
+            SetWrappedTooltip("Baud rate for Arduino communication. Must match the rate in your Arduino sketch.");
+        }
 
         if (ImGui::Checkbox("Arduino 16-bit Mouse", &config.arduino_16_bit_mouse))
         {
             config.saveConfig();
             input_method_changed.store(true);
         }
+        if (ImGui::IsItemHovered())
+        {
+            SetWrappedTooltip("Enable 16-bit precision for mouse movements (recommended for smoother control).");
+        }
+        
         if (ImGui::Checkbox("Arduino Enable Keys", &config.arduino_enable_keys))
         {
             config.saveConfig();
             input_method_changed.store(true);
+        }
+        if (ImGui::IsItemHovered())
+        {
+            SetWrappedTooltip("Enable keyboard key simulation through Arduino. Required if using keybinds for any functions.");
         }
     }
     else if (config.input_method == "GHUB")
@@ -225,6 +300,10 @@ void draw_mouse()
             if (ImGui::Button("GHub Docs"))
             {
                 ShellExecute(0, 0, L"https://github.com/SunOner/sunone_aimbot_docs/blob/main/tips/ghub.md", 0, 0, SW_SHOW);
+            }
+            if (ImGui::IsItemHovered())
+            {
+                SetWrappedTooltip("Open documentation for GHUB configuration in your web browser.");
             }
         }
         ImGui::TextColored(ImVec4(255, 0, 0, 255), "Use at your own risk, the method is detected in some games.");
