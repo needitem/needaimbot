@@ -40,6 +40,14 @@ public:
     float kp;
     float ki;
     float kd;
+    
+    // Separated X/Y PID Controllers
+    float kp_x;
+    float ki_x;
+    float kd_x;
+    float kp_y;
+    float ki_y;
+    float kd_y;
 
     // Kalman Filter
     float process_noise_q;
