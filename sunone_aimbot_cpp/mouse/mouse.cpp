@@ -23,7 +23,15 @@ extern Config config;
 
 // PID 컨트롤러 구현
 PIDController2D::PIDController2D(double kp, double ki, double kd)
-    : kp(kp), ki(ki), kd(kd)
+    : kp(kp), ki(ki), kd(kd), kp_x(kp), ki_x(ki), kd_x(kd), kp_y(kp), ki_y(ki), kd_y(kd)
+{
+    reset();
+}
+
+// X/Y 분리 게인을 사용하는 새 생성자 구현
+PIDController2D::PIDController2D(double kp_x, double ki_x, double kd_x, double kp_y, double ki_y, double kd_y)
+    : kp_x(kp_x), ki_x(ki_x), kd_x(kd_x), kp_y(kp_y), ki_y(ki_y), kd_y(kd_y), 
+      kp((kp_x + kp_y) / 2), ki((ki_x + ki_y) / 2), kd((kd_x + kd_y) / 2) // 평균값을 공통 게인으로 설정
 {
     reset();
 }
@@ -38,54 +46,81 @@ Eigen::Vector2d PIDController2D::calculate(const Eigen::Vector2d &error)
 
     // 시간 기반 게인 조정 (30ms 간격으로 변경 - 더 빠른 업데이트)
     static auto last_gain_update = now;
-    static double cached_kp = kp;
-    static double cached_ki = ki; // ki도 동적 조정에 포함
-    static double cached_kd = kd;
+    // X축/Y축 게인 캐싱
+    static double cached_kp_x = kp_x;
+    static double cached_ki_x = ki_x;
+    static double cached_kd_x = kd_x;
+    static double cached_kp_y = kp_y;
+    static double cached_ki_y = ki_y;
+    static double cached_kd_y = kd_y;
 
     double time_since_update = std::chrono::duration<double>(now - last_gain_update).count();
     if (time_since_update >= 0.03) // 30ms로 속도 향상
     {
         last_gain_update = now;
-        double error_magnitude = error.norm();
+        
+        // X축과 Y축 오차 분리
+        double error_magnitude_x = std::abs(error.x());
+        double error_magnitude_y = std::abs(error.y());
 
-        // 오차 크기에 따른 더 적극적인 게인 조정
-        double target_kp = kp * (1.0 + std::min(error_magnitude / 100.0, 0.6)); // 더 강한 비례 반응
-        double target_ki = ki * (1.0 - std::min(error_magnitude / 400.0, 0.8)); // 오차가 크면 적분 효과 감소
-        double target_kd = kd * (1.0 + std::min(error_magnitude / 200.0, 0.4)); // 더 강한 미분 반응
+        // X축 게인 조정 (수평 움직임)
+        double target_kp_x = kp_x * (1.0 + std::min(error_magnitude_x / 100.0, 0.6));
+        double target_ki_x = ki_x * (1.0 - std::min(error_magnitude_x / 400.0, 0.8));
+        double target_kd_x = kd_x * (1.0 + std::min(error_magnitude_x / 200.0, 0.4));
+
+        // Y축 게인 조정 (수직 움직임) - 조금 더 보수적으로 조정
+        double target_kp_y = kp_y * (1.0 + std::min(error_magnitude_y / 120.0, 0.5)); // 수직은 좀 더 보수적
+        double target_ki_y = ki_y * (1.0 - std::min(error_magnitude_y / 350.0, 0.9)); // 수직 적분 효과 더 감소
+        double target_kd_y = kd_y * (1.0 + std::min(error_magnitude_y / 180.0, 0.5)); // 더 강한 수직 미분 반응
 
         // 빠른 보간으로 신속하게 변경
         double alpha = std::min(time_since_update * 15.0, 1.0); // 최대 67ms에 걸쳐 완전히 변경
-        cached_kp = cached_kp * (1.0 - alpha) + target_kp * alpha;
-        cached_ki = cached_ki * (1.0 - alpha) + target_ki * alpha;
-        cached_kd = cached_kd * (1.0 - alpha) + target_kd * alpha;
+        cached_kp_x = cached_kp_x * (1.0 - alpha) + target_kp_x * alpha;
+        cached_ki_x = cached_ki_x * (1.0 - alpha) + target_ki_x * alpha;
+        cached_kd_x = cached_kd_x * (1.0 - alpha) + target_kd_x * alpha;
+        cached_kp_y = cached_kp_y * (1.0 - alpha) + target_kp_y * alpha;
+        cached_ki_y = cached_ki_y * (1.0 - alpha) + target_ki_y * alpha;
+        cached_kd_y = cached_kd_y * (1.0 - alpha) + target_kd_y * alpha;
     }
 
     if (dt > 0.0001)
     {
         // 적분항 업데이트 - 오차 크기에 따른 적분 제한
         double error_norm = error.norm();
-        double integral_factor = 1.0;
+        
+        // X축/Y축 적분 인자 별도 계산
+        double integral_factor_x = 1.0;
+        double integral_factor_y = 1.0;
         
         // 오차가 크면 적분 효과 감소 (과도한 누적 방지)
-        if (error_norm > 100.0) {
-            integral_factor = 100.0 / error_norm;
+        if (std::abs(error.x()) > 100.0) {
+            integral_factor_x = 100.0 / std::abs(error.x());
+        }
+        if (std::abs(error.y()) > 80.0) { // Y축은 더 빨리 제한 (하향 조준 문제 방지)
+            integral_factor_y = 80.0 / std::abs(error.y());
         }
         
-        integral += error * dt * integral_factor;
+        // X축/Y축 분리 적분
+        integral.x() += error.x() * dt * integral_factor_x;
+        integral.y() += error.y() * dt * integral_factor_y;
 
         // 적분 항 제한 - 동적 제한
-        const double max_integral = error_norm > 200.0 ? 30.0 : 80.0;
-        integral.x() = std::clamp(integral.x(), -max_integral, max_integral);
-        integral.y() = std::clamp(integral.y(), -max_integral, max_integral);
-
-        // 미분항 계산 및 필터링 - 더 빠른 변화 감지용 필터
+        integral.x() = std::clamp(integral.x(), -80.0, 80.0);
+        integral.y() = std::clamp(integral.y(), -60.0, 60.0); // Y축 적분을 좀 더 제한
+        
+        // 미분항 계산 및 필터링 - X축/Y축 별도 계산
         derivative = (error - prev_error) / dt;
         
-        // 고속 움직임에 대한 적응형 필터링
-        double derivative_norm = derivative.norm();
-        double alpha = derivative_norm > 500.0 ? 0.7 : 0.85; // 빠른 변화 시 필터링 감소
+        // X축/Y축 별도의 미분 필터링
+        double derivative_norm_x = std::abs(derivative.x());
+        double derivative_norm_y = std::abs(derivative.y());
         
-        derivative = derivative * alpha + prev_derivative * (1.0 - alpha);
+        double alpha_x = derivative_norm_x > 500.0 ? 0.7 : 0.85;
+        double alpha_y = derivative_norm_y > 400.0 ? 0.6 : 0.9; // Y축은 더 빠르게 반응, 더 강한 필터링
+        
+        derivative.x() = derivative.x() * alpha_x + prev_derivative.x() * (1.0 - alpha_x);
+        derivative.y() = derivative.y() * alpha_y + prev_derivative.y() * (1.0 - alpha_y);
+        
         prev_derivative = derivative;
     }
     else
@@ -93,15 +128,17 @@ Eigen::Vector2d PIDController2D::calculate(const Eigen::Vector2d &error)
         derivative.setZero();
     }
 
-    // 캐시된 게인으로 PID 출력 계산
-    Eigen::Vector2d output = cached_kp * error + cached_ki * integral + cached_kd * derivative;
+    // X축/Y축 분리 게인으로 PID 출력 계산
+    Eigen::Vector2d output;
+    output.x() = cached_kp_x * error.x() + cached_ki_x * integral.x() + cached_kd_x * derivative.x();
+    output.y() = cached_kp_y * error.y() + cached_ki_y * integral.y() + cached_kd_y * derivative.y();
 
-    // 출력 제한 - 너무 급격한 움직임 방지
-    double output_norm = output.norm();
-    const double max_output = 1500.0;
-    if (output_norm > max_output) {
-        output *= (max_output / output_norm);
-    }
+    // 출력 제한 - X축/Y축 별도 제한
+    const double max_output_x = 1500.0;
+    const double max_output_y = 1200.0; // Y축은 조금 더 제한 (과도한 하향 움직임 방지)
+    
+    output.x() = std::clamp(output.x(), -max_output_x, max_output_x);
+    output.y() = std::clamp(output.y(), -max_output_y, max_output_y);
 
     prev_error = error;
     return output;
@@ -121,6 +158,31 @@ void PIDController2D::updateParameters(double kp, double ki, double kd)
     this->kp = kp;
     this->ki = ki;
     this->kd = kd;
+    
+    // 공통 게인도 X/Y 게인으로 설정 (하위 호환성)
+    this->kp_x = kp;
+    this->ki_x = ki;
+    this->kd_x = kd;
+    this->kp_y = kp;
+    this->ki_y = ki;
+    this->kd_y = kd;
+}
+
+// X/Y 분리 게인 업데이트 함수 구현
+void PIDController2D::updateSeparatedParameters(double kp_x, double ki_x, double kd_x, 
+                                               double kp_y, double ki_y, double kd_y)
+{
+    this->kp_x = kp_x;
+    this->ki_x = ki_x;
+    this->kd_x = kd_x;
+    this->kp_y = kp_y;
+    this->ki_y = ki_y;
+    this->kd_y = kd_y;
+    
+    // 공통 게인은 X/Y의 평균으로 설정 (기존 코드와의 호환성 위해)
+    this->kp = (kp_x + kp_y) / 2;
+    this->ki = (ki_x + ki_y) / 2;
+    this->kd = (kd_x + kd_y) / 2;
 }
 
 // 칼만 필터 구현
@@ -239,7 +301,61 @@ MouseThread::MouseThread(
         input_method = std::make_unique<Win32InputMethod>();
     }
 
-    last_prediction_time = std::chrono::steady_clock::now();
+    last_target_time = std::chrono::steady_clock::now();
+    last_prediction_time = last_target_time;
+}
+
+// X/Y 분리 PID 컨트롤러를 지원하는 새 생성자 구현
+MouseThread::MouseThread(
+    int resolution,
+    int dpi,
+    double sensitivity,
+    int fovX,
+    int fovY,
+    double kp_x,
+    double ki_x,
+    double kd_x,
+    double kp_y,
+    double ki_y,
+    double kd_y,
+    double process_noise_q,
+    double measurement_noise_r,
+    bool auto_shoot,
+    float bScope_multiplier,
+    SerialConnection *serialConnection,
+    GhubMouse *gHub) : screen_width(static_cast<double>(resolution * 16) / 9.0),
+                       screen_height(static_cast<double>(resolution)),
+                       dpi(static_cast<double>(dpi)),
+                       mouse_sensitivity(sensitivity),
+                       fov_x(static_cast<double>(fovX)),
+                       fov_y(static_cast<double>(fovY)),
+                       center_x(screen_width / 2),
+                       center_y(screen_height / 2),
+                       auto_shoot(auto_shoot),
+                       bScope_multiplier(bScope_multiplier),
+                       current_target(nullptr),
+                       tracking_errors(false)
+{
+    // 칼만 필터와 분리된 PID 컨트롤러 초기화
+    kalman_filter = std::make_unique<KalmanFilter2D>(process_noise_q, measurement_noise_r);
+    pid_controller = std::make_unique<PIDController2D>(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
+
+    // InputMethod 초기화
+    if (serialConnection && serialConnection->isOpen())
+    {
+        input_method = std::make_unique<SerialInputMethod>(serialConnection);
+    }
+    else if (gHub)
+    {
+        input_method = std::make_unique<GHubInputMethod>(gHub);
+    }
+    else
+    {
+        input_method = std::make_unique<Win32InputMethod>();
+    }
+
+    last_target_time = std::chrono::steady_clock::now();
+    last_prediction_time = last_target_time;
 }
 
 void MouseThread::updateConfig(
@@ -256,19 +372,58 @@ void MouseThread::updateConfig(
     bool auto_shoot,
     float bScope_multiplier)
 {
-    this->screen_width = resolution;
-    this->screen_height = resolution;
-    this->dpi = dpi;
+    this->screen_width = static_cast<double>(resolution);
+    this->screen_height = static_cast<double>(resolution);
+    this->dpi = static_cast<double>(dpi);
     this->mouse_sensitivity = sensitivity;
-    this->fov_x = fovX;
-    this->fov_y = fovY;
+    this->fov_x = static_cast<double>(fovX);
+    this->fov_y = static_cast<double>(fovY);
     this->auto_shoot = auto_shoot;
     this->bScope_multiplier = bScope_multiplier;
-    this->center_x = resolution / 2;
-    this->center_y = resolution / 2;
+    this->center_x = screen_width / 2.0;
+    this->center_y = screen_height / 2.0;
 
+    // 칼만 필터 업데이트
     kalman_filter->updateParameters(process_noise_q, measurement_noise_r);
+
+    // 레거시 PID 컨트롤러 업데이트 (X/Y 축 동일 게인)
     pid_controller->updateParameters(kp, ki, kd);
+}
+
+// 분리된 X/Y PID 게인을 사용하는 새 updateConfig 메서드 구현
+void MouseThread::updateConfig(
+    int resolution,
+    int dpi,
+    double sensitivity,
+    int fovX,
+    int fovY,
+    double kp_x,
+    double ki_x,
+    double kd_x,
+    double kp_y,
+    double ki_y,
+    double kd_y,
+    double process_noise_q,
+    double measurement_noise_r,
+    bool auto_shoot,
+    float bScope_multiplier)
+{
+    this->screen_width = static_cast<double>(resolution);
+    this->screen_height = static_cast<double>(resolution);
+    this->dpi = static_cast<double>(dpi);
+    this->mouse_sensitivity = sensitivity;
+    this->fov_x = static_cast<double>(fovX);
+    this->fov_y = static_cast<double>(fovY);
+    this->auto_shoot = auto_shoot;
+    this->bScope_multiplier = bScope_multiplier;
+    this->center_x = screen_width / 2.0;
+    this->center_y = screen_height / 2.0;
+
+    // 칼만 필터 업데이트
+    kalman_filter->updateParameters(process_noise_q, measurement_noise_r);
+
+    // 분리된 PID 컨트롤러 업데이트 (X/Y 축 별도 게인)
+    pid_controller->updateSeparatedParameters(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
 }
 
 Eigen::Vector2d MouseThread::predictTargetPosition(double target_x, double target_y)
@@ -568,7 +723,7 @@ void MouseThread::checkAndResetPredictions()
         const double elapsed = std::chrono::duration<double>(current_time - last_target_time).count();
 
         // 타겟 손실 감지 시간을 250ms에서 150ms로 줄임 - 더 빠른 새 타겟 획득
-        if (elapsed > 0.15) // 150ms timeout
+        if (elapsed > 0.1) // 150ms timeout
         {
             resetPrediction();
             target_detected = false;
