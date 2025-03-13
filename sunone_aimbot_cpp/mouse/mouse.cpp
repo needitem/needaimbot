@@ -744,6 +744,24 @@ void MouseThread::applyRecoilCompensation(float strength)
     // Pre-compute the scaling factor
     static const double vertical_scale = (fov_y / screen_height) * (dpi * (1.0 / mouse_sensitivity)) / 360.0;
 
+    // Reduce recoil compensation when actively aiming at an enemy
+    if (aiming.load())
+    {
+        // Configurable reduction factor - read from config
+        float reduction_factor = 0.5f; // Default 50% reduction
+        
+        // Get the current reduction factor from config if available
+        {
+            std::lock_guard<std::mutex> config_lock(configMutex);
+            if (config.recoil_reduction_while_aiming > 0.0f && config.recoil_reduction_while_aiming <= 1.0f) {
+                reduction_factor = config.recoil_reduction_while_aiming;
+            }
+        }
+        
+        // Apply reduced strength with pre-computed scale
+        strength *= reduction_factor;
+    }
+
     // Apply strength with pre-computed scale
     int compensation = static_cast<int>(strength * vertical_scale);
 
