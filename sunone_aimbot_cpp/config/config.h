@@ -34,6 +34,7 @@ public:
     bool easynorecoil;
     float easynorecoilstrength;
     float norecoil_step;  // Step size for adjusting norecoil strength
+    float recoil_reduction_while_aiming; // Reduction factor when aiming at an enemy (0.0-1.0)
     std::string input_method; // "WIN32", "GHUB", "ARDUINO"
 
     // PID Controller
