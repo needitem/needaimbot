@@ -63,17 +63,32 @@ void draw_mouse()
     // X-axis PID Settings
     if (ImGui::CollapsingHeader("Horizontal (X-axis) PID", ImGuiTreeNodeFlags_DefaultOpen))
     {
-        ImGui::SliderFloat("Proportional X (Kp)", &config.kp_x, 0.0f, 3.0f, "%.3f");
+        // Cast to float for ImGui slider but preserve double precision
+        float kp_x_display = static_cast<float>(config.kp_x);
+        if (ImGui::SliderFloat("Proportional X (Kp)", &kp_x_display, 0.0f, 3.0f, "%.3f"))
+        {
+            config.kp_x = static_cast<double>(kp_x_display);
+        }
         if (ImGui::IsItemHovered())
         {
             SetWrappedTooltip("Affects the immediate horizontal response. Higher values make aiming more responsive but can cause overshooting.");
         }
-        ImGui::SliderFloat("Integral X (Ki)", &config.ki_x, 0.0f, 5.0f, "%.3f");
+
+        float ki_x_display = static_cast<float>(config.ki_x);
+        if (ImGui::SliderFloat("Integral X (Ki)", &ki_x_display, 0.0f, 5.0f, "%.3f"))
+        {
+            config.ki_x = static_cast<double>(ki_x_display);
+        }
         if (ImGui::IsItemHovered())
         {
             SetWrappedTooltip("Accounts for accumulated horizontal error over time. Higher values help eliminate persistent offset but can cause oscillation.");
         }
-        ImGui::SliderFloat("Derivative X (Kd)", &config.kd_x, 0.0f, 1.0f, "%.3f");
+
+        float kd_x_display = static_cast<float>(config.kd_x);
+        if (ImGui::SliderFloat("Derivative X (Kd)", &kd_x_display, 0.0f, 1.0f, "%.3f"))
+        {
+            config.kd_x = static_cast<double>(kd_x_display);
+        }
         if (ImGui::IsItemHovered())
         {
             SetWrappedTooltip("Predicts future horizontal error based on rate of change. Higher values add dampening to reduce overshooting.");
@@ -83,17 +98,31 @@ void draw_mouse()
     // Y-axis PID Settings
     if (ImGui::CollapsingHeader("Vertical (Y-axis) PID", ImGuiTreeNodeFlags_DefaultOpen))
     {
-        ImGui::SliderFloat("Proportional Y (Kp)", &config.kp_y, 0.0f, 3.0f, "%.3f");
+        float kp_y_display = static_cast<float>(config.kp_y);
+        if (ImGui::SliderFloat("Proportional Y (Kp)", &kp_y_display, 0.0f, 3.0f, "%.3f"))
+        {
+            config.kp_y = static_cast<double>(kp_y_display);
+        }
         if (ImGui::IsItemHovered())
         {
             SetWrappedTooltip("Affects the immediate vertical response. Higher values make aiming more responsive but can cause overshooting.");
         }
-        ImGui::SliderFloat("Integral Y (Ki)", &config.ki_y, 0.0f, 5.0f, "%.3f");
+
+        float ki_y_display = static_cast<float>(config.ki_y);
+        if (ImGui::SliderFloat("Integral Y (Ki)", &ki_y_display, 0.0f, 5.0f, "%.3f"))
+        {
+            config.ki_y = static_cast<double>(ki_y_display);
+        }
         if (ImGui::IsItemHovered())
         {
             SetWrappedTooltip("Accounts for accumulated vertical error over time. Higher values help eliminate persistent offset but can cause oscillation.");
         }
-        ImGui::SliderFloat("Derivative Y (Kd)", &config.kd_y, 0.0f, 1.0f, "%.3f");
+
+        float kd_y_display = static_cast<float>(config.kd_y);
+        if (ImGui::SliderFloat("Derivative Y (Kd)", &kd_y_display, 0.0f, 1.0f, "%.3f"))
+        {
+            config.kd_y = static_cast<double>(kd_y_display);
+        }
         if (ImGui::IsItemHovered())
         {
             SetWrappedTooltip("Predicts future vertical error based on rate of change. Higher values add dampening to reduce overshooting.");
@@ -103,8 +132,10 @@ void draw_mouse()
     // Legacy combined PID settings (for backward compatibility)
     if (ImGui::CollapsingHeader("Combined PID (Legacy)"))
     {
-        if (ImGui::SliderFloat("Proportional (Kp)", &config.kp, 0.0f, 3.0f, "%.3f"))
+        float kp_display = static_cast<float>(config.kp);
+        if (ImGui::SliderFloat("Proportional (Kp)", &kp_display, 0.0f, 3.0f, "%.3f"))
         {
+            config.kp = static_cast<double>(kp_display);
             // Sync legacy value to both axes if user adjusts it
             config.kp_x = config.kp;
             config.kp_y = config.kp;
@@ -114,8 +145,10 @@ void draw_mouse()
             SetWrappedTooltip("Legacy setting that affects both axes. Prefer using the separate X and Y controls above.");
         }
         
-        if (ImGui::SliderFloat("Integral (Ki)", &config.ki, 0.0f, 5.0f, "%.3f"))
+        float ki_display = static_cast<float>(config.ki);
+        if (ImGui::SliderFloat("Integral (Ki)", &ki_display, 0.0f, 5.0f, "%.3f"))
         {
+            config.ki = static_cast<double>(ki_display);
             // Sync legacy value to both axes
             config.ki_x = config.ki;
             config.ki_y = config.ki;
@@ -125,8 +158,10 @@ void draw_mouse()
             SetWrappedTooltip("Legacy setting that affects both axes. Prefer using the separate X and Y controls above.");
         }
         
-        if (ImGui::SliderFloat("Derivative (Kd)", &config.kd, 0.0f, 1.0f, "%.3f"))
+        float kd_display = static_cast<float>(config.kd);
+        if (ImGui::SliderFloat("Derivative (Kd)", &kd_display, 0.0f, 1.0f, "%.3f"))
         {
+            config.kd = static_cast<double>(kd_display);
             // Sync legacy value to both axes
             config.kd_x = config.kd;
             config.kd_y = config.kd;
