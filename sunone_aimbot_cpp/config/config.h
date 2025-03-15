@@ -38,17 +38,17 @@ public:
     std::string input_method; // "WIN32", "GHUB", "ARDUINO"
 
     // PID Controller
-    float kp;
-    float ki;
-    float kd;
+    double kp;
+    double ki;
+    double kd;
     
     // Separated X/Y PID Controllers
-    float kp_x;
-    float ki_x;
-    float kd_x;
-    float kp_y;
-    float ki_y;
-    float kd_y;
+    double kp_x;
+    double ki_x;
+    double kd_x;
+    double kp_y;
+    double ki_y;
+    double kd_y;
 
     // Kalman Filter
     float process_noise_q;

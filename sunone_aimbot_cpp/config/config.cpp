@@ -76,17 +76,17 @@ bool Config::loadConfig(const std::string& filename)
         input_method = "WIN32";
 
         // PID Controller
-        kp = 0.5f;
-        ki = 0.0f;
-        kd = 0.1f;
+        kp = 0.5;
+        ki = 0.0;
+        kd = 0.1;
         
         // Separated X/Y PID Controllers
-        kp_x = 0.5f;  // 초기값은 공통 값과 동일하게 설정
-        ki_x = 0.0f;
-        kd_x = 0.1f;
-        kp_y = 0.4f;  // Y축은 약간 낮게 설정 (과도한 하향 조준 방지)
-        ki_y = 0.0f;
-        kd_y = 0.15f; // Y축은 미분 게인을 약간 높게 설정 (더 빠른 감속)
+        kp_x = 0.5;  // 초기값은 공통 값과 동일하게 설정
+        ki_x = 0.0;
+        kd_x = 0.1;
+        kp_y = 0.4;  // Y축은 약간 낮게 설정 (과도한 하향 조준 방지)
+        ki_y = 0.0;
+        kd_y = 0.15; // Y축은 미분 게인을 약간 높게 설정 (더 빠른 감속)
 
         // Kalman Filter
         process_noise_q = 0.01f;
@@ -216,17 +216,17 @@ bool Config::loadConfig(const std::string& filename)
     input_method = get_string("input_method", "WIN32");
 
     // PID Controller
-    kp = (float)get_double("kp", 0.5);
-    ki = (float)get_double("ki", 0.0);
-    kd = (float)get_double("kd", 0.1);
+    kp = (double)get_double("kp", 0.5);
+    ki = (double)get_double("ki", 0.0);
+    kd = (double)get_double("kd", 0.1);
 
     // Separated X/Y PID Controllers
-    kp_x = (float)get_double("kp_x", 0.5);
-    ki_x = (float)get_double("ki_x", 0.0);
-    kd_x = (float)get_double("kd_x", 0.1);
-    kp_y = (float)get_double("kp_y", 0.4);
-    ki_y = (float)get_double("ki_y", 0.0);
-    kd_y = (float)get_double("kd_y", 0.15);
+    kp_x = (double)get_double("kp_x", 0.5);
+    ki_x = (double)get_double("ki_x", 0.0);
+    kd_x = (double)get_double("kd_x", 0.1);
+    kp_y = (double)get_double("kp_y", 0.4);
+    ki_y = (double)get_double("ki_y", 0.0);
+    kd_y = (double)get_double("kd_y", 0.15);
 
     // Kalman Filter
     process_noise_q = (float)get_double("process_noise_q", 0.01);
@@ -348,7 +348,7 @@ bool Config::saveConfig(const std::string& filename)
         << "kp = " << kp << "\n"
         << "ki = " << ki << "\n"
         << "kd = " << kd << "\n"
-        << std::fixed << std::setprecision(1)
+        << std::fixed << std::setprecision(3)
 
         << "# Separated X/Y PID Controllers\n"
         << "kp_x = " << kp_x << "\n"

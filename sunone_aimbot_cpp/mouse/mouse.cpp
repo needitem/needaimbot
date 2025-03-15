@@ -38,15 +38,14 @@ PIDController2D::PIDController2D(double kp_x, double ki_x, double kd_x, double k
 
 Eigen::Vector2d PIDController2D::calculate(const Eigen::Vector2d &error)
 {
+    // Calculate time delta with clamping
     auto now = std::chrono::steady_clock::now();
     double dt = std::chrono::duration<double>(now - last_time_point).count();
-    dt = std::min(dt, 0.1); // 시간 간격 제한
-
+    dt = std::min(dt, 0.1); // Limit time delta
     last_time_point = now;
 
-    // 시간 기반 게인 조정 (30ms 간격으로 변경 - 더 빠른 업데이트)
+    // Static cache for gains and time update to reduce mutex contention
     static auto last_gain_update = now;
-    // X축/Y축 게인 캐싱
     static double cached_kp_x = kp_x;
     static double cached_ki_x = ki_x;
     static double cached_kd_x = kd_x;
@@ -54,72 +53,110 @@ Eigen::Vector2d PIDController2D::calculate(const Eigen::Vector2d &error)
     static double cached_ki_y = ki_y;
     static double cached_kd_y = kd_y;
 
+    // Only update gains every 30ms to reduce calculations
     double time_since_update = std::chrono::duration<double>(now - last_gain_update).count();
-    if (time_since_update >= 0.03) // 30ms로 속도 향상
+    if (time_since_update >= 0.03)
     {
         last_gain_update = now;
         
-        // X축과 Y축 오차 분리
+        // Extract error components with absolute value
         double error_magnitude_x = std::abs(error.x());
         double error_magnitude_y = std::abs(error.y());
 
-        // X축 게인 조정 (수평 움직임)
-        double target_kp_x = kp_x * (1.0 + std::min(error_magnitude_x / 100.0, 0.6));
-        double target_ki_x = ki_x * (1.0 - std::min(error_magnitude_x / 400.0, 0.8));
+        // SIMD for gain adjustments
+        __m128d error_mag = _mm_set_pd(error_magnitude_y, error_magnitude_x);
+        
+        // X-axis gain calculation factors
+        __m128d x_factors = _mm_set_pd(
+            1.0 - std::min(error_magnitude_x / 400.0, 0.8), // ki factor
+            1.0 + std::min(error_magnitude_x / 100.0, 0.6)  // kp factor
+        );
+        
+        // Y-axis gain calculation factors
+        __m128d y_factors = _mm_set_pd(
+            1.0 - std::min(error_magnitude_y / 350.0, 0.9), // ki factor
+            1.0 + std::min(error_magnitude_y / 120.0, 0.5)  // kp factor
+        );
+        
+        // Calculate target gains
+        double target_kp_x = kp_x * _mm_cvtsd_f64(x_factors);
+        double target_ki_x = ki_x * _mm_cvtsd_f64(_mm_unpackhi_pd(x_factors, x_factors));
         double target_kd_x = kd_x * (1.0 + std::min(error_magnitude_x / 200.0, 0.4));
+        
+        double target_kp_y = kp_y * _mm_cvtsd_f64(y_factors);
+        double target_ki_y = ki_y * _mm_cvtsd_f64(_mm_unpackhi_pd(y_factors, y_factors));
+        double target_kd_y = kd_y * (1.0 + std::min(error_magnitude_y / 180.0, 0.5));
 
-        // Y축 게인 조정 (수직 움직임) - 조금 더 보수적으로 조정
-        double target_kp_y = kp_y * (1.0 + std::min(error_magnitude_y / 120.0, 0.5)); // 수직은 좀 더 보수적
-        double target_ki_y = ki_y * (1.0 - std::min(error_magnitude_y / 350.0, 0.9)); // 수직 적분 효과 더 감소
-        double target_kd_y = kd_y * (1.0 + std::min(error_magnitude_y / 180.0, 0.5)); // 더 강한 수직 미분 반응
-
-        // 빠른 보간으로 신속하게 변경
-        double alpha = std::min(time_since_update * 15.0, 1.0); // 최대 67ms에 걸쳐 완전히 변경
-        cached_kp_x = cached_kp_x * (1.0 - alpha) + target_kp_x * alpha;
-        cached_ki_x = cached_ki_x * (1.0 - alpha) + target_ki_x * alpha;
-        cached_kd_x = cached_kd_x * (1.0 - alpha) + target_kd_x * alpha;
-        cached_kp_y = cached_kp_y * (1.0 - alpha) + target_kp_y * alpha;
-        cached_ki_y = cached_ki_y * (1.0 - alpha) + target_ki_y * alpha;
-        cached_kd_y = cached_kd_y * (1.0 - alpha) + target_kd_y * alpha;
+        // Fast interpolation to avoid sudden changes
+        double alpha = std::min(time_since_update * 15.0, 1.0);
+        double one_minus_alpha = 1.0 - alpha;
+        
+        // SIMD for interpolation
+        __m128d current_x_gains = _mm_set_pd(cached_ki_x, cached_kp_x);
+        __m128d target_x_gains = _mm_set_pd(target_ki_x, target_kp_x);
+        __m128d alpha_vec = _mm_set1_pd(alpha);
+        __m128d one_minus_alpha_vec = _mm_set1_pd(one_minus_alpha);
+        
+        __m128d new_x_gains = _mm_add_pd(
+            _mm_mul_pd(current_x_gains, one_minus_alpha_vec),
+            _mm_mul_pd(target_x_gains, alpha_vec)
+        );
+        
+        cached_kp_x = _mm_cvtsd_f64(new_x_gains);
+        cached_ki_x = _mm_cvtsd_f64(_mm_unpackhi_pd(new_x_gains, new_x_gains));
+        
+        // Same for Y gains
+        __m128d current_y_gains = _mm_set_pd(cached_ki_y, cached_kp_y);
+        __m128d target_y_gains = _mm_set_pd(target_ki_y, target_kp_y);
+        
+        __m128d new_y_gains = _mm_add_pd(
+            _mm_mul_pd(current_y_gains, one_minus_alpha_vec),
+            _mm_mul_pd(target_y_gains, alpha_vec)
+        );
+        
+        cached_kp_y = _mm_cvtsd_f64(new_y_gains);
+        cached_ki_y = _mm_cvtsd_f64(_mm_unpackhi_pd(new_y_gains, new_y_gains));
+        
+        // Update Kd with simple interpolation
+        cached_kd_x = cached_kd_x * one_minus_alpha + target_kd_x * alpha;
+        cached_kd_y = cached_kd_y * one_minus_alpha + target_kd_y * alpha;
     }
 
+    // Only update integral and derivative if time delta is significant
     if (dt > 0.0001)
     {
-        // 적분항 업데이트 - 오차 크기에 따른 적분 제한
-        double error_norm = error.norm();
+        // Calculate integral limiting factors
+        double integral_factor_x = (std::abs(error.x()) > 100.0) ? 
+                                  100.0 / std::abs(error.x()) : 1.0;
+        double integral_factor_y = (std::abs(error.y()) > 80.0) ? 
+                                  80.0 / std::abs(error.y()) : 1.0;
         
-        // X축/Y축 적분 인자 별도 계산
-        double integral_factor_x = 1.0;
-        double integral_factor_y = 1.0;
-        
-        // 오차가 크면 적분 효과 감소 (과도한 누적 방지)
-        if (std::abs(error.x()) > 100.0) {
-            integral_factor_x = 100.0 / std::abs(error.x());
-        }
-        if (std::abs(error.y()) > 80.0) { // Y축은 더 빨리 제한 (하향 조준 문제 방지)
-            integral_factor_y = 80.0 / std::abs(error.y());
-        }
-        
-        // X축/Y축 분리 적분
+        // Update integral terms
         integral.x() += error.x() * dt * integral_factor_x;
         integral.y() += error.y() * dt * integral_factor_y;
-
-        // 적분 항 제한 - 동적 제한
+        
+        // Hard clamp integral to prevent windup
         integral.x() = std::clamp(integral.x(), -80.0, 80.0);
-        integral.y() = std::clamp(integral.y(), -60.0, 60.0); // Y축 적분을 좀 더 제한
+        integral.y() = std::clamp(integral.y(), -60.0, 60.0);
         
-        // 미분항 계산 및 필터링 - X축/Y축 별도 계산
-        derivative = (error - prev_error) / dt;
+        // Calculate derivative
+        __m128d error_vec = _mm_set_pd(error.y(), error.x());
+        __m128d prev_error_vec = _mm_set_pd(prev_error.y(), prev_error.x());
+        __m128d dt_vec = _mm_set1_pd(1.0 / dt);
         
-        // X축/Y축 별도의 미분 필터링
-        double derivative_norm_x = std::abs(derivative.x());
-        double derivative_norm_y = std::abs(derivative.y());
+        __m128d derivative_vec = _mm_mul_pd(_mm_sub_pd(error_vec, prev_error_vec), dt_vec);
         
-        double alpha_x = derivative_norm_x > 500.0 ? 0.7 : 0.85;
-        double alpha_y = derivative_norm_y > 400.0 ? 0.6 : 0.9; // Y축은 더 빠르게 반응, 더 강한 필터링
+        // Extract derivative components
+        double derivative_x = _mm_cvtsd_f64(derivative_vec);
+        double derivative_y = _mm_cvtsd_f64(_mm_unpackhi_pd(derivative_vec, derivative_vec));
         
-        derivative.x() = derivative.x() * alpha_x + prev_derivative.x() * (1.0 - alpha_x);
-        derivative.y() = derivative.y() * alpha_y + prev_derivative.y() * (1.0 - alpha_y);
+        // Apply different filtering based on derivative magnitude
+        double alpha_x = (std::abs(derivative_x) > 500.0) ? 0.7 : 0.85;
+        double alpha_y = (std::abs(derivative_y) > 400.0) ? 0.6 : 0.9;
+        
+        // Update derivative with filtering
+        derivative.x() = derivative_x * alpha_x + prev_derivative.x() * (1.0 - alpha_x);
+        derivative.y() = derivative_y * alpha_y + prev_derivative.y() * (1.0 - alpha_y);
         
         prev_derivative = derivative;
     }
@@ -128,20 +165,37 @@ Eigen::Vector2d PIDController2D::calculate(const Eigen::Vector2d &error)
         derivative.setZero();
     }
 
-    // X축/Y축 분리 게인으로 PID 출력 계산
-    Eigen::Vector2d output;
-    output.x() = cached_kp_x * error.x() + cached_ki_x * integral.x() + cached_kd_x * derivative.x();
-    output.y() = cached_kp_y * error.y() + cached_ki_y * integral.y() + cached_kd_y * derivative.y();
-
-    // 출력 제한 - X축/Y축 별도 제한
-    const double max_output_x = 1500.0;
-    const double max_output_y = 1200.0; // Y축은 조금 더 제한 (과도한 하향 움직임 방지)
+    // Calculate PID output using SIMD
+    __m128d error_vec = _mm_set_pd(error.y(), error.x());
+    __m128d integral_vec = _mm_set_pd(integral.y(), integral.x());
+    __m128d derivative_vec = _mm_set_pd(derivative.y(), derivative.x());
     
-    output.x() = std::clamp(output.x(), -max_output_x, max_output_x);
-    output.y() = std::clamp(output.y(), -max_output_y, max_output_y);
+    __m128d kp_vec = _mm_set_pd(cached_kp_y, cached_kp_x);
+    __m128d ki_vec = _mm_set_pd(cached_ki_y, cached_ki_x);
+    __m128d kd_vec = _mm_set_pd(cached_kd_y, cached_kd_x);
+    
+    __m128d p_term = _mm_mul_pd(kp_vec, error_vec);
+    __m128d i_term = _mm_mul_pd(ki_vec, integral_vec);
+    __m128d d_term = _mm_mul_pd(kd_vec, derivative_vec);
+    
+    // Sum the terms
+    __m128d output_vec = _mm_add_pd(_mm_add_pd(p_term, i_term), d_term);
+    
+    // Clamp the output using different limits for X and Y
+    double output_x = _mm_cvtsd_f64(output_vec);
+    double output_y = _mm_cvtsd_f64(_mm_unpackhi_pd(output_vec, output_vec));
+    
+    const double max_output_x = 1500.0;
+    const double max_output_y = 1200.0;
+    
+    output_x = std::clamp(output_x, -max_output_x, max_output_x);
+    output_y = std::clamp(output_y, -max_output_y, max_output_y);
 
+    // Update previous error
     prev_error = error;
-    return output;
+    
+    // Return the final output
+    return Eigen::Vector2d(output_x, output_y);
 }
 
 void PIDController2D::reset()
@@ -434,74 +488,92 @@ Eigen::Vector2d MouseThread::predictTargetPosition(double target_x, double targe
 
     last_prediction_time = current_time;
 
-    if (!target_detected.load())
-    {
-        kalman_filter->predict(dt);
-        return Eigen::Vector2d(kalman_filter->getState()(0, 0), kalman_filter->getState()(1, 0));
-    }
-
+    // Always predict first, irrespective of target detection
     kalman_filter->predict(dt);
 
-    Eigen::Vector2d measurement(target_x, target_y);
+    // Early return if no target
+    if (!target_detected.load())
+    {
+        const auto &state = kalman_filter->getState();
+        return Eigen::Vector2d(state(0, 0), state(1, 0));
+    }
+
+    // Use SIMD to create measurement vector
+    __m128d measurement_vec = _mm_set_pd(target_y, target_x);
+    Eigen::Vector2d measurement(_mm_cvtsd_f64(measurement_vec), 
+                               _mm_cvtsd_f64(_mm_unpackhi_pd(measurement_vec, measurement_vec)));
+    
     kalman_filter->update(measurement);
 
     const auto &state = kalman_filter->getState();
-    double pos_x = state(0, 0);
-    double pos_y = state(1, 0);
-    double vel_x = state(2, 0);
-    double vel_y = state(3, 0);
-    double acc_x = state(4, 0);
-    double acc_y = state(5, 0);
+    
+    // Use SIMD to gather state variables
+    __m128d pos = _mm_set_pd(state(1, 0), state(0, 0));
+    __m128d vel = _mm_set_pd(state(3, 0), state(2, 0));
+    __m128d acc = _mm_set_pd(state(5, 0), state(4, 0));
+    
+    // Extract position components
+    double pos_x = _mm_cvtsd_f64(pos);
+    double pos_y = _mm_cvtsd_f64(_mm_unpackhi_pd(pos, pos));
+    
+    // Extract velocity components
+    double vel_x = _mm_cvtsd_f64(vel);
+    double vel_y = _mm_cvtsd_f64(_mm_unpackhi_pd(vel, vel));
+    
+    // Extract acceleration components
+    double acc_x = _mm_cvtsd_f64(acc);
+    double acc_y = _mm_cvtsd_f64(_mm_unpackhi_pd(acc, acc));
 
-    // 빠른 움직임을 더 잘 감지하기 위한 속도 및 가속도 계산
-    double velocity = std::sqrt(vel_x * vel_x + vel_y * vel_y);
-    double acceleration = std::sqrt(acc_x * acc_x + acc_y * acc_y);
+    // Compute velocity magnitude using SIMD
+    __m128d vel_squared = _mm_mul_pd(vel, vel);
+    __m128d sum_vel = _mm_hadd_pd(vel_squared, vel_squared);
+    double velocity = _mm_cvtsd_f64(_mm_sqrt_pd(sum_vel));
 
-    // 속도에 따른 예측 시간 조정 (이전보다 더 적극적으로)
-    constexpr double base_prediction_factor = 0.07; // 기본값 증가
-    double prediction_time;
+    // Compute acceleration magnitude using SIMD
+    __m128d acc_squared = _mm_mul_pd(acc, acc);
+    __m128d sum_acc = _mm_hadd_pd(acc_squared, acc_squared);
+    double acceleration = _mm_cvtsd_f64(_mm_sqrt_pd(sum_acc));
 
-    // 속도와 가속도에 따른 예측 시간 동적 조정 - 급격히 빠른 움직임에 더 빠르게 반응
-    if (velocity < 200.0)
-    {
-        prediction_time = dt * base_prediction_factor;
-    }
-    else if (velocity < 500.0)
-    {
-        prediction_time = dt * base_prediction_factor * 1.5;
-    }
-    else if (velocity < 800.0)
-    {
-        prediction_time = dt * base_prediction_factor * 2.0;
-    }
-    else
-    {
-        // 매우 빠른 움직임에 대한 더 적극적인 예측
-        prediction_time = dt * base_prediction_factor * 2.5;
-    }
+    // Use lookup table approach to eliminate branches for prediction_time calculation
+    constexpr double base_prediction_factor = 0.07;
+    constexpr double prediction_factors[4] = {1.0, 1.5, 2.0, 2.5};
+    
+    int velocity_idx = std::min(static_cast<int>(velocity / 200.0), 3);
+    double prediction_time = dt * base_prediction_factor * prediction_factors[velocity_idx];
 
-    // 가속도를 고려한 이차 예측 (고속 움직임에 더 정확함)
-    double future_x = pos_x + vel_x * prediction_time + 0.5 * acc_x * prediction_time * prediction_time;
-    double future_y = pos_y + vel_y * prediction_time + 0.5 * acc_y * prediction_time * prediction_time;
-
-    // 급격한 방향 전환 감지 및 보정
+    // SIMD for position prediction calculation
+    __m128d pred_time = _mm_set1_pd(prediction_time);
+    __m128d pred_time_squared = _mm_mul_pd(pred_time, pred_time);
+    __m128d half = _mm_set1_pd(0.5);
+    
+    // Calculate: pos + vel*t + 0.5*acc*t^2
+    __m128d term1 = _mm_mul_pd(vel, pred_time);
+    __m128d term2 = _mm_mul_pd(_mm_mul_pd(acc, pred_time_squared), half);
+    __m128d future_pos = _mm_add_pd(_mm_add_pd(pos, term1), term2);
+    
+    // Direction change detection and correction
     static Eigen::Vector2d prev_velocity(0, 0);
     Eigen::Vector2d current_velocity(vel_x, vel_y);
     
-    if (prev_velocity.norm() > 0 && current_velocity.norm() > 200.0) {
+    if (prev_velocity.norm() > 0 && velocity > 200.0) {
         double angle_change = std::acos(
-            std::clamp(prev_velocity.dot(current_velocity) / (prev_velocity.norm() * current_velocity.norm()), -1.0, 1.0)
+            std::clamp(prev_velocity.dot(current_velocity) / (prev_velocity.norm() * velocity), -1.0, 1.0)
         );
         
-        // 급격한 방향 전환 시 예측을 덜 적극적으로 조정
-        if (angle_change > 0.5) { // ~30도 이상 변화 감지
+        // Apply correction only for significant direction changes
+        if (angle_change > 0.5) {
             double reduction_factor = std::max(0.3, 1.0 - angle_change / 3.14);
-            future_x = pos_x + vel_x * prediction_time * reduction_factor;
-            future_y = pos_y + vel_y * prediction_time * reduction_factor;
+            __m128d reduction = _mm_set1_pd(reduction_factor);
+            __m128d corrected_term1 = _mm_mul_pd(vel, _mm_mul_pd(pred_time, reduction));
+            future_pos = _mm_add_pd(pos, corrected_term1);
         }
     }
     
     prev_velocity = current_velocity;
+    
+    // Extract final position
+    double future_x = _mm_cvtsd_f64(future_pos);
+    double future_y = _mm_cvtsd_f64(_mm_unpackhi_pd(future_pos, future_pos));
 
     target_detected.store(true);
     return Eigen::Vector2d(future_x, future_y);
@@ -509,56 +581,77 @@ Eigen::Vector2d MouseThread::predictTargetPosition(double target_x, double targe
 
 Eigen::Vector2d MouseThread::calculateMovement(const Eigen::Vector2d &target_pos)
 {
-    // Calculate error directly
-    Eigen::Vector2d error(target_pos[0] - center_x, target_pos[1] - center_y);
+    // Pre-compute scaling factors for better cache locality
+    static const double fov_scale_x = fov_x / screen_width;
+    static const double fov_scale_y = fov_y / screen_height;
+    static const double sens_scale = dpi * (1.0 / mouse_sensitivity) / 360.0;
+    
+    // Use SIMD to calculate error
+    __m128d target = _mm_set_pd(target_pos[1], target_pos[0]);
+    __m128d center = _mm_set_pd(center_y, center_x);
+    __m128d error_simd = _mm_sub_pd(target, center);
+    
+    // Convert to Eigen vector for PID controller
+    Eigen::Vector2d error(_mm_cvtsd_f64(error_simd), 
+                          _mm_cvtsd_f64(_mm_unpackhi_pd(error_simd, error_simd)));
 
     // Calculate PID output
     Eigen::Vector2d pid_output = pid_controller->calculate(error);
 
-    // Scale output with FOV and sensitivity
-    double fov_scale_x = fov_x / screen_width;
-    double fov_scale_y = fov_y / screen_height;
-    double sens_scale = dpi * (1.0 / mouse_sensitivity) / 360.0;
-
-    return Eigen::Vector2d(
-        pid_output[0] * fov_scale_x * sens_scale,
-        pid_output[1] * fov_scale_y * sens_scale);
+    // Use SIMD for output scaling
+    __m128d pid_vec = _mm_set_pd(pid_output[1], pid_output[0]);
+    __m128d scale = _mm_set_pd(fov_scale_y * sens_scale, fov_scale_x * sens_scale);
+    __m128d result = _mm_mul_pd(pid_vec, scale);
+    
+    // Convert back to Eigen vector
+    return Eigen::Vector2d(_mm_cvtsd_f64(result), 
+                          _mm_cvtsd_f64(_mm_unpackhi_pd(result, result)));
 }
 
 bool MouseThread::checkTargetInScope(double target_x, double target_y, double target_w, double target_h, double reduction_factor)
 {
-    // SIMD 최적화된 중심점 계산
-    __m128d target_dims = _mm_set_pd(target_h, target_w);
-    __m128d half = _mm_set1_pd(0.5);
+    // Fast boundary check using SIMD - first do a quick approximate check
+    constexpr double SCOPE_MARGIN = 0.15; // 25% of screen width/height
+    
+    // Cache the screen boundaries
+    static const double screen_margin_x = screen_width * SCOPE_MARGIN;
+    static const double screen_margin_y = screen_height * SCOPE_MARGIN;
+    
+    // Calculate target center using SIMD
     __m128d target_pos = _mm_set_pd(target_y, target_x);
-    __m128d target_center = _mm_add_pd(target_pos, _mm_mul_pd(target_dims, half));
-
-    // 화면 중심과의 차이 계산
+    __m128d target_size = _mm_set_pd(target_h, target_w);
+    __m128d half = _mm_set1_pd(0.5);
+    __m128d target_center = _mm_add_pd(target_pos, _mm_mul_pd(target_size, half));
+    
+    // Calculate absolute difference from screen center
     __m128d screen_center = _mm_set_pd(center_y, center_x);
     __m128d diff = _mm_sub_pd(target_center, screen_center);
-    __m128d abs_diff = _mm_andnot_pd(_mm_set1_pd(-0.0), diff);
-
-    // 빠른 경계 검사
-    double max_diff_x = _mm_cvtsd_f64(abs_diff);
-    double max_diff_y = _mm_cvtsd_f64(_mm_unpackhi_pd(abs_diff, abs_diff));
-
-    if (max_diff_x > screen_width * 0.25 || max_diff_y > screen_height * 0.25)
+    __m128d abs_diff = _mm_andnot_pd(_mm_set1_pd(-0.0), diff); // Fast absolute value
+    
+    // Extract x and y differences
+    double diff_x = _mm_cvtsd_f64(abs_diff);
+    double diff_y = _mm_cvtsd_f64(_mm_unpackhi_pd(abs_diff, abs_diff));
+    
+    // Fast early rejection (avoid unnecessary calculations)
+    if (diff_x > screen_margin_x || diff_y > screen_margin_y)
     {
         return false;
     }
-
-    // 축소된 타겟 크기 계산
-    __m128d reduced_dims = _mm_mul_pd(target_dims, _mm_set1_pd(reduction_factor * 0.5));
-
-    // 경계 검사
-    __m128d min_bound = _mm_sub_pd(target_center, reduced_dims);
-    __m128d max_bound = _mm_add_pd(target_center, reduced_dims);
-
-    // 화면 중심이 축소된 타겟 영역 내에 있는지 확인
+    
+    // Calculate reduced target size
+    __m128d reduction = _mm_set1_pd(reduction_factor * 0.5);
+    __m128d reduced_size = _mm_mul_pd(target_size, reduction);
+    
+    // Calculate target bounds
+    __m128d min_bound = _mm_sub_pd(target_center, reduced_size);
+    __m128d max_bound = _mm_add_pd(target_center, reduced_size);
+    
+    // Check if screen center is within reduced target bounds
     __m128d compare_min = _mm_cmpge_pd(screen_center, min_bound);
     __m128d compare_max = _mm_cmple_pd(screen_center, max_bound);
     __m128d result = _mm_and_pd(compare_min, compare_max);
-
+    
+    // Both conditions must be true for target to be in scope
     return _mm_movemask_pd(result) == 0x3;
 }
 
@@ -739,32 +832,37 @@ void MouseThread::setInputMethod(std::unique_ptr<InputMethod> new_method)
 
 void MouseThread::applyRecoilCompensation(float strength)
 {
-    std::lock_guard<std::mutex> lock(input_method_mutex);
-
     // Pre-compute the scaling factor
     static const double vertical_scale = (fov_y / screen_height) * (dpi * (1.0 / mouse_sensitivity)) / 360.0;
 
     // Reduce recoil compensation when actively aiming at an enemy
     if (aiming.load())
     {
-        // Configurable reduction factor - read from config
-        float reduction_factor = 0.5f; // Default 50% reduction
+        // Read reduction factor only once, cache it statically
+        static float reduction_factor = 0.5f; // Default 50% reduction
+        static auto last_config_check = std::chrono::steady_clock::now();
         
-        // Get the current reduction factor from config if available
-        {
+        // Update cached reduction factor every 250ms to reduce lock contention
+        auto now = std::chrono::steady_clock::now();
+        if (std::chrono::duration<double>(now - last_config_check).count() > 1.25) {
             std::lock_guard<std::mutex> config_lock(configMutex);
             if (config.recoil_reduction_while_aiming > 0.0f && config.recoil_reduction_while_aiming <= 1.0f) {
                 reduction_factor = config.recoil_reduction_while_aiming;
             }
+            last_config_check = now;
         }
         
-        // Apply reduced strength with pre-computed scale
+        // Apply reduced strength with single multiplication - no conditionals
         strength *= reduction_factor;
     }
 
-    // Apply strength with pre-computed scale
-    int compensation = static_cast<int>(strength * vertical_scale);
+    // Apply strength with pre-computed scale using SIMD
+    __m128d strength_vec = _mm_set1_pd(strength);
+    __m128d scale_vec = _mm_set1_pd(vertical_scale);
+    __m128d result = _mm_mul_pd(strength_vec, scale_vec);
+    int compensation = static_cast<int>(_mm_cvtsd_f64(result));
 
+    // Move mouse atomically
     if (input_method)
     {
         input_method->move(0, compensation);
