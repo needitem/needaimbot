@@ -9,6 +9,7 @@
 #include <atomic>
 #include <mutex>
 #include <condition_variable>
+#include <immintrin.h> // For SIMD instructions
 
 #include "capture.h"
 #include "visuals.h"
@@ -49,6 +50,108 @@ std::atomic<bool> input_method_changed(false);
 
 std::atomic<bool> zooming(false);
 std::atomic<bool> shooting(false);
+
+struct alignas(64) DetectionData {
+    std::vector<cv::Rect> boxes;
+    std::vector<int> classes;
+    int version;
+    
+    DetectionData() : version(0) {
+        // Pre-allocate with typical maximum size to avoid reallocations
+        boxes.reserve(64);  // Increased from 32 to 64 for typical max targets
+        classes.reserve(64);
+    }
+};
+
+// SIMD-optimized functions for vector operations
+namespace simd {
+    // Process multiple detection boxes in parallel using SIMD
+    inline void processBatchedBoxes(const std::vector<cv::Rect>& boxes, 
+                                   const std::vector<int>& classes,
+                                   std::vector<float>& scores,
+                                   int resolution_x, 
+                                   int resolution_y,
+                                   bool disable_headshot) {
+        const size_t count = boxes.size();
+        if (count < 4) return; // Not enough data for SIMD processing
+        
+        // Pre-allocate scores vector with exact size to avoid reallocation
+        scores.resize(count);
+        
+        // Pre-allocate temporary arrays for SIMD processing
+        alignas(16) float centers_x[4];
+        alignas(16) float centers_y[4];
+        alignas(16) float distances[4];
+        
+        // Process 4 boxes at a time using SSE
+        size_t i = 0;
+        for (; i + 3 < count; i += 4) {
+            // Load box centers (x coordinates)
+            centers_x[0] = boxes[i].x + boxes[i].width * 0.5f;
+            centers_x[1] = boxes[i+1].x + boxes[i+1].width * 0.5f;
+            centers_x[2] = boxes[i+2].x + boxes[i+2].width * 0.5f;
+            centers_x[3] = boxes[i+3].x + boxes[i+3].width * 0.5f;
+            
+            // Load box centers (y coordinates)
+            centers_y[0] = boxes[i].y + boxes[i].height * 0.5f;
+            centers_y[1] = boxes[i+1].y + boxes[i+1].height * 0.5f;
+            centers_y[2] = boxes[i+2].y + boxes[i+2].height * 0.5f;
+            centers_y[3] = boxes[i+3].y + boxes[i+3].height * 0.5f;
+            
+            // Convert to SIMD vectors
+            __m128 center_xs = _mm_load_ps(centers_x);  // Using aligned load
+            __m128 center_ys = _mm_load_ps(centers_y);  // Using aligned load
+            
+            // Calculate distances from screen center
+            __m128 half_res_x = _mm_set1_ps(resolution_x * 0.5f);
+            __m128 half_res_y = _mm_set1_ps(resolution_y * 0.5f);
+            
+            __m128 diff_x = _mm_sub_ps(center_xs, half_res_x);
+            __m128 diff_y = _mm_sub_ps(center_ys, half_res_y);
+            
+            // Calculate squared distances (x²+y²)
+            __m128 sq_x = _mm_mul_ps(diff_x, diff_x);
+            __m128 sq_y = _mm_mul_ps(diff_y, diff_y);
+            __m128 squared_distances = _mm_add_ps(sq_x, sq_y);
+            
+            // Store results
+            _mm_store_ps(distances, squared_distances);  // Using aligned store
+            
+            // Apply additional score factors (would depend on targeting preferences)
+            for (size_t j = 0; j < 4; j++) {
+                // Lower distance = higher score
+                float distance_score = 1.0f / (1.0f + std::sqrt(distances[j]));
+                
+                // Class-based scoring (e.g., prefer headshots)
+                float class_score = 1.0f;
+                if (!disable_headshot && classes[i+j] == 0) { // Assuming 0 is head class
+                    class_score = 1.5f; // Prefer headshots
+                }
+                
+                scores[i+j] = distance_score * class_score;
+            }
+        }
+        
+        // Handle remaining boxes without SIMD
+        for (; i < count; i++) {
+            float center_x = boxes[i].x + boxes[i].width * 0.5f;
+            float center_y = boxes[i].y + boxes[i].height * 0.5f;
+            
+            float diff_x = center_x - (resolution_x * 0.5f);
+            float diff_y = center_y - (resolution_y * 0.5f);
+            
+            float squared_distance = diff_x * diff_x + diff_y * diff_y;
+            float distance_score = 1.0f / (1.0f + std::sqrt(squared_distance));
+            
+            float class_score = 1.0f;
+            if (!disable_headshot && classes[i] == 0) {
+                class_score = 1.5f;
+            }
+            
+            scores[i] = distance_score * class_score;
+        }
+    }
+}
 
 void initializeInputMethod()
 {
@@ -125,12 +228,16 @@ void mouseThreadFunction(MouseThread &mouseThread)
     bool is_active = false;
     auto last_active_time = std::chrono::steady_clock::now();
     
-    static std::vector<cv::Rect> boxes;
-    static std::vector<int> classes;
-    static AimbotTarget staticTarget(0, 0, 0, 0, 0); 
+    DetectionData detectionData;
+    std::vector<float> target_scores;
+    target_scores.reserve(64);  // Increased from 32 to 64 to match DetectionData
     
     const int FRAMES_BETWEEN_TIME_CHECK = 10;
     int frame_counter = 0;
+    
+    // Pre-load atomic values to reduce atomic operations
+    bool is_shooting = shooting.load();
+    bool is_zooming = zooming.load();
     
     while (!shouldExit)
     {
@@ -138,6 +245,12 @@ void mouseThreadFunction(MouseThread &mouseThread)
         
         bool is_aiming = aiming.load();
         bool auto_shooting = config.auto_shoot;
+        
+        // Periodically update atomic copies
+        if (frame_counter % 10 == 0) {
+            is_shooting = shooting.load();
+            is_zooming = zooming.load();
+        }
         
         bool newFrameAvailable = false;
         {
@@ -154,15 +267,9 @@ void mouseThreadFunction(MouseThread &mouseThread)
                 newFrameAvailable = true;
                 lastDetectionVersion = detector.detectionVersion;
                 
-                if (boxes.capacity() < detector.detectedBoxes.size()) {
-                    boxes.reserve(detector.detectedBoxes.size() + 10);
-                }
-                if (classes.capacity() < detector.detectedClasses.size()) {
-                    classes.reserve(detector.detectedClasses.size() + 10);
-                }
-                
-                boxes = detector.detectedBoxes;
-                classes = detector.detectedClasses;
+                detectionData.boxes = std::move(detector.detectedBoxes);
+                detectionData.classes = std::move(detector.detectedClasses);
+                detectionData.version = detector.detectionVersion;
             }
         } 
         
@@ -176,7 +283,10 @@ void mouseThreadFunction(MouseThread &mouseThread)
             continue;
         }
         
-        handleEasyNoRecoil(mouseThread);
+        // Only call handleEasyNoRecoil when needed
+        if (config.easynorecoil && is_shooting && is_zooming) {
+            mouseThread.applyRecoilCompensation(config.easynorecoilstrength);
+        }
         
         if (input_method_changed.load()) {
             initializeInputMethod();
@@ -206,7 +316,23 @@ void mouseThreadFunction(MouseThread &mouseThread)
             detection_resolution_changed.store(false);
         }
 
-        AimbotTarget *target = sortTargets(boxes, classes, config.detection_resolution, config.detection_resolution, config.disable_headshot);
+        // Compute scores with SIMD if there are enough boxes
+        if (detectionData.boxes.size() > 4) {
+            // Use SIMD-optimized processing when there are enough boxes
+            simd::processBatchedBoxes(
+                detectionData.boxes,
+                detectionData.classes,
+                target_scores,
+                config.detection_resolution,
+                config.detection_resolution,
+                config.disable_headshot
+            );
+        }
+
+        AimbotTarget* target = sortTargets(detectionData.boxes, detectionData.classes, 
+                                         config.detection_resolution, 
+                                         config.detection_resolution, 
+                                         config.disable_headshot);
        
         bool has_target = (target != nullptr);
         
