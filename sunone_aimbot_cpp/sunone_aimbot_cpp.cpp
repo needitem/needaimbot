@@ -107,7 +107,6 @@ void initializeInputMethod()
     globalMouseThread->setInputMethod(std::move(input_method));
 }
 
-// 노리코일 처리를 위한 함수 복원 - 인라인화로 함수 호출 오버헤드 감소
 inline void handleEasyNoRecoil(MouseThread &mouseThread)
 {
     if (config.easynorecoil && shooting.load() && zooming.load())
@@ -120,54 +119,43 @@ void mouseThreadFunction(MouseThread &mouseThread)
 {
     int lastDetectionVersion = -1;
     
-    // 스레드 대기 시간 최적화 (ms)
     constexpr auto idle_timeout = std::chrono::milliseconds(30);
     constexpr auto active_timeout = std::chrono::milliseconds(5);
     
-    // 활성 상태 트래킹
     bool is_active = false;
     auto last_active_time = std::chrono::steady_clock::now();
     
-    // 메모리 할당 최소화를 위한 정적 객체 선언
     static std::vector<cv::Rect> boxes;
     static std::vector<int> classes;
-    static AimbotTarget staticTarget(0, 0, 0, 0, 0); // 재사용 가능한 타겟 객체
+    static AimbotTarget staticTarget(0, 0, 0, 0, 0); 
     
-    // 프레임 카운터 추가 (시간 측정 최적화)
     const int FRAMES_BETWEEN_TIME_CHECK = 10;
     int frame_counter = 0;
     
     while (!shouldExit)
     {
-        // 적절한 대기 시간 선택 (활성/비활성)
         auto timeout = is_active ? active_timeout : idle_timeout;
         
-        // 스레드 제어 상태 한 번에 로드 (원자적 읽기 최소화)
         bool is_aiming = aiming.load();
         bool auto_shooting = config.auto_shoot;
         
         bool newFrameAvailable = false;
         {
-            // 탐지 결과에 대한 락 (최소화) - 필요한 데이터만 빠르게 복사
             std::unique_lock<std::mutex> lock(detector.detectionMutex);
             
-            // 새 프레임이 준비되거나 종료 신호가 올 때까지 대기
             detector.detectionCV.wait_for(lock, timeout, [&]() {
                 return detector.detectionVersion > lastDetectionVersion || shouldExit;
             });
             
-            // 종료 검사
             if (shouldExit)
                 break;
                 
-            // 새 프레임이 있으면 데이터 복사
             if (detector.detectionVersion > lastDetectionVersion) {
                 newFrameAvailable = true;
                 lastDetectionVersion = detector.detectionVersion;
                 
-                // 메모리 재할당을 방지하기 위해 미리 용량 예약
                 if (boxes.capacity() < detector.detectedBoxes.size()) {
-                    boxes.reserve(detector.detectedBoxes.size() + 10); // 여유 공간 확보
+                    boxes.reserve(detector.detectedBoxes.size() + 10);
                 }
                 if (classes.capacity() < detector.detectedClasses.size()) {
                     classes.reserve(detector.detectedClasses.size() + 10);
@@ -176,24 +164,20 @@ void mouseThreadFunction(MouseThread &mouseThread)
                 boxes = detector.detectedBoxes;
                 classes = detector.detectedClasses;
             }
-        } // 락 즉시 해제
+        } 
         
-        // 새 프레임이 없으면 반동 제어만 수행하고 계속
         if (!newFrameAvailable) {
-            // 비활성 상태 체크 (빈도 제한)
             if (is_active && (++frame_counter >= FRAMES_BETWEEN_TIME_CHECK)) {
                 frame_counter = 0;
                 if (std::chrono::steady_clock::now() - last_active_time > std::chrono::milliseconds(300)) {
                     is_active = false;
                 }
             }
-            
-            // 반동 제어는 계속 적용
-            handleEasyNoRecoil(mouseThread);
             continue;
         }
         
-        // 설정 변경 감지 및 처리 (최적화: 조건 체크 후 처리)
+        handleEasyNoRecoil(mouseThread);
+        
         if (input_method_changed.load()) {
             initializeInputMethod();
             input_method_changed.store(false);
@@ -222,17 +206,13 @@ void mouseThreadFunction(MouseThread &mouseThread)
             detection_resolution_changed.store(false);
         }
 
-        // 타겟 찾기 (정적 객체 대신 기존 인터페이스 유지)
         AimbotTarget *target = sortTargets(boxes, classes, config.detection_resolution, config.detection_resolution, config.disable_headshot);
-        
-        // 조건 체크 최적화 (조건 통합)
+       
         bool has_target = (target != nullptr);
         
-        // 조준 및 발사 로직 단순화
         if (is_aiming && has_target) {
             is_active = true;
             
-            // 시간 측정 빈도 제한
             if (++frame_counter >= FRAMES_BETWEEN_TIME_CHECK) {
                 frame_counter = 0;
                 last_active_time = std::chrono::steady_clock::now();
@@ -247,16 +227,10 @@ void mouseThreadFunction(MouseThread &mouseThread)
             mouseThread.releaseMouse();
         }
         
-        // 반동 제어 처리
-        handleEasyNoRecoil(mouseThread);
-        
-        // 예측 초기화 검사
         mouseThread.checkAndResetPredictions();
         delete target;
     }
 }
-
-// 모델 로딩 중복 코드를 하나의 함수로 통합
 bool loadAndValidateModel(std::string& modelName, const std::vector<std::string>& availableModels) {
     if (modelName.empty() && !availableModels.empty()) {
         modelName = availableModels[0];
@@ -311,7 +285,6 @@ int main()
             return -1;
         }
 
-        // 입력 방식 초기화 코드 간소화
         if (config.input_method == "ARDUINO")
         {
             arduinoSerial = new SerialConnection(config.arduino_port, config.arduino_baudrate);
@@ -348,7 +321,6 @@ int main()
 
         globalMouseThread = &mouseThread;
 
-        // 모델 로딩 로직을 통합 함수로 대체
         std::vector<std::string> availableModels = getAvailableModels();
         if (!loadAndValidateModel(config.ai_model, availableModels)) {
             std::cin.get();
