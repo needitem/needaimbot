@@ -51,15 +51,22 @@ Detector::Detector()
     numClasses(0)
 {
     cudaStreamCreate(&stream);
+    cudaStreamCreate(&preprocessStream);
+    cudaStreamCreate(&postprocessStream);
 
     cvStream = cv::cuda::Stream();
     preprocessCvStream = cv::cuda::Stream();
     postprocessCvStream = cv::cuda::Stream();
+    
+    cudaEventCreateWithFlags(&processingDone, cudaEventDisableTiming);
 }
 
 Detector::~Detector()
 {
     cudaStreamDestroy(stream);
+    cudaStreamDestroy(preprocessStream);
+    cudaStreamDestroy(postprocessStream);
+    cudaEventDestroy(processingDone);
     
     for (auto& buffer : pinnedOutputBuffers)
     {
@@ -461,11 +468,12 @@ void Detector::inferenceThread()
             {
                 preProcess(frame);
                 
-                cudaStreamSynchronize(stream);
-                
                 context->enqueueV3(stream);
-                
-                cudaStreamSynchronize(stream);
+
+                cudaEvent_t inferenceComplete;
+                cudaEventCreate(&inferenceComplete);
+                cudaEventRecord(inferenceComplete, stream);
+                cudaEventSynchronize(inferenceComplete);
                 
                 for (const auto& name : outputNames)
                 {
@@ -478,12 +486,15 @@ void Detector::inferenceThread()
                         std::vector<__half>& outputDataHalf = outputDataBuffersHalf[name];
                         outputDataHalf.resize(numElements);
                         
-                        cudaMemcpy(
+                        cudaMemcpyAsync(
                             outputDataHalf.data(),
                             outputBindings[name],
                             size,
-                            cudaMemcpyDeviceToHost
+                            cudaMemcpyDeviceToHost,
+                            postprocessStream
                         );
+                        
+                        cudaStreamSynchronize(postprocessStream);
                         
                         std::vector<float> outputDataFloat(outputDataHalf.size());
                         for (size_t i = 0; i < outputDataHalf.size(); ++i) {
@@ -497,16 +508,22 @@ void Detector::inferenceThread()
                         std::vector<float>& outputData = outputDataBuffers[name];
                         outputData.resize(size / sizeof(float));
                         
-                        cudaMemcpy(
+                        cudaMemcpyAsync(
                             outputData.data(),
                             outputBindings[name],
                             size,
-                            cudaMemcpyDeviceToHost
+                            cudaMemcpyDeviceToHost,
+                            postprocessStream
                         );
+                        
+                        cudaStreamSynchronize(postprocessStream);
                             
                         postProcess(outputData.data(), name);
                     }
                 }
+                
+                cudaEventDestroy(inferenceComplete);
+                
             } catch (const std::exception& e)
             {
                 std::cerr << "[Detector] Error during inference: " << e.what() << std::endl;
@@ -555,7 +572,7 @@ void Detector::preProcess(const cv::cuda::GpuMat& frame)
         resizedBuffer.convertTo(floatBuffer, CV_32F, 1.0f / 255.0f, 0, preprocessCvStream);
         cv::cuda::split(floatBuffer, channelBuffers, preprocessCvStream);
         
-        preprocessCvStream.waitForCompletion();
+        synchronizeStreams(preprocessCvStream, stream);
         
         size_t channelSize = h * w * sizeof(float);
         for (int i = 0; i < c; ++i)
@@ -568,6 +585,7 @@ void Detector::preProcess(const cv::cuda::GpuMat& frame)
                 stream
             );
         }
+        
     } catch (const cv::Exception& e)
     {
         std::cerr << "[Detector] OpenCV error in preProcess: " << e.what() << std::endl;
