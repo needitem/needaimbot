@@ -44,6 +44,9 @@ public:
     std::vector<std::string> outputNames;
     std::unordered_map<std::string, size_t> outputSizes;
 
+    std::atomic<bool> shouldExit;
+    std::condition_variable inferenceCV;
+
 private:
     std::unique_ptr<nvinfer1::IRuntime> runtime;
     std::unique_ptr<nvinfer1::ICudaEngine> engine;
@@ -62,8 +65,6 @@ private:
     bool usePinnedMemory;
 
     std::mutex inferenceMutex;
-    std::condition_variable inferenceCV;
-    std::atomic<bool> shouldExit;
     cv::cuda::GpuMat currentFrame;
     bool frameReady;
 
@@ -96,6 +97,9 @@ private:
     cv::cuda::GpuMat resizedBuffer;
     cv::cuda::GpuMat floatBuffer;
     std::vector<cv::cuda::GpuMat> channelBuffers;
+
+    // CUDA 이벤트 추가
+    cudaEvent_t processingDone;
 
     // 에러 관리를 위한 헬퍼 함수
     bool checkCudaError(cudaError_t err, const std::string& message) {
