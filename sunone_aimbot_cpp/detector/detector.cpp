@@ -246,6 +246,14 @@ void Detector::initialize(const std::string& modelFile)
         }
 
         outputShapes[outName] = shape;
+        
+        if (dtype == nvinfer1::DataType::kHALF) {
+            size_t numElements = outputSizes[outName] / sizeof(__half);
+            outputDataBuffersHalf[outName].reserve(numElements);
+        } else if (dtype == nvinfer1::DataType::kFLOAT) {
+            size_t numElements = outputSizes[outName] / sizeof(float);
+            outputDataBuffers[outName].reserve(numElements);
+        }
     }
 
     getBindings();
@@ -271,13 +279,20 @@ void Detector::initialize(const std::string& modelFile)
     int h = dims.d[2];
     int w = dims.d[3];
     
-    resizedBuffer.create(h, w, CV_8UC3);
-    floatBuffer.create(h, w, CV_32FC3);
+    if (resizedBuffer.empty() || resizedBuffer.size() != cv::Size(w, h)) {
+        resizedBuffer.create(h, w, CV_8UC3);
+    }
+    
+    if (floatBuffer.empty() || floatBuffer.size() != cv::Size(w, h)) {
+        floatBuffer.create(h, w, CV_32FC3);
+    }
     
     channelBuffers.resize(c);
     for (int i = 0; i < c; ++i)
     {
-        channelBuffers[i].create(h, w, CV_32F);
+        if (channelBuffers[i].empty() || channelBuffers[i].size() != cv::Size(w, h)) {
+            channelBuffers[i].create(h, w, CV_32F);
+        }
     }
     
     for (const auto& name : inputNames)
@@ -294,8 +309,13 @@ void Detector::initialize(const std::string& modelFile)
         for (const auto& outName : outputNames)
         {
             size_t size = outputSizes[outName];
+            
+            if (pinnedOutputBuffers.find(outName) != pinnedOutputBuffers.end() && 
+                pinnedOutputBuffers[outName] != nullptr) {
+                continue;
+            }
+            
             void* hostBuffer = nullptr;
-
             cudaError_t status = cudaMallocHost(&hostBuffer, size);
             if (status == cudaSuccess)
             {
@@ -484,10 +504,18 @@ void Detector::inferenceThread()
                     {
                         size_t numElements = size / sizeof(__half);
                         std::vector<__half>& outputDataHalf = outputDataBuffersHalf[name];
-                        outputDataHalf.resize(numElements);
+                        
+                        if (outputDataHalf.size() != numElements) {
+                            outputDataHalf.resize(numElements);
+                        }
+                        
+                        void* outputDest = outputDataHalf.data();
+                        if (config.use_pinned_memory && pinnedOutputBuffers.find(name) != pinnedOutputBuffers.end()) {
+                            outputDest = pinnedOutputBuffers[name];
+                        }
                         
                         cudaMemcpyAsync(
-                            outputDataHalf.data(),
+                            outputDest,
                             outputBindings[name],
                             size,
                             cudaMemcpyDeviceToHost,
@@ -496,7 +524,15 @@ void Detector::inferenceThread()
                         
                         cudaStreamSynchronize(postprocessStream);
                         
-                        std::vector<float> outputDataFloat(outputDataHalf.size());
+                        if (config.use_pinned_memory && outputDest != outputDataHalf.data()) {
+                            memcpy(outputDataHalf.data(), outputDest, size);
+                        }
+                        
+                        std::vector<float>& outputDataFloat = outputDataBuffers["temp_float"];
+                        if (outputDataFloat.size() != numElements) {
+                            outputDataFloat.resize(numElements);
+                        }
+                        
                         for (size_t i = 0; i < outputDataHalf.size(); ++i) {
                             outputDataFloat[i] = __half2float(outputDataHalf[i]);
                         }
@@ -506,10 +542,19 @@ void Detector::inferenceThread()
                     else if (dtype == nvinfer1::DataType::kFLOAT)
                     {
                         std::vector<float>& outputData = outputDataBuffers[name];
-                        outputData.resize(size / sizeof(float));
+                        
+                        size_t numElements = size / sizeof(float);
+                        if (outputData.size() != numElements) {
+                            outputData.resize(numElements);
+                        }
+                        
+                        void* outputDest = outputData.data();
+                        if (config.use_pinned_memory && pinnedOutputBuffers.find(name) != pinnedOutputBuffers.end()) {
+                            outputDest = pinnedOutputBuffers[name];
+                        }
                         
                         cudaMemcpyAsync(
-                            outputData.data(),
+                            outputDest,
                             outputBindings[name],
                             size,
                             cudaMemcpyDeviceToHost,
@@ -517,6 +562,10 @@ void Detector::inferenceThread()
                         );
                         
                         cudaStreamSynchronize(postprocessStream);
+                        
+                        if (config.use_pinned_memory && outputDest != outputData.data()) {
+                            memcpy(outputData.data(), outputDest, size);
+                        }
                             
                         postProcess(outputData.data(), name);
                     }
