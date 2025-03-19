@@ -162,6 +162,9 @@ public:
     double& getFOVY() { return fov_y; }
     bool& getAutoShoot() { return auto_shoot; }
     float& getScopeMultiplier() { return bScope_multiplier; }
+    
+    // 타겟 감지 상태를 가져오는 메소드 추가
+    bool isTargetDetected() const { return target_detected.load(); }
 };
 
 #endif // MOUSE_H

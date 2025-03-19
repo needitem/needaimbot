@@ -832,40 +832,10 @@ void MouseThread::setInputMethod(std::unique_ptr<InputMethod> new_method)
 
 void MouseThread::applyRecoilCompensation(float strength)
 {
-    // Pre-compute the scaling factor
-    static const double vertical_scale = (fov_y / screen_height) * (dpi * (1.0 / mouse_sensitivity)) / 360.0;
-
-    // Reduce recoil compensation when actively aiming at an enemy
-    if (aiming.load())
-    {
-        // Read reduction factor only once, cache it statically
-        static float reduction_factor = 0.5f; // Default 50% reduction
-        static auto last_config_check = std::chrono::steady_clock::now();
-        
-        // Update cached reduction factor every 250ms to reduce lock contention
-        auto now = std::chrono::steady_clock::now();
-        if (std::chrono::duration<double>(now - last_config_check).count() > 1.25) {
-            std::lock_guard<std::mutex> config_lock(configMutex);
-            if (config.recoil_reduction_while_aiming > 0.0f && config.recoil_reduction_while_aiming <= 1.0f) {
-                reduction_factor = config.recoil_reduction_while_aiming;
-            }
-            last_config_check = now;
-        }
-        
-        // Apply reduced strength with single multiplication - no conditionals
-        strength *= reduction_factor;
-    }
-
-    // Apply strength with pre-computed scale using SIMD
-    __m128d strength_vec = _mm_set1_pd(strength);
-    __m128d scale_vec = _mm_set1_pd(vertical_scale);
-    __m128d result = _mm_mul_pd(strength_vec, scale_vec);
-    int compensation = static_cast<int>(_mm_cvtsd_f64(result));
-
     // Move mouse atomically
     if (input_method)
     {
-        input_method->move(0, compensation);
+        input_method->move(0, strength);
     }
 }
 
