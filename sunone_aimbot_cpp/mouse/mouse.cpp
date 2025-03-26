@@ -63,59 +63,33 @@ Eigen::Vector2d PIDController2D::calculate(const Eigen::Vector2d &error)
         double error_magnitude_x = std::abs(error.x());
         double error_magnitude_y = std::abs(error.y());
 
-        // SIMD for gain adjustments
-        __m128d error_mag = _mm_set_pd(error_magnitude_y, error_magnitude_x);
+        // 불필요한 SIMD 제거하고 직접 계산으로 대체
+        // X-축 게인 계산 요소
+        double kp_factor_x = 1.0 + std::min(error_magnitude_x / 100.0, 0.6);
+        double ki_factor_x = 1.0 - std::min(error_magnitude_x / 400.0, 0.8);
         
-        // X-axis gain calculation factors
-        __m128d x_factors = _mm_set_pd(
-            1.0 - std::min(error_magnitude_x / 400.0, 0.8), // ki factor
-            1.0 + std::min(error_magnitude_x / 100.0, 0.6)  // kp factor
-        );
+        // Y-축 게인 계산 요소
+        double kp_factor_y = 1.0 + std::min(error_magnitude_y / 120.0, 0.5);
+        double ki_factor_y = 1.0 - std::min(error_magnitude_y / 350.0, 0.9);
         
-        // Y-axis gain calculation factors
-        __m128d y_factors = _mm_set_pd(
-            1.0 - std::min(error_magnitude_y / 350.0, 0.9), // ki factor
-            1.0 + std::min(error_magnitude_y / 120.0, 0.5)  // kp factor
-        );
-        
-        // Calculate target gains
-        double target_kp_x = kp_x * _mm_cvtsd_f64(x_factors);
-        double target_ki_x = ki_x * _mm_cvtsd_f64(_mm_unpackhi_pd(x_factors, x_factors));
+        // 목표 게인 계산
+        double target_kp_x = kp_x * kp_factor_x;
+        double target_ki_x = ki_x * ki_factor_x;
         double target_kd_x = kd_x * (1.0 + std::min(error_magnitude_x / 200.0, 0.4));
         
-        double target_kp_y = kp_y * _mm_cvtsd_f64(y_factors);
-        double target_ki_y = ki_y * _mm_cvtsd_f64(_mm_unpackhi_pd(y_factors, y_factors));
+        double target_kp_y = kp_y * kp_factor_y;
+        double target_ki_y = ki_y * ki_factor_y;
         double target_kd_y = kd_y * (1.0 + std::min(error_magnitude_y / 180.0, 0.5));
 
         // Fast interpolation to avoid sudden changes
         double alpha = std::min(time_since_update * 15.0, 1.0);
         double one_minus_alpha = 1.0 - alpha;
         
-        // SIMD for interpolation
-        __m128d current_x_gains = _mm_set_pd(cached_ki_x, cached_kp_x);
-        __m128d target_x_gains = _mm_set_pd(target_ki_x, target_kp_x);
-        __m128d alpha_vec = _mm_set1_pd(alpha);
-        __m128d one_minus_alpha_vec = _mm_set1_pd(one_minus_alpha);
-        
-        __m128d new_x_gains = _mm_add_pd(
-            _mm_mul_pd(current_x_gains, one_minus_alpha_vec),
-            _mm_mul_pd(target_x_gains, alpha_vec)
-        );
-        
-        cached_kp_x = _mm_cvtsd_f64(new_x_gains);
-        cached_ki_x = _mm_cvtsd_f64(_mm_unpackhi_pd(new_x_gains, new_x_gains));
-        
-        // Same for Y gains
-        __m128d current_y_gains = _mm_set_pd(cached_ki_y, cached_kp_y);
-        __m128d target_y_gains = _mm_set_pd(target_ki_y, target_kp_y);
-        
-        __m128d new_y_gains = _mm_add_pd(
-            _mm_mul_pd(current_y_gains, one_minus_alpha_vec),
-            _mm_mul_pd(target_y_gains, alpha_vec)
-        );
-        
-        cached_kp_y = _mm_cvtsd_f64(new_y_gains);
-        cached_ki_y = _mm_cvtsd_f64(_mm_unpackhi_pd(new_y_gains, new_y_gains));
+        // 불필요한 SIMD 제거하고 직접 보간 계산
+        cached_kp_x = cached_kp_x * one_minus_alpha + target_kp_x * alpha;
+        cached_ki_x = cached_ki_x * one_minus_alpha + target_ki_x * alpha;
+        cached_kp_y = cached_kp_y * one_minus_alpha + target_kp_y * alpha;
+        cached_ki_y = cached_ki_y * one_minus_alpha + target_ki_y * alpha;
         
         // Update Kd with simple interpolation
         cached_kd_x = cached_kd_x * one_minus_alpha + target_kd_x * alpha;
@@ -139,16 +113,9 @@ Eigen::Vector2d PIDController2D::calculate(const Eigen::Vector2d &error)
         integral.x() = std::clamp(integral.x(), -80.0, 80.0);
         integral.y() = std::clamp(integral.y(), -60.0, 60.0);
         
-        // Calculate derivative
-        __m128d error_vec = _mm_set_pd(error.y(), error.x());
-        __m128d prev_error_vec = _mm_set_pd(prev_error.y(), prev_error.x());
-        __m128d dt_vec = _mm_set1_pd(1.0 / dt);
-        
-        __m128d derivative_vec = _mm_mul_pd(_mm_sub_pd(error_vec, prev_error_vec), dt_vec);
-        
-        // Extract derivative components
-        double derivative_x = _mm_cvtsd_f64(derivative_vec);
-        double derivative_y = _mm_cvtsd_f64(_mm_unpackhi_pd(derivative_vec, derivative_vec));
+        // 불필요한 SIMD 제거하고 직접 미분 계산
+        double derivative_x = (error.x() - prev_error.x()) / dt;
+        double derivative_y = (error.y() - prev_error.y()) / dt;
         
         // Apply different filtering based on derivative magnitude
         double alpha_x = (std::abs(derivative_x) > 500.0) ? 0.7 : 0.85;
@@ -165,26 +132,21 @@ Eigen::Vector2d PIDController2D::calculate(const Eigen::Vector2d &error)
         derivative.setZero();
     }
 
-    // Calculate PID output using SIMD
-    __m128d error_vec = _mm_set_pd(error.y(), error.x());
-    __m128d integral_vec = _mm_set_pd(integral.y(), integral.x());
-    __m128d derivative_vec = _mm_set_pd(derivative.y(), derivative.x());
+    // 불필요한 SIMD 제거하고 직접 PID 출력 계산
+    double p_term_x = cached_kp_x * error.x();
+    double p_term_y = cached_kp_y * error.y();
     
-    __m128d kp_vec = _mm_set_pd(cached_kp_y, cached_kp_x);
-    __m128d ki_vec = _mm_set_pd(cached_ki_y, cached_ki_x);
-    __m128d kd_vec = _mm_set_pd(cached_kd_y, cached_kd_x);
+    double i_term_x = cached_ki_x * integral.x();
+    double i_term_y = cached_ki_y * integral.y();
     
-    __m128d p_term = _mm_mul_pd(kp_vec, error_vec);
-    __m128d i_term = _mm_mul_pd(ki_vec, integral_vec);
-    __m128d d_term = _mm_mul_pd(kd_vec, derivative_vec);
+    double d_term_x = cached_kd_x * derivative.x();
+    double d_term_y = cached_kd_y * derivative.y();
     
-    // Sum the terms
-    __m128d output_vec = _mm_add_pd(_mm_add_pd(p_term, i_term), d_term);
+    // 항 합산
+    double output_x = p_term_x + i_term_x + d_term_x;
+    double output_y = p_term_y + i_term_y + d_term_y;
     
-    // Clamp the output using different limits for X and Y
-    double output_x = _mm_cvtsd_f64(output_vec);
-    double output_y = _mm_cvtsd_f64(_mm_unpackhi_pd(output_vec, output_vec));
-    
+    // 출력 제한 (X와 Y에 다른 한계 적용)
     const double max_output_x = 1500.0;
     const double max_output_y = 1200.0;
     
@@ -498,41 +460,23 @@ Eigen::Vector2d MouseThread::predictTargetPosition(double target_x, double targe
         return Eigen::Vector2d(state(0, 0), state(1, 0));
     }
 
-    // Use SIMD to create measurement vector
-    __m128d measurement_vec = _mm_set_pd(target_y, target_x);
-    Eigen::Vector2d measurement(_mm_cvtsd_f64(measurement_vec), 
-                               _mm_cvtsd_f64(_mm_unpackhi_pd(measurement_vec, measurement_vec)));
-    
+    // 불필요한 SIMD 제거: 단순히 두 값만 설정하는 경우 직접 생성이 더 효율적
+    Eigen::Vector2d measurement(target_x, target_y);
     kalman_filter->update(measurement);
 
     const auto &state = kalman_filter->getState();
     
-    // Use SIMD to gather state variables
-    __m128d pos = _mm_set_pd(state(1, 0), state(0, 0));
-    __m128d vel = _mm_set_pd(state(3, 0), state(2, 0));
-    __m128d acc = _mm_set_pd(state(5, 0), state(4, 0));
-    
-    // Extract position components
-    double pos_x = _mm_cvtsd_f64(pos);
-    double pos_y = _mm_cvtsd_f64(_mm_unpackhi_pd(pos, pos));
-    
-    // Extract velocity components
-    double vel_x = _mm_cvtsd_f64(vel);
-    double vel_y = _mm_cvtsd_f64(_mm_unpackhi_pd(vel, vel));
-    
-    // Extract acceleration components
-    double acc_x = _mm_cvtsd_f64(acc);
-    double acc_y = _mm_cvtsd_f64(_mm_unpackhi_pd(acc, acc));
+    // 간단한 변수 추출은 SIMD 없이 직접 할당하는 것이 더 효율적
+    double pos_x = state(0, 0);
+    double pos_y = state(1, 0);
+    double vel_x = state(2, 0);
+    double vel_y = state(3, 0);
+    double acc_x = state(4, 0);
+    double acc_y = state(5, 0);
 
-    // Compute velocity magnitude using SIMD
-    __m128d vel_squared = _mm_mul_pd(vel, vel);
-    __m128d sum_vel = _mm_hadd_pd(vel_squared, vel_squared);
-    double velocity = _mm_cvtsd_f64(_mm_sqrt_pd(sum_vel));
-
-    // Compute acceleration magnitude using SIMD
-    __m128d acc_squared = _mm_mul_pd(acc, acc);
-    __m128d sum_acc = _mm_hadd_pd(acc_squared, acc_squared);
-    double acceleration = _mm_cvtsd_f64(_mm_sqrt_pd(sum_acc));
+    // SIMD 없이 벡터 크기 계산
+    double velocity = std::sqrt(vel_x * vel_x + vel_y * vel_y);
+    double acceleration = std::sqrt(acc_x * acc_x + acc_y * acc_y);
 
     // Use lookup table approach to eliminate branches for prediction_time calculation
     constexpr double base_prediction_factor = 0.07;
@@ -541,15 +485,10 @@ Eigen::Vector2d MouseThread::predictTargetPosition(double target_x, double targe
     int velocity_idx = std::min(static_cast<int>(velocity / 200.0), 3);
     double prediction_time = dt * base_prediction_factor * prediction_factors[velocity_idx];
 
-    // SIMD for position prediction calculation
-    __m128d pred_time = _mm_set1_pd(prediction_time);
-    __m128d pred_time_squared = _mm_mul_pd(pred_time, pred_time);
-    __m128d half = _mm_set1_pd(0.5);
-    
-    // Calculate: pos + vel*t + 0.5*acc*t^2
-    __m128d term1 = _mm_mul_pd(vel, pred_time);
-    __m128d term2 = _mm_mul_pd(_mm_mul_pd(acc, pred_time_squared), half);
-    __m128d future_pos = _mm_add_pd(_mm_add_pd(pos, term1), term2);
+    // SIMD 대신 직접 계산
+    double half_pred_time_squared = 0.5 * prediction_time * prediction_time;
+    double future_x = pos_x + vel_x * prediction_time + acc_x * half_pred_time_squared;
+    double future_y = pos_y + vel_y * prediction_time + acc_y * half_pred_time_squared;
     
     // Direction change detection and correction
     static Eigen::Vector2d prev_velocity(0, 0);
@@ -563,18 +502,13 @@ Eigen::Vector2d MouseThread::predictTargetPosition(double target_x, double targe
         // Apply correction only for significant direction changes
         if (angle_change > 0.5) {
             double reduction_factor = std::max(0.3, 1.0 - angle_change / 3.14);
-            __m128d reduction = _mm_set1_pd(reduction_factor);
-            __m128d corrected_term1 = _mm_mul_pd(vel, _mm_mul_pd(pred_time, reduction));
-            future_pos = _mm_add_pd(pos, corrected_term1);
+            future_x = pos_x + vel_x * prediction_time * reduction_factor;
+            future_y = pos_y + vel_y * prediction_time * reduction_factor;
         }
     }
     
     prev_velocity = current_velocity;
     
-    // Extract final position
-    double future_x = _mm_cvtsd_f64(future_pos);
-    double future_y = _mm_cvtsd_f64(_mm_unpackhi_pd(future_pos, future_pos));
-
     target_detected.store(true);
     return Eigen::Vector2d(future_x, future_y);
 }
@@ -586,51 +520,39 @@ Eigen::Vector2d MouseThread::calculateMovement(const Eigen::Vector2d &target_pos
     static const double fov_scale_y = fov_y / screen_height;
     static const double sens_scale = dpi * (1.0 / mouse_sensitivity) / 360.0;
     
-    // Use SIMD to calculate error
-    __m128d target = _mm_set_pd(target_pos[1], target_pos[0]);
-    __m128d center = _mm_set_pd(center_y, center_x);
-    __m128d error_simd = _mm_sub_pd(target, center);
+    // 불필요한 SIMD 제거하고 직접 오차 계산
+    double error_x = target_pos[0] - center_x;
+    double error_y = target_pos[1] - center_y;
     
-    // Convert to Eigen vector for PID controller
-    Eigen::Vector2d error(_mm_cvtsd_f64(error_simd), 
-                          _mm_cvtsd_f64(_mm_unpackhi_pd(error_simd, error_simd)));
+    // Eigen 벡터로 변환
+    Eigen::Vector2d error(error_x, error_y);
 
     // Calculate PID output
     Eigen::Vector2d pid_output = pid_controller->calculate(error);
 
-    // Use SIMD for output scaling
-    __m128d pid_vec = _mm_set_pd(pid_output[1], pid_output[0]);
-    __m128d scale = _mm_set_pd(fov_scale_y * sens_scale, fov_scale_x * sens_scale);
-    __m128d result = _mm_mul_pd(pid_vec, scale);
+    // 불필요한 SIMD 제거하고 직접 출력 스케일링
+    double result_x = pid_output[0] * fov_scale_x * sens_scale;
+    double result_y = pid_output[1] * fov_scale_y * sens_scale;
     
-    // Convert back to Eigen vector
-    return Eigen::Vector2d(_mm_cvtsd_f64(result), 
-                          _mm_cvtsd_f64(_mm_unpackhi_pd(result, result)));
+    return Eigen::Vector2d(result_x, result_y);
 }
 
 bool MouseThread::checkTargetInScope(double target_x, double target_y, double target_w, double target_h, double reduction_factor)
 {
-    // Fast boundary check using SIMD - first do a quick approximate check
-    constexpr double SCOPE_MARGIN = 0.15; // 25% of screen width/height
+    // Fast boundary check - first do a quick approximate check
+    constexpr double SCOPE_MARGIN = 0.15; // 15% of screen width/height
     
     // Cache the screen boundaries
     static const double screen_margin_x = screen_width * SCOPE_MARGIN;
     static const double screen_margin_y = screen_height * SCOPE_MARGIN;
     
-    // Calculate target center using SIMD
-    __m128d target_pos = _mm_set_pd(target_y, target_x);
-    __m128d target_size = _mm_set_pd(target_h, target_w);
-    __m128d half = _mm_set1_pd(0.5);
-    __m128d target_center = _mm_add_pd(target_pos, _mm_mul_pd(target_size, half));
+    // 불필요한 SIMD 제거: 간단한 중심점 계산
+    double target_center_x = target_x + target_w * 0.5;
+    double target_center_y = target_y + target_h * 0.5;
     
-    // Calculate absolute difference from screen center
-    __m128d screen_center = _mm_set_pd(center_y, center_x);
-    __m128d diff = _mm_sub_pd(target_center, screen_center);
-    __m128d abs_diff = _mm_andnot_pd(_mm_set1_pd(-0.0), diff); // Fast absolute value
-    
-    // Extract x and y differences
-    double diff_x = _mm_cvtsd_f64(abs_diff);
-    double diff_y = _mm_cvtsd_f64(_mm_unpackhi_pd(abs_diff, abs_diff));
+    // 절대 차이 계산
+    double diff_x = std::abs(target_center_x - center_x);
+    double diff_y = std::abs(target_center_y - center_y);
     
     // Fast early rejection (avoid unnecessary calculations)
     if (diff_x > screen_margin_x || diff_y > screen_margin_y)
@@ -638,30 +560,27 @@ bool MouseThread::checkTargetInScope(double target_x, double target_y, double ta
         return false;
     }
     
-    // Calculate reduced target size
-    __m128d reduction = _mm_set1_pd(reduction_factor * 0.5);
-    __m128d reduced_size = _mm_mul_pd(target_size, reduction);
+    // 축소된 타겟 사이즈 계산
+    double reduced_half_w = target_w * reduction_factor * 0.5;
+    double reduced_half_h = target_h * reduction_factor * 0.5;
     
-    // Calculate target bounds
-    __m128d min_bound = _mm_sub_pd(target_center, reduced_size);
-    __m128d max_bound = _mm_add_pd(target_center, reduced_size);
+    // 타겟 범위 계산
+    double min_x = target_center_x - reduced_half_w;
+    double max_x = target_center_x + reduced_half_w;
+    double min_y = target_center_y - reduced_half_h;
+    double max_y = target_center_y + reduced_half_h;
     
-    // Check if screen center is within reduced target bounds
-    __m128d compare_min = _mm_cmpge_pd(screen_center, min_bound);
-    __m128d compare_max = _mm_cmple_pd(screen_center, max_bound);
-    __m128d result = _mm_and_pd(compare_min, compare_max);
-    
-    // Both conditions must be true for target to be in scope
-    return _mm_movemask_pd(result) == 0x3;
+    // 스크린 중심점이 축소된 타겟 범위 내에 있는지 체크
+    return (center_x >= min_x && center_x <= max_x && 
+            center_y >= min_y && center_y <= max_y);
 }
 
 double MouseThread::calculateTargetDistance(const AimbotTarget &target) const
 {
-    // SIMD optimized distance calculation
-    __m128d pos = _mm_set_pd(target.y - center_y, target.x - center_x);
-    __m128d squared = _mm_mul_pd(pos, pos);
-    __m128d sum = _mm_hadd_pd(squared, squared);
-    return _mm_cvtsd_f64(_mm_sqrt_pd(sum));
+    // SIMD 제거: 간단한 2D 거리 계산
+    double dx = target.x + target.w * 0.5 - center_x;
+    double dy = target.y + target.h * 0.5 - center_y;
+    return std::sqrt(dx * dx + dy * dy);
 }
 
 AimbotTarget *MouseThread::findClosestTarget(const std::vector<AimbotTarget> &targets) const
@@ -697,29 +616,24 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     const double local_sensitivity = mouse_sensitivity;
     const double local_dpi = dpi;
 
-    // SIMD 최적화를 위한 데이터 정렬
-    alignas(16) double target_data[2] = {
-        target.x + target.w * 0.5,
-        target.y + target.h * 0.5};
+    // 타겟 중심점 계산
+    double target_center_x = target.x + target.w * 0.5;
+    double target_center_y = target.y + target.h * 0.5;
 
-    // SIMD를 사용한 오차 계산
-    __m128d target_pos = _mm_load_pd(target_data);
-    __m128d center_pos = _mm_set_pd(local_center_y, local_center_x);
-    __m128d error_vec = _mm_sub_pd(target_pos, center_pos);
-
-    double error_x = _mm_cvtsd_f64(error_vec);
-    double error_y = _mm_cvtsd_f64(_mm_unpackhi_pd(error_vec, error_vec));
+    // SIMD 없이 오차 계산
+    double error_x = target_center_x - local_center_x;
+    double error_y = target_center_y - local_center_y;
 
     // 첫 번째 탐지인 경우 예측 초기화
     if (!target_detected.load())
     {
         resetPrediction();
-        Eigen::Vector2d measurement(target_data[0], target_data[1]);
+        Eigen::Vector2d measurement(target_center_x, target_center_y);
         kalman_filter->update(measurement);
     }
 
     // 대상 위치 예측
-    Eigen::Vector2d predicted = predictTargetPosition(target_data[0], target_data[1]);
+    Eigen::Vector2d predicted = predictTargetPosition(target_center_x, target_center_y);
 
     // 수정된 오차 계산
     error_x = predicted.x() - local_center_x;
@@ -739,23 +653,20 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     Eigen::Vector2d error(error_x, error_y);
     Eigen::Vector2d pid_output = pid_controller->calculate(error);
 
-    // 마우스 이동 계산 최적화
-    __m128d pid_vec = _mm_set_pd(pid_output.y(), pid_output.x());
-    __m128d scale_vec = _mm_set_pd(
-        (local_fov_y / 360.0) * (1000.0 / (local_sensitivity * local_dpi)),
-        (local_fov_x / 360.0) * (1000.0 / (local_sensitivity * local_dpi)));
-    __m128d move_vec = _mm_mul_pd(pid_vec, scale_vec);
+    // 마우스 이동 계산
+    double move_x = pid_output.x() * (local_fov_x / 360.0) * (1000.0 / (local_sensitivity * local_dpi));
+    double move_y = pid_output.y() * (local_fov_y / 360.0) * (1000.0 / (local_sensitivity * local_dpi));
 
     // 스코프 배율 적용
     if (bScope_multiplier > 1.0f)
     {
-        __m128d scope_vec = _mm_set1_pd(1.0 / bScope_multiplier);
-        move_vec = _mm_mul_pd(move_vec, scope_vec);
+        move_x /= bScope_multiplier;
+        move_y /= bScope_multiplier;
     }
 
     // 정수로 반올림
-    int dx_int = static_cast<int>(std::round(_mm_cvtsd_f64(move_vec)));
-    int dy_int = static_cast<int>(std::round(_mm_cvtsd_f64(_mm_unpackhi_pd(move_vec, move_vec))));
+    int dx_int = static_cast<int>(std::round(move_x));
+    int dy_int = static_cast<int>(std::round(move_y));
 
     // 실제 마우스 이동 (0이 아닌 경우에만)
     if (dx_int != 0 || dy_int != 0)
