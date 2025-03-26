@@ -19,6 +19,12 @@ void NMS(std::vector<Detection>& detections, float nmsThreshold)
     std::vector<Detection> result;
     result.reserve(detections.size());
 
+    // 경계 박스 면적 미리 계산하여 저장
+    std::vector<float> areas(detections.size());
+    for (size_t i = 0; i < detections.size(); ++i) {
+        areas[i] = static_cast<float>(detections[i].box.area());
+    }
+
     for (size_t i = 0; i < detections.size(); ++i)
     {
         if (suppress[i]) continue;
@@ -26,19 +32,36 @@ void NMS(std::vector<Detection>& detections, float nmsThreshold)
         result.push_back(detections[i]);
         
         const cv::Rect& box_i = detections[i].box;
-        const float area_i = static_cast<float>(box_i.area());
+        const float area_i = areas[i];
+        const float conf_i = detections[i].confidence;
         
         for (size_t j = i + 1; j < detections.size(); ++j)
         {
-            if (suppress[j]) break;
+            if (suppress[j]) continue;
+            
+            // 빠른 rejection 패턴 1: 신뢰도가 특정 임계값 이하로 차이나면 건너뛰기
+            if (conf_i > detections[j].confidence * 2.0f) {
+                suppress[j] = true;
+                continue;
+            }
             
             const cv::Rect& box_j = detections[j].box;
+            
+            // 빠른 rejection 패턴 2: 경계 확인을 통한 중복 필터링 (Bounding Box 완전 분리 확인)
+            if (box_i.x > box_j.x + box_j.width || 
+                box_j.x > box_i.x + box_i.width ||
+                box_i.y > box_j.y + box_j.height || 
+                box_j.y > box_i.y + box_i.height) {
+                continue; // 상자가 겹치지 않으면 건너뛰기
+            }
+            
+            // 이제 교차 영역 계산
             const cv::Rect intersection = box_i & box_j;
             
             if (intersection.width > 0 && intersection.height > 0)
             {
                 const float intersection_area = static_cast<float>(intersection.area());
-                const float union_area = area_i + static_cast<float>(box_j.area()) - intersection_area;
+                const float union_area = area_i + areas[j] - intersection_area;
                 if (intersection_area / union_area > nmsThreshold)
                 {
                     suppress[j] = true;

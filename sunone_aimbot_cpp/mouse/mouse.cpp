@@ -21,17 +21,17 @@ extern std::atomic<bool> aiming;
 extern std::mutex configMutex;
 extern Config config;
 
-// PID 컨트롤러 구현
+// PID Controller implementation
 PIDController2D::PIDController2D(double kp, double ki, double kd)
     : kp(kp), ki(ki), kd(kd), kp_x(kp), ki_x(ki), kd_x(kd), kp_y(kp), ki_y(ki), kd_y(kd)
 {
     reset();
 }
 
-// X/Y 분리 게인을 사용하는 새 생성자 구현
+// Implementation of new constructor using separate X/Y gains
 PIDController2D::PIDController2D(double kp_x, double ki_x, double kd_x, double kp_y, double ki_y, double kd_y)
     : kp_x(kp_x), ki_x(ki_x), kd_x(kd_x), kp_y(kp_y), ki_y(ki_y), kd_y(kd_y), 
-      kp((kp_x + kp_y) / 2), ki((ki_x + ki_y) / 2), kd((kd_x + kd_y) / 2) // 평균값을 공통 게인으로 설정
+      kp((kp_x + kp_y) / 2), ki((ki_x + ki_y) / 2), kd((kd_x + kd_y) / 2) // Set the average value as common gain
 {
     reset();
 }
@@ -63,16 +63,16 @@ Eigen::Vector2d PIDController2D::calculate(const Eigen::Vector2d &error)
         double error_magnitude_x = std::abs(error.x());
         double error_magnitude_y = std::abs(error.y());
 
-        // 불필요한 SIMD 제거하고 직접 계산으로 대체
-        // X-축 게인 계산 요소
+        // Remove unnecessary SIMD and replace with direct calculation
+        // X-axis gain calculation elements
         double kp_factor_x = 1.0 + std::min(error_magnitude_x / 100.0, 0.6);
         double ki_factor_x = 1.0 - std::min(error_magnitude_x / 400.0, 0.8);
         
-        // Y-축 게인 계산 요소
+        // Y-axis gain calculation elements
         double kp_factor_y = 1.0 + std::min(error_magnitude_y / 120.0, 0.5);
         double ki_factor_y = 1.0 - std::min(error_magnitude_y / 350.0, 0.9);
         
-        // 목표 게인 계산
+        // Target gain calculation
         double target_kp_x = kp_x * kp_factor_x;
         double target_ki_x = ki_x * ki_factor_x;
         double target_kd_x = kd_x * (1.0 + std::min(error_magnitude_x / 200.0, 0.4));
@@ -85,7 +85,7 @@ Eigen::Vector2d PIDController2D::calculate(const Eigen::Vector2d &error)
         double alpha = std::min(time_since_update * 15.0, 1.0);
         double one_minus_alpha = 1.0 - alpha;
         
-        // 불필요한 SIMD 제거하고 직접 보간 계산
+        // Remove unnecessary SIMD and perform direct interpolation calculation
         cached_kp_x = cached_kp_x * one_minus_alpha + target_kp_x * alpha;
         cached_ki_x = cached_ki_x * one_minus_alpha + target_ki_x * alpha;
         cached_kp_y = cached_kp_y * one_minus_alpha + target_kp_y * alpha;
@@ -113,7 +113,7 @@ Eigen::Vector2d PIDController2D::calculate(const Eigen::Vector2d &error)
         integral.x() = std::clamp(integral.x(), -80.0, 80.0);
         integral.y() = std::clamp(integral.y(), -60.0, 60.0);
         
-        // 불필요한 SIMD 제거하고 직접 미분 계산
+        // Remove unnecessary SIMD and perform direct derivative calculation
         double derivative_x = (error.x() - prev_error.x()) / dt;
         double derivative_y = (error.y() - prev_error.y()) / dt;
         
@@ -132,7 +132,7 @@ Eigen::Vector2d PIDController2D::calculate(const Eigen::Vector2d &error)
         derivative.setZero();
     }
 
-    // 불필요한 SIMD 제거하고 직접 PID 출력 계산
+    // Remove unnecessary SIMD and perform direct PID output calculation
     double p_term_x = cached_kp_x * error.x();
     double p_term_y = cached_kp_y * error.y();
     
@@ -142,11 +142,11 @@ Eigen::Vector2d PIDController2D::calculate(const Eigen::Vector2d &error)
     double d_term_x = cached_kd_x * derivative.x();
     double d_term_y = cached_kd_y * derivative.y();
     
-    // 항 합산
+    // Sum the terms
     double output_x = p_term_x + i_term_x + d_term_x;
     double output_y = p_term_y + i_term_y + d_term_y;
     
-    // 출력 제한 (X와 Y에 다른 한계 적용)
+    // Output limits (different limits for X and Y)
     const double max_output_x = 1500.0;
     const double max_output_y = 1200.0;
     
@@ -162,11 +162,11 @@ Eigen::Vector2d PIDController2D::calculate(const Eigen::Vector2d &error)
 
 void PIDController2D::reset()
 {
-    prev_error = Eigen::Vector2d::Zero();               // 이전 오차 초기화
-    integral = Eigen::Vector2d::Zero();                 // 적분항 초기화
-    derivative = Eigen::Vector2d::Zero();               // 미분항 초기화
-    prev_derivative = Eigen::Vector2d::Zero();          // 이전 미분항 초기화
-    last_time_point = std::chrono::steady_clock::now(); // 시간 초기화
+    prev_error = Eigen::Vector2d::Zero();               // Initialize previous error
+    integral = Eigen::Vector2d::Zero();                 // Initialize integral term
+    derivative = Eigen::Vector2d::Zero();               // Initialize derivative term
+    prev_derivative = Eigen::Vector2d::Zero();          // Initialize previous derivative
+    last_time_point = std::chrono::steady_clock::now(); // Initialize time
 }
 
 void PIDController2D::updateParameters(double kp, double ki, double kd)
@@ -175,7 +175,7 @@ void PIDController2D::updateParameters(double kp, double ki, double kd)
     this->ki = ki;
     this->kd = kd;
     
-    // 공통 게인도 X/Y 게인으로 설정 (하위 호환성)
+    // Common gain is also set to X/Y gain (backwards compatibility)
     this->kp_x = kp;
     this->ki_x = ki;
     this->kd_x = kd;
@@ -184,7 +184,7 @@ void PIDController2D::updateParameters(double kp, double ki, double kd)
     this->kd_y = kd;
 }
 
-// X/Y 분리 게인 업데이트 함수 구현
+// X/Y separate gain update function implementation
 void PIDController2D::updateSeparatedParameters(double kp_x, double ki_x, double kd_x, 
                                                double kp_y, double ki_y, double kd_y)
 {
@@ -195,31 +195,31 @@ void PIDController2D::updateSeparatedParameters(double kp_x, double ki_x, double
     this->ki_y = ki_y;
     this->kd_y = kd_y;
     
-    // 공통 게인은 X/Y의 평균으로 설정 (기존 코드와의 호환성 위해)
+    // Common gain is set to X/Y average (for compatibility with existing code)
     this->kp = (kp_x + kp_y) / 2;
     this->ki = (ki_x + ki_y) / 2;
     this->kd = (kd_x + kd_y) / 2;
 }
 
-// 칼만 필터 구현
+// Kalman filter implementation
 KalmanFilter2D::KalmanFilter2D(double process_noise_q, double measurement_noise_r)
 {
-    // 상태 전이 행렬 초기화
+    // Initialize state transition matrix
     A = Eigen::Matrix<double, 6, 6>::Identity();
 
-    // 측정 행렬 초기화 (위치만 측정)
+    // Initialize measurement matrix (position only)
     H = Eigen::Matrix<double, 2, 6>::Zero();
-    H(0, 0) = 1.0; // x 위치
-    H(1, 1) = 1.0; // y 위치
+    H(0, 0) = 1.0; // x position
+    H(1, 1) = 1.0; // y position
 
-    // 노이즈 매트릭스 초기화 - 위치, 속도, 가속도에 다른 노이즈 값 적용
+    // Initialize noise matrices - apply different noise values to position, velocity, acceleration
     Q = Eigen::Matrix<double, 6, 6>::Identity() * process_noise_q;
     
-    // 급격한 움직임에 더 민감하게 반응하도록 속도와 가속도 노이즈 증가
-    Q(2, 2) = process_noise_q * 2.5; // vx에 대한 프로세스 노이즈 증가
-    Q(3, 3) = process_noise_q * 2.5; // vy에 대한 프로세스 노이즈 증가
-    Q(4, 4) = process_noise_q * 4.0; // ax에 대한 프로세스 노이즈 증가
-    Q(5, 5) = process_noise_q * 4.0; // ay에 대한 프로세스 노이즈 증가
+    // Increase noise for velocity and acceleration to be more sensitive to rapid movements
+    Q(2, 2) = process_noise_q * 2.5; // Increase process noise for vx
+    Q(3, 3) = process_noise_q * 2.5; // Increase process noise for vy
+    Q(4, 4) = process_noise_q * 4.0; // Increase process noise for ax
+    Q(5, 5) = process_noise_q * 4.0; // Increase process noise for ay
     
     R = Eigen::Matrix2d::Identity() * measurement_noise_r;
     P = Eigen::Matrix<double, 6, 6>::Identity();
@@ -229,7 +229,7 @@ KalmanFilter2D::KalmanFilter2D(double process_noise_q, double measurement_noise_
 
 void KalmanFilter2D::predict(double dt)
 {
-    // dt에 따른 상태 전이 행렬 업데이트
+    // Update state transition matrix according to dt
     A(0, 2) = dt; // x = x + vx*dt + 0.5*ax*dt^2
     A(0, 4) = 0.5 * dt * dt;
     A(1, 3) = dt; // y = y + vy*dt + 0.5*ay*dt^2
@@ -259,14 +259,14 @@ void KalmanFilter2D::reset()
 
 void KalmanFilter2D::updateParameters(double process_noise_q, double measurement_noise_r)
 {
-    // 기본 노이즈 업데이트
+    // Update basic noise
     Q = Eigen::Matrix<double, 6, 6>::Identity() * process_noise_q;
     
-    // 급격한 움직임에 더 민감하게 반응하도록 속도와 가속도 노이즈 증가
-    Q(2, 2) = process_noise_q * 2.5; // vx에 대한 프로세스 노이즈 증가
-    Q(3, 3) = process_noise_q * 2.5; // vy에 대한 프로세스 노이즈 증가
-    Q(4, 4) = process_noise_q * 4.0; // ax에 대한 프로세스 노이즈 증가
-    Q(5, 5) = process_noise_q * 4.0; // ay에 대한 프로세스 노이즈 증가
+    // Increase velocity and acceleration noise to be more sensitive to rapid movements
+    Q(2, 2) = process_noise_q * 2.5; // Increase process noise for vx
+    Q(3, 3) = process_noise_q * 2.5; // Increase process noise for vy
+    Q(4, 4) = process_noise_q * 4.0; // Increase process noise for ax
+    Q(5, 5) = process_noise_q * 4.0; // Increase process noise for ay
     
     R = Eigen::Matrix2d::Identity() * measurement_noise_r;
 }
@@ -275,7 +275,6 @@ void KalmanFilter2D::updateParameters(double process_noise_q, double measurement
 MouseThread::MouseThread(
     int resolution,
     int dpi,
-    double sensitivity,
     int fovX,
     int fovY,
     double kp,
@@ -289,7 +288,6 @@ MouseThread::MouseThread(
     GhubMouse *gHub) : screen_width(static_cast<double>(resolution * 16) / 9.0),
                        screen_height(static_cast<double>(resolution)),
                        dpi(static_cast<double>(dpi)),
-                       mouse_sensitivity(sensitivity),
                        fov_x(static_cast<double>(fovX)),
                        fov_y(static_cast<double>(fovY)),
                        center_x(screen_width / 2),
@@ -299,11 +297,11 @@ MouseThread::MouseThread(
                        current_target(nullptr),
                        tracking_errors(false)
 {
-    // 칼만 필터와 PID 컨트롤러 초기화
+    // Initialize Kalman filter and PID controller
     kalman_filter = std::make_unique<KalmanFilter2D>(process_noise_q, measurement_noise_r);
     pid_controller = std::make_unique<PIDController2D>(kp, ki, kd);
 
-    // InputMethod 초기화
+    // Initialize InputMethod
     if (serialConnection && serialConnection->isOpen())
     {
         input_method = std::make_unique<SerialInputMethod>(serialConnection);
@@ -321,11 +319,10 @@ MouseThread::MouseThread(
     last_prediction_time = last_target_time;
 }
 
-// X/Y 분리 PID 컨트롤러를 지원하는 새 생성자 구현
+// Implementation of new constructor with separated X/Y PID controllers
 MouseThread::MouseThread(
     int resolution,
     int dpi,
-    double sensitivity,
     int fovX,
     int fovY,
     double kp_x,
@@ -342,7 +339,6 @@ MouseThread::MouseThread(
     GhubMouse *gHub) : screen_width(static_cast<double>(resolution * 16) / 9.0),
                        screen_height(static_cast<double>(resolution)),
                        dpi(static_cast<double>(dpi)),
-                       mouse_sensitivity(sensitivity),
                        fov_x(static_cast<double>(fovX)),
                        fov_y(static_cast<double>(fovY)),
                        center_x(screen_width / 2),
@@ -352,11 +348,11 @@ MouseThread::MouseThread(
                        current_target(nullptr),
                        tracking_errors(false)
 {
-    // 칼만 필터와 분리된 PID 컨트롤러 초기화
+    // Initialize Kalman filter and separated PID controller
     kalman_filter = std::make_unique<KalmanFilter2D>(process_noise_q, measurement_noise_r);
     pid_controller = std::make_unique<PIDController2D>(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
 
-    // InputMethod 초기화
+    // Initialize InputMethod
     if (serialConnection && serialConnection->isOpen())
     {
         input_method = std::make_unique<SerialInputMethod>(serialConnection);
@@ -377,7 +373,6 @@ MouseThread::MouseThread(
 void MouseThread::updateConfig(
     int resolution,
     int dpi,
-    double sensitivity,
     int fovX,
     int fovY,
     double kp,
@@ -391,7 +386,6 @@ void MouseThread::updateConfig(
     this->screen_width = static_cast<double>(resolution);
     this->screen_height = static_cast<double>(resolution);
     this->dpi = static_cast<double>(dpi);
-    this->mouse_sensitivity = sensitivity;
     this->fov_x = static_cast<double>(fovX);
     this->fov_y = static_cast<double>(fovY);
     this->auto_shoot = auto_shoot;
@@ -399,18 +393,17 @@ void MouseThread::updateConfig(
     this->center_x = screen_width / 2.0;
     this->center_y = screen_height / 2.0;
 
-    // 칼만 필터 업데이트
+    // Update Kalman filter
     kalman_filter->updateParameters(process_noise_q, measurement_noise_r);
 
-    // 레거시 PID 컨트롤러 업데이트 (X/Y 축 동일 게인)
+    // Update legacy PID controller (same gains for X/Y axes)
     pid_controller->updateParameters(kp, ki, kd);
 }
 
-// 분리된 X/Y PID 게인을 사용하는 새 updateConfig 메서드 구현
+// Implementation of updateConfig method using separated X/Y PID gains
 void MouseThread::updateConfig(
     int resolution,
     int dpi,
-    double sensitivity,
     int fovX,
     int fovY,
     double kp_x,
@@ -427,7 +420,6 @@ void MouseThread::updateConfig(
     this->screen_width = static_cast<double>(resolution);
     this->screen_height = static_cast<double>(resolution);
     this->dpi = static_cast<double>(dpi);
-    this->mouse_sensitivity = sensitivity;
     this->fov_x = static_cast<double>(fovX);
     this->fov_y = static_cast<double>(fovY);
     this->auto_shoot = auto_shoot;
@@ -435,10 +427,10 @@ void MouseThread::updateConfig(
     this->center_x = screen_width / 2.0;
     this->center_y = screen_height / 2.0;
 
-    // 칼만 필터 업데이트
+    // Update Kalman filter
     kalman_filter->updateParameters(process_noise_q, measurement_noise_r);
 
-    // 분리된 PID 컨트롤러 업데이트 (X/Y 축 별도 게인)
+    // Update separated PID controller (different gains for X/Y axes)
     pid_controller->updateSeparatedParameters(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
 }
 
@@ -460,13 +452,13 @@ Eigen::Vector2d MouseThread::predictTargetPosition(double target_x, double targe
         return Eigen::Vector2d(state(0, 0), state(1, 0));
     }
 
-    // 불필요한 SIMD 제거: 단순히 두 값만 설정하는 경우 직접 생성이 더 효율적
+    // Removed unnecessary SIMD: direct creation is more efficient when simply setting two values
     Eigen::Vector2d measurement(target_x, target_y);
     kalman_filter->update(measurement);
 
     const auto &state = kalman_filter->getState();
     
-    // 간단한 변수 추출은 SIMD 없이 직접 할당하는 것이 더 효율적
+    // Simple variable extraction is more efficient without SIMD with direct assignment
     double pos_x = state(0, 0);
     double pos_y = state(1, 0);
     double vel_x = state(2, 0);
@@ -474,7 +466,7 @@ Eigen::Vector2d MouseThread::predictTargetPosition(double target_x, double targe
     double acc_x = state(4, 0);
     double acc_y = state(5, 0);
 
-    // SIMD 없이 벡터 크기 계산
+    // Vector size calculation without SIMD
     double velocity = std::sqrt(vel_x * vel_x + vel_y * vel_y);
     double acceleration = std::sqrt(acc_x * acc_x + acc_y * acc_y);
 
@@ -518,19 +510,19 @@ Eigen::Vector2d MouseThread::calculateMovement(const Eigen::Vector2d &target_pos
     // Pre-compute scaling factors for better cache locality
     static const double fov_scale_x = fov_x / screen_width;
     static const double fov_scale_y = fov_y / screen_height;
-    static const double sens_scale = dpi * (1.0 / mouse_sensitivity) / 360.0;
+    static const double sens_scale = dpi / 360.0; // Removed mouse_sensitivity reference
     
-    // 불필요한 SIMD 제거하고 직접 오차 계산
+    // Remove unnecessary SIMD and calculate error directly
     double error_x = target_pos[0] - center_x;
     double error_y = target_pos[1] - center_y;
     
-    // Eigen 벡터로 변환
+    // Convert to Eigen vector
     Eigen::Vector2d error(error_x, error_y);
 
     // Calculate PID output
     Eigen::Vector2d pid_output = pid_controller->calculate(error);
 
-    // 불필요한 SIMD 제거하고 직접 출력 스케일링
+    // Remove unnecessary SIMD and directly scale output
     double result_x = pid_output[0] * fov_scale_x * sens_scale;
     double result_y = pid_output[1] * fov_scale_y * sens_scale;
     
@@ -546,11 +538,11 @@ bool MouseThread::checkTargetInScope(double target_x, double target_y, double ta
     static const double screen_margin_x = screen_width * SCOPE_MARGIN;
     static const double screen_margin_y = screen_height * SCOPE_MARGIN;
     
-    // 불필요한 SIMD 제거: 간단한 중심점 계산
+    // Remove unnecessary SIMD and perform simple center point calculation
     double target_center_x = target_x + target_w * 0.5;
     double target_center_y = target_y + target_h * 0.5;
     
-    // 절대 차이 계산
+    // Absolute difference calculation
     double diff_x = std::abs(target_center_x - center_x);
     double diff_y = std::abs(target_center_y - center_y);
     
@@ -560,24 +552,24 @@ bool MouseThread::checkTargetInScope(double target_x, double target_y, double ta
         return false;
     }
     
-    // 축소된 타겟 사이즈 계산
+    // Calculate reduced target size
     double reduced_half_w = target_w * reduction_factor * 0.5;
     double reduced_half_h = target_h * reduction_factor * 0.5;
     
-    // 타겟 범위 계산
+    // Target range calculation
     double min_x = target_center_x - reduced_half_w;
     double max_x = target_center_x + reduced_half_w;
     double min_y = target_center_y - reduced_half_h;
     double max_y = target_center_y + reduced_half_h;
     
-    // 스크린 중심점이 축소된 타겟 범위 내에 있는지 체크
+    // Check if screen center is within reduced target range
     return (center_x >= min_x && center_x <= max_x && 
             center_y >= min_y && center_y <= max_y);
 }
 
 double MouseThread::calculateTargetDistance(const AimbotTarget &target) const
 {
-    // SIMD 제거: 간단한 2D 거리 계산
+    // SIMD removed: simple 2D distance calculation
     double dx = target.x + target.w * 0.5 - center_x;
     double dy = target.y + target.h * 0.5 - center_y;
     return std::sqrt(dx * dx + dy * dy);
@@ -608,23 +600,22 @@ AimbotTarget *MouseThread::findClosestTarget(const std::vector<AimbotTarget> &ta
 
 void MouseThread::moveMouse(const AimbotTarget &target)
 {
-    // 자주 사용되는 값들을 로컬에 캐시
+    // Cache frequently used values locally
     const double local_center_x = center_x;
     const double local_center_y = center_y;
     const double local_fov_x = fov_x;
     const double local_fov_y = fov_y;
-    const double local_sensitivity = mouse_sensitivity;
     const double local_dpi = dpi;
 
-    // 타겟 중심점 계산
+    // Calculate target center point
     double target_center_x = target.x + target.w * 0.5;
     double target_center_y = target.y + target.h * 0.5;
 
-    // SIMD 없이 오차 계산
+    // Calculate error without SIMD
     double error_x = target_center_x - local_center_x;
     double error_y = target_center_y - local_center_y;
 
-    // 첫 번째 탐지인 경우 예측 초기화
+    // Reset prediction for first detection
     if (!target_detected.load())
     {
         resetPrediction();
@@ -632,14 +623,14 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         kalman_filter->update(measurement);
     }
 
-    // 대상 위치 예측
+    // Predict target position
     Eigen::Vector2d predicted = predictTargetPosition(target_center_x, target_center_y);
 
-    // 수정된 오차 계산
+    // Calculate adjusted error
     error_x = predicted.x() - local_center_x;
     error_y = predicted.y() - local_center_y;
 
-    // 성능 측정 콜백
+    // Performance tracking callback
     if (tracking_errors)
     {
         std::lock_guard<std::mutex> lock(callback_mutex);
@@ -649,26 +640,26 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         }
     }
 
-    // PID 컨트롤러에 오차 입력
+    // Input error to PID controller
     Eigen::Vector2d error(error_x, error_y);
     Eigen::Vector2d pid_output = pid_controller->calculate(error);
 
-    // 마우스 이동 계산
-    double move_x = pid_output.x() * (local_fov_x / 360.0) * (1000.0 / (local_sensitivity * local_dpi));
-    double move_y = pid_output.y() * (local_fov_y / 360.0) * (1000.0 / (local_sensitivity * local_dpi));
+    // Calculate mouse movement - sensitivity removed
+    double move_x = pid_output.x() * (local_fov_x / 360.0) * (1000.0 / local_dpi);
+    double move_y = pid_output.y() * (local_fov_y / 360.0) * (1000.0 / local_dpi);
 
-    // 스코프 배율 적용
+    // Apply scope multiplier
     if (bScope_multiplier > 1.0f)
     {
         move_x /= bScope_multiplier;
         move_y /= bScope_multiplier;
     }
 
-    // 정수로 반올림
+    // Round to integers
     int dx_int = static_cast<int>(std::round(move_x));
     int dy_int = static_cast<int>(std::round(move_y));
 
-    // 실제 마우스 이동 (0이 아닌 경우에만)
+    // Actual mouse movement (only if non-zero)
     if (dx_int != 0 || dy_int != 0)
     {
         std::lock_guard<std::mutex> lock(input_method_mutex);
@@ -726,7 +717,7 @@ void MouseThread::checkAndResetPredictions()
         const auto current_time = std::chrono::steady_clock::now();
         const double elapsed = std::chrono::duration<double>(current_time - last_target_time).count();
 
-        // 타겟 손실 감지 시간을 250ms에서 150ms로 줄임 - 더 빠른 새 타겟 획득
+        // Reduced target loss detection time from 250ms to 150ms - quicker acquisition of new targets
         if (elapsed > 0.1) // 150ms timeout
         {
             resetPrediction();
