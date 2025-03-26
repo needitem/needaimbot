@@ -66,7 +66,6 @@ bool Config::loadConfig(const std::string& filename)
 
         // Mouse
         dpi = 1000;
-        sensitivity = 4.0f;
         fovX = 50;
         fovY = 50;
         easynorecoil = false;
@@ -206,7 +205,6 @@ bool Config::loadConfig(const std::string& filename)
 
     // Mouse
     dpi = get_long("dpi", 1000);
-    sensitivity = (float)get_double("sensitivity", 4.0);
     fovX = get_long("fovX", 50);
     fovY = get_long("fovY", 50);
     easynorecoil = get_bool("easynorecoil", false);
@@ -332,8 +330,6 @@ bool Config::saveConfig(const std::string& filename)
     // Mouse
     file << "# Mouse move\n"
         << "dpi = " << dpi << "\n"
-        << std::fixed << std::setprecision(1)
-        << "sensitivity = " << sensitivity << "\n"
         << "fovX = " << fovX << "\n"
         << "fovY = " << fovY << "\n"
         << "easynorecoil = " << (easynorecoil ? "true" : "false") << "\n"

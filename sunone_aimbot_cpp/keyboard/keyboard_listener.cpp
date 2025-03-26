@@ -109,7 +109,6 @@ void keyboardListener()
                     globalMouseThread->updateConfig(
                         config.detection_resolution,
                         config.dpi,
-                        config.sensitivity,
                         config.fovX,
                         config.fovY,
                         config.kp_x,

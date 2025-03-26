@@ -276,7 +276,6 @@ void OverlayThread()
 
     // Mouse
     int prev_dpi = config.dpi;
-    float prev_sensitivity = config.sensitivity;
     int prev_fovX = config.fovX;
     int prev_fovY = config.fovY;
     bool prev_easynorecoil = config.easynorecoil;
@@ -454,7 +453,6 @@ void OverlayThread()
                         globalMouseThread->updateConfig(
                             config.detection_resolution,
                             config.dpi,
-                            config.sensitivity,
                             config.fovX,
                             config.fovY,
                             config.kp_x,
@@ -517,9 +515,8 @@ void OverlayThread()
                         config.saveConfig();
                     }
 
-                    // DPI / SENSITIVITY / FOVX / FOVY / PID / KALMAN
+                    // DPI / FOVX / FOVY / PID / KALMAN
                     if (prev_dpi != config.dpi ||
-                        prev_sensitivity != config.sensitivity ||
                         prev_fovX != config.fovX ||
                         prev_fovY != config.fovY ||
                         prev_kp_x != config.kp_x ||
@@ -532,7 +529,6 @@ void OverlayThread()
                         prev_measurement_noise_r != config.measurement_noise_r)
                     {
                         prev_dpi = config.dpi;
-                        prev_sensitivity = config.sensitivity;
                         prev_fovX = config.fovX;
                         prev_fovY = config.fovY;
                         prev_kp_x = config.kp_x;
@@ -547,7 +543,6 @@ void OverlayThread()
                         globalMouseThread->updateConfig(
                             config.detection_resolution,
                             config.dpi,
-                            config.sensitivity,
                             config.fovX,
                             config.fovY,
                             config.kp_x,
@@ -574,7 +569,6 @@ void OverlayThread()
                         globalMouseThread->updateConfig(
                             config.detection_resolution,
                             config.dpi,
-                            config.sensitivity,
                             config.fovX,
                             config.fovY,
                             config.kp_x,

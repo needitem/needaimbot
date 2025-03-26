@@ -63,9 +63,9 @@ struct alignas(64) DetectionData {
     }
 };
 
-// SIMD-optimized functions for vector operations
+// Optimized vector processing functions (more efficient without SIMD)
 namespace simd {
-    // Process multiple detection boxes in parallel using SIMD
+    // Optimized function for target box score calculation
     inline void processBatchedBoxes(const std::vector<cv::Rect>& boxes, 
                                    const std::vector<int>& classes,
                                    std::vector<float>& scores,
@@ -75,31 +75,45 @@ namespace simd {
         const size_t count = boxes.size();
         if (count == 0) return;
         
-        // Pre-allocate scores vector with exact size to avoid reallocation
+        // 벡터 크기 미리 할당 (재할당 방지)
         scores.resize(count);
         
-        // 스크린 중앙점 미리 계산
+        // 자주 사용되는 값 미리 계산
         const float half_res_x = resolution_x * 0.5f;
         const float half_res_y = resolution_y * 0.5f;
+        const int class_head = 0; // 머리 클래스 ID
         
-        // SIMD는 박스가 최소 4개 이상일 때만 효율적
-        // 대부분의 경우 동시에 화면에 나타나는 타겟은 소수이므로
-        // 불필요한 SIMD 오버헤드를 없애고 직접 계산으로 전환
+        // 배치 처리 최적화: 캐시 효율성 향상을 위한 루프 구성
         for (size_t i = 0; i < count; i++) {
-            float center_x = boxes[i].x + boxes[i].width * 0.5f;
-            float center_y = boxes[i].y + boxes[i].height * 0.5f;
+            // 박스 중심점 계산 - 포인터 역참조 최소화
+            const cv::Rect& box = boxes[i];
+            const float center_x = box.x + box.width * 0.5f;
+            const float center_y = box.y + box.height * 0.5f;
             
-            float diff_x = center_x - half_res_x;
-            float diff_y = center_y - half_res_y;
+            // 화면 중앙에서의 차이 계산
+            const float diff_x = center_x - half_res_x;
+            const float diff_y = center_y - half_res_y;
             
-            float squared_distance = diff_x * diff_x + diff_y * diff_y;
-            float distance_score = 1.0f / (1.0f + std::sqrt(squared_distance));
+            // 거리 계산 및 점수화 (제곱근 연산 최소화)
+            const float squared_distance = diff_x * diff_x + diff_y * diff_y;
             
-            float class_score = 1.0f;
-            if (!disable_headshot && classes[i] == 0) {
-                class_score = 1.5f;
+            // 거리가 매우 작을 때 (화면 중앙에 가까울 때) 최적화
+            float distance_score;
+            if (squared_distance < 100.0f) {
+                // 화면 중앙에 매우 가까운 경우 직접 계산으로 최적화
+                distance_score = 1.0f;
+            } else if (squared_distance > 500000.0f) {
+                // 너무 멀리 있는 경우 점수를 매우 낮게 설정
+                distance_score = 0.0001f;
+            } else {
+                // 일반적인 거리 계산
+                distance_score = 1.0f / (1.0f + std::sqrt(squared_distance));
             }
             
+            // 클래스에 따른 가중치 적용 (조건 확인 간소화)
+            float class_score = (!disable_headshot && classes[i] == class_head) ? 1.5f : 1.0f;
+            
+            // 최종 점수 계산
             scores[i] = distance_score * class_score;
         }
     }
@@ -251,7 +265,6 @@ void mouseThreadFunction(MouseThread &mouseThread)
                 mouseThread.updateConfig(
                     config.detection_resolution,
                     config.dpi,
-                    config.sensitivity,
                     config.fovX,
                     config.fovY,
                     config.kp_x,
@@ -268,18 +281,15 @@ void mouseThreadFunction(MouseThread &mouseThread)
             detection_resolution_changed.store(false);
         }
 
-        // Compute scores with SIMD if there are enough boxes
-        if (detectionData.boxes.size() > 4) {
-            // Use SIMD-optimized processing when there are enough boxes
-            simd::processBatchedBoxes(
-                detectionData.boxes,
-                detectionData.classes,
-                target_scores,
-                config.detection_resolution,
-                config.detection_resolution,
-                config.disable_headshot
-            );
-        }
+        // Always perform optimized target score calculation (without conditions)
+        simd::processBatchedBoxes(
+            detectionData.boxes,
+            detectionData.classes,
+            target_scores,
+            config.detection_resolution,
+            config.detection_resolution,
+            config.disable_headshot
+        );
 
         AimbotTarget* target = sortTargets(detectionData.boxes, detectionData.classes, 
                                          config.detection_resolution, 
@@ -381,7 +391,6 @@ int main()
         MouseThread mouseThread(
             config.detection_resolution,
             config.dpi,
-            config.sensitivity,
             config.fovX,
             config.fovY,
             config.kp_x,

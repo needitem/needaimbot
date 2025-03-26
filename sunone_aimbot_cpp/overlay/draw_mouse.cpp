@@ -39,12 +39,6 @@ void draw_mouse()
         SetWrappedTooltip("Mouse DPI (Dots Per Inch). Higher values increase mouse sensitivity.");
     }
     
-    ImGui::SliderFloat("Sensitivity", &config.sensitivity, 0.1f, 10.0f, "%.1f");
-    if (ImGui::IsItemHovered())
-    {
-        SetWrappedTooltip("Adjusts how sensitive the aiming is. Higher values result in larger movements.");
-    }
-    
     ImGui::SliderInt("FOV X", &config.fovX, 60, 120);
     if (ImGui::IsItemHovered())
     {

@@ -9,23 +9,23 @@
 #include <shared_mutex>
 #include <memory>
 #include <functional>
-#include <chrono>  // 시간 측정을 위한 헤더 추가
+#include <chrono>  // Header for time measurement
 
 #include "AimbotTarget.h"
 #include "SerialConnection.h"
 #include "ghub.h"
 #include "InputMethod.h"
 
-// 개선된 2D 칼만 필터 - 위치, 속도, 가속도 추적
+// Improved 2D Kalman filter - tracking position, velocity, acceleration
 class KalmanFilter2D {
 private:
-    // 상태 벡터: [x, y, vx, vy, ax, ay]
-    Eigen::Matrix<double, 6, 6> A;  // 상태 전이 행렬
-    Eigen::Matrix<double, 2, 6> H;  // 측정 행렬
-    Eigen::Matrix<double, 6, 6> Q;  // 프로세스 노이즈
-    Eigen::Matrix2d R;              // 측정 노이즈
-    Eigen::Matrix<double, 6, 6> P;  // 오차 공분산
-    Eigen::Matrix<double, 6, 1> x;  // 상태 벡터
+    // State vector: [x, y, vx, vy, ax, ay]
+    Eigen::Matrix<double, 6, 6> A;  // State transition matrix
+    Eigen::Matrix<double, 2, 6> H;  // Measurement matrix
+    Eigen::Matrix<double, 6, 6> Q;  // Process noise
+    Eigen::Matrix2d R;              // Measurement noise
+    Eigen::Matrix<double, 6, 6> P;  // Error covariance
+    Eigen::Matrix<double, 6, 1> x;  // State vector
 
 public:
     KalmanFilter2D(double process_noise_q = 0.1, double measurement_noise_r = 0.1);
@@ -36,40 +36,40 @@ public:
     void updateParameters(double process_noise_q, double measurement_noise_r);
 };
 
-// 2D PID 컨트롤러 - 에임 보정용
+// 2D PID controller - for aim correction
 class PIDController2D
 {
 private:
-    // 수평(X축)과 수직(Y축)으로 분리된 PID 게인
-    double kp_x, kp_y;  // 비례 게인: 현재 오차에 대한 즉각적인 반응 (큰 값 = 빠른 반응, 작은 값 = 부드러운 움직임)
-    double ki_x, ki_y;  // 적분 게인: 누적 오차 보정 (큰 값 = 정확한 조준, 작은 값 = 오버슈트 감소)
-    double kd_x, kd_y;  // 미분 게인: 오차 변화율에 대한 반응 (큰 값 = 빠른 정지, 작은 값 = 부드러운 감속)
+    // PID gains separated for horizontal (X-axis) and vertical (Y-axis)
+    double kp_x, kp_y;  // Proportional gain: immediate response to current error (higher value = faster response, lower value = smoother movement)
+    double ki_x, ki_y;  // Integral gain: correction of accumulated error (higher value = accurate aiming, lower value = reduced overshoot)
+    double kd_x, kd_y;  // Derivative gain: response to error change rate (higher value = faster stopping, lower value = smoother deceleration)
     
-    // 기존 공통 게인 (호환성 유지용)
+    // Common gains for backward compatibility
     double kp;  
     double ki;  
     double kd;  
     
-    Eigen::Vector2d prev_error;  // 이전 오차 (미분항 계산용)
-    Eigen::Vector2d integral;    // 누적 오차 (적분항 계산용)
-    Eigen::Vector2d derivative;  // 변화율 저장 (미분항)
-    Eigen::Vector2d prev_derivative; // 이전 미분값 (미분항 필터링용)
-    std::chrono::steady_clock::time_point last_time_point;  // 이전 계산 시간 (dt 계산용)
+    Eigen::Vector2d prev_error;  // Previous error (for derivative term)
+    Eigen::Vector2d integral;    // Accumulated error (for integral term)
+    Eigen::Vector2d derivative;  // Change rate (derivative term)
+    Eigen::Vector2d prev_derivative; // Previous derivative (for derivative filtering)
+    std::chrono::steady_clock::time_point last_time_point;  // Previous calculation time (for dt calculation)
 
 public:
-    // 기존 생성자 (호환성 유지)
+    // Original constructor (for compatibility)
     PIDController2D(double kp, double ki, double kd);
     
-    // X/Y 분리 게인을 사용하는 새 생성자
+    // New constructor with separated X/Y gains
     PIDController2D(double kp_x, double ki_x, double kd_x, double kp_y, double ki_y, double kd_y);
     
     Eigen::Vector2d calculate(const Eigen::Vector2d &error);
-    void reset();  // 컨트롤러 초기화 (새로운 타겟 조준 시작시 사용)
+    void reset();  // Controller reset (used when starting to aim at a new target)
     
-    // 기존 파라미터 업데이트 함수 (호환성 유지)
+    // Original parameter update function (for compatibility)
     void updateParameters(double kp, double ki, double kd);
     
-    // X/Y 분리 게인 업데이트 함수
+    // X/Y separated gain update function
     void updateSeparatedParameters(double kp_x, double ki_x, double kd_x, double kp_y, double ki_y, double kd_y);
 };
 
@@ -82,7 +82,7 @@ private:
     std::unique_ptr<PIDController2D> pid_controller;
     std::unique_ptr<InputMethod> input_method;
 
-    // 성능 추적을 위한 콜백 함수
+    // Performance tracking callback
     ErrorTrackingCallback error_callback;
     std::mutex callback_mutex;
     bool tracking_errors;
@@ -90,7 +90,6 @@ private:
     double screen_width;
     double screen_height;
     double dpi;
-    double mouse_sensitivity;
     double fov_x;
     double fov_y;
     double center_x;
@@ -110,7 +109,7 @@ private:
     AimbotTarget *findClosestTarget(const std::vector<AimbotTarget> &targets) const;
 
 public:
-    MouseThread(int resolution, int dpi, double sensitivity, int fovX, int fovY,
+    MouseThread(int resolution, int dpi, int fovX, int fovY,
                 double kp, double ki, double kd,
                 double process_noise_q, double measurement_noise_r,
                 bool auto_shoot, float bScope_multiplier,
@@ -118,7 +117,7 @@ public:
                 GhubMouse *gHub = nullptr);
 
     // X/Y 분리 PID 컨트롤러를 지원하는 새 생성자
-    MouseThread(int resolution, int dpi, double sensitivity, int fovX, int fovY,
+    MouseThread(int resolution, int dpi, int fovX, int fovY,
                 double kp_x, double ki_x, double kd_x,
                 double kp_y, double ki_y, double kd_y,
                 double process_noise_q, double measurement_noise_r,
@@ -126,13 +125,13 @@ public:
                 SerialConnection *serialConnection = nullptr,
                 GhubMouse *gHub = nullptr);
 
-    void updateConfig(int resolution, int dpi, double sensitivity, int fovX, int fovY,
+    void updateConfig(int resolution, int dpi, int fovX, int fovY,
                       double kp, double ki, double kd,
                       double process_noise_q, double measurement_noise_r,
                       bool auto_shoot, float bScope_multiplier);
 
     // 분리된 X/Y PID 게인을 사용하는 새 updateConfig 메서드
-    void updateConfig(int resolution, int dpi, double sensitivity, int fovX, int fovY,
+    void updateConfig(int resolution, int dpi, int fovX, int fovY,
                       double kp_x, double ki_x, double kd_x,
                       double kp_y, double ki_y, double kd_y,
                       double process_noise_q, double measurement_noise_r,
@@ -157,7 +156,6 @@ public:
     double& getScreenWidth() { return screen_width; }
     double& getScreenHeight() { return screen_height; }
     double& getDPI() { return dpi; }
-    double& getSensitivity() { return mouse_sensitivity; }
     double& getFOVX() { return fov_x; }
     double& getFOVY() { return fov_y; }
     bool& getAutoShoot() { return auto_shoot; }
