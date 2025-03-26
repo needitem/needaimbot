@@ -9,7 +9,6 @@
 #include <atomic>
 #include <mutex>
 #include <condition_variable>
-#include <immintrin.h> // For SIMD instructions
 
 #include "capture.h"
 #include "visuals.h"
@@ -57,15 +56,12 @@ struct alignas(64) DetectionData {
     int version;
     
     DetectionData() : version(0) {
-        // Pre-allocate with typical maximum size to avoid reallocations
-        boxes.reserve(64);  // Increased from 32 to 64 for typical max targets
+        boxes.reserve(64);
         classes.reserve(64);
     }
 };
 
-// Optimized vector processing functions (more efficient without SIMD)
-namespace simd {
-    // Optimized function for target box score calculation
+namespace optimized {
     inline void processBatchedBoxes(const std::vector<cv::Rect>& boxes, 
                                    const std::vector<int>& classes,
                                    std::vector<float>& scores,
@@ -184,12 +180,11 @@ void mouseThreadFunction(MouseThread &mouseThread)
     
     DetectionData detectionData;
     std::vector<float> target_scores;
-    target_scores.reserve(64);  // Increased from 32 to 64 to match DetectionData
+    target_scores.reserve(64);
     
     const int FRAMES_BETWEEN_TIME_CHECK = 10;
     int frame_counter = 0;
     
-    // Pre-load atomic values to reduce atomic operations
     bool is_shooting = shooting.load();
     bool is_zooming = zooming.load();
     
@@ -200,7 +195,6 @@ void mouseThreadFunction(MouseThread &mouseThread)
         bool is_aiming = aiming.load();
         bool auto_shooting = config.auto_shoot;
         
-        // Periodically update atomic copies
         if (frame_counter % 10 == 0) {
             is_shooting = shooting.load();
             is_zooming = zooming.load();
@@ -237,7 +231,6 @@ void mouseThreadFunction(MouseThread &mouseThread)
             continue;
         }
         
-        // Only call handleEasyNoRecoil when needed
         if (config.easynorecoil && is_shooting && is_zooming) {
             mouseThread.applyRecoilCompensation(config.easynorecoilstrength);
         }
@@ -269,8 +262,7 @@ void mouseThreadFunction(MouseThread &mouseThread)
             detection_resolution_changed.store(false);
         }
 
-        // Always perform optimized target score calculation (without conditions)
-        simd::processBatchedBoxes(
+        optimized::processBatchedBoxes(
             detectionData.boxes,
             detectionData.classes,
             target_scores,
@@ -306,6 +298,7 @@ void mouseThreadFunction(MouseThread &mouseThread)
         delete target;
     }
 }
+
 bool loadAndValidateModel(std::string& modelName, const std::vector<std::string>& availableModels) {
     if (modelName.empty() && !availableModels.empty()) {
         modelName = availableModels[0];

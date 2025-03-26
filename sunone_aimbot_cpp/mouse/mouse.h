@@ -9,7 +9,7 @@
 #include <shared_mutex>
 #include <memory>
 #include <functional>
-#include <chrono>  // Header for time measurement
+#include <chrono>
 
 #include "AimbotTarget.h"
 #include "SerialConnection.h"
@@ -26,6 +26,8 @@ private:
     Eigen::Matrix2d R;              // Measurement noise
     Eigen::Matrix<double, 6, 6> P;  // Error covariance
     Eigen::Matrix<double, 6, 1> x;  // State vector
+
+    void initializeMatrices(double process_noise_q, double measurement_noise_r);
 
 public:
     KalmanFilter2D(double process_noise_q = 0.1, double measurement_noise_r = 0.1);
@@ -107,6 +109,8 @@ private:
 
     double calculateTargetDistance(const AimbotTarget &target) const;
     AimbotTarget *findClosestTarget(const std::vector<AimbotTarget> &targets) const;
+    void initializeInputMethod(SerialConnection *serialConnection, GhubMouse *gHub);
+    void initializeScreen(int resolution, int dpi, int fovX, int fovY, bool auto_shoot, float bScope_multiplier);
 
 public:
     MouseThread(int resolution, int dpi, int fovX, int fovY,
@@ -141,7 +145,6 @@ public:
     void pressMouse(const AimbotTarget &target);
     void releaseMouse();
     void resetPrediction();
-    void checkAndResetPredictions();
     void applyRecoilCompensation(float strength);
 
     void enableErrorTracking(const ErrorTrackingCallback& callback);
