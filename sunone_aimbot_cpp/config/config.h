@@ -28,7 +28,6 @@ public:
 
     // Mouse
     int dpi;
-    float sensitivity;
     int fovX;
     int fovY;
     bool easynorecoil;

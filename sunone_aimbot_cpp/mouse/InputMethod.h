@@ -4,7 +4,7 @@
 #include "SerialConnection.h"
 #include "ghub.h"
 
-// 마우스 입력 방식에 대한 인터페이스
+// Interface for mouse input methods
 class InputMethod
 {
 public:
@@ -15,14 +15,14 @@ public:
     virtual bool isValid() const = 0;
 };
 
-// 시리얼 연결(Arduino)을 통한 마우스 입력 구현
+// Mouse input implementation via serial connection (Arduino)
 class SerialInputMethod : public InputMethod
 {
 public:
     explicit SerialInputMethod(SerialConnection *serial) : serial_(serial) {}
     ~SerialInputMethod() override
     {
-        // 참조만 유지하므로 소멸자에서 삭제하지 않음
+        // Only maintaining reference, not deleting in destructor
     }
 
     void move(int x, int y) override
@@ -58,14 +58,14 @@ private:
     SerialConnection *serial_;
 };
 
-// Logitech G HUB을 통한 마우스 입력 구현
+// Mouse input implementation via Logitech G HUB
 class GHubInputMethod : public InputMethod
 {
 public:
     explicit GHubInputMethod(GhubMouse *ghub) : ghub_(ghub) {}
     ~GHubInputMethod() override
     {
-        // 참조만 유지하므로 소멸자에서 삭제하지 않음
+        // Only maintaining reference, not deleting in destructor
     }
 
     void move(int x, int y) override
@@ -101,7 +101,7 @@ private:
     GhubMouse *ghub_;
 };
 
-// Windows API를 통한 기본 마우스 입력 구현
+// Default mouse input implementation via Windows API
 class Win32InputMethod : public InputMethod
 {
 public:
@@ -135,7 +135,7 @@ public:
 
     bool isValid() const override
     {
-        return true; // Win32 API는 항상 유효하다고 가정
+        return true; // Assuming Win32 API is always valid
     }
 };
 
