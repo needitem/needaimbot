@@ -116,7 +116,6 @@ public:
                 SerialConnection *serialConnection = nullptr,
                 GhubMouse *gHub = nullptr);
 
-    // X/Y 분리 PID 컨트롤러를 지원하는 새 생성자
     MouseThread(int resolution, int dpi, int fovX, int fovY,
                 double kp_x, double ki_x, double kd_x,
                 double kp_y, double ki_y, double kd_y,
@@ -129,8 +128,6 @@ public:
                       double kp, double ki, double kd,
                       double process_noise_q, double measurement_noise_r,
                       bool auto_shoot, float bScope_multiplier);
-
-    // 분리된 X/Y PID 게인을 사용하는 새 updateConfig 메서드
     void updateConfig(int resolution, int dpi, int fovX, int fovY,
                       double kp_x, double ki_x, double kd_x,
                       double kp_y, double ki_y, double kd_y,

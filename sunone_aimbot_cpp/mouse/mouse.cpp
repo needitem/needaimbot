@@ -294,7 +294,6 @@ MouseThread::MouseThread(
                        center_y(screen_height / 2),
                        auto_shoot(auto_shoot),
                        bScope_multiplier(bScope_multiplier),
-                       current_target(nullptr),
                        tracking_errors(false)
 {
     // Initialize Kalman filter and PID controller
@@ -315,8 +314,7 @@ MouseThread::MouseThread(
         input_method = std::make_unique<Win32InputMethod>();
     }
 
-    last_target_time = std::chrono::steady_clock::now();
-    last_prediction_time = last_target_time;
+    last_prediction_time = std::chrono::steady_clock::now();
 }
 
 // Implementation of new constructor with separated X/Y PID controllers
@@ -345,7 +343,6 @@ MouseThread::MouseThread(
                        center_y(screen_height / 2),
                        auto_shoot(auto_shoot),
                        bScope_multiplier(bScope_multiplier),
-                       current_target(nullptr),
                        tracking_errors(false)
 {
     // Initialize Kalman filter and separated PID controller
@@ -366,8 +363,7 @@ MouseThread::MouseThread(
         input_method = std::make_unique<Win32InputMethod>();
     }
 
-    last_target_time = std::chrono::steady_clock::now();
-    last_prediction_time = last_target_time;
+    last_prediction_time = std::chrono::steady_clock::now();
 }
 
 void MouseThread::updateConfig(
@@ -396,7 +392,7 @@ void MouseThread::updateConfig(
     // Update Kalman filter
     kalman_filter->updateParameters(process_noise_q, measurement_noise_r);
 
-    // Update legacy PID controller (same gains for X/Y axes)
+    // Update PID controller
     pid_controller->updateParameters(kp, ki, kd);
 }
 
@@ -442,23 +438,16 @@ Eigen::Vector2d MouseThread::predictTargetPosition(double target_x, double targe
 
     last_prediction_time = current_time;
 
-    // Always predict first, irrespective of target detection
+    // Predict the target movement
     kalman_filter->predict(dt);
 
-    // Early return if no target
-    if (!target_detected.load())
-    {
-        const auto &state = kalman_filter->getState();
-        return Eigen::Vector2d(state(0, 0), state(1, 0));
-    }
-
-    // Removed unnecessary SIMD: direct creation is more efficient when simply setting two values
+    // Measurement update
     Eigen::Vector2d measurement(target_x, target_y);
     kalman_filter->update(measurement);
 
     const auto &state = kalman_filter->getState();
     
-    // Simple variable extraction is more efficient without SIMD with direct assignment
+    // Extract state variables
     double pos_x = state(0, 0);
     double pos_y = state(1, 0);
     double vel_x = state(2, 0);
@@ -466,18 +455,17 @@ Eigen::Vector2d MouseThread::predictTargetPosition(double target_x, double targe
     double acc_x = state(4, 0);
     double acc_y = state(5, 0);
 
-    // Vector size calculation without SIMD
+    // Calculate velocity magnitude
     double velocity = std::sqrt(vel_x * vel_x + vel_y * vel_y);
-    double acceleration = std::sqrt(acc_x * acc_x + acc_y * acc_y);
 
-    // Use lookup table approach to eliminate branches for prediction_time calculation
+    // Use lookup table for prediction time
     constexpr double base_prediction_factor = 0.07;
     constexpr double prediction_factors[4] = {1.0, 1.5, 2.0, 2.5};
     
     int velocity_idx = std::min(static_cast<int>(velocity / 200.0), 3);
     double prediction_time = dt * base_prediction_factor * prediction_factors[velocity_idx];
 
-    // SIMD 대신 직접 계산
+    // Calculate future position
     double half_pred_time_squared = 0.5 * prediction_time * prediction_time;
     double future_x = pos_x + vel_x * prediction_time + acc_x * half_pred_time_squared;
     double future_y = pos_y + vel_y * prediction_time + acc_y * half_pred_time_squared;
@@ -501,7 +489,6 @@ Eigen::Vector2d MouseThread::predictTargetPosition(double target_x, double targe
     
     prev_velocity = current_velocity;
     
-    target_detected.store(true);
     return Eigen::Vector2d(future_x, future_y);
 }
 
@@ -582,6 +569,7 @@ AimbotTarget *MouseThread::findClosestTarget(const std::vector<AimbotTarget> &ta
         return nullptr;
     }
 
+    // Always pick the closest target without locking - no persistence
     AimbotTarget *closest = nullptr;
     double min_distance = std::numeric_limits<double>::max();
 
@@ -595,6 +583,7 @@ AimbotTarget *MouseThread::findClosestTarget(const std::vector<AimbotTarget> &ta
         }
     }
 
+    // No target persistence - always return current closest
     return closest;
 }
 
@@ -611,22 +600,17 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     double target_center_x = target.x + target.w * 0.5;
     double target_center_y = target.y + target.h * 0.5;
 
-    // Calculate error without SIMD
+    // Calculate initial error
     double error_x = target_center_x - local_center_x;
     double error_y = target_center_y - local_center_y;
 
-    // Reset prediction for first detection
-    if (!target_detected.load())
-    {
-        resetPrediction();
-        Eigen::Vector2d measurement(target_center_x, target_center_y);
-        kalman_filter->update(measurement);
-    }
-
+    // Reset prediction for each target to avoid locking
+    resetPrediction();
+    
     // Predict target position
     Eigen::Vector2d predicted = predictTargetPosition(target_center_x, target_center_y);
 
-    // Calculate adjusted error
+    // Calculate adjusted error with prediction
     error_x = predicted.x() - local_center_x;
     error_y = predicted.y() - local_center_y;
 
@@ -644,7 +628,7 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     Eigen::Vector2d error(error_x, error_y);
     Eigen::Vector2d pid_output = pid_controller->calculate(error);
 
-    // Calculate mouse movement - sensitivity removed
+    // Calculate mouse movement
     double move_x = pid_output.x() * (local_fov_x / 360.0) * (1000.0 / local_dpi);
     double move_y = pid_output.y() * (local_fov_y / 360.0) * (1000.0 / local_dpi);
 
@@ -668,8 +652,6 @@ void MouseThread::moveMouse(const AimbotTarget &target)
             input_method->move(dx_int, dy_int);
         }
     }
-
-    last_target_time = std::chrono::steady_clock::now();
 }
 
 void MouseThread::pressMouse(const AimbotTarget &target)
@@ -706,24 +688,7 @@ void MouseThread::resetPrediction()
 {
     kalman_filter->reset();
     pid_controller->reset();
-    target_detected = false;
     last_prediction_time = std::chrono::steady_clock::now();
-}
-
-void MouseThread::checkAndResetPredictions()
-{
-    if (target_detected)
-    {
-        const auto current_time = std::chrono::steady_clock::now();
-        const double elapsed = std::chrono::duration<double>(current_time - last_target_time).count();
-
-        // Reduced target loss detection time from 250ms to 150ms - quicker acquisition of new targets
-        if (elapsed > 0.1) // 150ms timeout
-        {
-            resetPrediction();
-            target_detected = false;
-        }
-    }
 }
 
 void MouseThread::setInputMethod(std::unique_ptr<InputMethod> new_method)
