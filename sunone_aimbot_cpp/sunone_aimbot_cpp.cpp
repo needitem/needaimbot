@@ -73,72 +73,24 @@ namespace simd {
                                    int resolution_y,
                                    bool disable_headshot) {
         const size_t count = boxes.size();
-        if (count < 4) return; // Not enough data for SIMD processing
+        if (count == 0) return;
         
         // Pre-allocate scores vector with exact size to avoid reallocation
         scores.resize(count);
         
-        // Pre-allocate temporary arrays for SIMD processing
-        alignas(16) float centers_x[4];
-        alignas(16) float centers_y[4];
-        alignas(16) float distances[4];
+        // 스크린 중앙점 미리 계산
+        const float half_res_x = resolution_x * 0.5f;
+        const float half_res_y = resolution_y * 0.5f;
         
-        // Process 4 boxes at a time using SSE
-        size_t i = 0;
-        for (; i + 3 < count; i += 4) {
-            // Load box centers (x coordinates)
-            centers_x[0] = boxes[i].x + boxes[i].width * 0.5f;
-            centers_x[1] = boxes[i+1].x + boxes[i+1].width * 0.5f;
-            centers_x[2] = boxes[i+2].x + boxes[i+2].width * 0.5f;
-            centers_x[3] = boxes[i+3].x + boxes[i+3].width * 0.5f;
-            
-            // Load box centers (y coordinates)
-            centers_y[0] = boxes[i].y + boxes[i].height * 0.5f;
-            centers_y[1] = boxes[i+1].y + boxes[i+1].height * 0.5f;
-            centers_y[2] = boxes[i+2].y + boxes[i+2].height * 0.5f;
-            centers_y[3] = boxes[i+3].y + boxes[i+3].height * 0.5f;
-            
-            // Convert to SIMD vectors
-            __m128 center_xs = _mm_load_ps(centers_x);  // Using aligned load
-            __m128 center_ys = _mm_load_ps(centers_y);  // Using aligned load
-            
-            // Calculate distances from screen center
-            __m128 half_res_x = _mm_set1_ps(resolution_x * 0.5f);
-            __m128 half_res_y = _mm_set1_ps(resolution_y * 0.5f);
-            
-            __m128 diff_x = _mm_sub_ps(center_xs, half_res_x);
-            __m128 diff_y = _mm_sub_ps(center_ys, half_res_y);
-            
-            // Calculate squared distances (x²+y²)
-            __m128 sq_x = _mm_mul_ps(diff_x, diff_x);
-            __m128 sq_y = _mm_mul_ps(diff_y, diff_y);
-            __m128 squared_distances = _mm_add_ps(sq_x, sq_y);
-            
-            // Store results
-            _mm_store_ps(distances, squared_distances);  // Using aligned store
-            
-            // Apply additional score factors (would depend on targeting preferences)
-            for (size_t j = 0; j < 4; j++) {
-                // Lower distance = higher score
-                float distance_score = 1.0f / (1.0f + std::sqrt(distances[j]));
-                
-                // Class-based scoring (e.g., prefer headshots)
-                float class_score = 1.0f;
-                if (!disable_headshot && classes[i+j] == 0) { // Assuming 0 is head class
-                    class_score = 1.5f; // Prefer headshots
-                }
-                
-                scores[i+j] = distance_score * class_score;
-            }
-        }
-        
-        // Handle remaining boxes without SIMD
-        for (; i < count; i++) {
+        // SIMD는 박스가 최소 4개 이상일 때만 효율적
+        // 대부분의 경우 동시에 화면에 나타나는 타겟은 소수이므로
+        // 불필요한 SIMD 오버헤드를 없애고 직접 계산으로 전환
+        for (size_t i = 0; i < count; i++) {
             float center_x = boxes[i].x + boxes[i].width * 0.5f;
             float center_y = boxes[i].y + boxes[i].height * 0.5f;
             
-            float diff_x = center_x - (resolution_x * 0.5f);
-            float diff_y = center_y - (resolution_y * 0.5f);
+            float diff_x = center_x - half_res_x;
+            float diff_y = center_y - half_res_y;
             
             float squared_distance = diff_x * diff_x + diff_y * diff_y;
             float distance_score = 1.0f / (1.0f + std::sqrt(squared_distance));
