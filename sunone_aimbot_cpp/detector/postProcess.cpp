@@ -5,6 +5,7 @@
 #include "sunone_aimbot_cpp.h"
 #include "detector.h"
 
+// Original CPU implementation kept for fallback
 void NMS(std::vector<Detection>& detections, float nmsThreshold)
 {
     if (detections.empty()) return;
@@ -19,7 +20,6 @@ void NMS(std::vector<Detection>& detections, float nmsThreshold)
     std::vector<Detection> result;
     result.reserve(detections.size());
 
-    // 경계 박스 면적 미리 계산하여 저장
     std::vector<float> areas(detections.size());
     for (size_t i = 0; i < detections.size(); ++i) {
         areas[i] = static_cast<float>(detections[i].box.area());
@@ -39,8 +39,7 @@ void NMS(std::vector<Detection>& detections, float nmsThreshold)
         {
             if (suppress[j]) continue;
             
-            // 빠른 rejection 패턴 1: 신뢰도가 특정 임계값 이하로 차이나면 건너뛰기
-            if (conf_i > detections[j].confidence * 2.0f) {
+             if (conf_i > detections[j].confidence * 2.0f) {
                 suppress[j] = true;
                 continue;
             }
@@ -55,7 +54,6 @@ void NMS(std::vector<Detection>& detections, float nmsThreshold)
                 continue; // 상자가 겹치지 않으면 건너뛰기
             }
             
-            // 이제 교차 영역 계산
             const cv::Rect intersection = box_i & box_j;
             
             if (intersection.width > 0 && intersection.height > 0)
@@ -115,7 +113,17 @@ std::vector<Detection> postProcessYolo10(
         }
     }
 
-    NMS(detections, nmsThreshold);
+    if (!detections.empty()) {
+        try {
+            // Use GPU NMS by default
+            NMSGpu(detections, nmsThreshold);
+        }
+        catch (const std::exception& e) {
+            // Fallback to CPU version if GPU fails
+            std::cerr << "[postProcess] GPU NMS failed, falling back to CPU: " << e.what() << std::endl;
+            NMS(detections, nmsThreshold);
+        }
+    }
 
     return detections;
 }
@@ -183,9 +191,16 @@ std::vector<Detection> postProcessYolo11(
         }
     }
 
-    if (!detections.empty())
-    {
-        NMS(detections, nmsThreshold);
+    if (!detections.empty()) {
+        try {
+            // Use GPU NMS by default
+            NMSGpu(detections, nmsThreshold);
+        }
+        catch (const std::exception& e) {
+            // Fallback to CPU version if GPU fails
+            std::cerr << "[postProcess] GPU NMS failed, falling back to CPU: " << e.what() << std::endl;
+            NMS(detections, nmsThreshold);
+        }
     }
 
     return detections;

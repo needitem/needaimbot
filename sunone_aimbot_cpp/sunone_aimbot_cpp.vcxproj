@@ -53,6 +53,9 @@
     <ClCompile Include="tensorrt\nvinf.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <CudaCompile Include="detector\postProcessGpu.cu" />
+  </ItemGroup>
+  <ItemGroup>
     <ClInclude Include="capture\capture.h" />
     <ClInclude Include="capture\duplication_api_capture.h" />
     <ClInclude Include="capture\virtual_camera.h" />

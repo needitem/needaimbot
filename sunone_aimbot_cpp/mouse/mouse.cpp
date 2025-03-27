@@ -152,7 +152,6 @@ Eigen::Vector2d PIDController2D::calculate(const Eigen::Vector2d &error)
     else if (output.y() < -MAX_OUTPUT_Y) output.y() = -MAX_OUTPUT_Y;
 
     prev_error = error;
-    
     return output;
 }
 
