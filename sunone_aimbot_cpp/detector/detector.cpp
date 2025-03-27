@@ -490,89 +490,87 @@ void Detector::inferenceThread()
                 
                 context->enqueueV3(stream);
 
-                cudaEvent_t inferenceComplete;
-                cudaEventCreate(&inferenceComplete);
-                cudaEventRecord(inferenceComplete, stream);
-                cudaEventSynchronize(inferenceComplete);
-                
                 for (const auto& name : outputNames)
                 {
                     size_t size = outputSizes[name];
                     nvinfer1::DataType dtype = outputTypes[name];
-                    
+                    void* outputBindingPtr = outputBindings[name];
+                    void* hostBufferPtr = nullptr;
+
                     if (dtype == nvinfer1::DataType::kHALF)
                     {
                         size_t numElements = size / sizeof(__half);
                         std::vector<__half>& outputDataHalf = outputDataBuffersHalf[name];
-                        
                         if (outputDataHalf.size() != numElements) {
                             outputDataHalf.resize(numElements);
                         }
-                        
-                        void* outputDest = outputDataHalf.data();
-                        if (config.use_pinned_memory && pinnedOutputBuffers.find(name) != pinnedOutputBuffers.end()) {
-                            outputDest = pinnedOutputBuffers[name];
+                        hostBufferPtr = outputDataHalf.data();
+                        if (config.use_pinned_memory && pinnedOutputBuffers.count(name)) {
+                            hostBufferPtr = pinnedOutputBuffers[name];
                         }
-                        
+                    }
+                    else if (dtype == nvinfer1::DataType::kFLOAT)
+                    {
+                        size_t numElements = size / sizeof(float);
+                        std::vector<float>& outputData = outputDataBuffers[name];
+                         if (outputData.size() != numElements) {
+                            outputData.resize(numElements);
+                        }
+                        hostBufferPtr = outputData.data();
+                         if (config.use_pinned_memory && pinnedOutputBuffers.count(name)) {
+                            hostBufferPtr = pinnedOutputBuffers[name];
+                        }
+                    }
+
+                    if (hostBufferPtr && outputBindingPtr) {
                         cudaMemcpyAsync(
-                            outputDest,
-                            outputBindings[name],
+                            hostBufferPtr,
+                            outputBindingPtr,
                             size,
                             cudaMemcpyDeviceToHost,
                             postprocessStream
                         );
-                        
-                        cudaStreamSynchronize(postprocessStream);
-                        
-                        if (config.use_pinned_memory && outputDest != outputDataHalf.data()) {
-                            memcpy(outputDataHalf.data(), outputDest, size);
+                    }
+                }
+
+                cudaStreamSynchronize(postprocessStream);
+
+                for (const auto& name : outputNames)
+                {
+                    size_t size = outputSizes[name];
+                    nvinfer1::DataType dtype = outputTypes[name];
+
+                    if (dtype == nvinfer1::DataType::kHALF)
+                    {
+                        void* hostBufferPtr = outputDataBuffersHalf[name].data();
+                        if (config.use_pinned_memory && pinnedOutputBuffers.count(name)) {
+                            hostBufferPtr = pinnedOutputBuffers[name];
+                            memcpy(outputDataBuffersHalf[name].data(), hostBufferPtr, size);
                         }
-                        
+
                         std::vector<float>& outputDataFloat = outputDataBuffers["temp_float"];
+                        size_t numElements = size / sizeof(__half);
                         if (outputDataFloat.size() != numElements) {
                             outputDataFloat.resize(numElements);
                         }
-                        
-                        for (size_t i = 0; i < outputDataHalf.size(); ++i) {
-                            outputDataFloat[i] = __half2float(outputDataHalf[i]);
+                        for (size_t i = 0; i < outputDataBuffersHalf[name].size(); ++i) {
+                             outputDataFloat[i] = __half2float(outputDataBuffersHalf[name][i]);
                         }
-                        
+
                         postProcess(outputDataFloat.data(), name);
                     }
                     else if (dtype == nvinfer1::DataType::kFLOAT)
                     {
-                        std::vector<float>& outputData = outputDataBuffers[name];
-                        
-                        size_t numElements = size / sizeof(float);
-                        if (outputData.size() != numElements) {
-                            outputData.resize(numElements);
+                        void* hostBufferPtr = outputDataBuffers[name].data();
+                        if (config.use_pinned_memory && pinnedOutputBuffers.count(name)) {
+                            hostBufferPtr = pinnedOutputBuffers[name];
+                            memcpy(outputDataBuffers[name].data(), hostBufferPtr, size);
                         }
-                        
-                        void* outputDest = outputData.data();
-                        if (config.use_pinned_memory && pinnedOutputBuffers.find(name) != pinnedOutputBuffers.end()) {
-                            outputDest = pinnedOutputBuffers[name];
-                        }
-                        
-                        cudaMemcpyAsync(
-                            outputDest,
-                            outputBindings[name],
-                            size,
-                            cudaMemcpyDeviceToHost,
-                            postprocessStream
-                        );
-                        
-                        cudaStreamSynchronize(postprocessStream);
-                        
-                        if (config.use_pinned_memory && outputDest != outputData.data()) {
-                            memcpy(outputData.data(), outputDest, size);
-                        }
-                            
-                        postProcess(outputData.data(), name);
+
+                        postProcess(outputDataBuffers[name].data(), name);
                     }
                 }
-                
-                cudaEventDestroy(inferenceComplete);
-                
+
             } catch (const std::exception& e)
             {
                 std::cerr << "[Detector] Error during inference: " << e.what() << std::endl;
