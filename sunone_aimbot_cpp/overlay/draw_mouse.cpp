@@ -33,26 +33,34 @@ void SetWrappedTooltip(const char* text)
 
 void draw_mouse()
 {
-    ImGui::SliderInt("DPI", &config.dpi, 800, 5000);
-    if (ImGui::IsItemHovered())
+    ImGui::Columns(2, "MouseSettingsColumns", false); // Start 2-column layout
+
+    // --- Column 1 Start ---
+    if (ImGui::CollapsingHeader("Display & Sensitivity", ImGuiTreeNodeFlags_DefaultOpen))
     {
-        SetWrappedTooltip("Mouse DPI (Dots Per Inch). Higher values increase mouse sensitivity.");
+        ImGui::SliderInt("DPI", &config.dpi, 800, 5000);
+        if (ImGui::IsItemHovered())
+        {
+            SetWrappedTooltip("Mouse DPI (Dots Per Inch). Higher values increase mouse sensitivity.");
+        }
+        
+        ImGui::SliderInt("FOV X", &config.fovX, 60, 120);
+        if (ImGui::IsItemHovered())
+        {
+            SetWrappedTooltip("Horizontal Field of View in degrees. Should match your game's settings.");
+        }
+        
+        ImGui::SliderInt("FOV Y", &config.fovY, 40, 100);
+        if (ImGui::IsItemHovered())
+        {
+            SetWrappedTooltip("Vertical Field of View in degrees. Should match your game's settings.");
+        }
+        ImGui::Spacing(); // Add spacing at the end of the group
     }
-    
-    ImGui::SliderInt("FOV X", &config.fovX, 60, 120);
-    if (ImGui::IsItemHovered())
-    {
-        SetWrappedTooltip("Horizontal Field of View in degrees. Should match your game's settings.");
-    }
-    
-    ImGui::SliderInt("FOV Y", &config.fovY, 40, 100);
-    if (ImGui::IsItemHovered())
-    {
-        SetWrappedTooltip("Vertical Field of View in degrees. Should match your game's settings.");
-    }
-    
-    ImGui::Separator();
+
+    // No Separator needed here due to column layout
     ImGui::Text("PID Controller Settings");
+    ImGui::Spacing(); // Add spacing before the first PID header
     
     // X-axis PID Settings
     if (ImGui::CollapsingHeader("Horizontal (X-axis) PID", ImGuiTreeNodeFlags_DefaultOpen))
@@ -87,6 +95,7 @@ void draw_mouse()
         {
             SetWrappedTooltip("Predicts future horizontal error based on rate of change. Higher values add dampening to reduce overshooting.");
         }
+        ImGui::Spacing(); // Add spacing after the X-axis PID settings
     }
     
     // Y-axis PID Settings
@@ -121,27 +130,40 @@ void draw_mouse()
         {
             SetWrappedTooltip("Predicts future vertical error based on rate of change. Higher values add dampening to reduce overshooting.");
         }
+        ImGui::Spacing(); // Add spacing after the Y-axis PID settings
     }
 
-    ImGui::Separator();
-    ImGui::Text("Kalman Filter Settings");
-    ImGui::SliderFloat("Process Noise (Q)", &config.process_noise_q, 0.001f, 5.0f, "%.3f");
-    if (ImGui::IsItemHovered())
-    {
-        SetWrappedTooltip("Represents the uncertainty in the process model. Higher values make the filter more responsive to new measurements but noisier. Lower values make aim smoother but less responsive to sudden changes.");
-    }
-    ImGui::SliderFloat("Measurement Noise (R)", &config.measurement_noise_r, 0.001f, 1.0f, "%.3f");
-    if (ImGui::IsItemHovered())
-    {
-        SetWrappedTooltip("Represents noise in the measurements. Higher values make the filter trust measurements less, resulting in smoother but potentially slower aiming. Lower values increase responsiveness but may cause jitter.");
-    }
-    ImGui::SliderFloat("Estimation Error (P)", &config.estimation_error_p, 0.001f, 10.0f, "%.3f");
-    if (ImGui::IsItemHovered())
-    {
-        SetWrappedTooltip("Initial uncertainty in the state estimate. Higher values cause the filter to give more weight to initial measurements. Affects how quickly the filter converges to stable tracking.");
-    }
+    // No Separator needed here
+    // ImGui::Text("Kalman Filter Settings"); // Text might be redundant if header is descriptive
+    ImGui::Spacing(); // Add spacing before the Kalman header
 
-    ImGui::Separator();
+    // Group Kalman Filter Settings
+    if (ImGui::CollapsingHeader("Kalman Filter Smoothing", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        ImGui::SliderFloat("Process Noise (Q)", &config.process_noise_q, 0.001f, 15.0f, "%.3f");
+        if (ImGui::IsItemHovered())
+        {
+            SetWrappedTooltip("Represents the uncertainty in the process model. Higher values make the filter more responsive to new measurements but noisier. Lower values make aim smoother but less responsive to sudden changes.");
+        }
+        ImGui::SliderFloat("Measurement Noise (R)", &config.measurement_noise_r, 0.001f, 1.0f, "%.3f");
+        if (ImGui::IsItemHovered())
+        {
+            SetWrappedTooltip("Represents noise in the measurements. Higher values make the filter trust measurements less, resulting in smoother but potentially slower aiming. Lower values increase responsiveness but may cause jitter.");
+        }
+        ImGui::SliderFloat("Estimation Error (P)", &config.estimation_error_p, 0.001f, 10.0f, "%.3f");
+        if (ImGui::IsItemHovered())
+        {
+            SetWrappedTooltip("Initial uncertainty in the state estimate. Higher values cause the filter to give more weight to initial measurements. Affects how quickly the filter converges to stable tracking.");
+        }
+        ImGui::Spacing(); // Add spacing at the end of the group
+    }
+    // --- Column 1 End ---
+
+    ImGui::NextColumn(); // Move to the second column
+
+    // --- Column 2 Start ---
+    // No Separator needed here
+    ImGui::Spacing(); // Add spacing before the Recoil header
 
     // Create a collapsible section for Recoil Control
     if (ImGui::CollapsingHeader("Recoil Control", ImGuiTreeNodeFlags_DefaultOpen))
@@ -205,9 +227,11 @@ void draw_mouse()
             // Hotkey information
             ImGui::TextColored(ImVec4(0.7f, 0.7f, 1.0f, 1.0f), "Left/Right Arrow keys: Adjust recoil strength");
         }
+        ImGui::Spacing(); // Add spacing after Recoil settings
     }
 
-    ImGui::Separator();
+    // No Separator needed here
+    ImGui::Spacing(); // Add spacing before Aiming settings header
 
     // Create a collapsible section for Aiming Settings
     if (ImGui::CollapsingHeader("Aiming Settings", ImGuiTreeNodeFlags_DefaultOpen))
@@ -228,10 +252,12 @@ void draw_mouse()
             }
             ImGui::Unindent(10.0f);
         }
+        ImGui::Spacing(); // Add spacing after Aiming settings
     }
 
     // INPUT METHODS - Put in its own collapsible section
-    ImGui::Separator();
+    // No Separator needed here
+    ImGui::Spacing(); // Add spacing before Input Method settings header
     if (ImGui::CollapsingHeader("Input Method Settings", ImGuiTreeNodeFlags_DefaultOpen))
     {
         std::vector<std::string> input_methods = { "WIN32", "GHUB", "ARDUINO" };
@@ -252,161 +278,39 @@ void draw_mouse()
             }
         }
 
-        if (ImGui::Combo("Input Method", &input_method_index, method_items.data(), static_cast<int>(method_items.size())))
+        if (ImGui::Combo("Input Method", &input_method_index, method_items.data(), method_items.size()))
         {
-            std::string new_input_method = input_methods[input_method_index];
-
-            if (new_input_method != config.input_method)
-            {
-                config.input_method = new_input_method;
-                config.saveConfig();
-                input_method_changed.store(true);
-            }
+            config.input_method = input_methods[input_method_index];
+            config.saveConfig();
         }
-        
         if (ImGui::IsItemHovered())
         {
-            SetWrappedTooltip("Select method for mouse control. Each method has different compatibility with games.");
+            SetWrappedTooltip("Select the input method for sending mouse movements:\n"
+                             "WIN32: Standard Windows SendInput. May be detected.\n"
+                             "GHUB: Logitech G Hub driver (if installed and supported). Generally safer.\n"
+                             "ARDUINO: Requires a connected Arduino board flashed with appropriate firmware.");
         }
 
-        // Add some indent for method-specific settings
-        ImGui::Indent(10.0f);
-        
-        if (config.input_method == "ARDUINO")
+        // Display GHUB version if GHUB method is selected or potentially usable
+        if (config.input_method == "GHUB" || !ghub_version.empty())
         {
-            if (arduinoSerial)
+            ImGui::Text("GHUB Version: %s", ghub_version.c_str());
+            if (ghub_version.empty())
             {
-                if (arduinoSerial->isOpen())
-                {
-                    ImGui::TextColored(ImVec4(0, 255, 0, 255), "Arduino connected");
-                }
-                else
-                {
-                    ImGui::TextColored(ImVec4(255, 0, 0, 255), "Arduino not connected");
-                }
-            }
-
-            std::vector<std::string> port_list;
-            for (int i = 1; i <= 30; ++i)
-            {
-                port_list.push_back("COM" + std::to_string(i));
-            }
-
-            std::vector<const char*> port_items;
-            port_items.reserve(port_list.size());
-            for (const auto& port : port_list)
-            {
-                port_items.push_back(port.c_str());
-            }
-
-            int port_index = 0;
-            for (size_t i = 0; i < port_list.size(); ++i)
-            {
-                if (port_list[i] == config.arduino_port)
-                {
-                    port_index = static_cast<int>(i);
-                    break;
-                }
-            }
-
-            if (ImGui::Combo("Port", &port_index, port_items.data(), static_cast<int>(port_items.size())))
-            {
-                config.arduino_port = port_list[port_index];
-                config.saveConfig();
-                input_method_changed.store(true);
-            }
-            if (ImGui::IsItemHovered())
-            {
-                SetWrappedTooltip("Select the COM port your Arduino is connected to. Check Device Manager if unsure.");
-            }
-
-            std::vector<int> baud_rate_list = { 9600, 19200, 38400, 57600, 115200 };
-            std::vector<std::string> baud_rate_str_list;
-            for (const auto& rate : baud_rate_list)
-            {
-                baud_rate_str_list.push_back(std::to_string(rate));
-            }
-
-            std::vector<const char*> baud_rate_items;
-            baud_rate_items.reserve(baud_rate_str_list.size());
-            for (const auto& rate_str : baud_rate_str_list)
-            {
-                baud_rate_items.push_back(rate_str.c_str());
-            }
-
-            int baud_rate_index = 0;
-            for (size_t i = 0; i < baud_rate_list.size(); ++i)
-            {
-                if (baud_rate_list[i] == config.arduino_baudrate)
-                {
-                    baud_rate_index = static_cast<int>(i);
-                    break;
-                }
-            }
-
-            if (ImGui::Combo("Baudrate", &baud_rate_index, baud_rate_items.data(), static_cast<int>(baud_rate_items.size())))
-            {
-                config.arduino_baudrate = baud_rate_list[baud_rate_index];
-                config.saveConfig();
-                input_method_changed.store(true);
-            }
-            if (ImGui::IsItemHovered())
-            {
-                SetWrappedTooltip("Baud rate for Arduino communication. Must match the rate in your Arduino sketch.");
-            }
-
-            if (ImGui::Checkbox("16-bit Mouse Precision", &config.arduino_16_bit_mouse))
-            {
-                config.saveConfig();
-                input_method_changed.store(true);
-            }
-            if (ImGui::IsItemHovered())
-            {
-                SetWrappedTooltip("Enable 16-bit precision for mouse movements (recommended for smoother control).");
-            }
-            
-            if (ImGui::Checkbox("Enable Keyboard Keys", &config.arduino_enable_keys))
-            {
-                config.saveConfig();
-                input_method_changed.store(true);
-            }
-            if (ImGui::IsItemHovered())
-            {
-                SetWrappedTooltip("Enable keyboard key simulation through Arduino. Required if using keybinds for any functions.");
+                 ImGui::SameLine();
+                 ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "(Not Found/Error)");
             }
         }
-        else if (config.input_method == "GHUB")
-        {
-            if (ghub_version == "13.1.4")
-            {
-                ImGui::TextColored(ImVec4(0, 255, 0, 255), "Correct Ghub version installed: %s", ghub_version.c_str());
-            }
-            else
-            {
-                if (ghub_version == "")
-                {
-                    ghub_version = "unknown";
-                }
 
-                ImGui::TextColored(ImVec4(255, 165, 0, 255), "Installed Ghub version: %s", ghub_version.c_str());
-                ImGui::TextWrapped("The wrong version of Ghub is installed or the path to Ghub is not set by default.\nDefault system path: C:\\Program Files\\LGHUB");
-                if (ImGui::Button("View GHub Documentation"))
-                {
-                    ShellExecute(0, 0, L"https://github.com/SunOner/sunone_aimbot_docs/blob/main/tips/ghub.md", 0, 0, SW_SHOW);
-                }
-                if (ImGui::IsItemHovered())
-                {
-                    SetWrappedTooltip("Open documentation for GHUB configuration in your web browser.");
-                }
-            }
-            ImGui::TextColored(ImVec4(255, 0, 0, 255), "Use at your own risk, this method may be detected in some games.");
-        }
-        else if (config.input_method == "WIN32")
-        {
-            ImGui::TextWrapped("This is a standard mouse input method. It may not work in most games.");
-            ImGui::TextColored(ImVec4(255, 0, 0, 255), "Use at your own risk, this method may be detected in some games.");
-        }
-        
-        ImGui::Unindent(10.0f);
+        // Optional: Add ARDUINO COM port selection if needed
+        // if (config.input_method == "ARDUINO") { ... }
+
+        ImGui::Spacing(); // Add spacing at the end
     }
+    // --- Column 2 End ---
+
+    ImGui::Columns(1); // End column layout and return to 1 column
+
+    // Optionally add a separator at the very end if needed before other global UI elements
+    // ImGui::Separator();
 }
