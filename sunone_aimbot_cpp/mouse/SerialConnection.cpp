@@ -4,6 +4,8 @@
 #include <iostream>
 #include <vector>
 #include <algorithm>
+#include <queue>
+#include <condition_variable>
 
 #include "sunone_aimbot_cpp.h"
 #include "SerialConnection.h"
@@ -13,7 +15,8 @@ SerialConnection::SerialConnection(const std::string& port, unsigned int baud_ra
     listening_(false),
     aiming_active(false),
     shooting_active(false),
-    zooming_active(false)
+    zooming_active(false),
+    writer_running_(false)
 {
     try
     {
@@ -30,6 +33,9 @@ SerialConnection::SerialConnection(const std::string& port, unsigned int baud_ra
             {
                 startListening();
             }
+
+            writer_running_ = true;
+            writer_thread_ = std::thread(&SerialConnection::writerThreadFunc, this);
         }
         else
         {
@@ -45,6 +51,12 @@ SerialConnection::SerialConnection(const std::string& port, unsigned int baud_ra
 SerialConnection::~SerialConnection()
 {
     listening_ = false;
+    if (writer_thread_.joinable())
+    {
+        writer_running_ = false;
+        queue_cv_.notify_one();
+        writer_thread_.join();
+    }
     if (serial_.isOpen())
     {
         try { serial_.close(); }
@@ -64,18 +76,14 @@ bool SerialConnection::isOpen() const
 
 void SerialConnection::write(const std::string& data)
 {
-    std::lock_guard<std::mutex> lock(write_mutex_);
-    if (is_open_)
+    if (!is_open_ || !writer_running_)
+        return;
+
     {
-        try
-        {
-            serial_.write(data);
-        }
-        catch (...)
-        {
-            is_open_ = false;
-        }
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        write_queue_.push(data);
     }
+    queue_cv_.notify_one();
 }
 
 std::string SerialConnection::read()
@@ -284,5 +292,40 @@ void SerialConnection::processIncomingLine(const std::string& line)
     catch (const std::exception& e)
     {
         std::cerr << "[Arduino] Error processing line '" << line << "': " << e.what() << std::endl;
+    }
+}
+
+void SerialConnection::writerThreadFunc()
+{
+    while (writer_running_)
+    {
+        std::string data_to_write;
+        {
+            std::unique_lock<std::mutex> lock(queue_mutex_);
+            queue_cv_.wait(lock, [this] { return !write_queue_.empty() || !writer_running_; });
+
+            if (!writer_running_ && write_queue_.empty())
+            {
+                break;
+            }
+
+            if (!write_queue_.empty()) {
+                data_to_write = write_queue_.front();
+                write_queue_.pop();
+            }
+        }
+
+        if (!data_to_write.empty() && is_open_)
+        {
+            try
+            {
+                serial_.write(data_to_write);
+            }
+            catch (...)
+            {
+                is_open_ = false;
+                writer_running_ = false;
+            }
+        }
     }
 }

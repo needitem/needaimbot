@@ -90,16 +90,13 @@ private:
     std::unordered_map<std::string, std::vector<__half>> outputDataBuffersHalf;
     std::unordered_map<std::string, nvinfer1::DataType> outputTypes;
 
-    std::vector<cv::Rect> boxes;
-    std::vector<float> confidences;
-    std::vector<int> classes;
-
     cv::cuda::GpuMat resizedBuffer;
     cv::cuda::GpuMat floatBuffer;
     std::vector<cv::cuda::GpuMat> channelBuffers;
 
     // CUDA 이벤트 추가
     cudaEvent_t processingDone;
+    cudaEvent_t postprocessCopyDone;
 
     // 에러 관리를 위한 헬퍼 함수
     bool checkCudaError(cudaError_t err, const std::string& message) {

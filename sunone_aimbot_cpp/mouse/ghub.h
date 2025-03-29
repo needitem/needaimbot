@@ -4,6 +4,13 @@
 #include <filesystem>
 #include <windows.h>
 
+// Define function pointer types matching the DLL functions
+typedef bool (*mouse_open_t)();
+typedef bool (*moveR_t)(int, int);
+typedef bool (*press_t)(int);
+typedef bool (*release_t)();
+typedef bool (*mouse_close_t)();
+
 class GhubMouse
 {
 public:
@@ -19,6 +26,13 @@ private:
     std::filesystem::path dlldir;
     HMODULE gm;
     bool gmok;
+
+    // Cached function pointers
+    mouse_open_t pfnMouseOpen = nullptr;
+    moveR_t pfnMoveR = nullptr;
+    press_t pfnPress = nullptr;
+    release_t pfnRelease = nullptr;
+    mouse_close_t pfnMouseClose = nullptr;
 
     static UINT _ghub_SendInput(UINT nInputs, LPINPUT pInputs);
     static INPUT _ghub_Input(MOUSEINPUT mi);

@@ -209,64 +209,94 @@ public:
         return hr;
     }
 
-    HRESULT AcquireFrame(FrameContext &frameCtx, UINT timeout = 100)
+    // Modified AcquireFrame to only acquire data and metadata, not perform copies.
+    // Returns DXGI_OUTDUPL_FRAME_INFO for metadata checks in the caller.
+    HRESULT AcquireFrame(FrameContext &frameCtx, DXGI_OUTDUPL_FRAME_INFO& frameInfo, UINT timeout = 100)
     {
         if (!m_duplication)
             return E_FAIL;
 
-        DXGI_OUTDUPL_FRAME_INFO frameInfo{};
+        // DXGI_OUTDUPL_FRAME_INFO frameInfo{}; // Provided by caller now
         IDXGIResource *resource = nullptr;
 
         HRESULT hr = m_duplication->AcquireNextFrame(timeout, &frameInfo, &resource);
-        if (FAILED(hr))
+        if (hr == DXGI_ERROR_WAIT_TIMEOUT)
+        {
+            // Caller should handle timeout
             return hr;
+        }
+        else if (FAILED(hr))
+        { // Includes ACCESS_LOST etc.
+             if (resource) resource->Release();
+             m_duplication->ReleaseFrame(); // Important to release frame state on error
+            return hr;
+        }
+
+        // --- Get Texture --- 
+        hr = resource->QueryInterface(__uuidof(ID3D11Texture2D), (void **)&frameCtx.texture);
+        resource->Release(); // Always release the resource
+        if (FAILED(hr) || !frameCtx.texture)
+        {
+             m_duplication->ReleaseFrame(); // Release frame state if texture acquisition fails
+             if (frameCtx.texture) { // QueryInterface might succeed but return null? Unlikely but safe. 
+                frameCtx.texture->Release();
+                frameCtx.texture = nullptr;
+             }
+            return FAILED(hr) ? hr : E_FAIL; // Return original error or generic failure
+        }
+
+        // --- Get Metadata --- 
+        frameCtx.moveRects.clear(); // Clear previous frame's metadata
+        frameCtx.dirtyRects.clear();
 
         if (frameInfo.TotalMetadataBufferSize > 0)
         {
-            UINT moveCount = frameInfo.TotalMetadataBufferSize;
-            frameCtx.moveRects.resize(moveCount / sizeof(DXGI_OUTDUPL_MOVE_RECT));
-            hr = m_duplication->GetFrameMoveRects(moveCount,
-                                                  frameCtx.moveRects.data(), &moveCount);
+            UINT metaDataSize = frameInfo.TotalMetadataBufferSize;
+            m_metaDataBuffer.resize(metaDataSize); // Resize member buffer
 
-            UINT dirtyCount = frameInfo.TotalMetadataBufferSize - moveCount;
-            frameCtx.dirtyRects.resize(dirtyCount / sizeof(RECT));
-            hr = m_duplication->GetFrameDirtyRects(dirtyCount,
-                                                   frameCtx.dirtyRects.data(), &dirtyCount);
+            // --- Get Move Rects ---
+            UINT moveRectsSize = 0;
+            HRESULT hrMeta = m_duplication->GetFrameMoveRects(metaDataSize, 
+                                                              reinterpret_cast<DXGI_OUTDUPL_MOVE_RECT*>(m_metaDataBuffer.data()), // Use member buffer
+                                                              &moveRectsSize);
+            if (SUCCEEDED(hrMeta) && moveRectsSize > 0) {
+                UINT numMoveRects = moveRectsSize / sizeof(DXGI_OUTDUPL_MOVE_RECT);
+                 // Check against member buffer size
+                 if (numMoveRects * sizeof(DXGI_OUTDUPL_MOVE_RECT) <= m_metaDataBuffer.size()) { 
+                    frameCtx.moveRects.assign(reinterpret_cast<DXGI_OUTDUPL_MOVE_RECT*>(m_metaDataBuffer.data()), // Use member buffer
+                                              reinterpret_cast<DXGI_OUTDUPL_MOVE_RECT*>(m_metaDataBuffer.data()) + numMoveRects);
+                 }
+            }
+
+            // --- Get Dirty Rects ---
+            // Calculate expected size based on resized member buffer and actual move rects size
+            UINT expectedDirtyRectsSize = (m_metaDataBuffer.size() >= moveRectsSize) ? (m_metaDataBuffer.size() - moveRectsSize) : 0;
+            UINT actualDirtyRectsSize = 0; // To store the actual size returned by GetFrameDirtyRects
+            if (expectedDirtyRectsSize > 0) {
+                BYTE* dirtyRectsDataStart = m_metaDataBuffer.data() + moveRectsSize; 
+                hrMeta = m_duplication->GetFrameDirtyRects(expectedDirtyRectsSize, // Pass the available buffer size
+                                                      reinterpret_cast<RECT*>(dirtyRectsDataStart), 
+                                                      &actualDirtyRectsSize); // Get the actual size
+                if (SUCCEEDED(hrMeta) && actualDirtyRectsSize > 0) {
+                    UINT numDirtyRects = actualDirtyRectsSize / sizeof(RECT);
+                    // Ensure the actual size fits within the expected size derived from the buffer
+                    if (numDirtyRects * sizeof(RECT) <= expectedDirtyRectsSize) { 
+                        frameCtx.dirtyRects.assign(reinterpret_cast<RECT*>(dirtyRectsDataStart), 
+                                                   reinterpret_cast<RECT*>(dirtyRectsDataStart) + numDirtyRects);
+                    }
+                }
+            }
         }
-
-        hr = resource->QueryInterface(__uuidof(ID3D11Texture2D), (void **)&frameCtx.texture);
-        resource->Release();
-
-        return (SUCCEEDED(hr)) ? S_OK : hr;
+        // m_metaDataBuffer is a member and persists
+        
+        // Caller is responsible for calling m_duplication->ReleaseFrame() after processing
+        return S_OK; // Successfully acquired frame and metadata
     }
 
     void ReleaseFrame()
     {
         if (m_duplication)
             m_duplication->ReleaseFrame();
-    }
-
-    HRESULT CopyFromDesktopTexture(ID3D11Texture2D *srcTexture, int fullWidth, int fullHeight, int regionWidth, int regionHeight)
-    {
-        if (!m_context || !m_sharedTexture)
-            return E_FAIL;
-
-        D3D11_BOX sourceRegion;
-        sourceRegion.left = (fullWidth - regionWidth) / 2;
-        sourceRegion.top = (fullHeight - regionHeight) / 2;
-        sourceRegion.front = 0;
-        sourceRegion.right = sourceRegion.left + regionWidth;
-        sourceRegion.bottom = sourceRegion.top + regionHeight;
-        sourceRegion.back = 1;
-
-        m_context->CopySubresourceRegion(
-            m_sharedTexture,
-            0,
-            0, 0, 0,
-            srcTexture,
-            0,
-            &sourceRegion);
-        return S_OK;
     }
 
     cv::cuda::GpuMat CopySharedTextureToCudaMat(int regionWidth, int regionHeight)
@@ -319,7 +349,7 @@ public:
         cudaGraphicsUnmapResources(1, &m_cudaResource, m_cudaStream);
 
         // Ensure the copy is complete
-        cudaStreamSynchronize(m_cudaStream);
+        // cudaStreamSynchronize(m_cudaStream); // Removed for lower latency. Caller MUST synchronize.
 
         return frameGpu;
     }
@@ -370,6 +400,8 @@ public:
     cudaGraphicsResource *m_cudaResource;
     cudaStream_t m_cudaStream;
     std::vector<cv::cuda::GpuMat> m_framePool;
+    UINT m_timeout = 16; // Reduced timeout for lower latency (approx. 60Hz)
+    std::vector<BYTE> m_metaDataBuffer; // Reuse metadata buffer
 };
 
 DuplicationAPIScreenCapture::DuplicationAPIScreenCapture(int desiredWidth, int desiredHeight)
@@ -416,40 +448,78 @@ cv::cuda::GpuMat DuplicationAPIScreenCapture::GetNextFrame()
         return cv::cuda::GpuMat();
 
     HRESULT hr = S_OK;
-    FrameContext frameCtx;
+    FrameContext frameCtx; // Holds texture, move/dirty rects
+    DXGI_OUTDUPL_FRAME_INFO frameInfo = {}; // Holds metadata info
 
-    hr = m_ddaManager->AcquireFrame(frameCtx, 100);
+    // Define the target capture area on the screen *early*
+    RECT captureScreenRect;
+    captureScreenRect.left = (screenWidth - regionWidth) / 2;
+    captureScreenRect.top = (screenHeight - regionHeight) / 2;
+    captureScreenRect.right = captureScreenRect.left + regionWidth;
+    captureScreenRect.bottom = captureScreenRect.top + regionHeight;
+
+    // Acquire the next frame - populates frameCtx and frameInfo
+    hr = m_ddaManager->AcquireFrame(frameCtx, frameInfo, m_ddaManager->m_timeout);
+
     if (hr == DXGI_ERROR_WAIT_TIMEOUT)
     {
+        // std::cout << "[Capture] Wait timeout" << std::endl; // Optional: log timeout
+        // No frame acquired, frameCtx.texture should be null
+        // DDAManager::AcquireFrame doesn't call ReleaseFrame on timeout
         return cv::cuda::GpuMat();
     }
     else if (hr == DXGI_ERROR_ACCESS_LOST || hr == DXGI_ERROR_DEVICE_RESET || hr == DXGI_ERROR_DEVICE_REMOVED)
     {
-        capture_method_changed.store(true);
-        m_ddaManager->ReleaseFrame();
-        return cv::cuda::GpuMat();
+        std::cerr << "[Capture] DDA Access lost/Device reset. Reinitializing..." << std::endl;
+        capture_method_changed.store(true); // Signal reinitialization
+        // DDAManager::AcquireFrame already called ReleaseFrame internally on these errors
+        // frameCtx.texture should be null or already released
+        return cv::cuda::GpuMat(); 
     }
     else if (FAILED(hr))
     {
-        std::cerr << "[Capture] AcquireNextFrame failed (hr=0x" << std::hex << hr << ")" << std::endl;
-        m_ddaManager->ReleaseFrame();
+        std::cerr << "[Capture] AcquireFrame failed (hr=0x" << std::hex << hr << ")" << std::endl;
+        // DDAManager::AcquireFrame already called ReleaseFrame internally on failure
+        // frameCtx.texture should be null or already released
         return cv::cuda::GpuMat();
     }
 
-    if (!frameCtx.texture)
+    // If we reach here, AcquireFrame succeeded and frameCtx.texture is valid.
+    // DDAManager::AcquireFrame did NOT call ReleaseFrame yet.
+
+    // --- Start Copy Logic (Simplified: Always copy the full region) ---
+    if (m_ddaManager->m_context && m_ddaManager->m_sharedTexture && frameCtx.texture)
     {
-        m_ddaManager->ReleaseFrame();
-        return cv::cuda::GpuMat();
+        // Always copy the entire target region from the source texture
+        D3D11_BOX sourceBox;
+        sourceBox.left = captureScreenRect.left; 
+        sourceBox.top = captureScreenRect.top;
+        sourceBox.front = 0;
+        sourceBox.right = captureScreenRect.right;
+        sourceBox.bottom = captureScreenRect.bottom;
+        sourceBox.back = 1;
+
+        m_ddaManager->m_context->CopySubresourceRegion(
+            m_ddaManager->m_sharedTexture, // Dest texture
+            0,                             // Dest subresource
+            0, 0, 0,                       // Dest X, Y, Z (destination is top-left of shared texture)
+            frameCtx.texture,              // Src texture (copy from the newly acquired frame)
+            0,                             // Src subresource
+            &sourceBox);                   // Src box defined by captureScreenRect
     }
+    // --- End Copy Logic ---
 
-    m_ddaManager->CopyFromDesktopTexture(frameCtx.texture, screenWidth, screenHeight, regionWidth, regionHeight);
-
-    m_ddaManager->ReleaseFrame();
+    // Release the acquired desktop frame back to DXGI *after* copying from it
+    m_ddaManager->ReleaseFrame(); 
 
     cv::cuda::GpuMat frameGpu = m_ddaManager->CopySharedTextureToCudaMat(regionWidth, regionHeight);
 
-    frameCtx.texture->Release();
-    frameCtx.texture = nullptr;
+    // We MUST release the texture obtained from QueryInterface
+    if (frameCtx.texture)
+    {
+         frameCtx.texture->Release();
+         frameCtx.texture = nullptr;
+    }
 
     // Recycle the previous frame if we have one
     if (!m_previousFrame.empty())

@@ -28,14 +28,7 @@
 #include "other_tools.h"
 #include "postProcess.h"
 
-cudaStream_t getStreamFromOpenCVStream(const cv::cuda::Stream&)
-{
-    return 0;
-}
-
 extern std::atomic<bool> detectionPaused;
-int model_quant;
-std::vector<float> outputData;
 
 extern std::atomic<bool> detector_model_changed;
 extern std::atomic<bool> detection_resolution_changed;
@@ -59,6 +52,7 @@ Detector::Detector()
     postprocessCvStream = cv::cuda::Stream();
     
     cudaEventCreateWithFlags(&processingDone, cudaEventDisableTiming);
+    cudaEventCreateWithFlags(&postprocessCopyDone, cudaEventDisableTiming);
 }
 
 Detector::~Detector()
@@ -67,6 +61,7 @@ Detector::~Detector()
     cudaStreamDestroy(preprocessStream);
     cudaStreamDestroy(postprocessStream);
     cudaEventDestroy(processingDone);
+    cudaEventDestroy(postprocessCopyDone);
     
     for (auto& buffer : pinnedOutputBuffers)
     {
@@ -532,8 +527,10 @@ void Detector::inferenceThread()
                         );
                     }
                 }
+                
+                cudaEventRecord(postprocessCopyDone, postprocessStream);
 
-                cudaStreamSynchronize(postprocessStream);
+                cudaEventSynchronize(postprocessCopyDone);
 
                 for (const auto& name : outputNames)
                 {

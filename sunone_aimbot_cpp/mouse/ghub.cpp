@@ -44,15 +44,33 @@ GhubMouse::GhubMouse()
     }
     else
     {
-        auto mouse_open = reinterpret_cast<bool(*)()>(GetProcAddress(gm, "mouse_open"));
-        if (mouse_open == NULL)
+        // Cache function pointers
+        pfnMouseOpen = reinterpret_cast<mouse_open_t>(GetProcAddress(gm, "mouse_open"));
+        pfnMoveR = reinterpret_cast<moveR_t>(GetProcAddress(gm, "moveR"));
+        pfnPress = reinterpret_cast<press_t>(GetProcAddress(gm, "press"));
+        pfnRelease = reinterpret_cast<release_t>(GetProcAddress(gm, "release"));
+        pfnMouseClose = reinterpret_cast<mouse_close_t>(GetProcAddress(gm, "mouse_close"));
+
+        // Check if mouse_open function pointer is valid and call it
+        if (pfnMouseOpen == NULL)
         {
-            std::cerr << "[Ghub] Failed to open mouse!" << std::endl;
+            std::cerr << "[Ghub] Failed to get mouse_open function address!" << std::endl;
             gmok = false;
         }
         else
         {
-            gmok = mouse_open();
+            gmok = pfnMouseOpen();
+            if (!gmok) {
+                 std::cerr << "[Ghub] mouse_open() failed!" << std::endl;
+            } else {
+                 // Check if other critical functions were loaded
+                 if (pfnMoveR == nullptr || pfnPress == nullptr || pfnRelease == nullptr) {
+                     std::cerr << "[Ghub] Warning: Failed to load one or more core mouse functions (moveR, press, release)." << std::endl;
+                     // Decide if this constitutes failure - perhaps gmok should be false?
+                     // For now, we'll leave gmok as true if mouse_open succeeded, 
+                     // but the functions using the null pointers will fallback to SendInput.
+                 }
+            }
         }
     }
 }
@@ -67,28 +85,24 @@ GhubMouse::~GhubMouse()
 
 bool GhubMouse::mouse_xy(int x, int y)
 {
-    if (gmok)
+    // Use cached function pointer if available and DLL is okay
+    if (gmok && pfnMoveR != nullptr)
     {
-        auto moveR = reinterpret_cast<bool(*)(int, int)>(GetProcAddress(gm, "moveR"));
-        if (moveR != NULL)
-        {
-            return moveR(x, y);
-        }
+        return pfnMoveR(x, y);
     }
+    // Fallback to SendInput
     INPUT input = _ghub_Mouse(MOUSEEVENTF_MOVE, x, y);
     return _ghub_SendInput(1, &input) == 1;
 }
 
 bool GhubMouse::mouse_down(int key)
 {
-    if (gmok)
+    // Use cached function pointer if available and DLL is okay
+    if (gmok && pfnPress != nullptr)
     {
-        auto press = reinterpret_cast<bool(*)(int)>(GetProcAddress(gm, "press"));
-        if (press != NULL)
-        {
-            return press(key);
-        }
+        return pfnPress(key);
     }
+    // Fallback to SendInput
     DWORD flag = (key == 1) ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_RIGHTDOWN;
     INPUT input = _ghub_Mouse(flag);
     return _ghub_SendInput(1, &input) == 1;
@@ -96,14 +110,13 @@ bool GhubMouse::mouse_down(int key)
 
 bool GhubMouse::mouse_up(int key)
 {
-    if (gmok)
+    // Use cached function pointer if available and DLL is okay
+    if (gmok && pfnRelease != nullptr)
     {
-        auto release = reinterpret_cast<bool(*)()>(GetProcAddress(gm, "release"));
-        if (release != NULL)
-        {
-            return release();
-        }
+        // Assuming release takes no arguments based on previous GetProcAddress call
+        return pfnRelease(); 
     }
+    // Fallback to SendInput
     DWORD flag = (key == 1) ? MOUSEEVENTF_LEFTUP : MOUSEEVENTF_RIGHTUP;
     INPUT input = _ghub_Mouse(flag);
     return _ghub_SendInput(1, &input) == 1;
@@ -111,13 +124,10 @@ bool GhubMouse::mouse_up(int key)
 
 bool GhubMouse::mouse_close()
 {
-    if (gmok)
+    // Use cached function pointer if available and DLL is okay
+    if (gmok && pfnMouseClose != nullptr)
     {
-        auto mouse_close = reinterpret_cast<bool(*)()>(GetProcAddress(gm, "mouse_close"));
-        if (mouse_close != NULL)
-        {
-            return mouse_close();
-        }
+        return pfnMouseClose();
     }
-    return false;
+    return false; // No SendInput fallback for close
 }
