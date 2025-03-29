@@ -122,49 +122,6 @@ void draw_mouse()
             SetWrappedTooltip("Predicts future vertical error based on rate of change. Higher values add dampening to reduce overshooting.");
         }
     }
-    
-    // Legacy combined PID settings (for backward compatibility)
-    if (ImGui::CollapsingHeader("Combined PID (Legacy)"))
-    {
-        float kp_display = static_cast<float>(config.kp);
-        if (ImGui::SliderFloat("Proportional (Kp)", &kp_display, 0.0f, 3.0f, "%.3f"))
-        {
-            config.kp = static_cast<double>(kp_display);
-            // Sync legacy value to both axes if user adjusts it
-            config.kp_x = config.kp;
-            config.kp_y = config.kp;
-        }
-        if (ImGui::IsItemHovered())
-        {
-            SetWrappedTooltip("Legacy setting that affects both axes. Prefer using the separate X and Y controls above.");
-        }
-        
-        float ki_display = static_cast<float>(config.ki);
-        if (ImGui::SliderFloat("Integral (Ki)", &ki_display, 0.0f, 5.0f, "%.3f"))
-        {
-            config.ki = static_cast<double>(ki_display);
-            // Sync legacy value to both axes
-            config.ki_x = config.ki;
-            config.ki_y = config.ki;
-        }
-        if (ImGui::IsItemHovered())
-        {
-            SetWrappedTooltip("Legacy setting that affects both axes. Prefer using the separate X and Y controls above.");
-        }
-        
-        float kd_display = static_cast<float>(config.kd);
-        if (ImGui::SliderFloat("Derivative (Kd)", &kd_display, 0.0f, 1.0f, "%.3f"))
-        {
-            config.kd = static_cast<double>(kd_display);
-            // Sync legacy value to both axes
-            config.kd_x = config.kd;
-            config.kd_y = config.kd;
-        }
-        if (ImGui::IsItemHovered())
-        {
-            SetWrappedTooltip("Legacy setting that affects both axes. Prefer using the separate X and Y controls above.");
-        }
-    }
 
     ImGui::Separator();
     ImGui::Text("Kalman Filter Settings");

@@ -48,11 +48,6 @@ private:
     float ki_x, ki_y;  // Integral gain: correction of accumulated error (higher value = accurate aiming, lower value = reduced overshoot)
     float kd_x, kd_y;  // Derivative gain: response to error change rate (higher value = faster stopping, lower value = smoother deceleration)
     
-    // Common gains for backward compatibility
-    float kp;  
-    float ki;  
-    float kd;  
-    
     Eigen::Vector2f prev_error;  // Previous error (for derivative term)
     Eigen::Vector2f integral;    // Accumulated error (for integral term)
     Eigen::Vector2f derivative;  // Change rate (derivative term)
@@ -60,17 +55,11 @@ private:
     std::chrono::steady_clock::time_point last_time_point;  // Previous calculation time (for dt calculation)
 
 public:
-    // Original constructor (for compatibility)
-    PIDController2D(float kp, float ki, float kd);
-    
     // New constructor with separated X/Y gains
     PIDController2D(float kp_x, float ki_x, float kd_x, float kp_y, float ki_y, float kd_y);
     
     Eigen::Vector2f calculate(const Eigen::Vector2f &error);
     void reset();  // Controller reset (used when starting to aim at a new target)
-    
-    // Original parameter update function (for compatibility)
-    void updateParameters(float kp, float ki, float kd);
     
     // X/Y separated gain update function
     void updateSeparatedParameters(float kp_x, float ki_x, float kd_x, float kp_y, float ki_y, float kd_y);
@@ -115,13 +104,6 @@ private:
 
 public:
     MouseThread(int resolution, int dpi, int fovX, int fovY,
-                float kp, float ki, float kd,
-                float process_noise_q, float measurement_noise_r,
-                bool auto_shoot, float bScope_multiplier,
-                SerialConnection *serialConnection = nullptr,
-                GhubMouse *gHub = nullptr);
-
-    MouseThread(int resolution, int dpi, int fovX, int fovY,
                 float kp_x, float ki_x, float kd_x,
                 float kp_y, float ki_y, float kd_y,
                 float process_noise_q, float measurement_noise_r,
@@ -129,10 +111,6 @@ public:
                 SerialConnection *serialConnection = nullptr,
                 GhubMouse *gHub = nullptr);
 
-    void updateConfig(int resolution, int dpi, int fovX, int fovY,
-                      float kp, float ki, float kd,
-                      float process_noise_q, float measurement_noise_r,
-                      bool auto_shoot, float bScope_multiplier);
     void updateConfig(int resolution, int dpi, int fovX, int fovY,
                       float kp_x, float ki_x, float kd_x,
                       float kp_y, float ki_y, float kd_y,

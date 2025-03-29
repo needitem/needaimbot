@@ -34,15 +34,8 @@ constexpr float VEL_NOISE_FACTOR = 2.5f;
 constexpr float ACC_NOISE_FACTOR = 4.0f;
 constexpr float BASE_PREDICTION_FACTOR = 0.07f;
 
-PIDController2D::PIDController2D(float kp, float ki, float kd)
-    : kp(kp), ki(ki), kd(kd), kp_x(kp), ki_x(ki), kd_x(kd), kp_y(kp), ki_y(ki), kd_y(kd)
-{
-    reset();
-}
-
 PIDController2D::PIDController2D(float kp_x, float ki_x, float kd_x, float kp_y, float ki_y, float kd_y)
-    : kp_x(kp_x), ki_x(ki_x), kd_x(kd_x), kp_y(kp_y), ki_y(ki_y), kd_y(kd_y), 
-      kp((kp_x + kp_y) / 2.0f), ki((ki_x + ki_y) / 2.0f), kd((kd_x + kd_y) / 2.0f)
+    : kp_x(kp_x), ki_x(ki_x), kd_x(kd_x), kp_y(kp_y), ki_y(ki_y), kd_y(kd_y)
 {
     reset();
 }
@@ -164,20 +157,6 @@ void PIDController2D::reset()
     last_time_point = std::chrono::steady_clock::now();
 }
 
-void PIDController2D::updateParameters(float kp, float ki, float kd)
-{
-    this->kp = kp;
-    this->ki = ki;
-    this->kd = kd;
-    
-    this->kp_x = kp;
-    this->ki_x = ki;
-    this->kd_x = kd;
-    this->kp_y = kp;
-    this->ki_y = ki;
-    this->kd_y = kd;
-}
-
 void PIDController2D::updateSeparatedParameters(float kp_x, float ki_x, float kd_x, 
                                                float kp_y, float ki_y, float kd_y)
 {
@@ -187,10 +166,6 @@ void PIDController2D::updateSeparatedParameters(float kp_x, float ki_x, float kd
     this->kp_y = kp_y;
     this->ki_y = ki_y;
     this->kd_y = kd_y;
-    
-    this->kp = (kp_x + kp_y) / 2.0f;
-    this->ki = (ki_x + ki_y) / 2.0f;
-    this->kd = (kd_x + kd_y) / 2.0f;
 }
 
 void KalmanFilter2D::initializeMatrices(float process_noise_q, float measurement_noise_r)
@@ -257,28 +232,6 @@ MouseThread::MouseThread(
     int dpi,
     int fovX,
     int fovY,
-    float kp,
-    float ki,
-    float kd,
-    float process_noise_q,
-    float measurement_noise_r,
-    bool auto_shoot,
-    float bScope_multiplier,
-    SerialConnection *serialConnection,
-    GhubMouse *gHub) : tracking_errors(false)
-{
-    initializeScreen(resolution, dpi, fovX, fovY, auto_shoot, bScope_multiplier);
-    kalman_filter = std::make_unique<KalmanFilter2D>(process_noise_q, measurement_noise_r);
-    pid_controller = std::make_unique<PIDController2D>(kp, ki, kd);
-    initializeInputMethod(serialConnection, gHub);
-    last_prediction_time = std::chrono::steady_clock::now();
-}
-
-MouseThread::MouseThread(
-    int resolution,
-    int dpi,
-    int fovX,
-    int fovY,
     float kp_x,
     float ki_x,
     float kd_x,
@@ -326,24 +279,6 @@ void MouseThread::initializeScreen(int resolution, int dpi, int fovX, int fovY, 
     this->bScope_multiplier = bScope_multiplier;
     this->center_x = screen_width / 2.0f;
     this->center_y = screen_height / 2.0f;
-}
-
-void MouseThread::updateConfig(
-    int resolution,
-    int dpi,
-    int fovX,
-    int fovY,
-    float kp,
-    float ki,
-    float kd,
-    float process_noise_q,
-    float measurement_noise_r,
-    bool auto_shoot,
-    float bScope_multiplier)
-{
-    initializeScreen(resolution, dpi, fovX, fovY, auto_shoot, bScope_multiplier);
-    kalman_filter->updateParameters(process_noise_q, measurement_noise_r);
-    pid_controller->updateParameters(kp, ki, kd);
 }
 
 void MouseThread::updateConfig(

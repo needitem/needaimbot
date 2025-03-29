@@ -289,11 +289,6 @@ void OverlayThread()
     float prev_ki_y = config.ki_y;
     float prev_kd_y = config.kd_y;
     
-    // 레거시 PID 컨트롤러 (호환성 유지)
-    float prev_kp = config.kp;
-    float prev_ki = config.ki;
-    float prev_kd = config.kd;
-
     // Kalman Filter
     float prev_process_noise_q = config.process_noise_q;
     float prev_measurement_noise_r = config.measurement_noise_r;
@@ -455,12 +450,12 @@ void OverlayThread()
                             config.dpi,
                             config.fovX,
                             config.fovY,
-                            config.kp_x,
-                            config.ki_x,
-                            config.kd_x,
-                            config.kp_y,
-                            config.ki_y,
-                            config.kd_y,
+                            static_cast<float>(config.kp_x),
+                            static_cast<float>(config.ki_x),
+                            static_cast<float>(config.kd_x),
+                            static_cast<float>(config.kp_y),
+                            static_cast<float>(config.ki_y),
+                            static_cast<float>(config.kd_y),
                             config.process_noise_q,
                             config.measurement_noise_r,
                             config.auto_shoot,
@@ -545,12 +540,12 @@ void OverlayThread()
                             config.dpi,
                             config.fovX,
                             config.fovY,
-                            config.kp_x,
-                            config.ki_x,
-                            config.kd_x,
-                            config.kp_y,
-                            config.ki_y,
-                            config.kd_y,
+                            static_cast<float>(config.kp_x),
+                            static_cast<float>(config.ki_x),
+                            static_cast<float>(config.kd_x),
+                            static_cast<float>(config.kp_y),
+                            static_cast<float>(config.ki_y),
+                            static_cast<float>(config.kd_y),
                             config.process_noise_q,
                             config.measurement_noise_r,
                             config.auto_shoot,
@@ -571,12 +566,12 @@ void OverlayThread()
                             config.dpi,
                             config.fovX,
                             config.fovY,
-                            config.kp_x,
-                            config.ki_x,
-                            config.kd_x,
-                            config.kp_y,
-                            config.ki_y,
-                            config.kd_y,
+                            static_cast<float>(config.kp_x),
+                            static_cast<float>(config.ki_x),
+                            static_cast<float>(config.kd_x),
+                            static_cast<float>(config.kp_y),
+                            static_cast<float>(config.ki_y),
+                            static_cast<float>(config.kd_y),
                             config.process_noise_q,
                             config.measurement_noise_r,
                             config.auto_shoot,

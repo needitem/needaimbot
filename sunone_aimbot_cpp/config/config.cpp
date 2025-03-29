@@ -75,9 +75,9 @@ bool Config::loadConfig(const std::string& filename)
         input_method = "WIN32";
 
         // PID Controller
-        kp = 0.5;
-        ki = 0.0;
-        kd = 0.1;
+        // kp = 0.5;
+        // ki = 0.0;
+        // kd = 0.1;
         
         // Separated X/Y PID Controllers
         kp_x = 0.5;  // 초기값은 공통 값과 동일하게 설정
@@ -214,9 +214,9 @@ bool Config::loadConfig(const std::string& filename)
     input_method = get_string("input_method", "WIN32");
 
     // PID Controller
-    kp = (double)get_double("kp", 0.5);
-    ki = (double)get_double("ki", 0.0);
-    kd = (double)get_double("kd", 0.1);
+    // kp = (double)get_double("kp", 0.5);
+    // ki = (double)get_double("ki", 0.0);
+    // kd = (double)get_double("kd", 0.1);
 
     // Separated X/Y PID Controllers
     kp_x = (double)get_double("kp_x", 0.5);
@@ -290,6 +290,22 @@ bool Config::loadConfig(const std::string& filename)
     always_on_top = get_bool("always_on_top", true);
     verbose = get_bool("verbose", false);
 
+    ini.SetDoubleValue("", "recoil_reduction_while_aiming", recoil_reduction_while_aiming);
+    ini.SetValue("", "input_method", input_method.c_str());
+
+    // PID Controller
+    // ini.SetDoubleValue("", "kp", kp);
+    // ini.SetDoubleValue("", "ki", ki);
+    // ini.SetDoubleValue("", "kd", kd);
+
+    // Separated X/Y PID Controllers
+    ini.SetDoubleValue("", "kp_x", kp_x);
+    ini.SetDoubleValue("", "ki_x", ki_x);
+    ini.SetDoubleValue("", "kd_x", kd_x);
+    ini.SetDoubleValue("", "kp_y", kp_y);
+    ini.SetDoubleValue("", "ki_y", ki_y);
+    ini.SetDoubleValue("", "kd_y", kd_y);
+
     return true;
 }
 
@@ -339,14 +355,9 @@ bool Config::saveConfig(const std::string& filename)
         << "recoil_reduction_while_aiming = " << recoil_reduction_while_aiming << "\n"
         << "# WIN32, GHUB, ARDUINO\n"
         << "input_method = " << input_method << "\n\n"
-        << "# PID Controller\n"
-        << std::fixed << std::setprecision(3)
-        << "kp = " << kp << "\n"
-        << "ki = " << ki << "\n"
-        << "kd = " << kd << "\n"
-        << std::fixed << std::setprecision(3)
 
         << "# Separated X/Y PID Controllers\n"
+        << std::fixed << std::setprecision(3)
         << "kp_x = " << kp_x << "\n"
         << "ki_x = " << ki_x << "\n"
         << "kd_x = " << kd_x << "\n"
