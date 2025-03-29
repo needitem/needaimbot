@@ -196,6 +196,55 @@ void SetupImGui()
 
     ImGui::StyleColorsDark();
 
+    // Customize the dark theme further for a more modern look
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.WindowPadding = ImVec2(8.0f, 8.0f);
+    style.FramePadding = ImVec2(5.0f, 4.0f);
+    style.ItemSpacing = ImVec2(6.0f, 4.0f);
+    style.ItemInnerSpacing = ImVec2(4.0f, 4.0f);
+    style.IndentSpacing = 21.0f;
+    style.ScrollbarSize = 14.0f;
+    style.GrabMinSize = 10.0f;
+
+    style.WindowBorderSize = 1.0f;
+    style.ChildBorderSize = 1.0f;
+    style.PopupBorderSize = 1.0f;
+    style.FrameBorderSize = 0.0f; // No border for frames like sliders/buttons initially
+    style.TabBorderSize = 0.0f;
+
+    style.WindowRounding = 6.0f; // Slightly rounded window corners
+    style.ChildRounding = 4.0f;
+    style.FrameRounding = 4.0f; // Slightly rounded frames (buttons, sliders, etc.)
+    style.PopupRounding = 4.0f;
+    style.ScrollbarRounding = 9.0f;
+    style.GrabRounding = 3.0f;
+    style.TabRounding = 4.0f;
+
+    // Slightly adjust colors for a custom feel (optional, can tweak further)
+    ImVec4* colors = style.Colors;
+    // Example: Make window background slightly darker
+    colors[ImGuiCol_WindowBg] = ImVec4(0.08f, 0.08f, 0.09f, 1.00f); // Darker background
+    colors[ImGuiCol_ChildBg] = ImVec4(0.10f, 0.10f, 0.11f, 1.00f); // Slightly lighter child background
+    colors[ImGuiCol_PopupBg] = ImVec4(0.07f, 0.07f, 0.08f, 1.00f); // Darker popup
+    // Example: Adjust header color
+    colors[ImGuiCol_Header] = ImVec4(0.15f, 0.15f, 0.17f, 1.00f); // Darker header
+    colors[ImGuiCol_HeaderHovered] = ImVec4(0.20f, 0.20f, 0.22f, 1.00f); // Slightly lighter hover
+    colors[ImGuiCol_HeaderActive] = ImVec4(0.25f, 0.25f, 0.28f, 1.00f); // Slightly lighter active
+    // Example: Adjust button color (Subtle blue tint)
+    colors[ImGuiCol_Button] = ImVec4(0.15f, 0.35f, 0.65f, 0.70f);
+    colors[ImGuiCol_ButtonHovered] = ImVec4(0.20f, 0.45f, 0.75f, 0.85f);
+    colors[ImGuiCol_ButtonActive] = ImVec4(0.10f, 0.25f, 0.55f, 0.85f);
+    // Adjust frame background (for sliders, inputs etc.)
+    colors[ImGuiCol_FrameBg] = ImVec4(0.12f, 0.12f, 0.13f, 1.00f);
+    colors[ImGuiCol_FrameBgHovered] = ImVec4(0.18f, 0.18f, 0.19f, 1.00f);
+    colors[ImGuiCol_FrameBgActive] = ImVec4(0.22f, 0.22f, 0.24f, 1.00f);
+    // Adjust Tab colors
+    colors[ImGuiCol_Tab] = ImVec4(0.15f, 0.15f, 0.17f, 1.00f); // Match header
+    colors[ImGuiCol_TabHovered] = ImVec4(0.25f, 0.25f, 0.28f, 1.00f); // Lighter hover
+    colors[ImGuiCol_TabActive] = ImVec4(0.20f, 0.40f, 0.70f, 1.00f); // Active tab with blue tint
+    colors[ImGuiCol_TabUnfocused] = ImVec4(0.15f, 0.15f, 0.17f, 0.97f);
+    colors[ImGuiCol_TabUnfocusedActive] = ImVec4(0.18f, 0.30f, 0.55f, 1.00f); // Unfocused active with blue tint
+
     load_body_texture();
 }
 
