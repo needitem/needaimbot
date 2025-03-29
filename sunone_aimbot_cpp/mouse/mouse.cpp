@@ -20,72 +20,72 @@ extern std::atomic<bool> aiming;
 extern std::mutex configMutex;
 extern Config config;
 
-// Constants for PID controller
-constexpr double MAX_OUTPUT_X = 1500.0;
-constexpr double MAX_OUTPUT_Y = 1200.0;
-constexpr double MAX_INTEGRAL_X = 80.0;
-constexpr double MAX_INTEGRAL_Y = 60.0;
-constexpr double ERROR_THRESHOLD_X = 100.0;
-constexpr double ERROR_THRESHOLD_Y = 80.0;
-constexpr double SCOPE_MARGIN = 0.15;
+// Constants for PID controller - Changed to float
+constexpr float MAX_OUTPUT_X = 1500.0f;
+constexpr float MAX_OUTPUT_Y = 1200.0f;
+constexpr float MAX_INTEGRAL_X = 80.0f;
+constexpr float MAX_INTEGRAL_Y = 60.0f;
+constexpr float ERROR_THRESHOLD_X = 100.0f;
+constexpr float ERROR_THRESHOLD_Y = 80.0f;
+constexpr float SCOPE_MARGIN = 0.15f;
 
-// Constants for Kalman filter
-constexpr double VEL_NOISE_FACTOR = 2.5;
-constexpr double ACC_NOISE_FACTOR = 4.0;
-constexpr double BASE_PREDICTION_FACTOR = 0.07;
+// Constants for Kalman filter - Changed to float
+constexpr float VEL_NOISE_FACTOR = 2.5f;
+constexpr float ACC_NOISE_FACTOR = 4.0f;
+constexpr float BASE_PREDICTION_FACTOR = 0.07f;
 
-PIDController2D::PIDController2D(double kp, double ki, double kd)
+PIDController2D::PIDController2D(float kp, float ki, float kd)
     : kp(kp), ki(ki), kd(kd), kp_x(kp), ki_x(ki), kd_x(kd), kp_y(kp), ki_y(ki), kd_y(kd)
 {
     reset();
 }
 
-PIDController2D::PIDController2D(double kp_x, double ki_x, double kd_x, double kp_y, double ki_y, double kd_y)
+PIDController2D::PIDController2D(float kp_x, float ki_x, float kd_x, float kp_y, float ki_y, float kd_y)
     : kp_x(kp_x), ki_x(ki_x), kd_x(kd_x), kp_y(kp_y), ki_y(ki_y), kd_y(kd_y), 
-      kp((kp_x + kp_y) / 2), ki((ki_x + ki_y) / 2), kd((kd_x + kd_y) / 2)
+      kp((kp_x + kp_y) / 2.0f), ki((ki_x + ki_y) / 2.0f), kd((kd_x + kd_y) / 2.0f)
 {
     reset();
 }
 
-Eigen::Vector2d PIDController2D::calculate(const Eigen::Vector2d &error)
+Eigen::Vector2f PIDController2D::calculate(const Eigen::Vector2f &error)
 {
     auto now = std::chrono::steady_clock::now();
-    double dt = std::chrono::duration<double>(now - last_time_point).count();
-    dt = dt > 0.1 ? 0.1 : dt;
+    float dt = std::chrono::duration<float>(now - last_time_point).count();
+    dt = dt > 0.1f ? 0.1f : dt;
     last_time_point = now;
 
     static auto last_gain_update = now;
-    static double cached_kp_x = kp_x;
-    static double cached_ki_x = ki_x;
-    static double cached_kd_x = kd_x;
-    static double cached_kp_y = kp_y;
-    static double cached_ki_y = ki_y;
-    static double cached_kd_y = kd_y;
+    static float cached_kp_x = kp_x;
+    static float cached_ki_x = ki_x;
+    static float cached_kd_x = kd_x;
+    static float cached_kp_y = kp_y;
+    static float cached_ki_y = ki_y;
+    static float cached_kd_y = kd_y;
 
-    double time_since_update = std::chrono::duration<double>(now - last_gain_update).count();
-    if (time_since_update >= 0.05)
+    float time_since_update = std::chrono::duration<float>(now - last_gain_update).count();
+    if (time_since_update >= 0.05f)
     {
         last_gain_update = now;
         
-        double error_magnitude_x = std::abs(error.x());
-        double error_magnitude_y = std::abs(error.y());
+        float error_magnitude_x = std::abs(error.x());
+        float error_magnitude_y = std::abs(error.y());
 
-        double kp_factor_x = 1.0 + std::min(error_magnitude_x * 0.01, 0.6);
-        double ki_factor_x = 1.0 - std::min(error_magnitude_x * 0.0025, 0.8);
+        float kp_factor_x = 1.0f + std::min(error_magnitude_x * 0.01f, 0.6f);
+        float ki_factor_x = 1.0f - std::min(error_magnitude_x * 0.0025f, 0.8f);
         
-        double kp_factor_y = 1.0 + std::min(error_magnitude_y * 0.00833, 0.5);
-        double ki_factor_y = 1.0 - std::min(error_magnitude_y * 0.00286, 0.9);
+        float kp_factor_y = 1.0f + std::min(error_magnitude_y * 0.00833f, 0.5f);
+        float ki_factor_y = 1.0f - std::min(error_magnitude_y * 0.00286f, 0.9f);
         
-        double target_kp_x = kp_x * kp_factor_x;
-        double target_ki_x = ki_x * ki_factor_x;
-        double target_kd_x = kd_x * (1.0 + std::min(error_magnitude_x * 0.002, 0.4));
+        float target_kp_x = kp_x * kp_factor_x;
+        float target_ki_x = ki_x * ki_factor_x;
+        float target_kd_x = kd_x * (1.0f + std::min(error_magnitude_x * 0.002f, 0.4f));
         
-        double target_kp_y = kp_y * kp_factor_y;
-        double target_ki_y = ki_y * ki_factor_y;
-        double target_kd_y = kd_y * (1.0 + std::min(error_magnitude_y * 0.00278, 0.5));
+        float target_kp_y = kp_y * kp_factor_y;
+        float target_ki_y = ki_y * ki_factor_y;
+        float target_kd_y = kd_y * (1.0f + std::min(error_magnitude_y * 0.00278f, 0.5f));
 
-        double alpha = std::min(time_since_update * 15.0, 1.0);
-        if (alpha > 0.95) {
+        float alpha = std::min(time_since_update * 15.0f, 1.0f);
+        if (alpha > 0.95f) {
             cached_kp_x = target_kp_x;
             cached_ki_x = target_ki_x;
             cached_kd_x = target_kd_x;
@@ -93,7 +93,7 @@ Eigen::Vector2d PIDController2D::calculate(const Eigen::Vector2d &error)
             cached_ki_y = target_ki_y;
             cached_kd_y = target_kd_y;
         } else {
-            double one_minus_alpha = 1.0 - alpha;
+            float one_minus_alpha = 1.0f - alpha;
             cached_kp_x = cached_kp_x * one_minus_alpha + target_kp_x * alpha;
             cached_ki_x = cached_ki_x * one_minus_alpha + target_ki_x * alpha;
             cached_kd_x = cached_kd_x * one_minus_alpha + target_kd_x * alpha;
@@ -103,18 +103,18 @@ Eigen::Vector2d PIDController2D::calculate(const Eigen::Vector2d &error)
         }
     }
 
-    if (dt > 0.0001)
+    if (dt > 0.0001f)
     {
-        static const double inv_error_threshold_x = 1.0 / ERROR_THRESHOLD_X;
-        static const double inv_error_threshold_y = 1.0 / ERROR_THRESHOLD_Y;
+        static const float inv_error_threshold_x = 1.0f / ERROR_THRESHOLD_X;
+        static const float inv_error_threshold_y = 1.0f / ERROR_THRESHOLD_Y;
         
-        double abs_error_x = std::abs(error.x());
-        double abs_error_y = std::abs(error.y());
+        float abs_error_x = std::abs(error.x());
+        float abs_error_y = std::abs(error.y());
         
-        double integral_factor_x = abs_error_x > ERROR_THRESHOLD_X ? 
-                                  ERROR_THRESHOLD_X / abs_error_x : 1.0;
-        double integral_factor_y = abs_error_y > ERROR_THRESHOLD_Y ? 
-                                  ERROR_THRESHOLD_Y / abs_error_y : 1.0;
+        float integral_factor_x = abs_error_x > ERROR_THRESHOLD_X ? 
+                                  ERROR_THRESHOLD_X / abs_error_x : 1.0f;
+        float integral_factor_y = abs_error_y > ERROR_THRESHOLD_Y ? 
+                                  ERROR_THRESHOLD_Y / abs_error_y : 1.0f;
         
         integral.x() += error.x() * dt * integral_factor_x;
         integral.y() += error.y() * dt * integral_factor_y;
@@ -125,14 +125,14 @@ Eigen::Vector2d PIDController2D::calculate(const Eigen::Vector2d &error)
         if (integral.y() > MAX_INTEGRAL_Y) integral.y() = MAX_INTEGRAL_Y;
         else if (integral.y() < -MAX_INTEGRAL_Y) integral.y() = -MAX_INTEGRAL_Y;
         
-        double derivative_x = (error.x() - prev_error.x()) / dt;
-        double derivative_y = (error.y() - prev_error.y()) / dt;
+        float derivative_x = (error.x() - prev_error.x()) / dt;
+        float derivative_y = (error.y() - prev_error.y()) / dt;
         
-        double alpha_x = (std::abs(derivative_x) > 500.0) ? 0.7 : 0.85;
-        double alpha_y = (std::abs(derivative_y) > 400.0) ? 0.6 : 0.9;
+        float alpha_x = (std::abs(derivative_x) > 500.0f) ? 0.7f : 0.85f;
+        float alpha_y = (std::abs(derivative_y) > 400.0f) ? 0.6f : 0.9f;
         
-        derivative.x() = derivative_x * alpha_x + prev_derivative.x() * (1.0 - alpha_x);
-        derivative.y() = derivative_y * alpha_y + prev_derivative.y() * (1.0 - alpha_y);
+        derivative.x() = derivative_x * alpha_x + prev_derivative.x() * (1.0f - alpha_x);
+        derivative.y() = derivative_y * alpha_y + prev_derivative.y() * (1.0f - alpha_y);
         
         prev_derivative = derivative;
     }
@@ -141,7 +141,7 @@ Eigen::Vector2d PIDController2D::calculate(const Eigen::Vector2d &error)
         derivative.setZero();
     }
 
-    Eigen::Vector2d output;
+    Eigen::Vector2f output;
     output.x() = cached_kp_x * error.x() + cached_ki_x * integral.x() + cached_kd_x * derivative.x();
     output.y() = cached_kp_y * error.y() + cached_ki_y * integral.y() + cached_kd_y * derivative.y();
     
@@ -157,14 +157,14 @@ Eigen::Vector2d PIDController2D::calculate(const Eigen::Vector2d &error)
 
 void PIDController2D::reset()
 {
-    prev_error = Eigen::Vector2d::Zero();
-    integral = Eigen::Vector2d::Zero();
-    derivative = Eigen::Vector2d::Zero();
-    prev_derivative = Eigen::Vector2d::Zero();
+    prev_error = Eigen::Vector2f::Zero();
+    integral = Eigen::Vector2f::Zero();
+    derivative = Eigen::Vector2f::Zero();
+    prev_derivative = Eigen::Vector2f::Zero();
     last_time_point = std::chrono::steady_clock::now();
 }
 
-void PIDController2D::updateParameters(double kp, double ki, double kd)
+void PIDController2D::updateParameters(float kp, float ki, float kd)
 {
     this->kp = kp;
     this->ki = ki;
@@ -178,8 +178,8 @@ void PIDController2D::updateParameters(double kp, double ki, double kd)
     this->kd_y = kd;
 }
 
-void PIDController2D::updateSeparatedParameters(double kp_x, double ki_x, double kd_x, 
-                                               double kp_y, double ki_y, double kd_y)
+void PIDController2D::updateSeparatedParameters(float kp_x, float ki_x, float kd_x, 
+                                               float kp_y, float ki_y, float kd_y)
 {
     this->kp_x = kp_x;
     this->ki_x = ki_x;
@@ -188,42 +188,42 @@ void PIDController2D::updateSeparatedParameters(double kp_x, double ki_x, double
     this->ki_y = ki_y;
     this->kd_y = kd_y;
     
-    this->kp = (kp_x + kp_y) / 2;
-    this->ki = (ki_x + ki_y) / 2;
-    this->kd = (kd_x + kd_y) / 2;
+    this->kp = (kp_x + kp_y) / 2.0f;
+    this->ki = (ki_x + ki_y) / 2.0f;
+    this->kd = (kd_x + kd_y) / 2.0f;
 }
 
-void KalmanFilter2D::initializeMatrices(double process_noise_q, double measurement_noise_r)
+void KalmanFilter2D::initializeMatrices(float process_noise_q, float measurement_noise_r)
 {
-    Q = Eigen::Matrix<double, 6, 6>::Identity() * process_noise_q;
+    Q = Eigen::Matrix<float, 6, 6>::Identity() * process_noise_q;
     
     Q(2, 2) = process_noise_q * VEL_NOISE_FACTOR;
     Q(3, 3) = process_noise_q * VEL_NOISE_FACTOR;
     Q(4, 4) = process_noise_q * ACC_NOISE_FACTOR;
     Q(5, 5) = process_noise_q * ACC_NOISE_FACTOR;
     
-    R = Eigen::Matrix2d::Identity() * measurement_noise_r;
+    R = Eigen::Matrix2f::Identity() * measurement_noise_r;
 }
 
-KalmanFilter2D::KalmanFilter2D(double process_noise_q, double measurement_noise_r)
+KalmanFilter2D::KalmanFilter2D(float process_noise_q, float measurement_noise_r)
 {
-    A = Eigen::Matrix<double, 6, 6>::Identity();
+    A = Eigen::Matrix<float, 6, 6>::Identity();
 
-    H = Eigen::Matrix<double, 2, 6>::Zero();
-    H(0, 0) = 1.0;
-    H(1, 1) = 1.0;
+    H = Eigen::Matrix<float, 2, 6>::Zero();
+    H(0, 0) = 1.0f;
+    H(1, 1) = 1.0f;
 
     initializeMatrices(process_noise_q, measurement_noise_r);
-    P = Eigen::Matrix<double, 6, 6>::Identity();
-    x = Eigen::Matrix<double, 6, 1>::Zero();
+    P = Eigen::Matrix<float, 6, 6>::Identity();
+    x = Eigen::Matrix<float, 6, 1>::Zero();
 }
 
-void KalmanFilter2D::predict(double dt)
+void KalmanFilter2D::predict(float dt)
 {
     A(0, 2) = dt;
-    A(0, 4) = 0.5 * dt * dt;
+    A(0, 4) = 0.5f * dt * dt;
     A(1, 3) = dt;
-    A(1, 5) = 0.5 * dt * dt;
+    A(1, 5) = 0.5f * dt * dt;
     A(2, 4) = dt;
     A(3, 5) = dt;
 
@@ -231,23 +231,23 @@ void KalmanFilter2D::predict(double dt)
     P = A * P * A.transpose() + Q;
 }
 
-void KalmanFilter2D::update(const Eigen::Vector2d &measurement)
+void KalmanFilter2D::update(const Eigen::Vector2f &measurement)
 {
-    Eigen::Matrix2d S = H * P * H.transpose() + R;
-    Eigen::Matrix<double, 6, 2> K = P * H.transpose() * S.inverse();
+    Eigen::Matrix2f S = H * P * H.transpose() + R;
+    Eigen::Matrix<float, 6, 2> K = P * H.transpose() * S.inverse();
 
-    Eigen::Vector2d y = measurement - H * x;
+    Eigen::Vector2f y = measurement - H * x;
     x = x + K * y;
-    P = (Eigen::Matrix<double, 6, 6>::Identity() - K * H) * P;
+    P = (Eigen::Matrix<float, 6, 6>::Identity() - K * H) * P;
 }
 
 void KalmanFilter2D::reset()
 {
-    x = Eigen::Matrix<double, 6, 1>::Zero();
-    P = Eigen::Matrix<double, 6, 6>::Identity();
+    x = Eigen::Matrix<float, 6, 1>::Zero();
+    P = Eigen::Matrix<float, 6, 6>::Identity();
 }
 
-void KalmanFilter2D::updateParameters(double process_noise_q, double measurement_noise_r)
+void KalmanFilter2D::updateParameters(float process_noise_q, float measurement_noise_r)
 {
     initializeMatrices(process_noise_q, measurement_noise_r);
 }
@@ -257,11 +257,11 @@ MouseThread::MouseThread(
     int dpi,
     int fovX,
     int fovY,
-    double kp,
-    double ki,
-    double kd,
-    double process_noise_q,
-    double measurement_noise_r,
+    float kp,
+    float ki,
+    float kd,
+    float process_noise_q,
+    float measurement_noise_r,
     bool auto_shoot,
     float bScope_multiplier,
     SerialConnection *serialConnection,
@@ -279,14 +279,14 @@ MouseThread::MouseThread(
     int dpi,
     int fovX,
     int fovY,
-    double kp_x,
-    double ki_x,
-    double kd_x,
-    double kp_y,
-    double ki_y,
-    double kd_y,
-    double process_noise_q,
-    double measurement_noise_r,
+    float kp_x,
+    float ki_x,
+    float kd_x,
+    float kp_y,
+    float ki_y,
+    float kd_y,
+    float process_noise_q,
+    float measurement_noise_r,
     bool auto_shoot,
     float bScope_multiplier,
     SerialConnection *serialConnection,
@@ -317,15 +317,15 @@ void MouseThread::initializeInputMethod(SerialConnection *serialConnection, Ghub
 
 void MouseThread::initializeScreen(int resolution, int dpi, int fovX, int fovY, bool auto_shoot, float bScope_multiplier)
 {
-    this->screen_width = static_cast<double>(resolution);
-    this->screen_height = static_cast<double>(resolution);
-    this->dpi = static_cast<double>(dpi);
-    this->fov_x = static_cast<double>(fovX);
-    this->fov_y = static_cast<double>(fovY);
+    this->screen_width = static_cast<float>(resolution);
+    this->screen_height = static_cast<float>(resolution); // Should this be height?
+    this->dpi = static_cast<float>(dpi);
+    this->fov_x = static_cast<float>(fovX);
+    this->fov_y = static_cast<float>(fovY);
     this->auto_shoot = auto_shoot;
     this->bScope_multiplier = bScope_multiplier;
-    this->center_x = screen_width / 2.0;
-    this->center_y = screen_height / 2.0;
+    this->center_x = screen_width / 2.0f;
+    this->center_y = screen_height / 2.0f;
 }
 
 void MouseThread::updateConfig(
@@ -333,11 +333,11 @@ void MouseThread::updateConfig(
     int dpi,
     int fovX,
     int fovY,
-    double kp,
-    double ki,
-    double kd,
-    double process_noise_q,
-    double measurement_noise_r,
+    float kp,
+    float ki,
+    float kd,
+    float process_noise_q,
+    float measurement_noise_r,
     bool auto_shoot,
     float bScope_multiplier)
 {
@@ -351,14 +351,14 @@ void MouseThread::updateConfig(
     int dpi,
     int fovX,
     int fovY,
-    double kp_x,
-    double ki_x,
-    double kd_x,
-    double kp_y,
-    double ki_y,
-    double kd_y,
-    double process_noise_q,
-    double measurement_noise_r,
+    float kp_x,
+    float ki_x,
+    float kd_x,
+    float kp_y,
+    float ki_y,
+    float kd_y,
+    float process_noise_q,
+    float measurement_noise_r,
     bool auto_shoot,
     float bScope_multiplier)
 {
@@ -367,47 +367,47 @@ void MouseThread::updateConfig(
     pid_controller->updateSeparatedParameters(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
 }
 
-Eigen::Vector2d MouseThread::predictTargetPosition(double target_x, double target_y)
+Eigen::Vector2f MouseThread::predictTargetPosition(float target_x, float target_y)
 {
     auto current_time = std::chrono::steady_clock::now();
-    double dt = std::min(std::chrono::duration<double>(current_time - last_prediction_time).count(), 0.1);
+    float dt = std::min(std::chrono::duration<float>(current_time - last_prediction_time).count(), 0.1f);
     last_prediction_time = current_time;
 
     kalman_filter->predict(dt);
 
-    Eigen::Vector2d measurement(target_x, target_y);
+    Eigen::Vector2f measurement(target_x, target_y);
     kalman_filter->update(measurement);
 
     const auto &state = kalman_filter->getState();
     
-    double pos_x = state(0, 0);
-    double pos_y = state(1, 0);
-    double vel_x = state(2, 0);
-    double vel_y = state(3, 0);
-    double acc_x = state(4, 0);
-    double acc_y = state(5, 0);
+    float pos_x = state(0, 0);
+    float pos_y = state(1, 0);
+    float vel_x = state(2, 0);
+    float vel_y = state(3, 0);
+    // float acc_x = state(4, 0); // Acceleration removed in previous optimization
+    // float acc_y = state(5, 0);
 
-    double velocity = std::sqrt(vel_x * vel_x + vel_y * vel_y);
+    float velocity = std::sqrt(vel_x * vel_x + vel_y * vel_y);
 
-    constexpr double prediction_factors[4] = {1.0, 1.5, 2.0, 2.5};
+    constexpr float prediction_factors[4] = {1.0f, 1.5f, 2.0f, 2.5f};
     
-    int velocity_idx = std::min(static_cast<int>(velocity / 200.0), 3);
-    double prediction_time = dt * BASE_PREDICTION_FACTOR * prediction_factors[velocity_idx];
+    int velocity_idx = std::min(static_cast<int>(velocity / 200.0f), 3);
+    float prediction_time = dt * BASE_PREDICTION_FACTOR * prediction_factors[velocity_idx];
 
-    double half_pred_time_squared = 0.5 * prediction_time * prediction_time;
-    double future_x = pos_x + vel_x * prediction_time + acc_x * half_pred_time_squared;
-    double future_y = pos_y + vel_y * prediction_time + acc_y * half_pred_time_squared;
+    // Simplified prediction: Remove acceleration term (already done)
+    float future_x = pos_x + vel_x * prediction_time;
+    float future_y = pos_y + vel_y * prediction_time;
     
-    static Eigen::Vector2d prev_velocity(0, 0);
-    Eigen::Vector2d current_velocity(vel_x, vel_y);
+    static Eigen::Vector2f prev_velocity(0.0f, 0.0f);
+    Eigen::Vector2f current_velocity(vel_x, vel_y);
     
-    if (prev_velocity.norm() > 0 && velocity > 200.0) {
-        double angle_change = std::acos(
-            std::clamp(prev_velocity.dot(current_velocity) / (prev_velocity.norm() * velocity), -1.0, 1.0)
+    if (prev_velocity.norm() > 0 && velocity > 200.0f) {
+        float angle_change = std::acos(
+            std::clamp(prev_velocity.dot(current_velocity) / (prev_velocity.norm() * velocity), -1.0f, 1.0f)
         );
         
-        if (angle_change > 0.5) {
-            double reduction_factor = std::max(0.3, 1.0 - angle_change / 3.14);
+        if (angle_change > 0.5f) {
+            float reduction_factor = std::max(0.3f, 1.0f - angle_change / 3.14f);
             future_x = pos_x + vel_x * prediction_time * reduction_factor;
             future_y = pos_y + vel_y * prediction_time * reduction_factor;
         }
@@ -415,59 +415,59 @@ Eigen::Vector2d MouseThread::predictTargetPosition(double target_x, double targe
     
     prev_velocity = current_velocity;
     
-    return Eigen::Vector2d(future_x, future_y);
+    return Eigen::Vector2f(future_x, future_y);
 }
 
-Eigen::Vector2d MouseThread::calculateMovement(const Eigen::Vector2d &target_pos)
+Eigen::Vector2f MouseThread::calculateMovement(const Eigen::Vector2f &target_pos)
 {
-    static const double fov_scale_x = fov_x / screen_width;
-    static const double fov_scale_y = fov_y / screen_height;
-    static const double sens_scale = dpi / 360.0;
+    static const float fov_scale_x = fov_x / screen_width;
+    static const float fov_scale_y = fov_y / screen_height;
+    static const float sens_scale = dpi / 360.0f;
     
-    double error_x = target_pos[0] - center_x;
-    double error_y = target_pos[1] - center_y;
+    float error_x = target_pos[0] - center_x;
+    float error_y = target_pos[1] - center_y;
     
-    Eigen::Vector2d error(error_x, error_y);
-    Eigen::Vector2d pid_output = pid_controller->calculate(error);
+    Eigen::Vector2f error(error_x, error_y);
+    Eigen::Vector2f pid_output = pid_controller->calculate(error);
 
-    double result_x = pid_output[0] * fov_scale_x * sens_scale;
-    double result_y = pid_output[1] * fov_scale_y * sens_scale;
+    float result_x = pid_output[0] * fov_scale_x * sens_scale;
+    float result_y = pid_output[1] * fov_scale_y * sens_scale;
     
-    return Eigen::Vector2d(result_x, result_y);
+    return Eigen::Vector2f(result_x, result_y);
 }
 
-bool MouseThread::checkTargetInScope(double target_x, double target_y, double target_w, double target_h, double reduction_factor)
+bool MouseThread::checkTargetInScope(float target_x, float target_y, float target_w, float target_h, float reduction_factor)
 {
-    static const double screen_margin_x = screen_width * SCOPE_MARGIN;
-    static const double screen_margin_y = screen_height * SCOPE_MARGIN;
+    static const float screen_margin_x = screen_width * SCOPE_MARGIN;
+    static const float screen_margin_y = screen_height * SCOPE_MARGIN;
     
-    double target_center_x = target_x + target_w * 0.5;
-    double target_center_y = target_y + target_h * 0.5;
+    float target_center_x = target_x + target_w * 0.5f;
+    float target_center_y = target_y + target_h * 0.5f;
     
-    double diff_x = std::abs(target_center_x - center_x);
-    double diff_y = std::abs(target_center_y - center_y);
+    float diff_x = std::abs(target_center_x - center_x);
+    float diff_y = std::abs(target_center_y - center_y);
     
     if (diff_x > screen_margin_x || diff_y > screen_margin_y)
     {
         return false;
     }
     
-    double reduced_half_w = target_w * reduction_factor * 0.5;
-    double reduced_half_h = target_h * reduction_factor * 0.5;
+    float reduced_half_w = target_w * reduction_factor * 0.5f;
+    float reduced_half_h = target_h * reduction_factor * 0.5f;
     
-    double min_x = target_center_x - reduced_half_w;
-    double max_x = target_center_x + reduced_half_w;
-    double min_y = target_center_y - reduced_half_h;
-    double max_y = target_center_y + reduced_half_h;
+    float min_x = target_center_x - reduced_half_w;
+    float max_x = target_center_x + reduced_half_w;
+    float min_y = target_center_y - reduced_half_h;
+    float max_y = target_center_y + reduced_half_h;
     
     return (center_x >= min_x && center_x <= max_x && 
             center_y >= min_y && center_y <= max_y);
 }
 
-double MouseThread::calculateTargetDistance(const AimbotTarget &target) const
+float MouseThread::calculateTargetDistance(const AimbotTarget &target) const
 {
-    double dx = target.x + target.w * 0.5 - center_x;
-    double dy = target.y + target.h * 0.5 - center_y;
+    float dx = target.x + target.w * 0.5f - center_x;
+    float dy = target.y + target.h * 0.5f - center_y;
     return std::sqrt(dx * dx + dy * dy);
 }
 
@@ -479,11 +479,11 @@ AimbotTarget *MouseThread::findClosestTarget(const std::vector<AimbotTarget> &ta
     }
 
     AimbotTarget *closest = nullptr;
-    double min_distance = std::numeric_limits<double>::max();
+    float min_distance = std::numeric_limits<float>::max(); // Use float max
 
     for (const auto &target : targets)
     {
-        double distance = calculateTargetDistance(target);
+        float distance = calculateTargetDistance(target);
         if (distance < min_distance)
         {
             min_distance = distance;
@@ -496,20 +496,20 @@ AimbotTarget *MouseThread::findClosestTarget(const std::vector<AimbotTarget> &ta
 
 void MouseThread::moveMouse(const AimbotTarget &target)
 {
-    const double local_center_x = center_x;
-    const double local_center_y = center_y;
-    const double local_fov_x = fov_x;
-    const double local_fov_y = fov_y;
-    const double local_dpi = dpi;
+    const float local_center_x = center_x;
+    const float local_center_y = center_y;
+    const float local_fov_x = fov_x;
+    const float local_fov_y = fov_y;
+    const float local_dpi = dpi;
 
-    double target_center_x = target.x + target.w * 0.5;
-    double target_center_y = target.y + target.h * 0.5;
+    float target_center_x = target.x + target.w * 0.5f;
+    float target_center_y = target.y + target.h * 0.5f;
 
-    resetPrediction();
+    // resetPrediction(); // Why is this called here? Consider if needed on every move.
     
-    Eigen::Vector2d predicted = predictTargetPosition(target_center_x, target_center_y);
-    double error_x = predicted.x() - local_center_x;
-    double error_y = predicted.y() - local_center_y;
+    Eigen::Vector2f predicted = predictTargetPosition(target_center_x, target_center_y);
+    float error_x = predicted.x() - local_center_x;
+    float error_y = predicted.y() - local_center_y;
 
     if (tracking_errors)
     {
@@ -520,11 +520,11 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         }
     }
 
-    Eigen::Vector2d error(error_x, error_y);
-    Eigen::Vector2d pid_output = pid_controller->calculate(error);
+    Eigen::Vector2f error(error_x, error_y);
+    Eigen::Vector2f pid_output = pid_controller->calculate(error);
 
-    double move_x = pid_output.x() * (local_fov_x / 360.0) * (1000.0 / local_dpi);
-    double move_y = pid_output.y() * (local_fov_y / 360.0) * (1000.0 / local_dpi);
+    float move_x = pid_output.x() * (local_fov_x / 360.0f) * (1000.0f / local_dpi);
+    float move_y = pid_output.y() * (local_fov_y / 360.0f) * (1000.0f / local_dpi);
 
     if (bScope_multiplier > 1.0f)
     {
