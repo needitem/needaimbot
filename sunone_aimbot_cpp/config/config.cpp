@@ -71,7 +71,6 @@ bool Config::loadConfig(const std::string& filename)
         easynorecoil = false;
         easynorecoilstrength = 0.0f;
         norecoil_step = 5.0f;
-        recoil_reduction_while_aiming = 0.5f;
         input_method = "WIN32";
 
         // PID Controller
@@ -112,7 +111,6 @@ bool Config::loadConfig(const std::string& filename)
         export_enable_fp16 = true;
 
         // CUDA
-        use_cuda_graph = true;
         use_pinned_memory = true;
 
         // Buttons
@@ -210,7 +208,6 @@ bool Config::loadConfig(const std::string& filename)
     easynorecoil = get_bool("easynorecoil", false);
     easynorecoilstrength = (float)get_double("easynorecoilstrength", 0.0);
     norecoil_step = (float)get_double("norecoil_step", 5.0);
-    recoil_reduction_while_aiming = (float)get_double("recoil_reduction_while_aiming", 0.5);
     input_method = get_string("input_method", "WIN32");
 
     // PID Controller
@@ -251,7 +248,6 @@ bool Config::loadConfig(const std::string& filename)
     export_enable_fp16 = get_bool("export_enable_fp16", true);
 
     // CUDA
-    use_cuda_graph = get_bool("use_cuda_graph", true);
     use_pinned_memory = get_bool("use_pinned_memory", true);
 
     // Buttons
@@ -290,7 +286,6 @@ bool Config::loadConfig(const std::string& filename)
     always_on_top = get_bool("always_on_top", true);
     verbose = get_bool("verbose", false);
 
-    ini.SetDoubleValue("", "recoil_reduction_while_aiming", recoil_reduction_while_aiming);
     ini.SetValue("", "input_method", input_method.c_str());
 
     // PID Controller
@@ -352,7 +347,6 @@ bool Config::saveConfig(const std::string& filename)
         << std::fixed << std::setprecision(1)
         << "easynorecoilstrength = " << easynorecoilstrength << "\n"
         << "norecoil_step = " << norecoil_step << "\n"
-        << "recoil_reduction_while_aiming = " << recoil_reduction_while_aiming << "\n"
         << "# WIN32, GHUB, ARDUINO\n"
         << "input_method = " << input_method << "\n\n"
 
@@ -398,7 +392,6 @@ bool Config::saveConfig(const std::string& filename)
 
     // CUDA
     file << "# CUDA\n"
-        << "use_cuda_graph = " << (use_cuda_graph ? "true" : "false") << "\n"
         << "use_pinned_memory = " << (use_pinned_memory ? "true" : "false") << "\n\n";
 
     // Buttons

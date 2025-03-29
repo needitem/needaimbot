@@ -197,25 +197,6 @@ void draw_mouse()
             {
                 SetWrappedTooltip("Step size for adjusting recoil compensation strength with left/right arrow keys (0.1 - 50.0)");
             }
-            
-            // Add a slider for recoil reduction when aiming
-            // Convert the 0.0-1.0 range to -100 to 100 percent for display
-            int reduction_percent = static_cast<int>((config.recoil_reduction_while_aiming * 2.0f - 1.0f) * 100.0f);
-            if (ImGui::SliderInt("Recoil Adjust When Aiming", &reduction_percent, -100, 100, "%d%%"))
-            {
-                // Convert percent back to 0.0-1.0 range
-                config.recoil_reduction_while_aiming = static_cast<float>(reduction_percent) / 100.0f * 0.5f + 0.5f;
-                config.saveConfig();
-            }
-            if (ImGui::IsItemHovered())
-            {
-                SetWrappedTooltip("Adjusts recoil compensation when aiming at an enemy:\n"
-                                 "0% = Normal compensation (unchanged)\n"
-                                 "-100% = Reduces recoil compensation when aiming\n"
-                                 "100% = Increases recoil compensation when aiming\n\n"
-                                 "Use negative values if recoil compensation is too strong when aiming at enemies.");
-            }
-            
             ImGui::Unindent(10.0f);
             
             // Warning for high recoil strength
