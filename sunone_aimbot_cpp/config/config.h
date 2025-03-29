@@ -37,9 +37,9 @@ public:
     std::string input_method; // "WIN32", "GHUB", "ARDUINO"
 
     // PID Controller
-    double kp;
-    double ki;
-    double kd;
+    // double kp;
+    // double ki;
+    // double kd;
     
     // Separated X/Y PID Controllers
     double kp_x;
