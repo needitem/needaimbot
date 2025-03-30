@@ -13,6 +13,7 @@
 #include <opencv2/cudaimgproc.hpp>
 #include <opencv2/cudaarithm.hpp>
 #include <opencv2/core/cuda.hpp>
+#include <opencv2/core/cuda_stream_accessor.hpp>
 
 #include <algorithm>
 #include <cuda_fp16.h>
@@ -612,12 +613,45 @@ void Detector::preProcess(const cv::cuda::GpuMat& frame)
 
     try
     {
-        cv::cuda::resize(frame, resizedBuffer, cv::Size(w, h), 0, 0, cv::INTER_LINEAR, preprocessCvStream);
+        cv::cuda::GpuMat preprocessedFrame;
+
+        if (config.circle_mask) {
+            cv::Mat mask = cv::Mat::zeros(frame.size(), CV_8UC1);
+            cv::Point center(mask.cols / 2, mask.rows / 2);
+            int radius = std::min(mask.cols, mask.rows) / 2;
+            cv::circle(mask, center, radius, cv::Scalar(255), -1);
+            cv::cuda::GpuMat maskGpu;
+            maskGpu.upload(mask, preprocessCvStream);
+
+            cv::cuda::GpuMat maskedImageGpu;
+            maskedImageGpu.create(frame.size(), frame.type()); 
+            maskedImageGpu.setTo(cv::Scalar::all(0), preprocessCvStream);
+            frame.copyTo(maskedImageGpu, maskGpu, preprocessCvStream);
+            
+            cv::cuda::resize(maskedImageGpu, resizedBuffer, cv::Size(w, h), 0, 0, cv::INTER_LINEAR, preprocessCvStream);
+        } else {
+            cv::cuda::resize(frame, resizedBuffer, cv::Size(w, h), 0, 0, cv::INTER_LINEAR, preprocessCvStream);
+        }
+
         resizedBuffer.convertTo(floatBuffer, CV_32F, 1.0f / 255.0f, 0, preprocessCvStream);
         cv::cuda::split(floatBuffer, channelBuffers, preprocessCvStream);
         
-        synchronizeStreams(preprocessCvStream, stream);
+        // Synchronize preprocess operations before copying to TensorRT buffer
+        cudaEvent_t preprocessDoneEvent;
+        cudaEventCreateWithFlags(&preprocessDoneEvent, cudaEventDisableTiming);
         
+        // Get the underlying CUDA stream from the OpenCV stream
+        cudaStream_t underlyingPreprocessStream = cv::cuda::StreamAccessor::getStream(preprocessCvStream);
+        
+        // Record the event on the underlying CUDA stream
+        cudaEventRecord(preprocessDoneEvent, underlyingPreprocessStream);
+        
+        // Make the main TensorRT stream wait for the preprocess event
+        cudaStreamWaitEvent(stream, preprocessDoneEvent, 0);
+        
+        // Destroy the event (consider managing lifecycle more carefully if needed)
+        cudaEventDestroy(preprocessDoneEvent);
+
         size_t channelSize = h * w * sizeof(float);
         for (int i = 0; i < c; ++i)
         {
