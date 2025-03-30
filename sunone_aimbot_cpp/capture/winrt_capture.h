@@ -30,7 +30,8 @@ public:
     WinRTScreenCapture(int desiredWidth, int desiredHeight);
     ~WinRTScreenCapture();
 
-    cv::cuda::GpuMat GetNextFrame() override;
+    cv::cuda::GpuMat GetNextFrameGpu() override;
+    cv::Mat GetNextFrameCpu() override;
 
 private:
     winrt::com_ptr<ID3D11Device>            d3dDevice;

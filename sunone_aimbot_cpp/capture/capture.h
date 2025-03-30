@@ -2,6 +2,8 @@
 #define CAPTURE_H
 
 #include <opencv2/opencv.hpp>
+#include <opencv2/core.hpp>
+#include <opencv2/cudaarithm.hpp>
 #include <atomic>
 #include <chrono>
 #include <mutex>
@@ -33,7 +35,8 @@ class IScreenCapture
 {
 public:
     virtual ~IScreenCapture() {}
-    virtual cv::cuda::GpuMat GetNextFrame() = 0;
+    virtual cv::cuda::GpuMat GetNextFrameGpu() = 0;
+    virtual cv::Mat GetNextFrameCpu() = 0;
 };
 
 #endif // CAPTURE_H

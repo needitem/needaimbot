@@ -16,6 +16,7 @@ public:
     bool capture_borders;
     bool capture_cursor;
     std::string virtual_camera_name;
+    bool capture_use_cuda;
 
     // Target
     bool disable_headshot;
