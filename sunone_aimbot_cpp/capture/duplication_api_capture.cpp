@@ -442,7 +442,7 @@ DuplicationAPIScreenCapture::~DuplicationAPIScreenCapture()
     cudaStream = nullptr;
 }
 
-cv::cuda::GpuMat DuplicationAPIScreenCapture::GetNextFrame()
+cv::cuda::GpuMat DuplicationAPIScreenCapture::GetNextFrameGpu()
 {
     if (!m_ddaManager || !m_ddaManager->m_duplication)
         return cv::cuda::GpuMat();
@@ -531,4 +531,120 @@ cv::cuda::GpuMat DuplicationAPIScreenCapture::GetNextFrame()
     m_previousFrame = frameGpu;
 
     return frameGpu;
+}
+
+cv::Mat DuplicationAPIScreenCapture::GetNextFrameCpu()
+{
+    if (!m_ddaManager || !m_ddaManager->m_duplication)
+        return cv::Mat();
+
+    HRESULT hr = S_OK;
+    FrameContext frameCtx;
+    DXGI_OUTDUPL_FRAME_INFO frameInfo = {};
+
+    RECT captureScreenRect;
+    captureScreenRect.left = (screenWidth - regionWidth) / 2;
+    captureScreenRect.top = (screenHeight - regionHeight) / 2;
+    captureScreenRect.right = captureScreenRect.left + regionWidth;
+    captureScreenRect.bottom = captureScreenRect.top + regionHeight;
+
+    hr = m_ddaManager->AcquireFrame(frameCtx, frameInfo, m_ddaManager->m_timeout);
+
+    if (hr == DXGI_ERROR_WAIT_TIMEOUT)
+    {
+        return cv::Mat();
+    }
+    else if (hr == DXGI_ERROR_ACCESS_LOST || hr == DXGI_ERROR_DEVICE_RESET || hr == DXGI_ERROR_DEVICE_REMOVED)
+    {
+        std::cerr << "[Capture] DDA Access lost/Device reset (CPU Path). Reinitializing..." << std::endl;
+        capture_method_changed.store(true);
+        return cv::Mat();
+    }
+    else if (FAILED(hr))
+    {
+        std::cerr << "[Capture] AcquireFrame failed (CPU Path) (hr=0x" << std::hex << hr << ")" << std::endl;
+        return cv::Mat();
+    }
+
+    // Copy to shared texture
+    if (m_ddaManager->m_context && m_ddaManager->m_sharedTexture && frameCtx.texture)
+    {
+        D3D11_BOX sourceBox;
+        sourceBox.left = captureScreenRect.left;
+        sourceBox.top = captureScreenRect.top;
+        sourceBox.front = 0;
+        sourceBox.right = captureScreenRect.right;
+        sourceBox.bottom = captureScreenRect.bottom;
+        sourceBox.back = 1;
+
+        m_ddaManager->m_context->CopySubresourceRegion(
+            m_ddaManager->m_sharedTexture, 0, 0, 0, 0,
+            frameCtx.texture, 0, &sourceBox);
+    }
+
+    // Release acquired frame
+    m_ddaManager->ReleaseFrame();
+
+    // Copy shared texture to CPU Mat via CUDA mapping
+    cv::Mat frameCpu(regionHeight, regionWidth, CV_8UC4); // Create CPU Mat
+    if (!frameCpu.empty() && m_ddaManager->m_cudaResource && m_ddaManager->m_cudaStream)
+    {
+        cudaError_t err = cudaGraphicsMapResources(1, &m_ddaManager->m_cudaResource, m_ddaManager->m_cudaStream);
+        if (err == cudaSuccess)
+        {
+            cudaArray_t cuArray;
+            err = cudaGraphicsSubResourceGetMappedArray(&cuArray, m_ddaManager->m_cudaResource, 0, 0);
+            if (err == cudaSuccess)
+            {
+                // Copy from CUDA array to Host (CPU) memory
+                err = cudaMemcpy2DFromArrayAsync(
+                    frameCpu.data,        // Destination: CPU Mat data pointer
+                    frameCpu.step,        // Destination: CPU Mat step (bytes per row)
+                    cuArray,              // Source: Mapped CUDA array
+                    0, 0,                 // Source X, Y offset
+                    regionWidth * 4,      // Width in bytes (BGRA)
+                    regionHeight,         // Height
+                    cudaMemcpyDeviceToHost, // Copy direction
+                    m_ddaManager->m_cudaStream);
+
+                if (err == cudaSuccess)
+                {
+                    // Synchronize the stream to ensure the copy is complete before returning
+                    cudaStreamSynchronize(m_ddaManager->m_cudaStream);
+                }
+                else
+                {
+                    std::cerr << "[DDA] cudaMemcpy2DFromArrayAsync (D->H) error: " << cudaGetErrorString(err) << std::endl;
+                    frameCpu.release(); // Release the mat on error
+                }
+            }
+            else
+            {
+                std::cerr << "[DDA] cudaGraphicsSubResourceGetMappedArray (CPU Path) error: " << cudaGetErrorString(err) << std::endl;
+                frameCpu.release();
+            }
+            cudaGraphicsUnmapResources(1, &m_ddaManager->m_cudaResource, m_ddaManager->m_cudaStream);
+        }
+        else
+        {
+            std::cerr << "[DDA] cudaGraphicsMapResources (CPU Path) error: " << cudaGetErrorString(err) << std::endl;
+            frameCpu.release();
+        }
+    } else {
+         if (frameCpu.empty()) std::cerr << "[DDA] Failed to create CPU Mat" << std::endl;
+         if (!m_ddaManager->m_cudaResource) std::cerr << "[DDA] CUDA resource invalid for CPU path" << std::endl;
+         if (!m_ddaManager->m_cudaStream) std::cerr << "[DDA] CUDA stream invalid for CPU path" << std::endl;
+        frameCpu.release(); // Release if setup failed
+    }
+
+    // Release the texture obtained from QueryInterface
+    if (frameCtx.texture)
+    {
+         frameCtx.texture->Release();
+         frameCtx.texture = nullptr;
+    }
+
+    // Note: Frame recycling is currently GPU-based. CPU path doesn't recycle.
+
+    return frameCpu;
 }

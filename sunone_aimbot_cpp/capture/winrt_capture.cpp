@@ -132,7 +132,7 @@ WinRTScreenCapture::~WinRTScreenCapture()
     d3dDevice = nullptr;
 }
 
-cv::cuda::GpuMat WinRTScreenCapture::GetNextFrame()
+cv::cuda::GpuMat WinRTScreenCapture::GetNextFrameGpu()
 {
     try
     {
@@ -199,8 +199,106 @@ cv::cuda::GpuMat WinRTScreenCapture::GetNextFrame()
     }
     catch (const std::exception& e)
     {
-        std::cerr << "[WinRTCapture] Exception in GetNextFrame(): " << e.what() << std::endl;
+        std::cerr << "[WinRTCapture] Exception in GetNextFrameGpu(): " << e.what() << std::endl;
         return cv::cuda::GpuMat();
+    }
+}
+
+cv::Mat WinRTScreenCapture::GetNextFrameCpu()
+{
+    try
+    {
+        winrt::Windows::Graphics::Capture::Direct3D11CaptureFrame lastFrame{ nullptr };
+        while (auto tempFrame = framePool.TryGetNextFrame())
+        {
+            lastFrame = tempFrame;
+        }
+
+        if (!lastFrame)
+        {
+            return cv::Mat(); // Return empty CPU Mat on timeout/no frame
+        }
+
+        auto frameSurface = lastFrame.Surface();
+        winrt::com_ptr<ID3D11Texture2D> frameTexture =
+            GetDXGIInterfaceFromObject<ID3D11Texture2D>(frameSurface);
+
+        if (!frameTexture)
+        {
+            throw std::runtime_error("[WinRTCapture] Can't query ID3D11Texture2D from frame surface (CPU Path).");
+        }
+
+        D3D11_BOX sourceRegion;
+        sourceRegion.left = regionX;
+        sourceRegion.top = regionY;
+        sourceRegion.front = 0;
+        sourceRegion.right = regionX + regionWidth;
+        sourceRegion.bottom = regionY + regionHeight;
+        sourceRegion.back = 1;
+
+        d3dContext->CopySubresourceRegion(
+            sharedTexture.get(), 0, 0, 0, 0,
+            frameTexture.get(), 0, &sourceRegion);
+
+        // --- CUDA Mapping and Copy to CPU --- 
+        cv::Mat frameCpu(regionHeight, regionWidth, CV_8UC4); // Create CPU Mat
+        cudaError_t err;
+
+        err = cudaGraphicsMapResources(1, &cudaResource, cudaStream);
+        if (err != cudaSuccess) {
+            std::cerr << "[WinRTCapture] cudaGraphicsMapResources (CPU Path) error: " << cudaGetErrorString(err) << std::endl;
+            return cv::Mat(); // Return empty Mat on error
+        }
+
+        cudaArray_t cuArray = nullptr;
+        err = cudaGraphicsSubResourceGetMappedArray(&cuArray, cudaResource, 0, 0);
+        if (err != cudaSuccess) {
+            std::cerr << "[WinRTCapture] cudaGraphicsSubResourceGetMappedArray (CPU Path) error: " << cudaGetErrorString(err) << std::endl;
+            cudaGraphicsUnmapResources(1, &cudaResource, cudaStream); // Unmap even on error here
+            return cv::Mat();
+        }
+
+        // Copy from CUDA array to Host (CPU) memory
+        err = cudaMemcpy2DFromArrayAsync(
+            frameCpu.data,        // Destination: CPU Mat data pointer
+            frameCpu.step,        // Destination: CPU Mat step (bytes per row)
+            cuArray,              // Source: Mapped CUDA array
+            0, 0,                 // Source X, Y offset
+            regionWidth * 4,      // Width in bytes (BGRA)
+            regionHeight,         // Height
+            cudaMemcpyDeviceToHost, // Copy direction
+            cudaStream);
+
+        if (err == cudaSuccess)
+        {
+            // Synchronize the stream to ensure the copy is complete before returning
+            err = cudaStreamSynchronize(cudaStream);
+            if (err != cudaSuccess) {
+                 std::cerr << "[WinRTCapture] cudaStreamSynchronize (CPU Path) error: " << cudaGetErrorString(err) << std::endl;
+                 // Mat might be partially filled, release it to be safe
+                 frameCpu.release();
+            }
+        }
+        else
+        {
+            std::cerr << "[WinRTCapture] cudaMemcpy2DFromArrayAsync (D->H) error: " << cudaGetErrorString(err) << std::endl;
+            frameCpu.release(); // Release the mat on copy error
+        }
+
+        // Unmap the resource regardless of copy success/failure (if mapping succeeded)
+        cudaGraphicsUnmapResources(1, &cudaResource, cudaStream);
+
+        return frameCpu;
+    }
+    catch (const std::exception& e)
+    {
+        std::cerr << "[WinRTCapture] Exception in GetNextFrameCpu(): " << e.what() << std::endl;
+        return cv::Mat();
+    }
+    catch (const winrt::hresult_error& e)
+    {
+        std::cerr << "[WinRTCapture] WinRT hresult_error in GetNextFrameCpu(): " << winrt::to_string(e.message()) << " (Code: 0x" << std::hex << e.code() << ")" << std::endl;
+        return cv::Mat();
     }
 }
 

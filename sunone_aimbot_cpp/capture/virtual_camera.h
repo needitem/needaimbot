@@ -6,10 +6,11 @@
 
 class VirtualCameraCapture : public IScreenCapture {
 public:
-    VirtualCameraCapture(int width, int height);
+    VirtualCameraCapture(int desiredWidth, int desiredHeight);
     ~VirtualCameraCapture();
 
-    cv::cuda::GpuMat GetNextFrame() override;
+    cv::cuda::GpuMat GetNextFrameGpu() override;
+    cv::Mat GetNextFrameCpu() override;
     static std::vector<std::string> GetAvailableVirtualCameras();
 
 private:

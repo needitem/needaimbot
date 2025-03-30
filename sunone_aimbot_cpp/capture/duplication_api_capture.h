@@ -19,7 +19,8 @@ class DuplicationAPIScreenCapture : public IScreenCapture
 public:
     DuplicationAPIScreenCapture(int desiredWidth, int desiredHeight);
     ~DuplicationAPIScreenCapture();
-    cv::cuda::GpuMat GetNextFrame() override;
+    cv::cuda::GpuMat GetNextFrameGpu() override;
+    cv::Mat GetNextFrameCpu() override;
 
 private:
     std::unique_ptr<DDAManager> m_ddaManager;

@@ -3,6 +3,7 @@
 
 #include <string>
 #include <d3d11.h>
+#include <opencv2/opencv.hpp>
 
 static inline bool is_base64(unsigned char c);
 std::vector<unsigned char> Base64Decode(const std::string& encoded_string);
@@ -26,4 +27,8 @@ HMONITOR GetMonitorHandleByIndex(int monitorIndex);
 std::vector<std::string> getAvailableModels();
 void welcome_message();
 bool checkwin1903();
+
+// Function to save a cv::Mat as a screenshot
+void saveScreenshot(const cv::Mat& frame, const std::string& directory = "screenshots");
+
 #endif // OTHER_TOOLS_H

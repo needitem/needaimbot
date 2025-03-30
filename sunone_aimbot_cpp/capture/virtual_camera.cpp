@@ -81,27 +81,28 @@ VirtualCameraCapture::~VirtualCameraCapture()
     }
 }
 
-cv::cuda::GpuMat VirtualCameraCapture::GetNextFrame()
+cv::Mat VirtualCameraCapture::GetNextFrameCpu()
 {
     if (!cap || !cap->isOpened())
     {
-        return cv::cuda::GpuMat();
+        return cv::Mat();
     }
 
     cv::Mat frame;
     if (!cap->read(frame))
     {
-        return cv::cuda::GpuMat();
+        return cv::Mat();
     }
 
     if (frame.empty())
     {
-        return cv::cuda::GpuMat();
+        return cv::Mat();
     }
 
     cv::Mat processedFrame;
     try
     {
+        // Ensure 3 channels (BGR) for consistency
         if (frame.channels() == 1)
         {
             cv::cvtColor(frame, processedFrame, cv::COLOR_GRAY2BGR);
@@ -117,14 +118,16 @@ cv::cuda::GpuMat VirtualCameraCapture::GetNextFrame()
         else
         {
             std::cerr << "[Virtual camera] Unexpected number of channels: " << frame.channels() << std::endl;
-            return cv::cuda::GpuMat();
+            return cv::Mat();
         }
 
+        // Resize to the desired capture size
         cv::Mat resizedFrame;
         cv::resize(processedFrame, resizedFrame,
             cv::Size(captureWidth, captureHeight),
             0, 0, cv::INTER_LINEAR);
 
+        // Ensure even dimensions if necessary (though maybe less critical for CPU path)
         if (resizedFrame.cols % 2 != 0 || resizedFrame.rows % 2 != 0)
         {
             cv::Mat evenFrame;
@@ -137,12 +140,32 @@ cv::cuda::GpuMat VirtualCameraCapture::GetNextFrame()
             resizedFrame = evenFrame;
         }
 
-        frameGpu.upload(resizedFrame);
-        return frameGpu;
+        return resizedFrame;
     }
     catch (const cv::Exception& e)
     {
-        std::cerr << "[Virtual camera] OpenCV exception: " << e.what() << std::endl;
+        std::cerr << "[Virtual camera] OpenCV exception in GetNextFrameCpu: " << e.what() << std::endl;
+        return cv::Mat();
+    }
+}
+
+cv::cuda::GpuMat VirtualCameraCapture::GetNextFrameGpu()
+{
+    cv::Mat cpuFrame = GetNextFrameCpu();
+    if (cpuFrame.empty())
+    {
+        return cv::cuda::GpuMat();
+    }
+
+    cv::cuda::GpuMat gpuFrame;
+    try
+    {
+        gpuFrame.upload(cpuFrame);
+        return gpuFrame;
+    }
+    catch (const cv::Exception& e)
+    {
+        std::cerr << "[Virtual camera] OpenCV exception in GetNextFrameGpu (upload): " << e.what() << std::endl;
         return cv::cuda::GpuMat();
     }
 }

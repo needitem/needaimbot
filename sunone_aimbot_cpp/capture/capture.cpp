@@ -189,108 +189,131 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
             }
 
             // --- Frame Capture and Processing ---
-            cv::cuda::GpuMat screenshotGpu = capturer->GetNextFrame();
+            cv::cuda::GpuMat screenshotGpu;
+            cv::Mat screenshotCpu;
 
-            if (!screenshotGpu.empty())
-            {
-                cv::cuda::GpuMat processedFrame;
+            if (config.capture_use_cuda) { // Assumes config.capture_use_cuda exists
+                screenshotGpu = capturer->GetNextFrameGpu();
 
-                // Apply circle mask if enabled
-                if (config.circle_mask)
+                if (!screenshotGpu.empty())
                 {
-                    // Create a circular mask
-                    cv::Mat mask = cv::Mat::zeros(screenshotGpu.size(), CV_8UC1);
-                    cv::Point center(mask.cols / 2, mask.rows / 2);
-                    int radius = std::min(mask.cols, mask.rows) / 2;
-                    cv::circle(mask, center, radius, cv::Scalar(255), -1);
+                    cv::cuda::GpuMat processedFrameGpu;
 
-                    // Upload mask to GPU and apply it
-                    cv::cuda::GpuMat maskGpu;
-                    maskGpu.upload(mask);
-                    cv::cuda::GpuMat maskedImageGpu;
-                    screenshotGpu.copyTo(maskedImageGpu, maskGpu);
-
-                    // Resize the masked image
-                    // Using INTER_LINEAR for resizing is a good balance between speed and quality.
-                    cv::cuda::resize(maskedImageGpu, processedFrame, cv::Size(640, 640), 0, 0, cv::INTER_LINEAR);
-                }
-                else
-                {
-                    // Resize the original screenshot directly
-                    cv::cuda::resize(screenshotGpu, processedFrame, cv::Size(640, 640));
-                }
-
-                // --- Update Shared Data and Notify Other Threads ---
-                {
-                    // Update the global GPU frame under mutex protection
-                    std::lock_guard<std::mutex> lock(frameMutex);
-                    latestFrameGpu = processedFrame.clone(); // Store a clone for the display thread
-                }
-
-                // Send the processed frame to the detector thread
-                detector.processFrame(processedFrame);
-
-                // Download the processed frame to CPU for display/overlay thread
-                // download() copies data, so latestFrameCpu will hold the new frame data.
-                processedFrame.download(latestFrameCpu);
-                {
-                    // Lock mutex to ensure consistency when display thread reads latestFrameCpu
-                    std::lock_guard<std::mutex> lock(frameMutex);
-                    // No need to clone latestFrameCpu again, download already updated it.
-                }
-                // Notify the display thread that a new CPU frame is available
-                frameCV.notify_one();
-
-                // --- Screenshot Logic ---
-                if (!config.screenshot_button.empty() && config.screenshot_button[0] != "None")
-                {
-                    bool buttonPressed = isAnyKeyPressed(config.screenshot_button);
-                    auto now = std::chrono::steady_clock::now();
-                    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastSaveTime).count();
-
-                    // Check if the button is pressed and enough time has passed since the last save
-                    if (buttonPressed && elapsed >= config.screenshot_delay)
+                    // Apply circle mask if enabled (GPU version)
+                    if (config.circle_mask)
                     {
-                        cv::Mat resizedCpu; // Use a temporary Mat for the screenshot
-                        processedFrame.download(resizedCpu); // Download the frame to save
-                        auto epoch_time = std::chrono::duration_cast<std::chrono::milliseconds>(
-                            std::chrono::system_clock::now().time_since_epoch()).count();
-                        std::string filename = std::to_string(epoch_time) + ".jpg";
-                        // Ensure the "screenshots" directory exists (checked at program start)
-                        cv::imwrite("screenshots/" + filename, resizedCpu);
-                        lastSaveTime = now; // Update the last save time
+                        cv::Mat mask = cv::Mat::zeros(screenshotGpu.size(), CV_8UC1);
+                        cv::Point center(mask.cols / 2, mask.rows / 2);
+                        int radius = std::min(mask.cols, mask.rows) / 2;
+                        cv::circle(mask, center, radius, cv::Scalar(255), -1);
+                        cv::cuda::GpuMat maskGpu;
+                        maskGpu.upload(mask);
+                        cv::cuda::GpuMat maskedImageGpu;
+                        screenshotGpu.copyTo(maskedImageGpu, maskGpu);
+                        cv::cuda::resize(maskedImageGpu, processedFrameGpu, cv::Size(640, 640), 0, 0, cv::INTER_LINEAR);
+                    }
+                    else
+                    {
+                        cv::cuda::resize(screenshotGpu, processedFrameGpu, cv::Size(640, 640));
+                    }
+
+                    // Send the processed frame to the detector thread
+                    detector.processFrame(processedFrameGpu);
+
+                    // Update Shared Data and Notify Other Threads
+                    {
+                        std::lock_guard<std::mutex> lock(frameMutex);
+                        latestFrameGpu = processedFrameGpu.clone(); // Update global GPU frame
+                        processedFrameGpu.download(latestFrameCpu);  // Update global CPU frame for display/screenshot
+                    }
+                    frameCV.notify_one(); // Notify display thread
+                }
+            } else { // Use CPU capture path
+                screenshotCpu = capturer->GetNextFrameCpu();
+
+                if (!screenshotCpu.empty())
+                {
+                    cv::Mat processedFrameCpu;
+
+                    // Apply circle mask if enabled (CPU version)
+                    if (config.circle_mask)
+                    {
+                        cv::Mat mask = cv::Mat::zeros(screenshotCpu.size(), CV_8UC1);
+                        cv::Point center(mask.cols / 2, mask.rows / 2);
+                        int radius = std::min(mask.cols, mask.rows) / 2;
+                        cv::circle(mask, center, radius, cv::Scalar(255), -1);
+                        cv::Mat maskedImageCpu;
+                        screenshotCpu.copyTo(maskedImageCpu, mask);
+                        cv::resize(maskedImageCpu, processedFrameCpu, cv::Size(640, 640), 0, 0, cv::INTER_LINEAR);
+                    }
+                    else
+                    {
+                        cv::resize(screenshotCpu, processedFrameCpu, cv::Size(640, 640));
+                    }
+
+                    // Send the processed frame to the detector thread (needs upload)
+                    cv::cuda::GpuMat processedFrameGpuForDetector;
+                    processedFrameGpuForDetector.upload(processedFrameCpu);
+                    detector.processFrame(processedFrameGpuForDetector);
+
+                    // Update Shared Data and Notify Other Threads
+                    {
+                        std::lock_guard<std::mutex> lock(frameMutex);
+                        latestFrameCpu = processedFrameCpu.clone(); // Update global CPU frame
+                        latestFrameGpu = processedFrameGpuForDetector.clone(); // Update global GPU frame
+                    }
+                    frameCV.notify_one(); // Notify display thread
+                }
+            }
+
+            // --- FPS Calculation ---
+            captureFrameCount++;
+            auto now = std::chrono::high_resolution_clock::now();
+            auto elapsed_fps = std::chrono::duration_cast<std::chrono::seconds>(now - captureFpsStartTime).count();
+            if (elapsed_fps >= 1)
+            {
+                captureFps = captureFrameCount.load();
+                captureFrameCount = 0;
+                captureFpsStartTime = now;
+            }
+
+            // --- Screenshot Logic (Uses latestFrameCpu, which is updated in both paths) ---
+            if (!config.screenshot_button.empty() && config.screenshot_button[0] != "None")
+            {
+                bool buttonPressed = isAnyKeyPressed(config.screenshot_button);
+                auto now_ss = std::chrono::steady_clock::now(); // Use a different 'now' variable
+                auto elapsed_ss = std::chrono::duration_cast<std::chrono::milliseconds>(now_ss - lastSaveTime).count();
+
+                if (buttonPressed && !buttonPreviouslyPressed && elapsed_ss > 1000) // 1-second cooldown
+                {
+                    std::lock_guard<std::mutex> lock(frameMutex); // Lock mutex before accessing latestFrameCpu
+                    if (!latestFrameCpu.empty())
+                    {
+                        saveScreenshot(latestFrameCpu);
+                        lastSaveTime = now_ss; // Update last save time
                     }
                 }
+                buttonPreviouslyPressed = buttonPressed;
+            }
 
-                // --- FPS Calculation ---
-                captureFrameCount++;
-                auto currentTime = std::chrono::high_resolution_clock::now();
-                std::chrono::duration<double> elapsedTime = currentTime - captureFpsStartTime;
-                if (elapsedTime.count() >= 1.0) // Update FPS counter every second
-                {
-                    captureFps = static_cast<int>(captureFrameCount / elapsedTime.count());
-                    captureFrameCount = 0; // Reset frame count for the next second
-                    captureFpsStartTime = currentTime; // Reset start time
-                }
-            } // End if (!screenshotGpu.empty())
-
-            // --- FPS Limiting Sleep ---
-            if (frame_duration.has_value()) // Check if frame limiting is enabled
+            // --- FPS Limiting ---
+            if (frameLimitingEnabled && frame_duration.has_value())
             {
                 auto end_time = std::chrono::high_resolution_clock::now();
-                auto work_duration = end_time - start_time;
-                auto sleep_duration = frame_duration.value() - work_duration;
+                auto elapsed_time = std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(end_time - start_time);
+                auto sleep_duration = *frame_duration - elapsed_time;
 
-                // Sleep only if there's remaining time in the frame budget
-                if (sleep_duration > std::chrono::duration<double, std::milli>(0))
+                if (sleep_duration.count() > 0)
                 {
-                    // Use sleep_for for accurate waiting
-                    std::this_thread::sleep_for(sleep_duration);
+                     // Use std::this_thread::sleep_for for better precision if needed
+                     std::this_thread::sleep_for(sleep_duration);
                 }
-                // Update start_time for the next iteration's measurement
+                 start_time = std::chrono::high_resolution_clock::now(); // Reset start time for next frame
+            } else {
+                // Reset start time even if not limiting, to avoid drift if limiting is re-enabled
                 start_time = std::chrono::high_resolution_clock::now();
             }
-        } // End while (!shouldExit)
+        } // End of while (!shouldExit) loop
 
         // --- Cleanup Before Exiting Thread ---
         if (frameLimitingEnabled)

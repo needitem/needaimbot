@@ -54,6 +54,7 @@ bool Config::loadConfig(const std::string& filename)
         capture_borders = true;
         capture_cursor = true;
         virtual_camera_name = "None";
+        capture_use_cuda = true;
 
         // Target
         disable_headshot = false;
@@ -191,6 +192,7 @@ bool Config::loadConfig(const std::string& filename)
     capture_borders = get_bool("capture_borders", true);
     capture_cursor = get_bool("capture_cursor", true);
     virtual_camera_name = get_string("virtual_camera_name", "None");
+    capture_use_cuda = get_bool("capture_use_cuda", true);
 
     // Target
     disable_headshot = get_bool("disable_headshot", false);
@@ -325,7 +327,8 @@ bool Config::saveConfig(const std::string& filename)
         << "circle_mask = " << (circle_mask ? "true" : "false") << "\n"
         << "capture_borders = " << (capture_borders ? "true" : "false") << "\n"
         << "capture_cursor = " << (capture_cursor ? "true" : "false") << "\n"
-        << "virtual_camera_name = " << virtual_camera_name << "\n\n";
+        << "virtual_camera_name = " << virtual_camera_name << "\n"
+        << "capture_use_cuda = " << (capture_use_cuda ? "true" : "false") << "\n\n";
 
     // Target
     file << "# Target\n"

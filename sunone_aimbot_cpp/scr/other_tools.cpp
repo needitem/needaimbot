@@ -21,6 +21,11 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 
+#include <filesystem> // Requires C++17
+#include <chrono>
+#include <iomanip>
+#include <sstream>
+
 #define STB_IMAGE_STATIC
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -475,4 +480,58 @@ void welcome_message()
     config.joinStrings(config.button_pause) << " -> Pause Aiming\n" <<
     config.joinStrings(config.button_open_overlay) << " -> Overlay (OPTIONS)" <<
     std::endl;
+}
+
+// Implementation of saveScreenshot
+void saveScreenshot(const cv::Mat& frame, const std::string& directory)
+{
+    if (frame.empty())
+    {
+        std::cerr << "[Screenshot] Error: Frame is empty, cannot save." << std::endl;
+        return;
+    }
+
+    try
+    {
+        // Ensure the directory exists
+        if (!std::filesystem::exists(directory))
+        {
+            if (!std::filesystem::create_directories(directory))
+            {
+                 std::cerr << "[Screenshot] Error: Could not create directory: " << directory << std::endl;
+                 return;
+            }
+        }
+
+        // Generate filename based on timestamp
+        auto now = std::chrono::system_clock::now();
+        auto epoch_time = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+        std::string filename = std::to_string(epoch_time) + ".png"; // Using PNG for lossless quality
+        std::string filepath = directory + "/" + filename;
+
+        // Save the image
+        if (cv::imwrite(filepath, frame))
+        {
+            if (config.verbose) // Assuming config is accessible via extern in other_tools.h/cpp
+            {
+                std::cout << "[Screenshot] Saved screenshot to: " << filepath << std::endl;
+            }
+        }
+        else
+        {
+            std::cerr << "[Screenshot] Error: Failed to save screenshot to: " << filepath << std::endl;
+        }
+    }
+    catch (const cv::Exception& e)
+    {
+        std::cerr << "[Screenshot] OpenCV exception during imwrite: " << e.what() << std::endl;
+    }
+     catch (const std::filesystem::filesystem_error& e)
+    {
+         std::cerr << "[Screenshot] Filesystem error: " << e.what() << std::endl;
+    }
+    catch (const std::exception& e)
+    {
+        std::cerr << "[Screenshot] General exception: " << e.what() << std::endl;
+    }
 }
