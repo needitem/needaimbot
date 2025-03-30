@@ -197,34 +197,38 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 
                 if (!screenshotGpu.empty())
                 {
-                    cv::cuda::GpuMat processedFrameGpu;
+                    // REMOVED Preprocessing (Resizing/Masking) - Moved to Detector
+                    // cv::cuda::GpuMat processedFrameGpu;
+                    // // Apply circle mask if enabled (GPU version)
+                    // if (config.circle_mask)
+                    // {
+                    //     cv::Mat mask = cv::Mat::zeros(screenshotGpu.size(), CV_8UC1);
+                    //     cv::Point center(mask.cols / 2, mask.rows / 2);
+                    //     int radius = std::min(mask.cols, mask.rows) / 2;
+                    //     cv::circle(mask, center, radius, cv::Scalar(255), -1);
+                    //     cv::cuda::GpuMat maskGpu;
+                    //     maskGpu.upload(mask);
+                    //     cv::cuda::GpuMat maskedImageGpu;
+                    //     screenshotGpu.copyTo(maskedImageGpu, maskGpu);
+                    //     cv::cuda::resize(maskedImageGpu, processedFrameGpu, cv::Size(640, 640), 0, 0, cv::INTER_LINEAR);
+                    // }
+                    // else
+                    // {
+                    //     cv::cuda::resize(screenshotGpu, processedFrameGpu, cv::Size(640, 640));
+                    // }
 
-                    // Apply circle mask if enabled (GPU version)
-                    if (config.circle_mask)
-                    {
-                        cv::Mat mask = cv::Mat::zeros(screenshotGpu.size(), CV_8UC1);
-                        cv::Point center(mask.cols / 2, mask.rows / 2);
-                        int radius = std::min(mask.cols, mask.rows) / 2;
-                        cv::circle(mask, center, radius, cv::Scalar(255), -1);
-                        cv::cuda::GpuMat maskGpu;
-                        maskGpu.upload(mask);
-                        cv::cuda::GpuMat maskedImageGpu;
-                        screenshotGpu.copyTo(maskedImageGpu, maskGpu);
-                        cv::cuda::resize(maskedImageGpu, processedFrameGpu, cv::Size(640, 640), 0, 0, cv::INTER_LINEAR);
-                    }
-                    else
-                    {
-                        cv::cuda::resize(screenshotGpu, processedFrameGpu, cv::Size(640, 640));
-                    }
-
-                    // Send the processed frame to the detector thread
-                    detector.processFrame(processedFrameGpu);
+                    // Send the RAW captured frame to the detector thread
+                    // The detector will handle preprocessing (resize, mask, etc.)
+                    detector.processFrame(screenshotGpu); // Pass raw frame
 
                     // Update Shared Data and Notify Other Threads
+                    // WARNING: latestFrameGpu/Cpu now hold the RAW captured frame,
+                    // not the resized/processed one, unless detector updates them.
+                    // Consider if this download is still necessary or should be removed.
                     {
                         std::lock_guard<std::mutex> lock(frameMutex);
-                        latestFrameGpu = processedFrameGpu.clone(); // Update global GPU frame
-                        processedFrameGpu.download(latestFrameCpu);  // Update global CPU frame for display/screenshot
+                        latestFrameGpu = screenshotGpu.clone(); // Update global GPU frame (RAW)
+                        // screenshotGpu.download(latestFrameCpu);  // OPTIMIZATION: Removed frequent GPU->CPU download. Only download when needed (e.g., for screenshots conditionally).
                     }
                     frameCV.notify_one(); // Notify display thread
                 }
@@ -286,7 +290,15 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 
                 if (buttonPressed && !buttonPreviouslyPressed && elapsed_ss > 1000) // 1-second cooldown
                 {
-                    std::lock_guard<std::mutex> lock(frameMutex); // Lock mutex before accessing latestFrameCpu
+                    std::lock_guard<std::mutex> lock(frameMutex); // Lock mutex before accessing frames
+                    
+                    // FIX: Conditionally download the latest GPU frame to CPU just for the screenshot
+                    //      if using the GPU capture path and the GPU frame is available.
+                    if (config.capture_use_cuda && !latestFrameGpu.empty()) {
+                        latestFrameGpu.download(latestFrameCpu); 
+                    }
+                    
+                    // Now save latestFrameCpu (which is now up-to-date even in GPU mode)
                     if (!latestFrameCpu.empty())
                     {
                         saveScreenshot(latestFrameCpu);
