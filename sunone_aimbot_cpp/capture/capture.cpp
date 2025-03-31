@@ -10,6 +10,7 @@
 #include <chrono>
 #include <timeapi.h>
 #include <condition_variable>
+#include <memory>
 
 #include <opencv2/opencv.hpp>
 #include <opencv2/cudawarping.hpp>
@@ -104,7 +105,8 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
         }
 
         // Use the helper function for initial capturer creation
-        IScreenCapture* capturer = createCapturer(CAPTURE_WIDTH, CAPTURE_HEIGHT);
+        // Use std::unique_ptr for automatic memory management
+        std::unique_ptr<IScreenCapture> capturer(createCapturer(CAPTURE_WIDTH, CAPTURE_HEIGHT));
         if (!capturer) {
              std::cerr << "[Capture] Failed to initialize capturer!" << std::endl;
              return; // Exit thread if initialization fails
@@ -164,14 +166,14 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 capture_cursor_changed.load() ||
                 capture_borders_changed.load())
             {
-                delete capturer; // Clean up the old capturer instance
+                // Clean up the old capturer instance (unique_ptr does this automatically via reset)
 
                 // Get new dimensions from config
                 int new_CAPTURE_WIDTH = config.detection_resolution;
                 int new_CAPTURE_HEIGHT = config.detection_resolution;
 
                 // Use the helper function to create the new capturer
-                capturer = createCapturer(new_CAPTURE_WIDTH, new_CAPTURE_HEIGHT);
+                capturer.reset(createCapturer(new_CAPTURE_WIDTH, new_CAPTURE_HEIGHT)); // unique_ptr handles deleting the old one
                 if (!capturer) {
                     std::cerr << "[Capture] Failed to re-initialize capturer after config change!" << std::endl;
                     break; // Exit the loop if re-initialization fails
@@ -237,6 +239,8 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 
                 if (!screenshotCpu.empty())
                 {
+                    // REMOVED CPU Preprocessing - Will be handled by detector
+                    /*
                     cv::Mat processedFrameCpu;
 
                     // Apply circle mask if enabled (CPU version)
@@ -259,12 +263,19 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                     cv::cuda::GpuMat processedFrameGpuForDetector;
                     processedFrameGpuForDetector.upload(processedFrameCpu);
                     detector.processFrame(processedFrameGpuForDetector);
+                    */
+
+                    // Send the RAW CPU frame to the detector thread
+                    // Assumes a new detector method like processFrameCpu exists or processFrame is overloaded
+                    detector.processFrame(screenshotCpu); // Pass raw CPU frame
 
                     // Update Shared Data and Notify Other Threads
                     {
                         std::lock_guard<std::mutex> lock(frameMutex);
-                        latestFrameCpu = processedFrameCpu.clone(); // Update global CPU frame
-                        latestFrameGpu = processedFrameGpuForDetector.clone(); // Update global GPU frame
+                        // Update global CPU frame with the raw captured frame
+                        latestFrameCpu = screenshotCpu.clone(); 
+                        // Remove GPU frame update here, detector will handle GpuMat creation
+                        // latestFrameGpu = processedFrameGpuForDetector.clone(); 
                     }
                     frameCV.notify_one(); // Notify display thread
                 }
@@ -332,14 +343,14 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
         {
             timeEndPeriod(1); // Release high-resolution timer
         }
-        delete capturer; // Delete the final capturer instance
+        // delete capturer; // Delete the final capturer instance - Not needed with unique_ptr
 
         // WinRT apartment is automatically uninitialized by winrtUninitializer destructor when the thread exits.
     }
     catch (const std::exception& e)
     {
         std::cerr << "[Capture] Unhandled exception in capture thread: " << e.what() << std::endl;
-        // Consider adding cleanup logic here as well (e.g., delete capturer if allocated)
+        // Consider adding cleanup logic here as well (e.g., delete capturer if allocated) - Not needed with unique_ptr
         // The RAII WinRTUninitializer will still handle apartment uninitialization.
     }
     // winrt::uninit_apartment(); // Not needed if using RAII wrapper

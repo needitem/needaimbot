@@ -25,6 +25,7 @@ public:
     ~Detector();
     void initialize(const std::string &modelFile);
     void processFrame(const cv::cuda::GpuMat &frame);
+    void processFrame(const cv::Mat &frame);
     void inferenceThread();
     void releaseDetections();
     bool getLatestDetections(std::vector<cv::Rect> &boxes, std::vector<int> &classes);
@@ -47,6 +48,11 @@ public:
     std::atomic<bool> shouldExit;
     std::condition_variable inferenceCV;
 
+    cv::cuda::GpuMat currentFrame;
+    cv::Mat currentFrameCpu;
+    bool frameReady;
+    bool frameIsGpu;
+
 private:
     std::unique_ptr<nvinfer1::IRuntime> runtime;
     std::unique_ptr<nvinfer1::ICudaEngine> engine;
@@ -65,15 +71,6 @@ private:
     bool usePinnedMemory;
 
     std::mutex inferenceMutex;
-    cv::cuda::GpuMat currentFrame;
-    bool frameReady;
-
-    void loadEngine(const std::string &engineFile);
-    void preProcess(const cv::cuda::GpuMat &frame);
-    void postProcess(const float *output, const std::string &outputName);
-    void getInputNames();
-    void getOutputNames();
-    void getBindings();
 
     std::unordered_map<std::string, size_t> inputSizes;
     std::unordered_map<std::string, void *> inputBindings;
@@ -94,11 +91,9 @@ private:
     cv::cuda::GpuMat floatBuffer;
     std::vector<cv::cuda::GpuMat> channelBuffers;
 
-    // CUDA 이벤트 추가
     cudaEvent_t processingDone;
     cudaEvent_t postprocessCopyDone;
 
-    // 에러 관리를 위한 헬퍼 함수
     bool checkCudaError(cudaError_t err, const std::string& message) {
         if (err != cudaSuccess) {
             std::cerr << "[CUDA] Error " << message << ": " << cudaGetErrorString(err) << std::endl;
@@ -118,6 +113,13 @@ private:
         cudaStreamWaitEvent(cudaStream, event, 0);
         cudaEventDestroy(event);
     }
+
+    void loadEngine(const std::string &engineFile);
+    void preProcess(const cv::cuda::GpuMat &frame);
+    void postProcess(const float *output, const std::string &outputName);
+    void getInputNames();
+    void getOutputNames();
+    void getBindings();
 };
 
 #endif // DETECTOR_H
