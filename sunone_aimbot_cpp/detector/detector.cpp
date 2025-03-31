@@ -408,12 +408,32 @@ void Detector::processFrame(const cv::cuda::GpuMat& frame)
 
     std::unique_lock<std::mutex> lock(inferenceMutex);
     currentFrame = frame;
+    frameIsGpu = true;
+    frameReady = true;
+    inferenceCV.notify_one();
+}
+
+void Detector::processFrame(const cv::Mat& frame)
+{
+    if (detectionPaused)
+    {
+        std::lock_guard<std::mutex> lock(detectionMutex);
+        detectedBoxes.clear();
+        detectedClasses.clear();
+        return;
+    }
+
+    std::unique_lock<std::mutex> lock(inferenceMutex);
+    currentFrameCpu = frame.clone();
+    frameIsGpu = false;
     frameReady = true;
     inferenceCV.notify_one();
 }
 
 void Detector::inferenceThread()
 {
+    cv::cuda::GpuMat frameGpu;
+
     while (!shouldExit)
     {
         if (detector_model_changed.load()) {
@@ -442,7 +462,8 @@ void Detector::inferenceThread()
             detector_model_changed.store(false);
         }
         
-        cv::cuda::GpuMat frame;
+        cv::Mat frameCpu;
+        bool isGpu = false;
         bool hasNewFrame = false;
         
         {
@@ -457,7 +478,12 @@ void Detector::inferenceThread()
             
             if (frameReady)
             {
-                frame = std::move(currentFrame);
+                isGpu = frameIsGpu;
+                if (isGpu) {
+                    frameGpu = std::move(currentFrame);
+                } else {
+                    frameCpu = std::move(currentFrameCpu);
+                }
                 frameReady = false;
                 hasNewFrame = true;
             }
@@ -478,11 +504,16 @@ void Detector::inferenceThread()
             error_logged = false;
         }
         
-        if (hasNewFrame && !frame.empty())
+        if (hasNewFrame && ((isGpu && !frameGpu.empty()) || (!isGpu && !frameCpu.empty())))
         {
             try
             {
-                preProcess(frame);
+                // Upload CPU frame to GPU if necessary before preprocessing
+                if (!isGpu) {
+                    frameGpu.upload(frameCpu, preprocessCvStream); 
+                }
+
+                preProcess(frameGpu); // Always preprocess the GpuMat
                 
                 context->enqueueV3(stream);
 

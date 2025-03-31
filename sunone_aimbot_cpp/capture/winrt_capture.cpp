@@ -193,7 +193,6 @@ cv::cuda::GpuMat WinRTScreenCapture::GetNextFrameGpu()
         );
 
         cudaGraphicsUnmapResources(1, &cudaResource, cudaStream);
-        cudaStreamSynchronize(cudaStream);
 
         return frameGpu;
     }
