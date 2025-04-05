@@ -9,6 +9,8 @@
 #include <mutex>
 #include <atomic>
 
+#include "KalmanFilter2D.h"
+#include "PIDController2D.h"
 #include "mouse.h"
 #include "capture.h"
 #include "SerialConnection.h"
@@ -20,220 +22,20 @@ extern std::atomic<bool> aiming;
 extern std::mutex configMutex;
 extern Config config;
 
-// Constants for PID controller - Changed to float
-constexpr float MAX_OUTPUT_X = 1500.0f;
-constexpr float MAX_OUTPUT_Y = 1200.0f;
-constexpr float MAX_INTEGRAL_X = 80.0f;
-constexpr float MAX_INTEGRAL_Y = 60.0f;
-constexpr float ERROR_THRESHOLD_X = 100.0f;
-constexpr float ERROR_THRESHOLD_Y = 80.0f;
+// Constants for PID controller - Removing hardcoded limits
+// constexpr float MAX_OUTPUT_X = 375.0f;  // Removed
+// constexpr float MAX_OUTPUT_Y = 300.0f;  // Removed
+// constexpr float MAX_INTEGRAL_X = 80.0f; // Removed
+// constexpr float MAX_INTEGRAL_Y = 60.0f; // Removed
+// constexpr float ERROR_THRESHOLD_X = 80.0f; // Removed
+// constexpr float ERROR_THRESHOLD_Y = 60.0f; // Removed
 constexpr float SCOPE_MARGIN = 0.15f;
 
 // Constants for Kalman filter - Changed to float
-constexpr float VEL_NOISE_FACTOR = 2.5f;
-constexpr float ACC_NOISE_FACTOR = 4.0f;
+// constexpr float VEL_NOISE_FACTOR = 2.5f; // Remove definition from here, use KalmanFilter2D.h
+// ACC_NOISE_FACTOR is removed if using 4D filter
+// constexpr float ACC_NOISE_FACTOR = 4.0f; // Commented out assuming 4D filter
 constexpr float BASE_PREDICTION_FACTOR = 0.07f;
-
-PIDController2D::PIDController2D(float kp_x, float ki_x, float kd_x, float kp_y, float ki_y, float kd_y)
-    : kp_x(kp_x), ki_x(ki_x), kd_x(kd_x), kp_y(kp_y), ki_y(ki_y), kd_y(kd_y)
-{
-    reset();
-}
-
-Eigen::Vector2f PIDController2D::calculate(const Eigen::Vector2f &error)
-{
-    auto now = std::chrono::steady_clock::now();
-    float dt = std::chrono::duration<float>(now - last_time_point).count();
-    dt = dt > 0.1f ? 0.1f : dt;
-    last_time_point = now;
-
-    static auto last_gain_update = now;
-    static float cached_kp_x = kp_x;
-    static float cached_ki_x = ki_x;
-    static float cached_kd_x = kd_x;
-    static float cached_kp_y = kp_y;
-    static float cached_ki_y = ki_y;
-    static float cached_kd_y = kd_y;
-
-    float time_since_update = std::chrono::duration<float>(now - last_gain_update).count();
-    if (time_since_update >= 0.05f)
-    {
-        // Optimization: Skip dynamic gain update if error is already very small
-        constexpr float DYNAMIC_GAIN_ERROR_THRESH_SQ = 2.0f * 2.0f; // e.g., skip if error < 2 pixels (squared)
-        if (error.squaredNorm() < DYNAMIC_GAIN_ERROR_THRESH_SQ) {
-            // Keep last_gain_update = now; to prevent immediate re-entry if error fluctuates slightly
-            last_gain_update = now; 
-        } else {
-            // Original dynamic gain adjustment logic follows
-            last_gain_update = now;
-
-            float error_magnitude_x = std::abs(error.x());
-            float error_magnitude_y = std::abs(error.y());
-
-            float kp_factor_x = 1.0f + std::min(error_magnitude_x * 0.01f, 0.6f);
-            float ki_factor_x = 1.0f - std::min(error_magnitude_x * 0.0025f, 0.8f);
-            
-            float kp_factor_y = 1.0f + std::min(error_magnitude_y * 0.00833f, 0.5f);
-            float ki_factor_y = 1.0f - std::min(error_magnitude_y * 0.00286f, 0.9f);
-            
-            float target_kp_x = kp_x * kp_factor_x;
-            float target_ki_x = ki_x * ki_factor_x;
-            float target_kd_x = kd_x * (1.0f + std::min(error_magnitude_x * 0.002f, 0.4f));
-            
-            float target_kp_y = kp_y * kp_factor_y;
-            float target_ki_y = ki_y * ki_factor_y;
-            float target_kd_y = kd_y * (1.0f + std::min(error_magnitude_y * 0.00278f, 0.5f));
-
-            float alpha = std::min(time_since_update * 15.0f, 1.0f);
-            if (alpha > 0.95f) {
-                cached_kp_x = target_kp_x;
-                cached_ki_x = target_ki_x;
-                cached_kd_x = target_kd_x;
-                cached_kp_y = target_kp_y;
-                cached_ki_y = target_ki_y;
-                cached_kd_y = target_kd_y;
-            } else {
-                float one_minus_alpha = 1.0f - alpha;
-                cached_kp_x = cached_kp_x * one_minus_alpha + target_kp_x * alpha;
-                cached_ki_x = cached_ki_x * one_minus_alpha + target_ki_x * alpha;
-                cached_kd_x = cached_kd_x * one_minus_alpha + target_kd_x * alpha;
-                cached_kp_y = cached_kp_y * one_minus_alpha + target_kp_y * alpha;
-                cached_ki_y = cached_ki_y * one_minus_alpha + target_ki_y * alpha;
-                cached_kd_y = cached_kd_y * one_minus_alpha + target_kd_y * alpha;
-            }
-        } // End of the 'else' block for dynamic gain calculation
-    }
-
-    if (dt > 0.0001f)
-    {
-        static const float inv_error_threshold_x = 1.0f / ERROR_THRESHOLD_X;
-        static const float inv_error_threshold_y = 1.0f / ERROR_THRESHOLD_Y;
-        
-        float abs_error_x = std::abs(error.x());
-        float abs_error_y = std::abs(error.y());
-        
-        float integral_factor_x = abs_error_x > ERROR_THRESHOLD_X ? 
-                                  ERROR_THRESHOLD_X / abs_error_x : 1.0f;
-        float integral_factor_y = abs_error_y > ERROR_THRESHOLD_Y ? 
-                                  ERROR_THRESHOLD_Y / abs_error_y : 1.0f;
-        
-        integral.x() += error.x() * dt * integral_factor_x;
-        integral.y() += error.y() * dt * integral_factor_y;
-        
-        if (integral.x() > MAX_INTEGRAL_X) integral.x() = MAX_INTEGRAL_X;
-        else if (integral.x() < -MAX_INTEGRAL_X) integral.x() = -MAX_INTEGRAL_X;
-        
-        if (integral.y() > MAX_INTEGRAL_Y) integral.y() = MAX_INTEGRAL_Y;
-        else if (integral.y() < -MAX_INTEGRAL_Y) integral.y() = -MAX_INTEGRAL_Y;
-        
-        float derivative_x = (error.x() - prev_error.x()) / dt;
-        float derivative_y = (error.y() - prev_error.y()) / dt;
-        
-        float alpha_x = (std::abs(derivative_x) > 500.0f) ? 0.7f : 0.85f;
-        float alpha_y = (std::abs(derivative_y) > 400.0f) ? 0.6f : 0.9f;
-        
-        derivative.x() = derivative_x * alpha_x + prev_derivative.x() * (1.0f - alpha_x);
-        derivative.y() = derivative_y * alpha_y + prev_derivative.y() * (1.0f - alpha_y);
-        
-        prev_derivative = derivative;
-    }
-    else
-    {
-        derivative.setZero();
-    }
-
-    Eigen::Vector2f output;
-    output.x() = cached_kp_x * error.x() + cached_ki_x * integral.x() + cached_kd_x * derivative.x();
-    output.y() = cached_kp_y * error.y() + cached_ki_y * integral.y() + cached_kd_y * derivative.y();
-    
-    if (output.x() > MAX_OUTPUT_X) output.x() = MAX_OUTPUT_X;
-    else if (output.x() < -MAX_OUTPUT_X) output.x() = -MAX_OUTPUT_X;
-    
-    if (output.y() > MAX_OUTPUT_Y) output.y() = MAX_OUTPUT_Y;
-    else if (output.y() < -MAX_OUTPUT_Y) output.y() = -MAX_OUTPUT_Y;
-
-    prev_error = error;
-    return output;
-}
-
-void PIDController2D::reset()
-{
-    prev_error = Eigen::Vector2f::Zero();
-    integral = Eigen::Vector2f::Zero();
-    derivative = Eigen::Vector2f::Zero();
-    prev_derivative = Eigen::Vector2f::Zero();
-    last_time_point = std::chrono::steady_clock::now();
-}
-
-void PIDController2D::updateSeparatedParameters(float kp_x, float ki_x, float kd_x, 
-                                               float kp_y, float ki_y, float kd_y)
-{
-    this->kp_x = kp_x;
-    this->ki_x = ki_x;
-    this->kd_x = kd_x;
-    this->kp_y = kp_y;
-    this->ki_y = ki_y;
-    this->kd_y = kd_y;
-}
-
-void KalmanFilter2D::initializeMatrices(float process_noise_q, float measurement_noise_r)
-{
-    Q = Eigen::Matrix<float, 6, 6>::Identity() * process_noise_q;
-    
-    Q(2, 2) = process_noise_q * VEL_NOISE_FACTOR;
-    Q(3, 3) = process_noise_q * VEL_NOISE_FACTOR;
-    Q(4, 4) = process_noise_q * ACC_NOISE_FACTOR;
-    Q(5, 5) = process_noise_q * ACC_NOISE_FACTOR;
-    
-    R = Eigen::Matrix2f::Identity() * measurement_noise_r;
-}
-
-KalmanFilter2D::KalmanFilter2D(float process_noise_q, float measurement_noise_r)
-{
-    A = Eigen::Matrix<float, 6, 6>::Identity();
-
-    H = Eigen::Matrix<float, 2, 6>::Zero();
-    H(0, 0) = 1.0f;
-    H(1, 1) = 1.0f;
-
-    initializeMatrices(process_noise_q, measurement_noise_r);
-    P = Eigen::Matrix<float, 6, 6>::Identity();
-    x = Eigen::Matrix<float, 6, 1>::Zero();
-}
-
-void KalmanFilter2D::predict(float dt)
-{
-    A(0, 2) = dt;
-    A(0, 4) = 0.5f * dt * dt;
-    A(1, 3) = dt;
-    A(1, 5) = 0.5f * dt * dt;
-    A(2, 4) = dt;
-    A(3, 5) = dt;
-
-    x = A * x;
-    P = A * P * A.transpose() + Q;
-}
-
-void KalmanFilter2D::update(const Eigen::Vector2f &measurement)
-{
-    Eigen::Matrix2f S = H * P * H.transpose() + R;
-    Eigen::Matrix<float, 6, 2> K = P * H.transpose() * S.inverse();
-
-    Eigen::Vector2f y = measurement - H * x;
-    x = x + K * y;
-    P = (Eigen::Matrix<float, 6, 6>::Identity() - K * H) * P;
-}
-
-void KalmanFilter2D::reset()
-{
-    x = Eigen::Matrix<float, 6, 1>::Zero();
-    P = Eigen::Matrix<float, 6, 6>::Identity();
-}
-
-void KalmanFilter2D::updateParameters(float process_noise_q, float measurement_noise_r)
-{
-    initializeMatrices(process_noise_q, measurement_noise_r);
-}
 
 MouseThread::MouseThread(
     int resolution,
@@ -259,6 +61,8 @@ MouseThread::MouseThread(
     initializeInputMethod(serialConnection, gHub);
     last_prediction_time = std::chrono::steady_clock::now();
 }
+
+MouseThread::~MouseThread() = default;
 
 void MouseThread::initializeInputMethod(SerialConnection *serialConnection, GhubMouse *gHub)
 {
@@ -336,7 +140,8 @@ Eigen::Vector2f MouseThread::predictTargetPosition(float target_x, float target_
     Eigen::Vector2f measurement(target_x, target_y);
     kalman_filter->update(measurement);
 
-    const auto &state = kalman_filter->getState();
+    // Use explicit type instead of auto& to potentially resolve compiler issues
+    const Eigen::Matrix<float, 4, 1>& state = kalman_filter->getState();
     
     float pos_x = state(0, 0);
     float pos_y = state(1, 0);
