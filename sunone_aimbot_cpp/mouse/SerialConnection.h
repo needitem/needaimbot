@@ -44,7 +44,6 @@ private:
 
     void timerThreadFunc();
     void listeningThreadFunc();
-    void writerThreadFunc();
 
 private:
     serial::Serial serial_;
@@ -55,12 +54,6 @@ private:
 
     std::thread listening_thread_;
     std::atomic<bool> listening_;
-
-    std::thread writer_thread_;
-    std::atomic<bool> writer_running_;
-    std::queue<std::string> write_queue_;
-    std::mutex queue_mutex_;
-    std::condition_variable queue_cv_;
 
 };
 

@@ -18,6 +18,9 @@
 #include <opencv2/cudaarithm.hpp>
 #include <cuda_runtime_api.h>
 
+typedef struct CUstream_st* cudaStream_t;
+typedef struct CUevent_st* cudaEvent_t;
+
 class Detector
 {
 public:
@@ -29,6 +32,7 @@ public:
     void inferenceThread();
     void releaseDetections();
     bool getLatestDetections(std::vector<cv::Rect> &boxes, std::vector<int> &classes);
+    void setCaptureEvent(cudaEvent_t event);
 
     std::mutex detectionMutex;
 
@@ -52,6 +56,12 @@ public:
     cv::Mat currentFrameCpu;
     bool frameReady;
     bool frameIsGpu;
+
+    cudaEvent_t processingDone;
+    cudaEvent_t postprocessCopyDone;
+    cudaEvent_t m_captureDoneEvent = nullptr;
+
+    cv::cuda::GpuMat resizedBuffer;
 
 private:
     std::unique_ptr<nvinfer1::IRuntime> runtime;
@@ -87,12 +97,8 @@ private:
     std::unordered_map<std::string, std::vector<__half>> outputDataBuffersHalf;
     std::unordered_map<std::string, nvinfer1::DataType> outputTypes;
 
-    cv::cuda::GpuMat resizedBuffer;
     cv::cuda::GpuMat floatBuffer;
     std::vector<cv::cuda::GpuMat> channelBuffers;
-
-    cudaEvent_t processingDone;
-    cudaEvent_t postprocessCopyDone;
 
     bool checkCudaError(cudaError_t err, const std::string& message) {
         if (err != cudaSuccess) {

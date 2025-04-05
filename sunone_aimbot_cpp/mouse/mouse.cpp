@@ -58,42 +58,50 @@ Eigen::Vector2f PIDController2D::calculate(const Eigen::Vector2f &error)
     float time_since_update = std::chrono::duration<float>(now - last_gain_update).count();
     if (time_since_update >= 0.05f)
     {
-        last_gain_update = now;
-        
-        float error_magnitude_x = std::abs(error.x());
-        float error_magnitude_y = std::abs(error.y());
-
-        float kp_factor_x = 1.0f + std::min(error_magnitude_x * 0.01f, 0.6f);
-        float ki_factor_x = 1.0f - std::min(error_magnitude_x * 0.0025f, 0.8f);
-        
-        float kp_factor_y = 1.0f + std::min(error_magnitude_y * 0.00833f, 0.5f);
-        float ki_factor_y = 1.0f - std::min(error_magnitude_y * 0.00286f, 0.9f);
-        
-        float target_kp_x = kp_x * kp_factor_x;
-        float target_ki_x = ki_x * ki_factor_x;
-        float target_kd_x = kd_x * (1.0f + std::min(error_magnitude_x * 0.002f, 0.4f));
-        
-        float target_kp_y = kp_y * kp_factor_y;
-        float target_ki_y = ki_y * ki_factor_y;
-        float target_kd_y = kd_y * (1.0f + std::min(error_magnitude_y * 0.00278f, 0.5f));
-
-        float alpha = std::min(time_since_update * 15.0f, 1.0f);
-        if (alpha > 0.95f) {
-            cached_kp_x = target_kp_x;
-            cached_ki_x = target_ki_x;
-            cached_kd_x = target_kd_x;
-            cached_kp_y = target_kp_y;
-            cached_ki_y = target_ki_y;
-            cached_kd_y = target_kd_y;
+        // Optimization: Skip dynamic gain update if error is already very small
+        constexpr float DYNAMIC_GAIN_ERROR_THRESH_SQ = 2.0f * 2.0f; // e.g., skip if error < 2 pixels (squared)
+        if (error.squaredNorm() < DYNAMIC_GAIN_ERROR_THRESH_SQ) {
+            // Keep last_gain_update = now; to prevent immediate re-entry if error fluctuates slightly
+            last_gain_update = now; 
         } else {
-            float one_minus_alpha = 1.0f - alpha;
-            cached_kp_x = cached_kp_x * one_minus_alpha + target_kp_x * alpha;
-            cached_ki_x = cached_ki_x * one_minus_alpha + target_ki_x * alpha;
-            cached_kd_x = cached_kd_x * one_minus_alpha + target_kd_x * alpha;
-            cached_kp_y = cached_kp_y * one_minus_alpha + target_kp_y * alpha;
-            cached_ki_y = cached_ki_y * one_minus_alpha + target_ki_y * alpha;
-            cached_kd_y = cached_kd_y * one_minus_alpha + target_kd_y * alpha;
-        }
+            // Original dynamic gain adjustment logic follows
+            last_gain_update = now;
+
+            float error_magnitude_x = std::abs(error.x());
+            float error_magnitude_y = std::abs(error.y());
+
+            float kp_factor_x = 1.0f + std::min(error_magnitude_x * 0.01f, 0.6f);
+            float ki_factor_x = 1.0f - std::min(error_magnitude_x * 0.0025f, 0.8f);
+            
+            float kp_factor_y = 1.0f + std::min(error_magnitude_y * 0.00833f, 0.5f);
+            float ki_factor_y = 1.0f - std::min(error_magnitude_y * 0.00286f, 0.9f);
+            
+            float target_kp_x = kp_x * kp_factor_x;
+            float target_ki_x = ki_x * ki_factor_x;
+            float target_kd_x = kd_x * (1.0f + std::min(error_magnitude_x * 0.002f, 0.4f));
+            
+            float target_kp_y = kp_y * kp_factor_y;
+            float target_ki_y = ki_y * ki_factor_y;
+            float target_kd_y = kd_y * (1.0f + std::min(error_magnitude_y * 0.00278f, 0.5f));
+
+            float alpha = std::min(time_since_update * 15.0f, 1.0f);
+            if (alpha > 0.95f) {
+                cached_kp_x = target_kp_x;
+                cached_ki_x = target_ki_x;
+                cached_kd_x = target_kd_x;
+                cached_kp_y = target_kp_y;
+                cached_ki_y = target_ki_y;
+                cached_kd_y = target_kd_y;
+            } else {
+                float one_minus_alpha = 1.0f - alpha;
+                cached_kp_x = cached_kp_x * one_minus_alpha + target_kp_x * alpha;
+                cached_ki_x = cached_ki_x * one_minus_alpha + target_ki_x * alpha;
+                cached_kd_x = cached_kd_x * one_minus_alpha + target_kd_x * alpha;
+                cached_kp_y = cached_kp_y * one_minus_alpha + target_kp_y * alpha;
+                cached_ki_y = cached_ki_y * one_minus_alpha + target_ki_y * alpha;
+                cached_kd_y = cached_kd_y * one_minus_alpha + target_kd_y * alpha;
+            }
+        } // End of the 'else' block for dynamic gain calculation
     }
 
     if (dt > 0.0001f)
@@ -279,6 +287,21 @@ void MouseThread::initializeScreen(int resolution, int dpi, int fovX, int fovY, 
     this->bScope_multiplier = bScope_multiplier;
     this->center_x = screen_width / 2.0f;
     this->center_y = screen_height / 2.0f;
+
+    // Pre-calculate movement scaling factors
+    // Avoid division by zero if dpi is zero
+    float dpi_safe = (this->dpi > 1e-3f) ? this->dpi : 1.0f;
+    float base_scale_x = (this->fov_x / 360.0f) * (1000.0f / dpi_safe);
+    float base_scale_y = (this->fov_y / 360.0f) * (1000.0f / dpi_safe);
+
+    // Incorporate scope multiplier into the pre-calculated scale
+    if (this->bScope_multiplier > 1.0f) {
+        this->move_scale_x = base_scale_x / this->bScope_multiplier;
+        this->move_scale_y = base_scale_y / this->bScope_multiplier;
+    } else {
+        this->move_scale_x = base_scale_x;
+        this->move_scale_y = base_scale_y;
+    }
 }
 
 void MouseThread::updateConfig(
@@ -322,11 +345,15 @@ Eigen::Vector2f MouseThread::predictTargetPosition(float target_x, float target_
     // float acc_x = state(4, 0); // Acceleration removed in previous optimization
     // float acc_y = state(5, 0);
 
-    float velocity = std::sqrt(vel_x * vel_x + vel_y * vel_y);
+    // Use squared velocity for magnitude checks to avoid sqrt
+    float velocity_squared = vel_x * vel_x + vel_y * vel_y;
+    // Threshold for velocity index (squared value of 200.0f)
+    constexpr float VEL_THRESH_SQ = 200.0f * 200.0f;
 
     constexpr float prediction_factors[4] = {1.0f, 1.5f, 2.0f, 2.5f};
     
-    int velocity_idx = std::min(static_cast<int>(velocity / 200.0f), 3);
+    // Calculate index based on squared velocity
+    int velocity_idx = std::min(static_cast<int>(velocity_squared / VEL_THRESH_SQ), 3);
     float prediction_time = dt * BASE_PREDICTION_FACTOR * prediction_factors[velocity_idx];
 
     // Simplified prediction: Remove acceleration term (already done)
@@ -336,13 +363,25 @@ Eigen::Vector2f MouseThread::predictTargetPosition(float target_x, float target_
     static Eigen::Vector2f prev_velocity(0.0f, 0.0f);
     Eigen::Vector2f current_velocity(vel_x, vel_y);
     
-    if (prev_velocity.norm() > 0 && velocity > 200.0f) {
-        float angle_change = std::acos(
-            std::clamp(prev_velocity.dot(current_velocity) / (prev_velocity.norm() * velocity), -1.0f, 1.0f)
-        );
-        
-        if (angle_change > 0.5f) {
-            float reduction_factor = std::max(0.3f, 1.0f - angle_change / 3.14f);
+    // Check for significant direction change using dot product and squared norms (avoid sqrt and acos)
+    float prev_vel_norm_sq = prev_velocity.squaredNorm();
+    // Use a threshold based on squared velocity (VEL_THRESH_SQ)
+    if (prev_vel_norm_sq > 1e-4f && velocity_squared > VEL_THRESH_SQ) { // Check prev_vel_norm_sq to avoid division by zero
+        float dot_product = prev_velocity.dot(current_velocity);
+        // Cosine threshold corresponding to angle 0.5 radians (cos(0.5) approx 0.87758)
+        constexpr float COS_ANGLE_THRESH = 0.87758f; 
+        // Compare cosine directly: dot / (norm1 * norm2) < threshold <=> dot * dot < threshold^2 * norm1^2 * norm2^2
+        // To avoid the remaining sqrt in norm2 (velocity), compare dot directly if norms are similar, or use cosine comparison carefully
+        // Simpler approach: compare cosine similarity value
+        float cos_similarity = dot_product / std::sqrt(prev_vel_norm_sq * velocity_squared); // Need one sqrt here unfortunately, but avoid acos
+
+        if (cos_similarity < COS_ANGLE_THRESH) { // Angle is greater than 0.5 rad if cosine is smaller
+            // Calculate reduction factor based on cosine similarity instead of angle
+            // Map cosine similarity range [-1, COS_ANGLE_THRESH] to reduction factor [0.3, 1.0]
+            // Example linear mapping: factor = 0.3 + 0.7 * (cos_similarity + 1.0) / (COS_ANGLE_THRESH + 1.0)
+            float reduction_factor = 0.3f + 0.7f * (cos_similarity + 1.0f) / (COS_ANGLE_THRESH + 1.0f);
+            reduction_factor = std::clamp(reduction_factor, 0.3f, 1.0f); // Ensure it stays within bounds
+
             future_x = pos_x + vel_x * prediction_time * reduction_factor;
             future_y = pos_y + vel_y * prediction_time * reduction_factor;
         }
@@ -418,10 +457,14 @@ AimbotTarget *MouseThread::findClosestTarget(const std::vector<AimbotTarget> &ta
 
     for (const auto &target : targets)
     {
-        float distance = calculateTargetDistance(target);
-        if (distance < min_distance)
+        // Calculate squared distance to avoid sqrt for comparison
+        float dx = target.x + target.w * 0.5f - center_x;
+        float dy = target.y + target.h * 0.5f - center_y;
+        float distance_sq = dx * dx + dy * dy;
+
+        if (distance_sq < min_distance) // Compare squared distances
         {
-            min_distance = distance;
+            min_distance = distance_sq; // Store the minimum squared distance
             closest = const_cast<AimbotTarget *>(&target);
         }
     }
@@ -458,14 +501,9 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     Eigen::Vector2f error(error_x, error_y);
     Eigen::Vector2f pid_output = pid_controller->calculate(error);
 
-    float move_x = pid_output.x() * (local_fov_x / 360.0f) * (1000.0f / local_dpi);
-    float move_y = pid_output.y() * (local_fov_y / 360.0f) * (1000.0f / local_dpi);
-
-    if (bScope_multiplier > 1.0f)
-    {
-        move_x /= bScope_multiplier;
-        move_y /= bScope_multiplier;
-    }
+    // Use pre-calculated scaling factors
+    float move_x = pid_output.x() * move_scale_x;
+    float move_y = pid_output.y() * move_scale_y;
 
     int dx_int = static_cast<int>(std::round(move_x));
     int dy_int = static_cast<int>(std::round(move_y));

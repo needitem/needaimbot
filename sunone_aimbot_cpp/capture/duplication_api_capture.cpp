@@ -28,7 +28,7 @@ class DDAManager
 {
 public:
     DDAManager()
-        : m_device(nullptr), m_context(nullptr), m_duplication(nullptr), m_output1(nullptr), m_sharedTexture(nullptr), m_cudaResource(nullptr), m_cudaStream(nullptr), m_framePool(5) // Pre-allocate 5 frames in the pool
+        : m_device(nullptr), m_context(nullptr), m_duplication(nullptr), m_output1(nullptr), m_sharedTexture(nullptr), m_cudaResource(nullptr), m_cudaStream(nullptr), m_framePool(5), m_captureDoneEvent(nullptr) // Pre-allocate 5 frames in the pool
     {
         ZeroMemory(&m_duplDesc, sizeof(m_duplDesc));
     }
@@ -195,6 +195,14 @@ public:
             }
 
             cudaStreamCreate(&m_cudaStream);
+
+            // Create the capture done event
+            cudaError_t eventErr = cudaEventCreateWithFlags(&m_captureDoneEvent, cudaEventDisableTiming);
+            if (eventErr != cudaSuccess)
+            {
+                std::cerr << "[DDA] Failed to create CUDA event: " << cudaGetErrorString(eventErr) << std::endl;
+                // Handle error appropriately, maybe throw or return error code from Initialize
+            }
         }
 
         SafeRelease(&output);
@@ -351,6 +359,12 @@ public:
         // Ensure the copy is complete
         // cudaStreamSynchronize(m_cudaStream); // Removed for lower latency. Caller MUST synchronize.
 
+        // Record event on the capture stream to signal copy completion
+        if (m_captureDoneEvent)
+        {
+            cudaEventRecord(m_captureDoneEvent, m_cudaStream);
+        }
+
         return frameGpu;
     }
 
@@ -387,6 +401,13 @@ public:
             cudaStreamDestroy(m_cudaStream);
             m_cudaStream = nullptr;
         }
+
+        // Destroy the event
+        if (m_captureDoneEvent)
+        {
+            cudaEventDestroy(m_captureDoneEvent);
+            m_captureDoneEvent = nullptr;
+        }
     }
 
 public:
@@ -399,6 +420,7 @@ public:
     ID3D11Texture2D *m_sharedTexture;
     cudaGraphicsResource *m_cudaResource;
     cudaStream_t m_cudaStream;
+    cudaEvent_t m_captureDoneEvent;
     std::vector<cv::cuda::GpuMat> m_framePool;
     UINT m_timeout = 16; // Reduced timeout for lower latency (approx. 60Hz)
     std::vector<BYTE> m_metaDataBuffer; // Reuse metadata buffer
@@ -647,4 +669,14 @@ cv::Mat DuplicationAPIScreenCapture::GetNextFrameCpu()
     // Note: Frame recycling is currently GPU-based. CPU path doesn't recycle.
 
     return frameCpu;
+}
+
+// Implementation for the event getter function
+cudaEvent_t DuplicationAPIScreenCapture::GetCaptureDoneEvent() const
+{
+   if (m_ddaManager)
+   {
+       return m_ddaManager->m_captureDoneEvent;
+   }
+   return nullptr; // Or handle error appropriately
 }

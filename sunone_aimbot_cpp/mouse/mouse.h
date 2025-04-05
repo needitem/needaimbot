@@ -86,8 +86,10 @@ private:
     float fov_y;
     float center_x;
     float center_y;
-    bool auto_shoot;
     float bScope_multiplier;
+    float move_scale_x; // Pre-calculated scaling factor for X movement
+    float move_scale_y; // Pre-calculated scaling factor for Y movement
+    bool auto_shoot;
 
     std::chrono::steady_clock::time_point last_target_time;
     std::chrono::steady_clock::time_point last_prediction_time;

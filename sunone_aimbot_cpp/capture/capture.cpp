@@ -45,6 +45,9 @@
 #include "winrt_capture.h"
 #include "virtual_camera.h"
 
+// Assume detector is globally accessible or passed to captureThread
+extern Detector detector;
+
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "windowsapp.lib")
@@ -112,6 +115,12 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
              return; // Exit thread if initialization fails
         }
 
+        // --- Initial setting of capture event for the detector ---
+        if (capturer) { // Check if capturer is valid
+            detector.setCaptureEvent(capturer->GetCaptureDoneEvent());
+        }
+        // --- End initial setting ---
+
         // cv::cuda::GpuMat latestFrameGpu; // This is a global variable now, remove local declaration
         bool buttonPreviouslyPressed = false;
 
@@ -178,6 +187,12 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                     std::cerr << "[Capture] Failed to re-initialize capturer after config change!" << std::endl;
                     break; // Exit the loop if re-initialization fails
                 }
+
+                // --- Update capture event for the detector after recreation ---
+                if (capturer) { // Check if new capturer is valid
+                    detector.setCaptureEvent(capturer->GetCaptureDoneEvent());
+                }
+                // --- End update ---
 
                 // Update global screen dimensions (Consider getting actual dimensions from capturer if possible)
                 screenWidth = new_CAPTURE_WIDTH;

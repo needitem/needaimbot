@@ -271,10 +271,11 @@ void mouseThreadFunction(MouseThread &mouseThread)
             config.disable_headshot
         );
 
-        AimbotTarget* target = sortTargets(detectionData.boxes, detectionData.classes, 
-                                         config.detection_resolution, 
-                                         config.detection_resolution, 
-                                         config.disable_headshot);
+        // Find the best target using the pre-calculated scores
+        AimbotTarget* target = findBestTarget(detectionData.boxes, 
+                                            detectionData.classes, 
+                                            target_scores, // Pass the calculated scores
+                                            config.disable_headshot);
        
         bool has_target = (target != nullptr);
         

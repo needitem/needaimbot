@@ -12,6 +12,17 @@
 
 #include "capture.h"
 
+// Forward declaration
+struct ID3D11Device;
+struct ID3D11DeviceContext;
+struct IDXGIOutput1;
+struct IDXGIOutputDuplication;
+struct ID3D11Texture2D;
+struct _DXGI_OUTDUPL_DESC; // Use underscore prefix if DXGI_OUTDUPL_DESC is a struct typedef
+struct cudaGraphicsResource;
+typedef struct CUstream_st* cudaStream_t; // Define cudaStream_t if not included elsewhere
+typedef struct CUevent_st* cudaEvent_t;   // Define cudaEvent_t if not included elsewhere
+
 class DDAManager;
 
 class DuplicationAPIScreenCapture : public IScreenCapture
@@ -21,6 +32,7 @@ public:
     ~DuplicationAPIScreenCapture();
     cv::cuda::GpuMat GetNextFrameGpu() override;
     cv::Mat GetNextFrameCpu() override;
+    cudaEvent_t GetCaptureDoneEvent() const;
 
 private:
     std::unique_ptr<DDAManager> m_ddaManager;
@@ -33,6 +45,7 @@ private:
     ID3D11Texture2D *sharedTexture = nullptr;
     cudaGraphicsResource *cudaResource = nullptr;
     cudaStream_t cudaStream = nullptr;
+    cudaEvent_t m_captureDoneEvent;
 
     int screenWidth = 0;
     int screenHeight = 0;

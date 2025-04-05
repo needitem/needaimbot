@@ -31,12 +31,16 @@ extern std::condition_variable frameCV;
 extern std::atomic<bool> shouldExit;
 extern std::atomic<bool> show_window_changed;
 
+// Forward declaration for CUDA event type if not included
+typedef struct CUevent_st* cudaEvent_t;
+
 class IScreenCapture
 {
 public:
-    virtual ~IScreenCapture() {}
+    virtual ~IScreenCapture() = default; // Virtual destructor
     virtual cv::cuda::GpuMat GetNextFrameGpu() = 0;
     virtual cv::Mat GetNextFrameCpu() = 0;
+    virtual cudaEvent_t GetCaptureDoneEvent() const = 0; // Pure virtual function
 };
 
 #endif // CAPTURE_H
