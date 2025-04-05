@@ -36,7 +36,9 @@
     <ClCompile Include="keyboard\keyboard_listener.cpp" />
     <ClCompile Include="keyboard\keycodes.cpp" />
     <ClCompile Include="mouse\ghub.cpp" />
+    <ClCompile Include="mouse\KalmanFilter2D.cpp" />
     <ClCompile Include="mouse\mouse.cpp" />
+    <ClCompile Include="mouse\PIDController2D.cpp" />
     <ClCompile Include="mouse\SerialConnection.cpp" />
     <ClCompile Include="mouse\AimbotTarget.cpp" />
     <ClCompile Include="overlay\draw_ai.cpp" />
@@ -77,7 +79,9 @@
     <ClInclude Include="keyboard\keycodes.h" />
     <ClInclude Include="mouse\ghub.h" />
     <ClInclude Include="mouse\InputMethod.h" />
+    <ClInclude Include="mouse\KalmanFilter2D.h" />
     <ClInclude Include="mouse\mouse.h" />
+    <ClInclude Include="mouse\PIDController2D.h" />
     <ClInclude Include="mouse\SerialConnection.h" />
     <ClInclude Include="mouse\AimbotTarget.h" />
     <ClInclude Include="overlay\draw_settings.h" />

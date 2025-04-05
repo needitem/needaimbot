@@ -67,7 +67,7 @@ void draw_mouse()
     {
         // Cast to float for ImGui slider but preserve double precision
         float kp_x_display = static_cast<float>(config.kp_x);
-        if (ImGui::SliderFloat("Proportional X (Kp)", &kp_x_display, 0.0f, 3.0f, "%.3f"))
+        if (ImGui::SliderFloat("Proportional X (Kp)", &kp_x_display, 0.0f, 20.0f, "%.3f"))
         {
             config.kp_x = static_cast<double>(kp_x_display);
         }
@@ -77,7 +77,7 @@ void draw_mouse()
         }
 
         float ki_x_display = static_cast<float>(config.ki_x);
-        if (ImGui::SliderFloat("Integral X (Ki)", &ki_x_display, 0.0f, 5.0f, "%.3f"))
+        if (ImGui::SliderFloat("Integral X (Ki)", &ki_x_display, 0.0f, 20.0f, "%.3f"))
         {
             config.ki_x = static_cast<double>(ki_x_display);
         }
@@ -87,7 +87,7 @@ void draw_mouse()
         }
 
         float kd_x_display = static_cast<float>(config.kd_x);
-        if (ImGui::SliderFloat("Derivative X (Kd)", &kd_x_display, 0.0f, 1.0f, "%.3f"))
+        if (ImGui::SliderFloat("Derivative X (Kd)", &kd_x_display, 0.0f, 5.0f, "%.3f"))
         {
             config.kd_x = static_cast<double>(kd_x_display);
         }
@@ -102,7 +102,7 @@ void draw_mouse()
     if (ImGui::CollapsingHeader("Vertical (Y-axis) PID", ImGuiTreeNodeFlags_DefaultOpen))
     {
         float kp_y_display = static_cast<float>(config.kp_y);
-        if (ImGui::SliderFloat("Proportional Y (Kp)", &kp_y_display, 0.0f, 3.0f, "%.3f"))
+        if (ImGui::SliderFloat("Proportional Y (Kp)", &kp_y_display, 0.0f, 20.0f, "%.3f"))
         {
             config.kp_y = static_cast<double>(kp_y_display);
         }
@@ -112,7 +112,7 @@ void draw_mouse()
         }
 
         float ki_y_display = static_cast<float>(config.ki_y);
-        if (ImGui::SliderFloat("Integral Y (Ki)", &ki_y_display, 0.0f, 5.0f, "%.3f"))
+        if (ImGui::SliderFloat("Integral Y (Ki)", &ki_y_display, 0.0f, 20.0f, "%.3f"))
         {
             config.ki_y = static_cast<double>(ki_y_display);
         }
@@ -122,7 +122,7 @@ void draw_mouse()
         }
 
         float kd_y_display = static_cast<float>(config.kd_y);
-        if (ImGui::SliderFloat("Derivative Y (Kd)", &kd_y_display, 0.0f, 1.0f, "%.3f"))
+        if (ImGui::SliderFloat("Derivative Y (Kd)", &kd_y_display, 0.0f, 5.0f, "%.3f"))
         {
             config.kd_y = static_cast<double>(kd_y_display);
         }
@@ -140,17 +140,17 @@ void draw_mouse()
     // Group Kalman Filter Settings
     if (ImGui::CollapsingHeader("Kalman Filter Smoothing", ImGuiTreeNodeFlags_DefaultOpen))
     {
-        ImGui::SliderFloat("Process Noise (Q)", &config.process_noise_q, 0.001f, 15.0f, "%.3f");
+        ImGui::SliderFloat("Process Noise (Q)", &config.process_noise_q, 0.001f, 100.0f, "%.3f");
         if (ImGui::IsItemHovered())
         {
             SetWrappedTooltip("Represents the uncertainty in the process model. Higher values make the filter more responsive to new measurements but noisier. Lower values make aim smoother but less responsive to sudden changes.");
         }
-        ImGui::SliderFloat("Measurement Noise (R)", &config.measurement_noise_r, 0.001f, 1.0f, "%.3f");
+        ImGui::SliderFloat("Measurement Noise (R)", &config.measurement_noise_r, 0.001f, 100.0f, "%.3f");
         if (ImGui::IsItemHovered())
         {
             SetWrappedTooltip("Represents noise in the measurements. Higher values make the filter trust measurements less, resulting in smoother but potentially slower aiming. Lower values increase responsiveness but may cause jitter.");
         }
-        ImGui::SliderFloat("Estimation Error (P)", &config.estimation_error_p, 0.001f, 10.0f, "%.3f");
+        ImGui::SliderFloat("Estimation Error (P)", &config.estimation_error_p, 0.001f, 50.0f, "%.3f");
         if (ImGui::IsItemHovered())
         {
             SetWrappedTooltip("Initial uncertainty in the state estimate. Higher values cause the filter to give more weight to initial measurements. Affects how quickly the filter converges to stable tracking.");
