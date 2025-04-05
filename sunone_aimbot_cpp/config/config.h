@@ -115,6 +115,12 @@ public:
     bool loadConfig(const std::string& filename = "config.ini");
     bool saveConfig(const std::string& filename = "config.ini");
 
+    // Profile Management
+    std::vector<std::string> listProfiles();
+    bool saveProfile(const std::string& profileName);
+    bool loadProfile(const std::string& profileName);
+    bool deleteProfile(const std::string& profileName);
+
     std::string joinStrings(const std::vector<std::string>& vec, const std::string& delimiter = ",");
 private:
     std::vector<std::string> splitString(const std::string& str, char delimiter = ',');
