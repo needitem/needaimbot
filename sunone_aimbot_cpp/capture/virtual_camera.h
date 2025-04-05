@@ -11,6 +11,7 @@ public:
 
     cv::cuda::GpuMat GetNextFrameGpu() override;
     cv::Mat GetNextFrameCpu() override;
+    cudaEvent_t GetCaptureDoneEvent() const override { return nullptr; }
     static std::vector<std::string> GetAvailableVirtualCameras();
 
 private:
