@@ -32,6 +32,7 @@ public:
 
     cv::cuda::GpuMat GetNextFrameGpu() override;
     cv::Mat GetNextFrameCpu() override;
+    cudaEvent_t GetCaptureDoneEvent() const override { return nullptr; }
 
 private:
     winrt::com_ptr<ID3D11Device>            d3dDevice;

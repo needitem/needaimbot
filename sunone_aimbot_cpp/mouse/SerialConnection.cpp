@@ -12,11 +12,7 @@
 
 SerialConnection::SerialConnection(const std::string& port, unsigned int baud_rate)
     : is_open_(false),
-    listening_(false),
-    aiming_active(false),
-    shooting_active(false),
-    zooming_active(false),
-    writer_running_(false)
+    listening_(false)
 {
     try
     {
@@ -33,9 +29,6 @@ SerialConnection::SerialConnection(const std::string& port, unsigned int baud_ra
             {
                 startListening();
             }
-
-            writer_running_ = true;
-            writer_thread_ = std::thread(&SerialConnection::writerThreadFunc, this);
         }
         else
         {
@@ -51,12 +44,6 @@ SerialConnection::SerialConnection(const std::string& port, unsigned int baud_ra
 SerialConnection::~SerialConnection()
 {
     listening_ = false;
-    if (writer_thread_.joinable())
-    {
-        writer_running_ = false;
-        queue_cv_.notify_one();
-        writer_thread_.join();
-    }
     if (serial_.isOpen())
     {
         try { serial_.close(); }
@@ -76,14 +63,18 @@ bool SerialConnection::isOpen() const
 
 void SerialConnection::write(const std::string& data)
 {
-    if (!is_open_ || !writer_running_)
+    if (!is_open_)
         return;
 
-    {
-        std::lock_guard<std::mutex> lock(queue_mutex_);
-        write_queue_.push(data);
+    try {
+        size_t bytes_written = serial_.write(data);
+        if (bytes_written != data.length()) {
+            std::cerr << "[Arduino] Warning: Serial write might be incomplete. Expected " << data.length() << ", wrote " << bytes_written << std::endl;
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "[Arduino] Error during serial write: " << e.what() << std::endl;
+        is_open_ = false;
     }
-    queue_cv_.notify_one();
 }
 
 std::string SerialConnection::read()
@@ -125,11 +116,20 @@ void SerialConnection::move(int x, int y)
 
     if (config.arduino_16_bit_mouse)
     {
-        std::string data = "m" + std::to_string(x) + "," + std::to_string(y) + "\n";
-        write(data);
+        // Use snprintf for potentially faster formatting
+        char buffer[32]; // Buffer large enough for "m-32768,-32768\n\0"
+        int len = snprintf(buffer, sizeof(buffer), "m%d,%d\n", x, y);
+        // Check for snprintf success and buffer not overflowed
+        if (len > 0 && len < sizeof(buffer)) {
+            // Pass the formatted buffer to write
+            // Assuming write takes const std::string&, create string from buffer view
+            write(std::string(buffer, len)); 
+        }
     }
     else
     {
+        // Combine split move commands into a single string
+        std::string combined_data;
         std::vector<int> x_parts = splitValue(x);
         std::vector<int> y_parts = splitValue(y);
 
@@ -137,10 +137,23 @@ void SerialConnection::move(int x, int y)
         while (x_parts.size() < max_splits) x_parts.push_back(0);
         while (y_parts.size() < max_splits) y_parts.push_back(0);
 
+        // Reserve space for efficiency (estimate size)
+        combined_data.reserve(max_splits * 15); // Rough estimate: "m-127,-127\n" is ~12 chars
+
+        char buffer[32]; // Buffer for formatting each part
         for (size_t i = 0; i < max_splits; ++i)
         {
-            std::string data = "m" + std::to_string(x_parts[i]) + "," + std::to_string(y_parts[i]) + "\n";
-            write(data);
+            // Format each part using snprintf
+            int len = snprintf(buffer, sizeof(buffer), "m%d,%d\n", x_parts[i], y_parts[i]);
+            // Append the formatted part if successful
+            if (len > 0 && len < sizeof(buffer)) {
+                combined_data.append(buffer, len);
+            }
+        }
+
+        // Write the combined string once
+        if (!combined_data.empty()) {
+            write(combined_data);
         }
     }
 }
@@ -292,40 +305,5 @@ void SerialConnection::processIncomingLine(const std::string& line)
     catch (const std::exception& e)
     {
         std::cerr << "[Arduino] Error processing line '" << line << "': " << e.what() << std::endl;
-    }
-}
-
-void SerialConnection::writerThreadFunc()
-{
-    while (writer_running_)
-    {
-        std::string data_to_write;
-        {
-            std::unique_lock<std::mutex> lock(queue_mutex_);
-            queue_cv_.wait(lock, [this] { return !write_queue_.empty() || !writer_running_; });
-
-            if (!writer_running_ && write_queue_.empty())
-            {
-                break;
-            }
-
-            if (!write_queue_.empty()) {
-                data_to_write = write_queue_.front();
-                write_queue_.pop();
-            }
-        }
-
-        if (!data_to_write.empty() && is_open_)
-        {
-            try
-            {
-                serial_.write(data_to_write);
-            }
-            catch (...)
-            {
-                is_open_ = false;
-                writer_running_ = false;
-            }
-        }
     }
 }

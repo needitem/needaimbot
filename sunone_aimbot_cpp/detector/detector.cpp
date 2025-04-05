@@ -29,10 +29,15 @@
 #include "other_tools.h"
 #include "postProcess.h"
 
+// Assume a global pointer to the active capture object exists (Needs proper implementation)
+// extern IScreenCapture* g_capture;
 extern std::atomic<bool> detectionPaused;
 
 extern std::atomic<bool> detector_model_changed;
 extern std::atomic<bool> detection_resolution_changed;
+
+// Assume detector is globally accessible or passed to captureThread
+// extern IScreenCapture* g_capture; // Removed global capture dependency
 
 static bool error_logged = false;
 
@@ -632,6 +637,18 @@ void Detector::preProcess(const cv::cuda::GpuMat& frame)
 {
     if (frame.empty()) return;
 
+    // --- Wait for Capture Event (using member variable) ---
+    if (m_captureDoneEvent) {
+        // Make the preprocess stream wait for the capture event
+        cudaStream_t underlyingPreprocessStream = cv::cuda::StreamAccessor::getStream(preprocessCvStream);
+        cudaError_t waitErr = cudaStreamWaitEvent(underlyingPreprocessStream, m_captureDoneEvent, 0);
+        if (waitErr != cudaSuccess) {
+            std::cerr << "[Detector] cudaStreamWaitEvent failed in preProcess: " << cudaGetErrorString(waitErr) << std::endl;
+            // Handle error, maybe return or throw
+        }
+    }
+    // --- End Wait for Capture Event ---
+
     void* inputBuffer = inputBindings[inputName];
 
     if (!inputBuffer) return;
@@ -753,4 +770,11 @@ void Detector::postProcess(const float* output, const std::string& outputName)
         detectionVersion++;
     }
     detectionCV.notify_one();
+}
+
+// Implementation for the event setter function
+void Detector::setCaptureEvent(cudaEvent_t event) {
+    // This function could be called from captureThread when the capturer is created/recreated
+    // Consider thread safety if accessed concurrently, though likely called sequentially by captureThread
+    m_captureDoneEvent = event;
 }

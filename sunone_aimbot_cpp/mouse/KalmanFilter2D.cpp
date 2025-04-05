@@ -56,7 +56,26 @@ void KalmanFilter2D::update(const Eigen::Vector2f &measurement)
 {
     // Calculate Kalman gain (K)
     Eigen::Matrix2f S = H * P * H.transpose() + R; // Innovation covariance
-    Eigen::Matrix<float, 6, 2> K = P * H.transpose() * S.inverse(); // Kalman gain
+
+    // Directly calculate 2x2 inverse for S = [[s00, s01], [s10, s11]]
+    float detS = S(0, 0) * S(1, 1) - S(0, 1) * S(1, 0);
+    Eigen::Matrix2f S_inv;
+    // Avoid division by zero or near-zero determinant
+    if (std::abs(detS) < 1e-6f) {
+        // Handle singularity: e.g., use identity, pseudo-inverse, or skip update
+        // Using identity might be problematic. Skipping update or using pseudo-inverse might be safer.
+        // For now, let's skip the update if determinant is too small.
+        // std::cerr << "[Kalman] Warning: Skipping update due to near-zero determinant." << std::endl;
+        return; 
+        // Or: S_inv = Eigen::Matrix2f::Identity(); // Less ideal
+    }
+    float invDetS = 1.0f / detS;
+    S_inv(0, 0) =  S(1, 1) * invDetS;
+    S_inv(0, 1) = -S(0, 1) * invDetS;
+    S_inv(1, 0) = -S(1, 0) * invDetS;
+    S_inv(1, 1) =  S(0, 0) * invDetS;
+
+    Eigen::Matrix<float, 6, 2> K = P * H.transpose() * S_inv; // Kalman gain using calculated inverse
 
     // Update state estimate with measurement
     Eigen::Vector2f y = measurement - H * x; // Measurement residual (innovation)
