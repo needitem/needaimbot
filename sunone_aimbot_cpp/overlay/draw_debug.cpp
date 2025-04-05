@@ -7,6 +7,17 @@
 #include "sunone_aimbot_cpp.h"
 #include "overlay.h"
 #include "include/other_tools.h"
+#include <vector>
+#include <string>
+
+// Helper function to convert vector<string> to vector<const char*>
+std::vector<const char*> getProfileCstrs(const std::vector<std::string>& profiles) {
+    std::vector<const char*> cstrs;
+    cstrs.reserve(profiles.size());
+    for(const auto& s : profiles)
+        cstrs.push_back(s.c_str());
+    return cstrs;
+}
 
 void draw_debug()
 {
@@ -74,6 +85,109 @@ void draw_debug()
     ImGui::InputInt("Screenshot delay", &config.screenshot_delay, 50, 500);
     ImGui::Checkbox("Always On Top", &config.always_on_top);
     ImGui::Checkbox("Verbose console output", &config.verbose);
+
+    // Profile Management UI Section
+    ImGui::Separator();
+    ImGui::Text("Config Profiles");
+
+    // Get the list of profiles dynamically
+    static std::vector<std::string> profile_names = config.listProfiles();
+    static std::vector<const char*> profile_cstrs = getProfileCstrs(profile_names); // C-style strings for ImGui Combo
+    static int current_profile_idx = -1; // Initialize to -1 (no selection)
+
+    // Refresh profiles if needed (e.g., after save/delete)
+    auto refresh_profiles = [&](){
+        profile_names = config.listProfiles();
+        profile_cstrs = getProfileCstrs(profile_names);
+        // Try to maintain selection if possible, otherwise reset
+        if (current_profile_idx >= (int)profile_names.size()) {
+             current_profile_idx = profile_names.empty() ? -1 : 0;
+        }
+    };
+
+    // Find the initial index if a profile was loaded previously or exists
+    // This part might need adjustment based on how initial load is handled
+    if (current_profile_idx == -1 && !profile_names.empty()) {
+        current_profile_idx = 0; // Default to first profile if none selected
+    }
+
+    const char* combo_preview_value = (current_profile_idx >= 0 && current_profile_idx < (int)profile_cstrs.size()) ? profile_cstrs[current_profile_idx] : "Select Profile...";
+
+    if (ImGui::BeginCombo("Select Profile", combo_preview_value))
+    {
+        for (int n = 0; n < (int)profile_cstrs.size(); n++)
+        {
+            const bool is_selected = (current_profile_idx == n);
+            if (ImGui::Selectable(profile_cstrs[n], is_selected))
+                current_profile_idx = n;
+
+            if (is_selected)
+                ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+
+    static char new_profile_name[128] = "";
+    ImGui::InputText("New Profile Name", new_profile_name, IM_ARRAYSIZE(new_profile_name));
+
+    if (ImGui::Button("Save Profile")) {
+        std::string profileToSave;
+        if (strlen(new_profile_name) > 0) {
+             profileToSave = std::string(new_profile_name);
+             // Basic validation: avoid problematic characters if needed
+             // profileToSave = sanitize_filename(profileToSave);
+             config.saveProfile(profileToSave);
+             refresh_profiles();
+             // Select the newly saved profile
+             for(size_t i = 0; i < profile_names.size(); ++i) {
+                 if (profile_names[i] == profileToSave) {
+                     current_profile_idx = static_cast<int>(i);
+                     break;
+                 }
+             }
+             new_profile_name[0] = '\0'; // Clear the input field
+        } else if (current_profile_idx >= 0 && current_profile_idx < (int)profile_names.size()) {
+             profileToSave = profile_names[current_profile_idx];
+             config.saveProfile(profileToSave); // Overwrite selected profile
+             // No need to refresh list or change index here
+             std::cout << "[UI] Profile '" << profileToSave << "' overwritten." << std::endl;
+        } else {
+            std::cerr << "[UI] Cannot save: No profile selected and no new name entered." << std::endl;
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Load Profile")) {
+        if (current_profile_idx >= 0 && current_profile_idx < (int)profile_names.size()) {
+            std::string profileToLoad = profile_names[current_profile_idx];
+            if (config.loadProfile(profileToLoad)) {
+                 std::cout << "[UI] Profile '" << profileToLoad << "' loaded successfully." << std::endl;
+                 // UI should update automatically as config object is modified
+            } else {
+                 std::cerr << "[UI] Failed to load profile '" << profileToLoad << "'." << std::endl;
+                 // Maybe refresh list in case the file was deleted externally
+                 refresh_profiles();
+            }
+        } else {
+            std::cerr << "[UI] Cannot load: No profile selected." << std::endl;
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Delete Profile")) {
+         if (current_profile_idx >= 0 && current_profile_idx < (int)profile_names.size()) {
+            std::string profileToDelete = profile_names[current_profile_idx];
+             if (config.deleteProfile(profileToDelete)) {
+                 std::cout << "[UI] Profile '" << profileToDelete << "' deleted successfully." << std::endl;
+                 refresh_profiles(); // Refresh list and reset index
+             } else {
+                 std::cerr << "[UI] Failed to delete profile '" << profileToDelete << "'." << std::endl;
+                 // Refresh list in case of external changes or permissions issue
+                 refresh_profiles();
+             }
+        } else {
+             std::cerr << "[UI] Cannot delete: No profile selected." << std::endl;
+        }
+    }
+    // End Profile Management UI Section
 
     ImGui::Separator();
 

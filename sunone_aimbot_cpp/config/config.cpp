@@ -7,6 +7,7 @@
 #include <iomanip>
 #include <string>
 #include <filesystem>
+#include <algorithm>
 
 #include "config.h"
 #include "modules/SimpleIni.h"
@@ -440,4 +441,85 @@ bool Config::saveConfig(const std::string& filename)
 
     file.close();
     return true;
+}
+
+std::vector<std::string> Config::listProfiles() {
+    std::vector<std::string> profiles;
+    std::string current_path_str = "."; // Assuming profiles are in the same directory as the executable
+    
+    try {
+        for (const auto& entry : std::filesystem::directory_iterator(current_path_str)) {
+            if (entry.is_regular_file()) {
+                std::string filename = entry.path().filename().string();
+                std::string extension = entry.path().extension().string();
+
+                if (extension == ".ini" && filename != "config.ini") { // Find .ini files, excluding the main config.ini
+                    std::string profileName = entry.path().stem().string(); // Get filename without extension
+                    profiles.push_back(profileName);
+                }
+            }
+        }
+    } catch (const std::filesystem::filesystem_error& e) {
+        std::cerr << "[Config] Error listing profiles in directory '" << current_path_str << "': " << e.what() << std::endl;
+    }
+    
+    // Sort profiles alphabetically for consistency
+    std::sort(profiles.begin(), profiles.end());
+
+    // Optionally add a default entry if config.ini exists and you want to represent it
+    // profiles.insert(profiles.begin(), "Default"); 
+
+    return profiles;
+}
+
+bool Config::saveProfile(const std::string& profileName) {
+    if (profileName.empty() || profileName == "config") {
+        std::cerr << "[Config] Invalid profile name for saving: '" << profileName << "'. Cannot save." << std::endl;
+        return false;
+    }
+    std::string filename = profileName + ".ini";
+    std::cout << "[Config] Saving current settings to profile: " << filename << std::endl;
+    return saveConfig(filename); // Reuse existing save logic
+}
+
+bool Config::loadProfile(const std::string& profileName) {
+     if (profileName.empty()) {
+        std::cerr << "[Config] Invalid profile name for loading: '" << profileName << "'. Cannot load." << std::endl;
+        return false;
+    }
+    std::string filename = profileName + ".ini";
+     std::cout << "[Config] Loading settings from profile: " << filename << std::endl;
+
+    if (!std::filesystem::exists(filename)) {
+         std::cerr << "[Config] Profile file not found: " << filename << std::endl;
+         return false; // Indicate failure if profile doesn't exist
+    }
+    return loadConfig(filename); // Reuse existing load logic
+}
+
+bool Config::deleteProfile(const std::string& profileName) {
+    if (profileName.empty() || profileName == "config") {
+         std::cerr << "[Config] Invalid profile name for deletion: '" << profileName << "'. Cannot delete." << std::endl;
+        return false;
+    }
+    std::string filename = profileName + ".ini";
+    std::cout << "[Config] Attempting to delete profile: " << filename << std::endl;
+
+    try {
+        if (std::filesystem::exists(filename)) {
+            if (std::filesystem::remove(filename)) {
+                std::cout << "[Config] Profile deleted successfully: " << filename << std::endl;
+                return true;
+            } else {
+                std::cerr << "[Config] Failed to delete profile file: " << filename << std::endl;
+                return false;
+            }
+        } else {
+            std::cerr << "[Config] Profile file to delete not found: " << filename << std::endl;
+            return false; // Indicate failure as file wasn't found
+        }
+    } catch (const std::filesystem::filesystem_error& e) {
+        std::cerr << "[Config] Filesystem error while deleting profile '" << filename << "': " << e.what() << std::endl;
+        return false;
+    }
 }
