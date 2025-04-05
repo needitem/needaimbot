@@ -17,53 +17,10 @@
 #include "ghub.h"
 #include "InputMethod.h"
 
-// Improved 2D Kalman filter - tracking position, velocity, acceleration
-class KalmanFilter2D {
-private:
-    // State vector: [x, y, vx, vy, ax, ay]
-    Eigen::Matrix<float, 6, 6> A;  // State transition matrix
-    Eigen::Matrix<float, 2, 6> H;  // Measurement matrix
-    Eigen::Matrix<float, 6, 6> Q;  // Process noise
-    Eigen::Matrix2f R;              // Measurement noise
-    Eigen::Matrix<float, 6, 6> P;  // Error covariance
-    Eigen::Matrix<float, 6, 1> x;  // State vector
-
-    void initializeMatrices(float process_noise_q, float measurement_noise_r);
-
-public:
-    KalmanFilter2D(float process_noise_q = 0.1f, float measurement_noise_r = 0.1f);
-    void predict(float dt);
-    void update(const Eigen::Vector2f& measurement);
-    Eigen::Matrix<float, 6, 1> getState() const { return x; }
-    void reset();
-    void updateParameters(float process_noise_q, float measurement_noise_r);
-};
-
-// 2D PID controller - for aim correction
-class PIDController2D
-{
-private:
-    // PID gains separated for horizontal (X-axis) and vertical (Y-axis)
-    float kp_x, kp_y;  // Proportional gain: immediate response to current error (higher value = faster response, lower value = smoother movement)
-    float ki_x, ki_y;  // Integral gain: correction of accumulated error (higher value = accurate aiming, lower value = reduced overshoot)
-    float kd_x, kd_y;  // Derivative gain: response to error change rate (higher value = faster stopping, lower value = smoother deceleration)
-    
-    Eigen::Vector2f prev_error;  // Previous error (for derivative term)
-    Eigen::Vector2f integral;    // Accumulated error (for integral term)
-    Eigen::Vector2f derivative;  // Change rate (derivative term)
-    Eigen::Vector2f prev_derivative; // Previous derivative (for derivative filtering)
-    std::chrono::steady_clock::time_point last_time_point;  // Previous calculation time (for dt calculation)
-
-public:
-    // New constructor with separated X/Y gains
-    PIDController2D(float kp_x, float ki_x, float kd_x, float kp_y, float ki_y, float kd_y);
-    
-    Eigen::Vector2f calculate(const Eigen::Vector2f &error);
-    void reset();  // Controller reset (used when starting to aim at a new target)
-    
-    // X/Y separated gain update function
-    void updateSeparatedParameters(float kp_x, float ki_x, float kd_x, float kp_y, float ki_y, float kd_y);
-};
+// Forward declare KalmanFilter2D if its definition is in KalmanFilter2D.h
+class KalmanFilter2D;
+// Forward declare PIDController2D
+class PIDController2D;
 
 using ErrorTrackingCallback = std::function<void(float error_x, float error_y)>;
 
@@ -112,6 +69,7 @@ public:
                 bool auto_shoot, float bScope_multiplier,
                 SerialConnection *serialConnection = nullptr,
                 GhubMouse *gHub = nullptr);
+    ~MouseThread();
 
     void updateConfig(int resolution, int dpi, int fovX, int fovY,
                       float kp_x, float ki_x, float kd_x,

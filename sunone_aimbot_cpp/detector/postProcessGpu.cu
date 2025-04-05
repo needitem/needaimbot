@@ -18,7 +18,6 @@ __global__ void calculateIoUKernel(
     int idy = blockIdx.y * blockDim.y + threadIdx.y;
     
     if (idx < num_boxes && idy < num_boxes && idx < idy) {
-        // Calculate intersection dimensions
         int x1 = max(d_x1[idx], d_x1[idy]);
         int y1 = max(d_y1[idx], d_y1[idy]);
         int x2 = min(d_x2[idx], d_x2[idy]);
