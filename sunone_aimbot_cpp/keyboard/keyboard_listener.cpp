@@ -120,7 +120,8 @@ void keyboardListener()
                         config.process_noise_q,
                         config.measurement_noise_r,
                         config.auto_shoot,
-                        config.bScope_multiplier
+                        config.bScope_multiplier,
+                        config.norecoil_ms
                     );
                 }
                 reloadPressed = true;
