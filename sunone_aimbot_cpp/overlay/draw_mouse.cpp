@@ -197,6 +197,17 @@ void draw_mouse()
             {
                 SetWrappedTooltip("Step size for adjusting recoil compensation strength with left/right arrow keys (0.1 - 50.0)");
             }
+            
+            // Recoil delay in milliseconds
+            if (ImGui::InputFloat("Recoil Delay (ms)", &config.norecoil_ms, 0.0f, 0.0f, "%.1f"))
+            {
+                config.norecoil_ms = std::max(0.0f, std::min(config.norecoil_ms, 100.0f));
+                config.saveConfig();
+            }
+            if (ImGui::IsItemHovered())
+            {
+                SetWrappedTooltip("Delay in milliseconds between recoil compensation movements (0.0 - 100.0)");
+            }
             ImGui::Unindent(10.0f);
             
             // Warning for high recoil strength
