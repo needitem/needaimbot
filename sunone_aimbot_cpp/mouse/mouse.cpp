@@ -8,6 +8,7 @@
 #include <chrono>
 #include <mutex>
 #include <atomic>
+#include <iostream> // For debugging recoil timing
 
 #include "KalmanFilter2D.h"
 #include "PIDController2D.h"
@@ -52,10 +53,11 @@ MouseThread::MouseThread(
     float measurement_noise_r,
     bool auto_shoot,
     float bScope_multiplier,
+    float norecoil_ms,
     SerialConnection *serialConnection,
     GhubMouse *gHub) : tracking_errors(false)
 {
-    initializeScreen(resolution, dpi, fovX, fovY, auto_shoot, bScope_multiplier);
+    initializeScreen(resolution, dpi, fovX, fovY, auto_shoot, bScope_multiplier, norecoil_ms);
     kalman_filter = std::make_unique<KalmanFilter2D>(process_noise_q, measurement_noise_r);
     pid_controller = std::make_unique<PIDController2D>(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
     initializeInputMethod(serialConnection, gHub);
@@ -80,15 +82,16 @@ void MouseThread::initializeInputMethod(SerialConnection *serialConnection, Ghub
     }
 }
 
-void MouseThread::initializeScreen(int resolution, int dpi, int fovX, int fovY, bool auto_shoot, float bScope_multiplier)
+void MouseThread::initializeScreen(int resolution, int dpi, int fovX, int fovY, bool auto_shoot, float bScope_multiplier, float norecoil_ms)
 {
     this->screen_width = static_cast<float>(resolution);
-    this->screen_height = static_cast<float>(resolution); // Should this be height?
+    this->screen_height = static_cast<float>(resolution); // Should this be height? Yes, likely. Consider using separate config value if needed.
     this->dpi = static_cast<float>(dpi);
     this->fov_x = static_cast<float>(fovX);
     this->fov_y = static_cast<float>(fovY);
     this->auto_shoot = auto_shoot;
     this->bScope_multiplier = bScope_multiplier;
+    this->norecoil_ms = norecoil_ms; // Initialize norecoil_ms
     this->center_x = screen_width / 2.0f;
     this->center_y = screen_height / 2.0f;
 
@@ -106,6 +109,9 @@ void MouseThread::initializeScreen(int resolution, int dpi, int fovX, int fovY, 
         this->move_scale_x = base_scale_x;
         this->move_scale_y = base_scale_y;
     }
+
+    // Initialize last recoil time
+    this->last_recoil_compensation_time = std::chrono::steady_clock::now();
 }
 
 void MouseThread::updateConfig(
@@ -122,9 +128,10 @@ void MouseThread::updateConfig(
     float process_noise_q,
     float measurement_noise_r,
     bool auto_shoot,
-    float bScope_multiplier)
+    float bScope_multiplier,
+    float norecoil_ms)
 {
-    initializeScreen(resolution, dpi, fovX, fovY, auto_shoot, bScope_multiplier);
+    initializeScreen(resolution, dpi, fovX, fovY, auto_shoot, bScope_multiplier, norecoil_ms);
     kalman_filter->updateParameters(process_noise_q, measurement_noise_r);
     pid_controller->updateSeparatedParameters(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
 }
@@ -368,9 +375,32 @@ void MouseThread::setInputMethod(std::unique_ptr<InputMethod> new_method)
 
 void MouseThread::applyRecoilCompensation(float strength)
 {
-    if (input_method)
+    // Ensure input method is valid before proceeding
+    if (!input_method || !input_method->isValid()) {
+        return;
+    }
+
+    // Only apply if strength is non-zero
+    if (std::abs(strength) < 1e-3f) {
+        return;
+    }
+
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_recoil_compensation_time);
+    auto required_delay = std::chrono::milliseconds(static_cast<long long>(this->norecoil_ms));
+
+    // Check if enough time has passed since the last compensation
+    if (elapsed >= required_delay)
     {
-        input_method->move(0, strength);
+        std::lock_guard<std::mutex> lock(input_method_mutex); // Lock before accessing input_method
+        // Apply recoil compensation (move mouse vertically)
+        // Cast strength to int after potential scaling/logic if needed
+        int dy_recoil = static_cast<int>(std::round(strength));
+        if (dy_recoil != 0) {
+             input_method->move(0, dy_recoil);
+        }
+        // Update the time of the last compensation
+        last_recoil_compensation_time = now;
     }
 }
 
@@ -385,4 +415,5 @@ void MouseThread::disableErrorTracking()
 {
     std::lock_guard<std::mutex> lock(callback_mutex);
     tracking_errors = false;
+    error_callback = nullptr; // Clear the callback
 }
