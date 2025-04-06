@@ -47,9 +47,11 @@ private:
     float move_scale_x; // Pre-calculated scaling factor for X movement
     float move_scale_y; // Pre-calculated scaling factor for Y movement
     bool auto_shoot;
+    float norecoil_ms; // Store recoil delay
 
     std::chrono::steady_clock::time_point last_target_time;
     std::chrono::steady_clock::time_point last_prediction_time;
+    std::chrono::steady_clock::time_point last_recoil_compensation_time; // Track last recoil time
     std::atomic<bool> target_detected{false};
     std::atomic<bool> mouse_pressed{false};
 
@@ -59,7 +61,7 @@ private:
     float calculateTargetDistance(const AimbotTarget &target) const;
     AimbotTarget *findClosestTarget(const std::vector<AimbotTarget> &targets) const;
     void initializeInputMethod(SerialConnection *serialConnection, GhubMouse *gHub);
-    void initializeScreen(int resolution, int dpi, int fovX, int fovY, bool auto_shoot, float bScope_multiplier);
+    void initializeScreen(int resolution, int dpi, int fovX, int fovY, bool auto_shoot, float bScope_multiplier, float norecoil_ms);
 
 public:
     MouseThread(int resolution, int dpi, int fovX, int fovY,
@@ -67,6 +69,7 @@ public:
                 float kp_y, float ki_y, float kd_y,
                 float process_noise_q, float measurement_noise_r,
                 bool auto_shoot, float bScope_multiplier,
+                float norecoil_ms,
                 SerialConnection *serialConnection = nullptr,
                 GhubMouse *gHub = nullptr);
     ~MouseThread();
@@ -75,7 +78,8 @@ public:
                       float kp_x, float ki_x, float kd_x,
                       float kp_y, float ki_y, float kd_y,
                       float process_noise_q, float measurement_noise_r,
-                      bool auto_shoot, float bScope_multiplier);
+                      bool auto_shoot, float bScope_multiplier,
+                      float norecoil_ms);
 
     Eigen::Vector2f predictTargetPosition(float target_x, float target_y);
     Eigen::Vector2f calculateMovement(const Eigen::Vector2f &target_pos);
