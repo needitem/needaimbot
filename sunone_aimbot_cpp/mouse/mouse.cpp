@@ -10,6 +10,10 @@
 #include <atomic>
 #include <iostream> // For debugging recoil timing
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 #include "KalmanFilter2D.h"
 #include "PIDController2D.h"
 #include "mouse.h"
@@ -142,65 +146,33 @@ Eigen::Vector2f MouseThread::predictTargetPosition(float target_x, float target_
     float dt = std::min(std::chrono::duration<float>(current_time - last_prediction_time).count(), 0.1f);
     last_prediction_time = current_time;
 
+    // Update Kalman filter
     kalman_filter->predict(dt);
-
     Eigen::Vector2f measurement(target_x, target_y);
     kalman_filter->update(measurement);
 
-    // Use explicit type instead of auto& to potentially resolve compiler issues
+    // Get state
     const Eigen::Matrix<float, 4, 1>& state = kalman_filter->getState();
-    
     float pos_x = state(0, 0);
     float pos_y = state(1, 0);
     float vel_x = state(2, 0);
     float vel_y = state(3, 0);
-    // float acc_x = state(4, 0); // Acceleration removed in previous optimization
-    // float acc_y = state(5, 0);
 
-    // Use squared velocity for magnitude checks to avoid sqrt
-    float velocity_squared = vel_x * vel_x + vel_y * vel_y;
-    // Threshold for velocity index (squared value of 200.0f)
-    constexpr float VEL_THRESH_SQ = 200.0f * 200.0f;
+    // Calculate velocity magnitude
+    float velocity_magnitude = std::sqrt(vel_x * vel_x + vel_y * vel_y);
 
-    constexpr float prediction_factors[4] = {1.0f, 1.5f, 2.0f, 2.5f};
+    // Simplified prediction time calculation
+    float prediction_time = 0.03f; // Fixed base prediction time (30ms)
     
-    // Calculate index based on squared velocity
-    int velocity_idx = std::min(static_cast<int>(velocity_squared / VEL_THRESH_SQ), 3);
-    float prediction_time = dt * BASE_PREDICTION_FACTOR * prediction_factors[velocity_idx];
+    // Only scale prediction time based on velocity
+    if (velocity_magnitude > 50.0f) {
+        prediction_time *= std::min(velocity_magnitude / 100.0f, 1.5f);
+    }
 
-    // Simplified prediction: Remove acceleration term (already done)
+    // Calculate predicted position
     float future_x = pos_x + vel_x * prediction_time;
     float future_y = pos_y + vel_y * prediction_time;
-    
-    static Eigen::Vector2f prev_velocity(0.0f, 0.0f);
-    Eigen::Vector2f current_velocity(vel_x, vel_y);
-    
-    // Check for significant direction change using dot product and squared norms (avoid sqrt and acos)
-    float prev_vel_norm_sq = prev_velocity.squaredNorm();
-    // Use a threshold based on squared velocity (VEL_THRESH_SQ)
-    if (prev_vel_norm_sq > 1e-4f && velocity_squared > VEL_THRESH_SQ) { // Check prev_vel_norm_sq to avoid division by zero
-        float dot_product = prev_velocity.dot(current_velocity);
-        // Cosine threshold corresponding to angle 0.5 radians (cos(0.5) approx 0.87758)
-        constexpr float COS_ANGLE_THRESH = 0.87758f; 
-        // Compare cosine directly: dot / (norm1 * norm2) < threshold <=> dot * dot < threshold^2 * norm1^2 * norm2^2
-        // To avoid the remaining sqrt in norm2 (velocity), compare dot directly if norms are similar, or use cosine comparison carefully
-        // Simpler approach: compare cosine similarity value
-        float cos_similarity = dot_product / std::sqrt(prev_vel_norm_sq * velocity_squared); // Need one sqrt here unfortunately, but avoid acos
 
-        if (cos_similarity < COS_ANGLE_THRESH) { // Angle is greater than 0.5 rad if cosine is smaller
-            // Calculate reduction factor based on cosine similarity instead of angle
-            // Map cosine similarity range [-1, COS_ANGLE_THRESH] to reduction factor [0.3, 1.0]
-            // Example linear mapping: factor = 0.3 + 0.7 * (cos_similarity + 1.0) / (COS_ANGLE_THRESH + 1.0)
-            float reduction_factor = 0.3f + 0.7f * (cos_similarity + 1.0f) / (COS_ANGLE_THRESH + 1.0f);
-            reduction_factor = std::clamp(reduction_factor, 0.3f, 1.0f); // Ensure it stays within bounds
-
-            future_x = pos_x + vel_x * prediction_time * reduction_factor;
-            future_y = pos_y + vel_y * prediction_time * reduction_factor;
-        }
-    }
-    
-    prev_velocity = current_velocity;
-    
     return Eigen::Vector2f(future_x, future_y);
 }
 
