@@ -247,9 +247,16 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                     {
                         std::lock_guard<std::mutex> lock(frameMutex);
                         latestFrameGpu = screenshotGpu.clone(); // Update global GPU frame (RAW)
-                        // screenshotGpu.download(latestFrameCpu);  // OPTIMIZATION: Removed frequent GPU->CPU download. Only download when needed (e.g., for screenshots conditionally).
+                        if (config.show_window) // Only download to CPU if the debug window is shown
+                        {
+                             screenshotGpu.download(latestFrameCpu);
+                        }
+                        frameCV.notify_one(); // Notify display thread
                     }
-                    frameCV.notify_one(); // Notify display thread
+                }
+                else
+                {
+                    // Handle empty GPU frame if necessary (e.g., log a warning)
                 }
             } else { // Use CPU capture path
                 screenshotCpu = capturer->GetNextFrameCpu();
@@ -295,6 +302,10 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                         // latestFrameGpu = processedFrameGpuForDetector.clone(); 
                     }
                     frameCV.notify_one(); // Notify display thread
+                }
+                else
+                {
+                     // Handle empty CPU frame if necessary (e.g., log a warning)
                 }
             }
 
