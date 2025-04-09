@@ -3,6 +3,8 @@
 #include "config.h"
 #include "other_tools.h"
 #include "capture.h"
+#include <iostream>
+#include <iomanip>
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -48,9 +50,11 @@ public:
         ID3D11DeviceContext **outContext = nullptr)
     {
         HRESULT hr = S_OK;
+        std::cout << "[DDA] Initializing DDAManager for monitor index: " << monitorIndex << std::endl;
 
         IDXGIFactory1 *factory = nullptr;
         hr = CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void **)&factory);
+        std::cout << "[DDA] CreateDXGIFactory1 result: 0x" << std::hex << hr << std::endl;
         if (FAILED(hr))
         {
             std::cerr << "[DDA] Failed to create DXGIFactory1 (hr = " << std::hex << hr << ")." << std::endl;
@@ -59,6 +63,7 @@ public:
 
         IDXGIAdapter1 *adapter = nullptr;
         hr = factory->EnumAdapters1(monitorIndex, &adapter);
+        std::cout << "[DDA] EnumAdapters1 result: 0x" << std::hex << hr << " for index " << monitorIndex << std::endl;
         if (hr == DXGI_ERROR_NOT_FOUND)
         {
             std::cerr << "[DDA] Not found adapter with index " << monitorIndex << ". Error code: DXGI_ERROR_NOT_FOUND." << std::endl;
@@ -71,9 +76,15 @@ public:
             factory->Release();
             return hr;
         }
+        if (adapter) {
+            DXGI_ADAPTER_DESC1 desc;
+            adapter->GetDesc1(&desc);
+            std::wcout << L"[DDA] Using Adapter: " << desc.Description << std::endl;
+        }
 
         IDXGIOutput *output = nullptr;
         hr = adapter->EnumOutputs(0, &output);
+        std::cout << "[DDA] EnumOutputs result: 0x" << std::hex << hr << " for output index 0" << std::endl;
         if (hr == DXGI_ERROR_NOT_FOUND)
         {
             std::cerr << "[DDA] The adapter has no outputs (monitors). Error code: DXGI_ERROR_NOT_FOUND." << std::endl;
@@ -87,6 +98,11 @@ public:
             SafeRelease(&adapter);
             SafeRelease(&factory);
             return hr;
+        }
+        if (output) {
+             DXGI_OUTPUT_DESC desc;
+             output->GetDesc(&desc);
+             std::wcout << L"[DDA] Using Output: " << desc.DeviceName << std::endl;
         }
 
         {
@@ -104,6 +120,7 @@ public:
                 &m_device,
                 nullptr,
                 &m_context);
+            std::cout << "[DDA] D3D11CreateDevice result: 0x" << std::hex << hr << std::endl;
 
             if (FAILED(hr))
             {
@@ -116,6 +133,7 @@ public:
         }
 
         hr = output->QueryInterface(__uuidof(IDXGIOutput1), (void **)&m_output1);
+        std::cout << "[DDA] QueryInterface for IDXGIOutput1 result: 0x" << std::hex << hr << std::endl;
         if (FAILED(hr))
         {
             std::cerr << "[DDA] QueryInterface on IDXGIOutput1 failed (hr = " << std::hex << hr << ")." << std::endl;
@@ -127,10 +145,20 @@ public:
             return hr;
         }
 
+        std::cout << "[DDA] Calling DuplicateOutput with m_device: " << m_device << std::endl;
         hr = m_output1->DuplicateOutput(m_device, &m_duplication);
+        std::cout << "[DDA] DuplicateOutput result: 0x" << std::hex << hr << std::endl;
         if (FAILED(hr))
         {
             std::cerr << "[DDA] DuplicateOutput failed (hr = " << std::hex << hr << ")." << std::endl;
+            if (hr == DXGI_ERROR_UNSUPPORTED) {
+                 std::cerr << "[DDA] Error: DXGI_ERROR_UNSUPPORTED. Desktop Duplication API is not supported on this system/configuration." << std::endl;
+            } else if (hr == DXGI_ERROR_ACCESS_DENIED) {
+                 std::cerr << "[DDA] Error: DXGI_ERROR_ACCESS_DENIED. Access denied, possibly due to protected content or insufficient privileges." << std::endl;
+            } else if (hr == E_INVALIDARG) {
+                 std::cerr << "[DDA] Error: E_INVALIDARG. Check if the device pointer is valid and belongs to the correct adapter." << std::endl;
+            }
+            
             SafeRelease(&m_output1);
             SafeRelease(&m_context);
             SafeRelease(&m_device);
@@ -196,12 +224,10 @@ public:
 
             cudaStreamCreate(&m_cudaStream);
 
-            // Create the capture done event
             cudaError_t eventErr = cudaEventCreateWithFlags(&m_captureDoneEvent, cudaEventDisableTiming);
             if (eventErr != cudaSuccess)
             {
                 std::cerr << "[DDA] Failed to create CUDA event: " << cudaGetErrorString(eventErr) << std::endl;
-                // Handle error appropriately, maybe throw or return error code from Initialize
             }
         }
 
@@ -217,77 +243,66 @@ public:
         return hr;
     }
 
-    // Modified AcquireFrame to only acquire data and metadata, not perform copies.
-    // Returns DXGI_OUTDUPL_FRAME_INFO for metadata checks in the caller.
     HRESULT AcquireFrame(FrameContext &frameCtx, DXGI_OUTDUPL_FRAME_INFO& frameInfo, UINT timeout = 100)
     {
         if (!m_duplication)
             return E_FAIL;
 
-        // DXGI_OUTDUPL_FRAME_INFO frameInfo{}; // Provided by caller now
         IDXGIResource *resource = nullptr;
 
         HRESULT hr = m_duplication->AcquireNextFrame(timeout, &frameInfo, &resource);
         if (hr == DXGI_ERROR_WAIT_TIMEOUT)
         {
-            // Caller should handle timeout
             return hr;
         }
         else if (FAILED(hr))
-        { // Includes ACCESS_LOST etc.
+        {
              if (resource) resource->Release();
-             m_duplication->ReleaseFrame(); // Important to release frame state on error
+             m_duplication->ReleaseFrame();
             return hr;
         }
 
-        // --- Get Texture --- 
         hr = resource->QueryInterface(__uuidof(ID3D11Texture2D), (void **)&frameCtx.texture);
-        resource->Release(); // Always release the resource
+        resource->Release();
         if (FAILED(hr) || !frameCtx.texture)
         {
-             m_duplication->ReleaseFrame(); // Release frame state if texture acquisition fails
-             if (frameCtx.texture) { // QueryInterface might succeed but return null? Unlikely but safe. 
+             m_duplication->ReleaseFrame();
+             if (frameCtx.texture) {
                 frameCtx.texture->Release();
                 frameCtx.texture = nullptr;
              }
-            return FAILED(hr) ? hr : E_FAIL; // Return original error or generic failure
+            return FAILED(hr) ? hr : E_FAIL;
         }
 
-        // --- Get Metadata --- 
-        frameCtx.moveRects.clear(); // Clear previous frame's metadata
+        frameCtx.moveRects.clear();
         frameCtx.dirtyRects.clear();
 
         if (frameInfo.TotalMetadataBufferSize > 0)
         {
             UINT metaDataSize = frameInfo.TotalMetadataBufferSize;
-            m_metaDataBuffer.resize(metaDataSize); // Resize member buffer
+            m_metaDataBuffer.resize(metaDataSize);
 
-            // --- Get Move Rects ---
             UINT moveRectsSize = 0;
             HRESULT hrMeta = m_duplication->GetFrameMoveRects(metaDataSize, 
-                                                              reinterpret_cast<DXGI_OUTDUPL_MOVE_RECT*>(m_metaDataBuffer.data()), // Use member buffer
+                                                              reinterpret_cast<DXGI_OUTDUPL_MOVE_RECT*>(m_metaDataBuffer.data()),
                                                               &moveRectsSize);
             if (SUCCEEDED(hrMeta) && moveRectsSize > 0) {
                 UINT numMoveRects = moveRectsSize / sizeof(DXGI_OUTDUPL_MOVE_RECT);
-                 // Check against member buffer size
                  if (numMoveRects * sizeof(DXGI_OUTDUPL_MOVE_RECT) <= m_metaDataBuffer.size()) { 
-                    frameCtx.moveRects.assign(reinterpret_cast<DXGI_OUTDUPL_MOVE_RECT*>(m_metaDataBuffer.data()), // Use member buffer
+                    frameCtx.moveRects.assign(reinterpret_cast<DXGI_OUTDUPL_MOVE_RECT*>(m_metaDataBuffer.data()),
                                               reinterpret_cast<DXGI_OUTDUPL_MOVE_RECT*>(m_metaDataBuffer.data()) + numMoveRects);
                  }
             }
 
-            // --- Get Dirty Rects ---
-            // Calculate expected size based on resized member buffer and actual move rects size
             UINT expectedDirtyRectsSize = (m_metaDataBuffer.size() >= moveRectsSize) ? (m_metaDataBuffer.size() - moveRectsSize) : 0;
-            UINT actualDirtyRectsSize = 0; // To store the actual size returned by GetFrameDirtyRects
+            UINT actualDirtyRectsSize = 0;
             if (expectedDirtyRectsSize > 0) {
                 BYTE* dirtyRectsDataStart = m_metaDataBuffer.data() + moveRectsSize; 
-                hrMeta = m_duplication->GetFrameDirtyRects(expectedDirtyRectsSize, // Pass the available buffer size
+                hrMeta = m_duplication->GetFrameDirtyRects(expectedDirtyRectsSize,
                                                       reinterpret_cast<RECT*>(dirtyRectsDataStart), 
-                                                      &actualDirtyRectsSize); // Get the actual size
+                                                      &actualDirtyRectsSize);
                 if (SUCCEEDED(hrMeta) && actualDirtyRectsSize > 0) {
                     UINT numDirtyRects = actualDirtyRectsSize / sizeof(RECT);
-                    // Ensure the actual size fits within the expected size derived from the buffer
                     if (numDirtyRects * sizeof(RECT) <= expectedDirtyRectsSize) { 
                         frameCtx.dirtyRects.assign(reinterpret_cast<RECT*>(dirtyRectsDataStart), 
                                                    reinterpret_cast<RECT*>(dirtyRectsDataStart) + numDirtyRects);
@@ -295,10 +310,8 @@ public:
                 }
             }
         }
-        // m_metaDataBuffer is a member and persists
         
-        // Caller is responsible for calling m_duplication->ReleaseFrame() after processing
-        return S_OK; // Successfully acquired frame and metadata
+        return S_OK;
     }
 
     void ReleaseFrame()
@@ -309,7 +322,6 @@ public:
 
     cv::cuda::GpuMat CopySharedTextureToCudaMat(int regionWidth, int regionHeight)
     {
-        // Map the shared texture to CUDA
         cudaError_t err = cudaGraphicsMapResources(1, &m_cudaResource, m_cudaStream);
         if (err != cudaSuccess)
         {
@@ -317,7 +329,6 @@ public:
             return cv::cuda::GpuMat();
         }
 
-        // Get the mapped array
         cudaArray_t cuArray;
         err = cudaGraphicsSubResourceGetMappedArray(&cuArray, m_cudaResource, 0, 0);
         if (err != cudaSuccess)
@@ -327,14 +338,12 @@ public:
             return cv::cuda::GpuMat();
         }
 
-        // Get a frame from the pool or create a new one if needed
         cv::cuda::GpuMat frameGpu;
         if (!m_framePool.empty())
         {
             frameGpu = m_framePool.back();
             m_framePool.pop_back();
 
-            // Ensure the frame has the correct size
             if (frameGpu.rows != regionHeight || frameGpu.cols != regionWidth)
             {
                 frameGpu.release();
@@ -346,20 +355,14 @@ public:
             frameGpu = cv::cuda::GpuMat(regionHeight, regionWidth, CV_8UC4);
         }
 
-        // Copy from the CUDA array to the GpuMat
         cudaMemcpy2DFromArrayAsync(
             frameGpu.data, frameGpu.step,
             cuArray, 0, 0,
             regionWidth * 4, regionHeight,
             cudaMemcpyDeviceToDevice, m_cudaStream);
 
-        // Unmap the resource
         cudaGraphicsUnmapResources(1, &m_cudaResource, m_cudaStream);
 
-        // Ensure the copy is complete
-        // cudaStreamSynchronize(m_cudaStream); // Removed for lower latency. Caller MUST synchronize.
-
-        // Record event on the capture stream to signal copy completion
         if (m_captureDoneEvent)
         {
             cudaEventRecord(m_captureDoneEvent, m_cudaStream);
@@ -368,10 +371,9 @@ public:
         return frameGpu;
     }
 
-    // Return a frame to the pool for reuse
     void RecycleFrame(cv::cuda::GpuMat &frame)
     {
-        if (m_framePool.size() < 10) // Limit pool size
+        if (m_framePool.size() < 10)
         {
             m_framePool.push_back(frame);
         }
@@ -402,7 +404,6 @@ public:
             m_cudaStream = nullptr;
         }
 
-        // Destroy the event
         if (m_captureDoneEvent)
         {
             cudaEventDestroy(m_captureDoneEvent);
@@ -422,13 +423,14 @@ public:
     cudaStream_t m_cudaStream;
     cudaEvent_t m_captureDoneEvent;
     std::vector<cv::cuda::GpuMat> m_framePool;
-    UINT m_timeout = 16; // Reduced timeout for lower latency (approx. 60Hz)
-    std::vector<BYTE> m_metaDataBuffer; // Reuse metadata buffer
+    UINT m_timeout = 16;
+    std::vector<BYTE> m_metaDataBuffer;
 };
 
 DuplicationAPIScreenCapture::DuplicationAPIScreenCapture(int desiredWidth, int desiredHeight)
     : d3dDevice(nullptr), d3dContext(nullptr), deskDupl(nullptr), stagingTexture(nullptr), output1(nullptr), sharedTexture(nullptr), cudaResource(nullptr), cudaStream(nullptr), regionWidth(desiredWidth), regionHeight(desiredHeight), screenWidth(0), screenHeight(0)
 {
+    std::cout << "[Capture] DuplicationAPIScreenCapture constructor called." << std::endl;
     m_ddaManager = std::make_unique<DDAManager>();
 
     HRESULT hr = m_ddaManager->Initialize(
@@ -470,49 +472,35 @@ cv::cuda::GpuMat DuplicationAPIScreenCapture::GetNextFrameGpu()
         return cv::cuda::GpuMat();
 
     HRESULT hr = S_OK;
-    FrameContext frameCtx; // Holds texture, move/dirty rects
-    DXGI_OUTDUPL_FRAME_INFO frameInfo = {}; // Holds metadata info
+    FrameContext frameCtx;
+    DXGI_OUTDUPL_FRAME_INFO frameInfo = {};
 
-    // Define the target capture area on the screen *early*
     RECT captureScreenRect;
     captureScreenRect.left = (screenWidth - regionWidth) / 2;
     captureScreenRect.top = (screenHeight - regionHeight) / 2;
     captureScreenRect.right = captureScreenRect.left + regionWidth;
     captureScreenRect.bottom = captureScreenRect.top + regionHeight;
 
-    // Acquire the next frame - populates frameCtx and frameInfo
     hr = m_ddaManager->AcquireFrame(frameCtx, frameInfo, m_ddaManager->m_timeout);
 
     if (hr == DXGI_ERROR_WAIT_TIMEOUT)
     {
-        // std::cout << "[Capture] Wait timeout" << std::endl; // Optional: log timeout
-        // No frame acquired, frameCtx.texture should be null
-        // DDAManager::AcquireFrame doesn't call ReleaseFrame on timeout
         return cv::cuda::GpuMat();
     }
     else if (hr == DXGI_ERROR_ACCESS_LOST || hr == DXGI_ERROR_DEVICE_RESET || hr == DXGI_ERROR_DEVICE_REMOVED)
     {
         std::cerr << "[Capture] DDA Access lost/Device reset. Reinitializing..." << std::endl;
-        capture_method_changed.store(true); // Signal reinitialization
-        // DDAManager::AcquireFrame already called ReleaseFrame internally on these errors
-        // frameCtx.texture should be null or already released
+        capture_method_changed.store(true);
         return cv::cuda::GpuMat(); 
     }
     else if (FAILED(hr))
     {
         std::cerr << "[Capture] AcquireFrame failed (hr=0x" << std::hex << hr << ")" << std::endl;
-        // DDAManager::AcquireFrame already called ReleaseFrame internally on failure
-        // frameCtx.texture should be null or already released
         return cv::cuda::GpuMat();
     }
 
-    // If we reach here, AcquireFrame succeeded and frameCtx.texture is valid.
-    // DDAManager::AcquireFrame did NOT call ReleaseFrame yet.
-
-    // --- Start Copy Logic (Simplified: Always copy the full region) ---
     if (m_ddaManager->m_context && m_ddaManager->m_sharedTexture && frameCtx.texture)
     {
-        // Always copy the entire target region from the source texture
         D3D11_BOX sourceBox;
         sourceBox.left = captureScreenRect.left; 
         sourceBox.top = captureScreenRect.top;
@@ -522,34 +510,29 @@ cv::cuda::GpuMat DuplicationAPIScreenCapture::GetNextFrameGpu()
         sourceBox.back = 1;
 
         m_ddaManager->m_context->CopySubresourceRegion(
-            m_ddaManager->m_sharedTexture, // Dest texture
-            0,                             // Dest subresource
-            0, 0, 0,                       // Dest X, Y, Z (destination is top-left of shared texture)
-            frameCtx.texture,              // Src texture (copy from the newly acquired frame)
-            0,                             // Src subresource
-            &sourceBox);                   // Src box defined by captureScreenRect
+            m_ddaManager->m_sharedTexture,
+            0,
+            0, 0, 0,
+            frameCtx.texture,
+            0,
+            &sourceBox);
     }
-    // --- End Copy Logic ---
 
-    // Release the acquired desktop frame back to DXGI *after* copying from it
     m_ddaManager->ReleaseFrame(); 
 
     cv::cuda::GpuMat frameGpu = m_ddaManager->CopySharedTextureToCudaMat(regionWidth, regionHeight);
 
-    // We MUST release the texture obtained from QueryInterface
     if (frameCtx.texture)
     {
          frameCtx.texture->Release();
          frameCtx.texture = nullptr;
     }
 
-    // Recycle the previous frame if we have one
     if (!m_previousFrame.empty())
     {
         m_ddaManager->RecycleFrame(m_previousFrame);
     }
 
-    // Store the current frame for recycling next time
     m_previousFrame = frameGpu;
 
     return frameGpu;
@@ -588,7 +571,6 @@ cv::Mat DuplicationAPIScreenCapture::GetNextFrameCpu()
         return cv::Mat();
     }
 
-    // Copy to shared texture
     if (m_ddaManager->m_context && m_ddaManager->m_sharedTexture && frameCtx.texture)
     {
         D3D11_BOX sourceBox;
@@ -604,11 +586,9 @@ cv::Mat DuplicationAPIScreenCapture::GetNextFrameCpu()
             frameCtx.texture, 0, &sourceBox);
     }
 
-    // Release acquired frame
     m_ddaManager->ReleaseFrame();
 
-    // Copy shared texture to CPU Mat via CUDA mapping
-    cv::Mat frameCpu(regionHeight, regionWidth, CV_8UC4); // Create CPU Mat
+    cv::Mat frameCpu(regionHeight, regionWidth, CV_8UC4);
     if (!frameCpu.empty() && m_ddaManager->m_cudaResource && m_ddaManager->m_cudaStream)
     {
         cudaError_t err = cudaGraphicsMapResources(1, &m_ddaManager->m_cudaResource, m_ddaManager->m_cudaStream);
@@ -618,7 +598,6 @@ cv::Mat DuplicationAPIScreenCapture::GetNextFrameCpu()
             err = cudaGraphicsSubResourceGetMappedArray(&cuArray, m_ddaManager->m_cudaResource, 0, 0);
             if (err == cudaSuccess)
             {
-                // Copy from CUDA array to Host (CPU) memory
                 err = cudaMemcpy2DFromArrayAsync(
                     frameCpu.data,        // Destination: CPU Mat data pointer
                     frameCpu.step,        // Destination: CPU Mat step (bytes per row)
@@ -631,13 +610,12 @@ cv::Mat DuplicationAPIScreenCapture::GetNextFrameCpu()
 
                 if (err == cudaSuccess)
                 {
-                    // Synchronize the stream to ensure the copy is complete before returning
                     cudaStreamSynchronize(m_ddaManager->m_cudaStream);
                 }
                 else
                 {
                     std::cerr << "[DDA] cudaMemcpy2DFromArrayAsync (D->H) error: " << cudaGetErrorString(err) << std::endl;
-                    frameCpu.release(); // Release the mat on error
+                    frameCpu.release();
                 }
             }
             else
@@ -656,27 +634,23 @@ cv::Mat DuplicationAPIScreenCapture::GetNextFrameCpu()
          if (frameCpu.empty()) std::cerr << "[DDA] Failed to create CPU Mat" << std::endl;
          if (!m_ddaManager->m_cudaResource) std::cerr << "[DDA] CUDA resource invalid for CPU path" << std::endl;
          if (!m_ddaManager->m_cudaStream) std::cerr << "[DDA] CUDA stream invalid for CPU path" << std::endl;
-        frameCpu.release(); // Release if setup failed
+        frameCpu.release();
     }
 
-    // Release the texture obtained from QueryInterface
     if (frameCtx.texture)
     {
          frameCtx.texture->Release();
          frameCtx.texture = nullptr;
     }
 
-    // Note: Frame recycling is currently GPU-based. CPU path doesn't recycle.
-
     return frameCpu;
 }
 
-// Implementation for the event getter function
 cudaEvent_t DuplicationAPIScreenCapture::GetCaptureDoneEvent() const
 {
    if (m_ddaManager)
    {
        return m_ddaManager->m_captureDoneEvent;
    }
-   return nullptr; // Or handle error appropriately
+   return nullptr;
 }

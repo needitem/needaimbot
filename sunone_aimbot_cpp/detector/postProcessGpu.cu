@@ -5,6 +5,9 @@
 #include <thrust/host_vector.h>
 #include <thrust/sort.h>
 #include <thrust/execution_policy.h>
+#include <thrust/copy.h>       // For thrust::copy_if
+#include <thrust/iterator/counting_iterator.h> // For thrust::counting_iterator
+#include <thrust/gather.h>     // Added for thrust::gather
 
 #include "postProcess.h"
 
@@ -62,6 +65,171 @@ __global__ void nmsKernel(
     }
 }
 
+// Functor for Thrust copy_if
+struct is_kept {
+    const bool* d_keep_ptr;
+    is_kept(const bool* ptr) : d_keep_ptr(ptr) {}
+    __host__ __device__
+    bool operator()(const int& i) const {
+        return d_keep_ptr[i];
+    }
+};
+
+// Modified NMSGpu function for direct GPU processing
+void NMSGpu(
+    const Detection* d_input_detections,
+    int input_num_detections,
+    Detection* d_output_detections,
+    int* d_output_count_gpu,
+    int max_output_detections,
+    float nmsThreshold,
+    cudaStream_t stream)
+{
+    if (input_num_detections <= 0) {
+        cudaMemsetAsync(d_output_count_gpu, 0, sizeof(int), stream);
+        return;
+    }
+
+    // --- Temporary GPU Buffers --- 
+    // Need buffers for coordinates, areas, scores, IoU matrix, and keep flags.
+    // Consider using a memory pool for better performance if NMS is called frequently.
+    int* d_x1 = nullptr;
+    int* d_y1 = nullptr;
+    int* d_x2 = nullptr;
+    int* d_y2 = nullptr;
+    float* d_areas = nullptr;
+    float* d_scores = nullptr;
+    float* d_iou_matrix = nullptr;
+    bool* d_keep = nullptr;
+    int* d_indices = nullptr; // For copy_if
+
+    cudaError_t err;
+    err = cudaMallocAsync(&d_x1, input_num_detections * sizeof(int), stream);
+    if (err != cudaSuccess) goto cleanup_and_exit;
+    err = cudaMallocAsync(&d_y1, input_num_detections * sizeof(int), stream);
+    if (err != cudaSuccess) goto cleanup_and_exit;
+    err = cudaMallocAsync(&d_x2, input_num_detections * sizeof(int), stream);
+    if (err != cudaSuccess) goto cleanup_and_exit;
+    err = cudaMallocAsync(&d_y2, input_num_detections * sizeof(int), stream);
+    if (err != cudaSuccess) goto cleanup_and_exit;
+    err = cudaMallocAsync(&d_areas, input_num_detections * sizeof(float), stream);
+    if (err != cudaSuccess) goto cleanup_and_exit;
+    err = cudaMallocAsync(&d_scores, input_num_detections * sizeof(float), stream);
+    if (err != cudaSuccess) goto cleanup_and_exit;
+    err = cudaMallocAsync(&d_iou_matrix, (size_t)input_num_detections * input_num_detections * sizeof(float), stream);
+    if (err != cudaSuccess) goto cleanup_and_exit;
+    err = cudaMallocAsync(&d_keep, input_num_detections * sizeof(bool), stream);
+    if (err != cudaSuccess) goto cleanup_and_exit;
+    err = cudaMallocAsync(&d_indices, input_num_detections * sizeof(int), stream);
+    if (err != cudaSuccess) goto cleanup_and_exit;
+
+    // --- Kernel to Extract Data from Detection Struct --- 
+    // (Need to write this kernel: extractDataKernel)
+    // extractDataKernel<<<...>>> (d_input_detections, input_num_detections, d_x1, d_y1, d_x2, d_y2, d_areas, d_scores, stream);
+    // Placeholder: For now, assume data is already in separate arrays (this won't work yet)
+    // In a real scenario, you MUST extract data from d_input_detections here.
+    // Let's add a simple placeholder kernel.
+    
+    /*
+    __global__ void extractDataKernel(
+        const Detection* input, int n, int* x1, int* y1, int* x2, int* y2, float* areas, float* scores
+    ) {
+        int idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx < n) {
+            const cv::Rect& box = input[idx].box;
+            x1[idx] = box.x;
+            y1[idx] = box.y;
+            x2[idx] = box.x + box.width;
+            y2[idx] = box.y + box.height;
+            areas[idx] = (float)box.width * box.height; // area might be 0 if width/height is 0
+            scores[idx] = input[idx].confidence;
+        }
+    }
+    // Launch configuration needs calculation
+    // extractDataKernel<<<grid, block, 0, stream>>>(...);
+    */
+    
+    // --- Initialize Keep Flags and IoU Matrix --- 
+    // Initialize d_keep to true using Thrust or a simple kernel
+    // thrust::fill(thrust::cuda::par.on(stream), thrust::device_pointer_cast(d_keep), thrust::device_pointer_cast(d_keep) + input_num_detections, true);
+    cudaMemsetAsync(d_keep, 1, input_num_detections * sizeof(bool), stream); // Set all to true (1)
+    cudaMemsetAsync(d_iou_matrix, 0, (size_t)input_num_detections * input_num_detections * sizeof(float), stream); // Zero out IoU matrix
+
+    // --- Calculate IoU Matrix --- 
+    {
+        dim3 block_size(16, 16);
+        dim3 grid_size((input_num_detections + block_size.x - 1) / block_size.x,
+                       (input_num_detections + block_size.y - 1) / block_size.y);
+        calculateIoUKernel<<<grid_size, block_size, 0, stream>>>(
+            d_x1, d_y1, d_x2, d_y2, d_areas, d_iou_matrix, input_num_detections, nmsThreshold // Pass nmsThreshold here? Original kernel didn't use it directly
+        );
+    }
+
+    // --- Perform NMS --- 
+    {
+        const int block_nms = 256;
+        const int grid_nms = (input_num_detections + block_nms - 1) / block_nms;
+        nmsKernel<<<grid_nms, block_nms, 0, stream>>>(
+            d_keep, d_iou_matrix, d_scores, input_num_detections, nmsThreshold
+        );
+    }
+
+    // --- Compact Results using Thrust copy_if --- 
+    {
+        thrust::device_ptr<const Detection> d_input_ptr(d_input_detections);
+        thrust::device_ptr<Detection> d_output_ptr(d_output_detections);
+        thrust::counting_iterator<int> first(0);
+        thrust::counting_iterator<int> last = first + input_num_detections;
+        
+        // Create temporary buffer for indices to keep
+        thrust::device_ptr<int> d_indices_ptr(d_indices);
+
+        // 1. Filter indices: Keep indices where d_keep is true
+        auto end_indices_iter = thrust::copy_if(
+            thrust::cuda::par.on(stream),
+            first, last,
+            d_indices_ptr,
+            is_kept(d_keep) // Use the functor with the keep flags
+        );
+        int final_count = end_indices_iter - d_indices_ptr;
+
+        // Ensure final_count doesn't exceed output buffer size
+        final_count = min(final_count, max_output_detections);
+
+        // 2. Gather data: Use the filtered indices to copy Detection objects
+        thrust::gather(
+            thrust::cuda::par.on(stream),
+            d_indices_ptr, d_indices_ptr + final_count, // Indices to gather from
+            d_input_ptr,                               // Input Detection array
+            d_output_ptr                               // Output Detection array
+        );
+
+        // Copy the final count to the output count buffer
+        cudaMemcpyAsync(d_output_count_gpu, &final_count, sizeof(int), cudaMemcpyHostToDevice, stream);
+    }
+
+cleanup_and_exit:
+    // Free temporary buffers (consider using RAII or smart pointers for robustness)
+    cudaFreeAsync(d_x1, stream);
+    cudaFreeAsync(d_y1, stream);
+    cudaFreeAsync(d_x2, stream);
+    cudaFreeAsync(d_y2, stream);
+    cudaFreeAsync(d_areas, stream);
+    cudaFreeAsync(d_scores, stream);
+    cudaFreeAsync(d_iou_matrix, stream);
+    cudaFreeAsync(d_keep, stream);
+    cudaFreeAsync(d_indices, stream);
+
+    // Check for errors that might have occurred during cleanup or earlier
+    err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        fprintf(stderr, "[NMSGpu] CUDA error during processing or cleanup: %s\n", cudaGetErrorString(err));
+        // Optionally, try to set the output count to 0 if an error occurred before that point
+        // cudaMemsetAsync(d_output_count_gpu, 0, sizeof(int), stream);
+    }
+}
+
+/* Original NMSGpu implementation (operates on std::vector)
 void NMSGpu(std::vector<Detection>& detections, float nmsThreshold, cudaStream_t stream) {
     if (detections.empty()) return;
     
@@ -140,3 +308,4 @@ void NMSGpu(std::vector<Detection>& detections, float nmsThreshold, cudaStream_t
     
     detections = std::move(result);
 } 
+*/ 
