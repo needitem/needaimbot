@@ -71,13 +71,13 @@ void NMS(std::vector<Detection>& detections, float nmsThreshold)
     detections = std::move(result);
 }
 
-std::vector<Detection> postProcessYolo10(
+// --- New CPU Decoding Functions ---
+std::vector<Detection> decodeYolo10(
     const float* output,
     const std::vector<int64_t>& shape,
     int numClasses,
     float confThreshold,
-    float nmsThreshold
-)
+    float img_scale)
 {
     std::vector<Detection> detections;
 
@@ -97,52 +97,41 @@ std::vector<Detection> postProcessYolo10(
             float dx = det[2];
             float dy = det[3];
 
-            int x = static_cast<int>(cx * detector.img_scale);
-            int y = static_cast<int>(cy * detector.img_scale);
-            int width = static_cast<int>((dx - cx) * detector.img_scale);
-            int height = static_cast<int>((dy - cy) * detector.img_scale);
+            int x = static_cast<int>(cx * img_scale);
+            int y = static_cast<int>(cy * img_scale);
+            int width = static_cast<int>((dx - cx) * img_scale);
+            int height = static_cast<int>((dy - cy) * img_scale);
+
+            // Basic sanity check for box dimensions
+            if (width <= 0 || height <= 0) continue;
 
             cv::Rect box(x, y, width, height);
 
-            Detection det;
-            det.box = box;
-            det.confidence = confidence;
-            det.classId = classId;
+            Detection detection;
+            detection.box = box;
+            detection.confidence = confidence;
+            detection.classId = classId;
 
-            detections.push_back(det);
+            detections.push_back(detection);
         }
     }
-
-    if (!detections.empty()) {
-        try {
-            // Use GPU NMS by default
-            NMSGpu(detections, nmsThreshold);
-        }
-        catch (const std::exception& e) {
-            // Fallback to CPU version if GPU fails
-            std::cerr << "[postProcess] GPU NMS failed, falling back to CPU: " << e.what() << std::endl;
-            NMS(detections, nmsThreshold);
-        }
-    }
-
     return detections;
 }
 
-std::vector<Detection> postProcessYolo11(
+std::vector<Detection> decodeYolo11(
     const float* output,
     const std::vector<int64_t>& shape,
     int numClasses,
     float confThreshold,
-    float nmsThreshold
-)
+    float img_scale)
 {
+    std::vector<Detection> detections;
     if (shape.size() != 3)
     {
-        std::cerr << "[postProcess] Unsupported output shape" << std::endl;
-        return std::vector<Detection>();
+        std::cerr << "[decodeYolo11] Unsupported output shape" << std::endl;
+        return detections;
     }
 
-    std::vector<Detection> detections;
     detections.reserve(shape[2]);
 
     int rows = shape[1];
@@ -150,14 +139,12 @@ std::vector<Detection> postProcessYolo11(
     
     if (rows < 4 + numClasses)
     {
-        std::cerr << "[postProcess] Number of classes exceeds available rows in det_output" << std::endl;
+        std::cerr << "[decodeYolo11] Number of classes exceeds available rows in det_output" << std::endl;
         return detections;
     }
     
     cv::Mat det_output(rows, cols, CV_32F, (void*)output);
 
-    const float img_scale = detector.img_scale;
-    
     for (int i = 0; i < cols; ++i)
     {
         cv::Mat classes_scores = det_output.col(i).rowRange(4, 4 + numClasses);
@@ -176,6 +163,9 @@ std::vector<Detection> postProcessYolo11(
             const float half_ow = 0.5f * ow;
             const float half_oh = 0.5f * oh;
             
+            // Basic sanity check for box dimensions
+            if (ow <= 0 || oh <= 0) continue;
+
             cv::Rect box;
             box.x = static_cast<int>((cx - half_ow) * img_scale);
             box.y = static_cast<int>((cy - half_oh) * img_scale);
@@ -190,6 +180,20 @@ std::vector<Detection> postProcessYolo11(
             detections.push_back(detection);
         }
     }
+    return detections;
+}
+
+// --- Original Combined Functions (Modified to use decode + NMS, or commented out) ---
+/* Original implementation commented out - NMS is now separate
+std::vector<Detection> postProcessYolo10(
+    const float* output,
+    const std::vector<int64_t>& shape,
+    int numClasses,
+    float confThreshold,
+    float nmsThreshold
+)
+{
+    std::vector<Detection> detections = decodeYolo10(output, shape, numClasses, confThreshold);
 
     if (!detections.empty()) {
         try {
@@ -205,3 +209,31 @@ std::vector<Detection> postProcessYolo11(
 
     return detections;
 }
+*/
+
+/* Original implementation commented out - NMS is now separate
+std::vector<Detection> postProcessYolo11(
+    const float* output,
+    const std::vector<int64_t>& shape,
+    int numClasses,
+    float confThreshold,
+    float nmsThreshold
+)
+{
+    std::vector<Detection> detections = decodeYolo11(output, shape, numClasses, confThreshold);
+
+    if (!detections.empty()) {
+        try {
+            // Use GPU NMS by default
+            NMSGpu(detections, nmsThreshold);
+        }
+        catch (const std::exception& e) {
+            // Fallback to CPU version if GPU fails
+            std::cerr << "[postProcess] GPU NMS failed, falling back to CPU: " << e.what() << std::endl;
+            NMS(detections, nmsThreshold);
+        }
+    }
+
+    return detections;
+}
+*/

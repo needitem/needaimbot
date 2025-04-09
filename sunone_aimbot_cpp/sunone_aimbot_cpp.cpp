@@ -178,10 +178,6 @@ void mouseThreadFunction(MouseThread &mouseThread)
     bool is_active = false;
     auto last_active_time = std::chrono::steady_clock::now();
     
-    DetectionData detectionData;
-    std::vector<float> target_scores;
-    target_scores.reserve(64);
-    
     const int FRAMES_BETWEEN_TIME_CHECK = 10;
     int frame_counter = 0;
     
@@ -201,6 +197,9 @@ void mouseThreadFunction(MouseThread &mouseThread)
         }
         
         bool newFrameAvailable = false;
+        bool has_target_from_detector = false;
+        Detection best_target_from_detector;
+
         {
             std::unique_lock<std::mutex> lock(detector.detectionMutex);
             
@@ -215,21 +214,12 @@ void mouseThreadFunction(MouseThread &mouseThread)
                 newFrameAvailable = true;
                 lastDetectionVersion = detector.detectionVersion;
                 
-                detectionData.boxes = std::move(detector.detectedBoxes);
-                detectionData.classes = std::move(detector.detectedClasses);
-                detectionData.version = detector.detectionVersion;
-            }
-        } 
-        
-        if (!newFrameAvailable) {
-            if (is_active && (++frame_counter >= FRAMES_BETWEEN_TIME_CHECK)) {
-                frame_counter = 0;
-                if (std::chrono::steady_clock::now() - last_active_time > std::chrono::milliseconds(300)) {
-                    is_active = false;
+                has_target_from_detector = detector.m_hasBestTarget;
+                if (has_target_from_detector) {
+                    best_target_from_detector = detector.m_bestTargetHost;
                 }
             }
-            continue;
-        }
+        } 
         
         if (config.easynorecoil && is_shooting && is_zooming) {
             mouseThread.applyRecoilCompensation(config.easynorecoilstrength);
@@ -240,47 +230,7 @@ void mouseThreadFunction(MouseThread &mouseThread)
             input_method_changed.store(false);
         }
 
-        if (detection_resolution_changed.load()) {
-            {
-                std::lock_guard<std::mutex> lock(configMutex);
-                mouseThread.updateConfig(
-                    config.detection_resolution,
-                    config.dpi,
-                    config.fovX,
-                    config.fovY,
-                    config.kp_x,
-                    config.ki_x,
-                    config.kd_x,
-                    config.kp_y,
-                    config.ki_y,
-                    config.kd_y,
-                    config.process_noise_q,
-                    config.measurement_noise_r,
-                    config.auto_shoot,
-                    config.bScope_multiplier,
-                    config.norecoil_ms);
-            }
-            detection_resolution_changed.store(false);
-        }
-
-        optimized::processBatchedBoxes(
-            detectionData.boxes,
-            detectionData.classes,
-            target_scores,
-            config.detection_resolution,
-            config.detection_resolution,
-            config.disable_headshot
-        );
-
-        // Find the best target using the pre-calculated scores
-        AimbotTarget* target = findBestTarget(detectionData.boxes, 
-                                            detectionData.classes, 
-                                            target_scores, // Pass the calculated scores
-                                            config.disable_headshot);
-       
-        bool has_target = (target != nullptr);
-        
-        if (is_aiming && has_target) {
+        if (is_aiming && has_target_from_detector) {
             is_active = true;
             
             if (++frame_counter >= FRAMES_BETWEEN_TIME_CHECK) {
@@ -288,16 +238,22 @@ void mouseThreadFunction(MouseThread &mouseThread)
                 last_active_time = std::chrono::steady_clock::now();
             }
             
-            mouseThread.moveMouse(*target);
+            AimbotTarget target(
+                best_target_from_detector.box.x, 
+                best_target_from_detector.box.y, 
+                best_target_from_detector.box.width, 
+                best_target_from_detector.box.height,
+                best_target_from_detector.classId
+            );
+            
+            mouseThread.moveMouse(target);
             
             if (auto_shooting) {
-                mouseThread.pressMouse(*target);
+                mouseThread.pressMouse(target);
             }
         } else if (auto_shooting) {
             mouseThread.releaseMouse();
         }
-        
-        delete target;
     }
 }
 
@@ -398,7 +354,6 @@ int main()
         }
 
         detector.initialize("models/" + config.ai_model);
-        detection_resolution_changed.store(true);
 
         initializeInputMethod();
 

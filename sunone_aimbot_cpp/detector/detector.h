@@ -18,8 +18,13 @@
 #include <opencv2/cudaarithm.hpp>
 #include <cuda_runtime_api.h>
 
+#include "postProcess.h"
+
 typedef struct CUstream_st* cudaStream_t;
 typedef struct CUevent_st* cudaEvent_t;
+
+// Forward declaration for the Detection struct
+struct Detection;
 
 class Detector
 {
@@ -62,6 +67,19 @@ public:
     cudaEvent_t m_captureDoneEvent = nullptr;
 
     cv::cuda::GpuMat resizedBuffer;
+
+    // GPU Post-processing results
+    void* m_finalDetectionsGpu = nullptr;        // Buffer for final detections on GPU
+    int* m_finalDetectionsCountGpu = nullptr;     // Buffer for count of final detections on GPU
+    int m_finalDetectionsCountHost = 0;        // Count of final detections on Host
+    std::vector<Detection> m_finalDetectionsHost; // Buffer for final detections on Host (temp)
+
+    // GPU Scoring & Best Target Selection results
+    float* m_scoresGpu = nullptr;             // Buffer for scores on GPU
+    int* m_bestTargetIndexGpu = nullptr;  // Buffer for best target index on GPU (size 1)
+    int m_bestTargetIndexHost = -1;       // Best target index on Host
+    Detection m_bestTargetHost;           // Best target details on Host
+    bool m_hasBestTarget = false;         // Flag if a valid best target exists
 
 private:
     std::unique_ptr<nvinfer1::IRuntime> runtime;
@@ -122,10 +140,10 @@ private:
 
     void loadEngine(const std::string &engineFile);
     void preProcess(const cv::cuda::GpuMat &frame);
-    void postProcess(const float *output, const std::string &outputName);
     void getInputNames();
     void getOutputNames();
     void getBindings();
+    void performGpuPostProcessing(cudaStream_t stream);
 };
 
 #endif // DETECTOR_H
