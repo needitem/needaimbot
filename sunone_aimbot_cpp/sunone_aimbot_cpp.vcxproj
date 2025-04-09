@@ -59,7 +59,6 @@
   <ItemGroup>
     <ClInclude Include="capture\capture.h" />
     <ClInclude Include="capture\duplication_api_capture.h" />
-    <ClInclude Include="capture\virtual_camera.h" />
     <ClInclude Include="capture\winrt_capture.h" />
     <ClInclude Include="config\config.h" />
     <ClInclude Include="detector\detector.h" />
