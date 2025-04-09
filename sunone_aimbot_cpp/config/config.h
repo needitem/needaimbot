@@ -8,7 +8,7 @@ class Config
 {
 public:
     // Capture
-    std::string capture_method; // "duplication_api", "winrt", "virtual_camera"
+    // std::string capture_method; // "duplication_api", "winrt", "virtual_camera"
     int detection_resolution;
     int capture_fps;
     int monitor_idx;

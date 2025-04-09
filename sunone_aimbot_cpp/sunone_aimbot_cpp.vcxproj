@@ -22,8 +22,6 @@
   <ItemGroup>
     <ClCompile Include="capture\capture.cpp" />
     <ClCompile Include="capture\duplication_api_capture.cpp" />
-    <ClCompile Include="capture\virtual_camera.cpp" />
-    <ClCompile Include="capture\winrt_capture.cpp" />
     <ClCompile Include="config\config.cpp" />
     <ClCompile Include="detector\detector.cpp" />
     <ClCompile Include="detector\postProcess.cpp" />

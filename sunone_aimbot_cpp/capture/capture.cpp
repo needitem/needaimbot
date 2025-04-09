@@ -42,8 +42,8 @@
 #include "other_tools.h"
 
 #include "duplication_api_capture.h"
-#include "winrt_capture.h"
-#include "virtual_camera.h"
+// #include "winrt_capture.h" // Removed
+// #include "virtual_camera.h" // Removed for now, can be added back if needed
 
 // Assume detector is globally accessible or passed to captureThread
 extern Detector detector;
@@ -52,8 +52,8 @@ extern Detector detector;
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "windowsapp.lib")
 
-// Helper function to create a capturer instance based on config
-// This function encapsulates the logic for selecting and initializing the appropriate capturer.
+// Helper function to create a capturer instance based on config - REMOVED
+/*
 IScreenCapture* createCapturer(int width, int height) {
     IScreenCapture* capturer = nullptr;
     const std::string& method = config.capture_method; // Cache config value for efficiency
@@ -78,6 +78,7 @@ IScreenCapture* createCapturer(int width, int height) {
     }
     return capturer;
 }
+*/
 
 cv::cuda::GpuMat latestFrameGpu;
 cv::Mat latestFrameCpu;
@@ -93,11 +94,10 @@ std::chrono::time_point<std::chrono::high_resolution_clock> captureFpsStartTime;
 
 void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 {
-    // Initialize WinRT apartment once at the start of the thread.
-    // This is necessary for the WinRT capture method and safe to call even if not used.
-    winrt::init_apartment(winrt::apartment_type::multi_threaded);
-    // Use RAII to ensure uninitialization even if exceptions occur.
-    struct WinRTUninitializer { ~WinRTUninitializer() { winrt::uninit_apartment(); } } winrtUninitializer;
+    // Initialize WinRT apartment once at the start of the thread. - REMOVED
+    // winrt::init_apartment(winrt::apartment_type::multi_threaded);
+    // Use RAII to ensure uninitialization even if exceptions occur. - REMOVED
+    // struct WinRTUninitializer { ~WinRTUninitializer() { winrt::uninit_apartment(); } } winrtUninitializer;
 
     try
     {
@@ -107,11 +107,12 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
             std::cout << "[Capture] CUDA Support: " << cv::cuda::getCudaEnabledDeviceCount() << " devices found." << std::endl;
         }
 
-        // Use the helper function for initial capturer creation
+        // Use the helper function for initial capturer creation - REPLACED
         // Use std::unique_ptr for automatic memory management
-        std::unique_ptr<IScreenCapture> capturer(createCapturer(CAPTURE_WIDTH, CAPTURE_HEIGHT));
+        // std::unique_ptr<IScreenCapture> capturer(createCapturer(CAPTURE_WIDTH, CAPTURE_HEIGHT));
+        std::unique_ptr<DuplicationAPIScreenCapture> capturer = std::make_unique<DuplicationAPIScreenCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT);
         if (!capturer) {
-             std::cerr << "[Capture] Failed to initialize capturer!" << std::endl;
+             std::cerr << "[Capture] Failed to initialize DuplicationAPIScreenCapture!" << std::endl;
              return; // Exit thread if initialization fails
         }
 
@@ -171,7 +172,7 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
             // by specific capturer implementations without needing full recreation.
             // This check assumes recreation is necessary for these changes.
             if (detection_resolution_changed.load() ||
-                capture_method_changed.load() ||
+                // capture_method_changed.load() || // Removed
                 capture_cursor_changed.load() ||
                 capture_borders_changed.load())
             {
@@ -181,10 +182,11 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 int new_CAPTURE_WIDTH = config.detection_resolution;
                 int new_CAPTURE_HEIGHT = config.detection_resolution;
 
-                // Use the helper function to create the new capturer
-                capturer.reset(createCapturer(new_CAPTURE_WIDTH, new_CAPTURE_HEIGHT)); // unique_ptr handles deleting the old one
+                // Use the helper function to create the new capturer - REPLACED
+                // capturer.reset(createCapturer(new_CAPTURE_WIDTH, new_CAPTURE_HEIGHT)); // unique_ptr handles deleting the old one
+                capturer.reset(new DuplicationAPIScreenCapture(new_CAPTURE_WIDTH, new_CAPTURE_HEIGHT));
                 if (!capturer) {
-                    std::cerr << "[Capture] Failed to re-initialize capturer after config change!" << std::endl;
+                    std::cerr << "[Capture] Failed to re-initialize DuplicationAPIScreenCapture after config change!" << std::endl;
                     break; // Exit the loop if re-initialization fails
                 }
 
@@ -200,7 +202,7 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 
                 // Reset the change flags
                 detection_resolution_changed.store(false);
-                capture_method_changed.store(false);
+                // capture_method_changed.store(false); // Removed
                 capture_cursor_changed.store(false);
                 capture_borders_changed.store(false);
             }

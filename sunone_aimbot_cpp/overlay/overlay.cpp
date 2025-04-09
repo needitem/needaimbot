@@ -24,7 +24,6 @@
 #include "capture.h"
 #include "keyboard_listener.h"
 #include "other_tools.h"
-#include "virtual_camera.h"
 
 ID3D11Device* g_pd3dDevice = NULL;
 ID3D11DeviceContext* g_pd3dDeviceContext = NULL;
@@ -306,12 +305,10 @@ void OverlayThread()
     bool show_overlay = false;
 
     // Capture
-    std::string prev_capture_method = config.capture_method;
     int prev_detection_resolution = config.detection_resolution;
     int prev_capture_fps = config.capture_fps;
     int prev_monitor_idx = config.monitor_idx;
     bool prev_circle_mask = config.circle_mask;
-
     bool prev_capture_borders = config.capture_borders;
     bool prev_capture_cursor = config.capture_cursor;
 
@@ -514,7 +511,7 @@ void OverlayThread()
                     }
 
                     // CAPTURE CURSOR
-                    if (prev_capture_cursor != config.capture_cursor && config.capture_method == "winrt")
+                    if (prev_capture_cursor != config.capture_cursor)
                     {
                         capture_cursor_changed.store(true);
                         prev_capture_cursor = config.capture_cursor;
@@ -522,7 +519,7 @@ void OverlayThread()
                     }
 
                     // CAPTURE BORDERS
-                    if (prev_capture_borders != config.capture_borders && config.capture_method == "winrt")
+                    if (prev_capture_borders != config.capture_borders)
                     {
                         capture_borders_changed.store(true);
                         prev_capture_borders = config.capture_borders;
