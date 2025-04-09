@@ -75,6 +75,7 @@
     <ClInclude Include="mouse\InputMethod.h" />
     <ClInclude Include="mouse\KalmanFilter2D.h" />
     <ClInclude Include="mouse\PIDController2D.h" />
+    <ClInclude Include="detector\scoringGpu.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
@@ -84,5 +85,6 @@
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="detector\postProcessGpu.cu" />
+    <CudaCompile Include="detector\scoringGpu.cu" />
   </ItemGroup>
 </Project>
