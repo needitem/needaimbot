@@ -175,25 +175,21 @@ void mouseThreadFunction(MouseThread &mouseThread)
     constexpr auto idle_timeout = std::chrono::milliseconds(30);
     constexpr auto active_timeout = std::chrono::milliseconds(5);
     
-    bool is_active = false;
-    auto last_active_time = std::chrono::steady_clock::now();
-    
-    const int FRAMES_BETWEEN_TIME_CHECK = 10;
-    int frame_counter = 0;
-    
-    bool is_shooting = shooting.load();
-    bool is_zooming = zooming.load();
-    
     while (!shouldExit)
     {
-        auto timeout = is_active ? active_timeout : idle_timeout;
+        auto timeout = aiming.load() ? active_timeout : idle_timeout;
         
         bool is_aiming = aiming.load();
         bool auto_shooting = config.auto_shoot;
-        
-        if (frame_counter % 10 == 0) {
-            is_shooting = shooting.load();
-            is_zooming = zooming.load();
+
+        if (input_method_changed.load()) {
+            initializeInputMethod();
+            input_method_changed.store(false);
+        }
+
+        if (config.easynorecoil && shooting.load() && zooming.load())
+        {
+            mouseThread.applyRecoilCompensation(config.easynorecoilstrength);
         }
         
         bool newFrameAvailable = false;
@@ -219,25 +215,9 @@ void mouseThreadFunction(MouseThread &mouseThread)
                     best_target_from_detector = detector.m_bestTargetHost;
                 }
             }
-        } 
-        
-        if (config.easynorecoil && is_shooting && is_zooming) {
-            mouseThread.applyRecoilCompensation(config.easynorecoilstrength);
-        }
-        
-        if (input_method_changed.load()) {
-            initializeInputMethod();
-            input_method_changed.store(false);
         }
 
         if (is_aiming && has_target_from_detector) {
-            is_active = true;
-            
-            if (++frame_counter >= FRAMES_BETWEEN_TIME_CHECK) {
-                frame_counter = 0;
-                last_active_time = std::chrono::steady_clock::now();
-            }
-            
             AimbotTarget target(
                 best_target_from_detector.box.x, 
                 best_target_from_detector.box.y, 
