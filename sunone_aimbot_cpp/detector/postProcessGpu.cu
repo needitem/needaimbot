@@ -75,6 +75,32 @@ struct is_kept {
     }
 };
 
+// Kernel to extract data from Detection struct into separate arrays
+__global__ void extractDataKernel(
+    const Detection* d_input_detections, int n, 
+    int* d_x1, int* d_y1, int* d_x2, int* d_y2, 
+    float* d_areas, float* d_scores) 
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < n) {
+        // Access the box directly within the Detection struct
+        // Note: Accessing cv::Rect members directly in a __global__ function 
+        // might require ensuring cv::Rect is trivially copyable or using 
+        // alternative data structures if it causes issues. 
+        // Assuming cv::Rect is POD-like for GPU usage here.
+        const Detection& det = d_input_detections[idx];
+        d_x1[idx] = det.box.x;
+        d_y1[idx] = det.box.y;
+        d_x2[idx] = det.box.x + det.box.width;
+        d_y2[idx] = det.box.y + det.box.height;
+        // Calculate area safely, avoiding negative results from potential invalid boxes
+        float width = max(0.0f, (float)det.box.width); 
+        float height = max(0.0f, (float)det.box.height);
+        d_areas[idx] = width * height; 
+        d_scores[idx] = det.confidence;
+    }
+}
+
 // Modified NMSGpu function for direct GPU processing
 void NMSGpu(
     const Detection* d_input_detections,
@@ -130,25 +156,15 @@ void NMSGpu(
     // In a real scenario, you MUST extract data from d_input_detections here.
     // Let's add a simple placeholder kernel.
     
-    /*
-    __global__ void extractDataKernel(
-        const Detection* input, int n, int* x1, int* y1, int* x2, int* y2, float* areas, float* scores
-    ) {
-        int idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (idx < n) {
-            const cv::Rect& box = input[idx].box;
-            x1[idx] = box.x;
-            y1[idx] = box.y;
-            x2[idx] = box.x + box.width;
-            y2[idx] = box.y + box.height;
-            areas[idx] = (float)box.width * box.height; // area might be 0 if width/height is 0
-            scores[idx] = input[idx].confidence;
-        }
-    }
-    // Launch configuration needs calculation
-    // extractDataKernel<<<grid, block, 0, stream>>>(...);
-    */
-    
+    // Launch the extractDataKernel
+    const int block_extract = 256;
+    const int grid_extract = (input_num_detections + block_extract - 1) / block_extract;
+    extractDataKernel<<<grid_extract, block_extract, 0, stream>>>(
+        d_input_detections, input_num_detections, 
+        d_x1, d_y1, d_x2, d_y2, 
+        d_areas, d_scores
+    );
+
     // --- Initialize Keep Flags and IoU Matrix --- 
     // Initialize d_keep to true using Thrust or a simple kernel
     // thrust::fill(thrust::cuda::par.on(stream), thrust::device_pointer_cast(d_keep), thrust::device_pointer_cast(d_keep) + input_num_detections, true);

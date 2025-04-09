@@ -17,6 +17,7 @@
 #include "KalmanFilter2D.h"
 #include "PIDController2D.h"
 #include "mouse.h"
+#include "AimbotTarget.h"
 #include "capture.h"
 #include "SerialConnection.h"
 #include "sunone_aimbot_cpp.h"
