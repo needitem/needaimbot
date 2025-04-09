@@ -490,7 +490,6 @@ cv::cuda::GpuMat DuplicationAPIScreenCapture::GetNextFrameGpu()
     else if (hr == DXGI_ERROR_ACCESS_LOST || hr == DXGI_ERROR_DEVICE_RESET || hr == DXGI_ERROR_DEVICE_REMOVED)
     {
         std::cerr << "[Capture] DDA Access lost/Device reset. Reinitializing..." << std::endl;
-        capture_method_changed.store(true);
         return cv::cuda::GpuMat(); 
     }
     else if (FAILED(hr))
@@ -562,7 +561,6 @@ cv::Mat DuplicationAPIScreenCapture::GetNextFrameCpu()
     else if (hr == DXGI_ERROR_ACCESS_LOST || hr == DXGI_ERROR_DEVICE_RESET || hr == DXGI_ERROR_DEVICE_REMOVED)
     {
         std::cerr << "[Capture] DDA Access lost/Device reset (CPU Path). Reinitializing..." << std::endl;
-        capture_method_changed.store(true);
         return cv::Mat();
     }
     else if (FAILED(hr))

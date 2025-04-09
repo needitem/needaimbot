@@ -47,7 +47,7 @@ bool Config::loadConfig(const std::string& filename)
         std::cerr << "[Config] Config file does not exist, creating default config: " << filename << std::endl;
 
         // Capture
-        capture_method = "duplication_api";
+        // capture_method = "duplication_api"; // Removed
         detection_resolution = 320;
         capture_fps = 60;
         monitor_idx = 0;
@@ -186,7 +186,7 @@ bool Config::loadConfig(const std::string& filename)
     };
 
     // Capture
-    capture_method = get_string("capture_method", "duplication_api");
+    // capture_method = get_string("capture_method", "duplication_api"); // Removed
     detection_resolution = get_long("detection_resolution", 320);
     capture_fps = get_long("capture_fps", 60);
     monitor_idx = get_long("monitor_idx", 0);
@@ -322,8 +322,8 @@ bool Config::saveConfig(const std::string& filename)
     file << "# https://github.com/SunOner/sunone_aimbot_docs/blob/main/config/config_cpp.md\n\n";
 
     // Capture
+    // ini.SetValue("", "capture_method", capture_method.c_str()); // Removed
     file << "# Capture\n"
-        << "capture_method = " << capture_method << "\n"
         << "detection_resolution = " << detection_resolution << "\n"
         << "capture_fps = " << capture_fps << "\n"
         << "monitor_idx = " << monitor_idx << "\n"
