@@ -28,9 +28,10 @@ std::atomic<bool> aiming(false);
 std::atomic<bool> detectionPaused(false);
 std::mutex configMutex;
 
+Config config;
+
 Detector detector;
 MouseThread *globalMouseThread = nullptr;
-Config config;
 
 GhubMouse *gHub = nullptr;
 SerialConnection *arduinoSerial = nullptr;
@@ -265,6 +266,16 @@ bool loadAndValidateModel(std::string& modelName, const std::vector<std::string>
 
 int main()
 {
+    if (!config.loadConfig())
+    {
+        std::cerr << "[Config] Error loading config! Check config.ini." << std::endl;
+        std::cin.get();
+        return -1;
+    }
+
+    // Initialize the CUDA context for the detector after loading config
+    detector.initializeCudaContext();
+
     try
     {
         int cuda_devices = 0;
@@ -280,13 +291,6 @@ int main()
         if (!CreateDirectory(L"screenshots", NULL) && GetLastError() != ERROR_ALREADY_EXISTS)
         {
             std::cout << "[MAIN] Error with screenshoot folder" << std::endl;
-            std::cin.get();
-            return -1;
-        }
-
-        if (!config.loadConfig())
-        {
-            std::cerr << "[Config] Error with loading config!" << std::endl;
             std::cin.get();
             return -1;
         }
@@ -333,6 +337,7 @@ int main()
             return -1;
         }
 
+        // Call detector initialize AFTER initializing its CUDA context
         detector.initialize("models/" + config.ai_model);
 
         initializeInputMethod();
