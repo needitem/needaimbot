@@ -32,6 +32,7 @@ public:
     Detector();
     ~Detector();
     void initialize(const std::string &modelFile);
+    bool initializeCudaContext();
     void processFrame(const cv::cuda::GpuMat &frame);
     void processFrame(const cv::Mat &frame);
     void inferenceThread();
@@ -81,7 +82,10 @@ public:
     Detection m_bestTargetHost;           // Best target details on Host
     bool m_hasBestTarget = false;         // Flag if a valid best target exists
 
+    bool isCudaContextInitialized() const { return m_cudaContextInitialized; } // Getter for the flag
+
 private:
+    bool m_cudaContextInitialized = false; // Add this flag
     std::unique_ptr<nvinfer1::IRuntime> runtime;
     std::unique_ptr<nvinfer1::ICudaEngine> engine;
     std::unique_ptr<nvinfer1::IExecutionContext> context;

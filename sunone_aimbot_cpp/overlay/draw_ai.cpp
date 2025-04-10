@@ -74,4 +74,15 @@ void draw_ai()
     ImGui::SliderFloat("Confidence Threshold", &config.confidence_threshold, 0.01f, 1.00f, "%.2f");
     ImGui::SliderFloat("NMS Threshold", &config.nms_threshold, 0.01f, 1.00f, "%.2f");
     ImGui::SliderInt("Max Detections", &config.max_detections, 1, 100);
+    
+    ImGui::Separator();
+    
+    if (ImGui::InputInt("CUDA Device ID", &config.cuda_device_id))
+    {
+        if (config.cuda_device_id < 0) config.cuda_device_id = 0;
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Set the CUDA device ID to use for detection (requires restart).");
+    }
 }

@@ -29,6 +29,7 @@
 #include "other_tools.h"
 #include "postProcess.h"
 #include "scoringGpu.h"
+#include "config.h"
 
 // Assume a global pointer to the active capture object exists (Needs proper implementation)
 // extern IScreenCapture* g_capture;
@@ -39,6 +40,8 @@ extern std::atomic<bool> detection_resolution_changed;
 
 // Assume detector is globally accessible or passed to captureThread
 // extern IScreenCapture* g_capture; // Removed global capture dependency
+
+extern Config config; // Declare external global config object
 
 static bool error_logged = false;
 
@@ -52,22 +55,23 @@ Detector::Detector()
     m_finalDetectionsGpu(nullptr),
     m_finalDetectionsCountGpu(nullptr),
     m_scoresGpu(nullptr),
-    m_bestTargetIndexGpu(nullptr)
+    m_bestTargetIndexGpu(nullptr),
+    m_captureDoneEvent(nullptr), // Initialize event pointer
+    m_cudaContextInitialized(false)
 {
-    cudaStreamCreate(&stream);
-    cudaStreamCreate(&preprocessStream);
-    cudaStreamCreate(&postprocessStream);
-
-    cvStream = cv::cuda::Stream();
-    preprocessCvStream = cv::cuda::Stream();
-    postprocessCvStream = cv::cuda::Stream();
-    
-    cudaEventCreateWithFlags(&processingDone, cudaEventDisableTiming);
-    cudaEventCreateWithFlags(&postprocessCopyDone, cudaEventDisableTiming);
+    // No CUDA initialization here anymore
 }
 
 Detector::~Detector()
 {
+    // Release CUDA resources if they were created
+    if (stream) cudaStreamDestroy(stream);
+    if (preprocessStream) cudaStreamDestroy(preprocessStream);
+    if (postprocessStream) cudaStreamDestroy(postprocessStream);
+    if (processingDone) cudaEventDestroy(processingDone);
+    if (postprocessCopyDone) cudaEventDestroy(postprocessCopyDone);
+    // m_captureDoneEvent is likely managed elsewhere (Capture class?)
+
     cudaStreamDestroy(stream);
     cudaStreamDestroy(preprocessStream);
     cudaStreamDestroy(postprocessStream);
@@ -212,8 +216,43 @@ void Detector::getBindings()
     }
 }
 
+bool Detector::initializeCudaContext()
+{
+    // Set the CUDA device using the value from config
+    cudaError_t cuda_err = cudaSetDevice(config.cuda_device_id);
+    if (cuda_err != cudaSuccess) {
+        std::cerr << "[Detector] ERROR: Failed to set CUDA device " << config.cuda_device_id 
+                  << ": " << cudaGetErrorString(cuda_err) << std::endl;
+        m_cudaContextInitialized = false; // Ensure flag is false
+        return false; // Return false on failure
+    }
+    std::cout << "[Detector] Successfully set CUDA device to " << config.cuda_device_id << "." << std::endl;
+
+    // Create CUDA streams
+    if (!checkCudaError(cudaStreamCreate(&stream), "creating main stream")) { m_cudaContextInitialized = false; return false; }
+    if (!checkCudaError(cudaStreamCreate(&preprocessStream), "creating preprocess stream")) { m_cudaContextInitialized = false; return false; }
+    if (!checkCudaError(cudaStreamCreate(&postprocessStream), "creating postprocess stream")) { m_cudaContextInitialized = false; return false; }
+
+    // Create corresponding OpenCV CUDA streams (optional, but good practice if mixing OpenCV CUDA)
+    cvStream = cv::cuda::StreamAccessor::wrapStream(stream);
+    preprocessCvStream = cv::cuda::StreamAccessor::wrapStream(preprocessStream);
+    postprocessCvStream = cv::cuda::StreamAccessor::wrapStream(postprocessStream);
+    
+    // Create CUDA events
+    if (!checkCudaError(cudaEventCreateWithFlags(&processingDone, cudaEventDisableTiming), "creating processingDone event")) { m_cudaContextInitialized = false; return false; }
+    if (!checkCudaError(cudaEventCreateWithFlags(&postprocessCopyDone, cudaEventDisableTiming), "creating postprocessCopyDone event")) { m_cudaContextInitialized = false; return false; }
+
+    m_cudaContextInitialized = true; // Set flag to true on success
+    return true; // Return true on success
+}
+
 void Detector::initialize(const std::string& modelFile)
 {
+    if (!isCudaContextInitialized()) {
+        std::cerr << "[Detector] CUDA context not initialized. Skipping TensorRT engine load and GPU memory allocation." << std::endl;
+        return; // Skip if CUDA context failed
+    }
+
     runtime.reset(nvinfer1::createInferRuntime(gLogger));
     loadEngine(modelFile);
 
@@ -281,6 +320,7 @@ void Detector::initialize(const std::string& modelFile)
 
     getBindings();
 
+    // Only allocate GPU memory if CUDA context is initialized
     size_t maxDetections = config.max_detections > 0 ? config.max_detections : 100;
     size_t finalDetectionsSize = sizeof(Detection) * maxDetections;
     if (m_finalDetectionsGpu) cudaFree(m_finalDetectionsGpu);
@@ -297,7 +337,6 @@ void Detector::initialize(const std::string& modelFile)
     
     m_finalDetectionsHost.resize(maxDetections);
 
-    // Allocate GPU memory for scoring results
     size_t scoresSize = maxDetections * sizeof(float);
     if (m_scoresGpu) cudaFree(m_scoresGpu);
     cudaError_t err_scores = cudaMalloc(&m_scoresGpu, scoresSize);
@@ -305,7 +344,6 @@ void Detector::initialize(const std::string& modelFile)
         std::cerr << "[Detector] Failed to allocate GPU memory for scores: " << cudaGetErrorString(err_scores) << std::endl;
     }
 
-    // Allocate GPU memory for best target index
     if (m_bestTargetIndexGpu) cudaFree(m_bestTargetIndexGpu);
     cudaError_t err_idx = cudaMalloc(&m_bestTargetIndexGpu, sizeof(int));
     if (err_idx != cudaSuccess) {
@@ -456,6 +494,8 @@ void Detector::loadEngine(const std::string& modelFile)
 
 void Detector::processFrame(const cv::cuda::GpuMat& frame)
 {
+    if (!isCudaContextInitialized()) return; // Skip if CUDA context failed
+
     if (detectionPaused)
     {
         std::lock_guard<std::mutex> lock(detectionMutex);
@@ -473,6 +513,8 @@ void Detector::processFrame(const cv::cuda::GpuMat& frame)
 
 void Detector::processFrame(const cv::Mat& frame)
 {
+    if (!isCudaContextInitialized()) return; // Skip if CUDA context failed
+
     if (detectionPaused)
     {
         std::lock_guard<std::mutex> lock(detectionMutex);
@@ -490,6 +532,11 @@ void Detector::processFrame(const cv::Mat& frame)
 
 void Detector::inferenceThread()
 {
+    if (!isCudaContextInitialized()) { // Check at the beginning of the thread
+        std::cerr << "[Detector Thread] CUDA context not initialized. Inference thread exiting." << std::endl;
+        return;
+    }
+
     cv::cuda::GpuMat frameGpu;
 
     while (!shouldExit)

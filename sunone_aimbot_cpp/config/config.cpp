@@ -115,6 +115,7 @@ bool Config::loadConfig(const std::string& filename)
 
         // CUDA
         use_pinned_memory = true;
+        cuda_device_id = 0;
 
         // Buttons
         button_targeting = splitString("RightMouseButton");
@@ -254,6 +255,7 @@ bool Config::loadConfig(const std::string& filename)
 
     // CUDA
     use_pinned_memory = get_bool("use_pinned_memory", true);
+    cuda_device_id = get_long("cuda_device_id", 0);
 
     // Buttons
     button_targeting = splitString(get_string("button_targeting", "RightMouseButton"));
@@ -305,6 +307,15 @@ bool Config::loadConfig(const std::string& filename)
     ini.SetDoubleValue("", "kp_y", kp_y);
     ini.SetDoubleValue("", "ki_y", ki_y);
     ini.SetDoubleValue("", "kd_y", kd_y);
+
+    ini.SetDoubleValue("", "estimation_error_p", static_cast<double>(estimation_error_p));
+
+    // CUDA
+    ini.SetBoolValue("", "use_pinned_memory", use_pinned_memory);
+    ini.SetLongValue("", "cuda_device_id", cuda_device_id);
+
+    // Buttons
+    ini.SetValue("", "button_targeting", joinStrings(button_targeting, " ").c_str());
 
     return true;
 }
@@ -399,7 +410,8 @@ bool Config::saveConfig(const std::string& filename)
 
     // CUDA
     file << "# CUDA\n"
-        << "use_pinned_memory = " << (use_pinned_memory ? "true" : "false") << "\n\n";
+        << "use_pinned_memory = " << (use_pinned_memory ? "true" : "false") << "\n"
+        << "cuda_device_id = " << cuda_device_id << "\n\n";
 
     // Buttons
     file << "# Buttons\n"
