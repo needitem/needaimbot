@@ -76,6 +76,7 @@ public:
 
     // CUDA
     bool use_pinned_memory;
+    int cuda_device_id = 0;
 
     // Buttons
     std::vector<std::string> button_targeting;
