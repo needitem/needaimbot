@@ -17,6 +17,7 @@
 #include <opencv2/cudacodec.hpp>
 #include <opencv2/cudaimgproc.hpp>
 #include <opencv2/cudaarithm.hpp>
+#include <opencv2/core/cuda.hpp>
 
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.System.h>
@@ -52,6 +53,18 @@ extern Detector detector;
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "windowsapp.lib")
 
+// Define global variables used across threads
+cv::cuda::GpuMat latestFrameGpu;
+std::mutex frameMutex;
+cv::Mat latestFrameCpu;
+
+// Define other global variables as needed
+int screenWidth = 0;
+int screenHeight = 0;
+std::atomic<int> captureFrameCount(0);
+std::atomic<int> captureFps(0);
+std::chrono::time_point<std::chrono::high_resolution_clock> captureFpsStartTime;
+
 // Helper function to create a capturer instance based on config - REMOVED
 /*
 IScreenCapture* createCapturer(int width, int height) {
@@ -79,18 +92,6 @@ IScreenCapture* createCapturer(int width, int height) {
     return capturer;
 }
 */
-
-cv::cuda::GpuMat latestFrameGpu;
-cv::Mat latestFrameCpu;
-
-std::mutex frameMutex;
-
-int screenWidth = 0;
-int screenHeight = 0;
-
-std::atomic<int> captureFrameCount(0);
-std::atomic<int> captureFps(0);
-std::chrono::time_point<std::chrono::high_resolution_clock> captureFpsStartTime;
 
 void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 {

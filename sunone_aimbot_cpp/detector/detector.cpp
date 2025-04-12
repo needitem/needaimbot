@@ -52,11 +52,13 @@ Detector::Detector()
     inputBufferDevice(nullptr),
     img_scale(1.0f),
     numClasses(0),
+    m_decodedDetectionsGpu(nullptr),
+    m_decodedCountGpu(nullptr),
     m_finalDetectionsGpu(nullptr),
     m_finalDetectionsCountGpu(nullptr),
     m_scoresGpu(nullptr),
     m_bestTargetIndexGpu(nullptr),
-    m_captureDoneEvent(nullptr), // Initialize event pointer
+    m_captureDoneEvent(nullptr),
     m_cudaContextInitialized(false)
 {
     // No CUDA initialization here anymore
@@ -71,17 +73,6 @@ Detector::~Detector()
     if (processingDone) cudaEventDestroy(processingDone);
     if (postprocessCopyDone) cudaEventDestroy(postprocessCopyDone);
     // m_captureDoneEvent is likely managed elsewhere (Capture class?)
-
-    cudaStreamDestroy(stream);
-    cudaStreamDestroy(preprocessStream);
-    cudaStreamDestroy(postprocessStream);
-    cudaEventDestroy(processingDone);
-    cudaEventDestroy(postprocessCopyDone);
-    
-    for (auto& buffer : pinnedOutputBuffers)
-    {
-        if (buffer.second) cudaFreeHost(buffer.second);
-    }
 
     for (auto& binding : inputBindings)
     {
@@ -98,22 +89,12 @@ Detector::~Detector()
         cudaFree(inputBufferDevice);
     }
 
-    if (m_finalDetectionsGpu) {
-        cudaFree(m_finalDetectionsGpu);
-        m_finalDetectionsGpu = nullptr;
-    }
-    if (m_finalDetectionsCountGpu) {
-        cudaFree(m_finalDetectionsCountGpu);
-        m_finalDetectionsCountGpu = nullptr;
-    }
-    if (m_scoresGpu) {
-        cudaFree(m_scoresGpu);
-        m_scoresGpu = nullptr;
-    }
-    if (m_bestTargetIndexGpu) {
-        cudaFree(m_bestTargetIndexGpu);
-        m_bestTargetIndexGpu = nullptr;
-    }
+    freeGpuBuffer(m_decodedDetectionsGpu);
+    freeGpuBuffer(m_decodedCountGpu);
+    freeGpuBuffer(m_finalDetectionsGpu);
+    freeGpuBuffer(m_finalDetectionsCountGpu);
+    freeGpuBuffer(m_scoresGpu);
+    freeGpuBuffer(m_bestTargetIndexGpu);
 }
 
 void Detector::getInputNames()
@@ -280,7 +261,8 @@ void Detector::initialize(const std::string& modelFile)
 
     inputName = inputNames[0];
 
-    context->setInputShape(inputName.c_str(), nvinfer1::Dims4{1, 3, 640, 640});
+    inputDims = nvinfer1::Dims4{1, 3, 640, 640};
+    context->setInputShape(inputName.c_str(), inputDims);
 
     if (!context->allInputDimensionsSpecified())
     {
@@ -300,55 +282,30 @@ void Detector::initialize(const std::string& modelFile)
         nvinfer1::Dims dims = context->getTensorShape(outName.c_str());
         nvinfer1::DataType dtype = engine->getTensorDataType(outName.c_str());
         outputSizes[outName] = getSizeByDim(dims) * getElementSize(dtype);
+        outputTypes[outName] = dtype;
         
         std::vector<int64_t> shape;
         for (int j = 0; j < dims.nbDims; j++)
         {
             shape.push_back(dims.d[j]);
         }
-
         outputShapes[outName] = shape;
-        
-        if (dtype == nvinfer1::DataType::kHALF) {
-            size_t numElements = outputSizes[outName] / sizeof(__half);
-            outputDataBuffersHalf[outName].reserve(numElements);
-        } else if (dtype == nvinfer1::DataType::kFLOAT) {
-            size_t numElements = outputSizes[outName] / sizeof(float);
-            outputDataBuffers[outName].reserve(numElements);
-        }
     }
 
     getBindings();
 
-    // Only allocate GPU memory if CUDA context is initialized
     size_t maxDetections = config.max_detections > 0 ? config.max_detections : 100;
-    size_t finalDetectionsSize = sizeof(Detection) * maxDetections;
-    if (m_finalDetectionsGpu) cudaFree(m_finalDetectionsGpu);
-    cudaError_t err_det = cudaMalloc(&m_finalDetectionsGpu, finalDetectionsSize);
-    if (err_det != cudaSuccess) {
-        std::cerr << "[Detector] Failed to allocate GPU memory for final detections: " << cudaGetErrorString(err_det) << std::endl;
-    }
+    size_t maxDecodedMultiplier = 2;
 
-    if (m_finalDetectionsCountGpu) cudaFree(m_finalDetectionsCountGpu);
-    cudaError_t err_count = cudaMalloc(&m_finalDetectionsCountGpu, sizeof(int));
-    if (err_count != cudaSuccess) {
-        std::cerr << "[Detector] Failed to allocate GPU memory for detection count: " << cudaGetErrorString(err_count) << std::endl;
-    }
-    
-    m_finalDetectionsHost.resize(maxDetections);
+    allocateGpuBuffer(m_decodedDetectionsGpu, maxDetections * maxDecodedMultiplier, "Decoded Detections");
+    allocateGpuBuffer(m_decodedCountGpu, 1, "Decoded Count");
 
-    size_t scoresSize = maxDetections * sizeof(float);
-    if (m_scoresGpu) cudaFree(m_scoresGpu);
-    cudaError_t err_scores = cudaMalloc(&m_scoresGpu, scoresSize);
-    if (err_scores != cudaSuccess) {
-        std::cerr << "[Detector] Failed to allocate GPU memory for scores: " << cudaGetErrorString(err_scores) << std::endl;
-    }
+    allocateGpuBuffer(m_finalDetectionsGpu, maxDetections, "Final Detections");
+    allocateGpuBuffer(m_finalDetectionsCountGpu, 1, "Final Count");
 
-    if (m_bestTargetIndexGpu) cudaFree(m_bestTargetIndexGpu);
-    cudaError_t err_idx = cudaMalloc(&m_bestTargetIndexGpu, sizeof(int));
-    if (err_idx != cudaSuccess) {
-        std::cerr << "[Detector] Failed to allocate GPU memory for best target index: " << cudaGetErrorString(err_idx) << std::endl;
-    }
+    allocateGpuBuffer(m_scoresGpu, maxDetections, "Scores");
+
+    allocateGpuBuffer(m_bestTargetIndexGpu, 1, "Best Index");
 
     if (!outputNames.empty())
     {
@@ -358,18 +315,21 @@ void Detector::initialize(const std::string& modelFile)
         if (config.postprocess == "yolo10")
         {
             numClasses = 11;
-        } else
-        {
+        } else if (outDims.nbDims == 3) {
             numClasses = outDims.d[1] - 4;
+        } else {
+            std::cerr << "[Detector] Warning: Unknown output dimensions for class calculation. Assuming 0."
+                      << std::endl;
+            numClasses = 0;
         }
     }
 
     img_scale = static_cast<float>(config.detection_resolution) / 640;
     
-    nvinfer1::Dims dims = context->getTensorShape(inputName.c_str());
-    int c = dims.d[1];
-    int h = dims.d[2];
-    int w = dims.d[3];
+    nvinfer1::Dims actualInputDims = context->getTensorShape(inputName.c_str());
+    int c = actualInputDims.d[1];
+    int h = actualInputDims.d[2];
+    int w = actualInputDims.d[3];
     
     if (resizedBuffer.empty() || resizedBuffer.size() != cv::Size(w, h)) {
         resizedBuffer.create(h, w, CV_8UC3);
@@ -394,26 +354,6 @@ void Detector::initialize(const std::string& modelFile)
     for (const auto& name : outputNames)
     {
         context->setTensorAddress(name.c_str(), outputBindings[name]);
-    }
-
-    if (config.use_pinned_memory)
-    {
-        for (const auto& outName : outputNames)
-        {
-            size_t size = outputSizes[outName];
-            
-            if (pinnedOutputBuffers.find(outName) != pinnedOutputBuffers.end() && 
-                pinnedOutputBuffers[outName] != nullptr) {
-                continue;
-            }
-            
-            void* hostBuffer = nullptr;
-            cudaError_t status = cudaMallocHost(&hostBuffer, size);
-            if (status == cudaSuccess)
-            {
-                pinnedOutputBuffers[outName] = hostBuffer;
-            }
-        }
     }
 }
 
@@ -499,8 +439,7 @@ void Detector::processFrame(const cv::cuda::GpuMat& frame)
     if (detectionPaused)
     {
         std::lock_guard<std::mutex> lock(detectionMutex);
-        detectedBoxes.clear();
-        detectedClasses.clear();
+        m_hasBestTarget = false;
         return;
     }
 
@@ -518,8 +457,7 @@ void Detector::processFrame(const cv::Mat& frame)
     if (detectionPaused)
     {
         std::lock_guard<std::mutex> lock(detectionMutex);
-        detectedBoxes.clear();
-        detectedClasses.clear();
+        m_hasBestTarget = false;
         return;
     }
 
@@ -559,11 +497,19 @@ void Detector::inferenceThread()
                     if (binding.second) cudaFree(binding.second);
                 }
                 outputBindings.clear();
+
+                freeGpuBuffer(m_decodedDetectionsGpu);
+                freeGpuBuffer(m_decodedCountGpu);
+                freeGpuBuffer(m_finalDetectionsGpu);
+                freeGpuBuffer(m_finalDetectionsCountGpu);
+                freeGpuBuffer(m_scoresGpu);
+                freeGpuBuffer(m_bestTargetIndexGpu);
             }
             
             initialize("models/" + config.ai_model);
             
-            detection_resolution_changed.store(true);
+            img_scale = static_cast<float>(config.detection_resolution) / 640;
+            
             detector_model_changed.store(false);
         }
         
@@ -576,7 +522,7 @@ void Detector::inferenceThread()
             
             if (!frameReady && !shouldExit)
             {
-                inferenceCV.wait(lock, [this] { return frameReady || shouldExit; });
+                inferenceCV.wait_for(lock, std::chrono::milliseconds(100), [this] { return frameReady || shouldExit; });
             }
             
             if (shouldExit) break;
@@ -613,209 +559,223 @@ void Detector::inferenceThread()
         {
             try
             {
-                // Upload CPU frame to GPU if necessary before preprocessing
-                if (!isGpu) {
+                if (!isGpu && !frameCpu.empty()) {
                     frameGpu.upload(frameCpu, preprocessCvStream); 
+                } else if (!isGpu) {
+                    continue; 
                 }
 
-                preProcess(frameGpu); // Always preprocess the GpuMat
+                if (frameGpu.empty()) {
+                    continue;
+                }
+
+                preProcess(frameGpu);
                 
                 context->enqueueV3(stream);
 
-                // --- Copy raw output from GPU to CPU Host buffers --- 
-                for (const auto& name : outputNames)
-                {
-                    size_t size = outputSizes[name];
-                    nvinfer1::DataType dtype = outputTypes[name];
-                    void* outputBindingPtr = outputBindings[name];
-                    void* hostBufferPtr = nullptr;
+                performGpuPostProcessing(stream);
 
-                    if (dtype == nvinfer1::DataType::kHALF) {
-                        // Ensure buffer exists and is correctly sized
-                        size_t numElements = size / sizeof(__half);
-                        if (outputDataBuffersHalf.find(name) == outputDataBuffersHalf.end() || outputDataBuffersHalf[name].size() != numElements) {
-                            outputDataBuffersHalf[name].resize(numElements);
-                        }
-                        // Determine destination buffer (pinned or regular)
-                        hostBufferPtr = outputDataBuffersHalf[name].data();
-                        if (config.use_pinned_memory && pinnedOutputBuffers.count(name)) {
-                            hostBufferPtr = pinnedOutputBuffers[name]; // Use pinned memory if available and configured
-                        }
-                    } else if (dtype == nvinfer1::DataType::kFLOAT) {
-                        size_t numElements = size / sizeof(float);
-                         if (outputDataBuffers.find(name) == outputDataBuffers.end() || outputDataBuffers[name].size() != numElements) {
-                            outputDataBuffers[name].resize(numElements);
-                        }
-                        hostBufferPtr = outputDataBuffers[name].data();
-                         if (config.use_pinned_memory && pinnedOutputBuffers.count(name)) {
-                            hostBufferPtr = pinnedOutputBuffers[name]; // Use pinned memory
-                        }
-                    } else {
-                        // Handle other types if necessary, or log error
-                        std::cerr << "[Detector] Unsupported output data type for copy: " << static_cast<int>(dtype) << " for output " << name << std::endl;
-                        continue; // Skip copy for unsupported type
-                    }
-
-                    if (hostBufferPtr && outputBindingPtr) {
-                        cudaMemcpyAsync(
-                            hostBufferPtr,          // Destination (Host: pinned or regular)
-                            outputBindingPtr,       // Source (GPU)
-                            size,                   // Size in bytes
-                            cudaMemcpyDeviceToHost,
-                            stream                 // Use the main inference stream
-                        );
-                    } else if (!outputBindingPtr) {
-                         std::cerr << "[Detector] Output binding pointer is null for " << name << std::endl;
-                    } else {
-                         std::cerr << "[Detector] Host buffer pointer is null for " << name << " (Type: " << static_cast<int>(dtype) << ")" << std::endl;
-                    }
-                }
-                // Synchronize after submitting all copies for this frame
                 cudaStreamSynchronize(stream); 
-                
-                // --- Handle Pinned Memory Transfer (if used) --- 
-                // If pinned memory was used, copy data from pinned host buffers to regular std::vectors
-                if (config.use_pinned_memory) {
-                    for (const auto& name : outputNames) {
-                         nvinfer1::DataType dtype = outputTypes[name];
-                         size_t size = outputSizes[name];
-                         if (pinnedOutputBuffers.count(name)) {
-                             void* pinnedHostPtr = pinnedOutputBuffers[name];
-                             if (dtype == nvinfer1::DataType::kHALF) {
-                                 memcpy(outputDataBuffersHalf[name].data(), pinnedHostPtr, size);
-                             } else if (dtype == nvinfer1::DataType::kFLOAT) {
-                                 memcpy(outputDataBuffers[name].data(), pinnedHostPtr, size);
-                             } 
-                         } 
-                    }
-                }
 
-                // --- Perform Post-processing (CPU Decode + GPU NMS) --- 
-                performGpuPostProcessing(stream); // This function will now use the CPU buffers populated above
-
-                // --- Synchronize GPU NMS operations --- 
-                cudaStreamSynchronize(stream); // Ensure NMSGpu operations & count copy are complete
-
-                // Reset best target flag
                 m_hasBestTarget = false;
 
-                // --- Calculate Scores, Find Best Target, and Copy ONLY Best Target to Host --- 
+                cudaError_t countCopyErr = cudaMemcpy(&m_finalDetectionsCountHost, m_finalDetectionsCountGpu, sizeof(int), cudaMemcpyDeviceToHost);
+                if (countCopyErr != cudaSuccess) {
+                     std::cerr << "[Detector] Failed to copy final detection count DtoH: " << cudaGetErrorString(countCopyErr) << std::endl;
+                     m_finalDetectionsCountHost = 0;
+                }
+                
                 if (m_finalDetectionsCountHost > 0) {
-                    // Ensure count doesn't exceed buffer sizes
-                    int validDetections = std::min((int)m_finalDetectionsHost.size(), m_finalDetectionsCountHost);
+                    int validDetections = std::min((int)config.max_detections, m_finalDetectionsCountHost);
                     
                     if (validDetections > 0) {
-                        // Calculate scores on GPU
                         calculateTargetScoresGpu(
-                            static_cast<Detection*>(m_finalDetectionsGpu),
+                            m_finalDetectionsGpu,
                             validDetections,
                             m_scoresGpu,
-                            config.detection_resolution, // Use config values for resolution
+                            config.detection_resolution, 
                             config.detection_resolution,
                             config.disable_headshot,
-                            config.class_head, // Make sure class_head is defined in config
+                            config.class_head, 
                             stream
                         );
+                        cudaError_t scoreErr = cudaGetLastError();
+                        if(scoreErr != cudaSuccess) std::cerr << "[Detector] Error after calculateTargetScoresGpu: " << cudaGetErrorString(scoreErr) << std::endl;
 
-                        // Find the index of the best target on GPU
-                        findBestTargetGpu(
+                        cudaError_t findErr = findBestTargetGpu(
                             m_scoresGpu,
                             validDetections,
                             m_bestTargetIndexGpu,
                             stream
                         );
+                        if(findErr != cudaSuccess) std::cerr << "[Detector] Error after findBestTargetGpu: " << cudaGetErrorString(findErr) << std::endl;
 
-                        // Copy the best index from GPU to Host
-                        cudaMemcpyAsync(
+                        cudaError_t indexCopyErr = cudaMemcpyAsync(
                             &m_bestTargetIndexHost,
                             m_bestTargetIndexGpu,
                             sizeof(int),
                             cudaMemcpyDeviceToHost,
                             stream
                         );
-                        // Synchronize to get the best index on host
-                        cudaStreamSynchronize(stream);
+                        
+                        cudaStreamSynchronize(stream); 
+                        if (indexCopyErr != cudaSuccess) {
+                            std::cerr << "[Detector] Failed to copy best index DtoH: " << cudaGetErrorString(indexCopyErr) << std::endl;
+                            m_bestTargetIndexHost = -1;
+                        }
 
-                        // If a valid best target index was found, copy that single detection to host
                         if (m_bestTargetIndexHost >= 0 && m_bestTargetIndexHost < validDetections) {
-                            cudaMemcpyAsync(
-                                &m_bestTargetHost,                                               // Dest: Host struct
-                                static_cast<Detection*>(m_finalDetectionsGpu) + m_bestTargetIndexHost, // Src: Element in GPU array
-                                sizeof(Detection),                                               // Size of one detection
+                            cudaError_t targetCopyErr = cudaMemcpyAsync(
+                                &m_bestTargetHost,                                  // Dest: Host struct
+                                m_finalDetectionsGpu + m_bestTargetIndexHost, // Src: Element in final GPU array
+                                sizeof(Detection),                                  // Size of one detection
                                 cudaMemcpyDeviceToHost,
                                 stream
                             );
-                            // Synchronize to ensure the best target data is ready on host
                             cudaStreamSynchronize(stream);
-                            m_hasBestTarget = true; // Mark that we have a valid target
+                            if (targetCopyErr != cudaSuccess) {
+                                std::cerr << "[Detector] Failed to copy best target DtoH: " << cudaGetErrorString(targetCopyErr) << std::endl;
+                                m_hasBestTarget = false;
+                            } else {
+                                m_hasBestTarget = true;
+                            }
                         } else {
-                           m_bestTargetIndexHost = -1; // Ensure index is -1 if something went wrong
+                           m_bestTargetIndexHost = -1;
+                           m_hasBestTarget = false; 
                         }
                     } else {
-                         m_bestTargetIndexHost = -1; // No valid detections to score
+                         m_bestTargetIndexHost = -1;
+                         m_hasBestTarget = false;
                     }
                 } else {
-                     m_bestTargetIndexHost = -1; // No detections from NMS
+                     m_bestTargetIndexHost = -1;
+                     m_hasBestTarget = false;
                 }
 
-                // --- Update shared detection results (Only best target related info if needed) --- 
                 {
                     std::lock_guard<std::mutex> lock(detectionMutex);
-                    // Clear old full detection lists
-                    detectedBoxes.clear();
-                    detectedClasses.clear();
-                    
-                    // We no longer populate detectedBoxes/detectedClasses here.
-                    // Mouse thread will directly use m_hasBestTarget and m_bestTargetHost.
-                    
-                    // Update version number regardless
-                    detectionVersion++;
+                    detectionVersion++; 
                 }
-                detectionCV.notify_one(); // Notify waiting threads (mouse thread)
+                detectionCV.notify_one();
 
             } catch (const std::exception& e)
             {
-                std::cerr << "[Detector] Error during inference: " << e.what() << std::endl;
+                std::cerr << "[Detector] Error during inference loop: " << e.what() << std::endl;
+                m_hasBestTarget = false;
             }
+        } else if (hasNewFrame) {
+             {
+                std::lock_guard<std::mutex> lock(detectionMutex);
+                m_hasBestTarget = false; 
+                detectionVersion++; 
+             }
+             detectionCV.notify_one();
+        } 
+    }
+}
+
+void Detector::performGpuPostProcessing(cudaStream_t stream) {
+    if (outputNames.empty()) {
+        std::cerr << "[Detector] No output names found for post-processing." << std::endl;
+        cudaMemsetAsync(m_finalDetectionsCountGpu, 0, sizeof(int), stream);
+        return;
+    }
+
+    const std::string& primaryOutputName = outputNames[0];
+    void* d_rawOutputPtr = outputBindings[primaryOutputName];
+    nvinfer1::DataType outputType = outputTypes[primaryOutputName];
+    const std::vector<int64_t>& shape = outputShapes[primaryOutputName];
+
+    if (!d_rawOutputPtr) {
+        std::cerr << "[Detector] Raw output GPU pointer is null for " << primaryOutputName << std::endl;
+        cudaMemsetAsync(m_finalDetectionsCountGpu, 0, sizeof(int), stream);
+        return;
+    }
+
+    cudaMemsetAsync(m_decodedCountGpu, 0, sizeof(int), stream);
+    cudaError_t decodeErr = cudaSuccess;
+
+    int maxDecodedDetections = config.max_detections * 2;
+
+    if (config.postprocess == "yolo10") {
+        decodeErr = decodeYolo10Gpu(
+            d_rawOutputPtr,
+            outputType,
+            shape,
+            numClasses,
+            config.confidence_threshold,
+            this->img_scale,
+            m_decodedDetectionsGpu,
+            m_decodedCountGpu,
+            maxDecodedDetections,
+            stream);
+    } else if (config.postprocess == "yolo8" || config.postprocess == "yolo9" || config.postprocess == "yolo11" || config.postprocess == "yolo12") {
+         decodeErr = decodeYolo11Gpu(
+            d_rawOutputPtr,
+            outputType,
+            shape,
+            numClasses,
+            config.confidence_threshold,
+            this->img_scale,
+            m_decodedDetectionsGpu,
+            m_decodedCountGpu,
+            maxDecodedDetections,
+            stream);
+    } else {
+        std::cerr << "[Detector] Unsupported post-processing type for GPU decoding: " << config.postprocess << std::endl;
+        cudaMemsetAsync(m_finalDetectionsCountGpu, 0, sizeof(int), stream);
+        return;
+    }
+
+    if (decodeErr != cudaSuccess) {
+        std::cerr << "[Detector] GPU decoding kernel launch/execution failed: " << cudaGetErrorString(decodeErr) << std::endl;
+        cudaMemsetAsync(m_finalDetectionsCountGpu, 0, sizeof(int), stream);
+        return;
+    }
+
+    int decodedCountHost = 0;
+    cudaError_t decodeCountCopyErr = cudaMemcpyAsync(&decodedCountHost, m_decodedCountGpu, sizeof(int), cudaMemcpyDeviceToHost, stream);
+    
+    cudaStreamSynchronize(stream); 
+    if (decodeCountCopyErr != cudaSuccess) {
+         std::cerr << "[Detector] Failed to copy decoded count DtoH: " << cudaGetErrorString(decodeCountCopyErr) << std::endl;
+         cudaMemsetAsync(m_finalDetectionsCountGpu, 0, sizeof(int), stream);
+         return;
+    }
+
+    if (decodedCountHost > 0) {
+        int inputNmsCount = std::min(decodedCountHost, maxDecodedDetections);
+
+        try {
+            NMSGpu(
+                m_decodedDetectionsGpu,
+                inputNmsCount,
+                m_finalDetectionsGpu,
+                m_finalDetectionsCountGpu,
+                (int)config.max_detections,
+                config.nms_threshold,
+                stream
+            );
+        } catch (const std::exception& e) {
+             std::cerr << "[Detector] Exception during NMSGpu call: " << e.what() << std::endl;
+             cudaMemsetAsync(m_finalDetectionsCountGpu, 0, sizeof(int), stream);
         }
+    } else {
+         cudaMemsetAsync(m_finalDetectionsCountGpu, 0, sizeof(int), stream);
     }
-}
-
-void Detector::releaseDetections()
-{
-    std::lock_guard<std::mutex> lock(detectionMutex);
-    detectedBoxes.clear();
-    detectedClasses.clear();
-}
-
-bool Detector::getLatestDetections(std::vector<cv::Rect>& boxes, std::vector<int>& classes)
-{
-    std::lock_guard<std::mutex> lock(detectionMutex);
-
-    if (!detectedBoxes.empty())
-    {
-        boxes = detectedBoxes;
-        classes = detectedClasses;
-        return true;
-    }
-    return false;
 }
 
 void Detector::preProcess(const cv::cuda::GpuMat& frame)
 {
     if (frame.empty()) return;
 
-    // --- Wait for Capture Event (using member variable) ---
     if (m_captureDoneEvent) {
-        // Make the preprocess stream wait for the capture event
         cudaStream_t underlyingPreprocessStream = cv::cuda::StreamAccessor::getStream(preprocessCvStream);
         cudaError_t waitErr = cudaStreamWaitEvent(underlyingPreprocessStream, m_captureDoneEvent, 0);
         if (waitErr != cudaSuccess) {
             std::cerr << "[Detector] cudaStreamWaitEvent failed in preProcess: " << cudaGetErrorString(waitErr) << std::endl;
-            // Handle error, maybe return or throw
         }
     }
-    // --- End Wait for Capture Event ---
 
     void* inputBuffer = inputBindings[inputName];
 
@@ -852,20 +812,15 @@ void Detector::preProcess(const cv::cuda::GpuMat& frame)
         resizedBuffer.convertTo(floatBuffer, CV_32F, 1.0f / 255.0f, 0, preprocessCvStream);
         cv::cuda::split(floatBuffer, channelBuffers, preprocessCvStream);
         
-        // Synchronize preprocess operations before copying to TensorRT buffer
         cudaEvent_t preprocessDoneEvent;
         cudaEventCreateWithFlags(&preprocessDoneEvent, cudaEventDisableTiming);
         
-        // Get the underlying CUDA stream from the OpenCV stream
         cudaStream_t underlyingPreprocessStream = cv::cuda::StreamAccessor::getStream(preprocessCvStream);
         
-        // Record the event on the underlying CUDA stream
         cudaEventRecord(preprocessDoneEvent, underlyingPreprocessStream);
         
-        // Make the main TensorRT stream wait for the preprocess event
         cudaStreamWaitEvent(stream, preprocessDoneEvent, 0);
         
-        // Destroy the event (consider managing lifecycle more carefully if needed)
         cudaEventDestroy(preprocessDoneEvent);
 
         size_t channelSize = h * w * sizeof(float);
@@ -884,140 +839,6 @@ void Detector::preProcess(const cv::cuda::GpuMat& frame)
     {
         std::cerr << "[Detector] OpenCV error in preProcess: " << e.what() << std::endl;
     }
-}
-
-void Detector::performGpuPostProcessing(cudaStream_t stream) {
-    if (outputNames.empty()) {
-        std::cerr << "[Detector] No output names found for post-processing." << std::endl;
-        m_finalDetectionsCountHost = 0; // Ensure count is 0 if no output
-        return;
-    }
-
-    const std::string& primaryOutputName = outputNames[0]; // Assuming primary output is sufficient
-    nvinfer1::DataType outputType = outputTypes[primaryOutputName];
-    const std::vector<int64_t>& shape = outputShapes[primaryOutputName];
-
-    std::vector<Detection> decoded_detections;
-    const float* outputDataPtr = nullptr;
-    std::vector<float> tempFloatBuffer; // Needed if input is half
-
-    // --- Get pointer to CPU buffer and handle FP16 conversion --- 
-    if (outputType == nvinfer1::DataType::kHALF) {
-        if (outputDataBuffersHalf.find(primaryOutputName) == outputDataBuffersHalf.end()) {
-             std::cerr << "[Detector] Half precision output buffer not found for " << primaryOutputName << std::endl;
-             m_finalDetectionsCountHost = 0;
-             return;
-        }
-        const std::vector<__half>& halfData = outputDataBuffersHalf[primaryOutputName];
-        size_t numElements = halfData.size();
-        tempFloatBuffer.resize(numElements); 
-        // Perform conversion from __half to float on CPU
-        for (size_t i = 0; i < numElements; ++i) {
-            tempFloatBuffer[i] = __half2float(halfData[i]);
-        }
-        outputDataPtr = tempFloatBuffer.data();
-
-    } else if (outputType == nvinfer1::DataType::kFLOAT) {
-        if (outputDataBuffers.find(primaryOutputName) == outputDataBuffers.end()) {
-             std::cerr << "[Detector] Float output buffer not found for " << primaryOutputName << std::endl;
-             m_finalDetectionsCountHost = 0;
-             return;
-        }
-        outputDataPtr = outputDataBuffers[primaryOutputName].data();
-    } else {
-         std::cerr << "[Detector] Unsupported output data type for CPU decoding: " << static_cast<int>(outputType) << std::endl;
-         m_finalDetectionsCountHost = 0;
-         return;
-    }
-
-    if (!outputDataPtr) {
-         std::cerr << "[Detector] Failed to get valid CPU output data pointer." << std::endl;
-         m_finalDetectionsCountHost = 0;
-         return;
-    }
-
-    // --- Perform CPU Decoding --- 
-    // Pass img_scale to the decode function
-    // Note: Need to ensure img_scale is up-to-date if detection resolution changes
-    if (config.postprocess == "yolo10") {
-        decoded_detections = decodeYolo10(
-            outputDataPtr,
-            shape,
-            numClasses,
-            config.confidence_threshold,
-            this->img_scale
-        );
-    } else if (config.postprocess == "yolo8" || config.postprocess == "yolo9" || config.postprocess == "yolo11" || config.postprocess == "yolo12") {
-         decoded_detections = decodeYolo11(
-            outputDataPtr,
-            shape,
-            numClasses,
-            config.confidence_threshold,
-            this->img_scale
-        );
-    } else {
-        std::cerr << "[Detector] Unsupported post-processing type for CPU decoding: " << config.postprocess << std::endl;
-        m_finalDetectionsCountHost = 0;
-        return; // Or handle differently
-    }
-
-    // --- Perform GPU NMS --- 
-    if (!decoded_detections.empty()) {
-        // Allocate temporary GPU buffer for decoded detections
-        Detection* tempDecodedGpu = nullptr;
-        size_t decodedSize = decoded_detections.size() * sizeof(Detection);
-        cudaError_t allocErr = cudaMallocAsync(&tempDecodedGpu, decodedSize, stream);
-
-        if (allocErr == cudaSuccess) {
-            // Copy decoded detections from CPU to temporary GPU buffer
-            cudaMemcpyAsync(tempDecodedGpu, decoded_detections.data(), decodedSize, cudaMemcpyHostToDevice, stream);
-
-            try {
-                // Call the modified NMSGpu
-                NMSGpu(
-                    tempDecodedGpu,              // Input detections (GPU)
-                    decoded_detections.size(),   // Number of input detections
-                    static_cast<Detection*>(m_finalDetectionsGpu), // Cast output buffer to Detection*
-                    m_finalDetectionsCountGpu,   // Output count of filtered detections (GPU)
-                    (int)m_finalDetectionsHost.size(), // Max size of the output buffer (using host buffer size)
-                    config.nms_threshold,
-                    stream
-                );
-            } catch (const std::exception& e) {
-                 std::cerr << "[Detector] NMSGpu call failed: " << e.what() << std::endl;
-                 // If NMSGpu fails, set count to 0
-                 cudaMemsetAsync(m_finalDetectionsCountGpu, 0, sizeof(int), stream);
-            }
-            // Free the temporary GPU buffer
-            cudaFreeAsync(tempDecodedGpu, stream);
-        } else {
-             std::cerr << "[Detector] Failed to allocate temp GPU buffer for NMS input: " << cudaGetErrorString(allocErr) << std::endl;
-             cudaMemsetAsync(m_finalDetectionsCountGpu, 0, sizeof(int), stream); // Set count to 0 on allocation failure
-        }
-    } else {
-         // No detections after decoding, set GPU count to 0
-         cudaMemsetAsync(m_finalDetectionsCountGpu, 0, sizeof(int), stream);
-    }
-
-    // --- Update Host Count --- 
-    // Copy the final detection count from GPU to Host
-    cudaMemcpyAsync(
-        &m_finalDetectionsCountHost, 
-        m_finalDetectionsCountGpu, 
-        sizeof(int), 
-        cudaMemcpyDeviceToHost, 
-        stream
-    );
-
-    // Removed memcpy from decoded_detections to m_finalDetectionsHost
-    /*
-    m_finalDetectionsCountHost = static_cast<int>(decoded_detections.size());
-    int countToCopy = std::min((int)m_finalDetectionsHost.size(), m_finalDetectionsCountHost);
-    if (countToCopy > 0) {
-         memcpy(m_finalDetectionsHost.data(), decoded_detections.data(), countToCopy * sizeof(Detection));
-    }
-    */
-
 }
 
 void Detector::setCaptureEvent(cudaEvent_t event) {
