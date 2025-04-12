@@ -24,7 +24,7 @@ typedef struct CUstream_st* cudaStream_t;
 typedef struct CUevent_st* cudaEvent_t;
 
 // Forward declaration for the Detection struct
-struct Detection;
+// struct Detection; // Already in postProcess.h
 
 class Detector
 {
@@ -36,16 +36,18 @@ public:
     void processFrame(const cv::cuda::GpuMat &frame);
     void processFrame(const cv::Mat &frame);
     void inferenceThread();
-    void releaseDetections();
-    bool getLatestDetections(std::vector<cv::Rect> &boxes, std::vector<int> &classes);
+    // void releaseDetections(); // No longer needed as public API?
+    // bool getLatestDetections(std::vector<cv::Rect> &boxes, std::vector<int> &classes); // Use best target info instead
     void setCaptureEvent(cudaEvent_t event);
 
     std::mutex detectionMutex;
 
     int detectionVersion;
     std::condition_variable detectionCV;
-    std::vector<cv::Rect> detectedBoxes;
-    std::vector<int> detectedClasses;
+    // --- Removed members related to CPU post-processing results ---
+    // std::vector<cv::Rect> detectedBoxes; // No longer populated directly
+    // std::vector<int> detectedClasses;   // No longer populated directly
+
     float img_scale;
 
     int getInputHeight() const { return inputDims.d[2]; }
@@ -69,17 +71,21 @@ public:
 
     cv::cuda::GpuMat resizedBuffer;
 
-    // GPU Post-processing results
-    void* m_finalDetectionsGpu = nullptr;        // Buffer for final detections on GPU
-    int* m_finalDetectionsCountGpu = nullptr;     // Buffer for count of final detections on GPU
-    int m_finalDetectionsCountHost = 0;        // Count of final detections on Host
-    std::vector<Detection> m_finalDetectionsHost; // Buffer for final detections on Host (temp)
+    // --- Members for GPU Post-processing Pipeline ---
+    Detection* m_decodedDetectionsGpu = nullptr;   // GPU buffer for decoded detections (before NMS)
+    int* m_decodedCountGpu = nullptr;        // GPU buffer for count of decoded detections (atomic)
+    int m_decodedCountHost = 0;          // Host copy of decoded count (for debugging/logging)
 
-    // GPU Scoring & Best Target Selection results
-    float* m_scoresGpu = nullptr;             // Buffer for scores on GPU
-    int* m_bestTargetIndexGpu = nullptr;  // Buffer for best target index on GPU (size 1)
-    int m_bestTargetIndexHost = -1;       // Best target index on Host
-    Detection m_bestTargetHost;           // Best target details on Host
+    // --- Members for Final NMS Results (GPU & Host) ---
+    Detection* m_finalDetectionsGpu = nullptr;        // GPU buffer for final detections (after NMS)
+    int* m_finalDetectionsCountGpu = nullptr;     // GPU buffer for count of final detections (after NMS)
+    int m_finalDetectionsCountHost = 0;        // Host copy of final NMS count
+
+    // --- Members for Scoring & Best Target (GPU & Host) ---
+    float* m_scoresGpu = nullptr;             // GPU buffer for scores
+    int* m_bestTargetIndexGpu = nullptr;  // GPU buffer for best target index
+    int m_bestTargetIndexHost = -1;       // Host copy of best target index
+    Detection m_bestTargetHost;           // Host copy of best target details
     bool m_hasBestTarget = false;         // Flag if a valid best target exists
 
     bool isCudaContextInitialized() const { return m_cudaContextInitialized; } // Getter for the flag
@@ -99,8 +105,11 @@ private:
     cudaStream_t preprocessStream;
     cudaStream_t postprocessStream;
 
-    std::unordered_map<std::string, void *> pinnedOutputBuffers;
-    bool usePinnedMemory;
+    // --- Removed members related to CPU output buffers ---
+    // std::unordered_map<std::string, std::vector<float>> outputDataBuffers;
+    // std::unordered_map<std::string, std::vector<__half>> outputDataBuffersHalf;
+    // std::unordered_map<std::string, void *> pinnedOutputBuffers; // Keep if used for other things, or remove
+    bool usePinnedMemory; // Keep if used elsewhere
 
     std::mutex inferenceMutex;
 
@@ -108,16 +117,17 @@ private:
     std::unordered_map<std::string, void *> inputBindings;
     std::unordered_map<std::string, void *> outputBindings;
     std::unordered_map<std::string, std::vector<int64_t>> outputShapes;
+    std::unordered_map<std::string, nvinfer1::DataType> outputTypes; // Keep this
     int numClasses;
 
     size_t getSizeByDim(const nvinfer1::Dims &dims);
     size_t getElementSize(nvinfer1::DataType dtype);
 
     std::string inputName;
-    void *inputBufferDevice;
-    std::unordered_map<std::string, std::vector<float>> outputDataBuffers;
-    std::unordered_map<std::string, std::vector<__half>> outputDataBuffersHalf;
-    std::unordered_map<std::string, nvinfer1::DataType> outputTypes;
+    void *inputBufferDevice; // Keep for preprocess
+    // std::unordered_map<std::string, std::vector<float>> outputDataBuffers; // Removed
+    // std::unordered_map<std::string, std::vector<__half>> outputDataBuffersHalf; // Removed
+
 
     cv::cuda::GpuMat floatBuffer;
     std::vector<cv::cuda::GpuMat> channelBuffers;
@@ -129,6 +139,31 @@ private:
         }
         return true;
     }
+
+    // --- Memory allocation/deallocation helper (Definitions moved inside class) --- 
+    template<typename T>
+    cudaError_t allocateGpuBuffer(T*& buffer, size_t count, const char* name) {
+        if (buffer) {
+            cudaFree(buffer);
+            buffer = nullptr;
+        }
+        cudaError_t err = cudaMalloc(&buffer, count * sizeof(T));
+        if (err != cudaSuccess) {
+             std::cerr << "[CUDA] Failed to allocate GPU buffer '" << name << "': " << cudaGetErrorString(err) << std::endl;
+        }
+        return err;
+    }
+    template<typename T>
+    void freeGpuBuffer(T*& buffer) {
+        if (buffer) {
+            cudaFree(buffer);
+            buffer = nullptr;
+        }
+    }
+
+    // --- Post-processing function (modified) ---
+    void performGpuPostProcessing(cudaStream_t stream);
+
 
     void synchronizeStreams(cv::cuda::Stream &cvStream, cudaStream_t cudaStream)
     {
@@ -147,7 +182,7 @@ private:
     void getInputNames();
     void getOutputNames();
     void getBindings();
-    void performGpuPostProcessing(cudaStream_t stream);
+    // void performGpuPostProcessing(cudaStream_t stream); // Moved up
 };
 
 #endif // DETECTOR_H
