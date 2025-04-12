@@ -29,6 +29,7 @@ extern std::mutex frameMutex;
 extern std::condition_variable frameCV;
 extern std::atomic<bool> shouldExit;
 extern std::atomic<bool> show_window_changed;
+extern std::atomic<bool> newFrameAvailable;
 
 // Forward declaration for CUDA event type if not included
 typedef struct CUevent_st* cudaEvent_t;
