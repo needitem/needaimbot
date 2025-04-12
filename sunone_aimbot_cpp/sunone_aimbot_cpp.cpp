@@ -21,6 +21,12 @@
 #include "ghub.h"
 #include "other_tools.h"
 #include "mouse/InputMethod.h"
+#include "config.h"
+#include "detector/detector.h"
+
+// Include headers for version checking
+#include <cuda_runtime_api.h>
+#include <iomanip> // For std::setw
 
 std::condition_variable frameCV;
 std::atomic<bool> shouldExit(false);
@@ -266,12 +272,34 @@ bool loadAndValidateModel(std::string& modelName, const std::vector<std::string>
 
 int main()
 {
+    // Load config first to check the verbose flag
     if (!config.loadConfig())
     {
         std::cerr << "[Config] Error loading config! Check config.ini." << std::endl;
         std::cin.get();
         return -1;
     }
+
+    // --- Version Logging Start ---
+    if (config.verbose) {
+        std::cout << "--- Dependency Versions ---" << std::endl;
+
+        // CUDA Version
+        int runtimeVersion = 0;
+        cudaError_t cuda_err = cudaRuntimeGetVersion(&runtimeVersion);
+        if (cuda_err == cudaSuccess) {
+            int major = runtimeVersion / 1000;
+            int minor = (runtimeVersion % 1000) / 10;
+            std::cout << std::left << std::setw(20) << "CUDA Runtime:" << major << "." << minor << std::endl;
+        } else {
+            std::cerr << std::left << std::setw(20) << "CUDA Runtime:" << "Error getting version - " << cudaGetErrorString(cuda_err) << std::endl;
+        }
+
+        // OpenCV Version
+        std::cout << std::left << std::setw(20) << "OpenCV Build Info:" << std::endl << cv::getBuildInformation() << std::endl;
+        std::cout << "---------------------------" << std::endl << std::endl;
+    }
+    // --- Version Logging End ---
 
     // Initialize the CUDA context for the detector after loading config
     detector.initializeCudaContext();
