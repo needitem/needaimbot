@@ -48,6 +48,7 @@
 
 // Assume detector is globally accessible or passed to captureThread
 extern Detector detector;
+extern std::mutex configMutex; // Declare configMutex as external
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -57,6 +58,7 @@ extern Detector detector;
 cv::cuda::GpuMat latestFrameGpu;
 std::mutex frameMutex;
 cv::Mat latestFrameCpu;
+std::atomic<bool> newFrameAvailable = false; // Definition for frame notification flag
 
 // Define other global variables as needed
 int screenWidth = 0;
@@ -248,10 +250,14 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                     {
                         std::lock_guard<std::mutex> lock(frameMutex);
                         latestFrameGpu = screenshotGpu.clone(); // Update global GPU frame (RAW)
-                        if (config.show_window) // Only download to CPU if the debug window is shown
                         {
-                             screenshotGpu.download(latestFrameCpu);
+                           std::lock_guard<std::mutex> config_lock(configMutex); // Lock config mutex before reading config
+                            if (config.show_window) // Only download to CPU if the debug window is shown
+                            {
+                                screenshotGpu.download(latestFrameCpu);
+                            }
                         }
+                        newFrameAvailable = true; // Set flag indicating a frame (GPU or maybe CPU via download) is ready
                         frameCV.notify_one(); // Notify display thread
                     }
                 }
@@ -298,9 +304,10 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                     {
                         std::lock_guard<std::mutex> lock(frameMutex);
                         // Update global CPU frame with the raw captured frame
-                        latestFrameCpu = screenshotCpu.clone(); 
+                        latestFrameCpu = screenshotCpu.clone();
+                        newFrameAvailable = true; // Set flag indicating a CPU frame is ready
                         // Remove GPU frame update here, detector will handle GpuMat creation
-                        // latestFrameGpu = processedFrameGpuForDetector.clone(); 
+                        // latestFrameGpu = processedFrameGpuForDetector.clone();
                     }
                     frameCV.notify_one(); // Notify display thread
                 }

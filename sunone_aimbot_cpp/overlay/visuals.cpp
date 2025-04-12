@@ -20,6 +20,7 @@
 #include "capture.h"
 
 extern std::atomic<bool> show_window_changed;
+extern std::mutex configMutex; // Declare configMutex as external
 
 // Assume these are defined elsewhere and updated (e.g., in main or capture)
 extern cv::cuda::GpuMat latestFrameGpu;
@@ -29,222 +30,233 @@ extern std::condition_variable frameCV;
 
 void displayThread()
 {
-    // Removed CPU vectors: std::vector<cv::Rect> boxes; std::vector<int> classes;
-
-    if (config.show_window)
-    {
-        cv::namedWindow(config.window_name, cv::WINDOW_NORMAL);
-
-        if (config.always_on_top)
-        {
-            cv::setWindowProperty(config.window_name, cv::WND_PROP_TOPMOST, 1);
-        }
-        else
-        {
-            cv::setWindowProperty(config.window_name, cv::WND_PROP_TOPMOST, 0);
-        }
-    }
-
     int currentSize = 0;
-    cv::cuda::GpuMat frameGpu;       // Use GpuMat for the frame
-    cv::cuda::GpuMat displayFrameGpu; // Use GpuMat for resizing and drawing
-    cv::Mat displayFrameCpu;      // CPU Mat for imshow and text drawing
-
-    // Use a dedicated CUDA stream for visualization tasks if desired, or use default stream
-    cv::cuda::Stream visStream; // Optional: Create a stream for visualization
+    // We need both GPU and CPU Mats for different paths
+    cv::cuda::GpuMat frameGpu;
+    cv::cuda::GpuMat displayFrameGpu;
+    cv::Mat frameCpu;
+    cv::Mat displayFrameCpu; // This will hold the final image for imshow
+    cv::cuda::Stream visStream;
+    bool window_created = false;
 
     while (!shouldExit)
     {
-        if (show_window_changed.load())
+        bool show_window_flag_changed = show_window_changed.load();
+        bool should_show_window = false;
+        bool should_be_always_on_top = false;
+        bool use_cuda = false; // Capture mode
+        int window_size = 100;
+        bool show_fps = false;
+
         {
-            if (config.show_window)
-            {
-                cv::namedWindow(config.window_name, cv::WINDOW_NORMAL);
-                if (config.always_on_top)
-                {
-                    cv::setWindowProperty(config.window_name, cv::WND_PROP_TOPMOST, 1);
-                }
-                else
-                {
-                    cv::setWindowProperty(config.window_name, cv::WND_PROP_TOPMOST, 0);
-                }
-            }
-            else
-            {
-                if (cv::getWindowProperty(config.window_name, cv::WND_PROP_VISIBLE) >= 0)
-                {
-                   cv::destroyWindow(config.window_name);
-                }
-            }
+            std::lock_guard<std::mutex> lock(configMutex);
+            should_show_window = config.show_window;
+            should_be_always_on_top = config.always_on_top;
+            use_cuda = config.capture_use_cuda;
+            window_size = config.window_size;
+            show_fps = config.show_fps;
+        }
+
+        if (show_window_flag_changed) {
             show_window_changed.store(false);
         }
 
-        if (config.show_window)
-        {
+        // --- Window Lifecycle Management ---
+        if (should_show_window) {
+             if (!window_created) {
+                 cv::namedWindow(config.window_name, cv::WINDOW_NORMAL);
+                 cv::setWindowProperty(config.window_name, cv::WND_PROP_TOPMOST, should_be_always_on_top ? 1 : 0);
+                 window_created = true;
+                 currentSize = 0;
+                 // Clear buffers when window is created
+                 displayFrameGpu = cv::cuda::GpuMat();
+                 displayFrameCpu = cv::Mat();
+             }
+             else if (show_window_flag_changed) {
+                  cv::setWindowProperty(config.window_name, cv::WND_PROP_TOPMOST, should_be_always_on_top ? 1 : 0);
+             }
+
+            // --- Frame Acquisition ---
+            bool frameValid = false;
+            int originalWidth = 0;
+            int originalHeight = 0;
             {
                 std::unique_lock<std::mutex> lock(frameMutex);
-                frameCV.wait(lock, [] { return !latestFrameGpu.empty() || shouldExit; });
+                frameCV.wait(lock, [&] { return newFrameAvailable || shouldExit; });
+
                 if (shouldExit) break;
-                frameGpu = latestFrameGpu.clone();
-            }
 
-            if (frameGpu.empty()) continue; // Skip if frame is empty
-
-            int desiredWidth = frameGpu.cols; // Base width
-            int desiredHeight = frameGpu.rows; // Base height
-            int displayWidth = desiredWidth;
-            int displayHeight = desiredHeight;
-
-            // Assume displayFrameGpu needs update if size changes or it's empty
-            bool needsResizeOrCopy = false;
-
-            if (config.window_size != 100)
-            {
-                displayWidth = static_cast<int>((desiredWidth * config.window_size) / 100.0f);
-                displayHeight = static_cast<int>((desiredHeight * config.window_size) / 100.0f);
-                if (displayWidth != currentSize || displayFrameGpu.cols != displayWidth || displayFrameGpu.rows != displayHeight || displayFrameGpu.empty()) {
-                    cv::resizeWindow(config.window_name, displayWidth, displayHeight);
-                    currentSize = displayWidth;
-                    needsResizeOrCopy = true;
+                if (newFrameAvailable) {
+                    if (use_cuda) {
+                        if (!latestFrameGpu.empty()) {
+                            frameGpu = latestFrameGpu.clone(); // Clone GPU frame
+                            originalWidth = frameGpu.cols;
+                            originalHeight = frameGpu.rows;
+                            frameValid = true;
+                        }
+                    } else { // CPU Mode
+                        if (!latestFrameCpu.empty()) {
+                            frameCpu = latestFrameCpu.clone(); // Clone CPU frame
+                            originalWidth = frameCpu.cols;
+                            originalHeight = frameCpu.rows;
+                            frameValid = true;
+                        }
+                    }
+                    newFrameAvailable = false; // Reset flag
                 }
+            } // frameMutex unlocked
+
+            if (!frameValid || originalWidth == 0 || originalHeight == 0) continue;
+
+            // --- Resizing Logic (GPU or CPU path) ---
+            int displayWidth = originalWidth;
+            int displayHeight = originalHeight;
+            bool needsResize = false;
+
+            if (window_size != 100) {
+                displayWidth = static_cast<int>((originalWidth * window_size) / 100.0f);
+                displayHeight = static_cast<int>((originalHeight * window_size) / 100.0f);
             }
-            else // config.window_size == 100
+
+            // Check if resize is needed OR if target buffer size is wrong
+            if (currentSize != displayWidth || // Window size changed
+                (use_cuda && (displayFrameGpu.cols != displayWidth || displayFrameGpu.rows != displayHeight)) ||
+                (!use_cuda && (displayFrameCpu.cols != displayWidth || displayFrameCpu.rows != displayHeight)) ||
+                (use_cuda && displayFrameGpu.empty()) || // Buffer empty
+                (!use_cuda && displayFrameCpu.empty()) )
             {
-                 displayWidth = desiredWidth;
-                 displayHeight = desiredHeight;
-                 if (currentSize != displayWidth || displayFrameGpu.cols != displayWidth || displayFrameGpu.rows != displayHeight || displayFrameGpu.empty()) {
-                    cv::resizeWindow(config.window_name, displayWidth, displayHeight);
-                    currentSize = displayWidth;
-                    needsResizeOrCopy = true; // Need to copy/clone even if size is same but buffer is invalid/empty
+                 needsResize = true; // Need resize or initial copy
+                 if (window_created && displayWidth > 0 && displayHeight > 0) {
+                     cv::resizeWindow(config.window_name, displayWidth, displayHeight);
+                 }
+                 currentSize = displayWidth;
+            }
+
+            // Perform Resize/Copy
+            if (use_cuda) {
+                bool resize_performed = false;
+                // Check if window/buffer size mismatch requires action
+                if (needsResize) {
+                    if (window_size != 100 && displayWidth > 0 && displayHeight > 0) {
+                         // Perform GPU resize
+                         cv::cuda::resize(frameGpu, displayFrameGpu, cv::Size(displayWidth, displayHeight), 0, 0, cv::INTER_LINEAR, visStream);
+                         resize_performed = true;
+                    }
+                    // If window_size is 100, needsResize might be true only because displayFrameGpu was empty/wrong size.
+                    // The copy will happen below if resize wasn't performed.
+                }
+
+                // If resize was NOT performed (either needsResize was false, or window_size was 100),
+                // ensure displayFrameGpu is updated with the current frame's data using copyTo.
+                if (!resize_performed) {
+                    frameGpu.copyTo(displayFrameGpu, visStream);
+                }
+
+                 // Now download the final displayFrameGpu (it's guaranteed to be updated now)
+                 if (!displayFrameGpu.empty()){
+                     visStream.waitForCompletion();
+                     displayFrameGpu.download(displayFrameCpu, visStream);
+                     visStream.waitForCompletion();
+                 } else {
+                     std::cerr << "[Visuals] Error: displayFrameGpu is empty before download!" << std::endl;
+                     continue;
+                 }
+
+            } else { // CPU Mode
+                if (needsResize) {
+                     if (window_size != 100 && displayWidth > 0 && displayHeight > 0) {
+                          cv::resize(frameCpu, displayFrameCpu, cv::Size(displayWidth, displayHeight), 0, 0, cv::INTER_LINEAR);
+                     } else {
+                          displayFrameCpu = frameCpu; // Use directly if no resize or size 100
+                     }
+                } else if (displayFrameCpu.empty()) { // Initial frame case without resize
+                    displayFrameCpu = frameCpu;
+                }
+                 // displayFrameCpu now holds the correct CPU image
+                 if (displayFrameCpu.empty()) {
+                     std::cerr << "[Visuals] Error: displayFrameCpu is empty in CPU mode!" << std::endl;
+                     continue;
                  }
             }
 
-            // Perform resize or copy to displayFrameGpu
-            if (needsResizeOrCopy) {
-                if (config.window_size != 100) {
-                    cv::cuda::resize(frameGpu, displayFrameGpu, cv::Size(displayWidth, displayHeight), 0, 0, cv::INTER_LINEAR, visStream);
-                } else {
-                    // If size is 100, displayFrameGpu should be a copy of frameGpu
-                    frameGpu.copyTo(displayFrameGpu, visStream); // Use copyTo if no modification needed before download
-                }
-            } else {
-                 // If no resize/copy needed, make sure displayFrameGpu still references the correct data for download
-                 // This case might be tricky if frameGpu is modified elsewhere. Safest might be copy always if unsure.
-                 // Let's assume if needsResizeOrCopy is false, displayFrameGpu is already correct from previous iteration or not needed.
-                 // If drawing happened *on* displayFrameGpu, it would need cloning. Since drawing is moved to CPU, copyTo is ok.
-                  if (displayFrameGpu.empty()) { // Ensure it's initialized if this is the first frame and size is 100
-                      frameGpu.copyTo(displayFrameGpu, visStream);
-                  }
-            }
 
-            std::string labelText = ""; // Store text label to draw later on CPU
+            // --- Detection Overlay Logic (Draws on displayFrameCpu) ---
+             Detection bestTargetHost;
+             bool hasTarget = false;
+             cv::Rect scaledBox;
+             std::string labelText = "";
+             {
+                 std::lock_guard<std::mutex> lock(detector.detectionMutex);
+                 if (detector.m_hasBestTarget)
+                 {
+                     hasTarget = true;
+                     bestTargetHost = detector.m_bestTargetHost;
+                     // Scaling calculations (From detection res to display size: displayWidth/displayHeight)
+                     cv::Rect box = bestTargetHost.box;
+                     float scale_x = static_cast<float>(displayWidth) / config.detection_resolution;
+                     float scale_y = static_cast<float>(displayHeight) / config.detection_resolution;
 
-            Detection bestTargetHost; // Local struct to hold the best target copied from Host (already copied in detector)
-            bool hasTarget = false;
-            cv::Rect scaledBox;       // Scaled box coordinates for drawing
+                     scaledBox.x = static_cast<int>(box.x * scale_x);
+                     scaledBox.y = static_cast<int>(box.y * scale_y);
+                     scaledBox.width = static_cast<int>(box.width * scale_x);
+                     scaledBox.height = static_cast<int>(box.height * scale_y);
 
-            { // Mutex lock scope for accessing detector results (reading host variables)
-                std::lock_guard<std::mutex> lock(detector.detectionMutex);
-                if (detector.m_hasBestTarget) // Use the flag set after successful DtoH copy in Detector
-                {
-                    hasTarget = true;
-                    bestTargetHost = detector.m_bestTargetHost; // Copy from the host member
+                     // Clamp box
+                     scaledBox.x = std::max(0, scaledBox.x);
+                     scaledBox.y = std::max(0, scaledBox.y);
+                     scaledBox.width = std::min(displayWidth - scaledBox.x, scaledBox.width);
+                     scaledBox.height = std::min(displayHeight - scaledBox.y, scaledBox.height);
 
-                    // --- Scaling calculations (can stay on CPU) ---
-                    cv::Rect box = bestTargetHost.box; // Original box from detection resolution
-
-                    // 1. Scale box from detection resolution to original frame resolution (frameGpu size)
-                    float box_scale_x = static_cast<float>(frameGpu.cols) / config.detection_resolution;
-                    float box_scale_y = static_cast<float>(frameGpu.rows) / config.detection_resolution;
-
-                    scaledBox.x = static_cast<int>(box.x * box_scale_x);
-                    scaledBox.y = static_cast<int>(box.y * box_scale_y);
-                    scaledBox.width = static_cast<int>(box.width * box_scale_x);
-                    scaledBox.height = static_cast<int>(box.height * box_scale_y);
-
-                    // 2. Scale box from original frame resolution to display frame resolution (displayFrameGpu size)
-                    float resize_scale_x = static_cast<float>(displayFrameGpu.cols) / frameGpu.cols;
-                    float resize_scale_y = static_cast<float>(displayFrameGpu.rows) / frameGpu.rows;
-
-                    scaledBox.x = static_cast<int>(scaledBox.x * resize_scale_x);
-                    scaledBox.y = static_cast<int>(scaledBox.y * resize_scale_y);
-                    scaledBox.width = static_cast<int>(scaledBox.width * resize_scale_x);
-                    scaledBox.height = static_cast<int>(scaledBox.height * resize_scale_y);
-
-                    // 3. Clamp box to display frame boundaries
-                    scaledBox.x = std::max(0, scaledBox.x);
-                    scaledBox.y = std::max(0, scaledBox.y);
-                    scaledBox.width = std::min(displayFrameGpu.cols - scaledBox.x, scaledBox.width);
-                    scaledBox.height = std::min(displayFrameGpu.rows - scaledBox.y, scaledBox.height);
-
-                    // Prepare label text (on CPU)
-                    labelText = "ID:" + std::to_string(bestTargetHost.classId); // + " C:" + std::to_string(bestTargetHost.confidence).substr(0,4);
-                }
-            } // Mutex released here
-
-            // --- Download the frame to CPU for text overlay and display ---
-             if (!displayFrameGpu.empty()) {
-                visStream.waitForCompletion(); // Ensure drawing/resizing is done before download
-                displayFrameGpu.download(displayFrameCpu, visStream);
-                visStream.waitForCompletion(); // Ensure download is done before CPU access
-             } else if (!frameGpu.empty()) {
-                 // Fallback: If displayFrameGpu wasn't created (e.g., size 100, no resize), download original frameGpu
-                 frameGpu.download(displayFrameCpu, visStream);
-                 visStream.waitForCompletion();
-             } else {
-                 // If both are empty, skip display
-                 continue;
+                     labelText = "ID:" + std::to_string(bestTargetHost.classId);
+                 }
              }
 
-            // --- Draw overlays on CPU Mat ---
+            // --- Draw on CPU (displayFrameCpu) ---
             if (!displayFrameCpu.empty()) {
-                // Draw rectangle on CPU if a target exists
-                if (hasTarget && scaledBox.width > 0 && scaledBox.height > 0)
-                {
-                    cv::rectangle(displayFrameCpu, scaledBox, cv::Scalar(0, 255, 0), 2); // Draw on CPU Mat
+                // Draw detection box
+                if (hasTarget && scaledBox.width > 0 && scaledBox.height > 0) {
+                    cv::rectangle(displayFrameCpu, scaledBox, cv::Scalar(0, 255, 0), 2);
+                    cv::Point textOrg(scaledBox.x, std::max(0, scaledBox.y - 5));
+                    cv::putText(displayFrameCpu, labelText, textOrg, cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 1);
                 }
-
-                // Draw label text on CPU
-                if (hasTarget) {
-                    // Draw label text near the (scaled) box
-                    cv::Point textOrg(scaledBox.x, std::max(0, scaledBox.y - 5)); // Position above box, clamp y
-                    cv::putText(displayFrameCpu, labelText, textOrg,
-                        cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 1);
-                }
-
-                if (config.show_fps && !displayFrameCpu.empty())
-                {
-                    // Draw FPS text
-                    cv::putText(displayFrameCpu, "FPS: " + std::to_string(static_cast<int>(captureFps)), cv::Point(10, 30),
-                        cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(255, 255, 0), 2);
+                // Draw FPS (Use value read earlier under lock)
+                if (show_fps) {
+                     cv::putText(displayFrameCpu, "FPS: " + std::to_string(static_cast<int>(captureFps)), cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(255, 255, 0), 2);
                 }
             }
 
-            // --- Display the final CPU frame ---
-            try
-            {
+            // --- Show Frame (displayFrameCpu) ---
+            try {
                  if (!displayFrameCpu.empty()) {
                      cv::imshow(config.window_name, displayFrameCpu);
                  }
-            }
-            catch (cv::Exception& e)
-            {
+            } catch (const cv::Exception& e) {
                 std::cerr << "[Visuals]: OpenCV display error: " << e.what() << std::endl;
-                // Consider breaking or handling the error appropriately
-                // break;
+                 if(window_created) {
+                      if (cv::getWindowProperty(config.window_name, cv::WND_PROP_VISIBLE) >= 0) {
+                         cv::destroyWindow(config.window_name);
+                      }
+                      window_created = false;
+                 }
             }
 
-            if (cv::waitKey(1) == 27) shouldExit = true;
-        }
-        else
-        {
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
-        }
-    }
+            // --- Handle OpenCV events ---
+            if (cv::waitKey(1) == 27) { shouldExit = true; }
 
-    // Cleanup: Use getWindowProperty again
-    if (cv::getWindowProperty(config.window_name, cv::WND_PROP_VISIBLE) >= 0)
-    {
-        cv::destroyWindow(config.window_name);
+        } else { // should_show_window is false
+            if (window_created) {
+                if (cv::getWindowProperty(config.window_name, cv::WND_PROP_VISIBLE) >= 0) {
+                    cv::destroyWindow(config.window_name);
+                }
+                window_created = false;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    } // End while loop
+
+    if (window_created) {
+        if (cv::getWindowProperty(config.window_name, cv::WND_PROP_VISIBLE) >= 0) {
+            cv::destroyWindow(config.window_name);
+        }
     }
 }
