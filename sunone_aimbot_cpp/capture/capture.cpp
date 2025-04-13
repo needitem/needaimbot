@@ -179,35 +179,55 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 capture_cursor_changed.load() ||
                 capture_borders_changed.load())
             {
-                // Clean up the old capturer instance (unique_ptr does this automatically via reset)
+                 // std::cout << "[Capture] Configuration changed, recreating capturer..." << std::endl; // <<< REMOVED LOG
+
+                // Step 1: Explicitly destroy the old capturer first
+                // std::cout << "[Capture] Resetting existing capturer..." << std::endl; // <<< REMOVED LOG
+                capturer.reset(); // This calls the destructor and Release()
+                // std::cout << "[Capture] Existing capturer reset complete." << std::endl; // <<< REMOVED LOG
+
+                // Optional: Add a small delay if needed, although fixing the order should suffice
+                // std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
                 // Get new dimensions from config
                 int new_CAPTURE_WIDTH = config.detection_resolution;
                 int new_CAPTURE_HEIGHT = config.detection_resolution;
 
-                // Use the helper function to create the new capturer - REPLACED
-                // capturer.reset(createCapturer(new_CAPTURE_WIDTH, new_CAPTURE_HEIGHT)); // unique_ptr handles deleting the old one
-                capturer.reset(new DuplicationAPIScreenCapture(new_CAPTURE_WIDTH, new_CAPTURE_HEIGHT));
-                if (!capturer) {
-                    std::cerr << "[Capture] Failed to re-initialize DuplicationAPIScreenCapture after config change!" << std::endl;
+                // Step 2: Create the new capturer using make_unique
+                // std::cout << "[Capture] Creating new DuplicationAPIScreenCapture..." << std::endl; // <<< REMOVED LOG
+                capturer = std::make_unique<DuplicationAPIScreenCapture>(new_CAPTURE_WIDTH, new_CAPTURE_HEIGHT);
+                // std::cout << "[Capture] New DuplicationAPIScreenCapture created." << std::endl; // <<< REMOVED LOG
+
+                // Step 3: Check if the NEW capturer initialized successfully
+                if (!capturer || !capturer->IsInitialized()) { // Use the new IsInitialized() method
+                    std::cerr << "[Capture] Failed to create or initialize new DuplicationAPIScreenCapture after config change!" << std::endl;
+                    capturer.reset(); // Clean up the failed object
                     break; // Exit the loop if re-initialization fails
                 }
+                // std::cout << "[Capture] New capturer initialized successfully." << std::endl; // <<< REMOVED LOG
+
 
                 // --- Update capture event for the detector after recreation ---
-                if (capturer) { // Check if new capturer is valid
-                    detector.setCaptureEvent(capturer->GetCaptureDoneEvent());
-                }
+                // No need to check capturer here again, already checked above
+                detector.setCaptureEvent(capturer->GetCaptureDoneEvent());
+                 // std::cout << "[Capture] Capture event updated for detector." << std::endl; // <<< REMOVED LOG
+
+
                 // --- End update ---
 
                 // Update global screen dimensions (Consider getting actual dimensions from capturer if possible)
-                screenWidth = new_CAPTURE_WIDTH;
-                screenHeight = new_CAPTURE_HEIGHT;
+                // TODO: Ideally, get screenWidth/screenHeight from the new capturer instance
+                // For now, using config values:
+                screenWidth = new_CAPTURE_WIDTH; // This seems incorrect if it's just detection resolution
+                screenHeight = new_CAPTURE_HEIGHT; // This seems incorrect if it's just detection resolution
+                // It might be better to get the actual screen dimensions from DDAManager after init.
 
                 // Reset the change flags
                 detection_resolution_changed.store(false);
                 // capture_method_changed.store(false); // Removed
                 capture_cursor_changed.store(false);
                 capture_borders_changed.store(false);
+                 // std::cout << "[Capture] Configuration change handled." << std::endl; // <<< REMOVED LOG
             }
 
             // --- Frame Capture and Processing ---

@@ -9,8 +9,13 @@
 #include <d3d11.h>
 #include <dxgi1_2.h>
 #include <memory>
+#include <iostream>
+#include <iomanip>
 
 #include "capture.h"
+
+#pragma comment(lib, "d3d11.lib")
+#pragma comment(lib, "dxgi.lib")
 
 // Forward declaration
 struct ID3D11Device;
@@ -32,7 +37,8 @@ public:
     ~DuplicationAPIScreenCapture();
     cv::cuda::GpuMat GetNextFrameGpu() override;
     cv::Mat GetNextFrameCpu() override;
-    cudaEvent_t GetCaptureDoneEvent() const;
+    cudaEvent_t GetCaptureDoneEvent() const override;
+    bool IsInitialized() const { return m_initialized; }
 
 private:
     std::unique_ptr<DDAManager> m_ddaManager;
@@ -53,6 +59,7 @@ private:
     int regionHeight = 0;
 
     cv::cuda::GpuMat m_previousFrame;
+    bool m_initialized = false;
 };
 
 #endif // DUPLICATION_API_CAPTURE_H

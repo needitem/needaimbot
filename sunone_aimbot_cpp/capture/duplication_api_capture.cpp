@@ -428,7 +428,7 @@ public:
 };
 
 DuplicationAPIScreenCapture::DuplicationAPIScreenCapture(int desiredWidth, int desiredHeight)
-    : d3dDevice(nullptr), d3dContext(nullptr), deskDupl(nullptr), stagingTexture(nullptr), output1(nullptr), sharedTexture(nullptr), cudaResource(nullptr), cudaStream(nullptr), regionWidth(desiredWidth), regionHeight(desiredHeight), screenWidth(0), screenHeight(0)
+    : d3dDevice(nullptr), d3dContext(nullptr), deskDupl(nullptr), stagingTexture(nullptr), output1(nullptr), sharedTexture(nullptr), cudaResource(nullptr), cudaStream(nullptr), regionWidth(desiredWidth), regionHeight(desiredHeight), screenWidth(0), screenHeight(0), m_initialized(false)
 {
     std::cout << "[Capture] DuplicationAPIScreenCapture constructor called." << std::endl;
     m_ddaManager = std::make_unique<DDAManager>();
@@ -447,6 +447,8 @@ DuplicationAPIScreenCapture::DuplicationAPIScreenCapture(int desiredWidth, int d
                   << std::hex << hr << std::endl;
         return;
     }
+
+    m_initialized = true;
 }
 
 DuplicationAPIScreenCapture::~DuplicationAPIScreenCapture()
