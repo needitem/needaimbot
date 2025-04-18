@@ -2,7 +2,7 @@
 #define SCORING_GPU_H
 
 #include <cuda_runtime.h>
-#include "postProcess.h" // For Detection struct
+#include "postProcess.h"
 
 /**
  * @brief Calculates target scores on the GPU based on distance and class ID.
@@ -43,5 +43,4 @@ cudaError_t findBestTargetGpu(
     cudaStream_t stream
 );
 
-
-#endif // SCORING_GPU_H
+#endif

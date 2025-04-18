@@ -59,8 +59,9 @@ MouseThread::MouseThread(
     bool auto_shoot,
     float bScope_multiplier,
     float norecoil_ms,
+    float prediction_time_ms,
     SerialConnection *serialConnection,
-    GhubMouse *gHub) : tracking_errors(false)
+    GhubMouse *gHub) : tracking_errors(false), prediction_time_ms_(prediction_time_ms)
 {
     initializeScreen(resolution, dpi, fovX, fovY, auto_shoot, bScope_multiplier, norecoil_ms);
     kalman_filter = std::make_unique<KalmanFilter2D>(process_noise_q, measurement_noise_r);
@@ -134,11 +135,13 @@ void MouseThread::updateConfig(
     float measurement_noise_r,
     bool auto_shoot,
     float bScope_multiplier,
-    float norecoil_ms)
+    float norecoil_ms,
+    float prediction_time_ms)
 {
     initializeScreen(resolution, dpi, fovX, fovY, auto_shoot, bScope_multiplier, norecoil_ms);
     kalman_filter->updateParameters(process_noise_q, measurement_noise_r);
     pid_controller->updateSeparatedParameters(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
+    this->prediction_time_ms_ = prediction_time_ms;
 }
 
 Eigen::Vector2f MouseThread::predictTargetPosition(float target_x, float target_y)
@@ -163,7 +166,7 @@ Eigen::Vector2f MouseThread::predictTargetPosition(float target_x, float target_
     float velocity_magnitude = std::sqrt(vel_x * vel_x + vel_y * vel_y);
 
     // Simplified prediction time calculation
-    float prediction_time = 0.03f; // Fixed base prediction time (30ms)
+    float prediction_time = prediction_time_ms_ / 1000.0f;
     
     // Only scale prediction time based on velocity
     if (velocity_magnitude > 50.0f) {

@@ -75,6 +75,7 @@ bool Config::loadConfig(const std::string& filename)
         norecoil_step = 5.0f;
         norecoil_ms = 10.0f;
         input_method = "WIN32";
+        prediction_time_ms = 30.0f;
 
         // PID Controller
         // kp = 0.5;
@@ -215,6 +216,7 @@ bool Config::loadConfig(const std::string& filename)
     norecoil_step = (float)get_double("norecoil_step", 5.0);
     norecoil_ms = (float)get_double("norecoil_ms", 10.0);
     input_method = get_string("input_method", "WIN32");
+    prediction_time_ms = (float)get_double("prediction_time_ms", 30.0);
 
     // PID Controller
     // kp = (double)get_double("kp", 0.5);
@@ -316,6 +318,9 @@ bool Config::loadConfig(const std::string& filename)
 
     // Buttons
     ini.SetValue("", "button_targeting", joinStrings(button_targeting, " ").c_str());
+
+    ini.SetDoubleValue("", "norecoil_ms", norecoil_ms);
+    ini.SetDoubleValue("", "prediction_time_ms", prediction_time_ms);
 
     return true;
 }

@@ -58,6 +58,8 @@ private:
     // Simplified target tracking
     AimbotTarget *current_target;
 
+    float prediction_time_ms_; // Base prediction time
+
     float calculateTargetDistance(const AimbotTarget &target) const;
     AimbotTarget *findClosestTarget(const std::vector<AimbotTarget> &targets) const;
     void initializeInputMethod(SerialConnection *serialConnection, GhubMouse *gHub);
@@ -70,6 +72,7 @@ public:
                 float process_noise_q, float measurement_noise_r,
                 bool auto_shoot, float bScope_multiplier,
                 float norecoil_ms,
+                float prediction_time_ms, // Add prediction time parameter
                 SerialConnection *serialConnection = nullptr,
                 GhubMouse *gHub = nullptr);
     ~MouseThread();
@@ -79,7 +82,8 @@ public:
                       float kp_y, float ki_y, float kd_y,
                       float process_noise_q, float measurement_noise_r,
                       bool auto_shoot, float bScope_multiplier,
-                      float norecoil_ms);
+                      float norecoil_ms,
+                      float prediction_time_ms); // Add prediction time parameter
 
     Eigen::Vector2f predictTargetPosition(float target_x, float target_y);
     Eigen::Vector2f calculateMovement(const Eigen::Vector2f &target_pos);
