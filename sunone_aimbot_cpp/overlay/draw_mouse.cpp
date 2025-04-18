@@ -208,6 +208,18 @@ void draw_mouse()
             {
                 SetWrappedTooltip("Delay in milliseconds between recoil compensation movements (0.0 - 100.0)");
             }
+
+            // Add Prediction Time slider here
+            if (ImGui::InputFloat("Base Prediction (ms)", &config.prediction_time_ms, 0.0f, 0.0f, "%.1f"))
+            {
+                config.prediction_time_ms = std::max(0.0f, std::min(config.prediction_time_ms, 100.0f)); // Clamp value
+                config.saveConfig(); 
+            }
+            if (ImGui::IsItemHovered())
+            {
+                 SetWrappedTooltip("Base prediction time in milliseconds. Higher values predict further ahead but may overshoot. (0.0 - 100.0)");
+            }
+
             ImGui::Unindent(10.0f);
             
             // Warning for high recoil strength

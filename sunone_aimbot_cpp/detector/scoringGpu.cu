@@ -25,36 +25,30 @@ __global__ void calculateTargetScoresKernel(
 
     if (idx < num_detections) {
         const Detection& det = d_detections[idx];
-        const cv::Rect& box = det.box; // cv::Rect is plain data, accessible in kernel
+        const cv::Rect& box = det.box;
 
-        // Calculate center (relative to detection resolution, assuming box coords are scaled)
         const float center_x = box.x + box.width * 0.5f;
         const float center_y = box.y + box.height * 0.5f;
 
-        // Calculate difference from screen center
         const float half_res_x = resolution_x * 0.5f;
         const float half_res_y = resolution_y * 0.5f;
         const float diff_x = center_x - half_res_x;
         const float diff_y = center_y - half_res_y;
 
-        // Calculate squared distance and score
         const float squared_distance = diff_x * diff_x + diff_y * diff_y;
 
         float distance_score;
-        // These thresholds might need adjustment based on typical distances
-        if (squared_distance < 100.0f) { // Very close
+
+        if (squared_distance < 100.0f) {
             distance_score = 1.0f;
-        } else if (squared_distance > 500000.0f) { // Very far
+        } else if (squared_distance > 500000.0f) {
             distance_score = 0.0001f;
         } else {
-            // Inverse relationship: closer is better score
             distance_score = 1.0f / (1.0f + sqrtf(squared_distance));
         }
 
-        // Calculate class score bonus
         float class_score = (!disable_headshot && det.classId == class_head) ? 1.5f : 1.0f;
 
-        // Final score
         d_scores[idx] = distance_score * class_score;
     }
 }
@@ -86,7 +80,6 @@ void calculateTargetScoresGpu(
     );
 }
 
-
 // Function to find the best target index using Thrust
 cudaError_t findBestTargetGpu(
     const float* d_scores,
@@ -95,35 +88,30 @@ cudaError_t findBestTargetGpu(
     cudaStream_t stream)
 {
     if (num_detections <= 0) {
-         // Set index to -1 or handle appropriately if no detections
-         cudaMemsetAsync(d_best_index_gpu, 0xFF, sizeof(int), stream); // Set to -1
+         cudaMemsetAsync(d_best_index_gpu, 0xFF, sizeof(int), stream);
          return cudaSuccess;
     }
     try {
-        // Wrap raw pointers for Thrust
         thrust::device_ptr<const float> d_scores_ptr(d_scores);
 
-        // Find iterator to the max element
         auto max_iter = thrust::max_element(
-            thrust::cuda::par.on(stream), // Execute on the specified stream
+            thrust::cuda::par.on(stream),
             d_scores_ptr,
             d_scores_ptr + num_detections
         );
 
-        // Calculate the index using thrust::distance
         int best_index = thrust::distance(d_scores_ptr, max_iter);
 
-        // Copy the index to the output GPU buffer
         cudaMemcpyAsync(
             d_best_index_gpu,
             &best_index,
             sizeof(int),
-            cudaMemcpyHostToDevice, // Copying calculated index from host temp variable to GPU buffer
+            cudaMemcpyHostToDevice,
             stream
         );
-        return cudaGetLastError(); // Check for errors in async operations
+        return cudaGetLastError();
     } catch (const std::exception& e) {
          fprintf(stderr, "[Thrust Error] findBestTargetGpu: %s\n", e.what());
-         return cudaErrorUnknown; // Or a more specific error
+         return cudaErrorUnknown;
     }
 }
