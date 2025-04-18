@@ -112,23 +112,23 @@ void draw_mouse()
         }
 
         float ki_y_display = static_cast<float>(config.ki_y);
-        if (ImGui::SliderFloat("Integral Y (Ki)", &ki_y_display, 0.0f, 20.0f, "%.3f"))
+        if (ImGui::SliderFloat("Integral Y (Ki)", &ki_y_display, 0.0f, 10.0f, "%.3f"))
         {
             config.ki_y = static_cast<double>(ki_y_display);
         }
         if (ImGui::IsItemHovered())
         {
-            SetWrappedTooltip("Accounts for accumulated vertical error over time. Higher values help eliminate persistent offset but can cause oscillation.");
+            SetWrappedTooltip("Integral gain for Y-axis. (0.0 - 10.0)");
         }
 
         float kd_y_display = static_cast<float>(config.kd_y);
-        if (ImGui::SliderFloat("Derivative Y (Kd)", &kd_y_display, 0.0f, 5.0f, "%.3f"))
+        if (ImGui::SliderFloat("Derivative Y (Kd)", &kd_y_display, 0.0f, 10.0f, "%.3f"))
         {
             config.kd_y = static_cast<double>(kd_y_display);
         }
         if (ImGui::IsItemHovered())
         {
-            SetWrappedTooltip("Predicts future vertical error based on rate of change. Higher values add dampening to reduce overshooting.");
+            SetWrappedTooltip("Derivative gain for Y-axis. (0.0 - 10.0)");
         }
         ImGui::Spacing(); // Add spacing after the Y-axis PID settings
     }
@@ -138,23 +138,9 @@ void draw_mouse()
     ImGui::Spacing(); // Add spacing before the Kalman header
 
     // Group Kalman Filter Settings
-    if (ImGui::CollapsingHeader("Kalman Filter Smoothing", ImGuiTreeNodeFlags_DefaultOpen))
+    if (ImGui::CollapsingHeader("Prediction & Scope"))
     {
-        ImGui::SliderFloat("Process Noise (Q)", &config.process_noise_q, 0.001f, 100.0f, "%.3f");
-        if (ImGui::IsItemHovered())
-        {
-            SetWrappedTooltip("Represents the uncertainty in the process model. Higher values make the filter more responsive to new measurements but noisier. Lower values make aim smoother but less responsive to sudden changes.");
-        }
-        ImGui::SliderFloat("Measurement Noise (R)", &config.measurement_noise_r, 0.001f, 100.0f, "%.3f");
-        if (ImGui::IsItemHovered())
-        {
-            SetWrappedTooltip("Represents noise in the measurements. Higher values make the filter trust measurements less, resulting in smoother but potentially slower aiming. Lower values increase responsiveness but may cause jitter.");
-        }
-        ImGui::SliderFloat("Estimation Error (P)", &config.estimation_error_p, 0.001f, 50.0f, "%.3f");
-        if (ImGui::IsItemHovered())
-        {
-            SetWrappedTooltip("Initial uncertainty in the state estimate. Higher values cause the filter to give more weight to initial measurements. Affects how quickly the filter converges to stable tracking.");
-        }
+        ImGui::SeparatorText("Kalman Filter");
         ImGui::Spacing(); // Add spacing at the end of the group
     }
     // --- Column 1 End ---
@@ -209,17 +195,6 @@ void draw_mouse()
                 SetWrappedTooltip("Delay in milliseconds between recoil compensation movements (0.0 - 100.0)");
             }
 
-            // Add Prediction Time slider here
-            if (ImGui::InputFloat("Base Prediction (ms)", &config.prediction_time_ms, 0.0f, 0.0f, "%.1f"))
-            {
-                config.prediction_time_ms = std::max(0.0f, std::min(config.prediction_time_ms, 100.0f)); // Clamp value
-                config.saveConfig(); 
-            }
-            if (ImGui::IsItemHovered())
-            {
-                 SetWrappedTooltip("Base prediction time in milliseconds. Higher values predict further ahead but may overshoot. (0.0 - 100.0)");
-            }
-
             ImGui::Unindent(10.0f);
             
             // Warning for high recoil strength
@@ -249,10 +224,10 @@ void draw_mouse()
         if (config.auto_shoot)
         {
             ImGui::Indent(10.0f);
-            ImGui::SliderFloat("Scope Multiplier", &config.bScope_multiplier, 0.5f, 2.0f, "%.1f");
+            ImGui::SliderFloat("Scope Multiplier", &config.bScope_multiplier, 1.0f, 10.0f, "%.2f");
             if (ImGui::IsItemHovered())
             {
-                SetWrappedTooltip("Adjusts aiming when using scoped weapons. Lower values for more precise scopes.");
+                SetWrappedTooltip("Sensitivity reduction factor when target is within scope range. (1.0 = no reduction, >1.0 = reduction)");
             }
             ImGui::Unindent(10.0f);
         }

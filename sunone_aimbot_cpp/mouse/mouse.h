@@ -17,8 +17,6 @@
 #include "ghub.h"
 #include "InputMethod.h"
 
-// Forward declare KalmanFilter2D if its definition is in KalmanFilter2D.h
-class KalmanFilter2D;
 // Forward declare PIDController2D
 class PIDController2D;
 
@@ -27,7 +25,6 @@ using ErrorTrackingCallback = std::function<void(float error_x, float error_y)>;
 class MouseThread
 {
 private:
-    std::unique_ptr<KalmanFilter2D> kalman_filter;
     std::unique_ptr<PIDController2D> pid_controller;
     std::unique_ptr<InputMethod> input_method;
 
@@ -50,15 +47,12 @@ private:
     float norecoil_ms; // Store recoil delay
 
     std::chrono::steady_clock::time_point last_target_time;
-    std::chrono::steady_clock::time_point last_prediction_time;
     std::chrono::steady_clock::time_point last_recoil_compensation_time; // Track last recoil time
     std::atomic<bool> target_detected{false};
     std::atomic<bool> mouse_pressed{false};
 
     // Simplified target tracking
     AimbotTarget *current_target;
-
-    float prediction_time_ms_; // Base prediction time
 
     float calculateTargetDistance(const AimbotTarget &target) const;
     AimbotTarget *findClosestTarget(const std::vector<AimbotTarget> &targets) const;
@@ -69,10 +63,8 @@ public:
     MouseThread(int resolution, int dpi, int fovX, int fovY,
                 float kp_x, float ki_x, float kd_x,
                 float kp_y, float ki_y, float kd_y,
-                float process_noise_q, float measurement_noise_r,
                 bool auto_shoot, float bScope_multiplier,
                 float norecoil_ms,
-                float prediction_time_ms, // Add prediction time parameter
                 SerialConnection *serialConnection = nullptr,
                 GhubMouse *gHub = nullptr);
     ~MouseThread();
@@ -80,10 +72,8 @@ public:
     void updateConfig(int resolution, int dpi, int fovX, int fovY,
                       float kp_x, float ki_x, float kd_x,
                       float kp_y, float ki_y, float kd_y,
-                      float process_noise_q, float measurement_noise_r,
                       bool auto_shoot, float bScope_multiplier,
-                      float norecoil_ms,
-                      float prediction_time_ms); // Add prediction time parameter
+                      float norecoil_ms);
 
     Eigen::Vector2f predictTargetPosition(float target_x, float target_y);
     Eigen::Vector2f calculateMovement(const Eigen::Vector2f &target_pos);
@@ -91,7 +81,6 @@ public:
     void moveMouse(const AimbotTarget &target);
     void pressMouse(const AimbotTarget &target);
     void releaseMouse();
-    void resetPrediction();
     void applyRecoilCompensation(float strength);
 
     void enableErrorTracking(const ErrorTrackingCallback& callback);
