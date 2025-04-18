@@ -36,6 +36,7 @@ public:
     float norecoil_step;  // Step size for adjusting norecoil strength
     float norecoil_ms;    // Millisecond delay for recoil control
     std::string input_method; // "WIN32", "GHUB", "ARDUINO"
+    float prediction_time_ms; // Base prediction time in milliseconds
 
     // PID Controller
     // double kp;
