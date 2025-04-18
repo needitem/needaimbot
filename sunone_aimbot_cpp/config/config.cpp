@@ -66,6 +66,10 @@ bool Config::loadConfig(const std::string& filename)
         shooting_range_targets = false;
         auto_aim = false;
 
+        // Target Stickiness
+        sticky_bonus = -50.0f; // Default bonus (negative because lower score is better)
+        sticky_iou_threshold = 0.3f; // Default IoU threshold
+
         // Mouse
         dpi = 1000;
         fovX = 50;
@@ -206,6 +210,10 @@ bool Config::loadConfig(const std::string& filename)
     ignore_third_person = get_bool("ignore_third_person", false);
     shooting_range_targets = get_bool("shooting_range_targets", false);
     auto_aim = get_bool("auto_aim", false);
+
+    // Target Stickiness
+    sticky_bonus = (float)get_double("sticky_bonus", -50.0);
+    sticky_iou_threshold = (float)get_double("sticky_iou_threshold", 0.3);
 
     // Mouse
     dpi = get_long("dpi", 1000);
@@ -359,6 +367,11 @@ bool Config::saveConfig(const std::string& filename)
         << "ignore_third_person = " << (ignore_third_person ? "true" : "false") << "\n"
         << "shooting_range_targets = " << (shooting_range_targets ? "true" : "false") << "\n"
         << "auto_aim = " << (auto_aim ? "true" : "false") << "\n\n";
+
+    // Target Stickiness
+    file << "# Target Stickiness\n"
+        << "sticky_bonus = " << sticky_bonus << "\n"
+        << "sticky_iou_threshold = " << sticky_iou_threshold << "\n\n";
 
     // Mouse
     file << "# Mouse move\n"

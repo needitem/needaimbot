@@ -27,6 +27,10 @@ public:
     bool shooting_range_targets;
     bool auto_aim;
 
+    // Target Stickiness
+    float sticky_bonus;          // Score bonus for sticking to the previous target
+    float sticky_iou_threshold; // IoU threshold for stickiness
+
     // Mouse
     int dpi;
     int fovX;
