@@ -79,7 +79,7 @@ bool Config::loadConfig(const std::string& filename)
         norecoil_step = 5.0f;
         norecoil_ms = 10.0f;
         input_method = "WIN32";
-        prediction_time_ms = 30.0f;
+        // prediction_time_ms = 30.0f; // Removed
 
         // PID Controller
         // kp = 0.5;
@@ -94,10 +94,10 @@ bool Config::loadConfig(const std::string& filename)
         ki_y = 0.0;
         kd_y = 0.15; // Y축은 미분 게인을 약간 높게 설정 (더 빠른 감속)
 
-        // Kalman Filter
-        process_noise_q = 0.01f;
-        measurement_noise_r = 0.1f;
-        estimation_error_p = 1.0f;
+        // Kalman Filter // Removed section
+        // process_noise_q = 0.01f;
+        // measurement_noise_r = 0.1f;
+        // estimation_error_p = 1.0f;
 
         // Arduino
         arduino_baudrate = 115200;
@@ -224,7 +224,7 @@ bool Config::loadConfig(const std::string& filename)
     norecoil_step = (float)get_double("norecoil_step", 5.0);
     norecoil_ms = (float)get_double("norecoil_ms", 10.0);
     input_method = get_string("input_method", "WIN32");
-    prediction_time_ms = (float)get_double("prediction_time_ms", 30.0);
+    // prediction_time_ms = (float)get_double("prediction_time_ms", 30.0); // Removed
 
     // PID Controller
     // kp = (double)get_double("kp", 0.5);
@@ -239,10 +239,10 @@ bool Config::loadConfig(const std::string& filename)
     ki_y = (double)get_double("ki_y", 0.0);
     kd_y = (double)get_double("kd_y", 0.15);
 
-    // Kalman Filter
-    process_noise_q = (float)get_double("process_noise_q", 0.01);
-    measurement_noise_r = (float)get_double("measurement_noise_r", 0.1);
-    estimation_error_p = (float)get_double("estimation_error_p", 1.0);
+    // Kalman Filter // Removed section
+    // process_noise_q = (float)get_double("process_noise_q", 0.01);
+    // measurement_noise_r = (float)get_double("measurement_noise_r", 0.1);
+    // estimation_error_p = (float)get_double("estimation_error_p", 1.0);
 
     // Arduino
     arduino_baudrate = get_long("arduino_baudrate", 115200);
@@ -318,7 +318,10 @@ bool Config::loadConfig(const std::string& filename)
     ini.SetDoubleValue("", "ki_y", ki_y);
     ini.SetDoubleValue("", "kd_y", kd_y);
 
-    ini.SetDoubleValue("", "estimation_error_p", static_cast<double>(estimation_error_p));
+    // Kalman Filter // Removed section
+    // ini.SetDoubleValue("", "process_noise_q", process_noise_q);
+    // ini.SetDoubleValue("", "measurement_noise_r", measurement_noise_r);
+    // ini.SetDoubleValue("", "estimation_error_p", estimation_error_p);
 
     // CUDA
     ini.SetBoolValue("", "use_pinned_memory", use_pinned_memory);
@@ -328,7 +331,7 @@ bool Config::loadConfig(const std::string& filename)
     ini.SetValue("", "button_targeting", joinStrings(button_targeting, " ").c_str());
 
     ini.SetDoubleValue("", "norecoil_ms", norecoil_ms);
-    ini.SetDoubleValue("", "prediction_time_ms", prediction_time_ms);
+    // ini.SetDoubleValue("", "prediction_time_ms", prediction_time_ms); // Removed
 
     return true;
 }
@@ -393,13 +396,7 @@ bool Config::saveConfig(const std::string& filename)
         << "kd_x = " << kd_x << "\n"
         << "kp_y = " << kp_y << "\n"
         << "ki_y = " << ki_y << "\n"
-        << "kd_y = " << kd_y << "\n\n"
-
-        << "# Kalman Filter\n"
-        << std::fixed << std::setprecision(3)
-        << "process_noise_q = " << process_noise_q << "\n"
-        << "measurement_noise_r = " << measurement_noise_r << "\n"
-        << "estimation_error_p = " << estimation_error_p << "\n\n";
+        << "kd_y = " << kd_y << "\n\n";
 
     // Arduino
     file << "# Arduino\n"

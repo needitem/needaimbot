@@ -40,13 +40,7 @@ public:
     float norecoil_step;  // Step size for adjusting norecoil strength
     float norecoil_ms;    // Millisecond delay for recoil control
     std::string input_method; // "WIN32", "GHUB", "ARDUINO"
-    float prediction_time_ms; // Base prediction time in milliseconds
 
-    // PID Controller
-    // double kp;
-    // double ki;
-    // double kd;
-    
     // Separated X/Y PID Controllers
     double kp_x;
     double ki_x;
@@ -54,11 +48,6 @@ public:
     double kp_y;
     double ki_y;
     double kd_y;
-
-    // Kalman Filter
-    float process_noise_q;
-    float measurement_noise_r;
-    float estimation_error_p;
 
     // Arduino
     int arduino_baudrate;

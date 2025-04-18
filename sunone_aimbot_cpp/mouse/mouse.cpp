@@ -14,7 +14,6 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-#include "KalmanFilter2D.h"
 #include "PIDController2D.h"
 #include "mouse.h"
 #include "AimbotTarget.h"
@@ -41,7 +40,7 @@ constexpr float SCOPE_MARGIN = 0.15f;
 // constexpr float VEL_NOISE_FACTOR = 2.5f; // Remove definition from here, use KalmanFilter2D.h
 // ACC_NOISE_FACTOR is removed if using 4D filter
 // constexpr float ACC_NOISE_FACTOR = 4.0f; // Commented out assuming 4D filter
-constexpr float BASE_PREDICTION_FACTOR = 0.07f;
+// constexpr float BASE_PREDICTION_FACTOR = 0.07f; // Removed
 
 MouseThread::MouseThread(
     int resolution,
@@ -54,20 +53,15 @@ MouseThread::MouseThread(
     float kp_y,
     float ki_y,
     float kd_y,
-    float process_noise_q,
-    float measurement_noise_r,
     bool auto_shoot,
     float bScope_multiplier,
     float norecoil_ms,
-    float prediction_time_ms,
     SerialConnection *serialConnection,
-    GhubMouse *gHub) : tracking_errors(false), prediction_time_ms_(prediction_time_ms)
+    GhubMouse *gHub) : tracking_errors(false)
 {
     initializeScreen(resolution, dpi, fovX, fovY, auto_shoot, bScope_multiplier, norecoil_ms);
-    kalman_filter = std::make_unique<KalmanFilter2D>(process_noise_q, measurement_noise_r);
     pid_controller = std::make_unique<PIDController2D>(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
     initializeInputMethod(serialConnection, gHub);
-    last_prediction_time = std::chrono::steady_clock::now();
 }
 
 MouseThread::~MouseThread() = default;
@@ -131,53 +125,20 @@ void MouseThread::updateConfig(
     float kp_y,
     float ki_y,
     float kd_y,
-    float process_noise_q,
-    float measurement_noise_r,
     bool auto_shoot,
     float bScope_multiplier,
-    float norecoil_ms,
-    float prediction_time_ms)
+    float norecoil_ms
+    /* float prediction_time_ms */)
 {
     initializeScreen(resolution, dpi, fovX, fovY, auto_shoot, bScope_multiplier, norecoil_ms);
-    kalman_filter->updateParameters(process_noise_q, measurement_noise_r);
     pid_controller->updateSeparatedParameters(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
-    this->prediction_time_ms_ = prediction_time_ms;
 }
 
 Eigen::Vector2f MouseThread::predictTargetPosition(float target_x, float target_y)
 {
-    auto current_time = std::chrono::steady_clock::now();
-    float dt = std::min(std::chrono::duration<float>(current_time - last_prediction_time).count(), 0.1f);
-    last_prediction_time = current_time;
-
-    // Update Kalman filter
-    kalman_filter->predict(dt);
-    Eigen::Vector2f measurement(target_x, target_y);
-    kalman_filter->update(measurement);
-
-    // Get state
-    const Eigen::Matrix<float, 4, 1>& state = kalman_filter->getState();
-    float pos_x = state(0, 0);
-    float pos_y = state(1, 0);
-    float vel_x = state(2, 0);
-    float vel_y = state(3, 0);
-
-    // Calculate velocity magnitude
-    float velocity_magnitude = std::sqrt(vel_x * vel_x + vel_y * vel_y);
-
-    // Simplified prediction time calculation
-    float prediction_time = prediction_time_ms_ / 1000.0f;
-    
-    // Only scale prediction time based on velocity
-    if (velocity_magnitude > 50.0f) {
-        prediction_time *= std::min(velocity_magnitude / 100.0f, 1.5f);
-    }
-
-    // Calculate predicted position
-    float future_x = pos_x + vel_x * prediction_time;
-    float future_y = pos_y + vel_y * prediction_time;
-
-    return Eigen::Vector2f(future_x, future_y);
+    // Removed Kalman filter update and prediction logic
+    // Simply return the current target position
+    return Eigen::Vector2f(target_x, target_y);
 }
 
 Eigen::Vector2f MouseThread::calculateMovement(const Eigen::Vector2f &target_pos)
@@ -336,19 +297,6 @@ void MouseThread::releaseMouse()
     mouse_pressed = false;
 }
 
-void MouseThread::resetPrediction()
-{
-    kalman_filter->reset();
-    pid_controller->reset();
-    last_prediction_time = std::chrono::steady_clock::now();
-}
-
-void MouseThread::setInputMethod(std::unique_ptr<InputMethod> new_method)
-{
-    std::lock_guard<std::mutex> lock(input_method_mutex);
-    input_method = std::move(new_method);
-}
-
 void MouseThread::applyRecoilCompensation(float strength)
 {
     // Ensure input method is valid before proceeding
@@ -392,4 +340,10 @@ void MouseThread::disableErrorTracking()
     std::lock_guard<std::mutex> lock(callback_mutex);
     tracking_errors = false;
     error_callback = nullptr; // Clear the callback
+}
+
+void MouseThread::setInputMethod(std::unique_ptr<InputMethod> new_method)
+{
+    std::lock_guard<std::mutex> lock(input_method_mutex);
+    input_method = std::move(new_method);
 }
