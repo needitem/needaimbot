@@ -59,8 +59,13 @@ Detector::Detector()
     m_scoresGpu(nullptr),
     m_bestTargetIndexGpu(nullptr),
     m_captureDoneEvent(nullptr),
-    m_cudaContextInitialized(false)
+    m_cudaContextInitialized(false),
+    m_hasBestTarget(false),
+    m_bestTargetIndexHost(-1),
+    m_hadTargetLastFrame(false) // Initialize stickiness state
 {
+    // Initialize previousTargetBox to an empty rect
+    m_previousTargetBox = cv::Rect();
     // No CUDA initialization here anymore
 }
 
@@ -593,10 +598,14 @@ void Detector::inferenceThread()
                             m_finalDetectionsGpu,
                             validDetections,
                             m_scoresGpu,
-                            config.detection_resolution, 
+                            config.detection_resolution,
                             config.detection_resolution,
                             config.disable_headshot,
-                            config.class_head, 
+                            config.class_head,
+                            m_previousTargetBox,
+                            m_hadTargetLastFrame,
+                            config.sticky_bonus,
+                            config.sticky_iou_threshold,
                             stream
                         );
                         cudaError_t scoreErr = cudaGetLastError();
@@ -636,20 +645,27 @@ void Detector::inferenceThread()
                             if (targetCopyErr != cudaSuccess) {
                                 std::cerr << "[Detector] Failed to copy best target DtoH: " << cudaGetErrorString(targetCopyErr) << std::endl;
                                 m_hasBestTarget = false;
+                                m_hadTargetLastFrame = false; // Update state: No target found
                             } else {
                                 m_hasBestTarget = true;
+                                // <<< Update previous target state >>>
+                                m_previousTargetBox = m_bestTargetHost.box;
+                                m_hadTargetLastFrame = true;
                             }
                         } else {
                            m_bestTargetIndexHost = -1;
-                           m_hasBestTarget = false; 
+                           m_hasBestTarget = false;
+                           m_hadTargetLastFrame = false; // Update state: No target found
                         }
                     } else {
                          m_bestTargetIndexHost = -1;
                          m_hasBestTarget = false;
+                         m_hadTargetLastFrame = false; // Update state: No target found
                     }
                 } else {
                      m_bestTargetIndexHost = -1;
                      m_hasBestTarget = false;
+                     m_hadTargetLastFrame = false; // Update state: No target found
                 }
 
                 {
@@ -662,15 +678,23 @@ void Detector::inferenceThread()
             {
                 std::cerr << "[Detector] Error during inference loop: " << e.what() << std::endl;
                 m_hasBestTarget = false;
+                m_hadTargetLastFrame = false; // Update state on error
             }
         } else if (hasNewFrame) {
              {
                 std::lock_guard<std::mutex> lock(detectionMutex);
                 m_hasBestTarget = false; 
                 detectionVersion++; 
+                m_hadTargetLastFrame = false; // Update state if frame exists but no processing
              }
              detectionCV.notify_one();
-        } 
+        } else {
+             // Optional: Handle case where there's no new frame at all?
+             // Maybe keep previous state or reset?
+             // For now, we reset if hasNewFrame is false but the outer loop continues
+             // (This branch might not be strictly necessary depending on overall flow)
+             // m_hadTargetLastFrame = false; 
+        }
     }
 }
 

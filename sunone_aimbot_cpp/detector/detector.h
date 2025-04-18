@@ -17,6 +17,7 @@
 #include <opencv2/cudawarping.hpp>
 #include <opencv2/cudaarithm.hpp>
 #include <cuda_runtime_api.h>
+#include <opencv2/cudaimgproc.hpp>
 
 #include "postProcess.h"
 
@@ -25,6 +26,8 @@ typedef struct CUevent_st* cudaEvent_t;
 
 // Forward declaration for the Detection struct
 // struct Detection; // Already in postProcess.h
+struct Detection; // Forward declaration if needed, or include postProcess.h
+struct Config; // Forward declaration
 
 class Detector
 {
@@ -87,6 +90,11 @@ public:
     int m_bestTargetIndexHost = -1;       // Host copy of best target index
     Detection m_bestTargetHost;           // Host copy of best target details
     bool m_hasBestTarget = false;         // Flag if a valid best target exists
+
+    // <<< Target Stickiness State >>>
+    cv::Rect m_previousTargetBox;
+    bool m_hadTargetLastFrame;
+    // <<< End Target Stickiness State >>>
 
     bool isCudaContextInitialized() const { return m_cudaContextInitialized; } // Getter for the flag
 

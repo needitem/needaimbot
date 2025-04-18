@@ -82,6 +82,31 @@ void draw_target()
     ImGui::Checkbox("Ignore Third Person", &config.ignore_third_person);
     ImGui::Checkbox("Shooting range targets", &config.shooting_range_targets);
     ImGui::Checkbox("Auto Aim", &config.auto_aim);
+
+    ImGui::Separator();
+    ImGui::Text("Target Stickiness");
+    ImGui::Spacing();
+
+    // Sticky Bonus Slider (Negative is better, so range -100 to 0)
+    if (ImGui::SliderFloat("Sticky Bonus", &config.sticky_bonus, -100.0f, 0.0f, "%.1f"))
+    {
+        config.saveConfig();
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Bonus score applied to previous target (lower is better, more sticky).");
+    }
+
+    // Sticky IoU Threshold Slider (0.0 to 1.0)
+    if (ImGui::SliderFloat("Sticky IoU Threshold", &config.sticky_iou_threshold, 0.0f, 1.0f, "%.2f"))
+    {
+        config.sticky_iou_threshold = std::max(0.0f, std::min(config.sticky_iou_threshold, 1.0f)); // Clamp value
+        config.saveConfig();
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Minimum Intersection over Union required to consider a target sticky.");
+    }
 }
 
 void load_body_texture()
