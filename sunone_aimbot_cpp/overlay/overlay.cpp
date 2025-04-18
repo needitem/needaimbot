@@ -336,8 +336,6 @@ void OverlayThread()
     float prev_kd_y = config.kd_y;
     
     // Kalman Filter
-    float prev_process_noise_q = config.process_noise_q;
-    float prev_measurement_noise_r = config.measurement_noise_r;
 
     //Mouse shooting
     bool prev_auto_shoot = config.auto_shoot;
@@ -502,12 +500,9 @@ void OverlayThread()
                             static_cast<float>(config.kp_y),
                             static_cast<float>(config.ki_y),
                             static_cast<float>(config.kd_y),
-                            config.process_noise_q,
-                            config.measurement_noise_r,
                             config.auto_shoot,
                             config.bScope_multiplier,
-                            config.norecoil_ms,
-                            config.prediction_time_ms);
+                            config.norecoil_ms);
                         config.saveConfig();
                     }
 
@@ -567,9 +562,7 @@ void OverlayThread()
                         prev_kd_x != config.kd_x ||
                         prev_kp_y != config.kp_y ||
                         prev_ki_y != config.ki_y ||
-                        prev_kd_y != config.kd_y ||
-                        prev_process_noise_q != config.process_noise_q ||
-                        prev_measurement_noise_r != config.measurement_noise_r)
+                        prev_kd_y != config.kd_y)
                     {
                         prev_dpi = config.dpi;
                         prev_fovX = config.fovX;
@@ -580,8 +573,6 @@ void OverlayThread()
                         prev_kp_y = config.kp_y;
                         prev_ki_y = config.ki_y;
                         prev_kd_y = config.kd_y;
-                        prev_process_noise_q = config.process_noise_q;
-                        prev_measurement_noise_r = config.measurement_noise_r;
 
                         globalMouseThread->updateConfig(
                             config.detection_resolution,
@@ -594,12 +585,9 @@ void OverlayThread()
                             static_cast<float>(config.kp_y),
                             static_cast<float>(config.ki_y),
                             static_cast<float>(config.kd_y),
-                            config.process_noise_q,
-                            config.measurement_noise_r,
                             config.auto_shoot,
                             config.bScope_multiplier,
-                            config.norecoil_ms,
-                            config.prediction_time_ms);
+                            config.norecoil_ms);
 
                         config.saveConfig();
                     }
@@ -622,12 +610,9 @@ void OverlayThread()
                             static_cast<float>(config.kp_y),
                             static_cast<float>(config.ki_y),
                             static_cast<float>(config.kd_y),
-                            config.process_noise_q,
-                            config.measurement_noise_r,
                             config.auto_shoot,
                             config.bScope_multiplier,
-                            config.norecoil_ms,
-                            config.prediction_time_ms);
+                            config.norecoil_ms);
 
                         config.saveConfig();
                     }

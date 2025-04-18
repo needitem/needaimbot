@@ -117,12 +117,9 @@ void keyboardListener()
                         config.kp_y,
                         config.ki_y,
                         config.kd_y,
-                        config.process_noise_q,
-                        config.measurement_noise_r,
                         config.auto_shoot,
                         config.bScope_multiplier,
-                        config.norecoil_ms,
-                        config.prediction_time_ms
+                        config.norecoil_ms
                     );
                 }
                 reloadPressed = true;
