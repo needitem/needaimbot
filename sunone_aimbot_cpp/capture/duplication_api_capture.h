@@ -17,16 +17,15 @@
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
 
-// Forward declaration
 struct ID3D11Device;
 struct ID3D11DeviceContext;
 struct IDXGIOutput1;
 struct IDXGIOutputDuplication;
 struct ID3D11Texture2D;
-struct _DXGI_OUTDUPL_DESC; // Use underscore prefix if DXGI_OUTDUPL_DESC is a struct typedef
+struct _DXGI_OUTDUPL_DESC;
 struct cudaGraphicsResource;
-typedef struct CUstream_st* cudaStream_t; // Define cudaStream_t if not included elsewhere
-typedef struct CUevent_st* cudaEvent_t;   // Define cudaEvent_t if not included elsewhere
+typedef struct CUstream_st* cudaStream_t;
+typedef struct CUevent_st* cudaEvent_t;
 
 class DDAManager;
 
@@ -62,4 +61,4 @@ private:
     bool m_initialized = false;
 };
 
-#endif // DUPLICATION_API_CAPTURE_H
+#endif
