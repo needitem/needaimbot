@@ -25,6 +25,7 @@
 #include "keyboard_listener.h"
 #include "other_tools.h"
 
+
 ID3D11Device* g_pd3dDevice = NULL;
 ID3D11DeviceContext* g_pd3dDeviceContext = NULL;
 IDXGISwapChain* g_pSwapChain = NULL;
@@ -434,49 +435,48 @@ void OverlayThread()
                     if (ImGui::BeginTabItem("Capture"))
                     {
                         draw_capture_settings();
-
                         ImGui::EndTabItem();
                     }
 
                     if (ImGui::BeginTabItem("Target"))
                     {
                         draw_target();
-
                         ImGui::EndTabItem();
                     }
 
                     if (ImGui::BeginTabItem("Mouse"))
                     {
                         draw_mouse();
-
                         ImGui::EndTabItem();
                     }
 
                     if (ImGui::BeginTabItem("AI"))
                     {
                         draw_ai();
-
                         ImGui::EndTabItem();
                     }
 
                     if (ImGui::BeginTabItem("Buttons"))
                     {
                         draw_buttons();
-
                         ImGui::EndTabItem();
                     }
 
                     if (ImGui::BeginTabItem("Overlay"))
                     {
                         draw_overlay();
-
                         ImGui::EndTabItem();
                     }
 
                     if (ImGui::BeginTabItem("Debug"))
                     {
                         draw_debug();
+                        ImGui::EndTabItem();
+                    }
 
+                    if (ImGui::BeginTabItem("Profile"))
+                    {
+                        draw_profile();
                         ImGui::EndTabItem();
                     }
 
