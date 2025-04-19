@@ -21,9 +21,7 @@
     <ClCompile Include="imgui\imgui_tables.cpp" />
     <ClCompile Include="imgui\imgui_widgets.cpp" />
     <ClCompile Include="detector\postProcess.cpp" />
-    <ClCompile Include="capture\winrt_capture.cpp" />
     <ClCompile Include="capture\duplication_api_capture.cpp" />
-    <ClCompile Include="capture\virtual_camera.cpp" />
     <ClCompile Include="sunone_aimbot_cpp.cpp" />
     <ClCompile Include="overlay\draw_capture.cpp" />
     <ClCompile Include="overlay\draw_target.cpp" />
@@ -34,6 +32,7 @@
     <ClCompile Include="overlay\draw_debug.cpp" />
     <ClCompile Include="mouse\KalmanFilter2D.cpp" />
     <ClCompile Include="mouse\PIDController2D.cpp" />
+    <ClCompile Include="overlay\draw_profile.cpp" />
   </ItemGroup>
   <ItemGroup>
     <Filter Include="scr">
@@ -69,7 +68,6 @@
     <ClInclude Include="detector\postProcess.h" />
     <ClInclude Include="capture\winrt_capture.h" />
     <ClInclude Include="capture\duplication_api_capture.h" />
-    <ClInclude Include="capture\virtual_camera.h" />
     <ClInclude Include="sunone_aimbot_cpp.h" />
     <ClInclude Include="overlay\draw_settings.h" />
     <ClInclude Include="mouse\InputMethod.h" />

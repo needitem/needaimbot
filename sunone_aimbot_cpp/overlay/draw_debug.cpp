@@ -11,7 +11,7 @@
 #include <string>
 
 // Helper function to convert vector<string> to vector<const char*>
-std::vector<const char*> getProfileCstrs(const std::vector<std::string>& profiles) {
+inline std::vector<const char*> getProfileCstrs(const std::vector<std::string>& profiles) {
     std::vector<const char*> cstrs;
     cstrs.reserve(profiles.size());
     for(const auto& s : profiles)
