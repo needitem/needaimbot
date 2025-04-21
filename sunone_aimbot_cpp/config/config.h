@@ -41,6 +41,13 @@ public:
     float norecoil_ms;    // Millisecond delay for recoil control
     std::string input_method; // "WIN32", "GHUB", "ARDUINO"
 
+    // Scope Recoil Control
+    int active_scope_magnification; // 0=None, 2=2x, 3=3x, 4=4x, 6=6x
+    float recoil_mult_2x;
+    float recoil_mult_3x;
+    float recoil_mult_4x;
+    float recoil_mult_6x;
+
     // Separated X/Y PID Controllers
     double kp_x;
     double ki_x;
@@ -58,6 +65,12 @@ public:
     // Mouse shooting
     bool auto_shoot;
     float bScope_multiplier;
+
+    // Kalman Filter settings
+    float prediction_time_ms;
+    float kalman_process_noise;
+    float kalman_measurement_noise;
+    bool enable_prediction; // Flag to enable/disable prediction
 
     // AI
     std::string ai_model;
