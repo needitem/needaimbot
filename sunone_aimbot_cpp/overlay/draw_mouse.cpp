@@ -140,7 +140,73 @@ void draw_mouse()
     // Group Kalman Filter Settings
     if (ImGui::CollapsingHeader("Prediction & Scope"))
     {
-        ImGui::SeparatorText("Kalman Filter");
+        // Existing Scope Multiplier if auto_shoot is enabled (moved here)
+        // Consider if this should always be visible or only with auto_shoot
+        // if (config.auto_shoot)
+        // {
+            ImGui::Indent(10.0f);
+            ImGui::SeparatorText("Scope Settings");
+            if (ImGui::SliderFloat("Scope Multiplier", &config.bScope_multiplier, 1.0f, 10.0f, "%.2f")) {
+                 config.saveConfig();
+            }
+            if (ImGui::IsItemHovered())
+            {
+                SetWrappedTooltip("Sensitivity reduction factor when target is within scope range. (1.0 = no reduction, >1.0 = reduction)");
+            }
+            ImGui::Unindent(10.0f);
+            ImGui::Spacing(); // Add spacing after scope setting
+        // } else {
+        //    ImGui::TextDisabled("Scope Multiplier (requires Auto Shoot)");
+        // }
+
+        ImGui::SeparatorText("Kalman Filter Prediction");
+        ImGui::Indent(10.0f);
+        // Enable/Disable Prediction Checkbox
+        if (ImGui::Checkbox("Enable Prediction", &config.enable_prediction)) {
+            config.saveConfig();
+        }
+        if (ImGui::IsItemHovered()) {
+            SetWrappedTooltip("Enable or disable target movement prediction using the Kalman filter.");
+        }
+        ImGui::Spacing(); // Add space after the checkbox
+
+        // Disable prediction settings if prediction is disabled
+        if (!config.enable_prediction) {
+            ImGui::BeginDisabled();
+        }
+
+        // Prediction Time
+        if (ImGui::InputFloat("Prediction Time (ms)", &config.prediction_time_ms, 1.0f, 5.0f, "%.1f")) {
+            config.prediction_time_ms = std::max(0.0f, config.prediction_time_ms); // Ensure non-negative
+            config.saveConfig();
+        }
+        if (ImGui::IsItemHovered()) {
+            SetWrappedTooltip("How far into the future to predict target movement in milliseconds. Adjust based on latency and target speed (e.g., 16-50ms).");
+        }
+
+        // Process Noise
+        if (ImGui::InputFloat("Process Noise (Q)", &config.kalman_process_noise, 0.01f, 0.1f, "%.3f")) {
+            config.kalman_process_noise = std::max(1e-6f, config.kalman_process_noise); // Ensure positive
+            config.saveConfig();
+        }
+        if (ImGui::IsItemHovered()) {
+            SetWrappedTooltip("Kalman Filter Process Noise (Q): Uncertainty in the target's movement model. Higher values trust measurements more, lower values trust the prediction model more.");
+        }
+
+        // Measurement Noise
+        if (ImGui::InputFloat("Measurement Noise (R)", &config.kalman_measurement_noise, 0.1f, 1.0f, "%.2f")) {
+            config.kalman_measurement_noise = std::max(1e-6f, config.kalman_measurement_noise); // Ensure positive
+            config.saveConfig();
+        }
+        if (ImGui::IsItemHovered()) {
+             SetWrappedTooltip("Kalman Filter Measurement Noise (R): Uncertainty in the detected target position measurement. Higher values trust the prediction model more, lower values trust measurements more.");
+        }
+
+        // End disabling prediction settings
+        if (!config.enable_prediction) {
+            ImGui::EndDisabled();
+        }
+        ImGui::Unindent(10.0f);
         ImGui::Spacing(); // Add spacing at the end of the group
     }
     // --- Column 1 End ---
@@ -166,11 +232,13 @@ void draw_mouse()
             // Add spacing for better visual separation
             ImGui::Indent(10.0f);
             
-            // Recoil strength slider
-            ImGui::SliderFloat("Compensation Strength", &config.easynorecoilstrength, 0.1f, 500.0f, "%.1f");
+            // Recoil strength input field
+            if (ImGui::InputFloat("Compensation Strength", &config.easynorecoilstrength, 0.1f, 1.0f, "%.1f")) {
+                config.saveConfig(); // Save on change
+            }
             if (ImGui::IsItemHovered())
             {
-                SetWrappedTooltip("Adjusts the intensity of recoil compensation. Higher values mean stronger compensation.");
+                SetWrappedTooltip("Adjusts the base intensity of recoil compensation.");
             }
             
             // Recoil adjustment step size
@@ -194,6 +262,65 @@ void draw_mouse()
             {
                 SetWrappedTooltip("Delay in milliseconds between recoil compensation movements (0.0 - 100.0)");
             }
+
+            ImGui::Spacing();
+            ImGui::SeparatorText("Active Scope Recoil");
+            // TODO: Add int active_scope_magnification = 0; to your config struct.
+            bool scope_changed = false;
+            if (ImGui::RadioButton("None##Scope", &config.active_scope_magnification, 0)) { scope_changed = true; }
+            if (ImGui::IsItemHovered()) SetWrappedTooltip("Use base recoil strength (no multiplier).");
+            ImGui::SameLine();
+            if (ImGui::RadioButton("2x##Scope", &config.active_scope_magnification, 2)) { scope_changed = true; }
+            if (ImGui::IsItemHovered()) SetWrappedTooltip("Apply 2x scope recoil multiplier.");
+            ImGui::SameLine();
+            if (ImGui::RadioButton("3x##Scope", &config.active_scope_magnification, 3)) { scope_changed = true; }
+            if (ImGui::IsItemHovered()) SetWrappedTooltip("Apply 3x scope recoil multiplier.");
+            ImGui::SameLine();
+            if (ImGui::RadioButton("4x##Scope", &config.active_scope_magnification, 4)) { scope_changed = true; }
+            if (ImGui::IsItemHovered()) SetWrappedTooltip("Apply 4x scope recoil multiplier.");
+            ImGui::SameLine();
+            if (ImGui::RadioButton("6x##Scope", &config.active_scope_magnification, 6)) { scope_changed = true; }
+            if (ImGui::IsItemHovered()) SetWrappedTooltip("Apply 6x scope recoil multiplier.");
+
+            if (scope_changed) {
+                config.saveConfig();
+            }
+
+            ImGui::Spacing();
+            ImGui::SeparatorText("Scope Multiplier Values");
+            // TODO: Ensure these float variables exist in your config struct:
+            // recoil_mult_2x, recoil_mult_3x, recoil_mult_4x, recoil_mult_6x
+            struct ScopeMultiplierValue {
+                const char* label;
+                float* multiplier; // Pointer to config.recoil_mult_X
+                int id; // Unique ID for ImGui
+            };
+
+            std::vector<ScopeMultiplierValue> scope_values = {
+                {"2x Multiplier:", &config.recoil_mult_2x, 2},
+                {"3x Multiplier:", &config.recoil_mult_3x, 3},
+                {"4x Multiplier:", &config.recoil_mult_4x, 4},
+                {"6x Multiplier:", &config.recoil_mult_6x, 6}
+            };
+
+            for (const auto& scope_val : scope_values) {
+                ImGui::Text("%s", scope_val.label);
+                ImGui::SameLine();
+                ImGui::PushItemWidth(100); // Set a fixed width for the input field
+                std::string input_label = "##MultVal" + std::to_string(scope_val.id);
+                if (ImGui::InputFloat(input_label.c_str(), scope_val.multiplier, 0.01f, 0.1f, "%.2f")) {
+                    *scope_val.multiplier = std::max(0.0f, *scope_val.multiplier); // Ensure non-negative
+                    config.saveConfig();
+                }
+                ImGui::PopItemWidth();
+                if (ImGui::IsItemHovered()) {
+                    char tooltip[128];
+                    snprintf(tooltip, sizeof(tooltip), "Recoil multiplier factor for %dx scope. Base strength is multiplied by this value.", scope_val.id);
+                    SetWrappedTooltip(tooltip);
+                }
+            }
+
+            ImGui::Spacing(); // Add spacing after scope multipliers
 
             ImGui::Unindent(10.0f);
             
@@ -224,11 +351,11 @@ void draw_mouse()
         if (config.auto_shoot)
         {
             ImGui::Indent(10.0f);
-            ImGui::SliderFloat("Scope Multiplier", &config.bScope_multiplier, 1.0f, 10.0f, "%.2f");
-            if (ImGui::IsItemHovered())
-            {
-                SetWrappedTooltip("Sensitivity reduction factor when target is within scope range. (1.0 = no reduction, >1.0 = reduction)");
-            }
+            // ImGui::SliderFloat("Scope Multiplier", &config.bScope_multiplier, 1.0f, 10.0f, "%.2f");
+            // if (ImGui::IsItemHovered())
+            // {
+            //     SetWrappedTooltip("Sensitivity reduction factor when target is within scope range. (1.0 = no reduction, >1.0 = reduction)");
+            // }
             ImGui::Unindent(10.0f);
         }
         ImGui::Spacing(); // Add spacing after Aiming settings

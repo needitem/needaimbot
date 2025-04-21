@@ -79,12 +79,22 @@ bool Config::loadConfig(const std::string& filename)
         norecoil_step = 5.0f;
         norecoil_ms = 10.0f;
         input_method = "WIN32";
-        // prediction_time_ms = 30.0f; // Removed
+
+        // Scope Recoil Control (Defaults)
+        active_scope_magnification = 0;
+        recoil_mult_2x = 1.0f;
+        recoil_mult_3x = 1.0f;
+        recoil_mult_4x = 1.0f;
+        recoil_mult_6x = 1.0f;
+
+        // Kalman Filter settings
+        prediction_time_ms = 16.0f; // Default value
+        kalman_process_noise = 1.0f; // Default value
+        kalman_measurement_noise = 10.0f; // Default value
+        enable_prediction = true; // Default: enable prediction
 
         // PID Controller
         // kp = 0.5;
-        // ki = 0.0;
-        // kd = 0.1;
         
         // Separated X/Y PID Controllers
         kp_x = 0.5;  // 초기값은 공통 값과 동일하게 설정
@@ -93,11 +103,6 @@ bool Config::loadConfig(const std::string& filename)
         kp_y = 0.4;  // Y축은 약간 낮게 설정 (과도한 하향 조준 방지)
         ki_y = 0.0;
         kd_y = 0.15; // Y축은 미분 게인을 약간 높게 설정 (더 빠른 감속)
-
-        // Kalman Filter // Removed section
-        // process_noise_q = 0.01f;
-        // measurement_noise_r = 0.1f;
-        // estimation_error_p = 1.0f;
 
         // Arduino
         arduino_baudrate = 115200;
@@ -224,7 +229,19 @@ bool Config::loadConfig(const std::string& filename)
     norecoil_step = (float)get_double("norecoil_step", 5.0);
     norecoil_ms = (float)get_double("norecoil_ms", 10.0);
     input_method = get_string("input_method", "WIN32");
-    // prediction_time_ms = (float)get_double("prediction_time_ms", 30.0); // Removed
+
+    // Scope Recoil Control (Load)
+    active_scope_magnification = get_long("active_scope_magnification", 0);
+    recoil_mult_2x = (float)get_double("recoil_mult_2x", 1.0);
+    recoil_mult_3x = (float)get_double("recoil_mult_3x", 1.0);
+    recoil_mult_4x = (float)get_double("recoil_mult_4x", 1.0);
+    recoil_mult_6x = (float)get_double("recoil_mult_6x", 1.0);
+
+    // Kalman Filter settings
+    prediction_time_ms = (float)get_double("prediction_time_ms", 16.0);
+    kalman_process_noise = (float)get_double("kalman_process_noise", 1.0);
+    kalman_measurement_noise = (float)get_double("kalman_measurement_noise", 10.0);
+    enable_prediction = get_bool("enable_prediction", true); // Load prediction enable flag
 
     // PID Controller
     // kp = (double)get_double("kp", 0.5);
@@ -238,11 +255,6 @@ bool Config::loadConfig(const std::string& filename)
     kp_y = (double)get_double("kp_y", 0.4);
     ki_y = (double)get_double("ki_y", 0.0);
     kd_y = (double)get_double("kd_y", 0.15);
-
-    // Kalman Filter // Removed section
-    // process_noise_q = (float)get_double("process_noise_q", 0.01);
-    // measurement_noise_r = (float)get_double("measurement_noise_r", 0.1);
-    // estimation_error_p = (float)get_double("estimation_error_p", 1.0);
 
     // Arduino
     arduino_baudrate = get_long("arduino_baudrate", 115200);
@@ -318,10 +330,11 @@ bool Config::loadConfig(const std::string& filename)
     ini.SetDoubleValue("", "ki_y", ki_y);
     ini.SetDoubleValue("", "kd_y", kd_y);
 
-    // Kalman Filter // Removed section
-    // ini.SetDoubleValue("", "process_noise_q", process_noise_q);
-    // ini.SetDoubleValue("", "measurement_noise_r", measurement_noise_r);
-    // ini.SetDoubleValue("", "estimation_error_p", estimation_error_p);
+    // Kalman Filter settings
+    ini.SetDoubleValue("", "prediction_time_ms", prediction_time_ms);
+    ini.SetDoubleValue("", "kalman_process_noise", kalman_process_noise);
+    ini.SetDoubleValue("", "kalman_measurement_noise", kalman_measurement_noise);
+    ini.SetBoolValue("", "enable_prediction", enable_prediction); // Save prediction enable flag
 
     // CUDA
     ini.SetBoolValue("", "use_pinned_memory", use_pinned_memory);
@@ -330,8 +343,17 @@ bool Config::loadConfig(const std::string& filename)
     // Buttons
     ini.SetValue("", "button_targeting", joinStrings(button_targeting, " ").c_str());
 
-    ini.SetDoubleValue("", "norecoil_ms", norecoil_ms);
-    // ini.SetDoubleValue("", "prediction_time_ms", prediction_time_ms); // Removed
+    ini.SetDoubleValue("", "norecoil_step", norecoil_step, nullptr, true);
+    ini.SetDoubleValue("", "norecoil_ms", norecoil_ms, nullptr, true);
+
+    ini.SetDoubleValue("", "bScope_multiplier", bScope_multiplier);
+
+    // Scope Recoil Control (Save)
+    ini.SetLongValue("", "active_scope_magnification", active_scope_magnification);
+    ini.SetDoubleValue("", "recoil_mult_2x", recoil_mult_2x, nullptr, true);
+    ini.SetDoubleValue("", "recoil_mult_3x", recoil_mult_3x, nullptr, true);
+    ini.SetDoubleValue("", "recoil_mult_4x", recoil_mult_4x, nullptr, true);
+    ini.SetDoubleValue("", "recoil_mult_6x", recoil_mult_6x, nullptr, true);
 
     return true;
 }
@@ -398,6 +420,16 @@ bool Config::saveConfig(const std::string& filename)
         << "ki_y = " << ki_y << "\n"
         << "kd_y = " << kd_y << "\n\n";
 
+    // Kalman Filter settings
+    file << "# Kalman Filter Prediction\n"
+        << std::fixed << std::setprecision(1)
+        << "prediction_time_ms = " << prediction_time_ms << "\n"
+        << std::fixed << std::setprecision(3)
+        << "kalman_process_noise = " << kalman_process_noise << "\n"
+        << std::fixed << std::setprecision(2)
+        << "kalman_measurement_noise = " << kalman_measurement_noise << "\n"
+        << "enable_prediction = " << (enable_prediction ? "true" : "false") << "\n\n";
+
     // Arduino
     file << "# Arduino\n"
         << "arduino_baudrate = " << arduino_baudrate << "\n"
@@ -410,6 +442,15 @@ bool Config::saveConfig(const std::string& filename)
         << "auto_shoot = " << (auto_shoot ? "true" : "false") << "\n"
         << std::fixed << std::setprecision(1)
         << "bScope_multiplier = " << bScope_multiplier << "\n\n";
+
+    // Scope Recoil Control (Save)
+    file << "# Scope Recoil Control\n"
+        << "active_scope_magnification = " << active_scope_magnification << "\n"
+        << std::fixed << std::setprecision(2)
+        << "recoil_mult_2x = " << recoil_mult_2x << "\n"
+        << "recoil_mult_3x = " << recoil_mult_3x << "\n"
+        << "recoil_mult_4x = " << recoil_mult_4x << "\n"
+        << "recoil_mult_6x = " << recoil_mult_6x << "\n\n";
 
     // AI
     file << "# AI\n"
