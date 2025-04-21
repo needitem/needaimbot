@@ -352,6 +352,7 @@ int main()
             config.auto_shoot,
             config.bScope_multiplier,
             config.norecoil_ms,
+            config.prediction_time_ms,
             arduinoSerial,
             gHub);
 

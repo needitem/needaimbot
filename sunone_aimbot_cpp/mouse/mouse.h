@@ -16,6 +16,7 @@
 #include "SerialConnection.h"
 #include "ghub.h"
 #include "InputMethod.h"
+#include "KalmanFilter2D.h"
 
 // Forward declare PIDController2D
 class PIDController2D;
@@ -27,6 +28,7 @@ class MouseThread
 private:
     std::unique_ptr<PIDController2D> pid_controller;
     std::unique_ptr<InputMethod> input_method;
+    std::unique_ptr<KalmanFilter2D> kalman_filter;
 
     // Performance tracking callback
     ErrorTrackingCallback error_callback;
@@ -48,23 +50,26 @@ private:
 
     std::chrono::steady_clock::time_point last_target_time;
     std::chrono::steady_clock::time_point last_recoil_compensation_time; // Track last recoil time
+    std::chrono::steady_clock::time_point last_update_time; // Track time for Kalman Filter dt calculation
     std::atomic<bool> target_detected{false};
     std::atomic<bool> mouse_pressed{false};
 
     // Simplified target tracking
     AimbotTarget *current_target;
+    float prediction_time_ms; // Prediction time in milliseconds
 
     float calculateTargetDistance(const AimbotTarget &target) const;
     AimbotTarget *findClosestTarget(const std::vector<AimbotTarget> &targets) const;
     void initializeInputMethod(SerialConnection *serialConnection, GhubMouse *gHub);
-    void initializeScreen(int resolution, int dpi, int fovX, int fovY, bool auto_shoot, float bScope_multiplier, float norecoil_ms);
+    void initializeScreen(int resolution, int dpi, int fovX, int fovY, bool auto_shoot, float bScope_multiplier, float norecoil_ms, float prediction_time_ms);
+    void resetPrediction();
 
 public:
     MouseThread(int resolution, int dpi, int fovX, int fovY,
                 float kp_x, float ki_x, float kd_x,
                 float kp_y, float ki_y, float kd_y,
                 bool auto_shoot, float bScope_multiplier,
-                float norecoil_ms,
+                float norecoil_ms, float prediction_time_ms,
                 SerialConnection *serialConnection = nullptr,
                 GhubMouse *gHub = nullptr);
     ~MouseThread();
@@ -73,7 +78,7 @@ public:
                       float kp_x, float ki_x, float kd_x,
                       float kp_y, float ki_y, float kd_y,
                       bool auto_shoot, float bScope_multiplier,
-                      float norecoil_ms);
+                      float norecoil_ms, float prediction_time_ms);
 
     Eigen::Vector2f predictTargetPosition(float target_x, float target_y);
     Eigen::Vector2f calculateMovement(const Eigen::Vector2f &target_pos);

@@ -502,7 +502,8 @@ void OverlayThread()
                             static_cast<float>(config.kd_y),
                             config.auto_shoot,
                             config.bScope_multiplier,
-                            config.norecoil_ms);
+                            config.norecoil_ms,
+                            config.prediction_time_ms);
                         config.saveConfig();
                     }
 
@@ -587,7 +588,8 @@ void OverlayThread()
                             static_cast<float>(config.kd_y),
                             config.auto_shoot,
                             config.bScope_multiplier,
-                            config.norecoil_ms);
+                            config.norecoil_ms,
+                            config.prediction_time_ms);
 
                         config.saveConfig();
                     }
@@ -612,7 +614,8 @@ void OverlayThread()
                             static_cast<float>(config.kd_y),
                             config.auto_shoot,
                             config.bScope_multiplier,
-                            config.norecoil_ms);
+                            config.norecoil_ms,
+                            config.prediction_time_ms);
 
                         config.saveConfig();
                     }
