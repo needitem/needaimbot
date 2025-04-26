@@ -150,7 +150,7 @@ bool MouseThread::checkTargetInScope(float target_x, float target_y, float targe
             center_y >= min_y && center_y <= max_y);
 }
 
-float MouseThread::calculateTargetDistance(const AimbotTarget &target) const
+float MouseThread::calculateTargetDistanceSquared(const AimbotTarget &target) const
 {
     float dx = target.x + target.w * 0.5f - center_x;
     float target_center_y;
@@ -176,7 +176,7 @@ float MouseThread::calculateTargetDistance(const AimbotTarget &target) const
         target_center_y = target.y + target.h * config.body_y_offset;
     }
     float dy = target_center_y - center_y;
-    return std::sqrt(dx * dx + dy * dy);
+    return dx * dx + dy * dy;
 }
 
 void MouseThread::moveMouse(const AimbotTarget &target)

@@ -19,10 +19,6 @@ private:
     Eigen::Vector2f prev_derivative; // Previous derivative (for derivative filtering)
     std::chrono::steady_clock::time_point last_time_point;  // Previous calculation time (for dt calculation)
 
-    // Cached gains for calculation (potentially dynamically adjusted)
-    float cached_kp_x, cached_ki_x, cached_kd_x;
-    float cached_kp_y, cached_ki_y, cached_kd_y;
-
 public:
     // New constructor with separated X/Y gains
     PIDController2D(float kp_x, float ki_x, float kd_x, float kp_y, float ki_y, float kd_y);

@@ -51,7 +51,7 @@ private:
     // Simplified target tracking
     AimbotTarget *current_target;
 
-    float calculateTargetDistance(const AimbotTarget &target) const;
+    float calculateTargetDistanceSquared(const AimbotTarget &target) const;
     void initializeInputMethod(SerialConnection *serialConnection, GhubMouse *gHub);
     void initializeScreen(int resolution, bool auto_shoot, float bScope_multiplier, float norecoil_ms);
 

@@ -128,32 +128,35 @@ void SerialConnection::move(int x, int y)
     }
     else
     {
-        // Combine split move commands into a single string
-        std::string combined_data;
-        std::vector<int> x_parts = splitValue(x);
-        std::vector<int> y_parts = splitValue(y);
-
-        size_t max_splits = std::max(x_parts.size(), y_parts.size());
-        while (x_parts.size() < max_splits) x_parts.push_back(0);
-        while (y_parts.size() < max_splits) y_parts.push_back(0);
-
-        // Reserve space for efficiency (estimate size)
-        combined_data.reserve(max_splits * 15); // Rough estimate: "m-127,-127\n" is ~12 chars
-
         char buffer[32]; // Buffer for formatting each part
-        for (size_t i = 0; i < max_splits; ++i)
+        
+        int current_x = x;
+        int current_y = y;
+        int sign_x = (x > 0) ? 1 : ((x < 0) ? -1 : 0);
+        int sign_y = (y > 0) ? 1 : ((y < 0) ? -1 : 0);
+        int abs_x = std::abs(x);
+        int abs_y = std::abs(y);
+        
+        while (abs_x > 0 || abs_y > 0)
         {
-            // Format each part using snprintf
-            int len = snprintf(buffer, sizeof(buffer), "m%d,%d\n", x_parts[i], y_parts[i]);
-            // Append the formatted part if successful
-            if (len > 0 && len < sizeof(buffer)) {
-                combined_data.append(buffer, len);
-            }
-        }
+            int move_part_x = 0;
+            int move_part_y = 0;
 
-        // Write the combined string once
-        if (!combined_data.empty()) {
-            write(combined_data);
+            if (abs_x > 0) {
+                move_part_x = std::min(abs_x, 127) * sign_x;
+                abs_x -= std::min(abs_x, 127);
+            }
+            if (abs_y > 0) {
+                move_part_y = std::min(abs_y, 127) * sign_y;
+                abs_y -= std::min(abs_y, 127);
+            }
+            
+            // Format each part using snprintf
+            int len = snprintf(buffer, sizeof(buffer), "m%d,%d\n", move_part_x, move_part_y);
+            // Write the formatted part if successful
+            if (len > 0 && len < sizeof(buffer)) {
+                write(std::string(buffer, len)); // Send immediately
+            }
         }
     }
 }
