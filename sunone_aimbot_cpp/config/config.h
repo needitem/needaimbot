@@ -28,8 +28,8 @@ public:
     bool auto_aim;
 
     // Target Stickiness
-    float sticky_bonus;          // Score bonus for sticking to the previous target
-    float sticky_iou_threshold; // IoU threshold for stickiness
+    // Removed: float sticky_bonus;
+    // Removed: float sticky_iou_threshold;
 
     // Mouse
     bool easynorecoil;
