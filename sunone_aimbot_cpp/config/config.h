@@ -32,9 +32,6 @@ public:
     float sticky_iou_threshold; // IoU threshold for stickiness
 
     // Mouse
-    int dpi;
-    int fovX;
-    int fovY;
     bool easynorecoil;
     float easynorecoilstrength;
     float norecoil_step;  // Step size for adjusting norecoil strength

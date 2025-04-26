@@ -38,23 +38,6 @@ void draw_mouse()
     // --- Column 1 Start ---
     if (ImGui::CollapsingHeader("Display & Sensitivity", ImGuiTreeNodeFlags_DefaultOpen))
     {
-        ImGui::SliderInt("DPI", &config.dpi, 800, 5000);
-        if (ImGui::IsItemHovered())
-        {
-            SetWrappedTooltip("Mouse DPI (Dots Per Inch). Higher values increase mouse sensitivity.");
-        }
-        
-        ImGui::SliderInt("FOV X", &config.fovX, 60, 120);
-        if (ImGui::IsItemHovered())
-        {
-            SetWrappedTooltip("Horizontal Field of View in degrees. Should match your game's settings.");
-        }
-        
-        ImGui::SliderInt("FOV Y", &config.fovY, 40, 100);
-        if (ImGui::IsItemHovered())
-        {
-            SetWrappedTooltip("Vertical Field of View in degrees. Should match your game's settings.");
-        }
         ImGui::Spacing(); // Add spacing at the end of the group
     }
 
@@ -65,9 +48,9 @@ void draw_mouse()
     // X-axis PID Settings
     if (ImGui::CollapsingHeader("Horizontal (X-axis) PID", ImGuiTreeNodeFlags_DefaultOpen))
     {
-        // Cast to float for ImGui slider but preserve double precision
+        // Cast to float for ImGui input but preserve double precision
         float kp_x_display = static_cast<float>(config.kp_x);
-        if (ImGui::SliderFloat("Proportional X (Kp)", &kp_x_display, 0.0f, 20.0f, "%.3f"))
+        if (ImGui::InputFloat("Proportional X (Kp)", &kp_x_display, 0.01f, 0.1f, "%.3f"))
         {
             config.kp_x = static_cast<double>(kp_x_display);
         }
@@ -77,7 +60,7 @@ void draw_mouse()
         }
 
         float ki_x_display = static_cast<float>(config.ki_x);
-        if (ImGui::SliderFloat("Integral X (Ki)", &ki_x_display, 0.0f, 20.0f, "%.3f"))
+        if (ImGui::InputFloat("Integral X (Ki)", &ki_x_display, 0.01f, 0.1f, "%.3f"))
         {
             config.ki_x = static_cast<double>(ki_x_display);
         }
@@ -87,7 +70,7 @@ void draw_mouse()
         }
 
         float kd_x_display = static_cast<float>(config.kd_x);
-        if (ImGui::SliderFloat("Derivative X (Kd)", &kd_x_display, 0.0f, 5.0f, "%.3f"))
+        if (ImGui::InputFloat("Derivative X (Kd)", &kd_x_display, 0.01f, 0.1f, "%.3f"))
         {
             config.kd_x = static_cast<double>(kd_x_display);
         }
@@ -102,7 +85,7 @@ void draw_mouse()
     if (ImGui::CollapsingHeader("Vertical (Y-axis) PID", ImGuiTreeNodeFlags_DefaultOpen))
     {
         float kp_y_display = static_cast<float>(config.kp_y);
-        if (ImGui::SliderFloat("Proportional Y (Kp)", &kp_y_display, 0.0f, 20.0f, "%.3f"))
+        if (ImGui::InputFloat("Proportional Y (Kp)", &kp_y_display, 0.01f, 0.1f, "%.3f"))
         {
             config.kp_y = static_cast<double>(kp_y_display);
         }
@@ -112,23 +95,23 @@ void draw_mouse()
         }
 
         float ki_y_display = static_cast<float>(config.ki_y);
-        if (ImGui::SliderFloat("Integral Y (Ki)", &ki_y_display, 0.0f, 10.0f, "%.3f"))
+        if (ImGui::InputFloat("Integral Y (Ki)", &ki_y_display, 0.01f, 0.1f, "%.3f"))
         {
             config.ki_y = static_cast<double>(ki_y_display);
         }
         if (ImGui::IsItemHovered())
         {
-            SetWrappedTooltip("Integral gain for Y-axis. (0.0 - 10.0)");
+            SetWrappedTooltip("Accounts for accumulated vertical error over time. Higher values help eliminate persistent offset but can cause oscillation.");
         }
 
         float kd_y_display = static_cast<float>(config.kd_y);
-        if (ImGui::SliderFloat("Derivative Y (Kd)", &kd_y_display, 0.0f, 10.0f, "%.3f"))
+        if (ImGui::InputFloat("Derivative Y (Kd)", &kd_y_display, 0.01f, 0.1f, "%.3f"))
         {
             config.kd_y = static_cast<double>(kd_y_display);
         }
         if (ImGui::IsItemHovered())
         {
-            SetWrappedTooltip("Derivative gain for Y-axis. (0.0 - 10.0)");
+            SetWrappedTooltip("Predicts future vertical error based on rate of change. Higher values add dampening to reduce overshooting.");
         }
         ImGui::Spacing(); // Add spacing after the Y-axis PID settings
     }

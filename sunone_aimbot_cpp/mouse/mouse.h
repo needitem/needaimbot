@@ -37,9 +37,6 @@ private:
 
     float screen_width;
     float screen_height;
-    float dpi;
-    float fov_x;
-    float fov_y;
     float center_x;
     float center_y;
     float bScope_multiplier;
@@ -59,13 +56,12 @@ private:
     float prediction_time_ms; // Prediction time in milliseconds
 
     float calculateTargetDistance(const AimbotTarget &target) const;
-    AimbotTarget *findClosestTarget(const std::vector<AimbotTarget> &targets) const;
     void initializeInputMethod(SerialConnection *serialConnection, GhubMouse *gHub);
-    void initializeScreen(int resolution, int dpi, int fovX, int fovY, bool auto_shoot, float bScope_multiplier, float norecoil_ms, float prediction_time_ms);
+    void initializeScreen(int resolution, bool auto_shoot, float bScope_multiplier, float norecoil_ms, float prediction_time_ms);
     void resetPrediction();
 
 public:
-    MouseThread(int resolution, int dpi, int fovX, int fovY,
+    MouseThread(int resolution,
                 float kp_x, float ki_x, float kd_x,
                 float kp_y, float ki_y, float kd_y,
                 bool auto_shoot, float bScope_multiplier,
@@ -74,7 +70,7 @@ public:
                 GhubMouse *gHub = nullptr);
     ~MouseThread();
 
-    void updateConfig(int resolution, int dpi, int fovX, int fovY,
+    void updateConfig(int resolution,
                       float kp_x, float ki_x, float kd_x,
                       float kp_y, float ki_y, float kd_y,
                       bool auto_shoot, float bScope_multiplier,
@@ -96,9 +92,6 @@ public:
     
     float& getScreenWidth() { return screen_width; }
     float& getScreenHeight() { return screen_height; }
-    float& getDPI() { return dpi; }
-    float& getFOVX() { return fov_x; }
-    float& getFOVY() { return fov_y; }
     bool& getAutoShoot() { return auto_shoot; }
     float& getScopeMultiplier() { return bScope_multiplier; }
     
