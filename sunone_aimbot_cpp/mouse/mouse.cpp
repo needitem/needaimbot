@@ -22,7 +22,6 @@
 #include "sunone_aimbot_cpp.h"
 #include "ghub.h"
 #include "config.h"
-#include "KalmanFilter2D.h"
 
 extern std::atomic<bool> aiming;
 extern std::mutex configMutex;
@@ -41,11 +40,10 @@ MouseThread::MouseThread(
     bool auto_shoot,
     float bScope_multiplier,
     float norecoil_ms,
-    float prediction_time_ms, 
     SerialConnection *serialConnection,
     GhubMouse *gHub) : tracking_errors(false)
 {
-    initializeScreen(resolution, auto_shoot, bScope_multiplier, norecoil_ms, config.prediction_time_ms);
+    initializeScreen(resolution, auto_shoot, bScope_multiplier, norecoil_ms);
     pid_controller = std::make_unique<PIDController2D>(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
     initializeInputMethod(serialConnection, gHub);
 }
@@ -68,14 +66,13 @@ void MouseThread::initializeInputMethod(SerialConnection *serialConnection, Ghub
     }
 }
 
-void MouseThread::initializeScreen(int resolution, bool auto_shoot, float bScope_multiplier, float norecoil_ms, float prediction_time_ms)
+void MouseThread::initializeScreen(int resolution, bool auto_shoot, float bScope_multiplier, float norecoil_ms)
 {
     this->screen_width = static_cast<float>(resolution);
     this->screen_height = static_cast<float>(resolution); 
     this->auto_shoot = auto_shoot;
     this->bScope_multiplier = bScope_multiplier;
     this->norecoil_ms = norecoil_ms; 
-    this->prediction_time_ms = prediction_time_ms; 
     this->center_x = screen_width / 2.0f;
     this->center_y = screen_height / 2.0f;
 
@@ -92,9 +89,6 @@ void MouseThread::initializeScreen(int resolution, bool auto_shoot, float bScope
     }
 
     this->last_recoil_compensation_time = std::chrono::steady_clock::now();
-
-    kalman_filter = std::make_unique<KalmanFilter2D>(config.kalman_process_noise, config.kalman_measurement_noise);
-    resetPrediction(); 
 }
 
 void MouseThread::updateConfig(
@@ -107,53 +101,11 @@ void MouseThread::updateConfig(
     float kd_y,
     bool auto_shoot,
     float bScope_multiplier,
-    float norecoil_ms,
-    float prediction_time_ms 
+    float norecoil_ms
     )
 {
-    initializeScreen(resolution, auto_shoot, bScope_multiplier, norecoil_ms, config.prediction_time_ms);
+    initializeScreen(resolution, auto_shoot, bScope_multiplier, norecoil_ms);
     pid_controller->updateSeparatedParameters(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
-    
-    if (kalman_filter) {
-        kalman_filter->updateParameters(config.kalman_process_noise, config.kalman_measurement_noise);
-    }
-    
-    this->prediction_time_ms = config.prediction_time_ms; 
-
-    resetPrediction(); 
-}
-
-Eigen::Vector2f MouseThread::predictTargetPosition(float target_x, float target_y)
-{
-    if (!config.enable_prediction) {
-        return Eigen::Vector2f(target_x, target_y);
-    }
-
-    if (!kalman_filter)
-    {
-        return Eigen::Vector2f(target_x, target_y);
-    }
-
-    auto now = std::chrono::steady_clock::now();
-    float dt = std::chrono::duration<float>(now - last_update_time).count();
-    last_update_time = now;
-
-    if (dt <= 0.0f || dt > 0.5f) { 
-         dt = 1.0f / 60.0f; 
-    }
-
-    kalman_filter->predict(dt);
-
-    Eigen::Vector2f measurement(target_x, target_y);
-    kalman_filter->update(measurement);
-
-    const auto& state = kalman_filter->getState();
-
-    float pred_time_sec = prediction_time_ms / 1000.0f;
-    float predicted_x = state[0] + state[2] * pred_time_sec;
-    float filtered_y = state[1];
-
-    return Eigen::Vector2f(predicted_x, filtered_y);
 }
 
 Eigen::Vector2f MouseThread::calculateMovement(const Eigen::Vector2f &target_pos)
@@ -201,7 +153,29 @@ bool MouseThread::checkTargetInScope(float target_x, float target_y, float targe
 float MouseThread::calculateTargetDistance(const AimbotTarget &target) const
 {
     float dx = target.x + target.w * 0.5f - center_x;
-    float dy = target.y + target.h * 0.5f - center_y;
+    float target_center_y;
+    /*
+     Model Class IDs (from user):
+      0: player
+      1: bot
+      2: weapon
+      3: outline
+      4: dead_body
+      5: hideout_target_human
+      6: hideout_target_balls
+      7: head
+      8: smoke
+      9: fire
+      10: third_person
+    */
+    constexpr int HEAD_CLASS_ID = 7; // Class ID for head
+
+    if (!config.disable_headshot && target.classId == HEAD_CLASS_ID) {
+        target_center_y = target.y + target.h * config.head_y_offset;
+    } else {
+        target_center_y = target.y + target.h * config.body_y_offset;
+    }
+    float dy = target_center_y - center_y;
     return std::sqrt(dx * dx + dy * dy);
 }
 
@@ -211,11 +185,34 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     const float local_center_y = center_y;
 
     float target_center_x = target.x + target.w * 0.5f;
-    float target_center_y = target.y + target.h * 0.5f;
+    float target_center_y;
+    /*
+     Model Class IDs (from user):
+      0: player
+      1: bot
+      2: weapon
+      3: outline
+      4: dead_body
+      5: hideout_target_human
+      6: hideout_target_balls
+      7: head
+      8: smoke
+      9: fire
+      10: third_person
+    */
+    constexpr int HEAD_CLASS_ID = 7; // Class ID for head
 
-    Eigen::Vector2f predicted = predictTargetPosition(target_center_x, target_center_y);
-    float error_x = predicted.x() - local_center_x;
-    float error_y = predicted.y() - local_center_y;
+    {
+        std::lock_guard<std::mutex> lock(configMutex);
+        if (!config.disable_headshot && target.classId == HEAD_CLASS_ID) {
+            target_center_y = target.y + target.h * config.head_y_offset;
+        } else {
+            target_center_y = target.y + target.h * config.body_y_offset;
+        }
+    }
+
+    float error_x = target_center_x - local_center_x;
+    float error_y = target_center_y - local_center_y;
 
     if (tracking_errors)
     {
@@ -320,11 +317,4 @@ void MouseThread::setInputMethod(std::unique_ptr<InputMethod> new_method)
 {
     std::lock_guard<std::mutex> lock(input_method_mutex);
     input_method = std::move(new_method);
-}
-
-void MouseThread::resetPrediction() {
-    if (kalman_filter) {
-        kalman_filter->reset();
-    }
-    last_update_time = std::chrono::steady_clock::now(); 
 }

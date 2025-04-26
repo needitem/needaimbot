@@ -35,12 +35,6 @@ void draw_mouse()
 {
     ImGui::Columns(2, "MouseSettingsColumns", false); // Start 2-column layout
 
-    // --- Column 1 Start ---
-    if (ImGui::CollapsingHeader("Display & Sensitivity", ImGuiTreeNodeFlags_DefaultOpen))
-    {
-        ImGui::Spacing(); // Add spacing at the end of the group
-    }
-
     // No Separator needed here due to column layout
     ImGui::Text("PID Controller Settings");
     ImGui::Spacing(); // Add spacing before the first PID header
@@ -142,54 +136,6 @@ void draw_mouse()
         //    ImGui::TextDisabled("Scope Multiplier (requires Auto Shoot)");
         // }
 
-        ImGui::SeparatorText("Kalman Filter Prediction");
-        ImGui::Indent(10.0f);
-        // Enable/Disable Prediction Checkbox
-        if (ImGui::Checkbox("Enable Prediction", &config.enable_prediction)) {
-            config.saveConfig();
-        }
-        if (ImGui::IsItemHovered()) {
-            SetWrappedTooltip("Enable or disable target movement prediction using the Kalman filter.");
-        }
-        ImGui::Spacing(); // Add space after the checkbox
-
-        // Disable prediction settings if prediction is disabled
-        if (!config.enable_prediction) {
-            ImGui::BeginDisabled();
-        }
-
-        // Prediction Time
-        if (ImGui::InputFloat("Prediction Time (ms)", &config.prediction_time_ms, 1.0f, 5.0f, "%.1f")) {
-            config.prediction_time_ms = std::max(0.0f, config.prediction_time_ms); // Ensure non-negative
-            config.saveConfig();
-        }
-        if (ImGui::IsItemHovered()) {
-            SetWrappedTooltip("How far into the future to predict target movement in milliseconds. Adjust based on latency and target speed (e.g., 16-50ms).");
-        }
-
-        // Process Noise
-        if (ImGui::InputFloat("Process Noise (Q)", &config.kalman_process_noise, 0.01f, 0.1f, "%.3f")) {
-            config.kalman_process_noise = std::max(1e-6f, config.kalman_process_noise); // Ensure positive
-            config.saveConfig();
-        }
-        if (ImGui::IsItemHovered()) {
-            SetWrappedTooltip("Kalman Filter Process Noise (Q): Uncertainty in the target's movement model. Higher values trust measurements more, lower values trust the prediction model more.");
-        }
-
-        // Measurement Noise
-        if (ImGui::InputFloat("Measurement Noise (R)", &config.kalman_measurement_noise, 0.1f, 1.0f, "%.2f")) {
-            config.kalman_measurement_noise = std::max(1e-6f, config.kalman_measurement_noise); // Ensure positive
-            config.saveConfig();
-        }
-        if (ImGui::IsItemHovered()) {
-             SetWrappedTooltip("Kalman Filter Measurement Noise (R): Uncertainty in the detected target position measurement. Higher values trust the prediction model more, lower values trust measurements more.");
-        }
-
-        // End disabling prediction settings
-        if (!config.enable_prediction) {
-            ImGui::EndDisabled();
-        }
-        ImGui::Unindent(10.0f);
         ImGui::Spacing(); // Add spacing at the end of the group
     }
     // --- Column 1 End ---
