@@ -51,16 +51,19 @@ void draw_target()
 
         ImDrawList* draw_list = ImGui::GetWindowDrawList();
 
-        // Draw body offset line (Simplified calculation)
-        float body_line_y = image_pos.y + config.body_y_offset * image_size.y;
+        // Draw body offset line
+        float normalized_body_value = (config.body_y_offset - 1.0f) / 1.0f;
+        float body_line_y = image_pos.y + (1.0f + normalized_body_value) * image_size.y;
         ImVec2 body_line_start = ImVec2(image_pos.x, body_line_y);
         ImVec2 body_line_end = ImVec2(image_pos.x + image_size.x, body_line_y);
         draw_list->AddLine(body_line_start, body_line_end, IM_COL32(255, 0, 0, 255), 2.0f);
         
-        // Draw head offset line - Visualization (Use full image height)
-        // head_y_offset = 0.0 maps to the top of the image
-        // head_y_offset = 1.0 maps to the bottom of the image
-        float head_line_y = image_pos.y + config.head_y_offset * image_size.y;
+        // Draw head offset line - modified calculation
+        // When head_y_offset is 0.0, the line is at the top of the image
+        // When head_y_offset is 1.0, the line is at the position where body_y_offset is 0.15
+        float body_y_pos_at_015 = image_pos.y + (1.0f + (0.15f - 1.0f) / 1.0f) * image_size.y;
+        float head_top_pos = image_pos.y;
+        float head_line_y = head_top_pos + (config.head_y_offset * (body_y_pos_at_015 - head_top_pos));
         
         ImVec2 head_line_start = ImVec2(image_pos.x, head_line_y);
         ImVec2 head_line_end = ImVec2(image_pos.x + image_size.x, head_line_y);
