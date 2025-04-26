@@ -205,9 +205,19 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     {
         std::lock_guard<std::mutex> lock(configMutex);
         if (!config.disable_headshot && target.classId == HEAD_CLASS_ID) {
+            // Headshot aiming logic
             target_center_y = target.y + target.h * config.head_y_offset;
+            // Optional: Add logging for headshot case too if needed
+            // std::cout << "[Aim Debug] Headshot Aim: target.h = " << target.h 
+            //           << ", head_offset = " << config.head_y_offset 
+            //           << ", target_center_y = " << target_center_y << std::endl;
         } else {
+            // Body aiming logic (or disabled headshot)
             target_center_y = target.y + target.h * config.body_y_offset;
+            
+            // --- Logging Removed --- 
+            // Logging was here
+            // --- End Logging --- 
         }
     }
 

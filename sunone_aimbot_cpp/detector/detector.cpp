@@ -29,6 +29,7 @@
 #include "other_tools.h"
 #include "postProcess.h"
 #include "scoringGpu.h"
+#include "filterGpu.h"
 #include "config.h"
 
 // Assume a global pointer to the active capture object exists (Needs proper implementation)
@@ -56,16 +57,17 @@ Detector::Detector()
     m_decodedCountGpu(nullptr),
     m_finalDetectionsGpu(nullptr),
     m_finalDetectionsCountGpu(nullptr),
+    m_classFilteredDetectionsGpu(nullptr),
+    m_classFilteredCountGpu(nullptr),
     m_scoresGpu(nullptr),
     m_bestTargetIndexGpu(nullptr),
     m_captureDoneEvent(nullptr),
     m_cudaContextInitialized(false),
     m_hasBestTarget(false),
     m_bestTargetIndexHost(-1),
-    m_hadTargetLastFrame(false) // Initialize stickiness state
+    m_finalDetectionsCountHost(0),
+    m_classFilteredCountHost(0)
 {
-    // Initialize previousTargetBox to an empty rect
-    m_previousTargetBox = cv::Rect();
     // No CUDA initialization here anymore
 }
 
@@ -98,6 +100,8 @@ Detector::~Detector()
     freeGpuBuffer(m_decodedCountGpu);
     freeGpuBuffer(m_finalDetectionsGpu);
     freeGpuBuffer(m_finalDetectionsCountGpu);
+    freeGpuBuffer(m_classFilteredDetectionsGpu);
+    freeGpuBuffer(m_classFilteredCountGpu);
     freeGpuBuffer(m_scoresGpu);
     freeGpuBuffer(m_bestTargetIndexGpu);
 }
@@ -299,19 +303,10 @@ void Detector::initialize(const std::string& modelFile)
 
     getBindings();
 
-    size_t maxDetections = config.max_detections > 0 ? config.max_detections : 100;
-    size_t maxDecodedMultiplier = 2;
+    // --- Initialize GPU Buffers --- 
+    initializeBuffers(); // Call the buffer initialization function
 
-    allocateGpuBuffer(m_decodedDetectionsGpu, maxDetections * maxDecodedMultiplier, "Decoded Detections");
-    allocateGpuBuffer(m_decodedCountGpu, 1, "Decoded Count");
-
-    allocateGpuBuffer(m_finalDetectionsGpu, maxDetections, "Final Detections");
-    allocateGpuBuffer(m_finalDetectionsCountGpu, 1, "Final Count");
-
-    allocateGpuBuffer(m_scoresGpu, maxDetections, "Scores");
-
-    allocateGpuBuffer(m_bestTargetIndexGpu, 1, "Best Index");
-
+    // Determine numClasses based on output shape
     if (!outputNames.empty())
     {
         const std::string& mainOut = outputNames[0];
@@ -507,6 +502,8 @@ void Detector::inferenceThread()
                 freeGpuBuffer(m_decodedCountGpu);
                 freeGpuBuffer(m_finalDetectionsGpu);
                 freeGpuBuffer(m_finalDetectionsCountGpu);
+                freeGpuBuffer(m_classFilteredDetectionsGpu);
+                freeGpuBuffer(m_classFilteredCountGpu);
                 freeGpuBuffer(m_scoresGpu);
                 freeGpuBuffer(m_bestTargetIndexGpu);
             }
@@ -580,45 +577,50 @@ void Detector::inferenceThread()
 
                 performGpuPostProcessing(stream);
 
-                cudaStreamSynchronize(stream); 
+                // --- Synchronization Point 1: Ensure PostProcessing (including NMS) is done --- 
+                // cudaStreamSynchronize(stream); // Sync moved into performGpuPostProcessing and before DtoH copies
 
-                m_hasBestTarget = false;
+                m_hasBestTarget = false; // Reset target status
+                m_finalDetectionsCountHost = 0; // Reset host count for final (NMS) results
+                // m_classFilteredCountHost = 0; // No longer needed here
 
-                cudaError_t countCopyErr = cudaMemcpy(&m_finalDetectionsCountHost, m_finalDetectionsCountGpu, sizeof(int), cudaMemcpyDeviceToHost);
-                if (countCopyErr != cudaSuccess) {
-                     std::cerr << "[Detector] Failed to copy final detection count DtoH: " << cudaGetErrorString(countCopyErr) << std::endl;
+                // Get the count of detections after NMS (which are already class-filtered)
+                cudaError_t finalCountCopyErr = cudaMemcpy(&m_finalDetectionsCountHost, m_finalDetectionsCountGpu, sizeof(int), cudaMemcpyDeviceToHost); // Use a blocking copy or ensure stream is synced before use
+                // cudaStreamSynchronize(stream); // Ensure copy is complete if using async
+                if (finalCountCopyErr != cudaSuccess) {
+                     std::cerr << "[Detector] Failed to copy final NMS detection count DtoH: " << cudaGetErrorString(finalCountCopyErr) << std::endl;
                      m_finalDetectionsCountHost = 0;
                 }
-                
+
+                // --- Scoring Stage (using final NMS detections, which are pre-filtered) ---
                 if (m_finalDetectionsCountHost > 0) {
-                    int validDetections = std::min((int)config.max_detections, m_finalDetectionsCountHost);
+                    // Use the count after NMS for scoring
+                    int validDetectionsForScoring = std::min((int)config.max_detections, m_finalDetectionsCountHost);
                     
-                    if (validDetections > 0) {
+                    if (validDetectionsForScoring > 0) {
+                        // Score the final (class-filtered and NMS'd) detections
                         calculateTargetScoresGpu(
-                            m_finalDetectionsGpu,
-                            validDetections,
+                            m_finalDetectionsGpu, // Use final detections
+                            validDetectionsForScoring,    // Use final count
                             m_scoresGpu,
                             config.detection_resolution,
                             config.detection_resolution,
-                            config.disable_headshot,
-                            config.class_head,
-                            m_previousTargetBox,
-                            m_hadTargetLastFrame,
-                            config.sticky_bonus,
-                            config.sticky_iou_threshold,
+                            1.0f, // Use hardcoded distance weight
                             stream
                         );
                         cudaError_t scoreErr = cudaGetLastError();
                         if(scoreErr != cudaSuccess) std::cerr << "[Detector] Error after calculateTargetScoresGpu: " << cudaGetErrorString(scoreErr) << std::endl;
 
+                        // Find best target among scored detections
                         cudaError_t findErr = findBestTargetGpu(
                             m_scoresGpu,
-                            validDetections,
+                            validDetectionsForScoring, // Use final count
                             m_bestTargetIndexGpu,
                             stream
                         );
                         if(findErr != cudaSuccess) std::cerr << "[Detector] Error after findBestTargetGpu: " << cudaGetErrorString(findErr) << std::endl;
 
+                        // Copy best index from GPU to Host
                         cudaError_t indexCopyErr = cudaMemcpyAsync(
                             &m_bestTargetIndexHost,
                             m_bestTargetIndexGpu,
@@ -627,47 +629,48 @@ void Detector::inferenceThread()
                             stream
                         );
                         
-                        cudaStreamSynchronize(stream); 
+                        // --- Synchronization Point: Ensure index copy is done --- 
+                        cudaStreamSynchronize(stream); // Synchronize after index copy
                         if (indexCopyErr != cudaSuccess) {
                             std::cerr << "[Detector] Failed to copy best index DtoH: " << cudaGetErrorString(indexCopyErr) << std::endl;
                             m_bestTargetIndexHost = -1;
                         }
 
-                        if (m_bestTargetIndexHost >= 0 && m_bestTargetIndexHost < validDetections) {
+                        // Check if the best index is valid within the *final* detections
+                        if (m_bestTargetIndexHost >= 0 && m_bestTargetIndexHost < validDetectionsForScoring) {
+                            // Copy the best target *from the final NMS buffer*
                             cudaError_t targetCopyErr = cudaMemcpyAsync(
-                                &m_bestTargetHost,                                  // Dest: Host struct
-                                m_finalDetectionsGpu + m_bestTargetIndexHost, // Src: Element in final GPU array
-                                sizeof(Detection),                                  // Size of one detection
+                                &m_bestTargetHost,                                      // Dest: Host struct
+                                m_finalDetectionsGpu + m_bestTargetIndexHost, // Src: Element in *final* GPU array
+                                sizeof(Detection),                                      // Size of one detection
                                 cudaMemcpyDeviceToHost,
                                 stream
                             );
-                            cudaStreamSynchronize(stream);
+                            // --- Synchronization Point: Ensure target copy is done --- 
+                            cudaStreamSynchronize(stream); // Synchronize after target copy
                             if (targetCopyErr != cudaSuccess) {
                                 std::cerr << "[Detector] Failed to copy best target DtoH: " << cudaGetErrorString(targetCopyErr) << std::endl;
                                 m_hasBestTarget = false;
-                                m_hadTargetLastFrame = false; // Update state: No target found
                             } else {
                                 m_hasBestTarget = true;
-                                // <<< Update previous target state >>>
-                                m_previousTargetBox = m_bestTargetHost.box;
-                                m_hadTargetLastFrame = true;
                             }
                         } else {
+                           // Best index out of bounds or negative
                            m_bestTargetIndexHost = -1;
                            m_hasBestTarget = false;
-                           m_hadTargetLastFrame = false; // Update state: No target found
                         }
                     } else {
+                         // No valid detections after NMS for scoring
                          m_bestTargetIndexHost = -1;
                          m_hasBestTarget = false;
-                         m_hadTargetLastFrame = false; // Update state: No target found
                     }
                 } else {
+                     // No detections passed NMS (or class filter before NMS)
                      m_bestTargetIndexHost = -1;
                      m_hasBestTarget = false;
-                     m_hadTargetLastFrame = false; // Update state: No target found
                 }
 
+                // Notify that detection is complete
                 {
                     std::lock_guard<std::mutex> lock(detectionMutex);
                     detectionVersion++; 
@@ -678,14 +681,12 @@ void Detector::inferenceThread()
             {
                 std::cerr << "[Detector] Error during inference loop: " << e.what() << std::endl;
                 m_hasBestTarget = false;
-                m_hadTargetLastFrame = false; // Update state on error
             }
         } else if (hasNewFrame) {
              {
                 std::lock_guard<std::mutex> lock(detectionMutex);
                 m_hasBestTarget = false; 
                 detectionVersion++; 
-                m_hadTargetLastFrame = false; // Update state if frame exists but no processing
              }
              detectionCV.notify_one();
         } else {
@@ -693,7 +694,6 @@ void Detector::inferenceThread()
              // Maybe keep previous state or reset?
              // For now, we reset if hasNewFrame is false but the outer loop continues
              // (This branch might not be strictly necessary depending on overall flow)
-             // m_hadTargetLastFrame = false; 
         }
     }
 }
@@ -757,34 +757,83 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         return;
     }
 
+    // Copy decoded count from GPU to Host
     int decodedCountHost = 0;
     cudaError_t decodeCountCopyErr = cudaMemcpyAsync(&decodedCountHost, m_decodedCountGpu, sizeof(int), cudaMemcpyDeviceToHost, stream);
     
-    cudaStreamSynchronize(stream); 
+    // --- Synchronization Point 1: Ensure decode count copy is done --- 
+    cudaStreamSynchronize(stream); // Synchronize after decode count copy
     if (decodeCountCopyErr != cudaSuccess) {
          std::cerr << "[Detector] Failed to copy decoded count DtoH: " << cudaGetErrorString(decodeCountCopyErr) << std::endl;
+         // Ensure subsequent steps know there are no detections
          cudaMemsetAsync(m_finalDetectionsCountGpu, 0, sizeof(int), stream);
-         return;
+         return; // Cannot proceed without count
     }
 
+    // --- Class ID Filtering Stage (Moved Before NMS) --- 
+    int classFilteredCountHost = 0; // Host count for filtered results
     if (decodedCountHost > 0) {
-        int inputNmsCount = std::min(decodedCountHost, maxDecodedDetections);
+        int validDecodedDetections = std::min(decodedCountHost, maxDecodedDetections); // Use maxDecodedDetections limit
+        if (validDecodedDetections > 0) {
+             // Call the GPU filter function
+             cudaError_t filterErr = filterDetectionsByClassIdGpu(
+                 m_decodedDetectionsGpu,      // Input: Decoded detections
+                 validDecodedDetections,        // Number of input detections
+                 m_classFilteredDetectionsGpu, // Output: Filtered detections buffer
+                 m_classFilteredCountGpu,   // Output: Filtered count buffer
+                 0,                         // Hardcoded person class ID
+                 config.class_head,         // Head class ID from config
+                 config.disable_headshot,   // Pass the flag here
+                 config.max_detections,     // Max output detections
+                 stream
+             );
+             if (filterErr != cudaSuccess) {
+                 std::cerr << "[Detector] Error during filterDetectionsByClassIdGpu: " << cudaGetErrorString(filterErr) << std::endl;
+                 classFilteredCountHost = 0;
+                 cudaMemsetAsync(m_classFilteredCountGpu, 0, sizeof(int), stream); // Ensure GPU count is 0 on error
+             } else {
+                 // Get the count of detections after class filtering
+                 cudaError_t filteredCountCopyErr = cudaMemcpyAsync(&classFilteredCountHost, m_classFilteredCountGpu, sizeof(int), cudaMemcpyDeviceToHost, stream);
+                 
+                 // --- Synchronization Point 2: Ensure filter count copy is done --- 
+                 cudaStreamSynchronize(stream); // Synchronize after filter count copy
+                 if (filteredCountCopyErr != cudaSuccess) {
+                     std::cerr << "[Detector] Failed to copy filtered detection count DtoH: " << cudaGetErrorString(filteredCountCopyErr) << std::endl;
+                     classFilteredCountHost = 0;
+                 }
+             }
+        } else {
+            // No valid decoded detections
+            classFilteredCountHost = 0;
+            cudaMemsetAsync(m_classFilteredCountGpu, 0, sizeof(int), stream);
+        }
+    } else {
+         // No decoded detections
+         classFilteredCountHost = 0;
+         cudaMemsetAsync(m_classFilteredCountGpu, 0, sizeof(int), stream);
+    }
+
+    // --- NMS Stage (Using class-filtered detections) ---
+    if (classFilteredCountHost > 0) {
+        // Use the potentially capped host count for NMS input
+        int inputNmsCount = std::min(classFilteredCountHost, (int)config.max_detections); 
 
         try {
             NMSGpu(
-                m_decodedDetectionsGpu,
-                inputNmsCount,
-                m_finalDetectionsGpu,
-                m_finalDetectionsCountGpu,
-                (int)config.max_detections,
+                m_classFilteredDetectionsGpu, // Input: Class-filtered detections
+                inputNmsCount,              // Number of filtered detections
+                m_finalDetectionsGpu,         // Output: Final detections after NMS
+                m_finalDetectionsCountGpu,    // Output: Final count after NMS
+                (int)config.max_detections, // Max output detections for NMS
                 config.nms_threshold,
                 stream
             );
         } catch (const std::exception& e) {
              std::cerr << "[Detector] Exception during NMSGpu call: " << e.what() << std::endl;
-             cudaMemsetAsync(m_finalDetectionsCountGpu, 0, sizeof(int), stream);
+             cudaMemsetAsync(m_finalDetectionsCountGpu, 0, sizeof(int), stream); // Reset final count on error
         }
     } else {
+         // No detections passed the class filter, so no NMS needed. Ensure final count is 0.
          cudaMemsetAsync(m_finalDetectionsCountGpu, 0, sizeof(int), stream);
     }
 }
@@ -867,4 +916,27 @@ void Detector::preProcess(const cv::cuda::GpuMat& frame)
 
 void Detector::setCaptureEvent(cudaEvent_t event) {
     m_captureDoneEvent = event;
+}
+
+void Detector::initializeBuffers() {
+    // Check if context and stream are valid before using them
+    if (!context || !stream) {
+        std::cerr << "[Detector] Error: Cannot initialize buffers without valid context and stream." << std::endl;
+        return; 
+    }
+    // Use allocateGpuBuffer which is a member function
+    allocateGpuBuffer(m_decodedDetectionsGpu, config.max_detections * 2, "decoded detections");
+    allocateGpuBuffer(m_decodedCountGpu, 1, "decoded count");
+    allocateGpuBuffer(m_finalDetectionsGpu, config.max_detections, "final detections");
+    allocateGpuBuffer(m_finalDetectionsCountGpu, 1, "final count");
+    allocateGpuBuffer(m_classFilteredDetectionsGpu, config.max_detections, "class filtered detections");
+    allocateGpuBuffer(m_classFilteredCountGpu, 1, "class filtered count");
+    allocateGpuBuffer(m_scoresGpu, config.max_detections, "scores");
+    allocateGpuBuffer(m_bestTargetIndexGpu, 1, "best index");
+
+    // Initialize counts to zero on GPU using the member stream
+    if (m_decodedCountGpu) cudaMemsetAsync(m_decodedCountGpu, 0, sizeof(int), stream);
+    if (m_finalDetectionsCountGpu) cudaMemsetAsync(m_finalDetectionsCountGpu, 0, sizeof(int), stream);
+    if (m_classFilteredCountGpu) cudaMemsetAsync(m_classFilteredCountGpu, 0, sizeof(int), stream);
+    if (m_bestTargetIndexGpu) cudaMemsetAsync(m_bestTargetIndexGpu, 0xFF, sizeof(int), stream); // Initialize index to -1 (0xFFFFFFFF)
 }
