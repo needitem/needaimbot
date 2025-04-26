@@ -322,9 +322,6 @@ void OverlayThread()
     bool prev_auto_aim = config.auto_aim;
 
     // Mouse
-    int prev_dpi = config.dpi;
-    int prev_fovX = config.fovX;
-    int prev_fovY = config.fovY;
     bool prev_easynorecoil = config.easynorecoil;
     float prev_easynorecoilstrength = config.easynorecoilstrength;
 
@@ -491,15 +488,12 @@ void OverlayThread()
                         // apply new detection_resolution
                         globalMouseThread->updateConfig(
                             config.detection_resolution,
-                            config.dpi,
-                            config.fovX,
-                            config.fovY,
-                            static_cast<float>(config.kp_x),
-                            static_cast<float>(config.ki_x),
-                            static_cast<float>(config.kd_x),
-                            static_cast<float>(config.kp_y),
-                            static_cast<float>(config.ki_y),
-                            static_cast<float>(config.kd_y),
+                            config.kp_x,
+                            config.ki_x,
+                            config.kd_x,
+                            config.kp_y,
+                            config.ki_y,
+                            config.kd_y,
                             config.auto_shoot,
                             config.bScope_multiplier,
                             config.norecoil_ms,
@@ -554,20 +548,14 @@ void OverlayThread()
                         config.saveConfig();
                     }
 
-                    // DPI / FOVX / FOVY / PID / KALMAN
-                    if (prev_dpi != config.dpi ||
-                        prev_fovX != config.fovX ||
-                        prev_fovY != config.fovY ||
-                        prev_kp_x != config.kp_x ||
+                    // PID
+                    if (prev_kp_x != config.kp_x ||
                         prev_ki_x != config.ki_x ||
                         prev_kd_x != config.kd_x ||
                         prev_kp_y != config.kp_y ||
                         prev_ki_y != config.ki_y ||
                         prev_kd_y != config.kd_y)
                     {
-                        prev_dpi = config.dpi;
-                        prev_fovX = config.fovX;
-                        prev_fovY = config.fovY;
                         prev_kp_x = config.kp_x;
                         prev_ki_x = config.ki_x;
                         prev_kd_x = config.kd_x;
@@ -577,15 +565,12 @@ void OverlayThread()
 
                         globalMouseThread->updateConfig(
                             config.detection_resolution,
-                            config.dpi,
-                            config.fovX,
-                            config.fovY,
-                            static_cast<float>(config.kp_x),
-                            static_cast<float>(config.ki_x),
-                            static_cast<float>(config.kd_x),
-                            static_cast<float>(config.kp_y),
-                            static_cast<float>(config.ki_y),
-                            static_cast<float>(config.kd_y),
+                            config.kp_x,
+                            config.ki_x,
+                            config.kd_x,
+                            config.kp_y,
+                            config.ki_y,
+                            config.kd_y,
                             config.auto_shoot,
                             config.bScope_multiplier,
                             config.norecoil_ms,
@@ -603,15 +588,12 @@ void OverlayThread()
 
                         globalMouseThread->updateConfig(
                             config.detection_resolution,
-                            config.dpi,
-                            config.fovX,
-                            config.fovY,
-                            static_cast<float>(config.kp_x),
-                            static_cast<float>(config.ki_x),
-                            static_cast<float>(config.kd_x),
-                            static_cast<float>(config.kp_y),
-                            static_cast<float>(config.ki_y),
-                            static_cast<float>(config.kd_y),
+                            config.kp_x,
+                            config.ki_x,
+                            config.kd_x,
+                            config.kp_y,
+                            config.ki_y,
+                            config.kd_y,
                             config.auto_shoot,
                             config.bScope_multiplier,
                             config.norecoil_ms,

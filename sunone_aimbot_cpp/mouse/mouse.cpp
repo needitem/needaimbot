@@ -32,9 +32,6 @@ constexpr float SCOPE_MARGIN = 0.15f;
 
 MouseThread::MouseThread(
     int resolution,
-    int dpi,
-    int fovX,
-    int fovY,
     float kp_x,
     float ki_x,
     float kd_x,
@@ -48,7 +45,7 @@ MouseThread::MouseThread(
     SerialConnection *serialConnection,
     GhubMouse *gHub) : tracking_errors(false)
 {
-    initializeScreen(resolution, dpi, fovX, fovY, auto_shoot, bScope_multiplier, norecoil_ms, config.prediction_time_ms);
+    initializeScreen(resolution, auto_shoot, bScope_multiplier, norecoil_ms, config.prediction_time_ms);
     pid_controller = std::make_unique<PIDController2D>(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
     initializeInputMethod(serialConnection, gHub);
 }
@@ -71,13 +68,10 @@ void MouseThread::initializeInputMethod(SerialConnection *serialConnection, Ghub
     }
 }
 
-void MouseThread::initializeScreen(int resolution, int dpi, int fovX, int fovY, bool auto_shoot, float bScope_multiplier, float norecoil_ms, float prediction_time_ms)
+void MouseThread::initializeScreen(int resolution, bool auto_shoot, float bScope_multiplier, float norecoil_ms, float prediction_time_ms)
 {
     this->screen_width = static_cast<float>(resolution);
     this->screen_height = static_cast<float>(resolution); 
-    this->dpi = static_cast<float>(dpi);
-    this->fov_x = static_cast<float>(fovX);
-    this->fov_y = static_cast<float>(fovY);
     this->auto_shoot = auto_shoot;
     this->bScope_multiplier = bScope_multiplier;
     this->norecoil_ms = norecoil_ms; 
@@ -85,9 +79,9 @@ void MouseThread::initializeScreen(int resolution, int dpi, int fovX, int fovY, 
     this->center_x = screen_width / 2.0f;
     this->center_y = screen_height / 2.0f;
 
-    float dpi_safe = (this->dpi > 1e-3f) ? this->dpi : 1.0f;
-    float base_scale_x = (this->fov_x / 360.0f) * (1000.0f / dpi_safe);
-    float base_scale_y = (this->fov_y / 360.0f) * (1000.0f / dpi_safe);
+    const float SENSITIVITY_FACTOR = 0.05f; // Example: Adjust this base sensitivity
+    float base_scale_x = SENSITIVITY_FACTOR;
+    float base_scale_y = SENSITIVITY_FACTOR;
 
     if (this->bScope_multiplier > 1.0f) {
         this->move_scale_x = base_scale_x / this->bScope_multiplier;
@@ -105,9 +99,6 @@ void MouseThread::initializeScreen(int resolution, int dpi, int fovX, int fovY, 
 
 void MouseThread::updateConfig(
     int resolution,
-    int dpi,
-    int fovX,
-    int fovY,
     float kp_x,
     float ki_x,
     float kd_x,
@@ -120,7 +111,7 @@ void MouseThread::updateConfig(
     float prediction_time_ms 
     )
 {
-    initializeScreen(resolution, dpi, fovX, fovY, auto_shoot, bScope_multiplier, norecoil_ms, config.prediction_time_ms);
+    initializeScreen(resolution, auto_shoot, bScope_multiplier, norecoil_ms, config.prediction_time_ms);
     pid_controller->updateSeparatedParameters(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
     
     if (kalman_filter) {
@@ -167,18 +158,14 @@ Eigen::Vector2f MouseThread::predictTargetPosition(float target_x, float target_
 
 Eigen::Vector2f MouseThread::calculateMovement(const Eigen::Vector2f &target_pos)
 {
-    static const float fov_scale_x = fov_x / screen_width;
-    static const float fov_scale_y = fov_y / screen_height;
-    static const float sens_scale = dpi / 360.0f;
-    
     float error_x = target_pos[0] - center_x;
     float error_y = target_pos[1] - center_y;
     
     Eigen::Vector2f error(error_x, error_y);
     Eigen::Vector2f pid_output = pid_controller->calculate(error);
 
-    float result_x = pid_output[0] * fov_scale_x * sens_scale;
-    float result_y = pid_output[1] * fov_scale_y * sens_scale;
+    float result_x = pid_output[0] * move_scale_x;
+    float result_y = pid_output[1] * move_scale_y;
     
     return Eigen::Vector2f(result_x, result_y);
 }
@@ -218,39 +205,10 @@ float MouseThread::calculateTargetDistance(const AimbotTarget &target) const
     return std::sqrt(dx * dx + dy * dy);
 }
 
-AimbotTarget *MouseThread::findClosestTarget(const std::vector<AimbotTarget> &targets) const
-{
-    if (targets.empty())
-    {
-        return nullptr;
-    }
-
-    AimbotTarget *closest = nullptr;
-    float min_distance = std::numeric_limits<float>::max(); 
-
-    for (const auto &target : targets)
-    {
-        float dx = target.x + target.w * 0.5f - center_x;
-        float dy = target.y + target.h * 0.5f - center_y;
-        float distance_sq = dx * dx + dy * dy;
-
-        if (distance_sq < min_distance) 
-        {
-            min_distance = distance_sq; 
-            closest = const_cast<AimbotTarget *>(&target);
-        }
-    }
-
-    return closest;
-}
-
 void MouseThread::moveMouse(const AimbotTarget &target)
 {
     const float local_center_x = center_x;
     const float local_center_y = center_y;
-    const float local_fov_x = fov_x;
-    const float local_fov_y = fov_y;
-    const float local_dpi = dpi;
 
     float target_center_x = target.x + target.w * 0.5f;
     float target_center_y = target.y + target.h * 0.5f;

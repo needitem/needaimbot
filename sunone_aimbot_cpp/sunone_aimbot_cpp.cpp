@@ -340,9 +340,6 @@ int main()
 
         MouseThread mouseThread(
             config.detection_resolution,
-            config.dpi,
-            config.fovX,
-            config.fovY,
             config.kp_x,
             config.ki_x,
             config.kd_x,

@@ -71,9 +71,9 @@ bool Config::loadConfig(const std::string& filename)
         sticky_iou_threshold = 0.3f; // Default IoU threshold
 
         // Mouse
-        dpi = 1000;
-        fovX = 50;
-        fovY = 50;
+        // dpi = 1000;
+        // fovX = 50;
+        // fovY = 50;
         easynorecoil = false;
         easynorecoilstrength = 0.0f;
         norecoil_step = 5.0f;
@@ -221,9 +221,9 @@ bool Config::loadConfig(const std::string& filename)
     sticky_iou_threshold = (float)get_double("sticky_iou_threshold", 0.3);
 
     // Mouse
-    dpi = get_long("dpi", 1000);
-    fovX = get_long("fovX", 50);
-    fovY = get_long("fovY", 50);
+    // dpi = get_long("dpi", 1000);
+    // fovX = get_long("fovX", 50);
+    // fovY = get_long("fovY", 50);
     easynorecoil = get_bool("easynorecoil", false);
     easynorecoilstrength = (float)get_double("easynorecoilstrength", 0.0);
     norecoil_step = (float)get_double("norecoil_step", 5.0);
@@ -399,10 +399,12 @@ bool Config::saveConfig(const std::string& filename)
         << "sticky_iou_threshold = " << sticky_iou_threshold << "\n\n";
 
     // Mouse
+    // Remove dpi saving (Assume done)
+    // ini.SetLongValue("", "dpi", dpi);
+    // Remove fovX and fovY saving
+    // ini.SetLongValue("", "fovX", fovX);
+    // ini.SetLongValue("", "fovY", fovY);
     file << "# Mouse move\n"
-        << "dpi = " << dpi << "\n"
-        << "fovX = " << fovX << "\n"
-        << "fovY = " << fovY << "\n"
         << "easynorecoil = " << (easynorecoil ? "true" : "false") << "\n"
         << std::fixed << std::setprecision(1)
         << "easynorecoilstrength = " << easynorecoilstrength << "\n"
