@@ -116,8 +116,7 @@ void keyboardListener()
                         config.kd_y,
                         config.auto_shoot,
                         config.bScope_multiplier,
-                        config.norecoil_ms,
-                        config.prediction_time_ms
+                        config.norecoil_ms
                     );
                 }
                 reloadPressed = true;
