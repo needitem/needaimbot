@@ -67,8 +67,8 @@ bool Config::loadConfig(const std::string& filename)
         auto_aim = false;
 
         // Target Stickiness
-        sticky_bonus = -50.0f; // Default bonus (negative because lower score is better)
-        sticky_iou_threshold = 0.3f; // Default IoU threshold
+        // sticky_bonus = -50.0f; // Default bonus (negative because lower score is better)
+        // sticky_iou_threshold = 0.3f; // Default IoU threshold
 
         // Mouse
         // dpi = 1000;
@@ -216,9 +216,9 @@ bool Config::loadConfig(const std::string& filename)
     shooting_range_targets = get_bool("shooting_range_targets", false);
     auto_aim = get_bool("auto_aim", false);
 
-    // Target Stickiness
-    sticky_bonus = (float)get_double("sticky_bonus", -50.0);
-    sticky_iou_threshold = (float)get_double("sticky_iou_threshold", 0.3);
+    // Removed Target Stickiness loading
+    // sticky_bonus = (float)get_double("sticky_bonus", -50.0);
+    // sticky_iou_threshold = (float)get_double("sticky_iou_threshold", 0.3);
 
     // Mouse
     // dpi = get_long("dpi", 1000);
@@ -393,10 +393,10 @@ bool Config::saveConfig(const std::string& filename)
         << "shooting_range_targets = " << (shooting_range_targets ? "true" : "false") << "\n"
         << "auto_aim = " << (auto_aim ? "true" : "false") << "\n\n";
 
-    // Target Stickiness
-    file << "# Target Stickiness\n"
-        << "sticky_bonus = " << sticky_bonus << "\n"
-        << "sticky_iou_threshold = " << sticky_iou_threshold << "\n\n";
+    // Removed Target Stickiness saving
+    // writeLine(file, "", "Target Stickiness", "", "");
+    // writeLine(file, "sticky_bonus", sticky_bonus);
+    // writeLine(file, "sticky_iou_threshold", sticky_iou_threshold);
 
     // Mouse
     // Remove dpi saving (Assume done)

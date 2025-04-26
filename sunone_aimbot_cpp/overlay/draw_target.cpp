@@ -87,26 +87,18 @@ void draw_target()
     ImGui::Text("Target Stickiness");
     ImGui::Spacing();
 
-    // Sticky Bonus Slider (Negative is better, so range -100 to 0)
-    if (ImGui::SliderFloat("Sticky Bonus", &config.sticky_bonus, -100.0f, 0.0f, "%.1f"))
-    {
-        config.saveConfig();
-    }
-    if (ImGui::IsItemHovered())
-    {
-        ImGui::SetTooltip("Bonus score applied to previous target (lower is better, more sticky).");
-    }
-
-    // Sticky IoU Threshold Slider (0.0 to 1.0)
-    if (ImGui::SliderFloat("Sticky IoU Threshold", &config.sticky_iou_threshold, 0.0f, 1.0f, "%.2f"))
-    {
-        config.sticky_iou_threshold = std::max(0.0f, std::min(config.sticky_iou_threshold, 1.0f)); // Clamp value
-        config.saveConfig();
-    }
-    if (ImGui::IsItemHovered())
-    {
-        ImGui::SetTooltip("Minimum Intersection over Union required to consider a target sticky.");
-    }
+    // Removed Sticky Bonus UI Elements
+    // ImGui::SeparatorText("Target Stickiness");
+    // if (ImGui::SliderFloat("Sticky Bonus", &config.sticky_bonus, -100.0f, 0.0f, "%.1f"))
+    // {
+    //     config.sticky_bonus = std::max(-100.0f, std::min(config.sticky_bonus, 0.0f)); // Clamp value
+    //     settings_changed = true;
+    // }
+    // if (ImGui::SliderFloat("Sticky IoU Threshold", &config.sticky_iou_threshold, 0.0f, 1.0f, "%.2f"))
+    // {
+    //     config.sticky_iou_threshold = std::max(0.0f, std::min(config.sticky_iou_threshold, 1.0f)); // Clamp value
+    //     settings_changed = true;
+    // }
 }
 
 void load_body_texture()

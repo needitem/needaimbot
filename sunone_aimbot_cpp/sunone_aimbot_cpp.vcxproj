@@ -53,6 +53,7 @@
     <ClCompile Include="tensorrt\nvinf.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <CudaCompile Include="detector\filterGpu.cu" />
     <CudaCompile Include="detector\postProcessGpu.cu" />
     <CudaCompile Include="detector\scoringGpu.cu" />
   </ItemGroup>
@@ -62,6 +63,7 @@
     <ClInclude Include="capture\winrt_capture.h" />
     <ClInclude Include="config\config.h" />
     <ClInclude Include="detector\detector.h" />
+    <ClInclude Include="detector\filterGpu.h" />
     <ClInclude Include="detector\postProcess.h" />
     <ClInclude Include="detector\scoringGpu.h" />
     <ClInclude Include="imgui\imconfig.h" />

@@ -52,7 +52,8 @@ __global__ void calculateIoUKernel(
 // CUDA kernel to perform NMS suppression
 __global__ void nmsKernel(
     bool* d_keep, const float* d_iou_matrix,
-    const float* d_scores, int num_boxes, float nms_threshold) 
+    const float* d_scores, const int* d_classIds,
+    int num_boxes, float nms_threshold) 
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     
@@ -62,8 +63,12 @@ __global__ void nmsKernel(
         for (int i = 0; i < num_boxes; i++) {
             if (idx == i) continue; // Skip self
             
-            if (d_scores[idx] > d_scores[i] && d_iou_matrix[idx * num_boxes + i] > nms_threshold) {
-                d_keep[i] = false; // Suppress box i
+            // Check class ID match before suppressing
+            if (d_classIds[idx] == d_classIds[i]) {
+                // Suppress box i if it overlaps significantly with box idx AND box idx has a higher score
+                if (d_scores[idx] > d_scores[i] && d_iou_matrix[idx * num_boxes + i] > nms_threshold) {
+                    d_keep[i] = false; // Suppress box i only if classes match and IoU/score condition met
+                }
             }
         }
     }
@@ -83,7 +88,7 @@ struct is_kept {
 __global__ void extractDataKernel(
     const Detection* d_input_detections, int n, 
     int* d_x1, int* d_y1, int* d_x2, int* d_y2, 
-    float* d_areas, float* d_scores) 
+    float* d_areas, float* d_scores, int* d_classIds)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {
@@ -102,6 +107,7 @@ __global__ void extractDataKernel(
         float height = max(0.0f, (float)det.box.height);
         d_areas[idx] = width * height; 
         d_scores[idx] = det.confidence;
+        d_classIds[idx] = det.classId; // Extract classId
     }
 }
 
@@ -123,6 +129,7 @@ void NMSGpu(
     float* d_areas = nullptr;
     float* d_scores = nullptr;
     float* d_iou_matrix = nullptr;
+    int* d_classIds = nullptr; // Add classIds pointer
     bool* d_keep = nullptr;
     int* d_indices = nullptr; // For copy_if
     cudaError_t err = cudaSuccess;
@@ -145,6 +152,7 @@ void NMSGpu(
     err = cudaMallocAsync(&d_x2, num_bytes_int, stream); if (err != cudaSuccess) goto cleanup;
     err = cudaMallocAsync(&d_y2, num_bytes_int, stream); if (err != cudaSuccess) goto cleanup;
     err = cudaMallocAsync(&d_areas, num_bytes_float, stream); if (err != cudaSuccess) goto cleanup;
+    err = cudaMallocAsync(&d_classIds, num_bytes_int, stream); if (err != cudaSuccess) goto cleanup; // Allocate memory for classIds
     err = cudaMallocAsync(&d_scores, num_bytes_float, stream); if (err != cudaSuccess) goto cleanup;
     err = cudaMallocAsync(&d_iou_matrix, num_bytes_iou, stream); if (err != cudaSuccess) goto cleanup;
     err = cudaMallocAsync(&d_keep, num_bytes_bool, stream); if (err != cudaSuccess) goto cleanup;
@@ -157,7 +165,7 @@ void NMSGpu(
         extractDataKernel<<<grid_extract, block_size, 0, stream>>>( 
             d_input_detections, input_num_detections,
             d_x1, d_y1, d_x2, d_y2,
-            d_areas, d_scores
+            d_areas, d_scores, d_classIds // Pass classIds buffer
         );
         err = cudaGetLastError(); if (err != cudaSuccess) goto cleanup;
     }
@@ -183,7 +191,7 @@ void NMSGpu(
     {
         const int grid_nms = (input_num_detections + block_size - 1) / block_size;
         nmsKernel<<<grid_nms, block_size, 0, stream>>>( 
-            d_keep, d_iou_matrix, d_scores, input_num_detections, nmsThreshold
+            d_keep, d_iou_matrix, d_scores, d_classIds, input_num_detections, nmsThreshold // Pass classIds
         );
          err = cudaGetLastError(); if (err != cudaSuccess) goto cleanup;
     }
@@ -239,6 +247,7 @@ cleanup: // Label for cleanup
     cudaFreeAsync(d_areas, stream);
     cudaFreeAsync(d_scores, stream);
     cudaFreeAsync(d_iou_matrix, stream);
+    cudaFreeAsync(d_classIds, stream); // Free classIds buffer
     cudaFreeAsync(d_keep, stream);
     cudaFreeAsync(d_indices, stream);
 

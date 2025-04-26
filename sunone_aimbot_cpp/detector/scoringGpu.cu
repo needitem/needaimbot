@@ -40,14 +40,7 @@ __global__ void calculateTargetScoresGpuKernel(
     float* d_scores,
     int frame_width,
     int frame_height,
-    bool disable_headshot,
-    int head_class_id,
-    cv::Rect previous_target_box, // Pass by value
-    bool had_target_last_frame,
-    float distance_weight,       // New parameter
-    float headshot_bonus,        // New parameter
-    float sticky_bonus_config,   // New parameter (avoid name clash)
-    float sticky_iou_threshold   // New parameter
+    float distance_weight       // Parameter for distance weighting
 ) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -64,25 +57,10 @@ __global__ void calculateTargetScoresGpuKernel(
         float frameCenterY = frame_height / 2.0f;
         float dx = centerX - frameCenterX;
         float dy = centerY - frameCenterY;
-        float distance_score = sqrtf(dx * dx + dy * dy) * distance_weight; // Use parameter
+        float distance_score = sqrtf(dx * dx + dy * dy) * distance_weight; // Apply distance weight
 
-        // Apply headshot bonus if enabled and class matches
-        float head_bonus_applied = 0.0f;
-        if (!disable_headshot && det.classId == head_class_id) {
-            head_bonus_applied = headshot_bonus; // Use parameter
-        }
-
-        // Apply sticky bonus if applicable
-        float sticky_bonus_applied = 0.0f;
-        if (had_target_last_frame) {
-            float iou = calculateIoU(box, previous_target_box);
-            if (iou > sticky_iou_threshold) { // Use parameter
-                sticky_bonus_applied = sticky_bonus_config; // Use parameter
-            }
-        }
-
-        // Final score (lower is better)
-        d_scores[idx] = distance_score + head_bonus_applied + sticky_bonus_applied;
+        // Final score (lower is better) - Only distance
+        d_scores[idx] = distance_score;
     }
 }
 
@@ -92,40 +70,22 @@ cudaError_t calculateTargetScoresGpu(
     float* d_scores,
     int frame_width,
     int frame_height,
-    bool disable_headshot,
-    int head_class_id,
-    const cv::Rect& previous_target_box,
-    bool had_target_last_frame,
-    float sticky_bonus,            // Added
-    float sticky_iou_threshold,    // Added
+    float distance_weight_config,  // Renamed for clarity
     cudaStream_t stream) {
     if (num_detections <= 0) {
         return cudaSuccess; // Nothing to score
     }
 
-    // Use hardcoded distance_weight and headshot_bonus for now, or pass them too?
-    // For now, hardcode them here as they are less likely to change frequently.
-    // If needed, add them to config and pass them down like sticky params.
-    const float distance_weight = 1.0f;
-    const float headshot_bonus = -20.0f;
-
     const int block_size = 256;
     const int grid_size = (num_detections + block_size - 1) / block_size;
 
-    calculateTargetScoresGpuKernel<<<grid_size, block_size, 0, stream>>>(
+    calculateTargetScoresGpuKernel<<<grid_size, block_size, 0, stream>>>( 
         d_detections,
         num_detections,
         d_scores,
         frame_width,
         frame_height,
-        disable_headshot,
-        head_class_id,
-        previous_target_box,
-        had_target_last_frame,
-        distance_weight,       // Pass hardcoded/local value
-        headshot_bonus,        // Pass hardcoded/local value
-        sticky_bonus,          // Pass parameter
-        sticky_iou_threshold   // Pass parameter
+        distance_weight_config       // Pass distance weight parameter
     );
 
     return cudaGetLastError();
@@ -139,20 +99,24 @@ cudaError_t findBestTargetGpu(
     cudaStream_t stream)
 {
     if (num_detections <= 0) {
+         // Set index to -1 (0xFFFFFFFF) if no detections
          cudaMemsetAsync(d_best_index_gpu, 0xFF, sizeof(int), stream);
          return cudaSuccess;
     }
     try {
         thrust::device_ptr<const float> d_scores_ptr(d_scores);
 
-        auto max_iter = thrust::max_element(
+        // Use min_element because lower scores are better
+        auto min_iter = thrust::min_element(
             thrust::cuda::par.on(stream),
             d_scores_ptr,
             d_scores_ptr + num_detections
         );
 
-        int best_index = thrust::distance(d_scores_ptr, max_iter);
+        // Calculate the index of the minimum element
+        int best_index = thrust::distance(d_scores_ptr, min_iter);
 
+        // Copy the best index to the output GPU buffer
         cudaMemcpyAsync(
             d_best_index_gpu,
             &best_index,
@@ -163,6 +127,8 @@ cudaError_t findBestTargetGpu(
         return cudaGetLastError();
     } catch (const std::exception& e) {
          fprintf(stderr, "[Thrust Error] findBestTargetGpu: %s\n", e.what());
+         // Set index to -1 on error
+         cudaMemsetAsync(d_best_index_gpu, 0xFF, sizeof(int), stream);
          return cudaErrorUnknown;
     }
 }
