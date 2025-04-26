@@ -166,10 +166,12 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                         latestFrameGpu = screenshotGpu.clone();
                         {
                            std::lock_guard<std::mutex> config_lock(configMutex);
-                            if (config.show_window)
-                            {
-                                screenshotGpu.download(latestFrameCpu);
-                            }
+                            // The download for the display window is handled in the display thread.
+                            // No download needed here if the window is shown.
+                            // if (config.show_window)
+                            // {
+                            //    screenshotGpu.download(latestFrameCpu); // Removed this line
+                            // }
                         }
                         newFrameAvailable = true;
                         frameCV.notify_one();

@@ -83,18 +83,16 @@ public:
     Detection* m_finalDetectionsGpu = nullptr;        // GPU buffer for final detections (after NMS)
     int* m_finalDetectionsCountGpu = nullptr;     // GPU buffer for count of final detections (after NMS)
     int m_finalDetectionsCountHost = 0;        // Host copy of final NMS count
+    Detection* m_classFilteredDetectionsGpu = nullptr; // Detections after class ID filter
+    int* m_classFilteredCountGpu = nullptr;      // Count after class ID filter
+    int m_classFilteredCountHost = 0;          // Host count after class filter
 
     // --- Members for Scoring & Best Target (GPU & Host) ---
     float* m_scoresGpu = nullptr;             // GPU buffer for scores
     int* m_bestTargetIndexGpu = nullptr;  // GPU buffer for best target index
     int m_bestTargetIndexHost = -1;       // Host copy of best target index
-    Detection m_bestTargetHost;           // Host copy of best target details
-    bool m_hasBestTarget = false;         // Flag if a valid best target exists
-
-    // <<< Target Stickiness State >>>
-    cv::Rect m_previousTargetBox;
-    bool m_hadTargetLastFrame;
-    // <<< End Target Stickiness State >>>
+    Detection m_bestTargetHost;           // Host copy of best target data
+    bool m_hasBestTarget = false;          // Flag indicating if a valid target was found
 
     bool isCudaContextInitialized() const { return m_cudaContextInitialized; } // Getter for the flag
 
@@ -190,6 +188,7 @@ private:
     void getInputNames();
     void getOutputNames();
     void getBindings();
+    void initializeBuffers();
     // void performGpuPostProcessing(cudaStream_t stream); // Moved up
 };
 
