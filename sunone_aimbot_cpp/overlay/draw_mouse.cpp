@@ -338,7 +338,67 @@ void draw_mouse()
         }
 
         // Optional: Add ARDUINO COM port selection if needed
-        // if (config.input_method == "ARDUINO") { ... }
+        if (config.input_method == "ARDUINO")
+        {
+            ImGui::Indent(10.0f);
+            ImGui::SeparatorText("Arduino Settings");
+
+            // COM Port Input
+            char port_buffer[64]; // Buffer to hold the COM port string
+            strncpy_s(port_buffer, sizeof(port_buffer), config.arduino_port.c_str(), _TRUNCATE);
+
+            ImGui::Text("COM Port:");
+            ImGui::SameLine();
+            ImGui::PushItemWidth(100); // Adjust width as needed
+            if (ImGui::InputText("##ArduinoPort", port_buffer, sizeof(port_buffer)))
+            {
+                config.arduino_port = port_buffer;
+                config.saveConfig();
+            }
+            ImGui::PopItemWidth();
+            if (ImGui::IsItemHovered())
+            {
+                SetWrappedTooltip("Enter the COM port your Arduino is connected to (e.g., COM3, /dev/ttyACM0).");
+            }
+
+            // Baud Rate Input
+            ImGui::Text("Baud Rate:");
+            ImGui::SameLine();
+            ImGui::PushItemWidth(100);
+            if (ImGui::InputInt("##ArduinoBaud", &config.arduino_baudrate, 0)) // No step buttons
+            {
+                // Add validation if necessary (e.g., ensure it's a standard rate)
+                config.saveConfig();
+            }
+            ImGui::PopItemWidth();
+            if (ImGui::IsItemHovered())
+            {
+                SetWrappedTooltip("Serial communication speed (e.g., 9600, 115200). Must match Arduino firmware.");
+            }
+
+            // 16-bit Mouse Checkbox
+            if (ImGui::Checkbox("Use 16-bit Mouse Movement", &config.arduino_16_bit_mouse))
+            {
+                config.saveConfig();
+            }
+            if (ImGui::IsItemHovered())
+            {
+                SetWrappedTooltip("Send mouse movement data as 16-bit values (requires compatible firmware). Otherwise, uses 8-bit.");
+            }
+
+            // Enable Keys Checkbox (Optional, add if needed)
+            // if (ImGui::Checkbox("Enable Key Sending", &config.arduino_enable_keys))
+            // {
+            //     config.saveConfig();
+            // }
+            // if (ImGui::IsItemHovered())
+            // {
+            //     SetWrappedTooltip("Allow sending key presses via Arduino (requires compatible firmware).");
+            // }
+
+            // TODO: Add other Arduino settings here if needed (Baud rate, 16-bit mouse, enable keys) <-- REMOVED
+            ImGui::Unindent(10.0f);
+        }
 
         ImGui::Spacing(); // Add spacing at the end
     }
