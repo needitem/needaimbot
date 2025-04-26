@@ -30,7 +30,6 @@
     <ClCompile Include="overlay\draw_buttons.cpp" />
     <ClCompile Include="overlay\draw_overlay.cpp" />
     <ClCompile Include="overlay\draw_debug.cpp" />
-    <ClCompile Include="mouse\KalmanFilter2D.cpp" />
     <ClCompile Include="mouse\PIDController2D.cpp" />
     <ClCompile Include="overlay\draw_profile.cpp" />
   </ItemGroup>
@@ -71,7 +70,6 @@
     <ClInclude Include="sunone_aimbot_cpp.h" />
     <ClInclude Include="overlay\draw_settings.h" />
     <ClInclude Include="mouse\InputMethod.h" />
-    <ClInclude Include="mouse\KalmanFilter2D.h" />
     <ClInclude Include="mouse\PIDController2D.h" />
     <ClInclude Include="detector\scoringGpu.h" />
   </ItemGroup>
