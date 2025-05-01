@@ -17,7 +17,13 @@ ImVec2 bodyImageSize;
 
 void draw_target()
 {
-    ImGui::Checkbox("Disable Headshot", &config.disable_headshot);
+    ImGui::SliderFloat("Body Y Offset", &config.body_y_offset, -1.0f, 1.0f, "%.2f");
+    ImGui::SliderFloat("Head Y Offset", &config.head_y_offset, 0.0f, 1.0f, "%.2f");
+    ImGui::SliderFloat("Offset Step", &config.offset_step, 0.001f, 0.1f, "%.3f");
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Step size for adjusting offset values with arrow keys (0.001 - 0.1)");
+    }
 
     ImGui::Separator();
 
@@ -25,23 +31,6 @@ void draw_target()
     ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Arrow keys: Adjust body offset");
     ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Shift+Arrow keys: Adjust head offset");
 
-    // Offset step control
-    if (ImGui::InputFloat("Offset Step", &config.offset_step, 0.0f, 0.0f, "%.3f"))
-    {
-        config.offset_step = std::max(0.001f, std::min(config.offset_step, 0.1f));
-        config.saveConfig();
-    }
-    if (ImGui::IsItemHovered())
-    {
-        ImGui::SetTooltip("Step size for adjusting offset values with arrow keys (0.001 - 0.1)");
-    }
-
-    // Body offset slider
-    ImGui::SliderFloat("Approximate Body Y Offset", &config.body_y_offset, 0.0f, 1.0f, "%.2f");
-    
-    // Head offset slider
-    ImGui::SliderFloat("Approximate Head Y Offset", &config.head_y_offset, 0.0f, 1.0f, "%.2f");
-    
     if (bodyTexture)
     {
         ImGui::Image((void*)bodyTexture, bodyImageSize);
