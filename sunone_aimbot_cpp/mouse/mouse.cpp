@@ -170,7 +170,7 @@ float MouseThread::calculateTargetDistanceSquared(const AimbotTarget &target) co
     */
     constexpr int HEAD_CLASS_ID = 7; // Class ID for head
 
-    if (!config.disable_headshot && target.classId == HEAD_CLASS_ID) {
+    if (!config.ignore_class_7 && target.classId == HEAD_CLASS_ID) {
         target_center_y = target.y + target.h * config.head_y_offset;
     } else {
         target_center_y = target.y + target.h * config.body_y_offset;
@@ -204,7 +204,7 @@ void MouseThread::moveMouse(const AimbotTarget &target)
 
     {
         std::lock_guard<std::mutex> lock(configMutex);
-        if (!config.disable_headshot && target.classId == HEAD_CLASS_ID) {
+        if (!config.ignore_class_7 && target.classId == HEAD_CLASS_ID) {
             // Headshot aiming logic
             target_center_y = target.y + target.h * config.head_y_offset;
             // Optional: Add logging for headshot case too if needed
