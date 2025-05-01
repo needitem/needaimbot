@@ -781,26 +781,30 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
                  validDecodedDetections,        // Number of input detections
                  m_classFilteredDetectionsGpu, // Output: Filtered detections buffer
                  m_classFilteredCountGpu,   // Output: Filtered count buffer
-                 0,                         // Hardcoded person class ID
-                 config.class_head,         // Head class ID from config
-                 config.disable_headshot,   // Pass the flag here
-                 config.max_detections,     // Max output detections
-                 stream
+                 config.ignore_class_0,
+                 config.ignore_class_1,
+                 config.ignore_class_2,
+                 config.ignore_class_3,
+                 config.ignore_class_4,
+                 config.ignore_class_5,
+                 config.ignore_class_6,
+                 config.ignore_class_7, // Note: might be redundant if disable_headshot is true
+                 config.ignore_class_8,
+                 config.ignore_class_9,
+                 config.ignore_class_10,
+                 config.max_detections,      // Use config value instead of undefined constant
+                 stream                      // CUDA stream
              );
-             if (filterErr != cudaSuccess) {
-                 std::cerr << "[Detector] Error during filterDetectionsByClassIdGpu: " << cudaGetErrorString(filterErr) << std::endl;
+             if (!checkCudaError(filterErr, "filtering detections by class ID")) return;
+
+             // Get the count of detections after class filtering
+             cudaError_t filteredCountCopyErr = cudaMemcpyAsync(&classFilteredCountHost, m_classFilteredCountGpu, sizeof(int), cudaMemcpyDeviceToHost, stream);
+             
+             // --- Synchronization Point 2: Ensure filter count copy is done --- 
+             cudaStreamSynchronize(stream); // Synchronize after filter count copy
+             if (filteredCountCopyErr != cudaSuccess) {
+                 std::cerr << "[Detector] Failed to copy filtered detection count DtoH: " << cudaGetErrorString(filteredCountCopyErr) << std::endl;
                  classFilteredCountHost = 0;
-                 cudaMemsetAsync(m_classFilteredCountGpu, 0, sizeof(int), stream); // Ensure GPU count is 0 on error
-             } else {
-                 // Get the count of detections after class filtering
-                 cudaError_t filteredCountCopyErr = cudaMemcpyAsync(&classFilteredCountHost, m_classFilteredCountGpu, sizeof(int), cudaMemcpyDeviceToHost, stream);
-                 
-                 // --- Synchronization Point 2: Ensure filter count copy is done --- 
-                 cudaStreamSynchronize(stream); // Synchronize after filter count copy
-                 if (filteredCountCopyErr != cudaSuccess) {
-                     std::cerr << "[Detector] Failed to copy filtered detection count DtoH: " << cudaGetErrorString(filteredCountCopyErr) << std::endl;
-                     classFilteredCountHost = 0;
-                 }
              }
         } else {
             // No valid decoded detections
