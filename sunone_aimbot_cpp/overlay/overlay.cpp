@@ -314,7 +314,6 @@ void OverlayThread()
     bool prev_capture_cursor = config.capture_cursor;
 
     // Target
-    bool prev_disable_headshot = config.disable_headshot;
     float prev_body_y_offset = config.body_y_offset;
     float prev_head_y_offset = config.head_y_offset;
     bool prev_ignore_third_person = config.ignore_third_person;
@@ -528,7 +527,7 @@ void OverlayThread()
                     }
 
                     // DISABLE_HEADSHOT / BODY_Y_OFFSET / HEAD_Y_OFFSET / IGNORE_THIRD_PERSON / SHOOTING_RANGE_TARGETS / AUTO_AIM / EASYNORECOIL / EASYNORECOILSTRENGTH
-                    if (prev_disable_headshot != config.disable_headshot ||
+                    if (/*prev_disable_headshot != config.disable_headshot ||*/
                         prev_body_y_offset != config.body_y_offset ||
                         prev_head_y_offset != config.head_y_offset ||
                         prev_ignore_third_person != config.ignore_third_person ||
@@ -537,7 +536,7 @@ void OverlayThread()
                         prev_easynorecoil != config.easynorecoil ||
                         prev_easynorecoilstrength != config.easynorecoilstrength)
                     {
-                        prev_disable_headshot = config.disable_headshot;
+                        // prev_disable_headshot = config.disable_headshot;
                         prev_body_y_offset = config.body_y_offset;
                         prev_head_y_offset = config.head_y_offset;
                         prev_ignore_third_person = config.ignore_third_person;

@@ -19,7 +19,6 @@ public:
     bool capture_use_cuda;
 
     // Target
-    bool disable_headshot;
     float body_y_offset;
     float head_y_offset;
     float offset_step;  // Step size for adjusting offsets
@@ -117,6 +116,18 @@ public:
     int screenshot_delay;
     bool always_on_top;
     bool verbose;
+
+    bool ignore_class_0; // player
+    bool ignore_class_1; // bot
+    bool ignore_class_2; // weapon
+    bool ignore_class_3; // outline
+    bool ignore_class_4; // dead_body
+    bool ignore_class_5; // hideout_target_human
+    bool ignore_class_6; // hideout_target_balls
+    bool ignore_class_7; // head (Note: May overlap with disable_headshot)
+    bool ignore_class_8; // smoke
+    bool ignore_class_9; // fire
+    bool ignore_class_10; // third_person
 
     bool loadConfig(const std::string& filename = "config.ini");
     bool saveConfig(const std::string& filename = "config.ini");

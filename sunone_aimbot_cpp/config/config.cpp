@@ -58,7 +58,7 @@ bool Config::loadConfig(const std::string& filename)
         capture_use_cuda = true;
 
         // Target
-        disable_headshot = false;
+        // disable_headshot = false; // Removed
         body_y_offset = 0.15f;
         head_y_offset = 0.05f;
         offset_step = 0.01f;
@@ -163,6 +163,19 @@ bool Config::loadConfig(const std::string& filename)
         always_on_top = true;
         verbose = false;
 
+        // Default ignore flags
+        ignore_class_0 = false; // player
+        ignore_class_1 = false; // bot
+        ignore_class_2 = false; // weapon
+        ignore_class_3 = false; // outline
+        ignore_class_4 = false; // dead_body
+        ignore_class_5 = false; // hideout_target_human
+        ignore_class_6 = false; // hideout_target_balls
+        ignore_class_7 = false; // head
+        ignore_class_8 = false; // smoke
+        ignore_class_9 = false; // fire
+        ignore_class_10 = false; // third_person
+
         saveConfig(filename);
         return true;
     }
@@ -208,7 +221,7 @@ bool Config::loadConfig(const std::string& filename)
     capture_use_cuda = get_bool("capture_use_cuda", true);
 
     // Target
-    disable_headshot = get_bool("disable_headshot", false);
+    // disable_headshot = get_bool("disable_headshot", false); // Removed
     body_y_offset = (float)get_double("body_y_offset", 0.15);
     head_y_offset = (float)get_double("head_y_offset", 0.05);
     offset_step = (float)get_double("offset_step", 0.01);
@@ -221,9 +234,11 @@ bool Config::loadConfig(const std::string& filename)
     // sticky_iou_threshold = (float)get_double("sticky_iou_threshold", 0.3);
 
     // Mouse
-    // dpi = get_long("dpi", 1000);
-    // fovX = get_long("fovX", 50);
-    // fovY = get_long("fovY", 50);
+    // Remove dpi saving (Assume done)
+    // ini.SetLongValue("", "dpi", dpi);
+    // Remove fovX and fovY saving
+    // ini.SetLongValue("", "fovX", fovX);
+    // ini.SetLongValue("", "fovY", fovY);
     easynorecoil = get_bool("easynorecoil", false);
     easynorecoilstrength = (float)get_double("easynorecoilstrength", 0.0);
     norecoil_step = (float)get_double("norecoil_step", 5.0);
@@ -315,6 +330,19 @@ bool Config::loadConfig(const std::string& filename)
     always_on_top = get_bool("always_on_top", true);
     verbose = get_bool("verbose", false);
 
+    // Load ignore flags
+    ignore_class_0 = get_bool("ignore_class_0", false);
+    ignore_class_1 = get_bool("ignore_class_1", false);
+    ignore_class_2 = get_bool("ignore_class_2", false);
+    ignore_class_3 = get_bool("ignore_class_3", false);
+    ignore_class_4 = get_bool("ignore_class_4", false);
+    ignore_class_5 = get_bool("ignore_class_5", false);
+    ignore_class_6 = get_bool("ignore_class_6", false);
+    ignore_class_7 = get_bool("ignore_class_7", false);
+    ignore_class_8 = get_bool("ignore_class_8", false);
+    ignore_class_9 = get_bool("ignore_class_9", false);
+    ignore_class_10 = get_bool("ignore_class_10", false);
+
     ini.SetValue("", "input_method", input_method.c_str());
 
     // PID Controller
@@ -384,7 +412,7 @@ bool Config::saveConfig(const std::string& filename)
 
     // Target
     file << "# Target\n"
-        << "disable_headshot = " << (disable_headshot ? "true" : "false") << "\n"
+        // << "disable_headshot = " << (disable_headshot ? "true" : "false") << "\n" // Removed
         << std::fixed << std::setprecision(2)
         << "body_y_offset = " << body_y_offset << "\n"
         << "head_y_offset = " << head_y_offset << "\n"
@@ -510,7 +538,20 @@ bool Config::saveConfig(const std::string& filename)
         << "screenshot_button = " << joinStrings(screenshot_button) << "\n"
         << "screenshot_delay = " << screenshot_delay << "\n"
         << "always_on_top = " << (always_on_top ? "true" : "false") << "\n"
-        << "verbose = " << (verbose ? "true" : "false") << "\n";
+        << "verbose = " << (verbose ? "true" : "false") << "\n"
+        << "\n"
+        << "[Ignore Classes]\n"
+        << "ignore_class_0 = " << (ignore_class_0 ? "true" : "false") << " ; player\n"
+        << "ignore_class_1 = " << (ignore_class_1 ? "true" : "false") << " ; bot\n"
+        << "ignore_class_2 = " << (ignore_class_2 ? "true" : "false") << " ; weapon\n"
+        << "ignore_class_3 = " << (ignore_class_3 ? "true" : "false") << " ; outline\n"
+        << "ignore_class_4 = " << (ignore_class_4 ? "true" : "false") << " ; dead_body\n"
+        << "ignore_class_5 = " << (ignore_class_5 ? "true" : "false") << " ; hideout_target_human\n"
+        << "ignore_class_6 = " << (ignore_class_6 ? "true" : "false") << " ; hideout_target_balls\n"
+        << "ignore_class_7 = " << (ignore_class_7 ? "true" : "false") << " ; head\n"
+        << "ignore_class_8 = " << (ignore_class_8 ? "true" : "false") << " ; smoke\n"
+        << "ignore_class_9 = " << (ignore_class_9 ? "true" : "false") << " ; fire\n"
+        << "ignore_class_10 = " << (ignore_class_10 ? "true" : "false") << " ; third_person\n";
 
     file.close();
     return true;
