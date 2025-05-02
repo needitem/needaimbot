@@ -58,6 +58,12 @@ public:
     bool arduino_16_bit_mouse;
     bool arduino_enable_keys;
 
+    // KMBOX net params:
+    std::string kmbox_ip;         
+    std::string kmbox_port;       
+    std::string kmbox_mac;    
+
+
     // Mouse shooting
     bool auto_shoot;
     float bScope_multiplier;
