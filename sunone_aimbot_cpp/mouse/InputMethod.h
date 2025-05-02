@@ -3,6 +3,7 @@
 
 #include "SerialConnection.h"
 #include "ghub.h"
+#include "kmboxNet.h"
 
 // Interface for mouse input methods
 class InputMethod
