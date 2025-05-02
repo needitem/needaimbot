@@ -73,6 +73,7 @@
     <ClInclude Include="mouse\PIDController2D.h" />
     <ClInclude Include="detector\scoringGpu.h" />
     <ClInclude Include="detector\filterGpu.h" />
+    <ClInclude Include="mouse\kmboxNet.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
