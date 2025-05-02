@@ -4,6 +4,10 @@
 #include "SerialConnection.h"
 #include "ghub.h"
 #include "kmboxNet.h"
+#include "rzctl.h"
+#include <filesystem>
+#include <iostream>
+#include <Windows.h>
 
 // Interface for mouse input methods
 class InputMethod
@@ -163,8 +167,122 @@ public:
     }
 
     bool isValid() const override {
-        // We have no direct “isOpen()” check, so assume init succeeded
+        // We have no direct "isOpen()" check, so assume init succeeded
         return true;
+    }
+};
+
+// Razer mouse input implementation
+class RZInputMethod : public InputMethod {
+private:
+    RZControl* rz_control_ = nullptr; // Pointer to the RZControl instance
+    bool initialized_ = false;
+    bool use_fallback_ = false; // Flag to indicate if fallback (SendInput) should be used
+    HMODULE rz_module_ = NULL; // Store module handle for explicit FreeLibrary
+
+    // Helper for SendInput fallback
+    void SendInputWrapper(INPUT input) {
+        SendInput(1, &input, sizeof(INPUT));
+    }
+
+public:
+    // Constructor now automatically finds DLL path
+    explicit RZInputMethod() {
+        char exe_path_buffer[MAX_PATH];
+        GetModuleFileNameA(NULL, exe_path_buffer, MAX_PATH);
+        std::filesystem::path base_dir = std::filesystem::path(exe_path_buffer).parent_path();
+        std::filesystem::path dll_path = base_dir / "rzctl.dll";
+        std::wstring w_dll_path = dll_path.wstring(); // RZControl constructor expects wstring
+
+        try {
+            // Explicitly load library here to manage handle and check existence
+            rz_module_ = LoadLibraryW(w_dll_path.c_str());
+            if (rz_module_ == NULL) {
+                std::cerr << "[Razer] Failed to load rzctl.dll from: " << dll_path.string() << std::endl;
+                throw std::runtime_error("rzctl.dll not found or failed to load.");
+            }
+
+            // Pass the path to RZControl (assuming RZControl still takes path)
+            // If RZControl is also modified, this needs adjustment
+            rz_control_ = new RZControl(w_dll_path); // Pass the found path
+            initialized_ = rz_control_->initialize();
+            if (!initialized_) {
+                 std::cerr << "[Razer] RZControl->initialize() failed!" << std::endl;
+                 throw std::runtime_error("RZControl initialization failed.");
+            }
+            use_fallback_ = false; // Initialization successful
+            std::cout << "[Razer] rzctl.dll loaded and initialized successfully." << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "[Razer] RZInputMethod initialization failed: " << e.what() 
+                      << " Falling back to SendInput." << std::endl;
+            delete rz_control_; // Clean up partially created object if any step failed
+            rz_control_ = nullptr;
+            if (rz_module_) { // Free library if loaded but init failed
+                FreeLibrary(rz_module_);
+                rz_module_ = NULL;
+            }
+            initialized_ = false;
+            use_fallback_ = true; // Use SendInput as fallback
+        }
+    }
+
+    ~RZInputMethod() override {
+        delete rz_control_;
+        if (rz_module_) { // Ensure library is freed
+            FreeLibrary(rz_module_);
+        }
+    }
+
+    // Disable copy/move semantics for simplicity if managing raw pointer
+    RZInputMethod(const RZInputMethod&) = delete;
+    RZInputMethod& operator=(const RZInputMethod&) = delete;
+    RZInputMethod(RZInputMethod&&) = delete;
+    RZInputMethod& operator=(RZInputMethod&&) = delete;
+
+    void move(int x, int y) override {
+        if (initialized_ && rz_control_) {
+            // Use Razer DLL method
+            rz_control_->moveMouse(x, y, true); // Assuming relative movement
+        } else if (use_fallback_) {
+            // Use SendInput fallback
+            INPUT input = {0};
+            input.type = INPUT_MOUSE;
+            input.mi.dwFlags = MOUSEEVENTF_MOVE;
+            input.mi.dx = x;
+            input.mi.dy = y;
+            SendInputWrapper(input);
+        }
+    }
+
+    void press() override {
+        if (initialized_ && rz_control_) {
+            // Use Razer DLL method
+            rz_control_->mouseClick(MouseClick::LEFT_DOWN);
+        } else if (use_fallback_) {
+            // Use SendInput fallback
+            INPUT input = {0};
+            input.type = INPUT_MOUSE;
+            input.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+            SendInputWrapper(input);
+        }
+    }
+
+    void release() override {
+        if (initialized_ && rz_control_) {
+            // Use Razer DLL method
+            rz_control_->mouseClick(MouseClick::LEFT_UP);
+        } else if (use_fallback_) {
+            // Use SendInput fallback
+            INPUT input = {0};
+            input.type = INPUT_MOUSE;
+            input.mi.dwFlags = MOUSEEVENTF_LEFTUP;
+            SendInputWrapper(input);
+        }
+    }
+
+    bool isValid() const override {
+        // Method is considered "valid" if either the DLL initialized OR we can use fallback
+        return (initialized_ && rz_control_ != nullptr) || use_fallback_;
     }
 };
 
