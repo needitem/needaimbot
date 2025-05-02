@@ -158,26 +158,6 @@ void initializeInputMethod()
             input_method = std::make_unique<GHubInputMethod>(gHub);
         }
     }
-
-    else if (config.input_method == "KMBOX")
-    {
-        std::cout << "[Mouse] Using kmboxNet method input." << std::endl;
-
-        int rc = kmNet_init(
-            config.kmbox_ip.c_str(),
-            config.kmbox_port.c_str(),
-            config.kmbox_mac.c_str()
-        );
-
-        if (rc == 0)
-        {
-            input_method = std::make_unique<KmboxInputMethod>();
-        }
-        else
-        {
-            std::cerr << "[kmboxNet] init failed with code " << rc << "\n";
-        }
-    }
     else if (config.input_method == "KMBOX")
     {
         std::cout << "[Mouse] Using kmboxNet method input.\n";
