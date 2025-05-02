@@ -177,13 +177,7 @@ class RZInputMethod : public InputMethod {
 private:
     RZControl* rz_control_ = nullptr; // Pointer to the RZControl instance
     bool initialized_ = false;
-    bool use_fallback_ = false; // Flag to indicate if fallback (SendInput) should be used
     HMODULE rz_module_ = NULL; // Store module handle for explicit FreeLibrary
-
-    // Helper for SendInput fallback
-    void SendInputWrapper(INPUT input) {
-        SendInput(1, &input, sizeof(INPUT));
-    }
 
 public:
     // Constructor now automatically finds DLL path
@@ -210,11 +204,10 @@ public:
                  std::cerr << "[Razer] RZControl->initialize() failed!" << std::endl;
                  throw std::runtime_error("RZControl initialization failed.");
             }
-            use_fallback_ = false; // Initialization successful
             std::cout << "[Razer] rzctl.dll loaded and initialized successfully." << std::endl;
         } catch (const std::exception& e) {
             std::cerr << "[Razer] RZInputMethod initialization failed: " << e.what() 
-                      << " Falling back to SendInput." << std::endl;
+                      << std::endl;
             delete rz_control_; // Clean up partially created object if any step failed
             rz_control_ = nullptr;
             if (rz_module_) { // Free library if loaded but init failed
@@ -222,7 +215,7 @@ public:
                 rz_module_ = NULL;
             }
             initialized_ = false;
-            use_fallback_ = true; // Use SendInput as fallback
+            throw; 
         }
     }
 
@@ -243,14 +236,6 @@ public:
         if (initialized_ && rz_control_) {
             // Use Razer DLL method
             rz_control_->moveMouse(x, y, true); // Assuming relative movement
-        } else if (use_fallback_) {
-            // Use SendInput fallback
-            INPUT input = {0};
-            input.type = INPUT_MOUSE;
-            input.mi.dwFlags = MOUSEEVENTF_MOVE;
-            input.mi.dx = x;
-            input.mi.dy = y;
-            SendInputWrapper(input);
         }
     }
 
@@ -258,12 +243,6 @@ public:
         if (initialized_ && rz_control_) {
             // Use Razer DLL method
             rz_control_->mouseClick(MouseClick::LEFT_DOWN);
-        } else if (use_fallback_) {
-            // Use SendInput fallback
-            INPUT input = {0};
-            input.type = INPUT_MOUSE;
-            input.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
-            SendInputWrapper(input);
         }
     }
 
@@ -271,18 +250,12 @@ public:
         if (initialized_ && rz_control_) {
             // Use Razer DLL method
             rz_control_->mouseClick(MouseClick::LEFT_UP);
-        } else if (use_fallback_) {
-            // Use SendInput fallback
-            INPUT input = {0};
-            input.type = INPUT_MOUSE;
-            input.mi.dwFlags = MOUSEEVENTF_LEFTUP;
-            SendInputWrapper(input);
         }
     }
 
     bool isValid() const override {
-        // Method is considered "valid" if either the DLL initialized OR we can use fallback
-        return (initialized_ && rz_control_ != nullptr) || use_fallback_;
+        // Method is considered "valid" only if the DLL initialized successfully
+        return (initialized_ && rz_control_ != nullptr);
     }
 };
 
