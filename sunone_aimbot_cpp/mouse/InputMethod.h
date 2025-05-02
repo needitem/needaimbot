@@ -3,6 +3,7 @@
 
 #include "SerialConnection.h"
 #include "ghub.h"
+#include "kmboxNet.h"
 
 // Interface for mouse input methods
 class InputMethod
@@ -136,6 +137,34 @@ public:
     bool isValid() const override
     {
         return true; // Assuming Win32 API is always valid
+    }
+};
+
+
+// kmboxNet-based mouse input implementation
+class KmboxInputMethod : public InputMethod {
+public:
+    KmboxInputMethod() = default;
+    ~KmboxInputMethod() override = default;
+
+    void move(int x, int y) override {
+        // kmNet_mouse_move takes SHORTs
+        kmNet_mouse_move(static_cast<short>(x), static_cast<short>(y));
+    }
+
+    void press() override {
+        // left button down
+        kmNet_mouse_left(1);
+    }
+
+    void release() override {
+        // left button up
+        kmNet_mouse_left(0);
+    }
+
+    bool isValid() const override {
+        // We have no direct “isOpen()” check, so assume init succeeded
+        return true;
     }
 };
 
