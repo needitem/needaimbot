@@ -154,7 +154,68 @@ void displayThread()
 
                  // Now download the final displayFrameGpu (it's guaranteed to be updated now)
                  if (!displayFrameGpu.empty()){
-                     visStream.waitForCompletion();
+                     // --- BEGIN GPU Drawing (Rectangle) ---
+                     Detection bestTargetHostGpu; // Need a separate copy for GPU drawing scope
+                     bool hasTargetGpu = false;
+                     cv::Rect scaledBoxGpu; // Need a separate Rect for GPU drawing scope
+                     {
+                         // Re-acquire lock briefly to get target for GPU drawing
+                         // This is slightly inefficient but necessary if target data changes rapidly
+                         // Alternatively, copy necessary data (hasTarget, scaledBox) outside the lock earlier
+                         std::lock_guard<std::mutex> lock(detector.detectionMutex);
+                         if (detector.m_hasBestTarget) {
+                             hasTargetGpu = true;
+                             bestTargetHostGpu = detector.m_bestTargetHost; // Use the same host data
+                             // Use the same scaling logic as before
+                             cv::Rect box = bestTargetHostGpu.box;
+                             float scale_x_gpu = static_cast<float>(displayFrameGpu.cols) / config.detection_resolution; // Scale to displayFrameGpu size
+                             float scale_y_gpu = static_cast<float>(displayFrameGpu.rows) / config.detection_resolution; // Scale to displayFrameGpu size
+
+                             scaledBoxGpu.x = static_cast<int>(box.x * scale_x_gpu);
+                             scaledBoxGpu.y = static_cast<int>(box.y * scale_y_gpu);
+                             scaledBoxGpu.width = static_cast<int>(box.width * scale_x_gpu);
+                             scaledBoxGpu.height = static_cast<int>(box.height * scale_y_gpu);
+
+                             // Clamp box to displayFrameGpu dimensions
+                             scaledBoxGpu.x = std::max(0, scaledBoxGpu.x);
+                             scaledBoxGpu.y = std::max(0, scaledBoxGpu.y);
+                             scaledBoxGpu.width = std::min(displayFrameGpu.cols - scaledBoxGpu.x, scaledBoxGpu.width);
+                             scaledBoxGpu.height = std::min(displayFrameGpu.rows - scaledBoxGpu.y, scaledBoxGpu.height);
+                         }
+                     } // Unlock detector.detectionMutex
+
+                     if (hasTargetGpu && scaledBoxGpu.width > 0 && scaledBoxGpu.height > 0) {
+                         cv::Scalar gpuColor(0, 255, 0, 255); // BGRA
+                         int thickness = 2;
+
+                         // Ensure thickness doesn't exceed box dimensions or go out of bounds
+                         int clamped_thickness_w = std::min(thickness, scaledBoxGpu.width / 2);
+                         int clamped_thickness_h = std::min(thickness, scaledBoxGpu.height / 2);
+                         clamped_thickness_w = std::max(1, clamped_thickness_w); // Ensure thickness is at least 1
+                         clamped_thickness_h = std::max(1, clamped_thickness_h); // Ensure thickness is at least 1
+
+
+                         // Check boundaries before creating ROI and drawing
+                         // Top line
+                         if (scaledBoxGpu.y + clamped_thickness_h <= displayFrameGpu.rows && scaledBoxGpu.width > 0) {
+                            cv::cuda::GpuMat(displayFrameGpu, cv::Rect(scaledBoxGpu.x, scaledBoxGpu.y, scaledBoxGpu.width, clamped_thickness_h)).setTo(gpuColor, visStream);
+                         }
+                         // Bottom line
+                         if (scaledBoxGpu.y + scaledBoxGpu.height - clamped_thickness_h >= 0 && scaledBoxGpu.y + scaledBoxGpu.height <= displayFrameGpu.rows && scaledBoxGpu.width > 0) {
+                             cv::cuda::GpuMat(displayFrameGpu, cv::Rect(scaledBoxGpu.x, scaledBoxGpu.y + scaledBoxGpu.height - clamped_thickness_h, scaledBoxGpu.width, clamped_thickness_h)).setTo(gpuColor, visStream);
+                         }
+                         // Left line
+                         if (scaledBoxGpu.x + clamped_thickness_w <= displayFrameGpu.cols && scaledBoxGpu.height > 0) {
+                            cv::cuda::GpuMat(displayFrameGpu, cv::Rect(scaledBoxGpu.x, scaledBoxGpu.y, clamped_thickness_w, scaledBoxGpu.height)).setTo(gpuColor, visStream);
+                         }
+                         // Right line
+                         if (scaledBoxGpu.x + scaledBoxGpu.width - clamped_thickness_w >= 0 && scaledBoxGpu.x + scaledBoxGpu.width <= displayFrameGpu.cols && scaledBoxGpu.height > 0) {
+                             cv::cuda::GpuMat(displayFrameGpu, cv::Rect(scaledBoxGpu.x + scaledBoxGpu.width - clamped_thickness_w, scaledBoxGpu.y, clamped_thickness_w, scaledBoxGpu.height)).setTo(gpuColor, visStream);
+                         }
+                     }
+                     // --- END GPU Drawing (Rectangle) ---
+
+                     visStream.waitForCompletion(); // Ensure GPU drawing is done before download
                      displayFrameGpu.download(displayFrameCpu, visStream);
                      visStream.waitForCompletion();
                  } else {
@@ -213,12 +274,19 @@ void displayThread()
 
             // --- Draw on CPU (displayFrameCpu) ---
             if (!displayFrameCpu.empty()) {
-                // Draw detection box
-                if (hasTarget && scaledBox.width > 0 && scaledBox.height > 0) {
-                    cv::rectangle(displayFrameCpu, scaledBox, cv::Scalar(0, 255, 0), 2);
+                // Draw detection box - MOVED TO GPU
+                // if (hasTarget && scaledBox.width > 0 && scaledBox.height > 0) {
+                //    cv::rectangle(displayFrameCpu, scaledBox, cv::Scalar(0, 255, 0), 2); // REMOVED
+                //    cv::Point textOrg(scaledBox.x, std::max(0, scaledBox.y - 5));
+                //    cv::putText(displayFrameCpu, labelText, textOrg, cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 1); // Keep text on CPU for now
+                //}
+
+                // Draw Text (ID) - Kept on CPU
+                 if (hasTarget && scaledBox.width > 0 && scaledBox.height > 0) { // Use original CPU-scoped variables for text placement
                     cv::Point textOrg(scaledBox.x, std::max(0, scaledBox.y - 5));
                     cv::putText(displayFrameCpu, labelText, textOrg, cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 1);
-                }
+                 }
+
                 // Draw FPS (Use value read earlier under lock)
                 if (show_fps) {
                      cv::putText(displayFrameCpu, "FPS: " + std::to_string(static_cast<int>(captureFps)), cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(255, 255, 0), 2);
