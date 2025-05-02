@@ -135,6 +135,7 @@ bool Config::loadConfig(const std::string& filename)
         button_pause = splitString("F3");
         button_reload_config = splitString("F4");
         button_open_overlay = splitString("Home");
+        button_disable_upward_aim = splitString("None");
 
         // Overlay
         overlay_opacity = 225;
@@ -302,6 +303,7 @@ bool Config::loadConfig(const std::string& filename)
     button_pause = splitString(get_string("button_pause", "F3"));
     button_reload_config = splitString(get_string("button_reload_config", "F4"));
     button_open_overlay = splitString(get_string("button_open_overlay", "Home"));
+    button_disable_upward_aim = splitString(get_string("button_disable_upward_aim", "None"));
 
     // Overlay
     overlay_opacity = get_long("overlay_opacity", 225);
@@ -370,6 +372,13 @@ bool Config::loadConfig(const std::string& filename)
 
     // Buttons
     ini.SetValue("", "button_targeting", joinStrings(button_targeting, " ").c_str());
+    ini.SetValue("", "button_shoot", joinStrings(button_shoot, " ").c_str());
+    ini.SetValue("", "button_zoom", joinStrings(button_zoom, " ").c_str());
+    ini.SetValue("", "button_exit", joinStrings(button_exit, " ").c_str());
+    ini.SetValue("", "button_pause", joinStrings(button_pause, " ").c_str());
+    ini.SetValue("", "button_reload_config", joinStrings(button_reload_config, " ").c_str());
+    ini.SetValue("", "button_open_overlay", joinStrings(button_open_overlay).c_str());
+    ini.SetValue("", "button_disable_upward_aim", joinStrings(button_disable_upward_aim).c_str());
 
     ini.SetDoubleValue("", "norecoil_step", norecoil_step, nullptr, true);
     ini.SetDoubleValue("", "norecoil_ms", norecoil_ms, nullptr, true);
@@ -382,6 +391,10 @@ bool Config::loadConfig(const std::string& filename)
     ini.SetDoubleValue("", "recoil_mult_3x", recoil_mult_3x, nullptr, true);
     ini.SetDoubleValue("", "recoil_mult_4x", recoil_mult_4x, nullptr, true);
     ini.SetDoubleValue("", "recoil_mult_6x", recoil_mult_6x, nullptr, true);
+
+    // Overlay
+    ini.SetLongValue("", "overlay_opacity", overlay_opacity);
+    ini.SetDoubleValue("", "overlay_ui_scale", overlay_ui_scale);
 
     return true;
 }
@@ -507,7 +520,8 @@ bool Config::saveConfig(const std::string& filename)
         << "button_exit = " << joinStrings(button_exit) << "\n"
         << "button_pause = " << joinStrings(button_pause) << "\n"
         << "button_reload_config = " << joinStrings(button_reload_config) << "\n"
-        << "button_open_overlay = " << joinStrings(button_open_overlay) << "\n\n";
+        << "button_open_overlay = " << joinStrings(button_open_overlay) << "\n"
+        << "button_disable_upward_aim = " << joinStrings(button_disable_upward_aim) << "\n\n";
 
     // Overlay
     file << "# Overlay\n"
@@ -636,4 +650,15 @@ bool Config::deleteProfile(const std::string& profileName) {
         std::cerr << "[Config] Filesystem error while deleting profile '" << filename << "': " << e.what() << std::endl;
         return false;
     }
+}
+
+void Config::resetConfig()
+{
+    // ... existing code ...
+    button_reload_config = {"None"};
+    button_open_overlay = {"None"};
+    button_disable_upward_aim = {"None"}; // Reset the new button config
+
+    // Call saveConfig to persist the reset values
+    saveConfig();
 }
