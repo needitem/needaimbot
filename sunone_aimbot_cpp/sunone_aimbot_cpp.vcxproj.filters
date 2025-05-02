@@ -32,6 +32,8 @@
     <ClCompile Include="overlay\draw_debug.cpp" />
     <ClCompile Include="mouse\PIDController2D.cpp" />
     <ClCompile Include="overlay\draw_profile.cpp" />
+    <ClCompile Include="mouse\kmboxNet.cpp" />
+    <ClCompile Include="mouse\my_enc.cpp" />
   </ItemGroup>
   <ItemGroup>
     <Filter Include="scr">
@@ -74,6 +76,8 @@
     <ClInclude Include="detector\scoringGpu.h" />
     <ClInclude Include="detector\filterGpu.h" />
     <ClInclude Include="mouse\kmboxNet.h" />
+    <ClInclude Include="mouse\HidTable.h" />
+    <ClInclude Include="mouse\my_enc.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
