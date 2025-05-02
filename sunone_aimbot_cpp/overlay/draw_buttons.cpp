@@ -356,6 +356,64 @@ void draw_buttons()
 
     ImGui::Separator();
 
+    ImGui::Text("Disable Upward Aim Buttons");
+
+    for (size_t i = 0; i < config.button_disable_upward_aim.size(); )
+    {
+        std::string& current_key_name = config.button_disable_upward_aim[i];
+
+        int current_index = -1;
+        for (size_t k = 0; k < key_names.size(); ++k)
+        {
+            if (key_names[k] == current_key_name)
+            {
+                current_index = static_cast<int>(k);
+                break;
+            }
+        }
+
+        if (current_index == -1)
+        {
+            current_index = 0;
+        }
+
+        std::string combo_label = "Disable Upward Aim Button " + std::to_string(i);
+
+        if (ImGui::Combo(combo_label.c_str(), &current_index, key_names_cstrs.data(), static_cast<int>(key_names_cstrs.size())))
+        {
+            current_key_name = key_names[current_index];
+            config.saveConfig();
+        }
+
+        ImGui::SameLine();
+        std::string remove_button_label = "Remove##button_disable_upward_aim" + std::to_string(i);
+        if (ImGui::Button(remove_button_label.c_str()))
+        {
+            if (config.button_disable_upward_aim.size() <= 1)
+            {
+                config.button_disable_upward_aim[0] = std::string("None");
+                config.saveConfig();
+                continue;
+            }
+            else
+            {
+                config.button_disable_upward_aim.erase(config.button_disable_upward_aim.begin() + i);
+                config.saveConfig();
+                continue;
+            }
+        }
+
+        ++i;
+    }
+
+    if (ImGui::Button("Add button##disable_upward_aim"))
+    {
+        config.button_disable_upward_aim.push_back("None");
+        config.saveConfig();
+    }
+
+    ImGui::Separator();
+
     ImGui::Text("Overlay Buttons");
 
     for (size_t i = 0; i < config.button_open_overlay.size(); )

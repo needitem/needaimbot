@@ -9,7 +9,13 @@
 
 void draw_overlay()
 {
-    ImGui::SliderInt("Overlay Opacity", &config.overlay_opacity, 40, 255);
+    ImGui::SeparatorText("Overlay Appearance");
+    ImGui::Spacing();
+
+    if (ImGui::SliderInt("Overlay Opacity", &config.overlay_opacity, 40, 255)) { config.saveConfig(); }
+    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Adjusts the transparency of the overlay window (settings menu)."); }
+
+    ImGui::Spacing();
 
     static float ui_scale = config.overlay_ui_scale;
 
@@ -27,4 +33,6 @@ void draw_overlay()
 
         SetWindowPos(g_hwnd, NULL, 0, 0, overlayWidth, overlayHeight, SWP_NOMOVE | SWP_NOZORDER);
     }
+    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Scales the size of the entire settings UI. May require restart for some elements."); }
+    ImGui::Spacing();
 }

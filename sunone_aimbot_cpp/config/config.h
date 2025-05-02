@@ -89,6 +89,7 @@ public:
     std::vector<std::string> button_pause;
     std::vector<std::string> button_reload_config;
     std::vector<std::string> button_open_overlay;
+    std::vector<std::string> button_disable_upward_aim;
 
     // Overlay
     int overlay_opacity;
@@ -137,6 +138,7 @@ public:
     bool saveProfile(const std::string& profileName);
     bool loadProfile(const std::string& profileName);
     bool deleteProfile(const std::string& profileName);
+    void resetConfig();
 
     std::string joinStrings(const std::vector<std::string>& vec, const std::string& delimiter = ",");
 private:

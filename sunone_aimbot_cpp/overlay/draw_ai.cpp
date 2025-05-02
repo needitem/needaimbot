@@ -48,7 +48,9 @@ void draw_ai()
         }
     }
 
+    ImGui::Spacing();
     ImGui::Separator();
+    ImGui::Spacing();
 
     std::vector<std::string> postprocessOptions = { "yolo8", "yolo9", "yolo10", "yolo11", "yolo12" };
     std::vector<const char*> postprocessItems;
@@ -74,13 +76,18 @@ void draw_ai()
         detector_model_changed.store(true);
     }
 
+    ImGui::Spacing();
     ImGui::Separator();
+    ImGui::Spacing();
+
     ImGui::SliderFloat("Confidence Threshold", &config.confidence_threshold, 0.01f, 1.00f, "%.2f");
-    ImGui::SliderFloat("NMS Threshold", &config.nms_threshold, 0.01f, 1.00f, "%.2f");
-    ImGui::SliderInt("Max Detections", &config.max_detections, 1, 100);
-    
+    if (ImGui::SliderFloat("NMS Threshold", &config.nms_threshold, 0.01f, 1.00f, "%.2f")) { config.saveConfig(); }
+    if (ImGui::SliderInt("Max Detections", &config.max_detections, 1, 100)) { config.saveConfig(); }
+
+    ImGui::Spacing();
     ImGui::Separator();
-    
+    ImGui::Spacing();
+
     if (ImGui::InputInt("CUDA Device ID", &config.cuda_device_id))
     {
         if (config.cuda_device_id < 0) config.cuda_device_id = 0;
@@ -91,8 +98,10 @@ void draw_ai()
         ImGui::SetTooltip("Set the CUDA device ID to use for detection (requires restart).");
     }
 
+    ImGui::Spacing();
     ImGui::Separator();
     ImGui::SeparatorText("Class Filtering");
+    ImGui::Spacing();
 
     // if (ImGui::Checkbox("Disable Headshot Aiming", &config.disable_headshot)) { config.saveConfig(); } // Removed
     // if (ImGui::IsItemHovered()){ // Removed
@@ -134,4 +143,5 @@ void draw_ai()
         }
     }
     ImGui::Columns(1); // Return to single column layout
+    ImGui::Spacing();
 }

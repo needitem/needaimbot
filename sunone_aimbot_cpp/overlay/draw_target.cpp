@@ -71,23 +71,6 @@ void draw_target()
     ImGui::Checkbox("Ignore Third Person", &config.ignore_third_person);
     ImGui::Checkbox("Shooting range targets", &config.shooting_range_targets);
     ImGui::Checkbox("Auto Aim", &config.auto_aim);
-
-    ImGui::Separator();
-    ImGui::Text("Target Stickiness");
-    ImGui::Spacing();
-
-    // Removed Sticky Bonus UI Elements
-    // ImGui::SeparatorText("Target Stickiness");
-    // if (ImGui::SliderFloat("Sticky Bonus", &config.sticky_bonus, -100.0f, 0.0f, "%.1f"))
-    // {
-    //     config.sticky_bonus = std::max(-100.0f, std::min(config.sticky_bonus, 0.0f)); // Clamp value
-    //     settings_changed = true;
-    // }
-    // if (ImGui::SliderFloat("Sticky IoU Threshold", &config.sticky_iou_threshold, 0.0f, 1.0f, "%.2f"))
-    // {
-    //     config.sticky_iou_threshold = std::max(0.0f, std::min(config.sticky_iou_threshold, 1.0f)); // Clamp value
-    //     settings_changed = true;
-    // }
 }
 
 void load_body_texture()
