@@ -19,8 +19,8 @@ inline std::vector<const char*> getProfileCstrs(const std::vector<std::string>& 
 
 void draw_profile()
 {
-    ImGui::Text("Profile Management");
-    ImGui::Separator();
+    ImGui::SeparatorText("Available Profiles");
+    ImGui::Spacing();
 
     static std::vector<std::string> profile_list = config.listProfiles();
     static std::vector<const char*> profile_list_cstrs = getProfileCstrs(profile_list);
@@ -43,7 +43,6 @@ void draw_profile()
         selected_profile_index = 0;
     }
 
-    ImGui::Text("Available Profiles:");
     if (ImGui::BeginListBox("##ProfilesList", ImVec2(-FLT_MIN, 5 * ImGui::GetTextLineHeightWithSpacing())))
     {
         for (int n = 0; n < profile_list_cstrs.size(); n++)
@@ -59,8 +58,11 @@ void draw_profile()
         ImGui::EndListBox();
     }
 
-    if (selected_profile_index >= 0 && selected_profile_index < profile_list.size())
+    ImGui::Spacing();
     {
+        bool profile_selected = (selected_profile_index >= 0 && selected_profile_index < profile_list.size());
+        if (!profile_selected) { ImGui::BeginDisabled(); }
+
         if (ImGui::Button("Load Selected"))
         {
             std::string profileToLoad = profile_list[selected_profile_index];
@@ -72,21 +74,10 @@ void draw_profile()
                 refresh_profiles();
             }
         }
-    } else {
-        ImGui::BeginDisabled();
-        ImGui::Button("Load Selected");
-        ImGui::EndDisabled();
-    }
+        if (ImGui::IsItemHovered() && profile_selected) { ImGui::SetTooltip("Load settings from the selected profile."); }
 
-    ImGui::SameLine();
-    if (ImGui::Button("Refresh List"))
-    {
-        refresh_profiles();
-        status_message = "Refreshed profile list.";
-    }
+        ImGui::SameLine();
 
-    ImGui::SameLine();
-    if (selected_profile_index >= 0 && selected_profile_index < profile_list.size()) {
         if (ImGui::Button("Delete Selected")) {
             std::string profileToDelete = profile_list[selected_profile_index];
              if (config.deleteProfile(profileToDelete)) {
@@ -97,20 +88,36 @@ void draw_profile()
                  refresh_profiles();
              }
         }
-    } else {
-        ImGui::BeginDisabled();
-        ImGui::Button("Delete Selected");
-        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered() && profile_selected) { ImGui::SetTooltip("Delete the selected profile file."); }
+
+        if (!profile_selected) { ImGui::EndDisabled(); }
     }
 
-    ImGui::Separator();
-
-    ImGui::Text("Save Current Settings As:");
-    ImGui::InputText("##NewProfileName", new_profile_name, IM_ARRAYSIZE(new_profile_name));
     ImGui::SameLine();
-    if (ImGui::Button("Save Profile"))
+
+    if (ImGui::Button("Refresh List"))
+    {
+        refresh_profiles();
+        status_message = "Refreshed profile list.";
+    }
+    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Rescan the profiles directory for changes."); }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    ImGui::SeparatorText("Save Current Settings");
+    ImGui::Spacing();
+
+    ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x * 0.6f);
+    ImGui::InputTextWithHint("##NewProfileName", "Enter new profile name or select to overwrite", new_profile_name, IM_ARRAYSIZE(new_profile_name));
+    ImGui::PopItemWidth();
+
+    ImGui::SameLine();
+    if (ImGui::Button("Save##SaveProfileBtn"))
     {
         std::string name = new_profile_name;
+        bool is_overwriting = false;
         if (!name.empty())
         {
              if (config.saveProfile(name))
@@ -131,7 +138,8 @@ void draw_profile()
              name = profile_list[selected_profile_index];
               if (config.saveProfile(name))
              {
-                 status_message = "Overwrote profile: " + name;
+                is_overwriting = true;
+                status_message = "Overwrote profile: " + name;
              } else {
                   status_message = "Error overwriting profile: " + name;
              }
@@ -139,8 +147,12 @@ void draw_profile()
              status_message = "Enter a new name or select a profile to overwrite.";
         }
     }
+    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Save the current settings. Either enter a new name or select an existing profile from the list to overwrite it."); }
+
+    ImGui::Spacing();
 
     if (!status_message.empty()) {
         ImGui::TextWrapped("Status: %s", status_message.c_str());
     }
+    ImGui::Spacing();
 }

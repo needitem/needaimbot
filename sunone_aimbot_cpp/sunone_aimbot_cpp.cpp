@@ -325,16 +325,37 @@ int main()
 
         if (config.input_method == "ARDUINO")
         {
-            arduinoSerial = new SerialConnection(config.arduino_port, config.arduino_baudrate);
+            try {
+                arduinoSerial = new SerialConnection(config.arduino_port, config.arduino_baudrate);
+                if (arduinoSerial->isOpen()) {
+                    std::cout << "Arduino connected on port " << config.arduino_port << "." << std::endl;
+                    
+                } else {
+                    std::cerr << "Error: Failed to open Arduino serial port " << config.arduino_port << ".";
+                    std::cerr << " Falling back to Win32 input method." << std::endl;
+                    delete arduinoSerial;
+                    arduinoSerial = nullptr;
+                    config.input_method = "WIN32"; // Fallback
+                }
+            } catch (const std::exception& e) {
+                std::cerr << "Error initializing Arduino serial connection: " << e.what() << ".";
+                std::cerr << " Falling back to Win32 input method." << std::endl;
+                if (arduinoSerial) {
+                    delete arduinoSerial;
+                    arduinoSerial = nullptr;
+                }
+                config.input_method = "WIN32"; // Fallback
+            }
         }
         else if (config.input_method == "GHUB")
         {
             gHub = new GhubMouse();
-            if (!gHub->mouse_xy(0, 0))
-            {
-                std::cerr << "[Ghub] Error with opening mouse." << std::endl;
+            if (!gHub || !gHub->mouse_xy(0, 0)) {
+                std::cerr << "Error: Failed to initialize G HUB. Check if G HUB is running.";
+                std::cerr << " Falling back to Win32 input method." << std::endl;
                 delete gHub;
                 gHub = nullptr;
+                config.input_method = "WIN32"; // Fallback
             }
         }
 

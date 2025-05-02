@@ -22,6 +22,7 @@
 #include "sunone_aimbot_cpp.h"
 #include "ghub.h"
 #include "config.h"
+#include "keyboard/keyboard_listener.h"
 
 extern std::atomic<bool> aiming;
 extern std::mutex configMutex;
@@ -241,6 +242,12 @@ void MouseThread::moveMouse(const AimbotTarget &target)
 
     int dx_int = static_cast<int>(std::round(move_x));
     int dy_int = static_cast<int>(std::round(move_y));
+
+    // Check if the disable upward aim button is pressed and movement is upward
+    if (isAnyKeyPressed(config.button_disable_upward_aim) && dy_int < 0)
+    {
+        dy_int = 0; // Disable upward movement
+    }
 
     if (dx_int != 0 || dy_int != 0)
     {
