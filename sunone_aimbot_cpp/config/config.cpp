@@ -110,6 +110,11 @@ bool Config::loadConfig(const std::string& filename)
         arduino_16_bit_mouse = false;
         arduino_enable_keys = false;
 
+		// KMBOX net params:
+        kmbox_ip = "192.168.2.188";
+        kmbox_port = "16896";
+        kmbox_mac = "46405c53";
+        
         // Mouse shooting
         auto_shoot = false;
         bScope_multiplier = 1.0f;
@@ -277,6 +282,11 @@ bool Config::loadConfig(const std::string& filename)
     arduino_port = get_string("arduino_port", "COM0");
     arduino_16_bit_mouse = get_bool("arduino_16_bit_mouse", false);
     arduino_enable_keys = get_bool("arduino_enable_keys", false);
+
+    // KMBOX config
+    kmbox_ip = ini.GetValue("KMBOX", "ip", "192.168.2.188");
+    kmbox_port = ini.GetValue("KMBOX", "port", "16896");
+    kmbox_mac = ini.GetValue("KMBOX", "mac", "46405C53");
 
     // Mouse shooting
     auto_shoot = get_bool("auto_shoot", false);
