@@ -161,11 +161,18 @@ void initializeInputMethod()
     else if (config.input_method == "KMBOX")
     {
         std::cout << "[Mouse] Using kmboxNet method input.\n";
-        int rc = kmNet_init(
-            config.kmbox_ip.c_str(),
-            config.kmbox_port.c_str(),
-            config.kmbox_mac.c_str()
-        );
+        char ip[256], port[256], mac[256];
+        strncpy(ip, config.kmbox_ip.c_str(), sizeof(ip));
+        strncpy(port, config.kmbox_port.c_str(), sizeof(port));
+        strncpy(mac, config.kmbox_mac.c_str(), sizeof(mac));
+
+        // Ensure null-termination
+        ip[sizeof(ip) - 1] = '\0';
+        port[sizeof(port) - 1] = '\0';
+        mac[sizeof(mac) - 1] = '\0';
+
+        int rc = kmNet_init(ip, port, mac);
+
         if (rc == 0)
         {
             input_method = std::make_unique<KmboxInputMethod>();
@@ -175,6 +182,7 @@ void initializeInputMethod()
             std::cerr << "[kmboxNet] init failed, code=" << rc << "\n";
         }
     }
+    
     if (!input_method)
     {
         std::cout << "[Mouse] Using default Win32 method input." << std::endl;
