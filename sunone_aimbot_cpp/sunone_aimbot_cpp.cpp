@@ -23,6 +23,7 @@
 #include "mouse/InputMethod.h"
 #include "config.h"
 #include "detector/detector.h"
+#include "kmboxNet.h"
 
 // Include headers for version checking
 #include <cuda_runtime_api.h>
@@ -157,7 +158,23 @@ void initializeInputMethod()
             input_method = std::make_unique<GHubInputMethod>(gHub);
         }
     }
-
+    else if (config.input_method == "KMBOX")
+    {
+        std::cout << "[Mouse] Using kmboxNet method input.\n";
+        int rc = kmNet_init(
+            config.kmbox_ip.c_str(),
+            config.kmbox_port.c_str(),
+            config.kmbox_mac.c_str()
+        );
+        if (rc == 0)
+        {
+            input_method = std::make_unique<KmboxInputMethod>();
+        }
+        else
+        {
+            std::cerr << "[kmboxNet] init failed, code=" << rc << "\n";
+        }
+    }
     if (!input_method)
     {
         std::cout << "[Mouse] Using default Win32 method input." << std::endl;
