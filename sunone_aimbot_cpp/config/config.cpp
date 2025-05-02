@@ -342,69 +342,18 @@ bool Config::loadConfig(const std::string& filename)
     always_on_top = get_bool("always_on_top", true);
     verbose = get_bool("verbose", false);
 
-    // Load ignore flags
-    ignore_class_0 = get_bool("ignore_class_0", false);
-    ignore_class_1 = get_bool("ignore_class_1", false);
-    ignore_class_2 = get_bool("ignore_class_2", false);
-    ignore_class_3 = get_bool("ignore_class_3", false);
-    ignore_class_4 = get_bool("ignore_class_4", false);
-    ignore_class_5 = get_bool("ignore_class_5", false);
-    ignore_class_6 = get_bool("ignore_class_6", false);
-    ignore_class_7 = get_bool("ignore_class_7", false);
-    ignore_class_8 = get_bool("ignore_class_8", false);
-    ignore_class_9 = get_bool("ignore_class_9", false);
-    ignore_class_10 = get_bool("ignore_class_10", false);
-
-    ini.SetValue("", "input_method", input_method.c_str());
-
-    // PID Controller
-    // ini.SetDoubleValue("", "kp", kp);
-    // ini.SetDoubleValue("", "ki", ki);
-    // ini.SetDoubleValue("", "kd", kd);
-
-    // Separated X/Y PID Controllers
-    ini.SetDoubleValue("", "kp_x", kp_x);
-    ini.SetDoubleValue("", "ki_x", ki_x);
-    ini.SetDoubleValue("", "kd_x", kd_x);
-    ini.SetDoubleValue("", "kp_y", kp_y);
-    ini.SetDoubleValue("", "ki_y", ki_y);
-    ini.SetDoubleValue("", "kd_y", kd_y);
-
-    // Kalman Filter settings
-    ini.SetDoubleValue("", "prediction_time_ms", prediction_time_ms);
-    ini.SetDoubleValue("", "kalman_process_noise", kalman_process_noise);
-    ini.SetDoubleValue("", "kalman_measurement_noise", kalman_measurement_noise);
-    ini.SetBoolValue("", "enable_prediction", enable_prediction); // Save prediction enable flag
-
-    // CUDA
-    ini.SetBoolValue("", "use_pinned_memory", use_pinned_memory);
-    ini.SetLongValue("", "cuda_device_id", cuda_device_id);
-
-    // Buttons
-    ini.SetValue("", "button_targeting", joinStrings(button_targeting, " ").c_str());
-    ini.SetValue("", "button_shoot", joinStrings(button_shoot, " ").c_str());
-    ini.SetValue("", "button_zoom", joinStrings(button_zoom, " ").c_str());
-    ini.SetValue("", "button_exit", joinStrings(button_exit, " ").c_str());
-    ini.SetValue("", "button_pause", joinStrings(button_pause, " ").c_str());
-    ini.SetValue("", "button_reload_config", joinStrings(button_reload_config, " ").c_str());
-    ini.SetValue("", "button_open_overlay", joinStrings(button_open_overlay).c_str());
-    ini.SetValue("", "button_disable_upward_aim", joinStrings(button_disable_upward_aim).c_str());
-
-    ini.SetDoubleValue("", "norecoil_step", norecoil_step, nullptr, true);
-    ini.SetDoubleValue("", "norecoil_ms", norecoil_ms, nullptr, true);
-
-    ini.SetDoubleValue("", "bScope_multiplier", bScope_multiplier);
-
-    // Scope Recoil Control (Save)
-    ini.SetLongValue("", "active_scope_magnification", active_scope_magnification);
-    ini.SetDoubleValue("", "recoil_mult_2x", recoil_mult_2x, nullptr, true);
-    ini.SetDoubleValue("", "recoil_mult_3x", recoil_mult_3x, nullptr, true);
-    ini.SetDoubleValue("", "recoil_mult_4x", recoil_mult_4x, nullptr, true);
-    ini.SetDoubleValue("", "recoil_mult_6x", recoil_mult_6x, nullptr, true);
-
-    // Overlay
-    ini.SetLongValue("", "overlay_opacity", overlay_opacity);
-    ini.SetDoubleValue("", "overlay_ui_scale", overlay_ui_scale);
+    // Load ignore flags from the correct section
+    ignore_class_0 = ini.GetBoolValue("Ignore Classes", "ignore_class_0", false);
+    ignore_class_1 = ini.GetBoolValue("Ignore Classes", "ignore_class_1", false);
+    ignore_class_2 = ini.GetBoolValue("Ignore Classes", "ignore_class_2", false);
+    ignore_class_3 = ini.GetBoolValue("Ignore Classes", "ignore_class_3", false);
+    ignore_class_4 = ini.GetBoolValue("Ignore Classes", "ignore_class_4", false);
+    ignore_class_5 = ini.GetBoolValue("Ignore Classes", "ignore_class_5", false);
+    ignore_class_6 = ini.GetBoolValue("Ignore Classes", "ignore_class_6", false);
+    ignore_class_7 = ini.GetBoolValue("Ignore Classes", "ignore_class_7", false);
+    ignore_class_8 = ini.GetBoolValue("Ignore Classes", "ignore_class_8", false);
+    ignore_class_9 = ini.GetBoolValue("Ignore Classes", "ignore_class_9", false);
+    ignore_class_10 = ini.GetBoolValue("Ignore Classes", "ignore_class_10", false);
 
     return true;
 }
