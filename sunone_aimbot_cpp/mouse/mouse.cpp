@@ -23,6 +23,11 @@
 #include "ghub.h"
 #include "config.h"
 #include "keyboard/keyboard_listener.h"
+#include "IPredictor.h"
+#include "VelocityPredictor.h"
+#include "LinearRegressionPredictor.h"
+#include "ExponentialSmoothingPredictor.h"
+#include "KalmanFilterPredictor.h"
 
 extern std::atomic<bool> aiming;
 extern std::mutex configMutex;
@@ -38,15 +43,22 @@ MouseThread::MouseThread(
     float kp_y,
     float ki_y,
     float kd_y,
-    bool auto_shoot,
     float bScope_multiplier,
     float norecoil_ms,
     SerialConnection *serialConnection,
     GhubMouse *gHub) : tracking_errors(false)
 {
-    initializeScreen(resolution, auto_shoot, bScope_multiplier, norecoil_ms);
+    initializeScreen(resolution, bScope_multiplier, norecoil_ms);
     pid_controller = std::make_unique<PIDController2D>(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
     initializeInputMethod(serialConnection, gHub);
+    
+    // Set the initial predictor based on config
+    std::string initial_algo;
+    {
+        std::lock_guard<std::mutex> lock(configMutex);
+        initial_algo = config.prediction_algorithm;
+    }
+    setPredictor(initial_algo); 
 }
 
 MouseThread::~MouseThread() = default;
@@ -67,11 +79,10 @@ void MouseThread::initializeInputMethod(SerialConnection *serialConnection, Ghub
     }
 }
 
-void MouseThread::initializeScreen(int resolution, bool auto_shoot, float bScope_multiplier, float norecoil_ms)
+void MouseThread::initializeScreen(int resolution, float bScope_multiplier, float norecoil_ms)
 {
     this->screen_width = static_cast<float>(resolution);
     this->screen_height = static_cast<float>(resolution); 
-    this->auto_shoot = auto_shoot;
     this->bScope_multiplier = bScope_multiplier;
     this->norecoil_ms = norecoil_ms; 
     this->center_x = screen_width / 2.0f;
@@ -100,13 +111,50 @@ void MouseThread::updateConfig(
     float kp_y,
     float ki_y,
     float kd_y,
-    bool auto_shoot,
     float bScope_multiplier,
     float norecoil_ms
     )
 {
-    initializeScreen(resolution, auto_shoot, bScope_multiplier, norecoil_ms);
+    initializeScreen(resolution, bScope_multiplier, norecoil_ms);
     pid_controller->updateSeparatedParameters(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
+    // Note: Predictor is NOT updated here. Call setPredictor explicitly if algo changes.
+}
+
+void MouseThread::setPredictor(const std::string& algorithm_name) {
+    std::lock_guard<std::mutex> lock(predictor_mutex_); // Protect predictor access
+    std::lock_guard<std::mutex> config_lock(configMutex); // Protect config access
+
+    std::cout << "[Mouse] Setting predictor algorithm: " << algorithm_name << std::endl;
+
+    if (algorithm_name == "Velocity Based") {
+        auto predictor = std::make_unique<VelocityPredictor>();
+        predictor->configure(config.velocity_prediction_ms);
+        predictor_ = std::move(predictor);
+    } else if (algorithm_name == "Linear Regression") {
+        auto predictor = std::make_unique<LinearRegressionPredictor>();
+        predictor->configure(config.lr_past_points, config.velocity_prediction_ms); // Assuming LR uses same prediction time for now
+        predictor_ = std::move(predictor);
+    } else if (algorithm_name == "Exponential Smoothing") {
+        auto predictor = std::make_unique<ExponentialSmoothingPredictor>();
+        predictor->configure(config.es_alpha, config.velocity_prediction_ms); // Assuming ES uses same prediction time for now
+        predictor_ = std::move(predictor);
+    } else if (algorithm_name == "Kalman Filter") {
+        auto predictor = std::make_unique<KalmanFilterPredictor>();
+        // Assuming Kalman uses its own prediction time setting from config
+        // Note: The config struct in the prompt has kalman_* noise vars but also a separate prediction_time_ms.
+        // Let's use the dedicated KF prediction time if it exists, otherwise maybe fallback?
+        // For now, assume config has kalman_q, kalman_r, kalman_p and velocity_prediction_ms. We use the latter.
+        // TODO: Clarify which prediction time variable Kalman should use. Using velocity_prediction_ms for now.
+        predictor->configure(config.kalman_q, config.kalman_r, config.kalman_p, config.velocity_prediction_ms);
+        predictor_ = std::move(predictor);
+    } else { // "None" or unknown
+        std::cout << "[Mouse] No predictor or unknown algorithm specified. Prediction disabled." << std::endl;
+        predictor_.reset(); // Set predictor to null
+    }
+
+    if (predictor_) {
+        predictor_->reset(); // Reset the state of the new predictor
+    }
 }
 
 Eigen::Vector2f MouseThread::calculateMovement(const Eigen::Vector2f &target_pos)
@@ -185,72 +233,69 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     const float local_center_x = center_x;
     const float local_center_y = center_y;
 
-    float target_center_x = target.x + target.w * 0.5f;
-    float target_center_y;
-    /*
-     Model Class IDs (from user):
-      0: player
-      1: bot
-      2: weapon
-      3: outline
-      4: dead_body
-      5: hideout_target_human
-      6: hideout_target_balls
-      7: head
-      8: smoke
-      9: fire
-      10: third_person
-    */
-    constexpr int HEAD_CLASS_ID = 7; // Class ID for head
-
+    // 1. Get Raw Target Position
+    Point2D raw_target_pos;
+    raw_target_pos.x = target.x + target.w * 0.5f;
+    
+    // Use configured offsets based on class ID
+    constexpr int HEAD_CLASS_ID = 7; 
+    float y_offset_multiplier = config.body_y_offset; // Default to body
     {
         std::lock_guard<std::mutex> lock(configMutex);
         if (!config.ignore_class_7 && target.classId == HEAD_CLASS_ID) {
-            // Headshot aiming logic
-            target_center_y = target.y + target.h * config.head_y_offset;
-            // Optional: Add logging for headshot case too if needed
-            // std::cout << "[Aim Debug] Headshot Aim: target.h = " << target.h 
-            //           << ", head_offset = " << config.head_y_offset 
-            //           << ", target_center_y = " << target_center_y << std::endl;
+            y_offset_multiplier = config.head_y_offset;
+        } 
+    }
+    raw_target_pos.y = target.y + target.h * y_offset_multiplier;
+
+    // 2. Update and Predict using the Predictor
+    Point2D predicted_target_pos = raw_target_pos; // Default to raw if no predictor
+    auto now = std::chrono::steady_clock::now();
+
+    {
+        std::lock_guard<std::mutex> lock(predictor_mutex_); // Lock predictor access
+        if (predictor_) { 
+            predictor_->update(raw_target_pos, now);
+            predicted_target_pos = predictor_->predict();
         } else {
-            // Body aiming logic (or disabled headshot)
-            target_center_y = target.y + target.h * config.body_y_offset;
-            
-            // --- Logging Removed --- 
-            // Logging was here
-            // --- End Logging --- 
+            // If no predictor, reset target ID tracking
         }
     }
 
-    float error_x = target_center_x - local_center_x;
-    float error_y = target_center_y - local_center_y;
+    // 3. Calculate Error based on Predicted Position
+    float error_x = predicted_target_pos.x - local_center_x;
+    float error_y = predicted_target_pos.y - local_center_y;
 
+    // Error tracking callback (optional)
     if (tracking_errors)
     {
         std::lock_guard<std::mutex> lock(callback_mutex);
         if (error_callback)
         {
-            error_callback(error_x, error_y);
+            error_callback(error_x, error_y); // Report error based on prediction
         }
     }
 
+    // 4. Calculate PID Output based on Error
     Eigen::Vector2f error(error_x, error_y);
     Eigen::Vector2f pid_output = pid_controller->calculate(error);
 
+    // 5. Scale PID Output for Mouse Movement
     float move_x = pid_output.x() * move_scale_x;
     float move_y = pid_output.y() * move_scale_y;
 
     int dx_int = static_cast<int>(std::round(move_x));
     int dy_int = static_cast<int>(std::round(move_y));
 
-    // Check if the disable upward aim button is pressed and movement is upward
+    // Check for disable upward aim button
     if (isAnyKeyPressed(config.button_disable_upward_aim) && dy_int < 0)
     {
-        dy_int = 0; // Disable upward movement
+        dy_int = 0; 
     }
 
+    // 6. Send Mouse Movement Command
     if (dx_int != 0 || dy_int != 0)
-    {
+    {        
         std::lock_guard<std::mutex> lock(input_method_mutex);
         if (input_method && input_method->isValid())
         {

@@ -57,6 +57,7 @@ std::atomic<bool> input_method_changed(false);
 
 std::atomic<bool> zooming(false);
 std::atomic<bool> shooting(false);
+std::atomic<bool> auto_shoot_active(false);
 
 struct alignas(64) DetectionData {
     std::vector<cv::Rect> boxes;
@@ -212,7 +213,7 @@ void mouseThreadFunction(MouseThread &mouseThread)
         auto timeout = aiming.load() ? active_timeout : idle_timeout;
         
         bool is_aiming = aiming.load();
-        bool auto_shooting = config.auto_shoot;
+        bool hotkey_pressed_for_trigger = auto_shoot_active.load();
 
         if (input_method_changed.load()) {
             initializeInputMethod();
@@ -249,21 +250,33 @@ void mouseThreadFunction(MouseThread &mouseThread)
             }
         }
 
-        if (is_aiming && has_target_from_detector) {
-            AimbotTarget target(
-                best_target_from_detector.box.x, 
-                best_target_from_detector.box.y, 
-                best_target_from_detector.box.width, 
-                best_target_from_detector.box.height,
-                best_target_from_detector.classId
+        Detection current_best_target;
+        bool target_available = has_target_from_detector;
+        if (target_available) {
+            current_best_target = best_target_from_detector;
+        }
+
+        if (is_aiming && target_available) {
+            AimbotTarget aim_target(
+                current_best_target.box.x, 
+                current_best_target.box.y, 
+                current_best_target.box.width, 
+                current_best_target.box.height,
+                current_best_target.classId
             );
-            
-            mouseThread.moveMouse(target);
-            
-            if (auto_shooting) {
-                mouseThread.pressMouse(target);
-            }
-        } else if (auto_shooting) {
+            mouseThread.moveMouse(aim_target);
+        }
+
+        if (hotkey_pressed_for_trigger && target_available) {
+            AimbotTarget shoot_target(
+                current_best_target.box.x, 
+                current_best_target.box.y, 
+                current_best_target.box.width, 
+                current_best_target.box.height,
+                current_best_target.classId
+            );
+            mouseThread.pressMouse(shoot_target);
+        } else {
             mouseThread.releaseMouse();
         }
     }
@@ -392,7 +405,6 @@ int main()
             config.kp_y,
             config.ki_y,
             config.kd_y,
-            config.auto_shoot,
             config.bScope_multiplier,
             config.norecoil_ms,
             arduinoSerial,

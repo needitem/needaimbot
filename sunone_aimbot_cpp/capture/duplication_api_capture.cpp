@@ -50,33 +50,33 @@ public:
         ID3D11DeviceContext **outContext = nullptr)
     {
         HRESULT hr = S_OK;
-        std::cout << "[DDA] Initializing DDAManager for monitor index: " << monitorIndex << std::endl;
+        // std::cout << "[DDA] Initializing DDAManager for monitor index: " << monitorIndex << std::endl;
 
         IDXGIFactory1 *factory = nullptr;
         hr = CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void **)&factory);
-        std::cout << "[DDA] CreateDXGIFactory1 result: 0x" << std::hex << hr << std::endl;
+        // std::cout << "[DDA] CreateDXGIFactory1 result: 0x" << std::hex << hr << std::endl;
         if (FAILED(hr))
         {
-            std::cerr << "[DDA] Failed to create DXGIFactory1 (hr = " << std::hex << hr << ")." << std::endl;
+            // std::cerr << "[DDA] Failed to create DXGIFactory1 (hr = " << std::hex << hr << ")." << std::endl;
             return hr;
         }
 
         IDXGIAdapter1 *adapter = nullptr;
         hr = factory->EnumAdapters1(monitorIndex, &adapter);
-        std::cout << "[DDA] EnumAdapters1 result: 0x" << std::hex << hr << " for index " << monitorIndex << std::endl;
+        // std::cout << "[DDA] EnumAdapters1 result: 0x" << std::hex << hr << " for index " << monitorIndex << std::endl;
         if (hr == DXGI_ERROR_NOT_FOUND)
         {
-            std::cerr << "[DDA] Not found adapter with index " << monitorIndex << ". Error code: DXGI_ERROR_NOT_FOUND." << std::endl;
+            // std::cerr << "[DDA] Not found adapter with index " << monitorIndex << ". Error code: DXGI_ERROR_NOT_FOUND." << std::endl;
             factory->Release();
             return hr;
         }
         else if (FAILED(hr))
         {
-            std::cerr << "[DDA] EnumAdapters1 return error (hr = " << std::hex << hr << ")." << std::endl;
+            // std::cerr << "[DDA] EnumAdapters1 return error (hr = " << std::hex << hr << ")." << std::endl;
             factory->Release();
             return hr;
         }
-        if (adapter) {
+        if (adapter && config.verbose) { // Keep verbose logging
             DXGI_ADAPTER_DESC1 desc;
             adapter->GetDesc1(&desc);
             std::wcout << L"[DDA] Using Adapter: " << desc.Description << std::endl;
@@ -84,22 +84,22 @@ public:
 
         IDXGIOutput *output = nullptr;
         hr = adapter->EnumOutputs(0, &output);
-        std::cout << "[DDA] EnumOutputs result: 0x" << std::hex << hr << " for output index 0" << std::endl;
+        // std::cout << "[DDA] EnumOutputs result: 0x" << std::hex << hr << " for output index 0" << std::endl;
         if (hr == DXGI_ERROR_NOT_FOUND)
         {
-            std::cerr << "[DDA] The adapter has no outputs (monitors). Error code: DXGI_ERROR_NOT_FOUND." << std::endl;
+            // std::cerr << "[DDA] The adapter has no outputs (monitors). Error code: DXGI_ERROR_NOT_FOUND." << std::endl;
             SafeRelease(&adapter);
             SafeRelease(&factory);
             return hr;
         }
         else if (FAILED(hr))
         {
-            std::cerr << "[DDA] EnumOutputs returned an error (hr = " << std::hex << hr << ")." << std::endl;
+            // std::cerr << "[DDA] EnumOutputs returned an error (hr = " << std::hex << hr << ")." << std::endl;
             SafeRelease(&adapter);
             SafeRelease(&factory);
             return hr;
         }
-        if (output) {
+        if (output && config.verbose) { // Keep verbose logging
              DXGI_OUTPUT_DESC desc;
              output->GetDesc(&desc);
              std::wcout << L"[DDA] Using Output: " << desc.DeviceName << std::endl;
@@ -120,11 +120,11 @@ public:
                 &m_device,
                 nullptr,
                 &m_context);
-            std::cout << "[DDA] D3D11CreateDevice result: 0x" << std::hex << hr << std::endl;
+            // std::cout << "[DDA] D3D11CreateDevice result: 0x" << std::hex << hr << std::endl;
 
             if (FAILED(hr))
             {
-                std::cerr << "[DDA] Couldn't create D3D11Device (hr = " << std::hex << hr << ")." << std::endl;
+                // std::cerr << "[DDA] Couldn't create D3D11Device (hr = " << std::hex << hr << ")." << std::endl;
                 SafeRelease(&output);
                 SafeRelease(&adapter);
                 SafeRelease(&factory);
@@ -133,10 +133,10 @@ public:
         }
 
         hr = output->QueryInterface(__uuidof(IDXGIOutput1), (void **)&m_output1);
-        std::cout << "[DDA] QueryInterface for IDXGIOutput1 result: 0x" << std::hex << hr << std::endl;
+        // std::cout << "[DDA] QueryInterface for IDXGIOutput1 result: 0x" << std::hex << hr << std::endl;
         if (FAILED(hr))
         {
-            std::cerr << "[DDA] QueryInterface on IDXGIOutput1 failed (hr = " << std::hex << hr << ")." << std::endl;
+            // std::cerr << "[DDA] QueryInterface on IDXGIOutput1 failed (hr = " << std::hex << hr << ")." << std::endl;
             SafeRelease(&m_context);
             SafeRelease(&m_device);
             SafeRelease(&output);
@@ -145,18 +145,18 @@ public:
             return hr;
         }
 
-        std::cout << "[DDA] Calling DuplicateOutput with m_device: " << m_device << std::endl;
+        // std::cout << "[DDA] Calling DuplicateOutput with m_device: " << m_device << std::endl;
         hr = m_output1->DuplicateOutput(m_device, &m_duplication);
-        std::cout << "[DDA] DuplicateOutput result: 0x" << std::hex << hr << std::endl;
+        // std::cout << "[DDA] DuplicateOutput result: 0x" << std::hex << hr << std::endl;
         if (FAILED(hr))
         {
-            std::cerr << "[DDA] DuplicateOutput failed (hr = " << std::hex << hr << ")." << std::endl;
+            // std::cerr << "[DDA] DuplicateOutput failed (hr = " << std::hex << hr << ")." << std::endl;
             if (hr == DXGI_ERROR_UNSUPPORTED) {
-                 std::cerr << "[DDA] Error: DXGI_ERROR_UNSUPPORTED. Desktop Duplication API is not supported on this system/configuration." << std::endl;
+                 // std::cerr << "[DDA] Error: DXGI_ERROR_UNSUPPORTED. Desktop Duplication API is not supported on this system/configuration." << std::endl;
             } else if (hr == DXGI_ERROR_ACCESS_DENIED) {
-                 std::cerr << "[DDA] Error: DXGI_ERROR_ACCESS_DENIED. Access denied, possibly due to protected content or insufficient privileges." << std::endl;
+                 // std::cerr << "[DDA] Error: DXGI_ERROR_ACCESS_DENIED. Access denied, possibly due to protected content or insufficient privileges." << std::endl;
             } else if (hr == E_INVALIDARG) {
-                 std::cerr << "[DDA] Error: E_INVALIDARG. Check if the device pointer is valid and belongs to the correct adapter." << std::endl;
+                 // std::cerr << "[DDA] Error: E_INVALIDARG. Check if the device pointer is valid and belongs to the correct adapter." << std::endl;
             }
             
             SafeRelease(&m_output1);
@@ -352,6 +352,7 @@ public:
         }
         else
         {
+             // Allow allocation if pool is empty
             frameGpu = cv::cuda::GpuMat(regionHeight, regionWidth, CV_8UC4);
         }
 
@@ -430,7 +431,7 @@ public:
 DuplicationAPIScreenCapture::DuplicationAPIScreenCapture(int desiredWidth, int desiredHeight)
     : d3dDevice(nullptr), d3dContext(nullptr), deskDupl(nullptr), stagingTexture(nullptr), output1(nullptr), sharedTexture(nullptr), cudaResource(nullptr), cudaStream(nullptr), regionWidth(desiredWidth), regionHeight(desiredHeight), screenWidth(0), screenHeight(0), m_initialized(false)
 {
-    std::cout << "[Capture] DuplicationAPIScreenCapture constructor called." << std::endl;
+    // std::cout << "[Capture] DuplicationAPIScreenCapture constructor called." << std::endl;
     m_ddaManager = std::make_unique<DDAManager>();
 
     HRESULT hr = m_ddaManager->Initialize(
@@ -496,7 +497,7 @@ cv::cuda::GpuMat DuplicationAPIScreenCapture::GetNextFrameGpu()
     }
     else if (FAILED(hr))
     {
-        std::cerr << "[Capture] AcquireFrame failed (hr=0x" << std::hex << hr << ")" << std::endl;
+        // std::cerr << "[Capture] AcquireFrame failed (hr=0x" << std::hex << hr << ")" << std::endl;
         return cv::cuda::GpuMat();
     }
 
@@ -567,7 +568,7 @@ cv::Mat DuplicationAPIScreenCapture::GetNextFrameCpu()
     }
     else if (FAILED(hr))
     {
-        std::cerr << "[Capture] AcquireFrame failed (CPU Path) (hr=0x" << std::hex << hr << ")" << std::endl;
+        // std::cerr << "[Capture] AcquireFrame failed (CPU Path) (hr=0x" << std::hex << hr << ")" << std::endl;
         return cv::Mat();
     }
 
@@ -614,26 +615,26 @@ cv::Mat DuplicationAPIScreenCapture::GetNextFrameCpu()
                 }
                 else
                 {
-                    std::cerr << "[DDA] cudaMemcpy2DFromArrayAsync (D->H) error: " << cudaGetErrorString(err) << std::endl;
+                    // std::cerr << "[DDA] cudaMemcpy2DFromArrayAsync (D->H) error: " << cudaGetErrorString(err) << std::endl;
                     frameCpu.release();
                 }
             }
             else
             {
-                std::cerr << "[DDA] cudaGraphicsSubResourceGetMappedArray (CPU Path) error: " << cudaGetErrorString(err) << std::endl;
+                // std::cerr << "[DDA] cudaGraphicsSubResourceGetMappedArray (CPU Path) error: " << cudaGetErrorString(err) << std::endl;
                 frameCpu.release();
             }
             cudaGraphicsUnmapResources(1, &m_ddaManager->m_cudaResource, m_ddaManager->m_cudaStream);
         }
         else
         {
-            std::cerr << "[DDA] cudaGraphicsMapResources (CPU Path) error: " << cudaGetErrorString(err) << std::endl;
+            // std::cerr << "[DDA] cudaGraphicsMapResources (CPU Path) error: " << cudaGetErrorString(err) << std::endl;
             frameCpu.release();
         }
     } else {
-         if (frameCpu.empty()) std::cerr << "[DDA] Failed to create CPU Mat" << std::endl;
-         if (!m_ddaManager->m_cudaResource) std::cerr << "[DDA] CUDA resource invalid for CPU path" << std::endl;
-         if (!m_ddaManager->m_cudaStream) std::cerr << "[DDA] CUDA stream invalid for CPU path" << std::endl;
+         // if (frameCpu.empty()) std::cerr << "[DDA] Failed to create CPU Mat" << std::endl;
+         // if (!m_ddaManager->m_cudaResource) std::cerr << "[DDA] CUDA resource invalid for CPU path" << std::endl;
+         // if (!m_ddaManager->m_cudaStream) std::cerr << "[DDA] CUDA stream invalid for CPU path" << std::endl;
         frameCpu.release();
     }
 

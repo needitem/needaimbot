@@ -335,7 +335,6 @@ void OverlayThread()
     // Kalman Filter
 
     //Mouse shooting
-    bool prev_auto_shoot = config.auto_shoot;
     float prev_bScope_multiplier = config.bScope_multiplier;
 
     // AI
@@ -493,7 +492,6 @@ void OverlayThread()
                             config.kp_y,
                             config.ki_y,
                             config.kd_y,
-                            config.auto_shoot,
                             config.bScope_multiplier,
                             config.norecoil_ms
                         );
@@ -570,7 +568,6 @@ void OverlayThread()
                             config.kp_y,
                             config.ki_y,
                             config.kd_y,
-                            config.auto_shoot,
                             config.bScope_multiplier,
                             config.norecoil_ms
                         );
@@ -579,10 +576,8 @@ void OverlayThread()
                     }
 
                     // AUTO_SHOOT / BSCOPE_MULTIPLIER
-                    if (prev_auto_shoot != config.auto_shoot ||
-                        prev_bScope_multiplier != config.bScope_multiplier)
+                    if (prev_bScope_multiplier != config.bScope_multiplier)
                     {
-                        prev_auto_shoot = config.auto_shoot;
                         prev_bScope_multiplier = config.bScope_multiplier;
 
                         globalMouseThread->updateConfig(
@@ -593,7 +588,6 @@ void OverlayThread()
                             config.kp_y,
                             config.ki_y,
                             config.kd_y,
-                            config.auto_shoot,
                             config.bScope_multiplier,
                             config.norecoil_ms
                         );

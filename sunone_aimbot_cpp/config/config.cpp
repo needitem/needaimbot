@@ -116,7 +116,7 @@ bool Config::loadConfig(const std::string& filename)
         kmbox_mac = "46405c53";
         
         // Mouse shooting
-        auto_shoot = false;
+        // auto_shoot = false; // Removed
         bScope_multiplier = 1.0f;
 
         // AI
@@ -141,6 +141,7 @@ bool Config::loadConfig(const std::string& filename)
         button_reload_config = splitString("F4");
         button_open_overlay = splitString("Home");
         button_disable_upward_aim = splitString("None");
+        button_auto_shoot = splitString("None"); // Default auto_shoot button
 
         // Overlay
         overlay_opacity = 225;
@@ -289,7 +290,7 @@ bool Config::loadConfig(const std::string& filename)
     kmbox_mac = ini.GetValue("KMBOX", "mac", "46405C53");
 
     // Mouse shooting
-    auto_shoot = get_bool("auto_shoot", false);
+    // auto_shoot = get_bool("auto_shoot", false); // Removed
     bScope_multiplier = (float)get_double("bScope_multiplier", 1.2);
 
     // AI
@@ -314,6 +315,7 @@ bool Config::loadConfig(const std::string& filename)
     button_reload_config = splitString(get_string("button_reload_config", "F4"));
     button_open_overlay = splitString(get_string("button_open_overlay", "Home"));
     button_disable_upward_aim = splitString(get_string("button_disable_upward_aim", "None"));
+    button_auto_shoot = splitString(get_string("button_auto_shoot", "None")); // Load auto_shoot button
 
     // Overlay
     overlay_opacity = get_long("overlay_opacity", 225);
@@ -354,6 +356,29 @@ bool Config::loadConfig(const std::string& filename)
     ignore_class_8 = ini.GetBoolValue("Ignore Classes", "ignore_class_8", false);
     ignore_class_9 = ini.GetBoolValue("Ignore Classes", "ignore_class_9", false);
     ignore_class_10 = ini.GetBoolValue("Ignore Classes", "ignore_class_10", false);
+
+    // Save Mouse Input settings
+    ini.SetValue("InputMethod", "Method", input_method.c_str());
+    ini.SetValue("InputMethod", "ArduinoPort", arduino_port.c_str());
+    ini.SetLongValue("InputMethod", "ArduinoBaudrate", arduino_baudrate);
+    ini.SetBoolValue("InputMethod", "Arduino16BitMouse", arduino_16_bit_mouse);
+
+    // Save Prediction settings
+    ini.SetValue("Prediction", "Algorithm", prediction_algorithm.c_str());
+    ini.SetDoubleValue("Prediction", "VelocityPredictionMs", static_cast<double>(velocity_prediction_ms));
+    ini.SetLongValue("Prediction", "LrPastPoints", lr_past_points);
+    ini.SetDoubleValue("Prediction", "EsAlpha", static_cast<double>(es_alpha));
+    ini.SetDoubleValue("Prediction", "KalmanQ", static_cast<double>(kalman_q));
+    ini.SetDoubleValue("Prediction", "KalmanR", static_cast<double>(kalman_r));
+    ini.SetDoubleValue("Prediction", "KalmanP", static_cast<double>(kalman_p));
+
+    // Save PID settings
+    ini.SetDoubleValue("PID", "KpX", kp_x);
+    ini.SetDoubleValue("PID", "KiX", ki_x);
+    ini.SetDoubleValue("PID", "KdX", kd_x);
+    ini.SetDoubleValue("PID", "KpY", kp_y);
+    ini.SetDoubleValue("PID", "KiY", ki_y);
+    ini.SetDoubleValue("PID", "KdY", kd_y);
 
     return true;
 }
@@ -441,7 +466,7 @@ bool Config::saveConfig(const std::string& filename)
 
     // Mouse shooting
     file << "# Mouse shooting\n"
-        << "auto_shoot = " << (auto_shoot ? "true" : "false") << "\n"
+        // << "auto_shoot = " << (auto_shoot ? "true" : "false") << "\n" // Removed
         << std::fixed << std::setprecision(1)
         << "bScope_multiplier = " << bScope_multiplier << "\n\n";
 
@@ -452,7 +477,11 @@ bool Config::saveConfig(const std::string& filename)
         << "recoil_mult_2x = " << recoil_mult_2x << "\n"
         << "recoil_mult_3x = " << recoil_mult_3x << "\n"
         << "recoil_mult_4x = " << recoil_mult_4x << "\n"
-        << "recoil_mult_6x = " << recoil_mult_6x << "\n\n";
+        << "recoil_mult_6x = " << recoil_mult_6x << "\n"
+        << "button_reload_config = " << joinStrings(button_reload_config) << "\n"
+        << "button_open_overlay = " << joinStrings(button_open_overlay) << "\n"
+        << "button_disable_upward_aim = " << joinStrings(button_disable_upward_aim) << "\n"
+        << "button_auto_shoot = " << joinStrings(button_auto_shoot) << "\n\n";
 
     // AI
     file << "# AI\n"
@@ -480,7 +509,8 @@ bool Config::saveConfig(const std::string& filename)
         << "button_pause = " << joinStrings(button_pause) << "\n"
         << "button_reload_config = " << joinStrings(button_reload_config) << "\n"
         << "button_open_overlay = " << joinStrings(button_open_overlay) << "\n"
-        << "button_disable_upward_aim = " << joinStrings(button_disable_upward_aim) << "\n\n";
+        << "button_disable_upward_aim = " << joinStrings(button_disable_upward_aim) << "\n"
+        << "button_auto_shoot = " << joinStrings(button_auto_shoot) << "\n\n";
 
     // Overlay
     file << "# Overlay\n"
@@ -613,11 +643,20 @@ bool Config::deleteProfile(const std::string& profileName) {
 
 void Config::resetConfig()
 {
-    // ... existing code ...
-    button_reload_config = {"None"};
-    button_open_overlay = {"None"};
-    button_disable_upward_aim = {"None"}; // Reset the new button config
+    // Call loadConfig with a non-existent filename to trigger default value assignment
+    loadConfig("__dummy_nonexistent_file__"); 
+    // Note: This is a simpler way to reset than manually setting each variable
+    // Ensure the default value section in loadConfig is complete and correct.
+    
+    // Optional: If you prefer explicit reset logic:
+    /*
+    // ... reset other variables ...
+    // auto_shoot = false; // Removed
+    auto_shoot_mode = 0;
+    button_auto_shoot = {"None"};
+    // ... rest of reset logic ...
+    */
 
     // Call saveConfig to persist the reset values
-    saveConfig();
+    saveConfig(); // Save the now reset configuration
 }

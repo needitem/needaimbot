@@ -9,6 +9,7 @@ class AimbotTarget
 public:
     int x, y, w, h;
     int classId;
+    int id;
 
     AimbotTarget(int x, int y, int w, int h, int classId);
 };
