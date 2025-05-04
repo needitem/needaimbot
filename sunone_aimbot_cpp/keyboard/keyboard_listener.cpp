@@ -21,6 +21,7 @@ extern std::atomic<bool> aiming;
 extern std::atomic<bool> shooting;
 extern std::atomic<bool> zooming;
 extern std::atomic<bool> detectionPaused;
+extern std::atomic<bool> auto_shoot_active;
 
 extern MouseThread* globalMouseThread;
 
@@ -114,7 +115,6 @@ void keyboardListener()
                         config.kp_y,
                         config.ki_y,
                         config.kd_y,
-                        config.auto_shoot,
                         config.bScope_multiplier,
                         config.norecoil_ms
                     );
@@ -126,6 +126,13 @@ void keyboardListener()
         {
             reloadPressed = false;
         }
+
+        // --- Auto Shoot Activation (Hold Mode Only) --- 
+        bool auto_shoot_key_pressed = isAnyKeyPressed(config.button_auto_shoot);
+        auto_shoot_active.store(auto_shoot_key_pressed); // Set active state based on key press
+        // Removed toggle logic and prev state tracking
+        
+        // --- End Auto Shoot Activation ---
 
         // Arrow key detection logic using isAnyKeyPressed
         bool upArrow = isAnyKeyPressed(upArrowKeys);

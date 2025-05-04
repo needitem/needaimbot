@@ -35,6 +35,10 @@
     <ClCompile Include="mouse\kmboxNet.cpp" />
     <ClCompile Include="mouse\my_enc.cpp" />
     <ClCompile Include="mouse\rzctl.cpp" />
+    <ClCompile Include="mouse\ExponentialSmoothingPredictor.cpp" />
+    <ClCompile Include="mouse\KalmanFilterPredictor.cpp" />
+    <ClCompile Include="mouse\LinearRegressionPredictor.cpp" />
+    <ClCompile Include="mouse\VelocityPredictor.cpp" />
   </ItemGroup>
   <ItemGroup>
     <Filter Include="scr">
@@ -80,6 +84,10 @@
     <ClInclude Include="mouse\HidTable.h" />
     <ClInclude Include="mouse\my_enc.h" />
     <ClInclude Include="mouse\rzctl.h" />
+    <ClInclude Include="mouse\ExponentialSmoothingPredictor.h" />
+    <ClInclude Include="mouse\KalmanFilterPredictor.h" />
+    <ClInclude Include="mouse\LinearRegressionPredictor.h" />
+    <ClInclude Include="mouse\VelocityPredictor.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
