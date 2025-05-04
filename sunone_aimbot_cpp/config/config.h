@@ -68,7 +68,7 @@ public:
 
 
     // Mouse shooting
-    bool auto_shoot;
+    // bool auto_shoot; // Removed
     float bScope_multiplier;
 
     // Kalman Filter settings
@@ -99,6 +99,7 @@ public:
     std::vector<std::string> button_reload_config;
     std::vector<std::string> button_open_overlay;
     std::vector<std::string> button_disable_upward_aim;
+    std::vector<std::string> button_auto_shoot; // Added for separate auto-shoot hotkey
 
     // Overlay
     int overlay_opacity;
@@ -138,6 +139,18 @@ public:
     bool ignore_class_8; // smoke
     bool ignore_class_9; // fire
     bool ignore_class_10; // third_person
+
+    // --- Prediction Algorithm Settings --- 
+    std::string prediction_algorithm = "None";    // None, Velocity Based, Linear Regression, Exponential Smoothing, Kalman Filter
+    float velocity_prediction_ms = 16.0f;     // For Velocity Based
+    int   lr_past_points = 10;              // For Linear Regression (min 2)
+    float es_alpha = 0.5f;                  // For Exponential Smoothing (0.01 - 1.0)
+    float kalman_q = 0.1f;                  // For Kalman Filter
+    float kalman_r = 0.1f;
+    float kalman_p = 0.1f;
+
+    // PID Controller Settings (using double for precision)
+    // double kp_x = 0.350;
 
     bool loadConfig(const std::string& filename = "config.ini");
     bool saveConfig(const std::string& filename = "config.ini");
