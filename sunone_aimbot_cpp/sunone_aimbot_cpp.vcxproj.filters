@@ -88,6 +88,7 @@
     <ClInclude Include="mouse\KalmanFilterPredictor.h" />
     <ClInclude Include="mouse\LinearRegressionPredictor.h" />
     <ClInclude Include="mouse\VelocityPredictor.h" />
+    <ClInclude Include="mouse\IPredictor.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
