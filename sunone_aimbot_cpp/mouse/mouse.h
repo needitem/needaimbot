@@ -11,6 +11,7 @@
 #include <memory>
 #include <functional>
 #include <chrono>
+#include <atomic>
 
 #include "AimbotTarget.h"
 #include "SerialConnection.h"
@@ -19,6 +20,13 @@
 
 // Forward declare PIDController2D
 class PIDController2D;
+
+// Forward declarations
+class InputMethod;
+class SerialConnection;
+class GhubMouse;
+class IPredictor; // Forward declare the interface
+struct Point2D; // Forward declare Point2D
 
 using ErrorTrackingCallback = std::function<void(float error_x, float error_y)>;
 
@@ -40,7 +48,6 @@ private:
     float bScope_multiplier;
     float move_scale_x; // Pre-calculated scaling factor for X movement
     float move_scale_y; // Pre-calculated scaling factor for Y movement
-    bool auto_shoot;
     float norecoil_ms; // Store recoil delay
 
     std::chrono::steady_clock::time_point last_target_time;
@@ -51,15 +58,19 @@ private:
     // Simplified target tracking
     AimbotTarget *current_target;
 
+    // Predictor
+    std::unique_ptr<IPredictor> predictor_; // Pointer to the current predictor
+    std::mutex predictor_mutex_;        // Mutex to protect predictor access/changes
+
     float calculateTargetDistanceSquared(const AimbotTarget &target) const;
     void initializeInputMethod(SerialConnection *serialConnection, GhubMouse *gHub);
-    void initializeScreen(int resolution, bool auto_shoot, float bScope_multiplier, float norecoil_ms);
+    void initializeScreen(int resolution, float bScope_multiplier, float norecoil_ms);
 
 public:
     MouseThread(int resolution,
                 float kp_x, float ki_x, float kd_x,
                 float kp_y, float ki_y, float kd_y,
-                bool auto_shoot, float bScope_multiplier,
+                float bScope_multiplier,
                 float norecoil_ms,
                 SerialConnection *serialConnection = nullptr,
                 GhubMouse *gHub = nullptr);
@@ -68,7 +79,7 @@ public:
     void updateConfig(int resolution,
                       float kp_x, float ki_x, float kd_x,
                       float kp_y, float ki_y, float kd_y,
-                      bool auto_shoot, float bScope_multiplier,
+                      float bScope_multiplier,
                       float norecoil_ms);
 
     Eigen::Vector2f calculateMovement(const Eigen::Vector2f &target_pos);
@@ -83,10 +94,10 @@ public:
 
     std::mutex input_method_mutex;
     void setInputMethod(std::unique_ptr<InputMethod> new_method);
+    void setPredictor(const std::string& algorithm_name); // Method to set the predictor
     
     float& getScreenWidth() { return screen_width; }
     float& getScreenHeight() { return screen_height; }
-    bool& getAutoShoot() { return auto_shoot; }
     float& getScopeMultiplier() { return bScope_multiplier; }
     
     // 타겟 감지 상태를 가져오는 메소드 추가
