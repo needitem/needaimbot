@@ -352,29 +352,6 @@ void draw_mouse()
             ImGui::PopItemWidth();
         }
 
-        ImGui::Spacing(); // Add spacing before Scope settings
-
-        // Existing Scope Multiplier if auto_shoot is enabled (moved here)
-        // Consider if this should always be visible or only with auto_shoot
-        // if (config.auto_shoot)
-        // {
-            //ImGui::Indent(10.0f); // Indentation was already applied above
-            ImGui::SeparatorText("Scope Settings");
-            ImGui::PushItemWidth(150); // Make slider wider
-            if (ImGui::SliderFloat("Triggerbot Area Size", &config.bScope_multiplier, 0.1f, 2.0f, "%.2f")) {
-                 config.saveConfig();
-            }
-            ImGui::PopItemWidth();
-            if (ImGui::IsItemHovered())
-            {
-                SetWrappedTooltip("Defines the central screen area size where Triggerbot activates.\nSmaller value = larger area, Larger value = smaller area.\n(1.0 = default area)");
-            }
-            // ImGui::Unindent(10.0f); // Unindent at the end of the section
-            ImGui::Spacing(); // Add spacing after scope setting
-        // } else {
-        //    ImGui::TextDisabled("Scope Multiplier (requires Auto Shoot)");
-        // }
-        
         ImGui::Unindent(10.0f); // Unindent the whole "Prediction & Scope" section content
         ImGui::Spacing(); // Add spacing at the end of the group
     }

@@ -127,6 +127,7 @@ bool Config::loadConfig(const std::string& filename)
         postprocess = "yolo10";
         export_enable_fp8 = false;
         export_enable_fp16 = true;
+        onnx_input_resolution = 640; // Default ONNX input resolution
 
         // CUDA
         use_pinned_memory = true;
@@ -305,9 +306,10 @@ bool Config::loadConfig(const std::string& filename)
     confidence_threshold = (float)get_double("confidence_threshold", 0.15);
     nms_threshold = (float)get_double("nms_threshold", 0.50);
     max_detections = get_long("max_detections", 20);
-    postprocess = get_string("postprocess", "yolo11");
-    export_enable_fp8 = get_bool("export_enable_fp8", true);
+    postprocess = get_string("postprocess", "yolo10");
+    export_enable_fp8 = get_bool("export_enable_fp8", false);
     export_enable_fp16 = get_bool("export_enable_fp16", true);
+    onnx_input_resolution = get_long("onnx_input_resolution", 640); // Load ONNX input resolution
 
     // CUDA
     use_pinned_memory = get_bool("use_pinned_memory", true);
@@ -470,7 +472,8 @@ bool Config::saveConfig(const std::string& filename)
          << "max_detections = " << max_detections << "\n"
          << "postprocess = " << postprocess << "\n"
          << "export_enable_fp8 = " << (export_enable_fp8 ? "true" : "false") << "\n"
-         << "export_enable_fp16 = " << (export_enable_fp16 ? "true" : "false") << "\n\n";
+         << "export_enable_fp16 = " << (export_enable_fp16 ? "true" : "false") << "\n"
+         << "onnx_input_resolution = " << onnx_input_resolution << "\n\n";
 
     // CUDA
     file << "# CUDA\n"
