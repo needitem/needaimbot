@@ -111,20 +111,22 @@ nvinfer1::ICudaEngine* buildEngineFromOnnx(const std::string& onnxFile, nvinfer1
     }
 
     nvinfer1::IOptimizationProfile* profile = builder->createOptimizationProfile();
+    int input_res = config.onnx_input_resolution;
+
     profile->setDimensions(
-        "images",
+        network->getInput(0)->getName(),
         nvinfer1::OptProfileSelector::kMIN,
-        nvinfer1::Dims4(1, 3, 160, 160)
+        nvinfer1::Dims4(1, 3, input_res, input_res)
     );
     profile->setDimensions(
-        "images",
+        network->getInput(0)->getName(),
         nvinfer1::OptProfileSelector::kOPT,
-        nvinfer1::Dims4(1, 3, 320, 320)
+        nvinfer1::Dims4(1, 3, input_res, input_res)
     );
     profile->setDimensions(
-        "images",
+        network->getInput(0)->getName(),
         nvinfer1::OptProfileSelector::kMAX,
-        nvinfer1::Dims4(1, 3, 640, 640)
+        nvinfer1::Dims4(1, 3, input_res, input_res)
     );
 
     cfg->addOptimizationProfile(profile);

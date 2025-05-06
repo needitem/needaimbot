@@ -85,6 +85,7 @@ public:
     std::string postprocess;
     bool export_enable_fp8;
     bool export_enable_fp16;
+    int onnx_input_resolution; // Added for selectable ONNX input resolution (e.g., 160, 320, 640)
 
     // CUDA
     bool use_pinned_memory;

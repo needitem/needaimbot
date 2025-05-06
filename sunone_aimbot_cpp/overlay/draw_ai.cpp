@@ -52,6 +52,37 @@ void draw_ai()
     ImGui::Separator();
     ImGui::Spacing();
 
+    // --- ONNX Input Resolution Selection ---
+    const char* resolution_items[] = { "160", "320", "640" };
+    int current_resolution_index = 0;
+    if (config.onnx_input_resolution == 160)      current_resolution_index = 0;
+    else if (config.onnx_input_resolution == 320) current_resolution_index = 1;
+    else if (config.onnx_input_resolution == 640) current_resolution_index = 2;
+    // else default to 0 (160) or handle error if value is unexpected
+
+    if (ImGui::Combo("ONNX Input Resolution", &current_resolution_index, resolution_items, IM_ARRAYSIZE(resolution_items)))
+    {
+        int selected_resolution = 160; // Default
+        if (current_resolution_index == 0)      selected_resolution = 160;
+        else if (current_resolution_index == 1) selected_resolution = 320;
+        else if (current_resolution_index == 2) selected_resolution = 640;
+
+        if (config.onnx_input_resolution != selected_resolution)
+        {
+            config.onnx_input_resolution = selected_resolution;
+            config.saveConfig();
+            detector_model_changed.store(true); // Trigger model reload/rebuild
+        }
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Select the input resolution for the ONNX model (e.g., 640 for 640x640 input).\nChanging this will require the .engine file to be rebuilt if it doesn't match.");
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
     std::vector<std::string> postprocessOptions = { "yolo8", "yolo9", "yolo10", "yolo11", "yolo12" };
     std::vector<const char*> postprocessItems;
     for (const auto& option : postprocessOptions)
