@@ -54,6 +54,7 @@ std::atomic<bool> capture_window_changed(false);
 std::atomic<bool> detector_model_changed(false);
 std::atomic<bool> show_window_changed(false);
 std::atomic<bool> input_method_changed(false);
+std::atomic<bool> prediction_settings_changed(false);
 
 std::atomic<bool> zooming(false);
 std::atomic<bool> shooting(false);
@@ -183,6 +184,17 @@ void initializeInputMethod()
             std::cerr << "[kmboxNet] init failed, code=" << rc << "\n";
         }
     }
+    else if (config.input_method == "RAZER")
+    {
+        std::cout << "[Mouse] Using Razer method input." << std::endl;
+        try {
+            input_method = std::make_unique<RZInputMethod>();
+            std::cout << "[Mouse] Razer input initialized successfully." << std::endl;
+        }
+        catch (const std::exception& e) {
+            std::cerr << "[Mouse] Razer initialization failed: " << e.what() << std::endl;
+        }
+    }
     
     if (!input_method)
     {
@@ -204,6 +216,7 @@ inline void handleEasyNoRecoil(MouseThread &mouseThread)
 void mouseThreadFunction(MouseThread &mouseThread)
 {
     int lastDetectionVersion = -1;
+    const void* last_target_identifier = nullptr;
     
     constexpr auto idle_timeout = std::chrono::milliseconds(30);
     constexpr auto active_timeout = std::chrono::milliseconds(5);
@@ -218,6 +231,17 @@ void mouseThreadFunction(MouseThread &mouseThread)
         if (input_method_changed.load()) {
             initializeInputMethod();
             input_method_changed.store(false);
+        }
+
+        // Check if prediction settings need updating
+        if (prediction_settings_changed.load()) {
+            std::cout << "[Mouse Thread] Prediction settings changed, updating predictor." << std::endl;
+            // Lock config mutex while reading prediction algorithm
+            {
+                std::lock_guard<std::mutex> lock(configMutex);
+                mouseThread.setPredictor(config.prediction_algorithm);
+            }
+            prediction_settings_changed.store(false); // Reset the flag
         }
 
         if (config.easynorecoil && shooting.load() && zooming.load())
@@ -250,36 +274,62 @@ void mouseThreadFunction(MouseThread &mouseThread)
             }
         }
 
-        Detection current_best_target;
-        bool target_available = has_target_from_detector;
-        if (target_available) {
-            current_best_target = best_target_from_detector;
-        }
+        if (newFrameAvailable)
+        {
+            if (is_aiming && has_target_from_detector)
+            {
+                const void* current_target_identifier = &best_target_from_detector;
 
-        if (is_aiming && target_available) {
-            AimbotTarget aim_target(
-                current_best_target.box.x, 
-                current_best_target.box.y, 
-                current_best_target.box.width, 
-                current_best_target.box.height,
-                current_best_target.classId
-            );
-            mouseThread.moveMouse(aim_target);
-        }
+                if (current_target_identifier != last_target_identifier)
+                {
+                    std::cout << "[Mouse] New target acquired or target changed, resetting predictor." << std::endl;
+                    mouseThread.resetPredictor();
+                    last_target_identifier = current_target_identifier;
+                }
 
-        if (hotkey_pressed_for_trigger && target_available) {
-            AimbotTarget shoot_target(
-                current_best_target.box.x, 
-                current_best_target.box.y, 
-                current_best_target.box.width, 
-                current_best_target.box.height,
-                current_best_target.classId
-            );
-            mouseThread.pressMouse(shoot_target);
-        } else {
-            mouseThread.releaseMouse();
+                // Convert Detection to AimbotTarget for mouse functions
+                // Construct AimbotTarget directly with parameters
+                AimbotTarget best_target(
+                    best_target_from_detector.box.x, 
+                    best_target_from_detector.box.y, 
+                    best_target_from_detector.box.width, 
+                    best_target_from_detector.box.height,
+                    best_target_from_detector.classId
+                );
+                // Add other necessary fields if AimbotTarget constructor requires them
+
+                // Now move the mouse towards the target (uses predicted X, raw Y internally)
+                mouseThread.moveMouse(best_target);
+
+                if (hotkey_pressed_for_trigger)
+                {
+                    mouseThread.pressMouse(best_target);
+                }
+                else
+                {
+                    mouseThread.releaseMouse();
+                }
+            }
+            else
+            {
+                mouseThread.releaseMouse();
+                if (last_target_identifier != nullptr) {
+                    std::cout << "[Mouse] Target lost, resetting predictor." << std::endl;
+                    mouseThread.resetPredictor();
+                    last_target_identifier = nullptr;
+                }
+            }
+        }
+        else
+        {
+            if (!hotkey_pressed_for_trigger || !is_aiming) {
+                mouseThread.releaseMouse();
+            }
         }
     }
+
+    mouseThread.releaseMouse();
+    std::cout << "Mouse thread exiting." << std::endl;
 }
 
 bool loadAndValidateModel(std::string& modelName, const std::vector<std::string>& availableModels) {

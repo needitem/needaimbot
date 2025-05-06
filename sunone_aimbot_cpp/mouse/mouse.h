@@ -62,6 +62,9 @@ private:
     std::unique_ptr<IPredictor> predictor_; // Pointer to the current predictor
     std::mutex predictor_mutex_;        // Mutex to protect predictor access/changes
 
+    int last_applied_dx_ = 0; // Added: Stores the last applied mouse dx
+    int last_applied_dy_ = 0; // Added: Stores the last applied mouse dy
+
     float calculateTargetDistanceSquared(const AimbotTarget &target) const;
     void initializeInputMethod(SerialConnection *serialConnection, GhubMouse *gHub);
     void initializeScreen(int resolution, float bScope_multiplier, float norecoil_ms);
@@ -95,6 +98,7 @@ public:
     std::mutex input_method_mutex;
     void setInputMethod(std::unique_ptr<InputMethod> new_method);
     void setPredictor(const std::string& algorithm_name); // Method to set the predictor
+    void resetPredictor(); // Method to reset the current predictor state
     
     float& getScreenWidth() { return screen_width; }
     float& getScreenHeight() { return screen_height; }

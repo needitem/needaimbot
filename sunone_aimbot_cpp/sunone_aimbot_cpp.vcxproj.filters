@@ -34,11 +34,11 @@
     <ClCompile Include="overlay\draw_profile.cpp" />
     <ClCompile Include="mouse\kmboxNet.cpp" />
     <ClCompile Include="mouse\my_enc.cpp" />
-    <ClCompile Include="mouse\rzctl.cpp" />
     <ClCompile Include="mouse\ExponentialSmoothingPredictor.cpp" />
     <ClCompile Include="mouse\KalmanFilterPredictor.cpp" />
     <ClCompile Include="mouse\LinearRegressionPredictor.cpp" />
     <ClCompile Include="mouse\VelocityPredictor.cpp" />
+    <ClCompile Include="mouse\rzctl.cpp" />
   </ItemGroup>
   <ItemGroup>
     <Filter Include="scr">

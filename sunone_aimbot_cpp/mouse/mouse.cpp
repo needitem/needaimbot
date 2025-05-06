@@ -256,15 +256,16 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         std::lock_guard<std::mutex> lock(predictor_mutex_); // Lock predictor access
         if (predictor_) { 
             predictor_->update(raw_target_pos, now);
-            predicted_target_pos = predictor_->predict();
+            // Predict the full position, but we'll only use the X component later
+            predicted_target_pos = predictor_->predict(); 
         } else {
-            // If no predictor, reset target ID tracking
+            // If no predictor, reset target ID tracking (this comment seems out of place, predictor handles its own state)
         }
     }
 
-    // 3. Calculate Error based on Predicted Position
-    float error_x = predicted_target_pos.x - local_center_x;
-    float error_y = predicted_target_pos.y - local_center_y;
+    // 3. Calculate Error based on Predicted X and Raw Y Position
+    float error_x = predicted_target_pos.x - local_center_x; // Use predicted X
+    float error_y = raw_target_pos.y - local_center_y;      // Use raw Y
 
     // Error tracking callback (optional)
     if (tracking_errors)
@@ -373,6 +374,16 @@ void MouseThread::disableErrorTracking()
     std::lock_guard<std::mutex> lock(callback_mutex);
     tracking_errors = false;
     error_callback = nullptr; 
+}
+
+void MouseThread::resetPredictor()
+{
+    std::lock_guard<std::mutex> lock(predictor_mutex_);
+    if (predictor_)
+    {
+        predictor_->reset();
+        std::cout << "[Mouse] Predictor state reset." << std::endl;
+    }
 }
 
 void MouseThread::setInputMethod(std::unique_ptr<InputMethod> new_method)
