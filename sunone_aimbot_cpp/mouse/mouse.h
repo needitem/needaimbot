@@ -60,7 +60,7 @@ private:
 
     // Predictor
     std::unique_ptr<IPredictor> predictor_; // Pointer to the current predictor
-    std::mutex predictor_mutex_;        // Mutex to protect predictor access/changes
+    mutable std::mutex predictor_mutex_;        // Mutex to protect predictor access/changes
 
     int last_applied_dx_ = 0; // Added: Stores the last applied mouse dx
     int last_applied_dy_ = 0; // Added: Stores the last applied mouse dy
@@ -99,6 +99,7 @@ public:
     void setInputMethod(std::unique_ptr<InputMethod> new_method);
     void setPredictor(const std::string& algorithm_name); // Method to set the predictor
     void resetPredictor(); // Method to reset the current predictor state
+    bool hasActivePredictor() const; // Method to check if a predictor is active
     
     float& getScreenWidth() { return screen_width; }
     float& getScreenHeight() { return screen_height; }
