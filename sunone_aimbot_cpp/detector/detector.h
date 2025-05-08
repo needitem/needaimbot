@@ -29,6 +29,10 @@ typedef struct CUevent_st* cudaEvent_t;
 struct Detection; // Forward declaration if needed, or include postProcess.h
 struct Config; // Forward declaration
 
+// Define using constexpr to allow definition in header (implies inline)
+// const int MAX_CLASSES_FOR_FILTERING = 64; // Old
+constexpr int MAX_CLASSES_FOR_FILTERING = 64; // Example value - Adjust if needed
+
 class Detector
 {
 public:
@@ -94,6 +98,10 @@ public:
     Detection m_bestTargetHost;           // Host copy of best target data
     bool m_hasBestTarget = false;          // Flag indicating if a valid target was found
 
+    // New member for GPU ignore flags (using unsigned char for CUDA compatibility)
+    // bool* m_d_ignore_flags_gpu = nullptr; // Old type
+    unsigned char* m_d_ignore_flags_gpu = nullptr;
+
     bool isCudaContextInitialized() const { return m_cudaContextInitialized; } // Getter for the flag
 
 private:
@@ -125,6 +133,9 @@ private:
     std::unordered_map<std::string, std::vector<int64_t>> outputShapes;
     std::unordered_map<std::string, nvinfer1::DataType> outputTypes; // Keep this
     int numClasses;
+
+    // New member for size of ignore flags buffer (matches MAX_CLASSES_FOR_FILTERING)
+    // size_t m_d_ignore_flags_size = 0; // Not strictly needed if using a const for size
 
     size_t getSizeByDim(const nvinfer1::Dims &dims);
     size_t getElementSize(nvinfer1::DataType dtype);

@@ -68,8 +68,6 @@ void draw_target()
     }
     ImGui::Text("Note: There is a different value for each game, as the sizes of the player models may vary.");
     ImGui::Separator();
-    ImGui::Checkbox("Ignore Third Person", &config.ignore_third_person);
-    ImGui::Checkbox("Shooting range targets", &config.shooting_range_targets);
     ImGui::Checkbox("Auto Aim", &config.auto_aim);
 }
 
