@@ -112,6 +112,9 @@ void draw_ai()
     ImGui::Spacing();
 
     ImGui::SliderFloat("Confidence Threshold", &config.confidence_threshold, 0.01f, 1.00f, "%.2f");
+    if (ImGui::IsItemDeactivatedAfterEdit()) {
+        config.saveConfig();
+    }
     if (ImGui::SliderFloat("NMS Threshold", &config.nms_threshold, 0.01f, 1.00f, "%.2f")) { config.saveConfig(); }
     if (ImGui::SliderInt("Max Detections", &config.max_detections, 1, 100)) { config.saveConfig(); }
 
@@ -131,48 +134,128 @@ void draw_ai()
 
     ImGui::Spacing();
     ImGui::Separator();
-    ImGui::SeparatorText("Class Filtering");
+    ImGui::SeparatorText("Class Definitions");
     ImGui::Spacing();
 
-    // if (ImGui::Checkbox("Disable Headshot Aiming", &config.disable_headshot)) { config.saveConfig(); } // Removed
-    // if (ImGui::IsItemHovered()){ // Removed
-    //      ImGui::SetTooltip("Aim for the body instead of the head. Does not affect head *detection* unless 'Ignore Head' is also checked."); // Removed
-    // } // Removed
+    // Input for the head class name
+    static char head_class_name_buffer[128];
+    strncpy(head_class_name_buffer, config.head_class_name.c_str(), sizeof(head_class_name_buffer) - 1);
+    head_class_name_buffer[sizeof(head_class_name_buffer) - 1] = '\0'; // Ensure null termination
+    ImGui::InputText("Head Class Identifier Name", head_class_name_buffer, sizeof(head_class_name_buffer));
+    if (ImGui::IsItemDeactivatedAfterEdit()) {
+        config.head_class_name = head_class_name_buffer;
+        config.saveConfig();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("The name of the class that should be treated as 'Head' for specific aiming logic (e.g., head_y_offset).");
+    }
+    ImGui::Spacing();
 
-    // ImGui::Spacing(); // Removed spacing as checkbox is gone
+    // Table for class settings for better alignment
+    if (ImGui::BeginTable("class_settings_table", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+        ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 50.0f);
+        ImGui::TableSetupColumn("Name");
+        ImGui::TableSetupColumn("Ignore", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+        ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+        ImGui::TableHeadersRow();
 
-    // --- Add checkboxes for ignoring specific classes --- 
-    struct ClassIgnoreInfo {
-        const char* label;
-        bool* config_flag;
-    };
+        for (size_t i = 0; i < config.class_settings.size(); ++i) {
+            ImGui::PushID(static_cast<int>(i));
+            ClassSetting& setting = config.class_settings[i];
 
-    std::vector<ClassIgnoreInfo> ignore_flags = {
-        {"Ignore Player (0)", &config.ignore_class_0},
-        {"Ignore Bot (1)", &config.ignore_class_1},
-        {"Ignore Weapon (2)", &config.ignore_class_2},
-        {"Ignore Outline (3)", &config.ignore_class_3},
-        {"Ignore Dead Body (4)", &config.ignore_class_4},
-        {"Ignore Hideout Human (5)", &config.ignore_class_5},
-        {"Ignore Hideout Balls (6)", &config.ignore_class_6},
-        {"Ignore Head (7)", &config.ignore_class_7},
-        {"Ignore Smoke (8)", &config.ignore_class_8},
-        {"Ignore Fire (9)", &config.ignore_class_9},
-        {"Ignore Third Person (10)", &config.ignore_class_10}
-    };
+            ImGui::TableNextRow();
+            
+            ImGui::TableSetColumnIndex(0);
+            if (ImGui::InputInt("##ID", &setting.id, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue)) {
+                // ID changed, ensure it's unique or handle conflicts if necessary
+                // For now, direct change and save.
+                config.saveConfig();
+            }
 
-    // Display checkboxes in two columns for better layout
-    ImGui::Columns(2, "ClassIgnoreColumns", false);
-    int items_per_column = (ignore_flags.size() + 1) / 2; // Calculate items per column
+            ImGui::TableSetColumnIndex(1);
+            char name_buf[128];
+            strncpy(name_buf, setting.name.c_str(), sizeof(name_buf) - 1);
+            name_buf[sizeof(name_buf) - 1] = '\0';
+            if (ImGui::InputText("##Name", name_buf, sizeof(name_buf), ImGuiInputTextFlags_EnterReturnsTrue)) {
+                setting.name = name_buf;
+                config.saveConfig();
+            }
+             if (ImGui::IsItemDeactivatedAfterEdit() && setting.name != name_buf) { // Handle focus loss too
+                setting.name = name_buf;
+                config.saveConfig();
+            }
 
-    for (size_t i = 0; i < ignore_flags.size(); ++i) {
-        if (ImGui::Checkbox(ignore_flags[i].label, ignore_flags[i].config_flag)) {
-            config.saveConfig();
+            ImGui::TableSetColumnIndex(2);
+            if (ImGui::Checkbox("##Ignore", &setting.ignore)) {
+                config.saveConfig();
+            }
+
+            ImGui::TableSetColumnIndex(3);
+            if (ImGui::Button("Remove")) {
+                config.class_settings.erase(config.class_settings.begin() + i);
+                config.saveConfig();
+                ImGui::PopID(); // Pop before potentially continuing loop with decremented i
+                i--; // Adjust index due to removal
+                continue; // Important to re-evaluate loop condition and avoid skipping next element
+            }
+            ImGui::PopID();
         }
-        if (i == items_per_column - 1) {
-            ImGui::NextColumn(); // Move to the next column after half the items
+        ImGui::EndTable();
+    }
+
+    ImGui::Spacing();
+
+    // --- Add new class --- 
+    ImGui::Separator();
+    ImGui::Text("Add New Class:");
+    static int new_class_id = 0; // Start with 0 or suggest next available
+    static char new_class_name_buf[128] = "";
+    static bool new_class_ignore = false;
+
+    // Suggest next available ID
+    if (ImGui::Button("Suggest Next ID")) {
+        int max_id = -1;
+        if (!config.class_settings.empty()) {
+            for(const auto& cs : config.class_settings) {
+                if (cs.id > max_id) max_id = cs.id;
+            }
+            new_class_id = max_id + 1;
+        } else {
+            new_class_id = 0;
         }
     }
-    ImGui::Columns(1); // Return to single column layout
+    ImGui::SameLine();
+    ImGui::InputInt("New ID", &new_class_id);
+    ImGui::InputText("New Name", new_class_name_buf, sizeof(new_class_name_buf));
+    ImGui::Checkbox("Ignore New", &new_class_ignore);
+
+    if (ImGui::Button("Add Class")) {
+        bool id_exists = false;
+        for (const auto& cs : config.class_settings) {
+            if (cs.id == new_class_id) {
+                id_exists = true;
+                break;
+            }
+        }
+        std::string temp_name = new_class_name_buf;
+        if (!id_exists && !temp_name.empty()) {
+            config.class_settings.emplace_back(new_class_id, temp_name, new_class_ignore);
+            config.saveConfig();
+            // Reset for next entry
+            int max_id = -1;
+            if (!config.class_settings.empty()) {
+                 for(const auto& cs : config.class_settings) {
+                    if (cs.id > max_id) max_id = cs.id;
+                }
+                new_class_id = max_id + 1;
+            } else {
+                 new_class_id = 0;
+            }
+            new_class_name_buf[0] = '\0'; // Clear buffer
+            new_class_ignore = false;
+        }
+        // TODO: else display error (e.g., ImGui::TextColored(ImVec4(1,0,0,1), "Error: ID exists or name empty."))
+    }
+
     ImGui::Spacing();
 }

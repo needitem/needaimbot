@@ -333,20 +333,29 @@ void draw_mouse()
 
             ImGui::PushItemWidth(100);
             ImGui::Text("Process Noise (Q):"); ImGui::SameLine();
-            if (ImGui::InputFloat("##KalmanQ", &config.kalman_q, 0.001f, 0.01f, "%.3f")) {
-                config.kalman_q = std::max(0.0f, config.kalman_q); config.saveConfig();
+            float temp_q = static_cast<float>(config.kalman_q);
+            if (ImGui::InputFloat("##KalmanQ", &temp_q, 0.001f, 0.01f, "%.3f")) {
+                config.kalman_q = static_cast<double>(temp_q);
+                if (config.kalman_q < 0) config.kalman_q = 0; // Ensure non-negative
+                config.saveConfig();
             }
             if (ImGui::IsItemHovered()) SetWrappedTooltip("Represents the uncertainty in the target's movement model. Higher values trust measurements less.");
 
             ImGui::Text("Measurement Noise (R):"); ImGui::SameLine();
-            if (ImGui::InputFloat("##KalmanR", &config.kalman_r, 0.001f, 0.01f, "%.3f")) {
-                config.kalman_r = std::max(0.0f, config.kalman_r); config.saveConfig();
+            float temp_r = static_cast<float>(config.kalman_r);
+            if (ImGui::InputFloat("##KalmanR", &temp_r, 0.001f, 0.01f, "%.3f")) {
+                config.kalman_r = static_cast<double>(temp_r);
+                if (config.kalman_r < 0) config.kalman_r = 0; // Ensure non-negative
+                config.saveConfig();
             }
             if (ImGui::IsItemHovered()) SetWrappedTooltip("Represents the uncertainty in the measurements (detection). Higher values trust the model prediction more.");
 
             ImGui::Text("Estimate Error (P):"); ImGui::SameLine();
-            if (ImGui::InputFloat("##KalmanP", &config.kalman_p, 0.01f, 0.1f, "%.2f")) {
-                 config.kalman_p = std::max(0.0f, config.kalman_p); config.saveConfig();
+            float temp_p = static_cast<float>(config.kalman_p);
+            if (ImGui::InputFloat("##KalmanP", &temp_p, 0.001f, 0.01f, "%.3f")) {
+                 config.kalman_p = static_cast<double>(temp_p);
+                if (config.kalman_p < 0) config.kalman_p = 0; // Ensure non-negative
+                config.saveConfig();
             }
             if (ImGui::IsItemHovered()) SetWrappedTooltip("Initial estimate of the state covariance. Represents the initial uncertainty about the target's state.");
             ImGui::PopItemWidth();

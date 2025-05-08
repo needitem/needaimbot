@@ -43,8 +43,22 @@ extern std::atomic<bool> detection_resolution_changed;
 // extern IScreenCapture* g_capture; // Removed global capture dependency
 
 extern Config config; // Declare external global config object
+extern std::mutex configMutex; // Added extern declaration
 
 static bool error_logged = false;
+
+// Declaration of the CUDA kernel (must match the .cu file)
+// This is a placeholder based on the new arguments. You MUST update your .cu file.
+extern cudaError_t filterDetectionsByClassIdGpu(
+    const Detection* decodedDetections,
+    int numDecodedDetections,
+    Detection* filteredDetections,
+    int* filteredCount,
+    const unsigned char* d_ignored_class_ids, // Changed to unsigned char*
+    int max_check_id,                        // Size of the d_ignored_class_ids array
+    int max_output_detections,
+    cudaStream_t stream
+);
 
 Detector::Detector()
     : frameReady(false),
@@ -66,7 +80,8 @@ Detector::Detector()
     m_hasBestTarget(false),
     m_bestTargetIndexHost(-1),
     m_finalDetectionsCountHost(0),
-    m_classFilteredCountHost(0)
+    m_classFilteredCountHost(0),
+    m_d_ignore_flags_gpu(nullptr)
 {
     // No CUDA initialization here anymore
 }
@@ -104,6 +119,11 @@ Detector::~Detector()
     freeGpuBuffer(m_classFilteredCountGpu);
     freeGpuBuffer(m_scoresGpu);
     freeGpuBuffer(m_bestTargetIndexGpu);
+
+    if (m_d_ignore_flags_gpu) {
+        cudaFree(m_d_ignore_flags_gpu);
+        m_d_ignore_flags_gpu = nullptr;
+    }
 }
 
 void Detector::getInputNames()
@@ -760,84 +780,105 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
     // Copy decoded count from GPU to Host
     int decodedCountHost = 0;
     cudaError_t decodeCountCopyErr = cudaMemcpyAsync(&decodedCountHost, m_decodedCountGpu, sizeof(int), cudaMemcpyDeviceToHost, stream);
-    
-    // --- Synchronization Point 1: Ensure decode count copy is done --- 
-    cudaStreamSynchronize(stream); // Synchronize after decode count copy
+    cudaStreamSynchronize(stream);
     if (decodeCountCopyErr != cudaSuccess) {
-         std::cerr << "[Detector] Failed to copy decoded count DtoH: " << cudaGetErrorString(decodeCountCopyErr) << std::endl;
-         // Ensure subsequent steps know there are no detections
-         cudaMemsetAsync(m_finalDetectionsCountGpu, 0, sizeof(int), stream);
-         return; // Cannot proceed without count
+        std::cerr << "[Detector] Failed to copy decoded count DtoH: " << cudaGetErrorString(decodeCountCopyErr) << std::endl;
+        cudaMemsetAsync(m_finalDetectionsCountGpu, 0, sizeof(int), stream);
+        return;
     }
 
-    // --- Class ID Filtering Stage (Moved Before NMS) --- 
-    int classFilteredCountHost = 0; // Host count for filtered results
+    // --- Class ID Filtering Stage --- 
+    int classFilteredCountHost = 0;
     if (decodedCountHost > 0) {
-        int validDecodedDetections = std::min(decodedCountHost, maxDecodedDetections); // Use maxDecodedDetections limit
+        int validDecodedDetections = std::min(decodedCountHost, static_cast<int>(config.max_detections * 2));
         if (validDecodedDetections > 0) {
-             // Call the GPU filter function
-             cudaError_t filterErr = filterDetectionsByClassIdGpu(
-                 m_decodedDetectionsGpu,      // Input: Decoded detections
-                 validDecodedDetections,        // Number of input detections
-                 m_classFilteredDetectionsGpu, // Output: Filtered detections buffer
-                 m_classFilteredCountGpu,   // Output: Filtered count buffer
-                 config.ignore_class_0,
-                 config.ignore_class_1,
-                 config.ignore_class_2,
-                 config.ignore_class_3,
-                 config.ignore_class_4,
-                 config.ignore_class_5,
-                 config.ignore_class_6,
-                 config.ignore_class_7, // Note: might be redundant if disable_headshot is true
-                 config.ignore_class_8,
-                 config.ignore_class_9,
-                 config.ignore_class_10,
-                 config.max_detections,      // Use config value instead of undefined constant
-                 stream                      // CUDA stream
-             );
-             if (!checkCudaError(filterErr, "filtering detections by class ID")) return;
+            
+            // 1. Prepare host-side ignore flags (vector<bool>)
+            std::vector<bool> host_ignored_flags(MAX_CLASSES_FOR_FILTERING, true);
+            {
+                std::lock_guard<std::mutex> lock(configMutex);
+                for (const auto& class_setting : config.class_settings) {
+                    if (class_setting.id >= 0 && class_setting.id < MAX_CLASSES_FOR_FILTERING) {
+                        host_ignored_flags[class_setting.id] = class_setting.ignore;
+                    }
+                }
+            }
 
-             // Get the count of detections after class filtering
-             cudaError_t filteredCountCopyErr = cudaMemcpyAsync(&classFilteredCountHost, m_classFilteredCountGpu, sizeof(int), cudaMemcpyDeviceToHost, stream);
-             
-             // --- Synchronization Point 2: Ensure filter count copy is done --- 
-             cudaStreamSynchronize(stream); // Synchronize after filter count copy
-             if (filteredCountCopyErr != cudaSuccess) {
-                 std::cerr << "[Detector] Failed to copy filtered detection count DtoH: " << cudaGetErrorString(filteredCountCopyErr) << std::endl;
-                 classFilteredCountHost = 0;
-             }
+            // 2. Convert vector<bool> to vector<unsigned char>
+            std::vector<unsigned char> host_ignored_uchar_flags(MAX_CLASSES_FOR_FILTERING);
+            for (size_t i = 0; i < MAX_CLASSES_FOR_FILTERING; ++i) {
+                host_ignored_uchar_flags[i] = static_cast<unsigned char>(host_ignored_flags[i]);
+            }
+
+            // 3. Copy host_ignored_uchar_flags to GPU buffer m_d_ignore_flags_gpu
+            if (m_d_ignore_flags_gpu) {
+                // Use host_ignored_uchar_flags.data() and correct size
+                cudaError_t copyErr = cudaMemcpyAsync(m_d_ignore_flags_gpu, host_ignored_uchar_flags.data(), 
+                                                      MAX_CLASSES_FOR_FILTERING * sizeof(unsigned char), 
+                                                      cudaMemcpyHostToDevice, stream);
+                if (!checkCudaError(copyErr, "copying ignore flags (uchar) to GPU")) {
+                    cudaMemsetAsync(m_finalDetectionsCountGpu, 0, sizeof(int), stream);
+                    return;
+                }
+            } else {
+                std::cerr << "[Detector] Ignore flags GPU buffer not allocated!" << std::endl;
+                cudaMemsetAsync(m_finalDetectionsCountGpu, 0, sizeof(int), stream);
+                return;
+            }
+
+            // 4. Call the GPU filter function (expecting unsigned char*)
+            cudaError_t filterErr = filterDetectionsByClassIdGpu(
+                m_decodedDetectionsGpu,         
+                validDecodedDetections,           
+                m_classFilteredDetectionsGpu,    
+                m_classFilteredCountGpu,      
+                m_d_ignore_flags_gpu,           // Pass unsigned char* buffer
+                MAX_CLASSES_FOR_FILTERING,      
+                config.max_detections,          
+                stream                          
+            );
+            if (!checkCudaError(filterErr, "filtering detections by class ID GPU")) {
+                 cudaMemsetAsync(m_finalDetectionsCountGpu, 0, sizeof(int), stream);
+                 return;
+            }
+
+            cudaError_t filteredCountCopyErr = cudaMemcpyAsync(&classFilteredCountHost, m_classFilteredCountGpu, sizeof(int), cudaMemcpyDeviceToHost, stream);
+            cudaStreamSynchronize(stream);
+            if (filteredCountCopyErr != cudaSuccess) {
+                std::cerr << "[Detector] Failed to copy filtered detection count DtoH: " << cudaGetErrorString(filteredCountCopyErr) << std::endl;
+                classFilteredCountHost = 0;
+            }
         } else {
-            // No valid decoded detections
             classFilteredCountHost = 0;
             cudaMemsetAsync(m_classFilteredCountGpu, 0, sizeof(int), stream);
         }
     } else {
-         // No decoded detections
-         classFilteredCountHost = 0;
-         cudaMemsetAsync(m_classFilteredCountGpu, 0, sizeof(int), stream);
+        classFilteredCountHost = 0;
+        cudaMemsetAsync(m_classFilteredCountGpu, 0, sizeof(int), stream);
     }
 
     // --- NMS Stage (Using class-filtered detections) ---
     if (classFilteredCountHost > 0) {
-        // Use the potentially capped host count for NMS input
-        int inputNmsCount = std::min(classFilteredCountHost, (int)config.max_detections); 
-
-        try {
-            NMSGpu(
-                m_classFilteredDetectionsGpu, // Input: Class-filtered detections
-                inputNmsCount,              // Number of filtered detections
-                m_finalDetectionsGpu,         // Output: Final detections after NMS
-                m_finalDetectionsCountGpu,    // Output: Final count after NMS
-                (int)config.max_detections, // Max output detections for NMS
-                config.nms_threshold,
-                stream
-            );
-        } catch (const std::exception& e) {
-             std::cerr << "[Detector] Exception during NMSGpu call: " << e.what() << std::endl;
-             cudaMemsetAsync(m_finalDetectionsCountGpu, 0, sizeof(int), stream); // Reset final count on error
+        int inputNmsCount = std::min(classFilteredCountHost, static_cast<int>(config.max_detections)); 
+        if (inputNmsCount > 0) {
+            try {
+                NMSGpu(
+                    m_classFilteredDetectionsGpu,
+                    inputNmsCount,            
+                    m_finalDetectionsGpu,       
+                    m_finalDetectionsCountGpu,  
+                    static_cast<int>(config.max_detections), 
+                    config.nms_threshold,
+                    stream
+                );
+            } catch (const std::exception& e) {
+                 std::cerr << "[Detector] Exception during NMSGpu call: " << e.what() << std::endl;
+                 cudaMemsetAsync(m_finalDetectionsCountGpu, 0, sizeof(int), stream);
+            }
+        } else {
+            cudaMemsetAsync(m_finalDetectionsCountGpu, 0, sizeof(int), stream);
         }
     } else {
-         // No detections passed the class filter, so no NMS needed. Ensure final count is 0.
          cudaMemsetAsync(m_finalDetectionsCountGpu, 0, sizeof(int), stream);
     }
 }
@@ -938,9 +979,17 @@ void Detector::initializeBuffers() {
     allocateGpuBuffer(m_scoresGpu, config.max_detections, "scores");
     allocateGpuBuffer(m_bestTargetIndexGpu, 1, "best index");
 
-    // Initialize counts to zero on GPU using the member stream
+    // Allocate GPU memory for ignore flags (as unsigned char)
+    cudaError_t err = cudaMalloc(&m_d_ignore_flags_gpu, MAX_CLASSES_FOR_FILTERING * sizeof(unsigned char));
+    if (err != cudaSuccess) {
+        std::cerr << "[CUDA] Failed to allocate GPU buffer for ignore flags: " << cudaGetErrorString(err) << std::endl;
+        // Handle error
+    } 
+    // No initialization needed here, will be updated each frame
+
+    // Initialize counts to zero on GPU
     if (m_decodedCountGpu) cudaMemsetAsync(m_decodedCountGpu, 0, sizeof(int), stream);
     if (m_finalDetectionsCountGpu) cudaMemsetAsync(m_finalDetectionsCountGpu, 0, sizeof(int), stream);
     if (m_classFilteredCountGpu) cudaMemsetAsync(m_classFilteredCountGpu, 0, sizeof(int), stream);
-    if (m_bestTargetIndexGpu) cudaMemsetAsync(m_bestTargetIndexGpu, 0xFF, sizeof(int), stream); // Initialize index to -1 (0xFFFFFFFF)
+    if (m_bestTargetIndexGpu) cudaMemsetAsync(m_bestTargetIndexGpu, 0xFF, sizeof(int), stream);
 }
