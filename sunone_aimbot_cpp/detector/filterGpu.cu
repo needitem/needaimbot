@@ -10,17 +10,8 @@ __global__ void filterDetectionsByClassIdKernel(
     int num_input_detections,
     Detection* output_detections,
     int* output_count, // Assumed to be initialized to 0 on GPU
-    bool ignore_class_0,
-    bool ignore_class_1,
-    bool ignore_class_2,
-    bool ignore_class_3,
-    bool ignore_class_4,
-    bool ignore_class_5,
-    bool ignore_class_6,
-    bool ignore_class_7,
-    bool ignore_class_8,
-    bool ignore_class_9,
-    bool ignore_class_10,
+    const unsigned char* d_ignored_class_ids, // Changed from individual bools
+    int max_check_id,                         // New parameter: size of d_ignored_class_ids
     int max_output_detections)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -29,19 +20,16 @@ __global__ void filterDetectionsByClassIdKernel(
         const Detection& det = input_detections[idx];
         bool should_keep = true; // Default to keeping the detection
 
-        // --- Simplified Filtering Logic ---
-        // Check individual class ignore flags
-        if (ignore_class_0 && det.classId == 0) { should_keep = false; }
-        else if (ignore_class_1 && det.classId == 1) { should_keep = false; }
-        else if (ignore_class_2 && det.classId == 2) { should_keep = false; }
-        else if (ignore_class_3 && det.classId == 3) { should_keep = false; }
-        else if (ignore_class_4 && det.classId == 4) { should_keep = false; }
-        else if (ignore_class_5 && det.classId == 5) { should_keep = false; }
-        else if (ignore_class_6 && det.classId == 6) { should_keep = false; }
-        else if (ignore_class_7 && det.classId == 7) { should_keep = false; } // Head filtering now solely based on this
-        else if (ignore_class_8 && det.classId == 8) { should_keep = false; }
-        else if (ignore_class_9 && det.classId == 9) { should_keep = false; }
-        else if (ignore_class_10 && det.classId == 10) { should_keep = false; }
+        // --- Updated Filtering Logic ---
+        // Check if the classId is within the bounds of the ignore array
+        // and if the flag for this classId is set (1 means ignore)
+        if (det.classId >= 0 && det.classId < max_check_id) {
+            if (d_ignored_class_ids[det.classId]) { // 1 (true) means ignore this class
+                should_keep = false;
+            }
+        }
+        // Optional: else if classId is out of bounds, decide whether to keep or discard.
+        // Current behavior: if classId is out of bounds of d_ignored_class_ids, it will be kept.
 
         if (should_keep) {
             // Atomically increment the output count and get the index to write to
@@ -63,17 +51,8 @@ cudaError_t filterDetectionsByClassIdGpu(
     int num_input_detections,
     Detection* d_output_detections,
     int* d_output_count, // Remember to cudaMemset this to 0 before calling!
-    bool ignore_class_0,
-    bool ignore_class_1,
-    bool ignore_class_2,
-    bool ignore_class_3,
-    bool ignore_class_4,
-    bool ignore_class_5,
-    bool ignore_class_6,
-    bool ignore_class_7,
-    bool ignore_class_8,
-    bool ignore_class_9,
-    bool ignore_class_10,
+    const unsigned char* d_ignored_class_ids, // Changed from individual bools
+    int max_check_id,                         // New parameter
     int max_output_detections,
     cudaStream_t stream)
 {
@@ -98,17 +77,8 @@ cudaError_t filterDetectionsByClassIdGpu(
         num_input_detections,
         d_output_detections,
         d_output_count,
-        ignore_class_0,
-        ignore_class_1,
-        ignore_class_2,
-        ignore_class_3,
-        ignore_class_4,
-        ignore_class_5,
-        ignore_class_6,
-        ignore_class_7,
-        ignore_class_8,
-        ignore_class_9,
-        ignore_class_10,
+        d_ignored_class_ids, // Pass the array
+        max_check_id,        // Pass its size
         max_output_detections);
 
     return cudaGetLastError();
