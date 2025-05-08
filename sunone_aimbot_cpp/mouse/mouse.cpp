@@ -401,6 +401,12 @@ void MouseThread::resetPredictor()
     }
 }
 
+bool MouseThread::hasActivePredictor() const
+{
+    std::lock_guard<std::mutex> lock(predictor_mutex_); // Ensure thread-safe access
+    return predictor_ != nullptr;
+}
+
 void MouseThread::setInputMethod(std::unique_ptr<InputMethod> new_method)
 {
     std::lock_guard<std::mutex> lock(input_method_mutex);
