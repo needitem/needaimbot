@@ -285,8 +285,10 @@ void mouseThreadFunction(MouseThread &mouseThread)
 
                 if (current_target_identifier != last_target_identifier)
                 {
-                    std::cout << "[Mouse] New target acquired or target changed, resetting predictor." << std::endl;
-                    mouseThread.resetPredictor();
+                    if (mouseThread.hasActivePredictor()) {
+                        std::cout << "[Mouse] New target acquired or target changed, resetting predictor." << std::endl;
+                        mouseThread.resetPredictor();
+                    }
                     last_target_identifier = current_target_identifier;
                 }
 
@@ -317,8 +319,10 @@ void mouseThreadFunction(MouseThread &mouseThread)
             {
                 mouseThread.releaseMouse();
                 if (last_target_identifier != nullptr) {
-                    std::cout << "[Mouse] Target lost, resetting predictor." << std::endl;
-                    mouseThread.resetPredictor();
+                    if (mouseThread.hasActivePredictor()) {
+                        std::cout << "[Mouse] Target lost, resetting predictor." << std::endl;
+                        mouseThread.resetPredictor();
+                    }
                     last_target_identifier = nullptr;
                 }
             }
