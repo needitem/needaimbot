@@ -203,25 +203,27 @@ float MouseThread::calculateTargetDistanceSquared(const AimbotTarget &target) co
 {
     float dx = target.x + target.w * 0.5f - center_x;
     float target_center_y;
-    /*
-     Model Class IDs (from user):
-      0: player
-      1: bot
-      2: weapon
-      3: outline
-      4: dead_body
-      5: hideout_target_human
-      6: hideout_target_balls
-      7: head
-      8: smoke
-      9: fire
-      10: third_person
-    */
-    constexpr int HEAD_CLASS_ID = 7; // Class ID for head
 
-    if (!config.ignore_class_7 && target.classId == HEAD_CLASS_ID) {
+    int head_class_id_to_use = -1;
+    bool apply_head_offset = false;
+    {
+        std::lock_guard<std::mutex> lock(configMutex); // Protects access to config.class_settings and config.head_class_name
+        for (const auto& class_setting : config.class_settings) {
+            if (class_setting.name == config.head_class_name) {
+                head_class_id_to_use = class_setting.id;
+                if (!class_setting.ignore) { // Only apply head offset if the designated head class is not ignored
+                    apply_head_offset = true;
+                }
+                break;
+            }
+        }
+    }
+
+    if (apply_head_offset && target.classId == head_class_id_to_use) {
+        std::lock_guard<std::mutex> lock(configMutex); // Protects access to config.head_y_offset
         target_center_y = target.y + target.h * config.head_y_offset;
     } else {
+        std::lock_guard<std::mutex> lock(configMutex); // Protects access to config.body_y_offset
         target_center_y = target.y + target.h * config.body_y_offset;
     }
     float dy = target_center_y - center_y;
@@ -237,16 +239,29 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     Point2D raw_target_pos;
     raw_target_pos.x = target.x + target.w * 0.5f;
     
-    // Use configured offsets based on class ID
-    constexpr int HEAD_CLASS_ID = 7; 
-    float y_offset_multiplier = config.body_y_offset; // Default to body
+    float y_offset_multiplier_val; // Renamed from y_offset_multiplier to avoid conflict if it was a member
+    int head_class_id_to_use = -1;
+    bool apply_head_offset = false;
+
     {
         std::lock_guard<std::mutex> lock(configMutex);
-        if (!config.ignore_class_7 && target.classId == HEAD_CLASS_ID) {
-            y_offset_multiplier = config.head_y_offset;
+        for (const auto& class_setting : config.class_settings) {
+            if (class_setting.name == config.head_class_name) {
+                head_class_id_to_use = class_setting.id;
+                if (!class_setting.ignore) {
+                    apply_head_offset = true;
+                }
+                break;
+            }
+        }
+
+        if (apply_head_offset && target.classId == head_class_id_to_use) {
+            y_offset_multiplier_val = config.head_y_offset;
+        } else {
+            y_offset_multiplier_val = config.body_y_offset;
         } 
     }
-    raw_target_pos.y = target.y + target.h * y_offset_multiplier;
+    raw_target_pos.y = target.y + target.h * y_offset_multiplier_val;
 
     // 2. Update and Predict using the Predictor
     Point2D predicted_target_pos = raw_target_pos; // Default to raw if no predictor
@@ -259,7 +274,7 @@ void MouseThread::moveMouse(const AimbotTarget &target)
             // Predict the full position, but we'll only use the X component later
             predicted_target_pos = predictor_->predict(); 
         } else {
-            // If no predictor, reset target ID tracking (this comment seems out of place, predictor handles its own state)
+            // No predictor active; predicted_target_pos remains raw_target_pos.
         }
     }
 
