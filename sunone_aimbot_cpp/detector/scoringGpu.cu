@@ -42,7 +42,8 @@ __global__ void calculateTargetScoresGpuKernel(
     int frame_height,
     float distance_weight,
     float confidence_weight,
-    int head_class_id             // ID of the 'Head' class
+    int head_class_id,             // ID of the 'Head' class
+    float head_class_score_multiplier // New parameter for the multiplier
 ) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -64,7 +65,7 @@ __global__ void calculateTargetScoresGpuKernel(
 
         // Apply bonus for head class if applicable
         if (head_class_id != -1 && det.classId == head_class_id) {
-            d_scores[idx] *= 0.8f; // Hardcoded 20% bonus (multiplier 0.8f)
+            d_scores[idx] *= head_class_score_multiplier; // Use parameter
         }
     }
 }
@@ -83,6 +84,8 @@ cudaError_t calculateTargetScoresGpu(
         return cudaSuccess;
     }
 
+    const float head_bonus_multiplier_val = 0.8f; // Define the value here for clarity or pass from config if needed
+
     const int block_size = 256;
     const int grid_size = (num_detections + block_size - 1) / block_size;
 
@@ -94,7 +97,8 @@ cudaError_t calculateTargetScoresGpu(
         frame_height,
         distance_weight_config,
         confidence_weight_config,
-        head_class_id_param         // Pass head class ID
+        head_class_id_param,
+        head_bonus_multiplier_val // Pass the multiplier value to the kernel
     );
 
     return cudaGetLastError();
