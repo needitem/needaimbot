@@ -95,6 +95,8 @@ Detector::Detector()
     m_nms_d_indices(nullptr),
     m_host_ignore_flags_uchar(MAX_CLASSES_FOR_FILTERING, 1), // Initialize vector with default ignore (1=true)
     m_ignore_flags_need_update(true) // Set to true to force update on first run
+    , m_isTargetLocked(false) // Initialize target locking state
+    , m_lockedTargetLostFrames(0) // Initialize lost frames counter
 {
     // No CUDA initialization here anymore
 }
@@ -674,84 +676,128 @@ void Detector::inferenceThread()
                      m_finalDetectionsCountHost = 0;
                 }
 
-                // --- Scoring Stage (using final NMS detections, which are pre-filtered) ---
-                if (m_finalDetectionsCountHost > 0) {
-                    // Use the count after NMS for scoring
-                    int validDetectionsForScoring = std::min((int)config.max_detections, m_finalDetectionsCountHost);
-                    
-                    if (validDetectionsForScoring > 0) {
-                        // Score the final (class-filtered and NMS'd) detections
-                        calculateTargetScoresGpu(
-                            m_finalDetectionsGpu, // Use final detections
-                            validDetectionsForScoring,    // Use final count
-                            m_scoresGpu,
-                            config.detection_resolution,
-                            config.detection_resolution,
-                            1.0f, // Use hardcoded distance weight
-                            config.confidence_weight, // Pass confidence_weight from config
-                            m_headClassId            // Pass resolved head_class_id
-                            ,stream
-                        );
-                        cudaError_t scoreErr = cudaGetLastError();
-                        if(scoreErr != cudaSuccess) std::cerr << "[Detector] Error after calculateTargetScoresGpu: " << cudaGetErrorString(scoreErr) << std::endl;
+                m_hasBestTarget = false; // Reset before applying locking or scoring
+                bool performed_normal_scoring = false;
 
-                        // Find best target among scored detections
-                        cudaError_t findErr = findBestTargetGpu(
-                            m_scoresGpu,
-                            validDetectionsForScoring, // Use final count
-                            m_bestTargetIndexGpu,
-                            stream
-                        );
-                        if(findErr != cudaSuccess) std::cerr << "[Detector] Error after findBestTargetGpu: " << cudaGetErrorString(findErr) << std::endl;
+                if (config.enable_target_locking && m_isTargetLocked) {
+                    bool locked_target_reacquired = false;
+                    if (m_finalDetectionsCountHost > 0) {
+                        std::vector<Detection> current_frame_detections(m_finalDetectionsCountHost);
+                        cudaError_t copyDetectionsErr = cudaMemcpyAsync(current_frame_detections.data(), m_finalDetectionsGpu, 
+                                                                     m_finalDetectionsCountHost * sizeof(Detection), cudaMemcpyDeviceToHost, stream);
+                        cudaStreamSynchronize(stream); // Ensure copy is done before host access
 
-                        // Copy best index from GPU to Host
-                        cudaError_t indexCopyErr = cudaMemcpyAsync(
-                            &m_bestTargetIndexHost,
-                            m_bestTargetIndexGpu,
-                            sizeof(int),
-                            cudaMemcpyDeviceToHost,
-                            stream
-                        );
-                        
-                        // --- Synchronization Point: Ensure index copy is done --- 
-                        cudaStreamSynchronize(stream); // Synchronize after index copy
-                        if (indexCopyErr != cudaSuccess) {
-                            std::cerr << "[Detector] Failed to copy best index DtoH: " << cudaGetErrorString(indexCopyErr) << std::endl;
-                            m_bestTargetIndexHost = -1;
+                        if (copyDetectionsErr == cudaSuccess) {
+                            float best_iou = 0.0f;
+                            int best_candidate_idx = -1;
+
+                            for (int i = 0; i < m_finalDetectionsCountHost; ++i) {
+                                float iou = calculate_host_iou(m_lockedTargetInfo.box, current_frame_detections[i].box);
+                                if (iou > config.target_locking_iou_threshold && iou > best_iou) {
+                                    best_iou = iou;
+                                    best_candidate_idx = i;
+                                }
+                            }
+
+                            if (best_candidate_idx != -1) {
+                                m_lockedTargetInfo = current_frame_detections[best_candidate_idx];
+                                m_bestTargetHost = m_lockedTargetInfo;
+                                m_hasBestTarget = true;
+                                m_bestTargetIndexHost = best_candidate_idx; // Index within current_frame_detections
+                                m_lockedTargetLostFrames = 0;
+                                locked_target_reacquired = true;
+                            }
                         }
+                        else {
+                            std::cerr << "[Detector] Failed to copy final detections to host for locking: " << cudaGetErrorString(copyDetectionsErr) << std::endl;
+                        }
+                    }
 
-                        // Check if the best index is valid within the *final* detections
-                        if (m_bestTargetIndexHost >= 0 && m_bestTargetIndexHost < validDetectionsForScoring) {
-                            // Copy the best target *from the final NMS buffer*
-                            cudaError_t targetCopyErr = cudaMemcpyAsync(
-                                &m_bestTargetHost,                                      // Dest: Host struct
-                                m_finalDetectionsGpu + m_bestTargetIndexHost, // Src: Element in *final* GPU array
-                                sizeof(Detection),                                      // Size of one detection
+                    if (!locked_target_reacquired) {
+                        m_lockedTargetLostFrames++;
+                        if (m_lockedTargetLostFrames > config.target_locking_max_lost_frames) {
+                            m_isTargetLocked = false; // Unlock
+                        }
+                        // If still locked but target not found this frame, m_hasBestTarget remains false
+                    }
+                }
+
+                // If target locking is disabled, or no target is locked, or lock was just lost,
+                // or if a locked target was not reacquired (and we are not in the grace period of lost frames for an active lock)
+                if (!m_hasBestTarget && (!config.enable_target_locking || !m_isTargetLocked)) {
+                    performed_normal_scoring = true;
+                    if (m_finalDetectionsCountHost > 0) {
+                        int validDetectionsForScoring = std::min((int)config.max_detections, m_finalDetectionsCountHost);
+                        if (validDetectionsForScoring > 0) {
+                             calculateTargetScoresGpu(
+                                m_finalDetectionsGpu, 
+                                validDetectionsForScoring,    
+                                m_scoresGpu,
+                                config.detection_resolution,
+                                config.detection_resolution,
+                                1.0f, 
+                                config.confidence_weight, 
+                                m_headClassId 
+                                ,stream
+                            );
+                            cudaError_t scoreErr = cudaGetLastError();
+                            if(scoreErr != cudaSuccess) std::cerr << "[Detector] Error after calculateTargetScoresGpu: " << cudaGetErrorString(scoreErr) << std::endl;
+
+                            cudaError_t findErr = findBestTargetGpu(
+                                m_scoresGpu,
+                                validDetectionsForScoring, 
+                                m_bestTargetIndexGpu,
+                                stream
+                            );
+                            if(findErr != cudaSuccess) std::cerr << "[Detector] Error after findBestTargetGpu: " << cudaGetErrorString(findErr) << std::endl;
+
+                            cudaError_t indexCopyErr = cudaMemcpyAsync(
+                                &m_bestTargetIndexHost,
+                                m_bestTargetIndexGpu,
+                                sizeof(int),
                                 cudaMemcpyDeviceToHost,
                                 stream
                             );
-                            // --- Synchronization Point: Ensure target copy is done --- 
-                            cudaStreamSynchronize(stream); // Synchronize after target copy
-                            if (targetCopyErr != cudaSuccess) {
-                                std::cerr << "[Detector] Failed to copy best target DtoH: " << cudaGetErrorString(targetCopyErr) << std::endl;
-                                m_hasBestTarget = false;
+                            cudaStreamSynchronize(stream); 
+                            if (indexCopyErr != cudaSuccess) {
+                                std::cerr << "[Detector] Failed to copy best index DtoH: " << cudaGetErrorString(indexCopyErr) << std::endl;
+                                m_bestTargetIndexHost = -1;
+                            }
+
+                            if (m_bestTargetIndexHost >= 0 && m_bestTargetIndexHost < validDetectionsForScoring) {
+                                cudaError_t targetCopyErr = cudaMemcpyAsync(
+                                    &m_bestTargetHost,                                      
+                                    m_finalDetectionsGpu + m_bestTargetIndexHost, 
+                                    sizeof(Detection),                                      
+                                    cudaMemcpyDeviceToHost,
+                                    stream
+                                ); 
+                                cudaStreamSynchronize(stream); 
+                                if (targetCopyErr != cudaSuccess) {
+                                    std::cerr << "[Detector] Failed to copy best target DtoH: " << cudaGetErrorString(targetCopyErr) << std::endl;
+                                    m_hasBestTarget = false;
+                                } else {
+                                    m_hasBestTarget = true;
+                                }
                             } else {
-                                m_hasBestTarget = true;
+                               m_bestTargetIndexHost = -1;
+                               m_hasBestTarget = false;
                             }
                         } else {
-                           // Best index out of bounds or negative
-                           m_bestTargetIndexHost = -1;
-                           m_hasBestTarget = false;
+                             m_bestTargetIndexHost = -1;
+                             m_hasBestTarget = false;
                         }
                     } else {
-                         // No valid detections after NMS for scoring
                          m_bestTargetIndexHost = -1;
                          m_hasBestTarget = false;
                     }
-                } else {
-                     // No detections passed NMS (or class filter before NMS)
-                     m_bestTargetIndexHost = -1;
-                     m_hasBestTarget = false;
+
+                    // If locking is enabled, and a new target was found by scoring, and we are not currently locked (or just lost the lock)
+                    if (config.enable_target_locking && m_hasBestTarget && !m_isTargetLocked) {
+                        m_isTargetLocked = true;
+                        m_lockedTargetInfo = m_bestTargetHost;
+                        m_lockedTargetLostFrames = 0;
+                    }
                 }
 
                 // Notify that detection is complete
@@ -1062,4 +1108,23 @@ void Detector::initializeBuffers() {
     if (m_finalDetectionsCountGpu) cudaMemsetAsync(m_finalDetectionsCountGpu, 0, sizeof(int), stream);
     if (m_classFilteredCountGpu) cudaMemsetAsync(m_classFilteredCountGpu, 0, sizeof(int), stream);
     if (m_bestTargetIndexGpu) cudaMemsetAsync(m_bestTargetIndexGpu, 0xFF, sizeof(int), stream);
+}
+
+// Helper function to calculate Intersection over Union (IoU) on the host
+float Detector::calculate_host_iou(const cv::Rect& box1, const cv::Rect& box2) {
+    int xA = std::max(box1.x, box2.x);
+    int yA = std::max(box1.y, box2.y);
+    int xB = std::min(box1.x + box1.width, box2.x + box2.width);
+    int yB = std::min(box1.y + box1.height, box2.y + box2.height);
+
+    // Intersection area
+    int interArea = std::max(0, xB - xA) * std::max(0, yB - yA);
+
+    // Union area
+    int box1Area = box1.width * box1.height;
+    int box2Area = box2.width * box2.height;
+    float unionArea = static_cast<float>(box1Area + box2Area - interArea);
+
+    // Compute IoU
+    return (unionArea > 0.0f) ? static_cast<float>(interArea) / unionArea : 0.0f;
 }

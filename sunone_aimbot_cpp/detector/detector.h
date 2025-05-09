@@ -99,6 +99,11 @@ public:
     bool m_hasBestTarget = false;          // Flag indicating if a valid target was found
     int m_headClassId = -1;                // ID of the head class, resolved from config
 
+    // Target Locking State
+    bool m_isTargetLocked;
+    Detection m_lockedTargetInfo;       // Stores information of the currently locked target
+    int m_lockedTargetLostFrames;       // Counter for frames the locked target has been missing
+
     // New member for GPU ignore flags (using unsigned char for CUDA compatibility)
     // bool* m_d_ignore_flags_gpu = nullptr; // Old type
     unsigned char* m_d_ignore_flags_gpu = nullptr;
@@ -122,6 +127,7 @@ public:
     bool isCudaContextInitialized() const { return m_cudaContextInitialized; } // Getter for the flag
 
 private:
+    static float calculate_host_iou(const cv::Rect& box1, const cv::Rect& box2); // Declare as private static
     bool m_cudaContextInitialized = false; // Add this flag
     std::unique_ptr<nvinfer1::IRuntime> runtime;
     std::unique_ptr<nvinfer1::ICudaEngine> engine;
