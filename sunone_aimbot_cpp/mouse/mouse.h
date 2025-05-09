@@ -35,6 +35,7 @@ class MouseThread
 private:
     std::unique_ptr<PIDController2D> pid_controller;
     std::unique_ptr<InputMethod> input_method;
+    std::mutex input_method_mutex;
 
     // Performance tracking callback
     ErrorTrackingCallback error_callback;
@@ -55,15 +56,12 @@ private:
     std::atomic<bool> target_detected{false};
     std::atomic<bool> mouse_pressed{false};
 
-    // Simplified target tracking
-    AimbotTarget *current_target;
-
     // Predictor
     std::unique_ptr<IPredictor> predictor_; // Pointer to the current predictor
     mutable std::mutex predictor_mutex_;        // Mutex to protect predictor access/changes
+    mutable std::mutex member_data_mutex_;      // Mutex to protect access to member data like screen dimensions, config values copied to members
 
     int last_applied_dx_ = 0; // Added: Stores the last applied mouse dx
-    int last_applied_dy_ = 0; // Added: Stores the last applied mouse dy
 
     float calculateTargetDistanceSquared(const AimbotTarget &target) const;
     void initializeInputMethod(SerialConnection *serialConnection, GhubMouse *gHub);
@@ -95,15 +93,14 @@ public:
     void enableErrorTracking(const ErrorTrackingCallback& callback);
     void disableErrorTracking();
 
-    std::mutex input_method_mutex;
     void setInputMethod(std::unique_ptr<InputMethod> new_method);
     void setPredictor(const std::string& algorithm_name); // Method to set the predictor
     void resetPredictor(); // Method to reset the current predictor state
     bool hasActivePredictor() const; // Method to check if a predictor is active
     
-    float& getScreenWidth() { return screen_width; }
-    float& getScreenHeight() { return screen_height; }
-    float& getScopeMultiplier() { return bScope_multiplier; }
+    float getScreenWidth() { std::lock_guard<std::mutex> lock(member_data_mutex_); return screen_width; }
+    float getScreenHeight() { std::lock_guard<std::mutex> lock(member_data_mutex_); return screen_height; }
+    float getScopeMultiplier() { std::lock_guard<std::mutex> lock(member_data_mutex_); return bScope_multiplier; }
     
     // 타겟 감지 상태를 가져오는 메소드 추가
     bool isTargetDetected() const { return target_detected.load(); }

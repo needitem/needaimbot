@@ -115,7 +115,10 @@ void MouseThread::updateConfig(
     float norecoil_ms
     )
 {
-    initializeScreen(resolution, bScope_multiplier, norecoil_ms);
+    {
+        std::lock_guard<std::mutex> lock(member_data_mutex_); // Lock for screen/timing params
+        initializeScreen(resolution, bScope_multiplier, norecoil_ms);
+    }
     pid_controller->updateSeparatedParameters(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
     // Note: Predictor is NOT updated here. Call setPredictor explicitly if algo changes.
 }
@@ -159,28 +162,47 @@ void MouseThread::setPredictor(const std::string& algorithm_name) {
 
 Eigen::Vector2f MouseThread::calculateMovement(const Eigen::Vector2f &target_pos)
 {
-    float error_x = target_pos[0] - center_x;
-    float error_y = target_pos[1] - center_y;
+    float current_center_x, current_center_y;
+    float current_move_scale_x, current_move_scale_y;
+    {
+        std::lock_guard<std::mutex> lock(member_data_mutex_); // Protect reads of member data
+        current_center_x = this->center_x;
+        current_center_y = this->center_y;
+        current_move_scale_x = this->move_scale_x;
+        current_move_scale_y = this->move_scale_y;
+    }
+
+    float error_x = target_pos[0] - current_center_x;
+    float error_y = target_pos[1] - current_center_y;
     
     Eigen::Vector2f error(error_x, error_y);
     Eigen::Vector2f pid_output = pid_controller->calculate(error);
 
-    float result_x = pid_output[0] * move_scale_x;
-    float result_y = pid_output[1] * move_scale_y;
+    float result_x = pid_output[0] * current_move_scale_x;
+    float result_y = pid_output[1] * current_move_scale_y;
     
     return Eigen::Vector2f(result_x, result_y);
 }
 
 bool MouseThread::checkTargetInScope(float target_x, float target_y, float target_w, float target_h, float reduction_factor)
 {
-    static const float screen_margin_x = screen_width * SCOPE_MARGIN;
-    static const float screen_margin_y = screen_height * SCOPE_MARGIN;
+    float current_screen_width, current_screen_height, current_center_x, current_center_y;
+    {
+        std::lock_guard<std::mutex> lock(member_data_mutex_); // Protect reads of member data
+        current_screen_width = this->screen_width;
+        current_screen_height = this->screen_height;
+        current_center_x = this->center_x;
+        current_center_y = this->center_y;
+    }
+
+    const float screen_margin_x = current_screen_width * SCOPE_MARGIN; // Use read value
+    const float screen_margin_y = current_screen_height * SCOPE_MARGIN; // Use read value
     
-    float target_center_x = target_x + target_w * 0.5f;
-    float target_center_y = target_y + target_h * 0.5f;
+    float target_center_x_val = target_x + target_w * 0.5f;
+    float target_center_y_val = target_y + target_h * 0.5f;
     
-    float diff_x = std::abs(target_center_x - center_x);
-    float diff_y = std::abs(target_center_y - center_y);
+    float diff_x = std::abs(target_center_x_val - current_center_x); // Use read value
+    float diff_y = std::abs(target_center_y_val - current_center_y); // Use read value
     
     if (diff_x > screen_margin_x || diff_y > screen_margin_y)
     {
@@ -190,26 +212,38 @@ bool MouseThread::checkTargetInScope(float target_x, float target_y, float targe
     float reduced_half_w = target_w * reduction_factor * 0.5f;
     float reduced_half_h = target_h * reduction_factor * 0.5f;
     
-    float min_x = target_center_x - reduced_half_w;
-    float max_x = target_center_x + reduced_half_w;
-    float min_y = target_center_y - reduced_half_h;
-    float max_y = target_center_y + reduced_half_h;
+    float min_x = target_center_x_val - reduced_half_w;
+    float max_x = target_center_x_val + reduced_half_w;
+    float min_y = target_center_y_val - reduced_half_h;
+    float max_y = target_center_y_val + reduced_half_h;
     
-    return (center_x >= min_x && center_x <= max_x && 
-            center_y >= min_y && center_y <= max_y);
+    return (current_center_x >= min_x && current_center_x <= max_x && 
+            current_center_y >= min_y && current_center_y <= max_y); // Use read values
 }
 
 float MouseThread::calculateTargetDistanceSquared(const AimbotTarget &target) const
 {
-    float dx = target.x + target.w * 0.5f - center_x;
-    float target_center_y;
+    float current_center_x, current_center_y;
+    {
+        std::lock_guard<std::mutex> lock(member_data_mutex_); // Protect reads of member data
+        current_center_x = this->center_x;
+        current_center_y = this->center_y;
+    }
+
+    float dx = target.x + target.w * 0.5f - current_center_x;
+    float target_center_y_val;
 
     int head_class_id_to_use = -1;
     bool apply_head_offset = false;
+    float head_y_offset_val; // To store config.head_y_offset
+    float body_y_offset_val; // To store config.body_y_offset
+    std::string head_class_name_val; // To store config.head_class_name
+
     {
-        std::lock_guard<std::mutex> lock(configMutex); // Protects access to config.class_settings and config.head_class_name
+        std::lock_guard<std::mutex> lock(configMutex); // Protects access to config
+        head_class_name_val = config.head_class_name; // Copy needed value
         for (const auto& class_setting : config.class_settings) {
-            if (class_setting.name == config.head_class_name) {
+            if (class_setting.name == head_class_name_val) {
                 head_class_id_to_use = class_setting.id;
                 if (!class_setting.ignore) { // Only apply head offset if the designated head class is not ignored
                     apply_head_offset = true;
@@ -217,23 +251,31 @@ float MouseThread::calculateTargetDistanceSquared(const AimbotTarget &target) co
                 break;
             }
         }
+        head_y_offset_val = config.head_y_offset; // Copy needed value
+        body_y_offset_val = config.body_y_offset; // Copy needed value
     }
 
     if (apply_head_offset && target.classId == head_class_id_to_use) {
-        std::lock_guard<std::mutex> lock(configMutex); // Protects access to config.head_y_offset
-        target_center_y = target.y + target.h * config.head_y_offset;
+        target_center_y_val = target.y + target.h * head_y_offset_val;
     } else {
-        std::lock_guard<std::mutex> lock(configMutex); // Protects access to config.body_y_offset
-        target_center_y = target.y + target.h * config.body_y_offset;
+        target_center_y_val = target.y + target.h * body_y_offset_val;
     }
-    float dy = target_center_y - center_y;
+    float dy = target_center_y_val - current_center_y;
     return dx * dx + dy * dy;
 }
 
 void MouseThread::moveMouse(const AimbotTarget &target)
 {
-    const float local_center_x = center_x;
-    const float local_center_y = center_y;
+    float current_center_x, current_center_y;
+    float current_move_scale_x, current_move_scale_y;
+
+    {
+        std::lock_guard<std::mutex> lock(member_data_mutex_); // Protect reads of member data
+        current_center_x = this->center_x;
+        current_center_y = this->center_y;
+        current_move_scale_x = this->move_scale_x;
+        current_move_scale_y = this->move_scale_y;
+    }
 
     // 1. Get Raw Target Position
     Point2D raw_target_pos;
@@ -279,8 +321,8 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     }
 
     // 3. Calculate Error based on Predicted X and Raw Y Position
-    float error_x = predicted_target_pos.x - local_center_x; // Use predicted X
-    float error_y = raw_target_pos.y - local_center_y;      // Use raw Y
+    float error_x = predicted_target_pos.x - current_center_x; // Use read value
+    float error_y = raw_target_pos.y - current_center_y;      // Use read value
 
     // Error tracking callback (optional)
     if (tracking_errors)
@@ -297,14 +339,20 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     Eigen::Vector2f pid_output = pid_controller->calculate(error);
 
     // 5. Scale PID Output for Mouse Movement
-    float move_x = pid_output.x() * move_scale_x;
-    float move_y = pid_output.y() * move_scale_y;
+    float move_x = pid_output.x() * current_move_scale_x; // Use read value
+    float move_y = pid_output.y() * current_move_scale_y; // Use read value
 
     int dx_int = static_cast<int>(std::round(move_x));
     int dy_int = static_cast<int>(std::round(move_y));
 
     // Check for disable upward aim button
-    if (isAnyKeyPressed(config.button_disable_upward_aim) && dy_int < 0)
+    bool disable_upward_aim_active = false;
+    {
+        std::lock_guard<std::mutex> lock(configMutex); // Protect config access
+        disable_upward_aim_active = isAnyKeyPressed(config.button_disable_upward_aim);
+    }
+
+    if (disable_upward_aim_active && dy_int < 0)
     {
         dy_int = 0; 
     }
@@ -362,7 +410,13 @@ void MouseThread::applyRecoilCompensation(float strength)
 
     auto now = std::chrono::steady_clock::now();
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_recoil_compensation_time);
-    auto required_delay = std::chrono::milliseconds(static_cast<long long>(this->norecoil_ms));
+    
+    long long current_norecoil_ms;
+    {
+        std::lock_guard<std::mutex> lock(member_data_mutex_); // Protect read of norecoil_ms
+        current_norecoil_ms = static_cast<long long>(this->norecoil_ms);
+    }
+    auto required_delay = std::chrono::milliseconds(current_norecoil_ms);
 
     if (elapsed >= required_delay)
     {

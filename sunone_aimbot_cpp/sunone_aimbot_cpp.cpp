@@ -115,24 +115,30 @@ namespace optimized {
 
 void initializeInputMethod()
 {
-    {
-        std::lock_guard<std::mutex> lock(globalMouseThread->input_method_mutex);
-
-        if (arduinoSerial)
-        {
-            delete arduinoSerial;
-            arduinoSerial = nullptr;
-        }
-
-        if (gHub)
-        {
-            gHub->mouse_close();
-            delete gHub;
-            gHub = nullptr;
-        }
+    // 1. Release/destroy the old InputMethod within MouseThread FIRST.
+    //    This ensures its destructor runs while arduinoSerial/gHub are still valid.
+    if (globalMouseThread) { 
+        globalMouseThread->setInputMethod(nullptr); 
     }
 
-    std::unique_ptr<InputMethod> input_method;
+    // 2. Now it's safe to delete the global resources.
+    if (arduinoSerial)
+    {
+        delete arduinoSerial;
+        arduinoSerial = nullptr;
+    }
+
+    if (gHub)
+    {
+        // Assuming mouse_close() is safe to call even if not fully open or already closed.
+        // If gHub can be non-null but not successfully initialized, mouse_close might need a check.
+        gHub->mouse_close(); 
+        delete gHub;
+        gHub = nullptr;
+    }
+
+    // 3. Create new resources and the new InputMethod
+    std::unique_ptr<InputMethod> new_input_method_instance; 
 
     if (config.input_method == "ARDUINO")
     {
@@ -141,71 +147,79 @@ void initializeInputMethod()
 
         if (arduinoSerial && arduinoSerial->isOpen())
         {
-            input_method = std::make_unique<SerialInputMethod>(arduinoSerial);
+            new_input_method_instance = std::make_unique<SerialInputMethod>(arduinoSerial);
+        } else {
+            std::cerr << "[Mouse] Failed to open Arduino serial port " << config.arduino_port << ". Defaulting to Win32." << std::endl;
+            if(arduinoSerial) { // Cleanup if new failed
+                delete arduinoSerial;
+                arduinoSerial = nullptr;
+            }
         }
     }
     else if (config.input_method == "GHUB")
     {
         std::cout << "[Mouse] Using Ghub method input." << std::endl;
-
         gHub = new GhubMouse();
-        if (!gHub->mouse_xy(0, 0))
+        if (gHub && gHub->mouse_xy(0, 0)) // mouse_xy for initialization check
         {
-            std::cerr << "[Ghub] Error with opening mouse." << std::endl;
-            delete gHub;
-            gHub = nullptr;
+            new_input_method_instance = std::make_unique<GHubInputMethod>(gHub);
         }
         else
         {
-            input_method = std::make_unique<GHubInputMethod>(gHub);
+            std::cerr << "[Ghub] Error with opening Ghub mouse. Defaulting to Win32." << std::endl;
+            if (gHub) { // Cleanup if new failed
+                 gHub->mouse_close(); // Attempt to close if partially initialized
+                 delete gHub;
+                 gHub = nullptr;
+            }
         }
     }
     else if (config.input_method == "KMBOX")
     {
         std::cout << "[Mouse] Using kmboxNet method input.\n";
         char ip[256], port[256], mac[256];
-        strncpy(ip, config.kmbox_ip.c_str(), sizeof(ip));
-        strncpy(port, config.kmbox_port.c_str(), sizeof(port));
-        strncpy(mac, config.kmbox_mac.c_str(), sizeof(mac));
-
-        // Ensure null-termination
+        strncpy(ip, config.kmbox_ip.c_str(), sizeof(ip) -1);
         ip[sizeof(ip) - 1] = '\0';
+        strncpy(port, config.kmbox_port.c_str(), sizeof(port) - 1);
         port[sizeof(port) - 1] = '\0';
+        strncpy(mac, config.kmbox_mac.c_str(), sizeof(mac) -1);
         mac[sizeof(mac) - 1] = '\0';
 
         int rc = kmNet_init(ip, port, mac);
-
         if (rc == 0)
         {
-            input_method = std::make_unique<KmboxInputMethod>();
+            new_input_method_instance = std::make_unique<KmboxInputMethod>();
         }
         else
         {
-            std::cerr << "[kmboxNet] init failed, code=" << rc << "\n";
+            std::cerr << "[kmboxNet] init failed, code=" << rc << ". Defaulting to Win32.\n";
         }
     }
     else if (config.input_method == "RAZER")
     {
         std::cout << "[Mouse] Using Razer method input." << std::endl;
         try {
-            input_method = std::make_unique<RZInputMethod>();
+            new_input_method_instance = std::make_unique<RZInputMethod>();
             std::cout << "[Mouse] Razer input initialized successfully." << std::endl;
         }
         catch (const std::exception& e) {
-            std::cerr << "[Mouse] Razer initialization failed: " << e.what() << std::endl;
-            std::cerr << "[Mouse] This might be an issue with the custom 'rzctl.dll' used by this program." << std::endl;
-            std::cerr << "[Mouse] Ensure 'rzctl.dll' is in the same directory as the executable and compatible with your Razer device and system." << std::endl;
-            std::cerr << "[Mouse] Refer to the source of 'rzctl.dll' (e.g., MarsInsanity/rzctl or Sadmeme/rzctl on GitHub) for more information or potential compatibility issues." << std::endl;
+            std::cerr << "[Mouse] Razer initialization failed: " << e.what() << ". Defaulting to Win32." << std::endl;
+            // Additional error messages from original code can be kept if desired.
         }
     }
     
-    if (!input_method)
+    // 4. If no specific input method was successfully created, or if config specified Win32 or an unknown method.
+    if (!new_input_method_instance)
     {
+        // This also catches the case where config.input_method was "WIN32" or an unrecognized value from the start.
         std::cout << "[Mouse] Using default Win32 method input." << std::endl;
-        input_method = std::make_unique<Win32InputMethod>();
+        new_input_method_instance = std::make_unique<Win32InputMethod>();
     }
 
-    globalMouseThread->setInputMethod(std::move(input_method));
+    // 5. Set the new input method in MouseThread.
+    if (globalMouseThread) {
+        globalMouseThread->setInputMethod(std::move(new_input_method_instance));
+    }
 }
 
 inline void handleEasyNoRecoil(MouseThread &mouseThread)
