@@ -143,6 +143,11 @@ public:
     double kalman_r = 0.1;
     double kalman_p = 0.1;
 
+    // Target Locking
+    bool enable_target_locking;
+    float target_locking_iou_threshold;
+    int target_locking_max_lost_frames;
+
     bool loadConfig(const std::string& filename = "config.ini");
     bool saveConfig(const std::string& filename = "config.ini");
 
