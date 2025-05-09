@@ -142,6 +142,8 @@ public:
     double kalman_r = 0.1;
     double kalman_p = 0.1;
 
+    float stickiness_radius; // Added for stickiness feature
+
     bool loadConfig(const std::string& filename = "config.ini");
     bool saveConfig(const std::string& filename = "config.ini");
 

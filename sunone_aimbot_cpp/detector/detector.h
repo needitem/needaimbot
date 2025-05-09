@@ -104,6 +104,10 @@ public:
 
     bool isCudaContextInitialized() const { return m_cudaContextInitialized; } // Getter for the flag
 
+    // Stickiness members
+    cv::Rect m_previousBestTargetBox;
+    bool m_hasPreviousBestTarget;
+
 private:
     bool m_cudaContextInitialized = false; // Add this flag
     std::unique_ptr<nvinfer1::IRuntime> runtime;
