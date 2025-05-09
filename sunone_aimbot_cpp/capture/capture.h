@@ -15,8 +15,10 @@ extern std::atomic<bool> capture_borders_changed;
 extern std::atomic<bool> capture_fps_changed;
 
 void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT);
-extern int screenWidth;
-extern int screenHeight;
+// extern int screenWidth;
+// extern int screenHeight;
+extern int g_captureRegionWidth;
+extern int g_captureRegionHeight;
 
 extern std::atomic<int> captureFrameCount;
 extern std::atomic<int> captureFps;

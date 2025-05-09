@@ -103,6 +103,22 @@ public:
     // bool* m_d_ignore_flags_gpu = nullptr; // Old type
     unsigned char* m_d_ignore_flags_gpu = nullptr;
 
+    // --- Pre-allocated NMS Buffers (GPU) ---
+    int* m_nms_d_x1 = nullptr;
+    int* m_nms_d_y1 = nullptr;
+    int* m_nms_d_x2 = nullptr;
+    int* m_nms_d_y2 = nullptr;
+    float* m_nms_d_areas = nullptr;
+    float* m_nms_d_scores = nullptr;    // For NMS internal confidence scores
+    int* m_nms_d_classIds = nullptr;  // For NMS internal class IDs
+    float* m_nms_d_iou_matrix = nullptr;
+    bool* m_nms_d_keep = nullptr;
+    int* m_nms_d_indices = nullptr;     // For Thrust's copy_if and gather operations
+
+    // Host-side copy of ignore flags and update tracker
+    std::vector<unsigned char> m_host_ignore_flags_uchar;
+    bool m_ignore_flags_need_update;
+
     bool isCudaContextInitialized() const { return m_cudaContextInitialized; } // Getter for the flag
 
 private:

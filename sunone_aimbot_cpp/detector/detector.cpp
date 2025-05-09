@@ -81,7 +81,20 @@ Detector::Detector()
     m_bestTargetIndexHost(-1),
     m_finalDetectionsCountHost(0),
     m_classFilteredCountHost(0),
-    m_d_ignore_flags_gpu(nullptr)
+    m_d_ignore_flags_gpu(nullptr),
+    // Initialize new NMS buffer pointers
+    m_nms_d_x1(nullptr),
+    m_nms_d_y1(nullptr),
+    m_nms_d_x2(nullptr),
+    m_nms_d_y2(nullptr),
+    m_nms_d_areas(nullptr),
+    m_nms_d_scores(nullptr),
+    m_nms_d_classIds(nullptr),
+    m_nms_d_iou_matrix(nullptr),
+    m_nms_d_keep(nullptr),
+    m_nms_d_indices(nullptr),
+    m_host_ignore_flags_uchar(MAX_CLASSES_FOR_FILTERING, 1), // Initialize vector with default ignore (1=true)
+    m_ignore_flags_need_update(true) // Set to true to force update on first run
 {
     // No CUDA initialization here anymore
 }
@@ -124,6 +137,18 @@ Detector::~Detector()
         cudaFree(m_d_ignore_flags_gpu);
         m_d_ignore_flags_gpu = nullptr;
     }
+
+    // Free new NMS buffers
+    freeGpuBuffer(m_nms_d_x1);
+    freeGpuBuffer(m_nms_d_y1);
+    freeGpuBuffer(m_nms_d_x2);
+    freeGpuBuffer(m_nms_d_y2);
+    freeGpuBuffer(m_nms_d_areas);
+    freeGpuBuffer(m_nms_d_scores);
+    freeGpuBuffer(m_nms_d_classIds);
+    freeGpuBuffer(m_nms_d_iou_matrix);
+    freeGpuBuffer(m_nms_d_keep);
+    freeGpuBuffer(m_nms_d_indices);
 }
 
 void Detector::getInputNames()
@@ -143,6 +168,21 @@ void Detector::getInputNames()
             }
         }
     }
+
+    if (m_bestTargetIndexGpu) cudaMemsetAsync(m_bestTargetIndexGpu, 0xFF, sizeof(int), stream);
+
+    // --- Allocate NMS Buffers ---
+    allocateGpuBuffer(m_nms_d_x1, config.max_detections, "NMS d_x1");
+    allocateGpuBuffer(m_nms_d_y1, config.max_detections, "NMS d_y1");
+    allocateGpuBuffer(m_nms_d_x2, config.max_detections, "NMS d_x2");
+    allocateGpuBuffer(m_nms_d_y2, config.max_detections, "NMS d_y2");
+    allocateGpuBuffer(m_nms_d_areas, config.max_detections, "NMS d_areas");
+    allocateGpuBuffer(m_nms_d_scores, config.max_detections, "NMS d_scores");
+    allocateGpuBuffer(m_nms_d_classIds, config.max_detections, "NMS d_classIds");
+    // IOU matrix is N x N
+    allocateGpuBuffer(m_nms_d_iou_matrix, config.max_detections * config.max_detections, "NMS d_iou_matrix"); 
+    allocateGpuBuffer(m_nms_d_keep, config.max_detections, "NMS d_keep");
+    allocateGpuBuffer(m_nms_d_indices, config.max_detections, "NMS d_indices");
 }
 
 void Detector::getOutputNames()
@@ -325,6 +365,9 @@ void Detector::initialize(const std::string& modelFile)
 
     // --- Initialize GPU Buffers --- 
     initializeBuffers(); // Call the buffer initialization function
+
+    // Force update of ignore flags on GPU after (re)initialization
+    m_ignore_flags_need_update = true;
 
     // Determine numClasses based on output shape
     if (!outputNames.empty())
@@ -814,40 +857,35 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         int validDecodedDetections = std::min(decodedCountHost, static_cast<int>(config.max_detections * 2));
         if (validDecodedDetections > 0) {
             
-            // 1. Prepare host-side ignore flags (vector<bool>)
-            std::vector<bool> host_ignored_flags(MAX_CLASSES_FOR_FILTERING, true);
-            {
-                std::lock_guard<std::mutex> lock(configMutex);
-                for (const auto& class_setting : config.class_settings) {
-                    if (class_setting.id >= 0 && class_setting.id < MAX_CLASSES_FOR_FILTERING) {
-                        host_ignored_flags[class_setting.id] = class_setting.ignore;
+            if (m_ignore_flags_need_update) {
+                { // Scoped lock for config access
+                    std::lock_guard<std::mutex> lock(configMutex);
+                    // Initialize all to ignore by default
+                    std::fill(m_host_ignore_flags_uchar.begin(), m_host_ignore_flags_uchar.end(), 1); 
+                    for (const auto& class_setting : config.class_settings) {
+                        if (class_setting.id >= 0 && class_setting.id < MAX_CLASSES_FOR_FILTERING) {
+                            m_host_ignore_flags_uchar[class_setting.id] = static_cast<unsigned char>(class_setting.ignore);
+                        }
                     }
                 }
-            }
 
-            // 2. Convert vector<bool> to vector<unsigned char>
-            std::vector<unsigned char> host_ignored_uchar_flags(MAX_CLASSES_FOR_FILTERING);
-            for (size_t i = 0; i < MAX_CLASSES_FOR_FILTERING; ++i) {
-                host_ignored_uchar_flags[i] = static_cast<unsigned char>(host_ignored_flags[i]);
-            }
-
-            // 3. Copy host_ignored_uchar_flags to GPU buffer m_d_ignore_flags_gpu
-            if (m_d_ignore_flags_gpu) {
-                // Use host_ignored_uchar_flags.data() and correct size
-                cudaError_t copyErr = cudaMemcpyAsync(m_d_ignore_flags_gpu, host_ignored_uchar_flags.data(), 
-                                                      MAX_CLASSES_FOR_FILTERING * sizeof(unsigned char), 
-                                                      cudaMemcpyHostToDevice, stream);
-                if (!checkCudaError(copyErr, "copying ignore flags (uchar) to GPU")) {
+                if (m_d_ignore_flags_gpu) {
+                    cudaError_t copyErr = cudaMemcpyAsync(m_d_ignore_flags_gpu, m_host_ignore_flags_uchar.data(), 
+                                                          MAX_CLASSES_FOR_FILTERING * sizeof(unsigned char), 
+                                                          cudaMemcpyHostToDevice, stream);
+                    if (!checkCudaError(copyErr, "copying updated ignore flags to GPU")) {
+                        cudaMemsetAsync(m_finalDetectionsCountGpu, 0, sizeof(int), stream);
+                        return;
+                    }
+                } else {
+                    std::cerr << "[Detector] Ignore flags GPU buffer not allocated!" << std::endl;
                     cudaMemsetAsync(m_finalDetectionsCountGpu, 0, sizeof(int), stream);
                     return;
                 }
-            } else {
-                std::cerr << "[Detector] Ignore flags GPU buffer not allocated!" << std::endl;
-                cudaMemsetAsync(m_finalDetectionsCountGpu, 0, sizeof(int), stream);
-                return;
+                m_ignore_flags_need_update = false; // Flags are now updated on GPU
             }
 
-            // 4. Call the GPU filter function (expecting unsigned char*)
+            // Call the GPU filter function (expecting unsigned char*)
             cudaError_t filterErr = filterDetectionsByClassIdGpu(
                 m_decodedDetectionsGpu,         
                 validDecodedDetections,           
@@ -890,6 +928,17 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
                     m_finalDetectionsCountGpu,  
                     static_cast<int>(config.max_detections), 
                     config.nms_threshold,
+                    // Pass pre-allocated NMS buffers
+                    m_nms_d_x1,
+                    m_nms_d_y1,
+                    m_nms_d_x2,
+                    m_nms_d_y2,
+                    m_nms_d_areas,
+                    m_nms_d_scores,     // NMS internal scores buffer
+                    m_nms_d_classIds,   // NMS internal classIds buffer
+                    m_nms_d_iou_matrix,
+                    m_nms_d_keep,
+                    m_nms_d_indices,
                     stream
                 );
             } catch (const std::exception& e) {

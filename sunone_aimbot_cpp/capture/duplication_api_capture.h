@@ -50,7 +50,6 @@ private:
     ID3D11Texture2D *sharedTexture = nullptr;
     cudaGraphicsResource *cudaResource = nullptr;
     cudaStream_t cudaStream = nullptr;
-    cudaEvent_t m_captureDoneEvent;
 
     int screenWidth = 0;
     int screenHeight = 0;
