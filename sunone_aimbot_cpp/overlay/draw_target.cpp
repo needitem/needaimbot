@@ -69,6 +69,20 @@ void draw_target()
     ImGui::Text("Note: There is a different value for each game, as the sizes of the player models may vary.");
     ImGui::Separator();
     ImGui::Checkbox("Auto Aim", &config.auto_aim);
+
+    ImGui::Separator(); // Separator for Target Locking section
+    ImGui::TextColored(ImVec4(0.0f, 1.0f, 1.0f, 1.0f), "Target Locking Settings");
+    ImGui::Checkbox("Enable Target Locking", &config.enable_target_locking);
+    ImGui::SliderFloat("Locking IoU Threshold", &config.target_locking_iou_threshold, 0.01f, 1.0f, "%.2f");
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("How much a new detection must overlap with the locked target (0.01 - 1.0)");
+    }
+    ImGui::SliderInt("Max Lost Frames", &config.target_locking_max_lost_frames, 0, 60);
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Frames the target can be lost before lock is released (0-60)");
+    }
 }
 
 void load_body_texture()
