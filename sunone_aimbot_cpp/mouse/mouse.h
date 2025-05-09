@@ -36,6 +36,7 @@ private:
     std::unique_ptr<PIDController2D> pid_controller;
     std::unique_ptr<InputMethod> input_method;
     std::mutex input_method_mutex;
+    mutable std::mutex member_data_mutex_;
 
     // Performance tracking callback
     ErrorTrackingCallback error_callback;
@@ -59,7 +60,6 @@ private:
     // Predictor
     std::unique_ptr<IPredictor> predictor_; // Pointer to the current predictor
     mutable std::mutex predictor_mutex_;        // Mutex to protect predictor access/changes
-    mutable std::mutex member_data_mutex_;      // Mutex to protect access to member data like screen dimensions, config values copied to members
 
     int last_applied_dx_ = 0; // Added: Stores the last applied mouse dx
 

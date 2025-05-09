@@ -89,6 +89,11 @@ bool Config::loadConfig(const std::string& filename)
         kalman_r = 0.1;
         kalman_p = 0.1;
 
+        // Target Locking Defaults
+        enable_target_locking = false;
+        target_locking_iou_threshold = 0.5f;
+        target_locking_max_lost_frames = 10;
+
         // Separated X/Y PID Controllers
         kp_x = 0.5; 
         ki_x = 0.0;
@@ -332,6 +337,11 @@ bool Config::loadConfig(const std::string& filename)
     // Removed loading of individual class_X and ignore_class_X into Config object members.
     // They are now fully managed by class_settings.
 
+    // Target Locking
+    enable_target_locking = get_bool_ini("TargetLocking", "enable_target_locking", false);
+    target_locking_iou_threshold = (float)get_double_ini("TargetLocking", "target_locking_iou_threshold", 0.5);
+    target_locking_max_lost_frames = get_long_ini("TargetLocking", "target_locking_max_lost_frames", 10);
+
     return true;
 }
 
@@ -397,6 +407,13 @@ bool Config::saveConfig(const std::string& filename)
     file << "kalman_q = " << kalman_q << "\n";
     file << "kalman_r = " << kalman_r << "\n";
     file << "kalman_p = " << kalman_p << "\n\n";
+    
+    file << "[TargetLocking]\n";
+    file << "enable_target_locking = " << (enable_target_locking ? "true" : "false") << "\n";
+    file << std::fixed << std::setprecision(6);
+    file << "target_locking_iou_threshold = " << target_locking_iou_threshold << "\n";
+    file << std::noboolalpha;
+    file << "target_locking_max_lost_frames = " << target_locking_max_lost_frames << "\n\n";
     
     file << "[PID]\n";
     file << std::fixed << std::setprecision(6);
