@@ -115,6 +115,7 @@ bool Config::loadConfig(const std::string& filename)
         ai_model = "sunxds_0.5.6.engine"; // Example, use your actual default
         confidence_threshold = 0.15f;
         nms_threshold = 0.50f;
+        confidence_weight = 0.65f; // Default value for confidence_weight (updated from 0.5f)
         max_detections = 100;
         postprocess = "yolo10";
         export_enable_fp8 = false;
@@ -249,6 +250,7 @@ bool Config::loadConfig(const std::string& filename)
     ai_model = get_string_ini("AI", "ai_model", "sunxds_0.5.6.engine");
     confidence_threshold = (float)get_double_ini("AI", "confidence_threshold", 0.15);
     nms_threshold = (float)get_double_ini("AI", "nms_threshold", 0.50);
+    confidence_weight = (float)get_double_ini("AI", "confidence_weight", 0.65); // Load confidence_weight (updated default from 0.5)
     max_detections = get_long_ini("AI", "max_detections", 20);
     postprocess = get_string_ini("AI", "postprocess", "yolo10");
     export_enable_fp8 = get_bool_ini("AI", "export_enable_fp8", false);
@@ -422,6 +424,7 @@ bool Config::saveConfig(const std::string& filename)
     file << std::fixed << std::setprecision(6);
     file << "confidence_threshold = " << confidence_threshold << "\n";
     file << "nms_threshold = " << nms_threshold << "\n";
+    file << "confidence_weight = " << confidence_weight << "\n";
     file << std::noboolalpha;
     file << "max_detections = " << max_detections << "\n";
     file << "postprocess = " << postprocess << "\n";

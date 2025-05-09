@@ -93,6 +93,7 @@ public:
     std::string ai_model;
     float confidence_threshold;
     float nms_threshold;
+    float confidence_weight;
     int max_detections;
     std::string postprocess;
     bool export_enable_fp8;
@@ -141,8 +142,6 @@ public:
     double kalman_q = 0.1;
     double kalman_r = 0.1;
     double kalman_p = 0.1;
-
-    float stickiness_radius; // Added for stickiness feature
 
     bool loadConfig(const std::string& filename = "config.ini");
     bool saveConfig(const std::string& filename = "config.ini");
