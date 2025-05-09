@@ -119,19 +119,20 @@ void NMSGpu(
     int* d_output_count_gpu,
     int max_output_detections,
     float nmsThreshold,
+    // Pre-allocated NMS buffers from Detector class
+    int* d_x1,
+    int* d_y1,
+    int* d_x2,
+    int* d_y2,
+    float* d_areas,
+    float* d_scores_nms,      // Renamed
+    int* d_classIds_nms,      // Renamed
+    float* d_iou_matrix,
+    bool* d_keep,
+    int* d_indices,
     cudaStream_t stream)
 {
-    // --- Declare all local variables at the beginning ---
-    int* d_x1 = nullptr;
-    int* d_y1 = nullptr;
-    int* d_x2 = nullptr;
-    int* d_y2 = nullptr;
-    float* d_areas = nullptr;
-    float* d_scores = nullptr;
-    float* d_iou_matrix = nullptr;
-    int* d_classIds = nullptr; // Add classIds pointer
-    bool* d_keep = nullptr;
-    int* d_indices = nullptr; // For copy_if
+    // --- Local variables (declarations of passed-in buffers are removed) ---
     cudaError_t err = cudaSuccess;
     const int block_size = 256; // Common block size
     int final_count = 0; // For Thrust result
@@ -141,23 +142,8 @@ void NMSGpu(
         return; // Exit early if no input
     }
 
-    // Allocate memory
-    size_t num_bytes_int = input_num_detections * sizeof(int);
-    size_t num_bytes_float = input_num_detections * sizeof(float);
-    size_t num_bytes_iou = (size_t)input_num_detections * input_num_detections * sizeof(float);
-    size_t num_bytes_bool = input_num_detections * sizeof(bool);
-
-    err = cudaMallocAsync(&d_x1, num_bytes_int, stream); if (err != cudaSuccess) goto cleanup;
-    err = cudaMallocAsync(&d_y1, num_bytes_int, stream); if (err != cudaSuccess) goto cleanup;
-    err = cudaMallocAsync(&d_x2, num_bytes_int, stream); if (err != cudaSuccess) goto cleanup;
-    err = cudaMallocAsync(&d_y2, num_bytes_int, stream); if (err != cudaSuccess) goto cleanup;
-    err = cudaMallocAsync(&d_areas, num_bytes_float, stream); if (err != cudaSuccess) goto cleanup;
-    err = cudaMallocAsync(&d_classIds, num_bytes_int, stream); if (err != cudaSuccess) goto cleanup; // Allocate memory for classIds
-    err = cudaMallocAsync(&d_scores, num_bytes_float, stream); if (err != cudaSuccess) goto cleanup;
-    err = cudaMallocAsync(&d_iou_matrix, num_bytes_iou, stream); if (err != cudaSuccess) goto cleanup;
-    err = cudaMallocAsync(&d_keep, num_bytes_bool, stream); if (err != cudaSuccess) goto cleanup;
-    err = cudaMallocAsync(&d_indices, num_bytes_int, stream); if (err != cudaSuccess) goto cleanup;
-
+    // --- Memory Allocation is NO LONGER DONE HERE for d_x1, d_y1, etc. ---
+    // These buffers are now passed as arguments and assumed to be pre-allocated.
 
     // --- Extract Data from Detection Struct ---
     {
@@ -165,15 +151,17 @@ void NMSGpu(
         extractDataKernel<<<grid_extract, block_size, 0, stream>>>( 
             d_input_detections, input_num_detections,
             d_x1, d_y1, d_x2, d_y2,
-            d_areas, d_scores, d_classIds // Pass classIds buffer
+            d_areas, d_scores_nms, d_classIds_nms // Use renamed parameters
         );
         err = cudaGetLastError(); if (err != cudaSuccess) goto cleanup;
     }
 
 
     // --- Initialize Keep Flags and IoU Matrix ---
-    cudaMemsetAsync(d_keep, 1, num_bytes_bool, stream); // Set all to true (1)
-    cudaMemsetAsync(d_iou_matrix, 0, num_bytes_iou, stream); // Zero out IoU matrix
+    // Size for keep flags is input_num_detections * sizeof(bool)
+    // Size for IoU matrix is input_num_detections * input_num_detections * sizeof(float)
+    cudaMemsetAsync(d_keep, 1, input_num_detections * sizeof(bool), stream); 
+    cudaMemsetAsync(d_iou_matrix, 0, (size_t)input_num_detections * input_num_detections * sizeof(float), stream);
     err = cudaGetLastError(); if (err != cudaSuccess) goto cleanup;
 
     // --- Calculate IoU Matrix ---
@@ -191,7 +179,7 @@ void NMSGpu(
     {
         const int grid_nms = (input_num_detections + block_size - 1) / block_size;
         nmsKernel<<<grid_nms, block_size, 0, stream>>>( 
-            d_keep, d_iou_matrix, d_scores, d_classIds, input_num_detections, nmsThreshold // Pass classIds
+            d_keep, d_iou_matrix, d_scores_nms, d_classIds_nms, input_num_detections, nmsThreshold // Use renamed parameters
         );
          err = cudaGetLastError(); if (err != cudaSuccess) goto cleanup;
     }
@@ -212,11 +200,8 @@ void NMSGpu(
             d_indices_ptr,
             is_kept(d_keep)
         );
-        final_count = end_indices_iter - d_indices_ptr; // Assign to declared variable
+        final_count = end_indices_iter - d_indices_ptr; 
 
-        // Ensure final_count doesn't exceed output buffer size
-        // Use std::min here - requires <algorithm> include if not already present
-        // Alternatively, implement simple min: final_count = (final_count < max_output_detections) ? final_count : max_output_detections;
         final_count = std::min(final_count, max_output_detections); 
 
         // Gather data
@@ -227,37 +212,25 @@ void NMSGpu(
             d_output_ptr
         );
 
-        // Copy final count to output
         cudaMemcpyAsync(d_output_count_gpu, &final_count, sizeof(int), cudaMemcpyHostToDevice, stream);
          err = cudaGetLastError(); if (err != cudaSuccess) goto cleanup;
 
     } catch (const std::exception& e) {
         fprintf(stderr, "[Thrust Error] NMSGpu copy_if/gather: %s\n", e.what());
-        err = cudaErrorUnknown; // Indicate error
-        goto cleanup; // Go to cleanup
+        err = cudaErrorUnknown; 
+        goto cleanup; 
     }
 
 
 cleanup: // Label for cleanup
-    // Free temporary buffers
-    cudaFreeAsync(d_x1, stream);
-    cudaFreeAsync(d_y1, stream);
-    cudaFreeAsync(d_x2, stream);
-    cudaFreeAsync(d_y2, stream);
-    cudaFreeAsync(d_areas, stream);
-    cudaFreeAsync(d_scores, stream);
-    cudaFreeAsync(d_iou_matrix, stream);
-    cudaFreeAsync(d_classIds, stream); // Free classIds buffer
-    cudaFreeAsync(d_keep, stream);
-    cudaFreeAsync(d_indices, stream);
+    // --- Freeing of temporary buffers is NO LONGER DONE HERE ---
+    // Buffers (d_x1, d_y1, etc.) are managed by the Detector class.
 
-    // Check for errors during processing or cleanup
-    cudaError_t lastErr = cudaGetLastError(); // Get error state after potential async frees
+    cudaError_t lastErr = cudaGetLastError(); 
     if (err != cudaSuccess || lastErr != cudaSuccess) {
         cudaError_t errorToReport = (err != cudaSuccess) ? err : lastErr;
         fprintf(stderr, "[NMSGpu] CUDA error occurred: %s (%d)\n", cudaGetErrorString(errorToReport), errorToReport);
-        // Set output count to 0 only if the error happened before successfully writing it
-        if (err != cudaSuccess) { // Check if error happened before final memcpy
+        if (err != cudaSuccess) { 
              cudaMemsetAsync(d_output_count_gpu, 0, sizeof(int), stream);
         }
     }

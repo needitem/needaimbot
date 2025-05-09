@@ -26,6 +26,17 @@ void NMSGpu(
     int* d_output_count_gpu,           // Output count of filtered detections (GPU, single int)
     int max_output_detections,         // Max size of the output buffer
     float nmsThreshold,
+    // Pre-allocated NMS buffers from Detector class
+    int* d_x1,
+    int* d_y1,
+    int* d_x2,
+    int* d_y2,
+    float* d_areas,
+    float* d_scores_nms,      // Renamed to avoid conflict with scoring scores
+    int* d_classIds_nms,      // Renamed for clarity
+    float* d_iou_matrix,
+    bool* d_keep,
+    int* d_indices,
     cudaStream_t stream = 0);
 
 // --- GPU Decoding Functions ---

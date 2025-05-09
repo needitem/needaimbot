@@ -56,8 +56,8 @@ std::mutex frameMutex;
 cv::Mat latestFrameCpu;
 std::atomic<bool> newFrameAvailable = false;
 
-int screenWidth = 0;
-int screenHeight = 0;
+int g_captureRegionWidth = 0;
+int g_captureRegionHeight = 0;
 std::atomic<int> captureFrameCount(0);
 std::atomic<int> captureFps(0);
 std::chrono::time_point<std::chrono::high_resolution_clock> captureFpsStartTime;
@@ -124,30 +124,51 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 capture_fps_changed.store(false);
             }
 
-            if (detection_resolution_changed.load() ||
-                capture_cursor_changed.load() ||
-                capture_borders_changed.load())
+            if (detection_resolution_changed.load())
             {
-                capturer.reset();
+                if (config.verbose) {
+                    std::cout << "[Capture] Detection resolution changed. Re-initializing capturer." << std::endl;
+                }
+                capturer.reset(); // Release old capturer first
 
                 int new_CAPTURE_WIDTH = config.detection_resolution;
                 int new_CAPTURE_HEIGHT = config.detection_resolution;
 
-                capturer = std::make_unique<DuplicationAPIScreenCapture>(new_CAPTURE_WIDTH, new_CAPTURE_HEIGHT);
+                auto tempCapturer = std::make_unique<DuplicationAPIScreenCapture>(new_CAPTURE_WIDTH, new_CAPTURE_HEIGHT);
 
-                if (!capturer || !capturer->IsInitialized()) {
-                    std::cerr << "[Capture] Failed to create or initialize new DuplicationAPIScreenCapture after config change!" << std::endl;
-                    capturer.reset();
-                    break;
+                if (!tempCapturer || !tempCapturer->IsInitialized()) {
+                    std::cerr << "[Capture] Failed to create or initialize new DuplicationAPIScreenCapture after resolution change!" << std::endl;
+                    shouldExit = true; // Signal loop to terminate
+                    break;             // Exit the while loop
+                } else {
+                    capturer = std::move(tempCapturer); // Move ownership to the main capturer
                 }
 
-                detector.setCaptureEvent(capturer->GetCaptureDoneEvent());
+                // This part will only be reached if initialization was successful
+                if (capturer) { // Redundant check given the break, but good practice
+                    detector.setCaptureEvent(capturer->GetCaptureDoneEvent());
+                }
 
-                screenWidth = new_CAPTURE_WIDTH;
-                screenHeight = new_CAPTURE_HEIGHT;
+                g_captureRegionWidth = new_CAPTURE_WIDTH;
+                g_captureRegionHeight = new_CAPTURE_HEIGHT;
 
                 detection_resolution_changed.store(false);
+            }
+
+            // Handle other flags that don't require full re-initialization
+            if (capture_cursor_changed.load())
+            {
+                if (config.verbose) {
+                    std::cout << "[Capture] Cursor capture setting changed (no capturer re-init needed)." << std::endl;
+                }
                 capture_cursor_changed.store(false);
+            }
+
+            if (capture_borders_changed.load())
+            {
+                if (config.verbose) {
+                    std::cout << "[Capture] Border capture setting changed (no capturer re-init needed)." << std::endl;
+                }
                 capture_borders_changed.store(false);
             }
 
