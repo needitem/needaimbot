@@ -84,6 +84,8 @@ Detector::Detector()
     m_d_ignore_flags_gpu(nullptr)
 {
     // No CUDA initialization here anymore
+    m_hasPreviousBestTarget = false; // Initialize stickiness flag
+    m_previousBestTargetBox = cv::Rect(0,0,0,0); // Initialize previous best target box
 }
 
 Detector::~Detector()
@@ -460,6 +462,7 @@ void Detector::processFrame(const cv::cuda::GpuMat& frame)
     {
         std::lock_guard<std::mutex> lock(detectionMutex);
         m_hasBestTarget = false;
+        this->m_hasPreviousBestTarget = false; // Reset stickiness on pause
         return;
     }
 
@@ -478,6 +481,7 @@ void Detector::processFrame(const cv::Mat& frame)
     {
         std::lock_guard<std::mutex> lock(detectionMutex);
         m_hasBestTarget = false;
+        this->m_hasPreviousBestTarget = false; // Reset stickiness on pause
         return;
     }
 
@@ -618,6 +622,17 @@ void Detector::inferenceThread()
                     int validDetectionsForScoring = std::min((int)config.max_detections, m_finalDetectionsCountHost);
                     
                     if (validDetectionsForScoring > 0) {
+                        // Prepare stickiness parameters
+                        bool obstáculos_prev_target_for_scoring = m_hasPreviousBestTarget;
+                        int prev_box_x = 0, prev_box_y = 0, prev_box_w = 0, prev_box_h = 0;
+                        if (obstáculos_prev_target_for_scoring) {
+                            prev_box_x = m_previousBestTargetBox.x;
+                            prev_box_y = m_previousBestTargetBox.y;
+                            prev_box_w = m_previousBestTargetBox.width;
+                            prev_box_h = m_previousBestTargetBox.height;
+                        }
+                        float stickiness_radius_sq = config.stickiness_radius * config.stickiness_radius;
+
                         // Score the final (class-filtered and NMS'd) detections
                         calculateTargetScoresGpu(
                             m_finalDetectionsGpu, // Use final detections
@@ -625,7 +640,14 @@ void Detector::inferenceThread()
                             m_scoresGpu,
                             config.detection_resolution,
                             config.detection_resolution,
-                            1.0f, // Use hardcoded distance weight
+                            1.0f, // Use hardcoded distance weight // TODO: Make this configurable if needed
+                            // Stickiness parameters
+                            obstáculos_prev_target_for_scoring,
+                            prev_box_x,
+                            prev_box_y,
+                            prev_box_w,
+                            prev_box_h,
+                            stickiness_radius_sq,
                             stream
                         );
                         cudaError_t scoreErr = cudaGetLastError();
@@ -679,6 +701,14 @@ void Detector::inferenceThread()
                            m_bestTargetIndexHost = -1;
                            m_hasBestTarget = false;
                         }
+
+                        // Update stickiness state for the next frame
+                        if (m_hasBestTarget) {
+                            this->m_previousBestTargetBox = m_bestTargetHost.box;
+                            this->m_hasPreviousBestTarget = true;
+                        } else {
+                            this->m_hasPreviousBestTarget = false; // Lost target, or no target found
+                        }
                     } else {
                          // No valid detections after NMS for scoring
                          m_bestTargetIndexHost = -1;
@@ -706,6 +736,7 @@ void Detector::inferenceThread()
              {
                 std::lock_guard<std::mutex> lock(detectionMutex);
                 m_hasBestTarget = false; 
+                this->m_hasPreviousBestTarget = false; // Also reset stickiness here
                 detectionVersion++; 
              }
              detectionCV.notify_one();
