@@ -14,8 +14,6 @@
 #include "scoringGpu.h"
 #include "postProcess.h" // For Detection struct
 
-__device__ const float STICKY_TARGET_SCORE = -1000.0f; // Score for a sticky target (lower is better)
-
 // Simple IoU calculation for __device__ function
 __device__ inline float calculateIoU(const cv::Rect& box1, const cv::Rect& box2) {
     int xA = max(box1.x, box2.x);
@@ -42,49 +40,32 @@ __global__ void calculateTargetScoresGpuKernel(
     float* d_scores,
     int frame_width,
     int frame_height,
-    float distance_weight,       // Parameter for distance weighting
-    // Stickiness parameters
-    bool has_previous_target_kernel,
-    int prev_target_box_x_kernel,
-    int prev_target_box_y_kernel,
-    int prev_target_box_width_kernel,
-    int prev_target_box_height_kernel,
-    float stickiness_radius_sq_kernel
+    float distance_weight,
+    float confidence_weight,
+    int head_class_id             // ID of the 'Head' class
 ) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (idx < num_detections) {
         const Detection& det = d_detections[idx];
-        const cv::Rect& box = det.box; // cv::Rect should be fine if it's a simple struct
+        const cv::Rect& box = det.box;
 
-        // Calculate center of the current box
-        float current_centerX = static_cast<float>(box.x) + static_cast<float>(box.width) / 2.0f;
-        float current_centerY = static_cast<float>(box.y) + static_cast<float>(box.height) / 2.0f;
+        float centerX = box.x + box.width / 2.0f;
+        float centerY = box.y + box.height / 2.0f;
 
-        // Stickiness check
-        if (has_previous_target_kernel) {
-            float prev_target_centerX = static_cast<float>(prev_target_box_x_kernel) + static_cast<float>(prev_target_box_width_kernel) / 2.0f;
-            float prev_target_centerY = static_cast<float>(prev_target_box_y_kernel) + static_cast<float>(prev_target_box_height_kernel) / 2.0f;
+        float frameCenterX = frame_width / 2.0f;
+        float frameCenterY = frame_height / 2.0f;
+        float dx = centerX - frameCenterX;
+        float dy = centerY - frameCenterY;
+        float distance_score = sqrtf(dx * dx + dy * dy) * distance_weight;
 
-            float dx_to_prev = current_centerX - prev_target_centerX;
-            float dy_to_prev = current_centerY - prev_target_centerY;
-            float dist_to_prev_sq = dx_to_prev * dx_to_prev + dy_to_prev * dy_to_prev;
+        float confidence_penalty_factor = (1.0f - det.confidence) * confidence_weight;
+        d_scores[idx] = distance_score * (1.0f + confidence_penalty_factor);
 
-            if (dist_to_prev_sq < stickiness_radius_sq_kernel) {
-                d_scores[idx] = STICKY_TARGET_SCORE;
-                return; // This is our sticky target
-            }
+        // Apply bonus for head class if applicable
+        if (head_class_id != -1 && det.classId == head_class_id) {
+            d_scores[idx] *= 0.8f; // Hardcoded 20% bonus (multiplier 0.8f)
         }
-
-        // Calculate distance from the center of the frame (original scoring)
-        float frameCenterX = static_cast<float>(frame_width) / 2.0f;
-        float frameCenterY = static_cast<float>(frame_height) / 2.0f;
-        float dx_to_center = current_centerX - frameCenterX;
-        float dy_to_center = current_centerY - frameCenterY;
-        float distance_from_center_score = sqrtf(dx_to_center * dx_to_center + dy_to_center * dy_to_center) * distance_weight; // Apply distance weight
-
-        // Final score (lower is better)
-        d_scores[idx] = distance_from_center_score;
     }
 }
 
@@ -94,17 +75,12 @@ cudaError_t calculateTargetScoresGpu(
     float* d_scores,
     int frame_width,
     int frame_height,
-    float distance_weight_config,  // Renamed for clarity
-    // Stickiness parameters
-    bool has_previous_target,
-    int prev_target_box_x,
-    int prev_target_box_y,
-    int prev_target_box_width,
-    int prev_target_box_height,
-    float stickiness_radius_sq,
-    cudaStream_t stream) {
+    float distance_weight_config,
+    float confidence_weight_config,
+    int head_class_id_param         // Renamed for clarity, ID of head class
+    ,cudaStream_t stream) {
     if (num_detections <= 0) {
-        return cudaSuccess; // Nothing to score
+        return cudaSuccess;
     }
 
     const int block_size = 256;
@@ -116,14 +92,9 @@ cudaError_t calculateTargetScoresGpu(
         d_scores,
         frame_width,
         frame_height,
-        distance_weight_config,       // Pass distance weight parameter
-        // Pass stickiness parameters
-        has_previous_target,
-        prev_target_box_x,
-        prev_target_box_y,
-        prev_target_box_width,
-        prev_target_box_height,
-        stickiness_radius_sq
+        distance_weight_config,
+        confidence_weight_config,
+        head_class_id_param         // Pass head class ID
     );
 
     return cudaGetLastError();

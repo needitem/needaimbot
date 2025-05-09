@@ -16,13 +16,9 @@ struct Detection; // Forward declaration
  * @param d_scores Output buffer for scores on the GPU (size should be num_detections).
  * @param frame_width Width of the detection frame/ROI.
  * @param frame_height Height of the detection frame/ROI.
- * @param distance_weight Weighting factor for the distance score.
- * @param has_previous_target Whether there is a previous target.
- * @param prev_target_box_x X coordinate of the previous target box.
- * @param prev_target_box_y Y coordinate of the previous target box.
- * @param prev_target_box_width Width of the previous target box.
- * @param prev_target_box_height Height of the previous target box.
- * @param stickiness_radius_sq Square of the stickiness radius.
+ * @param distance_weight_config Weighting factor for the distance score.
+ * @param confidence_weight_config Weighting factor for the confidence score.
+ * @param head_class_id ID of the 'Head' class
  * @param stream CUDA stream for asynchronous execution.
  */
 cudaError_t calculateTargetScoresGpu(
@@ -31,13 +27,9 @@ cudaError_t calculateTargetScoresGpu(
     float* d_scores,
     int frame_width,
     int frame_height,
-    float distance_weight,
-    bool has_previous_target,
-    int prev_target_box_x,
-    int prev_target_box_y,
-    int prev_target_box_width,
-    int prev_target_box_height,
-    float stickiness_radius_sq,
+    float distance_weight_config,
+    float confidence_weight_config,
+    int head_class_id,
     cudaStream_t stream
 );
 
