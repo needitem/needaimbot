@@ -97,16 +97,13 @@ public:
     int m_bestTargetIndexHost = -1;       // Host copy of best target index
     Detection m_bestTargetHost;           // Host copy of best target data
     bool m_hasBestTarget = false;          // Flag indicating if a valid target was found
+    int m_headClassId = -1;                // ID of the head class, resolved from config
 
     // New member for GPU ignore flags (using unsigned char for CUDA compatibility)
     // bool* m_d_ignore_flags_gpu = nullptr; // Old type
     unsigned char* m_d_ignore_flags_gpu = nullptr;
 
     bool isCudaContextInitialized() const { return m_cudaContextInitialized; } // Getter for the flag
-
-    // Stickiness members
-    cv::Rect m_previousBestTargetBox;
-    bool m_hasPreviousBestTarget;
 
 private:
     bool m_cudaContextInitialized = false; // Add this flag
