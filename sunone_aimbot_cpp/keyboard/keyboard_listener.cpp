@@ -16,6 +16,12 @@
 #include "sunone_aimbot_cpp.h"
 #include "capture.h"
 
+// Constants for offset and norecoil strength adjustments
+const float MIN_OFFSET_Y = 0.0f;
+const float MAX_OFFSET_Y = 1.0f;
+const float MIN_NORECOIL_STRENGTH = 0.1f;
+const float MAX_NORECOIL_STRENGTH = 500.0f;
+
 extern std::atomic<bool> shouldExit;
 extern std::atomic<bool> aiming;
 extern std::atomic<bool> shooting;
@@ -57,15 +63,9 @@ void keyboardListener()
     while (!shouldExit)
     {
         // Aiming
-        if (!config.auto_aim)
-        {
-        aiming = isAnyKeyPressed(config.button_targeting) ||
-            (config.arduino_enable_keys && arduinoSerial && arduinoSerial->isOpen() && arduinoSerial->aiming_active);
-        }
-        else
-        {
-            aiming = true;
-        }
+        aiming = config.auto_aim ||
+                 isAnyKeyPressed(config.button_targeting) ||
+                 (config.arduino_enable_keys && arduinoSerial && arduinoSerial->isOpen() && arduinoSerial->aiming_active);
 
         // Shooting
         shooting = isAnyKeyPressed(config.button_shoot) ||
@@ -147,12 +147,12 @@ void keyboardListener()
             if (shiftKey)
             {
                 // Shift + Up Arrow: Decrease head offset
-                config.head_y_offset = std::max(0.0f, config.head_y_offset - config.offset_step);
+                config.head_y_offset = std::max(MIN_OFFSET_Y, config.head_y_offset - config.offset_step);
             }
             else
             {
                 // Up Arrow: Decrease body offset
-                config.body_y_offset = std::max(0.0f, config.body_y_offset - config.offset_step);
+                config.body_y_offset = std::max(MIN_OFFSET_Y, config.body_y_offset - config.offset_step);
             }
         }
         if (downArrow && !prevDownArrow)
@@ -160,12 +160,12 @@ void keyboardListener()
             if (shiftKey)
             {
                 // Shift + Down Arrow: Increase head offset
-                config.head_y_offset = std::min(1.0f, config.head_y_offset + config.offset_step);
+                config.head_y_offset = std::min(MAX_OFFSET_Y, config.head_y_offset + config.offset_step);
             }
             else
             {
                 // Down Arrow: Increase body offset
-                config.body_y_offset = std::min(1.0f, config.body_y_offset + config.offset_step);
+                config.body_y_offset = std::min(MAX_OFFSET_Y, config.body_y_offset + config.offset_step);
             }
         }
 
@@ -173,12 +173,12 @@ void keyboardListener()
         // Adjust norecoil strength based on left and right arrow keys
         if (leftArrow && !prevLeftArrow)
         {
-            config.easynorecoilstrength = std::max(0.1f, config.easynorecoilstrength - config.norecoil_step);
+            config.easynorecoilstrength = std::max(MIN_NORECOIL_STRENGTH, config.easynorecoilstrength - config.norecoil_step);
         }
 
         if (rightArrow && !prevRightArrow)
         {
-            config.easynorecoilstrength = std::min(500.0f, config.easynorecoilstrength + config.norecoil_step);
+            config.easynorecoilstrength = std::min(MAX_NORECOIL_STRENGTH, config.easynorecoilstrength + config.norecoil_step);
         }
         
         // Update previous key states

@@ -60,6 +60,13 @@ public:
     float norecoil_ms;    // Millisecond delay for recoil control
     std::string input_method; // "WIN32", "GHUB", "ARDUINO"
 
+    // WindMouse Parameters
+    bool wind_mouse_enabled;
+    float wind_G;
+    float wind_W;
+    float wind_M;
+    float wind_D;
+
     // Scope Recoil Control
     int active_scope_magnification; // 0=None, 2=2x, 3=3x, 4=4x, 6=6x
     float recoil_mult_2x;
