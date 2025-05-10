@@ -9,6 +9,8 @@
 #include <mutex>
 #include <atomic>
 #include <iostream>
+#include <random>
+#include <functional>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -33,7 +35,73 @@ extern std::atomic<bool> aiming;
 extern std::mutex configMutex;
 extern Config config;
 
+// For WindMouse
+std::random_device rd;
+std::mt19937 gen(rd());
+
 constexpr float SCOPE_MARGIN = 0.15f;
+
+// WindMouse function based on the commit and typical implementations
+void WindMouse(float target_x, float target_y, float G, float W, float M, float D,
+               std::function<void(int, int)> move_func)
+{
+    float current_x = 0, current_y = 0;
+    float v_x = 0, v_y = 0;
+    float W_sqrt = sqrt(W);
+    float D_sqrt = sqrt(D);
+
+    float dist, random_dist, new_hypot;
+    float new_x_vel, new_y_vel;
+    float new_x, new_y;
+
+    while (true) {
+        dist = hypot(target_x - current_x, target_y - current_y);
+        if (dist <= 1.0f) { // Destination reached
+            break;
+        }
+
+        random_dist = std::uniform_real_distribution<float>(0.0f, dist / D_sqrt)(gen);
+        new_hypot = std::uniform_real_distribution<float>(0.0f, dist / M)(gen);
+
+        v_x += W_sqrt * (std::uniform_real_distribution<float>(-1.0f, 1.0f)(gen)) + G * (target_x - current_x - v_x) / dist;
+        v_y += W_sqrt * (std::uniform_real_distribution<float>(-1.0f, 1.0f)(gen)) + G * (target_y - current_y - v_y) / dist;
+
+        // Normalize velocity
+        float v_magnitude = hypot(v_x, v_y);
+        if (v_magnitude > new_hypot) {
+            v_x = (new_hypot / v_magnitude) * v_x;
+            v_y = (new_hypot / v_magnitude) * v_y;
+        }
+        
+        new_x = current_x + v_x;
+        new_y = current_y + v_y;
+
+        // Ensure movement doesn't overshoot.
+        if (hypot(target_x - new_x, target_y - new_y) > dist) {
+             new_x = current_x + (target_x - current_x) * (dist - random_dist) / dist;
+             new_y = current_y + (target_y - current_y) * (dist - random_dist) / dist;
+        }
+        
+        int move_dx = static_cast<int>(std::round(new_x - current_x));
+        int move_dy = static_cast<int>(std::round(new_y - current_y));
+
+        if (move_dx != 0 || move_dy != 0) {
+            move_func(move_dx, move_dy);
+        }
+        
+        current_x = new_x;
+        current_y = new_y;
+
+        Sleep(1); // Small delay to simulate human-like movement pauses
+    }
+}
+
+// QueueMove function (simple passthrough for now, as its direct usage isn't clear from the commit's MouseThread changes)
+void QueueMove(int dx, int dy, std::function<void(int, int)> move_func) {
+    if (dx != 0 || dy != 0) {
+        move_func(dx, dy);
+    }
+}
 
 MouseThread::MouseThread(
     int resolution,
@@ -347,9 +415,19 @@ void MouseThread::moveMouse(const AimbotTarget &target)
 
     // Check for disable upward aim button
     bool disable_upward_aim_active = false;
+    bool wind_mouse_enabled_val = false;
+    float wind_G_val = 18.0f, wind_W_val = 15.0f, wind_M_val = 10.0f, wind_D_val = 8.0f; // Default values
+
     {
         std::lock_guard<std::mutex> lock(configMutex); // Protect config access
         disable_upward_aim_active = isAnyKeyPressed(config.button_disable_upward_aim);
+        wind_mouse_enabled_val = config.wind_mouse_enabled;
+        if (wind_mouse_enabled_val) {
+            wind_G_val = config.wind_G;
+            wind_W_val = config.wind_W;
+            wind_M_val = config.wind_M;
+            wind_D_val = config.wind_D;
+        }
     }
 
     if (disable_upward_aim_active && dy_int < 0)
@@ -363,7 +441,18 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         std::lock_guard<std::mutex> lock(input_method_mutex);
         if (input_method && input_method->isValid())
         {
-            input_method->move(dx_int, dy_int);
+            if (wind_mouse_enabled_val) {
+                // The target for WindMouse is the calculated dx_int, dy_int
+                WindMouse(static_cast<float>(dx_int), static_cast<float>(dy_int),
+                          wind_G_val, wind_W_val, wind_M_val, wind_D_val,
+                          [this](int mdx, int mdy) {
+                              if (this->input_method && this->input_method->isValid()) {
+                                 this->input_method->move(mdx, mdy);
+                              }
+                          });
+            } else {
+                input_method->move(dx_int, dy_int);
+            }
         }
     }
 }
