@@ -73,6 +73,13 @@ bool Config::loadConfig(const std::string& filename)
         norecoil_ms = 10.0f;
         input_method = "WIN32";
 
+        // WindMouse Defaults
+        wind_mouse_enabled = false;
+        wind_G = 18.0f;
+        wind_W = 15.0f;
+        wind_M = 10.0f;
+        wind_D = 8.0f;
+
         // Scope Recoil Control
         active_scope_magnification = 0;
         recoil_mult_2x = 1.0f;
@@ -221,6 +228,13 @@ bool Config::loadConfig(const std::string& filename)
     norecoil_ms = (float)get_double_ini("Mouse", "norecoil_ms", 10.0);
     input_method = get_string_ini("Mouse", "input_method", "WIN32");
     bScope_multiplier = (float)get_double_ini("Mouse", "bScope_multiplier", 1.2);
+
+    // Load WindMouse Parameters
+    wind_mouse_enabled = get_bool_ini("Mouse", "wind_mouse_enabled", false);
+    wind_G = (float)get_double_ini("Mouse", "wind_G", 18.0);
+    wind_W = (float)get_double_ini("Mouse", "wind_W", 15.0);
+    wind_M = (float)get_double_ini("Mouse", "wind_M", 10.0);
+    wind_D = (float)get_double_ini("Mouse", "wind_D", 8.0);
 
     active_scope_magnification = get_long_ini("Recoil", "active_scope_magnification", 0);
     recoil_mult_2x = (float)get_double_ini("Recoil", "recoil_mult_2x", 1.0);
@@ -387,6 +401,13 @@ bool Config::saveConfig(const std::string& filename)
     file << "input_method = " << input_method << "\n";
     file << std::fixed << std::setprecision(6);
     file << "bScope_multiplier = " << bScope_multiplier << "\n\n";
+
+    // Save WindMouse Parameters
+    file << "wind_mouse_enabled = " << (wind_mouse_enabled ? "true" : "false") << "\n";
+    file << "wind_G = " << wind_G << "\n";
+    file << "wind_W = " << wind_W << "\n";
+    file << "wind_M = " << wind_M << "\n";
+    file << "wind_D = " << wind_D << "\n\n";
 
     file << "[Recoil]\n";
     file << "active_scope_magnification = " << active_scope_magnification << "\n";
