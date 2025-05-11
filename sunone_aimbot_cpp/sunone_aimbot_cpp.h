@@ -42,6 +42,21 @@ extern std::atomic<float> g_current_frame_acquisition_time_ms;
 extern std::vector<float> g_frame_acquisition_time_history;
 extern std::mutex g_frame_acquisition_history_mutex;
 
+// PID Calculation Time
+extern std::atomic<float> g_current_pid_calc_time_ms;
+extern std::vector<float> g_pid_calc_time_history;
+extern std::mutex g_pid_calc_history_mutex;
+
+// Predictor Calculation Time
+extern std::atomic<float> g_current_predictor_calc_time_ms;
+extern std::vector<float> g_predictor_calc_time_history;
+extern std::mutex g_predictor_calc_history_mutex;
+
+// Input Send Time
+extern std::atomic<float> g_current_input_send_time_ms;
+extern std::vector<float> g_input_send_time_history;
+extern std::mutex g_input_send_history_mutex;
+
 // Function to update history
 void add_to_history(std::vector<float>& history, float value, std::mutex& mtx, int max_size = STATS_HISTORY_SIZE);
 
