@@ -80,6 +80,21 @@ std::atomic<float> g_current_frame_acquisition_time_ms(0.0f);
 std::vector<float> g_frame_acquisition_time_history;
 std::mutex g_frame_acquisition_history_mutex;
 
+// PID Calculation Time definitions
+std::atomic<float> g_current_pid_calc_time_ms(0.0f);
+std::vector<float> g_pid_calc_time_history;
+std::mutex g_pid_calc_history_mutex;
+
+// Predictor Calculation Time definitions
+std::atomic<float> g_current_predictor_calc_time_ms(0.0f);
+std::vector<float> g_predictor_calc_time_history;
+std::mutex g_predictor_calc_history_mutex;
+
+// Input Send Time definitions
+std::atomic<float> g_current_input_send_time_ms(0.0f);
+std::vector<float> g_input_send_time_history;
+std::mutex g_input_send_history_mutex;
+
 struct alignas(64) DetectionData {
     std::vector<cv::Rect> boxes;
     std::vector<int> classes;
