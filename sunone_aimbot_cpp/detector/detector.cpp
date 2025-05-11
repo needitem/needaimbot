@@ -645,6 +645,8 @@ void Detector::inferenceThread()
         {
             try
             {
+                auto inference_start_time = std::chrono::high_resolution_clock::now(); // Start timing for inference
+
                 if (!isGpu && !frameCpu.empty()) {
                     frameGpu.upload(frameCpu, preprocessCvStream); 
                 } else if (!isGpu) {
@@ -660,6 +662,11 @@ void Detector::inferenceThread()
                 context->enqueueV3(stream);
 
                 performGpuPostProcessing(stream);
+
+                auto inference_end_time = std::chrono::high_resolution_clock::now(); // End timing for inference
+                std::chrono::duration<float, std::milli> inference_duration_ms = inference_end_time - inference_start_time;
+                g_current_inference_time_ms.store(inference_duration_ms.count());
+                add_to_history(g_inference_time_history, inference_duration_ms.count(), g_inference_history_mutex);
 
                 // --- Synchronization Point 1: Ensure PostProcessing (including NMS) is done --- 
                 // cudaStreamSynchronize(stream); // Sync moved into performGpuPostProcessing and before DtoH copies
