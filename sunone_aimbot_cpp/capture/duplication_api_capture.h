@@ -38,6 +38,7 @@ public:
     cv::Mat GetNextFrameCpu() override;
     cudaEvent_t GetCaptureDoneEvent() const override;
     bool IsInitialized() const { return m_initialized; }
+    void SetAcquireTimeout(UINT timeout);
 
 private:
     std::unique_ptr<DDAManager> m_ddaManager;
