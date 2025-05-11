@@ -5,6 +5,9 @@
 #include "detector.h"
 #include "mouse.h"
 #include "mouse/input_drivers/SerialConnection.h"
+#include <vector>
+#include <atomic>
+#include <mutex>
 
 extern Config config;
 extern Detector detector;
@@ -14,5 +17,21 @@ extern std::atomic<bool> input_method_changed;
 extern std::atomic<bool> aiming;
 extern std::atomic<bool> shooting;
 extern std::atomic<bool> zooming;
+
+// Maximum history size for plots
+const int STATS_HISTORY_SIZE = 100;
+
+// Inference Time
+extern std::atomic<float> g_current_inference_time_ms;
+extern std::vector<float> g_inference_time_history;
+extern std::mutex g_inference_history_mutex;
+
+// Capture FPS
+extern std::atomic<float> g_current_capture_fps;
+extern std::vector<float> g_capture_fps_history;
+extern std::mutex g_capture_history_mutex;
+
+// Function to update history
+void add_to_history(std::vector<float>& history, float value, std::mutex& mtx, int max_size = STATS_HISTORY_SIZE);
 
 #endif // SUNONE_AIMBOT_CPP_H

@@ -475,6 +475,12 @@ void OverlayThread()
                         ImGui::EndTabItem();
                     }
 
+                    if (ImGui::BeginTabItem("Stats"))
+                    {
+                        draw_stats();
+                        ImGui::EndTabItem();
+                    }
+
                     // ******************************************* APPLY VARS *******************************************
                     // DETECTION RESOLUTION
                     if (prev_detection_resolution != config.detection_resolution)
