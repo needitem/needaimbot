@@ -375,16 +375,23 @@ void MouseThread::moveMouse(const AimbotTarget &target)
 
     // 2. Update and Predict using the Predictor
     Point2D predicted_target_pos = raw_target_pos; // Default to raw if no predictor
-    auto now = std::chrono::steady_clock::now();
+    auto now_chrono = std::chrono::steady_clock::now(); // Renamed to avoid conflict with 'now' parameter
 
     {
         std::lock_guard<std::mutex> lock(predictor_mutex_); // Lock predictor access
         if (predictor_) { 
-            predictor_->update(raw_target_pos, now);
+            auto predictor_start_time = std::chrono::steady_clock::now();
+            predictor_->update(raw_target_pos, now_chrono);
             // Predict the full position, but we'll only use the X component later
             predicted_target_pos = predictor_->predict(); 
+            auto predictor_end_time = std::chrono::steady_clock::now();
+            float predictor_duration_ms = std::chrono::duration<float, std::milli>(predictor_end_time - predictor_start_time).count();
+            g_current_predictor_calc_time_ms.store(predictor_duration_ms, std::memory_order_relaxed);
+            add_to_history(g_predictor_calc_time_history, predictor_duration_ms, g_predictor_calc_history_mutex);
         } else {
             // No predictor active; predicted_target_pos remains raw_target_pos.
+            g_current_predictor_calc_time_ms.store(0.0f, std::memory_order_relaxed); // Store 0 if no predictor
+            add_to_history(g_predictor_calc_time_history, 0.0f, g_predictor_calc_history_mutex);
         }
     }
 
@@ -404,7 +411,12 @@ void MouseThread::moveMouse(const AimbotTarget &target)
 
     // 4. Calculate PID Output based on Error
     Eigen::Vector2f error(error_x, error_y);
+    auto pid_start_time = std::chrono::steady_clock::now();
     Eigen::Vector2f pid_output = pid_controller->calculate(error);
+    auto pid_end_time = std::chrono::steady_clock::now();
+    float pid_duration_ms = std::chrono::duration<float, std::milli>(pid_end_time - pid_start_time).count();
+    g_current_pid_calc_time_ms.store(pid_duration_ms, std::memory_order_relaxed);
+    add_to_history(g_pid_calc_time_history, pid_duration_ms, g_pid_calc_history_mutex);
 
     // 5. Scale PID Output for Mouse Movement
     float move_x = pid_output.x() * current_move_scale_x; // Use read value
@@ -441,17 +453,43 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         std::lock_guard<std::mutex> lock(input_method_mutex);
         if (input_method && input_method->isValid())
         {
+            auto input_send_start_time = std::chrono::steady_clock::now();
             if (wind_mouse_enabled_val) {
                 // The target for WindMouse is the calculated dx_int, dy_int
                 WindMouse(static_cast<float>(dx_int), static_cast<float>(dy_int),
                           wind_G_val, wind_W_val, wind_M_val, wind_D_val,
-                          [this](int mdx, int mdy) {
+                          [this](int mdx, int mdy) { // Capture this
                               if (this->input_method && this->input_method->isValid()) {
+                                 // Note: Measuring time inside this lambda for each small WindMouse step
+                                 // might be too granular and add overhead. 
+                                 // Consider measuring the whole WindMouse call if that's more representative.
+                                 // For now, sticking to measuring the direct input_method->move call.
+                                 auto wind_move_start = std::chrono::steady_clock::now();
                                  this->input_method->move(mdx, mdy);
+                                 auto wind_move_end = std::chrono::steady_clock::now();
+                                 float wind_move_duration_ms = std::chrono::duration<float, std::milli>(wind_move_end - wind_move_start).count();
+                                 // Decide how to aggregate WindMouse step times - perhaps an average or sum per WindMouse call?
+                                 // For simplicity, let's update with the latest step time. This might make the graph jumpy.
+                                 // A better approach might be to measure the whole WindMouse execution outside and report that.
+                                 // However, the request was to measure input send time, and this IS an input send.
+                                 g_current_input_send_time_ms.store(wind_move_duration_ms, std::memory_order_relaxed);
+                                 add_to_history(g_input_send_time_history, wind_move_duration_ms, g_input_send_history_mutex);
                               }
                           });
             } else {
                 input_method->move(dx_int, dy_int);
+            }
+            auto input_send_end_time = std::chrono::steady_clock::now();
+            float input_send_duration_ms = std::chrono::duration<float, std::milli>(input_send_end_time - input_send_start_time).count();
+            // If WindMouse was used, the input_send_duration_ms here would be for the whole WindMouse call.
+            // If not, it's for the single input_method->move call.
+            // This makes the meaning of g_current_input_send_time_ms a bit mixed if WindMouse calls occur.
+            // For now, let's prioritize the overall time if WindMouse is on, or the specific call if not.
+            // The lambda in WindMouse updates g_current_input_send_time_ms for each segment.
+            // If WindMouse is NOT active, this outer measurement is the one we want.
+            if (!wind_mouse_enabled_val) {
+                g_current_input_send_time_ms.store(input_send_duration_ms, std::memory_order_relaxed);
+                add_to_history(g_input_send_time_history, input_send_duration_ms, g_input_send_history_mutex);
             }
         }
     }
@@ -465,9 +503,14 @@ void MouseThread::pressMouse(const AimbotTarget &target)
 
     if (bScope && !mouse_pressed)
     {
-        if (input_method)
+        if (input_method && input_method->isValid())
         {
+            auto input_press_start_time = std::chrono::steady_clock::now();
             input_method->press();
+            auto input_press_end_time = std::chrono::steady_clock::now();
+            float press_duration_ms = std::chrono::duration<float, std::milli>(input_press_end_time - input_press_start_time).count();
+            g_current_input_send_time_ms.store(press_duration_ms, std::memory_order_relaxed); // Update with press time
+            add_to_history(g_input_send_time_history, press_duration_ms, g_input_send_history_mutex);
         }
         mouse_pressed = true;
     }
@@ -480,9 +523,14 @@ void MouseThread::releaseMouse()
 
     std::lock_guard<std::mutex> lock(input_method_mutex);
 
-    if (input_method)
+    if (input_method && input_method->isValid())
     {
+        auto input_release_start_time = std::chrono::steady_clock::now();
         input_method->release();
+        auto input_release_end_time = std::chrono::steady_clock::now();
+        float release_duration_ms = std::chrono::duration<float, std::milli>(input_release_end_time - input_release_start_time).count();
+        g_current_input_send_time_ms.store(release_duration_ms, std::memory_order_relaxed); // Update with release time
+        add_to_history(g_input_send_time_history, release_duration_ms, g_input_send_history_mutex);
     }
     mouse_pressed = false;
 }
@@ -497,8 +545,8 @@ void MouseThread::applyRecoilCompensation(float strength)
         return;
     }
 
-    auto now = std::chrono::steady_clock::now();
-    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_recoil_compensation_time);
+    auto now_chrono_recoil = std::chrono::steady_clock::now(); // Renamed to avoid conflict
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now_chrono_recoil - last_recoil_compensation_time);
     
     long long current_norecoil_ms;
     {
@@ -513,10 +561,15 @@ void MouseThread::applyRecoilCompensation(float strength)
         
         int dy_recoil = static_cast<int>(std::round(strength));
         if (dy_recoil != 0) {
+             auto recoil_send_start_time = std::chrono::steady_clock::now();
              input_method->move(0, dy_recoil);
+             auto recoil_send_end_time = std::chrono::steady_clock::now();
+             float recoil_send_duration_ms = std::chrono::duration<float, std::milli>(recoil_send_end_time - recoil_send_start_time).count();
+             g_current_input_send_time_ms.store(recoil_send_duration_ms, std::memory_order_relaxed);
+             add_to_history(g_input_send_time_history, recoil_send_duration_ms, g_input_send_history_mutex);
         }
         
-        last_recoil_compensation_time = now;
+        last_recoil_compensation_time = now_chrono_recoil;
     }
 }
 

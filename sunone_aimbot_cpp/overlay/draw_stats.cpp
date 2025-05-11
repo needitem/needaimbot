@@ -48,7 +48,7 @@ void draw_stats() {
     ImVec2 plot_size = ImVec2(ImGui::GetContentRegionAvail().x, 60.0f);
     float min_y, max_y;
 
-    // Detector Cycle Time (Previously Detector Loop Cycle Time)
+    // Detector Cycle Time
     ImGui::Text("Detector Cycle Time");
     float current_cycle_time = g_current_detector_cycle_time_ms.load(std::memory_order_relaxed);
     std::vector<float> cycle_history = get_history_copy(g_detector_cycle_time_history, g_detector_cycle_history_mutex);
@@ -114,4 +114,55 @@ void draw_stats() {
         ImGui::Text("No FPS data yet.");
     }
     ImGui::TextUnformatted(fps_label);
+    ImGui::Separator();
+
+    // PID Calculation Time
+    ImGui::Text("PID Calculation Time");
+    float current_pid_time = g_current_pid_calc_time_ms.load(std::memory_order_relaxed);
+    std::vector<float> pid_history = get_history_copy(g_pid_calc_time_history, g_pid_calc_history_mutex);
+    char pid_label[128];
+    snprintf(pid_label, sizeof(pid_label), "Current: %.3f ms", current_pid_time);
+    get_plot_scale(pid_history, min_y, max_y);
+    if (!pid_history.empty()) {
+        ImGui::PlotLines("##PIDCalcTimePlot", pid_history.data(), static_cast<int>(pid_history.size()),
+                         0, nullptr, min_y, max_y, plot_size);
+    } else {
+        ImGui::Dummy(plot_size);
+        ImGui::Text("No PID data yet.");
+    }
+    ImGui::TextUnformatted(pid_label);
+    ImGui::Separator();
+
+    // Predictor Calculation Time
+    ImGui::Text("Predictor Calculation Time");
+    float current_predictor_time = g_current_predictor_calc_time_ms.load(std::memory_order_relaxed);
+    std::vector<float> predictor_history = get_history_copy(g_predictor_calc_time_history, g_predictor_calc_history_mutex);
+    char predictor_label[128];
+    snprintf(predictor_label, sizeof(predictor_label), "Current: %.3f ms", current_predictor_time);
+    get_plot_scale(predictor_history, min_y, max_y);
+    if (!predictor_history.empty()) {
+        ImGui::PlotLines("##PredictorCalcTimePlot", predictor_history.data(), static_cast<int>(predictor_history.size()),
+                         0, nullptr, min_y, max_y, plot_size);
+    } else {
+        ImGui::Dummy(plot_size);
+        ImGui::Text("No predictor data yet.");
+    }
+    ImGui::TextUnformatted(predictor_label);
+    ImGui::Separator();
+
+    // Input Send Time
+    ImGui::Text("Input Send Time");
+    float current_input_send_time = g_current_input_send_time_ms.load(std::memory_order_relaxed);
+    std::vector<float> input_send_history = get_history_copy(g_input_send_time_history, g_input_send_history_mutex);
+    char input_send_label[128];
+    snprintf(input_send_label, sizeof(input_send_label), "Current: %.3f ms", current_input_send_time);
+    get_plot_scale(input_send_history, min_y, max_y);
+    if (!input_send_history.empty()) {
+        ImGui::PlotLines("##InputSendTimePlot", input_send_history.data(), static_cast<int>(input_send_history.size()),
+                         0, nullptr, min_y, max_y, plot_size);
+    } else {
+        ImGui::Dummy(plot_size);
+        ImGui::Text("No input send data yet.");
+    }
+    ImGui::TextUnformatted(input_send_label);
 }
