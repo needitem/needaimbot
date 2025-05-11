@@ -45,6 +45,8 @@ public:
     std::string virtual_camera_name;
     bool capture_use_cuda;
 
+    int capture_timeout_ms = 5; // Default value, can be overridden by config.ini
+
     // Target
     float body_y_offset;
     float head_y_offset;

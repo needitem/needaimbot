@@ -412,6 +412,10 @@ public:
         }
     }
 
+    void SetAcquireTimeout(UINT timeout) {
+        m_timeout = timeout;
+    }
+
 public:
     ID3D11Device *m_device;
     ID3D11DeviceContext *m_context;
@@ -424,7 +428,7 @@ public:
     cudaStream_t m_cudaStream;
     cudaEvent_t m_captureDoneEvent;
     std::vector<cv::cuda::GpuMat> m_framePool;
-    UINT m_timeout = 16;
+    UINT m_timeout = 1; // Default timeout for AcquireNextFrame in milliseconds
     std::vector<BYTE> m_metaDataBuffer;
 };
 
@@ -447,6 +451,11 @@ DuplicationAPIScreenCapture::DuplicationAPIScreenCapture(int desiredWidth, int d
         std::cerr << "[Capture] Error initializing DuplicationAPIScreenCapture: hr=0x"
                   << std::hex << hr << std::endl;
         return;
+    }
+
+    // Set timeout after DDAManager is successfully initialized
+    if (m_ddaManager) {
+        m_ddaManager->SetAcquireTimeout(config.capture_timeout_ms);
     }
 
     m_initialized = true;
@@ -645,6 +654,12 @@ cv::Mat DuplicationAPIScreenCapture::GetNextFrameCpu()
     }
 
     return frameCpu;
+}
+
+void DuplicationAPIScreenCapture::SetAcquireTimeout(UINT timeout) {
+    if (m_ddaManager) {
+        m_ddaManager->SetAcquireTimeout(timeout);
+    }
 }
 
 cudaEvent_t DuplicationAPIScreenCapture::GetCaptureDoneEvent() const

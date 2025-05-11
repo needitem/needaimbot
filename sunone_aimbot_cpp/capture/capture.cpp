@@ -172,12 +172,34 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 capture_borders_changed.store(false);
             }
 
+            if (capture_timeout_changed.load())
+            {
+                if (capturer) {
+                    capturer->SetAcquireTimeout(config.capture_timeout_ms);
+                }
+                if (config.verbose) {
+                    std::cout << "[Capture] AcquireFrame timeout changed to: " << config.capture_timeout_ms << "ms" << std::endl;
+                }
+                capture_timeout_changed.store(false);
+            }
+
             cv::cuda::GpuMat screenshotGpu;
             cv::Mat screenshotCpu;
 
+            auto frame_acq_start_time = std::chrono::high_resolution_clock::now();
+
             if (config.capture_use_cuda) {
                 screenshotGpu = capturer->GetNextFrameGpu();
+            } else {
+                screenshotCpu = capturer->GetNextFrameCpu();
+            }
 
+            auto frame_acq_end_time = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<float, std::milli> frame_acq_duration_ms = frame_acq_end_time - frame_acq_start_time;
+            g_current_frame_acquisition_time_ms.store(frame_acq_duration_ms.count());
+            add_to_history(g_frame_acquisition_time_history, frame_acq_duration_ms.count(), g_frame_acquisition_history_mutex);
+
+            if (config.capture_use_cuda) {
                 if (!screenshotGpu.empty())
                 {
                     detector.processFrame(screenshotGpu);
@@ -203,8 +225,6 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 
                 }
             } else {
-                screenshotCpu = capturer->GetNextFrameCpu();
-
                 if (!screenshotCpu.empty())
                 {
                     detector.processFrame(screenshotCpu);
