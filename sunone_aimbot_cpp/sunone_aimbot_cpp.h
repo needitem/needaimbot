@@ -4,7 +4,7 @@
 #include "config.h"
 #include "detector.h"
 #include "mouse.h"
-#include "SerialConnection.h"
+#include "mouse/input_drivers/SerialConnection.h"
 
 extern Config config;
 extern Detector detector;

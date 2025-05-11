@@ -8,10 +8,10 @@
 #include <thread>
 #include <iostream>
 
-#include "config.h"
-#include "SerialConnection.h"
+#include "../config/config.h"
+#include "../mouse/input_drivers/SerialConnection.h"
 #include "keyboard_listener.h"
-#include "mouse.h"
+#include "../mouse/mouse.h"
 #include "keycodes.h"
 #include "sunone_aimbot_cpp.h"
 #include "capture.h"
