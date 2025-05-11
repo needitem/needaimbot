@@ -17,13 +17,13 @@
 #include "sunone_aimbot_cpp.h"
 #include "keyboard_listener.h"
 #include "overlay.h"
-#include "SerialConnection.h"
-#include "ghub.h"
+#include "mouse/input_drivers/SerialConnection.h"
+#include "mouse/input_drivers/ghub.h"
 #include "other_tools.h"
-#include "mouse/InputMethod.h"
+#include "mouse/input_drivers/InputMethod.h"
 #include "config.h"
 #include "detector/detector.h"
-#include "kmboxNet.h"
+#include "mouse/input_drivers/kmboxNet.h"
 
 // Include headers for version checking
 #include <cuda_runtime_api.h>
