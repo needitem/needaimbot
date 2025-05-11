@@ -57,6 +57,7 @@ bool Config::loadConfig(const std::string& filename)
         capture_cursor = true;
         virtual_camera_name = "None";
         capture_use_cuda = true;
+        capture_timeout_ms = 5; // Default for new config file
 
         // Target
         body_y_offset = 0.15f;
@@ -214,6 +215,7 @@ bool Config::loadConfig(const std::string& filename)
     capture_cursor = get_bool_ini("Capture", "capture_cursor", true);
     virtual_camera_name = get_string_ini("Capture", "virtual_camera_name", "None");
     capture_use_cuda = get_bool_ini("Capture", "capture_use_cuda", true);
+    capture_timeout_ms = get_long_ini("Capture", "capture_timeout_ms", 5);
 
     body_y_offset = (float)get_double_ini("Target", "body_y_offset", 0.15);
     head_y_offset = (float)get_double_ini("Target", "head_y_offset", 0.05);
@@ -379,7 +381,8 @@ bool Config::saveConfig(const std::string& filename)
     file << "capture_borders = " << (capture_borders ? "true" : "false") << "\n";
     file << "capture_cursor = " << (capture_cursor ? "true" : "false") << "\n";
     file << "virtual_camera_name = " << virtual_camera_name << "\n";
-    file << "capture_use_cuda = " << (capture_use_cuda ? "true" : "false") << "\n\n";
+    file << "capture_use_cuda = " << (capture_use_cuda ? "true" : "false") << "\n";
+    file << "capture_timeout_ms = " << capture_timeout_ms << "\n\n";
 
     file << "[Target]\n";
     file << std::fixed << std::setprecision(6);

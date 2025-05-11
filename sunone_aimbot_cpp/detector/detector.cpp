@@ -560,6 +560,7 @@ void Detector::inferenceThread()
     }
 
     cv::cuda::GpuMat frameGpu;
+    static auto last_inference_loop_start_time = std::chrono::high_resolution_clock::time_point{}; // For cycle time
 
     while (!shouldExit)
     {
@@ -643,6 +644,14 @@ void Detector::inferenceThread()
         
         if (hasNewFrame && ((isGpu && !frameGpu.empty()) || (!isGpu && !frameCpu.empty())))
         {
+            auto current_inference_loop_start_time = std::chrono::high_resolution_clock::now();
+            if (last_inference_loop_start_time.time_since_epoch().count() != 0) { // Not the first frame
+                std::chrono::duration<float, std::milli> cycle_duration_ms = current_inference_loop_start_time - last_inference_loop_start_time;
+                g_current_detector_cycle_time_ms.store(cycle_duration_ms.count());
+                add_to_history(g_detector_cycle_time_history, cycle_duration_ms.count(), g_detector_cycle_history_mutex);
+            }
+            last_inference_loop_start_time = current_inference_loop_start_time;
+
             try
             {
                 auto inference_start_time = std::chrono::high_resolution_clock::now(); // Start timing for inference

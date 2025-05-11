@@ -55,6 +55,7 @@ std::atomic<bool> detector_model_changed(false);
 std::atomic<bool> show_window_changed(false);
 std::atomic<bool> input_method_changed(false);
 std::atomic<bool> prediction_settings_changed(false);
+std::atomic<bool> capture_timeout_changed(false);
 
 std::atomic<bool> zooming(false);
 std::atomic<bool> shooting(false);
@@ -68,6 +69,16 @@ std::mutex g_inference_history_mutex;
 std::atomic<float> g_current_capture_fps(0.0f);
 std::vector<float> g_capture_fps_history;
 std::mutex g_capture_history_mutex;
+
+// Detector Loop Cycle Time definitions
+std::atomic<float> g_current_detector_cycle_time_ms(0.0f);
+std::vector<float> g_detector_cycle_time_history;
+std::mutex g_detector_cycle_history_mutex;
+
+// Frame Acquisition Time definitions
+std::atomic<float> g_current_frame_acquisition_time_ms(0.0f);
+std::vector<float> g_frame_acquisition_time_history;
+std::mutex g_frame_acquisition_history_mutex;
 
 struct alignas(64) DetectionData {
     std::vector<cv::Rect> boxes;
