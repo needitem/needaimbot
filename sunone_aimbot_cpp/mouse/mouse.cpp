@@ -16,20 +16,20 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-#include "PIDController2D.h"
+#include "aimbot_components/PIDController2D.h"
 #include "mouse.h"
-#include "AimbotTarget.h"
-#include "capture.h"
-#include "SerialConnection.h"
+#include "aimbot_components/AimbotTarget.h"
+#include "capture/capture.h"
+#include "input_drivers/SerialConnection.h"
 #include "sunone_aimbot_cpp.h"
-#include "ghub.h"
-#include "config.h"
+#include "input_drivers/ghub.h"
+#include "config/config.h"
 #include "keyboard/keyboard_listener.h"
-#include "IPredictor.h"
-#include "VelocityPredictor.h"
-#include "LinearRegressionPredictor.h"
-#include "ExponentialSmoothingPredictor.h"
-#include "KalmanFilterPredictor.h"
+#include "predictors/IPredictor.h"
+#include "predictors/VelocityPredictor.h"
+#include "predictors/LinearRegressionPredictor.h"
+#include "predictors/ExponentialSmoothingPredictor.h"
+#include "predictors/KalmanFilterPredictor.h"
 
 extern std::atomic<bool> aiming;
 extern std::mutex configMutex;

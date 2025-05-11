@@ -13,10 +13,14 @@
 #include <chrono>
 #include <atomic>
 
-#include "AimbotTarget.h"
-#include "SerialConnection.h"
-#include "ghub.h"
-#include "InputMethod.h"
+#include "config/config.h"
+#include "aimbot_components/AimbotTarget.h"
+#include "predictors/IPredictor.h"
+#include "input_drivers/SerialConnection.h"
+#include "input_drivers/ghub.h"
+#include "input_drivers/kmboxNet.h"
+#include "input_drivers/rzctl.h"
+#include "input_drivers/InputMethod.h"
 
 // Forward declare PIDController2D
 class PIDController2D;
