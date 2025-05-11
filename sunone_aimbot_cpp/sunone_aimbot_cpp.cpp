@@ -60,6 +60,15 @@ std::atomic<bool> zooming(false);
 std::atomic<bool> shooting(false);
 std::atomic<bool> auto_shoot_active(false);
 
+// Stats variables definitions
+std::atomic<float> g_current_inference_time_ms(0.0f);
+std::vector<float> g_inference_time_history;
+std::mutex g_inference_history_mutex;
+
+std::atomic<float> g_current_capture_fps(0.0f);
+std::vector<float> g_capture_fps_history;
+std::mutex g_capture_history_mutex;
+
 struct alignas(64) DetectionData {
     std::vector<cv::Rect> boxes;
     std::vector<int> classes;
@@ -377,6 +386,14 @@ bool loadAndValidateModel(std::string& modelName, const std::vector<std::string>
     }
     
     return true;
+}
+
+void add_to_history(std::vector<float>& history, float value, std::mutex& mtx, int max_size) {
+    std::lock_guard<std::mutex> lock(mtx);
+    history.push_back(value);
+    if (history.size() > static_cast<size_t>(max_size)) {
+        history.erase(history.begin());
+    }
 }
 
 int main()

@@ -229,6 +229,10 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
             auto elapsed_fps = std::chrono::duration_cast<std::chrono::seconds>(now - captureFpsStartTime).count();
             if (elapsed_fps >= 1)
             {
+                float current_fps_val = static_cast<float>(captureFrameCount.load()) / static_cast<float>(elapsed_fps > 0 ? elapsed_fps : 1); 
+                g_current_capture_fps.store(current_fps_val);
+                add_to_history(g_capture_fps_history, current_fps_val, g_capture_history_mutex);
+
                 captureFps = captureFrameCount.load();
                 captureFrameCount = 0;
                 captureFpsStartTime = now;
