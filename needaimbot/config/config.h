@@ -46,6 +46,7 @@ public:
     bool capture_use_cuda;
 
     int capture_timeout_ms = 5; // Default value, can be overridden by config.ini
+    float target_fps; // Target FPS for main processing loop
 
     // Target
     float body_y_offset;
@@ -157,6 +158,16 @@ public:
     bool enable_target_locking;
     float target_locking_iou_threshold;
     int target_locking_max_lost_frames;
+
+    // --- Optical Flow Settings ---
+    bool enable_optical_flow;
+    bool draw_optical_flow; // To toggle drawing on the debug window
+    float optical_flow_alpha_cpu; // For visualization
+    int draw_optical_flow_steps;    // For visualization density
+    float optical_flow_magnitudeThreshold; // For filtering flow vectors
+    float staticFrameThreshold; // For detecting static frames to pause OF
+    float fovX; // Horizontal Field of View (degrees), used in OF calculations
+    float fovY; // Vertical Field of View (degrees), used in OF calculations
 
     bool loadConfig(const std::string& filename = "config.ini");
     bool saveConfig(const std::string& filename = "config.ini");

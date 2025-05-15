@@ -25,6 +25,8 @@
 #include "keyboard_listener.h"
 #include "other_tools.h"
 
+// Definition for the global atomic flag
+std::atomic<bool> g_config_optical_flow_changed{false};
 
 ID3D11Device* g_pd3dDevice = NULL;
 ID3D11DeviceContext* g_pd3dDeviceContext = NULL;
@@ -448,6 +450,12 @@ void OverlayThread()
                     if (ImGui::BeginTabItem("AI"))
                     {
                         draw_ai();
+                        ImGui::EndTabItem();
+                    }
+
+                    if (ImGui::BeginTabItem("Optical Flow"))
+                    {
+                        draw_optical_flow();
                         ImGui::EndTabItem();
                     }
 

@@ -58,6 +58,7 @@ bool Config::loadConfig(const std::string& filename)
         virtual_camera_name = "None";
         capture_use_cuda = true;
         capture_timeout_ms = 5; // Default for new config file
+        target_fps = 120.0f; // Default target FPS
 
         // Target
         body_y_offset = 0.15f;
@@ -180,6 +181,16 @@ bool Config::loadConfig(const std::string& filename)
         always_on_top = true;
         verbose = false;
 
+        // Optical Flow Defaults
+        enable_optical_flow = false;
+        draw_optical_flow = false;
+        optical_flow_alpha_cpu = 10.0f;
+        draw_optical_flow_steps = 16;
+        optical_flow_magnitudeThreshold = 0.5f;
+        staticFrameThreshold = 1.0f;
+        fovX = 90.0f; // Default FoV X
+        fovY = 60.0f; // Default FoV Y
+
         saveConfig(filename); // Save the newly created default config
         return true;
     }
@@ -217,6 +228,7 @@ bool Config::loadConfig(const std::string& filename)
     virtual_camera_name = get_string_ini("Capture", "virtual_camera_name", "None");
     capture_use_cuda = get_bool_ini("Capture", "capture_use_cuda", true);
     capture_timeout_ms = get_long_ini("Capture", "capture_timeout_ms", 5);
+    target_fps = (float)get_double_ini("Capture", "target_fps", 120.0);
 
     body_y_offset = (float)get_double_ini("Target", "body_y_offset", 0.15);
     head_y_offset = (float)get_double_ini("Target", "head_y_offset", 0.05);
@@ -305,6 +317,16 @@ bool Config::loadConfig(const std::string& filename)
     always_on_top = get_bool_ini("Debug", "always_on_top", true);
     verbose = get_bool_ini("Debug", "verbose", false);
 
+    // Load Optical Flow Settings
+    enable_optical_flow = get_bool_ini("OpticalFlow", "enable_optical_flow", false);
+    draw_optical_flow = get_bool_ini("OpticalFlow", "draw_optical_flow", false);
+    optical_flow_alpha_cpu = (float)get_double_ini("OpticalFlow", "optical_flow_alpha_cpu", 10.0);
+    draw_optical_flow_steps = get_long_ini("OpticalFlow", "draw_optical_flow_steps", 16);
+    optical_flow_magnitudeThreshold = (float)get_double_ini("OpticalFlow", "optical_flow_magnitudeThreshold", 0.5);
+    staticFrameThreshold = (float)get_double_ini("OpticalFlow", "staticFrameThreshold", 1.0);
+    fovX = (float)get_double_ini("OpticalFlow", "fovX", 90.0);
+    fovY = (float)get_double_ini("OpticalFlow", "fovY", 60.0);
+
     // --- Load Custom Class Settings --- 
     head_class_name = get_string_ini("Classes", "HeadClassName", "Head");
 
@@ -383,7 +405,8 @@ bool Config::saveConfig(const std::string& filename)
     file << "capture_cursor = " << (capture_cursor ? "true" : "false") << "\n";
     file << "virtual_camera_name = " << virtual_camera_name << "\n";
     file << "capture_use_cuda = " << (capture_use_cuda ? "true" : "false") << "\n";
-    file << "capture_timeout_ms = " << capture_timeout_ms << "\n\n";
+    file << "capture_timeout_ms = " << capture_timeout_ms << "\n";
+    file << "target_fps = " << target_fps << "\n\n";
 
     file << "[Target]\n";
     file << std::fixed << std::setprecision(6);

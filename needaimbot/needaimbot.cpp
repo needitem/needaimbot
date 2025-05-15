@@ -24,6 +24,7 @@
 #include "config.h"
 #include "detector/detector.h"
 #include "mouse/input_drivers/kmboxNet.h"
+#include "capture/optical_flow.h"
 
 // Include headers for version checking
 #include <cuda_runtime_api.h>
@@ -36,6 +37,7 @@ std::atomic<bool> detectionPaused(false);
 std::mutex configMutex;
 
 Config config;
+OpticalFlow g_opticalFlow;
 
 Detector detector;
 MouseThread *globalMouseThread = nullptr;
@@ -61,6 +63,7 @@ std::atomic<bool> zooming(false);
 std::atomic<bool> shooting(false);
 std::atomic<bool> auto_shoot_active(false);
 std::atomic<bool> silent_aim_trigger(false);
+std::atomic<bool> config_optical_flow_changed(false);
 
 // Stats variables definitions
 std::atomic<float> g_current_inference_time_ms(0.0f);
@@ -95,6 +98,8 @@ std::mutex g_predictor_calc_history_mutex;
 std::atomic<float> g_current_input_send_time_ms(0.0f);
 std::vector<float> g_input_send_time_history;
 std::mutex g_input_send_history_mutex;
+
+std::atomic<bool> config_changed_flag(false);
 
 struct alignas(64) DetectionData {
     std::vector<cv::Rect> boxes;
@@ -268,14 +273,35 @@ inline void handleEasyNoRecoil(MouseThread &mouseThread)
 
 void mouseThreadFunction(MouseThread &mouseThread)
 {
+    std::cout << "Mouse thread started." << std::endl;
+    auto last_frame_time = std::chrono::high_resolution_clock::now();
+    float target_fps = config.target_fps > 0 ? config.target_fps : 60.0f; // Ensure target_fps is positive
+    float target_frame_time_ms = 1000.0f / target_fps; 
+
     int lastDetectionVersion = -1;
     const void* last_target_identifier = nullptr;
-    
-    constexpr auto idle_timeout = std::chrono::milliseconds(30);
-    constexpr auto active_timeout = std::chrono::milliseconds(5);
-    
+    std::chrono::steady_clock::time_point last_successful_target_time = std::chrono::steady_clock::now();
+    std::chrono::steady_clock::time_point last_mouse_move_time = std::chrono::steady_clock::now();
+    const std::chrono::milliseconds active_timeout(15); 
+    const std::chrono::milliseconds idle_timeout(1);    
+
     while (!shouldExit)
     {
+        auto loop_start_time = std::chrono::high_resolution_clock::now();
+
+        if (config_optical_flow_changed.load()) {
+            if (config.enable_optical_flow) {
+                // Check if thread is already running; a simple way is to see if it's joinable
+                // This is not perfect, a dedicated is_running flag in OpticalFlow class would be better
+                std::cout << "[Config Change] Enabling optical flow. Starting thread if not already running." << std::endl;
+                g_opticalFlow.startOpticalFlowThread(); // startOpticalFlowThread handles if it's already running
+            } else {
+                std::cout << "[Config Change] Disabling optical flow. Stopping thread." << std::endl;
+                g_opticalFlow.stopOpticalFlowThread();
+            }
+            config_optical_flow_changed = false; // Reset flag
+        }
+
         auto timeout = aiming.load() ? active_timeout : idle_timeout;
         
         bool is_aiming = aiming.load();
@@ -400,6 +426,56 @@ void mouseThreadFunction(MouseThread &mouseThread)
                     mouseThread.releaseMouse();
                 }
             }
+        }
+
+        // Frame capture logic (assuming latestFrameGpu is updated by captureThread)
+        cv::cuda::GpuMat currentGpuFrame;
+        bool new_frame_for_detection = false;
+        {
+            std::unique_lock<std::mutex> lock(frameMutex);
+            if (frameCV.wait_for(lock, timeout, []{ return newFrameAvailable.load() || shouldExit.load(); })) {
+                if (shouldExit.load()) break;
+                if (newFrameAvailable.load()) {
+                    currentGpuFrame = latestFrameGpu.clone(); // Clone to work on a stable copy
+                    newFrameAvailable = false;
+                    new_frame_for_detection = true;
+                }
+            }
+        }
+
+        if (shouldExit.load()) break;
+
+        if (new_frame_for_detection && !currentGpuFrame.empty()) {
+            // Enqueue for optical flow if enabled
+            if (config.enable_optical_flow && g_opticalFlow.isThreadRunning()) { // Check if thread is intended to be running
+                g_opticalFlow.enqueueFrame(currentGpuFrame);
+            }
+            
+            // Detection is handled by the detector's own thread (detThread).
+            // The main loop (here) gets results via detector.detectionCV.
+            // So, no explicit call to detector.run_detection() here.
+            // auto detection_start_time = std::chrono::high_resolution_clock::now();
+            // detector.run_detection(currentGpuFrame); // REMOVED
+            // auto detection_end_time = std::chrono::high_resolution_clock::now();
+            // g_current_inference_time_ms = std::chrono::duration<float, std::milli>(detection_end_time - detection_start_time).count();
+            // add_to_history(g_inference_time_history, g_current_inference_time_ms.load(), g_inference_history_mutex);
+            // The timing for inference should be done within the Detector's inferenceThread.
+
+            // MouseThread already processes the best target derived from Detector's output earlier in this loop.
+            // if (!detectionPaused.load())
+            // {
+            //    mouseThread.processDetections(detector.detectedBoxes, detector.detectedClasses, detector.detectedConfidences); // REMOVED
+            // }
+        }
+
+        // Aiming / Firing logic 
+        auto loop_end_time = std::chrono::high_resolution_clock::now();
+        auto loop_duration = std::chrono::duration<float, std::milli>(loop_end_time - loop_start_time).count();
+        
+        target_fps = config.target_fps > 0 ? config.target_fps : 60.0f;
+        target_frame_time_ms = 1000.0f / target_fps;
+        if (loop_duration < target_frame_time_ms) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(target_frame_time_ms - loop_duration)));
         }
     }
 
@@ -567,10 +643,15 @@ int main()
         displayThread();
 
         keyThread.join();
+        std::cout << "Keyboard listener thread joined." << std::endl;
         capThread.join();
+        std::cout << "Capture thread joined." << std::endl;
         detThread.join();
+        std::cout << "Detection thread joined." << std::endl;
         mouseMovThread.join();
+        std::cout << "Mouse movement thread joined." << std::endl;
         overlayThread.join();
+        std::cout << "Overlay thread joined." << std::endl;
 
         if (arduinoSerial)
         {
@@ -581,6 +662,12 @@ int main()
         {
             gHub->mouse_close();
             delete gHub;
+        }
+
+        // Stop Optical Flow thread before exiting
+        if (config.enable_optical_flow) { // Or more robustly, check if it was ever started
+            std::cout << "Shutting down: Stopping optical flow thread." << std::endl;
+            g_opticalFlow.stopOpticalFlowThread();
         }
 
         return 0;
