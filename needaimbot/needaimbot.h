@@ -8,6 +8,7 @@
 #include <vector>
 #include <atomic>
 #include <mutex>
+#include "capture/optical_flow.h"
 
 extern Config config;
 extern Detector detector;
@@ -18,6 +19,8 @@ extern std::atomic<bool> aiming;
 extern std::atomic<bool> shooting;
 extern std::atomic<bool> zooming;
 extern std::atomic<bool> capture_timeout_changed;
+extern OpticalFlow opticalFlow;
+extern std::atomic<bool> config_optical_flow_changed;
 
 // Maximum history size for plots
 const int STATS_HISTORY_SIZE = 100;

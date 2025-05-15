@@ -5,7 +5,7 @@
 
 #include <opencv2/opencv.hpp>
 #include <opencv2/cudaarithm.hpp>
-#include <opencv2/cudawarping.hpp>
+// #include <opencv2/cudawarping.hpp> // cudawarping for resize might not be needed if we don't resize here
 #include <iostream>
 #include <atomic>
 #include <thread>
@@ -13,318 +13,143 @@
 #include <condition_variable>
 #include <chrono>
 #include <cuda_runtime_api.h>
+#include <cstdio> // For printf
 
 #include "visuals.h"
 #include "config.h"
-#include "needaimbot.h"
-#include "capture.h"
+#include "needaimbot.h" // For detector.detectionMutex, detector.m_hasBestTarget etc. if any debug drawing were to be kept (it's removed)
+#include "capture.h"   // For latestFrameGpu, latestFrameCpu, frameMutex, frameCV etc.
 
-extern std::atomic<bool> show_window_changed;
-extern std::mutex configMutex; // Declare configMutex as external
+// extern std::atomic<bool> show_window_changed; // Not used anymore by this thread
+extern std::mutex configMutex; 
 
 // Assume these are defined elsewhere and updated (e.g., in main or capture)
-extern cv::cuda::GpuMat latestFrameGpu;
-extern std::mutex frameMutex;
-extern std::condition_variable frameCV;
+// extern cv::cuda::GpuMat latestFrameGpu; // Already in capture.h
+// extern cv::Mat latestFrameCpu;         // Already in capture.h
+// extern std::mutex frameMutex;           // Already in capture.h
+// extern std::condition_variable frameCV;// Already in capture.h
 // ---
 
 void displayThread()
 {
-    int currentSize = 0;
-    // We need both GPU and CPU Mats for different paths
-    cv::cuda::GpuMat frameGpu;
-    cv::cuda::GpuMat displayFrameGpu;
-    cv::Mat frameCpu;
-    cv::Mat displayFrameCpu; // This will hold the final image for imshow
-    cv::cuda::Stream visStream;
-    bool window_created = false;
+    // printf("[DisplayThread] Thread started.\n");
+    cv::cuda::GpuMat acquiredGpuFrame;
+    cv::Mat acquiredCpuFrame;
+    cv::cuda::Stream processingStream; // Optional stream for GPU operations
+
+    int loop_count = 0;
 
     while (!shouldExit)
     {
-        bool show_window_flag_changed = show_window_changed.load();
-        bool should_show_window = false;
-        bool should_be_always_on_top = false;
-        bool use_cuda = false; // Capture mode
-        int window_size = 100;
-        bool show_fps = false;
+        loop_count++;
+        // printf("[DisplayThread L%d] Loop iteration start.\n", loop_count);
 
+        bool use_cuda_capture = false;
         {
+            // printf("[DisplayThread L%d] Attempting to lock configMutex...\n", loop_count);
             std::lock_guard<std::mutex> lock(configMutex);
-            should_show_window = config.show_window;
-            should_be_always_on_top = config.always_on_top;
-            use_cuda = config.capture_use_cuda;
-            window_size = config.window_size;
-            show_fps = config.show_fps;
+            use_cuda_capture = config.capture_use_cuda;
+            // printf("[DisplayThread L%d] configMutex locked and released. use_cuda_capture: %d\n", loop_count, use_cuda_capture);
         }
 
-        if (show_window_flag_changed) {
-            show_window_changed.store(false);
-        }
+        // --- Frame Acquisition ---
+        bool new_frame_was_available = false;
+        // printf("[DisplayThread L%d] Attempting to lock frameMutex for frame acquisition...\n", loop_count);
+        {
+            std::unique_lock<std::mutex> lock(frameMutex);
+            // printf("[DisplayThread L%d] frameMutex locked for frame acquisition.\n", loop_count);
+            // printf("[DisplayThread L%d] Waiting on frameCV. newFrameAvailable: %d, shouldExit: %d\n", loop_count, newFrameAvailable.load(std::memory_order_relaxed), shouldExit.load(std::memory_order_relaxed));
+            
+            frameCV.wait(lock, [&] { 
+                // This lambda can be noisy, only log if something changes or for a few iterations
+                // if (loop_count < 5) printf("[DisplayThread L%d] frameCV predicate check. newFrameAvailable: %d, shouldExit: %d\n", loop_count, newFrameAvailable.load(std::memory_order_relaxed), shouldExit.load(std::memory_order_relaxed));
+                return newFrameAvailable.load(std::memory_order_relaxed) || shouldExit.load(std::memory_order_relaxed); 
+            });
+            // printf("[DisplayThread L%d] Woke up from frameCV. newFrameAvailable: %d, shouldExit: %d\n", loop_count, newFrameAvailable.load(std::memory_order_relaxed), shouldExit.load(std::memory_order_relaxed));
 
-        // --- Window Lifecycle Management ---
-        if (should_show_window) {
-             if (!window_created) {
-                 cv::namedWindow(config.window_name, cv::WINDOW_NORMAL);
-                 cv::setWindowProperty(config.window_name, cv::WND_PROP_TOPMOST, should_be_always_on_top ? 1 : 0);
-                 window_created = true;
-                 currentSize = 0;
-                 // Clear buffers when window is created
-                 displayFrameGpu = cv::cuda::GpuMat();
-                 displayFrameCpu = cv::Mat();
-             }
-             else if (show_window_flag_changed) {
-                  cv::setWindowProperty(config.window_name, cv::WND_PROP_TOPMOST, should_be_always_on_top ? 1 : 0);
-             }
+            if (shouldExit.load(std::memory_order_relaxed)) {
+                // printf("[DisplayThread L%d] shouldExit is true, breaking loop.\n", loop_count);
+                // Mutex will be released by lock_guard at scope end
+                break;
+            }
 
-            // --- Frame Acquisition ---
-            bool frameValid = false;
-            int originalWidth = 0;
-            int originalHeight = 0;
-            {
-                std::unique_lock<std::mutex> lock(frameMutex);
-                frameCV.wait(lock, [&] { return newFrameAvailable || shouldExit; });
-
-                if (shouldExit) break;
-
-                if (newFrameAvailable) {
-                    if (use_cuda) {
-                        if (!latestFrameGpu.empty()) {
-                            frameGpu = latestFrameGpu.clone(); // Clone GPU frame
-                            originalWidth = frameGpu.cols;
-                            originalHeight = frameGpu.rows;
-                            frameValid = true;
-                        }
-                    } else { // CPU Mode
-                        if (!latestFrameCpu.empty()) {
-                            frameCpu = latestFrameCpu.clone(); // Clone CPU frame
-                            originalWidth = frameCpu.cols;
-                            originalHeight = frameCpu.rows;
-                            frameValid = true;
-                        }
+            if (newFrameAvailable.load(std::memory_order_relaxed)) {
+                // printf("[DisplayThread L%d] newFrameAvailable is true.\n", loop_count);
+                if (use_cuda_capture) {
+                    // printf("[DisplayThread L%d] CUDA capture mode. latestFrameGpu empty: %d\n", loop_count, latestFrameGpu.empty());
+                    if (!latestFrameGpu.empty()) {
+                        acquiredGpuFrame = latestFrameGpu.clone(); 
+                        // printf("[DisplayThread L%d] Cloned latestFrameGpu.\n", loop_count);
+                    } else {
+                        // printf("[DisplayThread L%d] Warning: CUDA mode but latestFrameGpu is empty.\n", loop_count);
                     }
-                    newFrameAvailable = false; // Reset flag
-                }
-            } // frameMutex unlocked
-
-            if (!frameValid || originalWidth == 0 || originalHeight == 0) continue;
-
-            // --- Resizing Logic (GPU or CPU path) ---
-            int displayWidth = originalWidth;
-            int displayHeight = originalHeight;
-            bool needsResize = false;
-
-            if (window_size != 100) {
-                displayWidth = static_cast<int>((originalWidth * window_size) / 100.0f);
-                displayHeight = static_cast<int>((originalHeight * window_size) / 100.0f);
-            }
-
-            // Check if resize is needed OR if target buffer size is wrong
-            if (currentSize != displayWidth || // Window size changed
-                (use_cuda && (displayFrameGpu.cols != displayWidth || displayFrameGpu.rows != displayHeight)) ||
-                (!use_cuda && (displayFrameCpu.cols != displayWidth || displayFrameCpu.rows != displayHeight)) ||
-                (use_cuda && displayFrameGpu.empty()) || // Buffer empty
-                (!use_cuda && displayFrameCpu.empty()) )
-            {
-                 needsResize = true; // Need resize or initial copy
-                 if (window_created && displayWidth > 0 && displayHeight > 0) {
-                     cv::resizeWindow(config.window_name, displayWidth, displayHeight);
-                 }
-                 currentSize = displayWidth;
-            }
-
-            // Perform Resize/Copy
-            if (use_cuda) {
-                bool resize_performed = false;
-                // Check if window/buffer size mismatch requires action
-                if (needsResize) {
-                    if (window_size != 100 && displayWidth > 0 && displayHeight > 0) {
-                         // Perform GPU resize
-                         cv::cuda::resize(frameGpu, displayFrameGpu, cv::Size(displayWidth, displayHeight), 0, 0, cv::INTER_LINEAR, visStream);
-                         resize_performed = true;
+                } else { // CPU Capture Mode
+                    // printf("[DisplayThread L%d] CPU capture mode. latestFrameCpu empty: %d\n", loop_count, latestFrameCpu.empty());
+                    if (!latestFrameCpu.empty()) {
+                        acquiredCpuFrame = latestFrameCpu.clone();
+                        // printf("[DisplayThread L%d] Cloned latestFrameCpu.\n", loop_count);
+                    } else {
+                        // printf("[DisplayThread L%d] Warning: CPU mode but latestFrameCpu is empty.\n", loop_count);
                     }
-                    // If window_size is 100, needsResize might be true only because displayFrameGpu was empty/wrong size.
-                    // The copy will happen below if resize wasn't performed.
                 }
-
-                // If resize was NOT performed (either needsResize was false, or window_size was 100),
-                // ensure displayFrameGpu is updated with the current frame's data using copyTo.
-                if (!resize_performed) {
-                    frameGpu.copyTo(displayFrameGpu, visStream);
-                }
-
-                 // Now download the final displayFrameGpu (it's guaranteed to be updated now)
-                 if (!displayFrameGpu.empty()){
-                     // --- BEGIN GPU Drawing (Rectangle) ---
-                     Detection bestTargetHostGpu; // Need a separate copy for GPU drawing scope
-                     bool hasTargetGpu = false;
-                     cv::Rect scaledBoxGpu; // Need a separate Rect for GPU drawing scope
-                     {
-                         // Re-acquire lock briefly to get target for GPU drawing
-                         // This is slightly inefficient but necessary if target data changes rapidly
-                         // Alternatively, copy necessary data (hasTarget, scaledBox) outside the lock earlier
-                         std::lock_guard<std::mutex> lock(detector.detectionMutex);
-                         if (detector.m_hasBestTarget) {
-                             hasTargetGpu = true;
-                             bestTargetHostGpu = detector.m_bestTargetHost; // Use the same host data
-                             // Use the same scaling logic as before
-                             cv::Rect box = bestTargetHostGpu.box;
-                             float scale_x_gpu = static_cast<float>(displayFrameGpu.cols) / config.detection_resolution; // Scale to displayFrameGpu size
-                             float scale_y_gpu = static_cast<float>(displayFrameGpu.rows) / config.detection_resolution; // Scale to displayFrameGpu size
-
-                             scaledBoxGpu.x = static_cast<int>(box.x * scale_x_gpu);
-                             scaledBoxGpu.y = static_cast<int>(box.y * scale_y_gpu);
-                             scaledBoxGpu.width = static_cast<int>(box.width * scale_x_gpu);
-                             scaledBoxGpu.height = static_cast<int>(box.height * scale_y_gpu);
-
-                             // Clamp box to displayFrameGpu dimensions
-                             scaledBoxGpu.x = std::max(0, scaledBoxGpu.x);
-                             scaledBoxGpu.y = std::max(0, scaledBoxGpu.y);
-                             scaledBoxGpu.width = std::min(displayFrameGpu.cols - scaledBoxGpu.x, scaledBoxGpu.width);
-                             scaledBoxGpu.height = std::min(displayFrameGpu.rows - scaledBoxGpu.y, scaledBoxGpu.height);
-                         }
-                     } // Unlock detector.detectionMutex
-
-                     if (hasTargetGpu && scaledBoxGpu.width > 0 && scaledBoxGpu.height > 0) {
-                         cv::Scalar gpuColor(0, 255, 0, 255); // BGRA
-                         int thickness = 2;
-
-                         // Ensure thickness doesn't exceed box dimensions or go out of bounds
-                         int clamped_thickness_w = std::min(thickness, scaledBoxGpu.width / 2);
-                         int clamped_thickness_h = std::min(thickness, scaledBoxGpu.height / 2);
-                         clamped_thickness_w = std::max(1, clamped_thickness_w); // Ensure thickness is at least 1
-                         clamped_thickness_h = std::max(1, clamped_thickness_h); // Ensure thickness is at least 1
-
-
-                         // Check boundaries before creating ROI and drawing
-                         // Top line
-                         if (scaledBoxGpu.y + clamped_thickness_h <= displayFrameGpu.rows && scaledBoxGpu.width > 0) {
-                            cv::cuda::GpuMat(displayFrameGpu, cv::Rect(scaledBoxGpu.x, scaledBoxGpu.y, scaledBoxGpu.width, clamped_thickness_h)).setTo(gpuColor, visStream);
-                         }
-                         // Bottom line
-                         if (scaledBoxGpu.y + scaledBoxGpu.height - clamped_thickness_h >= 0 && scaledBoxGpu.y + scaledBoxGpu.height <= displayFrameGpu.rows && scaledBoxGpu.width > 0) {
-                             cv::cuda::GpuMat(displayFrameGpu, cv::Rect(scaledBoxGpu.x, scaledBoxGpu.y + scaledBoxGpu.height - clamped_thickness_h, scaledBoxGpu.width, clamped_thickness_h)).setTo(gpuColor, visStream);
-                         }
-                         // Left line
-                         if (scaledBoxGpu.x + clamped_thickness_w <= displayFrameGpu.cols && scaledBoxGpu.height > 0) {
-                            cv::cuda::GpuMat(displayFrameGpu, cv::Rect(scaledBoxGpu.x, scaledBoxGpu.y, clamped_thickness_w, scaledBoxGpu.height)).setTo(gpuColor, visStream);
-                         }
-                         // Right line
-                         if (scaledBoxGpu.x + scaledBoxGpu.width - clamped_thickness_w >= 0 && scaledBoxGpu.x + scaledBoxGpu.width <= displayFrameGpu.cols && scaledBoxGpu.height > 0) {
-                             cv::cuda::GpuMat(displayFrameGpu, cv::Rect(scaledBoxGpu.x + scaledBoxGpu.width - clamped_thickness_w, scaledBoxGpu.y, clamped_thickness_w, scaledBoxGpu.height)).setTo(gpuColor, visStream);
-                         }
-                     }
-                     // --- END GPU Drawing (Rectangle) ---
-
-                     visStream.waitForCompletion(); // Ensure GPU drawing is done before download
-                     displayFrameGpu.download(displayFrameCpu, visStream);
-                     visStream.waitForCompletion();
-                 } else {
-                     std::cerr << "[Visuals] Error: displayFrameGpu is empty before download!" << std::endl;
-                     continue;
-                 }
-
-            } else { // CPU Mode
-                if (needsResize) {
-                     if (window_size != 100 && displayWidth > 0 && displayHeight > 0) {
-                          cv::resize(frameCpu, displayFrameCpu, cv::Size(displayWidth, displayHeight), 0, 0, cv::INTER_LINEAR);
-                     } else {
-                          displayFrameCpu = frameCpu; // Use directly if no resize or size 100
-                     }
-                } else if (displayFrameCpu.empty()) { // Initial frame case without resize
-                    displayFrameCpu = frameCpu;
-                }
-                 // displayFrameCpu now holds the correct CPU image
-                 if (displayFrameCpu.empty()) {
-                     std::cerr << "[Visuals] Error: displayFrameCpu is empty in CPU mode!" << std::endl;
-                     continue;
-                 }
+                newFrameAvailable.store(false, std::memory_order_relaxed); // Reset flag
+                new_frame_was_available = true;
+                // printf("[DisplayThread L%d] newFrameAvailable reset, new_frame_was_available = true.\n", loop_count);
             }
+            // printf("[DisplayThread L%d] Releasing frameMutex (end of scope) for frame acquisition.\n", loop_count);
+        } // frameMutex unlocked
 
-
-            // --- Detection Overlay Logic (Draws on displayFrameCpu) ---
-             Detection bestTargetHost;
-             bool hasTarget = false;
-             cv::Rect scaledBox;
-             std::string labelText = "";
-             {
-                 std::lock_guard<std::mutex> lock(detector.detectionMutex);
-                 if (detector.m_hasBestTarget)
-                 {
-                     hasTarget = true;
-                     bestTargetHost = detector.m_bestTargetHost;
-                     // Scaling calculations (From detection res to display size: displayWidth/displayHeight)
-                     cv::Rect box = bestTargetHost.box;
-                     float scale_x = static_cast<float>(displayWidth) / config.detection_resolution;
-                     float scale_y = static_cast<float>(displayHeight) / config.detection_resolution;
-
-                     scaledBox.x = static_cast<int>(box.x * scale_x);
-                     scaledBox.y = static_cast<int>(box.y * scale_y);
-                     scaledBox.width = static_cast<int>(box.width * scale_x);
-                     scaledBox.height = static_cast<int>(box.height * scale_y);
-
-                     // Clamp box
-                     scaledBox.x = std::max(0, scaledBox.x);
-                     scaledBox.y = std::max(0, scaledBox.y);
-                     scaledBox.width = std::min(displayWidth - scaledBox.x, scaledBox.width);
-                     scaledBox.height = std::min(displayHeight - scaledBox.y, scaledBox.height);
-
-                     labelText = "ID:" + std::to_string(bestTargetHost.classId);
-                 }
-             }
-
-            // --- Draw on CPU (displayFrameCpu) ---
-            if (!displayFrameCpu.empty()) {
-                // Draw detection box - MOVED TO GPU
-                // if (hasTarget && scaledBox.width > 0 && scaledBox.height > 0) {
-                //    cv::rectangle(displayFrameCpu, scaledBox, cv::Scalar(0, 255, 0), 2); // REMOVED
-                //    cv::Point textOrg(scaledBox.x, std::max(0, scaledBox.y - 5));
-                //    cv::putText(displayFrameCpu, labelText, textOrg, cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 1); // Keep text on CPU for now
-                //}
-
-                // Draw Text (ID) - Kept on CPU
-                 if (hasTarget && scaledBox.width > 0 && scaledBox.height > 0) { // Use original CPU-scoped variables for text placement
-                    cv::Point textOrg(scaledBox.x, std::max(0, scaledBox.y - 5));
-                    cv::putText(displayFrameCpu, labelText, textOrg, cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 1);
-                 }
-
-                // Draw FPS (Use value read earlier under lock)
-                if (show_fps) {
-                     cv::putText(displayFrameCpu, "FPS: " + std::to_string(static_cast<int>(captureFps)), cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(255, 255, 0), 2);
-                }
-            }
-
-            // --- Show Frame (displayFrameCpu) ---
-            try {
-                 if (!displayFrameCpu.empty()) {
-                     cv::imshow(config.window_name, displayFrameCpu);
-                 }
-            } catch (const cv::Exception& e) {
-                std::cerr << "[Visuals]: OpenCV display error: " << e.what() << std::endl;
-                 if(window_created) {
-                      if (cv::getWindowProperty(config.window_name, cv::WND_PROP_VISIBLE) >= 0) {
-                         cv::destroyWindow(config.window_name);
-                      }
-                      window_created = false;
-                 }
-            }
-
-            // --- Handle OpenCV events ---
-            if (cv::waitKey(1) == 27) { shouldExit = true; }
-
-        } else { // should_show_window is false
-            if (window_created) {
-                if (cv::getWindowProperty(config.window_name, cv::WND_PROP_VISIBLE) >= 0) {
-                    cv::destroyWindow(config.window_name);
-                }
-                window_created = false;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (!new_frame_was_available) {
+            // printf("[DisplayThread L%d] No new frame was available after wake-up. Sleeping briefly.\n", loop_count);
+            std::this_thread::sleep_for(std::chrono::milliseconds(5)); 
+            continue;
         }
-    } // End while loop
 
-    if (window_created) {
-        if (cv::getWindowProperty(config.window_name, cv::WND_PROP_VISIBLE) >= 0) {
-            cv::destroyWindow(config.window_name);
+        // --- Process acquired frame to update the shared latestFrameCpu ---
+        // printf("[DisplayThread L%d] Processing acquired frame. use_cuda_capture: %d\n", loop_count, use_cuda_capture);
+        if (use_cuda_capture) {
+            // printf("[DisplayThread L%d] CUDA mode processing. acquiredGpuFrame empty: %d\n", loop_count, acquiredGpuFrame.empty());
+            if (!acquiredGpuFrame.empty()) {
+                cv::Mat tempCpuFrame;
+                // printf("[DisplayThread L%d] Downloading acquiredGpuFrame...\n", loop_count);
+                try {
+                    acquiredGpuFrame.download(tempCpuFrame, processingStream);
+                    processingStream.waitForCompletion(); // Ensure download is complete
+                    // printf("[DisplayThread L%d] Download complete. tempCpuFrame empty: %d\n", loop_count, tempCpuFrame.empty());
+                } catch (const cv::Exception& e) {
+                    // printf("[DisplayThread L%d] cv::Exception during GpuMat::download: %s\n", loop_count, e.what());
+                    // Continue to allow thread to possibly recover or exit gracefully
+                }
+
+                if (!tempCpuFrame.empty()) {
+                    // printf("[DisplayThread L%d] Attempting to lock frameMutex to update latestFrameCpu...\n", loop_count);
+                    {
+                        std::lock_guard<std::mutex> lock(frameMutex); 
+                        // printf("[DisplayThread L%d] frameMutex locked to update latestFrameCpu.\n", loop_count);
+                        latestFrameCpu = tempCpuFrame.clone(); 
+                        // printf("[DisplayThread L%d] Updated global latestFrameCpu from Gpu download.\n", loop_count);
+                        // printf("[DisplayThread L%d] Releasing frameMutex (end of scope) after updating latestFrameCpu.\n", loop_count);
+                    }
+                } else {
+                    if (config.verbose) {} // printf("[DisplayThread L%d] Error: Downloaded GpuFrame is empty!\n", loop_count);
+                    if (config.verbose) OutputDebugStringA("[Visuals] Error: Downloaded GpuFrame is empty!\n"); // Kept original ODS for consistency if it's used elsewhere
+                }
+            } else {
+                 if (config.verbose) {} // printf("[DisplayThread L%d] Error: Acquired GpuFrame is empty in CUDA mode!\n", loop_count);
+                 if (config.verbose) OutputDebugStringA("[Visuals] Error: Acquired GpuFrame is empty in CUDA mode!\n");
+            }
+        } else { // CPU Capture Mode
+            // printf("[DisplayThread L%d] CPU mode processing. acquiredCpuFrame empty: %d\n", loop_count, acquiredCpuFrame.empty());
+            if (!acquiredCpuFrame.empty()) {
+                // In CPU capture mode, captureThread already updated latestFrameCpu.
+                // acquiredCpuFrame is a clone of that. No need to update latestFrameCpu again from here.
+                // printf("[DisplayThread L%d] CPU mode: latestFrameCpu already up-to-date by captureThread. No action needed with acquiredCpuFrame.\n", loop_count);
+            } else {
+                 if (config.verbose) {} // printf("[DisplayThread L%d] Error: Acquired CpuFrame is empty in CPU mode!\n", loop_count);
+                 if (config.verbose) OutputDebugStringA("[Visuals] Error: Acquired CpuFrame is empty in CPU mode!\n");
+            }
         }
+        // printf("[DisplayThread L%d] Loop iteration end.\n\n", loop_count);
     }
+    // printf("[DisplayThread] Thread exiting.\n");
 }
