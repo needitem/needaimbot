@@ -24,6 +24,7 @@ extern std::atomic<bool> capture_fps_changed;
 extern std::atomic<bool> capture_window_changed;
 extern std::atomic<bool> detector_model_changed;
 extern std::atomic<bool> show_window_changed;
+extern std::atomic<bool> g_config_optical_flow_changed;
 
 extern std::vector<std::string> key_names;
 extern std::vector<const char*> key_names_cstrs;
