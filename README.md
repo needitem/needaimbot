@@ -13,7 +13,7 @@
 	- Download and install [CUDA 12.8](https://developer.nvidia.com/cuda-12-8-0-download-archive).
 
 2. **Download the Latest Release**  
-	- Download from [Mega.nz](https://mega.nz/file/lT8XBKTR#WrbEzJl-cafjnDfyBfjMR6mbwN0_vbkKvAfSI1Mr2mc)
+	- Download from [Mega.nz](https://mega.nz/file/0PVxDRLL#b62nQhHkjm4iOIf0i8_yLuX1Gop5AomjWONGs-yfaKk)
 
 3. **Unpack Aimbot**
    - Extract the contents of the Aimbot.
