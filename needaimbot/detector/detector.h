@@ -77,6 +77,8 @@ public:
     cudaEvent_t m_captureDoneEvent = nullptr;
 
     cv::cuda::GpuMat resizedBuffer;
+    // GPU mask for HSV filtering
+    cv::cuda::GpuMat m_hsvMaskGpu;
 
     // --- Members for GPU Post-processing Pipeline ---
     Detection* m_decodedDetectionsGpu = nullptr;   // GPU buffer for decoded detections (before NMS)

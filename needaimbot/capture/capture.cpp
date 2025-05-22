@@ -11,6 +11,7 @@
 #include <timeapi.h>
 #include <condition_variable>
 #include <memory>
+#include <array>
 
 #include <opencv2/opencv.hpp>
 #include <opencv2/cudawarping.hpp>
@@ -31,9 +32,11 @@
 #include <winrt/base.h>
 #include <comdef.h>
 
+#ifndef __INTELLISENSE__
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <cuda_d3d11_interop.h>
+#endif
 
 #include "capture.h"
 #include "detector.h"
@@ -51,10 +54,17 @@ extern std::mutex configMutex;
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "windowsapp.lib")
 
+// Legacy single-buffer variables (required by visuals and draw_debug modules)
 cv::cuda::GpuMat latestFrameGpu;
-std::mutex frameMutex;
 cv::Mat latestFrameCpu;
+// Ring buffer to avoid locks
+std::array<cv::cuda::GpuMat, FRAME_BUFFER_COUNT> captureGpuBuffer;
+std::array<cv::Mat, FRAME_BUFFER_COUNT> captureCpuBuffer;
+std::atomic<int> captureGpuWriteIdx{0};
+std::atomic<int> captureCpuWriteIdx{0};
 std::atomic<bool> newFrameAvailable = false;
+// Mutex for condition_variable synchronization (defined for ring buffer signaling)
+std::mutex frameMutex;
 
 int g_captureRegionWidth = 0;
 int g_captureRegionHeight = 0;
@@ -203,22 +213,12 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 if (!screenshotGpu.empty())
                 {
                     detector.processFrame(screenshotGpu);
-
-                    {
-                        std::lock_guard<std::mutex> lock(frameMutex);
-                        latestFrameGpu = screenshotGpu.clone();
-                        {
-                           std::lock_guard<std::mutex> config_lock(configMutex);
-                            // The download for the display window is handled in the display thread.
-                            // No download needed here if the window is shown.
-                            // if (config.show_window)
-                            // {
-                            //    screenshotGpu.download(latestFrameCpu); // Removed this line
-                            // }
-                        }
-                        newFrameAvailable = true;
-                        frameCV.notify_one();
-                    }
+                    // Write to ring buffer without lock
+                    int idx = (captureGpuWriteIdx.load(std::memory_order_relaxed) + 1) % FRAME_BUFFER_COUNT;
+                    captureGpuBuffer[idx] = screenshotGpu;
+                    captureGpuWriteIdx.store(idx, std::memory_order_release);
+                    newFrameAvailable.store(true, std::memory_order_release);
+                    frameCV.notify_one(); // Wake display if needed
                 }
                 else
                 {
@@ -228,14 +228,11 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 if (!screenshotCpu.empty())
                 {
                     detector.processFrame(screenshotCpu);
-
-                    {
-                        std::lock_guard<std::mutex> lock(frameMutex);
-
-                        latestFrameCpu = screenshotCpu.clone();
-                        newFrameAvailable = true;
-
-                    }
+                    // Write to CPU ring buffer without lock
+                    int idx = (captureCpuWriteIdx.load(std::memory_order_relaxed) + 1) % FRAME_BUFFER_COUNT;
+                    captureCpuBuffer[idx] = screenshotCpu;
+                    captureCpuWriteIdx.store(idx, std::memory_order_release);
+                    newFrameAvailable.store(true, std::memory_order_release);
                     frameCV.notify_one();
                 }
                 else
@@ -266,16 +263,28 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 
                 if (buttonPressed && !buttonPreviouslyPressed && elapsed_ss > 1000)
                 {
-                    std::lock_guard<std::mutex> lock(frameMutex);
-
-                    if (config.capture_use_cuda && !latestFrameGpu.empty()) {
-                        latestFrameGpu.download(latestFrameCpu);
-                    }
-
-                    if (!latestFrameCpu.empty())
+                    // Save the most recent frame from ring buffer
+                    if (config.capture_use_cuda)
                     {
-                        saveScreenshot(latestFrameCpu);
-                        lastSaveTime = now_ss;
+                        int idx = captureGpuWriteIdx.load(std::memory_order_acquire);
+                        const cv::cuda::GpuMat& gpuFrame = captureGpuBuffer[idx];
+                        if (!gpuFrame.empty())
+                        {
+                            cv::Mat tmp;
+                            gpuFrame.download(tmp);
+                            saveScreenshot(tmp);
+                            lastSaveTime = now_ss;
+                        }
+                    }
+                    else
+                    {
+                        int idx = captureCpuWriteIdx.load(std::memory_order_acquire);
+                        const cv::Mat& cpuFrame = captureCpuBuffer[idx];
+                        if (!cpuFrame.empty())
+                        {
+                            saveScreenshot(cpuFrame);
+                            lastSaveTime = now_ss;
+                        }
                     }
                 }
                 buttonPreviouslyPressed = buttonPressed;
