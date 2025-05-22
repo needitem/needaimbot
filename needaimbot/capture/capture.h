@@ -8,6 +8,7 @@
 #include <chrono>
 #include <mutex>
 #include <condition_variable>
+#include <array>
 
 extern std::atomic<bool> detection_resolution_changed;
 extern std::atomic<bool> capture_cursor_changed;
@@ -26,6 +27,13 @@ extern std::chrono::time_point<std::chrono::high_resolution_clock> captureFpsSta
 
 extern cv::cuda::GpuMat latestFrameGpu;
 extern cv::Mat latestFrameCpu;
+
+// Ring buffer for frames to minimize lock overhead
+constexpr int FRAME_BUFFER_COUNT = 4;
+extern std::array<cv::cuda::GpuMat, FRAME_BUFFER_COUNT> captureGpuBuffer;
+extern std::array<cv::Mat, FRAME_BUFFER_COUNT> captureCpuBuffer;
+extern std::atomic<int> captureGpuWriteIdx;
+extern std::atomic<int> captureCpuWriteIdx;
 
 extern std::mutex frameMutex;
 extern std::condition_variable frameCV;

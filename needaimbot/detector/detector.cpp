@@ -32,6 +32,20 @@
 #include "filterGpu.h"
 #include "config.h"
 
+#if defined(__has_include)
+#  if __has_include(<nvToolsExt.h>)
+#    include <nvToolsExt.h>  // NVTX header for profiling
+#    define NVTX_PUSH(p) nvtxRangePushA(p)
+#    define NVTX_POP() nvtxRangePop()
+#  else
+#    define NVTX_PUSH(p)
+#    define NVTX_POP()
+#  endif
+#else
+#  define NVTX_PUSH(p)
+#  define NVTX_POP()
+#endif
+
 // Assume a global pointer to the active capture object exists (Needs proper implementation)
 // extern IScreenCapture* g_capture;
 extern std::atomic<bool> detectionPaused;
@@ -54,8 +68,11 @@ extern cudaError_t filterDetectionsByClassIdGpu(
     int numDecodedDetections,
     Detection* filteredDetections,
     int* filteredCount,
-    const unsigned char* d_ignored_class_ids, // Changed to unsigned char*
-    int max_check_id,                        // Size of the d_ignored_class_ids array
+    const unsigned char* d_ignored_class_ids,
+    int max_check_id,
+    const unsigned char* d_hsv_mask,
+    int mask_pitch,
+    int min_hsv_pixels,
     int max_output_detections,
     cudaStream_t stream
 );
@@ -564,6 +581,8 @@ void Detector::inferenceThread()
 
     while (!shouldExit)
     {
+        NVTX_PUSH("Detector Inference Loop");  // Start profiling range
+
         if (detector_model_changed.load()) {
             {
                 std::unique_lock<std::mutex> lock(inferenceMutex);
@@ -841,6 +860,8 @@ void Detector::inferenceThread()
              // For now, we reset if hasNewFrame is false but the outer loop continues
              // (This branch might not be strictly necessary depending on overall flow)
         }
+
+        NVTX_POP();  // End profiling range
     }
 }
 
@@ -947,16 +968,26 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
                 m_ignore_flags_need_update = false; // Flags are now updated on GPU
             }
 
-            // Call the GPU filter function (expecting unsigned char*)
+            // Prepare HSV mask pointer and pitch if HSV filtering enabled
+            const unsigned char* hsvMaskPtr = nullptr;
+            int maskPitch = 0;
+            if (config.enable_hsv_filter && !m_hsvMaskGpu.empty()) {
+                hsvMaskPtr = m_hsvMaskGpu.ptr<unsigned char>();
+                maskPitch = static_cast<int>(m_hsvMaskGpu.step);
+            }
+            // Call the GPU filter function (class + optional HSV mask)
             cudaError_t filterErr = filterDetectionsByClassIdGpu(
-                m_decodedDetectionsGpu,         
-                validDecodedDetections,           
-                m_classFilteredDetectionsGpu,    
-                m_classFilteredCountGpu,      
-                m_d_ignore_flags_gpu,           // Pass unsigned char* buffer
-                MAX_CLASSES_FOR_FILTERING,      
-                config.max_detections,          
-                stream                          
+                m_decodedDetectionsGpu,
+                validDecodedDetections,
+                m_classFilteredDetectionsGpu,
+                m_classFilteredCountGpu,
+                m_d_ignore_flags_gpu,
+                MAX_CLASSES_FOR_FILTERING,
+                hsvMaskPtr,
+                maskPitch,
+                config.min_hsv_pixels,
+                config.max_detections,
+                stream
             );
             if (!checkCudaError(filterErr, "filtering detections by class ID GPU")) {
                  cudaMemsetAsync(m_finalDetectionsCountGpu, 0, sizeof(int), stream);
@@ -1057,6 +1088,19 @@ void Detector::preProcess(const cv::cuda::GpuMat& frame)
             cv::cuda::resize(maskedImageGpu, resizedBuffer, cv::Size(w, h), 0, 0, cv::INTER_LINEAR, preprocessCvStream);
         } else {
             cv::cuda::resize(frame, resizedBuffer, cv::Size(w, h), 0, 0, cv::INTER_LINEAR, preprocessCvStream);
+        }
+
+        // Generate HSV mask if filtering enabled
+        if (config.enable_hsv_filter) {
+            cv::cuda::GpuMat hsvGpu;
+            cv::cuda::cvtColor(resizedBuffer, hsvGpu, cv::COLOR_BGR2HSV, 0, preprocessCvStream);
+            cv::Scalar lower(config.hsv_lower_h, config.hsv_lower_s, config.hsv_lower_v);
+            cv::Scalar upper(config.hsv_upper_h, config.hsv_upper_s, config.hsv_upper_v);
+            cv::cuda::GpuMat maskGpu;
+            cv::cuda::inRange(hsvGpu, lower, upper, maskGpu, preprocessCvStream);
+            m_hsvMaskGpu = maskGpu;
+        } else {
+            m_hsvMaskGpu.release();
         }
 
         resizedBuffer.convertTo(floatBuffer, CV_32F, 1.0f / 255.0f, 0, preprocessCvStream);

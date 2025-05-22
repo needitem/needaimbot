@@ -46,6 +46,7 @@
     <ClCompile Include="mouse\\input_drivers\\SerialConnection.cpp" />
     <ClCompile Include="mouse\\aimbot_components\\AimbotTarget.cpp" />
     <ClCompile Include="mouse\\predictors\\VelocityPredictor.cpp" />
+    <ClCompile Include="overlay\draw_hsv_filter.cpp" />
     <ClCompile Include="overlay\draw_opticalflow.cpp" />
     <ClCompile Include="overlay\draw_stats.cpp" />
     <ClCompile Include="overlay\\draw_ai.cpp" />

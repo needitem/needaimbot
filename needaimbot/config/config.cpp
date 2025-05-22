@@ -191,6 +191,16 @@ bool Config::loadConfig(const std::string& filename)
         fovX = 90.0f; // Default FoV X
         fovY = 60.0f; // Default FoV Y
 
+        // HSV Color Filter Defaults
+        enable_hsv_filter = false;
+        hsv_lower_h = 0;
+        hsv_lower_s = 0;
+        hsv_lower_v = 0;
+        hsv_upper_h = 179;
+        hsv_upper_s = 255;
+        hsv_upper_v = 255;
+        min_hsv_pixels = 10;
+
         saveConfig(filename); // Save the newly created default config
         return true;
     }
@@ -326,6 +336,16 @@ bool Config::loadConfig(const std::string& filename)
     staticFrameThreshold = (float)get_double_ini("OpticalFlow", "staticFrameThreshold", 1.0);
     fovX = (float)get_double_ini("OpticalFlow", "fovX", 90.0);
     fovY = (float)get_double_ini("OpticalFlow", "fovY", 60.0);
+
+    // Load HSV Color Filter Settings
+    enable_hsv_filter = get_bool_ini("HSVFilter", "enable_hsv_filter", false);
+    hsv_lower_h = get_long_ini("HSVFilter", "hsv_lower_h", 0);
+    hsv_lower_s = get_long_ini("HSVFilter", "hsv_lower_s", 0);
+    hsv_lower_v = get_long_ini("HSVFilter", "hsv_lower_v", 0);
+    hsv_upper_h = get_long_ini("HSVFilter", "hsv_upper_h", 179);
+    hsv_upper_s = get_long_ini("HSVFilter", "hsv_upper_s", 255);
+    hsv_upper_v = get_long_ini("HSVFilter", "hsv_upper_v", 255);
+    min_hsv_pixels = get_long_ini("HSVFilter", "min_hsv_pixels", 10);
 
     // --- Load Custom Class Settings --- 
     head_class_name = get_string_ini("Classes", "HeadClassName", "Head");
@@ -539,6 +559,16 @@ bool Config::saveConfig(const std::string& filename)
         file << "Class_" << i << "_Ignore = " << (class_settings[i].ignore ? "true" : "false") << "\n";
     }
     file << "\n";
+
+    file << "[HSVFilter]\n";
+    file << "enable_hsv_filter = " << (enable_hsv_filter ? "true" : "false") << "\n";
+    file << "hsv_lower_h = " << hsv_lower_h << "\n";
+    file << "hsv_lower_s = " << hsv_lower_s << "\n";
+    file << "hsv_lower_v = " << hsv_lower_v << "\n";
+    file << "hsv_upper_h = " << hsv_upper_h << "\n";
+    file << "hsv_upper_s = " << hsv_upper_s << "\n";
+    file << "hsv_upper_v = " << hsv_upper_v << "\n";
+    file << "min_hsv_pixels = " << min_hsv_pixels << "\n\n";
     
     file.close();
     return true;
