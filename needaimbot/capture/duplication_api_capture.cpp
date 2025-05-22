@@ -1,3 +1,7 @@
+// Define before including Windows/D3D headers to avoid macro collisions
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+
 #include "needaimbot.h"
 #include "duplication_api_capture.h"
 #include "config.h"
@@ -5,6 +9,7 @@
 #include "capture.h"
 #include <iostream>
 #include <iomanip>
+#include <algorithm>
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -30,13 +35,17 @@ class DDAManager
 {
 public:
     DDAManager()
-        : m_device(nullptr), m_context(nullptr), m_duplication(nullptr), m_output1(nullptr), m_sharedTexture(nullptr), m_cudaResource(nullptr), m_cudaStream(nullptr), m_framePool(5), m_captureDoneEvent(nullptr) // Pre-allocate 5 frames in the pool
+        : m_device(nullptr), m_context(nullptr), m_duplication(nullptr), m_output1(nullptr), m_sharedTexture(nullptr), m_cudaResource(nullptr), m_cudaStream(nullptr), m_framePool(5), m_captureDoneEvent(nullptr)
+        , m_pinnedHostBuffer(nullptr), m_hostCopyStream(nullptr) // Initialize pinned buffer and copy stream
     {
         ZeroMemory(&m_duplDesc, sizeof(m_duplDesc));
     }
 
     ~DDAManager()
     {
+        // Free pinned host buffer and destroy copy stream
+        if (m_hostCopyStream) cudaStreamDestroy(m_hostCopyStream);
+        if (m_pinnedHostBuffer) cudaFreeHost(m_pinnedHostBuffer);
         Release();
     }
 
@@ -229,6 +238,15 @@ public:
             {
                 std::cerr << "[DDA] Failed to create CUDA event: " << cudaGetErrorString(eventErr) << std::endl;
             }
+
+            // Allocate pinned host memory for CPU copy and create a dedicated copy stream
+            size_t hostBufferSize = static_cast<size_t>(captureWidth) * captureHeight * 4;
+            cudaError_t allocErr = cudaHostAlloc(&m_pinnedHostBuffer, hostBufferSize, cudaHostAllocDefault);
+            if (allocErr != cudaSuccess)
+            {
+                std::cerr << "[DDA] Failed to allocate pinned host memory: " << cudaGetErrorString(allocErr) << std::endl;
+            }
+            cudaStreamCreate(&m_hostCopyStream);
         }
 
         SafeRelease(&output);
@@ -430,6 +448,10 @@ public:
     std::vector<cv::cuda::GpuMat> m_framePool;
     UINT m_timeout = 1; // Default timeout for AcquireNextFrame in milliseconds
     std::vector<BYTE> m_metaDataBuffer;
+
+    // Added for asynchronous pinned host copy
+    unsigned char* m_pinnedHostBuffer;
+    cudaStream_t m_hostCopyStream;
 };
 
 DuplicationAPIScreenCapture::DuplicationAPIScreenCapture(int desiredWidth, int desiredHeight)
@@ -512,21 +534,42 @@ cv::cuda::GpuMat DuplicationAPIScreenCapture::GetNextFrameGpu()
 
     if (m_ddaManager->m_context && m_ddaManager->m_sharedTexture && frameCtx.texture)
     {
-        D3D11_BOX sourceBox;
-        sourceBox.left = captureScreenRect.left; 
-        sourceBox.top = captureScreenRect.top;
-        sourceBox.front = 0;
-        sourceBox.right = captureScreenRect.right;
-        sourceBox.bottom = captureScreenRect.bottom;
-        sourceBox.back = 1;
-
-        m_ddaManager->m_context->CopySubresourceRegion(
-            m_ddaManager->m_sharedTexture,
-            0,
-            0, 0, 0,
-            frameCtx.texture,
-            0,
-            &sourceBox);
+        // Copy only changed regions if available
+        if (!frameCtx.dirtyRects.empty())
+        {
+            for (const RECT& dirty : frameCtx.dirtyRects)
+            {
+                LONG left = std::max(dirty.left, captureScreenRect.left);
+                LONG top = std::max(dirty.top, captureScreenRect.top);
+                LONG right = std::min(dirty.right, captureScreenRect.right);
+                LONG bottom = std::min(dirty.bottom, captureScreenRect.bottom);
+                if (left < right && top < bottom)
+                {
+                    D3D11_BOX box = { left, top, 0, right, bottom, 1 };
+                    UINT destX = static_cast<UINT>(left - captureScreenRect.left);
+                    UINT destY = static_cast<UINT>(top - captureScreenRect.top);
+                    m_ddaManager->m_context->CopySubresourceRegion(
+                        m_ddaManager->m_sharedTexture,
+                        0,
+                        destX, destY, 0,
+                        frameCtx.texture,
+                        0,
+                        &box);
+                }
+            }
+        }
+        else
+        {
+            // Fallback to full region copy
+            D3D11_BOX box = { captureScreenRect.left, captureScreenRect.top, 0, captureScreenRect.right, captureScreenRect.bottom, 1 };
+            m_ddaManager->m_context->CopySubresourceRegion(
+                m_ddaManager->m_sharedTexture,
+                0,
+                0, 0, 0,
+                frameCtx.texture,
+                0,
+                &box);
+        }
     }
 
     m_ddaManager->ReleaseFrame(); 
@@ -577,31 +620,54 @@ cv::Mat DuplicationAPIScreenCapture::GetNextFrameCpu()
     }
     else if (FAILED(hr))
     {
-        // std::cerr << "[Capture] AcquireFrame failed (CPU Path) (hr=0x" << std::hex << hr << ")" << std::endl;
         return cv::Mat();
     }
 
     if (m_ddaManager->m_context && m_ddaManager->m_sharedTexture && frameCtx.texture)
     {
-        D3D11_BOX sourceBox;
-        sourceBox.left = captureScreenRect.left;
-        sourceBox.top = captureScreenRect.top;
-        sourceBox.front = 0;
-        sourceBox.right = captureScreenRect.right;
-        sourceBox.bottom = captureScreenRect.bottom;
-        sourceBox.back = 1;
-
-        m_ddaManager->m_context->CopySubresourceRegion(
-            m_ddaManager->m_sharedTexture, 0, 0, 0, 0,
-            frameCtx.texture, 0, &sourceBox);
+        // Copy only changed regions if available
+        if (!frameCtx.dirtyRects.empty())
+        {
+            for (const RECT& dirty : frameCtx.dirtyRects)
+            {
+                LONG left = std::max(dirty.left, captureScreenRect.left);
+                LONG top = std::max(dirty.top, captureScreenRect.top);
+                LONG right = std::min(dirty.right, captureScreenRect.right);
+                LONG bottom = std::min(dirty.bottom, captureScreenRect.bottom);
+                if (left < right && top < bottom)
+                {
+                    D3D11_BOX box = { left, top, 0, right, bottom, 1 };
+                    UINT destX = static_cast<UINT>(left - captureScreenRect.left);
+                    UINT destY = static_cast<UINT>(top - captureScreenRect.top);
+                    m_ddaManager->m_context->CopySubresourceRegion(
+                        m_ddaManager->m_sharedTexture, 0,
+                        destX, destY, 0,
+                        frameCtx.texture, 0,
+                        &box);
+                }
+            }
+        }
+        else
+        {
+            // Fallback to full region copy
+            D3D11_BOX box = { captureScreenRect.left, captureScreenRect.top, 0, captureScreenRect.right, captureScreenRect.bottom, 1 };
+            m_ddaManager->m_context->CopySubresourceRegion(
+                m_ddaManager->m_sharedTexture, 0,
+                0, 0, 0,
+                frameCtx.texture, 0,
+                &box);
+        }
     }
 
     m_ddaManager->ReleaseFrame();
 
-    cv::Mat frameCpu(regionHeight, regionWidth, CV_8UC4);
-    if (!frameCpu.empty() && m_ddaManager->m_cudaResource && m_ddaManager->m_cudaStream)
+    // Asynchronous pinned host copy
+    cv::Mat frameCpu;
+    if (m_ddaManager->m_cudaResource && m_ddaManager->m_pinnedHostBuffer)
     {
-        cudaError_t err = cudaGraphicsMapResources(1, &m_ddaManager->m_cudaResource, m_ddaManager->m_cudaStream);
+        unsigned char* hostPtr = m_ddaManager->m_pinnedHostBuffer;
+        size_t hostPitch = static_cast<size_t>(regionWidth) * 4;
+        cudaError_t err = cudaGraphicsMapResources(1, &m_ddaManager->m_cudaResource, m_ddaManager->m_hostCopyStream);
         if (err == cudaSuccess)
         {
             cudaArray_t cuArray;
@@ -609,42 +675,22 @@ cv::Mat DuplicationAPIScreenCapture::GetNextFrameCpu()
             if (err == cudaSuccess)
             {
                 err = cudaMemcpy2DFromArrayAsync(
-                    frameCpu.data,        // Destination: CPU Mat data pointer
-                    frameCpu.step,        // Destination: CPU Mat step (bytes per row)
-                    cuArray,              // Source: Mapped CUDA array
-                    0, 0,                 // Source X, Y offset
-                    regionWidth * 4,      // Width in bytes (BGRA)
-                    regionHeight,         // Height
-                    cudaMemcpyDeviceToHost, // Copy direction
-                    m_ddaManager->m_cudaStream);
-
+                    hostPtr,
+                    hostPitch,
+                    cuArray,
+                    0, 0,
+                    regionWidth * 4,
+                    regionHeight,
+                    cudaMemcpyDeviceToHost,
+                    m_ddaManager->m_hostCopyStream);
                 if (err == cudaSuccess)
                 {
-                    cudaStreamSynchronize(m_ddaManager->m_cudaStream);
-                }
-                else
-                {
-                    // std::cerr << "[DDA] cudaMemcpy2DFromArrayAsync (D->H) error: " << cudaGetErrorString(err) << std::endl;
-                    frameCpu.release();
+                    cudaStreamSynchronize(m_ddaManager->m_hostCopyStream);
+                    frameCpu = cv::Mat(regionHeight, regionWidth, CV_8UC4, hostPtr, hostPitch);
                 }
             }
-            else
-            {
-                // std::cerr << "[DDA] cudaGraphicsSubResourceGetMappedArray (CPU Path) error: " << cudaGetErrorString(err) << std::endl;
-                frameCpu.release();
-            }
-            cudaGraphicsUnmapResources(1, &m_ddaManager->m_cudaResource, m_ddaManager->m_cudaStream);
+            cudaGraphicsUnmapResources(1, &m_ddaManager->m_cudaResource, m_ddaManager->m_hostCopyStream);
         }
-        else
-        {
-            // std::cerr << "[DDA] cudaGraphicsMapResources (CPU Path) error: " << cudaGetErrorString(err) << std::endl;
-            frameCpu.release();
-        }
-    } else {
-         // if (frameCpu.empty()) std::cerr << "[DDA] Failed to create CPU Mat" << std::endl;
-         // if (!m_ddaManager->m_cudaResource) std::cerr << "[DDA] CUDA resource invalid for CPU path" << std::endl;
-         // if (!m_ddaManager->m_cudaStream) std::cerr << "[DDA] CUDA stream invalid for CPU path" << std::endl;
-        frameCpu.release();
     }
 
     if (frameCtx.texture)

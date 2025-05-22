@@ -453,6 +453,12 @@ void OverlayThread()
                         ImGui::EndTabItem();
                     }
 
+                    if (ImGui::BeginTabItem("HSV Filter"))
+                    {
+                        draw_hsv_filter_settings();
+                        ImGui::EndTabItem();
+                    }
+
                     if (ImGui::BeginTabItem("Optical Flow"))
                     {
                         draw_optical_flow();

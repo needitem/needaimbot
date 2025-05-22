@@ -3,9 +3,11 @@
 
 #include <opencv2/opencv.hpp>
 #include <opencv2/cudawarping.hpp>
+#ifndef __INTELLISENSE__
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <cuda_d3d11_interop.h>
+#endif
 #include <d3d11.h>
 #include <dxgi1_2.h>
 #include <memory>

@@ -169,6 +169,16 @@ public:
     float fovX; // Horizontal Field of View (degrees), used in OF calculations
     float fovY; // Vertical Field of View (degrees), used in OF calculations
 
+    // --- HSV Color Filter Settings ---
+    bool enable_hsv_filter;
+    int hsv_lower_h;
+    int hsv_lower_s;
+    int hsv_lower_v;
+    int hsv_upper_h;
+    int hsv_upper_s;
+    int hsv_upper_v;
+    int min_hsv_pixels;
+
     bool loadConfig(const std::string& filename = "config.ini");
     bool saveConfig(const std::string& filename = "config.ini");
 

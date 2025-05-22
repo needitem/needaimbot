@@ -17,29 +17,15 @@
 void OpticalFlow::preprocessFrame(cv::cuda::GpuMat& frameGray)
 {
     if (frameGray.empty()) return;
-
-    // The original preprocessFrame converts to CPU, blurs, equalizes, thresholds, then uploads.
-    // This can be slow. Consider performing more operations on GPU if possible.
-    // For now, keeping original logic.
-
-    cv::Mat frameCPU;
-    frameGray.download(frameCPU);
-
-    if (frameCPU.type() != CV_8UC1)
-    {
-        cv::cvtColor(frameCPU, frameCPU, cv::COLOR_BGR2GRAY);
-    }
-
-    cv::Mat blurredFrame, equalizedFrame, thresholdFrame;
-
-    // Parameters for these operations could be made configurable.
-    cv::GaussianBlur(frameCPU, blurredFrame, cv::Size(3, 3), 0);
-    cv::equalizeHist(blurredFrame, equalizedFrame);
-    // cv::threshold(equalizedFrame, thresholdFrame, 0, 255, cv::THRESH_BINARY | cv::THRESH_OTSU); // OTSU might not always be best
-    cv::adaptiveThreshold(equalizedFrame, thresholdFrame, 255, cv::ADAPTIVE_THRESH_GAUSSIAN_C, cv::THRESH_BINARY, 11, 2);
-
-
-    frameGray.upload(thresholdFrame);
+    // GPU-based preprocessing: Gaussian blur, histogram equalization, OTSU threshold
+    cv::cuda::GpuMat tmp;
+    // Gaussian blur
+    cv::Ptr<cv::cuda::Filter> gauss = cv::cuda::createGaussianFilter(frameGray.type(), frameGray.type(), cv::Size(3, 3), 0);
+    gauss->apply(frameGray, tmp);
+    // Histogram equalization
+    cv::cuda::equalizeHist(tmp, tmp);
+    // OTSU threshold
+    cv::cuda::threshold(tmp, frameGray, 0.0, 255.0, cv::THRESH_BINARY | cv::THRESH_OTSU);
 }
 
 OpticalFlow::OpticalFlow() : 
@@ -86,8 +72,8 @@ void OpticalFlow::computeOpticalFlow(const cv::cuda::GpuMat& frame)
         return;
     }
 
-    // Preprocessing can be intensive, ensure it's beneficial.
-    // preprocessFrame(frameGray); // Consider making this optional via config
+    // Preprocessing on GPU before optical flow
+    preprocessFrame(frameGray);
 
     static cv::cuda::GpuMat prevStaticCheck;
     // Ensure config.staticFrameThreshold is accessible. If not, use a default or pass config.
