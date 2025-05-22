@@ -5,43 +5,56 @@
 #include "filterGpu.h"
 #include "postProcess.h" // Include Detection definition
 
-__global__ void filterDetectionsByClassIdKernel(
-    const Detection* input_detections,
+// Kernel now applies both class-based ignore and optional HSV mask filter
+__global__ __launch_bounds__(256, 8) void filterDetectionsByClassIdKernel(
+    const Detection* __restrict__ input_detections,
     int num_input_detections,
-    Detection* output_detections,
-    int* output_count, // Assumed to be initialized to 0 on GPU
-    const unsigned char* d_ignored_class_ids, // Changed from individual bools
-    int max_check_id,                         // New parameter: size of d_ignored_class_ids
+    Detection* __restrict__ output_detections,
+    int* __restrict__ output_count,
+    const unsigned char* __restrict__ d_ignored_class_ids,
+    int max_check_id,
+    const unsigned char* __restrict__ d_hsv_mask,
+    int mask_pitch,
+    int min_hsv_pixels,
     int max_output_detections)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    for (; idx < num_input_detections; idx += stride) {
+        // Load detection
+        const Detection det = input_detections[idx]; // copy in register
+        bool should_keep = true;
 
-    if (idx < num_input_detections) {
-        const Detection& det = input_detections[idx];
-        bool should_keep = true; // Default to keeping the detection
-
-        // --- Updated Filtering Logic ---
-        // Check if the classId is within the bounds of the ignore array
-        // and if the flag for this classId is set (1 means ignore)
-        if (det.classId >= 0 && det.classId < max_check_id) {
-            if (d_ignored_class_ids[det.classId]) { // 1 (true) means ignore this class
-                should_keep = false;
-            }
+        // Class-based filtering
+        if (det.classId >= 0 && det.classId < max_check_id && d_ignored_class_ids[det.classId]) {
+            continue; // skip this detection
         }
-        // Optional: else if classId is out of bounds, decide whether to keep or discard.
-        // Current behavior: if classId is out of bounds of d_ignored_class_ids, it will be kept.
 
-        if (should_keep) {
-            // Atomically increment the output count and get the index to write to
-            int write_idx = atomicAdd(output_count, 1);
-
-            // Ensure we don't write past the allocated buffer size
-            if (write_idx < max_output_detections) {
-                output_detections[write_idx] = det;
-            } else {
-                // Decrement count if we went over the limit
-                atomicSub(output_count, 1);
+        // HSV mask filtering (if provided)
+        if (d_hsv_mask != nullptr) {
+            // iterate over bounding box and count matching pixels
+            int x0 = det.box.x;
+            int y0 = det.box.y;
+            int x1 = x0 + det.box.width;
+            int y1 = y0 + det.box.height;
+            int count = 0;
+            #pragma unroll 4
+            for (int y = y0; y < y1 && count < min_hsv_pixels; ++y) {
+                const unsigned char* row = d_hsv_mask + y * mask_pitch;
+                #pragma unroll 8
+                for (int x = x0; x < x1 && count < min_hsv_pixels; ++x) {
+                    if (row[x]) { ++count; }
+                }
             }
+            if (count < min_hsv_pixels) continue;
+        }
+
+        // Passed all filters, write to output
+        int write_idx = atomicAdd(output_count, 1);
+        if (write_idx < max_output_detections) {
+            output_detections[write_idx] = det;
+        } else {
+            atomicSub(output_count, 1);
         }
     }
 }
@@ -50,35 +63,40 @@ cudaError_t filterDetectionsByClassIdGpu(
     const Detection* d_input_detections,
     int num_input_detections,
     Detection* d_output_detections,
-    int* d_output_count, // Remember to cudaMemset this to 0 before calling!
-    const unsigned char* d_ignored_class_ids, // Changed from individual bools
-    int max_check_id,                         // New parameter
+    int* d_output_count,
+    const unsigned char* d_ignored_class_ids,
+    int max_check_id,
+    const unsigned char* d_hsv_mask,
+    int mask_pitch,
+    int min_hsv_pixels,
     int max_output_detections,
     cudaStream_t stream)
 {
     if (num_input_detections <= 0) {
-        // No input detections, ensure output count is 0 (although it should already be)
-        cudaMemsetAsync(d_output_count, 0, sizeof(int), stream);
-        return cudaSuccess;
+        // No input detections, ensure output count is 0
+        return cudaMemsetAsync(d_output_count, 0, sizeof(int), stream);
     }
 
-    // Ensure the output count is reset before the kernel launch
+    // Reset output count
     cudaError_t err = cudaMemsetAsync(d_output_count, 0, sizeof(int), stream);
     if (err != cudaSuccess) {
         fprintf(stderr, "[FilterGPU] Failed cudaMemsetAsync on output count: %s\n", cudaGetErrorString(err));
         return err;
     }
 
-    const int block_size = 256;
-    const int grid_size = (num_input_detections + block_size - 1) / block_size;
+    int block_size = 256;
+    int grid_size = (num_input_detections + block_size - 1) / block_size;
 
     filterDetectionsByClassIdKernel<<<grid_size, block_size, 0, stream>>>(
         d_input_detections,
         num_input_detections,
         d_output_detections,
         d_output_count,
-        d_ignored_class_ids, // Pass the array
-        max_check_id,        // Pass its size
+        d_ignored_class_ids,
+        max_check_id,
+        d_hsv_mask,
+        mask_pitch,
+        min_hsv_pixels,
         max_output_detections);
 
     return cudaGetLastError();

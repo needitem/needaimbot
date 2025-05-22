@@ -27,7 +27,9 @@
 #include "capture/optical_flow.h"
 
 // Include headers for version checking
+#ifndef __INTELLISENSE__
 #include <cuda_runtime_api.h>
+#endif
 #include <iomanip> // For std::setw
 
 std::condition_variable frameCV;
@@ -428,19 +430,20 @@ void mouseThreadFunction(MouseThread &mouseThread)
             }
         }
 
-        // Frame capture logic (assuming latestFrameGpu is updated by captureThread)
+        // Frame capture logic using ring buffer
         cv::cuda::GpuMat currentGpuFrame;
         bool new_frame_for_detection = false;
         {
             std::unique_lock<std::mutex> lock(frameMutex);
             if (frameCV.wait_for(lock, timeout, []{ return newFrameAvailable.load() || shouldExit.load(); })) {
                 if (shouldExit.load()) break;
-                if (newFrameAvailable.load()) {
-                    currentGpuFrame = latestFrameGpu.clone(); // Clone to work on a stable copy
-                    newFrameAvailable = false;
-                    new_frame_for_detection = true;
-                }
             }
+        }
+        if (newFrameAvailable.load(std::memory_order_acquire)) {
+            int idx = captureGpuWriteIdx.load(std::memory_order_acquire);
+            currentGpuFrame = captureGpuBuffer[idx]; // shallow copy
+            newFrameAvailable.store(false, std::memory_order_release);
+            new_frame_for_detection = true;
         }
 
         if (shouldExit.load()) break;
