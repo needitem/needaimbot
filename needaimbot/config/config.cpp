@@ -200,6 +200,7 @@ bool Config::loadConfig(const std::string& filename)
         hsv_upper_s = 255;
         hsv_upper_v = 255;
         min_hsv_pixels = 10;
+        remove_hsv_matches = false;
 
         saveConfig(filename); // Save the newly created default config
         return true;
@@ -346,6 +347,7 @@ bool Config::loadConfig(const std::string& filename)
     hsv_upper_s = get_long_ini("HSVFilter", "hsv_upper_s", 255);
     hsv_upper_v = get_long_ini("HSVFilter", "hsv_upper_v", 255);
     min_hsv_pixels = get_long_ini("HSVFilter", "min_hsv_pixels", 10);
+    remove_hsv_matches = get_bool_ini("HSVFilter", "remove_hsv_matches", false);
 
     // --- Load Custom Class Settings --- 
     head_class_name = get_string_ini("Classes", "HeadClassName", "Head");
@@ -568,7 +570,8 @@ bool Config::saveConfig(const std::string& filename)
     file << "hsv_upper_h = " << hsv_upper_h << "\n";
     file << "hsv_upper_s = " << hsv_upper_s << "\n";
     file << "hsv_upper_v = " << hsv_upper_v << "\n";
-    file << "min_hsv_pixels = " << min_hsv_pixels << "\n\n";
+    file << "min_hsv_pixels = " << min_hsv_pixels << "\n";
+    file << "remove_hsv_matches = " << (remove_hsv_matches ? "true" : "false") << "\n\n";
     
     file.close();
     return true;
