@@ -46,7 +46,7 @@ __global__ __launch_bounds__(256, 8) void filterDetectionsByClassIdKernel(
                     if (row[x]) { ++count; }
                 }
             }
-            if (count < min_hsv_pixels) continue;
+            if (count >= min_hsv_pixels) continue;
         }
 
         // Passed all filters, write to output
