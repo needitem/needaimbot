@@ -5,7 +5,7 @@
 #include "imgui/imgui_internal.h"
 
 #include "config.h" // Access to global config object
-#include "needaimbot.h" // For hsv_filter_settings_changed atomic
+#include "needaimbot.h"
 
 // Helper function from ImGui demo to show tooltips
 void HelpMarker(const char* desc)
@@ -63,6 +63,10 @@ void draw_hsv_filter_settings()
     // Minimum pixels
     changed |= ImGui::SliderInt("Min Pixels ##hsv", &config.min_hsv_pixels, 1, 1000);
     if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Minimum number of pixels within the bounding box that must match the HSV range."); }
+
+    // Filter mode: keep matching or remove matching
+    changed |= ImGui::Checkbox("Remove boxes matching HSV filter", &config.remove_hsv_matches);
+    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("By default, boxes with min_hsv_pixels matching HSV are kept; enable to remove them instead."); }
 
     ImGui::Spacing();
     // Warning if bounds are invalid

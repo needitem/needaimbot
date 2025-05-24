@@ -73,6 +73,7 @@ extern cudaError_t filterDetectionsByClassIdGpu(
     const unsigned char* d_hsv_mask,
     int mask_pitch,
     int min_hsv_pixels,
+    int remove_hsv_matches,
     int max_output_detections,
     cudaStream_t stream
 );
@@ -986,6 +987,7 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
                 hsvMaskPtr,
                 maskPitch,
                 config.min_hsv_pixels,
+                config.remove_hsv_matches,
                 config.max_detections,
                 stream
             );

@@ -20,6 +20,7 @@ cudaError_t filterDetectionsByClassIdGpu(
     const unsigned char* d_hsv_mask,
     int mask_pitch,
     int min_hsv_pixels,
+    bool remove_hsv_matches,
     int max_output_detections,
     cudaStream_t stream
 ); 
