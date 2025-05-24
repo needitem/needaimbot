@@ -178,6 +178,7 @@ public:
     int hsv_upper_s;
     int hsv_upper_v;
     int min_hsv_pixels;
+    bool remove_hsv_matches; // If true, boxes with enough HSV pixels will be removed instead of kept.
 
     bool loadConfig(const std::string& filename = "config.ini");
     bool saveConfig(const std::string& filename = "config.ini");

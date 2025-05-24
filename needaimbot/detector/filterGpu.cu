@@ -16,6 +16,7 @@ __global__ __launch_bounds__(256, 8) void filterDetectionsByClassIdKernel(
     const unsigned char* __restrict__ d_hsv_mask,
     int mask_pitch,
     int min_hsv_pixels,
+    bool remove_hsv_matches,
     int max_output_detections)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -46,7 +47,14 @@ __global__ __launch_bounds__(256, 8) void filterDetectionsByClassIdKernel(
                     if (row[x]) { ++count; }
                 }
             }
-            if (count >= min_hsv_pixels) continue;
+            // Decide skip based on remove_hsv_matches flag
+            if (!remove_hsv_matches) {
+                // Keep matches: skip if not enough pixels
+                if (count < min_hsv_pixels) continue;
+            } else {
+                // Remove matches: skip if enough pixels
+                if (count >= min_hsv_pixels) continue;
+            }
         }
 
         // Passed all filters, write to output
@@ -69,6 +77,7 @@ cudaError_t filterDetectionsByClassIdGpu(
     const unsigned char* d_hsv_mask,
     int mask_pitch,
     int min_hsv_pixels,
+    bool remove_hsv_matches,
     int max_output_detections,
     cudaStream_t stream)
 {
@@ -97,6 +106,7 @@ cudaError_t filterDetectionsByClassIdGpu(
         d_hsv_mask,
         mask_pitch,
         min_hsv_pixels,
+        remove_hsv_matches,
         max_output_detections);
 
     return cudaGetLastError();
