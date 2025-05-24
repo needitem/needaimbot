@@ -33,27 +33,34 @@ __global__ __launch_bounds__(256, 8) void filterDetectionsByClassIdKernel(
 
         // HSV mask filtering (if provided)
         if (d_hsv_mask != nullptr) {
-            // iterate over bounding box and count matching pixels
             int x0 = det.box.x;
             int y0 = det.box.y;
             int x1 = x0 + det.box.width;
             int y1 = y0 + det.box.height;
             int count = 0;
-            #pragma unroll 4
-            for (int y = y0; y < y1 && count < min_hsv_pixels; ++y) {
+            for (int y = y0; y < y1; ++y) {
                 const unsigned char* row = d_hsv_mask + y * mask_pitch;
-                #pragma unroll 8
-                for (int x = x0; x < x1 && count < min_hsv_pixels; ++x) {
-                    if (row[x]) { ++count; }
+                for (int x = x0; x < x1; ++x) {
+                    if (row[x]) {
+                        ++count;
+                        if (remove_hsv_matches) {
+                            // Remove mode: skip as soon as threshold reached
+                            if (count >= min_hsv_pixels) {
+                                goto skip_detection;
+                            }
+                        } else {
+                            // Keep mode: break out when threshold reached
+                            if (count >= min_hsv_pixels) {
+                                y = y1; // force outer loop to end
+                                break;
+                            }
+                        }
+                    }
                 }
             }
-            // Decide skip based on remove_hsv_matches flag
-            if (!remove_hsv_matches) {
-                // Keep matches: skip if not enough pixels
-                if (count < min_hsv_pixels) continue;
-            } else {
-                // Remove matches: skip if enough pixels
-                if (count >= min_hsv_pixels) continue;
+            // After scanning, if in keep mode and not enough pixels, skip
+            if (!remove_hsv_matches && count < min_hsv_pixels) {
+                goto skip_detection;
             }
         }
 
@@ -64,6 +71,10 @@ __global__ __launch_bounds__(256, 8) void filterDetectionsByClassIdKernel(
         } else {
             atomicSub(output_count, 1);
         }
+
+        continue;
+    skip_detection:
+        continue;
     }
 }
 
