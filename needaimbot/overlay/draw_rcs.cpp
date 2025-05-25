@@ -28,8 +28,6 @@ void SetWrappedTooltipRCS(const char* text)
 }
 
 void draw_rcs_settings() {
-    ImGui::Begin("RCS Settings");
-
     // Create a collapsible section for Recoil Control
     if (ImGui::CollapsingHeader("Recoil Control", ImGuiTreeNodeFlags_DefaultOpen))
     {
@@ -74,6 +72,28 @@ void draw_rcs_settings() {
             if (ImGui::IsItemHovered())
             {
                 SetWrappedTooltipRCS("Delay in milliseconds between recoil compensation movements (0.0 - 100.0)");
+            }
+
+            // Start Delay
+            if (ImGui::InputInt("Start Delay (ms)", &config.easynorecoil_start_delay_ms, 1, 10))
+            {
+                config.easynorecoil_start_delay_ms = (std::max)(0, config.easynorecoil_start_delay_ms);
+                config.saveConfig();
+            }
+            if (ImGui::IsItemHovered())
+            {
+                SetWrappedTooltipRCS("Delay in milliseconds before recoil compensation starts after the shoot key is pressed. Set to 0 to disable.");
+            }
+
+            // End Delay
+            if (ImGui::InputInt("End Delay (ms)", &config.easynorecoil_end_delay_ms, 1, 10))
+            {
+                config.easynorecoil_end_delay_ms = (std::max)(0, config.easynorecoil_end_delay_ms);
+                config.saveConfig();
+            }
+            if (ImGui::IsItemHovered())
+            {
+                SetWrappedTooltipRCS("Delay in milliseconds before recoil compensation stops after the shoot key is released. Set to 0 to disable.");
             }
 
             ImGui::Spacing();
@@ -148,6 +168,4 @@ void draw_rcs_settings() {
         }
         ImGui::Spacing(); // Add spacing after Recoil settings
     }
-
-    ImGui::End();
 }

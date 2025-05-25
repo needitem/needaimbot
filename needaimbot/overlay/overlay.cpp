@@ -447,6 +447,12 @@ void OverlayThread()
                         ImGui::EndTabItem();
                     }
 
+                    if (ImGui::BeginTabItem("RCS"))
+                    {
+                        draw_rcs_settings();
+                        ImGui::EndTabItem();
+                    }
+
                     if (ImGui::BeginTabItem("AI"))
                     {
                         draw_ai();
