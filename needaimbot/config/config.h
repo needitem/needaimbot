@@ -62,6 +62,8 @@ public:
     float norecoil_step;  // Step size for adjusting norecoil strength
     float norecoil_ms;    // Millisecond delay for recoil control
     std::string input_method; // "WIN32", "GHUB", "ARDUINO"
+    int easynorecoil_start_delay_ms; // Delay before recoil starts after key press
+    int easynorecoil_end_delay_ms;   // Delay before recoil stops after key release
 
     // WindMouse Parameters
     bool wind_mouse_enabled;

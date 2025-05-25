@@ -67,6 +67,12 @@ std::atomic<bool> auto_shoot_active(false);
 std::atomic<bool> silent_aim_trigger(false);
 std::atomic<bool> config_optical_flow_changed(false);
 
+// Recoil delay state
+std::chrono::steady_clock::time_point shooting_key_press_time;
+std::chrono::steady_clock::time_point shooting_key_release_time;
+std::atomic<bool> recoil_active(false);
+std::atomic<bool> was_shooting(false);
+
 // Stats variables definitions
 std::atomic<float> g_current_inference_time_ms(0.0f);
 std::vector<float> g_inference_time_history;
@@ -314,6 +320,58 @@ void mouseThreadFunction(MouseThread &mouseThread)
             input_method_changed.store(false);
         }
 
+        // Handle Easy No Recoil with delays
+        bool current_shooting_state = shooting.load();
+        bool currently_zooming = zooming.load();
+
+        if (config.easynorecoil) {
+            if (current_shooting_state && !was_shooting.load()) { // Key just pressed
+                shooting_key_press_time = std::chrono::steady_clock::now();
+                if (config.easynorecoil_start_delay_ms == 0) {
+                    recoil_active = true; // Start immediately if delay is 0
+                }
+            } else if (!current_shooting_state && was_shooting.load()) { // Key just released
+                shooting_key_release_time = std::chrono::steady_clock::now();
+                if (config.easynorecoil_end_delay_ms == 0) {
+                    recoil_active = false; // Stop immediately if delay is 0
+                }
+            }
+            was_shooting = current_shooting_state;
+
+            if (current_shooting_state && !recoil_active.load()) {
+                if (config.easynorecoil_start_delay_ms > 0) {
+                    auto elapsed_since_press = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - shooting_key_press_time
+                    ).count();
+                    if (elapsed_since_press >= config.easynorecoil_start_delay_ms) {
+                        recoil_active = true;
+                    }
+                }
+            } else if (!current_shooting_state && recoil_active.load()) {
+                if (config.easynorecoil_end_delay_ms > 0) {
+                    auto elapsed_since_release = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - shooting_key_release_time
+                    ).count();
+                    if (elapsed_since_release >= config.easynorecoil_end_delay_ms) {
+                        recoil_active = false;
+                    }
+                }
+            }
+            
+            // If still shooting but end delay is 0, recoil should have stopped when key was released.
+            // This handles the case where end_delay is 0 and shooting key is released.
+            if (!current_shooting_state && config.easynorecoil_end_delay_ms == 0) {
+                 recoil_active = false;
+            }
+
+
+            if (recoil_active.load() && currently_zooming) {
+                 mouseThread.applyRecoilCompensation(config.easynorecoilstrength);
+            }
+        } else {
+            recoil_active = false; // Ensure recoil is off if easynorecoil is disabled
+        }
+
         // Check for silent aim trigger first
         bool silent_trigger_active = silent_aim_trigger.load(std::memory_order_acquire);
         if (silent_trigger_active) {
@@ -350,7 +408,8 @@ void mouseThreadFunction(MouseThread &mouseThread)
             // Original logic for normal aiming or idle
             if (config.easynorecoil && shooting.load() && zooming.load())
             {
-                mouseThread.applyRecoilCompensation(config.easynorecoilstrength);
+                // This is now handled by the new delay logic above
+                // mouseThread.applyRecoilCompensation(config.easynorecoilstrength); 
             }
 
             bool newFrameAvailable = false;
