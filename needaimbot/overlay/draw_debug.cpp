@@ -47,10 +47,20 @@ static ID3D11ShaderResourceView* g_debugSRV = nullptr;
 static int texW = 0, texH = 0;
 static float debug_scale = 1.0f; // Default scale
 
+// Globals for HSV Mask rendering
+static ID3D11Texture2D* g_hsvMaskTex = nullptr;
+static ID3D11ShaderResourceView* g_hsvMaskSRV = nullptr;
+static int hsvTexW = 0, hsvTexH = 0;
+static float hsv_mask_preview_scale = 0.5f; // Default scale for HSV mask preview
+
 // Assume these are declared extern if not already available through includes
 extern Detector detector; // Access to the global detector object
 extern OpticalFlow g_opticalFlow; // Access to the global optical flow object
 extern Config config; // Already used
+
+// Static variables for Crosshair HSV
+static int g_crosshairH = 0, g_crosshairS = 0, g_crosshairV = 0;
+static bool g_crosshairHsvValid = false;
 
 // Function to upload cv::Mat to a D3D11 texture
 static void uploadDebugFrame(const cv::Mat& bgr)
@@ -123,6 +133,82 @@ static void uploadDebugFrame(const cv::Mat& bgr)
     }
 }
 
+// Function to upload cv::Mat (grayscale HSV mask) to a D3D11 texture
+static void uploadHsvMaskTexture(const cv::Mat& grayMask)
+{
+    if (grayMask.empty() || !g_pd3dDevice || !g_pd3dDeviceContext) {
+        return;
+    }
+
+    if (grayMask.type() != CV_8UC1) {
+        // OutputDebugStringA(("[uploadHsvMaskTexture] Error: Input mask is not CV_8UC1!\\n").c_str());
+        return;
+    }
+
+    if (!g_hsvMaskTex || grayMask.cols != hsvTexW || grayMask.rows != hsvTexH)
+    {
+        SAFE_RELEASE(g_hsvMaskTex);
+        SAFE_RELEASE(g_hsvMaskSRV);
+
+        hsvTexW = grayMask.cols;  hsvTexH = grayMask.rows;
+
+        D3D11_TEXTURE2D_DESC td = {};
+        td.Width = hsvTexW;
+        td.Height = hsvTexH;
+        td.MipLevels = td.ArraySize = 1;
+        td.Format = DXGI_FORMAT_R8G8B8A8_UNORM; // Standard RGBA format
+        td.SampleDesc.Count = 1;
+        td.Usage = D3D11_USAGE_DYNAMIC;
+        td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        td.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+
+        HRESULT hr_tex = g_pd3dDevice->CreateTexture2D(&td, nullptr, &g_hsvMaskTex);
+        if (FAILED(hr_tex))
+        {
+            SAFE_RELEASE(g_hsvMaskTex);
+            // OutputDebugStringA(("[uploadHsvMaskTexture] Error: CreateTexture2D failed! HRESULT: " + std::to_string(hr_tex) + "\\n").c_str());
+            return;
+        }
+
+        D3D11_SHADER_RESOURCE_VIEW_DESC sd = {};
+        sd.Format = td.Format;
+        sd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        sd.Texture2D.MipLevels = 1;
+        HRESULT hr_srv = g_pd3dDevice->CreateShaderResourceView(g_hsvMaskTex, &sd, &g_hsvMaskSRV);
+        if (FAILED(hr_srv))
+        {
+            SAFE_RELEASE(g_hsvMaskTex);
+            SAFE_RELEASE(g_hsvMaskSRV);
+            // OutputDebugStringA(("[uploadHsvMaskTexture] Error: CreateShaderResourceView failed! HRESULT: " + std::to_string(hr_srv) + "\\n").c_str());
+            return;
+        }
+    }
+
+    static cv::Mat rgbaMask; // Static to reuse memory
+    try {
+        cv::cvtColor(grayMask, rgbaMask, cv::COLOR_GRAY2RGBA);
+    } catch (const cv::Exception& e) {
+        // OutputDebugStringA(("[uploadHsvMaskTexture] cv::Exception during cvtColor: " + std::string(e.what()) + "\\n").c_str());
+        return;
+    }
+
+    if (rgbaMask.empty() || rgbaMask.cols <= 0 || rgbaMask.rows <= 0) {
+        // OutputDebugStringA(("[uploadHsvMaskTexture] Error: RGBA Mask is empty or invalid after conversion.\\n").c_str());
+        return;
+    }
+
+    D3D11_MAPPED_SUBRESOURCE ms;
+    HRESULT hr_map = g_pd3dDeviceContext->Map(g_hsvMaskTex, 0, D3D11_MAP_WRITE_DISCARD, 0, &ms);
+    if (SUCCEEDED(hr_map))
+    {
+        for (int y = 0; y < hsvTexH; ++y)
+            memcpy((uint8_t*)ms.pData + ms.RowPitch * y, rgbaMask.ptr(y), hsvTexW * 4); // 4 bytes per pixel for RGBA
+        g_pd3dDeviceContext->Unmap(g_hsvMaskTex, 0);
+    } else {
+        // OutputDebugStringA(("[uploadHsvMaskTexture] Error: Failed to map texture! HRESULT: " + std::to_string(hr_map) + "\\n").c_str());
+    }
+}
+
 // Function to draw the debug frame with overlays
 void draw_debug_frame()
 {
@@ -178,6 +264,7 @@ void draw_debug_frame()
 
     // --- Re-enabling frame display --- //
     if (!got_lock) {
+        g_crosshairHsvValid = false; // No frame, no HSV
         // If we couldn't get the lock, we can either show the last frame or a message.
         // For now, if there's an existing texture, show it. Otherwise, show a message.
         if (g_debugSRV && texW > 0 && texH > 0) {
@@ -195,6 +282,7 @@ void draw_debug_frame()
         // For now, let's allow rest of the debug UI to render.
     } else if (frameCopy.empty() || frameCopy.cols <= 0 || frameCopy.rows <= 0) {
         // printf("[draw_debug_frame] Error: frameCopy is empty or invalid before uploadDebugFrame.\\n");
+        g_crosshairHsvValid = false; // No valid frame, no HSV
         if (g_debugSRV && texW > 0 && texH > 0) {
             // ImGui::TextUnformatted("Debug frame: No new data, displaying last available frame.");
             ImGui::SliderFloat("Debug scale", &debug_scale, 0.1f, 3.0f, "%.1fx");
@@ -207,6 +295,31 @@ void draw_debug_frame()
         // Allow rest of the debug UI to render.
     } else {
         // Got lock and valid frameCopy
+        // Calculate Crosshair HSV before uploading frame
+        if (!frameCopy.empty() && frameCopy.cols > 0 && frameCopy.rows > 0) {
+            cv::Point center_pixel_coords(frameCopy.cols / 2, frameCopy.rows / 2);
+            if (center_pixel_coords.x >= 0 && center_pixel_coords.x < frameCopy.cols &&
+                center_pixel_coords.y >= 0 && center_pixel_coords.y < frameCopy.rows) {
+                cv::Vec3b bgr_pixel = frameCopy.at<cv::Vec3b>(center_pixel_coords);
+                cv::Mat bgr_mat(1, 1, CV_8UC3, cv::Scalar(bgr_pixel[0], bgr_pixel[1], bgr_pixel[2]));
+                cv::Mat hsv_mat;
+                cv::cvtColor(bgr_mat, hsv_mat, cv::COLOR_BGR2HSV);
+                if (!hsv_mat.empty()) {
+                     cv::Vec3b hsv_pixel = hsv_mat.at<cv::Vec3b>(0, 0);
+                     g_crosshairH = hsv_pixel[0];
+                     g_crosshairS = hsv_pixel[1];
+                     g_crosshairV = hsv_pixel[2];
+                     g_crosshairHsvValid = true;
+                } else {
+                    g_crosshairHsvValid = false;
+                }
+            } else {
+                g_crosshairHsvValid = false;
+            }
+        } else {
+            g_crosshairHsvValid = false;
+        }
+
         uploadDebugFrame(frameCopy);
         ImGui::SliderFloat("Debug scale", &debug_scale, 0.1f, 3.0f, "%.1fx");
         // --- ImGui::Image call is currently commented out --- // Now uncommented
@@ -326,6 +439,19 @@ void draw_debug_frame()
             draw_list->PopClipRect();
         }
     }
+
+    // --- Crosshair Pixel HSV Display ---
+    ImGui::SeparatorText("Crosshair Pixel HSV");
+    ImGui::Spacing();
+    if (g_crosshairHsvValid) {
+        ImGui::Text("Crosshair H: %d, S: %d, V: %d", g_crosshairH, g_crosshairS, g_crosshairV);
+    } else {
+        ImGui::TextUnformatted("Crosshair HSV: N/A (Debug preview not active or frame empty)");
+    }
+    ImGui::Spacing();
+    // We can add a separator after this if there are more sections, or leave it clean
+    // ImGui::Separator(); 
+    // ImGui::Spacing();
 }
 
 // --- Optical Flow Settings UI (Moved to its own function) ---
@@ -370,8 +496,6 @@ void draw_debug()
 
         if (prev_show_window_state == true && config.show_window == false) {
             // Preview window was just turned OFF. Release its D3D resources.
-            // These are static globals, so releasing them here means they'll be null
-            // until uploadDebugFrame recreates them if the window is shown again.
             if (g_debugSRV) {
                 g_debugSRV->Release();
                 g_debugSRV = nullptr;
@@ -380,9 +504,20 @@ void draw_debug()
                 g_debugTex->Release();
                 g_debugTex = nullptr;
             }
-            // Reset dimensions as well, so they are re-evaluated by uploadDebugFrame
             texW = 0; 
             texH = 0;
+
+            // Also release HSV Mask preview resources if window is turned off
+            if (g_hsvMaskSRV) {
+                g_hsvMaskSRV->Release();
+                g_hsvMaskSRV = nullptr;
+            }
+            if (g_hsvMaskTex) {
+                g_hsvMaskTex->Release();
+                g_hsvMaskTex = nullptr;
+            }
+            hsvTexW = 0;
+            hsvTexH = 0;
         }
     }
     if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Toggles the live debug frame preview below."); }
@@ -401,6 +536,63 @@ void draw_debug()
 
     ImGui::Spacing();
     ImGui::Separator(); // Separator after the preview window or its controls
+    ImGui::Spacing();
+
+    // --- HSV Filter Debug ---
+    ImGui::SeparatorText("HSV Filter Debug");
+    ImGui::Spacing();
+
+    if (ImGui::Checkbox("Enable HSV Filter (in Config)", &config.enable_hsv_filter)) {
+        config.saveConfig(); // Save if changed
+        detector.m_ignore_flags_need_update = true; // Trigger re-evaluation of filters in detector
+    }
+    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Toggles the HSV filtering logic (config.enable_hsv_filter)."); }
+
+    if (config.enable_hsv_filter) {
+        ImGui::Text("Min HSV Pixels: %d", config.min_hsv_pixels);
+        ImGui::SameLine(); ImGui::Spacing(); ImGui::SameLine();
+        ImGui::Text(config.remove_hsv_matches ? "Mode: Remove if HSV matches" : "Mode: Keep if HSV matches");
+
+        ImGui::Text("Lower H:%3d S:%3d V:%3d", config.hsv_lower_h, config.hsv_lower_s, config.hsv_lower_v);
+        ImGui::Text("Upper H:%3d S:%3d V:%3d", config.hsv_upper_h, config.hsv_upper_s, config.hsv_upper_v);
+        ImGui::Spacing();
+
+        static bool show_hsv_mask_preview = false;
+        ImGui::Checkbox("Show HSV Mask Preview", &show_hsv_mask_preview);
+
+        if (show_hsv_mask_preview) {
+            // Attempt to get and display the HSV mask from the detector
+            cv::cuda::GpuMat hsvMaskGpu = detector.getHsvMaskGpu(); // getHsvMaskGpu now returns by value (a clone)
+            if (!hsvMaskGpu.empty()) {
+                static cv::Mat hsvMaskCpu; // static to reuse memory
+                try {
+                    hsvMaskGpu.download(hsvMaskCpu); // Download to CPU
+                } catch (const cv::Exception& e) {
+                    ImGui::Text("Error downloading HSV Mask: %s", e.what());
+                    hsvMaskCpu.release(); // Ensure it's empty on error
+                }
+
+                if (!hsvMaskCpu.empty()) {
+                    uploadHsvMaskTexture(hsvMaskCpu); // Upload for rendering
+                    if (g_hsvMaskSRV && hsvTexW > 0 && hsvTexH > 0) {
+                        ImGui::SliderFloat("HSV Mask Scale", &hsv_mask_preview_scale, 0.1f, 2.0f, "%.1fx");
+                        ImVec2 mask_img_size(hsvTexW * hsv_mask_preview_scale, hsvTexH * hsv_mask_preview_scale);
+                        ImGui::Image(g_hsvMaskSRV, mask_img_size);
+                    } else {
+                        ImGui::Text("HSV Mask Texture not available for display.");
+                    }
+                } else {
+                    ImGui::Text("HSV Mask (CPU) is empty or download failed.");
+                }
+            } else {
+                ImGui::Text("HSV Mask (GPU) is not available from detector or not generated.");
+            }
+        }
+    } else {
+        ImGui::TextUnformatted("HSV Filter is currently disabled in config.");
+    }
+    ImGui::Spacing();
+    ImGui::Separator();
     ImGui::Spacing();
 
     // Screenshot Settings remain here
