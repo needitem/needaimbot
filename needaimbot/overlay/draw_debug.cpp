@@ -16,6 +16,21 @@
 #include "detector/postProcess.h" // For Detection struct
 #include "capture/optical_flow.h" // For OpticalFlow class (assuming g_opticalFlow)
 
+// Added for ring buffer access
+#include <array>
+#include <atomic>
+#include "opencv2/core/cuda.hpp" // For cv::cuda::GpuMat
+// cv::Mat is likely included via other headers like needaimbot.h or opencv.hpp transitively
+
+// Assuming FRAME_BUFFER_COUNT is defined in needaimbot.h (already included)
+// Extern declarations for ring buffers and indices from capture.cpp
+extern std::array<cv::cuda::GpuMat, FRAME_BUFFER_COUNT> captureGpuBuffer;
+extern std::array<cv::Mat, FRAME_BUFFER_COUNT> captureCpuBuffer;
+extern std::atomic<int> captureGpuWriteIdx;
+extern std::atomic<int> captureCpuWriteIdx;
+// extern Config config; // Already declared and used
+// extern std::mutex frameMutex; // Already used, implicitly extern
+
 #ifndef SAFE_RELEASE
 #define SAFE_RELEASE(p)     \
     do {                    \
@@ -121,19 +136,38 @@ void draw_debug_frame()
         if (lock.owns_lock()) {
             // printf("[DebugTab] frameMutex try_lock succeeded.\\n"); // Optional
             got_lock = true;
-            if (!latestFrameCpu.empty() && latestFrameCpu.cols > 0 && latestFrameCpu.rows > 0) // Check validity
-            {
-                try {
-                    latestFrameCpu.copyTo(frameCopy);
-                } catch (const cv::Exception& e) {
-                    // printf("[draw_debug_frame] Error: cv::Exception during latestFrameCpu.copyTo: %s\\n", e.what());
-                    return;
+
+            cv::Mat tempFrameFromRingBuffer;
+            if (config.capture_use_cuda) {
+                int read_idx_gpu = captureGpuWriteIdx.load(std::memory_order_acquire);
+                if (read_idx_gpu >= 0 && read_idx_gpu < FRAME_BUFFER_COUNT && !captureGpuBuffer[read_idx_gpu].empty()) {
+                    try {
+                        captureGpuBuffer[read_idx_gpu].download(tempFrameFromRingBuffer);
+                    } catch (const cv::Exception& e) {
+                        // OutputDebugStringA(("[draw_debug_frame] cv::Exception during GpuMat download: " + std::string(e.what()) + "\\\\n").c_str());
+                    }
                 }
             } else {
-                // printf("[draw_debug_frame] Info: latestFrameCpu is empty or has invalid dimensions before copyTo.\\n");
-                // frameCopy will remain empty
+                int read_idx_cpu = captureCpuWriteIdx.load(std::memory_order_acquire);
+                 if (read_idx_cpu >= 0 && read_idx_cpu < FRAME_BUFFER_COUNT && !captureCpuBuffer[read_idx_cpu].empty()) {
+                     try {
+                        captureCpuBuffer[read_idx_cpu].copyTo(tempFrameFromRingBuffer);
+                     } catch (const cv::Exception& e) {
+                        // OutputDebugStringA(("[draw_debug_frame] cv::Exception during Mat copyTo: " + std::string(e.what()) + "\\\\n").c_str());
+                     }
+                }
             }
-            // lock.unlock(); // Not strictly necessary due to RAII, unique_lock will unlock
+
+            if (!tempFrameFromRingBuffer.empty() && tempFrameFromRingBuffer.cols > 0 && tempFrameFromRingBuffer.rows > 0) {
+                try {
+                    tempFrameFromRingBuffer.copyTo(frameCopy);
+                } catch (const cv::Exception& e) {
+                    // OutputDebugStringA(("[draw_debug_frame] Error: cv::Exception during tempFrameFromRingBuffer.copyTo(frameCopy): " + std::string(e.what()) + "\\\\n").c_str());
+                }
+            } else {
+                // frameCopy remains empty if no valid frame from ring buffer
+                // OutputDebugStringA("[draw_debug_frame] Info: tempFrameFromRingBuffer is empty or invalid.\\\\n");
+            }
         } else {
             // printf("[DebugTab] frameMutex try_lock FAILED.\\n"); // Optional
             // If lock fails, got_lock remains false. frameCopy remains empty.
@@ -177,10 +211,17 @@ void draw_debug_frame()
         ImGui::SliderFloat("Debug scale", &debug_scale, 0.1f, 3.0f, "%.1fx");
         // --- ImGui::Image call is currently commented out --- // Now uncommented
         ImVec2 image_size(texW * debug_scale, texH * debug_scale);
-        if (g_debugSRV) ImGui::Image(g_debugSRV, image_size); // Check g_debugSRV before use
+        if (g_debugSRV) { // Check g_debugSRV before use
+            ImGui::Image(g_debugSRV, image_size);
+        } else {
+            ImGui::TextUnformatted("Debug frame: Data processed, but texture unavailable for display.");
+        }
     }
 
-    if (!g_debugSRV) return; // If no texture, can't get image_pos or draw on it
+    if (!g_debugSRV) {
+        ImGui::TextUnformatted("Overlays skipped: Debug texture unavailable."); // Added for clarity
+        return; // If no texture, can't get image_pos or draw on it
+    }
 
     ImVec2 image_pos = ImGui::GetItemRectMin(); // Get position of the drawn image
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
