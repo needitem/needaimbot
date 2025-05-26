@@ -69,9 +69,9 @@ std::atomic<bool> config_optical_flow_changed(false);
 
 // Recoil delay state
 std::chrono::steady_clock::time_point shooting_key_press_time;
-std::chrono::steady_clock::time_point shooting_key_release_time;
 std::atomic<bool> recoil_active(false);
 std::atomic<bool> was_shooting(false);
+std::atomic<bool> start_delay_pending(false);
 
 // Stats variables definitions
 std::atomic<float> g_current_inference_time_ms(0.0f);
@@ -328,48 +328,35 @@ void mouseThreadFunction(MouseThread &mouseThread)
             if (current_shooting_state && !was_shooting.load()) { // Key just pressed
                 shooting_key_press_time = std::chrono::steady_clock::now();
                 if (config.easynorecoil_start_delay_ms == 0) {
-                    recoil_active = true; // Start immediately if delay is 0
+                    recoil_active = true;
+                    start_delay_pending = false;
+                } else {
+                    recoil_active = false; // Ensure recoil is off until delay is met
+                    start_delay_pending = true;
                 }
             } else if (!current_shooting_state && was_shooting.load()) { // Key just released
-                shooting_key_release_time = std::chrono::steady_clock::now();
-                if (config.easynorecoil_end_delay_ms == 0) {
-                    recoil_active = false; // Stop immediately if delay is 0
-                }
-            }
-            was_shooting = current_shooting_state;
-
-            if (current_shooting_state && !recoil_active.load()) {
-                if (config.easynorecoil_start_delay_ms > 0) {
-                    auto elapsed_since_press = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::steady_clock::now() - shooting_key_press_time
-                    ).count();
-                    if (elapsed_since_press >= config.easynorecoil_start_delay_ms) {
-                        recoil_active = true;
-                    }
-                }
-            } else if (!current_shooting_state && recoil_active.load()) {
-                if (config.easynorecoil_end_delay_ms > 0) {
-                    auto elapsed_since_release = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::steady_clock::now() - shooting_key_release_time
-                    ).count();
-                    if (elapsed_since_release >= config.easynorecoil_end_delay_ms) {
-                        recoil_active = false;
-                    }
-                }
-            }
-            
-            // If still shooting but end delay is 0, recoil should have stopped when key was released.
-            // This handles the case where end_delay is 0 and shooting key is released.
-            if (!current_shooting_state && config.easynorecoil_end_delay_ms == 0) {
-                 recoil_active = false;
+                recoil_active = false;
+                start_delay_pending = false; // Clear pending delay on release
             }
 
+            if (start_delay_pending.load() && current_shooting_state) {
+                auto elapsed_since_press = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - shooting_key_press_time
+                ).count();
+                if (elapsed_since_press >= config.easynorecoil_start_delay_ms) {
+                    recoil_active = true;
+                    start_delay_pending = false;
+                }
+            }
+
+            was_shooting = current_shooting_state; // Update state AFTER all logic for the current tick
 
             if (recoil_active.load() && currently_zooming) {
                  mouseThread.applyRecoilCompensation(config.easynorecoilstrength);
             }
         } else {
             recoil_active = false; // Ensure recoil is off if easynorecoil is disabled
+            start_delay_pending = false;
         }
 
         // Check for silent aim trigger first
