@@ -126,7 +126,10 @@ public:
     std::vector<unsigned char> m_host_ignore_flags_uchar;
     bool m_ignore_flags_need_update;
 
+    std::mutex hsvMaskMutex; // Mutex for hsvMaskGpu access
+
     bool isCudaContextInitialized() const { return m_cudaContextInitialized; } // Getter for the flag
+    cv::cuda::GpuMat getHsvMaskGpu() const; // Declaration for the HSV Mask getter - MODIFIED return type
 
 private:
     static float calculate_host_iou(const cv::Rect& box1, const cv::Rect& box2); // Declare as private static

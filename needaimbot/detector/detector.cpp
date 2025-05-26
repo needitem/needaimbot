@@ -1098,10 +1098,14 @@ void Detector::preProcess(const cv::cuda::GpuMat& frame)
             cv::cuda::cvtColor(resizedBuffer, hsvGpu, cv::COLOR_BGR2HSV, 0, preprocessCvStream);
             cv::Scalar lower(config.hsv_lower_h, config.hsv_lower_s, config.hsv_lower_v);
             cv::Scalar upper(config.hsv_upper_h, config.hsv_upper_s, config.hsv_upper_v);
-            cv::cuda::GpuMat maskGpu;
+            cv::cuda::GpuMat maskGpu; // Temporary mask
             cv::cuda::inRange(hsvGpu, lower, upper, maskGpu, preprocessCvStream);
-            m_hsvMaskGpu = maskGpu;
+            {
+                std::lock_guard<std::mutex> lock(hsvMaskMutex); // Lock before writing to m_hsvMaskGpu
+                m_hsvMaskGpu = maskGpu;
+            }
         } else {
+            std::lock_guard<std::mutex> lock(hsvMaskMutex); // Lock before releasing m_hsvMaskGpu
             m_hsvMaskGpu.release();
         }
 
@@ -1189,4 +1193,22 @@ float Detector::calculate_host_iou(const cv::Rect& box1, const cv::Rect& box2) {
 
     // Compute IoU
     return (unionArea > 0.0f) ? static_cast<float>(interArea) / unionArea : 0.0f;
+}
+
+// Definition for the HSV Mask getter - MODIFIED
+// Returns a copy of the mask for thread safety
+// cv::cuda::GpuMat Detector::getHsvMaskGpu() const { // Marked as const but locking a mutex inside is complicated
+// To keep it simple, and since it's a getter that provides a *copy* for safety, making it non-const or using a mutable mutex might be alternatives.
+// For now, let's assume the const_cast is acceptable for this internal debug getter or consider changing the method to non-const if it causes issues.
+// A truly const version would need a mutable mutex, or the caller handles locking, which is less ideal for a simple getter.
+
+// Re-evaluating const correctness: A getter that locks and copies is a common pattern.
+// The object state itself (m_hsvMaskGpu) isn't modified by the getter, only read.
+// The mutex is for synchronizing read access with potential writes from other threads.
+cv::cuda::GpuMat Detector::getHsvMaskGpu() const { // Keeping it const
+    std::lock_guard<std::mutex> lock(const_cast<std::mutex&>(hsvMaskMutex)); // const_cast needed for mutex in const method
+    if (m_hsvMaskGpu.empty()) {
+        return cv::cuda::GpuMat(); // Return empty GpuMat if no mask
+    }
+    return m_hsvMaskGpu.clone(); // Return a copy
 }
