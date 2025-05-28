@@ -477,7 +477,7 @@ DuplicationAPIScreenCapture::DuplicationAPIScreenCapture(int desiredWidth, int d
 
     // Set timeout after DDAManager is successfully initialized
     if (m_ddaManager) {
-        m_ddaManager->SetAcquireTimeout(config.capture_timeout_ms);
+        m_ddaManager->SetAcquireTimeout(0); // minimal wait for smoothest frame acquisition
     }
 
     m_initialized = true;
