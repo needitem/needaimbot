@@ -91,8 +91,7 @@ void WindMouse(float target_x, float target_y, float G, float W, float M, float 
         
         current_x = new_x;
         current_y = new_y;
-
-        Sleep(1); // Small delay to simulate human-like movement pauses
+        // Sleep(1); // Small delay to simulate human-like movement pauses (removed for speed)
     }
 }
 
