@@ -73,7 +73,7 @@ extern cudaError_t filterDetectionsByClassIdGpu(
     const unsigned char* d_hsv_mask,
     int mask_pitch,
     int min_hsv_pixels,
-    int remove_hsv_matches,
+    bool remove_hsv_matches,
     int max_output_detections,
     cudaStream_t stream
 );
@@ -972,10 +972,24 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
             // Prepare HSV mask pointer and pitch if HSV filtering enabled
             const unsigned char* hsvMaskPtr = nullptr;
             int maskPitch = 0;
-            if (config.enable_hsv_filter && !m_hsvMaskGpu.empty()) {
-                hsvMaskPtr = m_hsvMaskGpu.ptr<unsigned char>();
-                maskPitch = static_cast<int>(m_hsvMaskGpu.step);
-            }
+            int current_min_hsv_pixels_val;
+            bool current_remove_hsv_matches_val;
+            int current_max_output_detections_val;
+
+            { // Scope for config lock
+                std::lock_guard<std::mutex> lock(configMutex);
+                if (config.enable_hsv_filter) { 
+                    std::lock_guard<std::mutex> hsv_lock(hsvMaskMutex); 
+                    if (!m_hsvMaskGpu.empty()) {
+                        hsvMaskPtr = m_hsvMaskGpu.ptr<unsigned char>();
+                        maskPitch = static_cast<int>(m_hsvMaskGpu.step);
+                    }
+                }
+                current_min_hsv_pixels_val = config.min_hsv_pixels;
+                current_remove_hsv_matches_val = config.remove_hsv_matches;
+                current_max_output_detections_val = config.max_detections; 
+            } // Release configMutex (and hsvMaskMutex if taken)
+            
             // Call the GPU filter function (class + optional HSV mask)
             cudaError_t filterErr = filterDetectionsByClassIdGpu(
                 m_decodedDetectionsGpu,
@@ -986,9 +1000,9 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
                 MAX_CLASSES_FOR_FILTERING,
                 hsvMaskPtr,
                 maskPitch,
-                config.min_hsv_pixels,
-                config.remove_hsv_matches,
-                config.max_detections,
+                current_min_hsv_pixels_val,
+                current_remove_hsv_matches_val,
+                current_max_output_detections_val,
                 stream
             );
             if (!checkCudaError(filterErr, "filtering detections by class ID GPU")) {
@@ -1093,19 +1107,36 @@ void Detector::preProcess(const cv::cuda::GpuMat& frame)
         }
 
         // Generate HSV mask if filtering enabled
-        if (config.enable_hsv_filter) {
+        bool current_enable_hsv_filter;
+        int current_hsv_lower_h = 0, current_hsv_lower_s = 0, current_hsv_lower_v = 0;
+        int current_hsv_upper_h = 0, current_hsv_upper_s = 0, current_hsv_upper_v = 0;
+
+        { // Scope for config lock
+            std::lock_guard<std::mutex> lock(configMutex);
+            current_enable_hsv_filter = config.enable_hsv_filter;
+            if (current_enable_hsv_filter) { // Only read bounds if filter is enabled
+                current_hsv_lower_h = config.hsv_lower_h;
+                current_hsv_lower_s = config.hsv_lower_s;
+                current_hsv_lower_v = config.hsv_lower_v;
+                current_hsv_upper_h = config.hsv_upper_h;
+                current_hsv_upper_s = config.hsv_upper_s;
+                current_hsv_upper_v = config.hsv_upper_v;
+            }
+        } // Release configMutex
+
+        if (current_enable_hsv_filter) {
             cv::cuda::GpuMat hsvGpu;
             cv::cuda::cvtColor(resizedBuffer, hsvGpu, cv::COLOR_BGR2HSV, 0, preprocessCvStream);
-            cv::Scalar lower(config.hsv_lower_h, config.hsv_lower_s, config.hsv_lower_v);
-            cv::Scalar upper(config.hsv_upper_h, config.hsv_upper_s, config.hsv_upper_v);
-            cv::cuda::GpuMat maskGpu; // Temporary mask
+            cv::Scalar lower(current_hsv_lower_h, current_hsv_lower_s, current_hsv_lower_v);
+            cv::Scalar upper(current_hsv_upper_h, current_hsv_upper_s, current_hsv_upper_v);
+            cv::cuda::GpuMat maskGpu; 
             cv::cuda::inRange(hsvGpu, lower, upper, maskGpu, preprocessCvStream);
             {
-                std::lock_guard<std::mutex> lock(hsvMaskMutex); // Lock before writing to m_hsvMaskGpu
+                std::lock_guard<std::mutex> lock(hsvMaskMutex); 
                 m_hsvMaskGpu = maskGpu;
             }
         } else {
-            std::lock_guard<std::mutex> lock(hsvMaskMutex); // Lock before releasing m_hsvMaskGpu
+            std::lock_guard<std::mutex> lock(hsvMaskMutex); 
             m_hsvMaskGpu.release();
         }
 
