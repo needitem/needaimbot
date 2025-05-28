@@ -1129,11 +1129,19 @@ void Detector::preProcess(const cv::cuda::GpuMat& frame)
             cv::cuda::cvtColor(resizedBuffer, hsvGpu, cv::COLOR_BGR2HSV, 0, preprocessCvStream);
             cv::Scalar lower(current_hsv_lower_h, current_hsv_lower_s, current_hsv_lower_v);
             cv::Scalar upper(current_hsv_upper_h, current_hsv_upper_s, current_hsv_upper_v);
-            cv::cuda::GpuMat maskGpu; 
+            cv::cuda::GpuMat maskGpu;
             cv::cuda::inRange(hsvGpu, lower, upper, maskGpu, preprocessCvStream);
+            // Resize mask to detection resolution so coordinates align with box filtering
+            int detRes = 0;
             {
-                std::lock_guard<std::mutex> lock(hsvMaskMutex); 
-                m_hsvMaskGpu = maskGpu;
+                std::lock_guard<std::mutex> lock(configMutex);
+                detRes = config.detection_resolution;
+            }
+            cv::cuda::GpuMat maskResized;
+            cv::cuda::resize(maskGpu, maskResized, cv::Size(detRes, detRes), 0, 0, cv::INTER_NEAREST, preprocessCvStream);
+            {
+                std::lock_guard<std::mutex> lock(hsvMaskMutex);
+                m_hsvMaskGpu = maskResized;
             }
         } else {
             std::lock_guard<std::mutex> lock(hsvMaskMutex); 
