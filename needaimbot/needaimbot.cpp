@@ -523,9 +523,7 @@ void mouseThreadFunction(MouseThread &mouseThread)
         
         target_fps = config.target_fps > 0 ? config.target_fps : 60.0f;
         target_frame_time_ms = 1000.0f / target_fps;
-        if (loop_duration < target_frame_time_ms) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(target_frame_time_ms - loop_duration)));
-        }
+        // Per-loop delay removed for speed (original sleep_for omitted)
     }
 
     mouseThread.releaseMouse();
