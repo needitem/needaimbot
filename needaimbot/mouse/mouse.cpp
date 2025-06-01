@@ -354,8 +354,6 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     int local_head_class_id_to_use = -1;
     bool local_apply_head_offset = false;
     bool local_disable_upward_aim_active = false;
-    bool local_wind_mouse_enabled_val = false;
-    float local_wind_G_val = 18.0f, local_wind_W_val = 15.0f, local_wind_M_val = 10.0f, local_wind_D_val = 8.0f; // Default values
     std::vector<std::string> local_button_disable_upward_aim;
 
 
@@ -380,13 +378,6 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         
         // Get other config values
         local_button_disable_upward_aim = config.button_disable_upward_aim; // Copy the vector
-        local_wind_mouse_enabled_val = config.wind_mouse_enabled;
-        if (local_wind_mouse_enabled_val) {
-            local_wind_G_val = config.wind_G;
-            local_wind_W_val = config.wind_W;
-            local_wind_M_val = config.wind_M;
-            local_wind_D_val = config.wind_D;
-        }
     }
     raw_target_pos.y = target.y + target.h * local_y_offset_multiplier_val;
 
@@ -456,29 +447,11 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         if (input_method && input_method->isValid())
         {
             auto input_send_start_time = std::chrono::steady_clock::now();
-            if (local_wind_mouse_enabled_val) { // Use local config variable
-                WindMouse(static_cast<float>(dx_int), static_cast<float>(dy_int),
-                          local_wind_G_val, local_wind_W_val, local_wind_M_val, local_wind_D_val, // Use local config variables
-                          [this](int mdx, int mdy) { 
-                              if (this->input_method && this->input_method->isValid()) {
-                                 auto wind_move_start = std::chrono::steady_clock::now();
-                                 this->input_method->move(mdx, mdy);
-                                 auto wind_move_end = std::chrono::steady_clock::now();
-                                 float wind_move_duration_ms = std::chrono::duration<float, std::milli>(wind_move_end - wind_move_start).count();
-                                 g_current_input_send_time_ms.store(wind_move_duration_ms, std::memory_order_relaxed);
-                                 add_to_history(g_input_send_time_history, wind_move_duration_ms, g_input_send_history_mutex);
-                              }
-                          });
-            } else {
-                input_method->move(dx_int, dy_int);
-            }
+            input_method->move(dx_int, dy_int);
             auto input_send_end_time = std::chrono::steady_clock::now();
             float input_send_duration_ms = std::chrono::duration<float, std::milli>(input_send_end_time - input_send_start_time).count();
-            
-            if (!local_wind_mouse_enabled_val) { // Use local config variable
-                g_current_input_send_time_ms.store(input_send_duration_ms, std::memory_order_relaxed);
-                add_to_history(g_input_send_time_history, input_send_duration_ms, g_input_send_history_mutex);
-            }
+            g_current_input_send_time_ms.store(input_send_duration_ms, std::memory_order_relaxed);
+            add_to_history(g_input_send_time_history, input_send_duration_ms, g_input_send_history_mutex);
         }
     }
 }

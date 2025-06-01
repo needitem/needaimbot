@@ -227,68 +227,6 @@ void draw_mouse()
     }
     // --- End Input Method Settings ---
 
-    // --- WindMouse Settings (New Section) ---
-    ImGui::Spacing(); // Add spacing before WindMouse settings header
-    if (ImGui::CollapsingHeader("WindMouse Settings", ImGuiTreeNodeFlags_DefaultOpen))
-    {
-        if (ImGui::Checkbox("Enable WindMouse", &config.wind_mouse_enabled))
-        {
-            config.saveConfig();
-        }
-        if (ImGui::IsItemHovered())
-        {
-            SetWrappedTooltip("Enables more human-like mouse movements using the WindMouse algorithm. Adjust G, W, M, D parameters below.");
-        }
-
-        ImGui::Indent(10.0f);
-        ImGui::PushItemWidth(100);
-
-        if (ImGui::InputFloat("Gravity (G)", &config.wind_G, 0.1f, 1.0f, "%.1f"))
-        {
-            config.wind_G = std::max(0.0f, config.wind_G); // Ensure non-negative
-            config.saveConfig();
-        }
-        if (ImGui::IsItemHovered())
-        {
-            SetWrappedTooltip("Strength of the force pulling the cursor towards the target. Higher values mean more direct movement.");
-        }
-
-        if (ImGui::InputFloat("Wind (W)", &config.wind_W, 0.1f, 1.0f, "%.1f"))
-        {
-            config.wind_W = std::max(0.0f, config.wind_W); // Ensure non-negative
-            config.saveConfig();
-        }
-        if (ImGui::IsItemHovered())
-        {
-            SetWrappedTooltip("Magnitude of random mouse movements (shake/tremor). Higher values make movement more erratic.");
-        }
-
-        if (ImGui::InputFloat("Mean (M)", &config.wind_M, 0.1f, 1.0f, "%.1f"))
-        {
-            config.wind_M = std::max(1.0f, config.wind_M); // Ensure M is at least 1 to avoid issues with division by zero or very small numbers in the algorithm
-            config.saveConfig();
-        }
-        if (ImGui::IsItemHovered())
-        {
-            SetWrappedTooltip("Mean distance for random mouse movements. Influences the scale of erratic jumps.");
-        }
-
-        if (ImGui::InputFloat("Deviation (D)", &config.wind_D, 0.1f, 1.0f, "%.1f"))
-        {
-            config.wind_D = std::max(1.0f, config.wind_D); // Ensure D is at least 1 for similar reasons to M
-            config.saveConfig();
-        }
-        if (ImGui::IsItemHovered())
-        {
-            SetWrappedTooltip("Standard deviation for random mouse movements. Controls the variability of the erratic jumps.");
-        }
-
-        ImGui::PopItemWidth();
-        ImGui::Unindent(10.0f);
-        ImGui::Spacing(); // Add spacing at the end of WindMouse settings
-    }
-    // --- End WindMouse Settings ---
-
     // No Separator needed here
     // ImGui::Text("Kalman Filter Settings"); // Text might be redundant if header is descriptive
     ImGui::Spacing(); // Add spacing before the Kalman header
