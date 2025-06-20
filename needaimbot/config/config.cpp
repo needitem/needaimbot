@@ -89,6 +89,7 @@ bool Config::loadConfig(const std::string& filename)
         velocity_prediction_ms = 16.0f;
         lr_past_points = 10;
         es_alpha = 0.5f;
+        es_beta = 0.5f;
         kalman_q = 0.1;
         kalman_r = 0.1;
         kalman_p = 0.1;
@@ -262,6 +263,7 @@ bool Config::loadConfig(const std::string& filename)
     velocity_prediction_ms = (float)get_double_ini("Prediction", "velocity_prediction_ms", 16.0);
     lr_past_points = get_long_ini("Prediction", "lr_past_points", 10);
     es_alpha = (float)get_double_ini("Prediction", "es_alpha", 0.5);
+    es_beta = (float)get_double_ini("Prediction", "es_beta", 0.5);
     kalman_q = get_double_ini("Prediction", "kalman_q", 0.1);
     kalman_r = get_double_ini("Prediction", "kalman_r", 0.1);
     kalman_p = get_double_ini("Prediction", "kalman_p", 0.1);
@@ -459,6 +461,7 @@ bool Config::saveConfig(const std::string& filename)
     file << "lr_past_points = " << lr_past_points << "\n";
     file << std::fixed << std::setprecision(6);
     file << "es_alpha = " << es_alpha << "\n";
+    file << "es_beta = " << es_beta << "\n";
     file << "kalman_q = " << kalman_q << "\n";
     file << "kalman_r = " << kalman_r << "\n";
     file << "kalman_p = " << kalman_p << "\n\n";

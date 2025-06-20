@@ -12,7 +12,7 @@ public:
     ~ExponentialSmoothingPredictor() override = default; 
 
     
-    void configure(float alpha, float prediction_ms);
+    void configure(float alpha, float beta, float prediction_ms);
 
     
     void update(const Point2D& position, std::chrono::steady_clock::time_point timestamp) override;
@@ -21,6 +21,7 @@ public:
 
 private:
     float alpha_; 
+    float beta_; 
     
     float prediction_time_seconds_;
     

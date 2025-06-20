@@ -1,5 +1,6 @@
 #include "KalmanFilterPredictor.h"
 #include <stdexcept>
+#include <cmath>
 
 
 KalmanFilterPredictor::KalmanFilterPredictor()
@@ -112,17 +113,24 @@ void KalmanFilterPredictor::update(const Point2D& measurement, std::chrono::stea
     Eigen::VectorXf y = measurement_vec - measurement_matrix_ * state_;
     
     
-    Eigen::MatrixXf S = measurement_matrix_ * covariance_ * measurement_matrix_.transpose() + measurement_noise_;
-    
-    
-    Eigen::MatrixXf K = covariance_ * measurement_matrix_.transpose() * S.inverse();
-    
+    Eigen::Matrix2f S = measurement_matrix_ * covariance_ * measurement_matrix_.transpose() + measurement_noise_;
+    // manual inversion of 2x2 S
+    float detS = S(0,0) * S(1,1) - S(0,1) * S(1,0);
+    Eigen::Matrix2f S_inv = Eigen::Matrix2f::Zero();
+    if (std::abs(detS) > 1e-12f) {
+        S_inv(0,0) =  S(1,1) / detS;
+        S_inv(1,1) =  S(0,0) / detS;
+        S_inv(0,1) = -S(0,1) / detS;
+        S_inv(1,0) = -S(1,0) / detS;
+    }
+    Eigen::MatrixXf K = covariance_ * measurement_matrix_.transpose() * S_inv;
     
     state_ = state_ + K * y;
     
-    
-    Eigen::MatrixXf I = Eigen::MatrixXf::Identity(4, 4);
-    covariance_ = (I - K * measurement_matrix_) * covariance_;
+    // Joseph form covariance update for numerical stability
+    Eigen::Matrix4f I = Eigen::Matrix4f::Identity();
+    Eigen::Matrix4f KH = K * measurement_matrix_;
+    covariance_ = (I - KH) * covariance_ * (I - KH).transpose() + K * measurement_noise_ * K.transpose();
 
     last_timestamp_ = timestamp;
 }

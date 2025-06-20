@@ -1,5 +1,6 @@
 #include "VelocityPredictor.h"
-#include <stdexcept> 
+#include <stdexcept>
+#include <algorithm>
 
 VelocityPredictor::VelocityPredictor() 
     : prediction_time_seconds_(0.016f), 
@@ -23,15 +24,17 @@ void VelocityPredictor::configure(float prediction_ms) {
 
 void VelocityPredictor::update(const Point2D& position, std::chrono::steady_clock::time_point timestamp) {
     if (has_previous_update_) {
-        auto time_diff = std::chrono::duration_cast<std::chrono::microseconds>(timestamp - last_timestamp_);
-        float dt_seconds = static_cast<float>(time_diff.count()) / 1e6f; 
+        float dt_seconds = std::chrono::duration<float>(timestamp - last_timestamp_).count();
+        // clamp dt to reasonable range to avoid spikes
+        dt_seconds = std::clamp(dt_seconds, 1e-6f, 0.1f);
 
-        if (dt_seconds > 1e-6) { 
-            current_velocity_.x = (position.x - last_position_.x) / dt_seconds;
-            current_velocity_.y = (position.y - last_position_.y) / dt_seconds;
-        } else {
-            
-            
+        if (dt_seconds > 1e-6f) {
+            // compute raw velocity
+            float raw_vx = (position.x - last_position_.x) / dt_seconds;
+            float raw_vy = (position.y - last_position_.y) / dt_seconds;
+            // smooth velocity to reduce noise (50% smoothing)
+            current_velocity_.x = 0.5f * raw_vx + 0.5f * current_velocity_.x;
+            current_velocity_.y = 0.5f * raw_vy + 0.5f * current_velocity_.y;
         }
     } else {
         

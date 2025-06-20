@@ -325,6 +325,15 @@ void draw_mouse()
             {
                 SetWrappedTooltip("Smoothing factor (alpha) between 0.01 and 1.0. Controls weighting of recent vs. past data.\nCloser to 1.0 = more weight on recent data (more responsive, less smooth).\nCloser to 0.01 = more weight on past data (smoother, less responsive).");
             }
+            // Exponential Smoothing trend factor (beta)
+            ImGui::PushItemWidth(100);
+            ImGui::Text("Trend Factor (Beta):"); ImGui::SameLine();
+            if (ImGui::SliderFloat("##ESBeta", &config.es_beta, 0.01f, 1.0f, "%.2f"))
+            {
+                config.saveConfig();
+            }
+            ImGui::PopItemWidth();
+            if (ImGui::IsItemHovered()) SetWrappedTooltip("Trend smoothing factor (beta) between 0.01 and 1.0. Controls smoothing of velocity trend.");
         }
         else if (config.prediction_algorithm == "Kalman Filter")
         {

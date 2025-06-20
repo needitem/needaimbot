@@ -145,7 +145,8 @@ public:
     float velocity_prediction_ms;
     int lr_past_points;
     float es_alpha;
-    double kalman_q; 
+    float es_beta;
+    double kalman_q;
     double kalman_r; 
     double kalman_p; 
 
