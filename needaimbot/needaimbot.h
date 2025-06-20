@@ -15,6 +15,7 @@ extern Detector detector;
 extern MouseThread* globalMouseThread;
 extern SerialConnection* arduinoSerial;
 extern std::atomic<bool> input_method_changed;
+extern std::atomic<bool> prediction_settings_changed;
 extern std::atomic<bool> aiming;
 extern std::atomic<bool> shooting;
 extern std::atomic<bool> zooming;
