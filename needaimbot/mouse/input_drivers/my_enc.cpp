@@ -4,7 +4,7 @@ void my_encrypt(unsigned char* input, unsigned char* key)
 	unsigned long* a2 = (unsigned long*)key;
 	unsigned long  a3 = a1[n - 1], a4 = a1[0], sum = 0, a5;
 	unsigned char a6, a7;
-	a7 = 6;//łőĘźÖľ
+	a7 = 6;
 	while (a7-- > 0)
 	{
 		sum += 2654435769; 
@@ -16,3 +16,4 @@ void my_encrypt(unsigned char* input, unsigned char* key)
 		a3 = a1[n - 1] += (a3 >> 5 ^ a4 << 2) + (a4 >> 3 ^ a3 << 4) ^ (sum ^ a4) + (a2[a6 & 3 ^ a5] ^ a3);
 	}
 }
+

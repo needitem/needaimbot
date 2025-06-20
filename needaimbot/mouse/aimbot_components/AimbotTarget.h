@@ -14,4 +14,4 @@ public:
     AimbotTarget(int x, int y, int w, int h, int classId);
 };
 
-#endif // AIMBOTTARGET_H
+#endif 

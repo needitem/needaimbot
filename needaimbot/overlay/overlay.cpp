@@ -25,7 +25,7 @@
 #include "keyboard_listener.h"
 #include "other_tools.h"
 
-// Definition for the global atomic flag
+
 std::atomic<bool> g_config_optical_flow_changed{false};
 
 ID3D11Device* g_pd3dDevice = NULL;
@@ -198,7 +198,7 @@ void SetupImGui()
 
     ImGui::StyleColorsDark();
 
-    // Customize the dark theme further for a more modern look
+    
     ImGuiStyle& style = ImGui::GetStyle();
     style.WindowPadding = ImVec2(8.0f, 8.0f);
     style.FramePadding = ImVec2(5.0f, 4.0f);
@@ -211,41 +211,41 @@ void SetupImGui()
     style.WindowBorderSize = 1.0f;
     style.ChildBorderSize = 1.0f;
     style.PopupBorderSize = 1.0f;
-    style.FrameBorderSize = 0.0f; // No border for frames like sliders/buttons initially
+    style.FrameBorderSize = 0.0f; 
     style.TabBorderSize = 0.0f;
 
-    style.WindowRounding = 6.0f; // Slightly rounded window corners
+    style.WindowRounding = 6.0f; 
     style.ChildRounding = 4.0f;
-    style.FrameRounding = 4.0f; // Slightly rounded frames (buttons, sliders, etc.)
+    style.FrameRounding = 4.0f; 
     style.PopupRounding = 4.0f;
     style.ScrollbarRounding = 9.0f;
     style.GrabRounding = 3.0f;
     style.TabRounding = 4.0f;
 
-    // Slightly adjust colors for a custom feel (optional, can tweak further)
+    
     ImVec4* colors = style.Colors;
-    // Example: Make window background slightly darker
-    colors[ImGuiCol_WindowBg] = ImVec4(0.08f, 0.08f, 0.09f, 1.00f); // Darker background
-    colors[ImGuiCol_ChildBg] = ImVec4(0.10f, 0.10f, 0.11f, 1.00f); // Slightly lighter child background
-    colors[ImGuiCol_PopupBg] = ImVec4(0.07f, 0.07f, 0.08f, 1.00f); // Darker popup
-    // Example: Adjust header color
-    colors[ImGuiCol_Header] = ImVec4(0.15f, 0.15f, 0.17f, 1.00f); // Darker header
-    colors[ImGuiCol_HeaderHovered] = ImVec4(0.20f, 0.20f, 0.22f, 1.00f); // Slightly lighter hover
-    colors[ImGuiCol_HeaderActive] = ImVec4(0.25f, 0.25f, 0.28f, 1.00f); // Slightly lighter active
-    // Example: Adjust button color (Subtle blue tint)
+    
+    colors[ImGuiCol_WindowBg] = ImVec4(0.08f, 0.08f, 0.09f, 1.00f); 
+    colors[ImGuiCol_ChildBg] = ImVec4(0.10f, 0.10f, 0.11f, 1.00f); 
+    colors[ImGuiCol_PopupBg] = ImVec4(0.07f, 0.07f, 0.08f, 1.00f); 
+    
+    colors[ImGuiCol_Header] = ImVec4(0.15f, 0.15f, 0.17f, 1.00f); 
+    colors[ImGuiCol_HeaderHovered] = ImVec4(0.20f, 0.20f, 0.22f, 1.00f); 
+    colors[ImGuiCol_HeaderActive] = ImVec4(0.25f, 0.25f, 0.28f, 1.00f); 
+    
     colors[ImGuiCol_Button] = ImVec4(0.15f, 0.35f, 0.65f, 0.70f);
     colors[ImGuiCol_ButtonHovered] = ImVec4(0.20f, 0.45f, 0.75f, 0.85f);
     colors[ImGuiCol_ButtonActive] = ImVec4(0.10f, 0.25f, 0.55f, 0.85f);
-    // Adjust frame background (for sliders, inputs etc.)
+    
     colors[ImGuiCol_FrameBg] = ImVec4(0.12f, 0.12f, 0.13f, 1.00f);
     colors[ImGuiCol_FrameBgHovered] = ImVec4(0.18f, 0.18f, 0.19f, 1.00f);
     colors[ImGuiCol_FrameBgActive] = ImVec4(0.22f, 0.22f, 0.24f, 1.00f);
-    // Adjust Tab colors
-    colors[ImGuiCol_Tab] = ImVec4(0.15f, 0.15f, 0.17f, 1.00f); // Match header
-    colors[ImGuiCol_TabHovered] = ImVec4(0.25f, 0.25f, 0.28f, 1.00f); // Lighter hover
-    colors[ImGuiCol_TabActive] = ImVec4(0.20f, 0.40f, 0.70f, 1.00f); // Active tab with blue tint
+    
+    colors[ImGuiCol_Tab] = ImVec4(0.15f, 0.15f, 0.17f, 1.00f); 
+    colors[ImGuiCol_TabHovered] = ImVec4(0.25f, 0.25f, 0.28f, 1.00f); 
+    colors[ImGuiCol_TabActive] = ImVec4(0.20f, 0.40f, 0.70f, 1.00f); 
     colors[ImGuiCol_TabUnfocused] = ImVec4(0.15f, 0.15f, 0.17f, 0.97f);
-    colors[ImGuiCol_TabUnfocusedActive] = ImVec4(0.18f, 0.30f, 0.55f, 1.00f); // Unfocused active with blue tint
+    colors[ImGuiCol_TabUnfocusedActive] = ImVec4(0.18f, 0.30f, 0.55f, 1.00f); 
 
     load_body_texture();
 }
@@ -307,7 +307,7 @@ void OverlayThread()
 
     bool show_overlay = false;
 
-    // Capture
+    
     int prev_detection_resolution = config.detection_resolution;
     int prev_capture_fps = config.capture_fps;
     int prev_monitor_idx = config.monitor_idx;
@@ -315,18 +315,18 @@ void OverlayThread()
     bool prev_capture_borders = config.capture_borders;
     bool prev_capture_cursor = config.capture_cursor;
 
-    // Target
+    
     float prev_body_y_offset = config.body_y_offset;
     float prev_head_y_offset = config.head_y_offset;
     bool prev_ignore_third_person = config.ignore_third_person;
     bool prev_shooting_range_targets = config.shooting_range_targets;
     bool prev_auto_aim = config.auto_aim;
 
-    // Mouse
+    
     bool prev_easynorecoil = config.easynorecoil;
     float prev_easynorecoilstrength = config.easynorecoilstrength;
 
-    // PID Controller
+    
     float prev_kp_x = config.kp_x;
     float prev_ki_x = config.ki_x;
     float prev_kd_x = config.kd_x;
@@ -334,20 +334,20 @@ void OverlayThread()
     float prev_ki_y = config.ki_y;
     float prev_kd_y = config.kd_y;
     
-    // Kalman Filter
+    
 
-    //Mouse shooting
+    
     float prev_bScope_multiplier = config.bScope_multiplier;
 
-    // AI
+    
     float prev_confidence_threshold = config.confidence_threshold;
     float prev_nms_threshold = config.nms_threshold;
     int prev_max_detections = config.max_detections;
 
-    // Overlay
+    
     int prev_opacity = config.overlay_opacity;
 
-    // Debug
+    
     bool prev_show_window = config.show_window;
     bool prev_show_fps = config.show_fps;
     int prev_window_size = config.window_size;
@@ -384,6 +384,11 @@ void OverlayThread()
 
     MSG msg;
     ZeroMemory(&msg, sizeof(msg));
+
+    // Overlay rendering frame timing
+    const std::chrono::milliseconds targetFrameTime(1000 / 30);
+    auto lastOverlayFrameTime = std::chrono::high_resolution_clock::now();
+
     while (!shouldExit)
     {
         while (::PeekMessage(&msg, NULL, 0U, 0U, PM_REMOVE))
@@ -501,15 +506,15 @@ void OverlayThread()
                         ImGui::EndTabItem();
                     }
 
-                    // ******************************************* APPLY VARS *******************************************
-                    // DETECTION RESOLUTION
+                    
+                    
                     if (prev_detection_resolution != config.detection_resolution)
                     {
                         prev_detection_resolution = config.detection_resolution;
                         detection_resolution_changed.store(true);
-                        detector_model_changed.store(true); // reboot vars for visuals
+                        detector_model_changed.store(true); 
 
-                        // apply new detection_resolution
+                        
                         globalMouseThread->updateConfig(
                             config.detection_resolution,
                             config.kp_x,
@@ -524,7 +529,7 @@ void OverlayThread()
                         config.saveConfig();
                     }
 
-                    // CAPTURE CURSOR
+                    
                     if (prev_capture_cursor != config.capture_cursor)
                     {
                         capture_cursor_changed.store(true);
@@ -532,7 +537,7 @@ void OverlayThread()
                         config.saveConfig();
                     }
 
-                    // CAPTURE BORDERS
+                    
                     if (prev_capture_borders != config.capture_borders)
                     {
                         capture_borders_changed.store(true);
@@ -540,7 +545,7 @@ void OverlayThread()
                         config.saveConfig();
                     }
 
-                    // CAPTURE_FPS
+                    
                     if (prev_capture_fps != config.capture_fps ||
                         prev_monitor_idx != config.monitor_idx)
                     {
@@ -550,8 +555,8 @@ void OverlayThread()
                         config.saveConfig();
                     }
 
-                    // DISABLE_HEADSHOT / BODY_Y_OFFSET / HEAD_Y_OFFSET / IGNORE_THIRD_PERSON / SHOOTING_RANGE_TARGETS / AUTO_AIM / EASYNORECOIL / EASYNORECOILSTRENGTH
-                    if (/*prev_disable_headshot != config.disable_headshot ||*/
+                    
+                    if (
                         prev_body_y_offset != config.body_y_offset ||
                         prev_head_y_offset != config.head_y_offset ||
                         prev_ignore_third_person != config.ignore_third_person ||
@@ -560,7 +565,7 @@ void OverlayThread()
                         prev_easynorecoil != config.easynorecoil ||
                         prev_easynorecoilstrength != config.easynorecoilstrength)
                     {
-                        // prev_disable_headshot = config.disable_headshot;
+                        
                         prev_body_y_offset = config.body_y_offset;
                         prev_head_y_offset = config.head_y_offset;
                         prev_ignore_third_person = config.ignore_third_person;
@@ -571,7 +576,7 @@ void OverlayThread()
                         config.saveConfig();
                     }
 
-                    // PID
+                    
                     if (prev_kp_x != config.kp_x ||
                         prev_ki_x != config.ki_x ||
                         prev_kd_x != config.kd_x ||
@@ -601,7 +606,7 @@ void OverlayThread()
                         config.saveConfig();
                     }
 
-                    // AUTO_SHOOT / BSCOPE_MULTIPLIER
+                    
                     if (prev_bScope_multiplier != config.bScope_multiplier)
                     {
                         prev_bScope_multiplier = config.bScope_multiplier;
@@ -621,7 +626,7 @@ void OverlayThread()
                         config.saveConfig();
                     }
 
-                    // OVERLAY OPACITY
+                    
                     if (prev_opacity != config.overlay_opacity)
                     {
                         BYTE opacity = config.overlay_opacity;
@@ -629,7 +634,7 @@ void OverlayThread()
                         config.saveConfig();
                     }
 
-                    // CONFIDENCE THERSHOLD / NMS THRESHOLD / MAX DETECTIONS
+                    
                     if (prev_confidence_threshold != config.confidence_threshold ||
                         prev_nms_threshold != config.nms_threshold ||
                         prev_max_detections != config.max_detections)
@@ -640,7 +645,7 @@ void OverlayThread()
                         config.saveConfig();
                     }
 
-                    // SHOW WINDOW / ALWAYS_ON_TOP
+                    
                     if (prev_show_window != config.show_window ||
                         prev_always_on_top != config.always_on_top)
                     {
@@ -650,7 +655,7 @@ void OverlayThread()
                         config.saveConfig();
                     }
                     
-                    // SHOW_FPS / WINDOW_SIZE / SCREENSHOT_DELAY / VERBOSE
+                    
                     if (prev_show_fps != config.show_fps ||
                         prev_window_size != config.window_size ||
                         prev_screenshot_delay != config.screenshot_delay ||
@@ -679,16 +684,23 @@ void OverlayThread()
             ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
             HRESULT result = g_pSwapChain->Present(0, 0);
-
+            auto now = std::chrono::high_resolution_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastOverlayFrameTime);
             if (result == DXGI_STATUS_OCCLUDED || result == DXGI_ERROR_ACCESS_LOST)
             {
+                // If occluded, back off
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            else if (elapsed < targetFrameTime)
+            {
+                std::this_thread::sleep_for(targetFrameTime - elapsed);
+            }
+            lastOverlayFrameTime = std::chrono::high_resolution_clock::now();
         }
         else
         {
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            // Window not visible: slow down loop
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
     }
 

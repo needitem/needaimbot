@@ -4,8 +4,8 @@
 #include <Windows.h>
 #include <vector>
 #include <string>
-#include <algorithm> // For std::find
-#include <iterator> // For std::distance
+#include <algorithm> 
+#include <iterator> 
 
 #include "imgui/imgui.h"
 #include "needaimbot.h"
@@ -52,17 +52,17 @@ void draw_ai()
     ImGui::Separator();
     ImGui::Spacing();
 
-    // --- ONNX Input Resolution Selection ---
+    
     const char* resolution_items[] = { "160", "320", "640" };
     int current_resolution_index = 0;
     if (config.onnx_input_resolution == 160)      current_resolution_index = 0;
     else if (config.onnx_input_resolution == 320) current_resolution_index = 1;
     else if (config.onnx_input_resolution == 640) current_resolution_index = 2;
-    // else default to 0 (160) or handle error if value is unexpected
+    
 
     if (ImGui::Combo("ONNX Input Resolution", &current_resolution_index, resolution_items, IM_ARRAYSIZE(resolution_items)))
     {
-        int selected_resolution = 160; // Default
+        int selected_resolution = 160; 
         if (current_resolution_index == 0)      selected_resolution = 160;
         else if (current_resolution_index == 1) selected_resolution = 320;
         else if (current_resolution_index == 2) selected_resolution = 640;
@@ -71,7 +71,7 @@ void draw_ai()
         {
             config.onnx_input_resolution = selected_resolution;
             config.saveConfig();
-            detector_model_changed.store(true); // Trigger model reload/rebuild
+            detector_model_changed.store(true); 
         }
     }
     if (ImGui::IsItemHovered())
@@ -137,10 +137,10 @@ void draw_ai()
     ImGui::SeparatorText("Class Definitions");
     ImGui::Spacing();
 
-    // Input for the head class name
+    
     static char head_class_name_buffer[128];
     strncpy(head_class_name_buffer, config.head_class_name.c_str(), sizeof(head_class_name_buffer) - 1);
-    head_class_name_buffer[sizeof(head_class_name_buffer) - 1] = '\0'; // Ensure null termination
+    head_class_name_buffer[sizeof(head_class_name_buffer) - 1] = '\0'; 
     ImGui::InputText("Head Class Identifier Name", head_class_name_buffer, sizeof(head_class_name_buffer));
     if (ImGui::IsItemDeactivatedAfterEdit()) {
         config.head_class_name = head_class_name_buffer;
@@ -151,7 +151,7 @@ void draw_ai()
     }
     ImGui::Spacing();
 
-    // Table for class settings for better alignment
+    
     if (ImGui::BeginTable("class_settings_table", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
         ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 50.0f);
         ImGui::TableSetupColumn("Name");
@@ -167,8 +167,8 @@ void draw_ai()
             
             ImGui::TableSetColumnIndex(0);
             if (ImGui::InputInt("##ID", &setting.id, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue)) {
-                // ID changed, ensure it's unique or handle conflicts if necessary
-                // For now, direct change and save.
+                
+                
                 config.saveConfig();
             }
 
@@ -180,7 +180,7 @@ void draw_ai()
                 setting.name = name_buf;
                 config.saveConfig();
             }
-             if (ImGui::IsItemDeactivatedAfterEdit() && setting.name != name_buf) { // Handle focus loss too
+             if (ImGui::IsItemDeactivatedAfterEdit() && setting.name != name_buf) { 
                 setting.name = name_buf;
                 config.saveConfig();
             }
@@ -194,9 +194,9 @@ void draw_ai()
             if (ImGui::Button("Remove")) {
                 config.class_settings.erase(config.class_settings.begin() + i);
                 config.saveConfig();
-                ImGui::PopID(); // Pop before potentially continuing loop with decremented i
-                i--; // Adjust index due to removal
-                continue; // Important to re-evaluate loop condition and avoid skipping next element
+                ImGui::PopID(); 
+                i--; 
+                continue; 
             }
             ImGui::PopID();
         }
@@ -205,14 +205,14 @@ void draw_ai()
 
     ImGui::Spacing();
 
-    // --- Add new class --- 
+    
     ImGui::Separator();
     ImGui::Text("Add New Class:");
-    static int new_class_id = 0; // Start with 0 or suggest next available
+    static int new_class_id = 0; 
     static char new_class_name_buf[128] = "";
     static bool new_class_ignore = false;
 
-    // Suggest next available ID
+    
     if (ImGui::Button("Suggest Next ID")) {
         int max_id = -1;
         if (!config.class_settings.empty()) {
@@ -241,7 +241,7 @@ void draw_ai()
         if (!id_exists && !temp_name.empty()) {
             config.class_settings.emplace_back(new_class_id, temp_name, new_class_ignore);
             config.saveConfig();
-            // Reset for next entry
+            
             int max_id = -1;
             if (!config.class_settings.empty()) {
                  for(const auto& cs : config.class_settings) {
@@ -251,10 +251,10 @@ void draw_ai()
             } else {
                  new_class_id = 0;
             }
-            new_class_name_buf[0] = '\0'; // Clear buffer
+            new_class_name_buf[0] = '\0'; 
             new_class_ignore = false;
         }
-        // TODO: else display error (e.g., ImGui::TextColored(ImVec4(1,0,0,1), "Error: ID exists or name empty."))
+        
     }
 
     ImGui::Spacing();

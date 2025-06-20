@@ -18,4 +18,4 @@ inline nvinfer1::IBuilderConfig* createBuilderConfig(nvinfer1::IBuilder* builder
 
 nvinfer1::ICudaEngine* loadEngineFromFile(const std::string& engineFile, nvinfer1::IRuntime* runtime);
 nvinfer1::ICudaEngine* buildEngineFromOnnx(const std::string& onnxFile, nvinfer1::ILogger& logger);
-#endif // NVINF_H
+#endif 

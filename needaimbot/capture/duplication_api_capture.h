@@ -1,4 +1,4 @@
-﻿#ifndef DUPLICATION_API_CAPTURE_H
+#ifndef DUPLICATION_API_CAPTURE_H
 #define DUPLICATION_API_CAPTURE_H
 
 #include <opencv2/opencv.hpp>

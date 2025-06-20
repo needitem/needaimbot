@@ -1,24 +1,24 @@
-// dear imgui
-// (binary_to_compressed_c.cpp)
-// Helper tool to turn a file into a C array, if you want to embed font data in your source code.
 
-// The data is first compressed with stb_compress() to reduce source code size,
-// then encoded in Base85 to fit in a string so we can fit roughly 4 bytes of compressed data into 5 bytes of source code (suggested by @mmalex)
-// (If we used 32-bit constants it would require take 11 bytes of source code to encode 4 bytes, and be endianness dependent)
-// Note that even with compression, the output array is likely to be bigger than the binary file..
-// Load compressed TTF fonts with ImGui::GetIO().Fonts->AddFontFromMemoryCompressedTTF()
 
-// Build with, e.g:
-//   # cl.exe binary_to_compressed_c.cpp
-//   # g++ binary_to_compressed_c.cpp
-//   # clang++ binary_to_compressed_c.cpp
-// You can also find a precompiled Windows binary in the binary/demo package available from https://github.com/ocornut/imgui
 
-// Usage:
-//   binary_to_compressed_c.exe [-base85] [-nocompress] [-nostatic] <inputfile> <symbolname>
-// Usage example:
-//   # binary_to_compressed_c.exe myfont.ttf MyFont > myfont.cpp
-//   # binary_to_compressed_c.exe -base85 myfont.ttf MyFont > myfont.cpp
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 #define _CRT_SECURE_NO_WARNINGS
 #include <stdio.h>
@@ -26,7 +26,7 @@
 #include <stdlib.h>
 #include <assert.h>
 
-// stb_compress* from stb.h - declaration
+
 typedef unsigned int stb_uint;
 typedef unsigned char stb_uchar;
 stb_uint stb_compress(stb_uchar* out, stb_uchar* in, stb_uint len);
@@ -71,7 +71,7 @@ char Encode85Byte(unsigned int x)
 
 bool binary_to_compressed_c(const char* filename, const char* symbol, bool use_base85_encoding, bool use_compression, bool use_static)
 {
-    // Read file
+    
     FILE* f = fopen(filename, "rb");
     if (!f) return false;
     int data_sz;
@@ -81,17 +81,17 @@ bool binary_to_compressed_c(const char* filename, const char* symbol, bool use_b
     memset((void*)(((char*)data) + data_sz), 0, 4);
     fclose(f);
 
-    // Compress
-    int maxlen = data_sz + 512 + (data_sz >> 2) + sizeof(int); // total guess
+    
+    int maxlen = data_sz + 512 + (data_sz >> 2) + sizeof(int); 
     char* compressed = use_compression ? new char[maxlen] : data;
     int compressed_sz = use_compression ? stb_compress((stb_uchar*)compressed, (stb_uchar*)data, data_sz) : data_sz;
     if (use_compression)
         memset(compressed + compressed_sz, 0, maxlen - compressed_sz);
 
-    // Output as Base85 encoded
+    
     FILE* out = stdout;
-    fprintf(out, "// File: '%s' (%d bytes)\n", filename, (int)data_sz);
-    fprintf(out, "// Exported using binary_to_compressed_c.cpp\n");
+    fprintf(out, "
+    fprintf(out, "
     const char* static_str = use_static ? "static " : "";
     const char* compressed_str = use_compression ? "compressed_" : "";
     if (use_base85_encoding)
@@ -100,7 +100,7 @@ bool binary_to_compressed_c(const char* filename, const char* symbol, bool use_b
         char prev_c = 0;
         for (int src_i = 0; src_i < compressed_sz; src_i += 4)
         {
-            // This is made a little more complicated by the fact that ??X sequences are interpreted as trigraphs by old C/C++ compilers. So we need to escape pairs of ??.
+            
             unsigned int d = *(unsigned int*)(compressed + src_i);
             for (unsigned int n5 = 0; n5 < 5; n5++, d /= 85)
             {
@@ -129,16 +129,16 @@ bool binary_to_compressed_c(const char* filename, const char* symbol, bool use_b
         fprintf(out, "\n};\n\n");
     }
 
-    // Cleanup
+    
     delete[] data;
     if (use_compression)
         delete[] compressed;
     return true;
 }
 
-// stb_compress* from stb.h - definition
 
-////////////////////           compressor         ///////////////////////
+
+
 
 static stb_uint stb_adler32(stb_uint adler32, stb_uchar *buffer, stb_uint buflen)
 {
@@ -179,7 +179,7 @@ static unsigned int stb_matchlen(stb_uchar *m1, stb_uchar *m2, stb_uint maxlen)
     return i;
 }
 
-// simple implementation that just takes the source data in a big block
+
 
 static stb_uchar *stb__out;
 static FILE      *stb__outfile;
@@ -191,7 +191,7 @@ static void stb__write(unsigned char v)
     ++stb__outbytes;
 }
 
-//#define stb_out(v)    (stb__out ? *stb__out++ = (stb_uchar) (v) : stb__write((stb_uchar) (v)))
+
 #define stb_out(v)    do { if (stb__out) *stb__out++ = (stb_uchar) (v); else stb__write((stb_uchar) (v)); } while (0)
 
 static void stb_out2(stb_uint v) { stb_out(v >> 8); stb_out(v); }
@@ -209,7 +209,7 @@ static void outliterals(stb_uchar *in, int numlit)
     if      (numlit ==     0)    ;
     else if (numlit <=    32)    stb_out (0x000020 + numlit-1);
     else if (numlit <=  2048)    stb_out2(0x000800 + numlit-1);
-    else /*  numlit <= 65536) */ stb_out3(0x070000 + numlit-1);
+    else  stb_out3(0x070000 + numlit-1);
 
     if (stb__out) {
         memcpy(stb__out,in,numlit);
@@ -218,7 +218,7 @@ static void outliterals(stb_uchar *in, int numlit)
         fwrite(in, 1, numlit, stb__outfile);
 }
 
-static int stb__window = 0x40000; // 256K
+static int stb__window = 0x40000; 
 
 static int stb_not_crap(int best, int dist)
 {
@@ -229,8 +229,8 @@ static int stb_not_crap(int best, int dist)
 
 static  stb_uint stb__hashsize = 32768;
 
-// note that you can play with the hashing functions all you
-// want without needing to change the decompressor
+
+
 #define stb__hc(q,h,c)      (((h) << 7) + ((h) >> 25) + q[c])
 #define stb__hc2(q,h,c,d)   (((h) << 14) + ((h) >> 18) + (q[c] << 7) + q[d])
 #define stb__hc3(q,c,d,e)   ((q[c] << 14) + (q[d] << 7) + q[e])
@@ -253,9 +253,9 @@ static int stb_compress_chunk(stb_uchar *history,
 
 #define STB__SCRAMBLE(h)   (((h) + ((h) >> 16)) & mask)
 
-    // stop short of the end so we don't scan off the end doing
-    // the hashing; this means we won't compress the last few bytes
-    // unless they were part of something longer
+    
+    
+    
     while (q < start+length && q+12 < end) {
         int m;
         stb_uint h1,h2,h3,h4, h;
@@ -269,16 +269,16 @@ static int stb_compress_chunk(stb_uchar *history,
 
 #define stb__nc(b,d)  ((d) <= window && ((b) > 9 || stb_not_crap((int)(b),(int)(d))))
 
-#define STB__TRY(t,p)  /* avoid retrying a match we already tried */ \
+#define STB__TRY(t,p)   \
     if (p ? dist != (int)(q-t) : 1)                             \
     if ((m = stb_matchlen(t, q, match_max)) > best)     \
     if (stb__nc(m,q-(t)))                                \
     best = m, dist = (int)(q - (t))
 
-        // rather than search for all matches, only try 4 candidate locations,
-        // chosen based on 4 different hash functions of different lengths.
-        // this strategy is inspired by LZO; hashing is unrolled here using the
-        // 'hc' macro
+        
+        
+        
+        
         h = stb__hc3(q,0, 1, 2); h1 = STB__SCRAMBLE(h);
         t = chash[h1]; if (t) STB__TRY(t,0);
         h = stb__hc2(q,h, 3, 4); h2 = STB__SCRAMBLE(h);
@@ -288,15 +288,15 @@ static int stb_compress_chunk(stb_uchar *history,
         h = stb__hc2(q,h,11,12); h4 = STB__SCRAMBLE(h);
         t = chash[h4]; if (t) STB__TRY(t,1);
 
-        // because we use a shared hash table, can only update it
-        // _after_ we've probed all of them
+        
+        
         chash[h1] = chash[h2] = chash[h3] = chash[h4] = q;
 
         if (best > 2)
             assert(dist > 0);
 
-        // see if our best match qualifies
-        if (best < 3) { // fast path literals
+        
+        if (best < 3) { 
             ++q;
         } else if (best > 2  &&  best <= 0x80    &&  dist <= 0x100) {
             outliterals(lit_start, (int)(q-lit_start)); lit_start = (q += best);
@@ -326,16 +326,16 @@ static int stb_compress_chunk(stb_uchar *history,
                 stb_out3(dist-1);
                 stb_out2(best-1);
             }
-        } else {  // fallback literals if no match was a balanced tradeoff
+        } else {  
             ++q;
         }
     }
 
-    // if we didn't get all the way, add the rest to literals
+    
     if (q-start < length)
         q = start+length;
 
-    // the literals are everything from lit_start to q
+    
     *pending_literals = (int)(q - lit_start);
 
     stb__running_adler = stb_adler32(stb__running_adler, start, (stb_uint)(q - start));
@@ -349,15 +349,15 @@ static int stb_compress_inner(stb_uchar *input, stb_uint length)
 
     stb_uchar **chash;
     chash = (stb_uchar**) malloc(stb__hashsize * sizeof(stb_uchar*));
-    if (chash == nullptr) return 0; // failure
+    if (chash == nullptr) return 0; 
     for (i=0; i < stb__hashsize; ++i)
         chash[i] = nullptr;
 
-    // stream signature
+    
     stb_out(0x57); stb_out(0xbc);
     stb_out2(0);
 
-    stb_out4(0);       // 64-bit length requires 32-bit leading 0
+    stb_out4(0);       
     stb_out4(length);
     stb_out4(stb__window);
 
@@ -370,11 +370,11 @@ static int stb_compress_inner(stb_uchar *input, stb_uint length)
 
     free(chash);
 
-    stb_out2(0x05fa); // end opcode
+    stb_out2(0x05fa); 
 
     stb_out4(stb__running_adler);
 
-    return 1; // success
+    return 1; 
 }
 
 stb_uint stb_compress(stb_uchar *out, stb_uchar *input, stb_uint length)
@@ -386,3 +386,4 @@ stb_uint stb_compress(stb_uchar *out, stb_uchar *input, stb_uint length)
 
     return (stb_uint)(stb__out - out);
 }
+

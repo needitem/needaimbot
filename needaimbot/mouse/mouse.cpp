@@ -35,13 +35,13 @@ extern std::atomic<bool> aiming;
 extern std::mutex configMutex;
 extern Config config;
 
-// For WindMouse
+
 std::random_device rd;
 std::mt19937 gen(rd());
 
 constexpr float SCOPE_MARGIN = 0.15f;
 
-// WindMouse function based on the commit and typical implementations
+
 void WindMouse(float target_x, float target_y, float G, float W, float M, float D,
                std::function<void(int, int)> move_func)
 {
@@ -56,7 +56,7 @@ void WindMouse(float target_x, float target_y, float G, float W, float M, float 
 
     while (true) {
         dist = hypot(target_x - current_x, target_y - current_y);
-        if (dist <= 1.0f) { // Destination reached
+        if (dist <= 1.0f) { 
             break;
         }
 
@@ -66,7 +66,7 @@ void WindMouse(float target_x, float target_y, float G, float W, float M, float 
         v_x += W_sqrt * (std::uniform_real_distribution<float>(-1.0f, 1.0f)(gen)) + G * (target_x - current_x - v_x) / dist;
         v_y += W_sqrt * (std::uniform_real_distribution<float>(-1.0f, 1.0f)(gen)) + G * (target_y - current_y - v_y) / dist;
 
-        // Normalize velocity
+        
         float v_magnitude = hypot(v_x, v_y);
         if (v_magnitude > new_hypot) {
             v_x = (new_hypot / v_magnitude) * v_x;
@@ -76,7 +76,7 @@ void WindMouse(float target_x, float target_y, float G, float W, float M, float 
         new_x = current_x + v_x;
         new_y = current_y + v_y;
 
-        // Ensure movement doesn't overshoot.
+        
         if (hypot(target_x - new_x, target_y - new_y) > dist) {
              new_x = current_x + (target_x - current_x) * (dist - random_dist) / dist;
              new_y = current_y + (target_y - current_y) * (dist - random_dist) / dist;
@@ -91,11 +91,11 @@ void WindMouse(float target_x, float target_y, float G, float W, float M, float 
         
         current_x = new_x;
         current_y = new_y;
-        // Sleep(1); // Small delay to simulate human-like movement pauses (removed for speed)
+        
     }
 }
 
-// QueueMove function (simple passthrough for now, as its direct usage isn't clear from the commit's MouseThread changes)
+
 void QueueMove(int dx, int dy, std::function<void(int, int)> move_func) {
     if (dx != 0 || dy != 0) {
         move_func(dx, dy);
@@ -119,7 +119,7 @@ MouseThread::MouseThread(
     pid_controller = std::make_unique<PIDController2D>(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
     initializeInputMethod(serialConnection, gHub);
     
-    // Set the initial predictor based on config
+    
     std::string initial_algo;
     {
         std::lock_guard<std::mutex> lock(configMutex);
@@ -155,7 +155,7 @@ void MouseThread::initializeScreen(int resolution, float bScope_multiplier, floa
     this->center_x = screen_width / 2.0f;
     this->center_y = screen_height / 2.0f;
 
-    const float SENSITIVITY_FACTOR = 0.05f; // Example: Adjust this base sensitivity
+    const float SENSITIVITY_FACTOR = 0.05f; 
     float base_scale_x = SENSITIVITY_FACTOR;
     float base_scale_y = SENSITIVITY_FACTOR;
 
@@ -183,16 +183,16 @@ void MouseThread::updateConfig(
     )
 {
     {
-        std::lock_guard<std::mutex> lock(member_data_mutex_); // Lock for screen/timing params
+        std::lock_guard<std::mutex> lock(member_data_mutex_); 
         initializeScreen(resolution, bScope_multiplier, norecoil_ms);
     }
     pid_controller->updateSeparatedParameters(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
-    // Note: Predictor is NOT updated here. Call setPredictor explicitly if algo changes.
+    
 }
 
 void MouseThread::setPredictor(const std::string& algorithm_name) {
-    std::lock_guard<std::mutex> lock(predictor_mutex_); // Protect predictor access
-    std::lock_guard<std::mutex> config_lock(configMutex); // Protect config access
+    std::lock_guard<std::mutex> lock(predictor_mutex_); 
+    std::lock_guard<std::mutex> config_lock(configMutex); 
 
     std::cout << "[Mouse] Setting predictor algorithm: " << algorithm_name << std::endl;
 
@@ -202,28 +202,28 @@ void MouseThread::setPredictor(const std::string& algorithm_name) {
         predictor_ = std::move(predictor);
     } else if (algorithm_name == "Linear Regression") {
         auto predictor = std::make_unique<LinearRegressionPredictor>();
-        predictor->configure(config.lr_past_points, config.velocity_prediction_ms); // Assuming LR uses same prediction time for now
+        predictor->configure(config.lr_past_points, config.velocity_prediction_ms); 
         predictor_ = std::move(predictor);
     } else if (algorithm_name == "Exponential Smoothing") {
         auto predictor = std::make_unique<ExponentialSmoothingPredictor>();
-        predictor->configure(config.es_alpha, config.velocity_prediction_ms); // Assuming ES uses same prediction time for now
+        predictor->configure(config.es_alpha, config.velocity_prediction_ms); 
         predictor_ = std::move(predictor);
     } else if (algorithm_name == "Kalman Filter") {
         auto predictor = std::make_unique<KalmanFilterPredictor>();
-        // Assuming Kalman uses its own prediction time setting from config
-        // Note: The config struct in the prompt has kalman_* noise vars but also a separate prediction_time_ms.
-        // Let's use the dedicated KF prediction time if it exists, otherwise maybe fallback?
-        // For now, assume config has kalman_q, kalman_r, kalman_p and velocity_prediction_ms. We use the latter.
-        // TODO: Clarify which prediction time variable Kalman should use. Using velocity_prediction_ms for now.
+        
+        
+        
+        
+        
         predictor->configure(config.kalman_q, config.kalman_r, config.kalman_p, config.velocity_prediction_ms);
         predictor_ = std::move(predictor);
-    } else { // "None" or unknown
+    } else { 
         std::cout << "[Mouse] No predictor or unknown algorithm specified. Prediction disabled." << std::endl;
-        predictor_.reset(); // Set predictor to null
+        predictor_.reset(); 
     }
 
     if (predictor_) {
-        predictor_->reset(); // Reset the state of the new predictor
+        predictor_->reset(); 
     }
 }
 
@@ -232,7 +232,7 @@ Eigen::Vector2f MouseThread::calculateMovement(const Eigen::Vector2f &target_pos
     float current_center_x, current_center_y;
     float current_move_scale_x, current_move_scale_y;
     {
-        std::lock_guard<std::mutex> lock(member_data_mutex_); // Protect reads of member data
+        std::lock_guard<std::mutex> lock(member_data_mutex_); 
         current_center_x = this->center_x;
         current_center_y = this->center_y;
         current_move_scale_x = this->move_scale_x;
@@ -255,21 +255,21 @@ bool MouseThread::checkTargetInScope(float target_x, float target_y, float targe
 {
     float current_screen_width, current_screen_height, current_center_x, current_center_y;
     {
-        std::lock_guard<std::mutex> lock(member_data_mutex_); // Protect reads of member data
+        std::lock_guard<std::mutex> lock(member_data_mutex_); 
         current_screen_width = this->screen_width;
         current_screen_height = this->screen_height;
         current_center_x = this->center_x;
         current_center_y = this->center_y;
     }
 
-    const float screen_margin_x = current_screen_width * SCOPE_MARGIN; // Use read value
-    const float screen_margin_y = current_screen_height * SCOPE_MARGIN; // Use read value
+    const float screen_margin_x = current_screen_width * SCOPE_MARGIN; 
+    const float screen_margin_y = current_screen_height * SCOPE_MARGIN; 
     
     float target_center_x_val = target_x + target_w * 0.5f;
     float target_center_y_val = target_y + target_h * 0.5f;
     
-    float diff_x = std::abs(target_center_x_val - current_center_x); // Use read value
-    float diff_y = std::abs(target_center_y_val - current_center_y); // Use read value
+    float diff_x = std::abs(target_center_x_val - current_center_x); 
+    float diff_y = std::abs(target_center_y_val - current_center_y); 
     
     if (diff_x > screen_margin_x || diff_y > screen_margin_y)
     {
@@ -285,14 +285,14 @@ bool MouseThread::checkTargetInScope(float target_x, float target_y, float targe
     float max_y = target_center_y_val + reduced_half_h;
     
     return (current_center_x >= min_x && current_center_x <= max_x && 
-            current_center_y >= min_y && current_center_y <= max_y); // Use read values
+            current_center_y >= min_y && current_center_y <= max_y); 
 }
 
 float MouseThread::calculateTargetDistanceSquared(const AimbotTarget &target) const
 {
     float current_center_x, current_center_y;
     {
-        std::lock_guard<std::mutex> lock(member_data_mutex_); // Protect reads of member data
+        std::lock_guard<std::mutex> lock(member_data_mutex_); 
         current_center_x = this->center_x;
         current_center_y = this->center_y;
     }
@@ -300,7 +300,7 @@ float MouseThread::calculateTargetDistanceSquared(const AimbotTarget &target) co
     float dx = target.x + target.w * 0.5f - current_center_x;
     float target_center_y_val;
 
-    // Local variables for config values
+    
     int local_head_class_id_to_use = -1;
     bool local_apply_head_offset = false;
     float local_head_y_offset_val;
@@ -308,7 +308,7 @@ float MouseThread::calculateTargetDistanceSquared(const AimbotTarget &target) co
     std::string local_head_class_name_val;
 
     {
-        std::lock_guard<std::mutex> lock(configMutex); // Protects access to config
+        std::lock_guard<std::mutex> lock(configMutex); 
         local_head_class_name_val = config.head_class_name;
         for (const auto& class_setting : config.class_settings) {
             if (class_setting.name == local_head_class_name_val) {
@@ -338,18 +338,18 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     float current_move_scale_x, current_move_scale_y;
 
     {
-        std::lock_guard<std::mutex> lock(member_data_mutex_); // Protect reads of member data
+        std::lock_guard<std::mutex> lock(member_data_mutex_); 
         current_center_x = this->center_x;
         current_center_y = this->center_y;
         current_move_scale_x = this->move_scale_x;
         current_move_scale_y = this->move_scale_y;
     }
 
-    // 1. Get Raw Target Position
+    
     Point2D raw_target_pos;
     raw_target_pos.x = target.x + target.w * 0.5f;
     
-    // Local variables for config values
+    
     float local_y_offset_multiplier_val;
     int local_head_class_id_to_use = -1;
     bool local_apply_head_offset = false;
@@ -358,8 +358,8 @@ void MouseThread::moveMouse(const AimbotTarget &target)
 
 
     {
-        std::lock_guard<std::mutex> lock(configMutex); // Protect config access
-        // Determine Y offset
+        std::lock_guard<std::mutex> lock(configMutex); 
+        
         for (const auto& class_setting : config.class_settings) {
             if (class_setting.name == config.head_class_name) {
                 local_head_class_id_to_use = class_setting.id;
@@ -376,22 +376,22 @@ void MouseThread::moveMouse(const AimbotTarget &target)
             local_y_offset_multiplier_val = config.body_y_offset;
         }
         
-        // Get other config values
-        local_button_disable_upward_aim = config.button_disable_upward_aim; // Copy the vector
+        
+        local_button_disable_upward_aim = config.button_disable_upward_aim; 
     }
     raw_target_pos.y = target.y + target.h * local_y_offset_multiplier_val;
 
-    // Check for disable upward aim button (isAnyKeyPressed can be called outside configMutex if key state is volatile)
-    // However, the button *configuration* comes from config.
+    
+    
     local_disable_upward_aim_active = isAnyKeyPressed(local_button_disable_upward_aim);
 
 
-    // 2. Update and Predict using the Predictor
-    Point2D predicted_target_pos = raw_target_pos; // Default to raw if no predictor
+    
+    Point2D predicted_target_pos = raw_target_pos; 
     auto now_chrono = std::chrono::steady_clock::now();
 
     {
-        std::lock_guard<std::mutex> lock(predictor_mutex_); // Lock predictor access
+        std::lock_guard<std::mutex> lock(predictor_mutex_); 
         if (predictor_) { 
             auto predictor_start_time = std::chrono::steady_clock::now();
             predictor_->update(raw_target_pos, now_chrono);
@@ -406,7 +406,7 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         }
     }
 
-    // 3. Calculate Error based on Predicted X and Raw Y Position
+    
     float error_x = predicted_target_pos.x - current_center_x;
     float error_y = raw_target_pos.y - current_center_y;
 
@@ -419,7 +419,7 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         }
     }
 
-    // 4. Calculate PID Output based on Error
+    
     Eigen::Vector2f error(error_x, error_y);
     auto pid_start_time = std::chrono::steady_clock::now();
     Eigen::Vector2f pid_output = pid_controller->calculate(error);
@@ -428,7 +428,7 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     g_current_pid_calc_time_ms.store(pid_duration_ms, std::memory_order_relaxed);
     add_to_history(g_pid_calc_time_history, pid_duration_ms, g_pid_calc_history_mutex);
 
-    // 5. Scale PID Output for Mouse Movement
+    
     float move_x = pid_output.x() * current_move_scale_x;
     float move_y = pid_output.y() * current_move_scale_y;
 
@@ -440,7 +440,7 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         dy_int = 0; 
     }
 
-    // 6. Send Mouse Movement Command
+    
     if (dx_int != 0 || dy_int != 0)
     {        
         std::lock_guard<std::mutex> lock(input_method_mutex);
@@ -470,7 +470,7 @@ void MouseThread::pressMouse(const AimbotTarget &target)
             input_method->press();
             auto input_press_end_time = std::chrono::steady_clock::now();
             float press_duration_ms = std::chrono::duration<float, std::milli>(input_press_end_time - input_press_start_time).count();
-            g_current_input_send_time_ms.store(press_duration_ms, std::memory_order_relaxed); // Update with press time
+            g_current_input_send_time_ms.store(press_duration_ms, std::memory_order_relaxed); 
             add_to_history(g_input_send_time_history, press_duration_ms, g_input_send_history_mutex);
         }
         mouse_pressed = true;
@@ -490,7 +490,7 @@ void MouseThread::releaseMouse()
         input_method->release();
         auto input_release_end_time = std::chrono::steady_clock::now();
         float release_duration_ms = std::chrono::duration<float, std::milli>(input_release_end_time - input_release_start_time).count();
-        g_current_input_send_time_ms.store(release_duration_ms, std::memory_order_relaxed); // Update with release time
+        g_current_input_send_time_ms.store(release_duration_ms, std::memory_order_relaxed); 
         add_to_history(g_input_send_time_history, release_duration_ms, g_input_send_history_mutex);
     }
     mouse_pressed = false;
@@ -506,12 +506,12 @@ void MouseThread::applyRecoilCompensation(float strength)
         return;
     }
 
-    auto now_chrono_recoil = std::chrono::steady_clock::now(); // Renamed to avoid conflict
+    auto now_chrono_recoil = std::chrono::steady_clock::now(); 
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now_chrono_recoil - last_recoil_compensation_time);
     
     long long current_norecoil_ms;
     {
-        std::lock_guard<std::mutex> lock(member_data_mutex_); // Protect read of norecoil_ms
+        std::lock_guard<std::mutex> lock(member_data_mutex_); 
         current_norecoil_ms = static_cast<long long>(this->norecoil_ms);
     }
     auto required_delay = std::chrono::milliseconds(current_norecoil_ms);
@@ -560,7 +560,7 @@ void MouseThread::resetPredictor()
 
 bool MouseThread::hasActivePredictor() const
 {
-    std::lock_guard<std::mutex> lock(predictor_mutex_); // Ensure thread-safe access
+    std::lock_guard<std::mutex> lock(predictor_mutex_); 
     return predictor_ != nullptr;
 }
 
@@ -574,16 +574,16 @@ void MouseThread::executeSilentAim(const AimbotTarget& target)
 {
     float current_center_x, current_center_y;
     {
-        std::lock_guard<std::mutex> lock(member_data_mutex_); // Protect reads of member data
+        std::lock_guard<std::mutex> lock(member_data_mutex_); 
         current_center_x = this->center_x;
         current_center_y = this->center_y;
     }
 
-    // 1. Calculate Target's Real Center (with Y-offset)
+    
     float target_actual_x = target.x + target.w * 0.5f;
     float target_actual_y;
 
-    // Local variables for config values
+    
     float local_y_offset_multiplier_val;
     int local_head_class_id_to_use = -1;
     bool local_apply_head_offset = false;
@@ -592,7 +592,7 @@ void MouseThread::executeSilentAim(const AimbotTarget& target)
 
 
     {
-        std::lock_guard<std::mutex> lock(configMutex); // Protect config access
+        std::lock_guard<std::mutex> lock(configMutex); 
         for (const auto& class_setting : config.class_settings) {
             if (class_setting.name == config.head_class_name) {
                 local_head_class_id_to_use = class_setting.id;
@@ -608,16 +608,16 @@ void MouseThread::executeSilentAim(const AimbotTarget& target)
         } else {
             local_y_offset_multiplier_val = config.body_y_offset;
         }
-        local_button_disable_upward_aim = config.button_disable_upward_aim; // Copy the vector
+        local_button_disable_upward_aim = config.button_disable_upward_aim; 
     }
     target_actual_y = target.y + target.h * local_y_offset_multiplier_val;
     
-    // Check for disable upward aim button (isAnyKeyPressed can be called outside configMutex if key state is volatile)
-    // However, the button *configuration* comes from config.
+    
+    
     local_disable_upward_aim_active = isAnyKeyPressed(local_button_disable_upward_aim);
 
 
-    // 2. Calculate Direct Delta for Snapping
+    
     float delta_x_float = target_actual_x - current_center_x;
     float delta_y_float = target_actual_y - current_center_y;
 
@@ -628,7 +628,7 @@ void MouseThread::executeSilentAim(const AimbotTarget& target)
         dy = 0;
     }
 
-    // 3. Execute Mouse Actions if Movement is Needed
+    
     if (dx != 0 || dy != 0)
     {
         std::lock_guard<std::mutex> lock(input_method_mutex);
@@ -636,19 +636,19 @@ void MouseThread::executeSilentAim(const AimbotTarget& target)
         {
             auto action_start_time = std::chrono::steady_clock::now();
 
-            // Move to target
+            
             input_method->move(dx, dy);
             
-            // Short delay before click, can be 0 if not needed
-            // Sleep(10); // Optional: small pause before click
+            
+            
 
-            // Press mouse
+            
             input_method->press();
 
-            // Hold click for specified duration
+            
             std::this_thread::sleep_for(silent_aim_click_duration_ms);
 
-            // Release mouse
+            
             input_method->release();
 
             auto action_end_time = std::chrono::steady_clock::now();

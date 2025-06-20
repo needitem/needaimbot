@@ -2,32 +2,33 @@
 #define PID_CONTROLLER_2D_H
 
 #include <chrono>
-#include "../modules/eigen/include/Eigen/Dense" // Assuming Eigen is needed for Vector2f
+#include "../modules/eigen/include/Eigen/Dense" 
 
 class PIDController2D
 {
 private:
-    // Base PID gains
-    float kp_x, kp_y;  // Proportional gain
-    float ki_x, ki_y;  // Integral gain
-    float kd_x, kd_y;  // Derivative gain
+    
+    float kp_x, kp_y;  
+    float ki_x, ki_y;  
+    float kd_x, kd_y;  
 
-    // State variables
-    Eigen::Vector2f prev_error;      // Previous error (for derivative term)
-    Eigen::Vector2f integral;        // Accumulated error (for integral term)
-    Eigen::Vector2f derivative;      // Change rate (derivative term)
-    Eigen::Vector2f prev_derivative; // Previous derivative (for derivative filtering)
-    std::chrono::steady_clock::time_point last_time_point;  // Previous calculation time (for dt calculation)
+    
+    Eigen::Vector2f prev_error;      
+    Eigen::Vector2f integral;        
+    Eigen::Vector2f derivative;      
+    Eigen::Vector2f prev_derivative; 
+    std::chrono::steady_clock::time_point last_time_point;  
 
 public:
-    // New constructor with separated X/Y gains
+    
     PIDController2D(float kp_x, float ki_x, float kd_x, float kp_y, float ki_y, float kd_y);
 
     Eigen::Vector2f calculate(const Eigen::Vector2f &error);
-    void reset();  // Controller reset (used when starting to aim at a new target)
+    void reset();  
 
-    // X/Y separated gain update function
+    
     void updateSeparatedParameters(float kp_x, float ki_x, float kd_x, float kp_y, float ki_y, float kd_y);
 };
 
-#endif // PID_CONTROLLER_2D_H
+#endif 
+

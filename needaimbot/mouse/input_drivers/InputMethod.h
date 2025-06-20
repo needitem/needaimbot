@@ -9,7 +9,7 @@
 #include <iostream>
 #include <Windows.h>
 
-// Interface for mouse input methods
+
 class InputMethod
 {
 public:
@@ -20,14 +20,14 @@ public:
     virtual bool isValid() const = 0;
 };
 
-// Mouse input implementation via serial connection (Arduino)
+
 class SerialInputMethod : public InputMethod
 {
 public:
     explicit SerialInputMethod(SerialConnection *serial) : serial_(serial) {}
     ~SerialInputMethod() override
     {
-        // Only maintaining reference, not deleting in destructor
+        
     }
 
     void move(int x, int y) override
@@ -63,14 +63,14 @@ private:
     SerialConnection *serial_;
 };
 
-// Mouse input implementation via Logitech G HUB
+
 class GHubInputMethod : public InputMethod
 {
 public:
     explicit GHubInputMethod(GhubMouse *ghub) : ghub_(ghub) {}
     ~GHubInputMethod() override
     {
-        // Only maintaining reference, not deleting in destructor
+        
     }
 
     void move(int x, int y) override
@@ -106,7 +106,7 @@ private:
     GhubMouse *ghub_;
 };
 
-// Default mouse input implementation via Windows API
+
 class Win32InputMethod : public InputMethod
 {
 public:
@@ -140,65 +140,65 @@ public:
 
     bool isValid() const override
     {
-        return true; // Assuming Win32 API is always valid
+        return true; 
     }
 };
 
 
-// kmboxNet-based mouse input implementation
+
 class KmboxInputMethod : public InputMethod {
 public:
     KmboxInputMethod() = default;
     ~KmboxInputMethod() override = default;
 
     void move(int x, int y) override {
-        // kmNet_mouse_move takes SHORTs
+        
         kmNet_mouse_move(static_cast<short>(x), static_cast<short>(y));
     }
 
     void press() override {
-        // left button down
+        
         kmNet_mouse_left(1);
     }
 
     void release() override {
-        // left button up
+        
         kmNet_mouse_left(0);
     }
 
     bool isValid() const override {
-        // We have no direct "isOpen()" check, so assume init succeeded
+        
         return true;
     }
 };
 
-// Razer mouse input implementation
+
 class RZInputMethod : public InputMethod {
 private:
-    RZControl* rz_control_ = nullptr; // Pointer to the RZControl instance
+    RZControl* rz_control_ = nullptr; 
     bool initialized_ = false;
-    HMODULE rz_module_ = NULL; // Store module handle for explicit FreeLibrary
+    HMODULE rz_module_ = NULL; 
 
 public:
-    // Constructor now automatically finds DLL path
+    
     explicit RZInputMethod() {
         char exe_path_buffer[MAX_PATH];
         GetModuleFileNameA(NULL, exe_path_buffer, MAX_PATH);
         std::filesystem::path base_dir = std::filesystem::path(exe_path_buffer).parent_path();
         std::filesystem::path dll_path = base_dir / "rzctl.dll";
-        std::wstring w_dll_path = dll_path.wstring(); // RZControl constructor expects wstring
+        std::wstring w_dll_path = dll_path.wstring(); 
 
         try {
-            // Explicitly load library here to manage handle and check existence
+            
             rz_module_ = LoadLibraryW(w_dll_path.c_str());
             if (rz_module_ == NULL) {
                 std::cerr << "[Razer] Failed to load rzctl.dll from: " << dll_path.string() << std::endl;
                 throw std::runtime_error("rzctl.dll not found or failed to load.");
             }
 
-            // Pass the path to RZControl (assuming RZControl still takes path)
-            // If RZControl is also modified, this needs adjustment
-            rz_control_ = new RZControl(w_dll_path); // Pass the found path
+            
+            
+            rz_control_ = new RZControl(w_dll_path); 
             initialized_ = rz_control_->initialize();
             if (!initialized_) {
                  std::cerr << "[Razer] RZControl->initialize() failed!" << std::endl;
@@ -208,9 +208,9 @@ public:
         } catch (const std::exception& e) {
             std::cerr << "[Razer] RZInputMethod initialization failed: " << e.what() 
                       << std::endl;
-            delete rz_control_; // Clean up partially created object if any step failed
+            delete rz_control_; 
             rz_control_ = nullptr;
-            if (rz_module_) { // Free library if loaded but init failed
+            if (rz_module_) { 
                 FreeLibrary(rz_module_);
                 rz_module_ = NULL;
             }
@@ -221,12 +221,12 @@ public:
 
     ~RZInputMethod() override {
         delete rz_control_;
-        if (rz_module_) { // Ensure library is freed
+        if (rz_module_) { 
             FreeLibrary(rz_module_);
         }
     }
 
-    // Disable copy/move semantics for simplicity if managing raw pointer
+    
     RZInputMethod(const RZInputMethod&) = delete;
     RZInputMethod& operator=(const RZInputMethod&) = delete;
     RZInputMethod(RZInputMethod&&) = delete;
@@ -234,29 +234,30 @@ public:
 
     void move(int x, int y) override {
         if (initialized_ && rz_control_) {
-            // Use Razer DLL method
-            rz_control_->moveMouse(x, y, true); // Assuming relative movement
+            
+            rz_control_->moveMouse(x, y, true); 
         }
     }
 
     void press() override {
         if (initialized_ && rz_control_) {
-            // Use Razer DLL method
+            
             rz_control_->mouseClick(MouseClick::LEFT_DOWN);
         }
     }
 
     void release() override {
         if (initialized_ && rz_control_) {
-            // Use Razer DLL method
+            
             rz_control_->mouseClick(MouseClick::LEFT_UP);
         }
     }
 
     bool isValid() const override {
-        // Method is considered "valid" only if the DLL initialized successfully
+        
         return (initialized_ && rz_control_ != nullptr);
     }
 };
 
-#endif // INPUT_METHOD_H
+#endif 
+

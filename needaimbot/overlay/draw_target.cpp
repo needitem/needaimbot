@@ -27,7 +27,7 @@ void draw_target()
 
     ImGui::Separator();
 
-    // Instructions for keyboard controls
+    
     ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Arrow keys: Adjust body offset");
     ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Shift+Arrow keys: Adjust head offset");
 
@@ -40,16 +40,16 @@ void draw_target()
 
         ImDrawList* draw_list = ImGui::GetWindowDrawList();
 
-        // Draw body offset line
+        
         float normalized_body_value = (config.body_y_offset - 1.0f) / 1.0f;
         float body_line_y = image_pos.y + (1.0f + normalized_body_value) * image_size.y;
         ImVec2 body_line_start = ImVec2(image_pos.x, body_line_y);
         ImVec2 body_line_end = ImVec2(image_pos.x + image_size.x, body_line_y);
         draw_list->AddLine(body_line_start, body_line_end, IM_COL32(255, 0, 0, 255), 2.0f);
         
-        // Draw head offset line - modified calculation
-        // When head_y_offset is 0.0, the line is at the top of the image
-        // When head_y_offset is 1.0, the line is at the position where body_y_offset is 0.15
+        
+        
+        
         float body_y_pos_at_015 = image_pos.y + (1.0f + (0.15f - 1.0f) / 1.0f) * image_size.y;
         float head_top_pos = image_pos.y;
         float head_line_y = head_top_pos + (config.head_y_offset * (body_y_pos_at_015 - head_top_pos));
@@ -58,7 +58,7 @@ void draw_target()
         ImVec2 head_line_end = ImVec2(image_pos.x + image_size.x, head_line_y);
         draw_list->AddLine(head_line_start, head_line_end, IM_COL32(0, 255, 0, 255), 2.0f);
         
-        // Add labels for the lines
+        
         draw_list->AddText(ImVec2(body_line_end.x + 5, body_line_y - 7), IM_COL32(255, 0, 0, 255), "Body");
         draw_list->AddText(ImVec2(head_line_end.x + 5, head_line_y - 7), IM_COL32(0, 255, 0, 255), "Head");
     }
@@ -70,7 +70,7 @@ void draw_target()
     ImGui::Separator();
     ImGui::Checkbox("Auto Aim", &config.auto_aim);
 
-    ImGui::Separator(); // Separator for Target Locking section
+    ImGui::Separator(); 
     ImGui::TextColored(ImVec4(0.0f, 1.0f, 1.0f, 1.0f), "Target Locking Settings");
     ImGui::Checkbox("Enable Target Locking", &config.enable_target_locking);
     ImGui::SliderFloat("Locking IoU Threshold", &config.target_locking_iou_threshold, 0.01f, 1.0f, "%.2f");

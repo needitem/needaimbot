@@ -28,7 +28,7 @@ std::vector<std::string> getAvailableModels();
 void welcome_message();
 bool checkwin1903();
 
-// Function to save a cv::Mat as a screenshot
+
 void saveScreenshot(const cv::Mat& frame, const std::string& directory = "screenshots");
 
-#endif // OTHER_TOOLS_H
+#endif 

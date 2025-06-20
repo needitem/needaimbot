@@ -7,4 +7,4 @@
 
 void displayThread();
 
-#endif // VISUALS_H
+#endif 

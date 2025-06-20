@@ -4,13 +4,13 @@
 #include <Windows.h>
 
 #include "imgui/imgui.h"
-#include "config.h"       // For config object
-#include "needaimbot.h"   // For config_optical_flow_changed (assuming it's declared here or in a file included by it)
-#include "overlay.h"      // Added to bring in declaration of g_config_optical_flow_changed
-// Potentially include "overlay.h" if config_optical_flow_changed is there
+#include "config.h"       
+#include "needaimbot.h"   
+#include "overlay.h"      
 
-// Ensure this global flag is declared (e.g., in needaimbot.h or overlay.h)
-// extern std::atomic<bool> config_optical_flow_changed; 
+
+
+
 
 void draw_optical_flow() 
 {
@@ -37,7 +37,7 @@ void draw_optical_flow()
             ImGui::SetTooltip("Show calculated optical flow vectors on the debug preview window (if implemented)."); 
         }
         
-        // Example parameters, adjust as per your OpticalFlow class needs
+        
         if (ImGui::SliderInt("Flow Vis Steps", &config.draw_optical_flow_steps, 1, 32)) {
             settings_changed_locally = true;
         }
@@ -76,19 +76,20 @@ void draw_optical_flow()
             ImGui::SetTooltip("Vertical Field of View. Used in some OF calculations."); 
         }
         
-        // Add other optical flow specific parameters from your config here...
-        // Example:
-        // if (ImGui::SliderFloat("Parameter X", &config.optical_flow_param_x, 0.0f, 1.0f)) {
-        //     settings_changed_locally = true;
-        // }
+        
+        
+        
+        
+        
 
         ImGui::Unindent();
     }
 
     if (settings_changed_locally) {
-        // if (config_optical_flow_changed_global_atomic_flag != nullptr) { // No longer using a pointer
-        g_config_optical_flow_changed.store(true); // Set the global atomic flag using the correct name
-        // }
-        config.saveConfig(); // Save configuration changes
+        
+        g_config_optical_flow_changed.store(true); 
+        
+        config.saveConfig(); 
     }
 }
+

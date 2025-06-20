@@ -1,38 +1,38 @@
-// dear imgui: Platform Backend for GLUT/FreeGLUT
-// This needs to be used along with a Renderer (e.g. OpenGL2)
 
-// !!! GLUT/FreeGLUT IS OBSOLETE PREHISTORIC SOFTWARE. Using GLUT is not recommended unless you really miss the 90's. !!!
-// !!! If someone or something is teaching you GLUT today, you are being abused. Please show some resistance. !!!
-// !!! Nowadays, prefer using GLFW or SDL instead!
 
-// Implemented features:
-//  [X] Platform: Partial keyboard support. Since 1.87 we are using the io.AddKeyEvent() function. Pass ImGuiKey values to all key functions e.g. ImGui::IsKeyPressed(ImGuiKey_Space). [Legacy GLUT values will also be supported unless IMGUI_DISABLE_OBSOLETE_KEYIO is set]
-// Issues:
-//  [ ] Platform: GLUT is unable to distinguish e.g. Backspace from CTRL+H or TAB from CTRL+I
-//  [ ] Platform: Missing horizontal mouse wheel support.
-//  [ ] Platform: Missing mouse cursor shape/visibility support.
-//  [ ] Platform: Missing clipboard support (not supported by Glut).
-//  [ ] Platform: Missing gamepad support.
 
-// You can use unmodified imgui_impl_* files in your project. See examples/ folder for examples of using this.
-// Prefer including the entire imgui/ repository into your project (either as a copy or as a submodule), and only build the backends you need.
-// Learn about Dear ImGui:
-// - FAQ                  https://dearimgui.com/faq
-// - Getting Started      https://dearimgui.com/getting-started
-// - Documentation        https://dearimgui.com/docs (same as your local docs/ folder).
-// - Introduction, links and more at the top of imgui.cpp
 
-// CHANGELOG
-// (minor and older changes stripped away, please see git history for details)
-//  2023-04-17: BREAKING: Removed call to ImGui::NewFrame() from ImGui_ImplGLUT_NewFrame(). Needs to be called from the main application loop, like with every other backends.
-//  2022-09-26: Inputs: Renamed ImGuiKey_ModXXX introduced in 1.87 to ImGuiMod_XXX (old names still supported).
-//  2022-01-26: Inputs: replaced short-lived io.AddKeyModsEvent() (added two weeks ago) with io.AddKeyEvent() using ImGuiKey_ModXXX flags. Sorry for the confusion.
-//  2022-01-17: Inputs: calling new io.AddMousePosEvent(), io.AddMouseButtonEvent(), io.AddMouseWheelEvent() API (1.87+).
-//  2022-01-10: Inputs: calling new io.AddKeyEvent(), io.AddKeyModsEvent() + io.SetKeyEventNativeData() API (1.87+). Support for full ImGuiKey range.
-//  2019-04-03: Misc: Renamed imgui_impl_freeglut.cpp/.h to imgui_impl_glut.cpp/.h.
-//  2019-03-25: Misc: Made io.DeltaTime always above zero.
-//  2018-11-30: Misc: Setting up io.BackendPlatformName so it can be displayed in the About Window.
-//  2018-03-22: Added GLUT Platform binding.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 #include "imgui.h"
 #ifndef IMGUI_DISABLE
@@ -45,12 +45,12 @@
 #endif
 
 #ifdef _MSC_VER
-#pragma warning (disable: 4505) // unreferenced local function has been removed (stb stuff)
+#pragma warning (disable: 4505) 
 #endif
 
-static int g_Time = 0;          // Current time, in milliseconds
+static int g_Time = 0;          
 
-// Glut has 1 function for characters and one for "special keys". We map the characters in the 0..255 range and the keys above.
+
 static ImGuiKey ImGui_ImplGLUT_KeyToImGuiKey(int key)
 {
     switch (key)
@@ -81,37 +81,37 @@ static ImGuiKey ImGui_ImplGLUT_KeyToImGuiKey(int key)
         case 92:                        return ImGuiKey_Backslash;
         case 93:                        return ImGuiKey_RightBracket;
         case 96:                        return ImGuiKey_GraveAccent;
-        //case 0:                         return ImGuiKey_CapsLock;
-        //case 0:                         return ImGuiKey_ScrollLock;
+        
+        
         case 256 + 0x006D:              return ImGuiKey_NumLock;
-        //case 0:                         return ImGuiKey_PrintScreen;
-        //case 0:                         return ImGuiKey_Pause;
-        //case '0':                       return ImGuiKey_Keypad0;
-        //case '1':                       return ImGuiKey_Keypad1;
-        //case '2':                       return ImGuiKey_Keypad2;
-        //case '3':                       return ImGuiKey_Keypad3;
-        //case '4':                       return ImGuiKey_Keypad4;
-        //case '5':                       return ImGuiKey_Keypad5;
-        //case '6':                       return ImGuiKey_Keypad6;
-        //case '7':                       return ImGuiKey_Keypad7;
-        //case '8':                       return ImGuiKey_Keypad8;
-        //case '9':                       return ImGuiKey_Keypad9;
-        //case 46:                        return ImGuiKey_KeypadDecimal;
-        //case 47:                        return ImGuiKey_KeypadDivide;
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
         case 42:                        return ImGuiKey_KeypadMultiply;
-        //case 45:                        return ImGuiKey_KeypadSubtract;
+        
         case 43:                        return ImGuiKey_KeypadAdd;
-        //case 13:                        return ImGuiKey_KeypadEnter;
-        //case 0:                         return ImGuiKey_KeypadEqual;
+        
+        
         case 256 + 0x0072:              return ImGuiKey_LeftCtrl;
         case 256 + 0x0070:              return ImGuiKey_LeftShift;
         case 256 + 0x0074:              return ImGuiKey_LeftAlt;
-        //case 0:                         return ImGuiKey_LeftSuper;
+        
         case 256 + 0x0073:              return ImGuiKey_RightCtrl;
         case 256 + 0x0071:              return ImGuiKey_RightShift;
         case 256 + 0x0075:              return ImGuiKey_RightAlt;
-        //case 0:                         return ImGuiKey_RightSuper;
-        //case 0:                         return ImGuiKey_Menu;
+        
+        
         case '0':                       return ImGuiKey_0;
         case '1':                       return ImGuiKey_1;
         case '2':                       return ImGuiKey_2;
@@ -202,7 +202,7 @@ void ImGui_ImplGLUT_Shutdown()
 
 void ImGui_ImplGLUT_NewFrame()
 {
-    // Setup time step
+    
     ImGuiIO& io = ImGui::GetIO();
     int current_time = glutGet(GLUT_ELAPSED_TIME);
     int delta_time_ms = (current_time - g_Time);
@@ -225,13 +225,13 @@ static void ImGui_ImplGLUT_AddKeyEvent(ImGuiKey key, bool down, int native_keyco
 {
     ImGuiIO& io = ImGui::GetIO();
     io.AddKeyEvent(key, down);
-    io.SetKeyEventNativeData(key, native_keycode, -1); // To support legacy indexing (<1.87 user code)
+    io.SetKeyEventNativeData(key, native_keycode, -1); 
 }
 
 void ImGui_ImplGLUT_KeyboardFunc(unsigned char c, int x, int y)
 {
-    // Send character to imgui
-    //printf("char_down_func %d '%c'\n", c, c);
+    
+    
     ImGuiIO& io = ImGui::GetIO();
     if (c >= 32)
         io.AddInputCharacter((unsigned int)c);
@@ -239,34 +239,34 @@ void ImGui_ImplGLUT_KeyboardFunc(unsigned char c, int x, int y)
     ImGuiKey key = ImGui_ImplGLUT_KeyToImGuiKey(c);
     ImGui_ImplGLUT_AddKeyEvent(key, true, c);
     ImGui_ImplGLUT_UpdateKeyModifiers();
-    (void)x; (void)y; // Unused
+    (void)x; (void)y; 
 }
 
 void ImGui_ImplGLUT_KeyboardUpFunc(unsigned char c, int x, int y)
 {
-    //printf("char_up_func %d '%c'\n", c, c);
+    
     ImGuiKey key = ImGui_ImplGLUT_KeyToImGuiKey(c);
     ImGui_ImplGLUT_AddKeyEvent(key, false, c);
     ImGui_ImplGLUT_UpdateKeyModifiers();
-    (void)x; (void)y; // Unused
+    (void)x; (void)y; 
 }
 
 void ImGui_ImplGLUT_SpecialFunc(int key, int x, int y)
 {
-    //printf("key_down_func %d\n", key);
+    
     ImGuiKey imgui_key = ImGui_ImplGLUT_KeyToImGuiKey(key + 256);
     ImGui_ImplGLUT_AddKeyEvent(imgui_key, true, key + 256);
     ImGui_ImplGLUT_UpdateKeyModifiers();
-    (void)x; (void)y; // Unused
+    (void)x; (void)y; 
 }
 
 void ImGui_ImplGLUT_SpecialUpFunc(int key, int x, int y)
 {
-    //printf("key_up_func %d\n", key);
+    
     ImGuiKey imgui_key = ImGui_ImplGLUT_KeyToImGuiKey(key + 256);
     ImGui_ImplGLUT_AddKeyEvent(imgui_key, false, key + 256);
     ImGui_ImplGLUT_UpdateKeyModifiers();
-    (void)x; (void)y; // Unused
+    (void)x; (void)y; 
 }
 
 void ImGui_ImplGLUT_MouseFunc(int glut_button, int state, int x, int y)
@@ -288,7 +288,7 @@ void ImGui_ImplGLUT_MouseWheelFunc(int button, int dir, int x, int y)
     io.AddMousePosEvent((float)x, (float)y);
     if (dir != 0)
         io.AddMouseWheelEvent(0.0f, dir > 0 ? 1.0f : -1.0f);
-    (void)button; // Unused
+    (void)button; 
 }
 #endif
 
@@ -304,6 +304,7 @@ void ImGui_ImplGLUT_MotionFunc(int x, int y)
     io.AddMousePosEvent((float)x, (float)y);
 }
 
-//-----------------------------------------------------------------------------
 
-#endif // #ifndef IMGUI_DISABLE
+
+#endif 
+

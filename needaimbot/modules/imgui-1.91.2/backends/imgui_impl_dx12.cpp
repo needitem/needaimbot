@@ -1,59 +1,59 @@
-// dear imgui: Renderer Backend for DirectX12
-// This needs to be used along with a Platform Backend (e.g. Win32)
 
-// Implemented features:
-//  [X] Renderer: User texture binding. Use 'D3D12_GPU_DESCRIPTOR_HANDLE' as ImTextureID. Read the FAQ about ImTextureID!
-//  [X] Renderer: Large meshes support (64k+ vertices) with 16-bit indices.
 
-// Important: to compile on 32-bit systems, this backend requires code to be compiled with '#define ImTextureID ImU64'.
-// This is because we need ImTextureID to carry a 64-bit value and by default ImTextureID is defined as void*.
-// To build this on 32-bit systems:
-// - [Solution 1] IDE/msbuild: in "Properties/C++/Preprocessor Definitions" add 'ImTextureID=ImU64' (this is what we do in the 'example_win32_direct12/example_win32_direct12.vcxproj' project file)
-// - [Solution 2] IDE/msbuild: in "Properties/C++/Preprocessor Definitions" add 'IMGUI_USER_CONFIG="my_imgui_config.h"' and inside 'my_imgui_config.h' add '#define ImTextureID ImU64' and as many other options as you like.
-// - [Solution 3] IDE/msbuild: edit imconfig.h and add '#define ImTextureID ImU64' (prefer solution 2 to create your own config file!)
-// - [Solution 4] command-line: add '/D ImTextureID=ImU64' to your cl.exe command-line (this is what we do in the example_win32_direct12/build_win32.bat file)
 
-// You can use unmodified imgui_impl_* files in your project. See examples/ folder for examples of using this.
-// Prefer including the entire imgui/ repository into your project (either as a copy or as a submodule), and only build the backends you need.
-// Learn about Dear ImGui:
-// - FAQ                  https://dearimgui.com/faq
-// - Getting Started      https://dearimgui.com/getting-started
-// - Documentation        https://dearimgui.com/docs (same as your local docs/ folder).
-// - Introduction, links and more at the top of imgui.cpp
 
-// CHANGELOG
-// (minor and older changes stripped away, please see git history for details)
-//  2022-10-11: Using 'nullptr' instead of 'NULL' as per our switch to C++11.
-//  2021-06-29: Reorganized backend to pull data from a single structure to facilitate usage with multiple-contexts (all g_XXXX access changed to bd->XXXX).
-//  2021-05-19: DirectX12: Replaced direct access to ImDrawCmd::TextureId with a call to ImDrawCmd::GetTexID(). (will become a requirement)
-//  2021-02-18: DirectX12: Change blending equation to preserve alpha in output buffer.
-//  2021-01-11: DirectX12: Improve Windows 7 compatibility (for D3D12On7) by loading d3d12.dll dynamically.
-//  2020-09-16: DirectX12: Avoid rendering calls with zero-sized scissor rectangle since it generates a validation layer warning.
-//  2020-09-08: DirectX12: Clarified support for building on 32-bit systems by redefining ImTextureID.
-//  2019-10-18: DirectX12: *BREAKING CHANGE* Added extra ID3D12DescriptorHeap parameter to ImGui_ImplDX12_Init() function.
-//  2019-05-29: DirectX12: Added support for large mesh (64K+ vertices), enable ImGuiBackendFlags_RendererHasVtxOffset flag.
-//  2019-04-30: DirectX12: Added support for special ImDrawCallback_ResetRenderState callback to reset render state.
-//  2019-03-29: Misc: Various minor tidying up.
-//  2018-12-03: Misc: Added #pragma comment statement to automatically link with d3dcompiler.lib when using D3DCompile().
-//  2018-11-30: Misc: Setting up io.BackendRendererName so it can be displayed in the About Window.
-//  2018-06-12: DirectX12: Moved the ID3D12GraphicsCommandList* parameter from NewFrame() to RenderDrawData().
-//  2018-06-08: Misc: Extracted imgui_impl_dx12.cpp/.h away from the old combined DX12+Win32 example.
-//  2018-06-08: DirectX12: Use draw_data->DisplayPos and draw_data->DisplaySize to setup projection matrix and clipping rectangle (to ease support for future multi-viewport).
-//  2018-02-22: Merged into master with all Win32 code synchronized to other examples.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 #include "imgui.h"
 #ifndef IMGUI_DISABLE
 #include "imgui_impl_dx12.h"
 
-// DirectX
+
 #include <d3d12.h>
 #include <dxgi1_4.h>
 #include <d3dcompiler.h>
 #ifdef _MSC_VER
-#pragma comment(lib, "d3dcompiler") // Automatically link with d3dcompiler.lib as we are using D3DCompile() below.
+#pragma comment(lib, "d3dcompiler") 
 #endif
 
-// DirectX data
+
 struct ImGui_ImplDX12_RenderBuffers;
 struct ImGui_ImplDX12_Data
 {
@@ -73,14 +73,14 @@ struct ImGui_ImplDX12_Data
     ImGui_ImplDX12_Data()       { memset((void*)this, 0, sizeof(*this)); frameIndex = UINT_MAX; }
 };
 
-// Backend data stored in io.BackendRendererUserData to allow support for multiple Dear ImGui contexts
-// It is STRONGLY preferred that you use docking branch with multi-viewports (== single Dear ImGui context + multiple windows) instead of multiple Dear ImGui contexts.
+
+
 static ImGui_ImplDX12_Data* ImGui_ImplDX12_GetBackendData()
 {
     return ImGui::GetCurrentContext() ? (ImGui_ImplDX12_Data*)ImGui::GetIO().BackendRendererUserData : nullptr;
 }
 
-// Buffers used during the rendering of a frame
+
 struct ImGui_ImplDX12_RenderBuffers
 {
     ID3D12Resource*     IndexBuffer;
@@ -94,13 +94,13 @@ struct VERTEX_CONSTANT_BUFFER_DX12
     float   mvp[4][4];
 };
 
-// Functions
+
 static void ImGui_ImplDX12_SetupRenderState(ImDrawData* draw_data, ID3D12GraphicsCommandList* ctx, ImGui_ImplDX12_RenderBuffers* fr)
 {
     ImGui_ImplDX12_Data* bd = ImGui_ImplDX12_GetBackendData();
 
-    // Setup orthographic projection matrix into our constant buffer
-    // Our visible imgui space lies from draw_data->DisplayPos (top left) to draw_data->DisplayPos+data_data->DisplaySize (bottom right).
+    
+    
     VERTEX_CONSTANT_BUFFER_DX12 vertex_constant_buffer;
     {
         float L = draw_data->DisplayPos.x;
@@ -117,7 +117,7 @@ static void ImGui_ImplDX12_SetupRenderState(ImDrawData* draw_data, ID3D12Graphic
         memcpy(&vertex_constant_buffer.mvp, mvp, sizeof(mvp));
     }
 
-    // Setup viewport
+    
     D3D12_VIEWPORT vp;
     memset(&vp, 0, sizeof(D3D12_VIEWPORT));
     vp.Width = draw_data->DisplaySize.x;
@@ -127,7 +127,7 @@ static void ImGui_ImplDX12_SetupRenderState(ImDrawData* draw_data, ID3D12Graphic
     vp.TopLeftX = vp.TopLeftY = 0.0f;
     ctx->RSSetViewports(1, &vp);
 
-    // Bind shader and vertex buffers
+    
     unsigned int stride = sizeof(ImDrawVert);
     unsigned int offset = 0;
     D3D12_VERTEX_BUFFER_VIEW vbv;
@@ -147,7 +147,7 @@ static void ImGui_ImplDX12_SetupRenderState(ImDrawData* draw_data, ID3D12Graphic
     ctx->SetGraphicsRootSignature(bd->pRootSignature);
     ctx->SetGraphicsRoot32BitConstants(0, 16, &vertex_constant_buffer, 0);
 
-    // Setup blend factor
+    
     const float blend_factor[4] = { 0.f, 0.f, 0.f, 0.f };
     ctx->OMSetBlendFactor(blend_factor);
 }
@@ -160,20 +160,20 @@ static inline void SafeRelease(T*& res)
     res = nullptr;
 }
 
-// Render function
+
 void ImGui_ImplDX12_RenderDrawData(ImDrawData* draw_data, ID3D12GraphicsCommandList* ctx)
 {
-    // Avoid rendering when minimized
+    
     if (draw_data->DisplaySize.x <= 0.0f || draw_data->DisplaySize.y <= 0.0f)
         return;
 
-    // FIXME: I'm assuming that this only gets called once per frame!
-    // If not, we can't just re-allocate the IB or VB, we'll have to do a proper allocator.
+    
+    
     ImGui_ImplDX12_Data* bd = ImGui_ImplDX12_GetBackendData();
     bd->frameIndex = bd->frameIndex + 1;
     ImGui_ImplDX12_RenderBuffers* fr = &bd->pFrameResources[bd->frameIndex % bd->numFramesInFlight];
 
-    // Create and grow vertex/index buffers if needed
+    
     if (fr->VertexBuffer == nullptr || fr->VertexBufferSize < draw_data->TotalVtxCount)
     {
         SafeRelease(fr->VertexBuffer);
@@ -221,7 +221,7 @@ void ImGui_ImplDX12_RenderDrawData(ImDrawData* draw_data, ID3D12GraphicsCommandL
             return;
     }
 
-    // Upload vertex/index data into a single contiguous GPU buffer
+    
     void* vtx_resource, *idx_resource;
     D3D12_RANGE range;
     memset(&range, 0, sizeof(D3D12_RANGE));
@@ -242,11 +242,11 @@ void ImGui_ImplDX12_RenderDrawData(ImDrawData* draw_data, ID3D12GraphicsCommandL
     fr->VertexBuffer->Unmap(0, &range);
     fr->IndexBuffer->Unmap(0, &range);
 
-    // Setup desired DX state
+    
     ImGui_ImplDX12_SetupRenderState(draw_data, ctx, fr);
 
-    // Render command lists
-    // (Because we merged all buffers into a single one, we maintain our own offset into them)
+    
+    
     int global_vtx_offset = 0;
     int global_idx_offset = 0;
     ImVec2 clip_off = draw_data->DisplayPos;
@@ -258,8 +258,8 @@ void ImGui_ImplDX12_RenderDrawData(ImDrawData* draw_data, ID3D12GraphicsCommandL
             const ImDrawCmd* pcmd = &cmd_list->CmdBuffer[cmd_i];
             if (pcmd->UserCallback != nullptr)
             {
-                // User callback, registered via ImDrawList::AddCallback()
-                // (ImDrawCallback_ResetRenderState is a special callback value used by the user to request the renderer to reset render state.)
+                
+                
                 if (pcmd->UserCallback == ImDrawCallback_ResetRenderState)
                     ImGui_ImplDX12_SetupRenderState(draw_data, ctx, fr);
                 else
@@ -267,13 +267,13 @@ void ImGui_ImplDX12_RenderDrawData(ImDrawData* draw_data, ID3D12GraphicsCommandL
             }
             else
             {
-                // Project scissor/clipping rectangles into framebuffer space
+                
                 ImVec2 clip_min(pcmd->ClipRect.x - clip_off.x, pcmd->ClipRect.y - clip_off.y);
                 ImVec2 clip_max(pcmd->ClipRect.z - clip_off.x, pcmd->ClipRect.w - clip_off.y);
                 if (clip_max.x <= clip_min.x || clip_max.y <= clip_min.y)
                     continue;
 
-                // Apply Scissor/clipping rectangle, Bind texture, Draw
+                
                 const D3D12_RECT r = { (LONG)clip_min.x, (LONG)clip_min.y, (LONG)clip_max.x, (LONG)clip_max.y };
                 D3D12_GPU_DESCRIPTOR_HANDLE texture_handle = {};
                 texture_handle.ptr = (UINT64)pcmd->GetTexID();
@@ -289,14 +289,14 @@ void ImGui_ImplDX12_RenderDrawData(ImDrawData* draw_data, ID3D12GraphicsCommandL
 
 static void ImGui_ImplDX12_CreateFontsTexture()
 {
-    // Build texture atlas
+    
     ImGuiIO& io = ImGui::GetIO();
     ImGui_ImplDX12_Data* bd = ImGui_ImplDX12_GetBackendData();
     unsigned char* pixels;
     int width, height;
     io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
 
-    // Upload texture to graphics system
+    
     {
         D3D12_HEAP_PROPERTIES props;
         memset(&props, 0, sizeof(D3D12_HEAP_PROPERTIES));
@@ -419,7 +419,7 @@ static void ImGui_ImplDX12_CreateFontsTexture()
         fence->Release();
         uploadBuffer->Release();
 
-        // Create texture view
+        
         D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc;
         ZeroMemory(&srvDesc, sizeof(srvDesc));
         srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -432,14 +432,14 @@ static void ImGui_ImplDX12_CreateFontsTexture()
         bd->pFontTextureResource = pTexture;
     }
 
-    // Store our identifier
-    // READ THIS IF THE STATIC_ASSERT() TRIGGERS:
-    // - Important: to compile on 32-bit systems, this backend requires code to be compiled with '#define ImTextureID ImU64'.
-    // - This is because we need ImTextureID to carry a 64-bit value and by default ImTextureID is defined as void*.
-    // [Solution 1] IDE/msbuild: in "Properties/C++/Preprocessor Definitions" add 'ImTextureID=ImU64' (this is what we do in the 'example_win32_direct12/example_win32_direct12.vcxproj' project file)
-    // [Solution 2] IDE/msbuild: in "Properties/C++/Preprocessor Definitions" add 'IMGUI_USER_CONFIG="my_imgui_config.h"' and inside 'my_imgui_config.h' add '#define ImTextureID ImU64' and as many other options as you like.
-    // [Solution 3] IDE/msbuild: edit imconfig.h and add '#define ImTextureID ImU64' (prefer solution 2 to create your own config file!)
-    // [Solution 4] command-line: add '/D ImTextureID=ImU64' to your cl.exe command-line (this is what we do in the example_win32_direct12/build_win32.bat file)
+    
+    
+    
+    
+    
+    
+    
+    
     static_assert(sizeof(ImTextureID) >= sizeof(bd->hFontSrvGpuDescHandle.ptr), "Can't pack descriptor handle into TexID, 32-bit not supported yet.");
     io.Fonts->SetTexID((ImTextureID)bd->hFontSrvGpuDescHandle.ptr);
 }
@@ -452,7 +452,7 @@ bool    ImGui_ImplDX12_CreateDeviceObjects()
     if (bd->pPipelineState)
         ImGui_ImplDX12_InvalidateDeviceObjects();
 
-    // Create the root signature
+    
     {
         D3D12_DESCRIPTOR_RANGE descRange = {};
         descRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
@@ -474,7 +474,7 @@ bool    ImGui_ImplDX12_CreateDeviceObjects()
         param[1].DescriptorTable.pDescriptorRanges = &descRange;
         param[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
-        // Bilinear sampling is required by default. Set 'io.Fonts->Flags |= ImFontAtlasFlags_NoBakedLines' or 'style.AntiAliasedLinesUseTex = false' to allow point/nearest sampling.
+        
         D3D12_STATIC_SAMPLER_DESC staticSampler = {};
         staticSampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
         staticSampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
@@ -501,21 +501,21 @@ bool    ImGui_ImplDX12_CreateDeviceObjects()
             D3D12_ROOT_SIGNATURE_FLAG_DENY_DOMAIN_SHADER_ROOT_ACCESS |
             D3D12_ROOT_SIGNATURE_FLAG_DENY_GEOMETRY_SHADER_ROOT_ACCESS;
 
-        // Load d3d12.dll and D3D12SerializeRootSignature() function address dynamically to facilitate using with D3D12On7.
-        // See if any version of d3d12.dll is already loaded in the process. If so, give preference to that.
+        
+        
         static HINSTANCE d3d12_dll = ::GetModuleHandleA("d3d12.dll");
         if (d3d12_dll == nullptr)
         {
-            // Attempt to load d3d12.dll from local directories. This will only succeed if
-            // (1) the current OS is Windows 7, and
-            // (2) there exists a version of d3d12.dll for Windows 7 (D3D12On7) in one of the following directories.
-            // See https://github.com/ocornut/imgui/pull/3696 for details.
-            const char* localD3d12Paths[] = { ".\\d3d12.dll", ".\\d3d12on7\\d3d12.dll", ".\\12on7\\d3d12.dll" }; // A. current directory, B. used by some games, C. used in Microsoft D3D12On7 sample
+            
+            
+            
+            
+            const char* localD3d12Paths[] = { ".\\d3d12.dll", ".\\d3d12on7\\d3d12.dll", ".\\12on7\\d3d12.dll" }; 
             for (int i = 0; i < IM_ARRAYSIZE(localD3d12Paths); i++)
                 if ((d3d12_dll = ::LoadLibraryA(localD3d12Paths[i])) != nullptr)
                     break;
 
-            // If failed, we are on Windows >= 10.
+            
             if (d3d12_dll == nullptr)
                 d3d12_dll = ::LoadLibraryA("d3d12.dll");
 
@@ -535,11 +535,11 @@ bool    ImGui_ImplDX12_CreateDeviceObjects()
         blob->Release();
     }
 
-    // By using D3DCompile() from <d3dcompiler.h> / d3dcompiler.lib, we introduce a dependency to a given version of d3dcompiler_XX.dll (see D3DCOMPILER_DLL_A)
-    // If you would like to use this DX12 sample code but remove this dependency you can:
-    //  1) compile once, save the compiled shader blobs into a file or source code and assign them to psoDesc.VS/PS [preferred solution]
-    //  2) use code to detect any version of the DLL and grab a pointer to D3DCompile from the DLL.
-    // See https://github.com/ocornut/imgui/pull/638 for sources and details.
+    
+    
+    
+    
+    
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc;
     memset(&psoDesc, 0, sizeof(D3D12_GRAPHICS_PIPELINE_STATE_DESC));
@@ -555,7 +555,7 @@ bool    ImGui_ImplDX12_CreateDeviceObjects()
     ID3DBlob* vertexShaderBlob;
     ID3DBlob* pixelShaderBlob;
 
-    // Create the vertex shader
+    
     {
         static const char* vertexShader =
             "cbuffer vertexBuffer : register(b0) \
@@ -586,10 +586,10 @@ bool    ImGui_ImplDX12_CreateDeviceObjects()
             }";
 
         if (FAILED(D3DCompile(vertexShader, strlen(vertexShader), nullptr, nullptr, nullptr, "main", "vs_5_0", 0, 0, &vertexShaderBlob, nullptr)))
-            return false; // NB: Pass ID3DBlob* pErrorBlob to D3DCompile() to get error showing in (const char*)pErrorBlob->GetBufferPointer(). Make sure to Release() the blob!
+            return false; 
         psoDesc.VS = { vertexShaderBlob->GetBufferPointer(), vertexShaderBlob->GetBufferSize() };
 
-        // Create the input layout
+        
         static D3D12_INPUT_ELEMENT_DESC local_layout[] =
         {
             { "POSITION", 0, DXGI_FORMAT_R32G32_FLOAT,   0, (UINT)offsetof(ImDrawVert, pos), D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
@@ -599,7 +599,7 @@ bool    ImGui_ImplDX12_CreateDeviceObjects()
         psoDesc.InputLayout = { local_layout, 3 };
     }
 
-    // Create the pixel shader
+    
     {
         static const char* pixelShader =
             "struct PS_INPUT\
@@ -620,12 +620,12 @@ bool    ImGui_ImplDX12_CreateDeviceObjects()
         if (FAILED(D3DCompile(pixelShader, strlen(pixelShader), nullptr, nullptr, nullptr, "main", "ps_5_0", 0, 0, &pixelShaderBlob, nullptr)))
         {
             vertexShaderBlob->Release();
-            return false; // NB: Pass ID3DBlob* pErrorBlob to D3DCompile() to get error showing in (const char*)pErrorBlob->GetBufferPointer(). Make sure to Release() the blob!
+            return false; 
         }
         psoDesc.PS = { pixelShaderBlob->GetBufferPointer(), pixelShaderBlob->GetBufferSize() };
     }
 
-    // Create the blending setup
+    
     {
         D3D12_BLEND_DESC& desc = psoDesc.BlendState;
         desc.AlphaToCoverageEnable = false;
@@ -639,7 +639,7 @@ bool    ImGui_ImplDX12_CreateDeviceObjects()
         desc.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
     }
 
-    // Create the rasterizer state
+    
     {
         D3D12_RASTERIZER_DESC& desc = psoDesc.RasterizerState;
         desc.FillMode = D3D12_FILL_MODE_SOLID;
@@ -655,7 +655,7 @@ bool    ImGui_ImplDX12_CreateDeviceObjects()
         desc.ConservativeRaster = D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF;
     }
 
-    // Create depth-stencil State
+    
     {
         D3D12_DEPTH_STENCIL_DESC& desc = psoDesc.DepthStencilState;
         desc.DepthEnable = false;
@@ -688,7 +688,7 @@ void    ImGui_ImplDX12_InvalidateDeviceObjects()
     SafeRelease(bd->pRootSignature);
     SafeRelease(bd->pPipelineState);
     SafeRelease(bd->pFontTextureResource);
-    io.Fonts->SetTexID(0); // We copied bd->pFontTextureView to io.Fonts->TexID so let's clear that as well.
+    io.Fonts->SetTexID(0); 
 
     for (UINT i = 0; i < bd->numFramesInFlight; i++)
     {
@@ -705,11 +705,11 @@ bool ImGui_ImplDX12_Init(ID3D12Device* device, int num_frames_in_flight, DXGI_FO
     IMGUI_CHECKVERSION();
     IM_ASSERT(io.BackendRendererUserData == nullptr && "Already initialized a renderer backend!");
 
-    // Setup backend capabilities flags
+    
     ImGui_ImplDX12_Data* bd = IM_NEW(ImGui_ImplDX12_Data)();
     io.BackendRendererUserData = (void*)bd;
     io.BackendRendererName = "imgui_impl_dx12";
-    io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;  // We can honor the ImDrawCmd::VtxOffset field, allowing for large meshes.
+    io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;  
 
     bd->pd3dDevice = device;
     bd->RTVFormat = rtv_format;
@@ -720,7 +720,7 @@ bool ImGui_ImplDX12_Init(ID3D12Device* device, int num_frames_in_flight, DXGI_FO
     bd->pd3dSrvDescHeap = cbv_srv_heap;
     bd->frameIndex = UINT_MAX;
 
-    // Create buffers with a default size (they will later be grown as needed)
+    
     for (int i = 0; i < num_frames_in_flight; i++)
     {
         ImGui_ImplDX12_RenderBuffers* fr = &bd->pFrameResources[i];
@@ -739,7 +739,7 @@ void ImGui_ImplDX12_Shutdown()
     IM_ASSERT(bd != nullptr && "No renderer backend to shutdown, or already shutdown?");
     ImGuiIO& io = ImGui::GetIO();
 
-    // Clean up windows and device objects
+    
     ImGui_ImplDX12_InvalidateDeviceObjects();
     delete[] bd->pFrameResources;
     io.BackendRendererName = nullptr;
@@ -757,6 +757,7 @@ void ImGui_ImplDX12_NewFrame()
         ImGui_ImplDX12_CreateDeviceObjects();
 }
 
-//-----------------------------------------------------------------------------
 
-#endif // #ifndef IMGUI_DISABLE
+
+#endif 
+

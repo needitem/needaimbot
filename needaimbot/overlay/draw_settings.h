@@ -1,7 +1,7 @@
 #ifndef DRAW_SETTINGS_H
 #define DRAW_SETTINGS_H
 
-// Function declarations for drawing different settings tabs
+
 void draw_capture_settings();
 void draw_target();
 void draw_mouse();
@@ -17,4 +17,4 @@ void draw_rcs_settings();
 void load_body_texture();
 void release_body_texture();
 
-#endif // DRAW_SETTINGS_H
+#endif 

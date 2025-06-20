@@ -1,103 +1,103 @@
-// dear imgui: Platform Backend for SDL2
-// This needs to be used along with a Renderer (e.g. DirectX11, OpenGL3, Vulkan..)
-// (Info: SDL2 is a cross-platform general purpose library for handling windows, inputs, graphics context creation, etc.)
-// (Prefer SDL 2.0.5+ for full feature support.)
 
-// Implemented features:
-//  [X] Platform: Clipboard support.
-//  [X] Platform: Mouse support. Can discriminate Mouse/TouchScreen.
-//  [X] Platform: Keyboard support. Since 1.87 we are using the io.AddKeyEvent() function. Pass ImGuiKey values to all key functions e.g. ImGui::IsKeyPressed(ImGuiKey_Space). [Legacy SDL_SCANCODE_* values will also be supported unless IMGUI_DISABLE_OBSOLETE_KEYIO is set]
-//  [X] Platform: Gamepad support. Enabled with 'io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad'.
-//  [X] Platform: Mouse cursor shape and visibility. Disable with 'io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange'.
-//  [X] Platform: Basic IME support. App needs to call 'SDL_SetHint(SDL_HINT_IME_SHOW_UI, "1");' before SDL_CreateWindow()!.
 
-// You can use unmodified imgui_impl_* files in your project. See examples/ folder for examples of using this.
-// Prefer including the entire imgui/ repository into your project (either as a copy or as a submodule), and only build the backends you need.
-// Learn about Dear ImGui:
-// - FAQ                  https://dearimgui.com/faq
-// - Getting Started      https://dearimgui.com/getting-started
-// - Documentation        https://dearimgui.com/docs (same as your local docs/ folder).
-// - Introduction, links and more at the top of imgui.cpp
 
-// CHANGELOG
-// (minor and older changes stripped away, please see git history for details)
-//  2024-09-09: use SDL_Vulkan_GetDrawableSize() when available. (#7967, #3190)
-//  2024-08-22: moved some OS/backend related function pointers from ImGuiIO to ImGuiPlatformIO:
-//               - io.GetClipboardTextFn    -> platform_io.Platform_GetClipboardTextFn
-//               - io.SetClipboardTextFn    -> platform_io.Platform_SetClipboardTextFn
-//               - io.PlatformOpenInShellFn -> platform_io.Platform_OpenInShellFn
-//               - io.PlatformSetImeDataFn  -> platform_io.Platform_SetImeDataFn
-//  2024-08-19: Storing SDL's Uint32 WindowID inside ImGuiViewport::PlatformHandle instead of SDL_Window*.
-//  2024-08-19: ImGui_ImplSDL2_ProcessEvent() now ignores events intended for other SDL windows. (#7853)
-//  2024-07-02: Emscripten: Added io.PlatformOpenInShellFn() handler for Emscripten versions.
-//  2024-07-02: Update for io.SetPlatformImeDataFn() -> io.PlatformSetImeDataFn() renaming in main library.
-//  2024-02-14: Inputs: Handle gamepad disconnection. Added ImGui_ImplSDL2_SetGamepadMode().
-//  2023-10-05: Inputs: Added support for extra ImGuiKey values: F13 to F24 function keys, app back/forward keys.
-//  2023-04-06: Inputs: Avoid calling SDL_StartTextInput()/SDL_StopTextInput() as they don't only pertain to IME. It's unclear exactly what their relation is to IME. (#6306)
-//  2023-04-04: Inputs: Added support for io.AddMouseSourceEvent() to discriminate ImGuiMouseSource_Mouse/ImGuiMouseSource_TouchScreen. (#2702)
-//  2023-02-23: Accept SDL_GetPerformanceCounter() not returning a monotonically increasing value. (#6189, #6114, #3644)
-//  2023-02-07: Implement IME handler (io.SetPlatformImeDataFn will call SDL_SetTextInputRect()/SDL_StartTextInput()).
-//  2023-02-07: *BREAKING CHANGE* Renamed this backend file from imgui_impl_sdl.cpp/.h to imgui_impl_sdl2.cpp/.h in prevision for the future release of SDL3.
-//  2023-02-02: Avoid calling SDL_SetCursor() when cursor has not changed, as the function is surprisingly costly on Mac with latest SDL (may be fixed in next SDL version).
-//  2023-02-02: Added support for SDL 2.0.18+ preciseX/preciseY mouse wheel data for smooth scrolling + Scaling X value on Emscripten (bug?). (#4019, #6096)
-//  2023-02-02: Removed SDL_MOUSEWHEEL value clamping, as values seem correct in latest Emscripten. (#4019)
-//  2023-02-01: Flipping SDL_MOUSEWHEEL 'wheel.x' value to match other backends and offer consistent horizontal scrolling direction. (#4019, #6096, #1463)
-//  2022-10-11: Using 'nullptr' instead of 'NULL' as per our switch to C++11.
-//  2022-09-26: Inputs: Disable SDL 2.0.22 new "auto capture" (SDL_HINT_MOUSE_AUTO_CAPTURE) which prevents drag and drop across windows for multi-viewport support + don't capture when drag and dropping. (#5710)
-//  2022-09-26: Inputs: Renamed ImGuiKey_ModXXX introduced in 1.87 to ImGuiMod_XXX (old names still supported).
-//  2022-03-22: Inputs: Fix mouse position issues when dragging outside of boundaries. SDL_CaptureMouse() erroneously still gives out LEAVE events when hovering OS decorations.
-//  2022-03-22: Inputs: Added support for extra mouse buttons (SDL_BUTTON_X1/SDL_BUTTON_X2).
-//  2022-02-04: Added SDL_Renderer* parameter to ImGui_ImplSDL2_InitForSDLRenderer(), so we can use SDL_GetRendererOutputSize() instead of SDL_GL_GetDrawableSize() when bound to a SDL_Renderer.
-//  2022-01-26: Inputs: replaced short-lived io.AddKeyModsEvent() (added two weeks ago) with io.AddKeyEvent() using ImGuiKey_ModXXX flags. Sorry for the confusion.
-//  2021-01-20: Inputs: calling new io.AddKeyAnalogEvent() for gamepad support, instead of writing directly to io.NavInputs[].
-//  2022-01-17: Inputs: calling new io.AddMousePosEvent(), io.AddMouseButtonEvent(), io.AddMouseWheelEvent() API (1.87+).
-//  2022-01-17: Inputs: always update key mods next and before key event (not in NewFrame) to fix input queue with very low framerates.
-//  2022-01-12: Update mouse inputs using SDL_MOUSEMOTION/SDL_WINDOWEVENT_LEAVE + fallback to provide it when focused but not hovered/captured. More standard and will allow us to pass it to future input queue API.
-//  2022-01-12: Maintain our own copy of MouseButtonsDown mask instead of using ImGui::IsAnyMouseDown() which will be obsoleted.
-//  2022-01-10: Inputs: calling new io.AddKeyEvent(), io.AddKeyModsEvent() + io.SetKeyEventNativeData() API (1.87+). Support for full ImGuiKey range.
-//  2021-08-17: Calling io.AddFocusEvent() on SDL_WINDOWEVENT_FOCUS_GAINED/SDL_WINDOWEVENT_FOCUS_LOST.
-//  2021-07-29: Inputs: MousePos is correctly reported when the host platform window is hovered but not focused (using SDL_GetMouseFocus() + SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, requires SDL 2.0.5+)
-//  2021-06-29: *BREAKING CHANGE* Removed 'SDL_Window* window' parameter to ImGui_ImplSDL2_NewFrame() which was unnecessary.
-//  2021-06-29: Reorganized backend to pull data from a single structure to facilitate usage with multiple-contexts (all g_XXXX access changed to bd->XXXX).
-//  2021-03-22: Rework global mouse pos availability check listing supported platforms explicitly, effectively fixing mouse access on Raspberry Pi. (#2837, #3950)
-//  2020-05-25: Misc: Report a zero display-size when window is minimized, to be consistent with other backends.
-//  2020-02-20: Inputs: Fixed mapping for ImGuiKey_KeyPadEnter (using SDL_SCANCODE_KP_ENTER instead of SDL_SCANCODE_RETURN2).
-//  2019-12-17: Inputs: On Wayland, use SDL_GetMouseState (because there is no global mouse state).
-//  2019-12-05: Inputs: Added support for ImGuiMouseCursor_NotAllowed mouse cursor.
-//  2019-07-21: Inputs: Added mapping for ImGuiKey_KeyPadEnter.
-//  2019-04-23: Inputs: Added support for SDL_GameController (if ImGuiConfigFlags_NavEnableGamepad is set by user application).
-//  2019-03-12: Misc: Preserve DisplayFramebufferScale when main window is minimized.
-//  2018-12-21: Inputs: Workaround for Android/iOS which don't seem to handle focus related calls.
-//  2018-11-30: Misc: Setting up io.BackendPlatformName so it can be displayed in the About Window.
-//  2018-11-14: Changed the signature of ImGui_ImplSDL2_ProcessEvent() to take a 'const SDL_Event*'.
-//  2018-08-01: Inputs: Workaround for Emscripten which doesn't seem to handle focus related calls.
-//  2018-06-29: Inputs: Added support for the ImGuiMouseCursor_Hand cursor.
-//  2018-06-08: Misc: Extracted imgui_impl_sdl.cpp/.h away from the old combined SDL2+OpenGL/Vulkan examples.
-//  2018-06-08: Misc: ImGui_ImplSDL2_InitForOpenGL() now takes a SDL_GLContext parameter.
-//  2018-05-09: Misc: Fixed clipboard paste memory leak (we didn't call SDL_FreeMemory on the data returned by SDL_GetClipboardText).
-//  2018-03-20: Misc: Setup io.BackendFlags ImGuiBackendFlags_HasMouseCursors flag + honor ImGuiConfigFlags_NoMouseCursorChange flag.
-//  2018-02-16: Inputs: Added support for mouse cursors, honoring ImGui::GetMouseCursor() value.
-//  2018-02-06: Misc: Removed call to ImGui::Shutdown() which is not available from 1.60 WIP, user needs to call CreateContext/DestroyContext themselves.
-//  2018-02-06: Inputs: Added mapping for ImGuiKey_Space.
-//  2018-02-05: Misc: Using SDL_GetPerformanceCounter() instead of SDL_GetTicks() to be able to handle very high framerate (1000+ FPS).
-//  2018-02-05: Inputs: Keyboard mapping is using scancodes everywhere instead of a confusing mixture of keycodes and scancodes.
-//  2018-01-20: Inputs: Added Horizontal Mouse Wheel support.
-//  2018-01-19: Inputs: When available (SDL 2.0.4+) using SDL_CaptureMouse() to retrieve coordinates outside of client area when dragging. Otherwise (SDL 2.0.3 and before) testing for SDL_WINDOW_INPUT_FOCUS instead of SDL_WINDOW_MOUSE_FOCUS.
-//  2018-01-18: Inputs: Added mapping for ImGuiKey_Insert.
-//  2017-08-25: Inputs: MousePos set to -FLT_MAX,-FLT_MAX when mouse is unavailable/missing (instead of -1,-1).
-//  2016-10-15: Misc: Added a void* user_data parameter to Clipboard function handlers.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 #include "imgui.h"
 #ifndef IMGUI_DISABLE
 #include "imgui_impl_sdl2.h"
 
-// Clang warnings with -Weverything
+
 #if defined(__clang__)
 #pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wimplicit-int-float-conversion"  // warning: implicit conversion from 'xxx' to 'float' may lose precision
+#pragma clang diagnostic ignored "-Wimplicit-int-float-conversion"  
 #endif
 
-// SDL
+
 #include <SDL.h>
 #include <SDL_syswm.h>
 #ifdef __APPLE__
@@ -117,7 +117,7 @@
 extern "C" { extern DECLSPEC void SDLCALL SDL_Vulkan_GetDrawableSize(SDL_Window* window, int* w, int* h); }
 #endif
 
-// SDL Data
+
 struct ImGui_ImplSDL2_Data
 {
     SDL_Window*             Window;
@@ -126,7 +126,7 @@ struct ImGui_ImplSDL2_Data
     Uint64                  Time;
     char*                   ClipboardTextData;
 
-    // Mouse handling
+    
     Uint32                  MouseWindowID;
     int                     MouseButtonsDown;
     SDL_Cursor*             MouseCursors[ImGuiMouseCursor_COUNT];
@@ -134,7 +134,7 @@ struct ImGui_ImplSDL2_Data
     int                     MouseLastLeaveFrame;
     bool                    MouseCanUseGlobalState;
 
-    // Gamepad handling
+    
     ImVector<SDL_GameController*> Gamepads;
     ImGui_ImplSDL2_GamepadMode    GamepadMode;
     bool                          WantUpdateGamepadsList;
@@ -142,16 +142,16 @@ struct ImGui_ImplSDL2_Data
     ImGui_ImplSDL2_Data()   { memset((void*)this, 0, sizeof(*this)); }
 };
 
-// Backend data stored in io.BackendPlatformUserData to allow support for multiple Dear ImGui contexts
-// It is STRONGLY preferred that you use docking branch with multi-viewports (== single Dear ImGui context + multiple windows) instead of multiple Dear ImGui contexts.
-// FIXME: multi-context support is not well tested and probably dysfunctional in this backend.
-// FIXME: some shared resources (mouse cursor shape, gamepad) are mishandled when using multi-context.
+
+
+
+
 static ImGui_ImplSDL2_Data* ImGui_ImplSDL2_GetBackendData()
 {
     return ImGui::GetCurrentContext() ? (ImGui_ImplSDL2_Data*)ImGui::GetIO().BackendPlatformUserData : nullptr;
 }
 
-// Functions
+
 static const char* ImGui_ImplSDL2_GetClipboardText(ImGuiContext*)
 {
     ImGui_ImplSDL2_Data* bd = ImGui_ImplSDL2_GetBackendData();
@@ -166,7 +166,7 @@ static void ImGui_ImplSDL2_SetClipboardText(ImGuiContext*, const char* text)
     SDL_SetClipboardText(text);
 }
 
-// Note: native IME will only display if user calls SDL_SetHint(SDL_HINT_IME_SHOW_UI, "1") _before_ SDL_CreateWindow().
+
 static void ImGui_ImplSDL2_PlatformSetImeData(ImGuiContext*, ImGuiViewport*, ImGuiPlatformImeData* data)
 {
     if (data->WantVisible)
@@ -180,7 +180,7 @@ static void ImGui_ImplSDL2_PlatformSetImeData(ImGuiContext*, ImGuiViewport*, ImG
     }
 }
 
-// Not static to allow third-party code to use that if they want to (but undocumented)
+
 ImGuiKey ImGui_ImplSDL2_KeyEventToImGuiKey(SDL_Keycode keycode, SDL_Scancode scancode)
 {
     IM_UNUSED(scancode);
@@ -325,11 +325,11 @@ static ImGuiViewport* ImGui_ImplSDL2_GetViewportForWindowID(Uint32 window_id)
     return (window_id == bd->WindowID) ? ImGui::GetMainViewport() : NULL;
 }
 
-// You can read the io.WantCaptureMouse, io.WantCaptureKeyboard flags to tell if dear imgui wants to use your inputs.
-// - When io.WantCaptureMouse is true, do not dispatch mouse input data to your main application, or clear/overwrite your copy of the mouse data.
-// - When io.WantCaptureKeyboard is true, do not dispatch keyboard input data to your main application, or clear/overwrite your copy of the keyboard data.
-// Generally you may always pass all inputs to dear imgui, and hide them from your application based on those two flags.
-// If you have multiple SDL events and some of them are not meant to be used by dear imgui, you may need to filter events based on their windowID field.
+
+
+
+
+
 bool ImGui_ImplSDL2_ProcessEvent(const SDL_Event* event)
 {
     ImGui_ImplSDL2_Data* bd = ImGui_ImplSDL2_GetBackendData();
@@ -351,8 +351,8 @@ bool ImGui_ImplSDL2_ProcessEvent(const SDL_Event* event)
         {
             if (ImGui_ImplSDL2_GetViewportForWindowID(event->wheel.windowID) == NULL)
                 return false;
-            //IMGUI_DEBUG_LOG("wheel %.2f %.2f, precise %.2f %.2f\n", (float)event->wheel.x, (float)event->wheel.y, event->wheel.preciseX, event->wheel.preciseY);
-#if SDL_VERSION_ATLEAST(2,0,18) // If this fails to compile on Emscripten: update to latest Emscripten!
+            
+#if SDL_VERSION_ATLEAST(2,0,18) 
             float wheel_x = -event->wheel.preciseX;
             float wheel_y = event->wheel.preciseY;
 #else
@@ -399,18 +399,18 @@ bool ImGui_ImplSDL2_ProcessEvent(const SDL_Event* event)
             ImGui_ImplSDL2_UpdateKeyModifiers((SDL_Keymod)event->key.keysym.mod);
             ImGuiKey key = ImGui_ImplSDL2_KeyEventToImGuiKey(event->key.keysym.sym, event->key.keysym.scancode);
             io.AddKeyEvent(key, (event->type == SDL_KEYDOWN));
-            io.SetKeyEventNativeData(key, event->key.keysym.sym, event->key.keysym.scancode, event->key.keysym.scancode); // To support legacy indexing (<1.87 user code). Legacy backend uses SDLK_*** as indices to IsKeyXXX() functions.
+            io.SetKeyEventNativeData(key, event->key.keysym.sym, event->key.keysym.scancode, event->key.keysym.scancode); 
             return true;
         }
         case SDL_WINDOWEVENT:
         {
             if (ImGui_ImplSDL2_GetViewportForWindowID(event->window.windowID) == NULL)
                 return false;
-            // - When capturing mouse, SDL will send a bunch of conflicting LEAVE/ENTER event on every mouse move, but the final ENTER tends to be right.
-            // - However we won't get a correct LEAVE event for a captured window.
-            // - In some cases, when detaching a window from main viewport SDL may send SDL_WINDOWEVENT_ENTER one frame too late,
-            //   causing SDL_WINDOWEVENT_LEAVE on previous frame to interrupt drag operation by clear mouse position. This is why
-            //   we delay process the SDL_WINDOWEVENT_LEAVE events by one frame. See issue #5012 for details.
+            
+            
+            
+            
+            
             Uint8 window_event = event->window.event;
             if (window_event == SDL_WINDOWEVENT_ENTER)
             {
@@ -445,8 +445,8 @@ static bool ImGui_ImplSDL2_Init(SDL_Window* window, SDL_Renderer* renderer, void
     IMGUI_CHECKVERSION();
     IM_ASSERT(io.BackendPlatformUserData == nullptr && "Already initialized a platform backend!");
 
-    // Check and store if we are on a SDL backend that supports global mouse position
-    // ("wayland" and "rpi" don't support it, but we chose to use a white-list instead of a black-list)
+    
+    
     bool mouse_can_use_global_state = false;
 #if SDL_HAS_CAPTURE_AND_GLOBAL_MOUSE
     const char* sdl_backend = SDL_GetCurrentVideoDriver();
@@ -456,12 +456,12 @@ static bool ImGui_ImplSDL2_Init(SDL_Window* window, SDL_Renderer* renderer, void
             mouse_can_use_global_state = true;
 #endif
 
-    // Setup backend capabilities flags
+    
     ImGui_ImplSDL2_Data* bd = IM_NEW(ImGui_ImplSDL2_Data)();
     io.BackendPlatformUserData = (void*)bd;
     io.BackendPlatformName = "imgui_impl_sdl2";
-    io.BackendFlags |= ImGuiBackendFlags_HasMouseCursors;       // We can honor GetMouseCursor() values (optional)
-    io.BackendFlags |= ImGuiBackendFlags_HasSetMousePos;        // We can honor io.WantSetMousePos requests (optional, rarely used)
+    io.BackendFlags |= ImGuiBackendFlags_HasMouseCursors;       
+    io.BackendFlags |= ImGuiBackendFlags_HasSetMousePos;        
 
     bd->Window = window;
     bd->WindowID = SDL_GetWindowID(window);
@@ -477,11 +477,11 @@ static bool ImGui_ImplSDL2_Init(SDL_Window* window, SDL_Renderer* renderer, void
     platform_io.Platform_OpenInShellFn = [](ImGuiContext*, const char* url) { ImGui_ImplSDL2_EmscriptenOpenURL(url); return true; };
 #endif
 
-    // Gamepad handling
+    
     bd->GamepadMode = ImGui_ImplSDL2_GamepadMode_AutoFirst;
     bd->WantUpdateGamepadsList = true;
 
-    // Load mouse cursors
+    
     bd->MouseCursors[ImGuiMouseCursor_Arrow] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_ARROW);
     bd->MouseCursors[ImGuiMouseCursor_TextInput] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_IBEAM);
     bd->MouseCursors[ImGuiMouseCursor_ResizeAll] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_SIZEALL);
@@ -492,8 +492,8 @@ static bool ImGui_ImplSDL2_Init(SDL_Window* window, SDL_Renderer* renderer, void
     bd->MouseCursors[ImGuiMouseCursor_Hand] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_HAND);
     bd->MouseCursors[ImGuiMouseCursor_NotAllowed] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_NO);
 
-    // Set platform dependent data in viewport
-    // Our mouse update function expect PlatformHandle to be filled for the main viewport
+    
+    
     ImGuiViewport* main_viewport = ImGui::GetMainViewport();
     main_viewport->PlatformHandle = (void*)(intptr_t)bd->WindowID;
     main_viewport->PlatformHandleRaw = nullptr;
@@ -508,28 +508,28 @@ static bool ImGui_ImplSDL2_Init(SDL_Window* window, SDL_Renderer* renderer, void
 #endif
     }
 
-    // From 2.0.5: Set SDL hint to receive mouse click events on window focus, otherwise SDL doesn't emit the event.
-    // Without this, when clicking to gain focus, our widgets wouldn't activate even though they showed as hovered.
-    // (This is unfortunately a global SDL setting, so enabling it might have a side-effect on your application.
-    // It is unlikely to make a difference, but if your app absolutely needs to ignore the initial on-focus click:
-    // you can ignore SDL_MOUSEBUTTONDOWN events coming right after a SDL_WINDOWEVENT_FOCUS_GAINED)
+    
+    
+    
+    
+    
 #ifdef SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH
     SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
 #endif
 
-    // From 2.0.18: Enable native IME.
-    // IMPORTANT: This is used at the time of SDL_CreateWindow() so this will only affects secondary windows, if any.
-    // For the main window to be affected, your application needs to call this manually before calling SDL_CreateWindow().
+    
+    
+    
 #ifdef SDL_HINT_IME_SHOW_UI
     SDL_SetHint(SDL_HINT_IME_SHOW_UI, "1");
 #endif
 
-    // From 2.0.22: Disable auto-capture, this is preventing drag and drop across multiple windows (see #5710)
+    
 #ifdef SDL_HINT_MOUSE_AUTO_CAPTURE
     SDL_SetHint(SDL_HINT_MOUSE_AUTO_CAPTURE, "0");
 #endif
 
-    (void)sdl_gl_context; // Unused in 'master' branch.
+    (void)sdl_gl_context; 
     return true;
 }
 
@@ -594,22 +594,22 @@ static void ImGui_ImplSDL2_UpdateMouseData()
     ImGui_ImplSDL2_Data* bd = ImGui_ImplSDL2_GetBackendData();
     ImGuiIO& io = ImGui::GetIO();
 
-    // We forward mouse input when hovered or captured (via SDL_MOUSEMOTION) or when focused (below)
+    
 #if SDL_HAS_CAPTURE_AND_GLOBAL_MOUSE
-    // SDL_CaptureMouse() let the OS know e.g. that our imgui drag outside the SDL window boundaries shouldn't e.g. trigger other operations outside
+    
     SDL_CaptureMouse((bd->MouseButtonsDown != 0) ? SDL_TRUE : SDL_FALSE);
     SDL_Window* focused_window = SDL_GetKeyboardFocus();
     const bool is_app_focused = (bd->Window == focused_window);
 #else
-    const bool is_app_focused = (SDL_GetWindowFlags(bd->Window) & SDL_WINDOW_INPUT_FOCUS) != 0; // SDL 2.0.3 and non-windowed systems: single-viewport only
+    const bool is_app_focused = (SDL_GetWindowFlags(bd->Window) & SDL_WINDOW_INPUT_FOCUS) != 0; 
 #endif
     if (is_app_focused)
     {
-        // (Optional) Set OS mouse position from Dear ImGui if requested (rarely used, only when ImGuiConfigFlags_NavEnableSetMousePos is enabled by user)
+        
         if (io.WantSetMousePos)
             SDL_WarpMouseInWindow(bd->Window, (int)io.MousePos.x, (int)io.MousePos.y);
 
-        // (Optional) Fallback to provide mouse position when focused (SDL_MOUSEMOTION already provides this when hovered or captured)
+        
         if (bd->MouseCanUseGlobalState && bd->MouseButtonsDown == 0)
         {
             int window_x, window_y, mouse_x_global, mouse_y_global;
@@ -630,16 +630,16 @@ static void ImGui_ImplSDL2_UpdateMouseCursor()
     ImGuiMouseCursor imgui_cursor = ImGui::GetMouseCursor();
     if (io.MouseDrawCursor || imgui_cursor == ImGuiMouseCursor_None)
     {
-        // Hide OS mouse cursor if imgui is drawing it or if it wants no cursor
+        
         SDL_ShowCursor(SDL_FALSE);
     }
     else
     {
-        // Show OS mouse cursor
+        
         SDL_Cursor* expected_cursor = bd->MouseCursors[imgui_cursor] ? bd->MouseCursors[imgui_cursor] : bd->MouseCursors[ImGuiMouseCursor_Arrow];
         if (bd->MouseLastCursor != expected_cursor)
         {
-            SDL_SetCursor(expected_cursor); // SDL function doesn't have an early out (see #6113)
+            SDL_SetCursor(expected_cursor); 
             bd->MouseLastCursor = expected_cursor;
         }
         SDL_ShowCursor(SDL_TRUE);
@@ -699,7 +699,7 @@ static void ImGui_ImplSDL2_UpdateGamepads()
     ImGui_ImplSDL2_Data* bd = ImGui_ImplSDL2_GetBackendData();
     ImGuiIO& io = ImGui::GetIO();
 
-    // Update list of controller(s) to use
+    
     if (bd->WantUpdateGamepadsList && bd->GamepadMode != ImGui_ImplSDL2_GamepadMode_Manual)
     {
         ImGui_ImplSDL2_CloseGamepads();
@@ -715,7 +715,7 @@ static void ImGui_ImplSDL2_UpdateGamepads()
         bd->WantUpdateGamepadsList = false;
     }
 
-    // FIXME: Technically feeding gamepad shouldn't depend on this now that they are regular inputs.
+    
     if ((io.ConfigFlags & ImGuiConfigFlags_NavEnableGamepad) == 0)
         return;
     io.BackendFlags &= ~ImGuiBackendFlags_HasGamepad;
@@ -723,14 +723,14 @@ static void ImGui_ImplSDL2_UpdateGamepads()
         return;
     io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
 
-    // Update gamepad inputs
-    const int thumb_dead_zone = 8000; // SDL_gamecontroller.h suggests using this value.
+    
+    const int thumb_dead_zone = 8000; 
     ImGui_ImplSDL2_UpdateGamepadButton(bd, io, ImGuiKey_GamepadStart,       SDL_CONTROLLER_BUTTON_START);
     ImGui_ImplSDL2_UpdateGamepadButton(bd, io, ImGuiKey_GamepadBack,        SDL_CONTROLLER_BUTTON_BACK);
-    ImGui_ImplSDL2_UpdateGamepadButton(bd, io, ImGuiKey_GamepadFaceLeft,    SDL_CONTROLLER_BUTTON_X);              // Xbox X, PS Square
-    ImGui_ImplSDL2_UpdateGamepadButton(bd, io, ImGuiKey_GamepadFaceRight,   SDL_CONTROLLER_BUTTON_B);              // Xbox B, PS Circle
-    ImGui_ImplSDL2_UpdateGamepadButton(bd, io, ImGuiKey_GamepadFaceUp,      SDL_CONTROLLER_BUTTON_Y);              // Xbox Y, PS Triangle
-    ImGui_ImplSDL2_UpdateGamepadButton(bd, io, ImGuiKey_GamepadFaceDown,    SDL_CONTROLLER_BUTTON_A);              // Xbox A, PS Cross
+    ImGui_ImplSDL2_UpdateGamepadButton(bd, io, ImGuiKey_GamepadFaceLeft,    SDL_CONTROLLER_BUTTON_X);              
+    ImGui_ImplSDL2_UpdateGamepadButton(bd, io, ImGuiKey_GamepadFaceRight,   SDL_CONTROLLER_BUTTON_B);              
+    ImGui_ImplSDL2_UpdateGamepadButton(bd, io, ImGuiKey_GamepadFaceUp,      SDL_CONTROLLER_BUTTON_Y);              
+    ImGui_ImplSDL2_UpdateGamepadButton(bd, io, ImGuiKey_GamepadFaceDown,    SDL_CONTROLLER_BUTTON_A);              
     ImGui_ImplSDL2_UpdateGamepadButton(bd, io, ImGuiKey_GamepadDpadLeft,    SDL_CONTROLLER_BUTTON_DPAD_LEFT);
     ImGui_ImplSDL2_UpdateGamepadButton(bd, io, ImGuiKey_GamepadDpadRight,   SDL_CONTROLLER_BUTTON_DPAD_RIGHT);
     ImGui_ImplSDL2_UpdateGamepadButton(bd, io, ImGuiKey_GamepadDpadUp,      SDL_CONTROLLER_BUTTON_DPAD_UP);
@@ -757,7 +757,7 @@ void ImGui_ImplSDL2_NewFrame()
     IM_ASSERT(bd != nullptr && "Context or backend not initialized! Did you call ImGui_ImplSDL2_Init()?");
     ImGuiIO& io = ImGui::GetIO();
 
-    // Setup display size (every frame to accommodate for window resizing)
+    
     int w, h;
     int display_w, display_h;
     SDL_GetWindowSize(bd->Window, &w, &h);
@@ -775,8 +775,8 @@ void ImGui_ImplSDL2_NewFrame()
     if (w > 0 && h > 0)
         io.DisplayFramebufferScale = ImVec2((float)display_w / w, (float)display_h / h);
 
-    // Setup time step (we don't use SDL_GetTicks() because it is using millisecond resolution)
-    // (Accept SDL_GetPerformanceCounter() not returning a monotonically increasing value. Happens in VMs and Emscripten, see #6189, #6114, #3644)
+    
+    
     static Uint64 frequency = SDL_GetPerformanceFrequency();
     Uint64 current_time = SDL_GetPerformanceCounter();
     if (current_time <= bd->Time)
@@ -794,14 +794,15 @@ void ImGui_ImplSDL2_NewFrame()
     ImGui_ImplSDL2_UpdateMouseData();
     ImGui_ImplSDL2_UpdateMouseCursor();
 
-    // Update game controllers (if enabled and available)
+    
     ImGui_ImplSDL2_UpdateGamepads();
 }
 
-//-----------------------------------------------------------------------------
+
 
 #if defined(__clang__)
 #pragma clang diagnostic pop
 #endif
 
-#endif // #ifndef IMGUI_DISABLE
+#endif 
+

@@ -5,7 +5,7 @@
 #include "needaimbot.h"
 #include "detector.h"
 
-// Original CPU implementation kept for fallback
+
 void NMS(std::vector<Detection>& detections, float nmsThreshold)
 {
     if (detections.empty()) return;
@@ -46,12 +46,11 @@ void NMS(std::vector<Detection>& detections, float nmsThreshold)
             
             const cv::Rect& box_j = detections[j].box;
             
-            // 빠른 rejection 패턴 2: 경계 확인을 통한 중복 필터링 (Bounding Box 완전 분리 확인)
             if (box_i.x > box_j.x + box_j.width || 
                 box_j.x > box_i.x + box_i.width ||
                 box_i.y > box_j.y + box_j.height || 
                 box_j.y > box_i.y + box_i.height) {
-                continue; // 상자가 겹치지 않으면 건너뛰기
+                continue; 
             }
             
             const cv::Rect intersection = box_i & box_j;
@@ -71,7 +70,7 @@ void NMS(std::vector<Detection>& detections, float nmsThreshold)
     detections = std::move(result);
 }
 
-// --- New CPU Decoding Functions ---
+
 std::vector<Detection> decodeYolo10(
     const float* output,
     const std::vector<int64_t>& shape,
@@ -102,7 +101,7 @@ std::vector<Detection> decodeYolo10(
             int width = static_cast<int>((dx - cx) * img_scale);
             int height = static_cast<int>((dy - cy) * img_scale);
 
-            // Basic sanity check for box dimensions
+            
             if (width <= 0 || height <= 0) continue;
 
             cv::Rect box(x, y, width, height);
@@ -163,7 +162,7 @@ std::vector<Detection> decodeYolo11(
             const float half_ow = 0.5f * ow;
             const float half_oh = 0.5f * oh;
             
-            // Basic sanity check for box dimensions
+            
             if (ow <= 0 || oh <= 0) continue;
 
             cv::Rect box;
@@ -182,58 +181,3 @@ std::vector<Detection> decodeYolo11(
     }
     return detections;
 }
-
-// --- Original Combined Functions (Modified to use decode + NMS, or commented out) ---
-/* Original implementation commented out - NMS is now separate
-std::vector<Detection> postProcessYolo10(
-    const float* output,
-    const std::vector<int64_t>& shape,
-    int numClasses,
-    float confThreshold,
-    float nmsThreshold
-)
-{
-    std::vector<Detection> detections = decodeYolo10(output, shape, numClasses, confThreshold);
-
-    if (!detections.empty()) {
-        try {
-            // Use GPU NMS by default
-            NMSGpu(detections, nmsThreshold);
-        }
-        catch (const std::exception& e) {
-            // Fallback to CPU version if GPU fails
-            std::cerr << "[postProcess] GPU NMS failed, falling back to CPU: " << e.what() << std::endl;
-            NMS(detections, nmsThreshold);
-        }
-    }
-
-    return detections;
-}
-*/
-
-/* Original implementation commented out - NMS is now separate
-std::vector<Detection> postProcessYolo11(
-    const float* output,
-    const std::vector<int64_t>& shape,
-    int numClasses,
-    float confThreshold,
-    float nmsThreshold
-)
-{
-    std::vector<Detection> detections = decodeYolo11(output, shape, numClasses, confThreshold);
-
-    if (!detections.empty()) {
-        try {
-            // Use GPU NMS by default
-            NMSGpu(detections, nmsThreshold);
-        }
-        catch (const std::exception& e) {
-            // Fallback to CPU version if GPU fails
-            std::cerr << "[postProcess] GPU NMS failed, falling back to CPU: " << e.what() << std::endl;
-            NMS(detections, nmsThreshold);
-        }
-    }
-
-    return detections;
-}
-*/
