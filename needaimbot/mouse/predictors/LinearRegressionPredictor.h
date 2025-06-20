@@ -24,12 +24,19 @@ public:
 private:
     struct HistoryEntry {
         Point2D position;
-        std::chrono::steady_clock::time_point timestamp;
+        float t; // timestamp in seconds since epoch
     };
 
     int num_points_to_use_;
     float prediction_time_seconds_;
     std::deque<HistoryEntry> history_; 
+    // incremental sums for O(1) regression
+    float sum_t_;
+    float sum_t2_;
+    float sum_tx_;
+    float sum_ty_;
+    float sum_x_;
+    float sum_y_;
 };
 
 #endif 

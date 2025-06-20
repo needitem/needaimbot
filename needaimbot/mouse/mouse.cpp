@@ -206,7 +206,7 @@ void MouseThread::setPredictor(const std::string& algorithm_name) {
         predictor_ = std::move(predictor);
     } else if (algorithm_name == "Exponential Smoothing") {
         auto predictor = std::make_unique<ExponentialSmoothingPredictor>();
-        predictor->configure(config.es_alpha, config.velocity_prediction_ms); 
+        predictor->configure(config.es_alpha, config.es_beta, config.velocity_prediction_ms);
         predictor_ = std::move(predictor);
     } else if (algorithm_name == "Kalman Filter") {
         auto predictor = std::make_unique<KalmanFilterPredictor>();
