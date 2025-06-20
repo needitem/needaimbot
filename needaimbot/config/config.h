@@ -42,7 +42,6 @@ public:
     bool circle_mask;
     bool capture_borders;
     bool capture_cursor;
-    std::string virtual_camera_name;
     bool capture_use_cuda;
 
     int capture_timeout_ms = 5; 
@@ -103,10 +102,9 @@ public:
     std::string postprocess;
     bool export_enable_fp8;
     bool export_enable_fp16;
-    int onnx_input_resolution; 
+    int onnx_input_resolution;
 
     
-    bool use_pinned_memory;
     int cuda_device_id = 0;
 
     

@@ -55,7 +55,6 @@ bool Config::loadConfig(const std::string& filename)
         circle_mask = true;
         capture_borders = true;
         capture_cursor = true;
-        virtual_camera_name = "None";
         capture_use_cuda = true;
         capture_timeout_ms = 5; 
         target_fps = 120.0f; 
@@ -133,7 +132,6 @@ bool Config::loadConfig(const std::string& filename)
         onnx_input_resolution = 640;
 
         
-        use_pinned_memory = true;
         cuda_device_id = 0;
 
         
@@ -232,7 +230,6 @@ bool Config::loadConfig(const std::string& filename)
     circle_mask = get_bool_ini("Capture", "circle_mask", true);
     capture_borders = get_bool_ini("Capture", "capture_borders", true);
     capture_cursor = get_bool_ini("Capture", "capture_cursor", true);
-    virtual_camera_name = get_string_ini("Capture", "virtual_camera_name", "None");
     capture_use_cuda = get_bool_ini("Capture", "capture_use_cuda", true);
     capture_timeout_ms = get_long_ini("Capture", "capture_timeout_ms", 5);
     target_fps = (float)get_double_ini("Capture", "target_fps", 120.0);
@@ -294,7 +291,6 @@ bool Config::loadConfig(const std::string& filename)
     export_enable_fp16 = get_bool_ini("AI", "export_enable_fp16", true);
     onnx_input_resolution = get_long_ini("AI", "onnx_input_resolution", 640);
 
-    use_pinned_memory = get_bool_ini("CUDA", "use_pinned_memory", true);
     cuda_device_id = get_long_ini("CUDA", "cuda_device_id", 0);
 
     button_targeting = splitString(get_string_ini("Buttons", "button_targeting", "RightMouseButton"));
@@ -417,7 +413,6 @@ bool Config::saveConfig(const std::string& filename)
     file << "circle_mask = " << (circle_mask ? "true" : "false") << "\n";
     file << "capture_borders = " << (capture_borders ? "true" : "false") << "\n";
     file << "capture_cursor = " << (capture_cursor ? "true" : "false") << "\n";
-    file << "virtual_camera_name = " << virtual_camera_name << "\n";
     file << "capture_use_cuda = " << (capture_use_cuda ? "true" : "false") << "\n";
     file << "capture_timeout_ms = " << capture_timeout_ms << "\n";
     file << "target_fps = " << target_fps << "\n\n";
@@ -508,7 +503,6 @@ bool Config::saveConfig(const std::string& filename)
     file << "onnx_input_resolution = " << onnx_input_resolution << "\n\n";
 
     file << "[CUDA]\n";
-    file << "use_pinned_memory = " << (use_pinned_memory ? "true" : "false") << "\n";
     file << "cuda_device_id = " << cuda_device_id << "\n\n";
 
     file << "[Buttons]\n";
