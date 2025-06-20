@@ -8,23 +8,23 @@
 #include "imgui/imgui.h"
 #include "needaimbot.h"
 #include "include/other_tools.h"
-#include "overlay.h" // Include necessary header for key_names etc.
+#include "overlay.h" 
 
 std::string ghub_version = get_ghub_version();
 
-// Helper function to show a tooltip with word wrapping and prevention of screen cutoff
+
 void SetWrappedTooltip(const char* text) 
 {
     ImGui::BeginTooltip();
     
-    // Get window size and position
+    
     ImVec2 window_size = ImGui::GetIO().DisplaySize;
     ImVec2 mouse_pos = ImGui::GetMousePos();
     
-    // Calculate max width for tooltip (use 50% of screen width)
+    
     float max_width = window_size.x * 0.5f;
     
-    // Set text wrapping
+    
     ImGui::PushTextWrapPos(max_width);
     ImGui::TextUnformatted(text);
     ImGui::PopTextWrapPos();
@@ -34,16 +34,16 @@ void SetWrappedTooltip(const char* text)
 
 void draw_mouse()
 {
-    ImGui::Columns(2, "MouseSettingsColumns", false); // Start 2-column layout
+    ImGui::Columns(2, "MouseSettingsColumns", false); 
 
-    // No Separator needed here due to column layout
-    ImGui::Text("PID Controller Settings");
-    ImGui::Spacing(); // Add spacing before the first PID header
     
-    // X-axis PID Settings
+    ImGui::Text("PID Controller Settings");
+    ImGui::Spacing(); 
+    
+    
     if (ImGui::CollapsingHeader("Horizontal (X-axis) PID", ImGuiTreeNodeFlags_DefaultOpen))
     {
-        // Cast to float for ImGui input but preserve double precision
+        
         float kp_x_display = static_cast<float>(config.kp_x);
         if (ImGui::InputFloat("Proportional X (Kp)", &kp_x_display, 0.01f, 0.1f, "%.3f"))
         {
@@ -73,10 +73,10 @@ void draw_mouse()
         {
             SetWrappedTooltip("Predicts future horizontal error based on rate of change. Higher values add dampening to reduce overshooting.");
         }
-        ImGui::Spacing(); // Add spacing after the X-axis PID settings
+        ImGui::Spacing(); 
     }
     
-    // Y-axis PID Settings
+    
     if (ImGui::CollapsingHeader("Vertical (Y-axis) PID", ImGuiTreeNodeFlags_DefaultOpen))
     {
         float kp_y_display = static_cast<float>(config.kp_y);
@@ -108,14 +108,14 @@ void draw_mouse()
         {
             SetWrappedTooltip("Predicts future vertical error based on rate of change. Higher values add dampening to reduce overshooting.");
         }
-        ImGui::Spacing(); // Add spacing after the Y-axis PID settings
+        ImGui::Spacing(); 
     }
 
-    // --- Input Method Settings (Moved to Column 1) ---
-    ImGui::Spacing(); // Add spacing before Input Method settings header
+    
+    ImGui::Spacing(); 
     if (ImGui::CollapsingHeader("Input Method Settings", ImGuiTreeNodeFlags_DefaultOpen))
     {
-        // Add "RAZER" and potentially "KMBOX" if applicable
+        
         std::vector<std::string> input_methods = { "WIN32", "GHUB", "ARDUINO", "RAZER", "KMBOX" }; 
         std::vector<const char*> method_items;
         method_items.reserve(input_methods.size());
@@ -149,7 +149,7 @@ void draw_mouse()
                              "KMBOX: Uses kmBoxNet library (requires B box hardware).");
         }
 
-        // Display GHUB version if GHUB method is selected or potentially usable
+        
         if (config.input_method == "GHUB" || !ghub_version.empty())
         {
             ImGui::Text("GHUB Version: %s", ghub_version.c_str());
@@ -160,19 +160,19 @@ void draw_mouse()
             }
         }
 
-        // Optional: Add ARDUINO COM port selection if needed
+        
         if (config.input_method == "ARDUINO")
         {
             ImGui::Indent(10.0f);
             ImGui::SeparatorText("Arduino Settings");
 
-            // COM Port Input
-            char port_buffer[64]; // Buffer to hold the COM port string
+            
+            char port_buffer[64]; 
             strncpy_s(port_buffer, sizeof(port_buffer), config.arduino_port.c_str(), _TRUNCATE);
 
             ImGui::Text("COM Port:");
             ImGui::SameLine();
-            ImGui::PushItemWidth(100); // Adjust width as needed
+            ImGui::PushItemWidth(100); 
             if (ImGui::InputText("##ArduinoPort", port_buffer, sizeof(port_buffer)))
             {
                 config.arduino_port = port_buffer;
@@ -184,13 +184,13 @@ void draw_mouse()
                 SetWrappedTooltip("Enter the COM port your Arduino is connected to (e.g., COM3, /dev/ttyACM0).");
             }
 
-            // Baud Rate Input
+            
             ImGui::Text("Baud Rate:");
             ImGui::SameLine();
             ImGui::PushItemWidth(100);
-            if (ImGui::InputInt("##ArduinoBaud", &config.arduino_baudrate, 0)) // No step buttons
+            if (ImGui::InputInt("##ArduinoBaud", &config.arduino_baudrate, 0)) 
             {
-                // Add validation if necessary (e.g., ensure it's a standard rate)
+                
                 config.saveConfig();
             }
             ImGui::PopItemWidth();
@@ -199,7 +199,7 @@ void draw_mouse()
                 SetWrappedTooltip("Serial communication speed (e.g., 9600, 115200). Must match Arduino firmware.");
             }
 
-            // 16-bit Mouse Checkbox
+            
             if (ImGui::Checkbox("Use 16-bit Mouse Movement", &config.arduino_16_bit_mouse))
             {
                 config.saveConfig();
@@ -212,7 +212,7 @@ void draw_mouse()
             ImGui::Unindent(10.0f);
         }
 
-        // Kmbox Settings (assuming kmboxNet library is integrated elsewhere)
+        
         if (config.input_method == "KMBOX") 
         {
             ImGui::Indent(10.0f);
@@ -223,24 +223,24 @@ void draw_mouse()
             ImGui::Unindent(10.0f);
         }
 
-        ImGui::Spacing(); // Add spacing at the end
+        ImGui::Spacing(); 
     }
-    // --- End Input Method Settings ---
+    
 
-    // No Separator needed here
-    // ImGui::Text("Kalman Filter Settings"); // Text might be redundant if header is descriptive
-    ImGui::Spacing(); // Add spacing before the Kalman header
+    
+    
+    ImGui::Spacing(); 
 
-    // Group Kalman Filter Settings
+    
     if (ImGui::CollapsingHeader("Prediction & Scope"))
     {
         ImGui::Indent(10.0f);
 
-        // --- Prediction Algorithm Selection ---
+        
         ImGui::SeparatorText("Prediction Algorithm");
 
-        // TODO: Add std::string prediction_algorithm = "None"; to your config struct.
-        // Non-AI prediction methods + Kalman
+        
+        
         const char* prediction_algorithms[] = {
             "None",
             "Velocity Based",
@@ -249,15 +249,15 @@ void draw_mouse()
             "Kalman Filter"
         };
         int current_algorithm_index = 0;
-        // Map string config to index
+        
         std::string current_algo = config.prediction_algorithm;
         if (current_algo == "Velocity Based")          { current_algorithm_index = 1; }
         else if (current_algo == "Linear Regression")    { current_algorithm_index = 2; }
         else if (current_algo == "Exponential Smoothing"){ current_algorithm_index = 3; }
         else if (current_algo == "Kalman Filter")        { current_algorithm_index = 4; }
-        else { current_algorithm_index = 0; } // Default to None
+        else { current_algorithm_index = 0; } 
 
-        ImGui::PushItemWidth(150); // Adjust width as needed
+        ImGui::PushItemWidth(150); 
         if (ImGui::Combo("Algorithm", &current_algorithm_index, prediction_algorithms, IM_ARRAYSIZE(prediction_algorithms)))
         {
             config.prediction_algorithm = prediction_algorithms[current_algorithm_index];
@@ -275,15 +275,15 @@ void draw_mouse()
         }
         ImGui::Spacing();
 
-        // --- Algorithm Specific Settings ---
+        
         if (config.prediction_algorithm == "Velocity Based")
         {
-            // TODO: Add float velocity_prediction_ms = 16.0f; to your config struct.
+            
             ImGui::SeparatorText("Velocity Prediction Settings");
             ImGui::PushItemWidth(100);
             if (ImGui::InputFloat("Prediction Time (ms)", &config.velocity_prediction_ms, 1.0f, 5.0f, "%.1f"))
             {
-                config.velocity_prediction_ms = std::max(0.0f, config.velocity_prediction_ms); // Ensure non-negative
+                config.velocity_prediction_ms = std::max(0.0f, config.velocity_prediction_ms); 
                 config.saveConfig();
             }
             ImGui::PopItemWidth();
@@ -294,13 +294,13 @@ void draw_mouse()
         }
         else if (config.prediction_algorithm == "Linear Regression")
         {
-            // TODO: Add settings for Linear Regression if needed (e.g., number of past points)
+            
             ImGui::SeparatorText("Linear Regression Settings");
             ImGui::PushItemWidth(100);
             ImGui::Text("Past Points (N):"); ImGui::SameLine();
             if (ImGui::InputInt("##LRPastPoints", &config.lr_past_points, 1, 5))
             {
-                config.lr_past_points = std::max(2, config.lr_past_points); // Need at least 2 points for a line
+                config.lr_past_points = std::max(2, config.lr_past_points); 
                 config.saveConfig();
             }
             ImGui::PopItemWidth();
@@ -311,11 +311,11 @@ void draw_mouse()
         }
         else if (config.prediction_algorithm == "Exponential Smoothing")
         {
-            // TODO: Add settings for Exponential Smoothing if needed (e.g., alpha parameter)
+            
             ImGui::SeparatorText("Exponential Smoothing Settings");
             ImGui::PushItemWidth(100);
             ImGui::Text("Factor (Alpha):"); ImGui::SameLine();
-            // Using SliderFloat for easier adjustment between 0 and 1
+            
             if (ImGui::SliderFloat("##ESAlpha", &config.es_alpha, 0.01f, 1.0f, "%.2f"))
             {
                 config.saveConfig();
@@ -328,7 +328,7 @@ void draw_mouse()
         }
         else if (config.prediction_algorithm == "Kalman Filter")
         {
-            // TODO: Add float kalman_q = 0.1f;, kalman_r = 0.1f;, kalman_p = 0.1f; to your config struct.
+            
             ImGui::SeparatorText("Kalman Filter Settings");
 
             ImGui::PushItemWidth(100);
@@ -336,7 +336,7 @@ void draw_mouse()
             float temp_q = static_cast<float>(config.kalman_q);
             if (ImGui::InputFloat("##KalmanQ", &temp_q, 0.001f, 0.01f, "%.3f")) {
                 config.kalman_q = static_cast<double>(temp_q);
-                if (config.kalman_q < 0) config.kalman_q = 0; // Ensure non-negative
+                if (config.kalman_q < 0) config.kalman_q = 0; 
                 config.saveConfig();
             }
             if (ImGui::IsItemHovered()) SetWrappedTooltip("Represents the uncertainty in the target's movement model. Higher values trust measurements less.");
@@ -345,7 +345,7 @@ void draw_mouse()
             float temp_r = static_cast<float>(config.kalman_r);
             if (ImGui::InputFloat("##KalmanR", &temp_r, 0.001f, 0.01f, "%.3f")) {
                 config.kalman_r = static_cast<double>(temp_r);
-                if (config.kalman_r < 0) config.kalman_r = 0; // Ensure non-negative
+                if (config.kalman_r < 0) config.kalman_r = 0; 
                 config.saveConfig();
             }
             if (ImGui::IsItemHovered()) SetWrappedTooltip("Represents the uncertainty in the measurements (detection). Higher values trust the model prediction more.");
@@ -354,32 +354,32 @@ void draw_mouse()
             float temp_p = static_cast<float>(config.kalman_p);
             if (ImGui::InputFloat("##KalmanP", &temp_p, 0.001f, 0.01f, "%.3f")) {
                  config.kalman_p = static_cast<double>(temp_p);
-                if (config.kalman_p < 0) config.kalman_p = 0; // Ensure non-negative
+                if (config.kalman_p < 0) config.kalman_p = 0; 
                 config.saveConfig();
             }
             if (ImGui::IsItemHovered()) SetWrappedTooltip("Initial estimate of the state covariance. Represents the initial uncertainty about the target's state.");
             ImGui::PopItemWidth();
         }
 
-        ImGui::Unindent(10.0f); // Unindent the whole "Prediction & Scope" section content
-        ImGui::Spacing(); // Add spacing at the end of the group
+        ImGui::Unindent(10.0f); 
+        ImGui::Spacing(); 
     }
-    // --- Column 1 End ---
+    
 
-    ImGui::NextColumn(); // Move to the second column
+    ImGui::NextColumn(); 
 
-    // --- Column 2 Start ---
-    // No Separator needed here
-    ImGui::Spacing(); // Add spacing before the Recoil header
+    
+    
+    ImGui::Spacing(); 
 
-    // No Separator needed here
-    ImGui::Spacing(); // Add spacing before Aiming settings header
+    
+    ImGui::Spacing(); 
 
-    // Create a collapsible section for Aiming Settings
+    
     if (ImGui::CollapsingHeader("Aiming Settings", ImGuiTreeNodeFlags_DefaultOpen))
     {
-        // --- Auto Shoot Hotkey Settings (Keep this section) --- 
-        // TODO: Add `std::vector<std::string> button_auto_shoot = {"None"};` to your config struct.
+        
+        
         ImGui::SeparatorText("Auto Shoot Hotkeys");
 
         for (size_t i = 0; i < config.button_auto_shoot.size(); )
@@ -398,13 +398,13 @@ void draw_mouse()
 
             if (current_index == -1)
             {
-                current_index = 0; // Default to "None"
+                current_index = 0; 
             }
 
             std::string combo_label = "Auto Shoot Hotkey " + std::to_string(i);
 
-            ImGui::PushID(combo_label.c_str()); // Unique ID for Combo
-            ImGui::PushItemWidth(150); // Adjust width
+            ImGui::PushID(combo_label.c_str()); 
+            ImGui::PushItemWidth(150); 
             if (ImGui::Combo("", &current_index, key_names_cstrs.data(), static_cast<int>(key_names_cstrs.size())))
             {
                 current_key_name = key_names[current_index];
@@ -421,15 +421,15 @@ void draw_mouse()
                 {
                     config.button_auto_shoot[0] = std::string("None");
                     config.saveConfig();
-                    // Do not increment i
+                    
                 }
                 else
                 {
                     config.button_auto_shoot.erase(config.button_auto_shoot.begin() + i);
                     config.saveConfig();
-                    // Do not increment i
+                    
                 }
-                continue; // Skip incrementing i
+                continue; 
             }
 
             ++i;
@@ -440,11 +440,11 @@ void draw_mouse()
             config.button_auto_shoot.push_back("None");
             config.saveConfig();
         }
-        // --- End Auto Shoot Hotkey Settings ---
+        
 
-        // --- Scope Settings (Moved Here) ---
+        
         ImGui::SeparatorText("Scope Settings");
-        ImGui::PushItemWidth(150); // Make slider wider
+        ImGui::PushItemWidth(150); 
         if (ImGui::SliderFloat("Triggerbot Area Size", &config.bScope_multiplier, 0.1f, 2.0f, "%.2f")) { 
              config.saveConfig();
         }
@@ -453,10 +453,10 @@ void draw_mouse()
         {
             SetWrappedTooltip("Defines the central screen area size where Triggerbot activates.\nSmaller value = larger area, Larger value = smaller area.\n(1.0 = default area)");
         }
-        ImGui::Spacing(); // Add spacing after scope setting
-        // --- End Scope Settings ---
+        ImGui::Spacing(); 
+        
 
-        ImGui::SeparatorText("Targeting Buttons"); // Separator for clarity
+        ImGui::SeparatorText("Targeting Buttons"); 
 
         for (size_t i = 0; i < config.button_targeting.size(); )
         {
@@ -474,20 +474,20 @@ void draw_mouse()
 
             if (current_index == -1)
             {
-                current_index = 0; // Default to "None" if not found
+                current_index = 0; 
             }
 
             std::string combo_label = "Targeting Button " + std::to_string(i);
 
-            ImGui::PushID(combo_label.c_str()); // Push unique ID for Combo
-            ImGui::PushItemWidth(150); // Adjust width as needed
+            ImGui::PushID(combo_label.c_str()); 
+            ImGui::PushItemWidth(150); 
             if (ImGui::Combo("", &current_index, key_names_cstrs.data(), static_cast<int>(key_names_cstrs.size())))
             {
                 current_key_name = key_names[current_index];
                 config.saveConfig();
             }
             ImGui::PopItemWidth();
-            ImGui::PopID(); // Pop ID
+            ImGui::PopID(); 
 
             ImGui::SameLine();
             std::string remove_button_label = "Remove##targeting_" + std::to_string(i);
@@ -497,15 +497,15 @@ void draw_mouse()
                 {
                     config.button_targeting[0] = std::string("None");
                     config.saveConfig();
-                    // Do not increment i, loop continues with the modified vector
+                    
                 }
                 else
                 {
                     config.button_targeting.erase(config.button_targeting.begin() + i);
                     config.saveConfig();
-                    // Do not increment i, loop continues with the modified vector
+                    
                 }
-                continue; // Skip incrementing i
+                continue; 
             }
 
             ++i;
@@ -517,7 +517,7 @@ void draw_mouse()
             config.saveConfig();
         }
 
-        ImGui::SeparatorText("Disable Upward Aim"); // Separator for clarity
+        ImGui::SeparatorText("Disable Upward Aim"); 
 
         for (size_t i = 0; i < config.button_disable_upward_aim.size(); )
         {
@@ -540,15 +540,15 @@ void draw_mouse()
 
             std::string combo_label = "Disable Upward Button " + std::to_string(i);
 
-            ImGui::PushID(combo_label.c_str()); // Push unique ID for Combo
-            ImGui::PushItemWidth(150); // Adjust width as needed
+            ImGui::PushID(combo_label.c_str()); 
+            ImGui::PushItemWidth(150); 
             if (ImGui::Combo("", &current_index, key_names_cstrs.data(), static_cast<int>(key_names_cstrs.size())))
             {
                 current_key_name = key_names[current_index];
                 config.saveConfig();
             }
             ImGui::PopItemWidth();
-            ImGui::PopID(); // Pop ID
+            ImGui::PopID(); 
 
             ImGui::SameLine();
             std::string remove_button_label = "Remove##disable_upward_" + std::to_string(i);
@@ -558,15 +558,15 @@ void draw_mouse()
                 {
                     config.button_disable_upward_aim[0] = std::string("None");
                     config.saveConfig();
-                    // Do not increment i
+                    
                 }
                 else
                 {
                     config.button_disable_upward_aim.erase(config.button_disable_upward_aim.begin() + i);
                     config.saveConfig();
-                    // Do not increment i
+                    
                 }
-                continue; // Skip incrementing i
+                continue; 
             }
 
             ++i;
@@ -578,10 +578,10 @@ void draw_mouse()
             config.saveConfig();
         }
         
-        ImGui::Spacing(); // Add spacing after Aiming settings
+        ImGui::Spacing(); 
     }
 
-    // --- Silent Aim Hotkey Settings (New Section) ---
+    
     ImGui::SeparatorText("Silent Aim Hotkeys");
 
     for (size_t i = 0; i < config.button_silent_aim.size(); )
@@ -600,13 +600,13 @@ void draw_mouse()
 
         if (current_index == -1)
         {
-            current_index = 0; // Default to "None"
+            current_index = 0; 
         }
 
         std::string combo_label = "Silent Aim Hotkey " + std::to_string(i);
 
-        ImGui::PushID(combo_label.c_str()); // Unique ID for Combo
-        ImGui::PushItemWidth(150); // Adjust width
+        ImGui::PushID(combo_label.c_str()); 
+        ImGui::PushItemWidth(150); 
         if (ImGui::Combo("", &current_index, key_names_cstrs.data(), static_cast<int>(key_names_cstrs.size())))
         {
             current_key_name = key_names[current_index];
@@ -623,15 +623,15 @@ void draw_mouse()
             {
                 config.button_silent_aim[0] = std::string("None");
                 config.saveConfig();
-                // Do not increment i
+                
             }
             else
             {
                 config.button_silent_aim.erase(config.button_silent_aim.begin() + i);
                 config.saveConfig();
-                // Do not increment i
+                
             }
-            continue; // Skip incrementing i
+            continue; 
         }
 
         ++i;
@@ -642,19 +642,19 @@ void draw_mouse()
         config.button_silent_aim.push_back("None");
         config.saveConfig();
     }
-    // --- End Silent Aim Hotkey Settings ---
+    
 
-    // INPUT METHODS - REMOVED FROM HERE
-    // // No Separator needed here
-    // ImGui::Spacing(); // Add spacing before Input Method settings header
-    // if (ImGui::CollapsingHeader("Input Method Settings", ImGuiTreeNodeFlags_DefaultOpen))
-    // {
-    //    // ... (Content of Input Method Settings was here) ...
-    // }
-    // --- Column 2 End ---
+    
+    
+    
+    
+    
+    
+    
+    
 
-    ImGui::Columns(1); // End column layout and return to 1 column
+    ImGui::Columns(1); 
 
-    // Optionally add a separator at the very end if needed before other global UI elements
-    // ImGui::Separator();
+    
+    
 }

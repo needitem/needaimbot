@@ -57,4 +57,4 @@ private:
 
 };
 
-#endif // SERIALCONNECTION_H
+#endif 

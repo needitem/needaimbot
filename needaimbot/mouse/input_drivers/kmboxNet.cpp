@@ -1,4 +1,4 @@
-﻿#include "kmboxNet.h"
+#include "kmboxNet.h"
 #include "HidTable.h"
 #include "my_enc.h"
 #include <time.h>
@@ -7,28 +7,28 @@
 #include <ctype.h>
 #include <windows.h>
 
-// Global definitions
-SOCKET sockClientfd = 0;   // Defined here (declared extern in header)
-unsigned int xbox_mac = 0; // Global MAC value
 
-// Global transmission objects
+SOCKET sockClientfd = 0;   
+unsigned int xbox_mac = 0; 
+
+
 client_tx tx;
 client_tx rx;
 SOCKADDR_IN addrSrv;
 soft_mouse_t softmouse;
 soft_keyboard_t softkeyboard;
 
-// Mutex for thread synchronization
+
 static HANDLE m_hMutex_lock = NULL;
 
-// Additional static variables used in the implementation
-// (e.g., for monitor functions, encryption key, etc.)
+
+
 static short monitor_port = 0;
 static int monitor_run = 0;
 static int mask_keyboard_mouse_flag = 0;
 static unsigned char key[16] = { 0 };
 
-// Utility function: Convert a hexadecimal string to an unsigned int.
+
 unsigned int StrToHex(char* pbSrc, int nLen)
 {
     char h1, h2;
@@ -49,7 +49,7 @@ unsigned int StrToHex(char* pbSrc, int nLen)
     return (pbDest[0] << 24) | (pbDest[1] << 16) | (pbDest[2] << 8) | pbDest[3];
 }
 
-// Helper to release mutex and check response
+
 int NetRxReturnHandle(client_tx* rx, client_tx* tx)
 {
     int ret = 0;
@@ -61,9 +61,9 @@ int NetRxReturnHandle(client_tx* rx, client_tx* tx)
     return ret;
 }
 
-//-----------------------------------------
-// Initialization and Connection Functions
-//-----------------------------------------
+
+
+
 int kmNet_init(char* ip, char* port, char* mac)
 {
     WORD wVersionRequested = MAKEWORD(1, 1);
@@ -95,19 +95,19 @@ int kmNet_init(char* ip, char* port, char* mac)
     tx.head.rand = rand();
     tx.head.indexpts = 0;
     tx.head.cmd = cmd_connect;
-    // Send the connection command here…
-    // For example:
+    
+    
     sendto(sockClientfd, (const char*)&tx, sizeof(cmd_head_t), 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
-    Sleep(20); // Wait for the box to respond
+    Sleep(20); 
     SOCKADDR_IN sclient;
     int clen = sizeof(sclient);
     recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
     return NetRxReturnHandle(&rx, &tx);
 }
 
-//-----------------------------------------
-// Mouse Functions
-//-----------------------------------------
+
+
+
 int kmNet_mouse_move(short x, short y)
 {
     int err;
@@ -122,7 +122,7 @@ int kmNet_mouse_move(short x, short y)
     memcpy(&tx.cmd_mouse, &softmouse, sizeof(soft_mouse_t));
     int length = sizeof(cmd_head_t) + sizeof(soft_mouse_t);
     sendto(sockClientfd, (const char*)&tx, length, 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
-    // Clear temporary values
+    
     softmouse.x = 0;
     softmouse.y = 0;
     SOCKADDR_IN sclient;
@@ -200,13 +200,13 @@ int kmNet_enc_mouse_left(int isdown)
     return success;
 }
 
-// Similar implementations follow for mouse_middle, mouse_right, mouse_wheel,
-// mouse_side1, mouse_side2, mouse_all, mouse_move_auto, and mouse_move_beizer.
-// For brevity, these functions are implemented following the same pattern as above.
 
-//-----------------------------------------
-// Keyboard Functions
-//-----------------------------------------
+
+
+
+
+
+
 int kmNet_keydown(int vk_key)
 {
     int i, err;
@@ -236,7 +236,7 @@ int kmNet_keydown(int vk_key)
                 goto KM_down_send;
             }
         }
-        // If full, remove the oldest key and append
+        
         memmove(&softkeyboard.button[0], &softkeyboard.button[1], 9);
         softkeyboard.button[9] = vk_key;
     }
@@ -302,13 +302,13 @@ int kmNet_keypress(int vk_key, int ms)
     return success;
 }
 
-// Similarly, implement the encrypted versions for keydown, keyup, and keypress
-// (kmNet_enc_keydown, kmNet_enc_keyup, kmNet_enc_keypress)
-// using a similar pattern as above, adding encryption (via my_encrypt) as needed.
 
-//-----------------------------------------
-// Other Functions (Reboot, Monitor, Masking, Configuration, LCD, etc.)
-//-----------------------------------------
+
+
+
+
+
+
 int kmNet_reboot(void)
 {
     int err;
@@ -352,36 +352,37 @@ int kmNet_enc_reboot(void)
     return success;
 }
 
-// Stub implementations for monitor, masking, configuration, and LCD functions.
-// You should fill these in following the patterns above.
 
-int kmNet_monitor(short port) { /* ... */ return success; }
-int kmNet_monitor_mouse_left(void) { /* ... */ return 1; }
-int kmNet_monitor_mouse_middle(void) { /* ... */ return 1; }
-int kmNet_monitor_mouse_right(void) { /* ... */ return 1; }
-int kmNet_monitor_mouse_side1(void) { /* ... */ return 1; }
-int kmNet_monitor_mouse_side2(void) { /* ... */ return 1; }
-int kmNet_monitor_mouse_xy(int* x, int* y) { /* ... */ *x = 0; *y = 0; return 1; }
-int kmNet_monitor_mouse_wheel(int* wheel) { /* ... */ *wheel = 0; return 1; }
-int kmNet_monitor_keyboard(short vkey) { /* ... */ return 1; }
 
-int kmNet_mask_mouse_left(int enable) { /* ... */ return success; }
-int kmNet_mask_mouse_right(int enable) { /* ... */ return success; }
-int kmNet_mask_mouse_middle(int enable) { /* ... */ return success; }
-int kmNet_mask_mouse_side1(int enable) { /* ... */ return success; }
-int kmNet_mask_mouse_side2(int enable) { /* ... */ return success; }
-int kmNet_mask_mouse_x(int enable) { /* ... */ return success; }
-int kmNet_mask_mouse_y(int enable) { /* ... */ return success; }
-int kmNet_mask_mouse_wheel(int enable) { /* ... */ return success; }
-int kmNet_mask_keyboard(short vkey) { /* ... */ return success; }
-int kmNet_unmask_keyboard(short vkey) { /* ... */ return success; }
-int kmNet_unmask_all(void) { /* ... */ return success; }
 
-int kmNet_setconfig(char* ip, unsigned short port) { /* ... */ return success; }
-int kmNet_setvidpid(unsigned short vid, unsigned short pid) { /* ... */ return success; }
-int kmNet_debug(short port, char enable) { /* ... */ return success; }
-int kmNet_lcd_color(unsigned short rgb565) { /* ... */ return success; }
-int kmNet_lcd_picture_bottom(unsigned char* buff_128_80) { /* ... */ return success; }
-int kmNet_lcd_picture(unsigned char* buff_128_160) { /* ... */ return success; }
+int kmNet_monitor(short port) {  return success; }
+int kmNet_monitor_mouse_left(void) {  return 1; }
+int kmNet_monitor_mouse_middle(void) {  return 1; }
+int kmNet_monitor_mouse_right(void) {  return 1; }
+int kmNet_monitor_mouse_side1(void) {  return 1; }
+int kmNet_monitor_mouse_side2(void) {  return 1; }
+int kmNet_monitor_mouse_xy(int* x, int* y) {  *x = 0; *y = 0; return 1; }
+int kmNet_monitor_mouse_wheel(int* wheel) {  *wheel = 0; return 1; }
+int kmNet_monitor_keyboard(short vkey) {  return 1; }
 
-// End of file
+int kmNet_mask_mouse_left(int enable) {  return success; }
+int kmNet_mask_mouse_right(int enable) {  return success; }
+int kmNet_mask_mouse_middle(int enable) {  return success; }
+int kmNet_mask_mouse_side1(int enable) {  return success; }
+int kmNet_mask_mouse_side2(int enable) {  return success; }
+int kmNet_mask_mouse_x(int enable) {  return success; }
+int kmNet_mask_mouse_y(int enable) {  return success; }
+int kmNet_mask_mouse_wheel(int enable) {  return success; }
+int kmNet_mask_keyboard(short vkey) {  return success; }
+int kmNet_unmask_keyboard(short vkey) {  return success; }
+int kmNet_unmask_all(void) {  return success; }
+
+int kmNet_setconfig(char* ip, unsigned short port) {  return success; }
+int kmNet_setvidpid(unsigned short vid, unsigned short pid) {  return success; }
+int kmNet_debug(short port, char enable) {  return success; }
+int kmNet_lcd_color(unsigned short rgb565) {  return success; }
+int kmNet_lcd_picture_bottom(unsigned char* buff_128_80) {  return success; }
+int kmNet_lcd_picture(unsigned char* buff_128_160) {  return success; }
+
+
+

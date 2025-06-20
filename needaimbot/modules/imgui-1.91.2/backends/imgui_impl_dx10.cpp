@@ -1,51 +1,51 @@
-// dear imgui: Renderer Backend for DirectX10
-// This needs to be used along with a Platform Backend (e.g. Win32)
 
-// Implemented features:
-//  [X] Renderer: User texture binding. Use 'ID3D10ShaderResourceView*' as ImTextureID. Read the FAQ about ImTextureID!
-//  [X] Renderer: Large meshes support (64k+ vertices) with 16-bit indices.
 
-// You can use unmodified imgui_impl_* files in your project. See examples/ folder for examples of using this.
-// Prefer including the entire imgui/ repository into your project (either as a copy or as a submodule), and only build the backends you need.
-// Learn about Dear ImGui:
-// - FAQ                  https://dearimgui.com/faq
-// - Getting Started      https://dearimgui.com/getting-started
-// - Documentation        https://dearimgui.com/docs (same as your local docs/ folder).
-// - Introduction, links and more at the top of imgui.cpp
 
-// CHANGELOG
-// (minor and older changes stripped away, please see git history for details)
-//  2022-10-11: Using 'nullptr' instead of 'NULL' as per our switch to C++11.
-//  2021-06-29: Reorganized backend to pull data from a single structure to facilitate usage with multiple-contexts (all g_XXXX access changed to bd->XXXX).
-//  2021-05-19: DirectX10: Replaced direct access to ImDrawCmd::TextureId with a call to ImDrawCmd::GetTexID(). (will become a requirement)
-//  2021-02-18: DirectX10: Change blending equation to preserve alpha in output buffer.
-//  2019-07-21: DirectX10: Backup, clear and restore Geometry Shader is any is bound when calling ImGui_ImplDX10_RenderDrawData().
-//  2019-05-29: DirectX10: Added support for large mesh (64K+ vertices), enable ImGuiBackendFlags_RendererHasVtxOffset flag.
-//  2019-04-30: DirectX10: Added support for special ImDrawCallback_ResetRenderState callback to reset render state.
-//  2018-12-03: Misc: Added #pragma comment statement to automatically link with d3dcompiler.lib when using D3DCompile().
-//  2018-11-30: Misc: Setting up io.BackendRendererName so it can be displayed in the About Window.
-//  2018-07-13: DirectX10: Fixed unreleased resources in Init and Shutdown functions.
-//  2018-06-08: Misc: Extracted imgui_impl_dx10.cpp/.h away from the old combined DX10+Win32 example.
-//  2018-06-08: DirectX10: Use draw_data->DisplayPos and draw_data->DisplaySize to setup projection matrix and clipping rectangle.
-//  2018-04-09: Misc: Fixed erroneous call to io.Fonts->ClearInputData() + ClearTexData() that was left in DX10 example but removed in 1.47 (Nov 2015) on other backends.
-//  2018-02-16: Misc: Obsoleted the io.RenderDrawListsFn callback and exposed ImGui_ImplDX10_RenderDrawData() in the .h file so you can call it yourself.
-//  2018-02-06: Misc: Removed call to ImGui::Shutdown() which is not available from 1.60 WIP, user needs to call CreateContext/DestroyContext themselves.
-//  2016-05-07: DirectX10: Disabling depth-write.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 #include "imgui.h"
 #ifndef IMGUI_DISABLE
 #include "imgui_impl_dx10.h"
 
-// DirectX
+
 #include <stdio.h>
 #include <d3d10_1.h>
 #include <d3d10.h>
 #include <d3dcompiler.h>
 #ifdef _MSC_VER
-#pragma comment(lib, "d3dcompiler") // Automatically link with d3dcompiler.lib as we are using D3DCompile() below.
+#pragma comment(lib, "d3dcompiler") 
 #endif
 
-// DirectX data
+
 struct ImGui_ImplDX10_Data
 {
     ID3D10Device*               pd3dDevice;
@@ -72,19 +72,19 @@ struct VERTEX_CONSTANT_BUFFER_DX10
     float   mvp[4][4];
 };
 
-// Backend data stored in io.BackendRendererUserData to allow support for multiple Dear ImGui contexts
-// It is STRONGLY preferred that you use docking branch with multi-viewports (== single Dear ImGui context + multiple windows) instead of multiple Dear ImGui contexts.
+
+
 static ImGui_ImplDX10_Data* ImGui_ImplDX10_GetBackendData()
 {
     return ImGui::GetCurrentContext() ? (ImGui_ImplDX10_Data*)ImGui::GetIO().BackendRendererUserData : nullptr;
 }
 
-// Functions
+
 static void ImGui_ImplDX10_SetupRenderState(ImDrawData* draw_data, ID3D10Device* ctx)
 {
     ImGui_ImplDX10_Data* bd = ImGui_ImplDX10_GetBackendData();
 
-    // Setup viewport
+    
     D3D10_VIEWPORT vp;
     memset(&vp, 0, sizeof(D3D10_VIEWPORT));
     vp.Width = (UINT)draw_data->DisplaySize.x;
@@ -94,7 +94,7 @@ static void ImGui_ImplDX10_SetupRenderState(ImDrawData* draw_data, ID3D10Device*
     vp.TopLeftX = vp.TopLeftY = 0;
     ctx->RSSetViewports(1, &vp);
 
-    // Bind shader and vertex buffers
+    
     unsigned int stride = sizeof(ImDrawVert);
     unsigned int offset = 0;
     ctx->IASetInputLayout(bd->pInputLayout);
@@ -107,24 +107,24 @@ static void ImGui_ImplDX10_SetupRenderState(ImDrawData* draw_data, ID3D10Device*
     ctx->PSSetSamplers(0, 1, &bd->pFontSampler);
     ctx->GSSetShader(nullptr);
 
-    // Setup render state
+    
     const float blend_factor[4] = { 0.f, 0.f, 0.f, 0.f };
     ctx->OMSetBlendState(bd->pBlendState, blend_factor, 0xffffffff);
     ctx->OMSetDepthStencilState(bd->pDepthStencilState, 0);
     ctx->RSSetState(bd->pRasterizerState);
 }
 
-// Render function
+
 void ImGui_ImplDX10_RenderDrawData(ImDrawData* draw_data)
 {
-    // Avoid rendering when minimized
+    
     if (draw_data->DisplaySize.x <= 0.0f || draw_data->DisplaySize.y <= 0.0f)
         return;
 
     ImGui_ImplDX10_Data* bd = ImGui_ImplDX10_GetBackendData();
     ID3D10Device* ctx = bd->pd3dDevice;
 
-    // Create and grow vertex/index buffers if needed
+    
     if (!bd->pVB || bd->VertexBufferSize < draw_data->TotalVtxCount)
     {
         if (bd->pVB) { bd->pVB->Release(); bd->pVB = nullptr; }
@@ -154,7 +154,7 @@ void ImGui_ImplDX10_RenderDrawData(ImDrawData* draw_data)
             return;
     }
 
-    // Copy and convert all vertices into a single contiguous buffer
+    
     ImDrawVert* vtx_dst = nullptr;
     ImDrawIdx* idx_dst = nullptr;
     bd->pVB->Map(D3D10_MAP_WRITE_DISCARD, 0, (void**)&vtx_dst);
@@ -170,8 +170,8 @@ void ImGui_ImplDX10_RenderDrawData(ImDrawData* draw_data)
     bd->pVB->Unmap();
     bd->pIB->Unmap();
 
-    // Setup orthographic projection matrix into our constant buffer
-    // Our visible imgui space lies from draw_data->DisplayPos (top left) to draw_data->DisplayPos+data_data->DisplaySize (bottom right). DisplayPos is (0,0) for single viewport apps.
+    
+    
     {
         void* mapped_resource;
         if (bd->pVertexConstantBuffer->Map(D3D10_MAP_WRITE_DISCARD, 0, &mapped_resource) != S_OK)
@@ -192,7 +192,7 @@ void ImGui_ImplDX10_RenderDrawData(ImDrawData* draw_data)
         bd->pVertexConstantBuffer->Unmap();
     }
 
-    // Backup DX state that will be modified to restore it afterwards (unfortunately this is very ugly looking and verbose. Close your eyes!)
+    
     struct BACKUP_DX10_STATE
     {
         UINT                        ScissorRectsCount, ViewportsCount;
@@ -233,11 +233,11 @@ void ImGui_ImplDX10_RenderDrawData(ImDrawData* draw_data)
     ctx->IAGetVertexBuffers(0, 1, &old.VertexBuffer, &old.VertexBufferStride, &old.VertexBufferOffset);
     ctx->IAGetInputLayout(&old.InputLayout);
 
-    // Setup desired DX state
+    
     ImGui_ImplDX10_SetupRenderState(draw_data, ctx);
 
-    // Render command lists
-    // (Because we merged all buffers into a single one, we maintain our own offset into them)
+    
+    
     int global_vtx_offset = 0;
     int global_idx_offset = 0;
     ImVec2 clip_off = draw_data->DisplayPos;
@@ -249,8 +249,8 @@ void ImGui_ImplDX10_RenderDrawData(ImDrawData* draw_data)
             const ImDrawCmd* pcmd = &cmd_list->CmdBuffer[cmd_i];
             if (pcmd->UserCallback)
             {
-                // User callback, registered via ImDrawList::AddCallback()
-                // (ImDrawCallback_ResetRenderState is a special callback value used by the user to request the renderer to reset render state.)
+                
+                
                 if (pcmd->UserCallback == ImDrawCallback_ResetRenderState)
                     ImGui_ImplDX10_SetupRenderState(draw_data, ctx);
                 else
@@ -258,17 +258,17 @@ void ImGui_ImplDX10_RenderDrawData(ImDrawData* draw_data)
             }
             else
             {
-                // Project scissor/clipping rectangles into framebuffer space
+                
                 ImVec2 clip_min(pcmd->ClipRect.x - clip_off.x, pcmd->ClipRect.y - clip_off.y);
                 ImVec2 clip_max(pcmd->ClipRect.z - clip_off.x, pcmd->ClipRect.w - clip_off.y);
                 if (clip_max.x <= clip_min.x || clip_max.y <= clip_min.y)
                     continue;
 
-                // Apply scissor/clipping rectangle
+                
                 const D3D10_RECT r = { (LONG)clip_min.x, (LONG)clip_min.y, (LONG)clip_max.x, (LONG)clip_max.y };
                 ctx->RSSetScissorRects(1, &r);
 
-                // Bind texture, Draw
+                
                 ID3D10ShaderResourceView* texture_srv = (ID3D10ShaderResourceView*)pcmd->GetTexID();
                 ctx->PSSetShaderResources(0, 1, &texture_srv);
                 ctx->DrawIndexed(pcmd->ElemCount, pcmd->IdxOffset + global_idx_offset, pcmd->VtxOffset + global_vtx_offset);
@@ -278,7 +278,7 @@ void ImGui_ImplDX10_RenderDrawData(ImDrawData* draw_data)
         global_vtx_offset += cmd_list->VtxBuffer.Size;
     }
 
-    // Restore modified DX state
+    
     ctx->RSSetScissorRects(old.ScissorRectsCount, old.ScissorRects);
     ctx->RSSetViewports(old.ViewportsCount, old.Viewports);
     ctx->RSSetState(old.RS); if (old.RS) old.RS->Release();
@@ -298,14 +298,14 @@ void ImGui_ImplDX10_RenderDrawData(ImDrawData* draw_data)
 
 static void ImGui_ImplDX10_CreateFontsTexture()
 {
-    // Build texture atlas
+    
     ImGui_ImplDX10_Data* bd = ImGui_ImplDX10_GetBackendData();
     ImGuiIO& io = ImGui::GetIO();
     unsigned char* pixels;
     int width, height;
     io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
 
-    // Upload texture to graphics system
+    
     {
         D3D10_TEXTURE2D_DESC desc;
         ZeroMemory(&desc, sizeof(desc));
@@ -327,7 +327,7 @@ static void ImGui_ImplDX10_CreateFontsTexture()
         bd->pd3dDevice->CreateTexture2D(&desc, &subResource, &pTexture);
         IM_ASSERT(pTexture != nullptr);
 
-        // Create texture view
+        
         D3D10_SHADER_RESOURCE_VIEW_DESC srv_desc;
         ZeroMemory(&srv_desc, sizeof(srv_desc));
         srv_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -338,11 +338,11 @@ static void ImGui_ImplDX10_CreateFontsTexture()
         pTexture->Release();
     }
 
-    // Store our identifier
+    
     io.Fonts->SetTexID((ImTextureID)bd->pFontTextureView);
 
-    // Create texture sampler
-    // (Bilinear sampling is required by default. Set 'io.Fonts->Flags |= ImFontAtlasFlags_NoBakedLines' or 'style.AntiAliasedLinesUseTex = false' to allow point/nearest sampling)
+    
+    
     {
         D3D10_SAMPLER_DESC desc;
         ZeroMemory(&desc, sizeof(desc));
@@ -366,13 +366,13 @@ bool    ImGui_ImplDX10_CreateDeviceObjects()
     if (bd->pFontSampler)
         ImGui_ImplDX10_InvalidateDeviceObjects();
 
-    // By using D3DCompile() from <d3dcompiler.h> / d3dcompiler.lib, we introduce a dependency to a given version of d3dcompiler_XX.dll (see D3DCOMPILER_DLL_A)
-    // If you would like to use this DX10 sample code but remove this dependency you can:
-    //  1) compile once, save the compiled shader blobs into a file or source code and pass them to CreateVertexShader()/CreatePixelShader() [preferred solution]
-    //  2) use code to detect any version of the DLL and grab a pointer to D3DCompile from the DLL.
-    // See https://github.com/ocornut/imgui/pull/638 for sources and details.
+    
+    
+    
+    
+    
 
-    // Create the vertex shader
+    
     {
         static const char* vertexShader =
             "cbuffer vertexBuffer : register(b0) \
@@ -404,14 +404,14 @@ bool    ImGui_ImplDX10_CreateDeviceObjects()
 
         ID3DBlob* vertexShaderBlob;
         if (FAILED(D3DCompile(vertexShader, strlen(vertexShader), nullptr, nullptr, nullptr, "main", "vs_4_0", 0, 0, &vertexShaderBlob, nullptr)))
-            return false; // NB: Pass ID3DBlob* pErrorBlob to D3DCompile() to get error showing in (const char*)pErrorBlob->GetBufferPointer(). Make sure to Release() the blob!
+            return false; 
         if (bd->pd3dDevice->CreateVertexShader(vertexShaderBlob->GetBufferPointer(), vertexShaderBlob->GetBufferSize(), &bd->pVertexShader) != S_OK)
         {
             vertexShaderBlob->Release();
             return false;
         }
 
-        // Create the input layout
+        
         D3D10_INPUT_ELEMENT_DESC local_layout[] =
         {
             { "POSITION", 0, DXGI_FORMAT_R32G32_FLOAT,   0, (UINT)offsetof(ImDrawVert, pos), D3D10_INPUT_PER_VERTEX_DATA, 0 },
@@ -425,7 +425,7 @@ bool    ImGui_ImplDX10_CreateDeviceObjects()
         }
         vertexShaderBlob->Release();
 
-        // Create the constant buffer
+        
         {
             D3D10_BUFFER_DESC desc;
             desc.ByteWidth = sizeof(VERTEX_CONSTANT_BUFFER_DX10);
@@ -437,7 +437,7 @@ bool    ImGui_ImplDX10_CreateDeviceObjects()
         }
     }
 
-    // Create the pixel shader
+    
     {
         static const char* pixelShader =
             "struct PS_INPUT\
@@ -457,7 +457,7 @@ bool    ImGui_ImplDX10_CreateDeviceObjects()
 
         ID3DBlob* pixelShaderBlob;
         if (FAILED(D3DCompile(pixelShader, strlen(pixelShader), nullptr, nullptr, nullptr, "main", "ps_4_0", 0, 0, &pixelShaderBlob, nullptr)))
-            return false; // NB: Pass ID3DBlob* pErrorBlob to D3DCompile() to get error showing in (const char*)pErrorBlob->GetBufferPointer(). Make sure to Release() the blob!
+            return false; 
         if (bd->pd3dDevice->CreatePixelShader(pixelShaderBlob->GetBufferPointer(), pixelShaderBlob->GetBufferSize(), &bd->pPixelShader) != S_OK)
         {
             pixelShaderBlob->Release();
@@ -466,7 +466,7 @@ bool    ImGui_ImplDX10_CreateDeviceObjects()
         pixelShaderBlob->Release();
     }
 
-    // Create the blending setup
+    
     {
         D3D10_BLEND_DESC desc;
         ZeroMemory(&desc, sizeof(desc));
@@ -482,7 +482,7 @@ bool    ImGui_ImplDX10_CreateDeviceObjects()
         bd->pd3dDevice->CreateBlendState(&desc, &bd->pBlendState);
     }
 
-    // Create the rasterizer state
+    
     {
         D3D10_RASTERIZER_DESC desc;
         ZeroMemory(&desc, sizeof(desc));
@@ -493,7 +493,7 @@ bool    ImGui_ImplDX10_CreateDeviceObjects()
         bd->pd3dDevice->CreateRasterizerState(&desc, &bd->pRasterizerState);
     }
 
-    // Create depth-stencil State
+    
     {
         D3D10_DEPTH_STENCIL_DESC desc;
         ZeroMemory(&desc, sizeof(desc));
@@ -519,7 +519,7 @@ void    ImGui_ImplDX10_InvalidateDeviceObjects()
         return;
 
     if (bd->pFontSampler)           { bd->pFontSampler->Release(); bd->pFontSampler = nullptr; }
-    if (bd->pFontTextureView)       { bd->pFontTextureView->Release(); bd->pFontTextureView = nullptr; ImGui::GetIO().Fonts->SetTexID(0); } // We copied bd->pFontTextureView to io.Fonts->TexID so let's clear that as well.
+    if (bd->pFontTextureView)       { bd->pFontTextureView->Release(); bd->pFontTextureView = nullptr; ImGui::GetIO().Fonts->SetTexID(0); } 
     if (bd->pIB)                    { bd->pIB->Release(); bd->pIB = nullptr; }
     if (bd->pVB)                    { bd->pVB->Release(); bd->pVB = nullptr; }
     if (bd->pBlendState)            { bd->pBlendState->Release(); bd->pBlendState = nullptr; }
@@ -537,13 +537,13 @@ bool    ImGui_ImplDX10_Init(ID3D10Device* device)
     IMGUI_CHECKVERSION();
     IM_ASSERT(io.BackendRendererUserData == nullptr && "Already initialized a renderer backend!");
 
-    // Setup backend capabilities flags
+    
     ImGui_ImplDX10_Data* bd = IM_NEW(ImGui_ImplDX10_Data)();
     io.BackendRendererUserData = (void*)bd;
     io.BackendRendererName = "imgui_impl_dx10";
-    io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;  // We can honor the ImDrawCmd::VtxOffset field, allowing for large meshes.
+    io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;  
 
-    // Get factory from device
+    
     IDXGIDevice* pDXGIDevice = nullptr;
     IDXGIAdapter* pDXGIAdapter = nullptr;
     IDXGIFactory* pFactory = nullptr;
@@ -585,6 +585,7 @@ void ImGui_ImplDX10_NewFrame()
         ImGui_ImplDX10_CreateDeviceObjects();
 }
 
-//-----------------------------------------------------------------------------
 
-#endif // #ifndef IMGUI_DISABLE
+
+#endif 
+

@@ -22,15 +22,15 @@
 #include "input_drivers/rzctl.h"
 #include "input_drivers/InputMethod.h"
 
-// Forward declare PIDController2D
+
 class PIDController2D;
 
-// Forward declarations
+
 class InputMethod;
 class SerialConnection;
 class GhubMouse;
-class IPredictor; // Forward declare the interface
-struct Point2D; // Forward declare Point2D
+class IPredictor; 
+struct Point2D; 
 
 using ErrorTrackingCallback = std::function<void(float error_x, float error_y)>;
 
@@ -42,7 +42,7 @@ private:
     std::mutex input_method_mutex;
     mutable std::mutex member_data_mutex_;
 
-    // Performance tracking callback
+    
     ErrorTrackingCallback error_callback;
     std::mutex callback_mutex;
     bool tracking_errors;
@@ -52,21 +52,21 @@ private:
     float center_x;
     float center_y;
     float bScope_multiplier;
-    float move_scale_x; // Pre-calculated scaling factor for X movement
-    float move_scale_y; // Pre-calculated scaling factor for Y movement
-    float norecoil_ms; // Store recoil delay
-    std::chrono::milliseconds silent_aim_click_duration_ms; // Added for silent aim
+    float move_scale_x; 
+    float move_scale_y; 
+    float norecoil_ms; 
+    std::chrono::milliseconds silent_aim_click_duration_ms; 
 
     std::chrono::steady_clock::time_point last_target_time;
-    std::chrono::steady_clock::time_point last_recoil_compensation_time; // Track last recoil time
+    std::chrono::steady_clock::time_point last_recoil_compensation_time; 
     std::atomic<bool> target_detected{false};
     std::atomic<bool> mouse_pressed{false};
 
-    // Predictor
-    std::unique_ptr<IPredictor> predictor_; // Pointer to the current predictor
-    mutable std::mutex predictor_mutex_;        // Mutex to protect predictor access/changes
+    
+    std::unique_ptr<IPredictor> predictor_; 
+    mutable std::mutex predictor_mutex_;        
 
-    int last_applied_dx_ = 0; // Added: Stores the last applied mouse dx
+    int last_applied_dx_ = 0; 
 
     float calculateTargetDistanceSquared(const AimbotTarget &target) const;
     void initializeInputMethod(SerialConnection *serialConnection, GhubMouse *gHub);
@@ -99,17 +99,17 @@ public:
     void disableErrorTracking();
 
     void setInputMethod(std::unique_ptr<InputMethod> new_method);
-    void setPredictor(const std::string& algorithm_name); // Method to set the predictor
-    void resetPredictor(); // Method to reset the current predictor state
-    bool hasActivePredictor() const; // Method to check if a predictor is active
-    void executeSilentAim(const AimbotTarget& target); // Added for silent aim
+    void setPredictor(const std::string& algorithm_name); 
+    void resetPredictor(); 
+    bool hasActivePredictor() const; 
+    void executeSilentAim(const AimbotTarget& target); 
     
     float getScreenWidth() { std::lock_guard<std::mutex> lock(member_data_mutex_); return screen_width; }
     float getScreenHeight() { std::lock_guard<std::mutex> lock(member_data_mutex_); return screen_height; }
     float getScopeMultiplier() { std::lock_guard<std::mutex> lock(member_data_mutex_); return bScope_multiplier; }
     
-    // 타겟 감지 상태를 가져오는 메소드 추가
+    
     bool isTargetDetected() const { return target_detected.load(); }
 };
 
-#endif // MOUSE_H
+#endif 

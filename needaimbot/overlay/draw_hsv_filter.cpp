@@ -4,10 +4,10 @@
 #include <imgui.h>
 #include "imgui/imgui_internal.h"
 
-#include "config.h" // Access to global config object
+#include "config.h" 
 #include "needaimbot.h"
 
-// Helper function from ImGui demo to show tooltips
+
 void HelpMarker(const char* desc)
 {
     ImGui::TextDisabled("(?)");
@@ -21,9 +21,9 @@ void HelpMarker(const char* desc)
     }
 } 
 
-// Ensure this extern declaration matches the one in config.h/config.cpp
-// extern Config config; // Already available via include "config.h" if setup correctly
-// extern std::atomic<bool> hsv_filter_settings_changed; // Already available via "needaimbot.h"
+
+
+
 
 void draw_hsv_filter_settings()
 {
@@ -32,15 +32,15 @@ void draw_hsv_filter_settings()
 
     bool changed = false;
 
-    // Enable toggle
+    
     changed |= ImGui::Checkbox("Enable HSV Filter", &config.enable_hsv_filter);
     if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Enable or disable HSV color filtering."); }
     ImGui::Spacing();
 
-    // Disable following controls when filter is off
+    
     ImGui::BeginDisabled(!config.enable_hsv_filter);
 
-    // Lower bounds
+    
     ImGui::Text("Lower HSV Bounds:");
     changed |= ImGui::SliderInt("Lower H ##hsv", &config.hsv_lower_h, 0, 179);
     ImGui::SameLine(); HelpMarker("Hue (0-179)");
@@ -50,7 +50,7 @@ void draw_hsv_filter_settings()
     ImGui::SameLine(); HelpMarker("Value (0-255)");
 
     ImGui::Spacing();
-    // Upper bounds
+    
     ImGui::Text("Upper HSV Bounds:");
     changed |= ImGui::SliderInt("Upper H ##hsv", &config.hsv_upper_h, 0, 179);
     ImGui::SameLine(); HelpMarker("Hue (0-179)");
@@ -60,21 +60,21 @@ void draw_hsv_filter_settings()
     ImGui::SameLine(); HelpMarker("Value (0-255)");
 
     ImGui::Spacing();
-    // Minimum pixels
+    
     changed |= ImGui::SliderInt("Min Pixels ##hsv", &config.min_hsv_pixels, 1, 1000);
     if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Minimum number of pixels within the bounding box that must match the HSV range."); }
 
-    // Filter mode: keep matching or remove matching
+    
     changed |= ImGui::Checkbox("Remove boxes matching HSV filter", &config.remove_hsv_matches);
     if (ImGui::IsItemHovered()) { ImGui::SetTooltip("By default, boxes with min_hsv_pixels matching HSV are kept; enable to remove them instead."); }
 
     ImGui::Spacing();
-    // Warning if bounds are invalid
+    
     if (config.hsv_lower_h > config.hsv_upper_h || config.hsv_lower_s > config.hsv_upper_s || config.hsv_lower_v > config.hsv_upper_v) {
         ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Warning: Lower bound is greater than upper bound for one or more HSV components.");
     }
 
-    // Color preview swatches
+    
     ImGui::Spacing();
     ImGui::Text("Preview Colors:");
     float lh = config.hsv_lower_h / 179.0f;

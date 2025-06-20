@@ -1,4 +1,4 @@
-﻿#define WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
 #define _WINSOCKAPI_
 #include <winsock2.h>
 #include <Windows.h>
@@ -99,7 +99,7 @@ nvinfer1::ICudaEngine* buildEngineFromOnnx(const std::string& onnxFile, nvinfer1
 
     nvinfer1::IBuilderConfig* cfg = builder->createBuilderConfig();
 
-    // --- Timing Cache Load ---
+    
     const char* cachePath = "tensorrt_timing_cache.bin";
     std::ifstream cacheFileRead(cachePath, std::ios::binary);
     std::vector<char> cacheData;
@@ -116,14 +116,14 @@ nvinfer1::ICudaEngine* buildEngineFromOnnx(const std::string& onnxFile, nvinfer1
     if (!cacheData.empty()) {
         timingCache = cfg->createTimingCache(cacheData.data(), cacheData.size());
     } else {
-        timingCache = cfg->createTimingCache(nullptr, 0); // Create an empty cache
+        timingCache = cfg->createTimingCache(nullptr, 0); 
     }
     if (timingCache) {
-        cfg->setTimingCache(*timingCache, false); // false: ignore discrepancies if cache is from a different TRT version or hardware
+        cfg->setTimingCache(*timingCache, false); 
     } else {
         std::cerr << "[TensorRT] Warning: Could not create timing cache." << std::endl;
     }
-    // --- End Timing Cache Load ---
+    
 
     nvonnxparser::IParser* parser = nvonnxparser::createParser(*network, logger);
     if (!parser->parseFromFile(onnxFile.c_str(), static_cast<int>(nvinfer1::ILogger::Severity::kWARNING)))
@@ -187,8 +187,8 @@ nvinfer1::ICudaEngine* buildEngineFromOnnx(const std::string& onnxFile, nvinfer1
         return nullptr;
     }
 
-    // --- Timing Cache Save ---
-    if (timingCache) { // timingCache should exist if created above
+    
+    if (timingCache) { 
         nvinfer1::IHostMemory* serializedCache = timingCache->serialize();
         if (serializedCache) {
             std::ofstream cacheFileWrite(cachePath, std::ios::binary);
@@ -204,14 +204,14 @@ nvinfer1::ICudaEngine* buildEngineFromOnnx(const std::string& onnxFile, nvinfer1
             delete serializedCache;
         }
     }
-    // Note: TensorRT IBuilderConfig takes ownership of the ITimingCache object set via setTimingCache.
-    // So, we don't need to explicitly delete timingCache here if it was successfully set.
-    // If createTimingCache failed or was not set, and we allocated it, we would need to manage its lifecycle.
-    // However, createTimingCache is called on cfg, and setTimingCache also on cfg.
-    // If timingCache was created but not set (e.g. setTimingCache failed, though unlikely),
-    // then builder->destroyTimingCache(timingCache) might be needed if it wasn't managed by cfg.
-    // Given the current logic, cfg should manage it.
-    // --- End Timing Cache Save ---
+    
+    
+    
+    
+    
+    
+    
+    
 
     nvinfer1::IRuntime* runtime = nvinfer1::createInferRuntime(logger);
     nvinfer1::ICudaEngine* engine = runtime->deserializeCudaEngine(plan->data(), plan->size());

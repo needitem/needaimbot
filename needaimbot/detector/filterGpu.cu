@@ -3,9 +3,9 @@
 #include <device_atomic_functions.h>
 
 #include "filterGpu.h"
-#include "postProcess.h" // Include Detection definition
+#include "postProcess.h" 
 
-// Kernel now applies both class-based ignore and optional HSV mask filter
+
 __global__ __launch_bounds__(256, 8) void filterDetectionsByClassIdKernel(
     const Detection* __restrict__ input_detections,
     int num_input_detections,
@@ -22,16 +22,16 @@ __global__ __launch_bounds__(256, 8) void filterDetectionsByClassIdKernel(
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
     for (; idx < num_input_detections; idx += stride) {
-        // Load detection
-        const Detection det = input_detections[idx]; // copy in register
+        
+        const Detection det = input_detections[idx]; 
         bool should_keep = true;
 
-        // Class-based filtering
+        
         if (det.classId >= 0 && det.classId < max_check_id && d_ignored_class_ids[det.classId]) {
-            continue; // skip this detection
+            continue; 
         }
 
-        // HSV mask filtering (if provided)
+        
         if (d_hsv_mask != nullptr) {
             int x0 = det.box.x;
             int y0 = det.box.y;
@@ -44,27 +44,27 @@ __global__ __launch_bounds__(256, 8) void filterDetectionsByClassIdKernel(
                     if (row[x]) {
                         ++count;
                         if (remove_hsv_matches) {
-                            // Remove mode: skip as soon as threshold reached
+                            
                             if (count >= min_hsv_pixels) {
                                 goto skip_detection;
                             }
                         } else {
-                            // Keep mode: break out when threshold reached
+                            
                             if (count >= min_hsv_pixels) {
-                                y = y1; // force outer loop to end
+                                y = y1; 
                                 break;
                             }
                         }
                     }
                 }
             }
-            // After scanning, if in keep mode and not enough pixels, skip
+            
             if (!remove_hsv_matches && count < min_hsv_pixels) {
                 goto skip_detection;
             }
         }
 
-        // Passed all filters, write to output
+        
         int write_idx = atomicAdd(output_count, 1);
         if (write_idx < max_output_detections) {
             output_detections[write_idx] = det;
@@ -93,11 +93,11 @@ cudaError_t filterDetectionsByClassIdGpu(
     cudaStream_t stream)
 {
     if (num_input_detections <= 0) {
-        // No input detections, ensure output count is 0
+        
         return cudaMemsetAsync(d_output_count, 0, sizeof(int), stream);
     }
 
-    // Reset output count
+    
     cudaError_t err = cudaMemsetAsync(d_output_count, 0, sizeof(int), stream);
     if (err != cudaSuccess) {
         fprintf(stderr, "[FilterGPU] Failed cudaMemsetAsync on output count: %s\n", cudaGetErrorString(err));

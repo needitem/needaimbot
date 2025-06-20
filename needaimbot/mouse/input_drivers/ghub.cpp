@@ -44,14 +44,14 @@ GhubMouse::GhubMouse()
     }
     else
     {
-        // Cache function pointers
+        
         pfnMouseOpen = reinterpret_cast<mouse_open_t>(GetProcAddress(gm, "mouse_open"));
         pfnMoveR = reinterpret_cast<moveR_t>(GetProcAddress(gm, "moveR"));
         pfnPress = reinterpret_cast<press_t>(GetProcAddress(gm, "press"));
         pfnRelease = reinterpret_cast<release_t>(GetProcAddress(gm, "release"));
         pfnMouseClose = reinterpret_cast<mouse_close_t>(GetProcAddress(gm, "mouse_close"));
 
-        // Check if mouse_open function pointer is valid and call it
+        
         if (pfnMouseOpen == NULL)
         {
             std::cerr << "[Ghub] Failed to get mouse_open function address!" << std::endl;
@@ -63,12 +63,9 @@ GhubMouse::GhubMouse()
             if (!gmok) {
                  std::cerr << "[Ghub] mouse_open() failed!" << std::endl;
             } else {
-                 // Check if other critical functions were loaded
+                 
                  if (pfnMoveR == nullptr || pfnPress == nullptr || pfnRelease == nullptr) {
                      std::cerr << "[Ghub] Warning: Failed to load one or more core mouse functions (moveR, press, release)." << std::endl;
-                     // Decide if this constitutes failure - perhaps gmok should be false?
-                     // For now, we'll leave gmok as true if mouse_open succeeded, 
-                     // but the functions using the null pointers will fallback to SendInput.
                  }
             }
         }
@@ -85,24 +82,24 @@ GhubMouse::~GhubMouse()
 
 bool GhubMouse::mouse_xy(int x, int y)
 {
-    // Use cached function pointer if available and DLL is okay
+    
     if (gmok && pfnMoveR != nullptr)
     {
         return pfnMoveR(x, y);
     }
-    // Fallback to SendInput
+    
     INPUT input = _ghub_Mouse(MOUSEEVENTF_MOVE, x, y);
     return _ghub_SendInput(1, &input) == 1;
 }
 
 bool GhubMouse::mouse_down(int key)
 {
-    // Use cached function pointer if available and DLL is okay
+    
     if (gmok && pfnPress != nullptr)
     {
         return pfnPress(key);
     }
-    // Fallback to SendInput
+    
     DWORD flag = (key == 1) ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_RIGHTDOWN;
     INPUT input = _ghub_Mouse(flag);
     return _ghub_SendInput(1, &input) == 1;
@@ -110,13 +107,13 @@ bool GhubMouse::mouse_down(int key)
 
 bool GhubMouse::mouse_up(int key)
 {
-    // Use cached function pointer if available and DLL is okay
+    
     if (gmok && pfnRelease != nullptr)
     {
-        // Assuming release takes no arguments based on previous GetProcAddress call
+        
         return pfnRelease(); 
     }
-    // Fallback to SendInput
+    
     DWORD flag = (key == 1) ? MOUSEEVENTF_LEFTUP : MOUSEEVENTF_RIGHTUP;
     INPUT input = _ghub_Mouse(flag);
     return _ghub_SendInput(1, &input) == 1;
@@ -124,10 +121,10 @@ bool GhubMouse::mouse_up(int key)
 
 bool GhubMouse::mouse_close()
 {
-    // Use cached function pointer if available and DLL is okay
+    
     if (gmok && pfnMouseClose != nullptr)
     {
         return pfnMouseClose();
     }
-    return false; // No SendInput fallback for close
+    return false; 
 }
