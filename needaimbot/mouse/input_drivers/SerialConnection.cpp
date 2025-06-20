@@ -1,4 +1,4 @@
-﻿#define WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
 #define _WINSOCKAPI_
 #include <windows.h>
 #include <iostream>
@@ -116,19 +116,19 @@ void SerialConnection::move(int x, int y)
 
     if (config.arduino_16_bit_mouse)
     {
-        // Use snprintf for potentially faster formatting
-        char buffer[32]; // Buffer large enough for "m-32768,-32768\n\0"
+        
+        char buffer[32]; 
         int len = snprintf(buffer, sizeof(buffer), "m%d,%d\n", x, y);
-        // Check for snprintf success and buffer not overflowed
+        
         if (len > 0 && len < sizeof(buffer)) {
-            // Pass the formatted buffer to write
-            // Assuming write takes const std::string&, create string from buffer view
+            
+            
             write(std::string(buffer, len)); 
         }
     }
     else
     {
-        char buffer[32]; // Buffer for formatting each part
+        char buffer[32]; 
         
         int current_x = x;
         int current_y = y;
@@ -151,11 +151,11 @@ void SerialConnection::move(int x, int y)
                 abs_y -= std::min(abs_y, 127);
             }
             
-            // Format each part using snprintf
+            
             int len = snprintf(buffer, sizeof(buffer), "m%d,%d\n", move_part_x, move_part_y);
-            // Write the formatted part if successful
+            
             if (len > 0 && len < sizeof(buffer)) {
-                write(std::string(buffer, len)); // Send immediately
+                write(std::string(buffer, len)); 
             }
         }
     }

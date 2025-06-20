@@ -48,7 +48,7 @@ bool Config::loadConfig(const std::string& filename)
     {
         std::cerr << "[Config] Config file does not exist, creating default config: " << filename << std::endl;
 
-        // Capture
+        
         detection_resolution = 320;
         capture_fps = 60;
         monitor_idx = 0;
@@ -57,10 +57,10 @@ bool Config::loadConfig(const std::string& filename)
         capture_cursor = true;
         virtual_camera_name = "None";
         capture_use_cuda = true;
-        capture_timeout_ms = 5; // Default for new config file
-        target_fps = 120.0f; // Default target FPS
+        capture_timeout_ms = 5; 
+        target_fps = 120.0f; 
 
-        // Target
+        
         body_y_offset = 0.15f;
         head_y_offset = 0.05f;
         offset_step = 0.01f;
@@ -68,7 +68,7 @@ bool Config::loadConfig(const std::string& filename)
         shooting_range_targets = false;
         auto_aim = false;
 
-        // Mouse
+        
         easynorecoil = false;
         easynorecoilstrength = 0.0f;
         norecoil_step = 5.0f;
@@ -77,14 +77,14 @@ bool Config::loadConfig(const std::string& filename)
         easynorecoil_start_delay_ms = 0;
         easynorecoil_end_delay_ms = 0;
 
-        // Scope Recoil Control
+        
         active_scope_magnification = 0;
         recoil_mult_2x = 1.0f;
         recoil_mult_3x = 1.0f;
         recoil_mult_4x = 1.0f;
         recoil_mult_6x = 1.0f;
 
-        // Prediction Algorithm Settings (Defaults from your original file)
+        
         prediction_algorithm = "None"; 
         velocity_prediction_ms = 16.0f;
         lr_past_points = 10;
@@ -93,12 +93,12 @@ bool Config::loadConfig(const std::string& filename)
         kalman_r = 0.1;
         kalman_p = 0.1;
 
-        // Target Locking Defaults
+        
         enable_target_locking = false;
         target_locking_iou_threshold = 0.5f;
         target_locking_max_lost_frames = 10;
 
-        // Separated X/Y PID Controllers
+        
         kp_x = 0.5; 
         ki_x = 0.0;
         kd_x = 0.1;
@@ -106,36 +106,36 @@ bool Config::loadConfig(const std::string& filename)
         ki_y = 0.0;
         kd_y = 0.15;
 
-        // Arduino
+        
         arduino_baudrate = 115200;
         arduino_port = "COM0";
         arduino_16_bit_mouse = false;
         arduino_enable_keys = false;
 
-		// KMBOX net params:
+		
         kmbox_ip = "192.168.2.188";
         kmbox_port = "16896";
         kmbox_mac = "46405c53";
         
-        // Mouse shooting
+        
         bScope_multiplier = 1.0f;
 
-        // AI
-        ai_model = "sunxds_0.5.6.engine"; // Example, use your actual default
+        
+        ai_model = "sunxds_0.5.6.engine"; 
         confidence_threshold = 0.15f;
         nms_threshold = 0.50f;
-        confidence_weight = 0.65f; // Default value for confidence_weight (updated from 0.5f)
+        confidence_weight = 0.65f; 
         max_detections = 100;
         postprocess = "yolo10";
         export_enable_fp8 = false;
         export_enable_fp16 = true;
         onnx_input_resolution = 640;
 
-        // CUDA
+        
         use_pinned_memory = true;
         cuda_device_id = 0;
 
-        // Buttons
+        
         button_targeting = splitString("RightMouseButton");
         button_shoot = splitString("LeftMouseButton");
         button_zoom = splitString("RightMouseButton");
@@ -145,13 +145,13 @@ bool Config::loadConfig(const std::string& filename)
         button_open_overlay = splitString("Home");
         button_disable_upward_aim = splitString("None");
         button_auto_shoot = splitString("None"); 
-        button_silent_aim = splitString("None"); // Default for silent aim hotkey
+        button_silent_aim = splitString("None"); 
 
-        // Overlay
+        
         overlay_opacity = 225;
         overlay_ui_scale = 1.0f;
 
-        // --- Custom Class Settings Defaults ---
+        
         head_class_name = "Head";
         class_settings.clear();
         class_settings.emplace_back(0, "Player", false);
@@ -166,7 +166,7 @@ bool Config::loadConfig(const std::string& filename)
         class_settings.emplace_back(9, "Fire", true);
         class_settings.emplace_back(10, "Third Person", true); 
 
-        // Debug
+        
         show_window = true;
         show_fps = true;
         window_name = "Debug";
@@ -176,17 +176,17 @@ bool Config::loadConfig(const std::string& filename)
         always_on_top = true;
         verbose = false;
 
-        // Optical Flow Defaults
+        
         enable_optical_flow = false;
         draw_optical_flow = false;
         optical_flow_alpha_cpu = 10.0f;
         draw_optical_flow_steps = 16;
         optical_flow_magnitudeThreshold = 0.5f;
         staticFrameThreshold = 1.0f;
-        fovX = 90.0f; // Default FoV X
-        fovY = 60.0f; // Default FoV Y
+        fovX = 90.0f; 
+        fovY = 60.0f; 
 
-        // HSV Color Filter Defaults
+        
         enable_hsv_filter = false;
         hsv_lower_h = 0;
         hsv_lower_s = 0;
@@ -197,7 +197,7 @@ bool Config::loadConfig(const std::string& filename)
         min_hsv_pixels = 10;
         remove_hsv_matches = false;
 
-        saveConfig(filename); // Save the newly created default config
+        saveConfig(filename); 
         return true;
     }
 
@@ -209,7 +209,7 @@ bool Config::loadConfig(const std::string& filename)
         return false;
     }
 
-    // Helper lambdas (these were already well-defined in your code)
+    
     auto get_string_ini = [&](const char* section, const char* key, const char* defval) {
         const char* val = ini.GetValue(section, key, defval);
         return std::string(val ? val : "");
@@ -224,7 +224,7 @@ bool Config::loadConfig(const std::string& filename)
         return ini.GetDoubleValue(section, key, defval);
     };
 
-    // Load settings from designated sections
+    
     detection_resolution = get_long_ini("Capture", "detection_resolution", 320);
     capture_fps = get_long_ini("Capture", "capture_fps", 60);
     monitor_idx = get_long_ini("Capture", "monitor_idx", 0);
@@ -285,7 +285,7 @@ bool Config::loadConfig(const std::string& filename)
     ai_model = get_string_ini("AI", "ai_model", "sunxds_0.5.6.engine");
     confidence_threshold = (float)get_double_ini("AI", "confidence_threshold", 0.15);
     nms_threshold = (float)get_double_ini("AI", "nms_threshold", 0.50);
-    confidence_weight = (float)get_double_ini("AI", "confidence_weight", 0.65); // Load confidence_weight (updated default from 0.5)
+    confidence_weight = (float)get_double_ini("AI", "confidence_weight", 0.65); 
     max_detections = get_long_ini("AI", "max_detections", 20);
     postprocess = get_string_ini("AI", "postprocess", "yolo10");
     export_enable_fp8 = get_bool_ini("AI", "export_enable_fp8", false);
@@ -304,7 +304,7 @@ bool Config::loadConfig(const std::string& filename)
     button_open_overlay = splitString(get_string_ini("Buttons", "button_open_overlay", "Home"));
     button_disable_upward_aim = splitString(get_string_ini("Buttons", "button_disable_upward_aim", "None"));
     button_auto_shoot = splitString(get_string_ini("Buttons", "button_auto_shoot", "None"));
-    button_silent_aim = splitString(get_string_ini("Buttons", "button_silent_aim", "None")); // Load silent aim hotkey
+    button_silent_aim = splitString(get_string_ini("Buttons", "button_silent_aim", "None")); 
 
     overlay_opacity = get_long_ini("Overlay", "overlay_opacity", 225);
     overlay_ui_scale = (float)get_double_ini("Overlay", "overlay_ui_scale", 1.0);
@@ -318,7 +318,7 @@ bool Config::loadConfig(const std::string& filename)
     always_on_top = get_bool_ini("Debug", "always_on_top", true);
     verbose = get_bool_ini("Debug", "verbose", false);
 
-    // Load Optical Flow Settings
+    
     enable_optical_flow = get_bool_ini("OpticalFlow", "enable_optical_flow", false);
     draw_optical_flow = get_bool_ini("OpticalFlow", "draw_optical_flow", false);
     optical_flow_alpha_cpu = (float)get_double_ini("OpticalFlow", "optical_flow_alpha_cpu", 10.0);
@@ -328,7 +328,7 @@ bool Config::loadConfig(const std::string& filename)
     fovX = (float)get_double_ini("OpticalFlow", "fovX", 90.0);
     fovY = (float)get_double_ini("OpticalFlow", "fovY", 60.0);
 
-    // Load HSV Color Filter Settings
+    
     enable_hsv_filter = get_bool_ini("HSVFilter", "enable_hsv_filter", false);
     hsv_lower_h = get_long_ini("HSVFilter", "hsv_lower_h", 0);
     hsv_lower_s = get_long_ini("HSVFilter", "hsv_lower_s", 0);
@@ -339,20 +339,20 @@ bool Config::loadConfig(const std::string& filename)
     min_hsv_pixels = get_long_ini("HSVFilter", "min_hsv_pixels", 10);
     remove_hsv_matches = get_bool_ini("HSVFilter", "remove_hsv_matches", false);
 
-    // --- Load Custom Class Settings --- 
+    
     head_class_name = get_string_ini("Classes", "HeadClassName", "Head");
 
     int classSettingsCount = ini.GetLongValue("ClassSettings", "Count", -1); 
 
-    class_settings.clear(); // Clear before loading or migrating
-    if (classSettingsCount != -1) { // New format exists
+    class_settings.clear(); 
+    if (classSettingsCount != -1) { 
         for (int i = 0; i < classSettingsCount; ++i) {
             std::string id_key = "Class_" + std::to_string(i) + "_ID";
             std::string name_key = "Class_" + std::to_string(i) + "_Name";
             std::string ignore_key = "Class_" + std::to_string(i) + "_Ignore";
             
             int id_val = ini.GetLongValue("ClassSettings", id_key.c_str(), i);
-            std::string name_val = ini.GetValue("ClassSettings", name_key.c_str(), ""); // Use GetValue for string
+            std::string name_val = ini.GetValue("ClassSettings", name_key.c_str(), ""); 
             bool ignore_val = ini.GetBoolValue("ClassSettings", ignore_key.c_str(), false);
             
             if (name_val.empty()) { 
@@ -360,7 +360,7 @@ bool Config::loadConfig(const std::string& filename)
             }
             class_settings.emplace_back(id_val, name_val, ignore_val);
         }
-    } else { // Old format or no custom settings: Migrate from [Ignore Classes] section values if they exist
+    } else { 
         bool temp_ignores[11];
         temp_ignores[0] = ini.GetBoolValue("Ignore Classes", "ignore_class_0", false);
         temp_ignores[1] = ini.GetBoolValue("Ignore Classes", "ignore_class_1", false);
@@ -386,10 +386,10 @@ bool Config::loadConfig(const std::string& filename)
         class_settings.emplace_back(9, "Fire", temp_ignores[9]);
         class_settings.emplace_back(10, "Third Person", temp_ignores[10]);
     }
-    // Removed loading of individual class_X and ignore_class_X into Config object members.
-    // They are now fully managed by class_settings.
+    
+    
 
-    // Target Locking
+    
     enable_target_locking = get_bool_ini("TargetLocking", "enable_target_locking", false);
     target_locking_iou_threshold = (float)get_double_ini("TargetLocking", "target_locking_iou_threshold", 0.5);
     target_locking_max_lost_frames = get_long_ini("TargetLocking", "target_locking_max_lost_frames", 10);
@@ -518,7 +518,7 @@ bool Config::saveConfig(const std::string& filename)
     file << "button_open_overlay = " << joinStrings(button_open_overlay) << "\n";
     file << "button_disable_upward_aim = " << joinStrings(button_disable_upward_aim) << "\n";
     file << "button_auto_shoot = " << joinStrings(button_auto_shoot) << "\n";
-    file << "button_silent_aim = " << joinStrings(button_silent_aim) << "\n\n"; // Save silent aim hotkey
+    file << "button_silent_aim = " << joinStrings(button_silent_aim) << "\n\n"; 
 
     file << "[Overlay]\n";
     file << "overlay_opacity = " << overlay_opacity << "\n";
@@ -640,17 +640,18 @@ bool Config::deleteProfile(const std::string& profileName) {
 
 void Config::resetConfig()
 {
-    // This will call loadConfig with a non-existent filename, triggering the default value assignments
-    // and then save it.
+    
+    
     loadConfig("__dummy_nonexistent_file_for_reset__.ini"); 
-    // saveConfig("config.ini"); // loadConfig already calls saveConfig if file doesn't exist
+    
 }
 
-// The default constructor which calls loadConfig("config.ini")
+
 Config::Config()
 {
-    // Attempt to load the default config file.
-    // If it fails to load (e.g., parse error but file exists), it will print an error.
-    // If the file doesn't exist, loadConfig will create it with defaults.
+    
+    
+    
     loadConfig("config.ini"); 
 }
+

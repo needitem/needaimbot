@@ -4,7 +4,7 @@
 #include <filesystem>
 #include <windows.h>
 
-// Define function pointer types matching the DLL functions
+
 typedef bool (*mouse_open_t)();
 typedef bool (*moveR_t)(int, int);
 typedef bool (*press_t)(int);
@@ -27,7 +27,7 @@ private:
     HMODULE gm;
     bool gmok;
 
-    // Cached function pointers
+    
     mouse_open_t pfnMouseOpen = nullptr;
     moveR_t pfnMoveR = nullptr;
     press_t pfnPress = nullptr;
@@ -40,4 +40,4 @@ private:
     static INPUT _ghub_Mouse(DWORD flags, LONG x = 0, LONG y = 0, DWORD data = 0);
 };
 
-#endif // GHUB_H
+#endif 

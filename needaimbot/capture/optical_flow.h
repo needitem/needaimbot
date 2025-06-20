@@ -20,23 +20,23 @@ public:
 
     void enqueueFrame(const cv::cuda::GpuMat& frame);
     void getMotion(int& xShift, int& yShift);
-    void manageOpticalFlowThread(); // Not present in sunone_aimbot_cpp, but seems like a good idea from the .cpp
+    void manageOpticalFlowThread(); 
     void getAngularVelocity(double& angularVelocityXOut, double& angularVelocityYOut);
     void getAngularAcceleration(double& angularAccelerationXOut, double& angularAccelerationYOut);
 
-    bool isOpticalFlowValid() const; // Changed from isFlowValid to follow naming convention
-    bool isThreadRunning() const;    // Added to check if thread is active
+    bool isOpticalFlowValid() const; 
+    bool isThreadRunning() const;    
 
     std::pair<double, double> getAverageGlobalFlow();
-    cv::cuda::GpuMat flow; // Public for drawing
-    std::atomic<bool> isFlowValidAtomic; // Public for drawing, made atomic for thread safety
+    cv::cuda::GpuMat flow; 
+    std::atomic<bool> isFlowValidAtomic; 
 
 private:
     void computeOpticalFlow(const cv::cuda::GpuMat& frame);
     void opticalFlowLoop();
     void preprocessFrame(cv::cuda::GpuMat& frameGray);
 
-    std::thread m_opticalFlowThread; // Prefixed member variables
+    std::thread m_opticalFlowThread; 
     std::atomic<bool> m_shouldExit;
 
     std::queue<cv::cuda::GpuMat> m_frameQueue;
@@ -44,9 +44,9 @@ private:
     std::mutex m_frameMutex;
 
     cv::cuda::GpuMat m_prevFrameGray;
-    std::mutex m_flowMutex; // To protect flow and related calculation variables
-    int m_xShift; // Not clear if still needed with angular velocity
-    int m_yShift; // Not clear if still needed with angular velocity
+    std::mutex m_flowMutex; 
+    int m_xShift; 
+    int m_yShift; 
 
     cv::cuda::GpuMat m_hintFlow;
     int m_flowWidth, m_flowHeight;
@@ -57,12 +57,12 @@ private:
     double m_prevTime;
     double m_prevAngularVelocityX;
     double m_prevAngularVelocityY;
-    double m_angularAccelerationX; // Not fully implemented in source
-    double m_angularAccelerationY; // Not fully implemented in source
+    double m_angularAccelerationX; 
+    double m_angularAccelerationY; 
     double m_prevPixelFlowX;
     double m_prevPixelFlowY;
 
-    cv::Ptr<cv::cuda::NvidiaOpticalFlow_2_0> m_cvOpticalFlow; // Renamed to avoid conflict
+    cv::Ptr<cv::cuda::NvidiaOpticalFlow_2_0> m_cvOpticalFlow; 
 };
 
-#endif // OPTICAL_FLOW_H 
+#endif 

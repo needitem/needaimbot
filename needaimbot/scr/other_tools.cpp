@@ -21,7 +21,7 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 
-#include <filesystem> // Requires C++17
+#include <filesystem> 
 #include <chrono>
 #include <iomanip>
 #include <sstream>
@@ -184,7 +184,7 @@ std::vector<std::string>::difference_type getModelIndex(std::vector<std::string>
     }
     else
     {
-        return 0; // not found
+        return 0; 
     }
 }
 
@@ -482,7 +482,7 @@ void welcome_message()
     std::endl;
 }
 
-// Implementation of saveScreenshot
+
 void saveScreenshot(const cv::Mat& frame, const std::string& directory)
 {
     if (frame.empty())
@@ -493,7 +493,7 @@ void saveScreenshot(const cv::Mat& frame, const std::string& directory)
 
     try
     {
-        // Ensure the directory exists
+        
         if (!std::filesystem::exists(directory))
         {
             if (!std::filesystem::create_directories(directory))
@@ -503,16 +503,16 @@ void saveScreenshot(const cv::Mat& frame, const std::string& directory)
             }
         }
 
-        // Generate filename based on timestamp
+        
         auto now = std::chrono::system_clock::now();
         auto epoch_time = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-        std::string filename = std::to_string(epoch_time) + ".png"; // Using PNG for lossless quality
+        std::string filename = std::to_string(epoch_time) + ".png"; 
         std::string filepath = directory + "/" + filename;
 
-        // Save the image
+        
         if (cv::imwrite(filepath, frame))
         {
-            if (config.verbose) // Assuming config is accessible via extern in other_tools.h/cpp
+            if (config.verbose) 
             {
                 std::cout << "[Screenshot] Saved screenshot to: " << filepath << std::endl;
             }

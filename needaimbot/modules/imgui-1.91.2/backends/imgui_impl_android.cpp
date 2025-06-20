@@ -1,33 +1,33 @@
-// dear imgui: Platform Binding for Android native app
-// This needs to be used along with the OpenGL 3 Renderer (imgui_impl_opengl3)
 
-// Implemented features:
-//  [X] Platform: Keyboard support. Since 1.87 we are using the io.AddKeyEvent() function. Pass ImGuiKey values to all key functions e.g. ImGui::IsKeyPressed(ImGuiKey_Space). [Legacy AKEYCODE_* values will also be supported unless IMGUI_DISABLE_OBSOLETE_KEYIO is set]
-//  [X] Platform: Mouse support. Can discriminate Mouse/TouchScreen/Pen.
-// Missing features:
-//  [ ] Platform: Clipboard support.
-//  [ ] Platform: Gamepad support. Enable with 'io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad'.
-//  [ ] Platform: Mouse cursor shape and visibility. Disable with 'io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange'. FIXME: Check if this is even possible with Android.
-// Important:
-//  - Consider using SDL or GLFW backend on Android, which will be more full-featured than this.
-//  - FIXME: On-screen keyboard currently needs to be enabled by the application (see examples/ and issue #3446)
-//  - FIXME: Unicode character inputs needs to be passed by Dear ImGui by the application (see examples/ and issue #3446)
 
-// You can use unmodified imgui_impl_* files in your project. See examples/ folder for examples of using this.
-// Prefer including the entire imgui/ repository into your project (either as a copy or as a submodule), and only build the backends you need.
-// Learn about Dear ImGui:
-// - FAQ                  https://dearimgui.com/faq
-// - Getting Started      https://dearimgui.com/getting-started
-// - Documentation        https://dearimgui.com/docs (same as your local docs/ folder).
-// - Introduction, links and more at the top of imgui.cpp
 
-// CHANGELOG
-// (minor and older changes stripped away, please see git history for details)
-//  2022-09-26: Inputs: Renamed ImGuiKey_ModXXX introduced in 1.87 to ImGuiMod_XXX (old names still supported).
-//  2022-01-26: Inputs: replaced short-lived io.AddKeyModsEvent() (added two weeks ago) with io.AddKeyEvent() using ImGuiKey_ModXXX flags. Sorry for the confusion.
-//  2022-01-17: Inputs: calling new io.AddMousePosEvent(), io.AddMouseButtonEvent(), io.AddMouseWheelEvent() API (1.87+).
-//  2022-01-10: Inputs: calling new io.AddKeyEvent(), io.AddKeyModsEvent() + io.SetKeyEventNativeData() API (1.87+). Support for full ImGuiKey range.
-//  2021-03-04: Initial version.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 #include "imgui.h"
 #ifndef IMGUI_DISABLE
@@ -38,7 +38,7 @@
 #include <android/keycodes.h>
 #include <android/log.h>
 
-// Android data
+
 static double                                   g_Time = 0.0;
 static ANativeWindow*                           g_Window;
 static char                                     g_LogTag[] = "ImGuiExample";
@@ -176,9 +176,9 @@ int32_t ImGui_ImplAndroid_HandleInputEvent(const AInputEvent* input_event)
 
         switch (event_action)
         {
-        // FIXME: AKEY_EVENT_ACTION_DOWN and AKEY_EVENT_ACTION_UP occur at once as soon as a touch pointer
-        // goes up from a key. We use a simple key event queue/ and process one event per key per frame in
-        // ImGui_ImplAndroid_NewFrame()...or consider using IO queue, if suitable: https://github.com/ocornut/imgui/issues/2787
+        
+        
+        
         case AKEY_EVENT_ACTION_DOWN:
         case AKEY_EVENT_ACTION_UP:
         {
@@ -222,9 +222,9 @@ int32_t ImGui_ImplAndroid_HandleInputEvent(const AInputEvent* input_event)
         case AMOTION_EVENT_ACTION_DOWN:
         case AMOTION_EVENT_ACTION_UP:
         {
-            // Physical mouse buttons (and probably other physical devices) also invoke the actions AMOTION_EVENT_ACTION_DOWN/_UP,
-            // but we have to process them separately to identify the actual button pressed. This is done below via
-            // AMOTION_EVENT_ACTION_BUTTON_PRESS/_RELEASE. Here, we only process "FINGER" input (and "UNKNOWN", as a fallback).
+            
+            
+            
             int tool_type = AMotionEvent_getToolType(input_event, event_pointer_index);
             if (tool_type == AMOTION_EVENT_TOOL_TYPE_FINGER || tool_type == AMOTION_EVENT_TOOL_TYPE_UNKNOWN)
             {
@@ -242,8 +242,8 @@ int32_t ImGui_ImplAndroid_HandleInputEvent(const AInputEvent* input_event)
             io.AddMouseButtonEvent(2, (button_state & AMOTION_EVENT_BUTTON_TERTIARY) != 0);
             break;
         }
-        case AMOTION_EVENT_ACTION_HOVER_MOVE: // Hovering: Tool moves while NOT pressed (such as a physical mouse)
-        case AMOTION_EVENT_ACTION_MOVE:       // Touch pointer moves while DOWN
+        case AMOTION_EVENT_ACTION_HOVER_MOVE: 
+        case AMOTION_EVENT_ACTION_MOVE:       
             io.AddMousePosEvent(AMotionEvent_getX(input_event, event_pointer_index), AMotionEvent_getY(input_event, event_pointer_index));
             break;
         case AMOTION_EVENT_ACTION_SCROLL:
@@ -268,7 +268,7 @@ bool ImGui_ImplAndroid_Init(ANativeWindow* window)
     g_Window = window;
     g_Time = 0.0;
 
-    // Setup backend capabilities flags
+    
     ImGuiIO& io = ImGui::GetIO();
     io.BackendPlatformName = "imgui_impl_android";
 
@@ -285,7 +285,7 @@ void ImGui_ImplAndroid_NewFrame()
 {
     ImGuiIO& io = ImGui::GetIO();
 
-    // Setup display size (every frame to accommodate for window resizing)
+    
     int32_t window_width = ANativeWindow_getWidth(g_Window);
     int32_t window_height = ANativeWindow_getHeight(g_Window);
     int display_width = window_width;
@@ -295,7 +295,7 @@ void ImGui_ImplAndroid_NewFrame()
     if (window_width > 0 && window_height > 0)
         io.DisplayFramebufferScale = ImVec2((float)display_width / window_width, (float)display_height / window_height);
 
-    // Setup time step
+    
     struct timespec current_timespec;
     clock_gettime(CLOCK_MONOTONIC, &current_timespec);
     double current_time = (double)(current_timespec.tv_sec) + (current_timespec.tv_nsec / 1000000000.0);
@@ -303,6 +303,7 @@ void ImGui_ImplAndroid_NewFrame()
     g_Time = current_time;
 }
 
-//-----------------------------------------------------------------------------
 
-#endif // #ifndef IMGUI_DISABLE
+
+#endif 
+

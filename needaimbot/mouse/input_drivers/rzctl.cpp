@@ -55,8 +55,8 @@ void RZControl::moveMouse(int x, int y, bool from_start_point) {
 }
 
 void RZControl::processMoveInstructions(const std::vector<std::pair<int, int>>& instructions, 
-                           bool from_start_point /* = false */,
-                           DWORD delay_ms /* = 0 */) {
+                           bool from_start_point ,
+                           DWORD delay_ms ) {
     for (const auto& [x, y] : instructions) {
         moveMouse(x, y, from_start_point);
         if (delay_ms > 0) {

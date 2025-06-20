@@ -1,39 +1,4 @@
-/*!
- * \file serial/impl/unix.h
- * \author  William Woodall <wjwwood@gmail.com>
- * \author  John Harrison <ash@greaterthaninfinity.com>
- * \version 0.1
- *
- * \section LICENSE
- *
- * The MIT License
- *
- * Copyright (c) 2012 William Woodall, John Harrison
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
- *
- * \section DESCRIPTION
- *
- * This provides a unix based pimpl for the Serial class. This implementation is
- * based off termios.h and uses select for multiplexing the IO ports.
- *
- */
+
 
 #if !defined(_WIN32)
 
@@ -192,30 +157,31 @@ protected:
   void reconfigurePort ();
 
 private:
-  string port_;               // Path to the file descriptor
-  int fd_;                    // The current file descriptor
+  string port_;               
+  int fd_;                    
 
   bool is_open_;
   bool xonxoff_;
   bool rtscts_;
 
-  Timeout timeout_;           // Timeout for read operations
-  unsigned long baudrate_;    // Baudrate
-  uint32_t byte_time_ns_;     // Nanoseconds to transmit/receive a single byte
+  Timeout timeout_;           
+  unsigned long baudrate_;    
+  uint32_t byte_time_ns_;     
 
-  parity_t parity_;           // Parity
-  bytesize_t bytesize_;       // Size of the bytes
-  stopbits_t stopbits_;       // Stop Bits
-  flowcontrol_t flowcontrol_; // Flow Control
+  parity_t parity_;           
+  bytesize_t bytesize_;       
+  stopbits_t stopbits_;       
+  flowcontrol_t flowcontrol_; 
 
-  // Mutex used to lock the read functions
+  
   pthread_mutex_t read_mutex;
-  // Mutex used to lock the write functions
+  
   pthread_mutex_t write_mutex;
 };
 
 }
 
-#endif // SERIAL_IMPL_UNIX_H
+#endif 
 
-#endif // !defined(_WIN32)
+#endif 
+

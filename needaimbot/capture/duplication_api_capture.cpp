@@ -1,4 +1,4 @@
-// Define before including Windows/D3D headers to avoid macro collisions
+
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 
@@ -36,14 +36,14 @@ class DDAManager
 public:
     DDAManager()
         : m_device(nullptr), m_context(nullptr), m_duplication(nullptr), m_output1(nullptr), m_sharedTexture(nullptr), m_cudaResource(nullptr), m_cudaStream(nullptr), m_framePool(5), m_captureDoneEvent(nullptr)
-        , m_pinnedHostBuffer(nullptr), m_hostCopyStream(nullptr) // Initialize pinned buffer and copy stream
+        , m_pinnedHostBuffer(nullptr), m_hostCopyStream(nullptr) 
     {
         ZeroMemory(&m_duplDesc, sizeof(m_duplDesc));
     }
 
     ~DDAManager()
     {
-        // Free pinned host buffer and destroy copy stream
+        
         if (m_hostCopyStream) cudaStreamDestroy(m_hostCopyStream);
         if (m_pinnedHostBuffer) cudaFreeHost(m_pinnedHostBuffer);
         Release();
@@ -59,33 +59,33 @@ public:
         ID3D11DeviceContext **outContext = nullptr)
     {
         HRESULT hr = S_OK;
-        // std::cout << "[DDA] Initializing DDAManager for monitor index: " << monitorIndex << std::endl;
+        
 
         IDXGIFactory1 *factory = nullptr;
         hr = CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void **)&factory);
-        // std::cout << "[DDA] CreateDXGIFactory1 result: 0x" << std::hex << hr << std::endl;
+        
         if (FAILED(hr))
         {
-            // std::cerr << "[DDA] Failed to create DXGIFactory1 (hr = " << std::hex << hr << ")." << std::endl;
+            
             return hr;
         }
 
         IDXGIAdapter1 *adapter = nullptr;
         hr = factory->EnumAdapters1(monitorIndex, &adapter);
-        // std::cout << "[DDA] EnumAdapters1 result: 0x" << std::hex << hr << " for index " << monitorIndex << std::endl;
+        
         if (hr == DXGI_ERROR_NOT_FOUND)
         {
-            // std::cerr << "[DDA] Not found adapter with index " << monitorIndex << ". Error code: DXGI_ERROR_NOT_FOUND." << std::endl;
+            
             factory->Release();
             return hr;
         }
         else if (FAILED(hr))
         {
-            // std::cerr << "[DDA] EnumAdapters1 return error (hr = " << std::hex << hr << ")." << std::endl;
+            
             factory->Release();
             return hr;
         }
-        if (adapter && config.verbose) { // Keep verbose logging
+        if (adapter && config.verbose) { 
             DXGI_ADAPTER_DESC1 desc;
             adapter->GetDesc1(&desc);
             std::wcout << L"[DDA] Using Adapter: " << desc.Description << std::endl;
@@ -93,22 +93,22 @@ public:
 
         IDXGIOutput *output = nullptr;
         hr = adapter->EnumOutputs(0, &output);
-        // std::cout << "[DDA] EnumOutputs result: 0x" << std::hex << hr << " for output index 0" << std::endl;
+        
         if (hr == DXGI_ERROR_NOT_FOUND)
         {
-            // std::cerr << "[DDA] The adapter has no outputs (monitors). Error code: DXGI_ERROR_NOT_FOUND." << std::endl;
+            
             SafeRelease(&adapter);
             SafeRelease(&factory);
             return hr;
         }
         else if (FAILED(hr))
         {
-            // std::cerr << "[DDA] EnumOutputs returned an error (hr = " << std::hex << hr << ")." << std::endl;
+            
             SafeRelease(&adapter);
             SafeRelease(&factory);
             return hr;
         }
-        if (output && config.verbose) { // Keep verbose logging
+        if (output && config.verbose) { 
              DXGI_OUTPUT_DESC desc;
              output->GetDesc(&desc);
              std::wcout << L"[DDA] Using Output: " << desc.DeviceName << std::endl;
@@ -129,11 +129,11 @@ public:
                 &m_device,
                 nullptr,
                 &m_context);
-            // std::cout << "[DDA] D3D11CreateDevice result: 0x" << std::hex << hr << std::endl;
+            
 
             if (FAILED(hr))
             {
-                // std::cerr << "[DDA] Couldn't create D3D11Device (hr = " << std::hex << hr << ")." << std::endl;
+                
                 SafeRelease(&output);
                 SafeRelease(&adapter);
                 SafeRelease(&factory);
@@ -142,10 +142,10 @@ public:
         }
 
         hr = output->QueryInterface(__uuidof(IDXGIOutput1), (void **)&m_output1);
-        // std::cout << "[DDA] QueryInterface for IDXGIOutput1 result: 0x" << std::hex << hr << std::endl;
+        
         if (FAILED(hr))
         {
-            // std::cerr << "[DDA] QueryInterface on IDXGIOutput1 failed (hr = " << std::hex << hr << ")." << std::endl;
+            
             SafeRelease(&m_context);
             SafeRelease(&m_device);
             SafeRelease(&output);
@@ -154,18 +154,18 @@ public:
             return hr;
         }
 
-        // std::cout << "[DDA] Calling DuplicateOutput with m_device: " << m_device << std::endl;
+        
         hr = m_output1->DuplicateOutput(m_device, &m_duplication);
-        // std::cout << "[DDA] DuplicateOutput result: 0x" << std::hex << hr << std::endl;
+        
         if (FAILED(hr))
         {
-            // std::cerr << "[DDA] DuplicateOutput failed (hr = " << std::hex << hr << ")." << std::endl;
+            
             if (hr == DXGI_ERROR_UNSUPPORTED) {
-                 // std::cerr << "[DDA] Error: DXGI_ERROR_UNSUPPORTED. Desktop Duplication API is not supported on this system/configuration." << std::endl;
+                 
             } else if (hr == DXGI_ERROR_ACCESS_DENIED) {
-                 // std::cerr << "[DDA] Error: DXGI_ERROR_ACCESS_DENIED. Access denied, possibly due to protected content or insufficient privileges." << std::endl;
+                 
             } else if (hr == E_INVALIDARG) {
-                 // std::cerr << "[DDA] Error: E_INVALIDARG. Check if the device pointer is valid and belongs to the correct adapter." << std::endl;
+                 
             }
             
             SafeRelease(&m_output1);
@@ -239,7 +239,7 @@ public:
                 std::cerr << "[DDA] Failed to create CUDA event: " << cudaGetErrorString(eventErr) << std::endl;
             }
 
-            // Allocate pinned host memory for CPU copy and create a dedicated copy stream
+            
             size_t hostBufferSize = static_cast<size_t>(captureWidth) * captureHeight * 4;
             cudaError_t allocErr = cudaHostAlloc(&m_pinnedHostBuffer, hostBufferSize, cudaHostAllocDefault);
             if (allocErr != cudaSuccess)
@@ -370,7 +370,7 @@ public:
         }
         else
         {
-             // Allow allocation if pool is empty
+             
             frameGpu = cv::cuda::GpuMat(regionHeight, regionWidth, CV_8UC4);
         }
 
@@ -446,10 +446,10 @@ public:
     cudaStream_t m_cudaStream;
     cudaEvent_t m_captureDoneEvent;
     std::vector<cv::cuda::GpuMat> m_framePool;
-    UINT m_timeout = 1; // Default timeout for AcquireNextFrame in milliseconds
+    UINT m_timeout = 1; 
     std::vector<BYTE> m_metaDataBuffer;
 
-    // Added for asynchronous pinned host copy
+    
     unsigned char* m_pinnedHostBuffer;
     cudaStream_t m_hostCopyStream;
 };
@@ -457,7 +457,7 @@ public:
 DuplicationAPIScreenCapture::DuplicationAPIScreenCapture(int desiredWidth, int desiredHeight)
     : d3dDevice(nullptr), d3dContext(nullptr), deskDupl(nullptr), stagingTexture(nullptr), output1(nullptr), sharedTexture(nullptr), cudaResource(nullptr), cudaStream(nullptr), regionWidth(desiredWidth), regionHeight(desiredHeight), screenWidth(0), screenHeight(0), m_initialized(false)
 {
-    // std::cout << "[Capture] DuplicationAPIScreenCapture constructor called." << std::endl;
+    
     m_ddaManager = std::make_unique<DDAManager>();
 
     HRESULT hr = m_ddaManager->Initialize(
@@ -475,9 +475,9 @@ DuplicationAPIScreenCapture::DuplicationAPIScreenCapture(int desiredWidth, int d
         return;
     }
 
-    // Set timeout after DDAManager is successfully initialized
+    
     if (m_ddaManager) {
-        m_ddaManager->SetAcquireTimeout(0); // minimal wait for smoothest frame acquisition
+        m_ddaManager->SetAcquireTimeout(0); 
     }
 
     m_initialized = true;
@@ -528,13 +528,13 @@ cv::cuda::GpuMat DuplicationAPIScreenCapture::GetNextFrameGpu()
     }
     else if (FAILED(hr))
     {
-        // std::cerr << "[Capture] AcquireFrame failed (hr=0x" << std::hex << hr << ")" << std::endl;
+        
         return cv::cuda::GpuMat();
     }
 
     if (m_ddaManager->m_context && m_ddaManager->m_sharedTexture && frameCtx.texture)
     {
-        // Copy only changed regions if available
+        
         if (!frameCtx.dirtyRects.empty())
         {
             for (const RECT& dirty : frameCtx.dirtyRects)
@@ -560,7 +560,7 @@ cv::cuda::GpuMat DuplicationAPIScreenCapture::GetNextFrameGpu()
         }
         else
         {
-            // Fallback to full region copy
+            
             D3D11_BOX box = { captureScreenRect.left, captureScreenRect.top, 0, captureScreenRect.right, captureScreenRect.bottom, 1 };
             m_ddaManager->m_context->CopySubresourceRegion(
                 m_ddaManager->m_sharedTexture,
@@ -625,7 +625,7 @@ cv::Mat DuplicationAPIScreenCapture::GetNextFrameCpu()
 
     if (m_ddaManager->m_context && m_ddaManager->m_sharedTexture && frameCtx.texture)
     {
-        // Copy only changed regions if available
+        
         if (!frameCtx.dirtyRects.empty())
         {
             for (const RECT& dirty : frameCtx.dirtyRects)
@@ -649,7 +649,7 @@ cv::Mat DuplicationAPIScreenCapture::GetNextFrameCpu()
         }
         else
         {
-            // Fallback to full region copy
+            
             D3D11_BOX box = { captureScreenRect.left, captureScreenRect.top, 0, captureScreenRect.right, captureScreenRect.bottom, 1 };
             m_ddaManager->m_context->CopySubresourceRegion(
                 m_ddaManager->m_sharedTexture, 0,
@@ -661,7 +661,7 @@ cv::Mat DuplicationAPIScreenCapture::GetNextFrameCpu()
 
     m_ddaManager->ReleaseFrame();
 
-    // Asynchronous pinned host copy
+    
     cv::Mat frameCpu;
     if (m_ddaManager->m_cudaResource && m_ddaManager->m_pinnedHostBuffer)
     {

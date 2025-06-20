@@ -54,16 +54,16 @@ extern std::mutex configMutex;
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "windowsapp.lib")
 
-// Legacy single-buffer variables (required by visuals and draw_debug modules)
+
 cv::cuda::GpuMat latestFrameGpu;
 cv::Mat latestFrameCpu;
-// Ring buffer to avoid locks
+
 std::array<cv::cuda::GpuMat, FRAME_BUFFER_COUNT> captureGpuBuffer;
 std::array<cv::Mat, FRAME_BUFFER_COUNT> captureCpuBuffer;
 std::atomic<int> captureGpuWriteIdx{0};
 std::atomic<int> captureCpuWriteIdx{0};
 std::atomic<bool> newFrameAvailable = false;
-// Mutex for condition_variable synchronization (defined for ring buffer signaling)
+
 std::mutex frameMutex;
 
 int g_captureRegionWidth = 0;
@@ -109,6 +109,9 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
         captureFpsStartTime = std::chrono::high_resolution_clock::now();
         auto start_time = std::chrono::high_resolution_clock::now();
 
+        cv::cuda::GpuMat screenshotGpu;
+        cv::Mat screenshotCpu;
+
         while (!shouldExit)
         {
             if (capture_fps_changed.load())
@@ -139,7 +142,7 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 if (config.verbose) {
                     std::cout << "[Capture] Detection resolution changed. Re-initializing capturer." << std::endl;
                 }
-                capturer.reset(); // Release old capturer first
+                capturer.reset(); 
 
                 int new_CAPTURE_WIDTH = config.detection_resolution;
                 int new_CAPTURE_HEIGHT = config.detection_resolution;
@@ -148,14 +151,14 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 
                 if (!tempCapturer || !tempCapturer->IsInitialized()) {
                     std::cerr << "[Capture] Failed to create or initialize new DuplicationAPIScreenCapture after resolution change!" << std::endl;
-                    shouldExit = true; // Signal loop to terminate
-                    break;             // Exit the while loop
+                    shouldExit = true; 
+                    break;             
                 } else {
-                    capturer = std::move(tempCapturer); // Move ownership to the main capturer
+                    capturer = std::move(tempCapturer); 
                 }
 
-                // This part will only be reached if initialization was successful
-                if (capturer) { // Redundant check given the break, but good practice
+                
+                if (capturer) { 
                     detector.setCaptureEvent(capturer->GetCaptureDoneEvent());
                 }
 
@@ -165,7 +168,7 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 detection_resolution_changed.store(false);
             }
 
-            // Handle other flags that don't require full re-initialization
+            
             if (capture_cursor_changed.load())
             {
                 if (config.verbose) {
@@ -193,9 +196,6 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 capture_timeout_changed.store(false);
             }
 
-            cv::cuda::GpuMat screenshotGpu;
-            cv::Mat screenshotCpu;
-
             auto frame_acq_start_time = std::chrono::high_resolution_clock::now();
 
             if (config.capture_use_cuda) {
@@ -213,12 +213,12 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 if (!screenshotGpu.empty())
                 {
                     detector.processFrame(screenshotGpu);
-                    // Write to ring buffer without lock
+                    
                     int idx = (captureGpuWriteIdx.load(std::memory_order_relaxed) + 1) % FRAME_BUFFER_COUNT;
                     captureGpuBuffer[idx] = screenshotGpu;
                     captureGpuWriteIdx.store(idx, std::memory_order_release);
                     newFrameAvailable.store(true, std::memory_order_release);
-                    frameCV.notify_one(); // Wake display if needed
+                    frameCV.notify_one(); 
                 }
                 else
                 {
@@ -228,7 +228,7 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 if (!screenshotCpu.empty())
                 {
                     detector.processFrame(screenshotCpu);
-                    // Write to CPU ring buffer without lock
+                    
                     int idx = (captureCpuWriteIdx.load(std::memory_order_relaxed) + 1) % FRAME_BUFFER_COUNT;
                     captureCpuBuffer[idx] = screenshotCpu;
                     captureCpuWriteIdx.store(idx, std::memory_order_release);
@@ -263,7 +263,7 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 
                 if (buttonPressed && !buttonPreviouslyPressed && elapsed_ss > 1000)
                 {
-                    // Save the most recent frame from ring buffer
+                    
                     if (config.capture_use_cuda)
                     {
                         int idx = captureGpuWriteIdx.load(std::memory_order_acquire);

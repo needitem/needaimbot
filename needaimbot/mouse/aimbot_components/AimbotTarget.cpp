@@ -13,5 +13,5 @@
 
 AimbotTarget::AimbotTarget(int x, int y, int w, int h, int cls) : x(x), y(y), w(w), h(h), classId(cls) {}
 
-// Static object declaration - Object reuse pattern to avoid dynamic allocation every time
+
 static AimbotTarget s_targetInstance(0, 0, 0, 0, 0);
