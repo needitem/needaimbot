@@ -452,6 +452,12 @@ void OverlayThread()
                         ImGui::EndTabItem();
                     }
 
+                    if (ImGui::BeginTabItem("Prediction"))
+                    {
+                        draw_prediction();
+                        ImGui::EndTabItem();
+                    }
+
                     if (ImGui::BeginTabItem("RCS"))
                     {
                         draw_rcs_settings();
@@ -668,10 +674,15 @@ void OverlayThread()
                         config.saveConfig();
                     }
 
-                ImGui::EndTabBar();
                 }
+
+                ImGui::EndTabBar();
             }
 
+            if (prediction_settings_changed.exchange(false))
+            {
+                globalMouseThread->setPredictor(config.prediction_algorithm);
+            }
             ImGui::Separator();
             ImGui::TextColored(ImVec4(255, 255, 255, 100), "Do not test shooting and aiming with the overlay and debug window is open.");
 

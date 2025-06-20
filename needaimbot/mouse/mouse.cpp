@@ -408,7 +408,7 @@ void MouseThread::moveMouse(const AimbotTarget &target)
 
     
     float error_x = predicted_target_pos.x - current_center_x;
-    float error_y = raw_target_pos.y - current_center_y;
+    float error_y = predicted_target_pos.y - current_center_y;
 
     if (tracking_errors)
     {
