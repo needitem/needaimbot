@@ -8,7 +8,13 @@
 #include <cstdio>   
 #include <algorithm> 
 #include <cmath>     
+#include <fstream>
+#include <numeric>
 
+// Static variables for stats logging
+static bool stats_log_header_written = false;
+static int stats_log_frame_counter = 0;
+static const int stats_log_interval = 60; // log every 60 frames
 
 static std::vector<float> get_history_copy(const std::vector<float>& history, std::mutex& mtx) {
     std::lock_guard<std::mutex> lock(mtx);
@@ -165,5 +171,47 @@ void draw_stats() {
         ImGui::Text("No input send data yet.");
     }
     ImGui::TextUnformatted(input_send_label);
+    
+    // Log stats to CSV file periodically
+    stats_log_frame_counter++;
+    if (stats_log_frame_counter >= stats_log_interval) {
+        stats_log_frame_counter = 0;
+        double avg_cycle = 0.0;
+        if (!cycle_history.empty()) {
+            avg_cycle = std::accumulate(cycle_history.begin(), cycle_history.end(), 0.0) / cycle_history.size();
+        }
+        double avg_acq = 0.0;
+        if (!acq_history.empty()) {
+            avg_acq = std::accumulate(acq_history.begin(), acq_history.end(), 0.0) / acq_history.size();
+        }
+        double avg_inf = 0.0;
+        if (!inference_history.empty()) {
+            avg_inf = std::accumulate(inference_history.begin(), inference_history.end(), 0.0) / inference_history.size();
+        }
+        double avg_pid = 0.0;
+        if (!pid_history.empty()) {
+            avg_pid = std::accumulate(pid_history.begin(), pid_history.end(), 0.0) / pid_history.size();
+        }
+        double avg_pred = 0.0;
+        if (!predictor_history.empty()) {
+            avg_pred = std::accumulate(predictor_history.begin(), predictor_history.end(), 0.0) / predictor_history.size();
+        }
+        double avg_input = 0.0;
+        if (!input_send_history.empty()) {
+            avg_input = std::accumulate(input_send_history.begin(), input_send_history.end(), 0.0) / input_send_history.size();
+        }
+        double avg_fps = 0.0;
+        if (!fps_history.empty()) {
+            avg_fps = std::accumulate(fps_history.begin(), fps_history.end(), 0.0) / fps_history.size();
+        }
+        std::ofstream ofs("stats.csv", std::ios::app);
+        if (ofs) {
+            if (!stats_log_header_written) {
+                ofs << "avg_cycle_ms,avg_acq_ms,avg_inf_ms,avg_fps,avg_pid_ms,avg_pred_ms,avg_input_ms\n";
+                stats_log_header_written = true;
+            }
+            ofs << avg_cycle << "," << avg_acq << "," << avg_inf << "," << avg_fps << "," << avg_pid << "," << avg_pred << "," << avg_input << "\n";
+        }
+    }
 }
 
