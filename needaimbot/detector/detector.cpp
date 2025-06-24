@@ -23,6 +23,7 @@
 #include <queue>
 #include <mutex>
 #include <limits>
+#include <omp.h>
 
 #include "detector.h"
 #include "nvinf.h"
@@ -170,6 +171,9 @@ Detector::~Detector()
     freeGpuBuffer(m_nms_d_iou_matrix);
     freeGpuBuffer(m_nms_d_keep);
     freeGpuBuffer(m_nms_d_indices);
+
+    if (h_finalDetectionsCountPinned) cudaFreeHost(h_finalDetectionsCountPinned);
+    if (h_finalDetectionsPinned) cudaFreeHost(h_finalDetectionsPinned);
 }
 
 void Detector::getInputNames()
@@ -312,6 +316,10 @@ bool Detector::initializeCudaContext()
     
     if (!checkCudaError(cudaEventCreateWithFlags(&processingDone, cudaEventDisableTiming), "creating processingDone event")) { m_cudaContextInitialized = false; return false; }
     if (!checkCudaError(cudaEventCreateWithFlags(&postprocessCopyDone, cudaEventDisableTiming), "creating postprocessCopyDone event")) { m_cudaContextInitialized = false; return false; }
+
+    // Allocate pinned host memory for detection copies
+    cudaHostAlloc(&h_finalDetectionsCountPinned, sizeof(int), cudaHostAllocDefault);
+    cudaHostAlloc(&h_finalDetectionsPinned, config.max_detections * sizeof(Detection), cudaHostAllocDefault);
 
     m_cudaContextInitialized = true; 
     return true; 
@@ -706,113 +714,42 @@ void Detector::inferenceThread()
 
                 m_hasBestTarget = false;
                 m_finalDetectionsCountHost = 0;
-                // Copy detection count to host
-                cudaMemcpy(&m_finalDetectionsCountHost, m_finalDetectionsCountGpu, sizeof(int), cudaMemcpyDeviceToHost);
-                // Ensure all GPU work is done
-                cudaStreamSynchronize(stream);
-                // Copy detections to host vector
-                current_frame_detections.clear();
-                if (m_finalDetectionsCountHost > 0) {
-                    current_frame_detections.resize(m_finalDetectionsCountHost);
-                    cudaMemcpy(current_frame_detections.data(), m_finalDetectionsGpu,
-                               m_finalDetectionsCountHost * sizeof(Detection), cudaMemcpyDeviceToHost);
-                }
-                // Apply target locking logic
-                if (!config.enable_target_locking) {
-                    // No locking: pick nearest detection to center
-                    m_isTargetLocked = false;
-                    m_lockedTargetLostFrames = 0;
-                    if (!current_frame_detections.empty()) {
-                        int bestIdx = 0;
-                        float bestDist2 = std::numeric_limits<float>::max();
-                        cv::Point centerPt(config.detection_resolution / 2, config.detection_resolution / 2);
-                        for (int i = 0; i < (int)current_frame_detections.size(); ++i) {
-                            const auto& det = current_frame_detections[i];
-                            cv::Point boxCenter(det.box.x + det.box.width / 2, det.box.y + det.box.height / 2);
-                            float dx = boxCenter.x - centerPt.x;
-                            float dy = boxCenter.y - centerPt.y;
-                            float dist2 = dx * dx + dy * dy;
-                            if (dist2 < bestDist2) {
-                                bestDist2 = dist2;
-                                bestIdx = i;
-                            }
+                // Record event on inference stream to signal postprocessing done
+                cudaEventRecord(processingDone, stream);
+                // Have postprocessStream wait until postprocessing is complete
+                cudaStreamWaitEvent(postprocessStream, processingDone, 0);
+                // Copy detection count to host pinned memory
+                cudaMemcpyAsync(h_finalDetectionsCountPinned, m_finalDetectionsCountGpu, sizeof(int), cudaMemcpyDeviceToHost, postprocessStream);
+                cudaStreamSynchronize(postprocessStream);
+                int count = *h_finalDetectionsCountPinned;
+                if (count > 0) {
+                    // Copy all detections into pinned host memory
+                    cudaMemcpyAsync(h_finalDetectionsPinned, m_finalDetectionsGpu, count * sizeof(Detection), cudaMemcpyDeviceToHost, postprocessStream);
+                    cudaStreamSynchronize(postprocessStream);
+                    // Host-side search for nearest detection to center
+                    int cx = config.detection_resolution / 2;
+                    int cy = config.detection_resolution / 2;
+                    int bestIdx = 0;
+                    float bestDist2 = std::numeric_limits<float>::max();
+                    for (int i = 0; i < count; ++i) {
+                        const Detection& det = h_finalDetectionsPinned[i];
+                        float fx = det.box.x + det.box.width * 0.5f;
+                        float fy = det.box.y + det.box.height * 0.5f;
+                        float dx = fx - cx;
+                        float dy = fy - cy;
+                        float dist2 = dx * dx + dy * dy;
+                        if (dist2 < bestDist2) {
+                            bestDist2 = dist2;
+                            bestIdx = i;
                         }
-                        m_bestTargetHost = current_frame_detections[bestIdx];
-                        m_bestTargetIndexHost = bestIdx;
-                        m_hasBestTarget = true;
-                    } else {
-                        m_bestTargetIndexHost = -1;
-                        m_hasBestTarget = false;
                     }
-                } else if (!m_isTargetLocked) {
-                    // Acquire new lock
-                    if (!current_frame_detections.empty()) {
-                        int bestIdx = 0;
-                        float bestDist2 = std::numeric_limits<float>::max();
-                        cv::Point centerPt(config.detection_resolution / 2, config.detection_resolution / 2);
-                        for (int i = 0; i < (int)current_frame_detections.size(); ++i) {
-                            const auto& det = current_frame_detections[i];
-                            cv::Point boxCenter(det.box.x + det.box.width / 2, det.box.y + det.box.height / 2);
-                            float dx = boxCenter.x - centerPt.x;
-                            float dy = boxCenter.y - centerPt.y;
-                            float dist2 = dx * dx + dy * dy;
-                            if (dist2 < bestDist2) {
-                                bestDist2 = dist2;
-                                bestIdx = i;
-                            }
-                        }
-                        m_lockedTargetInfo = current_frame_detections[bestIdx];
-                        m_bestTargetHost = m_lockedTargetInfo;
-                        m_bestTargetIndexHost = bestIdx;
-                        m_hasBestTarget = true;
-                        m_isTargetLocked = true;
-                        m_lockedTargetLostFrames = 0;
-                    } else {
-                        m_bestTargetIndexHost = -1;
-                        m_hasBestTarget = false;
-                    }
+                    // Assign best target
+                    m_bestTargetHost = h_finalDetectionsPinned[bestIdx];
+                    m_bestTargetIndexHost = bestIdx;
+                    m_hasBestTarget = true;
                 } else {
-                    // Locked: track or release
-                    if (!current_frame_detections.empty()) {
-                        float bestIou = 0.0f;
-                        int bestIdx = -1;
-                        for (int i = 0; i < (int)current_frame_detections.size(); ++i) {
-                            float iou = calculate_host_iou(current_frame_detections[i].box, m_lockedTargetInfo.box);
-                            if (iou > bestIou) {
-                                bestIou = iou;
-                                bestIdx = i;
-                            }
-                        }
-                        if (bestIdx >= 0 && bestIou >= config.target_locking_iou_threshold) {
-                            m_lockedTargetInfo = current_frame_detections[bestIdx];
-                            m_bestTargetHost = m_lockedTargetInfo;
-                            m_bestTargetIndexHost = bestIdx;
-                            m_lockedTargetLostFrames = 0;
-                            m_hasBestTarget = true;
-                        } else {
-                            m_lockedTargetLostFrames++;
-                            if (m_lockedTargetLostFrames < config.target_locking_max_lost_frames) {
-                                m_bestTargetHost = m_lockedTargetInfo;
-                                m_hasBestTarget = true;
-                            } else {
-                                m_isTargetLocked = false;
-                                m_lockedTargetLostFrames = 0;
-                                m_bestTargetIndexHost = -1;
-                                m_hasBestTarget = false;
-                            }
-                        }
-                    } else {
-                        m_lockedTargetLostFrames++;
-                        if (m_lockedTargetLostFrames < config.target_locking_max_lost_frames) {
-                            m_bestTargetHost = m_lockedTargetInfo;
-                            m_hasBestTarget = true;
-                        } else {
-                            m_isTargetLocked = false;
-                            m_lockedTargetLostFrames = 0;
-                            m_bestTargetIndexHost = -1;
-                            m_hasBestTarget = false;
-                        }
-                    }
+                    m_bestTargetIndexHost = -1;
+                    m_hasBestTarget = false;
                 }
                 // Notify update
                 {

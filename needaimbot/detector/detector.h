@@ -149,6 +149,10 @@ private:
 
     bool usePinnedMemory; 
 
+    // Pinned host buffers for asynchronous copy
+    int* h_finalDetectionsCountPinned = nullptr;
+    Detection* h_finalDetectionsPinned = nullptr;
+
     std::mutex inferenceMutex;
 
     std::unordered_map<std::string, size_t> inputSizes;
