@@ -70,7 +70,7 @@ int g_captureRegionWidth = 0;
 int g_captureRegionHeight = 0;
 std::atomic<int> captureFrameCount(0);
 std::atomic<int> captureFps(0);
-std::chrono::time_point<std::chrono::high_resolution_clock> captureFpsStartTime;
+std::chrono::time_point<std::chrono::steady_clock> captureFpsStartTime;
 
 void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 {
@@ -106,7 +106,7 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
             frameLimitingEnabled = true;
         }
 
-        captureFpsStartTime = std::chrono::high_resolution_clock::now();
+        captureFpsStartTime = std::chrono::steady_clock::now();
         auto start_time = std::chrono::high_resolution_clock::now();
 
         cv::cuda::GpuMat screenshotGpu;
@@ -212,6 +212,7 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
             if (config.capture_use_cuda) {
                 if (!screenshotGpu.empty())
                 {
+                    captureFrameCount++;
                     detector.processFrame(screenshotGpu);
                     
                     int idx = (captureGpuWriteIdx.load(std::memory_order_relaxed) + 1) % FRAME_BUFFER_COUNT;
@@ -227,6 +228,7 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
             } else {
                 if (!screenshotCpu.empty())
                 {
+                    captureFrameCount++;
                     detector.processFrame(screenshotCpu);
                     
                     int idx = (captureCpuWriteIdx.load(std::memory_order_relaxed) + 1) % FRAME_BUFFER_COUNT;
@@ -241,12 +243,11 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 }
             }
 
-            captureFrameCount++;
-            auto now = std::chrono::high_resolution_clock::now();
-            auto elapsed_fps = std::chrono::duration_cast<std::chrono::seconds>(now - captureFpsStartTime).count();
-            if (elapsed_fps >= 1)
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed_fps = std::chrono::duration<double>(now - captureFpsStartTime).count();
+            if (elapsed_fps >= 1.0)
             {
-                float current_fps_val = static_cast<float>(captureFrameCount.load()) / static_cast<float>(elapsed_fps > 0 ? elapsed_fps : 1); 
+                float current_fps_val = static_cast<float>(captureFrameCount.load()) / static_cast<float>(elapsed_fps);
                 g_current_capture_fps.store(current_fps_val);
                 add_to_history(g_capture_fps_history, current_fps_val, g_capture_history_mutex);
 
