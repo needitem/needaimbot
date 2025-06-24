@@ -358,8 +358,9 @@ void Detector::initialize(const std::string& modelFile)
     }
 
     inputName = inputNames[0];
-
-    inputDims = nvinfer1::Dims4{1, 3, 640, 640};
+    // use dynamic ONNX input resolution
+    int r = config.onnx_input_resolution;
+    inputDims = nvinfer1::Dims4{1, 3, r, r};
     context->setInputShape(inputName.c_str(), inputDims);
 
     if (!context->allInputDimensionsSpecified())
@@ -503,7 +504,13 @@ void Detector::loadEngine(const std::string& modelFile)
     }
     else if (extension == ".onnx")
     {
-        engineFilePath = modelPath.replace_extension(".engine").string();
+        // generate engine filename with resolution and precision suffixes
+        std::string baseName = modelPath.stem().string();
+        baseName += "_" + std::to_string(config.onnx_input_resolution);
+        if (config.export_enable_fp16) baseName += "_fp16";
+        if (config.export_enable_fp8)  baseName += "_fp8";
+        std::string engineFilename = baseName + ".engine";
+        engineFilePath = (modelPath.parent_path() / engineFilename).string();
 
         if (!fileExists(engineFilePath))
         {
@@ -521,9 +528,6 @@ void Detector::loadEngine(const std::string& modelFile)
                     {
                         engineFile.write(reinterpret_cast<const char*>(serializedEngine->data()), serializedEngine->size());
                         engineFile.close();
-                        
-                        config.ai_model = std::filesystem::path(engineFilePath).filename().string();
-                        config.saveConfig("config.ini");
                         
                         std::cout << "[Detector] Engine saved to: " << engineFilePath << std::endl;
                     }

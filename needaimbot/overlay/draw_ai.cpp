@@ -6,6 +6,7 @@
 #include <string>
 #include <algorithm> 
 #include <iterator> 
+#include <filesystem>
 
 #include "imgui/imgui.h"
 #include "needaimbot.h"
@@ -78,6 +79,46 @@ void draw_ai()
     {
         ImGui::SetTooltip("Select the input resolution for the ONNX model (e.g., 640 for 640x640 input).\nChanging this will require the .engine file to be rebuilt if it doesn't match.");
     }
+
+    // Add TensorRT precision options
+    if (ImGui::Checkbox("Enable FP16", &config.export_enable_fp16))
+    {
+        config.saveConfig();
+        detector_model_changed.store(true);
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Enable FP16 precision for the exported TensorRT engine.");
+
+    if (ImGui::Checkbox("Enable FP8", &config.export_enable_fp8))
+    {
+        config.saveConfig();
+        detector_model_changed.store(true);
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Enable FP8 precision for the exported TensorRT engine.");
+
+    // Force rebuild button
+    if (ImGui::Button("Rebuild Engine"))
+    {
+        std::filesystem::path modelPath(std::string("models/") + config.ai_model);
+        std::filesystem::path onnxPath = modelPath;
+        if (modelPath.extension() == ".engine")
+            onnxPath.replace_extension(".onnx");
+        std::filesystem::path enginePath = onnxPath;
+        enginePath.replace_extension(".engine");
+        if (std::filesystem::exists(enginePath))
+        {
+            std::filesystem::remove(enginePath);
+            if (config.verbose)
+                std::cout << "[Overlay] Removed engine: " << enginePath.string() << std::endl;
+        }
+        // switch to .onnx model to force rebuild from ONNX
+        config.ai_model = onnxPath.filename().string();
+        config.saveConfig();
+        detector_model_changed.store(true);
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Force rebuild of the TensorRT engine from ONNX.");
 
     ImGui::Spacing();
     ImGui::Separator();
