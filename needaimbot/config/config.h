@@ -78,6 +78,7 @@ public:
     double kp_y;
     double ki_y;
     double kd_y;
+    double derivative_smoothing_factor;
 
     
     int arduino_baudrate;
@@ -140,14 +141,7 @@ public:
                                          
 
     
-    std::string prediction_algorithm;
-    float velocity_prediction_ms;
-    int lr_past_points;
-    float es_alpha;
-    float es_beta;
-    double kalman_q;
-    double kalman_r; 
-    double kalman_p; 
+     
 
     
     bool enable_target_locking;
