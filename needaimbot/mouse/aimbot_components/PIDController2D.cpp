@@ -2,8 +2,8 @@
 #include <cmath>
 #include <algorithm> 
 
-PIDController2D::PIDController2D(float kp_x, float ki_x, float kd_x, float kp_y, float ki_y, float kd_y)
-    : kp_x(kp_x), ki_x(ki_x), kd_x(kd_x), kp_y(kp_y), ki_y(ki_y), kd_y(kd_y)
+PIDController2D::PIDController2D(float kp_x, float ki_x, float kd_x, float kp_y, float ki_y, float kd_y, float derivative_smoothing_factor)
+    : kp_x(kp_x), ki_x(ki_x), kd_x(kd_x), kp_y(kp_y), ki_y(ki_y), kd_y(kd_y), derivative_smoothing_factor(derivative_smoothing_factor)
 {
     reset();
 }
@@ -12,31 +12,26 @@ Eigen::Vector2f PIDController2D::calculate(const Eigen::Vector2f &error)
 {
     auto now = std::chrono::steady_clock::now();
     float dt = std::chrono::duration<float>(now - last_time_point).count();
-    dt = dt > 0.1f ? 0.1f : dt; 
     last_time_point = now;
 
-    
     if (dt > 0.0001f)
     {
         integral.x() += error.x() * dt;
         integral.y() += error.y() * dt;
 
-        
-        float derivative_x = (error.x() - prev_error.x()) / dt;
-        float derivative_y = (error.y() - prev_error.y()) / dt;
+        float current_derivative_x = (error.x() - prev_error.x()) / dt;
+        float current_derivative_y = (error.y() - prev_error.y()) / dt;
 
-        
-        float alpha_x = (std::abs(derivative_x) > 500.0f) ? 0.7f : 0.85f;
-        float alpha_y = (std::abs(derivative_y) > 400.0f) ? 0.6f : 0.9f;
-
-        derivative.x() = derivative_x * alpha_x + prev_derivative.x() * (1.0f - alpha_x);
-        derivative.y() = derivative_y * alpha_y + prev_derivative.y() * (1.0f - alpha_y);
+        // Apply smoothing to the derivative term
+        derivative.x() = current_derivative_x * derivative_smoothing_factor + prev_derivative.x() * (1.0f - derivative_smoothing_factor);
+        derivative.y() = current_derivative_y * derivative_smoothing_factor + prev_derivative.y() * (1.0f - derivative_smoothing_factor);
 
         prev_derivative = derivative;
     }
     else
     {
-        derivative.setZero();
+        // If dt is too small, maintain the previous derivative to avoid sudden jumps
+        // derivative.setZero(); // Uncomment this if you prefer to zero out derivative for very small dt
     }
 
     
@@ -58,14 +53,14 @@ void PIDController2D::reset()
 }
 
 void PIDController2D::updateSeparatedParameters(float kp_x, float ki_x, float kd_x,
-                                               float kp_y, float ki_y, float kd_y)
+                                               float kp_y, float ki_y, float kd_y, float derivative_smoothing_factor)
 {
-    
     this->kp_x = kp_x;
     this->ki_x = ki_x;
     this->kd_x = kd_x;
     this->kp_y = kp_y;
     this->ki_y = ki_y;
     this->kd_y = kd_y;
+    this->derivative_smoothing_factor = derivative_smoothing_factor;
 }
 
