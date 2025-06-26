@@ -32,7 +32,7 @@
 #endif
 #include <iomanip> 
 
-std::condition_variable frameCV;
+
 std::atomic<bool> shouldExit(false);
 std::atomic<bool> aiming(false);
 std::atomic<bool> detectionPaused(false);
@@ -420,7 +420,7 @@ void mouseThreadFunction(MouseThread &mouseThread)
                 
             }
 
-            bool newFrameAvailable = false;
+            bool newDetectionAvailable = false;
             bool has_target_from_detector = false;
             Detection best_target_from_detector;
 
@@ -440,7 +440,7 @@ void mouseThreadFunction(MouseThread &mouseThread)
                 if (shouldExit)
                     break;
                 if (detector.detectionVersion > lastDetectionVersion) {
-                    newFrameAvailable = true;
+                    newDetectionAvailable = true;
                     lastDetectionVersion = detector.detectionVersion;
                     has_target_from_detector = detector.m_hasBestTarget;
                     if (has_target_from_detector) {
@@ -449,7 +449,7 @@ void mouseThreadFunction(MouseThread &mouseThread)
                 }
             }
 
-            if (newFrameAvailable)
+            if (newDetectionAvailable)
             {
                 if (is_aiming && has_target_from_detector)
                 {
@@ -503,45 +503,7 @@ void mouseThreadFunction(MouseThread &mouseThread)
         }
 
         
-        cv::cuda::GpuMat currentGpuFrame;
-        bool new_frame_for_detection = false;
-        {
-            std::unique_lock<std::mutex> lock(frameMutex);
-            if (frameCV.wait_for(lock, timeout, []{ return newFrameAvailable.load() || shouldExit.load(); })) {
-                if (shouldExit.load()) break;
-            }
-        }
-        if (newFrameAvailable.load(std::memory_order_acquire)) {
-            int idx = captureGpuWriteIdx.load(std::memory_order_acquire);
-            currentGpuFrame = captureGpuBuffer[idx]; 
-            newFrameAvailable.store(false, std::memory_order_release);
-            new_frame_for_detection = true;
-        }
-
-        if (shouldExit.load()) break;
-
-        if (new_frame_for_detection && !currentGpuFrame.empty()) {
-            
-            if (config.enable_optical_flow && g_opticalFlow.isThreadRunning()) { 
-                g_opticalFlow.enqueueFrame(currentGpuFrame);
-            }
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-
-            
-            
-            
-            
-            
-        }
+        
 
         
         auto loop_end_time = std::chrono::high_resolution_clock::now();
@@ -713,7 +675,7 @@ int main()
 
         welcome_message();
 
-        displayThread();
+        
 
         keyThread.join();
         std::cout << "Keyboard listener thread joined." << std::endl;

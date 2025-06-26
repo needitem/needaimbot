@@ -98,6 +98,7 @@ public:
     float confidence_threshold;
     float nms_threshold;
     float confidence_weight;
+    float distance_weight;
     int max_detections;
     std::string postprocess;
     bool export_enable_fp8;
