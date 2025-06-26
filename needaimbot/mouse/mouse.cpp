@@ -25,11 +25,7 @@
 #include "input_drivers/ghub.h"
 #include "config/config.h"
 #include "keyboard/keyboard_listener.h"
-#include "predictors/IPredictor.h"
-#include "predictors/VelocityPredictor.h"
-#include "predictors/LinearRegressionPredictor.h"
-#include "predictors/ExponentialSmoothingPredictor.h"
-#include "predictors/KalmanFilterPredictor.h"
+
 
 extern std::atomic<bool> aiming;
 extern std::mutex configMutex;
@@ -112,20 +108,13 @@ MouseThread::MouseThread(
     float kd_y,
     float bScope_multiplier,
     float norecoil_ms,
+    float derivative_smoothing_factor,
     SerialConnection *serialConnection,
     GhubMouse *gHub) : tracking_errors(false), silent_aim_click_duration_ms(50)
 {
     initializeScreen(resolution, bScope_multiplier, norecoil_ms);
-    pid_controller = std::make_unique<PIDController2D>(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
+    pid_controller = std::make_unique<PIDController2D>(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y, derivative_smoothing_factor);
     initializeInputMethod(serialConnection, gHub);
-    
-    
-    std::string initial_algo;
-    {
-        std::lock_guard<std::mutex> lock(configMutex);
-        initial_algo = config.prediction_algorithm;
-    }
-    setPredictor(initial_algo); 
 }
 
 MouseThread::~MouseThread() = default;
@@ -179,53 +168,19 @@ void MouseThread::updateConfig(
     float ki_y,
     float kd_y,
     float bScope_multiplier,
-    float norecoil_ms
+    float norecoil_ms,
+    float derivative_smoothing_factor
     )
 {
     {
         std::lock_guard<std::mutex> lock(member_data_mutex_); 
         initializeScreen(resolution, bScope_multiplier, norecoil_ms);
     }
-    pid_controller->updateSeparatedParameters(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
+    pid_controller->updateSeparatedParameters(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y, derivative_smoothing_factor);
     
 }
 
-void MouseThread::setPredictor(const std::string& algorithm_name) {
-    std::lock_guard<std::mutex> lock(predictor_mutex_); 
-    std::lock_guard<std::mutex> config_lock(configMutex); 
 
-    std::cout << "[Mouse] Setting predictor algorithm: " << algorithm_name << std::endl;
-
-    if (algorithm_name == "Velocity Based") {
-        auto predictor = std::make_unique<VelocityPredictor>();
-        predictor->configure(config.velocity_prediction_ms);
-        predictor_ = std::move(predictor);
-    } else if (algorithm_name == "Linear Regression") {
-        auto predictor = std::make_unique<LinearRegressionPredictor>();
-        predictor->configure(config.lr_past_points, config.velocity_prediction_ms); 
-        predictor_ = std::move(predictor);
-    } else if (algorithm_name == "Exponential Smoothing") {
-        auto predictor = std::make_unique<ExponentialSmoothingPredictor>();
-        predictor->configure(config.es_alpha, config.es_beta, config.velocity_prediction_ms);
-        predictor_ = std::move(predictor);
-    } else if (algorithm_name == "Kalman Filter") {
-        auto predictor = std::make_unique<KalmanFilterPredictor>();
-        
-        
-        
-        
-        
-        predictor->configure(config.kalman_q, config.kalman_r, config.kalman_p, config.velocity_prediction_ms);
-        predictor_ = std::move(predictor);
-    } else { 
-        std::cout << "[Mouse] No predictor or unknown algorithm specified. Prediction disabled." << std::endl;
-        predictor_.reset(); 
-    }
-
-    if (predictor_) {
-        predictor_->reset(); 
-    }
-}
 
 Eigen::Vector2f MouseThread::calculateMovement(const Eigen::Vector2f &target_pos)
 {
@@ -387,24 +342,7 @@ void MouseThread::moveMouse(const AimbotTarget &target)
 
 
     
-    Point2D predicted_target_pos = raw_target_pos; 
-    auto now_chrono = std::chrono::steady_clock::now();
-
-    {
-        std::lock_guard<std::mutex> lock(predictor_mutex_); 
-        if (predictor_) { 
-            auto predictor_start_time = std::chrono::steady_clock::now();
-            predictor_->update(raw_target_pos, now_chrono);
-            predicted_target_pos = predictor_->predict(); 
-            auto predictor_end_time = std::chrono::steady_clock::now();
-            float predictor_duration_ms = std::chrono::duration<float, std::milli>(predictor_end_time - predictor_start_time).count();
-            g_current_predictor_calc_time_ms.store(predictor_duration_ms, std::memory_order_relaxed);
-            add_to_history(g_predictor_calc_time_history, predictor_duration_ms, g_predictor_calc_history_mutex);
-        } else {
-            g_current_predictor_calc_time_ms.store(0.0f, std::memory_order_relaxed);
-            add_to_history(g_predictor_calc_time_history, 0.0f, g_predictor_calc_history_mutex);
-        }
-    }
+    Point2D predicted_target_pos = raw_target_pos;
 
     
     float error_x = predicted_target_pos.x - current_center_x;
@@ -548,21 +486,7 @@ void MouseThread::disableErrorTracking()
     error_callback = nullptr; 
 }
 
-void MouseThread::resetPredictor()
-{
-    std::lock_guard<std::mutex> lock(predictor_mutex_);
-    if (predictor_)
-    {
-        predictor_->reset();
-        std::cout << "[Mouse] Predictor state reset." << std::endl;
-    }
-}
 
-bool MouseThread::hasActivePredictor() const
-{
-    std::lock_guard<std::mutex> lock(predictor_mutex_); 
-    return predictor_ != nullptr;
-}
 
 void MouseThread::setInputMethod(std::unique_ptr<InputMethod> new_method)
 {

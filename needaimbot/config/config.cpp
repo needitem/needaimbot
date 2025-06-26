@@ -84,17 +84,11 @@ bool Config::loadConfig(const std::string& filename)
         recoil_mult_6x = 1.0f;
 
         
-        prediction_algorithm = "None"; 
-        velocity_prediction_ms = 16.0f;
-        lr_past_points = 10;
-        es_alpha = 0.5f;
-        es_beta = 0.5f;
-        kalman_q = 0.1;
-        kalman_r = 0.1;
-        kalman_p = 0.1;
+        
 
         
         enable_target_locking = false;
+        derivative_smoothing_factor = 0.8f; // Default value for smoothing factor
         target_locking_iou_threshold = 0.5f;
         target_locking_max_lost_frames = 10;
 
@@ -257,14 +251,7 @@ bool Config::loadConfig(const std::string& filename)
     recoil_mult_4x = (float)get_double_ini("Recoil", "recoil_mult_4x", 1.0);
     recoil_mult_6x = (float)get_double_ini("Recoil", "recoil_mult_6x", 1.0);
 
-    prediction_algorithm = get_string_ini("Prediction", "prediction_algorithm", "None");
-    velocity_prediction_ms = (float)get_double_ini("Prediction", "velocity_prediction_ms", 16.0);
-    lr_past_points = get_long_ini("Prediction", "lr_past_points", 10);
-    es_alpha = (float)get_double_ini("Prediction", "es_alpha", 0.5);
-    es_beta = (float)get_double_ini("Prediction", "es_beta", 0.5);
-    kalman_q = get_double_ini("Prediction", "kalman_q", 0.1);
-    kalman_r = get_double_ini("Prediction", "kalman_r", 0.1);
-    kalman_p = get_double_ini("Prediction", "kalman_p", 0.1);
+    
     
     kp_x = get_double_ini("PID", "kp_x", 0.5);
     ki_x = get_double_ini("PID", "ki_x", 0.0);
@@ -272,6 +259,7 @@ bool Config::loadConfig(const std::string& filename)
     kp_y = get_double_ini("PID", "kp_y", 0.4);
     ki_y = get_double_ini("PID", "ki_y", 0.0);
     kd_y = get_double_ini("PID", "kd_y", 0.15);
+    derivative_smoothing_factor = (float)get_double_ini("PID", "derivative_smoothing_factor", 0.8);
 
     arduino_baudrate = get_long_ini("Arduino", "arduino_baudrate", 115200);
     arduino_port = get_string_ini("Arduino", "arduino_port", "COM0");
@@ -450,18 +438,7 @@ bool Config::saveConfig(const std::string& filename)
     file << "recoil_mult_4x = " << recoil_mult_4x << "\n";
     file << "recoil_mult_6x = " << recoil_mult_6x << "\n\n";
 
-    file << "[Prediction]\n";
-    file << "prediction_algorithm = " << prediction_algorithm << "\n";
-    file << std::fixed << std::setprecision(6);
-    file << "velocity_prediction_ms = " << velocity_prediction_ms << "\n";
-    file << std::noboolalpha;
-    file << "lr_past_points = " << lr_past_points << "\n";
-    file << std::fixed << std::setprecision(6);
-    file << "es_alpha = " << es_alpha << "\n";
-    file << "es_beta = " << es_beta << "\n";
-    file << "kalman_q = " << kalman_q << "\n";
-    file << "kalman_r = " << kalman_r << "\n";
-    file << "kalman_p = " << kalman_p << "\n\n";
+    
     
     file << "[TargetLocking]\n";
     file << "enable_target_locking = " << (enable_target_locking ? "true" : "false") << "\n";
@@ -477,7 +454,8 @@ bool Config::saveConfig(const std::string& filename)
     file << "kd_x = " << kd_x << "\n";
     file << "kp_y = " << kp_y << "\n";
     file << "ki_y = " << ki_y << "\n";
-    file << "kd_y = " << kd_y << "\n\n";
+    file << "kd_y = " << kd_y << "\n";
+    file << "derivative_smoothing_factor = " << derivative_smoothing_factor << "\n\n";
 
     file << "[Arduino]\n";
     file << std::noboolalpha;

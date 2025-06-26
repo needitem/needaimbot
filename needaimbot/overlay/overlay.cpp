@@ -452,11 +452,7 @@ void OverlayThread()
                         ImGui::EndTabItem();
                     }
 
-                    if (ImGui::BeginTabItem("Prediction"))
-                    {
-                        draw_prediction();
-                        ImGui::EndTabItem();
-                    }
+                    
 
                     if (ImGui::BeginTabItem("RCS"))
                     {
@@ -530,7 +526,8 @@ void OverlayThread()
                             config.ki_y,
                             config.kd_y,
                             config.bScope_multiplier,
-                            config.norecoil_ms
+                            config.norecoil_ms,
+                            config.derivative_smoothing_factor
                         );
                         config.saveConfig();
                     }
@@ -606,7 +603,8 @@ void OverlayThread()
                             config.ki_y,
                             config.kd_y,
                             config.bScope_multiplier,
-                            config.norecoil_ms
+                            config.norecoil_ms,
+                            config.derivative_smoothing_factor
                         );
 
                         config.saveConfig();
@@ -626,7 +624,8 @@ void OverlayThread()
                             config.ki_y,
                             config.kd_y,
                             config.bScope_multiplier,
-                            config.norecoil_ms
+                            config.norecoil_ms,
+                            config.derivative_smoothing_factor
                         );
 
                         config.saveConfig();
@@ -679,10 +678,7 @@ void OverlayThread()
                 ImGui::EndTabBar();
             }
 
-            if (prediction_settings_changed.exchange(false))
-            {
-                globalMouseThread->setPredictor(config.prediction_algorithm);
-            }
+            
             ImGui::Separator();
             ImGui::TextColored(ImVec4(255, 255, 255, 100), "Do not test shooting and aiming with the overlay and debug window is open.");
 

@@ -140,21 +140,7 @@ void draw_stats() {
     ImGui::Separator();
 
     
-    ImGui::Text("Predictor Calculation Time");
-    float current_predictor_time = g_current_predictor_calc_time_ms.load(std::memory_order_relaxed);
-    std::vector<float> predictor_history = get_history_copy(g_predictor_calc_time_history, g_predictor_calc_history_mutex);
-    char predictor_label[128];
-    snprintf(predictor_label, sizeof(predictor_label), "Current: %.3f ms", current_predictor_time);
-    get_plot_scale(predictor_history, min_y, max_y);
-    if (!predictor_history.empty()) {
-        ImGui::PlotLines("##PredictorCalcTimePlot", predictor_history.data(), static_cast<int>(predictor_history.size()),
-                         0, nullptr, min_y, max_y, plot_size);
-    } else {
-        ImGui::Dummy(plot_size);
-        ImGui::Text("No predictor data yet.");
-    }
-    ImGui::TextUnformatted(predictor_label);
-    ImGui::Separator();
+    
 
     
     ImGui::Text("Input Send Time");
@@ -207,10 +193,11 @@ void draw_stats() {
         std::ofstream ofs("stats.csv", std::ios::app);
         if (ofs) {
             if (!stats_log_header_written) {
-                ofs << "avg_cycle_ms,avg_acq_ms,avg_inf_ms,avg_fps,avg_pid_ms,avg_pred_ms,avg_input_ms\n";
+                ofs << "avg_cycle_ms,avg_acq_ms,avg_inf_ms,avg_fps,avg_pid_ms,avg_input_ms
+"
                 stats_log_header_written = true;
             }
-            ofs << avg_cycle << "," << avg_acq << "," << avg_inf << "," << avg_fps << "," << avg_pid << "," << avg_pred << "," << avg_input << "\n";
+            ofs << avg_cycle << "," << avg_acq << "," << avg_inf << "," << avg_fps << "," << avg_pid << "," << avg_input << "\n";
         }
     }
 }

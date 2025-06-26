@@ -15,7 +15,7 @@ extern Detector detector;
 extern MouseThread* globalMouseThread;
 extern SerialConnection* arduinoSerial;
 extern std::atomic<bool> input_method_changed;
-extern std::atomic<bool> prediction_settings_changed;
+
 extern std::atomic<bool> aiming;
 extern std::atomic<bool> shooting;
 extern std::atomic<bool> zooming;
@@ -52,9 +52,7 @@ extern std::vector<float> g_pid_calc_time_history;
 extern std::mutex g_pid_calc_history_mutex;
 
 
-extern std::atomic<float> g_current_predictor_calc_time_ms;
-extern std::vector<float> g_predictor_calc_time_history;
-extern std::mutex g_predictor_calc_history_mutex;
+
 
 
 extern std::atomic<float> g_current_input_send_time_ms;

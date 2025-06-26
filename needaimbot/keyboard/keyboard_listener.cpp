@@ -116,7 +116,8 @@ void keyboardListener()
                         config.ki_y,
                         config.kd_y,
                         config.bScope_multiplier,
-                        config.norecoil_ms
+                        config.norecoil_ms,
+                        config.derivative_smoothing_factor
                     );
                 }
                 reloadPressed = true;

@@ -15,22 +15,19 @@
 
 #include "config/config.h"
 #include "aimbot_components/AimbotTarget.h"
-#include "predictors/IPredictor.h"
 #include "input_drivers/SerialConnection.h"
 #include "input_drivers/ghub.h"
 #include "input_drivers/kmboxNet.h"
 #include "input_drivers/rzctl.h"
 #include "input_drivers/InputMethod.h"
 
-
 class PIDController2D;
 
 
 class InputMethod;
 class SerialConnection;
-class GhubMouse;
-class IPredictor; 
-struct Point2D; 
+class GhubMouse; 
+struct Point2D { float x, y; }; 
 
 using ErrorTrackingCallback = std::function<void(float error_x, float error_y)>;
 
@@ -62,8 +59,6 @@ private:
     std::atomic<bool> target_detected{false};
     std::atomic<bool> mouse_pressed{false};
 
-    
-    std::unique_ptr<IPredictor> predictor_; 
     mutable std::mutex predictor_mutex_;        
 
     int last_applied_dx_ = 0; 
@@ -78,6 +73,7 @@ public:
                 float kp_y, float ki_y, float kd_y,
                 float bScope_multiplier,
                 float norecoil_ms,
+                float derivative_smoothing_factor,
                 SerialConnection *serialConnection = nullptr,
                 GhubMouse *gHub = nullptr);
     ~MouseThread();
@@ -86,7 +82,8 @@ public:
                       float kp_x, float ki_x, float kd_x,
                       float kp_y, float ki_y, float kd_y,
                       float bScope_multiplier,
-                      float norecoil_ms);
+                      float norecoil_ms,
+                      float derivative_smoothing_factor);
 
     Eigen::Vector2f calculateMovement(const Eigen::Vector2f &target_pos);
     bool checkTargetInScope(float target_x, float target_y, float target_w, float target_h, float reduction_factor);
@@ -99,9 +96,7 @@ public:
     void disableErrorTracking();
 
     void setInputMethod(std::unique_ptr<InputMethod> new_method);
-    void setPredictor(const std::string& algorithm_name); 
-    void resetPredictor(); 
-    bool hasActivePredictor() const; 
+     
     void executeSilentAim(const AimbotTarget& target); 
     
     float getScreenWidth() { std::lock_guard<std::mutex> lock(member_data_mutex_); return screen_width; }

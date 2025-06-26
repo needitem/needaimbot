@@ -58,7 +58,7 @@ std::atomic<bool> capture_window_changed(false);
 std::atomic<bool> detector_model_changed(false);
 std::atomic<bool> show_window_changed(false);
 std::atomic<bool> input_method_changed(false);
-std::atomic<bool> prediction_settings_changed(false);
+
 std::atomic<bool> capture_timeout_changed(false);
 
 std::atomic<bool> zooming(false);
@@ -100,9 +100,7 @@ std::vector<float> g_pid_calc_time_history;
 std::mutex g_pid_calc_history_mutex;
 
 
-std::atomic<float> g_current_predictor_calc_time_ms(0.0f);
-std::vector<float> g_predictor_calc_time_history;
-std::mutex g_predictor_calc_history_mutex;
+
 
 
 std::atomic<float> g_current_input_send_time_ms(0.0f);
@@ -455,14 +453,7 @@ void mouseThreadFunction(MouseThread &mouseThread)
                 {
                     const void* current_target_identifier = &best_target_from_detector; 
 
-                    if (current_target_identifier != last_target_identifier)
-                    {
-                        if (mouseThread.hasActivePredictor()) {
-                            
-                            mouseThread.resetPredictor();
-                        }
-                        last_target_identifier = current_target_identifier;
-                    }
+                    
 
                     AimbotTarget best_target(
                         best_target_from_detector.box.x, 
@@ -485,13 +476,7 @@ void mouseThreadFunction(MouseThread &mouseThread)
                 else
                 {
                     mouseThread.releaseMouse();
-                    if (last_target_identifier != nullptr) {
-                        if (mouseThread.hasActivePredictor()) {
-                            
-                            mouseThread.resetPredictor();
-                        }
-                        last_target_identifier = nullptr;
-                    }
+                    
                 }
             }
             else
@@ -651,6 +636,7 @@ int main()
             config.kd_y,
             config.bScope_multiplier,
             config.norecoil_ms,
+            config.derivative_smoothing_factor,
             arduinoSerial,
             gHub);
 
