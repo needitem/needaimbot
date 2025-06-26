@@ -172,8 +172,7 @@ Detector::~Detector()
     freeGpuBuffer(m_nms_d_keep);
     freeGpuBuffer(m_nms_d_indices);
 
-    if (h_finalDetectionsCountPinned) cudaFreeHost(h_finalDetectionsCountPinned);
-    if (h_finalDetectionsPinned) cudaFreeHost(h_finalDetectionsPinned);
+    
 }
 
 void Detector::getInputNames()
@@ -317,9 +316,7 @@ bool Detector::initializeCudaContext()
     if (!checkCudaError(cudaEventCreateWithFlags(&processingDone, cudaEventDisableTiming), "creating processingDone event")) { m_cudaContextInitialized = false; return false; }
     if (!checkCudaError(cudaEventCreateWithFlags(&postprocessCopyDone, cudaEventDisableTiming), "creating postprocessCopyDone event")) { m_cudaContextInitialized = false; return false; }
 
-    // Allocate pinned host memory for detection copies
-    cudaHostAlloc(&h_finalDetectionsCountPinned, sizeof(int), cudaHostAllocDefault);
-    cudaHostAlloc(&h_finalDetectionsPinned, config.max_detections * sizeof(Detection), cudaHostAllocDefault);
+    
 
     m_cudaContextInitialized = true; 
     return true; 
@@ -716,43 +713,43 @@ void Detector::inferenceThread()
                 
                 
 
-                m_hasBestTarget = false;
-                m_finalDetectionsCountHost = 0;
-                // Record event on inference stream to signal postprocessing done
-                cudaEventRecord(processingDone, stream);
-                // Have postprocessStream wait until postprocessing is complete
-                cudaStreamWaitEvent(postprocessStream, processingDone, 0);
-                // Copy detection count to host pinned memory
-                cudaMemcpyAsync(h_finalDetectionsCountPinned, m_finalDetectionsCountGpu, sizeof(int), cudaMemcpyDeviceToHost, postprocessStream);
-                cudaStreamSynchronize(postprocessStream);
-                int count = *h_finalDetectionsCountPinned;
-                if (count > 0) {
-                    // Copy all detections into pinned host memory
-                    cudaMemcpyAsync(h_finalDetectionsPinned, m_finalDetectionsGpu, count * sizeof(Detection), cudaMemcpyDeviceToHost, postprocessStream);
-                    cudaStreamSynchronize(postprocessStream);
-                    // Host-side search for nearest detection to center
-                    int cx = config.detection_resolution / 2;
-                    int cy = config.detection_resolution / 2;
-                    int bestIdx = 0;
-                    float bestDist2 = std::numeric_limits<float>::max();
-                    for (int i = 0; i < count; ++i) {
-                        const Detection& det = h_finalDetectionsPinned[i];
-                        float fx = det.box.x + det.box.width * 0.5f;
-                        float fy = det.box.y + det.box.height * 0.5f;
-                        float dx = fx - cx;
-                        float dy = fy - cy;
-                        float dist2 = dx * dx + dy * dy;
-                        if (dist2 < bestDist2) {
-                            bestDist2 = dist2;
-                            bestIdx = i;
-                        }
+                cudaStreamSynchronize(stream);
+
+                int final_detections_count = 0;
+                cudaMemcpy(&final_detections_count, m_finalDetectionsCountGpu, sizeof(int), cudaMemcpyDeviceToHost);
+
+                if (final_detections_count > 0)
+                {
+                    calculateTargetScoresGpu(
+                        m_finalDetectionsGpu, 
+                        final_detections_count, 
+                        m_scoresGpu, 
+                        config.detection_resolution, 
+                        config.detection_resolution, 
+                        config.distance_weight, 
+                        config.confidence_weight, 
+                        m_headClassId, 
+                        stream
+                    );
+
+                    findBestTargetGpu(m_scoresGpu, final_detections_count, m_bestTargetIndexGpu, stream);
+
+                    cudaMemcpyAsync(&m_bestTargetIndexHost, m_bestTargetIndexGpu, sizeof(int), cudaMemcpyDeviceToHost, stream);
+                    cudaStreamSynchronize(stream);
+
+                    if (m_bestTargetIndexHost >= 0 && m_bestTargetIndexHost < final_detections_count)
+                    {
+                        cudaMemcpyAsync(&m_bestTargetHost, &m_finalDetectionsGpu[m_bestTargetIndexHost], sizeof(Detection), cudaMemcpyDeviceToHost, stream);
+                        cudaStreamSynchronize(stream);
+                        m_hasBestTarget = true;
                     }
-                    // Assign best target
-                    m_bestTargetHost = h_finalDetectionsPinned[bestIdx];
-                    m_bestTargetIndexHost = bestIdx;
-                    m_hasBestTarget = true;
-                } else {
-                    m_bestTargetIndexHost = -1;
+                    else
+                    {
+                        m_hasBestTarget = false;
+                    }
+                }
+                else
+                {
                     m_hasBestTarget = false;
                 }
                 // Notify update

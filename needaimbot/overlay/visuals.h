@@ -5,6 +5,6 @@
 #include <vector>
 #include "detector.h"
 
-void displayThread();
+
 
 #endif 

@@ -69,6 +69,7 @@
     <CudaCompile Include="detector\filterGpu.cu" />
     <CudaCompile Include="detector\postProcessGpu.cu" />
     <CudaCompile Include="detector\scoringGpu.cu" />
+    <CudaCompile Include="detector\targetLockingGpu.cu" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="capture\capture.h" />
@@ -80,6 +81,7 @@
     <ClInclude Include="detector\filterGpu.h" />
     <ClInclude Include="detector\postProcess.h" />
     <ClInclude Include="detector\scoringGpu.h" />
+    <ClInclude Include="detector\targetLockingGpu.h" />
     <ClInclude Include="imgui\imconfig.h" />
     <ClInclude Include="imgui\imgui.h" />
     <ClInclude Include="imgui\imgui_impl_dx11.h" />
@@ -92,10 +94,19 @@
     <ClInclude Include="include\other_tools.h" />
     <ClInclude Include="keyboard\keyboard_listener.h" />
     <ClInclude Include="keyboard\keycodes.h" />
+    <ClInclude Include="mouse\aimbot_components\AimbotTarget.h" />
+    <ClInclude Include="mouse\aimbot_components\PIDController2D.h" />
     <ClInclude Include="mouse\ExponentialSmoothingPredictor.h" />
     <ClInclude Include="mouse\ghub.h" />
     <ClInclude Include="mouse\HidTable.h" />
     <ClInclude Include="mouse\InputMethod.h" />
+    <ClInclude Include="mouse\input_drivers\ghub.h" />
+    <ClInclude Include="mouse\input_drivers\HidTable.h" />
+    <ClInclude Include="mouse\input_drivers\InputMethod.h" />
+    <ClInclude Include="mouse\input_drivers\kmboxNet.h" />
+    <ClInclude Include="mouse\input_drivers\my_enc.h" />
+    <ClInclude Include="mouse\input_drivers\rzctl.h" />
+    <ClInclude Include="mouse\input_drivers\SerialConnection.h" />
     <ClInclude Include="mouse\IPredictor.h" />
     <ClInclude Include="mouse\KalmanFilterPredictor.h" />
     <ClInclude Include="mouse\kmboxNet.h" />
@@ -103,6 +114,11 @@
     <ClInclude Include="mouse\mouse.h" />
     <ClInclude Include="mouse\my_enc.h" />
     <ClInclude Include="mouse\PIDController2D.h" />
+    <ClInclude Include="mouse\predictors\ExponentialSmoothingPredictor.h" />
+    <ClInclude Include="mouse\predictors\IPredictor.h" />
+    <ClInclude Include="mouse\predictors\KalmanFilterPredictor.h" />
+    <ClInclude Include="mouse\predictors\LinearRegressionPredictor.h" />
+    <ClInclude Include="mouse\predictors\VelocityPredictor.h" />
     <ClInclude Include="mouse\rzctl.h" />
     <ClInclude Include="mouse\SerialConnection.h" />
     <ClInclude Include="mouse\AimbotTarget.h" />

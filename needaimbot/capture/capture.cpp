@@ -49,6 +49,7 @@
 
 extern Detector detector;
 extern std::mutex configMutex;
+extern OpticalFlow g_opticalFlow;
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -62,9 +63,9 @@ std::array<cv::cuda::GpuMat, FRAME_BUFFER_COUNT> captureGpuBuffer;
 std::array<cv::Mat, FRAME_BUFFER_COUNT> captureCpuBuffer;
 std::atomic<int> captureGpuWriteIdx{0};
 std::atomic<int> captureCpuWriteIdx{0};
-std::atomic<bool> newFrameAvailable = false;
 
-std::mutex frameMutex;
+
+
 
 int g_captureRegionWidth = 0;
 int g_captureRegionHeight = 0;
@@ -214,12 +215,9 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 {
                     captureFrameCount++;
                     detector.processFrame(screenshotGpu);
-                    
-                    int idx = (captureGpuWriteIdx.load(std::memory_order_relaxed) + 1) % FRAME_BUFFER_COUNT;
-                    captureGpuBuffer[idx] = screenshotGpu;
-                    captureGpuWriteIdx.store(idx, std::memory_order_release);
-                    newFrameAvailable.store(true, std::memory_order_release);
-                    frameCV.notify_one(); 
+                    if (config.enable_optical_flow && g_opticalFlow.isThreadRunning()) {
+                        g_opticalFlow.enqueueFrame(screenshotGpu);
+                    } 
                 }
                 else
                 {
@@ -230,12 +228,11 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 {
                     captureFrameCount++;
                     detector.processFrame(screenshotCpu);
-                    
-                    int idx = (captureCpuWriteIdx.load(std::memory_order_relaxed) + 1) % FRAME_BUFFER_COUNT;
-                    captureCpuBuffer[idx] = screenshotCpu;
-                    captureCpuWriteIdx.store(idx, std::memory_order_release);
-                    newFrameAvailable.store(true, std::memory_order_release);
-                    frameCV.notify_one();
+                    if (config.enable_optical_flow && g_opticalFlow.isThreadRunning()) {
+                        cv::cuda::GpuMat gpuFrame;
+                        gpuFrame.upload(screenshotCpu);
+                        g_opticalFlow.enqueueFrame(gpuFrame);
+                    }
                 }
                 else
                 {
