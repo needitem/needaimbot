@@ -32,7 +32,14 @@ void draw_mouse()
     ImGui::Columns(2, "MouseSettingsColumns", false); 
 
     
-    ImGui::Text("PID Controller Settings");
+    ImGui::Text("Controller Settings");
+    ImGui::Spacing();
+    
+    if (ImGui::Checkbox("Use Predictive Controller", &config.use_predictive_controller)) { config.saveConfig(); }
+    if (ImGui::IsItemHovered())
+    {
+        SetWrappedTooltip("Enable advanced Kalman filter + PID controller for better target tracking and prediction. Recommended for moving targets.");
+    }
     ImGui::Spacing(); 
     
     
@@ -104,6 +111,44 @@ void draw_mouse()
             SetWrappedTooltip("Predicts future vertical error based on rate of change. Higher values add dampening to reduce overshooting.");
         }
         ImGui::Spacing(); 
+    }
+
+    
+    if (config.use_predictive_controller && ImGui::CollapsingHeader("Predictive Controller Settings"))
+    {
+        float prediction_time_display = config.prediction_time_ms;
+        if (ImGui::InputFloat("Prediction Time (ms)", &prediction_time_display, 1.0f, 10.0f, "%.1f"))
+        {
+            config.prediction_time_ms = prediction_time_display;
+            config.saveConfig();
+        }
+        if (ImGui::IsItemHovered())
+        {
+            SetWrappedTooltip("How far ahead to predict target movement in milliseconds. Higher values work better for fast-moving targets.");
+        }
+
+        float process_noise_display = config.kalman_process_noise;
+        if (ImGui::InputFloat("Process Noise", &process_noise_display, 0.1f, 1.0f, "%.1f"))
+        {
+            config.kalman_process_noise = process_noise_display;
+            config.saveConfig();
+        }
+        if (ImGui::IsItemHovered())
+        {
+            SetWrappedTooltip("Kalman filter process noise. Higher values make the tracker adapt faster to sudden target movements.");
+        }
+
+        float measurement_noise_display = config.kalman_measurement_noise;
+        if (ImGui::InputFloat("Measurement Noise", &measurement_noise_display, 0.1f, 1.0f, "%.1f"))
+        {
+            config.kalman_measurement_noise = measurement_noise_display;
+            config.saveConfig();
+        }
+        if (ImGui::IsItemHovered())
+        {
+            SetWrappedTooltip("Kalman filter measurement noise. Higher values smooth out detection jitter but reduce responsiveness.");
+        }
+        ImGui::Spacing();
     }
 
     
