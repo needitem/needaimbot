@@ -82,6 +82,12 @@ public:
     double derivative_smoothing_factor;
 
     
+    bool use_predictive_controller;
+    float prediction_time_ms;
+    float kalman_process_noise;
+    float kalman_measurement_noise;
+
+    
     int arduino_baudrate;
     std::string arduino_port;
     bool arduino_16_bit_mouse;
