@@ -178,10 +178,6 @@ void draw_stats() {
         if (!pid_history.empty()) {
             avg_pid = std::accumulate(pid_history.begin(), pid_history.end(), 0.0) / pid_history.size();
         }
-        double avg_pred = 0.0;
-        if (!predictor_history.empty()) {
-            avg_pred = std::accumulate(predictor_history.begin(), predictor_history.end(), 0.0) / predictor_history.size();
-        }
         double avg_input = 0.0;
         if (!input_send_history.empty()) {
             avg_input = std::accumulate(input_send_history.begin(), input_send_history.end(), 0.0) / input_send_history.size();
@@ -189,15 +185,6 @@ void draw_stats() {
         double avg_fps = 0.0;
         if (!fps_history.empty()) {
             avg_fps = std::accumulate(fps_history.begin(), fps_history.end(), 0.0) / fps_history.size();
-        }
-        std::ofstream ofs("stats.csv", std::ios::app);
-        if (ofs) {
-            if (!stats_log_header_written) {
-                ofs << "avg_cycle_ms,avg_acq_ms,avg_inf_ms,avg_fps,avg_pid_ms,avg_input_ms
-"
-                stats_log_header_written = true;
-            }
-            ofs << avg_cycle << "," << avg_acq << "," << avg_inf << "," << avg_fps << "," << avg_pid << "," << avg_input << "\n";
         }
     }
 }

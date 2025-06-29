@@ -284,9 +284,18 @@ inline void handleEasyNoRecoil(MouseThread &mouseThread)
 void mouseThreadFunction(MouseThread &mouseThread)
 {
     std::cout << "Mouse thread started." << std::endl;
+    
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+    SetThreadAffinityMask(GetCurrentThread(), 1 << 1);
+    
     auto last_frame_time = std::chrono::high_resolution_clock::now();
-    float target_fps = config.target_fps > 0 ? config.target_fps : 60.0f; 
-    float target_frame_time_ms = 1000.0f / target_fps; 
+    float target_fps = config.target_fps > 0 ? config.target_fps : 1000.0f;
+    float target_frame_time_ms = 1000.0f / target_fps;
+    
+    constexpr int PREDICTION_BUFFER_SIZE = 8;
+    std::array<Detection, PREDICTION_BUFFER_SIZE> prediction_buffer;
+    int prediction_index = 0;
+    bool prediction_initialized = false; 
 
     int lastDetectionVersion = -1;
     const void* last_target_identifier = nullptr;
@@ -451,10 +460,8 @@ void mouseThreadFunction(MouseThread &mouseThread)
             {
                 if (is_aiming && has_target_from_detector)
                 {
-                    const void* current_target_identifier = &best_target_from_detector; 
-
+                    const void* current_target_identifier = &best_target_from_detector;
                     
-
                     AimbotTarget best_target(
                         best_target_from_detector.box.x, 
                         best_target_from_detector.box.y, 
@@ -462,7 +469,14 @@ void mouseThreadFunction(MouseThread &mouseThread)
                         best_target_from_detector.box.height,
                         best_target_from_detector.classId
                     );
+                    
+                    auto pid_start = std::chrono::high_resolution_clock::now();
                     mouseThread.moveMouse(best_target);
+                    auto pid_end = std::chrono::high_resolution_clock::now();
+                    
+                    float pid_time_ms = std::chrono::duration<float, std::milli>(pid_end - pid_start).count();
+                    add_to_history(g_pid_calc_time_history, pid_time_ms, g_pid_calc_history_mutex, 100);
+                    g_current_pid_calc_time_ms.store(pid_time_ms);
 
                     if (hotkey_pressed_for_trigger)
                     {
@@ -653,11 +667,19 @@ int main()
 
         initializeInputMethod();
 
+        SetThreadAffinityMask(GetCurrentThread(), 1 << 3);
+        
         std::thread keyThread(keyboardListener);
         std::thread capThread(captureThread, config.detection_resolution, config.detection_resolution);
         std::thread detThread(&Detector::inferenceThread, &detector);
         std::thread mouseMovThread(mouseThreadFunction, std::ref(mouseThread));
         std::thread overlayThread(OverlayThread);
+        
+        SetThreadPriority(keyThread.native_handle(), THREAD_PRIORITY_NORMAL);
+        SetThreadPriority(capThread.native_handle(), THREAD_PRIORITY_TIME_CRITICAL);
+        SetThreadPriority(detThread.native_handle(), THREAD_PRIORITY_HIGHEST);
+        SetThreadPriority(mouseMovThread.native_handle(), THREAD_PRIORITY_TIME_CRITICAL);
+        SetThreadPriority(overlayThread.native_handle(), THREAD_PRIORITY_BELOW_NORMAL);
 
         welcome_message();
 

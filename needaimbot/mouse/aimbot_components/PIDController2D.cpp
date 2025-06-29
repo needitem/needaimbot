@@ -10,29 +10,27 @@ PIDController2D::PIDController2D(float kp_x, float ki_x, float kd_x, float kp_y,
 
 Eigen::Vector2f PIDController2D::calculate(const Eigen::Vector2f &error)
 {
-    auto now = std::chrono::steady_clock::now();
-    float dt = std::chrono::duration<float>(now - last_time_point).count();
+    auto now = std::chrono::high_resolution_clock::now();
+    float dt = std::chrono::duration<float, std::nano>(now - last_time_point).count() * 1e-9f;
     last_time_point = now;
+    
+    static const float MIN_DT = 1e-6f;
+    static const float MAX_DT = 0.1f;
+    dt = std::clamp(dt, MIN_DT, MAX_DT);
 
-    if (dt > 0.0001f)
-    {
-        integral.x() += error.x() * dt;
-        integral.y() += error.y() * dt;
+    constexpr float INTEGRAL_CLAMP = 100.0f;
+    
+    integral.x() = std::clamp(integral.x() + error.x() * dt, -INTEGRAL_CLAMP, INTEGRAL_CLAMP);
+    integral.y() = std::clamp(integral.y() + error.y() * dt, -INTEGRAL_CLAMP, INTEGRAL_CLAMP);
 
-        float current_derivative_x = (error.x() - prev_error.x()) / dt;
-        float current_derivative_y = (error.y() - prev_error.y()) / dt;
+    const float inv_dt = 1.0f / dt;
+    float current_derivative_x = (error.x() - prev_error.x()) * inv_dt;
+    float current_derivative_y = (error.y() - prev_error.y()) * inv_dt;
 
-        // Apply smoothing to the derivative term
-        derivative.x() = current_derivative_x * derivative_smoothing_factor + prev_derivative.x() * (1.0f - derivative_smoothing_factor);
-        derivative.y() = current_derivative_y * derivative_smoothing_factor + prev_derivative.y() * (1.0f - derivative_smoothing_factor);
+    derivative.x() = current_derivative_x * derivative_smoothing_factor + prev_derivative.x() * (1.0f - derivative_smoothing_factor);
+    derivative.y() = current_derivative_y * derivative_smoothing_factor + prev_derivative.y() * (1.0f - derivative_smoothing_factor);
 
-        prev_derivative = derivative;
-    }
-    else
-    {
-        // If dt is too small, maintain the previous derivative to avoid sudden jumps
-        // derivative.setZero(); // Uncomment this if you prefer to zero out derivative for very small dt
-    }
+    prev_derivative = derivative;
 
     
     Eigen::Vector2f output;

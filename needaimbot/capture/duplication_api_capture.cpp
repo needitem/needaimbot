@@ -36,15 +36,22 @@ class DDAManager
 public:
     DDAManager()
         : m_device(nullptr), m_context(nullptr), m_duplication(nullptr), m_output1(nullptr), m_sharedTexture(nullptr), m_cudaResource(nullptr), m_cudaStream(nullptr), m_framePool(5), m_captureDoneEvent(nullptr)
-        , m_pinnedHostBuffer(nullptr), m_hostCopyStream(nullptr) 
+        , m_pinnedHostBuffer(nullptr), m_hostCopyStream(nullptr), m_asyncCopyStream(nullptr), m_computeStream(nullptr)
     {
         ZeroMemory(&m_duplDesc, sizeof(m_duplDesc));
+        cudaStreamCreateWithFlags(&m_asyncCopyStream, cudaStreamNonBlocking);
+        cudaStreamCreateWithFlags(&m_computeStream, cudaStreamNonBlocking);
+        
+        size_t pinnedSize = 1920 * 1080 * 3;
+        cudaMallocHost(&m_pinnedHostBuffer, pinnedSize);
     }
 
     ~DDAManager()
     {
         
         if (m_hostCopyStream) cudaStreamDestroy(m_hostCopyStream);
+        if (m_asyncCopyStream) cudaStreamDestroy(m_asyncCopyStream);
+        if (m_computeStream) cudaStreamDestroy(m_computeStream);
         if (m_pinnedHostBuffer) cudaFreeHost(m_pinnedHostBuffer);
         Release();
     }
@@ -452,6 +459,8 @@ public:
     
     unsigned char* m_pinnedHostBuffer;
     cudaStream_t m_hostCopyStream;
+    cudaStream_t m_asyncCopyStream;
+    cudaStream_t m_computeStream;
 };
 
 DuplicationAPIScreenCapture::DuplicationAPIScreenCapture(int desiredWidth, int desiredHeight)
