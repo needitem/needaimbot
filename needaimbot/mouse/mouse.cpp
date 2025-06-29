@@ -366,7 +366,41 @@ void MouseThread::moveMouse(const AimbotTarget &target)
 
 
     
+    // Calculate initial error for prediction
+    float initial_error_x = raw_target_pos.x - current_center_x;
+    float initial_error_y = raw_target_pos.y - current_center_y;
+    
+    // Enhanced target prediction using velocity estimation
     Point2D predicted_target_pos = raw_target_pos;
+    
+    static Point2D last_target_pos = raw_target_pos;
+    static auto last_target_time = std::chrono::high_resolution_clock::now();
+    auto current_time = std::chrono::high_resolution_clock::now();
+    
+    float dt_target = std::chrono::duration<float, std::milli>(current_time - last_target_time).count() / 1000.0f;
+    dt_target = std::clamp(dt_target, 0.001f, 0.1f); // Clamp between 1ms and 100ms
+    
+    if (dt_target > 0.001f) {
+        // Calculate target velocity
+        float target_vel_x = (raw_target_pos.x - last_target_pos.x) / dt_target;
+        float target_vel_y = (raw_target_pos.y - last_target_pos.y) / dt_target;
+        
+        // Prediction time based on current error magnitude
+        float error_magnitude = std::sqrt(initial_error_x * initial_error_x + initial_error_y * initial_error_y);
+        float prediction_time = std::clamp(error_magnitude * 0.001f, 0.0f, 0.05f); // 0-50ms prediction
+        
+        // Apply prediction with velocity smoothing
+        static float smooth_vel_x = 0.0f, smooth_vel_y = 0.0f;
+        const float velocity_smoothing = 0.7f;
+        smooth_vel_x = smooth_vel_x * (1.0f - velocity_smoothing) + target_vel_x * velocity_smoothing;
+        smooth_vel_y = smooth_vel_y * (1.0f - velocity_smoothing) + target_vel_y * velocity_smoothing;
+        
+        predicted_target_pos.x = raw_target_pos.x + smooth_vel_x * prediction_time;
+        predicted_target_pos.y = raw_target_pos.y + smooth_vel_y * prediction_time;
+    }
+    
+    last_target_pos = raw_target_pos;
+    last_target_time = current_time;
 
     
     float error_x = predicted_target_pos.x - current_center_x;
@@ -391,11 +425,47 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     add_to_history(g_pid_calc_time_history, pid_duration_ms, g_pid_calc_history_mutex);
 
     
-    float move_x = pid_output.x() * current_move_scale_x;
-    float move_y = pid_output.y() * current_move_scale_y;
+    // Adaptive sensitivity scaling based on error magnitude
+    float error_magnitude = std::sqrt(error_x * error_x + error_y * error_y);
+    float adaptive_scale = 1.0f;
+    
+    // Close range: higher precision (lower sensitivity)
+    // Far range: faster movement (higher sensitivity)
+    if (error_magnitude < 10.0f) {
+        adaptive_scale = 0.7f; // Higher precision for small errors
+    } else if (error_magnitude < 50.0f) {
+        adaptive_scale = 1.0f; // Normal sensitivity
+    } else {
+        adaptive_scale = 1.3f; // Faster movement for large errors
+    }
+    
+    float move_x = pid_output.x() * current_move_scale_x * adaptive_scale;
+    float move_y = pid_output.y() * current_move_scale_y * adaptive_scale;
 
-    int dx_int = static_cast<int>(std::round(move_x));
-    int dy_int = static_cast<int>(std::round(move_y));
+    // Dead zone and micro-movement filtering
+    const float DEAD_ZONE = 0.5f;
+    const float MICRO_MOVEMENT_THRESHOLD = 0.3f;
+    
+    // Apply dead zone
+    if (std::abs(move_x) < DEAD_ZONE) move_x = 0.0f;
+    if (std::abs(move_y) < DEAD_ZONE) move_y = 0.0f;
+    
+    // Accumulate sub-pixel movements
+    static float accumulated_x = 0.0f, accumulated_y = 0.0f;
+    accumulated_x += move_x;
+    accumulated_y += move_y;
+    
+    int dx_int = 0, dy_int = 0;
+    
+    // Only move when accumulated movement exceeds threshold
+    if (std::abs(accumulated_x) >= MICRO_MOVEMENT_THRESHOLD) {
+        dx_int = static_cast<int>(std::round(accumulated_x));
+        accumulated_x -= dx_int;
+    }
+    if (std::abs(accumulated_y) >= MICRO_MOVEMENT_THRESHOLD) {
+        dy_int = static_cast<int>(std::round(accumulated_y));
+        accumulated_y -= dy_int;
+    }
 
     if (local_disable_upward_aim_active && dy_int < 0)
     {

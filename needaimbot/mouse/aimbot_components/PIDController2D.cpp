@@ -27,8 +27,20 @@ Eigen::Vector2f PIDController2D::calculate(const Eigen::Vector2f &error)
     float current_derivative_x = (error.x() - prev_error.x()) * inv_dt;
     float current_derivative_y = (error.y() - prev_error.y()) * inv_dt;
 
-    derivative.x() = current_derivative_x * derivative_smoothing_factor + prev_derivative.x() * (1.0f - derivative_smoothing_factor);
-    derivative.y() = current_derivative_y * derivative_smoothing_factor + prev_derivative.y() * (1.0f - derivative_smoothing_factor);
+    // Enhanced derivative filtering with adaptive smoothing
+    float error_magnitude = std::sqrt(error.x() * error.x() + error.y() * error.y());
+    float adaptive_smoothing = derivative_smoothing_factor;
+    
+    // Use more smoothing for small errors (higher precision)
+    // Use less smoothing for large errors (faster response)
+    if (error_magnitude < 5.0f) {
+        adaptive_smoothing = std::min(derivative_smoothing_factor * 1.5f, 0.9f);
+    } else if (error_magnitude > 20.0f) {
+        adaptive_smoothing = std::max(derivative_smoothing_factor * 0.7f, 0.1f);
+    }
+    
+    derivative.x() = current_derivative_x * adaptive_smoothing + prev_derivative.x() * (1.0f - adaptive_smoothing);
+    derivative.y() = current_derivative_y * adaptive_smoothing + prev_derivative.y() * (1.0f - adaptive_smoothing);
 
     prev_derivative = derivative;
 
