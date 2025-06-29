@@ -60,14 +60,11 @@ namespace UIHelpers
             changed = true;
         }
         
-        float t = *value ? 1.0f : 0.0f;
-        
-        ImGuiContext& g = *GImGui;
-        float ANIM_SPEED = 0.08f;
-        if (g.LastActiveId == g.CurrentWindow->GetID("##toggle")) {
-            float t_anim = ImSaturate(g.LastActiveIdTimer / ANIM_SPEED);
-            t = *value ? (t_anim) : (1.0f - t_anim);
-        }
+        // Simplified animation for better performance
+        static float t_smooth = *value ? 1.0f : 0.0f;
+        float target = *value ? 1.0f : 0.0f;
+        t_smooth += (target - t_smooth) * 0.15f; // Smooth interpolation
+        float t = t_smooth;
         
         ImU32 col_bg;
         if (ImGui::IsItemHovered()) {
