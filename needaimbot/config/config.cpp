@@ -56,6 +56,7 @@ bool Config::loadConfig(const std::string& filename)
         capture_borders = true;
         capture_cursor = true;
         capture_use_cuda = true;
+        use_1ms_capture = false;
         capture_timeout_ms = 5; 
         target_fps = 120.0f; 
 
@@ -226,6 +227,7 @@ bool Config::loadConfig(const std::string& filename)
     capture_borders = get_bool_ini("Capture", "capture_borders", true);
     capture_cursor = get_bool_ini("Capture", "capture_cursor", true);
     capture_use_cuda = get_bool_ini("Capture", "capture_use_cuda", true);
+    use_1ms_capture = get_bool_ini("Capture", "use_1ms_capture", false);
     capture_timeout_ms = get_long_ini("Capture", "capture_timeout_ms", 5);
     target_fps = (float)get_double_ini("Capture", "target_fps", 120.0);
 
@@ -404,6 +406,7 @@ bool Config::saveConfig(const std::string& filename)
     file << "capture_borders = " << (capture_borders ? "true" : "false") << "\n";
     file << "capture_cursor = " << (capture_cursor ? "true" : "false") << "\n";
     file << "capture_use_cuda = " << (capture_use_cuda ? "true" : "false") << "\n";
+    file << "use_1ms_capture = " << (use_1ms_capture ? "true" : "false") << "\n";
     file << "capture_timeout_ms = " << capture_timeout_ms << "\n";
     file << "target_fps = " << target_fps << "\n\n";
 

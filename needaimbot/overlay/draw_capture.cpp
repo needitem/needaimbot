@@ -88,6 +88,13 @@ void draw_capture_settings()
     }
 
     ImGui::Spacing();
+    if (ImGui::Checkbox("Use 1ms Capture", &config.use_1ms_capture)) { config.saveConfig(); }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Uses 1ms interval capture method for game capture (alternative to duplication API).");
+    }
+
+    ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
 

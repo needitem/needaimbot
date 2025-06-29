@@ -378,7 +378,7 @@ void mouseThreadFunction(MouseThread &mouseThread)
                 }
             }
             was_shooting = current_shooting_state; 
-            if (recoil_active.load() && currently_zooming) {
+            if (recoil_active.load() && currently_zooming && current_shooting_state) {
                  mouseThread.applyRecoilCompensation(config.easynorecoilstrength);
             }
         } else {
@@ -420,13 +420,6 @@ void mouseThreadFunction(MouseThread &mouseThread)
             }
         }
         else {
-            
-            if (config.easynorecoil && shooting.load() && zooming.load())
-            {
-                
-                
-            }
-
             bool newDetectionAvailable = false;
             bool has_target_from_detector = false;
             Detection best_target_from_detector;

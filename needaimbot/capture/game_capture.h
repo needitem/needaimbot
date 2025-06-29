@@ -6,7 +6,7 @@
 
 class GameCapture {
 public:
-	GameCapture(int fov_width, int fov_height, int screen_width, int screen_height, const std::string& game_name);
+	GameCapture(int fov_width, int fov_height, int screen_width, int screen_height, const std::string& game_name, bool use_1ms_capture = false);
 	~GameCapture();
 	bool initialize();
 	cv::Mat get_frame();
@@ -32,6 +32,7 @@ private:
 	cv::Mat frame;
 	int width, height;
 	std::string game_name;
+	bool use_1ms_capture;
 	HANDLE inject_hook(DWORD target_id);
 	HANDLE OpenMapPlusId(const std::wstring& base_name, DWORD id);
 	HANDLE OpenDataMap(uint32_t window, uint32_t map_id);
