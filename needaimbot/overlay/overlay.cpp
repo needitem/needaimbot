@@ -579,10 +579,10 @@ void OverlayThread()
 
                 }
 
-                // Reduce frequency of config change detection to every 3 frames for performance
+                // Reduce frequency of config change detection to every 5 frames for performance
                 static int config_check_frame_counter = 0;
                 config_check_frame_counter++;
-                bool should_check_config = (config_check_frame_counter % 3 == 0);
+                bool should_check_config = (config_check_frame_counter % 5 == 0);
                 
                 if (should_check_config) {
                     
@@ -778,9 +778,9 @@ void OverlayThread()
             }
             else
             {
-                // Calculate target frame time based on user's target_fps setting
-                float target_fps_value = std::max(15.0f, std::min(240.0f, config.target_fps)); // Clamp between 15-240 FPS
-                auto targetFrameTime = std::chrono::milliseconds(static_cast<long long>(1000.0f / target_fps_value));
+                // Limit overlay FPS to 30 for better performance while maintaining responsiveness
+                float overlay_target_fps = 30.0f;
+                auto targetFrameTime = std::chrono::milliseconds(static_cast<long long>(1000.0f / overlay_target_fps));
                 
                 if (elapsed < targetFrameTime)
                 {

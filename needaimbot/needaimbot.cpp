@@ -115,8 +115,8 @@ struct alignas(64) DetectionData {
     int version;
     
     DetectionData() : version(0) {
-        boxes.reserve(64);
-        classes.reserve(64);
+        boxes.reserve(512);  // Increased from 64 to 512
+        classes.reserve(512);  // Increased from 64 to 512
     }
 };
 
@@ -130,6 +130,9 @@ namespace optimized {
         const size_t count = boxes.size();
         if (count == 0) return;
         
+        if (scores.capacity() < count) {
+            scores.reserve(std::max(count, static_cast<size_t>(512)));
+        }
         scores.resize(count);
         
         const float half_res_x = resolution_x * 0.5f;
@@ -301,7 +304,7 @@ void mouseThreadFunction(MouseThread &mouseThread)
     const void* last_target_identifier = nullptr;
     std::chrono::steady_clock::time_point last_successful_target_time = std::chrono::steady_clock::now();
     std::chrono::steady_clock::time_point last_mouse_move_time = std::chrono::steady_clock::now();
-    const std::chrono::milliseconds active_timeout(15); 
+    const std::chrono::milliseconds active_timeout(5); 
     const std::chrono::milliseconds idle_timeout(1);    
 
     while (!shouldExit)
@@ -506,7 +509,7 @@ void mouseThreadFunction(MouseThread &mouseThread)
         auto loop_end_time = std::chrono::high_resolution_clock::now();
         auto loop_duration = std::chrono::duration<float, std::milli>(loop_end_time - loop_start_time).count();
         
-        target_fps = config.target_fps > 0 ? config.target_fps : 60.0f;
+        target_fps = config.target_fps > 0 ? std::min(config.target_fps, 240.0f) : 240.0f;
         target_frame_time_ms = 1000.0f / target_fps;
         
     }

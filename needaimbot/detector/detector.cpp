@@ -613,6 +613,8 @@ void Detector::inferenceThread()
 
     // Preallocate host buffer for detections to avoid per-frame allocations
     thread_local std::vector<Detection> current_frame_detections;
+    
+    // Remove unused config_cache - optimization moved to performGpuPostProcessing
 
     while (!shouldExit)
     {
@@ -705,6 +707,8 @@ void Detector::inferenceThread()
                 add_to_history(g_detector_cycle_time_history, cycle_duration_ms.count(), g_detector_cycle_history_mutex);
             }
             last_inference_loop_start_time = current_inference_loop_start_time;
+            
+            // Config caching moved to performGpuPostProcessing function
 
             try
             {
@@ -734,8 +738,11 @@ void Detector::inferenceThread()
                 
                 
 
+                // Batch memory copies to reduce sync overhead
                 int final_detections_count = 0;
                 cudaMemcpyAsync(&final_detections_count, m_finalDetectionsCountGpu, sizeof(int), cudaMemcpyDeviceToHost, stream);
+                
+                // Only sync once after all GPU operations
                 cudaStreamSynchronize(stream);
 
                 if (final_detections_count > 0)
@@ -754,9 +761,16 @@ void Detector::inferenceThread()
 
                     findBestTargetGpu(m_scoresGpu, final_detections_count, m_bestTargetIndexGpu, stream);
 
+                    // Batch final memory copies
                     cudaMemcpyAsync(&m_bestTargetIndexHost, m_bestTargetIndexGpu, sizeof(int), cudaMemcpyDeviceToHost, stream);
-                    cudaMemcpyAsync(&m_bestTargetHost, &m_finalDetectionsGpu[m_bestTargetIndexHost], sizeof(Detection), cudaMemcpyDeviceToHost, stream);
+                    
+                    // Copy target data only after we have the index
                     cudaStreamSynchronize(stream);
+                    
+                    if (m_bestTargetIndexHost >= 0 && m_bestTargetIndexHost < final_detections_count) {
+                        cudaMemcpyAsync(&m_bestTargetHost, &m_finalDetectionsGpu[m_bestTargetIndexHost], sizeof(Detection), cudaMemcpyDeviceToHost, stream);
+                        cudaStreamSynchronize(stream);
+                    }
 
                     if (m_bestTargetIndexHost >= 0 && m_bestTargetIndexHost < final_detections_count)
                     {
@@ -821,34 +835,47 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
     cudaMemsetAsync(m_decodedCountGpu, 0, sizeof(int), stream);
     cudaError_t decodeErr = cudaSuccess;
 
-    int maxDecodedDetections = config.max_detections * 2;
+    // Local config variables to reduce mutex locks
+    int local_max_detections;
+    float local_nms_threshold;
+    float local_confidence_threshold;
+    std::string local_postprocess;
+    { 
+        std::lock_guard<std::mutex> lock(configMutex);
+        local_max_detections = config.max_detections;
+        local_nms_threshold = config.nms_threshold;
+        local_confidence_threshold = config.confidence_threshold;
+        local_postprocess = config.postprocess;
+    }
 
-    if (config.postprocess == "yolo10") {
+    int maxDecodedDetections = local_max_detections * 2;
+
+    if (local_postprocess == "yolo10") {
         decodeErr = decodeYolo10Gpu(
             d_rawOutputPtr,
             outputType,
             shape,
             numClasses,
-            config.confidence_threshold,
+            local_confidence_threshold,
             this->img_scale,
             m_decodedDetectionsGpu,
             m_decodedCountGpu,
             maxDecodedDetections,
             stream);
-    } else if (config.postprocess == "yolo8" || config.postprocess == "yolo9" || config.postprocess == "yolo11" || config.postprocess == "yolo12") {
+    } else if (local_postprocess == "yolo8" || local_postprocess == "yolo9" || local_postprocess == "yolo11" || local_postprocess == "yolo12") {
          decodeErr = decodeYolo11Gpu(
             d_rawOutputPtr,
             outputType,
             shape,
             numClasses,
-            config.confidence_threshold,
+            local_confidence_threshold,
             this->img_scale,
             m_decodedDetectionsGpu,
             m_decodedCountGpu,
             maxDecodedDetections,
             stream);
     } else {
-        std::cerr << "[Detector] Unsupported post-processing type for GPU decoding: " << config.postprocess << std::endl;
+        std::cerr << "[Detector] Unsupported post-processing type for GPU decoding: " << local_postprocess << std::endl;
         cudaMemsetAsync(m_finalDetectionsCountGpu, 0, sizeof(int), stream);
         return;
     }
@@ -869,14 +896,15 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
     }
 
     
-    // Synchronization needed to read decodedCountHost
+    // Only sync when we need to read the count
     cudaStreamSynchronize(stream);
     
     int classFilteredCountHost = 0;
     if (decodedCountHost > 0) {
-        int validDecodedDetections = std::min(decodedCountHost, static_cast<int>(config.max_detections * 2));
+        int validDecodedDetections = std::min(decodedCountHost, static_cast<int>(local_max_detections * 2));
         if (validDecodedDetections > 0) {
             
+            // Only update ignore flags when necessary
             if (m_ignore_flags_need_update) {
                 { 
                     std::lock_guard<std::mutex> lock(configMutex);
@@ -923,7 +951,7 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
                 }
                 current_min_hsv_pixels_val = config.min_hsv_pixels;
                 current_remove_hsv_matches_val = config.remove_hsv_matches;
-                current_max_output_detections_val = config.max_detections; 
+                current_max_output_detections_val = local_max_detections; 
             } 
             
             
@@ -947,6 +975,7 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
             }
 
             cudaError_t filteredCountCopyErr = cudaMemcpyAsync(&classFilteredCountHost, m_classFilteredCountGpu, sizeof(int), cudaMemcpyDeviceToHost, stream);
+            // Reduce sync points - only sync when necessary
             cudaStreamSynchronize(stream);
             if (filteredCountCopyErr != cudaSuccess) {
                 std::cerr << "[Detector] Failed to copy filtered detection count DtoH: " << cudaGetErrorString(filteredCountCopyErr) << std::endl;
@@ -963,8 +992,8 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
 
     
     if (classFilteredCountHost > 0) {
-        // Limit NMS input to reduce computation - only top 10 for performance
-        int inputNmsCount = std::min(classFilteredCountHost, std::min(static_cast<int>(config.max_detections), 10)); 
+        // Limit NMS input to reduce computation - only top 5 for performance
+        int inputNmsCount = std::min(classFilteredCountHost, std::min(local_max_detections, 5)); 
         if (inputNmsCount > 0) {
             try {
                 NMSGpu(
@@ -972,9 +1001,8 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
                     inputNmsCount,            
                     m_finalDetectionsGpu,       
                     m_finalDetectionsCountGpu,  
-                    static_cast<int>(config.max_detections), 
-                    config.nms_threshold,
-                    
+                    static_cast<int>(local_max_detections), 
+                    local_nms_threshold,
                     m_nms_d_x1,
                     m_nms_d_y1,
                     m_nms_d_x2,
