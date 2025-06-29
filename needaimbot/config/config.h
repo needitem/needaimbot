@@ -14,6 +14,27 @@ struct ClassSetting {
     ClassSetting(int i = 0, std::string n = "", bool ign = false) : id(i), name(std::move(n)), ignore(ign) {}
 };
 
+struct WeaponRecoilProfile {
+    std::string weapon_name;
+    float base_strength;
+    float fire_rate_multiplier;
+    float scope_mult_1x;
+    float scope_mult_2x;
+    float scope_mult_3x;
+    float scope_mult_4x;
+    float scope_mult_6x;
+    float scope_mult_8x;
+    int start_delay_ms;
+    int end_delay_ms;
+    float recoil_ms;
+    
+    WeaponRecoilProfile(std::string name = "Default", float strength = 3.0f, float fire_mult = 1.0f)
+        : weapon_name(std::move(name)), base_strength(strength), fire_rate_multiplier(fire_mult),
+          scope_mult_1x(0.8f), scope_mult_2x(1.0f), scope_mult_3x(1.2f), 
+          scope_mult_4x(1.4f), scope_mult_6x(1.6f), scope_mult_8x(1.8f),
+          start_delay_ms(0), end_delay_ms(0), recoil_ms(1.0f) {}
+};
+
 struct Config; 
 
 class Detector;
@@ -71,6 +92,11 @@ public:
     float recoil_mult_3x;
     float recoil_mult_4x;
     float recoil_mult_6x;
+
+    
+    std::vector<WeaponRecoilProfile> weapon_profiles;
+    int active_weapon_profile_index;
+    std::string current_weapon_name;
 
     
     double kp_x;
@@ -185,6 +211,15 @@ public:
     bool loadProfile(const std::string& profileName);
     bool deleteProfile(const std::string& profileName);
     void resetConfig();
+
+    
+    void initializeDefaultWeaponProfiles();
+    bool addWeaponProfile(const WeaponRecoilProfile& profile);
+    bool removeWeaponProfile(const std::string& weapon_name);
+    WeaponRecoilProfile* getWeaponProfile(const std::string& weapon_name);
+    WeaponRecoilProfile* getCurrentWeaponProfile();
+    bool setActiveWeaponProfile(const std::string& weapon_name);
+    std::vector<std::string> getWeaponProfileNames() const;
 
     std::string joinStrings(const std::vector<std::string>& vec, const std::string& delimiter = ",");
 private:

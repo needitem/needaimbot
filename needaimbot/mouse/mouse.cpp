@@ -566,6 +566,47 @@ void MouseThread::applyRecoilCompensation(float strength)
     }
 }
 
+void MouseThread::applyWeaponRecoilCompensation(const WeaponRecoilProfile* profile, int scope_magnification)
+{
+    if (!profile || !input_method || !input_method->isValid()) {
+        return;
+    }
+
+    float scope_multiplier = 1.0f;
+    switch (scope_magnification) {
+        case 1: scope_multiplier = profile->scope_mult_1x; break;
+        case 2: scope_multiplier = profile->scope_mult_2x; break;
+        case 3: scope_multiplier = profile->scope_mult_3x; break;
+        case 4: scope_multiplier = profile->scope_mult_4x; break;
+        case 6: scope_multiplier = profile->scope_mult_6x; break;
+        case 8: scope_multiplier = profile->scope_mult_8x; break;
+        default: scope_multiplier = profile->scope_mult_1x; break;
+    }
+
+    float adjusted_strength = profile->base_strength * profile->fire_rate_multiplier * scope_multiplier;
+    
+    auto now_chrono_recoil = std::chrono::steady_clock::now(); 
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now_chrono_recoil - last_recoil_compensation_time);
+    auto required_delay = std::chrono::milliseconds(static_cast<long long>(profile->recoil_ms));
+
+    if (elapsed >= required_delay)
+    {
+        std::lock_guard<std::mutex> lock(input_method_mutex); 
+        
+        int dy_recoil = static_cast<int>(std::round(adjusted_strength));
+        if (dy_recoil != 0) {
+             auto recoil_send_start_time = std::chrono::steady_clock::now();
+             input_method->move(0, dy_recoil);
+             auto recoil_send_end_time = std::chrono::steady_clock::now();
+             float recoil_send_duration_ms = std::chrono::duration<float, std::milli>(recoil_send_end_time - recoil_send_start_time).count();
+             g_current_input_send_time_ms.store(recoil_send_duration_ms, std::memory_order_relaxed);
+             add_to_history(g_input_send_time_history, recoil_send_duration_ms, g_input_send_history_mutex);
+        }
+        
+        last_recoil_compensation_time = now_chrono_recoil;
+    }
+}
+
 void MouseThread::enableErrorTracking(const ErrorTrackingCallback &callback)
 {
     std::lock_guard<std::mutex> lock(callback_mutex);

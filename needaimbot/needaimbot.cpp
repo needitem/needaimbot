@@ -379,7 +379,12 @@ void mouseThreadFunction(MouseThread &mouseThread)
             }
             was_shooting = current_shooting_state; 
             if (recoil_active.load() && currently_zooming && current_shooting_state) {
-                 mouseThread.applyRecoilCompensation(config.easynorecoilstrength);
+                WeaponRecoilProfile* current_profile = config.getCurrentWeaponProfile();
+                if (current_profile) {
+                    mouseThread.applyWeaponRecoilCompensation(current_profile, config.active_scope_magnification);
+                } else {
+                    mouseThread.applyRecoilCompensation(config.easynorecoilstrength);
+                }
             }
         } else {
             recoil_active = false; 

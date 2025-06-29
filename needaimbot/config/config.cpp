@@ -648,6 +648,91 @@ Config::Config()
     
     
     
-    loadConfig("config.ini"); 
+    loadConfig("config.ini");
+    initializeDefaultWeaponProfiles();
+}
+
+void Config::initializeDefaultWeaponProfiles()
+{
+    if (weapon_profiles.empty()) {
+        weapon_profiles.push_back(WeaponRecoilProfile("Default", 3.0f, 1.0f));
+        weapon_profiles.push_back(WeaponRecoilProfile("AK47", 4.5f, 1.2f));
+        weapon_profiles.push_back(WeaponRecoilProfile("M4A4", 3.5f, 1.1f));
+        weapon_profiles.push_back(WeaponRecoilProfile("AWP", 2.0f, 0.8f));
+        weapon_profiles.push_back(WeaponRecoilProfile("MP5", 2.5f, 1.3f));
+        
+        active_weapon_profile_index = 0;
+        current_weapon_name = "Default";
+    }
+}
+
+bool Config::addWeaponProfile(const WeaponRecoilProfile& profile)
+{
+    for (const auto& existing : weapon_profiles) {
+        if (existing.weapon_name == profile.weapon_name) {
+            return false;
+        }
+    }
+    weapon_profiles.push_back(profile);
+    return true;
+}
+
+bool Config::removeWeaponProfile(const std::string& weapon_name)
+{
+    if (weapon_name == "Default") return false;
+    
+    auto it = std::find_if(weapon_profiles.begin(), weapon_profiles.end(),
+        [&weapon_name](const WeaponRecoilProfile& profile) {
+            return profile.weapon_name == weapon_name;
+        });
+    
+    if (it != weapon_profiles.end()) {
+        weapon_profiles.erase(it);
+        if (current_weapon_name == weapon_name) {
+            setActiveWeaponProfile("Default");
+        }
+        return true;
+    }
+    return false;
+}
+
+WeaponRecoilProfile* Config::getWeaponProfile(const std::string& weapon_name)
+{
+    for (auto& profile : weapon_profiles) {
+        if (profile.weapon_name == weapon_name) {
+            return &profile;
+        }
+    }
+    return nullptr;
+}
+
+WeaponRecoilProfile* Config::getCurrentWeaponProfile()
+{
+    if (active_weapon_profile_index >= 0 && 
+        active_weapon_profile_index < static_cast<int>(weapon_profiles.size())) {
+        return &weapon_profiles[active_weapon_profile_index];
+    }
+    return nullptr;
+}
+
+bool Config::setActiveWeaponProfile(const std::string& weapon_name)
+{
+    for (size_t i = 0; i < weapon_profiles.size(); ++i) {
+        if (weapon_profiles[i].weapon_name == weapon_name) {
+            active_weapon_profile_index = static_cast<int>(i);
+            current_weapon_name = weapon_name;
+            return true;
+        }
+    }
+    return false;
+}
+
+std::vector<std::string> Config::getWeaponProfileNames() const
+{
+    std::vector<std::string> names;
+    for (const auto& profile : weapon_profiles) {
+        names.push_back(profile.weapon_name);
+    }
+    return names;
 }
 

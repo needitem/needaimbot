@@ -11,13 +11,14 @@
 #include <dxgi.h>
 #include <filesystem>
 
-#include <imgui.h>
-#include <imgui_impl_dx11.h>
-#include <imgui_impl_win32.h>
+#include <imgui/imgui.h>
+#include <imgui/imgui_impl_dx11.h>
+#include <imgui/imgui_impl_win32.h>
 #include <imgui/imgui_internal.h>
 
 #include "overlay.h"
 #include "overlay/draw_settings.h"
+#include "overlay/ui_helpers.h"
 #include "config.h"
 #include "keycodes.h"
 #include "needaimbot.h"
@@ -200,52 +201,102 @@ void SetupImGui()
 
     
     ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowPadding = ImVec2(8.0f, 8.0f);
-    style.FramePadding = ImVec2(5.0f, 4.0f);
-    style.ItemSpacing = ImVec2(6.0f, 4.0f);
-    style.ItemInnerSpacing = ImVec2(4.0f, 4.0f);
-    style.IndentSpacing = 21.0f;
-    style.ScrollbarSize = 14.0f;
-    style.GrabMinSize = 10.0f;
+    
+    style.WindowPadding = ImVec2(12.0f, 12.0f);
+    style.FramePadding = ImVec2(8.0f, 6.0f);
+    style.ItemSpacing = ImVec2(8.0f, 6.0f);
+    style.ItemInnerSpacing = ImVec2(6.0f, 6.0f);
+    style.IndentSpacing = 25.0f;
+    style.ScrollbarSize = 16.0f;
+    style.GrabMinSize = 12.0f;
 
-    style.WindowBorderSize = 1.0f;
-    style.ChildBorderSize = 1.0f;
-    style.PopupBorderSize = 1.0f;
-    style.FrameBorderSize = 0.0f; 
+    style.WindowBorderSize = 0.0f;
+    style.ChildBorderSize = 0.0f;
+    style.PopupBorderSize = 0.0f;
+    style.FrameBorderSize = 0.0f;
     style.TabBorderSize = 0.0f;
 
-    style.WindowRounding = 6.0f; 
-    style.ChildRounding = 4.0f;
-    style.FrameRounding = 4.0f; 
-    style.PopupRounding = 4.0f;
-    style.ScrollbarRounding = 9.0f;
-    style.GrabRounding = 3.0f;
-    style.TabRounding = 4.0f;
+    style.WindowRounding = 12.0f;
+    style.ChildRounding = 8.0f;
+    style.FrameRounding = 8.0f;
+    style.PopupRounding = 8.0f;
+    style.ScrollbarRounding = 12.0f;
+    style.GrabRounding = 6.0f;
+    style.TabRounding = 6.0f;
+
+    style.Alpha = 0.98f;
+    style.DisabledAlpha = 0.60f;
 
     
     ImVec4* colors = style.Colors;
     
-    colors[ImGuiCol_WindowBg] = ImVec4(0.08f, 0.08f, 0.09f, 1.00f); 
-    colors[ImGuiCol_ChildBg] = ImVec4(0.10f, 0.10f, 0.11f, 1.00f); 
-    colors[ImGuiCol_PopupBg] = ImVec4(0.07f, 0.07f, 0.08f, 1.00f); 
+    colors[ImGuiCol_Text] = ImVec4(0.95f, 0.95f, 0.95f, 1.00f);
+    colors[ImGuiCol_TextDisabled] = ImVec4(0.50f, 0.50f, 0.50f, 1.00f);
+    colors[ImGuiCol_WindowBg] = ImVec4(0.06f, 0.06f, 0.08f, 0.98f);
+    colors[ImGuiCol_ChildBg] = ImVec4(0.08f, 0.08f, 0.10f, 0.90f);
+    colors[ImGuiCol_PopupBg] = ImVec4(0.05f, 0.05f, 0.07f, 0.98f);
+    colors[ImGuiCol_Border] = ImVec4(0.20f, 0.20f, 0.25f, 0.50f);
+    colors[ImGuiCol_BorderShadow] = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
     
-    colors[ImGuiCol_Header] = ImVec4(0.15f, 0.15f, 0.17f, 1.00f); 
-    colors[ImGuiCol_HeaderHovered] = ImVec4(0.20f, 0.20f, 0.22f, 1.00f); 
-    colors[ImGuiCol_HeaderActive] = ImVec4(0.25f, 0.25f, 0.28f, 1.00f); 
+    colors[ImGuiCol_FrameBg] = ImVec4(0.12f, 0.12f, 0.15f, 0.90f);
+    colors[ImGuiCol_FrameBgHovered] = ImVec4(0.18f, 0.18f, 0.22f, 0.95f);
+    colors[ImGuiCol_FrameBgActive] = ImVec4(0.24f, 0.24f, 0.28f, 1.00f);
     
-    colors[ImGuiCol_Button] = ImVec4(0.15f, 0.35f, 0.65f, 0.70f);
-    colors[ImGuiCol_ButtonHovered] = ImVec4(0.20f, 0.45f, 0.75f, 0.85f);
-    colors[ImGuiCol_ButtonActive] = ImVec4(0.10f, 0.25f, 0.55f, 0.85f);
+    colors[ImGuiCol_TitleBg] = ImVec4(0.04f, 0.04f, 0.06f, 1.00f);
+    colors[ImGuiCol_TitleBgActive] = ImVec4(0.06f, 0.06f, 0.08f, 1.00f);
+    colors[ImGuiCol_TitleBgCollapsed] = ImVec4(0.04f, 0.04f, 0.06f, 0.75f);
     
-    colors[ImGuiCol_FrameBg] = ImVec4(0.12f, 0.12f, 0.13f, 1.00f);
-    colors[ImGuiCol_FrameBgHovered] = ImVec4(0.18f, 0.18f, 0.19f, 1.00f);
-    colors[ImGuiCol_FrameBgActive] = ImVec4(0.22f, 0.22f, 0.24f, 1.00f);
+    colors[ImGuiCol_MenuBarBg] = ImVec4(0.08f, 0.08f, 0.10f, 1.00f);
     
-    colors[ImGuiCol_Tab] = ImVec4(0.15f, 0.15f, 0.17f, 1.00f); 
-    colors[ImGuiCol_TabHovered] = ImVec4(0.25f, 0.25f, 0.28f, 1.00f); 
-    colors[ImGuiCol_TabActive] = ImVec4(0.20f, 0.40f, 0.70f, 1.00f); 
-    colors[ImGuiCol_TabUnfocused] = ImVec4(0.15f, 0.15f, 0.17f, 0.97f);
-    colors[ImGuiCol_TabUnfocusedActive] = ImVec4(0.18f, 0.30f, 0.55f, 1.00f); 
+    colors[ImGuiCol_ScrollbarBg] = ImVec4(0.08f, 0.08f, 0.10f, 0.60f);
+    colors[ImGuiCol_ScrollbarGrab] = ImVec4(0.25f, 0.25f, 0.30f, 0.80f);
+    colors[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.30f, 0.30f, 0.35f, 0.90f);
+    colors[ImGuiCol_ScrollbarGrabActive] = ImVec4(0.35f, 0.35f, 0.40f, 1.00f);
+    
+    colors[ImGuiCol_CheckMark] = ImVec4(0.20f, 0.70f, 0.90f, 1.00f);
+    
+    colors[ImGuiCol_SliderGrab] = ImVec4(0.20f, 0.60f, 0.90f, 0.90f);
+    colors[ImGuiCol_SliderGrabActive] = ImVec4(0.25f, 0.75f, 1.00f, 1.00f);
+    
+    colors[ImGuiCol_Button] = ImVec4(0.15f, 0.45f, 0.75f, 0.80f);
+    colors[ImGuiCol_ButtonHovered] = ImVec4(0.20f, 0.55f, 0.85f, 0.95f);
+    colors[ImGuiCol_ButtonActive] = ImVec4(0.10f, 0.35f, 0.65f, 1.00f);
+    
+    colors[ImGuiCol_Header] = ImVec4(0.12f, 0.40f, 0.70f, 0.70f);
+    colors[ImGuiCol_HeaderHovered] = ImVec4(0.15f, 0.50f, 0.80f, 0.85f);
+    colors[ImGuiCol_HeaderActive] = ImVec4(0.20f, 0.60f, 0.90f, 1.00f);
+    
+    colors[ImGuiCol_Separator] = ImVec4(0.20f, 0.20f, 0.25f, 0.60f);
+    colors[ImGuiCol_SeparatorHovered] = ImVec4(0.30f, 0.60f, 0.85f, 0.78f);
+    colors[ImGuiCol_SeparatorActive] = ImVec4(0.35f, 0.70f, 0.95f, 1.00f);
+    
+    colors[ImGuiCol_ResizeGrip] = ImVec4(0.20f, 0.60f, 0.90f, 0.30f);
+    colors[ImGuiCol_ResizeGripHovered] = ImVec4(0.25f, 0.70f, 0.95f, 0.67f);
+    colors[ImGuiCol_ResizeGripActive] = ImVec4(0.30f, 0.80f, 1.00f, 0.95f);
+    
+    colors[ImGuiCol_Tab] = ImVec4(0.12f, 0.12f, 0.15f, 0.90f);
+    colors[ImGuiCol_TabHovered] = ImVec4(0.20f, 0.50f, 0.80f, 0.80f);
+    colors[ImGuiCol_TabActive] = ImVec4(0.15f, 0.45f, 0.75f, 1.00f);
+    colors[ImGuiCol_TabUnfocused] = ImVec4(0.08f, 0.08f, 0.10f, 0.97f);
+    colors[ImGuiCol_TabUnfocusedActive] = ImVec4(0.12f, 0.35f, 0.60f, 1.00f);
+    
+    colors[ImGuiCol_PlotLines] = ImVec4(0.61f, 0.61f, 0.61f, 1.00f);
+    colors[ImGuiCol_PlotLinesHovered] = ImVec4(1.00f, 0.43f, 0.35f, 1.00f);
+    colors[ImGuiCol_PlotHistogram] = ImVec4(0.90f, 0.70f, 0.00f, 1.00f);
+    colors[ImGuiCol_PlotHistogramHovered] = ImVec4(1.00f, 0.60f, 0.00f, 1.00f);
+    
+    colors[ImGuiCol_TableHeaderBg] = ImVec4(0.12f, 0.12f, 0.15f, 1.00f);
+    colors[ImGuiCol_TableBorderStrong] = ImVec4(0.20f, 0.20f, 0.25f, 1.00f);
+    colors[ImGuiCol_TableBorderLight] = ImVec4(0.15f, 0.15f, 0.18f, 1.00f);
+    colors[ImGuiCol_TableRowBg] = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
+    colors[ImGuiCol_TableRowBgAlt] = ImVec4(1.00f, 1.00f, 1.00f, 0.06f);
+    
+    colors[ImGuiCol_TextSelectedBg] = ImVec4(0.20f, 0.60f, 0.90f, 0.35f);
+    colors[ImGuiCol_DragDropTarget] = ImVec4(1.00f, 1.00f, 0.00f, 0.90f);
+    colors[ImGuiCol_NavHighlight] = ImVec4(0.20f, 0.60f, 0.90f, 1.00f);
+    colors[ImGuiCol_NavWindowingHighlight] = ImVec4(1.00f, 1.00f, 1.00f, 0.70f);
+    colors[ImGuiCol_NavWindowingDimBg] = ImVec4(0.80f, 0.80f, 0.80f, 0.20f);
+    colors[ImGuiCol_ModalWindowDimBg] = ImVec4(0.80f, 0.80f, 0.80f, 0.35f); 
 
     load_body_texture();
 }
@@ -385,9 +436,13 @@ void OverlayThread()
     MSG msg;
     ZeroMemory(&msg, sizeof(msg));
 
-    // Overlay rendering frame timing
-    const std::chrono::milliseconds targetFrameTime(1000 / 30);
+    // Overlay rendering frame timing - Use config.target_fps for user control
     auto lastOverlayFrameTime = std::chrono::high_resolution_clock::now();
+    
+    // Config save batching to reduce I/O
+    bool config_needs_save = false;
+    auto last_config_save_time = std::chrono::high_resolution_clock::now();
+    const std::chrono::milliseconds config_save_interval(500); // Save config every 500ms max
 
     while (!shouldExit)
     {
@@ -529,7 +584,7 @@ void OverlayThread()
                             config.norecoil_ms,
                             config.derivative_smoothing_factor
                         );
-                        config.saveConfig();
+                        config_needs_save = true;
                     }
 
                     
@@ -537,7 +592,7 @@ void OverlayThread()
                     {
                         capture_cursor_changed.store(true);
                         prev_capture_cursor = config.capture_cursor;
-                        config.saveConfig();
+                        config_needs_save = true;
                     }
 
                     
@@ -545,7 +600,7 @@ void OverlayThread()
                     {
                         capture_borders_changed.store(true);
                         prev_capture_borders = config.capture_borders;
-                        config.saveConfig();
+                        config_needs_save = true;
                     }
 
                     
@@ -555,7 +610,7 @@ void OverlayThread()
                         capture_fps_changed.store(true);
                         prev_monitor_idx = config.monitor_idx;
                         prev_capture_fps = config.capture_fps;
-                        config.saveConfig();
+                        config_needs_save = true;
                     }
 
                     
@@ -576,7 +631,7 @@ void OverlayThread()
                         prev_auto_aim = config.auto_aim;
                         prev_easynorecoil = config.easynorecoil;
                         prev_easynorecoilstrength = config.easynorecoilstrength;
-                        config.saveConfig();
+                        config_needs_save = true;
                     }
 
                     
@@ -607,7 +662,7 @@ void OverlayThread()
                             config.derivative_smoothing_factor
                         );
 
-                        config.saveConfig();
+                        config_needs_save = true;
                     }
 
                     
@@ -628,7 +683,7 @@ void OverlayThread()
                             config.derivative_smoothing_factor
                         );
 
-                        config.saveConfig();
+                        config_needs_save = true;
                     }
 
                     
@@ -636,7 +691,7 @@ void OverlayThread()
                     {
                         BYTE opacity = config.overlay_opacity;
                         SetLayeredWindowAttributes(g_hwnd, 0, opacity, LWA_ALPHA);
-                        config.saveConfig();
+                        config_needs_save = true;
                     }
 
                     
@@ -647,7 +702,7 @@ void OverlayThread()
                         prev_nms_threshold = config.nms_threshold;
                         prev_confidence_threshold = config.confidence_threshold;
                         prev_max_detections = config.max_detections;
-                        config.saveConfig();
+                        config_needs_save = true;
                     }
 
                     
@@ -657,7 +712,7 @@ void OverlayThread()
                         prev_always_on_top = config.always_on_top;
                         show_window_changed.store(true);
                         prev_show_window = config.show_window;
-                        config.saveConfig();
+                        config_needs_save = true;
                     }
                     
                     
@@ -670,7 +725,7 @@ void OverlayThread()
                         prev_window_size = config.window_size;
                         prev_screenshot_delay = config.screenshot_delay;
                         prev_verbose = config.verbose;
-                        config.saveConfig();
+                        config_needs_save = true;
                     }
 
                 }
@@ -690,17 +745,26 @@ void OverlayThread()
             g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, clear_color_with_alpha);
             ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
-            HRESULT result = g_pSwapChain->Present(0, 0);
+            // Use immediate present for better performance (no VSync)
+            HRESULT result = g_pSwapChain->Present(0, DXGI_PRESENT_DO_NOT_WAIT);
             auto now = std::chrono::high_resolution_clock::now();
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastOverlayFrameTime);
+            
             if (result == DXGI_STATUS_OCCLUDED || result == DXGI_ERROR_ACCESS_LOST)
             {
                 // If occluded, back off
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
-            else if (elapsed < targetFrameTime)
+            else
             {
-                std::this_thread::sleep_for(targetFrameTime - elapsed);
+                // Calculate target frame time based on user's target_fps setting
+                float target_fps_value = std::max(15.0f, std::min(240.0f, config.target_fps)); // Clamp between 15-240 FPS
+                auto targetFrameTime = std::chrono::milliseconds(static_cast<long long>(1000.0f / target_fps_value));
+                
+                if (elapsed < targetFrameTime)
+                {
+                    std::this_thread::sleep_for(targetFrameTime - elapsed);
+                }
             }
             lastOverlayFrameTime = std::chrono::high_resolution_clock::now();
         }
@@ -708,6 +772,16 @@ void OverlayThread()
         {
             // Window not visible: slow down loop
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        
+        // Batched config saving to reduce I/O overhead
+        auto now = std::chrono::high_resolution_clock::now();
+        if (config_needs_save && 
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - last_config_save_time) >= config_save_interval)
+        {
+            config.saveConfig();
+            config_needs_save = false;
+            last_config_save_time = now;
         }
     }
 
