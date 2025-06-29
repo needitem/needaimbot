@@ -90,19 +90,19 @@ bool CreateDeviceD3D(HWND hWnd)
 {
     DXGI_SWAP_CHAIN_DESC sd;
     ZeroMemory(&sd, sizeof(sd));
-    sd.BufferCount = 2;
+    sd.BufferCount = 1; // Single buffer for better performance
     sd.BufferDesc.Width = overlayWidth;
     sd.BufferDesc.Height = overlayHeight;
     sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    sd.BufferDesc.RefreshRate.Numerator = 0;
+    sd.BufferDesc.RefreshRate.Numerator = 0; // Unlimited refresh rate
     sd.BufferDesc.RefreshRate.Denominator = 0;
     sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     sd.OutputWindow = hWnd;
-    sd.SampleDesc.Count = 1;
+    sd.SampleDesc.Count = 1; // No multisampling for performance
     sd.SampleDesc.Quality = 0;
     sd.Windowed = TRUE;
-    sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
-    sd.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
+    sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD; // Fastest swap effect
+    sd.Flags = 0; // Remove unnecessary flags for performance
 
     UINT createDeviceFlags = 0;
 
@@ -428,7 +428,16 @@ void OverlayThread()
     else
         input_method_index = 0;
     
-    std::vector<std::string> availableModels = getAvailableModels();
+    // Cache available models - only refresh every 5 seconds to avoid filesystem overhead
+    static std::vector<std::string> availableModels;
+    static auto lastModelRefresh = std::chrono::high_resolution_clock::now();
+    auto now_for_models = std::chrono::high_resolution_clock::now();
+    if (availableModels.empty() || 
+        std::chrono::duration_cast<std::chrono::seconds>(now_for_models - lastModelRefresh).count() >= 5)
+    {
+        availableModels = getAvailableModels();
+        lastModelRefresh = now_for_models;
+    }
 
     static auto lastTime = std::chrono::high_resolution_clock::now();
     POINT mouse;
@@ -476,9 +485,14 @@ void OverlayThread()
 
         if (show_overlay)
         {
+            // Optimized ImGui frame setup
             ImGui_ImplDX11_NewFrame();
             ImGui_ImplWin32_NewFrame();
             ImGui::NewFrame();
+            
+            // Disable unnecessary ImGui features for performance
+            ImGuiIO& io = ImGui::GetIO();
+            io.MouseDrawCursor = false; // Disable software cursor rendering
 
             ImGui::SetNextWindowPos(ImVec2(0, 0));
             ImGui::SetNextWindowSize(ImVec2((float)overlayWidth, (float)overlayHeight));
@@ -563,7 +577,14 @@ void OverlayThread()
                         ImGui::EndTabItem();
                     }
 
-                    
+                }
+
+                // Reduce frequency of config change detection to every 3 frames for performance
+                static int config_check_frame_counter = 0;
+                config_check_frame_counter++;
+                bool should_check_config = (config_check_frame_counter % 3 == 0);
+                
+                if (should_check_config) {
                     
                     if (prev_detection_resolution != config.detection_resolution)
                     {
@@ -727,7 +748,6 @@ void OverlayThread()
                         prev_verbose = config.verbose;
                         config_needs_save = true;
                     }
-
                 }
 
                 ImGui::EndTabBar();
@@ -740,6 +760,7 @@ void OverlayThread()
             ImGui::End();
             ImGui::Render();
 
+            // Optimized rendering
             const float clear_color_with_alpha[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
             g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, NULL);
             g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, clear_color_with_alpha);
@@ -796,12 +817,3 @@ void OverlayThread()
     ::UnregisterClass(_T("Edge"), GetModuleHandle(NULL));
 }
 
-int APIENTRY _tWinMain(_In_ HINSTANCE hInstance,
-    _In_opt_ HINSTANCE hPrevInstance,
-    _In_ LPTSTR    lpCmdLine,
-    _In_ int       nCmdShow)
-{
-    std::thread overlay(OverlayThread);
-    overlay.join();
-    return 0;
-}
