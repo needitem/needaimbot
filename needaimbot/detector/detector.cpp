@@ -724,11 +724,43 @@ void Detector::inferenceThread()
                     continue;
                 }
 
+                // Dynamic resolution adjustment based on performance
+                static int frame_counter = 0;
+                static float avg_inference_time = 0.0f;
+                frame_counter++;
+                
+                if (frame_counter % 30 == 0) { // Check every 30 frames
+                    avg_inference_time = g_current_inference_time_ms.load();
+                    
+                    // Auto-adjust resolution for target 3ms inference time
+                    if (avg_inference_time > 6.0f && config.detection_resolution > 192) {
+                        // Too slow, reduce resolution
+                        std::lock_guard<std::mutex> lock(configMutex);
+                        config.detection_resolution = std::max(192, config.detection_resolution - 32);
+                    } else if (avg_inference_time < 2.0f && config.detection_resolution < 384) {
+                        // Too fast, can increase resolution for better accuracy
+                        std::lock_guard<std::mutex> lock(configMutex);
+                        config.detection_resolution = std::min(384, config.detection_resolution + 32);
+                    }
+                }
+                
+                // Pipeline optimization: overlap preprocessing, inference, and postprocessing
                 preProcess(frameGpu);
                 
+                // Record event after preprocessing
+                cudaEventRecord(m_preprocessDone, preprocessStream);
+                
+                // Wait for preprocessing to complete before inference
+                cudaStreamWaitEvent(stream, m_preprocessDone, 0);
+                
                 context->enqueueV3(stream);
-
-                performGpuPostProcessing(stream);
+                
+                // Record event after inference
+                cudaEventRecord(m_inferenceDone, stream);
+                
+                // Start postprocessing immediately after inference (overlapped)
+                cudaStreamWaitEvent(postprocessStream, m_inferenceDone, 0);
+                performGpuPostProcessing(postprocessStream);
 
                 auto inference_end_time = std::chrono::high_resolution_clock::now(); 
                 std::chrono::duration<float, std::milli> inference_duration_ms = inference_end_time - inference_start_time;
@@ -738,12 +770,12 @@ void Detector::inferenceThread()
                 
                 
 
-                // Batch memory copies to reduce sync overhead
+                // Batch memory copies to reduce sync overhead  
                 int final_detections_count = 0;
-                cudaMemcpyAsync(&final_detections_count, m_finalDetectionsCountGpu, sizeof(int), cudaMemcpyDeviceToHost, stream);
+                cudaMemcpyAsync(&final_detections_count, m_finalDetectionsCountGpu, sizeof(int), cudaMemcpyDeviceToHost, postprocessStream);
                 
-                // Only sync once after all GPU operations
-                cudaStreamSynchronize(stream);
+                // Only sync postprocess stream after all operations
+                cudaStreamSynchronize(postprocessStream);
 
                 if (final_detections_count > 0)
                 {
@@ -756,20 +788,20 @@ void Detector::inferenceThread()
                         config.distance_weight, 
                         config.confidence_weight, 
                         m_headClassId, 
-                        stream
+                        postprocessStream
                     );
 
-                    findBestTargetGpu(m_scoresGpu, final_detections_count, m_bestTargetIndexGpu, stream);
+                    findBestTargetGpu(m_scoresGpu, final_detections_count, m_bestTargetIndexGpu, postprocessStream);
 
                     // Batch final memory copies
-                    cudaMemcpyAsync(&m_bestTargetIndexHost, m_bestTargetIndexGpu, sizeof(int), cudaMemcpyDeviceToHost, stream);
+                    cudaMemcpyAsync(&m_bestTargetIndexHost, m_bestTargetIndexGpu, sizeof(int), cudaMemcpyDeviceToHost, postprocessStream);
                     
                     // Copy target data only after we have the index
-                    cudaStreamSynchronize(stream);
+                    cudaStreamSynchronize(postprocessStream);
                     
                     if (m_bestTargetIndexHost >= 0 && m_bestTargetIndexHost < final_detections_count) {
-                        cudaMemcpyAsync(&m_bestTargetHost, &m_finalDetectionsGpu[m_bestTargetIndexHost], sizeof(Detection), cudaMemcpyDeviceToHost, stream);
-                        cudaStreamSynchronize(stream);
+                        cudaMemcpyAsync(&m_bestTargetHost, &m_finalDetectionsGpu[m_bestTargetIndexHost], sizeof(Detection), cudaMemcpyDeviceToHost, postprocessStream);
+                        cudaStreamSynchronize(postprocessStream);
                     }
 
                     if (m_bestTargetIndexHost >= 0 && m_bestTargetIndexHost < final_detections_count)
@@ -1051,22 +1083,30 @@ void Detector::preProcess(const cv::cuda::GpuMat& frame)
 
     try
     {
-        cv::cuda::GpuMat preprocessedFrame;
+        // Memory pool: reuse GPU buffers to avoid allocation overhead
+        static cv::cuda::GpuMat preprocessedFrame;
+        static cv::cuda::GpuMat maskGpu_static;
+        static cv::cuda::GpuMat maskedImageGpu_static;
+        static cv::cuda::GpuMat hsvGpu_static;
+        static cv::cuda::GpuMat maskGpu_hsv_static;
 
         if (config.circle_mask) {
-            cv::Mat mask = cv::Mat::zeros(frame.size(), CV_8UC1);
-            cv::Point center(mask.cols / 2, mask.rows / 2);
-            int radius = std::min(mask.cols, mask.rows) / 2;
-            cv::circle(mask, center, radius, cv::Scalar(255), -1);
-            cv::cuda::GpuMat maskGpu;
-            maskGpu.upload(mask, preprocessCvStream);
+            // Reuse static buffers
+            if (maskGpu_static.empty() || maskGpu_static.size() != frame.size()) {
+                cv::Mat mask = cv::Mat::zeros(frame.size(), CV_8UC1);
+                cv::Point center(mask.cols / 2, mask.rows / 2);
+                int radius = std::min(mask.cols, mask.rows) / 2;
+                cv::circle(mask, center, radius, cv::Scalar(255), -1);
+                maskGpu_static.upload(mask, preprocessCvStream);
+            }
 
-            cv::cuda::GpuMat maskedImageGpu;
-            maskedImageGpu.create(frame.size(), frame.type()); 
-            maskedImageGpu.setTo(cv::Scalar::all(0), preprocessCvStream);
-            frame.copyTo(maskedImageGpu, maskGpu, preprocessCvStream);
+            if (maskedImageGpu_static.empty() || maskedImageGpu_static.size() != frame.size()) {
+                maskedImageGpu_static.create(frame.size(), frame.type()); 
+            }
+            maskedImageGpu_static.setTo(cv::Scalar::all(0), preprocessCvStream);
+            frame.copyTo(maskedImageGpu_static, maskGpu_static, preprocessCvStream);
             
-            cv::cuda::resize(maskedImageGpu, resizedBuffer, cv::Size(w, h), 0, 0, cv::INTER_LINEAR, preprocessCvStream);
+            cv::cuda::resize(maskedImageGpu_static, resizedBuffer, cv::Size(w, h), 0, 0, cv::INTER_LINEAR, preprocessCvStream);
         } else {
             cv::cuda::resize(frame, resizedBuffer, cv::Size(w, h), 0, 0, cv::INTER_LINEAR, preprocessCvStream);
         }
@@ -1090,12 +1130,18 @@ void Detector::preProcess(const cv::cuda::GpuMat& frame)
         } 
 
         if (current_enable_hsv_filter) {
-            cv::cuda::GpuMat hsvGpu;
-            cv::cuda::cvtColor(resizedBuffer, hsvGpu, cv::COLOR_BGR2HSV, 0, preprocessCvStream);
+            // Reuse static HSV buffers
+            if (hsvGpu_static.empty() || hsvGpu_static.size() != resizedBuffer.size()) {
+                hsvGpu_static.create(resizedBuffer.size(), resizedBuffer.type());
+            }
+            cv::cuda::cvtColor(resizedBuffer, hsvGpu_static, cv::COLOR_BGR2HSV, 0, preprocessCvStream);
             cv::Scalar lower(current_hsv_lower_h, current_hsv_lower_s, current_hsv_lower_v);
             cv::Scalar upper(current_hsv_upper_h, current_hsv_upper_s, current_hsv_upper_v);
-            cv::cuda::GpuMat maskGpu;
-            cv::cuda::inRange(hsvGpu, lower, upper, maskGpu, preprocessCvStream);
+            
+            if (maskGpu_hsv_static.empty() || maskGpu_hsv_static.size() != resizedBuffer.size()) {
+                maskGpu_hsv_static.create(resizedBuffer.size(), CV_8UC1);
+            }
+            cv::cuda::inRange(hsvGpu_static, lower, upper, maskGpu_hsv_static, preprocessCvStream);
             
             int detRes = 0;
             {
@@ -1103,7 +1149,7 @@ void Detector::preProcess(const cv::cuda::GpuMat& frame)
                 detRes = config.detection_resolution;
             }
             cv::cuda::GpuMat maskResized;
-            cv::cuda::resize(maskGpu, maskResized, cv::Size(detRes, detRes), 0, 0, cv::INTER_NEAREST, preprocessCvStream);
+            cv::cuda::resize(maskGpu_hsv_static, maskResized, cv::Size(detRes, detRes), 0, 0, cv::INTER_NEAREST, preprocessCvStream);
             {
                 std::lock_guard<std::mutex> lock(hsvMaskMutex);
                 m_hsvMaskGpu = maskResized;
