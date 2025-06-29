@@ -90,6 +90,12 @@ bool Config::loadConfig(const std::string& filename)
         
         enable_target_locking = false;
         derivative_smoothing_factor = 0.8f; // Default value for smoothing factor
+        
+        use_predictive_controller = true;
+        prediction_time_ms = 50.0f;
+        kalman_process_noise = 10.0f;
+        kalman_measurement_noise = 5.0f;
+        
         target_locking_iou_threshold = 0.5f;
         target_locking_max_lost_frames = 10;
 
@@ -262,6 +268,11 @@ bool Config::loadConfig(const std::string& filename)
     ki_y = get_double_ini("PID", "ki_y", 0.0);
     kd_y = get_double_ini("PID", "kd_y", 0.15);
     derivative_smoothing_factor = (float)get_double_ini("PID", "derivative_smoothing_factor", 0.8);
+
+    use_predictive_controller = get_bool_ini("PID", "use_predictive_controller", true);
+    prediction_time_ms = (float)get_double_ini("PID", "prediction_time_ms", 50.0);
+    kalman_process_noise = (float)get_double_ini("PID", "kalman_process_noise", 10.0);
+    kalman_measurement_noise = (float)get_double_ini("PID", "kalman_measurement_noise", 5.0);
 
     arduino_baudrate = get_long_ini("Arduino", "arduino_baudrate", 115200);
     arduino_port = get_string_ini("Arduino", "arduino_port", "COM0");
@@ -458,7 +469,11 @@ bool Config::saveConfig(const std::string& filename)
     file << "kp_y = " << kp_y << "\n";
     file << "ki_y = " << ki_y << "\n";
     file << "kd_y = " << kd_y << "\n";
-    file << "derivative_smoothing_factor = " << derivative_smoothing_factor << "\n\n";
+    file << "derivative_smoothing_factor = " << derivative_smoothing_factor << "\n";
+    file << "use_predictive_controller = " << (use_predictive_controller ? "true" : "false") << "\n";
+    file << "prediction_time_ms = " << prediction_time_ms << "\n";
+    file << "kalman_process_noise = " << kalman_process_noise << "\n";
+    file << "kalman_measurement_noise = " << kalman_measurement_noise << "\n\n";
 
     file << "[Arduino]\n";
     file << std::noboolalpha;
