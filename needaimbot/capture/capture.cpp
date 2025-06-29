@@ -84,6 +84,10 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
         }
 
         std::unique_ptr<DuplicationAPIScreenCapture> capturer = std::make_unique<DuplicationAPIScreenCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT);
+        
+        timeBeginPeriod(1);
+        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+        SetThreadAffinityMask(GetCurrentThread(), 1 << 0);
         if (!capturer) {
              std::cerr << "[Capture] Failed to initialize DuplicationAPIScreenCapture!" << std::endl;
              return;
@@ -98,6 +102,15 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
         auto lastSaveTime = std::chrono::steady_clock::now();
 
         std::optional<std::chrono::duration<double, std::milli>> frame_duration;
+        
+        constexpr int PREFETCH_COUNT = 3;
+        for (int i = 0; i < PREFETCH_COUNT; ++i) {
+            captureGpuBuffer[i].create(CAPTURE_HEIGHT, CAPTURE_WIDTH, CV_8UC3);
+        }
+        
+        HANDLE capture_event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+        auto target_interval = std::chrono::nanoseconds(1000000000 / config.capture_fps);
+        auto next_capture_time = std::chrono::high_resolution_clock::now();
         bool frameLimitingEnabled = false;
 
         if (config.capture_fps > 0.0)

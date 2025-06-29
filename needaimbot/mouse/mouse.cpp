@@ -92,9 +92,33 @@ void WindMouse(float target_x, float target_y, float G, float W, float M, float 
 }
 
 
+thread_local static LARGE_INTEGER freq;
+thread_local static bool freq_initialized = false;
+
+void InitializeHighPrecisionTimer() {
+    if (!freq_initialized) {
+        QueryPerformanceFrequency(&freq);
+        freq_initialized = true;
+        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+        SetThreadAffinityMask(GetCurrentThread(), 1 << 1);
+    }
+}
+
 void QueueMove(int dx, int dy, std::function<void(int, int)> move_func) {
+    InitializeHighPrecisionTimer();
+    
     if (dx != 0 || dy != 0) {
+        LARGE_INTEGER start;
+        QueryPerformanceCounter(&start);
+        
         move_func(dx, dy);
+        
+        LARGE_INTEGER end;
+        QueryPerformanceCounter(&end);
+        float elapsed_us = ((end.QuadPart - start.QuadPart) * 1000000.0f) / freq.QuadPart;
+        
+        add_to_history(g_input_send_time_history, elapsed_us / 1000.0f, g_input_send_history_mutex, 100);
+        g_current_input_send_time_ms.store(elapsed_us / 1000.0f);
     }
 }
 

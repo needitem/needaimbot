@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-  <Import Project="..\packages\Microsoft.Windows.CppWinRT.2.0.240405.15\build\native\Microsoft.Windows.CppWinRT.props" Condition="Exists('..\packages\Microsoft.Windows.CppWinRT.2.0.240405.15\build\native\Microsoft.Windows.CppWinRT.props')" />
+  <Import Project="..\packages\Microsoft.Windows.CppWinRT.2.0.250303.1\build\native\Microsoft.Windows.CppWinRT.props" Condition="Exists('..\packages\Microsoft.Windows.CppWinRT.2.0.250303.1\build\native\Microsoft.Windows.CppWinRT.props')" />
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
       <Configuration>Debug</Configuration>
@@ -20,8 +20,10 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="..\..\..\Downloads\capture headers_[unknowncheats.me]_\capture headers\game_capture.cpp" />
     <ClCompile Include="capture\capture.cpp" />
     <ClCompile Include="capture\duplication_api_capture.cpp" />
+    <ClCompile Include="capture\game_capture.cpp" />
     <ClCompile Include="capture\optical_flow.cpp" />
     <ClCompile Include="config\config.cpp" />
     <ClCompile Include="detector\detector.cpp" />
@@ -68,8 +70,12 @@
     <CudaCompile Include="detector\targetLockingGpu.cu" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\..\..\Downloads\capture headers_[unknowncheats.me]_\capture headers\game_capture.h" />
+    <ClInclude Include="..\..\..\Downloads\capture headers_[unknowncheats.me]_\capture headers\hook_info.h" />
     <ClInclude Include="capture\capture.h" />
     <ClInclude Include="capture\duplication_api_capture.h" />
+    <ClInclude Include="capture\game_capture.h" />
+    <ClInclude Include="capture\hook_info.h" />
     <ClInclude Include="capture\optical_flow.h" />
     <ClInclude Include="capture\winrt_capture.h" />
     <ClInclude Include="config\config.h" />
@@ -131,7 +137,7 @@
     <Keyword>Win32Proj</Keyword>
     <ProjectGuid>{a27ffc6c-5ec3-43d3-be46-9925b722b3c8}</ProjectGuid>
     <RootNamespace>needaimbot</RootNamespace>
-    <WindowsTargetPlatformVersion>10.0.22621.0</WindowsTargetPlatformVersion>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
@@ -196,7 +202,7 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LinkIncremental>false</LinkIncremental>
     <IncludePath>$(MSBuildProjectDirectory)\modules\serial\include;$(MSBuildProjectDirectory);$(MSBuildProjectDirectory)\imgui;$(MSBuildProjectDirectory)\keyboard;$(MSBuildProjectDirectory)\config;$(MSBuildProjectDirectory)\tensorrt;$(MSBuildProjectDirectory)\detector;$(MSBuildProjectDirectory)\mouse;$(MSBuildProjectDirectory)\overlay;$(MSBuildProjectDirectory)\capture;$(MSBuildProjectDirectory)\modules\opencv\build\install\include;$(WindowsSDK_IncludePath);$(WindowsSDK_IncludePath)\cppwinrt;$(MSBuildProjectDirectory)\modules\TensorRT-10.8.0.43\include;include;$(ProgramW6432)\NVIDIA GPU Computing Toolkit\CUDA\v12.8\include;$(ProgramW6432)\NVIDIA\CUDNN\v9.7\include\12.8;$(IncludePath)</IncludePath>
-    <LibraryPath>$(MSBuildProjectDirectory)\modules\serial\visual_studio\x64\Release;$(MSBuildProjectDirectory)\modules\glfw-3.4.bin.WIN64\lib-vc2019;$(MSBuildProjectDirectory)\modules\opencv\build\install\x64\vc16\lib;$(MSBuildProjectDirectory)\modules\\TensorRT-10.8.0.43\lib;$(ProgramW6432)\NVIDIA GPU Computing Toolkit\CUDA\v12.8\lib\x64;$(ProgramW6432)\NVIDIA\CUDNN\v9.7\lib\12.8;$(LibraryPath)</LibraryPath>
+    <LibraryPath>$(MSBuildProjectDirectory)\modules\serial\visual_studio\x64\Release;$(MSBuildProjectDirectory)\modules\glfw-3.4.bin.WIN64\lib-vc2019;$(MSBuildProjectDirectory)\modules\opencv\build\install\x64\vc17\lib;$(MSBuildProjectDirectory)\modules\\TensorRT-10.8.0.43\lib;$(ProgramW6432)\NVIDIA GPU Computing Toolkit\CUDA\v12.8\lib\x64;$(ProgramW6432)\NVIDIA\CUDNN\v9.7\lib\12.8;$(LibraryPath)</LibraryPath>
     <TargetName>ai</TargetName>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
@@ -265,7 +271,7 @@
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalDependencies>opencv_world4100.lib;nvinfer_10.lib;nvonnxparser_10.lib;WindowsApp.lib;d3d11.lib;dxgi.lib;d2d1.lib;cuda.lib;cudart.lib;glfw3_mt.lib;glfw3dll.lib;serial.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>C:\Users\th072\Desktop\sunone_norecoil\needaimbot\modules\serial\visual_studio\x64\Release;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>C:\Users\th072\Desktop\needaimbot\needaimbot\modules\serial\visual_studio\x64\Release;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <Manifest>
       <GenerateCatalogFiles>false</GenerateCatalogFiles>
@@ -274,13 +280,24 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
     <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 12.8.targets" />
-    <Import Project="..\packages\Microsoft.Windows.CppWinRT.2.0.240405.15\build\native\Microsoft.Windows.CppWinRT.targets" Condition="Exists('..\packages\Microsoft.Windows.CppWinRT.2.0.240405.15\build\native\Microsoft.Windows.CppWinRT.targets')" />
+    <Import Project="..\packages\Microsoft.Windows.CppWinRT.2.0.250303.1\build\native\Microsoft.Windows.CppWinRT.targets" Condition="Exists('..\packages\Microsoft.Windows.CppWinRT.2.0.250303.1\build\native\Microsoft.Windows.CppWinRT.targets')" />
   </ImportGroup>
   <Target Name="EnsureNuGetPackageBuildImports" BeforeTargets="PrepareForBuild">
     <PropertyGroup>
       <ErrorText>이 프로젝트는 이 컴퓨터에 없는 NuGet 패키지를 참조합니다. 해당 패키지를 다운로드하려면 NuGet 패키지 복원을 사용하십시오. 자세한 내용은 http://go.microsoft.com/fwlink/?LinkID=322105를 참조하십시오. 누락된 파일은 {0}입니다.</ErrorText>
     </PropertyGroup>
-    <Error Condition="!Exists('..\packages\Microsoft.Windows.CppWinRT.2.0.240405.15\build\native\Microsoft.Windows.CppWinRT.props')" Text="$([System.String]::Format('$(ErrorText)', '..\packages\Microsoft.Windows.CppWinRT.2.0.240405.15\build\native\Microsoft.Windows.CppWinRT.props'))" />
-    <Error Condition="!Exists('..\packages\Microsoft.Windows.CppWinRT.2.0.240405.15\build\native\Microsoft.Windows.CppWinRT.targets')" Text="$([System.String]::Format('$(ErrorText)', '..\packages\Microsoft.Windows.CppWinRT.2.0.240405.15\build\native\Microsoft.Windows.CppWinRT.targets'))" />
+    <Error Condition="!Exists('..\packages\Microsoft.Windows.CppWinRT.2.0.250303.1\build\native\Microsoft.Windows.CppWinRT.props')" Text="$([System.String]::Format('$(ErrorText)', '..\packages\Microsoft.Windows.CppWinRT.2.0.250303.1\build\native\Microsoft.Windows.CppWinRT.props'))" />
+    <Error Condition="!Exists('..\packages\Microsoft.Windows.CppWinRT.2.0.250303.1\build\native\Microsoft.Windows.CppWinRT.targets')" Text="$([System.String]::Format('$(ErrorText)', '..\packages\Microsoft.Windows.CppWinRT.2.0.250303.1\build\native\Microsoft.Windows.CppWinRT.targets'))" />
+  </Target>
+  <!-- Automatically copy required DLLs after build -->
+  <ItemGroup>
+    <RuntimeDependencies Include="$(MSBuildProjectDirectory)\modules\opencv\build\install\x64\vc17\bin\opencv_world4100.dll" />
+    <RuntimeDependencies Include="$(MSBuildProjectDirectory)\modules\TensorRT-10.8.0.43\lib\nvinfer_10.dll" />
+    <RuntimeDependencies Include="$(MSBuildProjectDirectory)\modules\TensorRT-10.8.0.43\lib\nvonnxparser_10.dll" />
+    <RuntimeDependencies Include="$(ProgramW6432)\NVIDIA\CUDNN\v9.7\bin\12.8\cudnn64_9.dll" />
+    <RuntimeDependencies Include="$(MSBuildProjectDirectory)\modules\TensorRT-10.8.0.43\lib\nvinfer_builder_resource_10.dll" />
+  </ItemGroup>
+  <Target Name="CopyRuntimeDependencies" AfterTargets="Build">
+    <Copy SourceFiles="@(RuntimeDependencies)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
   </Target>
 </Project>

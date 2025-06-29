@@ -98,6 +98,8 @@ Detector::Detector()
     m_captureDoneEvent(nullptr),
     m_cudaContextInitialized(false),
     m_hasBestTarget(false),
+    m_computeStream(nullptr),
+    m_memoryStream(nullptr),
     m_bestTargetIndexHost(-1),
     m_finalDetectionsCountHost(0),
     m_classFilteredCountHost(0),
@@ -172,7 +174,22 @@ Detector::~Detector()
     freeGpuBuffer(m_nms_d_keep);
     freeGpuBuffer(m_nms_d_indices);
 
-    
+    if (m_computeStream) {
+        cudaStreamDestroy(m_computeStream);
+        m_computeStream = nullptr;
+    }
+    if (m_memoryStream) {
+        cudaStreamDestroy(m_memoryStream);
+        m_memoryStream = nullptr;
+    }
+    if (m_preprocessDone) {
+        cudaEventDestroy(m_preprocessDone);
+        m_preprocessDone = nullptr;
+    }
+    if (m_inferenceDone) {
+        cudaEventDestroy(m_inferenceDone);
+        m_inferenceDone = nullptr;
+    }
 }
 
 void Detector::getInputNames()
@@ -390,6 +407,10 @@ void Detector::initialize(const std::string& modelFile)
 
     getBindings();
 
+    cudaStreamCreateWithFlags(&m_computeStream, cudaStreamNonBlocking);
+    cudaStreamCreateWithFlags(&m_memoryStream, cudaStreamNonBlocking);
+    cudaEventCreateWithFlags(&m_preprocessDone, cudaEventDisableTiming);
+    cudaEventCreateWithFlags(&m_inferenceDone, cudaEventDisableTiming);
     
     initializeBuffers(); 
 
@@ -713,10 +734,9 @@ void Detector::inferenceThread()
                 
                 
 
-                cudaStreamSynchronize(stream);
-
                 int final_detections_count = 0;
-                cudaMemcpy(&final_detections_count, m_finalDetectionsCountGpu, sizeof(int), cudaMemcpyDeviceToHost);
+                cudaMemcpyAsync(&final_detections_count, m_finalDetectionsCountGpu, sizeof(int), cudaMemcpyDeviceToHost, stream);
+                cudaStreamSynchronize(stream);
 
                 if (final_detections_count > 0)
                 {
@@ -735,12 +755,11 @@ void Detector::inferenceThread()
                     findBestTargetGpu(m_scoresGpu, final_detections_count, m_bestTargetIndexGpu, stream);
 
                     cudaMemcpyAsync(&m_bestTargetIndexHost, m_bestTargetIndexGpu, sizeof(int), cudaMemcpyDeviceToHost, stream);
+                    cudaMemcpyAsync(&m_bestTargetHost, &m_finalDetectionsGpu[m_bestTargetIndexHost], sizeof(Detection), cudaMemcpyDeviceToHost, stream);
                     cudaStreamSynchronize(stream);
 
                     if (m_bestTargetIndexHost >= 0 && m_bestTargetIndexHost < final_detections_count)
                     {
-                        cudaMemcpyAsync(&m_bestTargetHost, &m_finalDetectionsGpu[m_bestTargetIndexHost], sizeof(Detection), cudaMemcpyDeviceToHost, stream);
-                        cudaStreamSynchronize(stream);
                         m_hasBestTarget = true;
                     }
                     else
@@ -843,13 +862,15 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
     
     int decodedCountHost = 0;
     cudaError_t decodeCountCopyErr = cudaMemcpyAsync(&decodedCountHost, m_decodedCountGpu, sizeof(int), cudaMemcpyDeviceToHost, stream);
-    cudaStreamSynchronize(stream);
     if (decodeCountCopyErr != cudaSuccess) {
         std::cerr << "[Detector] Failed to copy decoded count DtoH: " << cudaGetErrorString(decodeCountCopyErr) << std::endl;
         cudaMemsetAsync(m_finalDetectionsCountGpu, 0, sizeof(int), stream);
         return;
     }
 
+    
+    // Synchronization needed to read decodedCountHost
+    cudaStreamSynchronize(stream);
     
     int classFilteredCountHost = 0;
     if (decodedCountHost > 0) {
@@ -942,7 +963,8 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
 
     
     if (classFilteredCountHost > 0) {
-        int inputNmsCount = std::min(classFilteredCountHost, static_cast<int>(config.max_detections)); 
+        // Limit NMS input to reduce computation - only top 10 for performance
+        int inputNmsCount = std::min(classFilteredCountHost, std::min(static_cast<int>(config.max_detections), 10)); 
         if (inputNmsCount > 0) {
             try {
                 NMSGpu(

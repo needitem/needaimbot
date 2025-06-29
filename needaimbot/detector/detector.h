@@ -75,6 +75,11 @@ public:
     cudaEvent_t processingDone;
     cudaEvent_t postprocessCopyDone;
     cudaEvent_t m_captureDoneEvent = nullptr;
+    
+    cudaStream_t m_computeStream = nullptr;
+    cudaStream_t m_memoryStream = nullptr;
+    cudaEvent_t m_preprocessDone = nullptr;
+    cudaEvent_t m_inferenceDone = nullptr;
 
     cv::cuda::GpuMat resizedBuffer;
     
