@@ -181,6 +181,36 @@ void keyboardListener()
         {
             config.easynorecoilstrength = std::min(MAX_NORECOIL_STRENGTH, config.easynorecoilstrength + config.norecoil_step);
         }
+
+        
+        static bool prevPageUp = false, prevPageDown = false;
+        bool pageUp = GetAsyncKeyState(VK_PRIOR) & 0x8000;
+        bool pageDown = GetAsyncKeyState(VK_NEXT) & 0x8000;
+
+        if (pageUp && !prevPageUp)
+        {
+            auto weapon_names = config.getWeaponProfileNames();
+            if (!weapon_names.empty()) {
+                auto current_index = config.active_weapon_profile_index;
+                int next_index = (current_index + 1) % static_cast<int>(weapon_names.size());
+                config.setActiveWeaponProfile(weapon_names[next_index]);
+                std::cout << "[Weapon] Switched to: " << weapon_names[next_index] << std::endl;
+            }
+        }
+
+        if (pageDown && !prevPageDown)
+        {
+            auto weapon_names = config.getWeaponProfileNames();
+            if (!weapon_names.empty()) {
+                auto current_index = config.active_weapon_profile_index;
+                int prev_index = (current_index - 1 + static_cast<int>(weapon_names.size())) % static_cast<int>(weapon_names.size());
+                config.setActiveWeaponProfile(weapon_names[prev_index]);
+                std::cout << "[Weapon] Switched to: " << weapon_names[prev_index] << std::endl;
+            }
+        }
+
+        prevPageUp = pageUp;
+        prevPageDown = pageDown;
         
         
         prevUpArrow = upArrow;

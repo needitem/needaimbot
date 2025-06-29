@@ -91,6 +91,7 @@ public:
     void pressMouse(const AimbotTarget &target);
     void releaseMouse();
     void applyRecoilCompensation(float strength);
+    void applyWeaponRecoilCompensation(const WeaponRecoilProfile* profile, int scope_magnification);
 
     void enableErrorTracking(const ErrorTrackingCallback& callback);
     void disableErrorTracking();
