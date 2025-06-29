@@ -58,6 +58,7 @@
     <ClCompile Include="overlay\draw_profile.cpp" />
     <ClCompile Include="overlay\draw_target.cpp" />
     <ClCompile Include="overlay\overlay.cpp" />
+    <ClCompile Include="overlay\ui_helpers.cpp" />
     <ClCompile Include="overlay\visuals.cpp" />
     <ClCompile Include="scr\other_tools.cpp" />
     <ClCompile Include="needaimbot.cpp" />
@@ -122,6 +123,7 @@
     <ClInclude Include="mouse\VelocityPredictor.h" />
     <ClInclude Include="overlay\draw_settings.h" />
     <ClInclude Include="overlay\overlay.h" />
+    <ClInclude Include="overlay\ui_helpers.h" />
     <ClInclude Include="overlay\visuals.h" />
     <ClInclude Include="needaimbot.h" />
     <ClInclude Include="tensorrt\nvinf.h" />

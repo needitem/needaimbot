@@ -12,7 +12,7 @@ void draw_overlay()
     ImGui::SeparatorText("Overlay Appearance");
     ImGui::Spacing();
 
-    if (ImGui::SliderInt("Overlay Opacity", &config.overlay_opacity, 40, 255)) { config.saveConfig(); }
+    ImGui::SliderInt("Overlay Opacity", &config.overlay_opacity, 40, 255);
     if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Adjusts the transparency of the overlay window (settings menu)."); }
 
     ImGui::Spacing();
@@ -24,7 +24,7 @@ void draw_overlay()
         ImGui::GetIO().FontGlobalScale = ui_scale;
 
         config.overlay_ui_scale = ui_scale;
-        config.saveConfig("config.ini");
+        // Config will be saved by batch processing in overlay.cpp
 
         extern const int BASE_OVERLAY_WIDTH;
         extern const int BASE_OVERLAY_HEIGHT;
@@ -34,5 +34,21 @@ void draw_overlay()
         SetWindowPos(g_hwnd, NULL, 0, 0, overlayWidth, overlayHeight, SWP_NOMOVE | SWP_NOZORDER);
     }
     if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Scales the size of the entire settings UI. May require restart for some elements."); }
+    
+    ImGui::Spacing();
+    ImGui::SeparatorText("Performance");
+    ImGui::Spacing();
+    
+    // Display current overlay FPS setting
+    float clamped_fps = std::max(15.0f, std::min(240.0f, config.target_fps));
+    ImGui::Text("Overlay FPS: %.1f", clamped_fps);
+    if (ImGui::IsItemHovered()) { 
+        ImGui::SetTooltip("Overlay frame rate is controlled by Target FPS setting in Capture tab.\nClamped between 15-240 FPS for stability."); 
+    }
+    
+    // Show current frame time
+    float frame_time_ms = 1000.0f / clamped_fps;
+    ImGui::Text("Frame Time: %.2f ms", frame_time_ms);
+    
     ImGui::Spacing();
 }
