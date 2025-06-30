@@ -60,11 +60,8 @@ namespace UIHelpers
             changed = true;
         }
         
-        // Simplified animation for better performance
-        static float t_smooth = *value ? 1.0f : 0.0f;
-        float target = *value ? 1.0f : 0.0f;
-        t_smooth += (target - t_smooth) * 0.15f; // Smooth interpolation
-        float t = t_smooth;
+        // No animation - instant toggle
+        float t = *value ? 1.0f : 0.0f;
         
         ImU32 col_bg;
         if (ImGui::IsItemHovered()) {
@@ -80,7 +77,12 @@ namespace UIHelpers
         ImGui::Text("%s", label);
         
         if (description && ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("%s", description);
+            ImGui::BeginTooltip();
+            float max_width = ImGui::GetIO().DisplaySize.x * 0.5f;
+            ImGui::PushTextWrapPos(max_width);
+            ImGui::TextUnformatted(description);
+            ImGui::PopTextWrapPos();
+            ImGui::EndTooltip();
         }
         
         ImGui::PopID();
@@ -166,7 +168,12 @@ namespace UIHelpers
         ImGui::Text("%s", label);
         
         if (description && ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("%s", description);
+            ImGui::BeginTooltip();
+            float max_width = ImGui::GetIO().DisplaySize.x * 0.5f;
+            ImGui::PushTextWrapPos(max_width);
+            ImGui::TextUnformatted(description);
+            ImGui::PopTextWrapPos();
+            ImGui::EndTooltip();
         }
     }
 
@@ -175,7 +182,12 @@ namespace UIHelpers
         ImGui::SameLine();
         ImGui::TextDisabled("(?)");
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("%s", description);
+            ImGui::BeginTooltip();
+            const float wrap_width = ImGui::GetFontSize() * 35.0f;
+            ImGui::PushTextWrapPos(wrap_width);
+            ImGui::TextUnformatted(description);
+            ImGui::PopTextWrapPos();
+            ImGui::EndTooltip();
         }
     }
 
@@ -195,5 +207,17 @@ namespace UIHelpers
     void PopStyleColors()
     {
         ImGui::PopStyleColor(2);
+    }
+
+    void WrappedTooltip(const char* description)
+    {
+        if (ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            float max_width = ImGui::GetIO().DisplaySize.x * 0.5f;
+            ImGui::PushTextWrapPos(max_width);
+            ImGui::TextUnformatted(description);
+            ImGui::PopTextWrapPos();
+            ImGui::EndTooltip();
+        }
     }
 }

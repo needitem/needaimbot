@@ -5,7 +5,9 @@
       "Bash(rg:*)",
       "Bash(grep:*)",
       "Bash(ls:*)",
-      "Bash(msbuild:*)"
+      "Bash(msbuild:*)",
+      "Bash(cp:*)",
+      "Bash(rm:*)"
     ],
     "deny": []
   }

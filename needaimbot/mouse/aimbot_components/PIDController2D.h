@@ -11,7 +11,7 @@ private:
     float kp_x, kp_y;  
     float ki_x, ki_y;  
     float kd_x, kd_y;  
-    float derivative_smoothing_factor; 
+ 
 
     
     Eigen::Vector2f prev_error;      
@@ -22,13 +22,13 @@ private:
 
 public:
     
-    PIDController2D(float kp_x, float ki_x, float kd_x, float kp_y, float ki_y, float kd_y, float derivative_smoothing_factor);
+    PIDController2D(float kp_x, float ki_x, float kd_x, float kp_y, float ki_y, float kd_y);
 
     Eigen::Vector2f calculate(const Eigen::Vector2f &error);
     void reset();  
 
     
-    void updateSeparatedParameters(float kp_x, float ki_x, float kd_x, float kp_y, float ki_y, float kd_y, float derivative_smoothing_factor);
+    void updateSeparatedParameters(float kp_x, float ki_x, float kd_x, float kp_y, float ki_y, float kd_y);
 };
 
 #endif 

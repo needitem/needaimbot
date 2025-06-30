@@ -365,7 +365,12 @@ void mouseThreadFunction(MouseThread &mouseThread)
                 auto elapsed_since_press = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now() - shooting_key_press_time
                 ).count();
-                if (elapsed_since_press >= config.easynorecoil_start_delay_ms) {
+                
+                // Use weapon-specific delay if available, otherwise use global delay
+                WeaponRecoilProfile* current_profile = config.getCurrentWeaponProfile();
+                int start_delay = current_profile ? current_profile->start_delay_ms : config.easynorecoil_start_delay_ms;
+                
+                if (elapsed_since_press >= start_delay) {
                     recoil_active = true;
                     start_delay_pending = false;
                 }
@@ -375,7 +380,12 @@ void mouseThreadFunction(MouseThread &mouseThread)
                 auto elapsed_since_release = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now() - shooting_key_release_time
                 ).count();
-                if (elapsed_since_release >= config.easynorecoil_end_delay_ms) {
+                
+                // Use weapon-specific delay if available, otherwise use global delay
+                WeaponRecoilProfile* current_profile = config.getCurrentWeaponProfile();
+                int end_delay = current_profile ? current_profile->end_delay_ms : config.easynorecoil_end_delay_ms;
+                
+                if (elapsed_since_release >= end_delay) {
                     recoil_active = false;
                     end_delay_pending = false;
                 }
@@ -651,7 +661,6 @@ int main()
             config.kd_y,
             config.bScope_multiplier,
             config.norecoil_ms,
-            config.derivative_smoothing_factor,
             arduinoSerial,
             gHub);
 

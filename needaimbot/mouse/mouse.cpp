@@ -38,58 +38,6 @@ std::mt19937 gen(rd());
 constexpr float SCOPE_MARGIN = 0.15f;
 
 
-void WindMouse(float target_x, float target_y, float G, float W, float M, float D,
-               std::function<void(int, int)> move_func)
-{
-    float current_x = 0, current_y = 0;
-    float v_x = 0, v_y = 0;
-    float W_sqrt = sqrt(W);
-    float D_sqrt = sqrt(D);
-
-    float dist, random_dist, new_hypot;
-    float new_x_vel, new_y_vel;
-    float new_x, new_y;
-
-    while (true) {
-        dist = hypot(target_x - current_x, target_y - current_y);
-        if (dist <= 1.0f) { 
-            break;
-        }
-
-        random_dist = std::uniform_real_distribution<float>(0.0f, dist / D_sqrt)(gen);
-        new_hypot = std::uniform_real_distribution<float>(0.0f, dist / M)(gen);
-
-        v_x += W_sqrt * (std::uniform_real_distribution<float>(-1.0f, 1.0f)(gen)) + G * (target_x - current_x - v_x) / dist;
-        v_y += W_sqrt * (std::uniform_real_distribution<float>(-1.0f, 1.0f)(gen)) + G * (target_y - current_y - v_y) / dist;
-
-        
-        float v_magnitude = hypot(v_x, v_y);
-        if (v_magnitude > new_hypot) {
-            v_x = (new_hypot / v_magnitude) * v_x;
-            v_y = (new_hypot / v_magnitude) * v_y;
-        }
-        
-        new_x = current_x + v_x;
-        new_y = current_y + v_y;
-
-        
-        if (hypot(target_x - new_x, target_y - new_y) > dist) {
-             new_x = current_x + (target_x - current_x) * (dist - random_dist) / dist;
-             new_y = current_y + (target_y - current_y) * (dist - random_dist) / dist;
-        }
-        
-        int move_dx = static_cast<int>(std::round(new_x - current_x));
-        int move_dy = static_cast<int>(std::round(new_y - current_y));
-
-        if (move_dx != 0 || move_dy != 0) {
-            move_func(move_dx, move_dy);
-        }
-        
-        current_x = new_x;
-        current_y = new_y;
-        
-    }
-}
 
 
 thread_local static LARGE_INTEGER freq;
@@ -132,12 +80,11 @@ MouseThread::MouseThread(
     float kd_y,
     float bScope_multiplier,
     float norecoil_ms,
-    float derivative_smoothing_factor,
     SerialConnection *serialConnection,
     GhubMouse *gHub) : tracking_errors(false), silent_aim_click_duration_ms(50)
 {
     initializeScreen(resolution, bScope_multiplier, norecoil_ms);
-    pid_controller = std::make_unique<PIDController2D>(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y, derivative_smoothing_factor);
+    pid_controller = std::make_unique<PIDController2D>(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
     initializeInputMethod(serialConnection, gHub);
 }
 
@@ -192,15 +139,14 @@ void MouseThread::updateConfig(
     float ki_y,
     float kd_y,
     float bScope_multiplier,
-    float norecoil_ms,
-    float derivative_smoothing_factor
+    float norecoil_ms
     )
 {
     {
         std::lock_guard<std::mutex> lock(member_data_mutex_); 
         initializeScreen(resolution, bScope_multiplier, norecoil_ms);
     }
-    pid_controller->updateSeparatedParameters(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y, derivative_smoothing_factor);
+    pid_controller->updateSeparatedParameters(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
     
 }
 
@@ -389,14 +335,9 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         float error_magnitude = std::sqrt(initial_error_x * initial_error_x + initial_error_y * initial_error_y);
         float prediction_time = std::clamp(error_magnitude * 0.001f, 0.0f, 0.05f); // 0-50ms prediction
         
-        // Apply prediction with velocity smoothing
-        static float smooth_vel_x = 0.0f, smooth_vel_y = 0.0f;
-        const float velocity_smoothing = 0.7f;
-        smooth_vel_x = smooth_vel_x * (1.0f - velocity_smoothing) + target_vel_x * velocity_smoothing;
-        smooth_vel_y = smooth_vel_y * (1.0f - velocity_smoothing) + target_vel_y * velocity_smoothing;
-        
-        predicted_target_pos.x = raw_target_pos.x + smooth_vel_x * prediction_time;
-        predicted_target_pos.y = raw_target_pos.y + smooth_vel_y * prediction_time;
+        // Apply prediction without smoothing
+        predicted_target_pos.x = raw_target_pos.x + target_vel_x * prediction_time;
+        predicted_target_pos.y = raw_target_pos.y + target_vel_y * prediction_time;
     }
     
     last_target_pos = raw_target_pos;
@@ -552,14 +493,17 @@ void MouseThread::applyRecoilCompensation(float strength)
     {
         std::lock_guard<std::mutex> lock(input_method_mutex); 
         
+        // Apply strength directly without accumulation to prevent over-compensation
         int dy_recoil = static_cast<int>(std::round(strength));
+        
         if (dy_recoil != 0) {
-             auto recoil_send_start_time = std::chrono::steady_clock::now();
-             input_method->move(0, dy_recoil);
-             auto recoil_send_end_time = std::chrono::steady_clock::now();
-             float recoil_send_duration_ms = std::chrono::duration<float, std::milli>(recoil_send_end_time - recoil_send_start_time).count();
-             g_current_input_send_time_ms.store(recoil_send_duration_ms, std::memory_order_relaxed);
-             add_to_history(g_input_send_time_history, recoil_send_duration_ms, g_input_send_history_mutex);
+            
+            auto recoil_send_start_time = std::chrono::steady_clock::now();
+            input_method->move(0, dy_recoil);
+            auto recoil_send_end_time = std::chrono::steady_clock::now();
+            float recoil_send_duration_ms = std::chrono::duration<float, std::milli>(recoil_send_end_time - recoil_send_start_time).count();
+            g_current_input_send_time_ms.store(recoil_send_duration_ms, std::memory_order_relaxed);
+            add_to_history(g_input_send_time_history, recoil_send_duration_ms, g_input_send_history_mutex);
         }
         
         last_recoil_compensation_time = now_chrono_recoil;
@@ -593,14 +537,17 @@ void MouseThread::applyWeaponRecoilCompensation(const WeaponRecoilProfile* profi
     {
         std::lock_guard<std::mutex> lock(input_method_mutex); 
         
+        // Apply strength directly without accumulation to prevent over-compensation
         int dy_recoil = static_cast<int>(std::round(adjusted_strength));
+        
         if (dy_recoil != 0) {
-             auto recoil_send_start_time = std::chrono::steady_clock::now();
-             input_method->move(0, dy_recoil);
-             auto recoil_send_end_time = std::chrono::steady_clock::now();
-             float recoil_send_duration_ms = std::chrono::duration<float, std::milli>(recoil_send_end_time - recoil_send_start_time).count();
-             g_current_input_send_time_ms.store(recoil_send_duration_ms, std::memory_order_relaxed);
-             add_to_history(g_input_send_time_history, recoil_send_duration_ms, g_input_send_history_mutex);
+            
+            auto recoil_send_start_time = std::chrono::steady_clock::now();
+            input_method->move(0, dy_recoil);
+            auto recoil_send_end_time = std::chrono::steady_clock::now();
+            float recoil_send_duration_ms = std::chrono::duration<float, std::milli>(recoil_send_end_time - recoil_send_start_time).count();
+            g_current_input_send_time_ms.store(recoil_send_duration_ms, std::memory_order_relaxed);
+            add_to_history(g_input_send_time_history, recoil_send_duration_ms, g_input_send_history_mutex);
         }
         
         last_recoil_compensation_time = now_chrono_recoil;

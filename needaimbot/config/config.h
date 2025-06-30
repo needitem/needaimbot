@@ -32,7 +32,7 @@ struct WeaponRecoilProfile {
         : weapon_name(std::move(name)), base_strength(strength), fire_rate_multiplier(fire_mult),
           scope_mult_1x(0.8f), scope_mult_2x(1.0f), scope_mult_3x(1.2f), 
           scope_mult_4x(1.4f), scope_mult_6x(1.6f), scope_mult_8x(1.8f),
-          start_delay_ms(0), end_delay_ms(0), recoil_ms(1.0f) {}
+          start_delay_ms(0), end_delay_ms(0), recoil_ms(10.0f) {}
 };
 
 struct Config; 
@@ -105,7 +105,6 @@ public:
     double kp_y;
     double ki_y;
     double kd_y;
-    double derivative_smoothing_factor;
 
     
     bool use_predictive_controller;
