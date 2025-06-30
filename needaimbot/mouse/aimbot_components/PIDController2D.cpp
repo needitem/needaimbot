@@ -1,6 +1,7 @@
 #include "PIDController2D.h"
 #include <cmath>
 #include <algorithm>
+#include <mutex>
 #include "../../config/config.h"
 
 extern Config config;
