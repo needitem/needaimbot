@@ -2,8 +2,8 @@
 #include <cmath>
 #include <algorithm> 
 
-PIDController2D::PIDController2D(float kp_x, float ki_x, float kd_x, float kp_y, float ki_y, float kd_y, float derivative_smoothing_factor)
-    : kp_x(kp_x), ki_x(ki_x), kd_x(kd_x), kp_y(kp_y), ki_y(ki_y), kd_y(kd_y), derivative_smoothing_factor(derivative_smoothing_factor)
+PIDController2D::PIDController2D(float kp_x, float ki_x, float kd_x, float kp_y, float ki_y, float kd_y)
+    : kp_x(kp_x), ki_x(ki_x), kd_x(kd_x), kp_y(kp_y), ki_y(ki_y), kd_y(kd_y)
 {
     reset();
 }
@@ -27,20 +27,9 @@ Eigen::Vector2f PIDController2D::calculate(const Eigen::Vector2f &error)
     float current_derivative_x = (error.x() - prev_error.x()) * inv_dt;
     float current_derivative_y = (error.y() - prev_error.y()) * inv_dt;
 
-    // Enhanced derivative filtering with adaptive smoothing
-    float error_magnitude = std::sqrt(error.x() * error.x() + error.y() * error.y());
-    float adaptive_smoothing = derivative_smoothing_factor;
-    
-    // Use more smoothing for small errors (higher precision)
-    // Use less smoothing for large errors (faster response)
-    if (error_magnitude < 5.0f) {
-        adaptive_smoothing = std::min(derivative_smoothing_factor * 1.5f, 0.9f);
-    } else if (error_magnitude > 20.0f) {
-        adaptive_smoothing = std::max(derivative_smoothing_factor * 0.7f, 0.1f);
-    }
-    
-    derivative.x() = current_derivative_x * adaptive_smoothing + prev_derivative.x() * (1.0f - adaptive_smoothing);
-    derivative.y() = current_derivative_y * adaptive_smoothing + prev_derivative.y() * (1.0f - adaptive_smoothing);
+    // No smoothing - direct derivative calculation
+    derivative.x() = current_derivative_x;
+    derivative.y() = current_derivative_y;
 
     prev_derivative = derivative;
 
@@ -63,7 +52,7 @@ void PIDController2D::reset()
 }
 
 void PIDController2D::updateSeparatedParameters(float kp_x, float ki_x, float kd_x,
-                                               float kp_y, float ki_y, float kd_y, float derivative_smoothing_factor)
+                                               float kp_y, float ki_y, float kd_y)
 {
     this->kp_x = kp_x;
     this->ki_x = ki_x;
@@ -71,6 +60,5 @@ void PIDController2D::updateSeparatedParameters(float kp_x, float ki_x, float kd
     this->kp_y = kp_y;
     this->ki_y = ki_y;
     this->kd_y = kd_y;
-    this->derivative_smoothing_factor = derivative_smoothing_factor;
 }
 

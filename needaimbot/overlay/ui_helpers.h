@@ -15,6 +15,7 @@ namespace UIHelpers
     void BeautifulSection(const char* title, bool* open = nullptr);
     void StatusIndicator(const char* label, bool status, const char* description = nullptr);
     void InfoTooltip(const char* description);
+    void WrappedTooltip(const char* description);
     void BeautifulProgressBar(float fraction, const ImVec2& size = ImVec2(-1, 0), const char* overlay = nullptr);
     
     ImVec4 GetAccentColor(float alpha = 1.0f);
