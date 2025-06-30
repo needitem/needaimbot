@@ -8,7 +8,8 @@
 #include "imgui/imgui.h"
 #include "needaimbot.h"
 #include "include/other_tools.h"
-#include "overlay.h" 
+#include "overlay.h"
+#include "ui_helpers.h" 
 
 std::string ghub_version = get_ghub_version();
 
@@ -43,74 +44,133 @@ void draw_mouse()
     ImGui::Spacing(); 
     
     
-    if (ImGui::CollapsingHeader("Horizontal (X-axis) PID", ImGuiTreeNodeFlags_DefaultOpen))
+    if (ImGui::CollapsingHeader("PID Controller Settings", ImGuiTreeNodeFlags_DefaultOpen))
     {
+        ImGui::Text("PID parameters control how the aimbot tracks targets.");
+        ImGui::Spacing();
         
-        float kp_x_display = static_cast<float>(config.kp_x);
-        if (ImGui::InputFloat("Proportional X (Kp)", &kp_x_display, 0.01f, 0.1f, "%.3f"))
+        // X-axis PID
+        if (ImGui::TreeNode("X-Axis (Horizontal)"))
         {
-            config.kp_x = static_cast<double>(kp_x_display);
+            float kp_x_display = static_cast<float>(config.kp_x);
+            if (ImGui::InputFloat("Kp X", &kp_x_display, 0.01f, 0.1f, "%.3f"))
+            {
+                config.kp_x = static_cast<double>(kp_x_display);
+                config.saveConfig();
+            }
+            if (ImGui::IsItemHovered()) {
+                SetWrappedTooltip("Proportional gain for X-axis. Higher values = faster response but may cause oscillation.");
+            }
+            
+            float ki_x_display = static_cast<float>(config.ki_x);
+            if (ImGui::InputFloat("Ki X", &ki_x_display, 0.01f, 0.1f, "%.3f"))
+            {
+                config.ki_x = static_cast<double>(ki_x_display);
+                config.saveConfig();
+            }
+            if (ImGui::IsItemHovered()) {
+                SetWrappedTooltip("Integral gain for X-axis. Helps eliminate steady-state error.");
+            }
+            
+            float kd_x_display = static_cast<float>(config.kd_x);
+            if (ImGui::InputFloat("Kd X", &kd_x_display, 0.01f, 0.1f, "%.3f"))
+            {
+                config.kd_x = static_cast<double>(kd_x_display);
+                config.saveConfig();
+            }
+            if (ImGui::IsItemHovered()) {
+                SetWrappedTooltip("Derivative gain for X-axis. Reduces overshoot and oscillation.");
+            }
+            
+            ImGui::TreePop();
         }
-        if (ImGui::IsItemHovered())
+        
+        ImGui::Spacing();
+        
+        // Y-axis PID
+        if (ImGui::TreeNode("Y-Axis (Vertical)"))
         {
-            SetWrappedTooltip("Affects the immediate horizontal response. Higher values make aiming more responsive but can cause overshooting.");
+            float kp_y_display = static_cast<float>(config.kp_y);
+            if (ImGui::InputFloat("Kp Y", &kp_y_display, 0.01f, 0.1f, "%.3f"))
+            {
+                config.kp_y = static_cast<double>(kp_y_display);
+                config.saveConfig();
+            }
+            if (ImGui::IsItemHovered()) {
+                SetWrappedTooltip("Proportional gain for Y-axis. Higher values = faster response but may cause oscillation.");
+            }
+            
+            float ki_y_display = static_cast<float>(config.ki_y);
+            if (ImGui::InputFloat("Ki Y", &ki_y_display, 0.01f, 0.1f, "%.3f"))
+            {
+                config.ki_y = static_cast<double>(ki_y_display);
+                config.saveConfig();
+            }
+            if (ImGui::IsItemHovered()) {
+                SetWrappedTooltip("Integral gain for Y-axis. Helps eliminate steady-state error.");
+            }
+            
+            float kd_y_display = static_cast<float>(config.kd_y);
+            if (ImGui::InputFloat("Kd Y", &kd_y_display, 0.01f, 0.1f, "%.3f"))
+            {
+                config.kd_y = static_cast<double>(kd_y_display);
+                config.saveConfig();
+            }
+            if (ImGui::IsItemHovered()) {
+                SetWrappedTooltip("Derivative gain for Y-axis. Reduces overshoot and oscillation.");
+            }
+            
+            ImGui::TreePop();
         }
-
-        float ki_x_display = static_cast<float>(config.ki_x);
-        if (ImGui::InputFloat("Integral X (Ki)", &ki_x_display, 0.01f, 0.1f, "%.3f"))
+        
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+        
+        // Advanced Settings
+        if (ImGui::TreeNode("Advanced Settings"))
         {
-            config.ki_x = static_cast<double>(ki_x_display);
+            if (UIHelpers::BeautifulToggle("Enable Adaptive PID", &config.enable_adaptive_pid, 
+                                           "Uses distance-based PID adjustment for better stability at different ranges.")) {
+                config.saveConfig();
+            }
+            
+            if (UIHelpers::BeautifulSlider("Derivative Smoothing", &config.pid_derivative_smoothing, 0.0f, 0.8f, "%.3f")) {
+                config.saveConfig();
+            }
+            if (ImGui::IsItemHovered()) {
+                SetWrappedTooltip("Smooths derivative calculation to reduce noise. Higher values = more smoothing but slower response to rapid changes.");
+            }
+            
+            if (UIHelpers::BeautifulSlider("Movement Smoothing", &config.movement_smoothing, 0.0f, 0.6f, "%.3f")) {
+                config.saveConfig();
+            }
+            if (ImGui::IsItemHovered()) {
+                SetWrappedTooltip("Smooths final mouse movement. Higher values = less jitter but may reduce responsiveness.");
+            }
+            
+            ImGui::TreePop();
         }
-        if (ImGui::IsItemHovered())
+        
+        ImGui::Spacing();
+        
+        // Info section
+        if (ImGui::TreeNode("Tuning Tips"))
         {
-            SetWrappedTooltip("Accounts for accumulated horizontal error over time. Higher values help eliminate persistent offset but can cause oscillation.");
+            ImGui::BeginChild("PIDInfo", ImVec2(0, 80), true, ImGuiWindowFlags_AlwaysUseWindowPadding);
+            {
+                ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Tuning Tips:");
+                ImGui::Text("• Start with Kp, then add Kd to reduce oscillation");
+                ImGui::Text("• Use Ki sparingly - too much causes overshoot");
+                ImGui::Text("• Enable Adaptive PID for better long-range stability");
+                ImGui::Text("• Increase smoothing if you experience jitter");
+            }
+            ImGui::EndChild();
+            
+            ImGui::TreePop();
         }
-
-        float kd_x_display = static_cast<float>(config.kd_x);
-        if (ImGui::InputFloat("Derivative X (Kd)", &kd_x_display, 0.01f, 0.1f, "%.3f"))
-        {
-            config.kd_x = static_cast<double>(kd_x_display);
-        }
-        if (ImGui::IsItemHovered())
-        {
-            SetWrappedTooltip("Predicts future horizontal error based on rate of change. Higher values add dampening to reduce overshooting.");
-        }
-        ImGui::Spacing(); 
-    }
-    
-    
-    if (ImGui::CollapsingHeader("Vertical (Y-axis) PID", ImGuiTreeNodeFlags_DefaultOpen))
-    {
-        float kp_y_display = static_cast<float>(config.kp_y);
-        if (ImGui::InputFloat("Proportional Y (Kp)", &kp_y_display, 0.01f, 0.1f, "%.3f"))
-        {
-            config.kp_y = static_cast<double>(kp_y_display);
-        }
-        if (ImGui::IsItemHovered())
-        {
-            SetWrappedTooltip("Affects the immediate vertical response. Higher values make aiming more responsive but can cause overshooting.");
-        }
-
-        float ki_y_display = static_cast<float>(config.ki_y);
-        if (ImGui::InputFloat("Integral Y (Ki)", &ki_y_display, 0.01f, 0.1f, "%.3f"))
-        {
-            config.ki_y = static_cast<double>(ki_y_display);
-        }
-        if (ImGui::IsItemHovered())
-        {
-            SetWrappedTooltip("Accounts for accumulated vertical error over time. Higher values help eliminate persistent offset but can cause oscillation.");
-        }
-
-        float kd_y_display = static_cast<float>(config.kd_y);
-        if (ImGui::InputFloat("Derivative Y (Kd)", &kd_y_display, 0.01f, 0.1f, "%.3f"))
-        {
-            config.kd_y = static_cast<double>(kd_y_display);
-        }
-        if (ImGui::IsItemHovered())
-        {
-            SetWrappedTooltip("Predicts future vertical error based on rate of change. Higher values add dampening to reduce overshooting.");
-        }
-        ImGui::Spacing(); 
+        
+        ImGui::Spacing();
     }
 
     
