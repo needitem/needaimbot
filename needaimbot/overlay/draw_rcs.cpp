@@ -45,12 +45,14 @@ void draw_rcs_settings() {
                 
                 if (ImGui::Selectable(weapon_names[i].c_str(), is_selected)) {
                     config.setActiveWeaponProfile(weapon_names[i]);
+                    config.saveWeaponProfiles();
                 }
                 
                 // Right-click menu for weapon management
                 if (ImGui::BeginPopupContextItem()) {
                     if (weapon_names[i] != "Default" && ImGui::MenuItem("Delete Weapon")) {
                         config.removeWeaponProfile(weapon_names[i]);
+                        config.saveWeaponProfiles();
                     }
                     ImGui::EndPopup();
                 }
@@ -66,6 +68,7 @@ void draw_rcs_settings() {
         if (ImGui::Button("Add Weapon") && strlen(weapon_name_buffer) > 0) {
             WeaponRecoilProfile new_profile(weapon_name_buffer, 3.0f, 1.0f);
             if (config.addWeaponProfile(new_profile)) {
+                config.saveWeaponProfiles();
                 weapon_name_buffer[0] = '\0';
             }
         }
@@ -81,11 +84,21 @@ void draw_rcs_settings() {
             
             ImGui::Spacing();
             
-            UIHelpers::BeautifulSlider("Base Strength", &current_profile->base_strength, 0.1f, 10.0f, "%.2f");
-            UIHelpers::BeautifulSlider("Fire Rate Multiplier", &current_profile->fire_rate_multiplier, 0.1f, 3.0f, "%.2f");
-            UIHelpers::BeautifulSlider("Recoil Delay (ms)", &current_profile->recoil_ms, 0.1f, 50.0f, "%.1f");
-            ImGui::SliderInt("Start Delay (ms)", &current_profile->start_delay_ms, 0, 500);
-            ImGui::SliderInt("End Delay (ms)", &current_profile->end_delay_ms, 0, 500);
+            if (UIHelpers::BeautifulSlider("Base Strength", &current_profile->base_strength, 0.1f, 10.0f, "%.2f")) {
+                config.saveWeaponProfiles();
+            }
+            if (UIHelpers::BeautifulSlider("Fire Rate Multiplier", &current_profile->fire_rate_multiplier, 0.1f, 3.0f, "%.2f")) {
+                config.saveWeaponProfiles();
+            }
+            if (UIHelpers::BeautifulSlider("Recoil Delay (ms)", &current_profile->recoil_ms, 0.1f, 50.0f, "%.1f")) {
+                config.saveWeaponProfiles();
+            }
+            if (ImGui::SliderInt("Start Delay (ms)", &current_profile->start_delay_ms, 0, 500)) {
+                config.saveWeaponProfiles();
+            }
+            if (ImGui::SliderInt("End Delay (ms)", &current_profile->end_delay_ms, 0, 500)) {
+                config.saveWeaponProfiles();
+            }
         } else {
             UIHelpers::BeautifulText("No weapon profile selected", UIHelpers::GetWarningColor());
         }
@@ -103,18 +116,30 @@ void draw_rcs_settings() {
             ImGui::Spacing();
             
             ImGui::Columns(3, "ScopeMultipliers", false);
-            UIHelpers::BeautifulSlider("1x Multi", &current_profile->scope_mult_1x, 0.1f, 3.0f, "%.2f");
+            if (UIHelpers::BeautifulSlider("1x Multi", &current_profile->scope_mult_1x, 0.1f, 3.0f, "%.2f")) {
+                config.saveWeaponProfiles();
+            }
             ImGui::NextColumn();
-            UIHelpers::BeautifulSlider("2x Multi", &current_profile->scope_mult_2x, 0.1f, 3.0f, "%.2f");
+            if (UIHelpers::BeautifulSlider("2x Multi", &current_profile->scope_mult_2x, 0.1f, 3.0f, "%.2f")) {
+                config.saveWeaponProfiles();
+            }
             ImGui::NextColumn();
-            UIHelpers::BeautifulSlider("3x Multi", &current_profile->scope_mult_3x, 0.1f, 3.0f, "%.2f");
+            if (UIHelpers::BeautifulSlider("3x Multi", &current_profile->scope_mult_3x, 0.1f, 3.0f, "%.2f")) {
+                config.saveWeaponProfiles();
+            }
             ImGui::NextColumn();
             
-            UIHelpers::BeautifulSlider("4x Multi", &current_profile->scope_mult_4x, 0.1f, 3.0f, "%.2f");
+            if (UIHelpers::BeautifulSlider("4x Multi", &current_profile->scope_mult_4x, 0.1f, 3.0f, "%.2f")) {
+                config.saveWeaponProfiles();
+            }
             ImGui::NextColumn();
-            UIHelpers::BeautifulSlider("6x Multi", &current_profile->scope_mult_6x, 0.1f, 3.0f, "%.2f");
+            if (UIHelpers::BeautifulSlider("6x Multi", &current_profile->scope_mult_6x, 0.1f, 3.0f, "%.2f")) {
+                config.saveWeaponProfiles();
+            }
             ImGui::NextColumn();
-            UIHelpers::BeautifulSlider("8x Multi", &current_profile->scope_mult_8x, 0.1f, 3.0f, "%.2f");
+            if (UIHelpers::BeautifulSlider("8x Multi", &current_profile->scope_mult_8x, 0.1f, 3.0f, "%.2f")) {
+                config.saveWeaponProfiles();
+            }
             
             ImGui::Columns(1);
             

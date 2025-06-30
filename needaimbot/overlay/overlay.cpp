@@ -529,6 +529,12 @@ void OverlayThread()
                         ImGui::EndTabItem();
                     }
 
+                    if (ImGui::BeginTabItem("PID"))
+                    {
+                        draw_pid_settings();
+                        ImGui::EndTabItem();
+                    }
+
                     if (ImGui::BeginTabItem("AI"))
                     {
                         draw_ai();

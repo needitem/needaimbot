@@ -105,6 +105,10 @@ bool Config::loadConfig(const std::string& filename)
         kp_y = 0.4; 
         ki_y = 0.0;
         kd_y = 0.15;
+        
+        pid_derivative_smoothing = 0.2f;
+        movement_smoothing = 0.15f;
+        enable_adaptive_pid = true;
 
         
         arduino_baudrate = 115200;
@@ -187,6 +191,12 @@ bool Config::loadConfig(const std::string& filename)
         fovY = 60.0f; 
 
         
+        optical_flow_norecoil = false;
+        optical_flow_norecoil_strength = 2.0f;
+        optical_flow_norecoil_threshold = 1.0f;
+        optical_flow_norecoil_frames = 3;
+
+        
         enable_hsv_filter = false;
         hsv_lower_h = 0;
         hsv_lower_s = 0;
@@ -266,6 +276,10 @@ bool Config::loadConfig(const std::string& filename)
     kp_y = get_double_ini("PID", "kp_y", 0.4);
     ki_y = get_double_ini("PID", "ki_y", 0.0);
     kd_y = get_double_ini("PID", "kd_y", 0.15);
+    
+    pid_derivative_smoothing = (float)get_double_ini("PID", "pid_derivative_smoothing", 0.2);
+    movement_smoothing = (float)get_double_ini("PID", "movement_smoothing", 0.15);
+    enable_adaptive_pid = get_bool_ini("PID", "enable_adaptive_pid", true);
 
     use_predictive_controller = get_bool_ini("PID", "use_predictive_controller", true);
     prediction_time_ms = (float)get_double_ini("PID", "prediction_time_ms", 50.0);
@@ -326,6 +340,12 @@ bool Config::loadConfig(const std::string& filename)
     staticFrameThreshold = (float)get_double_ini("OpticalFlow", "staticFrameThreshold", 1.0);
     fovX = (float)get_double_ini("OpticalFlow", "fovX", 90.0);
     fovY = (float)get_double_ini("OpticalFlow", "fovY", 60.0);
+
+    
+    optical_flow_norecoil = get_bool_ini("OpticalFlow", "optical_flow_norecoil", false);
+    optical_flow_norecoil_strength = (float)get_double_ini("OpticalFlow", "optical_flow_norecoil_strength", 2.0);
+    optical_flow_norecoil_threshold = (float)get_double_ini("OpticalFlow", "optical_flow_norecoil_threshold", 1.0);
+    optical_flow_norecoil_frames = get_long_ini("OpticalFlow", "optical_flow_norecoil_frames", 3);
 
     
     enable_hsv_filter = get_bool_ini("HSVFilter", "enable_hsv_filter", false);
@@ -467,6 +487,9 @@ bool Config::saveConfig(const std::string& filename)
     file << "kp_y = " << kp_y << "\n";
     file << "ki_y = " << ki_y << "\n";
     file << "kd_y = " << kd_y << "\n";
+    file << "pid_derivative_smoothing = " << pid_derivative_smoothing << "\n";
+    file << "movement_smoothing = " << movement_smoothing << "\n";
+    file << "enable_adaptive_pid = " << (enable_adaptive_pid ? "true" : "false") << "\n";
     file << "use_predictive_controller = " << (use_predictive_controller ? "true" : "false") << "\n";
     file << "prediction_time_ms = " << prediction_time_ms << "\n";
     file << "kalman_process_noise = " << kalman_process_noise << "\n";
@@ -539,6 +562,21 @@ bool Config::saveConfig(const std::string& filename)
         file << "Class_" << i << "_Ignore = " << (class_settings[i].ignore ? "true" : "false") << "\n";
     }
     file << "\n";
+
+    file << "[OpticalFlow]\n";
+    file << "enable_optical_flow = " << (enable_optical_flow ? "true" : "false") << "\n";
+    file << "draw_optical_flow = " << (draw_optical_flow ? "true" : "false") << "\n";
+    file << std::fixed << std::setprecision(6);
+    file << "optical_flow_alpha_cpu = " << optical_flow_alpha_cpu << "\n";
+    file << "draw_optical_flow_steps = " << draw_optical_flow_steps << "\n";
+    file << "optical_flow_magnitudeThreshold = " << optical_flow_magnitudeThreshold << "\n";
+    file << "staticFrameThreshold = " << staticFrameThreshold << "\n";
+    file << "fovX = " << fovX << "\n";
+    file << "fovY = " << fovY << "\n";
+    file << "optical_flow_norecoil = " << (optical_flow_norecoil ? "true" : "false") << "\n";
+    file << "optical_flow_norecoil_strength = " << optical_flow_norecoil_strength << "\n";
+    file << "optical_flow_norecoil_threshold = " << optical_flow_norecoil_threshold << "\n";
+    file << "optical_flow_norecoil_frames = " << optical_flow_norecoil_frames << "\n\n";
 
     file << "[HSVFilter]\n";
     file << "enable_hsv_filter = " << (enable_hsv_filter ? "true" : "false") << "\n";
@@ -646,6 +684,7 @@ Config::Config()
     
     
     loadConfig("config.ini");
+    loadWeaponProfiles("weapon_profiles.ini");
     initializeDefaultWeaponProfiles();
 }
 
@@ -731,5 +770,98 @@ std::vector<std::string> Config::getWeaponProfileNames() const
         names.push_back(profile.weapon_name);
     }
     return names;
+}
+
+bool Config::saveWeaponProfiles(const std::string& filename)
+{
+    std::ofstream file(filename);
+    if (!file.is_open()) {
+        std::cerr << "Error opening weapon profiles file for writing: " << filename << std::endl;
+        return false;
+    }
+
+    file << "# Weapon Profiles for needaimbot\n";
+    file << "[WeaponProfiles]\n";
+    file << "Count = " << weapon_profiles.size() << "\n";
+    file << "active_weapon_profile_index = " << active_weapon_profile_index << "\n";
+    file << "current_weapon_name = " << current_weapon_name << "\n\n";
+
+    for (size_t i = 0; i < weapon_profiles.size(); ++i) {
+        const auto& profile = weapon_profiles[i];
+        file << "[Weapon_" << i << "]\n";
+        file << "weapon_name = " << profile.weapon_name << "\n";
+        file << std::fixed << std::setprecision(6);
+        file << "base_strength = " << profile.base_strength << "\n";
+        file << "fire_rate_multiplier = " << profile.fire_rate_multiplier << "\n";
+        file << "scope_mult_1x = " << profile.scope_mult_1x << "\n";
+        file << "scope_mult_2x = " << profile.scope_mult_2x << "\n";
+        file << "scope_mult_3x = " << profile.scope_mult_3x << "\n";
+        file << "scope_mult_4x = " << profile.scope_mult_4x << "\n";
+        file << "scope_mult_6x = " << profile.scope_mult_6x << "\n";
+        file << "scope_mult_8x = " << profile.scope_mult_8x << "\n";
+        file << "start_delay_ms = " << profile.start_delay_ms << "\n";
+        file << "end_delay_ms = " << profile.end_delay_ms << "\n";
+        file << "recoil_ms = " << profile.recoil_ms << "\n\n";
+    }
+
+    file.close();
+    return true;
+}
+
+bool Config::loadWeaponProfiles(const std::string& filename)
+{
+    if (!std::filesystem::exists(filename)) {
+        std::cout << "[Config] Weapon profiles file not found: " << filename << ". Will use defaults." << std::endl;
+        return false;
+    }
+
+    CSimpleIniA ini;
+    SI_Error rc = ini.LoadFile(filename.c_str());
+    if (rc < 0) {
+        std::cerr << "[Config] Error loading weapon profiles: " << filename << std::endl;
+        return false;
+    }
+
+    auto get_string_ini = [&](const char* section, const char* key, const char* default_val) -> std::string {
+        const char* value = ini.GetValue(section, key, default_val);
+        return value ? std::string(value) : std::string(default_val);
+    };
+
+    auto get_double_ini = [&](const char* section, const char* key, double default_val) -> double {
+        return ini.GetDoubleValue(section, key, default_val);
+    };
+
+    auto get_long_ini = [&](const char* section, const char* key, long default_val) -> long {
+        return ini.GetLongValue(section, key, default_val);
+    };
+
+    weapon_profiles.clear();
+    
+    int count = get_long_ini("WeaponProfiles", "Count", 0);
+    active_weapon_profile_index = get_long_ini("WeaponProfiles", "active_weapon_profile_index", 0);
+    current_weapon_name = get_string_ini("WeaponProfiles", "current_weapon_name", "Default");
+
+    for (int i = 0; i < count; ++i) {
+        std::string section = "Weapon_" + std::to_string(i);
+        
+        WeaponRecoilProfile profile;
+        profile.weapon_name = get_string_ini(section.c_str(), "weapon_name", "Default");
+        profile.base_strength = (float)get_double_ini(section.c_str(), "base_strength", 3.0);
+        profile.fire_rate_multiplier = (float)get_double_ini(section.c_str(), "fire_rate_multiplier", 1.0);
+        profile.scope_mult_1x = (float)get_double_ini(section.c_str(), "scope_mult_1x", 0.8);
+        profile.scope_mult_2x = (float)get_double_ini(section.c_str(), "scope_mult_2x", 1.0);
+        profile.scope_mult_3x = (float)get_double_ini(section.c_str(), "scope_mult_3x", 1.2);
+        profile.scope_mult_4x = (float)get_double_ini(section.c_str(), "scope_mult_4x", 1.4);
+        profile.scope_mult_6x = (float)get_double_ini(section.c_str(), "scope_mult_6x", 1.6);
+        profile.scope_mult_8x = (float)get_double_ini(section.c_str(), "scope_mult_8x", 1.8);
+        profile.start_delay_ms = get_long_ini(section.c_str(), "start_delay_ms", 0);
+        profile.end_delay_ms = get_long_ini(section.c_str(), "end_delay_ms", 0);
+        profile.recoil_ms = (float)get_double_ini(section.c_str(), "recoil_ms", 10.0);
+        
+        weapon_profiles.push_back(profile);
+    }
+
+    std::cout << "[Config] Loaded " << weapon_profiles.size() << " weapon profiles from " << filename << std::endl;
+    return true;
 }
 

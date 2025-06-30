@@ -89,12 +89,13 @@ namespace UIHelpers
         return changed;
     }
 
-    void BeautifulSlider(const char* label, float* value, float min, float max, const char* format)
+    bool BeautifulSlider(const char* label, float* value, float min, float max, const char* format)
     {
         ImGui::PushStyleColor(ImGuiCol_SliderGrab, GetAccentColor(0.9f));
         ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, GetAccentColor(1.0f));
-        ImGui::SliderFloat(label, value, min, max, format);
+        bool changed = ImGui::SliderFloat(label, value, min, max, format);
         ImGui::PopStyleColor(2);
+        return changed;
     }
 
     void BeautifulCombo(const char* label, int* current_item, const char* const items[], int items_count)
