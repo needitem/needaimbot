@@ -542,11 +542,6 @@ void OverlayThread()
                         ImGui::EndTabItem();
                     }
 
-                    if (ImGui::BeginTabItem("Optical Flow"))
-                    {
-                        draw_optical_flow();
-                        ImGui::EndTabItem();
-                    }
 
                     if (ImGui::BeginTabItem("Buttons"))
                     {
