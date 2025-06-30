@@ -75,12 +75,45 @@ void draw_optical_flow()
         if (ImGui::IsItemHovered()) { 
             ImGui::SetTooltip("Vertical Field of View. Used in some OF calculations."); 
         }
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
         
+        ImGui::Text("Optical Flow NoRecoil:");
         
+        if (ImGui::Checkbox("Enable OF NoRecoil", &config.optical_flow_norecoil)) {
+            settings_changed_locally = true;
+        }
+        if (ImGui::IsItemHovered()) { 
+            ImGui::SetTooltip("Enable optical flow based recoil compensation. Works independently from easy norecoil."); 
+        }
         
-        
-        
-        
+        if (config.optical_flow_norecoil) {
+            ImGui::Indent();
+            
+            if (ImGui::SliderFloat("OF NoRecoil Strength", &config.optical_flow_norecoil_strength, 0.1f, 10.0f, "%.2f")) {
+                settings_changed_locally = true;
+            }
+            if (ImGui::IsItemHovered()) { 
+                ImGui::SetTooltip("Strength of optical flow based recoil compensation."); 
+            }
+            
+            if (ImGui::SliderFloat("OF NoRecoil Threshold", &config.optical_flow_norecoil_threshold, 0.1f, 5.0f, "%.2f")) {
+                settings_changed_locally = true;
+            }
+            if (ImGui::IsItemHovered()) { 
+                ImGui::SetTooltip("Minimum optical flow magnitude to trigger recoil compensation."); 
+            }
+            
+            if (ImGui::SliderInt("OF NoRecoil Frames", &config.optical_flow_norecoil_frames, 1, 10)) {
+                settings_changed_locally = true;
+            }
+            if (ImGui::IsItemHovered()) { 
+                ImGui::SetTooltip("Number of consecutive frames above threshold required to trigger compensation."); 
+            }
+            
+            ImGui::Unindent();
+        }
 
         ImGui::Unindent();
     }

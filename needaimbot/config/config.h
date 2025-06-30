@@ -105,6 +105,10 @@ public:
     double kp_y;
     double ki_y;
     double kd_y;
+    
+    float pid_derivative_smoothing;
+    float movement_smoothing;
+    bool enable_adaptive_pid;
 
     
     bool use_predictive_controller;
@@ -191,6 +195,12 @@ public:
     float fovY; 
 
     
+    bool optical_flow_norecoil;
+    float optical_flow_norecoil_strength;
+    float optical_flow_norecoil_threshold;
+    int optical_flow_norecoil_frames;
+
+    
     bool enable_hsv_filter;
     int hsv_lower_h;
     int hsv_lower_s;
@@ -219,6 +229,9 @@ public:
     WeaponRecoilProfile* getCurrentWeaponProfile();
     bool setActiveWeaponProfile(const std::string& weapon_name);
     std::vector<std::string> getWeaponProfileNames() const;
+    
+    bool saveWeaponProfiles(const std::string& filename = "weapon_profiles.ini");
+    bool loadWeaponProfiles(const std::string& filename = "weapon_profiles.ini");
 
     std::string joinStrings(const std::vector<std::string>& vec, const std::string& delimiter = ",");
 private:

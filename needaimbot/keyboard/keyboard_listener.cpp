@@ -193,6 +193,7 @@ void keyboardListener()
                 auto current_index = config.active_weapon_profile_index;
                 int next_index = (current_index + 1) % static_cast<int>(weapon_names.size());
                 config.setActiveWeaponProfile(weapon_names[next_index]);
+                config.saveWeaponProfiles();
                 std::cout << "[Weapon] Switched to: " << weapon_names[next_index] << std::endl;
             }
         }
@@ -204,6 +205,7 @@ void keyboardListener()
                 auto current_index = config.active_weapon_profile_index;
                 int prev_index = (current_index - 1 + static_cast<int>(weapon_names.size())) % static_cast<int>(weapon_names.size());
                 config.setActiveWeaponProfile(weapon_names[prev_index]);
+                config.saveWeaponProfiles();
                 std::cout << "[Weapon] Switched to: " << weapon_names[prev_index] << std::endl;
             }
         }

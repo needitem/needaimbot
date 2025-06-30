@@ -61,7 +61,12 @@ private:
 
     mutable std::mutex predictor_mutex_;        
 
-    int last_applied_dx_ = 0; 
+    int last_applied_dx_ = 0;
+    
+    std::vector<std::pair<double, double>> recent_flow_values;
+    int optical_flow_recoil_frame_count;
+    
+    Eigen::Vector2f smoothed_movement; 
 
     float calculateTargetDistanceSquared(const AimbotTarget &target) const;
     void initializeInputMethod(SerialConnection *serialConnection, GhubMouse *gHub);
@@ -90,6 +95,7 @@ public:
     void releaseMouse();
     void applyRecoilCompensation(float strength);
     void applyWeaponRecoilCompensation(const WeaponRecoilProfile* profile, int scope_magnification);
+    void applyOpticalFlowRecoilCompensation();
 
     void enableErrorTracking(const ErrorTrackingCallback& callback);
     void disableErrorTracking();

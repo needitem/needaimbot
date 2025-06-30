@@ -20,6 +20,7 @@
 #include "mouse.h"
 #include "aimbot_components/AimbotTarget.h"
 #include "capture/capture.h"
+#include "capture/optical_flow.h"
 #include "input_drivers/SerialConnection.h"
 #include "needaimbot.h"
 #include "input_drivers/ghub.h"
@@ -81,7 +82,7 @@ MouseThread::MouseThread(
     float bScope_multiplier,
     float norecoil_ms,
     SerialConnection *serialConnection,
-    GhubMouse *gHub) : tracking_errors(false), silent_aim_click_duration_ms(50)
+    GhubMouse *gHub) : tracking_errors(false), silent_aim_click_duration_ms(50), optical_flow_recoil_frame_count(0)
 {
     initializeScreen(resolution, bScope_multiplier, norecoil_ms);
     pid_controller = std::make_unique<PIDController2D>(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
@@ -128,6 +129,7 @@ void MouseThread::initializeScreen(int resolution, float bScope_multiplier, floa
     }
 
     this->last_recoil_compensation_time = std::chrono::steady_clock::now();
+    this->smoothed_movement = Eigen::Vector2f::Zero();
 }
 
 void MouseThread::updateConfig(
@@ -357,9 +359,20 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     }
 
     
+    // Calculate error magnitude first for adaptive control
+    float error_magnitude = std::sqrt(error_x * error_x + error_y * error_y);
+    
     Eigen::Vector2f error(error_x, error_y);
     auto pid_start_time = std::chrono::steady_clock::now();
-    Eigen::Vector2f pid_output = pid_controller->calculate(error);
+    
+    // Use adaptive or standard PID based on config
+    Eigen::Vector2f pid_output;
+    if (config.enable_adaptive_pid) {
+        pid_output = pid_controller->calculateAdaptive(error, error_magnitude);
+    } else {
+        pid_output = pid_controller->calculate(error);
+    }
+    
     auto pid_end_time = std::chrono::steady_clock::now();
     float pid_duration_ms = std::chrono::duration<float, std::milli>(pid_end_time - pid_start_time).count();
     g_current_pid_calc_time_ms.store(pid_duration_ms, std::memory_order_relaxed);
@@ -367,7 +380,6 @@ void MouseThread::moveMouse(const AimbotTarget &target)
 
     
     // Adaptive sensitivity scaling based on error magnitude
-    float error_magnitude = std::sqrt(error_x * error_x + error_y * error_y);
     float adaptive_scale = 1.0f;
     
     // Close range: higher precision (lower sensitivity)
@@ -380,8 +392,25 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         adaptive_scale = 1.3f; // Faster movement for large errors
     }
     
-    float move_x = pid_output.x() * current_move_scale_x * adaptive_scale;
-    float move_y = pid_output.y() * current_move_scale_y * adaptive_scale;
+    float raw_move_x = pid_output.x() * current_move_scale_x * adaptive_scale;
+    float raw_move_y = pid_output.y() * current_move_scale_y * adaptive_scale;
+    
+    // Apply movement smoothing for stability without losing speed
+    // Less smoothing for small movements, more for large sudden movements
+    float smoothing;
+    {
+        std::lock_guard<std::mutex> lock(configMutex);
+        smoothing = config.movement_smoothing;
+    }
+    if (error_magnitude > 100.0f) {
+        smoothing = std::min(0.4f, smoothing + (error_magnitude - 100.0f) * 0.001f);
+    }
+    
+    smoothed_movement.x() = smoothing * smoothed_movement.x() + (1.0f - smoothing) * raw_move_x;
+    smoothed_movement.y() = smoothing * smoothed_movement.y() + (1.0f - smoothing) * raw_move_y;
+    
+    float move_x = smoothed_movement.x();
+    float move_y = smoothed_movement.y();
 
     // Dead zone and micro-movement filtering
     const float DEAD_ZONE = 0.5f;
@@ -662,5 +691,84 @@ void MouseThread::executeSilentAim(const AimbotTarget& target)
             g_current_input_send_time_ms.store(action_duration_ms, std::memory_order_relaxed);
             add_to_history(g_input_send_time_history, action_duration_ms, g_input_send_history_mutex);
         }
+    }
+}
+
+void MouseThread::applyOpticalFlowRecoilCompensation()
+{
+    if (!input_method || !input_method->isValid()) {
+        return;
+    }
+
+    bool enable_of_norecoil;
+    float strength;
+    float threshold;
+    int required_frames;
+    {
+        std::lock_guard<std::mutex> lock(configMutex);
+        enable_of_norecoil = config.optical_flow_norecoil;
+        strength = config.optical_flow_norecoil_strength;
+        threshold = config.optical_flow_norecoil_threshold;
+        required_frames = config.optical_flow_norecoil_frames;
+    }
+
+    if (!enable_of_norecoil) {
+        return;
+    }
+
+    extern OpticalFlow g_opticalFlow;
+    if (!g_opticalFlow.isOpticalFlowValid()) {
+        optical_flow_recoil_frame_count = 0;
+        recent_flow_values.clear();
+        return;
+    }
+
+    auto flow_data = g_opticalFlow.getAverageGlobalFlow();
+    double flow_y = flow_data.second;
+    
+    if (std::abs(flow_y) > threshold) {
+        recent_flow_values.push_back({flow_data.first, flow_y});
+        optical_flow_recoil_frame_count++;
+        
+        if (recent_flow_values.size() > static_cast<size_t>(required_frames)) {
+            recent_flow_values.erase(recent_flow_values.begin());
+        }
+        
+        if (optical_flow_recoil_frame_count >= required_frames && 
+            recent_flow_values.size() >= static_cast<size_t>(required_frames)) {
+            
+            double avg_flow_y = 0.0;
+            for (const auto& flow_val : recent_flow_values) {
+                avg_flow_y += flow_val.second;
+            }
+            avg_flow_y /= recent_flow_values.size();
+            
+            if (avg_flow_y > 0) {
+                auto now_chrono_recoil = std::chrono::steady_clock::now();
+                auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now_chrono_recoil - last_recoil_compensation_time);
+                auto required_delay = std::chrono::milliseconds(10);
+                
+                if (elapsed >= required_delay) {
+                    std::lock_guard<std::mutex> lock(input_method_mutex);
+                    
+                    int dy_recoil = -static_cast<int>(std::round(avg_flow_y * strength));
+                    
+                    if (dy_recoil != 0) {
+                        auto recoil_send_start_time = std::chrono::steady_clock::now();
+                        input_method->move(0, dy_recoil);
+                        auto recoil_send_end_time = std::chrono::steady_clock::now();
+                        float recoil_send_duration_ms = std::chrono::duration<float, std::milli>(recoil_send_end_time - recoil_send_start_time).count();
+                        g_current_input_send_time_ms.store(recoil_send_duration_ms, std::memory_order_relaxed);
+                        add_to_history(g_input_send_time_history, recoil_send_duration_ms, g_input_send_history_mutex);
+                    }
+                    
+                    last_recoil_compensation_time = now_chrono_recoil;
+                    optical_flow_recoil_frame_count = 0;
+                }
+            }
+        }
+    } else {
+        optical_flow_recoil_frame_count = 0;
+        recent_flow_values.clear();
     }
 }

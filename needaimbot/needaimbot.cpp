@@ -282,6 +282,11 @@ inline void handleEasyNoRecoil(MouseThread &mouseThread)
     {
         mouseThread.applyRecoilCompensation(config.easynorecoilstrength);
     }
+    
+    if (config.optical_flow_norecoil && shooting.load())
+    {
+        mouseThread.applyOpticalFlowRecoilCompensation();
+    }
 }
 
 void mouseThreadFunction(MouseThread &mouseThread)
@@ -398,6 +403,10 @@ void mouseThreadFunction(MouseThread &mouseThread)
                 } else {
                     mouseThread.applyRecoilCompensation(config.easynorecoilstrength);
                 }
+            }
+            
+            if (config.optical_flow_norecoil && current_shooting_state) {
+                mouseThread.applyOpticalFlowRecoilCompensation();
             }
         } else {
             recoil_active = false; 
