@@ -73,7 +73,6 @@ public:
                 float kp_y, float ki_y, float kd_y,
                 float bScope_multiplier,
                 float norecoil_ms,
-                float derivative_smoothing_factor,
                 SerialConnection *serialConnection = nullptr,
                 GhubMouse *gHub = nullptr);
     ~MouseThread();
@@ -82,8 +81,7 @@ public:
                       float kp_x, float ki_x, float kd_x,
                       float kp_y, float ki_y, float kd_y,
                       float bScope_multiplier,
-                      float norecoil_ms,
-                      float derivative_smoothing_factor);
+                      float norecoil_ms);
 
     Eigen::Vector2f calculateMovement(const Eigen::Vector2f &target_pos);
     bool checkTargetInScope(float target_x, float target_y, float target_w, float target_h, float reduction_factor);

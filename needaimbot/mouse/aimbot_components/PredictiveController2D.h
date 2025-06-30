@@ -26,7 +26,6 @@ public:
     PredictiveController2D(
         float kp_x, float ki_x, float kd_x, 
         float kp_y, float ki_y, float kd_y, 
-        float derivative_smoothing_factor,
         float prediction_time_ms = 50.0f,
         float process_noise = 10.0f,
         float measurement_noise = 5.0f
@@ -39,7 +38,7 @@ public:
     void reset();
     
     // Update parameters
-    void updatePIDParameters(float kp_x, float ki_x, float kd_x, float kp_y, float ki_y, float kd_y, float derivative_smoothing_factor);
+    void updatePIDParameters(float kp_x, float ki_x, float kd_x, float kp_y, float ki_y, float kd_y);
     void updateKalmanParameters(float process_noise, float measurement_noise);
     void updatePredictionParameters(float prediction_time_ms, float velocity_scale, bool use_prediction);
     

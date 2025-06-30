@@ -5,12 +5,11 @@
 PredictiveController2D::PredictiveController2D(
     float kp_x, float ki_x, float kd_x, 
     float kp_y, float ki_y, float kd_y, 
-    float derivative_smoothing_factor,
     float prediction_time_ms,
     float process_noise,
     float measurement_noise
 ) : kalman_tracker(process_noise, measurement_noise),
-    pid_controller(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y, derivative_smoothing_factor),
+    pid_controller(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y),
     prediction_time_ms(prediction_time_ms),
     velocity_scale(1.0f),
     use_prediction(true),
@@ -73,9 +72,9 @@ void PredictiveController2D::reset()
     last_update_time = std::chrono::steady_clock::now();
 }
 
-void PredictiveController2D::updatePIDParameters(float kp_x, float ki_x, float kd_x, float kp_y, float ki_y, float kd_y, float derivative_smoothing_factor)
+void PredictiveController2D::updatePIDParameters(float kp_x, float ki_x, float kd_x, float kp_y, float ki_y, float kd_y)
 {
-    pid_controller.updateSeparatedParameters(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y, derivative_smoothing_factor);
+    pid_controller.updateSeparatedParameters(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
 }
 
 void PredictiveController2D::updateKalmanParameters(float process_noise, float measurement_noise)
