@@ -8,7 +8,9 @@
       "Bash(msbuild:*)",
       "Bash(cp:*)",
       "Bash(rm:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git config:*)",
+      "Bash(git push:*)"
     ],
     "deny": []
   }
