@@ -8,7 +8,7 @@ namespace UIHelpers
 {
     void BeautifulButton(const char* label, const ImVec2& size = ImVec2(0, 0), bool active = false);
     bool BeautifulToggle(const char* label, bool* value, const char* description = nullptr);
-    void BeautifulSlider(const char* label, float* value, float min, float max, const char* format = "%.3f");
+    bool BeautifulSlider(const char* label, float* value, float min, float max, const char* format = "%.3f");
     void BeautifulCombo(const char* label, int* current_item, const char* const items[], int items_count);
     void BeautifulSeparator(const char* text = nullptr);
     void BeautifulText(const char* text, ImVec4 color = ImVec4(0.95f, 0.95f, 0.95f, 1.0f));
