@@ -31,7 +31,7 @@ public:
     
     // === 화면 캡처 ===
     int capture_fps = 60;
-    bool capture_use_cuda = true;
+    
     int monitor_idx = 0;
     
     // === 타겟 우선순위 ===

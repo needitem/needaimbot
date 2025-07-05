@@ -434,7 +434,7 @@ bool Config::saveConfig(const std::string& filename)
     file << "circle_mask = " << (circle_mask ? "true" : "false") << "\n";
     file << "capture_borders = " << (capture_borders ? "true" : "false") << "\n";
     file << "capture_cursor = " << (capture_cursor ? "true" : "false") << "\n";
-    file << "capture_use_cuda = " << (capture_use_cuda ? "true" : "false") << "\n";
+    
     file << "use_1ms_capture = " << (use_1ms_capture ? "true" : "false") << "\n";
     file << "capture_timeout_ms = " << capture_timeout_ms << "\n";
     file << "target_fps = " << target_fps << "\n\n";

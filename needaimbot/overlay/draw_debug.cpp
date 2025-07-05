@@ -1,9 +1,4 @@
-#define WIN32_LEAN_AND_MEAN
-#define _WINSOCKAPI_
-#include <winsock2.h>
-#include <Windows.h>
-
-
+#include "../AppContext.h"
 #include "imgui/imgui.h"
 #include "needaimbot.h"
 #include "overlay.h"
@@ -22,12 +17,6 @@
 #include "opencv2/core/cuda.hpp" 
 
 
-
-
-extern std::array<cv::cuda::GpuMat, FRAME_BUFFER_COUNT> captureGpuBuffer;
-extern std::array<cv::Mat, FRAME_BUFFER_COUNT> captureCpuBuffer;
-extern std::atomic<int> captureGpuWriteIdx;
-extern std::atomic<int> captureCpuWriteIdx;
 
 
 
@@ -54,13 +43,10 @@ static int hsvTexW = 0, hsvTexH = 0;
 static float hsv_mask_preview_scale = 0.5f; 
 
 
-extern Detector detector; 
-extern OpticalFlow g_opticalFlow; 
-extern Config config; 
-
 
 static int g_crosshairH = 0, g_crosshairS = 0, g_crosshairV = 0;
 static bool g_crosshairHsvValid = false;
+
 
 
 static void uploadDebugFrame(const cv::Mat& bgr)
@@ -214,7 +200,7 @@ void draw_debug_frame()
 {
     // Simplified frame acquisition using atomic index
     cv::Mat frameCopy;
-    if (config.capture_use_cuda) {
+    if (ctx.config.capture_use_cuda) {
         int idx = captureGpuWriteIdx.load(std::memory_order_acquire);
         if (idx >= 0 && idx < FRAME_BUFFER_COUNT) {
             try { captureGpuBuffer[idx].download(frameCopy); } catch (const cv::Exception&) { frameCopy.release(); }
@@ -245,12 +231,12 @@ void draw_debug_frame()
 
     
     {
-        std::lock_guard<std::mutex> det_lock(detector.detectionMutex);
-        if (detector.m_finalDetectionsCountHost > 0 && detector.m_finalDetectionsGpu != nullptr)
+        std::lock_guard<std::mutex> det_lock(ctx.detector.detectionMutex);
+        if (ctx.detector.m_finalDetectionsCountHost > 0 && ctx.detector.m_finalDetectionsGpu.get() != nullptr)
         {
-            std::vector<Detection> host_detections(detector.m_finalDetectionsCountHost);
-            cudaError_t err = cudaMemcpy(host_detections.data(), detector.m_finalDetectionsGpu,
-                                         detector.m_finalDetectionsCountHost * sizeof(Detection),
+            std::vector<Detection> host_detections(ctx.detector.m_finalDetectionsCountHost);
+            cudaError_t err = cudaMemcpy(host_detections.data(), ctx.detector.m_finalDetectionsGpu.get(),
+                                         ctx.detector.m_finalDetectionsCountHost * sizeof(Detection),
                                          cudaMemcpyDeviceToHost);
 
             if (err == cudaSuccess)
@@ -270,7 +256,7 @@ void draw_debug_frame()
                     draw_list->AddRect(p1, p2, color, 1.0f, 0, 1.5f); 
 
                     std::string className = "Unknown";
-                    for(const auto& cs : config.class_settings) { 
+                    for(const auto& cs : ctx.config.class_settings) { 
                         if (cs.id == det.classId) {
                             className = cs.name;
                             break;
@@ -287,10 +273,10 @@ void draw_debug_frame()
     }
 
     
-    if (config.draw_optical_flow && g_opticalFlow.isFlowValidAtomic.load() && !g_opticalFlow.flow.empty())
+    if (ctx.config.draw_optical_flow && ctx.opticalFlow.isFlowValidAtomic.load() && !ctx.opticalFlow.flow.empty())
     {
         cv::Mat flowCpu;
-        g_opticalFlow.flow.download(flowCpu); 
+        ctx.opticalFlow.flow.download(flowCpu); 
 
         if (!flowCpu.empty() && flowCpu.type() == CV_32FC2) 
         {
@@ -312,8 +298,8 @@ void draw_debug_frame()
             float visualScaleX = debug_scale * scaleX;
             float visualScaleY = debug_scale * scaleY;
 
-            int step = config.draw_optical_flow_steps > 0 ? config.draw_optical_flow_steps : 16; 
-            double magThreshold = config.optical_flow_magnitudeThreshold;
+            int step = ctx.config.draw_optical_flow_steps > 0 ? ctx.config.draw_optical_flow_steps : 16; 
+            double magThreshold = ctx.config.optical_flow_magnitudeThreshold;
 
             draw_list->PushClipRect(image_pos,
                                     ImVec2(image_pos.x + texW * debug_scale,
@@ -428,7 +414,141 @@ void draw_debug()
 
     if (config.show_window) 
     {
-        draw_debug_frame(); 
+        // Simplified frame acquisition using atomic index
+        cv::Mat frameCopy;
+        int idx = captureGpuWriteIdx.load(std::memory_order_acquire);
+        if (idx >= 0 && idx < FRAME_BUFFER_COUNT) {
+            try { captureGpuBuffer[idx].download(frameCopy); } catch (const cv::Exception&) { frameCopy.release(); }
+        }
+
+        if (frameCopy.empty()) {
+            ImGui::TextUnformatted("Debug frame unavailable.");
+            return;
+        }
+        uploadDebugFrame(frameCopy);
+        ImGui::SliderFloat("Debug scale", &debug_scale, 0.1f, 3.0f, "%.1fx");
+        ImVec2 image_size(texW * debug_scale, texH * debug_scale);
+        if (g_debugSRV) {
+            ImGui::Image(g_debugSRV, image_size);
+        } else {
+            ImGui::TextUnformatted("Debug frame: Data processed, but texture unavailable for display.");
+            ImGui::TextUnformatted("Overlays skipped: Debug texture unavailable.");
+            return;
+        }
+
+        ImVec2 image_pos = ImGui::GetItemRectMin();
+        ImDrawList* draw_list = ImGui::GetWindowDrawList();
+
+        
+        {
+            std::lock_guard<std::mutex> det_lock(detector.detectionMutex);
+            if (detector.m_finalDetectionsCountHost > 0 && detector.m_finalDetectionsGpu != nullptr)
+            {
+                std::vector<Detection> host_detections(detector.m_finalDetectionsCountHost);
+                cudaError_t err = cudaMemcpy(host_detections.data(), detector.m_finalDetectionsGpu,
+                                             detector.m_finalDetectionsCountHost * sizeof(Detection),
+                                             cudaMemcpyDeviceToHost);
+
+                if (err == cudaSuccess)
+                {
+                    for (const auto& det : host_detections)
+                    {
+                        ImVec2 p1(image_pos.x + det.box.x * debug_scale,
+                                  image_pos.y + det.box.y * debug_scale);
+                        ImVec2 p2(image_pos.x + (det.box.x + det.box.width) * debug_scale,
+                                  image_pos.y + (det.box.y + det.box.height) * debug_scale);
+
+                        ImU32 color = IM_COL32(255, 0, 0, 255); 
+
+                        
+                        
+
+                        draw_list->AddRect(p1, p2, color, 1.0f, 0, 1.5f); 
+
+                        std::string className = "Unknown";
+                        for(const auto& cs : config.class_settings) { 
+                            if (cs.id == det.classId) {
+                                className = cs.name;
+                                break;
+                            }
+                        }
+                        std::string label = className + " (" + std::to_string(static_cast<int>(det.confidence * 100)) + "%)";
+                        draw_list->AddText(ImVec2(p1.x, p1.y - 16), IM_COL32(255, 255, 0, 255), label.c_str());
+                    }
+                } else {
+                    
+                    
+                }
+            }
+        }
+
+        
+        if (ctx.config.draw_optical_flow && ctx.opticalFlow.isFlowValidAtomic.load() && !ctx.opticalFlow.flow.empty())
+    {
+        cv::Mat flowCpu;
+        ctx.opticalFlow.flow.download(flowCpu); 
+
+        if (!flowCpu.empty() && flowCpu.type() == CV_32FC2) 
+        {
+            
+            
+
+            cv::Mat flowChannels[2];
+            cv::split(flowCpu, flowChannels); 
+
+            cv::Mat magnitude;
+            cv::magnitude(flowChannels[0], flowChannels[1], magnitude);
+
+            
+            if (texW <=0 || texH <=0) return;
+
+
+            float scaleX = static_cast<float>(texW) / flowCpu.cols;
+            float scaleY = static_cast<float>(texH) / flowCpu.rows;
+            float visualScaleX = debug_scale * scaleX;
+            float visualScaleY = debug_scale * scaleY;
+
+            int step = ctx.config.draw_optical_flow_steps > 0 ? ctx.config.draw_optical_flow_steps : 16; 
+            double magThreshold = ctx.config.optical_flow_magnitudeThreshold;
+
+            draw_list->PushClipRect(image_pos,
+                                    ImVec2(image_pos.x + texW * debug_scale,
+                                           image_pos.y + texH * debug_scale),
+                                    true);
+
+            for (int y = 0; y < flowCpu.rows; y += step)
+            {
+                for (int x = 0; x < flowCpu.cols; x += step)
+                {
+                    float mag = magnitude.at<float>(y, x);
+                    if (mag > magThreshold)
+                    {
+                        const cv::Point2f& fxy = flowCpu.at<cv::Point2f>(y, x);
+
+                        ImVec2 p1(image_pos.x + x * visualScaleX,
+                                  image_pos.y + y * visualScaleY);
+                        
+                        ImVec2 p2 = ImVec2(p1.x + fxy.x * debug_scale * scaleX,  
+                                          p1.y + fxy.y * debug_scale * scaleY); 
+
+                        draw_list->AddLine(p1, p2, IM_COL32(0, 223, 255, 255), 1.0f); 
+                        draw_list->AddCircleFilled(p1, 1.5f * debug_scale, IM_COL32(0, 223, 255, 255)); 
+                    }
+                }
+            }
+            draw_list->PopClipRect();
+        }
+    }
+
+        
+        ImGui::SeparatorText("Crosshair Pixel HSV");
+        ImGui::Spacing();
+        if (g_crosshairHsvValid) {
+            ImGui::Text("Crosshair H: %d, S: %d, V: %d", g_crosshairH, g_crosshairS, g_crosshairV);
+        } else {
+            ImGui::TextUnformatted("Crosshair HSV: N/A (Debug preview not active or frame empty)");
+        }
+        ImGui::Spacing();
     }
 
     ImGui::Spacing();

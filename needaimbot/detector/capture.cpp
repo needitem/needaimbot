@@ -1,3 +1,5 @@
+#include "AppContext.h"
+
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
@@ -47,10 +49,6 @@
 
 #include "duplication_api_capture.h"
 
-extern Detector detector;
-extern std::mutex configMutex;
-extern OpticalFlow g_opticalFlow;
-
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "windowsapp.lib")
@@ -75,9 +73,10 @@ std::chrono::time_point<std::chrono::steady_clock> captureFpsStartTime;
 
 void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 {
+    auto& ctx = AppContext::getInstance();
     try
     {
-        if (config.verbose)
+        if (ctx.config.verbose)
         {
             std::cout << "[Capture] OpenCV version: " << CV_VERSION << std::endl;
             std::cout << "[Capture] CUDA Support: " << cv::cuda::getCudaEnabledDeviceCount() << " devices found." << std::endl;
@@ -94,7 +93,7 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
         }
 
         if (capturer) {
-            detector.setCaptureEvent(capturer->GetCaptureDoneEvent());
+            ctx.detector.setCaptureEvent(capturer->GetCaptureDoneEvent());
         }
 
         bool buttonPreviouslyPressed = false;
@@ -109,14 +108,14 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
         }
         
         HANDLE capture_event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-        auto target_interval = std::chrono::nanoseconds(1000000000 / config.capture_fps);
+        auto target_interval = std::chrono::nanoseconds(1000000000 / ctx.config.capture_fps);
         auto next_capture_time = std::chrono::high_resolution_clock::now();
         bool frameLimitingEnabled = false;
 
-        if (config.capture_fps > 0.0)
+        if (ctx.config.capture_fps > 0.0)
         {
             timeBeginPeriod(1);
-            frame_duration = std::chrono::duration<double, std::milli>(1000.0 / config.capture_fps);
+            frame_duration = std::chrono::duration<double, std::milli>(1000.0 / ctx.config.capture_fps);
             frameLimitingEnabled = true;
         }
 
@@ -124,20 +123,20 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
         auto start_time = std::chrono::high_resolution_clock::now();
 
         cv::cuda::GpuMat screenshotGpu;
-        cv::Mat screenshotCpu;
+        
 
         while (!shouldExit)
         {
-            if (capture_fps_changed.load())
+            if (ctx.capture_fps_changed.load())
             {
-                if (config.capture_fps > 0.0)
+                if (ctx.config.capture_fps > 0.0)
                 {
                     if (!frameLimitingEnabled)
                     {
                         timeBeginPeriod(1);
                         frameLimitingEnabled = true;
                     }
-                    frame_duration = std::chrono::duration<double, std::milli>(1000.0 / config.capture_fps);
+                    frame_duration = std::chrono::duration<double, std::milli>(1000.0 / ctx.config.capture_fps);
                 }
                 else
                 {
@@ -148,18 +147,18 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                     }
                     frame_duration = std::nullopt;
                 }
-                capture_fps_changed.store(false);
+                ctx.capture_fps_changed.store(false);
             }
 
-            if (detection_resolution_changed.load())
+            if (ctx.detection_resolution_changed.load())
             {
-                if (config.verbose) {
+                if (ctx.config.verbose) {
                     std::cout << "[Capture] Detection resolution changed. Re-initializing capturer." << std::endl;
                 }
                 capturer.reset(); 
 
-                int new_CAPTURE_WIDTH = config.detection_resolution;
-                int new_CAPTURE_HEIGHT = config.detection_resolution;
+                int new_CAPTURE_WIDTH = ctx.config.detection_resolution;
+                int new_CAPTURE_HEIGHT = ctx.config.detection_resolution;
 
                 auto tempCapturer = std::make_unique<DuplicationAPIScreenCapture>(new_CAPTURE_WIDTH, new_CAPTURE_HEIGHT);
 
@@ -172,47 +171,45 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 }
 
                 
-                if (capturer) { 
-                    detector.setCaptureEvent(capturer->GetCaptureDoneEvent());
-                }
+                
 
                 g_captureRegionWidth = new_CAPTURE_WIDTH;
                 g_captureRegionHeight = new_CAPTURE_HEIGHT;
 
-                detection_resolution_changed.store(false);
+                ctx.detection_resolution_changed.store(false);
             }
 
             
-            if (capture_cursor_changed.load())
+            if (ctx.capture_cursor_changed.load())
             {
-                if (config.verbose) {
+                if (ctx.config.verbose) {
                     std::cout << "[Capture] Cursor capture setting changed (no capturer re-init needed)." << std::endl;
                 }
-                capture_cursor_changed.store(false);
+                ctx.capture_cursor_changed.store(false);
             }
 
-            if (capture_borders_changed.load())
+            if (ctx.capture_borders_changed.load())
             {
-                if (config.verbose) {
+                if (ctx.config.verbose) {
                     std::cout << "[Capture] Border capture setting changed (no capturer re-init needed)." << std::endl;
                 }
-                capture_borders_changed.store(false);
+                ctx.capture_borders_changed.store(false);
             }
 
-            if (capture_timeout_changed.load())
+            if (ctx.capture_timeout_changed.load())
             {
                 if (capturer) {
-                    capturer->SetAcquireTimeout(config.capture_timeout_ms);
+                    capturer->SetAcquireTimeout(ctx.config.capture_timeout_ms);
                 }
-                if (config.verbose) {
-                    std::cout << "[Capture] AcquireFrame timeout changed to: " << config.capture_timeout_ms << "ms" << std::endl;
+                if (ctx.config.verbose) {
+                    std::cout << "[Capture] AcquireFrame timeout changed to: " << ctx.config.capture_timeout_ms << "ms" << std::endl;
                 }
-                capture_timeout_changed.store(false);
+                ctx.capture_timeout_changed.store(false);
             }
 
             auto frame_acq_start_time = std::chrono::high_resolution_clock::now();
 
-            if (config.capture_use_cuda) {
+            if (ctx.config.capture_use_cuda) {
                 screenshotGpu = capturer->GetNextFrameGpu();
             } else {
                 screenshotCpu = capturer->GetNextFrameCpu();
@@ -220,16 +217,16 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 
             auto frame_acq_end_time = std::chrono::high_resolution_clock::now();
             std::chrono::duration<float, std::milli> frame_acq_duration_ms = frame_acq_end_time - frame_acq_start_time;
-            g_current_frame_acquisition_time_ms.store(frame_acq_duration_ms.count());
-            add_to_history(g_frame_acquisition_time_history, frame_acq_duration_ms.count(), g_frame_acquisition_history_mutex);
+            ctx.g_current_frame_acquisition_time_ms.store(frame_acq_duration_ms.count());
+            add_to_history(ctx.g_frame_acquisition_time_history, frame_acq_duration_ms.count(), ctx.g_frame_acquisition_history_mutex);
 
-            if (config.capture_use_cuda) {
+            if (ctx.config.capture_use_cuda) {
                 if (!screenshotGpu.empty())
                 {
                     captureFrameCount++;
-                    detector.processFrame(screenshotGpu);
-                    if (config.enable_optical_flow && g_opticalFlow.isThreadRunning()) {
-                        g_opticalFlow.enqueueFrame(screenshotGpu);
+                    ctx.detector.processFrame(screenshotGpu);
+                    if (ctx.config.enable_optical_flow && ctx.opticalFlow.isThreadRunning()) {
+                        ctx.opticalFlow.enqueueFrame(screenshotGpu);
                     } 
                 }
                 else
@@ -240,11 +237,11 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 if (!screenshotCpu.empty())
                 {
                     captureFrameCount++;
-                    detector.processFrame(screenshotCpu);
-                    if (config.enable_optical_flow && g_opticalFlow.isThreadRunning()) {
+                    ctx.detector.processFrame(screenshotCpu);
+                    if (ctx.config.enable_optical_flow && ctx.opticalFlow.isThreadRunning()) {
                         cv::cuda::GpuMat gpuFrame;
                         gpuFrame.upload(screenshotCpu);
-                        g_opticalFlow.enqueueFrame(gpuFrame);
+                        ctx.opticalFlow.enqueueFrame(gpuFrame);
                     }
                 }
                 else
@@ -258,24 +255,24 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
             if (elapsed_fps >= 1.0)
             {
                 float current_fps_val = static_cast<float>(captureFrameCount.load()) / static_cast<float>(elapsed_fps);
-                g_current_capture_fps.store(current_fps_val);
-                add_to_history(g_capture_fps_history, current_fps_val, g_capture_history_mutex);
+                ctx.g_current_capture_fps.store(current_fps_val);
+                add_to_history(ctx.g_capture_fps_history, current_fps_val, ctx.g_capture_history_mutex);
 
                 captureFps = captureFrameCount.load();
                 captureFrameCount = 0;
                 captureFpsStartTime = now;
             }
 
-            if (!config.screenshot_button.empty() && config.screenshot_button[0] != "None")
+            if (!ctx.config.screenshot_button.empty() && ctx.config.screenshot_button[0] != "None")
             {
-                bool buttonPressed = isAnyKeyPressed(config.screenshot_button);
+                bool buttonPressed = isAnyKeyPressed(ctx.config.screenshot_button);
                 auto now_ss = std::chrono::steady_clock::now();
                 auto elapsed_ss = std::chrono::duration_cast<std::chrono::milliseconds>(now_ss - lastSaveTime).count();
 
                 if (buttonPressed && !buttonPreviouslyPressed && elapsed_ss > 1000)
                 {
                     
-                    if (config.capture_use_cuda)
+                    if (ctx.config.capture_use_cuda)
                     {
                         int idx = captureGpuWriteIdx.load(std::memory_order_acquire);
                         const cv::cuda::GpuMat& gpuFrame = captureGpuBuffer[idx];

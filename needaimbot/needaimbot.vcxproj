@@ -21,10 +21,10 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\..\..\Downloads\capture headers_[unknowncheats.me]_\capture headers\game_capture.cpp" />
-    <ClCompile Include="capture\capture.cpp" />
-    <ClCompile Include="capture\duplication_api_capture.cpp" />
-    <ClCompile Include="capture\game_capture.cpp" />
-    <ClCompile Include="capture\optical_flow.cpp" />
+    <ClCompile Include="detector\capture.cpp" />
+    <ClCompile Include="detector\duplication_api_capture.cpp" />
+    <ClCompile Include="detector\game_capture.cpp" />
+    <ClCompile Include="detector\optical_flow.cpp" />
     <ClCompile Include="config\config.cpp" />
     <ClCompile Include="detector\detector.cpp" />
     <ClCompile Include="detector\postProcess.cpp" />
@@ -61,7 +61,7 @@
     <ClCompile Include="overlay\visuals.cpp" />
     <ClCompile Include="scr\other_tools.cpp" />
     <ClCompile Include="needaimbot.cpp" />
-    <ClCompile Include="tensorrt\nvinf.cpp" />
+    <ClCompile Include="detector\nvinf.cpp" />
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="detector\filterGpu.cu" />
@@ -72,11 +72,11 @@
   <ItemGroup>
     <ClInclude Include="..\..\..\Downloads\capture headers_[unknowncheats.me]_\capture headers\game_capture.h" />
     <ClInclude Include="..\..\..\Downloads\capture headers_[unknowncheats.me]_\capture headers\hook_info.h" />
-    <ClInclude Include="capture\capture.h" />
-    <ClInclude Include="capture\duplication_api_capture.h" />
-    <ClInclude Include="capture\game_capture.h" />
-    <ClInclude Include="capture\hook_info.h" />
-    <ClInclude Include="capture\optical_flow.h" />
+    <ClInclude Include="detector\capture.h" />
+    <ClInclude Include="detector\duplication_api_capture.h" />
+    <ClInclude Include="detector\game_capture.h" />
+    <ClInclude Include="detector\hook_info.h" />
+    <ClInclude Include="detector\optical_flow.h" />
     <ClInclude Include="capture\winrt_capture.h" />
     <ClInclude Include="config\config.h" />
     <ClInclude Include="detector\detector.h" />
@@ -125,7 +125,7 @@
     <ClInclude Include="overlay\ui_helpers.h" />
     <ClInclude Include="overlay\visuals.h" />
     <ClInclude Include="needaimbot.h" />
-    <ClInclude Include="tensorrt\nvinf.h" />
+    <ClInclude Include="detector\nvinf.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
@@ -202,7 +202,7 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LinkIncremental>false</LinkIncremental>
-    <IncludePath>$(MSBuildProjectDirectory)\modules\serial\include;$(MSBuildProjectDirectory);$(MSBuildProjectDirectory)\imgui;$(MSBuildProjectDirectory)\keyboard;$(MSBuildProjectDirectory)\config;$(MSBuildProjectDirectory)\tensorrt;$(MSBuildProjectDirectory)\detector;$(MSBuildProjectDirectory)\mouse;$(MSBuildProjectDirectory)\overlay;$(MSBuildProjectDirectory)\capture;$(MSBuildProjectDirectory)\modules\opencv\build\install\include;$(WindowsSDK_IncludePath);$(WindowsSDK_IncludePath)\cppwinrt;$(MSBuildProjectDirectory)\modules\TensorRT-10.8.0.43\include;include;$(ProgramW6432)\NVIDIA GPU Computing Toolkit\CUDA\v12.8\include;$(ProgramW6432)\NVIDIA\CUDNN\v9.7\include\12.8;$(IncludePath)</IncludePath>
+    <IncludePath>$(MSBuildProjectDirectory)\modules\serial\include;$(MSBuildProjectDirectory);$(MSBuildProjectDirectory)\imgui;$(MSBuildProjectDirectory)\keyboard;$(MSBuildProjectDirectory)\config;$(MSBuildProjectDirectory)\detector;$(MSBuildProjectDirectory)\mouse;$(MSBuildProjectDirectory)\overlay;$(MSBuildProjectDirectory)\modules\opencv\build\install\include;$(WindowsSDK_IncludePath);$(WindowsSDK_IncludePath)\cppwinrt;$(MSBuildProjectDirectory)\modules\TensorRT-10.8.0.43\include;include;$(ProgramW6432)\NVIDIA GPU Computing Toolkit\CUDA\v12.8\include;$(ProgramW6432)\NVIDIA\CUDNN\v9.7\include\12.8;$(IncludePath)</IncludePath>
     <LibraryPath>$(MSBuildProjectDirectory)\modules\serial\visual_studio\x64\Release;$(MSBuildProjectDirectory)\modules\glfw-3.4.bin.WIN64\lib-vc2019;$(MSBuildProjectDirectory)\modules\opencv\build\install\x64\vc17\lib;$(MSBuildProjectDirectory)\modules\\TensorRT-10.8.0.43\lib;$(ProgramW6432)\NVIDIA GPU Computing Toolkit\CUDA\v12.8\lib\x64;$(ProgramW6432)\NVIDIA\CUDNN\v9.7\lib\12.8;$(LibraryPath)</LibraryPath>
     <TargetName>ai</TargetName>
   </PropertyGroup>

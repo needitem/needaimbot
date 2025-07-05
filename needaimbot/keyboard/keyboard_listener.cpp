@@ -22,203 +22,55 @@ const float MAX_OFFSET_Y = 1.0f;
 const float MIN_NORECOIL_STRENGTH = 0.1f;
 const float MAX_NORECOIL_STRENGTH = 500.0f;
 
-extern std::atomic<bool> shouldExit;
-extern std::atomic<bool> aiming;
-extern std::atomic<bool> shooting;
-extern std::atomic<bool> zooming;
-extern std::atomic<bool> detectionPaused;
-extern std::atomic<bool> auto_shoot_active;
+#include "../AppContext.h"
+#include "keyboard_listener.h"
+#include "../mouse/mouse.h"
+#include <iostream>
+#include <Windows.h>
+#include <atomic>
+#include <string>
+#include <vector>
 
-extern MouseThread* globalMouseThread;
+std::vector<int> get_vk_codes(const std::vector<std::string>& keys) {
+    std::vector<int> vk_codes;
+    for (const auto& key : keys) {
+        vk_codes.push_back(get_vk_code(key));
+    }
+    return vk_codes;
+}
 
-
-const std::vector<std::string> upArrowKeys = { "UpArrow" };
-const std::vector<std::string> downArrowKeys = { "DownArrow" };
-const std::vector<std::string> leftArrowKeys = { "LeftArrow" };
-const std::vector<std::string> rightArrowKeys = { "RightArrow" };
-const std::vector<std::string> shiftKeys = { "LeftShift", "RightShift" };
-
-
-bool prevUpArrow = false;
-bool prevDownArrow = false;
-bool prevLeftArrow = false;
-bool prevRightArrow = false;
-
-bool isAnyKeyPressed(const std::vector<std::string>& keys)
-{
-    for (const auto& key_name : keys)
-    {
-        int key_code = KeyCodes::getKeyCode(key_name);
-
-        if (key_code != -1 && (GetAsyncKeyState(key_code) & 0x8000))
-        {
+bool is_any_key_pressed(const std::vector<int>& vk_codes) {
+    for (int code : vk_codes) {
+        if (code != 0 && (GetAsyncKeyState(code) & 0x8000)) {
             return true;
         }
     }
     return false;
 }
 
-void keyboardListener()
-{
-    while (!shouldExit)
-    {
-        
-        aiming = config.auto_aim ||
-                 isAnyKeyPressed(config.button_targeting) ||
-                 (config.arduino_enable_keys && arduinoSerial && arduinoSerial->isOpen() && arduinoSerial->aiming_active);
+void keyboardListener() {
+    auto& ctx = AppContext::getInstance();
+    std::vector<int> aim_vk_codes = get_vk_codes(ctx.config.aim_button);
+    std::vector<int> shoot_vk_codes = get_vk_codes(ctx.config.shoot_button);
+    std::vector<int> zoom_vk_codes = get_vk_codes(ctx.config.zoom_button);
+    std::vector<int> pause_vk_codes = get_vk_codes(ctx.config.pause_button);
+    std::vector<int> auto_shoot_vk_codes = get_vk_codes(ctx.config.auto_shoot_button);
 
-        
-        shooting = isAnyKeyPressed(config.button_shoot) ||
-            (config.arduino_enable_keys && arduinoSerial && arduinoSerial->isOpen() && arduinoSerial->shooting_active);
+    while (!ctx.shouldExit) {
+        ctx.aiming = is_any_key_pressed(aim_vk_codes);
+        ctx.shooting = is_any_key_pressed(shoot_vk_codes);
+        ctx.zooming = is_any_key_pressed(zoom_vk_codes);
+        ctx.auto_shoot_active = is_any_key_pressed(auto_shoot_vk_codes);
 
-        
-        zooming = isAnyKeyPressed(config.button_zoom) ||
-            (config.arduino_enable_keys && arduinoSerial && arduinoSerial->isOpen() && arduinoSerial->zooming_active);
-
-        
-        if (isAnyKeyPressed(config.button_exit))
-        {
-            shouldExit = true;
-            quick_exit(0);
+        if (is_any_key_pressed(pause_vk_codes)) {
+            ctx.detectionPaused = !ctx.detectionPaused;
+            Sleep(200); // Debounce
         }
 
-        
-        static bool pausePressed = false;
-        if (isAnyKeyPressed(config.button_pause))
-        {
-            if (!pausePressed)
-            {
-                detectionPaused = !detectionPaused;
-                pausePressed = true;
-            }
-        }
-        else
-        {
-            pausePressed = false;
+        if (ctx.auto_shoot_active && ctx.globalMouseThread) {
+            ctx.globalMouseThread->executeSilentAim();
         }
 
-        
-        static bool reloadPressed = false;
-        if (isAnyKeyPressed(config.button_reload_config))
-        {
-            if (!reloadPressed)
-            {
-                config.loadConfig();
-                
-                if (globalMouseThread)
-                {
-                    globalMouseThread->updateConfig(
-                        config.detection_resolution,
-                        config.kp_x,
-                        config.ki_x,
-                        config.kd_x,
-                        config.kp_y,
-                        config.ki_y,
-                        config.kd_y,
-                        config.bScope_multiplier,
-                        config.norecoil_ms
-                    );
-                }
-                reloadPressed = true;
-            }
-        }
-        else
-        {
-            reloadPressed = false;
-        }
-
-        
-        bool auto_shoot_key_pressed = isAnyKeyPressed(config.button_auto_shoot);
-        auto_shoot_active.store(auto_shoot_key_pressed); 
-        
-        
-        
-
-        
-        bool upArrow = isAnyKeyPressed(upArrowKeys);
-        bool downArrow = isAnyKeyPressed(downArrowKeys);
-        bool leftArrow = isAnyKeyPressed(leftArrowKeys);
-        bool rightArrow = isAnyKeyPressed(rightArrowKeys);
-        bool shiftKey = isAnyKeyPressed(shiftKeys);
-
-        
-        if (upArrow && !prevUpArrow)
-        {
-            if (shiftKey)
-            {
-                
-                config.head_y_offset = std::max(MIN_OFFSET_Y, config.head_y_offset - config.offset_step);
-            }
-            else
-            {
-                
-                config.body_y_offset = std::max(MIN_OFFSET_Y, config.body_y_offset - config.offset_step);
-            }
-        }
-        if (downArrow && !prevDownArrow)
-        {
-            if (shiftKey)
-            {
-                
-                config.head_y_offset = std::min(MAX_OFFSET_Y, config.head_y_offset + config.offset_step);
-            }
-            else
-            {
-                
-                config.body_y_offset = std::min(MAX_OFFSET_Y, config.body_y_offset + config.offset_step);
-            }
-        }
-
-
-        
-        if (leftArrow && !prevLeftArrow)
-        {
-            config.easynorecoilstrength = std::max(MIN_NORECOIL_STRENGTH, config.easynorecoilstrength - config.norecoil_step);
-        }
-
-        if (rightArrow && !prevRightArrow)
-        {
-            config.easynorecoilstrength = std::min(MAX_NORECOIL_STRENGTH, config.easynorecoilstrength + config.norecoil_step);
-        }
-
-        
-        static bool prevPageUp = false, prevPageDown = false;
-        bool pageUp = GetAsyncKeyState(VK_PRIOR) & 0x8000;
-        bool pageDown = GetAsyncKeyState(VK_NEXT) & 0x8000;
-
-        if (pageUp && !prevPageUp)
-        {
-            auto weapon_names = config.getWeaponProfileNames();
-            if (!weapon_names.empty()) {
-                auto current_index = config.active_weapon_profile_index;
-                int next_index = (current_index + 1) % static_cast<int>(weapon_names.size());
-                config.setActiveWeaponProfile(weapon_names[next_index]);
-                config.saveWeaponProfiles();
-                std::cout << "[Weapon] Switched to: " << weapon_names[next_index] << std::endl;
-            }
-        }
-
-        if (pageDown && !prevPageDown)
-        {
-            auto weapon_names = config.getWeaponProfileNames();
-            if (!weapon_names.empty()) {
-                auto current_index = config.active_weapon_profile_index;
-                int prev_index = (current_index - 1 + static_cast<int>(weapon_names.size())) % static_cast<int>(weapon_names.size());
-                config.setActiveWeaponProfile(weapon_names[prev_index]);
-                config.saveWeaponProfiles();
-                std::cout << "[Weapon] Switched to: " << weapon_names[prev_index] << std::endl;
-            }
-        }
-
-        prevPageUp = pageUp;
-        prevPageDown = pageDown;
-        
-        
-        prevUpArrow = upArrow;
-        prevDownArrow = downArrow;
-        prevLeftArrow = leftArrow;
-        prevRightArrow = rightArrow;
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        Sleep(1);
     }
 }
