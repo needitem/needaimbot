@@ -63,7 +63,7 @@ public:
     bool circle_mask;
     bool capture_borders;
     bool capture_cursor;
-    bool capture_use_cuda;
+    
     bool use_1ms_capture;
 
     int capture_timeout_ms = 5; 

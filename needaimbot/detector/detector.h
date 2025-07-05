@@ -20,6 +20,7 @@
 #include <opencv2/cudaimgproc.hpp>
 
 #include "postProcess.h"
+#include "CudaBuffer.h"
 
 typedef struct CUstream_st* cudaStream_t;
 typedef struct CUevent_st* cudaEvent_t;
@@ -45,7 +46,7 @@ public:
     void inferenceThread();
     
     
-    void setCaptureEvent(cudaEvent_t event);
+    
 
     std::mutex detectionMutex;
 
@@ -72,60 +73,49 @@ public:
     bool frameReady;
     bool frameIsGpu;
 
-    cudaEvent_t processingDone;
-    cudaEvent_t postprocessCopyDone;
-    cudaEvent_t m_captureDoneEvent = nullptr;
-    
-    cudaStream_t m_computeStream = nullptr;
-    cudaStream_t m_memoryStream = nullptr;
-    cudaEvent_t m_preprocessDone = nullptr;
-    cudaEvent_t m_inferenceDone = nullptr;
+    cudaGraph_t m_graph = nullptr;
+    cudaGraphExec_t m_graphExec = nullptr;
+    bool m_isGraphInitialized = false;
 
     cv::cuda::GpuMat resizedBuffer;
     
     cv::cuda::GpuMat m_hsvMaskGpu;
 
     
-    Detection* m_decodedDetectionsGpu = nullptr;   
-    int* m_decodedCountGpu = nullptr;        
-    int m_decodedCountHost = 0;          
+    CudaBuffer<Detection> m_decodedDetectionsGpu;
+    CudaBuffer<int> m_decodedCountGpu;
+    int m_decodedCountHost = 0;
 
-    
-    Detection* m_finalDetectionsGpu = nullptr;        
-    int* m_finalDetectionsCountGpu = nullptr;     
-    int m_finalDetectionsCountHost = 0;        
-    Detection* m_classFilteredDetectionsGpu = nullptr; 
-    int* m_classFilteredCountGpu = nullptr;      
-    int m_classFilteredCountHost = 0;          
+    CudaBuffer<Detection> m_finalDetectionsGpu;
+    CudaBuffer<int> m_finalDetectionsCountGpu;
+    int m_finalDetectionsCountHost = 0;
+    CudaBuffer<Detection> m_classFilteredDetectionsGpu;
+    CudaBuffer<int> m_classFilteredCountGpu;
+    int m_classFilteredCountHost = 0;
 
-    
-    float* m_scoresGpu = nullptr;             
-    int* m_bestTargetIndexGpu = nullptr;  
-    int m_bestTargetIndexHost = -1;       
-    Detection m_bestTargetHost;           
-    bool m_hasBestTarget = false;          
-    int m_headClassId = -1;                
+    CudaBuffer<float> m_scoresGpu;
+    CudaBuffer<int> m_bestTargetIndexGpu;
+    int m_bestTargetIndexHost = -1;
+    Detection m_bestTargetHost;
+    bool m_hasBestTarget = false;
+    int m_headClassId = -1;
 
-    
     bool m_isTargetLocked;
-    Detection m_lockedTargetInfo;       
-    int m_lockedTargetLostFrames;       
+    Detection m_lockedTargetInfo;
+    int m_lockedTargetLostFrames;
 
-    
-    
-    unsigned char* m_d_ignore_flags_gpu = nullptr;
+    CudaBuffer<unsigned char> m_d_ignore_flags_gpu;
 
-    
-    int* m_nms_d_x1 = nullptr;
-    int* m_nms_d_y1 = nullptr;
-    int* m_nms_d_x2 = nullptr;
-    int* m_nms_d_y2 = nullptr;
-    float* m_nms_d_areas = nullptr;
-    float* m_nms_d_scores = nullptr;    
-    int* m_nms_d_classIds = nullptr;  
-    float* m_nms_d_iou_matrix = nullptr;
-    bool* m_nms_d_keep = nullptr;
-    int* m_nms_d_indices = nullptr;     
+    CudaBuffer<int> m_nms_d_x1;
+    CudaBuffer<int> m_nms_d_y1;
+    CudaBuffer<int> m_nms_d_x2;
+    CudaBuffer<int> m_nms_d_y2;
+    CudaBuffer<float> m_nms_d_areas;
+    CudaBuffer<float> m_nms_d_scores;
+    CudaBuffer<int> m_nms_d_classIds;
+    CudaBuffer<float> m_nms_d_iou_matrix;
+    CudaBuffer<bool> m_nms_d_keep;
+    CudaBuffer<int> m_nms_d_indices;     
 
     
     std::vector<unsigned char> m_host_ignore_flags_uchar;
@@ -136,7 +126,13 @@ public:
     bool isCudaContextInitialized() const { return m_cudaContextInitialized; } 
     cv::cuda::GpuMat getHsvMaskGpu() const; 
 
+    void start();
+    void stop();
+
 private:
+    std::thread m_captureThread;
+    std::thread m_inferenceThread;
+
     static float calculate_host_iou(const cv::Rect& box1, const cv::Rect& box2); 
     bool m_cudaContextInitialized = false; 
     std::unique_ptr<nvinfer1::IRuntime> runtime;
@@ -183,27 +179,6 @@ private:
     }
 
     
-    template<typename T>
-    cudaError_t allocateGpuBuffer(T*& buffer, size_t count, const char* name) {
-        if (buffer) {
-            cudaFree(buffer);
-            buffer = nullptr;
-        }
-        cudaError_t err = cudaMalloc(&buffer, count * sizeof(T));
-        if (err != cudaSuccess) {
-             std::cerr << "[CUDA] Failed to allocate GPU buffer '" << name << "': " << cudaGetErrorString(err) << std::endl;
-        }
-        return err;
-    }
-    template<typename T>
-    void freeGpuBuffer(T*& buffer) {
-        if (buffer) {
-            cudaFree(buffer);
-            buffer = nullptr;
-        }
-    }
-
-    
     void performGpuPostProcessing(cudaStream_t stream);
 
 
@@ -220,7 +195,7 @@ private:
     }
 
     void loadEngine(const std::string &engineFile);
-    void preProcess(const cv::cuda::GpuMat &frame);
+    void preProcess(const cv::cuda::GpuMat &frame, cudaStream_t stream);
     void getInputNames();
     void getOutputNames();
     void getBindings();

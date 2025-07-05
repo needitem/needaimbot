@@ -149,7 +149,7 @@ void SimpleConfig::applyToComplexConfig(Config& complex_config) const {
     
     complex_config.auto_aim = auto_aim;
     complex_config.capture_fps = capture_fps;
-    complex_config.capture_use_cuda = capture_use_cuda;
+    
     complex_config.show_window = show_window;
     complex_config.show_fps = show_fps;
     complex_config.verbose = verbose;
