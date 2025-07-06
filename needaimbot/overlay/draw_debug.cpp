@@ -368,6 +368,80 @@ void draw_debug()
     
     if (ImGui::Checkbox("Enable FPS Display", &ctx.config.show_fps)) { ctx.config.saveConfig(); } 
 
+    // Crosshair offset adjustment controls
+    ImGui::SameLine(); ImGui::Spacing(); ImGui::SameLine();
+    ImGui::Text("Crosshair Offset X=%.1f, Y=%.1f", ctx.config.crosshair_offset_x, ctx.config.crosshair_offset_y);
+    
+    ImGui::Spacing();
+    
+    const float adjustment_step = 1.0f;
+    bool offset_changed = false;
+    
+    // Directional adjustment buttons in cross formation
+    ImGui::BeginGroup();
+    {
+        // Top button (Up - increase Y)
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 30.0f);
+        if (ImGui::Button("UP##offset_up", ImVec2(30, 30))) {
+            ctx.config.crosshair_offset_y += adjustment_step;
+            offset_changed = true;
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move crosshair up");
+        
+        // Middle row (Left and Right)
+        if (ImGui::Button("L##offset_left", ImVec2(30, 30))) {
+            ctx.config.crosshair_offset_x += adjustment_step;
+            offset_changed = true;
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move crosshair left");
+        
+        ImGui::SameLine();
+        if (ImGui::Button("R##offset_right", ImVec2(30, 30))) {
+            ctx.config.crosshair_offset_x -= adjustment_step;
+            offset_changed = true;
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move crosshair right");
+        
+        // Bottom button (Down - decrease Y)
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 30.0f);
+        if (ImGui::Button("DN##offset_down", ImVec2(30, 30))) {
+            ctx.config.crosshair_offset_y -= adjustment_step;
+            offset_changed = true;
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move crosshair down");
+    }
+    ImGui::EndGroup();
+    
+    ImGui::SameLine();
+    ImGui::BeginGroup();
+    {
+        // Reset button
+        if (ImGui::Button("Reset##offset_reset", ImVec2(60, 30))) {
+            ctx.config.crosshair_offset_x = 0.0f;
+            ctx.config.crosshair_offset_y = 0.0f;
+            offset_changed = true;
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Reset crosshair offset to center");
+        
+        // Fine adjustment controls
+        ImGui::Spacing();
+        ImGui::Text("Fine Adjust:");
+        ImGui::PushItemWidth(80);
+        if (ImGui::DragFloat("X##offset_x_fine", &ctx.config.crosshair_offset_x, 0.1f, -100.0f, 100.0f, "%.1f")) {
+            offset_changed = true;
+        }
+        if (ImGui::DragFloat("Y##offset_y_fine", &ctx.config.crosshair_offset_y, 0.1f, -100.0f, 100.0f, "%.1f")) {
+            offset_changed = true;
+        }
+        ImGui::PopItemWidth();
+    }
+    ImGui::EndGroup();
+    
+    // Save config when offset changes
+    if (offset_changed) {
+        ctx.config.saveConfig();
+    }
+
     ImGui::Spacing();
 
     if (ctx.config.show_window) 
@@ -406,13 +480,6 @@ void draw_debug()
             if (ctx.detector) {
                 std::lock_guard<std::mutex> det_lock(ctx.detector->detectionMutex);
                 
-                // Debug info
-                ImGui::Text("Final Detections Count: %d", ctx.detector->m_finalDetectionsCountHost);
-                ImGui::Text("Has Best Target (Detector): %s", ctx.detector->m_hasBestTarget ? "true" : "false");
-                ImGui::Text("Best Target Index (Detector): %d", ctx.detector->m_bestTargetIndexHost);
-                
-                // Debug info for overlay data
-                ImGui::Text("Has Best Target (Overlay): %s", has_target_for_overlay ? "true" : "false");
 
                 if (ctx.detector->m_finalDetectionsCountHost > 0 && ctx.detector->m_finalDetectionsGpu.get() != nullptr)
                 {
@@ -423,7 +490,6 @@ void draw_debug()
 
                     if (err == cudaSuccess)
                     {
-                        ImGui::Text("Drawing %d detections", (int)host_detections.size());
                         for (size_t i = 0; i < host_detections.size(); ++i)
                         {
                             const auto& det = host_detections[i];
@@ -479,20 +545,14 @@ void draw_debug()
                                               (det.confidence >= ctx.config.confidence_threshold ? IM_COL32(255, 255, 0, 255) : IM_COL32(255, 0, 0, 255));
                             draw_list->AddText(ImVec2(p1.x, p1.y - 16), text_color, label.c_str());
                         }
-                    } else {
-                        ImGui::Text("CUDA memcpy failed: %s", cudaGetErrorString(err));
                     }
-                } else {
-                    ImGui::Text("No detections to draw (count: %d, gpu_ptr: %p)", 
-                               ctx.detector->m_finalDetectionsCountHost, 
-                               ctx.detector->m_finalDetectionsGpu.get());
                 }
             }
         }
 
-        // Draw center crosshair
-        float center_x = image_pos.x + (texW * debug_scale) / 2.0f;
-        float center_y = image_pos.y + (texH * debug_scale) / 2.0f;
+        // Draw center crosshair with offset
+        float center_x = image_pos.x + (texW * debug_scale) / 2.0f + (ctx.config.crosshair_offset_x * debug_scale);
+        float center_y = image_pos.y + (texH * debug_scale) / 2.0f + (ctx.config.crosshair_offset_y * debug_scale);
         ImU32 crosshair_color = IM_COL32(255, 255, 255, 255);
         
         // Draw crosshair lines
@@ -501,20 +561,6 @@ void draw_debug()
         
         // Debug text - moved below image
         ImGui::Separator();
-        ImGui::Text("Confidence Threshold: %.2f", ctx.config.confidence_threshold);
-        ImGui::Text("NMS Threshold: %.2f", ctx.config.nms_threshold);
-        
-        // Display target info using synchronized overlay data
-        if (has_target_for_overlay) {
-            ImGui::Text("Target Box (Overlay): x=%d, y=%d, w=%d, h=%d (conf: %.2f)", 
-                       (int)target_for_overlay.box.x,
-                       (int)target_for_overlay.box.y,
-                       (int)target_for_overlay.box.width,
-                       (int)target_for_overlay.box.height,
-                       target_for_overlay.confidence);
-        } else {
-            ImGui::Text("Target Box (Overlay): No target to draw.");
-        }
         ImGui::Text("Color Legend: Green=Best Target, Yellow=Valid, Red=Low Confidence");
         
         // Draw target offset if best target exists and is valid (using synchronized overlay data)
@@ -544,6 +590,7 @@ void draw_debug()
             // Draw target point
             draw_list->AddCircleFilled(ImVec2(target_center_x, target_center_y), 4.0f, IM_COL32(0, 255, 255, 255));
         }
+
 
 
         

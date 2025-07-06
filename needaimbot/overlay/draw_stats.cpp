@@ -66,7 +66,9 @@ void draw_stat_plot(const char* label, const std::vector<float>& history, float 
     ImVec2 plot_size = ImVec2(ImGui::GetContentRegionAvail().x, 40.0f);
 
     if (!history.empty()) {
-        ImGui::PlotLines("##", history.data(), static_cast<int>(history.size()), 0, nullptr, min_y, max_y, plot_size);
+        // Create unique ID for each plot using the label
+        std::string unique_id = "##plot_" + std::string(label);
+        ImGui::PlotLines(unique_id.c_str(), history.data(), static_cast<int>(history.size()), 0, nullptr, min_y, max_y, plot_size);
     } else {
         ImGui::Dummy(plot_size);
         ImGui::Text("No data yet.");

@@ -79,6 +79,10 @@ bool Config::loadConfig(const std::string& filename)
         auto_aim = false;
 
         
+        crosshair_offset_x = 0.0f;
+        crosshair_offset_y = 0.0f;
+
+        
         easynorecoil = false;
         easynorecoilstrength = 0.0f;
         norecoil_step = 5.0f;
@@ -246,6 +250,9 @@ bool Config::loadConfig(const std::string& filename)
     ignore_third_person = get_bool_ini("Target", "ignore_third_person", false);
     shooting_range_targets = get_bool_ini("Target", "shooting_range_targets", false);
     auto_aim = get_bool_ini("Target", "auto_aim", false);
+
+    crosshair_offset_x = (float)get_double_ini("Target", "crosshair_offset_x", 0.0);
+    crosshair_offset_y = (float)get_double_ini("Target", "crosshair_offset_y", 0.0);
 
     easynorecoil = get_bool_ini("Mouse", "easynorecoil", false);
     easynorecoilstrength = (float)get_double_ini("Mouse", "easynorecoilstrength", 0.0);
@@ -426,6 +433,8 @@ bool Config::saveConfig(const std::string& filename)
     file << "body_y_offset = " << body_y_offset << "\n";
     file << "head_y_offset = " << head_y_offset << "\n";
     file << "offset_step = " << offset_step << "\n";
+    file << "crosshair_offset_x = " << crosshair_offset_x << "\n";
+    file << "crosshair_offset_y = " << crosshair_offset_y << "\n";
     file << std::noboolalpha;
     file << "ignore_third_person = " << (ignore_third_person ? "true" : "false") << "\n";
     file << "shooting_range_targets = " << (shooting_range_targets ? "true" : "false") << "\n";

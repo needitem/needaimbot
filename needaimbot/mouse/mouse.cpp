@@ -229,6 +229,14 @@ float MouseThread::calculateTargetDistanceSquared(const AimbotTarget &target) co
         current_center_y = this->center_y;
     }
 
+    // Apply crosshair offset correction
+    {
+        auto& ctx = AppContext::getInstance();
+        std::lock_guard<std::mutex> lock(ctx.configMutex);
+        current_center_x += ctx.config.crosshair_offset_x;
+        current_center_y += ctx.config.crosshair_offset_y;
+    }
+
     float dx = target.x + target.w * 0.5f - current_center_x;
     float target_center_y_val;
 
@@ -277,6 +285,13 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         current_center_y = this->center_y;
         current_move_scale_x = this->move_scale_x;
         current_move_scale_y = this->move_scale_y;
+    }
+
+    // Apply crosshair offset correction
+    {
+        std::lock_guard<std::mutex> lock(ctx.configMutex);
+        current_center_x += ctx.config.crosshair_offset_x;
+        current_center_y += ctx.config.crosshair_offset_y;
     }
 
     
