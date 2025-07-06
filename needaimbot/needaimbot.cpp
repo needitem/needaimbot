@@ -24,7 +24,7 @@
 #include "mouse/input_drivers/InputMethod.h"
 #include "detector/detector.h"
 #include "mouse/input_drivers/kmboxNet.h"
-#include "detector/optical_flow.h"
+// #include "detector/optical_flow.h" // Optical flow removed
 
 
 #ifndef __INTELLISENSE__
@@ -163,14 +163,11 @@ inline void handleEasyNoRecoil(MouseThread &mouseThread)
         mouseThread.applyRecoilCompensation(ctx.config.easynorecoilstrength);
     }
     
-    if (ctx.config.optical_flow_norecoil && ctx.shooting.load())
-    {
-        mouseThread.applyOpticalFlowRecoilCompensation();
-    }
+    // Optical flow recoil compensation removed"
 }
 
-#include "constants.h"
-#include "mouse_logic.h"
+// #include "constants.h" // File removed
+// #include "mouse_logic.h" // File removed
 
 void mouseThreadFunction(MouseThread &mouseThread)
 {
@@ -182,27 +179,16 @@ void mouseThreadFunction(MouseThread &mouseThread)
     
     while (!ctx.shouldExit)
     {
-        if (ctx.config_optical_flow_changed.load()) {
-            if (ctx.config.enable_optical_flow) {
-                std::cout << "[Config Change] Enabling optical flow. Starting thread if not already running." << std::endl; 
-                ctx.opticalFlow.startOpticalFlowThread(); 
-            } else {
-                std::cout << "[Config Change] Disabling optical flow. Stopping thread." << std::endl;
-                ctx.opticalFlow.stopOpticalFlowThread();
-            }
-            ctx.config_optical_flow_changed = false; 
-        }
+        // Optical flow configuration removed
 
         if (ctx.input_method_changed.load()) {
             mouseThread.setInputMethod(initializeInputMethod());
             ctx.input_method_changed.store(false);
         }
 
-        MouseLogic::handle_recoil(mouseThread);
-        MouseLogic::handle_silent_aim(mouseThread);
-        MouseLogic::handle_aiming(mouseThread);
+        // MouseLogic functions removed - functionality integrated into MouseThread"
         
-        std::this_thread::sleep_for(std::chrono::milliseconds(constants::IDLE_TIMEOUT_MS));
+        std::this_thread::sleep_for(std::chrono::milliseconds(1)); // 1ms idle timeout
     }
 
     mouseThread.releaseMouse();
@@ -236,13 +222,7 @@ bool loadAndValidateModel(std::string& modelName, const std::vector<std::string>
     return true;
 }
 
-void add_to_history(std::vector<float>& history, float value, std::mutex& mtx, int max_size) {
-    std::lock_guard<std::mutex> lock(mtx);
-    history.push_back(value);
-    if (history.size() > static_cast<size_t>(max_size)) {
-        history.erase(history.begin());
-    }
-}
+// Duplicate add_to_history function removed (already defined above)
 
 int main()
 {
@@ -272,7 +252,7 @@ int main()
             std::cout << "---------------------------" << std::endl << std::endl;
         }
 
-        ctx.detector.initializeCudaContext();
+        ctx.detector->initializeCudaContext();
 
         int cuda_devices = 0;
         cudaError_t err = cudaGetDeviceCount(&cuda_devices);
@@ -313,19 +293,18 @@ int main()
             return -1;
         }
 
-        ctx.detector.initialize("models/" + ctx.config.ai_model);
+        ctx.detector->initialize("models/" + ctx.config.ai_model);
 
         SetThreadAffinityMask(GetCurrentThread(), 1 << 3);
         
-        ctx.detector.start();
+        ctx.detector->start();
 
         std::thread keyThread(keyboardListener);
         std::thread mouseMovThread(mouseThreadFunction, std::ref(mouseThread));
         std::thread overlayThread(OverlayThread);
         
         SetThreadPriority(keyThread.native_handle(), THREAD_PRIORITY_NORMAL);
-        SetThreadPriority(ctx.detector.m_captureThread.native_handle(), THREAD_PRIORITY_TIME_CRITICAL);
-        SetThreadPriority(ctx.detector.m_inferenceThread.native_handle(), THREAD_PRIORITY_HIGHEST);
+        // Detector thread priorities managed internally
         SetThreadPriority(mouseMovThread.native_handle(), THREAD_PRIORITY_TIME_CRITICAL);
         SetThreadPriority(overlayThread.native_handle(), THREAD_PRIORITY_BELOW_NORMAL);
 
@@ -334,7 +313,7 @@ int main()
         keyThread.join();
         std::cout << "Keyboard listener thread joined." << std::endl;
 
-        ctx.detector.stop();
+        ctx.detector->stop();
         std::cout << "Capture and detection threads joined." << std::endl;
 
         mouseMovThread.join();
@@ -342,10 +321,7 @@ int main()
         overlayThread.join();
         std::cout << "Overlay thread joined." << std::endl;
 
-        if (ctx.config.enable_optical_flow) { 
-            std::cout << "Shutting down: Stopping optical flow thread." << std::endl;
-            ctx.opticalFlow.stopOpticalFlowThread();
-        }
+        // Optical flow shutdown code removed
 
         return 0;
     }

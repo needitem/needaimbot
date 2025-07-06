@@ -6,7 +6,8 @@
 #include <imgui/imgui.h>
 #include "imgui/imgui_internal.h"
 
-#include "config.h"
+#include "AppContext.h"
+#include "config/config.h"
 #include "needaimbot.h"
 #include "capture.h"
 #include "include/other_tools.h"
@@ -16,23 +17,25 @@ int monitors = get_active_monitors();
 
 void draw_capture_settings()
 {
+    auto& ctx = AppContext::getInstance();
+    
     ImGui::SeparatorText("Capture Area & Resolution");
     ImGui::Spacing();
 
-    if (ImGui::SliderInt("Detection Resolution", &config.detection_resolution, 50, 1280)) { config.saveConfig(); }
+    if (ImGui::SliderInt("Detection Resolution", &ctx.config.detection_resolution, 50, 1280)) { ctx.config.saveConfig(); }
     if (ImGui::IsItemHovered())
     {
         ImGui::SetTooltip("Size (in pixels) of the square area around the cursor to capture for detection.\nSmaller values improve performance but may miss targets further from the crosshair.");
     }
-    if (config.detection_resolution >= 400)
+    if (ctx.config.detection_resolution >= 400)
     {
         ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "WARNING: Large detection resolution can impact performance.");
     }
 
     ImGui::Spacing();
-    if (ImGui::Checkbox("Circle mask", &config.circle_mask))
+    if (ImGui::Checkbox("Circle mask", &ctx.config.circle_mask))
     {
-        config.saveConfig();
+        ctx.config.saveConfig();
     }
     if (ImGui::IsItemHovered())
     {
@@ -46,28 +49,28 @@ void draw_capture_settings()
     ImGui::SeparatorText("Capture Behavior");
     ImGui::Spacing();
 
-    if (ImGui::SliderInt("Lock FPS", &config.capture_fps, 0, 240)) { config.saveConfig(); }
+    if (ImGui::SliderInt("Lock FPS", &ctx.config.capture_fps, 0, 240)) { ctx.config.saveConfig(); }
     if (ImGui::IsItemHovered())
     {
         ImGui::SetTooltip("Limits the screen capture rate. 0 = Unlocked (fastest possible).\nLower values reduce CPU usage but increase detection latency.");
     }
-    if (config.capture_fps == 0)
+    if (ctx.config.capture_fps == 0)
     {
         ImGui::SameLine();
         ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "-> Unlocked");
     }
 
-    if (config.capture_fps == 0 || config.capture_fps >= 61)
+    if (ctx.config.capture_fps == 0 || ctx.config.capture_fps >= 61)
     {
         ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "WARNING: High or unlocked FPS can significantly impact performance.");
     }
 
     ImGui::Spacing();
 
-    if (ImGui::SliderInt("Acquire Timeout (ms)", &config.capture_timeout_ms, 1, 100))
+    if (ImGui::SliderInt("Acquire Timeout (ms)", &ctx.config.capture_timeout_ms, 1, 100))
     {
-        config.saveConfig();
-        capture_timeout_changed = true;
+        ctx.config.saveConfig();
+        ctx.capture_timeout_changed = true;
     }
     if (ImGui::IsItemHovered())
     {
@@ -75,20 +78,20 @@ void draw_capture_settings()
     }
 
     ImGui::Spacing();
-    if (ImGui::Checkbox("Capture Borders", &config.capture_borders)) { config.saveConfig(); }
+    if (ImGui::Checkbox("Capture Borders", &ctx.config.capture_borders)) { ctx.config.saveConfig(); }
     if (ImGui::IsItemHovered())
     {
         ImGui::SetTooltip("Includes window borders in the screen capture (if applicable).");
     }
     ImGui::SameLine(); ImGui::Spacing(); ImGui::SameLine();
-    if (ImGui::Checkbox("Capture Cursor", &config.capture_cursor)) { config.saveConfig(); }
+    if (ImGui::Checkbox("Capture Cursor", &ctx.config.capture_cursor)) { ctx.config.saveConfig(); }
     if (ImGui::IsItemHovered())
     {
         ImGui::SetTooltip("Includes the mouse cursor in the screen capture.");
     }
 
     ImGui::Spacing();
-    if (ImGui::Checkbox("Use 1ms Capture", &config.use_1ms_capture)) { config.saveConfig(); }
+    if (ImGui::Checkbox("Use 1ms Capture", &ctx.config.use_1ms_capture)) { ctx.config.saveConfig(); }
     if (ImGui::IsItemHovered())
     {
         ImGui::SetTooltip("Uses 1ms interval capture method for game capture (alternative to duplication API).");
@@ -120,9 +123,9 @@ void draw_capture_settings()
             monitorItems.push_back(name.c_str());
         }
 
-        if (ImGui::Combo("Capture Monitor", &config.monitor_idx, monitorItems.data(), static_cast<int>(monitorItems.size())))
+        if (ImGui::Combo("Capture Monitor", &ctx.config.monitor_idx, monitorItems.data(), static_cast<int>(monitorItems.size())))
         {
-            config.saveConfig();
+            ctx.config.saveConfig();
         }
         if (ImGui::IsItemHovered())
         {

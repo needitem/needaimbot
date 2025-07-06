@@ -1,6 +1,9 @@
 #ifndef APP_CONTEXT_H
 #define APP_CONTEXT_H
 
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+
 #include <opencv2/opencv.hpp>
 #include <opencv2/core/cuda.hpp>
 #include <atomic>
@@ -11,7 +14,6 @@
 
 class MouseThread; // Forward declaration
 class Detector;
-class OpticalFlow;
 
 struct AppContext {
 public:
@@ -45,13 +47,57 @@ public:
     std::atomic<bool> shouldExit{false};
     std::atomic<bool> shooting{false};
     std::atomic<bool> zooming{false};
-    std::atomic<bool> config_optical_flow_changed{false};
     std::atomic<bool> input_method_changed{false};
+    
+    // Capture state changes
+    std::atomic<bool> capture_fps_changed{false};
+    std::atomic<bool> detection_resolution_changed{false};
+    std::atomic<bool> capture_cursor_changed{false};
+    std::atomic<bool> capture_borders_changed{false};
+    std::atomic<bool> capture_timeout_changed{false};
+    
+    // Performance metrics
+    std::atomic<float> g_current_frame_acquisition_time_ms{0.0f};
+    std::atomic<float> g_current_capture_fps{0.0f};
+    std::vector<float> g_frame_acquisition_time_history;
+    std::vector<float> g_capture_fps_history;
+    std::mutex g_frame_acquisition_history_mutex;
+    std::mutex g_capture_history_mutex;
+    
+    // Detector performance metrics
+    std::atomic<float> g_current_process_frame_time_ms{0.0f};
+    std::atomic<float> g_current_detector_cycle_time_ms{0.0f};
+    std::atomic<float> g_current_inference_time_ms{0.0f};
+    std::atomic<float> g_current_pid_calc_time_ms{0.0f};
+    std::atomic<float> g_current_input_send_time_ms{0.0f};
+    std::vector<float> g_process_frame_time_history;
+    std::vector<float> g_detector_cycle_time_history;
+    std::vector<float> g_inference_time_history;
+    std::vector<float> g_pid_calc_time_history;
+    std::vector<float> g_input_send_time_history;
+    std::mutex g_process_frame_history_mutex;
+    std::mutex g_detector_cycle_history_mutex;
+    std::mutex g_inference_history_mutex;
+    std::mutex g_pid_calc_history_mutex;
+    std::mutex g_input_send_history_mutex;
+    
+    // Application control
+    std::atomic<bool> detectionPaused{false};
+    std::atomic<bool> detector_model_changed{false};
+    std::mutex configMutex;
 
     // Modules
     MouseThread* globalMouseThread = nullptr;
-    Detector detector;
-    OpticalFlow opticalFlow;
+    Detector* detector = nullptr;
+    
+    // Helper functions
+    void add_to_history(std::vector<float>& history, float value, std::mutex& mutex) {
+        std::lock_guard<std::mutex> lock(mutex);
+        history.push_back(value);
+        if (history.size() > 100) {
+            history.erase(history.begin());
+        }
+    }
 
 private:
     AppContext() : captureGpuWriteIdx(0), captureCpuWriteIdx(0), newFrameAvailable(false) {}

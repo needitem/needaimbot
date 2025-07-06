@@ -9,6 +9,7 @@
 #include <iostream>
 
 #include "../config/config.h"
+#include "../AppContext.h"
 #include "../mouse/input_drivers/SerialConnection.h"
 #include "keyboard_listener.h"
 #include "../mouse/mouse.h"
@@ -34,7 +35,7 @@ const float MAX_NORECOIL_STRENGTH = 500.0f;
 std::vector<int> get_vk_codes(const std::vector<std::string>& keys) {
     std::vector<int> vk_codes;
     for (const auto& key : keys) {
-        vk_codes.push_back(get_vk_code(key));
+        vk_codes.push_back(KeyCodes::getKeyCode(key));
     }
     return vk_codes;
 }
@@ -50,26 +51,24 @@ bool is_any_key_pressed(const std::vector<int>& vk_codes) {
 
 void keyboardListener() {
     auto& ctx = AppContext::getInstance();
-    std::vector<int> aim_vk_codes = get_vk_codes(ctx.config.aim_button);
-    std::vector<int> shoot_vk_codes = get_vk_codes(ctx.config.shoot_button);
-    std::vector<int> zoom_vk_codes = get_vk_codes(ctx.config.zoom_button);
-    std::vector<int> pause_vk_codes = get_vk_codes(ctx.config.pause_button);
-    std::vector<int> auto_shoot_vk_codes = get_vk_codes(ctx.config.auto_shoot_button);
+    std::vector<int> aim_vk_codes = get_vk_codes(ctx.config.button_targeting);
+    std::vector<int> shoot_vk_codes = get_vk_codes(ctx.config.button_shoot);
+    std::vector<int> zoom_vk_codes = get_vk_codes(ctx.config.button_zoom);
+    std::vector<int> pause_vk_codes = get_vk_codes(ctx.config.button_pause);
+    std::vector<int> auto_shoot_vk_codes = get_vk_codes(ctx.config.button_auto_shoot);
 
     while (!ctx.shouldExit) {
-        ctx.aiming = is_any_key_pressed(aim_vk_codes);
+        // ctx.aiming = is_any_key_pressed(aim_vk_codes); // Remove aiming state
         ctx.shooting = is_any_key_pressed(shoot_vk_codes);
         ctx.zooming = is_any_key_pressed(zoom_vk_codes);
-        ctx.auto_shoot_active = is_any_key_pressed(auto_shoot_vk_codes);
+        // ctx.auto_shoot_active = is_any_key_pressed(auto_shoot_vk_codes); // Removed"
 
         if (is_any_key_pressed(pause_vk_codes)) {
             ctx.detectionPaused = !ctx.detectionPaused;
             Sleep(200); // Debounce
         }
 
-        if (ctx.auto_shoot_active && ctx.globalMouseThread) {
-            ctx.globalMouseThread->executeSilentAim();
-        }
+        // Auto shoot functionality removed
 
         Sleep(1);
     }

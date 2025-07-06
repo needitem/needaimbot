@@ -1,6 +1,10 @@
 #ifndef DETECTOR_H
 #define DETECTOR_H
 
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+
 #include <opencv2/opencv.hpp>
 #include <opencv2/core/cuda.hpp>
 #include <NvInfer.h>
@@ -18,9 +22,14 @@
 #include <opencv2/cudaarithm.hpp>
 #include <cuda_runtime_api.h>
 #include <opencv2/cudaimgproc.hpp>
+#include <filesystem>
 
 #include "postProcess.h"
 #include "CudaBuffer.h"
+
+// TensorRT utility functions
+nvinfer1::ICudaEngine* buildEngineFromOnnx(const std::string& onnxPath);
+nvinfer1::ICudaEngine* loadEngineFromFile(const std::string& enginePath);
 
 typedef struct CUstream_st* cudaStream_t;
 typedef struct CUevent_st* cudaEvent_t;
@@ -44,6 +53,7 @@ public:
     void processFrame(const cv::cuda::GpuMat &frame);
     void processFrame(const cv::Mat &frame);
     void inferenceThread();
+    void setCaptureEvent(HANDLE event) { captureEvent = event; }
     
     
     
@@ -72,6 +82,8 @@ public:
     cv::Mat currentFrameCpu;
     bool frameReady;
     bool frameIsGpu;
+    
+    HANDLE captureEvent = nullptr;
 
     cudaGraph_t m_graph = nullptr;
     cudaGraphExec_t m_graphExec = nullptr;
@@ -120,6 +132,15 @@ public:
     
     std::vector<unsigned char> m_host_ignore_flags_uchar;
     bool m_ignore_flags_need_update;
+    
+    // CUDA streams and events
+    cudaStream_t m_computeStream;
+    cudaStream_t m_memoryStream;
+    cudaEvent_t m_preprocessDone;
+    cudaEvent_t m_inferenceDone;
+    cudaEvent_t processingDone;
+    cudaEvent_t postprocessCopyDone;
+    HANDLE m_captureDoneEvent;
 
     std::mutex hsvMaskMutex; 
 
