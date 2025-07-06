@@ -279,6 +279,7 @@ public:
         HRESULT hr = m_duplication->AcquireNextFrame(timeout, &frameInfo, &resource);
         if (hr == DXGI_ERROR_WAIT_TIMEOUT)
         {
+            m_duplication->ReleaseFrame();
             return hr;
         }
         else if (FAILED(hr))
@@ -348,7 +349,7 @@ public:
 
     cv::cuda::GpuMat CopySharedTextureToCudaMat(int regionWidth, int regionHeight)
     {
-        cudaError_t err = cudaGraphicsMapResources(1, &m_cudaResource, m_cudaStream);
+        cudaError_t err = cudaGraphicsMapResources(1, &m_cudaResource, 0); // Use NULL stream
         if (err != cudaSuccess)
         {
             std::cerr << "[DDA] cudaGraphicsMapResources error: " << cudaGetErrorString(err) << std::endl;
@@ -360,7 +361,7 @@ public:
         if (err != cudaSuccess)
         {
             std::cerr << "[DDA] cudaGraphicsSubResourceGetMappedArray error: " << cudaGetErrorString(err) << std::endl;
-            cudaGraphicsUnmapResources(1, &m_cudaResource, m_cudaStream);
+            cudaGraphicsUnmapResources(1, &m_cudaResource, 0); // Use NULL stream
             return cv::cuda::GpuMat();
         }
 
@@ -386,13 +387,13 @@ public:
             frameGpu.data, frameGpu.step,
             cuArray, 0, 0,
             regionWidth * 4, regionHeight,
-            cudaMemcpyDeviceToDevice, m_cudaStream);
+            cudaMemcpyDeviceToDevice, 0); // Use NULL stream
 
-        cudaGraphicsUnmapResources(1, &m_cudaResource, m_cudaStream);
+        cudaGraphicsUnmapResources(1, &m_cudaResource, 0); // Use NULL stream
 
         if (m_captureDoneEvent)
         {
-            cudaEventRecord(m_captureDoneEvent, m_cudaStream);
+            cudaEventRecord(m_captureDoneEvent, 0); // Use NULL stream
         }
 
         return frameGpu;
@@ -512,7 +513,7 @@ DuplicationAPIScreenCapture::~DuplicationAPIScreenCapture()
 
 cv::cuda::GpuMat DuplicationAPIScreenCapture::GetNextFrameGpu()
 {
-    if (!m_ddaManager || !m_ddaManager->m_duplication)
+    if (!m_ddaManager || !m_ddaManager->m_duplication || AppContext::getInstance().shouldExit)
         return cv::cuda::GpuMat();
 
     HRESULT hr = S_OK;
@@ -529,6 +530,7 @@ cv::cuda::GpuMat DuplicationAPIScreenCapture::GetNextFrameGpu()
 
     if (hr == DXGI_ERROR_WAIT_TIMEOUT)
     {
+        m_ddaManager->ReleaseFrame();
         return cv::cuda::GpuMat();
     }
     else if (hr == DXGI_ERROR_ACCESS_LOST || hr == DXGI_ERROR_DEVICE_RESET || hr == DXGI_ERROR_DEVICE_REMOVED)
@@ -604,7 +606,7 @@ cv::cuda::GpuMat DuplicationAPIScreenCapture::GetNextFrameGpu()
 
 cv::Mat DuplicationAPIScreenCapture::GetNextFrameCpu()
 {
-    if (!m_ddaManager || !m_ddaManager->m_duplication)
+    if (!m_ddaManager || !m_ddaManager->m_duplication || AppContext::getInstance().shouldExit)
         return cv::Mat();
 
     HRESULT hr = S_OK;
@@ -621,6 +623,7 @@ cv::Mat DuplicationAPIScreenCapture::GetNextFrameCpu()
 
     if (hr == DXGI_ERROR_WAIT_TIMEOUT)
     {
+        m_ddaManager->ReleaseFrame();
         return cv::Mat();
     }
     else if (hr == DXGI_ERROR_ACCESS_LOST || hr == DXGI_ERROR_DEVICE_RESET || hr == DXGI_ERROR_DEVICE_REMOVED)
@@ -677,7 +680,7 @@ cv::Mat DuplicationAPIScreenCapture::GetNextFrameCpu()
     {
         unsigned char* hostPtr = m_ddaManager->m_pinnedHostBuffer;
         size_t hostPitch = static_cast<size_t>(regionWidth) * 4;
-        cudaError_t err = cudaGraphicsMapResources(1, &m_ddaManager->m_cudaResource, m_ddaManager->m_hostCopyStream);
+        cudaError_t err = cudaGraphicsMapResources(1, &m_ddaManager->m_cudaResource, 0); // Use NULL stream
         if (err == cudaSuccess)
         {
             cudaArray_t cuArray;
@@ -692,14 +695,14 @@ cv::Mat DuplicationAPIScreenCapture::GetNextFrameCpu()
                     regionWidth * 4,
                     regionHeight,
                     cudaMemcpyDeviceToHost,
-                    m_ddaManager->m_hostCopyStream);
+                    0); // Use NULL stream
                 if (err == cudaSuccess)
                 {
-                    cudaStreamSynchronize(m_ddaManager->m_hostCopyStream);
+                    cudaDeviceSynchronize(); // Synchronize entire device instead of specific stream
                     frameCpu = cv::Mat(regionHeight, regionWidth, CV_8UC4, hostPtr, hostPitch);
                 }
             }
-            cudaGraphicsUnmapResources(1, &m_ddaManager->m_cudaResource, m_ddaManager->m_hostCopyStream);
+            cudaGraphicsUnmapResources(1, &m_ddaManager->m_cudaResource, 0); // Use NULL stream
         }
     }
 

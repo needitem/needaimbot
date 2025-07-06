@@ -14,6 +14,15 @@
 #include "modules/SimpleIni.h"
 #include "keyboard/keyboard_listener.h"
 
+std::string Config::getExecutableDir() {
+    std::filesystem::path exePath = std::filesystem::current_path();
+    return exePath.string();
+}
+
+std::string Config::getConfigPath(const std::string& filename) {
+    return getExecutableDir() + "/" + filename;
+}
+
 std::vector<std::string> Config::splitString(const std::string& str, char delimiter)
 {
     std::vector<std::string> tokens;
@@ -44,20 +53,22 @@ std::string Config::joinStrings(const std::vector<std::string>& vec, const std::
 
 bool Config::loadConfig(const std::string& filename)
 {
-    if (!std::filesystem::exists(filename))
+    std::string configFile = filename.empty() ? getConfigPath("config.ini") : filename;
+    if (!std::filesystem::exists(configFile))
     {
-        std::cerr << "[Config] Config file does not exist, creating default config: " << filename << std::endl;
 
         
         detection_resolution = 320;
-        capture_fps = 60;
+        capture_fps = 0;  // 0 = unlimited FPS
         monitor_idx = 0;
         circle_mask = true;
         capture_borders = true;
         capture_cursor = true;
         use_1ms_capture = false;
         capture_timeout_ms = 5; 
-        target_fps = 120.0f; 
+        target_fps = 120.0f;
+        capture_method = "simple";
+        target_game_name = ""; 
 
         
         body_y_offset = 0.15f;
@@ -133,6 +144,7 @@ bool Config::loadConfig(const std::string& filename)
         postprocess = "yolo10";
         export_enable_fp8 = false;
         export_enable_fp16 = true;
+        tensorrt_fp16 = true;
         onnx_input_resolution = 640;
 
         
@@ -140,15 +152,13 @@ bool Config::loadConfig(const std::string& filename)
 
         
         button_targeting = splitString("RightMouseButton");
-        button_shoot = splitString("LeftMouseButton");
-        button_zoom = splitString("RightMouseButton");
         button_exit = splitString("F2");
         button_pause = splitString("F3");
         button_reload_config = splitString("F4");
         button_open_overlay = splitString("Home");
         button_disable_upward_aim = splitString("None");
         button_auto_shoot = splitString("None"); 
-        button_silent_aim = splitString("None"); 
+ 
 
         
         overlay_opacity = 225;
@@ -191,15 +201,14 @@ bool Config::loadConfig(const std::string& filename)
         min_hsv_pixels = 10;
         remove_hsv_matches = false;
 
-        saveConfig(filename); 
+        saveConfig(configFile); 
         return true;
     }
 
     CSimpleIniA ini;
     ini.SetUnicode();
-    SI_Error rc = ini.LoadFile(filename.c_str());
+    SI_Error rc = ini.LoadFile(configFile.c_str());
     if (rc < 0) {
-        std::cerr << "[Config] Error parsing INI file: " << filename << std::endl;
         return false;
     }
 
@@ -220,7 +229,7 @@ bool Config::loadConfig(const std::string& filename)
 
     
     detection_resolution = get_long_ini("Capture", "detection_resolution", 320);
-    capture_fps = get_long_ini("Capture", "capture_fps", 60);
+    capture_fps = get_long_ini("Capture", "capture_fps", 0);  // 0 = unlimited FPS
     monitor_idx = get_long_ini("Capture", "monitor_idx", 0);
     circle_mask = get_bool_ini("Capture", "circle_mask", true);
     capture_borders = get_bool_ini("Capture", "capture_borders", true);
@@ -228,6 +237,8 @@ bool Config::loadConfig(const std::string& filename)
     use_1ms_capture = get_bool_ini("Capture", "use_1ms_capture", false);
     capture_timeout_ms = get_long_ini("Capture", "capture_timeout_ms", 5);
     target_fps = (float)get_double_ini("Capture", "target_fps", 120.0);
+    capture_method = get_string_ini("Capture", "capture_method", "simple");
+    target_game_name = get_string_ini("Capture", "target_game_name", "");
 
     body_y_offset = (float)get_double_ini("Target", "body_y_offset", 0.15);
     head_y_offset = (float)get_double_ini("Target", "head_y_offset", 0.05);
@@ -287,20 +298,19 @@ bool Config::loadConfig(const std::string& filename)
     postprocess = get_string_ini("AI", "postprocess", "yolo10");
     export_enable_fp8 = get_bool_ini("AI", "export_enable_fp8", false);
     export_enable_fp16 = get_bool_ini("AI", "export_enable_fp16", true);
+    tensorrt_fp16 = get_bool_ini("AI", "tensorrt_fp16", true);
     onnx_input_resolution = get_long_ini("AI", "onnx_input_resolution", 640);
 
     cuda_device_id = get_long_ini("CUDA", "cuda_device_id", 0);
 
     button_targeting = splitString(get_string_ini("Buttons", "button_targeting", "RightMouseButton"));
-    button_shoot = splitString(get_string_ini("Buttons", "button_shoot", "LeftMouseButton"));
-    button_zoom = splitString(get_string_ini("Buttons", "button_zoom", "RightMouseButton"));
     button_exit = splitString(get_string_ini("Buttons", "button_exit", "F2"));
     button_pause = splitString(get_string_ini("Buttons", "button_pause", "F3"));
     button_reload_config = splitString(get_string_ini("Buttons", "button_reload_config", "F4"));
     button_open_overlay = splitString(get_string_ini("Buttons", "button_open_overlay", "Home"));
     button_disable_upward_aim = splitString(get_string_ini("Buttons", "button_disable_upward_aim", "None"));
     button_auto_shoot = splitString(get_string_ini("Buttons", "button_auto_shoot", "None"));
-    button_silent_aim = splitString(get_string_ini("Buttons", "button_silent_aim", "None")); 
+ 
 
     overlay_opacity = get_long_ini("Overlay", "overlay_opacity", 225);
     overlay_ui_scale = (float)get_double_ini("Overlay", "overlay_ui_scale", 1.0);
@@ -387,10 +397,11 @@ bool Config::loadConfig(const std::string& filename)
 
 bool Config::saveConfig(const std::string& filename)
 {
-    std::ofstream file(filename);
+    std::string configFile = filename.empty() ? getConfigPath("config.ini") : filename;
+    std::ofstream file(configFile);
     if (!file.is_open())
     {
-        std::cerr << "Error opening config for writing: " << filename << std::endl;
+        std::cerr << "Error opening config for writing: " << configFile << std::endl;
         return false;
     }
 
@@ -406,7 +417,9 @@ bool Config::saveConfig(const std::string& filename)
     
     file << "use_1ms_capture = " << (use_1ms_capture ? "true" : "false") << "\n";
     file << "capture_timeout_ms = " << capture_timeout_ms << "\n";
-    file << "target_fps = " << target_fps << "\n\n";
+    file << "target_fps = " << target_fps << "\n";
+    file << "capture_method = " << capture_method << "\n";
+    file << "target_game_name = " << target_game_name << "\n\n";
 
     file << "[Target]\n";
     file << std::fixed << std::setprecision(6);
@@ -488,6 +501,7 @@ bool Config::saveConfig(const std::string& filename)
     file << "postprocess = " << postprocess << "\n";
     file << "export_enable_fp8 = " << (export_enable_fp8 ? "true" : "false") << "\n";
     file << "export_enable_fp16 = " << (export_enable_fp16 ? "true" : "false") << "\n";
+    file << "tensorrt_fp16 = " << (tensorrt_fp16 ? "true" : "false") << "\n";
     file << "onnx_input_resolution = " << onnx_input_resolution << "\n\n";
 
     file << "[CUDA]\n";
@@ -495,15 +509,13 @@ bool Config::saveConfig(const std::string& filename)
 
     file << "[Buttons]\n";
     file << "button_targeting = " << joinStrings(button_targeting) << "\n";
-    file << "button_shoot = " << joinStrings(button_shoot) << "\n";
-    file << "button_zoom = " << joinStrings(button_zoom) << "\n";
     file << "button_exit = " << joinStrings(button_exit) << "\n";
     file << "button_pause = " << joinStrings(button_pause) << "\n";
     file << "button_reload_config = " << joinStrings(button_reload_config) << "\n";
     file << "button_open_overlay = " << joinStrings(button_open_overlay) << "\n";
     file << "button_disable_upward_aim = " << joinStrings(button_disable_upward_aim) << "\n";
     file << "button_auto_shoot = " << joinStrings(button_auto_shoot) << "\n";
-    file << "button_silent_aim = " << joinStrings(button_silent_aim) << "\n\n"; 
+ 
 
     file << "[Overlay]\n";
     file << "overlay_opacity = " << overlay_opacity << "\n";
@@ -565,7 +577,6 @@ std::vector<std::string> Config::listProfiles() {
             }
         }
     } catch (const std::filesystem::filesystem_error& e) {
-        std::cerr << "[Config] Error listing profiles in directory '" << current_path_str << "': " << e.what() << std::endl;
     }
     
     std::sort(profiles.begin(), profiles.end());
@@ -574,24 +585,19 @@ std::vector<std::string> Config::listProfiles() {
 
 bool Config::saveProfile(const std::string& profileName) {
     if (profileName.empty() || profileName == "config") {
-        std::cerr << "[Config] Invalid profile name for saving: '" << profileName << "'. Cannot save." << std::endl;
         return false;
     }
     std::string filename = profileName + ".ini";
-    std::cout << "[Config] Saving current settings to profile: " << filename << std::endl;
     return saveConfig(filename); 
 }
 
 bool Config::loadProfile(const std::string& profileName) {
      if (profileName.empty()) {
-        std::cerr << "[Config] Invalid profile name for loading: '" << profileName << "'. Cannot load." << std::endl;
         return false;
     }
     std::string filename = profileName + ".ini";
-     std::cout << "[Config] Loading settings from profile: " << filename << std::endl;
 
     if (!std::filesystem::exists(filename)) {
-         std::cerr << "[Config] Profile file not found: " << filename << std::endl;
          return false; 
     }
     return loadConfig(filename); 
@@ -599,27 +605,21 @@ bool Config::loadProfile(const std::string& profileName) {
 
 bool Config::deleteProfile(const std::string& profileName) {
     if (profileName.empty() || profileName == "config") {
-         std::cerr << "[Config] Invalid profile name for deletion: '" << profileName << "'. Cannot delete." << std::endl;
         return false;
     }
     std::string filename = profileName + ".ini";
-    std::cout << "[Config] Attempting to delete profile: " << filename << std::endl;
 
     try {
         if (std::filesystem::exists(filename)) {
             if (std::filesystem::remove(filename)) {
-                std::cout << "[Config] Profile deleted successfully: " << filename << std::endl;
                 return true;
             } else {
-                std::cerr << "[Config] Failed to delete profile file: " << filename << std::endl;
                 return false;
             }
         } else {
-            std::cerr << "[Config] Profile file to delete not found: " << filename << std::endl;
             return false; 
         }
     } catch (const std::filesystem::filesystem_error& e) {
-        std::cerr << "[Config] Filesystem error while deleting profile '" << filename << "': " << e.what() << std::endl;
         return false;
     }
 }
@@ -635,11 +635,12 @@ void Config::resetConfig()
 
 Config::Config()
 {
+    // Ensure we use the correct path for config files
+    std::string exePath = getExecutableDir();
     
-    
-    
-    loadConfig("config.ini");
-    loadWeaponProfiles("weapon_profiles.ini");
+    // Use empty string to trigger default path logic
+    loadConfig("");
+    loadWeaponProfiles(getConfigPath("weapon_profiles.ini"));
     initializeDefaultWeaponProfiles();
 }
 
@@ -766,14 +767,12 @@ bool Config::saveWeaponProfiles(const std::string& filename)
 bool Config::loadWeaponProfiles(const std::string& filename)
 {
     if (!std::filesystem::exists(filename)) {
-        std::cout << "[Config] Weapon profiles file not found: " << filename << ". Will use defaults." << std::endl;
         return false;
     }
 
     CSimpleIniA ini;
     SI_Error rc = ini.LoadFile(filename.c_str());
     if (rc < 0) {
-        std::cerr << "[Config] Error loading weapon profiles: " << filename << std::endl;
         return false;
     }
 
@@ -816,7 +815,6 @@ bool Config::loadWeaponProfiles(const std::string& filename)
         weapon_profiles.push_back(profile);
     }
 
-    std::cout << "[Config] Loaded " << weapon_profiles.size() << " weapon profiles from " << filename << std::endl;
     return true;
 }
 

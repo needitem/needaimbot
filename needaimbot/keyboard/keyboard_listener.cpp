@@ -49,18 +49,40 @@ bool is_any_key_pressed(const std::vector<int>& vk_codes) {
     return false;
 }
 
+bool isAnyKeyPressed(const std::vector<std::string>& keys) {
+    std::vector<int> vk_codes = get_vk_codes(keys);
+    return is_any_key_pressed(vk_codes);
+}
+
 void keyboardListener() {
     auto& ctx = AppContext::getInstance();
     std::vector<int> aim_vk_codes = get_vk_codes(ctx.config.button_targeting);
-    std::vector<int> shoot_vk_codes = get_vk_codes(ctx.config.button_shoot);
-    std::vector<int> zoom_vk_codes = get_vk_codes(ctx.config.button_zoom);
     std::vector<int> pause_vk_codes = get_vk_codes(ctx.config.button_pause);
     std::vector<int> auto_shoot_vk_codes = get_vk_codes(ctx.config.button_auto_shoot);
+    std::vector<int> exit_vk_codes = get_vk_codes(ctx.config.button_exit);
+
+    // Debug: Print targeting keys
+    std::cout << "[Keyboard] Targeting keys: ";
+    for (const auto& key : ctx.config.button_targeting) {
+        std::cout << key << " ";
+    }
+    std::cout << std::endl;
+
+    static bool last_aiming_state = false;
 
     while (!ctx.shouldExit) {
-        // ctx.aiming = is_any_key_pressed(aim_vk_codes); // Remove aiming state
-        ctx.shooting = is_any_key_pressed(shoot_vk_codes);
-        ctx.zooming = is_any_key_pressed(zoom_vk_codes);
+        if (is_any_key_pressed(exit_vk_codes)) {
+            ctx.shouldExit = true;
+            break;
+        }
+
+        bool current_aiming = is_any_key_pressed(aim_vk_codes);
+        ctx.aiming = current_aiming;
+        
+        if (current_aiming != last_aiming_state) {
+            std::cout << "[Keyboard] Aiming state changed: " << (current_aiming ? "true" : "false") << std::endl;
+            last_aiming_state = current_aiming;
+        }
         // ctx.auto_shoot_active = is_any_key_pressed(auto_shoot_vk_codes); // Removed"
 
         if (is_any_key_pressed(pause_vk_codes)) {

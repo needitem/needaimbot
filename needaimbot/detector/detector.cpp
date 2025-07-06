@@ -17,6 +17,9 @@
 #include <opencv2/core/cuda.hpp>
 #include <opencv2/core/cuda_stream_accessor.hpp>
 
+#include <NvInfer.h>
+#include <NvOnnxParser.h>
+
 #include <algorithm>
 #include <cuda_fp16.h>
 #include <atomic>
@@ -60,7 +63,7 @@ extern std::atomic<bool> detection_resolution_changed;
 
 
 
-extern Config config; 
+// extern Config config;  // Removed - use AppContext::getInstance().config instead
 extern std::mutex configMutex; 
 
 static bool error_logged = false;
@@ -99,7 +102,6 @@ Detector::Detector()
     m_host_ignore_flags_uchar(MAX_CLASSES_FOR_FILTERING, 1), 
     m_ignore_flags_need_update(true) 
     , m_isTargetLocked(false) 
-    , m_lockedTargetLostFrames(0) 
 {
     
 }
@@ -145,6 +147,19 @@ Detector::~Detector()
         cudaEventDestroy(m_inferenceDone);
         m_inferenceDone = nullptr;
     }
+    
+    // CUDA Graph cleanup
+    if (m_graphExec) {
+        cudaGraphExecDestroy(m_graphExec);
+        m_graphExec = nullptr;
+    }
+    if (m_graph) {
+        cudaGraphDestroy(m_graph);
+        m_graph = nullptr;
+    }
+    
+    // Reset CUDA device to ensure all resources are properly released
+    cudaDeviceReset();
 }
 
 void Detector::getInputNames()
@@ -390,7 +405,10 @@ void Detector::initialize(const std::string& modelFile)
         {
             numClasses = 11;
         } else if (outDims.nbDims == 3) {
-            numClasses = outDims.d[1] - 4;
+            // For yolo8/9/11/12, output is typically [1, num_features, num_boxes]
+            // num_features = 4 (bbox) + 1 (confidence) + num_classes
+            // So, num_classes = num_features - 5
+            numClasses = outDims.d[1] - 5; // Corrected: 4 for bbox, 1 for confidence
         } else {
             std::cerr << "[Detector] Warning: Unknown output dimensions for class calculation. Assuming 0."
                       << std::endl;
@@ -538,6 +556,10 @@ void Detector::processFrame(const cv::cuda::GpuMat& frame)
     {
         std::lock_guard<std::mutex> lock(detectionMutex);
         m_hasBestTarget = false;
+        memset(&m_bestTargetHost, 0, sizeof(Detection));
+        m_bestTargetIndexHost = -1;
+        m_finalDetectionsCountHost = 0;
+        detectionVersion++;
         return;
     }
 
@@ -552,7 +574,7 @@ void Detector::processFrame(const cv::cuda::GpuMat& frame)
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<float, std::milli> duration = end_time - start_time;
     ctx.g_current_process_frame_time_ms.store(duration.count());
-    add_to_history(ctx.g_process_frame_time_history, duration.count(), ctx.g_process_frame_history_mutex);
+    ctx.add_to_history(ctx.g_process_frame_time_history, duration.count(), ctx.g_process_frame_history_mutex);
 }
 
 void Detector::processFrame(const cv::Mat& frame)
@@ -564,6 +586,10 @@ void Detector::processFrame(const cv::Mat& frame)
     {
         std::lock_guard<std::mutex> lock(detectionMutex);
         m_hasBestTarget = false;
+        memset(&m_bestTargetHost, 0, sizeof(Detection));
+        m_bestTargetIndexHost = -1;
+        m_finalDetectionsCountHost = 0;
+        detectionVersion++;
         return;
     }
 
@@ -578,7 +604,7 @@ void Detector::processFrame(const cv::Mat& frame)
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<float, std::milli> duration = end_time - start_time;
     ctx.g_current_process_frame_time_ms.store(duration.count());
-    add_to_history(ctx.g_process_frame_time_history, duration.count(), ctx.g_process_frame_history_mutex);
+    ctx.add_to_history(ctx.g_process_frame_time_history, duration.count(), ctx.g_process_frame_history_mutex);
 }
 
 void Detector::inferenceThread()
@@ -590,14 +616,59 @@ void Detector::inferenceThread()
     }
 
     cv::cuda::GpuMat frameGpu;
-    static auto last_inference_loop_start_time = std::chrono::high_resolution_clock::time_point{};
+    static auto last_cycle_start_time = std::chrono::high_resolution_clock::time_point{};
 
     while (!ctx.shouldExit)
     {
+        auto cycle_start_time = std::chrono::high_resolution_clock::now();
+        
+        // Calculate detector cycle time (time between cycle starts)
+        if (last_cycle_start_time.time_since_epoch().count() != 0) {
+            std::chrono::duration<float, std::milli> cycle_duration_ms = cycle_start_time - last_cycle_start_time;
+            ctx.g_current_detector_cycle_time_ms.store(cycle_duration_ms.count());
+            ctx.add_to_history(ctx.g_detector_cycle_time_history, cycle_duration_ms.count(), ctx.g_detector_cycle_history_mutex);
+        }
+        last_cycle_start_time = cycle_start_time;
+        
         NVTX_PUSH("Detector Inference Loop");
 
+        if (ctx.shouldExit) {
+            break;
+        }
+
+        // Update ignore flags if needed
+        if (m_ignore_flags_need_update) {
+            std::lock_guard<std::mutex> lock(ctx.configMutex);
+            // Reset all flags to 0 (don't ignore)
+            std::fill(m_host_ignore_flags_uchar.begin(), m_host_ignore_flags_uchar.end(), 0);
+            
+            // Set ignore flags based on class settings
+            for (const auto& class_setting : ctx.config.class_settings) {
+                if (class_setting.id >= 0 && class_setting.id < MAX_CLASSES_FOR_FILTERING) {
+                    m_host_ignore_flags_uchar[class_setting.id] = class_setting.ignore ? 1 : 0;
+                }
+            }
+            
+            // Copy to GPU
+            cudaMemcpyAsync(m_d_ignore_flags_gpu.get(), m_host_ignore_flags_uchar.data(), 
+                           MAX_CLASSES_FOR_FILTERING * sizeof(unsigned char), 
+                           cudaMemcpyHostToDevice, stream);
+            
+            m_ignore_flags_need_update = false;
+            
+            if (ctx.config.verbose) {
+                std::cout << "[Detector] Updated ignore flags - ";
+                for (const auto& cs : ctx.config.class_settings) {
+                    if (cs.ignore) {
+                        std::cout << cs.name << "(ID:" << cs.id << ") ";
+                    }
+                }
+                std::cout << "are ignored" << std::endl;
+            }
+        }
+
         if (ctx.detector_model_changed.load()) {
-            // Reset graph on model change
+            // CUDA Graph reset
             if (m_graphExec) {
                 cudaGraphExecDestroy(m_graphExec);
                 m_graphExec = nullptr;
@@ -656,99 +727,122 @@ void Detector::inferenceThread()
 
         if (hasNewFrame && !frameGpu.empty())
         {
-            auto current_inference_loop_start_time = std::chrono::high_resolution_clock::now();
-            if (last_inference_loop_start_time.time_since_epoch().count() != 0) {
-                std::chrono::duration<float, std::milli> cycle_duration_ms = current_inference_loop_start_time - last_inference_loop_start_time;
-                ctx.g_current_detector_cycle_time_ms.store(cycle_duration_ms.count());
-                add_to_history(ctx.g_detector_cycle_time_history, cycle_duration_ms.count(), ctx.g_detector_cycle_history_mutex);
-            }
-            last_inference_loop_start_time = current_inference_loop_start_time;
-
             try
             {
                 auto inference_start_time = std::chrono::high_resolution_clock::now();
 
-                // Capture graph on first run or if not initialized
-                if (!m_isGraphInitialized)
-                {
-                    // Use a dedicated stream for capture to avoid interference
-                    cudaStream_t captureStream;
-                    cudaStreamCreate(&captureStream);
-
-                    cudaStreamBeginCapture(captureStream, cudaStreamCaptureModeGlobal);
-
-                    preProcess(frameGpu, captureStream);
-                    context->enqueueV3(captureStream);
-                    performGpuPostProcessing(captureStream);
-                    
-                    cudaStreamEndCapture(captureStream, &m_graph);
-                    
-                    cudaGraphInstantiate(&m_graphExec, m_graph, NULL, NULL, 0);
-                    m_isGraphInitialized = true;
-
-                    cudaStreamDestroy(captureStream);
-                }
-
-                // Launch the graph
-                if (m_graphExec) {
-                    cudaGraphLaunch(m_graphExec, stream);
-                } else {
-                    // Fallback or error
-                    std::cerr << "[Detector] CUDA Graph execution failed: graph not initialized." << std::endl;
+                // Execute preprocessing
+                preProcess(frameGpu, stream);
+                
+                // Execute inference directly without CUDA Graph (temporary fix)
+                // Clear any previous CUDA errors before inference
+                cudaGetLastError();
+                
+                bool enqueueSuccess = context->enqueueV3(stream);
+                if (!enqueueSuccess) {
+                    std::cerr << "[Detector] TensorRT enqueueV3 failed during direct inference" << std::endl;
+                    continue;
                 }
                 
-                // Synchronize the main stream to wait for graph completion
-                cudaStreamSynchronize(stream);
+                // Check for CUDA errors after inference
+                cudaError_t inferenceErr = cudaGetLastError();
+                if (inferenceErr != cudaSuccess) {
+                    std::cerr << "[Detector] CUDA error after inference: " << cudaGetErrorString(inferenceErr) << std::endl;
+                    continue;
+                }
+                
+                // Perform post-processing
+                performGpuPostProcessing(stream);
+                
+                // Synchronize the main stream to wait for completion (with exit check)
+                if (!ctx.shouldExit) {
+                    cudaError_t syncResult = cudaStreamSynchronize(stream);
+                    if (syncResult != cudaSuccess) {
+                        std::cerr << "[Detector] CUDA sync failed: " << cudaGetErrorString(syncResult) << std::endl;
+                    }
+                }
 
                 auto inference_end_time = std::chrono::high_resolution_clock::now();
                 std::chrono::duration<float, std::milli> inference_duration_ms = inference_end_time - inference_start_time;
                 ctx.g_current_inference_time_ms.store(inference_duration_ms.count());
-                add_to_history(ctx.g_inference_time_history, inference_duration_ms.count(), ctx.g_inference_history_mutex);
+                ctx.add_to_history(ctx.g_inference_time_history, inference_duration_ms.count(), ctx.g_inference_history_mutex);
 
-                // Post-graph processing (memory copies and logic)
+                // Post-graph processing (memory copies and target selection)
                 int final_detections_count = 0;
-                cudaMemcpy(&final_detections_count, m_finalDetectionsCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost);
+                cudaMemcpyAsync(&final_detections_count, m_finalDetectionsCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
 
-                if (final_detections_count > 0)
-                {
-                    // These operations are fast and can run on the default stream after the graph
-                    calculateTargetScoresGpu(m_finalDetectionsGpu.get(), final_detections_count, m_scoresGpu.get(), ctx.config.detection_resolution, ctx.config.detection_resolution, ctx.config.distance_weight, ctx.config.confidence_weight, m_headClassId, stream);
-                    findBestTargetGpu(m_scoresGpu.get(), final_detections_count, m_bestTargetIndexGpu.get(), stream);
-                    
-                    cudaStreamSynchronize(stream); // Wait for scores and index
-
-                    cudaMemcpy(&m_bestTargetIndexHost, m_bestTargetIndexGpu.get(), sizeof(int), cudaMemcpyDeviceToHost);
-                    
-                    if (m_bestTargetIndexHost >= 0 && m_bestTargetIndexHost < final_detections_count) {
-                        cudaMemcpy(&m_bestTargetHost, &m_finalDetectionsGpu.get()[m_bestTargetIndexHost], sizeof(Detection), cudaMemcpyDeviceToHost);
-                        m_hasBestTarget = true;
-                    } else {
-                        m_hasBestTarget = false;
-                    }
+                // Copy final detections count to host first
+                cudaMemcpyAsync(&m_finalDetectionsCountHost, m_finalDetectionsCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
+                if (!ctx.shouldExit) {
+                    cudaStreamSynchronize(stream);
                 }
-                else
-                {
-                    m_hasBestTarget = false;
-                }
-
+                
+                // Target handling logic with proper reset
                 {
                     std::lock_guard<std::mutex> lock(detectionMutex);
+                    
+                    // 1. Always reset the target state at the beginning of every cycle.
+                    m_hasBestTarget = false;
+                    memset(&m_bestTargetHost, 0, sizeof(Detection));
+                    m_bestTargetIndexHost = -1;
+                    
+                    // 2. Only proceed if the current frame has actual detections.
+                    if (m_finalDetectionsCountHost > 0 && !ctx.shouldExit)
+                    {
+                        // 3. Find the best target among the current, valid detections.
+                        calculateTargetScoresGpu(m_finalDetectionsGpu.get(), m_finalDetectionsCountHost, m_scoresGpu.get(), ctx.config.detection_resolution, ctx.config.detection_resolution, ctx.config.distance_weight, ctx.config.confidence_weight, m_headClassId, stream);
+                        findBestTargetGpu(m_scoresGpu.get(), m_finalDetectionsCountHost, m_bestTargetIndexGpu.get(), stream);
+                        cudaMemcpyAsync(&m_bestTargetIndexHost, m_bestTargetIndexGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
+                        cudaStreamSynchronize(stream);
+
+                        // 4. If a valid best target is found, update the state.
+                        if (m_bestTargetIndexHost >= 0 && m_bestTargetIndexHost < m_finalDetectionsCountHost) {
+                            cudaMemcpy(&m_bestTargetHost, &m_finalDetectionsGpu.get()[m_bestTargetIndexHost], sizeof(Detection), cudaMemcpyDeviceToHost);
+                            m_hasBestTarget = true; // Set to true only if a target is found in THIS frame.
+                        }
+                    }
+                    
+                    // Force clear target state if no detections found
+                    if (m_finalDetectionsCountHost == 0) {
+                        m_hasBestTarget = false;
+                        memset(&m_bestTargetHost, 0, sizeof(Detection));
+                        m_bestTargetIndexHost = -1;
+                    }
+                    
                     detectionVersion++;
                 }
                 detectionCV.notify_one();
+
             }
             catch (const std::exception& e)
             {
                 std::cerr << "[Detector] Error during inference loop: " << e.what() << std::endl;
                 m_hasBestTarget = false;
+                memset(&m_bestTargetHost, 0, sizeof(Detection));
+                m_bestTargetIndexHost = -1;
+                m_finalDetectionsCountHost = 0;
             }
         } else if (hasNewFrame) {
              {
                 std::lock_guard<std::mutex> lock(detectionMutex);
                 m_hasBestTarget = false;
+                memset(&m_bestTargetHost, 0, sizeof(Detection));
+                m_bestTargetIndexHost = -1;
+                m_finalDetectionsCountHost = 0;
                 detectionVersion++;
              }
              detectionCV.notify_one();
+        } else {
+            // No new frame received - clear target to prevent stale data
+            {
+                std::lock_guard<std::mutex> lock(detectionMutex);
+                m_hasBestTarget = false;
+                memset(&m_bestTargetHost, 0, sizeof(Detection));
+                m_bestTargetIndexHost = -1;
+                m_finalDetectionsCountHost = 0;
+                detectionVersion++;
+            }
+            detectionCV.notify_one();
         }
         NVTX_POP();
     }
@@ -781,17 +875,40 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
     float local_nms_threshold;
     float local_confidence_threshold;
     std::string local_postprocess;
+
+    // Get HSV mask info
+    const unsigned char* hsvMaskPtr = nullptr;
+    int maskPitch = 0;
+    int current_min_hsv_pixels_val;
+    bool current_remove_hsv_matches_val;
+    int current_max_output_detections_val;
+
     { 
         std::lock_guard<std::mutex> lock(ctx.configMutex);
         local_max_detections = ctx.config.max_detections;
         local_nms_threshold = ctx.config.nms_threshold;
         local_confidence_threshold = ctx.config.confidence_threshold;
         local_postprocess = ctx.config.postprocess;
+
+        if (ctx.config.enable_hsv_filter) { 
+            std::lock_guard<std::mutex> hsv_lock(hsvMaskMutex); 
+            if (!m_hsvMaskGpu.empty()) {
+                hsvMaskPtr = m_hsvMaskGpu.ptr<unsigned char>();
+                maskPitch = static_cast<int>(m_hsvMaskGpu.step);
+            }
+        }
+        current_min_hsv_pixels_val = ctx.config.min_hsv_pixels;
+        current_remove_hsv_matches_val = ctx.config.remove_hsv_matches;
+        current_max_output_detections_val = local_max_detections; 
     }
 
     int maxDecodedDetections = local_max_detections * 2;
 
+    // GPU decoding debug info removed - enable for debugging if needed
+
     if (local_postprocess == "yolo10") {
+        int max_candidates = (shape.size() > 1) ? shape[1] : 0;
+        
         decodeErr = decodeYolo10Gpu(
             d_rawOutputPtr,
             outputType,
@@ -801,9 +918,12 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
             this->img_scale,
             m_decodedDetectionsGpu.get(),
             m_decodedCountGpu.get(),
+            max_candidates,
             maxDecodedDetections,
             stream);
     } else if (local_postprocess == "yolo8" || local_postprocess == "yolo9" || local_postprocess == "yolo11" || local_postprocess == "yolo12") {
+        int max_candidates = (shape.size() > 2) ? shape[2] : 0;
+        
          decodeErr = decodeYolo11Gpu(
             d_rawOutputPtr,
             outputType,
@@ -813,6 +933,7 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
             this->img_scale,
             m_decodedDetectionsGpu.get(),
             m_decodedCountGpu.get(),
+            max_candidates,
             maxDecodedDetections,
             stream);
     } else {
@@ -823,147 +944,70 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
 
     if (decodeErr != cudaSuccess) {
         std::cerr << "[Detector] GPU decoding kernel launch/execution failed: " << cudaGetErrorString(decodeErr) << std::endl;
+        std::cerr << "[Detector] CUDA Error Code: " << decodeErr << std::endl;
         cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
         return;
     }
 
-    
-    int decodedCountHost = 0;
-    cudaError_t decodeCountCopyErr = cudaMemcpyAsync(&decodedCountHost, m_decodedCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
-    if (decodeCountCopyErr != cudaSuccess) {
-        std::cerr << "[Detector] Failed to copy decoded count DtoH: " << cudaGetErrorString(decodeCountCopyErr) << std::endl;
-        cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
-        return;
-    }
-
-    
-    // Only sync when we need to read the count
+    // Synchronize stream to get the actual decoded count from GPU
     cudaStreamSynchronize(stream);
-    
-    int classFilteredCountHost = 0;
-    if (decodedCountHost > 0) {
-        int validDecodedDetections = std::min(decodedCountHost, static_cast<int>(local_max_detections * 2));
-        if (validDecodedDetections > 0) {
-            
-            // Only update ignore flags when necessary
-            if (m_ignore_flags_need_update) {
-                { 
-                    std::lock_guard<std::mutex> lock(ctx.configMutex);
-                    
-                    std::fill(m_host_ignore_flags_uchar.begin(), m_host_ignore_flags_uchar.end(), 1); 
-                    for (const auto& class_setting : ctx.config.class_settings) {
-                        if (class_setting.id >= 0 && class_setting.id < MAX_CLASSES_FOR_FILTERING) {
-                            m_host_ignore_flags_uchar[class_setting.id] = static_cast<unsigned char>(class_setting.ignore);
-                        }
-                    }
-                }
+    int actualDecodedCount = 0;
+    cudaMemcpy(&actualDecodedCount, m_decodedCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost);
 
-                if (m_d_ignore_flags_gpu.get()) {
-                    cudaError_t copyErr = cudaMemcpyAsync(m_d_ignore_flags_gpu.get(), m_host_ignore_flags_uchar.data(), 
-                                                          MAX_CLASSES_FOR_FILTERING * sizeof(unsigned char), 
-                                                          cudaMemcpyHostToDevice, stream);
-                    if (!checkCudaError(copyErr, "copying updated ignore flags to GPU")) {
-                        cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
-                        return;
-                    }
-                } else {
-                    std::cerr << "[Detector] Ignore flags GPU buffer not allocated!" << std::endl;
-                    cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
-                    return;
-                }
-                m_ignore_flags_need_update = false; 
-            }
-
-            
-            const unsigned char* hsvMaskPtr = nullptr;
-            int maskPitch = 0;
-            int current_min_hsv_pixels_val;
-            bool current_remove_hsv_matches_val;
-            int current_max_output_detections_val;
-
-            { 
-                std::lock_guard<std::mutex> lock(ctx.configMutex);
-                if (ctx.config.enable_hsv_filter) { 
-                    std::lock_guard<std::mutex> hsv_lock(hsvMaskMutex); 
-                    if (!m_hsvMaskGpu.empty()) {
-                        hsvMaskPtr = m_hsvMaskGpu.ptr<unsigned char>();
-                        maskPitch = static_cast<int>(m_hsvMaskGpu.step);
-                    }
-                }
-                current_min_hsv_pixels_val = ctx.config.min_hsv_pixels;
-                current_remove_hsv_matches_val = ctx.config.remove_hsv_matches;
-                current_max_output_detections_val = local_max_detections; 
-            } 
-            
-            
-            cudaError_t filterErr = filterDetectionsByClassIdGpu(
-                m_decodedDetectionsGpu.get(),
-                validDecodedDetections,
-                m_classFilteredDetectionsGpu.get(),
-                m_classFilteredCountGpu.get(),
-                m_d_ignore_flags_gpu.get(),
-                MAX_CLASSES_FOR_FILTERING,
-                hsvMaskPtr,
-                maskPitch,
-                current_min_hsv_pixels_val,
-                current_remove_hsv_matches_val,
-                current_max_output_detections_val,
-                stream
-            );
-            if (!checkCudaError(filterErr, "filtering detections by class ID GPU")) {
-                 cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
-                 return;
-            }
-
-            cudaError_t filteredCountCopyErr = cudaMemcpyAsync(&classFilteredCountHost, m_classFilteredCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
-            // Reduce sync points - only sync when necessary
-            cudaStreamSynchronize(stream);
-            if (filteredCountCopyErr != cudaSuccess) {
-                std::cerr << "[Detector] Failed to copy filtered detection count DtoH: " << cudaGetErrorString(filteredCountCopyErr) << std::endl;
-                classFilteredCountHost = 0;
-            }
-        } else {
-            classFilteredCountHost = 0;
-            cudaMemsetAsync(m_classFilteredCountGpu.get(), 0, sizeof(int), stream);
-        }
-    } else {
-        classFilteredCountHost = 0;
-        cudaMemsetAsync(m_classFilteredCountGpu.get(), 0, sizeof(int), stream);
+    // Always process detections - let GPU kernels handle empty cases
+    cudaError_t filterErr = filterDetectionsByClassIdGpu(
+        m_decodedDetectionsGpu.get(),
+        actualDecodedCount, // Pass the actual count of decoded detections
+        m_classFilteredDetectionsGpu.get(),
+        m_classFilteredCountGpu.get(),
+        m_d_ignore_flags_gpu.get(),
+        MAX_CLASSES_FOR_FILTERING,
+        hsvMaskPtr,
+        maskPitch,
+        current_min_hsv_pixels_val,
+        current_remove_hsv_matches_val,
+        current_max_output_detections_val,
+        stream
+    );
+    if (!checkCudaError(filterErr, "filtering detections by class ID GPU")) {
+         cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
+         return;
     }
 
-    
-    if (classFilteredCountHost > 0) {
-        // Limit NMS input to reduce computation - only top 5 for performance
-        int inputNmsCount = std::min(classFilteredCountHost, std::min(local_max_detections, 5)); 
-        if (inputNmsCount > 0) {
-            try {
-                NMSGpu(
-                    m_classFilteredDetectionsGpu.get(),
-                    inputNmsCount,            
-                    m_finalDetectionsGpu.get(),       
-                    m_finalDetectionsCountGpu.get(),  
-                    static_cast<int>(local_max_detections), 
-                    local_nms_threshold,
-                    m_nms_d_x1.get(),
-                    m_nms_d_y1.get(),
-                    m_nms_d_x2.get(),
-                    m_nms_d_y2.get(),
-                    m_nms_d_areas.get(),
-                    m_nms_d_scores.get(),     
-                    m_nms_d_classIds.get(),   
-                    m_nms_d_iou_matrix.get(),
-                    m_nms_d_keep.get(),
-                    m_nms_d_indices.get(),
-                    stream
-                );
-            } catch (const std::exception& e) {
-                 std::cerr << "[Detector] Exception during NMSGpu call: " << e.what() << std::endl;
-                 cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
-            }
-        } else {
-            cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
-        }
-    } else {
+    // Check filtered count
+    int classFilteredCount = 0;
+    cudaMemcpy(&classFilteredCount, m_classFilteredCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost);
+
+    // Early exit if no detections after filtering - clear final results
+    if (classFilteredCount == 0) {
+        cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
+        cudaStreamSynchronize(stream);
+        return;
+    }
+
+    // Run NMS only if we have detections
+    try {
+        NMSGpu(
+            m_classFilteredDetectionsGpu.get(),
+            std::min(local_max_detections, 10), // Process up to 10 detections for performance
+            m_finalDetectionsGpu.get(),       
+            m_finalDetectionsCountGpu.get(),  
+            static_cast<int>(local_max_detections), 
+            local_nms_threshold,
+            m_nms_d_x1.get(),
+            m_nms_d_y1.get(),
+            m_nms_d_x2.get(),
+            m_nms_d_y2.get(),
+            m_nms_d_areas.get(),
+            m_nms_d_scores.get(),     
+            m_nms_d_classIds.get(),   
+            m_nms_d_iou_matrix.get(),
+            m_nms_d_keep.get(),
+            m_nms_d_indices.get(),
+            stream
+        );
+    } catch (const std::exception& e) {
+         std::cerr << "[Detector] Exception during NMSGpu call: " << e.what() << std::endl;
          cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
     }
 }
@@ -1056,8 +1100,38 @@ void Detector::initializeBuffers() {
         std::cerr << "[Detector] Error: Cannot initialize buffers without valid context and stream." << std::endl;
         return; 
     }
+
+    // Determine max_candidates based on the model's output shape
+    int max_candidates = 0;
+    if (!outputNames.empty()) {
+        const std::string& primaryOutputName = outputNames[0];
+        const std::vector<int64_t>& shape = outputShapes[primaryOutputName];
+        if (ctx.config.postprocess == "yolo10") {
+            max_candidates = (shape.size() > 1) ? static_cast<int>(shape[1]) : 0;
+        } else if (ctx.config.postprocess == "yolo8" || ctx.config.postprocess == "yolo9" || ctx.config.postprocess == "yolo11" || ctx.config.postprocess == "yolo12") {
+            max_candidates = (shape.size() > 2) ? static_cast<int>(shape[2]) : 0;
+        }
+        
+        std::cout << "[Detector] Buffer allocation info:" << std::endl;
+        std::cout << "  - Primary output: " << primaryOutputName << std::endl;
+        std::cout << "  - Shape: [";
+        for (size_t i = 0; i < shape.size(); ++i) {
+            std::cout << shape[i];
+            if (i < shape.size() - 1) std::cout << ", ";
+        }
+        std::cout << "]" << std::endl;
+        std::cout << "  - Max candidates: " << max_candidates << std::endl;
+    }
+
+    if (max_candidates == 0) {
+        std::cerr << "[Detector] Warning: Could not determine max_candidates from model output shape. Using default max_detections * 2." << std::endl;
+        max_candidates = ctx.config.max_detections * 2; // Fallback
+    }
     
-    m_decodedDetectionsGpu.allocate(ctx.config.max_detections * 2);
+    // Allocate extra buffer space for safety
+    int buffer_size = max_candidates * 2;
+    std::cout << "[Detector] Allocating decoded detections buffer: " << buffer_size << " detections" << std::endl;
+    m_decodedDetectionsGpu.allocate(buffer_size);
     m_decodedCountGpu.allocate(1);
     m_finalDetectionsGpu.allocate(ctx.config.max_detections);
     m_finalDetectionsCountGpu.allocate(1);
@@ -1123,6 +1197,11 @@ void Detector::stop()
 {
     auto& ctx = AppContext::getInstance();
     ctx.shouldExit = true;
+    
+    // Notify all condition variables to wake up waiting threads
+    inferenceCV.notify_all(); 
+    detectionCV.notify_all();
+    
     if (m_captureThread.joinable())
     {
         m_captureThread.join();
@@ -1131,4 +1210,99 @@ void Detector::stop()
     {
         m_inferenceThread.join();
     }
+}
+
+// TensorRT utility functions implementation
+nvinfer1::ICudaEngine* buildEngineFromOnnx(const std::string& onnxPath)
+{
+    class SimpleLogger : public nvinfer1::ILogger {
+        void log(Severity severity, const char* msg) noexcept override {
+            if (severity <= Severity::kWARNING) std::cout << "[TensorRT] " << msg << std::endl;
+        }
+    };
+    static SimpleLogger logger;
+
+    auto& ctx = AppContext::getInstance();
+    
+    std::unique_ptr<nvinfer1::IBuilder> builder(nvinfer1::createInferBuilder(logger));
+    if (!builder) return nullptr;
+
+    std::unique_ptr<nvinfer1::INetworkDefinition> network(builder->createNetworkV2(1U << static_cast<uint32_t>(nvinfer1::NetworkDefinitionCreationFlag::kEXPLICIT_BATCH)));
+    if (!network) return nullptr;
+
+    std::unique_ptr<nvonnxparser::IParser> parser(nvonnxparser::createParser(*network, logger));
+    if (!parser) return nullptr;
+
+    if (!parser->parseFromFile(onnxPath.c_str(), static_cast<int>(nvinfer1::ILogger::Severity::kWARNING))) {
+        std::cerr << "[TensorRT] Failed to parse ONNX file: " << onnxPath << std::endl;
+        return nullptr;
+    }
+
+    std::unique_ptr<nvinfer1::IBuilderConfig> config(builder->createBuilderConfig());
+    if (!config) return nullptr;
+
+    config->setMemoryPoolLimit(nvinfer1::MemoryPoolType::kWORKSPACE, 1U << 30); // 1GB
+
+    if (ctx.config.tensorrt_fp16 && builder->platformHasFastFp16()) {
+        config->setFlag(nvinfer1::BuilderFlag::kFP16);
+        std::cout << "[TensorRT] FP16 optimization enabled" << std::endl;
+    }
+
+    // Create optimization profile for dynamic inputs
+    auto profile = builder->createOptimizationProfile();
+    if (!profile) {
+        std::cerr << "[TensorRT] Failed to create optimization profile" << std::endl;
+        return nullptr;
+    }
+
+    // Set optimization profile for the input (assuming batch size = 1, channels = 3, and dynamic height/width)
+    const char* inputName = network->getInput(0)->getName();
+    nvinfer1::Dims inputDims = network->getInput(0)->getDimensions();
+    
+    // For YOLO models, typically the input is [1, 3, height, width]
+    // Set min, opt, and max dimensions - using the config's input resolution
+    int resolution = ctx.config.onnx_input_resolution;
+    nvinfer1::Dims minDims = nvinfer1::Dims4{1, 3, resolution, resolution};
+    nvinfer1::Dims optDims = nvinfer1::Dims4{1, 3, resolution, resolution};
+    nvinfer1::Dims maxDims = nvinfer1::Dims4{1, 3, resolution, resolution};
+    
+    profile->setDimensions(inputName, nvinfer1::OptProfileSelector::kMIN, minDims);
+    profile->setDimensions(inputName, nvinfer1::OptProfileSelector::kOPT, optDims);
+    profile->setDimensions(inputName, nvinfer1::OptProfileSelector::kMAX, maxDims);
+    
+    config->addOptimizationProfile(profile);
+
+    return builder->buildEngineWithConfig(*network, *config);
+}
+
+nvinfer1::ICudaEngine* loadEngineFromFile(const std::string& enginePath)
+{
+    class SimpleLogger : public nvinfer1::ILogger {
+        void log(Severity severity, const char* msg) noexcept override {
+            if (severity <= Severity::kWARNING) std::cout << "[TensorRT] " << msg << std::endl;
+        }
+    };
+    static SimpleLogger logger;
+
+    std::ifstream file(enginePath, std::ios::binary);
+    if (!file.is_open()) {
+        std::cerr << "[TensorRT] Failed to open engine file: " << enginePath << std::endl;
+        return nullptr;
+    }
+
+    file.seekg(0, std::ios::end);
+    size_t size = file.tellg();
+    file.seekg(0, std::ios::beg);
+
+    std::vector<char> buffer(size);
+    file.read(buffer.data(), size);
+    file.close();
+
+    std::unique_ptr<nvinfer1::IRuntime> runtime(nvinfer1::createInferRuntime(logger));
+    if (!runtime) {
+        std::cerr << "[TensorRT] Failed to create runtime" << std::endl;
+        return nullptr;
+    }
+
+    return runtime->deserializeCudaEngine(buffer.data(), size);
 }

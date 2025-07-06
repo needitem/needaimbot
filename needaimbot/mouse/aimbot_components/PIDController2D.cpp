@@ -3,8 +3,9 @@
 #include <algorithm>
 #include <mutex>
 #include "../../config/config.h"
+#include "../../AppContext.h"
 
-extern Config config;
+// extern Config config;  // Removed - use AppContext::getInstance().config instead
 extern std::mutex configMutex; 
 
 PIDController2D::PIDController2D(float kp_x, float ki_x, float kd_x, float kp_y, float ki_y, float kd_y)
@@ -104,8 +105,9 @@ Eigen::Vector2f PIDController2D::calculateAdaptive(const Eigen::Vector2f &error,
     // Adaptive smoothing - less smoothing for close targets, more for far targets
     float smoothing;
     {
+        auto& ctx = AppContext::getInstance();
         std::lock_guard<std::mutex> lock(configMutex);
-        smoothing = config.pid_derivative_smoothing;
+        smoothing = ctx.config.pid_derivative_smoothing;
     }
     if (error_magnitude > 50.0f) {
         smoothing = std::min(0.6f, smoothing + (error_magnitude - 50.0f) * 0.002f);

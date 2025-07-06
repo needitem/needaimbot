@@ -22,6 +22,7 @@
   <ItemGroup>
     <ClCompile Include="detector\capture.cpp" />
     <ClCompile Include="detector\duplication_api_capture.cpp" />
+    <ClCompile Include="detector\simple_capture.cpp" />
     <ClCompile Include="detector\game_capture.cpp" />
     <ClCompile Include="config\config.cpp" />
     <ClCompile Include="detector\detector.cpp" />
@@ -70,6 +71,7 @@
     <ClInclude Include="detector\capture.h" />
     <ClInclude Include="detector\CudaBuffer.h" />
     <ClInclude Include="detector\duplication_api_capture.h" />
+    <ClInclude Include="detector\simple_capture.h" />
     <ClInclude Include="detector\game_capture.h" />
     <ClInclude Include="detector\hook_info.h" />
     <ClInclude Include="capture\winrt_capture.h" />
@@ -119,6 +121,7 @@
     <ClInclude Include="overlay\overlay.h" />
     <ClInclude Include="overlay\ui_helpers.h" />
     <ClInclude Include="overlay\visuals.h" />
+    <ClInclude Include="AppContext.h" />
     <ClInclude Include="needaimbot.h" />
   </ItemGroup>
   <ItemGroup>
@@ -197,7 +200,7 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LinkIncremental>false</LinkIncremental>
     <IncludePath>$(MSBuildProjectDirectory)\modules\serial\include;$(MSBuildProjectDirectory);$(MSBuildProjectDirectory)\imgui;$(MSBuildProjectDirectory)\keyboard;$(MSBuildProjectDirectory)\config;$(MSBuildProjectDirectory)\detector;$(MSBuildProjectDirectory)\mouse;$(MSBuildProjectDirectory)\overlay;$(MSBuildProjectDirectory)\modules\opencv\build\install\include;$(WindowsSDK_IncludePath);$(WindowsSDK_IncludePath)\cppwinrt;$(MSBuildProjectDirectory)\modules\TensorRT-10.8.0.43\include;include;$(ProgramW6432)\NVIDIA GPU Computing Toolkit\CUDA\v12.8\include;$(ProgramW6432)\NVIDIA\CUDNN\v9.7\include\12.8;$(IncludePath)</IncludePath>
-    <LibraryPath>$(MSBuildProjectDirectory)\modules\serial\visual_studio\x64\Release;$(MSBuildProjectDirectory)\modules\opencv\build\install\x64\vc17\lib;$(MSBuildProjectDirectory)\modules\\TensorRT-10.8.0.43\lib;$(ProgramW6432)\NVIDIA GPU Computing Toolkit\CUDA\v12.8\lib\x64;$(ProgramW6432)\NVIDIA\CUDNN\v9.7\lib\12.8;$(LibraryPath)</LibraryPath>
+    <LibraryPath>$(MSBuildProjectDirectory)\modules\serial\visual_studio\x64\Release;$(MSBuildProjectDirectory)\modules\opencv\build\install\x64\vc17\lib;$(MSBuildProjectDirectory)\modules\\TensorRT-10.8.0.43\lib;$(ProgramW6432)\NVIDIA GPU Computing Toolkit\CUDA\v12.8\lib\x64;$(ProgramW6432)\NVIDIA\CUDNN\v9.7\lib\12.8;$(MSBuildProjectDirectory)\modules\glfw-3.4.bin.WIN64\lib-vc2022;$(LibraryPath)</LibraryPath>
     <TargetName>ai</TargetName>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">

@@ -551,67 +551,6 @@ void draw_mouse()
     }
 
     
-    ImGui::SeparatorText("Silent Aim Hotkeys");
-
-    for (size_t i = 0; i < ctx.config.button_silent_aim.size(); )
-    {
-        std::string& current_key_name = ctx.config.button_silent_aim[i];
-
-        int current_index = -1;
-        for (size_t k = 0; k < key_names.size(); ++k)
-        {
-            if (key_names[k] == current_key_name)
-            {
-                current_index = static_cast<int>(k);
-                break;
-            }
-        }
-
-        if (current_index == -1)
-        {
-            current_index = 0; 
-        }
-
-        std::string combo_label = "Silent Aim Hotkey " + std::to_string(i);
-
-        ImGui::PushID(combo_label.c_str()); 
-        ImGui::PushItemWidth(150); 
-        if (ImGui::Combo("", &current_index, key_names_cstrs.data(), static_cast<int>(key_names_cstrs.size())))
-        {
-            current_key_name = key_names[current_index];
-            ctx.config.saveConfig();
-        }
-        ImGui::PopItemWidth();
-        ImGui::PopID();
-
-        ImGui::SameLine();
-        std::string remove_button_label = "Remove##silent_aim_hotkey_" + std::to_string(i);
-        if (ImGui::Button(remove_button_label.c_str()))
-        {
-            if (ctx.config.button_silent_aim.size() <= 1)
-            {
-                ctx.config.button_silent_aim[0] = std::string("None");
-                ctx.config.saveConfig();
-                
-            }
-            else
-            {
-                ctx.config.button_silent_aim.erase(ctx.config.button_silent_aim.begin() + i);
-                ctx.config.saveConfig();
-                
-            }
-            continue; 
-        }
-
-        ++i;
-    }
-
-    if (ImGui::Button("Add Silent Aim Hotkey##silent_aim_hotkey"))
-    {
-        ctx.config.button_silent_aim.push_back("None");
-        ctx.config.saveConfig();
-    }
-    
 
     
     

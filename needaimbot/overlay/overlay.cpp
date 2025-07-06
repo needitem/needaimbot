@@ -37,7 +37,7 @@ IDXGISwapChain* g_pSwapChain = NULL;
 ID3D11RenderTargetView* g_mainRenderTargetView = NULL;
 HWND g_hwnd = NULL;
 
-extern Config config;
+// extern Config config;  // Removed - use AppContext::getInstance().config instead
 extern std::mutex configMutex;
 extern std::atomic<bool> shouldExit;
 
@@ -181,6 +181,7 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         return 0;
     case WM_DESTROY:
         shouldExit = true;
+        AppContext::getInstance().shouldExit = true;
         ::PostQuitMessage(0);
         return 0;
     default:
@@ -308,6 +309,7 @@ void SetupImGui()
 bool CreateOverlayWindow()
 {
     auto& ctx = AppContext::getInstance();
+    auto& config = ctx.config;  // Reference to avoid global config confusion
     
     overlayWidth = static_cast<int>(BASE_OVERLAY_WIDTH * ctx.config.overlay_ui_scale);
     overlayHeight = static_cast<int>(BASE_OVERLAY_HEIGHT * ctx.config.overlay_ui_scale);
@@ -354,6 +356,8 @@ bool CreateOverlayWindow()
 
 void OverlayThread()
 {
+    auto& ctx = AppContext::getInstance();
+    
     if (!CreateOverlayWindow())
     {
         std::cout << "[Overlay] Can't create overlay window!" << std::endl;
@@ -365,52 +369,52 @@ void OverlayThread()
     bool show_overlay = false;
 
     
-    int prev_detection_resolution = config.detection_resolution;
-    int prev_capture_fps = config.capture_fps;
-    int prev_monitor_idx = config.monitor_idx;
-    bool prev_circle_mask = config.circle_mask;
-    bool prev_capture_borders = config.capture_borders;
-    bool prev_capture_cursor = config.capture_cursor;
+    int prev_detection_resolution = ctx.config.detection_resolution;
+    int prev_capture_fps = ctx.config.capture_fps;
+    int prev_monitor_idx = ctx.config.monitor_idx;
+    bool prev_circle_mask = ctx.config.circle_mask;
+    bool prev_capture_borders = ctx.config.capture_borders;
+    bool prev_capture_cursor = ctx.config.capture_cursor;
 
     
-    float prev_body_y_offset = config.body_y_offset;
-    float prev_head_y_offset = config.head_y_offset;
-    bool prev_ignore_third_person = config.ignore_third_person;
-    bool prev_shooting_range_targets = config.shooting_range_targets;
-    bool prev_auto_aim = config.auto_aim;
+    float prev_body_y_offset = ctx.config.body_y_offset;
+    float prev_head_y_offset = ctx.config.head_y_offset;
+    bool prev_ignore_third_person = ctx.config.ignore_third_person;
+    bool prev_shooting_range_targets = ctx.config.shooting_range_targets;
+    bool prev_auto_aim = ctx.config.auto_aim;
 
     
-    bool prev_easynorecoil = config.easynorecoil;
-    float prev_easynorecoilstrength = config.easynorecoilstrength;
+    bool prev_easynorecoil = ctx.config.easynorecoil;
+    float prev_easynorecoilstrength = ctx.config.easynorecoilstrength;
 
     
-    float prev_kp_x = config.kp_x;
-    float prev_ki_x = config.ki_x;
-    float prev_kd_x = config.kd_x;
-    float prev_kp_y = config.kp_y;
-    float prev_ki_y = config.ki_y;
-    float prev_kd_y = config.kd_y;
+    float prev_kp_x = ctx.config.kp_x;
+    float prev_ki_x = ctx.config.ki_x;
+    float prev_kd_x = ctx.config.kd_x;
+    float prev_kp_y = ctx.config.kp_y;
+    float prev_ki_y = ctx.config.ki_y;
+    float prev_kd_y = ctx.config.kd_y;
     
     
 
     
-    float prev_bScope_multiplier = config.bScope_multiplier;
+    float prev_bScope_multiplier = ctx.config.bScope_multiplier;
 
     
-    float prev_confidence_threshold = config.confidence_threshold;
-    float prev_nms_threshold = config.nms_threshold;
-    int prev_max_detections = config.max_detections;
+    float prev_confidence_threshold = ctx.config.confidence_threshold;
+    float prev_nms_threshold = ctx.config.nms_threshold;
+    int prev_max_detections = ctx.config.max_detections;
 
     
-    int prev_opacity = config.overlay_opacity;
+    int prev_opacity = ctx.config.overlay_opacity;
 
     
-    bool prev_show_window = config.show_window;
-    bool prev_show_fps = config.show_fps;
-    int prev_window_size = config.window_size;
-    int prev_screenshot_delay = config.screenshot_delay;
-    bool prev_always_on_top = config.always_on_top;
-    bool prev_verbose = config.verbose;
+    bool prev_show_window = ctx.config.show_window;
+    bool prev_show_fps = ctx.config.show_fps;
+    int prev_window_size = ctx.config.window_size;
+    int prev_screenshot_delay = ctx.config.screenshot_delay;
+    bool prev_always_on_top = ctx.config.always_on_top;
+    bool prev_verbose = ctx.config.verbose;
 
     for (const auto& pair : KeyCodes::key_code_map)
     {
@@ -425,11 +429,11 @@ void OverlayThread()
     }
 
     int input_method_index = 0;
-    if (config.input_method == "WIN32")
+    if (ctx.config.input_method == "WIN32")
         input_method_index = 0;
-    else if (config.input_method == "GHUB")
+    else if (ctx.config.input_method == "GHUB")
         input_method_index = 1;
-    else if (config.input_method == "ARDUINO")
+    else if (ctx.config.input_method == "ARDUINO")
         input_method_index = 2;
     else
         input_method_index = 0;
@@ -451,7 +455,7 @@ void OverlayThread()
     MSG msg;
     ZeroMemory(&msg, sizeof(msg));
 
-    // Overlay rendering frame timing - Use config.target_fps for user control
+    // Overlay rendering frame timing - Use ctx.config.target_fps for user control
     auto lastOverlayFrameTime = std::chrono::high_resolution_clock::now();
     
     // Config save batching to reduce I/O
@@ -459,7 +463,7 @@ void OverlayThread()
     auto last_config_save_time = std::chrono::high_resolution_clock::now();
     const std::chrono::milliseconds config_save_interval(500); // Save config every 500ms max
 
-    while (!shouldExit)
+    while (!shouldExit && !AppContext::getInstance().shouldExit)
     {
         while (::PeekMessage(&msg, NULL, 0U, 0U, PM_REMOVE))
         {
@@ -472,7 +476,7 @@ void OverlayThread()
             }
         }
 
-        if (isAnyKeyPressed(config.button_open_overlay) & 0x1)
+        if (isAnyKeyPressed(ctx.config.button_open_overlay) & 0x1)
         {
             show_overlay = !show_overlay;
 
@@ -588,102 +592,102 @@ void OverlayThread()
                 
                 if (should_check_config) {
                     
-                    if (prev_detection_resolution != config.detection_resolution)
+                    if (prev_detection_resolution != ctx.config.detection_resolution)
                     {
-                        prev_detection_resolution = config.detection_resolution;
+                        prev_detection_resolution = ctx.config.detection_resolution;
                         detection_resolution_changed.store(true);
                         detector_model_changed.store(true); 
 
                         
                         if (AppContext::getInstance().globalMouseThread) {
                             AppContext::getInstance().globalMouseThread->updateConfig(
-                                config.detection_resolution,
-                                config.kp_x,
-                                config.ki_x,
-                                config.kd_x,
-                                config.kp_y,
-                                config.ki_y,
-                                config.kd_y,
-                                config.bScope_multiplier,
-                                config.norecoil_ms
+                                ctx.config.detection_resolution,
+                                ctx.config.kp_x,
+                                ctx.config.ki_x,
+                                ctx.config.kd_x,
+                                ctx.config.kp_y,
+                                ctx.config.ki_y,
+                                ctx.config.kd_y,
+                                ctx.config.bScope_multiplier,
+                                ctx.config.norecoil_ms
                             );
                         }
                         config_needs_save = true;
                     }
 
                     
-                    if (prev_capture_cursor != config.capture_cursor)
+                    if (prev_capture_cursor != ctx.config.capture_cursor)
                     {
                         capture_cursor_changed.store(true);
-                        prev_capture_cursor = config.capture_cursor;
+                        prev_capture_cursor = ctx.config.capture_cursor;
                         config_needs_save = true;
                     }
 
                     
-                    if (prev_capture_borders != config.capture_borders)
+                    if (prev_capture_borders != ctx.config.capture_borders)
                     {
                         capture_borders_changed.store(true);
-                        prev_capture_borders = config.capture_borders;
+                        prev_capture_borders = ctx.config.capture_borders;
                         config_needs_save = true;
                     }
 
                     
-                    if (prev_capture_fps != config.capture_fps ||
-                        prev_monitor_idx != config.monitor_idx)
+                    if (prev_capture_fps != ctx.config.capture_fps ||
+                        prev_monitor_idx != ctx.config.monitor_idx)
                     {
                         capture_fps_changed.store(true);
-                        prev_monitor_idx = config.monitor_idx;
-                        prev_capture_fps = config.capture_fps;
+                        prev_monitor_idx = ctx.config.monitor_idx;
+                        prev_capture_fps = ctx.config.capture_fps;
                         config_needs_save = true;
                     }
 
                     
                     if (
-                        prev_body_y_offset != config.body_y_offset ||
-                        prev_head_y_offset != config.head_y_offset ||
-                        prev_ignore_third_person != config.ignore_third_person ||
-                        prev_shooting_range_targets != config.shooting_range_targets ||
-                        prev_auto_aim != config.auto_aim ||
-                        prev_easynorecoil != config.easynorecoil ||
-                        prev_easynorecoilstrength != config.easynorecoilstrength)
+                        prev_body_y_offset != ctx.config.body_y_offset ||
+                        prev_head_y_offset != ctx.config.head_y_offset ||
+                        prev_ignore_third_person != ctx.config.ignore_third_person ||
+                        prev_shooting_range_targets != ctx.config.shooting_range_targets ||
+                        prev_auto_aim != ctx.config.auto_aim ||
+                        prev_easynorecoil != ctx.config.easynorecoil ||
+                        prev_easynorecoilstrength != ctx.config.easynorecoilstrength)
                     {
                         
-                        prev_body_y_offset = config.body_y_offset;
-                        prev_head_y_offset = config.head_y_offset;
-                        prev_ignore_third_person = config.ignore_third_person;
-                        prev_shooting_range_targets = config.shooting_range_targets;
-                        prev_auto_aim = config.auto_aim;
-                        prev_easynorecoil = config.easynorecoil;
-                        prev_easynorecoilstrength = config.easynorecoilstrength;
+                        prev_body_y_offset = ctx.config.body_y_offset;
+                        prev_head_y_offset = ctx.config.head_y_offset;
+                        prev_ignore_third_person = ctx.config.ignore_third_person;
+                        prev_shooting_range_targets = ctx.config.shooting_range_targets;
+                        prev_auto_aim = ctx.config.auto_aim;
+                        prev_easynorecoil = ctx.config.easynorecoil;
+                        prev_easynorecoilstrength = ctx.config.easynorecoilstrength;
                         config_needs_save = true;
                     }
 
                     
-                    if (prev_kp_x != config.kp_x ||
-                        prev_ki_x != config.ki_x ||
-                        prev_kd_x != config.kd_x ||
-                        prev_kp_y != config.kp_y ||
-                        prev_ki_y != config.ki_y ||
-                        prev_kd_y != config.kd_y)
+                    if (prev_kp_x != ctx.config.kp_x ||
+                        prev_ki_x != ctx.config.ki_x ||
+                        prev_kd_x != ctx.config.kd_x ||
+                        prev_kp_y != ctx.config.kp_y ||
+                        prev_ki_y != ctx.config.ki_y ||
+                        prev_kd_y != ctx.config.kd_y)
                     {
-                        prev_kp_x = config.kp_x;
-                        prev_ki_x = config.ki_x;
-                        prev_kd_x = config.kd_x;
-                        prev_kp_y = config.kp_y;
-                        prev_ki_y = config.ki_y;
-                        prev_kd_y = config.kd_y;
+                        prev_kp_x = ctx.config.kp_x;
+                        prev_ki_x = ctx.config.ki_x;
+                        prev_kd_x = ctx.config.kd_x;
+                        prev_kp_y = ctx.config.kp_y;
+                        prev_ki_y = ctx.config.ki_y;
+                        prev_kd_y = ctx.config.kd_y;
 
                         if (AppContext::getInstance().globalMouseThread) {
                             AppContext::getInstance().globalMouseThread->updateConfig(
-                                config.detection_resolution,
-                                config.kp_x,
-                                config.ki_x,
-                                config.kd_x,
-                                config.kp_y,
-                                config.ki_y,
-                                config.kd_y,
-                                config.bScope_multiplier,
-                                config.norecoil_ms
+                                ctx.config.detection_resolution,
+                                ctx.config.kp_x,
+                                ctx.config.ki_x,
+                                ctx.config.kd_x,
+                                ctx.config.kp_y,
+                                ctx.config.ki_y,
+                                ctx.config.kd_y,
+                                ctx.config.bScope_multiplier,
+                                ctx.config.norecoil_ms
                             );
                         }
 
@@ -691,21 +695,21 @@ void OverlayThread()
                     }
 
                     
-                    if (prev_bScope_multiplier != config.bScope_multiplier)
+                    if (prev_bScope_multiplier != ctx.config.bScope_multiplier)
                     {
-                        prev_bScope_multiplier = config.bScope_multiplier;
+                        prev_bScope_multiplier = ctx.config.bScope_multiplier;
 
                         if (AppContext::getInstance().globalMouseThread) {
                             AppContext::getInstance().globalMouseThread->updateConfig(
-                            config.detection_resolution,
-                            config.kp_x,
-                            config.ki_x,
-                            config.kd_x,
-                            config.kp_y,
-                            config.ki_y,
-                            config.kd_y,
-                            config.bScope_multiplier,
-                            config.norecoil_ms
+                            ctx.config.detection_resolution,
+                            ctx.config.kp_x,
+                            ctx.config.ki_x,
+                            ctx.config.kd_x,
+                            ctx.config.kp_y,
+                            ctx.config.ki_y,
+                            ctx.config.kd_y,
+                            ctx.config.bScope_multiplier,
+                            ctx.config.norecoil_ms
                             );
                         }
 
@@ -713,44 +717,44 @@ void OverlayThread()
                     }
 
                     
-                    if (prev_opacity != config.overlay_opacity)
+                    if (prev_opacity != ctx.config.overlay_opacity)
                     {
-                        BYTE opacity = config.overlay_opacity;
+                        BYTE opacity = ctx.config.overlay_opacity;
                         SetLayeredWindowAttributes(g_hwnd, 0, opacity, LWA_ALPHA);
                         config_needs_save = true;
                     }
 
                     
-                    if (prev_confidence_threshold != config.confidence_threshold ||
-                        prev_nms_threshold != config.nms_threshold ||
-                        prev_max_detections != config.max_detections)
+                    if (prev_confidence_threshold != ctx.config.confidence_threshold ||
+                        prev_nms_threshold != ctx.config.nms_threshold ||
+                        prev_max_detections != ctx.config.max_detections)
                     {
-                        prev_nms_threshold = config.nms_threshold;
-                        prev_confidence_threshold = config.confidence_threshold;
-                        prev_max_detections = config.max_detections;
+                        prev_nms_threshold = ctx.config.nms_threshold;
+                        prev_confidence_threshold = ctx.config.confidence_threshold;
+                        prev_max_detections = ctx.config.max_detections;
                         config_needs_save = true;
                     }
 
                     
-                    if (prev_show_window != config.show_window ||
-                        prev_always_on_top != config.always_on_top)
+                    if (prev_show_window != ctx.config.show_window ||
+                        prev_always_on_top != ctx.config.always_on_top)
                     {
-                        prev_always_on_top = config.always_on_top;
+                        prev_always_on_top = ctx.config.always_on_top;
                         show_window_changed.store(true);
-                        prev_show_window = config.show_window;
+                        prev_show_window = ctx.config.show_window;
                         config_needs_save = true;
                     }
                     
                     
-                    if (prev_show_fps != config.show_fps ||
-                        prev_window_size != config.window_size ||
-                        prev_screenshot_delay != config.screenshot_delay ||
-                        prev_verbose != config.verbose)
+                    if (prev_show_fps != ctx.config.show_fps ||
+                        prev_window_size != ctx.config.window_size ||
+                        prev_screenshot_delay != ctx.config.screenshot_delay ||
+                        prev_verbose != ctx.config.verbose)
                     {
-                        prev_show_fps = config.show_fps;
-                        prev_window_size = config.window_size;
-                        prev_screenshot_delay = config.screenshot_delay;
-                        prev_verbose = config.verbose;
+                        prev_show_fps = ctx.config.show_fps;
+                        prev_window_size = ctx.config.window_size;
+                        prev_screenshot_delay = ctx.config.screenshot_delay;
+                        prev_verbose = ctx.config.verbose;
                         config_needs_save = true;
                     }
                 }
@@ -805,7 +809,7 @@ void OverlayThread()
         if (config_needs_save && 
             std::chrono::duration_cast<std::chrono::milliseconds>(now - last_config_save_time) >= config_save_interval)
         {
-            config.saveConfig();
+            ctx.config.saveConfig();
             config_needs_save = false;
             last_config_save_time = now;
         }

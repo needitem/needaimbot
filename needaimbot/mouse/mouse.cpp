@@ -33,7 +33,7 @@
 
 extern std::atomic<bool> aiming;
 extern std::mutex configMutex;
-extern Config config;
+// extern Config config;  // Removed - use AppContext::getInstance().config instead
 
 
 std::random_device rd;
@@ -70,7 +70,7 @@ void QueueMove(int dx, int dy, std::function<void(int, int)> move_func) {
         QueryPerformanceCounter(&end);
         float elapsed_us = ((end.QuadPart - start.QuadPart) * 1000000.0f) / freq.QuadPart;
         
-        add_to_history(ctx.g_input_send_time_history, elapsed_us / 1000.0f, ctx.g_input_send_history_mutex, 100);
+        ctx.add_to_history(ctx.g_input_send_time_history, elapsed_us / 1000.0f, ctx.g_input_send_history_mutex);
         ctx.g_current_input_send_time_ms.store(elapsed_us / 1000.0f);
     }
 }
@@ -86,7 +86,7 @@ MouseThread::MouseThread(
     float bScope_multiplier,
     float norecoil_ms,
     SerialConnection *serialConnection,
-    GhubMouse *gHub) : tracking_errors(false), silent_aim_click_duration_ms(50), optical_flow_recoil_frame_count(0)
+    GhubMouse *gHub) : tracking_errors(false), optical_flow_recoil_frame_count(0)
 {
     initializeScreen(resolution, bScope_multiplier, norecoil_ms);
     pid_controller = std::make_unique<PIDController2D>(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
@@ -240,9 +240,10 @@ float MouseThread::calculateTargetDistanceSquared(const AimbotTarget &target) co
     std::string local_head_class_name_val;
 
     {
+        auto& ctx = AppContext::getInstance();
         std::lock_guard<std::mutex> lock(configMutex); 
-        local_head_class_name_val = config.head_class_name;
-        for (const auto& class_setting : config.class_settings) {
+        local_head_class_name_val = ctx.config.head_class_name;
+        for (const auto& class_setting : ctx.config.class_settings) {
             if (class_setting.name == local_head_class_name_val) {
                 local_head_class_id_to_use = class_setting.id;
                 if (!class_setting.ignore) {
@@ -251,8 +252,8 @@ float MouseThread::calculateTargetDistanceSquared(const AimbotTarget &target) co
                 break;
             }
         }
-        local_head_y_offset_val = config.head_y_offset;
-        local_body_y_offset_val = config.body_y_offset;
+        local_head_y_offset_val = ctx.config.head_y_offset;
+        local_body_y_offset_val = ctx.config.body_y_offset;
     }
 
     if (local_apply_head_offset && target.classId == local_head_class_id_to_use) {
@@ -283,16 +284,18 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     raw_target_pos.x = target.x + target.w * 0.5f;
     
     
+    // Copy all needed config values at once to minimize mutex lock time
     float local_y_offset_multiplier_val;
     int local_head_class_id_to_use = -1;
     bool local_apply_head_offset = false;
     bool local_disable_upward_aim_active = false;
     std::vector<std::string> local_button_disable_upward_aim;
-
+    float local_movement_smoothing;
 
     {
         std::lock_guard<std::mutex> lock(ctx.configMutex); 
         
+        // Copy all config values in one lock
         for (const auto& class_setting : ctx.config.class_settings) {
             if (class_setting.name == ctx.config.head_class_name) {
                 local_head_class_id_to_use = class_setting.id;
@@ -309,8 +312,8 @@ void MouseThread::moveMouse(const AimbotTarget &target)
             local_y_offset_multiplier_val = ctx.config.body_y_offset;
         }
         
-        
-        local_button_disable_upward_aim = ctx.config.button_disable_upward_aim; 
+        local_button_disable_upward_aim = ctx.config.button_disable_upward_aim;
+        local_movement_smoothing = ctx.config.movement_smoothing;
     }
     raw_target_pos.y = target.y + target.h * local_y_offset_multiplier_val;
 
@@ -327,29 +330,40 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     // Enhanced target prediction using velocity estimation
     Point2D predicted_target_pos = raw_target_pos;
     
-    static Point2D last_target_pos = raw_target_pos;
+    static Point2D last_target_pos = {0, 0};
     static auto last_target_time = std::chrono::high_resolution_clock::now();
+    static bool prediction_initialized = false;
     auto current_time = std::chrono::high_resolution_clock::now();
     
-    float dt_target = std::chrono::duration<float, std::milli>(current_time - last_target_time).count() / 1000.0f;
-    dt_target = std::clamp(dt_target, 0.001f, 0.1f); // Clamp between 1ms and 100ms
-    
-    if (dt_target > 0.001f) {
-        // Calculate target velocity
-        float target_vel_x = (raw_target_pos.x - last_target_pos.x) / dt_target;
-        float target_vel_y = (raw_target_pos.y - last_target_pos.y) / dt_target;
+    // Initialize or reset prediction when target changes significantly
+    if (!prediction_initialized || 
+        std::abs(raw_target_pos.x - last_target_pos.x) > 100.0f || 
+        std::abs(raw_target_pos.y - last_target_pos.y) > 100.0f) {
+        last_target_pos = raw_target_pos;
+        last_target_time = current_time;
+        prediction_initialized = true;
+        predicted_target_pos = raw_target_pos; // No prediction on first frame or large jumps
+    } else {
+        float dt_target = std::chrono::duration<float, std::milli>(current_time - last_target_time).count() / 1000.0f;
+        dt_target = std::clamp(dt_target, 0.001f, 0.1f); // Clamp between 1ms and 100ms
         
-        // Prediction time based on current error magnitude
-        float error_magnitude = std::sqrt(initial_error_x * initial_error_x + initial_error_y * initial_error_y);
-        float prediction_time = std::clamp(error_magnitude * 0.001f, 0.0f, 0.05f); // 0-50ms prediction
+        if (dt_target > 0.001f) {
+            // Calculate target velocity
+            float target_vel_x = (raw_target_pos.x - last_target_pos.x) / dt_target;
+            float target_vel_y = (raw_target_pos.y - last_target_pos.y) / dt_target;
+            
+            // Prediction time based on current error magnitude
+            float error_magnitude = std::sqrt(initial_error_x * initial_error_x + initial_error_y * initial_error_y);
+            float prediction_time = std::clamp(error_magnitude * 0.001f, 0.0f, 0.05f); // 0-50ms prediction
+            
+            // Apply prediction without smoothing
+            predicted_target_pos.x = raw_target_pos.x + target_vel_x * prediction_time;
+            predicted_target_pos.y = raw_target_pos.y + target_vel_y * prediction_time;
+        }
         
-        // Apply prediction without smoothing
-        predicted_target_pos.x = raw_target_pos.x + target_vel_x * prediction_time;
-        predicted_target_pos.y = raw_target_pos.y + target_vel_y * prediction_time;
+        last_target_pos = raw_target_pos;
+        last_target_time = current_time;
     }
-    
-    last_target_pos = raw_target_pos;
-    last_target_time = current_time;
 
     
     float error_x = predicted_target_pos.x - current_center_x;
@@ -378,11 +392,11 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     } else {
         pid_output = pid_controller->calculate(error);
     }
-    
+        
     auto pid_end_time = std::chrono::steady_clock::now();
     float pid_duration_ms = std::chrono::duration<float, std::milli>(pid_end_time - pid_start_time).count();
     ctx.g_current_pid_calc_time_ms.store(pid_duration_ms, std::memory_order_relaxed);
-    add_to_history(ctx.g_pid_calc_time_history, pid_duration_ms, ctx.g_pid_calc_history_mutex);
+    ctx.add_to_history(ctx.g_pid_calc_time_history, pid_duration_ms, ctx.g_pid_calc_history_mutex);
 
     
     // Adaptive sensitivity scaling based on error magnitude
@@ -401,13 +415,10 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     float raw_move_x = pid_output.x() * current_move_scale_x * adaptive_scale;
     float raw_move_y = pid_output.y() * current_move_scale_y * adaptive_scale;
     
+    
     // Apply movement smoothing for stability without losing speed
     // Less smoothing for small movements, more for large sudden movements
-    float smoothing;
-    {
-        std::lock_guard<std::mutex> lock(ctx.configMutex);
-        smoothing = ctx.config.movement_smoothing;
-    }
+    float smoothing = local_movement_smoothing;
     if (error_magnitude > 100.0f) {
         smoothing = std::min(0.4f, smoothing + (error_magnitude - 100.0f) * 0.001f);
     }
@@ -419,8 +430,9 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     float move_y = smoothed_movement.y();
 
     // Dead zone and micro-movement filtering
-    const float DEAD_ZONE = 0.5f; // Default dead zone
-    const float MICRO_MOVEMENT_THRESHOLD = 1.0f; // Default micro movement threshold
+    const float DEAD_ZONE = 0.1f; // Reduced dead zone
+    const float MICRO_MOVEMENT_THRESHOLD = 0.5f; // Reduced micro movement threshold
+    
     
     // Apply dead zone
     if (std::abs(move_x) < DEAD_ZONE) move_x = 0.0f;
@@ -442,7 +454,7 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         dy_int = static_cast<int>(std::round(accumulated_y));
         accumulated_y -= dy_int;
     }
-
+    
     if (local_disable_upward_aim_active && dy_int < 0)
     {
         dy_int = 0; 
@@ -459,7 +471,7 @@ void MouseThread::moveMouse(const AimbotTarget &target)
             auto input_send_end_time = std::chrono::steady_clock::now();
             float input_send_duration_ms = std::chrono::duration<float, std::milli>(input_send_end_time - input_send_start_time).count();
             ctx.g_current_input_send_time_ms.store(input_send_duration_ms, std::memory_order_relaxed);
-            add_to_history(ctx.g_input_send_time_history, input_send_duration_ms, ctx.g_input_send_history_mutex);
+            ctx.add_to_history(ctx.g_input_send_time_history, input_send_duration_ms, ctx.g_input_send_history_mutex);
         }
     }
 }
@@ -480,7 +492,7 @@ void MouseThread::pressMouse(const AimbotTarget &target)
             auto input_press_end_time = std::chrono::steady_clock::now();
             float press_duration_ms = std::chrono::duration<float, std::milli>(input_press_end_time - input_press_start_time).count();
             ctx.g_current_input_send_time_ms.store(press_duration_ms, std::memory_order_relaxed); 
-            add_to_history(ctx.g_input_send_time_history, press_duration_ms, ctx.g_input_send_history_mutex);
+            ctx.add_to_history(ctx.g_input_send_time_history, press_duration_ms, ctx.g_input_send_history_mutex);
         }
         mouse_pressed = true;
     }
@@ -501,7 +513,7 @@ void MouseThread::releaseMouse()
         auto input_release_end_time = std::chrono::steady_clock::now();
         float release_duration_ms = std::chrono::duration<float, std::milli>(input_release_end_time - input_release_start_time).count();
         ctx.g_current_input_send_time_ms.store(release_duration_ms, std::memory_order_relaxed); 
-        add_to_history(ctx.g_input_send_time_history, release_duration_ms, ctx.g_input_send_history_mutex);
+        ctx.add_to_history(ctx.g_input_send_time_history, release_duration_ms, ctx.g_input_send_history_mutex);
     }
     mouse_pressed = false;
 }
@@ -541,7 +553,7 @@ void MouseThread::applyRecoilCompensation(float strength)
             auto recoil_send_end_time = std::chrono::steady_clock::now();
             float recoil_send_duration_ms = std::chrono::duration<float, std::milli>(recoil_send_end_time - recoil_send_start_time).count();
             ctx.g_current_input_send_time_ms.store(recoil_send_duration_ms, std::memory_order_relaxed);
-            add_to_history(ctx.g_input_send_time_history, recoil_send_duration_ms, ctx.g_input_send_history_mutex);
+            ctx.add_to_history(ctx.g_input_send_time_history, recoil_send_duration_ms, ctx.g_input_send_history_mutex);
         }
         
         last_recoil_compensation_time = now_chrono_recoil;
@@ -586,7 +598,7 @@ void MouseThread::applyWeaponRecoilCompensation(const WeaponRecoilProfile* profi
             auto recoil_send_end_time = std::chrono::steady_clock::now();
             float recoil_send_duration_ms = std::chrono::duration<float, std::milli>(recoil_send_end_time - recoil_send_start_time).count();
             ctx.g_current_input_send_time_ms.store(recoil_send_duration_ms, std::memory_order_relaxed);
-            add_to_history(ctx.g_input_send_time_history, recoil_send_duration_ms, ctx.g_input_send_history_mutex);
+            ctx.add_to_history(ctx.g_input_send_time_history, recoil_send_duration_ms, ctx.g_input_send_history_mutex);
         }
         
         last_recoil_compensation_time = now_chrono_recoil;
@@ -615,95 +627,6 @@ void MouseThread::setInputMethod(std::unique_ptr<InputMethod> new_method)
     input_method = std::move(new_method);
 }
 
-void MouseThread::executeSilentAim(const AimbotTarget& target)
-{
-    auto& ctx = AppContext::getInstance();
-    float current_center_x, current_center_y;
-    {
-        std::lock_guard<std::mutex> lock(member_data_mutex_); 
-        current_center_x = this->center_x;
-        current_center_y = this->center_y;
-    }
-
-    
-    float target_actual_x = target.x + target.w * 0.5f;
-    float target_actual_y;
-
-    
-    float local_y_offset_multiplier_val;
-    int local_head_class_id_to_use = -1;
-    bool local_apply_head_offset = false;
-    bool local_disable_upward_aim_active = false;
-    std::vector<std::string> local_button_disable_upward_aim;
-
-
-    {
-        std::lock_guard<std::mutex> lock(ctx.configMutex); 
-        for (const auto& class_setting : ctx.config.class_settings) {
-            if (class_setting.name == ctx.config.head_class_name) {
-                local_head_class_id_to_use = class_setting.id;
-                if (!class_setting.ignore) {
-                    local_apply_head_offset = true;
-                }
-                break;
-            }
-        }
-
-        if (local_apply_head_offset && target.classId == local_head_class_id_to_use) {
-            local_y_offset_multiplier_val = ctx.config.head_y_offset;
-        } else {
-            local_y_offset_multiplier_val = ctx.config.body_y_offset;
-        }
-        local_button_disable_upward_aim = ctx.config.button_disable_upward_aim; 
-    }
-    target_actual_y = target.y + target.h * local_y_offset_multiplier_val;
-    
-    
-    
-    local_disable_upward_aim_active = isAnyKeyPressed(local_button_disable_upward_aim);
-
-
-    
-    float delta_x_float = target_actual_x - current_center_x;
-    float delta_y_float = target_actual_y - current_center_y;
-
-    int dx = static_cast<int>(std::round(delta_x_float));
-    int dy = static_cast<int>(std::round(delta_y_float));
-    
-    if (local_disable_upward_aim_active && dy < 0) {
-        dy = 0;
-    }
-
-    
-    if (dx != 0 || dy != 0)
-    {
-        std::lock_guard<std::mutex> lock(input_method_mutex);
-        if (input_method && input_method->isValid())
-        {
-            auto action_start_time = std::chrono::steady_clock::now();
-
-            
-            input_method->move(dx, dy);
-            
-            
-            
-
-            
-            input_method->press();
-
-            
-            std::this_thread::sleep_for(silent_aim_click_duration_ms);
-
-            
-            input_method->release();
-
-            auto action_end_time = std::chrono::steady_clock::now();
-            float action_duration_ms = std::chrono::duration<float, std::milli>(action_end_time - action_start_time).count();
-            ctx.g_current_input_send_time_ms.store(action_duration_ms, std::memory_order_relaxed);
-            add_to_history(ctx.g_input_send_time_history, action_duration_ms, ctx.g_input_send_history_mutex);
-        }
-    }
-}
 
 void MouseThread::applyOpticalFlowRecoilCompensation()
 {
@@ -714,4 +637,15 @@ void MouseThread::applyOpticalFlowRecoilCompensation()
 
     // Optical flow recoil compensation removed
     return;
+}
+
+void MouseThread::resetAccumulatedStates()
+{
+    // Reset PID controller
+    if (pid_controller) {
+        pid_controller->reset();
+    }
+    
+    // Reset smoothed movement
+    smoothed_movement = Eigen::Vector2f::Zero();
 }

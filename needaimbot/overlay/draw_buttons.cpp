@@ -11,11 +11,11 @@
 void draw_buttons()
 {
     auto& ctx = AppContext::getInstance();
-    ImGui::Text("Shoot Buttons");
+    ImGui::Text("Aimbot Activation Key");
 
-    for (size_t i = 0; i < ctx.config.button_shoot.size(); )
+    for (size_t i = 0; i < ctx.config.button_targeting.size(); )
     {
-        std::string& current_key_name = ctx.config.button_shoot[i];
+        std::string& current_key_name = ctx.config.button_targeting[i];
 
         int current_index = -1;
         for (size_t k = 0; k < key_names.size(); ++k)
@@ -32,7 +32,7 @@ void draw_buttons()
             current_index = 0;
         }
 
-        std::string combo_label = "Shoot Button " + std::to_string(i);
+        std::string combo_label = "Aimbot Key " + std::to_string(i);
 
         if (ImGui::Combo(combo_label.c_str(), &current_index, key_names_cstrs.data(), static_cast<int>(key_names_cstrs.size())))
         {
@@ -41,18 +41,18 @@ void draw_buttons()
         }
 
         ImGui::SameLine();
-        std::string remove_button_label = "Remove##button_shoot" + std::to_string(i);
+        std::string remove_button_label = "Remove##button_targeting" + std::to_string(i);
         if (ImGui::Button(remove_button_label.c_str()))
         {
-            if (ctx.config.button_shoot.size() <= 1)
+            if (ctx.config.button_targeting.size() <= 1)
             {
-                ctx.config.button_shoot[0] = std::string("None");
+                ctx.config.button_targeting[0] = std::string("None");
                 ctx.config.saveConfig();
                 continue;
             }
             else
             {
-                ctx.config.button_shoot.erase(ctx.config.button_shoot.begin() + i);
+                ctx.config.button_targeting.erase(ctx.config.button_targeting.begin() + i);
                 ctx.config.saveConfig();
                 continue;
             }
@@ -61,69 +61,17 @@ void draw_buttons()
         ++i;
     }
 
-    if (ImGui::Button("Add button##shoot"))
+    if (ImGui::Button("Add Aimbot Key##targeting"))
     {
-        ctx.config.button_shoot.push_back("None");
+        ctx.config.button_targeting.push_back("None");
         ctx.config.saveConfig();
     }
 
     ImGui::Separator();
+    ImGui::Text("Mouse Controls (Fixed):");
+    ImGui::BulletText("Left Click: Auto-Shooting (when aiming)");
+    ImGui::BulletText("Right Click: Zoom/Scope (independent of aimbot)");
 
-    ImGui::Text("Zoom Buttons");
-
-    for (size_t i = 0; i < ctx.config.button_zoom.size(); )
-    {
-        std::string& current_key_name = ctx.config.button_zoom[i];
-
-        int current_index = -1;
-        for (size_t k = 0; k < key_names.size(); ++k)
-        {
-            if (key_names[k] == current_key_name)
-            {
-                current_index = static_cast<int>(k);
-                break;
-            }
-        }
-
-        if (current_index == -1)
-        {
-            current_index = 0;
-        }
-
-        std::string combo_label = "Zoom Button " + std::to_string(i);
-
-        if (ImGui::Combo(combo_label.c_str(), &current_index, key_names_cstrs.data(), static_cast<int>(key_names_cstrs.size())))
-        {
-            current_key_name = key_names[current_index];
-            ctx.config.saveConfig();
-        }
-
-        ImGui::SameLine();
-        std::string remove_button_label = "Remove##button_zoom" + std::to_string(i);
-        if (ImGui::Button(remove_button_label.c_str()))
-        {
-            if (ctx.config.button_zoom.size() <= 1)
-            {
-                ctx.config.button_zoom[0] = std::string("None");
-                ctx.config.saveConfig();
-                continue;
-            }
-            else
-            {
-                ctx.config.button_zoom.erase(ctx.config.button_zoom.begin() + i);
-                ctx.config.saveConfig();
-                continue;
-            }
-        }
-
-        ++i;
-    }
-
-    if (ImGui::Button("Add button##zoom"))
-    {
-        ctx.config.button_zoom.push_back("None");
-        ctx.config.saveConfig();
-    }
 
     ImGui::Separator();
 

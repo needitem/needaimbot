@@ -202,11 +202,15 @@ void draw_debug_frame()
 {
     auto& ctx = AppContext::getInstance();
     
-    // Simplified frame acquisition using atomic index (always use CUDA)
+    // Get latest captured frame
     cv::Mat frameCopy;
-    int idx = ctx.captureGpuWriteIdx.load(std::memory_order_acquire);
-    if (idx >= 0 && idx < FRAME_BUFFER_COUNT) {
-        try { ctx.captureGpuBuffer[idx].download(frameCopy); } catch (const cv::Exception&) { frameCopy.release(); }
+    extern cv::cuda::GpuMat latestFrameGpu;
+    try {
+        if (!latestFrameGpu.empty()) {
+            latestFrameGpu.download(frameCopy);
+        }
+    } catch (const cv::Exception&) { 
+        frameCopy.release(); 
     }
     if (frameCopy.empty()) {
         ImGui::TextUnformatted("Debug frame unavailable.");
@@ -228,43 +232,44 @@ void draw_debug_frame()
 
     
     {
-        std::lock_guard<std::mutex> det_lock(ctx.detector->detectionMutex);
-        if (ctx.detector->m_finalDetectionsCountHost > 0 && ctx.detector->m_finalDetectionsGpu.get() != nullptr)
-        {
-            std::vector<Detection> host_detections(ctx.detector->m_finalDetectionsCountHost);
-            cudaError_t err = cudaMemcpy(host_detections.data(), ctx.detector->m_finalDetectionsGpu.get(),
-                                         ctx.detector->m_finalDetectionsCountHost * sizeof(Detection),
-                                         cudaMemcpyDeviceToHost);
-
-            if (err == cudaSuccess)
+        if (ctx.detector) {
+            std::lock_guard<std::mutex> det_lock(ctx.detector->detectionMutex);
+            if (ctx.detector->m_finalDetectionsCountHost > 0 && ctx.detector->m_finalDetectionsGpu.get() != nullptr)
             {
-                for (const auto& det : host_detections)
+                std::vector<Detection> host_detections(ctx.detector->m_finalDetectionsCountHost);
+                cudaError_t err = cudaMemcpy(host_detections.data(), ctx.detector->m_finalDetectionsGpu.get(),
+                                             ctx.detector->m_finalDetectionsCountHost * sizeof(Detection),
+                                             cudaMemcpyDeviceToHost);
+
+                if (err == cudaSuccess)
                 {
-                    ImVec2 p1(image_pos.x + det.box.x * debug_scale,
-                              image_pos.y + det.box.y * debug_scale);
-                    ImVec2 p2(image_pos.x + (det.box.x + det.box.width) * debug_scale,
-                              image_pos.y + (det.box.y + det.box.height) * debug_scale);
-
-                    ImU32 color = IM_COL32(255, 0, 0, 255); 
-
-                    
-                    
-
-                    draw_list->AddRect(p1, p2, color, 1.0f, 0, 1.5f); 
-
-                    std::string className = "Unknown";
-                    for(const auto& cs : ctx.config.class_settings) { 
-                        if (cs.id == det.classId) {
-                            className = cs.name;
-                            break;
+                    for (const auto& det : host_detections)
+                    {
+                        // Skip invalid detections
+                        if (det.box.width <= 0 || det.box.height <= 0) {
+                            continue;
                         }
+                        
+                        ImVec2 p1(image_pos.x + det.box.x * debug_scale,
+                                  image_pos.y + det.box.y * debug_scale);
+                        ImVec2 p2(image_pos.x + (det.box.x + det.box.width) * debug_scale,
+                                  image_pos.y + (det.box.y + det.box.height) * debug_scale);
+
+                        ImU32 color = IM_COL32(255, 0, 0, 255); 
+
+                        draw_list->AddRect(p1, p2, color, 1.0f, 0, 1.5f); 
+
+                        std::string className = "Unknown";
+                        for(const auto& cs : ctx.config.class_settings) { 
+                            if (cs.id == det.classId) {
+                                className = cs.name;
+                                break;
+                            }
+                        }
+                        std::string label = className + " (" + std::to_string(static_cast<int>(det.confidence * 100)) + "%)";
+                        draw_list->AddText(ImVec2(p1.x, p1.y - 16), IM_COL32(255, 255, 0, 255), label.c_str());
                     }
-                    std::string label = className + " (" + std::to_string(static_cast<int>(det.confidence * 100)) + "%)";
-                    draw_list->AddText(ImVec2(p1.x, p1.y - 16), IM_COL32(255, 255, 0, 255), label.c_str());
                 }
-            } else {
-                
-                
             }
         }
     }
@@ -299,6 +304,19 @@ inline std::vector<const char*> getProfileCstrs(const std::vector<std::string>& 
 void draw_debug()
 {
     auto& ctx = AppContext::getInstance();
+
+    // Declare these variables at the top of the function scope
+    bool has_target_for_overlay = false;
+    Detection target_for_overlay = {};
+    
+    // Acquire lock and populate variables once per frame
+    {
+        std::lock_guard<std::mutex> lock(ctx.overlay_target_mutex);
+        has_target_for_overlay = ctx.overlay_has_target.load();
+        if (has_target_for_overlay) {
+            target_for_overlay = ctx.overlay_target_info;
+        }
+    }
     
     if (ctx.config.show_fps) {
         ImGui::Text("Capture FPS: %.1f", ctx.g_current_capture_fps.load());
@@ -354,11 +372,15 @@ void draw_debug()
 
     if (ctx.config.show_window) 
     {
-        // Simplified frame acquisition using atomic index
+        // Get latest captured frame
         cv::Mat frameCopy;
-        int idx = ctx.captureGpuWriteIdx.load(std::memory_order_acquire);
-        if (idx >= 0 && idx < FRAME_BUFFER_COUNT) {
-            try { ctx.captureGpuBuffer[idx].download(frameCopy); } catch (const cv::Exception&) { frameCopy.release(); }
+        extern cv::cuda::GpuMat latestFrameGpu;
+        try {
+            if (!latestFrameGpu.empty()) {
+                latestFrameGpu.download(frameCopy);
+            }
+        } catch (const cv::Exception&) { 
+            frameCopy.release(); 
         }
 
         if (frameCopy.empty()) {
@@ -383,6 +405,15 @@ void draw_debug()
         {
             if (ctx.detector) {
                 std::lock_guard<std::mutex> det_lock(ctx.detector->detectionMutex);
+                
+                // Debug info
+                ImGui::Text("Final Detections Count: %d", ctx.detector->m_finalDetectionsCountHost);
+                ImGui::Text("Has Best Target (Detector): %s", ctx.detector->m_hasBestTarget ? "true" : "false");
+                ImGui::Text("Best Target Index (Detector): %d", ctx.detector->m_bestTargetIndexHost);
+                
+                // Debug info for overlay data
+                ImGui::Text("Has Best Target (Overlay): %s", has_target_for_overlay ? "true" : "false");
+
                 if (ctx.detector->m_finalDetectionsCountHost > 0 && ctx.detector->m_finalDetectionsGpu.get() != nullptr)
                 {
                     std::vector<Detection> host_detections(ctx.detector->m_finalDetectionsCountHost);
@@ -390,38 +421,128 @@ void draw_debug()
                                                  ctx.detector->m_finalDetectionsCountHost * sizeof(Detection),
                                                  cudaMemcpyDeviceToHost);
 
-                if (err == cudaSuccess)
-                {
-                    for (const auto& det : host_detections)
+                    if (err == cudaSuccess)
                     {
-                        ImVec2 p1(image_pos.x + det.box.x * debug_scale,
-                                  image_pos.y + det.box.y * debug_scale);
-                        ImVec2 p2(image_pos.x + (det.box.x + det.box.width) * debug_scale,
-                                  image_pos.y + (det.box.y + det.box.height) * debug_scale);
-
-                        ImU32 color = IM_COL32(255, 0, 0, 255); 
-
-                        
-                        
-
-                        draw_list->AddRect(p1, p2, color, 1.0f, 0, 1.5f); 
-
-                        std::string className = "Unknown";
-                        for(const auto& cs : ctx.config.class_settings) { 
-                            if (cs.id == det.classId) {
-                                className = cs.name;
-                                break;
+                        ImGui::Text("Drawing %d detections", (int)host_detections.size());
+                        for (size_t i = 0; i < host_detections.size(); ++i)
+                        {
+                            const auto& det = host_detections[i];
+                            
+                            // Skip invalid detections
+                            if (det.box.width <= 0 || det.box.height <= 0) {
+                                continue;
                             }
+                            
+                            ImVec2 p1(image_pos.x + det.box.x * debug_scale,
+                                      image_pos.y + det.box.y * debug_scale);
+                            ImVec2 p2(image_pos.x + (det.box.x + det.box.width) * debug_scale,
+                                      image_pos.y + (det.box.y + det.box.height) * debug_scale);
+
+                            // Check if this is the best target (using overlay's synchronized data)
+                            bool is_best_target = false;
+                            if (has_target_for_overlay && 
+                                det.box.x == target_for_overlay.box.x &&
+                                det.box.y == target_for_overlay.box.y &&
+                                det.box.width == target_for_overlay.box.width &&
+                                det.box.height == target_for_overlay.box.height) {
+                                is_best_target = true;
+                            }
+
+                            // Color coding: Green=best target, Yellow=valid target, Red=low confidence
+                            ImU32 color;
+                            float thickness;
+                            if (is_best_target) {
+                                color = IM_COL32(0, 255, 0, 255);  // Green for best target
+                                thickness = 3.0f;
+                            } else if (det.confidence >= ctx.config.confidence_threshold) {
+                                color = IM_COL32(255, 255, 0, 255);  // Yellow for valid targets
+                                thickness = 2.0f;
+                            } else {
+                                color = IM_COL32(255, 0, 0, 255);   // Red for low confidence
+                                thickness = 1.0f;
+                            }
+
+                            draw_list->AddRect(p1, p2, color, 1.0f, 0, thickness); 
+
+                            std::string className = "Unknown";
+                            for(const auto& cs : ctx.config.class_settings) { 
+                                if (cs.id == det.classId) {
+                                    className = cs.name;
+                                    break;
+                                }
+                            }
+                            std::string label = className + " (" + std::to_string(static_cast<int>(det.confidence * 100)) + "%)";
+                            if (is_best_target) {
+                                label = "[TARGET] " + label;
+                            }
+                            ImU32 text_color = is_best_target ? IM_COL32(0, 255, 0, 255) : 
+                                              (det.confidence >= ctx.config.confidence_threshold ? IM_COL32(255, 255, 0, 255) : IM_COL32(255, 0, 0, 255));
+                            draw_list->AddText(ImVec2(p1.x, p1.y - 16), text_color, label.c_str());
                         }
-                        std::string label = className + " (" + std::to_string(static_cast<int>(det.confidence * 100)) + "%)";
-                        draw_list->AddText(ImVec2(p1.x, p1.y - 16), IM_COL32(255, 255, 0, 255), label.c_str());
+                    } else {
+                        ImGui::Text("CUDA memcpy failed: %s", cudaGetErrorString(err));
                     }
                 } else {
-                    
-                    
-                }
+                    ImGui::Text("No detections to draw (count: %d, gpu_ptr: %p)", 
+                               ctx.detector->m_finalDetectionsCountHost, 
+                               ctx.detector->m_finalDetectionsGpu.get());
                 }
             }
+        }
+
+        // Draw center crosshair
+        float center_x = image_pos.x + (texW * debug_scale) / 2.0f;
+        float center_y = image_pos.y + (texH * debug_scale) / 2.0f;
+        ImU32 crosshair_color = IM_COL32(255, 255, 255, 255);
+        
+        // Draw crosshair lines
+        draw_list->AddLine(ImVec2(center_x - 10, center_y), ImVec2(center_x + 10, center_y), crosshair_color, 2.0f);
+        draw_list->AddLine(ImVec2(center_x, center_y - 10), ImVec2(center_x, center_y + 10), crosshair_color, 2.0f);
+        
+        // Debug text - moved below image
+        ImGui::Separator();
+        ImGui::Text("Confidence Threshold: %.2f", ctx.config.confidence_threshold);
+        ImGui::Text("NMS Threshold: %.2f", ctx.config.nms_threshold);
+        
+        // Display target info using synchronized overlay data
+        if (has_target_for_overlay) {
+            ImGui::Text("Target Box (Overlay): x=%d, y=%d, w=%d, h=%d (conf: %.2f)", 
+                       (int)target_for_overlay.box.x,
+                       (int)target_for_overlay.box.y,
+                       (int)target_for_overlay.box.width,
+                       (int)target_for_overlay.box.height,
+                       target_for_overlay.confidence);
+        } else {
+            ImGui::Text("Target Box (Overlay): No target to draw.");
+        }
+        ImGui::Text("Color Legend: Green=Best Target, Yellow=Valid, Red=Low Confidence");
+        
+        // Draw target offset if best target exists and is valid (using synchronized overlay data)
+        if (has_target_for_overlay && 
+            target_for_overlay.box.width > 0 && 
+            target_for_overlay.box.height > 0) {
+            auto& target = target_for_overlay;
+            float target_center_x = image_pos.x + (target.box.x + target.box.width / 2.0f) * debug_scale;
+            
+            // Calculate Y offset based on head/body settings
+            float y_offset;
+            bool is_head = false;
+            for (const auto& cs : ctx.config.class_settings) {
+                if (cs.id == target.classId && cs.name == ctx.config.head_class_name && !cs.ignore) {
+                    is_head = true;
+                    break;
+                }
+            }
+            y_offset = is_head ? ctx.config.head_y_offset : ctx.config.body_y_offset;
+            
+            float target_center_y = image_pos.y + (target.box.y + target.box.height * y_offset) * debug_scale;
+            
+            // Draw line from center to target
+            draw_list->AddLine(ImVec2(center_x, center_y), ImVec2(target_center_x, target_center_y), 
+                               IM_COL32(0, 255, 255, 255), 2.0f);
+            
+            // Draw target point
+            draw_list->AddCircleFilled(ImVec2(target_center_x, target_center_y), 4.0f, IM_COL32(0, 255, 255, 255));
         }
 
 
@@ -464,7 +585,15 @@ void draw_debug()
 
         if (show_hsv_mask_preview) {
             
-            cv::cuda::GpuMat hsvMaskGpu = ctx.detector ? ctx.detector->getHsvMaskGpu() : cv::cuda::GpuMat(); 
+            cv::cuda::GpuMat hsvMaskGpu;
+            if (ctx.detector) {
+                try {
+                    hsvMaskGpu = ctx.detector->getHsvMaskGpu();
+                } catch (const std::exception& e) {
+                    // Handle any exceptions from getHsvMaskGpu
+                    hsvMaskGpu = cv::cuda::GpuMat();
+                }
+            } 
             if (!hsvMaskGpu.empty()) {
                 static cv::Mat hsvMaskCpu; 
                 try {
