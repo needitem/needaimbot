@@ -134,6 +134,10 @@ void MouseThread::initializeScreen(int resolution, float bScope_multiplier, floa
 
     this->last_recoil_compensation_time = std::chrono::steady_clock::now();
     this->smoothed_movement = Eigen::Vector2f::Zero();
+    this->last_target_time_ = std::chrono::high_resolution_clock::now();
+    this->prediction_initialized_ = false;
+    this->accumulated_x_ = 0.0f;
+    this->accumulated_y_ = 0.0f;
 }
 
 void MouseThread::updateConfig(
@@ -294,10 +298,8 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         current_center_y += ctx.config.crosshair_offset_y;
     }
 
-    
     Point2D raw_target_pos;
     raw_target_pos.x = target.x + target.w * 0.5f;
-    
     
     // Copy all needed config values at once to minimize mutex lock time
     float local_y_offset_multiplier_val;
@@ -332,68 +334,21 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     }
     raw_target_pos.y = target.y + target.h * local_y_offset_multiplier_val;
 
-    
-    
     local_disable_upward_aim_active = isAnyKeyPressed(local_button_disable_upward_aim);
 
-
-    
-    // Calculate initial error for prediction
-    float initial_error_x = raw_target_pos.x - current_center_x;
-    float initial_error_y = raw_target_pos.y - current_center_y;
-    
-    // Enhanced target prediction using velocity estimation
-    Point2D predicted_target_pos = raw_target_pos;
-    
-    static Point2D last_target_pos = {0, 0};
-    static auto last_target_time = std::chrono::high_resolution_clock::now();
-    static bool prediction_initialized = false;
-    auto current_time = std::chrono::high_resolution_clock::now();
-    
-    // Initialize or reset prediction when target changes significantly
-    if (!prediction_initialized || 
-        std::abs(raw_target_pos.x - last_target_pos.x) > 100.0f || 
-        std::abs(raw_target_pos.y - last_target_pos.y) > 100.0f) {
-        last_target_pos = raw_target_pos;
-        last_target_time = current_time;
-        prediction_initialized = true;
-        predicted_target_pos = raw_target_pos; // No prediction on first frame or large jumps
-    } else {
-        float dt_target = std::chrono::duration<float, std::milli>(current_time - last_target_time).count() / 1000.0f;
-        dt_target = std::clamp(dt_target, 0.001f, 0.1f); // Clamp between 1ms and 100ms
-        
-        if (dt_target > 0.001f) {
-            // Calculate target velocity
-            float target_vel_x = (raw_target_pos.x - last_target_pos.x) / dt_target;
-            float target_vel_y = (raw_target_pos.y - last_target_pos.y) / dt_target;
-            
-            // Prediction time based on current error magnitude
-            float error_magnitude = std::sqrt(initial_error_x * initial_error_x + initial_error_y * initial_error_y);
-            float prediction_time = std::clamp(error_magnitude * 0.001f, 0.0f, 0.05f); // 0-50ms prediction
-            
-            // Apply prediction without smoothing
-            predicted_target_pos.x = raw_target_pos.x + target_vel_x * prediction_time;
-            predicted_target_pos.y = raw_target_pos.y + target_vel_y * prediction_time;
-        }
-        
-        last_target_pos = raw_target_pos;
-        last_target_time = current_time;
-    }
-
+    // Calculate predicted target position
+    Point2D predicted_target_pos = calculatePredictedTarget(target, current_center_x, current_center_y);
     
     float error_x = predicted_target_pos.x - current_center_x;
     float error_y = predicted_target_pos.y - current_center_y;
 
-    if (tracking_errors)
-    {
+    if (tracking_errors) {
         std::lock_guard<std::mutex> lock(callback_mutex);
-        if (error_callback)
-        {
+        if (error_callback) {
             error_callback(error_x, error_y);
         }
     }
 
-    
     // Calculate error magnitude first for adaptive control
     float error_magnitude = std::sqrt(error_x * error_x + error_y * error_y);
     
@@ -413,74 +368,31 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     ctx.g_current_pid_calc_time_ms.store(pid_duration_ms, std::memory_order_relaxed);
     ctx.add_to_history(ctx.g_pid_calc_time_history, pid_duration_ms, ctx.g_pid_calc_history_mutex);
 
-    
-    // Adaptive sensitivity scaling based on error magnitude
-    float adaptive_scale = 1.0f;
-    
-    // Close range: higher precision (lower sensitivity)
-    // Far range: faster movement (higher sensitivity)
-    if (error_magnitude < 10.0f) {
-        adaptive_scale = 0.7f; // Higher precision for small errors
-    } else if (error_magnitude < 50.0f) {
-        adaptive_scale = 1.0f; // Normal sensitivity
-    } else {
-        adaptive_scale = 1.3f; // Faster movement for large errors
-    }
-    
+    // Calculate adaptive scale and apply to movement
+    float adaptive_scale = calculateAdaptiveScale(error_magnitude);
     float raw_move_x = pid_output.x() * current_move_scale_x * adaptive_scale;
     float raw_move_y = pid_output.y() * current_move_scale_y * adaptive_scale;
     
+    Eigen::Vector2f raw_movement(raw_move_x, raw_move_y);
+    Eigen::Vector2f smoothed_movement_result = applyMovementSmoothing(raw_movement, error_magnitude, local_movement_smoothing);
     
-    // Apply movement smoothing for stability without losing speed
-    // Less smoothing for small movements, more for large sudden movements
-    float smoothing = local_movement_smoothing;
-    if (error_magnitude > 100.0f) {
-        smoothing = std::min(0.4f, smoothing + (error_magnitude - 100.0f) * 0.001f);
-    }
-    
-    smoothed_movement.x() = smoothing * smoothed_movement.x() + (1.0f - smoothing) * raw_move_x;
-    smoothed_movement.y() = smoothing * smoothed_movement.y() + (1.0f - smoothing) * raw_move_y;
-    
-    float move_x = smoothed_movement.x();
-    float move_y = smoothed_movement.y();
+    float move_x = smoothed_movement_result.x();
+    float move_y = smoothed_movement_result.y();
 
-    // Dead zone and micro-movement filtering
-    const float DEAD_ZONE = 0.1f; // Reduced dead zone
-    const float MICRO_MOVEMENT_THRESHOLD = 0.5f; // Reduced micro movement threshold
-    
-    
     // Apply dead zone
     if (std::abs(move_x) < DEAD_ZONE) move_x = 0.0f;
     if (std::abs(move_y) < DEAD_ZONE) move_y = 0.0f;
     
-    // Accumulate sub-pixel movements
-    static float accumulated_x = 0.0f, accumulated_y = 0.0f;
-    accumulated_x += move_x;
-    accumulated_y += move_y;
+    // Process accumulated movement
+    auto [dx_int, dy_int] = processAccumulatedMovement(move_x, move_y);
     
-    int dx_int = 0, dy_int = 0;
-    
-    // Only move when accumulated movement exceeds threshold
-    if (std::abs(accumulated_x) >= MICRO_MOVEMENT_THRESHOLD) {
-        dx_int = static_cast<int>(std::round(accumulated_x));
-        accumulated_x -= dx_int;
-    }
-    if (std::abs(accumulated_y) >= MICRO_MOVEMENT_THRESHOLD) {
-        dy_int = static_cast<int>(std::round(accumulated_y));
-        accumulated_y -= dy_int;
-    }
-    
-    if (local_disable_upward_aim_active && dy_int < 0)
-    {
+    if (local_disable_upward_aim_active && dy_int < 0) {
         dy_int = 0; 
     }
 
-    
-    if (dx_int != 0 || dy_int != 0)
-    {        
+    if (dx_int != 0 || dy_int != 0) {
         std::lock_guard<std::mutex> lock(input_method_mutex);
-        if (input_method && input_method->isValid())
-        {
+        if (input_method && input_method->isValid()) {
             auto input_send_start_time = std::chrono::steady_clock::now();
             input_method->move(dx_int, dy_int);
             auto input_send_end_time = std::chrono::steady_clock::now();
@@ -535,50 +447,18 @@ void MouseThread::releaseMouse()
 
 void MouseThread::applyRecoilCompensation(float strength)
 {
-    auto& ctx = AppContext::getInstance();
-    if (!input_method || !input_method->isValid()) {
-        return;
-    }
-
-    if (std::abs(strength) < 1e-3f) {
-        return;
-    }
-
-    auto now_chrono_recoil = std::chrono::steady_clock::now(); 
-    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now_chrono_recoil - last_recoil_compensation_time);
-    
-    long long current_norecoil_ms;
+    float current_norecoil_ms;
     {
         std::lock_guard<std::mutex> lock(member_data_mutex_); 
-        current_norecoil_ms = static_cast<long long>(this->norecoil_ms);
+        current_norecoil_ms = this->norecoil_ms;
     }
-    auto required_delay = std::chrono::milliseconds(current_norecoil_ms);
-
-    if (elapsed >= required_delay)
-    {
-        std::lock_guard<std::mutex> lock(input_method_mutex); 
-        
-        // Apply strength directly without accumulation to prevent over-compensation
-        int dy_recoil = static_cast<int>(std::round(strength));
-        
-        if (dy_recoil != 0) {
-            
-            auto recoil_send_start_time = std::chrono::steady_clock::now();
-            input_method->move(0, dy_recoil);
-            auto recoil_send_end_time = std::chrono::steady_clock::now();
-            float recoil_send_duration_ms = std::chrono::duration<float, std::milli>(recoil_send_end_time - recoil_send_start_time).count();
-            ctx.g_current_input_send_time_ms.store(recoil_send_duration_ms, std::memory_order_relaxed);
-            ctx.add_to_history(ctx.g_input_send_time_history, recoil_send_duration_ms, ctx.g_input_send_history_mutex);
-        }
-        
-        last_recoil_compensation_time = now_chrono_recoil;
-    }
+    
+    applyRecoilCompensationInternal(strength, current_norecoil_ms);
 }
 
 void MouseThread::applyWeaponRecoilCompensation(const WeaponRecoilProfile* profile, int scope_magnification)
 {
-    auto& ctx = AppContext::getInstance();
-    if (!profile || !input_method || !input_method->isValid()) {
+    if (!profile) {
         return;
     }
 
@@ -595,29 +475,7 @@ void MouseThread::applyWeaponRecoilCompensation(const WeaponRecoilProfile* profi
 
     float adjusted_strength = profile->base_strength * profile->fire_rate_multiplier * scope_multiplier;
     
-    auto now_chrono_recoil = std::chrono::steady_clock::now(); 
-    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now_chrono_recoil - last_recoil_compensation_time);
-    auto required_delay = std::chrono::milliseconds(static_cast<long long>(profile->recoil_ms));
-
-    if (elapsed >= required_delay)
-    {
-        std::lock_guard<std::mutex> lock(input_method_mutex); 
-        
-        // Apply strength directly without accumulation to prevent over-compensation
-        int dy_recoil = static_cast<int>(std::round(adjusted_strength));
-        
-        if (dy_recoil != 0) {
-            
-            auto recoil_send_start_time = std::chrono::steady_clock::now();
-            input_method->move(0, dy_recoil);
-            auto recoil_send_end_time = std::chrono::steady_clock::now();
-            float recoil_send_duration_ms = std::chrono::duration<float, std::milli>(recoil_send_end_time - recoil_send_start_time).count();
-            ctx.g_current_input_send_time_ms.store(recoil_send_duration_ms, std::memory_order_relaxed);
-            ctx.add_to_history(ctx.g_input_send_time_history, recoil_send_duration_ms, ctx.g_input_send_history_mutex);
-        }
-        
-        last_recoil_compensation_time = now_chrono_recoil;
-    }
+    applyRecoilCompensationInternal(adjusted_strength, profile->recoil_ms);
 }
 
 void MouseThread::enableErrorTracking(const ErrorTrackingCallback &callback)
@@ -643,13 +501,166 @@ void MouseThread::setInputMethod(std::unique_ptr<InputMethod> new_method)
 }
 
 
-void MouseThread::applyOpticalFlowRecoilCompensation()
+Point2D MouseThread::calculatePredictedTarget(const AimbotTarget& target, float current_center_x, float current_center_y)
+{
+    Point2D raw_target_pos;
+    raw_target_pos.x = target.x + target.w * 0.5f;
+    
+    // Get y offset from target configuration
+    float local_y_offset_multiplier_val;
+    {
+        auto& ctx = AppContext::getInstance();
+        std::lock_guard<std::mutex> lock(ctx.configMutex);
+        
+        bool local_apply_head_offset = false;
+        int local_head_class_id_to_use = -1;
+        
+        for (const auto& class_setting : ctx.config.class_settings) {
+            if (class_setting.name == ctx.config.head_class_name) {
+                local_head_class_id_to_use = class_setting.id;
+                if (!class_setting.ignore) {
+                    local_apply_head_offset = true;
+                }
+                break;
+            }
+        }
+        
+        if (local_apply_head_offset && target.classId == local_head_class_id_to_use) {
+            local_y_offset_multiplier_val = ctx.config.head_y_offset;
+        } else {
+            local_y_offset_multiplier_val = ctx.config.body_y_offset;
+        }
+    }
+    
+    raw_target_pos.y = target.y + target.h * local_y_offset_multiplier_val;
+    
+    // Calculate initial error for prediction
+    float initial_error_x = raw_target_pos.x - current_center_x;
+    float initial_error_y = raw_target_pos.y - current_center_y;
+    
+    // Enhanced target prediction using velocity estimation
+    Point2D predicted_target_pos = raw_target_pos;
+    auto current_time = std::chrono::high_resolution_clock::now();
+    
+    // Initialize or reset prediction when target changes significantly
+    if (!prediction_initialized_ || 
+        std::abs(raw_target_pos.x - last_target_pos_.x) > LARGE_MOVEMENT_THRESHOLD || 
+        std::abs(raw_target_pos.y - last_target_pos_.y) > LARGE_MOVEMENT_THRESHOLD) {
+        last_target_pos_ = raw_target_pos;
+        last_target_time_ = current_time;
+        prediction_initialized_ = true;
+        predicted_target_pos = raw_target_pos; // No prediction on first frame or large jumps
+    } else {
+        float dt_target = std::chrono::duration<float, std::milli>(current_time - last_target_time_).count() / 1000.0f;
+        dt_target = std::clamp(dt_target, MIN_DELTA_TIME, MAX_DELTA_TIME);
+        
+        if (dt_target > MIN_DELTA_TIME) {
+            // Calculate target velocity
+            float target_vel_x = (raw_target_pos.x - last_target_pos_.x) / dt_target;
+            float target_vel_y = (raw_target_pos.y - last_target_pos_.y) / dt_target;
+            
+            // Prediction time based on current error magnitude
+            float error_magnitude = std::sqrt(initial_error_x * initial_error_x + initial_error_y * initial_error_y);
+            float prediction_time = std::clamp(error_magnitude * PREDICTION_TIME_FACTOR, 0.0f, MAX_PREDICTION_TIME);
+            
+            // Apply prediction
+            predicted_target_pos.x = raw_target_pos.x + target_vel_x * prediction_time;
+            predicted_target_pos.y = raw_target_pos.y + target_vel_y * prediction_time;
+        }
+        
+        last_target_pos_ = raw_target_pos;
+        last_target_time_ = current_time;
+    }
+    
+    return predicted_target_pos;
+}
+
+Eigen::Vector2f MouseThread::applyMovementSmoothing(const Eigen::Vector2f& raw_movement, float error_magnitude, float smoothing_factor)
+{
+    // Apply movement smoothing for stability without losing speed
+    // Less smoothing for small movements, more for large sudden movements
+    float smoothing = smoothing_factor;
+    if (error_magnitude > LARGE_MOVEMENT_THRESHOLD) {
+        smoothing = std::min(MAX_ADDITIONAL_SMOOTHING, smoothing + (error_magnitude - LARGE_MOVEMENT_THRESHOLD) * SMOOTHING_INCREASE_FACTOR);
+    }
+    
+    smoothed_movement.x() = smoothing * smoothed_movement.x() + (1.0f - smoothing) * raw_movement.x();
+    smoothed_movement.y() = smoothing * smoothed_movement.y() + (1.0f - smoothing) * raw_movement.y();
+    
+    return smoothed_movement;
+}
+
+std::pair<int, int> MouseThread::processAccumulatedMovement(float move_x, float move_y)
+{
+    // Accumulate sub-pixel movements
+    accumulated_x_ += move_x;
+    accumulated_y_ += move_y;
+    
+    int dx_int = 0, dy_int = 0;
+    
+    // Only move when accumulated movement exceeds threshold
+    if (std::abs(accumulated_x_) >= MICRO_MOVEMENT_THRESHOLD) {
+        dx_int = static_cast<int>(std::round(accumulated_x_));
+        accumulated_x_ -= dx_int;
+    }
+    if (std::abs(accumulated_y_) >= MICRO_MOVEMENT_THRESHOLD) {
+        dy_int = static_cast<int>(std::round(accumulated_y_));
+        accumulated_y_ -= dy_int;
+    }
+    
+    return {dx_int, dy_int};
+}
+
+float MouseThread::calculateAdaptiveScale(float error_magnitude) const
+{
+    // Adaptive sensitivity scaling based on error magnitude
+    // Close range: higher precision (lower sensitivity)
+    // Far range: faster movement (higher sensitivity)
+    if (error_magnitude < SMALL_ERROR_THRESHOLD) {
+        return CLOSE_RANGE_SCALE; // Higher precision for small errors
+    } else if (error_magnitude < MEDIUM_ERROR_THRESHOLD) {
+        return NORMAL_RANGE_SCALE; // Normal sensitivity
+    } else {
+        return FAR_RANGE_SCALE; // Faster movement for large errors
+    }
+}
+
+void MouseThread::applyRecoilCompensationInternal(float strength, float delay_ms)
 {
     auto& ctx = AppContext::getInstance();
     if (!input_method || !input_method->isValid()) {
         return;
     }
 
+    if (std::abs(strength) < 1e-3f) {
+        return;
+    }
+
+    auto now_chrono_recoil = std::chrono::steady_clock::now(); 
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now_chrono_recoil - last_recoil_compensation_time);
+    auto required_delay = std::chrono::milliseconds(static_cast<long long>(delay_ms));
+
+    if (elapsed >= required_delay) {
+        std::lock_guard<std::mutex> lock(input_method_mutex); 
+        
+        // Apply strength directly without accumulation to prevent over-compensation
+        int dy_recoil = static_cast<int>(std::round(strength));
+        
+        if (dy_recoil != 0) {
+            auto recoil_send_start_time = std::chrono::steady_clock::now();
+            input_method->move(0, dy_recoil);
+            auto recoil_send_end_time = std::chrono::steady_clock::now();
+            float recoil_send_duration_ms = std::chrono::duration<float, std::milli>(recoil_send_end_time - recoil_send_start_time).count();
+            ctx.g_current_input_send_time_ms.store(recoil_send_duration_ms, std::memory_order_relaxed);
+            ctx.add_to_history(ctx.g_input_send_time_history, recoil_send_duration_ms, ctx.g_input_send_history_mutex);
+        }
+        
+        last_recoil_compensation_time = now_chrono_recoil;
+    }
+}
+
+void MouseThread::applyOpticalFlowRecoilCompensation()
+{
     // Optical flow recoil compensation removed
     return;
 }
@@ -663,4 +674,13 @@ void MouseThread::resetAccumulatedStates()
     
     // Reset smoothed movement
     smoothed_movement = Eigen::Vector2f::Zero();
+    
+    // Reset prediction state
+    prediction_initialized_ = false;
+    last_target_pos_ = {0, 0};
+    last_target_time_ = std::chrono::high_resolution_clock::now();
+    
+    // Reset accumulated movement
+    accumulated_x_ = 0.0f;
+    accumulated_y_ = 0.0f;
 }

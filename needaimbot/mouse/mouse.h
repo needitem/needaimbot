@@ -68,6 +68,31 @@ private:
     
     Eigen::Vector2f smoothed_movement; 
 
+    // Target prediction members (moved from static variables)
+    Point2D last_target_pos_{0, 0};
+    std::chrono::high_resolution_clock::time_point last_target_time_;
+    bool prediction_initialized_ = false;
+    
+    // Movement accumulation members (moved from static variables)
+    float accumulated_x_ = 0.0f;
+    float accumulated_y_ = 0.0f;
+    
+    // Constants
+    static constexpr float DEAD_ZONE = 0.1f;
+    static constexpr float MICRO_MOVEMENT_THRESHOLD = 0.5f;
+    static constexpr float MAX_PREDICTION_TIME = 0.05f;
+    static constexpr float LARGE_MOVEMENT_THRESHOLD = 100.0f;
+    static constexpr float SMALL_ERROR_THRESHOLD = 10.0f;
+    static constexpr float MEDIUM_ERROR_THRESHOLD = 50.0f;
+    static constexpr float CLOSE_RANGE_SCALE = 0.7f;
+    static constexpr float NORMAL_RANGE_SCALE = 1.0f;
+    static constexpr float FAR_RANGE_SCALE = 1.3f;
+    static constexpr float MIN_DELTA_TIME = 0.001f;
+    static constexpr float MAX_DELTA_TIME = 0.1f;
+    static constexpr float PREDICTION_TIME_FACTOR = 0.001f;
+    static constexpr float SMOOTHING_INCREASE_FACTOR = 0.001f;
+    static constexpr float MAX_ADDITIONAL_SMOOTHING = 0.4f;
+
     float calculateTargetDistanceSquared(const AimbotTarget &target) const;
     void initializeInputMethod(SerialConnection *serialConnection, GhubMouse *gHub);
     void initializeScreen(int resolution, float bScope_multiplier, float norecoil_ms);
@@ -101,6 +126,13 @@ public:
     void disableErrorTracking();
 
     void setInputMethod(std::unique_ptr<InputMethod> new_method);
+    
+    // Helper methods for moveMouse refactoring
+    Point2D calculatePredictedTarget(const AimbotTarget& target, float current_center_x, float current_center_y);
+    Eigen::Vector2f applyMovementSmoothing(const Eigen::Vector2f& raw_movement, float error_magnitude, float smoothing_factor);
+    std::pair<int, int> processAccumulatedMovement(float move_x, float move_y);
+    float calculateAdaptiveScale(float error_magnitude) const;
+    void applyRecoilCompensationInternal(float strength, float delay_ms);
      
  
     
