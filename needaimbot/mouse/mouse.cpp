@@ -1,9 +1,9 @@
-#include "../constants.h"
+// #include "../constants.h" // File removed
 #include "../AppContext.h"
 #include "mouse.h"
 #include "aimbot_components/AimbotTarget.h"
 #include "../detector/capture.h"
-#include "../detector/optical_flow.h"
+// #include "../detector/optical_flow.h" // Optical flow removed
 #include "input_drivers/SerialConnection.h"
 #include "../needaimbot.h"
 #include "input_drivers/ghub.h"
@@ -120,7 +120,7 @@ void MouseThread::initializeScreen(int resolution, float bScope_multiplier, floa
     this->center_x = screen_width / 2.0f;
     this->center_y = screen_height / 2.0f;
 
-    const float SENSITIVITY_FACTOR = constants::SENSITIVITY_FACTOR; 
+    const float SENSITIVITY_FACTOR = 1.0f; // Default sensitivity factor
     float base_scale_x = SENSITIVITY_FACTOR;
     float base_scale_y = SENSITIVITY_FACTOR;
 
@@ -193,8 +193,9 @@ bool MouseThread::checkTargetInScope(float target_x, float target_y, float targe
         current_center_y = this->center_y;
     }
 
-    const float screen_margin_x = current_screen_width * constants::SCOPE_MARGIN; 
-    const float screen_margin_y = current_screen_height * constants::SCOPE_MARGIN; 
+    const float SCOPE_MARGIN = 0.1f; // Default scope margin
+    const float screen_margin_x = current_screen_width * SCOPE_MARGIN; 
+    const float screen_margin_y = current_screen_height * SCOPE_MARGIN; 
     
     float target_center_x_val = target_x + target_w * 0.5f;
     float target_center_y_val = target_y + target_h * 0.5f;
@@ -418,8 +419,8 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     float move_y = smoothed_movement.y();
 
     // Dead zone and micro-movement filtering
-    const float DEAD_ZONE = constants::DEAD_ZONE;
-    const float MICRO_MOVEMENT_THRESHOLD = constants::MICRO_MOVEMENT_THRESHOLD;
+    const float DEAD_ZONE = 0.5f; // Default dead zone
+    const float MICRO_MOVEMENT_THRESHOLD = 1.0f; // Default micro movement threshold
     
     // Apply dead zone
     if (std::abs(move_x) < DEAD_ZONE) move_x = 0.0f;
@@ -711,74 +712,6 @@ void MouseThread::applyOpticalFlowRecoilCompensation()
         return;
     }
 
-    bool enable_of_norecoil;
-    float strength;
-    float threshold;
-    int required_frames;
-    {
-        std::lock_guard<std::mutex> lock(ctx.configMutex);
-        enable_of_norecoil = ctx.config.optical_flow_norecoil;
-        strength = ctx.config.optical_flow_norecoil_strength;
-        threshold = ctx.config.optical_flow_norecoil_threshold;
-        required_frames = ctx.config.optical_flow_norecoil_frames;
-    }
-
-    if (!enable_of_norecoil) {
-        return;
-    }
-
-    if (!ctx.opticalFlow.isOpticalFlowValid()) {
-        optical_flow_recoil_frame_count = 0;
-        recent_flow_values.clear();
-        return;
-    }
-
-    auto flow_data = ctx.opticalFlow.getAverageGlobalFlow();
-    double flow_y = flow_data.second;
-    
-    if (std::abs(flow_y) > threshold) {
-        recent_flow_values.push_back({flow_data.first, flow_y});
-        optical_flow_recoil_frame_count++;
-        
-        if (recent_flow_values.size() > static_cast<size_t>(required_frames)) {
-            recent_flow_values.erase(recent_flow_values.begin());
-        }
-        
-        if (optical_flow_recoil_frame_count >= required_frames && 
-            recent_flow_values.size() >= static_cast<size_t>(required_frames)) {
-            
-            double avg_flow_y = 0.0;
-            for (const auto& flow_val : recent_flow_values) {
-                avg_flow_y += flow_val.second;
-            }
-            avg_flow_y /= recent_flow_values.size();
-            
-            if (avg_flow_y > 0) {
-                auto now_chrono_recoil = std::chrono::steady_clock::now();
-                auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now_chrono_recoil - last_recoil_compensation_time);
-                auto required_delay = std::chrono::milliseconds(10);
-                
-                if (elapsed >= required_delay) {
-                    std::lock_guard<std::mutex> lock(input_method_mutex);
-                    
-                    int dy_recoil = -static_cast<int>(std::round(avg_flow_y * strength));
-                    
-                    if (dy_recoil != 0) {
-                        auto recoil_send_start_time = std::chrono::steady_clock::now();
-                        input_method->move(0, dy_recoil);
-                        auto recoil_send_end_time = std::chrono::steady_clock::now();
-                        float recoil_send_duration_ms = std::chrono::duration<float, std::milli>(recoil_send_end_time - recoil_send_start_time).count();
-                        ctx.g_current_input_send_time_ms.store(recoil_send_duration_ms, std::memory_order_relaxed);
-                        add_to_history(ctx.g_input_send_time_history, recoil_send_duration_ms, ctx.g_input_send_history_mutex);
-                    }
-                    
-                    last_recoil_compensation_time = now_chrono_recoil;
-                    optical_flow_recoil_frame_count = 0;
-                }
-            }
-        }
-    } else {
-        optical_flow_recoil_frame_count = 0;
-        recent_flow_values.clear();
-    }
+    // Optical flow recoil compensation removed
+    return;
 }

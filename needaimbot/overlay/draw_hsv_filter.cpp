@@ -4,7 +4,8 @@
 #include <imgui.h>
 #include "imgui/imgui_internal.h"
 
-#include "config.h" 
+#include "AppContext.h"
+#include "config/config.h" 
 #include "needaimbot.h"
 
 
@@ -27,62 +28,64 @@ void HelpMarker(const char* desc)
 
 void draw_hsv_filter_settings()
 {
+    auto& ctx = AppContext::getInstance();
+    
     ImGui::SeparatorText("HSV Color Filter Settings");
     ImGui::Spacing();
 
     bool changed = false;
 
     
-    changed |= ImGui::Checkbox("Enable HSV Filter", &config.enable_hsv_filter);
+    changed |= ImGui::Checkbox("Enable HSV Filter", &ctx.config.enable_hsv_filter);
     if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Enable or disable HSV color filtering."); }
     ImGui::Spacing();
 
     
-    ImGui::BeginDisabled(!config.enable_hsv_filter);
+    ImGui::BeginDisabled(!ctx.config.enable_hsv_filter);
 
     
     ImGui::Text("Lower HSV Bounds:");
-    changed |= ImGui::SliderInt("Lower H ##hsv", &config.hsv_lower_h, 0, 179);
+    changed |= ImGui::SliderInt("Lower H ##hsv", &ctx.config.hsv_lower_h, 0, 179);
     ImGui::SameLine(); HelpMarker("Hue (0-179)");
-    changed |= ImGui::SliderInt("Lower S ##hsv", &config.hsv_lower_s, 0, 255);
+    changed |= ImGui::SliderInt("Lower S ##hsv", &ctx.config.hsv_lower_s, 0, 255);
     ImGui::SameLine(); HelpMarker("Saturation (0-255)");
-    changed |= ImGui::SliderInt("Lower V ##hsv", &config.hsv_lower_v, 0, 255);
+    changed |= ImGui::SliderInt("Lower V ##hsv", &ctx.config.hsv_lower_v, 0, 255);
     ImGui::SameLine(); HelpMarker("Value (0-255)");
 
     ImGui::Spacing();
     
     ImGui::Text("Upper HSV Bounds:");
-    changed |= ImGui::SliderInt("Upper H ##hsv", &config.hsv_upper_h, 0, 179);
+    changed |= ImGui::SliderInt("Upper H ##hsv", &ctx.config.hsv_upper_h, 0, 179);
     ImGui::SameLine(); HelpMarker("Hue (0-179)");
-    changed |= ImGui::SliderInt("Upper S ##hsv", &config.hsv_upper_s, 0, 255);
+    changed |= ImGui::SliderInt("Upper S ##hsv", &ctx.config.hsv_upper_s, 0, 255);
     ImGui::SameLine(); HelpMarker("Saturation (0-255)");
-    changed |= ImGui::SliderInt("Upper V ##hsv", &config.hsv_upper_v, 0, 255);
+    changed |= ImGui::SliderInt("Upper V ##hsv", &ctx.config.hsv_upper_v, 0, 255);
     ImGui::SameLine(); HelpMarker("Value (0-255)");
 
     ImGui::Spacing();
     
-    changed |= ImGui::SliderInt("Min Pixels ##hsv", &config.min_hsv_pixels, 1, 1000);
+    changed |= ImGui::SliderInt("Min Pixels ##hsv", &ctx.config.min_hsv_pixels, 1, 1000);
     if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Minimum number of pixels within the bounding box that must match the HSV range."); }
 
     
-    changed |= ImGui::Checkbox("Remove boxes matching HSV filter", &config.remove_hsv_matches);
+    changed |= ImGui::Checkbox("Remove boxes matching HSV filter", &ctx.config.remove_hsv_matches);
     if (ImGui::IsItemHovered()) { ImGui::SetTooltip("By default, boxes with min_hsv_pixels matching HSV are kept; enable to remove them instead."); }
 
     ImGui::Spacing();
     
-    if (config.hsv_lower_h > config.hsv_upper_h || config.hsv_lower_s > config.hsv_upper_s || config.hsv_lower_v > config.hsv_upper_v) {
+    if (ctx.config.hsv_lower_h > ctx.config.hsv_upper_h || ctx.config.hsv_lower_s > ctx.config.hsv_upper_s || ctx.config.hsv_lower_v > ctx.config.hsv_upper_v) {
         ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Warning: Lower bound is greater than upper bound for one or more HSV components.");
     }
 
     
     ImGui::Spacing();
     ImGui::Text("Preview Colors:");
-    float lh = config.hsv_lower_h / 179.0f;
-    float ls = config.hsv_lower_s / 255.0f;
-    float lv = config.hsv_lower_v / 255.0f;
-    float uh = config.hsv_upper_h / 179.0f;
-    float us = config.hsv_upper_s / 255.0f;
-    float uv = config.hsv_upper_v / 255.0f;
+    float lh = ctx.config.hsv_lower_h / 179.0f;
+    float ls = ctx.config.hsv_lower_s / 255.0f;
+    float lv = ctx.config.hsv_lower_v / 255.0f;
+    float uh = ctx.config.hsv_upper_h / 179.0f;
+    float us = ctx.config.hsv_upper_s / 255.0f;
+    float uv = ctx.config.hsv_upper_v / 255.0f;
     float lr, lg, lb;
     float ur, ug, ub;
     ImGui::ColorConvertHSVtoRGB(lh, ls, lv, lr, lg, lb);
@@ -93,6 +96,6 @@ void draw_hsv_filter_settings()
     ImGui::EndDisabled();
 
     if (changed) {
-        config.saveConfig();
+        ctx.config.saveConfig();
     }
 } 

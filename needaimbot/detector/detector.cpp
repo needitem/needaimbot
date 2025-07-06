@@ -28,9 +28,9 @@
 #include <omp.h>
 
 #include "detector.h"
-#include "nvinf.h"
 #include "needaimbot.h"
 #include "other_tools.h"
+
 #include "postProcess.h"
 #include "scoringGpu.h"
 #include "filterGpu.h"
@@ -305,7 +305,14 @@ void Detector::initialize(const std::string& modelFile)
         return; 
     }
 
-    runtime.reset(nvinfer1::createInferRuntime(gLogger));
+    // Create a simple logger for TensorRT
+    class SimpleLogger : public nvinfer1::ILogger {
+        void log(Severity severity, const char* msg) noexcept override {
+            if (severity <= Severity::kWARNING) std::cout << msg << std::endl;
+        }
+    };
+    static SimpleLogger logger;
+    runtime.reset(nvinfer1::createInferRuntime(logger));
     loadEngine(modelFile);
 
     if (!engine)
@@ -491,7 +498,7 @@ void Detector::loadEngine(const std::string& modelFile)
         {
             std::cout << "[Detector] Building engine from ONNX model" << std::endl;
 
-            nvinfer1::ICudaEngine* builtEngine = buildEngineFromOnnx(modelFile, gLogger);
+            nvinfer1::ICudaEngine* builtEngine = buildEngineFromOnnx(modelFile);
             if (builtEngine)
             {
                 nvinfer1::IHostMemory* serializedEngine = builtEngine->serialize();
@@ -519,7 +526,7 @@ void Detector::loadEngine(const std::string& modelFile)
     }
 
     std::cout << "[Detector] Loading engine: " << engineFilePath << std::endl;
-    engine.reset(loadEngineFromFile(engineFilePath, runtime.get()));
+    engine.reset(loadEngineFromFile(engineFilePath));
 }
 
 void Detector::processFrame(const cv::cuda::GpuMat& frame)
@@ -745,7 +752,7 @@ void Detector::inferenceThread()
         }
         NVTX_POP();
     }
-}''
+}
 
 void Detector::performGpuPostProcessing(cudaStream_t stream) {
     auto& ctx = AppContext::getInstance();
@@ -987,7 +994,7 @@ void Detector::preProcess(const cv::cuda::GpuMat& frame, cudaStream_t stream)
                 cv::Mat mask = cv::Mat::zeros(frame.size(), CV_8UC1);
                 cv::Point center(mask.cols / 2, mask.rows / 2);
                 int radius = std::min(mask.cols, mask.rows) / 2;
-                cv::circle(mask, center, cv::Scalar(255), -1);
+                cv::circle(mask, center, radius, cv::Scalar(255), -1);
                 maskGpu_static.upload(mask, cvStream);
             }
             maskedImageGpu_static.create(frame.size(), frame.type());
@@ -1108,7 +1115,7 @@ void Detector::start()
 {
     auto& ctx = AppContext::getInstance();
     ctx.shouldExit = false;
-    m_captureThread = std::thread(captureThread, ctx.config.detection_resolution, ctx.config.detection_resolution);
+    // Note: capture thread is handled separately in capture.cpp
     m_inferenceThread = std::thread(&Detector::inferenceThread, this);
 }
 

@@ -16,7 +16,9 @@
 #include <imgui/imgui_impl_win32.h>
 #include <imgui/imgui_internal.h>
 
+#include "AppContext.h"
 #include "overlay.h"
+#include "mouse/mouse.h"
 #include "overlay/draw_settings.h"
 #include "overlay/ui_helpers.h"
 #include "config.h"
@@ -188,11 +190,13 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
 void SetupImGui()
 {
+    auto& ctx = AppContext::getInstance();
+    
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
 
     ImGuiIO& io = ImGui::GetIO();
-    io.FontGlobalScale = config.overlay_ui_scale;
+    io.FontGlobalScale = ctx.config.overlay_ui_scale;
 
     ImGui_ImplWin32_Init(g_hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
@@ -303,8 +307,10 @@ void SetupImGui()
 
 bool CreateOverlayWindow()
 {
-    overlayWidth = static_cast<int>(BASE_OVERLAY_WIDTH * config.overlay_ui_scale);
-    overlayHeight = static_cast<int>(BASE_OVERLAY_HEIGHT * config.overlay_ui_scale);
+    auto& ctx = AppContext::getInstance();
+    
+    overlayWidth = static_cast<int>(BASE_OVERLAY_WIDTH * ctx.config.overlay_ui_scale);
+    overlayHeight = static_cast<int>(BASE_OVERLAY_HEIGHT * ctx.config.overlay_ui_scale);
 
     WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, WndProc, 0L, 0L,
                       GetModuleHandle(NULL), NULL, NULL, NULL, NULL,
@@ -320,19 +326,19 @@ bool CreateOverlayWindow()
     if (g_hwnd == NULL)
         return false;
     
-    if (config.overlay_opacity <= 20)
+    if (ctx.config.overlay_opacity <= 20)
     {
-        config.overlay_opacity = 20;
-        config.saveConfig("config.ini");
+        ctx.config.overlay_opacity = 20;
+        ctx.config.saveConfig("config.ini");
     }
 
-    if (config.overlay_opacity >= 256)
+    if (ctx.config.overlay_opacity >= 256)
     {
-        config.overlay_opacity = 255;
-        config.saveConfig("config.ini");
+        ctx.config.overlay_opacity = 255;
+        ctx.config.saveConfig("config.ini");
     }
 
-    BYTE opacity = config.overlay_opacity;
+    BYTE opacity = ctx.config.overlay_opacity;
 
     SetLayeredWindowAttributes(g_hwnd, 0, opacity, LWA_ALPHA);
 
@@ -589,17 +595,19 @@ void OverlayThread()
                         detector_model_changed.store(true); 
 
                         
-                        globalMouseThread->updateConfig(
-                            config.detection_resolution,
-                            config.kp_x,
-                            config.ki_x,
-                            config.kd_x,
-                            config.kp_y,
-                            config.ki_y,
-                            config.kd_y,
-                            config.bScope_multiplier,
-                            config.norecoil_ms
-                        );
+                        if (AppContext::getInstance().globalMouseThread) {
+                            AppContext::getInstance().globalMouseThread->updateConfig(
+                                config.detection_resolution,
+                                config.kp_x,
+                                config.ki_x,
+                                config.kd_x,
+                                config.kp_y,
+                                config.ki_y,
+                                config.kd_y,
+                                config.bScope_multiplier,
+                                config.norecoil_ms
+                            );
+                        }
                         config_needs_save = true;
                     }
 
@@ -665,17 +673,19 @@ void OverlayThread()
                         prev_ki_y = config.ki_y;
                         prev_kd_y = config.kd_y;
 
-                        globalMouseThread->updateConfig(
-                            config.detection_resolution,
-                            config.kp_x,
-                            config.ki_x,
-                            config.kd_x,
-                            config.kp_y,
-                            config.ki_y,
-                            config.kd_y,
-                            config.bScope_multiplier,
-                            config.norecoil_ms
-                        );
+                        if (AppContext::getInstance().globalMouseThread) {
+                            AppContext::getInstance().globalMouseThread->updateConfig(
+                                config.detection_resolution,
+                                config.kp_x,
+                                config.ki_x,
+                                config.kd_x,
+                                config.kp_y,
+                                config.ki_y,
+                                config.kd_y,
+                                config.bScope_multiplier,
+                                config.norecoil_ms
+                            );
+                        }
 
                         config_needs_save = true;
                     }
@@ -685,7 +695,8 @@ void OverlayThread()
                     {
                         prev_bScope_multiplier = config.bScope_multiplier;
 
-                        globalMouseThread->updateConfig(
+                        if (AppContext::getInstance().globalMouseThread) {
+                            AppContext::getInstance().globalMouseThread->updateConfig(
                             config.detection_resolution,
                             config.kp_x,
                             config.ki_x,
@@ -695,7 +706,8 @@ void OverlayThread()
                             config.kd_y,
                             config.bScope_multiplier,
                             config.norecoil_ms
-                        );
+                            );
+                        }
 
                         config_needs_save = true;
                     }

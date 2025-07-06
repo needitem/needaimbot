@@ -92,8 +92,8 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
              return;
         }
 
-        if (capturer) {
-            ctx.detector.setCaptureEvent(capturer->GetCaptureDoneEvent());
+        if (capturer && ctx.detector) {
+            ctx.detector->setCaptureEvent(capturer->GetCaptureDoneEvent());
         }
 
         bool buttonPreviouslyPressed = false;
@@ -209,46 +209,24 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 
             auto frame_acq_start_time = std::chrono::high_resolution_clock::now();
 
-            if (ctx.config.capture_use_cuda) {
-                screenshotGpu = capturer->GetNextFrameGpu();
-            } else {
-                screenshotCpu = capturer->GetNextFrameCpu();
-            }
+            screenshotGpu = capturer->GetNextFrameGpu();
 
             auto frame_acq_end_time = std::chrono::high_resolution_clock::now();
             std::chrono::duration<float, std::milli> frame_acq_duration_ms = frame_acq_end_time - frame_acq_start_time;
             ctx.g_current_frame_acquisition_time_ms.store(frame_acq_duration_ms.count());
             add_to_history(ctx.g_frame_acquisition_time_history, frame_acq_duration_ms.count(), ctx.g_frame_acquisition_history_mutex);
 
-            if (ctx.config.capture_use_cuda) {
-                if (!screenshotGpu.empty())
+            if (!screenshotGpu.empty())
                 {
                     captureFrameCount++;
-                    ctx.detector.processFrame(screenshotGpu);
-                    if (ctx.config.enable_optical_flow && ctx.opticalFlow.isThreadRunning()) {
-                        ctx.opticalFlow.enqueueFrame(screenshotGpu);
-                    } 
-                }
-                else
-                {
-
-                }
-            } else {
-                if (!screenshotCpu.empty())
-                {
-                    captureFrameCount++;
-                    ctx.detector.processFrame(screenshotCpu);
-                    if (ctx.config.enable_optical_flow && ctx.opticalFlow.isThreadRunning()) {
-                        cv::cuda::GpuMat gpuFrame;
-                        gpuFrame.upload(screenshotCpu);
-                        ctx.opticalFlow.enqueueFrame(gpuFrame);
+                    if (ctx.detector) {
+                        ctx.detector->processFrame(screenshotGpu);
                     }
                 }
                 else
                 {
 
                 }
-            }
 
             auto now = std::chrono::steady_clock::now();
             auto elapsed_fps = std::chrono::duration<double>(now - captureFpsStartTime).count();
@@ -271,29 +249,15 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 
                 if (buttonPressed && !buttonPreviouslyPressed && elapsed_ss > 1000)
                 {
-                    
-                    if (ctx.config.capture_use_cuda)
+                    int idx = captureGpuWriteIdx.load(std::memory_order_acquire);
+                    const cv::cuda::GpuMat& gpuFrame = captureGpuBuffer[idx];
+                    if (!gpuFrame.empty())
                     {
-                        int idx = captureGpuWriteIdx.load(std::memory_order_acquire);
-                        const cv::cuda::GpuMat& gpuFrame = captureGpuBuffer[idx];
-                        if (!gpuFrame.empty())
-                        {
-                            cv::Mat tmp;
+                        cv::Mat tmp;
                             gpuFrame.download(tmp);
                             saveScreenshot(tmp);
                             lastSaveTime = now_ss;
                         }
-                    }
-                    else
-                    {
-                        int idx = captureCpuWriteIdx.load(std::memory_order_acquire);
-                        const cv::Mat& cpuFrame = captureCpuBuffer[idx];
-                        if (!cpuFrame.empty())
-                        {
-                            saveScreenshot(cpuFrame);
-                            lastSaveTime = now_ss;
-                        }
-                    }
                 }
                 buttonPreviouslyPressed = buttonPressed;
             }
