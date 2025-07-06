@@ -180,11 +180,6 @@ void draw_capture_settings()
 
     ImGui::Spacing();
 
-    if (ImGui::SliderInt("Acquire Timeout (ms)", &ctx.config.capture_timeout_ms, 1, 100))
-    {
-        ctx.config.saveConfig();
-        ctx.capture_timeout_changed = true;
-    }
     if (ImGui::IsItemHovered())
     {
         ImGui::SetTooltip("Timeout for AcquireNextFrame in milliseconds (1-100ms).\nLower values can make the application feel more responsive if frames are ready quickly,\nbut may lead to more timeouts (frame drops) if the system is slow to provide frames.\nHigher values give the system more time but can increase perceived latency if waiting for a slow frame.");
