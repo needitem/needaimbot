@@ -13,6 +13,7 @@
 #include "include/other_tools.h"
 #include "overlay.h"
 #include "AppContext.h"
+#include "detector/detector.h"
 
 void draw_ai()
 {
@@ -232,12 +233,14 @@ void draw_ai()
             ImGui::TableSetColumnIndex(2);
             if (ImGui::Checkbox("##Ignore", &setting.ignore)) {
                 ctx.config.saveConfig();
+                if (ctx.detector) ctx.detector->m_ignore_flags_need_update = true;
             }
 
             ImGui::TableSetColumnIndex(3);
             if (ImGui::Button("Remove")) {
                 ctx.config.class_settings.erase(ctx.config.class_settings.begin() + i);
                 ctx.config.saveConfig();
+                if (ctx.detector) ctx.detector->m_ignore_flags_need_update = true;
                 ImGui::PopID(); 
                 i--; 
                 continue; 
@@ -285,6 +288,7 @@ void draw_ai()
         if (!id_exists && !temp_name.empty()) {
             ctx.config.class_settings.emplace_back(new_class_id, temp_name, new_class_ignore);
             ctx.config.saveConfig();
+            if (ctx.detector) ctx.detector->m_ignore_flags_need_update = true;
             
             int max_id = -1;
             if (!ctx.config.class_settings.empty()) {

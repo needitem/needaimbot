@@ -4,6 +4,7 @@
 #include <device_atomic_functions.h> 
 #include <vector>
 #include <algorithm> 
+#include <cmath>
 #include <thrust/device_vector.h>
 #include <thrust/host_vector.h>
 #include <thrust/sort.h>
@@ -208,7 +209,7 @@ void NMSGpu(
         );
 
         cudaMemcpyAsync(d_output_count_gpu, &final_count, sizeof(int), cudaMemcpyHostToDevice, stream);
-         err = cudaGetLastError(); if (err != cudaSuccess) goto cleanup;
+        err = cudaGetLastError(); if (err != cudaSuccess) goto cleanup;
 
     } catch (const std::exception& e) {
         fprintf(stderr, "[Thrust Error] NMSGpu copy_if/gather: %s\n", e.what());
@@ -234,10 +235,10 @@ cleanup:
 
 
 
-__device__ inline float readOutputValue(const void* buffer, nvinfer1::DataType type, size_t index) {
-    if (type == nvinfer1::DataType::kFLOAT) {
+__device__ inline float readOutputValue(const void* buffer, int type, size_t index) {
+    if (type == 0) { // kFLOAT
         return reinterpret_cast<const float*>(buffer)[index];
-    } else if (type == nvinfer1::DataType::kHALF) {
+    } else if (type == 1) { // kHALF
         return __half2float(reinterpret_cast<const __half*>(buffer)[index]);
     }
     
@@ -247,9 +248,9 @@ __device__ inline float readOutputValue(const void* buffer, nvinfer1::DataType t
 
 __global__ void decodeYolo10GpuKernel(
     const void* d_raw_output,          
-    nvinfer1::DataType output_type,    
-    int64_t num_detections_raw,        
-    int64_t stride,                    
+    int output_type,    
+    int num_detections_raw,        
+    int stride,                    
     int num_classes,                   
     float conf_threshold,              
     float img_scale,                   
@@ -306,9 +307,9 @@ __global__ void decodeYolo10GpuKernel(
 
 __global__ void decodeYolo11GpuKernel(
     const void* d_raw_output,          
-    nvinfer1::DataType output_type,    
-    int64_t num_boxes_raw,             
-    int64_t num_rows,                  
+    int output_type,    
+    int num_boxes_raw,             
+    int num_rows,                  
     int num_classes,                   
     float conf_threshold,              
     float img_scale,                   
@@ -327,6 +328,10 @@ __global__ void decodeYolo11GpuKernel(
         for (int c = 0; c < num_classes; ++c) {
             
             size_t score_idx = (4 + c) * num_boxes_raw + idx;
+            if (score_idx >= num_rows * num_boxes_raw) {
+                printf("[decodeYolo11GpuKernel] Score index out of bounds: %zu >= %d\n", score_idx, num_rows * num_boxes_raw);
+                continue;
+            }
             float score = readOutputValue(d_raw_output, output_type, score_idx);
             if (score > max_score) {
                 max_score = score;
@@ -337,10 +342,21 @@ __global__ void decodeYolo11GpuKernel(
         
         if (max_score > conf_threshold) {
             
-            float cx = readOutputValue(d_raw_output, output_type, 0 * num_boxes_raw + idx);
-            float cy = readOutputValue(d_raw_output, output_type, 1 * num_boxes_raw + idx);
-            float ow = readOutputValue(d_raw_output, output_type, 2 * num_boxes_raw + idx);
-            float oh = readOutputValue(d_raw_output, output_type, 3 * num_boxes_raw + idx);
+            size_t cx_idx = 0 * num_boxes_raw + idx;
+            size_t cy_idx = 1 * num_boxes_raw + idx;
+            size_t ow_idx = 2 * num_boxes_raw + idx;
+            size_t oh_idx = 3 * num_boxes_raw + idx;
+            
+            if (cx_idx >= num_rows * num_boxes_raw || cy_idx >= num_rows * num_boxes_raw || 
+                ow_idx >= num_rows * num_boxes_raw || oh_idx >= num_rows * num_boxes_raw) {
+                printf("[decodeYolo11GpuKernel] Bbox index out of bounds\n");
+                return;
+            }
+            
+            float cx = readOutputValue(d_raw_output, output_type, cx_idx);
+            float cy = readOutputValue(d_raw_output, output_type, cy_idx);
+            float ow = readOutputValue(d_raw_output, output_type, ow_idx);
+            float oh = readOutputValue(d_raw_output, output_type, oh_idx);
 
             
             if (ow > 0 && oh > 0) {
@@ -386,34 +402,60 @@ cudaError_t decodeYolo10Gpu(
     float img_scale,
     Detection* d_decoded_detections,
     int* d_decoded_count, 
+    int max_candidates,
     int max_detections,
     cudaStream_t stream)
 {
+    printf("[decodeYolo10Gpu] Input validation:\n");
+    printf("  - Shape size: %zd\n", shape.size());
+    printf("  - Max candidates: %d\n", max_candidates);
+    printf("  - Max detections: %d\n", max_detections);
+    printf("  - Num classes: %d\n", num_classes);
+    printf("  - Conf threshold: %f\n", conf_threshold);
+    printf("  - d_raw_output ptr: %p\n", d_raw_output);
+    printf("  - d_decoded_detections ptr: %p\n", d_decoded_detections);
+    printf("  - d_decoded_count ptr: %p\n", d_decoded_count);
+    printf("  - Output type: %d\n", (int)output_type);
+    
     if (shape.size() != 3) {
         fprintf(stderr, "[decodeYolo10Gpu] Error: Unexpected output shape size %zd\n", shape.size());
         return cudaErrorInvalidValue;
     }
 
-    int64_t num_detections_raw = shape[1];
-    int64_t stride = shape[2]; 
-
-    if (num_detections_raw <= 0 || stride == 0) {
-        
+    if (max_candidates <= 0) {
+        printf("[decodeYolo10Gpu] Warning: max_candidates <= 0, returning success\n");
         cudaMemsetAsync(d_decoded_count, 0, sizeof(int), stream);
-        return cudaSuccess; 
+        return cudaSuccess;
     }
 
+    int64_t stride = shape[2];
+    printf("  - Stride: %lld\n", stride);
     
-    
+    if (stride <= 0) {
+        printf("[decodeYolo10Gpu] Warning: stride <= 0, returning success\n");
+        cudaMemsetAsync(d_decoded_count, 0, sizeof(int), stream);
+        return cudaSuccess;
+    }
 
     const int block_size = 256;
-    const int grid_size = (num_detections_raw + block_size - 1) / block_size;
+    const int grid_size = (max_candidates + block_size - 1) / block_size;
+    printf("  - Grid size: %d, Block size: %d\n", grid_size, block_size);
 
-    decodeYolo10GpuKernel<<<grid_size, block_size, 0, stream>>>( 
-        d_raw_output, output_type, num_detections_raw, stride, num_classes,
+    if (d_raw_output == nullptr || d_decoded_detections == nullptr || d_decoded_count == nullptr) {
+        fprintf(stderr, "[decodeYolo10Gpu] Error: Null pointer detected\n");
+        return cudaErrorInvalidValue;
+    }
+
+    decodeYolo10GpuKernel<<<grid_size, block_size, 0, stream>>>(
+        d_raw_output, (int)output_type, max_candidates, (int)stride, num_classes,
         conf_threshold, img_scale, d_decoded_detections, d_decoded_count, max_detections);
 
-    return cudaGetLastError();
+    cudaError_t kernel_err = cudaGetLastError();
+    if (kernel_err != cudaSuccess) {
+        fprintf(stderr, "[decodeYolo10Gpu] Kernel launch error: %s\n", cudaGetErrorString(kernel_err));
+    }
+    
+    return kernel_err;
 }
 
 
@@ -426,33 +468,70 @@ cudaError_t decodeYolo11Gpu(
     float img_scale,
     Detection* d_decoded_detections,
     int* d_decoded_count, 
+    int max_candidates,
     int max_detections,
     cudaStream_t stream)
 {
-     if (shape.size() != 3) {
+    // Fixed CUDA "invalid argument" error by:
+    // 1. Using max_candidates consistently for grid calculation and kernel launch
+    // 2. Proper initialization of decoded count with synchronous cudaMemset
+    // 3. Clearing previous CUDA errors before kernel launch
+    // 4. Added parameter validation for floating-point values
+    
+    if (shape.size() != 3) {
         fprintf(stderr, "[decodeYolo11Gpu] Error: Unexpected output shape size %zd\n", shape.size());
         return cudaErrorInvalidValue;
     }
 
-    int64_t num_rows = shape[1]; 
-    int64_t num_boxes_raw = shape[2];
+    if (max_candidates <= 0) {
+        cudaMemsetAsync(d_decoded_count, 0, sizeof(int), stream);
+        return cudaSuccess;
+    }
 
-     if (num_boxes_raw <= 0 || num_rows == 0) {
-         
-         cudaMemsetAsync(d_decoded_count, 0, sizeof(int), stream);
-         return cudaSuccess; 
-     }
-
+    int64_t num_rows = shape[1];
+    int64_t num_boxes = shape[2];
     
+    if (num_rows <= 0 || num_boxes <= 0) {
+        cudaMemsetAsync(d_decoded_count, 0, sizeof(int), stream);
+        return cudaSuccess;
+    }
 
     const int block_size = 256;
-    const int grid_size = (num_boxes_raw + block_size - 1) / block_size;
+    const int grid_size = (max_candidates + block_size - 1) / block_size;
 
-    decodeYolo11GpuKernel<<<grid_size, block_size, 0, stream>>>( 
-        d_raw_output, output_type, num_boxes_raw, num_rows, num_classes,
+    if (d_raw_output == nullptr || d_decoded_detections == nullptr || d_decoded_count == nullptr) {
+        fprintf(stderr, "[decodeYolo11Gpu] Error: Null pointer detected\n");
+        return cudaErrorInvalidValue;
+    }
+
+    // Initialize decoded count to zero (synchronous to ensure proper initialization)
+    cudaError_t init_err = cudaMemset(d_decoded_count, 0, sizeof(int));
+    if (init_err != cudaSuccess) {
+        return init_err;
+    }
+
+    // Clear any previous CUDA errors before kernel launch
+    cudaGetLastError();
+    
+    // Validate parameters
+    if (grid_size <= 0 || block_size <= 0 || max_candidates <= 0 || num_rows <= 0 || max_detections <= 0) {
+        return cudaErrorInvalidValue;
+    }
+
+    if (!isfinite(conf_threshold) || !isfinite(img_scale) || conf_threshold < 0.0f || img_scale <= 0.0f) {
+        return cudaErrorInvalidValue;
+    }
+    
+    decodeYolo11GpuKernel<<<grid_size, block_size, 0, stream>>>(
+        d_raw_output, (int)output_type, max_candidates, (int)num_rows, num_classes,
         conf_threshold, img_scale, d_decoded_detections, d_decoded_count, max_detections);
 
-    return cudaGetLastError();
+    cudaError_t kernel_err = cudaGetLastError();
+    if (kernel_err != cudaSuccess) {
+        fprintf(stderr, "[decodeYolo11Gpu] Kernel launch error: %s\n", cudaGetErrorString(kernel_err));
+    }
+    
+    return kernel_err;
 }
 
  

@@ -52,7 +52,7 @@ private:
     float move_scale_x; 
     float move_scale_y; 
     float norecoil_ms; 
-    std::chrono::milliseconds silent_aim_click_duration_ms; 
+ 
 
     std::chrono::steady_clock::time_point last_target_time;
     std::chrono::steady_clock::time_point last_recoil_compensation_time; 
@@ -102,7 +102,7 @@ public:
 
     void setInputMethod(std::unique_ptr<InputMethod> new_method);
      
-    void executeSilentAim(const AimbotTarget& target); 
+ 
     
     float getScreenWidth() { std::lock_guard<std::mutex> lock(member_data_mutex_); return screen_width; }
     float getScreenHeight() { std::lock_guard<std::mutex> lock(member_data_mutex_); return screen_height; }
@@ -110,6 +110,12 @@ public:
     
     
     bool isTargetDetected() const { return target_detected.load(); }
+    
+    // Add method to access PID controller for resetting
+    PIDController2D* getPIDController() { return pid_controller.get(); }
+    
+    // Add method to reset all accumulated states
+    void resetAccumulatedStates();
 };
 
 #endif 

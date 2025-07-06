@@ -286,12 +286,9 @@ void SerialConnection::processIncomingLine(const std::string& line)
             switch (buttonId)
             {
             case 2:
-                // aiming_active = true;
-                // aiming.store(true); // Aiming state removed
                 break;
             case 1:
                 shooting_active = true;
-                AppContext::getInstance().shooting.store(true);
                 break;
             }
         }
@@ -301,12 +298,9 @@ void SerialConnection::processIncomingLine(const std::string& line)
             switch (buttonId)
             {
             case 2:
-                // aiming_active = false;
-                // aiming.store(false); // Aiming state removed
                 break;
             case 1:
                 shooting_active = false;
-                AppContext::getInstance().shooting.store(false);
                 break;
             }
         }
