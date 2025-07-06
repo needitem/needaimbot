@@ -455,7 +455,7 @@ public:
     cudaStream_t m_cudaStream;
     cudaEvent_t m_captureDoneEvent;
     std::vector<cv::cuda::GpuMat> m_framePool;
-    UINT m_timeout = 1; 
+    UINT m_timeout = 0; 
     std::vector<BYTE> m_metaDataBuffer;
 
     

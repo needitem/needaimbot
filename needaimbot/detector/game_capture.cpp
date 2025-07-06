@@ -1,8 +1,8 @@
 #include "game_capture.h"
 #include <sstream>
 
-GameCapture::GameCapture(int fw, int fh, int sw, int sh, const std::string& game, bool use_1ms) :
-	screen_width(sw), screen_height(sh), width(fw), height(fh), game_name(game), use_1ms_capture(use_1ms), hwnd(nullptr), process_id(0), thread_id(0),
+GameCapture::GameCapture(int fw, int fh, int sw, int sh, const std::string& game) :
+	screen_width(sw), screen_height(sh), width(fw), height(fh), game_name(game), hwnd(nullptr), process_id(0), thread_id(0),
     hook_restart(nullptr), hook_stop(nullptr), hook_ready(nullptr), hook_exit(nullptr), hook_init(nullptr),
     keepalive_mutex(nullptr), hook_info_map(nullptr), hook_data_map(nullptr),
     shared_hook_info(nullptr), shared_shtex_data(nullptr),
@@ -85,7 +85,7 @@ bool GameCapture::initialize() {
     shared_hook_info->UNUSED_use_scale = false;
     shared_hook_info->allow_srgb_alias = true;
     shared_hook_info->force_shmem = false;
-    shared_hook_info->frame_interval = use_1ms_capture ? 1000000 : 0;
+    shared_hook_info->frame_interval = 0;
     hook_stop = OpenEventPlusId(L"CaptureHook_Stop", process_id);
     hook_ready = OpenEventPlusId(L"CaptureHook_HookReady", process_id);
     hook_exit = OpenEventPlusId(L"CaptureHook_Exit", process_id);
