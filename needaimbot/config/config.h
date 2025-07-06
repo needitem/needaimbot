@@ -64,9 +64,7 @@ public:
     bool capture_borders;
     bool capture_cursor;
     
-    bool use_1ms_capture;
-
-    int capture_timeout_ms = 5; 
+ 
     float target_fps;
     
     std::string capture_method; // "simple", "duplication", "game_capture"
