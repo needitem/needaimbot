@@ -81,6 +81,10 @@ public:
     bool auto_aim;
 
     
+    float crosshair_offset_x;
+    float crosshair_offset_y;
+
+    
     bool easynorecoil;
     float easynorecoilstrength;
     float norecoil_step;  
