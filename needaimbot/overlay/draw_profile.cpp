@@ -1,3 +1,4 @@
+#include "AppContext.h"
 #include "../imgui/imgui.h"
 #include "../imgui/imgui_internal.h"
 #include "needaimbot.h"
@@ -19,17 +20,19 @@ inline std::vector<const char*> getProfileCstrs(const std::vector<std::string>& 
 
 void draw_profile()
 {
+    auto& ctx = AppContext::getInstance();
+    
     ImGui::SeparatorText("Available Profiles");
     ImGui::Spacing();
 
-    static std::vector<std::string> profile_list = config.listProfiles();
+    static std::vector<std::string> profile_list = ctx.config.listProfiles();
     static std::vector<const char*> profile_list_cstrs = getProfileCstrs(profile_list);
     static int selected_profile_index = -1;
     static char new_profile_name[128] = "";
     static std::string status_message = "";
 
     auto refresh_profiles = [&](){
-        profile_list = config.listProfiles();
+        profile_list = ctx.config.listProfiles();
         profile_list_cstrs = getProfileCstrs(profile_list);
         if (selected_profile_index >= (int)profile_list.size()) {
              selected_profile_index = profile_list.empty() ? -1 : 0;
@@ -66,7 +69,7 @@ void draw_profile()
         if (ImGui::Button("Load Selected"))
         {
             std::string profileToLoad = profile_list[selected_profile_index];
-            if (config.loadProfile(profileToLoad))
+            if (ctx.config.loadProfile(profileToLoad))
             {
                 status_message = "Loaded profile: " + profileToLoad;
             } else {
@@ -80,7 +83,7 @@ void draw_profile()
 
         if (ImGui::Button("Delete Selected")) {
             std::string profileToDelete = profile_list[selected_profile_index];
-             if (config.deleteProfile(profileToDelete)) {
+             if (ctx.config.deleteProfile(profileToDelete)) {
                  status_message = "Deleted profile: " + profileToDelete;
                  refresh_profiles();
              } else {
@@ -120,7 +123,7 @@ void draw_profile()
         bool is_overwriting = false;
         if (!name.empty())
         {
-             if (config.saveProfile(name))
+             if (ctx.config.saveProfile(name))
             {
                 status_message = "Saved profile: " + name;
                 refresh_profiles();
@@ -136,7 +139,7 @@ void draw_profile()
             }
         } else if (selected_profile_index >= 0 && selected_profile_index < profile_list.size()) {
              name = profile_list[selected_profile_index];
-              if (config.saveProfile(name))
+              if (ctx.config.saveProfile(name))
              {
                 is_overwriting = true;
                 status_message = "Overwrote profile: " + name;

@@ -5,6 +5,7 @@
 
 #include <shellapi.h>
 
+#include "AppContext.h"
 #include "imgui/imgui.h"
 #include "needaimbot.h"
 #include "include/other_tools.h"
@@ -30,13 +31,15 @@ static void SetWrappedTooltip(const char* text)
 
 void draw_mouse()
 {
+    auto& ctx = AppContext::getInstance();
+    
     ImGui::Columns(2, "MouseSettingsColumns", false); 
 
     
     ImGui::Text("Controller Settings");
     ImGui::Spacing();
     
-    if (ImGui::Checkbox("Use Predictive Controller", &config.use_predictive_controller)) { config.saveConfig(); }
+    if (ImGui::Checkbox("Use Predictive Controller", &ctx.config.use_predictive_controller)) { ctx.config.saveConfig(); }
     if (ImGui::IsItemHovered())
     {
         SetWrappedTooltip("Enable advanced Kalman filter + PID controller for better target tracking and prediction. Recommended for moving targets.");
@@ -52,31 +55,31 @@ void draw_mouse()
         // X-axis PID
         if (ImGui::TreeNode("X-Axis (Horizontal)"))
         {
-            float kp_x_display = static_cast<float>(config.kp_x);
+            float kp_x_display = static_cast<float>(ctx.config.kp_x);
             if (ImGui::InputFloat("Kp X", &kp_x_display, 0.01f, 0.1f, "%.3f"))
             {
-                config.kp_x = static_cast<double>(kp_x_display);
-                config.saveConfig();
+                ctx.config.kp_x = static_cast<double>(kp_x_display);
+                ctx.config.saveConfig();
             }
             if (ImGui::IsItemHovered()) {
                 SetWrappedTooltip("Proportional gain for X-axis. Higher values = faster response but may cause oscillation.");
             }
             
-            float ki_x_display = static_cast<float>(config.ki_x);
+            float ki_x_display = static_cast<float>(ctx.config.ki_x);
             if (ImGui::InputFloat("Ki X", &ki_x_display, 0.01f, 0.1f, "%.3f"))
             {
-                config.ki_x = static_cast<double>(ki_x_display);
-                config.saveConfig();
+                ctx.config.ki_x = static_cast<double>(ki_x_display);
+                ctx.config.saveConfig();
             }
             if (ImGui::IsItemHovered()) {
                 SetWrappedTooltip("Integral gain for X-axis. Helps eliminate steady-state error.");
             }
             
-            float kd_x_display = static_cast<float>(config.kd_x);
+            float kd_x_display = static_cast<float>(ctx.config.kd_x);
             if (ImGui::InputFloat("Kd X", &kd_x_display, 0.01f, 0.1f, "%.3f"))
             {
-                config.kd_x = static_cast<double>(kd_x_display);
-                config.saveConfig();
+                ctx.config.kd_x = static_cast<double>(kd_x_display);
+                ctx.config.saveConfig();
             }
             if (ImGui::IsItemHovered()) {
                 SetWrappedTooltip("Derivative gain for X-axis. Reduces overshoot and oscillation.");
@@ -90,31 +93,31 @@ void draw_mouse()
         // Y-axis PID
         if (ImGui::TreeNode("Y-Axis (Vertical)"))
         {
-            float kp_y_display = static_cast<float>(config.kp_y);
+            float kp_y_display = static_cast<float>(ctx.config.kp_y);
             if (ImGui::InputFloat("Kp Y", &kp_y_display, 0.01f, 0.1f, "%.3f"))
             {
-                config.kp_y = static_cast<double>(kp_y_display);
-                config.saveConfig();
+                ctx.config.kp_y = static_cast<double>(kp_y_display);
+                ctx.config.saveConfig();
             }
             if (ImGui::IsItemHovered()) {
                 SetWrappedTooltip("Proportional gain for Y-axis. Higher values = faster response but may cause oscillation.");
             }
             
-            float ki_y_display = static_cast<float>(config.ki_y);
+            float ki_y_display = static_cast<float>(ctx.config.ki_y);
             if (ImGui::InputFloat("Ki Y", &ki_y_display, 0.01f, 0.1f, "%.3f"))
             {
-                config.ki_y = static_cast<double>(ki_y_display);
-                config.saveConfig();
+                ctx.config.ki_y = static_cast<double>(ki_y_display);
+                ctx.config.saveConfig();
             }
             if (ImGui::IsItemHovered()) {
                 SetWrappedTooltip("Integral gain for Y-axis. Helps eliminate steady-state error.");
             }
             
-            float kd_y_display = static_cast<float>(config.kd_y);
+            float kd_y_display = static_cast<float>(ctx.config.kd_y);
             if (ImGui::InputFloat("Kd Y", &kd_y_display, 0.01f, 0.1f, "%.3f"))
             {
-                config.kd_y = static_cast<double>(kd_y_display);
-                config.saveConfig();
+                ctx.config.kd_y = static_cast<double>(kd_y_display);
+                ctx.config.saveConfig();
             }
             if (ImGui::IsItemHovered()) {
                 SetWrappedTooltip("Derivative gain for Y-axis. Reduces overshoot and oscillation.");
@@ -130,20 +133,20 @@ void draw_mouse()
         // Advanced Settings
         if (ImGui::TreeNode("Advanced Settings"))
         {
-            if (UIHelpers::BeautifulToggle("Enable Adaptive PID", &config.enable_adaptive_pid, 
+            if (UIHelpers::BeautifulToggle("Enable Adaptive PID", &ctx.config.enable_adaptive_pid, 
                                            "Uses distance-based PID adjustment for better stability at different ranges.")) {
-                config.saveConfig();
+                ctx.config.saveConfig();
             }
             
-            if (UIHelpers::BeautifulSlider("Derivative Smoothing", &config.pid_derivative_smoothing, 0.0f, 0.8f, "%.3f")) {
-                config.saveConfig();
+            if (UIHelpers::BeautifulSlider("Derivative Smoothing", &ctx.config.pid_derivative_smoothing, 0.0f, 0.8f, "%.3f")) {
+                ctx.config.saveConfig();
             }
             if (ImGui::IsItemHovered()) {
                 SetWrappedTooltip("Smooths derivative calculation to reduce noise. Higher values = more smoothing but slower response to rapid changes.");
             }
             
-            if (UIHelpers::BeautifulSlider("Movement Smoothing", &config.movement_smoothing, 0.0f, 0.6f, "%.3f")) {
-                config.saveConfig();
+            if (UIHelpers::BeautifulSlider("Movement Smoothing", &ctx.config.movement_smoothing, 0.0f, 0.6f, "%.3f")) {
+                ctx.config.saveConfig();
             }
             if (ImGui::IsItemHovered()) {
                 SetWrappedTooltip("Smooths final mouse movement. Higher values = less jitter but may reduce responsiveness.");
@@ -174,35 +177,35 @@ void draw_mouse()
     }
 
     
-    if (config.use_predictive_controller && ImGui::CollapsingHeader("Predictive Controller Settings"))
+    if (ctx.config.use_predictive_controller && ImGui::CollapsingHeader("Predictive Controller Settings"))
     {
-        float prediction_time_display = config.prediction_time_ms;
+        float prediction_time_display = ctx.config.prediction_time_ms;
         if (ImGui::InputFloat("Prediction Time (ms)", &prediction_time_display, 1.0f, 10.0f, "%.1f"))
         {
-            config.prediction_time_ms = prediction_time_display;
-            config.saveConfig();
+            ctx.config.prediction_time_ms = prediction_time_display;
+            ctx.config.saveConfig();
         }
         if (ImGui::IsItemHovered())
         {
             SetWrappedTooltip("How far ahead to predict target movement in milliseconds. Higher values work better for fast-moving targets.");
         }
 
-        float process_noise_display = config.kalman_process_noise;
+        float process_noise_display = ctx.config.kalman_process_noise;
         if (ImGui::InputFloat("Process Noise", &process_noise_display, 0.1f, 1.0f, "%.1f"))
         {
-            config.kalman_process_noise = process_noise_display;
-            config.saveConfig();
+            ctx.config.kalman_process_noise = process_noise_display;
+            ctx.config.saveConfig();
         }
         if (ImGui::IsItemHovered())
         {
             SetWrappedTooltip("Kalman filter process noise. Higher values make the tracker adapt faster to sudden target movements.");
         }
 
-        float measurement_noise_display = config.kalman_measurement_noise;
+        float measurement_noise_display = ctx.config.kalman_measurement_noise;
         if (ImGui::InputFloat("Measurement Noise", &measurement_noise_display, 0.1f, 1.0f, "%.1f"))
         {
-            config.kalman_measurement_noise = measurement_noise_display;
-            config.saveConfig();
+            ctx.config.kalman_measurement_noise = measurement_noise_display;
+            ctx.config.saveConfig();
         }
         if (ImGui::IsItemHovered())
         {
@@ -227,7 +230,7 @@ void draw_mouse()
         int input_method_index = 0;
         for (size_t i = 0; i < input_methods.size(); ++i)
         {
-            if (input_methods[i] == config.input_method)
+            if (input_methods[i] == ctx.config.input_method)
             {
                 input_method_index = static_cast<int>(i);
                 break;
@@ -236,8 +239,8 @@ void draw_mouse()
 
         if (ImGui::Combo("Input Method", &input_method_index, method_items.data(), method_items.size()))
         {
-            config.input_method = input_methods[input_method_index];
-            config.saveConfig();
+            ctx.config.input_method = input_methods[input_method_index];
+            ctx.config.saveConfig();
         }
         if (ImGui::IsItemHovered())
         {
@@ -250,7 +253,7 @@ void draw_mouse()
         }
 
         
-        if (config.input_method == "GHUB" || !ghub_version.empty())
+        if (ctx.config.input_method == "GHUB" || !ghub_version.empty())
         {
             ImGui::Text("GHUB Version: %s", ghub_version.c_str());
             if (ghub_version.empty())
@@ -261,22 +264,22 @@ void draw_mouse()
         }
 
         
-        if (config.input_method == "ARDUINO")
+        if (ctx.config.input_method == "ARDUINO")
         {
             ImGui::Indent(10.0f);
             ImGui::SeparatorText("Arduino Settings");
 
             
             char port_buffer[64]; 
-            strncpy_s(port_buffer, sizeof(port_buffer), config.arduino_port.c_str(), _TRUNCATE);
+            strncpy_s(port_buffer, sizeof(port_buffer), ctx.config.arduino_port.c_str(), _TRUNCATE);
 
             ImGui::Text("COM Port:");
             ImGui::SameLine();
             ImGui::PushItemWidth(100); 
             if (ImGui::InputText("##ArduinoPort", port_buffer, sizeof(port_buffer)))
             {
-                config.arduino_port = port_buffer;
-                config.saveConfig();
+                ctx.config.arduino_port = port_buffer;
+                ctx.config.saveConfig();
             }
             ImGui::PopItemWidth();
             if (ImGui::IsItemHovered())
@@ -288,10 +291,10 @@ void draw_mouse()
             ImGui::Text("Baud Rate:");
             ImGui::SameLine();
             ImGui::PushItemWidth(100);
-            if (ImGui::InputInt("##ArduinoBaud", &config.arduino_baudrate, 0)) 
+            if (ImGui::InputInt("##ArduinoBaud", &ctx.config.arduino_baudrate, 0)) 
             {
                 
-                config.saveConfig();
+                ctx.config.saveConfig();
             }
             ImGui::PopItemWidth();
             if (ImGui::IsItemHovered())
@@ -300,9 +303,9 @@ void draw_mouse()
             }
 
             
-            if (ImGui::Checkbox("Use 16-bit Mouse Movement", &config.arduino_16_bit_mouse))
+            if (ImGui::Checkbox("Use 16-bit Mouse Movement", &ctx.config.arduino_16_bit_mouse))
             {
-                config.saveConfig();
+                ctx.config.saveConfig();
             }
             if (ImGui::IsItemHovered())
             {
@@ -313,7 +316,7 @@ void draw_mouse()
         }
 
         
-        if (config.input_method == "KMBOX") 
+        if (ctx.config.input_method == "KMBOX") 
         {
             ImGui::Indent(10.0f);
             ImGui::SeparatorText("Kmbox Settings");
@@ -348,9 +351,9 @@ void draw_mouse()
         
         ImGui::SeparatorText("Auto Shoot Hotkeys");
 
-        for (size_t i = 0; i < config.button_auto_shoot.size(); )
+        for (size_t i = 0; i < ctx.config.button_auto_shoot.size(); )
         {
-            std::string& current_key_name = config.button_auto_shoot[i];
+            std::string& current_key_name = ctx.config.button_auto_shoot[i];
 
             int current_index = -1;
             for (size_t k = 0; k < key_names.size(); ++k)
@@ -374,7 +377,7 @@ void draw_mouse()
             if (ImGui::Combo("", &current_index, key_names_cstrs.data(), static_cast<int>(key_names_cstrs.size())))
             {
                 current_key_name = key_names[current_index];
-                config.saveConfig();
+                ctx.config.saveConfig();
             }
             ImGui::PopItemWidth();
             ImGui::PopID();
@@ -383,16 +386,16 @@ void draw_mouse()
             std::string remove_button_label = "Remove##auto_shoot_hotkey_" + std::to_string(i);
             if (ImGui::Button(remove_button_label.c_str()))
             {
-                if (config.button_auto_shoot.size() <= 1)
+                if (ctx.config.button_auto_shoot.size() <= 1)
                 {
-                    config.button_auto_shoot[0] = std::string("None");
-                    config.saveConfig();
+                    ctx.config.button_auto_shoot[0] = std::string("None");
+                    ctx.config.saveConfig();
                     
                 }
                 else
                 {
-                    config.button_auto_shoot.erase(config.button_auto_shoot.begin() + i);
-                    config.saveConfig();
+                    ctx.config.button_auto_shoot.erase(ctx.config.button_auto_shoot.begin() + i);
+                    ctx.config.saveConfig();
                     
                 }
                 continue; 
@@ -403,16 +406,16 @@ void draw_mouse()
 
         if (ImGui::Button("Add Auto Shoot Hotkey##auto_shoot_hotkey"))
         {
-            config.button_auto_shoot.push_back("None");
-            config.saveConfig();
+            ctx.config.button_auto_shoot.push_back("None");
+            ctx.config.saveConfig();
         }
         
 
         
         ImGui::SeparatorText("Scope Settings");
         ImGui::PushItemWidth(150); 
-        if (ImGui::SliderFloat("Triggerbot Area Size", &config.bScope_multiplier, 0.1f, 2.0f, "%.2f")) { 
-             config.saveConfig();
+        if (ImGui::SliderFloat("Triggerbot Area Size", &ctx.config.bScope_multiplier, 0.1f, 2.0f, "%.2f")) { 
+             ctx.config.saveConfig();
         }
         ImGui::PopItemWidth();
         if (ImGui::IsItemHovered())
@@ -424,9 +427,9 @@ void draw_mouse()
 
         ImGui::SeparatorText("Targeting Buttons"); 
 
-        for (size_t i = 0; i < config.button_targeting.size(); )
+        for (size_t i = 0; i < ctx.config.button_targeting.size(); )
         {
-            std::string& current_key_name = config.button_targeting[i];
+            std::string& current_key_name = ctx.config.button_targeting[i];
 
             int current_index = -1;
             for (size_t k = 0; k < key_names.size(); ++k)
@@ -450,7 +453,7 @@ void draw_mouse()
             if (ImGui::Combo("", &current_index, key_names_cstrs.data(), static_cast<int>(key_names_cstrs.size())))
             {
                 current_key_name = key_names[current_index];
-                config.saveConfig();
+                ctx.config.saveConfig();
             }
             ImGui::PopItemWidth();
             ImGui::PopID(); 
@@ -459,16 +462,16 @@ void draw_mouse()
             std::string remove_button_label = "Remove##targeting_" + std::to_string(i);
             if (ImGui::Button(remove_button_label.c_str()))
             {
-                if (config.button_targeting.size() <= 1)
+                if (ctx.config.button_targeting.size() <= 1)
                 {
-                    config.button_targeting[0] = std::string("None");
-                    config.saveConfig();
+                    ctx.config.button_targeting[0] = std::string("None");
+                    ctx.config.saveConfig();
                     
                 }
                 else
                 {
-                    config.button_targeting.erase(config.button_targeting.begin() + i);
-                    config.saveConfig();
+                    ctx.config.button_targeting.erase(ctx.config.button_targeting.begin() + i);
+                    ctx.config.saveConfig();
                     
                 }
                 continue; 
@@ -479,15 +482,15 @@ void draw_mouse()
 
         if (ImGui::Button("Add Targeting Button##targeting"))
         {
-            config.button_targeting.push_back("None");
-            config.saveConfig();
+            ctx.config.button_targeting.push_back("None");
+            ctx.config.saveConfig();
         }
 
         ImGui::SeparatorText("Disable Upward Aim"); 
 
-        for (size_t i = 0; i < config.button_disable_upward_aim.size(); )
+        for (size_t i = 0; i < ctx.config.button_disable_upward_aim.size(); )
         {
-            std::string& current_key_name = config.button_disable_upward_aim[i];
+            std::string& current_key_name = ctx.config.button_disable_upward_aim[i];
 
             int current_index = -1;
             for (size_t k = 0; k < key_names.size(); ++k)
@@ -511,7 +514,7 @@ void draw_mouse()
             if (ImGui::Combo("", &current_index, key_names_cstrs.data(), static_cast<int>(key_names_cstrs.size())))
             {
                 current_key_name = key_names[current_index];
-                config.saveConfig();
+                ctx.config.saveConfig();
             }
             ImGui::PopItemWidth();
             ImGui::PopID(); 
@@ -520,16 +523,16 @@ void draw_mouse()
             std::string remove_button_label = "Remove##disable_upward_" + std::to_string(i);
             if (ImGui::Button(remove_button_label.c_str()))
             {
-                if (config.button_disable_upward_aim.size() <= 1)
+                if (ctx.config.button_disable_upward_aim.size() <= 1)
                 {
-                    config.button_disable_upward_aim[0] = std::string("None");
-                    config.saveConfig();
+                    ctx.config.button_disable_upward_aim[0] = std::string("None");
+                    ctx.config.saveConfig();
                     
                 }
                 else
                 {
-                    config.button_disable_upward_aim.erase(config.button_disable_upward_aim.begin() + i);
-                    config.saveConfig();
+                    ctx.config.button_disable_upward_aim.erase(ctx.config.button_disable_upward_aim.begin() + i);
+                    ctx.config.saveConfig();
                     
                 }
                 continue; 
@@ -540,8 +543,8 @@ void draw_mouse()
 
         if (ImGui::Button("Add Disable Upward Button##disable_upward_aim"))
         {
-            config.button_disable_upward_aim.push_back("None");
-            config.saveConfig();
+            ctx.config.button_disable_upward_aim.push_back("None");
+            ctx.config.saveConfig();
         }
         
         ImGui::Spacing(); 
@@ -550,9 +553,9 @@ void draw_mouse()
     
     ImGui::SeparatorText("Silent Aim Hotkeys");
 
-    for (size_t i = 0; i < config.button_silent_aim.size(); )
+    for (size_t i = 0; i < ctx.config.button_silent_aim.size(); )
     {
-        std::string& current_key_name = config.button_silent_aim[i];
+        std::string& current_key_name = ctx.config.button_silent_aim[i];
 
         int current_index = -1;
         for (size_t k = 0; k < key_names.size(); ++k)
@@ -576,7 +579,7 @@ void draw_mouse()
         if (ImGui::Combo("", &current_index, key_names_cstrs.data(), static_cast<int>(key_names_cstrs.size())))
         {
             current_key_name = key_names[current_index];
-            config.saveConfig();
+            ctx.config.saveConfig();
         }
         ImGui::PopItemWidth();
         ImGui::PopID();
@@ -585,16 +588,16 @@ void draw_mouse()
         std::string remove_button_label = "Remove##silent_aim_hotkey_" + std::to_string(i);
         if (ImGui::Button(remove_button_label.c_str()))
         {
-            if (config.button_silent_aim.size() <= 1)
+            if (ctx.config.button_silent_aim.size() <= 1)
             {
-                config.button_silent_aim[0] = std::string("None");
-                config.saveConfig();
+                ctx.config.button_silent_aim[0] = std::string("None");
+                ctx.config.saveConfig();
                 
             }
             else
             {
-                config.button_silent_aim.erase(config.button_silent_aim.begin() + i);
-                config.saveConfig();
+                ctx.config.button_silent_aim.erase(ctx.config.button_silent_aim.begin() + i);
+                ctx.config.saveConfig();
                 
             }
             continue; 
@@ -605,8 +608,8 @@ void draw_mouse()
 
     if (ImGui::Button("Add Silent Aim Hotkey##silent_aim_hotkey"))
     {
-        config.button_silent_aim.push_back("None");
-        config.saveConfig();
+        ctx.config.button_silent_aim.push_back("None");
+        ctx.config.saveConfig();
     }
     
 

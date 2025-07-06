@@ -1,4 +1,5 @@
 #include "../AppContext.h"
+#include "../detector/detector.h"
 #include "imgui/imgui.h"
 #include "needaimbot.h"
 #include "overlay.h"
@@ -6,10 +7,11 @@
 #include <vector>
 #include <string>
 #include <d3d11.h> 
-#include "capture.h" 
+#include "capture.h"
+#include "detector/capture.h" 
 #include <cuda_runtime.h> 
 #include "detector/postProcess.h" 
-#include "capture/optical_flow.h" 
+ 
 
 
 #include <array>
@@ -198,18 +200,13 @@ static void uploadHsvMaskTexture(const cv::Mat& grayMask)
 
 void draw_debug_frame()
 {
-    // Simplified frame acquisition using atomic index
+    auto& ctx = AppContext::getInstance();
+    
+    // Simplified frame acquisition using atomic index (always use CUDA)
     cv::Mat frameCopy;
-    if (ctx.config.capture_use_cuda) {
-        int idx = captureGpuWriteIdx.load(std::memory_order_acquire);
-        if (idx >= 0 && idx < FRAME_BUFFER_COUNT) {
-            try { captureGpuBuffer[idx].download(frameCopy); } catch (const cv::Exception&) { frameCopy.release(); }
-        }
-    } else {
-        int idx = captureCpuWriteIdx.load(std::memory_order_acquire);
-        if (idx >= 0 && idx < FRAME_BUFFER_COUNT) {
-            try { captureCpuBuffer[idx].copyTo(frameCopy); } catch (const cv::Exception&) { frameCopy.release(); }
-        }
+    int idx = ctx.captureGpuWriteIdx.load(std::memory_order_acquire);
+    if (idx >= 0 && idx < FRAME_BUFFER_COUNT) {
+        try { ctx.captureGpuBuffer[idx].download(frameCopy); } catch (const cv::Exception&) { frameCopy.release(); }
     }
     if (frameCopy.empty()) {
         ImGui::TextUnformatted("Debug frame unavailable.");
@@ -231,12 +228,12 @@ void draw_debug_frame()
 
     
     {
-        std::lock_guard<std::mutex> det_lock(ctx.detector.detectionMutex);
-        if (ctx.detector.m_finalDetectionsCountHost > 0 && ctx.detector.m_finalDetectionsGpu.get() != nullptr)
+        std::lock_guard<std::mutex> det_lock(ctx.detector->detectionMutex);
+        if (ctx.detector->m_finalDetectionsCountHost > 0 && ctx.detector->m_finalDetectionsGpu.get() != nullptr)
         {
-            std::vector<Detection> host_detections(ctx.detector.m_finalDetectionsCountHost);
-            cudaError_t err = cudaMemcpy(host_detections.data(), ctx.detector.m_finalDetectionsGpu.get(),
-                                         ctx.detector.m_finalDetectionsCountHost * sizeof(Detection),
+            std::vector<Detection> host_detections(ctx.detector->m_finalDetectionsCountHost);
+            cudaError_t err = cudaMemcpy(host_detections.data(), ctx.detector->m_finalDetectionsGpu.get(),
+                                         ctx.detector->m_finalDetectionsCountHost * sizeof(Detection),
                                          cudaMemcpyDeviceToHost);
 
             if (err == cudaSuccess)
@@ -272,63 +269,6 @@ void draw_debug_frame()
         }
     }
 
-    
-    if (ctx.config.draw_optical_flow && ctx.opticalFlow.isFlowValidAtomic.load() && !ctx.opticalFlow.flow.empty())
-    {
-        cv::Mat flowCpu;
-        ctx.opticalFlow.flow.download(flowCpu); 
-
-        if (!flowCpu.empty() && flowCpu.type() == CV_32FC2) 
-        {
-            
-            
-
-            cv::Mat flowChannels[2];
-            cv::split(flowCpu, flowChannels); 
-
-            cv::Mat magnitude;
-            cv::magnitude(flowChannels[0], flowChannels[1], magnitude);
-
-            
-            if (texW <=0 || texH <=0) return;
-
-
-            float scaleX = static_cast<float>(texW) / flowCpu.cols;
-            float scaleY = static_cast<float>(texH) / flowCpu.rows;
-            float visualScaleX = debug_scale * scaleX;
-            float visualScaleY = debug_scale * scaleY;
-
-            int step = ctx.config.draw_optical_flow_steps > 0 ? ctx.config.draw_optical_flow_steps : 16; 
-            double magThreshold = ctx.config.optical_flow_magnitudeThreshold;
-
-            draw_list->PushClipRect(image_pos,
-                                    ImVec2(image_pos.x + texW * debug_scale,
-                                           image_pos.y + texH * debug_scale),
-                                    true);
-
-            for (int y = 0; y < flowCpu.rows; y += step)
-            {
-                for (int x = 0; x < flowCpu.cols; x += step)
-                {
-                    float mag = magnitude.at<float>(y, x);
-                    if (mag > magThreshold)
-                    {
-                        const cv::Point2f& fxy = flowCpu.at<cv::Point2f>(y, x);
-
-                        ImVec2 p1(image_pos.x + x * visualScaleX,
-                                  image_pos.y + y * visualScaleY);
-                        
-                        ImVec2 p2 = ImVec2(p1.x + fxy.x * debug_scale * scaleX,  
-                                          p1.y + fxy.y * debug_scale * scaleY); 
-
-                        draw_list->AddLine(p1, p2, IM_COL32(0, 223, 255, 255), 1.0f); 
-                        draw_list->AddCircleFilled(p1, 1.5f * debug_scale, IM_COL32(0, 223, 255, 255)); 
-                    }
-                }
-            }
-            draw_list->PopClipRect();
-        }
-    }
 
     
     ImGui::SeparatorText("Crosshair Pixel HSV");
@@ -358,11 +298,11 @@ inline std::vector<const char*> getProfileCstrs(const std::vector<std::string>& 
 
 void draw_debug()
 {
+    auto& ctx = AppContext::getInstance();
     
-    
-    if (config.show_fps) {
-        ImGui::Text("Capture FPS: %.1f", g_current_capture_fps.load());
-        ImGui::Text("Inference Time: %.2f ms", g_current_inference_time_ms.load());
+    if (ctx.config.show_fps) {
+        ImGui::Text("Capture FPS: %.1f", ctx.g_current_capture_fps.load());
+        ImGui::Text("Inference Time: %.2f ms", ctx.g_current_inference_time_ms.load());
         
         ImGui::Separator();
         ImGui::Spacing();
@@ -371,13 +311,13 @@ void draw_debug()
     ImGui::SeparatorText("Debug Preview & Overlay"); 
     ImGui::Spacing();
 
-    bool prev_show_window_state = config.show_window; 
-    if (ImGui::Checkbox("Show Preview Window", &config.show_window)) 
+    bool prev_show_window_state = ctx.config.show_window; 
+    if (ImGui::Checkbox("Show Preview Window", &ctx.config.show_window)) 
     {
         
-        config.saveConfig(); 
+        ctx.config.saveConfig(); 
 
-        if (prev_show_window_state == true && config.show_window == false) {
+        if (prev_show_window_state == true && ctx.config.show_window == false) {
             
             if (g_debugSRV) {
                 g_debugSRV->Release();
@@ -408,17 +348,17 @@ void draw_debug()
     ImGui::SameLine(); ImGui::Spacing(); ImGui::SameLine();
     
     
-    if (ImGui::Checkbox("Enable FPS Display", &config.show_fps)) { config.saveConfig(); } 
+    if (ImGui::Checkbox("Enable FPS Display", &ctx.config.show_fps)) { ctx.config.saveConfig(); } 
 
     ImGui::Spacing();
 
-    if (config.show_window) 
+    if (ctx.config.show_window) 
     {
         // Simplified frame acquisition using atomic index
         cv::Mat frameCopy;
-        int idx = captureGpuWriteIdx.load(std::memory_order_acquire);
+        int idx = ctx.captureGpuWriteIdx.load(std::memory_order_acquire);
         if (idx >= 0 && idx < FRAME_BUFFER_COUNT) {
-            try { captureGpuBuffer[idx].download(frameCopy); } catch (const cv::Exception&) { frameCopy.release(); }
+            try { ctx.captureGpuBuffer[idx].download(frameCopy); } catch (const cv::Exception&) { frameCopy.release(); }
         }
 
         if (frameCopy.empty()) {
@@ -441,13 +381,14 @@ void draw_debug()
 
         
         {
-            std::lock_guard<std::mutex> det_lock(detector.detectionMutex);
-            if (detector.m_finalDetectionsCountHost > 0 && detector.m_finalDetectionsGpu != nullptr)
-            {
-                std::vector<Detection> host_detections(detector.m_finalDetectionsCountHost);
-                cudaError_t err = cudaMemcpy(host_detections.data(), detector.m_finalDetectionsGpu,
-                                             detector.m_finalDetectionsCountHost * sizeof(Detection),
-                                             cudaMemcpyDeviceToHost);
+            if (ctx.detector) {
+                std::lock_guard<std::mutex> det_lock(ctx.detector->detectionMutex);
+                if (ctx.detector->m_finalDetectionsCountHost > 0 && ctx.detector->m_finalDetectionsGpu.get() != nullptr)
+                {
+                    std::vector<Detection> host_detections(ctx.detector->m_finalDetectionsCountHost);
+                    cudaError_t err = cudaMemcpy(host_detections.data(), ctx.detector->m_finalDetectionsGpu.get(),
+                                                 ctx.detector->m_finalDetectionsCountHost * sizeof(Detection),
+                                                 cudaMemcpyDeviceToHost);
 
                 if (err == cudaSuccess)
                 {
@@ -466,7 +407,7 @@ void draw_debug()
                         draw_list->AddRect(p1, p2, color, 1.0f, 0, 1.5f); 
 
                         std::string className = "Unknown";
-                        for(const auto& cs : config.class_settings) { 
+                        for(const auto& cs : ctx.config.class_settings) { 
                             if (cs.id == det.classId) {
                                 className = cs.name;
                                 break;
@@ -479,66 +420,10 @@ void draw_debug()
                     
                     
                 }
-            }
-        }
-
-        
-        if (ctx.config.draw_optical_flow && ctx.opticalFlow.isFlowValidAtomic.load() && !ctx.opticalFlow.flow.empty())
-    {
-        cv::Mat flowCpu;
-        ctx.opticalFlow.flow.download(flowCpu); 
-
-        if (!flowCpu.empty() && flowCpu.type() == CV_32FC2) 
-        {
-            
-            
-
-            cv::Mat flowChannels[2];
-            cv::split(flowCpu, flowChannels); 
-
-            cv::Mat magnitude;
-            cv::magnitude(flowChannels[0], flowChannels[1], magnitude);
-
-            
-            if (texW <=0 || texH <=0) return;
-
-
-            float scaleX = static_cast<float>(texW) / flowCpu.cols;
-            float scaleY = static_cast<float>(texH) / flowCpu.rows;
-            float visualScaleX = debug_scale * scaleX;
-            float visualScaleY = debug_scale * scaleY;
-
-            int step = ctx.config.draw_optical_flow_steps > 0 ? ctx.config.draw_optical_flow_steps : 16; 
-            double magThreshold = ctx.config.optical_flow_magnitudeThreshold;
-
-            draw_list->PushClipRect(image_pos,
-                                    ImVec2(image_pos.x + texW * debug_scale,
-                                           image_pos.y + texH * debug_scale),
-                                    true);
-
-            for (int y = 0; y < flowCpu.rows; y += step)
-            {
-                for (int x = 0; x < flowCpu.cols; x += step)
-                {
-                    float mag = magnitude.at<float>(y, x);
-                    if (mag > magThreshold)
-                    {
-                        const cv::Point2f& fxy = flowCpu.at<cv::Point2f>(y, x);
-
-                        ImVec2 p1(image_pos.x + x * visualScaleX,
-                                  image_pos.y + y * visualScaleY);
-                        
-                        ImVec2 p2 = ImVec2(p1.x + fxy.x * debug_scale * scaleX,  
-                                          p1.y + fxy.y * debug_scale * scaleY); 
-
-                        draw_list->AddLine(p1, p2, IM_COL32(0, 223, 255, 255), 1.0f); 
-                        draw_list->AddCircleFilled(p1, 1.5f * debug_scale, IM_COL32(0, 223, 255, 255)); 
-                    }
                 }
             }
-            draw_list->PopClipRect();
         }
-    }
+
 
         
         ImGui::SeparatorText("Crosshair Pixel HSV");
@@ -559,19 +444,19 @@ void draw_debug()
     ImGui::SeparatorText("HSV Filter Debug");
     ImGui::Spacing();
 
-    if (ImGui::Checkbox("Enable HSV Filter (in Config)", &config.enable_hsv_filter)) {
-        config.saveConfig(); 
-        detector.m_ignore_flags_need_update = true; 
+    if (ImGui::Checkbox("Enable HSV Filter (in Config)", &ctx.config.enable_hsv_filter)) {
+        ctx.config.saveConfig(); 
+        if (ctx.detector) ctx.detector->m_ignore_flags_need_update = true; 
     }
     if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Toggles the HSV filtering logic (config.enable_hsv_filter)."); }
 
-    if (config.enable_hsv_filter) {
-        ImGui::Text("Min HSV Pixels: %d", config.min_hsv_pixels);
+    if (ctx.config.enable_hsv_filter) {
+        ImGui::Text("Min HSV Pixels: %d", ctx.config.min_hsv_pixels);
         ImGui::SameLine(); ImGui::Spacing(); ImGui::SameLine();
-        ImGui::Text(config.remove_hsv_matches ? "Mode: Remove if HSV matches" : "Mode: Keep if HSV matches");
+        ImGui::Text(ctx.config.remove_hsv_matches ? "Mode: Remove if HSV matches" : "Mode: Keep if HSV matches");
 
-        ImGui::Text("Lower H:%3d S:%3d V:%3d", config.hsv_lower_h, config.hsv_lower_s, config.hsv_lower_v);
-        ImGui::Text("Upper H:%3d S:%3d V:%3d", config.hsv_upper_h, config.hsv_upper_s, config.hsv_upper_v);
+        ImGui::Text("Lower H:%3d S:%3d V:%3d", ctx.config.hsv_lower_h, ctx.config.hsv_lower_s, ctx.config.hsv_lower_v);
+        ImGui::Text("Upper H:%3d S:%3d V:%3d", ctx.config.hsv_upper_h, ctx.config.hsv_upper_s, ctx.config.hsv_upper_v);
         ImGui::Spacing();
 
         static bool show_hsv_mask_preview = false;
@@ -579,7 +464,7 @@ void draw_debug()
 
         if (show_hsv_mask_preview) {
             
-            cv::cuda::GpuMat hsvMaskGpu = detector.getHsvMaskGpu(); 
+            cv::cuda::GpuMat hsvMaskGpu = ctx.detector ? ctx.detector->getHsvMaskGpu() : cv::cuda::GpuMat(); 
             if (!hsvMaskGpu.empty()) {
                 static cv::Mat hsvMaskCpu; 
                 try {
@@ -616,9 +501,9 @@ void draw_debug()
     ImGui::SeparatorText("Screenshot Settings");
     ImGui::Spacing();
 
-    for (size_t i = 0; i < config.screenshot_button.size(); )
+    for (size_t i = 0; i < ctx.config.screenshot_button.size(); )
     {
-        std::string& current_key_name = config.screenshot_button[i];
+        std::string& current_key_name = ctx.config.screenshot_button[i];
 
         int current_index = -1;
         for (size_t k = 0; k < key_names.size(); ++k)
@@ -640,23 +525,23 @@ void draw_debug()
         if (ImGui::Combo(combo_label.c_str(), &current_index, key_names_cstrs.data(), static_cast<int>(key_names_cstrs.size())))
         {
             current_key_name = key_names[current_index];
-            config.saveConfig();
+            ctx.config.saveConfig();
         }
 
         ImGui::SameLine();
         std::string remove_button_label = "Remove##button_screenshot" + std::to_string(i);
         if (ImGui::Button(remove_button_label.c_str()))
         {
-            if (config.screenshot_button.size() <= 1)
+            if (ctx.config.screenshot_button.size() <= 1)
             {
-                config.screenshot_button[0] = std::string("None");
-                config.saveConfig();
+                ctx.config.screenshot_button[0] = std::string("None");
+                ctx.config.saveConfig();
                 continue;
             }
             else
             {
-                config.screenshot_button.erase(config.screenshot_button.begin() + i);
-                config.saveConfig();
+                ctx.config.screenshot_button.erase(ctx.config.screenshot_button.begin() + i);
+                ctx.config.saveConfig();
                 continue;
             }
         }
@@ -665,7 +550,7 @@ void draw_debug()
     }
 
     ImGui::Spacing();
-    if (ImGui::InputInt("Screenshot Delay (ms)", &config.screenshot_delay, 50, 500)) { config.saveConfig(); }
+    if (ImGui::InputInt("Screenshot Delay (ms)", &ctx.config.screenshot_delay, 50, 500)) { ctx.config.saveConfig(); }
     if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Delay in milliseconds after pressing the button before taking the screenshot."); }
 
     ImGui::Spacing();
@@ -675,10 +560,10 @@ void draw_debug()
     ImGui::SeparatorText("Miscellaneous");
     ImGui::Spacing();
 
-    if (ImGui::Checkbox("Always On Top", &config.always_on_top)) { config.saveConfig(); }
+    if (ImGui::Checkbox("Always On Top", &ctx.config.always_on_top)) { ctx.config.saveConfig(); }
     if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Keeps the overlay window always on top of other windows."); }
     ImGui::SameLine(); ImGui::Spacing(); ImGui::SameLine();
-    if (ImGui::Checkbox("Verbose Console Output", &config.verbose)) { config.saveConfig(); }
+    if (ImGui::Checkbox("Verbose Console Output", &ctx.config.verbose)) { ctx.config.saveConfig(); }
     if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Prints more detailed information to the console window for debugging."); }
 
     ImGui::Spacing();

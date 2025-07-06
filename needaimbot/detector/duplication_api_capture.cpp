@@ -7,6 +7,7 @@
 #include "config.h"
 #include "other_tools.h"
 #include "capture.h"
+#include "AppContext.h"
 #include <iostream>
 #include <iomanip>
 #include <algorithm>
@@ -92,7 +93,7 @@ public:
             factory->Release();
             return hr;
         }
-        if (adapter && config.verbose) { 
+        if (adapter && AppContext::getInstance().config.verbose) { 
             DXGI_ADAPTER_DESC1 desc;
             adapter->GetDesc1(&desc);
             std::wcout << L"[DDA] Using Adapter: " << desc.Description << std::endl;
@@ -115,7 +116,7 @@ public:
             SafeRelease(&factory);
             return hr;
         }
-        if (output && config.verbose) { 
+        if (output && AppContext::getInstance().config.verbose) { 
              DXGI_OUTPUT_DESC desc;
              output->GetDesc(&desc);
              std::wcout << L"[DDA] Using Output: " << desc.DeviceName << std::endl;
@@ -191,7 +192,7 @@ public:
         outScreenWidth = outputDesc.DesktopCoordinates.right - outputDesc.DesktopCoordinates.left;
         outScreenHeight = outputDesc.DesktopCoordinates.bottom - outputDesc.DesktopCoordinates.top;
 
-        if (config.verbose)
+        if (AppContext::getInstance().config.verbose)
         {
             std::wcout << L"[DDA] Monitor: " << outputDesc.DeviceName
                        << L", Resolution: " << outScreenWidth << L"x" << outScreenHeight << std::endl;
@@ -470,7 +471,7 @@ DuplicationAPIScreenCapture::DuplicationAPIScreenCapture(int desiredWidth, int d
     m_ddaManager = std::make_unique<DDAManager>();
 
     HRESULT hr = m_ddaManager->Initialize(
-        config.monitor_idx,
+        AppContext::getInstance().config.monitor_idx,
         regionWidth,
         regionHeight,
         screenWidth,

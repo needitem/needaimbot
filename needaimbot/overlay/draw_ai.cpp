@@ -12,9 +12,12 @@
 #include "needaimbot.h"
 #include "include/other_tools.h"
 #include "overlay.h"
+#include "AppContext.h"
 
 void draw_ai()
 {
+    auto& ctx = AppContext::getInstance();
+    
     std::vector<std::string> availableModels = getAvailableModels();
     if (availableModels.empty())
     {
@@ -23,7 +26,7 @@ void draw_ai()
     else
     {
         int currentModelIndex = 0;
-        auto it = std::find(availableModels.begin(), availableModels.end(), config.ai_model);
+        auto it = std::find(availableModels.begin(), availableModels.end(), ctx.config.ai_model);
 
         if (it != availableModels.end())
         {
@@ -40,10 +43,10 @@ void draw_ai()
 
         if (ImGui::Combo("Model", &currentModelIndex, modelsItems.data(), static_cast<int>(modelsItems.size())))
         {
-            if (config.ai_model != availableModels[currentModelIndex])
+            if (ctx.config.ai_model != availableModels[currentModelIndex])
             {
-                config.ai_model = availableModels[currentModelIndex];
-                config.saveConfig();
+                ctx.config.ai_model = availableModels[currentModelIndex];
+                ctx.config.saveConfig();
                 detector_model_changed.store(true);
             }
         }
@@ -56,9 +59,9 @@ void draw_ai()
     
     const char* resolution_items[] = { "160", "320", "640" };
     int current_resolution_index = 0;
-    if (config.onnx_input_resolution == 160)      current_resolution_index = 0;
-    else if (config.onnx_input_resolution == 320) current_resolution_index = 1;
-    else if (config.onnx_input_resolution == 640) current_resolution_index = 2;
+    if (ctx.config.onnx_input_resolution == 160)      current_resolution_index = 0;
+    else if (ctx.config.onnx_input_resolution == 320) current_resolution_index = 1;
+    else if (ctx.config.onnx_input_resolution == 640) current_resolution_index = 2;
     
 
     if (ImGui::Combo("ONNX Input Resolution", &current_resolution_index, resolution_items, IM_ARRAYSIZE(resolution_items)))
@@ -68,10 +71,10 @@ void draw_ai()
         else if (current_resolution_index == 1) selected_resolution = 320;
         else if (current_resolution_index == 2) selected_resolution = 640;
 
-        if (config.onnx_input_resolution != selected_resolution)
+        if (ctx.config.onnx_input_resolution != selected_resolution)
         {
-            config.onnx_input_resolution = selected_resolution;
-            config.saveConfig();
+            ctx.config.onnx_input_resolution = selected_resolution;
+            ctx.config.saveConfig();
             detector_model_changed.store(true); 
         }
     }
@@ -81,17 +84,17 @@ void draw_ai()
     }
 
     // Add TensorRT precision options
-    if (ImGui::Checkbox("Enable FP16", &config.export_enable_fp16))
+    if (ImGui::Checkbox("Enable FP16", &ctx.config.export_enable_fp16))
     {
-        config.saveConfig();
+        ctx.config.saveConfig();
         detector_model_changed.store(true);
     }
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Enable FP16 precision for the exported TensorRT engine.");
 
-    if (ImGui::Checkbox("Enable FP8", &config.export_enable_fp8))
+    if (ImGui::Checkbox("Enable FP8", &ctx.config.export_enable_fp8))
     {
-        config.saveConfig();
+        ctx.config.saveConfig();
         detector_model_changed.store(true);
     }
     if (ImGui::IsItemHovered())
@@ -100,7 +103,7 @@ void draw_ai()
     // Force rebuild button
     if (ImGui::Button("Rebuild Engine"))
     {
-        std::filesystem::path modelPath(std::string("models/") + config.ai_model);
+        std::filesystem::path modelPath(std::string("models/") + ctx.config.ai_model);
         std::filesystem::path onnxPath = modelPath;
         if (modelPath.extension() == ".engine")
             onnxPath.replace_extension(".onnx");
@@ -109,12 +112,12 @@ void draw_ai()
         if (std::filesystem::exists(enginePath))
         {
             std::filesystem::remove(enginePath);
-            if (config.verbose)
+            if (ctx.config.verbose)
                 std::cout << "[Overlay] Removed engine: " << enginePath.string() << std::endl;
         }
         // switch to .onnx model to force rebuild from ONNX
-        config.ai_model = onnxPath.filename().string();
-        config.saveConfig();
+        ctx.config.ai_model = onnxPath.filename().string();
+        ctx.config.saveConfig();
         detector_model_changed.store(true);
     }
     if (ImGui::IsItemHovered())
@@ -134,7 +137,7 @@ void draw_ai()
     int currentPostprocessIndex = 0;
     for (size_t i = 0; i < postprocessOptions.size(); ++i)
     {
-        if (postprocessOptions[i] == config.postprocess)
+        if (postprocessOptions[i] == ctx.config.postprocess)
         {
             currentPostprocessIndex = static_cast<int>(i);
             break;
@@ -143,8 +146,8 @@ void draw_ai()
 
     if (ImGui::Combo("Postprocess", &currentPostprocessIndex, postprocessItems.data(), static_cast<int>(postprocessItems.size())))
     {
-        config.postprocess = postprocessOptions[currentPostprocessIndex];
-        config.saveConfig();
+        ctx.config.postprocess = postprocessOptions[currentPostprocessIndex];
+        ctx.config.saveConfig();
         detector_model_changed.store(true);
     }
 
@@ -152,21 +155,21 @@ void draw_ai()
     ImGui::Separator();
     ImGui::Spacing();
 
-    ImGui::SliderFloat("Confidence Threshold", &config.confidence_threshold, 0.01f, 1.00f, "%.2f");
+    ImGui::SliderFloat("Confidence Threshold", &ctx.config.confidence_threshold, 0.01f, 1.00f, "%.2f");
     if (ImGui::IsItemDeactivatedAfterEdit()) {
-        config.saveConfig();
+        ctx.config.saveConfig();
     }
-    if (ImGui::SliderFloat("NMS Threshold", &config.nms_threshold, 0.01f, 1.00f, "%.2f")) { config.saveConfig(); }
-    if (ImGui::SliderInt("Max Detections", &config.max_detections, 1, 100)) { config.saveConfig(); }
+    if (ImGui::SliderFloat("NMS Threshold", &ctx.config.nms_threshold, 0.01f, 1.00f, "%.2f")) { ctx.config.saveConfig(); }
+    if (ImGui::SliderInt("Max Detections", &ctx.config.max_detections, 1, 100)) { ctx.config.saveConfig(); }
 
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
 
-    if (ImGui::InputInt("CUDA Device ID", &config.cuda_device_id))
+    if (ImGui::InputInt("CUDA Device ID", &ctx.config.cuda_device_id))
     {
-        if (config.cuda_device_id < 0) config.cuda_device_id = 0;
-        config.saveConfig();
+        if (ctx.config.cuda_device_id < 0) ctx.config.cuda_device_id = 0;
+        ctx.config.saveConfig();
     }
     if (ImGui::IsItemHovered())
     {
@@ -180,12 +183,12 @@ void draw_ai()
 
     
     static char head_class_name_buffer[128];
-    strncpy(head_class_name_buffer, config.head_class_name.c_str(), sizeof(head_class_name_buffer) - 1);
+    strncpy_s(head_class_name_buffer, sizeof(head_class_name_buffer), ctx.config.head_class_name.c_str(), _TRUNCATE);
     head_class_name_buffer[sizeof(head_class_name_buffer) - 1] = '\0'; 
     ImGui::InputText("Head Class Identifier Name", head_class_name_buffer, sizeof(head_class_name_buffer));
     if (ImGui::IsItemDeactivatedAfterEdit()) {
-        config.head_class_name = head_class_name_buffer;
-        config.saveConfig();
+        ctx.config.head_class_name = head_class_name_buffer;
+        ctx.config.saveConfig();
     }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("The name of the class that should be treated as 'Head' for specific aiming logic (e.g., head_y_offset).");
@@ -200,9 +203,9 @@ void draw_ai()
         ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_WidthFixed, 70.0f);
         ImGui::TableHeadersRow();
 
-        for (size_t i = 0; i < config.class_settings.size(); ++i) {
+        for (size_t i = 0; i < ctx.config.class_settings.size(); ++i) {
             ImGui::PushID(static_cast<int>(i));
-            ClassSetting& setting = config.class_settings[i];
+            ClassSetting& setting = ctx.config.class_settings[i];
 
             ImGui::TableNextRow();
             
@@ -210,31 +213,31 @@ void draw_ai()
             if (ImGui::InputInt("##ID", &setting.id, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue)) {
                 
                 
-                config.saveConfig();
+                ctx.config.saveConfig();
             }
 
             ImGui::TableSetColumnIndex(1);
             char name_buf[128];
-            strncpy(name_buf, setting.name.c_str(), sizeof(name_buf) - 1);
+            strncpy_s(name_buf, sizeof(name_buf), setting.name.c_str(), _TRUNCATE);
             name_buf[sizeof(name_buf) - 1] = '\0';
             if (ImGui::InputText("##Name", name_buf, sizeof(name_buf), ImGuiInputTextFlags_EnterReturnsTrue)) {
                 setting.name = name_buf;
-                config.saveConfig();
+                ctx.config.saveConfig();
             }
              if (ImGui::IsItemDeactivatedAfterEdit() && setting.name != name_buf) { 
                 setting.name = name_buf;
-                config.saveConfig();
+                ctx.config.saveConfig();
             }
 
             ImGui::TableSetColumnIndex(2);
             if (ImGui::Checkbox("##Ignore", &setting.ignore)) {
-                config.saveConfig();
+                ctx.config.saveConfig();
             }
 
             ImGui::TableSetColumnIndex(3);
             if (ImGui::Button("Remove")) {
-                config.class_settings.erase(config.class_settings.begin() + i);
-                config.saveConfig();
+                ctx.config.class_settings.erase(ctx.config.class_settings.begin() + i);
+                ctx.config.saveConfig();
                 ImGui::PopID(); 
                 i--; 
                 continue; 
@@ -256,8 +259,8 @@ void draw_ai()
     
     if (ImGui::Button("Suggest Next ID")) {
         int max_id = -1;
-        if (!config.class_settings.empty()) {
-            for(const auto& cs : config.class_settings) {
+        if (!ctx.config.class_settings.empty()) {
+            for(const auto& cs : ctx.config.class_settings) {
                 if (cs.id > max_id) max_id = cs.id;
             }
             new_class_id = max_id + 1;
@@ -272,7 +275,7 @@ void draw_ai()
 
     if (ImGui::Button("Add Class")) {
         bool id_exists = false;
-        for (const auto& cs : config.class_settings) {
+        for (const auto& cs : ctx.config.class_settings) {
             if (cs.id == new_class_id) {
                 id_exists = true;
                 break;
@@ -280,12 +283,12 @@ void draw_ai()
         }
         std::string temp_name = new_class_name_buf;
         if (!id_exists && !temp_name.empty()) {
-            config.class_settings.emplace_back(new_class_id, temp_name, new_class_ignore);
-            config.saveConfig();
+            ctx.config.class_settings.emplace_back(new_class_id, temp_name, new_class_ignore);
+            ctx.config.saveConfig();
             
             int max_id = -1;
-            if (!config.class_settings.empty()) {
-                 for(const auto& cs : config.class_settings) {
+            if (!ctx.config.class_settings.empty()) {
+                 for(const auto& cs : ctx.config.class_settings) {
                     if (cs.id > max_id) max_id = cs.id;
                 }
                 new_class_id = max_id + 1;

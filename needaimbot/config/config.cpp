@@ -55,7 +55,6 @@ bool Config::loadConfig(const std::string& filename)
         circle_mask = true;
         capture_borders = true;
         capture_cursor = true;
-        capture_use_cuda = true;
         use_1ms_capture = false;
         capture_timeout_ms = 5; 
         target_fps = 120.0f; 
@@ -180,21 +179,6 @@ bool Config::loadConfig(const std::string& filename)
         always_on_top = true;
         verbose = false;
 
-        
-        enable_optical_flow = false;
-        draw_optical_flow = false;
-        optical_flow_alpha_cpu = 10.0f;
-        draw_optical_flow_steps = 16;
-        optical_flow_magnitudeThreshold = 0.5f;
-        staticFrameThreshold = 1.0f;
-        fovX = 90.0f; 
-        fovY = 60.0f; 
-
-        
-        optical_flow_norecoil = false;
-        optical_flow_norecoil_strength = 2.0f;
-        optical_flow_norecoil_threshold = 1.0f;
-        optical_flow_norecoil_frames = 3;
 
         
         enable_hsv_filter = false;
@@ -241,7 +225,6 @@ bool Config::loadConfig(const std::string& filename)
     circle_mask = get_bool_ini("Capture", "circle_mask", true);
     capture_borders = get_bool_ini("Capture", "capture_borders", true);
     capture_cursor = get_bool_ini("Capture", "capture_cursor", true);
-    capture_use_cuda = get_bool_ini("Capture", "capture_use_cuda", true);
     use_1ms_capture = get_bool_ini("Capture", "use_1ms_capture", false);
     capture_timeout_ms = get_long_ini("Capture", "capture_timeout_ms", 5);
     target_fps = (float)get_double_ini("Capture", "target_fps", 120.0);
@@ -332,20 +315,6 @@ bool Config::loadConfig(const std::string& filename)
     verbose = get_bool_ini("Debug", "verbose", false);
 
     
-    enable_optical_flow = get_bool_ini("OpticalFlow", "enable_optical_flow", false);
-    draw_optical_flow = get_bool_ini("OpticalFlow", "draw_optical_flow", false);
-    optical_flow_alpha_cpu = (float)get_double_ini("OpticalFlow", "optical_flow_alpha_cpu", 10.0);
-    draw_optical_flow_steps = get_long_ini("OpticalFlow", "draw_optical_flow_steps", 16);
-    optical_flow_magnitudeThreshold = (float)get_double_ini("OpticalFlow", "optical_flow_magnitudeThreshold", 0.5);
-    staticFrameThreshold = (float)get_double_ini("OpticalFlow", "staticFrameThreshold", 1.0);
-    fovX = (float)get_double_ini("OpticalFlow", "fovX", 90.0);
-    fovY = (float)get_double_ini("OpticalFlow", "fovY", 60.0);
-
-    
-    optical_flow_norecoil = get_bool_ini("OpticalFlow", "optical_flow_norecoil", false);
-    optical_flow_norecoil_strength = (float)get_double_ini("OpticalFlow", "optical_flow_norecoil_strength", 2.0);
-    optical_flow_norecoil_threshold = (float)get_double_ini("OpticalFlow", "optical_flow_norecoil_threshold", 1.0);
-    optical_flow_norecoil_frames = get_long_ini("OpticalFlow", "optical_flow_norecoil_frames", 3);
 
     
     enable_hsv_filter = get_bool_ini("HSVFilter", "enable_hsv_filter", false);
@@ -563,20 +532,6 @@ bool Config::saveConfig(const std::string& filename)
     }
     file << "\n";
 
-    file << "[OpticalFlow]\n";
-    file << "enable_optical_flow = " << (enable_optical_flow ? "true" : "false") << "\n";
-    file << "draw_optical_flow = " << (draw_optical_flow ? "true" : "false") << "\n";
-    file << std::fixed << std::setprecision(6);
-    file << "optical_flow_alpha_cpu = " << optical_flow_alpha_cpu << "\n";
-    file << "draw_optical_flow_steps = " << draw_optical_flow_steps << "\n";
-    file << "optical_flow_magnitudeThreshold = " << optical_flow_magnitudeThreshold << "\n";
-    file << "staticFrameThreshold = " << staticFrameThreshold << "\n";
-    file << "fovX = " << fovX << "\n";
-    file << "fovY = " << fovY << "\n";
-    file << "optical_flow_norecoil = " << (optical_flow_norecoil ? "true" : "false") << "\n";
-    file << "optical_flow_norecoil_strength = " << optical_flow_norecoil_strength << "\n";
-    file << "optical_flow_norecoil_threshold = " << optical_flow_norecoil_threshold << "\n";
-    file << "optical_flow_norecoil_frames = " << optical_flow_norecoil_frames << "\n\n";
 
     file << "[HSVFilter]\n";
     file << "enable_hsv_filter = " << (enable_hsv_filter ? "true" : "false") << "\n";

@@ -35,6 +35,7 @@
 #include "other_tools.h"
 #include "config.h"
 #include "needaimbot.h"
+#include "AppContext.h"
 
 static const std::string base64_chars =
 "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -176,6 +177,7 @@ std::vector<std::string> getOnnxFiles()
 
 std::vector<std::string>::difference_type getModelIndex(std::vector<std::string> engine_models)
 {
+    auto& config = AppContext::getInstance().config;
     auto it = std::find(engine_models.begin(), engine_models.end(), config.ai_model);
 
     if (it != engine_models.end())
@@ -473,6 +475,7 @@ bool checkwin1903()
 
 void welcome_message()
 {
+    auto& config = AppContext::getInstance().config;
     std::cout <<
     "\n\nAimbot is started!\n" <<
     config.joinStrings(config.button_targeting) << " -> Targeting\n" <<
@@ -512,6 +515,7 @@ void saveScreenshot(const cv::Mat& frame, const std::string& directory)
         
         if (cv::imwrite(filepath, frame))
         {
+            auto& config = AppContext::getInstance().config;
             if (config.verbose) 
             {
                 std::cout << "[Screenshot] Saved screenshot to: " << filepath << std::endl;

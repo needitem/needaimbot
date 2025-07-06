@@ -3,27 +3,30 @@
 #include <winsock2.h>
 #include <Windows.h>
 
+#include "AppContext.h"
 #include "imgui/imgui.h"
 #include "needaimbot.h"
 #include "overlay.h"
 
 void draw_overlay()
 {
+    auto& ctx = AppContext::getInstance();
+    
     ImGui::SeparatorText("Overlay Appearance");
     ImGui::Spacing();
 
-    ImGui::SliderInt("Overlay Opacity", &config.overlay_opacity, 40, 255);
+    ImGui::SliderInt("Overlay Opacity", &ctx.config.overlay_opacity, 40, 255);
     if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Adjusts the transparency of the overlay window (settings menu)."); }
 
     ImGui::Spacing();
 
-    static float ui_scale = config.overlay_ui_scale;
+    static float ui_scale = ctx.config.overlay_ui_scale;
 
     if (ImGui::SliderFloat("UI Scale", &ui_scale, 0.5f, 3.0f, "%.2f"))
     {
         ImGui::GetIO().FontGlobalScale = ui_scale;
 
-        config.overlay_ui_scale = ui_scale;
+        ctx.config.overlay_ui_scale = ui_scale;
         // Config will be saved by batch processing in overlay.cpp
 
         extern const int BASE_OVERLAY_WIDTH;
@@ -40,7 +43,7 @@ void draw_overlay()
     ImGui::Spacing();
     
     // Display current overlay FPS setting
-    float clamped_fps = std::max(15.0f, std::min(240.0f, config.target_fps));
+    float clamped_fps = std::max(15.0f, std::min(240.0f, ctx.config.target_fps));
     ImGui::Text("Overlay FPS: %.1f", clamped_fps);
     if (ImGui::IsItemHovered()) { 
         ImGui::SetTooltip("Overlay frame rate is controlled by Target FPS setting in Capture tab.\nClamped between 15-240 FPS for stability."); 

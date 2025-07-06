@@ -184,21 +184,6 @@ public:
     float target_locking_iou_threshold;
     int target_locking_max_lost_frames;
 
-    
-    bool enable_optical_flow;
-    bool draw_optical_flow; 
-    float optical_flow_alpha_cpu; 
-    int draw_optical_flow_steps;    
-    float optical_flow_magnitudeThreshold; 
-    float staticFrameThreshold; 
-    float fovX; 
-    float fovY; 
-
-    
-    bool optical_flow_norecoil;
-    float optical_flow_norecoil_strength;
-    float optical_flow_norecoil_threshold;
-    int optical_flow_norecoil_frames;
 
     
     bool enable_hsv_filter;

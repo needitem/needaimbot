@@ -9,6 +9,7 @@
 
 #include "needaimbot.h"
 #include "SerialConnection.h"
+#include "../../AppContext.h"
 
 SerialConnection::SerialConnection(const std::string& port, unsigned int baud_rate)
     : is_open_(false),
@@ -25,7 +26,7 @@ SerialConnection::SerialConnection(const std::string& port, unsigned int baud_ra
             is_open_ = true;
             std::cout << "[Arduino] Connected! PORT: " << port << std::endl;
 
-            if (config.arduino_enable_keys)
+            if (AppContext::getInstance().config.arduino_enable_keys)
             {
                 startListening();
             }
@@ -119,7 +120,7 @@ void SerialConnection::move(int x, int y)
     if (!is_open_)
         return;
 
-    if (config.arduino_16_bit_mouse)
+    if (AppContext::getInstance().config.arduino_16_bit_mouse)
     {
         
         char buffer[32]; 
@@ -207,7 +208,7 @@ void SerialConnection::timerThreadFunc()
 
         bool arduino_enable_keys_local;
         {
-            arduino_enable_keys_local = config.arduino_enable_keys;
+            arduino_enable_keys_local = AppContext::getInstance().config.arduino_enable_keys;
         }
 
         if (arduino_enable_keys_local)
@@ -285,12 +286,12 @@ void SerialConnection::processIncomingLine(const std::string& line)
             switch (buttonId)
             {
             case 2:
-                aiming_active = true;
-                aiming.store(true);
+                // aiming_active = true;
+                // aiming.store(true); // Aiming state removed
                 break;
             case 1:
                 shooting_active = true;
-                shooting.store(true);
+                AppContext::getInstance().shooting.store(true);
                 break;
             }
         }
@@ -300,12 +301,12 @@ void SerialConnection::processIncomingLine(const std::string& line)
             switch (buttonId)
             {
             case 2:
-                aiming_active = false;
-                aiming.store(false);
+                // aiming_active = false;
+                // aiming.store(false); // Aiming state removed
                 break;
             case 1:
                 shooting_active = false;
-                shooting.store(false);
+                AppContext::getInstance().shooting.store(false);
                 break;
             }
         }
