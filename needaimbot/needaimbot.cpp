@@ -37,7 +37,19 @@
 
 
 #include "needaimbot.h"
+#include "mouse/aimbot_components/AimbotTarget.h"
 #include <algorithm>
+
+// Global variable definitions
+std::atomic<bool> shouldExit{false};
+std::mutex configMutex;
+// Config config;  // Removed - use AppContext::getInstance().config instead
+std::atomic<bool> detector_model_changed{false};
+std::atomic<bool> capture_fps_changed{false};
+std::atomic<bool> detection_resolution_changed{false};
+std::atomic<bool> capture_borders_changed{false};
+std::atomic<bool> capture_cursor_changed{false};
+std::atomic<bool> show_window_changed{false};
 
 void add_to_history(std::vector<float>& history, float value, std::mutex& mtx, int max_size) {
     std::lock_guard<std::mutex> lock(mtx);
@@ -158,16 +170,16 @@ std::unique_ptr<InputMethod> initializeInputMethod() {
 inline void handleEasyNoRecoil(MouseThread &mouseThread)
 {
     auto& ctx = AppContext::getInstance();
-    if (ctx.config.easynorecoil && ctx.shooting.load() && ctx.zooming.load())
+    // Check for left click (shooting) and right click (zooming) directly
+    bool leftClicked = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+    bool rightClicked = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+    
+    if (ctx.config.easynorecoil && leftClicked && rightClicked)
     {
         mouseThread.applyRecoilCompensation(ctx.config.easynorecoilstrength);
     }
-    
-    // Optical flow recoil compensation removed"
 }
 
-// #include "constants.h" // File removed
-// #include "mouse_logic.h" // File removed
 
 void mouseThreadFunction(MouseThread &mouseThread)
 {
@@ -177,18 +189,144 @@ void mouseThreadFunction(MouseThread &mouseThread)
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
     SetThreadAffinityMask(GetCurrentThread(), 1 << 1);
     
+    static int loop_count = 0;
+    
     while (!ctx.shouldExit)
     {
-        // Optical flow configuration removed
+        // Wait for detection update or exit signal
+        static int last_detection_version = 0;
+        bool current_aiming = ctx.aiming;
+        bool current_has_target = false;
+        Detection current_target = {};
+        
+        {
+            std::unique_lock<std::mutex> lock(ctx.detector->detectionMutex);
+            // Wait with timeout to prevent stale target usage
+            auto wait_result = ctx.detector->detectionCV.wait_for(lock, std::chrono::milliseconds(50), [&]() { 
+                return ctx.shouldExit || ctx.input_method_changed.load() || 
+                       ctx.detector->detectionVersion != last_detection_version; 
+            });
+            
+            // Copy target data while mutex is held
+            if (ctx.detector) {
+                // If timeout occurred, treat as no target to prevent stale data usage
+                if (!wait_result) {
+                    current_has_target = false;
+                    current_target = {};
+                    static int timeout_count = 0;
+                    if (++timeout_count % 20 == 0) {  // Log every second
+                        std::cout << "[Mouse] Detection timeout - clearing target" << std::endl;
+                    }
+                } else {
+                    // LOG: About to copy data from Detector.
+                    if (ctx.config.verbose) std::cout << "[Mouse] Reading from Detector. Detector state: hasBestTarget=" << (ctx.detector->m_hasBestTarget ? "true" : "false") << std::endl;
+
+                    current_has_target = ctx.detector->m_hasBestTarget;
+                    if (current_has_target) {
+                        current_target = ctx.detector->m_bestTargetHost;
+                    } else {
+                        current_target = {}; // Zero-initialize the struct
+                    }
+                    last_detection_version = ctx.detector->detectionVersion;
+
+                    // LOG: Data has been copied.
+                    if (ctx.config.verbose) std::cout << "[Mouse] Copied to local. Local state: current_has_target=" << (current_has_target ? "true" : "false") << ", Pos: (" << current_target.box.x << ", " << current_target.box.y << ")" << std::endl;
+                }
+            }
+        }
+
+        // Update AppContext for Overlay to read
+        {
+            std::lock_guard<std::mutex> lock(ctx.overlay_target_mutex);
+            ctx.overlay_has_target.store(current_has_target);
+            if (current_has_target) {
+                ctx.overlay_target_info = current_target;
+            } else {
+                ctx.overlay_target_info = {}; // Explicitly clear if no target
+            }
+        }
+
+        if (ctx.shouldExit) break;
 
         if (ctx.input_method_changed.load()) {
             mouseThread.setInputMethod(initializeInputMethod());
             ctx.input_method_changed.store(false);
         }
 
-        // MouseLogic functions removed - functionality integrated into MouseThread"
         
-        std::this_thread::sleep_for(std::chrono::milliseconds(1)); // 1ms idle timeout
+        if (current_aiming && current_has_target) {
+            // Validate target is within screen bounds
+            bool target_valid = (current_target.box.x >= 0 && 
+                                current_target.box.y >= 0 &&
+                                current_target.box.width > 0 && 
+                                current_target.box.height > 0 &&
+                                current_target.box.x + current_target.box.width <= ctx.config.detection_resolution &&
+                                current_target.box.y + current_target.box.height <= ctx.config.detection_resolution &&
+                                current_target.confidence > 0.0f);
+            
+            if (target_valid) {
+                // Convert Detection to AimbotTarget using copied data
+                AimbotTarget target(
+                    current_target.box.x,
+                    current_target.box.y,
+                    current_target.box.width,
+                    current_target.box.height,
+                    current_target.classId
+                );
+                
+                // Move mouse to target (this can be slow, but doesn't block detection updates)
+                mouseThread.moveMouse(target);
+            } else {
+                // Invalid target - release mouse
+                mouseThread.releaseMouse();
+            }
+            
+        } else {
+            // Release mouse if no target or not aiming
+            mouseThread.releaseMouse();
+            
+            // Only reset once when transitioning from target to no target
+            static bool had_target_before = false;
+            if (had_target_before) {
+                mouseThread.resetAccumulatedStates();
+                had_target_before = false;
+            }
+        }
+        
+        // Update the flag when we have a target
+        if (current_aiming && current_has_target) {
+            static bool& had_target_before = *[]() { static bool flag = false; return &flag; }();
+            had_target_before = true;
+        }
+        
+        // Apply recoil compensation when both mouse buttons are pressed (ADS + Shooting)
+        if (ctx.config.easynorecoil) {
+            bool left_mouse_pressed = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+            bool right_mouse_pressed = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+            
+            static bool was_recoil_active = false;
+            bool recoil_active = left_mouse_pressed && right_mouse_pressed;
+            
+            if (recoil_active && !was_recoil_active) {
+                std::cout << "[Recoil] Started - L+R mouse pressed" << std::endl;
+            } else if (!recoil_active && was_recoil_active) {
+                std::cout << "[Recoil] Stopped" << std::endl;
+            }
+            was_recoil_active = recoil_active;
+            
+            if (recoil_active) {
+                // Check if we have an active weapon profile
+                if (ctx.config.active_weapon_profile_index >= 0 && 
+                    ctx.config.active_weapon_profile_index < ctx.config.weapon_profiles.size()) {
+                    
+                    const WeaponRecoilProfile& profile = ctx.config.weapon_profiles[ctx.config.active_weapon_profile_index];
+                    mouseThread.applyWeaponRecoilCompensation(&profile, ctx.config.active_scope_magnification);
+                } else {
+                    // Use simple recoil compensation
+                    mouseThread.applyRecoilCompensation(ctx.config.easynorecoilstrength);
+                }
+            }
+        }
     }
 
     mouseThread.releaseMouse();
@@ -252,6 +390,7 @@ int main()
             std::cout << "---------------------------" << std::endl << std::endl;
         }
 
+        ctx.detector = new Detector();
         ctx.detector->initializeCudaContext();
 
         int cuda_devices = 0;
@@ -299,6 +438,9 @@ int main()
         
         ctx.detector->start();
 
+        // Start capture thread
+        std::thread captureThrd(captureThread, ctx.config.detection_resolution, ctx.config.detection_resolution);
+
         std::thread keyThread(keyboardListener);
         std::thread mouseMovThread(mouseThreadFunction, std::ref(mouseThread));
         std::thread overlayThread(OverlayThread);
@@ -310,20 +452,28 @@ int main()
 
         welcome_message();
 
-        keyThread.join();
-        std::cout << "Keyboard listener thread joined." << std::endl;
+        if (keyThread.joinable()) {
+            keyThread.join();
+        }
 
         ctx.detector->stop();
-        std::cout << "Capture and detection threads joined." << std::endl;
 
-        mouseMovThread.join();
-        std::cout << "Mouse movement thread joined." << std::endl;
-        overlayThread.join();
-        std::cout << "Overlay thread joined." << std::endl;
+        if (captureThrd.joinable()) {
+            captureThrd.detach();
+        }
 
-        // Optical flow shutdown code removed
+        if (mouseMovThread.joinable()) {
+            mouseMovThread.detach();
+        }
 
-        return 0;
+        if (overlayThread.joinable()) {
+            overlayThread.detach();
+        }
+
+        delete ctx.detector;
+        ctx.detector = nullptr;
+        
+        std::exit(0);
     }
     catch (const std::exception &e)
     {

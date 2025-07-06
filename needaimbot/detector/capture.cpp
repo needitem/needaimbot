@@ -47,7 +47,9 @@
 #include "keyboard_listener.h"
 #include "other_tools.h"
 
+#include "simple_capture.h"
 #include "duplication_api_capture.h"
+#include "game_capture.h"
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -82,18 +84,36 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
             std::cout << "[Capture] CUDA Support: " << cv::cuda::getCudaEnabledDeviceCount() << " devices found." << std::endl;
         }
 
-        std::unique_ptr<DuplicationAPIScreenCapture> capturer = std::make_unique<DuplicationAPIScreenCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT);
+        // Initialize capture method based on config
+        std::unique_ptr<SimpleScreenCapture> simple_capturer;
+        std::unique_ptr<DuplicationAPIScreenCapture> duplication_capturer;
+        std::unique_ptr<GameCapture> game_capturer;
+        
+        // Create the appropriate capturer based on config
+        if (ctx.config.capture_method == "duplication") {
+            duplication_capturer = std::make_unique<DuplicationAPIScreenCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT);
+        } else if (ctx.config.capture_method == "game_capture") {
+            game_capturer = std::make_unique<GameCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN), ctx.config.target_game_name, ctx.config.use_1ms_capture);
+        } else {
+            simple_capturer = std::make_unique<SimpleScreenCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT);
+        }
         
         timeBeginPeriod(1);
         SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
         SetThreadAffinityMask(GetCurrentThread(), 1 << 0);
-        if (!capturer) {
-             std::cerr << "[Capture] Failed to initialize DuplicationAPIScreenCapture!" << std::endl;
-             return;
+        // Check if the selected capturer is initialized
+        bool is_initialized = false;
+        if (simple_capturer) {
+            is_initialized = simple_capturer->IsInitialized();
+        } else if (duplication_capturer) {
+            is_initialized = duplication_capturer->IsInitialized();
+        } else if (game_capturer) {
+            is_initialized = game_capturer->initialize(); // GameCapture uses initialize() method
         }
-
-        if (capturer && ctx.detector) {
-            ctx.detector->setCaptureEvent(capturer->GetCaptureDoneEvent());
+        
+        if (!is_initialized) {
+             std::cerr << "[Capture] Failed to initialize " << ctx.config.capture_method << " capturer!" << std::endl;
+             return;
         }
 
         bool buttonPreviouslyPressed = false;
@@ -106,6 +126,12 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
         for (int i = 0; i < PREFETCH_COUNT; ++i) {
             captureGpuBuffer[i].create(CAPTURE_HEIGHT, CAPTURE_WIDTH, CV_8UC3);
         }
+        
+        // Pre-allocate a reusable GPU mat for uploads
+        cv::cuda::GpuMat reusableGpuMat;
+        
+        // Create dedicated CUDA stream for capture operations
+        cv::cuda::Stream captureStream;
         
         HANDLE capture_event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
         auto target_interval = std::chrono::nanoseconds(1000000000 / ctx.config.capture_fps);
@@ -127,6 +153,10 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 
         while (!shouldExit)
         {
+            if (AppContext::getInstance().shouldExit) {
+                std::cout << "[CaptureThread] shouldExit is true, breaking loop." << std::endl;
+                break; 
+            }
             if (ctx.capture_fps_changed.load())
             {
                 if (ctx.config.capture_fps > 0.0)
@@ -150,28 +180,67 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 ctx.capture_fps_changed.store(false);
             }
 
+            if (ctx.capture_method_changed.load())
+            {
+                if (ctx.config.verbose) {
+                    std::cout << "[Capture] Capture method changed to: " << ctx.config.capture_method << std::endl;
+                }
+                
+                // Reset all capturers
+                simple_capturer.reset();
+                duplication_capturer.reset();
+                game_capturer.reset();
+                
+                // Create new capturer based on method
+                if (ctx.config.capture_method == "duplication") {
+                    duplication_capturer = std::make_unique<DuplicationAPIScreenCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT);
+                } else if (ctx.config.capture_method == "game_capture") {
+                    game_capturer = std::make_unique<GameCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN), ctx.config.target_game_name, ctx.config.use_1ms_capture);
+                    game_capturer->initialize();
+                } else {
+                    simple_capturer = std::make_unique<SimpleScreenCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT);
+                }
+                
+                ctx.capture_method_changed.store(false);
+            }
+
             if (ctx.detection_resolution_changed.load())
             {
                 if (ctx.config.verbose) {
                     std::cout << "[Capture] Detection resolution changed. Re-initializing capturer." << std::endl;
                 }
-                capturer.reset(); 
+                
+                // Reset all capturers
+                simple_capturer.reset();
+                duplication_capturer.reset();
+                game_capturer.reset();
 
                 int new_CAPTURE_WIDTH = ctx.config.detection_resolution;
                 int new_CAPTURE_HEIGHT = ctx.config.detection_resolution;
 
-                auto tempCapturer = std::make_unique<DuplicationAPIScreenCapture>(new_CAPTURE_WIDTH, new_CAPTURE_HEIGHT);
-
-                if (!tempCapturer || !tempCapturer->IsInitialized()) {
-                    std::cerr << "[Capture] Failed to create or initialize new DuplicationAPIScreenCapture after resolution change!" << std::endl;
-                    shouldExit = true; 
-                    break;             
+                // Recreate the appropriate capturer
+                if (ctx.config.capture_method == "duplication") {
+                    duplication_capturer = std::make_unique<DuplicationAPIScreenCapture>(new_CAPTURE_WIDTH, new_CAPTURE_HEIGHT);
+                    if (!duplication_capturer || !duplication_capturer->IsInitialized()) {
+                        std::cerr << "[Capture] Failed to create or initialize DuplicationAPIScreenCapture after resolution change!" << std::endl;
+                        shouldExit = true; 
+                        break;             
+                    }
+                } else if (ctx.config.capture_method == "game_capture") {
+                    game_capturer = std::make_unique<GameCapture>(new_CAPTURE_WIDTH, new_CAPTURE_HEIGHT, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN), ctx.config.target_game_name, ctx.config.use_1ms_capture);
+                    if (!game_capturer || !game_capturer->initialize()) {
+                        std::cerr << "[Capture] Failed to create or initialize GameCapture after resolution change!" << std::endl;
+                        shouldExit = true; 
+                        break;             
+                    }
                 } else {
-                    capturer = std::move(tempCapturer); 
+                    simple_capturer = std::make_unique<SimpleScreenCapture>(new_CAPTURE_WIDTH, new_CAPTURE_HEIGHT);
+                    if (!simple_capturer || !simple_capturer->IsInitialized()) {
+                        std::cerr << "[Capture] Failed to create or initialize SimpleScreenCapture after resolution change!" << std::endl;
+                        shouldExit = true; 
+                        break;             
+                    }
                 }
-
-                
-                
 
                 g_captureRegionWidth = new_CAPTURE_WIDTH;
                 g_captureRegionHeight = new_CAPTURE_HEIGHT;
@@ -198,23 +267,50 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 
             if (ctx.capture_timeout_changed.load())
             {
-                if (capturer) {
-                    capturer->SetAcquireTimeout(ctx.config.capture_timeout_ms);
+                if (simple_capturer) {
+                    simple_capturer->SetAcquireTimeout(ctx.config.capture_timeout_ms);
+                } else if (duplication_capturer) {
+                    duplication_capturer->SetAcquireTimeout(ctx.config.capture_timeout_ms);
                 }
+                // GameCapture doesn't have SetAcquireTimeout method
                 if (ctx.config.verbose) {
                     std::cout << "[Capture] AcquireFrame timeout changed to: " << ctx.config.capture_timeout_ms << "ms" << std::endl;
                 }
                 ctx.capture_timeout_changed.store(false);
             }
 
+            // Measure only the actual capture API call time
             auto frame_acq_start_time = std::chrono::high_resolution_clock::now();
-
-            screenshotGpu = capturer->GetNextFrameGpu();
-
+            cv::Mat screenshotCpu;
+            if (simple_capturer) {
+                screenshotCpu = simple_capturer->GetNextFrameCpu();
+            } else if (duplication_capturer) {
+                screenshotCpu = duplication_capturer->GetNextFrameCpu();
+            } else if (game_capturer) {
+                screenshotCpu = game_capturer->get_frame(); // GameCapture uses get_frame() method
+            }
             auto frame_acq_end_time = std::chrono::high_resolution_clock::now();
+            
             std::chrono::duration<float, std::milli> frame_acq_duration_ms = frame_acq_end_time - frame_acq_start_time;
             ctx.g_current_frame_acquisition_time_ms.store(frame_acq_duration_ms.count());
-            add_to_history(ctx.g_frame_acquisition_time_history, frame_acq_duration_ms.count(), ctx.g_frame_acquisition_history_mutex);
+            ctx.add_to_history(ctx.g_frame_acquisition_time_history, frame_acq_duration_ms.count(), ctx.g_frame_acquisition_history_mutex);
+
+            if (!screenshotCpu.empty()) {
+                // Use dedicated stream to avoid legacy stream conflicts
+                if (reusableGpuMat.empty()) {
+                    reusableGpuMat.create(CAPTURE_HEIGHT, CAPTURE_WIDTH, CV_8UC3);
+                }
+                reusableGpuMat.upload(screenshotCpu, captureStream);
+                screenshotGpu = reusableGpuMat;
+                
+                // Update latest frame for debug display (avoid clone for performance)
+                if (latestFrameGpu.size() != screenshotGpu.size()) {
+                    latestFrameGpu.create(screenshotGpu.size(), screenshotGpu.type());
+                }
+                screenshotGpu.copyTo(latestFrameGpu);
+            } else {
+                screenshotGpu = cv::cuda::GpuMat();
+            }
 
             if (!screenshotGpu.empty())
                 {
@@ -234,7 +330,7 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
             {
                 float current_fps_val = static_cast<float>(captureFrameCount.load()) / static_cast<float>(elapsed_fps);
                 ctx.g_current_capture_fps.store(current_fps_val);
-                add_to_history(ctx.g_capture_fps_history, current_fps_val, ctx.g_capture_history_mutex);
+                ctx.add_to_history(ctx.g_capture_fps_history, current_fps_val, ctx.g_capture_history_mutex);
 
                 captureFps = captureFrameCount.load();
                 captureFrameCount = 0;
@@ -282,6 +378,12 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
         {
             timeEndPeriod(1);
         }
+        
+        // Clean up GPU resources before thread exit
+        reusableGpuMat.release();
+        screenshotGpu.release();
+        
+        std::cout << "[Capture] Capture thread exiting." << std::endl;
 
     }
     catch (const std::exception& e)

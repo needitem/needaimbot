@@ -67,7 +67,10 @@ public:
     bool use_1ms_capture;
 
     int capture_timeout_ms = 5; 
-    float target_fps; 
+    float target_fps;
+    
+    std::string capture_method; // "simple", "duplication", "game_capture"
+    std::string target_game_name; // Game window title for GameCapture 
 
     
     float body_y_offset;
@@ -140,6 +143,7 @@ public:
     std::string postprocess;
     bool export_enable_fp8;
     bool export_enable_fp16;
+    bool tensorrt_fp16;
     int onnx_input_resolution;
 
     
@@ -147,15 +151,12 @@ public:
 
     
     std::vector<std::string> button_targeting;
-    std::vector<std::string> button_shoot;
-    std::vector<std::string> button_zoom;
     std::vector<std::string> button_exit;
     std::vector<std::string> button_pause;
     std::vector<std::string> button_reload_config;
     std::vector<std::string> button_open_overlay;
     std::vector<std::string> button_disable_upward_aim;
     std::vector<std::string> button_auto_shoot;
-    std::vector<std::string> button_silent_aim;
 
     
     int overlay_opacity;
@@ -196,8 +197,12 @@ public:
     int min_hsv_pixels;
     bool remove_hsv_matches; 
 
-    bool loadConfig(const std::string& filename = "config.ini");
-    bool saveConfig(const std::string& filename = "config.ini");
+    // Path utilities
+    std::string getExecutableDir();
+    std::string getConfigPath(const std::string& filename);
+    
+    bool loadConfig(const std::string& filename = "");
+    bool saveConfig(const std::string& filename = "");
 
     
     std::vector<std::string> listProfiles();

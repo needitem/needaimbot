@@ -11,6 +11,7 @@
 #include <condition_variable>
 #include <vector>
 #include "config/config.h"
+#include "detector/postProcess.h"
 
 class MouseThread; // Forward declaration
 class Detector;
@@ -45,8 +46,7 @@ public:
 
     // Application state
     std::atomic<bool> shouldExit{false};
-    std::atomic<bool> shooting{false};
-    std::atomic<bool> zooming{false};
+    std::atomic<bool> aiming{false};
     std::atomic<bool> input_method_changed{false};
     
     // Capture state changes
@@ -55,6 +55,7 @@ public:
     std::atomic<bool> capture_cursor_changed{false};
     std::atomic<bool> capture_borders_changed{false};
     std::atomic<bool> capture_timeout_changed{false};
+    std::atomic<bool> capture_method_changed{false};
     
     // Performance metrics
     std::atomic<float> g_current_frame_acquisition_time_ms{0.0f};
@@ -89,6 +90,11 @@ public:
     // Modules
     MouseThread* globalMouseThread = nullptr;
     Detector* detector = nullptr;
+
+    // Overlay Target Data (Synchronized for UI)
+    std::atomic<bool> overlay_has_target{false};
+    Detection overlay_target_info{}; // Zero-initialized
+    std::mutex overlay_target_mutex;
     
     // Helper functions
     void add_to_history(std::vector<float>& history, float value, std::mutex& mutex) {
@@ -100,7 +106,11 @@ public:
     }
 
 private:
-    AppContext() : captureGpuWriteIdx(0), captureCpuWriteIdx(0), newFrameAvailable(false) {}
+    AppContext() : captureGpuWriteIdx(0), captureCpuWriteIdx(0), newFrameAvailable(false) {
+        // Initialize capture buffers
+        captureGpuBuffer.resize(4); // Use literal instead of FRAME_BUFFER_COUNT to avoid circular include
+        captureCpuBuffer.resize(4);
+    }
 };
 
 #endif // APP_CONTEXT_H

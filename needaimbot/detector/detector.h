@@ -27,6 +27,13 @@
 #include "postProcess.h"
 #include "CudaBuffer.h"
 
+struct TrackedTarget {
+    int id;
+    Detection detection;
+    int frames_since_last_seen;
+    // Add other tracking-specific data here, like velocity
+};
+
 // TensorRT utility functions
 nvinfer1::ICudaEngine* buildEngineFromOnnx(const std::string& onnxPath);
 nvinfer1::ICudaEngine* loadEngineFromFile(const std::string& enginePath);
@@ -85,6 +92,7 @@ public:
     
     HANDLE captureEvent = nullptr;
 
+    // CUDA Graph support
     cudaGraph_t m_graph = nullptr;
     cudaGraphExec_t m_graphExec = nullptr;
     bool m_isGraphInitialized = false;
@@ -112,9 +120,12 @@ public:
     bool m_hasBestTarget = false;
     int m_headClassId = -1;
 
+    // Target Tracking System
+    std::vector<TrackedTarget> m_tracked_targets;
+    int m_next_target_id = 0;
+
     bool m_isTargetLocked;
     Detection m_lockedTargetInfo;
-    int m_lockedTargetLostFrames;
 
     CudaBuffer<unsigned char> m_d_ignore_flags_gpu;
 

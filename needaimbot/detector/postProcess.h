@@ -42,28 +42,30 @@ void NMSGpu(
 
 
 cudaError_t decodeYolo10Gpu(
-    const void* d_raw_output,          
-    nvinfer1::DataType output_type,    
-    const std::vector<int64_t>& shape, 
-    int num_classes,                   
-    float conf_threshold,              
-    float img_scale,                   
-    Detection* d_decoded_detections,   
-    int* d_decoded_count,              
-    int max_detections,                
+    const void* d_raw_output,
+    nvinfer1::DataType output_type,
+    const std::vector<int64_t>& shape,
+    int num_classes,
+    float conf_threshold,
+    float img_scale,
+    Detection* d_decoded_detections,
+    int* d_decoded_count,
+    int max_candidates,
+    int max_detections,
     cudaStream_t stream);
 
 
 cudaError_t decodeYolo11Gpu(
-    const void* d_raw_output,          
-    nvinfer1::DataType output_type,    
-    const std::vector<int64_t>& shape, 
-    int num_classes,                   
-    float conf_threshold,              
-    float img_scale,                   
-    Detection* d_decoded_detections,   
-    int* d_decoded_count,              
-    int max_detections,                
+    const void* d_raw_output,
+    nvinfer1::DataType output_type,
+    const std::vector<int64_t>& shape,
+    int num_classes,
+    float conf_threshold,
+    float img_scale,
+    Detection* d_decoded_detections,
+    int* d_decoded_count,
+    int max_candidates,
+    int max_detections,
     cudaStream_t stream);
 
 

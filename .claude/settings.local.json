@@ -3,7 +3,13 @@
     "allow": [
       "Bash(find:*)",
       "Bash(rg:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(rm:*)",
+      "Bash(mv:*)",
+      "Bash(ls:*)",
+      "Bash(sed:*)",
+      "Bash(./ai.exe --help)",
+      "Bash(chmod:*)"
     ],
     "deny": []
   }
