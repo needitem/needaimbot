@@ -307,11 +307,7 @@ void mouseThreadFunction(MouseThread &mouseThread)
             static bool was_recoil_active = false;
             bool recoil_active = left_mouse_pressed && right_mouse_pressed;
             
-            if (recoil_active && !was_recoil_active) {
-                std::cout << "[Recoil] Started - L+R mouse pressed" << std::endl;
-            } else if (!recoil_active && was_recoil_active) {
-                std::cout << "[Recoil] Stopped" << std::endl;
-            }
+            // Track recoil state changes silently
             was_recoil_active = recoil_active;
             
             if (recoil_active) {

@@ -429,6 +429,7 @@ void MouseThread::moveMouse(const AimbotTarget &target)
             float input_send_duration_ms = std::chrono::duration<float, std::milli>(input_send_end_time - input_send_start_time).count();
             ctx.g_current_input_send_time_ms.store(input_send_duration_ms, std::memory_order_relaxed);
             ctx.add_to_history(ctx.g_input_send_time_history, input_send_duration_ms, ctx.g_input_send_history_mutex);
+            
         }
     }
 }
@@ -585,17 +586,68 @@ Point2D MouseThread::calculatePredictedTarget(const AimbotTarget& target, float 
         dt_target = std::clamp(dt_target, MIN_DELTA_TIME, MAX_DELTA_TIME);
         
         if (dt_target > MIN_DELTA_TIME) {
-            // Calculate target velocity
+            // Calculate current velocity
             float target_vel_x = (raw_target_pos.x - last_target_pos_.x) / dt_target;
             float target_vel_y = (raw_target_pos.y - last_target_pos_.y) / dt_target;
             
-            // Prediction time based on current error magnitude
-            float error_magnitude = std::sqrt(initial_error_x * initial_error_x + initial_error_y * initial_error_y);
-            float prediction_time = std::clamp(error_magnitude * PREDICTION_TIME_FACTOR, 0.0f, MAX_PREDICTION_TIME);
+            // Get velocity history settings from config
+            bool use_velocity_history;
+            int max_history_size;
+            {
+                auto& ctx = AppContext::getInstance();
+                std::lock_guard<std::mutex> lock(ctx.configMutex);
+                use_velocity_history = ctx.config.enable_velocity_history;
+                max_history_size = ctx.config.velocity_history_size;
+            }
             
-            // Apply prediction
-            predicted_target_pos.x = raw_target_pos.x + target_vel_x * prediction_time;
-            predicted_target_pos.y = raw_target_pos.y + target_vel_y * prediction_time;
+            // Update velocity history if enabled
+            current_velocity_.x = target_vel_x;
+            current_velocity_.y = target_vel_y;
+            
+            if (use_velocity_history) {
+                velocity_history_.push_back(current_velocity_);
+                velocity_time_history_.push_back(current_time);
+                
+                // Maintain history size
+                while (static_cast<int>(velocity_history_.size()) > max_history_size) {
+                    velocity_history_.erase(velocity_history_.begin());
+                    velocity_time_history_.erase(velocity_time_history_.begin());
+                }
+            }
+            
+            // Calculate weighted average velocity (recent velocities weighted more)
+            Point2D avg_velocity{0, 0};
+            
+            if (use_velocity_history && velocity_history_.size() >= 2) {
+                float total_weight = 0.0f;
+                for (size_t i = 0; i < velocity_history_.size(); ++i) {
+                    float weight = static_cast<float>(i + 1); // Linear weighting, most recent = highest weight
+                    avg_velocity.x += velocity_history_[i].x * weight;
+                    avg_velocity.y += velocity_history_[i].y * weight;
+                    total_weight += weight;
+                }
+                
+                if (total_weight > 0.0f) {
+                    avg_velocity.x /= total_weight;
+                    avg_velocity.y /= total_weight;
+                }
+            } else {
+                avg_velocity = current_velocity_;
+            }
+            
+            // Prediction time based on current error magnitude and config
+            float error_magnitude = std::sqrt(initial_error_x * initial_error_x + initial_error_y * initial_error_y);
+            float prediction_factor;
+            {
+                auto& ctx = AppContext::getInstance();
+                std::lock_guard<std::mutex> lock(ctx.configMutex);
+                prediction_factor = ctx.config.prediction_time_factor;
+            }
+            float prediction_time = std::clamp(error_magnitude * prediction_factor, 0.0f, MAX_PREDICTION_TIME);
+            
+            // Apply enhanced prediction with smoothed velocity
+            predicted_target_pos.x = raw_target_pos.x + avg_velocity.x * prediction_time;
+            predicted_target_pos.y = raw_target_pos.y + avg_velocity.y * prediction_time;
         }
         
         last_target_pos_ = raw_target_pos;
@@ -628,17 +680,90 @@ std::pair<int, int> MouseThread::processAccumulatedMovement(float move_x, float 
     
     int dx_int = 0, dy_int = 0;
     
+    // Add dithering to improve sub-pixel accuracy and reduce stepping artifacts
+    float dithered_x = accumulated_x_;
+    float dithered_y = accumulated_y_;
+    
+    // Apply dithering if enabled
+    {
+        auto& ctx = AppContext::getInstance();
+        std::lock_guard<std::mutex> lock(ctx.configMutex);
+        if (ctx.config.enable_subpixel_dithering) {
+            dithered_x += dither_dist_(dither_rng_) * ctx.config.dither_strength;
+            dithered_y += dither_dist_(dither_rng_) * ctx.config.dither_strength;
+        }
+    }
+    
     // Only move when accumulated movement exceeds threshold
-    if (std::abs(accumulated_x_) >= MICRO_MOVEMENT_THRESHOLD) {
-        dx_int = static_cast<int>(std::round(accumulated_x_));
+    if (std::abs(dithered_x) >= MICRO_MOVEMENT_THRESHOLD) {
+        dx_int = static_cast<int>(std::round(dithered_x));
         accumulated_x_ -= dx_int;
     }
-    if (std::abs(accumulated_y_) >= MICRO_MOVEMENT_THRESHOLD) {
-        dy_int = static_cast<int>(std::round(accumulated_y_));
+    if (std::abs(dithered_y) >= MICRO_MOVEMENT_THRESHOLD) {
+        dy_int = static_cast<int>(std::round(dithered_y));
         accumulated_y_ -= dy_int;
     }
     
     return {dx_int, dy_int};
+}
+
+void MouseThread::updateLatencyMeasurements(float input_latency_ms, float capture_latency_ms)
+{
+    // Update input latency history
+    input_latency_history_.push_back(input_latency_ms);
+    if (input_latency_history_.size() > LATENCY_HISTORY_SIZE) {
+        input_latency_history_.erase(input_latency_history_.begin());
+    }
+    
+    // Update capture latency history  
+    capture_latency_history_.push_back(capture_latency_ms);
+    if (capture_latency_history_.size() > LATENCY_HISTORY_SIZE) {
+        capture_latency_history_.erase(capture_latency_history_.begin());
+    }
+    
+    // Calculate moving average of total latency
+    float avg_input_latency = 0.0f;
+    float avg_capture_latency = 0.0f;
+    
+    if (!input_latency_history_.empty()) {
+        for (float latency : input_latency_history_) {
+            avg_input_latency += latency;
+        }
+        avg_input_latency /= input_latency_history_.size();
+    }
+    
+    if (!capture_latency_history_.empty()) {
+        for (float latency : capture_latency_history_) {
+            avg_capture_latency += latency;
+        }
+        avg_capture_latency /= capture_latency_history_.size();
+    }
+    
+    // Add estimated processing latency (AI inference + post-processing)
+    constexpr float PROCESSING_LATENCY_MS = 3.0f;
+    
+    estimated_total_latency_ms_ = avg_input_latency + avg_capture_latency + PROCESSING_LATENCY_MS;
+    
+    // Clamp to reasonable bounds
+    estimated_total_latency_ms_ = std::clamp(estimated_total_latency_ms_, 5.0f, 100.0f);
+}
+
+float MouseThread::getEstimatedTotalLatency() const
+{
+    return estimated_total_latency_ms_;
+}
+
+Point2D MouseThread::applyLatencyCompensation(const Point2D& predicted_pos, const Point2D& velocity) const
+{
+    // Convert latency from ms to seconds
+    float latency_compensation_time = estimated_total_latency_ms_ / 1000.0f;
+    
+    // Apply additional prediction based on estimated system latency
+    Point2D compensated_pos;
+    compensated_pos.x = predicted_pos.x + velocity.x * latency_compensation_time;
+    compensated_pos.y = predicted_pos.y + velocity.y * latency_compensation_time;
+    
+    return compensated_pos;
 }
 
 float MouseThread::calculateAdaptiveScale(float error_magnitude) const
