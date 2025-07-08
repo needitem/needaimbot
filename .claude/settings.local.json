@@ -9,7 +9,8 @@
       "Bash(ls:*)",
       "Bash(sed:*)",
       "Bash(./ai.exe --help)",
-      "Bash(chmod:*)"
+      "Bash(chmod:*)",
+      "Bash(gemini:*)"
     ],
     "deny": []
   }
