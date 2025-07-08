@@ -80,7 +80,6 @@ void keyboardListener() {
         ctx.aiming = current_aiming;
         
         if (current_aiming != last_aiming_state) {
-            std::cout << "[Keyboard] Aiming state changed: " << (current_aiming ? "true" : "false") << std::endl;
             last_aiming_state = current_aiming;
         }
         // ctx.auto_shoot_active = is_any_key_pressed(auto_shoot_vk_codes); // Removed"

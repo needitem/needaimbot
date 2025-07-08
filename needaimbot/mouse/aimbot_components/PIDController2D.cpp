@@ -33,9 +33,19 @@ Eigen::Vector2f PIDController2D::calculate(const Eigen::Vector2f &error)
     float current_derivative_x = (error.x() - prev_error.x()) * inv_dt;
     float current_derivative_y = (error.y() - prev_error.y()) * inv_dt;
 
-    // No smoothing - direct derivative calculation
-    derivative.x() = current_derivative_x;
-    derivative.y() = current_derivative_y;
+    // Apply derivative smoothing from config
+    float smoothing;
+    {
+        auto& ctx = AppContext::getInstance();
+        std::lock_guard<std::mutex> lock(configMutex);
+        smoothing = ctx.config.pid_derivative_smoothing;
+    }
+    
+    // Apply exponential smoothing to reduce noise
+    smoothed_derivative.x() = smoothing * smoothed_derivative.x() + (1.0f - smoothing) * current_derivative_x;
+    smoothed_derivative.y() = smoothing * smoothed_derivative.y() + (1.0f - smoothing) * current_derivative_y;
+    
+    derivative = smoothed_derivative;
 
     prev_derivative = derivative;
 
@@ -82,13 +92,19 @@ Eigen::Vector2f PIDController2D::calculateAdaptive(const Eigen::Vector2f &error,
     // Distance-based PID parameter adaptation
     float distance_factor = std::clamp(error_magnitude / 100.0f, 0.1f, 3.0f);
     
-    // Reduce derivative gain for large errors to prevent oscillation
+    // More aggressive derivative gain reduction for stability
     float adaptive_kd_x = kd_x;
     float adaptive_kd_y = kd_y;
-    if (error_magnitude > 50.0f) {
-        float damping_factor = 1.0f / (1.0f + (error_magnitude - 50.0f) * 0.01f);
+    if (error_magnitude > 30.0f) {
+        float damping_factor = 1.0f / (1.0f + (error_magnitude - 30.0f) * 0.02f);
         adaptive_kd_x *= damping_factor;
         adaptive_kd_y *= damping_factor;
+    }
+    
+    // Additional damping for very close targets to prevent oscillation
+    if (error_magnitude < 15.0f) {
+        adaptive_kd_x *= 0.5f;
+        adaptive_kd_y *= 0.5f;
     }
     
     // Reduce integral windup for large errors

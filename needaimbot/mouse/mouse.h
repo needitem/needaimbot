@@ -12,6 +12,7 @@
 #include <functional>
 #include <chrono>
 #include <atomic>
+#include <random>
 
 #include "config/config.h"
 #include "aimbot_components/AimbotTarget.h"
@@ -73,9 +74,27 @@ private:
     std::chrono::high_resolution_clock::time_point last_target_time_;
     bool prediction_initialized_ = false;
     
+    // Velocity history for improved prediction
+    static constexpr int VELOCITY_HISTORY_SIZE = 5;
+    std::vector<Point2D> velocity_history_;
+    std::vector<std::chrono::high_resolution_clock::time_point> velocity_time_history_;
+    Point2D current_velocity_{0, 0};
+    
     // Movement accumulation members (moved from static variables)
     float accumulated_x_ = 0.0f;
     float accumulated_y_ = 0.0f;
+    
+    // Dithering for improved sub-pixel accuracy
+    mutable std::mt19937 dither_rng_{std::random_device{}()};
+    mutable std::uniform_real_distribution<float> dither_dist_{-0.5f, 0.5f};
+    
+    // Latency compensation
+    static constexpr int LATENCY_HISTORY_SIZE = 10;
+    std::vector<float> input_latency_history_;
+    std::vector<float> capture_latency_history_;
+    float estimated_total_latency_ms_ = 20.0f; // Default assumption
+    std::chrono::high_resolution_clock::time_point frame_capture_time_;
+    std::chrono::high_resolution_clock::time_point target_detection_time_;
     
     // Constants
     static constexpr float DEAD_ZONE = 0.1f;
@@ -96,6 +115,11 @@ private:
     float calculateTargetDistanceSquared(const AimbotTarget &target) const;
     void initializeInputMethod(SerialConnection *serialConnection, GhubMouse *gHub);
     void initializeScreen(int resolution, float bScope_multiplier, float norecoil_ms);
+    
+    // Latency compensation methods
+    void updateLatencyMeasurements(float input_latency_ms, float capture_latency_ms);
+    float getEstimatedTotalLatency() const;
+    Point2D applyLatencyCompensation(const Point2D& predicted_pos, const Point2D& velocity) const;
 
 public:
     MouseThread(int resolution,

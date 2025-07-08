@@ -108,6 +108,13 @@ bool Config::loadConfig(const std::string& filename)
         kalman_process_noise = 10.0f;
         kalman_measurement_noise = 5.0f;
         
+        // Sub-pixel and prediction defaults
+        enable_subpixel_dithering = true;
+        dither_strength = 0.3f;
+        enable_velocity_history = true;
+        velocity_history_size = 5;
+        prediction_time_factor = 0.001f;
+        
         target_locking_iou_threshold = 0.5f;
         target_locking_max_lost_frames = 10;
 
@@ -283,6 +290,13 @@ bool Config::loadConfig(const std::string& filename)
     prediction_time_ms = (float)get_double_ini("PID", "prediction_time_ms", 50.0);
     kalman_process_noise = (float)get_double_ini("PID", "kalman_process_noise", 10.0);
     kalman_measurement_noise = (float)get_double_ini("PID", "kalman_measurement_noise", 5.0);
+    
+    // Sub-pixel and prediction settings
+    enable_subpixel_dithering = get_bool_ini("PID", "enable_subpixel_dithering", true);
+    dither_strength = (float)get_double_ini("PID", "dither_strength", 0.3);
+    enable_velocity_history = get_bool_ini("PID", "enable_velocity_history", true);
+    velocity_history_size = get_long_ini("PID", "velocity_history_size", 5);
+    prediction_time_factor = (float)get_double_ini("PID", "prediction_time_factor", 0.001);
 
     arduino_baudrate = get_long_ini("Arduino", "arduino_baudrate", 115200);
     arduino_port = get_string_ini("Arduino", "arduino_port", "COM0");
@@ -479,7 +493,14 @@ bool Config::saveConfig(const std::string& filename)
     file << "use_predictive_controller = " << (use_predictive_controller ? "true" : "false") << "\n";
     file << "prediction_time_ms = " << prediction_time_ms << "\n";
     file << "kalman_process_noise = " << kalman_process_noise << "\n";
-    file << "kalman_measurement_noise = " << kalman_measurement_noise << "\n\n";
+    file << "kalman_measurement_noise = " << kalman_measurement_noise << "\n";
+    file << "enable_subpixel_dithering = " << (enable_subpixel_dithering ? "true" : "false") << "\n";
+    file << "dither_strength = " << dither_strength << "\n";
+    file << "enable_velocity_history = " << (enable_velocity_history ? "true" : "false") << "\n";
+    file << std::noboolalpha;
+    file << "velocity_history_size = " << velocity_history_size << "\n";
+    file << std::fixed << std::setprecision(6);
+    file << "prediction_time_factor = " << prediction_time_factor << "\n\n";
 
     file << "[Arduino]\n";
     file << std::noboolalpha;
