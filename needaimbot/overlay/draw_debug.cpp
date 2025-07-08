@@ -202,20 +202,34 @@ void draw_debug_frame()
 {
     auto& ctx = AppContext::getInstance();
     
-    // Get latest captured frame
-    cv::Mat frameCopy;
+    // Only process if debug window is visible
+    if (!ctx.config.show_window) {
+        ImGui::TextUnformatted("Debug window disabled.");
+        return;
+    }
+    
+    // Get latest captured frame - cache it to avoid multiple downloads
+    static cv::Mat frameCopy;
+    static bool frameValid = false;
+    
     extern cv::cuda::GpuMat latestFrameGpu;
     try {
         if (!latestFrameGpu.empty()) {
             latestFrameGpu.download(frameCopy);
+            frameValid = true;
+        } else {
+            frameValid = false;
         }
     } catch (const cv::Exception&) { 
         frameCopy.release(); 
+        frameValid = false;
     }
-    if (frameCopy.empty()) {
+    
+    if (!frameValid || frameCopy.empty()) {
         ImGui::TextUnformatted("Debug frame unavailable.");
         return;
     }
+    
     uploadDebugFrame(frameCopy);
     ImGui::SliderFloat("Debug scale", &debug_scale, 0.1f, 3.0f, "%.1fx");
     ImVec2 image_size(texW * debug_scale, texH * debug_scale);
