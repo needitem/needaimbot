@@ -465,25 +465,11 @@ void OverlayThread()
 
     while (!shouldExit && !AppContext::getInstance().shouldExit)
     {
-        // Use efficient message handling based on overlay visibility
-        if (show_overlay) {
-            while (::PeekMessage(&msg, NULL, 0U, 0U, PM_REMOVE))
-            {
-                ::TranslateMessage(&msg);
-                ::DispatchMessage(&msg);
-                if (msg.message == WM_QUIT)
-                {
-                    shouldExit = true;
-                    return;
-                }
-            }
-        } else {
-            // When hidden, use blocking GetMessage for better CPU efficiency
-            if (::GetMessage(&msg, NULL, 0U, 0U))
-            {
-                ::TranslateMessage(&msg);
-                ::DispatchMessage(&msg);
-            }
+        // Handle Windows messages
+        while (::PeekMessage(&msg, NULL, 0U, 0U, PM_REMOVE))
+        {
+            ::TranslateMessage(&msg);
+            ::DispatchMessage(&msg);
             if (msg.message == WM_QUIT)
             {
                 shouldExit = true;
@@ -506,6 +492,13 @@ void OverlayThread()
             }
 
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        }
+
+        // When overlay is hidden, reduce CPU usage based on target_fps setting
+        if (!show_overlay)
+        {
+            int delay_ms = static_cast<int>(1000.0f / ctx.config.target_fps);
+            std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
         }
 
         if (show_overlay)

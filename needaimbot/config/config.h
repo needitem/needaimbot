@@ -120,6 +120,13 @@ public:
     float prediction_time_ms;
     float kalman_process_noise;
     float kalman_measurement_noise;
+    
+    // Sub-pixel movement and prediction
+    bool enable_subpixel_dithering;
+    float dither_strength;
+    bool enable_velocity_history;
+    int velocity_history_size;
+    float prediction_time_factor;
 
     
     int arduino_baudrate;

@@ -152,6 +152,51 @@ void draw_mouse()
                 SetWrappedTooltip("Smooths final mouse movement. Higher values = less jitter but may reduce responsiveness.");
             }
             
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+            
+            // Sub-pixel Movement Settings
+            ImGui::Text("Sub-pixel Movement");
+            if (UIHelpers::BeautifulToggle("Enable Sub-pixel Dithering", &ctx.config.enable_subpixel_dithering, 
+                                           "Adds small random variations to improve movement smoothness and reduce stepping artifacts.")) {
+                ctx.config.saveConfig();
+            }
+            
+            if (ctx.config.enable_subpixel_dithering) {
+                if (UIHelpers::BeautifulSlider("Dither Strength", &ctx.config.dither_strength, 0.0f, 1.0f, "%.3f")) {
+                    ctx.config.saveConfig();
+                }
+                if (ImGui::IsItemHovered()) {
+                    SetWrappedTooltip("Strength of dithering effect. Higher values = more smoothness but may reduce precision.");
+                }
+            }
+            
+            ImGui::Spacing();
+            
+            // Target Prediction Settings  
+            ImGui::Text("Target Prediction");
+            if (UIHelpers::BeautifulToggle("Enable Velocity History", &ctx.config.enable_velocity_history, 
+                                           "Uses target velocity history for more accurate prediction of moving targets.")) {
+                ctx.config.saveConfig();
+            }
+            
+            if (ctx.config.enable_velocity_history) {
+                if (ImGui::SliderInt("Velocity History Size", &ctx.config.velocity_history_size, 2, 10)) {
+                    ctx.config.saveConfig();
+                }
+                if (ImGui::IsItemHovered()) {
+                    SetWrappedTooltip("Number of past velocity samples to use for prediction. More samples = smoother but slower adaptation.");
+                }
+            }
+            
+            if (UIHelpers::BeautifulSlider("Prediction Factor", &ctx.config.prediction_time_factor, 0.0001f, 0.01f, "%.4f")) {
+                ctx.config.saveConfig();
+            }
+            if (ImGui::IsItemHovered()) {
+                SetWrappedTooltip("How much prediction is applied based on target distance. Higher values = more aggressive prediction.");
+            }
+            
             ImGui::TreePop();
         }
         
