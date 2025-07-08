@@ -10,7 +10,10 @@
       "Bash(sed:*)",
       "Bash(./ai.exe --help)",
       "Bash(chmod:*)",
-      "Bash(gemini:*)"
+      "Bash(gemini:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git config:*)"
     ],
     "deny": []
   }
