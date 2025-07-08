@@ -465,10 +465,25 @@ void OverlayThread()
 
     while (!shouldExit && !AppContext::getInstance().shouldExit)
     {
-        while (::PeekMessage(&msg, NULL, 0U, 0U, PM_REMOVE))
-        {
-            ::TranslateMessage(&msg);
-            ::DispatchMessage(&msg);
+        // Use efficient message handling based on overlay visibility
+        if (show_overlay) {
+            while (::PeekMessage(&msg, NULL, 0U, 0U, PM_REMOVE))
+            {
+                ::TranslateMessage(&msg);
+                ::DispatchMessage(&msg);
+                if (msg.message == WM_QUIT)
+                {
+                    shouldExit = true;
+                    return;
+                }
+            }
+        } else {
+            // When hidden, use blocking GetMessage for better CPU efficiency
+            if (::GetMessage(&msg, NULL, 0U, 0U))
+            {
+                ::TranslateMessage(&msg);
+                ::DispatchMessage(&msg);
+            }
             if (msg.message == WM_QUIT)
             {
                 shouldExit = true;
@@ -495,6 +510,14 @@ void OverlayThread()
 
         if (show_overlay)
         {
+            // Control frame rate to 30 FPS when visible
+            auto now = std::chrono::high_resolution_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastOverlayFrameTime);
+            if (elapsed.count() < 33) { // ~30 FPS
+                std::this_thread::sleep_for(std::chrono::milliseconds(33 - elapsed.count()));
+            }
+            lastOverlayFrameTime = std::chrono::high_resolution_clock::now();
+            
             // Optimized ImGui frame setup
             ImGui_ImplDX11_NewFrame();
             ImGui_ImplWin32_NewFrame();
@@ -777,8 +800,8 @@ void OverlayThread()
 
             // Use immediate present for better performance (no VSync)
             HRESULT result = g_pSwapChain->Present(0, DXGI_PRESENT_DO_NOT_WAIT);
-            auto now = std::chrono::high_resolution_clock::now();
-            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastOverlayFrameTime);
+            auto present_now = std::chrono::high_resolution_clock::now();
+            auto present_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(present_now - lastOverlayFrameTime);
             
             if (result == DXGI_STATUS_OCCLUDED || result == DXGI_ERROR_ACCESS_LOST)
             {
@@ -791,9 +814,9 @@ void OverlayThread()
                 float overlay_target_fps = 30.0f;
                 auto targetFrameTime = std::chrono::milliseconds(static_cast<long long>(1000.0f / overlay_target_fps));
                 
-                if (elapsed < targetFrameTime)
+                if (present_elapsed < targetFrameTime)
                 {
-                    std::this_thread::sleep_for(targetFrameTime - elapsed);
+                    std::this_thread::sleep_for(targetFrameTime - present_elapsed);
                 }
             }
             lastOverlayFrameTime = std::chrono::high_resolution_clock::now();

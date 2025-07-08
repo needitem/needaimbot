@@ -35,9 +35,9 @@ __device__ inline float calculateIoU(const cv::Rect& box1, const cv::Rect& box2)
 
 
 __global__ void calculateTargetScoresGpuKernel(
-    const Detection* d_detections,
+    const Detection* __restrict__ d_detections,
     int num_detections,
-    float* d_scores,
+    float* __restrict__ d_scores,
     int frame_width,
     int frame_height,
     float distance_weight,
@@ -58,9 +58,9 @@ __global__ void calculateTargetScoresGpuKernel(
         float frameCenterY = frame_height / 2.0f;
         float dx = centerX - frameCenterX;
         float dy = centerY - frameCenterY;
-        float distance_score = sqrtf(dx * dx + dy * dy) * distance_weight;
+        float distance_score = sqrtf(dx * dx + dy * dy) * fmaxf(0.0f, distance_weight);
 
-        float confidence_penalty_factor = (1.0f - det.confidence) * confidence_weight;
+        float confidence_penalty_factor = (1.0f - det.confidence) * fmaxf(0.0f, confidence_weight);
         d_scores[idx] = distance_score * (1.0f + confidence_penalty_factor);
 
         

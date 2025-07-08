@@ -282,6 +282,16 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     auto& ctx = AppContext::getInstance();
     float current_center_x, current_center_y;
     float current_move_scale_x, current_move_scale_y;
+    
+    // Copy all needed config values at once
+    float crosshair_offset_x, crosshair_offset_y;
+    float movement_smoothing;
+    bool use_predictive_controller;
+    float prediction_time_ms;
+    int head_class_id_to_use = -1;
+    bool apply_head_offset = false;
+    float head_y_offset, body_y_offset;
+    std::string head_class_name;
 
     {
         std::lock_guard<std::mutex> lock(member_data_mutex_); 
@@ -291,12 +301,32 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         current_move_scale_y = this->move_scale_y;
     }
 
-    // Apply crosshair offset correction
+    // Get all config values in one lock
     {
         std::lock_guard<std::mutex> lock(ctx.configMutex);
-        current_center_x += ctx.config.crosshair_offset_x;
-        current_center_y += ctx.config.crosshair_offset_y;
+        crosshair_offset_x = ctx.config.crosshair_offset_x;
+        crosshair_offset_y = ctx.config.crosshair_offset_y;
+        movement_smoothing = ctx.config.movement_smoothing;
+        use_predictive_controller = ctx.config.use_predictive_controller;
+        prediction_time_ms = ctx.config.prediction_time_ms;
+        head_class_name = ctx.config.head_class_name;
+        head_y_offset = ctx.config.head_y_offset;
+        body_y_offset = ctx.config.body_y_offset;
+        
+        for (const auto& class_setting : ctx.config.class_settings) {
+            if (class_setting.name == head_class_name) {
+                head_class_id_to_use = class_setting.id;
+                if (!class_setting.ignore) {
+                    apply_head_offset = true;
+                }
+                break;
+            }
+        }
     }
+
+    // Apply crosshair offset correction
+    current_center_x += crosshair_offset_x;
+    current_center_y += crosshair_offset_y;
 
     Point2D raw_target_pos;
     raw_target_pos.x = target.x + target.w * 0.5f;

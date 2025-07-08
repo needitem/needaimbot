@@ -49,7 +49,7 @@ public:
     }
 
     void allocate(size_t size) {
-        if (m_size == size) return;
+        if (m_size >= size) return;
 
         T* ptr = nullptr;
         cudaError_t err = cudaMalloc(&ptr, size * sizeof(T));

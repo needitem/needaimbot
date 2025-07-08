@@ -22,11 +22,11 @@ __device__ inline float calculateIoUForLockingKernel(const cv::Rect& box1, const
 }
 
 __global__ void reacquireLockedTargetKernel(
-    const Detection* d_current_detections,
+    const Detection* __restrict__ d_current_detections,
     int num_current_detections,
     cv::Rect previous_locked_target_box, 
     float iou_threshold,
-    int* d_final_best_index_output)
+    int* __restrict__ d_final_best_index_output)
 {
     
     
