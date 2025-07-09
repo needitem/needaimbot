@@ -13,69 +13,71 @@
 #include "capture.h"
 #include "include/other_tools.h"
 #include "draw_settings.h"
+#include "ui_helpers.h"
 
 int monitors = get_active_monitors();
 
-void draw_capture_settings()
+static void draw_capture_area_settings()
 {
     auto& ctx = AppContext::getInstance();
     
-    ImGui::SeparatorText("Capture Area & Resolution");
-    ImGui::Spacing();
-
-    if (ImGui::SliderInt("Detection Resolution", &ctx.config.detection_resolution, 50, 1280)) { ctx.config.saveConfig(); }
-    if (ImGui::IsItemHovered())
-    {
-        ImGui::SetTooltip("Size (in pixels) of the square area around the cursor to capture for detection.\nSmaller values improve performance but may miss targets further from the crosshair.");
+    UIHelpers::BeginCard("Capture Area & Resolution");
+    
+    UIHelpers::CompactSlider("Detection Resolution", reinterpret_cast<float*>(&ctx.config.detection_resolution), 50.0f, 1280.0f, "%.0f");
+    UIHelpers::InfoTooltip("Size (in pixels) of the square area around the cursor to capture for detection.\nSmaller values improve performance but may miss targets further from the crosshair.");
+    if (ImGui::IsItemDeactivatedAfterEdit()) {
+        ctx.config.saveConfig();
     }
+    
     if (ctx.config.detection_resolution >= 400)
     {
-        ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "WARNING: Large detection resolution can impact performance.");
+        UIHelpers::BeautifulText("WARNING: Large detection resolution can impact performance.", UIHelpers::GetWarningColor());
     }
-
-    ImGui::Spacing();
-    if (ImGui::Checkbox("Circle mask", &ctx.config.circle_mask))
+    
+    UIHelpers::Spacer(5.0f);
+    
+    if (UIHelpers::BeautifulToggle("Circle Mask", &ctx.config.circle_mask, "Applies a circular mask to the captured area, ignoring corners."))
     {
         ctx.config.saveConfig();
     }
-    if (ImGui::IsItemHovered())
-    {
-        ImGui::SetTooltip("Applies a circular mask to the captured area, ignoring corners.");
+    
+    UIHelpers::EndCard();
+}
+
+static void draw_capture_behavior_settings()
+{
+    auto& ctx = AppContext::getInstance();
+    
+    UIHelpers::BeginCard("Capture Behavior");
+    
+    UIHelpers::CompactSlider("Lock FPS", reinterpret_cast<float*>(&ctx.config.capture_fps), 0.0f, 240.0f, "%.0f");
+    UIHelpers::InfoTooltip("Limits the screen capture rate. 0 = Unlocked (fastest possible).\nLower values reduce CPU usage but increase detection latency.");
+    if (ImGui::IsItemDeactivatedAfterEdit()) {
+        ctx.config.saveConfig();
     }
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    ImGui::SeparatorText("Capture Behavior");
-    ImGui::Spacing();
-
-    if (ImGui::SliderInt("Lock FPS", &ctx.config.capture_fps, 0, 240)) { ctx.config.saveConfig(); }
-    if (ImGui::IsItemHovered())
-    {
-        ImGui::SetTooltip("Limits the screen capture rate. 0 = Unlocked (fastest possible).\nLower values reduce CPU usage but increase detection latency.");
-    }
+    
     if (ctx.config.capture_fps == 0)
     {
         ImGui::SameLine();
-        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "-> Unlocked");
+        UIHelpers::BeautifulText("-> Unlocked", UIHelpers::GetErrorColor());
     }
-
+    
     if (ctx.config.capture_fps == 0 || ctx.config.capture_fps >= 61)
     {
-        ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "WARNING: High or unlocked FPS can significantly impact performance.");
+        UIHelpers::BeautifulText("WARNING: High or unlocked FPS can significantly impact performance.", UIHelpers::GetWarningColor());
     }
-
-    ImGui::Spacing();
-
-    // Capture Method Selection
+    
+    UIHelpers::Spacer(5.0f);
+    
     const char* capture_methods[] = { "Simple (BitBlt)", "Desktop Duplication API", "UnknownCheats Game Capture" };
     int current_method = 0;
     if (ctx.config.capture_method == "simple") current_method = 0;
     else if (ctx.config.capture_method == "duplication") current_method = 1;
     else if (ctx.config.capture_method == "game_capture") current_method = 2;
-
-    if (ImGui::Combo("Capture Method", &current_method, capture_methods, IM_ARRAYSIZE(capture_methods)))
+    
+    UIHelpers::CompactCombo("Capture Method", &current_method, capture_methods, IM_ARRAYSIZE(capture_methods));
+    UIHelpers::InfoTooltip("Simple: Fast BitBlt screen capture\nDuplication API: Windows Desktop Duplication API\nGame Capture: UnknownCheats method for game capturing");
+    if (ImGui::IsItemDeactivatedAfterEdit())
     {
         if (current_method == 0) ctx.config.capture_method = "simple";
         else if (current_method == 1) ctx.config.capture_method = "duplication";
@@ -83,21 +85,17 @@ void draw_capture_settings()
         ctx.config.saveConfig();
         ctx.capture_method_changed = true;
     }
-    if (ImGui::IsItemHovered())
-    {
-        ImGui::SetTooltip("Simple: Fast BitBlt screen capture (current method)\nDuplication API: Windows Desktop Duplication API\nGame Capture: UnknownCheats method for game capturing");
-    }
-
+    
     // Show game selection dropdown when GameCapture is selected
     if (ctx.config.capture_method == "game_capture") {
-        ImGui::Spacing();
+        UIHelpers::Spacer(5.0f);
         
         // Get list of available windows
         static std::vector<std::string> window_titles;
         static std::vector<std::string> window_display_names;
         static bool need_refresh = true;
         
-        if (need_refresh || ImGui::Button("Refresh Windows")) {
+        if (UIHelpers::BeautifulButton("Refresh Windows", ImVec2(-1, 0)) || need_refresh) {
             window_titles.clear();
             window_display_names.clear();
             window_titles.push_back(""); // Empty option
@@ -152,7 +150,7 @@ void draw_capture_settings()
         }
         
         // Create dropdown
-        if (ImGui::Combo("Target Game Window", &current_selection, 
+        UIHelpers::CompactCombo("Target Game Window", &current_selection, 
                         [](void* data, int idx, const char** out_text) -> bool {
                             auto* names = static_cast<std::vector<std::string>*>(data);
                             if (idx >= 0 && idx < static_cast<int>(names->size())) {
@@ -160,8 +158,9 @@ void draw_capture_settings()
                                 return true;
                             }
                             return false;
-                        }, &window_display_names, static_cast<int>(window_display_names.size()))) {
-            
+                        }, &window_display_names, static_cast<int>(window_display_names.size()));
+        UIHelpers::InfoTooltip("Select the window you want to capture from the list of visible windows");
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
             if (current_selection >= 0 && current_selection < static_cast<int>(window_titles.size())) {
                 ctx.config.target_game_name = window_titles[current_selection];
                 ctx.config.saveConfig();
@@ -169,70 +168,105 @@ void draw_capture_settings()
             }
         }
         
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Select the window you want to capture from the list of visible windows");
-        }
-        
         if (ctx.config.target_game_name.empty()) {
-            ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Warning: Please select a target window for Game Capture!");
+            UIHelpers::BeautifulText("Warning: Please select a target window for Game Capture!", UIHelpers::GetWarningColor());
         }
     }
-
-    ImGui::Spacing();
-
-    if (ImGui::IsItemHovered())
+    
+    UIHelpers::Spacer(5.0f);
+    
+    ImGui::Columns(2, "capture_options", false);
+    
+    if (UIHelpers::BeautifulToggle("Capture Borders", &ctx.config.capture_borders, "Includes window borders in the screen capture (if applicable)."))
     {
-        ImGui::SetTooltip("Timeout for AcquireNextFrame in milliseconds (1-100ms).\nLower values can make the application feel more responsive if frames are ready quickly,\nbut may lead to more timeouts (frame drops) if the system is slow to provide frames.\nHigher values give the system more time but can increase perceived latency if waiting for a slow frame.");
+        ctx.config.saveConfig();
     }
-
-    ImGui::Spacing();
-    if (ImGui::Checkbox("Capture Borders", &ctx.config.capture_borders)) { ctx.config.saveConfig(); }
-    if (ImGui::IsItemHovered())
+    
+    ImGui::NextColumn();
+    
+    if (UIHelpers::BeautifulToggle("Capture Cursor", &ctx.config.capture_cursor, "Includes the mouse cursor in the screen capture."))
     {
-        ImGui::SetTooltip("Includes window borders in the screen capture (if applicable).");
+        ctx.config.saveConfig();
     }
-    ImGui::SameLine(); ImGui::Spacing(); ImGui::SameLine();
-    if (ImGui::Checkbox("Capture Cursor", &ctx.config.capture_cursor)) { ctx.config.saveConfig(); }
-    if (ImGui::IsItemHovered())
+    
+    ImGui::Columns(1);
+    
+    UIHelpers::EndCard();
+}
+
+static void draw_capture_source_settings()
+{
+    auto& ctx = AppContext::getInstance();
+    
+    UIHelpers::BeginCard("Capture Source (CUDA Only)");
+    
+    std::vector<std::string> monitorNames;
+    if (monitors == -1)
     {
-        ImGui::SetTooltip("Includes the mouse cursor in the screen capture.");
+        monitorNames.push_back("Monitor 1");
     }
-
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    ImGui::SeparatorText("Capture Source (CUDA Only)");
-    ImGui::Spacing();
+    else
     {
-        std::vector<std::string> monitorNames;
-        if (monitors == -1)
+        for (int i = -1; i < monitors; ++i)
         {
-            monitorNames.push_back("Monitor 1");
-        }
-        else
-        {
-            for (int i = -1; i < monitors; ++i)
-            {
-                monitorNames.push_back("Monitor " + std::to_string(i + 1));
-            }
-        }
-
-        std::vector<const char*> monitorItems;
-        for (const auto& name : monitorNames)
-        {
-            monitorItems.push_back(name.c_str());
-        }
-
-        if (ImGui::Combo("Capture Monitor", &ctx.config.monitor_idx, monitorItems.data(), static_cast<int>(monitorItems.size())))
-        {
-            ctx.config.saveConfig();
-        }
-        if (ImGui::IsItemHovered())
-        {
-            ImGui::SetTooltip("Select which monitor to capture from when using CUDA-based screen capture.");
+            monitorNames.push_back("Monitor " + std::to_string(i + 1));
         }
     }
-    ImGui::Spacing();
+
+    std::vector<const char*> monitorItems;
+    for (const auto& name : monitorNames)
+    {
+        monitorItems.push_back(name.c_str());
+    }
+
+    UIHelpers::CompactCombo("Capture Monitor", &ctx.config.monitor_idx, monitorItems.data(), static_cast<int>(monitorItems.size()));
+    UIHelpers::InfoTooltip("Select which monitor to capture from when using CUDA-based screen capture.");
+    if (ImGui::IsItemDeactivatedAfterEdit())
+    {
+        ctx.config.saveConfig();
+    }
+    
+    UIHelpers::EndCard();
+}
+
+void draw_capture_settings()
+{
+    auto& ctx = AppContext::getInstance();
+    
+    UIHelpers::BeginTwoColumnLayout(0.6f);
+    
+    // Left column - Main capture settings
+    draw_capture_area_settings();
+    UIHelpers::Spacer();
+    
+    draw_capture_behavior_settings();
+    
+    UIHelpers::NextColumn();
+    
+    // Right column - Source and info
+    draw_capture_source_settings();
+    UIHelpers::Spacer();
+    
+    UIHelpers::BeginInfoPanel();
+    
+    UIHelpers::BeautifulText("Performance Tips", UIHelpers::GetAccentColor());
+    UIHelpers::Spacer(5.0f);
+    
+    ImGui::BulletText("Lower detection resolution for better performance");
+    ImGui::BulletText("Use circle mask to focus on center targets");
+    ImGui::BulletText("Limit FPS to 60 for stable performance");
+    ImGui::BulletText("Simple capture method is usually fastest");
+    
+    UIHelpers::Spacer();
+    
+    UIHelpers::BeautifulText("Capture Method Guide", UIHelpers::GetAccentColor());
+    UIHelpers::Spacer(5.0f);
+    
+    ImGui::BulletText("Simple: Best for windowed games");
+    ImGui::BulletText("Duplication: Good for fullscreen apps");
+    ImGui::BulletText("Game Capture: For specific game windows");
+    
+    UIHelpers::EndInfoPanel();
+    
+    UIHelpers::EndTwoColumnLayout();
 }

@@ -14,15 +14,18 @@
 #include "overlay.h"
 #include "AppContext.h"
 #include "detector/detector.h"
+#include "ui_helpers.h"
 
-void draw_ai()
+static void draw_model_settings()
 {
     auto& ctx = AppContext::getInstance();
+    
+    UIHelpers::BeginCard("Model & Engine Settings");
     
     std::vector<std::string> availableModels = getAvailableModels();
     if (availableModels.empty())
     {
-        ImGui::Text("No models available in the 'models' folder.");
+        UIHelpers::BeautifulText("No models available in the 'models' folder.", UIHelpers::GetWarningColor());
     }
     else
     {
@@ -42,7 +45,8 @@ void draw_ai()
             modelsItems.push_back(modelName.c_str());
         }
 
-        if (ImGui::Combo("Model", &currentModelIndex, modelsItems.data(), static_cast<int>(modelsItems.size())))
+        UIHelpers::CompactCombo("Model", &currentModelIndex, modelsItems.data(), static_cast<int>(modelsItems.size()));
+        if (ImGui::IsItemDeactivatedAfterEdit())
         {
             if (ctx.config.ai_model != availableModels[currentModelIndex])
             {
@@ -52,11 +56,8 @@ void draw_ai()
             }
         }
     }
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
+    
+    UIHelpers::Spacer(5.0f);
     
     const char* resolution_items[] = { "160", "320", "640" };
     int current_resolution_index = 0;
@@ -64,8 +65,9 @@ void draw_ai()
     else if (ctx.config.onnx_input_resolution == 320) current_resolution_index = 1;
     else if (ctx.config.onnx_input_resolution == 640) current_resolution_index = 2;
     
-
-    if (ImGui::Combo("ONNX Input Resolution", &current_resolution_index, resolution_items, IM_ARRAYSIZE(resolution_items)))
+    UIHelpers::CompactCombo("Input Resolution", &current_resolution_index, resolution_items, IM_ARRAYSIZE(resolution_items));
+    UIHelpers::InfoTooltip("Select the input resolution for the ONNX model (e.g., 640 for 640x640 input).\nChanging this will require the .engine file to be rebuilt if it doesn't match.");
+    if (ImGui::IsItemDeactivatedAfterEdit())
     {
         int selected_resolution = 160; 
         if (current_resolution_index == 0)      selected_resolution = 160;
@@ -79,30 +81,24 @@ void draw_ai()
             detector_model_changed.store(true); 
         }
     }
-    if (ImGui::IsItemHovered())
-    {
-        ImGui::SetTooltip("Select the input resolution for the ONNX model (e.g., 640 for 640x640 input).\nChanging this will require the .engine file to be rebuilt if it doesn't match.");
-    }
-
-    // Add TensorRT precision options
-    if (ImGui::Checkbox("Enable FP16", &ctx.config.export_enable_fp16))
+    
+    UIHelpers::Spacer(5.0f);
+    
+    if (UIHelpers::BeautifulToggle("Enable FP16", &ctx.config.export_enable_fp16, "Enable FP16 precision for the exported TensorRT engine."))
     {
         ctx.config.saveConfig();
         detector_model_changed.store(true);
     }
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Enable FP16 precision for the exported TensorRT engine.");
-
-    if (ImGui::Checkbox("Enable FP8", &ctx.config.export_enable_fp8))
+    
+    if (UIHelpers::BeautifulToggle("Enable FP8", &ctx.config.export_enable_fp8, "Enable FP8 precision for the exported TensorRT engine."))
     {
         ctx.config.saveConfig();
         detector_model_changed.store(true);
     }
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Enable FP8 precision for the exported TensorRT engine.");
-
-    // Force rebuild button
-    if (ImGui::Button("Rebuild Engine"))
+    
+    UIHelpers::Spacer(5.0f);
+    
+    if (UIHelpers::BeautifulButton("Rebuild Engine", ImVec2(-1, 0)))
     {
         std::filesystem::path modelPath(std::string("models/") + ctx.config.ai_model);
         std::filesystem::path onnxPath = modelPath;
@@ -116,18 +112,21 @@ void draw_ai()
             if (ctx.config.verbose)
                 std::cout << "[Overlay] Removed engine: " << enginePath.string() << std::endl;
         }
-        // switch to .onnx model to force rebuild from ONNX
         ctx.config.ai_model = onnxPath.filename().string();
         ctx.config.saveConfig();
         detector_model_changed.store(true);
     }
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Force rebuild of the TensorRT engine from ONNX.");
+    UIHelpers::WrappedTooltip("Force rebuild of the TensorRT engine from ONNX.");
+    
+    UIHelpers::EndCard();
+}
 
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
+static void draw_detection_settings()
+{
+    auto& ctx = AppContext::getInstance();
+    
+    UIHelpers::BeginCard("Detection Parameters");
+    
     std::vector<std::string> postprocessOptions = { "yolo8", "yolo9", "yolo10", "yolo11", "yolo12" };
     std::vector<const char*> postprocessItems;
     for (const auto& option : postprocessOptions)
@@ -145,57 +144,60 @@ void draw_ai()
         }
     }
 
-    if (ImGui::Combo("Postprocess", &currentPostprocessIndex, postprocessItems.data(), static_cast<int>(postprocessItems.size())))
+    UIHelpers::CompactCombo("Postprocess Algorithm", &currentPostprocessIndex, postprocessItems.data(), static_cast<int>(postprocessItems.size()));
+    if (ImGui::IsItemDeactivatedAfterEdit())
     {
         ctx.config.postprocess = postprocessOptions[currentPostprocessIndex];
         ctx.config.saveConfig();
         detector_model_changed.store(true);
     }
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    ImGui::SliderFloat("Confidence Threshold", &ctx.config.confidence_threshold, 0.01f, 1.00f, "%.2f");
+    
+    UIHelpers::Spacer(5.0f);
+    
+    UIHelpers::CompactSlider("Confidence Threshold", &ctx.config.confidence_threshold, 0.01f, 1.00f, "%.2f");
     if (ImGui::IsItemDeactivatedAfterEdit()) {
         ctx.config.saveConfig();
     }
-    if (ImGui::SliderFloat("NMS Threshold", &ctx.config.nms_threshold, 0.01f, 1.00f, "%.2f")) { ctx.config.saveConfig(); }
-    if (ImGui::SliderInt("Max Detections", &ctx.config.max_detections, 1, 100)) { ctx.config.saveConfig(); }
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    if (ImGui::InputInt("CUDA Device ID", &ctx.config.cuda_device_id))
-    {
-        if (ctx.config.cuda_device_id < 0) ctx.config.cuda_device_id = 0;
+    
+    UIHelpers::CompactSlider("NMS Threshold", &ctx.config.nms_threshold, 0.01f, 1.00f, "%.2f");
+    if (ImGui::IsItemDeactivatedAfterEdit()) {
         ctx.config.saveConfig();
     }
-    if (ImGui::IsItemHovered())
-    {
-        ImGui::SetTooltip("Set the CUDA device ID to use for detection (requires restart).");
+    
+    ImGui::PushItemWidth(-1);
+    if (ImGui::SliderInt("##max_detections", &ctx.config.max_detections, 1, 100)) {
+        ctx.config.saveConfig();
     }
+    ImGui::PopItemWidth();
+    ImGui::SameLine();
+    ImGui::Text("Max Detections");
+    
+    UIHelpers::EndCard();
+}
 
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::SeparatorText("Class Definitions");
-    ImGui::Spacing();
-
+static void draw_class_settings()
+{
+    auto& ctx = AppContext::getInstance();
+    
+    UIHelpers::BeginCard("Class & Targeting Definitions");
     
     static char head_class_name_buffer[128];
     strncpy_s(head_class_name_buffer, sizeof(head_class_name_buffer), ctx.config.head_class_name.c_str(), _TRUNCATE);
-    head_class_name_buffer[sizeof(head_class_name_buffer) - 1] = '\0'; 
-    ImGui::InputText("Head Class Identifier Name", head_class_name_buffer, sizeof(head_class_name_buffer));
+    head_class_name_buffer[sizeof(head_class_name_buffer) - 1] = '\0';
+    
+    ImGui::PushItemWidth(-1);
+    ImGui::InputText("##head_class", head_class_name_buffer, sizeof(head_class_name_buffer));
+    ImGui::PopItemWidth();
+    ImGui::SameLine();
+    ImGui::Text("Head Class Name");
+    UIHelpers::InfoTooltip("The name of the class that should be treated as 'Head' for specific aiming logic (e.g., head_y_offset).");
+    
     if (ImGui::IsItemDeactivatedAfterEdit()) {
         ctx.config.head_class_name = head_class_name_buffer;
         ctx.config.saveConfig();
     }
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("The name of the class that should be treated as 'Head' for specific aiming logic (e.g., head_y_offset).");
-    }
-    ImGui::Spacing();
-
+    
+    UIHelpers::Spacer(5.0f);
     
     if (ImGui::BeginTable("class_settings_table", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
         ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 50.0f);
@@ -212,8 +214,6 @@ void draw_ai()
             
             ImGui::TableSetColumnIndex(0);
             if (ImGui::InputInt("##ID", &setting.id, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue)) {
-                
-                
                 ctx.config.saveConfig();
             }
 
@@ -225,7 +225,7 @@ void draw_ai()
                 setting.name = name_buf;
                 ctx.config.saveConfig();
             }
-             if (ImGui::IsItemDeactivatedAfterEdit() && setting.name != name_buf) { 
+            if (ImGui::IsItemDeactivatedAfterEdit() && setting.name != name_buf) { 
                 setting.name = name_buf;
                 ctx.config.saveConfig();
             }
@@ -237,7 +237,7 @@ void draw_ai()
             }
 
             ImGui::TableSetColumnIndex(3);
-            if (ImGui::Button("Remove")) {
+            if (UIHelpers::BeautifulButton("Remove", ImVec2(-1, 0))) {
                 ctx.config.class_settings.erase(ctx.config.class_settings.begin() + i);
                 ctx.config.saveConfig();
                 if (ctx.detector) ctx.detector->m_ignore_flags_need_update = true;
@@ -250,17 +250,37 @@ void draw_ai()
         ImGui::EndTable();
     }
 
-    ImGui::Spacing();
-
+    UIHelpers::Spacer(5.0f);
     
-    ImGui::Separator();
-    ImGui::Text("Add New Class:");
+    UIHelpers::BeautifulSeparator("Add New Class");
+    
     static int new_class_id = 0; 
     static char new_class_name_buf[128] = "";
     static bool new_class_ignore = false;
 
+    ImGui::Columns(3, "new_class_columns", false);
     
-    if (ImGui::Button("Suggest Next ID")) {
+    ImGui::PushItemWidth(-1);
+    ImGui::InputInt("##new_id", &new_class_id);
+    ImGui::PopItemWidth();
+    ImGui::Text("ID");
+    
+    ImGui::NextColumn();
+    
+    ImGui::PushItemWidth(-1);
+    ImGui::InputText("##new_name", new_class_name_buf, sizeof(new_class_name_buf));
+    ImGui::PopItemWidth();
+    ImGui::Text("Name");
+    
+    ImGui::NextColumn();
+    
+    ImGui::Checkbox("Ignore", &new_class_ignore);
+    
+    ImGui::Columns(1);
+    
+    UIHelpers::Spacer(5.0f);
+    
+    if (UIHelpers::BeautifulButton("Suggest Next ID", ImVec2(-1, 0))) {
         int max_id = -1;
         if (!ctx.config.class_settings.empty()) {
             for(const auto& cs : ctx.config.class_settings) {
@@ -271,12 +291,8 @@ void draw_ai()
             new_class_id = 0;
         }
     }
-    ImGui::SameLine();
-    ImGui::InputInt("New ID", &new_class_id);
-    ImGui::InputText("New Name", new_class_name_buf, sizeof(new_class_name_buf));
-    ImGui::Checkbox("Ignore New", &new_class_ignore);
-
-    if (ImGui::Button("Add Class")) {
+    
+    if (UIHelpers::BeautifulButton("Add Class", ImVec2(-1, 0))) {
         bool id_exists = false;
         for (const auto& cs : ctx.config.class_settings) {
             if (cs.id == new_class_id) {
@@ -292,18 +308,64 @@ void draw_ai()
             
             int max_id = -1;
             if (!ctx.config.class_settings.empty()) {
-                 for(const auto& cs : ctx.config.class_settings) {
+                for(const auto& cs : ctx.config.class_settings) {
                     if (cs.id > max_id) max_id = cs.id;
                 }
                 new_class_id = max_id + 1;
             } else {
-                 new_class_id = 0;
+                new_class_id = 0;
             }
             new_class_name_buf[0] = '\0'; 
             new_class_ignore = false;
         }
-        
     }
+    
+    UIHelpers::EndCard();
+}
 
-    ImGui::Spacing();
+static void draw_advanced_settings()
+{
+    auto& ctx = AppContext::getInstance();
+    
+    static bool advanced_open = false;
+    UIHelpers::BeginCard(nullptr);
+    
+    if (ImGui::CollapsingHeader("Advanced Settings", &advanced_open)) {
+        UIHelpers::Spacer(5.0f);
+        
+        ImGui::PushItemWidth(-1);
+        if (ImGui::InputInt("##cuda_device", &ctx.config.cuda_device_id)) {
+            if (ctx.config.cuda_device_id < 0) ctx.config.cuda_device_id = 0;
+            ctx.config.saveConfig();
+        }
+        ImGui::PopItemWidth();
+        ImGui::SameLine();
+        ImGui::Text("CUDA Device ID");
+        UIHelpers::InfoTooltip("Set the CUDA device ID to use for detection (requires restart).");
+    }
+    
+    UIHelpers::EndCard();
+}
+
+void draw_ai()
+{
+    auto& ctx = AppContext::getInstance();
+    
+    UIHelpers::BeginTwoColumnLayout(0.6f);
+    
+    // Left column - Main settings
+    draw_model_settings();
+    UIHelpers::Spacer();
+    
+    draw_detection_settings();
+    UIHelpers::Spacer();
+    
+    draw_advanced_settings();
+    
+    UIHelpers::NextColumn();
+    
+    // Right column - Class settings and info
+    draw_class_settings();
+    
+    UIHelpers::EndTwoColumnLayout();
 }

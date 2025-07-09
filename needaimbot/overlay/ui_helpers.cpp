@@ -24,21 +24,6 @@ namespace UIHelpers
         return ImVec4(0.90f, 0.30f, 0.30f, alpha);
     }
 
-    void BeautifulButton(const char* label, const ImVec2& size, bool active)
-    {
-        if (active) {
-            ImGui::PushStyleColor(ImGuiCol_Button, GetAccentColor(0.9f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, GetAccentColor(1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, GetAccentColor(0.8f));
-        } else {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.15f, 0.18f, 0.90f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.20f, 0.25f, 0.95f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.25f, 0.25f, 0.30f, 1.00f));
-        }
-        
-        ImGui::Button(label, size);
-        ImGui::PopStyleColor(3);
-    }
 
     bool BeautifulToggle(const char* label, bool* value, const char* description)
     {
@@ -220,5 +205,139 @@ namespace UIHelpers
             ImGui::PopTextWrapPos();
             ImGui::EndTooltip();
         }
+    }
+
+    // Layout helpers
+    static float s_leftColumnWidth = 0.0f;
+    static float s_rightColumnWidth = 0.0f;
+    
+    void BeginTwoColumnLayout(float left_width_ratio)
+    {
+        float available_width = ImGui::GetContentRegionAvail().x;
+        s_leftColumnWidth = available_width * left_width_ratio;
+        s_rightColumnWidth = available_width * (1.0f - left_width_ratio) - ImGui::GetStyle().ItemSpacing.x;
+        
+        ImGui::BeginChild("##left_column", ImVec2(s_leftColumnWidth, 0), false);
+    }
+    
+    void NextColumn()
+    {
+        ImGui::EndChild();
+        ImGui::SameLine();
+        ImGui::BeginChild("##right_column", ImVec2(s_rightColumnWidth, 0), false);
+    }
+    
+    void EndTwoColumnLayout()
+    {
+        ImGui::EndChild();
+    }
+    
+    void BeginGroupBox(const char* title)
+    {
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.10f, 0.10f, 0.13f, 0.90f));
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 6.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.0f);
+        
+        ImGui::BeginChild(title, ImVec2(0, 0), true);
+        
+        if (title) {
+            ImGui::PushStyleColor(ImGuiCol_Text, GetAccentColor());
+            ImGui::Text("%s", title);
+            ImGui::PopStyleColor();
+            ImGui::Separator();
+            ImGui::Spacing();
+        }
+    }
+    
+    void EndGroupBox()
+    {
+        ImGui::EndChild();
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor();
+    }
+    
+    void BeginCard(const char* title)
+    {
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.12f, 0.12f, 0.15f, 0.95f));
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 10.0f));
+        
+        ImGui::BeginChild(title ? title : "##card", ImVec2(0, 0), true);
+        
+        if (title) {
+            ImGui::PushStyleColor(ImGuiCol_Text, GetAccentColor());
+            ImGui::Text("%s", title);
+            ImGui::PopStyleColor();
+            ImGui::Separator();
+            ImGui::Spacing();
+        }
+    }
+    
+    void EndCard()
+    {
+        ImGui::EndChild();
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor();
+    }
+    
+    void BeginInfoPanel()
+    {
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.08f, 0.12f, 0.18f, 0.90f));
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 6.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f, 8.0f));
+        
+        ImGui::BeginChild("##info_panel", ImVec2(0, 0), true);
+    }
+    
+    void EndInfoPanel()
+    {
+        ImGui::EndChild();
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor();
+    }
+    
+    void Spacer(float height)
+    {
+        ImGui::Dummy(ImVec2(0, height));
+    }
+    
+    bool BeautifulButton(const char* label, const ImVec2& size)
+    {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.15f, 0.18f, 0.90f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, GetAccentColor(0.7f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, GetAccentColor(0.9f));
+        ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.5f, 0.5f));
+        
+        bool result = ImGui::Button(label, size);
+        
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor(3);
+        
+        return result;
+    }
+    
+    void CompactSlider(const char* label, float* value, float min, float max, const char* format)
+    {
+        ImGui::PushItemWidth(-1);
+        BeautifulSlider(label, value, min, max, format);
+        ImGui::PopItemWidth();
+    }
+    
+    void CompactCombo(const char* label, int* current_item, const char* const items[], int items_count)
+    {
+        ImGui::PushItemWidth(-1);
+        BeautifulCombo(label, current_item, items, items_count);
+        ImGui::PopItemWidth();
+    }
+    
+    void CompactCombo(const char* label, int* current_item, bool (*getter)(void*, int, const char**), void* data, int items_count)
+    {
+        ImGui::PushItemWidth(-1);
+        ImGui::PushStyleColor(ImGuiCol_Header, GetAccentColor(0.7f));
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, GetAccentColor(0.8f));
+        ImGui::PushStyleColor(ImGuiCol_HeaderActive, GetAccentColor(0.9f));
+        ImGui::Combo(label, current_item, getter, data, items_count);
+        ImGui::PopStyleColor(3);
+        ImGui::PopItemWidth();
     }
 }
