@@ -7,291 +7,144 @@
 #include "needaimbot.h"
 #include "overlay.h"
 #include "AppContext.h"
+#include "ui_helpers.h"
+
+static void draw_button_section(const char* title, const char* description, std::vector<std::string>& button_list, const char* add_id, const char* remove_id, bool allow_empty = false)
+{
+    UIHelpers::BeginCard(title);
+    
+    if (description) {
+        UIHelpers::BeautifulText(description, UIHelpers::GetAccentColor(0.8f));
+        UIHelpers::Spacer(5.0f);
+    }
+    
+    for (size_t i = 0; i < button_list.size(); )
+    {
+        std::string& current_key_name = button_list[i];
+        
+        int current_index = -1;
+        for (size_t k = 0; k < key_names.size(); ++k)
+        {
+            if (key_names[k] == current_key_name)
+            {
+                current_index = static_cast<int>(k);
+                break;
+            }
+        }
+        
+        if (current_index == -1)
+        {
+            current_index = 0;
+        }
+        
+        ImGui::PushID(static_cast<int>(i));
+        
+        float button_width = 70.0f;
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - button_width - ImGui::GetStyle().ItemSpacing.x);
+        
+        std::string combo_label = "##" + std::string(title) + std::to_string(i);
+        if (ImGui::Combo(combo_label.c_str(), &current_index, key_names_cstrs.data(), static_cast<int>(key_names_cstrs.size())))
+        {
+            current_key_name = key_names[current_index];
+            AppContext::getInstance().config.saveConfig();
+        }
+        
+        ImGui::SameLine();
+        std::string remove_button_label = "Remove##" + std::string(remove_id) + std::to_string(i);
+        if (UIHelpers::BeautifulButton(remove_button_label.c_str(), ImVec2(button_width, 0)))
+        {
+            if (!allow_empty && button_list.size() <= 1)
+            {
+                button_list[0] = std::string("None");
+                AppContext::getInstance().config.saveConfig();
+                ImGui::PopID();
+                continue;
+            }
+            else
+            {
+                button_list.erase(button_list.begin() + i);
+                AppContext::getInstance().config.saveConfig();
+                ImGui::PopID();
+                continue;
+            }
+        }
+        
+        ImGui::PopID();
+        ++i;
+    }
+    
+    UIHelpers::Spacer(5.0f);
+    std::string add_button_label = "Add Key##" + std::string(add_id);
+    if (UIHelpers::BeautifulButton(add_button_label.c_str(), ImVec2(-1, 0)))
+    {
+        button_list.push_back("None");
+        AppContext::getInstance().config.saveConfig();
+    }
+    
+    UIHelpers::EndCard();
+}
 
 void draw_buttons()
 {
     auto& ctx = AppContext::getInstance();
-    ImGui::Text("Aimbot Activation Key");
-
-    for (size_t i = 0; i < ctx.config.button_targeting.size(); )
-    {
-        std::string& current_key_name = ctx.config.button_targeting[i];
-
-        int current_index = -1;
-        for (size_t k = 0; k < key_names.size(); ++k)
-        {
-            if (key_names[k] == current_key_name)
-            {
-                current_index = static_cast<int>(k);
-                break;
-            }
-        }
-
-        if (current_index == -1)
-        {
-            current_index = 0;
-        }
-
-        std::string combo_label = "Aimbot Key " + std::to_string(i);
-
-        if (ImGui::Combo(combo_label.c_str(), &current_index, key_names_cstrs.data(), static_cast<int>(key_names_cstrs.size())))
-        {
-            current_key_name = key_names[current_index];
-            ctx.config.saveConfig();
-        }
-
-        ImGui::SameLine();
-        std::string remove_button_label = "Remove##button_targeting" + std::to_string(i);
-        if (ImGui::Button(remove_button_label.c_str()))
-        {
-            if (ctx.config.button_targeting.size() <= 1)
-            {
-                ctx.config.button_targeting[0] = std::string("None");
-                ctx.config.saveConfig();
-                continue;
-            }
-            else
-            {
-                ctx.config.button_targeting.erase(ctx.config.button_targeting.begin() + i);
-                ctx.config.saveConfig();
-                continue;
-            }
-        }
-
-        ++i;
-    }
-
-    if (ImGui::Button("Add Aimbot Key##targeting"))
-    {
-        ctx.config.button_targeting.push_back("None");
-        ctx.config.saveConfig();
-    }
-
-    ImGui::Separator();
-    ImGui::Text("Mouse Controls (Fixed):");
+    
+    UIHelpers::BeginTwoColumnLayout(0.65f);
+    
+    // Left column - Button configurations
+    draw_button_section("Aimbot Activation Keys", "Keys that activate the aimbot when held", 
+                       ctx.config.button_targeting, "targeting", "button_targeting");
+    
+    UIHelpers::Spacer();
+    
+    draw_button_section("Exit Keys", "Keys that completely exit the application", 
+                       ctx.config.button_exit, "exit", "button_exit");
+    
+    UIHelpers::Spacer();
+    
+    draw_button_section("Pause Keys", "Keys that temporarily pause the aimbot", 
+                       ctx.config.button_pause, "pause", "button_pause");
+    
+    UIHelpers::Spacer();
+    
+    draw_button_section("Reload Config Keys", "Keys that reload the configuration file", 
+                       ctx.config.button_reload_config, "reload_config", "button_reload_config");
+    
+    UIHelpers::Spacer();
+    
+    draw_button_section("Overlay Toggle Keys", "Keys that show/hide this overlay", 
+                       ctx.config.button_open_overlay, "overlay", "button_open_overlay", true);
+    
+    UIHelpers::NextColumn();
+    
+    // Right column - Information panel
+    UIHelpers::BeginInfoPanel();
+    
+    UIHelpers::BeautifulText("Mouse Controls (Fixed)", UIHelpers::GetAccentColor());
+    UIHelpers::Spacer(5.0f);
+    
     ImGui::BulletText("Left Click: Auto-Shooting (when aiming)");
     ImGui::BulletText("Right Click: Zoom/Scope (independent of aimbot)");
-
-
-    ImGui::Separator();
-
-    ImGui::Text("Exit Buttons");
-
-    for (size_t i = 0; i < ctx.config.button_exit.size(); )
-    {
-        std::string& current_key_name = ctx.config.button_exit[i];
-
-        int current_index = -1;
-        for (size_t k = 0; k < key_names.size(); ++k)
-        {
-            if (key_names[k] == current_key_name)
-            {
-                current_index = static_cast<int>(k);
-                break;
-            }
-        }
-
-        if (current_index == -1)
-        {
-            current_index = 0;
-        }
-
-        std::string combo_label = "Exit Button " + std::to_string(i);
-
-        if (ImGui::Combo(combo_label.c_str(), &current_index, key_names_cstrs.data(), static_cast<int>(key_names_cstrs.size())))
-        {
-            current_key_name = key_names[current_index];
-            ctx.config.saveConfig();
-        }
-
-        ImGui::SameLine();
-        std::string remove_button_label = "Remove##button_exit" + std::to_string(i);
-        if (ImGui::Button(remove_button_label.c_str()))
-        {
-            if (ctx.config.button_exit.size() <= 1)
-            {
-                ctx.config.button_exit[0] = std::string("None");
-                ctx.config.saveConfig();
-                continue;
-            }
-            else
-            {
-                ctx.config.button_exit.erase(ctx.config.button_exit.begin() + i);
-                ctx.config.saveConfig();
-                continue;
-            }
-        }
-
-        ++i;
-    }
-
-    if (ImGui::Button("Add button##exit"))
-    {
-        ctx.config.button_exit.push_back("None");
-        ctx.config.saveConfig();
-    }
-
-    ImGui::Separator();
-
-    ImGui::Text("Pause Buttons");
-
-    for (size_t i = 0; i < ctx.config.button_pause.size(); )
-    {
-        std::string& current_key_name = ctx.config.button_pause[i];
-
-        int current_index = -1;
-        for (size_t k = 0; k < key_names.size(); ++k)
-        {
-            if (key_names[k] == current_key_name)
-            {
-                current_index = static_cast<int>(k);
-                break;
-            }
-        }
-
-        if (current_index == -1)
-        {
-            current_index = 0;
-        }
-
-        std::string combo_label = "Pause Button " + std::to_string(i);
-
-        if (ImGui::Combo(combo_label.c_str(), &current_index, key_names_cstrs.data(), static_cast<int>(key_names_cstrs.size())))
-        {
-            current_key_name = key_names[current_index];
-            ctx.config.saveConfig();
-        }
-
-        ImGui::SameLine();
-        std::string remove_button_label = "Remove##button_pause" + std::to_string(i);
-        if (ImGui::Button(remove_button_label.c_str()))
-        {
-            if (ctx.config.button_pause.size() <= 1)
-            {
-                ctx.config.button_pause[0] = std::string("None");
-                ctx.config.saveConfig();
-                continue;
-            }
-            else
-            {
-                ctx.config.button_pause.erase(ctx.config.button_pause.begin() + i);
-                ctx.config.saveConfig();
-                continue;
-            }
-        }
-        ++i;
-    }
-
-    if (ImGui::Button("Add button##pause"))
-    {
-        ctx.config.button_pause.push_back("None");
-        ctx.config.saveConfig();
-    }
-
-    ImGui::Separator();
-
-    ImGui::Text("Reload Config Buttons");
-
-    for (size_t i = 0; i < ctx.config.button_reload_config.size(); )
-    {
-        std::string& current_key_name = ctx.config.button_reload_config[i];
-
-        int current_index = -1;
-        for (size_t k = 0; k < key_names.size(); ++k)
-        {
-            if (key_names[k] == current_key_name)
-            {
-                current_index = static_cast<int>(k);
-                break;
-            }
-        }
-
-        if (current_index == -1)
-        {
-            current_index = 0;
-        }
-
-        std::string combo_label = "Reload Config Button " + std::to_string(i);
-
-        if (ImGui::Combo(combo_label.c_str(), &current_index, key_names_cstrs.data(), static_cast<int>(key_names_cstrs.size())))
-        {
-            current_key_name = key_names[current_index];
-            ctx.config.saveConfig();
-        }
-
-        ImGui::SameLine();
-        std::string remove_button_label = "Remove##button_reload_config" + std::to_string(i);
-        if (ImGui::Button(remove_button_label.c_str()))
-        {
-            if (ctx.config.button_reload_config.size() <= 1)
-            {
-                ctx.config.button_reload_config[0] = std::string("None");
-                ctx.config.saveConfig();
-                continue;
-            }
-            else
-            {
-                ctx.config.button_reload_config.erase(ctx.config.button_reload_config.begin() + i);
-                ctx.config.saveConfig();
-                continue;
-            }
-        }
-
-        ++i;
-    }
-
-    if (ImGui::Button("Add button##reload_config"))
-    {
-        ctx.config.button_reload_config.push_back("None");
-        ctx.config.saveConfig();
-    }
-
-    ImGui::Separator();
-
-    ImGui::Text("Overlay Buttons");
-
-    for (size_t i = 0; i < ctx.config.button_open_overlay.size(); )
-    {
-        std::string& current_key_name = ctx.config.button_open_overlay[i];
-
-        int current_index = -1;
-        for (size_t k = 0; k < key_names.size(); ++k)
-        {
-            if (key_names[k] == current_key_name)
-            {
-                current_index = static_cast<int>(k);
-                break;
-            }
-        }
-
-        if (current_index == -1)
-        {
-            current_index = 0;
-        }
-
-        std::string combo_label = "Overlay Button " + std::to_string(i);
-
-        if (ImGui::Combo(combo_label.c_str(), &current_index, key_names_cstrs.data(), static_cast<int>(key_names_cstrs.size())))
-        {
-            current_key_name = key_names[current_index];
-            ctx.config.saveConfig();
-        }
-
-        ImGui::SameLine();
-        std::string remove_button_label = "Remove##button_open_overlay" + std::to_string(i);
-        if (ImGui::Button(remove_button_label.c_str()))
-        {
-            ctx.config.button_open_overlay.erase(ctx.config.button_open_overlay.begin() + i);
-            ctx.config.saveConfig();
-            continue;
-        }
-
-        ++i;
-    }
-
-    if (ImGui::Button("Add button##overlay"))
-    {
-        ctx.config.button_open_overlay.push_back("None");
-        ctx.config.saveConfig();
-    }
+    
+    UIHelpers::Spacer();
+    
+    UIHelpers::BeautifulText("Key Binding Tips", UIHelpers::GetWarningColor());
+    UIHelpers::Spacer(5.0f);
+    
+    ImGui::BulletText("Use easy-to-reach keys for aimbot activation");
+    ImGui::BulletText("Avoid conflicts with game controls");
+    ImGui::BulletText("Test key combinations in a safe environment");
+    ImGui::BulletText("Multiple keys can be assigned to the same function");
+    
+    UIHelpers::Spacer();
+    
+    UIHelpers::BeautifulText("Status", UIHelpers::GetAccentColor());
+    UIHelpers::Spacer(5.0f);
+    
+    UIHelpers::StatusIndicator("Aimbot Keys", !ctx.config.button_targeting.empty() && ctx.config.button_targeting[0] != "None");
+    UIHelpers::StatusIndicator("Exit Keys", !ctx.config.button_exit.empty() && ctx.config.button_exit[0] != "None");
+    UIHelpers::StatusIndicator("Pause Keys", !ctx.config.button_pause.empty() && ctx.config.button_pause[0] != "None");
+    
+    UIHelpers::EndInfoPanel();
+    
+    UIHelpers::EndTwoColumnLayout();
 }
