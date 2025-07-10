@@ -329,6 +329,9 @@ void draw_debug()
         has_target_for_overlay = ctx.overlay_has_target.load();
         if (has_target_for_overlay) {
             target_for_overlay = ctx.overlay_target_info;
+        } else {
+            // Clear target data when no target is detected
+            target_for_overlay = {};
         }
     }
     
