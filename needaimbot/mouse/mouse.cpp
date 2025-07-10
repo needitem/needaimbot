@@ -226,20 +226,25 @@ bool MouseThread::checkTargetInScope(float target_x, float target_y, float targe
 
 float MouseThread::calculateTargetDistanceSquared(const AimbotTarget &target) const
 {
+    auto& ctx = AppContext::getInstance();
     float current_center_x, current_center_y;
+    float crosshair_offset_x, crosshair_offset_y;
+    
+    // Get all values with minimal locking
     {
         std::lock_guard<std::mutex> lock(member_data_mutex_); 
         current_center_x = this->center_x;
         current_center_y = this->center_y;
     }
-
-    // Apply crosshair offset correction
     {
-        auto& ctx = AppContext::getInstance();
         std::lock_guard<std::mutex> lock(ctx.configMutex);
-        current_center_x += ctx.config.crosshair_offset_x;
-        current_center_y += ctx.config.crosshair_offset_y;
+        crosshair_offset_x = ctx.config.crosshair_offset_x;
+        crosshair_offset_y = ctx.config.crosshair_offset_y;
     }
+    
+    // Apply crosshair offset correction
+    current_center_x += crosshair_offset_x;
+    current_center_y += crosshair_offset_y;
 
     float dx = target.x + target.w * 0.5f - current_center_x;
     float target_center_y_val;
@@ -332,40 +337,21 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     Point2D raw_target_pos;
     raw_target_pos.x = target.x + target.w * 0.5f;
     
-    // Copy all needed config values at once to minimize mutex lock time
+    // Use already copied config values
     float local_y_offset_multiplier_val;
-    int local_head_class_id_to_use = -1;
-    bool local_apply_head_offset = false;
-    bool local_disable_upward_aim_active = false;
-    std::vector<std::string> local_button_disable_upward_aim;
-    float local_movement_smoothing;
-
-    {
-        std::lock_guard<std::mutex> lock(ctx.configMutex); 
-        
-        // Copy all config values in one lock
-        for (const auto& class_setting : ctx.config.class_settings) {
-            if (class_setting.name == ctx.config.head_class_name) {
-                local_head_class_id_to_use = class_setting.id;
-                if (!class_setting.ignore) {
-                    local_apply_head_offset = true;
-                }
-                break;
-            }
-        }
-
-        if (local_apply_head_offset && target.classId == local_head_class_id_to_use) {
-            local_y_offset_multiplier_val = ctx.config.head_y_offset;
-        } else {
-            local_y_offset_multiplier_val = ctx.config.body_y_offset;
-        }
-        
-        local_button_disable_upward_aim = ctx.config.button_disable_upward_aim;
-        local_movement_smoothing = ctx.config.movement_smoothing;
+    if (apply_head_offset && target.classId == head_class_id_to_use) {
+        local_y_offset_multiplier_val = head_y_offset;
+    } else {
+        local_y_offset_multiplier_val = body_y_offset;
     }
     raw_target_pos.y = target.y + target.h * local_y_offset_multiplier_val;
 
-    local_disable_upward_aim_active = isAnyKeyPressed(local_button_disable_upward_aim);
+    // Check disable upward aim with copied config
+    bool local_disable_upward_aim_active = false;
+    {
+        std::lock_guard<std::mutex> lock(ctx.configMutex);
+        local_disable_upward_aim_active = isAnyKeyPressed(ctx.config.button_disable_upward_aim);
+    }
 
     // Calculate predicted target position
     Point2D predicted_target_pos = calculatePredictedTarget(target, current_center_x, current_center_y);
@@ -405,7 +391,7 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     float raw_move_y = pid_output.y() * current_move_scale_y * adaptive_scale;
     
     Eigen::Vector2f raw_movement(raw_move_x, raw_move_y);
-    Eigen::Vector2f smoothed_movement_result = applyMovementSmoothing(raw_movement, error_magnitude, local_movement_smoothing);
+    Eigen::Vector2f smoothed_movement_result = applyMovementSmoothing(raw_movement, error_magnitude, movement_smoothing);
     
     float move_x = smoothed_movement_result.x();
     float move_y = smoothed_movement_result.y();
@@ -430,8 +416,6 @@ void MouseThread::moveMouse(const AimbotTarget &target)
             float input_send_duration_ms = std::chrono::duration<float, std::milli>(input_send_end_time - input_send_start_time).count();
             ctx.g_current_input_send_time_ms.store(input_send_duration_ms, std::memory_order_relaxed);
             ctx.add_to_history(ctx.g_input_send_time_history, input_send_duration_ms, ctx.g_input_send_history_mutex);
-            
-            
         }
     }
     
