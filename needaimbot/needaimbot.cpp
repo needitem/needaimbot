@@ -13,6 +13,7 @@
 #include "AppContext.h"
 #include "detector/capture.h"
 #include "visuals.h"
+#include "utils/constants.h"
 #include "detector.h"
 #include "mouse.h"
 #include "needaimbot.h"
@@ -60,6 +61,12 @@ void add_to_history(std::vector<float>& history, float value, std::mutex& mtx, i
     }
 }
 
+// Pre-allocated thread-local buffers for performance
+thread_local struct {
+    std::vector<float> scoreBuffer;
+    bool initialized = false;
+} tlBuffers;
+
 struct alignas(64) DetectionData {
     std::vector<cv::Rect> boxes;
     std::vector<int> classes;
@@ -81,8 +88,15 @@ namespace optimized {
         const size_t count = boxes.size();
         if (count == 0) return;
         
-        if (scores.capacity() < count) {
-            scores.reserve(std::max(count, static_cast<size_t>(512)));
+        // Initialize thread-local buffer on first use
+        if (!tlBuffers.initialized) {
+            tlBuffers.scoreBuffer.reserve(1024);
+            tlBuffers.initialized = true;
+        }
+        
+        // Use pre-allocated buffer instead of resizing scores directly
+        if (tlBuffers.scoreBuffer.capacity() < count) {
+            tlBuffers.scoreBuffer.reserve(count * 2); // Double for future growth
         }
         scores.resize(count);
         
@@ -101,9 +115,9 @@ namespace optimized {
             const float squared_distance = diff_x * diff_x + diff_y * diff_y;
             
             float distance_score;
-            if (squared_distance < 100.0f) {
+            if (squared_distance < Constants::MIN_SQUARED_DISTANCE) {
                 distance_score = 1.0f;
-            } else if (squared_distance > 500000.0f) {
+            } else if (squared_distance > Constants::MAX_SQUARED_DISTANCE) {
                 distance_score = 0.0001f;
             } else {
                 float sqrtd = sqrtf(squared_distance);

@@ -160,8 +160,11 @@ Detector::~Detector()
         m_graph = nullptr;
     }
     
-    // Reset CUDA device to ensure all resources are properly released
-    cudaDeviceReset();
+    // Synchronize to ensure all CUDA operations are complete
+    cudaStreamSynchronize(stream);
+    
+    // Note: Removed cudaDeviceReset() as it affects all CUDA contexts,
+    // not just this instance. Proper cleanup is handled by destructors.
 }
 
 void Detector::getInputNames()

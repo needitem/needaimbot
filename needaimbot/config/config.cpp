@@ -11,6 +11,7 @@
 #include <shlobj.h>
 
 #include "config.h"
+#include "config_validator.h"
 #include "modules/SimpleIni.h"
 #include "keyboard/keyboard_listener.h"
 
@@ -409,6 +410,9 @@ bool Config::loadConfig(const std::string& filename)
     enable_target_locking = get_bool_ini("TargetLocking", "enable_target_locking", false);
     target_locking_iou_threshold = (float)get_double_ini("TargetLocking", "target_locking_iou_threshold", 0.5);
     target_locking_max_lost_frames = get_long_ini("TargetLocking", "target_locking_max_lost_frames", 10);
+
+    // Validate and correct all configuration values
+    ConfigValidator::validateAndCorrect(*this);
 
     return true;
 }
