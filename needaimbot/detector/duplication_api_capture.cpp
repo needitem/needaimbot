@@ -206,6 +206,7 @@ public:
             sharedTexDesc.ArraySize = 1;
             sharedTexDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
             sharedTexDesc.SampleDesc.Count = 1;
+            sharedTexDesc.SampleDesc.Quality = 0;
             sharedTexDesc.Usage = D3D11_USAGE_DEFAULT;
             sharedTexDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
             sharedTexDesc.CPUAccessFlags = 0;
