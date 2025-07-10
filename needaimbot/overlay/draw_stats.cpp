@@ -84,13 +84,10 @@ void draw_stats() {
         ImGui::TableSetupColumn("Metric", ImGuiTableColumnFlags_WidthFixed, 150.0f);
         ImGui::TableSetupColumn("Value");
 
-        draw_stat_plot("Detector Cycle Time", get_history_copy(ctx.g_detector_cycle_time_history, ctx.g_detector_cycle_history_mutex), ctx.g_current_detector_cycle_time_ms.load(std::memory_order_relaxed), "ms");
-        draw_stat_plot("Frame Acquisition Time", get_history_copy(ctx.g_frame_acquisition_time_history, ctx.g_frame_acquisition_history_mutex), ctx.g_current_frame_acquisition_time_ms.load(std::memory_order_relaxed), "ms");
+        draw_stat_plot("Capture Time", get_history_copy(ctx.g_frame_acquisition_time_history, ctx.g_frame_acquisition_history_mutex), ctx.g_current_frame_acquisition_time_ms.load(std::memory_order_relaxed), "ms");
         draw_stat_plot("Inference Time", get_history_copy(ctx.g_inference_time_history, ctx.g_inference_history_mutex), ctx.g_current_inference_time_ms.load(std::memory_order_relaxed), "ms");
-        draw_stat_plot("Capture FPS", get_history_copy(ctx.g_capture_fps_history, ctx.g_capture_history_mutex), ctx.g_current_capture_fps.load(std::memory_order_relaxed), "FPS", true);
-        draw_stat_plot("PID Calculation Time", get_history_copy(ctx.g_pid_calc_time_history, ctx.g_pid_calc_history_mutex), ctx.g_current_pid_calc_time_ms.load(std::memory_order_relaxed), "ms");
-        draw_stat_plot("Input Send Time", get_history_copy(ctx.g_input_send_time_history, ctx.g_input_send_history_mutex), ctx.g_current_input_send_time_ms.load(std::memory_order_relaxed), "ms");
-        draw_stat_plot("Process Frame Time", get_history_copy(ctx.g_process_frame_time_history, ctx.g_process_frame_history_mutex), ctx.g_current_process_frame_time_ms.load(std::memory_order_relaxed), "ms");
+        draw_stat_plot("Mouse Movement Time", get_history_copy(ctx.g_input_send_time_history, ctx.g_input_send_history_mutex), ctx.g_current_input_send_time_ms.load(std::memory_order_relaxed), "ms");
+        draw_stat_plot("Total Cycle Time", get_history_copy(ctx.g_detector_cycle_time_history, ctx.g_detector_cycle_history_mutex), ctx.g_current_detector_cycle_time_ms.load(std::memory_order_relaxed), "ms");
 
         ImGui::EndTable();
     }

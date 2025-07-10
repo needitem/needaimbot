@@ -280,6 +280,7 @@ float MouseThread::calculateTargetDistanceSquared(const AimbotTarget &target) co
 void MouseThread::moveMouse(const AimbotTarget &target)
 {
     auto& ctx = AppContext::getInstance();
+    
     float current_center_x, current_center_y;
     float current_move_scale_x, current_move_scale_y;
     
@@ -430,8 +431,15 @@ void MouseThread::moveMouse(const AimbotTarget &target)
             ctx.g_current_input_send_time_ms.store(input_send_duration_ms, std::memory_order_relaxed);
             ctx.add_to_history(ctx.g_input_send_time_history, input_send_duration_ms, ctx.g_input_send_history_mutex);
             
+            
         }
     }
+    
+    // Calculate pure detection-to-movement time (excluding FPS waiting)
+    auto movement_completion_time = std::chrono::high_resolution_clock::now();
+    float detection_to_movement_ms = std::chrono::duration<float, std::milli>(movement_completion_time - target.detection_timestamp).count();
+    ctx.g_current_detection_to_movement_time_ms.store(detection_to_movement_ms, std::memory_order_relaxed);
+    ctx.add_to_history(ctx.g_detection_to_movement_time_history, detection_to_movement_ms, ctx.g_detection_to_movement_history_mutex);
 }
 
 void MouseThread::pressMouse(const AimbotTarget &target)

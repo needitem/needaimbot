@@ -153,6 +153,7 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 
         while (!shouldExit)
         {
+            
             if (AppContext::getInstance().shouldExit) {
                 std::cout << "[CaptureThread] shouldExit is true, breaking loop." << std::endl;
                 break; 
@@ -283,12 +284,19 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
             ctx.add_to_history(ctx.g_frame_acquisition_time_history, frame_acq_duration_ms.count(), ctx.g_frame_acquisition_history_mutex);
 
             if (!screenshotCpu.empty()) {
+                // Measure GPU upload time separately
+                auto gpu_upload_start = std::chrono::high_resolution_clock::now();
+                
                 // Use dedicated stream to avoid legacy stream conflicts
                 if (reusableGpuMat.empty()) {
                     reusableGpuMat.create(CAPTURE_HEIGHT, CAPTURE_WIDTH, CV_8UC3);
                 }
                 reusableGpuMat.upload(screenshotCpu, captureStream);
                 screenshotGpu = reusableGpuMat;
+                
+                auto gpu_upload_end = std::chrono::high_resolution_clock::now();
+                float gpu_upload_ms = std::chrono::duration<float, std::milli>(gpu_upload_end - gpu_upload_start).count();
+                
                 
                 // Update latest frame for debug display (avoid clone for performance)
                 if (latestFrameGpu.size() != screenshotGpu.size()) {
@@ -351,12 +359,24 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 auto elapsed_time = std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(end_time - start_time);
                 auto sleep_duration = *frame_duration - elapsed_time;
 
+
                 if (sleep_duration.count() > 0)
                 {
+                     auto sleep_start = std::chrono::high_resolution_clock::now();
                      std::this_thread::sleep_for(sleep_duration);
+                     auto sleep_end = std::chrono::high_resolution_clock::now();
+                     
+                     // Record actual additional sleep time
+                     float actual_sleep_ms = std::chrono::duration<float, std::milli>(sleep_end - sleep_start).count();
+                     ctx.g_current_fps_delay_time_ms.store(actual_sleep_ms, std::memory_order_relaxed);
+                     ctx.add_to_history(ctx.g_fps_delay_time_history, actual_sleep_ms, ctx.g_fps_delay_history_mutex);
+                } else {
+                     ctx.g_current_fps_delay_time_ms.store(0.0f, std::memory_order_relaxed);
                 }
                  start_time = std::chrono::high_resolution_clock::now();
             } else {
+                // No FPS limiting, no delay
+                ctx.g_current_fps_delay_time_ms.store(0.0f, std::memory_order_relaxed);
                 start_time = std::chrono::high_resolution_clock::now();
             }
         }
