@@ -21,7 +21,7 @@ static void draw_pid_controls()
     UIHelpers::BeginCard("PID Controller Settings");
     
     UIHelpers::BeautifulText("PID parameters control how the aimbot tracks targets.", UIHelpers::GetAccentColor(0.8f));
-    UIHelpers::Spacer(5.0f);
+    UIHelpers::CompactSpacer();
     
     // Combined PID settings in a more compact layout
     ImGui::Columns(2, "pid_columns", false);
@@ -248,7 +248,7 @@ static void draw_input_method_settings()
     }
     
     if (ctx.config.input_method == "GHUB" || !ghub_version.empty()) {
-        UIHelpers::Spacer(5.0f);
+        UIHelpers::CompactSpacer();
         ImGui::Text("GHUB Version: %s", ghub_version.c_str());
         if (ghub_version.empty()) {
             ImGui::SameLine();
@@ -352,7 +352,7 @@ static void draw_hotkey_section(const char* title, std::vector<std::string>& hot
         ++i;
     }
     
-    UIHelpers::Spacer(5.0f);
+    UIHelpers::CompactSpacer();
     std::string add_button_label = "Add " + std::string(title) + " Hotkey";
     if (UIHelpers::BeautifulButton(add_button_label.c_str(), ImVec2(-1, 0)))
     {
@@ -399,16 +399,16 @@ void draw_mouse()
     }
     
     UIHelpers::EndCard();
-    UIHelpers::Spacer();
+    UIHelpers::CompactSpacer();
     
     draw_pid_controls();
-    UIHelpers::Spacer();
+    UIHelpers::CompactSpacer();
     
     draw_advanced_settings();
-    UIHelpers::Spacer();
+    UIHelpers::CompactSpacer();
     
     draw_predictive_settings();
-    UIHelpers::Spacer();
+    UIHelpers::CompactSpacer();
     
     draw_input_method_settings();
     
@@ -416,22 +416,22 @@ void draw_mouse()
     
     // Right column - Aiming settings and tips
     draw_aiming_settings();
-    UIHelpers::Spacer();
+    UIHelpers::CompactSpacer();
     
     UIHelpers::BeginInfoPanel();
     
     UIHelpers::BeautifulText("PID Tuning Tips", UIHelpers::GetAccentColor());
-    UIHelpers::Spacer(5.0f);
+    UIHelpers::CompactSpacer();
     
     ImGui::BulletText("Start with Kp, then add Kd to reduce oscillation");
     ImGui::BulletText("Use Ki sparingly - too much causes overshoot");
     ImGui::BulletText("Enable Adaptive PID for better long-range stability");
     ImGui::BulletText("Increase smoothing if you experience jitter");
     
-    UIHelpers::Spacer();
+    UIHelpers::CompactSpacer();
     
     UIHelpers::BeautifulText("Input Method Guide", UIHelpers::GetAccentColor());
-    UIHelpers::Spacer(5.0f);
+    UIHelpers::CompactSpacer();
     
     ImGui::BulletText("WIN32: Standard method, may be detected");
     ImGui::BulletText("GHUB: Logitech driver, generally safer");

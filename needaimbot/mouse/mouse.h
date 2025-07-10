@@ -97,15 +97,15 @@ private:
     std::chrono::high_resolution_clock::time_point target_detection_time_;
     
     // Constants
-    static constexpr float DEAD_ZONE = 0.1f;
+    static constexpr float DEAD_ZONE = 0.3f;
     static constexpr float MICRO_MOVEMENT_THRESHOLD = 0.5f;
-    static constexpr float MAX_PREDICTION_TIME = 0.05f;
+    static constexpr float MAX_PREDICTION_TIME = 0.03f;
     static constexpr float LARGE_MOVEMENT_THRESHOLD = 100.0f;
     static constexpr float SMALL_ERROR_THRESHOLD = 10.0f;
     static constexpr float MEDIUM_ERROR_THRESHOLD = 50.0f;
-    static constexpr float CLOSE_RANGE_SCALE = 0.7f;
+    static constexpr float CLOSE_RANGE_SCALE = 0.8f;
     static constexpr float NORMAL_RANGE_SCALE = 1.0f;
-    static constexpr float FAR_RANGE_SCALE = 1.3f;
+    static constexpr float FAR_RANGE_SCALE = 1.1f;
     static constexpr float MIN_DELTA_TIME = 0.001f;
     static constexpr float MAX_DELTA_TIME = 0.1f;
     static constexpr float PREDICTION_TIME_FACTOR = 0.001f;

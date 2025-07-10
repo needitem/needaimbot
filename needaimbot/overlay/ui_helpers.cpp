@@ -260,7 +260,7 @@ namespace UIHelpers
     {
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.12f, 0.12f, 0.15f, 0.95f));
         ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 10.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 4.0f));
         
         ImGui::BeginChild(title ? title : "##card", ImVec2(0, 0), true);
         
@@ -269,7 +269,7 @@ namespace UIHelpers
             ImGui::Text("%s", title);
             ImGui::PopStyleColor();
             ImGui::Separator();
-            ImGui::Spacing();
+            // Removed extra spacing after title
         }
     }
     
@@ -299,6 +299,11 @@ namespace UIHelpers
     void Spacer(float height)
     {
         ImGui::Dummy(ImVec2(0, height));
+    }
+    
+    void CompactSpacer()
+    {
+        ImGui::Dummy(ImVec2(0, 3.0f));
     }
     
     bool BeautifulButton(const char* label, const ImVec2& size)

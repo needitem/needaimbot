@@ -57,7 +57,7 @@ static void draw_model_settings()
         }
     }
     
-    UIHelpers::Spacer(5.0f);
+    UIHelpers::CompactSpacer();
     
     const char* resolution_items[] = { "160", "320", "640" };
     int current_resolution_index = 0;
@@ -82,7 +82,7 @@ static void draw_model_settings()
         }
     }
     
-    UIHelpers::Spacer(5.0f);
+    UIHelpers::CompactSpacer();
     
     if (UIHelpers::BeautifulToggle("Enable FP16", &ctx.config.export_enable_fp16, "Enable FP16 precision for the exported TensorRT engine."))
     {
@@ -96,7 +96,7 @@ static void draw_model_settings()
         detector_model_changed.store(true);
     }
     
-    UIHelpers::Spacer(5.0f);
+    UIHelpers::CompactSpacer();
     
     if (UIHelpers::BeautifulButton("Rebuild Engine", ImVec2(-1, 0)))
     {
@@ -152,7 +152,7 @@ static void draw_detection_settings()
         detector_model_changed.store(true);
     }
     
-    UIHelpers::Spacer(5.0f);
+    UIHelpers::CompactSpacer();
     
     UIHelpers::CompactSlider("Confidence Threshold", &ctx.config.confidence_threshold, 0.01f, 1.00f, "%.2f");
     if (ImGui::IsItemDeactivatedAfterEdit()) {
@@ -197,7 +197,7 @@ static void draw_class_settings()
         ctx.config.saveConfig();
     }
     
-    UIHelpers::Spacer(5.0f);
+    UIHelpers::CompactSpacer();
     
     if (ImGui::BeginTable("class_settings_table", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
         ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 50.0f);
@@ -250,7 +250,7 @@ static void draw_class_settings()
         ImGui::EndTable();
     }
 
-    UIHelpers::Spacer(5.0f);
+    UIHelpers::CompactSpacer();
     
     UIHelpers::BeautifulSeparator("Add New Class");
     
@@ -278,7 +278,7 @@ static void draw_class_settings()
     
     ImGui::Columns(1);
     
-    UIHelpers::Spacer(5.0f);
+    UIHelpers::CompactSpacer();
     
     if (UIHelpers::BeautifulButton("Suggest Next ID", ImVec2(-1, 0))) {
         int max_id = -1;
@@ -331,7 +331,7 @@ static void draw_advanced_settings()
     UIHelpers::BeginCard(nullptr);
     
     if (ImGui::CollapsingHeader("Advanced Settings", &advanced_open)) {
-        UIHelpers::Spacer(5.0f);
+        UIHelpers::CompactSpacer();
         
         ImGui::PushItemWidth(-1);
         if (ImGui::InputInt("##cuda_device", &ctx.config.cuda_device_id)) {
@@ -355,10 +355,10 @@ void draw_ai()
     
     // Left column - Main settings
     draw_model_settings();
-    UIHelpers::Spacer();
+    UIHelpers::CompactSpacer();
     
     draw_detection_settings();
-    UIHelpers::Spacer();
+    UIHelpers::CompactSpacer();
     
     draw_advanced_settings();
     

@@ -50,8 +50,8 @@ ID3D11BlendState* g_pBlendState = nullptr;
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
-const int BASE_OVERLAY_WIDTH = 680;
-const int BASE_OVERLAY_HEIGHT = 480;
+const int BASE_OVERLAY_WIDTH = 620;
+const int BASE_OVERLAY_HEIGHT = 420;
 int overlayWidth = 0;
 int overlayHeight = 0;
 
@@ -207,13 +207,13 @@ void SetupImGui()
     
     ImGuiStyle& style = ImGui::GetStyle();
     
-    style.WindowPadding = ImVec2(12.0f, 12.0f);
-    style.FramePadding = ImVec2(8.0f, 6.0f);
-    style.ItemSpacing = ImVec2(8.0f, 6.0f);
-    style.ItemInnerSpacing = ImVec2(6.0f, 6.0f);
-    style.IndentSpacing = 25.0f;
-    style.ScrollbarSize = 16.0f;
-    style.GrabMinSize = 12.0f;
+    style.WindowPadding = ImVec2(8.0f, 8.0f);
+    style.FramePadding = ImVec2(6.0f, 4.0f);
+    style.ItemSpacing = ImVec2(6.0f, 4.0f);
+    style.ItemInnerSpacing = ImVec2(4.0f, 4.0f);
+    style.IndentSpacing = 18.0f;
+    style.ScrollbarSize = 14.0f;
+    style.GrabMinSize = 10.0f;
 
     style.WindowBorderSize = 0.0f;
     style.ChildBorderSize = 0.0f;

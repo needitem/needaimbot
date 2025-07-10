@@ -34,7 +34,7 @@ static void draw_capture_area_settings()
         UIHelpers::BeautifulText("WARNING: Large detection resolution can impact performance.", UIHelpers::GetWarningColor());
     }
     
-    UIHelpers::Spacer(5.0f);
+    UIHelpers::CompactSpacer();
     
     if (UIHelpers::BeautifulToggle("Circle Mask", &ctx.config.circle_mask, "Applies a circular mask to the captured area, ignoring corners."))
     {
@@ -67,17 +67,26 @@ static void draw_capture_behavior_settings()
         UIHelpers::BeautifulText("WARNING: High or unlocked FPS can significantly impact performance.", UIHelpers::GetWarningColor());
     }
     
-    UIHelpers::Spacer(5.0f);
+    UIHelpers::CompactSpacer();
     
     const char* capture_methods[] = { "Simple (BitBlt)", "Desktop Duplication API", "UnknownCheats Game Capture" };
-    int current_method = 0;
-    if (ctx.config.capture_method == "simple") current_method = 0;
-    else if (ctx.config.capture_method == "duplication") current_method = 1;
-    else if (ctx.config.capture_method == "game_capture") current_method = 2;
+    static int current_method = 0;
+    static bool first_time = true;
     
+    // Initialize on first run
+    if (first_time) {
+        if (ctx.config.capture_method == "simple") current_method = 0;
+        else if (ctx.config.capture_method == "duplication") current_method = 1;
+        else if (ctx.config.capture_method == "game_capture") current_method = 2;
+        first_time = false;
+    }
+    
+    int previous_method = current_method;
     UIHelpers::CompactCombo("Capture Method", &current_method, capture_methods, IM_ARRAYSIZE(capture_methods));
     UIHelpers::InfoTooltip("Simple: Fast BitBlt screen capture\nDuplication API: Windows Desktop Duplication API\nGame Capture: UnknownCheats method for game capturing");
-    if (ImGui::IsItemDeactivatedAfterEdit())
+    
+    // Check if the value actually changed
+    if (current_method != previous_method)
     {
         if (current_method == 0) ctx.config.capture_method = "simple";
         else if (current_method == 1) ctx.config.capture_method = "duplication";
@@ -88,7 +97,7 @@ static void draw_capture_behavior_settings()
     
     // Show game selection dropdown when GameCapture is selected
     if (ctx.config.capture_method == "game_capture") {
-        UIHelpers::Spacer(5.0f);
+        UIHelpers::CompactSpacer();
         
         // Get list of available windows
         static std::vector<std::string> window_titles;
@@ -173,7 +182,7 @@ static void draw_capture_behavior_settings()
         }
     }
     
-    UIHelpers::Spacer(5.0f);
+    UIHelpers::CompactSpacer();
     
     ImGui::Columns(2, "capture_options", false);
     
@@ -237,7 +246,7 @@ void draw_capture_settings()
     
     // Left column - Main capture settings
     draw_capture_area_settings();
-    UIHelpers::Spacer();
+    UIHelpers::CompactSpacer();
     
     draw_capture_behavior_settings();
     
@@ -245,22 +254,22 @@ void draw_capture_settings()
     
     // Right column - Source and info
     draw_capture_source_settings();
-    UIHelpers::Spacer();
+    UIHelpers::CompactSpacer();
     
     UIHelpers::BeginInfoPanel();
     
     UIHelpers::BeautifulText("Performance Tips", UIHelpers::GetAccentColor());
-    UIHelpers::Spacer(5.0f);
+    UIHelpers::CompactSpacer();
     
     ImGui::BulletText("Lower detection resolution for better performance");
     ImGui::BulletText("Use circle mask to focus on center targets");
     ImGui::BulletText("Limit FPS to 60 for stable performance");
     ImGui::BulletText("Simple capture method is usually fastest");
     
-    UIHelpers::Spacer();
+    UIHelpers::CompactSpacer();
     
     UIHelpers::BeautifulText("Capture Method Guide", UIHelpers::GetAccentColor());
-    UIHelpers::Spacer(5.0f);
+    UIHelpers::CompactSpacer();
     
     ImGui::BulletText("Simple: Best for windowed games");
     ImGui::BulletText("Duplication: Good for fullscreen apps");

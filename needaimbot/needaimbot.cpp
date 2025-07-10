@@ -202,7 +202,7 @@ void mouseThreadFunction(MouseThread &mouseThread)
         {
             std::unique_lock<std::mutex> lock(ctx.detector->detectionMutex);
             // Wait with timeout to prevent stale target usage
-            auto wait_result = ctx.detector->detectionCV.wait_for(lock, std::chrono::milliseconds(50), [&]() { 
+            auto wait_result = ctx.detector->detectionCV.wait_for(lock, std::chrono::milliseconds(10), [&]() { 
                 return ctx.shouldExit || ctx.input_method_changed.load() || 
                        ctx.detector->detectionVersion != last_detection_version; 
             });
@@ -213,10 +213,6 @@ void mouseThreadFunction(MouseThread &mouseThread)
                 if (!wait_result) {
                     current_has_target = false;
                     current_target = {};
-                    static int timeout_count = 0;
-                    if (++timeout_count % 20 == 0) {  // Log every second
-                        std::cout << "[Mouse] Detection timeout - clearing target" << std::endl;
-                    }
                 } else {
                     // LOG: About to copy data from Detector.
                     if (ctx.config.verbose) std::cout << "[Mouse] Reading from Detector. Detector state: hasBestTarget=" << (ctx.detector->m_hasBestTarget ? "true" : "false") << std::endl;

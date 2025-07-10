@@ -15,7 +15,7 @@ static void draw_button_section(const char* title, const char* description, std:
     
     if (description) {
         UIHelpers::BeautifulText(description, UIHelpers::GetAccentColor(0.8f));
-        UIHelpers::Spacer(5.0f);
+        UIHelpers::CompactSpacer();
     }
     
     for (size_t i = 0; i < button_list.size(); )
@@ -73,7 +73,7 @@ static void draw_button_section(const char* title, const char* description, std:
         ++i;
     }
     
-    UIHelpers::Spacer(5.0f);
+    UIHelpers::CompactSpacer();
     std::string add_button_label = "Add Key##" + std::string(add_id);
     if (UIHelpers::BeautifulButton(add_button_label.c_str(), ImVec2(-1, 0)))
     {
@@ -94,22 +94,22 @@ void draw_buttons()
     draw_button_section("Aimbot Activation Keys", "Keys that activate the aimbot when held", 
                        ctx.config.button_targeting, "targeting", "button_targeting");
     
-    UIHelpers::Spacer();
+    UIHelpers::CompactSpacer();
     
     draw_button_section("Exit Keys", "Keys that completely exit the application", 
                        ctx.config.button_exit, "exit", "button_exit");
     
-    UIHelpers::Spacer();
+    UIHelpers::CompactSpacer();
     
     draw_button_section("Pause Keys", "Keys that temporarily pause the aimbot", 
                        ctx.config.button_pause, "pause", "button_pause");
     
-    UIHelpers::Spacer();
+    UIHelpers::CompactSpacer();
     
     draw_button_section("Reload Config Keys", "Keys that reload the configuration file", 
                        ctx.config.button_reload_config, "reload_config", "button_reload_config");
     
-    UIHelpers::Spacer();
+    UIHelpers::CompactSpacer();
     
     draw_button_section("Overlay Toggle Keys", "Keys that show/hide this overlay", 
                        ctx.config.button_open_overlay, "overlay", "button_open_overlay", true);
@@ -120,25 +120,25 @@ void draw_buttons()
     UIHelpers::BeginInfoPanel();
     
     UIHelpers::BeautifulText("Mouse Controls (Fixed)", UIHelpers::GetAccentColor());
-    UIHelpers::Spacer(5.0f);
+    UIHelpers::CompactSpacer();
     
     ImGui::BulletText("Left Click: Auto-Shooting (when aiming)");
     ImGui::BulletText("Right Click: Zoom/Scope (independent of aimbot)");
     
-    UIHelpers::Spacer();
+    UIHelpers::CompactSpacer();
     
     UIHelpers::BeautifulText("Key Binding Tips", UIHelpers::GetWarningColor());
-    UIHelpers::Spacer(5.0f);
+    UIHelpers::CompactSpacer();
     
     ImGui::BulletText("Use easy-to-reach keys for aimbot activation");
     ImGui::BulletText("Avoid conflicts with game controls");
     ImGui::BulletText("Test key combinations in a safe environment");
     ImGui::BulletText("Multiple keys can be assigned to the same function");
     
-    UIHelpers::Spacer();
+    UIHelpers::CompactSpacer();
     
     UIHelpers::BeautifulText("Status", UIHelpers::GetAccentColor());
-    UIHelpers::Spacer(5.0f);
+    UIHelpers::CompactSpacer();
     
     UIHelpers::StatusIndicator("Aimbot Keys", !ctx.config.button_targeting.empty() && ctx.config.button_targeting[0] != "None");
     UIHelpers::StatusIndicator("Exit Keys", !ctx.config.button_exit.empty() && ctx.config.button_exit[0] != "None");

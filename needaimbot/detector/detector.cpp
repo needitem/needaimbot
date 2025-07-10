@@ -112,6 +112,8 @@ Detector::~Detector()
     if (stream) cudaStreamDestroy(stream);
     if (preprocessStream) cudaStreamDestroy(preprocessStream);
     if (postprocessStream) cudaStreamDestroy(postprocessStream);
+    if (m_preprocessDone) cudaEventDestroy(m_preprocessDone);
+    if (m_inferenceDone) cudaEventDestroy(m_inferenceDone);
     if (processingDone) cudaEventDestroy(processingDone);
     if (postprocessCopyDone) cudaEventDestroy(postprocessCopyDone);
     
@@ -303,6 +305,8 @@ bool Detector::initializeCudaContext()
     postprocessCvStream = cv::cuda::StreamAccessor::wrapStream(postprocessStream);
     
     
+    if (!checkCudaError(cudaEventCreateWithFlags(&m_preprocessDone, cudaEventDisableTiming), "creating preprocessDone event")) { m_cudaContextInitialized = false; return false; }
+    if (!checkCudaError(cudaEventCreateWithFlags(&m_inferenceDone, cudaEventDisableTiming), "creating inferenceDone event")) { m_cudaContextInitialized = false; return false; }
     if (!checkCudaError(cudaEventCreateWithFlags(&processingDone, cudaEventDisableTiming), "creating processingDone event")) { m_cudaContextInitialized = false; return false; }
     if (!checkCudaError(cudaEventCreateWithFlags(&postprocessCopyDone, cudaEventDisableTiming), "creating postprocessCopyDone event")) { m_cudaContextInitialized = false; return false; }
 
@@ -699,7 +703,7 @@ void Detector::inferenceThread()
         bool hasNewFrame = false;
         {
             std::unique_lock<std::mutex> lock(inferenceMutex);
-            if (inferenceCV.wait_for(lock, std::chrono::milliseconds(100), [this] { return frameReady || AppContext::getInstance().shouldExit; }))
+            if (inferenceCV.wait_for(lock, std::chrono::milliseconds(10), [this] { return frameReady || AppContext::getInstance().shouldExit; }))
             {
                 if (AppContext::getInstance().shouldExit) break;
                 if (frameReady) {
@@ -719,7 +723,7 @@ void Detector::inferenceThread()
                 std::cerr << "[Detector] Context not initialized" << std::endl;
                 error_logged = true;
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
             continue;
         } else {
             error_logged = false;
@@ -732,7 +736,11 @@ void Detector::inferenceThread()
                 auto inference_start_time = std::chrono::high_resolution_clock::now();
 
                 // Execute preprocessing
-                preProcess(frameGpu, stream);
+                preProcess(frameGpu, preprocessStream);
+                cudaEventRecord(m_preprocessDone, preprocessStream);
+                
+                // Wait for preprocessing to complete before inference
+                cudaStreamWaitEvent(stream, m_preprocessDone, 0);
                 
                 // Execute inference directly without CUDA Graph (temporary fix)
                 // Clear any previous CUDA errors before inference
@@ -750,17 +758,12 @@ void Detector::inferenceThread()
                     std::cerr << "[Detector] CUDA error after inference: " << cudaGetErrorString(inferenceErr) << std::endl;
                     continue;
                 }
+                cudaEventRecord(m_inferenceDone, stream);
                 
-                // Perform post-processing
-                performGpuPostProcessing(stream);
-                
-                // Synchronize the main stream to wait for completion (with exit check)
-                if (!ctx.shouldExit) {
-                    cudaError_t syncResult = cudaStreamSynchronize(stream);
-                    if (syncResult != cudaSuccess) {
-                        std::cerr << "[Detector] CUDA sync failed: " << cudaGetErrorString(syncResult) << std::endl;
-                    }
-                }
+                // Start post-processing on a different stream
+                cudaStreamWaitEvent(postprocessStream, m_inferenceDone, 0);
+                performGpuPostProcessing(postprocessStream);
+                cudaEventRecord(processingDone, postprocessStream);
 
                 auto inference_end_time = std::chrono::high_resolution_clock::now();
                 std::chrono::duration<float, std::milli> inference_duration_ms = inference_end_time - inference_start_time;
@@ -768,14 +771,11 @@ void Detector::inferenceThread()
                 ctx.add_to_history(ctx.g_inference_time_history, inference_duration_ms.count(), ctx.g_inference_history_mutex);
 
                 // Post-graph processing (memory copies and target selection)
-                int final_detections_count = 0;
-                cudaMemcpyAsync(&final_detections_count, m_finalDetectionsCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
-
-                // Copy final detections count to host first
+                // Wait for postprocessing to complete before copying
+                cudaStreamWaitEvent(stream, processingDone, 0);
+                
+                // Copy final detections count to host asynchronously
                 cudaMemcpyAsync(&m_finalDetectionsCountHost, m_finalDetectionsCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
-                if (!ctx.shouldExit) {
-                    cudaStreamSynchronize(stream);
-                }
                 
                 // Target handling logic with proper reset
                 {
@@ -793,11 +793,16 @@ void Detector::inferenceThread()
                         calculateTargetScoresGpu(m_finalDetectionsGpu.get(), m_finalDetectionsCountHost, m_scoresGpu.get(), ctx.config.detection_resolution, ctx.config.detection_resolution, ctx.config.distance_weight, ctx.config.confidence_weight, m_headClassId, stream);
                         findBestTargetGpu(m_scoresGpu.get(), m_finalDetectionsCountHost, m_bestTargetIndexGpu.get(), stream);
                         cudaMemcpyAsync(&m_bestTargetIndexHost, m_bestTargetIndexGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
+                        // Only synchronize once at the end for all async operations
                         cudaStreamSynchronize(stream);
+                        
+                        // Use regular copy after sync for best target
+                        if (m_bestTargetIndexHost >= 0 && m_bestTargetIndexHost < m_finalDetectionsCountHost) {
+                            cudaMemcpy(&m_bestTargetHost, &m_finalDetectionsGpu.get()[m_bestTargetIndexHost], sizeof(Detection), cudaMemcpyDeviceToHost);
+                        }
 
                         // 4. If a valid best target is found, update the state.
                         if (m_bestTargetIndexHost >= 0 && m_bestTargetIndexHost < m_finalDetectionsCountHost) {
-                            cudaMemcpy(&m_bestTargetHost, &m_finalDetectionsGpu.get()[m_bestTargetIndexHost], sizeof(Detection), cudaMemcpyDeviceToHost);
                             m_hasBestTarget = true; // Set to true only if a target is found in THIS frame.
                         }
                     }
