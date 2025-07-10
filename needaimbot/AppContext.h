@@ -10,6 +10,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <vector>
+#include <memory>
 #include "config/config.h"
 #include "detector/postProcess.h"
 
@@ -97,8 +98,8 @@ public:
     std::mutex configMutex;
 
     // Modules
-    MouseThread* globalMouseThread = nullptr;
-    Detector* detector = nullptr;
+    MouseThread* globalMouseThread = nullptr;  // Stack allocated in main, so using raw pointer
+    Detector* detector = nullptr;  // Changed back to raw pointer to avoid incomplete type issues
 
     // Overlay Target Data (Synchronized for UI)
     std::atomic<bool> overlay_has_target{false};
