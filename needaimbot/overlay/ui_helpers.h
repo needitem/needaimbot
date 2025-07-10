@@ -27,7 +27,8 @@ namespace UIHelpers
     void EndCard();
     void BeginInfoPanel();
     void EndInfoPanel();
-    void Spacer(float height = 10.0f);
+    void Spacer(float height = 5.0f);
+    void CompactSpacer();
     bool BeautifulButton(const char* label, const ImVec2& size = ImVec2(-1, 0));
     void CompactSlider(const char* label, float* value, float min, float max, const char* format = "%.2f");
     void CompactCombo(const char* label, int* current_item, const char* const items[], int items_count);

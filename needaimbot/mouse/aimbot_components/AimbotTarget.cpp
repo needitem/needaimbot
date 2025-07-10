@@ -11,7 +11,7 @@
 #include "AimbotTarget.h"
 #include "config.h"
 
-AimbotTarget::AimbotTarget(int x, int y, int w, int h, int cls) : x(x), y(y), w(w), h(h), classId(cls) {}
+AimbotTarget::AimbotTarget(int x, int y, int w, int h, int cls) : x(x), y(y), w(w), h(h), classId(cls), detection_timestamp(std::chrono::high_resolution_clock::now()) {}
 
 
 static AimbotTarget s_targetInstance(0, 0, 0, 0, 0);

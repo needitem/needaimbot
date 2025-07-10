@@ -1,6 +1,7 @@
 #include "simple_capture.h"
 #include "AppContext.h"
 #include <iostream>
+#include <chrono>
 #include <opencv2/core/cuda.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/cudaimgproc.hpp>
@@ -108,9 +109,9 @@ cv::Mat SimpleScreenCapture::GetNextFrameCpu()
     int startX = (m_screenWidth - m_width) / 2;
     int startY = (m_screenHeight - m_height) / 2;
     
-    // Capture screen region using BitBlt with CAPTUREBLT flag for better performance
+    // Try optimized BitBlt with NOCOPYBITS for better performance on high-res displays
     BOOL result = BitBlt(m_memoryDC, 0, 0, m_width, m_height, 
-                        m_screenDC, startX, startY, SRCCOPY | CAPTUREBLT);
+                        m_screenDC, startX, startY, SRCCOPY | NOMIRRORBITMAP);
     
     if (!result) {
         std::cerr << "[SimpleCapture] BitBlt failed" << std::endl;
