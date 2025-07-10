@@ -23,9 +23,12 @@ static void draw_capture_area_settings()
     
     UIHelpers::BeginCard("Capture Area & Resolution");
     
-    UIHelpers::CompactSlider("Detection Resolution", reinterpret_cast<float*>(&ctx.config.detection_resolution), 50.0f, 1280.0f, "%.0f");
+    // Use temporary float for the slider
+    float detection_res_float = static_cast<float>(ctx.config.detection_resolution);
+    UIHelpers::CompactSlider("Detection Resolution", &detection_res_float, 50.0f, 1280.0f, "%.0f");
     UIHelpers::InfoTooltip("Size (in pixels) of the square area around the cursor to capture for detection.\nSmaller values improve performance but may miss targets further from the crosshair.");
     if (ImGui::IsItemDeactivatedAfterEdit()) {
+        ctx.config.detection_resolution = static_cast<int>(detection_res_float);
         ctx.config.saveConfig();
     }
     
@@ -50,9 +53,12 @@ static void draw_capture_behavior_settings()
     
     UIHelpers::BeginCard("Capture Behavior");
     
-    UIHelpers::CompactSlider("Lock FPS", reinterpret_cast<float*>(&ctx.config.capture_fps), 0.0f, 240.0f, "%.0f");
+    // Use temporary float for the slider
+    float capture_fps_float = static_cast<float>(ctx.config.capture_fps);
+    UIHelpers::CompactSlider("Lock FPS", &capture_fps_float, 0.0f, 240.0f, "%.0f");
     UIHelpers::InfoTooltip("Limits the screen capture rate. 0 = Unlocked (fastest possible).\nLower values reduce CPU usage but increase detection latency.");
     if (ImGui::IsItemDeactivatedAfterEdit()) {
+        ctx.config.capture_fps = static_cast<int>(capture_fps_float);
         ctx.config.saveConfig();
     }
     
