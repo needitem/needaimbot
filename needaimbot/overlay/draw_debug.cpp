@@ -497,7 +497,6 @@ void draw_debug()
             if (ctx.detector) {
                 std::lock_guard<std::mutex> det_lock(ctx.detector->detectionMutex);
                 
-
                 if (ctx.detector->m_finalDetectionsCountHost > 0 && ctx.detector->m_finalDetectionsGpu.get() != nullptr)
                 {
                     std::vector<Detection> host_detections(ctx.detector->m_finalDetectionsCountHost);

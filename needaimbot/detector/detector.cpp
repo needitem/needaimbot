@@ -781,6 +781,9 @@ void Detector::inferenceThread()
                 // Copy final detections count to host asynchronously
                 cudaMemcpyAsync(&m_finalDetectionsCountHost, m_finalDetectionsCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
                 
+                // Synchronize to ensure count is available
+                cudaStreamSynchronize(stream);
+                
                 // Target handling logic with proper reset
                 {
                     std::lock_guard<std::mutex> lock(detectionMutex);
@@ -797,7 +800,6 @@ void Detector::inferenceThread()
                         calculateTargetScoresGpu(m_finalDetectionsGpu.get(), m_finalDetectionsCountHost, m_scoresGpu.get(), ctx.config.detection_resolution, ctx.config.detection_resolution, ctx.config.distance_weight, ctx.config.confidence_weight, m_headClassId, stream);
                         findBestTargetGpu(m_scoresGpu.get(), m_finalDetectionsCountHost, m_bestTargetIndexGpu.get(), stream);
                         cudaMemcpyAsync(&m_bestTargetIndexHost, m_bestTargetIndexGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
-                        // Only synchronize once at the end for all async operations
                         cudaStreamSynchronize(stream);
                         
                         // Use regular copy after sync for best target
@@ -958,6 +960,17 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         return;
     }
 
+    // Check decoded count
+    int decodedCount = 0;
+    cudaMemcpyAsync(&decodedCount, m_decodedCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
+    cudaStreamSynchronize(stream);
+    
+    // If no detections were decoded, clear final count and return early
+    if (decodedCount == 0) {
+        cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
+        return;
+    }
+    
     // Process all detections without syncing - use max possible count
     cudaError_t filterErr = filterDetectionsByClassIdGpu(
         m_decodedDetectionsGpu.get(),
