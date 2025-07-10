@@ -769,6 +769,7 @@ void Detector::inferenceThread()
                 std::chrono::duration<float, std::milli> inference_duration_ms = inference_end_time - inference_start_time;
                 ctx.g_current_inference_time_ms.store(inference_duration_ms.count());
                 ctx.add_to_history(ctx.g_inference_time_history, inference_duration_ms.count(), ctx.g_inference_history_mutex);
+                
 
                 // Post-graph processing (memory copies and target selection)
                 // Wait for postprocessing to complete before copying
@@ -954,15 +955,10 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         return;
     }
 
-    // Synchronize stream to get the actual decoded count from GPU
-    cudaStreamSynchronize(stream);
-    int actualDecodedCount = 0;
-    cudaMemcpy(&actualDecodedCount, m_decodedCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost);
-
-    // Always process detections - let GPU kernels handle empty cases
+    // Process all detections without syncing - use max possible count
     cudaError_t filterErr = filterDetectionsByClassIdGpu(
         m_decodedDetectionsGpu.get(),
-        actualDecodedCount, // Pass the actual count of decoded detections
+        maxDecodedDetections, // Use max possible instead of syncing
         m_classFilteredDetectionsGpu.get(),
         m_classFilteredCountGpu.get(),
         m_d_ignore_flags_gpu.get(),
@@ -979,22 +975,11 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
          return;
     }
 
-    // Check filtered count
-    int classFilteredCount = 0;
-    cudaMemcpy(&classFilteredCount, m_classFilteredCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost);
-
-    // Early exit if no detections after filtering - clear final results
-    if (classFilteredCount == 0) {
-        cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
-        cudaStreamSynchronize(stream);
-        return;
-    }
-
-    // Run NMS only if we have detections
+    // Run NMS with max detections to avoid sync
     try {
         NMSGpu(
             m_classFilteredDetectionsGpu.get(),
-            std::min(local_max_detections, 10), // Process up to 10 detections for performance
+            local_max_detections, // Use max instead of actual count
             m_finalDetectionsGpu.get(),       
             m_finalDetectionsCountGpu.get(),  
             static_cast<int>(local_max_detections), 

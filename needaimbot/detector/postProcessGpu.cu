@@ -16,37 +16,44 @@
 #include "postProcess.h"
 #include <NvInferRuntimeCommon.h> 
 
+// Fast initialization kernel
+__global__ void initKeepKernel(bool* d_keep, int n) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < n) {
+        d_keep[idx] = true;
+    }
+}
 
-__global__ void calculateIoUKernel(
-    const int* d_x1, const int* d_y1, const int* d_x2, const int* d_y2,
-    const float* d_areas, float* d_iou_matrix,
+
+__global__ __launch_bounds__(256, 4) void calculateIoUKernel(
+    const int* __restrict__ d_x1, const int* __restrict__ d_y1, 
+    const int* __restrict__ d_x2, const int* __restrict__ d_y2,
+    const float* __restrict__ d_areas, float* __restrict__ d_iou_matrix,
     int num_boxes, float nms_threshold) 
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int idy = blockIdx.y * blockDim.y + threadIdx.y;
     
     if (idx < num_boxes && idy < num_boxes && idx < idy) {
+        // Use fast math operations
         int x1 = max(d_x1[idx], d_x1[idy]);
         int y1 = max(d_y1[idx], d_y1[idy]);
         int x2 = min(d_x2[idx], d_x2[idy]);
         int y2 = min(d_y2[idx], d_y2[idy]);
         
-        
-        float width = (float)max(0, x2 - x1);
-        float height = (float)max(0, y2 - y1);
-        
-        if (width > 0 && height > 0) {
-            float intersection_area = width * height;
-            float union_area = d_areas[idx] + d_areas[idy] - intersection_area;
-            float iou = intersection_area / union_area;
-            
-            
-            d_iou_matrix[idx * num_boxes + idy] = iou;
-            d_iou_matrix[idy * num_boxes + idx] = iou; 
-        } else {
+        // Early exit if no overlap
+        if (x2 <= x1 || y2 <= y1) {
             d_iou_matrix[idx * num_boxes + idy] = 0.0f;
             d_iou_matrix[idy * num_boxes + idx] = 0.0f;
+            return;
         }
+        
+        float intersection_area = __int2float_rn(x2 - x1) * __int2float_rn(y2 - y1);
+        float union_area = d_areas[idx] + d_areas[idy] - intersection_area;
+        float iou = __fdiv_rn(intersection_area, union_area);
+        
+        d_iou_matrix[idx * num_boxes + idy] = iou;
+        d_iou_matrix[idy * num_boxes + idx] = iou;
     }
 }
 
@@ -156,8 +163,12 @@ void NMSGpu(
     
     
     
-    cudaMemsetAsync(d_keep, 1, input_num_detections * sizeof(bool), stream); 
-    cudaMemsetAsync(d_iou_matrix, 0, (size_t)input_num_detections * input_num_detections * sizeof(float), stream);
+    // Initialize keep array to 1 (true)
+    {
+        int grid_init = (input_num_detections + block_size - 1) / block_size;
+        initKeepKernel<<<grid_init, block_size, 0, stream>>>(d_keep, input_num_detections);
+    }
+    // Skip zeroing IoU matrix - kernel will only write non-zero values
     err = cudaGetLastError(); if (err != cudaSuccess) goto cleanup;
 
     
