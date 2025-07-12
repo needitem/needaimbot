@@ -34,6 +34,21 @@ namespace UIHelpers
     void CompactCombo(const char* label, int* current_item, const char* const items[], int items_count);
     void CompactCombo(const char* label, int* current_item, bool (*getter)(void*, int, const char**), void* data, int items_count);
     
+    // Section helpers for better organization
+    void BeginSettingsSection(const char* title, const char* description = nullptr);
+    void EndSettingsSection();
+    void SettingsHeader(const char* title);
+    void SettingsSubHeader(const char* title);
+    void HelpMarker(const char* desc);
+    void SettingsRow(const char* label, float label_width = 120.0f);
+    void SettingsValue(const char* value);
+    
+    // Enhanced controls with better visibility
+    bool EnhancedSliderFloat(const char* label, float* v, float v_min, float v_max, const char* format = "%.3f", const char* description = nullptr);
+    bool EnhancedCombo(const char* label, int* current_item, const char* const items[], int items_count, const char* description = nullptr);
+    bool EnhancedCheckbox(const char* label, bool* v, const char* description = nullptr);
+    bool EnhancedButton(const char* label, const ImVec2& size = ImVec2(0, 0), const char* description = nullptr);
+    
     ImVec4 GetAccentColor(float alpha = 1.0f);
     ImVec4 GetSuccessColor(float alpha = 1.0f);
     ImVec4 GetWarningColor(float alpha = 1.0f);

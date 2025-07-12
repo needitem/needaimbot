@@ -155,7 +155,6 @@ public:
     
     // Helper methods for moveMouse refactoring
     Point2D calculatePredictedTarget(const AimbotTarget& target, float current_center_x, float current_center_y);
-    Eigen::Vector2f applyMovementSmoothing(const Eigen::Vector2f& raw_movement, float error_magnitude, float smoothing_factor);
     std::pair<int, int> processAccumulatedMovement(float move_x, float move_y);
     float calculateAdaptiveScale(float error_magnitude) const;
     void applyRecoilCompensationInternal(float strength, float delay_ms);

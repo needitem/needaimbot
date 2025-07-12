@@ -292,7 +292,6 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     
     // Copy all needed config values at once
     float crosshair_offset_x, crosshair_offset_y;
-    float movement_smoothing;
     bool use_predictive_controller;
     float prediction_time_ms;
     int head_class_id_to_use = -1;
@@ -313,7 +312,6 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         std::lock_guard<std::mutex> lock(ctx.configMutex);
         crosshair_offset_x = ctx.config.crosshair_offset_x;
         crosshair_offset_y = ctx.config.crosshair_offset_y;
-        movement_smoothing = ctx.config.movement_smoothing;
         use_predictive_controller = ctx.config.use_predictive_controller;
         prediction_time_ms = ctx.config.prediction_time_ms;
         head_class_name = ctx.config.head_class_name;
@@ -391,11 +389,8 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     float raw_move_x = pid_output.x() * current_move_scale_x * adaptive_scale;
     float raw_move_y = pid_output.y() * current_move_scale_y * adaptive_scale;
     
-    Eigen::Vector2f raw_movement(raw_move_x, raw_move_y);
-    Eigen::Vector2f smoothed_movement_result = applyMovementSmoothing(raw_movement, error_magnitude, movement_smoothing);
-    
-    float move_x = smoothed_movement_result.x();
-    float move_y = smoothed_movement_result.y();
+    float move_x = raw_move_x;
+    float move_y = raw_move_y;
 
     // Apply dead zone with adaptive threshold based on error magnitude
     float adaptive_dead_zone = DEAD_ZONE * (1.0f + std::min(1.0f, 10.0f / (error_magnitude + 1.0f)));
@@ -697,36 +692,6 @@ Point2D MouseThread::calculatePredictedTarget(const AimbotTarget& target, float 
     return predicted_target_pos;
 }
 
-Eigen::Vector2f MouseThread::applyMovementSmoothing(const Eigen::Vector2f& raw_movement, float error_magnitude, float smoothing_factor)
-{
-    // Apply movement smoothing for stability without losing speed
-    // Less smoothing for small movements, more for large sudden movements
-    float smoothing = smoothing_factor;
-    if (error_magnitude > LARGE_MOVEMENT_THRESHOLD) {
-        smoothing = std::min(MAX_ADDITIONAL_SMOOTHING, smoothing + (error_magnitude - LARGE_MOVEMENT_THRESHOLD) * SMOOTHING_INCREASE_FACTOR);
-    }
-    
-    // Enhanced smoothing with jitter reduction
-    // Apply stronger smoothing to small, rapid movements (likely jitter)
-    float movement_magnitude = raw_movement.norm();
-    if (movement_magnitude < 5.0f && movement_magnitude > 0.1f) {
-        // Small movements get extra smoothing to reduce jitter
-        smoothing = std::min(0.95f, smoothing + 0.2f);
-    }
-    
-    // Velocity-based smoothing - smooth more when velocity changes rapidly
-    Eigen::Vector2f velocity_change = raw_movement - smoothed_movement;
-    float velocity_change_magnitude = velocity_change.norm();
-    if (velocity_change_magnitude > 10.0f) {
-        // Rapid changes get smoothed more
-        smoothing = std::min(0.9f, smoothing + 0.1f);
-    }
-    
-    smoothed_movement.x() = smoothing * smoothed_movement.x() + (1.0f - smoothing) * raw_movement.x();
-    smoothed_movement.y() = smoothing * smoothed_movement.y() + (1.0f - smoothing) * raw_movement.y();
-    
-    return smoothed_movement;
-}
 
 std::pair<int, int> MouseThread::processAccumulatedMovement(float move_x, float move_y)
 {

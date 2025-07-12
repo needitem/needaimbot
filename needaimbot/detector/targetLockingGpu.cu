@@ -4,18 +4,18 @@
 
 
 
-__device__ inline float calculateIoUForLockingKernel(const cv::Rect& box1, const cv::Rect& box2) {
-    int xA = max(box1.x, box2.x);
-    int yA = max(box1.y, box2.y);
-    int xB = min(box1.x + box1.width, box2.x + box2.width);
-    int yB = min(box1.y + box1.height, box2.y + box2.height);
+__device__ inline float calculateIoUForLockingKernel(int x1, int y1, int w1, int h1, int x2, int y2, int w2, int h2) {
+    int xA = max(x1, x2);
+    int yA = max(y1, y2);
+    int xB = min(x1 + w1, x2 + w2);
+    int yB = min(y1 + h1, y2 + h2);
 
     int interWidth = max(0, xB - xA);
     int interHeight = max(0, yB - yA);
     int interArea = interWidth * interHeight;
 
-    int box1Area = box1.width * box1.height;
-    int box2Area = box2.width * box2.height;
+    int box1Area = w1 * h1;
+    int box2Area = w2 * h2;
     float unionArea = static_cast<float>(box1Area + box2Area - interArea);
 
     return (unionArea > 0.0f) ? static_cast<float>(interArea) / unionArea : 0.0f;
@@ -42,7 +42,15 @@ __global__ void reacquireLockedTargetKernel(
     s_best_ious[tid] = 0.0f; 
 
     if (idx_global < num_current_detections) {
-        float iou = calculateIoUForLockingKernel(d_current_detections[idx_global].box, previous_locked_target_box);
+        float iou = calculateIoUForLockingKernel(
+            d_current_detections[idx_global].x, 
+            d_current_detections[idx_global].y,
+            d_current_detections[idx_global].width, 
+            d_current_detections[idx_global].height,
+            previous_locked_target_box.x,
+            previous_locked_target_box.y,
+            previous_locked_target_box.width,
+            previous_locked_target_box.height);
         if (iou >= iou_threshold) {
             s_best_indices[tid] = idx_global;
             s_best_ious[tid] = iou;

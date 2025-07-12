@@ -345,4 +345,182 @@ namespace UIHelpers
         ImGui::PopStyleColor(3);
         ImGui::PopItemWidth();
     }
+
+    // Enhanced UI helpers for better organization
+    void BeginSettingsSection(const char* title, const char* description)
+    {
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.08f, 0.08f, 0.10f, 0.95f));
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 8.0f));
+        
+        ImGui::BeginChild(title, ImVec2(0, 0), true);
+        
+        // Section header
+        if (title) {
+            ImGui::PushStyleColor(ImGuiCol_Text, GetAccentColor());
+            ImGui::Text("%s", title);
+            ImGui::PopStyleColor();
+            
+            if (description) {
+                ImGui::SameLine();
+                HelpMarker(description);
+            }
+            
+            ImGui::Separator();
+            Spacer(2.0f);
+        }
+    }
+    
+    void EndSettingsSection()
+    {
+        ImGui::EndChild();
+        ImGui::PopStyleVar(3);
+        ImGui::PopStyleColor();
+        Spacer(6.0f);
+    }
+    
+    void SettingsHeader(const char* title)
+    {
+        ImGui::PushStyleColor(ImGuiCol_Text, GetAccentColor(0.9f));
+        ImGui::Text("%s", title);
+        ImGui::PopStyleColor();
+        ImGui::Separator();
+        Spacer(3.0f);
+    }
+    
+    void SettingsSubHeader(const char* title)
+    {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.8f, 0.8f, 1.0f));
+        ImGui::Text("%s", title);
+        ImGui::PopStyleColor();
+        Spacer(2.0f);
+    }
+    
+    void HelpMarker(const char* desc)
+    {
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+            ImGui::TextUnformatted(desc);
+            ImGui::PopTextWrapPos();
+            ImGui::EndTooltip();
+        }
+    }
+    
+    void SettingsRow(const char* label, float label_width)
+    {
+        ImGui::Text("%s", label);
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(label_width);
+    }
+    
+    void SettingsValue(const char* value)
+    {
+        ImGui::PushStyleColor(ImGuiCol_Text, GetAccentColor(0.8f));
+        ImGui::Text("%s", value);
+        ImGui::PopStyleColor();
+    }
+    
+    bool EnhancedSliderFloat(const char* label, float* v, float v_min, float v_max, const char* format, const char* description)
+    {
+        // Enhanced styling for better visibility
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.15f, 0.15f, 0.18f, 0.95f));
+        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.20f, 0.20f, 0.25f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.25f, 0.25f, 0.30f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_SliderGrab, GetAccentColor(0.9f));
+        ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, GetAccentColor(1.0f));
+        
+        // Make slider wider
+        ImGui::SetNextItemWidth(-1);
+        bool changed = ImGui::SliderFloat(label, v, v_min, v_max, format);
+        
+        ImGui::PopStyleColor(5);
+        
+        if (description && ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+            ImGui::TextUnformatted(description);
+            ImGui::PopTextWrapPos();
+            ImGui::EndTooltip();
+        }
+        
+        return changed;
+    }
+    
+    bool EnhancedCombo(const char* label, int* current_item, const char* const items[], int items_count, const char* description)
+    {
+        // Enhanced styling for better visibility
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.15f, 0.15f, 0.18f, 0.95f));
+        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.20f, 0.20f, 0.25f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.25f, 0.25f, 0.30f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_Button, GetAccentColor(0.7f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, GetAccentColor(0.8f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, GetAccentColor(0.9f));
+        ImGui::PushStyleColor(ImGuiCol_Header, GetAccentColor(0.7f));
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, GetAccentColor(0.8f));
+        ImGui::PushStyleColor(ImGuiCol_HeaderActive, GetAccentColor(0.9f));
+        
+        // Make combo wider
+        ImGui::SetNextItemWidth(-1);
+        bool changed = ImGui::Combo(label, current_item, items, items_count);
+        
+        ImGui::PopStyleColor(9);
+        
+        if (description && ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+            ImGui::TextUnformatted(description);
+            ImGui::PopTextWrapPos();
+            ImGui::EndTooltip();
+        }
+        
+        return changed;
+    }
+    
+    bool EnhancedCheckbox(const char* label, bool* v, const char* description)
+    {
+        // Enhanced styling
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.15f, 0.15f, 0.18f, 0.95f));
+        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.20f, 0.20f, 0.25f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.25f, 0.25f, 0.30f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_CheckMark, GetAccentColor(1.0f));
+        
+        bool changed = ImGui::Checkbox(label, v);
+        
+        ImGui::PopStyleColor(4);
+        
+        if (description && ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+            ImGui::TextUnformatted(description);
+            ImGui::PopTextWrapPos();
+            ImGui::EndTooltip();
+        }
+        
+        return changed;
+    }
+    
+    bool EnhancedButton(const char* label, const ImVec2& size, const char* description)
+    {
+        // Enhanced styling
+        ImGui::PushStyleColor(ImGuiCol_Button, GetAccentColor(0.8f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, GetAccentColor(0.9f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, GetAccentColor(1.0f));
+        
+        bool pressed = ImGui::Button(label, size);
+        
+        ImGui::PopStyleColor(3);
+        
+        if (description && ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+            ImGui::TextUnformatted(description);
+            ImGui::PopTextWrapPos();
+            ImGui::EndTooltip();
+        }
+        
+        return pressed;
+    }
 }

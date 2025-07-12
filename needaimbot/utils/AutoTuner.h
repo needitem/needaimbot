@@ -72,12 +72,6 @@ public:
                             static_cast<float>(ctx.config.kd_x),
                             [&ctx](float v) { ctx.config.kd_x = v; }});
         
-        // Movement smoothing
-        parameters.push_back({"movement_smoothing", 0.0f, 0.6f, 0.05f,
-                            ctx.config.movement_smoothing,
-                            ctx.config.movement_smoothing,
-                            [&ctx](float v) { ctx.config.movement_smoothing = v; }});
-        
         // Prediction factor
         parameters.push_back({"prediction_time_factor", 0.0001f, 0.01f, 0.0001f,
                             ctx.config.prediction_time_factor,
