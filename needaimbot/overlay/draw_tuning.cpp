@@ -64,11 +64,6 @@ void draw_tuning() {
                 ctx.config.kp_y, ctx.config.ki_y, ctx.config.kd_y);
     ImGui::NextColumn();
     
-    ImGui::Text("Movement Smoothing");
-    ImGui::NextColumn();
-    ImGui::Text("%.3f", ctx.config.movement_smoothing);
-    ImGui::NextColumn();
-    
     ImGui::Text("Prediction Factor");
     ImGui::NextColumn();
     ImGui::Text("%.4f", ctx.config.prediction_time_factor);

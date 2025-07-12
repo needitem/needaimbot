@@ -27,78 +27,48 @@ static void draw_pid_controls()
     ImGui::Columns(2, "pid_columns", false);
     
     // X-axis
-    UIHelpers::BeautifulText("X-Axis (Horizontal)", UIHelpers::GetAccentColor());
+    UIHelpers::SettingsSubHeader("X-Axis (Horizontal)");
     
     float kp_x = static_cast<float>(ctx.config.kp_x);
-    ImGui::PushItemWidth(-1);
-    if (ImGui::InputFloat("##kp_x", &kp_x, 0.01f, 0.1f, "%.3f")) {
+    if (UIHelpers::EnhancedSliderFloat("Kp X", &kp_x, 0.0f, 2.0f, "%.3f", "Proportional gain for X-axis. Higher values = faster response but may cause oscillation.")) {
         ctx.config.kp_x = static_cast<double>(kp_x);
         ctx.config.saveConfig();
     }
-    ImGui::PopItemWidth();
-    ImGui::SameLine();
-    ImGui::Text("Kp X");
-    UIHelpers::InfoTooltip("Proportional gain for X-axis. Higher values = faster response but may cause oscillation.");
     
     float ki_x = static_cast<float>(ctx.config.ki_x);
-    ImGui::PushItemWidth(-1);
-    if (ImGui::InputFloat("##ki_x", &ki_x, 0.01f, 0.1f, "%.3f")) {
+    if (UIHelpers::EnhancedSliderFloat("Ki X", &ki_x, 0.0f, 1.0f, "%.3f", "Integral gain for X-axis. Helps eliminate steady-state error.")) {
         ctx.config.ki_x = static_cast<double>(ki_x);
         ctx.config.saveConfig();
     }
-    ImGui::PopItemWidth();
-    ImGui::SameLine();
-    ImGui::Text("Ki X");
-    UIHelpers::InfoTooltip("Integral gain for X-axis. Helps eliminate steady-state error.");
     
     float kd_x = static_cast<float>(ctx.config.kd_x);
-    ImGui::PushItemWidth(-1);
-    if (ImGui::InputFloat("##kd_x", &kd_x, 0.01f, 0.1f, "%.3f")) {
+    if (UIHelpers::EnhancedSliderFloat("Kd X", &kd_x, 0.0f, 1.0f, "%.3f", "Derivative gain for X-axis. Reduces overshoot and oscillation.")) {
         ctx.config.kd_x = static_cast<double>(kd_x);
         ctx.config.saveConfig();
     }
-    ImGui::PopItemWidth();
-    ImGui::SameLine();
-    ImGui::Text("Kd X");
-    UIHelpers::InfoTooltip("Derivative gain for X-axis. Reduces overshoot and oscillation.");
     
     ImGui::NextColumn();
     
     // Y-axis
-    UIHelpers::BeautifulText("Y-Axis (Vertical)", UIHelpers::GetAccentColor());
+    UIHelpers::SettingsSubHeader("Y-Axis (Vertical)");
     
     float kp_y = static_cast<float>(ctx.config.kp_y);
-    ImGui::PushItemWidth(-1);
-    if (ImGui::InputFloat("##kp_y", &kp_y, 0.01f, 0.1f, "%.3f")) {
+    if (UIHelpers::EnhancedSliderFloat("Kp Y", &kp_y, 0.0f, 2.0f, "%.3f", "Proportional gain for Y-axis. Higher values = faster response but may cause oscillation.")) {
         ctx.config.kp_y = static_cast<double>(kp_y);
         ctx.config.saveConfig();
     }
-    ImGui::PopItemWidth();
-    ImGui::SameLine();
-    ImGui::Text("Kp Y");
-    UIHelpers::InfoTooltip("Proportional gain for Y-axis. Higher values = faster response but may cause oscillation.");
     
     float ki_y = static_cast<float>(ctx.config.ki_y);
-    ImGui::PushItemWidth(-1);
-    if (ImGui::InputFloat("##ki_y", &ki_y, 0.01f, 0.1f, "%.3f")) {
+    if (UIHelpers::EnhancedSliderFloat("Ki Y", &ki_y, 0.0f, 1.0f, "%.3f", "Integral gain for Y-axis. Helps eliminate steady-state error.")) {
         ctx.config.ki_y = static_cast<double>(ki_y);
         ctx.config.saveConfig();
     }
-    ImGui::PopItemWidth();
-    ImGui::SameLine();
-    ImGui::Text("Ki Y");
-    UIHelpers::InfoTooltip("Integral gain for Y-axis. Helps eliminate steady-state error.");
     
     float kd_y = static_cast<float>(ctx.config.kd_y);
-    ImGui::PushItemWidth(-1);
-    if (ImGui::InputFloat("##kd_y", &kd_y, 0.01f, 0.1f, "%.3f")) {
+    if (UIHelpers::EnhancedSliderFloat("Kd Y", &kd_y, 0.0f, 1.0f, "%.3f", "Derivative gain for Y-axis. Reduces overshoot and oscillation.")) {
         ctx.config.kd_y = static_cast<double>(kd_y);
         ctx.config.saveConfig();
     }
-    ImGui::PopItemWidth();
-    ImGui::SameLine();
-    ImGui::Text("Kd Y");
-    UIHelpers::InfoTooltip("Derivative gain for Y-axis. Reduces overshoot and oscillation.");
     
     ImGui::Columns(1);
     
@@ -111,115 +81,77 @@ static void draw_advanced_settings()
     
     UIHelpers::BeginCard("Advanced Controller Settings");
     
-    if (UIHelpers::BeautifulToggle("Enable Adaptive PID", &ctx.config.enable_adaptive_pid, 
+    if (UIHelpers::EnhancedCheckbox("Enable Adaptive PID", &ctx.config.enable_adaptive_pid, 
                                    "Uses distance-based PID adjustment for better stability at different ranges.")) {
         ctx.config.saveConfig();
     }
     
-    UIHelpers::CompactSlider("Derivative Smoothing", &ctx.config.pid_derivative_smoothing, 0.0f, 0.8f, "%.3f");
-    UIHelpers::InfoTooltip("Smooths derivative calculation to reduce noise. Higher values = more smoothing but slower response to rapid changes.");
-    if (ImGui::IsItemDeactivatedAfterEdit()) {
+    if (UIHelpers::EnhancedSliderFloat("Derivative Smoothing", &ctx.config.pid_derivative_smoothing, 0.0f, 1.0f, "%.3f",
+                                      "Smooths derivative calculation to reduce noise. Higher values = more smoothing but slower response to rapid changes.")) {
         ctx.config.saveConfig();
     }
     
-    UIHelpers::CompactSlider("Movement Smoothing", &ctx.config.movement_smoothing, 0.0f, 0.6f, "%.3f");
-    UIHelpers::InfoTooltip("Smooths final mouse movement. Higher values = less jitter but may reduce responsiveness.");
-    if (ImGui::IsItemDeactivatedAfterEdit()) {
-        ctx.config.saveConfig();
-    }
+    UIHelpers::Spacer();
+    UIHelpers::SettingsSubHeader("Sub-pixel Movement");
     
-    UIHelpers::BeautifulSeparator("Sub-pixel Movement");
-    
-    if (UIHelpers::BeautifulToggle("Enable Sub-pixel Dithering", &ctx.config.enable_subpixel_dithering, 
+    if (UIHelpers::EnhancedCheckbox("Enable Sub-pixel Dithering", &ctx.config.enable_subpixel_dithering, 
                                    "Adds small random variations to improve movement smoothness and reduce stepping artifacts.")) {
         ctx.config.saveConfig();
     }
     
     if (ctx.config.enable_subpixel_dithering) {
-        UIHelpers::CompactSlider("Dither Strength", &ctx.config.dither_strength, 0.0f, 1.0f, "%.3f");
-        UIHelpers::InfoTooltip("Strength of dithering effect. Higher values = more smoothness but may reduce precision.");
-        if (ImGui::IsItemDeactivatedAfterEdit()) {
+        if (UIHelpers::EnhancedSliderFloat("Dither Strength", &ctx.config.dither_strength, 0.0f, 1.0f, "%.3f",
+                                          "Strength of dithering effect. Higher values = more smoothness but may reduce precision.")) {
             ctx.config.saveConfig();
         }
     }
     
-    UIHelpers::BeautifulSeparator("Target Prediction");
+    UIHelpers::Spacer();
+    UIHelpers::SettingsSubHeader("Target Prediction");
     
-    if (UIHelpers::BeautifulToggle("Enable Velocity History", &ctx.config.enable_velocity_history, 
+    if (UIHelpers::EnhancedCheckbox("Enable Velocity History", &ctx.config.enable_velocity_history, 
                                    "Uses target velocity history for more accurate prediction of moving targets.")) {
         ctx.config.saveConfig();
     }
     
     if (ctx.config.enable_velocity_history) {
-        ImGui::PushItemWidth(-1);
-        if (ImGui::SliderInt("##velocity_history", &ctx.config.velocity_history_size, 2, 10)) {
+        // Enhanced velocity history size slider
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.15f, 0.15f, 0.18f, 0.95f));
+        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.20f, 0.20f, 0.25f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_SliderGrab, UIHelpers::GetAccentColor(0.9f));
+        ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, UIHelpers::GetAccentColor(1.0f));
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::SliderInt("Velocity History Size", &ctx.config.velocity_history_size, 2, 10, "%d samples")) {
             ctx.config.saveConfig();
         }
-        ImGui::PopItemWidth();
-        ImGui::SameLine();
-        ImGui::Text("Velocity History Size");
-        UIHelpers::InfoTooltip("Number of past velocity samples to use for prediction. More samples = smoother but slower adaptation.");
+        ImGui::PopStyleColor(4);
+        if (ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            ImGui::Text("Number of past velocity samples to use for prediction.");
+            ImGui::Text("More samples = smoother but slower adaptation to target changes.");
+            ImGui::EndTooltip();
+        }
     }
     
-    UIHelpers::CompactSlider("Prediction Factor", &ctx.config.prediction_time_factor, 0.0001f, 0.01f, "%.4f");
-    UIHelpers::InfoTooltip("How much prediction is applied based on target distance. Higher values = more aggressive prediction.");
-    if (ImGui::IsItemDeactivatedAfterEdit()) {
+    if (UIHelpers::EnhancedSliderFloat("Prediction Factor", &ctx.config.prediction_time_factor, 0.0001f, 0.01f, "%.4f",
+                                      "How much prediction is applied based on target distance. Higher values = more aggressive prediction.")) {
         ctx.config.saveConfig();
     }
     
     UIHelpers::EndCard();
 }
 
-static void draw_predictive_settings()
-{
-    auto& ctx = AppContext::getInstance();
-    
-    if (!ctx.config.use_predictive_controller) return;
-    
-    UIHelpers::BeginCard("Predictive Controller Settings");
-    
-    float prediction_time = ctx.config.prediction_time_ms;
-    ImGui::PushItemWidth(-1);
-    if (ImGui::InputFloat("##prediction_time", &prediction_time, 1.0f, 10.0f, "%.1f")) {
-        ctx.config.prediction_time_ms = prediction_time;
-        ctx.config.saveConfig();
-    }
-    ImGui::PopItemWidth();
-    ImGui::SameLine();
-    ImGui::Text("Prediction Time (ms)");
-    UIHelpers::InfoTooltip("How far ahead to predict target movement in milliseconds. Higher values work better for fast-moving targets.");
-    
-    float process_noise = ctx.config.kalman_process_noise;
-    ImGui::PushItemWidth(-1);
-    if (ImGui::InputFloat("##process_noise", &process_noise, 0.1f, 1.0f, "%.1f")) {
-        ctx.config.kalman_process_noise = process_noise;
-        ctx.config.saveConfig();
-    }
-    ImGui::PopItemWidth();
-    ImGui::SameLine();
-    ImGui::Text("Process Noise");
-    UIHelpers::InfoTooltip("Kalman filter process noise. Higher values make the tracker adapt faster to sudden target movements.");
-    
-    float measurement_noise = ctx.config.kalman_measurement_noise;
-    ImGui::PushItemWidth(-1);
-    if (ImGui::InputFloat("##measurement_noise", &measurement_noise, 0.1f, 1.0f, "%.1f")) {
-        ctx.config.kalman_measurement_noise = measurement_noise;
-        ctx.config.saveConfig();
-    }
-    ImGui::PopItemWidth();
-    ImGui::SameLine();
-    ImGui::Text("Measurement Noise");
-    UIHelpers::InfoTooltip("Kalman filter measurement noise. Higher values smooth out detection jitter but reduce responsiveness.");
-    
-    UIHelpers::EndCard();
-}
 
 static void draw_input_method_settings()
 {
     auto& ctx = AppContext::getInstance();
     
-    UIHelpers::BeginCard("Input Method Settings");
+    UIHelpers::BeginCard("Input Method Configuration");
     
+    UIHelpers::BeautifulText("Choose how mouse movements are sent to the system", UIHelpers::GetAccentColor(0.8f));
+    UIHelpers::Spacer(8.0f);
+    
+    // Method selection with cleaner layout
     std::vector<std::string> input_methods = { "WIN32", "GHUB", "ARDUINO", "RAZER", "KMBOX" };
     std::vector<const char*> method_items;
     method_items.reserve(input_methods.size());
@@ -235,55 +167,55 @@ static void draw_input_method_settings()
         }
     }
     
-    
-    int previous_method_index = input_method_index;
-    UIHelpers::CompactCombo("Input Method", &input_method_index, method_items.data(), method_items.size());
-    UIHelpers::InfoTooltip("Select the input method for sending mouse movements:\n"
-                          "WIN32: Standard Windows SendInput. May be detected.\n"
-                          "GHUB: Logitech G Hub driver (if installed and supported). Generally safer.\n"
-                          "ARDUINO: Requires a connected Arduino board flashed with appropriate firmware.\n"
-                          "RAZER: Uses a specific Razer driver DLL (rzctl.dll). Requires DLL path.\n"
-                          "KMBOX: Uses kmBoxNet library (requires B box hardware).");
-    
-    // Check if the value actually changed
-    if (input_method_index != previous_method_index) {
+    // Enhanced method selector with cleaner styling
+    UIHelpers::SettingsSubHeader("Input Method");
+    if (UIHelpers::EnhancedCombo("##input_method", &input_method_index, method_items.data(), method_items.size(),
+                                "WIN32: Standard API (detectable)\nGHUB: Logitech driver (safer)\nARDUINO: Hardware device\nRAZER: Razer driver\nKMBOX: Hardware solution")) {
         ctx.config.input_method = input_methods[input_method_index];
         ctx.config.saveConfig();
         ctx.input_method_changed.store(true);
     }
     
-    if (ctx.config.input_method == "GHUB" || !ghub_version.empty()) {
-        UIHelpers::CompactSpacer();
-        ImGui::Text("GHUB Version: %s", ghub_version.c_str());
-        if (ghub_version.empty()) {
-            ImGui::SameLine();
-            UIHelpers::BeautifulText("(Not Found/Error)", UIHelpers::GetErrorColor());
+    UIHelpers::Spacer(12.0f);
+    
+    // Method-specific settings in organized sections
+    if (ctx.config.input_method == "GHUB") {
+        UIHelpers::SettingsSubHeader("Logitech G HUB Status");
+        
+        if (!ghub_version.empty()) {
+            UIHelpers::StatusIndicator("G HUB Version", true, ("Version: " + ghub_version).c_str());
+        } else {
+            UIHelpers::StatusIndicator("G HUB Version", false, "G HUB not detected or error occurred");
+            UIHelpers::BeautifulText("Install Logitech G HUB for this input method to work", UIHelpers::GetWarningColor());
         }
     }
     
     if (ctx.config.input_method == "ARDUINO") {
-        UIHelpers::BeautifulSeparator("Arduino Settings");
+        UIHelpers::SettingsSubHeader("Arduino Configuration");
         
+        // COM Port setting with cleaner layout
+        ImGui::Text("COM Port");
         char port_buffer[64];
         strncpy_s(port_buffer, sizeof(port_buffer), ctx.config.arduino_port.c_str(), _TRUNCATE);
         
-        ImGui::PushItemWidth(-1);
+        ImGui::SetNextItemWidth(-1);
         if (ImGui::InputText("##arduino_port", port_buffer, sizeof(port_buffer))) {
             ctx.config.arduino_port = port_buffer;
             ctx.config.saveConfig();
         }
-        ImGui::PopItemWidth();
-        ImGui::SameLine();
-        ImGui::Text("COM Port");
-        UIHelpers::InfoTooltip("Enter the COM port your Arduino is connected to (e.g., COM3, /dev/ttyACM0).");
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Enter the COM port your Arduino is connected to (e.g., COM3, /dev/ttyACM0)");
+        }
         
-        // Baud rate with preset options
+        UIHelpers::CompactSpacer();
+        
+        // Baud rate with cleaner presentation
+        ImGui::Text("Baud Rate");
         const char* baud_rates[] = { "9600", "115200", "250000", "500000", "1000000" };
         int current_baud_index = -1;
         char custom_baud[32];
         snprintf(custom_baud, sizeof(custom_baud), "%d", ctx.config.arduino_baudrate);
         
-        // Find if current baud rate matches a preset
         for (int i = 0; i < IM_ARRAYSIZE(baud_rates); i++) {
             if (std::string(baud_rates[i]) == custom_baud) {
                 current_baud_index = i;
@@ -291,9 +223,10 @@ static void draw_input_method_settings()
             }
         }
         
-        ImGui::PushItemWidth(-1);
+        ImGui::SetNextItemWidth(-1);
         if (current_baud_index >= 0) {
-            if (ImGui::Combo("##arduino_baud_combo", &current_baud_index, baud_rates, IM_ARRAYSIZE(baud_rates))) {
+            if (UIHelpers::EnhancedCombo("##arduino_baud_combo", &current_baud_index, baud_rates, IM_ARRAYSIZE(baud_rates),
+                                        "115200: Standard speed\n250000-1000000: High speed (requires compatible firmware)")) {
                 ctx.config.arduino_baudrate = std::stoi(baud_rates[current_baud_index]);
                 ctx.config.saveConfig();
                 ctx.input_method_changed.store(true);
@@ -304,20 +237,30 @@ static void draw_input_method_settings()
                 ctx.input_method_changed.store(true);
             }
         }
-        ImGui::PopItemWidth();
-        ImGui::SameLine();
-        ImGui::Text("Baud Rate");
-        UIHelpers::InfoTooltip("Serial communication speed. Higher = faster response.\n115200: Standard\n250000-1000000: High speed (requires compatible Arduino)");
         
-        if (UIHelpers::BeautifulToggle("Use 16-bit Mouse Movement", &ctx.config.arduino_16_bit_mouse,
-                                       "Send mouse movement data as 16-bit values (requires compatible firmware). Otherwise, uses 8-bit.")) {
+        UIHelpers::Spacer(8.0f);
+        
+        if (UIHelpers::EnhancedCheckbox("Use 16-bit Mouse Movement", &ctx.config.arduino_16_bit_mouse,
+                                       "Send mouse data as 16-bit values (requires compatible firmware). Higher precision but needs firmware support.")) {
             ctx.config.saveConfig();
         }
     }
     
     if (ctx.config.input_method == "KMBOX") {
-        UIHelpers::BeautifulSeparator("Kmbox Settings");
-        UIHelpers::BeautifulText("KmboxNet selected. Ensure B-box hardware is connected and kmNet library is initialized.", UIHelpers::GetWarningColor());
+        UIHelpers::SettingsSubHeader("KmboxNet Hardware");
+        UIHelpers::StatusIndicator("Hardware Required", true, "Ensure B-box hardware is connected and kmNet library is initialized");
+        UIHelpers::BeautifulText("Hardware-based input simulation for maximum safety", UIHelpers::GetSuccessColor());
+    }
+    
+    if (ctx.config.input_method == "RAZER") {
+        UIHelpers::SettingsSubHeader("Razer Synapse");
+        UIHelpers::StatusIndicator("Driver Required", true, "Requires Razer Synapse to be installed and running");
+    }
+    
+    if (ctx.config.input_method == "WIN32") {
+        UIHelpers::SettingsSubHeader("Windows API Warning");
+        UIHelpers::StatusIndicator("Detection Risk", false, "This method uses standard Windows API which may be detected by anti-cheat systems");
+        UIHelpers::BeautifulText("Consider using hardware-based methods for better safety", UIHelpers::GetWarningColor());
     }
     
     UIHelpers::EndCard();
@@ -325,7 +268,8 @@ static void draw_input_method_settings()
 
 static void draw_hotkey_section(const char* title, std::vector<std::string>& hotkeys, const char* add_id)
 {
-    UIHelpers::BeautifulSeparator(title);
+    // Create child window for better space management
+    ImGui::BeginChild((std::string("hotkey_section_") + add_id).c_str(), ImVec2(0, 0), false);
     
     for (size_t i = 0; i < hotkeys.size(); )
     {
@@ -346,19 +290,35 @@ static void draw_hotkey_section(const char* title, std::vector<std::string>& hot
             current_index = 0;
         }
         
-        ImGui::PushID(static_cast<int>(i));
+        // Use unique ID combining section name and index
+        std::string unique_id = std::string(add_id) + "_" + std::to_string(i);
+        ImGui::PushID(unique_id.c_str());
         
-        float button_width = 70.0f;
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - button_width - ImGui::GetStyle().ItemSpacing.x);
+        // Calculate proper button width
+        float remove_button_width = 80.0f;
+        float available_width = ImGui::GetContentRegionAvail().x;
+        float combo_width = available_width - remove_button_width - ImGui::GetStyle().ItemSpacing.x;
         
-        if (ImGui::Combo("##hotkey", &current_index, key_names_cstrs.data(), static_cast<int>(key_names_cstrs.size())))
+        // Enhanced key selector with better styling and wider width
+        ImGui::SetNextItemWidth(combo_width);
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.15f, 0.15f, 0.18f, 0.95f));
+        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.20f, 0.20f, 0.25f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_Button, UIHelpers::GetAccentColor(0.7f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, UIHelpers::GetAccentColor(0.8f));
+        ImGui::PushStyleColor(ImGuiCol_Header, UIHelpers::GetAccentColor(0.7f));
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, UIHelpers::GetAccentColor(0.8f));
+        
+        std::string combo_label = "##hotkey_combo_" + unique_id;
+        if (ImGui::Combo(combo_label.c_str(), &current_index, key_names_cstrs.data(), static_cast<int>(key_names_cstrs.size())))
         {
             current_key_name = key_names[current_index];
             AppContext::getInstance().config.saveConfig();
         }
+        ImGui::PopStyleColor(6);
         
         ImGui::SameLine();
-        if (UIHelpers::BeautifulButton("Remove", ImVec2(button_width, 0)))
+        std::string remove_button_label = "Remove##" + unique_id;
+        if (UIHelpers::BeautifulButton(remove_button_label.c_str(), ImVec2(remove_button_width, 0)))
         {
             if (hotkeys.size() <= 1)
             {
@@ -381,33 +341,62 @@ static void draw_hotkey_section(const char* title, std::vector<std::string>& hot
     }
     
     UIHelpers::CompactSpacer();
-    std::string add_button_label = "Add " + std::string(title) + " Hotkey";
+    std::string add_button_label = "Add Key##" + std::string(add_id);
     if (UIHelpers::BeautifulButton(add_button_label.c_str(), ImVec2(-1, 0)))
     {
         hotkeys.push_back("None");
         AppContext::getInstance().config.saveConfig();
     }
+    
+    ImGui::EndChild();
 }
 
 static void draw_aiming_settings()
 {
     auto& ctx = AppContext::getInstance();
     
-    UIHelpers::BeginCard("Aiming Settings");
+    UIHelpers::BeginCard("Aiming Controls");
     
-    draw_hotkey_section("Auto Shoot", ctx.config.button_auto_shoot, "auto_shoot");
+    // Targeting Section
+    UIHelpers::SettingsSubHeader("Targeting Controls");
+    UIHelpers::BeautifulText("Configure keys for aimbot activation", UIHelpers::GetAccentColor(0.7f));
+    UIHelpers::Spacer(6.0f);
     
-    UIHelpers::BeautifulSeparator("Scope Settings");
+    draw_hotkey_section("Aimbot Activation Keys", ctx.config.button_targeting, "targeting_keys");
     
-    UIHelpers::CompactSlider("Triggerbot Area Size", &ctx.config.bScope_multiplier, 0.1f, 2.0f, "%.2f");
-    UIHelpers::InfoTooltip("Defines the central screen area size where Triggerbot activates.\nSmaller value = larger area, Larger value = smaller area.\n(1.0 = default area)");
-    if (ImGui::IsItemDeactivatedAfterEdit()) {
+    UIHelpers::Spacer(8.0f);
+    
+    // Auto Shoot Section
+    UIHelpers::SettingsSubHeader("Auto Shooting");
+    UIHelpers::BeautifulText("Automatically shoot when targeting enemies", UIHelpers::GetAccentColor(0.7f));
+    UIHelpers::Spacer(6.0f);
+    
+    draw_hotkey_section("Auto Shoot Keys", ctx.config.button_auto_shoot, "auto_shoot_keys");
+    
+    UIHelpers::Spacer(8.0f);
+    
+    // Movement Restrictions
+    UIHelpers::SettingsSubHeader("Movement Restrictions");
+    UIHelpers::BeautifulText("Control when aimbot should avoid certain movements", UIHelpers::GetAccentColor(0.7f));
+    UIHelpers::Spacer(6.0f);
+    
+    draw_hotkey_section("Disable Upward Aim Keys", ctx.config.button_disable_upward_aim, "disable_upward_keys");
+    
+    UIHelpers::EndCard();
+    
+    UIHelpers::CompactSpacer();
+    
+    // Separate card for Triggerbot to give more space
+    UIHelpers::BeginCard("Triggerbot Configuration");
+    
+    UIHelpers::BeautifulText("Configure the screen area where triggerbot activates", UIHelpers::GetAccentColor(0.7f));
+    UIHelpers::Spacer(6.0f);
+    
+    ImGui::Text("Area Size Multiplier");
+    if (UIHelpers::EnhancedSliderFloat("##triggerbot_area", &ctx.config.bScope_multiplier, 0.1f, 2.0f, "%.2f",
+                                      "Defines the central screen area size where Triggerbot activates.\nSmaller value = larger area\nLarger value = smaller area\n(1.0 = default area)")) {
         ctx.config.saveConfig();
     }
-    
-    draw_hotkey_section("Targeting", ctx.config.button_targeting, "targeting");
-    
-    draw_hotkey_section("Disable Upward Aim", ctx.config.button_disable_upward_aim, "disable_upward_aim");
     
     UIHelpers::EndCard();
 }
@@ -426,6 +415,36 @@ void draw_mouse()
         ctx.config.saveConfig();
     }
     
+    // Show predictive settings directly under the toggle when enabled
+    if (ctx.config.use_predictive_controller) {
+        UIHelpers::Spacer(8.0f);
+        UIHelpers::SettingsSubHeader("Predictive Settings");
+        
+        // Prediction Time
+        ImGui::Text("Prediction Time (ms)");
+        if (UIHelpers::EnhancedSliderFloat("##prediction_time", &ctx.config.prediction_time_ms, 1.0f, 100.0f, "%.1f",
+                                          "How far ahead to predict target movement. Higher values work better for fast-moving targets.")) {
+            ctx.config.saveConfig();
+        }
+        
+        UIHelpers::CompactSpacer();
+        
+        // Kalman Filter settings in compact layout
+        ImGui::Text("Process Noise");
+        if (UIHelpers::EnhancedSliderFloat("##process_noise", &ctx.config.kalman_process_noise, 0.001f, 1.0f, "%.3f",
+                                          "Kalman filter process noise. Higher values make tracker adapt faster to sudden movements.")) {
+            ctx.config.saveConfig();
+        }
+        
+        UIHelpers::CompactSpacer();
+        
+        ImGui::Text("Measurement Noise");
+        if (UIHelpers::EnhancedSliderFloat("##measurement_noise", &ctx.config.kalman_measurement_noise, 0.001f, 1.0f, "%.3f",
+                                          "Kalman filter measurement noise. Higher values smooth out jitter but reduce responsiveness.")) {
+            ctx.config.saveConfig();
+        }
+    }
+    
     UIHelpers::EndCard();
     UIHelpers::CompactSpacer();
     
@@ -433,9 +452,6 @@ void draw_mouse()
     UIHelpers::CompactSpacer();
     
     draw_advanced_settings();
-    UIHelpers::CompactSpacer();
-    
-    draw_predictive_settings();
     UIHelpers::CompactSpacer();
     
     draw_input_method_settings();
