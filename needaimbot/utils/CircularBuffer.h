@@ -3,12 +3,20 @@
 #include <atomic>
 #include <algorithm>
 
+// Cache line size for most modern CPUs
+#ifndef CACHE_LINE_SIZE
+#define CACHE_LINE_SIZE 64
+#endif
+
 template<typename T, size_t N>
 class CircularBuffer {
 private:
-    std::array<T, N> buffer;
-    std::atomic<size_t> head{0};
-    std::atomic<size_t> size{0};
+    // Align buffer to cache line to avoid false sharing
+    alignas(CACHE_LINE_SIZE) std::array<T, N> buffer;
+    
+    // Separate atomics with padding to prevent false sharing
+    alignas(CACHE_LINE_SIZE) std::atomic<size_t> head{0};
+    alignas(CACHE_LINE_SIZE) std::atomic<size_t> size{0};
 
 public:
     CircularBuffer() = default;

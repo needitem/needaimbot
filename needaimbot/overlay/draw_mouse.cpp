@@ -235,6 +235,8 @@ static void draw_input_method_settings()
         }
     }
     
+    
+    int previous_method_index = input_method_index;
     UIHelpers::CompactCombo("Input Method", &input_method_index, method_items.data(), method_items.size());
     UIHelpers::InfoTooltip("Select the input method for sending mouse movements:\n"
                           "WIN32: Standard Windows SendInput. May be detected.\n"
@@ -242,9 +244,12 @@ static void draw_input_method_settings()
                           "ARDUINO: Requires a connected Arduino board flashed with appropriate firmware.\n"
                           "RAZER: Uses a specific Razer driver DLL (rzctl.dll). Requires DLL path.\n"
                           "KMBOX: Uses kmBoxNet library (requires B box hardware).");
-    if (ImGui::IsItemDeactivatedAfterEdit()) {
+    
+    // Check if the value actually changed
+    if (input_method_index != previous_method_index) {
         ctx.config.input_method = input_methods[input_method_index];
         ctx.config.saveConfig();
+        ctx.input_method_changed.store(true);
     }
     
     if (ctx.config.input_method == "GHUB" || !ghub_version.empty()) {
@@ -272,14 +277,37 @@ static void draw_input_method_settings()
         ImGui::Text("COM Port");
         UIHelpers::InfoTooltip("Enter the COM port your Arduino is connected to (e.g., COM3, /dev/ttyACM0).");
         
+        // Baud rate with preset options
+        const char* baud_rates[] = { "9600", "115200", "250000", "500000", "1000000" };
+        int current_baud_index = -1;
+        char custom_baud[32];
+        snprintf(custom_baud, sizeof(custom_baud), "%d", ctx.config.arduino_baudrate);
+        
+        // Find if current baud rate matches a preset
+        for (int i = 0; i < IM_ARRAYSIZE(baud_rates); i++) {
+            if (std::string(baud_rates[i]) == custom_baud) {
+                current_baud_index = i;
+                break;
+            }
+        }
+        
         ImGui::PushItemWidth(-1);
-        if (ImGui::InputInt("##arduino_baud", &ctx.config.arduino_baudrate, 0)) {
-            ctx.config.saveConfig();
+        if (current_baud_index >= 0) {
+            if (ImGui::Combo("##arduino_baud_combo", &current_baud_index, baud_rates, IM_ARRAYSIZE(baud_rates))) {
+                ctx.config.arduino_baudrate = std::stoi(baud_rates[current_baud_index]);
+                ctx.config.saveConfig();
+                ctx.input_method_changed.store(true);
+            }
+        } else {
+            if (ImGui::InputInt("##arduino_baud", &ctx.config.arduino_baudrate, 0)) {
+                ctx.config.saveConfig();
+                ctx.input_method_changed.store(true);
+            }
         }
         ImGui::PopItemWidth();
         ImGui::SameLine();
         ImGui::Text("Baud Rate");
-        UIHelpers::InfoTooltip("Serial communication speed (e.g., 9600, 115200). Must match Arduino firmware.");
+        UIHelpers::InfoTooltip("Serial communication speed. Higher = faster response.\n115200: Standard\n250000-1000000: High speed (requires compatible Arduino)");
         
         if (UIHelpers::BeautifulToggle("Use 16-bit Mouse Movement", &ctx.config.arduino_16_bit_mouse,
                                        "Send mouse movement data as 16-bit values (requires compatible firmware). Otherwise, uses 8-bit.")) {

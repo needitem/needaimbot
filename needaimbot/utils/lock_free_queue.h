@@ -24,9 +24,16 @@ public:
     }
     
     ~LockFreeQueue() {
-        while (Node* oldHead = head.load()) {
-            head.store(oldHead->next);
-            delete oldHead;
+        // Properly clean up all nodes and their data
+        Node* current = head.load();
+        while (current != nullptr) {
+            Node* next = current->next.load();
+            T* data = current->data.load();
+            if (data != nullptr) {
+                delete data;
+            }
+            delete current;
+            current = next;
         }
     }
     

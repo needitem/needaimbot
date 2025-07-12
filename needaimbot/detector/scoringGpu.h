@@ -18,6 +18,8 @@ cudaError_t calculateTargetScoresGpu(
     float distance_weight_config,
     float confidence_weight_config,
     int head_class_id,
+    float crosshair_offset_x,
+    float crosshair_offset_y,
     cudaStream_t stream
 );
 
@@ -26,6 +28,16 @@ cudaError_t findBestTargetGpu(
     const float* d_scores,
     int num_detections,
     int* d_best_index_gpu,
+    cudaStream_t stream
+);
+
+// Find the detection that best matches the previous target (for tracking continuity)
+cudaError_t findMatchingTargetGpu(
+    const Detection* d_detections,
+    int num_detections,
+    const Detection& previous_target,
+    int* d_matching_index_gpu,
+    float* d_matching_score_gpu,
     cudaStream_t stream
 );
 
