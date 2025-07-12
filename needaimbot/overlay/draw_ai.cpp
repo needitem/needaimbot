@@ -45,7 +45,8 @@ static void draw_model_settings()
             modelsItems.push_back(modelName.c_str());
         }
 
-        UIHelpers::CompactCombo("Model", &currentModelIndex, modelsItems.data(), static_cast<int>(modelsItems.size()));
+        UIHelpers::EnhancedCombo("AI Model", &currentModelIndex, modelsItems.data(), static_cast<int>(modelsItems.size()), 
+                                "Select the AI model file to use for target detection. Models should be placed in the 'models' folder.");
         if (ImGui::IsItemDeactivatedAfterEdit())
         {
             if (ctx.config.ai_model != availableModels[currentModelIndex])
@@ -65,8 +66,8 @@ static void draw_model_settings()
     else if (ctx.config.onnx_input_resolution == 320) current_resolution_index = 1;
     else if (ctx.config.onnx_input_resolution == 640) current_resolution_index = 2;
     
-    UIHelpers::CompactCombo("Input Resolution", &current_resolution_index, resolution_items, IM_ARRAYSIZE(resolution_items));
-    UIHelpers::InfoTooltip("Select the input resolution for the ONNX model (e.g., 640 for 640x640 input).\nChanging this will require the .engine file to be rebuilt if it doesn't match.");
+    UIHelpers::EnhancedCombo("Input Resolution", &current_resolution_index, resolution_items, IM_ARRAYSIZE(resolution_items),
+                            "Select the input resolution for the ONNX model (e.g., 640 for 640x640 input). Changing this will require the .engine file to be rebuilt if it doesn't match.");
     if (ImGui::IsItemDeactivatedAfterEdit())
     {
         int selected_resolution = 160; 
@@ -84,13 +85,13 @@ static void draw_model_settings()
     
     UIHelpers::CompactSpacer();
     
-    if (UIHelpers::BeautifulToggle("Enable FP16", &ctx.config.export_enable_fp16, "Enable FP16 precision for the exported TensorRT engine."))
+    if (UIHelpers::EnhancedCheckbox("Enable FP16 Precision", &ctx.config.export_enable_fp16, "Enable FP16 precision for the exported TensorRT engine. Reduces memory usage and improves performance on supported GPUs."))
     {
         ctx.config.saveConfig();
         detector_model_changed.store(true);
     }
     
-    if (UIHelpers::BeautifulToggle("Enable FP8", &ctx.config.export_enable_fp8, "Enable FP8 precision for the exported TensorRT engine."))
+    if (UIHelpers::EnhancedCheckbox("Enable FP8 Precision", &ctx.config.export_enable_fp8, "Enable FP8 precision for the exported TensorRT engine. Experimental feature for maximum performance on supported GPUs."))
     {
         ctx.config.saveConfig();
         detector_model_changed.store(true);
@@ -98,7 +99,7 @@ static void draw_model_settings()
     
     UIHelpers::CompactSpacer();
     
-    if (UIHelpers::BeautifulButton("Rebuild Engine", ImVec2(-1, 0)))
+    if (UIHelpers::EnhancedButton("Rebuild Engine", ImVec2(-1, 0), "Force rebuild of the TensorRT engine from ONNX. Use this when changing precision settings or if the engine has issues."))
     {
         std::filesystem::path modelPath(std::string("models/") + ctx.config.ai_model);
         std::filesystem::path onnxPath = modelPath;
@@ -116,7 +117,6 @@ static void draw_model_settings()
         ctx.config.saveConfig();
         detector_model_changed.store(true);
     }
-    UIHelpers::WrappedTooltip("Force rebuild of the TensorRT engine from ONNX.");
     
     UIHelpers::EndCard();
 }
@@ -144,7 +144,8 @@ static void draw_detection_settings()
         }
     }
 
-    UIHelpers::CompactCombo("Postprocess Algorithm", &currentPostprocessIndex, postprocessItems.data(), static_cast<int>(postprocessItems.size()));
+    UIHelpers::EnhancedCombo("Postprocess Algorithm", &currentPostprocessIndex, postprocessItems.data(), static_cast<int>(postprocessItems.size()),
+                            "Select the YOLO postprocessing algorithm that matches your model version.");
     if (ImGui::IsItemDeactivatedAfterEdit())
     {
         ctx.config.postprocess = postprocessOptions[currentPostprocessIndex];
@@ -152,25 +153,35 @@ static void draw_detection_settings()
         detector_model_changed.store(true);
     }
     
-    UIHelpers::CompactSpacer();
+    UIHelpers::Spacer();
     
-    UIHelpers::CompactSlider("Confidence Threshold", &ctx.config.confidence_threshold, 0.01f, 1.00f, "%.2f");
-    if (ImGui::IsItemDeactivatedAfterEdit()) {
+    if (UIHelpers::EnhancedSliderFloat("Confidence Threshold", &ctx.config.confidence_threshold, 0.01f, 1.00f, "%.2f", 
+                                      "Minimum confidence score required for target detection. Higher values = fewer false positives."))
+    {
         ctx.config.saveConfig();
     }
     
-    UIHelpers::CompactSlider("NMS Threshold", &ctx.config.nms_threshold, 0.01f, 1.00f, "%.2f");
-    if (ImGui::IsItemDeactivatedAfterEdit()) {
+    if (UIHelpers::EnhancedSliderFloat("NMS Threshold", &ctx.config.nms_threshold, 0.01f, 1.00f, "%.2f",
+                                      "Non-Maximum Suppression threshold for removing overlapping detections. Lower values = less overlap allowed."))
+    {
         ctx.config.saveConfig();
     }
     
-    ImGui::PushItemWidth(-1);
-    if (ImGui::SliderInt("##max_detections", &ctx.config.max_detections, 1, 100)) {
+    // Max detections slider with better styling
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.15f, 0.15f, 0.18f, 0.95f));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.20f, 0.20f, 0.25f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_SliderGrab, UIHelpers::GetAccentColor(0.9f));
+    ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, UIHelpers::GetAccentColor(1.0f));
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::SliderInt("Max Detections", &ctx.config.max_detections, 1, 100, "%d detections")) {
         ctx.config.saveConfig();
     }
-    ImGui::PopItemWidth();
-    ImGui::SameLine();
-    ImGui::Text("Max Detections");
+    ImGui::PopStyleColor(4);
+    if (ImGui::IsItemHovered()) {
+        ImGui::BeginTooltip();
+        ImGui::Text("Maximum number of targets to detect per frame. Higher values may impact performance.");
+        ImGui::EndTooltip();
+    }
     
     UIHelpers::EndCard();
 }

@@ -42,12 +42,21 @@ static void draw_button_section(const char* title, const char* description, std:
         float button_width = 70.0f;
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - button_width - ImGui::GetStyle().ItemSpacing.x);
         
+        // Enhanced combo box styling
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.15f, 0.15f, 0.18f, 0.95f));
+        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.20f, 0.20f, 0.25f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_Button, UIHelpers::GetAccentColor(0.7f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, UIHelpers::GetAccentColor(0.8f));
+        ImGui::PushStyleColor(ImGuiCol_Header, UIHelpers::GetAccentColor(0.7f));
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, UIHelpers::GetAccentColor(0.8f));
+        
         std::string combo_label = "##" + std::string(title) + std::to_string(i);
         if (ImGui::Combo(combo_label.c_str(), &current_index, key_names_cstrs.data(), static_cast<int>(key_names_cstrs.size())))
         {
             current_key_name = key_names[current_index];
             AppContext::getInstance().config.saveConfig();
         }
+        ImGui::PopStyleColor(6);
         
         ImGui::SameLine();
         std::string remove_button_label = "Remove##" + std::string(remove_id) + std::to_string(i);

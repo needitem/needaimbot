@@ -112,7 +112,6 @@ public:
     double kd_y;
     
     float pid_derivative_smoothing;
-    float movement_smoothing;
     bool enable_adaptive_pid;
 
     

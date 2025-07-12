@@ -123,7 +123,6 @@ bool Config::loadConfig(const std::string& filename)
         kd_y = 0.15;
         
         pid_derivative_smoothing = 0.2f;
-        movement_smoothing = 0.15f;
         enable_adaptive_pid = true;
 
         
@@ -280,7 +279,6 @@ bool Config::loadConfig(const std::string& filename)
     kd_y = get_double_ini("PID", "kd_y", 0.15);
     
     pid_derivative_smoothing = (float)get_double_ini("PID", "pid_derivative_smoothing", 0.2);
-    movement_smoothing = (float)get_double_ini("PID", "movement_smoothing", 0.15);
     enable_adaptive_pid = get_bool_ini("PID", "enable_adaptive_pid", true);
 
     use_predictive_controller = get_bool_ini("PID", "use_predictive_controller", true);
@@ -479,7 +477,6 @@ bool Config::saveConfig(const std::string& filename)
     file << "ki_y = " << ki_y << "\n";
     file << "kd_y = " << kd_y << "\n";
     file << "pid_derivative_smoothing = " << pid_derivative_smoothing << "\n";
-    file << "movement_smoothing = " << movement_smoothing << "\n";
     file << "enable_adaptive_pid = " << (enable_adaptive_pid ? "true" : "false") << "\n";
     file << "use_predictive_controller = " << (use_predictive_controller ? "true" : "false") << "\n";
     file << "prediction_time_ms = " << prediction_time_ms << "\n";
