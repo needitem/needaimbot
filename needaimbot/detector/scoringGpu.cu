@@ -43,30 +43,37 @@ __global__ void calculateTargetScoresGpuKernel(
     float distance_weight,
     float confidence_weight,
     int head_class_id,             
-    float head_class_score_multiplier 
+    float head_class_score_multiplier,
+    float crosshairX,  // Crosshair position X (including offset)
+    float crosshairY   // Crosshair position Y (including offset)
 ) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (idx < num_detections) {
         const Detection& det = d_detections[idx];
-        const cv::Rect& box = det.box;
 
-        float centerX = box.x + box.width / 2.0f;
-        float centerY = box.y + box.height / 2.0f;
+        float centerX = det.x + det.width * 0.5f;
+        float centerY = det.y + det.height * 0.5f;
 
-        float frameCenterX = frame_width / 2.0f;
-        float frameCenterY = frame_height / 2.0f;
-        float dx = centerX - frameCenterX;
-        float dy = centerY - frameCenterY;
-        float distance_score = sqrtf(dx * dx + dy * dy) * fmaxf(0.0f, distance_weight);
-
-        float confidence_penalty_factor = (1.0f - det.confidence) * fmaxf(0.0f, confidence_weight);
-        d_scores[idx] = distance_score * (1.0f + confidence_penalty_factor);
-
+        float dx = centerX - crosshairX;
+        float dy = centerY - crosshairY;
         
+        // Use fast reciprocal square root approximation if distance_weight is 1.0
+        float distance = sqrtf(dx * dx + dy * dy);
+        float distance_score = distance * fmaxf(0.0f, distance_weight);
+
+        // Optimize confidence calculation
+        float confidence_factor = fmaf(1.0f - det.confidence, fmaxf(0.0f, confidence_weight), 1.0f);
+        float score = distance_score * confidence_factor;
+
+        // Apply head class bonus
         if (head_class_id != -1 && det.classId == head_class_id) {
-            d_scores[idx] *= head_class_score_multiplier; 
+            score *= head_class_score_multiplier; 
         }
+        
+        // Consider target size - prefer larger targets when distances are similar
+        float size_factor = 1.0f / (1.0f + 0.0001f * (det.width * det.height));
+        d_scores[idx] = score * size_factor;
     }
 }
 
@@ -78,14 +85,20 @@ cudaError_t calculateTargetScoresGpu(
     int frame_height,
     float distance_weight_config,
     float confidence_weight_config,
-    int head_class_id_param         
-    ,cudaStream_t stream) {
+    int head_class_id_param,
+    float crosshair_offset_x,
+    float crosshair_offset_y,
+    cudaStream_t stream) {
     if (num_detections <= 0) {
         return cudaSuccess;
     }
 
     const float head_bonus_multiplier_val = 0.8f; 
 
+    // Calculate crosshair position with offset
+    const float crosshairX = frame_width * 0.5f + crosshair_offset_x;
+    const float crosshairY = frame_height * 0.5f + crosshair_offset_y;
+    
     const int block_size = 256;
     const int grid_size = (num_detections + block_size - 1) / block_size;
 
@@ -98,7 +111,9 @@ cudaError_t calculateTargetScoresGpu(
         distance_weight_config,
         confidence_weight_config,
         head_class_id_param,
-        head_bonus_multiplier_val 
+        head_bonus_multiplier_val,
+        crosshairX,
+        crosshairY
     );
 
     return cudaGetLastError();
@@ -144,5 +159,83 @@ cudaError_t findBestTargetGpu(
          cudaMemsetAsync(d_best_index_gpu, 0xFF, sizeof(int), stream);
          return cudaErrorUnknown;
     }
+}
+
+// Kernel to find the detection that best matches the previous target
+__global__ void findMatchingTargetKernel(
+    const Detection* d_detections,
+    int num_detections,
+    const Detection previous_target,
+    int* d_matching_index,
+    float* d_matching_score
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= num_detections) return;
+    
+    const Detection& det = d_detections[idx];
+    
+    // Skip if not the same class
+    if (det.classId != previous_target.classId) return;
+    
+    // Calculate center points
+    float det_cx = det.x + det.width * 0.5f;
+    float det_cy = det.y + det.height * 0.5f;
+    float prev_cx = previous_target.x + previous_target.width * 0.5f;
+    float prev_cy = previous_target.y + previous_target.height * 0.5f;
+    
+    // Calculate distance between centers
+    float dx = det_cx - prev_cx;
+    float dy = det_cy - prev_cy;
+    float distance = sqrtf(dx * dx + dy * dy);
+    
+    // Calculate size difference (IoU-like metric)
+    float size_diff = fabsf(det.width - previous_target.width) + fabsf(det.height - previous_target.height);
+    
+    // Combined score (lower is better) - prioritize spatial proximity
+    float score = distance + size_diff * 0.1f;
+    
+    // Use atomicMin to find the best match
+    unsigned int* score_as_uint = (unsigned int*)d_matching_score;
+    unsigned int my_score_uint = __float_as_uint(score);
+    unsigned int old_score_uint = atomicMin(score_as_uint, my_score_uint);
+    
+    // If we updated the score, also update the index
+    if (old_score_uint != my_score_uint && my_score_uint == *score_as_uint) {
+        *d_matching_index = idx;
+    }
+}
+
+cudaError_t findMatchingTargetGpu(
+    const Detection* d_detections,
+    int num_detections,
+    const Detection& previous_target,
+    int* d_matching_index_gpu,
+    float* d_matching_score_gpu,
+    cudaStream_t stream
+) {
+    if (num_detections <= 0) {
+        cudaMemsetAsync(d_matching_index_gpu, 0xFF, sizeof(int), stream);
+        float max_float = FLT_MAX;
+        cudaMemcpyAsync(d_matching_score_gpu, &max_float, sizeof(float), cudaMemcpyHostToDevice, stream);
+        return cudaSuccess;
+    }
+    
+    // Initialize with max values
+    cudaMemsetAsync(d_matching_index_gpu, 0xFF, sizeof(int), stream);
+    float max_float = FLT_MAX;
+    cudaMemcpyAsync(d_matching_score_gpu, &max_float, sizeof(float), cudaMemcpyHostToDevice, stream);
+    
+    const int block_size = 256;
+    const int grid_size = (num_detections + block_size - 1) / block_size;
+    
+    findMatchingTargetKernel<<<grid_size, block_size, 0, stream>>>(
+        d_detections,
+        num_detections,
+        previous_target,
+        d_matching_index_gpu,
+        d_matching_score_gpu
+    );
+    
+    return cudaGetLastError();
 }
 

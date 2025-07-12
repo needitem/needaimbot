@@ -109,11 +109,30 @@ private:
 
 class Win32InputMethod : public InputMethod
 {
+private:
+    // Batch multiple inputs for better performance
+    static constexpr size_t MAX_BATCH_SIZE = 64;
+    std::vector<INPUT> input_batch;
+    
+    void flushBatch() {
+        if (!input_batch.empty()) {
+            SendInput(static_cast<UINT>(input_batch.size()), input_batch.data(), sizeof(INPUT));
+            input_batch.clear();
+        }
+    }
+    
 public:
-    Win32InputMethod() = default;
+    Win32InputMethod() {
+        input_batch.reserve(MAX_BATCH_SIZE);
+    }
+    
+    ~Win32InputMethod() override {
+        flushBatch();
+    }
 
     void move(int x, int y) override
     {
+        // For mouse movement, send immediately for responsiveness
         INPUT input = {0};
         input.type = INPUT_MOUSE;
         input.mi.dwFlags = MOUSEEVENTF_MOVE;

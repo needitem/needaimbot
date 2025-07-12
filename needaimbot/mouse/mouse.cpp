@@ -9,6 +9,7 @@
 #include "input_drivers/ghub.h"
 #include "../config/config.h"
 #include "../keyboard/keyboard_listener.h"
+#include "../utils/AutoTuner.h"
 
 #define WIN32_LEAN_AND_MEAN
 #define _WINSOCKAPI_
@@ -582,6 +583,17 @@ Point2D MouseThread::calculatePredictedTarget(const AimbotTarget& target, float 
             float target_vel_x = (raw_target_pos.x - last_target_pos_.x) / dt_target;
             float target_vel_y = (raw_target_pos.y - last_target_pos_.y) / dt_target;
             
+            // Calculate acceleration
+            if (last_velocity_.x != 0 || last_velocity_.y != 0) {
+                current_acceleration_.x = (target_vel_x - last_velocity_.x) / dt_target;
+                current_acceleration_.y = (target_vel_y - last_velocity_.y) / dt_target;
+                
+                // Limit acceleration to prevent overshooting
+                const float MAX_ACCELERATION = 5000.0f; // pixels/s^2
+                current_acceleration_.x = std::clamp(current_acceleration_.x, -MAX_ACCELERATION, MAX_ACCELERATION);
+                current_acceleration_.y = std::clamp(current_acceleration_.y, -MAX_ACCELERATION, MAX_ACCELERATION);
+            }
+            
             // Get velocity history settings from config
             bool use_velocity_history;
             int max_history_size;
@@ -593,6 +605,7 @@ Point2D MouseThread::calculatePredictedTarget(const AimbotTarget& target, float 
             }
             
             // Update velocity history if enabled
+            last_velocity_ = current_velocity_;
             current_velocity_.x = target_vel_x;
             current_velocity_.y = target_vel_y;
             
@@ -627,19 +640,53 @@ Point2D MouseThread::calculatePredictedTarget(const AimbotTarget& target, float 
                 avg_velocity = current_velocity_;
             }
             
-            // Prediction time based on current error magnitude and config
+            // Adaptive prediction time based on multiple factors
             float error_magnitude = std::sqrt(initial_error_x * initial_error_x + initial_error_y * initial_error_y);
+            float velocity_magnitude = std::sqrt(avg_velocity.x * avg_velocity.x + avg_velocity.y * avg_velocity.y);
+            float acceleration_magnitude = std::sqrt(current_acceleration_.x * current_acceleration_.x + 
+                                                   current_acceleration_.y * current_acceleration_.y);
+            
             float prediction_factor;
+            float base_prediction_time_ms;
             {
                 auto& ctx = AppContext::getInstance();
                 std::lock_guard<std::mutex> lock(ctx.configMutex);
                 prediction_factor = ctx.config.prediction_time_factor;
+                base_prediction_time_ms = ctx.config.prediction_time_ms;
             }
-            float prediction_time = std::clamp(error_magnitude * prediction_factor, 0.0f, MAX_PREDICTION_TIME);
             
-            // Apply enhanced prediction with smoothed velocity
-            predicted_target_pos.x = raw_target_pos.x + avg_velocity.x * prediction_time;
-            predicted_target_pos.y = raw_target_pos.y + avg_velocity.y * prediction_time;
+            // Calculate adaptive prediction time
+            // Higher velocity = more prediction needed
+            // Higher acceleration = less prediction (target changing direction)
+            float velocity_factor = std::min(1.0f, velocity_magnitude / 1000.0f); // normalize to 0-1
+            float acceleration_penalty = std::min(1.0f, acceleration_magnitude / 5000.0f); // normalize to 0-1
+            
+            // Combine factors for final prediction time
+            float prediction_time = (base_prediction_time_ms / 1000.0f) * velocity_factor * (1.0f - acceleration_penalty * 0.5f);
+            
+            // Also consider error magnitude
+            prediction_time += error_magnitude * prediction_factor;
+            prediction_time = std::clamp(prediction_time, 0.0f, MAX_PREDICTION_TIME);
+            
+            // Apply enhanced prediction with velocity and acceleration (2nd order prediction)
+            // Position = current_pos + velocity * t + 0.5 * acceleration * t^2
+            predicted_target_pos.x = raw_target_pos.x + avg_velocity.x * prediction_time + 
+                                   0.5f * current_acceleration_.x * prediction_time * prediction_time;
+            predicted_target_pos.y = raw_target_pos.y + avg_velocity.y * prediction_time + 
+                                   0.5f * current_acceleration_.y * prediction_time * prediction_time;
+            
+            // Apply prediction limits to prevent overshooting
+            const float MAX_PREDICTION_DISTANCE = 100.0f; // pixels
+            float prediction_distance_x = predicted_target_pos.x - raw_target_pos.x;
+            float prediction_distance_y = predicted_target_pos.y - raw_target_pos.y;
+            float prediction_distance = std::sqrt(prediction_distance_x * prediction_distance_x + 
+                                                prediction_distance_y * prediction_distance_y);
+            
+            if (prediction_distance > MAX_PREDICTION_DISTANCE) {
+                float scale = MAX_PREDICTION_DISTANCE / prediction_distance;
+                predicted_target_pos.x = raw_target_pos.x + prediction_distance_x * scale;
+                predicted_target_pos.y = raw_target_pos.y + prediction_distance_y * scale;
+            }
         }
         
         last_target_pos_ = raw_target_pos;
@@ -822,7 +869,17 @@ void MouseThread::resetAccumulatedStates()
     // Reset smoothed movement
     smoothed_movement = Eigen::Vector2f::Zero();
     
+    // Reset movement accumulation
+    accumulated_x_ = 0.0f;
+    accumulated_y_ = 0.0f;
+    
     // Reset prediction state
+    prediction_initialized_ = false;
+    current_velocity_ = {0, 0};
+    last_velocity_ = {0, 0};
+    current_acceleration_ = {0, 0};
+    velocity_history_.clear();
+    velocity_time_history_.clear();
     prediction_initialized_ = false;
     last_target_pos_ = {0, 0};
     last_target_time_ = std::chrono::high_resolution_clock::now();

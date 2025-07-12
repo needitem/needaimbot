@@ -22,7 +22,7 @@ void NMS(std::vector<Detection>& detections, float nmsThreshold)
 
     std::vector<float> areas(detections.size());
     for (size_t i = 0; i < detections.size(); ++i) {
-        areas[i] = static_cast<float>(detections[i].box.area());
+        areas[i] = static_cast<float>(detections[i].width * detections[i].height);
     }
 
     for (size_t i = 0; i < detections.size(); ++i)
@@ -31,7 +31,7 @@ void NMS(std::vector<Detection>& detections, float nmsThreshold)
         
         result.push_back(detections[i]);
         
-        const cv::Rect& box_i = detections[i].box;
+        const cv::Rect box_i = detections[i].box();
         const float area_i = areas[i];
         const float conf_i = detections[i].confidence;
         
@@ -44,7 +44,7 @@ void NMS(std::vector<Detection>& detections, float nmsThreshold)
                 continue;
             }
             
-            const cv::Rect& box_j = detections[j].box;
+            const cv::Rect box_j = detections[j].box();
             
             if (box_i.x > box_j.x + box_j.width || 
                 box_j.x > box_i.x + box_i.width ||
@@ -91,25 +91,22 @@ std::vector<Detection> decodeYolo10(
         {
             int classId = static_cast<int>(det[5]);
 
-            float cx = det[0];
-            float cy = det[1];
-            float dx = det[2];
-            float dy = det[3];
+            float x1 = det[0];
+            float y1 = det[1];
+            float x2 = det[2];
+            float y2 = det[3];
 
-            int x = static_cast<int>(cx * img_scale);
-            int y = static_cast<int>(cy * img_scale);
-            int width = static_cast<int>((dx - cx) * img_scale);
-            int height = static_cast<int>((dy - cy) * img_scale);
+            int x = static_cast<int>(x1 * img_scale);
+            int y = static_cast<int>(y1 * img_scale);
+            int width = static_cast<int>((x2 - x1) * img_scale);
+            int height = static_cast<int>((y2 - y1) * img_scale);
 
             
             if (width <= 0 || height <= 0) continue;
 
             cv::Rect box(x, y, width, height);
 
-            Detection detection;
-            detection.box = box;
-            detection.confidence = confidence;
-            detection.classId = classId;
+            Detection detection(box, confidence, classId);
 
             detections.push_back(detection);
         }
@@ -171,10 +168,7 @@ std::vector<Detection> decodeYolo11(
             box.width = static_cast<int>(ow * img_scale);
             box.height = static_cast<int>(oh * img_scale);
 
-            Detection detection;
-            detection.box = box;
-            detection.confidence = static_cast<float>(score);
-            detection.classId = class_id_point.y;
+            Detection detection(box, static_cast<float>(score), class_id_point.y);
 
             detections.push_back(detection);
         }

@@ -240,7 +240,7 @@ void mouseThreadFunction(MouseThread &mouseThread)
                     last_detection_version = ctx.detector->detectionVersion;
 
                     // LOG: Data has been copied.
-                    if (ctx.config.verbose) std::cout << "[Mouse] Copied to local. Local state: current_has_target=" << (current_has_target ? "true" : "false") << ", Pos: (" << current_target.box.x << ", " << current_target.box.y << ")" << std::endl;
+                    if (ctx.config.verbose) std::cout << "[Mouse] Copied to local. Local state: current_has_target=" << (current_has_target ? "true" : "false") << ", Pos: (" << current_target.x << ", " << current_target.y << ")" << std::endl;
                 }
             }
         }
@@ -266,21 +266,21 @@ void mouseThreadFunction(MouseThread &mouseThread)
         
         if (current_aiming && current_has_target) {
             // Validate target is within screen bounds
-            bool target_valid = (current_target.box.x >= 0 && 
-                                current_target.box.y >= 0 &&
-                                current_target.box.width > 0 && 
-                                current_target.box.height > 0 &&
-                                current_target.box.x + current_target.box.width <= ctx.config.detection_resolution &&
-                                current_target.box.y + current_target.box.height <= ctx.config.detection_resolution &&
+            bool target_valid = (current_target.x >= 0 && 
+                                current_target.y >= 0 &&
+                                current_target.width > 0 && 
+                                current_target.height > 0 &&
+                                current_target.x + current_target.width <= ctx.config.detection_resolution &&
+                                current_target.y + current_target.height <= ctx.config.detection_resolution &&
                                 current_target.confidence > 0.0f);
             
             if (target_valid) {
                 // Convert Detection to AimbotTarget using copied data
                 AimbotTarget target(
-                    current_target.box.x,
-                    current_target.box.y,
-                    current_target.box.width,
-                    current_target.box.height,
+                    current_target.x,
+                    current_target.y,
+                    current_target.width,
+                    current_target.height,
                     current_target.classId
                 );
                 
@@ -378,6 +378,7 @@ int main()
             std::cin.get();
             return -1;
         }
+        
 
         if (ctx.config.verbose) {
             std::cout << "--- Dependency Versions ---" << std::endl;

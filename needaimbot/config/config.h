@@ -148,6 +148,7 @@ public:
     float nms_threshold;
     float confidence_weight;
     float distance_weight;
+    float sticky_target_threshold;  // How much better a new target must be to switch (0.0-1.0)
     int max_detections;
     std::string postprocess;
     bool export_enable_fp8;
@@ -189,10 +190,6 @@ public:
     
      
 
-    
-    bool enable_target_locking;
-    float target_locking_iou_threshold;
-    int target_locking_max_lost_frames;
 
 
     

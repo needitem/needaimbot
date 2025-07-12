@@ -119,6 +119,18 @@ public:
     Detection m_bestTargetHost;
     bool m_hasBestTarget = false;
     int m_headClassId = -1;
+    
+    // For matching previous target
+    CudaBuffer<int> m_matchingIndexGpu;
+    CudaBuffer<float> m_matchingScoreGpu;
+    
+    // Target persistence to reduce flickering
+    int m_targetLostFrameCount = 0;
+    static constexpr int TARGET_LOST_THRESHOLD = 3; // Frames to wait before clearing target
+    
+    // Sticky target to prevent jumping between targets
+    float m_lastTargetScore = 0.0f;
+    static constexpr float STICKY_TARGET_THRESHOLD = 0.8f; // New target must be 20% better to switch
 
     // Target Tracking System
     std::vector<TrackedTarget> m_tracked_targets;
@@ -144,9 +156,24 @@ public:
     std::vector<unsigned char> m_host_ignore_flags_uchar;
     bool m_ignore_flags_need_update;
     
-    // CUDA streams and events
-    cudaStream_t m_computeStream;
-    cudaStream_t m_memoryStream;
+    // CUDA streams and events for pipelining
+    static constexpr int NUM_STREAMS = 3;
+    cudaStream_t m_streams[NUM_STREAMS];
+    cudaEvent_t m_events[NUM_STREAMS];
+    int m_currentStreamIdx = 0;
+    
+    // Pipeline buffers for each stream
+    struct PipelineBuffer {
+        cv::cuda::GpuMat resizedFrame;
+        CudaBuffer<float> inputBuffer;
+        CudaBuffer<float> outputBuffer;
+        bool inUse = false;
+    };
+    PipelineBuffer m_pipelineBuffers[NUM_STREAMS];
+    
+    // Legacy stream variables (for compatibility)
+    cudaStream_t& m_computeStream = m_streams[0];
+    cudaStream_t& m_memoryStream = m_streams[1];
     cudaEvent_t m_preprocessDone;
     cudaEvent_t m_inferenceDone;
     cudaEvent_t processingDone;

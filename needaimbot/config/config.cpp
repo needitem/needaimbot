@@ -87,7 +87,7 @@ bool Config::loadConfig(const std::string& filename)
         easynorecoilstrength = 0.0f;
         norecoil_step = 5.0f;
         norecoil_ms = 10.0f;
-        input_method = "WIN32";
+        input_method = "WIN32";  // Default value, will be overridden by config file if present
         easynorecoil_start_delay_ms = 0;
         easynorecoil_end_delay_ms = 0;
 
@@ -102,8 +102,6 @@ bool Config::loadConfig(const std::string& filename)
         
 
         
-        enable_target_locking = false;
-        
         use_predictive_controller = true;
         prediction_time_ms = 50.0f;
         kalman_process_noise = 10.0f;
@@ -115,9 +113,6 @@ bool Config::loadConfig(const std::string& filename)
         enable_velocity_history = true;
         velocity_history_size = 5;
         prediction_time_factor = 0.001f;
-        
-        target_locking_iou_threshold = 0.5f;
-        target_locking_max_lost_frames = 10;
 
         
         kp_x = 0.5; 
@@ -151,6 +146,7 @@ bool Config::loadConfig(const std::string& filename)
         nms_threshold = 0.50f;
         confidence_weight = 0.65f; 
         distance_weight = 0.35f; 
+        sticky_target_threshold = 0.8f; // Default: new target must be 20% better
         max_detections = 100;
         postprocess = "yolo10";
         export_enable_fp8 = false;
@@ -313,6 +309,7 @@ bool Config::loadConfig(const std::string& filename)
     nms_threshold = (float)get_double_ini("AI", "nms_threshold", 0.50);
     confidence_weight = (float)get_double_ini("AI", "confidence_weight", 0.65); 
     distance_weight = (float)get_double_ini("AI", "distance_weight", 0.35); 
+    sticky_target_threshold = (float)get_double_ini("AI", "sticky_target_threshold", 0.8);
     max_detections = get_long_ini("AI", "max_detections", 20);
     postprocess = get_string_ini("AI", "postprocess", "yolo10");
     export_enable_fp8 = get_bool_ini("AI", "export_enable_fp8", false);
@@ -406,10 +403,6 @@ bool Config::loadConfig(const std::string& filename)
     
     
 
-    
-    enable_target_locking = get_bool_ini("TargetLocking", "enable_target_locking", false);
-    target_locking_iou_threshold = (float)get_double_ini("TargetLocking", "target_locking_iou_threshold", 0.5);
-    target_locking_max_lost_frames = get_long_ini("TargetLocking", "target_locking_max_lost_frames", 10);
 
     // Validate and correct all configuration values
     ConfigValidator::validateAndCorrect(*this);
@@ -476,12 +469,6 @@ bool Config::saveConfig(const std::string& filename)
 
     
     
-    file << "[TargetLocking]\n";
-    file << "enable_target_locking = " << (enable_target_locking ? "true" : "false") << "\n";
-    file << std::fixed << std::setprecision(6);
-    file << "target_locking_iou_threshold = " << target_locking_iou_threshold << "\n";
-    file << std::noboolalpha;
-    file << "target_locking_max_lost_frames = " << target_locking_max_lost_frames << "\n\n";
     
     file << "[PID]\n";
     file << std::fixed << std::setprecision(6);
@@ -525,6 +512,7 @@ bool Config::saveConfig(const std::string& filename)
     file << "nms_threshold = " << nms_threshold << "\n";
     file << "confidence_weight = " << confidence_weight << "\n";
     file << "distance_weight = " << distance_weight << "\n";
+    file << "sticky_target_threshold = " << sticky_target_threshold << "\n";
     file << std::noboolalpha;
     file << "max_detections = " << max_detections << "\n";
     file << "postprocess = " << postprocess << "\n";

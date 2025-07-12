@@ -68,6 +68,7 @@ public:
         config.max_detections = std::clamp(config.max_detections, 1, Constants::MAX_DETECTIONS);
         config.distance_weight = std::clamp(config.distance_weight, 0.0f, 10.0f);
         config.confidence_weight = std::clamp(config.confidence_weight, 0.0f, 10.0f);
+        config.sticky_target_threshold = std::clamp(config.sticky_target_threshold, 0.0f, 1.0f);
 
         // Overlay settings
         config.overlay_opacity = std::clamp(
@@ -97,14 +98,12 @@ public:
             config.capture_method = "duplication";
         }
 
-        if (config.input_method != "arduino" &&
-            config.input_method != "hidguardian" &&
-            config.input_method != "windows" &&
-            config.input_method != "logitech" &&
-            config.input_method != "memprocfs" &&
-            config.input_method != "razer" &&
-            config.input_method != "kmbox") {
-            config.input_method = "windows";
+        if (config.input_method != "WIN32" &&
+            config.input_method != "GHUB" &&
+            config.input_method != "ARDUINO" &&
+            config.input_method != "RAZER" &&
+            config.input_method != "KMBOX") {
+            config.input_method = "WIN32";
         }
 
         // Validate head class name

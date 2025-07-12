@@ -33,10 +33,10 @@ __global__ __launch_bounds__(256, 8) void filterDetectionsByClassIdKernel(
 
         
         if (d_hsv_mask != nullptr) {
-            int x0 = det.box.x;
-            int y0 = det.box.y;
-            int x1 = x0 + det.box.width;
-            int y1 = y0 + det.box.height;
+            int x0 = det.x;
+            int y0 = det.y;
+            int x1 = x0 + det.width;
+            int y1 = y0 + det.height;
             int count = 0;
             for (int y = y0; y < y1; ++y) {
                 const unsigned char* row = d_hsv_mask + y * mask_pitch;

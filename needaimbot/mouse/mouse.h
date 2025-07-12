@@ -79,6 +79,8 @@ private:
     std::vector<Point2D> velocity_history_;
     std::vector<std::chrono::high_resolution_clock::time_point> velocity_time_history_;
     Point2D current_velocity_{0, 0};
+    Point2D current_acceleration_{0, 0};
+    Point2D last_velocity_{0, 0};
     
     // Movement accumulation members (moved from static variables)
     float accumulated_x_ = 0.0f;

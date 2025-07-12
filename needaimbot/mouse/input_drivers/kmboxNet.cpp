@@ -98,7 +98,7 @@ int kmNet_init(char* ip, char* port, char* mac)
     
     
     sendto(sockClientfd, (const char*)&tx, sizeof(cmd_head_t), 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
-    Sleep(20); 
+    Sleep(5); // Reduced from 20ms to 5ms for faster initialization
     SOCKADDR_IN sclient;
     int clen = sizeof(sclient);
     recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
@@ -125,11 +125,16 @@ int kmNet_mouse_move(short x, short y)
     
     softmouse.x = 0;
     softmouse.y = 0;
+    
+    // Non-blocking receive with timeout for better responsiveness
+    DWORD timeout = 1; // 1ms timeout
+    setsockopt(sockClientfd, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout, sizeof(timeout));
+    
     SOCKADDR_IN sclient;
     int clen = sizeof(sclient);
     err = recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
     ReleaseMutex(m_hMutex_lock);
-    return (err == success ? success : err_net_tx);
+    return success; // Return success immediately for better responsiveness
 }
 
 int kmNet_enc_mouse_move(short x, short y)

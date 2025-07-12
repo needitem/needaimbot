@@ -68,6 +68,49 @@ public:
     size_t size() const {
         return m_size;
     }
+    
+    // Async memory transfer methods
+    cudaError_t copyToAsync(T* dst, size_t count, cudaStream_t stream = 0) const {
+        if (!m_ptr || !dst || count > m_size) {
+            return cudaErrorInvalidValue;
+        }
+        return cudaMemcpyAsync(dst, m_ptr.get(), count * sizeof(T), 
+                              cudaMemcpyDeviceToHost, stream);
+    }
+    
+    cudaError_t copyFromAsync(const T* src, size_t count, cudaStream_t stream = 0) {
+        if (!m_ptr || !src || count > m_size) {
+            return cudaErrorInvalidValue;
+        }
+        return cudaMemcpyAsync(m_ptr.get(), src, count * sizeof(T), 
+                              cudaMemcpyHostToDevice, stream);
+    }
+    
+    cudaError_t copyToDeviceAsync(T* dst, size_t count, cudaStream_t stream = 0) const {
+        if (!m_ptr || !dst || count > m_size) {
+            return cudaErrorInvalidValue;
+        }
+        return cudaMemcpyAsync(dst, m_ptr.get(), count * sizeof(T), 
+                              cudaMemcpyDeviceToDevice, stream);
+    }
+    
+    // Pinned memory support for faster async transfers
+    static T* allocatePinned(size_t size) {
+        T* ptr = nullptr;
+        cudaError_t err = cudaMallocHost(&ptr, size * sizeof(T));
+        if (err != cudaSuccess) {
+            std::cerr << "[CUDA] Failed to allocate pinned memory: " 
+                      << cudaGetErrorString(err) << std::endl;
+            return nullptr;
+        }
+        return ptr;
+    }
+    
+    static void freePinned(T* ptr) {
+        if (ptr) {
+            cudaFreeHost(ptr);
+        }
+    }
 
 private:
     CudaUniquePtr<T> m_ptr;

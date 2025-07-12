@@ -74,18 +74,35 @@ void draw_target()
     ImGui::Checkbox("Auto Aim", &ctx.config.auto_aim);
 
     ImGui::Separator(); 
-    ImGui::TextColored(ImVec4(0.0f, 1.0f, 1.0f, 1.0f), "Target Locking Settings");
-    ImGui::Checkbox("Enable Target Locking", &ctx.config.enable_target_locking);
-    ImGui::SliderFloat("Locking IoU Threshold", &ctx.config.target_locking_iou_threshold, 0.01f, 1.0f, "%.2f");
+    ImGui::TextColored(ImVec4(0.0f, 1.0f, 1.0f, 1.0f), "Target Selection Settings");
+    
+    ImGui::SliderFloat("Distance Weight", &ctx.config.distance_weight, 0.0f, 10.0f, "%.2f");
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("How much a new detection must overlap with the locked target (0.01 - 1.0)");
+        ImGui::SetTooltip("How much to prioritize targets closer to crosshair (0.0 - 10.0)");
     }
-    ImGui::SliderInt("Max Lost Frames", &ctx.config.target_locking_max_lost_frames, 0, 60);
+    if (ImGui::IsItemDeactivatedAfterEdit()) {
+        ctx.config.saveConfig();
+    }
+    
+    ImGui::SliderFloat("Confidence Weight", &ctx.config.confidence_weight, 0.0f, 10.0f, "%.2f");
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Frames the target can be lost before lock is released (0-60)");
+        ImGui::SetTooltip("How much to prioritize targets with higher detection confidence (0.0 - 10.0)");
     }
+    if (ImGui::IsItemDeactivatedAfterEdit()) {
+        ctx.config.saveConfig();
+    }
+    
+    ImGui::SliderFloat("Sticky Target Threshold", &ctx.config.sticky_target_threshold, 0.0f, 1.0f, "%.2f");
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("How much better a new target must be to switch (0.0 = always switch, 1.0 = never switch)");
+    }
+    if (ImGui::IsItemDeactivatedAfterEdit()) {
+        ctx.config.saveConfig();
+    }
+    
 }
 
 void load_body_texture()
