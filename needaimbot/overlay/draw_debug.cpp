@@ -260,14 +260,14 @@ void draw_debug_frame()
                     for (const auto& det : host_detections)
                     {
                         // Skip invalid detections
-                        if (det.box.width <= 0 || det.box.height <= 0) {
+                        if (det.width <= 0 || det.height <= 0) {
                             continue;
                         }
                         
-                        ImVec2 p1(image_pos.x + det.box.x * debug_scale,
-                                  image_pos.y + det.box.y * debug_scale);
-                        ImVec2 p2(image_pos.x + (det.box.x + det.box.width) * debug_scale,
-                                  image_pos.y + (det.box.y + det.box.height) * debug_scale);
+                        ImVec2 p1(image_pos.x + det.x * debug_scale,
+                                  image_pos.y + det.y * debug_scale);
+                        ImVec2 p2(image_pos.x + (det.x + det.width) * debug_scale,
+                                  image_pos.y + (det.y + det.height) * debug_scale);
 
                         ImU32 color = IM_COL32(255, 0, 0, 255); 
 
@@ -511,22 +511,22 @@ void draw_debug()
                             const auto& det = host_detections[i];
                             
                             // Skip invalid detections
-                            if (det.box.width <= 0 || det.box.height <= 0) {
+                            if (det.width <= 0 || det.height <= 0) {
                                 continue;
                             }
                             
-                            ImVec2 p1(image_pos.x + det.box.x * debug_scale,
-                                      image_pos.y + det.box.y * debug_scale);
-                            ImVec2 p2(image_pos.x + (det.box.x + det.box.width) * debug_scale,
-                                      image_pos.y + (det.box.y + det.box.height) * debug_scale);
+                            ImVec2 p1(image_pos.x + det.x * debug_scale,
+                                      image_pos.y + det.y * debug_scale);
+                            ImVec2 p2(image_pos.x + (det.x + det.width) * debug_scale,
+                                      image_pos.y + (det.y + det.height) * debug_scale);
 
                             // Check if this is the best target (using overlay's synchronized data)
                             bool is_best_target = false;
                             if (has_target_for_overlay && 
-                                det.box.x == target_for_overlay.box.x &&
-                                det.box.y == target_for_overlay.box.y &&
-                                det.box.width == target_for_overlay.box.width &&
-                                det.box.height == target_for_overlay.box.height) {
+                                det.x == target_for_overlay.x &&
+                                det.y == target_for_overlay.y &&
+                                det.width == target_for_overlay.width &&
+                                det.height == target_for_overlay.height) {
                                 is_best_target = true;
                             }
 
@@ -581,10 +581,10 @@ void draw_debug()
         
         // Draw target offset if best target exists and is valid (using synchronized overlay data)
         if (has_target_for_overlay && 
-            target_for_overlay.box.width > 0 && 
-            target_for_overlay.box.height > 0) {
+            target_for_overlay.width > 0 && 
+            target_for_overlay.height > 0) {
             auto& target = target_for_overlay;
-            float target_center_x = image_pos.x + (target.box.x + target.box.width / 2.0f) * debug_scale;
+            float target_center_x = image_pos.x + (target.x + target.width / 2.0f) * debug_scale;
             
             // Calculate Y offset based on head/body settings
             float y_offset;
@@ -597,7 +597,7 @@ void draw_debug()
             }
             y_offset = is_head ? ctx.config.head_y_offset : ctx.config.body_y_offset;
             
-            float target_center_y = image_pos.y + (target.box.y + target.box.height * y_offset) * debug_scale;
+            float target_center_y = image_pos.y + (target.y + target.height * y_offset) * debug_scale;
             
             // Draw line from center to target
             draw_list->AddLine(ImVec2(center_x, center_y), ImVec2(target_center_x, target_center_y), 

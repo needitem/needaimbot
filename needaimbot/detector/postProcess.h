@@ -8,11 +8,33 @@
 
 
 
+// Cache-optimized Detection structure
 struct Detection
 {
-    cv::Rect box;
-    float confidence;
-    int classId;
+    // Most frequently accessed members first
+    float confidence;     // 4 bytes
+    int classId;         // 4 bytes
+    
+    // Box coordinates packed together
+    int x;               // 4 bytes
+    int y;               // 4 bytes
+    int width;           // 4 bytes
+    int height;          // 4 bytes
+    
+    // Helper methods for cv::Rect compatibility
+    cv::Rect box() const { return cv::Rect(x, y, width, height); }
+    void setBox(const cv::Rect& rect) {
+        x = rect.x;
+        y = rect.y;
+        width = rect.width;
+        height = rect.height;
+    }
+    
+    // Constructor for compatibility
+    Detection() : confidence(0), classId(0), x(0), y(0), width(0), height(0) {}
+    Detection(const cv::Rect& rect, float conf, int cls) 
+        : confidence(conf), classId(cls), x(rect.x), y(rect.y), 
+          width(rect.width), height(rect.height) {}
 };
 
 
@@ -26,6 +48,8 @@ void NMSGpu(
     int* d_output_count_gpu,           
     int max_output_detections,         
     float nmsThreshold,
+    int frame_width,
+    int frame_height,
     
     int* d_x1,
     int* d_y1,

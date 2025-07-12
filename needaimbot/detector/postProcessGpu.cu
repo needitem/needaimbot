@@ -25,16 +25,42 @@ __global__ void initKeepKernel(bool* d_keep, int n) {
 }
 
 
+// Spatial indexing constants
+__constant__ int GRID_SIZE = 10;  // 10x10 spatial grid
+
+__device__ inline int getSpatialCell(int x, int y, int frame_width, int frame_height) {
+    int cellX = min(GRID_SIZE - 1, (x * GRID_SIZE) / frame_width);
+    int cellY = min(GRID_SIZE - 1, (y * GRID_SIZE) / frame_height);
+    return cellY * GRID_SIZE + cellX;
+}
+
 __global__ __launch_bounds__(256, 4) void calculateIoUKernel(
     const int* __restrict__ d_x1, const int* __restrict__ d_y1, 
     const int* __restrict__ d_x2, const int* __restrict__ d_y2,
     const float* __restrict__ d_areas, float* __restrict__ d_iou_matrix,
-    int num_boxes, float nms_threshold) 
+    int num_boxes, float nms_threshold, int frame_width, int frame_height) 
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int idy = blockIdx.y * blockDim.y + threadIdx.y;
     
     if (idx < num_boxes && idy < num_boxes && idx < idy) {
+        // Spatial proximity check - only compute IoU for nearby boxes
+        int cell1 = getSpatialCell((d_x1[idx] + d_x2[idx]) / 2, 
+                                  (d_y1[idx] + d_y2[idx]) / 2, 
+                                  frame_width, frame_height);
+        int cell2 = getSpatialCell((d_x1[idy] + d_x2[idy]) / 2, 
+                                  (d_y1[idy] + d_y2[idy]) / 2, 
+                                  frame_width, frame_height);
+        
+        // Skip IoU calculation if boxes are far apart
+        int cellDiffX = abs(cell1 % GRID_SIZE - cell2 % GRID_SIZE);
+        int cellDiffY = abs(cell1 / GRID_SIZE - cell2 / GRID_SIZE);
+        if (cellDiffX > 1 || cellDiffY > 1) {
+            d_iou_matrix[idx * num_boxes + idy] = 0.0f;
+            d_iou_matrix[idy * num_boxes + idx] = 0.0f;
+            return;
+        }
+        
         // Use fast math operations
         int x1 = max(d_x1[idx], d_x1[idy]);
         int y1 = max(d_y1[idx], d_y1[idy]);
@@ -101,13 +127,13 @@ __global__ void extractDataKernel(
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {
         const Detection& det = d_input_detections[idx];
-        d_x1[idx] = det.box.x;
-        d_y1[idx] = det.box.y;
-        d_x2[idx] = det.box.x + det.box.width;
-        d_y2[idx] = det.box.y + det.box.height;
+        d_x1[idx] = det.x;
+        d_y1[idx] = det.y;
+        d_x2[idx] = det.x + det.width;
+        d_y2[idx] = det.y + det.height;
         
-        float width = max(0.0f, (float)det.box.width); 
-        float height = max(0.0f, (float)det.box.height);
+        float width = max(0.0f, (float)det.width); 
+        float height = max(0.0f, (float)det.height);
         d_areas[idx] = width * height; 
         d_scores[idx] = det.confidence;
         d_classIds[idx] = det.classId; 
@@ -122,6 +148,8 @@ void NMSGpu(
     int* d_output_count_gpu,
     int max_output_detections,
     float nmsThreshold,
+    int frame_width,
+    int frame_height,
     
     int* d_x1,
     int* d_y1,
@@ -177,7 +205,7 @@ void NMSGpu(
         dim3 grid_iou((input_num_detections + block_iou.x - 1) / block_iou.x,
                        (input_num_detections + block_iou.y - 1) / block_iou.y);
         calculateIoUKernel<<<grid_iou, block_iou, 0, stream>>>( 
-            d_x1, d_y1, d_x2, d_y2, d_areas, d_iou_matrix, input_num_detections, nmsThreshold
+            d_x1, d_y1, d_x2, d_y2, d_areas, d_iou_matrix, input_num_detections, nmsThreshold, frame_width, frame_height
         );
         err = cudaGetLastError(); if (err != cudaSuccess) goto cleanup;
     }
@@ -279,17 +307,17 @@ __global__ void decodeYolo10GpuKernel(
         if (confidence > conf_threshold) {
             int classId = static_cast<int>(readOutputValue(d_raw_output, output_type, base_idx + 5));
 
-            
-            float cx = readOutputValue(d_raw_output, output_type, base_idx + 0);
-            float cy = readOutputValue(d_raw_output, output_type, base_idx + 1);
+            // YOLO10 outputs x1, y1, x2, y2 (top-left and bottom-right corners)
+            float x1 = readOutputValue(d_raw_output, output_type, base_idx + 0);
+            float y1 = readOutputValue(d_raw_output, output_type, base_idx + 1);
             float x2 = readOutputValue(d_raw_output, output_type, base_idx + 2); 
             float y2 = readOutputValue(d_raw_output, output_type, base_idx + 3);
 
-            
-            int x = static_cast<int>(cx * img_scale);
-            int y = static_cast<int>(cy * img_scale);
-            int width = static_cast<int>((x2 - cx) * img_scale);
-            int height = static_cast<int>((y2 - cy) * img_scale);
+            // Convert to pixel coordinates
+            int x = static_cast<int>(x1 * img_scale);
+            int y = static_cast<int>(y1 * img_scale);
+            int width = static_cast<int>((x2 - x1) * img_scale);
+            int height = static_cast<int>((y2 - y1) * img_scale);
 
             
             if (width > 0 && height > 0) {
@@ -299,10 +327,10 @@ __global__ void decodeYolo10GpuKernel(
                 
                 if (write_idx < max_detections) {
                     Detection& det = d_decoded_detections[write_idx];
-                    det.box.x = x;
-                    det.box.y = y;
-                    det.box.width = width;
-                    det.box.height = height;
+                    det.x = x;
+                    det.y = y;
+                    det.width = width;
+                    det.height = height;
                     det.confidence = confidence;
                     det.classId = classId;
                 } else {
@@ -386,10 +414,10 @@ __global__ void decodeYolo11GpuKernel(
                 
                 if (write_idx < max_detections) {
                     Detection& det = d_decoded_detections[write_idx];
-                    det.box.x = x;
-                    det.box.y = y;
-                    det.box.width = width;
-                    det.box.height = height;
+                    det.x = x;
+                    det.y = y;
+                    det.width = width;
+                    det.height = height;
                     det.confidence = max_score;
                     det.classId = max_class_id;
                 } else {

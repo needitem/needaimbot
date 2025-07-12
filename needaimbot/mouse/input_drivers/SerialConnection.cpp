@@ -67,16 +67,13 @@ void SerialConnection::write(const std::string& data)
     if (!is_open_)
         return;
 
-    static thread_local std::string buffer;
-    buffer.reserve(64);
-    
     try {
-        buffer = data;
-        size_t bytes_written = serial_.write(buffer);
-        if (bytes_written != buffer.length()) {
-            std::cerr << "[Arduino] Warning: Serial write might be incomplete. Expected " << buffer.length() << ", wrote " << bytes_written << std::endl;
+        size_t bytes_written = serial_.write(data);
+        if (bytes_written != data.length()) {
+            std::cerr << "[Arduino] Warning: Serial write might be incomplete. Expected " << data.length() << ", wrote " << bytes_written << std::endl;
         }
-        buffer.clear();
+        // Flush immediately for lower latency
+        serial_.flush();
     } catch (const std::exception& e) {
         std::cerr << "[Arduino] Error during serial write: " << e.what() << std::endl;
         is_open_ = false;
@@ -265,7 +262,7 @@ void SerialConnection::listeningThreadFunc()
             }
             else
             {
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
         }
         catch (...)
