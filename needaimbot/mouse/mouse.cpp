@@ -397,9 +397,10 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     float move_x = smoothed_movement_result.x();
     float move_y = smoothed_movement_result.y();
 
-    // Apply dead zone
-    if (std::abs(move_x) < DEAD_ZONE) move_x = 0.0f;
-    if (std::abs(move_y) < DEAD_ZONE) move_y = 0.0f;
+    // Apply dead zone with adaptive threshold based on error magnitude
+    float adaptive_dead_zone = DEAD_ZONE * (1.0f + std::min(1.0f, 10.0f / (error_magnitude + 1.0f)));
+    if (std::abs(move_x) < adaptive_dead_zone) move_x = 0.0f;
+    if (std::abs(move_y) < adaptive_dead_zone) move_y = 0.0f;
     
     // Process accumulated movement
     auto [dx_int, dy_int] = processAccumulatedMovement(move_x, move_y);
@@ -703,6 +704,22 @@ Eigen::Vector2f MouseThread::applyMovementSmoothing(const Eigen::Vector2f& raw_m
     float smoothing = smoothing_factor;
     if (error_magnitude > LARGE_MOVEMENT_THRESHOLD) {
         smoothing = std::min(MAX_ADDITIONAL_SMOOTHING, smoothing + (error_magnitude - LARGE_MOVEMENT_THRESHOLD) * SMOOTHING_INCREASE_FACTOR);
+    }
+    
+    // Enhanced smoothing with jitter reduction
+    // Apply stronger smoothing to small, rapid movements (likely jitter)
+    float movement_magnitude = raw_movement.norm();
+    if (movement_magnitude < 5.0f && movement_magnitude > 0.1f) {
+        // Small movements get extra smoothing to reduce jitter
+        smoothing = std::min(0.95f, smoothing + 0.2f);
+    }
+    
+    // Velocity-based smoothing - smooth more when velocity changes rapidly
+    Eigen::Vector2f velocity_change = raw_movement - smoothed_movement;
+    float velocity_change_magnitude = velocity_change.norm();
+    if (velocity_change_magnitude > 10.0f) {
+        // Rapid changes get smoothed more
+        smoothing = std::min(0.9f, smoothing + 0.1f);
     }
     
     smoothed_movement.x() = smoothing * smoothed_movement.x() + (1.0f - smoothing) * raw_movement.x();
