@@ -292,6 +292,8 @@ bool Config::loadConfig(const std::string& filename)
     enable_velocity_history = get_bool_ini("PID", "enable_velocity_history", true);
     velocity_history_size = get_long_ini("PID", "velocity_history_size", 5);
     prediction_time_factor = (float)get_double_ini("PID", "prediction_time_factor", 0.001);
+    
+    // Hybrid aim control settings
 
     arduino_baudrate = get_long_ini("Arduino", "arduino_baudrate", 115200);
     arduino_port = get_string_ini("Arduino", "arduino_port", "COM0");

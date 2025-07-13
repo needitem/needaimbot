@@ -153,9 +153,11 @@ void MouseThread::updateConfig(
     float norecoil_ms
     )
 {
+    auto& ctx = AppContext::getInstance();
     {
         std::lock_guard<std::mutex> lock(member_data_mutex_); 
         initializeScreen(resolution, bScope_multiplier, norecoil_ms);
+        
     }
     pid_controller->updateSeparatedParameters(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
     
@@ -368,30 +370,89 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     // Calculate error magnitude first for adaptive control
     float error_magnitude = std::sqrt(error_x * error_x + error_y * error_y);
     
-    Eigen::Vector2f error(error_x, error_y);
-    auto pid_start_time = std::chrono::steady_clock::now();
+    float move_x, move_y;
     
-    // Use adaptive or standard PID based on config
-    Eigen::Vector2f pid_output;
-    if (ctx.config.enable_adaptive_pid) {
-        pid_output = pid_controller->calculateAdaptive(error, error_magnitude);
-    } else {
-        pid_output = pid_controller->calculate(error);
-    }
+    // Use standard PID controller
+    {
+        Eigen::Vector2f error(error_x, error_y);
+        auto pid_start_time = std::chrono::steady_clock::now();
         
-    auto pid_end_time = std::chrono::steady_clock::now();
-    float pid_duration_ms = std::chrono::duration<float, std::milli>(pid_end_time - pid_start_time).count();
-    ctx.g_current_pid_calc_time_ms.store(pid_duration_ms, std::memory_order_relaxed);
-    ctx.add_to_history(ctx.g_pid_calc_time_history, pid_duration_ms, ctx.g_pid_calc_history_mutex);
+        // Use adaptive or standard PID based on config
+        Eigen::Vector2f pid_output;
+        if (ctx.config.enable_adaptive_pid) {
+            pid_output = pid_controller->calculateAdaptive(error, error_magnitude);
+        } else {
+            pid_output = pid_controller->calculate(error);
+        }
+            
+        auto pid_end_time = std::chrono::steady_clock::now();
+        float pid_duration_ms = std::chrono::duration<float, std::milli>(pid_end_time - pid_start_time).count();
+        ctx.g_current_pid_calc_time_ms.store(pid_duration_ms, std::memory_order_relaxed);
+        ctx.add_to_history(ctx.g_pid_calc_time_history, pid_duration_ms, ctx.g_pid_calc_history_mutex);
 
-    // Calculate adaptive scale and apply to movement
-    float adaptive_scale = calculateAdaptiveScale(error_magnitude);
-    float raw_move_x = pid_output.x() * current_move_scale_x * adaptive_scale;
-    float raw_move_y = pid_output.y() * current_move_scale_y * adaptive_scale;
+        // Calculate adaptive scale and apply to movement
+        float adaptive_scale = calculateAdaptiveScale(error_magnitude);
+        float raw_move_x = pid_output.x() * current_move_scale_x * adaptive_scale;
+        float raw_move_y = pid_output.y() * current_move_scale_y * adaptive_scale;
+        
+        move_x = raw_move_x;
+        move_y = raw_move_y;
+        
+        // Enhanced predictive braking system with look-ahead
+        // Calculate current velocity (pixels per frame)
+        float current_velocity = std::sqrt(move_x * move_x + move_y * move_y);
+        
+        // Project where we'll be after this movement
+        float projected_error_x = error_x - move_x;
+        float projected_error_y = error_y - move_y;
+        float projected_distance = std::sqrt(projected_error_x * projected_error_x + projected_error_y * projected_error_y);
+        
+        // If we're going to overshoot (projected distance > current distance), brake hard
+        if (projected_distance > error_magnitude && error_magnitude < 15.0f) {
+            // We're about to overshoot - emergency brake
+            float emergency_brake = 0.2f + (error_magnitude / 15.0f) * 0.3f;  // 0.2 to 0.5
+            move_x *= emergency_brake;
+            move_y *= emergency_brake;
+        }
+        else if (error_magnitude < 25.0f) {
+            // Close range - calculate precise stopping distance
+            const float DECELERATION_RATE = 0.7f;  // How quickly we can decelerate per frame
+            
+            // Calculate frames needed to stop at current velocity
+            float frames_to_stop = current_velocity / (current_velocity * (1.0f - DECELERATION_RATE));
+            float stopping_distance = current_velocity * frames_to_stop * 0.5f;  // Average velocity during deceleration
+            
+            // Start braking earlier for high velocity movements
+            if (stopping_distance > error_magnitude * 0.6f) {
+                // Smooth braking based on how much we need to slow down
+                float brake_strength = 1.0f - (error_magnitude / stopping_distance);
+                float brake_factor = 1.0f - (brake_strength * brake_strength * 0.7f);  // Quadratic for smooth braking
+                move_x *= brake_factor;
+                move_y *= brake_factor;
+            }
+        }
+    }
+
+    // Store previous movement for direction change detection
+    static float prev_move_x = 0.0f;
+    static float prev_move_y = 0.0f;
     
-    float move_x = raw_move_x;
-    float move_y = raw_move_y;
-
+    // Detect direction reversal (sign change) which indicates potential overshoot
+    bool x_direction_changed = (prev_move_x * move_x < 0) && (std::abs(prev_move_x) > 1.0f);
+    bool y_direction_changed = (prev_move_y * move_y < 0) && (std::abs(prev_move_y) > 1.0f);
+    
+    if (x_direction_changed && error_magnitude < 20.0f) {
+        // Direction reversed on X axis - likely overshooting
+        move_x *= 0.3f;  // Drastically reduce but don't stop completely
+    }
+    if (y_direction_changed && error_magnitude < 20.0f) {
+        // Direction reversed on Y axis - likely overshooting
+        move_y *= 0.3f;  // Drastically reduce but don't stop completely
+    }
+    
+    prev_move_x = move_x;
+    prev_move_y = move_y;
+    
     // Apply dead zone with adaptive threshold based on error magnitude
     float adaptive_dead_zone = DEAD_ZONE * (1.0f + std::min(1.0f, 10.0f / (error_magnitude + 1.0f)));
     if (std::abs(move_x) < adaptive_dead_zone) move_x = 0.0f;
@@ -789,15 +850,19 @@ Point2D MouseThread::applyLatencyCompensation(const Point2D& predicted_pos, cons
 
 float MouseThread::calculateAdaptiveScale(float error_magnitude) const
 {
-    // Adaptive sensitivity scaling based on error magnitude
-    // Close range: higher precision (lower sensitivity)
-    // Far range: faster movement (higher sensitivity)
-    if (error_magnitude < SMALL_ERROR_THRESHOLD) {
-        return CLOSE_RANGE_SCALE; // Higher precision for small errors
+    // Maintain full speed until very close, then gentle reduction
+    // This keeps movement fast while providing precision at the end
+    
+    if (error_magnitude < 10.0f) {
+        // Very close range - slight reduction for precision
+        // 10px: 1.0x, 5px: 0.85x, 0px: 0.7x
+        return 0.7f + (error_magnitude / 10.0f) * 0.3f;
     } else if (error_magnitude < MEDIUM_ERROR_THRESHOLD) {
-        return NORMAL_RANGE_SCALE; // Normal sensitivity
+        // Normal range - maintain full speed
+        return NORMAL_RANGE_SCALE;
     } else {
-        return FAR_RANGE_SCALE; // Faster movement for large errors
+        // Far range - slightly increased sensitivity for large corrections
+        return std::min(FAR_RANGE_SCALE, 1.0f + (error_magnitude - MEDIUM_ERROR_THRESHOLD) * 0.001f);
     }
 }
 
@@ -847,6 +912,7 @@ void MouseThread::resetAccumulatedStates()
     if (pid_controller) {
         pid_controller->reset();
     }
+    
     
     // Reset smoothed movement
     smoothed_movement = Eigen::Vector2f::Zero();
