@@ -107,6 +107,19 @@ Eigen::Vector2f PIDController2D::calculateAdaptive(const Eigen::Vector2f &error,
         adaptive_kd_y *= 0.5f;
     }
     
+    // Adaptive integral reset to prevent overshoot
+    // When approaching target (error decreasing), reduce integral accumulation
+    if (error_magnitude < 10.0f && prev_error.norm() > error.norm()) {
+        // Target is getting closer - reduce integral to prevent overshoot
+        integral *= 0.5f;
+    }
+    
+    // Reset integral completely if very close and moving away (overshooting)
+    if (error_magnitude < 5.0f && prev_error.norm() < error.norm()) {
+        // We're very close but moving away - likely overshooting
+        integral = Eigen::Vector2f::Zero();
+    }
+    
     // Reduce integral windup for large errors
     float integral_scale = error_magnitude > 30.0f ? 0.5f : 1.0f;
     constexpr float INTEGRAL_CLAMP = 100.0f;

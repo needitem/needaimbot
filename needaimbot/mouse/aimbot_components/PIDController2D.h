@@ -32,6 +32,10 @@ public:
 
     
     void updateSeparatedParameters(float kp_x, float ki_x, float kd_x, float kp_y, float ki_y, float kd_y);
+    
+    // Getters for gains (needed by HybridAimController)
+    float getKpX() const { return kp_x; }
+    float getKpY() const { return kp_y; }
 };
 
 #endif 

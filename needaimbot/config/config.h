@@ -126,6 +126,7 @@ public:
     bool enable_velocity_history;
     int velocity_history_size;
     float prediction_time_factor;
+    
 
     
     int arduino_baudrate;

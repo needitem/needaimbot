@@ -39,6 +39,7 @@ private:
     std::unique_ptr<InputMethod> input_method;
     std::mutex input_method_mutex;
     mutable std::mutex member_data_mutex_;
+    
 
     
     ErrorTrackingCallback error_callback;
@@ -138,6 +139,7 @@ public:
                       float kp_y, float ki_y, float kd_y,
                       float bScope_multiplier,
                       float norecoil_ms);
+    
 
     Eigen::Vector2f calculateMovement(const Eigen::Vector2f &target_pos);
     bool checkTargetInScope(float target_x, float target_y, float target_w, float target_h, float reduction_factor);

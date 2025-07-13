@@ -88,6 +88,7 @@ void draw_stats() {
         draw_stat_plot("Inference Time", get_history_copy(ctx.g_inference_time_history, ctx.g_inference_history_mutex), ctx.g_current_inference_time_ms.load(std::memory_order_relaxed), "ms");
         draw_stat_plot("Mouse Movement Time", get_history_copy(ctx.g_input_send_time_history, ctx.g_input_send_history_mutex), ctx.g_current_input_send_time_ms.load(std::memory_order_relaxed), "ms");
         draw_stat_plot("Total Cycle Time", get_history_copy(ctx.g_detector_cycle_time_history, ctx.g_detector_cycle_history_mutex), ctx.g_current_detector_cycle_time_ms.load(std::memory_order_relaxed), "ms");
+        
 
         ImGui::EndTable();
     }

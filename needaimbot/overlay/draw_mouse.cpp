@@ -138,6 +138,7 @@ static void draw_advanced_settings()
         ctx.config.saveConfig();
     }
     
+    
     UIHelpers::EndCard();
 }
 
