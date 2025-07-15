@@ -54,6 +54,16 @@ void draw_profile()
             if (ImGui::Selectable(profile_list_cstrs[n], is_selected))
             {
                 selected_profile_index = n;
+                
+                // Auto-load selected profile
+                std::string profileToLoad = profile_list[selected_profile_index];
+                if (ctx.config.loadProfile(profileToLoad))
+                {
+                    status_message = "Loaded profile: " + profileToLoad;
+                } else {
+                    status_message = "Error loading profile: " + profileToLoad;
+                    refresh_profiles();
+                }
             }
             if (is_selected)
                 ImGui::SetItemDefaultFocus();
