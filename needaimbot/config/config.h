@@ -77,6 +77,8 @@ public:
     bool ignore_third_person;
     bool shooting_range_targets;
     bool auto_aim;
+    bool enable_aimbot;
+    bool enable_triggerbot;
 
     
     float crosshair_offset_x;

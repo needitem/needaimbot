@@ -77,6 +77,8 @@ bool Config::loadConfig(const std::string& filename)
         ignore_third_person = false;
         shooting_range_targets = false;
         auto_aim = false;
+        enable_aimbot = true;
+        enable_triggerbot = false;
 
         
         crosshair_offset_x = 0.0f;
@@ -250,6 +252,8 @@ bool Config::loadConfig(const std::string& filename)
     ignore_third_person = get_bool_ini("Target", "ignore_third_person", false);
     shooting_range_targets = get_bool_ini("Target", "shooting_range_targets", false);
     auto_aim = get_bool_ini("Target", "auto_aim", false);
+    enable_aimbot = get_bool_ini("Target", "enable_aimbot", true);
+    enable_triggerbot = get_bool_ini("Target", "enable_triggerbot", false);
 
     crosshair_offset_x = (float)get_double_ini("Target", "crosshair_offset_x", 0.0);
     crosshair_offset_y = (float)get_double_ini("Target", "crosshair_offset_y", 0.0);
@@ -444,7 +448,9 @@ bool Config::saveConfig(const std::string& filename)
     file << std::noboolalpha;
     file << "ignore_third_person = " << (ignore_third_person ? "true" : "false") << "\n";
     file << "shooting_range_targets = " << (shooting_range_targets ? "true" : "false") << "\n";
-    file << "auto_aim = " << (auto_aim ? "true" : "false") << "\n\n";
+    file << "auto_aim = " << (auto_aim ? "true" : "false") << "\n";
+    file << "enable_aimbot = " << (enable_aimbot ? "true" : "false") << "\n";
+    file << "enable_triggerbot = " << (enable_triggerbot ? "true" : "false") << "\n\n";
 
     file << "[Mouse]\n";
     file << "easynorecoil = " << (easynorecoil ? "true" : "false") << "\n";
