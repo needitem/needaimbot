@@ -550,7 +550,7 @@ void OverlayThread()
                         
                         // Target offset and selection settings
                         UIHelpers::BeginSettingsSection("Target Selection", "Configure how targets are selected and prioritized");
-                        draw_targeting();
+                        // draw_targeting() removed - functionality moved elsewhere
                         UIHelpers::EndSettingsSection();
                         
                         ImGui::EndChild();

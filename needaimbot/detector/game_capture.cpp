@@ -10,20 +10,40 @@ GameCapture::GameCapture(int fw, int fh, int sw, int sh, const std::string& game
     hook_restart(nullptr), hook_stop(nullptr), hook_ready(nullptr), hook_exit(nullptr), hook_init(nullptr),
     keepalive_mutex(nullptr), hook_info_map(nullptr), hook_data_map(nullptr),
     shared_hook_info(nullptr), shared_shtex_data(nullptr),
-	pDevice(nullptr), pContext(nullptr), pSharedResource(nullptr), pStagingTexture(nullptr), texture_mutexes{ nullptr, nullptr }
+	pDevice(nullptr), pContext(nullptr), pSharedResource(nullptr), pStagingTexture(nullptr), texture_mutexes{ nullptr, nullptr },
+	pStagingTexture2(nullptr), FrameBuffer(nullptr), FrameBuffer2(nullptr)
 {
+	// Pre-allocate frame pool
+	frame_pool.reserve(max_frame_pool_size);
+	
 	if (!initialize()) {
 		std::cout << "ERROR: GameCapture initialization failed for game: " << game_name << std::endl;
 		throw std::runtime_error("GameCapture initialization failed");
 	}
+	
+	// Start capture thread if async is enabled
+	if (async_capture_enabled) {
+		capture_running = true;
+		capture_thread = std::thread(&GameCapture::capture_thread_func, this);
+	}
 }
 
 GameCapture::~GameCapture() {
+    // Stop capture thread
+    if (capture_running) {
+        capture_running = false;
+        capture_cv.notify_all();
+        if (capture_thread.joinable()) {
+            capture_thread.join();
+        }
+    }
+    
     if (hook_stop) {
         SetEvent(hook_stop);
         CloseHandle(hook_stop);
     }
     if (pStagingTexture) pStagingTexture->Release();
+    if (pStagingTexture2) pStagingTexture2->Release();
     if (pSharedResource) pSharedResource->Release();
     if (pContext) pContext->Release();
     if (pDevice) pDevice->Release();
@@ -39,6 +59,9 @@ GameCapture::~GameCapture() {
     if (hook_exit) CloseHandle(hook_exit);
     if (hook_init) CloseHandle(hook_init);
     if (keepalive_mutex) CloseHandle(keepalive_mutex);
+    
+    // Clean up allocated buffers
+    cleanup_buffers();
 
     hook_stop = nullptr;
     hook_ready = nullptr;
@@ -224,59 +247,99 @@ bool GameCapture::initialize() {
         std::cout << "ERROR: CreateTexture2D (pDevice) failed!" << std::endl;
         return false;
     }
+    
+    // Create second staging texture for double buffering
+    hr = pDevice->CreateTexture2D(&desc, nullptr, &pStagingTexture2);
+    if (FAILED(hr)) {
+        std::cout << "WARNING: Failed to create second staging texture, double buffering disabled" << std::endl;
+        pStagingTexture2 = nullptr;
+    }
 
     sourceRegion = get_region();
+    
+    // Pre-allocate frame buffers
+    int row_size = width * 4;
+    int data_size = height * row_size;
+    FrameBuffer = allocate_buffer(data_size);
+    if (pStagingTexture2) {
+        FrameBuffer2 = allocate_buffer(data_size);
+    }
 
 	std::cout << "GameCapture initialized successfully for game: " << game_name << std::endl;
     return true;
 }
 
 Image GameCapture::get_frame() {
-    Image img = {};
+    if (async_capture_enabled && capture_running) {
+        // Use async capture thread
+        std::unique_lock<std::mutex> lock(capture_mutex);
+        if (new_frame_ready) {
+            new_frame_ready = false;
+            return ready_frame;
+        }
+        return Image(); // Return empty if no new frame
+    }
+    
+    // Synchronous capture
+    return get_frame_internal();
+}
+
+Image GameCapture::get_frame_internal() {
+    Image img = get_pooled_frame();
 
     if (WaitForSingleObject(hook_restart, 0) == WAIT_OBJECT_0) {
         if (!initialize()) {
             std::cout << "ERROR: Re-initialization failed" << std::endl;
-            return img;
+            return_to_pool(img);
+            return Image();
         }
     }
 
     if (!pContext || !pSharedResource || !pStagingTexture) {
         std::cout << "ERROR: D3D resources not initialized!" << std::endl;
-        return img;
+        return_to_pool(img);
+        return Image();
     }
 
-    pContext->CopySubresourceRegion(pStagingTexture, 0, 0, 0, 0, pSharedResource, 0, &sourceRegion);
+    // Use double buffering if available
+    int buffer_idx = current_staging_buffer.load();
+    ID3D11Texture2D* staging = (buffer_idx == 0 || !pStagingTexture2) ? pStagingTexture : pStagingTexture2;
+    BYTE* buffer = (buffer_idx == 0 || !FrameBuffer2) ? FrameBuffer : FrameBuffer2;
+    
+    // Toggle buffer for next frame
+    if (pStagingTexture2) {
+        current_staging_buffer = 1 - buffer_idx;
+    }
+
+    // Copy from shared resource to staging texture
+    pContext->CopySubresourceRegion(staging, 0, 0, 0, 0, pSharedResource, 0, &sourceRegion);
 
     D3D11_MAPPED_SUBRESOURCE mapped = {};
-    HRESULT hr = pContext->Map(pStagingTexture, 0, D3D11_MAP_READ, 0, &mapped);
+    HRESULT hr = pContext->Map(staging, 0, D3D11_MAP_READ, 0, &mapped);
     if (FAILED(hr)) {
         std::cout << "ERROR: Map (pContext) failed!" << std::endl;
-        return img;
+        return_to_pool(img);
+        return Image();
     }
 
     int row_size = width * 4;  
-    int data_size = height * row_size;
-    static int prev_data_size = 0;
-
-    if (!FrameBuffer || prev_data_size != data_size) {
-        if (FrameBuffer)
-            free(FrameBuffer);
-
-        FrameBuffer = (BYTE*)malloc(data_size);
-        prev_data_size = data_size;
+    
+    // Optimized memory copy - copy entire buffer at once if pitch matches
+    if (mapped.RowPitch == row_size) {
+        memcpy(buffer, mapped.pData, height * row_size);
+    } else {
+        // Row-by-row copy only if pitch doesn't match
+        for (int y = 0; y < height; ++y) {
+            memcpy(buffer + y * row_size, (BYTE*)mapped.pData + y * mapped.RowPitch, row_size);
+        }
     }
 
-    for (int y = 0; y < height; ++y) {
-        memcpy(FrameBuffer + y * row_size, (BYTE*)mapped.pData + y * mapped.RowPitch, row_size);
-    }
-
-    pContext->Unmap(pStagingTexture, 0);
+    pContext->Unmap(staging, 0);
 
     img.width = width;
     img.height = height;
     img.pitch = row_size;
-    img.data = FrameBuffer;
+    img.data = buffer;
 
     return img;
 }
@@ -346,8 +409,9 @@ std::string GameCapture::run_get_graphics_offsets() {
 }
 
 bool GameCapture::SaveBMP(const char* filename, const Image& img) {
-    FILE* f = fopen(filename, "wb");
-    if (!f) return false;
+    FILE* f = nullptr;
+    errno_t err = fopen_s(&f, filename, "wb");
+    if (err != 0 || !f) return false;
 
     int padding = (4 - (img.width * 3) % 4) % 4;
     int rowSize = img.width * 3 + padding;
@@ -383,6 +447,66 @@ bool GameCapture::SaveBMP(const char* filename, const Image& img) {
 
     fclose(f);
     return true;
+}
+
+// Frame pool management
+Image GameCapture::get_pooled_frame() {
+    std::lock_guard<std::mutex> lock(frame_pool_mutex);
+    
+    if (!frame_pool.empty()) {
+        Image frame = frame_pool.back();
+        frame_pool.pop_back();
+        return frame;
+    }
+    
+    // Allocate new frame if pool is empty
+    return Image(width, height, width * 4);
+}
+
+void GameCapture::return_to_pool(const Image& img) {
+    if (img.width == 0 || img.height == 0) return;
+    
+    std::lock_guard<std::mutex> lock(frame_pool_mutex);
+    
+    if (frame_pool.size() < max_frame_pool_size) {
+        frame_pool.push_back(img);
+    }
+}
+
+// Buffer management
+BYTE* GameCapture::allocate_buffer(size_t size) {
+    BYTE* buffer = (BYTE*)_aligned_malloc(size, 64); // 64-byte aligned for better cache performance
+    if (buffer) {
+        std::lock_guard<std::mutex> lock(buffer_mutex);
+        allocated_buffers.push_back(buffer);
+    }
+    return buffer;
+}
+
+void GameCapture::cleanup_buffers() {
+    std::lock_guard<std::mutex> lock(buffer_mutex);
+    for (BYTE* buffer : allocated_buffers) {
+        if (buffer) _aligned_free(buffer);
+    }
+    allocated_buffers.clear();
+}
+
+// Async capture thread
+void GameCapture::capture_thread_func() {
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+    
+    while (capture_running) {
+        Image new_frame = get_frame_internal();
+        
+        if (new_frame.data) {
+            std::lock_guard<std::mutex> lock(capture_mutex);
+            ready_frame = new_frame;
+            new_frame_ready = true;
+        }
+        
+        // Small sleep to prevent CPU spinning
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
+    }
 }
 
 void GameCapture::initialize_offsets() {
