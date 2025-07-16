@@ -48,3 +48,7 @@ needaimbot/imgui.ini
 needaimbot/modules/SimpleIni.h
 /needaimbot/modules/serial
 /needaimbot/modules/cudnn
+
+# Claude Code
+.claude/
+nul
