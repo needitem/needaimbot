@@ -126,7 +126,7 @@ public:
     
     // Target persistence to reduce flickering
     int m_targetLostFrameCount = 0;
-    static constexpr int TARGET_LOST_THRESHOLD = 3; // Frames to wait before clearing target
+    static constexpr int TARGET_LOST_THRESHOLD = 1; // Wait 1 frame before clearing target
     
     // Sticky target to prevent jumping between targets
     float m_lastTargetScore = 0.0f;
