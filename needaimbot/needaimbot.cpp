@@ -264,7 +264,7 @@ void mouseThreadFunction(MouseThread &mouseThread)
         }
 
         
-        if (current_aiming && current_has_target) {
+        if (current_has_target) {
             // Validate target is within screen bounds
             bool target_valid = (current_target.x >= 0 && 
                                 current_target.y >= 0 &&
@@ -284,15 +284,33 @@ void mouseThreadFunction(MouseThread &mouseThread)
                     current_target.classId
                 );
                 
-                // Move mouse to target (this can be slow, but doesn't block detection updates)
-                mouseThread.moveMouse(target);
+                // Move mouse to target if aimbot is enabled AND aiming key is pressed
+                if (current_aiming && ctx.config.enable_aimbot) {
+                    mouseThread.moveMouse(target);
+                }
+                
+                // Auto-shoot if triggerbot is enabled (works independently of aiming)
+                // Check if auto_shoot button is configured and pressed, or if no button is configured (always on)
+                bool auto_shoot_active = ctx.config.button_auto_shoot.empty() || 
+                                       ctx.config.button_auto_shoot[0] == "None" ||
+                                       isAnyKeyPressed(ctx.config.button_auto_shoot);
+                
+                // Check if user is manually holding mouse button
+                bool manual_mouse_down = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+                
+                if (ctx.config.enable_triggerbot && auto_shoot_active && !manual_mouse_down) {
+                    mouseThread.pressMouse(target);
+                } else if (!manual_mouse_down) {
+                    // Only release if user isn't manually holding mouse
+                    mouseThread.releaseMouse();
+                }
             } else {
                 // Invalid target - release mouse
                 mouseThread.releaseMouse();
             }
             
         } else {
-            // Release mouse if no target or not aiming
+            // Release mouse if no target
             mouseThread.releaseMouse();
             
             // Only reset once when transitioning from target to no target

@@ -60,6 +60,8 @@ private:
     std::chrono::steady_clock::time_point last_recoil_compensation_time; 
     std::atomic<bool> target_detected{false};
     std::atomic<bool> mouse_pressed{false};
+    std::chrono::steady_clock::time_point last_mouse_release_time;
+    std::chrono::steady_clock::time_point last_mouse_press_time;
 
     mutable std::mutex predictor_mutex_;        
 
