@@ -59,12 +59,12 @@ bool Config::loadConfig(const std::string& filename)
     {
 
         
-        detection_resolution = 320;
-        capture_fps = 0;  // 0 = unlimited FPS
+        detection_resolution = 320;  // Lower resolution for better performance
+        capture_fps = 60;  // Cap at 60 FPS to reduce CPU load
         monitor_idx = 0;
-        circle_mask = true;
-        capture_borders = true;
-        capture_cursor = true;
+        circle_mask = false;  // Disabled for better performance
+        capture_borders = false;  // Disabled for better performance
+        capture_cursor = false;  // Disabled for better performance
  
         target_fps = 120.0f;
         capture_method = "simple";
@@ -143,12 +143,12 @@ bool Config::loadConfig(const std::string& filename)
 
         
         ai_model = "sunxds_0.5.6.engine"; 
-        confidence_threshold = 0.15f;
-        nms_threshold = 0.50f;
-        confidence_weight = 0.65f; 
-        distance_weight = 0.35f; 
-        sticky_target_threshold = 0.8f; // Default: new target must be 20% better
-        max_detections = 100;
+        confidence_threshold = 0.25f;  // Higher threshold = fewer detections = better performance
+        nms_threshold = 0.45f;  // Slightly lower for better duplicate removal
+        confidence_weight = 0.0f;  // Ignore confidence completely
+        distance_weight = 1.0f;  // Only use distance
+        sticky_target_threshold = 0.0f; // Always switch to closest target
+        max_detections = 30;  // Reduced from 100 for better performance
         postprocess = "yolo10";
         export_enable_fp8 = false;
         export_enable_fp16 = true;
@@ -199,7 +199,7 @@ bool Config::loadConfig(const std::string& filename)
 
 
         
-        enable_hsv_filter = false;
+        enable_hsv_filter = false;  // Keep disabled for performance
         hsv_lower_h = 0;
         hsv_lower_s = 0;
         hsv_lower_v = 0;
@@ -309,12 +309,12 @@ bool Config::loadConfig(const std::string& filename)
     kmbox_mac = get_string_ini("KMBOX", "mac", "46405C53");
 
     ai_model = get_string_ini("AI", "ai_model", "sunxds_0.5.6.engine");
-    confidence_threshold = (float)get_double_ini("AI", "confidence_threshold", 0.15);
-    nms_threshold = (float)get_double_ini("AI", "nms_threshold", 0.50);
-    confidence_weight = (float)get_double_ini("AI", "confidence_weight", 0.65); 
-    distance_weight = (float)get_double_ini("AI", "distance_weight", 0.35); 
-    sticky_target_threshold = (float)get_double_ini("AI", "sticky_target_threshold", 0.8);
-    max_detections = get_long_ini("AI", "max_detections", 20);
+    confidence_threshold = (float)get_double_ini("AI", "confidence_threshold", 0.25);
+    nms_threshold = (float)get_double_ini("AI", "nms_threshold", 0.45);
+    confidence_weight = (float)get_double_ini("AI", "confidence_weight", 0.0); 
+    distance_weight = (float)get_double_ini("AI", "distance_weight", 1.0); 
+    sticky_target_threshold = (float)get_double_ini("AI", "sticky_target_threshold", 0.0);
+    max_detections = get_long_ini("AI", "max_detections", 30);
     postprocess = get_string_ini("AI", "postprocess", "yolo10");
     export_enable_fp8 = get_bool_ini("AI", "export_enable_fp8", false);
     export_enable_fp16 = get_bool_ini("AI", "export_enable_fp16", true);

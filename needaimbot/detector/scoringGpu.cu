@@ -58,22 +58,11 @@ __global__ void calculateTargetScoresGpuKernel(
         float dx = centerX - crosshairX;
         float dy = centerY - crosshairY;
         
-        // Use fast reciprocal square root approximation if distance_weight is 1.0
+        // Simple distance-only calculation for closest target selection
         float distance = sqrtf(dx * dx + dy * dy);
-        float distance_score = distance * fmaxf(0.0f, distance_weight);
-
-        // Optimize confidence calculation
-        float confidence_factor = fmaf(1.0f - det.confidence, fmaxf(0.0f, confidence_weight), 1.0f);
-        float score = distance_score * confidence_factor;
-
-        // Apply head class bonus
-        if (head_class_id != -1 && det.classId == head_class_id) {
-            score *= head_class_score_multiplier; 
-        }
         
-        // Consider target size - prefer larger targets when distances are similar
-        float size_factor = 1.0f / (1.0f + 0.0001f * (det.width * det.height));
-        d_scores[idx] = score * size_factor;
+        // Lower score = better target (closest to crosshair)
+        d_scores[idx] = distance;
     }
 }
 

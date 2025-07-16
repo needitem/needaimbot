@@ -25,11 +25,24 @@ static void draw_capture_area_settings()
     
     // Use temporary float for the slider
     float detection_res_float = static_cast<float>(ctx.config.detection_resolution);
+    
+    // Store the old value to detect changes
+    int old_resolution = ctx.config.detection_resolution;
+    
     UIHelpers::CompactSlider("Detection Resolution", &detection_res_float, 50.0f, 1280.0f, "%.0f");
     UIHelpers::InfoTooltip("Size (in pixels) of the square area around the cursor to capture for detection.\nSmaller values improve performance but may miss targets further from the crosshair.");
-    if (ImGui::IsItemDeactivatedAfterEdit()) {
-        ctx.config.detection_resolution = static_cast<int>(detection_res_float);
+    
+    // Check if value changed
+    int new_resolution = static_cast<int>(detection_res_float);
+    if (new_resolution != old_resolution) {
+        ctx.config.detection_resolution = new_resolution;
         ctx.config.saveConfig();
+        
+        // Force update flags
+        extern std::atomic<bool> detection_resolution_changed;
+        extern std::atomic<bool> detector_model_changed;
+        detection_resolution_changed.store(true);
+        detector_model_changed.store(true);
     }
     
     if (ctx.config.detection_resolution >= 400)
@@ -55,11 +68,22 @@ static void draw_capture_behavior_settings()
     
     // Use temporary float for the slider
     float capture_fps_float = static_cast<float>(ctx.config.capture_fps);
+    
+    // Store the old value to detect changes
+    int old_fps = ctx.config.capture_fps;
+    
     UIHelpers::CompactSlider("Lock FPS", &capture_fps_float, 0.0f, 240.0f, "%.0f");
     UIHelpers::InfoTooltip("Limits the screen capture rate. 0 = Unlocked (fastest possible).\nLower values reduce CPU usage but increase detection latency.");
-    if (ImGui::IsItemDeactivatedAfterEdit()) {
-        ctx.config.capture_fps = static_cast<int>(capture_fps_float);
+    
+    // Check if value changed
+    int new_fps = static_cast<int>(capture_fps_float);
+    if (new_fps != old_fps) {
+        ctx.config.capture_fps = new_fps;
         ctx.config.saveConfig();
+        
+        // Force update flags
+        extern std::atomic<bool> capture_fps_changed;
+        capture_fps_changed.store(true);
     }
     
     if (ctx.config.capture_fps == 0)
