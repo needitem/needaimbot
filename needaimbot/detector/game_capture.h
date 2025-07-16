@@ -1,20 +1,34 @@
-#pragma once
 #include <windows.h>
 #include <d3d11.h>
-#include <opencv2/opencv.hpp>
 #include "hook_info.h"
+#include <sstream>
+#include <iostream>
+#include <stdio.h>
+
+#ifdef _MSC_VER
+#pragma comment(lib, "d3d11.lib")
+#pragma comment(lib, "dxgi.lib") 
+#endif
+
+struct Image {
+	int width;
+	int height;
+	int pitch;   
+	BYTE* data;  
+};
 
 class GameCapture {
 public:
 	GameCapture(int fov_width, int fov_height, int screen_width, int screen_height, const std::string& game_name);
 	~GameCapture();
 	bool initialize();
-	cv::Mat get_frame();
+	Image get_frame();
+	bool SaveBMP(const char* filename, const Image& img);
 private:
 	// Edit these paths as needed
-	std::wstring inject_path = L"C:\\Program Files\\obs-studio\\data\\obs-plugins\\win-capture\\inject-helper64.exe";
-	std::wstring hook_path = L"C:\\Program Files\\obs-studio\\data\\obs-plugins\\win-capture\\graphics-hook64.dll";
-	const char* get_graphics_offsets64 = R"("C:\Program Files\obs-studio\data\obs-plugins\win-capture\get-graphics-offsets64.exe")";
+	std::wstring inject_path = L"obs_stuff\\inject-helper64.exe";
+	std::wstring hook_path = L"obs_stuff\\graphics-hook64.dll";
+	const char* get_graphics_offsets64 = R"("obs_stuff\\get-graphics-offsets64.exe")";
 
 	int screen_width, screen_height;
 	HWND hwnd;
@@ -29,7 +43,8 @@ private:
 	ID3D11Resource* pSharedResource;
 	ID3D11Texture2D* pStagingTexture;
 	D3D11_BOX sourceRegion;
-	cv::Mat frame;
+	Image frame;
+	BYTE* FrameBuffer;
 	int width, height;
 	std::string game_name;
 	HANDLE inject_hook(DWORD target_id);
