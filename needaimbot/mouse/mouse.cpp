@@ -489,20 +489,30 @@ void MouseThread::pressMouse(const AimbotTarget &target)
     auto& ctx = AppContext::getInstance();
     std::lock_guard<std::mutex> lock(input_method_mutex);
 
-    auto bScope = checkTargetInScope(target.x, target.y, target.w, target.h, bScope_multiplier);
+    // For triggerbot, use a more lenient scope check (1.5x the normal multiplier)
+    float triggerbot_scope_multiplier = bScope_multiplier * 1.5f;
+    auto bScope = checkTargetInScope(target.x, target.y, target.w, target.h, triggerbot_scope_multiplier);
 
     if (bScope && !mouse_pressed)
     {
-        if (input_method && input_method->isValid())
-        {
-            auto input_press_start_time = std::chrono::steady_clock::now();
-            input_method->press();
-            auto input_press_end_time = std::chrono::steady_clock::now();
-            float press_duration_ms = std::chrono::duration<float, std::milli>(input_press_end_time - input_press_start_time).count();
-            ctx.g_current_input_send_time_ms.store(press_duration_ms, std::memory_order_relaxed); 
-            ctx.add_to_history(ctx.g_input_send_time_history, press_duration_ms, ctx.g_input_send_history_mutex);
+        // Add a small delay after release to prevent rapid fire
+        auto now = std::chrono::steady_clock::now();
+        auto time_since_release = std::chrono::duration<float, std::milli>(now - last_mouse_release_time).count();
+        
+        // Only press if at least 50ms have passed since last release
+        if (time_since_release > 50.0f) {
+            if (input_method && input_method->isValid())
+            {
+                auto input_press_start_time = std::chrono::steady_clock::now();
+                input_method->press();
+                auto input_press_end_time = std::chrono::steady_clock::now();
+                float press_duration_ms = std::chrono::duration<float, std::milli>(input_press_end_time - input_press_start_time).count();
+                ctx.g_current_input_send_time_ms.store(press_duration_ms, std::memory_order_relaxed); 
+                ctx.add_to_history(ctx.g_input_send_time_history, press_duration_ms, ctx.g_input_send_history_mutex);
+            }
+            mouse_pressed = true;
+            last_mouse_press_time = now;
         }
-        mouse_pressed = true;
     }
 }
 
@@ -510,6 +520,14 @@ void MouseThread::releaseMouse()
 {
     auto& ctx = AppContext::getInstance();
     if (!mouse_pressed)
+        return;
+
+    // Add a small delay to prevent rapid press/release cycles
+    auto now = std::chrono::steady_clock::now();
+    auto time_since_press = std::chrono::duration<float, std::milli>(now - last_mouse_press_time).count();
+    
+    // Only release if at least 100ms have passed since press (prevents rapid clicking)
+    if (time_since_press < 100.0f)
         return;
 
     std::lock_guard<std::mutex> lock(input_method_mutex);
@@ -524,6 +542,7 @@ void MouseThread::releaseMouse()
         ctx.add_to_history(ctx.g_input_send_time_history, release_duration_ms, ctx.g_input_send_history_mutex);
     }
     mouse_pressed = false;
+    last_mouse_release_time = now;
 }
 
 void MouseThread::applyRecoilCompensation(float strength)
