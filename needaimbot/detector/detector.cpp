@@ -746,20 +746,10 @@ void Detector::inferenceThread()
                 // Wait for preprocessing to complete before inference
                 cudaStreamWaitEvent(stream, m_preprocessDone, 0);
                 
-                // Execute inference directly without CUDA Graph (temporary fix)
-                // Clear any previous CUDA errors before inference
-                cudaGetLastError();
-                
+                // Direct inference without CUDA Graph to avoid stream conflicts
                 bool enqueueSuccess = context->enqueueV3(stream);
                 if (!enqueueSuccess) {
-                    std::cerr << "[Detector] TensorRT enqueueV3 failed during direct inference" << std::endl;
-                    continue;
-                }
-                
-                // Check for CUDA errors after inference
-                cudaError_t inferenceErr = cudaGetLastError();
-                if (inferenceErr != cudaSuccess) {
-                    std::cerr << "[Detector] CUDA error after inference: " << cudaGetErrorString(inferenceErr) << std::endl;
+                    std::cerr << "[Detector] TensorRT enqueueV3 failed" << std::endl;
                     continue;
                 }
                 cudaEventRecord(m_inferenceDone, stream);
@@ -779,7 +769,7 @@ void Detector::inferenceThread()
                 // Wait for postprocessing to complete before copying
                 cudaStreamWaitEvent(stream, processingDone, 0);
                 
-                // Copy final detections count to host asynchronously
+                // Copy final detections count to host
                 cudaMemcpyAsync(&m_finalDetectionsCountHost, m_finalDetectionsCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
                 
                 // Synchronize to ensure count is available
@@ -1118,26 +1108,49 @@ void Detector::preProcess(const cv::cuda::GpuMat& frame, cudaStream_t stream)
             cv::cuda::resize(frame, resizedBuffer, cv::Size(w, h), 0, 0, cv::INTER_LINEAR, cvStream);
         }
 
-        bool current_enable_hsv_filter;
-        // HSV config values read once, assuming they don't change during graph execution
+        // Only process HSV filter if enabled and actually being used
+        bool current_enable_hsv_filter = false;
+        bool current_remove_hsv_matches = false;
         {
             std::lock_guard<std::mutex> lock(ctx.configMutex);
             current_enable_hsv_filter = ctx.config.enable_hsv_filter;
+            current_remove_hsv_matches = ctx.config.remove_hsv_matches;
         }
 
-        if (current_enable_hsv_filter) {
+        // Skip HSV processing entirely if not needed
+        if (current_enable_hsv_filter && (current_remove_hsv_matches || ctx.config.min_hsv_pixels > 0)) {
             static cv::cuda::GpuMat hsvGpu_static;
             static cv::cuda::GpuMat maskGpu_hsv_static;
-            cv::cuda::cvtColor(resizedBuffer, hsvGpu_static, cv::COLOR_BGR2HSV, 0, cvStream);
-            cv::Scalar lower(ctx.config.hsv_lower_h, ctx.config.hsv_lower_s, ctx.config.hsv_lower_v);
-            cv::Scalar upper(ctx.config.hsv_upper_h, ctx.config.hsv_upper_s, ctx.config.hsv_upper_v);
-            cv::cuda::inRange(hsvGpu_static, lower, upper, maskGpu_hsv_static, cvStream);
             
-            cv::cuda::GpuMat maskResized;
-            cv::cuda::resize(maskGpu_hsv_static, maskResized, cv::Size(ctx.config.detection_resolution, ctx.config.detection_resolution), 0, 0, cv::INTER_NEAREST, cvStream);
-            {
-                std::lock_guard<std::mutex> lock(hsvMaskMutex);
-                m_hsvMaskGpu = maskResized;
+            // Cache HSV bounds to avoid repeated access
+            static cv::Scalar cached_lower, cached_upper;
+            static bool bounds_cached = false;
+            
+            if (!bounds_cached || ctx.config.hsv_lower_h != cached_lower[0]) {
+                cached_lower = cv::Scalar(ctx.config.hsv_lower_h, ctx.config.hsv_lower_s, ctx.config.hsv_lower_v);
+                cached_upper = cv::Scalar(ctx.config.hsv_upper_h, ctx.config.hsv_upper_s, ctx.config.hsv_upper_v);
+                bounds_cached = true;
+            }
+            
+            cv::cuda::cvtColor(resizedBuffer, hsvGpu_static, cv::COLOR_BGR2HSV, 0, cvStream);
+            cv::cuda::inRange(hsvGpu_static, cached_lower, cached_upper, maskGpu_hsv_static, cvStream);
+            
+            // Only resize if resolution changed
+            static int last_resolution = 0;
+            if (last_resolution != ctx.config.detection_resolution) {
+                last_resolution = ctx.config.detection_resolution;
+                cv::cuda::GpuMat maskResized;
+                cv::cuda::resize(maskGpu_hsv_static, maskResized, cv::Size(last_resolution, last_resolution), 0, 0, cv::INTER_NEAREST, cvStream);
+                {
+                    std::lock_guard<std::mutex> lock(hsvMaskMutex);
+                    m_hsvMaskGpu = maskResized;
+                }
+            }
+        } else {
+            // Clear HSV mask if not in use
+            std::lock_guard<std::mutex> lock(hsvMaskMutex);
+            if (!m_hsvMaskGpu.empty()) {
+                m_hsvMaskGpu.release();
             }
         }
 

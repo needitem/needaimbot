@@ -73,35 +73,11 @@ void draw_target()
     ImGui::Separator();
     ImGui::Checkbox("Auto Aim", &ctx.config.auto_aim);
 
-    ImGui::Separator(); 
-    ImGui::TextColored(ImVec4(0.0f, 1.0f, 1.0f, 1.0f), "Target Selection Settings");
-    
-    ImGui::SliderFloat("Distance Weight", &ctx.config.distance_weight, 0.0f, 10.0f, "%.2f");
-    if (ImGui::IsItemHovered())
-    {
-        ImGui::SetTooltip("How much to prioritize targets closer to crosshair (0.0 - 10.0)");
-    }
-    if (ImGui::IsItemDeactivatedAfterEdit()) {
-        ctx.config.saveConfig();
-    }
-    
-    ImGui::SliderFloat("Confidence Weight", &ctx.config.confidence_weight, 0.0f, 10.0f, "%.2f");
-    if (ImGui::IsItemHovered())
-    {
-        ImGui::SetTooltip("How much to prioritize targets with higher detection confidence (0.0 - 10.0)");
-    }
-    if (ImGui::IsItemDeactivatedAfterEdit()) {
-        ctx.config.saveConfig();
-    }
-    
-    ImGui::SliderFloat("Sticky Target Threshold", &ctx.config.sticky_target_threshold, 0.0f, 1.0f, "%.2f");
-    if (ImGui::IsItemHovered())
-    {
-        ImGui::SetTooltip("How much better a new target must be to switch (0.0 = always switch, 1.0 = never switch)");
-    }
-    if (ImGui::IsItemDeactivatedAfterEdit()) {
-        ctx.config.saveConfig();
-    }
+    // Target selection is now fixed to closest target only
+    // These settings are hidden but set to optimal values for closest target selection
+    ctx.config.distance_weight = 1.0f;  // Maximum distance priority
+    ctx.config.confidence_weight = 0.0f;  // Ignore confidence
+    ctx.config.sticky_target_threshold = 0.0f;  // Always switch to closest
     
 }
 
