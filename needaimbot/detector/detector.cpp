@@ -113,8 +113,13 @@ Detector::~Detector()
     if (stream) cudaStreamDestroy(stream);
     if (preprocessStream) cudaStreamDestroy(preprocessStream);
     if (postprocessStream) cudaStreamDestroy(postprocessStream);
+    if (m_preprocessStream) cudaStreamDestroy(m_preprocessStream);
+    if (m_inferenceStream) cudaStreamDestroy(m_inferenceStream);
+    if (m_postprocessStream) cudaStreamDestroy(m_postprocessStream);
     if (m_preprocessDone) cudaEventDestroy(m_preprocessDone);
     if (m_inferenceDone) cudaEventDestroy(m_inferenceDone);
+    if (m_inferenceDone2) cudaEventDestroy(m_inferenceDone2);
+    if (m_postprocessDone) cudaEventDestroy(m_postprocessDone);
     if (processingDone) cudaEventDestroy(processingDone);
     if (postprocessCopyDone) cudaEventDestroy(postprocessCopyDone);
     
@@ -151,15 +156,7 @@ Detector::~Detector()
         m_inferenceDone = nullptr;
     }
     
-    // CUDA Graph cleanup
-    if (m_graphExec) {
-        cudaGraphExecDestroy(m_graphExec);
-        m_graphExec = nullptr;
-    }
-    if (m_graph) {
-        cudaGraphDestroy(m_graph);
-        m_graph = nullptr;
-    }
+    // CUDA Graph removed for optimization
     
     // Synchronize to ensure all CUDA operations are complete
     cudaStreamSynchronize(stream);
@@ -298,10 +295,13 @@ bool Detector::initializeCudaContext()
     }
     std::cout << "[Detector] Successfully set CUDA device to " << ctx.config.cuda_device_id << "." << std::endl;
 
-    
+    // Create multiple streams for pipeline optimization
     if (!checkCudaError(cudaStreamCreate(&stream), "creating main stream")) { m_cudaContextInitialized = false; return false; }
     if (!checkCudaError(cudaStreamCreate(&preprocessStream), "creating preprocess stream")) { m_cudaContextInitialized = false; return false; }
     if (!checkCudaError(cudaStreamCreate(&postprocessStream), "creating postprocess stream")) { m_cudaContextInitialized = false; return false; }
+    if (!checkCudaError(cudaStreamCreate(&m_preprocessStream), "creating preprocess2 stream")) { m_cudaContextInitialized = false; return false; }
+    if (!checkCudaError(cudaStreamCreate(&m_inferenceStream), "creating inference2 stream")) { m_cudaContextInitialized = false; return false; }
+    if (!checkCudaError(cudaStreamCreate(&m_postprocessStream), "creating postprocess2 stream")) { m_cudaContextInitialized = false; return false; }
 
     
     cvStream = cv::cuda::StreamAccessor::wrapStream(stream);
@@ -313,6 +313,18 @@ bool Detector::initializeCudaContext()
     if (!checkCudaError(cudaEventCreateWithFlags(&m_inferenceDone, cudaEventDisableTiming), "creating inferenceDone event")) { m_cudaContextInitialized = false; return false; }
     if (!checkCudaError(cudaEventCreateWithFlags(&processingDone, cudaEventDisableTiming), "creating processingDone event")) { m_cudaContextInitialized = false; return false; }
     if (!checkCudaError(cudaEventCreateWithFlags(&postprocessCopyDone, cudaEventDisableTiming), "creating postprocessCopyDone event")) { m_cudaContextInitialized = false; return false; }
+    if (!checkCudaError(cudaEventCreateWithFlags(&m_inferenceDone2, cudaEventDisableTiming), "creating inferenceDone2 event")) { m_cudaContextInitialized = false; return false; }
+    if (!checkCudaError(cudaEventCreateWithFlags(&m_postprocessDone, cudaEventDisableTiming), "creating postprocessDone event")) { m_cudaContextInitialized = false; return false; }
+    
+    // Pre-allocate common buffer sizes in memory pool
+    std::vector<size_t> commonSizes = {
+        1920 * 1080 * 3,           // Full HD image
+        640 * 640 * 3,             // Common detection size
+        512 * 512 * 3,             // Another common size
+        sizeof(Detection) * 1000,   // Detection buffer
+        sizeof(float) * 1000       // Score buffer
+    };
+    getGpuMemoryPool().preallocate(commonSizes, stream);
 
     
 
@@ -676,16 +688,7 @@ void Detector::inferenceThread()
         }
 
         if (ctx.detector_model_changed.load()) {
-            // CUDA Graph reset
-            if (m_graphExec) {
-                cudaGraphExecDestroy(m_graphExec);
-                m_graphExec = nullptr;
-            }
-            if (m_graph) {
-                cudaGraphDestroy(m_graph);
-                m_graph = nullptr;
-            }
-            m_isGraphInitialized = false;
+            // CUDA Graph removed for optimization
 
             // Re-initialize detector components
             {

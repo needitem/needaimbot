@@ -657,6 +657,9 @@ void Config::resetConfig()
 
 Config::Config()
 {
+    // Initialize show_metrics to false by default
+    show_metrics = false;
+    
     // Ensure we use the correct path for config files
     std::string exePath = getExecutableDir();
     
