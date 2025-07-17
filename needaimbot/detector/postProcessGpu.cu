@@ -25,13 +25,15 @@ __global__ void initKeepKernel(bool* d_keep, int n) {
 }
 
 
-// Spatial indexing constants
-__constant__ int GRID_SIZE = 10;  // 10x10 spatial grid
+// Optimized spatial indexing constants
+__constant__ int GRID_SIZE = 16;  // 16x16 spatial grid for better cache alignment
+__constant__ int GRID_SHIFT = 4;  // log2(16) for faster division
 
 __device__ inline int getSpatialCell(int x, int y, int frame_width, int frame_height) {
-    int cellX = min(GRID_SIZE - 1, (x * GRID_SIZE) / frame_width);
-    int cellY = min(GRID_SIZE - 1, (y * GRID_SIZE) / frame_height);
-    return cellY * GRID_SIZE + cellX;
+    // Use bit shift instead of division for power-of-2 grid size
+    int cellX = min(GRID_SIZE - 1, (x << GRID_SHIFT) / frame_width);
+    int cellY = min(GRID_SIZE - 1, (y << GRID_SHIFT) / frame_height);
+    return (cellY << GRID_SHIFT) + cellX;
 }
 
 __global__ __launch_bounds__(256, 4) void calculateIoUKernel(
@@ -40,32 +42,48 @@ __global__ __launch_bounds__(256, 4) void calculateIoUKernel(
     const float* __restrict__ d_areas, float* __restrict__ d_iou_matrix,
     int num_boxes, float nms_threshold, int frame_width, int frame_height) 
 {
+    // Shared memory for caching box coordinates
+    __shared__ int s_x1[256], s_y1[256], s_x2[256], s_y2[256];
+    __shared__ float s_areas[256];
+    
+    int tid = threadIdx.x + threadIdx.y * blockDim.x;
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int idy = blockIdx.y * blockDim.y + threadIdx.y;
     
+    // Cooperative loading into shared memory
+    if (tid < blockDim.x * blockDim.y && idx < num_boxes) {
+        s_x1[tid] = d_x1[idx];
+        s_y1[tid] = d_y1[idx];
+        s_x2[tid] = d_x2[idx];
+        s_y2[tid] = d_y2[idx];
+        s_areas[tid] = d_areas[idx];
+    }
+    __syncthreads();
+    
     if (idx < num_boxes && idy < num_boxes && idx < idy) {
-        // Spatial proximity check - only compute IoU for nearby boxes
-        int cell1 = getSpatialCell((d_x1[idx] + d_x2[idx]) / 2, 
-                                  (d_y1[idx] + d_y2[idx]) / 2, 
-                                  frame_width, frame_height);
-        int cell2 = getSpatialCell((d_x1[idy] + d_x2[idy]) / 2, 
-                                  (d_y1[idy] + d_y2[idy]) / 2, 
-                                  frame_width, frame_height);
+        // Spatial proximity check with optimized bit operations
+        int center1_x = (s_x1[threadIdx.x] + s_x2[threadIdx.x]) >> 1;
+        int center1_y = (s_y1[threadIdx.x] + s_y2[threadIdx.x]) >> 1;
+        int center2_x = (d_x1[idy] + d_x2[idy]) >> 1;
+        int center2_y = (d_y1[idy] + d_y2[idy]) >> 1;
         
-        // Skip IoU calculation if boxes are far apart
-        int cellDiffX = abs(cell1 % GRID_SIZE - cell2 % GRID_SIZE);
-        int cellDiffY = abs(cell1 / GRID_SIZE - cell2 / GRID_SIZE);
+        int cell1 = getSpatialCell(center1_x, center1_y, frame_width, frame_height);
+        int cell2 = getSpatialCell(center2_x, center2_y, frame_width, frame_height);
+        
+        // Use bit operations for faster grid distance calculation
+        int cellDiffX = abs((cell1 & (GRID_SIZE - 1)) - (cell2 & (GRID_SIZE - 1)));
+        int cellDiffY = abs((cell1 >> GRID_SHIFT) - (cell2 >> GRID_SHIFT));
         if (cellDiffX > 1 || cellDiffY > 1) {
             d_iou_matrix[idx * num_boxes + idy] = 0.0f;
             d_iou_matrix[idy * num_boxes + idx] = 0.0f;
             return;
         }
         
-        // Use fast math operations
-        int x1 = max(d_x1[idx], d_x1[idy]);
-        int y1 = max(d_y1[idx], d_y1[idy]);
-        int x2 = min(d_x2[idx], d_x2[idy]);
-        int y2 = min(d_y2[idx], d_y2[idy]);
+        // Use cached values from shared memory where possible
+        int x1 = max(s_x1[threadIdx.x], d_x1[idy]);
+        int y1 = max(s_y1[threadIdx.x], d_y1[idy]);
+        int x2 = min(s_x2[threadIdx.x], d_x2[idy]);
+        int y2 = min(s_y2[threadIdx.x], d_y2[idy]);
         
         // Early exit if no overlap
         if (x2 <= x1 || y2 <= y1) {
@@ -74,10 +92,12 @@ __global__ __launch_bounds__(256, 4) void calculateIoUKernel(
             return;
         }
         
+        // Use fast intrinsic math functions
         float intersection_area = __int2float_rn(x2 - x1) * __int2float_rn(y2 - y1);
-        float union_area = d_areas[idx] + d_areas[idy] - intersection_area;
+        float union_area = __fadd_rn(s_areas[threadIdx.x], __fsub_rn(d_areas[idy], intersection_area));
         float iou = __fdiv_rn(intersection_area, union_area);
         
+        // Coalesced memory writes
         d_iou_matrix[idx * num_boxes + idy] = iou;
         d_iou_matrix[idy * num_boxes + idx] = iou;
     }
@@ -89,11 +109,26 @@ __global__ void nmsKernel(
     const float* d_scores, const int* d_classIds,
     int num_boxes, float nms_threshold) 
 {
+    // Use shared memory for frequently accessed data
+    extern __shared__ float s_scores[];
+    
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int tid = threadIdx.x;
+    
+    // Load scores into shared memory
+    if (idx < num_boxes && tid < blockDim.x) {
+        s_scores[tid] = d_scores[idx];
+    }
+    __syncthreads();
     
     if (idx < num_boxes) {
         if (!d_keep[idx]) return; 
         
+        float my_score = s_scores[tid];
+        int my_class = d_classIds[idx];
+        
+        // Unroll loop for better performance
+        #pragma unroll 4
         for (int i = 0; i < num_boxes; i++) {
             if (idx == i) continue; 
             

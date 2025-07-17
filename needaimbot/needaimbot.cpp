@@ -200,10 +200,34 @@ void mouseThreadFunction(MouseThread &mouseThread)
     auto& ctx = AppContext::getInstance();
     std::cout << "Mouse thread started." << std::endl;
     
-    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
-    SetThreadAffinityMask(GetCurrentThread(), 1 << 1);
+    // Reduce thread priority to prevent excessive CPU usage
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+    // Remove CPU core affinity to allow OS scheduling
+    // SetThreadAffinityMask(GetCurrentThread(), 1 << 1);
     
     static int loop_count = 0;
+    
+    // Cache for keyboard states to reduce system calls
+    struct KeyStateCache {
+        bool left_mouse = false;
+        bool right_mouse = false;
+        std::chrono::steady_clock::time_point last_update;
+        const std::chrono::milliseconds update_interval{16}; // Update every 16ms (~60Hz)
+        
+        void update() {
+            auto now = std::chrono::steady_clock::now();
+            if (now - last_update >= update_interval) {
+                left_mouse = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+                right_mouse = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+                last_update = now;
+            }
+        }
+    } key_cache;
+    
+    // Dynamic wait time based on target availability
+    std::chrono::milliseconds wait_timeout(10);
+    const std::chrono::milliseconds active_timeout(10);   // When target is present
+    const std::chrono::milliseconds idle_timeout(30);    // When no target
     
     while (!ctx.shouldExit)
     {
@@ -215,8 +239,8 @@ void mouseThreadFunction(MouseThread &mouseThread)
         
         {
             std::unique_lock<std::mutex> lock(ctx.detector->detectionMutex);
-            // Wait with timeout to prevent stale target usage
-            auto wait_result = ctx.detector->detectionCV.wait_for(lock, std::chrono::milliseconds(10), [&]() { 
+            // Wait with dynamic timeout
+            auto wait_result = ctx.detector->detectionCV.wait_for(lock, wait_timeout, [&]() { 
                 return ctx.shouldExit || ctx.input_method_changed.load() || 
                        ctx.detector->detectionVersion != last_detection_version; 
             });
@@ -295,8 +319,8 @@ void mouseThreadFunction(MouseThread &mouseThread)
                                        ctx.config.button_auto_shoot[0] == "None" ||
                                        isAnyKeyPressed(ctx.config.button_auto_shoot);
                 
-                // Check if user is manually holding mouse button
-                bool manual_mouse_down = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+                // Use cached mouse state
+                bool manual_mouse_down = key_cache.left_mouse;
                 
                 if (ctx.config.enable_triggerbot && auto_shoot_active && !manual_mouse_down) {
                     mouseThread.pressMouse(target);
@@ -327,13 +351,21 @@ void mouseThreadFunction(MouseThread &mouseThread)
             had_target_before = true;
         }
         
+        // Update dynamic wait timeout based on target presence
+        wait_timeout = current_has_target ? active_timeout : idle_timeout;
+        
+        // Skip expensive operations when no target and not aiming
+        if (!current_has_target && !current_aiming) {
+            continue;
+        }
+        
+        // Update key cache periodically
+        key_cache.update();
+        
         // Apply recoil compensation when both mouse buttons are pressed (ADS + Shooting)
         if (ctx.config.easynorecoil) {
-            bool left_mouse_pressed = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
-            bool right_mouse_pressed = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
-            
             static bool was_recoil_active = false;
-            bool recoil_active = left_mouse_pressed && right_mouse_pressed;
+            bool recoil_active = key_cache.left_mouse && key_cache.right_mouse;
             
             // Track recoil state changes silently
             was_recoil_active = recoil_active;

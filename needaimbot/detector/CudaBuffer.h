@@ -4,19 +4,20 @@
 #include <cuda_runtime.h>
 #include <iostream>
 #include <memory>
+#include "GpuMemoryPool.h"
 
-// Deleter for cudaMalloc'd memory
-struct CudaDeleter {
+// Deleter for memory pool
+struct PoolDeleter {
     void operator()(void* ptr) const {
         if (ptr) {
-            cudaFree(ptr);
+            getGpuMemoryPool().deallocate(ptr);
         }
     }
 };
 
-// Unique pointer for CUDA memory
+// Unique pointer for pooled memory
 template<typename T>
-using CudaUniquePtr = std::unique_ptr<T, CudaDeleter>;
+using CudaUniquePtr = std::unique_ptr<T, PoolDeleter>;
 
 // A wrapper for a CUDA buffer
 template<typename T>
@@ -48,16 +49,16 @@ public:
         return *this;
     }
 
-    void allocate(size_t size) {
+    void allocate(size_t size, cudaStream_t stream = 0) {
         if (m_size >= size) return;
 
-        T* ptr = nullptr;
-        cudaError_t err = cudaMalloc(&ptr, size * sizeof(T));
-        if (err != cudaSuccess) {
-            std::cerr << "[CUDA] Failed to allocate buffer: " << cudaGetErrorString(err) << std::endl;
+        // Use memory pool for allocation
+        void* ptr = getGpuMemoryPool().allocate(size * sizeof(T), stream);
+        if (!ptr) {
+            std::cerr << "[CUDA] Failed to allocate buffer from pool" << std::endl;
             throw std::runtime_error("CUDA memory allocation failed");
         }
-        m_ptr.reset(ptr);
+        m_ptr.reset(static_cast<T*>(ptr));
         m_size = size;
     }
 
