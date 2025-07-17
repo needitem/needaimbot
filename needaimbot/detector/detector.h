@@ -26,6 +26,7 @@
 
 #include "postProcess.h"
 #include "CudaBuffer.h"
+#include "DetectionExchange.h"
 
 struct TrackedTarget {
     int id;
@@ -65,8 +66,11 @@ public:
     
     
 
+    // Lock-free detection exchange
+    DetectionExchange detectionExchange;
+    
+    // Legacy mutex-based system (for backward compatibility)
     std::mutex detectionMutex;
-
     int detectionVersion;
     std::condition_variable detectionCV;
     
@@ -92,10 +96,17 @@ public:
     
     HANDLE captureEvent = nullptr;
 
-    // CUDA Graph support
-    cudaGraph_t m_graph = nullptr;
-    cudaGraphExec_t m_graphExec = nullptr;
-    bool m_isGraphInitialized = false;
+    // CUDA Graph support removed for optimization
+    
+    // Multiple CUDA streams for pipeline optimization
+    cudaStream_t m_preprocessStream = nullptr;
+    cudaStream_t m_inferenceStream = nullptr;
+    cudaStream_t m_postprocessStream = nullptr;
+    
+    // Events for stream synchronization
+    cudaEvent_t m_preprocessDone = nullptr;
+    cudaEvent_t m_inferenceDone2 = nullptr;
+    cudaEvent_t m_postprocessDone = nullptr;
 
     cv::cuda::GpuMat resizedBuffer;
     

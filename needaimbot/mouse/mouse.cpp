@@ -52,8 +52,10 @@ void InitializeHighPrecisionTimer() {
     if (!freq_initialized) {
         QueryPerformanceFrequency(&freq);
         freq_initialized = true;
-        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
-        SetThreadAffinityMask(GetCurrentThread(), 1 << 1);
+        // Reduced priority to prevent excessive CPU usage
+        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+        // Remove CPU core affinity to allow OS scheduling
+        // SetThreadAffinityMask(GetCurrentThread(), 1 << 1);
     }
 }
 
@@ -62,17 +64,22 @@ void QueueMove(int dx, int dy, std::function<void(int, int)> move_func) {
     InitializeHighPrecisionTimer();
     
     if (dx != 0 || dy != 0) {
-        LARGE_INTEGER start;
-        QueryPerformanceCounter(&start);
-        
-        move_func(dx, dy);
-        
-        LARGE_INTEGER end;
-        QueryPerformanceCounter(&end);
-        float elapsed_us = ((end.QuadPart - start.QuadPart) * 1000000.0f) / freq.QuadPart;
-        
-        ctx.add_to_history(ctx.g_input_send_time_history, elapsed_us / 1000.0f, ctx.g_input_send_history_mutex);
-        ctx.g_current_input_send_time_ms.store(elapsed_us / 1000.0f);
+        // Skip timing measurements if not needed (performance optimization)
+        if (ctx.config.verbose || ctx.config.show_metrics) {
+            LARGE_INTEGER start;
+            QueryPerformanceCounter(&start);
+            
+            move_func(dx, dy);
+            
+            LARGE_INTEGER end;
+            QueryPerformanceCounter(&end);
+            float elapsed_us = ((end.QuadPart - start.QuadPart) * 1000000.0f) / freq.QuadPart;
+            
+            ctx.add_to_history(ctx.g_input_send_time_history, elapsed_us / 1000.0f, ctx.g_input_send_history_mutex);
+            ctx.g_current_input_send_time_ms.store(elapsed_us / 1000.0f);
+        } else {
+            move_func(dx, dy);
+        }
     }
 }
 
@@ -292,14 +299,44 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     float current_center_x, current_center_y;
     float current_move_scale_x, current_move_scale_y;
     
-    // Copy all needed config values at once
-    float crosshair_offset_x, crosshair_offset_y;
-    bool use_predictive_controller;
-    float prediction_time_ms;
-    int head_class_id_to_use = -1;
-    bool apply_head_offset = false;
-    float head_y_offset, body_y_offset;
-    std::string head_class_name;
+    // Cache for config values to reduce mutex locks
+    static struct ConfigCache {
+        float crosshair_offset_x, crosshair_offset_y;
+        bool use_predictive_controller;
+        float prediction_time_ms;
+        int head_class_id_to_use = -1;
+        bool apply_head_offset = false;
+        float head_y_offset, body_y_offset;
+        std::string head_class_name;
+        std::chrono::steady_clock::time_point last_update;
+        const std::chrono::milliseconds update_interval{100}; // Update every 100ms
+        
+        void update(const Config& config) {
+            auto now = std::chrono::steady_clock::now();
+            if (now - last_update >= update_interval) {
+                crosshair_offset_x = config.crosshair_offset_x;
+                crosshair_offset_y = config.crosshair_offset_y;
+                use_predictive_controller = config.use_predictive_controller;
+                prediction_time_ms = config.prediction_time_ms;
+                head_class_name = config.head_class_name;
+                head_y_offset = config.head_y_offset;
+                body_y_offset = config.body_y_offset;
+                
+                head_class_id_to_use = -1;
+                apply_head_offset = false;
+                for (const auto& class_setting : config.class_settings) {
+                    if (class_setting.name == head_class_name) {
+                        head_class_id_to_use = class_setting.id;
+                        if (!class_setting.ignore) {
+                            apply_head_offset = true;
+                        }
+                        break;
+                    }
+                }
+                last_update = now;
+            }
+        }
+    } config_cache;
 
     {
         std::lock_guard<std::mutex> lock(member_data_mutex_); 
@@ -309,41 +346,25 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         current_move_scale_y = this->move_scale_y;
     }
 
-    // Get all config values in one lock
+    // Update config cache if needed
     {
         std::lock_guard<std::mutex> lock(ctx.configMutex);
-        crosshair_offset_x = ctx.config.crosshair_offset_x;
-        crosshair_offset_y = ctx.config.crosshair_offset_y;
-        use_predictive_controller = ctx.config.use_predictive_controller;
-        prediction_time_ms = ctx.config.prediction_time_ms;
-        head_class_name = ctx.config.head_class_name;
-        head_y_offset = ctx.config.head_y_offset;
-        body_y_offset = ctx.config.body_y_offset;
-        
-        for (const auto& class_setting : ctx.config.class_settings) {
-            if (class_setting.name == head_class_name) {
-                head_class_id_to_use = class_setting.id;
-                if (!class_setting.ignore) {
-                    apply_head_offset = true;
-                }
-                break;
-            }
-        }
+        config_cache.update(ctx.config);
     }
 
     // Apply crosshair offset correction
-    current_center_x += crosshair_offset_x;
-    current_center_y += crosshair_offset_y;
+    current_center_x += config_cache.crosshair_offset_x;
+    current_center_y += config_cache.crosshair_offset_y;
 
     Point2D raw_target_pos;
     raw_target_pos.x = target.x + target.w * 0.5f;
     
-    // Use already copied config values
+    // Use cached config values
     float local_y_offset_multiplier_val;
-    if (apply_head_offset && target.classId == head_class_id_to_use) {
-        local_y_offset_multiplier_val = head_y_offset;
+    if (config_cache.apply_head_offset && target.classId == config_cache.head_class_id_to_use) {
+        local_y_offset_multiplier_val = config_cache.head_y_offset;
     } else {
-        local_y_offset_multiplier_val = body_y_offset;
+        local_y_offset_multiplier_val = config_cache.body_y_offset;
     }
     raw_target_pos.y = target.y + target.h * local_y_offset_multiplier_val;
 
@@ -468,12 +489,17 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     if (dx_int != 0 || dy_int != 0) {
         std::lock_guard<std::mutex> lock(input_method_mutex);
         if (input_method && input_method->isValid()) {
-            auto input_send_start_time = std::chrono::steady_clock::now();
-            input_method->move(dx_int, dy_int);
-            auto input_send_end_time = std::chrono::steady_clock::now();
-            float input_send_duration_ms = std::chrono::duration<float, std::milli>(input_send_end_time - input_send_start_time).count();
-            ctx.g_current_input_send_time_ms.store(input_send_duration_ms, std::memory_order_relaxed);
-            ctx.add_to_history(ctx.g_input_send_time_history, input_send_duration_ms, ctx.g_input_send_history_mutex);
+            // Skip timing measurements if not needed
+            if (ctx.config.verbose || ctx.config.show_metrics) {
+                auto input_send_start_time = std::chrono::steady_clock::now();
+                input_method->move(dx_int, dy_int);
+                auto input_send_end_time = std::chrono::steady_clock::now();
+                float input_send_duration_ms = std::chrono::duration<float, std::milli>(input_send_end_time - input_send_start_time).count();
+                ctx.g_current_input_send_time_ms.store(input_send_duration_ms, std::memory_order_relaxed);
+                ctx.add_to_history(ctx.g_input_send_time_history, input_send_duration_ms, ctx.g_input_send_history_mutex);
+            } else {
+                input_method->move(dx_int, dy_int);
+            }
         }
     }
     

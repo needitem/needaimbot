@@ -183,6 +183,7 @@ public:
     int screenshot_delay;
     bool always_on_top;
     bool verbose;
+    bool show_metrics;  // For performance metrics display
 
     
     std::vector<ClassSetting> class_settings;
