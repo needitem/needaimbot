@@ -185,7 +185,6 @@ public:
     // Legacy stream variables (for compatibility)
     cudaStream_t& m_computeStream = m_streams[0];
     cudaStream_t& m_memoryStream = m_streams[1];
-    cudaEvent_t m_preprocessDone;
     cudaEvent_t m_inferenceDone;
     cudaEvent_t processingDone;
     cudaEvent_t postprocessCopyDone;
