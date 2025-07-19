@@ -10,7 +10,8 @@
 #include "needaimbot.h"
 #include "include/other_tools.h"
 #include "overlay.h"
-#include "ui_helpers.h" 
+#include "ui_helpers.h"
+#include "common_helpers.h" 
 
 std::string ghub_version = get_ghub_version();
 
