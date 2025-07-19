@@ -26,80 +26,237 @@ __global__ void initKeepKernel(bool* d_keep, int n) {
 
 
 // Optimized spatial indexing constants
-__constant__ int GRID_SIZE = 16;  // 16x16 spatial grid for better cache alignment
-__constant__ int GRID_SHIFT = 4;  // log2(16) for faster division
+__constant__ int GRID_SIZE = 32;  // 32x32 spatial grid for better granularity
+__constant__ int GRID_SHIFT = 5;  // log2(32) for faster division
+__constant__ int GRID_MASK = 31;  // For fast modulo
 
-__device__ inline int getSpatialCell(int x, int y, int frame_width, int frame_height) {
-    // Use bit shift instead of division for power-of-2 grid size
-    int cellX = min(GRID_SIZE - 1, (x << GRID_SHIFT) / frame_width);
-    int cellY = min(GRID_SIZE - 1, (y << GRID_SHIFT) / frame_height);
-    return (cellY << GRID_SHIFT) + cellX;
+// Helper function to read output values based on data type
+__device__ inline float readOutputValue(const void* buffer, int type, size_t index) {
+    if (type == 0) { // kFLOAT
+        return reinterpret_cast<const float*>(buffer)[index];
+    } else if (type == 1) { // kHALF
+        return __half2float(reinterpret_cast<const __half*>(buffer)[index]);
+    }
+    
+    return 0.0f; 
+}
+
+// Fused decode and filter kernel for YOLO10
+__global__ void decodeAndFilterYolo10Kernel(
+    const void* d_raw_output,
+    int output_type,
+    int num_detections_raw,
+    int stride,
+    int num_classes,
+    float conf_threshold,
+    float img_scale,
+    const unsigned char* __restrict__ d_ignored_class_ids,
+    int max_check_id,
+    Detection* d_decoded_detections,
+    int* d_decoded_count,
+    int max_detections)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (idx < num_detections_raw) {
+        size_t base_idx = idx * stride;
+        
+        // Read confidence first for early rejection
+        float confidence = readOutputValue(d_raw_output, output_type, base_idx + 4);
+        
+        if (confidence > conf_threshold) {
+            int classId = static_cast<int>(readOutputValue(d_raw_output, output_type, base_idx + 5));
+            
+            // Apply class filter immediately
+            if (classId >= 0 && classId < max_check_id && d_ignored_class_ids && d_ignored_class_ids[classId]) {
+                return; // Skip ignored classes
+            }
+            
+            // Decode bounding box
+            float x1 = readOutputValue(d_raw_output, output_type, base_idx + 0);
+            float y1 = readOutputValue(d_raw_output, output_type, base_idx + 1);
+            float x2 = readOutputValue(d_raw_output, output_type, base_idx + 2);
+            float y2 = readOutputValue(d_raw_output, output_type, base_idx + 3);
+            
+            // Convert to pixel coordinates
+            int x = static_cast<int>(x1 * img_scale);
+            int y = static_cast<int>(y1 * img_scale);
+            int width = static_cast<int>((x2 - x1) * img_scale);
+            int height = static_cast<int>((y2 - y1) * img_scale);
+            
+            // Validate dimensions
+            if (width > 0 && height > 0) {
+                int write_idx = atomicAdd(d_decoded_count, 1);
+                
+                if (write_idx < max_detections) {
+                    Detection& det = d_decoded_detections[write_idx];
+                    det.x = x;
+                    det.y = y;
+                    det.width = width;
+                    det.height = height;
+                    det.confidence = confidence;
+                    det.classId = classId;
+                }
+            }
+        }
+    }
+}
+
+// Fused decode and filter kernel for YOLO11
+__global__ void decodeAndFilterYolo11Kernel(
+    const void* d_raw_output,
+    int output_type,
+    int num_boxes_raw,
+    int num_rows,
+    int num_classes,
+    float conf_threshold,
+    float img_scale,
+    const unsigned char* __restrict__ d_ignored_class_ids,
+    int max_check_id,
+    Detection* d_decoded_detections,
+    int* d_decoded_count,
+    int max_detections)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (idx < num_boxes_raw) {
+        // Find max score and class
+        float max_score = -1.0f;
+        int max_class_id = -1;
+        
+        for (int c = 0; c < num_classes; ++c) {
+            size_t score_idx = (4 + c) * num_boxes_raw + idx;
+            if (score_idx >= num_rows * num_boxes_raw) continue;
+            
+            float score = readOutputValue(d_raw_output, output_type, score_idx);
+            if (score > max_score) {
+                max_score = score;
+                max_class_id = c;
+            }
+        }
+        
+        // Apply confidence threshold and class filter
+        if (max_score > conf_threshold) {
+            // Check class filter
+            if (max_class_id >= 0 && max_class_id < max_check_id && 
+                d_ignored_class_ids && d_ignored_class_ids[max_class_id]) {
+                return; // Skip ignored classes
+            }
+            
+            // Decode bounding box
+            float cx = readOutputValue(d_raw_output, output_type, 0 * num_boxes_raw + idx);
+            float cy = readOutputValue(d_raw_output, output_type, 1 * num_boxes_raw + idx);
+            float ow = readOutputValue(d_raw_output, output_type, 2 * num_boxes_raw + idx);
+            float oh = readOutputValue(d_raw_output, output_type, 3 * num_boxes_raw + idx);
+            
+            if (ow > 0 && oh > 0) {
+                const float half_ow = 0.5f * ow;
+                const float half_oh = 0.5f * oh;
+                int x = static_cast<int>((cx - half_ow) * img_scale);
+                int y = static_cast<int>((cy - half_oh) * img_scale);
+                int width = static_cast<int>(ow * img_scale);
+                int height = static_cast<int>(oh * img_scale);
+                
+                int write_idx = atomicAdd(d_decoded_count, 1);
+                
+                if (write_idx < max_detections) {
+                    Detection& det = d_decoded_detections[write_idx];
+                    det.x = x;
+                    det.y = y;
+                    det.width = width;
+                    det.height = height;
+                    det.confidence = max_score;
+                    det.classId = max_class_id;
+                }
+            }
+        }
+    }
+}
+
+__device__ inline int2 getSpatialCell(float cx, float cy, float inv_cell_width, float inv_cell_height) {
+    // Direct calculation without divisions
+    int cellX = min(GRID_SIZE - 1, __float2int_rn(cx * inv_cell_width));
+    int cellY = min(GRID_SIZE - 1, __float2int_rn(cy * inv_cell_height));
+    return make_int2(cellX, cellY);
+}
+
+__device__ inline bool cellsAreNear(int2 cell1, int2 cell2, int threshold = 1) {
+    return abs(cell1.x - cell2.x) <= threshold && abs(cell1.y - cell2.y) <= threshold;
 }
 
 __global__ __launch_bounds__(256, 4) void calculateIoUKernel(
     const int* __restrict__ d_x1, const int* __restrict__ d_y1, 
     const int* __restrict__ d_x2, const int* __restrict__ d_y2,
     const float* __restrict__ d_areas, float* __restrict__ d_iou_matrix,
-    int num_boxes, float nms_threshold, int frame_width, int frame_height) 
+    int num_boxes, float nms_threshold, float inv_cell_width, float inv_cell_height) 
 {
-    // Shared memory for caching box coordinates
-    __shared__ int s_x1[256], s_y1[256], s_x2[256], s_y2[256];
-    __shared__ float s_areas[256];
+    // Increased shared memory for better cache utilization
+    extern __shared__ char shared_mem[];
+    int* s_x1 = (int*)shared_mem;
+    int* s_y1 = s_x1 + blockDim.x;
+    int* s_x2 = s_y1 + blockDim.x;
+    int* s_y2 = s_x2 + blockDim.x;
+    float* s_areas = (float*)(s_y2 + blockDim.x);
+    int2* s_cells = (int2*)(s_areas + blockDim.x);
     
-    int tid = threadIdx.x + threadIdx.y * blockDim.x;
+    int tid = threadIdx.x;
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int idy = blockIdx.y * blockDim.y + threadIdx.y;
     
-    // Cooperative loading into shared memory
-    if (tid < blockDim.x * blockDim.y && idx < num_boxes) {
+    // Cooperative loading with coalesced access
+    if (idx < num_boxes) {
         s_x1[tid] = d_x1[idx];
         s_y1[tid] = d_y1[idx];
         s_x2[tid] = d_x2[idx];
         s_y2[tid] = d_y2[idx];
         s_areas[tid] = d_areas[idx];
+        
+        // Pre-calculate spatial cells
+        float cx = (s_x1[tid] + s_x2[tid]) * 0.5f;
+        float cy = (s_y1[tid] + s_y2[tid]) * 0.5f;
+        s_cells[tid] = getSpatialCell(cx, cy, inv_cell_width, inv_cell_height);
     }
     __syncthreads();
     
     if (idx < num_boxes && idy < num_boxes && idx < idy) {
-        // Spatial proximity check with optimized bit operations
-        int center1_x = (s_x1[threadIdx.x] + s_x2[threadIdx.x]) >> 1;
-        int center1_y = (s_y1[threadIdx.x] + s_y2[threadIdx.x]) >> 1;
-        int center2_x = (d_x1[idy] + d_x2[idy]) >> 1;
-        int center2_y = (d_y1[idy] + d_y2[idy]) >> 1;
+        // Load second box data
+        int x1_b = d_x1[idy];
+        int y1_b = d_y1[idy];
+        int x2_b = d_x2[idy];
+        int y2_b = d_y2[idy];
+        float area_b = d_areas[idy];
         
-        int cell1 = getSpatialCell(center1_x, center1_y, frame_width, frame_height);
-        int cell2 = getSpatialCell(center2_x, center2_y, frame_width, frame_height);
+        // Calculate spatial cell for second box
+        float cx_b = (x1_b + x2_b) * 0.5f;
+        float cy_b = (y1_b + y2_b) * 0.5f;
+        int2 cell_b = getSpatialCell(cx_b, cy_b, inv_cell_width, inv_cell_height);
         
-        // Use bit operations for faster grid distance calculation
-        int cellDiffX = abs((cell1 & (GRID_SIZE - 1)) - (cell2 & (GRID_SIZE - 1)));
-        int cellDiffY = abs((cell1 >> GRID_SHIFT) - (cell2 >> GRID_SHIFT));
-        if (cellDiffX > 1 || cellDiffY > 1) {
-            d_iou_matrix[idx * num_boxes + idy] = 0.0f;
-            d_iou_matrix[idy * num_boxes + idx] = 0.0f;
-            return;
+        // Early spatial rejection
+        if (!cellsAreNear(s_cells[tid], cell_b, 1)) {
+            return; // Matrix is initialized to 0
         }
         
-        // Use cached values from shared memory where possible
-        int x1 = max(s_x1[threadIdx.x], d_x1[idy]);
-        int y1 = max(s_y1[threadIdx.x], d_y1[idy]);
-        int x2 = min(s_x2[threadIdx.x], d_x2[idy]);
-        int y2 = min(s_y2[threadIdx.x], d_y2[idy]);
+        // Calculate intersection using min/max intrinsics
+        int x1 = max(s_x1[tid], x1_b);
+        int y1 = max(s_y1[tid], y1_b);
+        int x2 = min(s_x2[tid], x2_b);
+        int y2 = min(s_y2[tid], y2_b);
         
         // Early exit if no overlap
         if (x2 <= x1 || y2 <= y1) {
-            d_iou_matrix[idx * num_boxes + idy] = 0.0f;
-            d_iou_matrix[idy * num_boxes + idx] = 0.0f;
             return;
         }
         
-        // Use fast intrinsic math functions
+        // Use FMA for better performance
         float intersection_area = __int2float_rn(x2 - x1) * __int2float_rn(y2 - y1);
-        float union_area = __fadd_rn(s_areas[threadIdx.x], __fsub_rn(d_areas[idy], intersection_area));
+        float union_area = fmaf(-1.0f, intersection_area, s_areas[tid] + area_b);
         float iou = __fdiv_rn(intersection_area, union_area);
         
-        // Coalesced memory writes
-        d_iou_matrix[idx * num_boxes + idy] = iou;
-        d_iou_matrix[idy * num_boxes + idx] = iou;
+        // Single coalesced write (symmetric matrix)
+        if (iou > nms_threshold) {
+            d_iou_matrix[idx * num_boxes + idy] = iou;
+            d_iou_matrix[idy * num_boxes + idx] = iou;
+        }
     }
 }
 
@@ -239,8 +396,16 @@ void NMSGpu(
         dim3 block_iou(16, 16); 
         dim3 grid_iou((input_num_detections + block_iou.x - 1) / block_iou.x,
                        (input_num_detections + block_iou.y - 1) / block_iou.y);
-        calculateIoUKernel<<<grid_iou, block_iou, 0, stream>>>( 
-            d_x1, d_y1, d_x2, d_y2, d_areas, d_iou_matrix, input_num_detections, nmsThreshold, frame_width, frame_height
+        
+        // Pre-calculate inverse cell dimensions for faster division
+        float inv_cell_width = static_cast<float>(GRID_SIZE) / frame_width;
+        float inv_cell_height = static_cast<float>(GRID_SIZE) / frame_height;
+        
+        // Calculate shared memory size
+        size_t shared_mem_size = block_iou.x * (4 * sizeof(int) + sizeof(float) + sizeof(int2));
+        
+        calculateIoUKernel<<<grid_iou, block_iou, shared_mem_size, stream>>>( 
+            d_x1, d_y1, d_x2, d_y2, d_areas, d_iou_matrix, input_num_detections, nmsThreshold, inv_cell_width, inv_cell_height
         );
         err = cudaGetLastError(); if (err != cudaSuccess) goto cleanup;
     }
@@ -307,17 +472,6 @@ cleanup:
 }
 
 
-
-
-__device__ inline float readOutputValue(const void* buffer, int type, size_t index) {
-    if (type == 0) { // kFLOAT
-        return reinterpret_cast<const float*>(buffer)[index];
-    } else if (type == 1) { // kHALF
-        return __half2float(reinterpret_cast<const __half*>(buffer)[index]);
-    }
-    
-    return 0.0f; 
-}
 
 
 __global__ void decodeYolo10GpuKernel(

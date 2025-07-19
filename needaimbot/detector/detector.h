@@ -81,6 +81,20 @@ public:
 
     int getInputHeight() const { return inputDims.d[2]; }
     int getInputWidth() const { return inputDims.d[3]; }
+    
+    // Batched results structure for reduced memory transfers
+    struct BatchedResults {
+        int finalCount;
+        int bestIndex;
+        float bestScore;
+        Detection bestTarget;
+        int matchingIndex;
+        float matchingScore;
+    };
+    
+    // GPU memory for batched results
+    BatchedResults* m_batchedResultsGpu;
+    BatchedResults m_batchedResultsHost;
 
     std::vector<std::string> inputNames;
     std::vector<std::string> outputNames;

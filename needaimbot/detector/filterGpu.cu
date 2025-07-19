@@ -6,6 +6,15 @@
 #include "postProcess.h" 
 
 
+// Warp-level reduction for HSV pixel counting
+__device__ inline int warpReduceSum(int val) {
+    for (int offset = 16; offset > 0; offset /= 2) {
+        val += __shfl_down_sync(0xffffffff, val, offset);
+    }
+    return val;
+}
+
+// Optimized HSV filtering with parallel reduction
 __global__ __launch_bounds__(256, 8) void filterDetectionsByClassIdKernel(
     const Detection* __restrict__ input_detections,
     int num_input_detections,
@@ -19,62 +28,102 @@ __global__ __launch_bounds__(256, 8) void filterDetectionsByClassIdKernel(
     bool remove_hsv_matches,
     int max_output_detections)
 {
+    // Shared memory for warp-level reductions
+    __shared__ int warp_counts[8]; // 256 threads = 8 warps
+    
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
+    
     for (; idx < num_input_detections; idx += stride) {
+        const Detection det = input_detections[idx];
         
-        const Detection det = input_detections[idx]; 
-        bool should_keep = true;
-
-        
+        // Early rejection based on class ID
         if (det.classId >= 0 && det.classId < max_check_id && d_ignored_class_ids[det.classId]) {
-            continue; 
+            continue;
         }
-
         
+        bool should_keep = true;
+        
+        // HSV filtering with parallel pixel counting
         if (d_hsv_mask != nullptr) {
             int x0 = det.x;
             int y0 = det.y;
             int x1 = x0 + det.width;
             int y1 = y0 + det.height;
-            int count = 0;
-            for (int y = y0; y < y1; ++y) {
-                const unsigned char* row = d_hsv_mask + y * mask_pitch;
-                for (int x = x0; x < x1; ++x) {
-                    if (row[x]) {
-                        ++count;
-                        if (remove_hsv_matches) {
-                            
-                            if (count >= min_hsv_pixels) {
-                                goto skip_detection;
-                            }
-                        } else {
-                            
-                            if (count >= min_hsv_pixels) {
-                                y = y1; 
-                                break;
-                            }
+            
+            // Tile-based processing for better memory access
+            const int TILE_SIZE = 32;
+            int total_count = 0;
+            
+            for (int ty = y0; ty < y1; ty += TILE_SIZE) {
+                for (int tx = x0; tx < x1; tx += TILE_SIZE) {
+                    // Count pixels in this tile using warp-level parallelism
+                    int local_count = 0;
+                    int tid_in_warp = threadIdx.x & 31;
+                    int warp_id = threadIdx.x / 32;
+                    
+                    // Each thread in warp processes different pixels
+                    for (int offset = tid_in_warp; offset < TILE_SIZE * TILE_SIZE; offset += 32) {
+                        int dy = offset / TILE_SIZE;
+                        int dx = offset % TILE_SIZE;
+                        int py = ty + dy;
+                        int px = tx + dx;
+                        
+                        if (py < y1 && px < x1) {
+                            local_count += d_hsv_mask[py * mask_pitch + px] ? 1 : 0;
                         }
                     }
+                    
+                    // Warp-level reduction
+                    local_count = warpReduceSum(local_count);
+                    
+                    // First thread in warp accumulates result
+                    if (tid_in_warp == 0) {
+                        warp_counts[warp_id] = local_count;
+                    }
+                    __syncthreads();
+                    
+                    // Thread 0 sums all warp results
+                    if (threadIdx.x == 0) {
+                        for (int i = 0; i < 8; i++) {
+                            total_count += warp_counts[i];
+                        }
+                    }
+                    __syncthreads();
+                    
+                    // Broadcast result to all threads
+                    total_count = __shfl_sync(0xffffffff, total_count, 0);
+                    
+                    // Early exit if threshold reached
+                    if ((remove_hsv_matches && total_count >= min_hsv_pixels) ||
+                        (!remove_hsv_matches && total_count >= min_hsv_pixels)) {
+                        break;
+                    }
+                }
+                
+                if ((remove_hsv_matches && total_count >= min_hsv_pixels) ||
+                    (!remove_hsv_matches && total_count >= min_hsv_pixels)) {
+                    break;
                 }
             }
             
-            if (!remove_hsv_matches && count < min_hsv_pixels) {
-                goto skip_detection;
+            // Apply filtering logic
+            if (remove_hsv_matches && total_count >= min_hsv_pixels) {
+                should_keep = false;
+            } else if (!remove_hsv_matches && total_count < min_hsv_pixels) {
+                should_keep = false;
             }
         }
-
         
-        int write_idx = atomicAdd(output_count, 1);
-        if (write_idx < max_output_detections) {
-            output_detections[write_idx] = det;
-        } else {
-            atomicSub(output_count, 1);
+        // Write output if detection should be kept
+        if (should_keep) {
+            int write_idx = atomicAdd(output_count, 1);
+            if (write_idx < max_output_detections) {
+                output_detections[write_idx] = det;
+            } else {
+                atomicSub(output_count, 1);
+            }
         }
-
-        continue;
-    skip_detection:
-        continue;
     }
 }
 
