@@ -134,6 +134,7 @@ public:
     CudaBuffer<Detection> m_finalDetectionsGpu;
     CudaBuffer<int> m_finalDetectionsCountGpu;
     int m_finalDetectionsCountHost = 0;
+    std::chrono::steady_clock::time_point m_lastDetectionTime;
     CudaBuffer<Detection> m_classFilteredDetectionsGpu;
     CudaBuffer<int> m_classFilteredCountGpu;
     int m_classFilteredCountHost = 0;
@@ -149,13 +150,6 @@ public:
     CudaBuffer<int> m_matchingIndexGpu;
     CudaBuffer<float> m_matchingScoreGpu;
     
-    // Target persistence to reduce flickering
-    int m_targetLostFrameCount = 0;
-    static constexpr int TARGET_LOST_THRESHOLD = 1; // Wait 1 frame before clearing target
-    
-    // Sticky target to prevent jumping between targets
-    float m_lastTargetScore = 0.0f;
-    static constexpr float STICKY_TARGET_THRESHOLD = 0.8f; // New target must be 20% better to switch
 
     // Target Tracking System
     std::vector<TrackedTarget> m_tracked_targets;
