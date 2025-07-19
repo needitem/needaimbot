@@ -210,11 +210,11 @@ static void draw_class_settings()
     
     UIHelpers::CompactSpacer();
     
-    if (ImGui::BeginTable("class_settings_table", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-        ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 50.0f);
-        ImGui::TableSetupColumn("Name");
-        ImGui::TableSetupColumn("Ignore", ImGuiTableColumnFlags_WidthFixed, 70.0f);
-        ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+    if (ImGui::BeginTable("class_settings_table", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Resizable)) {
+        ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 45.0f);
+        ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Ignore", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+        ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_WidthFixed, 85.0f);
         ImGui::TableHeadersRow();
 
         for (size_t i = 0; i < ctx.config.class_settings.size(); ++i) {

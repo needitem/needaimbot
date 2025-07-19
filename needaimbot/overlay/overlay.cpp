@@ -52,6 +52,8 @@ IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARA
 
 const int BASE_OVERLAY_WIDTH = 620;
 const int BASE_OVERLAY_HEIGHT = 420;
+const int MIN_OVERLAY_WIDTH = 800;  // Minimum width for AI Model tab
+const int MIN_OVERLAY_HEIGHT = 600;
 int overlayWidth = 0;
 int overlayHeight = 0;
 
@@ -311,8 +313,8 @@ bool CreateOverlayWindow()
     auto& ctx = AppContext::getInstance();
     auto& config = ctx.config;  // Reference to avoid global config confusion
     
-    overlayWidth = static_cast<int>(BASE_OVERLAY_WIDTH * ctx.config.overlay_ui_scale);
-    overlayHeight = static_cast<int>(BASE_OVERLAY_HEIGHT * ctx.config.overlay_ui_scale);
+    overlayWidth = static_cast<int>(std::max(MIN_OVERLAY_WIDTH, static_cast<int>(BASE_OVERLAY_WIDTH * ctx.config.overlay_ui_scale)));
+    overlayHeight = static_cast<int>(std::max(MIN_OVERLAY_HEIGHT, static_cast<int>(BASE_OVERLAY_HEIGHT * ctx.config.overlay_ui_scale)));
 
     WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, WndProc, 0L, 0L,
                       GetModuleHandle(NULL), NULL, NULL, NULL, NULL,
@@ -322,7 +324,7 @@ bool CreateOverlayWindow()
     g_hwnd = ::CreateWindowEx(
         WS_EX_TOPMOST | WS_EX_LAYERED,
         wc.lpszClassName, _T("Chrome"),
-        WS_POPUP, 0, 0, overlayWidth, overlayHeight,
+        WS_POPUP | WS_SIZEBOX | WS_MAXIMIZEBOX, 0, 0, overlayWidth, overlayHeight,
         NULL, NULL, wc.hInstance, NULL);
 
     if (g_hwnd == NULL)
@@ -520,10 +522,12 @@ void OverlayThread()
             ImGuiIO& io = ImGui::GetIO();
             io.MouseDrawCursor = false; // Disable software cursor rendering
 
+            RECT rect;
+            GetClientRect(g_hwnd, &rect);
             ImGui::SetNextWindowPos(ImVec2(0, 0));
-            ImGui::SetNextWindowSize(ImVec2((float)overlayWidth, (float)overlayHeight));
+            ImGui::SetNextWindowSize(ImVec2((float)(rect.right - rect.left), (float)(rect.bottom - rect.top)));
 
-            ImGui::Begin("Options", &show_overlay, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar);
+            ImGui::Begin("Options", &show_overlay, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar);
             {
                 std::lock_guard<std::mutex> lock(configMutex);
 
