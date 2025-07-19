@@ -8,6 +8,7 @@
 #include "overlay.h"
 #include "AppContext.h"
 #include "ui_helpers.h"
+#include "common_helpers.h"
 
 static void draw_button_section(const char* title, const char* description, std::vector<std::string>& button_list, const char* add_id, const char* remove_id, bool allow_empty = false)
 {
