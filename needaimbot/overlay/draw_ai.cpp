@@ -15,6 +15,7 @@
 #include "AppContext.h"
 #include "detector/detector.h"
 #include "ui_helpers.h"
+#include "common_helpers.h"
 
 static void draw_model_settings()
 {
@@ -292,15 +293,7 @@ static void draw_class_settings()
     UIHelpers::CompactSpacer();
     
     if (UIHelpers::BeautifulButton("Suggest Next ID", ImVec2(-1, 0))) {
-        int max_id = -1;
-        if (!ctx.config.class_settings.empty()) {
-            for(const auto& cs : ctx.config.class_settings) {
-                if (cs.id > max_id) max_id = cs.id;
-            }
-            new_class_id = max_id + 1;
-        } else {
-            new_class_id = 0;
-        }
+        new_class_id = CommonHelpers::getNextClassId();
     }
     
     if (UIHelpers::BeautifulButton("Add Class", ImVec2(-1, 0))) {
@@ -317,15 +310,7 @@ static void draw_class_settings()
             ctx.config.saveConfig();
             if (ctx.detector) ctx.detector->m_ignore_flags_need_update = true;
             
-            int max_id = -1;
-            if (!ctx.config.class_settings.empty()) {
-                for(const auto& cs : ctx.config.class_settings) {
-                    if (cs.id > max_id) max_id = cs.id;
-                }
-                new_class_id = max_id + 1;
-            } else {
-                new_class_id = 0;
-            }
+            new_class_id = CommonHelpers::getNextClassId();
             new_class_name_buf[0] = '\0'; 
             new_class_ignore = false;
         }

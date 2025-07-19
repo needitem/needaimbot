@@ -4,6 +4,7 @@
 #include "needaimbot.h"
 #include "overlay.h"
 #include "include/other_tools.h"
+#include "common_helpers.h"
 #include <vector>
 #include <string>
 #include <d3d11.h> 
@@ -264,13 +265,7 @@ static void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float debug_
 
                 draw_list->AddRect(p1, p2, color, 1.0f, 0, thickness); 
 
-                std::string className = "Unknown";
-                for(const auto& cs : ctx.config.class_settings) { 
-                    if (cs.id == det.classId) {
-                        className = cs.name;
-                        break;
-                    }
-                }
+                std::string className = CommonHelpers::getClassNameById(det.classId);
                 std::string label = className + " (" + std::to_string(static_cast<int>(det.confidence * 100)) + "%)";
                 if (is_best_target) {
                     label = "[TARGET] " + label;
@@ -658,53 +653,7 @@ void draw_debug()
     ImGui::SeparatorText("Screenshot Settings");
     ImGui::Spacing();
 
-    for (size_t i = 0; i < ctx.config.screenshot_button.size(); )
-    {
-        std::string& current_key_name = ctx.config.screenshot_button[i];
-
-        int current_index = -1;
-        for (size_t k = 0; k < key_names.size(); ++k)
-        {
-            if (key_names[k] == current_key_name)
-            {
-                current_index = static_cast<int>(k);
-                break;
-            }
-        }
-
-        if (current_index == -1)
-        {
-            current_index = 0;
-        }
-
-        std::string combo_label = "Screenshot Button " + std::to_string(i);
-
-        if (ImGui::Combo(combo_label.c_str(), &current_index, key_names_cstrs.data(), static_cast<int>(key_names_cstrs.size())))
-        {
-            current_key_name = key_names[current_index];
-            ctx.config.saveConfig();
-        }
-
-        ImGui::SameLine();
-        std::string remove_button_label = "Remove##button_screenshot" + std::to_string(i);
-        if (ImGui::Button(remove_button_label.c_str()))
-        {
-            if (ctx.config.screenshot_button.size() <= 1)
-            {
-                ctx.config.screenshot_button[0] = std::string("None");
-                ctx.config.saveConfig();
-                continue;
-            }
-            else
-            {
-                ctx.config.screenshot_button.erase(ctx.config.screenshot_button.begin() + i);
-                ctx.config.saveConfig();
-                continue;
-            }
-        }
-
-        ++i;
-    }
+    CommonHelpers::drawKeyBindingList("Screenshot Button", ctx.config.screenshot_button, key_names, key_names_cstrs);
 
     ImGui::Spacing();
     if (ImGui::InputInt("Screenshot Delay (ms)", &ctx.config.screenshot_delay, 50, 500)) { ctx.config.saveConfig(); }
