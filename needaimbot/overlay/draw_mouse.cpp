@@ -6,7 +6,6 @@
 #include <shellapi.h>
 
 #include "AppContext.h"
-#include "imgui/imgui.h"
 #include "needaimbot.h"
 #include "include/other_tools.h"
 #include "overlay.h"
@@ -31,21 +30,33 @@ static void draw_pid_controls()
     UIHelpers::SettingsSubHeader("X-Axis (Horizontal)");
     
     float kp_x = static_cast<float>(ctx.config.kp_x);
-    if (UIHelpers::EnhancedSliderFloat("Kp X", &kp_x, 0.0f, 2.0f, "%.3f", "Proportional gain for X-axis. Higher values = faster response but may cause oscillation.")) {
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::DragFloat("Kp X##kp_x", &kp_x, 0.001f, 0.0f, 2.0f, "%.3f")) {
         ctx.config.kp_x = static_cast<double>(kp_x);
         ctx.config.saveConfig();
     }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Proportional gain for X-axis. Higher values = faster response but may cause oscillation.\nUse Ctrl+Click to input value directly.");
+    }
     
     float ki_x = static_cast<float>(ctx.config.ki_x);
-    if (UIHelpers::EnhancedSliderFloat("Ki X", &ki_x, 0.0f, 1.0f, "%.3f", "Integral gain for X-axis. Helps eliminate steady-state error.")) {
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::DragFloat("Ki X##ki_x", &ki_x, 0.0001f, 0.0f, 0.1f, "%.4f")) {
         ctx.config.ki_x = static_cast<double>(ki_x);
         ctx.config.saveConfig();
     }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Integral gain for X-axis. Helps eliminate steady-state error.\nUse Ctrl+Click to input value directly.");
+    }
     
     float kd_x = static_cast<float>(ctx.config.kd_x);
-    if (UIHelpers::EnhancedSliderFloat("Kd X", &kd_x, 0.0f, 1.0f, "%.3f", "Derivative gain for X-axis. Reduces overshoot and oscillation.")) {
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::DragFloat("Kd X##kd_x", &kd_x, 0.0001f, 0.0f, 0.1f, "%.4f")) {
         ctx.config.kd_x = static_cast<double>(kd_x);
         ctx.config.saveConfig();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Derivative gain for X-axis. Reduces overshoot and oscillation.\nUse Ctrl+Click to input value directly.");
     }
     
     ImGui::NextColumn();
@@ -54,24 +65,68 @@ static void draw_pid_controls()
     UIHelpers::SettingsSubHeader("Y-Axis (Vertical)");
     
     float kp_y = static_cast<float>(ctx.config.kp_y);
-    if (UIHelpers::EnhancedSliderFloat("Kp Y", &kp_y, 0.0f, 2.0f, "%.3f", "Proportional gain for Y-axis. Higher values = faster response but may cause oscillation.")) {
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::DragFloat("Kp Y##kp_y", &kp_y, 0.001f, 0.0f, 2.0f, "%.3f")) {
         ctx.config.kp_y = static_cast<double>(kp_y);
         ctx.config.saveConfig();
     }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Proportional gain for Y-axis. Higher values = faster response but may cause oscillation.\nUse Ctrl+Click to input value directly.");
+    }
     
     float ki_y = static_cast<float>(ctx.config.ki_y);
-    if (UIHelpers::EnhancedSliderFloat("Ki Y", &ki_y, 0.0f, 1.0f, "%.3f", "Integral gain for Y-axis. Helps eliminate steady-state error.")) {
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::DragFloat("Ki Y##ki_y", &ki_y, 0.0001f, 0.0f, 0.1f, "%.4f")) {
         ctx.config.ki_y = static_cast<double>(ki_y);
         ctx.config.saveConfig();
     }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Integral gain for Y-axis. Helps eliminate steady-state error.\nUse Ctrl+Click to input value directly.");
+    }
     
     float kd_y = static_cast<float>(ctx.config.kd_y);
-    if (UIHelpers::EnhancedSliderFloat("Kd Y", &kd_y, 0.0f, 1.0f, "%.3f", "Derivative gain for Y-axis. Reduces overshoot and oscillation.")) {
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::DragFloat("Kd Y##kd_y", &kd_y, 0.0001f, 0.0f, 0.1f, "%.4f")) {
         ctx.config.kd_y = static_cast<double>(kd_y);
         ctx.config.saveConfig();
     }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Derivative gain for Y-axis. Reduces overshoot and oscillation.\nUse Ctrl+Click to input value directly.");
+    }
     
     ImGui::Columns(1);
+    
+    UIHelpers::Spacer();
+    UIHelpers::SettingsSubHeader("Quick Presets");
+    
+    if (ImGui::Button("Conservative", ImVec2((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x * 2) / 3, 0))) {
+        ctx.config.kp_x = 0.3; ctx.config.ki_x = 0.001; ctx.config.kd_x = 0.005;
+        ctx.config.kp_y = 0.3; ctx.config.ki_y = 0.001; ctx.config.kd_y = 0.005;
+        ctx.config.saveConfig();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Safe values for most situations");
+    }
+    
+    ImGui::SameLine();
+    if (ImGui::Button("Balanced", ImVec2((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) / 2, 0))) {
+        ctx.config.kp_x = 0.5; ctx.config.ki_x = 0.003; ctx.config.kd_x = 0.01;
+        ctx.config.kp_y = 0.5; ctx.config.ki_y = 0.003; ctx.config.kd_y = 0.01;
+        ctx.config.saveConfig();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Balanced between speed and stability");
+    }
+    
+    ImGui::SameLine();
+    if (ImGui::Button("Aggressive", ImVec2(-1, 0))) {
+        ctx.config.kp_x = 0.8; ctx.config.ki_x = 0.005; ctx.config.kd_x = 0.02;
+        ctx.config.kp_y = 0.8; ctx.config.ki_y = 0.005; ctx.config.kd_y = 0.02;
+        ctx.config.saveConfig();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Fast tracking, may oscillate");
+    }
     
     UIHelpers::EndCard();
 }
