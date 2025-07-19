@@ -547,19 +547,6 @@ void OverlayThread()
                         ImGui::EndTabItem();
                     }
 
-                    // Targeting - Target detection and selection
-                    if (ImGui::BeginTabItem("Targeting"))
-                    {
-                        ImGui::BeginChild("##targeting_content", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
-                        
-                        // Target offset and selection settings
-                        UIHelpers::BeginSettingsSection("Target Selection", "Configure how targets are selected and prioritized");
-                        // draw_targeting() removed - functionality moved elsewhere
-                        UIHelpers::EndSettingsSection();
-                        
-                        ImGui::EndChild();
-                        ImGui::EndTabItem();
-                    }
 
                     // Mouse Movement
                     if (ImGui::BeginTabItem("Mouse"))
