@@ -16,6 +16,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include "opencv2/core/cuda.hpp" 
 
 
@@ -197,6 +198,91 @@ static void uploadHsvMaskTexture(const cv::Mat& grayMask)
     }
 }
 
+static void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float debug_scale) {
+    auto& ctx = AppContext::getInstance();
+    
+    if (!ctx.detector) return;
+    
+    std::lock_guard<std::mutex> det_lock(ctx.detector->detectionMutex);
+    
+    // Check if detection results are fresh (less than 100ms old)
+    auto now = std::chrono::steady_clock::now();
+    auto timeSinceLastDetection = std::chrono::duration_cast<std::chrono::milliseconds>(now - ctx.detector->m_lastDetectionTime).count();
+    
+    if (timeSinceLastDetection > 100) {
+        // Detection results are too old, don't display them
+        return;
+    }
+    
+    if (ctx.detector->m_finalDetectionsCountHost > 0 && ctx.detector->m_finalDetectionsGpu.get() != nullptr)
+    {
+        std::vector<Detection> host_detections(ctx.detector->m_finalDetectionsCountHost);
+        cudaError_t err = cudaMemcpy(host_detections.data(), ctx.detector->m_finalDetectionsGpu.get(),
+                                     ctx.detector->m_finalDetectionsCountHost * sizeof(Detection),
+                                     cudaMemcpyDeviceToHost);
+
+        if (err == cudaSuccess)
+        {
+            for (const auto& det : host_detections)
+            {
+                // Skip invalid detections
+                if (det.width <= 0 || det.height <= 0) {
+                    continue;
+                }
+                
+                ImVec2 p1(image_pos.x + det.x * debug_scale,
+                          image_pos.y + det.y * debug_scale);
+                ImVec2 p2(image_pos.x + (det.x + det.width) * debug_scale,
+                          image_pos.y + (det.y + det.height) * debug_scale);
+
+                // Check if this is the best target
+                bool is_best_target = false;
+                {
+                    std::lock_guard<std::mutex> lock(ctx.overlay_target_mutex);
+                    if (ctx.overlay_has_target.load() && 
+                        det.x == ctx.overlay_target_info.x &&
+                        det.y == ctx.overlay_target_info.y &&
+                        det.width == ctx.overlay_target_info.width &&
+                        det.height == ctx.overlay_target_info.height) {
+                        is_best_target = true;
+                    }
+                }
+
+                // Color coding: Green=best target, Yellow=valid target, Red=low confidence
+                ImU32 color;
+                float thickness;
+                if (is_best_target) {
+                    color = IM_COL32(0, 255, 0, 255);  // Green for best target
+                    thickness = 3.0f;
+                } else if (det.confidence >= ctx.config.confidence_threshold) {
+                    color = IM_COL32(255, 255, 0, 255);  // Yellow for valid targets
+                    thickness = 2.0f;
+                } else {
+                    color = IM_COL32(255, 0, 0, 255);   // Red for low confidence
+                    thickness = 1.0f;
+                }
+
+                draw_list->AddRect(p1, p2, color, 1.0f, 0, thickness); 
+
+                std::string className = "Unknown";
+                for(const auto& cs : ctx.config.class_settings) { 
+                    if (cs.id == det.classId) {
+                        className = cs.name;
+                        break;
+                    }
+                }
+                std::string label = className + " (" + std::to_string(static_cast<int>(det.confidence * 100)) + "%)";
+                if (is_best_target) {
+                    label = "[TARGET] " + label;
+                }
+                ImU32 text_color = is_best_target ? IM_COL32(0, 255, 0, 255) : 
+                                  (det.confidence >= ctx.config.confidence_threshold ? IM_COL32(255, 255, 0, 255) : IM_COL32(255, 0, 0, 255));
+                draw_list->AddText(ImVec2(p1.x, p1.y - 16), text_color, label.c_str());
+            }
+        }
+    }
+}
+
 
 void draw_debug_frame()
 {
@@ -244,49 +330,8 @@ void draw_debug_frame()
     ImVec2 image_pos = ImGui::GetItemRectMin();
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
 
-    
-    {
-        if (ctx.detector) {
-            std::lock_guard<std::mutex> det_lock(ctx.detector->detectionMutex);
-            if (ctx.detector->m_finalDetectionsCountHost > 0 && ctx.detector->m_finalDetectionsGpu.get() != nullptr)
-            {
-                std::vector<Detection> host_detections(ctx.detector->m_finalDetectionsCountHost);
-                cudaError_t err = cudaMemcpy(host_detections.data(), ctx.detector->m_finalDetectionsGpu.get(),
-                                             ctx.detector->m_finalDetectionsCountHost * sizeof(Detection),
-                                             cudaMemcpyDeviceToHost);
-
-                if (err == cudaSuccess)
-                {
-                    for (const auto& det : host_detections)
-                    {
-                        // Skip invalid detections
-                        if (det.width <= 0 || det.height <= 0) {
-                            continue;
-                        }
-                        
-                        ImVec2 p1(image_pos.x + det.x * debug_scale,
-                                  image_pos.y + det.y * debug_scale);
-                        ImVec2 p2(image_pos.x + (det.x + det.width) * debug_scale,
-                                  image_pos.y + (det.y + det.height) * debug_scale);
-
-                        ImU32 color = IM_COL32(255, 0, 0, 255); 
-
-                        draw_list->AddRect(p1, p2, color, 1.0f, 0, 1.5f); 
-
-                        std::string className = "Unknown";
-                        for(const auto& cs : ctx.config.class_settings) { 
-                            if (cs.id == det.classId) {
-                                className = cs.name;
-                                break;
-                            }
-                        }
-                        std::string label = className + " (" + std::to_string(static_cast<int>(det.confidence * 100)) + "%)";
-                        draw_list->AddText(ImVec2(p1.x, p1.y - 16), IM_COL32(255, 255, 0, 255), label.c_str());
-                    }
-                }
-            }
-        }
-    }
+    // Draw detections
+    drawDetections(draw_list, image_pos, debug_scale);
 
 
     
@@ -318,22 +363,6 @@ inline std::vector<const char*> getProfileCstrs(const std::vector<std::string>& 
 void draw_debug()
 {
     auto& ctx = AppContext::getInstance();
-
-    // Declare these variables at the top of the function scope
-    bool has_target_for_overlay = false;
-    Detection target_for_overlay = {};
-    
-    // Acquire lock and populate variables once per frame
-    {
-        std::lock_guard<std::mutex> lock(ctx.overlay_target_mutex);
-        has_target_for_overlay = ctx.overlay_has_target.load();
-        if (has_target_for_overlay) {
-            target_for_overlay = ctx.overlay_target_info;
-        } else {
-            // Clear target data when no target is detected
-            target_for_overlay = {};
-        }
-    }
     
     if (ctx.config.show_fps) {
         ImGui::Text("Capture FPS: %.1f", ctx.g_current_capture_fps.load());
@@ -492,79 +521,8 @@ void draw_debug()
         ImVec2 image_pos = ImGui::GetItemRectMin();
         ImDrawList* draw_list = ImGui::GetWindowDrawList();
 
-        
-        {
-            if (ctx.detector) {
-                std::lock_guard<std::mutex> det_lock(ctx.detector->detectionMutex);
-                
-                if (ctx.detector->m_finalDetectionsCountHost > 0 && ctx.detector->m_finalDetectionsGpu.get() != nullptr)
-                {
-                    std::vector<Detection> host_detections(ctx.detector->m_finalDetectionsCountHost);
-                    cudaError_t err = cudaMemcpy(host_detections.data(), ctx.detector->m_finalDetectionsGpu.get(),
-                                                 ctx.detector->m_finalDetectionsCountHost * sizeof(Detection),
-                                                 cudaMemcpyDeviceToHost);
-
-                    if (err == cudaSuccess)
-                    {
-                        for (size_t i = 0; i < host_detections.size(); ++i)
-                        {
-                            const auto& det = host_detections[i];
-                            
-                            // Skip invalid detections
-                            if (det.width <= 0 || det.height <= 0) {
-                                continue;
-                            }
-                            
-                            ImVec2 p1(image_pos.x + det.x * debug_scale,
-                                      image_pos.y + det.y * debug_scale);
-                            ImVec2 p2(image_pos.x + (det.x + det.width) * debug_scale,
-                                      image_pos.y + (det.y + det.height) * debug_scale);
-
-                            // Check if this is the best target (using overlay's synchronized data)
-                            bool is_best_target = false;
-                            if (has_target_for_overlay && 
-                                det.x == target_for_overlay.x &&
-                                det.y == target_for_overlay.y &&
-                                det.width == target_for_overlay.width &&
-                                det.height == target_for_overlay.height) {
-                                is_best_target = true;
-                            }
-
-                            // Color coding: Green=best target, Yellow=valid target, Red=low confidence
-                            ImU32 color;
-                            float thickness;
-                            if (is_best_target) {
-                                color = IM_COL32(0, 255, 0, 255);  // Green for best target
-                                thickness = 3.0f;
-                            } else if (det.confidence >= ctx.config.confidence_threshold) {
-                                color = IM_COL32(255, 255, 0, 255);  // Yellow for valid targets
-                                thickness = 2.0f;
-                            } else {
-                                color = IM_COL32(255, 0, 0, 255);   // Red for low confidence
-                                thickness = 1.0f;
-                            }
-
-                            draw_list->AddRect(p1, p2, color, 1.0f, 0, thickness); 
-
-                            std::string className = "Unknown";
-                            for(const auto& cs : ctx.config.class_settings) { 
-                                if (cs.id == det.classId) {
-                                    className = cs.name;
-                                    break;
-                                }
-                            }
-                            std::string label = className + " (" + std::to_string(static_cast<int>(det.confidence * 100)) + "%)";
-                            if (is_best_target) {
-                                label = "[TARGET] " + label;
-                            }
-                            ImU32 text_color = is_best_target ? IM_COL32(0, 255, 0, 255) : 
-                                              (det.confidence >= ctx.config.confidence_threshold ? IM_COL32(255, 255, 0, 255) : IM_COL32(255, 0, 0, 255));
-                            draw_list->AddText(ImVec2(p1.x, p1.y - 16), text_color, label.c_str());
-                        }
-                    }
-                }
-            }
-        }
+        // Draw detections
+        drawDetections(draw_list, image_pos, debug_scale);
 
         // Draw center crosshair with offset
         float center_x = image_pos.x + (texW * debug_scale) / 2.0f + (ctx.config.crosshair_offset_x * debug_scale);
@@ -580,10 +538,17 @@ void draw_debug()
         ImGui::Text("Color Legend: Green=Best Target, Yellow=Valid, Red=Low Confidence");
         
         // Draw target offset if best target exists and is valid (using synchronized overlay data)
-        if (has_target_for_overlay && 
-            target_for_overlay.width > 0 && 
-            target_for_overlay.height > 0) {
-            auto& target = target_for_overlay;
+        Detection target;
+        bool hasTarget = false;
+        {
+            std::lock_guard<std::mutex> lock(ctx.overlay_target_mutex);
+            hasTarget = ctx.overlay_has_target.load();
+            if (hasTarget) {
+                target = ctx.overlay_target_info;
+            }
+        }
+        
+        if (hasTarget && target.width > 0 && target.height > 0) {
             float target_center_x = image_pos.x + (target.x + target.width / 2.0f) * debug_scale;
             
             // Calculate Y offset based on head/body settings

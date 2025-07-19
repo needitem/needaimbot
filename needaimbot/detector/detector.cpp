@@ -97,7 +97,6 @@ Detector::Detector()
     m_cudaContextInitialized(false),
     m_hasBestTarget(false),
     m_bestTargetIndexHost(-1),
-    m_targetLostFrameCount(0),
     m_finalDetectionsCountHost(0),
     m_classFilteredCountHost(0),
     m_host_ignore_flags_uchar(MAX_CLASSES_FOR_FILTERING, 1), 
@@ -855,6 +854,7 @@ void Detector::inferenceThread()
                 
                 // Extract results from batched structure
                 m_finalDetectionsCountHost = m_batchedResultsHost.finalCount;
+                m_lastDetectionTime = std::chrono::steady_clock::now();
                 
                 // Target handling logic with proper reset
                 {
@@ -933,31 +933,18 @@ void Detector::inferenceThread()
                         // Update target tracking state
                         if (m_bestTargetIndexHost >= 0 && m_bestTargetIndexHost < m_finalDetectionsCountHost) {
                             m_hasBestTarget = true;
-                            m_targetLostFrameCount = 0;
-                            m_lastTargetScore = newBestScore;
                         } else {
-                            // No valid target found in current detections
-                            m_targetLostFrameCount++;
-                            if (m_targetLostFrameCount >= TARGET_LOST_THRESHOLD) {
-                                // Only clear target after threshold is reached
-                                m_hasBestTarget = false;
-                                memset(&m_bestTargetHost, 0, sizeof(Detection));
-                                m_bestTargetIndexHost = -1;
-                                m_lastTargetScore = 0.0f;
-                            }
-                            // Otherwise keep previous target
-                        }
-                    }
-                    else if (m_finalDetectionsCountHost == 0) {
-                        // No detections at all
-                        m_targetLostFrameCount++;
-                        if (m_targetLostFrameCount >= TARGET_LOST_THRESHOLD) {
-                            // Only clear target after threshold is reached
+                            // No valid target found - clear immediately
                             m_hasBestTarget = false;
                             memset(&m_bestTargetHost, 0, sizeof(Detection));
                             m_bestTargetIndexHost = -1;
                         }
-                        // Otherwise keep previous target
+                    }
+                    else if (m_finalDetectionsCountHost == 0) {
+                        // No detections at all - clear immediately
+                        m_hasBestTarget = false;
+                        memset(&m_bestTargetHost, 0, sizeof(Detection));
+                        m_bestTargetIndexHost = -1;
                     }
                     
                     detectionVersion++;
