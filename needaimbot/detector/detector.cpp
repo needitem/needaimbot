@@ -104,11 +104,17 @@ Detector::Detector()
     m_ignore_flags_need_update(true) 
     , m_isTargetLocked(false) 
 {
-    
+    // Initialize batched results
+    cudaMalloc((void**)&m_batchedResultsGpu, sizeof(BatchedResults));
+    memset(&m_batchedResultsHost, 0, sizeof(BatchedResults));
 }
 
 Detector::~Detector()
 {
+    if (m_batchedResultsGpu) {
+        cudaFree(m_batchedResultsGpu);
+        m_batchedResultsGpu = nullptr;
+    }
     
     if (stream) cudaStreamDestroy(stream);
     if (preprocessStream) cudaStreamDestroy(preprocessStream);
@@ -634,6 +640,43 @@ void Detector::inferenceThread()
         std::cerr << "[Detector Thread] CUDA context not initialized. Inference thread exiting." << std::endl;
         return;
     }
+    
+    // Cache frequently accessed config values to reduce mutex contention
+    struct CachedConfig {
+        int detection_resolution;
+        int max_detections;
+        float confidence_threshold;
+        float nms_threshold;
+        float distance_weight;
+        float confidence_weight;
+        float crosshair_offset_x;
+        float crosshair_offset_y;
+        float sticky_target_threshold;
+        bool enable_hsv_filter;
+        int min_hsv_pixels_required;
+        bool hsv_filter_remove_on_match;
+        
+        void update(const Config& config) {
+            detection_resolution = config.detection_resolution;
+            max_detections = config.max_detections;
+            confidence_threshold = config.confidence_threshold;
+            nms_threshold = config.nms_threshold;
+            distance_weight = config.distance_weight;
+            confidence_weight = config.confidence_weight;
+            crosshair_offset_x = config.crosshair_offset_x;
+            crosshair_offset_y = config.crosshair_offset_y;
+            sticky_target_threshold = config.sticky_target_threshold;
+            enable_hsv_filter = config.enable_hsv_filter;
+            min_hsv_pixels_required = config.min_hsv_pixels;
+            hsv_filter_remove_on_match = config.remove_hsv_matches;
+        }
+    } cached_config;
+    
+    // Initial config cache
+    {
+        std::lock_guard<std::mutex> lock(ctx.configMutex);
+        cached_config.update(ctx.config);
+    }
 
     cv::cuda::GpuMat frameGpu;
     static auto last_cycle_start_time = std::chrono::high_resolution_clock::time_point{};
@@ -772,11 +815,46 @@ void Detector::inferenceThread()
                 // Wait for postprocessing to complete before copying
                 cudaStreamWaitEvent(stream, processingDone, 0);
                 
-                // Copy final detections count to host
-                cudaMemcpyAsync(&m_finalDetectionsCountHost, m_finalDetectionsCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
+                // Prepare batched results on GPU by copying individual elements
+                // Since we can't launch a kernel from a .cpp file, we'll copy the data separately
+                cudaMemcpyAsync(&m_batchedResultsHost.finalCount, m_finalDetectionsCountGpu.get(), 
+                               sizeof(int), cudaMemcpyDeviceToHost, stream);
                 
-                // Synchronize to ensure count is available
+                // Copy best index and score if valid
+                int bestIndexTemp = -1;
+                cudaMemcpyAsync(&bestIndexTemp, m_bestTargetIndexGpu.get(), 
+                               sizeof(int), cudaMemcpyDeviceToHost, stream);
                 cudaStreamSynchronize(stream);
+                
+                m_batchedResultsHost.bestIndex = bestIndexTemp;
+                if (bestIndexTemp >= 0 && bestIndexTemp < m_finalDetectionsCountHost) {
+                    cudaMemcpyAsync(&m_batchedResultsHost.bestScore, &m_scoresGpu.get()[bestIndexTemp], 
+                                   sizeof(float), cudaMemcpyDeviceToHost, stream);
+                    cudaMemcpyAsync(&m_batchedResultsHost.bestTarget, &m_finalDetectionsGpu.get()[bestIndexTemp], 
+                                   sizeof(Detection), cudaMemcpyDeviceToHost, stream);
+                } else {
+                    m_batchedResultsHost.bestScore = -1.0f;
+                }
+                
+                // Copy matching index and score if valid
+                int matchingIndexTemp = -1;
+                cudaMemcpyAsync(&matchingIndexTemp, m_matchingIndexGpu.get(), 
+                               sizeof(int), cudaMemcpyDeviceToHost, stream);
+                cudaStreamSynchronize(stream);
+                
+                m_batchedResultsHost.matchingIndex = matchingIndexTemp;
+                if (matchingIndexTemp >= 0 && matchingIndexTemp < m_finalDetectionsCountHost) {
+                    cudaMemcpyAsync(&m_batchedResultsHost.matchingScore, &m_scoresGpu.get()[matchingIndexTemp], 
+                                   sizeof(float), cudaMemcpyDeviceToHost, stream);
+                } else {
+                    m_batchedResultsHost.matchingScore = -1.0f;
+                }
+                
+                // Synchronize to ensure results are available
+                cudaStreamSynchronize(stream);
+                
+                // Extract results from batched structure
+                m_finalDetectionsCountHost = m_batchedResultsHost.finalCount;
                 
                 // Target handling logic with proper reset
                 {
@@ -785,11 +863,11 @@ void Detector::inferenceThread()
                     // Only proceed if we have detections
                     if (m_finalDetectionsCountHost > 0 && !ctx.shouldExit)
                     {
-                        // First, calculate scores for all detections
+                        // First, calculate scores for all detections using cached config
                         calculateTargetScoresGpu(m_finalDetectionsGpu.get(), m_finalDetectionsCountHost, m_scoresGpu.get(), 
-                            ctx.config.detection_resolution, ctx.config.detection_resolution, 
-                            ctx.config.distance_weight, ctx.config.confidence_weight, m_headClassId, 
-                            ctx.config.crosshair_offset_x, ctx.config.crosshair_offset_y, stream);
+                            cached_config.detection_resolution, cached_config.detection_resolution, 
+                            cached_config.distance_weight, cached_config.confidence_weight, m_headClassId, 
+                            cached_config.crosshair_offset_x, cached_config.crosshair_offset_y, stream);
                         
                         // Find the overall best target
                         findBestTargetGpu(m_scoresGpu.get(), m_finalDetectionsCountHost, m_bestTargetIndexGpu.get(), stream);
@@ -802,54 +880,58 @@ void Detector::inferenceThread()
                             // Find the detection that best matches our previous target
                             findMatchingTargetGpu(m_finalDetectionsGpu.get(), m_finalDetectionsCountHost, 
                                 m_bestTargetHost, m_matchingIndexGpu.get(), m_matchingScoreGpu.get(), stream);
-                            
-                            // Get the matching index and the best index
-                            int matchingIndex = -1;
-                            cudaMemcpyAsync(&matchingIndex, m_matchingIndexGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
-                            cudaMemcpyAsync(&newBestIndex, m_bestTargetIndexGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
-                            cudaStreamSynchronize(stream);
+                        }
+                        
+                        // Wait for all target processing to complete
+                        cudaStreamSynchronize(stream);
+                        
+                        // Use batched results
+                        newBestIndex = m_batchedResultsHost.bestIndex;
+                        
+                        if (m_hasBestTarget && newBestIndex >= 0) {
+                            int matchingIndex = m_batchedResultsHost.matchingIndex;
                             
                             // If we found a match and it's valid
                             if (matchingIndex >= 0 && matchingIndex < m_finalDetectionsCountHost && 
                                 newBestIndex >= 0 && newBestIndex < m_finalDetectionsCountHost) {
                                 
-                                // Get scores for both targets
-                                float matchingScore, bestScore;
-                                cudaMemcpy(&matchingScore, &m_scoresGpu.get()[matchingIndex], sizeof(float), cudaMemcpyDeviceToHost);
-                                cudaMemcpy(&bestScore, &m_scoresGpu.get()[newBestIndex], sizeof(float), cudaMemcpyDeviceToHost);
+                                float matchingScore = m_batchedResultsHost.matchingScore;
+                                float bestScore = m_batchedResultsHost.bestScore;
                                 
                                 // Apply sticky target logic
                                 // Only switch if the new target is significantly better
-                                float threshold = 1.0f - ctx.config.sticky_target_threshold; // Convert to "how much better" metric
+                                float threshold = 1.0f - cached_config.sticky_target_threshold; // Convert to "how much better" metric
                                 if (bestScore < matchingScore * threshold) {
                                     // New target is significantly better, switch to it
                                     m_bestTargetIndexHost = newBestIndex;
                                     newBestScore = bestScore;
+                                    m_bestTargetHost = m_batchedResultsHost.bestTarget;
                                 } else {
                                     // Stick with the matched target
                                     m_bestTargetIndexHost = matchingIndex;
                                     newBestScore = matchingScore;
+                                    // Need to copy the matching target separately
+                                    cudaMemcpy(&m_bestTargetHost, &m_finalDetectionsGpu.get()[matchingIndex], 
+                                             sizeof(Detection), cudaMemcpyDeviceToHost);
                                 }
                             } else if (newBestIndex >= 0 && newBestIndex < m_finalDetectionsCountHost) {
                                 // No match found, use the best target
                                 m_bestTargetIndexHost = newBestIndex;
-                                cudaMemcpy(&newBestScore, &m_scoresGpu.get()[newBestIndex], sizeof(float), cudaMemcpyDeviceToHost);
+                                newBestScore = m_batchedResultsHost.bestScore;
+                                m_bestTargetHost = m_batchedResultsHost.bestTarget;
                             } else {
                                 // No valid targets at all
                                 m_bestTargetIndexHost = -1;
                             }
-                        } else {
+                        } else if (newBestIndex >= 0 && newBestIndex < m_finalDetectionsCountHost) {
                             // No previous target, just use the best one
-                            cudaMemcpyAsync(&m_bestTargetIndexHost, m_bestTargetIndexGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
-                            cudaStreamSynchronize(stream);
-                            if (m_bestTargetIndexHost >= 0 && m_bestTargetIndexHost < m_finalDetectionsCountHost) {
-                                cudaMemcpy(&newBestScore, &m_scoresGpu.get()[m_bestTargetIndexHost], sizeof(float), cudaMemcpyDeviceToHost);
-                            }
+                            m_bestTargetIndexHost = newBestIndex;
+                            newBestScore = m_batchedResultsHost.bestScore;
+                            m_bestTargetHost = m_batchedResultsHost.bestTarget;
                         }
                         
-                        // Copy the best target to host if valid
+                        // Update target tracking state
                         if (m_bestTargetIndexHost >= 0 && m_bestTargetIndexHost < m_finalDetectionsCountHost) {
-                            cudaMemcpy(&m_bestTargetHost, &m_finalDetectionsGpu.get()[m_bestTargetIndexHost], sizeof(Detection), cudaMemcpyDeviceToHost);
                             m_hasBestTarget = true;
                             m_targetLostFrameCount = 0;
                             m_lastTargetScore = newBestScore;
