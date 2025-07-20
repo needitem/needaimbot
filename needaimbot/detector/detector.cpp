@@ -101,7 +101,7 @@ Detector::Detector()
     m_host_ignore_flags_uchar(MAX_CLASSES_FOR_FILTERING, 1), 
     m_ignore_flags_need_update(true) 
     , m_isTargetLocked(false)
-    , m_lastDetectionTime(std::chrono::steady_clock::now())
+    , m_lastDetectionTime(std::chrono::steady_clock::now()) 
 {
     // Initialize batched results
     cudaMalloc((void**)&m_batchedResultsGpu, sizeof(BatchedResults));
@@ -149,15 +149,6 @@ Detector::~Detector()
     {
         cudaFree(inputBufferDevice);
     }
-
-    
-    // Destroy double buffer events
-    for (int i = 0; i < 2; i++) {
-        if (m_doubleBuffer.readyEvents[i]) {
-            cudaEventDestroy(m_doubleBuffer.readyEvents[i]);
-        }
-    }
-    
     
     // Synchronize to ensure all CUDA operations are complete
     cudaStreamSynchronize(stream);
@@ -296,15 +287,10 @@ bool Detector::initializeCudaContext()
     }
     std::cout << "[Detector] Successfully set CUDA device to " << ctx.config.cuda_device_id << "." << std::endl;
 
-    // Create multiple streams for pipeline optimization with priorities
-    // Get stream priority range
-    int leastPriority, greatestPriority;
-    cudaDeviceGetStreamPriorityRange(&leastPriority, &greatestPriority);
-    
-    // Create streams with appropriate priorities (inference gets highest priority)
-    if (!checkCudaError(cudaStreamCreateWithPriority(&stream, cudaStreamNonBlocking, greatestPriority), "creating main stream")) { m_cudaContextInitialized = false; return false; }
-    if (!checkCudaError(cudaStreamCreateWithPriority(&preprocessStream, cudaStreamNonBlocking, (greatestPriority + leastPriority) / 2), "creating preprocess stream")) { m_cudaContextInitialized = false; return false; }
-    if (!checkCudaError(cudaStreamCreateWithPriority(&postprocessStream, cudaStreamNonBlocking, (greatestPriority + leastPriority) / 2), "creating postprocess stream")) { m_cudaContextInitialized = false; return false; }
+    // Create multiple streams for pipeline optimization
+    if (!checkCudaError(cudaStreamCreate(&stream), "creating main stream")) { m_cudaContextInitialized = false; return false; }
+    if (!checkCudaError(cudaStreamCreate(&preprocessStream), "creating preprocess stream")) { m_cudaContextInitialized = false; return false; }
+    if (!checkCudaError(cudaStreamCreate(&postprocessStream), "creating postprocess stream")) { m_cudaContextInitialized = false; return false; }
 
     
     cvStream = cv::cuda::StreamAccessor::wrapStream(stream);
@@ -315,16 +301,6 @@ bool Detector::initializeCudaContext()
     if (!checkCudaError(cudaEventCreateWithFlags(&m_preprocessDone, cudaEventDisableTiming), "creating preprocessDone event")) { m_cudaContextInitialized = false; return false; }
     if (!checkCudaError(cudaEventCreateWithFlags(&m_inferenceDone, cudaEventDisableTiming), "creating inferenceDone event")) { m_cudaContextInitialized = false; return false; }
     if (!checkCudaError(cudaEventCreateWithFlags(&processingDone, cudaEventDisableTiming), "creating processingDone event")) { m_cudaContextInitialized = false; return false; }
-    
-    // Initialize double buffer events for ultra-fast frame processing
-    for (int i = 0; i < 2; i++) {
-        if (!checkCudaError(cudaEventCreateWithFlags(&m_doubleBuffer.readyEvents[i], cudaEventDisableTiming), 
-                          "creating double buffer event")) { 
-            m_cudaContextInitialized = false; 
-            return false; 
-        }
-    }
-    
 
     
 
@@ -585,24 +561,11 @@ void Detector::processFrame(const cv::cuda::GpuMat& frame)
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    // Ultra-fast double buffering: copy to write buffer while read buffer is being processed
-    {
-        std::unique_lock<std::mutex> lock(inferenceMutex);
-        
-        // Copy to the write buffer
-        frame.copyTo(m_doubleBuffer.frameBuffers[m_doubleBuffer.currentWriteIdx]);
-        
-        // Signal that new frame is ready
-        cudaEventRecord(m_doubleBuffer.readyEvents[m_doubleBuffer.currentWriteIdx], stream);
-        
-        // Swap buffers for next iteration
-        m_doubleBuffer.swap();
-        
-        currentFrame = m_doubleBuffer.frameBuffers[m_doubleBuffer.currentReadIdx];
-        frameIsGpu = true;
-        frameReady = true;
-        inferenceCV.notify_one();
-    }
+    std::unique_lock<std::mutex> lock(inferenceMutex);
+    currentFrame = frame;
+    frameIsGpu = true;
+    frameReady = true;
+    inferenceCV.notify_one();
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<float, std::milli> duration = end_time - start_time;
@@ -706,7 +669,6 @@ void Detector::inferenceThread()
             break;
         }
 
-
         // Update ignore flags if needed
         if (m_ignore_flags_need_update) {
             std::lock_guard<std::mutex> lock(ctx.configMutex);
@@ -739,7 +701,8 @@ void Detector::inferenceThread()
         }
 
         if (ctx.detector_model_changed.load()) {
-        
+            // CUDA Graph removed for optimization
+
             // Re-initialize detector components
             {
                 std::unique_lock<std::mutex> lock(inferenceMutex);
@@ -771,8 +734,6 @@ void Detector::inferenceThread()
                     }
                     frameReady = false;
                     hasNewFrame = true;
-                    
-                    // Remove frame received log to reduce spam
                 }
             }
         }
@@ -794,9 +755,6 @@ void Detector::inferenceThread()
             {
                 auto inference_start_time = std::chrono::high_resolution_clock::now();
 
-                // Clear detection count at the start of each frame
-                cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
-                
                 // Execute preprocessing
                 preProcess(frameGpu, preprocessStream);
                 cudaEventRecord(m_preprocessDone, preprocessStream);
@@ -823,10 +781,11 @@ void Detector::inferenceThread()
                 ctx.add_to_history(ctx.g_inference_time_history, inference_duration_ms.count(), ctx.g_inference_history_mutex);
                 
 
-                // Ultra-optimized post-processing with minimal synchronization
+                // Post-graph processing (memory copies and target selection)
                 // Wait for postprocessing to complete before copying
                 cudaStreamWaitEvent(stream, processingDone, 0);
                 
+                // Ultra-optimized post-processing with minimal synchronization
                 // Batch copy all critical data in one go using pinned memory
                 cudaMemcpyAsync(m_pinnedBestIndex, m_bestTargetIndexGpu.get(), 
                                sizeof(int), cudaMemcpyDeviceToHost, stream);
@@ -841,55 +800,20 @@ void Detector::inferenceThread()
                 // Continue with GPU operations while copies are in flight
                 // This allows us to overlap CPU work with GPU memory transfers
                 
-                // Don't use old cached value
+                // Wait for initial copies to complete before accessing pinned memory
+                cudaEventSynchronize(m_finalCopyEvent);
+                
+                // Update count from pinned memory
+                m_finalDetectionsCountHost = m_batchedResultsPinned->finalCount;
+                m_lastDetectionTime = std::chrono::steady_clock::now();
                 
                 // Target handling logic with proper reset
                 {
                     std::lock_guard<std::mutex> lock(detectionMutex);
                     
-                    // Wait for initial copies to complete before accessing pinned memory
-                    cudaEventSynchronize(m_finalCopyEvent);
-                    
-                    // Update count from pinned memory
-                    m_finalDetectionsCountHost = m_batchedResultsPinned->finalCount;
-                    
-                    if (ctx.config.verbose) {
-                        static auto lastLogTime = std::chrono::steady_clock::now();
-                        auto now = std::chrono::steady_clock::now();
-                        auto timeSinceLastLog = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastLogTime).count();
-                        
-                        if (timeSinceLastLog >= 1000) {  // Log only once per second
-                            std::cout << "[Detector] Detection count: " << m_finalDetectionsCountHost 
-                                      << ", hasBestTarget: " << m_hasBestTarget << std::endl;
-                            
-                            // Log detection details if we have detections
-                            if (m_finalDetectionsCountHost > 0 && m_bestTargetIndexHost >= 0) {
-                                std::cout << "[Detector] Best target - Class: " << m_bestTargetHost.classId 
-                                         << ", Confidence: " << m_bestTargetHost.confidence
-                                         << ", Box: (" << m_bestTargetHost.x << ", " << m_bestTargetHost.y 
-                                         << ", " << m_bestTargetHost.width << ", " << m_bestTargetHost.height << ")" << std::endl;
-                            }
-                            lastLogTime = now;
-                        }
-                    }
-                    
-                    // If no detections, clear target immediately
-                    if (m_finalDetectionsCountHost == 0) {
-                        if (m_hasBestTarget) {
-                            // Log removed to reduce spam
-                            m_hasBestTarget = false;
-                            memset(&m_bestTargetHost, 0, sizeof(Detection));
-                            m_bestTargetIndexHost = -1;
-                        }
-                    }
                     // Only proceed if we have detections
-                    else if (m_finalDetectionsCountHost > 0 && !ctx.shouldExit)
+                    if (m_finalDetectionsCountHost > 0 && !ctx.shouldExit)
                     {
-                        // Filter out detections touching screen edges
-                        const int edge_margin = 5; // pixels from edge to consider as touching
-                        const int screen_width = cached_config.detection_resolution;
-                        const int screen_height = cached_config.detection_resolution;
-                        
                         // First, calculate scores for all detections using cached config
                         calculateTargetScoresGpu(m_finalDetectionsGpu.get(), m_finalDetectionsCountHost, m_scoresGpu.get(), 
                             cached_config.detection_resolution, cached_config.detection_resolution, 
@@ -899,12 +823,13 @@ void Detector::inferenceThread()
                         // Find the overall best target
                         findBestTargetGpu(m_scoresGpu.get(), m_finalDetectionsCountHost, m_bestTargetIndexGpu.get(), stream);
                         
-                        // If we have a previous target, try to match it in the new detections
-                        if (m_hasBestTarget) {
-                            // Find the detection that best matches our previous target
-                            findMatchingTargetGpu(m_finalDetectionsGpu.get(), m_finalDetectionsCountHost, 
-                                m_bestTargetHost, m_matchingIndexGpu.get(), m_matchingScoreGpu.get(), stream);
-                        }
+                        int newBestIndex = -1;
+                        float newBestScore = FLT_MAX;
+                        
+                        // Skip sticky target logic - always use fresh detection
+                        
+                        // Wait for all target processing to complete
+                        cudaStreamSynchronize(stream);
                         
                         // Now copy the full batched results structure in one go
                         cudaMemcpyAsync(m_batchedResultsPinned, m_batchedResultsGpu, 
@@ -922,88 +847,36 @@ void Detector::inferenceThread()
                         // Single synchronization point for all copies
                         cudaStreamSynchronize(stream);
                         
-                        // Now use the pinned memory results
-                        int newBestIndex = *m_pinnedBestIndex;
-                        float newBestScore = FLT_MAX;
-                        
-                        if (m_hasBestTarget && newBestIndex >= 0) {
-                            int matchingIndex = *m_pinnedMatchingIndex;
-                            
-                            // If we found a match and it's valid
-                            if (matchingIndex >= 0 && matchingIndex < m_finalDetectionsCountHost && 
-                                newBestIndex >= 0 && newBestIndex < m_finalDetectionsCountHost) {
-                                
-                                float matchingScore = m_batchedResultsPinned->matchingScore;
-                                float bestScore = m_batchedResultsPinned->bestScore;
-                                
-                                // Apply sticky target logic
-                                // Only switch if the new target is significantly better
-                                float threshold = 1.0f - cached_config.sticky_target_threshold;
-                                if (bestScore < matchingScore * threshold) {
-                                    // New target is significantly better, switch to it
-                                    m_bestTargetIndexHost = newBestIndex;
-                                    newBestScore = bestScore;
-                                    m_bestTargetHost = m_batchedResultsPinned->bestTarget;
-                                } else {
-                                    // Stick with the matched target (already in GPU memory)
-                                    m_bestTargetIndexHost = matchingIndex;
-                                    newBestScore = matchingScore;
-                                    // Copy matching target in background
-                                    cudaMemcpyAsync(&m_bestTargetHost, &m_finalDetectionsGpu.get()[matchingIndex], 
-                                                   sizeof(Detection), cudaMemcpyDeviceToHost, stream);
-                                }
-                            } else if (newBestIndex >= 0 && newBestIndex < m_finalDetectionsCountHost) {
-                                // No match found, use the best target
-                                m_bestTargetIndexHost = newBestIndex;
-                                newBestScore = m_batchedResultsPinned->bestScore;
-                                m_bestTargetHost = m_batchedResultsPinned->bestTarget;
-                            } else {
-                                // No valid targets at all
-                                m_bestTargetIndexHost = -1;
-                            }
-                        } else if (newBestIndex >= 0 && newBestIndex < m_finalDetectionsCountHost) {
-                            // No previous target, just use the best one
-                            m_bestTargetIndexHost = newBestIndex;
-                            newBestScore = m_batchedResultsPinned->bestScore;
-                            m_bestTargetHost = m_batchedResultsPinned->bestTarget;
-                        }
-                        
                         // Copy pinned results to regular host memory for compatibility
                         memcpy(&m_batchedResultsHost, m_batchedResultsPinned, sizeof(BatchedResults));
                         
+                        // Simply use the best target from current frame
+                        newBestIndex = *m_pinnedBestIndex;
+                        
+                        if (newBestIndex >= 0 && newBestIndex < m_finalDetectionsCountHost) {
+                            // Use the best target from this frame only
+                            m_bestTargetIndexHost = newBestIndex;
+                            m_bestTargetHost = m_batchedResultsPinned->bestTarget;
+                        } else {
+                            // No valid targets
+                            m_bestTargetIndexHost = -1;
+                        }
+                        
                         // Update target tracking state
                         if (m_bestTargetIndexHost >= 0 && m_bestTargetIndexHost < m_finalDetectionsCountHost) {
-                            // Check if target touches screen edges
-                            bool touches_edge = false;
-                            if (m_bestTargetHost.x <= edge_margin || 
-                                m_bestTargetHost.y <= edge_margin ||
-                                (m_bestTargetHost.x + m_bestTargetHost.width) >= (screen_width - edge_margin) ||
-                                (m_bestTargetHost.y + m_bestTargetHost.height) >= (screen_height - edge_margin)) {
-                                touches_edge = true;
-                                if (ctx.config.verbose) {
-                                    std::cout << "[Detector] Target touches screen edge - ignoring" << std::endl;
-                                }
-                            }
-                            
-                            if (!touches_edge) {
-                                if (ctx.config.verbose && !m_hasBestTarget) {
-                                    std::cout << "[Detector] New target acquired!" << std::endl;
-                                }
-                                m_hasBestTarget = true;
-                                // Update detection time when we have a valid target
-                                m_lastDetectionTime = std::chrono::steady_clock::now();
-                            } else {
-                                // Target touches edge - clear it
-                                m_hasBestTarget = false;
-                                memset(&m_bestTargetHost, 0, sizeof(Detection));
-                                m_bestTargetIndexHost = -1;
-                            }
+                            m_hasBestTarget = true;
                         } else {
-                            // No valid target found in this frame, clear previous target
+                            // No valid target found - clear immediately
                             m_hasBestTarget = false;
                             memset(&m_bestTargetHost, 0, sizeof(Detection));
                             m_bestTargetIndexHost = -1;
                         }
+                    }
+                    else if (m_finalDetectionsCountHost == 0) {
+                        // No detections at all - clear immediately
+                        m_hasBestTarget = false;
+                        memset(&m_bestTargetHost, 0, sizeof(Detection));
+                        m_bestTargetIndexHost = -1;
                     }
                     
                     detectionVersion++;
@@ -1020,41 +893,18 @@ void Detector::inferenceThread()
                 m_finalDetectionsCountHost = 0;
             }
         } else if (hasNewFrame) {
-             // Frame received but empty or invalid
              {
                 std::lock_guard<std::mutex> lock(detectionMutex);
                 m_hasBestTarget = false;
                 memset(&m_bestTargetHost, 0, sizeof(Detection));
                 m_bestTargetIndexHost = -1;
                 m_finalDetectionsCountHost = 0;
-                // Clear GPU count too
-                cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
-                cudaMemsetAsync(m_batchedResultsPinned, 0, sizeof(BatchedResults), stream);
                 detectionVersion++;
              }
              detectionCV.notify_one();
         } else {
-            // No new frame received - check if we should clear stale target
-            {
-                std::lock_guard<std::mutex> lock(detectionMutex);
-                if (m_hasBestTarget) {
-                    auto now = std::chrono::steady_clock::now();
-                    auto timeSinceLastDetection = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        now - m_lastDetectionTime).count();
-                    
-                    if (timeSinceLastDetection > 100) {  // 100ms timeout for no frames
-                        m_hasBestTarget = false;
-                        memset(&m_bestTargetHost, 0, sizeof(Detection));
-                        m_bestTargetIndexHost = -1;
-                        m_finalDetectionsCountHost = 0;
-                        // Also clear GPU memory to prevent stale data
-                        cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
-                        cudaMemsetAsync(m_batchedResultsPinned, 0, sizeof(BatchedResults), stream);
-                        cudaStreamSynchronize(stream);
-                        detectionVersion++;
-                    }
-                }
-            }
+            // No new frame received - keep previous detection state
+            // Don't clear target or increment version unnecessarily
         }
         NVTX_POP();
     }
@@ -1161,13 +1011,21 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         return;
     }
 
-    // Ultra-optimized: process all detections without checking count first
-    // The GPU kernel will handle empty cases efficiently
-    // This avoids a costly synchronization point
+    // Check decoded count
+    int decodedCount = 0;
+    cudaMemcpyAsync(&decodedCount, m_decodedCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
+    cudaStreamSynchronize(stream);
     
+    // If no detections were decoded, clear final count and return early
+    if (decodedCount == 0) {
+        cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
+        return;
+    }
+    
+    // Process all detections without syncing - use max possible count
     cudaError_t filterErr = filterDetectionsByClassIdGpu(
         m_decodedDetectionsGpu.get(),
-        maxDecodedDetections, // Always use max to avoid sync
+        maxDecodedDetections, // Use max possible instead of syncing
         m_classFilteredDetectionsGpu.get(),
         m_classFilteredCountGpu.get(),
         m_d_ignore_flags_gpu.get(),

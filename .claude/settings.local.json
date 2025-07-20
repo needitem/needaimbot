@@ -17,7 +17,9 @@
       "Bash(awk:*)",
       "Bash(git add:*)",
       "Bash(cmd /c:*)",
-      "Bash(del:*)"
+      "Bash(del:*)",
+      "Bash(diff:*)",
+      "Bash(git checkout:*)"
     ],
     "deny": []
   }
