@@ -15,7 +15,9 @@
       "Bash(git push:*)",
       "Bash(git config:*)",
       "Bash(awk:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(cmd /c:*)",
+      "Bash(del:*)"
     ],
     "deny": []
   }
