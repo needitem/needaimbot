@@ -998,10 +998,13 @@ void Detector::inferenceThread()
                                 memset(&m_bestTargetHost, 0, sizeof(Detection));
                                 m_bestTargetIndexHost = -1;
                             }
+                        } else {
+                            // No valid target found in this frame, clear previous target
+                            m_hasBestTarget = false;
+                            memset(&m_bestTargetHost, 0, sizeof(Detection));
+                            m_bestTargetIndexHost = -1;
                         }
-                        // Don't clear target here - let timeout handle it
                     }
-                    // Don't clear target here either - let timeout handle it
                     
                     detectionVersion++;
                 }
