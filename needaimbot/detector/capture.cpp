@@ -49,7 +49,6 @@
 
 #include "simple_capture.h"
 #include "duplication_api_capture.h"
-#include "game_capture.h"
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -87,16 +86,10 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
         // Initialize capture method based on config
         std::unique_ptr<SimpleScreenCapture> simple_capturer;
         std::unique_ptr<DuplicationAPIScreenCapture> duplication_capturer;
-        std::unique_ptr<GameCapture> game_capturer;
         
         // Create the appropriate capturer based on config
         if (ctx.config.capture_method == "duplication") {
             duplication_capturer = std::make_unique<DuplicationAPIScreenCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT);
-        } else if (ctx.config.capture_method == "game_capture") {
-            game_capturer = std::make_unique<GameCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN), ctx.config.target_game_name);
-            // Enable async capture for better performance
-            game_capturer->enable_async_capture(true);
-            game_capturer->set_frame_pool_size(10);
         } else {
             simple_capturer = std::make_unique<SimpleScreenCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT);
         }
@@ -110,8 +103,6 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
             is_initialized = simple_capturer->IsInitialized();
         } else if (duplication_capturer) {
             is_initialized = duplication_capturer->IsInitialized();
-        } else if (game_capturer) {
-            is_initialized = game_capturer->initialize(); // GameCapture uses initialize() method
         }
         
         if (!is_initialized) {
@@ -193,16 +184,10 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 // Reset all capturers
                 simple_capturer.reset();
                 duplication_capturer.reset();
-                game_capturer.reset();
                 
                 // Create new capturer based on method
                 if (ctx.config.capture_method == "duplication") {
                     duplication_capturer = std::make_unique<DuplicationAPIScreenCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT);
-                } else if (ctx.config.capture_method == "game_capture") {
-                    game_capturer = std::make_unique<GameCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN), ctx.config.target_game_name);
-                    game_capturer->enable_async_capture(true);
-                    game_capturer->set_frame_pool_size(10);
-                    game_capturer->initialize();
                 } else {
                     simple_capturer = std::make_unique<SimpleScreenCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT);
                 }
@@ -219,7 +204,6 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 // Reset all capturers
                 simple_capturer.reset();
                 duplication_capturer.reset();
-                game_capturer.reset();
 
                 int new_CAPTURE_WIDTH = ctx.config.detection_resolution;
                 int new_CAPTURE_HEIGHT = ctx.config.detection_resolution;
@@ -231,21 +215,6 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                         std::cerr << "[Capture] Failed to create or initialize DuplicationAPIScreenCapture after resolution change!" << std::endl;
                         shouldExit = true; 
                         break;             
-                    }
-                } else if (ctx.config.capture_method == "game_capture") {
-                    game_capturer = std::make_unique<GameCapture>(new_CAPTURE_WIDTH, new_CAPTURE_HEIGHT, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN), ctx.config.target_game_name);
-                    if (game_capturer) {
-                        game_capturer->enable_async_capture(true);
-                        game_capturer->set_frame_pool_size(10);
-                        if (!game_capturer->initialize()) {
-                            std::cerr << "[Capture] Failed to initialize GameCapture after resolution change!" << std::endl;
-                            shouldExit = true; 
-                            break;
-                        }
-                    } else {
-                        std::cerr << "[Capture] Failed to create GameCapture after resolution change!" << std::endl;
-                        shouldExit = true; 
-                        break;
                     }
                 } else {
                     simple_capturer = std::make_unique<SimpleScreenCapture>(new_CAPTURE_WIDTH, new_CAPTURE_HEIGHT);
@@ -287,15 +256,6 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 screenshotCpu = simple_capturer->GetNextFrameCpu();
             } else if (duplication_capturer) {
                 screenshotCpu = duplication_capturer->GetNextFrameCpu();
-            } else if (game_capturer) {
-                Image img = game_capturer->get_frame();
-                if (img.data && img.width > 0 && img.height > 0) {
-                    // Optimized conversion - avoid clone if possible
-                    cv::Mat temp(img.height, img.width, CV_8UC4, img.data);
-                    
-                    // Direct color conversion without intermediate copy
-                    cv::cvtColor(temp, screenshotCpu, cv::COLOR_BGRA2BGR);
-                }
             }
             auto frame_acq_end_time = std::chrono::high_resolution_clock::now();
             

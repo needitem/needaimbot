@@ -100,7 +100,8 @@ Detector::Detector()
     m_finalDetectionsCountHost(0),
     m_host_ignore_flags_uchar(MAX_CLASSES_FOR_FILTERING, 1), 
     m_ignore_flags_need_update(true) 
-    , m_isTargetLocked(false) 
+    , m_isTargetLocked(false)
+    , m_lastDetectionTime(std::chrono::steady_clock::now())
 {
     // Initialize batched results
     cudaMalloc((void**)&m_batchedResultsGpu, sizeof(BatchedResults));
@@ -705,6 +706,7 @@ void Detector::inferenceThread()
             break;
         }
 
+
         // Update ignore flags if needed
         if (m_ignore_flags_need_update) {
             std::lock_guard<std::mutex> lock(ctx.configMutex);
@@ -769,6 +771,8 @@ void Detector::inferenceThread()
                     }
                     frameReady = false;
                     hasNewFrame = true;
+                    
+                    // Remove frame received log to reduce spam
                 }
             }
         }
@@ -790,6 +794,9 @@ void Detector::inferenceThread()
             {
                 auto inference_start_time = std::chrono::high_resolution_clock::now();
 
+                // Clear detection count at the start of each frame
+                cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
+                
                 // Execute preprocessing
                 preProcess(frameGpu, preprocessStream);
                 cudaEventRecord(m_preprocessDone, preprocessStream);
@@ -834,26 +841,11 @@ void Detector::inferenceThread()
                 // Continue with GPU operations while copies are in flight
                 // This allows us to overlap CPU work with GPU memory transfers
                 
-                // Extract results from batched structure
-                m_finalDetectionsCountHost = m_batchedResultsHost.finalCount;
+                // Don't use old cached value
                 
                 // Target handling logic with proper reset
                 {
                     std::lock_guard<std::mutex> lock(detectionMutex);
-                    
-                    // Check if target should be reset due to timeout (50ms)
-                    auto now = std::chrono::steady_clock::now();
-                    if (m_hasBestTarget && m_lastDetectionTime.time_since_epoch().count() > 0) {
-                        auto timeSinceLastDetection = std::chrono::duration_cast<std::chrono::milliseconds>(
-                            now - m_lastDetectionTime).count();
-                        
-                        if (timeSinceLastDetection > 50) {
-                            // Reset target due to timeout
-                            m_hasBestTarget = false;
-                            memset(&m_bestTargetHost, 0, sizeof(Detection));
-                            m_bestTargetIndexHost = -1;
-                        }
-                    }
                     
                     // Wait for initial copies to complete before accessing pinned memory
                     cudaEventSynchronize(m_finalCopyEvent);
@@ -861,9 +853,43 @@ void Detector::inferenceThread()
                     // Update count from pinned memory
                     m_finalDetectionsCountHost = m_batchedResultsPinned->finalCount;
                     
+                    if (ctx.config.verbose) {
+                        static auto lastLogTime = std::chrono::steady_clock::now();
+                        auto now = std::chrono::steady_clock::now();
+                        auto timeSinceLastLog = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastLogTime).count();
+                        
+                        if (timeSinceLastLog >= 1000) {  // Log only once per second
+                            std::cout << "[Detector] Detection count: " << m_finalDetectionsCountHost 
+                                      << ", hasBestTarget: " << m_hasBestTarget << std::endl;
+                            
+                            // Log detection details if we have detections
+                            if (m_finalDetectionsCountHost > 0 && m_bestTargetIndexHost >= 0) {
+                                std::cout << "[Detector] Best target - Class: " << m_bestTargetHost.classId 
+                                         << ", Confidence: " << m_bestTargetHost.confidence
+                                         << ", Box: (" << m_bestTargetHost.x << ", " << m_bestTargetHost.y 
+                                         << ", " << m_bestTargetHost.width << ", " << m_bestTargetHost.height << ")" << std::endl;
+                            }
+                            lastLogTime = now;
+                        }
+                    }
+                    
+                    // If no detections, clear target immediately
+                    if (m_finalDetectionsCountHost == 0) {
+                        if (m_hasBestTarget) {
+                            // Log removed to reduce spam
+                            m_hasBestTarget = false;
+                            memset(&m_bestTargetHost, 0, sizeof(Detection));
+                            m_bestTargetIndexHost = -1;
+                        }
+                    }
                     // Only proceed if we have detections
-                    if (m_finalDetectionsCountHost > 0 && !ctx.shouldExit)
+                    else if (m_finalDetectionsCountHost > 0 && !ctx.shouldExit)
                     {
+                        // Filter out detections touching screen edges
+                        const int edge_margin = 5; // pixels from edge to consider as touching
+                        const int screen_width = cached_config.detection_resolution;
+                        const int screen_height = cached_config.detection_resolution;
+                        
                         // First, calculate scores for all detections using cached config
                         calculateTargetScoresGpu(m_finalDetectionsGpu.get(), m_finalDetectionsCountHost, m_scoresGpu.get(), 
                             cached_config.detection_resolution, cached_config.detection_resolution, 
@@ -947,22 +973,35 @@ void Detector::inferenceThread()
                         
                         // Update target tracking state
                         if (m_bestTargetIndexHost >= 0 && m_bestTargetIndexHost < m_finalDetectionsCountHost) {
-                            m_hasBestTarget = true;
-                            // Update detection time when we have a valid target
-                            m_lastDetectionTime = std::chrono::steady_clock::now();
-                        } else {
-                            // No valid target found - clear immediately
-                            m_hasBestTarget = false;
-                            memset(&m_bestTargetHost, 0, sizeof(Detection));
-                            m_bestTargetIndexHost = -1;
+                            // Check if target touches screen edges
+                            bool touches_edge = false;
+                            if (m_bestTargetHost.x <= edge_margin || 
+                                m_bestTargetHost.y <= edge_margin ||
+                                (m_bestTargetHost.x + m_bestTargetHost.width) >= (screen_width - edge_margin) ||
+                                (m_bestTargetHost.y + m_bestTargetHost.height) >= (screen_height - edge_margin)) {
+                                touches_edge = true;
+                                if (ctx.config.verbose) {
+                                    std::cout << "[Detector] Target touches screen edge - ignoring" << std::endl;
+                                }
+                            }
+                            
+                            if (!touches_edge) {
+                                if (ctx.config.verbose && !m_hasBestTarget) {
+                                    std::cout << "[Detector] New target acquired!" << std::endl;
+                                }
+                                m_hasBestTarget = true;
+                                // Update detection time when we have a valid target
+                                m_lastDetectionTime = std::chrono::steady_clock::now();
+                            } else {
+                                // Target touches edge - clear it
+                                m_hasBestTarget = false;
+                                memset(&m_bestTargetHost, 0, sizeof(Detection));
+                                m_bestTargetIndexHost = -1;
+                            }
                         }
+                        // Don't clear target here - let timeout handle it
                     }
-                    else if (m_finalDetectionsCountHost == 0) {
-                        // No detections at all - clear immediately
-                        m_hasBestTarget = false;
-                        memset(&m_bestTargetHost, 0, sizeof(Detection));
-                        m_bestTargetIndexHost = -1;
-                    }
+                    // Don't clear target here either - let timeout handle it
                     
                     detectionVersion++;
                 }
@@ -978,18 +1017,41 @@ void Detector::inferenceThread()
                 m_finalDetectionsCountHost = 0;
             }
         } else if (hasNewFrame) {
+             // Frame received but empty or invalid
              {
                 std::lock_guard<std::mutex> lock(detectionMutex);
                 m_hasBestTarget = false;
                 memset(&m_bestTargetHost, 0, sizeof(Detection));
                 m_bestTargetIndexHost = -1;
                 m_finalDetectionsCountHost = 0;
+                // Clear GPU count too
+                cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
+                cudaMemsetAsync(m_batchedResultsPinned, 0, sizeof(BatchedResults), stream);
                 detectionVersion++;
              }
              detectionCV.notify_one();
         } else {
-            // No new frame received - keep previous detection state
-            // Don't clear target or increment version unnecessarily
+            // No new frame received - check if we should clear stale target
+            {
+                std::lock_guard<std::mutex> lock(detectionMutex);
+                if (m_hasBestTarget) {
+                    auto now = std::chrono::steady_clock::now();
+                    auto timeSinceLastDetection = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        now - m_lastDetectionTime).count();
+                    
+                    if (timeSinceLastDetection > 100) {  // 100ms timeout for no frames
+                        m_hasBestTarget = false;
+                        memset(&m_bestTargetHost, 0, sizeof(Detection));
+                        m_bestTargetIndexHost = -1;
+                        m_finalDetectionsCountHost = 0;
+                        // Also clear GPU memory to prevent stale data
+                        cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
+                        cudaMemsetAsync(m_batchedResultsPinned, 0, sizeof(BatchedResults), stream);
+                        cudaStreamSynchronize(stream);
+                        detectionVersion++;
+                    }
+                }
+            }
         }
         NVTX_POP();
     }
