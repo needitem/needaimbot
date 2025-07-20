@@ -58,10 +58,16 @@ __global__ void calculateTargetScoresGpuKernel(
         float dx = centerX - crosshairX;
         float dy = centerY - crosshairY;
         
-        // Simple distance-only calculation for closest target selection
+        // Calculate distance to crosshair
         float distance = sqrtf(dx * dx + dy * dy);
         
-        // Lower score = better target (closest to crosshair)
+        // Apply head class priority
+        // If this is a head class, multiply distance by a factor < 1 to prioritize it
+        if (det.classId == head_class_id) {
+            distance *= head_class_score_multiplier; // 0.5f = 50% priority boost (heads are strongly preferred)
+        }
+        
+        // Lower score = better target (closest to crosshair with head priority)
         d_scores[idx] = distance;
     }
 }
@@ -82,7 +88,7 @@ cudaError_t calculateTargetScoresGpu(
         return cudaSuccess;
     }
 
-    const float head_bonus_multiplier_val = 0.8f; 
+    const float head_bonus_multiplier_val = 0.5f; // 50% priority boost for head targets 
 
     // Calculate crosshair position with offset
     const float crosshairX = frame_width * 0.5f + crosshair_offset_x;
