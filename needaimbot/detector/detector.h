@@ -26,7 +26,6 @@
 
 #include "postProcess.h"
 #include "CudaBuffer.h"
-#include "DetectionExchange.h"
 
 struct TrackedTarget {
     int id;
@@ -66,10 +65,7 @@ public:
     
     
 
-    // Lock-free detection exchange
-    DetectionExchange detectionExchange;
-    
-    // Legacy mutex-based system (for backward compatibility)
+    // Mutex-based detection system
     std::mutex detectionMutex;
     int detectionVersion;
     std::condition_variable detectionCV;
@@ -95,6 +91,12 @@ public:
     // GPU memory for batched results
     BatchedResults* m_batchedResultsGpu;
     BatchedResults m_batchedResultsHost;
+    
+    // Pinned memory for ultra-fast transfers
+    BatchedResults* m_batchedResultsPinned;
+    int* m_pinnedBestIndex;
+    int* m_pinnedMatchingIndex;
+    cudaEvent_t m_finalCopyEvent;
 
     std::vector<std::string> inputNames;
     std::vector<std::string> outputNames;
@@ -110,17 +112,6 @@ public:
     
     HANDLE captureEvent = nullptr;
 
-    // CUDA Graph support removed for optimization
-    
-    // Multiple CUDA streams for pipeline optimization
-    cudaStream_t m_preprocessStream = nullptr;
-    cudaStream_t m_inferenceStream = nullptr;
-    cudaStream_t m_postprocessStream = nullptr;
-    
-    // Events for stream synchronization
-    cudaEvent_t m_preprocessDone = nullptr;
-    cudaEvent_t m_inferenceDone2 = nullptr;
-    cudaEvent_t m_postprocessDone = nullptr;
 
     cv::cuda::GpuMat resizedBuffer;
     
@@ -129,7 +120,6 @@ public:
     
     CudaBuffer<Detection> m_decodedDetectionsGpu;
     CudaBuffer<int> m_decodedCountGpu;
-    int m_decodedCountHost = 0;
 
     CudaBuffer<Detection> m_finalDetectionsGpu;
     CudaBuffer<int> m_finalDetectionsCountGpu;
@@ -137,7 +127,6 @@ public:
     std::chrono::steady_clock::time_point m_lastDetectionTime;
     CudaBuffer<Detection> m_classFilteredDetectionsGpu;
     CudaBuffer<int> m_classFilteredCountGpu;
-    int m_classFilteredCountHost = 0;
 
     CudaBuffer<float> m_scoresGpu;
     CudaBuffer<int> m_bestTargetIndexGpu;
@@ -175,27 +164,24 @@ public:
     std::vector<unsigned char> m_host_ignore_flags_uchar;
     bool m_ignore_flags_need_update;
     
-    // CUDA streams and events for pipelining
-    static constexpr int NUM_STREAMS = 3;
-    cudaStream_t m_streams[NUM_STREAMS];
-    cudaEvent_t m_events[NUM_STREAMS];
-    int m_currentStreamIdx = 0;
     
-    // Pipeline buffers for each stream
-    struct PipelineBuffer {
-        cv::cuda::GpuMat resizedFrame;
-        CudaBuffer<float> inputBuffer;
-        CudaBuffer<float> outputBuffer;
-        bool inUse = false;
+    // Double buffering for ultra-fast processing
+    struct DoubleBuffer {
+        cv::cuda::GpuMat frameBuffers[2];
+        BatchedResults resultBuffers[2];
+        cudaEvent_t readyEvents[2];
+        int currentReadIdx = 0;
+        int currentWriteIdx = 1;
+        void swap() {
+            currentReadIdx = (currentReadIdx + 1) % 2;
+            currentWriteIdx = (currentWriteIdx + 1) % 2;
+        }
     };
-    PipelineBuffer m_pipelineBuffers[NUM_STREAMS];
+    DoubleBuffer m_doubleBuffer;
     
-    // Legacy stream variables (for compatibility)
-    cudaStream_t& m_computeStream = m_streams[0];
-    cudaStream_t& m_memoryStream = m_streams[1];
     cudaEvent_t m_inferenceDone;
+    cudaEvent_t m_preprocessDone; 
     cudaEvent_t processingDone;
-    cudaEvent_t postprocessCopyDone;
     HANDLE m_captureDoneEvent;
 
     std::mutex hsvMaskMutex; 

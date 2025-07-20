@@ -98,7 +98,6 @@ Detector::Detector()
     m_hasBestTarget(false),
     m_bestTargetIndexHost(-1),
     m_finalDetectionsCountHost(0),
-    m_classFilteredCountHost(0),
     m_host_ignore_flags_uchar(MAX_CLASSES_FOR_FILTERING, 1), 
     m_ignore_flags_need_update(true) 
     , m_isTargetLocked(false) 
@@ -106,6 +105,12 @@ Detector::Detector()
     // Initialize batched results
     cudaMalloc((void**)&m_batchedResultsGpu, sizeof(BatchedResults));
     memset(&m_batchedResultsHost, 0, sizeof(BatchedResults));
+    
+    // Allocate pinned memory for ultra-fast transfers
+    cudaHostAlloc((void**)&m_batchedResultsPinned, sizeof(BatchedResults), cudaHostAllocDefault);
+    cudaHostAlloc((void**)&m_pinnedBestIndex, sizeof(int), cudaHostAllocDefault);
+    cudaHostAlloc((void**)&m_pinnedMatchingIndex, sizeof(int), cudaHostAllocDefault);
+    cudaEventCreateWithFlags(&m_finalCopyEvent, cudaEventDisableTiming);
 }
 
 Detector::~Detector()
@@ -115,18 +120,18 @@ Detector::~Detector()
         m_batchedResultsGpu = nullptr;
     }
     
+    // Free pinned memory
+    if (m_batchedResultsPinned) cudaFreeHost(m_batchedResultsPinned);
+    if (m_pinnedBestIndex) cudaFreeHost(m_pinnedBestIndex);
+    if (m_pinnedMatchingIndex) cudaFreeHost(m_pinnedMatchingIndex);
+    if (m_finalCopyEvent) cudaEventDestroy(m_finalCopyEvent);
+    
     if (stream) cudaStreamDestroy(stream);
     if (preprocessStream) cudaStreamDestroy(preprocessStream);
     if (postprocessStream) cudaStreamDestroy(postprocessStream);
-    if (m_preprocessStream) cudaStreamDestroy(m_preprocessStream);
-    if (m_inferenceStream) cudaStreamDestroy(m_inferenceStream);
-    if (m_postprocessStream) cudaStreamDestroy(m_postprocessStream);
     if (m_preprocessDone) cudaEventDestroy(m_preprocessDone);
     if (m_inferenceDone) cudaEventDestroy(m_inferenceDone);
-    if (m_inferenceDone2) cudaEventDestroy(m_inferenceDone2);
-    if (m_postprocessDone) cudaEventDestroy(m_postprocessDone);
     if (processingDone) cudaEventDestroy(processingDone);
-    if (postprocessCopyDone) cudaEventDestroy(postprocessCopyDone);
     
 
     for (auto& binding : inputBindings)
@@ -144,24 +149,14 @@ Detector::~Detector()
         cudaFree(inputBufferDevice);
     }
 
-    if (m_computeStream) {
-        cudaStreamDestroy(m_computeStream);
-        m_computeStream = nullptr;
-    }
-    if (m_memoryStream) {
-        cudaStreamDestroy(m_memoryStream);
-        m_memoryStream = nullptr;
-    }
-    if (m_preprocessDone) {
-        cudaEventDestroy(m_preprocessDone);
-        m_preprocessDone = nullptr;
-    }
-    if (m_inferenceDone) {
-        cudaEventDestroy(m_inferenceDone);
-        m_inferenceDone = nullptr;
+    
+    // Destroy double buffer events
+    for (int i = 0; i < 2; i++) {
+        if (m_doubleBuffer.readyEvents[i]) {
+            cudaEventDestroy(m_doubleBuffer.readyEvents[i]);
+        }
     }
     
-    // CUDA Graph removed for optimization
     
     // Synchronize to ensure all CUDA operations are complete
     cudaStreamSynchronize(stream);
@@ -300,13 +295,15 @@ bool Detector::initializeCudaContext()
     }
     std::cout << "[Detector] Successfully set CUDA device to " << ctx.config.cuda_device_id << "." << std::endl;
 
-    // Create multiple streams for pipeline optimization
-    if (!checkCudaError(cudaStreamCreate(&stream), "creating main stream")) { m_cudaContextInitialized = false; return false; }
-    if (!checkCudaError(cudaStreamCreate(&preprocessStream), "creating preprocess stream")) { m_cudaContextInitialized = false; return false; }
-    if (!checkCudaError(cudaStreamCreate(&postprocessStream), "creating postprocess stream")) { m_cudaContextInitialized = false; return false; }
-    if (!checkCudaError(cudaStreamCreate(&m_preprocessStream), "creating preprocess2 stream")) { m_cudaContextInitialized = false; return false; }
-    if (!checkCudaError(cudaStreamCreate(&m_inferenceStream), "creating inference2 stream")) { m_cudaContextInitialized = false; return false; }
-    if (!checkCudaError(cudaStreamCreate(&m_postprocessStream), "creating postprocess2 stream")) { m_cudaContextInitialized = false; return false; }
+    // Create multiple streams for pipeline optimization with priorities
+    // Get stream priority range
+    int leastPriority, greatestPriority;
+    cudaDeviceGetStreamPriorityRange(&leastPriority, &greatestPriority);
+    
+    // Create streams with appropriate priorities (inference gets highest priority)
+    if (!checkCudaError(cudaStreamCreateWithPriority(&stream, cudaStreamNonBlocking, greatestPriority), "creating main stream")) { m_cudaContextInitialized = false; return false; }
+    if (!checkCudaError(cudaStreamCreateWithPriority(&preprocessStream, cudaStreamNonBlocking, (greatestPriority + leastPriority) / 2), "creating preprocess stream")) { m_cudaContextInitialized = false; return false; }
+    if (!checkCudaError(cudaStreamCreateWithPriority(&postprocessStream, cudaStreamNonBlocking, (greatestPriority + leastPriority) / 2), "creating postprocess stream")) { m_cudaContextInitialized = false; return false; }
 
     
     cvStream = cv::cuda::StreamAccessor::wrapStream(stream);
@@ -317,19 +314,16 @@ bool Detector::initializeCudaContext()
     if (!checkCudaError(cudaEventCreateWithFlags(&m_preprocessDone, cudaEventDisableTiming), "creating preprocessDone event")) { m_cudaContextInitialized = false; return false; }
     if (!checkCudaError(cudaEventCreateWithFlags(&m_inferenceDone, cudaEventDisableTiming), "creating inferenceDone event")) { m_cudaContextInitialized = false; return false; }
     if (!checkCudaError(cudaEventCreateWithFlags(&processingDone, cudaEventDisableTiming), "creating processingDone event")) { m_cudaContextInitialized = false; return false; }
-    if (!checkCudaError(cudaEventCreateWithFlags(&postprocessCopyDone, cudaEventDisableTiming), "creating postprocessCopyDone event")) { m_cudaContextInitialized = false; return false; }
-    if (!checkCudaError(cudaEventCreateWithFlags(&m_inferenceDone2, cudaEventDisableTiming), "creating inferenceDone2 event")) { m_cudaContextInitialized = false; return false; }
-    if (!checkCudaError(cudaEventCreateWithFlags(&m_postprocessDone, cudaEventDisableTiming), "creating postprocessDone event")) { m_cudaContextInitialized = false; return false; }
     
-    // Pre-allocate common buffer sizes in memory pool
-    std::vector<size_t> commonSizes = {
-        1920 * 1080 * 3,           // Full HD image
-        640 * 640 * 3,             // Common detection size
-        512 * 512 * 3,             // Another common size
-        sizeof(Detection) * 1000,   // Detection buffer
-        sizeof(float) * 1000       // Score buffer
-    };
-    getGpuMemoryPool().preallocate(commonSizes, stream);
+    // Initialize double buffer events for ultra-fast frame processing
+    for (int i = 0; i < 2; i++) {
+        if (!checkCudaError(cudaEventCreateWithFlags(&m_doubleBuffer.readyEvents[i], cudaEventDisableTiming), 
+                          "creating double buffer event")) { 
+            m_cudaContextInitialized = false; 
+            return false; 
+        }
+    }
+    
 
     
 
@@ -590,11 +584,24 @@ void Detector::processFrame(const cv::cuda::GpuMat& frame)
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    std::unique_lock<std::mutex> lock(inferenceMutex);
-    currentFrame = frame;
-    frameIsGpu = true;
-    frameReady = true;
-    inferenceCV.notify_one();
+    // Ultra-fast double buffering: copy to write buffer while read buffer is being processed
+    {
+        std::unique_lock<std::mutex> lock(inferenceMutex);
+        
+        // Copy to the write buffer
+        frame.copyTo(m_doubleBuffer.frameBuffers[m_doubleBuffer.currentWriteIdx]);
+        
+        // Signal that new frame is ready
+        cudaEventRecord(m_doubleBuffer.readyEvents[m_doubleBuffer.currentWriteIdx], stream);
+        
+        // Swap buffers for next iteration
+        m_doubleBuffer.swap();
+        
+        currentFrame = m_doubleBuffer.frameBuffers[m_doubleBuffer.currentReadIdx];
+        frameIsGpu = true;
+        frameReady = true;
+        inferenceCV.notify_one();
+    }
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<float, std::milli> duration = end_time - start_time;
@@ -730,8 +737,7 @@ void Detector::inferenceThread()
         }
 
         if (ctx.detector_model_changed.load()) {
-            // CUDA Graph removed for optimization
-
+        
             // Re-initialize detector components
             {
                 std::unique_lock<std::mutex> lock(inferenceMutex);
@@ -810,47 +816,23 @@ void Detector::inferenceThread()
                 ctx.add_to_history(ctx.g_inference_time_history, inference_duration_ms.count(), ctx.g_inference_history_mutex);
                 
 
-                // Post-graph processing (memory copies and target selection)
+                // Ultra-optimized post-processing with minimal synchronization
                 // Wait for postprocessing to complete before copying
                 cudaStreamWaitEvent(stream, processingDone, 0);
                 
-                // Prepare batched results on GPU by copying individual elements
-                // Since we can't launch a kernel from a .cpp file, we'll copy the data separately
-                cudaMemcpyAsync(&m_batchedResultsHost.finalCount, m_finalDetectionsCountGpu.get(), 
+                // Batch copy all critical data in one go using pinned memory
+                cudaMemcpyAsync(m_pinnedBestIndex, m_bestTargetIndexGpu.get(), 
+                               sizeof(int), cudaMemcpyDeviceToHost, stream);
+                cudaMemcpyAsync(m_pinnedMatchingIndex, m_matchingIndexGpu.get(), 
+                               sizeof(int), cudaMemcpyDeviceToHost, stream);
+                cudaMemcpyAsync(&m_batchedResultsPinned->finalCount, m_finalDetectionsCountGpu.get(), 
                                sizeof(int), cudaMemcpyDeviceToHost, stream);
                 
-                // Copy best index and score if valid
-                int bestIndexTemp = -1;
-                cudaMemcpyAsync(&bestIndexTemp, m_bestTargetIndexGpu.get(), 
-                               sizeof(int), cudaMemcpyDeviceToHost, stream);
-                cudaStreamSynchronize(stream);
+                // Record event instead of synchronizing
+                cudaEventRecord(m_finalCopyEvent, stream);
                 
-                m_batchedResultsHost.bestIndex = bestIndexTemp;
-                if (bestIndexTemp >= 0 && bestIndexTemp < m_finalDetectionsCountHost) {
-                    cudaMemcpyAsync(&m_batchedResultsHost.bestScore, &m_scoresGpu.get()[bestIndexTemp], 
-                                   sizeof(float), cudaMemcpyDeviceToHost, stream);
-                    cudaMemcpyAsync(&m_batchedResultsHost.bestTarget, &m_finalDetectionsGpu.get()[bestIndexTemp], 
-                                   sizeof(Detection), cudaMemcpyDeviceToHost, stream);
-                } else {
-                    m_batchedResultsHost.bestScore = -1.0f;
-                }
-                
-                // Copy matching index and score if valid
-                int matchingIndexTemp = -1;
-                cudaMemcpyAsync(&matchingIndexTemp, m_matchingIndexGpu.get(), 
-                               sizeof(int), cudaMemcpyDeviceToHost, stream);
-                cudaStreamSynchronize(stream);
-                
-                m_batchedResultsHost.matchingIndex = matchingIndexTemp;
-                if (matchingIndexTemp >= 0 && matchingIndexTemp < m_finalDetectionsCountHost) {
-                    cudaMemcpyAsync(&m_batchedResultsHost.matchingScore, &m_scoresGpu.get()[matchingIndexTemp], 
-                                   sizeof(float), cudaMemcpyDeviceToHost, stream);
-                } else {
-                    m_batchedResultsHost.matchingScore = -1.0f;
-                }
-                
-                // Synchronize to ensure results are available
-                cudaStreamSynchronize(stream);
+                // Continue with GPU operations while copies are in flight
+                // This allows us to overlap CPU work with GPU memory transfers
                 
                 // Extract results from batched structure
                 m_finalDetectionsCountHost = m_batchedResultsHost.finalCount;
@@ -859,6 +841,12 @@ void Detector::inferenceThread()
                 // Target handling logic with proper reset
                 {
                     std::lock_guard<std::mutex> lock(detectionMutex);
+                    
+                    // Wait for initial copies to complete before accessing pinned memory
+                    cudaEventSynchronize(m_finalCopyEvent);
+                    
+                    // Update count from pinned memory
+                    m_finalDetectionsCountHost = m_batchedResultsPinned->finalCount;
                     
                     // Only proceed if we have detections
                     if (m_finalDetectionsCountHost > 0 && !ctx.shouldExit)
@@ -872,9 +860,6 @@ void Detector::inferenceThread()
                         // Find the overall best target
                         findBestTargetGpu(m_scoresGpu.get(), m_finalDetectionsCountHost, m_bestTargetIndexGpu.get(), stream);
                         
-                        int newBestIndex = -1;
-                        float newBestScore = FLT_MAX;
-                        
                         // If we have a previous target, try to match it in the new detections
                         if (m_hasBestTarget) {
                             // Find the detection that best matches our previous target
@@ -882,43 +867,57 @@ void Detector::inferenceThread()
                                 m_bestTargetHost, m_matchingIndexGpu.get(), m_matchingScoreGpu.get(), stream);
                         }
                         
-                        // Wait for all target processing to complete
+                        // Now copy the full batched results structure in one go
+                        cudaMemcpyAsync(m_batchedResultsPinned, m_batchedResultsGpu, 
+                                       sizeof(BatchedResults), cudaMemcpyDeviceToHost, stream);
+                        
+                        // Also copy selected detections based on indices
+                        int bestIdx = *m_pinnedBestIndex;
+                        int matchIdx = *m_pinnedMatchingIndex;
+                        
+                        if (bestIdx >= 0 && bestIdx < m_finalDetectionsCountHost) {
+                            cudaMemcpyAsync(&m_batchedResultsPinned->bestTarget, &m_finalDetectionsGpu.get()[bestIdx], 
+                                          sizeof(Detection), cudaMemcpyDeviceToHost, stream);
+                        }
+                        
+                        // Single synchronization point for all copies
                         cudaStreamSynchronize(stream);
                         
-                        // Use batched results
-                        newBestIndex = m_batchedResultsHost.bestIndex;
+                        // Now use the pinned memory results
+                        int newBestIndex = *m_pinnedBestIndex;
+                        float newBestScore = FLT_MAX;
                         
                         if (m_hasBestTarget && newBestIndex >= 0) {
-                            int matchingIndex = m_batchedResultsHost.matchingIndex;
+                            int matchingIndex = *m_pinnedMatchingIndex;
                             
                             // If we found a match and it's valid
                             if (matchingIndex >= 0 && matchingIndex < m_finalDetectionsCountHost && 
                                 newBestIndex >= 0 && newBestIndex < m_finalDetectionsCountHost) {
                                 
-                                float matchingScore = m_batchedResultsHost.matchingScore;
-                                float bestScore = m_batchedResultsHost.bestScore;
+                                float matchingScore = m_batchedResultsPinned->matchingScore;
+                                float bestScore = m_batchedResultsPinned->bestScore;
                                 
                                 // Apply sticky target logic
                                 // Only switch if the new target is significantly better
-                                float threshold = 1.0f - cached_config.sticky_target_threshold; // Convert to "how much better" metric
+                                float threshold = 1.0f - cached_config.sticky_target_threshold;
                                 if (bestScore < matchingScore * threshold) {
                                     // New target is significantly better, switch to it
                                     m_bestTargetIndexHost = newBestIndex;
                                     newBestScore = bestScore;
-                                    m_bestTargetHost = m_batchedResultsHost.bestTarget;
+                                    m_bestTargetHost = m_batchedResultsPinned->bestTarget;
                                 } else {
-                                    // Stick with the matched target
+                                    // Stick with the matched target (already in GPU memory)
                                     m_bestTargetIndexHost = matchingIndex;
                                     newBestScore = matchingScore;
-                                    // Need to copy the matching target separately
-                                    cudaMemcpy(&m_bestTargetHost, &m_finalDetectionsGpu.get()[matchingIndex], 
-                                             sizeof(Detection), cudaMemcpyDeviceToHost);
+                                    // Copy matching target in background
+                                    cudaMemcpyAsync(&m_bestTargetHost, &m_finalDetectionsGpu.get()[matchingIndex], 
+                                                   sizeof(Detection), cudaMemcpyDeviceToHost, stream);
                                 }
                             } else if (newBestIndex >= 0 && newBestIndex < m_finalDetectionsCountHost) {
                                 // No match found, use the best target
                                 m_bestTargetIndexHost = newBestIndex;
-                                newBestScore = m_batchedResultsHost.bestScore;
-                                m_bestTargetHost = m_batchedResultsHost.bestTarget;
+                                newBestScore = m_batchedResultsPinned->bestScore;
+                                m_bestTargetHost = m_batchedResultsPinned->bestTarget;
                             } else {
                                 // No valid targets at all
                                 m_bestTargetIndexHost = -1;
@@ -926,9 +925,12 @@ void Detector::inferenceThread()
                         } else if (newBestIndex >= 0 && newBestIndex < m_finalDetectionsCountHost) {
                             // No previous target, just use the best one
                             m_bestTargetIndexHost = newBestIndex;
-                            newBestScore = m_batchedResultsHost.bestScore;
-                            m_bestTargetHost = m_batchedResultsHost.bestTarget;
+                            newBestScore = m_batchedResultsPinned->bestScore;
+                            m_bestTargetHost = m_batchedResultsPinned->bestTarget;
                         }
+                        
+                        // Copy pinned results to regular host memory for compatibility
+                        memcpy(&m_batchedResultsHost, m_batchedResultsPinned, sizeof(BatchedResults));
                         
                         // Update target tracking state
                         if (m_bestTargetIndexHost >= 0 && m_bestTargetIndexHost < m_finalDetectionsCountHost) {
@@ -1079,21 +1081,13 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         return;
     }
 
-    // Check decoded count
-    int decodedCount = 0;
-    cudaMemcpyAsync(&decodedCount, m_decodedCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
-    cudaStreamSynchronize(stream);
+    // Ultra-optimized: process all detections without checking count first
+    // The GPU kernel will handle empty cases efficiently
+    // This avoids a costly synchronization point
     
-    // If no detections were decoded, clear final count and return early
-    if (decodedCount == 0) {
-        cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
-        return;
-    }
-    
-    // Process all detections without syncing - use max possible count
     cudaError_t filterErr = filterDetectionsByClassIdGpu(
         m_decodedDetectionsGpu.get(),
-        maxDecodedDetections, // Use max possible instead of syncing
+        maxDecodedDetections, // Always use max to avoid sync
         m_classFilteredDetectionsGpu.get(),
         m_classFilteredCountGpu.get(),
         m_d_ignore_flags_gpu.get(),
