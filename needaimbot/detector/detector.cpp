@@ -287,10 +287,15 @@ bool Detector::initializeCudaContext()
     }
     std::cout << "[Detector] Successfully set CUDA device to " << ctx.config.cuda_device_id << "." << std::endl;
 
-    // Create multiple streams for pipeline optimization
-    if (!checkCudaError(cudaStreamCreate(&stream), "creating main stream")) { m_cudaContextInitialized = false; return false; }
-    if (!checkCudaError(cudaStreamCreate(&preprocessStream), "creating preprocess stream")) { m_cudaContextInitialized = false; return false; }
-    if (!checkCudaError(cudaStreamCreate(&postprocessStream), "creating postprocess stream")) { m_cudaContextInitialized = false; return false; }
+    // Create multiple streams for pipeline optimization with priorities
+    // Get stream priority range
+    int leastPriority, greatestPriority;
+    cudaDeviceGetStreamPriorityRange(&leastPriority, &greatestPriority);
+    
+    // Create streams with appropriate priorities (inference gets highest priority)
+    if (!checkCudaError(cudaStreamCreateWithPriority(&stream, cudaStreamNonBlocking, greatestPriority), "creating main stream")) { m_cudaContextInitialized = false; return false; }
+    if (!checkCudaError(cudaStreamCreateWithPriority(&preprocessStream, cudaStreamNonBlocking, (greatestPriority + leastPriority) / 2), "creating preprocess stream")) { m_cudaContextInitialized = false; return false; }
+    if (!checkCudaError(cudaStreamCreateWithPriority(&postprocessStream, cudaStreamNonBlocking, (greatestPriority + leastPriority) / 2), "creating postprocess stream")) { m_cudaContextInitialized = false; return false; }
 
     
     cvStream = cv::cuda::StreamAccessor::wrapStream(stream);
@@ -625,6 +630,7 @@ void Detector::inferenceThread()
         bool enable_hsv_filter;
         int min_hsv_pixels_required;
         bool hsv_filter_remove_on_match;
+        std::string postprocess;
         
         void update(const Config& config) {
             detection_resolution = config.detection_resolution;
@@ -639,6 +645,7 @@ void Detector::inferenceThread()
             enable_hsv_filter = config.enable_hsv_filter;
             min_hsv_pixels_required = config.min_hsv_pixels;
             hsv_filter_remove_on_match = config.remove_hsv_matches;
+            postprocess = config.postprocess;
         }
     } cached_config;
     
@@ -647,6 +654,9 @@ void Detector::inferenceThread()
         std::lock_guard<std::mutex> lock(ctx.configMutex);
         cached_config.update(ctx.config);
     }
+    
+    // Update cache periodically (every 100 frames)
+    static int frame_counter = 0;
 
     cv::cuda::GpuMat frameGpu;
     static auto last_cycle_start_time = std::chrono::high_resolution_clock::time_point{};
@@ -754,6 +764,12 @@ void Detector::inferenceThread()
             try
             {
                 auto inference_start_time = std::chrono::high_resolution_clock::now();
+                
+                // Update config cache every 100 frames to reduce mutex contention
+                if (++frame_counter % 100 == 0) {
+                    std::lock_guard<std::mutex> lock(ctx.configMutex);
+                    cached_config.update(ctx.config);
+                }
 
                 // Execute preprocessing
                 preProcess(frameGpu, preprocessStream);
@@ -785,26 +801,33 @@ void Detector::inferenceThread()
                 // Wait for postprocessing to complete before copying
                 cudaStreamWaitEvent(stream, processingDone, 0);
                 
-                // Ultra-optimized post-processing with minimal synchronization
-                // Batch copy all critical data in one go using pinned memory
-                cudaMemcpyAsync(m_pinnedBestIndex, m_bestTargetIndexGpu.get(), 
+                // Ultra-optimized: batch all memory operations
+                // 1. First, prepare all GPU-side data in a single structure
+                struct {
+                    int bestIndex;
+                    int finalCount;
+                    Detection bestTarget;
+                } compactResults;
+                
+                // 2. Copy indices first (they're needed to copy the right detection)
+                cudaMemcpyAsync(&compactResults.bestIndex, m_bestTargetIndexGpu.get(), 
                                sizeof(int), cudaMemcpyDeviceToHost, stream);
-                cudaMemcpyAsync(m_pinnedMatchingIndex, m_matchingIndexGpu.get(), 
-                               sizeof(int), cudaMemcpyDeviceToHost, stream);
-                cudaMemcpyAsync(&m_batchedResultsPinned->finalCount, m_finalDetectionsCountGpu.get(), 
+                cudaMemcpyAsync(&compactResults.finalCount, m_finalDetectionsCountGpu.get(), 
                                sizeof(int), cudaMemcpyDeviceToHost, stream);
                 
-                // Record event instead of synchronizing
-                cudaEventRecord(m_finalCopyEvent, stream);
+                // 3. Wait just for indices
+                cudaStreamSynchronize(stream);
                 
-                // Continue with GPU operations while copies are in flight
-                // This allows us to overlap CPU work with GPU memory transfers
+                // 4. Now copy the specific detection based on the index
+                if (compactResults.bestIndex >= 0 && compactResults.bestIndex < compactResults.finalCount) {
+                    cudaMemcpyAsync(&compactResults.bestTarget, &m_finalDetectionsGpu.get()[compactResults.bestIndex], 
+                                   sizeof(Detection), cudaMemcpyDeviceToHost, stream);
+                    cudaStreamSynchronize(stream);
+                }
                 
-                // Wait for initial copies to complete before accessing pinned memory
-                cudaEventSynchronize(m_finalCopyEvent);
-                
-                // Update count from pinned memory
-                m_finalDetectionsCountHost = m_batchedResultsPinned->finalCount;
+                // Update host variables
+                m_finalDetectionsCountHost = compactResults.finalCount;
+                *m_pinnedBestIndex = compactResults.bestIndex;
                 m_lastDetectionTime = std::chrono::steady_clock::now();
                 
                 // Target handling logic with proper reset
@@ -828,23 +851,17 @@ void Detector::inferenceThread()
                         
                         // Skip sticky target logic - always use fresh detection
                         
-                        // Wait for all target processing to complete
-                        cudaStreamSynchronize(stream);
-                        
-                        // Now copy the full batched results structure in one go
+                        // Copy results without intermediate sync
                         cudaMemcpyAsync(m_batchedResultsPinned, m_batchedResultsGpu, 
                                        sizeof(BatchedResults), cudaMemcpyDeviceToHost, stream);
                         
-                        // Also copy selected detections based on indices
-                        int bestIdx = *m_pinnedBestIndex;
-                        int matchIdx = *m_pinnedMatchingIndex;
-                        
-                        if (bestIdx >= 0 && bestIdx < m_finalDetectionsCountHost) {
-                            cudaMemcpyAsync(&m_batchedResultsPinned->bestTarget, &m_finalDetectionsGpu.get()[bestIdx], 
+                        // Also copy best target detection if valid
+                        if (*m_pinnedBestIndex >= 0 && *m_pinnedBestIndex < m_finalDetectionsCountHost) {
+                            cudaMemcpyAsync(&m_batchedResultsPinned->bestTarget, &m_finalDetectionsGpu.get()[*m_pinnedBestIndex], 
                                           sizeof(Detection), cudaMemcpyDeviceToHost, stream);
                         }
                         
-                        // Single synchronization point for all copies
+                        // Single synchronization point for all operations
                         cudaStreamSynchronize(stream);
                         
                         // Copy pinned results to regular host memory for compatibility
