@@ -23,7 +23,6 @@
     <ClCompile Include="detector\capture.cpp" />
     <ClCompile Include="detector\duplication_api_capture.cpp" />
     <ClCompile Include="detector\simple_capture.cpp" />
-    <ClCompile Include="detector\game_capture.cpp" />
     <ClCompile Include="config\config.cpp" />
     <ClCompile Include="detector\detector.cpp" />
     <ClCompile Include="detector\postProcess.cpp" />
@@ -72,8 +71,6 @@
     <ClInclude Include="detector\CudaBuffer.h" />
     <ClInclude Include="detector\duplication_api_capture.h" />
     <ClInclude Include="detector\simple_capture.h" />
-    <ClInclude Include="detector\game_capture.h" />
-    <ClInclude Include="detector\hook_info.h" />
     <ClInclude Include="capture\winrt_capture.h" />
     <ClInclude Include="config\config.h" />
     <ClInclude Include="detector\detector.h" />

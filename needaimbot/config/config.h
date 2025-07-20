@@ -67,8 +67,7 @@ public:
  
     float target_fps;
     
-    std::string capture_method; // "simple", "duplication", "game_capture"
-    std::string target_game_name; // Game window title for GameCapture 
+    std::string capture_method; // "simple", "duplication" 
 
     
     float body_y_offset;
