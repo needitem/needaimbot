@@ -836,11 +836,24 @@ void Detector::inferenceThread()
                 
                 // Extract results from batched structure
                 m_finalDetectionsCountHost = m_batchedResultsHost.finalCount;
-                m_lastDetectionTime = std::chrono::steady_clock::now();
                 
                 // Target handling logic with proper reset
                 {
                     std::lock_guard<std::mutex> lock(detectionMutex);
+                    
+                    // Check if target should be reset due to timeout (50ms)
+                    auto now = std::chrono::steady_clock::now();
+                    if (m_hasBestTarget && m_lastDetectionTime.time_since_epoch().count() > 0) {
+                        auto timeSinceLastDetection = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            now - m_lastDetectionTime).count();
+                        
+                        if (timeSinceLastDetection > 50) {
+                            // Reset target due to timeout
+                            m_hasBestTarget = false;
+                            memset(&m_bestTargetHost, 0, sizeof(Detection));
+                            m_bestTargetIndexHost = -1;
+                        }
+                    }
                     
                     // Wait for initial copies to complete before accessing pinned memory
                     cudaEventSynchronize(m_finalCopyEvent);
@@ -935,6 +948,8 @@ void Detector::inferenceThread()
                         // Update target tracking state
                         if (m_bestTargetIndexHost >= 0 && m_bestTargetIndexHost < m_finalDetectionsCountHost) {
                             m_hasBestTarget = true;
+                            // Update detection time when we have a valid target
+                            m_lastDetectionTime = std::chrono::steady_clock::now();
                         } else {
                             // No valid target found - clear immediately
                             m_hasBestTarget = false;
