@@ -2,8 +2,8 @@
 #include <numeric>
 
 #include "postProcess.h"
-#include "needaimbot.h"
-#include "detector.h"
+#include "../needaimbot.h"
+#include "../detector/detector.h"
 
 
 void NMS(std::vector<Detection>& detections, float nmsThreshold)

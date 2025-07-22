@@ -36,9 +36,9 @@
 #include "needaimbot.h"
 #include "other_tools.h"
 
-#include "postProcess.h"
-#include "scoringGpu.h"
-#include "filterGpu.h"
+#include "../postprocess/postProcess.h"
+#include "../postprocess/scoringGpu.h"
+#include "../postprocess/filterGpu.h"
 #include "config.h"
 
 #if defined(__has_include)

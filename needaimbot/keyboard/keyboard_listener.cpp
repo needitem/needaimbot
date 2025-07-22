@@ -15,7 +15,7 @@
 #include "../mouse/mouse.h"
 #include "keycodes.h"
 #include "needaimbot.h"
-#include "capture.h"
+#include "../capture/capture.h"
 
 
 const float MIN_OFFSET_Y = 0.0f;

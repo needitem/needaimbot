@@ -24,7 +24,7 @@
 #include "config.h"
 #include "keycodes.h"
 #include "needaimbot.h"
-#include "capture.h"
+#include "capture/capture.h"
 #include "keyboard_listener.h"
 #include "other_tools.h"
 

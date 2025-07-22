@@ -2,7 +2,7 @@
 #include "../AppContext.h"
 #include "mouse.h"
 #include "aimbot_components/AimbotTarget.h"
-#include "../detector/capture.h"
+#include "../capture/capture.h"
 // #include "../detector/optical_flow.h" // Optical flow removed
 #include "input_drivers/SerialConnection.h"
 #include "input_drivers/MakcuConnection.h"

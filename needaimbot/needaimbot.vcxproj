@@ -20,12 +20,14 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="detector\capture.cpp" />
-    <ClCompile Include="detector\duplication_api_capture.cpp" />
-    <ClCompile Include="detector\simple_capture.cpp" />
+    <ClCompile Include="capture\capture.cpp" />
+    <ClCompile Include="capture\duplication_api_capture.cpp" />
+    <ClCompile Include="capture\simple_capture.cpp" />
+    <ClCompile Include="capture\virtual_camera_capture.cpp" />
+    <ClCompile Include="capture\ndi_capture.cpp" />
     <ClCompile Include="config\config.cpp" />
     <ClCompile Include="detector\detector.cpp" />
-    <ClCompile Include="detector\postProcess.cpp" />
+    <ClCompile Include="postprocess\postProcess.cpp" />
     <ClCompile Include="imgui\imgui.cpp" />
     <ClCompile Include="imgui\imgui_draw.cpp" />
     <ClCompile Include="imgui\imgui_impl_dx11.cpp" />
@@ -42,6 +44,7 @@
     <ClCompile Include="mouse\\aimbot_components\\PIDController2D.cpp" />
     <ClCompile Include="mouse\\input_drivers\\rzctl.cpp" />
     <ClCompile Include="mouse\\input_drivers\\SerialConnection.cpp" />
+    <ClCompile Include="mouse\\input_drivers\\MakcuConnection.cpp" />
     <ClCompile Include="mouse\\aimbot_components\\AimbotTarget.cpp" />
     <ClCompile Include="overlay\draw_hsv_filter.cpp" />
     <ClCompile Include="overlay\draw_rcs.cpp" />
@@ -62,26 +65,27 @@
     <ClCompile Include="needaimbot.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <CudaCompile Include="detector\filterGpu.cu" />
-    <CudaCompile Include="detector\postProcessGpu.cu" />
-    <CudaCompile Include="detector\scoringGpu.cu" />
-    <CudaCompile Include="detector\targetLockingGpu.cu" />
+    <CudaCompile Include="postprocess\filterGpu.cu" />
+    <CudaCompile Include="postprocess\postProcessGpu.cu" />
+    <CudaCompile Include="postprocess\scoringGpu.cu" />
+    <CudaCompile Include="postprocess\targetLockingGpu.cu" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="core\config_cache.h" />
     <ClInclude Include="core\constants.h" />
     <ClInclude Include="core\error_handler.h" />
-    <ClInclude Include="detector\capture.h" />
+    <ClInclude Include="capture\capture.h" />
+    <ClInclude Include="capture\duplication_api_capture.h" />
+    <ClInclude Include="capture\simple_capture.h" />
+    <ClInclude Include="capture\virtual_camera_capture.h" />
+    <ClInclude Include="capture\ndi_capture.h" />
     <ClInclude Include="detector\CudaBuffer.h" />
-    <ClInclude Include="detector\duplication_api_capture.h" />
-    <ClInclude Include="detector\simple_capture.h" />
-    <ClInclude Include="capture\winrt_capture.h" />
     <ClInclude Include="config\config.h" />
     <ClInclude Include="detector\detector.h" />
-    <ClInclude Include="detector\filterGpu.h" />
-    <ClInclude Include="detector\postProcess.h" />
-    <ClInclude Include="detector\scoringGpu.h" />
-    <ClInclude Include="detector\targetLockingGpu.h" />
+    <ClInclude Include="postprocess\filterGpu.h" />
+    <ClInclude Include="postprocess\postProcess.h" />
+    <ClInclude Include="postprocess\scoringGpu.h" />
+    <ClInclude Include="postprocess\targetLockingGpu.h" />
     <ClInclude Include="imgui\imconfig.h" />
     <ClInclude Include="imgui\imgui.h" />
     <ClInclude Include="imgui\imgui_impl_dx11.h" />
@@ -108,6 +112,7 @@
     <ClInclude Include="mouse\input_drivers\my_enc.h" />
     <ClInclude Include="mouse\input_drivers\rzctl.h" />
     <ClInclude Include="mouse\input_drivers\SerialConnection.h" />
+    <ClInclude Include="mouse\input_drivers\MakcuConnection.h" />
     <ClInclude Include="mouse\IPredictor.h" />
     <ClInclude Include="mouse\KalmanFilterPredictor.h" />
     <ClInclude Include="mouse\kmboxNet.h" />
@@ -208,7 +213,7 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LinkIncremental>false</LinkIncremental>
-    <IncludePath>$(MSBuildProjectDirectory)\modules\serial\include;$(MSBuildProjectDirectory);$(MSBuildProjectDirectory)\imgui;$(MSBuildProjectDirectory)\keyboard;$(MSBuildProjectDirectory)\config;$(MSBuildProjectDirectory)\detector;$(MSBuildProjectDirectory)\mouse;$(MSBuildProjectDirectory)\overlay;$(MSBuildProjectDirectory)\modules\opencv\build\install\include;$(WindowsSDK_IncludePath);$(WindowsSDK_IncludePath)\cppwinrt;$(MSBuildProjectDirectory)\modules\TensorRT-10.8.0.43\include;include;$(ProgramW6432)\NVIDIA GPU Computing Toolkit\CUDA\v12.8\include;$(ProgramW6432)\NVIDIA\CUDNN\v9.7\include\12.8;$(IncludePath)</IncludePath>
+    <IncludePath>$(MSBuildProjectDirectory)\modules\serial\include;$(MSBuildProjectDirectory);$(MSBuildProjectDirectory)\imgui;$(MSBuildProjectDirectory)\keyboard;$(MSBuildProjectDirectory)\config;$(MSBuildProjectDirectory)\detector;$(MSBuildProjectDirectory)\capture;$(MSBuildProjectDirectory)\postprocess;$(MSBuildProjectDirectory)\mouse;$(MSBuildProjectDirectory)\overlay;$(MSBuildProjectDirectory)\modules\opencv\build\install\include;$(WindowsSDK_IncludePath);$(WindowsSDK_IncludePath)\cppwinrt;$(MSBuildProjectDirectory)\modules\TensorRT-10.8.0.43\include;include;$(ProgramW6432)\NVIDIA GPU Computing Toolkit\CUDA\v12.8\include;$(ProgramW6432)\NVIDIA\CUDNN\v9.7\include\12.8;$(IncludePath)</IncludePath>
     <LibraryPath>$(MSBuildProjectDirectory)\modules\serial\visual_studio\x64\Release;$(MSBuildProjectDirectory)\modules\opencv\build\install\x64\vc17\lib;$(MSBuildProjectDirectory)\modules\\TensorRT-10.8.0.43\lib;$(ProgramW6432)\NVIDIA GPU Computing Toolkit\CUDA\v12.8\lib\x64;$(ProgramW6432)\NVIDIA\CUDNN\v9.7\lib\12.8;$(MSBuildProjectDirectory)\modules\glfw-3.4.bin.WIN64\lib-vc2022;$(LibraryPath)</LibraryPath>
     <TargetName>ai</TargetName>
   </PropertyGroup>

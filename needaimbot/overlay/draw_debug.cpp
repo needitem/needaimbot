@@ -7,10 +7,10 @@
 #include <vector>
 #include <string>
 #include <d3d11.h> 
-#include "capture.h"
-#include "detector/capture.h" 
+#include "../capture/capture.h"
+#include "../capture/capture.h" 
 #include <cuda_runtime.h> 
-#include "detector/postProcess.h" 
+#include "../postprocess/postProcess.h" 
  
 
 

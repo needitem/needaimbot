@@ -233,4 +233,3 @@ cudaError_t findMatchingTargetGpu(
     
     return cudaGetLastError();
 }
-

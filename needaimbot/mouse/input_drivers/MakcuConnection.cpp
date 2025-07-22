@@ -67,8 +67,9 @@ private:
 #include <mutex>
 
 #include "MakcuConnection.h"
-#include "config.h"
-#include "sunone_aimbot_cpp.h"
+#include "../../config/config.h"
+#include "../../needaimbot.h"
+#include "../../AppContext.h"
 
 /* ---------- Makcu-specific constants ---------------------------- */
 static const uint32_t BOOT_BAUD = 115200;      // baud rate after initial connection
@@ -247,8 +248,10 @@ void MakcuConnection::listeningThreadFunc()
             /* update flags */
             shooting_active = b & 0x01;  // left mouse button
             aiming_active = b & 0x02;    // right mouse button
-            shooting.store(shooting_active);
-            aiming.store(aiming_active);
+            
+            // Update AppContext state
+            auto& ctx = AppContext::getInstance();
+            ctx.aiming.store(aiming_active);
 
             /* print state */
             std::cout << "LMB: " << (shooting_active ? "PRESS" : "release")
@@ -270,11 +273,11 @@ void MakcuConnection::processIncomingLine(const std::string& line)
             {
             case 1:
                 shooting_active = true;
-                shooting.store(true);
+                // Note: shooting state handled locally, no global shooting variable
                 break;
             case 2:
                 aiming_active = true;
-                aiming.store(true);
+                AppContext::getInstance().aiming.store(true);
                 break;
             }
         }
@@ -285,11 +288,11 @@ void MakcuConnection::processIncomingLine(const std::string& line)
             {
             case 1:
                 shooting_active = false;
-                shooting.store(false);
+                // Note: shooting state handled locally, no global shooting variable
                 break;
             case 2:
                 aiming_active = false;
-                aiming.store(false);
+                AppContext::getInstance().aiming.store(false);
                 break;
             }
         }

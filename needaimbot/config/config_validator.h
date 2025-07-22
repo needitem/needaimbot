@@ -95,7 +95,9 @@ public:
         // Validate string values
         if (config.capture_method != "simple" && 
             config.capture_method != "duplication" && 
-            config.capture_method != "bitblt") {
+            config.capture_method != "bitblt" &&
+            config.capture_method != "virtual_camera" &&
+            config.capture_method != "ndi") {
             config.capture_method = "duplication";
         }
 

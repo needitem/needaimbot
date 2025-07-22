@@ -10,7 +10,7 @@
 #include "AppContext.h"
 #include "config/config.h"
 #include "needaimbot.h"
-#include "capture.h"
+#include "../capture/capture.h"
 #include "include/other_tools.h"
 #include "draw_settings.h"
 #include "ui_helpers.h"
@@ -99,7 +99,7 @@ static void draw_capture_behavior_settings()
     
     UIHelpers::CompactSpacer();
     
-    const char* capture_methods[] = { "Simple (BitBlt)", "Desktop Duplication API" };
+    const char* capture_methods[] = { "Simple (BitBlt)", "Desktop Duplication API", "Virtual Camera", "NDI Stream" };
     static int current_method = 0;
     static bool first_time = true;
     
@@ -107,18 +107,22 @@ static void draw_capture_behavior_settings()
     if (first_time) {
         if (ctx.config.capture_method == "simple") current_method = 0;
         else if (ctx.config.capture_method == "duplication") current_method = 1;
+        else if (ctx.config.capture_method == "virtual_camera") current_method = 2;
+        else if (ctx.config.capture_method == "ndi") current_method = 3;
         first_time = false;
     }
     
     int previous_method = current_method;
     UIHelpers::CompactCombo("Capture Method", &current_method, capture_methods, IM_ARRAYSIZE(capture_methods));
-    UIHelpers::InfoTooltip("Simple: Fast BitBlt screen capture\nDuplication API: Windows Desktop Duplication API");
+    UIHelpers::InfoTooltip("Simple: Fast BitBlt screen capture\nDuplication API: Windows Desktop Duplication API\nVirtual Camera: 2PC setup via virtual camera devices\nNDI Stream: Network video streaming for 2PC setup");
     
     // Check if the value actually changed
     if (current_method != previous_method)
     {
         if (current_method == 0) ctx.config.capture_method = "simple";
         else if (current_method == 1) ctx.config.capture_method = "duplication";
+        else if (current_method == 2) ctx.config.capture_method = "virtual_camera";
+        else if (current_method == 3) ctx.config.capture_method = "ndi";
         ctx.config.saveConfig();
         ctx.capture_method_changed = true;
     }
@@ -179,6 +183,85 @@ static void draw_capture_source_settings()
     UIHelpers::EndCard();
 }
 
+static void draw_2pc_capture_settings()
+{
+    auto& ctx = AppContext::getInstance();
+    
+    if (ctx.config.capture_method == "virtual_camera" || ctx.config.capture_method == "ndi")
+    {
+        UIHelpers::BeginCard("2PC Capture Settings");
+        
+        if (ctx.config.capture_method == "virtual_camera")
+        {
+            UIHelpers::BeautifulText("Virtual Camera Configuration", UIHelpers::GetAccentColor());
+            UIHelpers::CompactSpacer();
+            
+            // Virtual camera device selection
+            static int selected_camera = 0;
+            const char* camera_devices[] = { "OBS Virtual Camera", "XSplit VCam", "Streamlabs Virtual Camera", "NVIDIA Broadcast", "Custom Device 1", "Custom Device 2" };
+            
+            UIHelpers::CompactCombo("Virtual Camera Device", &selected_camera, camera_devices, IM_ARRAYSIZE(camera_devices));
+            UIHelpers::InfoTooltip("Select the virtual camera device to capture from your streaming PC.\nMake sure the virtual camera is enabled in your streaming software.");
+            
+            UIHelpers::CompactSpacer();
+            
+            ImGui::BulletText("Enable virtual camera in streaming software");
+            ImGui::BulletText("Select matching device above");
+            ImGui::BulletText("Start capture on both PCs");
+        }
+        else if (ctx.config.capture_method == "ndi")
+        {
+            UIHelpers::BeautifulText("NDI Stream Configuration", UIHelpers::GetAccentColor());
+            UIHelpers::CompactSpacer();
+            
+            // NDI source selection
+            static char ndi_source_name[256] = "";
+            static bool first_init = true;
+            if (first_init) {
+                strncpy_s(ndi_source_name, ctx.config.ndi_source_name.c_str(), sizeof(ndi_source_name) - 1);
+                first_init = false;
+            }
+            
+            if (ImGui::InputText("NDI Source Name", ndi_source_name, sizeof(ndi_source_name))) {
+                ctx.config.ndi_source_name = std::string(ndi_source_name);
+                ctx.config.saveConfig();
+            }
+            UIHelpers::InfoTooltip("Enter the NDI source name from your streaming PC.\nLeave empty to auto-detect first available source.");
+            
+            UIHelpers::CompactSpacer();
+            
+            // Network fallback URL
+            static char network_url[512] = "";
+            static bool first_url_init = true;
+            if (first_url_init) {
+                strncpy_s(network_url, ctx.config.ndi_network_url.empty() ? "http://localhost:8080/video.mjpg" : ctx.config.ndi_network_url.c_str(), sizeof(network_url) - 1);
+                first_url_init = false;
+            }
+            
+            if (ImGui::InputText("Network Stream URL", network_url, sizeof(network_url))) {
+                ctx.config.ndi_network_url = std::string(network_url);
+                ctx.config.saveConfig();
+            }
+            UIHelpers::InfoTooltip("Fallback network stream URL when NDI is not available.\nCommon formats: HTTP MJPEG, RTMP, UDP streams.");
+            
+            UIHelpers::CompactSpacer();
+            
+            if (UIHelpers::BeautifulToggle("Low Latency Mode", &ctx.config.ndi_low_latency, "Enables high bandwidth mode for lowest possible latency."))
+            {
+                ctx.config.saveConfig();
+            }
+            
+            UIHelpers::CompactSpacer();
+            
+            ImGui::BulletText("Install NDI Tools on both PCs");
+            ImGui::BulletText("Enable NDI output in streaming software");
+            ImGui::BulletText("Ensure network connectivity");
+        }
+        
+        UIHelpers::EndCard();
+    }
+}
+
 void draw_capture_settings()
 {
     auto& ctx = AppContext::getInstance();
@@ -195,6 +278,9 @@ void draw_capture_settings()
     
     // Right column - Source and info
     draw_capture_source_settings();
+    UIHelpers::CompactSpacer();
+    
+    draw_2pc_capture_settings();
     UIHelpers::CompactSpacer();
     
     UIHelpers::BeginInfoPanel();
@@ -214,7 +300,8 @@ void draw_capture_settings()
     
     ImGui::BulletText("Simple: Best for windowed games");
     ImGui::BulletText("Duplication: Good for fullscreen apps");
-    ImGui::BulletText("Game Capture: For specific game windows");
+    ImGui::BulletText("Virtual Camera: For 2PC streaming setup");
+    ImGui::BulletText("NDI Stream: Network capture for 2PC setup");
     
     UIHelpers::EndInfoPanel();
     

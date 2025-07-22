@@ -18,7 +18,7 @@
 #include "visuals.h"
 #include "config.h"
 #include "needaimbot.h" 
-#include "capture.h"   
+#include "../capture/capture.h"   
 
 
 extern std::mutex configMutex; 

@@ -1,4 +1,6 @@
 #include "AppContext.h"
+#include "virtual_camera_capture.h"
+#include "ndi_capture.h"
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -86,10 +88,16 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
         // Initialize capture method based on config
         std::unique_ptr<SimpleScreenCapture> simple_capturer;
         std::unique_ptr<DuplicationAPIScreenCapture> duplication_capturer;
+        std::unique_ptr<VirtualCameraCapture> virtual_camera_capturer;
+        std::unique_ptr<NDICapture> ndi_capturer;
         
         // Create the appropriate capturer based on config
         if (ctx.config.capture_method == "duplication") {
             duplication_capturer = std::make_unique<DuplicationAPIScreenCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT);
+        } else if (ctx.config.capture_method == "virtual_camera") {
+            virtual_camera_capturer = std::make_unique<VirtualCameraCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT, 0);
+        } else if (ctx.config.capture_method == "ndi") {
+            ndi_capturer = std::make_unique<NDICapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT);
         } else {
             simple_capturer = std::make_unique<SimpleScreenCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT);
         }
@@ -103,6 +111,10 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
             is_initialized = simple_capturer->IsInitialized();
         } else if (duplication_capturer) {
             is_initialized = duplication_capturer->IsInitialized();
+        } else if (virtual_camera_capturer) {
+            is_initialized = virtual_camera_capturer->IsInitialized();
+        } else if (ndi_capturer) {
+            is_initialized = ndi_capturer->IsInitialized();
         }
         
         if (!is_initialized) {
@@ -184,10 +196,16 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 // Reset all capturers
                 simple_capturer.reset();
                 duplication_capturer.reset();
+                virtual_camera_capturer.reset();
+                ndi_capturer.reset();
                 
                 // Create new capturer based on method
                 if (ctx.config.capture_method == "duplication") {
                     duplication_capturer = std::make_unique<DuplicationAPIScreenCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT);
+                } else if (ctx.config.capture_method == "virtual_camera") {
+                    virtual_camera_capturer = std::make_unique<VirtualCameraCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT, 0);
+                } else if (ctx.config.capture_method == "ndi") {
+                    ndi_capturer = std::make_unique<NDICapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT);
                 } else {
                     simple_capturer = std::make_unique<SimpleScreenCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT);
                 }
@@ -204,6 +222,8 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 // Reset all capturers
                 simple_capturer.reset();
                 duplication_capturer.reset();
+                virtual_camera_capturer.reset();
+                ndi_capturer.reset();
 
                 int new_CAPTURE_WIDTH = ctx.config.detection_resolution;
                 int new_CAPTURE_HEIGHT = ctx.config.detection_resolution;
@@ -213,6 +233,20 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                     duplication_capturer = std::make_unique<DuplicationAPIScreenCapture>(new_CAPTURE_WIDTH, new_CAPTURE_HEIGHT);
                     if (!duplication_capturer || !duplication_capturer->IsInitialized()) {
                         std::cerr << "[Capture] Failed to create or initialize DuplicationAPIScreenCapture after resolution change!" << std::endl;
+                        should_exit = true; 
+                        break;             
+                    }
+                } else if (ctx.config.capture_method == "virtual_camera") {
+                    virtual_camera_capturer = std::make_unique<VirtualCameraCapture>(new_CAPTURE_WIDTH, new_CAPTURE_HEIGHT, 0);
+                    if (!virtual_camera_capturer || !virtual_camera_capturer->IsInitialized()) {
+                        std::cerr << "[Capture] Failed to create or initialize VirtualCameraCapture after resolution change!" << std::endl;
+                        should_exit = true; 
+                        break;             
+                    }
+                } else if (ctx.config.capture_method == "ndi") {
+                    ndi_capturer = std::make_unique<NDICapture>(new_CAPTURE_WIDTH, new_CAPTURE_HEIGHT);
+                    if (!ndi_capturer || !ndi_capturer->IsInitialized()) {
+                        std::cerr << "[Capture] Failed to create or initialize NDICapture after resolution change!" << std::endl;
                         should_exit = true; 
                         break;             
                     }
@@ -256,6 +290,10 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 screenshotCpu = simple_capturer->GetNextFrameCpu();
             } else if (duplication_capturer) {
                 screenshotCpu = duplication_capturer->GetNextFrameCpu();
+            } else if (virtual_camera_capturer) {
+                screenshotCpu = virtual_camera_capturer->GetNextFrameCpu();
+            } else if (ndi_capturer) {
+                screenshotCpu = ndi_capturer->GetNextFrameCpu();
             }
             auto frame_acq_end_time = std::chrono::high_resolution_clock::now();
             
