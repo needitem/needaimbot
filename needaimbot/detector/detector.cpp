@@ -660,7 +660,7 @@ void Detector::inferenceThread()
     cv::cuda::GpuMat frameGpu;
     static auto last_cycle_start_time = std::chrono::high_resolution_clock::time_point{};
 
-    while (!ctx.shouldExit)
+    while (!ctx.should_exit)
     {
         auto cycle_start_time = std::chrono::high_resolution_clock::now();
         
@@ -674,7 +674,7 @@ void Detector::inferenceThread()
         
         NVTX_PUSH("Detector Inference Loop");
 
-        if (ctx.shouldExit) {
+        if (ctx.should_exit) {
             break;
         }
 
@@ -732,9 +732,9 @@ void Detector::inferenceThread()
         bool hasNewFrame = false;
         {
             std::unique_lock<std::mutex> lock(inferenceMutex);
-            if (inferenceCV.wait_for(lock, std::chrono::milliseconds(10), [this] { return frameReady || AppContext::getInstance().shouldExit; }))
+            if (inferenceCV.wait_for(lock, std::chrono::milliseconds(10), [this] { return frameReady || AppContext::getInstance().should_exit; }))
             {
-                if (AppContext::getInstance().shouldExit) break;
+                if (AppContext::getInstance().should_exit) break;
                 if (frameReady) {
                     if (frameIsGpu) {
                         frameGpu = std::move(currentFrame);
@@ -834,7 +834,7 @@ void Detector::inferenceThread()
                     std::lock_guard<std::mutex> lock(detectionMutex);
                     
                     // Only proceed if we have detections
-                    if (m_finalDetectionsCountHost > 0 && !ctx.shouldExit)
+                    if (m_finalDetectionsCountHost > 0 && !ctx.should_exit)
                     {
                         // First, calculate scores for all detections using cached config
                         calculateTargetScoresGpu(m_finalDetectionsGpu.get(), m_finalDetectionsCountHost, m_scoresGpu.get(), 
@@ -1292,7 +1292,7 @@ cv::cuda::GpuMat Detector::getHsvMaskGpu() const {
 void Detector::start()
 {
     auto& ctx = AppContext::getInstance();
-    ctx.shouldExit = false;
+    ctx.should_exit = false;
     // Note: capture thread is handled separately in capture.cpp
     m_inferenceThread = std::thread(&Detector::inferenceThread, this);
 }
@@ -1300,7 +1300,7 @@ void Detector::start()
 void Detector::stop()
 {
     auto& ctx = AppContext::getInstance();
-    ctx.shouldExit = true;
+    ctx.should_exit = true;
     
     // Notify all condition variables to wake up waiting threads
     inferenceCV.notify_all(); 

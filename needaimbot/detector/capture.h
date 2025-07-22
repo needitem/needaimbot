@@ -37,7 +37,7 @@ extern std::atomic<int> captureCpuWriteIdx;
 
 extern std::mutex frameMutex;
 extern std::condition_variable frameCV;
-extern std::atomic<bool> shouldExit;
+extern std::atomic<bool> should_exit;
 extern std::atomic<bool> show_window_changed;
 extern std::atomic<bool> newFrameAvailable;
 

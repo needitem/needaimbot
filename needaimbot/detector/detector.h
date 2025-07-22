@@ -102,7 +102,7 @@ public:
     std::vector<std::string> outputNames;
     std::unordered_map<std::string, size_t> outputSizes;
 
-    std::atomic<bool> shouldExit;
+    std::atomic<bool> should_exit;
     std::condition_variable inferenceCV;
 
     cv::cuda::GpuMat currentFrame;
