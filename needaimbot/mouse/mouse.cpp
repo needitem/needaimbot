@@ -34,8 +34,6 @@
 
 extern std::atomic<bool> aiming;
 extern std::mutex configMutex;
-// extern Config config;  // Removed - use AppContext::getInstance().config instead
-
 
 std::random_device rd;
 std::mt19937 gen(rd());
@@ -98,6 +96,7 @@ MouseThread::MouseThread(
 {
     initializeScreen(resolution, bScope_multiplier, norecoil_ms);
     pid_controller = std::make_unique<PIDController2D>(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
+    kalman_filter = std::make_unique<TargetKalmanFilter>();
     initializeInputMethod(serialConnection, gHub);
 }
 
@@ -144,6 +143,7 @@ void MouseThread::initializeScreen(int resolution, float bScope_multiplier, floa
     this->smoothed_movement = Eigen::Vector2f::Zero();
     this->last_target_time_ = std::chrono::high_resolution_clock::now();
     this->prediction_initialized_ = false;
+    this->last_target_class_id_ = -1;
     this->accumulated_x_ = 0.0f;
     this->accumulated_y_ = 0.0f;
 }
@@ -634,6 +634,9 @@ Point2D MouseThread::calculatePredictedTarget(const AimbotTarget& target, float 
     
     // Get y offset from target configuration
     float local_y_offset_multiplier_val;
+    bool use_kalman_prediction;
+    float kalman_measurement_noise;
+    float base_prediction_time_ms;
     {
         auto& ctx = AppContext::getInstance();
         std::lock_guard<std::mutex> lock(ctx.configMutex);
@@ -656,6 +659,10 @@ Point2D MouseThread::calculatePredictedTarget(const AimbotTarget& target, float 
         } else {
             local_y_offset_multiplier_val = ctx.config.body_y_offset;
         }
+        
+        use_kalman_prediction = ctx.config.use_predictive_controller;
+        kalman_measurement_noise = ctx.config.kalman_measurement_noise;
+        base_prediction_time_ms = ctx.config.prediction_time_ms;
     }
     
     raw_target_pos.y = target.y + target.h * local_y_offset_multiplier_val;
@@ -663,27 +670,68 @@ Point2D MouseThread::calculatePredictedTarget(const AimbotTarget& target, float 
     // Calculate initial error for prediction
     float initial_error_x = raw_target_pos.x - current_center_x;
     float initial_error_y = raw_target_pos.y - current_center_y;
+    float error_magnitude = std::sqrt(initial_error_x * initial_error_x + initial_error_y * initial_error_y);
     
-    // Enhanced target prediction using velocity estimation
     Point2D predicted_target_pos = raw_target_pos;
-    auto current_time = std::chrono::high_resolution_clock::now();
     
-    // Initialize or reset prediction when target changes significantly
-    if (!prediction_initialized_ || 
-        std::abs(raw_target_pos.x - last_target_pos_.x) > LARGE_MOVEMENT_THRESHOLD || 
-        std::abs(raw_target_pos.y - last_target_pos_.y) > LARGE_MOVEMENT_THRESHOLD) {
-        last_target_pos_ = raw_target_pos;
-        last_target_time_ = current_time;
-        prediction_initialized_ = true;
-        predicted_target_pos = raw_target_pos; // No prediction on first frame or large jumps
-    } else {
-        float dt_target = std::chrono::duration<float, std::milli>(current_time - last_target_time_).count() / 1000.0f;
-        dt_target = std::clamp(dt_target, MIN_DELTA_TIME, MAX_DELTA_TIME);
+    // Use Kalman filter if enabled
+    if (use_kalman_prediction && kalman_filter) {
+        // Check if target class changed (e.g., head -> body transition)
+        bool class_changed = (last_target_class_id_ != -1 && last_target_class_id_ != target.classId);
         
-        if (dt_target > MIN_DELTA_TIME) {
-            // Calculate current velocity
-            float target_vel_x = (raw_target_pos.x - last_target_pos_.x) / dt_target;
-            float target_vel_y = (raw_target_pos.y - last_target_pos_.y) / dt_target;
+        // Check for large position jumps that might indicate target switch
+        float position_jump = 0.0f;
+        if (prediction_initialized_) {
+            float dx = raw_target_pos.x - last_target_pos_.x;
+            float dy = raw_target_pos.y - last_target_pos_.y;
+            position_jump = std::sqrt(dx * dx + dy * dy);
+        }
+        
+        // Reset Kalman filter if target changed or large jump detected
+        if (class_changed || position_jump > LARGE_MOVEMENT_THRESHOLD) {
+            kalman_filter->reset();
+            kalman_filter->initialize(raw_target_pos.x, raw_target_pos.y);
+            last_target_class_id_ = target.classId;
+            predicted_target_pos = raw_target_pos; // No prediction on reset
+        } else {
+            // Set measurement noise based on config
+            kalman_filter->setMeasurementNoise(kalman_measurement_noise);
+            
+            // Get Kalman prediction
+            Eigen::Vector2f kalman_prediction = kalman_filter->predict(raw_target_pos.x, raw_target_pos.y, base_prediction_time_ms);
+            
+            // Get confidence and apply it
+            float confidence = kalman_filter->getConfidence();
+            
+            // Blend Kalman prediction with raw position based on confidence
+            predicted_target_pos.x = raw_target_pos.x + (kalman_prediction.x() - raw_target_pos.x) * confidence;
+            predicted_target_pos.y = raw_target_pos.y + (kalman_prediction.y() - raw_target_pos.y) * confidence;
+        }
+        
+        // Update tracking state
+        last_target_pos_ = raw_target_pos;
+        last_target_class_id_ = target.classId;
+        prediction_initialized_ = true;
+    } else {
+        // Fallback to simple velocity-based prediction
+        auto current_time = std::chrono::high_resolution_clock::now();
+        
+        // Initialize or reset prediction when target changes significantly
+        if (!prediction_initialized_ || 
+            std::abs(raw_target_pos.x - last_target_pos_.x) > LARGE_MOVEMENT_THRESHOLD || 
+            std::abs(raw_target_pos.y - last_target_pos_.y) > LARGE_MOVEMENT_THRESHOLD) {
+            last_target_pos_ = raw_target_pos;
+            last_target_time_ = current_time;
+            prediction_initialized_ = true;
+            predicted_target_pos = raw_target_pos; // No prediction on first frame or large jumps
+        } else {
+            float dt_target = std::chrono::duration<float, std::milli>(current_time - last_target_time_).count() / 1000.0f;
+            dt_target = std::clamp(dt_target, MIN_DELTA_TIME, MAX_DELTA_TIME);
+            
+            if (dt_target > MIN_DELTA_TIME) {
+                // Calculate current velocity
+                float target_vel_x = (raw_target_pos.x - last_target_pos_.x) / dt_target;
+                float target_vel_y = (raw_target_pos.y - last_target_pos_.y) / dt_target;
             
             // Calculate acceleration
             if (last_velocity_.x != 0 || last_velocity_.y != 0) {
@@ -789,10 +837,11 @@ Point2D MouseThread::calculatePredictedTarget(const AimbotTarget& target, float 
                 predicted_target_pos.x = raw_target_pos.x + prediction_distance_x * scale;
                 predicted_target_pos.y = raw_target_pos.y + prediction_distance_y * scale;
             }
+            }
+            
+            last_target_pos_ = raw_target_pos;
+            last_target_time_ = current_time;
         }
-        
-        last_target_pos_ = raw_target_pos;
-        last_target_time_ = current_time;
     }
     
     return predicted_target_pos;
@@ -958,6 +1007,10 @@ void MouseThread::resetAccumulatedStates()
         pid_controller->reset();
     }
     
+    // Reset Kalman filter
+    if (kalman_filter) {
+        kalman_filter->reset();
+    }
     
     // Reset smoothed movement
     smoothed_movement = Eigen::Vector2f::Zero();
@@ -968,12 +1021,12 @@ void MouseThread::resetAccumulatedStates()
     
     // Reset prediction state
     prediction_initialized_ = false;
+    last_target_class_id_ = -1;
     current_velocity_ = {0, 0};
     last_velocity_ = {0, 0};
     current_acceleration_ = {0, 0};
     velocity_history_.clear();
     velocity_time_history_.clear();
-    prediction_initialized_ = false;
     last_target_pos_ = {0, 0};
     last_target_time_ = std::chrono::high_resolution_clock::now();
     

@@ -67,6 +67,9 @@
     <CudaCompile Include="detector\targetLockingGpu.cu" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="core\config_cache.h" />
+    <ClInclude Include="core\constants.h" />
+    <ClInclude Include="core\error_handler.h" />
     <ClInclude Include="detector\capture.h" />
     <ClInclude Include="detector\CudaBuffer.h" />
     <ClInclude Include="detector\duplication_api_capture.h" />

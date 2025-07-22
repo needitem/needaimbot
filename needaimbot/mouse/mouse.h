@@ -21,6 +21,7 @@
 #include "input_drivers/kmboxNet.h"
 #include "input_drivers/rzctl.h"
 #include "input_drivers/InputMethod.h"
+#include "aimbot_components/TargetKalmanFilter.h"
 
 class PIDController2D;
 
@@ -36,6 +37,7 @@ class MouseThread
 {
 private:
     std::unique_ptr<PIDController2D> pid_controller;
+    std::unique_ptr<TargetKalmanFilter> kalman_filter;
     std::unique_ptr<InputMethod> input_method;
     std::mutex input_method_mutex;
     mutable std::mutex member_data_mutex_;
@@ -76,6 +78,7 @@ private:
     Point2D last_target_pos_{0, 0};
     std::chrono::high_resolution_clock::time_point last_target_time_;
     bool prediction_initialized_ = false;
+    int last_target_class_id_ = -1;  // Track target class changes
     
     // Velocity history for improved prediction
     static constexpr int VELOCITY_HISTORY_SIZE = 5;
