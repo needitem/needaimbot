@@ -1,6 +1,8 @@
 #ifndef CONSTANTS_H
 #define CONSTANTS_H
 
+#define NOMINMAX
+
 namespace Constants {
     // Detection Constants
     constexpr int DEFAULT_YOLO_INPUT_SIZE = 640;
