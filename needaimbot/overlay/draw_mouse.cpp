@@ -113,29 +113,9 @@ static void draw_advanced_settings()
     
     UIHelpers::BeginCard("Advanced Controller Settings");
     
-    if (UIHelpers::EnhancedCheckbox("Enable Adaptive PID", &ctx.config.enable_adaptive_pid, 
-                                   "Uses distance-based PID adjustment for better stability at different ranges.")) {
-        ctx.config.saveConfig();
-    }
-    
     if (UIHelpers::EnhancedSliderFloat("Derivative Smoothing", &ctx.config.pid_derivative_smoothing, 0.0f, 1.0f, "%.3f",
                                       "Smooths derivative calculation to reduce noise. Higher values = more smoothing but slower response to rapid changes.")) {
         ctx.config.saveConfig();
-    }
-    
-    UIHelpers::Spacer();
-    UIHelpers::SettingsSubHeader("Sub-pixel Movement");
-    
-    if (UIHelpers::EnhancedCheckbox("Enable Sub-pixel Dithering", &ctx.config.enable_subpixel_dithering, 
-                                   "Adds small random variations to improve movement smoothness and reduce stepping artifacts.")) {
-        ctx.config.saveConfig();
-    }
-    
-    if (ctx.config.enable_subpixel_dithering) {
-        if (UIHelpers::EnhancedSliderFloat("Dither Strength", &ctx.config.dither_strength, 0.0f, 1.0f, "%.3f",
-                                          "Strength of dithering effect. Higher values = more smoothness but may reduce precision.")) {
-            ctx.config.saveConfig();
-        }
     }
     
     UIHelpers::Spacer();
@@ -443,15 +423,15 @@ void draw_mouse()
     // Left column - Controller settings
     UIHelpers::BeginCard("Controller Settings");
     
-    if (UIHelpers::BeautifulToggle("Use Predictive Controller", &ctx.config.use_predictive_controller,
-                                   "Enable advanced Kalman filter + PID controller for better target tracking and prediction. Recommended for moving targets.")) {
+    if (UIHelpers::BeautifulToggle("Use Kalman Filter", &ctx.config.use_predictive_controller,
+                                   "Enable Kalman filter for advanced target prediction. Provides smoother tracking and better handling of fast-moving targets.")) {
         ctx.config.saveConfig();
     }
     
     // Show predictive settings directly under the toggle when enabled
     if (ctx.config.use_predictive_controller) {
         UIHelpers::Spacer(8.0f);
-        UIHelpers::SettingsSubHeader("Predictive Settings");
+        UIHelpers::SettingsSubHeader("Kalman Filter Settings");
         
         // Prediction Time
         ImGui::Text("Prediction Time (ms)");
@@ -462,18 +442,10 @@ void draw_mouse()
         
         UIHelpers::CompactSpacer();
         
-        // Kalman Filter settings in compact layout
-        ImGui::Text("Process Noise");
-        if (UIHelpers::EnhancedSliderFloat("##process_noise", &ctx.config.kalman_process_noise, 0.001f, 1.0f, "%.3f",
-                                          "Kalman filter process noise. Higher values make tracker adapt faster to sudden movements.")) {
-            ctx.config.saveConfig();
-        }
-        
-        UIHelpers::CompactSpacer();
-        
-        ImGui::Text("Measurement Noise");
-        if (UIHelpers::EnhancedSliderFloat("##measurement_noise", &ctx.config.kalman_measurement_noise, 0.001f, 1.0f, "%.3f",
-                                          "Kalman filter measurement noise. Higher values smooth out jitter but reduce responsiveness.")) {
+        // Measurement Noise only - simplified for users
+        ImGui::Text("Filter Strength");
+        if (UIHelpers::EnhancedSliderFloat("##measurement_noise", &ctx.config.kalman_measurement_noise, 1.0f, 20.0f, "%.1f",
+                                          "Lower values = smoother tracking but less responsive. Higher values = more responsive but may be jittery.")) {
             ctx.config.saveConfig();
         }
     }
@@ -502,7 +474,6 @@ void draw_mouse()
     
     ImGui::BulletText("Start with Kp, then add Kd to reduce oscillation");
     ImGui::BulletText("Use Ki sparingly - too much causes overshoot");
-    ImGui::BulletText("Enable Adaptive PID for better long-range stability");
     ImGui::BulletText("Increase smoothing if you experience jitter");
     
     UIHelpers::CompactSpacer();
