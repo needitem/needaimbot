@@ -124,9 +124,9 @@ public:
     // Sub-pixel movement and prediction
     bool enable_subpixel_dithering;
     float dither_strength;
-    bool enable_velocity_history;
-    int velocity_history_size;
     float prediction_time_factor;
+    bool enable_latency_compensation;
+    float system_latency_ms;
     
 
     

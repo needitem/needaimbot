@@ -111,45 +111,27 @@ static void draw_advanced_settings()
 {
     auto& ctx = AppContext::getInstance();
     
-    UIHelpers::BeginCard("Advanced Controller Settings");
-    
-    if (UIHelpers::EnhancedSliderFloat("Derivative Smoothing", &ctx.config.pid_derivative_smoothing, 0.0f, 1.0f, "%.3f",
-                                      "Smooths derivative calculation to reduce noise. Higher values = more smoothing but slower response to rapid changes.")) {
-        ctx.config.saveConfig();
-    }
-    
-    UIHelpers::Spacer();
-    UIHelpers::SettingsSubHeader("Target Prediction");
-    
-    if (UIHelpers::EnhancedCheckbox("Enable Velocity History", &ctx.config.enable_velocity_history, 
-                                   "Uses target velocity history for more accurate prediction of moving targets.")) {
-        ctx.config.saveConfig();
-    }
-    
-    if (ctx.config.enable_velocity_history) {
-        // Enhanced velocity history size slider
-        ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.15f, 0.15f, 0.18f, 0.95f));
-        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.20f, 0.20f, 0.25f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_SliderGrab, UIHelpers::GetAccentColor(0.9f));
-        ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, UIHelpers::GetAccentColor(1.0f));
-        ImGui::SetNextItemWidth(-1);
-        if (ImGui::SliderInt("Velocity History Size", &ctx.config.velocity_history_size, 2, 10, "%d samples")) {
-            ctx.config.saveConfig();
-        }
-        ImGui::PopStyleColor(4);
-        if (ImGui::IsItemHovered()) {
-            ImGui::BeginTooltip();
-            ImGui::Text("Number of past velocity samples to use for prediction.");
-            ImGui::Text("More samples = smoother but slower adaptation to target changes.");
-            ImGui::EndTooltip();
-        }
-    }
+    UIHelpers::BeginCard("Advanced Prediction Settings");
     
     if (UIHelpers::EnhancedSliderFloat("Prediction Factor", &ctx.config.prediction_time_factor, 0.0001f, 0.01f, "%.4f",
                                       "How much prediction is applied based on target distance. Higher values = more aggressive prediction.")) {
         ctx.config.saveConfig();
     }
     
+    UIHelpers::Spacer();
+    
+    if (UIHelpers::BeautifulToggle("Latency Compensation", &ctx.config.enable_latency_compensation,
+                                   "Compensates for system latency (input lag, display lag, processing delay). Improves tracking of fast-moving targets.")) {
+        ctx.config.saveConfig();
+    }
+    
+    if (ctx.config.enable_latency_compensation) {
+        UIHelpers::Spacer(8.0f);
+        if (UIHelpers::EnhancedSliderFloat("System Latency (ms)", &ctx.config.system_latency_ms, 5.0f, 100.0f, "%.1f",
+                                          "Estimated total system latency including input lag, display lag, and processing delay. Adjust based on your setup.")) {
+            ctx.config.saveConfig();
+        }
+    }
     
     UIHelpers::EndCard();
 }
@@ -448,6 +430,14 @@ void draw_mouse()
                                           "Lower values = smoother tracking but less responsive. Higher values = more responsive but may be jittery.")) {
             ctx.config.saveConfig();
         }
+    }
+    
+    UIHelpers::Spacer();
+    UIHelpers::SettingsSubHeader("PID Controller Settings");
+    
+    if (UIHelpers::EnhancedSliderFloat("Derivative Smoothing", &ctx.config.pid_derivative_smoothing, 0.0f, 1.0f, "%.3f",
+                                      "Smooths PID derivative calculation to reduce noise. Higher values = more smoothing but slower response to rapid changes.")) {
+        ctx.config.saveConfig();
     }
     
     UIHelpers::EndCard();

@@ -80,10 +80,6 @@ private:
     bool prediction_initialized_ = false;
     int last_target_class_id_ = -1;  // Track target class changes
     
-    // Velocity history for improved prediction
-    static constexpr int VELOCITY_HISTORY_SIZE = 5;
-    std::vector<Point2D> velocity_history_;
-    std::vector<std::chrono::high_resolution_clock::time_point> velocity_time_history_;
     Point2D current_velocity_{0, 0};
     Point2D current_acceleration_{0, 0};
     Point2D last_velocity_{0, 0};
