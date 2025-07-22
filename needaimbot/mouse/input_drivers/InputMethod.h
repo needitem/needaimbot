@@ -2,6 +2,7 @@
 #define INPUT_METHOD_H
 
 #include "SerialConnection.h"
+#include "MakcuConnection.h"
 #include "ghub.h"
 #include "kmboxNet.h"
 #include "rzctl.h"
@@ -61,6 +62,49 @@ public:
 
 private:
     SerialConnection *serial_;
+};
+
+
+class MakcuInputMethod : public InputMethod
+{
+public:
+    explicit MakcuInputMethod(MakcuConnection *makcu) : makcu_(makcu) {}
+    ~MakcuInputMethod() override
+    {
+        
+    }
+
+    void move(int x, int y) override
+    {
+        if (makcu_ && makcu_->isOpen())
+        {
+            makcu_->move(x, y);
+        }
+    }
+
+    void press() override
+    {
+        if (makcu_ && makcu_->isOpen())
+        {
+            makcu_->press(1); // Left mouse button
+        }
+    }
+
+    void release() override
+    {
+        if (makcu_ && makcu_->isOpen())
+        {
+            makcu_->release(1); // Left mouse button
+        }
+    }
+
+    bool isValid() const override
+    {
+        return makcu_ && makcu_->isOpen();
+    }
+
+private:
+    MakcuConnection *makcu_;
 };
 
 

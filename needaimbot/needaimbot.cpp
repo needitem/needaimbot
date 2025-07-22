@@ -21,6 +21,7 @@
 #include "keyboard_listener.h"
 #include "overlay.h"
 #include "mouse/input_drivers/SerialConnection.h"
+#include "mouse/input_drivers/MakcuConnection.h"
 #include "mouse/input_drivers/ghub.h"
 #include "other_tools.h"
 #include "mouse/input_drivers/InputMethod.h"
@@ -161,6 +162,17 @@ std::unique_ptr<InputMethod> initializeInputMethod() {
             return std::make_unique<KmboxInputMethod>();
         }
         std::cerr << "[kmboxNet] init failed, code=" << rc << ". Defaulting to Win32.\n";
+    } else if (ctx.config.input_method == "MAKCU") {
+        std::cout << "[Mouse] Using MAKCU method input." << std::endl;
+        try {
+            auto makcuConnection = std::make_unique<MakcuConnection>(ctx.config.makcu_port, ctx.config.makcu_baudrate);
+            if (makcuConnection->isOpen()) {
+                return std::make_unique<MakcuInputMethod>(makcuConnection.release());
+            }
+            std::cerr << "[Mouse] Failed to open MAKCU port " << ctx.config.makcu_port << ". Defaulting to Win32." << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "[Mouse] MAKCU initialization failed: " << e.what() << ". Defaulting to Win32." << std::endl;
+        }
     } else if (ctx.config.input_method == "RAZER") {
         std::cout << "[Mouse] Using Razer method input." << std::endl;
         try {

@@ -141,6 +141,10 @@ public:
     std::string kmbox_mac;    
 
     
+    std::string makcu_port;
+    int makcu_baudrate;
+
+    
     float bScope_multiplier;
 
     

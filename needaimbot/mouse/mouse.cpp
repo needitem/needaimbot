@@ -5,6 +5,7 @@
 #include "../detector/capture.h"
 // #include "../detector/optical_flow.h" // Optical flow removed
 #include "input_drivers/SerialConnection.h"
+#include "input_drivers/MakcuConnection.h"
 #include "../needaimbot.h"
 #include "input_drivers/ghub.h"
 #include "../config/config.h"
@@ -92,21 +93,26 @@ MouseThread::MouseThread(
     float bScope_multiplier,
     float norecoil_ms,
     SerialConnection *serialConnection,
+    MakcuConnection *makcuConnection,
     GhubMouse *gHub) : tracking_errors(false), optical_flow_recoil_frame_count(0)
 {
     initializeScreen(resolution, bScope_multiplier, norecoil_ms);
     pid_controller = std::make_unique<PIDController2D>(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
     kalman_filter = std::make_unique<TargetKalmanFilter>();
-    initializeInputMethod(serialConnection, gHub);
+    initializeInputMethod(serialConnection, makcuConnection, gHub);
 }
 
 MouseThread::~MouseThread() = default;
 
-void MouseThread::initializeInputMethod(SerialConnection *serialConnection, GhubMouse *gHub)
+void MouseThread::initializeInputMethod(SerialConnection *serialConnection, MakcuConnection *makcuConnection, GhubMouse *gHub)
 {
     if (serialConnection && serialConnection->isOpen())
     {
         input_method = std::make_unique<SerialInputMethod>(serialConnection);
+    }
+    else if (makcuConnection && makcuConnection->isOpen())
+    {
+        input_method = std::make_unique<MakcuInputMethod>(makcuConnection);
     }
     else if (gHub)
     {

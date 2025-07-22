@@ -103,7 +103,8 @@ public:
             config.input_method != "GHUB" &&
             config.input_method != "ARDUINO" &&
             config.input_method != "RAZER" &&
-            config.input_method != "KMBOX") {
+            config.input_method != "KMBOX" &&
+            config.input_method != "MAKCU") {
             config.input_method = "WIN32";
         }
 
