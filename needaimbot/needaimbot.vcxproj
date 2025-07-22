@@ -34,6 +34,7 @@
     <ClCompile Include="imgui\imgui_widgets.cpp" />
     <ClCompile Include="keyboard\keyboard_listener.cpp" />
     <ClCompile Include="keyboard\\keycodes.cpp" />
+    <ClCompile Include="mouse\aimbot_components\TargetKalmanFilter.cpp" />
     <ClCompile Include="mouse\\input_drivers\\ghub.cpp" />
     <ClCompile Include="mouse\\input_drivers\\kmboxNet.cpp" />
     <ClCompile Include="mouse\\mouse.cpp" />
@@ -95,6 +96,7 @@
     <ClInclude Include="keyboard\keycodes.h" />
     <ClInclude Include="mouse\aimbot_components\AimbotTarget.h" />
     <ClInclude Include="mouse\aimbot_components\PIDController2D.h" />
+    <ClInclude Include="mouse\aimbot_components\TargetKalmanFilter.h" />
     <ClInclude Include="mouse\ExponentialSmoothingPredictor.h" />
     <ClInclude Include="mouse\ghub.h" />
     <ClInclude Include="mouse\HidTable.h" />
