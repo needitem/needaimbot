@@ -82,7 +82,6 @@ void keyboardListener() {
         if (current_aiming != last_aiming_state) {
             last_aiming_state = current_aiming;
         }
-        // ctx.auto_shoot_active = is_any_key_pressed(auto_shoot_vk_codes); // Removed"
 
         if (is_any_key_pressed(pause_vk_codes)) {
             ctx.detectionPaused = !ctx.detectionPaused;
