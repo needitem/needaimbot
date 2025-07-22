@@ -14,6 +14,7 @@
 #include "detector/capture.h"
 #include "visuals.h"
 #include "utils/constants.h"
+#include "core/constants.h"
 #include "detector.h"
 #include "mouse.h"
 #include "needaimbot.h"
@@ -42,7 +43,7 @@
 #include <algorithm>
 
 // Global variable definitions
-std::atomic<bool> shouldExit{false};
+std::atomic<bool> should_exit{false};
 std::mutex configMutex;
 std::atomic<bool> detector_model_changed{false};
 std::atomic<bool> capture_fps_changed{false};
@@ -65,8 +66,8 @@ struct alignas(64) DetectionData {
     int version;
     
     DetectionData() : version(0) {
-        boxes.reserve(512);  // Increased from 64 to 512
-        classes.reserve(512);  // Increased from 64 to 512
+        boxes.reserve(Constants::DEFAULT_DETECTION_RESERVE);
+        classes.reserve(Constants::DEFAULT_DETECTION_RESERVE);
     }
 };
 
@@ -82,7 +83,7 @@ namespace optimized {
         
         // Initialize thread-local buffer on first use
         if (!tlBuffers.initialized) {
-            tlBuffers.scoreBuffer.reserve(1024);
+            tlBuffers.scoreBuffer.reserve(Constants::THREAD_LOCAL_BUFFER_RESERVE);
             tlBuffers.initialized = true;
         }
         
@@ -131,7 +132,7 @@ std::unique_ptr<InputMethod> initializeInputMethod() {
         std::cout << "[Mouse] Using Arduino method input." << std::endl;
         try {
             auto arduinoSerial = std::make_unique<SerialConnection>(ctx.config.arduino_port, ctx.config.arduino_baudrate);
-            if (arduinoSerial && arduinoSerial->isOpen()) {
+            if (arduinoSerial->isOpen()) {
                 return std::make_unique<SerialInputMethod>(arduinoSerial.release());
             }
             std::cerr << "[Mouse] Failed to open Arduino serial port " << ctx.config.arduino_port << ". Defaulting to Win32." << std::endl;
@@ -141,10 +142,10 @@ std::unique_ptr<InputMethod> initializeInputMethod() {
     } else if (ctx.config.input_method == "GHUB") {
         std::cout << "[Mouse] Using Ghub method input." << std::endl;
         auto gHub = std::make_unique<GhubMouse>();
-        if (gHub && gHub->mouse_xy(0, 0)) {
+        if (gHub->mouse_xy(0, 0)) {
             return std::make_unique<GHubInputMethod>(gHub.release());
         }
-        std::cerr << "[Ghub] Error with opening Ghub mouse. Defaulting to Win32." << std::endl;
+        std::cerr << "[Mouse] Failed to initialize GHub mouse driver. Defaulting to Win32." << std::endl;
     } else if (ctx.config.input_method == "KMBOX") {
         std::cout << "[Mouse] Using kmboxNet method input.\n";
         char ip[256], port[256], mac[256];
@@ -193,7 +194,7 @@ void mouseThreadFunction(MouseThread &mouseThread)
     std::cout << "Mouse thread started." << std::endl;
     
     // Reduce thread priority to prevent excessive CPU usage
-    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+    SetThreadPriority(GetCurrentThread(), Constants::MOUSE_THREAD_PRIORITY);
     // Remove CPU core affinity to allow OS scheduling
     // SetThreadAffinityMask(GetCurrentThread(), 1 << 1);
     
@@ -217,11 +218,11 @@ void mouseThreadFunction(MouseThread &mouseThread)
     } key_cache;
     
     // Dynamic wait time based on target availability
-    std::chrono::milliseconds wait_timeout(10);
-    const std::chrono::milliseconds active_timeout(10);   // When target is present
-    const std::chrono::milliseconds idle_timeout(30);    // When no target
+    std::chrono::milliseconds wait_timeout(Constants::ACTIVE_WAIT_TIMEOUT_MS);
+    const std::chrono::milliseconds active_timeout(Constants::ACTIVE_WAIT_TIMEOUT_MS);
+    const std::chrono::milliseconds idle_timeout(Constants::IDLE_WAIT_TIMEOUT_MS);
     
-    while (!ctx.shouldExit)
+    while (!ctx.should_exit)
     {
         // Wait for detection update or exit signal
         static int last_detection_version = 0;
@@ -230,10 +231,10 @@ void mouseThreadFunction(MouseThread &mouseThread)
         Detection current_target = {};
         
         {
-            std::unique_lock<std::mutex> lock(ctx.detector->detectionMutex);
+            std::unique_lock<std::mutex> lock(ctx.detector->detection_mutex);
             // Wait with dynamic timeout
-            auto wait_result = ctx.detector->detectionCV.wait_for(lock, wait_timeout, [&]() { 
-                return ctx.shouldExit || ctx.input_method_changed.load() || 
+            auto wait_result = ctx.detector->detection_cv.wait_for(lock, wait_timeout, [&]() { 
+                return ctx.should_exit || ctx.input_method_changed.load() || 
                        ctx.detector->detectionVersion != last_detection_version; 
             });
             
@@ -272,7 +273,7 @@ void mouseThreadFunction(MouseThread &mouseThread)
             }
         }
 
-        if (ctx.shouldExit) break;
+        if (ctx.should_exit) break;
 
         if (ctx.input_method_changed.load()) {
             mouseThread.setInputMethod(initializeInputMethod());
@@ -437,7 +438,7 @@ int main()
             std::cout << "---------------------------" << std::endl << std::endl;
         }
 
-        ctx.detector = new Detector();
+        ctx.detector = std::make_unique<Detector>();
         ctx.detector->initializeCudaContext();
 
         int cuda_devices = 0;
@@ -470,8 +471,8 @@ int main()
             nullptr,
             nullptr);
 
-        ctx.globalMouseThread = &mouseThread;
-        ctx.globalMouseThread->setInputMethod(initializeInputMethod());
+        ctx.global_mouse_thread = &mouseThread;
+        ctx.global_mouse_thread->setInputMethod(initializeInputMethod());
 
         std::vector<std::string> availableModels = getAvailableModels();
         if (!loadAndValidateModel(ctx.config.ai_model, availableModels)) {
@@ -517,8 +518,7 @@ int main()
             overlayThread.detach();
         }
 
-        delete ctx.detector;
-        ctx.detector = nullptr;
+        ctx.detector.reset();
         
         std::exit(0);
     }
