@@ -17,6 +17,7 @@
 #include "config/config.h"
 #include "aimbot_components/AimbotTarget.h"
 #include "input_drivers/SerialConnection.h"
+#include "input_drivers/MakcuConnection.h"
 #include "input_drivers/ghub.h"
 #include "input_drivers/kmboxNet.h"
 #include "input_drivers/rzctl.h"
@@ -117,7 +118,7 @@ private:
     static constexpr float MAX_ADDITIONAL_SMOOTHING = 0.4f;
 
     float calculateTargetDistanceSquared(const AimbotTarget &target) const;
-    void initializeInputMethod(SerialConnection *serialConnection, GhubMouse *gHub);
+    void initializeInputMethod(SerialConnection *serialConnection, MakcuConnection *makcuConnection, GhubMouse *gHub);
     void initializeScreen(int resolution, float bScope_multiplier, float norecoil_ms);
     
     // Latency compensation methods
@@ -132,6 +133,7 @@ public:
                 float bScope_multiplier,
                 float norecoil_ms,
                 SerialConnection *serialConnection = nullptr,
+                MakcuConnection *makcuConnection = nullptr,
                 GhubMouse *gHub = nullptr);
     ~MouseThread();
 

@@ -139,6 +139,10 @@ bool Config::loadConfig(const std::string& filename)
         kmbox_mac = "46405c53";
         
         
+        makcu_port = "COM0";
+        makcu_baudrate = 4000000;
+        
+        
         bScope_multiplier = 1.0f;
 
         
@@ -306,6 +310,9 @@ bool Config::loadConfig(const std::string& filename)
     kmbox_ip = get_string_ini("KMBOX", "ip", "192.168.2.188");
     kmbox_port = get_string_ini("KMBOX", "port", "16896");
     kmbox_mac = get_string_ini("KMBOX", "mac", "46405C53");
+
+    makcu_port = get_string_ini("MAKCU", "makcu_port", "COM0");
+    makcu_baudrate = get_long_ini("MAKCU", "makcu_baudrate", 4000000);
 
     ai_model = get_string_ini("AI", "ai_model", "sunxds_0.5.6.engine");
     confidence_threshold = (float)get_double_ini("AI", "confidence_threshold", 0.25);
@@ -506,6 +513,10 @@ bool Config::saveConfig(const std::string& filename)
     file << "ip = " << kmbox_ip << "\n";
     file << "port = " << kmbox_port << "\n";
     file << "mac = " << kmbox_mac << "\n\n";
+    
+    file << "[MAKCU]\n";
+    file << "makcu_port = " << makcu_port << "\n";
+    file << "makcu_baudrate = " << makcu_baudrate << "\n\n";
     
     file << "[AI]\n";
     file << "ai_model = " << ai_model << "\n";
