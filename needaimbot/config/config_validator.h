@@ -7,6 +7,7 @@
 #include <cmath>
 #include "config.h"
 #include "../utils/constants.h"
+#include "../core/constants.h"
 
 class ConfigValidator {
 public:

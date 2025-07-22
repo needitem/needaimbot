@@ -231,9 +231,9 @@ void mouseThreadFunction(MouseThread &mouseThread)
         Detection current_target = {};
         
         {
-            std::unique_lock<std::mutex> lock(ctx.detector->detection_mutex);
+            std::unique_lock<std::mutex> lock(ctx.detector->detectionMutex);
             // Wait with dynamic timeout
-            auto wait_result = ctx.detector->detection_cv.wait_for(lock, wait_timeout, [&]() { 
+            bool wait_result = ctx.detector->detectionCV.wait_for(lock, wait_timeout, [&]() { 
                 return ctx.should_exit || ctx.input_method_changed.load() || 
                        ctx.detector->detectionVersion != last_detection_version; 
             });
@@ -438,7 +438,7 @@ int main()
             std::cout << "---------------------------" << std::endl << std::endl;
         }
 
-        ctx.detector = std::make_unique<Detector>();
+        ctx.detector = new Detector();
         ctx.detector->initializeCudaContext();
 
         int cuda_devices = 0;
@@ -518,7 +518,8 @@ int main()
             overlayThread.detach();
         }
 
-        ctx.detector.reset();
+        delete ctx.detector;
+        ctx.detector = nullptr;
         
         std::exit(0);
     }
