@@ -24,7 +24,7 @@
 #include <opencv2/cudaimgproc.hpp>
 #include <filesystem>
 
-#include "postProcess.h"
+#include "../postprocess/postProcess.h"
 #include "CudaBuffer.h"
 
 struct TrackedTarget {

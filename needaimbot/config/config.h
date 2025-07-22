@@ -67,8 +67,12 @@ public:
  
     float target_fps;
     
-    std::string capture_method; // "simple", "duplication" 
-
+    std::string capture_method; // "simple", "duplication", "virtual_camera", "ndi"
+    
+    // NDI capture settings
+    std::string ndi_source_name;
+    std::string ndi_network_url; 
+    bool ndi_low_latency;
     
     float body_y_offset;
     float head_y_offset;

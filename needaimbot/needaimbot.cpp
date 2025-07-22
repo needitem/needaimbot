@@ -11,7 +11,7 @@
 #include <condition_variable>
 
 #include "AppContext.h"
-#include "detector/capture.h"
+#include "capture/capture.h"
 #include "visuals.h"
 #include "utils/constants.h"
 #include "core/constants.h"

@@ -68,6 +68,11 @@ bool Config::loadConfig(const std::string& filename)
  
         target_fps = 120.0f;
         capture_method = "simple";
+        
+        // NDI capture defaults
+        ndi_source_name = "";
+        ndi_network_url = "";
+        ndi_low_latency = false;
  
 
         
@@ -248,6 +253,11 @@ bool Config::loadConfig(const std::string& filename)
     capture_cursor = get_bool_ini("Capture", "capture_cursor", true);
     target_fps = (float)get_double_ini("Capture", "target_fps", 120.0);
     capture_method = get_string_ini("Capture", "capture_method", "simple");
+    
+    // NDI capture settings
+    ndi_source_name = get_string_ini("Capture", "ndi_source_name", "");
+    ndi_network_url = get_string_ini("Capture", "ndi_network_url", "");
+    ndi_low_latency = get_bool_ini("Capture", "ndi_low_latency", false);
 
     body_y_offset = (float)get_double_ini("Target", "body_y_offset", 0.15);
     head_y_offset = (float)get_double_ini("Target", "head_y_offset", 0.05);
@@ -442,6 +452,9 @@ bool Config::saveConfig(const std::string& filename)
     
     file << "target_fps = " << target_fps << "\n";
     file << "capture_method = " << capture_method << "\n";
+    file << "ndi_source_name = " << ndi_source_name << "\n";
+    file << "ndi_network_url = " << ndi_network_url << "\n";
+    file << "ndi_low_latency = " << (ndi_low_latency ? "true" : "false") << "\n";
 
     file << "[Target]\n";
     file << std::fixed << std::setprecision(6);

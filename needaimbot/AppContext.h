@@ -12,7 +12,7 @@
 #include <vector>
 #include <memory>
 #include "config/config.h"
-#include "detector/postProcess.h"
+#include "postprocess/postProcess.h"
 
 class MouseThread; // Forward declaration
 class Detector;
