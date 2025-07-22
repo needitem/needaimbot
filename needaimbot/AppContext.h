@@ -99,7 +99,7 @@ public:
 
     // Modules
     MouseThread* global_mouse_thread = nullptr;  // Stack allocated in main, so using raw pointer
-    std::unique_ptr<Detector> detector;  // Smart pointer for automatic cleanup
+    Detector* detector = nullptr;  // Raw pointer, lifetime managed externally
 
     // Overlay Target Data (Synchronized for UI)
     std::atomic<bool> overlay_has_target{false};
@@ -116,7 +116,7 @@ public:
     }
 
 private:
-    AppContext() : captureGpuWriteIdx(0), captureCpuWriteIdx(0), newFrameAvailable(false) {
+    AppContext() : captureGpuWriteIdx(0), captureCpuWriteIdx(0), new_frame_available(false) {
         // Initialize capture buffers
         captureGpuBuffer.resize(4); // Use literal instead of FRAME_BUFFER_COUNT to avoid circular include
         captureCpuBuffer.resize(4);

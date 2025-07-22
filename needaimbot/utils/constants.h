@@ -17,9 +17,7 @@ namespace Constants {
     constexpr int MAX_CAPTURE_DIMENSION = 1920;
     constexpr int MIN_CAPTURE_DIMENSION = 50;
     
-    // Performance constants
-    constexpr int DEFAULT_CAPTURE_FPS = 60;
-    constexpr int MAX_CAPTURE_FPS = 240;
+    // Performance constants moved to core/constants.h to avoid duplication
     constexpr int OVERLAY_TARGET_FPS = 30;
     
     // UI constants
