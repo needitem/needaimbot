@@ -119,6 +119,7 @@
     <ClInclude Include="mouse\SerialConnection.h" />
     <ClInclude Include="mouse\AimbotTarget.h" />
     <ClInclude Include="mouse\VelocityPredictor.h" />
+    <ClInclude Include="overlay\common_helpers.h" />
     <ClInclude Include="overlay\draw_settings.h" />
     <ClInclude Include="overlay\overlay.h" />
     <ClInclude Include="overlay\ui_helpers.h" />

@@ -500,6 +500,7 @@ void MouseThread::moveMouse(const AimbotTarget &target)
             } else {
                 input_method->move(dx_int, dy_int);
             }
+            
         }
     }
     
@@ -663,6 +664,11 @@ Point2D MouseThread::calculatePredictedTarget(const AimbotTarget& target, float 
         use_kalman_prediction = ctx.config.use_predictive_controller;
         kalman_measurement_noise = ctx.config.kalman_measurement_noise;
         base_prediction_time_ms = ctx.config.prediction_time_ms;
+        
+        // If latency compensation is enabled, include it in Kalman prediction time
+        if (use_kalman_prediction && ctx.config.enable_latency_compensation) {
+            base_prediction_time_ms += ctx.config.system_latency_ms;
+        }
     }
     
     raw_target_pos.y = target.y + target.h * local_y_offset_multiplier_val;
@@ -744,55 +750,14 @@ Point2D MouseThread::calculatePredictedTarget(const AimbotTarget& target, float 
                 current_acceleration_.y = std::clamp(current_acceleration_.y, -MAX_ACCELERATION, MAX_ACCELERATION);
             }
             
-            // Get velocity history settings from config
-            bool use_velocity_history;
-            int max_history_size;
-            {
-                auto& ctx = AppContext::getInstance();
-                std::lock_guard<std::mutex> lock(ctx.configMutex);
-                use_velocity_history = ctx.config.enable_velocity_history;
-                max_history_size = ctx.config.velocity_history_size;
-            }
-            
-            // Update velocity history if enabled
+            // Update velocity tracking
             last_velocity_ = current_velocity_;
             current_velocity_.x = target_vel_x;
             current_velocity_.y = target_vel_y;
             
-            if (use_velocity_history) {
-                velocity_history_.push_back(current_velocity_);
-                velocity_time_history_.push_back(current_time);
-                
-                // Maintain history size
-                while (static_cast<int>(velocity_history_.size()) > max_history_size) {
-                    velocity_history_.erase(velocity_history_.begin());
-                    velocity_time_history_.erase(velocity_time_history_.begin());
-                }
-            }
-            
-            // Calculate weighted average velocity (recent velocities weighted more)
-            Point2D avg_velocity{0, 0};
-            
-            if (use_velocity_history && velocity_history_.size() >= 2) {
-                float total_weight = 0.0f;
-                for (size_t i = 0; i < velocity_history_.size(); ++i) {
-                    float weight = static_cast<float>(i + 1); // Linear weighting, most recent = highest weight
-                    avg_velocity.x += velocity_history_[i].x * weight;
-                    avg_velocity.y += velocity_history_[i].y * weight;
-                    total_weight += weight;
-                }
-                
-                if (total_weight > 0.0f) {
-                    avg_velocity.x /= total_weight;
-                    avg_velocity.y /= total_weight;
-                }
-            } else {
-                avg_velocity = current_velocity_;
-            }
-            
             // Adaptive prediction time based on multiple factors
             float error_magnitude = std::sqrt(initial_error_x * initial_error_x + initial_error_y * initial_error_y);
-            float velocity_magnitude = std::sqrt(avg_velocity.x * avg_velocity.x + avg_velocity.y * avg_velocity.y);
+            float velocity_magnitude = std::sqrt(current_velocity_.x * current_velocity_.x + current_velocity_.y * current_velocity_.y);
             float acceleration_magnitude = std::sqrt(current_acceleration_.x * current_acceleration_.x + 
                                                    current_acceleration_.y * current_acceleration_.y);
             
@@ -820,9 +785,9 @@ Point2D MouseThread::calculatePredictedTarget(const AimbotTarget& target, float 
             
             // Apply enhanced prediction with velocity and acceleration (2nd order prediction)
             // Position = current_pos + velocity * t + 0.5 * acceleration * t^2
-            predicted_target_pos.x = raw_target_pos.x + avg_velocity.x * prediction_time + 
+            predicted_target_pos.x = raw_target_pos.x + current_velocity_.x * prediction_time + 
                                    0.5f * current_acceleration_.x * prediction_time * prediction_time;
-            predicted_target_pos.y = raw_target_pos.y + avg_velocity.y * prediction_time + 
+            predicted_target_pos.y = raw_target_pos.y + current_velocity_.y * prediction_time + 
                                    0.5f * current_acceleration_.y * prediction_time * prediction_time;
             
             // Apply prediction limits to prevent overshooting
@@ -842,6 +807,19 @@ Point2D MouseThread::calculatePredictedTarget(const AimbotTarget& target, float 
             last_target_pos_ = raw_target_pos;
             last_target_time_ = current_time;
         }
+    }
+    
+    // Apply latency compensation if enabled and not using Kalman (to avoid double compensation)
+    bool enable_latency_compensation;
+    {
+        auto& ctx = AppContext::getInstance();
+        std::lock_guard<std::mutex> lock(ctx.configMutex);
+        enable_latency_compensation = ctx.config.enable_latency_compensation;
+        use_kalman_prediction = ctx.config.use_predictive_controller;
+    }
+    
+    if (enable_latency_compensation && !use_kalman_prediction) {
+        predicted_target_pos = applyLatencyCompensation(predicted_target_pos, current_velocity_);
     }
     
     return predicted_target_pos;
@@ -931,10 +909,18 @@ float MouseThread::getEstimatedTotalLatency() const
 
 Point2D MouseThread::applyLatencyCompensation(const Point2D& predicted_pos, const Point2D& velocity) const
 {
-    // Convert latency from ms to seconds
-    float latency_compensation_time = estimated_total_latency_ms_ / 1000.0f;
+    // Get latency compensation setting
+    float system_latency_ms;
+    {
+        auto& ctx = AppContext::getInstance();
+        std::lock_guard<std::mutex> lock(ctx.configMutex);
+        system_latency_ms = ctx.config.system_latency_ms;
+    }
     
-    // Apply additional prediction based on estimated system latency
+    // Convert latency from ms to seconds
+    float latency_compensation_time = system_latency_ms / 1000.0f;
+    
+    // Apply additional prediction based on system latency
     Point2D compensated_pos;
     compensated_pos.x = predicted_pos.x + velocity.x * latency_compensation_time;
     compensated_pos.y = predicted_pos.y + velocity.y * latency_compensation_time;
@@ -1025,8 +1011,6 @@ void MouseThread::resetAccumulatedStates()
     current_velocity_ = {0, 0};
     last_velocity_ = {0, 0};
     current_acceleration_ = {0, 0};
-    velocity_history_.clear();
-    velocity_time_history_.clear();
     last_target_pos_ = {0, 0};
     last_target_time_ = std::chrono::high_resolution_clock::now();
     

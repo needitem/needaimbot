@@ -45,10 +45,20 @@ namespace Constants {
     constexpr int DEFAULT_THREAD_POOL_SIZE = 4;
     constexpr int MAX_THREAD_POOL_SIZE = 16;
     
-    // History Buffer Sizes
+    // Buffer Sizes
+    constexpr size_t DEFAULT_DETECTION_RESERVE = 512;
+    constexpr size_t THREAD_LOCAL_BUFFER_RESERVE = 1024;
     constexpr int DEFAULT_HISTORY_SIZE = 100;
     constexpr int VELOCITY_HISTORY_SIZE = 5;
     constexpr int LATENCY_HISTORY_SIZE = 10;
+    
+    // Thread Priority Constants
+    constexpr int MOUSE_THREAD_PRIORITY = THREAD_PRIORITY_ABOVE_NORMAL;
+    constexpr int DETECTOR_THREAD_PRIORITY = THREAD_PRIORITY_TIME_CRITICAL;
+    
+    // Timing Intervals
+    constexpr int ACTIVE_WAIT_TIMEOUT_MS = 10;
+    constexpr int IDLE_WAIT_TIMEOUT_MS = 30;
 }
 
 #endif // CONSTANTS_H

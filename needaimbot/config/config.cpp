@@ -112,9 +112,9 @@ bool Config::loadConfig(const std::string& filename)
         // Sub-pixel and prediction defaults
         enable_subpixel_dithering = true;
         dither_strength = 0.3f;
-        enable_velocity_history = true;
-        velocity_history_size = 5;
         prediction_time_factor = 0.001f;
+        enable_latency_compensation = true;
+        system_latency_ms = 20.0f;
 
         
         kp_x = 0.5; 
@@ -292,9 +292,9 @@ bool Config::loadConfig(const std::string& filename)
     // Sub-pixel and prediction settings
     enable_subpixel_dithering = get_bool_ini("PID", "enable_subpixel_dithering", true);
     dither_strength = (float)get_double_ini("PID", "dither_strength", 0.3);
-    enable_velocity_history = get_bool_ini("PID", "enable_velocity_history", true);
-    velocity_history_size = get_long_ini("PID", "velocity_history_size", 5);
     prediction_time_factor = (float)get_double_ini("PID", "prediction_time_factor", 0.001);
+    enable_latency_compensation = get_bool_ini("PID", "enable_latency_compensation", true);
+    system_latency_ms = (float)get_double_ini("PID", "system_latency_ms", 20.0);
     
     // Hybrid aim control settings
 
@@ -490,9 +490,8 @@ bool Config::saveConfig(const std::string& filename)
     file << "kalman_measurement_noise = " << kalman_measurement_noise << "\n";
     file << "enable_subpixel_dithering = " << (enable_subpixel_dithering ? "true" : "false") << "\n";
     file << "dither_strength = " << dither_strength << "\n";
-    file << "enable_velocity_history = " << (enable_velocity_history ? "true" : "false") << "\n";
-    file << std::noboolalpha;
-    file << "velocity_history_size = " << velocity_history_size << "\n";
+    file << "enable_latency_compensation = " << (enable_latency_compensation ? "true" : "false") << "\n";
+    file << "system_latency_ms = " << system_latency_ms << "\n";
     file << std::fixed << std::setprecision(6);
     file << "prediction_time_factor = " << prediction_time_factor << "\n\n";
 

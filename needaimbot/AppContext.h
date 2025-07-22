@@ -37,16 +37,16 @@ public:
     std::atomic<int> captureCpuWriteIdx{0};
 
     // Frame synchronization
-    std::mutex frameMutex;
-    std::condition_variable frameCV;
-    std::atomic<bool> newFrameAvailable{false};
+    std::mutex frame_mutex;
+    std::condition_variable frame_cv;
+    std::atomic<bool> new_frame_available{false};
 
     // Detection synchronization
-    std::mutex detectionMutex;
-    std::condition_variable detectionCV;
+    std::mutex detection_mutex;
+    std::condition_variable detection_cv;
 
     // Application state
-    std::atomic<bool> shouldExit{false};
+    std::atomic<bool> should_exit{false};
     std::atomic<bool> aiming{false};
     std::atomic<bool> input_method_changed{false};
     
@@ -98,8 +98,8 @@ public:
     std::mutex configMutex;
 
     // Modules
-    MouseThread* globalMouseThread = nullptr;  // Stack allocated in main, so using raw pointer
-    Detector* detector = nullptr;  // Changed back to raw pointer to avoid incomplete type issues
+    MouseThread* global_mouse_thread = nullptr;  // Stack allocated in main, so using raw pointer
+    std::unique_ptr<Detector> detector;  // Smart pointer for automatic cleanup
 
     // Overlay Target Data (Synchronized for UI)
     std::atomic<bool> overlay_has_target{false};
