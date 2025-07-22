@@ -5,7 +5,6 @@
 #include "../../config/config.h"
 #include "../../AppContext.h"
 
-// extern Config config;  // Removed - use AppContext::getInstance().config instead
 extern std::mutex configMutex; 
 
 PIDController2D::PIDController2D(float kp_x, float ki_x, float kd_x, float kp_y, float ki_y, float kd_y)

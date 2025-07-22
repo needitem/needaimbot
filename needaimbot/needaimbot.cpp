@@ -44,7 +44,6 @@
 // Global variable definitions
 std::atomic<bool> shouldExit{false};
 std::mutex configMutex;
-// Config config;  // Removed - use AppContext::getInstance().config instead
 std::atomic<bool> detector_model_changed{false};
 std::atomic<bool> capture_fps_changed{false};
 std::atomic<bool> detection_resolution_changed{false};
@@ -52,14 +51,7 @@ std::atomic<bool> capture_borders_changed{false};
 std::atomic<bool> capture_cursor_changed{false};
 std::atomic<bool> show_window_changed{false};
 
-void add_to_history(std::vector<float>& history, float value, std::mutex& mtx, int max_size) {
-    std::lock_guard<std::mutex> lock(mtx);
-    history.push_back(value);
-    if (history.size() > max_size)
-    {
-        history.erase(history.begin());
-    }
-}
+// add_to_history function removed - use AppContext::getInstance().add_to_history() instead
 
 // Pre-allocated thread-local buffers for performance
 thread_local struct {
@@ -415,8 +407,6 @@ bool loadAndValidateModel(std::string& modelName, const std::vector<std::string>
     
     return true;
 }
-
-// Duplicate add_to_history function removed (already defined above)
 
 int main()
 {

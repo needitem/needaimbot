@@ -37,7 +37,6 @@ IDXGISwapChain* g_pSwapChain = NULL;
 ID3D11RenderTargetView* g_mainRenderTargetView = NULL;
 HWND g_hwnd = NULL;
 
-// extern Config config;  // Removed - use AppContext::getInstance().config instead
 extern std::mutex configMutex;
 extern std::atomic<bool> shouldExit;
 

@@ -65,7 +65,6 @@ extern std::atomic<bool> detection_resolution_changed;
 
 
 
-// extern Config config;  // Removed - use AppContext::getInstance().config instead
 extern std::mutex configMutex; 
 
 static bool error_logged = false;
