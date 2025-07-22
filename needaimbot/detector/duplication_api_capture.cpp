@@ -514,7 +514,7 @@ DuplicationAPIScreenCapture::~DuplicationAPIScreenCapture()
 
 cv::cuda::GpuMat DuplicationAPIScreenCapture::GetNextFrameGpu()
 {
-    if (!m_ddaManager || !m_ddaManager->m_duplication || AppContext::getInstance().shouldExit)
+    if (!m_ddaManager || !m_ddaManager->m_duplication || AppContext::getInstance().should_exit)
         return cv::cuda::GpuMat();
 
     HRESULT hr = S_OK;
@@ -607,7 +607,7 @@ cv::cuda::GpuMat DuplicationAPIScreenCapture::GetNextFrameGpu()
 
 cv::Mat DuplicationAPIScreenCapture::GetNextFrameCpu()
 {
-    if (!m_ddaManager || !m_ddaManager->m_duplication || AppContext::getInstance().shouldExit)
+    if (!m_ddaManager || !m_ddaManager->m_duplication || AppContext::getInstance().should_exit)
         return cv::Mat();
 
     HRESULT hr = S_OK;

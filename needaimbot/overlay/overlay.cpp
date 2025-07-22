@@ -38,7 +38,7 @@ ID3D11RenderTargetView* g_mainRenderTargetView = NULL;
 HWND g_hwnd = NULL;
 
 extern std::mutex configMutex;
-extern std::atomic<bool> shouldExit;
+extern std::atomic<bool> should_exit;
 
 bool CreateDeviceD3D(HWND hWnd);
 void CleanupDeviceD3D();
@@ -181,8 +181,8 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
         return 0;
     case WM_DESTROY:
-        shouldExit = true;
-        AppContext::getInstance().shouldExit = true;
+        should_exit = true;
+        AppContext::getInstance().should_exit = true;
         ::PostQuitMessage(0);
         return 0;
     default:
@@ -464,7 +464,7 @@ void OverlayThread()
     auto last_config_save_time = std::chrono::high_resolution_clock::now();
     const std::chrono::milliseconds config_save_interval(500); // Save config every 500ms max
 
-    while (!shouldExit && !AppContext::getInstance().shouldExit)
+    while (!should_exit && !AppContext::getInstance().should_exit)
     {
         // Handle Windows messages
         while (::PeekMessage(&msg, NULL, 0U, 0U, PM_REMOVE))
@@ -473,7 +473,7 @@ void OverlayThread()
             ::DispatchMessage(&msg);
             if (msg.message == WM_QUIT)
             {
-                shouldExit = true;
+                should_exit = true;
                 return;
             }
         }
@@ -693,8 +693,8 @@ void OverlayThread()
                         detector_model_changed.store(true); 
 
                         
-                        if (AppContext::getInstance().globalMouseThread) {
-                            AppContext::getInstance().globalMouseThread->updateConfig(
+                        if (AppContext::getInstance().global_mouse_thread) {
+                            AppContext::getInstance().global_mouse_thread->updateConfig(
                                 ctx.config.detection_resolution,
                                 ctx.config.kp_x,
                                 ctx.config.ki_x,
@@ -771,8 +771,8 @@ void OverlayThread()
                         prev_ki_y = ctx.config.ki_y;
                         prev_kd_y = ctx.config.kd_y;
 
-                        if (AppContext::getInstance().globalMouseThread) {
-                            AppContext::getInstance().globalMouseThread->updateConfig(
+                        if (AppContext::getInstance().global_mouse_thread) {
+                            AppContext::getInstance().global_mouse_thread->updateConfig(
                                 ctx.config.detection_resolution,
                                 ctx.config.kp_x,
                                 ctx.config.ki_x,
@@ -793,8 +793,8 @@ void OverlayThread()
                     {
                         prev_bScope_multiplier = ctx.config.bScope_multiplier;
 
-                        if (AppContext::getInstance().globalMouseThread) {
-                            AppContext::getInstance().globalMouseThread->updateConfig(
+                        if (AppContext::getInstance().global_mouse_thread) {
+                            AppContext::getInstance().global_mouse_thread->updateConfig(
                             ctx.config.detection_resolution,
                             ctx.config.kp_x,
                             ctx.config.ki_x,

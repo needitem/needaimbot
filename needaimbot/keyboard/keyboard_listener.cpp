@@ -70,9 +70,9 @@ void keyboardListener() {
 
     static bool last_aiming_state = false;
 
-    while (!ctx.shouldExit) {
+    while (!ctx.should_exit) {
         if (is_any_key_pressed(exit_vk_codes)) {
-            ctx.shouldExit = true;
+            ctx.should_exit = true;
             break;
         }
 

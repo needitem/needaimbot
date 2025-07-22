@@ -145,11 +145,11 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
         cv::cuda::GpuMat screenshotGpu;
         
 
-        while (!shouldExit)
+        while (!should_exit)
         {
             
-            if (AppContext::getInstance().shouldExit) {
-                std::cout << "[CaptureThread] shouldExit is true, breaking loop." << std::endl;
+            if (AppContext::getInstance().should_exit) {
+                std::cout << "[CaptureThread] should_exit is true, breaking loop." << std::endl;
                 break; 
             }
             if (ctx.capture_fps_changed.load())
@@ -213,14 +213,14 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                     duplication_capturer = std::make_unique<DuplicationAPIScreenCapture>(new_CAPTURE_WIDTH, new_CAPTURE_HEIGHT);
                     if (!duplication_capturer || !duplication_capturer->IsInitialized()) {
                         std::cerr << "[Capture] Failed to create or initialize DuplicationAPIScreenCapture after resolution change!" << std::endl;
-                        shouldExit = true; 
+                        should_exit = true; 
                         break;             
                     }
                 } else {
                     simple_capturer = std::make_unique<SimpleScreenCapture>(new_CAPTURE_WIDTH, new_CAPTURE_HEIGHT);
                     if (!simple_capturer || !simple_capturer->IsInitialized()) {
                         std::cerr << "[Capture] Failed to create or initialize SimpleScreenCapture after resolution change!" << std::endl;
-                        shouldExit = true; 
+                        should_exit = true; 
                         break;             
                     }
                 }
