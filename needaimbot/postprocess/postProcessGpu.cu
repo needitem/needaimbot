@@ -26,6 +26,7 @@ __global__ void initKeepKernel(bool* d_keep, int n) {
 
 
 // Optimized spatial indexing constants
+#define HOST_GRID_SIZE 32  // Host-side constant for calculations
 __constant__ int GRID_SIZE = 32;  // 32x32 spatial grid for better granularity
 __constant__ int GRID_SHIFT = 5;  // log2(32) for faster division
 __constant__ int GRID_MASK = 31;  // For fast modulo
@@ -281,8 +282,7 @@ __global__ void nmsKernel(
     if (idx < num_boxes) {
         if (!d_keep[idx]) return; 
         
-        float my_score = s_scores[tid];
-        int my_class = d_classIds[idx];
+        // Variables removed as they were unused
         
         // Unroll loop for better performance
         #pragma unroll 4
@@ -398,8 +398,8 @@ void NMSGpu(
                        (input_num_detections + block_iou.y - 1) / block_iou.y);
         
         // Pre-calculate inverse cell dimensions for faster division
-        float inv_cell_width = static_cast<float>(GRID_SIZE) / frame_width;
-        float inv_cell_height = static_cast<float>(GRID_SIZE) / frame_height;
+        float inv_cell_width = static_cast<float>(HOST_GRID_SIZE) / frame_width;
+        float inv_cell_height = static_cast<float>(HOST_GRID_SIZE) / frame_height;
         
         // Calculate shared memory size
         size_t shared_mem_size = block_iou.x * (4 * sizeof(int) + sizeof(float) + sizeof(int2));
@@ -435,7 +435,7 @@ void NMSGpu(
             d_indices_ptr,
             is_kept(d_keep)
         );
-        final_count = end_indices_iter - d_indices_ptr; 
+        final_count = static_cast<int>(end_indices_iter - d_indices_ptr); 
 
         final_count = std::min(final_count, max_output_detections); 
 
@@ -548,7 +548,7 @@ __global__ void decodeYolo11GpuKernel(
     int idx = blockIdx.x * blockDim.x + threadIdx.x; 
 
     if (idx < num_boxes_raw) {
-        size_t box_base_idx = idx; 
+        // box_base_idx variable removed as it was unused 
 
         
         float max_score = -1.0f;

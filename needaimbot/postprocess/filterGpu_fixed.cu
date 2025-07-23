@@ -14,7 +14,7 @@ __device__ inline int warpReduceSum(int val) {
 }
 
 // Optimized HSV filtering kernel
-__global__ __launch_bounds__(256, 4) void filterDetectionsByClassIdKernel(
+__global__ __launch_bounds__(256, 8) void filterDetectionsByClassIdKernel(
     const Detection* __restrict__ input_detections,
     int num_input_detections,
     Detection* __restrict__ output_detections,

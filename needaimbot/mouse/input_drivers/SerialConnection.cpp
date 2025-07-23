@@ -123,10 +123,10 @@ bool SerialConnection::openPort()
     serial_handle_ = CreateFileA(
         full_port.c_str(),
         GENERIC_READ | GENERIC_WRITE,
-        0,                          // 배타적 액세스
+        0,                         // 독점 액세스 (Arduino 호환)
         NULL,                       // 보안 속성 없음
         OPEN_EXISTING,             // 존재하는 포트 열기
-        FILE_ATTRIBUTE_NORMAL,     // 동기 I/O로 변경
+        FILE_ATTRIBUTE_NORMAL,     // 동기 I/O로 수정
         NULL
     );
 
@@ -290,31 +290,17 @@ std::string SerialConnection::read()
 
     char buffer[256];
     DWORD bytes_read = 0;
-    OVERLAPPED overlapped = {0};
-    overlapped.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
-    
-    if (overlapped.hEvent == NULL) {
-        return "";
-    }
 
+    // 동기 방식으로 단순화
     BOOL result = ReadFile(
         serial_handle_,
         buffer,
         sizeof(buffer) - 1,
         &bytes_read,
-        &overlapped
+        NULL  // 동기 I/O
     );
 
-    if (!result && GetLastError() == ERROR_IO_PENDING) {
-        DWORD wait_result = WaitForSingleObject(overlapped.hEvent, 1);
-        if (wait_result == WAIT_OBJECT_0) {
-            GetOverlappedResult(serial_handle_, &overlapped, &bytes_read, FALSE);
-        }
-    }
-
-    CloseHandle(overlapped.hEvent);
-
-    if (bytes_read > 0) {
+    if (result && bytes_read > 0) {
         buffer[bytes_read] = '\0';
         return std::string(buffer);
     }

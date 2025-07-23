@@ -27,6 +27,105 @@
 #include "../postprocess/postProcess.h"
 #include "CudaBuffer.h"
 
+// GPU 메모리 풀 최적화 클래스
+class CudaMemoryPool {
+private:
+    struct Block {
+        void* ptr;
+        size_t size;
+        bool in_use;
+        Block* next;
+    };
+    
+    Block* free_blocks;
+    void* pool_base;
+    size_t pool_size;
+    size_t used_bytes;
+    size_t alignment = 256;
+    std::mutex pool_mutex;
+    
+    size_t align_up(size_t size, size_t alignment) {
+        return (size + alignment - 1) & ~(alignment - 1);
+    }
+    
+public:
+    CudaMemoryPool(size_t total_size) : free_blocks(nullptr), used_bytes(0) {
+        cudaMalloc(&pool_base, total_size);
+        pool_size = total_size;
+        
+        free_blocks = new Block;
+        free_blocks->ptr = pool_base;
+        free_blocks->size = total_size;
+        free_blocks->in_use = false;
+        free_blocks->next = nullptr;
+    }
+    
+    ~CudaMemoryPool() {
+        if (pool_base) cudaFree(pool_base);
+        while (free_blocks) {
+            Block* next = free_blocks->next;
+            delete free_blocks;
+            free_blocks = next;
+        }
+    }
+    
+    void* allocate(size_t size) {
+        std::lock_guard<std::mutex> lock(pool_mutex);
+        size = align_up(size, alignment);
+        
+        Block* current = free_blocks;
+        while (current) {
+            if (!current->in_use && current->size >= size) {
+                current->in_use = true;
+                used_bytes += size;
+                
+                if (current->size > size + alignment) {
+                    Block* new_block = new Block;
+                    new_block->ptr = static_cast<char*>(current->ptr) + size;
+                    new_block->size = current->size - size;
+                    new_block->in_use = false;
+                    new_block->next = current->next;
+                    
+                    current->size = size;
+                    current->next = new_block;
+                }
+                
+                return current->ptr;
+            }
+            current = current->next;
+        }
+        
+        return nullptr;
+    }
+    
+    void deallocate(void* ptr) {
+        std::lock_guard<std::mutex> lock(pool_mutex);
+        
+        Block* current = free_blocks;
+        while (current) {
+            if (current->ptr == ptr && current->in_use) {
+                current->in_use = false;
+                used_bytes -= current->size;
+                return;
+            }
+            current = current->next;
+        }
+    }
+    
+    void reset() {
+        std::lock_guard<std::mutex> lock(pool_mutex);
+        Block* current = free_blocks;
+        while (current) {
+            current->in_use = false;
+            current = current->next;
+        }
+        used_bytes = 0;
+    }
+    
+    size_t getUsedBytes() const { return used_bytes; }
+    size_t getTotalBytes() const { return pool_size; }
+};
+
 /**
  * @brief Represents a target being tracked across frames
  * 
