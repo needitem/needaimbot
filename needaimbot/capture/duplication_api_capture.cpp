@@ -321,7 +321,7 @@ public:
                  }
             }
 
-            UINT expectedDirtyRectsSize = (m_metaDataBuffer.size() >= moveRectsSize) ? (m_metaDataBuffer.size() - moveRectsSize) : 0;
+            UINT expectedDirtyRectsSize = (m_metaDataBuffer.size() >= moveRectsSize) ? static_cast<UINT>(m_metaDataBuffer.size() - moveRectsSize) : 0;
             UINT actualDirtyRectsSize = 0;
             if (expectedDirtyRectsSize > 0) {
                 BYTE* dirtyRectsDataStart = m_metaDataBuffer.data() + moveRectsSize; 
@@ -557,7 +557,7 @@ cv::cuda::GpuMat DuplicationAPIScreenCapture::GetNextFrameGpu()
                 LONG bottom = std::min(dirty.bottom, captureScreenRect.bottom);
                 if (left < right && top < bottom)
                 {
-                    D3D11_BOX box = { left, top, 0, right, bottom, 1 };
+                    D3D11_BOX box = { static_cast<UINT>(left), static_cast<UINT>(top), 0, static_cast<UINT>(right), static_cast<UINT>(bottom), 1 };
                     UINT destX = static_cast<UINT>(left - captureScreenRect.left);
                     UINT destY = static_cast<UINT>(top - captureScreenRect.top);
                     m_ddaManager->m_context->CopySubresourceRegion(
@@ -573,7 +573,7 @@ cv::cuda::GpuMat DuplicationAPIScreenCapture::GetNextFrameGpu()
         else
         {
             
-            D3D11_BOX box = { captureScreenRect.left, captureScreenRect.top, 0, captureScreenRect.right, captureScreenRect.bottom, 1 };
+            D3D11_BOX box = { static_cast<UINT>(captureScreenRect.left), static_cast<UINT>(captureScreenRect.top), 0, static_cast<UINT>(captureScreenRect.right), static_cast<UINT>(captureScreenRect.bottom), 1 };
             m_ddaManager->m_context->CopySubresourceRegion(
                 m_ddaManager->m_sharedTexture,
                 0,
@@ -649,7 +649,7 @@ cv::Mat DuplicationAPIScreenCapture::GetNextFrameCpu()
                 LONG bottom = std::min(dirty.bottom, captureScreenRect.bottom);
                 if (left < right && top < bottom)
                 {
-                    D3D11_BOX box = { left, top, 0, right, bottom, 1 };
+                    D3D11_BOX box = { static_cast<UINT>(left), static_cast<UINT>(top), 0, static_cast<UINT>(right), static_cast<UINT>(bottom), 1 };
                     UINT destX = static_cast<UINT>(left - captureScreenRect.left);
                     UINT destY = static_cast<UINT>(top - captureScreenRect.top);
                     m_ddaManager->m_context->CopySubresourceRegion(
@@ -663,7 +663,7 @@ cv::Mat DuplicationAPIScreenCapture::GetNextFrameCpu()
         else
         {
             
-            D3D11_BOX box = { captureScreenRect.left, captureScreenRect.top, 0, captureScreenRect.right, captureScreenRect.bottom, 1 };
+            D3D11_BOX box = { static_cast<UINT>(captureScreenRect.left), static_cast<UINT>(captureScreenRect.top), 0, static_cast<UINT>(captureScreenRect.right), static_cast<UINT>(captureScreenRect.bottom), 1 };
             m_ddaManager->m_context->CopySubresourceRegion(
                 m_ddaManager->m_sharedTexture, 0,
                 0, 0, 0,

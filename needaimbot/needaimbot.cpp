@@ -370,7 +370,6 @@ void mouseThreadFunction(MouseThread &mouseThread)
             static bool was_recoil_active = false;
             bool recoil_active = key_cache.left_mouse && key_cache.right_mouse;
             
-            // Track recoil state changes silently
             was_recoil_active = recoil_active;
             
             if (recoil_active) {
@@ -470,12 +469,12 @@ int main()
 
         MouseThread mouseThread(
             ctx.config.detection_resolution,
-            ctx.config.kp_x,
-            ctx.config.ki_x,
-            ctx.config.kd_x,
-            ctx.config.kp_y,
-            ctx.config.ki_y,
-            ctx.config.kd_y,
+            static_cast<float>(ctx.config.kp_x),
+            static_cast<float>(ctx.config.ki_x),
+            static_cast<float>(ctx.config.kd_x),
+            static_cast<float>(ctx.config.kp_y),
+            static_cast<float>(ctx.config.ki_y),
+            static_cast<float>(ctx.config.kd_y),
             ctx.config.bScope_multiplier,
             ctx.config.norecoil_ms,
             nullptr,

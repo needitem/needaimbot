@@ -44,7 +44,7 @@ public:
         // Recoil settings
         config.easynorecoilstrength = std::clamp(config.easynorecoilstrength, 0.0f, 10.0f);
         config.norecoil_step = std::clamp(config.norecoil_step, 0.1f, 5.0f);
-        config.norecoil_ms = (std::max)(1, (std::min)(static_cast<int>(config.norecoil_ms), 100));
+        config.norecoil_ms = static_cast<float>((std::max)(1, (std::min)(static_cast<int>(config.norecoil_ms), 100)));
         config.easynorecoil_start_delay_ms = (std::max)(0, config.easynorecoil_start_delay_ms);
         config.easynorecoil_end_delay_ms = (std::max)(0, config.easynorecoil_end_delay_ms);
 
@@ -78,7 +78,7 @@ public:
             UtilConstants::MAX_OVERLAY_OPACITY
         );
         config.overlay_ui_scale = std::clamp(config.overlay_ui_scale, 0.5f, 3.0f);
-        config.window_size = (std::max)(0.1f, (std::min)(static_cast<float>(config.window_size), 3.0f));
+        config.window_size = static_cast<int>((std::max)(0.1f, (std::min)(static_cast<float>(config.window_size), 3.0f)));
 
         // Screenshot delay
         config.screenshot_delay = (std::max)(0, config.screenshot_delay);

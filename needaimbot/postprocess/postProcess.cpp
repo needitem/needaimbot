@@ -130,8 +130,8 @@ std::vector<Detection> decodeYolo11(
 
     detections.reserve(shape[2]);
 
-    int rows = shape[1];
-    int cols = shape[2];
+    int rows = static_cast<int>(shape[1]);
+    int cols = static_cast<int>(shape[2]);
     
     if (rows < 4 + numClasses)
     {

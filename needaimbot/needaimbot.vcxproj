@@ -121,7 +121,6 @@
     <ClInclude Include="mouse\my_enc.h" />
     <ClInclude Include="mouse\PIDController2D.h" />
     <ClInclude Include="mouse\rzctl.h" />
-    <ClInclude Include="mouse\SerialConnection.h" />
     <ClInclude Include="mouse\AimbotTarget.h" />
     <ClInclude Include="mouse\VelocityPredictor.h" />
     <ClInclude Include="overlay\common_helpers.h" />
@@ -213,8 +212,8 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LinkIncremental>false</LinkIncremental>
-    <IncludePath>$(MSBuildProjectDirectory)\modules\serial\include;$(MSBuildProjectDirectory);$(MSBuildProjectDirectory)\imgui;$(MSBuildProjectDirectory)\keyboard;$(MSBuildProjectDirectory)\config;$(MSBuildProjectDirectory)\detector;$(MSBuildProjectDirectory)\capture;$(MSBuildProjectDirectory)\postprocess;$(MSBuildProjectDirectory)\mouse;$(MSBuildProjectDirectory)\overlay;$(MSBuildProjectDirectory)\modules\opencv\build\install\include;$(WindowsSDK_IncludePath);$(WindowsSDK_IncludePath)\cppwinrt;$(MSBuildProjectDirectory)\modules\TensorRT-10.8.0.43\include;include;$(ProgramW6432)\NVIDIA GPU Computing Toolkit\CUDA\v12.8\include;$(ProgramW6432)\NVIDIA\CUDNN\v9.7\include\12.8;$(IncludePath)</IncludePath>
-    <LibraryPath>$(MSBuildProjectDirectory)\modules\serial\visual_studio\x64\Release;$(MSBuildProjectDirectory)\modules\opencv\build\install\x64\vc17\lib;$(MSBuildProjectDirectory)\modules\\TensorRT-10.8.0.43\lib;$(ProgramW6432)\NVIDIA GPU Computing Toolkit\CUDA\v12.8\lib\x64;$(ProgramW6432)\NVIDIA\CUDNN\v9.7\lib\12.8;$(MSBuildProjectDirectory)\modules\glfw-3.4.bin.WIN64\lib-vc2022;$(LibraryPath)</LibraryPath>
+    <IncludePath>$(MSBuildProjectDirectory);$(MSBuildProjectDirectory)\imgui;$(MSBuildProjectDirectory)\keyboard;$(MSBuildProjectDirectory)\config;$(MSBuildProjectDirectory)\detector;$(MSBuildProjectDirectory)\capture;$(MSBuildProjectDirectory)\postprocess;$(MSBuildProjectDirectory)\mouse;$(MSBuildProjectDirectory)\overlay;$(MSBuildProjectDirectory)\modules\opencv\build\install\include;$(WindowsSDK_IncludePath);$(WindowsSDK_IncludePath)\cppwinrt;$(MSBuildProjectDirectory)\modules\TensorRT-10.8.0.43\include;include;$(ProgramW6432)\NVIDIA GPU Computing Toolkit\CUDA\v12.8\include;$(ProgramW6432)\NVIDIA\CUDNN\v9.7\include\12.8;$(IncludePath)</IncludePath>
+    <LibraryPath>$(MSBuildProjectDirectory)\modules\opencv\build\install\x64\vc17\lib;$(MSBuildProjectDirectory)\modules\\TensorRT-10.8.0.43\lib;$(ProgramW6432)\NVIDIA GPU Computing Toolkit\CUDA\v12.8\lib\x64;$(ProgramW6432)\NVIDIA\CUDNN\v9.7\lib\12.8;$(MSBuildProjectDirectory)\modules\glfw-3.4.bin.WIN64\lib-vc2022;$(LibraryPath)</LibraryPath>
     <TargetName>ai</TargetName>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
@@ -223,6 +222,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -237,6 +237,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -254,12 +255,17 @@
       <AdditionalIncludeDirectories>$(MSBuildProjectDirectory)\modules\boost_1_82_0;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalDependencies>opencv_world4100d.lib;nvinfer_10.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
+    <CudaCompile>
+      <CodeGeneration>compute_75,sm_75;compute_80,sm_80;compute_86,sm_86;compute_89,sm_89</CodeGeneration>
+      <AdditionalOptions>-Wno-deprecated-gpu-targets %(AdditionalOptions)</AdditionalOptions>
+    </CudaCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
@@ -283,8 +289,8 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>opencv_world4100.lib;nvinfer_10.lib;nvonnxparser_10.lib;WindowsApp.lib;d3d11.lib;dxgi.lib;d2d1.lib;cuda.lib;cudart.lib;glfw3_mt.lib;glfw3dll.lib;serial.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>C:\Users\th072\Desktop\needaimbot\needaimbot\modules\serial\visual_studio\x64\Release;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>opencv_world4100.lib;nvinfer_10.lib;nvonnxparser_10.lib;WindowsApp.lib;d3d11.lib;dxgi.lib;d2d1.lib;cuda.lib;cudart.lib;glfw3_mt.lib;glfw3dll.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <Manifest>
       <GenerateCatalogFiles>false</GenerateCatalogFiles>
