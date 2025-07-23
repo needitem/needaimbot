@@ -12,21 +12,20 @@
 
 #include "AppContext.h"
 #include "capture/capture.h"
-#include "visuals.h"
-#include "utils/constants.h"
+#include "overlay/visuals.h"
 #include "core/constants.h"
-#include "detector.h"
-#include "mouse.h"
+#include "utils/constants.h"
+#include "detector/detector.h"
+#include "mouse/mouse.h"
 #include "needaimbot.h"
-#include "keyboard_listener.h"
-#include "overlay.h"
+#include "keyboard/keyboard_listener.h"
+#include "overlay/overlay.h"
 #include "mouse/input_drivers/SerialConnection.h"
 #include "mouse/input_drivers/MakcuConnection.h"
 #include "mouse/input_drivers/ghub.h"
-#include "other_tools.h"
 #include "mouse/input_drivers/InputMethod.h"
-#include "detector/detector.h"
 #include "mouse/input_drivers/kmboxNet.h"
+#include "include/other_tools.h"
 // #include "detector/optical_flow.h" // Optical flow removed
 
 
@@ -39,7 +38,6 @@
 
 
 
-#include "needaimbot.h"
 #include "mouse/aimbot_components/AimbotTarget.h"
 #include <algorithm>
 

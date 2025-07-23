@@ -1,20 +1,51 @@
-#ifndef CONSTANTS_H
-#define CONSTANTS_H
+#ifndef NEEDAIMBOT_CORE_CONSTANTS_H
+#define NEEDAIMBOT_CORE_CONSTANTS_H
+
+/**
+ * @file constants.h
+ * @brief System-wide constants and configuration values
+ * 
+ * Contains all numerical constants, thresholds, and default values
+ * used throughout the aimbot system. Centralized constant management
+ * improves maintainability and performance tuning.
+ */
 
 #define NOMINMAX
 
 namespace Constants {
-    // Detection Constants
+    // ============================================================================
+    // AI Detection Constants
+    // ============================================================================
+    
+    /// Default input resolution for YOLO models (width/height)
     constexpr int DEFAULT_YOLO_INPUT_SIZE = 640;
+    
+    /// Minimum confidence score for object detection (0.0-1.0)
     constexpr float DEFAULT_CONFIDENCE_THRESHOLD = 0.25f;
+    
+    /// Non-Maximum Suppression threshold for duplicate removal
     constexpr float DEFAULT_NMS_THRESHOLD = 0.45f;
     
-    // Mouse Movement Constants
+    // ============================================================================
+    // Mouse Movement & Control Constants
+    // ============================================================================
+    
+    /// Emergency brake system - minimum brake force multiplier
     constexpr float EMERGENCY_BRAKE_MIN = 0.2f;
+    
+    /// Emergency brake system - maximum brake force multiplier
     constexpr float EMERGENCY_BRAKE_MAX = 0.5f;
+    
+    /// Emergency brake system - scaling factor for brake force calculation
     constexpr float EMERGENCY_BRAKE_SCALE = 0.3f;
+    
+    /// Angle threshold (degrees) for detecting rapid direction changes
     constexpr float DIRECTION_CHANGE_THRESHOLD = 20.0f;
+    
+    /// Damping factor applied during direction changes to reduce oscillation
     constexpr float DIRECTION_CHANGE_DAMPING = 0.3f;
+    
+    /// Deceleration multiplier when approaching target
     constexpr float DECELERATION_FACTOR = 0.5f;
     
     // Target Detection Constants
@@ -61,6 +92,28 @@ namespace Constants {
     // Timing Intervals
     constexpr int ACTIVE_WAIT_TIMEOUT_MS = 10;
     constexpr int IDLE_WAIT_TIMEOUT_MS = 30;
+    constexpr int DETECTION_WAIT_TIMEOUT_MS = 10;
+    constexpr int FRAME_WAIT_TIMEOUT_MS = 33;
+    
+    // Capture constants
+    constexpr int DEFAULT_CAPTURE_WIDTH = 320;
+    constexpr int DEFAULT_CAPTURE_HEIGHT = 320;
+    constexpr int MAX_CAPTURE_DIMENSION = 1920;
+    constexpr int MIN_CAPTURE_DIMENSION = 50;
+    
+    // Detection constants
+    constexpr int DEFAULT_DETECTION_RESOLUTION = 320;  
+    constexpr int MIN_DETECTION_RESOLUTION = 50;
+    constexpr int MAX_DETECTION_RESOLUTION = 1280;
+    constexpr int MAX_DETECTIONS = 100;
+    
+    // Memory pool sizes
+    constexpr size_t DETECTION_POOL_SIZE = 1000;
+    constexpr size_t RECT_POOL_SIZE = 1000;
+    
+    // Distance thresholds for target detection
+    constexpr float MIN_SQUARED_DISTANCE = 100.0f;
+    constexpr float MAX_SQUARED_DISTANCE = 10000.0f;
 }
 
-#endif // CONSTANTS_H
+#endif // NEEDAIMBOT_CORE_CONSTANTS_H

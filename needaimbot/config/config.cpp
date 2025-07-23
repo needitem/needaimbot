@@ -619,7 +619,8 @@ std::vector<std::string> Config::listProfiles() {
                 }
             }
         }
-    } catch (const std::filesystem::filesystem_error& e) {
+    } catch (const std::filesystem::filesystem_error&) {
+        // Error accessing profiles directory - ignore and return empty list
     }
     
     std::sort(profiles.begin(), profiles.end());
@@ -662,7 +663,7 @@ bool Config::deleteProfile(const std::string& profileName) {
         } else {
             return false; 
         }
-    } catch (const std::filesystem::filesystem_error& e) {
+    } catch (const std::filesystem::filesystem_error&) {
         return false;
     }
 }

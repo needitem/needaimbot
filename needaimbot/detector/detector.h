@@ -1,5 +1,5 @@
-#ifndef DETECTOR_H
-#define DETECTOR_H
+#ifndef NEEDAIMBOT_DETECTOR_DETECTOR_H
+#define NEEDAIMBOT_DETECTOR_DETECTOR_H
 
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
@@ -27,11 +27,17 @@
 #include "../postprocess/postProcess.h"
 #include "CudaBuffer.h"
 
+/**
+ * @brief Represents a target being tracked across frames
+ * 
+ * Contains detection information and temporal tracking data
+ * for maintaining target continuity in video sequences.
+ */
 struct TrackedTarget {
-    int id;
-    Detection detection;
-    int frames_since_last_seen;
-    // Add other tracking-specific data here, like velocity
+    int id;                       ///< Unique identifier for this target
+    Detection detection;          ///< Latest detection information
+    int frames_since_last_seen;  ///< Number of frames since last detection
+    // TODO: Add velocity, acceleration, and prediction data
 };
 
 // TensorRT utility functions
@@ -44,12 +50,19 @@ typedef struct CUevent_st* cudaEvent_t;
 
 
 struct Detection; 
-struct Config; 
+class Config; 
 
 
 
 constexpr int MAX_CLASSES_FOR_FILTERING = 64; 
 
+/**
+ * @brief High-performance AI-based object detector with CUDA acceleration
+ * 
+ * Provides real-time object detection using TensorRT inference engine
+ * with GPU-accelerated preprocessing and postprocessing pipelines.
+ * Includes target tracking, filtering, and advanced memory management.
+ */
 class Detector
 {
 public:
@@ -75,8 +88,8 @@ public:
 
     float img_scale;
 
-    int getInputHeight() const { return inputDims.d[2]; }
-    int getInputWidth() const { return inputDims.d[3]; }
+    int getInputHeight() const { return static_cast<int>(inputDims.d[2]); }
+    int getInputWidth() const { return static_cast<int>(inputDims.d[3]); }
     
     // Batched results structure for reduced memory transfers
     struct BatchedResults {
@@ -266,4 +279,4 @@ private:
     
 };
 
-#endif 
+#endif // NEEDAIMBOT_DETECTOR_DETECTOR_H
