@@ -389,12 +389,12 @@ void OverlayThread()
     float prev_easynorecoilstrength = ctx.config.easynorecoilstrength;
 
     
-    float prev_kp_x = ctx.config.kp_x;
-    float prev_ki_x = ctx.config.ki_x;
-    float prev_kd_x = ctx.config.kd_x;
-    float prev_kp_y = ctx.config.kp_y;
-    float prev_ki_y = ctx.config.ki_y;
-    float prev_kd_y = ctx.config.kd_y;
+    float prev_kp_x = static_cast<float>(ctx.config.kp_x);
+    float prev_ki_x = static_cast<float>(ctx.config.ki_x);
+    float prev_kd_x = static_cast<float>(ctx.config.kd_x);
+    float prev_kp_y = static_cast<float>(ctx.config.kp_y);
+    float prev_ki_y = static_cast<float>(ctx.config.ki_y);
+    float prev_kd_y = static_cast<float>(ctx.config.kd_y);
     
     
 
@@ -451,7 +451,6 @@ void OverlayThread()
     }
 
     static auto lastTime = std::chrono::high_resolution_clock::now();
-    POINT mouse;
 
     MSG msg;
     ZeroMemory(&msg, sizeof(msg));
@@ -696,12 +695,12 @@ void OverlayThread()
                         if (AppContext::getInstance().global_mouse_thread) {
                             AppContext::getInstance().global_mouse_thread->updateConfig(
                                 ctx.config.detection_resolution,
-                                ctx.config.kp_x,
-                                ctx.config.ki_x,
-                                ctx.config.kd_x,
-                                ctx.config.kp_y,
-                                ctx.config.ki_y,
-                                ctx.config.kd_y,
+                                static_cast<float>(ctx.config.kp_x),
+                                static_cast<float>(ctx.config.ki_x),
+                                static_cast<float>(ctx.config.kd_x),
+                                static_cast<float>(ctx.config.kp_y),
+                                static_cast<float>(ctx.config.ki_y),
+                                static_cast<float>(ctx.config.kd_y),
                                 ctx.config.bScope_multiplier,
                                 ctx.config.norecoil_ms
                             );
@@ -764,22 +763,22 @@ void OverlayThread()
                         prev_ki_y != ctx.config.ki_y ||
                         prev_kd_y != ctx.config.kd_y)
                     {
-                        prev_kp_x = ctx.config.kp_x;
-                        prev_ki_x = ctx.config.ki_x;
-                        prev_kd_x = ctx.config.kd_x;
-                        prev_kp_y = ctx.config.kp_y;
-                        prev_ki_y = ctx.config.ki_y;
-                        prev_kd_y = ctx.config.kd_y;
+                        prev_kp_x = static_cast<float>(ctx.config.kp_x);
+                        prev_ki_x = static_cast<float>(ctx.config.ki_x);
+                        prev_kd_x = static_cast<float>(ctx.config.kd_x);
+                        prev_kp_y = static_cast<float>(ctx.config.kp_y);
+                        prev_ki_y = static_cast<float>(ctx.config.ki_y);
+                        prev_kd_y = static_cast<float>(ctx.config.kd_y);
 
                         if (AppContext::getInstance().global_mouse_thread) {
                             AppContext::getInstance().global_mouse_thread->updateConfig(
                                 ctx.config.detection_resolution,
-                                ctx.config.kp_x,
-                                ctx.config.ki_x,
-                                ctx.config.kd_x,
-                                ctx.config.kp_y,
-                                ctx.config.ki_y,
-                                ctx.config.kd_y,
+                                static_cast<float>(ctx.config.kp_x),
+                                static_cast<float>(ctx.config.ki_x),
+                                static_cast<float>(ctx.config.kd_x),
+                                static_cast<float>(ctx.config.kp_y),
+                                static_cast<float>(ctx.config.ki_y),
+                                static_cast<float>(ctx.config.kd_y),
                                 ctx.config.bScope_multiplier,
                                 ctx.config.norecoil_ms
                             );
@@ -796,12 +795,12 @@ void OverlayThread()
                         if (AppContext::getInstance().global_mouse_thread) {
                             AppContext::getInstance().global_mouse_thread->updateConfig(
                             ctx.config.detection_resolution,
-                            ctx.config.kp_x,
-                            ctx.config.ki_x,
-                            ctx.config.kd_x,
-                            ctx.config.kp_y,
-                            ctx.config.ki_y,
-                            ctx.config.kd_y,
+                            static_cast<float>(ctx.config.kp_x),
+                            static_cast<float>(ctx.config.ki_x),
+                            static_cast<float>(ctx.config.kd_x),
+                            static_cast<float>(ctx.config.kp_y),
+                            static_cast<float>(ctx.config.ki_y),
+                            static_cast<float>(ctx.config.kd_y),
                             ctx.config.bScope_multiplier,
                             ctx.config.norecoil_ms
                             );

@@ -74,9 +74,9 @@ void draw_profile()
     
     if (ImGui::BeginListBox("##ProfilesList", ImVec2(-FLT_MIN, 8 * ImGui::GetTextLineHeightWithSpacing())))
     {
-        for (int n = 0; n < profile_list_cstrs.size(); n++)
+        for (size_t n = 0; n < profile_list_cstrs.size(); n++)
         {
-            const bool is_selected = (selected_profile_index == n);
+            const bool is_selected = (selected_profile_index == static_cast<int>(n));
             const bool is_current = (profile_list[n] == current_profile_name);
             
             if (is_current) {
@@ -92,7 +92,7 @@ void draw_profile()
             
             if (ImGui::Selectable(label, is_selected))
             {
-                selected_profile_index = n;
+                selected_profile_index = static_cast<int>(n);
                 // Don't auto-load, just select
             }
             

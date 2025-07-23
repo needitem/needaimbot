@@ -9,7 +9,7 @@
 #include <atomic>
 #include <mutex>
 
-#include "serial/serial.h"
+// Windows Native Serial API - 최고 성능을 위해
 
 class MakcuConnection
 {
@@ -44,7 +44,9 @@ private:
     void processIncomingLine(const std::string& line);
 
 private:
-    serial::Serial serial_;
+    HANDLE serial_handle_;
+    DCB dcb_config_;
+    COMMTIMEOUTS timeouts_;
     std::atomic<bool> is_open_;
     std::atomic<bool> listening_;
     std::thread       listening_thread_;

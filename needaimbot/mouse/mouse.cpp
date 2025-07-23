@@ -524,7 +524,7 @@ void MouseThread::pressMouse(const AimbotTarget &target)
 
     // For triggerbot, use a more lenient scope check (1.5x the normal multiplier)
     float triggerbot_scope_multiplier = bScope_multiplier * 1.5f;
-    auto bScope = checkTargetInScope(target.x, target.y, target.w, target.h, triggerbot_scope_multiplier);
+    auto bScope = checkTargetInScope(static_cast<float>(target.x), static_cast<float>(target.y), static_cast<float>(target.w), static_cast<float>(target.h), triggerbot_scope_multiplier);
 
     if (bScope && !mouse_pressed)
     {

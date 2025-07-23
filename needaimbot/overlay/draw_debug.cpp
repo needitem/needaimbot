@@ -99,7 +99,7 @@ static void uploadDebugFrame(const cv::Mat& bgr)
     static cv::Mat rgba;
     try {
         cv::cvtColor(bgr, rgba, cv::COLOR_BGR2RGBA);
-    } catch (const cv::Exception& e) {
+    } catch (const cv::Exception&) {
         
         
         return;
@@ -176,7 +176,7 @@ static void uploadHsvMaskTexture(const cv::Mat& grayMask)
     static cv::Mat rgbaMask; 
     try {
         cv::cvtColor(grayMask, rgbaMask, cv::COLOR_GRAY2RGBA);
-    } catch (const cv::Exception& e) {
+    } catch (const cv::Exception&) {
         
         return;
     }
@@ -611,7 +611,7 @@ void draw_debug()
             if (ctx.detector) {
                 try {
                     hsvMaskGpu = ctx.detector->getHsvMaskGpu();
-                } catch (const std::exception& e) {
+                } catch (const std::exception&) {
                     // Handle any exceptions from getHsvMaskGpu
                     hsvMaskGpu = cv::cuda::GpuMat();
                 }

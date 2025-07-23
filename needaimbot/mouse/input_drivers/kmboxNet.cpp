@@ -139,7 +139,6 @@ int kmNet_mouse_move(short x, short y)
 
 int kmNet_enc_mouse_move(short x, short y)
 {
-    int err;
     client_tx tx_enc = { 0 };
     if (sockClientfd <= 0)
         return err_creat_socket;
@@ -184,7 +183,6 @@ int kmNet_mouse_left(int isdown)
 
 int kmNet_enc_mouse_left(int isdown)
 {
-    int err;
     client_tx tx_enc = { 0 };
     if (sockClientfd <= 0)
         return err_creat_socket;
@@ -285,7 +283,6 @@ int kmNet_keyup(int vk_key)
             }
         }
     }
-KM_up_send:
     tx.head.indexpts++;
     tx.head.cmd = cmd_keyboard_all;
     tx.head.rand = rand();
@@ -336,7 +333,6 @@ int kmNet_reboot(void)
 
 int kmNet_enc_reboot(void)
 {
-    int err;
     client_tx tx_enc = { 0 };
     if (sockClientfd <= 0)
         return err_creat_socket;
