@@ -634,16 +634,6 @@ cudaError_t decodeYolo10Gpu(
     int max_detections,
     cudaStream_t stream)
 {
-    printf("[decodeYolo10Gpu] Input validation:\n");
-    printf("  - Shape size: %zd\n", shape.size());
-    printf("  - Max candidates: %d\n", max_candidates);
-    printf("  - Max detections: %d\n", max_detections);
-    printf("  - Num classes: %d\n", num_classes);
-    printf("  - Conf threshold: %f\n", conf_threshold);
-    printf("  - d_raw_output ptr: %p\n", d_raw_output);
-    printf("  - d_decoded_detections ptr: %p\n", d_decoded_detections);
-    printf("  - d_decoded_count ptr: %p\n", d_decoded_count);
-    printf("  - Output type: %d\n", (int)output_type);
     
     if (shape.size() != 3) {
         fprintf(stderr, "[decodeYolo10Gpu] Error: Unexpected output shape size %zd\n", shape.size());
@@ -651,23 +641,19 @@ cudaError_t decodeYolo10Gpu(
     }
 
     if (max_candidates <= 0) {
-        printf("[decodeYolo10Gpu] Warning: max_candidates <= 0, returning success\n");
         cudaMemsetAsync(d_decoded_count, 0, sizeof(int), stream);
         return cudaSuccess;
     }
 
     int64_t stride = shape[2];
-    printf("  - Stride: %lld\n", stride);
     
     if (stride <= 0) {
-        printf("[decodeYolo10Gpu] Warning: stride <= 0, returning success\n");
         cudaMemsetAsync(d_decoded_count, 0, sizeof(int), stream);
         return cudaSuccess;
     }
 
     const int block_size = 256;
     const int grid_size = (max_candidates + block_size - 1) / block_size;
-    printf("  - Grid size: %d, Block size: %d\n", grid_size, block_size);
 
     if (d_raw_output == nullptr || d_decoded_detections == nullptr || d_decoded_count == nullptr) {
         fprintf(stderr, "[decodeYolo10Gpu] Error: Null pointer detected\n");

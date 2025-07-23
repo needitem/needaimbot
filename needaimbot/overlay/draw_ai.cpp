@@ -45,9 +45,8 @@ static void draw_model_settings()
             modelsItems.push_back(modelName.c_str());
         }
 
-        UIHelpers::EnhancedCombo("AI Model", &currentModelIndex, modelsItems.data(), static_cast<int>(modelsItems.size()), 
-                                "Select the AI model file to use for target detection. Models should be placed in the 'models' folder.");
-        if (ImGui::IsItemDeactivatedAfterEdit())
+        if (UIHelpers::EnhancedCombo("AI Model", &currentModelIndex, modelsItems.data(), static_cast<int>(modelsItems.size()), 
+                                    "Select the AI model file to use for target detection. Models should be placed in the 'models' folder."))
         {
             if (ctx.config.ai_model != availableModels[currentModelIndex])
             {
@@ -66,9 +65,8 @@ static void draw_model_settings()
     else if (ctx.config.onnx_input_resolution == 320) current_resolution_index = 1;
     else if (ctx.config.onnx_input_resolution == 640) current_resolution_index = 2;
     
-    UIHelpers::EnhancedCombo("Input Resolution", &current_resolution_index, resolution_items, IM_ARRAYSIZE(resolution_items),
-                            "Select the input resolution for the ONNX model (e.g., 640 for 640x640 input). Changing this will require the .engine file to be rebuilt if it doesn't match.");
-    if (ImGui::IsItemDeactivatedAfterEdit())
+    if (UIHelpers::EnhancedCombo("Input Resolution", &current_resolution_index, resolution_items, IM_ARRAYSIZE(resolution_items),
+                                "Select the input resolution for the ONNX model (e.g., 640 for 640x640 input). Changing this will require the .engine file to be rebuilt if it doesn't match."))
     {
         int selected_resolution = 160; 
         if (current_resolution_index == 0)      selected_resolution = 160;
@@ -144,9 +142,8 @@ static void draw_detection_settings()
         }
     }
 
-    UIHelpers::EnhancedCombo("Postprocess Algorithm", &currentPostprocessIndex, postprocessItems.data(), static_cast<int>(postprocessItems.size()),
-                            "Select the YOLO postprocessing algorithm that matches your model version.");
-    if (ImGui::IsItemDeactivatedAfterEdit())
+    if (UIHelpers::EnhancedCombo("Postprocess Algorithm", &currentPostprocessIndex, postprocessItems.data(), static_cast<int>(postprocessItems.size()),
+                                "Select the YOLO postprocessing algorithm that matches your model version."))
     {
         ctx.config.postprocess = postprocessOptions[currentPostprocessIndex];
         ctx.config.saveConfig();

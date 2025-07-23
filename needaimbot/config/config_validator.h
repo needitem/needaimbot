@@ -74,8 +74,8 @@ public:
         // Overlay settings
         config.overlay_opacity = std::clamp(
             config.overlay_opacity,
-            Constants::MIN_OVERLAY_OPACITY,
-            Constants::MAX_OVERLAY_OPACITY
+            UtilConstants::MIN_OVERLAY_OPACITY,
+            UtilConstants::MAX_OVERLAY_OPACITY
         );
         config.overlay_ui_scale = std::clamp(config.overlay_ui_scale, 0.5f, 3.0f);
         config.window_size = (std::max)(0.1f, (std::min)(static_cast<float>(config.window_size), 3.0f));
