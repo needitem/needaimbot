@@ -12,7 +12,7 @@
 #include <queue>
 #include <condition_variable>
 
-#include "serial/serial.h"
+// Windows Native Serial API - 최고 성능을 위해
 
 class SerialConnection
 {
@@ -21,6 +21,9 @@ public:
     ~SerialConnection();
 
     bool isOpen() const;
+    bool isHealthy() const;
+    bool reconnect();
+    void close();
 
     void write(const std::string& data);
     std::string read();
@@ -46,8 +49,17 @@ private:
     void listeningThreadFunc();
 
 private:
-    serial::Serial serial_;
+    bool openPort();
+    bool configurePort();
+    bool testConnection();
+
+    HANDLE serial_handle_;
+    DCB dcb_config_;
+    COMMTIMEOUTS timeouts_;
     std::atomic<bool> is_open_;
+    std::string port_name_;
+    unsigned int baud_rate_;
+    mutable std::mutex connection_mutex_;
 
     std::thread timer_thread_;
     std::atomic<bool> timer_running_;

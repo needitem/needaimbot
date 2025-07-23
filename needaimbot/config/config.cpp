@@ -251,7 +251,7 @@ bool Config::loadConfig(const std::string& filename)
     circle_mask = get_bool_ini("Capture", "circle_mask", true);
     capture_borders = get_bool_ini("Capture", "capture_borders", true);
     capture_cursor = get_bool_ini("Capture", "capture_cursor", true);
-    target_fps = (float)get_double_ini("Capture", "target_fps", 120.0);
+    target_fps = static_cast<float>(get_double_ini("Capture", "target_fps", 120.0));
     capture_method = get_string_ini("Capture", "capture_method", "simple");
     
     // NDI capture settings
@@ -259,32 +259,32 @@ bool Config::loadConfig(const std::string& filename)
     ndi_network_url = get_string_ini("Capture", "ndi_network_url", "");
     ndi_low_latency = get_bool_ini("Capture", "ndi_low_latency", false);
 
-    body_y_offset = (float)get_double_ini("Target", "body_y_offset", 0.15);
-    head_y_offset = (float)get_double_ini("Target", "head_y_offset", 0.05);
-    offset_step = (float)get_double_ini("Target", "offset_step", 0.01);
+    body_y_offset = static_cast<float>(get_double_ini("Target", "body_y_offset", 0.15));
+    head_y_offset = static_cast<float>(get_double_ini("Target", "head_y_offset", 0.05));
+    offset_step = static_cast<float>(get_double_ini("Target", "offset_step", 0.01));
     ignore_third_person = get_bool_ini("Target", "ignore_third_person", false);
     shooting_range_targets = get_bool_ini("Target", "shooting_range_targets", false);
     auto_aim = get_bool_ini("Target", "auto_aim", false);
     enable_aimbot = get_bool_ini("Target", "enable_aimbot", true);
     enable_triggerbot = get_bool_ini("Target", "enable_triggerbot", false);
 
-    crosshair_offset_x = (float)get_double_ini("Target", "crosshair_offset_x", 0.0);
-    crosshair_offset_y = (float)get_double_ini("Target", "crosshair_offset_y", 0.0);
+    crosshair_offset_x = static_cast<float>(get_double_ini("Target", "crosshair_offset_x", 0.0));
+    crosshair_offset_y = static_cast<float>(get_double_ini("Target", "crosshair_offset_y", 0.0));
 
     easynorecoil = get_bool_ini("Mouse", "easynorecoil", false);
-    easynorecoilstrength = (float)get_double_ini("Mouse", "easynorecoilstrength", 0.0);
-    norecoil_step = (float)get_double_ini("Mouse", "norecoil_step", 5.0);
-    norecoil_ms = (float)get_double_ini("Mouse", "norecoil_ms", 10.0);
+    easynorecoilstrength = static_cast<float>(get_double_ini("Mouse", "easynorecoilstrength", 0.0));
+    norecoil_step = static_cast<float>(get_double_ini("Mouse", "norecoil_step", 5.0));
+    norecoil_ms = static_cast<float>(get_double_ini("Mouse", "norecoil_ms", 10.0));
     input_method = get_string_ini("Mouse", "input_method", "WIN32");
     easynorecoil_start_delay_ms = get_long_ini("Mouse", "easynorecoil_start_delay_ms", 0);
     easynorecoil_end_delay_ms = get_long_ini("Mouse", "easynorecoil_end_delay_ms", 0);
-    bScope_multiplier = (float)get_double_ini("Mouse", "bScope_multiplier", 1.2);
+    bScope_multiplier = static_cast<float>(get_double_ini("Mouse", "bScope_multiplier", 1.2));
 
     active_scope_magnification = get_long_ini("Recoil", "active_scope_magnification", 0);
-    recoil_mult_2x = (float)get_double_ini("Recoil", "recoil_mult_2x", 1.0);
-    recoil_mult_3x = (float)get_double_ini("Recoil", "recoil_mult_3x", 1.0);
-    recoil_mult_4x = (float)get_double_ini("Recoil", "recoil_mult_4x", 1.0);
-    recoil_mult_6x = (float)get_double_ini("Recoil", "recoil_mult_6x", 1.0);
+    recoil_mult_2x = static_cast<float>(get_double_ini("Recoil", "recoil_mult_2x", 1.0));
+    recoil_mult_3x = static_cast<float>(get_double_ini("Recoil", "recoil_mult_3x", 1.0));
+    recoil_mult_4x = static_cast<float>(get_double_ini("Recoil", "recoil_mult_4x", 1.0));
+    recoil_mult_6x = static_cast<float>(get_double_ini("Recoil", "recoil_mult_6x", 1.0));
 
     
     
@@ -295,20 +295,20 @@ bool Config::loadConfig(const std::string& filename)
     ki_y = get_double_ini("PID", "ki_y", 0.0);
     kd_y = get_double_ini("PID", "kd_y", 0.15);
     
-    pid_derivative_smoothing = (float)get_double_ini("PID", "pid_derivative_smoothing", 0.2);
+    pid_derivative_smoothing = static_cast<float>(get_double_ini("PID", "pid_derivative_smoothing", 0.2));
     enable_adaptive_pid = get_bool_ini("PID", "enable_adaptive_pid", true);
 
     use_predictive_controller = get_bool_ini("PID", "use_predictive_controller", true);
-    prediction_time_ms = (float)get_double_ini("PID", "prediction_time_ms", 50.0);
-    kalman_process_noise = (float)get_double_ini("PID", "kalman_process_noise", 10.0);
-    kalman_measurement_noise = (float)get_double_ini("PID", "kalman_measurement_noise", 5.0);
+    prediction_time_ms = static_cast<float>(get_double_ini("PID", "prediction_time_ms", 50.0));
+    kalman_process_noise = static_cast<float>(get_double_ini("PID", "kalman_process_noise", 10.0));
+    kalman_measurement_noise = static_cast<float>(get_double_ini("PID", "kalman_measurement_noise", 5.0));
     
     // Sub-pixel and prediction settings
     enable_subpixel_dithering = get_bool_ini("PID", "enable_subpixel_dithering", true);
-    dither_strength = (float)get_double_ini("PID", "dither_strength", 0.3);
-    prediction_time_factor = (float)get_double_ini("PID", "prediction_time_factor", 0.001);
+    dither_strength = static_cast<float>(get_double_ini("PID", "dither_strength", 0.3));
+    prediction_time_factor = static_cast<float>(get_double_ini("PID", "prediction_time_factor", 0.001));
     enable_latency_compensation = get_bool_ini("PID", "enable_latency_compensation", true);
-    system_latency_ms = (float)get_double_ini("PID", "system_latency_ms", 20.0);
+    system_latency_ms = static_cast<float>(get_double_ini("PID", "system_latency_ms", 20.0));
     
     // Hybrid aim control settings
 
@@ -325,11 +325,11 @@ bool Config::loadConfig(const std::string& filename)
     makcu_baudrate = get_long_ini("MAKCU", "makcu_baudrate", 4000000);
 
     ai_model = get_string_ini("AI", "ai_model", "sunxds_0.5.6.engine");
-    confidence_threshold = (float)get_double_ini("AI", "confidence_threshold", 0.25);
-    nms_threshold = (float)get_double_ini("AI", "nms_threshold", 0.45);
-    confidence_weight = (float)get_double_ini("AI", "confidence_weight", 0.0); 
-    distance_weight = (float)get_double_ini("AI", "distance_weight", 1.0); 
-    sticky_target_threshold = (float)get_double_ini("AI", "sticky_target_threshold", 0.0);
+    confidence_threshold = static_cast<float>(get_double_ini("AI", "confidence_threshold", 0.25));
+    nms_threshold = static_cast<float>(get_double_ini("AI", "nms_threshold", 0.45));
+    confidence_weight = static_cast<float>(get_double_ini("AI", "confidence_weight", 0.0)); 
+    distance_weight = static_cast<float>(get_double_ini("AI", "distance_weight", 1.0)); 
+    sticky_target_threshold = static_cast<float>(get_double_ini("AI", "sticky_target_threshold", 0.0));
     max_detections = get_long_ini("AI", "max_detections", 30);
     postprocess = get_string_ini("AI", "postprocess", "yolo10");
     export_enable_fp8 = get_bool_ini("AI", "export_enable_fp8", false);
@@ -349,7 +349,7 @@ bool Config::loadConfig(const std::string& filename)
  
 
     overlay_opacity = get_long_ini("Overlay", "overlay_opacity", 225);
-    overlay_ui_scale = (float)get_double_ini("Overlay", "overlay_ui_scale", 1.0);
+    overlay_ui_scale = static_cast<float>(get_double_ini("Overlay", "overlay_ui_scale", 1.0));
 
     show_window = get_bool_ini("Debug", "show_window", true);
     show_fps = get_bool_ini("Debug", "show_fps", true);
@@ -847,17 +847,17 @@ bool Config::loadWeaponProfiles(const std::string& filename)
         
         WeaponRecoilProfile profile;
         profile.weapon_name = get_string_ini(section.c_str(), "weapon_name", "Default");
-        profile.base_strength = (float)get_double_ini(section.c_str(), "base_strength", 3.0);
-        profile.fire_rate_multiplier = (float)get_double_ini(section.c_str(), "fire_rate_multiplier", 1.0);
-        profile.scope_mult_1x = (float)get_double_ini(section.c_str(), "scope_mult_1x", 0.8);
-        profile.scope_mult_2x = (float)get_double_ini(section.c_str(), "scope_mult_2x", 1.0);
-        profile.scope_mult_3x = (float)get_double_ini(section.c_str(), "scope_mult_3x", 1.2);
-        profile.scope_mult_4x = (float)get_double_ini(section.c_str(), "scope_mult_4x", 1.4);
-        profile.scope_mult_6x = (float)get_double_ini(section.c_str(), "scope_mult_6x", 1.6);
-        profile.scope_mult_8x = (float)get_double_ini(section.c_str(), "scope_mult_8x", 1.8);
+        profile.base_strength = static_cast<float>(get_double_ini(section.c_str(), "base_strength", 3.0));
+        profile.fire_rate_multiplier = static_cast<float>(get_double_ini(section.c_str(), "fire_rate_multiplier", 1.0));
+        profile.scope_mult_1x = static_cast<float>(get_double_ini(section.c_str(), "scope_mult_1x", 0.8));
+        profile.scope_mult_2x = static_cast<float>(get_double_ini(section.c_str(), "scope_mult_2x", 1.0));
+        profile.scope_mult_3x = static_cast<float>(get_double_ini(section.c_str(), "scope_mult_3x", 1.2));
+        profile.scope_mult_4x = static_cast<float>(get_double_ini(section.c_str(), "scope_mult_4x", 1.4));
+        profile.scope_mult_6x = static_cast<float>(get_double_ini(section.c_str(), "scope_mult_6x", 1.6));
+        profile.scope_mult_8x = static_cast<float>(get_double_ini(section.c_str(), "scope_mult_8x", 1.8));
         profile.start_delay_ms = get_long_ini(section.c_str(), "start_delay_ms", 0);
         profile.end_delay_ms = get_long_ini(section.c_str(), "end_delay_ms", 0);
-        profile.recoil_ms = (float)get_double_ini(section.c_str(), "recoil_ms", 10.0);
+        profile.recoil_ms = static_cast<float>(get_double_ini(section.c_str(), "recoil_ms", 10.0));
         
         weapon_profiles.push_back(profile);
     }

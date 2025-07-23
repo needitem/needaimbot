@@ -164,7 +164,7 @@ static void draw_input_method_settings()
     
     // Enhanced method selector with cleaner styling
     UIHelpers::SettingsSubHeader("Input Method");
-    if (UIHelpers::EnhancedCombo("##input_method", &input_method_index, method_items.data(), method_items.size(),
+    if (UIHelpers::EnhancedCombo("##input_method", &input_method_index, method_items.data(), static_cast<int>(method_items.size()),
                                 "WIN32: Standard API (detectable)\nGHUB: Logitech driver (safer)\nARDUINO: Hardware device\nRAZER: Razer driver\nKMBOX: Hardware solution")) {
         ctx.config.input_method = input_methods[input_method_index];
         ctx.config.saveConfig();

@@ -408,7 +408,7 @@ void Detector::initialize(const std::string& modelFile)
             // For yolo8/9/11/12, output is typically [1, num_features, num_boxes]
             // num_features = 4 (bbox) + 1 (confidence) + num_classes
             // So, num_classes = num_features - 5
-            numClasses = outDims.d[1] - 5; // Corrected: 4 for bbox, 1 for confidence
+            numClasses = static_cast<int>(outDims.d[1] - 5); // Corrected: 4 for bbox, 1 for confidence
         } else {
             std::cerr << "[Detector] Warning: Unknown output dimensions for class calculation. Assuming 0."
                       << std::endl;
@@ -438,9 +438,9 @@ void Detector::initialize(const std::string& modelFile)
     }
     
     nvinfer1::Dims actualInputDims = context->getTensorShape(inputName.c_str());
-    int c = actualInputDims.d[1];
-    int h = actualInputDims.d[2];
-    int w = actualInputDims.d[3];
+    int c = static_cast<int>(actualInputDims.d[1]);
+    int h = static_cast<int>(actualInputDims.d[2]);
+    int w = static_cast<int>(actualInputDims.d[3]);
     
     if (resizedBuffer.empty() || resizedBuffer.size() != cv::Size(w, h)) {
         resizedBuffer.create(h, w, CV_8UC3);
@@ -985,7 +985,7 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
     // GPU decoding debug info removed - enable for debugging if needed
 
     if (local_postprocess == "yolo10") {
-        int max_candidates = (shape.size() > 1) ? shape[1] : 0;
+        int max_candidates = (shape.size() > 1) ? static_cast<int>(shape[1]) : 0;
         
         decodeErr = decodeYolo10Gpu(
             d_rawOutputPtr,
@@ -1000,7 +1000,7 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
             maxDecodedDetections,
             stream);
     } else if (local_postprocess == "yolo8" || local_postprocess == "yolo9" || local_postprocess == "yolo11" || local_postprocess == "yolo12") {
-        int max_candidates = (shape.size() > 2) ? shape[2] : 0;
+        int max_candidates = (shape.size() > 2) ? static_cast<int>(shape[2]) : 0;
         
          decodeErr = decodeYolo11Gpu(
             d_rawOutputPtr,
@@ -1103,9 +1103,9 @@ void Detector::preProcess(const cv::cuda::GpuMat& frame, cudaStream_t stream)
     if (!inputBuffer) return;
 
     nvinfer1::Dims dims = context->getTensorShape(inputName.c_str());
-    int c = dims.d[1];
-    int h = dims.d[2];
-    int w = dims.d[3];
+    int c = static_cast<int>(dims.d[1]);
+    int h = static_cast<int>(dims.d[2]);
+    int w = static_cast<int>(dims.d[3]);
 
     try
     {
