@@ -1,17 +1,29 @@
-#ifndef CONFIG_H
-#define CONFIG_H
+#ifndef NEEDAIMBOT_CONFIG_CONFIG_H
+#define NEEDAIMBOT_CONFIG_CONFIG_H
 
 #include <string>
 #include <vector>
 
 
+/**
+ * @brief Configuration for object detection class filtering
+ * 
+ * Defines how specific object classes should be handled during detection,
+ * including whether to ignore certain classes or apply special processing.
+ */
 struct ClassSetting {
-    int id;
-    std::string name;
-    bool ignore;
+    int id;              ///< Unique class identifier
+    std::string name;    ///< Human-readable class name
+    bool ignore;         ///< Whether to ignore this class during detection
 
-    
-    ClassSetting(int i = 0, std::string n = "", bool ign = false) : id(i), name(std::move(n)), ignore(ign) {}
+    /**
+     * @brief Construct a new Class Setting object
+     * @param i Class ID
+     * @param n Class name
+     * @param ign Whether to ignore this class
+     */
+    ClassSetting(int i = 0, std::string n = "", bool ign = false) 
+        : id(i), name(std::move(n)), ignore(ign) {}
 };
 
 struct WeaponRecoilProfile {
@@ -35,7 +47,7 @@ struct WeaponRecoilProfile {
           start_delay_ms(0), end_delay_ms(0), recoil_ms(10.0f) {}
 };
 
-struct Config; 
+class Config; 
 
 class Detector;
 class GhubMouse; 
@@ -45,6 +57,13 @@ class SerialConnection;
 
 
 
+/**
+ * @brief Comprehensive configuration manager for the aimbot system
+ * 
+ * Manages all configuration settings including AI model parameters,
+ * input/output settings, weapon profiles, and system preferences.
+ * Supports profile management and persistent storage.
+ */
 class Config
 {
 public:
@@ -244,5 +263,5 @@ private:
     std::vector<std::string> splitString(const std::string& str, char delimiter = ',');
 };
 
-#endif 
+#endif // NEEDAIMBOT_CONFIG_CONFIG_H
 

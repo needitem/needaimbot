@@ -7,7 +7,7 @@
 #include <utility> 
 
 
-enum class MouseClick {
+enum class MouseClick : uint32_t {
     LEFT_DOWN = 1,
     LEFT_UP = 2,
     RIGHT_DOWN = 4,
@@ -18,8 +18,8 @@ enum class MouseClick {
     BACK_UP = 128,
     FORWARD_DOWN = 256,
     FORWARD_UP = 512,
-    SCROLL_DOWN = 4287104000, 
-    SCROLL_UP = 7865344
+    SCROLL_DOWN = 4287104000U, 
+    SCROLL_UP = 7865344U
 };
 
 enum class KeyboardInputType {

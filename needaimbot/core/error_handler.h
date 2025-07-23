@@ -1,10 +1,19 @@
-#ifndef ERROR_HANDLER_H
-#define ERROR_HANDLER_H
+#ifndef NEEDAIMBOT_CORE_ERROR_HANDLER_H
+#define NEEDAIMBOT_CORE_ERROR_HANDLER_H
+
+// Prevent Windows ERROR macro from interfering
+#ifdef ERROR
+#undef ERROR
+#endif
 
 #include <iostream>
 #include <string>
 #include <cuda_runtime.h>
 #include <functional>
+#include <chrono>
+#include <thread>
+#include <atomic>
+#include <mutex>
 
 namespace ErrorHandler {
     
@@ -15,7 +24,13 @@ namespace ErrorHandler {
         CRITICAL
     };
     
-    // CUDA error checking with detailed context
+    /**
+     * @brief Check CUDA error with detailed context information
+     * @param error CUDA error code to check
+     * @param context Context string describing where the error occurred
+     * @param level Error severity level
+     * @return true if no error, false if error occurred
+     */
     inline bool checkCudaError(cudaError_t error, const std::string& context, ErrorLevel level = ErrorLevel::ERROR) {
         if (error != cudaSuccess) {
             const char* errorStr = cudaGetErrorString(error);
@@ -89,6 +104,47 @@ namespace ErrorHandler {
         }
         return false;
     }
+    
+    // Performance-aware logging (replaces direct cout/cerr usage)
+    class Logger {
+    private:
+        static std::atomic<bool> verbose_mode_;
+        static std::mutex log_mutex_;
+        
+    public:
+        static void setVerbose(bool enabled) { verbose_mode_.store(enabled); }
+        
+        template<typename... Args>
+        static void info(const std::string& component, Args&&... args) {
+            if (!verbose_mode_.load()) return;
+            
+            std::lock_guard<std::mutex> lock(log_mutex_);
+            std::cout << "[INFO][" << component << "] ";
+            (std::cout << ... << args) << std::endl;
+        }
+        
+        template<typename... Args>  
+        static void error(const std::string& component, Args&&... args) {
+            std::lock_guard<std::mutex> lock(log_mutex_);
+            std::cerr << "[ERROR][" << component << "] ";
+            (std::cerr << ... << args) << std::endl;
+        }
+        
+        template<typename... Args>
+        static void debug(const std::string& component, Args&&... args) {
+            #ifdef _DEBUG
+            if (!verbose_mode_.load()) return;
+            
+            std::lock_guard<std::mutex> lock(log_mutex_);
+            std::cout << "[DEBUG][" << component << "] ";
+            (std::cout << ... << args) << std::endl;
+            #endif
+        }
+    };
+    
+    // Static member definitions (should be in .cpp file in real implementation)
+    inline std::atomic<bool> Logger::verbose_mode_{false};
+    inline std::mutex Logger::log_mutex_;
 }
 
-#endif // ERROR_HANDLER_H
+#endif // NEEDAIMBOT_CORE_ERROR_HANDLER_H

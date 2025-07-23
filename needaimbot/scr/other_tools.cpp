@@ -302,10 +302,11 @@ std::string get_ghub_version()
     }
     in.close();
 
-    if (line.data())
+    if (!line.empty())
     {
         return line;
     }
+    return "Unknown"; // Default return value for missing or empty version file
 }
 
 std::string get_environment_vars()
