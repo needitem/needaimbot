@@ -26,17 +26,13 @@
 #include "mouse/input_drivers/InputMethod.h"
 #include "mouse/input_drivers/kmboxNet.h"
 #include "include/other_tools.h"
-// #include "detector/optical_flow.h" // Optical flow removed
 
 
 #ifndef __INTELLISENSE__
 #include <cuda_runtime_api.h>
 #endif
 #include <iomanip> 
-
-
-
-
+#include <csignal>
 
 #include "mouse/aimbot_components/AimbotTarget.h"
 #include <algorithm>
@@ -53,76 +49,6 @@ std::atomic<bool> show_window_changed{false};
 
 // add_to_history function removed - use AppContext::getInstance().add_to_history() instead
 
-// Pre-allocated thread-local buffers for performance
-thread_local struct {
-    std::vector<float> scoreBuffer;
-    bool initialized = false;
-} tlBuffers;
-
-struct alignas(64) DetectionData {
-    std::vector<cv::Rect> boxes;
-    std::vector<int> classes;
-    int version;
-    
-    DetectionData() : version(0) {
-        boxes.reserve(Constants::DEFAULT_DETECTION_RESERVE);
-        classes.reserve(Constants::DEFAULT_DETECTION_RESERVE);
-    }
-};
-
-namespace optimized {
-    inline void processBatchedBoxes(const std::vector<cv::Rect>& boxes, 
-                                   const std::vector<int>& classes,
-                                   std::vector<float>& scores,
-                                   int resolution_x, 
-                                   int resolution_y,
-                                   bool disable_headshot) {
-        const size_t count = boxes.size();
-        if (count == 0) return;
-        
-        // Initialize thread-local buffer on first use
-        if (!tlBuffers.initialized) {
-            tlBuffers.scoreBuffer.reserve(Constants::THREAD_LOCAL_BUFFER_RESERVE);
-            tlBuffers.initialized = true;
-        }
-        
-        // Use pre-allocated buffer instead of resizing scores directly
-        if (tlBuffers.scoreBuffer.capacity() < count) {
-            tlBuffers.scoreBuffer.reserve(count * 2); // Double for future growth
-        }
-        scores.resize(count);
-        
-        const float half_res_x = resolution_x * 0.5f;
-        const float half_res_y = resolution_y * 0.5f;
-        const int class_head = 0; 
-        
-        for (size_t i = 0; i < count; i++) {
-            const cv::Rect& box = boxes[i];
-            const float center_x = box.x + box.width * 0.5f;
-            const float center_y = box.y + box.height * 0.5f;
-            
-            const float diff_x = center_x - half_res_x;
-            const float diff_y = center_y - half_res_y;
-            
-            const float squared_distance = diff_x * diff_x + diff_y * diff_y;
-            
-            float distance_score;
-            if (squared_distance < Constants::MIN_SQUARED_DISTANCE) {
-                distance_score = 1.0f;
-            } else if (squared_distance > Constants::MAX_SQUARED_DISTANCE) {
-                distance_score = 0.0001f;
-            } else {
-                float sqrtd = sqrtf(squared_distance);
-                distance_score = 1.0f / (1.0f + sqrtd);
-            }
-            
-            int head_mask = (!disable_headshot && classes[i] == class_head);
-            float class_score = 1.0f + 0.5f * head_mask;
-            
-            scores[i] = distance_score * class_score;
-        }
-    }
-}
 
 std::unique_ptr<InputMethod> initializeInputMethod() {
     auto& ctx = AppContext::getInstance();
@@ -184,18 +110,6 @@ std::unique_ptr<InputMethod> initializeInputMethod() {
     return std::make_unique<Win32InputMethod>();
 }
 
-inline void handleEasyNoRecoil(MouseThread &mouseThread)
-{
-    auto& ctx = AppContext::getInstance();
-    // Check for left click (shooting) and right click (zooming) directly
-    bool leftClicked = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
-    bool rightClicked = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
-    
-    if (ctx.config.easynorecoil && leftClicked && rightClicked)
-    {
-        mouseThread.applyRecoilCompensation(ctx.config.easynorecoilstrength);
-    }
-}
 
 
 void mouseThreadFunction(MouseThread &mouseThread)
@@ -255,7 +169,6 @@ void mouseThreadFunction(MouseThread &mouseThread)
                     current_has_target = false;
                     current_target = {};
                 } else {
-                    // LOG: About to copy data from Detector.
                     if (ctx.config.verbose) std::cout << "[Mouse] Reading from Detector. Detector state: hasBestTarget=" << (ctx.detector->m_hasBestTarget ? "true" : "false") << std::endl;
 
                     current_has_target = ctx.detector->m_hasBestTarget;
@@ -266,7 +179,6 @@ void mouseThreadFunction(MouseThread &mouseThread)
                     }
                     last_detection_version = ctx.detector->detectionVersion;
 
-                    // LOG: Data has been copied.
                     if (ctx.config.verbose) std::cout << "[Mouse] Copied to local. Local state: current_has_target=" << (current_has_target ? "true" : "false") << ", Pos: (" << current_target.x << ", " << current_target.y << ")" << std::endl;
                 }
             }
@@ -418,10 +330,34 @@ bool loadAndValidateModel(std::string& modelName, const std::vector<std::string>
     return true;
 }
 
+// Signal handler for clean shutdown
+static void signalHandler(int sig) {
+    std::cout << "\n[MAIN] Received signal " << sig << ", initiating clean shutdown..." << std::endl;
+    AppContext::getInstance().should_exit = true;
+}
+
+// Console control handler for Windows
+static BOOL WINAPI consoleHandler(DWORD signal) {
+    if (signal == CTRL_C_EVENT || signal == CTRL_BREAK_EVENT || signal == CTRL_CLOSE_EVENT) {
+        std::cout << "\n[MAIN] Console control event received, initiating clean shutdown..." << std::endl;
+        AppContext::getInstance().should_exit = true;
+        
+        // Give the main thread time to clean up properly
+        Sleep(2000);
+        return TRUE;
+    }
+    return FALSE;
+}
+
 int main()
 {
     auto& ctx = AppContext::getInstance();
     try {
+        // Set up signal handlers for clean shutdown
+        std::signal(SIGINT, signalHandler);
+        std::signal(SIGTERM, signalHandler);
+        SetConsoleCtrlHandler(consoleHandler, TRUE);
+        
         if (!ctx.config.loadConfig())
         {
             std::cerr << "[Config] Error loading config! Check config.ini." << std::endl;
@@ -448,7 +384,15 @@ int main()
         }
 
         ctx.detector = new Detector();
-        ctx.detector->initializeCudaContext();
+        
+        // CUDA 초기화 및 검증
+        if (!ctx.detector->initializeCudaContext()) {
+            std::cerr << "[MAIN] CUDA context initialization failed. Cannot continue." << std::endl;
+            delete ctx.detector;
+            ctx.detector = nullptr;
+            std::cin.get();
+            return -1;
+        }
 
         int cuda_devices = 0;
         cudaError_t err = cudaGetDeviceCount(&cuda_devices);
@@ -456,6 +400,8 @@ int main()
         if (err != cudaSuccess)
         {
             std::cout << "[MAIN] No GPU devices with CUDA support available." << std::endl;
+            delete ctx.detector;
+            ctx.detector = nullptr;
             std::cin.get();
             return -1;
         }
@@ -513,23 +459,52 @@ int main()
             keyThread.join();
         }
 
-        ctx.detector->stop();
+        // 안전한 종료 시퀀스
+        std::cout << "[MAIN] Initiating safe shutdown..." << std::endl;
+        
+        // 2. 검출기 중지
+        if (ctx.detector) {
+            ctx.detector->stop();
+        }
 
+        // 3. 스레드들을 안전하게 종료 (detach 대신 join 사용)
+        std::cout << "[MAIN] Waiting for threads to finish..." << std::endl;
+        
         if (captureThrd.joinable()) {
-            captureThrd.detach();
+            try {
+                captureThrd.join();
+                std::cout << "[MAIN] Capture thread joined successfully." << std::endl;
+            } catch (const std::exception& e) {
+                std::cerr << "[MAIN] Error joining capture thread: " << e.what() << std::endl;
+            }
         }
 
         if (mouseMovThread.joinable()) {
-            mouseMovThread.detach();
+            try {
+                mouseMovThread.join();
+                std::cout << "[MAIN] Mouse thread joined successfully." << std::endl;
+            } catch (const std::exception& e) {
+                std::cerr << "[MAIN] Error joining mouse thread: " << e.what() << std::endl;
+            }
         }
 
         if (overlayThread.joinable()) {
-            overlayThread.detach();
+            try {
+                overlayThread.join();
+                std::cout << "[MAIN] Overlay thread joined successfully." << std::endl;
+            } catch (const std::exception& e) {
+                std::cerr << "[MAIN] Error joining overlay thread: " << e.what() << std::endl;
+            }
         }
 
-        delete ctx.detector;
-        ctx.detector = nullptr;
+        // 4. 자원 정리
+        if (ctx.detector) {
+            delete ctx.detector;
+            ctx.detector = nullptr;
+            std::cout << "[MAIN] Detector resources cleaned up." << std::endl;
+        }
         
+        std::cout << "[MAIN] Safe shutdown completed." << std::endl;
         std::exit(0);
     }
     catch (const std::exception &e)
