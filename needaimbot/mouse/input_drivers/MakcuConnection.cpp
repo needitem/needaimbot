@@ -4,7 +4,6 @@
 #include <iostream>
 #include <algorithm>
 #include <vector>
-#include <array>
 #include <thread>
 #include <mutex>
 
@@ -12,6 +11,7 @@
 #include "../../config/config.h"
 #include "../../needaimbot.h"
 #include "../../AppContext.h"
+#include "../../core/common_utils.h"
 
 /* ---------- Makcu-specific constants ---------------------------- */
 static const uint32_t BOOT_BAUD = 115200;      // baud rate after initial connection
@@ -27,9 +27,26 @@ MakcuConnection::MakcuConnection(const std::string& port, unsigned int /*baud_ra
       listening_(false),
       aiming_active(false), 
       shooting_active(false), 
-      zooming_active(false)
+      zooming_active(false),
+      port_name_(port)
 {
-    std::string full_port = "\\\\.\\" + port;
+    try {
+        if (!initializeMakcuConnection()) {
+            throw std::runtime_error("Failed to initialize Makcu connection to " + port);
+        }
+        
+        std::cout << "[Makcu] Connected at 4Mbps! PORT: " << port 
+                  << " (Native Windows API - Ultra Low Latency)" << std::endl;
+                  
+    } catch (const std::exception& e) {
+        cleanup();
+        std::cerr << "[Makcu] Initialization error: " << e.what() << std::endl;
+        // 객체는 생성되지만 is_open_은 false로 유지됨
+    }
+}
+
+bool MakcuConnection::initializeMakcuConnection() {
+    std::string full_port = "\\\\.\\" + port_name_;
     
     // 1단계: 115200 baud로 초기 연결
     serial_handle_ = CreateFileA(
@@ -43,58 +60,28 @@ MakcuConnection::MakcuConnection(const std::string& port, unsigned int /*baud_ra
     );
 
     if (serial_handle_ == INVALID_HANDLE_VALUE) {
-        std::cerr << "[Makcu] Unable to open port: " << port 
+        std::cerr << "[Makcu] Unable to open port: " << port_name_ 
                   << " (Error: " << GetLastError() << ")" << std::endl;
-        return;
+        return false;
     }
 
     // DCB 설정 - 115200 baud
-    ZeroMemory(&dcb_config_, sizeof(DCB));
-    dcb_config_.DCBlength = sizeof(DCB);
-    
-    if (!GetCommState(serial_handle_, &dcb_config_)) {
-        std::cerr << "[Makcu] Failed to get comm state" << std::endl;
-        CloseHandle(serial_handle_);
-        serial_handle_ = INVALID_HANDLE_VALUE;
-        return;
-    }
-
-    dcb_config_.BaudRate = BOOT_BAUD;
-    dcb_config_.ByteSize = 8;
-    dcb_config_.Parity = NOPARITY;
-    dcb_config_.StopBits = ONESTOPBIT;
-    dcb_config_.fBinary = TRUE;
-    dcb_config_.fParity = FALSE;
-    dcb_config_.fOutxCtsFlow = FALSE;
-    dcb_config_.fOutxDsrFlow = FALSE;
-    dcb_config_.fDtrControl = DTR_CONTROL_DISABLE;
-    dcb_config_.fDsrSensitivity = FALSE;
-    dcb_config_.fTXContinueOnXoff = FALSE;
-    dcb_config_.fOutX = FALSE;
-    dcb_config_.fInX = FALSE;
-    dcb_config_.fErrorChar = FALSE;
-    dcb_config_.fNull = FALSE;
-    dcb_config_.fRtsControl = RTS_CONTROL_DISABLE;
-    dcb_config_.fAbortOnError = FALSE;
-
-    if (!SetCommState(serial_handle_, &dcb_config_)) {
-        std::cerr << "[Makcu] Failed to set initial comm state" << std::endl;
-        CloseHandle(serial_handle_);
-        serial_handle_ = INVALID_HANDLE_VALUE;
-        return;
+    if (!configureDCB(BOOT_BAUD)) {
+        closeHandle();
+        return false;
     }
 
     // 2단계: baud rate 변경 명령 전송
     DWORD bytes_written = 0;
     if (!WriteFile(serial_handle_, BAUD_CHANGE_CMD, sizeof(BAUD_CHANGE_CMD), &bytes_written, NULL)) {
         std::cerr << "[Makcu] Failed to send baud change command" << std::endl;
-        CloseHandle(serial_handle_);
-        serial_handle_ = INVALID_HANDLE_VALUE;
-        return;
+        closeHandle();
+        return false;
     }
 
     // 포트 닫고 MCU 리셋 대기
     CloseHandle(serial_handle_);
+    serial_handle_ = INVALID_HANDLE_VALUE;
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     // 3단계: 4Mbps로 재연결
@@ -110,15 +97,50 @@ MakcuConnection::MakcuConnection(const std::string& port, unsigned int /*baud_ra
 
     if (serial_handle_ == INVALID_HANDLE_VALUE) {
         std::cerr << "[Makcu] Unable to reopen port at high speed" << std::endl;
-        return;
+        return false;
     }
 
     // 4Mbps DCB 설정
+    if (!configureDCB(WORK_BAUD)) {
+        closeHandle();
+        return false;
+    }
+
+    // 타임아웃 설정
+    if (!configureTimeouts()) {
+        closeHandle();
+        return false;
+    }
+
+    // 버퍼 최적화 - 더 큰 버퍼로 Makcu 통신 효율성 개선
+    constexpr DWORD BUFFER_SIZE = 256;  // Optimized for Makcu's high-speed communication
+    if (!SetupComm(serial_handle_, BUFFER_SIZE, BUFFER_SIZE)) {
+        std::cerr << "[Makcu] Warning: Failed to setup comm buffers" << std::endl;
+    }
+    PurgeComm(serial_handle_, PURGE_RXCLEAR | PURGE_TXCLEAR);
+
+    // 리스닝 스레드 시작
+    try {
+        startListening();
+        is_open_ = true;
+        return true;
+    } catch (const std::exception& e) {
+        std::cerr << "[Makcu] Failed to start listening thread: " << e.what() << std::endl;
+        closeHandle();
+        return false;
+    }
+}
+
+bool MakcuConnection::configureDCB(uint32_t baud_rate) {
     ZeroMemory(&dcb_config_, sizeof(DCB));
     dcb_config_.DCBlength = sizeof(DCB);
-    GetCommState(serial_handle_, &dcb_config_);
+    
+    if (!GetCommState(serial_handle_, &dcb_config_)) {
+        std::cerr << "[Makcu] Failed to get comm state" << std::endl;
+        return false;
+    }
 
-    dcb_config_.BaudRate = WORK_BAUD;  // 4 Mbps
+    dcb_config_.BaudRate = baud_rate;
     dcb_config_.ByteSize = 8;
     dcb_config_.Parity = NOPARITY;
     dcb_config_.StopBits = ONESTOPBIT;
@@ -137,51 +159,113 @@ MakcuConnection::MakcuConnection(const std::string& port, unsigned int /*baud_ra
     dcb_config_.fAbortOnError = FALSE;
 
     if (!SetCommState(serial_handle_, &dcb_config_)) {
-        std::cerr << "[Makcu] Failed to set high-speed comm state" << std::endl;
-        CloseHandle(serial_handle_);
-        serial_handle_ = INVALID_HANDLE_VALUE;
-        return;
+        std::cerr << "[Makcu] Failed to set comm state for baud rate: " << baud_rate << std::endl;
+        return false;
     }
+    
+    return true;
+}
 
-    // 초저지연 타임아웃 설정
+bool MakcuConnection::configureTimeouts() {
+    // Optimized timeouts for 4Mbps communication
     timeouts_.ReadIntervalTimeout = 1;
     timeouts_.ReadTotalTimeoutMultiplier = 0;
-    timeouts_.ReadTotalTimeoutConstant = 1;
+    timeouts_.ReadTotalTimeoutConstant = 5;  // Slightly higher for 4Mbps stability
     timeouts_.WriteTotalTimeoutMultiplier = 0;
-    timeouts_.WriteTotalTimeoutConstant = 1;
+    timeouts_.WriteTotalTimeoutConstant = 10;  // Adequate for high-speed writes
 
     if (!SetCommTimeouts(serial_handle_, &timeouts_)) {
         std::cerr << "[Makcu] Failed to set timeouts" << std::endl;
-        CloseHandle(serial_handle_);
-        serial_handle_ = INVALID_HANDLE_VALUE;
-        return;
+        return false;
     }
-
-    // 버퍼 최적화
-    SetupComm(serial_handle_, 64, 64);
-    PurgeComm(serial_handle_, PURGE_RXCLEAR | PURGE_TXCLEAR);
-
-    is_open_ = true;
-    std::cout << "[Makcu] Connected at 4Mbps! PORT: " << port 
-              << " (Native Windows API - Ultra Low Latency)" << std::endl;
-
-    startListening();
+    
+    return true;
 }
 
-MakcuConnection::~MakcuConnection()
-{
-    listening_ = false;
-    
-    if (listening_thread_.joinable()) {
-        listening_thread_.join();
+void MakcuConnection::safeMakcuClose() {
+    if (!is_open_ || serial_handle_ == INVALID_HANDLE_VALUE) {
+        return;
     }
     
+    std::cout << "[Makcu] Starting safe Makcu port closure (wjwwood/serial method)..." << std::endl;
+    
+    try {
+        // 1. 릴리스 명령 전송 (포트 닫기 전에)
+        sendCommand("LR\n");  // Left Release
+        sendCommand("RR\n");  // Right Release
+        Sleep(10);
+        sendCommand("M0,0\n");  // 중립 위치
+        Sleep(10);
+        
+        // 2. 출력 버퍼 플러시 (전송 완료 보장)
+        if (!FlushFileBuffers(serial_handle_)) {
+            std::cerr << "[Makcu] Warning: FlushFileBuffers failed" << std::endl;
+        }
+        
+        // 3. 입력 버퍼 정리
+        if (!PurgeComm(serial_handle_, PURGE_RXCLEAR)) {
+            std::cerr << "[Makcu] Warning: PURGE_RXCLEAR failed" << std::endl;
+        }
+        
+        // 4. 출력 버퍼 정리  
+        if (!PurgeComm(serial_handle_, PURGE_TXCLEAR)) {
+            std::cerr << "[Makcu] Warning: PURGE_TXCLEAR failed" << std::endl;
+        }
+        
+        // 5. Makcu 정지 명령
+        sendCommand("STOP\n");
+        Sleep(20);
+        
+        // 6. 하드웨어 안정화 대기 (4Mbps 고려)
+        Sleep(100);
+        
+        // 7. 포트 안전하게 닫기 (wjwwood/serial 방식)
+        if (serial_handle_ != INVALID_HANDLE_VALUE) {
+            int ret = CloseHandle(serial_handle_);
+            if (ret == 0) {
+                DWORD error = GetLastError();
+                std::cerr << "[Makcu] Error closing Makcu port: " << error << std::endl;
+            } else {
+                serial_handle_ = INVALID_HANDLE_VALUE;
+                std::cout << "[Makcu] Makcu port closed successfully." << std::endl;
+            }
+        }
+        
+        is_open_ = false;
+        listening_ = false;
+        
+    } catch (const std::exception& e) {
+        std::cerr << "[Makcu] Error during safe Makcu close: " << e.what() << std::endl;
+    }
+}
+
+void MakcuConnection::cleanup() {
+    listening_ = false;
+    
+    // wjwwood/serial 방식의 안전한 포트 종료
+    safeMakcuClose();
+    
+    if (listening_thread_.joinable()) {
+        try {
+            listening_thread_.join();
+        } catch (const std::exception& e) {
+            std::cerr << "[Makcu] Error joining listening thread: " << e.what() << std::endl;
+        }
+    }
+}
+
+
+void MakcuConnection::closeHandle() {
     if (serial_handle_ != INVALID_HANDLE_VALUE) {
         CloseHandle(serial_handle_);
         serial_handle_ = INVALID_HANDLE_VALUE;
     }
-    
     is_open_ = false;
+}
+
+MakcuConnection::~MakcuConnection()
+{
+    cleanup();
 }
 
 bool MakcuConnection::isOpen() const
@@ -211,8 +295,13 @@ void MakcuConnection::write(const std::string& data)
     );
 
     if (!result && GetLastError() == ERROR_IO_PENDING) {
-        WaitForSingleObject(overlapped.hEvent, 1);
-        GetOverlappedResult(serial_handle_, &overlapped, &bytes_written, FALSE);
+        // Wait with proper timeout for high-speed communication
+        DWORD waitResult = WaitForSingleObject(overlapped.hEvent, 10);  // 10ms timeout
+        if (waitResult == WAIT_OBJECT_0) {
+            GetOverlappedResult(serial_handle_, &overlapped, &bytes_written, FALSE);
+        } else {
+            std::cerr << "[Makcu] Write operation timeout" << std::endl;
+        }
     }
 
     CloseHandle(overlapped.hEvent);
@@ -291,15 +380,6 @@ void MakcuConnection::move(int x, int y)
     sendCommand(std::string(command));
 }
 
-void MakcuConnection::start_boot()
-{
-    sendCommand("BOOT\n");
-}
-
-void MakcuConnection::reboot()
-{
-    sendCommand("REBOOT\n");
-}
 
 void MakcuConnection::send_stop()
 {

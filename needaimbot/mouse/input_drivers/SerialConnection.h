@@ -9,8 +9,6 @@
 #include <thread>
 #include <atomic>
 #include <mutex>
-#include <queue>
-#include <condition_variable>
 
 // Windows Native Serial API - 최고 성능을 위해
 
@@ -51,7 +49,10 @@ private:
 private:
     bool openPort();
     bool configurePort();
-    bool testConnection();
+    bool initializeSerial();
+    void cleanup();
+    void closeHandle();
+    void safeSerialClose();  // wjwwood/serial 방식의 안전한 종료
 
     HANDLE serial_handle_;
     DCB dcb_config_;

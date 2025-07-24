@@ -10,8 +10,6 @@
 
 #include <opencv2/opencv.hpp>
 #include <opencv2/dnn.hpp>
-#include <opencv2/cudawarping.hpp>
-#include <opencv2/cudacodec.hpp>
 #include <opencv2/cudaimgproc.hpp>
 #include <opencv2/cudaarithm.hpp>
 #include <opencv2/core/cuda.hpp>
@@ -23,14 +21,10 @@
 #include <algorithm>
 #include <cuda_fp16.h>
 #include <atomic>
-#include <numeric>
 #include <vector>
-#include <queue>
 #include <mutex>
 #include <limits>
 #include <cfloat>
-#include <omp.h>
-#include <float.h>
 
 #include "detector.h"
 #include "needaimbot.h"
@@ -67,7 +61,6 @@ extern std::atomic<bool> detection_resolution_changed;
 
 extern std::mutex configMutex; 
 
-static bool error_logged = false;
 
 
 
@@ -115,42 +108,99 @@ Detector::Detector()
 
 Detector::~Detector()
 {
-    if (m_batchedResultsGpu) {
-        cudaFree(m_batchedResultsGpu);
-        m_batchedResultsGpu = nullptr;
-    }
+    std::cout << "[Detector] Starting resource cleanup..." << std::endl;
     
-    // Free pinned memory
-    if (m_batchedResultsPinned) cudaFreeHost(m_batchedResultsPinned);
-    if (m_pinnedBestIndex) cudaFreeHost(m_pinnedBestIndex);
-    if (m_pinnedMatchingIndex) cudaFreeHost(m_pinnedMatchingIndex);
-    if (m_finalCopyEvent) cudaEventDestroy(m_finalCopyEvent);
-    
-    if (stream) cudaStreamDestroy(stream);
-    if (preprocessStream) cudaStreamDestroy(preprocessStream);
-    if (postprocessStream) cudaStreamDestroy(postprocessStream);
-    if (m_preprocessDone) cudaEventDestroy(m_preprocessDone);
-    if (m_inferenceDone) cudaEventDestroy(m_inferenceDone);
-    if (processingDone) cudaEventDestroy(processingDone);
-    
+    try {
+        // 1. 먼저 모든 CUDA 스트림 동기화 (가장 중요)
+        if (stream) {
+            cudaStreamSynchronize(stream);
+        }
+        if (preprocessStream) {
+            cudaStreamSynchronize(preprocessStream);
+        }
+        if (postprocessStream) {
+            cudaStreamSynchronize(postprocessStream);
+        }
+        
+        // 2. 이벤트 정리 (스트림보다 먼저)
+        if (m_finalCopyEvent) {
+            cudaEventDestroy(m_finalCopyEvent);
+            m_finalCopyEvent = nullptr;
+        }
+        if (m_preprocessDone) {
+            cudaEventDestroy(m_preprocessDone);
+            m_preprocessDone = nullptr;
+        }
+        if (m_inferenceDone) {
+            cudaEventDestroy(m_inferenceDone);
+            m_inferenceDone = nullptr;
+        }
+        if (processingDone) {
+            cudaEventDestroy(processingDone);
+            processingDone = nullptr;
+        }
+        
+        // 3. 메모리 버퍼 정리
+        if (m_batchedResultsGpu) {
+            cudaFree(m_batchedResultsGpu);
+            m_batchedResultsGpu = nullptr;
+        }
+        
+        // 4. Pinned memory 정리
+        if (m_batchedResultsPinned) {
+            cudaFreeHost(m_batchedResultsPinned);
+            m_batchedResultsPinned = nullptr;
+        }
+        if (m_pinnedBestIndex) {
+            cudaFreeHost(m_pinnedBestIndex);
+            m_pinnedBestIndex = nullptr;
+        }
+        if (m_pinnedMatchingIndex) {
+            cudaFreeHost(m_pinnedMatchingIndex);
+            m_pinnedMatchingIndex = nullptr;
+        }
+        
+        // 5. Input/Output 바인딩 정리
+        for (auto& binding : inputBindings) {
+            if (binding.second) {
+                cudaFree(binding.second);
+                binding.second = nullptr;
+            }
+        }
+        inputBindings.clear();
 
-    for (auto& binding : inputBindings)
-    {
-        if (binding.second) cudaFree(binding.second);
-    }
+        for (auto& binding : outputBindings) {
+            if (binding.second) {
+                cudaFree(binding.second);
+                binding.second = nullptr;
+            }
+        }
+        outputBindings.clear();
 
-    for (auto& binding : outputBindings)
-    {
-        if (binding.second) cudaFree(binding.second);
+        if (inputBufferDevice) {
+            cudaFree(inputBufferDevice);
+            inputBufferDevice = nullptr;
+        }
+        
+        // 6. 스트림 정리 (마지막에)
+        if (stream) {
+            cudaStreamDestroy(stream);
+            stream = nullptr;
+        }
+        if (preprocessStream) {
+            cudaStreamDestroy(preprocessStream);
+            preprocessStream = nullptr;
+        }
+        if (postprocessStream) {
+            cudaStreamDestroy(postprocessStream);
+            postprocessStream = nullptr;
+        }
+        
+        std::cout << "[Detector] Resource cleanup completed successfully." << std::endl;
+        
+    } catch (const std::exception& e) {
+        std::cerr << "[Detector] Error during cleanup: " << e.what() << std::endl;
     }
-
-    if (inputBufferDevice)
-    {
-        cudaFree(inputBufferDevice);
-    }
-    
-    // Synchronize to ensure all CUDA operations are complete
-    cudaStreamSynchronize(stream);
     
     // Note: Removed cudaDeviceReset() as it affects all CUDA contexts,
     // not just this instance. Proper cleanup is handled by destructors.
@@ -748,14 +798,9 @@ void Detector::inferenceThread()
         }
 
         if (!context) {
-            if (!error_logged) {
-                std::cerr << "[Detector] Context not initialized" << std::endl;
-                error_logged = true;
-            }
+            std::cerr << "[Detector] Context not initialized" << std::endl;
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
             continue;
-        } else {
-            error_logged = false;
         }
 
         if (hasNewFrame && !frameGpu.empty())
