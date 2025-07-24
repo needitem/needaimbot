@@ -4,12 +4,34 @@
 #include <iostream>
 #include <vector>
 #include <algorithm>
-#include <queue>
-#include <condition_variable>
+#include <chrono>
+#include <set>
+#include <future>
 
 #include "needaimbot.h"
 #include "SerialConnection.h"
 #include "../../AppContext.h"
+#include "../../core/common_utils.h"
+
+// 전역 정리 핸들러 클래스 (전방 선언)
+class GlobalSerialCleanupHandler {
+private:
+    static std::set<std::string> used_ports;
+    
+public:
+    static void registerPort(const std::string& port) {
+        used_ports.insert(port);
+    }
+    
+    static void unregisterPort(const std::string& port) {
+        used_ports.erase(port);
+    }
+    
+    ~GlobalSerialCleanupHandler();  // 정의는 나중에
+};
+
+// static 멤버 정의
+std::set<std::string> GlobalSerialCleanupHandler::used_ports;
 
 SerialConnection::SerialConnection(const std::string& port, unsigned int baud_rate)
     : serial_handle_(INVALID_HANDLE_VALUE),
@@ -22,23 +44,168 @@ SerialConnection::SerialConnection(const std::string& port, unsigned int baud_ra
       shooting_active(false), 
       zooming_active(false)
 {
-    // 초기 연결 시도
-    if (openPort() && configurePort()) {
+    try {
+        // 사용된 포트 등록 (정리 대상으로 추가)
+        GlobalSerialCleanupHandler::registerPort(port_name_);
+        
+        // 원자적 초기화 시도
+        if (!initializeSerial()) {
+            throw std::runtime_error("Failed to initialize serial connection to " + port_name_);
+        }
+        
         std::cout << "[Arduino] Connected! PORT: " << port_name_ 
                   << " (Native Windows API - Ultra Low Latency)" << std::endl;
         
+    } catch (const std::exception& e) {
+        // 초기화 실패 시 모든 자원 정리
+        cleanup();
+        std::cerr << "[Arduino] Initialization error: " << e.what() << std::endl;
+        // 객체는 생성되지만 is_open_은 false로 유지됨
+    }
+}
+
+bool SerialConnection::initializeSerial() {
+    // 1. 포트 열기
+    if (!openPort()) {
+        return false;
+    }
+    
+    // 2. 포트 설정
+    if (!configurePort()) {
+        closeHandle();
+        return false;
+    }
+    
+    // 3. 스레드 시작
+    try {
         if (AppContext::getInstance().config.arduino_enable_keys) {
             startListening();
         }
         startTimer();
-    } else {
-        std::cerr << "[Arduino] Failed to establish initial connection to " << port_name_ << std::endl;
+        return true;
+    } catch (const std::exception& e) {
+        std::cerr << "[Arduino] Thread initialization failed: " << e.what() << std::endl;
+        closeHandle();
+        return false;
     }
+}
+
+void SerialConnection::safeSerialClose() {
+    if (!is_open_ || serial_handle_ == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    
+    std::cout << "[Arduino] Starting safe serial port closure..." << std::endl;
+    
+    try {
+        // 1. 즉시 I/O 취소 (강제 종료 대비)
+        CancelIo(serial_handle_);
+        
+        // 2. 단순한 릴리스 명령만 전송 (Arduino가 실제로 지원하는 명령)
+        std::cout << "[Arduino] Sending release command..." << std::endl;
+        sendCommand("r");
+        Sleep(50);
+        
+        // 3. 출력 버퍼 플러시 (전송 완료 보장)
+        if (!FlushFileBuffers(serial_handle_)) {
+            std::cerr << "[Arduino] Warning: FlushFileBuffers failed" << std::endl;
+        }
+        
+        // 4. 모든 버퍼 강제 정리 (ABORT 포함)
+        DWORD purge_flags = PURGE_TXABORT | PURGE_RXABORT | PURGE_TXCLEAR | PURGE_RXCLEAR;
+        if (!PurgeComm(serial_handle_, purge_flags)) {
+            std::cerr << "[Arduino] Warning: PurgeComm failed" << std::endl;
+        }
+        
+        // 5. DTR/RTS 라인 상태 유지 (Arduino 리셋 방지)
+        // DTR/RTS 조작을 제거 - 이는 Arduino를 리셋시킬 수 있음
+        // 대부분의 Arduino 보드는 DTR 라인 변경 시 자동 리셋됨
+        
+        // 7. 짧은 대기
+        Sleep(50);
+        
+        // 8. 포트 안전하게 닫기 (강화된 방식)
+        if (serial_handle_ != INVALID_HANDLE_VALUE) {
+            int ret = CloseHandle(serial_handle_);
+            if (ret == 0) {
+                DWORD error = GetLastError();
+                std::cerr << "[Arduino] Error closing serial port: " << error << std::endl;
+            } else {
+                serial_handle_ = INVALID_HANDLE_VALUE;
+                std::cout << "[Arduino] Serial port closed successfully." << std::endl;
+            }
+        }
+        
+        is_open_ = false;
+        
+    } catch (const std::exception& e) {
+        std::cerr << "[Arduino] Error during safe serial close: " << e.what() << std::endl;
+        // 예외 발생 시에도 핸들 정리 시도
+        if (serial_handle_ != INVALID_HANDLE_VALUE) {
+            CloseHandle(serial_handle_);
+            serial_handle_ = INVALID_HANDLE_VALUE;
+            is_open_ = false;
+        }
+    }
+}
+
+
+void SerialConnection::cleanup() {
+    // 플래그 설정
+    timer_running_ = false;
+    listening_ = false;
+    
+    std::cout << "[Arduino] Starting cleanup..." << std::endl;
+    
+    // I/O 작업 취소 먼저 수행
+    if (serial_handle_ != INVALID_HANDLE_VALUE) {
+        CancelIo(serial_handle_);
+    }
+    
+    // 타임아웃 기반 스레드 종료 함수
+    auto cleanup_with_timeout = [this](std::thread& t, const std::string& name) {
+        if (t.joinable()) {
+            auto future = std::async(std::launch::async, [&t]() {
+                t.join();
+            });
+            
+            if (future.wait_for(std::chrono::milliseconds(NeedAimbot::Constants::THREAD_JOIN_TIMEOUT_MS)) == std::future_status::timeout) {
+                std::cout << "[Arduino] " << name << " thread timeout - detaching" << std::endl;
+                // TerminateThread 사용 회피 - 리소스 누수 가능
+                t.detach();
+            } else {
+                std::cout << "[Arduino] " << name << " thread terminated gracefully" << std::endl;
+            }
+        }
+    };
+    
+    // 스레드를 먼저 정리 (포트 닫기 전에)
+    cleanup_with_timeout(listening_thread_, "Listening");
+    cleanup_with_timeout(timer_thread_, "Timer");
+    
+    // 그 다음 포트 안전하게 종료
+    safeSerialClose();
+    
+    std::cout << "[Arduino] Cleanup completed" << std::endl;
+}
+
+
+void SerialConnection::closeHandle() {
+    if (serial_handle_ != INVALID_HANDLE_VALUE) {
+        CloseHandle(serial_handle_);
+        serial_handle_ = INVALID_HANDLE_VALUE;
+    }
+    is_open_ = false;
 }
 
 SerialConnection::~SerialConnection()
 {
-    close();
+    std::cout << "[Arduino] Destructor called for port: " << port_name_ << std::endl;
+    cleanup();
+    
+    // 포트 등록 해제
+    GlobalSerialCleanupHandler::unregisterPort(port_name_);
+    std::cout << "[Arduino] Port " << port_name_ << " unregistered from cleanup handler" << std::endl;
 }
 
 bool SerialConnection::isOpen() const
@@ -96,45 +263,53 @@ bool SerialConnection::reconnect()
 void SerialConnection::close()
 {
     std::lock_guard<std::mutex> lock(connection_mutex_);
-    
-    timer_running_ = false;
-    listening_ = false;
-    
-    if (timer_thread_.joinable()) {
-        timer_thread_.join();
-    }
-    
-    if (listening_thread_.joinable()) {
-        listening_thread_.join();
-    }
-    
-    if (serial_handle_ != INVALID_HANDLE_VALUE) {
-        CloseHandle(serial_handle_);
-        serial_handle_ = INVALID_HANDLE_VALUE;
-    }
-    
-    is_open_ = false;
+    cleanup();
 }
 
 bool SerialConnection::openPort()
 {
     std::string full_port = "\\\\.\\" + port_name_;
     
+    // 첫 번째 시도: 독점 액세스 (기존 방식)
     serial_handle_ = CreateFileA(
         full_port.c_str(),
         GENERIC_READ | GENERIC_WRITE,
-        0,                         // 독점 액세스 (Arduino 호환)
-        NULL,                       // 보안 속성 없음
-        OPEN_EXISTING,             // 존재하는 포트 열기
-        FILE_ATTRIBUTE_NORMAL,     // 동기 I/O로 수정
+        0,                         // 독점 액세스
+        NULL,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
         NULL
     );
 
     if (serial_handle_ == INVALID_HANDLE_VALUE) {
         DWORD error = GetLastError();
-        std::cerr << "[Arduino] Unable to open port: " << port_name_ 
-                  << " (Error: " << error << ")" << std::endl;
-        return false;
+        
+        if (error == ERROR_ACCESS_DENIED || error == ERROR_SHARING_VIOLATION) {
+            std::cout << "[Arduino] Port in use, trying shared access..." << std::endl;
+            
+            // 두 번째 시도: 공유 액세스
+            serial_handle_ = CreateFileA(
+                full_port.c_str(),
+                GENERIC_READ | GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,  // 공유 액세스 허용
+                NULL,
+                OPEN_EXISTING,
+                FILE_ATTRIBUTE_NORMAL,
+                NULL
+            );
+            
+            if (serial_handle_ == INVALID_HANDLE_VALUE) {
+                std::cerr << "[Arduino] Failed to open port even with shared access: " 
+                          << port_name_ << " (Error: " << GetLastError() << ")" << std::endl;
+                return false;
+            } else {
+                std::cout << "[Arduino] Port opened with shared access" << std::endl;
+            }
+        } else {
+            std::cerr << "[Arduino] Unable to open port: " << port_name_ 
+                      << " (Error: " << error << ")" << std::endl;
+            return false;
+        }
     }
 
     return true;
@@ -182,9 +357,9 @@ bool SerialConnection::configurePort()
     // 즉시 응답을 위한 타임아웃 설정
     timeouts_.ReadIntervalTimeout = 1;          // 바이트 간 간격 1ms
     timeouts_.ReadTotalTimeoutMultiplier = 0;   // 총 읽기 시간 승수
-    timeouts_.ReadTotalTimeoutConstant = 10;    // 총 읽기 시간 상수 10ms
+    timeouts_.ReadTotalTimeoutConstant = NeedAimbot::Constants::SERIAL_READ_TIMEOUT_MS;
     timeouts_.WriteTotalTimeoutMultiplier = 0;  // 총 쓰기 시간 승수
-    timeouts_.WriteTotalTimeoutConstant = 50;   // 총 쓰기 시간 상수 50ms
+    timeouts_.WriteTotalTimeoutConstant = NeedAimbot::Constants::SERIAL_WRITE_TIMEOUT_MS;
 
     if (!SetCommTimeouts(serial_handle_, &timeouts_)) {
         std::cerr << "[Arduino] Failed to set timeouts" << std::endl;
@@ -193,8 +368,9 @@ bool SerialConnection::configurePort()
         return false;
     }
 
-    // 버퍼 크기 최적화 - 작은 버퍼로 지연 최소화
-    if (!SetupComm(serial_handle_, 64, 64)) {
+    // 버퍼 크기 최적화 - 더 큰 버퍼로 효율성 개선
+    constexpr DWORD BUFFER_SIZE = 512;  // Increased from 64 for better throughput
+    if (!SetupComm(serial_handle_, BUFFER_SIZE, BUFFER_SIZE)) {
         std::cerr << "[Arduino] Failed to setup comm buffers" << std::endl;
     }
 
@@ -205,24 +381,6 @@ bool SerialConnection::configurePort()
     return true;
 }
 
-bool SerialConnection::testConnection()
-{
-    if (!isOpen()) return false;
-    
-    // 간단한 핑 테스트 (실제 Arduino 코드에 따라 조정 필요)
-    const std::string ping_cmd = "PING\n";
-    DWORD bytes_written = 0;
-    
-    BOOL result = WriteFile(
-        serial_handle_,
-        ping_cmd.c_str(),
-        static_cast<DWORD>(ping_cmd.length()),
-        &bytes_written,
-        NULL
-    );
-    
-    return result && (bytes_written == ping_cmd.length());
-}
 
 void SerialConnection::write(const std::string& data)
 {
@@ -444,3 +602,22 @@ void SerialConnection::processIncomingLine(const std::string& line)
         }
     }
 }
+
+// GlobalSerialCleanupHandler 소멸자 구현
+GlobalSerialCleanupHandler::~GlobalSerialCleanupHandler() {
+        // 프로그램 종료 시 추가 정리 비활성화
+        // SerialConnection의 소멸자가 이미 적절한 정리를 수행했으므로
+        // 추가적인 포트 접근은 시스템 상태를 방해할 수 있음
+        
+        if (!used_ports.empty()) {
+            std::cout << "[Cleanup] Serial ports have been cleaned up by their respective destructors." << std::endl;
+            std::cout << "[Cleanup] Registered ports were: ";
+            for (const std::string& p : used_ports) {
+                std::cout << p << " ";
+            }
+            std::cout << std::endl;
+        }
+    }
+
+// 전역 정리 객체 (프로그램 종료 시 자동 실행)
+static GlobalSerialCleanupHandler global_serial_cleanup;

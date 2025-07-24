@@ -27,8 +27,6 @@ public:
     void release(int button);
     void move(int x, int y);
 
-    void start_boot();
-    void reboot();
     void send_stop();
 
     bool aiming_active;
@@ -42,6 +40,14 @@ private:
     void startListening();
     void listeningThreadFunc();
     void processIncomingLine(const std::string& line);
+    
+    // 초기화 및 정리 메서드
+    bool initializeMakcuConnection();
+    bool configureDCB(uint32_t baud_rate);
+    bool configureTimeouts();
+    void cleanup();
+    void closeHandle();
+    void safeMakcuClose();  // wjwwood/serial 방식의 안전한 종료
 
 private:
     HANDLE serial_handle_;
@@ -51,6 +57,7 @@ private:
     std::atomic<bool> listening_;
     std::thread       listening_thread_;
     std::mutex        write_mutex_;
+    std::string       port_name_;  // 포트 이름 저장
 };
 
 #endif // MAKCUCONNECTION_H
