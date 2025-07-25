@@ -17,41 +17,47 @@ public:
     class Event {
     public:
         void notify() {
-            {
-                std::lock_guard<std::mutex> lock(mutex_);
-                signaled_ = true;
-                version_++;
-            }
+            version_.fetch_add(1, std::memory_order_release);
+            signaled_.store(true, std::memory_order_release);
             cv_.notify_all();
         }
         
         void reset() {
-            std::lock_guard<std::mutex> lock(mutex_);
-            signaled_ = false;
+            signaled_.store(false, std::memory_order_release);
         }
         
         bool wait() {
+            // Fast path - check atomic without lock
+            if (signaled_.load(std::memory_order_acquire)) {
+                return true;
+            }
+            // Slow path - wait with lock
             std::unique_lock<std::mutex> lock(mutex_);
-            cv_.wait(lock, [this] { return signaled_; });
+            cv_.wait(lock, [this] { return signaled_.load(std::memory_order_acquire); });
             return true;
         }
         
         template<typename Rep, typename Period>
         bool wait_for(const std::chrono::duration<Rep, Period>& timeout) {
+            // Fast path - check atomic without lock
+            if (signaled_.load(std::memory_order_acquire)) {
+                return true;
+            }
+            // Slow path - wait with lock
             std::unique_lock<std::mutex> lock(mutex_);
-            return cv_.wait_for(lock, timeout, [this] { return signaled_; });
+            return cv_.wait_for(lock, timeout, [this] { return signaled_.load(std::memory_order_acquire); });
         }
         
         int version() const {
-            std::lock_guard<std::mutex> lock(mutex_);
-            return version_;
+            return version_.load(std::memory_order_acquire);
         }
         
     private:
+        // Group frequently accessed members together for better cache locality
+        std::atomic<bool> signaled_{false};  // Check without lock in fast path
+        std::atomic<int> version_{0};
         mutable std::mutex mutex_;
         std::condition_variable cv_;
-        bool signaled_ = false;
-        int version_ = 0;
     };
     
     // Scoped performance timer

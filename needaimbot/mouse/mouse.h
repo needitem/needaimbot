@@ -26,6 +26,7 @@
 #include "input_drivers/rzctl.h"
 #include "input_drivers/InputMethod.h"
 #include "aimbot_components/TargetKalmanFilter.h"
+#include "aimbot_components/SnapAimController.h"
 
 class PIDController2D;
 
@@ -40,8 +41,9 @@ using ErrorTrackingCallback = std::function<void(float error_x, float error_y)>;
 class MouseThread
 {
 private:
-    std::unique_ptr<PIDController2D> pid_controller;
-    std::unique_ptr<TargetKalmanFilter> kalman_filter;
+    std::unique_ptr<PIDController2D> pid_controller; // 호환성을 위해 유지
+    std::unique_ptr<TargetKalmanFilter> kalman_filter; // 호환성을 위해 유지
+    std::unique_ptr<SnapAimController> snap_controller; // 새로운 조준 시스템
     std::unique_ptr<InputMethod> input_method;
     std::mutex input_method_mutex;
     mutable std::mutex member_data_mutex_;
@@ -193,8 +195,15 @@ public:
     // Add method to access PID controller for resetting
     PIDController2D* getPIDController() { return pid_controller.get(); }
     
+    // Enable/disable snap aim mode
+    void setSnapAimEnabled(bool enabled) { use_snap_aim_ = enabled; }
+    bool isSnapAimEnabled() const { return use_snap_aim_; }
+    
     // Add method to reset all accumulated states
     void resetAccumulatedStates();
+    
+private:
+    std::atomic<bool> use_snap_aim_{true}; // 기본적으로 Snap Aim 사용
 };
 
 #endif 

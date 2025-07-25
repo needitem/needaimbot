@@ -90,6 +90,7 @@ public:
     std::vector<std::pair<std::string, PerformanceMetrics>> getAllMetrics() const {
         std::lock_guard<std::mutex> lock(mutex_);
         std::vector<std::pair<std::string, PerformanceMetrics>> result;
+        result.reserve(metrics_map_.size());  // Pre-allocate to avoid reallocations
         for (const auto& pair : metrics_map_) {
             result.push_back(pair);
         }
@@ -162,6 +163,12 @@ public:
     void logSlowOperations(float threshold_ms = 16.0f) const {
         auto all_metrics = getAllMetrics();
         for (const auto& [name, metrics] : all_metrics) {
+            // Skip intentional wait operations
+            if (name.find("Wait") != std::string::npos || 
+                name.find("wait") != std::string::npos) {
+                continue;
+            }
+            
             if (metrics.avg_time_ms > threshold_ms) {
                 std::cout << "[Performance] Slow operation detected: " << name 
                           << " avg=" << metrics.avg_time_ms << "ms"
@@ -173,7 +180,9 @@ public:
     }
     
 private:
-    PerformanceMonitor() = default;
+    PerformanceMonitor() {
+        metrics_map_.reserve(50);  // Pre-allocate for typical number of metrics
+    }
     
     mutable std::mutex mutex_;
     std::unordered_map<std::string, PerformanceMetrics> metrics_map_;
