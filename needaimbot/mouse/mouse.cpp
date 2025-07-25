@@ -31,6 +31,7 @@
 #endif
 
 #include "aimbot_components/PIDController2D.h"
+#include "aimbot_components/SnapAimController.h"
 
 
 extern std::atomic<bool> aiming;
@@ -95,6 +96,7 @@ MouseThread::MouseThread(
     initializeScreen(resolution, bScope_multiplier, norecoil_ms);
     pid_controller = std::make_unique<PIDController2D>(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
     kalman_filter = std::make_unique<TargetKalmanFilter>();
+    snap_controller = std::make_unique<SnapAimController>(); // 새로운 스냅 에임 컨트롤러
     initializeInputMethod(serialConnection, makcuConnection, gHub);
     
     // Start async input worker thread
@@ -409,71 +411,36 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     
     float move_x, move_y;
     
-    // Use standard PID controller
-    {
-        Eigen::Vector2f error(error_x, error_y);
-        auto pid_start_time = std::chrono::steady_clock::now();
-        
-        // Use adaptive or standard PID based on config
-        Eigen::Vector2f pid_output;
-        if (ctx.config.enable_adaptive_pid) {
-            pid_output = pid_controller->calculateAdaptive(error, error_magnitude);
-        } else {
-            pid_output = pid_controller->calculate(error);
-        }
-            
-        auto pid_end_time = std::chrono::steady_clock::now();
-        float pid_duration_ms = std::chrono::duration<float, std::milli>(pid_end_time - pid_start_time).count();
-        ctx.g_current_pid_calc_time_ms.store(pid_duration_ms, std::memory_order_relaxed);
-        ctx.add_to_history(ctx.g_pid_calc_time_history, pid_duration_ms, ctx.g_pid_calc_history_mutex);
-
-        // Calculate adaptive scale and apply to movement
-        float adaptive_scale = calculateAdaptiveScale(error_magnitude);
-        float raw_move_x = pid_output.x() * current_move_scale_x * adaptive_scale;
-        float raw_move_y = pid_output.y() * current_move_scale_y * adaptive_scale;
-        
-        move_x = raw_move_x;
-        move_y = raw_move_y;
-        
-        // Simplified predictive braking system
-        // Use exponential decay based on distance for smooth deceleration
-        if (error_magnitude < 30.0f) {
-            // Apply exponential braking curve for close targets
-            // This provides smooth deceleration without complex calculations
-            float brake_factor = 1.0f - std::exp(-error_magnitude / 10.0f);
-            brake_factor = std::max(0.15f, brake_factor); // Minimum 15% speed to avoid getting stuck
-            
-            move_x *= brake_factor;
-            move_y *= brake_factor;
-        }
-    }
-
-    // Simplified overshoot prevention using momentum dampening
-    // Instead of harsh direction change detection, use smooth momentum tracking
-    static float momentum_x = 0.0f;
-    static float momentum_y = 0.0f;
+    // Simple PID without any smoothing or extra algorithms
+    Eigen::Vector2f error(error_x, error_y);
+    auto pid_start_time = std::chrono::steady_clock::now();
     
-    // Update momentum with smoothing (acts as a low-pass filter to reduce jitter)
-    const float momentum_alpha = 0.7f; // Higher = more responsive, lower = more smooth
-    momentum_x = momentum_alpha * move_x + (1.0f - momentum_alpha) * momentum_x;
-    momentum_y = momentum_alpha * move_y + (1.0f - momentum_alpha) * momentum_y;
+    // Basic PID calculation
+    Eigen::Vector2f pid_output = pid_controller->calculate(error);
+        
+    auto pid_end_time = std::chrono::steady_clock::now();
+    float pid_duration_ms = std::chrono::duration<float, std::milli>(pid_end_time - pid_start_time).count();
+    ctx.g_current_pid_calc_time_ms.store(pid_duration_ms, std::memory_order_relaxed);
+    ctx.add_to_history(ctx.g_pid_calc_time_history, pid_duration_ms, ctx.g_pid_calc_history_mutex);
+
+    // Apply error-based scaling to reduce jitter on large errors
+    float error_scale_factor = 1.0f;
     
-    // If we're very close and momentum is opposing error direction, dampen it
-    if (error_magnitude < 15.0f) {
-        // Check if momentum opposes the error (potential overshoot)
-        float momentum_dot_error = (momentum_x * error_x + momentum_y * error_y);
-        if (momentum_dot_error < 0) {
-            // Momentum is pointing away from target - apply dampening
-            float dampen_factor = 0.5f + 0.5f * (error_magnitude / 15.0f);
-            move_x *= dampen_factor;
-            move_y *= dampen_factor;
+    // Apply the first matching rule
+    for (const auto& rule : ctx.config.error_scaling_rules) {
+        if (error_magnitude >= rule.error_threshold) {
+            error_scale_factor = rule.scale_factor;
+            break;
         }
     }
     
-    // Apply dead zone with adaptive threshold based on error magnitude
-    float adaptive_dead_zone = DEAD_ZONE * (1.0f + std::min(1.0f, 10.0f / (error_magnitude + 1.0f)));
-    if (std::abs(move_x) < adaptive_dead_zone) move_x = 0.0f;
-    if (std::abs(move_y) < adaptive_dead_zone) move_y = 0.0f;
+    // Apply PID output with error scaling
+    move_x = pid_output.x() * current_move_scale_x * error_scale_factor;
+    move_y = pid_output.y() * current_move_scale_y * error_scale_factor;
+
+    // Simple dead zone without adaptive threshold
+    if (std::abs(move_x) < DEAD_ZONE) move_x = 0.0f;
+    if (std::abs(move_y) < DEAD_ZONE) move_y = 0.0f;
     
     // Process accumulated movement
     auto [dx_int, dy_int] = processAccumulatedMovement(move_x, move_y);

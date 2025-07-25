@@ -129,8 +129,15 @@ bool Config::loadConfig(const std::string& filename)
         ki_y = 0.0;
         kd_y = 0.15;
         
+        // Initialize default error scaling rules
+        error_scaling_rules.clear();
+        error_scaling_rules.push_back(ErrorScalingRule(150.0f, 0.3f));  // Large error: 30% scale
+        error_scaling_rules.push_back(ErrorScalingRule(100.0f, 0.5f));  // Medium error: 50% scale
+        error_scaling_rules.push_back(ErrorScalingRule(50.0f, 0.8f));   // Small error: 80% scale
+        
         pid_derivative_smoothing = 0.2f;
         enable_adaptive_pid = true;
+        enable_snap_aim = true;
 
         
         arduino_baudrate = 115200;
@@ -297,6 +304,28 @@ bool Config::loadConfig(const std::string& filename)
     
     pid_derivative_smoothing = static_cast<float>(get_double_ini("PID", "pid_derivative_smoothing", 0.2));
     enable_adaptive_pid = get_bool_ini("PID", "enable_adaptive_pid", true);
+    enable_snap_aim = get_bool_ini("PID", "enable_snap_aim", true);
+    
+    // Load error scaling rules
+    error_scaling_rules.clear();
+    int num_rules = get_long_ini("PID", "error_scaling_rule_count", 3);
+    for (int i = 0; i < num_rules; i++) {
+        std::string prefix = "error_scaling_rule_" + std::to_string(i) + "_";
+        std::string threshold_key = prefix + "threshold";
+        std::string scale_key = prefix + "scale";
+        float threshold = static_cast<float>(get_double_ini("PID", threshold_key.c_str(), 0.0));
+        float scale = static_cast<float>(get_double_ini("PID", scale_key.c_str(), 1.0));
+        if (threshold > 0.0f) {
+            error_scaling_rules.push_back(ErrorScalingRule(threshold, scale));
+        }
+    }
+    
+    // Add default rules if none loaded
+    if (error_scaling_rules.empty()) {
+        error_scaling_rules.push_back(ErrorScalingRule(150.0f, 0.3f));
+        error_scaling_rules.push_back(ErrorScalingRule(100.0f, 0.5f));
+        error_scaling_rules.push_back(ErrorScalingRule(50.0f, 0.8f));
+    }
 
     use_predictive_controller = get_bool_ini("PID", "use_predictive_controller", true);
     prediction_time_ms = static_cast<float>(get_double_ini("PID", "prediction_time_ms", 50.0));
@@ -504,6 +533,15 @@ bool Config::saveConfig(const std::string& filename)
     file << "kd_y = " << kd_y << "\n";
     file << "pid_derivative_smoothing = " << pid_derivative_smoothing << "\n";
     file << "enable_adaptive_pid = " << (enable_adaptive_pid ? "true" : "false") << "\n";
+    file << "enable_snap_aim = " << (enable_snap_aim ? "true" : "false") << "\n";
+    
+    // Save error scaling rules
+    file << "error_scaling_rule_count = " << error_scaling_rules.size() << "\n";
+    for (size_t i = 0; i < error_scaling_rules.size(); i++) {
+        std::string prefix = "error_scaling_rule_" + std::to_string(i) + "_";
+        file << prefix << "threshold = " << error_scaling_rules[i].error_threshold << "\n";
+        file << prefix << "scale = " << error_scaling_rules[i].scale_factor << "\n";
+    }
     file << "use_predictive_controller = " << (use_predictive_controller ? "true" : "false") << "\n";
     file << "prediction_time_ms = " << prediction_time_ms << "\n";
     file << "kalman_process_noise = " << kalman_process_noise << "\n";
