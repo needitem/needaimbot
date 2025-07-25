@@ -13,6 +13,9 @@
 #include <chrono>
 #include <atomic>
 #include <random>
+#include <queue>
+#include <thread>
+#include <condition_variable>
 
 #include "config/config.h"
 #include "aimbot_components/AimbotTarget.h"
@@ -89,10 +92,6 @@ private:
     float accumulated_x_ = 0.0f;
     float accumulated_y_ = 0.0f;
     
-    // Dithering for improved sub-pixel accuracy
-    mutable std::mt19937 dither_rng_{std::random_device{}()};
-    mutable std::uniform_real_distribution<float> dither_dist_{-0.5f, 0.5f};
-    
     // Latency compensation
     static constexpr int LATENCY_HISTORY_SIZE = 10;
     std::vector<float> input_latency_history_;
@@ -116,6 +115,24 @@ private:
     static constexpr float PREDICTION_TIME_FACTOR = 0.001f;
     static constexpr float SMOOTHING_INCREASE_FACTOR = 0.001f;
     static constexpr float MAX_ADDITIONAL_SMOOTHING = 0.4f;
+    
+    // Async mouse input queue system
+    struct MouseCommand {
+        enum Type { MOVE, PRESS, RELEASE };
+        Type type;
+        int dx;
+        int dy;
+        std::chrono::high_resolution_clock::time_point timestamp;
+    };
+    
+    std::queue<MouseCommand> mouse_command_queue_;
+    mutable std::mutex queue_mutex_;
+    std::condition_variable queue_cv_;
+    std::thread async_input_thread_;
+    std::atomic<bool> should_stop_thread_{false};
+    
+    void asyncInputWorker();
+    void enqueueMouseCommand(MouseCommand::Type type, int dx = 0, int dy = 0);
 
     float calculateTargetDistanceSquared(const AimbotTarget &target) const;
     void initializeInputMethod(SerialConnection *serialConnection, MakcuConnection *makcuConnection, GhubMouse *gHub);
