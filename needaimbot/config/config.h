@@ -209,6 +209,17 @@ public:
     
     float pid_derivative_smoothing;
     bool enable_adaptive_pid;
+    bool enable_snap_aim;  // Use snap aim for fastest targeting
+    
+    // Error-based scaling for jitter and overshoot control
+    struct ErrorScalingRule {
+        float error_threshold;  // Error magnitude threshold
+        float scale_factor;     // Scale factor to apply (0.0 - 1.0)
+        
+        ErrorScalingRule(float threshold = 0.0f, float scale = 1.0f) 
+            : error_threshold(threshold), scale_factor(scale) {}
+    };
+    std::vector<ErrorScalingRule> error_scaling_rules;
 
     
     bool use_predictive_controller;
