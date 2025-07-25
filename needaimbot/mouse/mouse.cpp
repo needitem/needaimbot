@@ -51,10 +51,6 @@ void InitializeHighPrecisionTimer() {
     if (!freq_initialized) {
         QueryPerformanceFrequency(&freq);
         freq_initialized = true;
-        // Reduced priority to prevent excessive CPU usage
-        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
-        // Remove CPU core affinity to allow OS scheduling
-        // SetThreadAffinityMask(GetCurrentThread(), 1 << 1);
     }
 }
 
@@ -100,9 +96,23 @@ MouseThread::MouseThread(
     pid_controller = std::make_unique<PIDController2D>(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
     kalman_filter = std::make_unique<TargetKalmanFilter>();
     initializeInputMethod(serialConnection, makcuConnection, gHub);
+    
+    // Start async input worker thread
+    async_input_thread_ = std::thread(&MouseThread::asyncInputWorker, this);
 }
 
-MouseThread::~MouseThread() = default;
+MouseThread::~MouseThread() {
+    // Stop the async worker thread
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        should_stop_thread_ = true;
+    }
+    queue_cv_.notify_all();
+    
+    if (async_input_thread_.joinable()) {
+        async_input_thread_.join();
+    }
+}
 
 void MouseThread::initializeInputMethod(SerialConnection *serialConnection, MakcuConnection *makcuConnection, GhubMouse *gHub)
 {
@@ -425,60 +435,40 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         move_x = raw_move_x;
         move_y = raw_move_y;
         
-        // Enhanced predictive braking system with look-ahead
-        // Calculate current velocity (pixels per frame)
-        float current_velocity = std::sqrt(move_x * move_x + move_y * move_y);
-        
-        // Project where we'll be after this movement
-        float projected_error_x = error_x - move_x;
-        float projected_error_y = error_y - move_y;
-        float projected_distance = std::sqrt(projected_error_x * projected_error_x + projected_error_y * projected_error_y);
-        
-        // If we're going to overshoot (projected distance > current distance), brake hard
-        if (projected_distance > error_magnitude && error_magnitude < 15.0f) {
-            // We're about to overshoot - emergency brake
-            float emergency_brake = 0.2f + (error_magnitude / 15.0f) * 0.3f;  // 0.2 to 0.5
-            move_x *= emergency_brake;
-            move_y *= emergency_brake;
-        }
-        else if (error_magnitude < 25.0f) {
-            // Close range - calculate precise stopping distance
-            const float DECELERATION_RATE = 0.7f;  // How quickly we can decelerate per frame
+        // Simplified predictive braking system
+        // Use exponential decay based on distance for smooth deceleration
+        if (error_magnitude < 30.0f) {
+            // Apply exponential braking curve for close targets
+            // This provides smooth deceleration without complex calculations
+            float brake_factor = 1.0f - std::exp(-error_magnitude / 10.0f);
+            brake_factor = std::max(0.15f, brake_factor); // Minimum 15% speed to avoid getting stuck
             
-            // Calculate frames needed to stop at current velocity
-            float frames_to_stop = current_velocity / (current_velocity * (1.0f - DECELERATION_RATE));
-            float stopping_distance = current_velocity * frames_to_stop * 0.5f;  // Average velocity during deceleration
-            
-            // Start braking earlier for high velocity movements
-            if (stopping_distance > error_magnitude * 0.6f) {
-                // Smooth braking based on how much we need to slow down
-                float brake_strength = 1.0f - (error_magnitude / stopping_distance);
-                float brake_factor = 1.0f - (brake_strength * brake_strength * 0.7f);  // Quadratic for smooth braking
-                move_x *= brake_factor;
-                move_y *= brake_factor;
-            }
+            move_x *= brake_factor;
+            move_y *= brake_factor;
         }
     }
 
-    // Store previous movement for direction change detection
-    static float prev_move_x = 0.0f;
-    static float prev_move_y = 0.0f;
+    // Simplified overshoot prevention using momentum dampening
+    // Instead of harsh direction change detection, use smooth momentum tracking
+    static float momentum_x = 0.0f;
+    static float momentum_y = 0.0f;
     
-    // Detect direction reversal (sign change) which indicates potential overshoot
-    bool x_direction_changed = (prev_move_x * move_x < 0) && (std::abs(prev_move_x) > 1.0f);
-    bool y_direction_changed = (prev_move_y * move_y < 0) && (std::abs(prev_move_y) > 1.0f);
+    // Update momentum with smoothing (acts as a low-pass filter to reduce jitter)
+    const float momentum_alpha = 0.7f; // Higher = more responsive, lower = more smooth
+    momentum_x = momentum_alpha * move_x + (1.0f - momentum_alpha) * momentum_x;
+    momentum_y = momentum_alpha * move_y + (1.0f - momentum_alpha) * momentum_y;
     
-    if (x_direction_changed && error_magnitude < 20.0f) {
-        // Direction reversed on X axis - likely overshooting
-        move_x *= 0.3f;  // Drastically reduce but don't stop completely
+    // If we're very close and momentum is opposing error direction, dampen it
+    if (error_magnitude < 15.0f) {
+        // Check if momentum opposes the error (potential overshoot)
+        float momentum_dot_error = (momentum_x * error_x + momentum_y * error_y);
+        if (momentum_dot_error < 0) {
+            // Momentum is pointing away from target - apply dampening
+            float dampen_factor = 0.5f + 0.5f * (error_magnitude / 15.0f);
+            move_x *= dampen_factor;
+            move_y *= dampen_factor;
+        }
     }
-    if (y_direction_changed && error_magnitude < 20.0f) {
-        // Direction reversed on Y axis - likely overshooting
-        move_y *= 0.3f;  // Drastically reduce but don't stop completely
-    }
-    
-    prev_move_x = move_x;
-    prev_move_y = move_y;
     
     // Apply dead zone with adaptive threshold based on error magnitude
     float adaptive_dead_zone = DEAD_ZONE * (1.0f + std::min(1.0f, 10.0f / (error_magnitude + 1.0f)));
@@ -493,21 +483,8 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     }
 
     if (dx_int != 0 || dy_int != 0) {
-        std::lock_guard<std::mutex> lock(input_method_mutex);
-        if (input_method && input_method->isValid()) {
-            // Skip timing measurements if not needed
-            if (ctx.config.verbose || ctx.config.show_metrics) {
-                auto input_send_start_time = std::chrono::steady_clock::now();
-                input_method->move(dx_int, dy_int);
-                auto input_send_end_time = std::chrono::steady_clock::now();
-                float input_send_duration_ms = std::chrono::duration<float, std::milli>(input_send_end_time - input_send_start_time).count();
-                ctx.g_current_input_send_time_ms.store(input_send_duration_ms, std::memory_order_relaxed);
-                ctx.add_to_history(ctx.g_input_send_time_history, input_send_duration_ms, ctx.g_input_send_history_mutex);
-            } else {
-                input_method->move(dx_int, dy_int);
-            }
-            
-        }
+        // Use async queue instead of direct call
+        enqueueMouseCommand(MouseCommand::MOVE, dx_int, dy_int);
     }
     
     // Calculate pure detection-to-movement time (excluding FPS waiting)
@@ -520,7 +497,6 @@ void MouseThread::moveMouse(const AimbotTarget &target)
 void MouseThread::pressMouse(const AimbotTarget &target)
 {
     auto& ctx = AppContext::getInstance();
-    std::lock_guard<std::mutex> lock(input_method_mutex);
 
     // For triggerbot, use a more lenient scope check (1.5x the normal multiplier)
     float triggerbot_scope_multiplier = bScope_multiplier * 1.5f;
@@ -534,15 +510,8 @@ void MouseThread::pressMouse(const AimbotTarget &target)
         
         // Only press if at least 50ms have passed since last release
         if (time_since_release > 50.0f) {
-            if (input_method && input_method->isValid())
-            {
-                auto input_press_start_time = std::chrono::steady_clock::now();
-                input_method->press();
-                auto input_press_end_time = std::chrono::steady_clock::now();
-                float press_duration_ms = std::chrono::duration<float, std::milli>(input_press_end_time - input_press_start_time).count();
-                ctx.g_current_input_send_time_ms.store(press_duration_ms, std::memory_order_relaxed); 
-                ctx.add_to_history(ctx.g_input_send_time_history, press_duration_ms, ctx.g_input_send_history_mutex);
-            }
+            // Use async queue instead of direct call
+            enqueueMouseCommand(MouseCommand::PRESS);
             mouse_pressed = true;
             last_mouse_press_time = now;
         }
@@ -563,17 +532,8 @@ void MouseThread::releaseMouse()
     if (time_since_press < 100.0f)
         return;
 
-    std::lock_guard<std::mutex> lock(input_method_mutex);
-
-    if (input_method && input_method->isValid())
-    {
-        auto input_release_start_time = std::chrono::steady_clock::now();
-        input_method->release();
-        auto input_release_end_time = std::chrono::steady_clock::now();
-        float release_duration_ms = std::chrono::duration<float, std::milli>(input_release_end_time - input_release_start_time).count();
-        ctx.g_current_input_send_time_ms.store(release_duration_ms, std::memory_order_relaxed); 
-        ctx.add_to_history(ctx.g_input_send_time_history, release_duration_ms, ctx.g_input_send_history_mutex);
-    }
+    // Use async queue instead of direct call
+    enqueueMouseCommand(MouseCommand::RELEASE);
     mouse_pressed = false;
     last_mouse_release_time = now;
 }
@@ -840,27 +800,14 @@ std::pair<int, int> MouseThread::processAccumulatedMovement(float move_x, float 
     
     int dx_int = 0, dy_int = 0;
     
-    // Add dithering to improve sub-pixel accuracy and reduce stepping artifacts
-    float dithered_x = accumulated_x_;
-    float dithered_y = accumulated_y_;
-    
-    // Apply dithering if enabled
-    {
-        auto& ctx = AppContext::getInstance();
-        std::lock_guard<std::mutex> lock(ctx.configMutex);
-        if (ctx.config.enable_subpixel_dithering) {
-            dithered_x += dither_dist_(dither_rng_) * ctx.config.dither_strength;
-            dithered_y += dither_dist_(dither_rng_) * ctx.config.dither_strength;
-        }
-    }
-    
+    // Simple rounding without dithering (dithering was ineffective)
     // Only move when accumulated movement exceeds threshold
-    if (std::abs(dithered_x) >= MICRO_MOVEMENT_THRESHOLD) {
-        dx_int = static_cast<int>(std::round(dithered_x));
+    if (std::abs(accumulated_x_) >= MICRO_MOVEMENT_THRESHOLD) {
+        dx_int = static_cast<int>(std::round(accumulated_x_));
         accumulated_x_ -= dx_int;
     }
-    if (std::abs(dithered_y) >= MICRO_MOVEMENT_THRESHOLD) {
-        dy_int = static_cast<int>(std::round(dithered_y));
+    if (std::abs(accumulated_y_) >= MICRO_MOVEMENT_THRESHOLD) {
+        dy_int = static_cast<int>(std::round(accumulated_y_));
         accumulated_y_ -= dy_int;
     }
     
@@ -955,9 +902,6 @@ float MouseThread::calculateAdaptiveScale(float error_magnitude) const
 void MouseThread::applyRecoilCompensationInternal(float strength, float delay_ms)
 {
     auto& ctx = AppContext::getInstance();
-    if (!input_method || !input_method->isValid()) {
-        return;
-    }
 
     if (std::abs(strength) < 1e-3f) {
         return;
@@ -968,18 +912,12 @@ void MouseThread::applyRecoilCompensationInternal(float strength, float delay_ms
     auto required_delay = std::chrono::milliseconds(static_cast<long long>(delay_ms));
 
     if (elapsed >= required_delay) {
-        std::lock_guard<std::mutex> lock(input_method_mutex); 
-        
         // Apply strength directly without accumulation to prevent over-compensation
         int dy_recoil = static_cast<int>(std::round(strength));
         
         if (dy_recoil != 0) {
-            auto recoil_send_start_time = std::chrono::steady_clock::now();
-            input_method->move(0, dy_recoil);
-            auto recoil_send_end_time = std::chrono::steady_clock::now();
-            float recoil_send_duration_ms = std::chrono::duration<float, std::milli>(recoil_send_end_time - recoil_send_start_time).count();
-            ctx.g_current_input_send_time_ms.store(recoil_send_duration_ms, std::memory_order_relaxed);
-            ctx.add_to_history(ctx.g_input_send_time_history, recoil_send_duration_ms, ctx.g_input_send_history_mutex);
+            // Use async queue instead of direct call
+            enqueueMouseCommand(MouseCommand::MOVE, 0, dy_recoil);
         }
         
         last_recoil_compensation_time = now_chrono_recoil;
@@ -1023,4 +961,83 @@ void MouseThread::resetAccumulatedStates()
     // Reset accumulated movement
     accumulated_x_ = 0.0f;
     accumulated_y_ = 0.0f;
+}
+
+void MouseThread::asyncInputWorker()
+{
+    auto& ctx = AppContext::getInstance();
+    
+    while (!should_stop_thread_.load()) {
+        std::unique_lock<std::mutex> lock(queue_mutex_);
+        
+        // Wait for commands or stop signal
+        queue_cv_.wait(lock, [this] {
+            return !mouse_command_queue_.empty() || should_stop_thread_.load();
+        });
+        
+        // Process all pending commands
+        while (!mouse_command_queue_.empty() && !should_stop_thread_.load()) {
+            MouseCommand cmd = mouse_command_queue_.front();
+            mouse_command_queue_.pop();
+            
+            // Release lock while executing command
+            lock.unlock();
+            
+            // Execute command based on type
+            {
+                std::lock_guard<std::mutex> input_lock(input_method_mutex);
+                if (input_method && input_method->isValid()) {
+                    auto exec_start = std::chrono::high_resolution_clock::now();
+                    
+                    switch (cmd.type) {
+                        case MouseCommand::MOVE:
+                            if (cmd.dx != 0 || cmd.dy != 0) {
+                                input_method->move(cmd.dx, cmd.dy);
+                            }
+                            break;
+                        case MouseCommand::PRESS:
+                            input_method->press();
+                            break;
+                        case MouseCommand::RELEASE:
+                            input_method->release();
+                            break;
+                    }
+                    
+                    // Track performance if needed
+                    if (ctx.config.verbose || ctx.config.show_metrics) {
+                        auto exec_end = std::chrono::high_resolution_clock::now();
+                        float exec_duration_ms = std::chrono::duration<float, std::milli>(exec_end - exec_start).count();
+                        ctx.g_current_input_send_time_ms.store(exec_duration_ms, std::memory_order_relaxed);
+                        ctx.add_to_history(ctx.g_input_send_time_history, exec_duration_ms, ctx.g_input_send_history_mutex);
+                        
+                        // Also track queue latency (time from enqueue to execution)
+                        float queue_latency_ms = std::chrono::duration<float, std::milli>(exec_start - cmd.timestamp).count();
+                        // You can add a new metric for queue latency if needed
+                    }
+                }
+            }
+            
+            // Reacquire lock for next iteration
+            lock.lock();
+        }
+    }
+}
+
+void MouseThread::enqueueMouseCommand(MouseCommand::Type type, int dx, int dy)
+{
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        
+        // Add command to queue with timestamp
+        MouseCommand cmd;
+        cmd.type = type;
+        cmd.dx = dx;
+        cmd.dy = dy;
+        cmd.timestamp = std::chrono::high_resolution_clock::now();
+        
+        mouse_command_queue_.push(cmd);
+    }
+    
+    // Notify worker thread
+    queue_cv_.notify_one();
 }
