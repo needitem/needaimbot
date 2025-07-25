@@ -462,6 +462,15 @@ int main()
         // 안전한 종료 시퀀스
         std::cout << "[MAIN] Initiating safe shutdown..." << std::endl;
         
+        // 1. 입력 메서드 명시적 정리 (특히 시리얼 연결)
+        if (ctx.global_mouse_thread) {
+            std::cout << "[MAIN] Cleaning up input method..." << std::endl;
+            // 마우스 릴리스 확인
+            ctx.global_mouse_thread->releaseMouse();
+            // 입력 메서드 안전하게 종료
+            ctx.global_mouse_thread->setInputMethod(nullptr);
+        }
+        
         // 2. 검출기 중지
         if (ctx.detector) {
             ctx.detector->stop();
@@ -503,6 +512,20 @@ int main()
             ctx.detector = nullptr;
             std::cout << "[MAIN] Detector resources cleaned up." << std::endl;
         }
+        
+        // 5. Windows 마우스 상태 정리
+        std::cout << "[MAIN] Resetting Windows mouse state..." << std::endl;
+        // 마우스 버튼이 눌려있을 수 있으므로 강제로 릴리스
+        INPUT input = {0};
+        input.type = INPUT_MOUSE;
+        input.mi.dwFlags = MOUSEEVENTF_LEFTUP | MOUSEEVENTF_RIGHTUP | MOUSEEVENTF_MIDDLEUP;
+        SendInput(1, &input, sizeof(INPUT));
+        
+        // 마우스 위치를 현재 위치로 초기화 (움직임 없음)
+        input.mi.dwFlags = MOUSEEVENTF_MOVE;
+        input.mi.dx = 0;
+        input.mi.dy = 0;
+        SendInput(1, &input, sizeof(INPUT));
         
         std::cout << "[MAIN] Safe shutdown completed." << std::endl;
         std::exit(0);
