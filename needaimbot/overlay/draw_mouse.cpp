@@ -14,6 +14,134 @@
 
 std::string ghub_version = get_ghub_version();
 
+static void draw_error_scaling_controls()
+{
+    auto& ctx = AppContext::getInstance();
+    
+    UIHelpers::BeginCard("Error-Based Scaling");
+    
+    UIHelpers::BeautifulText("Reduces jitter when error is large (recoil compensation)", UIHelpers::GetAccentColor(0.8f));
+    UIHelpers::CompactSpacer();
+    
+    // Static temporary rules for editing
+    static std::vector<Config::ErrorScalingRule> temp_rules = ctx.config.error_scaling_rules;
+    static bool has_unsaved_changes = false;
+    
+    // Display current rules
+    ImGui::Text("Current Scaling Rules:");
+    ImGui::SameLine();
+    
+    // Show unsaved changes indicator
+    if (has_unsaved_changes) {
+        ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "(Unsaved Changes)");
+    }
+    
+    UIHelpers::CompactSpacer();
+    
+    // Sort rules by threshold for display
+    std::sort(temp_rules.begin(), temp_rules.end(), 
+        [](const Config::ErrorScalingRule& a, const Config::ErrorScalingRule& b) {
+            return a.error_threshold > b.error_threshold;
+        });
+    
+    // Table for rules
+    if (ImGui::BeginTable("error_scaling_table", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+        ImGui::TableSetupColumn("Error Threshold", ImGuiTableColumnFlags_WidthFixed, 120);
+        ImGui::TableSetupColumn("Scale Factor", ImGuiTableColumnFlags_WidthFixed, 100);
+        ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_WidthFixed, 80);
+        ImGui::TableHeadersRow();
+        
+        for (size_t i = 0; i < temp_rules.size(); i++) {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            
+            ImGui::PushID(static_cast<int>(i));
+            
+            float threshold = temp_rules[i].error_threshold;
+            if (ImGui::InputFloat("##threshold", &threshold, 0.0f, 0.0f, "%.0f")) {
+                temp_rules[i].error_threshold = threshold;
+                has_unsaved_changes = true;
+            }
+            
+            ImGui::TableSetColumnIndex(1);
+            float scale = temp_rules[i].scale_factor * 100.0f; // Convert to percentage
+            if (ImGui::SliderFloat("##scale", &scale, 0.0f, 100.0f, "%.0f%%")) {
+                temp_rules[i].scale_factor = scale / 100.0f;
+                has_unsaved_changes = true;
+            }
+            
+            ImGui::TableSetColumnIndex(2);
+            if (ImGui::Button("Remove##remove")) {
+                temp_rules.erase(temp_rules.begin() + i);
+                has_unsaved_changes = true;
+            }
+            
+            ImGui::PopID();
+        }
+        
+        ImGui::EndTable();
+    }
+    
+    UIHelpers::Spacer();
+    
+    // Add new rule
+    static float new_threshold = 200.0f;
+    static float new_scale = 30.0f;
+    
+    ImGui::Text("Add New Rule:");
+    ImGui::PushItemWidth(100);
+    ImGui::InputFloat("Threshold", &new_threshold, 0.0f, 0.0f, "%.0f");
+    ImGui::SameLine();
+    ImGui::InputFloat("Scale %", &new_scale, 0.0f, 0.0f, "%.0f");
+    ImGui::PopItemWidth();
+    ImGui::SameLine();
+    
+    if (ImGui::Button("Add Rule")) {
+        temp_rules.push_back(Config::ErrorScalingRule(new_threshold, new_scale / 100.0f));
+        has_unsaved_changes = true;
+    }
+    
+    UIHelpers::Spacer();
+    
+    // Apply and Cancel buttons
+    if (has_unsaved_changes) {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.7f, 0.0f, 0.9f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.0f, 0.8f, 0.0f, 1.0f));
+        if (ImGui::Button("Apply Changes", ImVec2(120, 0))) {
+            // Apply changes to actual config
+            ctx.config.error_scaling_rules = temp_rules;
+            ctx.config.saveConfig();
+            has_unsaved_changes = false;
+        }
+        ImGui::PopStyleColor(2);
+        
+        ImGui::SameLine();
+        
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.0f, 0.0f, 0.9f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.0f, 0.0f, 1.0f));
+        if (ImGui::Button("Cancel", ImVec2(80, 0))) {
+            // Revert to saved config
+            temp_rules = ctx.config.error_scaling_rules;
+            has_unsaved_changes = false;
+        }
+        ImGui::PopStyleColor(2);
+    } else {
+        // Reset button when no changes
+        if (ImGui::Button("Reset to Defaults", ImVec2(150, 0))) {
+            temp_rules.clear();
+            temp_rules.push_back(Config::ErrorScalingRule(150.0f, 0.3f));
+            temp_rules.push_back(Config::ErrorScalingRule(100.0f, 0.5f));
+            temp_rules.push_back(Config::ErrorScalingRule(50.0f, 0.8f));
+            has_unsaved_changes = true;
+        }
+    }
+    
+    UIHelpers::Spacer();
+    UIHelpers::BeautifulText("Tip: Higher error thresholds apply first. When error >= threshold, movement is scaled down.", UIHelpers::GetAccentColor(0.6f));
+    
+    UIHelpers::EndCard();
+}
+
 static void draw_pid_controls()
 {
     auto& ctx = AppContext::getInstance();
@@ -107,34 +235,7 @@ static void draw_pid_controls()
     UIHelpers::EndCard();
 }
 
-static void draw_advanced_settings()
-{
-    auto& ctx = AppContext::getInstance();
-    
-    UIHelpers::BeginCard("Advanced Prediction Settings");
-    
-    if (UIHelpers::EnhancedSliderFloat("Prediction Factor", &ctx.config.prediction_time_factor, 0.0001f, 0.01f, "%.4f",
-                                      "How much prediction is applied based on target distance. Higher values = more aggressive prediction.")) {
-        ctx.config.saveConfig();
-    }
-    
-    UIHelpers::Spacer();
-    
-    if (UIHelpers::BeautifulToggle("Latency Compensation", &ctx.config.enable_latency_compensation,
-                                   "Compensates for system latency (input lag, display lag, processing delay). Improves tracking of fast-moving targets.")) {
-        ctx.config.saveConfig();
-    }
-    
-    if (ctx.config.enable_latency_compensation) {
-        UIHelpers::Spacer(8.0f);
-        if (UIHelpers::EnhancedSliderFloat("System Latency (ms)", &ctx.config.system_latency_ms, 5.0f, 100.0f, "%.1f",
-                                          "Estimated total system latency including input lag, display lag, and processing delay. Adjust based on your setup.")) {
-            ctx.config.saveConfig();
-        }
-    }
-    
-    UIHelpers::EndCard();
-}
+// Advanced settings removed - keeping code simple
 
 
 static void draw_input_method_settings()
@@ -402,51 +503,12 @@ void draw_mouse()
     
     UIHelpers::BeginTwoColumnLayout(0.65f);
     
-    // Left column - Controller settings
-    UIHelpers::BeginCard("Controller Settings");
-    
-    if (UIHelpers::BeautifulToggle("Use Kalman Filter", &ctx.config.use_predictive_controller,
-                                   "Enable Kalman filter for advanced target prediction. Provides smoother tracking and better handling of fast-moving targets.")) {
-        ctx.config.saveConfig();
-    }
-    
-    // Show predictive settings directly under the toggle when enabled
-    if (ctx.config.use_predictive_controller) {
-        UIHelpers::Spacer(8.0f);
-        UIHelpers::SettingsSubHeader("Kalman Filter Settings");
-        
-        // Prediction Time
-        ImGui::Text("Prediction Time (ms)");
-        if (UIHelpers::EnhancedSliderFloat("##prediction_time", &ctx.config.prediction_time_ms, 1.0f, 100.0f, "%.1f",
-                                          "How far ahead to predict target movement. Higher values work better for fast-moving targets.")) {
-            ctx.config.saveConfig();
-        }
-        
-        UIHelpers::CompactSpacer();
-        
-        // Measurement Noise only - simplified for users
-        ImGui::Text("Filter Strength");
-        if (UIHelpers::EnhancedSliderFloat("##measurement_noise", &ctx.config.kalman_measurement_noise, 1.0f, 20.0f, "%.1f",
-                                          "Lower values = smoother tracking but less responsive. Higher values = more responsive but may be jittery.")) {
-            ctx.config.saveConfig();
-        }
-    }
-    
-    UIHelpers::Spacer();
-    UIHelpers::SettingsSubHeader("PID Controller Settings");
-    
-    if (UIHelpers::EnhancedSliderFloat("Derivative Smoothing", &ctx.config.pid_derivative_smoothing, 0.0f, 1.0f, "%.3f",
-                                      "Smooths PID derivative calculation to reduce noise. Higher values = more smoothing but slower response to rapid changes.")) {
-        ctx.config.saveConfig();
-    }
-    
-    UIHelpers::EndCard();
-    UIHelpers::CompactSpacer();
+    // Left column - PID settings and error scaling
     
     draw_pid_controls();
     UIHelpers::CompactSpacer();
     
-    draw_advanced_settings();
+    draw_error_scaling_controls();
     UIHelpers::CompactSpacer();
     
     draw_input_method_settings();
@@ -462,9 +524,10 @@ void draw_mouse()
     UIHelpers::BeautifulText("PID Tuning Tips", UIHelpers::GetAccentColor());
     UIHelpers::CompactSpacer();
     
-    ImGui::BulletText("Start with Kp, then add Kd to reduce oscillation");
-    ImGui::BulletText("Use Ki sparingly - too much causes overshoot");
-    ImGui::BulletText("Increase smoothing if you experience jitter");
+    ImGui::BulletText("Start with Kp (proportional) for basic tracking");
+    ImGui::BulletText("Add Kd (derivative) to reduce oscillation");
+    ImGui::BulletText("Use Ki (integral) sparingly to fix drift");
+    ImGui::BulletText("Lower values = smoother, Higher values = faster");
     
     UIHelpers::CompactSpacer();
     
