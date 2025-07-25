@@ -398,9 +398,9 @@ bool SerialConnection::configurePort()
     const char* move_cmd = "m0,0\n";
     
     DWORD bytes_written;
-    WriteFile(serial_handle_, release_cmd, strlen(release_cmd), &bytes_written, NULL);
+    WriteFile(serial_handle_, release_cmd, static_cast<DWORD>(strlen(release_cmd)), &bytes_written, NULL);
     Sleep(10);
-    WriteFile(serial_handle_, move_cmd, strlen(move_cmd), &bytes_written, NULL);
+    WriteFile(serial_handle_, move_cmd, static_cast<DWORD>(strlen(move_cmd)), &bytes_written, NULL);
     Sleep(10);
     
     return true;
