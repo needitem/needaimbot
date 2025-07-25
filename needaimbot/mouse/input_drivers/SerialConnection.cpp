@@ -7,6 +7,7 @@
 #include <chrono>
 #include <set>
 #include <future>
+#include <cstring>
 
 #include "needaimbot.h"
 #include "SerialConnection.h"
@@ -57,8 +58,12 @@ SerialConnection::SerialConnection(const std::string& port, unsigned int baud_ra
                   << " (Native Windows API - Ultra Low Latency)" << std::endl;
         
     } catch (const std::exception& e) {
-        // 초기화 실패 시 모든 자원 정리
-        cleanup();
+        // 초기화 실패 시 간단한 정리만 수행 (스레드는 아직 생성되지 않음)
+        if (serial_handle_ != INVALID_HANDLE_VALUE) {
+            CloseHandle(serial_handle_);
+            serial_handle_ = INVALID_HANDLE_VALUE;
+        }
+        is_open_ = false;
         std::cerr << "[Arduino] Initialization error: " << e.what() << std::endl;
         // 객체는 생성되지만 is_open_은 false로 유지됨
     }
@@ -101,9 +106,13 @@ void SerialConnection::safeSerialClose() {
         // 1. 즉시 I/O 취소 (강제 종료 대비)
         CancelIo(serial_handle_);
         
-        // 2. 단순한 릴리스 명령만 전송 (Arduino가 실제로 지원하는 명령)
-        std::cout << "[Arduino] Sending release command..." << std::endl;
-        sendCommand("r");
+        // 2. Arduino를 안전한 상태로 리셋 - 여러 명령 전송
+        std::cout << "[Arduino] Resetting Arduino to safe state..." << std::endl;
+        sendCommand("r");  // 마우스 릴리스
+        Sleep(10);
+        sendCommand("m0,0\n");  // 움직임 중지
+        Sleep(10);
+        sendCommand("r");  // 한 번 더 릴리스 확인
         Sleep(50);
         
         // 3. 출력 버퍼 플러시 (전송 완료 보장)
@@ -117,9 +126,11 @@ void SerialConnection::safeSerialClose() {
             std::cerr << "[Arduino] Warning: PurgeComm failed" << std::endl;
         }
         
-        // 5. DTR/RTS 라인 상태 유지 (Arduino 리셋 방지)
-        // DTR/RTS 조작을 제거 - 이는 Arduino를 리셋시킬 수 있음
-        // 대부분의 Arduino 보드는 DTR 라인 변경 시 자동 리셋됨
+        // 5. DTR/RTS 라인 상태를 명시적으로 설정 (Arduino 안정화)
+        // DTR과 RTS를 LOW로 설정하여 Arduino가 깨끗한 상태를 유지하도록 함
+        EscapeCommFunction(serial_handle_, CLRDTR);
+        EscapeCommFunction(serial_handle_, CLRRTS);
+        Sleep(10);
         
         // 7. 짧은 대기
         Sleep(50);
@@ -337,14 +348,14 @@ bool SerialConnection::configurePort()
     dcb_config_.fParity = FALSE;
     dcb_config_.fOutxCtsFlow = FALSE;
     dcb_config_.fOutxDsrFlow = FALSE;
-    dcb_config_.fDtrControl = DTR_CONTROL_ENABLE;   // Arduino 호환을 위해 활성화
+    dcb_config_.fDtrControl = DTR_CONTROL_DISABLE;   // Arduino 리셋 방지
     dcb_config_.fDsrSensitivity = FALSE;
     dcb_config_.fTXContinueOnXoff = FALSE;
     dcb_config_.fOutX = FALSE;
     dcb_config_.fInX = FALSE;
     dcb_config_.fErrorChar = FALSE;
     dcb_config_.fNull = FALSE;
-    dcb_config_.fRtsControl = RTS_CONTROL_ENABLE;   // Arduino 호환을 위해 활성화
+    dcb_config_.fRtsControl = RTS_CONTROL_DISABLE;   // Arduino 리셋 방지
     dcb_config_.fAbortOnError = FALSE;
 
     if (!SetCommState(serial_handle_, &dcb_config_)) {
@@ -378,6 +389,20 @@ bool SerialConnection::configurePort()
     PurgeComm(serial_handle_, PURGE_RXCLEAR | PURGE_TXCLEAR);
 
     is_open_ = true;
+    
+    // Arduino 초기화 명령 전송 (is_open_ = true 이후)
+    Sleep(100);  // Arduino 부팅 대기
+    
+    // 직접 write 호출 (sendCommand는 write를 호출하는데 write는 is_open을 체크함)
+    const char* release_cmd = "r";
+    const char* move_cmd = "m0,0\n";
+    
+    DWORD bytes_written;
+    WriteFile(serial_handle_, release_cmd, strlen(release_cmd), &bytes_written, NULL);
+    Sleep(10);
+    WriteFile(serial_handle_, move_cmd, strlen(move_cmd), &bytes_written, NULL);
+    Sleep(10);
+    
     return true;
 }
 
