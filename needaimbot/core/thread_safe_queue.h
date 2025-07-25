@@ -28,21 +28,24 @@ public:
         {
             std::lock_guard<std::mutex> lock(mutex_);
             queue_.push(std::move(item));
-        }
-        cv_.notify_one();
+        }  // Lock released here
+        cv_.notify_one();  // Notify without holding lock - prevents unnecessary contention
     }
 
     // Try to push with size limit
     bool try_push(T item, size_t max_size) {
+        bool pushed = false;
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (queue_.size() >= max_size) {
-                return false;
+            if (queue_.size() < max_size) {
+                queue_.push(std::move(item));
+                pushed = true;
             }
-            queue_.push(std::move(item));
+        }  // Lock released here
+        if (pushed) {
+            cv_.notify_one();  // Notify without holding lock
         }
-        cv_.notify_one();
-        return true;
+        return pushed;
     }
 
     // Pop item with timeout
@@ -88,8 +91,10 @@ public:
     // Clear all items
     void clear() {
         std::lock_guard<std::mutex> lock(mutex_);
-        std::queue<T> empty;
-        std::swap(queue_, empty);
+        // More efficient than creating empty queue and swapping
+        while (!queue_.empty()) {
+            queue_.pop();
+        }
     }
 
     // Stop the queue (unblock all waiting threads)

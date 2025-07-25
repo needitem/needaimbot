@@ -26,6 +26,10 @@
 #include "mouse/input_drivers/InputMethod.h"
 #include "mouse/input_drivers/kmboxNet.h"
 #include "include/other_tools.h"
+#include "core/thread_manager.h"
+#include "core/sync_manager.h"
+#include "core/error_manager.h"
+#include "core/performance_monitor.h"
 
 
 #ifndef __INTELLISENSE__
@@ -115,7 +119,7 @@ std::unique_ptr<InputMethod> initializeInputMethod() {
 void mouseThreadFunction(MouseThread &mouseThread)
 {
     auto& ctx = AppContext::getInstance();
-    std::cout << "Mouse thread started." << std::endl;
+    LOG_INFO("MouseThread", "Mouse thread started");
     
     // Reduce thread priority to prevent excessive CPU usage
     SetThreadPriority(GetCurrentThread(), Constants::MOUSE_THREAD_PRIORITY);
@@ -156,6 +160,9 @@ void mouseThreadFunction(MouseThread &mouseThread)
         
         {
             std::unique_lock<std::mutex> lock(ctx.detector->detectionMutex);
+            // Performance monitoring for wait time
+            PERF_TIMER("MouseThread.WaitForDetection");
+            
             // Wait with dynamic timeout
             bool wait_result = ctx.detector->detectionCV.wait_for(lock, wait_timeout, [&]() { 
                 return ctx.should_exit || ctx.input_method_changed.load() || 
@@ -225,6 +232,9 @@ void mouseThreadFunction(MouseThread &mouseThread)
                 
                 // Move mouse to target if aimbot is enabled AND aiming key is pressed
                 if (current_aiming && ctx.config.enable_aimbot) {
+                    PERF_TIMER("MouseThread.MoveMouse");
+                    // Enable snap aim if configured
+                    mouseThread.setSnapAimEnabled(ctx.config.enable_snap_aim);
                     mouseThread.moveMouse(target);
                 }
                 
@@ -300,7 +310,7 @@ void mouseThreadFunction(MouseThread &mouseThread)
     }
 
     mouseThread.releaseMouse();
-    std::cout << "Mouse thread exiting." << std::endl;
+    LOG_INFO("MouseThread", "Mouse thread exiting");
 }
 
 bool loadAndValidateModel(std::string& modelName, const std::vector<std::string>& availableModels) {
@@ -352,6 +362,13 @@ static BOOL WINAPI consoleHandler(DWORD signal) {
 int main()
 {
     auto& ctx = AppContext::getInstance();
+    
+    // Set up error handling
+    ErrorManager::getInstance().setCriticalHandler([](const ErrorManager::ErrorEntry& error) {
+        std::cerr << "[CRITICAL ERROR] " << error.component << ": " << error.message << std::endl;
+        // Could trigger emergency shutdown or recovery here
+    });
+    
     try {
         // Set up signal handlers for clean shutdown
         std::signal(SIGINT, signalHandler);
@@ -441,22 +458,54 @@ int main()
         
         ctx.detector->start();
 
-        // Start capture thread
-        std::thread captureThrd(captureThread, ctx.config.detection_resolution, ctx.config.detection_resolution);
-
-        std::thread keyThread(keyboardListener);
-        std::thread mouseMovThread(mouseThreadFunction, std::ref(mouseThread));
-        std::thread overlayThread(OverlayThread);
+        // Create thread managers for better resource management
+        ThreadManager captureThreadMgr("CaptureThread", 
+            [&]() { captureThread(ctx.config.detection_resolution, ctx.config.detection_resolution); },
+            THREAD_PRIORITY_ABOVE_NORMAL);
         
-        SetThreadPriority(keyThread.native_handle(), THREAD_PRIORITY_NORMAL);
-        // Detector thread priorities managed internally
-        SetThreadPriority(mouseMovThread.native_handle(), THREAD_PRIORITY_TIME_CRITICAL);
-        SetThreadPriority(overlayThread.native_handle(), THREAD_PRIORITY_BELOW_NORMAL);
+        ThreadManager keyThreadMgr("KeyboardThread", 
+            keyboardListener,
+            THREAD_PRIORITY_NORMAL);
+        
+        ThreadManager mouseThreadMgr("MouseThread", 
+            [&mouseThread]() { mouseThreadFunction(mouseThread); },
+            THREAD_PRIORITY_TIME_CRITICAL);
+        
+        ThreadManager overlayThreadMgr("OverlayThread", 
+            OverlayThread,
+            THREAD_PRIORITY_BELOW_NORMAL);
+        
+        // Start all threads
+        captureThreadMgr.start();
+        keyThreadMgr.start();
+        mouseThreadMgr.start();
+        overlayThreadMgr.start();
 
         welcome_message();
+        
+        // Start performance monitoring thread
+        ThreadManager perfMonitorMgr("PerformanceMonitor", []() {
+            while (!AppContext::getInstance().should_exit) {
+                std::this_thread::sleep_for(std::chrono::seconds(10));
+                
+                // Log system metrics
+                auto sysMetrics = PerformanceMonitor::getInstance().getSystemMetrics();
+                if (sysMetrics.cpu_usage_percent > 80.0f) {
+                    LOG_WARNING("Performance", "High CPU usage: " + std::to_string(sysMetrics.cpu_usage_percent) + "%");
+                }
+                if (sysMetrics.memory_usage_mb > 1024) {
+                    LOG_WARNING("Performance", "High memory usage: " + std::to_string(sysMetrics.memory_usage_mb) + "MB");
+                }
+                
+                // Log slow operations
+                PerformanceMonitor::getInstance().logSlowOperations();
+            }
+        }, THREAD_PRIORITY_LOWEST);
+        perfMonitorMgr.start();
 
-        if (keyThread.joinable()) {
-            keyThread.join();
+        // Wait for keyboard thread to signal exit
+        while (keyThreadMgr.isRunning() && !ctx.should_exit) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
 
         // 안전한 종료 시퀀스
@@ -476,35 +525,11 @@ int main()
             ctx.detector->stop();
         }
 
-        // 3. 스레드들을 안전하게 종료 (detach 대신 join 사용)
+        // 3. 스레드들을 안전하게 종료 (ThreadManager가 자동으로 처리)
         std::cout << "[MAIN] Waiting for threads to finish..." << std::endl;
         
-        if (captureThrd.joinable()) {
-            try {
-                captureThrd.join();
-                std::cout << "[MAIN] Capture thread joined successfully." << std::endl;
-            } catch (const std::exception& e) {
-                std::cerr << "[MAIN] Error joining capture thread: " << e.what() << std::endl;
-            }
-        }
-
-        if (mouseMovThread.joinable()) {
-            try {
-                mouseMovThread.join();
-                std::cout << "[MAIN] Mouse thread joined successfully." << std::endl;
-            } catch (const std::exception& e) {
-                std::cerr << "[MAIN] Error joining mouse thread: " << e.what() << std::endl;
-            }
-        }
-
-        if (overlayThread.joinable()) {
-            try {
-                overlayThread.join();
-                std::cout << "[MAIN] Overlay thread joined successfully." << std::endl;
-            } catch (const std::exception& e) {
-                std::cerr << "[MAIN] Error joining overlay thread: " << e.what() << std::endl;
-            }
-        }
+        // ThreadManager destructors will automatically stop and join threads
+        // This happens in reverse order of construction (LIFO)
 
         // 4. 자원 정리
         if (ctx.detector) {
@@ -527,7 +552,23 @@ int main()
         input.mi.dy = 0;
         SendInput(1, &input, sizeof(INPUT));
         
-        std::cout << "[MAIN] Safe shutdown completed." << std::endl;
+        // Log final statistics
+        std::cout << "\n[MAIN] Final Statistics:" << std::endl;
+        std::cout << "  Warnings: " << ErrorManager::getInstance().getWarningCount() << std::endl;
+        std::cout << "  Errors: " << ErrorManager::getInstance().getErrorCount() << std::endl;
+        std::cout << "  Critical Errors: " << ErrorManager::getInstance().getCriticalCount() << std::endl;
+        
+        std::cout << "\n[MAIN] Performance Summary:" << std::endl;
+        auto allMetrics = PerformanceMonitor::getInstance().getAllMetrics();
+        for (const auto& [name, metrics] : allMetrics) {
+            if (metrics.sample_count > 0) {
+                std::cout << "  " << name << ": avg=" << metrics.avg_time_ms 
+                          << "ms, min=" << metrics.min_time_ms 
+                          << "ms, max=" << metrics.max_time_ms << "ms" << std::endl;
+            }
+        }
+        
+        std::cout << "\n[MAIN] Safe shutdown completed." << std::endl;
         std::exit(0);
     }
     catch (const std::exception &e)

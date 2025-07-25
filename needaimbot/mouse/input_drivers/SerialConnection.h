@@ -9,6 +9,8 @@
 #include <thread>
 #include <atomic>
 #include <mutex>
+#include <memory>
+#include <chrono>
 
 // Windows Native Serial API - 최고 성능을 위해
 
@@ -31,13 +33,19 @@ public:
     void release();
     void move(int x, int y);
 
-    bool aiming_active;
-    bool shooting_active;
-    bool zooming_active;
+    std::atomic<bool> aiming_active;
+    std::atomic<bool> shooting_active;
+    std::atomic<bool> zooming_active;
 
 private:
     void sendCommand(const std::string& command);
     std::vector<int> splitValue(int value);
+    
+    // Disable copy and move operations for thread safety
+    SerialConnection(const SerialConnection&) = delete;
+    SerialConnection& operator=(const SerialConnection&) = delete;
+    SerialConnection(SerialConnection&&) = delete;
+    SerialConnection& operator=(SerialConnection&&) = delete;
 
     void startTimer();
     void startListening();
@@ -52,7 +60,14 @@ private:
     bool initializeSerial();
     void cleanup();
     void closeHandle();
-    void safeSerialClose();  // wjwwood/serial 방식의 안전한 종료
+    void safeSerialClose();
+    
+    // Helper for thread-safe operations
+    template<typename Func>
+    auto executeThreadSafe(Func&& func) const -> decltype(func()) {
+        std::lock_guard<std::mutex> lock(connection_mutex_);
+        return func();
+    }
 
     HANDLE serial_handle_;
     DCB dcb_config_;
