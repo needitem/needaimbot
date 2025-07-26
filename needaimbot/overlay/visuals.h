@@ -1,7 +1,7 @@
 #ifndef VISUALS_H
 #define VISUALS_H
 
-#include <opencv2/opencv.hpp>
+// OpenCV removed - using custom types
 #include <vector>
 #include "detector.h"
 

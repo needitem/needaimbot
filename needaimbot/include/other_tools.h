@@ -3,7 +3,7 @@
 
 #include <string>
 #include <d3d11.h>
-#include <opencv2/opencv.hpp>
+#include "../cuda/simple_cuda_mat.h"
 
 static inline bool is_base64(unsigned char c);
 std::vector<unsigned char> Base64Decode(const std::string& encoded_string);
@@ -29,6 +29,6 @@ void welcome_message();
 bool checkwin1903();
 
 
-void saveScreenshot(const cv::Mat& frame, const std::string& directory = "screenshots");
+void saveScreenshot(const SimpleMat& frame, const std::string& directory = "screenshots");
 
 #endif 

@@ -3,8 +3,7 @@
 #include <winsock2.h>
 #include <Windows.h>
 
-#include <opencv2/opencv.hpp>
-#include <opencv2/cudaarithm.hpp>
+// OpenCV removed - using custom CUDA processing
 
 #include <iostream>
 #include <atomic>

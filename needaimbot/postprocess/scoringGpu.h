@@ -3,8 +3,7 @@
 
 #include <cuda_runtime.h>
 #include "postProcess.h"
-#include <opencv2/core/cuda.hpp>
-#include <opencv2/core/types.hpp>
+// OpenCV removed - using custom types
 
 struct Detection; 
 
@@ -20,8 +19,7 @@ cudaError_t calculateTargetScoresGpu(
     int head_class_id,
     float crosshair_offset_x,
     float crosshair_offset_y,
-    cudaStream_t stream
-);
+    cudaStream_t stream);
 
 
 cudaError_t findBestTargetGpu(

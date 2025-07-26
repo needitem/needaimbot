@@ -8,12 +8,8 @@
 #include <fstream>
 #include <iostream>
 
-#include <opencv2/opencv.hpp>
-#include <opencv2/dnn.hpp>
-#include <opencv2/cudaimgproc.hpp>
-#include <opencv2/cudaarithm.hpp>
-#include <opencv2/core/cuda.hpp>
-#include <opencv2/core/cuda_stream_accessor.hpp>
+#include "../cuda/cuda_image_processing.h"
+#include "../cuda/cuda_float_processing.h"
 
 #include <NvInfer.h>
 #include <NvOnnxParser.h>
@@ -27,13 +23,13 @@
 #include <cfloat>
 
 #include "detector.h"
-#include "needaimbot.h"
-#include "other_tools.h"
+#include "../needaimbot.h"
+#include "../include/other_tools.h"
 
 #include "../postprocess/postProcess.h"
 #include "../postprocess/scoringGpu.h"
 #include "../postprocess/filterGpu.h"
-#include "config.h"
+#include "../config/config.h"
 
 #if defined(__has_include)
 #  if __has_include(<nvToolsExt.h>)
@@ -346,11 +342,7 @@ bool Detector::initializeCudaContext()
     if (!checkCudaError(cudaStreamCreateWithPriority(&preprocessStream, cudaStreamNonBlocking, (greatestPriority + leastPriority) / 2), "creating preprocess stream")) { m_cudaContextInitialized = false; return false; }
     if (!checkCudaError(cudaStreamCreateWithPriority(&postprocessStream, cudaStreamNonBlocking, (greatestPriority + leastPriority) / 2), "creating postprocess stream")) { m_cudaContextInitialized = false; return false; }
 
-    
-    cvStream = cv::cuda::StreamAccessor::wrapStream(stream);
-    preprocessCvStream = cv::cuda::StreamAccessor::wrapStream(preprocessStream);
-    postprocessCvStream = cv::cuda::StreamAccessor::wrapStream(postprocessStream);
-    
+    // OpenCV streams removed - using native CUDA streams only
     
     if (!checkCudaError(cudaEventCreateWithFlags(&m_preprocessDone, cudaEventDisableTiming), "creating preprocessDone event")) { m_cudaContextInitialized = false; return false; }
     if (!checkCudaError(cudaEventCreateWithFlags(&m_inferenceDone, cudaEventDisableTiming), "creating inferenceDone event")) { m_cudaContextInitialized = false; return false; }
@@ -492,19 +484,19 @@ void Detector::initialize(const std::string& modelFile)
     int h = static_cast<int>(actualInputDims.d[2]);
     int w = static_cast<int>(actualInputDims.d[3]);
     
-    if (resizedBuffer.empty() || resizedBuffer.size() != cv::Size(w, h)) {
-        resizedBuffer.create(h, w, CV_8UC3);
+    if (resizedBuffer.empty() || resizedBuffer.rows() != h || resizedBuffer.cols() != w) {
+        resizedBuffer.create(h, w, 3);
     }
     
-    if (floatBuffer.empty() || floatBuffer.size() != cv::Size(w, h)) {
-        floatBuffer.create(h, w, CV_32FC3);
+    if (floatBuffer.empty() || floatBuffer.rows() != h || floatBuffer.cols() != w) {
+        floatBuffer.create(h, w, 3); // We'll need to handle float types differently
     }
     
     channelBuffers.resize(c);
     for (int i = 0; i < c; ++i)
     {
-        if (channelBuffers[i].empty() || channelBuffers[i].size() != cv::Size(w, h)) {
-            channelBuffers[i].create(h, w, CV_32F);
+        if (channelBuffers[i].empty() || channelBuffers[i].rows() != h || channelBuffers[i].cols() != w) {
+            channelBuffers[i].create(h, w, 1);  // 1 channel for float data
         }
     }
     
@@ -597,10 +589,14 @@ void Detector::loadEngine(const std::string& modelFile)
     engine.reset(loadEngineFromFile(engineFilePath));
 }
 
-void Detector::processFrame(const cv::cuda::GpuMat& frame)
+void Detector::processFrame(const SimpleCudaMat& frame)
 {
     auto& ctx = AppContext::getInstance();
-    if (!isCudaContextInitialized()) return; 
+    
+    
+    if (!isCudaContextInitialized()) {
+        return;
+    }
 
     if (ctx.detectionPaused)
     {
@@ -616,7 +612,7 @@ void Detector::processFrame(const cv::cuda::GpuMat& frame)
     auto start_time = std::chrono::high_resolution_clock::now();
 
     std::unique_lock<std::mutex> lock(inferenceMutex);
-    currentFrame = frame;
+    currentFrame = frame.clone();
     frameIsGpu = true;
     frameReady = true;
     inferenceCV.notify_one();
@@ -627,7 +623,7 @@ void Detector::processFrame(const cv::cuda::GpuMat& frame)
     ctx.add_to_history(ctx.g_process_frame_time_history, duration.count(), ctx.g_process_frame_history_mutex);
 }
 
-void Detector::processFrame(const cv::Mat& frame)
+void Detector::processFrame(const SimpleMat& frame)
 {
     auto& ctx = AppContext::getInstance();
     if (!isCudaContextInitialized()) return; 
@@ -646,7 +642,7 @@ void Detector::processFrame(const cv::Mat& frame)
     auto start_time = std::chrono::high_resolution_clock::now();
 
     std::unique_lock<std::mutex> lock(inferenceMutex);
-    currentFrameCpu = frame.clone();
+    currentFrameCpu = frame;
     frameIsGpu = false;
     frameReady = true;
     inferenceCV.notify_one();
@@ -707,7 +703,7 @@ void Detector::inferenceThread()
     // Update cache periodically (every 100 frames)
     static int frame_counter = 0;
 
-    cv::cuda::GpuMat frameGpu;
+    SimpleCudaMat frameGpu;
     static auto last_cycle_start_time = std::chrono::high_resolution_clock::time_point{};
 
     while (!ctx.should_exit)
@@ -789,7 +785,8 @@ void Detector::inferenceThread()
                     if (frameIsGpu) {
                         frameGpu = std::move(currentFrame);
                     } else {
-                        frameGpu.upload(currentFrameCpu);
+                        frameGpu.create(currentFrameCpu.rows(), currentFrameCpu.cols(), currentFrameCpu.channels());
+                        frameGpu.upload(currentFrameCpu.data(), currentFrameCpu.step());
                     }
                     frameReady = false;
                     hasNewFrame = true;
@@ -823,6 +820,7 @@ void Detector::inferenceThread()
                 cudaStreamWaitEvent(stream, m_preprocessDone, 0);
                 
                 // Direct inference without CUDA Graph to avoid stream conflicts
+                
                 bool enqueueSuccess = context->enqueueV3(stream);
                 if (!enqueueSuccess) {
                     std::cerr << "[Detector] TensorRT enqueueV3 failed" << std::endl;
@@ -884,7 +882,8 @@ void Detector::inferenceThread()
                         // First, calculate scores for all detections using cached config
                         calculateTargetScoresGpu(m_finalDetectionsGpu.get(), m_finalDetectionsCountHost, m_scoresGpu.get(), 
                             cached_config.detection_resolution, cached_config.detection_resolution, 
-                            cached_config.distance_weight, cached_config.confidence_weight, m_headClassId, 
+                            cached_config.distance_weight, cached_config.confidence_weight, 
+                            0, // head_class_id - 0 for person class
                             cached_config.crosshair_offset_x, cached_config.crosshair_offset_y, stream);
                         
                         // Find the overall best target
@@ -979,10 +978,14 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         return;
     }
 
+    static int postProcessCount = 0;
+    postProcessCount++;
+
     const std::string& primaryOutputName = outputNames[0];
     void* d_rawOutputPtr = outputBindings[primaryOutputName];
     nvinfer1::DataType outputType = outputTypes[primaryOutputName];
     const std::vector<int64_t>& shape = outputShapes[primaryOutputName];
+
 
     if (!d_rawOutputPtr) {
         std::cerr << "[Detector] Raw output GPU pointer is null for " << primaryOutputName << std::endl;
@@ -1016,8 +1019,8 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         if (ctx.config.enable_hsv_filter) { 
             std::lock_guard<std::mutex> hsv_lock(hsvMaskMutex); 
             if (!m_hsvMaskGpu.empty()) {
-                hsvMaskPtr = m_hsvMaskGpu.ptr<unsigned char>();
-                maskPitch = static_cast<int>(m_hsvMaskGpu.step);
+                hsvMaskPtr = m_hsvMaskGpu.data();
+                maskPitch = static_cast<int>(m_hsvMaskGpu.step());
             }
         }
         current_min_hsv_pixels_val = ctx.config.min_hsv_pixels;
@@ -1029,8 +1032,11 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
 
     // GPU decoding debug info removed - enable for debugging if needed
 
+    
+    
     if (local_postprocess == "yolo10") {
         int max_candidates = (shape.size() > 1) ? static_cast<int>(shape[1]) : 0;
+        
         
         decodeErr = decodeYolo10Gpu(
             d_rawOutputPtr,
@@ -1046,6 +1052,7 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
             stream);
     } else if (local_postprocess == "yolo8" || local_postprocess == "yolo9" || local_postprocess == "yolo11" || local_postprocess == "yolo12") {
         int max_candidates = (shape.size() > 2) ? static_cast<int>(shape[2]) : 0;
+        
         
          decodeErr = decodeYolo11Gpu(
             d_rawOutputPtr,
@@ -1103,6 +1110,11 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
          return;
     }
 
+    // Check filtered count for debugging
+    int filteredCount = 0;
+    cudaMemcpyAsync(&filteredCount, m_classFilteredCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
+    cudaStreamSynchronize(stream);
+    
     // Run NMS with max detections to avoid sync
     try {
         // Get frame dimensions from config
@@ -1136,13 +1148,12 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
     }
 }
 
-void Detector::preProcess(const cv::cuda::GpuMat& frame, cudaStream_t stream)
+void Detector::preProcess(const SimpleCudaMat& frame, cudaStream_t stream)
 {
     auto& ctx = AppContext::getInstance();
     if (frame.empty()) return;
 
     // This function will now use the stream passed for graph capture
-    cv::cuda::Stream cvStream = cv::cuda::StreamAccessor::wrapStream(stream);
 
     void* inputBuffer = inputBindings[inputName];
     if (!inputBuffer) return;
@@ -1151,26 +1162,39 @@ void Detector::preProcess(const cv::cuda::GpuMat& frame, cudaStream_t stream)
     int c = static_cast<int>(dims.d[1]);
     int h = static_cast<int>(dims.d[2]);
     int w = static_cast<int>(dims.d[3]);
+    
 
     try
     {
-        static cv::cuda::GpuMat maskGpu_static;
-        static cv::cuda::GpuMat maskedImageGpu_static;
+        static SimpleCudaMat maskGpu_static;
+        static SimpleCudaMat maskedImageGpu_static;
 
         if (ctx.config.circle_mask) {
-            if (maskGpu_static.empty() || maskGpu_static.size() != frame.size()) {
-                cv::Mat mask = cv::Mat::zeros(frame.size(), CV_8UC1);
-                cv::Point center(mask.cols / 2, mask.rows / 2);
-                int radius = std::min(mask.cols, mask.rows) / 2;
-                cv::circle(mask, center, radius, cv::Scalar(255), -1);
-                maskGpu_static.upload(mask, cvStream);
+            if (maskGpu_static.empty() || maskGpu_static.rows() != frame.rows() || maskGpu_static.cols() != frame.cols()) {
+                SimpleMat mask(frame.rows(), frame.cols(), 1);
+                mask.setZero();
+                int centerX = mask.cols() / 2;
+                int centerY = mask.rows() / 2;
+                int radius = std::min(mask.cols(), mask.rows()) / 2;
+                // Create circular mask manually
+                for (int y = 0; y < mask.rows(); ++y) {
+                    for (int x = 0; x < mask.cols(); ++x) {
+                        int dx = x - centerX;
+                        int dy = y - centerY;
+                        if (dx * dx + dy * dy <= radius * radius) {
+                            mask.set(y, x, 255);
+                        }
+                    }
+                }
+                maskGpu_static.create(mask.rows(), mask.cols(), 1);
+                maskGpu_static.upload(mask.data(), mask.step());
             }
-            maskedImageGpu_static.create(frame.size(), frame.type());
-            maskedImageGpu_static.setTo(cv::Scalar::all(0), cvStream);
-            frame.copyTo(maskedImageGpu_static, maskGpu_static, cvStream);
-            cv::cuda::resize(maskedImageGpu_static, resizedBuffer, cv::Size(w, h), 0, 0, cv::INTER_LINEAR, cvStream);
+            maskedImageGpu_static.create(frame.rows(), frame.cols(), frame.channels());
+            maskedImageGpu_static.setZero();
+            CudaImageProcessing::applyMask(frame, maskedImageGpu_static, maskGpu_static, stream);
+            CudaImageProcessing::resize(maskedImageGpu_static, resizedBuffer, w, h, stream);
         } else {
-            cv::cuda::resize(frame, resizedBuffer, cv::Size(w, h), 0, 0, cv::INTER_LINEAR, cvStream);
+            CudaImageProcessing::resize(frame, resizedBuffer, w, h, stream);
         }
 
         // Only process HSV filter if enabled and actually being used
@@ -1184,31 +1208,37 @@ void Detector::preProcess(const cv::cuda::GpuMat& frame, cudaStream_t stream)
 
         // Skip HSV processing entirely if not needed
         if (current_enable_hsv_filter && (current_remove_hsv_matches || ctx.config.min_hsv_pixels > 0)) {
-            static cv::cuda::GpuMat hsvGpu_static;
-            static cv::cuda::GpuMat maskGpu_hsv_static;
+            static SimpleCudaMat hsvGpu_static;
+            static SimpleCudaMat maskGpu_hsv_static;
             
             // Cache HSV bounds to avoid repeated access
-            static cv::Scalar cached_lower, cached_upper;
+            static float cached_lower[3], cached_upper[3];
             static bool bounds_cached = false;
             
             if (!bounds_cached || ctx.config.hsv_lower_h != cached_lower[0]) {
-                cached_lower = cv::Scalar(ctx.config.hsv_lower_h, ctx.config.hsv_lower_s, ctx.config.hsv_lower_v);
-                cached_upper = cv::Scalar(ctx.config.hsv_upper_h, ctx.config.hsv_upper_s, ctx.config.hsv_upper_v);
+                cached_lower[0] = ctx.config.hsv_lower_h;
+                cached_lower[1] = ctx.config.hsv_lower_s;
+                cached_lower[2] = ctx.config.hsv_lower_v;
+                cached_upper[0] = ctx.config.hsv_upper_h;
+                cached_upper[1] = ctx.config.hsv_upper_s;
+                cached_upper[2] = ctx.config.hsv_upper_v;
                 bounds_cached = true;
             }
             
-            cv::cuda::cvtColor(resizedBuffer, hsvGpu_static, cv::COLOR_BGR2HSV, 0, cvStream);
-            cv::cuda::inRange(hsvGpu_static, cached_lower, cached_upper, maskGpu_hsv_static, cvStream);
+            hsvGpu_static.create(resizedBuffer.rows(), resizedBuffer.cols(), 3);
+            CudaImageProcessing::bgr2hsv(resizedBuffer, hsvGpu_static, stream);
+            maskGpu_hsv_static.create(hsvGpu_static.rows(), hsvGpu_static.cols(), 1);
+            CudaImageProcessing::inRange(hsvGpu_static, cached_lower, cached_upper, maskGpu_hsv_static, stream);
             
             // Only resize if resolution changed
             static int last_resolution = 0;
             if (last_resolution != ctx.config.detection_resolution) {
                 last_resolution = ctx.config.detection_resolution;
-                cv::cuda::GpuMat maskResized;
-                cv::cuda::resize(maskGpu_hsv_static, maskResized, cv::Size(last_resolution, last_resolution), 0, 0, cv::INTER_NEAREST, cvStream);
+                SimpleCudaMat maskResized;
+                CudaImageProcessing::resize(maskGpu_hsv_static, maskResized, last_resolution, last_resolution, stream);
                 {
                     std::lock_guard<std::mutex> lock(hsvMaskMutex);
-                    m_hsvMaskGpu = maskResized;
+                    m_hsvMaskGpu = std::move(maskResized);
                 }
             }
         } else {
@@ -1219,23 +1249,28 @@ void Detector::preProcess(const cv::cuda::GpuMat& frame, cudaStream_t stream)
             }
         }
 
-        resizedBuffer.convertTo(floatBuffer, CV_32F, 1.0f / 255.0f, 0, cvStream);
-        cv::cuda::split(floatBuffer, channelBuffers, cvStream);
+        // Convert to float and split channels
+        CudaFloatProcessing::convertToFloat(resizedBuffer, floatBuffer, 1.0f / 255.0f, 0.0f, stream);
+        channelBuffers.resize(c);
+        for (int i = 0; i < c; ++i) {
+            channelBuffers[i].create(h, w, 1);
+        }
+        CudaFloatProcessing::splitFloat(floatBuffer, channelBuffers.data(), stream);
 
         size_t channelSize = h * w * sizeof(float);
         for (int i = 0; i < c; ++i)
         {
             cudaMemcpyAsync(
                 static_cast<float*>(inputBuffer) + i * h * w,
-                channelBuffers[i].ptr<float>(),
+                channelBuffers[i].data(),
                 channelSize,
                 cudaMemcpyDeviceToDevice,
                 stream
             );
         }
-    } catch (const cv::Exception& e)
+    } catch (const std::exception& e)
     {
-        std::cerr << "[Detector] OpenCV error in preProcess: " << e.what() << std::endl;
+        std::cerr << "[Detector] Error in preProcess: " << e.what() << std::endl;
     }
 }
 
@@ -1298,18 +1333,18 @@ void Detector::initializeBuffers() {
 }
 
 
-float Detector::calculate_host_iou(const cv::Rect& box1, const cv::Rect& box2) {
-    int xA = std::max(box1.x, box2.x);
-    int yA = std::max(box1.y, box2.y);
-    int xB = std::min(box1.x + box1.width, box2.x + box2.width);
-    int yB = std::min(box1.y + box1.height, box2.y + box2.height);
+float Detector::calculate_host_iou(const Detection& det1, const Detection& det2) {
+    int xA = (std::max)(det1.x, det2.x);
+    int yA = (std::max)(det1.y, det2.y);
+    int xB = (std::min)(det1.x + det1.width, det2.x + det2.width);
+    int yB = (std::min)(det1.y + det1.height, det2.y + det2.height);
 
     
-    int interArea = std::max(0, xB - xA) * std::max(0, yB - yA);
+    int interArea = (std::max)(0, xB - xA) * (std::max)(0, yB - yA);
 
     
-    int box1Area = box1.width * box1.height;
-    int box2Area = box2.width * box2.height;
+    int box1Area = det1.width * det1.height;
+    int box2Area = det2.width * det2.height;
     float unionArea = static_cast<float>(box1Area + box2Area - interArea);
 
     
@@ -1326,10 +1361,10 @@ float Detector::calculate_host_iou(const cv::Rect& box1, const cv::Rect& box2) {
 
 
 
-cv::cuda::GpuMat Detector::getHsvMaskGpu() const { 
+SimpleCudaMat Detector::getHsvMaskGpu() const { 
     std::lock_guard<std::mutex> lock(const_cast<std::mutex&>(hsvMaskMutex)); 
     if (m_hsvMaskGpu.empty()) {
-        return cv::cuda::GpuMat(); 
+        return SimpleCudaMat(); 
     }
     return m_hsvMaskGpu.clone(); 
 }

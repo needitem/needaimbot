@@ -18,7 +18,7 @@ public:
     
     struct PerformanceMetrics {
         float avg_time_ms = 0.0f;
-        float min_time_ms = std::numeric_limits<float>::max();
+        float min_time_ms = (std::numeric_limits<float>::max)();
         float max_time_ms = 0.0f;
         float fps = 0.0f;
         size_t sample_count = 0;
@@ -61,8 +61,8 @@ public:
         metrics.sample_count++;
         
         // Update min/max
-        metrics.min_time_ms = std::min(metrics.min_time_ms, time_ms);
-        metrics.max_time_ms = std::max(metrics.max_time_ms, time_ms);
+        metrics.min_time_ms = (std::min)(metrics.min_time_ms, time_ms);
+        metrics.max_time_ms = (std::max)(metrics.max_time_ms, time_ms);
         
         // Update rolling average
         const float alpha = 0.1f; // Smoothing factor

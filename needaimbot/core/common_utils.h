@@ -68,7 +68,7 @@ public:
         cudaDeviceGetStreamPriorityRange(&leastPriority, &greatestPriority);
         
         // Clamp priority to valid range
-        priority = std::max(greatestPriority, std::min(priority, leastPriority));
+        priority = (std::max)(greatestPriority, (std::min)(priority, leastPriority));
         
         cudaError_t err = cudaStreamCreateWithPriority(&stream_, cudaStreamNonBlocking, priority);
         if (err != cudaSuccess) {

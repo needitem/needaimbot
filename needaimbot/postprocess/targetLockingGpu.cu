@@ -24,7 +24,7 @@ __device__ inline float calculateIoUForLockingKernel(int x1, int y1, int w1, int
 __global__ void reacquireLockedTargetKernel(
     const Detection* __restrict__ d_current_detections,
     int num_current_detections,
-    cv::Rect previous_locked_target_box, 
+    int prev_x, int prev_y, int prev_width, int prev_height,
     float iou_threshold,
     int* __restrict__ d_final_best_index_output)
 {
@@ -47,10 +47,10 @@ __global__ void reacquireLockedTargetKernel(
             d_current_detections[idx_global].y,
             d_current_detections[idx_global].width, 
             d_current_detections[idx_global].height,
-            previous_locked_target_box.x,
-            previous_locked_target_box.y,
-            previous_locked_target_box.width,
-            previous_locked_target_box.height);
+            prev_x,
+            prev_y,
+            prev_width,
+            prev_height);
         if (iou >= iou_threshold) {
             s_best_indices[tid] = idx_global;
             s_best_ious[tid] = iou;
@@ -87,7 +87,7 @@ __global__ void reacquireLockedTargetKernel(
 cudaError_t reacquireLockedTargetGpu(
     const Detection* d_current_detections,
     int num_current_detections,
-    const cv::Rect& previous_locked_target_box,
+    int prev_x, int prev_y, int prev_width, int prev_height,
     float iou_threshold,
     int* d_reacquired_target_index_output,
     cudaStream_t stream)
@@ -123,7 +123,7 @@ cudaError_t reacquireLockedTargetGpu(
     reacquireLockedTargetKernel<<<grid_size, block_size, shared_mem_size, stream>>>(
         d_current_detections,
         num_current_detections,
-        previous_locked_target_box,
+        prev_x, prev_y, prev_width, prev_height,
         iou_threshold,
         d_reacquired_target_index_output
     );

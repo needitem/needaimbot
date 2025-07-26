@@ -1,6 +1,4 @@
 #include "AppContext.h"
-#include "virtual_camera_capture.h"
-#include "ndi_capture.h"
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -17,12 +15,8 @@
 #include <memory>
 #include <array>
 
-#include <opencv2/opencv.hpp>
-#include <opencv2/cudawarping.hpp>
-#include <opencv2/cudacodec.hpp>
-#include <opencv2/cudaimgproc.hpp>
-#include <opencv2/cudaarithm.hpp>
-#include <opencv2/core/cuda.hpp>
+#include "../cuda/cuda_image_processing.h"
+#include "../utils/image_io.h"
 
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.System.h>
@@ -47,7 +41,7 @@
 #include "needaimbot.h"
 #include "keycodes.h"
 #include "keyboard_listener.h"
-#include "other_tools.h"
+#include "../include/other_tools.h"
 
 #include "simple_capture.h"
 #include "duplication_api_capture.h"
@@ -57,11 +51,11 @@
 #pragma comment(lib, "windowsapp.lib")
 
 
-cv::cuda::GpuMat latestFrameGpu;
-cv::Mat latestFrameCpu;
+SimpleCudaMat latestFrameGpu;
+SimpleMat latestFrameCpu;
 
-std::array<cv::cuda::GpuMat, FRAME_BUFFER_COUNT> captureGpuBuffer;
-std::array<cv::Mat, FRAME_BUFFER_COUNT> captureCpuBuffer;
+std::array<SimpleCudaMat, FRAME_BUFFER_COUNT> captureGpuBuffer;
+std::array<SimpleMat, FRAME_BUFFER_COUNT> captureCpuBuffer;
 std::atomic<int> captureGpuWriteIdx{0};
 std::atomic<int> captureCpuWriteIdx{0};
 
@@ -76,30 +70,30 @@ std::chrono::time_point<std::chrono::steady_clock> captureFpsStartTime;
 
 void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 {
+    std::cout << "[CaptureThread] Starting capture thread with resolution: " << CAPTURE_WIDTH << "x" << CAPTURE_HEIGHT << std::endl;
     auto& ctx = AppContext::getInstance();
     try
     {
         if (ctx.config.verbose)
         {
-            std::cout << "[Capture] OpenCV version: " << CV_VERSION << std::endl;
-            std::cout << "[Capture] CUDA Support: " << cv::cuda::getCudaEnabledDeviceCount() << " devices found." << std::endl;
+            int cuda_devices = 0;
+            cudaGetDeviceCount(&cuda_devices);
+            std::cout << "[Capture] CUDA Support: " << cuda_devices << " devices found." << std::endl;
         }
 
         // Initialize capture method based on config
         std::unique_ptr<SimpleScreenCapture> simple_capturer;
         std::unique_ptr<DuplicationAPIScreenCapture> duplication_capturer;
-        std::unique_ptr<VirtualCameraCapture> virtual_camera_capturer;
-        std::unique_ptr<NDICapture> ndi_capturer;
+        
+        std::cout << "[CaptureThread] Initializing capture method: " << ctx.config.capture_method << std::endl;
         
         // Create the appropriate capturer based on config
         if (ctx.config.capture_method == "duplication") {
             duplication_capturer = std::make_unique<DuplicationAPIScreenCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT);
-        } else if (ctx.config.capture_method == "virtual_camera") {
-            virtual_camera_capturer = std::make_unique<VirtualCameraCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT, 0);
-        } else if (ctx.config.capture_method == "ndi") {
-            ndi_capturer = std::make_unique<NDICapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT);
+            std::cout << "[CaptureThread] Created DuplicationAPIScreenCapture" << std::endl;
         } else {
             simple_capturer = std::make_unique<SimpleScreenCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT);
+            std::cout << "[CaptureThread] Created SimpleScreenCapture" << std::endl;
         }
         
         timeBeginPeriod(1);
@@ -111,10 +105,6 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
             is_initialized = simple_capturer->IsInitialized();
         } else if (duplication_capturer) {
             is_initialized = duplication_capturer->IsInitialized();
-        } else if (virtual_camera_capturer) {
-            is_initialized = virtual_camera_capturer->IsInitialized();
-        } else if (ndi_capturer) {
-            is_initialized = ndi_capturer->IsInitialized();
         }
         
         if (!is_initialized) {
@@ -130,14 +120,15 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
         
         constexpr int PREFETCH_COUNT = 3;
         for (int i = 0; i < PREFETCH_COUNT; ++i) {
-            captureGpuBuffer[i].create(CAPTURE_HEIGHT, CAPTURE_WIDTH, CV_8UC3);
+            captureGpuBuffer[i].create(CAPTURE_HEIGHT, CAPTURE_WIDTH, 3);
         }
         
         // Pre-allocate a reusable GPU mat for uploads
-        cv::cuda::GpuMat reusableGpuMat;
+        SimpleCudaMat reusableGpuMat;
         
         // Create dedicated CUDA stream for capture operations
-        cv::cuda::Stream captureStream;
+        cudaStream_t captureStream;
+        cudaStreamCreate(&captureStream);
         
         HANDLE capture_event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
         auto target_interval = std::chrono::nanoseconds(1000000000 / ctx.config.capture_fps);
@@ -154,7 +145,7 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
         captureFpsStartTime = std::chrono::steady_clock::now();
         auto start_time = std::chrono::high_resolution_clock::now();
 
-        cv::cuda::GpuMat screenshotGpu;
+        SimpleCudaMat screenshotGpu;
         
 
         while (!should_exit)
@@ -196,16 +187,10 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 // Reset all capturers
                 simple_capturer.reset();
                 duplication_capturer.reset();
-                virtual_camera_capturer.reset();
-                ndi_capturer.reset();
                 
                 // Create new capturer based on method
                 if (ctx.config.capture_method == "duplication") {
                     duplication_capturer = std::make_unique<DuplicationAPIScreenCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT);
-                } else if (ctx.config.capture_method == "virtual_camera") {
-                    virtual_camera_capturer = std::make_unique<VirtualCameraCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT, 0);
-                } else if (ctx.config.capture_method == "ndi") {
-                    ndi_capturer = std::make_unique<NDICapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT);
                 } else {
                     simple_capturer = std::make_unique<SimpleScreenCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT);
                 }
@@ -222,8 +207,6 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 // Reset all capturers
                 simple_capturer.reset();
                 duplication_capturer.reset();
-                virtual_camera_capturer.reset();
-                ndi_capturer.reset();
 
                 int new_CAPTURE_WIDTH = ctx.config.detection_resolution;
                 int new_CAPTURE_HEIGHT = ctx.config.detection_resolution;
@@ -233,20 +216,6 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                     duplication_capturer = std::make_unique<DuplicationAPIScreenCapture>(new_CAPTURE_WIDTH, new_CAPTURE_HEIGHT);
                     if (!duplication_capturer || !duplication_capturer->IsInitialized()) {
                         std::cerr << "[Capture] Failed to create or initialize DuplicationAPIScreenCapture after resolution change!" << std::endl;
-                        should_exit = true; 
-                        break;             
-                    }
-                } else if (ctx.config.capture_method == "virtual_camera") {
-                    virtual_camera_capturer = std::make_unique<VirtualCameraCapture>(new_CAPTURE_WIDTH, new_CAPTURE_HEIGHT, 0);
-                    if (!virtual_camera_capturer || !virtual_camera_capturer->IsInitialized()) {
-                        std::cerr << "[Capture] Failed to create or initialize VirtualCameraCapture after resolution change!" << std::endl;
-                        should_exit = true; 
-                        break;             
-                    }
-                } else if (ctx.config.capture_method == "ndi") {
-                    ndi_capturer = std::make_unique<NDICapture>(new_CAPTURE_WIDTH, new_CAPTURE_HEIGHT);
-                    if (!ndi_capturer || !ndi_capturer->IsInitialized()) {
-                        std::cerr << "[Capture] Failed to create or initialize NDICapture after resolution change!" << std::endl;
                         should_exit = true; 
                         break;             
                     }
@@ -285,15 +254,15 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 
             // Measure only the actual capture API call time
             auto frame_acq_start_time = std::chrono::high_resolution_clock::now();
-            cv::Mat screenshotCpu;
+            SimpleMat screenshotCpu;
+            
+            static int captureCount = 0;
+            ++captureCount;
+            
             if (simple_capturer) {
                 screenshotCpu = simple_capturer->GetNextFrameCpu();
             } else if (duplication_capturer) {
                 screenshotCpu = duplication_capturer->GetNextFrameCpu();
-            } else if (virtual_camera_capturer) {
-                screenshotCpu = virtual_camera_capturer->GetNextFrameCpu();
-            } else if (ndi_capturer) {
-                screenshotCpu = ndi_capturer->GetNextFrameCpu();
             }
             auto frame_acq_end_time = std::chrono::high_resolution_clock::now();
             
@@ -302,27 +271,42 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
             ctx.add_to_history(ctx.g_frame_acquisition_time_history, frame_acq_duration_ms.count(), ctx.g_frame_acquisition_history_mutex);
 
             if (!screenshotCpu.empty()) {
+                static int successCount = 0;
+                ++successCount;
+                
                 // Measure GPU upload time separately
                 auto gpu_upload_start = std::chrono::high_resolution_clock::now();
                 
-                // Use dedicated stream to avoid legacy stream conflicts
-                if (reusableGpuMat.empty()) {
-                    reusableGpuMat.create(CAPTURE_HEIGHT, CAPTURE_WIDTH, CV_8UC3);
+                // Create GPU mat with correct dimensions
+                screenshotGpu.create(screenshotCpu.rows(), screenshotCpu.cols(), screenshotCpu.channels());
+                
+                // Upload CPU frame to GPU
+                cudaError_t err = cudaMemcpy2DAsync(
+                    screenshotGpu.data(), screenshotGpu.step(),
+                    screenshotCpu.data(), screenshotCpu.step(),
+                    screenshotCpu.cols() * screenshotCpu.channels(), screenshotCpu.rows(),
+                    cudaMemcpyHostToDevice, captureStream
+                );
+                
+                if (err != cudaSuccess) {
+                    std::cerr << "[CaptureThread] GPU upload failed: " << cudaGetErrorString(err) << std::endl;
+                    screenshotGpu = SimpleCudaMat();
+                } else {
+                    cudaStreamSynchronize(captureStream);
+                    
+                    auto gpu_upload_end = std::chrono::high_resolution_clock::now();
+                    float gpu_upload_ms = std::chrono::duration<float, std::milli>(gpu_upload_end - gpu_upload_start).count();
+                    
+                    
+                    // Update latest frame for debug display
+                    if (latestFrameGpu.rows() != screenshotGpu.rows() || latestFrameGpu.cols() != screenshotGpu.cols()) {
+                        latestFrameGpu.create(screenshotGpu.rows(), screenshotGpu.cols(), screenshotGpu.channels());
+                    }
+                    latestFrameGpu.copyFrom(screenshotGpu);
+                    
                 }
-                reusableGpuMat.upload(screenshotCpu, captureStream);
-                screenshotGpu = reusableGpuMat;
-                
-                auto gpu_upload_end = std::chrono::high_resolution_clock::now();
-                float gpu_upload_ms = std::chrono::duration<float, std::milli>(gpu_upload_end - gpu_upload_start).count();
-                
-                
-                // Update latest frame for debug display (avoid clone for performance)
-                if (latestFrameGpu.size() != screenshotGpu.size()) {
-                    latestFrameGpu.create(screenshotGpu.size(), screenshotGpu.type());
-                }
-                screenshotGpu.copyTo(latestFrameGpu);
             } else {
-                screenshotGpu = cv::cuda::GpuMat();
+                screenshotGpu = SimpleCudaMat();
             }
 
             if (!screenshotGpu.empty())
@@ -359,12 +343,12 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 if (buttonPressed && !buttonPreviouslyPressed && elapsed_ss > 1000)
                 {
                     int idx = captureGpuWriteIdx.load(std::memory_order_acquire);
-                    const cv::cuda::GpuMat& gpuFrame = captureGpuBuffer[idx];
+                    const SimpleCudaMat& gpuFrame = captureGpuBuffer[idx];
                     if (!gpuFrame.empty())
                     {
-                        cv::Mat tmp;
-                            gpuFrame.download(tmp);
-                            saveScreenshot(tmp);
+                        SimpleMat tmp(gpuFrame.rows(), gpuFrame.cols(), gpuFrame.channels());
+                            gpuFrame.download(tmp.data(), tmp.step());
+                            ImageIO::saveScreenshot(tmp);
                             lastSaveTime = now_ss;
                         }
                 }
@@ -407,6 +391,7 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
         // Clean up GPU resources before thread exit
         reusableGpuMat.release();
         screenshotGpu.release();
+        cudaStreamDestroy(captureStream);
         
         std::cout << "[Capture] Capture thread exiting." << std::endl;
 
