@@ -8,10 +8,15 @@
 #include "capture.h"
 #include "../AppContext.h"
 #include "../cuda/cuda_image_processing.h"
+#include "../cuda/color_conversion.h"
+#include "frame_buffer_pool.h"
 #include <iostream>
 // Force recompile - SimpleMat constructor fix applied
 #include <iomanip>
 #include <algorithm>
+#include <thread>
+#include <chrono>
+#include <ppl.h>
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -713,19 +718,38 @@ SimpleMat DuplicationAPIScreenCapture::GetNextFrameCpu()
                         frameCtx.texture = nullptr;
                     }
                     
-                    // Convert BGRA to BGR
-                    SimpleMat bgrFrame(frameCpu.rows(), frameCpu.cols(), 3);
-                    
-                    
-                    for (int y = 0; y < frameCpu.rows(); ++y) {
-                        const uint8_t* srcRow = frameCpu.data() + y * frameCpu.step();
-                        uint8_t* dstRow = bgrFrame.data() + y * bgrFrame.step();
-                        for (int x = 0; x < frameCpu.cols(); ++x) {
-                            dstRow[x * 3 + 0] = srcRow[x * 4 + 0]; // B
-                            dstRow[x * 3 + 1] = srcRow[x * 4 + 1]; // G
-                            dstRow[x * 3 + 2] = srcRow[x * 4 + 2]; // R
-                        }
+                    // 프레임 버퍼 풀에서 BGR 버퍼 획듍
+                    if (!g_frameBufferPool) {
+                        g_frameBufferPool = std::make_unique<FrameBufferPool>(10);
                     }
+                    SimpleMat bgrFrame = g_frameBufferPool->acquireCpuBuffer(frameCpu.rows(), frameCpu.cols(), 3);
+                    
+                    // 개선된 병렬 변환 (캐시 효율성)
+                    const int blockHeight = 8;
+                    concurrency::parallel_for(0, (frameCpu.rows() + blockHeight - 1) / blockHeight, [&](int blockY) {
+                        int startY = blockY * blockHeight;
+                        int endY = std::min(startY + blockHeight, frameCpu.rows());
+                        
+                        for (int y = startY; y < endY; ++y) {
+                            const uint8_t* srcRow = frameCpu.data() + y * frameCpu.step();
+                            uint8_t* dstRow = bgrFrame.data() + y * bgrFrame.step();
+                            
+                            // SIMD-친화적 변환
+                            int x = 0;
+                            for (; x < frameCpu.cols() - 3; x += 4) {
+                                for (int i = 0; i < 4; ++i) {
+                                    dstRow[(x + i) * 3 + 0] = srcRow[(x + i) * 4 + 0];
+                                    dstRow[(x + i) * 3 + 1] = srcRow[(x + i) * 4 + 1];
+                                    dstRow[(x + i) * 3 + 2] = srcRow[(x + i) * 4 + 2];
+                                }
+                            }
+                            for (; x < frameCpu.cols(); ++x) {
+                                dstRow[x * 3 + 0] = srcRow[x * 4 + 0];
+                                dstRow[x * 3 + 1] = srcRow[x * 4 + 1];
+                                dstRow[x * 3 + 2] = srcRow[x * 4 + 2];
+                            }
+                        }
+                    });
                     
                     
                     return bgrFrame;

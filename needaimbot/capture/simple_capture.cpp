@@ -1,13 +1,16 @@
 #include "simple_capture.h"
 #include "AppContext.h"
 #include "../cuda/cuda_image_processing.h"
+#include "frame_buffer_pool.h"
 #include <iostream>
 #include <chrono>
+#include <algorithm>  // For std::min
 #include <ppl.h>  // For parallel_for
 
 SimpleScreenCapture::SimpleScreenCapture(int width, int height) 
     : m_initialized(false), m_width(width), m_height(height),
-      m_screenDC(nullptr), m_memoryDC(nullptr), m_bitmap(nullptr), m_bitmapData(nullptr)
+      m_screenDC(nullptr), m_memoryDC(nullptr), m_bitmap(nullptr), m_bitmapData(nullptr),
+      m_retryCount(0), m_maxRetries(3)
 {
     
     // Get screen dimensions
@@ -106,13 +109,33 @@ SimpleMat SimpleScreenCapture::GetNextFrameCpu()
     if (captureAttempts % 60 == 1) {
     }
     
-    // Try optimized BitBlt with NOCOPYBITS for better performance on high-res displays
-    BOOL result = BitBlt(m_memoryDC, 0, 0, m_width, m_height, 
-                        m_screenDC, startX, startY, SRCCOPY | NOMIRRORBITMAP);
+    // 프레임 버퍼 풀에서 버퍼 획듍 (먼저 선언)
+    if (!g_frameBufferPool) {
+        g_frameBufferPool = std::make_unique<FrameBufferPool>(10);
+    }
+    SimpleMat bgrFrame = g_frameBufferPool->acquireCpuBuffer(m_height, m_width, 3);
     
-    if (!result) {
-        DWORD error = GetLastError();
-        return SimpleMat();
+    // 에러 복구를 위한 재시도 로직
+    BOOL result = FALSE;
+    int retries = 0;
+    
+    while (!result && retries < m_maxRetries) {
+        result = BitBlt(m_memoryDC, 0, 0, m_width, m_height, 
+                        m_screenDC, startX, startY, SRCCOPY | NOMIRRORBITMAP);
+        
+        if (!result) {
+            DWORD error = GetLastError();
+            if (retries < m_maxRetries - 1) {
+                // 지수 백오프
+                int sleepMs = (1 << retries) * 10; // 10ms, 20ms, 40ms
+                std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
+                retries++;
+            } else {
+                // 최종 실패 시 빈 프레임 반환
+                g_frameBufferPool->releaseCpuBuffer(std::move(bgrFrame));
+                return SimpleMat();
+            }
+        }
     }
     
     // Verify bitmap data is valid
@@ -124,8 +147,7 @@ SimpleMat SimpleScreenCapture::GetNextFrameCpu()
     if (captureAttempts % 300 == 1 && m_bitmapData) {
     }
     
-    // Convert BGRA to BGR
-    SimpleMat bgrFrame(m_height, m_width, 3);
+    // 버퍼가 이미 위에서 선언되었음
     
     if (captureAttempts % 60 == 1) {
     }
@@ -136,14 +158,32 @@ SimpleMat SimpleScreenCapture::GetNextFrameCpu()
         return SimpleMat();
     }
     
-    // Parallel color conversion from BGRA to BGR for better performance
-    concurrency::parallel_for(0, m_height, [&](int y) {
-        const uint8_t* srcRow = srcData + y * (m_width * 4);  // BGRA stride
-        uint8_t* dstRow = bgrFrame.data() + y * bgrFrame.step();
-        for (int x = 0; x < m_width; ++x) {
-            dstRow[x * 3 + 0] = srcRow[x * 4 + 0]; // B
-            dstRow[x * 3 + 1] = srcRow[x * 4 + 1]; // G
-            dstRow[x * 3 + 2] = srcRow[x * 4 + 2]; // R
+    // 개선된 병렬 색상 변환 - 캐시 효율성 향상
+    const int blockHeight = 8; // 캐시 라인 최적화
+    concurrency::parallel_for(0, (m_height + blockHeight - 1) / blockHeight, [&](int blockY) {
+        int startY = blockY * blockHeight;
+        int endY = (std::min)(startY + blockHeight, m_height);
+        
+        for (int y = startY; y < endY; ++y) {
+            const uint8_t* srcRow = srcData + y * (m_width * 4);
+            uint8_t* dstRow = bgrFrame.data() + y * bgrFrame.step();
+            
+            // SIMD-친화적인 루프 구조
+            int x = 0;
+            for (; x < m_width - 3; x += 4) {
+                // 4픽셀을 한 번에 처리
+                for (int i = 0; i < 4; ++i) {
+                    dstRow[(x + i) * 3 + 0] = srcRow[(x + i) * 4 + 0]; // B
+                    dstRow[(x + i) * 3 + 1] = srcRow[(x + i) * 4 + 1]; // G
+                    dstRow[(x + i) * 3 + 2] = srcRow[(x + i) * 4 + 2]; // R
+                }
+            }
+            // 나머지 픽셀 처리
+            for (; x < m_width; ++x) {
+                dstRow[x * 3 + 0] = srcRow[x * 4 + 0];
+                dstRow[x * 3 + 1] = srcRow[x * 4 + 1];
+                dstRow[x * 3 + 2] = srcRow[x * 4 + 2];
+            }
         }
     });
     

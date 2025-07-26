@@ -14,10 +14,13 @@
 #include <condition_variable>
 #include <memory>
 #include <array>
+#include <queue>
 
 #include "../cuda/cuda_image_processing.h"
 #include "../cuda/cuda_error_check.h"
+#include "../cuda/color_conversion.h"
 #include "../utils/image_io.h"
+#include "frame_buffer_pool.h"
 
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.System.h>
@@ -69,6 +72,13 @@ std::atomic<int> captureFrameCount(0);
 std::atomic<int> captureFps(0);
 std::chrono::time_point<std::chrono::steady_clock> captureFpsStartTime;
 
+// 비동기 파이프라인을 위한 구조체
+struct PipelineFrame {
+    SimpleCudaMat gpuFrame;
+    cudaEvent_t event;
+    bool ready;
+};
+
 void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 {
     std::cout << "[CaptureThread] Starting capture thread with resolution: " << CAPTURE_WIDTH << "x" << CAPTURE_HEIGHT << std::endl;
@@ -76,6 +86,11 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
     
     // RAII guard for CUDA cleanup
     CudaResourceGuard cudaGuard;
+    
+    // 프레임 버퍼 풀 초기화
+    if (!g_frameBufferPool) {
+        g_frameBufferPool = std::make_unique<FrameBufferPool>(10);
+    }
     
     try
     {
@@ -103,7 +118,19 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
         
         timeBeginPeriod(1);
         SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
-        SetThreadAffinityMask(GetCurrentThread(), 1 << 0);
+        
+        // 개선된 스레드 친화도 설정 - NUMA 인식
+        SYSTEM_INFO sysInfo;
+        GetSystemInfo(&sysInfo);
+        DWORD_PTR affinityMask = 0;
+        
+        // 물리 코어 선호 (하이퍼스레딩 회피)
+        for (DWORD i = 0; i < sysInfo.dwNumberOfProcessors; i += 2) {
+            affinityMask |= (1ULL << i);
+        }
+        
+        if (affinityMask == 0) affinityMask = 1; // 최소한 하나의 코어
+        SetThreadAffinityMask(GetCurrentThread(), affinityMask);
         // Check if the selected capturer is initialized
         bool is_initialized = false;
         if (simple_capturer) {
@@ -123,17 +150,23 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 
         std::optional<std::chrono::duration<double, std::milli>> frame_duration;
         
-        constexpr int PREFETCH_COUNT = 3;
-        for (int i = 0; i < PREFETCH_COUNT; ++i) {
-            captureGpuBuffer[i].create(CAPTURE_HEIGHT, CAPTURE_WIDTH, 3);
-        }
-        
-        // Pre-allocate a reusable GPU mat for uploads
-        SimpleCudaMat reusableGpuMat;
-        
-        // Create dedicated CUDA stream for capture operations
+        // 3단계 비동기 파이프라인을 위한 스트림 생성
         cudaStream_t captureStream = nullptr;
-        CUDA_CHECK_WARN(cudaStreamCreate(&captureStream));
+        cudaStream_t processStream = nullptr;
+        cudaStream_t uploadStream = nullptr;
+        
+        CUDA_CHECK_WARN(cudaStreamCreateWithFlags(&captureStream, cudaStreamNonBlocking));
+        CUDA_CHECK_WARN(cudaStreamCreateWithFlags(&processStream, cudaStreamNonBlocking));
+        CUDA_CHECK_WARN(cudaStreamCreateWithFlags(&uploadStream, cudaStreamNonBlocking));
+        
+        // 파이프라인 버퍼 준비
+        constexpr int PIPELINE_DEPTH = 3;
+        std::array<PipelineFrame, PIPELINE_DEPTH> pipeline;
+        for (int i = 0; i < PIPELINE_DEPTH; ++i) {
+            pipeline[i].ready = true;
+            CUDA_CHECK_WARN(cudaEventCreateWithFlags(&pipeline[i].event, cudaEventDisableTiming));
+        }
+        int pipelineIdx = 0;
         
         HANDLE capture_event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
         auto target_interval = std::chrono::nanoseconds(1000000000 / ctx.config.capture_fps);
@@ -279,36 +312,43 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 static int successCount = 0;
                 ++successCount;
                 
-                // Measure GPU upload time separately
-                auto gpu_upload_start = std::chrono::high_resolution_clock::now();
+                // 비동기 파이프라인 처리
+                auto& currentPipe = pipeline[pipelineIdx];
                 
-                // Create GPU mat with correct dimensions
-                screenshotGpu.create(screenshotCpu.rows(), screenshotCpu.cols(), screenshotCpu.channels());
+                // 이전 프레임이 처리 중이면 대기
+                if (!currentPipe.ready) {
+                    CUDA_CHECK_WARN(cudaEventSynchronize(currentPipe.event));
+                }
                 
-                // Upload CPU frame to GPU
+                // 프레임 버퍼 풀에서 GPU 버퍼 획득
+                currentPipe.gpuFrame = g_frameBufferPool->acquireGpuBuffer(
+                    screenshotCpu.rows(), screenshotCpu.cols(), screenshotCpu.channels()
+                );
+                
+                // 비동기 GPU 업로드
                 cudaError_t err = cudaMemcpy2DAsync(
-                    screenshotGpu.data(), screenshotGpu.step(),
+                    currentPipe.gpuFrame.data(), currentPipe.gpuFrame.step(),
                     screenshotCpu.data(), screenshotCpu.step(),
                     screenshotCpu.cols() * screenshotCpu.channels(), screenshotCpu.rows(),
-                    cudaMemcpyHostToDevice, captureStream
+                    cudaMemcpyHostToDevice, uploadStream
                 );
                 
                 if (err != cudaSuccess) {
                     std::cerr << "[CaptureThread] GPU upload failed: " << cudaGetErrorString(err) << std::endl;
-                    screenshotGpu.release();
+                    g_frameBufferPool->releaseGpuBuffer(std::move(currentPipe.gpuFrame));
+                    screenshotGpu = SimpleCudaMat();
                 } else {
-                    CUDA_CHECK_WARN(cudaStreamSynchronize(captureStream));
+                    // 업로드 완료 이벤트 기록
+                    CUDA_CHECK_WARN(cudaEventRecord(currentPipe.event, uploadStream));
+                    currentPipe.ready = false;
                     
-                    auto gpu_upload_end = std::chrono::high_resolution_clock::now();
-                    float gpu_upload_ms = std::chrono::duration<float, std::milli>(gpu_upload_end - gpu_upload_start).count();
-                    
-                    
-                    // Update latest frame for debug display
-                    if (latestFrameGpu.rows() != screenshotGpu.rows() || latestFrameGpu.cols() != screenshotGpu.cols()) {
-                        latestFrameGpu.create(screenshotGpu.rows(), screenshotGpu.cols(), screenshotGpu.channels());
-                    }
-                    latestFrameGpu.copyFrom(screenshotGpu);
-                    
+                    // 다음 파이프라인 스테이지로 이동
+                    screenshotGpu = std::move(currentPipe.gpuFrame);
+                    pipelineIdx = (pipelineIdx + 1) % PIPELINE_DEPTH;
+                }
+                // CPU 버퍼를 풀에 반환
+                if (!screenshotCpu.empty()) {
+                    // SimpleMat은 move semantics를 지원하지 않으므로 그냥 스코프를 벗어나면 해제됨
                 }
             } else {
                 screenshotGpu = SimpleCudaMat();
@@ -393,11 +433,35 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
             timeEndPeriod(1);
         }
         
-        // Clean up GPU resources before thread exit
-        reusableGpuMat.release();
-        screenshotGpu.release();
-        if (captureStream) {
-            CUDA_CHECK_WARN(cudaStreamDestroy(captureStream));
+        // 파이프라인 정리
+        for (auto& pipe : pipeline) {
+            if (!pipe.ready && pipe.event) {
+                CUDA_CHECK_WARN(cudaEventSynchronize(pipe.event));
+            }
+            if (pipe.event) {
+                CUDA_CHECK_WARN(cudaEventDestroy(pipe.event));
+            }
+            if (!pipe.gpuFrame.empty()) {
+                g_frameBufferPool->releaseGpuBuffer(std::move(pipe.gpuFrame));
+            }
+        }
+        
+        // 스트림 정리
+        if (captureStream) CUDA_CHECK_WARN(cudaStreamDestroy(captureStream));
+        if (processStream) CUDA_CHECK_WARN(cudaStreamDestroy(processStream));
+        if (uploadStream) CUDA_CHECK_WARN(cudaStreamDestroy(uploadStream));
+        
+        // 버퍼 풀 통계 출력
+        if (ctx.config.verbose && g_frameBufferPool) {
+            const auto& stats = g_frameBufferPool->getStats();
+            std::cout << "[Capture] Buffer pool stats - CPU: " 
+                      << stats.cpu_acquires << " acquires, "
+                      << stats.cpu_creates << " creates, "
+                      << stats.cpu_releases << " releases" << std::endl;
+            std::cout << "[Capture] Buffer pool stats - GPU: "
+                      << stats.gpu_acquires << " acquires, "
+                      << stats.gpu_creates << " creates, "
+                      << stats.gpu_releases << " releases" << std::endl;
         }
         
         std::cout << "[Capture] Capture thread exiting." << std::endl;
