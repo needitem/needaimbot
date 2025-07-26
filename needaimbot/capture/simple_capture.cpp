@@ -3,6 +3,7 @@
 #include "../cuda/cuda_image_processing.h"
 #include <iostream>
 #include <chrono>
+#include <ppl.h>  // For parallel_for
 
 SimpleScreenCapture::SimpleScreenCapture(int width, int height) 
     : m_initialized(false), m_width(width), m_height(height),
@@ -135,8 +136,8 @@ SimpleMat SimpleScreenCapture::GetNextFrameCpu()
         return SimpleMat();
     }
     
-    // Manual color conversion from BGRA to BGR
-    for (int y = 0; y < m_height; ++y) {
+    // Parallel color conversion from BGRA to BGR for better performance
+    concurrency::parallel_for(0, m_height, [&](int y) {
         const uint8_t* srcRow = srcData + y * (m_width * 4);  // BGRA stride
         uint8_t* dstRow = bgrFrame.data() + y * bgrFrame.step();
         for (int x = 0; x < m_width; ++x) {
@@ -144,7 +145,7 @@ SimpleMat SimpleScreenCapture::GetNextFrameCpu()
             dstRow[x * 3 + 1] = srcRow[x * 4 + 1]; // G
             dstRow[x * 3 + 2] = srcRow[x * 4 + 2]; // R
         }
-    }
+    });
     
     if (captureAttempts % 60 == 1) {
     }
