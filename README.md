@@ -127,44 +127,82 @@
 4. **Set Up Project Structure**  
    Create a folder named `modules` in the directory `needaimbot/needaimbot/modules`.
 
-5. **Build OpenCV with CUDA Support**
+5. **Build OpenCV with CUDA Support (Maximum Performance)**
 	- Download and install [CMake](https://cmake.org/) and [CUDA 12.8](https://developer.nvidia.com/cuda-12-8-0-download-archive).
-	- Download [OpenCV](https://github.com/opencv/opencv).
-	- Download [OpenCV Contrib](https://github.com/opencv/opencv_contrib/tags).
+	- Download [OpenCV 4.12](https://github.com/opencv/opencv) (latest version for enhanced performance).
+	- Download [OpenCV Contrib 4.12](https://github.com/opencv/opencv_contrib/tags).
 	- Create new directories: `needaimbot/needaimbot/modules/opencv/` and `needaimbot/modules/opencv/build`.
-	- Extract `opencv-4.10.0` to `needaimbot/needaimbot/modules/opencv/opencv-4.10.0` and `opencv_contrib-4.10.0` to `needaimbot/modules/opencv/opencv_contrib-4.10.0`.
+	- Extract `opencv-4.12.0` to `needaimbot/needaimbot/modules/opencv/opencv-4.12.0` and `opencv_contrib-4.12.0` to `needaimbot/modules/opencv/opencv_contrib-4.12.0`.
 	- Extract cuDNN to `needaimbot/needaimbot/modules/cudnn`.
-	- Open CMake and set the source code location to `needaimbot/modules/opencv/opencv-4.10.0`.
+	- Open CMake and set the source code location to `needaimbot/modules/opencv/opencv-4.12.0`.
 	- Set the build directory to `needaimbot/needaimbot/modules/opencv/build`.
 	- Click `Configure`.
 	- (Some options will appear after the next configuration application. For example, to configure the CUDNN_LIBRARY paths, you first need to activate the WITH_CUDA option and click configure.)
-	- Check or configure:
-		- `WITH_CUDA`
-		- `WITH_CUBLAS`
-		- `ENABLE_FAST_MATH`
-		- `CUDA_FAST_MATH`
-		- `WITH_CUDNN`
+	
+	**Core Performance Settings:**
+		- `CMAKE_BUILD_TYPE` = `Release`
+		- `CMAKE_CXX_FLAGS_RELEASE` = `/Ox /Ob2 /Ot /Oy /GT /GL /Gw /Gy /fp:fast /arch:AVX2 /favor:INTEL64 /MP /bigobj`
+		- `CMAKE_C_FLAGS_RELEASE` = `/Ox /Ob2 /Ot /Oy /GT /GL /Gw /Gy /fp:fast /arch:AVX2 /favor:INTEL64 /MP`
+		- `CMAKE_EXE_LINKER_FLAGS_RELEASE` = `/LTCG /OPT:REF /OPT:ICF /INCREMENTAL:NO`
+		- `CMAKE_SHARED_LINKER_FLAGS_RELEASE` = `/LTCG /OPT:REF /OPT:ICF /INCREMENTAL:NO`
+	
+	**CUDA & GPU Acceleration:**
+		- `WITH_CUDA` = `ON`
+		- `WITH_CUBLAS` = `ON`
+		- `ENABLE_FAST_MATH` = `ON`
+		- `CUDA_FAST_MATH` = `ON`
+		- `WITH_CUDNN` = `ON`
 		- `CUDNN_LIBRARY` = `<full path>needaimbot/needaimbot/modules/cudnn/lib/x64/cudnn.lib`
 		- `CUDNN_INCLUDE_DIR` = `<full path>needaimbot/needaimbot/modules/cudnn/include`
 		- `CUDA_ARCH_BIN` = Visit the [CUDA Wiki](https://en.wikipedia.org/wiki/CUDA) to find your Nvidia GPU architecture. For example, for `RTX 3080-TI`, enter `8.6`.
-		- `OPENCV_DNN_CUDA`
-		- `OPENCV_EXTRA_MODULES_PATH` = `<full path>needaimbot/needaimbot/modules/opencv/opencv_contrib-4.10.0/modules`
-		- `BUILD_opencv_world`
+		- `OPENCV_DNN_CUDA` = `ON`
+	
+	**CPU Optimization:**
+		- `CPU_BASELINE` = `AVX2`
+		- `CPU_DISPATCH` = `AVX2,FP16,AVX512_SKX`
+		- `WITH_IPP` = `ON` (Intel Performance Primitives)
+		- `WITH_TBB` = `ON` (Threading Building Blocks)
+		- `WITH_OPENMP` = `ON`
+		- `WITH_EIGEN` = `ON`
+		- `WITH_LAPACK` = `ON`
+	
+	**Module Configuration:**
+		- `OPENCV_EXTRA_MODULES_PATH` = `<full path>needaimbot/needaimbot/modules/opencv/opencv_contrib-4.12.0/modules`
+		- `BUILD_opencv_world` = `ON`
+		- `BUILD_SHARED_LIBS` = `ON`
+		- `ENABLE_PRECOMPILED_HEADERS` = `ON`
 		
-		- Uncheck:
-			- `WITH_NVCUVENC`
-			- `WITH_NVCUVID`
-   - Click `Configure` again and ensure that the flags for `CUDA_FAST_MATH` and `ENABLE_FAST_MATH` are not reset.
+	**Disable Unnecessary Features:**
+		- `BUILD_opencv_apps` = `OFF`
+		- `BUILD_opencv_java` = `OFF`
+		- `BUILD_opencv_js` = `OFF`
+		- `BUILD_opencv_python2` = `OFF`
+		- `BUILD_TESTS` = `OFF`
+		- `BUILD_PERF_TESTS` = `OFF`
+		- `BUILD_EXAMPLES` = `OFF`
+		- `BUILD_DOCS` = `OFF`
+		- `WITH_NVCUVENC` = `OFF`
+		- `WITH_NVCUVID` = `OFF`
+		- `WITH_GSTREAMER` = `OFF`
+		- `WITH_GTK` = `OFF`
+		- `WITH_QT` = `OFF`
+	
+   - Click `Configure` again and ensure that all optimization flags are properly set.
    - Click `Generate` to build the C++ solution.
    - Close CMake and open `needaimbot/modules/opencv/build/OpenCV.sln`, or click `Open Project` in cmake.
    - Switch the build configuration to `x64` and `Release`.
    - Open the `CMakeTargets` folder in the solution.
-   - Right-click on `ALL_BUILD` and select `Build`. (Building the project can take up to two hours.)
+   - Right-click on `ALL_BUILD` and select `Build`. (Building with maximum optimization can take 2-4 hours.)
    - After building, right-click on `INSTALL` and select `Build`.
    - Verify the built files exist in the following folders:
      - `needaimbot/needaimbot/modules/opencv/build/install/include/opencv2` - Contains `.hpp` and `.h` files.
      - `needaimbot/needaimbot/modules/opencv/build/install/x64/vc16/bin` - Contains `.dll` files.
      - `needaimbot/needaimbot/modules/opencv/build/install/x64/vc16/lib` - Contains `.lib` files.
+	
+	**Performance Notes:**
+	- Use `/arch:AVX512` instead of `/arch:AVX2` if your CPU supports AVX-512 (Intel Skylake-X or newer)
+	- The `/Ox /Ot /GL /LTCG` combination provides maximum speed optimization
+	- Building with these settings will result in larger binaries but significantly faster execution
 
 6. **Download Required Libraries**  
 	- [simpleIni](https://github.com/brofield/simpleini/blob/master/SimpleIni.h)
