@@ -8,26 +8,21 @@ SimpleScreenCapture::SimpleScreenCapture(int width, int height)
     : m_initialized(false), m_width(width), m_height(height),
       m_screenDC(nullptr), m_memoryDC(nullptr), m_bitmap(nullptr), m_bitmapData(nullptr)
 {
-    std::cout << "[SimpleCapture] Constructor called with size: " << width << "x" << height << std::endl;
     
     // Get screen dimensions
     m_screenWidth = GetSystemMetrics(SM_CXSCREEN);
     m_screenHeight = GetSystemMetrics(SM_CYSCREEN);
     
-    std::cout << "[SimpleCapture] Screen resolution: " << m_screenWidth << "x" << m_screenHeight << std::endl;
-    std::cout << "[SimpleCapture] Capture region: " << m_width << "x" << m_height << std::endl;
     
     // Get screen DC
     m_screenDC = GetDC(NULL);
     if (!m_screenDC) {
-        std::cerr << "[SimpleCapture] Failed to get screen DC" << std::endl;
         return;
     }
     
     // Create compatible DC
     m_memoryDC = CreateCompatibleDC(m_screenDC);
     if (!m_memoryDC) {
-        std::cerr << "[SimpleCapture] Failed to create memory DC" << std::endl;
         ReleaseDC(NULL, m_screenDC);
         return;
     }
@@ -45,7 +40,6 @@ SimpleScreenCapture::SimpleScreenCapture(int width, int height)
     m_bitmap = CreateDIBSection(m_memoryDC, &m_bmpInfo, DIB_RGB_COLORS, 
                                (void**)&m_bitmapData, NULL, 0);
     if (!m_bitmap) {
-        std::cerr << "[SimpleCapture] Failed to create DIB section" << std::endl;
         DeleteDC(m_memoryDC);
         ReleaseDC(NULL, m_screenDC);
         return;
@@ -96,11 +90,9 @@ SimpleMat SimpleScreenCapture::GetNextFrameCpu()
     
     // Only log every 300 frames to reduce spam
     if (captureAttempts % 300 == 1) {
-        std::cout << "[SimpleCapture] Capturing frames... (attempt " << captureAttempts << ")" << std::endl;
     }
     
     if (!m_initialized) {
-        std::cerr << "[SimpleCapture] GetNextFrameCpu: Not initialized!" << std::endl;
         return SimpleMat();
     }
     
@@ -111,8 +103,6 @@ SimpleMat SimpleScreenCapture::GetNextFrameCpu()
     int startY = (m_screenHeight - m_height) / 2;
     
     if (captureAttempts % 60 == 1) {
-        std::cout << "[SimpleCapture] Capturing from (" << startX << ", " << startY 
-                  << ") size: " << m_width << "x" << m_height << std::endl;
     }
     
     // Try optimized BitBlt with NOCOPYBITS for better performance on high-res displays
@@ -121,39 +111,30 @@ SimpleMat SimpleScreenCapture::GetNextFrameCpu()
     
     if (!result) {
         DWORD error = GetLastError();
-        std::cerr << "[SimpleCapture] BitBlt failed. Error: " << error << std::endl;
         return SimpleMat();
     }
     
     // Verify bitmap data is valid
     if (!m_bitmapData) {
-        std::cerr << "[SimpleCapture] Bitmap data is null!" << std::endl;
         return SimpleMat();
     }
     
     // Verify bitmap data periodically
     if (captureAttempts % 300 == 1 && m_bitmapData) {
-        std::cout << "[SimpleCapture] Bitmap data valid at: " << (void*)m_bitmapData << std::endl;
     }
     
     // Convert BGRA to BGR
     SimpleMat bgrFrame(m_height, m_width, 3);
     
     if (captureAttempts % 60 == 1) {
-        std::cout << "[SimpleCapture] Converting BGRA to BGR..." << std::endl;
-        std::cout << "[SimpleCapture] BGR frame created - empty: " << bgrFrame.empty() 
-                  << " data: " << (void*)bgrFrame.data() 
-                  << " step: " << bgrFrame.step() << std::endl;
     }
     
     // Verify source data before conversion
     const uint8_t* srcData = m_hostFrame.data();
     if (!srcData) {
-        std::cerr << "[SimpleCapture] Source data is null!" << std::endl;
         // Use bitmap data directly
         srcData = static_cast<const uint8_t*>(m_bitmapData);
         if (!srcData) {
-            std::cerr << "[SimpleCapture] Bitmap data is also null!" << std::endl;
             return SimpleMat();
         }
     }
@@ -170,9 +151,6 @@ SimpleMat SimpleScreenCapture::GetNextFrameCpu()
     }
     
     if (captureAttempts % 60 == 1) {
-        std::cout << "[SimpleCapture] Frame captured successfully. BGR frame: " 
-                  << bgrFrame.cols() << "x" << bgrFrame.rows() 
-                  << " channels: " << bgrFrame.channels() << std::endl;
     }
     
     return bgrFrame;
