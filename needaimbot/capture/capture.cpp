@@ -16,6 +16,7 @@
 #include <array>
 
 #include "../cuda/cuda_image_processing.h"
+#include "../cuda/cuda_error_check.h"
 #include "../utils/image_io.h"
 
 #include <winrt/Windows.Foundation.h>
@@ -72,6 +73,10 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 {
     std::cout << "[CaptureThread] Starting capture thread with resolution: " << CAPTURE_WIDTH << "x" << CAPTURE_HEIGHT << std::endl;
     auto& ctx = AppContext::getInstance();
+    
+    // RAII guard for CUDA cleanup
+    CudaResourceGuard cudaGuard;
+    
     try
     {
         if (ctx.config.verbose)
@@ -127,8 +132,8 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
         SimpleCudaMat reusableGpuMat;
         
         // Create dedicated CUDA stream for capture operations
-        cudaStream_t captureStream;
-        cudaStreamCreate(&captureStream);
+        cudaStream_t captureStream = nullptr;
+        CUDA_CHECK_WARN(cudaStreamCreate(&captureStream));
         
         HANDLE capture_event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
         auto target_interval = std::chrono::nanoseconds(1000000000 / ctx.config.capture_fps);
@@ -290,9 +295,9 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 
                 if (err != cudaSuccess) {
                     std::cerr << "[CaptureThread] GPU upload failed: " << cudaGetErrorString(err) << std::endl;
-                    screenshotGpu = SimpleCudaMat();
+                    screenshotGpu.release();
                 } else {
-                    cudaStreamSynchronize(captureStream);
+                    CUDA_CHECK_WARN(cudaStreamSynchronize(captureStream));
                     
                     auto gpu_upload_end = std::chrono::high_resolution_clock::now();
                     float gpu_upload_ms = std::chrono::duration<float, std::milli>(gpu_upload_end - gpu_upload_start).count();
@@ -391,7 +396,9 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
         // Clean up GPU resources before thread exit
         reusableGpuMat.release();
         screenshotGpu.release();
-        cudaStreamDestroy(captureStream);
+        if (captureStream) {
+            CUDA_CHECK_WARN(cudaStreamDestroy(captureStream));
+        }
         
         std::cout << "[Capture] Capture thread exiting." << std::endl;
 

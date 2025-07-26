@@ -3,6 +3,7 @@
 #include <cuda_runtime.h>
 #include <memory>
 #include <cstring>
+#include "cuda_error_check.h"
 
 // Simple GPU matrix class to replace cv::cuda::GpuMat
 class SimpleCudaMat {
@@ -61,7 +62,7 @@ public:
     // Release GPU memory
     void release() {
         if (data_) {
-            cudaFree(data_);
+            CUDA_CHECK_WARN(cudaFree(data_));
             data_ = nullptr;
         }
         width_ = height_ = channels_ = 0;
@@ -96,13 +97,13 @@ public:
         
         if (hostStep == step_) {
             // Simple copy
-            cudaMemcpy(data_, hostData, sizeInBytes(), cudaMemcpyHostToDevice);
+            CUDA_CHECK(cudaMemcpy(data_, hostData, sizeInBytes(), cudaMemcpyHostToDevice));
         } else {
             // Row-by-row copy
             const uint8_t* src = static_cast<const uint8_t*>(hostData);
             uint8_t* dst = data_;
             for (int y = 0; y < height_; ++y) {
-                cudaMemcpy(dst, src, width_ * channels_, cudaMemcpyHostToDevice);
+                CUDA_CHECK(cudaMemcpy(dst, src, width_ * channels_, cudaMemcpyHostToDevice));
                 src += hostStep;
                 dst += step_;
             }
@@ -119,13 +120,13 @@ public:
         
         if (hostStep == step_) {
             // Simple copy
-            cudaMemcpy(hostData, data_, sizeInBytes(), cudaMemcpyDeviceToHost);
+            CUDA_CHECK(cudaMemcpy(hostData, data_, sizeInBytes(), cudaMemcpyDeviceToHost));
         } else {
             // Row-by-row copy
             uint8_t* dst = static_cast<uint8_t*>(hostData);
             const uint8_t* src = data_;
             for (int y = 0; y < height_; ++y) {
-                cudaMemcpy(dst, src, width_ * channels_, cudaMemcpyDeviceToHost);
+                CUDA_CHECK(cudaMemcpy(dst, src, width_ * channels_, cudaMemcpyDeviceToHost));
                 dst += hostStep;
                 src += step_;
             }
@@ -177,7 +178,7 @@ public:
     SimpleCudaMat clone() const {
         SimpleCudaMat result(height_, width_, channels_);
         if (!empty()) {
-            cudaMemcpy(result.data_, data_, sizeInBytes(), cudaMemcpyDeviceToDevice);
+            CUDA_CHECK(cudaMemcpy(result.data_, data_, sizeInBytes(), cudaMemcpyDeviceToDevice));
         }
         return result;
     }
@@ -190,13 +191,13 @@ public:
         }
         
         create(other.height_, other.width_, other.channels_);
-        cudaMemcpy(data_, other.data_, other.sizeInBytes(), cudaMemcpyDeviceToDevice);
+        CUDA_CHECK(cudaMemcpy(data_, other.data_, other.sizeInBytes(), cudaMemcpyDeviceToDevice));
     }
     
     // Set to zero
     void setZero() {
         if (!empty()) {
-            cudaMemset(data_, 0, sizeInBytes());
+            CUDA_CHECK(cudaMemset(data_, 0, sizeInBytes()));
         }
     }
     
@@ -205,7 +206,19 @@ private:
         if (width_ > 0 && height_ > 0 && channels_ > 0) {
             // Align step to 32 bytes for better performance
             step_ = ((width_ * channels_ + 31) / 32) * 32;
-            cudaMalloc(&data_, step_ * height_);
+            size_t allocSize = step_ * height_;
+            
+            // Check available memory before allocation
+            size_t free_mem, total_mem;
+            if (!checkGpuMemory(allocSize, free_mem, total_mem)) {
+                throw std::runtime_error("Insufficient GPU memory for allocation");
+            }
+            
+            cudaError_t err = cudaMalloc(&data_, allocSize);
+            if (err != cudaSuccess) {
+                step_ = 0;
+                throw std::runtime_error("GPU allocation failed: " + getCudaErrorDescription(err));
+            }
         }
     }
     
