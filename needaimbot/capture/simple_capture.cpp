@@ -54,12 +54,11 @@ SimpleScreenCapture::SimpleScreenCapture(int width, int height)
     // Select bitmap into memory DC
     SelectObject(m_memoryDC, m_bitmap);
     
-    // Pre-allocate matrices
-    m_hostFrame = SimpleMat(m_height, m_width, 4, m_bitmapData, m_width * 4);
+    // Don't use external data wrapper for now - it seems to be causing issues
+    // m_hostFrame = SimpleMat(m_height, m_width, 4, m_bitmapData, m_width * 4);
     
-    std::cout << "[SimpleCapture] Host frame created: " << m_hostFrame.cols() << "x" << m_hostFrame.rows() 
-              << " channels=" << m_hostFrame.channels() << " empty=" << m_hostFrame.empty() << std::endl;
-    std::cout << "[SimpleCapture] Bitmap data pointer: " << (void*)m_bitmapData << std::endl;
+    // std::cout << "[SimpleCapture] Host frame created: " << m_hostFrame.cols() << "x" << m_hostFrame.rows() 
+    //           << " channels=" << m_hostFrame.channels() << " empty=" << m_hostFrame.empty() << std::endl;
     
     // Pre-allocate GPU memory to avoid allocation during stream capture
     m_deviceFrame.create(m_height, m_width, 4); // BGRA first
@@ -67,7 +66,6 @@ SimpleScreenCapture::SimpleScreenCapture(int width, int height)
     
     m_initialized = true;
     
-    std::cout << "[SimpleCapture] Initialized successfully" << std::endl;
 }
 
 SimpleScreenCapture::~SimpleScreenCapture()
@@ -96,14 +94,17 @@ SimpleMat SimpleScreenCapture::GetNextFrameCpu()
     static int captureAttempts = 0;
     captureAttempts++;
     
-    std::cout << "[SimpleCapture] GetNextFrameCpu called, attempt " << captureAttempts << std::endl;
+    // Only log every 300 frames to reduce spam
+    if (captureAttempts % 300 == 1) {
+        std::cout << "[SimpleCapture] Capturing frames... (attempt " << captureAttempts << ")" << std::endl;
+    }
     
     if (!m_initialized) {
         std::cerr << "[SimpleCapture] GetNextFrameCpu: Not initialized!" << std::endl;
         return SimpleMat();
     }
     
-    std::cout << "[SimpleCapture] Initialized check passed" << std::endl;
+    // Initialization check passed (no need to log every frame)
     
     // Calculate center region coordinates
     int startX = (m_screenWidth - m_width) / 2;
@@ -130,10 +131,9 @@ SimpleMat SimpleScreenCapture::GetNextFrameCpu()
         return SimpleMat();
     }
     
-    // Debug: Check if m_hostFrame is valid
-    if (captureAttempts % 60 == 1) {
-        std::cout << "[SimpleCapture] m_hostFrame empty: " << m_hostFrame.empty() 
-                  << " cols: " << m_hostFrame.cols() << " rows: " << m_hostFrame.rows() << std::endl;
+    // Verify bitmap data periodically
+    if (captureAttempts % 300 == 1 && m_bitmapData) {
+        std::cout << "[SimpleCapture] Bitmap data valid at: " << (void*)m_bitmapData << std::endl;
     }
     
     // Convert BGRA to BGR
@@ -141,16 +141,26 @@ SimpleMat SimpleScreenCapture::GetNextFrameCpu()
     
     if (captureAttempts % 60 == 1) {
         std::cout << "[SimpleCapture] Converting BGRA to BGR..." << std::endl;
-        std::cout << "[SimpleCapture] Source data: " << (void*)m_hostFrame.data() 
-                  << " step: " << m_hostFrame.step() << std::endl;
         std::cout << "[SimpleCapture] BGR frame created - empty: " << bgrFrame.empty() 
                   << " data: " << (void*)bgrFrame.data() 
                   << " step: " << bgrFrame.step() << std::endl;
     }
     
+    // Verify source data before conversion
+    const uint8_t* srcData = m_hostFrame.data();
+    if (!srcData) {
+        std::cerr << "[SimpleCapture] Source data is null!" << std::endl;
+        // Use bitmap data directly
+        srcData = static_cast<const uint8_t*>(m_bitmapData);
+        if (!srcData) {
+            std::cerr << "[SimpleCapture] Bitmap data is also null!" << std::endl;
+            return SimpleMat();
+        }
+    }
+    
     // Manual color conversion from BGRA to BGR
     for (int y = 0; y < m_height; ++y) {
-        const uint8_t* srcRow = m_hostFrame.data() + y * m_hostFrame.step();
+        const uint8_t* srcRow = srcData + y * (m_width * 4);  // BGRA stride
         uint8_t* dstRow = bgrFrame.data() + y * bgrFrame.step();
         for (int x = 0; x < m_width; ++x) {
             dstRow[x * 3 + 0] = srcRow[x * 4 + 0]; // B

@@ -28,11 +28,6 @@ private:
     BITMAPINFO m_bmpInfo;
     unsigned char* m_bitmapData;
     
-    SimpleMat m_hostFrame;
     SimpleCudaMat m_deviceFrame;
     SimpleCudaMat m_tempBgrFrame;
-    
-    // Raw CUDA memory for direct access
-    void* m_cudaPtr;
-    size_t m_cudaPitch;
 };
