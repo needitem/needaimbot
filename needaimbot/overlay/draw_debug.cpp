@@ -42,10 +42,10 @@ static int texW = 0, texH = 0;
 static float debug_scale = 1.0f; 
 
 
-static ID3D11Texture2D* g_hsvMaskTex = nullptr;
-static ID3D11ShaderResourceView* g_hsvMaskSRV = nullptr;
-static int hsvTexW = 0, hsvTexH = 0;
-static float hsv_mask_preview_scale = 0.5f; 
+static ID3D11Texture2D* g_colorMaskTex = nullptr;
+static ID3D11ShaderResourceView* g_colorMaskSRV = nullptr;
+static int colorTexW = 0, colorTexH = 0;
+static float color_mask_preview_scale = 0.5f; 
 
 
 
@@ -114,8 +114,8 @@ static void uploadDebugFrame(const SimpleMat& bgr)
     uint8_t* dst = rgba.data();
     for (int y = 0; y < bgr.rows(); y++) {
         for (int x = 0; x < bgr.cols(); x++) {
-            int src_idx = y * bgr.step() + x * 3;
-            int dst_idx = y * rgba.step() + x * 4;
+            int src_idx = static_cast<int>(y * bgr.step() + x * 3);
+            int dst_idx = static_cast<int>(y * rgba.step() + x * 4);
             dst[dst_idx + 0] = src[src_idx + 2]; // R
             dst[dst_idx + 1] = src[src_idx + 1]; // G
             dst[dst_idx + 2] = src[src_idx + 0]; // B
@@ -141,7 +141,7 @@ static void uploadDebugFrame(const SimpleMat& bgr)
 }
 
 
-static void uploadHsvMaskTexture(const SimpleMat& grayMask)
+static void uploadColorMaskTexture(const SimpleMat& grayMask)
 {
     if (grayMask.empty() || !g_pd3dDevice || !g_pd3dDeviceContext) {
         return;
@@ -152,16 +152,16 @@ static void uploadHsvMaskTexture(const SimpleMat& grayMask)
         return;
     }
 
-    if (!g_hsvMaskTex || grayMask.cols() != hsvTexW || grayMask.rows() != hsvTexH)
+    if (!g_colorMaskTex || grayMask.cols() != colorTexW || grayMask.rows() != colorTexH)
     {
-        SAFE_RELEASE(g_hsvMaskTex);
-        SAFE_RELEASE(g_hsvMaskSRV);
+        SAFE_RELEASE(g_colorMaskTex);
+        SAFE_RELEASE(g_colorMaskSRV);
 
-        hsvTexW = grayMask.cols();  hsvTexH = grayMask.rows();
+        colorTexW = grayMask.cols();  colorTexH = grayMask.rows();
 
         D3D11_TEXTURE2D_DESC td = {};
-        td.Width = hsvTexW;
-        td.Height = hsvTexH;
+        td.Width = colorTexW;
+        td.Height = colorTexH;
         td.MipLevels = td.ArraySize = 1;
         td.Format = DXGI_FORMAT_R8G8B8A8_UNORM; 
         td.SampleDesc.Count = 1;
@@ -169,10 +169,10 @@ static void uploadHsvMaskTexture(const SimpleMat& grayMask)
         td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
         td.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
 
-        HRESULT hr_tex = g_pd3dDevice->CreateTexture2D(&td, nullptr, &g_hsvMaskTex);
+        HRESULT hr_tex = g_pd3dDevice->CreateTexture2D(&td, nullptr, &g_colorMaskTex);
         if (FAILED(hr_tex))
         {
-            SAFE_RELEASE(g_hsvMaskTex);
+            SAFE_RELEASE(g_colorMaskTex);
             
             return;
         }
@@ -181,11 +181,11 @@ static void uploadHsvMaskTexture(const SimpleMat& grayMask)
         sd.Format = td.Format;
         sd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
         sd.Texture2D.MipLevels = 1;
-        HRESULT hr_srv = g_pd3dDevice->CreateShaderResourceView(g_hsvMaskTex, &sd, &g_hsvMaskSRV);
+        HRESULT hr_srv = g_pd3dDevice->CreateShaderResourceView(g_colorMaskTex, &sd, &g_colorMaskSRV);
         if (FAILED(hr_srv))
         {
-            SAFE_RELEASE(g_hsvMaskTex);
-            SAFE_RELEASE(g_hsvMaskSRV);
+            SAFE_RELEASE(g_colorMaskTex);
+            SAFE_RELEASE(g_colorMaskSRV);
             
             return;
         }
@@ -201,7 +201,7 @@ static void uploadHsvMaskTexture(const SimpleMat& grayMask)
     for (int y = 0; y < grayMask.rows(); y++) {
         for (int x = 0; x < grayMask.cols(); x++) {
             uint8_t gray_val = src[y * grayMask.step() + x];
-            int dst_idx = y * rgbaMask.step() + x * 4;
+            int dst_idx = static_cast<int>(y * rgbaMask.step() + x * 4);
             dst[dst_idx + 0] = gray_val; // R
             dst[dst_idx + 1] = gray_val; // G
             dst[dst_idx + 2] = gray_val; // B
@@ -215,12 +215,12 @@ static void uploadHsvMaskTexture(const SimpleMat& grayMask)
     }
 
     D3D11_MAPPED_SUBRESOURCE ms;
-    HRESULT hr_map = g_pd3dDeviceContext->Map(g_hsvMaskTex, 0, D3D11_MAP_WRITE_DISCARD, 0, &ms);
+    HRESULT hr_map = g_pd3dDeviceContext->Map(g_colorMaskTex, 0, D3D11_MAP_WRITE_DISCARD, 0, &ms);
     if (SUCCEEDED(hr_map))
     {
-        for (int y = 0; y < hsvTexH; ++y)
-            memcpy((uint8_t*)ms.pData + ms.RowPitch * y, rgbaMask.data() + y * rgbaMask.step(), hsvTexW * 4); 
-        g_pd3dDeviceContext->Unmap(g_hsvMaskTex, 0);
+        for (int y = 0; y < colorTexH; ++y)
+            memcpy((uint8_t*)ms.pData + ms.RowPitch * y, rgbaMask.data() + y * rgbaMask.step(), colorTexW * 4); 
+        g_pd3dDeviceContext->Unmap(g_colorMaskTex, 0);
     } else {
         
     }
@@ -433,16 +433,16 @@ void draw_debug()
             texH = 0;
 
             
-            if (g_hsvMaskSRV) {
-                g_hsvMaskSRV->Release();
-                g_hsvMaskSRV = nullptr;
+            if (g_colorMaskSRV) {
+                g_colorMaskSRV->Release();
+                g_colorMaskSRV = nullptr;
             }
-            if (g_hsvMaskTex) {
-                g_hsvMaskTex->Release();
-                g_hsvMaskTex = nullptr;
+            if (g_colorMaskTex) {
+                g_colorMaskTex->Release();
+                g_colorMaskTex = nullptr;
             }
-            hsvTexW = 0;
-            hsvTexH = 0;
+            colorTexW = 0;
+            colorTexH = 0;
         }
     }
     if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Toggles the live debug frame preview below."); }
@@ -629,59 +629,60 @@ void draw_debug()
     ImGui::Spacing();
 
     
-    ImGui::SeparatorText("HSV Filter Debug");
+    ImGui::SeparatorText("RGB Color Filter Debug");
     ImGui::Spacing();
 
-    if (ImGui::Checkbox("Enable HSV Filter (in Config)", &ctx.config.enable_hsv_filter)) {
+    if (ImGui::Checkbox("Enable RGB Color Filter (in Config)", &ctx.config.enable_color_filter)) {
         ctx.config.saveConfig(); 
         if (ctx.detector) ctx.detector->m_ignore_flags_need_update = true; 
     }
-    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Toggles the HSV filtering logic (config.enable_hsv_filter)."); }
+    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Toggles the RGB color filtering logic (config.enable_color_filter)."); }
 
-    if (ctx.config.enable_hsv_filter) {
-        ImGui::Text("Min HSV Pixels: %d", ctx.config.min_hsv_pixels);
+    if (ctx.config.enable_color_filter) {
+        ImGui::Text("Min Color Pixels: %d", ctx.config.min_color_pixels);
         ImGui::SameLine(); ImGui::Spacing(); ImGui::SameLine();
-        ImGui::Text(ctx.config.remove_hsv_matches ? "Mode: Remove if HSV matches" : "Mode: Keep if HSV matches");
+        ImGui::Text(ctx.config.remove_color_matches ? "Mode: Remove if color matches" : "Mode: Keep if color matches");
 
-        ImGui::Text("Lower H:%3d S:%3d V:%3d", ctx.config.hsv_lower_h, ctx.config.hsv_lower_s, ctx.config.hsv_lower_v);
-        ImGui::Text("Upper H:%3d S:%3d V:%3d", ctx.config.hsv_upper_h, ctx.config.hsv_upper_s, ctx.config.hsv_upper_v);
+        ImGui::Text("Red Range: %3d - %3d", ctx.config.rgb_min_r, ctx.config.rgb_max_r);
+        ImGui::Text("Green Range: %3d - %3d", ctx.config.rgb_min_g, ctx.config.rgb_max_g);
+        ImGui::Text("Blue Range: %3d - %3d", ctx.config.rgb_min_b, ctx.config.rgb_max_b);
         ImGui::Spacing();
 
-        static bool show_hsv_mask_preview = false;
-        ImGui::Checkbox("Show HSV Mask Preview", &show_hsv_mask_preview);
+        static bool show_color_mask_preview = false;
+        ImGui::Checkbox("Show Color Mask Preview", &show_color_mask_preview);
 
-        if (show_hsv_mask_preview) {
+        if (show_color_mask_preview) {
             
-            SimpleCudaMat hsvMaskGpu;
+            SimpleCudaMat colorMaskGpu;
             if (ctx.detector) {
                 try {
-                    hsvMaskGpu = ctx.detector->getHsvMaskGpu();
+                    colorMaskGpu = ctx.detector->getColorMaskGpu();
                 } catch (const std::exception&) {
-                    // Handle any exceptions from getHsvMaskGpu
-                    hsvMaskGpu = SimpleCudaMat();
+                    // Handle any exceptions from getColorMaskGpu
+                    colorMaskGpu = SimpleCudaMat();
                 }
             } 
-            if (!hsvMaskGpu.empty()) {
-                static SimpleMat hsvMaskCpu; 
+            if (!colorMaskGpu.empty()) {
+                static SimpleMat colorMaskCpu; 
                 try {
-                    hsvMaskCpu.create(hsvMaskGpu.rows(), hsvMaskGpu.cols(), hsvMaskGpu.channels());
-                    hsvMaskGpu.download(hsvMaskCpu.data(), hsvMaskCpu.step()); 
+                    colorMaskCpu.create(colorMaskGpu.rows(), colorMaskGpu.cols(), colorMaskGpu.channels());
+                    colorMaskGpu.download(colorMaskCpu.data(), colorMaskCpu.step()); 
                 } catch (...) {
-                    ImGui::Text("Error downloading HSV Mask");
-                    hsvMaskCpu.release(); 
+                    ImGui::Text("Error downloading Color Mask");
+                    colorMaskCpu.release(); 
                 }
 
-                if (!hsvMaskCpu.empty()) {
-                    uploadHsvMaskTexture(hsvMaskCpu); 
-                    if (g_hsvMaskSRV && hsvTexW > 0 && hsvTexH > 0) {
-                        ImGui::SliderFloat("HSV Mask Scale", &hsv_mask_preview_scale, 0.1f, 2.0f, "%.1fx");
-                        ImVec2 mask_img_size(hsvTexW * hsv_mask_preview_scale, hsvTexH * hsv_mask_preview_scale);
-                        ImGui::Image(g_hsvMaskSRV, mask_img_size);
+                if (!colorMaskCpu.empty()) {
+                    uploadColorMaskTexture(colorMaskCpu); 
+                    if (g_colorMaskSRV && colorTexW > 0 && colorTexH > 0) {
+                        ImGui::SliderFloat("Color Mask Scale", &color_mask_preview_scale, 0.1f, 2.0f, "%.1fx");
+                        ImVec2 mask_img_size(colorTexW * color_mask_preview_scale, colorTexH * color_mask_preview_scale);
+                        ImGui::Image(g_colorMaskSRV, mask_img_size);
                     } else {
-                        ImGui::Text("HSV Mask Texture not available for display.");
+                        ImGui::Text("Color Mask Texture not available for display.");
                     }
                 } else {
-                    ImGui::Text("HSV Mask (CPU) is empty or download failed.");
+                    ImGui::Text("Color Mask (CPU) is empty or download failed.");
                 }
             } else {
                 ImGui::Text("HSV Mask (GPU) is not available from detector or not generated.");

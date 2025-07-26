@@ -83,14 +83,14 @@ public:
         // Screenshot delay
         config.screenshot_delay = (std::max)(0, config.screenshot_delay);
 
-        // HSV filter parameters
-        config.hsv_lower_h = std::clamp(config.hsv_lower_h, 0, 179);
-        config.hsv_lower_s = std::clamp(config.hsv_lower_s, 0, 255);
-        config.hsv_lower_v = std::clamp(config.hsv_lower_v, 0, 255);
-        config.hsv_upper_h = std::clamp(config.hsv_upper_h, 0, 179);
-        config.hsv_upper_s = std::clamp(config.hsv_upper_s, 0, 255);
-        config.hsv_upper_v = std::clamp(config.hsv_upper_v, 0, 255);
-        config.min_hsv_pixels = (std::max)(0, config.min_hsv_pixels);
+        // RGB color filter parameters
+        config.rgb_min_r = std::clamp(config.rgb_min_r, 0, 255);
+        config.rgb_max_r = std::clamp(config.rgb_max_r, 0, 255);
+        config.rgb_min_g = std::clamp(config.rgb_min_g, 0, 255);
+        config.rgb_max_g = std::clamp(config.rgb_max_g, 0, 255);
+        config.rgb_min_b = std::clamp(config.rgb_min_b, 0, 255);
+        config.rgb_max_b = std::clamp(config.rgb_max_b, 0, 255);
+        config.min_color_pixels = (std::max)(0, config.min_color_pixels);
 
         // Validate string values
         if (config.capture_method != "simple" && 

@@ -616,9 +616,9 @@ void OverlayThread()
                     {
                         ImGui::BeginChild("##visual_content", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
                         
-                        // HSV Filter
-                        UIHelpers::BeginSettingsSection("Color Filter", "Configure HSV color-based filtering");
-                        draw_hsv_filter_settings();
+                        // Color Filter (RGB/HSV)
+                        UIHelpers::BeginSettingsSection("Color Filter", "Configure color-based filtering");
+                        draw_color_filter_settings();
                         UIHelpers::EndSettingsSection();
                         
                         // Overlay Settings
