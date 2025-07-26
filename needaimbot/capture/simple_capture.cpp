@@ -129,14 +129,10 @@ SimpleMat SimpleScreenCapture::GetNextFrameCpu()
     if (captureAttempts % 60 == 1) {
     }
     
-    // Verify source data before conversion
-    const uint8_t* srcData = m_hostFrame.data();
+    // Use bitmap data directly
+    const uint8_t* srcData = static_cast<const uint8_t*>(m_bitmapData);
     if (!srcData) {
-        // Use bitmap data directly
-        srcData = static_cast<const uint8_t*>(m_bitmapData);
-        if (!srcData) {
-            return SimpleMat();
-        }
+        return SimpleMat();
     }
     
     // Manual color conversion from BGRA to BGR
