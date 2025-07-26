@@ -214,16 +214,20 @@ bool Config::loadConfig(const std::string& filename)
         verbose = false;
 
 
+        // RGB Color filter defaults
+        enable_color_filter = false;
         
-        enable_hsv_filter = false;  // Keep disabled for performance
-        hsv_lower_h = 0;
-        hsv_lower_s = 0;
-        hsv_lower_v = 0;
-        hsv_upper_h = 179;
-        hsv_upper_s = 255;
-        hsv_upper_v = 255;
-        min_hsv_pixels = 10;
-        remove_hsv_matches = false;
+        // RGB defaults (detect red enemies)
+        rgb_min_r = 180;
+        rgb_max_r = 255;
+        rgb_min_g = 0;
+        rgb_max_g = 80;
+        rgb_min_b = 0;
+        rgb_max_b = 80;
+        
+        // Filter settings
+        min_color_pixels = 10;
+        remove_color_matches = false;
 
         saveConfig(configFile); 
         return true;
@@ -389,18 +393,20 @@ bool Config::loadConfig(const std::string& filename)
     always_on_top = get_bool_ini("Debug", "always_on_top", true);
     verbose = get_bool_ini("Debug", "verbose", false);
 
+    // RGB Color filter settings
+    enable_color_filter = get_bool_ini("ColorFilter", "enable_color_filter", false);
     
-
+    // RGB settings
+    rgb_min_r = get_long_ini("ColorFilter", "rgb_min_r", 180);
+    rgb_max_r = get_long_ini("ColorFilter", "rgb_max_r", 255);
+    rgb_min_g = get_long_ini("ColorFilter", "rgb_min_g", 0);
+    rgb_max_g = get_long_ini("ColorFilter", "rgb_max_g", 80);
+    rgb_min_b = get_long_ini("ColorFilter", "rgb_min_b", 0);
+    rgb_max_b = get_long_ini("ColorFilter", "rgb_max_b", 80);
     
-    enable_hsv_filter = get_bool_ini("HSVFilter", "enable_hsv_filter", false);
-    hsv_lower_h = get_long_ini("HSVFilter", "hsv_lower_h", 0);
-    hsv_lower_s = get_long_ini("HSVFilter", "hsv_lower_s", 0);
-    hsv_lower_v = get_long_ini("HSVFilter", "hsv_lower_v", 0);
-    hsv_upper_h = get_long_ini("HSVFilter", "hsv_upper_h", 179);
-    hsv_upper_s = get_long_ini("HSVFilter", "hsv_upper_s", 255);
-    hsv_upper_v = get_long_ini("HSVFilter", "hsv_upper_v", 255);
-    min_hsv_pixels = get_long_ini("HSVFilter", "min_hsv_pixels", 10);
-    remove_hsv_matches = get_bool_ini("HSVFilter", "remove_hsv_matches", false);
+    // Filter settings
+    min_color_pixels = get_long_ini("ColorFilter", "min_color_pixels", 10);
+    remove_color_matches = get_bool_ini("ColorFilter", "remove_color_matches", false);
 
     
     head_class_name = get_string_ini("Classes", "HeadClassName", "Head");
@@ -626,16 +632,17 @@ bool Config::saveConfig(const std::string& filename)
     file << "\n";
 
 
-    file << "[HSVFilter]\n";
-    file << "enable_hsv_filter = " << (enable_hsv_filter ? "true" : "false") << "\n";
-    file << "hsv_lower_h = " << hsv_lower_h << "\n";
-    file << "hsv_lower_s = " << hsv_lower_s << "\n";
-    file << "hsv_lower_v = " << hsv_lower_v << "\n";
-    file << "hsv_upper_h = " << hsv_upper_h << "\n";
-    file << "hsv_upper_s = " << hsv_upper_s << "\n";
-    file << "hsv_upper_v = " << hsv_upper_v << "\n";
-    file << "min_hsv_pixels = " << min_hsv_pixels << "\n";
-    file << "remove_hsv_matches = " << (remove_hsv_matches ? "true" : "false") << "\n\n";
+    // RGB ColorFilter section
+    file << "[ColorFilter]\n";
+    file << "enable_color_filter = " << (enable_color_filter ? "true" : "false") << "\n";
+    file << "rgb_min_r = " << rgb_min_r << "\n";
+    file << "rgb_max_r = " << rgb_max_r << "\n";
+    file << "rgb_min_g = " << rgb_min_g << "\n";
+    file << "rgb_max_g = " << rgb_max_g << "\n";
+    file << "rgb_min_b = " << rgb_min_b << "\n";
+    file << "rgb_max_b = " << rgb_max_b << "\n";
+    file << "min_color_pixels = " << min_color_pixels << "\n";
+    file << "remove_color_matches = " << (remove_color_matches ? "true" : "false") << "\n\n";
     
     file.close();
     return true;

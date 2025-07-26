@@ -5,7 +5,7 @@
 #include "filterGpu.h"
 #include "postProcess.h" 
 
-// Warp-level reduction for HSV pixel counting
+// Warp-level reduction for color pixel counting
 __device__ inline int warpReduceSum(int val) {
     for (int offset = 16; offset > 0; offset /= 2) {
         val += __shfl_down_sync(0xffffffff, val, offset);
@@ -13,7 +13,7 @@ __device__ inline int warpReduceSum(int val) {
     return val;
 }
 
-// Optimized HSV filtering kernel
+// Optimized color filtering kernel
 __global__ __launch_bounds__(256, 4) void filterDetectionsByClassIdKernel(
     const Detection* __restrict__ input_detections,
     int num_input_detections,
@@ -21,10 +21,10 @@ __global__ __launch_bounds__(256, 4) void filterDetectionsByClassIdKernel(
     int* __restrict__ output_count,
     const unsigned char* __restrict__ d_ignored_class_ids,
     int max_check_id,
-    const unsigned char* __restrict__ d_hsv_mask,
+    const unsigned char* __restrict__ d_color_mask,
     int mask_pitch,
-    int min_hsv_pixels,
-    bool remove_hsv_matches,
+    int min_color_pixels,
+    bool remove_color_matches,
     int max_output_detections)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -40,30 +40,30 @@ __global__ __launch_bounds__(256, 4) void filterDetectionsByClassIdKernel(
         
         bool should_keep = true;
         
-        // HSV filtering with simple pixel counting
-        if (d_hsv_mask != nullptr) {
+        // Color filtering with simple pixel counting
+        if (d_color_mask != nullptr) {
             int x0 = det.x;
             int y0 = det.y;
             int x1 = x0 + det.width;
             int y1 = y0 + det.height;
             
-            // Count HSV matching pixels
-            int hsv_pixel_count = 0;
+            // Count color matching pixels
+            int color_pixel_count = 0;
             for (int y = y0; y < y1; y++) {
                 for (int x = x0; x < x1; x++) {
-                    if (d_hsv_mask[y * mask_pitch + x]) {
-                        hsv_pixel_count++;
+                    if (d_color_mask[y * mask_pitch + x]) {
+                        color_pixel_count++;
                     }
                 }
             }
             
-            // Apply HSV filtering logic
-            if (remove_hsv_matches) {
-                if (hsv_pixel_count >= min_hsv_pixels) {
+            // Apply color filtering logic
+            if (remove_color_matches) {
+                if (color_pixel_count >= min_color_pixels) {
                     should_keep = false;
                 }
             } else {
-                if (hsv_pixel_count < min_hsv_pixels) {
+                if (color_pixel_count < min_color_pixels) {
                     should_keep = false;
                 }
             }
@@ -87,10 +87,10 @@ cudaError_t filterDetectionsByClassIdGpu(
     int* d_output_count,
     const unsigned char* d_ignored_class_ids,
     int max_check_id,
-    const unsigned char* d_hsv_mask,
+    const unsigned char* d_color_mask,
     int mask_pitch,
-    int min_hsv_pixels,
-    bool remove_hsv_matches,
+    int min_color_pixels,
+    bool remove_color_matches,
     int max_output_detections,
     cudaStream_t stream
 ) {
@@ -110,10 +110,10 @@ cudaError_t filterDetectionsByClassIdGpu(
         d_output_count,
         d_ignored_class_ids,
         max_check_id,
-        d_hsv_mask,
+        d_color_mask,
         mask_pitch,
-        min_hsv_pixels,
-        remove_hsv_matches,
+        min_color_pixels,
+        remove_color_matches,
         max_output_detections
     );
     

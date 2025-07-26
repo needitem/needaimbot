@@ -304,16 +304,20 @@ public:
 
 
 
+    // RGB Color filter settings
+    bool enable_color_filter;
     
-    bool enable_hsv_filter;
-    int hsv_lower_h;
-    int hsv_lower_s;
-    int hsv_lower_v;
-    int hsv_upper_h;
-    int hsv_upper_s;
-    int hsv_upper_v;
-    int min_hsv_pixels;
-    bool remove_hsv_matches; 
+    // RGB filter ranges
+    int rgb_min_r;
+    int rgb_max_r;
+    int rgb_min_g;
+    int rgb_max_g;
+    int rgb_min_b;
+    int rgb_max_b;
+    
+    // Filter settings
+    int min_color_pixels;
+    bool remove_color_matches; 
 
     // Path utilities
     std::string getExecutableDir();

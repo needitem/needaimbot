@@ -225,7 +225,7 @@ public:
 
     SimpleCudaMat resizedBuffer;
     
-    SimpleCudaMat m_hsvMaskGpu;
+    SimpleCudaMat m_colorMaskGpu;  // For RGB or HSV color filtering
 
     
     CudaBuffer<Detection> m_decodedDetectionsGpu;
@@ -294,10 +294,10 @@ public:
     cudaEvent_t processingDone;
     HANDLE m_captureDoneEvent;
 
-    std::mutex hsvMaskMutex; 
+    std::mutex colorMaskMutex; 
 
     bool isCudaContextInitialized() const { return m_cudaContextInitialized; } 
-    SimpleCudaMat getHsvMaskGpu() const; 
+    SimpleCudaMat getColorMaskGpu() const; 
 
     void start();
     void stop();

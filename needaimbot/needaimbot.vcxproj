@@ -44,7 +44,7 @@
     <ClCompile Include="mouse\\input_drivers\\SerialConnection.cpp" />
     <ClCompile Include="mouse\\input_drivers\\MakcuConnection.cpp" />
     <ClCompile Include="mouse\\aimbot_components\\AimbotTarget.cpp" />
-    <ClCompile Include="overlay\draw_hsv_filter.cpp" />
+    <ClCompile Include="overlay\draw_color_filter.cpp" />
     <ClCompile Include="overlay\draw_rcs.cpp" />
     <ClCompile Include="overlay\draw_stats.cpp" />
     <ClCompile Include="overlay\draw_tuning.cpp" />
@@ -70,6 +70,7 @@
     <CudaCompile Include="postprocess\targetLockingGpu.cu" />
     <CudaCompile Include="cuda\cuda_image_processing.cu" />
     <CudaCompile Include="cuda\cuda_float_processing.cu" />
+    <CudaCompile Include="cuda\color_filter_kernel.cu" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="core\config_cache.h" />
