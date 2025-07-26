@@ -1,7 +1,7 @@
 #ifndef AIMBOTTARGET_H
 #define AIMBOTTARGET_H
 
-#include <opencv2/opencv.hpp>
+// OpenCV removed - using standard C++ types
 #include <vector>
 #include <chrono>
 

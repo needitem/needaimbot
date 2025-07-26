@@ -3,7 +3,7 @@
 #include <winsock2.h>
 #include <Windows.h>
 
-#include <opencv2/opencv.hpp>
+// OpenCV removed - using custom CUDA image processing
 #include <iostream>
 #include <thread>
 #include <atomic>
@@ -396,7 +396,7 @@ int main()
                 std::cerr << std::left << std::setw(20) << "CUDA Runtime:" << "Error getting version - " << cudaGetErrorString(cuda_err) << std::endl;
             }
 
-            std::cout << std::left << std::setw(20) << "OpenCV Build Info:" << std::endl << cv::getBuildInformation() << std::endl;
+            // OpenCV removed - no build info to display
             std::cout << "---------------------------" << std::endl << std::endl;
         }
 

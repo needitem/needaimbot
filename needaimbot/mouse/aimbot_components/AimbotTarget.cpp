@@ -5,7 +5,7 @@
 
 #include <cmath>
 #include <limits>
-#include <opencv2/opencv.hpp>
+// OpenCV removed - using standard C++ types
 
 #include "needaimbot.h"
 #include "AimbotTarget.h"

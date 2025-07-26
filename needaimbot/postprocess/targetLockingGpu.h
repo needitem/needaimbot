@@ -8,9 +8,10 @@
 cudaError_t reacquireLockedTargetGpu(
     const Detection* d_current_detections,
     int num_current_detections,
-    const cv::Rect& previous_locked_target_box,
+    int prev_x, int prev_y, int prev_width, int prev_height,
     float iou_threshold,
     int* d_reacquired_target_index_output,
     cudaStream_t stream);
+
 
 #endif 

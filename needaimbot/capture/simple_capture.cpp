@@ -1,23 +1,21 @@
 #include "simple_capture.h"
 #include "AppContext.h"
+#include "../cuda/cuda_image_processing.h"
 #include <iostream>
 #include <chrono>
-#include <opencv2/core/cuda.hpp>
-#include <opencv2/imgproc.hpp>
-#include <opencv2/cudaimgproc.hpp>
 
 SimpleScreenCapture::SimpleScreenCapture(int width, int height) 
     : m_initialized(false), m_width(width), m_height(height),
       m_screenDC(nullptr), m_memoryDC(nullptr), m_bitmap(nullptr), m_bitmapData(nullptr)
 {
+    std::cout << "[SimpleCapture] Constructor called with size: " << width << "x" << height << std::endl;
+    
     // Get screen dimensions
     m_screenWidth = GetSystemMetrics(SM_CXSCREEN);
     m_screenHeight = GetSystemMetrics(SM_CYSCREEN);
     
-    if (AppContext::getInstance().config.verbose) {
-        std::cout << "[SimpleCapture] Screen resolution: " << m_screenWidth << "x" << m_screenHeight << std::endl;
-        std::cout << "[SimpleCapture] Capture region: " << m_width << "x" << m_height << std::endl;
-    }
+    std::cout << "[SimpleCapture] Screen resolution: " << m_screenWidth << "x" << m_screenHeight << std::endl;
+    std::cout << "[SimpleCapture] Capture region: " << m_width << "x" << m_height << std::endl;
     
     // Get screen DC
     m_screenDC = GetDC(NULL);
@@ -56,26 +54,20 @@ SimpleScreenCapture::SimpleScreenCapture(int width, int height)
     // Select bitmap into memory DC
     SelectObject(m_memoryDC, m_bitmap);
     
-    // Pre-allocate OpenCV matrices
-    m_hostFrame = cv::Mat(m_height, m_width, CV_8UC4, m_bitmapData);
+    // Pre-allocate matrices
+    m_hostFrame = SimpleMat(m_height, m_width, 4, m_bitmapData, m_width * 4);
+    
+    std::cout << "[SimpleCapture] Host frame created: " << m_hostFrame.cols() << "x" << m_hostFrame.rows() 
+              << " channels=" << m_hostFrame.channels() << " empty=" << m_hostFrame.empty() << std::endl;
+    std::cout << "[SimpleCapture] Bitmap data pointer: " << (void*)m_bitmapData << std::endl;
     
     // Pre-allocate GPU memory to avoid allocation during stream capture
-    try {
-        m_deviceFrame.create(m_height, m_width, CV_8UC4); // BGRA first
-        m_tempBgrFrame.create(m_height, m_width, CV_8UC3); // BGR result
-    } catch (const cv::Exception& e) {
-        std::cerr << "[SimpleCapture] Failed to pre-allocate GPU memory: " << e.what() << std::endl;
-        DeleteObject(m_bitmap);
-        DeleteDC(m_memoryDC);
-        ReleaseDC(NULL, m_screenDC);
-        return;
-    }
+    m_deviceFrame.create(m_height, m_width, 4); // BGRA first
+    m_tempBgrFrame.create(m_height, m_width, 3); // BGR result
     
     m_initialized = true;
     
-    if (AppContext::getInstance().config.verbose) {
-        std::cout << "[SimpleCapture] Initialized successfully" << std::endl;
-    }
+    std::cout << "[SimpleCapture] Initialized successfully" << std::endl;
 }
 
 SimpleScreenCapture::~SimpleScreenCapture()
@@ -85,42 +77,93 @@ SimpleScreenCapture::~SimpleScreenCapture()
     if (m_screenDC) ReleaseDC(NULL, m_screenDC);
 }
 
-cv::cuda::GpuMat SimpleScreenCapture::GetNextFrameGpu()
+SimpleCudaMat SimpleScreenCapture::GetNextFrameGpu()
 {
     // Return CPU frame as GPU frame is problematic during stream capture
     // Let the caller handle GPU upload if needed
-    cv::Mat cpuFrame = GetNextFrameCpu();
+    SimpleMat cpuFrame = GetNextFrameCpu();
     if (cpuFrame.empty()) {
-        return cv::cuda::GpuMat();
+        return SimpleCudaMat();
     }
     
     // For now, return empty GpuMat to avoid stream capture conflicts
     // The detector should handle CPU frames or upload manually
-    return cv::cuda::GpuMat();
+    return SimpleCudaMat();
 }
 
-cv::Mat SimpleScreenCapture::GetNextFrameCpu()
+SimpleMat SimpleScreenCapture::GetNextFrameCpu()
 {
+    static int captureAttempts = 0;
+    captureAttempts++;
+    
+    std::cout << "[SimpleCapture] GetNextFrameCpu called, attempt " << captureAttempts << std::endl;
+    
     if (!m_initialized) {
-        return cv::Mat();
+        std::cerr << "[SimpleCapture] GetNextFrameCpu: Not initialized!" << std::endl;
+        return SimpleMat();
     }
+    
+    std::cout << "[SimpleCapture] Initialized check passed" << std::endl;
     
     // Calculate center region coordinates
     int startX = (m_screenWidth - m_width) / 2;
     int startY = (m_screenHeight - m_height) / 2;
+    
+    if (captureAttempts % 60 == 1) {
+        std::cout << "[SimpleCapture] Capturing from (" << startX << ", " << startY 
+                  << ") size: " << m_width << "x" << m_height << std::endl;
+    }
     
     // Try optimized BitBlt with NOCOPYBITS for better performance on high-res displays
     BOOL result = BitBlt(m_memoryDC, 0, 0, m_width, m_height, 
                         m_screenDC, startX, startY, SRCCOPY | NOMIRRORBITMAP);
     
     if (!result) {
-        std::cerr << "[SimpleCapture] BitBlt failed" << std::endl;
-        return cv::Mat();
+        DWORD error = GetLastError();
+        std::cerr << "[SimpleCapture] BitBlt failed. Error: " << error << std::endl;
+        return SimpleMat();
+    }
+    
+    // Verify bitmap data is valid
+    if (!m_bitmapData) {
+        std::cerr << "[SimpleCapture] Bitmap data is null!" << std::endl;
+        return SimpleMat();
+    }
+    
+    // Debug: Check if m_hostFrame is valid
+    if (captureAttempts % 60 == 1) {
+        std::cout << "[SimpleCapture] m_hostFrame empty: " << m_hostFrame.empty() 
+                  << " cols: " << m_hostFrame.cols() << " rows: " << m_hostFrame.rows() << std::endl;
     }
     
     // Convert BGRA to BGR
-    cv::Mat bgrFrame;
-    cv::cvtColor(m_hostFrame, bgrFrame, cv::COLOR_BGRA2BGR);
+    SimpleMat bgrFrame(m_height, m_width, 3);
     
-    return bgrFrame.clone(); // Return a copy since m_hostFrame is reused
+    if (captureAttempts % 60 == 1) {
+        std::cout << "[SimpleCapture] Converting BGRA to BGR..." << std::endl;
+        std::cout << "[SimpleCapture] Source data: " << (void*)m_hostFrame.data() 
+                  << " step: " << m_hostFrame.step() << std::endl;
+        std::cout << "[SimpleCapture] BGR frame created - empty: " << bgrFrame.empty() 
+                  << " data: " << (void*)bgrFrame.data() 
+                  << " step: " << bgrFrame.step() << std::endl;
+    }
+    
+    // Manual color conversion from BGRA to BGR
+    for (int y = 0; y < m_height; ++y) {
+        const uint8_t* srcRow = m_hostFrame.data() + y * m_hostFrame.step();
+        uint8_t* dstRow = bgrFrame.data() + y * bgrFrame.step();
+        for (int x = 0; x < m_width; ++x) {
+            dstRow[x * 3 + 0] = srcRow[x * 4 + 0]; // B
+            dstRow[x * 3 + 1] = srcRow[x * 4 + 1]; // G
+            dstRow[x * 3 + 2] = srcRow[x * 4 + 2]; // R
+        }
+    }
+    
+    if (captureAttempts % 60 == 1) {
+        std::cout << "[SimpleCapture] Frame captured successfully. BGR frame: " 
+                  << bgrFrame.cols() << "x" << bgrFrame.rows() 
+                  << " channels: " << bgrFrame.channels() << std::endl;
+    }
+    
+    return bgrFrame;
 }

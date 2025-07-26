@@ -4,6 +4,7 @@
 #include <Windows.h>
 
 #include <shellapi.h>
+#include <algorithm>
 
 #include "AppContext.h"
 #include "needaimbot.h"

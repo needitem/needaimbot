@@ -2,7 +2,7 @@
 #define POSTPROCESS_H
 
 #include <vector>
-#include <opencv2/opencv.hpp>
+// OpenCV removed - using custom structures
 #include <cuda_runtime.h>
 #include <NvInferRuntimeCommon.h> 
 
@@ -21,20 +21,19 @@ struct Detection
     int width;           // 4 bytes
     int height;          // 4 bytes
     
-    // Helper methods for cv::Rect compatibility
-    cv::Rect box() const { return cv::Rect(x, y, width, height); }
-    void setBox(const cv::Rect& rect) {
-        x = rect.x;
-        y = rect.y;
-        width = rect.width;
-        height = rect.height;
+    // Helper methods for box access
+    void getBox(int& outX, int& outY, int& outWidth, int& outHeight) const {
+        outX = x;
+        outY = y;
+        outWidth = width;
+        outHeight = height;
     }
     
-    // Constructor for compatibility
+    // Constructors
     Detection() : confidence(0), classId(0), x(0), y(0), width(0), height(0) {}
-    Detection(const cv::Rect& rect, float conf, int cls) 
-        : confidence(conf), classId(cls), x(rect.x), y(rect.y), 
-          width(rect.width), height(rect.height) {}
+    Detection(int x_, int y_, int width_, int height_, float conf, int cls) 
+        : confidence(conf), classId(cls), x(x_), y(y_), 
+          width(width_), height(height_) {}
 };
 
 
