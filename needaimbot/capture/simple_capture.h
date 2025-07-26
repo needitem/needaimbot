@@ -3,6 +3,7 @@
 #include "../cuda/simple_cuda_mat.h"
 #include <windows.h>
 #include <cuda_runtime.h>
+#include <thread>
 
 class SimpleScreenCapture {
 public:
@@ -30,4 +31,8 @@ private:
     
     SimpleCudaMat m_deviceFrame;
     SimpleCudaMat m_tempBgrFrame;
+    
+    // 에러 복구를 위한 카운터
+    int m_retryCount;
+    const int m_maxRetries;
 };
