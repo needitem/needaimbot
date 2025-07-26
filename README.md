@@ -6,12 +6,12 @@
 
 ## 🎯 Overview
 
-**needaimbot** is a high-performance C++ AI-powered aiming assistance tool that utilizes deep learning models and advanced computer vision techniques for real-time target detection and tracking. Built with cutting-edge technologies including TensorRT for GPU acceleration, OpenCV for image processing, and CUDA for parallel computing.
+**needaimbot** is a high-performance C++ AI-powered aiming assistance tool that utilizes deep learning models and advanced computer vision techniques for real-time target detection and tracking. Built with cutting-edge technologies including TensorRT for GPU acceleration and CUDA for parallel computing.
 
 ### Key Highlights
 - **Real-time AI target detection** with TensorRT optimization
 - **Advanced predictive tracking** using Kalman filters and PID controllers
-- **Multiple capture methods** including optical flow and hardware acceleration
+- **Multiple capture methods** with hardware acceleration
 - **Extensive input device support** (Logitech G-Hub, Razer, KMBox, Serial)
 - **Customizable overlay interface** with real-time configuration
 - **GPU-accelerated processing** for minimal latency
@@ -56,7 +56,7 @@
 - **📊 Optical Flow Integration**: Advanced motion detection and compensation
 - **🎛️ Live Configuration**: Real-time parameter adjustment through overlay interface
 
-### AI & Computer Vision
+### AI & Deep Learning
 - **TensorRT Model Optimization**: Automatic conversion and optimization of ONNX models
 - **Dynamic Shape Support**: Flexible input dimensions for various model architectures
 - **Multi-Model Support**: Easy switching between different AI models
@@ -97,9 +97,9 @@
 - **C++17**: Modern C++ standard with performance optimizations
 - **CUDA 12.8**: GPU acceleration and parallel computing
 - **TensorRT 10.8**: Deep learning inference optimization
-- **OpenCV 4.10**: Computer vision and image processing
 - **ImGui**: Immediate mode GUI framework
 - **Eigen**: Linear algebra and mathematical operations
+- **STB**: Image processing and I/O operations
 
 ### Performance Characteristics
 - **Inference Time**: <5ms per frame (RTX 3080)
@@ -127,90 +127,13 @@
 4. **Set Up Project Structure**  
    Create a folder named `modules` in the directory `needaimbot/needaimbot/modules`.
 
-5. **Build OpenCV with CUDA Support (Maximum Performance)**
-	- Download and install [CMake](https://cmake.org/) and [CUDA 12.8](https://developer.nvidia.com/cuda-12-8-0-download-archive).
-	- Download [OpenCV 4.12](https://github.com/opencv/opencv) (latest version for enhanced performance).
-	- Download [OpenCV Contrib 4.12](https://github.com/opencv/opencv_contrib/tags).
-	- Create new directories: `needaimbot/needaimbot/modules/opencv/` and `needaimbot/modules/opencv/build`.
-	- Extract `opencv-4.12.0` to `needaimbot/needaimbot/modules/opencv/opencv-4.12.0` and `opencv_contrib-4.12.0` to `needaimbot/modules/opencv/opencv_contrib-4.12.0`.
-	- Extract cuDNN to `needaimbot/needaimbot/modules/cudnn`.
-	- Open CMake and set the source code location to `needaimbot/modules/opencv/opencv-4.12.0`.
-	- Set the build directory to `needaimbot/needaimbot/modules/opencv/build`.
-	- Click `Configure`.
-	- (Some options will appear after the next configuration application. For example, to configure the CUDNN_LIBRARY paths, you first need to activate the WITH_CUDA option and click configure.)
-	
-	**Core Performance Settings:**
-		- `CMAKE_BUILD_TYPE` = `Release`
-		- `CMAKE_CXX_FLAGS_RELEASE` = `/Ox /Ob2 /Ot /Oy /GT /GL /Gw /Gy /fp:fast /arch:AVX2 /favor:INTEL64 /MP /bigobj`
-		- `CMAKE_C_FLAGS_RELEASE` = `/Ox /Ob2 /Ot /Oy /GT /GL /Gw /Gy /fp:fast /arch:AVX2 /favor:INTEL64 /MP`
-		- `CMAKE_EXE_LINKER_FLAGS_RELEASE` = `/LTCG /OPT:REF /OPT:ICF /INCREMENTAL:NO`
-		- `CMAKE_SHARED_LINKER_FLAGS_RELEASE` = `/LTCG /OPT:REF /OPT:ICF /INCREMENTAL:NO`
-	
-	**CUDA & GPU Acceleration:**
-		- `WITH_CUDA` = `ON`
-		- `WITH_CUBLAS` = `ON`
-		- `ENABLE_FAST_MATH` = `ON`
-		- `CUDA_FAST_MATH` = `ON`
-		- `WITH_CUDNN` = `ON`
-		- `CUDNN_LIBRARY` = `<full path>needaimbot/needaimbot/modules/cudnn/lib/x64/cudnn.lib`
-		- `CUDNN_INCLUDE_DIR` = `<full path>needaimbot/needaimbot/modules/cudnn/include`
-		- `CUDA_ARCH_BIN` = Visit the [CUDA Wiki](https://en.wikipedia.org/wiki/CUDA) to find your Nvidia GPU architecture. For example, for `RTX 3080-TI`, enter `8.6`.
-		- `OPENCV_DNN_CUDA` = `ON`
-	
-	**CPU Optimization:**
-		- `CPU_BASELINE` = `AVX2`
-		- `CPU_DISPATCH` = `AVX2,FP16,AVX512_SKX`
-		- `WITH_IPP` = `ON` (Intel Performance Primitives)
-		- `WITH_TBB` = `ON` (Threading Building Blocks)
-		- `WITH_OPENMP` = `ON`
-		- `WITH_EIGEN` = `ON`
-		- `WITH_LAPACK` = `ON`
-	
-	**Module Configuration:**
-		- `OPENCV_EXTRA_MODULES_PATH` = `<full path>needaimbot/needaimbot/modules/opencv/opencv_contrib-4.12.0/modules`
-		- `BUILD_opencv_world` = `ON`
-		- `BUILD_SHARED_LIBS` = `ON`
-		- `ENABLE_PRECOMPILED_HEADERS` = `ON`
-		
-	**Disable Unnecessary Features:**
-		- `BUILD_opencv_apps` = `OFF`
-		- `BUILD_opencv_java` = `OFF`
-		- `BUILD_opencv_js` = `OFF`
-		- `BUILD_opencv_python2` = `OFF`
-		- `BUILD_TESTS` = `OFF`
-		- `BUILD_PERF_TESTS` = `OFF`
-		- `BUILD_EXAMPLES` = `OFF`
-		- `BUILD_DOCS` = `OFF`
-		- `WITH_NVCUVENC` = `OFF`
-		- `WITH_NVCUVID` = `OFF`
-		- `WITH_GSTREAMER` = `OFF`
-		- `WITH_GTK` = `OFF`
-		- `WITH_QT` = `OFF`
-	
-   - Click `Configure` again and ensure that all optimization flags are properly set.
-   - Click `Generate` to build the C++ solution.
-   - Close CMake and open `needaimbot/modules/opencv/build/OpenCV.sln`, or click `Open Project` in cmake.
-   - Switch the build configuration to `x64` and `Release`.
-   - Open the `CMakeTargets` folder in the solution.
-   - Right-click on `ALL_BUILD` and select `Build`. (Building with maximum optimization can take 2-4 hours.)
-   - After building, right-click on `INSTALL` and select `Build`.
-   - Verify the built files exist in the following folders:
-     - `needaimbot/needaimbot/modules/opencv/build/install/include/opencv2` - Contains `.hpp` and `.h` files.
-     - `needaimbot/needaimbot/modules/opencv/build/install/x64/vc16/bin` - Contains `.dll` files.
-     - `needaimbot/needaimbot/modules/opencv/build/install/x64/vc16/lib` - Contains `.lib` files.
-	
-	**Performance Notes:**
-	- Use `/arch:AVX512` instead of `/arch:AVX2` if your CPU supports AVX-512 (Intel Skylake-X or newer)
-	- The `/Ox /Ot /GL /LTCG` combination provides maximum speed optimization
-	- Building with these settings will result in larger binaries but significantly faster execution
-
-6. **Download Required Libraries**  
+5. **Download Required Libraries**  
 	- [simpleIni](https://github.com/brofield/simpleini/blob/master/SimpleIni.h)
 	- [TensorRT-10.8.0.43](https://developer.nvidia.com/tensorrt/download/10x)
 	- [GLWF Windows pre-compiled binaries](https://www.glfw.org/download.html)
 	- [Eigen](https://gitlab.com/libeigen/eigen/-/releases) (Download the latest stable release)
 	
-7. **Extract Libraries**  
+6. **Extract Libraries**  
 	Place the downloaded libraries into the respective directories:
 	- `SimpleIni.h` -> `needaimbot/needaimbot/modules/SimpleIni.h`
 	- `TensorRT-10.8.0.43` -> `needaimbot/needaimbot/modules/TensorRT-10.8.0.43`
@@ -221,17 +144,17 @@
 
 	**Note**: Serial communication for Arduino input method now uses Windows Native Serial API (no external library required)
    
-8. **Configure Project Settings**
+7. **Configure Project Settings**
 	- Open the project in Visual Studio.
 	- Ensure all library paths are correctly set in **Project Properties** under **Library Directories**.
 	- Go to NuGet packages and install `Microsoft.Windows.CppWinRT`.
 
-9. **Verify CUDA Integration**
+8. **Verify CUDA Integration**
 	- Right-click on the project in Visual Studio.
 	- Navigate to **Build Dependencies** > **Build Customizations**.
 	- Ensure that **CUDA 12.8** (.targets, .props) is included.
 
-10. **Build the Project**
+9. **Build the Project**
     - Switch the build configuration to **Release**.
     - Build the project by selecting **Build** > **Build Solution**.
 
@@ -243,7 +166,15 @@
 - **CUDA Not Found**: Ensure CUDA 12.8 is properly installed and added to PATH
 - **TensorRT Installation**: Verify TensorRT 10.8 is extracted to the correct modules directory
 - **Visual Studio Build Errors**: Check that Windows SDK 10.0.26100.0 is installed
-- **OpenCV Build Failures**: Ensure all paths in CMake configuration are absolute and correct
+- **LNK4098 Runtime Library Conflicts**: 
+  - Ensure all libraries are built with `/MT` flag (Multi-threaded static runtime)
+  - Verify needaimbot project uses consistent Runtime Library settings
+  - Check that all dependencies use the same runtime library
+- **CUDA Compiler Environment Issues (NVCC Fatal)**:
+  - Error: `nvcc fatal : Could not set up the environment for Microsoft Visual Studio`
+  - This occurs when CUDA cannot find or access the Visual Studio environment properly
+  - Ensure Visual Studio is installed before CUDA
+  - Try reinstalling CUDA after Visual Studio is properly configured
 
 #### Runtime Issues
 - **Model Loading Errors**: 
@@ -360,22 +291,19 @@ We welcome contributions to improve needaimbot! Here's how you can help:
 ## 📚 References and modules
 
 - [TensorRT Documentation](https://docs.nvidia.com/deeplearning/tensorrt/)
-- [OpenCV Documentation](https://docs.opencv.org/4.x/d1/dfb/intro.html)
 - [Windows SDK](https://developer.microsoft.com/en-us/windows/downloads/windows-sdk/)
 - [simpleIni](https://github.com/brofield/simpleini/)
-- [serial](https://github.com/wjwwood/serial)
 - [ImGui](https://github.com/ocornut/imgui)
 - [CppWinRT](https://github.com/microsoft/cppwinrt)
 - [Python AI AIMBOT](https://github.com/SunOner/sunone_aimbot)
 - [GLFW](https://www.glfw.org/)
+- [STB Image](https://github.com/nothings/stb)
 
 ## 📄 Licenses
 
 ### Boost
 - **License:** [Boost Software License 1.0](https://www.boost.org/LICENSE_1_0.txt)
 
-### OpenCV
-- **License:** [Apache License 2.0](https://opencv.org/license.html)
 
 ### ImGui
 - **License:** [MIT License](https://github.com/ocornut/imgui/blob/master/LICENSE)

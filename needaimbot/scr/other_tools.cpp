@@ -10,6 +10,7 @@
 #include <fstream>
 #include <cstdlib>
 #include <unordered_set>
+#include <set>
 #include <tchar.h>
 #include <thread>
 #include <mutex>
@@ -36,6 +37,7 @@
 #include "config.h"
 #include "needaimbot.h"
 #include "AppContext.h"
+#include "../utils/image_io.h"
 
 static const std::string base64_chars =
 "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -487,7 +489,7 @@ void welcome_message()
 }
 
 
-void saveScreenshot(const cv::Mat& frame, const std::string& directory)
+void saveScreenshot(const SimpleMat& frame, const std::string& directory)
 {
     if (frame.empty())
     {
@@ -514,22 +516,8 @@ void saveScreenshot(const cv::Mat& frame, const std::string& directory)
         std::string filepath = directory + "/" + filename;
 
         
-        if (cv::imwrite(filepath, frame))
-        {
-            auto& config = AppContext::getInstance().config;
-            if (config.verbose) 
-            {
-                std::cout << "[Screenshot] Saved screenshot to: " << filepath << std::endl;
-            }
-        }
-        else
-        {
-            std::cerr << "[Screenshot] Error: Failed to save screenshot to: " << filepath << std::endl;
-        }
-    }
-    catch (const cv::Exception& e)
-    {
-        std::cerr << "[Screenshot] OpenCV exception during imwrite: " << e.what() << std::endl;
+        // Just delegate to ImageIO implementation
+        ImageIO::saveScreenshot(frame, directory);
     }
      catch (const std::filesystem::filesystem_error& e)
     {

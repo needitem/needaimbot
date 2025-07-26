@@ -5,8 +5,9 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
-#include <opencv2/opencv.hpp>
-#include <opencv2/core/cuda.hpp>
+#include "../cuda/simple_cuda_mat.h"
+#include "../cuda/cuda_image_processing.h"
+#include "../cuda/cuda_float_processing.h"
 #include <NvInfer.h>
 #include <atomic>
 #include <mutex>
@@ -18,10 +19,7 @@
 #include <thread>
 #include <chrono>
 #include <functional>
-#include <opencv2/cudawarping.hpp>
-#include <opencv2/cudaarithm.hpp>
 #include <cuda_runtime_api.h>
-#include <opencv2/cudaimgproc.hpp>
 #include <filesystem>
 
 #include "../postprocess/postProcess.h"
@@ -169,8 +167,8 @@ public:
     ~Detector();
     void initialize(const std::string &modelFile);
     bool initializeCudaContext();
-    void processFrame(const cv::cuda::GpuMat &frame);
-    void processFrame(const cv::Mat &frame);
+    void processFrame(const SimpleCudaMat &frame);
+    void processFrame(const SimpleMat &frame);
     void inferenceThread();
     void setCaptureEvent(HANDLE event) { captureEvent = event; }
     
@@ -217,17 +215,17 @@ public:
     std::atomic<bool> should_exit;
     std::condition_variable inferenceCV;
 
-    cv::cuda::GpuMat currentFrame;
-    cv::Mat currentFrameCpu;
+    SimpleCudaMat currentFrame;
+    SimpleMat currentFrameCpu;
     bool frameReady;
     bool frameIsGpu;
     
     HANDLE captureEvent = nullptr;
 
 
-    cv::cuda::GpuMat resizedBuffer;
+    SimpleCudaMat resizedBuffer;
     
-    cv::cuda::GpuMat m_hsvMaskGpu;
+    SimpleCudaMat m_hsvMaskGpu;
 
     
     CudaBuffer<Detection> m_decodedDetectionsGpu;
@@ -279,7 +277,7 @@ public:
     
     // Double buffering for ultra-fast processing
     struct DoubleBuffer {
-        cv::cuda::GpuMat frameBuffers[2];
+        SimpleCudaMat frameBuffers[2];
         BatchedResults resultBuffers[2];
         cudaEvent_t readyEvents[2];
         int currentReadIdx = 0;
@@ -299,7 +297,7 @@ public:
     std::mutex hsvMaskMutex; 
 
     bool isCudaContextInitialized() const { return m_cudaContextInitialized; } 
-    cv::cuda::GpuMat getHsvMaskGpu() const; 
+    SimpleCudaMat getHsvMaskGpu() const; 
 
     void start();
     void stop();
@@ -308,16 +306,14 @@ private:
     std::thread m_captureThread;
     std::thread m_inferenceThread;
 
-    static float calculate_host_iou(const cv::Rect& box1, const cv::Rect& box2); 
+    static float calculate_host_iou(const Detection& det1, const Detection& det2); 
     bool m_cudaContextInitialized = false; 
     std::unique_ptr<nvinfer1::IRuntime> runtime;
     std::unique_ptr<nvinfer1::ICudaEngine> engine;
     std::unique_ptr<nvinfer1::IExecutionContext> context;
     nvinfer1::Dims inputDims;
 
-    cv::cuda::Stream cvStream;
-    cv::cuda::Stream preprocessCvStream;
-    cv::cuda::Stream postprocessCvStream;
+    // CUDA streams removed - using native CUDA streams only
 
     cudaStream_t stream;
     cudaStream_t preprocessStream;
@@ -342,8 +338,8 @@ private:
     std::string inputName;
     void *inputBufferDevice; 
 
-    cv::cuda::GpuMat floatBuffer;
-    std::vector<cv::cuda::GpuMat> channelBuffers;
+    SimpleCudaMatFloat floatBuffer;
+    std::vector<SimpleCudaMatFloat> channelBuffers;
 
     bool checkCudaError(cudaError_t err, const std::string& message) {
         if (err != cudaSuccess) {
@@ -357,20 +353,17 @@ private:
     void performGpuPostProcessing(cudaStream_t stream);
 
 
-    void synchronizeStreams(cv::cuda::Stream &cvStream, cudaStream_t cudaStream)
+    void synchronizeStreams(cudaStream_t stream1, cudaStream_t stream2)
     {
         cudaEvent_t event;
         cudaEventCreate(&event);
-
-        cvStream.enqueueHostCallback([](int, void *userData)
-                                     { cudaEventRecord(static_cast<cudaEvent_t>(userData)); }, &event);
-
-        cudaStreamWaitEvent(cudaStream, event, 0);
+        cudaEventRecord(event, stream1);
+        cudaStreamWaitEvent(stream2, event, 0);
         cudaEventDestroy(event);
     }
 
     void loadEngine(const std::string &engineFile);
-    void preProcess(const cv::cuda::GpuMat &frame, cudaStream_t stream);
+    void preProcess(const SimpleCudaMat &frame, cudaStream_t stream);
     void getInputNames();
     void getOutputNames();
     void getBindings();

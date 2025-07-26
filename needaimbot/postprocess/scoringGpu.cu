@@ -13,18 +13,18 @@
 
 #include "scoringGpu.h"
 #include "postProcess.h" 
-#include <opencv2/cudaarithm.hpp>
+// OpenCV removed - using custom types
 
-__device__ inline float calculateIoU(const cv::Rect& box1, const cv::Rect& box2) {
-    int xA = max(box1.x, box2.x);
-    int yA = max(box1.y, box2.y);
-    int xB = min(box1.x + box1.width, box2.x + box2.width);
-    int yB = min(box1.y + box1.height, box2.y + box2.height);
+__device__ inline float calculateIoU(const Detection& det1, const Detection& det2) {
+    int xA = max(det1.x, det2.x);
+    int yA = max(det1.y, det2.y);
+    int xB = min(det1.x + det1.width, det2.x + det2.width);
+    int yB = min(det1.y + det1.height, det2.y + det2.height);
 
     int interArea = max(0, xB - xA) * max(0, yB - yA);
 
-    int box1Area = box1.width * box1.height;
-    int box2Area = box2.width * box2.height;
+    int box1Area = det1.width * det1.height;
+    int box2Area = det2.width * det2.height;
     float unionArea = static_cast<float>(box1Area + box2Area - interArea);
 
     return (unionArea > 0.0f) ? static_cast<float>(interArea) / unionArea : 0.0f;

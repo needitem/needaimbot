@@ -23,8 +23,6 @@
     <ClCompile Include="capture\capture.cpp" />
     <ClCompile Include="capture\duplication_api_capture.cpp" />
     <ClCompile Include="capture\simple_capture.cpp" />
-    <ClCompile Include="capture\virtual_camera_capture.cpp" />
-    <ClCompile Include="capture\ndi_capture.cpp" />
     <ClCompile Include="config\config.cpp" />
     <ClCompile Include="detector\detector.cpp" />
     <ClCompile Include="postprocess\postProcess.cpp" />
@@ -63,22 +61,28 @@
     <ClCompile Include="overlay\visuals.cpp" />
     <ClCompile Include="scr\other_tools.cpp" />
     <ClCompile Include="needaimbot.cpp" />
+    <ClCompile Include="utils\image_io.cpp" />
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="postprocess\filterGpu.cu" />
     <CudaCompile Include="postprocess\postProcessGpu.cu" />
     <CudaCompile Include="postprocess\scoringGpu.cu" />
     <CudaCompile Include="postprocess\targetLockingGpu.cu" />
+    <CudaCompile Include="cuda\cuda_image_processing.cu" />
+    <CudaCompile Include="cuda\cuda_float_processing.cu" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="core\config_cache.h" />
     <ClInclude Include="core\constants.h" />
     <ClInclude Include="core\error_handler.h" />
+    <ClInclude Include="core\common_utils.h" />
+    <ClInclude Include="cuda\simple_cuda_mat.h" />
+    <ClInclude Include="cuda\cuda_image_processing.h" />
+    <ClInclude Include="cuda\cuda_float_processing.h" />
+    <ClInclude Include="cuda\image_io.h" />
     <ClInclude Include="capture\capture.h" />
     <ClInclude Include="capture\duplication_api_capture.h" />
     <ClInclude Include="capture\simple_capture.h" />
-    <ClInclude Include="capture\virtual_camera_capture.h" />
-    <ClInclude Include="capture\ndi_capture.h" />
     <ClInclude Include="detector\CudaBuffer.h" />
     <ClInclude Include="config\config.h" />
     <ClInclude Include="detector\detector.h" />
@@ -205,15 +209,15 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <LinkIncremental>true</LinkIncremental>
-    <IncludePath>$(ProgramW6432)\NVIDIA\CUDNN\v9.1\include\12.4;$(ProgramW6432)\NVIDIA GPU Computing Toolkit\CUDA\v12.4\include;include;$(MSBuildProjectDirectory)\modules\TensorRT-10.3.0.26\include;$(MSBuildProjectDirectory)\modules\opencv\build\include;$(IncludePath)</IncludePath>
-    <LibraryPath>$(MSBuildProjectDirectory)\modules\boost_1_82_0\stage\lib;$(ProgramW6432)\NVIDIA\CUDNN\v9.1\lib\12.4;$(ProgramW6432)\NVIDIA GPU Computing Toolkit\CUDA\v12.4\lib\x64;$(MSBuildProjectDirectory)\modules\TensorRT-10.3.0.26\lib;$(MSBuildProjectDirectory)\modules\opencv\build\x64\vc16\lib;$(LibraryPath)</LibraryPath>
+    <IncludePath>$(ProgramW6432)\NVIDIA\CUDNN\v9.1\include\12.4;$(ProgramW6432)\NVIDIA GPU Computing Toolkit\CUDA\v12.4\include;include;$(MSBuildProjectDirectory)\modules\TensorRT-10.3.0.26\include;$(IncludePath)</IncludePath>
+    <LibraryPath>$(MSBuildProjectDirectory)\modules\boost_1_82_0\stage\lib;$(ProgramW6432)\NVIDIA\CUDNN\v9.1\lib\12.4;$(ProgramW6432)\NVIDIA GPU Computing Toolkit\CUDA\v12.4\lib\x64;$(MSBuildProjectDirectory)\modules\TensorRT-10.3.0.26\lib;$(LibraryPath)</LibraryPath>
     <ExternalIncludePath>$(ExternalIncludePath)</ExternalIncludePath>
     <ExecutablePath>$(ExecutablePath)</ExecutablePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LinkIncremental>false</LinkIncremental>
-    <IncludePath>$(MSBuildProjectDirectory);$(MSBuildProjectDirectory)\imgui;$(MSBuildProjectDirectory)\keyboard;$(MSBuildProjectDirectory)\config;$(MSBuildProjectDirectory)\detector;$(MSBuildProjectDirectory)\capture;$(MSBuildProjectDirectory)\postprocess;$(MSBuildProjectDirectory)\mouse;$(MSBuildProjectDirectory)\overlay;$(MSBuildProjectDirectory)\modules\opencv\build\install\include;$(WindowsSDK_IncludePath);$(WindowsSDK_IncludePath)\cppwinrt;$(MSBuildProjectDirectory)\modules\TensorRT-10.8.0.43\include;include;$(ProgramW6432)\NVIDIA GPU Computing Toolkit\CUDA\v12.8\include;$(ProgramW6432)\NVIDIA\CUDNN\v9.7\include\12.8;$(IncludePath)</IncludePath>
-    <LibraryPath>$(MSBuildProjectDirectory)\modules\opencv\build\install\x64\vc17\lib;$(MSBuildProjectDirectory)\modules\\TensorRT-10.8.0.43\lib;$(ProgramW6432)\NVIDIA GPU Computing Toolkit\CUDA\v12.8\lib\x64;$(ProgramW6432)\NVIDIA\CUDNN\v9.7\lib\12.8;$(MSBuildProjectDirectory)\modules\glfw-3.4.bin.WIN64\lib-vc2022;$(LibraryPath)</LibraryPath>
+    <IncludePath>$(MSBuildProjectDirectory);$(MSBuildProjectDirectory)\imgui;$(MSBuildProjectDirectory)\keyboard;$(MSBuildProjectDirectory)\config;$(MSBuildProjectDirectory)\detector;$(MSBuildProjectDirectory)\capture;$(MSBuildProjectDirectory)\postprocess;$(MSBuildProjectDirectory)\mouse;$(MSBuildProjectDirectory)\overlay;$(WindowsSDK_IncludePath);$(WindowsSDK_IncludePath)\cppwinrt;$(MSBuildProjectDirectory)\modules\TensorRT-10.8.0.43\include;include;$(ProgramW6432)\NVIDIA GPU Computing Toolkit\CUDA\v12.8\include;$(ProgramW6432)\NVIDIA\CUDNN\v9.7\include\12.8;$(IncludePath)</IncludePath>
+    <LibraryPath>$(MSBuildProjectDirectory)\modules\\TensorRT-10.8.0.43\lib;$(ProgramW6432)\NVIDIA GPU Computing Toolkit\CUDA\v12.8\lib\x64;$(ProgramW6432)\NVIDIA\CUDNN\v9.7\lib\12.8;$(MSBuildProjectDirectory)\modules\glfw-3.4.bin.WIN64\lib-vc2022;$(LibraryPath)</LibraryPath>
     <TargetName>ai</TargetName>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
@@ -260,7 +264,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>opencv_world4100d.lib;nvinfer_10.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>nvinfer_10.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <CudaCompile>
       <CodeGeneration>compute_75,sm_75;compute_80,sm_80;compute_86,sm_86;compute_89,sm_89</CodeGeneration>
@@ -273,7 +277,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NDEBUG;_CONSOLE;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalIncludeDirectories>$(MSBuildProjectDirectory)\modules\glfw-3.4.bin.WIN64\include;$(MSBuildProjectDirectory)\modules\stb;$(MSBuildProjectDirectory)\modules\imgui-1.91.2\backends;$(MSBuildProjectDirectory)\modules\imgui-1.91.2;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
@@ -289,7 +293,7 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>opencv_world4100.lib;nvinfer_10.lib;nvonnxparser_10.lib;WindowsApp.lib;d3d11.lib;dxgi.lib;d2d1.lib;cuda.lib;cudart.lib;glfw3_mt.lib;glfw3dll.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>nvinfer_10.lib;nvonnxparser_10.lib;WindowsApp.lib;d3d11.lib;dxgi.lib;d2d1.lib;cuda.lib;cudart.lib;glfw3_mt.lib;glfw3dll.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <Manifest>
@@ -314,7 +318,6 @@
   </Target>
   <!-- Automatically copy required DLLs after build -->
   <ItemGroup>
-    <RuntimeDependencies Include="$(MSBuildProjectDirectory)\modules\opencv\build\install\x64\vc17\bin\opencv_world4100.dll" />
     <RuntimeDependencies Include="$(MSBuildProjectDirectory)\modules\TensorRT-10.8.0.43\lib\nvinfer_10.dll" />
     <RuntimeDependencies Include="$(MSBuildProjectDirectory)\modules\TensorRT-10.8.0.43\lib\nvonnxparser_10.dll" />
     <RuntimeDependencies Include="$(ProgramW6432)\NVIDIA\CUDNN\v9.7\bin\12.8\cudnn64_9.dll" />

@@ -1,13 +1,15 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 
-#include "needaimbot.h"
+#include "../needaimbot.h"
 #include "duplication_api_capture.h"
-#include "config.h"
-#include "other_tools.h"
+#include "../config/config.h"
+#include "../include/other_tools.h"
 #include "capture.h"
-#include "AppContext.h"
+#include "../AppContext.h"
+#include "../cuda/cuda_image_processing.h"
 #include <iostream>
+// Force recompile - SimpleMat constructor fix applied
 #include <iomanip>
 #include <algorithm>
 
@@ -347,13 +349,13 @@ public:
             m_duplication->ReleaseFrame();
     }
 
-    cv::cuda::GpuMat CopySharedTextureToCudaMat(int regionWidth, int regionHeight)
+    SimpleCudaMat CopySharedTextureToCudaMat(int regionWidth, int regionHeight)
     {
         cudaError_t err = cudaGraphicsMapResources(1, &m_cudaResource, 0); // Use NULL stream
         if (err != cudaSuccess)
         {
             std::cerr << "[DDA] cudaGraphicsMapResources error: " << cudaGetErrorString(err) << std::endl;
-            return cv::cuda::GpuMat();
+            return SimpleCudaMat();
         }
 
         cudaArray_t cuArray;
@@ -362,29 +364,29 @@ public:
         {
             std::cerr << "[DDA] cudaGraphicsSubResourceGetMappedArray error: " << cudaGetErrorString(err) << std::endl;
             cudaGraphicsUnmapResources(1, &m_cudaResource, 0); // Use NULL stream
-            return cv::cuda::GpuMat();
+            return SimpleCudaMat();
         }
 
-        cv::cuda::GpuMat frameGpu;
+        SimpleCudaMat frameGpu;
         if (!m_framePool.empty())
         {
-            frameGpu = m_framePool.back();
+            frameGpu = std::move(m_framePool.back());
             m_framePool.pop_back();
 
-            if (frameGpu.rows != regionHeight || frameGpu.cols != regionWidth)
+            if (frameGpu.rows() != regionHeight || frameGpu.cols() != regionWidth)
             {
                 frameGpu.release();
-                frameGpu = cv::cuda::GpuMat(regionHeight, regionWidth, CV_8UC4);
+                frameGpu = SimpleCudaMat(regionHeight, regionWidth, 4);
             }
         }
         else
         {
              
-            frameGpu = cv::cuda::GpuMat(regionHeight, regionWidth, CV_8UC4);
+            frameGpu = SimpleCudaMat(regionHeight, regionWidth, 4);
         }
 
         cudaMemcpy2DFromArrayAsync(
-            frameGpu.data, frameGpu.step,
+            frameGpu.data(), frameGpu.step(),
             cuArray, 0, 0,
             regionWidth * 4, regionHeight,
             cudaMemcpyDeviceToDevice, 0); // Use NULL stream
@@ -399,11 +401,11 @@ public:
         return frameGpu;
     }
 
-    void RecycleFrame(cv::cuda::GpuMat &frame)
+    void RecycleFrame(SimpleCudaMat &frame)
     {
         if (m_framePool.size() < 10)
         {
-            m_framePool.push_back(frame);
+            m_framePool.push_back(std::move(frame));
         }
     }
 
@@ -454,7 +456,7 @@ public:
     cudaGraphicsResource *m_cudaResource;
     cudaStream_t m_cudaStream;
     cudaEvent_t m_captureDoneEvent;
-    std::vector<cv::cuda::GpuMat> m_framePool;
+    std::vector<SimpleCudaMat> m_framePool;
     UINT m_timeout = 0; 
     std::vector<BYTE> m_metaDataBuffer;
 
@@ -511,10 +513,10 @@ DuplicationAPIScreenCapture::~DuplicationAPIScreenCapture()
     cudaStream = nullptr;
 }
 
-cv::cuda::GpuMat DuplicationAPIScreenCapture::GetNextFrameGpu()
+SimpleCudaMat DuplicationAPIScreenCapture::GetNextFrameGpu()
 {
     if (!m_ddaManager || !m_ddaManager->m_duplication || AppContext::getInstance().should_exit)
-        return cv::cuda::GpuMat();
+        return SimpleCudaMat();
 
     HRESULT hr = S_OK;
     FrameContext frameCtx;
@@ -531,17 +533,17 @@ cv::cuda::GpuMat DuplicationAPIScreenCapture::GetNextFrameGpu()
     if (hr == DXGI_ERROR_WAIT_TIMEOUT)
     {
         m_ddaManager->ReleaseFrame();
-        return cv::cuda::GpuMat();
+        return SimpleCudaMat();
     }
     else if (hr == DXGI_ERROR_ACCESS_LOST || hr == DXGI_ERROR_DEVICE_RESET || hr == DXGI_ERROR_DEVICE_REMOVED)
     {
         std::cerr << "[Capture] DDA Access lost/Device reset. Reinitializing..." << std::endl;
-        return cv::cuda::GpuMat(); 
+        return SimpleCudaMat(); 
     }
     else if (FAILED(hr))
     {
         
-        return cv::cuda::GpuMat();
+        return SimpleCudaMat();
     }
 
     if (m_ddaManager->m_context && m_ddaManager->m_sharedTexture && frameCtx.texture)
@@ -586,7 +588,7 @@ cv::cuda::GpuMat DuplicationAPIScreenCapture::GetNextFrameGpu()
 
     m_ddaManager->ReleaseFrame(); 
 
-    cv::cuda::GpuMat frameGpu = m_ddaManager->CopySharedTextureToCudaMat(regionWidth, regionHeight);
+    SimpleCudaMat frameGpu = m_ddaManager->CopySharedTextureToCudaMat(regionWidth, regionHeight);
 
     if (frameCtx.texture)
     {
@@ -599,15 +601,15 @@ cv::cuda::GpuMat DuplicationAPIScreenCapture::GetNextFrameGpu()
         m_ddaManager->RecycleFrame(m_previousFrame);
     }
 
-    m_previousFrame = frameGpu;
+    m_previousFrame = std::move(frameGpu);
 
     return frameGpu;
 }
 
-cv::Mat DuplicationAPIScreenCapture::GetNextFrameCpu()
+SimpleMat DuplicationAPIScreenCapture::GetNextFrameCpu()
 {
     if (!m_ddaManager || !m_ddaManager->m_duplication || AppContext::getInstance().should_exit)
-        return cv::Mat();
+        return SimpleMat();
 
     HRESULT hr = S_OK;
     FrameContext frameCtx;
@@ -624,16 +626,16 @@ cv::Mat DuplicationAPIScreenCapture::GetNextFrameCpu()
     if (hr == DXGI_ERROR_WAIT_TIMEOUT)
     {
         m_ddaManager->ReleaseFrame();
-        return cv::Mat();
+        return SimpleMat();
     }
     else if (hr == DXGI_ERROR_ACCESS_LOST || hr == DXGI_ERROR_DEVICE_RESET || hr == DXGI_ERROR_DEVICE_REMOVED)
     {
         std::cerr << "[Capture] DDA Access lost/Device reset (CPU Path). Reinitializing..." << std::endl;
-        return cv::Mat();
+        return SimpleMat();
     }
     else if (FAILED(hr))
     {
-        return cv::Mat();
+        return SimpleMat();
     }
 
     if (m_ddaManager->m_context && m_ddaManager->m_sharedTexture && frameCtx.texture)
@@ -675,7 +677,7 @@ cv::Mat DuplicationAPIScreenCapture::GetNextFrameCpu()
     m_ddaManager->ReleaseFrame();
 
     
-    cv::Mat frameCpu;
+    // Don't declare frameCpu here - create it directly when needed
     if (m_ddaManager->m_cudaResource && m_ddaManager->m_pinnedHostBuffer)
     {
         unsigned char* hostPtr = m_ddaManager->m_pinnedHostBuffer;
@@ -699,11 +701,54 @@ cv::Mat DuplicationAPIScreenCapture::GetNextFrameCpu()
                 if (err == cudaSuccess)
                 {
                     cudaDeviceSynchronize(); // Synchronize entire device instead of specific stream
-                    frameCpu = cv::Mat(regionHeight, regionWidth, CV_8UC4, hostPtr, hostPitch);
+                    
+                    // Create and return SimpleMat directly
+                    SimpleMat frameCpu(regionHeight, regionWidth, 4, hostPtr, hostPitch);
+                    
+                    cudaGraphicsUnmapResources(1, &m_ddaManager->m_cudaResource, 0);
+                    
+                    if (frameCtx.texture)
+                    {
+                        frameCtx.texture->Release();
+                        frameCtx.texture = nullptr;
+                    }
+                    
+                    // Convert BGRA to BGR
+                    SimpleMat bgrFrame(frameCpu.rows(), frameCpu.cols(), 3);
+                    
+                    
+                    for (int y = 0; y < frameCpu.rows(); ++y) {
+                        const uint8_t* srcRow = frameCpu.data() + y * frameCpu.step();
+                        uint8_t* dstRow = bgrFrame.data() + y * bgrFrame.step();
+                        for (int x = 0; x < frameCpu.cols(); ++x) {
+                            dstRow[x * 3 + 0] = srcRow[x * 4 + 0]; // B
+                            dstRow[x * 3 + 1] = srcRow[x * 4 + 1]; // G
+                            dstRow[x * 3 + 2] = srcRow[x * 4 + 2]; // R
+                        }
+                    }
+                    
+                    
+                    return bgrFrame;
                 }
+                else
+                {
+                    std::cerr << "[DDA] cudaMemcpy2DFromArrayAsync failed: " << cudaGetErrorString(err) << std::endl;
+                }
+            }
+            else
+            {
+                std::cerr << "[DDA] cudaGraphicsSubResourceGetMappedArray failed: " << cudaGetErrorString(err) << std::endl;
             }
             cudaGraphicsUnmapResources(1, &m_ddaManager->m_cudaResource, 0); // Use NULL stream
         }
+        else
+        {
+            std::cerr << "[DDA] cudaGraphicsMapResources failed: " << cudaGetErrorString(err) << std::endl;
+        }
+    }
+    else
+    {
+        std::cerr << "[DDA] No CUDA resource or pinned buffer available" << std::endl;
     }
 
     if (frameCtx.texture)
@@ -712,7 +757,8 @@ cv::Mat DuplicationAPIScreenCapture::GetNextFrameCpu()
          frameCtx.texture = nullptr;
     }
 
-    return frameCpu;
+    // Return empty frame if we couldn't capture
+    return SimpleMat();
 }
 
 void DuplicationAPIScreenCapture::SetAcquireTimeout(UINT timeout) {

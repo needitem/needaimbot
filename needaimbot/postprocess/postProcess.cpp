@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <numeric>
+#include <iostream>
 
 #include "postProcess.h"
 #include "../needaimbot.h"
@@ -31,9 +32,9 @@ void NMS(std::vector<Detection>& detections, float nmsThreshold)
         
         result.push_back(detections[i]);
         
-        const cv::Rect box_i = detections[i].box();
+        const Detection& det_i = detections[i];
         const float area_i = areas[i];
-        const float conf_i = detections[i].confidence;
+        const float conf_i = det_i.confidence;
         
         for (size_t j = i + 1; j < detections.size(); ++j)
         {
@@ -44,20 +45,24 @@ void NMS(std::vector<Detection>& detections, float nmsThreshold)
                 continue;
             }
             
-            const cv::Rect box_j = detections[j].box();
+            const Detection& det_j = detections[j];
             
-            if (box_i.x > box_j.x + box_j.width || 
-                box_j.x > box_i.x + box_i.width ||
-                box_i.y > box_j.y + box_j.height || 
-                box_j.y > box_i.y + box_i.height) {
+            if (det_i.x > det_j.x + det_j.width || 
+                det_j.x > det_i.x + det_i.width ||
+                det_i.y > det_j.y + det_j.height || 
+                det_j.y > det_i.y + det_i.height) {
                 continue; 
             }
             
-            const cv::Rect intersection = box_i & box_j;
+            // Calculate intersection manually
+            int inter_x = (std::max)(det_i.x, det_j.x);
+            int inter_y = (std::max)(det_i.y, det_j.y);
+            int inter_w = (std::min)(det_i.x + det_i.width, det_j.x + det_j.width) - inter_x;
+            int inter_h = (std::min)(det_i.y + det_i.height, det_j.y + det_j.height) - inter_y;
             
-            if (intersection.width > 0 && intersection.height > 0)
+            if (inter_w > 0 && inter_h > 0)
             {
-                const float intersection_area = static_cast<float>(intersection.area());
+                const float intersection_area = static_cast<float>(inter_w * inter_h);
                 const float union_area = area_i + areas[j] - intersection_area;
                 if (intersection_area / union_area > nmsThreshold)
                 {
@@ -104,9 +109,7 @@ std::vector<Detection> decodeYolo10(
             
             if (width <= 0 || height <= 0) continue;
 
-            cv::Rect box(x, y, width, height);
-
-            Detection detection(box, confidence, classId);
+            Detection detection(x, y, width, height, confidence, classId);
 
             detections.push_back(detection);
         }
@@ -139,22 +142,29 @@ std::vector<Detection> decodeYolo11(
         return detections;
     }
     
-    cv::Mat det_output(rows, cols, CV_32F, (void*)output);
+    // Direct pointer access instead of cv::Mat
+    const float* det_output = output;
 
     for (int i = 0; i < cols; ++i)
     {
-        cv::Mat classes_scores = det_output.col(i).rowRange(4, 4 + numClasses);
-
-        cv::Point class_id_point;
-        double score;
-        cv::minMaxLoc(classes_scores, nullptr, &score, nullptr, &class_id_point);
+        // Find max score and class id manually
+        float max_score = 0.0f;
+        int class_id = 0;
+        for (int j = 0; j < numClasses; ++j) {
+            float score = det_output[(4 + j) * cols + i];
+            if (score > max_score) {
+                max_score = score;
+                class_id = j;
+            }
+        }
+        float score = max_score;
 
         if (score > confThreshold)
         {
-            float cx = det_output.at<float>(0, i);
-            float cy = det_output.at<float>(1, i);
-            float ow = det_output.at<float>(2, i);
-            float oh = det_output.at<float>(3, i);
+            float cx = det_output[0 * cols + i];
+            float cy = det_output[1 * cols + i];
+            float ow = det_output[2 * cols + i];
+            float oh = det_output[3 * cols + i];
 
             const float half_ow = 0.5f * ow;
             const float half_oh = 0.5f * oh;
@@ -162,13 +172,12 @@ std::vector<Detection> decodeYolo11(
             
             if (ow <= 0 || oh <= 0) continue;
 
-            cv::Rect box;
-            box.x = static_cast<int>((cx - half_ow) * img_scale);
-            box.y = static_cast<int>((cy - half_oh) * img_scale);
-            box.width = static_cast<int>(ow * img_scale);
-            box.height = static_cast<int>(oh * img_scale);
+            int x = static_cast<int>((cx - half_ow) * img_scale);
+            int y = static_cast<int>((cy - half_oh) * img_scale);
+            int width = static_cast<int>(ow * img_scale);
+            int height = static_cast<int>(oh * img_scale);
 
-            Detection detection(box, static_cast<float>(score), class_id_point.y);
+            Detection detection(x, y, width, height, static_cast<float>(score), class_id);
 
             detections.push_back(detection);
         }

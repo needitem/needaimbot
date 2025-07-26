@@ -43,7 +43,7 @@ void draw_overlay()
     ImGui::Spacing();
     
     // Display current overlay FPS setting
-    float clamped_fps = std::max(15.0f, std::min(240.0f, ctx.config.target_fps));
+    float clamped_fps = (std::max)(15.0f, (std::min)(240.0f, ctx.config.target_fps));
     ImGui::Text("Overlay FPS: %.1f", clamped_fps);
     if (ImGui::IsItemHovered()) { 
         ImGui::SetTooltip("Overlay frame rate is controlled by Target FPS setting in Capture tab.\nClamped between 15-240 FPS for stability."); 

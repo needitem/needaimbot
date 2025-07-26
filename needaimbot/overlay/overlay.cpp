@@ -312,8 +312,8 @@ bool CreateOverlayWindow()
     auto& ctx = AppContext::getInstance();
     auto& config = ctx.config;  // Reference to avoid global config confusion
     
-    overlayWidth = static_cast<int>(std::max(MIN_OVERLAY_WIDTH, static_cast<int>(BASE_OVERLAY_WIDTH * ctx.config.overlay_ui_scale)));
-    overlayHeight = static_cast<int>(std::max(MIN_OVERLAY_HEIGHT, static_cast<int>(BASE_OVERLAY_HEIGHT * ctx.config.overlay_ui_scale)));
+    overlayWidth = static_cast<int>((std::max)(MIN_OVERLAY_WIDTH, static_cast<int>(BASE_OVERLAY_WIDTH * ctx.config.overlay_ui_scale)));
+    overlayHeight = static_cast<int>((std::max)(MIN_OVERLAY_HEIGHT, static_cast<int>(BASE_OVERLAY_HEIGHT * ctx.config.overlay_ui_scale)));
 
     WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, WndProc, 0L, 0L,
                       GetModuleHandle(NULL), NULL, NULL, NULL, NULL,

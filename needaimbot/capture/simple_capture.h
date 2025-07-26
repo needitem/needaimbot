@@ -1,7 +1,6 @@
 #pragma once
 
-#include <opencv2/opencv.hpp>
-#include <opencv2/core/cuda.hpp>
+#include "../cuda/simple_cuda_mat.h"
 #include <windows.h>
 #include <cuda_runtime.h>
 
@@ -10,8 +9,8 @@ public:
     SimpleScreenCapture(int width, int height);
     ~SimpleScreenCapture();
     
-    cv::cuda::GpuMat GetNextFrameGpu();
-    cv::Mat GetNextFrameCpu();
+    SimpleCudaMat GetNextFrameGpu();
+    SimpleMat GetNextFrameCpu();
     
     bool IsInitialized() const { return m_initialized; }
     void SetAcquireTimeout(UINT timeout) {} // No-op for compatibility
@@ -29,9 +28,9 @@ private:
     BITMAPINFO m_bmpInfo;
     unsigned char* m_bitmapData;
     
-    cv::Mat m_hostFrame;
-    cv::cuda::GpuMat m_deviceFrame;
-    cv::cuda::GpuMat m_tempBgrFrame;
+    SimpleMat m_hostFrame;
+    SimpleCudaMat m_deviceFrame;
+    SimpleCudaMat m_tempBgrFrame;
     
     // Raw CUDA memory for direct access
     void* m_cudaPtr;

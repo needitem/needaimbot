@@ -17,7 +17,9 @@
 #include <array>
 #include <atomic>
 #include <chrono>
-#include "opencv2/core/cuda.hpp" 
+#include <iostream>
+// OpenCV removed - using custom CUDA utilities
+#include "../cuda/simple_cuda_mat.h" 
 
 
 
@@ -52,19 +54,25 @@ static bool g_crosshairHsvValid = false;
 
 
 
-static void uploadDebugFrame(const cv::Mat& bgr)
+static void uploadDebugFrame(const SimpleMat& bgr)
 {
     
     if (bgr.empty() || !g_pd3dDevice || !g_pd3dDeviceContext) {
+        static int errorCount = 0;
+        if (++errorCount % 60 == 0) {
+            std::cout << "[Debug] uploadDebugFrame: bgr.empty=" << bgr.empty() 
+                      << " g_pd3dDevice=" << (g_pd3dDevice != nullptr)
+                      << " g_pd3dDeviceContext=" << (g_pd3dDeviceContext != nullptr) << std::endl;
+        }
         return;
     }
 
-    if (!g_debugTex || bgr.cols != texW || bgr.rows != texH)
+    if (!g_debugTex || bgr.cols() != texW || bgr.rows() != texH)
     {
         SAFE_RELEASE(g_debugTex);
         SAFE_RELEASE(g_debugSRV);
 
-        texW = bgr.cols;  texH = bgr.rows;
+        texW = bgr.cols();  texH = bgr.rows();
 
         D3D11_TEXTURE2D_DESC td = {};
         td.Width = texW;
@@ -80,6 +88,7 @@ static void uploadDebugFrame(const cv::Mat& bgr)
         if (FAILED(hr_tex))
         {
             SAFE_RELEASE(g_debugTex);
+            std::cerr << "[Debug] Failed to create debug texture! HRESULT=" << std::hex << hr_tex << std::dec << std::endl;
             return;
         }
 
@@ -96,16 +105,25 @@ static void uploadDebugFrame(const cv::Mat& bgr)
         }
     }
 
-    static cv::Mat rgba;
-    try {
-        cv::cvtColor(bgr, rgba, cv::COLOR_BGR2RGBA);
-    } catch (const cv::Exception&) {
-        
-        
-        return;
+    // Convert BGR to RGBA
+    static SimpleMat rgba;
+    rgba.create(bgr.rows(), bgr.cols(), 4);
+    
+    // Manual BGR to RGBA conversion
+    const uint8_t* src = bgr.data();
+    uint8_t* dst = rgba.data();
+    for (int y = 0; y < bgr.rows(); y++) {
+        for (int x = 0; x < bgr.cols(); x++) {
+            int src_idx = y * bgr.step() + x * 3;
+            int dst_idx = y * rgba.step() + x * 4;
+            dst[dst_idx + 0] = src[src_idx + 2]; // R
+            dst[dst_idx + 1] = src[src_idx + 1]; // G
+            dst[dst_idx + 2] = src[src_idx + 0]; // B
+            dst[dst_idx + 3] = 255;               // A
+        }
     }
 
-    if (rgba.empty() || rgba.cols <= 0 || rgba.rows <= 0) { 
+    if (rgba.empty() || rgba.cols() <= 0 || rgba.rows() <= 0) { 
         return;
     }
 
@@ -114,7 +132,7 @@ static void uploadDebugFrame(const cv::Mat& bgr)
     if (SUCCEEDED(hr_map))
     {
         for (int y = 0; y < texH; ++y)
-            memcpy((uint8_t*)ms.pData + ms.RowPitch * y, rgba.ptr(y), texW * 4);
+            memcpy((uint8_t*)ms.pData + ms.RowPitch * y, rgba.data() + y * rgba.step(), texW * 4);
         g_pd3dDeviceContext->Unmap(g_debugTex, 0);
     } else {
         
@@ -123,23 +141,23 @@ static void uploadDebugFrame(const cv::Mat& bgr)
 }
 
 
-static void uploadHsvMaskTexture(const cv::Mat& grayMask)
+static void uploadHsvMaskTexture(const SimpleMat& grayMask)
 {
     if (grayMask.empty() || !g_pd3dDevice || !g_pd3dDeviceContext) {
         return;
     }
 
-    if (grayMask.type() != CV_8UC1) {
-        
+    if (grayMask.channels() != 1) {
+        // Not a single channel mask
         return;
     }
 
-    if (!g_hsvMaskTex || grayMask.cols != hsvTexW || grayMask.rows != hsvTexH)
+    if (!g_hsvMaskTex || grayMask.cols() != hsvTexW || grayMask.rows() != hsvTexH)
     {
         SAFE_RELEASE(g_hsvMaskTex);
         SAFE_RELEASE(g_hsvMaskSRV);
 
-        hsvTexW = grayMask.cols;  hsvTexH = grayMask.rows;
+        hsvTexW = grayMask.cols();  hsvTexH = grayMask.rows();
 
         D3D11_TEXTURE2D_DESC td = {};
         td.Width = hsvTexW;
@@ -173,15 +191,25 @@ static void uploadHsvMaskTexture(const cv::Mat& grayMask)
         }
     }
 
-    static cv::Mat rgbaMask; 
-    try {
-        cv::cvtColor(grayMask, rgbaMask, cv::COLOR_GRAY2RGBA);
-    } catch (const cv::Exception&) {
-        
-        return;
+    // Convert grayscale mask to RGBA
+    static SimpleMat rgbaMask;
+    rgbaMask.create(grayMask.rows(), grayMask.cols(), 4);
+    
+    // Manual GRAY to RGBA conversion
+    const uint8_t* src = grayMask.data();
+    uint8_t* dst = rgbaMask.data();
+    for (int y = 0; y < grayMask.rows(); y++) {
+        for (int x = 0; x < grayMask.cols(); x++) {
+            uint8_t gray_val = src[y * grayMask.step() + x];
+            int dst_idx = y * rgbaMask.step() + x * 4;
+            dst[dst_idx + 0] = gray_val; // R
+            dst[dst_idx + 1] = gray_val; // G
+            dst[dst_idx + 2] = gray_val; // B
+            dst[dst_idx + 3] = 255;       // A
+        }
     }
 
-    if (rgbaMask.empty() || rgbaMask.cols <= 0 || rgbaMask.rows <= 0) {
+    if (rgbaMask.empty() || rgbaMask.cols() <= 0 || rgbaMask.rows() <= 0) {
         
         return;
     }
@@ -191,7 +219,7 @@ static void uploadHsvMaskTexture(const cv::Mat& grayMask)
     if (SUCCEEDED(hr_map))
     {
         for (int y = 0; y < hsvTexH; ++y)
-            memcpy((uint8_t*)ms.pData + ms.RowPitch * y, rgbaMask.ptr(y), hsvTexW * 4); 
+            memcpy((uint8_t*)ms.pData + ms.RowPitch * y, rgbaMask.data() + y * rgbaMask.step(), hsvTexW * 4); 
         g_pd3dDeviceContext->Unmap(g_hsvMaskTex, 0);
     } else {
         
@@ -265,7 +293,7 @@ static void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float debug_
                 draw_list->AddRect(p1, p2, color, 1.0f, 0, thickness); 
 
                 std::string className = CommonHelpers::getClassNameById(det.classId);
-                std::string label = className + " (" + std::to_string(static_cast<int>(det.confidence * 100)) + "%)";
+                std::string label = className + " (" + std::to_string(static_cast<int>(det.confidence * 100.0f)) + "%)";
                 if (is_best_target) {
                     label = "[TARGET] " + label;
                 }
@@ -289,20 +317,36 @@ void draw_debug_frame()
     }
     
     // Get latest captured frame - cache it to avoid multiple downloads
-    static cv::Mat frameCopy;
+    static SimpleMat frameCopy;
     static bool frameValid = false;
     
-    extern cv::cuda::GpuMat latestFrameGpu;
+    extern SimpleCudaMat latestFrameGpu;
     try {
         if (!latestFrameGpu.empty()) {
-            latestFrameGpu.download(frameCopy);
+            frameCopy.create(latestFrameGpu.rows(), latestFrameGpu.cols(), latestFrameGpu.channels());
+            latestFrameGpu.download(frameCopy.data(), frameCopy.step());
             frameValid = true;
+            // Debug logging
+            static int frameCount = 0;
+            if (++frameCount % 60 == 0) {  // Log every 60 frames
+                std::cout << "[Debug] Frame downloaded: " << frameCopy.cols() << "x" << frameCopy.rows() 
+                          << " channels=" << frameCopy.channels() << std::endl;
+            }
         } else {
             frameValid = false;
+            static int emptyCount = 0;
+            if (++emptyCount % 60 == 0) {  // Log every 60 frames
+                std::cout << "[Debug] latestFrameGpu is empty!" << std::endl;
+            }
         }
-    } catch (const cv::Exception&) { 
+    } catch (const std::exception& e) { 
         frameCopy.release(); 
         frameValid = false;
+        std::cerr << "[Debug] Exception downloading frame: " << e.what() << std::endl;
+    } catch (...) { 
+        frameCopy.release(); 
+        frameValid = false;
+        std::cerr << "[Debug] Unknown exception downloading frame!" << std::endl;
     }
     
     if (!frameValid || frameCopy.empty()) {
@@ -487,13 +531,14 @@ void draw_debug()
     if (ctx.config.show_window) 
     {
         // Get latest captured frame
-        cv::Mat frameCopy;
-        extern cv::cuda::GpuMat latestFrameGpu;
+        SimpleMat frameCopy;
+        extern SimpleCudaMat latestFrameGpu;
         try {
             if (!latestFrameGpu.empty()) {
-                latestFrameGpu.download(frameCopy);
+                frameCopy.create(latestFrameGpu.rows(), latestFrameGpu.cols(), latestFrameGpu.channels());
+            latestFrameGpu.download(frameCopy.data(), frameCopy.step());
             }
-        } catch (const cv::Exception&) { 
+        } catch (...) { 
             frameCopy.release(); 
         }
 
@@ -607,21 +652,22 @@ void draw_debug()
 
         if (show_hsv_mask_preview) {
             
-            cv::cuda::GpuMat hsvMaskGpu;
+            SimpleCudaMat hsvMaskGpu;
             if (ctx.detector) {
                 try {
                     hsvMaskGpu = ctx.detector->getHsvMaskGpu();
                 } catch (const std::exception&) {
                     // Handle any exceptions from getHsvMaskGpu
-                    hsvMaskGpu = cv::cuda::GpuMat();
+                    hsvMaskGpu = SimpleCudaMat();
                 }
             } 
             if (!hsvMaskGpu.empty()) {
-                static cv::Mat hsvMaskCpu; 
+                static SimpleMat hsvMaskCpu; 
                 try {
-                    hsvMaskGpu.download(hsvMaskCpu); 
-                } catch (const cv::Exception& e) {
-                    ImGui::Text("Error downloading HSV Mask: %s", e.what());
+                    hsvMaskCpu.create(hsvMaskGpu.rows(), hsvMaskGpu.cols(), hsvMaskGpu.channels());
+                    hsvMaskGpu.download(hsvMaskCpu.data(), hsvMaskCpu.step()); 
+                } catch (...) {
+                    ImGui::Text("Error downloading HSV Mask");
                     hsvMaskCpu.release(); 
                 }
 

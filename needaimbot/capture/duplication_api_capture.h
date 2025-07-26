@@ -1,8 +1,7 @@
 #ifndef DUPLICATION_API_CAPTURE_H
 #define DUPLICATION_API_CAPTURE_H
 
-#include <opencv2/opencv.hpp>
-#include <opencv2/cudawarping.hpp>
+#include "../cuda/simple_cuda_mat.h"
 #ifndef __INTELLISENSE__
 #include <cuda.h>
 #include <cuda_runtime.h>
@@ -36,8 +35,8 @@ class DuplicationAPIScreenCapture : public IScreenCapture
 public:
     DuplicationAPIScreenCapture(int desiredWidth, int desiredHeight);
     ~DuplicationAPIScreenCapture();
-    cv::cuda::GpuMat GetNextFrameGpu() override;
-    cv::Mat GetNextFrameCpu() override;
+    SimpleCudaMat GetNextFrameGpu() override;
+    SimpleMat GetNextFrameCpu() override;
     cudaEvent_t GetCaptureDoneEvent() const override;
     bool IsInitialized() const { return m_initialized; }
     void SetAcquireTimeout(UINT timeout);
@@ -59,7 +58,7 @@ private:
     int regionWidth = 0;
     int regionHeight = 0;
 
-    cv::cuda::GpuMat m_previousFrame;
+    SimpleCudaMat m_previousFrame;
     bool m_initialized = false;
 };
 

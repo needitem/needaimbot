@@ -47,7 +47,7 @@ public:
         
         // 거리 기반 가속 이동
         float speed_multiplier = 1.0f + (distance / 100.0f) * settings_.acceleration_factor;
-        speed_multiplier = std::min(speed_multiplier, 5.0f); // 최대 5배속
+        speed_multiplier = (std::min)(speed_multiplier, 5.0f); // 최대 5배속
         
         return {
             error_x * settings_.snap_speed * speed_multiplier,

@@ -4,8 +4,7 @@
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
 
-#include <opencv2/opencv.hpp>
-#include <opencv2/core/cuda.hpp>
+#include "cuda/simple_cuda_mat.h"
 #include <atomic>
 #include <mutex>
 #include <condition_variable>
@@ -31,9 +30,9 @@ public:
     Config config;
 
     // Capture buffers
-    std::vector<cv::cuda::GpuMat> captureGpuBuffer;
+    std::vector<SimpleCudaMat> captureGpuBuffer;
     std::atomic<int> captureGpuWriteIdx{0};
-    std::vector<cv::Mat> captureCpuBuffer;
+    std::vector<SimpleMat> captureCpuBuffer;
     std::atomic<int> captureCpuWriteIdx{0};
 
     // Frame synchronization
