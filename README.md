@@ -206,7 +206,6 @@
 
 6. **Download Required Libraries**  
 	- [simpleIni](https://github.com/brofield/simpleini/blob/master/SimpleIni.h)
-	- [serial](https://github.com/wjwwood/serial)
 	- [TensorRT-10.8.0.43](https://developer.nvidia.com/tensorrt/download/10x)
 	- [GLWF Windows pre-compiled binaries](https://www.glfw.org/download.html)
 	- [Eigen](https://gitlab.com/libeigen/eigen/-/releases) (Download the latest stable release)
@@ -214,30 +213,25 @@
 7. **Extract Libraries**  
 	Place the downloaded libraries into the respective directories:
 	- `SimpleIni.h` -> `needaimbot/needaimbot/modules/SimpleIni.h`
-	- `serial` -> `needaimbot/needaimbot/modules/serial`
 	- `TensorRT-10.8.0.43` -> `needaimbot/needaimbot/modules/TensorRT-10.8.0.43`
 	- `GLWF` -> `needaimbot/needaimbot/modules/glfw-3.4.bin.WIN64`
 	- `Eigen` -> `needaimbot/needaimbot/modules/eigen`
 	  - Extract the Eigen archive and rename the folder to `include`
 	  - Verify that the header files are located at `needaimbot/needaimbot/modules/eigen/include/Eigen/`
-	
-8. **Compile serial**
-	- Navigate to the serial directory `needaimbot/needaimbot/modules/serial/visual_studio/`
-	- Open `visual_studio.sln`
-	- Go to project settings -> C/C++ -> Code Generation -> and change `Runtime Library` to `Multi-threaded (/MT)`
-	- Build in `Release x64`
+
+	**Note**: Serial communication for Arduino input method now uses Windows Native Serial API (no external library required)
    
-9. **Configure Project Settings**
+8. **Configure Project Settings**
 	- Open the project in Visual Studio.
 	- Ensure all library paths are correctly set in **Project Properties** under **Library Directories**.
 	- Go to NuGet packages and install `Microsoft.Windows.CppWinRT`.
 
-10. **Verify CUDA Integration**
+9. **Verify CUDA Integration**
 	- Right-click on the project in Visual Studio.
 	- Navigate to **Build Dependencies** > **Build Customizations**.
 	- Ensure that **CUDA 12.8** (.targets, .props) is included.
 
-11. **Build the Project**
+10. **Build the Project**
     - Switch the build configuration to **Release**.
     - Build the project by selecting **Build** > **Build Solution**.
 
