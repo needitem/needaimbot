@@ -11,7 +11,7 @@ void draw_overlay();
 void draw_debug();
 void draw_profile();
 void draw_stats();
-void draw_hsv_filter_settings();
+void draw_color_filter_settings();
 void draw_rcs_settings();
 void draw_tuning();
 void load_body_texture();

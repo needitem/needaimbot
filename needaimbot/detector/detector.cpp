@@ -10,6 +10,7 @@
 
 #include "../cuda/cuda_image_processing.h"
 #include "../cuda/cuda_float_processing.h"
+#include "../cuda/color_filter.h"
 
 #include <NvInfer.h>
 #include <NvOnnxParser.h>
@@ -69,7 +70,7 @@ extern cudaError_t filterDetectionsByClassIdGpu(
     int max_check_id,
     const unsigned char* d_hsv_mask,
     int mask_pitch,
-    int min_hsv_pixels,
+    int min_color_pixels,
     bool remove_hsv_matches,
     int max_output_detections,
     cudaStream_t stream
@@ -672,9 +673,9 @@ void Detector::inferenceThread()
         float crosshair_offset_x;
         float crosshair_offset_y;
         float sticky_target_threshold;
-        bool enable_hsv_filter;
-        int min_hsv_pixels_required;
-        bool hsv_filter_remove_on_match;
+        bool enable_color_filter;
+        int min_color_pixels_required;
+        bool color_filter_remove_on_match;
         std::string postprocess;
         
         void update(const Config& config) {
@@ -687,9 +688,9 @@ void Detector::inferenceThread()
             crosshair_offset_x = config.crosshair_offset_x;
             crosshair_offset_y = config.crosshair_offset_y;
             sticky_target_threshold = config.sticky_target_threshold;
-            enable_hsv_filter = config.enable_hsv_filter;
-            min_hsv_pixels_required = config.min_hsv_pixels;
-            hsv_filter_remove_on_match = config.remove_hsv_matches;
+            enable_color_filter = config.enable_color_filter;
+            min_color_pixels_required = config.min_color_pixels;
+            color_filter_remove_on_match = config.remove_color_matches;
             postprocess = config.postprocess;
         }
     } cached_config;
@@ -1002,11 +1003,11 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
     float local_confidence_threshold;
     std::string local_postprocess;
 
-    // Get HSV mask info
-    const unsigned char* hsvMaskPtr = nullptr;
+    // Get color mask info
+    const unsigned char* colorMaskPtr = nullptr;
     int maskPitch = 0;
-    int current_min_hsv_pixels_val;
-    bool current_remove_hsv_matches_val;
+    int current_min_color_pixels_val;
+    bool current_remove_color_matches_val;
     int current_max_output_detections_val;
 
     { 
@@ -1016,15 +1017,15 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         local_confidence_threshold = ctx.config.confidence_threshold;
         local_postprocess = ctx.config.postprocess;
 
-        if (ctx.config.enable_hsv_filter) { 
-            std::lock_guard<std::mutex> hsv_lock(hsvMaskMutex); 
-            if (!m_hsvMaskGpu.empty()) {
-                hsvMaskPtr = m_hsvMaskGpu.data();
-                maskPitch = static_cast<int>(m_hsvMaskGpu.step());
+        if (ctx.config.enable_color_filter) { 
+            std::lock_guard<std::mutex> color_lock(colorMaskMutex); 
+            if (!m_colorMaskGpu.empty()) {
+                colorMaskPtr = m_colorMaskGpu.data();
+                maskPitch = static_cast<int>(m_colorMaskGpu.step());
             }
         }
-        current_min_hsv_pixels_val = ctx.config.min_hsv_pixels;
-        current_remove_hsv_matches_val = ctx.config.remove_hsv_matches;
+        current_min_color_pixels_val = ctx.config.min_color_pixels;
+        current_remove_color_matches_val = ctx.config.remove_color_matches;
         current_max_output_detections_val = local_max_detections; 
     }
 
@@ -1098,10 +1099,10 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         m_classFilteredCountGpu.get(),
         m_d_ignore_flags_gpu.get(),
         MAX_CLASSES_FOR_FILTERING,
-        hsvMaskPtr,
+        colorMaskPtr,
         maskPitch,
-        current_min_hsv_pixels_val,
-        current_remove_hsv_matches_val,
+        current_min_color_pixels_val,
+        current_remove_color_matches_val,
         current_max_output_detections_val,
         stream
     );
@@ -1197,55 +1198,51 @@ void Detector::preProcess(const SimpleCudaMat& frame, cudaStream_t stream)
             CudaImageProcessing::resize(frame, resizedBuffer, w, h, stream);
         }
 
-        // Only process HSV filter if enabled and actually being used
-        bool current_enable_hsv_filter = false;
-        bool current_remove_hsv_matches = false;
+        // Process RGB color filter if enabled
+        bool current_enable_color_filter = false;
+        bool current_remove_color_matches = false;
         {
             std::lock_guard<std::mutex> lock(ctx.configMutex);
-            current_enable_hsv_filter = ctx.config.enable_hsv_filter;
-            current_remove_hsv_matches = ctx.config.remove_hsv_matches;
+            current_enable_color_filter = ctx.config.enable_color_filter;
+            current_remove_color_matches = ctx.config.remove_color_matches;
         }
 
-        // Skip HSV processing entirely if not needed
-        if (current_enable_hsv_filter && (current_remove_hsv_matches || ctx.config.min_hsv_pixels > 0)) {
-            static SimpleCudaMat hsvGpu_static;
-            static SimpleCudaMat maskGpu_hsv_static;
+        // Skip color processing entirely if not needed
+        if (current_enable_color_filter && (current_remove_color_matches || ctx.config.min_color_pixels > 0)) {
+            static SimpleCudaMat maskGpu_rgb_static;
             
-            // Cache HSV bounds to avoid repeated access
-            static float cached_lower[3], cached_upper[3];
-            static bool bounds_cached = false;
+            // Create color mask using RGB filter
+            maskGpu_rgb_static.create(resizedBuffer.rows(), resizedBuffer.cols(), 1);
             
-            if (!bounds_cached || ctx.config.hsv_lower_h != cached_lower[0]) {
-                cached_lower[0] = ctx.config.hsv_lower_h;
-                cached_lower[1] = ctx.config.hsv_lower_s;
-                cached_lower[2] = ctx.config.hsv_lower_v;
-                cached_upper[0] = ctx.config.hsv_upper_h;
-                cached_upper[1] = ctx.config.hsv_upper_s;
-                cached_upper[2] = ctx.config.hsv_upper_v;
-                bounds_cached = true;
-            }
-            
-            hsvGpu_static.create(resizedBuffer.rows(), resizedBuffer.cols(), 3);
-            CudaImageProcessing::bgr2hsv(resizedBuffer, hsvGpu_static, stream);
-            maskGpu_hsv_static.create(hsvGpu_static.rows(), hsvGpu_static.cols(), 1);
-            CudaImageProcessing::inRange(hsvGpu_static, cached_lower, cached_upper, maskGpu_hsv_static, stream);
+            // Use the RGB range filter (much faster than HSV)
+            launchRGBRangeFilter(
+                resizedBuffer.data(),
+                maskGpu_rgb_static.data(),
+                resizedBuffer.cols(),
+                resizedBuffer.rows(),
+                static_cast<int>(resizedBuffer.step()),
+                ctx.config.rgb_min_r, ctx.config.rgb_max_r,
+                ctx.config.rgb_min_g, ctx.config.rgb_max_g,
+                ctx.config.rgb_min_b, ctx.config.rgb_max_b,
+                stream
+            );
             
             // Only resize if resolution changed
             static int last_resolution = 0;
             if (last_resolution != ctx.config.detection_resolution) {
                 last_resolution = ctx.config.detection_resolution;
                 SimpleCudaMat maskResized;
-                CudaImageProcessing::resize(maskGpu_hsv_static, maskResized, last_resolution, last_resolution, stream);
+                CudaImageProcessing::resize(maskGpu_rgb_static, maskResized, last_resolution, last_resolution, stream);
                 {
-                    std::lock_guard<std::mutex> lock(hsvMaskMutex);
-                    m_hsvMaskGpu = std::move(maskResized);
+                    std::lock_guard<std::mutex> lock(colorMaskMutex);
+                    m_colorMaskGpu = std::move(maskResized);
                 }
             }
         } else {
-            // Clear HSV mask if not in use
-            std::lock_guard<std::mutex> lock(hsvMaskMutex);
-            if (!m_hsvMaskGpu.empty()) {
-                m_hsvMaskGpu.release();
+            // Clear color mask if not in use
+            std::lock_guard<std::mutex> lock(colorMaskMutex);
+            if (!m_colorMaskGpu.empty()) {
+                m_colorMaskGpu.release();
             }
         }
 
@@ -1361,12 +1358,12 @@ float Detector::calculate_host_iou(const Detection& det1, const Detection& det2)
 
 
 
-SimpleCudaMat Detector::getHsvMaskGpu() const { 
-    std::lock_guard<std::mutex> lock(const_cast<std::mutex&>(hsvMaskMutex)); 
-    if (m_hsvMaskGpu.empty()) {
+SimpleCudaMat Detector::getColorMaskGpu() const { 
+    std::lock_guard<std::mutex> lock(const_cast<std::mutex&>(colorMaskMutex)); 
+    if (m_colorMaskGpu.empty()) {
         return SimpleCudaMat(); 
     }
-    return m_hsvMaskGpu.clone(); 
+    return m_colorMaskGpu.clone(); 
 }
 
 void Detector::start()
