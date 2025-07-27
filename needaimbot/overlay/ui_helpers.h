@@ -56,6 +56,12 @@ namespace UIHelpers
     
     void PushStyleColors();
     void PopStyleColors();
+    
+    // Profile dropdown helper
+    bool ProfileDropdown(const char* combo_label = "##ProfileDropdown", float width = 200.0f);
+    
+    // Weapon profile dropdown helper
+    bool WeaponProfileDropdown(const char* combo_label = "##WeaponDropdown", float width = 200.0f);
 }
 
 #endif

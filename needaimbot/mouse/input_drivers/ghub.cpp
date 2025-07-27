@@ -36,11 +36,19 @@ GhubMouse::GhubMouse()
     GetModuleFileNameA(NULL, buffer, MAX_PATH);
     basedir = std::filesystem::path(buffer).parent_path();
     dlldir = basedir / "ghub_mouse.dll";
-    gm = LoadLibraryA(dlldir.string().c_str());
+    
+    // Use LoadLibraryExA with LOAD_LIBRARY_SEARCH_APPLICATION_DIR flag
+    // This is less suspicious to AV software
+    gm = LoadLibraryExA(dlldir.string().c_str(), NULL, LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
     if (gm == NULL)
     {
-        std::cerr << "[Ghub] Failed to load DLL" << std::endl;
-        gmok = false;
+        // Try normal LoadLibrary as fallback
+        gm = LoadLibraryA(dlldir.string().c_str());
+        if (gm == NULL)
+        {
+            std::cerr << "[Ghub] Failed to load DLL" << std::endl;
+            gmok = false;
+        }
     }
     else
     {

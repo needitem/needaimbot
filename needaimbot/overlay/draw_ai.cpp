@@ -15,6 +15,7 @@
 #include "detector/detector.h"
 #include "ui_helpers.h"
 #include "common_helpers.h"
+#include "draw_settings.h"
 
 static void draw_model_settings()
 {
@@ -51,7 +52,7 @@ static void draw_model_settings()
             if (ctx.config.ai_model != availableModels[currentModelIndex])
             {
                 ctx.config.ai_model = availableModels[currentModelIndex];
-                ctx.config.saveConfig();
+                SAVE_PROFILE();
                 detector_model_changed.store(true);
             }
         }
@@ -76,7 +77,7 @@ static void draw_model_settings()
         if (ctx.config.onnx_input_resolution != selected_resolution)
         {
             ctx.config.onnx_input_resolution = selected_resolution;
-            ctx.config.saveConfig();
+            SAVE_PROFILE();
             detector_model_changed.store(true); 
         }
     }
@@ -85,13 +86,13 @@ static void draw_model_settings()
     
     if (UIHelpers::EnhancedCheckbox("Enable FP16 Precision", &ctx.config.export_enable_fp16, "Enable FP16 precision for the exported TensorRT engine. Reduces memory usage and improves performance on supported GPUs."))
     {
-        ctx.config.saveConfig();
+        SAVE_PROFILE();
         detector_model_changed.store(true);
     }
     
     if (UIHelpers::EnhancedCheckbox("Enable FP8 Precision", &ctx.config.export_enable_fp8, "Enable FP8 precision for the exported TensorRT engine. Experimental feature for maximum performance on supported GPUs."))
     {
-        ctx.config.saveConfig();
+        SAVE_PROFILE();
         detector_model_changed.store(true);
     }
     
@@ -112,7 +113,7 @@ static void draw_model_settings()
                 std::cout << "[Overlay] Removed engine: " << enginePath.string() << std::endl;
         }
         ctx.config.ai_model = onnxPath.filename().string();
-        ctx.config.saveConfig();
+        SAVE_PROFILE();
         detector_model_changed.store(true);
     }
     
@@ -146,7 +147,7 @@ static void draw_detection_settings()
                                 "Select the YOLO postprocessing algorithm that matches your model version."))
     {
         ctx.config.postprocess = postprocessOptions[currentPostprocessIndex];
-        ctx.config.saveConfig();
+        SAVE_PROFILE();
         detector_model_changed.store(true);
     }
     
@@ -155,13 +156,13 @@ static void draw_detection_settings()
     if (UIHelpers::EnhancedSliderFloat("Confidence Threshold", &ctx.config.confidence_threshold, 0.01f, 1.00f, "%.2f", 
                                       "Minimum confidence score required for target detection. Higher values = fewer false positives."))
     {
-        ctx.config.saveConfig();
+        SAVE_PROFILE();
     }
     
     if (UIHelpers::EnhancedSliderFloat("NMS Threshold", &ctx.config.nms_threshold, 0.01f, 1.00f, "%.2f",
                                       "Non-Maximum Suppression threshold for removing overlapping detections. Lower values = less overlap allowed."))
     {
-        ctx.config.saveConfig();
+        SAVE_PROFILE();
     }
     
     // Max detections slider with better styling
@@ -171,7 +172,7 @@ static void draw_detection_settings()
     ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, UIHelpers::GetAccentColor(1.0f));
     ImGui::SetNextItemWidth(-1);
     if (ImGui::SliderInt("Max Detections", &ctx.config.max_detections, 1, 100, "%d detections")) {
-        ctx.config.saveConfig();
+        SAVE_PROFILE();
     }
     ImGui::PopStyleColor(4);
     if (ImGui::IsItemHovered()) {
@@ -202,7 +203,7 @@ static void draw_class_settings()
     
     if (ImGui::IsItemDeactivatedAfterEdit()) {
         ctx.config.head_class_name = head_class_name_buffer;
-        ctx.config.saveConfig();
+        SAVE_PROFILE();
     }
     
     UIHelpers::CompactSpacer();
@@ -222,7 +223,7 @@ static void draw_class_settings()
             
             ImGui::TableSetColumnIndex(0);
             if (ImGui::InputInt("##ID", &setting.id, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue)) {
-                ctx.config.saveConfig();
+                SAVE_PROFILE();
             }
 
             ImGui::TableSetColumnIndex(1);
@@ -231,23 +232,23 @@ static void draw_class_settings()
             name_buf[sizeof(name_buf) - 1] = '\0';
             if (ImGui::InputText("##Name", name_buf, sizeof(name_buf), ImGuiInputTextFlags_EnterReturnsTrue)) {
                 setting.name = name_buf;
-                ctx.config.saveConfig();
+                SAVE_PROFILE();
             }
             if (ImGui::IsItemDeactivatedAfterEdit() && setting.name != name_buf) { 
                 setting.name = name_buf;
-                ctx.config.saveConfig();
+                SAVE_PROFILE();
             }
 
             ImGui::TableSetColumnIndex(2);
             if (ImGui::Checkbox("##Ignore", &setting.ignore)) {
-                ctx.config.saveConfig();
+                SAVE_PROFILE();
                 if (ctx.detector) ctx.detector->m_ignore_flags_need_update = true;
             }
 
             ImGui::TableSetColumnIndex(3);
             if (UIHelpers::BeautifulButton("Remove", ImVec2(-1, 0))) {
                 ctx.config.class_settings.erase(ctx.config.class_settings.begin() + i);
-                ctx.config.saveConfig();
+                SAVE_PROFILE();
                 if (ctx.detector) ctx.detector->m_ignore_flags_need_update = true;
                 ImGui::PopID(); 
                 i--; 
@@ -303,7 +304,7 @@ static void draw_class_settings()
         std::string temp_name = new_class_name_buf;
         if (!id_exists && !temp_name.empty()) {
             ctx.config.class_settings.emplace_back(new_class_id, temp_name, new_class_ignore);
-            ctx.config.saveConfig();
+            SAVE_PROFILE();
             if (ctx.detector) ctx.detector->m_ignore_flags_need_update = true;
             
             new_class_id = CommonHelpers::getNextClassId();
@@ -328,7 +329,7 @@ static void draw_advanced_settings()
         ImGui::PushItemWidth(-1);
         if (ImGui::InputInt("##cuda_device", &ctx.config.cuda_device_id)) {
             if (ctx.config.cuda_device_id < 0) ctx.config.cuda_device_id = 0;
-            ctx.config.saveConfig();
+            SAVE_PROFILE();
         }
         ImGui::PopItemWidth();
         ImGui::SameLine();

@@ -36,7 +36,7 @@ static void draw_capture_area_settings()
     int new_resolution = static_cast<int>(detection_res_float);
     if (new_resolution != old_resolution) {
         ctx.config.detection_resolution = new_resolution;
-        ctx.config.saveConfig();
+        SAVE_PROFILE();
         
         // Force update flags
         extern std::atomic<bool> detection_resolution_changed;
@@ -54,7 +54,7 @@ static void draw_capture_area_settings()
     
     if (UIHelpers::BeautifulToggle("Circle Mask", &ctx.config.circle_mask, "Applies a circular mask to the captured area, ignoring corners."))
     {
-        ctx.config.saveConfig();
+        SAVE_PROFILE();
     }
     
     UIHelpers::EndCard();
@@ -79,7 +79,7 @@ static void draw_capture_behavior_settings()
     int new_fps = static_cast<int>(capture_fps_float);
     if (new_fps != old_fps) {
         ctx.config.capture_fps = new_fps;
-        ctx.config.saveConfig();
+        SAVE_PROFILE();
         
         // Force update flags
         extern std::atomic<bool> capture_fps_changed;
@@ -123,7 +123,7 @@ static void draw_capture_behavior_settings()
         else if (current_method == 1) ctx.config.capture_method = "duplication";
         else if (current_method == 2) ctx.config.capture_method = "virtual_camera";
         else if (current_method == 3) ctx.config.capture_method = "ndi";
-        ctx.config.saveConfig();
+        SAVE_PROFILE();
         ctx.capture_method_changed = true;
     }
     
@@ -133,14 +133,14 @@ static void draw_capture_behavior_settings()
     
     if (UIHelpers::BeautifulToggle("Capture Borders", &ctx.config.capture_borders, "Includes window borders in the screen capture (if applicable)."))
     {
-        ctx.config.saveConfig();
+        SAVE_PROFILE();
     }
     
     ImGui::NextColumn();
     
     if (UIHelpers::BeautifulToggle("Capture Cursor", &ctx.config.capture_cursor, "Includes the mouse cursor in the screen capture."))
     {
-        ctx.config.saveConfig();
+        SAVE_PROFILE();
     }
     
     ImGui::Columns(1);
@@ -177,7 +177,7 @@ static void draw_capture_source_settings()
     UIHelpers::InfoTooltip("Select which monitor to capture from when using CUDA-based screen capture.");
     if (ImGui::IsItemDeactivatedAfterEdit())
     {
-        ctx.config.saveConfig();
+        SAVE_PROFILE();
     }
     
     UIHelpers::EndCard();
@@ -224,7 +224,7 @@ static void draw_2pc_capture_settings()
             
             if (ImGui::InputText("NDI Source Name", ndi_source_name, sizeof(ndi_source_name))) {
                 ctx.config.ndi_source_name = std::string(ndi_source_name);
-                ctx.config.saveConfig();
+                SAVE_PROFILE();
             }
             UIHelpers::InfoTooltip("Enter the NDI source name from your streaming PC.\nLeave empty to auto-detect first available source.");
             
@@ -240,7 +240,7 @@ static void draw_2pc_capture_settings()
             
             if (ImGui::InputText("Network Stream URL", network_url, sizeof(network_url))) {
                 ctx.config.ndi_network_url = std::string(network_url);
-                ctx.config.saveConfig();
+                SAVE_PROFILE();
             }
             UIHelpers::InfoTooltip("Fallback network stream URL when NDI is not available.\nCommon formats: HTTP MJPEG, RTMP, UDP streams.");
             
@@ -248,7 +248,7 @@ static void draw_2pc_capture_settings()
             
             if (UIHelpers::BeautifulToggle("Low Latency Mode", &ctx.config.ndi_low_latency, "Enables high bandwidth mode for lowest possible latency."))
             {
-                ctx.config.saveConfig();
+                SAVE_PROFILE();
             }
             
             UIHelpers::CompactSpacer();
@@ -265,6 +265,10 @@ static void draw_2pc_capture_settings()
 void draw_capture_settings()
 {
     auto& ctx = AppContext::getInstance();
+    
+    // Profile dropdown at the top
+    UIHelpers::ProfileDropdown();
+    UIHelpers::CompactSpacer();
     
     UIHelpers::BeginTwoColumnLayout(0.6f);
     

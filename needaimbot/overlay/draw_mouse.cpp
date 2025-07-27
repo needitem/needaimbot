@@ -11,7 +11,8 @@
 #include "include/other_tools.h"
 #include "overlay.h"
 #include "ui_helpers.h"
-#include "common_helpers.h" 
+#include "common_helpers.h"
+#include "draw_settings.h" 
 
 std::string ghub_version = get_ghub_version();
 
@@ -111,7 +112,7 @@ static void draw_error_scaling_controls()
         if (ImGui::Button("Apply Changes", ImVec2(120, 0))) {
             // Apply changes to actual config
             ctx.config.error_scaling_rules = temp_rules;
-            ctx.config.saveConfig();
+            SAVE_PROFILE();
             has_unsaved_changes = false;
         }
         ImGui::PopStyleColor(2);
@@ -161,19 +162,19 @@ static void draw_pid_controls()
     float kp_x = static_cast<float>(ctx.config.kp_x);
     if (UIHelpers::EnhancedSliderFloat("Kp X", &kp_x, 0.0f, 2.0f, "%.3f", "Proportional gain for X-axis. Higher values = faster response but may cause oscillation.")) {
         ctx.config.kp_x = static_cast<double>(kp_x);
-        ctx.config.saveConfig();
+        SAVE_PROFILE();
     }
     
     float ki_x = static_cast<float>(ctx.config.ki_x);
     if (UIHelpers::EnhancedSliderFloat("Ki X", &ki_x, 0.0f, 0.02f, "%.4f", "Integral gain for X-axis. Helps eliminate steady-state error.")) {
         ctx.config.ki_x = static_cast<double>(ki_x);
-        ctx.config.saveConfig();
+        SAVE_PROFILE();
     }
     
     float kd_x = static_cast<float>(ctx.config.kd_x);
     if (UIHelpers::EnhancedSliderFloat("Kd X", &kd_x, 0.0f, 0.05f, "%.4f", "Derivative gain for X-axis. Reduces overshoot and oscillation.")) {
         ctx.config.kd_x = static_cast<double>(kd_x);
-        ctx.config.saveConfig();
+        SAVE_PROFILE();
     }
     
     ImGui::NextColumn();
@@ -184,19 +185,19 @@ static void draw_pid_controls()
     float kp_y = static_cast<float>(ctx.config.kp_y);
     if (UIHelpers::EnhancedSliderFloat("Kp Y", &kp_y, 0.0f, 2.0f, "%.3f", "Proportional gain for Y-axis. Higher values = faster response but may cause oscillation.")) {
         ctx.config.kp_y = static_cast<double>(kp_y);
-        ctx.config.saveConfig();
+        SAVE_PROFILE();
     }
     
     float ki_y = static_cast<float>(ctx.config.ki_y);
     if (UIHelpers::EnhancedSliderFloat("Ki Y", &ki_y, 0.0f, 0.02f, "%.4f", "Integral gain for Y-axis. Helps eliminate steady-state error.")) {
         ctx.config.ki_y = static_cast<double>(ki_y);
-        ctx.config.saveConfig();
+        SAVE_PROFILE();
     }
     
     float kd_y = static_cast<float>(ctx.config.kd_y);
     if (UIHelpers::EnhancedSliderFloat("Kd Y", &kd_y, 0.0f, 0.05f, "%.4f", "Derivative gain for Y-axis. Reduces overshoot and oscillation.")) {
         ctx.config.kd_y = static_cast<double>(kd_y);
-        ctx.config.saveConfig();
+        SAVE_PROFILE();
     }
     
     ImGui::Columns(1);
@@ -207,7 +208,7 @@ static void draw_pid_controls()
     if (ImGui::Button("Conservative", ImVec2((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x * 2) / 3, 0))) {
         ctx.config.kp_x = 0.3; ctx.config.ki_x = 0.001; ctx.config.kd_x = 0.005;
         ctx.config.kp_y = 0.3; ctx.config.ki_y = 0.001; ctx.config.kd_y = 0.005;
-        ctx.config.saveConfig();
+        SAVE_PROFILE();
     }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("Safe values for most situations");
@@ -217,7 +218,7 @@ static void draw_pid_controls()
     if (ImGui::Button("Balanced", ImVec2((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) / 2, 0))) {
         ctx.config.kp_x = 0.5; ctx.config.ki_x = 0.003; ctx.config.kd_x = 0.01;
         ctx.config.kp_y = 0.5; ctx.config.ki_y = 0.003; ctx.config.kd_y = 0.01;
-        ctx.config.saveConfig();
+        SAVE_PROFILE();
     }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("Balanced between speed and stability");
@@ -227,7 +228,7 @@ static void draw_pid_controls()
     if (ImGui::Button("Aggressive", ImVec2(-1, 0))) {
         ctx.config.kp_x = 0.8; ctx.config.ki_x = 0.005; ctx.config.kd_x = 0.02;
         ctx.config.kp_y = 0.8; ctx.config.ki_y = 0.005; ctx.config.kd_y = 0.02;
-        ctx.config.saveConfig();
+        SAVE_PROFILE();
     }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("Fast tracking, may oscillate");
@@ -269,7 +270,7 @@ static void draw_input_method_settings()
     if (UIHelpers::EnhancedCombo("##input_method", &input_method_index, method_items.data(), static_cast<int>(method_items.size()),
                                 "WIN32: Standard API (detectable)\nGHUB: Logitech driver (safer)\nARDUINO: Hardware device\nRAZER: Razer driver\nKMBOX: Hardware solution")) {
         ctx.config.input_method = input_methods[input_method_index];
-        ctx.config.saveConfig();
+        SAVE_PROFILE();
         ctx.input_method_changed.store(true);
     }
     
@@ -298,7 +299,7 @@ static void draw_input_method_settings()
         ImGui::SetNextItemWidth(-1);
         if (ImGui::InputText("##arduino_port", port_buffer, sizeof(port_buffer))) {
             ctx.config.arduino_port = port_buffer;
-            ctx.config.saveConfig();
+            SAVE_PROFILE();
         }
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Enter the COM port your Arduino is connected to (e.g., COM3, /dev/ttyACM0)");
@@ -325,12 +326,12 @@ static void draw_input_method_settings()
             if (UIHelpers::EnhancedCombo("##arduino_baud_combo", &current_baud_index, baud_rates, IM_ARRAYSIZE(baud_rates),
                                         "115200: Standard speed\n250000-1000000: High speed (requires compatible firmware)")) {
                 ctx.config.arduino_baudrate = std::stoi(baud_rates[current_baud_index]);
-                ctx.config.saveConfig();
+                SAVE_PROFILE();
                 ctx.input_method_changed.store(true);
             }
         } else {
             if (ImGui::InputInt("##arduino_baud", &ctx.config.arduino_baudrate, 0)) {
-                ctx.config.saveConfig();
+                SAVE_PROFILE();
                 ctx.input_method_changed.store(true);
             }
         }
@@ -339,7 +340,7 @@ static void draw_input_method_settings()
         
         if (UIHelpers::EnhancedCheckbox("Use 16-bit Mouse Movement", &ctx.config.arduino_16_bit_mouse,
                                        "Send mouse data as 16-bit values (requires compatible firmware). Higher precision but needs firmware support.")) {
-            ctx.config.saveConfig();
+            SAVE_PROFILE();
         }
     }
     
@@ -492,7 +493,7 @@ static void draw_aiming_settings()
     ImGui::Text("Area Size Multiplier");
     if (UIHelpers::EnhancedSliderFloat("##triggerbot_area", &ctx.config.bScope_multiplier, 0.1f, 2.0f, "%.2f",
                                       "Defines the central screen area size where Triggerbot activates.\nSmaller value = larger area\nLarger value = smaller area\n(1.0 = default area)")) {
-        ctx.config.saveConfig();
+        SAVE_PROFILE();
     }
     
     UIHelpers::EndCard();

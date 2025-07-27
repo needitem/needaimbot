@@ -4,6 +4,7 @@
 #include "overlay.h"
 #include "include/other_tools.h"
 #include "common_helpers.h"
+#include "draw_settings.h"
 #include <vector>
 #include <string>
 #include <d3d11.h> 
@@ -417,7 +418,7 @@ void draw_debug()
     if (ImGui::Checkbox("Show Preview Window", &ctx.config.show_window)) 
     {
         
-        ctx.config.saveConfig(); 
+        SAVE_PROFILE(); 
 
         if (prev_show_window_state == true && ctx.config.show_window == false) {
             
@@ -450,7 +451,7 @@ void draw_debug()
     ImGui::SameLine(); ImGui::Spacing(); ImGui::SameLine();
     
     
-    if (ImGui::Checkbox("Enable FPS Display", &ctx.config.show_fps)) { ctx.config.saveConfig(); } 
+    if (ImGui::Checkbox("Enable FPS Display", &ctx.config.show_fps)) { SAVE_PROFILE(); } 
 
     // Crosshair offset adjustment controls
     ImGui::SameLine(); ImGui::Spacing(); ImGui::SameLine();
@@ -523,7 +524,7 @@ void draw_debug()
     
     // Save config when offset changes
     if (offset_changed) {
-        ctx.config.saveConfig();
+        SAVE_PROFILE();
     }
 
     ImGui::Spacing();
@@ -633,7 +634,7 @@ void draw_debug()
     ImGui::Spacing();
 
     if (ImGui::Checkbox("Enable RGB Color Filter (in Config)", &ctx.config.enable_color_filter)) {
-        ctx.config.saveConfig(); 
+        SAVE_PROFILE(); 
         if (ctx.detector) ctx.detector->m_ignore_flags_need_update = true; 
     }
     if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Toggles the RGB color filtering logic (config.enable_color_filter)."); }
@@ -702,7 +703,7 @@ void draw_debug()
     CommonHelpers::drawKeyBindingList("Screenshot Button", ctx.config.screenshot_button, key_names, key_names_cstrs);
 
     ImGui::Spacing();
-    if (ImGui::InputInt("Screenshot Delay (ms)", &ctx.config.screenshot_delay, 50, 500)) { ctx.config.saveConfig(); }
+    if (ImGui::InputInt("Screenshot Delay (ms)", &ctx.config.screenshot_delay, 50, 500)) { SAVE_PROFILE(); }
     if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Delay in milliseconds after pressing the button before taking the screenshot."); }
 
     ImGui::Spacing();
@@ -712,10 +713,10 @@ void draw_debug()
     ImGui::SeparatorText("Miscellaneous");
     ImGui::Spacing();
 
-    if (ImGui::Checkbox("Always On Top", &ctx.config.always_on_top)) { ctx.config.saveConfig(); }
+    if (ImGui::Checkbox("Always On Top", &ctx.config.always_on_top)) { SAVE_PROFILE(); }
     if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Keeps the overlay window always on top of other windows."); }
     ImGui::SameLine(); ImGui::Spacing(); ImGui::SameLine();
-    if (ImGui::Checkbox("Verbose Console Output", &ctx.config.verbose)) { ctx.config.saveConfig(); }
+    if (ImGui::Checkbox("Verbose Console Output", &ctx.config.verbose)) { SAVE_PROFILE(); }
     if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Prints more detailed information to the console window for debugging."); }
 
     ImGui::Spacing();
