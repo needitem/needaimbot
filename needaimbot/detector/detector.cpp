@@ -885,6 +885,10 @@ void Detector::inferenceThread()
                     // Only proceed if we have detections
                     if (m_finalDetectionsCountHost > 0 && !ctx.should_exit)
                     {
+                        if (ctx.config.verbose) {
+                            std::cout << "[Detector] Processing " << m_finalDetectionsCountHost << " detections for target selection" << std::endl;
+                        }
+                        
                         // First, calculate scores for all detections using cached config
                         calculateTargetScoresGpu(m_finalDetectionsGpu.get(), m_finalDetectionsCountHost, m_scoresGpu.get(), 
                             cached_config.detection_resolution, cached_config.detection_resolution, 
@@ -895,18 +899,26 @@ void Detector::inferenceThread()
                         // Find the overall best target
                         findBestTargetGpu(m_scoresGpu.get(), m_finalDetectionsCountHost, m_bestTargetIndexGpu.get(), stream);
                         
-                        int newBestIndex = -1;
-                        float newBestScore = FLT_MAX;
+                        // Copy the best target index from GPU
+                        int bestIndexFromGpu = -1;
+                        cudaMemcpyAsync(&bestIndexFromGpu, m_bestTargetIndexGpu.get(), 
+                                       sizeof(int), cudaMemcpyDeviceToHost, stream);
+                        cudaStreamSynchronize(stream);
                         
-                        // Skip sticky target logic - always use fresh detection
+                        if (ctx.config.verbose) {
+                            std::cout << "[Detector] Best target index from GPU: " << bestIndexFromGpu << std::endl;
+                        }
+                        
+                        // Update pinned memory with the new best index
+                        *m_pinnedBestIndex = bestIndexFromGpu;
                         
                         // Copy results without intermediate sync
                         cudaMemcpyAsync(m_batchedResultsPinned, m_batchedResultsGpu, 
                                        sizeof(BatchedResults), cudaMemcpyDeviceToHost, stream);
                         
                         // Also copy best target detection if valid
-                        if (*m_pinnedBestIndex >= 0 && *m_pinnedBestIndex < m_finalDetectionsCountHost) {
-                            cudaMemcpyAsync(&m_batchedResultsPinned->bestTarget, &m_finalDetectionsGpu.get()[*m_pinnedBestIndex], 
+                        if (bestIndexFromGpu >= 0 && bestIndexFromGpu < m_finalDetectionsCountHost) {
+                            cudaMemcpyAsync(&m_batchedResultsPinned->bestTarget, &m_finalDetectionsGpu.get()[bestIndexFromGpu], 
                                           sizeof(Detection), cudaMemcpyDeviceToHost, stream);
                         }
                         
@@ -917,13 +929,25 @@ void Detector::inferenceThread()
                         memcpy(&m_batchedResultsHost, m_batchedResultsPinned, sizeof(BatchedResults));
                         
                         // Simply use the best target from current frame
-                        newBestIndex = *m_pinnedBestIndex;
+                        int newBestIndex = bestIndexFromGpu;
                         
                         if (newBestIndex >= 0 && newBestIndex < m_finalDetectionsCountHost) {
                             // Use the best target from this frame only
                             m_bestTargetIndexHost = newBestIndex;
                             m_bestTargetHost = m_batchedResultsPinned->bestTarget;
                             m_hasBestTarget = true;  // Only set true after successful assignment
+                            
+                            if (ctx.config.verbose) {
+                                std::cout << "[Detector] Target selected - Index: " << m_bestTargetIndexHost 
+                                          << ", Position: (" << m_bestTargetHost.x << ", " << m_bestTargetHost.y << ")"
+                                          << ", Size: " << m_bestTargetHost.width << "x" << m_bestTargetHost.height
+                                          << ", Confidence: " << m_bestTargetHost.confidence << std::endl;
+                            }
+                        } else {
+                            if (ctx.config.verbose) {
+                                std::cout << "[Detector] No valid target selected (bestIndex=" << newBestIndex 
+                                          << ", detectionCount=" << m_finalDetectionsCountHost << ")" << std::endl;
+                            }
                         }
                         // No else needed - state already cleared at the beginning
                     }
