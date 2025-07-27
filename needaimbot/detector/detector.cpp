@@ -890,50 +890,55 @@ void Detector::inferenceThread()
                         }
                         
                         // First, calculate scores for all detections using cached config
-                        calculateTargetScoresGpu(m_finalDetectionsGpu.get(), m_finalDetectionsCountHost, m_scoresGpu.get(), 
+                        cudaError_t scoreErr = calculateTargetScoresGpu(m_finalDetectionsGpu.get(), m_finalDetectionsCountHost, m_scoresGpu.get(), 
                             cached_config.detection_resolution, cached_config.detection_resolution, 
                             cached_config.distance_weight, cached_config.confidence_weight, 
                             0, // head_class_id - 0 for person class
                             cached_config.crosshair_offset_x, cached_config.crosshair_offset_y, stream);
                         
-                        // Find the overall best target
-                        findBestTargetGpu(m_scoresGpu.get(), m_finalDetectionsCountHost, m_bestTargetIndexGpu.get(), stream);
-                        
-                        // Copy the best target index from GPU
-                        int bestIndexFromGpu = -1;
-                        cudaMemcpyAsync(&bestIndexFromGpu, m_bestTargetIndexGpu.get(), 
-                                       sizeof(int), cudaMemcpyDeviceToHost, stream);
-                        cudaStreamSynchronize(stream);
-                        
-                        if (ctx.config.verbose) {
-                            std::cout << "[Detector] Best target index from GPU: " << bestIndexFromGpu << std::endl;
+                        if (scoreErr != cudaSuccess) {
+                            std::cerr << "[Detector] Failed to calculate target scores: " << cudaGetErrorString(scoreErr) << std::endl;
+                            continue;
                         }
                         
-                        // Update pinned memory with the new best index
-                        *m_pinnedBestIndex = bestIndexFromGpu;
+                        // Find the overall best target
+                        cudaError_t findErr = findBestTargetGpu(m_scoresGpu.get(), m_finalDetectionsCountHost, m_bestTargetIndexGpu.get(), stream);
                         
-                        // Copy results without intermediate sync
+                        if (findErr != cudaSuccess) {
+                            std::cerr << "[Detector] Failed to find best target: " << cudaGetErrorString(findErr) << std::endl;
+                            continue;
+                        }
+                        
+                        // Copy the best target index from GPU directly to pinned memory
+                        cudaMemcpyAsync(m_pinnedBestIndex, m_bestTargetIndexGpu.get(), 
+                                       sizeof(int), cudaMemcpyDeviceToHost, stream);
+                        
+                        // Batch all memory operations before sync
                         cudaMemcpyAsync(m_batchedResultsPinned, m_batchedResultsGpu, 
                                        sizeof(BatchedResults), cudaMemcpyDeviceToHost, stream);
                         
-                        // Also copy best target detection if valid
-                        if (bestIndexFromGpu >= 0 && bestIndexFromGpu < m_finalDetectionsCountHost) {
-                            cudaMemcpyAsync(&m_batchedResultsPinned->bestTarget, &m_finalDetectionsGpu.get()[bestIndexFromGpu], 
-                                          sizeof(Detection), cudaMemcpyDeviceToHost, stream);
+                        // Single synchronization point for initial copies
+                        cudaStreamSynchronize(stream);
+                        
+                        if (ctx.config.verbose) {
+                            std::cout << "[Detector] Best target index from GPU: " << *m_pinnedBestIndex << std::endl;
                         }
                         
-                        // Single synchronization point for all operations
-                        cudaStreamSynchronize(stream);
+                        // Copy best target detection if valid
+                        if (*m_pinnedBestIndex >= 0 && *m_pinnedBestIndex < m_finalDetectionsCountHost) {
+                            cudaMemcpyAsync(&m_batchedResultsPinned->bestTarget, 
+                                          &m_finalDetectionsGpu.get()[*m_pinnedBestIndex], 
+                                          sizeof(Detection), cudaMemcpyDeviceToHost, stream);
+                            cudaStreamSynchronize(stream);
+                        }
                         
                         // Copy pinned results to regular host memory for compatibility
                         memcpy(&m_batchedResultsHost, m_batchedResultsPinned, sizeof(BatchedResults));
                         
-                        // Simply use the best target from current frame
-                        int newBestIndex = bestIndexFromGpu;
-                        
-                        if (newBestIndex >= 0 && newBestIndex < m_finalDetectionsCountHost) {
+                        // Use the best target from current frame
+                        if (*m_pinnedBestIndex >= 0 && *m_pinnedBestIndex < m_finalDetectionsCountHost) {
                             // Use the best target from this frame only
-                            m_bestTargetIndexHost = newBestIndex;
+                            m_bestTargetIndexHost = *m_pinnedBestIndex;
                             m_bestTargetHost = m_batchedResultsPinned->bestTarget;
                             m_hasBestTarget = true;  // Only set true after successful assignment
                             
@@ -945,7 +950,7 @@ void Detector::inferenceThread()
                             }
                         } else {
                             if (ctx.config.verbose) {
-                                std::cout << "[Detector] No valid target selected (bestIndex=" << newBestIndex 
+                                std::cout << "[Detector] No valid target selected (bestIndex=" << *m_pinnedBestIndex 
                                           << ", detectionCount=" << m_finalDetectionsCountHost << ")" << std::endl;
                             }
                         }

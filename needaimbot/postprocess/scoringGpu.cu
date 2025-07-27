@@ -10,6 +10,7 @@
 #include <thrust/distance.h>
 #include <limits>
 #include <cmath>
+#include <cfloat>
 
 #include "scoringGpu.h"
 #include "postProcess.h" 
@@ -59,8 +60,9 @@ __global__ void calculateTargetScoresGpuKernel(
     float distance = sqrtf(dx * dx + dy * dy);
     
     // Normalize distance (0-1, where 0 is best)
-    float max_distance = sqrtf(frame_width * frame_width + frame_height * frame_height) * 0.5f;
-    float normalized_distance = distance / max_distance;
+    // Pre-calculate max_distance as it's constant for all detections
+    float max_distance = sqrtf(float(frame_width * frame_width + frame_height * frame_height)) * 0.5f;
+    float normalized_distance = fminf(distance / max_distance, 1.0f); // Clamp to [0, 1]
     
     // Distance score (closer is better, so 1 - normalized_distance)
     float distance_score = 1.0f - normalized_distance;
@@ -83,21 +85,41 @@ __global__ void findBestTargetKernel(
     int num_detections,
     int* __restrict__ d_best_index
 ) {
-    // Simple linear search for now - more reliable
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    extern __shared__ char shared_mem[];
+    float* shared_scores = (float*)shared_mem;
+    int* shared_indices = (int*)&shared_scores[blockDim.x];
     
-    if (idx == 0) {
-        float best_score = -1.0f;
-        int best_idx = -1;
-        
-        for (int i = 0; i < num_detections; i++) {
-            if (d_scores[i] > best_score) {
-                best_score = d_scores[i];
-                best_idx = i;
+    int tid = threadIdx.x;
+    int idx = blockIdx.x * blockDim.x + tid;
+    
+    // Initialize shared memory with thread's data or invalid values
+    if (idx < num_detections) {
+        shared_scores[tid] = d_scores[idx];
+        shared_indices[tid] = idx;
+    } else {
+        shared_scores[tid] = -FLT_MAX;
+        shared_indices[tid] = -1;
+    }
+    __syncthreads();
+    
+    // Parallel reduction to find maximum
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            if (shared_scores[tid + stride] > shared_scores[tid]) {
+                shared_scores[tid] = shared_scores[tid + stride];
+                shared_indices[tid] = shared_indices[tid + stride];
             }
         }
-        
-        *d_best_index = best_idx;
+        __syncthreads();
+    }
+    
+    // Only the first thread of the first block writes the result
+    if (tid == 0 && blockIdx.x == 0) {
+        // For multiple blocks, we'd need atomic operations or a second kernel
+        // For now, assume single block is sufficient for typical detection counts
+        if (shared_indices[0] >= 0) {
+            *d_best_index = shared_indices[0];
+        }
     }
 }
 
@@ -148,7 +170,8 @@ cudaError_t findBestTargetGpu(
         return cudaSuccess;
     }
     
-    // Use thrust to find the maximum element
+#ifdef USE_THRUST_IMPLEMENTATION
+    // Thrust implementation - more reliable but potentially slower
     thrust::device_ptr<const float> scores_ptr(d_scores);
     thrust::device_ptr<const float> max_iter = thrust::max_element(thrust::cuda::par.on(stream), 
                                                                     scores_ptr, 
@@ -165,6 +188,18 @@ cudaError_t findBestTargetGpu(
         int invalid_index = -1;
         cudaMemcpyAsync(d_best_index_gpu, &invalid_index, sizeof(int), cudaMemcpyHostToDevice, stream);
     }
+#else
+    // Custom kernel implementation - potentially faster for small datasets
+    int block_size = min(256, num_detections);
+    int grid_size = 1; // Single block for simplicity, can extend for larger datasets
+    size_t shared_mem_size = block_size * (sizeof(float) + sizeof(int));
+    
+    findBestTargetKernel<<<grid_size, block_size, shared_mem_size, stream>>>(
+        d_scores,
+        num_detections,
+        d_best_index_gpu
+    );
+#endif
     
     return cudaGetLastError();
 }
