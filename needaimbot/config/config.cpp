@@ -459,6 +459,16 @@ bool Config::loadConfig(const std::string& filename)
     
 
 
+    // Load active profile name from main config file only
+    if (configFile == getConfigPath("config.ini")) {
+        const char* profile_value = ini.GetValue("Profile", "active_profile");
+        if (profile_value) {
+            active_profile_name = profile_value;
+        } else {
+            active_profile_name = "Default";
+        }
+    }
+
     // Validate and correct all configuration values
     ConfigValidator::validateAndCorrect(*this);
 
@@ -644,6 +654,12 @@ bool Config::saveConfig(const std::string& filename)
     file << "min_color_pixels = " << min_color_pixels << "\n";
     file << "remove_color_matches = " << (remove_color_matches ? "true" : "false") << "\n\n";
     
+    // Save active profile name only to main config
+    if (configFile == getConfigPath("config.ini")) {
+        file << "[Profile]\n";
+        file << "active_profile = " << active_profile_name << "\n\n";
+    }
+    
     file.close();
     return true;
 }
@@ -719,6 +735,36 @@ void Config::resetConfig()
     
     loadConfig("__dummy_nonexistent_file_for_reset__.ini"); 
     
+}
+
+bool Config::setActiveProfile(const std::string& profileName) {
+    if (profileName.empty()) {
+        return false;
+    }
+    
+    // Load the profile
+    if (loadProfile(profileName)) {
+        active_profile_name = profileName;
+        return true;
+    }
+    
+    return false;
+}
+
+bool Config::saveActiveProfile() {
+    if (active_profile_name.empty() || active_profile_name == "Default") {
+        // For default profile, save to main config
+        return saveConfig();
+    } else {
+        // Save to the active profile
+        return saveProfile(active_profile_name);
+    }
+}
+
+bool Config::isProfileModified() const {
+    // This would require storing a copy of the last loaded profile settings
+    // For now, we'll return false - can be implemented later if needed
+    return false;
 }
 
 
