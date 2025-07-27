@@ -152,11 +152,13 @@ void mouseThreadFunction(MouseThread &mouseThread)
     
     while (!ctx.should_exit)
     {
-        // Wait for detection update or exit signal
-        static int last_detection_version = 0;
+        // Clear state at the beginning of each cycle to ensure no stale data
         bool current_aiming = ctx.aiming;
         bool current_has_target = false;
-        Detection current_target = {};
+        Detection current_target = {};  // Always start with clean state
+        
+        // Wait for detection update or exit signal
+        static int last_detection_version = 0;
         
         {
             std::unique_lock<std::mutex> lock(ctx.detector->detectionMutex);
