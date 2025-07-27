@@ -115,28 +115,87 @@ void draw_rcs_settings() {
             ImGui::Spacing();
             
             ImGui::Columns(3, "ScopeMultipliers", false);
-            if (UIHelpers::BeautifulSlider("1x Multi", &current_profile->scope_mult_1x, 0.1f, 3.0f, "%.2f")) {
+            
+            // 1x Multiplier
+            ImGui::Text("1x Multi: %.2f", current_profile->scope_mult_1x);
+            ImGui::SameLine();
+            if (ImGui::Button("-##1x")) {
+                current_profile->scope_mult_1x = (std::max)(0.1f, current_profile->scope_mult_1x - 0.1f);
                 SAVE_WEAPON_PROFILE();
             }
-            ImGui::NextColumn();
-            if (UIHelpers::BeautifulSlider("2x Multi", &current_profile->scope_mult_2x, 0.1f, 3.0f, "%.2f")) {
-                SAVE_WEAPON_PROFILE();
-            }
-            ImGui::NextColumn();
-            if (UIHelpers::BeautifulSlider("3x Multi", &current_profile->scope_mult_3x, 0.1f, 3.0f, "%.2f")) {
+            ImGui::SameLine();
+            if (ImGui::Button("+##1x")) {
+                current_profile->scope_mult_1x += 0.1f;
                 SAVE_WEAPON_PROFILE();
             }
             ImGui::NextColumn();
             
-            if (UIHelpers::BeautifulSlider("4x Multi", &current_profile->scope_mult_4x, 0.1f, 3.0f, "%.2f")) {
+            // 2x Multiplier
+            ImGui::Text("2x Multi: %.2f", current_profile->scope_mult_2x);
+            ImGui::SameLine();
+            if (ImGui::Button("-##2x")) {
+                current_profile->scope_mult_2x = (std::max)(0.1f, current_profile->scope_mult_2x - 0.1f);
+                SAVE_WEAPON_PROFILE();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("+##2x")) {
+                current_profile->scope_mult_2x += 0.1f;
                 SAVE_WEAPON_PROFILE();
             }
             ImGui::NextColumn();
-            if (UIHelpers::BeautifulSlider("6x Multi", &current_profile->scope_mult_6x, 0.1f, 3.0f, "%.2f")) {
+            
+            // 3x Multiplier
+            ImGui::Text("3x Multi: %.2f", current_profile->scope_mult_3x);
+            ImGui::SameLine();
+            if (ImGui::Button("-##3x")) {
+                current_profile->scope_mult_3x = (std::max)(0.1f, current_profile->scope_mult_3x - 0.1f);
+                SAVE_WEAPON_PROFILE();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("+##3x")) {
+                current_profile->scope_mult_3x += 0.1f;
                 SAVE_WEAPON_PROFILE();
             }
             ImGui::NextColumn();
-            if (UIHelpers::BeautifulSlider("8x Multi", &current_profile->scope_mult_8x, 0.1f, 3.0f, "%.2f")) {
+            
+            // 4x Multiplier
+            ImGui::Text("4x Multi: %.2f", current_profile->scope_mult_4x);
+            ImGui::SameLine();
+            if (ImGui::Button("-##4x")) {
+                current_profile->scope_mult_4x = (std::max)(0.1f, current_profile->scope_mult_4x - 0.1f);
+                SAVE_WEAPON_PROFILE();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("+##4x")) {
+                current_profile->scope_mult_4x += 0.1f;
+                SAVE_WEAPON_PROFILE();
+            }
+            ImGui::NextColumn();
+            
+            // 6x Multiplier
+            ImGui::Text("6x Multi: %.2f", current_profile->scope_mult_6x);
+            ImGui::SameLine();
+            if (ImGui::Button("-##6x")) {
+                current_profile->scope_mult_6x = (std::max)(0.1f, current_profile->scope_mult_6x - 0.1f);
+                SAVE_WEAPON_PROFILE();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("+##6x")) {
+                current_profile->scope_mult_6x += 0.1f;
+                SAVE_WEAPON_PROFILE();
+            }
+            ImGui::NextColumn();
+            
+            // 8x Multiplier
+            ImGui::Text("8x Multi: %.2f", current_profile->scope_mult_8x);
+            ImGui::SameLine();
+            if (ImGui::Button("-##8x")) {
+                current_profile->scope_mult_8x = (std::max)(0.1f, current_profile->scope_mult_8x - 0.1f);
+                SAVE_WEAPON_PROFILE();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("+##8x")) {
+                current_profile->scope_mult_8x += 0.1f;
                 SAVE_WEAPON_PROFILE();
             }
             
