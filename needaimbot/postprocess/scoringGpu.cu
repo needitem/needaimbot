@@ -83,36 +83,21 @@ __global__ void findBestTargetKernel(
     int num_detections,
     int* __restrict__ d_best_index
 ) {
-    extern __shared__ float shared_scores[];
-    int* shared_indices = (int*)&shared_scores[blockDim.x];
+    // Simple linear search for now - more reliable
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
     
-    int tid = threadIdx.x;
-    int idx = blockIdx.x * blockDim.x + tid;
-    
-    // Load data into shared memory
-    if (idx < num_detections) {
-        shared_scores[tid] = d_scores[idx];
-        shared_indices[tid] = idx;
-    } else {
-        shared_scores[tid] = -1.0f; // Invalid score
-        shared_indices[tid] = -1;
-    }
-    __syncthreads();
-    
-    // Parallel reduction to find maximum
-    for (int stride = blockDim.x / 2; stride > 0; stride /= 2) {
-        if (tid < stride && tid + stride < blockDim.x) {
-            if (shared_scores[tid + stride] > shared_scores[tid]) {
-                shared_scores[tid] = shared_scores[tid + stride];
-                shared_indices[tid] = shared_indices[tid + stride];
+    if (idx == 0) {
+        float best_score = -1.0f;
+        int best_idx = -1;
+        
+        for (int i = 0; i < num_detections; i++) {
+            if (d_scores[i] > best_score) {
+                best_score = d_scores[i];
+                best_idx = i;
             }
         }
-        __syncthreads();
-    }
-    
-    // First thread writes result
-    if (tid == 0 && shared_indices[0] >= 0) {
-        atomicMax(d_best_index, shared_indices[0]);
+        
+        *d_best_index = best_idx;
     }
 }
 
@@ -158,20 +143,28 @@ cudaError_t findBestTargetGpu(
     int* d_best_index_gpu,
     cudaStream_t stream
 ) {
-    if (num_detections <= 0) return cudaSuccess;
+    if (num_detections <= 0) {
+        cudaMemsetAsync(d_best_index_gpu, 0xFF, sizeof(int), stream);
+        return cudaSuccess;
+    }
     
-    // Initialize best index to -1
-    cudaMemsetAsync(d_best_index_gpu, -1, sizeof(int), stream);
+    // Use thrust to find the maximum element
+    thrust::device_ptr<const float> scores_ptr(d_scores);
+    thrust::device_ptr<const float> max_iter = thrust::max_element(thrust::cuda::par.on(stream), 
+                                                                    scores_ptr, 
+                                                                    scores_ptr + num_detections);
     
-    int block_size = 256;
-    int grid_size = (num_detections + block_size - 1) / block_size;
-    size_t shared_mem_size = block_size * (sizeof(float) + sizeof(int));
+    // Calculate the index
+    int best_index = thrust::distance(scores_ptr, max_iter);
     
-    findBestTargetKernel<<<grid_size, block_size, shared_mem_size, stream>>>(
-        d_scores,
-        num_detections,
-        d_best_index_gpu
-    );
+    // Verify the index is valid
+    if (best_index >= 0 && best_index < num_detections) {
+        cudaMemcpyAsync(d_best_index_gpu, &best_index, sizeof(int), cudaMemcpyHostToDevice, stream);
+    } else {
+        // No valid target found
+        int invalid_index = -1;
+        cudaMemcpyAsync(d_best_index_gpu, &invalid_index, sizeof(int), cudaMemcpyHostToDevice, stream);
+    }
     
     return cudaGetLastError();
 }
