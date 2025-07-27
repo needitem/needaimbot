@@ -345,6 +345,14 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                     // 다음 파이프라인 스테이지로 이동
                     screenshotGpu = std::move(currentPipe.gpuFrame);
                     pipelineIdx = (pipelineIdx + 1) % PIPELINE_DEPTH;
+                    
+                    // Update latest frame for debug display
+                    if (!screenshotGpu.empty()) {
+                        if (latestFrameGpu.rows() != screenshotGpu.rows() || latestFrameGpu.cols() != screenshotGpu.cols()) {
+                            latestFrameGpu.create(screenshotGpu.rows(), screenshotGpu.cols(), screenshotGpu.channels());
+                        }
+                        latestFrameGpu.copyFrom(screenshotGpu);
+                    }
                 }
                 // CPU 버퍼를 풀에 반환
                 if (!screenshotCpu.empty()) {
