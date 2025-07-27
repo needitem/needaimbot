@@ -877,6 +877,11 @@ void Detector::inferenceThread()
                 {
                     std::lock_guard<std::mutex> lock(detectionMutex);
                     
+                    // Always clear state first to ensure no stale data remains
+                    m_hasBestTarget = false;
+                    memset(&m_bestTargetHost, 0, sizeof(Detection));
+                    m_bestTargetIndexHost = -1;
+                    
                     // Only proceed if we have detections
                     if (m_finalDetectionsCountHost > 0 && !ctx.should_exit)
                     {
@@ -918,27 +923,11 @@ void Detector::inferenceThread()
                             // Use the best target from this frame only
                             m_bestTargetIndexHost = newBestIndex;
                             m_bestTargetHost = m_batchedResultsPinned->bestTarget;
-                        } else {
-                            // No valid targets
-                            m_bestTargetIndexHost = -1;
+                            m_hasBestTarget = true;  // Only set true after successful assignment
                         }
-                        
-                        // Update target tracking state
-                        if (m_bestTargetIndexHost >= 0 && m_bestTargetIndexHost < m_finalDetectionsCountHost) {
-                            m_hasBestTarget = true;
-                        } else {
-                            // No valid target found - clear immediately
-                            m_hasBestTarget = false;
-                            memset(&m_bestTargetHost, 0, sizeof(Detection));
-                            m_bestTargetIndexHost = -1;
-                        }
+                        // No else needed - state already cleared at the beginning
                     }
-                    else if (m_finalDetectionsCountHost == 0) {
-                        // No detections at all - clear immediately
-                        m_hasBestTarget = false;
-                        memset(&m_bestTargetHost, 0, sizeof(Detection));
-                        m_bestTargetIndexHost = -1;
-                    }
+                    // No else needed - state already cleared at the beginning
                     
                     detectionVersion++;
                 }
@@ -994,7 +983,11 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         return;
     }
 
+    // Clear all detection buffers at the start of processing
     cudaMemsetAsync(m_decodedCountGpu.get(), 0, sizeof(int), stream);
+    cudaMemsetAsync(m_classFilteredCountGpu.get(), 0, sizeof(int), stream);
+    cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
+    cudaMemsetAsync(m_bestTargetIndexGpu.get(), 0xFF, sizeof(int), stream);
     cudaError_t decodeErr = cudaSuccess;
 
     // Local config variables to reduce mutex locks
