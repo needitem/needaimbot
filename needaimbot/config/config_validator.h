@@ -48,12 +48,12 @@ public:
         config.easynorecoil_start_delay_ms = (std::max)(0, config.easynorecoil_start_delay_ms);
         config.easynorecoil_end_delay_ms = (std::max)(0, config.easynorecoil_end_delay_ms);
 
-        // Scope multipliers
-        config.bScope_multiplier = std::clamp(config.bScope_multiplier, 0.1f, 10.0f);
-        config.recoil_mult_2x = std::clamp(config.recoil_mult_2x, 0.1f, 10.0f);
-        config.recoil_mult_3x = std::clamp(config.recoil_mult_3x, 0.1f, 10.0f);
-        config.recoil_mult_4x = std::clamp(config.recoil_mult_4x, 0.1f, 10.0f);
-        config.recoil_mult_6x = std::clamp(config.recoil_mult_6x, 0.1f, 10.0f);
+        // Scope multipliers - no upper limit, only minimum
+        config.bScope_multiplier = (std::max)(0.1f, config.bScope_multiplier);
+        config.recoil_mult_2x = (std::max)(0.1f, config.recoil_mult_2x);
+        config.recoil_mult_3x = (std::max)(0.1f, config.recoil_mult_3x);
+        config.recoil_mult_4x = (std::max)(0.1f, config.recoil_mult_4x);
+        config.recoil_mult_6x = (std::max)(0.1f, config.recoil_mult_6x);
 
         // PID parameters
         config.kp_x = (std::max)(0.0f, (std::min)(static_cast<float>(config.kp_x), 10.0f));
