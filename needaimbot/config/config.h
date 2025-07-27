@@ -319,6 +319,9 @@ public:
     int min_color_pixels;
     bool remove_color_matches; 
 
+    // Active profile management
+    std::string active_profile_name = "Default";
+    
     // Path utilities
     std::string getExecutableDir();
     std::string getConfigPath(const std::string& filename);
@@ -332,6 +335,12 @@ public:
     bool loadProfile(const std::string& profileName);
     bool deleteProfile(const std::string& profileName);
     void resetConfig();
+    
+    // Active profile methods
+    bool setActiveProfile(const std::string& profileName);
+    std::string getActiveProfile() const { return active_profile_name; }
+    bool saveActiveProfile(); // Save current settings to active profile
+    bool isProfileModified() const; // Check if current settings differ from saved profile
 
     
     void initializeDefaultWeaponProfiles();
