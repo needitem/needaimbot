@@ -469,6 +469,40 @@ bool Config::loadConfig(const std::string& filename)
         }
     }
 
+    // Load weapon profiles from the config file
+    weapon_profiles.clear();
+    
+    int weapon_count = get_long_ini("WeaponProfiles", "Count", 0);
+    if (weapon_count > 0) {
+        active_weapon_profile_index = get_long_ini("WeaponProfiles", "active_weapon_profile_index", 0);
+        current_weapon_name = get_string_ini("WeaponProfiles", "current_weapon_name", "Default");
+
+        for (int i = 0; i < weapon_count; ++i) {
+            std::string section = "Weapon_" + std::to_string(i);
+            
+            WeaponRecoilProfile profile;
+            profile.weapon_name = get_string_ini(section.c_str(), "weapon_name", "Default");
+            profile.base_strength = static_cast<float>(get_double_ini(section.c_str(), "base_strength", 3.0));
+            profile.fire_rate_multiplier = static_cast<float>(get_double_ini(section.c_str(), "fire_rate_multiplier", 1.0));
+            profile.scope_mult_1x = static_cast<float>(get_double_ini(section.c_str(), "scope_mult_1x", 0.8));
+            profile.scope_mult_2x = static_cast<float>(get_double_ini(section.c_str(), "scope_mult_2x", 1.0));
+            profile.scope_mult_3x = static_cast<float>(get_double_ini(section.c_str(), "scope_mult_3x", 1.2));
+            profile.scope_mult_4x = static_cast<float>(get_double_ini(section.c_str(), "scope_mult_4x", 1.4));
+            profile.scope_mult_6x = static_cast<float>(get_double_ini(section.c_str(), "scope_mult_6x", 1.6));
+            profile.scope_mult_8x = static_cast<float>(get_double_ini(section.c_str(), "scope_mult_8x", 1.8));
+            profile.start_delay_ms = get_long_ini(section.c_str(), "start_delay_ms", 0);
+            profile.end_delay_ms = get_long_ini(section.c_str(), "end_delay_ms", 0);
+            profile.recoil_ms = static_cast<float>(get_double_ini(section.c_str(), "recoil_ms", 10.0));
+            
+            weapon_profiles.push_back(profile);
+        }
+    }
+    
+    // Initialize default weapon profiles if none were loaded
+    if (weapon_profiles.empty()) {
+        initializeDefaultWeaponProfiles();
+    }
+
     // Validate and correct all configuration values
     ConfigValidator::validateAndCorrect(*this);
 
@@ -660,6 +694,30 @@ bool Config::saveConfig(const std::string& filename)
         file << "active_profile = " << active_profile_name << "\n\n";
     }
     
+    // Save weapon profiles with each profile
+    file << "[WeaponProfiles]\n";
+    file << "Count = " << weapon_profiles.size() << "\n";
+    file << "active_weapon_profile_index = " << active_weapon_profile_index << "\n";
+    file << "current_weapon_name = " << current_weapon_name << "\n\n";
+
+    for (size_t i = 0; i < weapon_profiles.size(); ++i) {
+        const auto& profile = weapon_profiles[i];
+        file << "[Weapon_" << i << "]\n";
+        file << "weapon_name = " << profile.weapon_name << "\n";
+        file << std::fixed << std::setprecision(6);
+        file << "base_strength = " << profile.base_strength << "\n";
+        file << "fire_rate_multiplier = " << profile.fire_rate_multiplier << "\n";
+        file << "scope_mult_1x = " << profile.scope_mult_1x << "\n";
+        file << "scope_mult_2x = " << profile.scope_mult_2x << "\n";
+        file << "scope_mult_3x = " << profile.scope_mult_3x << "\n";
+        file << "scope_mult_4x = " << profile.scope_mult_4x << "\n";
+        file << "scope_mult_6x = " << profile.scope_mult_6x << "\n";
+        file << "scope_mult_8x = " << profile.scope_mult_8x << "\n";
+        file << "start_delay_ms = " << profile.start_delay_ms << "\n";
+        file << "end_delay_ms = " << profile.end_delay_ms << "\n";
+        file << "recoil_ms = " << profile.recoil_ms << "\n\n";
+    }
+    
     file.close();
     return true;
 }
@@ -778,8 +836,7 @@ Config::Config()
     
     // Use empty string to trigger default path logic
     loadConfig("");
-    loadWeaponProfiles(getConfigPath("weapon_profiles.ini"));
-    initializeDefaultWeaponProfiles();
+    // Weapon profiles are now loaded from the profile INI file itself
 }
 
 void Config::initializeDefaultWeaponProfiles()
@@ -866,6 +923,8 @@ std::vector<std::string> Config::getWeaponProfileNames() const
     return names;
 }
 
+// Deprecated - weapon profiles are now saved within saveConfig
+/*
 bool Config::saveWeaponProfiles(const std::string& filename)
 {
     std::ofstream file(filename);
@@ -901,7 +960,10 @@ bool Config::saveWeaponProfiles(const std::string& filename)
     file.close();
     return true;
 }
+*/
 
+// Deprecated - weapon profiles are now loaded within loadConfig
+/*
 bool Config::loadWeaponProfiles(const std::string& filename)
 {
     if (!std::filesystem::exists(filename)) {
@@ -955,4 +1017,5 @@ bool Config::loadWeaponProfiles(const std::string& filename)
 
     return true;
 }
+*/
 
