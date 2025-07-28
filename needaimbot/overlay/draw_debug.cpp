@@ -403,6 +403,17 @@ void draw_debug()
 {
     auto& ctx = AppContext::getInstance();
     
+    // Display pause status prominently
+    if (ctx.detectionPaused.load()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.3f, 0.3f, 1.0f)); // Red color
+        ImGui::Text("AIMBOT PAUSED");
+        ImGui::PopStyleColor();
+    } else {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.3f, 1.0f, 0.3f, 1.0f)); // Green color
+        ImGui::Text("AIMBOT ACTIVE");
+        ImGui::PopStyleColor();
+    }
+    
     if (ctx.config.show_fps) {
         ImGui::Text("Capture FPS: %.1f", ctx.g_current_capture_fps.load());
         ImGui::Text("Inference Time: %.2f ms", ctx.g_current_inference_time_ms.load());

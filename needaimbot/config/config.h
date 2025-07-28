@@ -351,8 +351,9 @@ public:
     bool setActiveWeaponProfile(const std::string& weapon_name);
     std::vector<std::string> getWeaponProfileNames() const;
     
-    bool saveWeaponProfiles(const std::string& filename = "weapon_profiles.ini");
-    bool loadWeaponProfiles(const std::string& filename = "weapon_profiles.ini");
+    // Deprecated - weapon profiles are now saved/loaded with each profile
+    // bool saveWeaponProfiles(const std::string& filename = "weapon_profiles.ini");
+    // bool loadWeaponProfiles(const std::string& filename = "weapon_profiles.ini");
 
     std::string joinStrings(const std::vector<std::string>& vec, const std::string& delimiter = ",");
 private:

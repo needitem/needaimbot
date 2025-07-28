@@ -667,7 +667,7 @@ namespace UIHelpers
                 {
                     if (weapon_list[i] != "Default" && ImGui::MenuItem("Delete")) {
                         ctx.config.removeWeaponProfile(weapon_list[i]);
-                        ctx.config.saveWeaponProfiles();
+                        ctx.config.saveActiveProfile();
                         initialized = false; // Force refresh
                     }
                     if (ImGui::MenuItem("Duplicate")) {
@@ -677,7 +677,7 @@ namespace UIHelpers
                             WeaponRecoilProfile copy = *original;
                             copy.weapon_name = new_name;
                             ctx.config.addWeaponProfile(copy);
-                            ctx.config.saveWeaponProfiles();
+                            ctx.config.saveActiveProfile();
                             initialized = false; // Force refresh
                         }
                     }
@@ -709,7 +709,7 @@ namespace UIHelpers
             if (ImGui::Button("Add") && strlen(new_weapon_name) > 0) {
                 WeaponRecoilProfile new_profile(new_weapon_name, 3.0f, 1.0f);
                 if (ctx.config.addWeaponProfile(new_profile)) {
-                    ctx.config.saveWeaponProfiles();
+                    ctx.config.saveActiveProfile();
                     new_weapon_name[0] = '\0';
                     initialized = false; // Force refresh
                     ImGui::CloseCurrentPopup();
