@@ -21,6 +21,21 @@ void draw_target()
 {
     auto& ctx = AppContext::getInstance();
     
+    // Display pause status prominently at the top
+    if (ctx.detectionPaused.load()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.3f, 0.3f, 1.0f)); // Red color
+        ImGui::Text("AIMBOT PAUSED (Press %s to resume)", 
+                    ctx.config.button_pause.empty() ? "F3" : ctx.config.button_pause[0].c_str());
+        ImGui::PopStyleColor();
+    } else {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.3f, 1.0f, 0.3f, 1.0f)); // Green color
+        ImGui::Text("AIMBOT ACTIVE");
+        ImGui::PopStyleColor();
+    }
+    
+    ImGui::Separator();
+    ImGui::Spacing();
+    
     ImGui::SliderFloat("Body Y Offset", &ctx.config.body_y_offset, -1.0f, 1.0f, "%.2f");
     ImGui::SliderFloat("Head Y Offset", &ctx.config.head_y_offset, 0.0f, 1.0f, "%.2f");
     ImGui::SliderFloat("Offset Step", &ctx.config.offset_step, 0.001f, 0.1f, "%.3f");

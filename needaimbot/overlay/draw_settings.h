@@ -6,9 +6,9 @@
     AppContext::getInstance().config.saveActiveProfile(); \
 } while(0)
 
-// Macro for saving weapon profiles
+// Macro for saving weapon profiles (now saves with the active profile)
 #define SAVE_WEAPON_PROFILE() do { \
-    AppContext::getInstance().config.saveWeaponProfiles(); \
+    AppContext::getInstance().config.saveActiveProfile(); \
 } while(0)
 
 void draw_capture_settings();
