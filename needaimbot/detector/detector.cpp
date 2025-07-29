@@ -222,7 +222,7 @@ void Detector::getInputNames()
         }
     }
 
-    if (m_bestTargetIndexGpu.get()) cudaMemsetAsync(m_bestTargetIndexGpu.get(), 0xFF, sizeof(int), stream);
+    // m_bestTargetIndexGpu will be initialized when needed in findBestTargetGpu
 
     
     m_nms_d_x1.allocate(ctx.config.max_detections);
@@ -902,7 +902,9 @@ void Detector::inferenceThread()
                         }
                         
                         // Find the overall best target
-                        cudaError_t findErr = findBestTargetGpu(m_scoresGpu.get(), m_finalDetectionsCountHost, m_bestTargetIndexGpu.get(), stream);
+                        cudaError_t findErr = findBestTargetGpu(m_scoresGpu.get(), m_finalDetectionsCountHost, 
+                                                               m_bestTargetIndexGpu.get(), stream,
+                                                               m_tempBlockScores.get(), m_tempBlockIndices.get());
                         
                         if (findErr != cudaSuccess) {
                             std::cerr << "[Detector] Failed to find best target: " << cudaGetErrorString(findErr) << std::endl;
@@ -921,7 +923,8 @@ void Detector::inferenceThread()
                         cudaStreamSynchronize(stream);
                         
                         if (ctx.config.verbose) {
-                            std::cout << "[Detector] Best target index from GPU: " << *m_pinnedBestIndex << std::endl;
+                            std::cout << "[Detector] Best target index from GPU: " << *m_pinnedBestIndex 
+                                      << " (out of " << m_finalDetectionsCountHost << " detections)" << std::endl;
                         }
                         
                         // Copy best target detection if valid
@@ -1016,7 +1019,7 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
     cudaMemsetAsync(m_decodedCountGpu.get(), 0, sizeof(int), stream);
     cudaMemsetAsync(m_classFilteredCountGpu.get(), 0, sizeof(int), stream);
     cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
-    cudaMemsetAsync(m_bestTargetIndexGpu.get(), 0xFF, sizeof(int), stream);
+    // Note: m_bestTargetIndexGpu is initialized in findBestTargetGpu, no need to reset here
     cudaError_t decodeErr = cudaSuccess;
 
     // Local config variables to reduce mutex locks
@@ -1342,13 +1345,19 @@ void Detector::initializeBuffers() {
     m_bestTargetIndexGpu.allocate(1);
     m_matchingIndexGpu.allocate(1);
     m_matchingScoreGpu.allocate(1);
+    
+    // Allocate temporary buffers for multi-block reduction
+    // Maximum number of blocks we might need
+    const int max_blocks = (ctx.config.max_detections + 255) / 256;
+    m_tempBlockScores.allocate(max_blocks);
+    m_tempBlockIndices.allocate(max_blocks);
 
     m_d_ignore_flags_gpu.allocate(MAX_CLASSES_FOR_FILTERING);
 
     if (m_decodedCountGpu.get()) cudaMemsetAsync(m_decodedCountGpu.get(), 0, sizeof(int), stream);
     if (m_finalDetectionsCountGpu.get()) cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
     if (m_classFilteredCountGpu.get()) cudaMemsetAsync(m_classFilteredCountGpu.get(), 0, sizeof(int), stream);
-    if (m_bestTargetIndexGpu.get()) cudaMemsetAsync(m_bestTargetIndexGpu.get(), 0xFF, sizeof(int), stream);
+    // m_bestTargetIndexGpu will be initialized when needed in findBestTargetGpu
 }
 
 

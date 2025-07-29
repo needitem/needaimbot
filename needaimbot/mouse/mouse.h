@@ -25,8 +25,6 @@
 #include "input_drivers/kmboxNet.h"
 #include "input_drivers/rzctl.h"
 #include "input_drivers/InputMethod.h"
-#include "aimbot_components/TargetKalmanFilter.h"
-#include "aimbot_components/SnapAimController.h"
 
 class PIDController2D;
 
@@ -42,8 +40,6 @@ class MouseThread
 {
 private:
     std::unique_ptr<PIDController2D> pid_controller; // 호환성을 위해 유지
-    std::unique_ptr<TargetKalmanFilter> kalman_filter; // 호환성을 위해 유지
-    std::unique_ptr<SnapAimController> snap_controller; // 새로운 조준 시스템
     std::unique_ptr<InputMethod> input_method;
     std::mutex input_method_mutex;
     mutable std::mutex member_data_mutex_;
@@ -71,42 +67,20 @@ private:
     std::chrono::steady_clock::time_point last_mouse_release_time;
     std::chrono::steady_clock::time_point last_mouse_press_time;
 
-    mutable std::mutex predictor_mutex_;        
-
     int last_applied_dx_ = 0;
     
     std::vector<std::pair<double, double>> recent_flow_values;
     int optical_flow_recoil_frame_count;
     
-    Eigen::Vector2f smoothed_movement; 
-
-    // Target prediction members (moved from static variables)
-    Point2D last_target_pos_{0, 0};
-    std::chrono::high_resolution_clock::time_point last_target_time_;
-    bool prediction_initialized_ = false;
-    int last_target_class_id_ = -1;  // Track target class changes
-    
-    Point2D current_velocity_{0, 0};
-    Point2D current_acceleration_{0, 0};
-    Point2D last_velocity_{0, 0};
+    Eigen::Vector2f smoothed_movement;
     
     // Movement accumulation members (moved from static variables)
     float accumulated_x_ = 0.0f;
     float accumulated_y_ = 0.0f;
     
-    // Latency compensation
-    static constexpr int LATENCY_HISTORY_SIZE = 10;
-    std::vector<float> input_latency_history_;
-    std::vector<float> capture_latency_history_;
-    float estimated_total_latency_ms_ = 20.0f; // Default assumption
-    std::chrono::high_resolution_clock::time_point frame_capture_time_;
-    std::chrono::high_resolution_clock::time_point target_detection_time_;
-    
     // Constants
     static constexpr float DEAD_ZONE = 0.3f;
     static constexpr float MICRO_MOVEMENT_THRESHOLD = 0.5f;
-    static constexpr float MAX_PREDICTION_TIME = 0.03f;
-    static constexpr float LARGE_MOVEMENT_THRESHOLD = 100.0f;
     static constexpr float SMALL_ERROR_THRESHOLD = 10.0f;
     static constexpr float MEDIUM_ERROR_THRESHOLD = 50.0f;
     static constexpr float CLOSE_RANGE_SCALE = 0.8f;
@@ -141,9 +115,6 @@ private:
     void initializeScreen(int resolution, float bScope_multiplier, float norecoil_ms);
     
     // Latency compensation methods
-    void updateLatencyMeasurements(float input_latency_ms, float capture_latency_ms);
-    float getEstimatedTotalLatency() const;
-    Point2D applyLatencyCompensation(const Point2D& predicted_pos, const Point2D& velocity) const;
 
 public:
     MouseThread(int resolution,
@@ -178,7 +149,6 @@ public:
     void setInputMethod(std::unique_ptr<InputMethod> new_method);
     
     // Helper methods for moveMouse refactoring
-    Point2D calculatePredictedTarget(const AimbotTarget& target, float current_center_x, float current_center_y);
     std::pair<int, int> processAccumulatedMovement(float move_x, float move_y);
     float calculateAdaptiveScale(float error_magnitude) const;
     void applyRecoilCompensationInternal(float strength, float delay_ms);
@@ -196,14 +166,11 @@ public:
     PIDController2D* getPIDController() { return pid_controller.get(); }
     
     // Enable/disable snap aim mode
-    void setSnapAimEnabled(bool enabled) { use_snap_aim_ = enabled; }
-    bool isSnapAimEnabled() const { return use_snap_aim_; }
     
     // Add method to reset all accumulated states
     void resetAccumulatedStates();
     
 private:
-    std::atomic<bool> use_snap_aim_{true}; // 기본적으로 Snap Aim 사용
 };
 
 #endif 
