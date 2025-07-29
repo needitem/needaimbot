@@ -47,7 +47,6 @@
     <ClCompile Include="overlay\draw_color_filter.cpp" />
     <ClCompile Include="overlay\draw_rcs.cpp" />
     <ClCompile Include="overlay\draw_stats.cpp" />
-    <ClCompile Include="overlay\draw_tuning.cpp" />
     <ClCompile Include="overlay\\draw_ai.cpp" />
     <ClCompile Include="overlay\draw_buttons.cpp" />
     <ClCompile Include="overlay\draw_capture.cpp" />
