@@ -47,11 +47,9 @@ private:
     SerialConnection(SerialConnection&&) = delete;
     SerialConnection& operator=(SerialConnection&&) = delete;
 
-    void startTimer();
     void startListening();
     void processIncomingLine(const std::string& line);
 
-    void timerThreadFunc();
     void listeningThreadFunc();
 
 private:
@@ -76,9 +74,6 @@ private:
     std::string port_name_;
     unsigned int baud_rate_;
     mutable std::mutex connection_mutex_;
-
-    std::thread timer_thread_;
-    std::atomic<bool> timer_running_;
 
     std::thread listening_thread_;
     std::atomic<bool> listening_;

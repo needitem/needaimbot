@@ -39,7 +39,6 @@ SerialConnection::SerialConnection(const std::string& port, unsigned int baud_ra
       is_open_(false),
       port_name_(port),
       baud_rate_(baud_rate),
-      timer_running_(false),
       listening_(false),
       aiming_active(false),
       shooting_active(false), 
@@ -86,7 +85,6 @@ bool SerialConnection::initializeSerial() {
         if (AppContext::getInstance().config.arduino_enable_keys) {
             startListening();
         }
-        startTimer();
         return true;
     } catch (const std::exception& e) {
         std::cerr << "[Arduino] Thread initialization failed: " << e.what() << std::endl;
@@ -163,7 +161,6 @@ void SerialConnection::safeSerialClose() {
 
 void SerialConnection::cleanup() {
     // 플래그 설정
-    timer_running_ = false;
     listening_ = false;
     
     std::cout << "[Arduino] Starting cleanup..." << std::endl;
@@ -192,7 +189,6 @@ void SerialConnection::cleanup() {
     
     // 스레드를 먼저 정리 (포트 닫기 전에)
     cleanup_with_timeout(listening_thread_, "Listening");
-    cleanup_with_timeout(timer_thread_, "Timer");
     
     // 그 다음 포트 안전하게 종료
     safeSerialClose();
@@ -553,24 +549,10 @@ std::vector<int> SerialConnection::splitValue(int value)
     return result;
 }
 
-void SerialConnection::startTimer()
-{
-    timer_running_ = true;
-    timer_thread_ = std::thread(&SerialConnection::timerThreadFunc, this);
-}
-
 void SerialConnection::startListening()
 {
     listening_ = true;
     listening_thread_ = std::thread(&SerialConnection::listeningThreadFunc, this);
-}
-
-void SerialConnection::timerThreadFunc()
-{
-    // TIMER 명령 제거 - Arduino에서 필요하지 않음
-    while (timer_running_) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100)); // 대기만
-    }
 }
 
 void SerialConnection::listeningThreadFunc()
