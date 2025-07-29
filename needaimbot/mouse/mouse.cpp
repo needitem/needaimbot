@@ -90,7 +90,7 @@ MouseThread::MouseThread(
     float norecoil_ms,
     SerialConnection *serialConnection,
     MakcuConnection *makcuConnection,
-    GhubMouse *gHub) : tracking_errors(false), optical_flow_recoil_frame_count(0)
+    GhubMouse *gHub)
 {
     initializeScreen(resolution, bScope_multiplier, norecoil_ms);
     pid_controller = std::make_unique<PIDController2D>(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
@@ -418,12 +418,6 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     float error_x = target_x - current_center_x;
     float error_y = target_y - current_center_y;
 
-    if (tracking_errors) {
-        std::lock_guard<std::mutex> lock(callback_mutex);
-        if (error_callback) {
-            error_callback(error_x, error_y);
-        }
-    }
 
     // Calculate error magnitude first for adaptive control
     float error_magnitude = std::sqrt(error_x * error_x + error_y * error_y);
@@ -557,19 +551,6 @@ void MouseThread::applyWeaponRecoilCompensation(const WeaponRecoilProfile* profi
     applyRecoilCompensationInternal(adjusted_strength, profile->recoil_ms);
 }
 
-void MouseThread::enableErrorTracking(const ErrorTrackingCallback &callback)
-{
-    std::lock_guard<std::mutex> lock(callback_mutex);
-    error_callback = callback;
-    tracking_errors = true;
-}
-
-void MouseThread::disableErrorTracking()
-{
-    std::lock_guard<std::mutex> lock(callback_mutex);
-    tracking_errors = false;
-    error_callback = nullptr; 
-}
 
 
 
@@ -648,11 +629,6 @@ void MouseThread::applyRecoilCompensationInternal(float strength, float delay_ms
     }
 }
 
-void MouseThread::applyOpticalFlowRecoilCompensation()
-{
-    // Optical flow recoil compensation removed
-    return;
-}
 
 void MouseThread::resetAccumulatedStates()
 {
