@@ -14,7 +14,7 @@
 #include "common_helpers.h"
 #include "draw_settings.h" 
 
-std::string ghub_version = get_ghub_version();
+// GHub version check removed - not needed
 
 static void draw_error_scaling_controls()
 {
@@ -280,12 +280,9 @@ static void draw_input_method_settings()
     if (ctx.config.input_method == "GHUB") {
         UIHelpers::SettingsSubHeader("Logitech G HUB Status");
         
-        if (!ghub_version.empty()) {
-            UIHelpers::StatusIndicator("G HUB Version", true, ("Version: " + ghub_version).c_str());
-        } else {
-            UIHelpers::StatusIndicator("G HUB Version", false, "G HUB not detected or error occurred");
-            UIHelpers::BeautifulText("Install Logitech G HUB for this input method to work", UIHelpers::GetWarningColor());
-        }
+        // Version check removed - just show status
+        UIHelpers::StatusIndicator("G HUB", true, "Selected as input method");
+        UIHelpers::BeautifulText("Make sure Logitech G HUB is installed for this to work", UIHelpers::GetAccentColor(0.7f));
     }
     
     if (ctx.config.input_method == "ARDUINO") {

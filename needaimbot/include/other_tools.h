@@ -2,6 +2,7 @@
 #define OTHER_TOOLS_H
 
 #include <string>
+#include <vector>
 #include <d3d11.h>
 #include "../cuda/simple_cuda_mat.h"
 
@@ -16,19 +17,12 @@ std::vector<std::string>::difference_type getModelIndex(std::vector<std::string>
 void HideConsole();
 void ShowConsole();
 bool IsConsoleVisible();
-std::string intToString(int value);
 bool LoadTextureFromFile(const char* filename, ID3D11Device* device, ID3D11ShaderResourceView** out_srv, int* out_width, int* out_height);
 bool LoadTextureFromMemory(const std::string& imageBase64, ID3D11Device* device, ID3D11ShaderResourceView** out_srv, int* out_width, int* out_height);
-std::string get_ghub_version();
-std::string get_environment_vars();
-std::string get_tensorrt_path();
-int get_active_monitors();
 HMONITOR GetMonitorHandleByIndex(int monitorIndex);
 std::vector<std::string> getAvailableModels();
 void welcome_message();
-bool checkwin1903();
 
 
-void saveScreenshot(const SimpleMat& frame, const std::string& directory = "screenshots");
 
 #endif 
