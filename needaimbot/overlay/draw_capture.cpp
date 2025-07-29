@@ -15,7 +15,8 @@
 #include "draw_settings.h"
 #include "ui_helpers.h"
 
-int monitors = get_active_monitors();
+// Monitor count is now simplified - just count all monitors
+int monitors = GetSystemMetrics(SM_CMONITORS);
 
 static void draw_capture_area_settings()
 {

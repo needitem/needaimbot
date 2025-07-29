@@ -19,25 +19,18 @@
 #include <d3d11.h>
 #include <dxgi.h>
 #include <dxgi1_2.h>
-#include <cuda.h>
-#include <cuda_runtime.h>
 
 #include <filesystem> 
-#include <chrono>
-#include <iomanip>
-#include <sstream>
 
 #define STB_IMAGE_STATIC
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
-#include <VersionHelpers.h>
 
 #include "other_tools.h"
 #include "config.h"
 #include "needaimbot.h"
 #include "AppContext.h"
-#include "../utils/image_io.h"
 
 static const std::string base64_chars =
 "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -129,10 +122,6 @@ bool IsConsoleVisible()
     return ::IsWindowVisible(::GetConsoleWindow()) != FALSE;
 }
 
-std::string intToString(int value)
-{
-    return std::to_string(value);
-}
 
 std::vector<std::string> getEngineFiles()
 {
@@ -253,7 +242,7 @@ bool LoadTextureFromMemory(const std::string& imageBase64, ID3D11Device* device,
 
     if (image_data == NULL)
     {
-        std::cerr << "Can't load image trom memory." << std::endl;
+        std::cerr << "Can't load image from memory." << std::endl;
         return false;
     }
 
@@ -292,126 +281,6 @@ bool LoadTextureFromMemory(const std::string& imageBase64, ID3D11Device* device,
     stbi_image_free(image_data);
 
     return true;
-}
-
-std::string get_ghub_version()
-{
-    std::string line;
-    std::ifstream in("C:\\Program Files\\LGHUB\\version");
-    if (in.is_open())
-    {
-        while (std::getline(in, line)) { }
-    }
-    in.close();
-
-    if (!line.empty())
-    {
-        return line;
-    }
-    return "Unknown"; // Default return value for missing or empty version file
-}
-
-std::string get_environment_vars()
-{
-    const char* env_var_name = "PATH";
-    char* env_var_value = nullptr;
-    size_t len = 0;
-
-    errno_t err = _dupenv_s(&env_var_value, &len, env_var_name);
-
-    std::string path_env;
-    if (err == 0 && env_var_value != nullptr)
-    {
-        path_env = env_var_value;
-        free(env_var_value);
-    }
-    else
-    {
-        std::cout << "Environment variable " << env_var_name << " not found." << std::endl;
-    }
-
-    return path_env;
-}
-
-bool contains_tensorrt(const std::string& path)
-{
-    std::string lowercase_path = path;
-    std::transform(lowercase_path.begin(), lowercase_path.end(), lowercase_path.begin(), ::tolower);
-    return lowercase_path.find("tensorrt") != std::string::npos;
-}
-
-std::string get_tensorrt_path()
-{
-    std::string env_path = get_environment_vars();
-    std::stringstream ss(env_path);
-    std::string token;
-
-    while (std::getline(ss, token, ';'))
-    {
-        if (contains_tensorrt(token))
-        {
-            size_t pos = token.find_last_of("\\/");
-            if (pos != std::string::npos && (token.substr(pos + 1) == "lib" || token.substr(pos + 1) == "bin"))
-            {
-                token = token.substr(0, pos);
-            }
-
-            return token;
-        }
-    }
-
-    return "";
-}
-
-int get_active_monitors()
-{
-    IDXGIFactory1* factory = nullptr;
-    if (FAILED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void**)&factory)))
-    {
-        return -1;
-    }
-
-    int monitorsWithCudaSupport = 0;
-
-    IDXGIAdapter1* adapter = nullptr;
-    for (UINT i = 0; factory->EnumAdapters1(i, &adapter) != DXGI_ERROR_NOT_FOUND; ++i)
-    {
-        DXGI_ADAPTER_DESC1 desc;
-        adapter->GetDesc1(&desc);
-
-        int deviceCount = 0;
-        if (cudaGetDeviceCount(&deviceCount) == cudaSuccess && deviceCount > 0)
-        {
-            CUdevice cuDevice;
-            for (int dev = 0; dev < deviceCount; ++dev)
-            {
-                CUresult cuRes = cuDeviceGet(&cuDevice, dev);
-                if (cuRes == CUDA_SUCCESS)
-                {
-                    int supportsCuda = 0;
-                    CUuuid uuid;
-                    cuRes = cuDeviceGetUuid(&uuid, cuDevice);
-                    if (cuRes == CUDA_SUCCESS && memcmp(&uuid, &desc.AdapterLuid, sizeof(uuid)) == 0)
-                    {
-                        supportsCuda = 1;
-                    }
-                    if (supportsCuda)
-                    {
-                        IDXGIOutput* output = nullptr;
-                        for (UINT j = 0; adapter->EnumOutputs(j, &output) != DXGI_ERROR_NOT_FOUND; ++j)
-                        {
-                            monitorsWithCudaSupport++;
-                            output->Release();
-                        }
-                    }
-                }
-            }
-        }
-        adapter->Release();
-    }
-
-    factory->Release();
-    return monitorsWithCudaSupport;
 }
 
 HMONITOR GetMonitorHandleByIndex(int monitorIndex)
@@ -471,10 +340,6 @@ std::vector<std::string> getAvailableModels()
     return availableModels;
 }
 
-bool checkwin1903()
-{
-    return IsWindows10OrGreater() && IsWindowsVersionOrGreater(10, 0, 18362);
-}
 
 void welcome_message()
 {
@@ -489,42 +354,3 @@ void welcome_message()
 }
 
 
-void saveScreenshot(const SimpleMat& frame, const std::string& directory)
-{
-    if (frame.empty())
-    {
-        std::cerr << "[Screenshot] Error: Frame is empty, cannot save." << std::endl;
-        return;
-    }
-
-    try
-    {
-        
-        if (!std::filesystem::exists(directory))
-        {
-            if (!std::filesystem::create_directories(directory))
-            {
-                 std::cerr << "[Screenshot] Error: Could not create directory: " << directory << std::endl;
-                 return;
-            }
-        }
-
-        
-        auto now = std::chrono::system_clock::now();
-        auto epoch_time = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-        std::string filename = std::to_string(epoch_time) + ".png"; 
-        std::string filepath = directory + "/" + filename;
-
-        
-        // Just delegate to ImageIO implementation
-        ImageIO::saveScreenshot(frame, directory);
-    }
-     catch (const std::filesystem::filesystem_error& e)
-    {
-         std::cerr << "[Screenshot] Filesystem error: " << e.what() << std::endl;
-    }
-    catch (const std::exception& e)
-    {
-        std::cerr << "[Screenshot] General exception: " << e.what() << std::endl;
-    }
-}
