@@ -207,8 +207,6 @@ public:
     double ki_y;
     double kd_y;
     
-    float pid_derivative_smoothing;
-    bool enable_adaptive_pid;
     
     // Error-based scaling for jitter and overshoot control
     struct ErrorScalingRule {
@@ -220,10 +218,6 @@ public:
     };
     std::vector<ErrorScalingRule> error_scaling_rules;
 
-    
-    // Sub-pixel movement
-    bool enable_subpixel_dithering;
-    float dither_strength;
     
 
     

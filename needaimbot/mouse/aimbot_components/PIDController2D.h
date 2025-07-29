@@ -17,23 +17,19 @@ private:
     Eigen::Vector2f prev_error;      
     Eigen::Vector2f integral;        
     Eigen::Vector2f derivative;      
-    Eigen::Vector2f prev_derivative; 
-    std::chrono::steady_clock::time_point last_time_point;
-    
-    Eigen::Vector2f smoothed_derivative;  
+    std::chrono::steady_clock::time_point last_time_point;  
 
 public:
     
     PIDController2D(float kp_x, float ki_x, float kd_x, float kp_y, float ki_y, float kd_y);
 
     Eigen::Vector2f calculate(const Eigen::Vector2f &error);
-    Eigen::Vector2f calculateAdaptive(const Eigen::Vector2f &error, float error_magnitude);
     void reset();  
 
     
     void updateSeparatedParameters(float kp_x, float ki_x, float kd_x, float kp_y, float ki_y, float kd_y);
     
-    // Getters for gains (needed by HybridAimController)
+    // Getters for gains
     float getKpX() const { return kp_x; }
     float getKpY() const { return kp_y; }
 };

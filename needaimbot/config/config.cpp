@@ -109,9 +109,6 @@ bool Config::loadConfig(const std::string& filename)
         
 
         
-        // Sub-pixel defaults
-        enable_subpixel_dithering = true;
-        dither_strength = 0.3f;
 
         
         kp_x = 0.5; 
@@ -127,8 +124,6 @@ bool Config::loadConfig(const std::string& filename)
         error_scaling_rules.push_back(ErrorScalingRule(100.0f, 0.5f));  // Medium error: 50% scale
         error_scaling_rules.push_back(ErrorScalingRule(50.0f, 0.8f));   // Small error: 80% scale
         
-        pid_derivative_smoothing = 0.2f;
-        enable_adaptive_pid = true;
 
         
         arduino_baudrate = 115200;
@@ -297,8 +292,6 @@ bool Config::loadConfig(const std::string& filename)
     ki_y = get_double_ini("PID", "ki_y", 0.0);
     kd_y = get_double_ini("PID", "kd_y", 0.15);
     
-    pid_derivative_smoothing = static_cast<float>(get_double_ini("PID", "pid_derivative_smoothing", 0.2));
-    enable_adaptive_pid = get_bool_ini("PID", "enable_adaptive_pid", true);
     
     // Load error scaling rules
     error_scaling_rules.clear();
@@ -321,9 +314,6 @@ bool Config::loadConfig(const std::string& filename)
         error_scaling_rules.push_back(ErrorScalingRule(50.0f, 0.8f));
     }
 
-    // Sub-pixel settings
-    enable_subpixel_dithering = get_bool_ini("PID", "enable_subpixel_dithering", true);
-    dither_strength = static_cast<float>(get_double_ini("PID", "dither_strength", 0.3));
     
     // Hybrid aim control settings
 
@@ -563,8 +553,6 @@ bool Config::saveConfig(const std::string& filename)
     file << "kp_y = " << kp_y << "\n";
     file << "ki_y = " << ki_y << "\n";
     file << "kd_y = " << kd_y << "\n";
-    file << "pid_derivative_smoothing = " << pid_derivative_smoothing << "\n";
-    file << "enable_adaptive_pid = " << (enable_adaptive_pid ? "true" : "false") << "\n";
     
     // Save error scaling rules
     file << "error_scaling_rule_count = " << error_scaling_rules.size() << "\n";
@@ -573,8 +561,7 @@ bool Config::saveConfig(const std::string& filename)
         file << prefix << "threshold = " << error_scaling_rules[i].error_threshold << "\n";
         file << prefix << "scale = " << error_scaling_rules[i].scale_factor << "\n";
     }
-    file << "enable_subpixel_dithering = " << (enable_subpixel_dithering ? "true" : "false") << "\n";
-    file << "dither_strength = " << dither_strength << "\n\n";
+    file << "\n";
 
     file << "[Arduino]\n";
     file << std::noboolalpha;
