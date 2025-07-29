@@ -209,7 +209,6 @@ public:
     
     float pid_derivative_smoothing;
     bool enable_adaptive_pid;
-    bool enable_snap_aim;  // Use snap aim for fastest targeting
     
     // Error-based scaling for jitter and overshoot control
     struct ErrorScalingRule {
@@ -222,17 +221,9 @@ public:
     std::vector<ErrorScalingRule> error_scaling_rules;
 
     
-    bool use_predictive_controller;
-    float prediction_time_ms;
-    float kalman_process_noise;
-    float kalman_measurement_noise;
-    
-    // Sub-pixel movement and prediction
+    // Sub-pixel movement
     bool enable_subpixel_dithering;
     float dither_strength;
-    float prediction_time_factor;
-    bool enable_latency_compensation;
-    float system_latency_ms;
     
 
     

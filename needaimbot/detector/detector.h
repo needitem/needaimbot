@@ -245,6 +245,10 @@ public:
     bool m_hasBestTarget = false;
     int m_headClassId = -1;
     
+    // Temporary buffers for multi-block reduction
+    CudaBuffer<float> m_tempBlockScores;
+    CudaBuffer<int> m_tempBlockIndices;
+    
     // For matching previous target
     CudaBuffer<int> m_matchingIndexGpu;
     CudaBuffer<float> m_matchingScoreGpu;

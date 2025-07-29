@@ -83,7 +83,9 @@ __global__ void calculateTargetScoresGpuKernel(
 __global__ void findBestTargetKernel(
     const float* __restrict__ d_scores,
     int num_detections,
-    int* __restrict__ d_best_index
+    int* __restrict__ d_best_index,
+    float* __restrict__ d_block_max_scores,
+    int* __restrict__ d_block_max_indices
 ) {
     extern __shared__ char shared_mem[];
     float* shared_scores = (float*)shared_mem;
@@ -102,7 +104,7 @@ __global__ void findBestTargetKernel(
     }
     __syncthreads();
     
-    // Parallel reduction to find maximum
+    // Parallel reduction to find maximum within block
     for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
         if (tid < stride) {
             if (shared_scores[tid + stride] > shared_scores[tid]) {
@@ -113,13 +115,55 @@ __global__ void findBestTargetKernel(
         __syncthreads();
     }
     
-    // Only the first thread of the first block writes the result
-    if (tid == 0 && blockIdx.x == 0) {
-        // For multiple blocks, we'd need atomic operations or a second kernel
-        // For now, assume single block is sufficient for typical detection counts
-        if (shared_indices[0] >= 0) {
+    // First thread of each block writes its block's maximum
+    if (tid == 0) {
+        if (d_block_max_scores && d_block_max_indices) {
+            // Multi-block case
+            d_block_max_scores[blockIdx.x] = shared_scores[0];
+            d_block_max_indices[blockIdx.x] = shared_indices[0];
+        } else {
+            // Single block case - write directly to output
             *d_best_index = shared_indices[0];
         }
+    }
+}
+
+__global__ void findGlobalMaxKernel(
+    const float* __restrict__ d_block_max_scores,
+    const int* __restrict__ d_block_max_indices,
+    int num_blocks,
+    int* __restrict__ d_best_index
+) {
+    extern __shared__ char shared_mem[];
+    float* shared_scores = (float*)shared_mem;
+    int* shared_indices = (int*)&shared_scores[blockDim.x];
+    
+    int tid = threadIdx.x;
+    
+    // Load block maximums
+    if (tid < num_blocks) {
+        shared_scores[tid] = d_block_max_scores[tid];
+        shared_indices[tid] = d_block_max_indices[tid];
+    } else {
+        shared_scores[tid] = -FLT_MAX;
+        shared_indices[tid] = -1;
+    }
+    __syncthreads();
+    
+    // Parallel reduction to find global maximum
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            if (shared_scores[tid + stride] > shared_scores[tid]) {
+                shared_scores[tid] = shared_scores[tid + stride];
+                shared_indices[tid] = shared_indices[tid + stride];
+            }
+        }
+        __syncthreads();
+    }
+    
+    // Write final result - always update even if it's -1
+    if (tid == 0) {
+        *d_best_index = shared_indices[0];
     }
 }
 
@@ -163,7 +207,9 @@ cudaError_t findBestTargetGpu(
     const float* d_scores,
     int num_detections,
     int* d_best_index_gpu,
-    cudaStream_t stream
+    cudaStream_t stream,
+    float* d_temp_scores,
+    int* d_temp_indices
 ) {
     if (num_detections <= 0) {
         cudaMemsetAsync(d_best_index_gpu, 0xFF, sizeof(int), stream);
@@ -180,25 +226,61 @@ cudaError_t findBestTargetGpu(
     // Calculate the index
     int best_index = thrust::distance(scores_ptr, max_iter);
     
-    // Verify the index is valid
-    if (best_index >= 0 && best_index < num_detections) {
-        cudaMemcpyAsync(d_best_index_gpu, &best_index, sizeof(int), cudaMemcpyHostToDevice, stream);
-    } else {
-        // No valid target found
-        int invalid_index = -1;
-        cudaMemcpyAsync(d_best_index_gpu, &invalid_index, sizeof(int), cudaMemcpyHostToDevice, stream);
-    }
+    // Always write the result, even if it's -1
+    cudaMemcpyAsync(d_best_index_gpu, &best_index, sizeof(int), cudaMemcpyHostToDevice, stream);
 #else
-    // Custom kernel implementation - potentially faster for small datasets
-    int block_size = min(256, num_detections);
-    int grid_size = 1; // Single block for simplicity, can extend for larger datasets
-    size_t shared_mem_size = block_size * (sizeof(float) + sizeof(int));
+    // Custom kernel implementation - supports multiple blocks for large datasets
+    const int block_size = 256;
+    const int grid_size = (num_detections + block_size - 1) / block_size;
     
-    findBestTargetKernel<<<grid_size, block_size, shared_mem_size, stream>>>(
-        d_scores,
-        num_detections,
-        d_best_index_gpu
-    );
+    if (grid_size == 1) {
+        // Single block - can write directly to output
+        size_t shared_mem_size = block_size * (sizeof(float) + sizeof(int));
+        
+        // Initialize to -1 first
+        cudaMemsetAsync(d_best_index_gpu, 0xFF, sizeof(int), stream);
+        
+        findBestTargetKernel<<<1, block_size, shared_mem_size, stream>>>(
+            d_scores,
+            num_detections,
+            d_best_index_gpu,
+            nullptr,  // Not needed for single block
+            nullptr   // Not needed for single block
+        );
+    } else {
+        // Multiple blocks - need temporary storage and second kernel
+        if (!d_temp_scores || !d_temp_indices) {
+            // If temporary buffers not provided, fall back to thrust
+            thrust::device_ptr<const float> scores_ptr(d_scores);
+            thrust::device_ptr<const float> max_iter = thrust::max_element(thrust::cuda::par.on(stream), 
+                                                                            scores_ptr, 
+                                                                            scores_ptr + num_detections);
+            int best_index = thrust::distance(scores_ptr, max_iter);
+            cudaMemcpyAsync(d_best_index_gpu, &best_index, sizeof(int), cudaMemcpyHostToDevice, stream);
+        } else {
+            size_t shared_mem_size = block_size * (sizeof(float) + sizeof(int));
+            
+            // First pass: find maximum in each block
+            findBestTargetKernel<<<grid_size, block_size, shared_mem_size, stream>>>(
+                d_scores,
+                num_detections,
+                d_best_index_gpu,  // Not used in multi-block first pass
+                d_temp_scores,
+                d_temp_indices
+            );
+            
+            // Second pass: find global maximum from block maximums
+            int final_block_size = min(grid_size, 256);
+            shared_mem_size = final_block_size * (sizeof(float) + sizeof(int));
+            
+            findGlobalMaxKernel<<<1, final_block_size, shared_mem_size, stream>>>(
+                d_temp_scores,
+                d_temp_indices,
+                grid_size,
+                d_best_index_gpu
+            );
+        }
+    }
 #endif
     
     return cudaGetLastError();

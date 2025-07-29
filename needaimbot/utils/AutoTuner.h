@@ -71,12 +71,6 @@ public:
                             static_cast<float>(ctx.config.kd_x),
                             static_cast<float>(ctx.config.kd_x),
                             [&ctx](float v) { ctx.config.kd_x = v; }});
-        
-        // Prediction factor
-        parameters.push_back({"prediction_time_factor", 0.0001f, 0.01f, 0.0001f,
-                            ctx.config.prediction_time_factor,
-                            ctx.config.prediction_time_factor,
-                            [&ctx](float v) { ctx.config.prediction_time_factor = v; }});
     }
     
     void startAutoTuning() {
