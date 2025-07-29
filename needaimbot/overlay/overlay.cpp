@@ -643,19 +643,6 @@ void OverlayThread()
                         ImGui::EndTabItem();
                     }
 
-                    // Advanced Settings
-                    if (ImGui::BeginTabItem("Advanced"))
-                    {
-                        ImGui::BeginChild("##advanced_content", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
-                        
-                        // Algorithm Tuning
-                        UIHelpers::BeginSettingsSection("Algorithm Tuning", "Fine-tune detection and tracking");
-                        draw_tuning();
-                        UIHelpers::EndSettingsSection();
-                        
-                        ImGui::EndChild();
-                        ImGui::EndTabItem();
-                    }
 
                     // Monitoring
                     if (ImGui::BeginTabItem("Monitor"))

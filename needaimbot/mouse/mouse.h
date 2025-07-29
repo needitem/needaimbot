@@ -67,8 +67,6 @@ private:
     int last_applied_dx_ = 0;
     
     
-    Eigen::Vector2f smoothed_movement;
-    
     // Movement accumulation members (moved from static variables)
     float accumulated_x_ = 0.0f;
     float accumulated_y_ = 0.0f;

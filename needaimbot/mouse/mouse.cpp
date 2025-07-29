@@ -10,7 +10,6 @@
 #include "input_drivers/ghub.h"
 #include "../config/config.h"
 #include "../keyboard/keyboard_listener.h"
-#include "../utils/AutoTuner.h"
 
 #define WIN32_LEAN_AND_MEAN
 #define _WINSOCKAPI_
@@ -155,7 +154,6 @@ void MouseThread::initializeScreen(int resolution, float bScope_multiplier, floa
     }
 
     this->last_recoil_compensation_time = std::chrono::steady_clock::now();
-    this->smoothed_movement = Eigen::Vector2f::Zero();
     this->accumulated_x_ = 0.0f;
     this->accumulated_y_ = 0.0f;
 }
@@ -637,9 +635,6 @@ void MouseThread::resetAccumulatedStates()
         pid_controller->reset();
     }
     
-    
-    // Reset smoothed movement
-    smoothed_movement = Eigen::Vector2f::Zero();
     
     // Reset movement accumulation
     accumulated_x_ = 0.0f;
