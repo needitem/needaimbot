@@ -26,7 +26,9 @@ cudaError_t findBestTargetGpu(
     const float* d_scores,
     int num_detections,
     int* d_best_index_gpu,
-    cudaStream_t stream
+    cudaStream_t stream,
+    float* d_temp_scores = nullptr,
+    int* d_temp_indices = nullptr
 );
 
 // Find the detection that best matches the previous target (for tracking continuity)

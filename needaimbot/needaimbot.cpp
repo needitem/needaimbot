@@ -235,8 +235,6 @@ void mouseThreadFunction(MouseThread &mouseThread)
                 // Move mouse to target if aimbot is enabled AND aiming key is pressed
                 if (current_aiming && ctx.config.enable_aimbot) {
                     PERF_TIMER("MouseThread.MoveMouse");
-                    // Enable snap aim if configured
-                    mouseThread.setSnapAimEnabled(ctx.config.enable_snap_aim);
                     mouseThread.moveMouse(target);
                 }
                 

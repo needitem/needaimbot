@@ -31,7 +31,6 @@
 #endif
 
 #include "aimbot_components/PIDController2D.h"
-#include "aimbot_components/SnapAimController.h"
 
 
 extern std::atomic<bool> aiming;
@@ -95,8 +94,6 @@ MouseThread::MouseThread(
 {
     initializeScreen(resolution, bScope_multiplier, norecoil_ms);
     pid_controller = std::make_unique<PIDController2D>(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
-    kalman_filter = std::make_unique<TargetKalmanFilter>();
-    snap_controller = std::make_unique<SnapAimController>(); // 새로운 스냅 에임 컨트롤러
     initializeInputMethod(serialConnection, makcuConnection, gHub);
     
     // Start async input worker thread
@@ -159,9 +156,6 @@ void MouseThread::initializeScreen(int resolution, float bScope_multiplier, floa
 
     this->last_recoil_compensation_time = std::chrono::steady_clock::now();
     this->smoothed_movement = Eigen::Vector2f::Zero();
-    this->last_target_time_ = std::chrono::high_resolution_clock::now();
-    this->prediction_initialized_ = false;
-    this->last_target_class_id_ = -1;
     this->accumulated_x_ = 0.0f;
     this->accumulated_y_ = 0.0f;
 }
@@ -320,8 +314,6 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     // Cache for config values to reduce mutex locks
     static struct ConfigCache {
         float crosshair_offset_x, crosshair_offset_y;
-        bool use_predictive_controller;
-        float prediction_time_ms;
         int head_class_id_to_use = -1;
         bool apply_head_offset = false;
         float head_y_offset, body_y_offset;
@@ -334,8 +326,6 @@ void MouseThread::moveMouse(const AimbotTarget &target)
             if (now - last_update >= update_interval) {
                 crosshair_offset_x = config.crosshair_offset_x;
                 crosshair_offset_y = config.crosshair_offset_y;
-                use_predictive_controller = config.use_predictive_controller;
-                prediction_time_ms = config.prediction_time_ms;
                 head_class_name = config.head_class_name;
                 head_y_offset = config.head_y_offset;
                 body_y_offset = config.body_y_offset;
@@ -393,11 +383,40 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         local_disable_upward_aim_active = isAnyKeyPressed(ctx.config.button_disable_upward_aim);
     }
 
-    // Calculate predicted target position
-    Point2D predicted_target_pos = calculatePredictedTarget(target, current_center_x, current_center_y);
+    // Calculate target center position (no prediction)
+    float target_x = target.x + target.w * 0.5f;
+    float target_y = target.y + target.h * 0.5f;
     
-    float error_x = predicted_target_pos.x - current_center_x;
-    float error_y = predicted_target_pos.y - current_center_y;
+    // Apply y offset based on target type
+    {
+        auto& ctx = AppContext::getInstance();
+        std::lock_guard<std::mutex> lock(ctx.configMutex);
+        
+        bool local_apply_head_offset = false;
+        int local_head_class_id_to_use = -1;
+        
+        for (const auto& class_setting : ctx.config.class_settings) {
+            if (class_setting.name == ctx.config.head_class_name) {
+                local_head_class_id_to_use = class_setting.id;
+                if (!class_setting.ignore) {
+                    local_apply_head_offset = true;
+                }
+                break;
+            }
+        }
+        
+        float y_offset_multiplier;
+        if (local_apply_head_offset && target.classId == local_head_class_id_to_use) {
+            y_offset_multiplier = ctx.config.head_y_offset;
+        } else {
+            y_offset_multiplier = ctx.config.body_y_offset;
+        }
+        
+        target_y = target.y + target.h * y_offset_multiplier;
+    }
+    
+    float error_x = target_x - current_center_x;
+    float error_y = target_y - current_center_y;
 
     if (tracking_errors) {
         std::lock_guard<std::mutex> lock(callback_mutex);
@@ -561,202 +580,6 @@ void MouseThread::setInputMethod(std::unique_ptr<InputMethod> new_method)
 }
 
 
-Point2D MouseThread::calculatePredictedTarget(const AimbotTarget& target, float current_center_x, float current_center_y)
-{
-    Point2D raw_target_pos;
-    raw_target_pos.x = target.x + target.w * 0.5f;
-    
-    // Get y offset from target configuration
-    float local_y_offset_multiplier_val;
-    bool use_kalman_prediction;
-    float kalman_measurement_noise;
-    float base_prediction_time_ms;
-    {
-        auto& ctx = AppContext::getInstance();
-        std::lock_guard<std::mutex> lock(ctx.configMutex);
-        
-        bool local_apply_head_offset = false;
-        int local_head_class_id_to_use = -1;
-        
-        for (const auto& class_setting : ctx.config.class_settings) {
-            if (class_setting.name == ctx.config.head_class_name) {
-                local_head_class_id_to_use = class_setting.id;
-                if (!class_setting.ignore) {
-                    local_apply_head_offset = true;
-                }
-                break;
-            }
-        }
-        
-        if (local_apply_head_offset && target.classId == local_head_class_id_to_use) {
-            local_y_offset_multiplier_val = ctx.config.head_y_offset;
-        } else {
-            local_y_offset_multiplier_val = ctx.config.body_y_offset;
-        }
-        
-        use_kalman_prediction = ctx.config.use_predictive_controller;
-        kalman_measurement_noise = ctx.config.kalman_measurement_noise;
-        base_prediction_time_ms = ctx.config.prediction_time_ms;
-        
-        // If latency compensation is enabled, include it in Kalman prediction time
-        if (use_kalman_prediction && ctx.config.enable_latency_compensation) {
-            base_prediction_time_ms += ctx.config.system_latency_ms;
-        }
-    }
-    
-    raw_target_pos.y = target.y + target.h * local_y_offset_multiplier_val;
-    
-    // Calculate initial error for prediction
-    float initial_error_x = raw_target_pos.x - current_center_x;
-    float initial_error_y = raw_target_pos.y - current_center_y;
-    float error_magnitude = std::sqrt(initial_error_x * initial_error_x + initial_error_y * initial_error_y);
-    
-    Point2D predicted_target_pos = raw_target_pos;
-    
-    // Use Kalman filter if enabled
-    if (use_kalman_prediction && kalman_filter) {
-        // Check if target class changed (e.g., head -> body transition)
-        bool class_changed = (last_target_class_id_ != -1 && last_target_class_id_ != target.classId);
-        
-        // Check for large position jumps that might indicate target switch
-        float position_jump = 0.0f;
-        if (prediction_initialized_) {
-            float dx = raw_target_pos.x - last_target_pos_.x;
-            float dy = raw_target_pos.y - last_target_pos_.y;
-            position_jump = std::sqrt(dx * dx + dy * dy);
-        }
-        
-        // Reset Kalman filter if target changed or large jump detected
-        if (class_changed || position_jump > LARGE_MOVEMENT_THRESHOLD) {
-            kalman_filter->reset();
-            kalman_filter->initialize(raw_target_pos.x, raw_target_pos.y);
-            last_target_class_id_ = target.classId;
-            predicted_target_pos = raw_target_pos; // No prediction on reset
-        } else {
-            // Set measurement noise based on config
-            kalman_filter->setMeasurementNoise(kalman_measurement_noise);
-            
-            // Get Kalman prediction
-            Eigen::Vector2f kalman_prediction = kalman_filter->predict(raw_target_pos.x, raw_target_pos.y, base_prediction_time_ms);
-            
-            // Get confidence and apply it
-            float confidence = kalman_filter->getConfidence();
-            
-            // Blend Kalman prediction with raw position based on confidence
-            predicted_target_pos.x = raw_target_pos.x + (kalman_prediction.x() - raw_target_pos.x) * confidence;
-            predicted_target_pos.y = raw_target_pos.y + (kalman_prediction.y() - raw_target_pos.y) * confidence;
-        }
-        
-        // Update tracking state
-        last_target_pos_ = raw_target_pos;
-        last_target_class_id_ = target.classId;
-        prediction_initialized_ = true;
-    } else {
-        // Fallback to simple velocity-based prediction
-        auto current_time = std::chrono::high_resolution_clock::now();
-        
-        // Initialize or reset prediction when target changes significantly
-        if (!prediction_initialized_ || 
-            std::abs(raw_target_pos.x - last_target_pos_.x) > LARGE_MOVEMENT_THRESHOLD || 
-            std::abs(raw_target_pos.y - last_target_pos_.y) > LARGE_MOVEMENT_THRESHOLD) {
-            last_target_pos_ = raw_target_pos;
-            last_target_time_ = current_time;
-            prediction_initialized_ = true;
-            predicted_target_pos = raw_target_pos; // No prediction on first frame or large jumps
-        } else {
-            float dt_target = std::chrono::duration<float, std::milli>(current_time - last_target_time_).count() / 1000.0f;
-            dt_target = std::clamp(dt_target, MIN_DELTA_TIME, MAX_DELTA_TIME);
-            
-            if (dt_target > MIN_DELTA_TIME) {
-                // Calculate current velocity
-                float target_vel_x = (raw_target_pos.x - last_target_pos_.x) / dt_target;
-                float target_vel_y = (raw_target_pos.y - last_target_pos_.y) / dt_target;
-            
-            // Calculate acceleration
-            if (last_velocity_.x != 0 || last_velocity_.y != 0) {
-                current_acceleration_.x = (target_vel_x - last_velocity_.x) / dt_target;
-                current_acceleration_.y = (target_vel_y - last_velocity_.y) / dt_target;
-                
-                // Limit acceleration to prevent overshooting
-                const float MAX_ACCELERATION = 5000.0f; // pixels/s^2
-                current_acceleration_.x = std::clamp(current_acceleration_.x, -MAX_ACCELERATION, MAX_ACCELERATION);
-                current_acceleration_.y = std::clamp(current_acceleration_.y, -MAX_ACCELERATION, MAX_ACCELERATION);
-            }
-            
-            // Update velocity tracking
-            last_velocity_ = current_velocity_;
-            current_velocity_.x = target_vel_x;
-            current_velocity_.y = target_vel_y;
-            
-            // Adaptive prediction time based on multiple factors
-            float error_magnitude = std::sqrt(initial_error_x * initial_error_x + initial_error_y * initial_error_y);
-            float velocity_magnitude = std::sqrt(current_velocity_.x * current_velocity_.x + current_velocity_.y * current_velocity_.y);
-            float acceleration_magnitude = std::sqrt(current_acceleration_.x * current_acceleration_.x + 
-                                                   current_acceleration_.y * current_acceleration_.y);
-            
-            float prediction_factor;
-            float base_prediction_time_ms;
-            {
-                auto& ctx = AppContext::getInstance();
-                std::lock_guard<std::mutex> lock(ctx.configMutex);
-                prediction_factor = ctx.config.prediction_time_factor;
-                base_prediction_time_ms = ctx.config.prediction_time_ms;
-            }
-            
-            // Calculate adaptive prediction time
-            // Higher velocity = more prediction needed
-            // Higher acceleration = less prediction (target changing direction)
-            float velocity_factor = std::min(1.0f, velocity_magnitude / 1000.0f); // normalize to 0-1
-            float acceleration_penalty = std::min(1.0f, acceleration_magnitude / 5000.0f); // normalize to 0-1
-            
-            // Combine factors for final prediction time
-            float prediction_time = (base_prediction_time_ms / 1000.0f) * velocity_factor * (1.0f - acceleration_penalty * 0.5f);
-            
-            // Also consider error magnitude
-            prediction_time += error_magnitude * prediction_factor;
-            prediction_time = std::clamp(prediction_time, 0.0f, MAX_PREDICTION_TIME);
-            
-            // Apply enhanced prediction with velocity and acceleration (2nd order prediction)
-            // Position = current_pos + velocity * t + 0.5 * acceleration * t^2
-            predicted_target_pos.x = raw_target_pos.x + current_velocity_.x * prediction_time + 
-                                   0.5f * current_acceleration_.x * prediction_time * prediction_time;
-            predicted_target_pos.y = raw_target_pos.y + current_velocity_.y * prediction_time + 
-                                   0.5f * current_acceleration_.y * prediction_time * prediction_time;
-            
-            // Apply prediction limits to prevent overshooting
-            const float MAX_PREDICTION_DISTANCE = 100.0f; // pixels
-            float prediction_distance_x = predicted_target_pos.x - raw_target_pos.x;
-            float prediction_distance_y = predicted_target_pos.y - raw_target_pos.y;
-            float prediction_distance = std::sqrt(prediction_distance_x * prediction_distance_x + 
-                                                prediction_distance_y * prediction_distance_y);
-            
-            if (prediction_distance > MAX_PREDICTION_DISTANCE) {
-                float scale = MAX_PREDICTION_DISTANCE / prediction_distance;
-                predicted_target_pos.x = raw_target_pos.x + prediction_distance_x * scale;
-                predicted_target_pos.y = raw_target_pos.y + prediction_distance_y * scale;
-            }
-            }
-            
-            last_target_pos_ = raw_target_pos;
-            last_target_time_ = current_time;
-        }
-    }
-    
-    // Apply latency compensation if enabled and not using Kalman (to avoid double compensation)
-    bool enable_latency_compensation;
-    {
-        auto& ctx = AppContext::getInstance();
-        std::lock_guard<std::mutex> lock(ctx.configMutex);
-        enable_latency_compensation = ctx.config.enable_latency_compensation;
-        use_kalman_prediction = ctx.config.use_predictive_controller;
-    }
-    
-    if (enable_latency_compensation && !use_kalman_prediction) {
-        predicted_target_pos = applyLatencyCompensation(predicted_target_pos, current_velocity_);
-    }
-    
-    return predicted_target_pos;
-}
 
 
 std::pair<int, int> MouseThread::processAccumulatedMovement(float move_x, float move_y)
@@ -781,72 +604,6 @@ std::pair<int, int> MouseThread::processAccumulatedMovement(float move_x, float 
     return {dx_int, dy_int};
 }
 
-void MouseThread::updateLatencyMeasurements(float input_latency_ms, float capture_latency_ms)
-{
-    // Update input latency history
-    input_latency_history_.push_back(input_latency_ms);
-    if (input_latency_history_.size() > LATENCY_HISTORY_SIZE) {
-        input_latency_history_.erase(input_latency_history_.begin());
-    }
-    
-    // Update capture latency history  
-    capture_latency_history_.push_back(capture_latency_ms);
-    if (capture_latency_history_.size() > LATENCY_HISTORY_SIZE) {
-        capture_latency_history_.erase(capture_latency_history_.begin());
-    }
-    
-    // Calculate moving average of total latency
-    float avg_input_latency = 0.0f;
-    float avg_capture_latency = 0.0f;
-    
-    if (!input_latency_history_.empty()) {
-        for (float latency : input_latency_history_) {
-            avg_input_latency += latency;
-        }
-        avg_input_latency /= input_latency_history_.size();
-    }
-    
-    if (!capture_latency_history_.empty()) {
-        for (float latency : capture_latency_history_) {
-            avg_capture_latency += latency;
-        }
-        avg_capture_latency /= capture_latency_history_.size();
-    }
-    
-    // Add estimated processing latency (AI inference + post-processing)
-    constexpr float PROCESSING_LATENCY_MS = 3.0f;
-    
-    estimated_total_latency_ms_ = avg_input_latency + avg_capture_latency + PROCESSING_LATENCY_MS;
-    
-    // Clamp to reasonable bounds
-    estimated_total_latency_ms_ = std::clamp(estimated_total_latency_ms_, 5.0f, 100.0f);
-}
-
-float MouseThread::getEstimatedTotalLatency() const
-{
-    return estimated_total_latency_ms_;
-}
-
-Point2D MouseThread::applyLatencyCompensation(const Point2D& predicted_pos, const Point2D& velocity) const
-{
-    // Get latency compensation setting
-    float system_latency_ms;
-    {
-        auto& ctx = AppContext::getInstance();
-        std::lock_guard<std::mutex> lock(ctx.configMutex);
-        system_latency_ms = ctx.config.system_latency_ms;
-    }
-    
-    // Convert latency from ms to seconds
-    float latency_compensation_time = system_latency_ms / 1000.0f;
-    
-    // Apply additional prediction based on system latency
-    Point2D compensated_pos;
-    compensated_pos.x = predicted_pos.x + velocity.x * latency_compensation_time;
-    compensated_pos.y = predicted_pos.y + velocity.y * latency_compensation_time;
-    
-    return compensated_pos;
-}
 
 float MouseThread::calculateAdaptiveScale(float error_magnitude) const
 {
@@ -904,10 +661,6 @@ void MouseThread::resetAccumulatedStates()
         pid_controller->reset();
     }
     
-    // Reset Kalman filter
-    if (kalman_filter) {
-        kalman_filter->reset();
-    }
     
     // Reset smoothed movement
     smoothed_movement = Eigen::Vector2f::Zero();
@@ -916,14 +669,6 @@ void MouseThread::resetAccumulatedStates()
     accumulated_x_ = 0.0f;
     accumulated_y_ = 0.0f;
     
-    // Reset prediction state
-    prediction_initialized_ = false;
-    last_target_class_id_ = -1;
-    current_velocity_ = {0, 0};
-    last_velocity_ = {0, 0};
-    current_acceleration_ = {0, 0};
-    last_target_pos_ = {0, 0};
-    last_target_time_ = std::chrono::high_resolution_clock::now();
     
     // Reset accumulated movement
     accumulated_x_ = 0.0f;

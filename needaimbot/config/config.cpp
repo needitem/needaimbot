@@ -109,17 +109,9 @@ bool Config::loadConfig(const std::string& filename)
         
 
         
-        use_predictive_controller = true;
-        prediction_time_ms = 50.0f;
-        kalman_process_noise = 10.0f;
-        kalman_measurement_noise = 5.0f;
-        
-        // Sub-pixel and prediction defaults
+        // Sub-pixel defaults
         enable_subpixel_dithering = true;
         dither_strength = 0.3f;
-        prediction_time_factor = 0.001f;
-        enable_latency_compensation = true;
-        system_latency_ms = 20.0f;
 
         
         kp_x = 0.5; 
@@ -137,7 +129,6 @@ bool Config::loadConfig(const std::string& filename)
         
         pid_derivative_smoothing = 0.2f;
         enable_adaptive_pid = true;
-        enable_snap_aim = true;
 
         
         arduino_baudrate = 115200;
@@ -308,7 +299,6 @@ bool Config::loadConfig(const std::string& filename)
     
     pid_derivative_smoothing = static_cast<float>(get_double_ini("PID", "pid_derivative_smoothing", 0.2));
     enable_adaptive_pid = get_bool_ini("PID", "enable_adaptive_pid", true);
-    enable_snap_aim = get_bool_ini("PID", "enable_snap_aim", true);
     
     // Load error scaling rules
     error_scaling_rules.clear();
@@ -331,17 +321,9 @@ bool Config::loadConfig(const std::string& filename)
         error_scaling_rules.push_back(ErrorScalingRule(50.0f, 0.8f));
     }
 
-    use_predictive_controller = get_bool_ini("PID", "use_predictive_controller", true);
-    prediction_time_ms = static_cast<float>(get_double_ini("PID", "prediction_time_ms", 50.0));
-    kalman_process_noise = static_cast<float>(get_double_ini("PID", "kalman_process_noise", 10.0));
-    kalman_measurement_noise = static_cast<float>(get_double_ini("PID", "kalman_measurement_noise", 5.0));
-    
-    // Sub-pixel and prediction settings
+    // Sub-pixel settings
     enable_subpixel_dithering = get_bool_ini("PID", "enable_subpixel_dithering", true);
     dither_strength = static_cast<float>(get_double_ini("PID", "dither_strength", 0.3));
-    prediction_time_factor = static_cast<float>(get_double_ini("PID", "prediction_time_factor", 0.001));
-    enable_latency_compensation = get_bool_ini("PID", "enable_latency_compensation", true);
-    system_latency_ms = static_cast<float>(get_double_ini("PID", "system_latency_ms", 20.0));
     
     // Hybrid aim control settings
 
@@ -583,7 +565,6 @@ bool Config::saveConfig(const std::string& filename)
     file << "kd_y = " << kd_y << "\n";
     file << "pid_derivative_smoothing = " << pid_derivative_smoothing << "\n";
     file << "enable_adaptive_pid = " << (enable_adaptive_pid ? "true" : "false") << "\n";
-    file << "enable_snap_aim = " << (enable_snap_aim ? "true" : "false") << "\n";
     
     // Save error scaling rules
     file << "error_scaling_rule_count = " << error_scaling_rules.size() << "\n";
@@ -592,16 +573,8 @@ bool Config::saveConfig(const std::string& filename)
         file << prefix << "threshold = " << error_scaling_rules[i].error_threshold << "\n";
         file << prefix << "scale = " << error_scaling_rules[i].scale_factor << "\n";
     }
-    file << "use_predictive_controller = " << (use_predictive_controller ? "true" : "false") << "\n";
-    file << "prediction_time_ms = " << prediction_time_ms << "\n";
-    file << "kalman_process_noise = " << kalman_process_noise << "\n";
-    file << "kalman_measurement_noise = " << kalman_measurement_noise << "\n";
     file << "enable_subpixel_dithering = " << (enable_subpixel_dithering ? "true" : "false") << "\n";
-    file << "dither_strength = " << dither_strength << "\n";
-    file << "enable_latency_compensation = " << (enable_latency_compensation ? "true" : "false") << "\n";
-    file << "system_latency_ms = " << system_latency_ms << "\n";
-    file << std::fixed << std::setprecision(6);
-    file << "prediction_time_factor = " << prediction_time_factor << "\n\n";
+    file << "dither_strength = " << dither_strength << "\n\n";
 
     file << "[Arduino]\n";
     file << std::noboolalpha;
