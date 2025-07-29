@@ -34,7 +34,6 @@ class SerialConnection;
 class GhubMouse; 
 struct Point2D { float x, y; }; 
 
-using ErrorTrackingCallback = std::function<void(float error_x, float error_y)>;
 
 class MouseThread
 {
@@ -46,9 +45,7 @@ private:
     
 
     
-    ErrorTrackingCallback error_callback;
     std::mutex callback_mutex;
-    bool tracking_errors;
 
     float screen_width;
     float screen_height;
@@ -69,8 +66,6 @@ private:
 
     int last_applied_dx_ = 0;
     
-    std::vector<std::pair<double, double>> recent_flow_values;
-    int optical_flow_recoil_frame_count;
     
     Eigen::Vector2f smoothed_movement;
     
@@ -141,10 +136,7 @@ public:
     void releaseMouse();
     void applyRecoilCompensation(float strength);
     void applyWeaponRecoilCompensation(const WeaponRecoilProfile* profile, int scope_magnification);
-    void applyOpticalFlowRecoilCompensation();
 
-    void enableErrorTracking(const ErrorTrackingCallback& callback);
-    void disableErrorTracking();
 
     void setInputMethod(std::unique_ptr<InputMethod> new_method);
     
