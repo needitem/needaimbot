@@ -21,12 +21,11 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="capture\capture.cpp" />
-    <ClCompile Include="capture\duplication_api_capture.cpp" />
     <ClCompile Include="capture\simple_capture.cpp" />
+    <ClCompile Include="capture\windows_graphics_capture.cpp" />
     <ClCompile Include="capture\frame_buffer_pool.cpp" />
     <ClCompile Include="config\config.cpp" />
     <ClCompile Include="detector\detector.cpp" />
-    <ClCompile Include="postprocess\postProcess.cpp" />
     <ClCompile Include="imgui\imgui.cpp" />
     <ClCompile Include="imgui\imgui_draw.cpp" />
     <ClCompile Include="imgui\imgui_impl_dx11.cpp" />
@@ -65,8 +64,7 @@
   <ItemGroup>
     <CudaCompile Include="postprocess\filterGpu.cu" />
     <CudaCompile Include="postprocess\postProcessGpu.cu" />
-    <CudaCompile Include="postprocess\scoringGpu.cu" />
-    <CudaCompile Include="postprocess\targetLockingGpu.cu" />
+    <CudaCompile Include="postprocess\batchedResults.cu" />
     <CudaCompile Include="cuda\cuda_image_processing.cu" />
     <CudaCompile Include="cuda\cuda_float_processing.cu" />
     <CudaCompile Include="cuda\color_filter_kernel.cu" />
@@ -83,16 +81,14 @@
     <ClInclude Include="cuda\image_io.h" />
     <ClInclude Include="cuda\color_conversion.h" />
     <ClInclude Include="capture\capture.h" />
-    <ClInclude Include="capture\duplication_api_capture.h" />
     <ClInclude Include="capture\simple_capture.h" />
+    <ClInclude Include="capture\windows_graphics_capture.h" />
     <ClInclude Include="capture\frame_buffer_pool.h" />
     <ClInclude Include="detector\CudaBuffer.h" />
     <ClInclude Include="config\config.h" />
     <ClInclude Include="detector\detector.h" />
     <ClInclude Include="postprocess\filterGpu.h" />
     <ClInclude Include="postprocess\postProcess.h" />
-    <ClInclude Include="postprocess\scoringGpu.h" />
-    <ClInclude Include="postprocess\targetLockingGpu.h" />
     <ClInclude Include="imgui\imconfig.h" />
     <ClInclude Include="imgui\imgui.h" />
     <ClInclude Include="imgui\imgui_impl_dx11.h" />

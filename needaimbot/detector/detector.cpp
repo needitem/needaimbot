@@ -28,7 +28,6 @@
 #include "../include/other_tools.h"
 
 #include "../postprocess/postProcess.h"
-#include "../postprocess/scoringGpu.h"
 #include "../postprocess/filterGpu.h"
 #include "../config/config.h"
 
@@ -76,6 +75,35 @@ extern cudaError_t filterDetectionsByClassIdGpu(
     cudaStream_t stream
 );
 
+// Simple CPU function to find closest target based on distance
+int findClosestTargetSimple(
+    const Detection* detections,
+    int count,
+    float crosshairX,
+    float crosshairY
+) {
+    if (count <= 0) return -1;
+    
+    float minDistance = FLT_MAX;
+    int closestIdx = -1;
+    
+    for (int i = 0; i < count; i++) {
+        float centerX = detections[i].x + detections[i].width * 0.5f;
+        float centerY = detections[i].y + detections[i].height * 0.5f;
+        
+        float dx = centerX - crosshairX;
+        float dy = centerY - crosshairY;
+        float distance = dx * dx + dy * dy; // No need for sqrt since we're just comparing
+        
+        if (distance < minDistance) {
+            minDistance = distance;
+            closestIdx = i;
+        }
+    }
+    
+    return closestIdx;
+}
+
 Detector::Detector()
     : frameReady(false),
     detectionVersion(0),
@@ -92,15 +120,7 @@ Detector::Detector()
     , m_isTargetLocked(false)
     , m_lastDetectionTime(std::chrono::steady_clock::now()) 
 {
-    // Initialize batched results
-    cudaMalloc((void**)&m_batchedResultsGpu, sizeof(BatchedResults));
-    memset(&m_batchedResultsHost, 0, sizeof(BatchedResults));
-    
-    // Allocate pinned memory for ultra-fast transfers
-    cudaHostAlloc((void**)&m_batchedResultsPinned, sizeof(BatchedResults), cudaHostAllocDefault);
-    cudaHostAlloc((void**)&m_pinnedBestIndex, sizeof(int), cudaHostAllocDefault);
-    cudaHostAlloc((void**)&m_pinnedMatchingIndex, sizeof(int), cudaHostAllocDefault);
-    cudaEventCreateWithFlags(&m_finalCopyEvent, cudaEventDisableTiming);
+
 }
 
 Detector::~Detector()
@@ -120,10 +140,6 @@ Detector::~Detector()
         }
         
         // 2. 이벤트 정리 (스트림보다 먼저)
-        if (m_finalCopyEvent) {
-            cudaEventDestroy(m_finalCopyEvent);
-            m_finalCopyEvent = nullptr;
-        }
         if (m_preprocessDone) {
             cudaEventDestroy(m_preprocessDone);
             m_preprocessDone = nullptr;
@@ -138,24 +154,6 @@ Detector::~Detector()
         }
         
         // 3. 메모리 버퍼 정리
-        if (m_batchedResultsGpu) {
-            cudaFree(m_batchedResultsGpu);
-            m_batchedResultsGpu = nullptr;
-        }
-        
-        // 4. Pinned memory 정리
-        if (m_batchedResultsPinned) {
-            cudaFreeHost(m_batchedResultsPinned);
-            m_batchedResultsPinned = nullptr;
-        }
-        if (m_pinnedBestIndex) {
-            cudaFreeHost(m_pinnedBestIndex);
-            m_pinnedBestIndex = nullptr;
-        }
-        if (m_pinnedMatchingIndex) {
-            cudaFreeHost(m_pinnedMatchingIndex);
-            m_pinnedMatchingIndex = nullptr;
-        }
         
         // 5. Input/Output 바인딩 정리
         for (auto& binding : inputBindings) {
@@ -179,7 +177,17 @@ Detector::~Detector()
             inputBufferDevice = nullptr;
         }
         
-        // 6. 스트림 정리 (마지막에)
+        // 6. CUDA Graph 정리
+        if (m_inferenceGraphExec) {
+            cudaGraphExecDestroy(m_inferenceGraphExec);
+            m_inferenceGraphExec = nullptr;
+        }
+        if (m_inferenceGraph) {
+            cudaGraphDestroy(m_inferenceGraph);
+            m_inferenceGraph = nullptr;
+        }
+        
+        // 7. 스트림 정리 (마지막에)
         if (stream) {
             cudaStreamDestroy(stream);
             stream = nullptr;
@@ -222,7 +230,7 @@ void Detector::getInputNames()
         }
     }
 
-    // m_bestTargetIndexGpu will be initialized when needed in findBestTargetGpu
+
 
     
     m_nms_d_x1.allocate(ctx.config.max_detections);
@@ -349,7 +357,16 @@ bool Detector::initializeCudaContext()
     if (!checkCudaError(cudaEventCreateWithFlags(&m_inferenceDone, cudaEventDisableTiming), "creating inferenceDone event")) { m_cudaContextInitialized = false; return false; }
     if (!checkCudaError(cudaEventCreateWithFlags(&processingDone, cudaEventDisableTiming), "creating processingDone event")) { m_cudaContextInitialized = false; return false; }
 
+    // GPU 워밍업 - 첫 추론 시간 단축
+    warmupGPU();
     
+    // GPU 메모리 대역폭 최적화 설정
+    cudaDeviceSetCacheConfig(cudaFuncCachePreferL1);
+    
+    // GPU 메모리 병합 최적화
+    size_t limit = 0;
+    cudaDeviceGetLimit(&limit, cudaLimitStackSize);
+    cudaDeviceSetLimit(cudaLimitStackSize, limit * 2);
 
     m_cudaContextInitialized = true; 
     return true; 
@@ -370,6 +387,11 @@ void Detector::initialize(const std::string& modelFile)
         }
     };
     static SimpleLogger logger;
+    
+    // TensorRT 버전 출력
+    std::cout << "[Detector] TensorRT version: " << NV_TENSORRT_MAJOR << "." 
+              << NV_TENSORRT_MINOR << "." << NV_TENSORRT_PATCH << std::endl;
+    
     runtime.reset(nvinfer1::createInferRuntime(logger));
     loadEngine(modelFile);
 
@@ -385,6 +407,19 @@ void Detector::initialize(const std::string& modelFile)
         std::cerr << "[Detector] Context creation failed" << std::endl;
         return;
     }
+    
+    // TensorRT 10.x 최적화 설정
+    // 메모리 할당 전략 최적화
+    if (context->setOptimizationProfileAsync(0, stream)) {
+        std::cout << "[Detector] Optimization profile set for better performance" << std::endl;
+    }
+    
+    // CUDA 그래프 호환성 설정
+    context->setEnqueueEmitsProfile(false);
+    
+    // 영구 캐시 활성화 - GPU의 실제 L2 캐시 크기에 맞춤
+    // 대부분의 GPU는 16MB 이하의 L2 캐시를 가짐
+    context->setPersistentCacheLimit(16 * 1024 * 1024); // 16MB (safe limit)
 
     getInputNames();
     getOutputNames();
@@ -612,10 +647,20 @@ void Detector::processFrame(const SimpleCudaMat& frame)
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    std::unique_lock<std::mutex> lock(inferenceMutex);
-    currentFrame = frame.clone();
-    frameIsGpu = true;
-    frameReady = true;
+    // 비동기 프레임 전달 - lock 시간 최소화
+    {
+        std::unique_lock<std::mutex> lock(inferenceMutex);
+        
+        // 이전 프레임이 아직 처리 중이면 스킵 (프레임 드롭으로 낮은 지연시간 유지)
+        if (frameReady) {
+            return; // 추론이 캡처보다 느리면 프레임 스킵
+        }
+        
+        currentFrame = frame.clone();
+        frameIsGpu = true;
+        frameReady = true;
+    }
+    
     inferenceCV.notify_one();
 
     auto end_time = std::chrono::high_resolution_clock::now();
@@ -660,6 +705,15 @@ void Detector::inferenceThread()
     if (!isCudaContextInitialized()) {
         std::cerr << "[Detector Thread] CUDA context not initialized. Inference thread exiting." << std::endl;
         return;
+    }
+    
+    // CPU 스레드 친화성 설정 (성능 코어에 고정)
+    {
+        HANDLE thread = GetCurrentThread();
+        DWORD_PTR mask = 0x0F; // 첫 4개 코어 사용 (보통 성능 코어)
+        SetThreadAffinityMask(thread, mask);
+        SetThreadPriority(thread, THREAD_PRIORITY_HIGHEST);
+        std::cout << "[Detector] Thread affinity and priority set for optimal performance" << std::endl;
     }
     
     // Cache frequently accessed config values to reduce mutex contention
@@ -820,11 +874,23 @@ void Detector::inferenceThread()
                 // Wait for preprocessing to complete before inference
                 cudaStreamWaitEvent(stream, m_preprocessDone, 0);
                 
-                // Direct inference without CUDA Graph to avoid stream conflicts
+                // CUDA Graph 기반 추론 (첫 프레임은 Graph 캡처)
+                if (!m_graphCaptured && frame_counter > 5) {
+                    captureInferenceGraph();
+                }
                 
-                bool enqueueSuccess = context->enqueueV3(stream);
+                bool enqueueSuccess;
+                if (m_graphCaptured && m_inferenceGraphExec) {
+                    // Graph 실행 (오버헤드 최소화)
+                    cudaGraphLaunch(m_inferenceGraphExec, stream);
+                    enqueueSuccess = true;
+                } else {
+                    // 일반 추론 (Graph 캡처 전)
+                    enqueueSuccess = context->enqueueV3(stream);
+                }
+                
                 if (!enqueueSuccess) {
-                    std::cerr << "[Detector] TensorRT enqueueV3 failed" << std::endl;
+                    std::cerr << "[Detector] TensorRT inference failed" << std::endl;
                     continue;
                 }
                 cudaEventRecord(m_inferenceDone, stream);
@@ -833,117 +899,54 @@ void Detector::inferenceThread()
                 cudaStreamWaitEvent(postprocessStream, m_inferenceDone, 0);
                 performGpuPostProcessing(postprocessStream);
                 cudaEventRecord(processingDone, postprocessStream);
+                
+                // GPU에서 detection 결과 복사 (간단한 방식)
+                cudaMemcpyAsync(&m_finalDetectionsCountHost, m_finalDetectionsCountGpu.get(), 
+                               sizeof(int), cudaMemcpyDeviceToHost, postprocessStream);
+                
+                // 먼저 count를 동기화해서 가져온 후 detection 데이터 복사
+                cudaStreamSynchronize(postprocessStream);
+                
+                // 검출된 객체가 있으면 detection 데이터도 복사
+                if (m_finalDetectionsCountHost > 0) {
+                    cudaMemcpyAsync(m_finalDetectionsHost.get(), m_finalDetectionsGpu.get(), 
+                                   m_finalDetectionsCountHost * sizeof(Detection), 
+                                   cudaMemcpyDeviceToHost, postprocessStream);
+                    cudaStreamSynchronize(postprocessStream);
+                }
 
                 auto inference_end_time = std::chrono::high_resolution_clock::now();
                 std::chrono::duration<float, std::milli> inference_duration_ms = inference_end_time - inference_start_time;
                 ctx.g_current_inference_time_ms.store(inference_duration_ms.count());
                 ctx.add_to_history(ctx.g_inference_time_history, inference_duration_ms.count(), ctx.g_inference_history_mutex);
                 
-
-                // Post-graph processing (memory copies and target selection)
-                // Wait for postprocessing to complete before copying
-                cudaStreamWaitEvent(stream, processingDone, 0);
-                
-                // Ultra-optimized: batch all memory operations
-                // 1. First, prepare all GPU-side data in a single structure
-                struct {
-                    int bestIndex;
-                    int finalCount;
-                    Detection bestTarget;
-                } compactResults;
-                
-                // 2. Copy indices first (they're needed to copy the right detection)
-                cudaMemcpyAsync(&compactResults.bestIndex, m_bestTargetIndexGpu.get(), 
-                               sizeof(int), cudaMemcpyDeviceToHost, stream);
-                cudaMemcpyAsync(&compactResults.finalCount, m_finalDetectionsCountGpu.get(), 
-                               sizeof(int), cudaMemcpyDeviceToHost, stream);
-                
-                // 3. Wait just for indices
-                cudaStreamSynchronize(stream);
-                
-                // 4. Now copy the specific detection based on the index
-                if (compactResults.bestIndex >= 0 && compactResults.bestIndex < compactResults.finalCount) {
-                    cudaMemcpyAsync(&compactResults.bestTarget, &m_finalDetectionsGpu.get()[compactResults.bestIndex], 
-                                   sizeof(Detection), cudaMemcpyDeviceToHost, stream);
-                    cudaStreamSynchronize(stream);
-                }
-                
-                // Update host variables
-                m_finalDetectionsCountHost = compactResults.finalCount;
-                *m_pinnedBestIndex = compactResults.bestIndex;
                 m_lastDetectionTime = std::chrono::steady_clock::now();
                 
-                // Target handling logic with proper reset
+                // CPU에서 단순한 거리 기반 타겟 선택
                 {
                     std::lock_guard<std::mutex> lock(detectionMutex);
                     
-                    // Always clear state first to ensure no stale data remains
+                    // Always clear state first
                     m_hasBestTarget = false;
                     memset(&m_bestTargetHost, 0, sizeof(Detection));
                     m_bestTargetIndexHost = -1;
                     
-                    // Only proceed if we have detections
-                    if (m_finalDetectionsCountHost > 0 && !ctx.should_exit)
-                    {
-                        if (ctx.config.verbose) {
-                            std::cout << "[Detector] Processing " << m_finalDetectionsCountHost << " detections for target selection" << std::endl;
-                        }
+                    // 검출된 객체가 있으면 가장 가까운 타겟 선택
+                    if (m_finalDetectionsCountHost > 0 && !ctx.should_exit) {
+                        float crosshairX = cached_config.detection_resolution / 2.0f + cached_config.crosshair_offset_x;
+                        float crosshairY = cached_config.detection_resolution / 2.0f + cached_config.crosshair_offset_y;
                         
-                        // First, calculate scores for all detections using cached config
-                        cudaError_t scoreErr = calculateTargetScoresGpu(m_finalDetectionsGpu.get(), m_finalDetectionsCountHost, m_scoresGpu.get(), 
-                            cached_config.detection_resolution, cached_config.detection_resolution, 
-                            cached_config.distance_weight, cached_config.confidence_weight, 
-                            0, // head_class_id - 0 for person class
-                            cached_config.crosshair_offset_x, cached_config.crosshair_offset_y, stream);
+                        int closestIndex = findClosestTargetSimple(
+                            m_finalDetectionsHost.get(),
+                            m_finalDetectionsCountHost,
+                            crosshairX,
+                            crosshairY
+                        );
                         
-                        if (scoreErr != cudaSuccess) {
-                            std::cerr << "[Detector] Failed to calculate target scores: " << cudaGetErrorString(scoreErr) << std::endl;
-                            continue;
-                        }
-                        
-                        // Find the overall best target
-                        cudaError_t findErr = findBestTargetGpu(m_scoresGpu.get(), m_finalDetectionsCountHost, 
-                                                               m_bestTargetIndexGpu.get(), stream,
-                                                               m_tempBlockScores.get(), m_tempBlockIndices.get());
-                        
-                        if (findErr != cudaSuccess) {
-                            std::cerr << "[Detector] Failed to find best target: " << cudaGetErrorString(findErr) << std::endl;
-                            continue;
-                        }
-                        
-                        // Copy the best target index from GPU directly to pinned memory
-                        cudaMemcpyAsync(m_pinnedBestIndex, m_bestTargetIndexGpu.get(), 
-                                       sizeof(int), cudaMemcpyDeviceToHost, stream);
-                        
-                        // Batch all memory operations before sync
-                        cudaMemcpyAsync(m_batchedResultsPinned, m_batchedResultsGpu, 
-                                       sizeof(BatchedResults), cudaMemcpyDeviceToHost, stream);
-                        
-                        // Single synchronization point for initial copies
-                        cudaStreamSynchronize(stream);
-                        
-                        if (ctx.config.verbose) {
-                            std::cout << "[Detector] Best target index from GPU: " << *m_pinnedBestIndex 
-                                      << " (out of " << m_finalDetectionsCountHost << " detections)" << std::endl;
-                        }
-                        
-                        // Copy best target detection if valid
-                        if (*m_pinnedBestIndex >= 0 && *m_pinnedBestIndex < m_finalDetectionsCountHost) {
-                            cudaMemcpyAsync(&m_batchedResultsPinned->bestTarget, 
-                                          &m_finalDetectionsGpu.get()[*m_pinnedBestIndex], 
-                                          sizeof(Detection), cudaMemcpyDeviceToHost, stream);
-                            cudaStreamSynchronize(stream);
-                        }
-                        
-                        // Copy pinned results to regular host memory for compatibility
-                        memcpy(&m_batchedResultsHost, m_batchedResultsPinned, sizeof(BatchedResults));
-                        
-                        // Use the best target from current frame
-                        if (*m_pinnedBestIndex >= 0 && *m_pinnedBestIndex < m_finalDetectionsCountHost) {
-                            // Use the best target from this frame only
-                            m_bestTargetIndexHost = *m_pinnedBestIndex;
-                            m_bestTargetHost = m_batchedResultsPinned->bestTarget;
-                            m_hasBestTarget = true;  // Only set true after successful assignment
+                        if (closestIndex >= 0) {
+                            m_hasBestTarget = true;
+                            m_bestTargetHost = m_finalDetectionsHost.get()[closestIndex];
+                            m_bestTargetIndexHost = closestIndex;
                             
                             if (ctx.config.verbose) {
                                 std::cout << "[Detector] Target selected - Index: " << m_bestTargetIndexHost 
@@ -951,15 +954,8 @@ void Detector::inferenceThread()
                                           << ", Size: " << m_bestTargetHost.width << "x" << m_bestTargetHost.height
                                           << ", Confidence: " << m_bestTargetHost.confidence << std::endl;
                             }
-                        } else {
-                            if (ctx.config.verbose) {
-                                std::cout << "[Detector] No valid target selected (bestIndex=" << *m_pinnedBestIndex 
-                                          << ", detectionCount=" << m_finalDetectionsCountHost << ")" << std::endl;
-                            }
                         }
-                        // No else needed - state already cleared at the beginning
                     }
-                    // No else needed - state already cleared at the beginning
                     
                     detectionVersion++;
                 }
@@ -1019,7 +1015,7 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
     cudaMemsetAsync(m_decodedCountGpu.get(), 0, sizeof(int), stream);
     cudaMemsetAsync(m_classFilteredCountGpu.get(), 0, sizeof(int), stream);
     cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
-    // Note: m_bestTargetIndexGpu is initialized in findBestTargetGpu, no need to reset here
+
     cudaError_t decodeErr = cudaSuccess;
 
     // Local config variables to reduce mutex locks
@@ -1168,6 +1164,9 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
             m_nms_d_indices.get(),
             stream
         );
+        
+        // Target selection will be done on CPU after copying results
+        
     } catch (const std::exception& e) {
          std::cerr << "[Detector] Exception during NMSGpu call: " << e.what() << std::endl;
          cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
@@ -1339,10 +1338,11 @@ void Detector::initializeBuffers() {
     m_decodedCountGpu.allocate(1);
     m_finalDetectionsGpu.allocate(ctx.config.max_detections);
     m_finalDetectionsCountGpu.allocate(1);
+    m_finalDetectionsHost = std::make_unique<Detection[]>(ctx.config.max_detections);
     m_classFilteredDetectionsGpu.allocate(ctx.config.max_detections);
     m_classFilteredCountGpu.allocate(1);
     m_scoresGpu.allocate(ctx.config.max_detections);
-    m_bestTargetIndexGpu.allocate(1);
+
     m_matchingIndexGpu.allocate(1);
     m_matchingScoreGpu.allocate(1);
     
@@ -1357,7 +1357,7 @@ void Detector::initializeBuffers() {
     if (m_decodedCountGpu.get()) cudaMemsetAsync(m_decodedCountGpu.get(), 0, sizeof(int), stream);
     if (m_finalDetectionsCountGpu.get()) cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
     if (m_classFilteredCountGpu.get()) cudaMemsetAsync(m_classFilteredCountGpu.get(), 0, sizeof(int), stream);
-    // m_bestTargetIndexGpu will be initialized when needed in findBestTargetGpu
+
 }
 
 
@@ -1397,10 +1397,79 @@ SimpleCudaMat Detector::getColorMaskGpu() const {
     return m_colorMaskGpu.clone(); 
 }
 
+void Detector::warmupGPU()
+{
+    auto& ctx = AppContext::getInstance();
+    std::cout << "[Detector] Warming up GPU..." << std::endl;
+    
+    // 더미 데이터로 GPU 워밍업
+    if (inputBufferDevice && inputDims.nbDims >= 4) {
+        size_t dummySize = static_cast<size_t>(inputDims.d[1]) * static_cast<size_t>(inputDims.d[2]) * static_cast<size_t>(inputDims.d[3]) * sizeof(float);
+        
+        // 작은 더미 데이터 생성
+        float* dummyData = nullptr;
+        cudaMalloc(&dummyData, dummySize);
+        cudaMemset(dummyData, 0, dummySize);
+        
+        // 5번 정도 더미 추론 실행
+        for (int i = 0; i < 5; i++) {
+            if (context) {
+                void* bindings[] = { dummyData };
+                context->enqueueV3(stream);
+                cudaStreamSynchronize(stream);
+            }
+        }
+        
+        cudaFree(dummyData);
+        std::cout << "[Detector] GPU warmup completed" << std::endl;
+    }
+}
+
+void Detector::preallocateGPUResources()
+{
+    // GPU 메모리 풀 생성 (100MB)
+    if (!m_gpuMemoryPool) {
+        m_gpuMemoryPool = std::make_unique<CudaMemoryPool>(100 * 1024 * 1024);
+        std::cout << "[Detector] GPU memory pool allocated: 100MB" << std::endl;
+    }
+    
+    // Pinned 메모리 추가 할당 (빠른 CPU-GPU 전송용)
+    void* pinnedBuffer = nullptr;
+    size_t pinnedSize = 10 * 1024 * 1024; // 10MB
+    cudaHostAlloc(&pinnedBuffer, pinnedSize, cudaHostAllocDefault);
+    cudaFreeHost(pinnedBuffer); // 일단 할당 후 해제 (시스템이 재사용 가능한 상태로 유지)
+}
+
+void Detector::captureInferenceGraph()
+{
+    if (m_graphCaptured || !context) return;
+    
+    std::cout << "[Detector] Capturing CUDA Graph for inference pipeline..." << std::endl;
+    
+    // Graph 캡처 시작
+    cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal);
+    
+    // 추론 파이프라인 기록
+    context->enqueueV3(stream);
+    
+    // Graph 캡처 종료
+    cudaStreamEndCapture(stream, &m_inferenceGraph);
+    
+    // Graph 인스턴스 생성
+    cudaGraphInstantiate(&m_inferenceGraphExec, m_inferenceGraph, nullptr, nullptr, 0);
+    
+    m_graphCaptured = true;
+    std::cout << "[Detector] CUDA Graph captured successfully" << std::endl;
+}
+
 void Detector::start()
 {
     auto& ctx = AppContext::getInstance();
     ctx.should_exit = false;
+    
+    // GPU 리소스 사전 할당
+    preallocateGPUResources();
+    
     // Note: capture thread is handled separately in capture.cpp
     m_inferenceThread = std::thread(&Detector::inferenceThread, this);
 }
@@ -1455,10 +1524,25 @@ nvinfer1::ICudaEngine* buildEngineFromOnnx(const std::string& onnxPath)
 
     config->setMemoryPoolLimit(nvinfer1::MemoryPoolType::kWORKSPACE, 1U << 30); // 1GB
 
+    // 더 공격적인 TensorRT 최적화
     if (ctx.config.tensorrt_fp16 && builder->platformHasFastFp16()) {
         config->setFlag(nvinfer1::BuilderFlag::kFP16);
         std::cout << "[TensorRT] FP16 optimization enabled" << std::endl;
     }
+    
+    // 추가 최적화 플래그
+    config->setFlag(nvinfer1::BuilderFlag::kGPU_FALLBACK); // DLA 사용 시 GPU 폴백
+    config->setFlag(nvinfer1::BuilderFlag::kPREFER_PRECISION_CONSTRAINTS); // 정밀도 제약 선호
+    
+    // 더 많은 커널 선택을 위한 tactics 소스 활성화
+    config->setTacticSources(
+        1U << static_cast<uint32_t>(nvinfer1::TacticSource::kCUBLAS) |
+        1U << static_cast<uint32_t>(nvinfer1::TacticSource::kCUBLAS_LT) |
+        1U << static_cast<uint32_t>(nvinfer1::TacticSource::kCUDNN)
+    );
+    
+    // 프로파일링을 통한 최적 커널 선택
+    config->setProfilingVerbosity(nvinfer1::ProfilingVerbosity::kDETAILED);
 
     // Create optimization profile for dynamic inputs
     auto profile = builder->createOptimizationProfile();

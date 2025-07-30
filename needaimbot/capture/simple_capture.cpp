@@ -1,6 +1,7 @@
 #include "simple_capture.h"
 #include "AppContext.h"
 #include "../cuda/cuda_image_processing.h"
+#include "../cuda/color_conversion.h"
 #include "frame_buffer_pool.h"
 #include <iostream>
 #include <chrono>
@@ -75,47 +76,20 @@ SimpleScreenCapture::~SimpleScreenCapture()
 
 SimpleCudaMat SimpleScreenCapture::GetNextFrameGpu()
 {
-    // Return CPU frame as GPU frame is problematic during stream capture
-    // Let the caller handle GPU upload if needed
-    SimpleMat cpuFrame = GetNextFrameCpu();
-    if (cpuFrame.empty()) {
+    if (!m_initialized) {
         return SimpleCudaMat();
     }
-    
-    // For now, return empty GpuMat to avoid stream capture conflicts
-    // The detector should handle CPU frames or upload manually
-    return SimpleCudaMat();
-}
-
-SimpleMat SimpleScreenCapture::GetNextFrameCpu()
-{
-    static int captureAttempts = 0;
-    captureAttempts++;
-    
-    // Only log every 300 frames to reduce spam
-    if (captureAttempts % 300 == 1) {
-    }
-    
-    if (!m_initialized) {
-        return SimpleMat();
-    }
-    
-    // Initialization check passed (no need to log every frame)
     
     // Calculate center region coordinates
     int startX = (m_screenWidth - m_width) / 2;
     int startY = (m_screenHeight - m_height) / 2;
     
-    if (captureAttempts % 60 == 1) {
-    }
-    
-    // 프레임 버퍼 풀에서 버퍼 획듍 (먼저 선언)
+    // Get frame buffer pool
     if (!g_frameBufferPool) {
         g_frameBufferPool = std::make_unique<FrameBufferPool>(10);
     }
-    SimpleMat bgrFrame = g_frameBufferPool->acquireCpuBuffer(m_height, m_width, 3);
     
-    // 에러 복구를 위한 재시도 로직
+    // Perform screen capture with retry logic
     BOOL result = FALSE;
     int retries = 0;
     
@@ -124,71 +98,51 @@ SimpleMat SimpleScreenCapture::GetNextFrameCpu()
                         m_screenDC, startX, startY, SRCCOPY | NOMIRRORBITMAP);
         
         if (!result) {
-            DWORD error = GetLastError();
             if (retries < m_maxRetries - 1) {
-                // 지수 백오프
+                // Exponential backoff
                 int sleepMs = (1 << retries) * 10; // 10ms, 20ms, 40ms
                 std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
                 retries++;
             } else {
-                // 최종 실패 시 빈 프레임 반환
-                g_frameBufferPool->releaseCpuBuffer(std::move(bgrFrame));
-                return SimpleMat();
+                // Final failure
+                return SimpleCudaMat();
             }
         }
     }
     
     // Verify bitmap data is valid
     if (!m_bitmapData) {
-        return SimpleMat();
+        return SimpleCudaMat();
     }
     
-    // Verify bitmap data periodically
-    if (captureAttempts % 300 == 1 && m_bitmapData) {
+    // Get GPU buffer from pool
+    SimpleCudaMat gpuFrame = g_frameBufferPool->acquireGpuBuffer(m_height, m_width, 3);
+    
+    // Create temporary GPU buffer for BGRA data
+    if (m_deviceFrame.rows() != m_height || m_deviceFrame.cols() != m_width) {
+        m_deviceFrame.create(m_height, m_width, 4);
     }
     
-    // 버퍼가 이미 위에서 선언되었음
+    // Upload bitmap data to GPU
+    cudaError_t err = cudaMemcpy2D(
+        m_deviceFrame.data(), m_deviceFrame.step(),
+        m_bitmapData, m_width * 4,
+        m_width * 4, m_height,
+        cudaMemcpyHostToDevice
+    );
     
-    if (captureAttempts % 60 == 1) {
+    if (err != cudaSuccess) {
+        g_frameBufferPool->releaseGpuBuffer(std::move(gpuFrame));
+        return SimpleCudaMat();
     }
     
-    // Use bitmap data directly
-    const uint8_t* srcData = static_cast<const uint8_t*>(m_bitmapData);
-    if (!srcData) {
-        return SimpleMat();
-    }
+    // Convert BGRA to BGR on GPU using CUDA function
+    cuda_bgra2bgr(
+        m_deviceFrame.data(), gpuFrame.data(),
+        m_width, m_height,
+        m_deviceFrame.step(), gpuFrame.step()
+    );
     
-    // 개선된 병렬 색상 변환 - 캐시 효율성 향상
-    const int blockHeight = 8; // 캐시 라인 최적화
-    concurrency::parallel_for(0, (m_height + blockHeight - 1) / blockHeight, [&](int blockY) {
-        int startY = blockY * blockHeight;
-        int endY = (std::min)(startY + blockHeight, m_height);
-        
-        for (int y = startY; y < endY; ++y) {
-            const uint8_t* srcRow = srcData + y * (m_width * 4);
-            uint8_t* dstRow = bgrFrame.data() + y * bgrFrame.step();
-            
-            // SIMD-친화적인 루프 구조
-            int x = 0;
-            for (; x < m_width - 3; x += 4) {
-                // 4픽셀을 한 번에 처리
-                for (int i = 0; i < 4; ++i) {
-                    dstRow[(x + i) * 3 + 0] = srcRow[(x + i) * 4 + 0]; // B
-                    dstRow[(x + i) * 3 + 1] = srcRow[(x + i) * 4 + 1]; // G
-                    dstRow[(x + i) * 3 + 2] = srcRow[(x + i) * 4 + 2]; // R
-                }
-            }
-            // 나머지 픽셀 처리
-            for (; x < m_width; ++x) {
-                dstRow[x * 3 + 0] = srcRow[x * 4 + 0];
-                dstRow[x * 3 + 1] = srcRow[x * 4 + 1];
-                dstRow[x * 3 + 2] = srcRow[x * 4 + 2];
-            }
-        }
-    });
-    
-    if (captureAttempts % 60 == 1) {
-    }
-    
-    return bgrFrame;
+    return gpuFrame;
 }
+

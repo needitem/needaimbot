@@ -1,19 +1,19 @@
 #pragma once
 
 #include "../cuda/simple_cuda_mat.h"
+#include "capture.h"
 #include <windows.h>
 #include <cuda_runtime.h>
 #include <thread>
 
-class SimpleScreenCapture {
+class SimpleScreenCapture : public IScreenCapture {
 public:
     SimpleScreenCapture(int width, int height);
     ~SimpleScreenCapture();
     
-    SimpleCudaMat GetNextFrameGpu();
-    SimpleMat GetNextFrameCpu();
-    
-    bool IsInitialized() const { return m_initialized; }
+    SimpleCudaMat GetNextFrameGpu() override;
+    cudaEvent_t GetCaptureDoneEvent() const override { return nullptr; } // Simple capture doesn't use events
+    bool IsInitialized() const override { return m_initialized; }
     void SetAcquireTimeout(UINT timeout) {} // No-op for compatibility
     
 private:

@@ -100,30 +100,36 @@ static void draw_capture_behavior_settings()
     
     UIHelpers::CompactSpacer();
     
-    const char* capture_methods[] = { "Simple (BitBlt)", "Desktop Duplication API", "Virtual Camera", "NDI Stream" };
-    static int current_method = 0;
-    static bool first_time = true;
+    const char* capture_methods[] = { "Simple (BitBlt)", "Windows Graphics Capture", "Virtual Camera", "NDI Stream" };
     
-    // Initialize on first run
-    if (first_time) {
-        if (ctx.config.capture_method == "simple") current_method = 0;
-        else if (ctx.config.capture_method == "duplication") current_method = 1;
-        else if (ctx.config.capture_method == "virtual_camera") current_method = 2;
-        else if (ctx.config.capture_method == "ndi") current_method = 3;
-        first_time = false;
+    // Always initialize from config
+    int current_method = 0;
+    if (ctx.config.capture_method == "simple") current_method = 0;
+    else if (ctx.config.capture_method == "wingraphics") current_method = 1;
+    else if (ctx.config.capture_method == "virtual_camera") current_method = 2;
+    else if (ctx.config.capture_method == "ndi") current_method = 3;
+    
+    // Debug log
+    static bool logged = false;
+    if (!logged) {
+        std::cout << "[UI] Current capture_method from config: " << ctx.config.capture_method << " -> index: " << current_method << std::endl;
+        logged = true;
     }
     
     int previous_method = current_method;
     UIHelpers::CompactCombo("Capture Method", &current_method, capture_methods, IM_ARRAYSIZE(capture_methods));
-    UIHelpers::InfoTooltip("Simple: Fast BitBlt screen capture\nDuplication API: Windows Desktop Duplication API\nVirtual Camera: 2PC setup via virtual camera devices\nNDI Stream: Network video streaming for 2PC setup");
+    UIHelpers::InfoTooltip("Simple: Fast BitBlt screen capture (CPU-based, stable performance)\nWindows Graphics Capture: Modern GPU-accelerated API with direct CUDA interop (Windows 10 1903+)\nVirtual Camera: 2PC setup via virtual camera devices\nNDI Stream: Network video streaming for 2PC setup");
     
     // Check if the value actually changed
     if (current_method != previous_method)
     {
+        std::string old_method = ctx.config.capture_method;
         if (current_method == 0) ctx.config.capture_method = "simple";
-        else if (current_method == 1) ctx.config.capture_method = "duplication";
+        else if (current_method == 1) ctx.config.capture_method = "wingraphics";
         else if (current_method == 2) ctx.config.capture_method = "virtual_camera";
         else if (current_method == 3) ctx.config.capture_method = "ndi";
+        
+        std::cout << "[UI] Capture method changed from " << old_method << " to " << ctx.config.capture_method << std::endl;
         SAVE_PROFILE();
         ctx.capture_method_changed = true;
     }
@@ -303,8 +309,8 @@ void draw_capture_settings()
     UIHelpers::BeautifulText("Capture Method Guide", UIHelpers::GetAccentColor());
     UIHelpers::CompactSpacer();
     
-    ImGui::BulletText("Simple: Best for windowed games");
-    ImGui::BulletText("Duplication: Good for fullscreen apps");
+    ImGui::BulletText("Simple: Best for windowed games, stable performance");
+    ImGui::BulletText("Win Graphics: Best for fullscreen and high resolutions");
     ImGui::BulletText("Virtual Camera: For 2PC streaming setup");
     ImGui::BulletText("NDI Stream: Network capture for 2PC setup");
     

@@ -158,7 +158,7 @@ public:
  
     float target_fps;
     
-    std::string capture_method; // "simple", "duplication", "virtual_camera", "ndi"
+    std::string capture_method; // "simple", "wingraphics", "virtual_camera", "ndi"
     
     // NDI capture settings
     std::string ndi_source_name;

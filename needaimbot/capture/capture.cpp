@@ -48,7 +48,7 @@
 #include "../include/other_tools.h"
 
 #include "simple_capture.h"
-#include "duplication_api_capture.h"
+#include "windows_graphics_capture.h"
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -56,12 +56,9 @@
 
 
 SimpleCudaMat latestFrameGpu;
-SimpleMat latestFrameCpu;
 
 std::array<SimpleCudaMat, FRAME_BUFFER_COUNT> captureGpuBuffer;
-std::array<SimpleMat, FRAME_BUFFER_COUNT> captureCpuBuffer;
 std::atomic<int> captureGpuWriteIdx{0};
-std::atomic<int> captureCpuWriteIdx{0};
 
 
 
@@ -103,14 +100,14 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 
         // Initialize capture method based on config
         std::unique_ptr<SimpleScreenCapture> simple_capturer;
-        std::unique_ptr<DuplicationAPIScreenCapture> duplication_capturer;
+        std::unique_ptr<WindowsGraphicsCapture> wingraphics_capturer;
         
         std::cout << "[CaptureThread] Initializing capture method: " << ctx.config.capture_method << std::endl;
         
         // Create the appropriate capturer based on config
-        if (ctx.config.capture_method == "duplication") {
-            duplication_capturer = std::make_unique<DuplicationAPIScreenCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT);
-            std::cout << "[CaptureThread] Created DuplicationAPIScreenCapture" << std::endl;
+ if (ctx.config.capture_method == "wingraphics") {
+            wingraphics_capturer = std::make_unique<WindowsGraphicsCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT);
+            std::cout << "[CaptureThread] Created WindowsGraphicsCapture" << std::endl;
         } else {
             simple_capturer = std::make_unique<SimpleScreenCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT);
             std::cout << "[CaptureThread] Created SimpleScreenCapture" << std::endl;
@@ -135,8 +132,8 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
         bool is_initialized = false;
         if (simple_capturer) {
             is_initialized = simple_capturer->IsInitialized();
-        } else if (duplication_capturer) {
-            is_initialized = duplication_capturer->IsInitialized();
+        } else if (wingraphics_capturer) {
+            is_initialized = wingraphics_capturer->IsInitialized();
         }
         
         if (!is_initialized) {
@@ -224,11 +221,11 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 
                 // Reset all capturers
                 simple_capturer.reset();
-                duplication_capturer.reset();
+                wingraphics_capturer.reset();
                 
                 // Create new capturer based on method
-                if (ctx.config.capture_method == "duplication") {
-                    duplication_capturer = std::make_unique<DuplicationAPIScreenCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT);
+ if (ctx.config.capture_method == "wingraphics") {
+                    wingraphics_capturer = std::make_unique<WindowsGraphicsCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT);
                 } else {
                     simple_capturer = std::make_unique<SimpleScreenCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT);
                 }
@@ -244,16 +241,16 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 
                 // Reset all capturers
                 simple_capturer.reset();
-                duplication_capturer.reset();
+                wingraphics_capturer.reset();
 
                 int new_CAPTURE_WIDTH = ctx.config.detection_resolution;
                 int new_CAPTURE_HEIGHT = ctx.config.detection_resolution;
 
                 // Recreate the appropriate capturer
-                if (ctx.config.capture_method == "duplication") {
-                    duplication_capturer = std::make_unique<DuplicationAPIScreenCapture>(new_CAPTURE_WIDTH, new_CAPTURE_HEIGHT);
-                    if (!duplication_capturer || !duplication_capturer->IsInitialized()) {
-                        std::cerr << "[Capture] Failed to create or initialize DuplicationAPIScreenCapture after resolution change!" << std::endl;
+ if (ctx.config.capture_method == "wingraphics") {
+                    wingraphics_capturer = std::make_unique<WindowsGraphicsCapture>(new_CAPTURE_WIDTH, new_CAPTURE_HEIGHT);
+                    if (!wingraphics_capturer || !wingraphics_capturer->IsInitialized()) {
+                        std::cerr << "[Capture] Failed to create or initialize WindowsGraphicsCapture after resolution change!" << std::endl;
                         should_exit = true; 
                         break;             
                     }
@@ -292,15 +289,14 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 
             // Measure only the actual capture API call time
             auto frame_acq_start_time = std::chrono::high_resolution_clock::now();
-            SimpleMat screenshotCpu;
-            
             static int captureCount = 0;
             ++captureCount;
             
+            // GPU-only capture
             if (simple_capturer) {
-                screenshotCpu = simple_capturer->GetNextFrameCpu();
-            } else if (duplication_capturer) {
-                screenshotCpu = duplication_capturer->GetNextFrameCpu();
+                screenshotGpu = simple_capturer->GetNextFrameGpu();
+            } else if (wingraphics_capturer) {
+                screenshotGpu = wingraphics_capturer->GetNextFrameGpu();
             }
             auto frame_acq_end_time = std::chrono::high_resolution_clock::now();
             
@@ -308,58 +304,15 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
             ctx.g_current_frame_acquisition_time_ms.store(frame_acq_duration_ms.count());
             ctx.add_to_history(ctx.g_frame_acquisition_time_history, frame_acq_duration_ms.count(), ctx.g_frame_acquisition_history_mutex);
 
-            if (!screenshotCpu.empty()) {
+            if (!screenshotGpu.empty()) {
                 static int successCount = 0;
                 ++successCount;
                 
-                // 비동기 파이프라인 처리
-                auto& currentPipe = pipeline[pipelineIdx];
-                
-                // 이전 프레임이 처리 중이면 대기
-                if (!currentPipe.ready) {
-                    CUDA_CHECK_WARN(cudaEventSynchronize(currentPipe.event));
+                // Update latest frame for debug display
+                if (latestFrameGpu.rows() != screenshotGpu.rows() || latestFrameGpu.cols() != screenshotGpu.cols()) {
+                    latestFrameGpu.create(screenshotGpu.rows(), screenshotGpu.cols(), screenshotGpu.channels());
                 }
-                
-                // 프레임 버퍼 풀에서 GPU 버퍼 획득
-                currentPipe.gpuFrame = g_frameBufferPool->acquireGpuBuffer(
-                    screenshotCpu.rows(), screenshotCpu.cols(), screenshotCpu.channels()
-                );
-                
-                // 비동기 GPU 업로드
-                cudaError_t err = cudaMemcpy2DAsync(
-                    currentPipe.gpuFrame.data(), currentPipe.gpuFrame.step(),
-                    screenshotCpu.data(), screenshotCpu.step(),
-                    screenshotCpu.cols() * screenshotCpu.channels(), screenshotCpu.rows(),
-                    cudaMemcpyHostToDevice, uploadStream
-                );
-                
-                if (err != cudaSuccess) {
-                    std::cerr << "[CaptureThread] GPU upload failed: " << cudaGetErrorString(err) << std::endl;
-                    g_frameBufferPool->releaseGpuBuffer(std::move(currentPipe.gpuFrame));
-                    screenshotGpu = SimpleCudaMat();
-                } else {
-                    // 업로드 완료 이벤트 기록
-                    CUDA_CHECK_WARN(cudaEventRecord(currentPipe.event, uploadStream));
-                    currentPipe.ready = false;
-                    
-                    // 다음 파이프라인 스테이지로 이동
-                    screenshotGpu = std::move(currentPipe.gpuFrame);
-                    pipelineIdx = (pipelineIdx + 1) % PIPELINE_DEPTH;
-                    
-                    // Update latest frame for debug display
-                    if (!screenshotGpu.empty()) {
-                        if (latestFrameGpu.rows() != screenshotGpu.rows() || latestFrameGpu.cols() != screenshotGpu.cols()) {
-                            latestFrameGpu.create(screenshotGpu.rows(), screenshotGpu.cols(), screenshotGpu.channels());
-                        }
-                        latestFrameGpu.copyFrom(screenshotGpu);
-                    }
-                }
-                // CPU 버퍼를 풀에 반환
-                if (!screenshotCpu.empty()) {
-                    // SimpleMat은 move semantics를 지원하지 않으므로 그냥 스코프를 벗어나면 해제됨
-                }
-            } else {
-                screenshotGpu = SimpleCudaMat();
+                latestFrameGpu.copyFrom(screenshotGpu);
             }
 
             if (!screenshotGpu.empty())

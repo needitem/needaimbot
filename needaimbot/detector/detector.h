@@ -188,25 +188,7 @@ public:
     int getInputHeight() const { return static_cast<int>(inputDims.d[2]); }
     int getInputWidth() const { return static_cast<int>(inputDims.d[3]); }
     
-    // Batched results structure for reduced memory transfers
-    struct BatchedResults {
-        int finalCount;
-        int bestIndex;
-        float bestScore;
-        Detection bestTarget;
-        int matchingIndex;
-        float matchingScore;
-    };
-    
-    // GPU memory for batched results
-    BatchedResults* m_batchedResultsGpu;
-    BatchedResults m_batchedResultsHost;
-    
-    // Pinned memory for ultra-fast transfers
-    BatchedResults* m_batchedResultsPinned;
-    int* m_pinnedBestIndex;
-    int* m_pinnedMatchingIndex;
-    cudaEvent_t m_finalCopyEvent;
+
 
     std::vector<std::string> inputNames;
     std::vector<std::string> outputNames;
@@ -234,12 +216,13 @@ public:
     CudaBuffer<Detection> m_finalDetectionsGpu;
     CudaBuffer<int> m_finalDetectionsCountGpu;
     int m_finalDetectionsCountHost = 0;
+    std::unique_ptr<Detection[]> m_finalDetectionsHost;
     std::chrono::steady_clock::time_point m_lastDetectionTime;
     CudaBuffer<Detection> m_classFilteredDetectionsGpu;
     CudaBuffer<int> m_classFilteredCountGpu;
 
     CudaBuffer<float> m_scoresGpu;
-    CudaBuffer<int> m_bestTargetIndexGpu;
+
     int m_bestTargetIndexHost = -1;
     Detection m_bestTargetHost;
     bool m_hasBestTarget = false;
@@ -282,7 +265,6 @@ public:
     // Double buffering for ultra-fast processing
     struct DoubleBuffer {
         SimpleCudaMat frameBuffers[2];
-        BatchedResults resultBuffers[2];
         cudaEvent_t readyEvents[2];
         int currentReadIdx = 0;
         int currentWriteIdx = 1;
@@ -309,6 +291,17 @@ public:
 private:
     std::thread m_captureThread;
     std::thread m_inferenceThread;
+    
+    // GPU 최적화 관련
+    std::unique_ptr<CudaMemoryPool> m_gpuMemoryPool;
+    void warmupGPU();
+    void preallocateGPUResources();
+    
+    // CUDA Graph 최적화
+    cudaGraph_t m_inferenceGraph = nullptr;
+    cudaGraphExec_t m_inferenceGraphExec = nullptr;
+    bool m_graphCaptured = false;
+    void captureInferenceGraph();
 
     static float calculate_host_iou(const Detection& det1, const Detection& det2); 
     bool m_cudaContextInitialized = false; 

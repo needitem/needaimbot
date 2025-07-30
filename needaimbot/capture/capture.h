@@ -25,14 +25,11 @@ extern std::atomic<int> captureFps;
 extern std::chrono::time_point<std::chrono::high_resolution_clock> captureFpsStartTime;
 
 extern SimpleCudaMat latestFrameGpu;
-extern SimpleMat latestFrameCpu;
 
 
 constexpr int FRAME_BUFFER_COUNT = 4;
 extern std::array<SimpleCudaMat, FRAME_BUFFER_COUNT> captureGpuBuffer;
-extern std::array<SimpleMat, FRAME_BUFFER_COUNT> captureCpuBuffer;
 extern std::atomic<int> captureGpuWriteIdx;
-extern std::atomic<int> captureCpuWriteIdx;
 
 extern std::mutex frameMutex;
 extern std::condition_variable frameCV;
@@ -48,8 +45,8 @@ class IScreenCapture
 public:
     virtual ~IScreenCapture() = default; 
     virtual SimpleCudaMat GetNextFrameGpu() = 0;
-    virtual SimpleMat GetNextFrameCpu() = 0;
-    virtual cudaEvent_t GetCaptureDoneEvent() const = 0; 
+    virtual cudaEvent_t GetCaptureDoneEvent() const = 0;
+    virtual bool IsInitialized() const = 0;
 };
 
 #endif 
