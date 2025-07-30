@@ -250,6 +250,7 @@ bool Config::loadConfig(const std::string& filename)
     capture_cursor = get_bool_ini("Capture", "capture_cursor", true);
     target_fps = static_cast<float>(get_double_ini("Capture", "target_fps", 120.0));
     capture_method = get_string_ini("Capture", "capture_method", "simple");
+    std::cout << "[Config] Loaded capture_method: " << capture_method << std::endl;
     
     // NDI capture settings
     ndi_source_name = get_string_ini("Capture", "ndi_source_name", "");
@@ -436,6 +437,17 @@ bool Config::loadConfig(const std::string& filename)
         const char* profile_value = ini.GetValue("Profile", "active_profile");
         if (profile_value) {
             active_profile_name = profile_value;
+            std::cout << "[Config] Active profile set to: " << active_profile_name << std::endl;
+            
+            // Actually load the profile if it's not Default
+            if (active_profile_name != "Default" && active_profile_name != "") {
+                std::string profileFile = active_profile_name + ".ini";
+                if (std::filesystem::exists(profileFile)) {
+                    std::cout << "[Config] Loading profile: " << profileFile << std::endl;
+                    // Load profile on top of default config
+                    loadConfig(profileFile);
+                }
+            }
         } else {
             active_profile_name = "Default";
         }
@@ -503,6 +515,7 @@ bool Config::saveConfig(const std::string& filename)
     
     file << "target_fps = " << target_fps << "\n";
     file << "capture_method = " << capture_method << "\n";
+    std::cout << "[Config] Saving capture_method: " << capture_method << std::endl;
     file << "ndi_source_name = " << ndi_source_name << "\n";
     file << "ndi_network_url = " << ndi_network_url << "\n";
     file << "ndi_low_latency = " << (ndi_low_latency ? "true" : "false") << "\n";

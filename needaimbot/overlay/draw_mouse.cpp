@@ -26,8 +26,33 @@ static void draw_error_scaling_controls()
     UIHelpers::CompactSpacer();
     
     // Static temporary rules for editing
-    static std::vector<Config::ErrorScalingRule> temp_rules = ctx.config.error_scaling_rules;
+    static std::vector<Config::ErrorScalingRule> temp_rules;
     static bool has_unsaved_changes = false;
+    static size_t last_config_size = 0;
+    
+    // Check if config has changed (e.g., after reload or profile switch)
+    // This ensures temp_rules stays in sync with loaded config
+    if (temp_rules.empty() || (!has_unsaved_changes && last_config_size != ctx.config.error_scaling_rules.size())) {
+        temp_rules = ctx.config.error_scaling_rules;
+        last_config_size = ctx.config.error_scaling_rules.size();
+        has_unsaved_changes = false;
+    }
+    
+    // Also check if the actual values have changed (in case size is same but values differ)
+    if (!has_unsaved_changes && temp_rules.size() == ctx.config.error_scaling_rules.size()) {
+        bool values_differ = false;
+        for (size_t i = 0; i < temp_rules.size(); i++) {
+            if (temp_rules[i].error_threshold != ctx.config.error_scaling_rules[i].error_threshold ||
+                temp_rules[i].scale_factor != ctx.config.error_scaling_rules[i].scale_factor) {
+                values_differ = true;
+                break;
+            }
+        }
+        if (values_differ) {
+            temp_rules = ctx.config.error_scaling_rules;
+            has_unsaved_changes = false;
+        }
+    }
     
     // Display current rules
     ImGui::Text("Current Scaling Rules:");

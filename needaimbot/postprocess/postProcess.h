@@ -37,7 +37,6 @@ struct Detection
 };
 
 
-void NMS(std::vector<Detection>& detections, float nmsThreshold);
 
 
 void NMSGpu(
@@ -92,33 +91,5 @@ cudaError_t decodeYolo11Gpu(
     cudaStream_t stream);
 
 
-std::vector<Detection> decodeYolo10(
-    const float* output,
-    const std::vector<int64_t>& shape,
-    int numClasses,
-    float confThreshold,
-    float img_scale);
-
-std::vector<Detection> decodeYolo11(
-    const float* output,
-    const std::vector<int64_t>& shape,
-    int numClasses,
-    float confThreshold,
-    float img_scale);
-
-
-std::vector<Detection> postProcessYolo10(
-    const float* output,
-    const std::vector<int64_t>& shape,
-    int numClasses,
-    float confThreshold,
-    float nmsThreshold);
-
-std::vector<Detection> postProcessYolo11(
-    const float* output,
-    const std::vector<int64_t>& shape,
-    int numClasses,
-    float confThreshold,
-    float nmsThreshold);
 
 #endif 
