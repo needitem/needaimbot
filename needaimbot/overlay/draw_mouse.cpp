@@ -32,7 +32,7 @@ static void draw_error_scaling_controls()
     
     // Check if config has changed (e.g., after reload or profile switch)
     // This ensures temp_rules stays in sync with loaded config
-    if (temp_rules.empty() || (!has_unsaved_changes && last_config_size != ctx.config.error_scaling_rules.size())) {
+    if (!has_unsaved_changes && (temp_rules.empty() || last_config_size != ctx.config.error_scaling_rules.size())) {
         temp_rules = ctx.config.error_scaling_rules;
         last_config_size = ctx.config.error_scaling_rules.size();
         has_unsaved_changes = false;
