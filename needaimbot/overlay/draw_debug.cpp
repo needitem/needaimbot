@@ -12,6 +12,7 @@
 #include "../capture/capture.h" 
 #include <cuda_runtime.h> 
 #include "../postprocess/postProcess.h" 
+#include "../cuda/color_conversion.h"
  
 
 
@@ -55,25 +56,25 @@ static bool g_crosshairHsvValid = false;
 
 
 
-static void uploadDebugFrame(const SimpleMat& bgr)
+// GPU-accelerated version with direct GPU memory handling
+static void uploadDebugFrame(const SimpleCudaMat& bgrGpu)
 {
-    
-    if (bgr.empty() || !g_pd3dDevice || !g_pd3dDeviceContext) {
+    if (bgrGpu.empty() || !g_pd3dDevice || !g_pd3dDeviceContext) {
         static int errorCount = 0;
         if (++errorCount % 60 == 0) {
-            std::cout << "[Debug] uploadDebugFrame: bgr.empty=" << bgr.empty() 
+            std::cout << "[Debug] uploadDebugFrame: bgrGpu.empty=" << bgrGpu.empty() 
                       << " g_pd3dDevice=" << (g_pd3dDevice != nullptr)
                       << " g_pd3dDeviceContext=" << (g_pd3dDeviceContext != nullptr) << std::endl;
         }
         return;
     }
 
-    if (!g_debugTex || bgr.cols() != texW || bgr.rows() != texH)
+    if (!g_debugTex || bgrGpu.cols() != texW || bgrGpu.rows() != texH)
     {
         SAFE_RELEASE(g_debugTex);
         SAFE_RELEASE(g_debugSRV);
 
-        texW = bgr.cols();  texH = bgr.rows();
+        texW = bgrGpu.cols();  texH = bgrGpu.rows();
 
         D3D11_TEXTURE2D_DESC td = {};
         td.Width = texW;
@@ -106,23 +107,24 @@ static void uploadDebugFrame(const SimpleMat& bgr)
         }
     }
 
-    // Convert BGR to RGBA
-    static SimpleMat rgba;
-    rgba.create(bgr.rows(), bgr.cols(), 4);
+    // GPU-based BGR to RGBA conversion
+    static SimpleCudaMat rgbaGpu;
+    rgbaGpu.create(bgrGpu.rows(), bgrGpu.cols(), 4);
     
-    // Manual BGR to RGBA conversion
-    const uint8_t* src = bgr.data();
-    uint8_t* dst = rgba.data();
-    for (int y = 0; y < bgr.rows(); y++) {
-        for (int x = 0; x < bgr.cols(); x++) {
-            int src_idx = static_cast<int>(y * bgr.step() + x * 3);
-            int dst_idx = static_cast<int>(y * rgba.step() + x * 4);
-            dst[dst_idx + 0] = src[src_idx + 2]; // R
-            dst[dst_idx + 1] = src[src_idx + 1]; // G
-            dst[dst_idx + 2] = src[src_idx + 0]; // B
-            dst[dst_idx + 3] = 255;               // A
-        }
+    // Use CUDA kernel for conversion
+    cudaError_t err = cuda_bgr2rgba(bgrGpu.data(), rgbaGpu.data(),
+                                     bgrGpu.cols(), bgrGpu.rows(),
+                                     static_cast<int>(bgrGpu.step()), 
+                                     static_cast<int>(rgbaGpu.step()));
+    if (err != cudaSuccess) {
+        std::cerr << "[Debug] CUDA BGR to RGBA conversion failed: " << cudaGetErrorString(err) << std::endl;
+        return;
     }
+    
+    // Download converted data from GPU
+    static SimpleMat rgba;
+    rgba.create(rgbaGpu.rows(), rgbaGpu.cols(), 4);
+    rgbaGpu.download(rgba.data(), rgba.step());
 
     if (rgba.empty() || rgba.cols() <= 0 || rgba.rows() <= 0) { 
         return;
@@ -135,11 +137,9 @@ static void uploadDebugFrame(const SimpleMat& bgr)
         for (int y = 0; y < texH; ++y)
             memcpy((uint8_t*)ms.pData + ms.RowPitch * y, rgba.data() + y * rgba.step(), texW * 4);
         g_pd3dDeviceContext->Unmap(g_debugTex, 0);
-    } else {
-        
-        
     }
 }
+
 
 
 static void uploadColorMaskTexture(const SimpleMat& grayMask)
@@ -317,45 +317,17 @@ void draw_debug_frame()
         return;
     }
     
-    // Get latest captured frame - cache it to avoid multiple downloads
-    static SimpleMat frameCopy;
-    static bool frameValid = false;
-    
+    // Use GPU frame directly without downloading
     extern SimpleCudaMat latestFrameGpu;
-    try {
-        if (!latestFrameGpu.empty()) {
-            frameCopy.create(latestFrameGpu.rows(), latestFrameGpu.cols(), latestFrameGpu.channels());
-            latestFrameGpu.download(frameCopy.data(), frameCopy.step());
-            frameValid = true;
-            // Debug logging
-            static int frameCount = 0;
-            if (++frameCount % 60 == 0) {  // Log every 60 frames
-                std::cout << "[Debug] Frame downloaded: " << frameCopy.cols() << "x" << frameCopy.rows() 
-                          << " channels=" << frameCopy.channels() << std::endl;
-            }
-        } else {
-            frameValid = false;
-            static int emptyCount = 0;
-            if (++emptyCount % 60 == 0) {  // Log every 60 frames
-                std::cout << "[Debug] latestFrameGpu is empty!" << std::endl;
-            }
-        }
-    } catch (const std::exception& e) { 
-        frameCopy.release(); 
-        frameValid = false;
-        std::cerr << "[Debug] Exception downloading frame: " << e.what() << std::endl;
-    } catch (...) { 
-        frameCopy.release(); 
-        frameValid = false;
-        std::cerr << "[Debug] Unknown exception downloading frame!" << std::endl;
-    }
     
-    if (!frameValid || frameCopy.empty()) {
+    if (latestFrameGpu.empty()) {
         ImGui::TextUnformatted("Debug frame unavailable.");
         return;
     }
     
-    uploadDebugFrame(frameCopy);
+    // Upload GPU frame directly
+    uploadDebugFrame(latestFrameGpu);
+    
     ImGui::SliderFloat("Debug scale", &debug_scale, 0.1f, 3.0f, "%.1fx");
     ImVec2 image_size(texW * debug_scale, texH * debug_scale);
     if (g_debugSRV) {
@@ -542,23 +514,17 @@ void draw_debug()
 
     if (ctx.config.show_window) 
     {
-        // Get latest captured frame
-        SimpleMat frameCopy;
+        // Use GPU frame directly
         extern SimpleCudaMat latestFrameGpu;
-        try {
-            if (!latestFrameGpu.empty()) {
-                frameCopy.create(latestFrameGpu.rows(), latestFrameGpu.cols(), latestFrameGpu.channels());
-            latestFrameGpu.download(frameCopy.data(), frameCopy.step());
-            }
-        } catch (...) { 
-            frameCopy.release(); 
-        }
-
-        if (frameCopy.empty()) {
+        
+        if (latestFrameGpu.empty()) {
             ImGui::TextUnformatted("Debug frame unavailable.");
             return;
         }
-        uploadDebugFrame(frameCopy);
+        
+        // Upload GPU frame directly
+        uploadDebugFrame(latestFrameGpu);
+        
         ImGui::SliderFloat("Debug scale", &debug_scale, 0.1f, 3.0f, "%.1fx");
         ImVec2 image_size(texW * debug_scale, texH * debug_scale);
         if (g_debugSRV) {
