@@ -415,6 +415,11 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     
     float error_x = target_x - current_center_x;
     float error_y = target_y - current_center_y;
+    
+    // Debug logging for PID control values
+    if (ctx.config.verbose) {
+        std::cout << "[Mouse] Error values - X: " << error_x << ", Y: " << error_y << std::endl;
+    }
 
 
     // Calculate error magnitude first for adaptive control
@@ -428,6 +433,11 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     
     // Basic PID calculation
     Eigen::Vector2f pid_output = pid_controller->calculate(error);
+    
+    // Debug logging for PID output
+    if (ctx.config.verbose) {
+        std::cout << "[Mouse] PID output - X: " << pid_output.x() << ", Y: " << pid_output.y() << std::endl;
+    }
         
     auto pid_end_time = std::chrono::steady_clock::now();
     float pid_duration_ms = std::chrono::duration<float, std::milli>(pid_end_time - pid_start_time).count();
@@ -448,6 +458,13 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     // Apply PID output with error scaling
     move_x = pid_output.x() * current_move_scale_x * error_scale_factor;
     move_y = pid_output.y() * current_move_scale_y * error_scale_factor;
+    
+    // Debug logging for final move values
+    if (ctx.config.verbose) {
+        std::cout << "[Mouse] Final move values - X: " << move_x << ", Y: " << move_y 
+                  << " (scale_x: " << current_move_scale_x << ", scale_y: " << current_move_scale_y 
+                  << ", error_scale: " << error_scale_factor << ")" << std::endl;
+    }
 
     // Simple dead zone without adaptive threshold
     if (std::abs(move_x) < DEAD_ZONE) move_x = 0.0f;
@@ -455,6 +472,11 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     
     // Process accumulated movement
     auto [dx_int, dy_int] = processAccumulatedMovement(move_x, move_y);
+    
+    // Debug logging for final integer movement values
+    if (ctx.config.verbose) {
+        std::cout << "[Mouse] Integer movement values - dx: " << dx_int << ", dy: " << dy_int << std::endl;
+    }
     
     if (local_disable_upward_aim_active && dy_int < 0) {
         dy_int = 0; 
