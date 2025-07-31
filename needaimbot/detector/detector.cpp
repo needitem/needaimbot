@@ -951,6 +951,12 @@ void Detector::inferenceThread()
                                    m_finalDetectionsCountHost * sizeof(Detection), 
                                    cudaMemcpyDeviceToHost, postprocessStream);
                     cudaStreamSynchronize(postprocessStream);
+                    
+                    // Add timestamp to all detections
+                    int64_t current_time_ms = getCurrentTimeMs();
+                    for (int i = 0; i < m_finalDetectionsCountHost; i++) {
+                        m_finalDetectionsHost[i].timestamp_ms = current_time_ms;
+                    }
                 }
 
                 auto inference_end_time = std::chrono::high_resolution_clock::now();

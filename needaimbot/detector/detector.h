@@ -25,6 +25,13 @@
 #include "../postprocess/postProcess.h"
 #include "CudaBuffer.h"
 
+// Helper function to get current time in milliseconds
+inline int64_t getCurrentTimeMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()
+    ).count();
+}
+
 
 /**
  * @brief Represents a target being tracked across frames
