@@ -289,6 +289,9 @@ public:
 
 
 
+    // GPU performance settings
+    int persistent_cache_limit_mb = 16; // TensorRT persistent L2 cache size in MB
+    
     // RGB Color filter settings
     bool enable_color_filter;
     

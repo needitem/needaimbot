@@ -344,6 +344,9 @@ bool Config::loadConfig(const std::string& filename)
     onnx_input_resolution = get_long_ini("AI", "onnx_input_resolution", 640);
 
     cuda_device_id = get_long_ini("CUDA", "cuda_device_id", 0);
+    
+    // GPU performance settings
+    persistent_cache_limit_mb = get_long_ini("GPU", "persistent_cache_limit_mb", 16);
 
     button_targeting = splitString(get_string_ini("Buttons", "button_targeting", "RightMouseButton"));
     button_exit = splitString(get_string_ini("Buttons", "button_exit", "F2"));
@@ -610,6 +613,9 @@ bool Config::saveConfig(const std::string& filename)
 
     file << "[CUDA]\n";
     file << "cuda_device_id = " << cuda_device_id << "\n\n";
+    
+    file << "[GPU]\n";
+    file << "persistent_cache_limit_mb = " << persistent_cache_limit_mb << "\n\n";
 
     file << "[Buttons]\n";
     file << "button_targeting = " << joinStrings(button_targeting) << "\n";

@@ -417,9 +417,10 @@ void Detector::initialize(const std::string& modelFile)
     // CUDA 그래프 호환성 설정
     context->setEnqueueEmitsProfile(false);
     
-    // 영구 캐시 활성화 - GPU의 실제 L2 캐시 크기에 맞춤
-    // 대부분의 GPU는 16MB 이하의 L2 캐시를 가짐
-    context->setPersistentCacheLimit(16 * 1024 * 1024); // 16MB (safe limit)
+    // 영구 캐시 활성화 - config에서 설정한 값 사용
+    size_t cacheLimit = static_cast<size_t>(ctx.config.persistent_cache_limit_mb) * 1024 * 1024;
+    context->setPersistentCacheLimit(cacheLimit);
+    std::cout << "[Detector] Persistent L2 cache limit set to " << ctx.config.persistent_cache_limit_mb << "MB" << std::endl;
 
     getInputNames();
     getOutputNames();
@@ -1426,20 +1427,6 @@ void Detector::warmupGPU()
     }
 }
 
-void Detector::preallocateGPUResources()
-{
-    // GPU 메모리 풀 생성 (100MB)
-    if (!m_gpuMemoryPool) {
-        m_gpuMemoryPool = std::make_unique<CudaMemoryPool>(100 * 1024 * 1024);
-        std::cout << "[Detector] GPU memory pool allocated: 100MB" << std::endl;
-    }
-    
-    // Pinned 메모리 추가 할당 (빠른 CPU-GPU 전송용)
-    void* pinnedBuffer = nullptr;
-    size_t pinnedSize = 10 * 1024 * 1024; // 10MB
-    cudaHostAlloc(&pinnedBuffer, pinnedSize, cudaHostAllocDefault);
-    cudaFreeHost(pinnedBuffer); // 일단 할당 후 해제 (시스템이 재사용 가능한 상태로 유지)
-}
 
 void Detector::captureInferenceGraph()
 {
@@ -1489,9 +1476,6 @@ void Detector::start()
 {
     auto& ctx = AppContext::getInstance();
     ctx.should_exit = false;
-    
-    // GPU 리소스 사전 할당
-    preallocateGPUResources();
     
     // Note: capture thread is handled separately in capture.cpp
     m_inferenceThread = std::thread(&Detector::inferenceThread, this);
