@@ -60,12 +60,6 @@ static bool g_crosshairHsvValid = false;
 static void uploadDebugFrame(const SimpleCudaMat& bgrGpu)
 {
     if (bgrGpu.empty() || !g_pd3dDevice || !g_pd3dDeviceContext) {
-        static int errorCount = 0;
-        if (++errorCount % 60 == 0) {
-            std::cout << "[Debug] uploadDebugFrame: bgrGpu.empty=" << bgrGpu.empty() 
-                      << " g_pd3dDevice=" << (g_pd3dDevice != nullptr)
-                      << " g_pd3dDeviceContext=" << (g_pd3dDeviceContext != nullptr) << std::endl;
-        }
         return;
     }
 
@@ -107,17 +101,27 @@ static void uploadDebugFrame(const SimpleCudaMat& bgrGpu)
         }
     }
 
-    // GPU-based BGR to RGBA conversion
+    // GPU-based color conversion
     static SimpleCudaMat rgbaGpu;
     rgbaGpu.create(bgrGpu.rows(), bgrGpu.cols(), 4);
     
-    // Use CUDA kernel for conversion
-    cudaError_t err = cuda_bgr2rgba(bgrGpu.data(), rgbaGpu.data(),
-                                     bgrGpu.cols(), bgrGpu.rows(),
-                                     static_cast<int>(bgrGpu.step()), 
-                                     static_cast<int>(rgbaGpu.step()));
+    cudaError_t err;
+    if (bgrGpu.channels() == 4) {
+        // BGRA to RGBA conversion
+        err = cuda_bgra2rgba(bgrGpu.data(), rgbaGpu.data(),
+                             bgrGpu.cols(), bgrGpu.rows(),
+                             static_cast<int>(bgrGpu.step()), 
+                             static_cast<int>(rgbaGpu.step()));
+    } else {
+        // BGR to RGBA conversion
+        err = cuda_bgr2rgba(bgrGpu.data(), rgbaGpu.data(),
+                            bgrGpu.cols(), bgrGpu.rows(),
+                            static_cast<int>(bgrGpu.step()), 
+                            static_cast<int>(rgbaGpu.step()));
+    }
+    
     if (err != cudaSuccess) {
-        std::cerr << "[Debug] CUDA BGR to RGBA conversion failed: " << cudaGetErrorString(err) << std::endl;
+        std::cerr << "[Debug] CUDA color conversion failed: " << cudaGetErrorString(err) << std::endl;
         return;
     }
     
@@ -134,8 +138,13 @@ static void uploadDebugFrame(const SimpleCudaMat& bgrGpu)
     HRESULT hr_map = g_pd3dDeviceContext->Map(g_debugTex, 0, D3D11_MAP_WRITE_DISCARD, 0, &ms);
     if (SUCCEEDED(hr_map))
     {
-        for (int y = 0; y < texH; ++y)
-            memcpy((uint8_t*)ms.pData + ms.RowPitch * y, rgba.data() + y * rgba.step(), texW * 4);
+        // Copy row by row, handling different row pitches
+        size_t copy_width = texW * 4;  // Width in bytes for RGBA
+        for (int y = 0; y < texH; ++y) {
+            memcpy((uint8_t*)ms.pData + ms.RowPitch * y, 
+                   rgba.data() + y * rgba.step(), 
+                   copy_width);
+        }
         g_pd3dDeviceContext->Unmap(g_debugTex, 0);
     }
 }

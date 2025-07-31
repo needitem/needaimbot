@@ -191,7 +191,21 @@ public:
         }
         
         create(other.height_, other.width_, other.channels_);
-        CUDA_CHECK(cudaMemcpy(data_, other.data_, other.sizeInBytes(), cudaMemcpyDeviceToDevice));
+        
+        // Handle different step sizes properly
+        if (step_ == other.step_) {
+            // Simple copy when steps match
+            CUDA_CHECK(cudaMemcpy(data_, other.data_, sizeInBytes(), cudaMemcpyDeviceToDevice));
+        } else {
+            // Row-by-row copy when steps differ
+            size_t copy_width = width_ * channels_;
+            for (int y = 0; y < height_; ++y) {
+                CUDA_CHECK(cudaMemcpy(data_ + y * step_, 
+                                     other.data_ + y * other.step_, 
+                                     copy_width, 
+                                     cudaMemcpyDeviceToDevice));
+            }
+        }
     }
     
     // Set to zero

@@ -22,7 +22,7 @@ bool saveImage(const SimpleMat& image, const std::string& filename, int quality)
     int width = image.cols();
     int height = image.rows();
     int channels = image.channels();
-    int stride = image.step();
+    int stride = static_cast<int>(image.step());
     
     int result = 0;
     

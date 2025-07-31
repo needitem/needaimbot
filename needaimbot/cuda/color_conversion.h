@@ -22,4 +22,10 @@ extern "C" {
                               int src_pitch, int dst_pitch,
                               uint8_t alpha = 255,
                               cudaStream_t stream = 0);
+    
+    // BGRA to RGBA conversion (swaps R/B channels)
+    cudaError_t cuda_bgra2rgba(const uint8_t* src, uint8_t* dst,
+                               int width, int height,
+                               int src_pitch, int dst_pitch,
+                               cudaStream_t stream = 0);
 }
