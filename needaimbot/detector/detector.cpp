@@ -899,17 +899,29 @@ void Detector::inferenceThread()
                 // Wait for preprocessing to complete before inference
                 cudaStreamWaitEvent(stream, m_preprocessDone, 0);
                 
-                // CUDA Graph 기반 추론 (첫 프레임은 Graph 캡처)
-                // Wait for a few more frames to ensure stable state before capturing
-                if (!m_graphCaptured && frame_counter > 10) {
+                // CUDA Graph 기반 추론 (충분한 프레임 후 캡처)
+                // Wait for more frames and ensure stable state before capturing
+                if (!m_graphCaptured && frame_counter > 30 && frame_counter % 10 == 0) {
+                    // Only attempt capture every 10 frames to avoid repeated failures
                     captureInferenceGraph();
                 }
                 
                 bool enqueueSuccess;
                 if (m_graphCaptured && m_inferenceGraphExec) {
                     // Graph 실행 (오버헤드 최소화)
-                    cudaGraphLaunch(m_inferenceGraphExec, stream);
-                    enqueueSuccess = true;
+                    cudaError_t graphLaunchResult = cudaGraphLaunch(m_inferenceGraphExec, stream);
+                    if (graphLaunchResult != cudaSuccess) {
+                        std::cerr << "[Detector] CUDA Graph launch failed: " << cudaGetErrorString(graphLaunchResult) << std::endl;
+                        // Fallback to regular inference
+                        m_graphCaptured = false;
+                        cudaGraphExecDestroy(m_inferenceGraphExec);
+                        cudaGraphDestroy(m_inferenceGraph);
+                        m_inferenceGraphExec = nullptr;
+                        m_inferenceGraph = nullptr;
+                        enqueueSuccess = context->enqueueV3(stream);
+                    } else {
+                        enqueueSuccess = true;
+                    }
                 } else {
                     // 일반 추론 (Graph 캡처 전)
                     enqueueSuccess = context->enqueueV3(stream);
@@ -1456,10 +1468,29 @@ void Detector::captureInferenceGraph()
 {
     if (m_graphCaptured || !context) return;
     
-    std::cout << "[Detector] Capturing CUDA Graph for inference pipeline..." << std::endl;
+    static int captureAttempts = 0;
+    const int maxAttempts = 5;
+    
+    if (captureAttempts >= maxAttempts) {
+        std::cerr << "[Detector] CUDA Graph capture disabled after " << maxAttempts << " failed attempts" << std::endl;
+        return;
+    }
+    
+    captureAttempts++;
+    std::cout << "[Detector] Capturing CUDA Graph for inference pipeline (attempt " << captureAttempts << "/" << maxAttempts << ")..." << std::endl;
     
     // Clear any previous CUDA errors
-    cudaGetLastError();
+    cudaError_t lastError = cudaGetLastError();
+    if (lastError != cudaSuccess) {
+        std::cerr << "[Detector] Clearing previous CUDA error: " << cudaGetErrorString(lastError) << std::endl;
+    }
+    
+    // Ensure stream is idle before capture
+    cudaError_t syncResult = cudaStreamSynchronize(stream);
+    if (syncResult != cudaSuccess) {
+        std::cerr << "[Detector] Failed to synchronize stream before capture: " << cudaGetErrorString(syncResult) << std::endl;
+        return;
+    }
     
     // Graph 캡처 시작
     cudaError_t captureResult = cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal);
@@ -1475,19 +1506,46 @@ void Detector::captureInferenceGraph()
     cudaGraph_t tempGraph = nullptr;
     captureResult = cudaStreamEndCapture(stream, &tempGraph);
     
-    // Check if capture was successful despite enqueue errors
+    // Check if capture was successful
     if (captureResult == cudaSuccess && tempGraph != nullptr) {
-        // Graph 인스턴스 생성
-        cudaError_t instantiateResult = cudaGraphInstantiate(&m_inferenceGraphExec, tempGraph, nullptr, nullptr, 0);
+        // Validate graph before instantiation
+        cudaGraphNode_t* nodes = nullptr;
+        size_t numNodes = 0;
+        cudaError_t getNodesResult = cudaGraphGetNodes(tempGraph, nullptr, &numNodes);
         
-        if (instantiateResult == cudaSuccess && m_inferenceGraphExec != nullptr) {
-            m_inferenceGraph = tempGraph;
-            m_graphCaptured = true;
-            std::cout << "[Detector] CUDA Graph captured successfully" << std::endl;
+        if (getNodesResult == cudaSuccess && numNodes > 0) {
+            std::cout << "[Detector] CUDA Graph captured with " << numNodes << " nodes" << std::endl;
+            
+            // Graph 인스턴스 생성
+            cudaError_t instantiateResult = cudaGraphInstantiate(&m_inferenceGraphExec, tempGraph, nullptr, nullptr, 0);
+            
+            if (instantiateResult == cudaSuccess && m_inferenceGraphExec != nullptr) {
+                m_inferenceGraph = tempGraph;
+                m_graphCaptured = true;
+                std::cout << "[Detector] CUDA Graph instantiated successfully" << std::endl;
+                
+                // Verify graph can be launched
+                cudaError_t launchResult = cudaGraphLaunch(m_inferenceGraphExec, stream);
+                if (launchResult == cudaSuccess) {
+                    cudaStreamSynchronize(stream);
+                    std::cout << "[Detector] CUDA Graph test launch successful" << std::endl;
+                } else {
+                    std::cerr << "[Detector] CUDA Graph test launch failed: " << cudaGetErrorString(launchResult) << std::endl;
+                    // Clean up
+                    cudaGraphExecDestroy(m_inferenceGraphExec);
+                    cudaGraphDestroy(m_inferenceGraph);
+                    m_inferenceGraphExec = nullptr;
+                    m_inferenceGraph = nullptr;
+                    m_graphCaptured = false;
+                }
+            } else {
+                // Clean up on failure
+                if (tempGraph) cudaGraphDestroy(tempGraph);
+                std::cerr << "[Detector] Failed to instantiate CUDA Graph: " << cudaGetErrorString(instantiateResult) << std::endl;
+            }
         } else {
-            // Clean up on failure
+            std::cerr << "[Detector] CUDA Graph has no nodes or failed to get nodes" << std::endl;
             if (tempGraph) cudaGraphDestroy(tempGraph);
-            std::cerr << "[Detector] Failed to instantiate CUDA Graph: " << cudaGetErrorString(instantiateResult) << std::endl;
         }
     } else {
         std::cerr << "[Detector] CUDA Graph capture failed: " << cudaGetErrorString(captureResult) << std::endl;
