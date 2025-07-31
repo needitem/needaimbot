@@ -344,13 +344,13 @@ static void draw_advanced_settings()
         ImGui::PushItemWidth(-1);
         if (ImGui::InputInt("##persistent_cache", &ctx.config.persistent_cache_limit_mb)) {
             if (ctx.config.persistent_cache_limit_mb < 1) ctx.config.persistent_cache_limit_mb = 1;
-            if (ctx.config.persistent_cache_limit_mb > 64) ctx.config.persistent_cache_limit_mb = 64;
+            if (ctx.config.persistent_cache_limit_mb > 128) ctx.config.persistent_cache_limit_mb = 128;
             SAVE_PROFILE();
         }
         ImGui::PopItemWidth();
         ImGui::SameLine();
         ImGui::Text("Persistent L2 Cache (MB)");
-        UIHelpers::InfoTooltip("TensorRT persistent L2 cache size in MB. Larger values may improve performance on GPUs with sufficient L2 cache. Default: 16MB");
+        UIHelpers::InfoTooltip("TensorRT persistent L2 cache size in MB. RTX 40 series: 24-72MB, RTX 30 series: 4-6MB, RTX 20 series: 4-5MB. Default: 32MB");
     }
     
     UIHelpers::EndCard();
