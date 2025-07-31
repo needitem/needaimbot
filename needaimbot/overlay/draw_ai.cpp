@@ -335,6 +335,22 @@ static void draw_advanced_settings()
         ImGui::SameLine();
         ImGui::Text("CUDA Device ID");
         UIHelpers::InfoTooltip("Set the CUDA device ID to use for detection (requires restart).");
+        
+        UIHelpers::Spacer();
+        
+        // GPU Performance Settings
+        UIHelpers::BeautifulSeparator("GPU Performance Settings");
+        
+        ImGui::PushItemWidth(-1);
+        if (ImGui::InputInt("##persistent_cache", &ctx.config.persistent_cache_limit_mb)) {
+            if (ctx.config.persistent_cache_limit_mb < 1) ctx.config.persistent_cache_limit_mb = 1;
+            if (ctx.config.persistent_cache_limit_mb > 64) ctx.config.persistent_cache_limit_mb = 64;
+            SAVE_PROFILE();
+        }
+        ImGui::PopItemWidth();
+        ImGui::SameLine();
+        ImGui::Text("Persistent L2 Cache (MB)");
+        UIHelpers::InfoTooltip("TensorRT persistent L2 cache size in MB. Larger values may improve performance on GPUs with sufficient L2 cache. Default: 16MB");
     }
     
     UIHelpers::EndCard();
