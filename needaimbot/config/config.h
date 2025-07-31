@@ -290,7 +290,7 @@ public:
 
 
     // GPU performance settings
-    int persistent_cache_limit_mb = 16; // TensorRT persistent L2 cache size in MB
+    int persistent_cache_limit_mb = 32; // TensorRT persistent L2 cache size in MB (default: 32MB for RTX 40 series)
     
     // RGB Color filter settings
     bool enable_color_filter;

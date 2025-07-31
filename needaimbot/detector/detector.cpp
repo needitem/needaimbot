@@ -367,6 +367,23 @@ bool Detector::initializeCudaContext()
     size_t limit = 0;
     cudaDeviceGetLimit(&limit, cudaLimitStackSize);
     cudaDeviceSetLimit(cudaLimitStackSize, limit * 2);
+    
+    // L2 캐시 크기 제한 확인 및 설정
+    size_t l2CacheSize = 0;
+    cudaDeviceGetLimit(&l2CacheSize, cudaLimitPersistingL2CacheSize);
+    std::cout << "[Detector] Current L2 cache limit: " << (l2CacheSize / (1024.0 * 1024.0)) << "MB" << std::endl;
+    
+    // 시스템이 지원하는 최대값으로 L2 캐시 설정
+    if (l2CacheSize < 16 * 1024 * 1024) {
+        // 시스템이 16MB를 지원하지 않으면 현재 값을 유지하거나 약간 증가
+        size_t newL2CacheSize = std::min(l2CacheSize * 2, size_t(8 * 1024 * 1024)); // 최대 8MB까지만
+        cudaError_t err = cudaDeviceSetLimit(cudaLimitPersistingL2CacheSize, newL2CacheSize);
+        if (err == cudaSuccess) {
+            std::cout << "[Detector] L2 cache limit set to: " << (newL2CacheSize / (1024.0 * 1024.0)) << "MB" << std::endl;
+        } else {
+            std::cout << "[Detector] Failed to set L2 cache limit: " << cudaGetErrorString(err) << std::endl;
+        }
+    }
 
     m_cudaContextInitialized = true; 
     return true; 
@@ -417,10 +434,17 @@ void Detector::initialize(const std::string& modelFile)
     // CUDA 그래프 호환성 설정
     context->setEnqueueEmitsProfile(false);
     
-    // 영구 캐시 활성화 - config에서 설정한 값 사용
-    size_t cacheLimit = static_cast<size_t>(ctx.config.persistent_cache_limit_mb) * 1024 * 1024;
-    context->setPersistentCacheLimit(cacheLimit);
-    std::cout << "[Detector] Persistent L2 cache limit set to " << ctx.config.persistent_cache_limit_mb << "MB" << std::endl;
+    // 영구 캐시 활성화 - 시스템 제한에 맞게 조정
+    size_t systemL2CacheLimit = 0;
+    cudaDeviceGetLimit(&systemL2CacheLimit, cudaLimitPersistingL2CacheSize);
+    
+    size_t requestedCacheLimit = static_cast<size_t>(ctx.config.persistent_cache_limit_mb) * 1024 * 1024;
+    size_t actualCacheLimit = std::min(requestedCacheLimit, systemL2CacheLimit);
+    
+    context->setPersistentCacheLimit(actualCacheLimit);
+    std::cout << "[Detector] TensorRT L2 cache limit set to " << (actualCacheLimit / (1024.0 * 1024.0)) 
+              << "MB (requested: " << ctx.config.persistent_cache_limit_mb 
+              << "MB, system max: " << (systemL2CacheLimit / (1024.0 * 1024.0)) << "MB)" << std::endl;
 
     getInputNames();
     getOutputNames();

@@ -346,7 +346,7 @@ bool Config::loadConfig(const std::string& filename)
     cuda_device_id = get_long_ini("CUDA", "cuda_device_id", 0);
     
     // GPU performance settings
-    persistent_cache_limit_mb = get_long_ini("GPU", "persistent_cache_limit_mb", 16);
+    persistent_cache_limit_mb = get_long_ini("GPU", "persistent_cache_limit_mb", 32);
 
     button_targeting = splitString(get_string_ini("Buttons", "button_targeting", "RightMouseButton"));
     button_exit = splitString(get_string_ini("Buttons", "button_exit", "F2"));
