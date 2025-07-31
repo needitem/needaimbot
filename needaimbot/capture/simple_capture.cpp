@@ -140,7 +140,7 @@ SimpleCudaMat SimpleScreenCapture::GetNextFrameGpu()
     cuda_bgra2bgr(
         m_deviceFrame.data(), gpuFrame.data(),
         m_width, m_height,
-        m_deviceFrame.step(), gpuFrame.step()
+        static_cast<int>(m_deviceFrame.step()), static_cast<int>(gpuFrame.step())
     );
     
     return gpuFrame;
