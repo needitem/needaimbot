@@ -295,8 +295,9 @@ SimpleCudaMat WindowsGraphicsCapture::GetNextFrameGpu()
         g_frameBufferPool = std::make_unique<FrameBufferPool>(10);
     }
     
+    // Keep BGRA format (4 channels) for direct use without conversion
     SimpleCudaMat gpuFrame = g_frameBufferPool->acquireGpuBuffer(
-        impl->m_captureHeight, impl->m_captureWidth, 4
+        impl->m_captureHeight, impl->m_captureWidth, 4  // BGRA
     );
     
     // Copy from CUDA array to linear memory (GPU to GPU, very fast!)

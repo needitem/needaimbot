@@ -14,7 +14,15 @@
 #include <thrust/gather.h>     
 
 #include "postProcess.h"
-#include <NvInferRuntimeCommon.h> 
+#include <NvInferRuntimeCommon.h>
+
+// For min/max functions
+#ifndef min
+#define min(a,b) ((a) < (b) ? (a) : (b))
+#endif
+#ifndef max
+#define max(a,b) ((a) > (b) ? (a) : (b))
+#endif 
 
 // Fast initialization kernel
 __global__ void initKeepKernel(bool* d_keep, int n) {
@@ -24,12 +32,105 @@ __global__ void initKeepKernel(bool* d_keep, int n) {
     }
 }
 
+// CUDA Graph compatible kernel to compact detections
+__global__ void compactDetectionsKernel(
+    const Detection* d_input_detections,
+    const bool* d_keep,
+    Detection* d_output_detections,
+    int* d_output_count,
+    int input_num_detections,
+    int max_output_detections)
+{
+    __shared__ int shared_count;
+    
+    if (threadIdx.x == 0) {
+        shared_count = 0;
+    }
+    __syncthreads();
+    
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (idx < input_num_detections && d_keep[idx]) {
+        int write_idx = atomicAdd(&shared_count, 1);
+        __syncthreads();
+        
+        if (threadIdx.x == 0) {
+            write_idx = atomicAdd(d_output_count, shared_count);
+        }
+        __syncthreads();
+        
+        if (idx < input_num_detections && d_keep[idx]) {
+            int global_idx = atomicAdd(d_output_count, 1);
+            if (global_idx < max_output_detections) {
+                d_output_detections[global_idx] = d_input_detections[idx];
+            }
+        }
+    }
+}
+
+// Simple kernel to count kept detections
+__global__ void countKeptDetectionsKernel(
+    const bool* d_keep,
+    int* d_count,
+    int n)
+{
+    extern __shared__ int shared_counts[];
+    
+    int tid = threadIdx.x;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    // Each thread counts its element
+    int local_count = 0;
+    if (idx < n && d_keep[idx]) {
+        local_count = 1;
+    }
+    
+    // Reduce within block
+    shared_counts[tid] = local_count;
+    __syncthreads();
+    
+    // Block-level reduction
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            shared_counts[tid] += shared_counts[tid + s];
+        }
+        __syncthreads();
+    }
+    
+    // First thread writes block result
+    if (tid == 0) {
+        atomicAdd(d_count, shared_counts[0]);
+    }
+}
+
+// More efficient kernel using atomic operations for gathering
+__global__ void gatherKeptDetectionsAtomicKernel(
+    const Detection* d_input_detections,
+    const bool* d_keep,
+    Detection* d_output_detections,
+    int* d_write_index,  // Global write index
+    int n,
+    int max_output)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (idx < n && d_keep[idx]) {
+        int output_idx = atomicAdd(d_write_index, 1);
+        if (output_idx < max_output) {
+            d_output_detections[output_idx] = d_input_detections[idx];
+        }
+    }
+}
+
 
 // Optimized spatial indexing constants
-#define HOST_GRID_SIZE 32  // Host-side constant for calculations
-__constant__ int GRID_SIZE = 32;  // 32x32 spatial grid for better granularity
-__constant__ int GRID_SHIFT = 5;  // log2(32) for faster division
-__constant__ int GRID_MASK = 31;  // For fast modulo
+#define HOST_GRID_SIZE 64  // Increased for better spatial partitioning
+__constant__ int GRID_SIZE = 64;  // 64x64 spatial grid for finer granularity
+__constant__ int GRID_SHIFT = 6;  // log2(64) for faster division
+__constant__ int GRID_MASK = 63;  // For fast modulo
+
+// Warp-level primitives for faster reduction
+#define WARP_SIZE 32
 
 // Helper function to read output values based on data type
 __device__ inline float readOutputValue(const void* buffer, int type, size_t index) {
@@ -357,22 +458,36 @@ void NMSGpu(
 {
     
     cudaError_t err = cudaSuccess;
-    const int block_size = 256; 
-    int final_count = 0; 
+    const int block_size = 256;
+    // Use fixed grid sizes for CUDA Graph compatibility
+    const int MAX_GRID_SIZE = 256; // Fixed maximum grid size 
 
-    if (input_num_detections <= 0) {
+    // Validate input parameters
+    if (!d_input_detections || !d_output_detections || !d_output_count_gpu ||
+        !d_x1 || !d_y1 || !d_x2 || !d_y2 || !d_areas || !d_scores_nms || 
+        !d_classIds_nms || !d_iou_matrix || !d_keep || !d_indices) {
+        fprintf(stderr, "[NMSGpu] Error: NULL pointer passed to NMSGpu\n");
+        if (d_output_count_gpu) cudaMemsetAsync(d_output_count_gpu, 0, sizeof(int), stream);
+        return;
+    }
+
+    if (input_num_detections <= 0 || max_output_detections <= 0) {
         cudaMemsetAsync(d_output_count_gpu, 0, sizeof(int), stream);
         return; 
     }
+    
+    // Clamp input_num_detections to ensure fixed grid sizes
+    int effective_detections = min(input_num_detections, max_output_detections);
 
     
     
 
     
     {
-        const int grid_extract = (input_num_detections + block_size - 1) / block_size;
+        // Use fixed grid size for CUDA Graph compatibility
+        const int grid_extract = min((effective_detections + block_size - 1) / block_size, MAX_GRID_SIZE);
         extractDataKernel<<<grid_extract, block_size, 0, stream>>>( 
-            d_input_detections, input_num_detections,
+            d_input_detections, effective_detections,
             d_x1, d_y1, d_x2, d_y2,
             d_areas, d_scores_nms, d_classIds_nms 
         );
@@ -385,8 +500,9 @@ void NMSGpu(
     
     // Initialize keep array to 1 (true)
     {
-        int grid_init = (input_num_detections + block_size - 1) / block_size;
-        initKeepKernel<<<grid_init, block_size, 0, stream>>>(d_keep, input_num_detections);
+        // Use fixed grid size for CUDA Graph compatibility
+        int grid_init = min((effective_detections + block_size - 1) / block_size, MAX_GRID_SIZE);
+        initKeepKernel<<<grid_init, block_size, 0, stream>>>(d_keep, effective_detections);
     }
     // Skip zeroing IoU matrix - kernel will only write non-zero values
     err = cudaGetLastError(); if (err != cudaSuccess) goto cleanup;
@@ -394,77 +510,59 @@ void NMSGpu(
     
     {
         dim3 block_iou(16, 16); 
-        dim3 grid_iou((input_num_detections + block_iou.x - 1) / block_iou.x,
-                       (input_num_detections + block_iou.y - 1) / block_iou.y);
+        // Fixed grid size for CUDA Graph compatibility
+        int grid_dim = min((effective_detections + block_iou.x - 1) / block_iou.x, 64);
+        dim3 grid_iou(grid_dim, grid_dim);
         
         // Pre-calculate inverse cell dimensions for faster division
         float inv_cell_width = static_cast<float>(HOST_GRID_SIZE) / frame_width;
         float inv_cell_height = static_cast<float>(HOST_GRID_SIZE) / frame_height;
         
-        // Calculate shared memory size
-        size_t shared_mem_size = block_iou.x * (4 * sizeof(int) + sizeof(float) + sizeof(int2));
+        // Use fixed shared memory size for CUDA Graph compatibility
+        const size_t shared_mem_size = 16 * (4 * sizeof(int) + sizeof(float) + sizeof(int2));
         
         calculateIoUKernel<<<grid_iou, block_iou, shared_mem_size, stream>>>( 
-            d_x1, d_y1, d_x2, d_y2, d_areas, d_iou_matrix, input_num_detections, nmsThreshold, inv_cell_width, inv_cell_height
+            d_x1, d_y1, d_x2, d_y2, d_areas, d_iou_matrix, effective_detections, nmsThreshold, inv_cell_width, inv_cell_height
         );
         err = cudaGetLastError(); if (err != cudaSuccess) goto cleanup;
     }
 
     
     {
-        const int grid_nms = (input_num_detections + block_size - 1) / block_size;
+        // Use fixed grid size for CUDA Graph compatibility
+        const int grid_nms = min((effective_detections + block_size - 1) / block_size, MAX_GRID_SIZE);
         nmsKernel<<<grid_nms, block_size, 0, stream>>>( 
-            d_keep, d_iou_matrix, d_scores_nms, d_classIds_nms, input_num_detections, nmsThreshold 
+            d_keep, d_iou_matrix, d_scores_nms, d_classIds_nms, effective_detections, nmsThreshold 
         );
          err = cudaGetLastError(); if (err != cudaSuccess) goto cleanup;
     }
 
 
-    
-    try {
-        thrust::device_ptr<const Detection> d_input_ptr(d_input_detections);
-        thrust::device_ptr<Detection> d_output_ptr(d_output_detections);
-        thrust::counting_iterator<int> first(0);
-        thrust::counting_iterator<int> last = first + input_num_detections;
-        thrust::device_ptr<int> d_indices_ptr(d_indices);
-
+    // Replace Thrust with CUDA Graph compatible kernels
+    {
+        // Reset output count to use as write index
+        cudaMemsetAsync(d_output_count_gpu, 0, sizeof(int), stream);
         
-        auto end_indices_iter = thrust::copy_if(
-            thrust::cuda::par.on(stream),
-            first, last,
-            d_indices_ptr,
-            is_kept(d_keep)
+        // Single pass: gather kept detections and count simultaneously
+        // Use fixed grid size for CUDA Graph compatibility
+        const int gather_blocks = min((effective_detections + block_size - 1) / block_size, MAX_GRID_SIZE);
+        gatherKeptDetectionsAtomicKernel<<<gather_blocks, block_size, 0, stream>>>(
+            d_input_detections, d_keep, d_output_detections, 
+            d_output_count_gpu,  // Use as atomic write index
+            effective_detections, max_output_detections
         );
-        final_count = static_cast<int>(end_indices_iter - d_indices_ptr); 
-
-        final_count = std::min(final_count, max_output_detections); 
-
-        
-        thrust::gather(
-            thrust::cuda::par.on(stream),
-            d_indices_ptr, d_indices_ptr + final_count,
-            d_input_ptr,
-            d_output_ptr
-        );
-
-        cudaMemcpyAsync(d_output_count_gpu, &final_count, sizeof(int), cudaMemcpyHostToDevice, stream);
-        err = cudaGetLastError(); if (err != cudaSuccess) goto cleanup;
-
-    } catch (const std::exception& e) {
-        fprintf(stderr, "[Thrust Error] NMSGpu copy_if/gather: %s\n", e.what());
-        err = cudaErrorUnknown; 
-        goto cleanup; 
+        err = cudaGetLastError(); 
+        if (err != cudaSuccess) goto cleanup;
     }
 
 
 cleanup: 
     
-    
-
     cudaError_t lastErr = cudaGetLastError(); 
     if (err != cudaSuccess || lastErr != cudaSuccess) {
         cudaError_t errorToReport = (err != cudaSuccess) ? err : lastErr;
-        fprintf(stderr, "[NMSGpu] CUDA error occurred: %s (%d)\n", cudaGetErrorString(errorToReport), errorToReport);
+        fprintf(stderr, "[NMSGpu] CUDA error occurred: %s (%d) - input_num_detections=%d, effective=%d, max_output=%d\n", 
+                cudaGetErrorString(errorToReport), errorToReport, input_num_detections, effective_detections, max_output_detections);
         if (err != cudaSuccess) { 
              cudaMemsetAsync(d_output_count_gpu, 0, sizeof(int), stream);
         }

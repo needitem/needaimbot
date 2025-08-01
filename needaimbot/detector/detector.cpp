@@ -363,6 +363,18 @@ bool Detector::initializeCudaContext()
     // GPU 메모리 대역폭 최적화 설정
     cudaDeviceSetCacheConfig(cudaFuncCachePreferL1);
     
+    // 메모리 풀 사전 할당으로 동적 할당 오버헤드 제거
+    size_t free_mem, total_mem;
+    cudaMemGetInfo(&free_mem, &total_mem);
+    
+    // GPU 메모리의 10%를 메모리 풀로 예약
+    size_t pool_size = total_mem / 10;
+    cudaMemPool_t mempool;
+    cudaDeviceGetDefaultMemPool(&mempool, ctx.config.cuda_device_id);
+    cudaMemPoolSetAttribute(mempool, cudaMemPoolAttrReleaseThreshold, &pool_size);
+    
+    std::cout << "[Detector] Memory pool initialized with " << (pool_size / (1024.0 * 1024.0)) << "MB" << std::endl;
+    
     // GPU 메모리 병합 최적화
     size_t limit = 0;
     cudaDeviceGetLimit(&limit, cudaLimitStackSize);
@@ -550,7 +562,7 @@ void Detector::initialize(const std::string& modelFile)
     }
     
     if (floatBuffer.empty() || floatBuffer.rows() != h || floatBuffer.cols() != w) {
-        floatBuffer.create(h, w, 3); // We'll need to handle float types differently
+        floatBuffer.create(h, w, 4); // Support up to 4 channels (BGRA)
     }
     
     channelBuffers.resize(c);
@@ -560,6 +572,9 @@ void Detector::initialize(const std::string& modelFile)
             channelBuffers[i].create(h, w, 1);  // 1 channel for float data
         }
     }
+    
+    // BGRA input support flag - can be added to detector.h if needed later
+    // bool m_supportBGRA = true; // RTX 40 series handles BGRA efficiently
     
     for (const auto& name : inputNames)
     {
@@ -892,23 +907,29 @@ void Detector::inferenceThread()
                     cached_config.update(ctx.config);
                 }
 
+                // 파이프라인 최적화: 이전 프레임의 후처리와 현재 프레임의 전처리를 병렬화
+                static bool firstFrame = true;
+                
+                if (!firstFrame) {
+                    // 이전 프레임의 후처리가 완료될 때까지 대기
+                    cudaEventSynchronize(processingDone);
+                }
+                
                 // Execute preprocessing
                 preProcess(frameGpu, preprocessStream);
                 cudaEventRecord(m_preprocessDone, preprocessStream);
                 
-                // Wait for preprocessing to complete before inference
-                cudaStreamWaitEvent(stream, m_preprocessDone, 0);
-                
                 // CUDA Graph 기반 추론 (충분한 프레임 후 캡처)
-                // Wait for more frames and ensure stable state before capturing
                 if (!m_graphCaptured && frame_counter > 30 && frame_counter % 10 == 0) {
-                    // Only attempt capture every 10 frames to avoid repeated failures
-                    captureInferenceGraph();
+                    captureInferenceGraph(frameGpu);
                 }
                 
                 bool enqueueSuccess;
+                // 전처리 완료 대기
+                cudaStreamWaitEvent(stream, m_preprocessDone, cudaEventWaitExternal);
+                
                 if (m_graphCaptured && m_inferenceGraphExec) {
-                    // Graph 실행 (오버헤드 최소화)
+                    // Graph 실행 (추론만)
                     cudaError_t graphLaunchResult = cudaGraphLaunch(m_inferenceGraphExec, stream);
                     if (graphLaunchResult != cudaSuccess) {
                         std::cerr << "[Detector] CUDA Graph launch failed: " << cudaGetErrorString(graphLaunchResult) << std::endl;
@@ -927,16 +948,21 @@ void Detector::inferenceThread()
                     enqueueSuccess = context->enqueueV3(stream);
                 }
                 
+                cudaEventRecord(m_inferenceDone, stream);
+                
+                // 후처리는 항상 별도로 실행 (동적 크기 때문에)
+                cudaStreamWaitEvent(postprocessStream, m_inferenceDone, cudaEventWaitExternal);
+                performGpuPostProcessing(postprocessStream);
+                
                 if (!enqueueSuccess) {
                     std::cerr << "[Detector] TensorRT inference failed" << std::endl;
                     continue;
                 }
-                cudaEventRecord(m_inferenceDone, stream);
                 
-                // Start post-processing on a different stream
-                cudaStreamWaitEvent(postprocessStream, m_inferenceDone, 0);
-                performGpuPostProcessing(postprocessStream);
+                // 후처리 완료 이벤트 기록
                 cudaEventRecord(processingDone, postprocessStream);
+                
+                firstFrame = false;
                 
                 // GPU에서 detection 결과 복사 (간단한 방식)
                 cudaMemcpyAsync(&m_finalDetectionsCountHost, m_finalDetectionsCountGpu.get(), 
@@ -1062,45 +1088,31 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
 
     cudaError_t decodeErr = cudaSuccess;
 
-    // Local config variables to reduce mutex locks
-    int local_max_detections;
-    float local_nms_threshold;
-    float local_confidence_threshold;
-    std::string local_postprocess;
-
-    // Get color mask info
-    const unsigned char* colorMaskPtr = nullptr;
-    int maskPitch = 0;
-    int current_min_color_pixels_val;
-    bool current_remove_color_matches_val;
-    int current_max_output_detections_val;
-
-    { 
+    // Use cached config values for CUDA Graph compatibility
+    // These should be set once before graph capture
+    static int cached_max_detections = 300;
+    static float cached_nms_threshold = 0.45f;
+    static float cached_confidence_threshold = 0.25f;
+    static std::string cached_postprocess = "yolo11";
+    static bool config_cached = false;
+    
+    // Only update cache when not in graph capture mode
+    if (!m_graphCaptured && !config_cached) {
         std::lock_guard<std::mutex> lock(ctx.configMutex);
-        local_max_detections = ctx.config.max_detections;
-        local_nms_threshold = ctx.config.nms_threshold;
-        local_confidence_threshold = ctx.config.confidence_threshold;
-        local_postprocess = ctx.config.postprocess;
-
-        if (ctx.config.enable_color_filter) { 
-            std::lock_guard<std::mutex> color_lock(colorMaskMutex); 
-            if (!m_colorMaskGpu.empty()) {
-                colorMaskPtr = m_colorMaskGpu.data();
-                maskPitch = static_cast<int>(m_colorMaskGpu.step());
-            }
-        }
-        current_min_color_pixels_val = ctx.config.min_color_pixels;
-        current_remove_color_matches_val = ctx.config.remove_color_matches;
-        current_max_output_detections_val = local_max_detections; 
+        cached_max_detections = ctx.config.max_detections;
+        cached_nms_threshold = ctx.config.nms_threshold;
+        cached_confidence_threshold = ctx.config.confidence_threshold;
+        cached_postprocess = ctx.config.postprocess;
+        config_cached = true;
     }
 
-    int maxDecodedDetections = local_max_detections * 2;
+    int maxDecodedDetections = cached_max_detections * 2;
 
     // GPU decoding debug info removed - enable for debugging if needed
 
     
     
-    if (local_postprocess == "yolo10") {
+    if (cached_postprocess == "yolo10") {
         int max_candidates = (shape.size() > 1) ? static_cast<int>(shape[1]) : 0;
         
         
@@ -1109,14 +1121,14 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
             outputType,
             shape,
             numClasses,
-            local_confidence_threshold,
+            cached_confidence_threshold,
             this->img_scale,
             m_decodedDetectionsGpu.get(),
             m_decodedCountGpu.get(),
             max_candidates,
             maxDecodedDetections,
             stream);
-    } else if (local_postprocess == "yolo8" || local_postprocess == "yolo9" || local_postprocess == "yolo11" || local_postprocess == "yolo12") {
+    } else if (cached_postprocess == "yolo8" || cached_postprocess == "yolo9" || cached_postprocess == "yolo11" || cached_postprocess == "yolo12") {
         int max_candidates = (shape.size() > 2) ? static_cast<int>(shape[2]) : 0;
         
         
@@ -1125,7 +1137,7 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
             outputType,
             shape,
             numClasses,
-            local_confidence_threshold,
+            cached_confidence_threshold,
             this->img_scale,
             m_decodedDetectionsGpu.get(),
             m_decodedCountGpu.get(),
@@ -1133,7 +1145,7 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
             maxDecodedDetections,
             stream);
     } else {
-        std::cerr << "[Detector] Unsupported post-processing type for GPU decoding: " << local_postprocess << std::endl;
+        std::cerr << "[Detector] Unsupported post-processing type for GPU decoding: " << cached_postprocess << std::endl;
         cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
         return;
     }
@@ -1156,46 +1168,77 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         return;
     }
     
-    // Process all detections without syncing - use max possible count
-    cudaError_t filterErr = filterDetectionsByClassIdGpu(
-        m_decodedDetectionsGpu.get(),
-        maxDecodedDetections, // Use max possible instead of syncing
-        m_classFilteredDetectionsGpu.get(),
-        m_classFilteredCountGpu.get(),
-        m_d_ignore_flags_gpu.get(),
-        MAX_CLASSES_FOR_FILTERING,
-        colorMaskPtr,
-        maskPitch,
-        current_min_color_pixels_val,
-        current_remove_color_matches_val,
-        current_max_output_detections_val,
-        stream
-    );
-    if (!checkCudaError(filterErr, "filtering detections by class ID GPU")) {
-         cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
-         return;
+    // Fused decode 커널이 이미 필터링을 수행했으므로, 
+    // YOLO10/11의 경우 추가 필터링 스킵
+    bool skipFiltering = (cached_postprocess == "yolo10" || cached_postprocess == "yolo11" || 
+                         cached_postprocess == "yolo12");
+    
+    cudaError_t filterErr = cudaSuccess;  // 변수를 밖에서 선언
+    
+    if (skipFiltering) {
+        // 이미 필터링된 결과를 직접 사용
+        cudaMemcpyAsync(m_classFilteredDetectionsGpu.get(), m_decodedDetectionsGpu.get(),
+                       maxDecodedDetections * sizeof(Detection), cudaMemcpyDeviceToDevice, stream);
+        cudaMemcpyAsync(m_classFilteredCountGpu.get(), m_decodedCountGpu.get(),
+                       sizeof(int), cudaMemcpyDeviceToDevice, stream);
+    } else {
+        // For CUDA Graph compatibility, disable color filtering in graph capture mode
+        const unsigned char* graphColorMaskPtr = nullptr;
+        int graphMaskPitch = 0;
+        
+        // Process all detections without syncing - use max possible count
+        filterErr = filterDetectionsByClassIdGpu(
+            m_decodedDetectionsGpu.get(),
+            maxDecodedDetections, // Use max possible instead of syncing
+            m_classFilteredDetectionsGpu.get(),
+            m_classFilteredCountGpu.get(),
+            m_d_ignore_flags_gpu.get(),
+            MAX_CLASSES_FOR_FILTERING,
+            graphColorMaskPtr,
+            graphMaskPitch,
+            0, // Disable color filtering in graph mode
+            false,
+            cached_max_detections,
+            stream
+        );
+        if (!checkCudaError(filterErr, "filtering detections by class ID GPU")) {
+            cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
+            return;
+        }
     }
 
-    // Check filtered count for debugging
-    int filteredCount = 0;
-    cudaMemcpyAsync(&filteredCount, m_classFilteredCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
-    cudaStreamSynchronize(stream);
+    // For CUDA Graph compatibility, use max detections instead of syncing
+    int effectiveFilteredCount = cached_max_detections;
     
-    // Run NMS with max detections to avoid sync
+    // Run NMS with fixed parameters for CUDA Graph
     try {
-        // Get frame dimensions from config
-        int frame_width = ctx.config.detection_resolution;
-        int frame_height = ctx.config.detection_resolution;
+        // Use cached frame dimensions for CUDA Graph compatibility
+        static int cached_frame_width = 640;
+        static int cached_frame_height = 640;
+        if (!m_graphCaptured) {
+            cached_frame_width = ctx.config.detection_resolution;
+            cached_frame_height = ctx.config.detection_resolution;
+        }
         
+        // Validate NMS buffers before calling
+        if (!m_nms_d_x1.get() || !m_nms_d_y1.get() || !m_nms_d_x2.get() || !m_nms_d_y2.get() ||
+            !m_nms_d_areas.get() || !m_nms_d_scores.get() || !m_nms_d_classIds.get() ||
+            !m_nms_d_iou_matrix.get() || !m_nms_d_keep.get() || !m_nms_d_indices.get()) {
+            std::cerr << "[Detector] ERROR: NMS buffers not properly allocated!" << std::endl;
+            cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
+            return;
+        }
+        
+        // Use fixed count for CUDA Graph compatibility
         NMSGpu(
             m_classFilteredDetectionsGpu.get(),
-            local_max_detections, // Use max instead of actual count
+            effectiveFilteredCount, // Use max count for graph compatibility
             m_finalDetectionsGpu.get(),       
             m_finalDetectionsCountGpu.get(),  
-            static_cast<int>(local_max_detections), 
-            local_nms_threshold,
-            frame_width,
-            frame_height,
+            cached_max_detections, 
+            cached_nms_threshold,
+            cached_frame_width,
+            cached_frame_height,
             m_nms_d_x1.get(),
             m_nms_d_y1.get(),
             m_nms_d_x2.get(),
@@ -1314,24 +1357,52 @@ void Detector::preProcess(const SimpleCudaMat& frame, cudaStream_t stream)
             }
         }
 
-        // Convert to float and split channels
+        // Handle both BGR (3 channel) and BGRA (4 channel) inputs
+        int inputChannels = resizedBuffer.channels();
+        
+        // Convert to float first
         CudaFloatProcessing::convertToFloat(resizedBuffer, floatBuffer, 1.0f / 255.0f, 0.0f, stream);
-        channelBuffers.resize(c);
-        for (int i = 0; i < c; ++i) {
-            channelBuffers[i].create(h, w, 1);
-        }
-        CudaFloatProcessing::splitFloat(floatBuffer, channelBuffers.data(), stream);
+        
+        if (inputChannels == 4 && c == 3) {
+            // Input is BGRA but model expects BGR - extract first 3 channels only
+            // Create 4 channel buffers but only copy first 3 to model
+            channelBuffers.resize(4);
+            for (int i = 0; i < 4; ++i) {
+                channelBuffers[i].create(h, w, 1);
+            }
+            CudaFloatProcessing::splitFloat(floatBuffer, channelBuffers.data(), stream);
+            
+            // Copy only BGR channels (0,1,2), skip Alpha (3)
+            size_t channelSize = h * w * sizeof(float);
+            for (int i = 0; i < 3; ++i)
+            {
+                cudaMemcpyAsync(
+                    static_cast<float*>(inputBuffer) + i * h * w,
+                    channelBuffers[i].data(),
+                    channelSize,
+                    cudaMemcpyDeviceToDevice,
+                    stream
+                );
+            }
+        } else {
+            // Standard path for matching channel counts
+            channelBuffers.resize(c);
+            for (int i = 0; i < c; ++i) {
+                channelBuffers[i].create(h, w, 1);
+            }
+            CudaFloatProcessing::splitFloat(floatBuffer, channelBuffers.data(), stream);
 
-        size_t channelSize = h * w * sizeof(float);
-        for (int i = 0; i < c; ++i)
-        {
-            cudaMemcpyAsync(
-                static_cast<float*>(inputBuffer) + i * h * w,
-                channelBuffers[i].data(),
-                channelSize,
-                cudaMemcpyDeviceToDevice,
-                stream
-            );
+            size_t channelSize = h * w * sizeof(float);
+            for (int i = 0; i < c; ++i)
+            {
+                cudaMemcpyAsync(
+                    static_cast<float*>(inputBuffer) + i * h * w,
+                    channelBuffers[i].data(),
+                    channelSize,
+                    cudaMemcpyDeviceToDevice,
+                    stream
+                );
+            }
         }
     } catch (const std::exception& e)
     {
@@ -1470,9 +1541,9 @@ void Detector::warmupGPU()
 }
 
 
-void Detector::captureInferenceGraph()
+void Detector::captureInferenceGraph(const SimpleCudaMat& frameGpu)
 {
-    if (m_graphCaptured || !context) return;
+    if (m_graphCaptured || !context || !frameGpu.data()) return;
     
     static int captureAttempts = 0;
     const int maxAttempts = 5;
@@ -1483,7 +1554,7 @@ void Detector::captureInferenceGraph()
     }
     
     captureAttempts++;
-    std::cout << "[Detector] Capturing CUDA Graph for inference pipeline (attempt " << captureAttempts << "/" << maxAttempts << ")..." << std::endl;
+    std::cout << "[Detector] Capturing CUDA Graph for FULL pipeline (attempt " << captureAttempts << "/" << maxAttempts << ")..." << std::endl;
     
     // Clear any previous CUDA errors
     cudaError_t lastError = cudaGetLastError();
@@ -1491,22 +1562,31 @@ void Detector::captureInferenceGraph()
         std::cerr << "[Detector] Clearing previous CUDA error: " << cudaGetErrorString(lastError) << std::endl;
     }
     
-    // Ensure stream is idle before capture
-    cudaError_t syncResult = cudaStreamSynchronize(stream);
-    if (syncResult != cudaSuccess) {
-        std::cerr << "[Detector] Failed to synchronize stream before capture: " << cudaGetErrorString(syncResult) << std::endl;
-        return;
-    }
+    // Ensure all streams are idle before capture
+    cudaStreamSynchronize(preprocessStream);
+    cudaStreamSynchronize(stream);
+    cudaStreamSynchronize(postprocessStream);
     
-    // Graph 캡처 시작
+    // 전체 파이프라인을 CUDA Graph로 캡처
     cudaError_t captureResult = cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal);
     if (captureResult != cudaSuccess) {
         std::cerr << "[Detector] Failed to begin CUDA Graph capture: " << cudaGetErrorString(captureResult) << std::endl;
         return;
     }
     
-    // 추론 파이프라인 기록
+    // 추론 실행
     bool enqueueResult = context->enqueueV3(stream);
+    
+    if (!enqueueResult) {
+        std::cerr << "[Detector] TensorRT enqueue failed during graph capture" << std::endl;
+        cudaGraph_t tempGraph = nullptr;
+        cudaStreamEndCapture(stream, &tempGraph);
+        if (tempGraph) cudaGraphDestroy(tempGraph);
+        return;
+    }
+    
+    // 후처리도 포함 (고정 크기로 수정됨)
+    performGpuPostProcessing(stream);
     
     // Graph 캡처 종료
     cudaGraph_t tempGraph = nullptr;
@@ -1623,6 +1703,16 @@ nvinfer1::ICudaEngine* buildEngineFromOnnx(const std::string& onnxPath)
     if (ctx.config.tensorrt_fp16 && builder->platformHasFastFp16()) {
         config->setFlag(nvinfer1::BuilderFlag::kFP16);
         std::cout << "[TensorRT] FP16 optimization enabled" << std::endl;
+    }
+    
+    // INT8 양자화 활성화 (RTX 40 시리즈에 최적화)
+    if (builder->platformHasFastInt8()) {
+        config->setFlag(nvinfer1::BuilderFlag::kINT8);
+        std::cout << "[TensorRT] INT8 optimization enabled for maximum speed" << std::endl;
+        
+        // 더 강력한 양자화 설정
+        // config->setFlag(nvinfer1::BuilderFlag::kSTRICT_TYPES); // TensorRT 10에서는 제거됨
+        // INT8 캘리브레이션은 별도로 설정해야 함
     }
     
     // 추가 최적화 플래그
