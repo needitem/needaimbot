@@ -201,7 +201,7 @@ public:
 
     
     // Movement method selection
-    std::string movement_method; // "pid" or "bezier"
+    std::string movement_method; // "pid", "bezier", "spline_kalman", or "gan"
     
     // PID Controller parameters
     double kp_x;
@@ -240,6 +240,21 @@ public:
             : error_threshold(threshold), scale_factor(scale) {}
     };
     std::vector<ErrorScalingRule> error_scaling_rules;
+    
+    // Spline + Kalman Filter parameters
+    int spline_segments;              // Number of spline segments (default: 20)
+    float kalman_process_noise;       // Process noise for Kalman filter (default: 0.1)
+    float kalman_measurement_noise;   // Measurement noise for Kalman filter (default: 1.0)
+    float spline_tension;             // Spline tension parameter (default: 0.5)
+    float spline_continuity;          // Spline continuity parameter (default: 0.5)
+    float spline_bias;                // Spline bias parameter (default: 0.0)
+    
+    // GAN-based movement parameters
+    float gan_noise_scale;            // Noise scale for GAN input (default: 0.3)
+    float gan_path_complexity;        // Path complexity factor (default: 0.7)
+    float gan_human_variability;      // Human variability factor (default: 0.5)
+    float gan_reaction_time;          // Simulated reaction time (default: 0.15)
+    int gan_acceleration_profile;     // 0: linear, 1: ease-in-out, 2: human-like (default: 2)
 
     
 
