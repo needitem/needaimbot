@@ -39,6 +39,7 @@
     <ClCompile Include="mouse\\mouse.cpp" />
     <ClCompile Include="mouse\\input_drivers\\my_enc.cpp" />
     <ClCompile Include="mouse\\aimbot_components\\PIDController2D.cpp" />
+    <ClCompile Include="mouse\\aimbot_components\\BezierCurveController.cpp" />
     <ClCompile Include="mouse\\input_drivers\\rzctl.cpp" />
     <ClCompile Include="mouse\\input_drivers\\SerialConnection.cpp" />
     <ClCompile Include="mouse\\input_drivers\\MakcuConnection.cpp" />
@@ -103,6 +104,7 @@
     <ClInclude Include="keyboard\keycodes.h" />
     <ClInclude Include="mouse\aimbot_components\AimbotTarget.h" />
     <ClInclude Include="mouse\aimbot_components\PIDController2D.h" />
+    <ClInclude Include="mouse\aimbot_components\BezierCurveController.h" />
     <ClInclude Include="mouse\ExponentialSmoothingPredictor.h" />
     <ClInclude Include="mouse\ghub.h" />
     <ClInclude Include="mouse\HidTable.h" />

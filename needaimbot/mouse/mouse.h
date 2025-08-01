@@ -27,6 +27,7 @@
 #include "input_drivers/InputMethod.h"
 
 class PIDController2D;
+class BezierCurveController;
 
 
 class InputMethod;
@@ -38,7 +39,8 @@ struct Point2D { float x, y; };
 class MouseThread
 {
 private:
-    std::unique_ptr<PIDController2D> pid_controller; // 호환성을 위해 유지
+    std::unique_ptr<PIDController2D> pid_controller; // PID controller
+    std::unique_ptr<BezierCurveController> bezier_controller; // Bezier curve controller
     std::unique_ptr<InputMethod> input_method;
     std::mutex input_method_mutex;
     mutable std::mutex member_data_mutex_;
