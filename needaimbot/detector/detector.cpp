@@ -26,6 +26,7 @@
 #include "detector.h"
 #include "../needaimbot.h"
 #include "../include/other_tools.h"
+#include "../core/constants.h"
 
 #include "../postprocess/postProcess.h"
 #include "../postprocess/filterGpu.h"
@@ -232,17 +233,18 @@ void Detector::getInputNames()
 
 
 
-    
-    m_nms_d_x1.allocate(ctx.config.max_detections);
-    m_nms_d_y1.allocate(ctx.config.max_detections);
-    m_nms_d_x2.allocate(ctx.config.max_detections);
-    m_nms_d_y2.allocate(ctx.config.max_detections);
-    m_nms_d_areas.allocate(ctx.config.max_detections);
-    m_nms_d_scores.allocate(ctx.config.max_detections);
-    m_nms_d_classIds.allocate(ctx.config.max_detections);
-    m_nms_d_iou_matrix.allocate(ctx.config.max_detections * ctx.config.max_detections);
-    m_nms_d_keep.allocate(ctx.config.max_detections);
-    m_nms_d_indices.allocate(ctx.config.max_detections);
+    // For CUDA Graph compatibility, ensure NMS buffers match maximum allowed detections
+    const int nms_buffer_size = Constants::MAX_DETECTIONS; // Use max from constants
+    m_nms_d_x1.allocate(nms_buffer_size);
+    m_nms_d_y1.allocate(nms_buffer_size);
+    m_nms_d_x2.allocate(nms_buffer_size);
+    m_nms_d_y2.allocate(nms_buffer_size);
+    m_nms_d_areas.allocate(nms_buffer_size);
+    m_nms_d_scores.allocate(nms_buffer_size);
+    m_nms_d_classIds.allocate(nms_buffer_size);
+    m_nms_d_iou_matrix.allocate(nms_buffer_size * nms_buffer_size);
+    m_nms_d_keep.allocate(nms_buffer_size);
+    m_nms_d_indices.allocate(nms_buffer_size);
 }
 
 void Detector::getOutputNames()
@@ -1090,7 +1092,7 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
 
     // Use cached config values for CUDA Graph compatibility
     // These should be set once before graph capture
-    static int cached_max_detections = 300;
+    static int cached_max_detections = Constants::MAX_DETECTIONS; // Use max from constants (100)
     static float cached_nms_threshold = 0.45f;
     static float cached_confidence_threshold = 0.25f;
     static std::string cached_postprocess = "yolo11";
@@ -1451,12 +1453,15 @@ void Detector::initializeBuffers() {
     std::cout << "[Detector] Allocating decoded detections buffer: " << buffer_size << " detections" << std::endl;
     m_decodedDetectionsGpu.allocate(buffer_size);
     m_decodedCountGpu.allocate(1);
-    m_finalDetectionsGpu.allocate(ctx.config.max_detections);
+    
+    // For CUDA Graph compatibility, use fixed buffer size matching maximum allowed detections
+    const int graph_buffer_size = Constants::MAX_DETECTIONS; // Use max from constants
+    m_finalDetectionsGpu.allocate(graph_buffer_size);
     m_finalDetectionsCountGpu.allocate(1);
-    m_finalDetectionsHost = std::make_unique<Detection[]>(ctx.config.max_detections);
-    m_classFilteredDetectionsGpu.allocate(ctx.config.max_detections);
+    m_finalDetectionsHost = std::make_unique<Detection[]>(graph_buffer_size);
+    m_classFilteredDetectionsGpu.allocate(graph_buffer_size);
     m_classFilteredCountGpu.allocate(1);
-    m_scoresGpu.allocate(ctx.config.max_detections);
+    m_scoresGpu.allocate(graph_buffer_size);
 
     m_matchingIndexGpu.allocate(1);
     m_matchingScoreGpu.allocate(1);
