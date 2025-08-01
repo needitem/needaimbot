@@ -1170,43 +1170,28 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         return;
     }
     
-    // Fused decode 커널이 이미 필터링을 수행했으므로, 
-    // YOLO10/11의 경우 추가 필터링 스킵
-    bool skipFiltering = (cached_postprocess == "yolo10" || cached_postprocess == "yolo11" || 
-                         cached_postprocess == "yolo12");
+    // For CUDA Graph compatibility, disable color filtering in graph capture mode
+    const unsigned char* graphColorMaskPtr = nullptr;
+    int graphMaskPitch = 0;
     
-    cudaError_t filterErr = cudaSuccess;  // 변수를 밖에서 선언
-    
-    if (skipFiltering) {
-        // 이미 필터링된 결과를 직접 사용
-        cudaMemcpyAsync(m_classFilteredDetectionsGpu.get(), m_decodedDetectionsGpu.get(),
-                       maxDecodedDetections * sizeof(Detection), cudaMemcpyDeviceToDevice, stream);
-        cudaMemcpyAsync(m_classFilteredCountGpu.get(), m_decodedCountGpu.get(),
-                       sizeof(int), cudaMemcpyDeviceToDevice, stream);
-    } else {
-        // For CUDA Graph compatibility, disable color filtering in graph capture mode
-        const unsigned char* graphColorMaskPtr = nullptr;
-        int graphMaskPitch = 0;
-        
-        // Process all detections without syncing - use max possible count
-        filterErr = filterDetectionsByClassIdGpu(
-            m_decodedDetectionsGpu.get(),
-            maxDecodedDetections, // Use max possible instead of syncing
-            m_classFilteredDetectionsGpu.get(),
-            m_classFilteredCountGpu.get(),
-            m_d_ignore_flags_gpu.get(),
-            MAX_CLASSES_FOR_FILTERING,
-            graphColorMaskPtr,
-            graphMaskPitch,
-            0, // Disable color filtering in graph mode
-            false,
-            cached_max_detections,
-            stream
-        );
-        if (!checkCudaError(filterErr, "filtering detections by class ID GPU")) {
-            cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
-            return;
-        }
+    // Process all detections without syncing - use max possible count
+    cudaError_t filterErr = filterDetectionsByClassIdGpu(
+        m_decodedDetectionsGpu.get(),
+        maxDecodedDetections, // Use max possible instead of syncing
+        m_classFilteredDetectionsGpu.get(),
+        m_classFilteredCountGpu.get(),
+        m_d_ignore_flags_gpu.get(),
+        MAX_CLASSES_FOR_FILTERING,
+        graphColorMaskPtr,
+        graphMaskPitch,
+        0, // Disable color filtering in graph mode
+        false,
+        cached_max_detections,
+        stream
+    );
+    if (!checkCudaError(filterErr, "filtering detections by class ID GPU")) {
+        cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
+        return;
     }
 
     // For CUDA Graph compatibility, use max detections instead of syncing
