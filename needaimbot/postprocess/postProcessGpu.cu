@@ -74,7 +74,8 @@ __global__ void countKeptDetectionsKernel(
     int* d_count,
     int n)
 {
-    extern __shared__ int shared_counts[];
+    // Fixed shared memory for CUDA Graph compatibility
+    __shared__ int shared_counts[256];
     
     int tid = threadIdx.x;
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -292,35 +293,23 @@ __global__ __launch_bounds__(256, 4) void calculateIoUKernel(
     const float* __restrict__ d_areas, float* __restrict__ d_iou_matrix,
     int num_boxes, float nms_threshold, float inv_cell_width, float inv_cell_height) 
 {
-    // Increased shared memory for better cache utilization
-    extern __shared__ char shared_mem[];
-    int* s_x1 = (int*)shared_mem;
-    int* s_y1 = s_x1 + blockDim.x;
-    int* s_x2 = s_y1 + blockDim.x;
-    int* s_y2 = s_x2 + blockDim.x;
-    float* s_areas = (float*)(s_y2 + blockDim.x);
-    int2* s_cells = (int2*)(s_areas + blockDim.x);
-    
-    int tid = threadIdx.x;
+    // No shared memory for CUDA Graph compatibility - read directly from global
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int idy = blockIdx.y * blockDim.y + threadIdx.y;
     
-    // Cooperative loading with coalesced access
-    if (idx < num_boxes) {
-        s_x1[tid] = d_x1[idx];
-        s_y1[tid] = d_y1[idx];
-        s_x2[tid] = d_x2[idx];
-        s_y2[tid] = d_y2[idx];
-        s_areas[tid] = d_areas[idx];
-        
-        // Pre-calculate spatial cells
-        float cx = (s_x1[tid] + s_x2[tid]) * 0.5f;
-        float cy = (s_y1[tid] + s_y2[tid]) * 0.5f;
-        s_cells[tid] = getSpatialCell(cx, cy, inv_cell_width, inv_cell_height);
-    }
-    __syncthreads();
-    
     if (idx < num_boxes && idy < num_boxes && idx < idy) {
+        // Load first box data
+        int x1_a = d_x1[idx];
+        int y1_a = d_y1[idx];
+        int x2_a = d_x2[idx];
+        int y2_a = d_y2[idx];
+        float area_a = d_areas[idx];
+        
+        // Calculate spatial cell for first box
+        float cx_a = (x1_a + x2_a) * 0.5f;
+        float cy_a = (y1_a + y2_a) * 0.5f;
+        int2 cell_a = getSpatialCell(cx_a, cy_a, inv_cell_width, inv_cell_height);
+        
         // Load second box data
         int x1_b = d_x1[idy];
         int y1_b = d_y1[idy];
@@ -334,15 +323,15 @@ __global__ __launch_bounds__(256, 4) void calculateIoUKernel(
         int2 cell_b = getSpatialCell(cx_b, cy_b, inv_cell_width, inv_cell_height);
         
         // Early spatial rejection
-        if (!cellsAreNear(s_cells[tid], cell_b, 1)) {
+        if (!cellsAreNear(cell_a, cell_b, 1)) {
             return; // Matrix is initialized to 0
         }
         
         // Calculate intersection using min/max intrinsics
-        int x1 = max(s_x1[tid], x1_b);
-        int y1 = max(s_y1[tid], y1_b);
-        int x2 = min(s_x2[tid], x2_b);
-        int y2 = min(s_y2[tid], y2_b);
+        int x1 = max(x1_a, x1_b);
+        int y1 = max(y1_a, y1_b);
+        int x2 = min(x2_a, x2_b);
+        int y2 = min(y2_a, y2_b);
         
         // Early exit if no overlap
         if (x2 <= x1 || y2 <= y1) {
@@ -351,7 +340,7 @@ __global__ __launch_bounds__(256, 4) void calculateIoUKernel(
         
         // Use FMA for better performance
         float intersection_area = __int2float_rn(x2 - x1) * __int2float_rn(y2 - y1);
-        float union_area = fmaf(-1.0f, intersection_area, s_areas[tid] + area_b);
+        float union_area = fmaf(-1.0f, intersection_area, area_a + area_b);
         float iou = __fdiv_rn(intersection_area, union_area);
         
         // Single coalesced write (symmetric matrix)
@@ -368,22 +357,11 @@ __global__ void nmsKernel(
     const float* d_scores, const int* d_classIds,
     int num_boxes, float nms_threshold) 
 {
-    // Use shared memory for frequently accessed data
-    extern __shared__ float s_scores[];
-    
+    // No shared memory needed - reading directly from global memory
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int tid = threadIdx.x;
-    
-    // Load scores into shared memory
-    if (idx < num_boxes && tid < blockDim.x) {
-        s_scores[tid] = d_scores[idx];
-    }
-    __syncthreads();
     
     if (idx < num_boxes) {
         if (!d_keep[idx]) return; 
-        
-        // Variables removed as they were unused
         
         // Unroll loop for better performance
         #pragma unroll 4
@@ -518,10 +496,8 @@ void NMSGpu(
         float inv_cell_width = static_cast<float>(HOST_GRID_SIZE) / frame_width;
         float inv_cell_height = static_cast<float>(HOST_GRID_SIZE) / frame_height;
         
-        // Use fixed shared memory size for CUDA Graph compatibility
-        const size_t shared_mem_size = 16 * (4 * sizeof(int) + sizeof(float) + sizeof(int2));
-        
-        calculateIoUKernel<<<grid_iou, block_iou, shared_mem_size, stream>>>( 
+        // No dynamic shared memory for CUDA Graph compatibility
+        calculateIoUKernel<<<grid_iou, block_iou, 0, stream>>>( 
             d_x1, d_y1, d_x2, d_y2, d_areas, d_iou_matrix, effective_detections, nmsThreshold, inv_cell_width, inv_cell_height
         );
         err = cudaGetLastError(); if (err != cudaSuccess) goto cleanup;
