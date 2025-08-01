@@ -175,15 +175,23 @@ static void draw_movement_method_settings()
     
     UIHelpers::BeginCard("Movement Method Settings");
     
-    UIHelpers::BeautifulText("Choose between PID controller or Bezier curve movement.", UIHelpers::GetAccentColor(0.8f));
+    UIHelpers::BeautifulText("Choose between different mouse movement algorithms.", UIHelpers::GetAccentColor(0.8f));
     UIHelpers::CompactSpacer();
     
     // Movement method selection
-    const char* movement_methods[] = { "PID", "Bezier" };
-    int current_method = (ctx.config.movement_method == "bezier") ? 1 : 0;
+    const char* movement_methods[] = { "PID", "Bezier", "Spline+Kalman", "GAN" };
+    int current_method = 0;
+    if (ctx.config.movement_method == "bezier") current_method = 1;
+    else if (ctx.config.movement_method == "spline_kalman") current_method = 2;
+    else if (ctx.config.movement_method == "gan") current_method = 3;
     
     if (ImGui::Combo("Movement Method", &current_method, movement_methods, IM_ARRAYSIZE(movement_methods))) {
-        ctx.config.movement_method = (current_method == 1) ? "bezier" : "pid";
+        switch (current_method) {
+            case 0: ctx.config.movement_method = "pid"; break;
+            case 1: ctx.config.movement_method = "bezier"; break;
+            case 2: ctx.config.movement_method = "spline_kalman"; break;
+            case 3: ctx.config.movement_method = "gan"; break;
+        }
         SAVE_PROFILE();
     }
     
@@ -386,6 +394,148 @@ static void draw_movement_method_settings()
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("Smoother curves, less direct");
             }
+        }
+    }
+    else if (ctx.config.movement_method == "spline_kalman") {
+        UIHelpers::Spacer();
+        UIHelpers::SettingsSubHeader("Spline + Kalman Filter Parameters");
+        
+        // Spline parameters
+        UIHelpers::BeautifulText("Spline Interpolation", UIHelpers::GetAccentColor(0.8f));
+        UIHelpers::CompactSpacer();
+        
+        int segments = ctx.config.spline_segments;
+        if (ImGui::SliderInt("Segments", &segments, 5, 50, "%d")) {
+            ctx.config.spline_segments = segments;
+            SAVE_PROFILE();
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Number of spline segments. More segments = smoother path.");
+        }
+        
+        float tension = ctx.config.spline_tension;
+        if (UIHelpers::EnhancedSliderFloat("Tension", &tension, 0.0f, 1.0f, "%.2f", "Controls curve tightness. 0 = loose, 1 = tight.")) {
+            ctx.config.spline_tension = tension;
+            SAVE_PROFILE();
+        }
+        
+        float continuity = ctx.config.spline_continuity;
+        if (UIHelpers::EnhancedSliderFloat("Continuity", &continuity, -1.0f, 1.0f, "%.2f", "Controls curve sharpness at control points.")) {
+            ctx.config.spline_continuity = continuity;
+            SAVE_PROFILE();
+        }
+        
+        float bias = ctx.config.spline_bias;
+        if (UIHelpers::EnhancedSliderFloat("Bias", &bias, -1.0f, 1.0f, "%.2f", "Controls curve direction bias.")) {
+            ctx.config.spline_bias = bias;
+            SAVE_PROFILE();
+        }
+        
+        UIHelpers::Spacer();
+        
+        // Kalman filter parameters
+        UIHelpers::BeautifulText("Kalman Filter", UIHelpers::GetAccentColor(0.8f));
+        UIHelpers::CompactSpacer();
+        
+        float process_noise = ctx.config.kalman_process_noise;
+        if (UIHelpers::EnhancedSliderFloat("Process Noise", &process_noise, 0.01f, 1.0f, "%.2f", "Model uncertainty. Higher = more responsive to changes.")) {
+            ctx.config.kalman_process_noise = process_noise;
+            SAVE_PROFILE();
+        }
+        
+        float measurement_noise = ctx.config.kalman_measurement_noise;
+        if (UIHelpers::EnhancedSliderFloat("Measurement Noise", &measurement_noise, 0.1f, 5.0f, "%.1f", "Sensor noise. Higher = more smoothing.")) {
+            ctx.config.kalman_measurement_noise = measurement_noise;
+            SAVE_PROFILE();
+        }
+    }
+    else if (ctx.config.movement_method == "gan") {
+        UIHelpers::Spacer();
+        UIHelpers::SettingsSubHeader("GAN-Based Movement Parameters");
+        
+        // Human-like characteristics
+        UIHelpers::BeautifulText("Human Characteristics", UIHelpers::GetAccentColor(0.8f));
+        UIHelpers::CompactSpacer();
+        
+        float variability = ctx.config.gan_human_variability;
+        if (UIHelpers::EnhancedSliderFloat("Human Variability", &variability, 0.0f, 1.0f, "%.2f", "Amount of human-like imperfection. 0 = robotic, 1 = very human.")) {
+            ctx.config.gan_human_variability = variability;
+            SAVE_PROFILE();
+        }
+        
+        float reaction_time = ctx.config.gan_reaction_time;
+        if (UIHelpers::EnhancedSliderFloat("Reaction Time", &reaction_time, 0.0f, 0.3f, "%.2f s", "Simulated human reaction delay.")) {
+            ctx.config.gan_reaction_time = reaction_time;
+            SAVE_PROFILE();
+        }
+        
+        // Acceleration profile
+        const char* accel_profiles[] = { "Linear", "Ease In/Out", "Human-like" };
+        int accel_profile = ctx.config.gan_acceleration_profile;
+        if (ImGui::Combo("Acceleration", &accel_profile, accel_profiles, IM_ARRAYSIZE(accel_profiles))) {
+            ctx.config.gan_acceleration_profile = accel_profile;
+            SAVE_PROFILE();
+        }
+        
+        UIHelpers::Spacer();
+        
+        // Path generation
+        UIHelpers::BeautifulText("Path Generation", UIHelpers::GetAccentColor(0.8f));
+        UIHelpers::CompactSpacer();
+        
+        float complexity = ctx.config.gan_path_complexity;
+        if (UIHelpers::EnhancedSliderFloat("Path Complexity", &complexity, 0.1f, 1.0f, "%.2f", "Complexity of generated path. Higher = more detailed movement.")) {
+            ctx.config.gan_path_complexity = complexity;
+            SAVE_PROFILE();
+        }
+        
+        float noise_scale = ctx.config.gan_noise_scale;
+        if (UIHelpers::EnhancedSliderFloat("Noise Scale", &noise_scale, 0.0f, 1.0f, "%.2f", "Amount of randomness in path generation.")) {
+            ctx.config.gan_noise_scale = noise_scale;
+            SAVE_PROFILE();
+        }
+        
+        UIHelpers::Spacer();
+        
+        // Presets
+        UIHelpers::SettingsSubHeader("GAN Presets");
+        
+        if (ImGui::Button("Precise", ImVec2((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x * 2) / 3, 0))) {
+            ctx.config.gan_human_variability = 0.2f;
+            ctx.config.gan_reaction_time = 0.05f;
+            ctx.config.gan_path_complexity = 0.5f;
+            ctx.config.gan_noise_scale = 0.1f;
+            ctx.config.gan_acceleration_profile = 1; // Ease in/out
+            SAVE_PROFILE();
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Low variability for competitive play");
+        }
+        
+        ImGui::SameLine();
+        if (ImGui::Button("Natural", ImVec2((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) / 2, 0))) {
+            ctx.config.gan_human_variability = 0.5f;
+            ctx.config.gan_reaction_time = 0.15f;
+            ctx.config.gan_path_complexity = 0.7f;
+            ctx.config.gan_noise_scale = 0.3f;
+            ctx.config.gan_acceleration_profile = 2; // Human-like
+            SAVE_PROFILE();
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Balanced human-like movement");
+        }
+        
+        ImGui::SameLine();
+        if (ImGui::Button("Casual", ImVec2(ImGui::GetContentRegionAvail().x, 0))) {
+            ctx.config.gan_human_variability = 0.8f;
+            ctx.config.gan_reaction_time = 0.25f;
+            ctx.config.gan_path_complexity = 0.9f;
+            ctx.config.gan_noise_scale = 0.5f;
+            ctx.config.gan_acceleration_profile = 2; // Human-like
+            SAVE_PROFILE();
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Very human-like, less precise");
         }
     }
     
