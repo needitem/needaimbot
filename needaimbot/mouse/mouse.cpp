@@ -31,6 +31,8 @@
 
 #include "aimbot_components/PIDController2D.h"
 #include "aimbot_components/BezierCurveController.h"
+#include "aimbot_components/SplineKalmanController.h"
+#include "aimbot_components/GANMouseController.h"
 
 
 extern std::atomic<bool> aiming;
@@ -95,9 +97,11 @@ MouseThread::MouseThread(
     auto& ctx = AppContext::getInstance();
     initializeScreen(resolution, bScope_multiplier, norecoil_ms);
     
-    // Initialize both controllers
+    // Initialize all controllers
     pid_controller = std::make_unique<PIDController2D>(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
     bezier_controller = std::make_unique<BezierCurveController>(ctx.config.bezier_speed, ctx.config.bezier_curve_factor);
+    spline_kalman_controller = std::make_unique<SplineKalmanController>();
+    gan_controller = std::make_unique<GANMouseController>();
     
     initializeInputMethod(serialConnection, makcuConnection, gHub);
     
@@ -191,6 +195,25 @@ void MouseThread::updateConfig(
     // Update Bezier controller (get latest params from config)
     if (bezier_controller) {
         bezier_controller->updateParameters(ctx.config.bezier_speed, ctx.config.bezier_curve_factor);
+    }
+    
+    // Update Spline+Kalman controller
+    if (spline_kalman_controller) {
+        spline_kalman_controller->setSplineSegments(ctx.config.spline_segments);
+        spline_kalman_controller->setKalmanProcessNoise(ctx.config.kalman_process_noise);
+        spline_kalman_controller->setKalmanMeasurementNoise(ctx.config.kalman_measurement_noise);
+        spline_kalman_controller->setSplineTension(ctx.config.spline_tension);
+        spline_kalman_controller->setSplineContinuity(ctx.config.spline_continuity);
+        spline_kalman_controller->setSplineBias(ctx.config.spline_bias);
+    }
+    
+    // Update GAN controller
+    if (gan_controller) {
+        gan_controller->setNoiseScale(ctx.config.gan_noise_scale);
+        gan_controller->setPathComplexity(ctx.config.gan_path_complexity);
+        gan_controller->setHumanVariability(ctx.config.gan_human_variability);
+        gan_controller->setReactionTime(ctx.config.gan_reaction_time);
+        gan_controller->setAccelerationProfile(ctx.config.gan_acceleration_profile);
     }
     
 }
@@ -476,6 +499,106 @@ void MouseThread::moveMouse(const AimbotTarget &target)
             }
             
             // Early return for bezier - we've already enqueued all movements
+            auto calc_end_time = std::chrono::steady_clock::now();
+            float calc_duration_ms = std::chrono::duration<float, std::milli>(calc_end_time - calc_start_time).count();
+            ctx.g_current_pid_calc_time_ms.store(calc_duration_ms, std::memory_order_relaxed);
+            ctx.add_to_history(ctx.g_pid_calc_time_history, calc_duration_ms, ctx.g_pid_calc_history_mutex);
+            
+            // Calculate pure detection-to-movement time
+            auto movement_completion_time = std::chrono::high_resolution_clock::now();
+            float detection_to_movement_ms = std::chrono::duration<float, std::milli>(movement_completion_time - target.detection_timestamp).count();
+            ctx.g_current_detection_to_movement_time_ms.store(detection_to_movement_ms, std::memory_order_relaxed);
+            ctx.add_to_history(ctx.g_detection_to_movement_time_history, detection_to_movement_ms, ctx.g_detection_to_movement_history_mutex);
+            
+            return;
+        }
+    }
+    else if (ctx.config.movement_method == "spline_kalman") {
+        // Use Spline + Kalman Filter controller
+        if (spline_kalman_controller) {
+            auto movements = spline_kalman_controller->calculatePath(
+                current_center_x, current_center_y,
+                current_center_x + error_x, current_center_y + error_y
+            );
+            
+            // Debug logging
+            if (ctx.config.verbose) {
+                std::cout << "[Mouse] Using Spline+Kalman method with " << movements.size() << " steps" << std::endl;
+            }
+            
+            // Execute all movements in the path
+            for (const auto& movement : movements) {
+                float dx = (movement.first - current_center_x) * current_move_scale_x;
+                float dy = (movement.second - current_center_y) * current_move_scale_y;
+                
+                // Update current position for next movement
+                current_center_x = movement.first;
+                current_center_y = movement.second;
+                
+                // Check disable upward aim
+                if (local_disable_upward_aim_active && dy < 0) {
+                    dy = 0;
+                }
+                
+                // Process accumulated movement
+                auto [dx_int, dy_int] = processAccumulatedMovement(dx, dy);
+                
+                if (dx_int != 0 || dy_int != 0) {
+                    enqueueMouseCommand(MouseCommand::MOVE, dx_int, dy_int);
+                }
+            }
+            
+            // Early return - we've already enqueued all movements
+            auto calc_end_time = std::chrono::steady_clock::now();
+            float calc_duration_ms = std::chrono::duration<float, std::milli>(calc_end_time - calc_start_time).count();
+            ctx.g_current_pid_calc_time_ms.store(calc_duration_ms, std::memory_order_relaxed);
+            ctx.add_to_history(ctx.g_pid_calc_time_history, calc_duration_ms, ctx.g_pid_calc_history_mutex);
+            
+            // Calculate pure detection-to-movement time
+            auto movement_completion_time = std::chrono::high_resolution_clock::now();
+            float detection_to_movement_ms = std::chrono::duration<float, std::milli>(movement_completion_time - target.detection_timestamp).count();
+            ctx.g_current_detection_to_movement_time_ms.store(detection_to_movement_ms, std::memory_order_relaxed);
+            ctx.add_to_history(ctx.g_detection_to_movement_time_history, detection_to_movement_ms, ctx.g_detection_to_movement_history_mutex);
+            
+            return;
+        }
+    }
+    else if (ctx.config.movement_method == "gan") {
+        // Use GAN-based controller
+        if (gan_controller) {
+            auto movements = gan_controller->calculatePath(
+                current_center_x, current_center_y,
+                current_center_x + error_x, current_center_y + error_y
+            );
+            
+            // Debug logging
+            if (ctx.config.verbose) {
+                std::cout << "[Mouse] Using GAN method with " << movements.size() << " steps" << std::endl;
+            }
+            
+            // Execute all movements in the path
+            for (const auto& movement : movements) {
+                float dx = (movement.first - current_center_x) * current_move_scale_x;
+                float dy = (movement.second - current_center_y) * current_move_scale_y;
+                
+                // Update current position for next movement
+                current_center_x = movement.first;
+                current_center_y = movement.second;
+                
+                // Check disable upward aim
+                if (local_disable_upward_aim_active && dy < 0) {
+                    dy = 0;
+                }
+                
+                // Process accumulated movement
+                auto [dx_int, dy_int] = processAccumulatedMovement(dx, dy);
+                
+                if (dx_int != 0 || dy_int != 0) {
+                    enqueueMouseCommand(MouseCommand::MOVE, dx_int, dy_int);
+                }
+            }
+            
+            // Early return - we've already enqueued all movements
             auto calc_end_time = std::chrono::steady_clock::now();
             float calc_duration_ms = std::chrono::duration<float, std::milli>(calc_end_time - calc_start_time).count();
             ctx.g_current_pid_calc_time_ms.store(calc_duration_ms, std::memory_order_relaxed);

@@ -147,6 +147,21 @@ bool Config::loadConfig(const std::string& filename)
         error_scaling_rules.push_back(ErrorScalingRule(100.0f, 0.5f));  // Medium error: 50% scale
         error_scaling_rules.push_back(ErrorScalingRule(50.0f, 0.8f));   // Small error: 80% scale
         
+        // Spline + Kalman Filter parameters
+        spline_segments = 20;
+        kalman_process_noise = 0.1f;
+        kalman_measurement_noise = 1.0f;
+        spline_tension = 0.5f;
+        spline_continuity = 0.5f;
+        spline_bias = 0.0f;
+        
+        // GAN-based movement parameters
+        gan_noise_scale = 0.3f;
+        gan_path_complexity = 0.7f;
+        gan_human_variability = 0.5f;
+        gan_reaction_time = 0.15f;
+        gan_acceleration_profile = 2; // human-like
+        
 
         
         arduino_baudrate = 115200;
@@ -359,6 +374,21 @@ bool Config::loadConfig(const std::string& filename)
         error_scaling_rules.push_back(ErrorScalingRule(100.0f, 0.5f));
         error_scaling_rules.push_back(ErrorScalingRule(50.0f, 0.8f));
     }
+    
+    // Spline + Kalman Filter parameters
+    spline_segments = get_long_ini("SplineKalman", "segments", 20);
+    kalman_process_noise = static_cast<float>(get_double_ini("SplineKalman", "process_noise", 0.1));
+    kalman_measurement_noise = static_cast<float>(get_double_ini("SplineKalman", "measurement_noise", 1.0));
+    spline_tension = static_cast<float>(get_double_ini("SplineKalman", "tension", 0.5));
+    spline_continuity = static_cast<float>(get_double_ini("SplineKalman", "continuity", 0.5));
+    spline_bias = static_cast<float>(get_double_ini("SplineKalman", "bias", 0.0));
+    
+    // GAN-based movement parameters
+    gan_noise_scale = static_cast<float>(get_double_ini("GAN", "noise_scale", 0.3));
+    gan_path_complexity = static_cast<float>(get_double_ini("GAN", "path_complexity", 0.7));
+    gan_human_variability = static_cast<float>(get_double_ini("GAN", "human_variability", 0.5));
+    gan_reaction_time = static_cast<float>(get_double_ini("GAN", "reaction_time", 0.15));
+    gan_acceleration_profile = get_long_ini("GAN", "acceleration_profile", 2);
 
     
     // Hybrid aim control settings
@@ -645,6 +675,23 @@ bool Config::saveConfig(const std::string& filename)
         file << prefix << "scale = " << error_scaling_rules[i].scale_factor << "\n";
     }
     file << "\n";
+    
+    // Spline + Kalman Filter parameters
+    file << "[SplineKalman]\n";
+    file << "segments = " << spline_segments << "\n";
+    file << "process_noise = " << kalman_process_noise << "\n";
+    file << "measurement_noise = " << kalman_measurement_noise << "\n";
+    file << "tension = " << spline_tension << "\n";
+    file << "continuity = " << spline_continuity << "\n";
+    file << "bias = " << spline_bias << "\n\n";
+    
+    // GAN-based movement parameters
+    file << "[GAN]\n";
+    file << "noise_scale = " << gan_noise_scale << "\n";
+    file << "path_complexity = " << gan_path_complexity << "\n";
+    file << "human_variability = " << gan_human_variability << "\n";
+    file << "reaction_time = " << gan_reaction_time << "\n";
+    file << "acceleration_profile = " << gan_acceleration_profile << "\n\n";
 
     file << "[Arduino]\n";
     file << std::noboolalpha;
