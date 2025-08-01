@@ -200,6 +200,10 @@ public:
     std::string current_weapon_name;
 
     
+    // Movement method selection
+    std::string movement_method; // "pid" or "bezier"
+    
+    // PID Controller parameters
     double kp_x;
     double ki_x;
     double kd_x;
@@ -207,6 +211,25 @@ public:
     double ki_y;
     double kd_y;
     
+    // Bezier Curve Controller parameters
+    float bezier_speed;       // Number of steps in the curve (higher = smoother but slower)
+    float bezier_curve_factor; // How much curve to add (0.0 - 1.0)
+    
+    // Advanced Bezier parameters (previously hardcoded)
+    float bezier_step_multiplier;     // Dynamic step calculation multiplier (default: 10.0)
+    float bezier_min_steps;           // Minimum steps for curve (default: 3)
+    float bezier_curve_offset_scale;  // Curve offset scaling factor (default: 0.03)
+    float bezier_max_curve_offset;    // Maximum curve offset pixels (default: 2.0)
+    float bezier_control1_min;        // Control point 1 minimum factor (default: 0.15)
+    float bezier_control1_range;      // Control point 1 range (default: 0.05)
+    float bezier_control2_min;        // Control point 2 minimum factor (default: 0.80)
+    float bezier_control2_range;      // Control point 2 range (default: 0.05)
+    float bezier_s_curve_probability; // S-curve probability 0-1 (default: 0.3)
+    float bezier_s_curve_offset1;     // S-curve offset multiplier 1 (default: 0.6)
+    float bezier_s_curve_offset2;     // S-curve offset multiplier 2 (default: 0.4)
+    float bezier_single_offset1;      // Single curve offset multiplier 1 (default: 0.5)
+    float bezier_single_offset2;      // Single curve offset multiplier 2 (default: 0.3)
+    float bezier_min_movement;        // Minimum movement threshold (default: 0.1)
     
     // Error-based scaling for jitter and overshoot control
     struct ErrorScalingRule {

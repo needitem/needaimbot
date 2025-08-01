@@ -30,6 +30,7 @@
 #endif
 
 #include "aimbot_components/PIDController2D.h"
+#include "aimbot_components/BezierCurveController.h"
 
 
 extern std::atomic<bool> aiming;
@@ -91,8 +92,13 @@ MouseThread::MouseThread(
     MakcuConnection *makcuConnection,
     GhubMouse *gHub)
 {
+    auto& ctx = AppContext::getInstance();
     initializeScreen(resolution, bScope_multiplier, norecoil_ms);
+    
+    // Initialize both controllers
     pid_controller = std::make_unique<PIDController2D>(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
+    bezier_controller = std::make_unique<BezierCurveController>(ctx.config.bezier_speed, ctx.config.bezier_curve_factor);
+    
     initializeInputMethod(serialConnection, makcuConnection, gHub);
     
     // Start async input worker thread
@@ -176,7 +182,16 @@ void MouseThread::updateConfig(
         initializeScreen(resolution, bScope_multiplier, norecoil_ms);
         
     }
-    pid_controller->updateSeparatedParameters(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
+    
+    // Update PID controller
+    if (pid_controller) {
+        pid_controller->updateSeparatedParameters(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
+    }
+    
+    // Update Bezier controller (get latest params from config)
+    if (bezier_controller) {
+        bezier_controller->updateParameters(ctx.config.bezier_speed, ctx.config.bezier_curve_factor);
+    }
     
 }
 
@@ -427,22 +442,67 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     
     float move_x, move_y;
     
-    // Simple PID without any smoothing or extra algorithms
     Eigen::Vector2f error(error_x, error_y);
-    auto pid_start_time = std::chrono::steady_clock::now();
+    auto calc_start_time = std::chrono::steady_clock::now();
     
-    // Basic PID calculation
+    // Choose movement method
+    if (ctx.config.movement_method == "bezier") {
+        // Use Bezier curve controller
+        if (bezier_controller) {
+            auto movements = bezier_controller->calculatePath(error);
+            
+            // Debug logging for Bezier
+            if (ctx.config.verbose) {
+                std::cout << "[Mouse] Using Bezier curve method with " << movements.size() << " steps" << std::endl;
+            }
+            
+            // For Bezier, we need to execute all movements in the path
+            // This is handled differently - we'll enqueue all movements
+            for (const auto& movement : movements) {
+                float dx = movement.x() * current_move_scale_x;
+                float dy = movement.y() * current_move_scale_y;
+                
+                // Check disable upward aim
+                if (local_disable_upward_aim_active && dy < 0) {
+                    dy = 0;
+                }
+                
+                // Process accumulated movement
+                auto [dx_int, dy_int] = processAccumulatedMovement(dx, dy);
+                
+                if (dx_int != 0 || dy_int != 0) {
+                    enqueueMouseCommand(MouseCommand::MOVE, dx_int, dy_int);
+                }
+            }
+            
+            // Early return for bezier - we've already enqueued all movements
+            auto calc_end_time = std::chrono::steady_clock::now();
+            float calc_duration_ms = std::chrono::duration<float, std::milli>(calc_end_time - calc_start_time).count();
+            ctx.g_current_pid_calc_time_ms.store(calc_duration_ms, std::memory_order_relaxed);
+            ctx.add_to_history(ctx.g_pid_calc_time_history, calc_duration_ms, ctx.g_pid_calc_history_mutex);
+            
+            // Calculate pure detection-to-movement time
+            auto movement_completion_time = std::chrono::high_resolution_clock::now();
+            float detection_to_movement_ms = std::chrono::duration<float, std::milli>(movement_completion_time - target.detection_timestamp).count();
+            ctx.g_current_detection_to_movement_time_ms.store(detection_to_movement_ms, std::memory_order_relaxed);
+            ctx.add_to_history(ctx.g_detection_to_movement_time_history, detection_to_movement_ms, ctx.g_detection_to_movement_history_mutex);
+            
+            return;
+        }
+    }
+    
+    // Default to PID controller
     Eigen::Vector2f pid_output = pid_controller->calculate(error);
     
     // Debug logging for PID output
     if (ctx.config.verbose) {
-        std::cout << "[Mouse] PID output - X: " << pid_output.x() << ", Y: " << pid_output.y() << std::endl;
+        std::cout << "[Mouse] Using PID method - X: " << pid_output.x() << ", Y: " << pid_output.y() << std::endl;
     }
         
-    auto pid_end_time = std::chrono::steady_clock::now();
-    float pid_duration_ms = std::chrono::duration<float, std::milli>(pid_end_time - pid_start_time).count();
-    ctx.g_current_pid_calc_time_ms.store(pid_duration_ms, std::memory_order_relaxed);
-    ctx.add_to_history(ctx.g_pid_calc_time_history, pid_duration_ms, ctx.g_pid_calc_history_mutex);
+    auto calc_end_time = std::chrono::steady_clock::now();
+    float calc_duration_ms = std::chrono::duration<float, std::milli>(calc_end_time - calc_start_time).count();
+    ctx.g_current_pid_calc_time_ms.store(calc_duration_ms, std::memory_order_relaxed);
+    ctx.add_to_history(ctx.g_pid_calc_time_history, calc_duration_ms, ctx.g_pid_calc_history_mutex);
 
     // Apply error-based scaling to reduce jitter on large errors
     float error_scale_factor = 1.0f;
@@ -657,13 +717,12 @@ void MouseThread::resetAccumulatedStates()
         pid_controller->reset();
     }
     
+    // Reset Bezier controller
+    if (bezier_controller) {
+        bezier_controller->reset();
+    }
     
     // Reset movement accumulation
-    accumulated_x_ = 0.0f;
-    accumulated_y_ = 0.0f;
-    
-    
-    // Reset accumulated movement
     accumulated_x_ = 0.0f;
     accumulated_y_ = 0.0f;
 }

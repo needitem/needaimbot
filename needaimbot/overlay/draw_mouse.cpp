@@ -169,6 +169,229 @@ static void draw_error_scaling_controls()
     UIHelpers::EndCard();
 }
 
+static void draw_movement_method_settings()
+{
+    auto& ctx = AppContext::getInstance();
+    
+    UIHelpers::BeginCard("Movement Method Settings");
+    
+    UIHelpers::BeautifulText("Choose between PID controller or Bezier curve movement.", UIHelpers::GetAccentColor(0.8f));
+    UIHelpers::CompactSpacer();
+    
+    // Movement method selection
+    const char* movement_methods[] = { "PID", "Bezier" };
+    int current_method = (ctx.config.movement_method == "bezier") ? 1 : 0;
+    
+    if (ImGui::Combo("Movement Method", &current_method, movement_methods, IM_ARRAYSIZE(movement_methods))) {
+        ctx.config.movement_method = (current_method == 1) ? "bezier" : "pid";
+        SAVE_PROFILE();
+    }
+    
+    if (ctx.config.movement_method == "bezier") {
+        UIHelpers::Spacer();
+        UIHelpers::SettingsSubHeader("Bezier Curve Parameters");
+        
+        float bezier_speed = ctx.config.bezier_speed;
+        if (UIHelpers::EnhancedSliderFloat("Speed", &bezier_speed, 1.0f, 100.0f, "%.0f", "Number of steps in the curve. Higher = smoother but slower.")) {
+            ctx.config.bezier_speed = bezier_speed;
+            SAVE_PROFILE();
+        }
+        
+        float bezier_curve_factor = ctx.config.bezier_curve_factor;
+        if (UIHelpers::EnhancedSliderFloat("Curve Factor", &bezier_curve_factor, 0.0f, 1.0f, "%.2f", "How much curve to add. 0 = straight line, 1 = maximum curve.")) {
+            ctx.config.bezier_curve_factor = bezier_curve_factor;
+            SAVE_PROFILE();
+        }
+        
+        // Advanced settings in collapsible section
+        if (ImGui::CollapsingHeader("Advanced Bezier Settings")) {
+            UIHelpers::Spacer();
+            
+            // Step calculation
+            UIHelpers::BeautifulText("Step Calculation", UIHelpers::GetAccentColor(0.8f));
+            UIHelpers::CompactSpacer();
+            
+            float step_mult = ctx.config.bezier_step_multiplier;
+            if (UIHelpers::EnhancedSliderFloat("Step Multiplier", &step_mult, 1.0f, 20.0f, "%.1f", "Divides error magnitude to calculate dynamic steps.")) {
+                ctx.config.bezier_step_multiplier = step_mult;
+                SAVE_PROFILE();
+            }
+            
+            int min_steps = ctx.config.bezier_min_steps;
+            if (ImGui::SliderInt("Minimum Steps", &min_steps, 1, 10)) {
+                ctx.config.bezier_min_steps = min_steps;
+                SAVE_PROFILE();
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Minimum number of curve steps.");
+            }
+            
+            UIHelpers::Spacer();
+            
+            // Curve offset
+            UIHelpers::BeautifulText("Curve Offset", UIHelpers::GetAccentColor(0.8f));
+            UIHelpers::CompactSpacer();
+            
+            float offset_scale = ctx.config.bezier_curve_offset_scale;
+            if (UIHelpers::EnhancedSliderFloat("Offset Scale", &offset_scale, 0.01f, 0.1f, "%.3f", "Scales the curve offset based on distance.")) {
+                ctx.config.bezier_curve_offset_scale = offset_scale;
+                SAVE_PROFILE();
+            }
+            
+            float max_offset = ctx.config.bezier_max_curve_offset;
+            if (UIHelpers::EnhancedSliderFloat("Max Offset", &max_offset, 1.0f, 10.0f, "%.1f", "Maximum curve offset in pixels.")) {
+                ctx.config.bezier_max_curve_offset = max_offset;
+                SAVE_PROFILE();
+            }
+            
+            UIHelpers::Spacer();
+            
+            // Control points
+            UIHelpers::BeautifulText("Control Points", UIHelpers::GetAccentColor(0.8f));
+            UIHelpers::CompactSpacer();
+            
+            float ctrl1_min = ctx.config.bezier_control1_min;
+            if (UIHelpers::EnhancedSliderFloat("Control 1 Min", &ctrl1_min, 0.05f, 0.3f, "%.2f", "First control point minimum position.")) {
+                ctx.config.bezier_control1_min = ctrl1_min;
+                SAVE_PROFILE();
+            }
+            
+            float ctrl1_range = ctx.config.bezier_control1_range;
+            if (UIHelpers::EnhancedSliderFloat("Control 1 Range", &ctrl1_range, 0.01f, 0.2f, "%.2f", "First control point randomness range.")) {
+                ctx.config.bezier_control1_range = ctrl1_range;
+                SAVE_PROFILE();
+            }
+            
+            float ctrl2_min = ctx.config.bezier_control2_min;
+            if (UIHelpers::EnhancedSliderFloat("Control 2 Min", &ctrl2_min, 0.7f, 0.9f, "%.2f", "Second control point minimum position.")) {
+                ctx.config.bezier_control2_min = ctrl2_min;
+                SAVE_PROFILE();
+            }
+            
+            float ctrl2_range = ctx.config.bezier_control2_range;
+            if (UIHelpers::EnhancedSliderFloat("Control 2 Range", &ctrl2_range, 0.01f, 0.2f, "%.2f", "Second control point randomness range.")) {
+                ctx.config.bezier_control2_range = ctrl2_range;
+                SAVE_PROFILE();
+            }
+            
+            UIHelpers::Spacer();
+            
+            // Curve types
+            UIHelpers::BeautifulText("Curve Types", UIHelpers::GetAccentColor(0.8f));
+            UIHelpers::CompactSpacer();
+            
+            float s_curve_prob = ctx.config.bezier_s_curve_probability;
+            if (UIHelpers::EnhancedSliderFloat("S-Curve Probability", &s_curve_prob, 0.0f, 1.0f, "%.2f", "Probability of using S-curve vs single curve.")) {
+                ctx.config.bezier_s_curve_probability = s_curve_prob;
+                SAVE_PROFILE();
+            }
+            
+            // S-curve offsets
+            UIHelpers::BeautifulText("S-Curve Offsets", UIHelpers::GetAccentColor(0.7f));
+            ImGui::Columns(2, "s_curve_cols", false);
+            
+            float s_off1 = ctx.config.bezier_s_curve_offset1;
+            if (UIHelpers::EnhancedSliderFloat("S-Curve Offset 1##s_off1", &s_off1, 0.1f, 1.0f, "%.2f", "First S-curve offset multiplier.")) {
+                ctx.config.bezier_s_curve_offset1 = s_off1;
+                SAVE_PROFILE();
+            }
+            
+            ImGui::NextColumn();
+            
+            float s_off2 = ctx.config.bezier_s_curve_offset2;
+            if (UIHelpers::EnhancedSliderFloat("S-Curve Offset 2##s_off2", &s_off2, 0.1f, 1.0f, "%.2f", "Second S-curve offset multiplier.")) {
+                ctx.config.bezier_s_curve_offset2 = s_off2;
+                SAVE_PROFILE();
+            }
+            
+            ImGui::Columns(1);
+            
+            // Single curve offsets
+            UIHelpers::BeautifulText("Single Curve Offsets", UIHelpers::GetAccentColor(0.7f));
+            ImGui::Columns(2, "single_curve_cols", false);
+            
+            float single_off1 = ctx.config.bezier_single_offset1;
+            if (UIHelpers::EnhancedSliderFloat("Single Offset 1##single_off1", &single_off1, 0.1f, 1.0f, "%.2f", "First single curve offset multiplier.")) {
+                ctx.config.bezier_single_offset1 = single_off1;
+                SAVE_PROFILE();
+            }
+            
+            ImGui::NextColumn();
+            
+            float single_off2 = ctx.config.bezier_single_offset2;
+            if (UIHelpers::EnhancedSliderFloat("Single Offset 2##single_off2", &single_off2, 0.1f, 1.0f, "%.2f", "Second single curve offset multiplier.")) {
+                ctx.config.bezier_single_offset2 = single_off2;
+                SAVE_PROFILE();
+            }
+            
+            ImGui::Columns(1);
+            
+            UIHelpers::Spacer();
+            
+            // Movement threshold
+            UIHelpers::BeautifulText("Movement Filtering", UIHelpers::GetAccentColor(0.8f));
+            UIHelpers::CompactSpacer();
+            
+            float min_move = ctx.config.bezier_min_movement;
+            if (UIHelpers::EnhancedSliderFloat("Min Movement", &min_move, 0.01f, 0.5f, "%.2f", "Minimum movement threshold to reduce jitter.")) {
+                ctx.config.bezier_min_movement = min_move;
+                SAVE_PROFILE();
+            }
+            
+            UIHelpers::Spacer();
+            
+            // Preset buttons
+            UIHelpers::SettingsSubHeader("Bezier Presets");
+            
+            if (ImGui::Button("Direct", ImVec2((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x * 2) / 3, 0))) {
+                ctx.config.bezier_curve_offset_scale = 0.02f;
+                ctx.config.bezier_max_curve_offset = 1.5f;
+                ctx.config.bezier_s_curve_probability = 0.2f;
+                ctx.config.bezier_s_curve_offset1 = 0.4f;
+                ctx.config.bezier_s_curve_offset2 = 0.3f;
+                ctx.config.bezier_single_offset1 = 0.3f;
+                ctx.config.bezier_single_offset2 = 0.2f;
+                SAVE_PROFILE();
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Very direct path with minimal curve");
+            }
+            
+            ImGui::SameLine();
+            if (ImGui::Button("Natural", ImVec2((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) / 2, 0))) {
+                ctx.config.bezier_curve_offset_scale = 0.03f;
+                ctx.config.bezier_max_curve_offset = 2.0f;
+                ctx.config.bezier_s_curve_probability = 0.3f;
+                ctx.config.bezier_s_curve_offset1 = 0.6f;
+                ctx.config.bezier_s_curve_offset2 = 0.4f;
+                ctx.config.bezier_single_offset1 = 0.5f;
+                ctx.config.bezier_single_offset2 = 0.3f;
+                SAVE_PROFILE();
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Balanced natural movement");
+            }
+            
+            ImGui::SameLine();
+            if (ImGui::Button("Smooth", ImVec2(-1, 0))) {
+                ctx.config.bezier_curve_offset_scale = 0.05f;
+                ctx.config.bezier_max_curve_offset = 3.0f;
+                ctx.config.bezier_s_curve_probability = 0.5f;
+                ctx.config.bezier_s_curve_offset1 = 0.8f;
+                ctx.config.bezier_s_curve_offset2 = 0.6f;
+                ctx.config.bezier_single_offset1 = 0.7f;
+                ctx.config.bezier_single_offset2 = 0.5f;
+                SAVE_PROFILE();
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Smoother curves, less direct");
+            }
+        }
+    }
+    
+    UIHelpers::EndCard();
+}
+
 static void draw_pid_controls()
 {
     auto& ctx = AppContext::getInstance();
@@ -527,10 +750,15 @@ void draw_mouse()
     
     UIHelpers::BeginTwoColumnLayout(0.65f);
     
-    // Left column - PID settings and error scaling
+    // Left column - Movement method and controller settings
     
-    draw_pid_controls();
+    draw_movement_method_settings();
     UIHelpers::CompactSpacer();
+    
+    if (ctx.config.movement_method == "pid") {
+        draw_pid_controls();
+        UIHelpers::CompactSpacer();
+    }
     
     draw_error_scaling_controls();
     UIHelpers::CompactSpacer();
