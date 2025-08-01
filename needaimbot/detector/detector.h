@@ -208,7 +208,7 @@ private:
     cudaGraph_t m_inferenceGraph = nullptr;
     cudaGraphExec_t m_inferenceGraphExec = nullptr;
     bool m_graphCaptured = false;
-    void captureInferenceGraph();
+    void captureInferenceGraph(const SimpleCudaMat& frameGpu);
 
     static float calculate_host_iou(const Detection& det1, const Detection& det2); 
     bool m_cudaContextInitialized = false; 

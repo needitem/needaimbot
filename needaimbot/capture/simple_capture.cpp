@@ -115,17 +115,12 @@ SimpleCudaMat SimpleScreenCapture::GetNextFrameGpu()
         return SimpleCudaMat();
     }
     
-    // Get GPU buffer from pool
-    SimpleCudaMat gpuFrame = g_frameBufferPool->acquireGpuBuffer(m_height, m_width, 3);
+    // Get GPU buffer from pool - keep BGRA format (4 channels)
+    SimpleCudaMat gpuFrame = g_frameBufferPool->acquireGpuBuffer(m_height, m_width, 4);
     
-    // Create temporary GPU buffer for BGRA data
-    if (m_deviceFrame.rows() != m_height || m_deviceFrame.cols() != m_width) {
-        m_deviceFrame.create(m_height, m_width, 4);
-    }
-    
-    // Upload bitmap data to GPU
+    // Upload bitmap data directly to GPU (already in BGRA format)
     cudaError_t err = cudaMemcpy2D(
-        m_deviceFrame.data(), m_deviceFrame.step(),
+        gpuFrame.data(), gpuFrame.step(),
         m_bitmapData, m_width * 4,
         m_width * 4, m_height,
         cudaMemcpyHostToDevice
@@ -136,13 +131,7 @@ SimpleCudaMat SimpleScreenCapture::GetNextFrameGpu()
         return SimpleCudaMat();
     }
     
-    // Convert BGRA to BGR on GPU using CUDA function
-    cuda_bgra2bgr(
-        m_deviceFrame.data(), gpuFrame.data(),
-        m_width, m_height,
-        static_cast<int>(m_deviceFrame.step()), static_cast<int>(gpuFrame.step())
-    );
-    
+    // No conversion needed - return BGRA directly
     return gpuFrame;
 }
 
