@@ -445,11 +445,6 @@ void Detector::initialize(const std::string& modelFile)
     
     // CUDA 그래프 호환성 설정
     context->setEnqueueEmitsProfile(false);
-    context->setAllowedEngineCapabilities(0); // Disable all special capabilities for graph compatibility
-    
-    // CUDA Graph 캡처를 위한 설정
-    // Ensure no dynamic shapes during graph capture
-    context->setInputShape(inputName.c_str(), inputDims);
     
     // 영구 캐시 활성화 - 시스템 제한에 맞게 조정
     size_t systemL2CacheLimit = 0;
