@@ -469,7 +469,11 @@ void NMSGpu(
             d_x1, d_y1, d_x2, d_y2,
             d_areas, d_scores_nms, d_classIds_nms 
         );
-        err = cudaGetLastError(); if (err != cudaSuccess) goto cleanup;
+        err = cudaGetLastError(); 
+        if (err != cudaSuccess) {
+            fprintf(stderr, "[NMSGpu] extractDataKernel failed: %s\n", cudaGetErrorString(err));
+            goto cleanup;
+        }
     }
 
 
@@ -483,7 +487,11 @@ void NMSGpu(
         initKeepKernel<<<grid_init, block_size, 0, stream>>>(d_keep, effective_detections);
     }
     // Skip zeroing IoU matrix - kernel will only write non-zero values
-    err = cudaGetLastError(); if (err != cudaSuccess) goto cleanup;
+    err = cudaGetLastError(); 
+    if (err != cudaSuccess) {
+        fprintf(stderr, "[NMSGpu] initKeepKernel failed: %s\n", cudaGetErrorString(err));
+        goto cleanup;
+    }
 
     
     {
@@ -500,7 +508,11 @@ void NMSGpu(
         calculateIoUKernel<<<grid_iou, block_iou, 0, stream>>>( 
             d_x1, d_y1, d_x2, d_y2, d_areas, d_iou_matrix, effective_detections, nmsThreshold, inv_cell_width, inv_cell_height
         );
-        err = cudaGetLastError(); if (err != cudaSuccess) goto cleanup;
+        err = cudaGetLastError(); 
+        if (err != cudaSuccess) {
+            fprintf(stderr, "[NMSGpu] calculateIoUKernel failed: %s\n", cudaGetErrorString(err));
+            goto cleanup;
+        }
     }
 
     
@@ -510,7 +522,11 @@ void NMSGpu(
         nmsKernel<<<grid_nms, block_size, 0, stream>>>( 
             d_keep, d_iou_matrix, d_scores_nms, d_classIds_nms, effective_detections, nmsThreshold 
         );
-         err = cudaGetLastError(); if (err != cudaSuccess) goto cleanup;
+        err = cudaGetLastError(); 
+        if (err != cudaSuccess) {
+            fprintf(stderr, "[NMSGpu] nmsKernel failed: %s\n", cudaGetErrorString(err));
+            goto cleanup;
+        }
     }
 
 
@@ -528,7 +544,10 @@ void NMSGpu(
             effective_detections, max_output_detections
         );
         err = cudaGetLastError(); 
-        if (err != cudaSuccess) goto cleanup;
+        if (err != cudaSuccess) {
+            fprintf(stderr, "[NMSGpu] gatherKeptDetectionsAtomicKernel failed: %s\n", cudaGetErrorString(err));
+            goto cleanup;
+        }
     }
 
 

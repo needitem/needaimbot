@@ -445,6 +445,11 @@ void Detector::initialize(const std::string& modelFile)
     
     // CUDA 그래프 호환성 설정
     context->setEnqueueEmitsProfile(false);
+    context->setAllowedEngineCapabilities(0); // Disable all special capabilities for graph compatibility
+    
+    // CUDA Graph 캡처를 위한 설정
+    // Ensure no dynamic shapes during graph capture
+    context->setInputShape(inputName.c_str(), inputDims);
     
     // 영구 캐시 활성화 - 시스템 제한에 맞게 조정
     size_t systemL2CacheLimit = 0;
@@ -1554,7 +1559,7 @@ void Detector::captureInferenceGraph(const SimpleCudaMat& frameGpu)
     }
     
     captureAttempts++;
-    std::cout << "[Detector] Capturing CUDA Graph for FULL pipeline (attempt " << captureAttempts << "/" << maxAttempts << ")..." << std::endl;
+    std::cout << "[Detector] Capturing CUDA Graph for inference only (attempt " << captureAttempts << "/" << maxAttempts << ")..." << std::endl;
     
     // Clear any previous CUDA errors
     cudaError_t lastError = cudaGetLastError();
@@ -1567,30 +1572,25 @@ void Detector::captureInferenceGraph(const SimpleCudaMat& frameGpu)
     cudaStreamSynchronize(stream);
     cudaStreamSynchronize(postprocessStream);
     
-    // 전체 파이프라인을 CUDA Graph로 캡처
-    cudaError_t captureResult = cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal);
+    // TensorRT 추론만 CUDA Graph로 캡처 (후처리는 제외)
+    cudaError_t captureResult = cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal);
     if (captureResult != cudaSuccess) {
         std::cerr << "[Detector] Failed to begin CUDA Graph capture: " << cudaGetErrorString(captureResult) << std::endl;
         return;
     }
     
-    // 추론 실행
+    // 추론 실행만 캡처
     bool enqueueResult = context->enqueueV3(stream);
-    
-    if (!enqueueResult) {
-        std::cerr << "[Detector] TensorRT enqueue failed during graph capture" << std::endl;
-        cudaGraph_t tempGraph = nullptr;
-        cudaStreamEndCapture(stream, &tempGraph);
-        if (tempGraph) cudaGraphDestroy(tempGraph);
-        return;
-    }
-    
-    // 후처리도 포함 (고정 크기로 수정됨)
-    performGpuPostProcessing(stream);
     
     // Graph 캡처 종료
     cudaGraph_t tempGraph = nullptr;
     captureResult = cudaStreamEndCapture(stream, &tempGraph);
+    
+    if (!enqueueResult || captureResult != cudaSuccess) {
+        std::cerr << "[Detector] TensorRT enqueue or capture failed during graph capture" << std::endl;
+        if (tempGraph) cudaGraphDestroy(tempGraph);
+        return;
+    }
     
     // Check if capture was successful
     if (captureResult == cudaSuccess && tempGraph != nullptr) {
