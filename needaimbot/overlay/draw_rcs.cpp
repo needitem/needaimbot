@@ -10,17 +10,6 @@
 
  
 
-void SetWrappedTooltipRCS(const char* text)
-{
-    ImGui::BeginTooltip();
-    ImVec2 window_size = ImGui::GetIO().DisplaySize;
-    ImVec2 mouse_pos = ImGui::GetMousePos();
-    float max_width = window_size.x * 0.5f;
-    ImGui::PushTextWrapPos(max_width);
-    ImGui::TextUnformatted(text);
-    ImGui::PopTextWrapPos();
-    ImGui::EndTooltip();
-}
 
 void draw_rcs_settings() {
     auto& ctx = AppContext::getInstance();

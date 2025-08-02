@@ -316,45 +316,11 @@ void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float debug_scale) 
 }
 
 
-void draw_debug_frame()
-{
-    // Preview functionality has been moved
-    ImGui::Text("The preview window has been moved to the Offset tab.");
-    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Please switch to the Offset tab to see the live preview.");
-    return;
-
-    ImVec2 image_pos = ImGui::GetItemRectMin();
-    ImDrawList* draw_list = ImGui::GetWindowDrawList();
-
-    // Draw detections
-    drawDetections(draw_list, image_pos, debug_scale);
-
-
-    
-    ImGui::SeparatorText("Crosshair Pixel HSV");
-    ImGui::Spacing();
-    if (g_crosshairHsvValid) {
-        ImGui::Text("Crosshair H: %d, S: %d, V: %d", g_crosshairH, g_crosshairS, g_crosshairV);
-    } else {
-        ImGui::TextUnformatted("Crosshair HSV: N/A (Debug preview not active or frame empty)");
-    }
-    ImGui::Spacing();
-    
-    
-    
-}
 
 
 
 
 
-inline std::vector<const char*> getProfileCstrs(const std::vector<std::string>& profiles) {
-    std::vector<const char*> cstrs;
-    cstrs.reserve(profiles.size());
-    for(const auto& s : profiles)
-        cstrs.push_back(s.c_str());
-    return cstrs;
-}
 
 void draw_debug()
 {
