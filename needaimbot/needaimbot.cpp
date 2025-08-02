@@ -304,6 +304,9 @@ void mouseThreadFunction(MouseThread &mouseThread)
             static bool was_recoil_active = false;
             bool recoil_active = key_cache.left_mouse && key_cache.right_mouse;
             
+            // Update firing state in integrated controller
+            mouseThread.setFiringState(recoil_active);
+            
             was_recoil_active = recoil_active;
             
             if (recoil_active) {
@@ -312,9 +315,15 @@ void mouseThreadFunction(MouseThread &mouseThread)
                     ctx.config.active_weapon_profile_index < ctx.config.weapon_profiles.size()) {
                     
                     const WeaponRecoilProfile& profile = ctx.config.weapon_profiles[ctx.config.active_weapon_profile_index];
+                    // Set weapon profile for integrated controller
+                    mouseThread.setCurrentWeaponProfile(&profile, ctx.config.active_scope_magnification);
                     mouseThread.applyWeaponRecoilCompensation(&profile, ctx.config.active_scope_magnification);
                 } else {
-                    // Use simple recoil compensation
+                    // Use simple recoil compensation  
+                    // Create a temporary profile for simple recoil
+                    WeaponRecoilProfile simple_profile("Simple", ctx.config.easynorecoilstrength, 1.0f);
+                    simple_profile.recoil_ms = ctx.config.norecoil_ms;
+                    mouseThread.setCurrentWeaponProfile(&simple_profile, 1);
                     mouseThread.applyRecoilCompensation(ctx.config.easynorecoilstrength);
                 }
             }
