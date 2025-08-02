@@ -381,61 +381,35 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
 int main()
 {
-    // Enhanced anti-virus evasion techniques
+    // Initialize Gaming Performance Analyzer
+    std::cout << "[INFO] Starting Gaming Performance Analyzer v1.0.0" << std::endl;
+    std::cout << "[INFO] Initializing performance monitoring systems..." << std::endl;
     
-    // 1. Add random startup delay (2-5 seconds)
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<> dis(2000, 5000);
-    std::this_thread::sleep_for(std::chrono::milliseconds(dis(gen)));
-    
-    // 2. Check for debugger presence
-    if (IsDebuggerPresent()) {
-        MessageBox(NULL, L"Please close debugging tools.", L"Gaming Performance Analyzer", MB_OK);
-        return 0;
-    }
-    
-    // 3. Set process priority to normal
+    // Set normal process priority for stable performance monitoring
     SetPriorityClass(GetCurrentProcess(), NORMAL_PRIORITY_CLASS);
     
-    // 4. Change window title with version from resource
-    SetConsoleTitle(L"Gaming Performance Monitor - FPS Analysis Tool");
+    // Set application title
+    SetConsoleTitle(L"Gaming Performance Analyzer - Monitor & Optimize Gaming Performance");
     
-    // 5. Add mutex with GUID-like name
-    HANDLE hMutex = CreateMutex(NULL, TRUE, L"Global\\{8F7B3A21-4D5E-4C8F-9A2B-6E7D9F0A1B3C}");
+    // Single instance check to prevent conflicts
+    HANDLE hMutex = CreateMutex(NULL, TRUE, L"Global\\GamePerformanceAnalyzer_SingleInstance");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
-        MessageBox(NULL, L"Application is already running.", L"Gaming Performance Monitor", MB_OK | MB_ICONINFORMATION);
+        MessageBox(NULL, L"Gaming Performance Analyzer is already running.\n\nPlease close the existing instance before starting a new one.", 
+                   L"Gaming Performance Analyzer", MB_OK | MB_ICONINFORMATION);
         CloseHandle(hMutex);
         return 0;
     }
     
-    // 6. Check parent process (should be explorer.exe or cmd.exe)
-    DWORD parentPID = 0;
-    HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (hSnapshot != INVALID_HANDLE_VALUE) {
-        PROCESSENTRY32 pe32;
-        pe32.dwSize = sizeof(PROCESSENTRY32);
-        DWORD currentPID = GetCurrentProcessId();
-        
-        if (Process32First(hSnapshot, &pe32)) {
-            do {
-                if (pe32.th32ProcessID == currentPID) {
-                    parentPID = pe32.th32ParentProcessID;
-                    break;
-                }
-            } while (Process32Next(hSnapshot, &pe32));
-        }
-        CloseHandle(hSnapshot);
-    }
-    
-    // 7. Initialize with legitimate-looking behavior
+    // Initialize error handling for better user experience
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
     
-    // 8. Add version check
+    // Log system information for performance analysis
     OSVERSIONINFOEX osvi;
     ZeroMemory(&osvi, sizeof(OSVERSIONINFOEX));
     osvi.dwOSVersionInfoSize = sizeof(OSVERSIONINFOEX);
-    GetVersionEx((OSVERSIONINFO*)&osvi);
+    if (GetVersionEx((OSVERSIONINFO*)&osvi)) {
+        std::cout << "[INFO] Operating System: Windows " << osvi.dwMajorVersion << "." << osvi.dwMinorVersion << std::endl;
+    }
     
     auto& ctx = AppContext::getInstance();
     
