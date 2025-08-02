@@ -40,7 +40,7 @@ static void draw_button_section(const char* title, const char* description, std:
         
         ImGui::PushID(static_cast<int>(i));
         
-        float button_width = 70.0f;
+        float button_width = 60.0f;
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - button_width - ImGui::GetStyle().ItemSpacing.x);
         
         // Enhanced combo box styling
@@ -85,7 +85,7 @@ static void draw_button_section(const char* title, const char* description, std:
     
     UIHelpers::CompactSpacer();
     std::string add_button_label = "Add Key##" + std::string(add_id);
-    if (UIHelpers::BeautifulButton(add_button_label.c_str(), ImVec2(-1, 0)))
+    if (UIHelpers::BeautifulButton(add_button_label.c_str(), ImVec2(-FLT_MIN, 0)))
     {
         button_list.push_back("None");
         AppContext::getInstance().config.saveConfig();

@@ -1,6 +1,6 @@
 #include "draw_offset.h"
-#include "imgui/imgui.h"
-#include "imgui/imgui_internal.h"
+#include "../imgui/imgui.h"
+#include "../imgui/imgui_internal.h"
 #include "AppContext.h"
 #include "draw_settings.h"
 #include "ui_helpers.h"
@@ -61,7 +61,7 @@ void renderOffsetTab()
     if (bodyTexture && bodyImageSize.x > 0 && bodyImageSize.y > 0)
     {
         // Scale the image to fit nicely in the UI
-        float scale = 0.7f;  // Scale down to 70% for better UI fit
+        float scale = 0.5f;  // Scale down to 50% for better UI fit
         ImVec2 scaledImageSize(bodyImageSize.x * scale, bodyImageSize.y * scale);
         
         // Draw the body image with offset indicators
