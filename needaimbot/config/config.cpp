@@ -88,6 +88,11 @@ bool Config::loadConfig(const std::string& filename)
         
         crosshair_offset_x = 0.0f;
         crosshair_offset_y = 0.0f;
+        
+        // Aim+shoot offset defaults
+        enable_aim_shoot_offset = false;
+        aim_shoot_offset_x = 0.0f;
+        aim_shoot_offset_y = 0.0f;
 
         
         easynorecoil = false;
@@ -268,6 +273,11 @@ bool Config::loadConfig(const std::string& filename)
 
     crosshair_offset_x = static_cast<float>(get_double_ini("Target", "crosshair_offset_x", 0.0));
     crosshair_offset_y = static_cast<float>(get_double_ini("Target", "crosshair_offset_y", 0.0));
+    
+    // Aim+shoot offset settings
+    enable_aim_shoot_offset = get_bool_ini("Target", "enable_aim_shoot_offset", false);
+    aim_shoot_offset_x = static_cast<float>(get_double_ini("Target", "aim_shoot_offset_x", 0.0));
+    aim_shoot_offset_y = static_cast<float>(get_double_ini("Target", "aim_shoot_offset_y", 0.0));
 
     easynorecoil = get_bool_ini("Mouse", "easynorecoil", false);
     easynorecoilstrength = static_cast<float>(get_double_ini("Mouse", "easynorecoilstrength", 0.0));
@@ -518,7 +528,6 @@ bool Config::saveConfig(const std::string& filename)
     
     file << "target_fps = " << target_fps << "\n";
     file << "capture_method = " << capture_method << "\n";
-    std::cout << "[Config] Saving capture_method: " << capture_method << std::endl;
     file << "ndi_source_name = " << ndi_source_name << "\n";
     file << "ndi_network_url = " << ndi_network_url << "\n";
     file << "ndi_low_latency = " << (ndi_low_latency ? "true" : "false") << "\n";
@@ -530,6 +539,9 @@ bool Config::saveConfig(const std::string& filename)
     file << "offset_step = " << offset_step << "\n";
     file << "crosshair_offset_x = " << crosshair_offset_x << "\n";
     file << "crosshair_offset_y = " << crosshair_offset_y << "\n";
+    file << "enable_aim_shoot_offset = " << (enable_aim_shoot_offset ? "true" : "false") << "\n";
+    file << "aim_shoot_offset_x = " << aim_shoot_offset_x << "\n";
+    file << "aim_shoot_offset_y = " << aim_shoot_offset_y << "\n";
     file << std::noboolalpha;
     file << "ignore_third_person = " << (ignore_third_person ? "true" : "false") << "\n";
     file << "shooting_range_targets = " << (shooting_range_targets ? "true" : "false") << "\n";

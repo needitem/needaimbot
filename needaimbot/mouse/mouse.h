@@ -25,8 +25,6 @@
 #include "input_drivers/kmboxNet.h"
 #include "input_drivers/rzctl.h"
 #include "input_drivers/InputMethod.h"
-#include "aimbot_components/IntegratedController.h"
-
 class PIDController2D;
 
 
@@ -39,8 +37,7 @@ struct Point2D { float x, y; };
 class MouseThread
 {
 private:
-    std::unique_ptr<PIDController2D> pid_controller; // 호환성을 위해 유지
-    std::unique_ptr<IntegratedController> integrated_controller; // 통합 컨트롤러
+    std::unique_ptr<PIDController2D> pid_controller;
     std::unique_ptr<InputMethod> input_method;
     std::mutex input_method_mutex;
     mutable std::mutex member_data_mutex_;
@@ -137,7 +134,6 @@ public:
     void applyRecoilCompensation(float strength);
     void applyWeaponRecoilCompensation(const WeaponRecoilProfile* profile, int scope_magnification);
 
-
     void setInputMethod(std::unique_ptr<InputMethod> new_method);
     
     // Helper methods for moveMouse refactoring
@@ -161,13 +157,6 @@ public:
     
     // Add method to reset all accumulated states
     void resetAccumulatedStates();
-    
-    // 통합 컨트롤러 접근자
-    IntegratedController* getIntegratedController() { return integrated_controller.get(); }
-    
-    // 사격 상태 설정
-    void setFiringState(bool firing);
-    void setCurrentWeaponProfile(const WeaponRecoilProfile* profile, int scope_magnification);
     
 private:
 };
