@@ -86,14 +86,6 @@ namespace UIHelpers
         return changed;
     }
 
-    void BeautifulCombo(const char* label, int* current_item, const char* const items[], int items_count)
-    {
-        ImGui::PushStyleColor(ImGuiCol_Header, GetAccentColor(0.7f));
-        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, GetAccentColor(0.8f));
-        ImGui::PushStyleColor(ImGuiCol_HeaderActive, GetAccentColor(0.9f));
-        ImGui::Combo(label, current_item, items, items_count);
-        ImGui::PopStyleColor(3);
-    }
 
     void BeautifulSeparator(const char* text)
     {
@@ -180,12 +172,6 @@ namespace UIHelpers
         }
     }
 
-    void BeautifulProgressBar(float fraction, const ImVec2& size, const char* overlay)
-    {
-        ImGui::PushStyleColor(ImGuiCol_PlotHistogram, GetAccentColor());
-        ImGui::ProgressBar(fraction, size, overlay);
-        ImGui::PopStyleColor();
-    }
 
     void PushStyleColors()
     {
@@ -210,41 +196,7 @@ namespace UIHelpers
         }
     }
 
-    // Layout helpers
-    static float s_leftColumnWidth = 0.0f;
-    static float s_rightColumnWidth = 0.0f;
     
-    void BeginTwoColumnLayout(float left_width_ratio)
-    {
-        ImGui::Columns(2, nullptr, false);
-        ImGui::SetColumnWidth(0, ImGui::GetContentRegionAvail().x * left_width_ratio);
-    }
-    
-    void NextColumn()
-    {
-        ImGui::NextColumn();
-    }
-    
-    void EndTwoColumnLayout()
-    {
-        ImGui::Columns(1);
-    }
-    
-    void BeginGroupBox(const char* title)
-    {
-        if (title) {
-            ImGui::PushStyleColor(ImGuiCol_Text, GetAccentColor());
-            ImGui::Text("%s", title);
-            ImGui::PopStyleColor();
-            ImGui::Separator();
-            ImGui::Spacing();
-        }
-    }
-    
-    void EndGroupBox()
-    {
-        // No-op now
-    }
     
     void BeginCard(const char* title)
     {
@@ -262,15 +214,6 @@ namespace UIHelpers
         // No-op now
     }
     
-    void BeginInfoPanel()
-    {
-        // No-op now
-    }
-    
-    void EndInfoPanel()
-    {
-        // No-op now
-    }
     
     void Spacer(float height)
     {
@@ -307,7 +250,11 @@ namespace UIHelpers
     void CompactCombo(const char* label, int* current_item, const char* const items[], int items_count)
     {
         ImGui::PushItemWidth(-FLT_MIN);
-        BeautifulCombo(label, current_item, items, items_count);
+        ImGui::PushStyleColor(ImGuiCol_Header, GetAccentColor(0.7f));
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, GetAccentColor(0.8f));
+        ImGui::PushStyleColor(ImGuiCol_HeaderActive, GetAccentColor(0.9f));
+        ImGui::Combo(label, current_item, items, items_count);
+        ImGui::PopStyleColor(3);
         ImGui::PopItemWidth();
     }
     

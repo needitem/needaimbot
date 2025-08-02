@@ -12,7 +12,6 @@
 
 #include "AppContext.h"
 #include "capture/capture.h"
-#include "overlay/visuals.h"
 #include "core/constants.h"
 #include "utils/constants.h"
 #include "detector/detector.h" // For getCurrentTimeMs()

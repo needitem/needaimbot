@@ -58,7 +58,6 @@
     <ClCompile Include="overlay\draw_target.cpp" />
     <ClCompile Include="overlay\overlay.cpp" />
     <ClCompile Include="overlay\ui_helpers.cpp" />
-    <ClCompile Include="overlay\visuals.cpp" />
     <ClCompile Include="scr\other_tools.cpp" />
     <ClCompile Include="needaimbot.cpp" />
     <ClCompile Include="utils\image_io.cpp" />
@@ -132,7 +131,6 @@
     <ClInclude Include="overlay\draw_offset.h" />
     <ClInclude Include="overlay\overlay.h" />
     <ClInclude Include="overlay\ui_helpers.h" />
-    <ClInclude Include="overlay\visuals.h" />
     <ClInclude Include="config\config_validator.h" />
     <ClInclude Include="utils\constants.h" />
     <ClInclude Include="utils\AutoTuner.h" />
