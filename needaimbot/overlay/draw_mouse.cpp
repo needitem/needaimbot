@@ -72,10 +72,10 @@ static void draw_error_scaling_controls()
         });
     
     // Table for rules
-    if (ImGui::BeginTable("error_scaling_table", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-        ImGui::TableSetupColumn("Error Threshold", ImGuiTableColumnFlags_WidthFixed, 120);
-        ImGui::TableSetupColumn("Scale Factor", ImGuiTableColumnFlags_WidthFixed, 100);
-        ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_WidthFixed, 80);
+    if (ImGui::BeginTable("error_scaling_table", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("Error Threshold", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Scale Factor", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_WidthFixed, 60);
         ImGui::TableHeadersRow();
         
         for (size_t i = 0; i < temp_rules.size(); i++) {
@@ -116,7 +116,7 @@ static void draw_error_scaling_controls()
     static float new_scale = 30.0f;
     
     ImGui::Text("Add New Rule:");
-    ImGui::PushItemWidth(100);
+    ImGui::PushItemWidth(80);
     ImGui::InputFloat("Threshold", &new_threshold, 0.0f, 0.0f, "%.0f");
     ImGui::SameLine();
     ImGui::InputFloat("Scale %", &new_scale, 0.0f, 0.0f, "%.0f");
@@ -134,7 +134,7 @@ static void draw_error_scaling_controls()
     if (has_unsaved_changes) {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.7f, 0.0f, 0.9f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.0f, 0.8f, 0.0f, 1.0f));
-        if (ImGui::Button("Apply Changes", ImVec2(120, 0))) {
+        if (ImGui::Button("Apply Changes", ImVec2(100, 0))) {
             // Apply changes to actual config
             ctx.config.error_scaling_rules = temp_rules;
             SAVE_PROFILE();
@@ -146,7 +146,7 @@ static void draw_error_scaling_controls()
         
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.0f, 0.0f, 0.9f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.0f, 0.0f, 1.0f));
-        if (ImGui::Button("Cancel", ImVec2(80, 0))) {
+        if (ImGui::Button("Cancel", ImVec2(60, 0))) {
             // Revert to saved config
             temp_rules = ctx.config.error_scaling_rules;
             has_unsaved_changes = false;
@@ -154,7 +154,7 @@ static void draw_error_scaling_controls()
         ImGui::PopStyleColor(2);
     } else {
         // Reset button when no changes
-        if (ImGui::Button("Reset to Defaults", ImVec2(150, 0))) {
+        if (ImGui::Button("Reset to Defaults", ImVec2(120, 0))) {
             temp_rules.clear();
             temp_rules.push_back(Config::ErrorScalingRule(150.0f, 0.3f));
             temp_rules.push_back(Config::ErrorScalingRule(100.0f, 0.5f));

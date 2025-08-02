@@ -1,5 +1,5 @@
 #include "ui_helpers.h"
-#include <imgui/imgui_internal.h>
+#include "../imgui/imgui_internal.h"
 #include <cmath>
 #include "AppContext.h"
 #include <vector>
@@ -262,8 +262,8 @@ namespace UIHelpers
     void BeginCard(const char* title)
     {
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.12f, 0.12f, 0.15f, 0.95f));
-        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 4.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 6.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(5.0f, 4.0f));
         
         ImGui::BeginChild(title ? title : "##card", ImVec2(0, 0), true);
         
@@ -272,7 +272,7 @@ namespace UIHelpers
             ImGui::Text("%s", title);
             ImGui::PopStyleColor();
             ImGui::Separator();
-            // Removed extra spacing after title
+            CompactSpacer();
         }
     }
     
@@ -326,21 +326,21 @@ namespace UIHelpers
     
     void CompactSlider(const char* label, float* value, float min, float max, const char* format)
     {
-        ImGui::PushItemWidth(-1);
+        ImGui::PushItemWidth(-FLT_MIN);
         BeautifulSlider(label, value, min, max, format);
         ImGui::PopItemWidth();
     }
     
     void CompactCombo(const char* label, int* current_item, const char* const items[], int items_count)
     {
-        ImGui::PushItemWidth(-1);
+        ImGui::PushItemWidth(-FLT_MIN);
         BeautifulCombo(label, current_item, items, items_count);
         ImGui::PopItemWidth();
     }
     
     void CompactCombo(const char* label, int* current_item, bool (*getter)(void*, int, const char**), void* data, int items_count)
     {
-        ImGui::PushItemWidth(-1);
+        ImGui::PushItemWidth(-FLT_MIN);
         ImGui::PushStyleColor(ImGuiCol_Header, GetAccentColor(0.7f));
         ImGui::PushStyleColor(ImGuiCol_HeaderHovered, GetAccentColor(0.8f));
         ImGui::PushStyleColor(ImGuiCol_HeaderActive, GetAccentColor(0.9f));
@@ -353,9 +353,9 @@ namespace UIHelpers
     void BeginSettingsSection(const char* title, const char* description)
     {
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.08f, 0.08f, 0.10f, 0.95f));
-        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 6.0f);
         ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 8.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 6.0f));
         
         ImGui::BeginChild(title, ImVec2(0, 0), true);
         
@@ -371,7 +371,7 @@ namespace UIHelpers
             }
             
             ImGui::Separator();
-            Spacer(2.0f);
+            CompactSpacer();
         }
     }
     
@@ -380,7 +380,7 @@ namespace UIHelpers
         ImGui::EndChild();
         ImGui::PopStyleVar(3);
         ImGui::PopStyleColor();
-        Spacer(6.0f);
+        CompactSpacer();
     }
     
     void SettingsHeader(const char* title)
@@ -435,8 +435,8 @@ namespace UIHelpers
         ImGui::PushStyleColor(ImGuiCol_SliderGrab, GetAccentColor(0.9f));
         ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, GetAccentColor(1.0f));
         
-        // Make slider wider
-        ImGui::SetNextItemWidth(-1);
+        // Auto-width slider (fills available space)
+        ImGui::SetNextItemWidth(-FLT_MIN);
         bool changed = ImGui::SliderFloat(label, v, v_min, v_max, format);
         
         ImGui::PopStyleColor(5);
@@ -465,8 +465,8 @@ namespace UIHelpers
         ImGui::PushStyleColor(ImGuiCol_HeaderHovered, GetAccentColor(0.8f));
         ImGui::PushStyleColor(ImGuiCol_HeaderActive, GetAccentColor(0.9f));
         
-        // Make combo wider
-        ImGui::SetNextItemWidth(-1);
+        // Auto-width combo (fills available space)
+        ImGui::SetNextItemWidth(-FLT_MIN);
         bool changed = ImGui::Combo(label, current_item, items, items_count);
         
         ImGui::PopStyleColor(9);

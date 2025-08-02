@@ -4,8 +4,8 @@
 #include <Windows.h>
 #include <Psapi.h>
 
-#include <imgui/imgui.h>
-#include "imgui/imgui_internal.h"
+#include "../imgui/imgui.h"
+#include "../imgui/imgui_internal.h"
 
 #include "AppContext.h"
 #include "config/config.h"
