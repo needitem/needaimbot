@@ -1,10 +1,12 @@
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
-#include <imgui.h>
-#include "imgui/imgui_internal.h"
+#include "../imgui/imgui.h"
+#include "../imgui/imgui_internal.h"
 #include "AppContext.h"
 #include "config/config.h"
 #include "needaimbot.h"
+#include "ui_helpers.h"
+#include "draw_settings.h"
 
 void HelpMarkerColorFilter(const char* desc)
 {
