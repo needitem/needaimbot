@@ -94,7 +94,6 @@ MouseThread::MouseThread(
 {
     initializeScreen(resolution, bScope_multiplier, norecoil_ms);
     pid_controller = std::make_unique<PIDController2D>(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
-    integrated_controller = std::make_unique<IntegratedController>(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
     initializeInputMethod(serialConnection, makcuConnection, gHub);
     
     // Start async input worker thread
@@ -179,10 +178,6 @@ void MouseThread::updateConfig(
         
     }
     pid_controller->updateSeparatedParameters(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
-    if (integrated_controller) {
-        integrated_controller->updatePIDParameters(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
-        integrated_controller->setScaleFactors(move_scale_x, move_scale_y);
-    }
     
 }
 
@@ -264,8 +259,14 @@ float MouseThread::calculateTargetDistanceSquared(const AimbotTarget &target) co
     }
     {
         std::lock_guard<std::mutex> lock(ctx.configMutex);
-        crosshair_offset_x = ctx.config.crosshair_offset_x;
-        crosshair_offset_y = ctx.config.crosshair_offset_y;
+        // Check if we should use aim+shoot offset
+        if (ctx.config.enable_aim_shoot_offset && ctx.aiming && ctx.shooting) {
+            crosshair_offset_x = ctx.config.aim_shoot_offset_x;
+            crosshair_offset_y = ctx.config.aim_shoot_offset_y;
+        } else {
+            crosshair_offset_x = ctx.config.crosshair_offset_x;
+            crosshair_offset_y = ctx.config.crosshair_offset_y;
+        }
     }
     
     // Apply crosshair offset correction
@@ -319,6 +320,8 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     // Cache for config values to reduce mutex locks
     static struct ConfigCache {
         float crosshair_offset_x, crosshair_offset_y;
+        float aim_shoot_offset_x, aim_shoot_offset_y;
+        bool enable_aim_shoot_offset;
         int head_class_id_to_use = -1;
         bool apply_head_offset = false;
         float head_y_offset, body_y_offset;
@@ -331,6 +334,9 @@ void MouseThread::moveMouse(const AimbotTarget &target)
             if (now - last_update >= update_interval) {
                 crosshair_offset_x = config.crosshair_offset_x;
                 crosshair_offset_y = config.crosshair_offset_y;
+                aim_shoot_offset_x = config.aim_shoot_offset_x;
+                aim_shoot_offset_y = config.aim_shoot_offset_y;
+                enable_aim_shoot_offset = config.enable_aim_shoot_offset;
                 head_class_name = config.head_class_name;
                 head_y_offset = config.head_y_offset;
                 body_y_offset = config.body_y_offset;
@@ -366,8 +372,13 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     }
 
     // Apply crosshair offset correction
-    current_center_x += config_cache.crosshair_offset_x;
-    current_center_y += config_cache.crosshair_offset_y;
+    if (config_cache.enable_aim_shoot_offset && ctx.aiming && ctx.shooting) {
+        current_center_x += config_cache.aim_shoot_offset_x;
+        current_center_y += config_cache.aim_shoot_offset_y;
+    } else {
+        current_center_x += config_cache.crosshair_offset_x;
+        current_center_y += config_cache.crosshair_offset_y;
+    }
 
     Point2D raw_target_pos;
     raw_target_pos.x = target.x + target.w * 0.5f;
@@ -429,69 +440,34 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     }
 
 
-    // IntegratedController 사용
-    if (integrated_controller) {
-        // 타겟 정보 업데이트
-        integrated_controller->updateTarget(target_x, target_y, current_center_x, current_center_y);
-        
-        auto start_time = std::chrono::steady_clock::now();
-        
-        // 통합 움직임 계산
-        auto [movement, debug_info] = integrated_controller->calculateMovement();
-        
-        auto end_time = std::chrono::steady_clock::now();
-        float calc_duration_ms = std::chrono::duration<float, std::milli>(end_time - start_time).count();
-        ctx.g_current_pid_calc_time_ms.store(calc_duration_ms, std::memory_order_relaxed);
-        ctx.add_to_history(ctx.g_pid_calc_time_history, calc_duration_ms, ctx.g_pid_calc_history_mutex);
-        
-        // Debug logging
-        if (ctx.config.verbose) {
-            std::cout << "[IntegratedController] Strategy: ";
-            switch (debug_info.strategy) {
-                case IntegratedController::MovementStrategy::NONE: std::cout << "NONE"; break;
-                case IntegratedController::MovementStrategy::RECOIL_ONLY: std::cout << "RECOIL_ONLY"; break;
-                case IntegratedController::MovementStrategy::PID_ONLY: std::cout << "PID_ONLY"; break;
-                case IntegratedController::MovementStrategy::ALIGNED_COMBINE: std::cout << "ALIGNED_COMBINE"; break;
-                case IntegratedController::MovementStrategy::CONFLICT_WEIGHTED: std::cout << "CONFLICT_WEIGHTED"; break;
-                case IntegratedController::MovementStrategy::PERPENDICULAR_WEIGHTED: std::cout << "PERPENDICULAR_WEIGHTED"; break;
-            }
-            std::cout << ", PID: (" << debug_info.pid_movement.x() << ", " << debug_info.pid_movement.y() << ")"
-                      << ", Recoil: (" << debug_info.recoil_movement.x() << ", " << debug_info.recoil_movement.y() << ")"
-                      << ", Final: (" << movement.x() << ", " << movement.y() << ")" << std::endl;
-        }
-        
-        move_x = movement.x();
-        move_y = movement.y();
-    } else {
-        // 기존 PID 로직 (호환성을 위해 유지)
-        float error_magnitude = std::sqrt(error_x * error_x + error_y * error_y);
-        
-        Eigen::Vector2f error(error_x, error_y);
-        auto pid_start_time = std::chrono::steady_clock::now();
-        
-        Eigen::Vector2f pid_output = pid_controller->calculate(error);
-        
-        if (ctx.config.verbose) {
-            std::cout << "[Mouse] PID output - X: " << pid_output.x() << ", Y: " << pid_output.y() << std::endl;
-        }
-            
-        auto pid_end_time = std::chrono::steady_clock::now();
-        float pid_duration_ms = std::chrono::duration<float, std::milli>(pid_end_time - pid_start_time).count();
-        ctx.g_current_pid_calc_time_ms.store(pid_duration_ms, std::memory_order_relaxed);
-        ctx.add_to_history(ctx.g_pid_calc_time_history, pid_duration_ms, ctx.g_pid_calc_history_mutex);
-
-        float error_scale_factor = 1.0f;
-        
-        for (const auto& rule : ctx.config.error_scaling_rules) {
-            if (error_magnitude >= rule.error_threshold) {
-                error_scale_factor = rule.scale_factor;
-                break;
-            }
-        }
-        
-        move_x = pid_output.x() * current_move_scale_x * error_scale_factor;
-        move_y = pid_output.y() * current_move_scale_y * error_scale_factor;
+    // 원래의 PID 로직 사용
+    float error_magnitude = std::sqrt(error_x * error_x + error_y * error_y);
+    
+    Eigen::Vector2f error(error_x, error_y);
+    auto pid_start_time = std::chrono::steady_clock::now();
+    
+    Eigen::Vector2f pid_output = pid_controller->calculate(error);
+    
+    if (ctx.config.verbose) {
+        std::cout << "[Mouse] PID output - X: " << pid_output.x() << ", Y: " << pid_output.y() << std::endl;
     }
+        
+    auto pid_end_time = std::chrono::steady_clock::now();
+    float pid_duration_ms = std::chrono::duration<float, std::milli>(pid_end_time - pid_start_time).count();
+    ctx.g_current_pid_calc_time_ms.store(pid_duration_ms, std::memory_order_relaxed);
+    ctx.add_to_history(ctx.g_pid_calc_time_history, pid_duration_ms, ctx.g_pid_calc_history_mutex);
+
+    float error_scale_factor = 1.0f;
+    
+    for (const auto& rule : ctx.config.error_scaling_rules) {
+        if (error_magnitude >= rule.error_threshold) {
+            error_scale_factor = rule.scale_factor;
+            break;
+        }
+    }
+    
+    move_x = pid_output.x() * current_move_scale_x * error_scale_factor;
+    move_y = pid_output.y() * current_move_scale_y * error_scale_factor;
     
     // Debug logging for final move values
     if (ctx.config.verbose) {
@@ -574,46 +550,37 @@ void MouseThread::releaseMouse()
 
 void MouseThread::applyRecoilCompensation(float strength)
 {
-    // IntegratedController 사용 시 더 이상 직접 호출하지 않음
-    // 반동 제어는 setFiringState와 setCurrentWeaponProfile로 관리
-    if (!integrated_controller) {
-        // 기존 로직 (호환성을 위해 유지)
-        float current_norecoil_ms;
-        {
-            std::lock_guard<std::mutex> lock(member_data_mutex_); 
-            current_norecoil_ms = this->norecoil_ms;
-        }
-        
-        applyRecoilCompensationInternal(strength, current_norecoil_ms);
+    // 항상 직접 반동 제어를 수행
+    float current_norecoil_ms;
+    {
+        std::lock_guard<std::mutex> lock(member_data_mutex_); 
+        current_norecoil_ms = this->norecoil_ms;
     }
+    
+    applyRecoilCompensationInternal(strength, current_norecoil_ms);
 }
 
 void MouseThread::applyWeaponRecoilCompensation(const WeaponRecoilProfile* profile, int scope_magnification)
 {
-    if (integrated_controller) {
-        // IntegratedController에 무기 프로파일 설정
-        integrated_controller->setWeaponProfile(profile, scope_magnification);
-    } else {
-        // 기존 로직 (호환성을 위해 유지)
-        if (!profile) {
-            return;
-        }
-
-        float scope_multiplier = 1.0f;
-        switch (scope_magnification) {
-            case 1: scope_multiplier = profile->scope_mult_1x; break;
-            case 2: scope_multiplier = profile->scope_mult_2x; break;
-            case 3: scope_multiplier = profile->scope_mult_3x; break;
-            case 4: scope_multiplier = profile->scope_mult_4x; break;
-            case 6: scope_multiplier = profile->scope_mult_6x; break;
-            case 8: scope_multiplier = profile->scope_mult_8x; break;
-            default: scope_multiplier = profile->scope_mult_1x; break;
-        }
-
-        float adjusted_strength = profile->base_strength * profile->fire_rate_multiplier * scope_multiplier;
-        
-        applyRecoilCompensationInternal(adjusted_strength, profile->recoil_ms);
+    // 항상 직접 반동 제어를 수행
+    if (!profile) {
+        return;
     }
+
+    float scope_multiplier = 1.0f;
+    switch (scope_magnification) {
+        case 1: scope_multiplier = profile->scope_mult_1x; break;
+        case 2: scope_multiplier = profile->scope_mult_2x; break;
+        case 3: scope_multiplier = profile->scope_mult_3x; break;
+        case 4: scope_multiplier = profile->scope_mult_4x; break;
+        case 6: scope_multiplier = profile->scope_mult_6x; break;
+        case 8: scope_multiplier = profile->scope_mult_8x; break;
+        default: scope_multiplier = profile->scope_mult_1x; break;
+    }
+
+    float adjusted_strength = profile->base_strength * profile->fire_rate_multiplier * scope_multiplier;
+    
+    applyRecoilCompensationInternal(adjusted_strength, profile->recoil_ms);
 }
 
 
@@ -685,6 +652,8 @@ void MouseThread::applyRecoilCompensationInternal(float strength, float delay_ms
         // Apply strength directly without accumulation to prevent over-compensation
         int dy_recoil = static_cast<int>(std::round(strength));
         
+        // Debug logging removed
+        
         if (dy_recoil != 0) {
             // Use async queue instead of direct call
             enqueueMouseCommand(MouseCommand::MOVE, 0, dy_recoil);
@@ -702,33 +671,12 @@ void MouseThread::resetAccumulatedStates()
         pid_controller->reset();
     }
     
-    // Reset integrated controller
-    if (integrated_controller) {
-        integrated_controller->reset();
-    }
-    
     // Reset movement accumulation
     accumulated_x_ = 0.0f;
     accumulated_y_ = 0.0f;
 }
 
-void MouseThread::setFiringState(bool firing)
-{
-    if (integrated_controller) {
-        if (firing) {
-            integrated_controller->startFiring();
-        } else {
-            integrated_controller->stopFiring();
-        }
-    }
-}
-
-void MouseThread::setCurrentWeaponProfile(const WeaponRecoilProfile* profile, int scope_magnification)
-{
-    if (integrated_controller) {
-        integrated_controller->setWeaponProfile(profile, scope_magnification);
-    }
-}
+// IntegratedController 관련 함수들 제거됨
 
 void MouseThread::asyncInputWorker()
 {

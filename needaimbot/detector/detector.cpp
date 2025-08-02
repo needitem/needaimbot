@@ -768,6 +768,9 @@ void Detector::inferenceThread()
         float confidence_weight;
         float crosshair_offset_x;
         float crosshair_offset_y;
+        float aim_shoot_offset_x;
+        float aim_shoot_offset_y;
+        bool enable_aim_shoot_offset;
         float sticky_target_threshold;
         bool enable_color_filter;
         int min_color_pixels_required;
@@ -783,6 +786,9 @@ void Detector::inferenceThread()
             confidence_weight = config.confidence_weight;
             crosshair_offset_x = config.crosshair_offset_x;
             crosshair_offset_y = config.crosshair_offset_y;
+            aim_shoot_offset_x = config.aim_shoot_offset_x;
+            aim_shoot_offset_y = config.aim_shoot_offset_y;
+            enable_aim_shoot_offset = config.enable_aim_shoot_offset;
             sticky_target_threshold = config.sticky_target_threshold;
             enable_color_filter = config.enable_color_filter;
             min_color_pixels_required = config.min_color_pixels;
@@ -1005,8 +1011,14 @@ void Detector::inferenceThread()
                     
                     // 검출된 객체가 있으면 가장 가까운 타겟 선택
                     if (m_finalDetectionsCountHost > 0 && !ctx.should_exit) {
-                        float crosshairX = cached_config.detection_resolution / 2.0f + cached_config.crosshair_offset_x;
-                        float crosshairY = cached_config.detection_resolution / 2.0f + cached_config.crosshair_offset_y;
+                        float crosshairX, crosshairY;
+                        if (cached_config.enable_aim_shoot_offset && ctx.aiming && ctx.shooting) {
+                            crosshairX = cached_config.detection_resolution / 2.0f + cached_config.aim_shoot_offset_x;
+                            crosshairY = cached_config.detection_resolution / 2.0f + cached_config.aim_shoot_offset_y;
+                        } else {
+                            crosshairX = cached_config.detection_resolution / 2.0f + cached_config.crosshair_offset_x;
+                            crosshairY = cached_config.detection_resolution / 2.0f + cached_config.crosshair_offset_y;
+                        }
                         
                         int closestIndex = findClosestTargetSimple(
                             m_finalDetectionsHost.get(),

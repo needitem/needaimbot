@@ -69,6 +69,7 @@ void keyboardListener() {
     std::cout << std::endl;
 
     static bool last_aiming_state = false;
+    static bool last_shooting_state = false;
 
     while (!ctx.should_exit) {
         if (is_any_key_pressed(exit_vk_codes)) {
@@ -83,12 +84,49 @@ void keyboardListener() {
             last_aiming_state = current_aiming;
         }
 
+        // Track auto_shoot button state
+        bool current_shooting = is_any_key_pressed(auto_shoot_vk_codes);
+        ctx.shooting = current_shooting;
+        
+        if (current_shooting != last_shooting_state) {
+            last_shooting_state = current_shooting;
+        }
+
         if (is_any_key_pressed(pause_vk_codes)) {
             ctx.detectionPaused = !ctx.detectionPaused;
             Sleep(200); // Debounce
         }
 
         // Auto shoot functionality removed
+
+        // Recoil strength adjustment with arrow keys
+        static DWORD last_adjust_time = 0;
+        DWORD current_time = GetTickCount();
+        
+        if (current_time - last_adjust_time > 100) {  // 100ms debounce
+            if (GetAsyncKeyState(VK_LEFT) & 0x8000) {
+                if (ctx.config.easynorecoilstrength > MIN_NORECOIL_STRENGTH) {
+                    ctx.config.easynorecoilstrength -= ctx.config.norecoil_step;
+                    if (ctx.config.easynorecoilstrength < MIN_NORECOIL_STRENGTH) {
+                        ctx.config.easynorecoilstrength = MIN_NORECOIL_STRENGTH;
+                    }
+                    std::cout << "[Keyboard] Recoil strength: " << ctx.config.easynorecoilstrength << std::endl;
+                    ctx.config.saveConfig();
+                    last_adjust_time = current_time;
+                }
+            }
+            else if (GetAsyncKeyState(VK_RIGHT) & 0x8000) {
+                if (ctx.config.easynorecoilstrength < MAX_NORECOIL_STRENGTH) {
+                    ctx.config.easynorecoilstrength += ctx.config.norecoil_step;
+                    if (ctx.config.easynorecoilstrength > MAX_NORECOIL_STRENGTH) {
+                        ctx.config.easynorecoilstrength = MAX_NORECOIL_STRENGTH;
+                    }
+                    std::cout << "[Keyboard] Recoil strength: " << ctx.config.easynorecoilstrength << std::endl;
+                    ctx.config.saveConfig();
+                    last_adjust_time = current_time;
+                }
+            }
+        }
 
         Sleep(1);
     }
