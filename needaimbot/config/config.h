@@ -177,6 +177,11 @@ public:
     
     float crosshair_offset_x;
     float crosshair_offset_y;
+    
+    // Separate offset for when aiming and shooting
+    bool enable_aim_shoot_offset;
+    float aim_shoot_offset_x;
+    float aim_shoot_offset_y;
 
     
     bool easynorecoil;
@@ -200,10 +205,6 @@ public:
     std::string current_weapon_name;
 
     
-    // Movement method selection
-    std::string movement_method; // "pid", "bezier", "spline_kalman", or "gan"
-    
-    // PID Controller parameters
     double kp_x;
     double ki_x;
     double kd_x;
@@ -211,25 +212,6 @@ public:
     double ki_y;
     double kd_y;
     
-    // Bezier Curve Controller parameters
-    float bezier_speed;       // Number of steps in the curve (higher = smoother but slower)
-    float bezier_curve_factor; // How much curve to add (0.0 - 1.0)
-    
-    // Advanced Bezier parameters (previously hardcoded)
-    float bezier_step_multiplier;     // Dynamic step calculation multiplier (default: 10.0)
-    float bezier_min_steps;           // Minimum steps for curve (default: 3)
-    float bezier_curve_offset_scale;  // Curve offset scaling factor (default: 0.03)
-    float bezier_max_curve_offset;    // Maximum curve offset pixels (default: 2.0)
-    float bezier_control1_min;        // Control point 1 minimum factor (default: 0.15)
-    float bezier_control1_range;      // Control point 1 range (default: 0.05)
-    float bezier_control2_min;        // Control point 2 minimum factor (default: 0.80)
-    float bezier_control2_range;      // Control point 2 range (default: 0.05)
-    float bezier_s_curve_probability; // S-curve probability 0-1 (default: 0.3)
-    float bezier_s_curve_offset1;     // S-curve offset multiplier 1 (default: 0.6)
-    float bezier_s_curve_offset2;     // S-curve offset multiplier 2 (default: 0.4)
-    float bezier_single_offset1;      // Single curve offset multiplier 1 (default: 0.5)
-    float bezier_single_offset2;      // Single curve offset multiplier 2 (default: 0.3)
-    float bezier_min_movement;        // Minimum movement threshold (default: 0.1)
     
     // Error-based scaling for jitter and overshoot control
     struct ErrorScalingRule {
@@ -240,21 +222,6 @@ public:
             : error_threshold(threshold), scale_factor(scale) {}
     };
     std::vector<ErrorScalingRule> error_scaling_rules;
-    
-    // Spline + Kalman Filter parameters
-    int spline_segments;              // Number of spline segments (default: 20)
-    float kalman_process_noise;       // Process noise for Kalman filter (default: 0.1)
-    float kalman_measurement_noise;   // Measurement noise for Kalman filter (default: 1.0)
-    float spline_tension;             // Spline tension parameter (default: 0.5)
-    float spline_continuity;          // Spline continuity parameter (default: 0.5)
-    float spline_bias;                // Spline bias parameter (default: 0.0)
-    
-    // GAN-based movement parameters
-    float gan_noise_scale;            // Noise scale for GAN input (default: 0.3)
-    float gan_path_complexity;        // Path complexity factor (default: 0.7)
-    float gan_human_variability;      // Human variability factor (default: 0.5)
-    float gan_reaction_time;          // Simulated reaction time (default: 0.15)
-    int gan_acceleration_profile;     // 0: linear, 1: ease-in-out, 2: human-like (default: 2)
 
     
 

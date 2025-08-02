@@ -209,10 +209,10 @@ static void draw_class_settings()
     UIHelpers::CompactSpacer();
     
     if (ImGui::BeginTable("class_settings_table", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Resizable)) {
-        ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 45.0f);
-        ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("Ignore", ImGuiTableColumnFlags_WidthFixed, 60.0f);
-        ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_WidthFixed, 85.0f);
+        ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthStretch, 0.15f);
+        ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 0.50f);
+        ImGui::TableSetupColumn("Ignore", ImGuiTableColumnFlags_WidthStretch, 0.15f);
+        ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_WidthStretch, 0.20f);
         ImGui::TableHeadersRow();
 
         for (size_t i = 0; i < ctx.config.class_settings.size(); ++i) {
@@ -360,21 +360,14 @@ void draw_ai()
 {
     auto& ctx = AppContext::getInstance();
     
-    UIHelpers::BeginTwoColumnLayout(0.6f);
-    
-    // Left column - Main settings
     draw_model_settings();
-    UIHelpers::CompactSpacer();
+    UIHelpers::Spacer();
     
     draw_detection_settings();
-    UIHelpers::CompactSpacer();
+    UIHelpers::Spacer();
+    
+    draw_class_settings();
+    UIHelpers::Spacer();
     
     draw_advanced_settings();
-    
-    UIHelpers::NextColumn();
-    
-    // Right column - Class settings and info
-    draw_class_settings();
-    
-    UIHelpers::EndTwoColumnLayout();
 }

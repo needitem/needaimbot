@@ -38,10 +38,10 @@
 #endif
 
 
-static ID3D11Texture2D* g_debugTex = nullptr;
-static ID3D11ShaderResourceView* g_debugSRV = nullptr;
-static int texW = 0, texH = 0;
-static float debug_scale = 1.0f; 
+ID3D11Texture2D* g_debugTex = nullptr;
+ID3D11ShaderResourceView* g_debugSRV = nullptr;
+int texW = 0, texH = 0;
+float debug_scale = 1.0f; 
 
 
 static ID3D11Texture2D* g_colorMaskTex = nullptr;
@@ -57,7 +57,7 @@ static bool g_crosshairHsvValid = false;
 
 
 // GPU-accelerated version with direct GPU memory handling
-static void uploadDebugFrame(const SimpleCudaMat& bgrGpu)
+void uploadDebugFrame(const SimpleCudaMat& bgrGpu)
 {
     if (bgrGpu.empty() || !g_pd3dDevice || !g_pd3dDeviceContext) {
         return;
@@ -236,7 +236,7 @@ static void uploadColorMaskTexture(const SimpleMat& grayMask)
     }
 }
 
-static void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float debug_scale) {
+void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float debug_scale) {
     auto& ctx = AppContext::getInstance();
     
     if (!ctx.detector) return;
@@ -318,34 +318,10 @@ static void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float debug_
 
 void draw_debug_frame()
 {
-    auto& ctx = AppContext::getInstance();
-    
-    // Only process if debug window is visible
-    if (!ctx.config.show_window) {
-        ImGui::TextUnformatted("Debug window disabled.");
-        return;
-    }
-    
-    // Use GPU frame directly without downloading
-    extern SimpleCudaMat latestFrameGpu;
-    
-    if (latestFrameGpu.empty()) {
-        ImGui::TextUnformatted("Debug frame unavailable.");
-        return;
-    }
-    
-    // Upload GPU frame directly
-    uploadDebugFrame(latestFrameGpu);
-    
-    ImGui::SliderFloat("Debug scale", &debug_scale, 0.1f, 3.0f, "%.1fx");
-    ImVec2 image_size(texW * debug_scale, texH * debug_scale);
-    if (g_debugSRV) {
-        ImGui::Image(g_debugSRV, image_size);
-    } else {
-        ImGui::TextUnformatted("Debug frame: Data processed, but texture unavailable for display.");
-        ImGui::TextUnformatted("Overlays skipped: Debug texture unavailable.");
-        return;
-    }
+    // Preview functionality has been moved
+    ImGui::Text("The preview window has been moved to the Offset tab.");
+    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Please switch to the Offset tab to see the live preview.");
+    return;
 
     ImVec2 image_pos = ImGui::GetItemRectMin();
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
@@ -403,213 +379,15 @@ void draw_debug()
         ImGui::Spacing();
     }
 
-    ImGui::SeparatorText("Debug Preview & Overlay"); 
+    ImGui::SeparatorText("Preview Notice"); 
     ImGui::Spacing();
-
-    bool prev_show_window_state = ctx.config.show_window; 
-    if (ImGui::Checkbox("Show Preview Window", &ctx.config.show_window)) 
-    {
-        
-        SAVE_PROFILE(); 
-
-        if (prev_show_window_state == true && ctx.config.show_window == false) {
-            
-            if (g_debugSRV) {
-                g_debugSRV->Release();
-                g_debugSRV = nullptr;
-            }
-            if (g_debugTex) {
-                g_debugTex->Release();
-                g_debugTex = nullptr;
-            }
-            texW = 0; 
-            texH = 0;
-
-            
-            if (g_colorMaskSRV) {
-                g_colorMaskSRV->Release();
-                g_colorMaskSRV = nullptr;
-            }
-            if (g_colorMaskTex) {
-                g_colorMaskTex->Release();
-                g_colorMaskTex = nullptr;
-            }
-            colorTexW = 0;
-            colorTexH = 0;
-        }
-    }
-    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Toggles the live debug frame preview below."); }
-
-    ImGui::SameLine(); ImGui::Spacing(); ImGui::SameLine();
     
-    
-    if (ImGui::Checkbox("Enable FPS Display", &ctx.config.show_fps)) { SAVE_PROFILE(); } 
-
-    // Crosshair offset adjustment controls
-    ImGui::SameLine(); ImGui::Spacing(); ImGui::SameLine();
-    ImGui::Text("Crosshair Offset X=%.1f, Y=%.1f", ctx.config.crosshair_offset_x, ctx.config.crosshair_offset_y);
+    ImGui::Text("The preview window has been moved to the Offset tab.");
+    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Please switch to the Offset tab to see the live preview.");
     
     ImGui::Spacing();
     
-    const float adjustment_step = 1.0f;
-    bool offset_changed = false;
-    
-    // Directional adjustment buttons in cross formation
-    ImGui::BeginGroup();
-    {
-        // Top button (Up - increase Y)
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 30.0f);
-        if (ImGui::Button("UP##offset_up", ImVec2(30, 30))) {
-            ctx.config.crosshair_offset_y += adjustment_step;
-            offset_changed = true;
-        }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move crosshair up");
-        
-        // Middle row (Left and Right)
-        if (ImGui::Button("L##offset_left", ImVec2(30, 30))) {
-            ctx.config.crosshair_offset_x += adjustment_step;
-            offset_changed = true;
-        }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move crosshair left");
-        
-        ImGui::SameLine();
-        if (ImGui::Button("R##offset_right", ImVec2(30, 30))) {
-            ctx.config.crosshair_offset_x -= adjustment_step;
-            offset_changed = true;
-        }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move crosshair right");
-        
-        // Bottom button (Down - decrease Y)
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 30.0f);
-        if (ImGui::Button("DN##offset_down", ImVec2(30, 30))) {
-            ctx.config.crosshair_offset_y -= adjustment_step;
-            offset_changed = true;
-        }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move crosshair down");
-    }
-    ImGui::EndGroup();
-    
-    ImGui::SameLine();
-    ImGui::BeginGroup();
-    {
-        // Reset button
-        if (ImGui::Button("Reset##offset_reset", ImVec2(60, 30))) {
-            ctx.config.crosshair_offset_x = 0.0f;
-            ctx.config.crosshair_offset_y = 0.0f;
-            offset_changed = true;
-        }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Reset crosshair offset to center");
-        
-        // Fine adjustment controls
-        ImGui::Spacing();
-        ImGui::Text("Fine Adjust:");
-        ImGui::PushItemWidth(80);
-        if (ImGui::DragFloat("X##offset_x_fine", &ctx.config.crosshair_offset_x, 0.1f, -100.0f, 100.0f, "%.1f")) {
-            offset_changed = true;
-        }
-        if (ImGui::DragFloat("Y##offset_y_fine", &ctx.config.crosshair_offset_y, 0.1f, -100.0f, 100.0f, "%.1f")) {
-            offset_changed = true;
-        }
-        ImGui::PopItemWidth();
-    }
-    ImGui::EndGroup();
-    
-    // Save config when offset changes
-    if (offset_changed) {
-        SAVE_PROFILE();
-    }
-
-    ImGui::Spacing();
-
-    if (ctx.config.show_window) 
-    {
-        // Use GPU frame directly
-        extern SimpleCudaMat latestFrameGpu;
-        
-        if (latestFrameGpu.empty()) {
-            ImGui::TextUnformatted("Debug frame unavailable.");
-            return;
-        }
-        
-        // Upload GPU frame directly
-        uploadDebugFrame(latestFrameGpu);
-        
-        ImGui::SliderFloat("Debug scale", &debug_scale, 0.1f, 3.0f, "%.1fx");
-        ImVec2 image_size(texW * debug_scale, texH * debug_scale);
-        if (g_debugSRV) {
-            ImGui::Image(g_debugSRV, image_size);
-        } else {
-            ImGui::TextUnformatted("Debug frame: Data processed, but texture unavailable for display.");
-            ImGui::TextUnformatted("Overlays skipped: Debug texture unavailable.");
-            return;
-        }
-
-        ImVec2 image_pos = ImGui::GetItemRectMin();
-        ImDrawList* draw_list = ImGui::GetWindowDrawList();
-
-        // Draw detections
-        drawDetections(draw_list, image_pos, debug_scale);
-
-        // Draw center crosshair with offset
-        float center_x = image_pos.x + (texW * debug_scale) / 2.0f + (ctx.config.crosshair_offset_x * debug_scale);
-        float center_y = image_pos.y + (texH * debug_scale) / 2.0f + (ctx.config.crosshair_offset_y * debug_scale);
-        ImU32 crosshair_color = IM_COL32(255, 255, 255, 255);
-        
-        // Draw crosshair lines
-        draw_list->AddLine(ImVec2(center_x - 10, center_y), ImVec2(center_x + 10, center_y), crosshair_color, 2.0f);
-        draw_list->AddLine(ImVec2(center_x, center_y - 10), ImVec2(center_x, center_y + 10), crosshair_color, 2.0f);
-        
-        // Debug text - moved below image
-        ImGui::Separator();
-        ImGui::Text("Color Legend: Green=Best Target, Yellow=Valid, Red=Low Confidence");
-        
-        // Draw target offset if best target exists and is valid (using synchronized overlay data)
-        Detection target;
-        bool hasTarget = false;
-        {
-            std::lock_guard<std::mutex> lock(ctx.overlay_target_mutex);
-            hasTarget = ctx.overlay_has_target.load();
-            if (hasTarget) {
-                target = ctx.overlay_target_info;
-            }
-        }
-        
-        if (hasTarget && target.width > 0 && target.height > 0) {
-            float target_center_x = image_pos.x + (target.x + target.width / 2.0f) * debug_scale;
-            
-            // Calculate Y offset based on head/body settings
-            float y_offset;
-            bool is_head = false;
-            for (const auto& cs : ctx.config.class_settings) {
-                if (cs.id == target.classId && cs.name == ctx.config.head_class_name && !cs.ignore) {
-                    is_head = true;
-                    break;
-                }
-            }
-            y_offset = is_head ? ctx.config.head_y_offset : ctx.config.body_y_offset;
-            
-            float target_center_y = image_pos.y + (target.y + target.height * y_offset) * debug_scale;
-            
-            // Draw line from center to target
-            draw_list->AddLine(ImVec2(center_x, center_y), ImVec2(target_center_x, target_center_y), 
-                               IM_COL32(0, 255, 255, 255), 2.0f);
-            
-            // Draw target point
-            draw_list->AddCircleFilled(ImVec2(target_center_x, target_center_y), 4.0f, IM_COL32(0, 255, 255, 255));
-        }
-
-
-
-        
-        ImGui::SeparatorText("Crosshair Pixel HSV");
-        ImGui::Spacing();
-        if (g_crosshairHsvValid) {
-            ImGui::Text("Crosshair H: %d, S: %d, V: %d", g_crosshairH, g_crosshairS, g_crosshairV);
-        } else {
-            ImGui::TextUnformatted("Crosshair HSV: N/A (Debug preview not active or frame empty)");
-        }
-        ImGui::Spacing();
-    }
+    if (ImGui::Checkbox("Enable FPS Display", &ctx.config.show_fps)) { SAVE_PROFILE(); }
 
     ImGui::Spacing();
     ImGui::Separator(); 

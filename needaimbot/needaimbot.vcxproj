@@ -39,9 +39,7 @@
     <ClCompile Include="mouse\\mouse.cpp" />
     <ClCompile Include="mouse\\input_drivers\\my_enc.cpp" />
     <ClCompile Include="mouse\\aimbot_components\\PIDController2D.cpp" />
-    <ClCompile Include="mouse\\aimbot_components\\BezierCurveController.cpp" />
-    <ClCompile Include="mouse\\aimbot_components\\SplineKalmanController.cpp" />
-    <ClCompile Include="mouse\\aimbot_components\\GANMouseController.cpp" />
+    <ClCompile Include="mouse\\aimbot_components\\IntegratedController.cpp" />
     <ClCompile Include="mouse\\input_drivers\\rzctl.cpp" />
     <ClCompile Include="mouse\\input_drivers\\SerialConnection.cpp" />
     <ClCompile Include="mouse\\input_drivers\\MakcuConnection.cpp" />
@@ -54,6 +52,7 @@
     <ClCompile Include="overlay\draw_capture.cpp" />
     <ClCompile Include="overlay\draw_debug.cpp" />
     <ClCompile Include="overlay\draw_mouse.cpp" />
+    <ClCompile Include="overlay\draw_offset.cpp" />
     <ClCompile Include="overlay\draw_overlay.cpp" />
     <ClCompile Include="overlay\draw_profile.cpp" />
     <ClCompile Include="overlay\draw_target.cpp" />
@@ -67,7 +66,6 @@
   <ItemGroup>
     <CudaCompile Include="postprocess\filterGpu.cu" />
     <CudaCompile Include="postprocess\postProcessGpu.cu" />
-    <CudaCompile Include="postprocess\batchedResults.cu" />
     <CudaCompile Include="cuda\cuda_image_processing.cu" />
     <CudaCompile Include="cuda\cuda_float_processing.cu" />
     <CudaCompile Include="cuda\color_filter_kernel.cu" />
@@ -106,9 +104,7 @@
     <ClInclude Include="keyboard\keycodes.h" />
     <ClInclude Include="mouse\aimbot_components\AimbotTarget.h" />
     <ClInclude Include="mouse\aimbot_components\PIDController2D.h" />
-    <ClInclude Include="mouse\aimbot_components\BezierCurveController.h" />
-    <ClInclude Include="mouse\aimbot_components\SplineKalmanController.h" />
-    <ClInclude Include="mouse\aimbot_components\GANMouseController.h" />
+    <ClInclude Include="mouse\aimbot_components\IntegratedController.h" />
     <ClInclude Include="mouse\ExponentialSmoothingPredictor.h" />
     <ClInclude Include="mouse\ghub.h" />
     <ClInclude Include="mouse\HidTable.h" />
@@ -133,6 +129,7 @@
     <ClInclude Include="mouse\VelocityPredictor.h" />
     <ClInclude Include="overlay\common_helpers.h" />
     <ClInclude Include="overlay\draw_settings.h" />
+    <ClInclude Include="overlay\draw_offset.h" />
     <ClInclude Include="overlay\overlay.h" />
     <ClInclude Include="overlay\ui_helpers.h" />
     <ClInclude Include="overlay\visuals.h" />
@@ -149,13 +146,16 @@
     <None Include="packages.config" />
   </ItemGroup>
   <ItemGroup>
+    <ResourceCompile Include="version_info.rc" />
+  </ItemGroup>
+  <ItemGroup>
     <AppxManifest Include="Package.appxmanifest" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>16.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
     <ProjectGuid>{a27ffc6c-5ec3-43d3-be46-9925b722b3c8}</ProjectGuid>
-    <RootNamespace>needaimbot</RootNamespace>
+    <RootNamespace>GamePerformanceAnalyzer</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -222,7 +222,7 @@
     <LinkIncremental>false</LinkIncremental>
     <IncludePath>$(MSBuildProjectDirectory);$(MSBuildProjectDirectory)\imgui;$(MSBuildProjectDirectory)\keyboard;$(MSBuildProjectDirectory)\config;$(MSBuildProjectDirectory)\detector;$(MSBuildProjectDirectory)\capture;$(MSBuildProjectDirectory)\postprocess;$(MSBuildProjectDirectory)\mouse;$(MSBuildProjectDirectory)\overlay;$(WindowsSDK_IncludePath);$(WindowsSDK_IncludePath)\cppwinrt;$(MSBuildProjectDirectory)\modules\TensorRT-10.8.0.43\include;include;$(ProgramW6432)\NVIDIA GPU Computing Toolkit\CUDA\v12.8\include;$(ProgramW6432)\NVIDIA\CUDNN\v9.7\include\12.8;$(IncludePath)</IncludePath>
     <LibraryPath>$(MSBuildProjectDirectory)\modules\\TensorRT-10.8.0.43\lib;$(ProgramW6432)\NVIDIA GPU Computing Toolkit\CUDA\v12.8\lib\x64;$(ProgramW6432)\NVIDIA\CUDNN\v9.7\lib\12.8;$(MSBuildProjectDirectory)\modules\glfw-3.4.bin.WIN64\lib-vc2022;$(LibraryPath)</LibraryPath>
-    <TargetName>ai</TargetName>
+    <TargetName>GamePerformanceAnalyzer</TargetName>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
@@ -284,7 +284,7 @@
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalIncludeDirectories>$(MSBuildProjectDirectory)\modules\glfw-3.4.bin.WIN64\include;$(MSBuildProjectDirectory)\modules\stb;$(MSBuildProjectDirectory)\modules\imgui-1.91.2\backends;$(MSBuildProjectDirectory)\modules\imgui-1.91.2;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <LanguageStandard>stdcpp17</LanguageStandard>

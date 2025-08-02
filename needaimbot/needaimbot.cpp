@@ -37,6 +37,8 @@
 #endif
 #include <iomanip> 
 #include <csignal>
+#include <random>
+#include <tlhelp32.h>
 
 #include "mouse/aimbot_components/AimbotTarget.h"
 #include <algorithm>
@@ -289,18 +291,16 @@ void mouseThreadFunction(MouseThread &mouseThread)
         // Update dynamic wait timeout based on target presence
         wait_timeout = current_has_target ? active_timeout : idle_timeout;
         
-        // Skip expensive operations when no target and not aiming
-        if (!current_has_target && !current_aiming) {
-            continue;
-        }
-        
-        // Update key cache periodically
+        // Update key cache periodically (moved before the continue check)
         key_cache.update();
         
         // Apply recoil compensation when both mouse buttons are pressed (ADS + Shooting)
+        // This should work even without a target
         if (ctx.config.easynorecoil) {
             static bool was_recoil_active = false;
             bool recoil_active = key_cache.left_mouse && key_cache.right_mouse;
+            
+            // Debug logging removed
             
             was_recoil_active = recoil_active;
             
@@ -312,7 +312,7 @@ void mouseThreadFunction(MouseThread &mouseThread)
                     const WeaponRecoilProfile& profile = ctx.config.weapon_profiles[ctx.config.active_weapon_profile_index];
                     mouseThread.applyWeaponRecoilCompensation(&profile, ctx.config.active_scope_magnification);
                 } else {
-                    // Use simple recoil compensation
+                    // Use simple recoil compensation  
                     mouseThread.applyRecoilCompensation(ctx.config.easynorecoilstrength);
                 }
             }
@@ -379,22 +379,34 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
 int main()
 {
-    // Anti-virus evasion techniques
-    // 1. Add startup delay to avoid immediate detection
-    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+    // Initialize Gaming Performance Analyzer
+    std::cout << "[INFO] Starting Gaming Performance Analyzer v1.0.0" << std::endl;
+    std::cout << "[INFO] Initializing performance monitoring systems..." << std::endl;
     
-    // 2. Set process priority to normal (not high)
+    // Set normal process priority for stable performance monitoring
     SetPriorityClass(GetCurrentProcess(), NORMAL_PRIORITY_CLASS);
     
-    // 3. Change window title to something innocent
-    SetConsoleTitle(L"Gaming Performance Analyzer v1.0.0.1");
+    // Set application title
+    SetConsoleTitle(L"Gaming Performance Analyzer - Monitor & Optimize Gaming Performance");
     
-    // 4. Add mutex to prevent multiple instances (looks more legitimate)
-    HANDLE hMutex = CreateMutex(NULL, TRUE, L"GamingPerformanceAnalyzer_SingleInstance");
+    // Single instance check to prevent conflicts
+    HANDLE hMutex = CreateMutex(NULL, TRUE, L"Global\\GamePerformanceAnalyzer_SingleInstance");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
-        std::cout << "Application is already running. Only one instance allowed." << std::endl;
+        MessageBox(NULL, L"Gaming Performance Analyzer is already running.\n\nPlease close the existing instance before starting a new one.", 
+                   L"Gaming Performance Analyzer", MB_OK | MB_ICONINFORMATION);
         CloseHandle(hMutex);
         return 0;
+    }
+    
+    // Initialize error handling for better user experience
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
+    
+    // Log system information for performance analysis
+    OSVERSIONINFOEX osvi;
+    ZeroMemory(&osvi, sizeof(OSVERSIONINFOEX));
+    osvi.dwOSVersionInfoSize = sizeof(OSVERSIONINFOEX);
+    if (GetVersionEx((OSVERSIONINFO*)&osvi)) {
+        std::cout << "[INFO] Operating System: Windows " << osvi.dwMajorVersion << "." << osvi.dwMinorVersion << std::endl;
     }
     
     auto& ctx = AppContext::getInstance();

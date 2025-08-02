@@ -88,6 +88,11 @@ bool Config::loadConfig(const std::string& filename)
         
         crosshair_offset_x = 0.0f;
         crosshair_offset_y = 0.0f;
+        
+        // Aim+shoot offset defaults
+        enable_aim_shoot_offset = false;
+        aim_shoot_offset_x = 0.0f;
+        aim_shoot_offset_y = 0.0f;
 
         
         easynorecoil = false;
@@ -110,10 +115,7 @@ bool Config::loadConfig(const std::string& filename)
 
         
 
-        // Movement method
-        movement_method = "pid"; // default to PID
         
-        // PID parameters
         kp_x = 0.5; 
         ki_x = 0.0;
         kd_x = 0.1;
@@ -121,46 +123,11 @@ bool Config::loadConfig(const std::string& filename)
         ki_y = 0.0;
         kd_y = 0.15;
         
-        // Bezier curve parameters - optimized for accuracy
-        bezier_speed = 30.0f;  // Reduced for better control
-        bezier_curve_factor = 0.1f;  // Reduced for more direct paths
-        
-        // Advanced Bezier parameters
-        bezier_step_multiplier = 10.0f;
-        bezier_min_steps = 1;
-        bezier_curve_offset_scale = 0.03f;
-        bezier_max_curve_offset = 2.0f;
-        bezier_control1_min = 0.15f;
-        bezier_control1_range = 0.05f;
-        bezier_control2_min = 0.80f;
-        bezier_control2_range = 0.05f;
-        bezier_s_curve_probability = 0.3f;
-        bezier_s_curve_offset1 = 0.6f;
-        bezier_s_curve_offset2 = 0.4f;
-        bezier_single_offset1 = 0.5f;
-        bezier_single_offset2 = 0.3f;
-        bezier_min_movement = 0.1f;
-        
         // Initialize default error scaling rules
         error_scaling_rules.clear();
         error_scaling_rules.push_back(ErrorScalingRule(150.0f, 0.3f));  // Large error: 30% scale
         error_scaling_rules.push_back(ErrorScalingRule(100.0f, 0.5f));  // Medium error: 50% scale
         error_scaling_rules.push_back(ErrorScalingRule(50.0f, 0.8f));   // Small error: 80% scale
-        
-        // Spline + Kalman Filter parameters
-        spline_segments = 20;
-        kalman_process_noise = 0.1f;
-        kalman_measurement_noise = 1.0f;
-        spline_tension = 0.5f;
-        spline_continuity = 0.5f;
-        spline_bias = 0.0f;
-        
-        // GAN-based movement parameters
-        gan_noise_scale = 0.3f;
-        gan_path_complexity = 0.7f;
-        gan_human_variability = 0.5f;
-        gan_reaction_time = 0.15f;
-        gan_acceleration_profile = 2; // human-like
         
 
         
@@ -288,6 +255,7 @@ bool Config::loadConfig(const std::string& filename)
     capture_cursor = get_bool_ini("Capture", "capture_cursor", true);
     target_fps = static_cast<float>(get_double_ini("Capture", "target_fps", 120.0));
     capture_method = get_string_ini("Capture", "capture_method", "simple");
+    std::cout << "[Config] Loaded capture_method: " << capture_method << std::endl;
     
     // NDI capture settings
     ndi_source_name = get_string_ini("Capture", "ndi_source_name", "");
@@ -305,6 +273,11 @@ bool Config::loadConfig(const std::string& filename)
 
     crosshair_offset_x = static_cast<float>(get_double_ini("Target", "crosshair_offset_x", 0.0));
     crosshair_offset_y = static_cast<float>(get_double_ini("Target", "crosshair_offset_y", 0.0));
+    
+    // Aim+shoot offset settings
+    enable_aim_shoot_offset = get_bool_ini("Target", "enable_aim_shoot_offset", false);
+    aim_shoot_offset_x = static_cast<float>(get_double_ini("Target", "aim_shoot_offset_x", 0.0));
+    aim_shoot_offset_y = static_cast<float>(get_double_ini("Target", "aim_shoot_offset_y", 0.0));
 
     easynorecoil = get_bool_ini("Mouse", "easynorecoil", false);
     easynorecoilstrength = static_cast<float>(get_double_ini("Mouse", "easynorecoilstrength", 0.0));
@@ -322,36 +295,13 @@ bool Config::loadConfig(const std::string& filename)
     recoil_mult_6x = static_cast<float>(get_double_ini("Recoil", "recoil_mult_6x", 1.0));
 
     
-    // Movement method
-    movement_method = get_string_ini("Movement", "method", "pid");
     
-    // PID parameters
     kp_x = get_double_ini("PID", "kp_x", 0.5);
     ki_x = get_double_ini("PID", "ki_x", 0.0);
     kd_x = get_double_ini("PID", "kd_x", 0.1);
     kp_y = get_double_ini("PID", "kp_y", 0.4);
     ki_y = get_double_ini("PID", "ki_y", 0.0);
     kd_y = get_double_ini("PID", "kd_y", 0.15);
-    
-    // Bezier curve parameters - optimized defaults
-    bezier_speed = static_cast<float>(get_double_ini("Bezier", "speed", 30.0));
-    bezier_curve_factor = static_cast<float>(get_double_ini("Bezier", "curve_factor", 0.1));
-    
-    // Advanced Bezier parameters
-    bezier_step_multiplier = static_cast<float>(get_double_ini("Bezier", "step_multiplier", 10.0));
-    bezier_min_steps = static_cast<int>(get_long_ini("Bezier", "min_steps", 1));
-    bezier_curve_offset_scale = static_cast<float>(get_double_ini("Bezier", "curve_offset_scale", 0.03));
-    bezier_max_curve_offset = static_cast<float>(get_double_ini("Bezier", "max_curve_offset", 2.0));
-    bezier_control1_min = static_cast<float>(get_double_ini("Bezier", "control1_min", 0.15));
-    bezier_control1_range = static_cast<float>(get_double_ini("Bezier", "control1_range", 0.05));
-    bezier_control2_min = static_cast<float>(get_double_ini("Bezier", "control2_min", 0.80));
-    bezier_control2_range = static_cast<float>(get_double_ini("Bezier", "control2_range", 0.05));
-    bezier_s_curve_probability = static_cast<float>(get_double_ini("Bezier", "s_curve_probability", 0.3));
-    bezier_s_curve_offset1 = static_cast<float>(get_double_ini("Bezier", "s_curve_offset1", 0.6));
-    bezier_s_curve_offset2 = static_cast<float>(get_double_ini("Bezier", "s_curve_offset2", 0.4));
-    bezier_single_offset1 = static_cast<float>(get_double_ini("Bezier", "single_offset1", 0.5));
-    bezier_single_offset2 = static_cast<float>(get_double_ini("Bezier", "single_offset2", 0.3));
-    bezier_min_movement = static_cast<float>(get_double_ini("Bezier", "min_movement", 0.1));
     
     
     // Load error scaling rules
@@ -374,21 +324,6 @@ bool Config::loadConfig(const std::string& filename)
         error_scaling_rules.push_back(ErrorScalingRule(100.0f, 0.5f));
         error_scaling_rules.push_back(ErrorScalingRule(50.0f, 0.8f));
     }
-    
-    // Spline + Kalman Filter parameters
-    spline_segments = get_long_ini("SplineKalman", "segments", 20);
-    kalman_process_noise = static_cast<float>(get_double_ini("SplineKalman", "process_noise", 0.1));
-    kalman_measurement_noise = static_cast<float>(get_double_ini("SplineKalman", "measurement_noise", 1.0));
-    spline_tension = static_cast<float>(get_double_ini("SplineKalman", "tension", 0.5));
-    spline_continuity = static_cast<float>(get_double_ini("SplineKalman", "continuity", 0.5));
-    spline_bias = static_cast<float>(get_double_ini("SplineKalman", "bias", 0.0));
-    
-    // GAN-based movement parameters
-    gan_noise_scale = static_cast<float>(get_double_ini("GAN", "noise_scale", 0.3));
-    gan_path_complexity = static_cast<float>(get_double_ini("GAN", "path_complexity", 0.7));
-    gan_human_variability = static_cast<float>(get_double_ini("GAN", "human_variability", 0.5));
-    gan_reaction_time = static_cast<float>(get_double_ini("GAN", "reaction_time", 0.15));
-    gan_acceleration_profile = get_long_ini("GAN", "acceleration_profile", 2);
 
     
     // Hybrid aim control settings
@@ -604,6 +539,9 @@ bool Config::saveConfig(const std::string& filename)
     file << "offset_step = " << offset_step << "\n";
     file << "crosshair_offset_x = " << crosshair_offset_x << "\n";
     file << "crosshair_offset_y = " << crosshair_offset_y << "\n";
+    file << "enable_aim_shoot_offset = " << (enable_aim_shoot_offset ? "true" : "false") << "\n";
+    file << "aim_shoot_offset_x = " << aim_shoot_offset_x << "\n";
+    file << "aim_shoot_offset_y = " << aim_shoot_offset_y << "\n";
     file << std::noboolalpha;
     file << "ignore_third_person = " << (ignore_third_person ? "true" : "false") << "\n";
     file << "shooting_range_targets = " << (shooting_range_targets ? "true" : "false") << "\n";
@@ -633,11 +571,8 @@ bool Config::saveConfig(const std::string& filename)
     file << "recoil_mult_6x = " << recoil_mult_6x << "\n\n";
 
     
-    // Movement method
-    file << "[Movement]\n";
-    file << "method = " << movement_method << "\n\n";
     
-    // PID parameters
+    
     file << "[PID]\n";
     file << std::fixed << std::setprecision(6);
     file << "kp_x = " << kp_x << "\n";
@@ -647,26 +582,6 @@ bool Config::saveConfig(const std::string& filename)
     file << "ki_y = " << ki_y << "\n";
     file << "kd_y = " << kd_y << "\n";
     
-    // Bezier curve parameters
-    file << "\n[Bezier]\n";
-    file << std::fixed << std::setprecision(6);
-    file << "speed = " << bezier_speed << "\n";
-    file << "curve_factor = " << bezier_curve_factor << "\n";
-    file << "step_multiplier = " << bezier_step_multiplier << "\n";
-    file << "min_steps = " << bezier_min_steps << "\n";
-    file << "curve_offset_scale = " << bezier_curve_offset_scale << "\n";
-    file << "max_curve_offset = " << bezier_max_curve_offset << "\n";
-    file << "control1_min = " << bezier_control1_min << "\n";
-    file << "control1_range = " << bezier_control1_range << "\n";
-    file << "control2_min = " << bezier_control2_min << "\n";
-    file << "control2_range = " << bezier_control2_range << "\n";
-    file << "s_curve_probability = " << bezier_s_curve_probability << "\n";
-    file << "s_curve_offset1 = " << bezier_s_curve_offset1 << "\n";
-    file << "s_curve_offset2 = " << bezier_s_curve_offset2 << "\n";
-    file << "single_offset1 = " << bezier_single_offset1 << "\n";
-    file << "single_offset2 = " << bezier_single_offset2 << "\n";
-    file << "min_movement = " << bezier_min_movement << "\n";
-    
     // Save error scaling rules
     file << "error_scaling_rule_count = " << error_scaling_rules.size() << "\n";
     for (size_t i = 0; i < error_scaling_rules.size(); i++) {
@@ -675,23 +590,6 @@ bool Config::saveConfig(const std::string& filename)
         file << prefix << "scale = " << error_scaling_rules[i].scale_factor << "\n";
     }
     file << "\n";
-    
-    // Spline + Kalman Filter parameters
-    file << "[SplineKalman]\n";
-    file << "segments = " << spline_segments << "\n";
-    file << "process_noise = " << kalman_process_noise << "\n";
-    file << "measurement_noise = " << kalman_measurement_noise << "\n";
-    file << "tension = " << spline_tension << "\n";
-    file << "continuity = " << spline_continuity << "\n";
-    file << "bias = " << spline_bias << "\n\n";
-    
-    // GAN-based movement parameters
-    file << "[GAN]\n";
-    file << "noise_scale = " << gan_noise_scale << "\n";
-    file << "path_complexity = " << gan_path_complexity << "\n";
-    file << "human_variability = " << gan_human_variability << "\n";
-    file << "reaction_time = " << gan_reaction_time << "\n";
-    file << "acceleration_profile = " << gan_acceleration_profile << "\n\n";
 
     file << "[Arduino]\n";
     file << std::noboolalpha;

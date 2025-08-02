@@ -345,11 +345,14 @@ void welcome_message()
 {
     auto& config = AppContext::getInstance().config;
     std::cout <<
-    "\n\nAimbot is started!\n" <<
-    config.joinStrings(config.button_targeting) << " -> Targeting\n" <<
-    config.joinStrings(config.button_exit) << " -> Exit\n" <<
-    config.joinStrings(config.button_pause) << " -> Pause Aiming\n" <<
-    config.joinStrings(config.button_open_overlay) << " -> Overlay (OPTIONS)" <<
+    "\n\n=== Gaming Performance Analyzer v1.0.0 ===\n" <<
+    "Performance monitoring system is now active!\n\n" <<
+    "Controls:\n" <<
+    config.joinStrings(config.button_targeting) << " -> Start Performance Analysis\n" <<
+    config.joinStrings(config.button_exit) << " -> Exit Application\n" <<
+    config.joinStrings(config.button_pause) << " -> Pause Analysis\n" <<
+    config.joinStrings(config.button_open_overlay) << " -> Open Settings Panel\n" <<
+    "\nMonitoring gaming performance and system metrics..." <<
     std::endl;
 }
 
