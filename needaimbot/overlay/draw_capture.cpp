@@ -275,46 +275,16 @@ void draw_capture_settings()
     
     // Profile dropdown at the top
     UIHelpers::ProfileDropdown();
-    UIHelpers::CompactSpacer();
+    UIHelpers::Spacer();
     
-    UIHelpers::BeginTwoColumnLayout(0.6f);
-    
-    // Left column - Main capture settings
     draw_capture_area_settings();
-    UIHelpers::CompactSpacer();
+    UIHelpers::Spacer();
     
     draw_capture_behavior_settings();
+    UIHelpers::Spacer();
     
-    UIHelpers::NextColumn();
-    
-    // Right column - Source and info
     draw_capture_source_settings();
-    UIHelpers::CompactSpacer();
+    UIHelpers::Spacer();
     
     draw_2pc_capture_settings();
-    UIHelpers::CompactSpacer();
-    
-    UIHelpers::BeginInfoPanel();
-    
-    UIHelpers::BeautifulText("Performance Tips", UIHelpers::GetAccentColor());
-    UIHelpers::CompactSpacer();
-    
-    ImGui::BulletText("Lower detection resolution for better performance");
-    ImGui::BulletText("Use circle mask to focus on center targets");
-    ImGui::BulletText("Limit FPS to 60 for stable performance");
-    ImGui::BulletText("Simple capture method is usually fastest");
-    
-    UIHelpers::CompactSpacer();
-    
-    UIHelpers::BeautifulText("Capture Method Guide", UIHelpers::GetAccentColor());
-    UIHelpers::CompactSpacer();
-    
-    ImGui::BulletText("Simple: Best for windowed games, stable performance");
-    ImGui::BulletText("Win Graphics: Best for fullscreen and high resolutions");
-    ImGui::BulletText("Virtual Camera: For 2PC streaming setup");
-    ImGui::BulletText("NDI Stream: Network capture for 2PC setup");
-    
-    UIHelpers::EndInfoPanel();
-    
-    UIHelpers::EndTwoColumnLayout();
 }
