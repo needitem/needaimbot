@@ -1,5 +1,5 @@
 #include "../AppContext.h"
-#include "imgui.h"
+#include "../imgui/imgui.h"
 #include "needaimbot.h" 
 #include "overlay/draw_settings.h" 
 #include "../config/config.h" 
@@ -63,7 +63,7 @@ void draw_stat_plot(const char* label, const std::vector<float>& history, float 
     float min_y, max_y;
     get_plot_scale(history, min_y, max_y, is_fps);
 
-    ImVec2 plot_size = ImVec2(ImGui::GetContentRegionAvail().x, 40.0f);
+    ImVec2 plot_size = ImVec2(ImGui::GetContentRegionAvail().x, 50.0f);
 
     if (!history.empty()) {
         // Create unique ID for each plot using the label
@@ -80,9 +80,9 @@ void draw_stat_plot(const char* label, const std::vector<float>& history, float 
 
 void draw_stats() {
     auto& ctx = AppContext::getInstance();
-    if (ImGui::BeginTable("stats_table", 2, ImGuiTableFlags_BordersInnerV)) {
-        ImGui::TableSetupColumn("Metric", ImGuiTableColumnFlags_WidthFixed, 150.0f);
-        ImGui::TableSetupColumn("Value");
+    if (ImGui::BeginTable("stats_table", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("Metric", ImGuiTableColumnFlags_WidthStretch, 0.4f);
+        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 0.6f);
 
         draw_stat_plot("Capture Time", get_history_copy(ctx.g_frame_acquisition_time_history, ctx.g_frame_acquisition_history_mutex), ctx.g_current_frame_acquisition_time_ms.load(std::memory_order_relaxed), "ms");
         draw_stat_plot("Inference Time", get_history_copy(ctx.g_inference_time_history, ctx.g_inference_history_mutex), ctx.g_current_inference_time_ms.load(std::memory_order_relaxed), "ms");

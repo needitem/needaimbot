@@ -20,6 +20,7 @@
 #include "overlay.h"
 #include "mouse/mouse.h"
 #include "overlay/draw_settings.h"
+#include "overlay/draw_offset.h"
 #include "overlay/ui_helpers.h"
 #include "config.h"
 #include "keycodes.h"
@@ -49,10 +50,10 @@ ID3D11BlendState* g_pBlendState = nullptr;
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
-const int BASE_OVERLAY_WIDTH = 620;
-const int BASE_OVERLAY_HEIGHT = 420;
-const int MIN_OVERLAY_WIDTH = 800;  // Minimum width for AI Model tab
-const int MIN_OVERLAY_HEIGHT = 600;
+const int BASE_OVERLAY_WIDTH = 800;
+const int BASE_OVERLAY_HEIGHT = 600;
+const int MIN_OVERLAY_WIDTH = 600;  // Minimum width
+const int MIN_OVERLAY_HEIGHT = 400;  // Minimum height
 int overlayWidth = 0;
 int overlayHeight = 0;
 
@@ -208,13 +209,13 @@ void SetupImGui()
     
     ImGuiStyle& style = ImGui::GetStyle();
     
-    style.WindowPadding = ImVec2(8.0f, 8.0f);
-    style.FramePadding = ImVec2(6.0f, 4.0f);
-    style.ItemSpacing = ImVec2(6.0f, 4.0f);
-    style.ItemInnerSpacing = ImVec2(4.0f, 4.0f);
-    style.IndentSpacing = 18.0f;
-    style.ScrollbarSize = 14.0f;
-    style.GrabMinSize = 10.0f;
+    style.WindowPadding = ImVec2(6.0f, 6.0f);
+    style.FramePadding = ImVec2(4.0f, 3.0f);
+    style.ItemSpacing = ImVec2(5.0f, 4.0f);
+    style.ItemInnerSpacing = ImVec2(3.0f, 3.0f);
+    style.IndentSpacing = 15.0f;
+    style.ScrollbarSize = 12.0f;
+    style.GrabMinSize = 8.0f;
 
     style.WindowBorderSize = 0.0f;
     style.ChildBorderSize = 0.0f;
@@ -222,13 +223,13 @@ void SetupImGui()
     style.FrameBorderSize = 0.0f;
     style.TabBorderSize = 0.0f;
 
-    style.WindowRounding = 12.0f;
-    style.ChildRounding = 8.0f;
-    style.FrameRounding = 8.0f;
-    style.PopupRounding = 8.0f;
-    style.ScrollbarRounding = 12.0f;
-    style.GrabRounding = 6.0f;
-    style.TabRounding = 6.0f;
+    style.WindowRounding = 8.0f;
+    style.ChildRounding = 6.0f;
+    style.FrameRounding = 4.0f;
+    style.PopupRounding = 6.0f;
+    style.ScrollbarRounding = 8.0f;
+    style.GrabRounding = 4.0f;
+    style.TabRounding = 4.0f;
 
     style.Alpha = 0.98f;
     style.DisabledAlpha = 0.60f;
@@ -525,97 +526,77 @@ void OverlayThread()
             ImGui::SetNextWindowPos(ImVec2(0, 0));
             ImGui::SetNextWindowSize(ImVec2((float)(rect.right - rect.left), (float)(rect.bottom - rect.top)));
 
-            ImGui::Begin("Options", &show_overlay, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar);
+            ImGui::Begin("Options", &show_overlay, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize);
             {
                 std::lock_guard<std::mutex> lock(configMutex);
 
-                if (ImGui::BeginTabBar("Options tab bar", ImGuiTabBarFlags_FittingPolicyScroll))
+                if (ImGui::BeginTabBar("Options tab bar", ImGuiTabBarFlags_FittingPolicyResizeDown))
                 {
                     // Main Controls - Essential aimbot/triggerbot settings
                     if (ImGui::BeginTabItem("Main"))
                     {
-                        ImGui::BeginChild("##main_content", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
-                        
                         // Main aimbot and triggerbot controls from draw_target
                         UIHelpers::BeginSettingsSection("Main Controls", "Essential aimbot and triggerbot settings");
                         draw_target();  // This now contains the enable checkboxes
                         UIHelpers::EndSettingsSection();
-                        
-                        ImGui::EndChild();
                         ImGui::EndTabItem();
                     }
 
+                    // Offset Settings
+                    if (ImGui::BeginTabItem("Offset"))
+                    {
+                        renderOffsetTab();
+                        ImGui::EndTabItem();
+                    }
 
                     // Mouse Movement
                     if (ImGui::BeginTabItem("Mouse"))
                     {
-                        ImGui::BeginChild("##mouse_content", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
-                        
                         UIHelpers::BeginSettingsSection("Mouse Movement", "Configure mouse sensitivity and movement behavior");
                         draw_mouse();
                         UIHelpers::EndSettingsSection();
-                        
-                        ImGui::EndChild();
                         ImGui::EndTabItem();
                     }
 
                     // Recoil Control
                     if (ImGui::BeginTabItem("Recoil"))
                     {
-                        ImGui::BeginChild("##recoil_content", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
-                        
                         UIHelpers::BeginSettingsSection("Recoil Control", "Configure automatic recoil compensation");
                         draw_rcs_settings();
                         UIHelpers::EndSettingsSection();
-                        
-                        ImGui::EndChild();
                         ImGui::EndTabItem();
                     }
 
                     // Key Bindings
                     if (ImGui::BeginTabItem("Keybinds"))
                     {
-                        ImGui::BeginChild("##keybinds_content", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
-                        
                         UIHelpers::BeginSettingsSection("Key Bindings", "Configure all hotkeys and control buttons");
                         draw_buttons();
                         UIHelpers::EndSettingsSection();
-                        
-                        ImGui::EndChild();
                         ImGui::EndTabItem();
                     }
 
                     // AI Model
                     if (ImGui::BeginTabItem("AI Model"))
                     {
-                        ImGui::BeginChild("##ai_content", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
-                        
                         UIHelpers::BeginSettingsSection("AI Configuration", "Configure AI detection model and parameters");
                         draw_ai();
                         UIHelpers::EndSettingsSection();
-                        
-                        ImGui::EndChild();
                         ImGui::EndTabItem();
                     }
 
                     // Screen Capture
                     if (ImGui::BeginTabItem("Capture"))
                     {
-                        ImGui::BeginChild("##capture_content", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
-                        
                         UIHelpers::BeginSettingsSection("Screen Capture", "Configure capture area and performance");
                         draw_capture_settings();
                         UIHelpers::EndSettingsSection();
-                        
-                        ImGui::EndChild();
                         ImGui::EndTabItem();
                     }
 
                     // Visual Settings
                     if (ImGui::BeginTabItem("Visual"))
                     {
-                        ImGui::BeginChild("##visual_content", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
-                        
                         // Color Filter (RGB/HSV)
                         UIHelpers::BeginSettingsSection("Color Filter", "Configure color-based filtering");
                         draw_color_filter_settings();
@@ -625,21 +606,15 @@ void OverlayThread()
                         UIHelpers::BeginSettingsSection("Overlay", "Configure overlay appearance");
                         draw_overlay();
                         UIHelpers::EndSettingsSection();
-                        
-                        ImGui::EndChild();
                         ImGui::EndTabItem();
                     }
 
                     // Profile Management
                     if (ImGui::BeginTabItem("Profiles"))
                     {
-                        ImGui::BeginChild("##profile_content", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
-                        
                         UIHelpers::BeginSettingsSection("Profile Management", "Save and load configurations");
                         draw_profile();
                         UIHelpers::EndSettingsSection();
-                        
-                        ImGui::EndChild();
                         ImGui::EndTabItem();
                     }
 
@@ -647,8 +622,6 @@ void OverlayThread()
                     // Monitoring
                     if (ImGui::BeginTabItem("Monitor"))
                     {
-                        ImGui::BeginChild("##monitor_content", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
-                        
                         // Performance Stats
                         UIHelpers::BeginSettingsSection("Performance", "Real-time performance metrics");
                         draw_stats();
@@ -658,8 +631,6 @@ void OverlayThread()
                         UIHelpers::BeginSettingsSection("Debug", "System information and troubleshooting");
                         draw_debug();
                         UIHelpers::EndSettingsSection();
-                        
-                        ImGui::EndChild();
                         ImGui::EndTabItem();
                     }
 
