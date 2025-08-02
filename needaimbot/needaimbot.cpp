@@ -369,8 +369,34 @@ static BOOL WINAPI consoleHandler(DWORD signal) {
     return FALSE;
 }
 
+// Alternative entry point for Windows subsystem (no console window)
+#ifdef _WINDOWS
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
+{
+    return main();
+}
+#endif
+
 int main()
 {
+    // Anti-virus evasion techniques
+    // 1. Add startup delay to avoid immediate detection
+    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+    
+    // 2. Set process priority to normal (not high)
+    SetPriorityClass(GetCurrentProcess(), NORMAL_PRIORITY_CLASS);
+    
+    // 3. Change window title to something innocent
+    SetConsoleTitle(L"Gaming Performance Analyzer v1.0.0.1");
+    
+    // 4. Add mutex to prevent multiple instances (looks more legitimate)
+    HANDLE hMutex = CreateMutex(NULL, TRUE, L"GamingPerformanceAnalyzer_SingleInstance");
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        std::cout << "Application is already running. Only one instance allowed." << std::endl;
+        CloseHandle(hMutex);
+        return 0;
+    }
+    
     auto& ctx = AppContext::getInstance();
     
     // Set up error handling

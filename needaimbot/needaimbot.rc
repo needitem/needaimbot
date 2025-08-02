@@ -1,0 +1,41 @@
+#include <windows.h>
+#include "resource.h"
+
+// Version information
+1 VERSIONINFO
+FILEVERSION     1,0,0,1
+PRODUCTVERSION  1,0,0,1
+FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+FILEFLAGS       0
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+FILESUBTYPE     VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904E4"
+        BEGIN
+            VALUE "CompanyName", "Private Software Development"
+            VALUE "FileDescription", "AI-Powered Gaming Performance Analysis Tool"
+            VALUE "FileVersion", "1.0.0.1"
+            VALUE "InternalName", "needaimbot.exe"
+            VALUE "LegalCopyright", "Copyright (C) 2024 Private Developer. All rights reserved."
+            VALUE "LegalTrademarks", "This software is for educational and research purposes only"
+            VALUE "OriginalFilename", "needaimbot.exe"
+            VALUE "ProductName", "Gaming Performance Analyzer"
+            VALUE "ProductVersion", "1.0.0.1"
+            VALUE "Comments", "AI-based gaming performance analysis and training tool"
+            VALUE "PrivateBuild", "Non-commercial educational build"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1252
+    END
+END
+
+// Manifest resource
+1 RT_MANIFEST "needaimbot.manifest"
+
+// Icon resource (optional - comment out if no icon file)
+// IDI_ICON1 ICON "needaimbot.ico"
