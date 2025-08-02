@@ -126,4 +126,9 @@ void draw_color_filter_settings()
     if (!ctx.config.enable_color_filter) {
         ImGui::EndDisabled();
     }
+    
+    // Save configuration if changed
+    if (changed) {
+        SAVE_PROFILE();
+    }
 }
