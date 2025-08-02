@@ -20,6 +20,7 @@
 #include "overlay.h"
 #include "mouse/mouse.h"
 #include "overlay/draw_settings.h"
+#include "overlay/draw_offset.h"
 #include "overlay/ui_helpers.h"
 #include "config.h"
 #include "keycodes.h"
@@ -545,6 +546,16 @@ void OverlayThread()
                         ImGui::EndTabItem();
                     }
 
+                    // Offset Settings
+                    if (ImGui::BeginTabItem("Offset"))
+                    {
+                        ImGui::BeginChild("##offset_content", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
+                        
+                        renderOffsetTab();
+                        
+                        ImGui::EndChild();
+                        ImGui::EndTabItem();
+                    }
 
                     // Mouse Movement
                     if (ImGui::BeginTabItem("Mouse"))
