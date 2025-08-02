@@ -23,7 +23,6 @@ void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float scale);
 void renderOffsetTab()
 {
     auto& ctx = AppContext::getInstance();
-    ImDrawList* draw_list = ImGui::GetWindowDrawList();
 
     UIHelpers::BeginSettingsSection("Target Offset Settings", "Adjust where the aimbot targets on bodies and heads");
 
@@ -56,52 +55,57 @@ void renderOffsetTab()
     ImGui::Spacing();
 
     // Visual representation of offsets
+    ImGui::Text("Body/Head Offset Preview:");
+    ImGui::Spacing();
+    
     if (bodyTexture && bodyImageSize.x > 0 && bodyImageSize.y > 0)
     {
-        ImGui::Text("Offset Preview:");
-        ImGui::Spacing();
+        // Scale the image to fit nicely in the UI
+        float scale = 0.7f;  // Scale down to 70% for better UI fit
+        ImVec2 scaledImageSize(bodyImageSize.x * scale, bodyImageSize.y * scale);
         
         // Draw the body image with offset indicators
-        ImGui::Image((void*)bodyTexture, bodyImageSize);
+        ImGui::Image((void*)bodyTexture, scaledImageSize);
 
         ImVec2 image_pos = ImGui::GetItemRectMin();
         ImVec2 image_size = ImGui::GetItemRectSize();
+        ImDrawList* draw_list = ImGui::GetWindowDrawList();
 
         // Ensure we have valid image dimensions
         if (image_size.x > 0 && image_size.y > 0)
         {
             // Draw body offset line (red)
-            // Body offset ranges from -1.0 to 1.0, where 0.15 is the default center
-            float body_y_normalized = (ctx.config.body_y_offset + 1.0f) / 2.0f; // Convert from [-1,1] to [0,1]
-            float body_line_y = image_pos.y + (1.0f - body_y_normalized) * image_size.y; // Invert Y because ImGui Y goes down
+            float normalized_body_value = (ctx.config.body_y_offset - 1.0f) / 1.0f;
+            float body_line_y = image_pos.y + (1.0f + normalized_body_value) * image_size.y;
             
             draw_list->AddLine(
                 ImVec2(image_pos.x, body_line_y), 
                 ImVec2(image_pos.x + image_size.x, body_line_y), 
                 IM_COL32(255, 0, 0, 255), 
-                3.0f
+                2.0f
             );
             
             // Draw head offset line (green)
-            // Head offset ranges from 0.0 to 1.0, where 0.05 is the default
-            float head_y_normalized = ctx.config.head_y_offset;
-            float head_line_y = image_pos.y + head_y_normalized * image_size.y;
+            // Head offset is calculated relative to body offset at 0.15
+            float body_y_pos_at_015 = image_pos.y + (1.0f + (0.15f - 1.0f) / 1.0f) * image_size.y;
+            float head_top_pos = image_pos.y;
+            float head_line_y = head_top_pos + (ctx.config.head_y_offset * (body_y_pos_at_015 - head_top_pos));
             
             draw_list->AddLine(
                 ImVec2(image_pos.x, head_line_y), 
                 ImVec2(image_pos.x + image_size.x, head_line_y), 
                 IM_COL32(0, 255, 0, 255), 
-                3.0f
+                2.0f
             );
             
             // Add text labels
             draw_list->AddText(
-                ImVec2(image_pos.x + image_size.x + 10, body_line_y - 8), 
+                ImVec2(image_pos.x + image_size.x + 5, body_line_y - 7), 
                 IM_COL32(255, 0, 0, 255), 
                 "Body"
             );
             draw_list->AddText(
-                ImVec2(image_pos.x + image_size.x + 10, head_line_y - 8), 
+                ImVec2(image_pos.x + image_size.x + 5, head_line_y - 7), 
                 IM_COL32(0, 255, 0, 255), 
                 "Head"
             );
@@ -119,77 +123,165 @@ void renderOffsetTab()
     ImGui::Separator();
     ImGui::Spacing();
 
-    // Crosshair Offset Settings (separate section)
+    // Crosshair Offset Settings (combined section)
     UIHelpers::BeginSettingsSection("Crosshair Offset", "Fine-tune the crosshair position for your display");
 
-    ImGui::Text("Current Offset: X=%.1f, Y=%.1f", ctx.config.crosshair_offset_x, ctx.config.crosshair_offset_y);
-    ImGui::Spacing();
-    
     const float adjustment_step = 1.0f;
     bool offset_changed = false;
+    bool aim_shoot_offset_changed = false;
     
-    // Directional adjustment buttons in cross formation
+    // Left side - Normal Offset
     ImGui::BeginGroup();
     {
-        // Top button (Up - increase Y)
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 30.0f);
-        if (ImGui::Button("UP##offset_up", ImVec2(30, 30))) {
-            ctx.config.crosshair_offset_y += adjustment_step;
-            offset_changed = true;
-        }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move crosshair up");
+        ImGui::Text("Normal Offset: X=%.1f, Y=%.1f", ctx.config.crosshair_offset_x, ctx.config.crosshair_offset_y);
+        ImGui::Spacing();
         
-        // Middle row (Left and Right)
-        if (ImGui::Button("L##offset_left", ImVec2(30, 30))) {
-            ctx.config.crosshair_offset_x += adjustment_step;
-            offset_changed = true;
+        // Directional adjustment buttons in cross formation
+        ImGui::BeginGroup();
+        {
+            // Top button (Up - increase Y)
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 30.0f);
+            if (ImGui::Button("UP##offset_up", ImVec2(30, 30))) {
+                ctx.config.crosshair_offset_y += adjustment_step;
+                offset_changed = true;
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move crosshair up");
+            
+            // Middle row (Left and Right)
+            if (ImGui::Button("L##offset_left", ImVec2(30, 30))) {
+                ctx.config.crosshair_offset_x += adjustment_step;
+                offset_changed = true;
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move crosshair left");
+            
+            ImGui::SameLine();
+            if (ImGui::Button("R##offset_right", ImVec2(30, 30))) {
+                ctx.config.crosshair_offset_x -= adjustment_step;
+                offset_changed = true;
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move crosshair right");
+            
+            // Bottom button (Down - decrease Y)
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 30.0f);
+            if (ImGui::Button("DN##offset_down", ImVec2(30, 30))) {
+                ctx.config.crosshair_offset_y -= adjustment_step;
+                offset_changed = true;
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move crosshair down");
         }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move crosshair left");
+        ImGui::EndGroup();
         
         ImGui::SameLine();
-        if (ImGui::Button("R##offset_right", ImVec2(30, 30))) {
-            ctx.config.crosshair_offset_x -= adjustment_step;
-            offset_changed = true;
+        ImGui::BeginGroup();
+        {
+            // Reset button
+            if (ImGui::Button("Reset##offset_reset", ImVec2(60, 30))) {
+                ctx.config.crosshair_offset_x = 0.0f;
+                ctx.config.crosshair_offset_y = 0.0f;
+                offset_changed = true;
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Reset crosshair offset to center");
+            
+            // Fine adjustment controls
+            ImGui::Spacing();
+            ImGui::Text("Fine Adjust:");
+            ImGui::PushItemWidth(80);
+            if (ImGui::DragFloat("X##offset_x_fine", &ctx.config.crosshair_offset_x, 0.1f, -100.0f, 100.0f, "%.1f")) {
+                offset_changed = true;
+            }
+            if (ImGui::DragFloat("Y##offset_y_fine", &ctx.config.crosshair_offset_y, 0.1f, -100.0f, 100.0f, "%.1f")) {
+                offset_changed = true;
+            }
+            ImGui::PopItemWidth();
         }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move crosshair right");
-        
-        // Bottom button (Down - decrease Y)
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 30.0f);
-        if (ImGui::Button("DN##offset_down", ImVec2(30, 30))) {
-            ctx.config.crosshair_offset_y -= adjustment_step;
-            offset_changed = true;
-        }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move crosshair down");
+        ImGui::EndGroup();
     }
     ImGui::EndGroup();
     
+    // Separator line
     ImGui::SameLine();
+    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+    ImGui::SameLine();
+    
+    // Right side - Aim+Shoot Offset
     ImGui::BeginGroup();
     {
-        // Reset button
-        if (ImGui::Button("Reset##offset_reset", ImVec2(60, 30))) {
-            ctx.config.crosshair_offset_x = 0.0f;
-            ctx.config.crosshair_offset_y = 0.0f;
-            offset_changed = true;
+        if (ImGui::Checkbox("Enable Aim+Shoot Offset", &ctx.config.enable_aim_shoot_offset)) {
+            SAVE_PROFILE();
         }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Reset crosshair offset to center");
+        UIHelpers::InfoTooltip("Different offset when both aim and shoot buttons are pressed");
         
-        // Fine adjustment controls
-        ImGui::Spacing();
-        ImGui::Text("Fine Adjust:");
-        ImGui::PushItemWidth(80);
-        if (ImGui::DragFloat("X##offset_x_fine", &ctx.config.crosshair_offset_x, 0.1f, -100.0f, 100.0f, "%.1f")) {
-            offset_changed = true;
+        if (ctx.config.enable_aim_shoot_offset) {
+            ImGui::Text("Aim+Shoot: X=%.1f, Y=%.1f", ctx.config.aim_shoot_offset_x, ctx.config.aim_shoot_offset_y);
+            ImGui::Spacing();
+            
+            // Directional adjustment buttons for aim+shoot offset
+            ImGui::BeginGroup();
+            {
+                // Top button (Up - increase Y)
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 30.0f);
+                if (ImGui::Button("UP##aim_shoot_up", ImVec2(30, 30))) {
+                    ctx.config.aim_shoot_offset_y += adjustment_step;
+                    aim_shoot_offset_changed = true;
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move aim+shoot crosshair up");
+                
+                // Middle row (Left and Right)
+                if (ImGui::Button("L##aim_shoot_left", ImVec2(30, 30))) {
+                    ctx.config.aim_shoot_offset_x += adjustment_step;
+                    aim_shoot_offset_changed = true;
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move aim+shoot crosshair left");
+                
+                ImGui::SameLine();
+                if (ImGui::Button("R##aim_shoot_right", ImVec2(30, 30))) {
+                    ctx.config.aim_shoot_offset_x -= adjustment_step;
+                    aim_shoot_offset_changed = true;
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move aim+shoot crosshair right");
+                
+                // Bottom button (Down - decrease Y)
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 30.0f);
+                if (ImGui::Button("DN##aim_shoot_down", ImVec2(30, 30))) {
+                    ctx.config.aim_shoot_offset_y -= adjustment_step;
+                    aim_shoot_offset_changed = true;
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move aim+shoot crosshair down");
+            }
+            ImGui::EndGroup();
+            
+            ImGui::SameLine();
+            ImGui::BeginGroup();
+            {
+                // Copy from normal offset button
+                if (ImGui::Button("Copy Normal", ImVec2(80, 30))) {
+                    ctx.config.aim_shoot_offset_x = ctx.config.crosshair_offset_x;
+                    ctx.config.aim_shoot_offset_y = ctx.config.crosshair_offset_y;
+                    aim_shoot_offset_changed = true;
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Copy from normal offset");
+                
+                // Fine adjustment controls
+                ImGui::Spacing();
+                ImGui::Text("Fine Adjust:");
+                ImGui::PushItemWidth(80);
+                if (ImGui::DragFloat("X##aim_shoot_x_fine", &ctx.config.aim_shoot_offset_x, 0.1f, -100.0f, 100.0f, "%.1f")) {
+                    aim_shoot_offset_changed = true;
+                }
+                if (ImGui::DragFloat("Y##aim_shoot_y_fine", &ctx.config.aim_shoot_offset_y, 0.1f, -100.0f, 100.0f, "%.1f")) {
+                    aim_shoot_offset_changed = true;
+                }
+                ImGui::PopItemWidth();
+            }
+            ImGui::EndGroup();
+        } else {
+            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Aim+Shoot offset is disabled");
         }
-        if (ImGui::DragFloat("Y##offset_y_fine", &ctx.config.crosshair_offset_y, 0.1f, -100.0f, 100.0f, "%.1f")) {
-            offset_changed = true;
-        }
-        ImGui::PopItemWidth();
     }
     ImGui::EndGroup();
     
     // Save config when offset changes
-    if (offset_changed) {
+    if (offset_changed || aim_shoot_offset_changed) {
         SAVE_PROFILE();
     }
 
@@ -241,7 +333,7 @@ void renderOffsetTab()
                 // Draw detections
                 drawDetections(draw_list, image_pos, debug_scale);
 
-                // Draw center crosshair with offset
+                // Draw normal crosshair with offset
                 float center_x = image_pos.x + (texW * debug_scale) / 2.0f + (ctx.config.crosshair_offset_x * debug_scale);
                 float center_y = image_pos.y + (texH * debug_scale) / 2.0f + (ctx.config.crosshair_offset_y * debug_scale);
                 ImU32 crosshair_color = IM_COL32(255, 255, 255, 255);
@@ -252,6 +344,33 @@ void renderOffsetTab()
                 
                 // Draw center circle
                 draw_list->AddCircle(ImVec2(center_x, center_y), 3.0f, crosshair_color, 0, 2.0f);
+                
+                // Also draw aim+shoot crosshair if enabled
+                if (ctx.config.enable_aim_shoot_offset) {
+                    float aim_shoot_x = image_pos.x + (texW * debug_scale) / 2.0f + (ctx.config.aim_shoot_offset_x * debug_scale);
+                    float aim_shoot_y = image_pos.y + (texH * debug_scale) / 2.0f + (ctx.config.aim_shoot_offset_y * debug_scale);
+                    ImU32 aim_shoot_color = IM_COL32(255, 128, 0, 255); // Orange color
+                    
+                    // Draw aim+shoot crosshair lines (dashed style)
+                    float dash_length = 5.0f;
+                    for (float x = -10; x < 10; x += dash_length * 2) {
+                        draw_list->AddLine(ImVec2(aim_shoot_x + x, aim_shoot_y), 
+                                          ImVec2(aim_shoot_x + x + dash_length, aim_shoot_y), 
+                                          aim_shoot_color, 2.0f);
+                    }
+                    for (float y = -10; y < 10; y += dash_length * 2) {
+                        draw_list->AddLine(ImVec2(aim_shoot_x, aim_shoot_y + y), 
+                                          ImVec2(aim_shoot_x, aim_shoot_y + y + dash_length), 
+                                          aim_shoot_color, 2.0f);
+                    }
+                    
+                    // Draw aim+shoot center circle
+                    draw_list->AddCircle(ImVec2(aim_shoot_x, aim_shoot_y), 4.0f, aim_shoot_color, 0, 2.0f);
+                    
+                    // Add label
+                    draw_list->AddText(ImVec2(aim_shoot_x + 15, aim_shoot_y - 8), 
+                                      aim_shoot_color, "Aim+Shoot");
+                }
             } else {
                 ImGui::TextUnformatted("Preview texture unavailable for display.");
             }

@@ -177,6 +177,11 @@ public:
     
     float crosshair_offset_x;
     float crosshair_offset_y;
+    
+    // Separate offset for when aiming and shooting
+    bool enable_aim_shoot_offset;
+    float aim_shoot_offset_x;
+    float aim_shoot_offset_y;
 
     
     bool easynorecoil;
