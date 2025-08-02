@@ -72,10 +72,10 @@ static void draw_error_scaling_controls()
         });
     
     // Table for rules
-    if (ImGui::BeginTable("error_scaling_table", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-        ImGui::TableSetupColumn("Error Threshold", ImGuiTableColumnFlags_WidthFixed, 120);
-        ImGui::TableSetupColumn("Scale Factor", ImGuiTableColumnFlags_WidthFixed, 100);
-        ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_WidthFixed, 80);
+    if (ImGui::BeginTable("error_scaling_table", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("Error Threshold", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Scale Factor", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_WidthStretch, 0.2f);
         ImGui::TableHeadersRow();
         
         for (size_t i = 0; i < temp_rules.size(); i++) {
@@ -116,7 +116,7 @@ static void draw_error_scaling_controls()
     static float new_scale = 30.0f;
     
     ImGui::Text("Add New Rule:");
-    ImGui::PushItemWidth(100);
+    ImGui::PushItemWidth(80);
     ImGui::InputFloat("Threshold", &new_threshold, 0.0f, 0.0f, "%.0f");
     ImGui::SameLine();
     ImGui::InputFloat("Scale %", &new_scale, 0.0f, 0.0f, "%.0f");
@@ -134,7 +134,7 @@ static void draw_error_scaling_controls()
     if (has_unsaved_changes) {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.7f, 0.0f, 0.9f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.0f, 0.8f, 0.0f, 1.0f));
-        if (ImGui::Button("Apply Changes", ImVec2(120, 0))) {
+        if (ImGui::Button("Apply Changes", ImVec2(100, 0))) {
             // Apply changes to actual config
             ctx.config.error_scaling_rules = temp_rules;
             SAVE_PROFILE();
@@ -146,7 +146,7 @@ static void draw_error_scaling_controls()
         
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.0f, 0.0f, 0.9f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.0f, 0.0f, 1.0f));
-        if (ImGui::Button("Cancel", ImVec2(80, 0))) {
+        if (ImGui::Button("Cancel", ImVec2(60, 0))) {
             // Revert to saved config
             temp_rules = ctx.config.error_scaling_rules;
             has_unsaved_changes = false;
@@ -154,7 +154,7 @@ static void draw_error_scaling_controls()
         ImGui::PopStyleColor(2);
     } else {
         // Reset button when no changes
-        if (ImGui::Button("Reset to Defaults", ImVec2(150, 0))) {
+        if (ImGui::Button("Reset to Defaults", ImVec2(120, 0))) {
             temp_rules.clear();
             temp_rules.push_back(Config::ErrorScalingRule(150.0f, 0.3f));
             temp_rules.push_back(Config::ErrorScalingRule(100.0f, 0.5f));
@@ -165,379 +165,6 @@ static void draw_error_scaling_controls()
     
     UIHelpers::Spacer();
     UIHelpers::BeautifulText("Tip: Higher error thresholds apply first. When error >= threshold, movement is scaled down.", UIHelpers::GetAccentColor(0.6f));
-    
-    UIHelpers::EndCard();
-}
-
-static void draw_movement_method_settings()
-{
-    auto& ctx = AppContext::getInstance();
-    
-    UIHelpers::BeginCard("Movement Method Settings");
-    
-    UIHelpers::BeautifulText("Choose between different mouse movement algorithms.", UIHelpers::GetAccentColor(0.8f));
-    UIHelpers::CompactSpacer();
-    
-    // Movement method selection
-    const char* movement_methods[] = { "PID", "Bezier", "Spline+Kalman", "GAN" };
-    int current_method = 0;
-    if (ctx.config.movement_method == "bezier") current_method = 1;
-    else if (ctx.config.movement_method == "spline_kalman") current_method = 2;
-    else if (ctx.config.movement_method == "gan") current_method = 3;
-    
-    if (ImGui::Combo("Movement Method", &current_method, movement_methods, IM_ARRAYSIZE(movement_methods))) {
-        switch (current_method) {
-            case 0: ctx.config.movement_method = "pid"; break;
-            case 1: ctx.config.movement_method = "bezier"; break;
-            case 2: ctx.config.movement_method = "spline_kalman"; break;
-            case 3: ctx.config.movement_method = "gan"; break;
-        }
-        SAVE_PROFILE();
-    }
-    
-    if (ctx.config.movement_method == "bezier") {
-        UIHelpers::Spacer();
-        UIHelpers::SettingsSubHeader("Bezier Curve Parameters");
-        
-        float bezier_speed = ctx.config.bezier_speed;
-        if (UIHelpers::EnhancedSliderFloat("Speed", &bezier_speed, 1.0f, 100.0f, "%.0f", "Number of steps in the curve. Higher = smoother but slower.")) {
-            ctx.config.bezier_speed = bezier_speed;
-            SAVE_PROFILE();
-        }
-        
-        float bezier_curve_factor = ctx.config.bezier_curve_factor;
-        if (UIHelpers::EnhancedSliderFloat("Curve Factor", &bezier_curve_factor, 0.0f, 1.0f, "%.2f", "How much curve to add. 0 = straight line, 1 = maximum curve.")) {
-            ctx.config.bezier_curve_factor = bezier_curve_factor;
-            SAVE_PROFILE();
-        }
-        
-        // Advanced settings in collapsible section
-        if (ImGui::CollapsingHeader("Advanced Bezier Settings")) {
-            UIHelpers::Spacer();
-            
-            // Step calculation
-            UIHelpers::BeautifulText("Step Calculation", UIHelpers::GetAccentColor(0.8f));
-            UIHelpers::CompactSpacer();
-            
-            float step_mult = ctx.config.bezier_step_multiplier;
-            if (UIHelpers::EnhancedSliderFloat("Step Multiplier", &step_mult, 1.0f, 20.0f, "%.1f", "Divides error magnitude to calculate dynamic steps.")) {
-                ctx.config.bezier_step_multiplier = step_mult;
-                SAVE_PROFILE();
-            }
-            
-            int min_steps = ctx.config.bezier_min_steps;
-            if (ImGui::SliderInt("Minimum Steps", &min_steps, 1, 10)) {
-                ctx.config.bezier_min_steps = min_steps;
-                SAVE_PROFILE();
-            }
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Minimum number of curve steps.");
-            }
-            
-            UIHelpers::Spacer();
-            
-            // Curve offset
-            UIHelpers::BeautifulText("Curve Offset", UIHelpers::GetAccentColor(0.8f));
-            UIHelpers::CompactSpacer();
-            
-            float offset_scale = ctx.config.bezier_curve_offset_scale;
-            if (UIHelpers::EnhancedSliderFloat("Offset Scale", &offset_scale, 0.01f, 0.1f, "%.3f", "Scales the curve offset based on distance.")) {
-                ctx.config.bezier_curve_offset_scale = offset_scale;
-                SAVE_PROFILE();
-            }
-            
-            float max_offset = ctx.config.bezier_max_curve_offset;
-            if (UIHelpers::EnhancedSliderFloat("Max Offset", &max_offset, 1.0f, 10.0f, "%.1f", "Maximum curve offset in pixels.")) {
-                ctx.config.bezier_max_curve_offset = max_offset;
-                SAVE_PROFILE();
-            }
-            
-            UIHelpers::Spacer();
-            
-            // Control points
-            UIHelpers::BeautifulText("Control Points", UIHelpers::GetAccentColor(0.8f));
-            UIHelpers::CompactSpacer();
-            
-            float ctrl1_min = ctx.config.bezier_control1_min;
-            if (UIHelpers::EnhancedSliderFloat("Control 1 Min", &ctrl1_min, 0.05f, 0.3f, "%.2f", "First control point minimum position.")) {
-                ctx.config.bezier_control1_min = ctrl1_min;
-                SAVE_PROFILE();
-            }
-            
-            float ctrl1_range = ctx.config.bezier_control1_range;
-            if (UIHelpers::EnhancedSliderFloat("Control 1 Range", &ctrl1_range, 0.01f, 0.2f, "%.2f", "First control point randomness range.")) {
-                ctx.config.bezier_control1_range = ctrl1_range;
-                SAVE_PROFILE();
-            }
-            
-            float ctrl2_min = ctx.config.bezier_control2_min;
-            if (UIHelpers::EnhancedSliderFloat("Control 2 Min", &ctrl2_min, 0.7f, 0.9f, "%.2f", "Second control point minimum position.")) {
-                ctx.config.bezier_control2_min = ctrl2_min;
-                SAVE_PROFILE();
-            }
-            
-            float ctrl2_range = ctx.config.bezier_control2_range;
-            if (UIHelpers::EnhancedSliderFloat("Control 2 Range", &ctrl2_range, 0.01f, 0.2f, "%.2f", "Second control point randomness range.")) {
-                ctx.config.bezier_control2_range = ctrl2_range;
-                SAVE_PROFILE();
-            }
-            
-            UIHelpers::Spacer();
-            
-            // Curve types
-            UIHelpers::BeautifulText("Curve Types", UIHelpers::GetAccentColor(0.8f));
-            UIHelpers::CompactSpacer();
-            
-            float s_curve_prob = ctx.config.bezier_s_curve_probability;
-            if (UIHelpers::EnhancedSliderFloat("S-Curve Probability", &s_curve_prob, 0.0f, 1.0f, "%.2f", "Probability of using S-curve vs single curve.")) {
-                ctx.config.bezier_s_curve_probability = s_curve_prob;
-                SAVE_PROFILE();
-            }
-            
-            // S-curve offsets
-            UIHelpers::BeautifulText("S-Curve Offsets", UIHelpers::GetAccentColor(0.7f));
-            ImGui::Columns(2, "s_curve_cols", false);
-            
-            float s_off1 = ctx.config.bezier_s_curve_offset1;
-            if (UIHelpers::EnhancedSliderFloat("S-Curve Offset 1##s_off1", &s_off1, 0.1f, 1.0f, "%.2f", "First S-curve offset multiplier.")) {
-                ctx.config.bezier_s_curve_offset1 = s_off1;
-                SAVE_PROFILE();
-            }
-            
-            ImGui::NextColumn();
-            
-            float s_off2 = ctx.config.bezier_s_curve_offset2;
-            if (UIHelpers::EnhancedSliderFloat("S-Curve Offset 2##s_off2", &s_off2, 0.1f, 1.0f, "%.2f", "Second S-curve offset multiplier.")) {
-                ctx.config.bezier_s_curve_offset2 = s_off2;
-                SAVE_PROFILE();
-            }
-            
-            ImGui::Columns(1);
-            
-            // Single curve offsets
-            UIHelpers::BeautifulText("Single Curve Offsets", UIHelpers::GetAccentColor(0.7f));
-            ImGui::Columns(2, "single_curve_cols", false);
-            
-            float single_off1 = ctx.config.bezier_single_offset1;
-            if (UIHelpers::EnhancedSliderFloat("Single Offset 1##single_off1", &single_off1, 0.1f, 1.0f, "%.2f", "First single curve offset multiplier.")) {
-                ctx.config.bezier_single_offset1 = single_off1;
-                SAVE_PROFILE();
-            }
-            
-            ImGui::NextColumn();
-            
-            float single_off2 = ctx.config.bezier_single_offset2;
-            if (UIHelpers::EnhancedSliderFloat("Single Offset 2##single_off2", &single_off2, 0.1f, 1.0f, "%.2f", "Second single curve offset multiplier.")) {
-                ctx.config.bezier_single_offset2 = single_off2;
-                SAVE_PROFILE();
-            }
-            
-            ImGui::Columns(1);
-            
-            UIHelpers::Spacer();
-            
-            // Movement threshold
-            UIHelpers::BeautifulText("Movement Filtering", UIHelpers::GetAccentColor(0.8f));
-            UIHelpers::CompactSpacer();
-            
-            float min_move = ctx.config.bezier_min_movement;
-            if (UIHelpers::EnhancedSliderFloat("Min Movement", &min_move, 0.01f, 0.5f, "%.2f", "Minimum movement threshold to reduce jitter.")) {
-                ctx.config.bezier_min_movement = min_move;
-                SAVE_PROFILE();
-            }
-            
-            UIHelpers::Spacer();
-            
-            // Preset buttons
-            UIHelpers::SettingsSubHeader("Bezier Presets");
-            
-            if (ImGui::Button("Direct", ImVec2((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x * 2) / 3, 0))) {
-                ctx.config.bezier_curve_offset_scale = 0.02f;
-                ctx.config.bezier_max_curve_offset = 1.5f;
-                ctx.config.bezier_s_curve_probability = 0.2f;
-                ctx.config.bezier_s_curve_offset1 = 0.4f;
-                ctx.config.bezier_s_curve_offset2 = 0.3f;
-                ctx.config.bezier_single_offset1 = 0.3f;
-                ctx.config.bezier_single_offset2 = 0.2f;
-                SAVE_PROFILE();
-            }
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Very direct path with minimal curve");
-            }
-            
-            ImGui::SameLine();
-            if (ImGui::Button("Natural", ImVec2((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) / 2, 0))) {
-                ctx.config.bezier_curve_offset_scale = 0.03f;
-                ctx.config.bezier_max_curve_offset = 2.0f;
-                ctx.config.bezier_s_curve_probability = 0.3f;
-                ctx.config.bezier_s_curve_offset1 = 0.6f;
-                ctx.config.bezier_s_curve_offset2 = 0.4f;
-                ctx.config.bezier_single_offset1 = 0.5f;
-                ctx.config.bezier_single_offset2 = 0.3f;
-                SAVE_PROFILE();
-            }
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Balanced natural movement");
-            }
-            
-            ImGui::SameLine();
-            if (ImGui::Button("Smooth", ImVec2(-1, 0))) {
-                ctx.config.bezier_curve_offset_scale = 0.05f;
-                ctx.config.bezier_max_curve_offset = 3.0f;
-                ctx.config.bezier_s_curve_probability = 0.5f;
-                ctx.config.bezier_s_curve_offset1 = 0.8f;
-                ctx.config.bezier_s_curve_offset2 = 0.6f;
-                ctx.config.bezier_single_offset1 = 0.7f;
-                ctx.config.bezier_single_offset2 = 0.5f;
-                SAVE_PROFILE();
-            }
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Smoother curves, less direct");
-            }
-        }
-    }
-    else if (ctx.config.movement_method == "spline_kalman") {
-        UIHelpers::Spacer();
-        UIHelpers::SettingsSubHeader("Spline + Kalman Filter Parameters");
-        
-        // Spline parameters
-        UIHelpers::BeautifulText("Spline Interpolation", UIHelpers::GetAccentColor(0.8f));
-        UIHelpers::CompactSpacer();
-        
-        int segments = ctx.config.spline_segments;
-        if (ImGui::SliderInt("Segments", &segments, 5, 50, "%d")) {
-            ctx.config.spline_segments = segments;
-            SAVE_PROFILE();
-        }
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Number of spline segments. More segments = smoother path.");
-        }
-        
-        float tension = ctx.config.spline_tension;
-        if (UIHelpers::EnhancedSliderFloat("Tension", &tension, 0.0f, 1.0f, "%.2f", "Controls curve tightness. 0 = loose, 1 = tight.")) {
-            ctx.config.spline_tension = tension;
-            SAVE_PROFILE();
-        }
-        
-        float continuity = ctx.config.spline_continuity;
-        if (UIHelpers::EnhancedSliderFloat("Continuity", &continuity, -1.0f, 1.0f, "%.2f", "Controls curve sharpness at control points.")) {
-            ctx.config.spline_continuity = continuity;
-            SAVE_PROFILE();
-        }
-        
-        float bias = ctx.config.spline_bias;
-        if (UIHelpers::EnhancedSliderFloat("Bias", &bias, -1.0f, 1.0f, "%.2f", "Controls curve direction bias.")) {
-            ctx.config.spline_bias = bias;
-            SAVE_PROFILE();
-        }
-        
-        UIHelpers::Spacer();
-        
-        // Kalman filter parameters
-        UIHelpers::BeautifulText("Kalman Filter", UIHelpers::GetAccentColor(0.8f));
-        UIHelpers::CompactSpacer();
-        
-        float process_noise = ctx.config.kalman_process_noise;
-        if (UIHelpers::EnhancedSliderFloat("Process Noise", &process_noise, 0.01f, 1.0f, "%.2f", "Model uncertainty. Higher = more responsive to changes.")) {
-            ctx.config.kalman_process_noise = process_noise;
-            SAVE_PROFILE();
-        }
-        
-        float measurement_noise = ctx.config.kalman_measurement_noise;
-        if (UIHelpers::EnhancedSliderFloat("Measurement Noise", &measurement_noise, 0.1f, 5.0f, "%.1f", "Sensor noise. Higher = more smoothing.")) {
-            ctx.config.kalman_measurement_noise = measurement_noise;
-            SAVE_PROFILE();
-        }
-    }
-    else if (ctx.config.movement_method == "gan") {
-        UIHelpers::Spacer();
-        UIHelpers::SettingsSubHeader("GAN-Based Movement Parameters");
-        
-        // Human-like characteristics
-        UIHelpers::BeautifulText("Human Characteristics", UIHelpers::GetAccentColor(0.8f));
-        UIHelpers::CompactSpacer();
-        
-        float variability = ctx.config.gan_human_variability;
-        if (UIHelpers::EnhancedSliderFloat("Human Variability", &variability, 0.0f, 1.0f, "%.2f", "Amount of human-like imperfection. 0 = robotic, 1 = very human.")) {
-            ctx.config.gan_human_variability = variability;
-            SAVE_PROFILE();
-        }
-        
-        float reaction_time = ctx.config.gan_reaction_time;
-        if (UIHelpers::EnhancedSliderFloat("Reaction Time", &reaction_time, 0.0f, 0.3f, "%.2f s", "Simulated human reaction delay.")) {
-            ctx.config.gan_reaction_time = reaction_time;
-            SAVE_PROFILE();
-        }
-        
-        // Acceleration profile
-        const char* accel_profiles[] = { "Linear", "Ease In/Out", "Human-like" };
-        int accel_profile = ctx.config.gan_acceleration_profile;
-        if (ImGui::Combo("Acceleration", &accel_profile, accel_profiles, IM_ARRAYSIZE(accel_profiles))) {
-            ctx.config.gan_acceleration_profile = accel_profile;
-            SAVE_PROFILE();
-        }
-        
-        UIHelpers::Spacer();
-        
-        // Path generation
-        UIHelpers::BeautifulText("Path Generation", UIHelpers::GetAccentColor(0.8f));
-        UIHelpers::CompactSpacer();
-        
-        float complexity = ctx.config.gan_path_complexity;
-        if (UIHelpers::EnhancedSliderFloat("Path Complexity", &complexity, 0.1f, 1.0f, "%.2f", "Complexity of generated path. Higher = more detailed movement.")) {
-            ctx.config.gan_path_complexity = complexity;
-            SAVE_PROFILE();
-        }
-        
-        float noise_scale = ctx.config.gan_noise_scale;
-        if (UIHelpers::EnhancedSliderFloat("Noise Scale", &noise_scale, 0.0f, 1.0f, "%.2f", "Amount of randomness in path generation.")) {
-            ctx.config.gan_noise_scale = noise_scale;
-            SAVE_PROFILE();
-        }
-        
-        UIHelpers::Spacer();
-        
-        // Presets
-        UIHelpers::SettingsSubHeader("GAN Presets");
-        
-        if (ImGui::Button("Precise", ImVec2((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x * 2) / 3, 0))) {
-            ctx.config.gan_human_variability = 0.2f;
-            ctx.config.gan_reaction_time = 0.05f;
-            ctx.config.gan_path_complexity = 0.5f;
-            ctx.config.gan_noise_scale = 0.1f;
-            ctx.config.gan_acceleration_profile = 1; // Ease in/out
-            SAVE_PROFILE();
-        }
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Low variability for competitive play");
-        }
-        
-        ImGui::SameLine();
-        if (ImGui::Button("Natural", ImVec2((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) / 2, 0))) {
-            ctx.config.gan_human_variability = 0.5f;
-            ctx.config.gan_reaction_time = 0.15f;
-            ctx.config.gan_path_complexity = 0.7f;
-            ctx.config.gan_noise_scale = 0.3f;
-            ctx.config.gan_acceleration_profile = 2; // Human-like
-            SAVE_PROFILE();
-        }
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Balanced human-like movement");
-        }
-        
-        ImGui::SameLine();
-        if (ImGui::Button("Casual", ImVec2(ImGui::GetContentRegionAvail().x, 0))) {
-            ctx.config.gan_human_variability = 0.8f;
-            ctx.config.gan_reaction_time = 0.25f;
-            ctx.config.gan_path_complexity = 0.9f;
-            ctx.config.gan_noise_scale = 0.5f;
-            ctx.config.gan_acceleration_profile = 2; // Human-like
-            SAVE_PROFILE();
-        }
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Very human-like, less precise");
-        }
-    }
     
     UIHelpers::EndCard();
 }
@@ -759,189 +386,17 @@ static void draw_input_method_settings()
     UIHelpers::EndCard();
 }
 
-static void draw_hotkey_section(const char* title, std::vector<std::string>& hotkeys, const char* add_id)
-{
-    // Create child window for better space management
-    ImGui::BeginChild((std::string("hotkey_section_") + add_id).c_str(), ImVec2(0, 0), false);
-    
-    for (size_t i = 0; i < hotkeys.size(); )
-    {
-        std::string& current_key_name = hotkeys[i];
-        
-        int current_index = -1;
-        for (size_t k = 0; k < key_names.size(); ++k)
-        {
-            if (key_names[k] == current_key_name)
-            {
-                current_index = static_cast<int>(k);
-                break;
-            }
-        }
-        
-        if (current_index == -1)
-        {
-            current_index = 0;
-        }
-        
-        // Use unique ID combining section name and index
-        std::string unique_id = std::string(add_id) + "_" + std::to_string(i);
-        ImGui::PushID(unique_id.c_str());
-        
-        // Calculate proper button width
-        float remove_button_width = 80.0f;
-        float available_width = ImGui::GetContentRegionAvail().x;
-        float combo_width = available_width - remove_button_width - ImGui::GetStyle().ItemSpacing.x;
-        
-        // Enhanced key selector with better styling and wider width
-        ImGui::SetNextItemWidth(combo_width);
-        ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.15f, 0.15f, 0.18f, 0.95f));
-        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.20f, 0.20f, 0.25f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_Button, UIHelpers::GetAccentColor(0.7f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, UIHelpers::GetAccentColor(0.8f));
-        ImGui::PushStyleColor(ImGuiCol_Header, UIHelpers::GetAccentColor(0.7f));
-        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, UIHelpers::GetAccentColor(0.8f));
-        
-        std::string combo_label = "##hotkey_combo_" + unique_id;
-        if (ImGui::Combo(combo_label.c_str(), &current_index, key_names_cstrs.data(), static_cast<int>(key_names_cstrs.size())))
-        {
-            current_key_name = key_names[current_index];
-            AppContext::getInstance().config.saveConfig();
-        }
-        ImGui::PopStyleColor(6);
-        
-        ImGui::SameLine();
-        std::string remove_button_label = "Remove##" + unique_id;
-        if (UIHelpers::BeautifulButton(remove_button_label.c_str(), ImVec2(remove_button_width, 0)))
-        {
-            if (hotkeys.size() <= 1)
-            {
-                hotkeys[0] = std::string("None");
-                AppContext::getInstance().config.saveConfig();
-                ImGui::PopID();
-                continue;
-            }
-            else
-            {
-                hotkeys.erase(hotkeys.begin() + i);
-                AppContext::getInstance().config.saveConfig();
-                ImGui::PopID();
-                continue;
-            }
-        }
-        
-        ImGui::PopID();
-        ++i;
-    }
-    
-    UIHelpers::CompactSpacer();
-    std::string add_button_label = "Add Key##" + std::string(add_id);
-    if (UIHelpers::BeautifulButton(add_button_label.c_str(), ImVec2(-1, 0)))
-    {
-        hotkeys.push_back("None");
-        AppContext::getInstance().config.saveConfig();
-    }
-    
-    ImGui::EndChild();
-}
 
-static void draw_aiming_settings()
-{
-    auto& ctx = AppContext::getInstance();
-    
-    UIHelpers::BeginCard("Aiming Controls");
-    
-    // Targeting Section
-    UIHelpers::SettingsSubHeader("Targeting Controls");
-    UIHelpers::BeautifulText("Configure keys for aimbot activation", UIHelpers::GetAccentColor(0.7f));
-    UIHelpers::Spacer(6.0f);
-    
-    draw_hotkey_section("Aimbot Activation Keys", ctx.config.button_targeting, "targeting_keys");
-    
-    UIHelpers::Spacer(8.0f);
-    
-    // Auto Shoot Section
-    UIHelpers::SettingsSubHeader("Auto Shooting");
-    UIHelpers::BeautifulText("Automatically shoot when targeting enemies", UIHelpers::GetAccentColor(0.7f));
-    UIHelpers::Spacer(6.0f);
-    
-    draw_hotkey_section("Auto Shoot Keys", ctx.config.button_auto_shoot, "auto_shoot_keys");
-    
-    UIHelpers::Spacer(8.0f);
-    
-    // Movement Restrictions
-    UIHelpers::SettingsSubHeader("Movement Restrictions");
-    UIHelpers::BeautifulText("Control when aimbot should avoid certain movements", UIHelpers::GetAccentColor(0.7f));
-    UIHelpers::Spacer(6.0f);
-    
-    draw_hotkey_section("Disable Upward Aim Keys", ctx.config.button_disable_upward_aim, "disable_upward_keys");
-    
-    UIHelpers::EndCard();
-    
-    UIHelpers::CompactSpacer();
-    
-    // Separate card for Triggerbot to give more space
-    UIHelpers::BeginCard("Triggerbot Configuration");
-    
-    UIHelpers::BeautifulText("Configure the screen area where triggerbot activates", UIHelpers::GetAccentColor(0.7f));
-    UIHelpers::Spacer(6.0f);
-    
-    ImGui::Text("Area Size Multiplier");
-    if (UIHelpers::EnhancedSliderFloat("##triggerbot_area", &ctx.config.bScope_multiplier, 0.1f, 2.0f, "%.2f",
-                                      "Defines the central screen area size where Triggerbot activates.\nSmaller value = larger area\nLarger value = smaller area\n(1.0 = default area)")) {
-        SAVE_PROFILE();
-    }
-    
-    UIHelpers::EndCard();
-}
 
 void draw_mouse()
 {
     auto& ctx = AppContext::getInstance();
     
-    UIHelpers::BeginTwoColumnLayout(0.65f);
-    
-    // Left column - Movement method and controller settings
-    
-    draw_movement_method_settings();
-    UIHelpers::CompactSpacer();
-    
-    if (ctx.config.movement_method == "pid") {
-        draw_pid_controls();
-        UIHelpers::CompactSpacer();
-    }
+    draw_pid_controls();
+    UIHelpers::Spacer();
     
     draw_error_scaling_controls();
-    UIHelpers::CompactSpacer();
+    UIHelpers::Spacer();
     
     draw_input_method_settings();
-    
-    UIHelpers::NextColumn();
-    
-    // Right column - Aiming settings and tips
-    draw_aiming_settings();
-    UIHelpers::CompactSpacer();
-    
-    UIHelpers::BeginInfoPanel();
-    
-    UIHelpers::BeautifulText("PID Tuning Tips", UIHelpers::GetAccentColor());
-    UIHelpers::CompactSpacer();
-    
-    ImGui::BulletText("Start with Kp (proportional) for basic tracking");
-    ImGui::BulletText("Add Kd (derivative) to reduce oscillation");
-    ImGui::BulletText("Use Ki (integral) sparingly to fix drift");
-    ImGui::BulletText("Lower values = smoother, Higher values = faster");
-    
-    UIHelpers::CompactSpacer();
-    
-    UIHelpers::BeautifulText("Input Method Guide", UIHelpers::GetAccentColor());
-    UIHelpers::CompactSpacer();
-    
-    ImGui::BulletText("WIN32: Standard method, may be detected");
-    ImGui::BulletText("GHUB: Logitech driver, generally safer");
-    ImGui::BulletText("ARDUINO: Hardware-based, requires setup");
-    ImGui::BulletText("KMBOX: Hardware solution, very safe");
-    
-    UIHelpers::EndInfoPanel();
-    
-    UIHelpers::EndTwoColumnLayout();
 }

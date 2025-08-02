@@ -30,8 +30,6 @@ void draw_profile()
     UIHelpers::ProfileDropdown();
     UIHelpers::Spacer();
     
-    UIHelpers::BeginTwoColumnLayout(0.55f);
-    
     // Left column - Profile management
     UIHelpers::BeginCard("Profile Management");
 
@@ -177,7 +175,7 @@ void draw_profile()
 
     UIHelpers::EndCard();
     
-    UIHelpers::NextColumn();
+    UIHelpers::Spacer();
     
     // Right column - Create new profile
     UIHelpers::BeginCard("Create New Profile");
@@ -298,6 +296,5 @@ void draw_profile()
         }
     }
     
-    UIHelpers::EndTwoColumnLayout();
 }
 

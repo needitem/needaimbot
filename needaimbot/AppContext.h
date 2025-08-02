@@ -47,6 +47,7 @@ public:
     // Application state
     std::atomic<bool> should_exit{false};
     std::atomic<bool> aiming{false};
+    std::atomic<bool> shooting{false};  // Track if auto_shoot button is pressed
     std::atomic<bool> input_method_changed{false};
     
     // Capture state changes

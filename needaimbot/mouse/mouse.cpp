@@ -30,9 +30,7 @@
 #endif
 
 #include "aimbot_components/PIDController2D.h"
-#include "aimbot_components/BezierCurveController.h"
-#include "aimbot_components/SplineKalmanController.h"
-#include "aimbot_components/GANMouseController.h"
+#include "aimbot_components/IntegratedController.h"
 
 
 extern std::atomic<bool> aiming;
@@ -94,15 +92,8 @@ MouseThread::MouseThread(
     MakcuConnection *makcuConnection,
     GhubMouse *gHub)
 {
-    auto& ctx = AppContext::getInstance();
     initializeScreen(resolution, bScope_multiplier, norecoil_ms);
-    
-    // Initialize all controllers
     pid_controller = std::make_unique<PIDController2D>(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
-    bezier_controller = std::make_unique<BezierCurveController>(ctx.config.bezier_speed, ctx.config.bezier_curve_factor);
-    spline_kalman_controller = std::make_unique<SplineKalmanController>();
-    gan_controller = std::make_unique<GANMouseController>();
-    
     initializeInputMethod(serialConnection, makcuConnection, gHub);
     
     // Start async input worker thread
@@ -186,35 +177,7 @@ void MouseThread::updateConfig(
         initializeScreen(resolution, bScope_multiplier, norecoil_ms);
         
     }
-    
-    // Update PID controller
-    if (pid_controller) {
-        pid_controller->updateSeparatedParameters(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
-    }
-    
-    // Update Bezier controller (get latest params from config)
-    if (bezier_controller) {
-        bezier_controller->updateParameters(ctx.config.bezier_speed, ctx.config.bezier_curve_factor);
-    }
-    
-    // Update Spline+Kalman controller
-    if (spline_kalman_controller) {
-        spline_kalman_controller->setSplineSegments(ctx.config.spline_segments);
-        spline_kalman_controller->setKalmanProcessNoise(ctx.config.kalman_process_noise);
-        spline_kalman_controller->setKalmanMeasurementNoise(ctx.config.kalman_measurement_noise);
-        spline_kalman_controller->setSplineTension(ctx.config.spline_tension);
-        spline_kalman_controller->setSplineContinuity(ctx.config.spline_continuity);
-        spline_kalman_controller->setSplineBias(ctx.config.spline_bias);
-    }
-    
-    // Update GAN controller
-    if (gan_controller) {
-        gan_controller->setNoiseScale(ctx.config.gan_noise_scale);
-        gan_controller->setPathComplexity(ctx.config.gan_path_complexity);
-        gan_controller->setHumanVariability(ctx.config.gan_human_variability);
-        gan_controller->setReactionTime(ctx.config.gan_reaction_time);
-        gan_controller->setAccelerationProfile(ctx.config.gan_acceleration_profile);
-    }
+    pid_controller->updateSeparatedParameters(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
     
 }
 
@@ -296,8 +259,14 @@ float MouseThread::calculateTargetDistanceSquared(const AimbotTarget &target) co
     }
     {
         std::lock_guard<std::mutex> lock(ctx.configMutex);
-        crosshair_offset_x = ctx.config.crosshair_offset_x;
-        crosshair_offset_y = ctx.config.crosshair_offset_y;
+        // Check if we should use aim+shoot offset
+        if (ctx.config.enable_aim_shoot_offset && ctx.aiming && ctx.shooting) {
+            crosshair_offset_x = ctx.config.aim_shoot_offset_x;
+            crosshair_offset_y = ctx.config.aim_shoot_offset_y;
+        } else {
+            crosshair_offset_x = ctx.config.crosshair_offset_x;
+            crosshair_offset_y = ctx.config.crosshair_offset_y;
+        }
     }
     
     // Apply crosshair offset correction
@@ -346,10 +315,13 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     
     float current_center_x, current_center_y;
     float current_move_scale_x, current_move_scale_y;
+    float move_x = 0.0f, move_y = 0.0f;
     
     // Cache for config values to reduce mutex locks
     static struct ConfigCache {
         float crosshair_offset_x, crosshair_offset_y;
+        float aim_shoot_offset_x, aim_shoot_offset_y;
+        bool enable_aim_shoot_offset;
         int head_class_id_to_use = -1;
         bool apply_head_offset = false;
         float head_y_offset, body_y_offset;
@@ -362,6 +334,9 @@ void MouseThread::moveMouse(const AimbotTarget &target)
             if (now - last_update >= update_interval) {
                 crosshair_offset_x = config.crosshair_offset_x;
                 crosshair_offset_y = config.crosshair_offset_y;
+                aim_shoot_offset_x = config.aim_shoot_offset_x;
+                aim_shoot_offset_y = config.aim_shoot_offset_y;
+                enable_aim_shoot_offset = config.enable_aim_shoot_offset;
                 head_class_name = config.head_class_name;
                 head_y_offset = config.head_y_offset;
                 body_y_offset = config.body_y_offset;
@@ -397,8 +372,13 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     }
 
     // Apply crosshair offset correction
-    current_center_x += config_cache.crosshair_offset_x;
-    current_center_y += config_cache.crosshair_offset_y;
+    if (config_cache.enable_aim_shoot_offset && ctx.aiming && ctx.shooting) {
+        current_center_x += config_cache.aim_shoot_offset_x;
+        current_center_y += config_cache.aim_shoot_offset_y;
+    } else {
+        current_center_x += config_cache.crosshair_offset_x;
+        current_center_y += config_cache.crosshair_offset_y;
+    }
 
     Point2D raw_target_pos;
     raw_target_pos.x = target.x + target.w * 0.5f;
@@ -460,177 +440,25 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     }
 
 
-    // Calculate error magnitude first for adaptive control
+    // 원래의 PID 로직 사용
     float error_magnitude = std::sqrt(error_x * error_x + error_y * error_y);
     
-    float move_x, move_y;
-    
     Eigen::Vector2f error(error_x, error_y);
-    auto calc_start_time = std::chrono::steady_clock::now();
+    auto pid_start_time = std::chrono::steady_clock::now();
     
-    // Choose movement method
-    if (ctx.config.movement_method == "bezier") {
-        // Use Bezier curve controller
-        if (bezier_controller) {
-            auto movements = bezier_controller->calculatePath(error);
-            
-            // Debug logging for Bezier
-            if (ctx.config.verbose) {
-                std::cout << "[Mouse] Using Bezier curve method with " << movements.size() << " steps" << std::endl;
-            }
-            
-            // For Bezier, we need to execute all movements in the path
-            // This is handled differently - we'll enqueue all movements
-            for (const auto& movement : movements) {
-                float dx = movement.x() * current_move_scale_x;
-                float dy = movement.y() * current_move_scale_y;
-                
-                // Check disable upward aim
-                if (local_disable_upward_aim_active && dy < 0) {
-                    dy = 0;
-                }
-                
-                // Process accumulated movement
-                auto [dx_int, dy_int] = processAccumulatedMovement(dx, dy);
-                
-                if (dx_int != 0 || dy_int != 0) {
-                    enqueueMouseCommand(MouseCommand::MOVE, dx_int, dy_int);
-                }
-            }
-            
-            // Early return for bezier - we've already enqueued all movements
-            auto calc_end_time = std::chrono::steady_clock::now();
-            float calc_duration_ms = std::chrono::duration<float, std::milli>(calc_end_time - calc_start_time).count();
-            ctx.g_current_pid_calc_time_ms.store(calc_duration_ms, std::memory_order_relaxed);
-            ctx.add_to_history(ctx.g_pid_calc_time_history, calc_duration_ms, ctx.g_pid_calc_history_mutex);
-            
-            // Calculate pure detection-to-movement time
-            auto movement_completion_time = std::chrono::high_resolution_clock::now();
-            float detection_to_movement_ms = std::chrono::duration<float, std::milli>(movement_completion_time - target.detection_timestamp).count();
-            ctx.g_current_detection_to_movement_time_ms.store(detection_to_movement_ms, std::memory_order_relaxed);
-            ctx.add_to_history(ctx.g_detection_to_movement_time_history, detection_to_movement_ms, ctx.g_detection_to_movement_history_mutex);
-            
-            return;
-        }
-    }
-    else if (ctx.config.movement_method == "spline_kalman") {
-        // Use Spline + Kalman Filter controller
-        if (spline_kalman_controller) {
-            auto movements = spline_kalman_controller->calculatePath(
-                current_center_x, current_center_y,
-                current_center_x + error_x, current_center_y + error_y
-            );
-            
-            // Debug logging
-            if (ctx.config.verbose) {
-                std::cout << "[Mouse] Using Spline+Kalman method with " << movements.size() << " steps" << std::endl;
-            }
-            
-            // Execute all movements in the path
-            for (const auto& movement : movements) {
-                float dx = (movement.first - current_center_x) * current_move_scale_x;
-                float dy = (movement.second - current_center_y) * current_move_scale_y;
-                
-                // Update current position for next movement
-                current_center_x = movement.first;
-                current_center_y = movement.second;
-                
-                // Check disable upward aim
-                if (local_disable_upward_aim_active && dy < 0) {
-                    dy = 0;
-                }
-                
-                // Process accumulated movement
-                auto [dx_int, dy_int] = processAccumulatedMovement(dx, dy);
-                
-                if (dx_int != 0 || dy_int != 0) {
-                    enqueueMouseCommand(MouseCommand::MOVE, dx_int, dy_int);
-                }
-            }
-            
-            // Early return - we've already enqueued all movements
-            auto calc_end_time = std::chrono::steady_clock::now();
-            float calc_duration_ms = std::chrono::duration<float, std::milli>(calc_end_time - calc_start_time).count();
-            ctx.g_current_pid_calc_time_ms.store(calc_duration_ms, std::memory_order_relaxed);
-            ctx.add_to_history(ctx.g_pid_calc_time_history, calc_duration_ms, ctx.g_pid_calc_history_mutex);
-            
-            // Calculate pure detection-to-movement time
-            auto movement_completion_time = std::chrono::high_resolution_clock::now();
-            float detection_to_movement_ms = std::chrono::duration<float, std::milli>(movement_completion_time - target.detection_timestamp).count();
-            ctx.g_current_detection_to_movement_time_ms.store(detection_to_movement_ms, std::memory_order_relaxed);
-            ctx.add_to_history(ctx.g_detection_to_movement_time_history, detection_to_movement_ms, ctx.g_detection_to_movement_history_mutex);
-            
-            return;
-        }
-    }
-    else if (ctx.config.movement_method == "gan") {
-        // Use GAN-based controller
-        if (gan_controller) {
-            auto movements = gan_controller->calculatePath(
-                current_center_x, current_center_y,
-                current_center_x + error_x, current_center_y + error_y
-            );
-            
-            // Debug logging
-            if (ctx.config.verbose) {
-                std::cout << "[Mouse] Using GAN method with " << movements.size() << " steps" << std::endl;
-            }
-            
-            // Execute all movements in the path
-            for (const auto& movement : movements) {
-                float dx = (movement.first - current_center_x) * current_move_scale_x;
-                float dy = (movement.second - current_center_y) * current_move_scale_y;
-                
-                // Update current position for next movement
-                current_center_x = movement.first;
-                current_center_y = movement.second;
-                
-                // Check disable upward aim
-                if (local_disable_upward_aim_active && dy < 0) {
-                    dy = 0;
-                }
-                
-                // Process accumulated movement
-                auto [dx_int, dy_int] = processAccumulatedMovement(dx, dy);
-                
-                if (dx_int != 0 || dy_int != 0) {
-                    enqueueMouseCommand(MouseCommand::MOVE, dx_int, dy_int);
-                }
-            }
-            
-            // Early return - we've already enqueued all movements
-            auto calc_end_time = std::chrono::steady_clock::now();
-            float calc_duration_ms = std::chrono::duration<float, std::milli>(calc_end_time - calc_start_time).count();
-            ctx.g_current_pid_calc_time_ms.store(calc_duration_ms, std::memory_order_relaxed);
-            ctx.add_to_history(ctx.g_pid_calc_time_history, calc_duration_ms, ctx.g_pid_calc_history_mutex);
-            
-            // Calculate pure detection-to-movement time
-            auto movement_completion_time = std::chrono::high_resolution_clock::now();
-            float detection_to_movement_ms = std::chrono::duration<float, std::milli>(movement_completion_time - target.detection_timestamp).count();
-            ctx.g_current_detection_to_movement_time_ms.store(detection_to_movement_ms, std::memory_order_relaxed);
-            ctx.add_to_history(ctx.g_detection_to_movement_time_history, detection_to_movement_ms, ctx.g_detection_to_movement_history_mutex);
-            
-            return;
-        }
-    }
-    
-    // Default to PID controller
     Eigen::Vector2f pid_output = pid_controller->calculate(error);
     
-    // Debug logging for PID output
     if (ctx.config.verbose) {
-        std::cout << "[Mouse] Using PID method - X: " << pid_output.x() << ", Y: " << pid_output.y() << std::endl;
+        std::cout << "[Mouse] PID output - X: " << pid_output.x() << ", Y: " << pid_output.y() << std::endl;
     }
         
-    auto calc_end_time = std::chrono::steady_clock::now();
-    float calc_duration_ms = std::chrono::duration<float, std::milli>(calc_end_time - calc_start_time).count();
-    ctx.g_current_pid_calc_time_ms.store(calc_duration_ms, std::memory_order_relaxed);
-    ctx.add_to_history(ctx.g_pid_calc_time_history, calc_duration_ms, ctx.g_pid_calc_history_mutex);
+    auto pid_end_time = std::chrono::steady_clock::now();
+    float pid_duration_ms = std::chrono::duration<float, std::milli>(pid_end_time - pid_start_time).count();
+    ctx.g_current_pid_calc_time_ms.store(pid_duration_ms, std::memory_order_relaxed);
+    ctx.add_to_history(ctx.g_pid_calc_time_history, pid_duration_ms, ctx.g_pid_calc_history_mutex);
 
-    // Apply error-based scaling to reduce jitter on large errors
     float error_scale_factor = 1.0f;
     
-    // Apply the first matching rule
     for (const auto& rule : ctx.config.error_scaling_rules) {
         if (error_magnitude >= rule.error_threshold) {
             error_scale_factor = rule.scale_factor;
@@ -638,7 +466,6 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         }
     }
     
-    // Apply PID output with error scaling
     move_x = pid_output.x() * current_move_scale_x * error_scale_factor;
     move_y = pid_output.y() * current_move_scale_y * error_scale_factor;
     
@@ -646,7 +473,7 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     if (ctx.config.verbose) {
         std::cout << "[Mouse] Final move values - X: " << move_x << ", Y: " << move_y 
                   << " (scale_x: " << current_move_scale_x << ", scale_y: " << current_move_scale_y 
-                  << ", error_scale: " << error_scale_factor << ")" << std::endl;
+                  << ")" << std::endl;
     }
 
     // Simple dead zone without adaptive threshold
@@ -723,6 +550,7 @@ void MouseThread::releaseMouse()
 
 void MouseThread::applyRecoilCompensation(float strength)
 {
+    // 항상 직접 반동 제어를 수행
     float current_norecoil_ms;
     {
         std::lock_guard<std::mutex> lock(member_data_mutex_); 
@@ -734,6 +562,7 @@ void MouseThread::applyRecoilCompensation(float strength)
 
 void MouseThread::applyWeaponRecoilCompensation(const WeaponRecoilProfile* profile, int scope_magnification)
 {
+    // 항상 직접 반동 제어를 수행
     if (!profile) {
         return;
     }
@@ -823,6 +652,8 @@ void MouseThread::applyRecoilCompensationInternal(float strength, float delay_ms
         // Apply strength directly without accumulation to prevent over-compensation
         int dy_recoil = static_cast<int>(std::round(strength));
         
+        // Debug logging removed
+        
         if (dy_recoil != 0) {
             // Use async queue instead of direct call
             enqueueMouseCommand(MouseCommand::MOVE, 0, dy_recoil);
@@ -840,15 +671,12 @@ void MouseThread::resetAccumulatedStates()
         pid_controller->reset();
     }
     
-    // Reset Bezier controller
-    if (bezier_controller) {
-        bezier_controller->reset();
-    }
-    
     // Reset movement accumulation
     accumulated_x_ = 0.0f;
     accumulated_y_ = 0.0f;
 }
+
+// IntegratedController 관련 함수들 제거됨
 
 void MouseThread::asyncInputWorker()
 {

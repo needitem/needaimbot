@@ -25,11 +25,7 @@
 #include "input_drivers/kmboxNet.h"
 #include "input_drivers/rzctl.h"
 #include "input_drivers/InputMethod.h"
-
 class PIDController2D;
-class BezierCurveController;
-class SplineKalmanController;
-class GANMouseController;
 
 
 class InputMethod;
@@ -41,10 +37,7 @@ struct Point2D { float x, y; };
 class MouseThread
 {
 private:
-    std::unique_ptr<PIDController2D> pid_controller; // PID controller
-    std::unique_ptr<BezierCurveController> bezier_controller; // Bezier curve controller
-    std::unique_ptr<SplineKalmanController> spline_kalman_controller; // Spline + Kalman filter controller
-    std::unique_ptr<GANMouseController> gan_controller; // GAN-based controller
+    std::unique_ptr<PIDController2D> pid_controller;
     std::unique_ptr<InputMethod> input_method;
     std::mutex input_method_mutex;
     mutable std::mutex member_data_mutex_;
@@ -140,7 +133,6 @@ public:
     void releaseMouse();
     void applyRecoilCompensation(float strength);
     void applyWeaponRecoilCompensation(const WeaponRecoilProfile* profile, int scope_magnification);
-
 
     void setInputMethod(std::unique_ptr<InputMethod> new_method);
     
