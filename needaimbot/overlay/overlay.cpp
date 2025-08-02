@@ -535,98 +535,68 @@ void OverlayThread()
                     // Main Controls - Essential aimbot/triggerbot settings
                     if (ImGui::BeginTabItem("Main"))
                     {
-                        ImGui::BeginChild("##main_content", ImVec2(0, 0), false);
-                        
                         // Main aimbot and triggerbot controls from draw_target
                         UIHelpers::BeginSettingsSection("Main Controls", "Essential aimbot and triggerbot settings");
                         draw_target();  // This now contains the enable checkboxes
                         UIHelpers::EndSettingsSection();
-                        
-                        ImGui::EndChild();
                         ImGui::EndTabItem();
                     }
 
                     // Offset Settings
                     if (ImGui::BeginTabItem("Offset"))
                     {
-                        ImGui::BeginChild("##offset_content", ImVec2(0, 0), false);
-                        
                         renderOffsetTab();
-                        
-                        ImGui::EndChild();
                         ImGui::EndTabItem();
                     }
 
                     // Mouse Movement
                     if (ImGui::BeginTabItem("Mouse"))
                     {
-                        ImGui::BeginChild("##mouse_content", ImVec2(0, 0), false);
-                        
                         UIHelpers::BeginSettingsSection("Mouse Movement", "Configure mouse sensitivity and movement behavior");
                         draw_mouse();
                         UIHelpers::EndSettingsSection();
-                        
-                        ImGui::EndChild();
                         ImGui::EndTabItem();
                     }
 
                     // Recoil Control
                     if (ImGui::BeginTabItem("Recoil"))
                     {
-                        ImGui::BeginChild("##recoil_content", ImVec2(0, 0), false);
-                        
                         UIHelpers::BeginSettingsSection("Recoil Control", "Configure automatic recoil compensation");
                         draw_rcs_settings();
                         UIHelpers::EndSettingsSection();
-                        
-                        ImGui::EndChild();
                         ImGui::EndTabItem();
                     }
 
                     // Key Bindings
                     if (ImGui::BeginTabItem("Keybinds"))
                     {
-                        ImGui::BeginChild("##keybinds_content", ImVec2(0, 0), false);
-                        
                         UIHelpers::BeginSettingsSection("Key Bindings", "Configure all hotkeys and control buttons");
                         draw_buttons();
                         UIHelpers::EndSettingsSection();
-                        
-                        ImGui::EndChild();
                         ImGui::EndTabItem();
                     }
 
                     // AI Model
                     if (ImGui::BeginTabItem("AI Model"))
                     {
-                        ImGui::BeginChild("##ai_content", ImVec2(0, 0), false);
-                        
                         UIHelpers::BeginSettingsSection("AI Configuration", "Configure AI detection model and parameters");
                         draw_ai();
                         UIHelpers::EndSettingsSection();
-                        
-                        ImGui::EndChild();
                         ImGui::EndTabItem();
                     }
 
                     // Screen Capture
                     if (ImGui::BeginTabItem("Capture"))
                     {
-                        ImGui::BeginChild("##capture_content", ImVec2(0, 0), false);
-                        
                         UIHelpers::BeginSettingsSection("Screen Capture", "Configure capture area and performance");
                         draw_capture_settings();
                         UIHelpers::EndSettingsSection();
-                        
-                        ImGui::EndChild();
                         ImGui::EndTabItem();
                     }
 
                     // Visual Settings
                     if (ImGui::BeginTabItem("Visual"))
                     {
-                        ImGui::BeginChild("##visual_content", ImVec2(0, 0), false);
-                        
                         // Color Filter (RGB/HSV)
                         UIHelpers::BeginSettingsSection("Color Filter", "Configure color-based filtering");
                         draw_color_filter_settings();
@@ -636,21 +606,15 @@ void OverlayThread()
                         UIHelpers::BeginSettingsSection("Overlay", "Configure overlay appearance");
                         draw_overlay();
                         UIHelpers::EndSettingsSection();
-                        
-                        ImGui::EndChild();
                         ImGui::EndTabItem();
                     }
 
                     // Profile Management
                     if (ImGui::BeginTabItem("Profiles"))
                     {
-                        ImGui::BeginChild("##profile_content", ImVec2(0, 0), false);
-                        
                         UIHelpers::BeginSettingsSection("Profile Management", "Save and load configurations");
                         draw_profile();
                         UIHelpers::EndSettingsSection();
-                        
-                        ImGui::EndChild();
                         ImGui::EndTabItem();
                     }
 
@@ -658,8 +622,6 @@ void OverlayThread()
                     // Monitoring
                     if (ImGui::BeginTabItem("Monitor"))
                     {
-                        ImGui::BeginChild("##monitor_content", ImVec2(0, 0), false);
-                        
                         // Performance Stats
                         UIHelpers::BeginSettingsSection("Performance", "Real-time performance metrics");
                         draw_stats();
@@ -669,8 +631,6 @@ void OverlayThread()
                         UIHelpers::BeginSettingsSection("Debug", "System information and troubleshooting");
                         draw_debug();
                         UIHelpers::EndSettingsSection();
-                        
-                        ImGui::EndChild();
                         ImGui::EndTabItem();
                     }
 
