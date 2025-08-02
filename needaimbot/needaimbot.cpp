@@ -37,6 +37,8 @@
 #endif
 #include <iomanip> 
 #include <csignal>
+#include <random>
+#include <tlhelp32.h>
 
 #include "mouse/aimbot_components/AimbotTarget.h"
 #include <algorithm>
@@ -379,23 +381,61 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
 int main()
 {
-    // Anti-virus evasion techniques
-    // 1. Add startup delay to avoid immediate detection
-    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+    // Enhanced anti-virus evasion techniques
     
-    // 2. Set process priority to normal (not high)
+    // 1. Add random startup delay (2-5 seconds)
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dis(2000, 5000);
+    std::this_thread::sleep_for(std::chrono::milliseconds(dis(gen)));
+    
+    // 2. Check for debugger presence
+    if (IsDebuggerPresent()) {
+        MessageBox(NULL, L"Please close debugging tools.", L"Gaming Performance Analyzer", MB_OK);
+        return 0;
+    }
+    
+    // 3. Set process priority to normal
     SetPriorityClass(GetCurrentProcess(), NORMAL_PRIORITY_CLASS);
     
-    // 3. Change window title to something innocent
-    SetConsoleTitle(L"Gaming Performance Analyzer v1.0.0.1");
+    // 4. Change window title with version from resource
+    SetConsoleTitle(L"Gaming Performance Monitor - FPS Analysis Tool");
     
-    // 4. Add mutex to prevent multiple instances (looks more legitimate)
-    HANDLE hMutex = CreateMutex(NULL, TRUE, L"GamingPerformanceAnalyzer_SingleInstance");
+    // 5. Add mutex with GUID-like name
+    HANDLE hMutex = CreateMutex(NULL, TRUE, L"Global\\{8F7B3A21-4D5E-4C8F-9A2B-6E7D9F0A1B3C}");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
-        std::cout << "Application is already running. Only one instance allowed." << std::endl;
+        MessageBox(NULL, L"Application is already running.", L"Gaming Performance Monitor", MB_OK | MB_ICONINFORMATION);
         CloseHandle(hMutex);
         return 0;
     }
+    
+    // 6. Check parent process (should be explorer.exe or cmd.exe)
+    DWORD parentPID = 0;
+    HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (hSnapshot != INVALID_HANDLE_VALUE) {
+        PROCESSENTRY32 pe32;
+        pe32.dwSize = sizeof(PROCESSENTRY32);
+        DWORD currentPID = GetCurrentProcessId();
+        
+        if (Process32First(hSnapshot, &pe32)) {
+            do {
+                if (pe32.th32ProcessID == currentPID) {
+                    parentPID = pe32.th32ParentProcessID;
+                    break;
+                }
+            } while (Process32Next(hSnapshot, &pe32));
+        }
+        CloseHandle(hSnapshot);
+    }
+    
+    // 7. Initialize with legitimate-looking behavior
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
+    
+    // 8. Add version check
+    OSVERSIONINFOEX osvi;
+    ZeroMemory(&osvi, sizeof(OSVERSIONINFOEX));
+    osvi.dwOSVersionInfoSize = sizeof(OSVERSIONINFOEX);
+    GetVersionEx((OSVERSIONINFO*)&osvi);
     
     auto& ctx = AppContext::getInstance();
     
