@@ -841,4 +841,134 @@ cudaError_t decodeYolo11Gpu(
     return kernel_err;
 }
 
+// Helper function for atomic min on float with associated index - declared before use
+__device__ void atomicMinFloat(float* addr, float value, int index, int* index_addr) {
+    unsigned int* addr_as_uint = (unsigned int*)addr;
+    unsigned int old = *addr_as_uint;
+    unsigned int assumed;
+    
+    do {
+        assumed = old;
+        float old_val = __uint_as_float(assumed);
+        if (value >= old_val) break;
+        
+        old = atomicCAS(addr_as_uint, assumed, __float_as_uint(value));
+        if (old == assumed) {
+            atomicExch(index_addr, index);
+        }
+    } while (assumed != old);
+}
+
+// GPU kernel for finding the closest target to crosshair
+__global__ void findClosestTargetKernel(
+    const Detection* d_detections,
+    int num_detections,
+    float crosshairX,
+    float crosshairY,
+    int* d_best_index,
+    float* d_best_distance)
+{
+    extern __shared__ float s_distances[];
+    int* s_indices = (int*)&s_distances[blockDim.x];
+    
+    int tid = threadIdx.x;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    // Initialize shared memory
+    float min_distance = FLT_MAX;
+    int min_index = -1;
+    
+    // Each thread computes distance for one detection
+    if (idx < num_detections) {
+        const Detection& det = d_detections[idx];
+        
+        // Skip invalid detections
+        if (det.width > 0 && det.height > 0 && det.confidence > 0) {
+            float centerX = det.x + det.width * 0.5f;
+            float centerY = det.y + det.height * 0.5f;
+            
+            float dx = fabsf(centerX - crosshairX);
+            float dy = fabsf(centerY - crosshairY);
+            float distance = dx + dy;
+            
+            min_distance = distance;
+            min_index = idx;
+        }
+    }
+    
+    // Store in shared memory
+    s_distances[tid] = min_distance;
+    s_indices[tid] = min_index;
+    __syncthreads();
+    
+    // Block-level reduction to find minimum distance
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            if (s_distances[tid + s] < s_distances[tid]) {
+                s_distances[tid] = s_distances[tid + s];
+                s_indices[tid] = s_indices[tid + s];
+            }
+        }
+        __syncthreads();
+    }
+    
+    // First thread writes block result
+    if (tid == 0) {
+        atomicMinFloat(d_best_distance, s_distances[0], s_indices[0], d_best_index);
+    }
+}
+
+// Host function to find closest target on GPU
+cudaError_t findClosestTargetGpu(
+    const Detection* d_detections,
+    int num_detections,
+    float crosshairX,
+    float crosshairY,
+    int* d_best_index,
+    Detection* d_best_target,
+    cudaStream_t stream)
+{
+    if (num_detections <= 0 || !d_detections || !d_best_index || !d_best_target) {
+        return cudaErrorInvalidValue;
+    }
+    
+    // Allocate temporary memory for best distance
+    float* d_best_distance;
+    cudaMalloc(&d_best_distance, sizeof(float));
+    
+    // Initialize to FLT_MAX and -1
+    float max_float = FLT_MAX;
+    int neg_one = -1;
+    cudaMemcpyAsync(d_best_distance, &max_float, sizeof(float), cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(d_best_index, &neg_one, sizeof(int), cudaMemcpyHostToDevice, stream);
+    
+    // Calculate grid and block dimensions
+    const int block_size = 256;
+    const int grid_size = (num_detections + block_size - 1) / block_size;
+    const size_t shared_mem_size = block_size * (sizeof(float) + sizeof(int));
+    
+    // Launch kernel
+    findClosestTargetKernel<<<grid_size, block_size, shared_mem_size, stream>>>(
+        d_detections, num_detections, crosshairX, crosshairY,
+        d_best_index, d_best_distance);
+    
+    // Wait for kernel to complete
+    cudaStreamSynchronize(stream);
+    
+    // Read the best index to decide if we need to copy
+    int best_index_host;
+    cudaMemcpy(&best_index_host, d_best_index, sizeof(int), cudaMemcpyDeviceToHost);
+    
+    if (best_index_host >= 0 && best_index_host < num_detections) {
+        // Copy the best detection to output
+        cudaMemcpyAsync(d_best_target, d_detections + best_index_host, 
+                        sizeof(Detection), cudaMemcpyDeviceToDevice, stream);
+    }
+    
+    // Clean up
+    cudaFree(d_best_distance);
+    
+    return cudaGetLastError();
+}
+
  

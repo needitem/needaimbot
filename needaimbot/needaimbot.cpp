@@ -15,7 +15,7 @@
 #include "capture/capture.h"
 #include "core/constants.h"
 #include "utils/constants.h"
-#include "detector/detector.h" // For getCurrentTimeMs()
+#include "detector/detector.h"
 #include "mouse/mouse.h"
 #include "needaimbot.h"
 #include "keyboard/keyboard_listener.h"
@@ -215,18 +215,8 @@ void mouseThreadFunction(MouseThread &mouseThread)
 
         
         if (current_has_target) {
-            // Check if target is not stale (max 300ms old)
-            int64_t current_time_ms = getCurrentTimeMs();
-            bool target_not_stale = !current_target.isStale(current_time_ms, 300);
-            
-            if (!target_not_stale && ctx.config.verbose) {
-                int64_t age_ms = current_time_ms - current_target.timestamp_ms;
-                std::cout << "[Mouse] Ignoring stale target (age: " << age_ms << "ms)" << std::endl;
-            }
-            
             // Validate target is within screen bounds
-            bool target_valid = target_not_stale &&
-                                (current_target.x >= 0 && 
+            bool target_valid = (current_target.x >= 0 && 
                                 current_target.y >= 0 &&
                                 current_target.width > 0 && 
                                 current_target.height > 0 &&

@@ -243,15 +243,6 @@ void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float debug_scale) 
     
     std::lock_guard<std::mutex> det_lock(ctx.detector->detectionMutex);
     
-    // Check if detection results are fresh (less than 100ms old)
-    auto now = std::chrono::steady_clock::now();
-    auto timeSinceLastDetection = std::chrono::duration_cast<std::chrono::milliseconds>(now - ctx.detector->m_lastDetectionTime).count();
-    
-    if (timeSinceLastDetection > 100) {
-        // Detection results are too old, don't display them
-        return;
-    }
-    
     if (ctx.detector->m_finalDetectionsCountHost > 0 && ctx.detector->m_finalDetectionsGpu.get() != nullptr)
     {
         std::vector<Detection> host_detections(ctx.detector->m_finalDetectionsCountHost);
@@ -263,8 +254,10 @@ void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float debug_scale) 
         {
             for (const auto& det : host_detections)
             {
-                // Skip invalid detections
-                if (det.width <= 0 || det.height <= 0) {
+                // Skip invalid detections - check multiple conditions
+                if (det.width <= 0 || det.height <= 0 || 
+                    det.confidence <= 0.0f || det.classId < 0 ||
+                    det.x < 0 || det.y < 0) {
                     continue;
                 }
                 
