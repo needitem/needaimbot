@@ -25,12 +25,6 @@
 #include "../postprocess/postProcess.h"
 #include "CudaBuffer.h"
 
-// Helper function to get current time in milliseconds
-inline int64_t getCurrentTimeMs() {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()
-    ).count();
-}
 
 
 /**
@@ -126,7 +120,6 @@ public:
     CudaBuffer<int> m_finalDetectionsCountGpu;
     int m_finalDetectionsCountHost = 0;
     std::unique_ptr<Detection[]> m_finalDetectionsHost;
-    std::chrono::steady_clock::time_point m_lastDetectionTime;
     CudaBuffer<Detection> m_classFilteredDetectionsGpu;
     CudaBuffer<int> m_classFilteredCountGpu;
 
@@ -136,6 +129,10 @@ public:
     Detection m_bestTargetHost;
     bool m_hasBestTarget = false;
     int m_headClassId = -1;
+    
+    // GPU buffers for target selection
+    CudaBuffer<int> m_bestTargetIndexGpu;
+    CudaBuffer<Detection> m_bestTargetGpu;
     
     // Temporary buffers for multi-block reduction
     CudaBuffer<float> m_tempBlockScores;

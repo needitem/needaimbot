@@ -77,33 +77,6 @@ extern cudaError_t filterDetectionsByClassIdGpu(
 );
 
 // Simple CPU function to find closest target based on distance
-int findClosestTargetSimple(
-    const Detection* detections,
-    int count,
-    float crosshairX,
-    float crosshairY
-) {
-    if (count <= 0) return -1;
-    
-    float minDistance = FLT_MAX;
-    int closestIdx = -1;
-    
-    for (int i = 0; i < count; i++) {
-        float centerX = detections[i].x + detections[i].width * 0.5f;
-        float centerY = detections[i].y + detections[i].height * 0.5f;
-        
-        float dx = centerX - crosshairX;
-        float dy = centerY - crosshairY;
-        float distance = dx * dx + dy * dy; // No need for sqrt since we're just comparing
-        
-        if (distance < minDistance) {
-            minDistance = distance;
-            closestIdx = i;
-        }
-    }
-    
-    return closestIdx;
-}
 
 Detector::Detector()
     : frameReady(false),
@@ -119,7 +92,7 @@ Detector::Detector()
     m_host_ignore_flags_uchar(MAX_CLASSES_FOR_FILTERING, 1), 
     m_ignore_flags_need_update(true) 
     , m_isTargetLocked(false)
-    , m_lastDetectionTime(std::chrono::steady_clock::now()) 
+ 
 {
 
 }
@@ -987,11 +960,6 @@ void Detector::inferenceThread()
                                    cudaMemcpyDeviceToHost, postprocessStream);
                     cudaStreamSynchronize(postprocessStream);
                     
-                    // Add timestamp to all detections
-                    int64_t current_time_ms = getCurrentTimeMs();
-                    for (int i = 0; i < m_finalDetectionsCountHost; i++) {
-                        m_finalDetectionsHost[i].timestamp_ms = current_time_ms;
-                    }
                 }
 
                 auto inference_end_time = std::chrono::high_resolution_clock::now();
@@ -999,52 +967,77 @@ void Detector::inferenceThread()
                 ctx.g_current_inference_time_ms.store(inference_duration_ms.count());
                 ctx.add_to_history(ctx.g_inference_time_history, inference_duration_ms.count(), ctx.g_inference_history_mutex);
                 
-                m_lastDetectionTime = std::chrono::steady_clock::now();
                 
-                // CPU에서 단순한 거리 기반 타겟 선택
-                {
-                    std::lock_guard<std::mutex> lock(detectionMutex);
+                // GPU에서 거리 기반 타겟 선택
+                if (m_finalDetectionsCountHost > 0 && !ctx.should_exit) {
+                    float crosshairX, crosshairY;
+                    if (cached_config.enable_aim_shoot_offset && ctx.aiming && ctx.shooting) {
+                        crosshairX = cached_config.detection_resolution / 2.0f + cached_config.aim_shoot_offset_x;
+                        crosshairY = cached_config.detection_resolution / 2.0f + cached_config.aim_shoot_offset_y;
+                    } else {
+                        crosshairX = cached_config.detection_resolution / 2.0f + cached_config.crosshair_offset_x;
+                        crosshairY = cached_config.detection_resolution / 2.0f + cached_config.crosshair_offset_y;
+                    }
                     
-                    // Always clear state first
+                    // Find closest target on GPU
+                    cudaError_t target_err = findClosestTargetGpu(
+                        m_finalDetectionsGpu.get(),
+                        m_finalDetectionsCountHost,
+                        crosshairX,
+                        crosshairY,
+                        m_bestTargetIndexGpu.get(),
+                        m_bestTargetGpu.get(),
+                        postprocessStream
+                    );
+                    
+                    if (target_err == cudaSuccess) {
+                        // Copy results to host
+                        cudaMemcpyAsync(&m_bestTargetIndexHost, m_bestTargetIndexGpu.get(), 
+                                       sizeof(int), cudaMemcpyDeviceToHost, postprocessStream);
+                        cudaMemcpyAsync(&m_bestTargetHost, m_bestTargetGpu.get(), 
+                                       sizeof(Detection), cudaMemcpyDeviceToHost, postprocessStream);
+                        cudaStreamSynchronize(postprocessStream);
+                        
+                        // Update detection state
+                        {
+                            std::lock_guard<std::mutex> lock(detectionMutex);
+                            
+                            if (m_bestTargetIndexHost >= 0) {
+                                m_hasBestTarget = true;
+                                
+                                if (ctx.config.verbose) {
+                                    std::cout << "[Detector] Target selected - Index: " << m_bestTargetIndexHost 
+                                              << ", Position: (" << m_bestTargetHost.x << ", " << m_bestTargetHost.y << ")"
+                                              << ", Size: " << m_bestTargetHost.width << "x" << m_bestTargetHost.height
+                                              << ", Confidence: " << m_bestTargetHost.confidence << std::endl;
+                                }
+                            } else {
+                                m_hasBestTarget = false;
+                                memset(&m_bestTargetHost, 0, sizeof(Detection));
+                            }
+                            
+                            detectionVersion++;
+                        }
+                        detectionCV.notify_one();
+                    } else {
+                        std::cerr << "[Detector] Error in GPU target selection: " << cudaGetErrorString(target_err) << std::endl;
+                        
+                        std::lock_guard<std::mutex> lock(detectionMutex);
+                        m_hasBestTarget = false;
+                        memset(&m_bestTargetHost, 0, sizeof(Detection));
+                        m_bestTargetIndexHost = -1;
+                        detectionVersion++;
+                        detectionCV.notify_one();
+                    }
+                } else {
+                    // No detections or should exit
+                    std::lock_guard<std::mutex> lock(detectionMutex);
                     m_hasBestTarget = false;
                     memset(&m_bestTargetHost, 0, sizeof(Detection));
                     m_bestTargetIndexHost = -1;
-                    
-                    // 검출된 객체가 있으면 가장 가까운 타겟 선택
-                    if (m_finalDetectionsCountHost > 0 && !ctx.should_exit) {
-                        float crosshairX, crosshairY;
-                        if (cached_config.enable_aim_shoot_offset && ctx.aiming && ctx.shooting) {
-                            crosshairX = cached_config.detection_resolution / 2.0f + cached_config.aim_shoot_offset_x;
-                            crosshairY = cached_config.detection_resolution / 2.0f + cached_config.aim_shoot_offset_y;
-                        } else {
-                            crosshairX = cached_config.detection_resolution / 2.0f + cached_config.crosshair_offset_x;
-                            crosshairY = cached_config.detection_resolution / 2.0f + cached_config.crosshair_offset_y;
-                        }
-                        
-                        int closestIndex = findClosestTargetSimple(
-                            m_finalDetectionsHost.get(),
-                            m_finalDetectionsCountHost,
-                            crosshairX,
-                            crosshairY
-                        );
-                        
-                        if (closestIndex >= 0) {
-                            m_hasBestTarget = true;
-                            m_bestTargetHost = m_finalDetectionsHost.get()[closestIndex];
-                            m_bestTargetIndexHost = closestIndex;
-                            
-                            if (ctx.config.verbose) {
-                                std::cout << "[Detector] Target selected - Index: " << m_bestTargetIndexHost 
-                                          << ", Position: (" << m_bestTargetHost.x << ", " << m_bestTargetHost.y << ")"
-                                          << ", Size: " << m_bestTargetHost.width << "x" << m_bestTargetHost.height
-                                          << ", Confidence: " << m_bestTargetHost.confidence << std::endl;
-                            }
-                        }
-                    }
-                    
                     detectionVersion++;
+                    detectionCV.notify_one();
                 }
-                detectionCV.notify_one();
 
             }
             catch (const std::exception& e)
@@ -1471,10 +1464,25 @@ void Detector::initializeBuffers() {
     m_tempBlockIndices.allocate(max_blocks);
 
     m_d_ignore_flags_gpu.allocate(MAX_CLASSES_FOR_FILTERING);
+    
+    // Allocate GPU buffers for target selection
+    m_bestTargetIndexGpu.allocate(1);
+    m_bestTargetGpu.allocate(1);
 
     if (m_decodedCountGpu.get()) cudaMemsetAsync(m_decodedCountGpu.get(), 0, sizeof(int), stream);
     if (m_finalDetectionsCountGpu.get()) cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
     if (m_classFilteredCountGpu.get()) cudaMemsetAsync(m_classFilteredCountGpu.get(), 0, sizeof(int), stream);
+    
+    // Initialize Detection arrays to prevent garbage values
+    if (m_decodedDetectionsGpu.get()) {
+        cudaMemsetAsync(m_decodedDetectionsGpu.get(), 0xFF, buffer_size * sizeof(Detection), stream);
+    }
+    if (m_finalDetectionsGpu.get()) {
+        cudaMemsetAsync(m_finalDetectionsGpu.get(), 0xFF, graph_buffer_size * sizeof(Detection), stream);
+    }
+    if (m_classFilteredDetectionsGpu.get()) {
+        cudaMemsetAsync(m_classFilteredDetectionsGpu.get(), 0xFF, graph_buffer_size * sizeof(Detection), stream);
+    }
 
 }
 
