@@ -881,19 +881,20 @@ void Detector::inferenceThread()
         bool hasNewFrame = false;
         {
             std::unique_lock<std::mutex> lock(inferenceMutex);
-            if (inferenceCV.wait_for(lock, std::chrono::milliseconds(10), [this] { return frameReady || AppContext::getInstance().should_exit; }))
-            {
-                if (AppContext::getInstance().should_exit) break;
-                if (frameReady) {
-                    if (frameIsGpu) {
-                        frameGpu = std::move(currentFrame);
-                    } else {
-                        frameGpu.create(currentFrameCpu.rows(), currentFrameCpu.cols(), currentFrameCpu.channels());
-                        frameGpu.upload(currentFrameCpu.data(), currentFrameCpu.step());
-                    }
-                    frameReady = false;
-                    hasNewFrame = true;
+            // Wait indefinitely for a frame or exit signal - no timeout
+            inferenceCV.wait(lock, [this] { return frameReady || AppContext::getInstance().should_exit; });
+            
+            if (AppContext::getInstance().should_exit) break;
+            
+            if (frameReady) {
+                if (frameIsGpu) {
+                    frameGpu = std::move(currentFrame);
+                } else {
+                    frameGpu.create(currentFrameCpu.rows(), currentFrameCpu.cols(), currentFrameCpu.channels());
+                    frameGpu.upload(currentFrameCpu.data(), currentFrameCpu.step());
                 }
+                frameReady = false;
+                hasNewFrame = true;
             }
         }
 
