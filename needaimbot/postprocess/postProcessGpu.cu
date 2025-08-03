@@ -153,7 +153,7 @@ __global__ void decodeAndFilterYolo10Kernel(
     int num_classes,
     float conf_threshold,
     float img_scale,
-    const unsigned char* __restrict__ d_ignored_class_ids,
+    const unsigned char* __restrict__ d_allowed_class_ids,
     int max_check_id,
     Detection* d_decoded_detections,
     int* d_decoded_count,
@@ -171,8 +171,8 @@ __global__ void decodeAndFilterYolo10Kernel(
             int classId = static_cast<int>(readOutputValue(d_raw_output, output_type, base_idx + 5));
             
             // Apply class filter immediately
-            if (classId >= 0 && classId < max_check_id && d_ignored_class_ids && d_ignored_class_ids[classId]) {
-                return; // Skip ignored classes
+            if (classId >= 0 && classId < max_check_id && d_allowed_class_ids && !d_allowed_class_ids[classId]) {
+                return; // Skip non-allowed classes
             }
             
             // Decode bounding box
@@ -214,7 +214,7 @@ __global__ void decodeAndFilterYolo11Kernel(
     int num_classes,
     float conf_threshold,
     float img_scale,
-    const unsigned char* __restrict__ d_ignored_class_ids,
+    const unsigned char* __restrict__ d_allowed_class_ids,
     int max_check_id,
     Detection* d_decoded_detections,
     int* d_decoded_count,
@@ -242,8 +242,8 @@ __global__ void decodeAndFilterYolo11Kernel(
         if (max_score > conf_threshold) {
             // Check class filter
             if (max_class_id >= 0 && max_class_id < max_check_id && 
-                d_ignored_class_ids && d_ignored_class_ids[max_class_id]) {
-                return; // Skip ignored classes
+                d_allowed_class_ids && !d_allowed_class_ids[max_class_id]) {
+                return; // Skip non-allowed classes
             }
             
             // Decode bounding box

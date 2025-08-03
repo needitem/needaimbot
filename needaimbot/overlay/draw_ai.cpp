@@ -109,8 +109,6 @@ static void draw_model_settings()
         if (std::filesystem::exists(enginePath))
         {
             std::filesystem::remove(enginePath);
-            if (ctx.config.verbose)
-                std::cout << "[Overlay] Removed engine: " << enginePath.string() << std::endl;
         }
         ctx.config.ai_model = onnxPath.filename().string();
         SAVE_PROFILE();
@@ -211,7 +209,7 @@ static void draw_class_settings()
     if (ImGui::BeginTable("class_settings_table", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Resizable)) {
         ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthStretch, 0.15f);
         ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 0.50f);
-        ImGui::TableSetupColumn("Ignore", ImGuiTableColumnFlags_WidthStretch, 0.15f);
+        ImGui::TableSetupColumn("Allow", ImGuiTableColumnFlags_WidthStretch, 0.15f);
         ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_WidthStretch, 0.20f);
         ImGui::TableHeadersRow();
 
@@ -240,16 +238,16 @@ static void draw_class_settings()
             }
 
             ImGui::TableSetColumnIndex(2);
-            if (ImGui::Checkbox("##Ignore", &setting.ignore)) {
+            if (ImGui::Checkbox("##Allow", &setting.allow)) {
                 SAVE_PROFILE();
-                if (ctx.detector) ctx.detector->m_ignore_flags_need_update = true;
+                if (ctx.detector) ctx.detector->m_allow_flags_need_update = true;
             }
 
             ImGui::TableSetColumnIndex(3);
             if (UIHelpers::BeautifulButton("Remove", ImVec2(-1, 0))) {
                 ctx.config.class_settings.erase(ctx.config.class_settings.begin() + i);
                 SAVE_PROFILE();
-                if (ctx.detector) ctx.detector->m_ignore_flags_need_update = true;
+                if (ctx.detector) ctx.detector->m_allow_flags_need_update = true;
                 ImGui::PopID(); 
                 i--; 
                 continue; 
@@ -265,7 +263,7 @@ static void draw_class_settings()
     
     static int new_class_id = 0; 
     static char new_class_name_buf[128] = "";
-    static bool new_class_ignore = false;
+    static bool new_class_allow = true;
 
     ImGui::Columns(3, "new_class_columns", false);
     
@@ -283,7 +281,7 @@ static void draw_class_settings()
     
     ImGui::NextColumn();
     
-    ImGui::Checkbox("Ignore", &new_class_ignore);
+    ImGui::Checkbox("Allow", &new_class_allow);
     
     ImGui::Columns(1);
     
@@ -303,13 +301,13 @@ static void draw_class_settings()
         }
         std::string temp_name = new_class_name_buf;
         if (!id_exists && !temp_name.empty()) {
-            ctx.config.class_settings.emplace_back(new_class_id, temp_name, new_class_ignore);
+            ctx.config.class_settings.emplace_back(new_class_id, temp_name, new_class_allow);
             SAVE_PROFILE();
-            if (ctx.detector) ctx.detector->m_ignore_flags_need_update = true;
+            if (ctx.detector) ctx.detector->m_allow_flags_need_update = true;
             
             new_class_id = CommonHelpers::getNextClassId();
             new_class_name_buf[0] = '\0'; 
-            new_class_ignore = false;
+            new_class_allow = true;
         }
     }
     

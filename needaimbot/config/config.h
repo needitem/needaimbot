@@ -81,21 +81,21 @@ public:
  * @brief Configuration for object detection class filtering
  * 
  * Defines how specific object classes should be handled during detection,
- * including whether to ignore certain classes or apply special processing.
+ * including whether to allow certain classes or apply special processing.
  */
 struct ClassSetting {
     int id;              ///< Unique class identifier
     std::string name;    ///< Human-readable class name
-    bool ignore;         ///< Whether to ignore this class during detection
+    bool allow;          ///< Whether to allow this class during detection
 
     /**
      * @brief Construct a new Class Setting object
      * @param i Class ID
      * @param n Class name
-     * @param ign Whether to ignore this class
+     * @param allow_class Whether to allow this class
      */
-    ClassSetting(int i = 0, std::string n = "", bool ign = false) 
-        : id(i), name(std::move(n)), ignore(ign) {}
+    ClassSetting(int i = 0, std::string n = "", bool allow_class = true) 
+        : id(i), name(std::move(n)), allow(allow_class) {}
 };
 
 struct WeaponRecoilProfile {
@@ -281,7 +281,6 @@ public:
     std::vector<std::string> screenshot_button;
     int screenshot_delay;
     bool always_on_top;
-    bool verbose;
     bool show_metrics;  // For performance metrics display
 
     
