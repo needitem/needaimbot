@@ -650,7 +650,6 @@ __global__ void decodeYolo11GpuKernel(
             
             size_t score_idx = (4 + c) * num_boxes_raw + idx;
             if (score_idx >= num_rows * num_boxes_raw) {
-                printf("[decodeYolo11GpuKernel] Score index out of bounds: %zu >= %d\n", score_idx, num_rows * num_boxes_raw);
                 continue;
             }
             float score = readOutputValue(d_raw_output, output_type, score_idx);
@@ -670,7 +669,6 @@ __global__ void decodeYolo11GpuKernel(
             
             if (cx_idx >= num_rows * num_boxes_raw || cy_idx >= num_rows * num_boxes_raw || 
                 ow_idx >= num_rows * num_boxes_raw || oh_idx >= num_rows * num_boxes_raw) {
-                printf("[decodeYolo11GpuKernel] Bbox index out of bounds\n");
                 return;
             }
             
