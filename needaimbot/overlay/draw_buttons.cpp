@@ -9,6 +9,33 @@
 #include "ui_helpers.h"
 #include "common_helpers.h"
 #include "draw_settings.h"
+#include "../keyboard/keycodes.h"
+
+// State for key detection
+static int g_detecting_key_index = -1;
+static std::string g_detecting_section;
+static std::vector<std::string>* g_detecting_hotkeys = nullptr;
+
+// Function to detect pressed key
+static std::string detect_pressed_key()
+{
+    // Check all keyboard keys
+    for (int vk = 0x01; vk <= 0xFE; vk++)
+    {
+        if (GetAsyncKeyState(vk) & 0x8000)
+        {
+            // Find the key name for this virtual key code
+            for (const auto& pair : KeyCodes::key_code_map)
+            {
+                if (pair.second == vk)
+                {
+                    return pair.first;
+                }
+            }
+        }
+    }
+    return "";
+}
 
 static void draw_hotkey_section(const char* title, std::vector<std::string>& hotkeys, const char* add_id)
 {
@@ -39,25 +66,68 @@ static void draw_hotkey_section(const char* title, std::vector<std::string>& hot
         
         // Calculate proper button width
         float remove_button_width = 80.0f;
+        float detect_button_width = 120.0f;
         float available_width = ImGui::GetContentRegionAvail().x;
-        float combo_width = available_width - remove_button_width - ImGui::GetStyle().ItemSpacing.x;
+        float combo_width = available_width - remove_button_width - detect_button_width - ImGui::GetStyle().ItemSpacing.x * 2;
         
-        // Enhanced key selector with better styling and wider width
-        ImGui::SetNextItemWidth(combo_width);
-        ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.15f, 0.15f, 0.18f, 0.95f));
-        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.20f, 0.20f, 0.25f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_Button, UIHelpers::GetAccentColor(0.7f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, UIHelpers::GetAccentColor(0.8f));
-        ImGui::PushStyleColor(ImGuiCol_Header, UIHelpers::GetAccentColor(0.7f));
-        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, UIHelpers::GetAccentColor(0.8f));
+        // Check if we're detecting for this key
+        bool is_detecting = (g_detecting_key_index == i && g_detecting_section == add_id && g_detecting_hotkeys == &hotkeys);
         
-        std::string combo_label = "##hotkey_combo_" + unique_id;
-        if (ImGui::Combo(combo_label.c_str(), &current_index, key_names_cstrs.data(), static_cast<int>(key_names_cstrs.size())))
+        if (is_detecting)
         {
-            current_key_name = key_names[current_index];
-            AppContext::getInstance().config.saveConfig();
+            // Show "Press any key..." button
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.4f, 0.4f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.9f, 0.5f, 0.5f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1.0f, 0.6f, 0.6f, 1.0f));
+            
+            if (ImGui::Button("Press any key...", ImVec2(combo_width + detect_button_width + ImGui::GetStyle().ItemSpacing.x, 0)))
+            {
+                // Cancel detection if clicked
+                g_detecting_key_index = -1;
+                g_detecting_section = "";
+                g_detecting_hotkeys = nullptr;
+            }
+            ImGui::PopStyleColor(3);
+            
+            // Check for pressed key
+            std::string detected_key = detect_pressed_key();
+            if (!detected_key.empty() && detected_key != "LeftMouseButton") // Ignore left click which would cancel
+            {
+                current_key_name = detected_key;
+                AppContext::getInstance().config.saveConfig();
+                g_detecting_key_index = -1;
+                g_detecting_section = "";
+                g_detecting_hotkeys = nullptr;
+            }
         }
-        ImGui::PopStyleColor(6);
+        else
+        {
+            // Enhanced key selector with better styling and wider width
+            ImGui::SetNextItemWidth(combo_width);
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.15f, 0.15f, 0.18f, 0.95f));
+            ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.20f, 0.20f, 0.25f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_Button, UIHelpers::GetAccentColor(0.7f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, UIHelpers::GetAccentColor(0.8f));
+            ImGui::PushStyleColor(ImGuiCol_Header, UIHelpers::GetAccentColor(0.7f));
+            ImGui::PushStyleColor(ImGuiCol_HeaderHovered, UIHelpers::GetAccentColor(0.8f));
+            
+            std::string combo_label = "##hotkey_combo_" + unique_id;
+            if (ImGui::Combo(combo_label.c_str(), &current_index, key_names_cstrs.data(), static_cast<int>(key_names_cstrs.size())))
+            {
+                current_key_name = key_names[current_index];
+                AppContext::getInstance().config.saveConfig();
+            }
+            ImGui::PopStyleColor(6);
+            
+            ImGui::SameLine();
+            std::string detect_button_label = "Detect##" + unique_id;
+            if (UIHelpers::BeautifulButton(detect_button_label.c_str(), ImVec2(detect_button_width, 0)))
+            {
+                g_detecting_key_index = i;
+                g_detecting_section = add_id;
+                g_detecting_hotkeys = &hotkeys;
+            }
+        }
         
         ImGui::SameLine();
         std::string remove_button_label = "Remove##" + unique_id;
@@ -172,28 +242,74 @@ static void draw_button_section(const char* title, const char* description, std:
         
         ImGui::PushID(static_cast<int>(i));
         
-        float button_width = 60.0f;
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - button_width - ImGui::GetStyle().ItemSpacing.x);
+        float remove_button_width = 60.0f;
+        float detect_button_width = 80.0f;
+        float available_width = ImGui::GetContentRegionAvail().x;
+        float combo_width = available_width - remove_button_width - detect_button_width - ImGui::GetStyle().ItemSpacing.x * 2;
         
-        // Enhanced combo box styling
-        ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.15f, 0.15f, 0.18f, 0.95f));
-        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.20f, 0.20f, 0.25f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_Button, UIHelpers::GetAccentColor(0.7f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, UIHelpers::GetAccentColor(0.8f));
-        ImGui::PushStyleColor(ImGuiCol_Header, UIHelpers::GetAccentColor(0.7f));
-        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, UIHelpers::GetAccentColor(0.8f));
+        // Check if we're detecting for this key
+        bool is_detecting = (g_detecting_key_index == i && g_detecting_section == add_id && g_detecting_hotkeys == &button_list);
         
-        std::string combo_label = "##" + std::string(title) + std::to_string(i);
-        if (ImGui::Combo(combo_label.c_str(), &current_index, key_names_cstrs.data(), static_cast<int>(key_names_cstrs.size())))
+        if (is_detecting)
         {
-            current_key_name = key_names[current_index];
-            AppContext::getInstance().config.saveConfig();
+            // Show "Press any key..." button
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.4f, 0.4f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.9f, 0.5f, 0.5f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1.0f, 0.6f, 0.6f, 1.0f));
+            
+            if (ImGui::Button("Press any key...", ImVec2(combo_width + detect_button_width + ImGui::GetStyle().ItemSpacing.x, 0)))
+            {
+                // Cancel detection if clicked
+                g_detecting_key_index = -1;
+                g_detecting_section = "";
+                g_detecting_hotkeys = nullptr;
+            }
+            ImGui::PopStyleColor(3);
+            
+            // Check for pressed key
+            std::string detected_key = detect_pressed_key();
+            if (!detected_key.empty() && detected_key != "LeftMouseButton") // Ignore left click which would cancel
+            {
+                current_key_name = detected_key;
+                AppContext::getInstance().config.saveConfig();
+                g_detecting_key_index = -1;
+                g_detecting_section = "";
+                g_detecting_hotkeys = nullptr;
+            }
         }
-        ImGui::PopStyleColor(6);
+        else
+        {
+            ImGui::SetNextItemWidth(combo_width);
+            
+            // Enhanced combo box styling
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.15f, 0.15f, 0.18f, 0.95f));
+            ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.20f, 0.20f, 0.25f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_Button, UIHelpers::GetAccentColor(0.7f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, UIHelpers::GetAccentColor(0.8f));
+            ImGui::PushStyleColor(ImGuiCol_Header, UIHelpers::GetAccentColor(0.7f));
+            ImGui::PushStyleColor(ImGuiCol_HeaderHovered, UIHelpers::GetAccentColor(0.8f));
+            
+            std::string combo_label = "##" + std::string(title) + std::to_string(i);
+            if (ImGui::Combo(combo_label.c_str(), &current_index, key_names_cstrs.data(), static_cast<int>(key_names_cstrs.size())))
+            {
+                current_key_name = key_names[current_index];
+                AppContext::getInstance().config.saveConfig();
+            }
+            ImGui::PopStyleColor(6);
+            
+            ImGui::SameLine();
+            std::string detect_button_label = "Detect##" + std::string(remove_id) + std::to_string(i);
+            if (UIHelpers::BeautifulButton(detect_button_label.c_str(), ImVec2(detect_button_width, 0)))
+            {
+                g_detecting_key_index = i;
+                g_detecting_section = add_id;
+                g_detecting_hotkeys = &button_list;
+            }
+        }
         
         ImGui::SameLine();
         std::string remove_button_label = "Remove##" + std::string(remove_id) + std::to_string(i);
-        if (UIHelpers::BeautifulButton(remove_button_label.c_str(), ImVec2(button_width, 0)))
+        if (UIHelpers::BeautifulButton(remove_button_label.c_str(), ImVec2(remove_button_width, 0)))
         {
             if (!allow_empty && button_list.size() <= 1)
             {
