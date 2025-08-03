@@ -26,10 +26,6 @@ void draw_profile()
 {
     auto& ctx = AppContext::getInstance();
     
-    // Show active profile at the top
-    UIHelpers::ProfileDropdown();
-    UIHelpers::Spacer();
-    
     // Left column - Profile management
     UIHelpers::BeginCard("Profile Management");
 
@@ -66,6 +62,7 @@ void draw_profile()
     UIHelpers::Spacer();
     
     UIHelpers::BeautifulText("All Profiles:");
+    ImGui::TextWrapped("Click to apply profile. Right-click for more options.");
     UIHelpers::CompactSpacer();
     
     if (ImGui::BeginListBox("##ProfilesList", ImVec2(-FLT_MIN, 10 * ImGui::GetTextLineHeightWithSpacing())))
@@ -89,6 +86,10 @@ void draw_profile()
             if (ImGui::Selectable(label, is_selected))
             {
                 selected_profile_index = static_cast<int>(n);
+                // Automatically switch to the selected profile
+                ctx.config.setActiveProfile(profile_list[n]);
+                status_message = "[OK] Switched to: " + profile_list[n];
+                status_time = std::chrono::steady_clock::now();
             }
             
             if (is_current) {
@@ -98,9 +99,9 @@ void draw_profile()
             // Right-click context menu
             if (ImGui::BeginPopupContextItem())
             {
-                if (ImGui::MenuItem("Switch to this profile")) {
-                    ctx.config.setActiveProfile(profile_list[n]);
-                    status_message = "[OK] Switched to: " + profile_list[n];
+                if (ImGui::MenuItem("Save current settings to this profile")) {
+                    ctx.config.saveProfile(profile_list[n]);
+                    status_message = "[OK] Saved settings to: " + profile_list[n];
                     status_time = std::chrono::steady_clock::now();
                 }
                 if (ImGui::MenuItem("Rename...")) {
@@ -224,28 +225,6 @@ void draw_profile()
         }
     }
     
-    UIHelpers::CompactSpacer();
-    
-    // Overwrite existing profile
-    if (profile_selected)
-    {
-        UIHelpers::BeautifulSeparator("Or");
-        UIHelpers::CompactSpacer();
-        
-        if (UIHelpers::EnhancedButton("Overwrite Selected", ImVec2(-1, 0), "Overwrite the selected profile with current settings"))
-        {
-            std::string name = profile_list[selected_profile_index];
-            if (ctx.config.saveProfile(name))
-            {
-                status_message = "[OK] Overwrote: " + name;
-                ctx.config.setActiveProfile(name);
-                status_time = std::chrono::steady_clock::now();
-            } else {
-                status_message = "[ERROR] Failed to overwrite: " + name;
-                status_time = std::chrono::steady_clock::now();
-            }
-        }
-    }
     
     UIHelpers::Spacer();
     UIHelpers::BeautifulSeparator("Profile Actions");
