@@ -21,9 +21,6 @@ struct Detection
     int width;           // 4 bytes
     int height;          // 4 bytes
     
-    // Timestamp for staleness check (in milliseconds since epoch)
-    int64_t timestamp_ms; // 8 bytes
-    
     // Helper methods for box access
     void getBox(int& outX, int& outY, int& outWidth, int& outHeight) const {
         outX = x;
@@ -32,16 +29,11 @@ struct Detection
         outHeight = height;
     }
     
-    // Check if detection is stale (older than maxAge milliseconds)
-    bool isStale(int64_t current_time_ms, int64_t maxAge = 300) const {
-        return (current_time_ms - timestamp_ms) > maxAge;
-    }
-    
     // Constructors
-    Detection() : confidence(0), classId(0), x(0), y(0), width(0), height(0), timestamp_ms(0) {}
+    Detection() : confidence(-1.0f), classId(-1), x(-1), y(-1), width(-1), height(-1) {}
     Detection(int x_, int y_, int width_, int height_, float conf, int cls) 
         : confidence(conf), classId(cls), x(x_), y(y_), 
-          width(width_), height(height_), timestamp_ms(0) {}
+          width(width_), height(height_) {}
 };
 
 
@@ -98,6 +90,15 @@ cudaError_t decodeYolo11Gpu(
     int max_detections,
     cudaStream_t stream);
 
+// GPU function to find closest target to crosshair
+cudaError_t findClosestTargetGpu(
+    const Detection* d_detections,
+    int num_detections,
+    float crosshairX,
+    float crosshairY,
+    int* d_best_index,
+    Detection* d_best_target,
+    cudaStream_t stream);
 
 
 #endif 
