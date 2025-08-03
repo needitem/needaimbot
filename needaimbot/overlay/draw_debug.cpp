@@ -358,7 +358,7 @@ void draw_debug()
 
     if (ImGui::Checkbox("Enable RGB Color Filter (in Config)", &ctx.config.enable_color_filter)) {
         SAVE_PROFILE(); 
-        if (ctx.detector) ctx.detector->m_ignore_flags_need_update = true; 
+        if (ctx.detector) ctx.detector->m_allow_flags_need_update = true; 
     }
     if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Toggles the RGB color filtering logic (config.enable_color_filter)."); }
 
@@ -438,9 +438,6 @@ void draw_debug()
 
     if (ImGui::Checkbox("Always On Top", &ctx.config.always_on_top)) { SAVE_PROFILE(); }
     if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Keeps the overlay window always on top of other windows."); }
-    ImGui::SameLine(); ImGui::Spacing(); ImGui::SameLine();
-    if (ImGui::Checkbox("Verbose Console Output", &ctx.config.verbose)) { SAVE_PROFILE(); }
-    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Prints more detailed information to the console window for debugging."); }
 
     ImGui::Spacing();
     ImGui::Separator();

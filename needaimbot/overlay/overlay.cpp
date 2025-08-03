@@ -416,7 +416,6 @@ void OverlayThread()
     int prev_window_size = ctx.config.window_size;
     int prev_screenshot_delay = ctx.config.screenshot_delay;
     bool prev_always_on_top = ctx.config.always_on_top;
-    bool prev_verbose = ctx.config.verbose;
 
     for (const auto& pair : KeyCodes::key_code_map)
     {
@@ -799,13 +798,11 @@ void OverlayThread()
                     
                     if (prev_show_fps != ctx.config.show_fps ||
                         prev_window_size != ctx.config.window_size ||
-                        prev_screenshot_delay != ctx.config.screenshot_delay ||
-                        prev_verbose != ctx.config.verbose)
+                        prev_screenshot_delay != ctx.config.screenshot_delay)
                     {
                         prev_show_fps = ctx.config.show_fps;
                         prev_window_size = ctx.config.window_size;
                         prev_screenshot_delay = ctx.config.screenshot_delay;
-                        prev_verbose = ctx.config.verbose;
                         config_needs_save = true;
                     }
                 }

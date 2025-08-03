@@ -91,12 +91,6 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
     
     try
     {
-        if (ctx.config.verbose)
-        {
-            int cuda_devices = 0;
-            cudaGetDeviceCount(&cuda_devices);
-            std::cout << "[Capture] CUDA Support: " << cuda_devices << " devices found." << std::endl;
-        }
 
         // Initialize capture method based on config
         std::unique_ptr<SimpleScreenCapture> simple_capturer;
@@ -215,9 +209,6 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 
             if (ctx.capture_method_changed.load())
             {
-                if (ctx.config.verbose) {
-                    std::cout << "[Capture] Capture method changed to: " << ctx.config.capture_method << std::endl;
-                }
                 
                 // Reset all capturers
                 simple_capturer.reset();
@@ -235,9 +226,6 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 
             if (ctx.detection_resolution_changed.load())
             {
-                if (ctx.config.verbose) {
-                    std::cout << "[Capture] Detection resolution changed. Re-initializing capturer." << std::endl;
-                }
                 
                 // Reset all capturers
                 simple_capturer.reset();
@@ -272,17 +260,11 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
             
             if (ctx.capture_cursor_changed.load())
             {
-                if (ctx.config.verbose) {
-                    std::cout << "[Capture] Cursor capture setting changed (no capturer re-init needed)." << std::endl;
-                }
                 ctx.capture_cursor_changed.store(false);
             }
 
             if (ctx.capture_borders_changed.load())
             {
-                if (ctx.config.verbose) {
-                    std::cout << "[Capture] Border capture setting changed (no capturer re-init needed)." << std::endl;
-                }
                 ctx.capture_borders_changed.store(false);
             }
 
@@ -412,18 +394,7 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
         if (processStream) CUDA_CHECK_WARN(cudaStreamDestroy(processStream));
         if (uploadStream) CUDA_CHECK_WARN(cudaStreamDestroy(uploadStream));
         
-        // 버퍼 풀 통계 출력
-        if (ctx.config.verbose && g_frameBufferPool) {
-            const auto& stats = g_frameBufferPool->getStats();
-            std::cout << "[Capture] Buffer pool stats - CPU: " 
-                      << stats.cpu_acquires << " acquires, "
-                      << stats.cpu_creates << " creates, "
-                      << stats.cpu_releases << " releases" << std::endl;
-            std::cout << "[Capture] Buffer pool stats - GPU: "
-                      << stats.gpu_acquires << " acquires, "
-                      << stats.gpu_creates << " creates, "
-                      << stats.gpu_releases << " releases" << std::endl;
-        }
+        // 버퍼 풀 정리 완료
         
         std::cout << "[Capture] Capture thread exiting." << std::endl;
 

@@ -156,7 +156,7 @@ bool Config::loadConfig(const std::string& filename)
         distance_weight = 1.0f;  // Only use distance
         sticky_target_threshold = 0.0f; // Always switch to closest target
         max_detections = 30;  // Reduced from 100 for better performance
-        postprocess = "yolo10";
+        postprocess = "yolo12";
         export_enable_fp8 = false;
         export_enable_fp16 = true;
         tensorrt_fp16 = true;
@@ -202,7 +202,6 @@ bool Config::loadConfig(const std::string& filename)
         screenshot_button = splitString("None");
         screenshot_delay = 500;
         always_on_top = true;
-        verbose = false;
 
 
         // RGB Color filter defaults
@@ -347,7 +346,7 @@ bool Config::loadConfig(const std::string& filename)
     distance_weight = static_cast<float>(get_double_ini("AI", "distance_weight", 1.0)); 
     sticky_target_threshold = static_cast<float>(get_double_ini("AI", "sticky_target_threshold", 0.0));
     max_detections = get_long_ini("AI", "max_detections", 30);
-    postprocess = get_string_ini("AI", "postprocess", "yolo10");
+    postprocess = get_string_ini("AI", "postprocess", "yolo12");
     export_enable_fp8 = get_bool_ini("AI", "export_enable_fp8", false);
     export_enable_fp16 = get_bool_ini("AI", "export_enable_fp16", true);
     tensorrt_fp16 = get_bool_ini("AI", "tensorrt_fp16", true);
@@ -377,7 +376,6 @@ bool Config::loadConfig(const std::string& filename)
     screenshot_button = splitString(get_string_ini("Debug", "screenshot_button", "None"));
     screenshot_delay = get_long_ini("Debug", "screenshot_delay", 500);
     always_on_top = get_bool_ini("Debug", "always_on_top", true);
-    verbose = get_bool_ini("Debug", "verbose", false);
 
     // RGB Color filter settings
     enable_color_filter = get_bool_ini("ColorFilter", "enable_color_filter", false);
@@ -404,42 +402,42 @@ bool Config::loadConfig(const std::string& filename)
         for (int i = 0; i < classSettingsCount; ++i) {
             std::string id_key = "Class_" + std::to_string(i) + "_ID";
             std::string name_key = "Class_" + std::to_string(i) + "_Name";
-            std::string ignore_key = "Class_" + std::to_string(i) + "_Ignore";
+            std::string allow_key = "Class_" + std::to_string(i) + "_Allow";
             
             int id_val = ini.GetLongValue("ClassSettings", id_key.c_str(), i);
             std::string name_val = ini.GetValue("ClassSettings", name_key.c_str(), ""); 
-            bool ignore_val = ini.GetBoolValue("ClassSettings", ignore_key.c_str(), false);
+            bool allow_val = ini.GetBoolValue("ClassSettings", allow_key.c_str(), true);
             
             if (name_val.empty()) { 
                 name_val = "Class " + std::to_string(id_val);
             }
-            class_settings.emplace_back(id_val, name_val, ignore_val);
+            class_settings.emplace_back(id_val, name_val, allow_val);
         }
     } else { 
-        bool temp_ignores[11];
-        temp_ignores[0] = ini.GetBoolValue("Ignore Classes", "ignore_class_0", false);
-        temp_ignores[1] = ini.GetBoolValue("Ignore Classes", "ignore_class_1", false);
-        temp_ignores[2] = ini.GetBoolValue("Ignore Classes", "ignore_class_2", true); 
-        temp_ignores[3] = ini.GetBoolValue("Ignore Classes", "ignore_class_3", true);
-        temp_ignores[4] = ini.GetBoolValue("Ignore Classes", "ignore_class_4", true);
-        temp_ignores[5] = ini.GetBoolValue("Ignore Classes", "ignore_class_5", false);
-        temp_ignores[6] = ini.GetBoolValue("Ignore Classes", "ignore_class_6", false);
-        temp_ignores[7] = ini.GetBoolValue("Ignore Classes", "ignore_class_7", false); 
-        temp_ignores[8] = ini.GetBoolValue("Ignore Classes", "ignore_class_8", true);
-        temp_ignores[9] = ini.GetBoolValue("Ignore Classes", "ignore_class_9", true);
-        temp_ignores[10] = ini.GetBoolValue("Ignore Classes", "ignore_class_10", true);
+        bool temp_allows[11];
+        temp_allows[0] = true;  // Player - allow by default
+        temp_allows[1] = true;  // Bot - allow by default
+        temp_allows[2] = false; // Weapon - don't allow by default
+        temp_allows[3] = false; // Outline - don't allow by default
+        temp_allows[4] = false; // Dead Body - don't allow by default
+        temp_allows[5] = true;  // Hideout Human - allow by default
+        temp_allows[6] = true;  // Hideout Balls - allow by default
+        temp_allows[7] = true;  // Head - allow by default
+        temp_allows[8] = false; // Smoke - don't allow by default
+        temp_allows[9] = false; // Fire - don't allow by default
+        temp_allows[10] = false; // Third Person - don't allow by default
 
-        class_settings.emplace_back(0, "Player", temp_ignores[0]);
-        class_settings.emplace_back(1, "Bot", temp_ignores[1]);
-        class_settings.emplace_back(2, "Weapon", temp_ignores[2]);
-        class_settings.emplace_back(3, "Outline", temp_ignores[3]);
-        class_settings.emplace_back(4, "Dead Body", temp_ignores[4]);
-        class_settings.emplace_back(5, "Hideout Human", temp_ignores[5]);
-        class_settings.emplace_back(6, "Hideout Balls", temp_ignores[6]);
-        class_settings.emplace_back(7, "Head", temp_ignores[7]);
-        class_settings.emplace_back(8, "Smoke", temp_ignores[8]);
-        class_settings.emplace_back(9, "Fire", temp_ignores[9]);
-        class_settings.emplace_back(10, "Third Person", temp_ignores[10]);
+        class_settings.emplace_back(0, "Player", temp_allows[0]);
+        class_settings.emplace_back(1, "Bot", temp_allows[1]);
+        class_settings.emplace_back(2, "Weapon", temp_allows[2]);
+        class_settings.emplace_back(3, "Outline", temp_allows[3]);
+        class_settings.emplace_back(4, "Dead Body", temp_allows[4]);
+        class_settings.emplace_back(5, "Hideout Human", temp_allows[5]);
+        class_settings.emplace_back(6, "Hideout Balls", temp_allows[6]);
+        class_settings.emplace_back(7, "Head", temp_allows[7]);
+        class_settings.emplace_back(8, "Smoke", temp_allows[8]);
+        class_settings.emplace_back(9, "Fire", temp_allows[9]);
+        class_settings.emplace_back(10, "Third Person", temp_allows[10]);
     }
     
     
@@ -651,8 +649,7 @@ bool Config::saveConfig(const std::string& filename)
     file << "window_size = " << window_size << "\n";
     file << "screenshot_button = " << joinStrings(screenshot_button) << "\n";
     file << "screenshot_delay = " << screenshot_delay << "\n";
-    file << "always_on_top = " << (always_on_top ? "true" : "false") << "\n";
-    file << "verbose = " << (verbose ? "true" : "false") << "\n\n";
+    file << "always_on_top = " << (always_on_top ? "true" : "false") << "\n\n";
 
     file << "[Classes]\n";
     file << "HeadClassName = " << head_class_name << "\n\n";
@@ -662,7 +659,7 @@ bool Config::saveConfig(const std::string& filename)
     for (size_t i = 0; i < class_settings.size(); ++i) {
         file << "Class_" << i << "_ID = " << class_settings[i].id << "\n";
         file << "Class_" << i << "_Name = " << class_settings[i].name << "\n";
-        file << "Class_" << i << "_Ignore = " << (class_settings[i].ignore ? "true" : "false") << "\n";
+        file << "Class_" << i << "_Allow = " << (class_settings[i].allow ? "true" : "false") << "\n";
     }
     file << "\n";
 

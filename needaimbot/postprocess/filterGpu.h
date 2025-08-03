@@ -8,7 +8,7 @@ cudaError_t filterDetectionsByClassIdGpu(
     int num_input_detections,
     Detection* d_output_detections,
     int* d_output_count,
-    const unsigned char* d_ignored_class_ids,
+    const unsigned char* d_allowed_class_ids,
     int max_check_id,
     const unsigned char* d_color_mask,
     int mask_pitch,

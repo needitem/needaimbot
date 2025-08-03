@@ -19,7 +19,7 @@ __global__ __launch_bounds__(256, 4) void filterDetectionsByClassIdKernel(
     int num_input_detections,
     Detection* __restrict__ output_detections,
     int* __restrict__ output_count,
-    const unsigned char* __restrict__ d_ignored_class_ids,
+    const unsigned char* __restrict__ d_allowed_class_ids,
     int max_check_id,
     const unsigned char* __restrict__ d_color_mask,
     int mask_pitch,
@@ -34,7 +34,7 @@ __global__ __launch_bounds__(256, 4) void filterDetectionsByClassIdKernel(
         const Detection det = input_detections[idx];
         
         // Early rejection based on class ID
-        if (det.classId >= 0 && det.classId < max_check_id && d_ignored_class_ids[det.classId]) {
+        if (det.classId >= 0 && det.classId < max_check_id && !d_allowed_class_ids[det.classId]) {
             continue;
         }
         
@@ -85,7 +85,7 @@ cudaError_t filterDetectionsByClassIdGpu(
     int num_input_detections,
     Detection* d_output_detections,
     int* d_output_count,
-    const unsigned char* d_ignored_class_ids,
+    const unsigned char* d_allowed_class_ids,
     int max_check_id,
     const unsigned char* d_color_mask,
     int mask_pitch,
@@ -108,7 +108,7 @@ cudaError_t filterDetectionsByClassIdGpu(
         num_input_detections,
         d_output_detections,
         d_output_count,
-        d_ignored_class_ids,
+        d_allowed_class_ids,
         max_check_id,
         d_color_mask,
         mask_pitch,

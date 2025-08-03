@@ -60,7 +60,7 @@ void QueueMove(int dx, int dy, std::function<void(int, int)> move_func) {
     
     if (dx != 0 || dy != 0) {
         // Skip timing measurements if not needed (performance optimization)
-        if (ctx.config.verbose || ctx.config.show_metrics) {
+        if (ctx.config.show_metrics) {
             LARGE_INTEGER start;
             QueryPerformanceCounter(&start);
             
@@ -290,7 +290,7 @@ float MouseThread::calculateTargetDistanceSquared(const AimbotTarget &target) co
         for (const auto& class_setting : ctx.config.class_settings) {
             if (class_setting.name == local_head_class_name_val) {
                 local_head_class_id_to_use = class_setting.id;
-                if (!class_setting.ignore) {
+                if (class_setting.allow) {
                     local_apply_head_offset = true;
                 }
                 break;
@@ -346,7 +346,7 @@ void MouseThread::moveMouse(const AimbotTarget &target)
                 for (const auto& class_setting : config.class_settings) {
                     if (class_setting.name == head_class_name) {
                         head_class_id_to_use = class_setting.id;
-                        if (!class_setting.ignore) {
+                        if (class_setting.allow) {
                             apply_head_offset = true;
                         }
                         break;
@@ -414,7 +414,7 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         for (const auto& class_setting : ctx.config.class_settings) {
             if (class_setting.name == ctx.config.head_class_name) {
                 local_head_class_id_to_use = class_setting.id;
-                if (!class_setting.ignore) {
+                if (class_setting.allow) {
                     local_apply_head_offset = true;
                 }
                 break;
@@ -435,9 +435,6 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     float error_y = target_y - current_center_y;
     
     // Debug logging for PID control values
-    if (ctx.config.verbose) {
-        std::cout << "[Mouse] Error values - X: " << error_x << ", Y: " << error_y << std::endl;
-    }
 
 
     // 원래의 PID 로직 사용
@@ -448,9 +445,6 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     
     Eigen::Vector2f pid_output = pid_controller->calculate(error);
     
-    if (ctx.config.verbose) {
-        std::cout << "[Mouse] PID output - X: " << pid_output.x() << ", Y: " << pid_output.y() << std::endl;
-    }
         
     auto pid_end_time = std::chrono::steady_clock::now();
     float pid_duration_ms = std::chrono::duration<float, std::milli>(pid_end_time - pid_start_time).count();
@@ -470,11 +464,6 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     move_y = pid_output.y() * current_move_scale_y * error_scale_factor;
     
     // Debug logging for final move values
-    if (ctx.config.verbose) {
-        std::cout << "[Mouse] Final move values - X: " << move_x << ", Y: " << move_y 
-                  << " (scale_x: " << current_move_scale_x << ", scale_y: " << current_move_scale_y 
-                  << ")" << std::endl;
-    }
 
     // Simple dead zone without adaptive threshold
     if (std::abs(move_x) < DEAD_ZONE) move_x = 0.0f;
@@ -484,9 +473,6 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     auto [dx_int, dy_int] = processAccumulatedMovement(move_x, move_y);
     
     // Debug logging for final integer movement values
-    if (ctx.config.verbose) {
-        std::cout << "[Mouse] Integer movement values - dx: " << dx_int << ", dy: " << dy_int << std::endl;
-    }
     
     if (local_disable_upward_aim_active && dy_int < 0) {
         dy_int = 0; 
@@ -719,7 +705,7 @@ void MouseThread::asyncInputWorker()
                     }
                     
                     // Track performance if needed
-                    if (ctx.config.verbose || ctx.config.show_metrics) {
+                    if (ctx.config.show_metrics) {
                         auto exec_end = std::chrono::high_resolution_clock::now();
                         float exec_duration_ms = std::chrono::duration<float, std::milli>(exec_end - exec_start).count();
                         ctx.g_current_input_send_time_ms.store(exec_duration_ms, std::memory_order_relaxed);
