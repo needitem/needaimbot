@@ -273,10 +273,6 @@ void draw_capture_settings()
 {
     auto& ctx = AppContext::getInstance();
     
-    // Profile dropdown at the top
-    UIHelpers::ProfileDropdown();
-    UIHelpers::Spacer();
-    
     draw_capture_area_settings();
     UIHelpers::Spacer();
     

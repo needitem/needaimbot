@@ -14,10 +14,6 @@
 void draw_rcs_settings() {
     auto& ctx = AppContext::getInstance();
     
-    // Profile dropdown at the top
-    UIHelpers::ProfileDropdown();
-    UIHelpers::CompactSpacer();
-    
     UIHelpers::PushStyleColors();
     
     UIHelpers::BeautifulSection("Recoil Control System");
