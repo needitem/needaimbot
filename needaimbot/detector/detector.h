@@ -150,7 +150,7 @@ public:
     bool m_isTargetLocked;
     Detection m_lockedTargetInfo;
 
-    CudaBuffer<unsigned char> m_d_ignore_flags_gpu;
+    CudaBuffer<unsigned char> m_d_allow_flags_gpu;
 
     CudaBuffer<int> m_nms_d_x1;
     CudaBuffer<int> m_nms_d_y1;
@@ -164,8 +164,8 @@ public:
     CudaBuffer<int> m_nms_d_indices;     
 
     
-    std::vector<unsigned char> m_host_ignore_flags_uchar;
-    bool m_ignore_flags_need_update;
+    std::vector<unsigned char> m_host_allow_flags_uchar;
+    bool m_allow_flags_need_update;
     
     
     // Double buffering for ultra-fast processing

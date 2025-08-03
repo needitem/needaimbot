@@ -180,7 +180,6 @@ void mouseThreadFunction(MouseThread &mouseThread)
                     current_has_target = false;
                     current_target = {};
                 } else {
-                    if (ctx.config.verbose && ctx.detector->m_hasBestTarget) std::cout << "[Mouse] Reading from Detector. Detector state: hasBestTarget=true" << std::endl;
 
                     current_has_target = ctx.detector->m_hasBestTarget;
                     if (current_has_target) {
@@ -190,7 +189,6 @@ void mouseThreadFunction(MouseThread &mouseThread)
                     }
                     last_detection_version = ctx.detector->detectionVersion;
 
-                    if (ctx.config.verbose && current_has_target) std::cout << "[Mouse] Copied to local. Local state: current_has_target=true, Pos: (" << current_target.x << ", " << current_target.y << ")" << std::endl;
                 }
             }
         }
@@ -504,22 +502,6 @@ int main()
         }
         
 
-        if (ctx.config.verbose) {
-            std::cout << "--- Dependency Versions ---" << std::endl;
-
-            int runtimeVersion = 0;
-            cudaError_t cuda_err = cudaRuntimeGetVersion(&runtimeVersion);
-            if (cuda_err == cudaSuccess) {
-                int major = runtimeVersion / 1000;
-                int minor = (runtimeVersion % 1000) / 10;
-                std::cout << std::left << std::setw(20) << "CUDA Runtime:" << major << "." << minor << std::endl;
-            } else {
-                std::cerr << std::left << std::setw(20) << "CUDA Runtime:" << "Error getting version - " << cudaGetErrorString(cuda_err) << std::endl;
-            }
-
-            // OpenCV removed - no build info to display
-            std::cout << "---------------------------" << std::endl << std::endl;
-        }
 
         ctx.detector = new Detector();
         

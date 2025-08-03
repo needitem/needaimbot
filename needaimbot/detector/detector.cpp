@@ -89,8 +89,8 @@ Detector::Detector()
     m_hasBestTarget(false),
     m_bestTargetIndexHost(-1),
     m_finalDetectionsCountHost(0),
-    m_host_ignore_flags_uchar(MAX_CLASSES_FOR_FILTERING, 1), 
-    m_ignore_flags_need_update(true) 
+    m_host_allow_flags_uchar(MAX_CLASSES_FOR_FILTERING, 0), 
+    m_allow_flags_need_update(true) 
     , m_isTargetLocked(false)
  
 {
@@ -197,10 +197,6 @@ void Detector::getInputNames()
         if (engine->getTensorIOMode(name) == nvinfer1::TensorIOMode::kINPUT)
         {
             inputNames.emplace_back(name);
-            if (ctx.config.verbose)
-            {
-                std::cout << "[Detector] Detected input: " << name << std::endl;
-            }
         }
     }
 
@@ -236,10 +232,6 @@ void Detector::getOutputNames()
             outputNames.emplace_back(name);
             outputTypes[name] = engine->getTensorDataType(name);
             
-            if (ctx.config.verbose)
-            {
-                std::cout << "[Detector] Detected output: " << name << std::endl;
-            }
         }
     }
 }
@@ -270,10 +262,6 @@ void Detector::getBindings()
             if (err == cudaSuccess)
             {
                 inputBindings[name] = ptr;
-                if (ctx.config.verbose)
-                {
-                    std::cout << "[Detector] Allocated " << size << " bytes for input " << name << std::endl;
-                }
             }
             else
             {
@@ -291,10 +279,6 @@ void Detector::getBindings()
             if (err == cudaSuccess)
             {
                 outputBindings[name] = ptr;
-                if (ctx.config.verbose)
-                {
-                    std::cout << "[Detector] Allocated " << size << " bytes for output " << name << std::endl;
-                }
             } else
             {
                 std::cerr << "[Detector] Failed to allocate output memory: " << cudaGetErrorString(err) << std::endl;
@@ -483,7 +467,7 @@ void Detector::initialize(const std::string& modelFile)
     initializeBuffers(); 
 
     
-    m_ignore_flags_need_update = true;
+    m_allow_flags_need_update = true;
 
     
     if (!outputNames.empty())
@@ -514,17 +498,9 @@ void Detector::initialize(const std::string& modelFile)
         for (const auto& class_setting : ctx.config.class_settings) {
             if (class_setting.name == ctx.config.head_class_name) {
                 m_headClassId = class_setting.id;
-                if (ctx.config.verbose) {
-                    std::cout << "[Detector] Head class '" << ctx.config.head_class_name << "' identified with ID: " << m_headClassId << std::endl;
-                }
                 break;
             }
         }
-        if (m_headClassId == -1 && ctx.config.verbose) {
-            std::cout << "[Detector] Warning: Head class name '" << ctx.config.head_class_name << "' not found in class_settings. No specific head bonus will be applied." << std::endl;
-        }
-    } else if (ctx.config.verbose) {
-        std::cout << "[Detector] head_class_name is empty in config. No specific head bonus will be applied based on name." << std::endl;
     }
     
     nvinfer1::Dims actualInputDims = context->getTensorShape(inputName.c_str());
@@ -800,35 +776,26 @@ void Detector::inferenceThread()
             break;
         }
 
-        // Update ignore flags if needed
-        if (m_ignore_flags_need_update) {
+        // Update allow flags if needed
+        if (m_allow_flags_need_update) {
             std::lock_guard<std::mutex> lock(ctx.configMutex);
-            // Reset all flags to 0 (don't ignore)
-            std::fill(m_host_ignore_flags_uchar.begin(), m_host_ignore_flags_uchar.end(), 0);
+            // Reset all flags to 0 (don't allow)
+            std::fill(m_host_allow_flags_uchar.begin(), m_host_allow_flags_uchar.end(), 0);
             
-            // Set ignore flags based on class settings
+            // Set allow flags based on class settings
             for (const auto& class_setting : ctx.config.class_settings) {
                 if (class_setting.id >= 0 && class_setting.id < MAX_CLASSES_FOR_FILTERING) {
-                    m_host_ignore_flags_uchar[class_setting.id] = class_setting.ignore ? 1 : 0;
+                    m_host_allow_flags_uchar[class_setting.id] = class_setting.allow ? 1 : 0;
                 }
             }
             
             // Copy to GPU
-            cudaMemcpyAsync(m_d_ignore_flags_gpu.get(), m_host_ignore_flags_uchar.data(), 
+            cudaMemcpyAsync(m_d_allow_flags_gpu.get(), m_host_allow_flags_uchar.data(), 
                            MAX_CLASSES_FOR_FILTERING * sizeof(unsigned char), 
                            cudaMemcpyHostToDevice, stream);
             
-            m_ignore_flags_need_update = false;
+            m_allow_flags_need_update = false;
             
-            if (ctx.config.verbose) {
-                std::cout << "[Detector] Updated ignore flags - ";
-                for (const auto& cs : ctx.config.class_settings) {
-                    if (cs.ignore) {
-                        std::cout << cs.name << "(ID:" << cs.id << ") ";
-                    }
-                }
-                std::cout << "are ignored" << std::endl;
-            }
         }
 
         if (ctx.detector_model_changed.load()) {
@@ -1005,12 +972,6 @@ void Detector::inferenceThread()
                             if (m_bestTargetIndexHost >= 0) {
                                 m_hasBestTarget = true;
                                 
-                                if (ctx.config.verbose) {
-                                    std::cout << "[Detector] Target selected - Index: " << m_bestTargetIndexHost 
-                                              << ", Position: (" << m_bestTargetHost.x << ", " << m_bestTargetHost.y << ")"
-                                              << ", Size: " << m_bestTargetHost.width << "x" << m_bestTargetHost.height
-                                              << ", Confidence: " << m_bestTargetHost.confidence << std::endl;
-                                }
                             } else {
                                 m_hasBestTarget = false;
                                 memset(&m_bestTargetHost, 0, sizeof(Detection));
@@ -1101,7 +1062,7 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
     static int cached_max_detections = Constants::MAX_DETECTIONS; // Use max from constants (100)
     static float cached_nms_threshold = 0.45f;
     static float cached_confidence_threshold = 0.25f;
-    static std::string cached_postprocess = "yolo11";
+    static std::string cached_postprocess = "yolo12";
     static bool config_cached = false;
     
     // Only update cache when not in graph capture mode
@@ -1186,7 +1147,7 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         maxDecodedDetections, // Use max possible instead of syncing
         m_classFilteredDetectionsGpu.get(),
         m_classFilteredCountGpu.get(),
-        m_d_ignore_flags_gpu.get(),
+        m_d_allow_flags_gpu.get(),
         MAX_CLASSES_FOR_FILTERING,
         graphColorMaskPtr,
         graphMaskPitch,
@@ -1463,7 +1424,7 @@ void Detector::initializeBuffers() {
     m_tempBlockScores.allocate(max_blocks);
     m_tempBlockIndices.allocate(max_blocks);
 
-    m_d_ignore_flags_gpu.allocate(MAX_CLASSES_FOR_FILTERING);
+    m_d_allow_flags_gpu.allocate(MAX_CLASSES_FOR_FILTERING);
     
     // Allocate GPU buffers for target selection
     m_bestTargetIndexGpu.allocate(1);
