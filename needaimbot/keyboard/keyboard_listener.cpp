@@ -18,10 +18,6 @@
 #include "../capture/capture.h"
 
 
-const float MIN_OFFSET_Y = 0.0f;
-const float MAX_OFFSET_Y = 1.0f;
-const float MIN_NORECOIL_STRENGTH = 0.1f;
-const float MAX_NORECOIL_STRENGTH = 500.0f;
 
 #include "../AppContext.h"
 #include "keyboard_listener.h"
@@ -98,35 +94,6 @@ void keyboardListener() {
         }
 
         // Auto shoot functionality removed
-
-        // Recoil strength adjustment with arrow keys
-        static DWORD last_adjust_time = 0;
-        DWORD current_time = GetTickCount();
-        
-        if (current_time - last_adjust_time > 100) {  // 100ms debounce
-            if (GetAsyncKeyState(VK_LEFT) & 0x8000) {
-                if (ctx.config.easynorecoilstrength > MIN_NORECOIL_STRENGTH) {
-                    ctx.config.easynorecoilstrength -= ctx.config.norecoil_step;
-                    if (ctx.config.easynorecoilstrength < MIN_NORECOIL_STRENGTH) {
-                        ctx.config.easynorecoilstrength = MIN_NORECOIL_STRENGTH;
-                    }
-                    std::cout << "[Keyboard] Recoil strength: " << ctx.config.easynorecoilstrength << std::endl;
-                    ctx.config.saveConfig();
-                    last_adjust_time = current_time;
-                }
-            }
-            else if (GetAsyncKeyState(VK_RIGHT) & 0x8000) {
-                if (ctx.config.easynorecoilstrength < MAX_NORECOIL_STRENGTH) {
-                    ctx.config.easynorecoilstrength += ctx.config.norecoil_step;
-                    if (ctx.config.easynorecoilstrength > MAX_NORECOIL_STRENGTH) {
-                        ctx.config.easynorecoilstrength = MAX_NORECOIL_STRENGTH;
-                    }
-                    std::cout << "[Keyboard] Recoil strength: " << ctx.config.easynorecoilstrength << std::endl;
-                    ctx.config.saveConfig();
-                    last_adjust_time = current_time;
-                }
-            }
-        }
 
         Sleep(1);
     }
