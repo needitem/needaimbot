@@ -2,6 +2,7 @@
 #define _WINSOCKAPI_
 #include <winsock2.h>
 #include <Windows.h>
+#include <shellapi.h>  // For ShellExecuteEx
 
 // OpenCV removed - using custom CUDA image processing
 #include <iostream>
@@ -376,14 +377,97 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 }
 #endif
 
+// Check if running with administrator privileges
+bool IsRunAsAdministrator()
+{
+    BOOL isAdmin = FALSE;
+    HANDLE hToken = NULL;
+    
+    if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken)) {
+        TOKEN_ELEVATION elevation;
+        DWORD cbSize = sizeof(TOKEN_ELEVATION);
+        if (GetTokenInformation(hToken, TokenElevation, &elevation, sizeof(elevation), &cbSize)) {
+            isAdmin = elevation.TokenIsElevated;
+        }
+        CloseHandle(hToken);
+    }
+    
+    return isAdmin;
+}
+
+// Restart the application with administrator privileges
+bool RestartAsAdministrator()
+{
+    wchar_t szPath[MAX_PATH];
+    if (GetModuleFileNameW(NULL, szPath, ARRAYSIZE(szPath))) {
+        SHELLEXECUTEINFOW sei = { sizeof(sei) };
+        sei.lpVerb = L"runas";
+        sei.lpFile = szPath;
+        sei.hwnd = NULL;
+        sei.nShow = SW_NORMAL;
+        
+        if (!ShellExecuteExW(&sei)) {
+            DWORD dwError = GetLastError();
+            if (dwError == ERROR_CANCELLED) {
+                // User refused the elevation
+                return false;
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
 int main()
 {
     // Initialize Gaming Performance Analyzer
     std::cout << "[INFO] Starting Gaming Performance Analyzer v1.0.0" << std::endl;
+    
+    // Check for administrator privileges
+    if (!IsRunAsAdministrator()) {
+        std::cout << "[INFO] Administrator privileges required for optimal performance." << std::endl;
+        std::cout << "[INFO] Requesting administrator privileges..." << std::endl;
+        
+        // Ask user if they want to restart with admin privileges
+        int result = MessageBoxW(NULL, 
+            L"Gaming Performance Analyzer requires administrator privileges for:\n\n"
+            L"• High process priority (better performance)\n"
+            L"• Access to system performance counters\n"
+            L"• Optimal GPU scheduling\n\n"
+            L"Would you like to restart with administrator privileges?",
+            L"Administrator Privileges Required", 
+            MB_YESNO | MB_ICONQUESTION);
+        
+        if (result == IDYES) {
+            if (RestartAsAdministrator()) {
+                // Exit current process as we're restarting with admin
+                return 0;
+            } else {
+                std::cout << "[WARNING] Failed to restart with administrator privileges." << std::endl;
+                std::cout << "[WARNING] Running with limited performance capabilities." << std::endl;
+            }
+        } else {
+            std::cout << "[WARNING] Running without administrator privileges." << std::endl;
+            std::cout << "[WARNING] Performance may be limited in some scenarios." << std::endl;
+        }
+    } else {
+        std::cout << "[INFO] Running with administrator privileges." << std::endl;
+    }
+    
     std::cout << "[INFO] Initializing performance monitoring systems..." << std::endl;
     
-    // Set normal process priority for stable performance monitoring
-    SetPriorityClass(GetCurrentProcess(), NORMAL_PRIORITY_CLASS);
+    // Set high process priority for better performance (requires admin)
+    if (IsRunAsAdministrator()) {
+        if (SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS)) {
+            std::cout << "[INFO] Process priority set to HIGH for optimal performance." << std::endl;
+        } else {
+            std::cout << "[WARNING] Failed to set high process priority." << std::endl;
+            SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
+        }
+    } else {
+        // Without admin, we can only set up to ABOVE_NORMAL
+        SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
+    }
     
     // Set application title
     SetConsoleTitle(L"Gaming Performance Analyzer - Monitor & Optimize Gaming Performance");
