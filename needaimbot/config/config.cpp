@@ -172,7 +172,7 @@ bool Config::loadConfig(const std::string& filename)
         button_reload_config = splitString("F4");
         button_open_overlay = splitString("Home");
         button_disable_upward_aim = splitString("None");
-        button_auto_shoot = splitString("None"); 
+        button_auto_shoot = splitString("LeftMouseButton"); 
  
 
         
@@ -378,7 +378,7 @@ bool Config::loadConfig(const std::string& filename)
     button_reload_config = splitString(get_string_ini("Buttons", "button_reload_config", "F4"));
     button_open_overlay = splitString(get_string_ini("Buttons", "button_open_overlay", "Home"));
     button_disable_upward_aim = splitString(get_string_ini("Buttons", "button_disable_upward_aim", "None"));
-    button_auto_shoot = splitString(get_string_ini("Buttons", "button_auto_shoot", "None"));
+    button_auto_shoot = splitString(get_string_ini("Buttons", "button_auto_shoot", "LeftMouseButton"));
  
 
     overlay_opacity = get_long_ini("Overlay", "overlay_opacity", 225);
