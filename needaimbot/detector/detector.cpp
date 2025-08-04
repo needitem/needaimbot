@@ -1143,6 +1143,10 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
     cudaMemcpyAsync(&decodedCount, m_decodedCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
     cudaStreamSynchronize(stream);
     
+    if (ctx.config.debug_mode) {
+        std::cout << "[DEBUG] Decoded detections: " << decodedCount << std::endl;
+    }
+    
     // If no detections were decoded, clear final count and return early
     if (decodedCount == 0) {
         cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
@@ -1163,6 +1167,14 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
     if (!checkCudaError(filterErr, "filtering detections by class ID GPU")) {
         cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
         return;
+    }
+    
+    // Debug: Check class filtered count
+    if (ctx.config.debug_mode) {
+        int classFilteredCount = 0;
+        cudaMemcpyAsync(&classFilteredCount, m_classFilteredCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
+        cudaStreamSynchronize(stream);
+        std::cout << "[DEBUG] Class filtered detections: " << classFilteredCount << std::endl;
     }
     
     // Step 2: RGB color filtering (before NMS for better efficiency)
@@ -1200,9 +1212,20 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         
         // Use color-filtered detections for NMS
         nmsInputDetections = m_colorFilteredDetectionsGpu.get();
+        
+        // Debug: Check color filtered count
+        if (ctx.config.debug_mode) {
+            int colorFilteredCount = 0;
+            cudaMemcpyAsync(&colorFilteredCount, m_colorFilteredCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
+            cudaStreamSynchronize(stream);
+            std::cout << "[DEBUG] Color filtered detections: " << colorFilteredCount << std::endl;
+        }
     } else {
         // No color filtering, use class-filtered detections directly
         nmsInputDetections = m_classFilteredDetectionsGpu.get();
+        if (ctx.config.debug_mode) {
+            std::cout << "[DEBUG] No color filtering applied (mask empty or graph captured)" << std::endl;
+        }
     }
     
     // Step 3: NMS (after all filtering for maximum efficiency)
@@ -1246,6 +1269,14 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
             m_nms_d_indices.get(),
             stream
         );
+        
+        // Debug: Check NMS output count
+        if (ctx.config.debug_mode) {
+            int nmsCount = 0;
+            cudaMemcpyAsync(&nmsCount, m_finalDetectionsCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
+            cudaStreamSynchronize(stream);
+            std::cout << "[DEBUG] NMS output detections: " << nmsCount << std::endl;
+        }
         
         // Target selection will be done on CPU after copying results
         

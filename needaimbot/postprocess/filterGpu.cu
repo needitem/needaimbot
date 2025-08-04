@@ -24,11 +24,14 @@ __global__ void copyDetectionsKernel(
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     
+    // First thread in first block sets the output count
+    if (idx == 0) {
+        *output_count = min(num_input_detections, max_output_detections);
+    }
+    
+    // All threads copy their respective detections
     if (idx < num_input_detections && idx < max_output_detections) {
         output_detections[idx] = input_detections[idx];
-        if (idx == 0) {
-            *output_count = min(num_input_detections, max_output_detections);
-        }
     }
 }
 
@@ -203,9 +206,6 @@ cudaError_t filterDetectionsByColorGpu(
         
         return cudaGetLastError();
     }
-    
-    // Initialize output count to 0
-    cudaMemsetAsync(d_output_count, 0, sizeof(int), stream);
     
     // Launch color filtering kernel
     int block_size = 256;
