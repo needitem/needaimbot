@@ -1138,24 +1138,30 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         return;
     }
 
-    // Check decoded count
-    int decodedCount = 0;
-    cudaMemcpyAsync(&decodedCount, m_decodedCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
-    cudaStreamSynchronize(stream);
+    // For CUDA Graph compatibility, use fixed counts when in graph mode
+    int decodedCount = maxDecodedDetections;  // Default to max for graph mode
+    int classFilteredCount = maxDecodedDetections;
     
-    // Debug output
-    std::cout << "[DEBUG] Decoded detections: " << decodedCount << std::endl;
-    
-    // If no detections were decoded, clear final count and return early
-    if (decodedCount == 0) {
-        cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
-        return;
+    // Only sync and get actual counts when not in graph mode
+    if (!m_graphCaptured) {
+        // Check decoded count
+        cudaMemcpyAsync(&decodedCount, m_decodedCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
+        cudaStreamSynchronize(stream);
+        
+        // Debug output
+        std::cout << "[DEBUG] Decoded detections: " << decodedCount << std::endl;
+        
+        // If no detections were decoded, clear final count and return early
+        if (decodedCount == 0) {
+            cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
+            return;
+        }
     }
     
     // Step 1: Class ID filtering (after confidence filtering in decode)
     cudaError_t filterErr = filterDetectionsByClassIdGpu(
         m_decodedDetectionsGpu.get(),
-        maxDecodedDetections, // Process all decoded detections
+        decodedCount,  // Use actual count or max for graph mode
         m_classFilteredDetectionsGpu.get(),
         m_classFilteredCountGpu.get(),
         m_d_allow_flags_gpu.get(),
@@ -1168,11 +1174,12 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         return;
     }
     
-    // Debug: Check class filtered count
-    int classFilteredCount = 0;
-    cudaMemcpyAsync(&classFilteredCount, m_classFilteredCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
-    cudaStreamSynchronize(stream);
-    std::cout << "[DEBUG] Class filtered detections: " << classFilteredCount << std::endl;
+    // Debug: Check class filtered count (only when not in graph mode)
+    if (!m_graphCaptured) {
+        cudaMemcpyAsync(&classFilteredCount, m_classFilteredCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
+        cudaStreamSynchronize(stream);
+        std::cout << "[DEBUG] Class filtered detections: " << classFilteredCount << std::endl;
+    }
     
     // Step 2: RGB color filtering (before NMS for better efficiency)
     // Get color mask if available
@@ -1182,7 +1189,7 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
     
     // For non-graph mode, apply color filtering if mask exists
     Detection* nmsInputDetections = nullptr;
-    int effectiveFilteredCount = 1000;
+    int effectiveFilteredCount = classFilteredCount;  // Use actual filtered count
     
     if (!m_graphCaptured && !colorMask.empty()) {
         colorMaskPtr = colorMask.data();
@@ -1191,7 +1198,7 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         // Apply RGB filtering
         cudaError_t colorFilterErr = filterDetectionsByColorGpu(
             m_classFilteredDetectionsGpu.get(),
-            1000,  // Process all class-filtered detections
+            classFilteredCount,  // Process actual class-filtered count
             m_colorFilteredDetectionsGpu.get(),
             m_colorFilteredCountGpu.get(),
             colorMaskPtr,
@@ -1215,6 +1222,7 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         cudaMemcpyAsync(&colorFilteredCount, m_colorFilteredCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
         cudaStreamSynchronize(stream);
         std::cout << "[DEBUG] Color filtered detections: " << colorFilteredCount << std::endl;
+        effectiveFilteredCount = colorFilteredCount;  // Update count for NMS
     } else {
         // No color filtering, use class-filtered detections directly
         nmsInputDetections = m_classFilteredDetectionsGpu.get();
