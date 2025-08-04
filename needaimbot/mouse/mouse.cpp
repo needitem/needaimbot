@@ -249,29 +249,13 @@ float MouseThread::calculateTargetDistanceSquared(const AimbotTarget &target) co
 {
     auto& ctx = AppContext::getInstance();
     float current_center_x, current_center_y;
-    float crosshair_offset_x, crosshair_offset_y;
     
-    // Get all values with minimal locking
+    // Get center values (capture already includes offset)
     {
         std::lock_guard<std::mutex> lock(member_data_mutex_); 
         current_center_x = this->center_x;
         current_center_y = this->center_y;
     }
-    {
-        std::lock_guard<std::mutex> lock(ctx.configMutex);
-        // Check if we should use aim+shoot offset
-        if (ctx.config.enable_aim_shoot_offset && ctx.aiming && ctx.shooting) {
-            crosshair_offset_x = ctx.config.aim_shoot_offset_x;
-            crosshair_offset_y = ctx.config.aim_shoot_offset_y;
-        } else {
-            crosshair_offset_x = ctx.config.crosshair_offset_x;
-            crosshair_offset_y = ctx.config.crosshair_offset_y;
-        }
-    }
-    
-    // Apply crosshair offset correction
-    current_center_x += crosshair_offset_x;
-    current_center_y += crosshair_offset_y;
 
     float dx = target.x + target.w * 0.5f - current_center_x;
     float target_center_y_val;
@@ -319,9 +303,6 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     
     // Cache for config values to reduce mutex locks
     static struct ConfigCache {
-        float crosshair_offset_x, crosshair_offset_y;
-        float aim_shoot_offset_x, aim_shoot_offset_y;
-        bool enable_aim_shoot_offset;
         int head_class_id_to_use = -1;
         bool apply_head_offset = false;
         float head_y_offset, body_y_offset;
@@ -332,11 +313,6 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         void update(const Config& config) {
             auto now = std::chrono::steady_clock::now();
             if (now - last_update >= update_interval) {
-                crosshair_offset_x = config.crosshair_offset_x;
-                crosshair_offset_y = config.crosshair_offset_y;
-                aim_shoot_offset_x = config.aim_shoot_offset_x;
-                aim_shoot_offset_y = config.aim_shoot_offset_y;
-                enable_aim_shoot_offset = config.enable_aim_shoot_offset;
                 head_class_name = config.head_class_name;
                 head_y_offset = config.head_y_offset;
                 body_y_offset = config.body_y_offset;
@@ -371,14 +347,7 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         config_cache.update(ctx.config);
     }
 
-    // Apply crosshair offset correction
-    if (config_cache.enable_aim_shoot_offset && ctx.aiming && ctx.shooting) {
-        current_center_x += config_cache.aim_shoot_offset_x;
-        current_center_y += config_cache.aim_shoot_offset_y;
-    } else {
-        current_center_x += config_cache.crosshair_offset_x;
-        current_center_y += config_cache.crosshair_offset_y;
-    }
+    // No offset correction needed - capture already includes offset
 
     Point2D raw_target_pos;
     raw_target_pos.x = target.x + target.w * 0.5f;

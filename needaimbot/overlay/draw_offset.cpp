@@ -160,6 +160,7 @@ void renderOffsetTab()
                 if (ImGui::Button("UP##offset_up", ImVec2(button_size, button_size))) {
                     ctx.config.crosshair_offset_y += adjustment_step;
                     offset_changed = true;
+                    ctx.crosshair_offset_changed.store(true);
                 }
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move crosshair up");
                 
@@ -167,6 +168,7 @@ void renderOffsetTab()
                 if (ImGui::Button("L##offset_left", ImVec2(button_size, button_size))) {
                     ctx.config.crosshair_offset_x += adjustment_step;
                     offset_changed = true;
+                    ctx.crosshair_offset_changed.store(true);
                 }
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move crosshair left");
                 
@@ -177,6 +179,7 @@ void renderOffsetTab()
                 if (ImGui::Button("R##offset_right", ImVec2(button_size, button_size))) {
                     ctx.config.crosshair_offset_x -= adjustment_step;
                     offset_changed = true;
+                    ctx.crosshair_offset_changed.store(true);
                 }
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move crosshair right");
                 
@@ -185,6 +188,7 @@ void renderOffsetTab()
                 if (ImGui::Button("DN##offset_down", ImVec2(button_size, button_size))) {
                     ctx.config.crosshair_offset_y -= adjustment_step;
                     offset_changed = true;
+                    ctx.crosshair_offset_changed.store(true);
                 }
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move crosshair down");
             }
@@ -199,6 +203,7 @@ void renderOffsetTab()
                 ctx.config.crosshair_offset_x = 0.0f;
                 ctx.config.crosshair_offset_y = 0.0f;
                 offset_changed = true;
+                ctx.crosshair_offset_changed.store(true);
             }
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Reset crosshair offset to center");
             
@@ -213,11 +218,13 @@ void renderOffsetTab()
             ImGui::Text("X"); ImGui::SameLine();
             if (ImGui::DragFloat("##offset_x_fine", &ctx.config.crosshair_offset_x, 0.1f, -100.0f, 100.0f, "%.1f")) {
                 offset_changed = true;
+                ctx.crosshair_offset_changed.store(true);
             }
             ImGui::SetNextItemWidth(60);
             ImGui::Text("Y"); ImGui::SameLine();
             if (ImGui::DragFloat("##offset_y_fine", &ctx.config.crosshair_offset_y, 0.1f, -100.0f, 100.0f, "%.1f")) {
                 offset_changed = true;
+                ctx.crosshair_offset_changed.store(true);
             }
             ImGui::PopItemWidth();
         }
