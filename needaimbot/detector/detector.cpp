@@ -930,10 +930,6 @@ void Detector::inferenceThread()
                 // 먼저 count를 동기화해서 가져온 후 detection 데이터 복사
                 cudaStreamSynchronize(postprocessStream);
                 
-                // Debug: Check final detection count
-                // if (m_finalDetectionsCountHost > 0) {
-                //     std::cout << "[Detector] Final detections on CPU: " << m_finalDetectionsCountHost << std::endl;
-                // }
                 
                 // 검출된 객체가 있으면 detection 데이터도 복사
                 if (m_finalDetectionsCountHost > 0) {
@@ -942,13 +938,6 @@ void Detector::inferenceThread()
                                    cudaMemcpyDeviceToHost, postprocessStream);
                     cudaStreamSynchronize(postprocessStream);
                     
-                    // Debug: Check first detection
-                    // std::cout << "[Detector] First detection - x:" << m_finalDetectionsHost[0].x 
-                    //           << " y:" << m_finalDetectionsHost[0].y 
-                    //           << " w:" << m_finalDetectionsHost[0].width 
-                    //           << " h:" << m_finalDetectionsHost[0].height 
-                    //           << " conf:" << m_finalDetectionsHost[0].confidence 
-                    //           << " class:" << m_finalDetectionsHost[0].classId << std::endl;
                 }
 
                 auto inference_end_time = std::chrono::high_resolution_clock::now();
@@ -993,13 +982,9 @@ void Detector::inferenceThread()
                             
                             if (m_bestTargetIndexHost >= 0) {
                                 m_hasBestTarget = true;
-                                // std::cout << "[Detector] Best target selected - idx:" << m_bestTargetIndexHost 
-                                //           << " x:" << m_bestTargetHost.x 
-                                //           << " y:" << m_bestTargetHost.y << std::endl;
                             } else {
                                 m_hasBestTarget = false;
                                 memset(&m_bestTargetHost, 0, sizeof(Detection));
-                                std::cout << "[Detector] No best target found" << std::endl;
                             }
                             
                             detectionVersion++;
@@ -1104,17 +1089,9 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
     // Too large buffers cause illegal memory access in NMS
     int maxDecodedDetections = 300;  // Reasonable buffer for detections
     
-    // Debug: Show decoding parameters
-    // if (!m_graphCaptured) {
-    //     std::cout << "[DEBUG] Decoding with confidence threshold: " << cached_confidence_threshold 
-    //               << ", postprocess: " << cached_postprocess << std::endl;
-    // }
     
     if (cached_postprocess == "yolo10") {
         int max_candidates = (shape.size() > 1) ? static_cast<int>(shape[1]) : 0;
-        if (!m_graphCaptured) {
-            std::cout << "[DEBUG] YOLO10 max_candidates: " << max_candidates << std::endl;
-        }
         
         // Pass large buffer size to decode ALL detections
         decodeErr = decodeYolo10Gpu(
@@ -1166,7 +1143,6 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
     cudaMemcpyAsync(&decodedCount, m_decodedCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
     cudaStreamSynchronize(stream);
     
-    // std::cout << "[DEBUG] Decoded count: " << decodedCount << std::endl;
     
     // If no detections were decoded, clear final count and return early
     if (decodedCount == 0) {
@@ -1177,17 +1153,6 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
     // Only sync and get detailed debug info when not in graph mode
     if (!m_graphCaptured) {
         
-        // Debug: Check first decoded detection
-        if (decodedCount > 0) {
-            Detection firstDecoded;
-            cudaMemcpyAsync(&firstDecoded, m_decodedDetectionsGpu.get(), sizeof(Detection), cudaMemcpyDeviceToHost, stream);
-            cudaStreamSynchronize(stream);
-            std::cout << "[DEBUG] First decoded - x:" << firstDecoded.x 
-                      << " y:" << firstDecoded.y 
-                      << " w:" << firstDecoded.width 
-                      << " h:" << firstDecoded.height 
-                      << " conf:" << firstDecoded.confidence << std::endl;
-        }
     }
     
     // Step 1: Class ID filtering (after confidence filtering in decode)
@@ -1213,19 +1178,6 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
     // Check class filtered count (only debug when not in graph mode)
     if (!m_graphCaptured) {
         
-        std::cout << "[DEBUG] Class filtered count: " << classFilteredCount << std::endl;
-        
-        // Debug: Check first class filtered detection
-        if (classFilteredCount > 0) {
-            Detection firstFiltered;
-            cudaMemcpyAsync(&firstFiltered, m_classFilteredDetectionsGpu.get(), sizeof(Detection), cudaMemcpyDeviceToHost, stream);
-            cudaStreamSynchronize(stream);
-            std::cout << "[DEBUG] First class filtered - x:" << firstFiltered.x 
-                      << " y:" << firstFiltered.y 
-                      << " w:" << firstFiltered.width 
-                      << " h:" << firstFiltered.height 
-                      << " conf:" << firstFiltered.confidence << std::endl;
-        }
     }
     
     // Early exit if no detections after class filtering
@@ -1299,18 +1251,6 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
             return;
         }
         
-        // Debug: Check NMS input
-        // std::cout << "[DEBUG] NMS input count: " << effectiveFilteredCount << std::endl;
-        if (effectiveFilteredCount > 0 && !m_graphCaptured) {
-            Detection firstNmsInput;
-            cudaMemcpyAsync(&firstNmsInput, nmsInputDetections, sizeof(Detection), cudaMemcpyDeviceToHost, stream);
-            cudaStreamSynchronize(stream);
-            std::cout << "[DEBUG] First NMS input - x:" << firstNmsInput.x 
-                      << " y:" << firstNmsInput.y 
-                      << " w:" << firstNmsInput.width 
-                      << " h:" << firstNmsInput.height 
-                      << " conf:" << firstNmsInput.confidence << std::endl;
-        }
         
         // NMS will process filtered detections and output only max_detections
         NMSGpu(
