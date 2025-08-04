@@ -18,6 +18,11 @@ SimpleScreenCapture::SimpleScreenCapture(int width, int height)
     m_screenWidth = GetSystemMetrics(SM_CXSCREEN);
     m_screenHeight = GetSystemMetrics(SM_CYSCREEN);
     
+    // Initialize capture region to center of screen
+    m_captureRegion.left = (m_screenWidth - m_width) / 2;
+    m_captureRegion.top = (m_screenHeight - m_height) / 2;
+    m_captureRegion.right = m_captureRegion.left + m_width;
+    m_captureRegion.bottom = m_captureRegion.top + m_height;
     
     // Get screen DC
     m_screenDC = GetDC(NULL);
@@ -74,15 +79,43 @@ SimpleScreenCapture::~SimpleScreenCapture()
     if (m_screenDC) ReleaseDC(NULL, m_screenDC);
 }
 
+void SimpleScreenCapture::UpdateCaptureRegion(float offsetX, float offsetY)
+{
+    // Calculate new capture region with offset
+    // Note: offsetX/Y are in pixels, positive X moves capture left, positive Y moves capture up
+    m_captureRegion.left = (m_screenWidth - m_width) / 2 - static_cast<int>(offsetX);
+    m_captureRegion.top = (m_screenHeight - m_height) / 2 - static_cast<int>(offsetY);
+    m_captureRegion.right = m_captureRegion.left + m_width;
+    m_captureRegion.bottom = m_captureRegion.top + m_height;
+    
+    // Clamp to screen boundaries
+    if (m_captureRegion.left < 0) {
+        m_captureRegion.left = 0;
+        m_captureRegion.right = m_width;
+    }
+    if (m_captureRegion.top < 0) {
+        m_captureRegion.top = 0;
+        m_captureRegion.bottom = m_height;
+    }
+    if (m_captureRegion.right > m_screenWidth) {
+        m_captureRegion.right = m_screenWidth;
+        m_captureRegion.left = m_screenWidth - m_width;
+    }
+    if (m_captureRegion.bottom > m_screenHeight) {
+        m_captureRegion.bottom = m_screenHeight;
+        m_captureRegion.top = m_screenHeight - m_height;
+    }
+}
+
 SimpleCudaMat SimpleScreenCapture::GetNextFrameGpu()
 {
     if (!m_initialized) {
         return SimpleCudaMat();
     }
     
-    // Calculate center region coordinates
-    int startX = (m_screenWidth - m_width) / 2;
-    int startY = (m_screenHeight - m_height) / 2;
+    // Use capture region from member variable (which can be updated with offset)
+    int startX = m_captureRegion.left;
+    int startY = m_captureRegion.top;
     
     // Get frame buffer pool
     if (!g_frameBufferPool) {

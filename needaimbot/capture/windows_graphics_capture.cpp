@@ -81,6 +81,37 @@ WindowsGraphicsCapture::WindowsGraphicsCapture(int captureWidth, int captureHeig
     impl->m_initialized = true;
 }
 
+void WindowsGraphicsCapture::UpdateCaptureRegion(float offsetX, float offsetY)
+{
+    auto impl = reinterpret_cast<WindowsGraphicsCaptureImpl*>(m_captureItem);
+    if (!impl) return;
+    
+    // Calculate new capture region with offset
+    // Note: offsetX/Y are in pixels, positive X moves capture left, positive Y moves capture up
+    impl->m_captureRegion.left = (impl->m_screenWidth - impl->m_captureWidth) / 2 - static_cast<int>(offsetX);
+    impl->m_captureRegion.top = (impl->m_screenHeight - impl->m_captureHeight) / 2 - static_cast<int>(offsetY);
+    impl->m_captureRegion.right = impl->m_captureRegion.left + impl->m_captureWidth;
+    impl->m_captureRegion.bottom = impl->m_captureRegion.top + impl->m_captureHeight;
+    
+    // Clamp to screen boundaries
+    if (impl->m_captureRegion.left < 0) {
+        impl->m_captureRegion.left = 0;
+        impl->m_captureRegion.right = impl->m_captureWidth;
+    }
+    if (impl->m_captureRegion.top < 0) {
+        impl->m_captureRegion.top = 0;
+        impl->m_captureRegion.bottom = impl->m_captureHeight;
+    }
+    if (impl->m_captureRegion.right > impl->m_screenWidth) {
+        impl->m_captureRegion.right = impl->m_screenWidth;
+        impl->m_captureRegion.left = impl->m_screenWidth - impl->m_captureWidth;
+    }
+    if (impl->m_captureRegion.bottom > impl->m_screenHeight) {
+        impl->m_captureRegion.bottom = impl->m_screenHeight;
+        impl->m_captureRegion.top = impl->m_screenHeight - impl->m_captureHeight;
+    }
+}
+
 WindowsGraphicsCapture::~WindowsGraphicsCapture()
 {
     auto impl = reinterpret_cast<WindowsGraphicsCaptureImpl*>(m_captureItem);

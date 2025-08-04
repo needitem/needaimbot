@@ -47,6 +47,7 @@ public:
     virtual SimpleCudaMat GetNextFrameGpu() = 0;
     virtual cudaEvent_t GetCaptureDoneEvent() const = 0;
     virtual bool IsInitialized() const = 0;
+    virtual void UpdateCaptureRegion(float offsetX, float offsetY) = 0;
 };
 
 #endif 

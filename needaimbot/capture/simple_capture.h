@@ -16,7 +16,11 @@ public:
     bool IsInitialized() const override { return m_initialized; }
     void SetAcquireTimeout(UINT timeout) {} // No-op for compatibility
     
+    // Update capture region with crosshair offset
+    void UpdateCaptureRegion(float offsetX, float offsetY);
+    
 private:
+    RECT m_captureRegion;
     bool m_initialized;
     int m_width;
     int m_height;
