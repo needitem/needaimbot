@@ -454,8 +454,8 @@ void NMSGpu(
         return; 
     }
     
-    // Clamp input_num_detections to ensure fixed grid sizes
-    int effective_detections = min(input_num_detections, max_output_detections);
+    // Use actual input count for processing, output will be limited later
+    int effective_detections = input_num_detections;
 
     
     

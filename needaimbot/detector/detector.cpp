@@ -1163,10 +1163,24 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         cudaMemcpyAsync(&decodedCount, m_decodedCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
         cudaStreamSynchronize(stream);
         
+        std::cout << "[DEBUG] Decoded count: " << decodedCount << std::endl;
+        
         // If no detections were decoded, clear final count and return early
         if (decodedCount == 0) {
             cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
             return;
+        }
+        
+        // Debug: Check first decoded detection
+        if (decodedCount > 0) {
+            Detection firstDecoded;
+            cudaMemcpyAsync(&firstDecoded, m_decodedDetectionsGpu.get(), sizeof(Detection), cudaMemcpyDeviceToHost, stream);
+            cudaStreamSynchronize(stream);
+            std::cout << "[DEBUG] First decoded - x:" << firstDecoded.x 
+                      << " y:" << firstDecoded.y 
+                      << " w:" << firstDecoded.width 
+                      << " h:" << firstDecoded.height 
+                      << " conf:" << firstDecoded.confidence << std::endl;
         }
     }
     
@@ -1190,6 +1204,20 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
     if (!m_graphCaptured) {
         cudaMemcpyAsync(&classFilteredCount, m_classFilteredCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
         cudaStreamSynchronize(stream);
+        
+        std::cout << "[DEBUG] Class filtered count: " << classFilteredCount << std::endl;
+        
+        // Debug: Check first class filtered detection
+        if (classFilteredCount > 0) {
+            Detection firstFiltered;
+            cudaMemcpyAsync(&firstFiltered, m_classFilteredDetectionsGpu.get(), sizeof(Detection), cudaMemcpyDeviceToHost, stream);
+            cudaStreamSynchronize(stream);
+            std::cout << "[DEBUG] First class filtered - x:" << firstFiltered.x 
+                      << " y:" << firstFiltered.y 
+                      << " w:" << firstFiltered.width 
+                      << " h:" << firstFiltered.height 
+                      << " conf:" << firstFiltered.confidence << std::endl;
+        }
     }
     
     // Step 2: RGB color filtering (before NMS for better efficiency)
@@ -1255,6 +1283,19 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
             std::cerr << "[Detector] ERROR: NMS buffers not properly allocated!" << std::endl;
             cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
             return;
+        }
+        
+        // Debug: Check NMS input
+        std::cout << "[DEBUG] NMS input count: " << effectiveFilteredCount << std::endl;
+        if (effectiveFilteredCount > 0 && !m_graphCaptured) {
+            Detection firstNmsInput;
+            cudaMemcpyAsync(&firstNmsInput, nmsInputDetections, sizeof(Detection), cudaMemcpyDeviceToHost, stream);
+            cudaStreamSynchronize(stream);
+            std::cout << "[DEBUG] First NMS input - x:" << firstNmsInput.x 
+                      << " y:" << firstNmsInput.y 
+                      << " w:" << firstNmsInput.width 
+                      << " h:" << firstNmsInput.height 
+                      << " conf:" << firstNmsInput.confidence << std::endl;
         }
         
         // NMS will process filtered detections and output only max_detections
@@ -1511,15 +1552,19 @@ void Detector::initializeBuffers() {
     if (m_finalDetectionsCountGpu.get()) cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
     if (m_classFilteredCountGpu.get()) cudaMemsetAsync(m_classFilteredCountGpu.get(), 0, sizeof(int), stream);
     
-    // Initialize Detection arrays to prevent garbage values
+    // Initialize Detection arrays to zero to prevent garbage values
+    // Do NOT use 0xFF as it creates invalid float values (NaN)
     if (m_decodedDetectionsGpu.get()) {
-        cudaMemsetAsync(m_decodedDetectionsGpu.get(), 0xFF, buffer_size * sizeof(Detection), stream);
+        cudaMemsetAsync(m_decodedDetectionsGpu.get(), 0, buffer_size * sizeof(Detection), stream);
     }
     if (m_finalDetectionsGpu.get()) {
-        cudaMemsetAsync(m_finalDetectionsGpu.get(), 0xFF, graph_buffer_size * sizeof(Detection), stream);
+        cudaMemsetAsync(m_finalDetectionsGpu.get(), 0, graph_buffer_size * sizeof(Detection), stream);
     }
     if (m_classFilteredDetectionsGpu.get()) {
-        cudaMemsetAsync(m_classFilteredDetectionsGpu.get(), 0xFF, graph_buffer_size * sizeof(Detection), stream);
+        cudaMemsetAsync(m_classFilteredDetectionsGpu.get(), 0, intermediate_buffer_size * sizeof(Detection), stream);
+    }
+    if (m_colorFilteredDetectionsGpu.get()) {
+        cudaMemsetAsync(m_colorFilteredDetectionsGpu.get(), 0, intermediate_buffer_size * sizeof(Detection), stream);
     }
 
 }
