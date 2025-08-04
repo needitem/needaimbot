@@ -1177,7 +1177,7 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
     
     if (!m_graphCaptured && !colorMask.empty()) {
         colorMaskPtr = colorMask.data();
-        maskPitch = colorMask.step();
+        maskPitch = static_cast<int>(colorMask.step());
         
         // Apply RGB filtering
         cudaError_t colorFilterErr = filterDetectionsByColorGpu(
