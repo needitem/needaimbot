@@ -931,9 +931,9 @@ void Detector::inferenceThread()
                 cudaStreamSynchronize(postprocessStream);
                 
                 // Debug: Check final detection count
-                if (m_finalDetectionsCountHost > 0) {
-                    std::cout << "[Detector] Final detections on CPU: " << m_finalDetectionsCountHost << std::endl;
-                }
+                // if (m_finalDetectionsCountHost > 0) {
+                //     std::cout << "[Detector] Final detections on CPU: " << m_finalDetectionsCountHost << std::endl;
+                // }
                 
                 // 검출된 객체가 있으면 detection 데이터도 복사
                 if (m_finalDetectionsCountHost > 0) {
@@ -943,12 +943,12 @@ void Detector::inferenceThread()
                     cudaStreamSynchronize(postprocessStream);
                     
                     // Debug: Check first detection
-                    std::cout << "[Detector] First detection - x:" << m_finalDetectionsHost[0].x 
-                              << " y:" << m_finalDetectionsHost[0].y 
-                              << " w:" << m_finalDetectionsHost[0].width 
-                              << " h:" << m_finalDetectionsHost[0].height 
-                              << " conf:" << m_finalDetectionsHost[0].confidence 
-                              << " class:" << m_finalDetectionsHost[0].classId << std::endl;
+                    // std::cout << "[Detector] First detection - x:" << m_finalDetectionsHost[0].x 
+                    //           << " y:" << m_finalDetectionsHost[0].y 
+                    //           << " w:" << m_finalDetectionsHost[0].width 
+                    //           << " h:" << m_finalDetectionsHost[0].height 
+                    //           << " conf:" << m_finalDetectionsHost[0].confidence 
+                    //           << " class:" << m_finalDetectionsHost[0].classId << std::endl;
                 }
 
                 auto inference_end_time = std::chrono::high_resolution_clock::now();
@@ -993,9 +993,9 @@ void Detector::inferenceThread()
                             
                             if (m_bestTargetIndexHost >= 0) {
                                 m_hasBestTarget = true;
-                                std::cout << "[Detector] Best target selected - idx:" << m_bestTargetIndexHost 
-                                          << " x:" << m_bestTargetHost.x 
-                                          << " y:" << m_bestTargetHost.y << std::endl;
+                                // std::cout << "[Detector] Best target selected - idx:" << m_bestTargetIndexHost 
+                                //           << " x:" << m_bestTargetHost.x 
+                                //           << " y:" << m_bestTargetHost.y << std::endl;
                             } else {
                                 m_hasBestTarget = false;
                                 memset(&m_bestTargetHost, 0, sizeof(Detection));
