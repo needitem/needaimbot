@@ -606,8 +606,9 @@ __global__ void decodeYolo10GpuKernel(
                 
                 int write_idx = ::atomicAdd(d_decoded_count, 1);
 
-                
-                if (write_idx < max_detections) {
+                // Remove max_detections check here - decode ALL valid detections
+                // Max detections will be applied AFTER NMS
+                if (write_idx < max_detections) {  // Keep buffer overflow protection
                     Detection& det = d_decoded_detections[write_idx];
                     det.x = x;
                     det.y = y;
@@ -615,9 +616,6 @@ __global__ void decodeYolo10GpuKernel(
                     det.height = height;
                     det.confidence = confidence;
                     det.classId = classId;
-                } else {
-                    
-                    
                 }
             }
         }
@@ -691,8 +689,9 @@ __global__ void decodeYolo11GpuKernel(
                  
                 int write_idx = ::atomicAdd(d_decoded_count, 1);
 
-                
-                if (write_idx < max_detections) {
+                // Remove max_detections check here - decode ALL valid detections
+                // Max detections will be applied AFTER NMS
+                if (write_idx < max_detections) {  // Keep buffer overflow protection
                     Detection& det = d_decoded_detections[write_idx];
                     det.x = x;
                     det.y = y;
@@ -700,9 +699,6 @@ __global__ void decodeYolo11GpuKernel(
                     det.height = height;
                     det.confidence = max_score;
                     det.classId = max_class_id;
-                } else {
-                    
-                    
                 }
             }
         }
