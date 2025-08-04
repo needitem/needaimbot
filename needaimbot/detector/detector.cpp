@@ -1086,12 +1086,12 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
     // These should be set once before graph capture
     static int cached_max_detections = Constants::MAX_DETECTIONS; // Use max from constants (100)
     static float cached_nms_threshold = 0.45f;
-    static float cached_confidence_threshold = 0.25f;
+    static float cached_confidence_threshold = 0.25f;  // Default confidence threshold
     static std::string cached_postprocess = "yolo12";
     static bool config_cached = false;
     
-    // Only update cache when not in graph capture mode
-    if (!m_graphCaptured && !config_cached) {
+    // Always update cache from config when not in graph capture mode
+    if (!m_graphCaptured) {
         std::lock_guard<std::mutex> lock(ctx.configMutex);
         cached_max_detections = ctx.config.max_detections;
         cached_nms_threshold = ctx.config.nms_threshold;
@@ -1104,12 +1104,17 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
     // Too large buffers cause illegal memory access in NMS
     int maxDecodedDetections = 300;  // Reasonable buffer for detections
     
-    // GPU decoding debug info removed - enable for debugging if needed
-
-    
+    // Debug: Show decoding parameters
+    if (!m_graphCaptured) {
+        std::cout << "[DEBUG] Decoding with confidence threshold: " << cached_confidence_threshold 
+                  << ", postprocess: " << cached_postprocess << std::endl;
+    }
     
     if (cached_postprocess == "yolo10") {
         int max_candidates = (shape.size() > 1) ? static_cast<int>(shape[1]) : 0;
+        if (!m_graphCaptured) {
+            std::cout << "[DEBUG] YOLO10 max_candidates: " << max_candidates << std::endl;
+        }
         
         // Pass large buffer size to decode ALL detections
         decodeErr = decodeYolo10Gpu(
@@ -1153,23 +1158,24 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         return;
     }
 
-    // For CUDA Graph compatibility, use fixed counts when in graph mode
-    int decodedCount = maxDecodedDetections;  // Default to max for graph mode
-    int classFilteredCount = maxDecodedDetections;
+    // Always get the actual decoded count for correct processing
+    int decodedCount = 0;
+    int classFilteredCount = 0;
     
-    // Only sync and get actual counts when not in graph mode
+    // Get actual decoded count (needed for correct filtering)
+    cudaMemcpyAsync(&decodedCount, m_decodedCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
+    cudaStreamSynchronize(stream);
+    
+    // std::cout << "[DEBUG] Decoded count: " << decodedCount << std::endl;
+    
+    // If no detections were decoded, clear final count and return early
+    if (decodedCount == 0) {
+        cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
+        return;
+    }
+    
+    // Only sync and get detailed debug info when not in graph mode
     if (!m_graphCaptured) {
-        // Check decoded count
-        cudaMemcpyAsync(&decodedCount, m_decodedCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
-        cudaStreamSynchronize(stream);
-        
-        std::cout << "[DEBUG] Decoded count: " << decodedCount << std::endl;
-        
-        // If no detections were decoded, clear final count and return early
-        if (decodedCount == 0) {
-            cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
-            return;
-        }
         
         // Debug: Check first decoded detection
         if (decodedCount > 0) {
@@ -1200,10 +1206,12 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         return;
     }
     
-    // Check class filtered count (only when not in graph mode)
+    // Always get class filtered count for correct processing
+    cudaMemcpyAsync(&classFilteredCount, m_classFilteredCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
+    cudaStreamSynchronize(stream);
+    
+    // Check class filtered count (only debug when not in graph mode)
     if (!m_graphCaptured) {
-        cudaMemcpyAsync(&classFilteredCount, m_classFilteredCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
-        cudaStreamSynchronize(stream);
         
         std::cout << "[DEBUG] Class filtered count: " << classFilteredCount << std::endl;
         
@@ -1218,6 +1226,12 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
                       << " h:" << firstFiltered.height 
                       << " conf:" << firstFiltered.confidence << std::endl;
         }
+    }
+    
+    // Early exit if no detections after class filtering
+    if (classFilteredCount == 0) {
+        cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
+        return;
     }
     
     // Step 2: RGB color filtering (before NMS for better efficiency)
@@ -1286,7 +1300,7 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         }
         
         // Debug: Check NMS input
-        std::cout << "[DEBUG] NMS input count: " << effectiveFilteredCount << std::endl;
+        // std::cout << "[DEBUG] NMS input count: " << effectiveFilteredCount << std::endl;
         if (effectiveFilteredCount > 0 && !m_graphCaptured) {
             Detection firstNmsInput;
             cudaMemcpyAsync(&firstNmsInput, nmsInputDetections, sizeof(Detection), cudaMemcpyDeviceToHost, stream);
