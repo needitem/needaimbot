@@ -1,6 +1,7 @@
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
 #include <device_atomic_functions.h>
+#include <algorithm>
 
 #include "filterGpu.h"
 #include "postProcess.h" 
@@ -11,6 +12,24 @@ __device__ inline int warpReduceSum(int val) {
         val += __shfl_down_sync(0xffffffff, val, offset);
     }
     return val;
+}
+
+// Simple copy kernel for pass-through when no filtering is needed
+__global__ void copyDetectionsKernel(
+    const Detection* __restrict__ input_detections,
+    int num_input_detections,
+    Detection* __restrict__ output_detections,
+    int* __restrict__ output_count,
+    int max_output_detections)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (idx < num_input_detections && idx < max_output_detections) {
+        output_detections[idx] = input_detections[idx];
+        if (idx == 0) {
+            *output_count = min(num_input_detections, max_output_detections);
+        }
+    }
 }
 
 // Optimized class filtering kernel (separated from color filtering)
@@ -167,7 +186,23 @@ cudaError_t filterDetectionsByColorGpu(
     int max_output_detections,
     cudaStream_t stream
 ) {
-    if (num_input_detections <= 0 || d_color_mask == nullptr) return cudaSuccess;
+    if (num_input_detections <= 0) return cudaSuccess;
+    
+    // If no color mask, just copy input to output
+    if (d_color_mask == nullptr) {
+        int block_size = 256;
+        int grid_size = (num_input_detections + block_size - 1) / block_size;
+        
+        copyDetectionsKernel<<<grid_size, block_size, 0, stream>>>(
+            d_input_detections,
+            num_input_detections,
+            d_output_detections,
+            d_output_count,
+            max_output_detections
+        );
+        
+        return cudaGetLastError();
+    }
     
     // Initialize output count to 0
     cudaMemsetAsync(d_output_count, 0, sizeof(int), stream);
