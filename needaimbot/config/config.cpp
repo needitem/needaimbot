@@ -305,24 +305,39 @@ bool Config::loadConfig(const std::string& filename)
     
     // Load error scaling rules
     error_scaling_rules.clear();
-    int num_rules = get_long_ini("PID", "error_scaling_rule_count", 3);
-    for (int i = 0; i < num_rules; i++) {
-        std::string prefix = "error_scaling_rule_" + std::to_string(i) + "_";
-        std::string threshold_key = prefix + "threshold";
-        std::string scale_key = prefix + "scale";
-        float threshold = static_cast<float>(get_double_ini("PID", threshold_key.c_str(), 0.0));
-        float scale = static_cast<float>(get_double_ini("PID", scale_key.c_str(), 1.0));
-        if (threshold > 0.0f) {
-            error_scaling_rules.push_back(ErrorScalingRule(threshold, scale));
-        }
-    }
+    int num_rules = get_long_ini("PID", "error_scaling_rule_count", -1);
     
-    // Add default rules if none loaded
-    if (error_scaling_rules.empty()) {
+    // If num_rules is -1, it means the key doesn't exist (new profile or old config)
+    if (num_rules == -1) {
+        // Load default rules for new profiles
         error_scaling_rules.push_back(ErrorScalingRule(150.0f, 0.3f));
         error_scaling_rules.push_back(ErrorScalingRule(100.0f, 0.5f));
         error_scaling_rules.push_back(ErrorScalingRule(50.0f, 0.8f));
+    } else if (num_rules > 0) {
+        // Load saved rules
+        for (int i = 0; i < num_rules; i++) {
+            std::string prefix = "error_scaling_rule_" + std::to_string(i) + "_";
+            std::string threshold_key = prefix + "threshold";
+            std::string scale_key = prefix + "scale";
+            
+            // Get values with proper defaults
+            float threshold = static_cast<float>(get_double_ini("PID", threshold_key.c_str(), 0.0));
+            float scale = static_cast<float>(get_double_ini("PID", scale_key.c_str(), 1.0));
+            
+            // Validate and add rule
+            if (threshold > 0.0f && scale >= 0.0f && scale <= 1.0f) {
+                error_scaling_rules.push_back(ErrorScalingRule(threshold, scale));
+            }
+        }
+        
+        // If we couldn't load any valid rules, add defaults
+        if (error_scaling_rules.empty()) {
+            error_scaling_rules.push_back(ErrorScalingRule(150.0f, 0.3f));
+            error_scaling_rules.push_back(ErrorScalingRule(100.0f, 0.5f));
+            error_scaling_rules.push_back(ErrorScalingRule(50.0f, 0.8f));
+        }
     }
+    // If num_rules is 0, keep the list empty (user explicitly wants no rules)
 
     
     // Hybrid aim control settings
