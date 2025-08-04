@@ -87,9 +87,10 @@ void WindowsGraphicsCapture::UpdateCaptureRegion(float offsetX, float offsetY)
     if (!impl) return;
     
     // Calculate new capture region with offset
-    // Note: offsetX/Y are in pixels, positive X moves capture left, positive Y moves capture up
-    impl->m_captureRegion.left = (impl->m_screenWidth - impl->m_captureWidth) / 2 - static_cast<int>(offsetX);
-    impl->m_captureRegion.top = (impl->m_screenHeight - impl->m_captureHeight) / 2 - static_cast<int>(offsetY);
+    // Note: When user moves crosshair right (positive offsetX), capture region should move right too
+    // When user moves crosshair down (positive offsetY), capture region should move down too
+    impl->m_captureRegion.left = (impl->m_screenWidth - impl->m_captureWidth) / 2 + static_cast<int>(offsetX);
+    impl->m_captureRegion.top = (impl->m_screenHeight - impl->m_captureHeight) / 2 + static_cast<int>(offsetY);
     impl->m_captureRegion.right = impl->m_captureRegion.left + impl->m_captureWidth;
     impl->m_captureRegion.bottom = impl->m_captureRegion.top + impl->m_captureHeight;
     

@@ -82,9 +82,10 @@ SimpleScreenCapture::~SimpleScreenCapture()
 void SimpleScreenCapture::UpdateCaptureRegion(float offsetX, float offsetY)
 {
     // Calculate new capture region with offset
-    // Note: offsetX/Y are in pixels, positive X moves capture left, positive Y moves capture up
-    m_captureRegion.left = (m_screenWidth - m_width) / 2 - static_cast<int>(offsetX);
-    m_captureRegion.top = (m_screenHeight - m_height) / 2 - static_cast<int>(offsetY);
+    // Note: When user moves crosshair right (positive offsetX), capture region should move right too
+    // When user moves crosshair down (positive offsetY), capture region should move down too
+    m_captureRegion.left = (m_screenWidth - m_width) / 2 + static_cast<int>(offsetX);
+    m_captureRegion.top = (m_screenHeight - m_height) / 2 + static_cast<int>(offsetY);
     m_captureRegion.right = m_captureRegion.left + m_width;
     m_captureRegion.bottom = m_captureRegion.top + m_height;
     
