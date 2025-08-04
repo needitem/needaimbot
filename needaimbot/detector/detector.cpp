@@ -202,8 +202,8 @@ void Detector::getInputNames()
 
 
 
-    // For CUDA Graph compatibility, ensure NMS buffers match maximum allowed detections
-    const int nms_buffer_size = Constants::MAX_DETECTIONS; // Use max from constants
+    // Allocate larger NMS buffers to handle all detections before filtering
+    const int nms_buffer_size = 1000; // Large buffer for all detections before NMS
     m_nms_d_x1.allocate(nms_buffer_size);
     m_nms_d_y1.allocate(nms_buffer_size);
     m_nms_d_x2.allocate(nms_buffer_size);
@@ -1075,8 +1075,10 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         config_cached = true;
     }
 
-    int maxDecodedDetections = cached_max_detections * 2;
-
+    // Use a larger buffer for decoding to capture ALL detections before NMS
+    // This ensures high-confidence detections are not lost
+    int maxDecodedDetections = 1000;  // Large buffer to capture all detections
+    
     // GPU decoding debug info removed - enable for debugging if needed
 
     
@@ -1084,7 +1086,7 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
     if (cached_postprocess == "yolo10") {
         int max_candidates = (shape.size() > 1) ? static_cast<int>(shape[1]) : 0;
         
-        
+        // Pass large buffer size to decode ALL detections
         decodeErr = decodeYolo10Gpu(
             d_rawOutputPtr,
             outputType,
@@ -1095,12 +1097,12 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
             m_decodedDetectionsGpu.get(),
             m_decodedCountGpu.get(),
             max_candidates,
-            maxDecodedDetections,
+            maxDecodedDetections,  // Large buffer for all detections
             stream);
     } else if (cached_postprocess == "yolo8" || cached_postprocess == "yolo9" || cached_postprocess == "yolo11" || cached_postprocess == "yolo12") {
         int max_candidates = (shape.size() > 2) ? static_cast<int>(shape[2]) : 0;
         
-        
+        // Pass large buffer size to decode ALL detections
          decodeErr = decodeYolo11Gpu(
             d_rawOutputPtr,
             outputType,
@@ -1111,7 +1113,7 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
             m_decodedDetectionsGpu.get(),
             m_decodedCountGpu.get(),
             max_candidates,
-            maxDecodedDetections,
+            maxDecodedDetections,  // Large buffer for all detections
             stream);
     } else {
         std::cerr << "[Detector] Unsupported post-processing type for GPU decoding: " << cached_postprocess << std::endl;
@@ -1141,10 +1143,10 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
     const unsigned char* graphColorMaskPtr = nullptr;
     int graphMaskPitch = 0;
     
-    // Process all detections without syncing - use max possible count
+    // Process all detections without syncing - use large buffer
     cudaError_t filterErr = filterDetectionsByClassIdGpu(
         m_decodedDetectionsGpu.get(),
-        maxDecodedDetections, // Use max possible instead of syncing
+        maxDecodedDetections, // Process all decoded detections
         m_classFilteredDetectionsGpu.get(),
         m_classFilteredCountGpu.get(),
         m_d_allow_flags_gpu.get(),
@@ -1153,7 +1155,7 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         graphMaskPitch,
         0, // Disable color filtering in graph mode
         false,
-        cached_max_detections,
+        1000,  // Large buffer for filtered detections
         stream
     );
     if (!checkCudaError(filterErr, "filtering detections by class ID GPU")) {
@@ -1161,8 +1163,8 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         return;
     }
 
-    // For CUDA Graph compatibility, use max detections instead of syncing
-    int effectiveFilteredCount = cached_max_detections;
+    // For CUDA Graph compatibility, use large buffer size
+    int effectiveFilteredCount = 1000;  // Process all filtered detections
     
     // Run NMS with fixed parameters for CUDA Graph
     try {
@@ -1183,13 +1185,13 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
             return;
         }
         
-        // Use fixed count for CUDA Graph compatibility
+        // NMS will process all detections and output only max_detections
         NMSGpu(
             m_classFilteredDetectionsGpu.get(),
-            effectiveFilteredCount, // Use max count for graph compatibility
+            effectiveFilteredCount, // Process all filtered detections
             m_finalDetectionsGpu.get(),       
             m_finalDetectionsCountGpu.get(),  
-            cached_max_detections, 
+            cached_max_detections,  // Apply max_detections limit AFTER NMS 
             cached_nms_threshold,
             cached_frame_width,
             cached_frame_height,
@@ -1406,12 +1408,13 @@ void Detector::initializeBuffers() {
     m_decodedDetectionsGpu.allocate(buffer_size);
     m_decodedCountGpu.allocate(1);
     
-    // For CUDA Graph compatibility, use fixed buffer size matching maximum allowed detections
-    const int graph_buffer_size = Constants::MAX_DETECTIONS; // Use max from constants
+    // Allocate larger buffers to handle all detections before max_detections limit
+    const int graph_buffer_size = Constants::MAX_DETECTIONS; // Final output size
+    const int intermediate_buffer_size = 1000; // Large buffer for intermediate processing
     m_finalDetectionsGpu.allocate(graph_buffer_size);
     m_finalDetectionsCountGpu.allocate(1);
     m_finalDetectionsHost = std::make_unique<Detection[]>(graph_buffer_size);
-    m_classFilteredDetectionsGpu.allocate(graph_buffer_size);
+    m_classFilteredDetectionsGpu.allocate(intermediate_buffer_size);  // Large buffer for filtered detections
     m_classFilteredCountGpu.allocate(1);
     m_scoresGpu.allocate(graph_buffer_size);
 
