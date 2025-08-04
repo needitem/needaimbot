@@ -57,6 +57,7 @@ public:
     std::atomic<bool> capture_borders_changed{false};
     std::atomic<bool> capture_timeout_changed{false};
     std::atomic<bool> capture_method_changed{false};
+    std::atomic<bool> crosshair_offset_changed{false};
     
     // Performance metrics
     std::atomic<float> g_current_frame_acquisition_time_ms{0.0f};

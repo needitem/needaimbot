@@ -36,6 +36,9 @@ public:
         return "Windows Graphics Capture API - Optimized for specific region capture with minimal GPU overhead";
     }
     
+    // Update capture region with crosshair offset
+    void UpdateCaptureRegion(float offsetX, float offsetY);
+    
 private:
     bool InitializeCapture();
     bool CreateCaptureItemForMonitor(int monitorIndex);
