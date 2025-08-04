@@ -212,8 +212,8 @@ void Detector::getInputNames()
 
 
 
-    // Allocate larger NMS buffers to handle all detections before filtering
-    const int nms_buffer_size = 1000; // Large buffer for all detections before NMS
+    // Allocate NMS buffers - balanced between capacity and memory usage
+    const int nms_buffer_size = 300; // Reasonable buffer for detections (was causing illegal memory access with 1000)
     m_nms_d_x1.allocate(nms_buffer_size);
     m_nms_d_y1.allocate(nms_buffer_size);
     m_nms_d_x2.allocate(nms_buffer_size);
@@ -1100,9 +1100,9 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         config_cached = true;
     }
 
-    // Use a larger buffer for decoding to capture ALL detections before NMS
-    // This ensures high-confidence detections are not lost
-    int maxDecodedDetections = 1000;  // Large buffer to capture all detections
+    // Use a reasonable buffer for decoding - balance between capacity and memory
+    // Too large buffers cause illegal memory access in NMS
+    int maxDecodedDetections = 300;  // Reasonable buffer for detections
     
     // GPU decoding debug info removed - enable for debugging if needed
 
@@ -1178,7 +1178,7 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         m_classFilteredCountGpu.get(),
         m_d_allow_flags_gpu.get(),
         MAX_CLASSES_FOR_FILTERING,
-        1000,  // Large buffer for filtered detections
+        300,  // Reasonable buffer for filtered detections
         stream
     );
     if (!checkCudaError(filterErr, "filtering detections by class ID GPU")) {
@@ -1216,7 +1216,7 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
             maskPitch,
             10,  // min_color_pixels threshold
             false,  // keep detections WITH color matches
-            1000,  // max output
+            300,  // max output
             stream
         );
         
@@ -1480,15 +1480,15 @@ void Detector::initializeBuffers() {
     m_decodedDetectionsGpu.allocate(buffer_size);
     m_decodedCountGpu.allocate(1);
     
-    // Allocate larger buffers to handle all detections before max_detections limit
+    // Allocate buffers - balanced to avoid illegal memory access
     const int graph_buffer_size = Constants::MAX_DETECTIONS; // Final output size
-    const int intermediate_buffer_size = 1000; // Large buffer for intermediate processing
+    const int intermediate_buffer_size = 300; // Reasonable buffer for intermediate processing
     m_finalDetectionsGpu.allocate(graph_buffer_size);
     m_finalDetectionsCountGpu.allocate(1);
     m_finalDetectionsHost = std::make_unique<Detection[]>(graph_buffer_size);
-    m_classFilteredDetectionsGpu.allocate(intermediate_buffer_size);  // Large buffer for class filtered detections
+    m_classFilteredDetectionsGpu.allocate(intermediate_buffer_size);  // Buffer for class filtered detections
     m_classFilteredCountGpu.allocate(1);
-    m_colorFilteredDetectionsGpu.allocate(intermediate_buffer_size);  // Large buffer for color filtered detections
+    m_colorFilteredDetectionsGpu.allocate(intermediate_buffer_size);  // Buffer for color filtered detections
     m_colorFilteredCountGpu.allocate(1);
     m_scoresGpu.allocate(graph_buffer_size);
 
