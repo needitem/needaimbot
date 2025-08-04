@@ -1105,10 +1105,10 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
     int maxDecodedDetections = 300;  // Reasonable buffer for detections
     
     // Debug: Show decoding parameters
-    if (!m_graphCaptured) {
-        std::cout << "[DEBUG] Decoding with confidence threshold: " << cached_confidence_threshold 
-                  << ", postprocess: " << cached_postprocess << std::endl;
-    }
+    // if (!m_graphCaptured) {
+    //     std::cout << "[DEBUG] Decoding with confidence threshold: " << cached_confidence_threshold 
+    //               << ", postprocess: " << cached_postprocess << std::endl;
+    // }
     
     if (cached_postprocess == "yolo10") {
         int max_candidates = (shape.size() > 1) ? static_cast<int>(shape[1]) : 0;
