@@ -122,6 +122,10 @@ public:
     std::unique_ptr<Detection[]> m_finalDetectionsHost;
     CudaBuffer<Detection> m_classFilteredDetectionsGpu;
     CudaBuffer<int> m_classFilteredCountGpu;
+    
+    // RGB filtered detections buffer (for optimized pipeline)
+    CudaBuffer<Detection> m_colorFilteredDetectionsGpu;
+    CudaBuffer<int> m_colorFilteredCountGpu;
 
     CudaBuffer<float> m_scoresGpu;
 

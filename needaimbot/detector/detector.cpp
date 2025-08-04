@@ -61,6 +61,7 @@ extern std::mutex configMutex;
 
 
 
+// External filter functions (separated for better performance)
 extern cudaError_t filterDetectionsByClassIdGpu(
     const Detection* decodedDetections,
     int numDecodedDetections,
@@ -68,10 +69,19 @@ extern cudaError_t filterDetectionsByClassIdGpu(
     int* filteredCount,
     const unsigned char* d_ignored_class_ids,
     int max_check_id,
-    const unsigned char* d_hsv_mask,
+    int max_output_detections,
+    cudaStream_t stream
+);
+
+extern cudaError_t filterDetectionsByColorGpu(
+    const Detection* d_input_detections,
+    int num_input_detections,
+    Detection* d_output_detections,
+    int* d_output_count,
+    const unsigned char* d_color_mask,
     int mask_pitch,
     int min_color_pixels,
-    bool remove_hsv_matches,
+    bool remove_color_matches,
     int max_output_detections,
     cudaStream_t stream
 );
@@ -1139,11 +1149,7 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         return;
     }
     
-    // For CUDA Graph compatibility, disable color filtering in graph capture mode
-    const unsigned char* graphColorMaskPtr = nullptr;
-    int graphMaskPitch = 0;
-    
-    // Process all detections without syncing - use large buffer
+    // Step 1: Class ID filtering (after confidence filtering in decode)
     cudaError_t filterErr = filterDetectionsByClassIdGpu(
         m_decodedDetectionsGpu.get(),
         maxDecodedDetections, // Process all decoded detections
@@ -1151,10 +1157,6 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         m_classFilteredCountGpu.get(),
         m_d_allow_flags_gpu.get(),
         MAX_CLASSES_FOR_FILTERING,
-        graphColorMaskPtr,
-        graphMaskPitch,
-        0, // Disable color filtering in graph mode
-        false,
         1000,  // Large buffer for filtered detections
         stream
     );
@@ -1162,11 +1164,48 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
         return;
     }
-
-    // For CUDA Graph compatibility, use large buffer size
-    int effectiveFilteredCount = 1000;  // Process all filtered detections
     
-    // Run NMS with fixed parameters for CUDA Graph
+    // Step 2: RGB color filtering (before NMS for better efficiency)
+    // Get color mask if available
+    SimpleCudaMat colorMask = getColorMaskGpu();
+    const unsigned char* colorMaskPtr = nullptr;
+    int maskPitch = 0;
+    
+    // For non-graph mode, apply color filtering if mask exists
+    Detection* nmsInputDetections = nullptr;
+    int effectiveFilteredCount = 1000;
+    
+    if (!m_graphCaptured && !colorMask.empty()) {
+        colorMaskPtr = colorMask.data();
+        maskPitch = colorMask.step();
+        
+        // Apply RGB filtering
+        cudaError_t colorFilterErr = filterDetectionsByColorGpu(
+            m_classFilteredDetectionsGpu.get(),
+            1000,  // Process all class-filtered detections
+            m_colorFilteredDetectionsGpu.get(),
+            m_colorFilteredCountGpu.get(),
+            colorMaskPtr,
+            maskPitch,
+            10,  // min_color_pixels threshold
+            false,  // keep detections WITH color matches
+            1000,  // max output
+            stream
+        );
+        
+        if (!checkCudaError(colorFilterErr, "filtering detections by color GPU")) {
+            cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
+            return;
+        }
+        
+        // Use color-filtered detections for NMS
+        nmsInputDetections = m_colorFilteredDetectionsGpu.get();
+    } else {
+        // No color filtering, use class-filtered detections directly
+        nmsInputDetections = m_classFilteredDetectionsGpu.get();
+    }
+    
+    // Step 3: NMS (after all filtering for maximum efficiency)
     try {
         // Use cached frame dimensions for CUDA Graph compatibility
         static int cached_frame_width = 640;
@@ -1185,9 +1224,9 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
             return;
         }
         
-        // NMS will process all detections and output only max_detections
+        // NMS will process filtered detections and output only max_detections
         NMSGpu(
-            m_classFilteredDetectionsGpu.get(),
+            nmsInputDetections,
             effectiveFilteredCount, // Process all filtered detections
             m_finalDetectionsGpu.get(),       
             m_finalDetectionsCountGpu.get(),  
@@ -1414,8 +1453,10 @@ void Detector::initializeBuffers() {
     m_finalDetectionsGpu.allocate(graph_buffer_size);
     m_finalDetectionsCountGpu.allocate(1);
     m_finalDetectionsHost = std::make_unique<Detection[]>(graph_buffer_size);
-    m_classFilteredDetectionsGpu.allocate(intermediate_buffer_size);  // Large buffer for filtered detections
+    m_classFilteredDetectionsGpu.allocate(intermediate_buffer_size);  // Large buffer for class filtered detections
     m_classFilteredCountGpu.allocate(1);
+    m_colorFilteredDetectionsGpu.allocate(intermediate_buffer_size);  // Large buffer for color filtered detections
+    m_colorFilteredCountGpu.allocate(1);
     m_scoresGpu.allocate(graph_buffer_size);
 
     m_matchingIndexGpu.allocate(1);
