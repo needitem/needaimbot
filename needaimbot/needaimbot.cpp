@@ -223,11 +223,6 @@ void mouseThreadFunction(MouseThread &mouseThread)
                                 current_target.confidence > 0.0f);
             
             if (target_valid) {
-                // Debug: Target acquired
-                // std::cout << "[Aimbot] Target valid - x:" << current_target.x 
-                //           << " y:" << current_target.y 
-                //           << " w:" << current_target.width 
-                //           << " h:" << current_target.height << std::endl;
                 
                 // Convert Detection to AimbotTarget using copied data
                 AimbotTarget target(
@@ -240,12 +235,8 @@ void mouseThreadFunction(MouseThread &mouseThread)
                 
                 // Move mouse to target if aimbot is enabled AND aiming key is pressed
                 if (current_aiming && ctx.config.enable_aimbot) {
-                    std::cout << "[Aimbot] Moving mouse to target" << std::endl;
                     PERF_TIMER("MouseThread.MoveMouse");
                     mouseThread.moveMouse(target);
-                } else {
-                    // std::cout << "[Aimbot] Not moving - aiming:" << current_aiming 
-                    //           << " enabled:" << ctx.config.enable_aimbot << std::endl;
                 }
                 
                 // Auto-shoot if triggerbot is enabled (works independently of aiming)
