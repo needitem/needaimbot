@@ -57,12 +57,6 @@ void keyboardListener() {
     std::vector<int> auto_shoot_vk_codes = get_vk_codes(ctx.config.button_auto_shoot);
     std::vector<int> exit_vk_codes = get_vk_codes(ctx.config.button_exit);
 
-    // Debug: Print targeting keys
-    std::cout << "[Keyboard] Targeting keys: ";
-    for (const auto& key : ctx.config.button_targeting) {
-        std::cout << key << " ";
-    }
-    std::cout << std::endl;
 
     static bool last_aiming_state = false;
     static bool last_shooting_state = false;
@@ -81,7 +75,12 @@ void keyboardListener() {
         }
 
         // Track auto_shoot button state
-        bool current_shooting = is_any_key_pressed(auto_shoot_vk_codes);
+        // If button_auto_shoot is empty or "None", shooting is always false
+        bool current_shooting = false;
+        if (!ctx.config.button_auto_shoot.empty() && 
+            ctx.config.button_auto_shoot[0] != "None") {
+            current_shooting = is_any_key_pressed(auto_shoot_vk_codes);
+        }
         ctx.shooting = current_shooting;
         
         if (current_shooting != last_shooting_state) {

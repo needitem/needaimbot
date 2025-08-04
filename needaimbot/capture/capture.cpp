@@ -102,13 +102,25 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
  if (ctx.config.capture_method == "wingraphics") {
             wingraphics_capturer = std::make_unique<WindowsGraphicsCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT);
             std::cout << "[CaptureThread] Created WindowsGraphicsCapture" << std::endl;
-            // Apply initial crosshair offset
-            wingraphics_capturer->UpdateCaptureRegion(ctx.config.crosshair_offset_x, ctx.config.crosshair_offset_y);
+            // Apply initial offset (check if aim+shoot is active)
+            float initialOffsetX = ctx.config.crosshair_offset_x;
+            float initialOffsetY = ctx.config.crosshair_offset_y;
+            if (ctx.config.enable_aim_shoot_offset && ctx.aiming.load() && ctx.shooting.load()) {
+                initialOffsetX = ctx.config.aim_shoot_offset_x;
+                initialOffsetY = ctx.config.aim_shoot_offset_y;
+            }
+            wingraphics_capturer->UpdateCaptureRegion(initialOffsetX, initialOffsetY);
         } else {
             simple_capturer = std::make_unique<SimpleScreenCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT);
             std::cout << "[CaptureThread] Created SimpleScreenCapture" << std::endl;
-            // Apply initial crosshair offset
-            simple_capturer->UpdateCaptureRegion(ctx.config.crosshair_offset_x, ctx.config.crosshair_offset_y);
+            // Apply initial offset (check if aim+shoot is active)
+            float initialOffsetX = ctx.config.crosshair_offset_x;
+            float initialOffsetY = ctx.config.crosshair_offset_y;
+            if (ctx.config.enable_aim_shoot_offset && ctx.aiming.load() && ctx.shooting.load()) {
+                initialOffsetX = ctx.config.aim_shoot_offset_x;
+                initialOffsetY = ctx.config.aim_shoot_offset_y;
+            }
+            simple_capturer->UpdateCaptureRegion(initialOffsetX, initialOffsetY);
         }
         
         timeBeginPeriod(1);
@@ -218,11 +230,22 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 simple_capturer.reset();
                 wingraphics_capturer.reset();
                 
+                // Determine which offset to use (check aim+shoot state)
+                bool use_aim_shoot_offset = ctx.config.enable_aim_shoot_offset && ctx.aiming.load() && ctx.shooting.load();
+                float offsetX = use_aim_shoot_offset ? ctx.config.aim_shoot_offset_x : ctx.config.crosshair_offset_x;
+                float offsetY = use_aim_shoot_offset ? ctx.config.aim_shoot_offset_y : ctx.config.crosshair_offset_y;
+                
                 // Create new capturer based on method
- if (ctx.config.capture_method == "wingraphics") {
+                if (ctx.config.capture_method == "wingraphics") {
                     wingraphics_capturer = std::make_unique<WindowsGraphicsCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT);
+                    if (wingraphics_capturer) {
+                        wingraphics_capturer->UpdateCaptureRegion(offsetX, offsetY);
+                    }
                 } else {
                     simple_capturer = std::make_unique<SimpleScreenCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT);
+                    if (simple_capturer) {
+                        simple_capturer->UpdateCaptureRegion(offsetX, offsetY);
+                    }
                 }
                 
                 ctx.capture_method_changed.store(false);
@@ -239,15 +262,20 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 int new_CAPTURE_HEIGHT = ctx.config.detection_resolution;
 
                 // Recreate the appropriate capturer
- if (ctx.config.capture_method == "wingraphics") {
+                // Determine which offset to use (check aim+shoot state)
+                bool use_aim_shoot_offset = ctx.config.enable_aim_shoot_offset && ctx.aiming.load() && ctx.shooting.load();
+                float offsetX = use_aim_shoot_offset ? ctx.config.aim_shoot_offset_x : ctx.config.crosshair_offset_x;
+                float offsetY = use_aim_shoot_offset ? ctx.config.aim_shoot_offset_y : ctx.config.crosshair_offset_y;
+                
+                if (ctx.config.capture_method == "wingraphics") {
                     wingraphics_capturer = std::make_unique<WindowsGraphicsCapture>(new_CAPTURE_WIDTH, new_CAPTURE_HEIGHT);
                     if (!wingraphics_capturer || !wingraphics_capturer->IsInitialized()) {
                         std::cerr << "[Capture] Failed to create or initialize WindowsGraphicsCapture after resolution change!" << std::endl;
                         should_exit = true; 
                         break;             
                     }
-                    // Apply current crosshair offset
-                    wingraphics_capturer->UpdateCaptureRegion(ctx.config.crosshair_offset_x, ctx.config.crosshair_offset_y);
+                    // Apply correct offset based on current state
+                    wingraphics_capturer->UpdateCaptureRegion(offsetX, offsetY);
                 } else {
                     simple_capturer = std::make_unique<SimpleScreenCapture>(new_CAPTURE_WIDTH, new_CAPTURE_HEIGHT);
                     if (!simple_capturer || !simple_capturer->IsInitialized()) {
@@ -255,12 +283,15 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                         should_exit = true; 
                         break;             
                     }
-                    // Apply current crosshair offset
-                    simple_capturer->UpdateCaptureRegion(ctx.config.crosshair_offset_x, ctx.config.crosshair_offset_y);
+                    // Apply correct offset based on current state
+                    simple_capturer->UpdateCaptureRegion(offsetX, offsetY);
                 }
 
                 g_captureRegionWidth = new_CAPTURE_WIDTH;
                 g_captureRegionHeight = new_CAPTURE_HEIGHT;
+                
+                // Force offset recheck on next frame
+                ctx.crosshair_offset_changed.store(true);
 
                 ctx.detection_resolution_changed.store(false);
             }
@@ -276,21 +307,50 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 ctx.capture_borders_changed.store(false);
             }
 
-            // Handle crosshair offset changes
-            if (ctx.crosshair_offset_changed.load())
+            // Handle crosshair offset changes or aim+shoot state changes
+            static bool was_aim_shoot = false;
+            bool is_aim_shoot = ctx.config.enable_aim_shoot_offset && ctx.aiming.load() && ctx.shooting.load();
+            
+            // Check if aim+shoot state changed, which requires offset update
+            bool state_changed = (is_aim_shoot != was_aim_shoot);
+            if (state_changed) {
+                ctx.crosshair_offset_changed.store(true);
+            }
+            
+            // Always check and apply offset changes
+            static float last_offsetX = -999999.0f;
+            static float last_offsetY = -999999.0f;
+            
+            float current_offsetX, current_offsetY;
+            
+            // Determine which offset to use
+            if (is_aim_shoot) {
+                current_offsetX = ctx.config.aim_shoot_offset_x;
+                current_offsetY = ctx.config.aim_shoot_offset_y;
+            } else {
+                current_offsetX = ctx.config.crosshair_offset_x;
+                current_offsetY = ctx.config.crosshair_offset_y;
+            }
+            
+            // Check if offset actually changed
+            bool offset_actually_changed = (current_offsetX != last_offsetX || current_offsetY != last_offsetY);
+            
+            if (ctx.crosshair_offset_changed.load() || offset_actually_changed)
             {
-                float offsetX = ctx.config.crosshair_offset_x;
-                float offsetY = ctx.config.crosshair_offset_y;
-                
                 // Apply offset to the active capturer
                 if (wingraphics_capturer) {
-                    wingraphics_capturer->UpdateCaptureRegion(offsetX, offsetY);
+                    wingraphics_capturer->UpdateCaptureRegion(current_offsetX, current_offsetY);
                 } else if (simple_capturer) {
-                    simple_capturer->UpdateCaptureRegion(offsetX, offsetY);
+                    simple_capturer->UpdateCaptureRegion(current_offsetX, current_offsetY);
                 }
                 
+                last_offsetX = current_offsetX;
+                last_offsetY = current_offsetY;
                 ctx.crosshair_offset_changed.store(false);
             }
+            
+            // IMPORTANT: Update was_aim_shoot OUTSIDE the if block
+            was_aim_shoot = is_aim_shoot;
 
             // Measure only the actual capture API call time
             auto frame_acq_start_time = std::chrono::high_resolution_clock::now();

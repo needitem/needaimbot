@@ -123,8 +123,8 @@ void renderOffsetTab()
     ImGui::Separator();
     ImGui::Spacing();
 
-    // Crosshair Offset Settings (combined section)
-    UIHelpers::BeginSettingsSection("Crosshair Offset", "Fine-tune the crosshair position for your display");
+    // Capture Region Offset Settings
+    UIHelpers::BeginSettingsSection("Capture Region Offset", "Adjust the capture area position (crosshair stays centered)");
 
     const float adjustment_step = 1.0f;
     bool offset_changed = false;
@@ -140,9 +140,9 @@ void renderOffsetTab()
         
         // Left column - Normal Offset
         {
-            ImGui::Text("Crosshair Offset (?)");
+            ImGui::Text("Capture Region Offset (?)");
             ImGui::SameLine();
-            UIHelpers::InfoTooltip("Adjusts the crosshair position on your screen");
+            UIHelpers::InfoTooltip("Moves the capture region while keeping crosshair centered on screen");
             ImGui::Text("X=%.0f, Y=%.0f", ctx.config.crosshair_offset_x, ctx.config.crosshair_offset_y);
             ImGui::Spacing();
             
@@ -158,39 +158,39 @@ void renderOffsetTab()
                 // Top button (Up)
                 ImGui::SetCursorPosX(ImGui::GetCursorPosX() + button_size + spacing);
                 if (ImGui::Button("UP##offset_up", ImVec2(button_size, button_size))) {
-                    ctx.config.crosshair_offset_y += adjustment_step;
+                    ctx.config.crosshair_offset_y -= adjustment_step;  // Negative to move capture up
                     offset_changed = true;
                     ctx.crosshair_offset_changed.store(true);
                 }
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move crosshair up");
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move capture region up");
                 
                 // Middle row (Left, Center, Right)
                 if (ImGui::Button("L##offset_left", ImVec2(button_size, button_size))) {
-                    ctx.config.crosshair_offset_x += adjustment_step;
+                    ctx.config.crosshair_offset_x -= adjustment_step;  // Negative to move capture left
                     offset_changed = true;
                     ctx.crosshair_offset_changed.store(true);
                 }
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move crosshair left");
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move capture region left");
                 
                 ImGui::SameLine(0, spacing);
                 ImGui::Dummy(ImVec2(button_size, button_size)); // Center space
                 
                 ImGui::SameLine(0, spacing);
                 if (ImGui::Button("R##offset_right", ImVec2(button_size, button_size))) {
-                    ctx.config.crosshair_offset_x -= adjustment_step;
+                    ctx.config.crosshair_offset_x += adjustment_step;  // Positive to move capture right
                     offset_changed = true;
                     ctx.crosshair_offset_changed.store(true);
                 }
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move crosshair right");
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move capture region right");
                 
                 // Bottom button (Down)
                 ImGui::SetCursorPosX(ImGui::GetCursorPosX() + button_size + spacing);
                 if (ImGui::Button("DN##offset_down", ImVec2(button_size, button_size))) {
-                    ctx.config.crosshair_offset_y -= adjustment_step;
+                    ctx.config.crosshair_offset_y += adjustment_step;  // Positive to move capture down
                     offset_changed = true;
                     ctx.crosshair_offset_changed.store(true);
                 }
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move crosshair down");
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move capture region down");
             }
             ImGui::EndGroup();
             
@@ -205,7 +205,7 @@ void renderOffsetTab()
                 offset_changed = true;
                 ctx.crosshair_offset_changed.store(true);
             }
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Reset crosshair offset to center");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Reset capture region to center");
             
             ImGui::Spacing();
             ImGui::Separator();
@@ -255,35 +255,39 @@ void renderOffsetTab()
                     // Top button (Up)
                     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + button_size + spacing);
                     if (ImGui::Button("UP##aim_shoot_up", ImVec2(button_size, button_size))) {
-                        ctx.config.aim_shoot_offset_y += adjustment_step;
+                        ctx.config.aim_shoot_offset_y -= adjustment_step;  // Negative to move capture up
                         aim_shoot_offset_changed = true;
+                        ctx.crosshair_offset_changed.store(true);
                     }
-                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move aim+shoot crosshair up");
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move aim+shoot capture region up");
                     
                     // Middle row (Left, Center, Right)
                     if (ImGui::Button("L##aim_shoot_left", ImVec2(button_size, button_size))) {
-                        ctx.config.aim_shoot_offset_x += adjustment_step;
+                        ctx.config.aim_shoot_offset_x -= adjustment_step;  // Negative to move capture left
                         aim_shoot_offset_changed = true;
+                        ctx.crosshair_offset_changed.store(true);
                     }
-                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move aim+shoot crosshair left");
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move aim+shoot capture region left");
                     
                     ImGui::SameLine(0, spacing);
                     ImGui::Dummy(ImVec2(button_size, button_size)); // Center space
                     
                     ImGui::SameLine(0, spacing);
                     if (ImGui::Button("R##aim_shoot_right", ImVec2(button_size, button_size))) {
-                        ctx.config.aim_shoot_offset_x -= adjustment_step;
+                        ctx.config.aim_shoot_offset_x += adjustment_step;  // Positive to move capture right
                         aim_shoot_offset_changed = true;
+                        ctx.crosshair_offset_changed.store(true);
                     }
-                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move aim+shoot crosshair right");
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move aim+shoot capture region right");
                     
                     // Bottom button (Down)
                     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + button_size + spacing);
                     if (ImGui::Button("DN##aim_shoot_down", ImVec2(button_size, button_size))) {
-                        ctx.config.aim_shoot_offset_y -= adjustment_step;
+                        ctx.config.aim_shoot_offset_y += adjustment_step;  // Positive to move capture down
                         aim_shoot_offset_changed = true;
+                        ctx.crosshair_offset_changed.store(true);
                     }
-                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move aim+shoot crosshair down");
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move aim+shoot capture region down");
                 }
                 ImGui::EndGroup();
                 
@@ -296,6 +300,7 @@ void renderOffsetTab()
                     ctx.config.aim_shoot_offset_x = ctx.config.crosshair_offset_x;
                     ctx.config.aim_shoot_offset_y = ctx.config.crosshair_offset_y;
                     aim_shoot_offset_changed = true;
+                    ctx.crosshair_offset_changed.store(true);
                 }
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Copy offset values from normal crosshair");
                 
@@ -310,11 +315,13 @@ void renderOffsetTab()
                 ImGui::Text("X"); ImGui::SameLine();
                 if (ImGui::DragFloat("##aim_shoot_x_fine", &ctx.config.aim_shoot_offset_x, 0.1f, -100.0f, 100.0f, "%.1f")) {
                     aim_shoot_offset_changed = true;
+                    ctx.crosshair_offset_changed.store(true);
                 }
                 ImGui::SetNextItemWidth(60);
                 ImGui::Text("Y"); ImGui::SameLine();
                 if (ImGui::DragFloat("##aim_shoot_y_fine", &ctx.config.aim_shoot_offset_y, 0.1f, -100.0f, 100.0f, "%.1f")) {
                     aim_shoot_offset_changed = true;
+                    ctx.crosshair_offset_changed.store(true);
                 }
                 ImGui::PopItemWidth();
             } else {
@@ -381,10 +388,13 @@ void renderOffsetTab()
                 // Draw detections
                 drawDetections(draw_list, image_pos, debug_scale);
 
-                // Draw normal crosshair with offset
-                float center_x = image_pos.x + (texW * debug_scale) / 2.0f + (ctx.config.crosshair_offset_x * debug_scale);
-                float center_y = image_pos.y + (texH * debug_scale) / 2.0f + (ctx.config.crosshair_offset_y * debug_scale);
-                ImU32 crosshair_color = IM_COL32(255, 255, 255, 255);
+                // Draw crosshair at center (no offset since capture region already includes offset)
+                float center_x = image_pos.x + (texW * debug_scale) / 2.0f;
+                float center_y = image_pos.y + (texH * debug_scale) / 2.0f;
+                
+                // Determine which offset is currently active
+                bool is_aim_shoot_active = ctx.config.enable_aim_shoot_offset && ctx.aiming.load() && ctx.shooting.load();
+                ImU32 crosshair_color = is_aim_shoot_active ? IM_COL32(255, 128, 0, 255) : IM_COL32(255, 255, 255, 255);
                 
                 // Draw crosshair lines
                 draw_list->AddLine(ImVec2(center_x - 10, center_y), ImVec2(center_x + 10, center_y), crosshair_color, 2.0f);
@@ -393,31 +403,39 @@ void renderOffsetTab()
                 // Draw center circle
                 draw_list->AddCircle(ImVec2(center_x, center_y), 3.0f, crosshair_color, 0, 2.0f);
                 
-                // Also draw aim+shoot crosshair if enabled
+                // Always show debug info
+                char debug_info[256];
+                snprintf(debug_info, sizeof(debug_info), "Debug: Aim=%d, Shoot=%d, Enabled=%d", 
+                        ctx.aiming.load() ? 1 : 0, 
+                        ctx.shooting.load() ? 1 : 0,
+                        ctx.config.enable_aim_shoot_offset ? 1 : 0);
+                draw_list->AddText(ImVec2(image_pos.x + 10, image_pos.y + 10), IM_COL32(255, 255, 0, 255), debug_info);
+                
+                // Show current offset info
                 if (ctx.config.enable_aim_shoot_offset) {
-                    float aim_shoot_x = image_pos.x + (texW * debug_scale) / 2.0f + (ctx.config.aim_shoot_offset_x * debug_scale);
-                    float aim_shoot_y = image_pos.y + (texH * debug_scale) / 2.0f + (ctx.config.aim_shoot_offset_y * debug_scale);
-                    ImU32 aim_shoot_color = IM_COL32(255, 128, 0, 255); // Orange color
+                    const char* offset_text = is_aim_shoot_active ? "Aim+Shoot Offset Active" : "Normal Offset Active";
+                    ImU32 text_color = is_aim_shoot_active ? IM_COL32(255, 128, 0, 255) : IM_COL32(255, 255, 255, 255);
                     
-                    // Draw aim+shoot crosshair lines (dashed style)
-                    float dash_length = 5.0f;
-                    for (float x = -10; x < 10; x += dash_length * 2) {
-                        draw_list->AddLine(ImVec2(aim_shoot_x + x, aim_shoot_y), 
-                                          ImVec2(aim_shoot_x + x + dash_length, aim_shoot_y), 
-                                          aim_shoot_color, 2.0f);
+                    // Display current offset status
+                    draw_list->AddText(ImVec2(image_pos.x + 10, image_pos.y + 30), text_color, offset_text);
+                    
+                    // Show offset values
+                    char offset_info[256];
+                    if (is_aim_shoot_active) {
+                        snprintf(offset_info, sizeof(offset_info), "Offset: X=%.0f, Y=%.0f", 
+                                ctx.config.aim_shoot_offset_x, ctx.config.aim_shoot_offset_y);
+                    } else {
+                        snprintf(offset_info, sizeof(offset_info), "Offset: X=%.0f, Y=%.0f", 
+                                ctx.config.crosshair_offset_x, ctx.config.crosshair_offset_y);
                     }
-                    for (float y = -10; y < 10; y += dash_length * 2) {
-                        draw_list->AddLine(ImVec2(aim_shoot_x, aim_shoot_y + y), 
-                                          ImVec2(aim_shoot_x, aim_shoot_y + y + dash_length), 
-                                          aim_shoot_color, 2.0f);
-                    }
-                    
-                    // Draw aim+shoot center circle
-                    draw_list->AddCircle(ImVec2(aim_shoot_x, aim_shoot_y), 4.0f, aim_shoot_color, 0, 2.0f);
-                    
-                    // Add label
-                    draw_list->AddText(ImVec2(aim_shoot_x + 15, aim_shoot_y - 8), 
-                                      aim_shoot_color, "Aim+Shoot");
+                    draw_list->AddText(ImVec2(image_pos.x + 10, image_pos.y + 50), text_color, offset_info);
+                } else {
+                    // Show normal offset when aim+shoot is disabled
+                    draw_list->AddText(ImVec2(image_pos.x + 10, image_pos.y + 30), IM_COL32(255, 255, 255, 255), "Normal Offset Active");
+                    char offset_info[256];
+                    snprintf(offset_info, sizeof(offset_info), "Offset: X=%.0f, Y=%.0f", 
+                            ctx.config.crosshair_offset_x, ctx.config.crosshair_offset_y);
+                    draw_list->AddText(ImVec2(image_pos.x + 10, image_pos.y + 50), IM_COL32(255, 255, 255, 255), offset_info);
                 }
             } else {
                 ImGui::TextUnformatted("Preview texture unavailable for display.");
