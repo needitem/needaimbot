@@ -71,7 +71,7 @@ static void draw_hotkey_section(const char* title, std::vector<std::string>& hot
         float combo_width = available_width - remove_button_width - detect_button_width - ImGui::GetStyle().ItemSpacing.x * 2;
         
         // Check if we're detecting for this key
-        bool is_detecting = (g_detecting_key_index == i && g_detecting_section == add_id && g_detecting_hotkeys == &hotkeys);
+        bool is_detecting = (g_detecting_key_index == static_cast<int>(i) && g_detecting_section == add_id && g_detecting_hotkeys == &hotkeys);
         
         if (is_detecting)
         {
@@ -123,7 +123,7 @@ static void draw_hotkey_section(const char* title, std::vector<std::string>& hot
             std::string detect_button_label = "Detect##" + unique_id;
             if (UIHelpers::BeautifulButton(detect_button_label.c_str(), ImVec2(detect_button_width, 0)))
             {
-                g_detecting_key_index = i;
+                g_detecting_key_index = static_cast<int>(i);
                 g_detecting_section = add_id;
                 g_detecting_hotkeys = &hotkeys;
             }
@@ -248,7 +248,7 @@ static void draw_button_section(const char* title, const char* description, std:
         float combo_width = available_width - remove_button_width - detect_button_width - ImGui::GetStyle().ItemSpacing.x * 2;
         
         // Check if we're detecting for this key
-        bool is_detecting = (g_detecting_key_index == i && g_detecting_section == add_id && g_detecting_hotkeys == &button_list);
+        bool is_detecting = (g_detecting_key_index == static_cast<int>(i) && g_detecting_section == add_id && g_detecting_hotkeys == &button_list);
         
         if (is_detecting)
         {
@@ -301,7 +301,7 @@ static void draw_button_section(const char* title, const char* description, std:
             std::string detect_button_label = "Detect##" + std::string(remove_id) + std::to_string(i);
             if (UIHelpers::BeautifulButton(detect_button_label.c_str(), ImVec2(detect_button_width, 0)))
             {
-                g_detecting_key_index = i;
+                g_detecting_key_index = static_cast<int>(i);
                 g_detecting_section = add_id;
                 g_detecting_hotkeys = &button_list;
             }
