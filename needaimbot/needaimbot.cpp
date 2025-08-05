@@ -271,6 +271,14 @@ void mouseThreadFunction(MouseThread &mouseThread)
             }
         }
         
+        // Track aiming state changes for PID reset
+        static bool last_aiming_state = false;
+        if (last_aiming_state && !current_aiming) {
+            // Aiming was just disabled - reset PID controller
+            mouseThread.resetAccumulatedStates();
+        }
+        last_aiming_state = current_aiming;
+        
         // Update the flag when we have a target
         if (current_aiming && current_has_target) {
             static bool& had_target_before = *[]() { static bool flag = false; return &flag; }();
