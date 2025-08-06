@@ -97,6 +97,10 @@ public:
     std::atomic<bool> detectionPaused{false};
     std::atomic<bool> detector_model_changed{false};
     std::mutex configMutex;
+    
+    // GPU-calculated movement deltas
+    std::atomic<float> g_movementDeltaX{0.0f};
+    std::atomic<float> g_movementDeltaY{0.0f};
 
     // Modules
     MouseThread* global_mouse_thread = nullptr;  // Stack allocated in main, so using raw pointer

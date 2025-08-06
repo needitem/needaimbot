@@ -57,23 +57,77 @@
 
 SimpleCudaMat latestFrameGpu;
 
-std::array<SimpleCudaMat, FRAME_BUFFER_COUNT> captureGpuBuffer;
-std::atomic<int> captureGpuWriteIdx{0};
-
-
-
-
 int g_captureRegionWidth = 0;
 int g_captureRegionHeight = 0;
 std::atomic<int> captureFrameCount(0);
 std::atomic<int> captureFps(0);
 std::chrono::time_point<std::chrono::steady_clock> captureFpsStartTime;
 
-// 비동기 파이프라인을 위한 구조체
-struct PipelineFrame {
-    SimpleCudaMat gpuFrame;
-    cudaEvent_t event;
-    bool ready;
+// Standard capture buffers
+std::array<SimpleCudaMat, FRAME_BUFFER_COUNT> captureGpuBuffer;
+std::atomic<int> captureGpuWriteIdx{0};
+
+// Forward declaration for triple buffer
+class TripleBufferCapture;
+std::unique_ptr<TripleBufferCapture> g_tripleBuffer;
+
+// Triple buffering for zero-latency pipeline (OPTIONAL - NOT USED)
+class TripleBufferCapture {
+private:
+    struct Buffer {
+        SimpleCudaMat frame;
+        cudaEvent_t ready;
+        std::atomic<bool> isReady{false};
+    };
+    
+    Buffer buffers[3];
+    std::atomic<int> captureIdx{0};
+    std::atomic<int> inferenceIdx{1};
+    std::atomic<int> displayIdx{2};
+    
+public:
+    TripleBufferCapture(int width, int height) {
+        for (int i = 0; i < 3; i++) {
+            buffers[i].frame.create(height, width, 3);
+            cudaEventCreateWithFlags(&buffers[i].ready, cudaEventDisableTiming | cudaEventBlockingSync);
+        }
+    }
+    
+    ~TripleBufferCapture() {
+        for (int i = 0; i < 3; i++) {
+            buffers[i].frame.release();
+            cudaEventDestroy(buffers[i].ready);
+        }
+    }
+    
+    SimpleCudaMat& getCaptureBuffer() {
+        return buffers[captureIdx].frame;
+    }
+    
+    void swapBuffers(cudaStream_t stream) {
+        int current = captureIdx.load();
+        cudaEventRecord(buffers[current].ready, stream);
+        buffers[current].isReady = true;
+        
+        // Atomic rotation: capture -> inference -> display -> capture
+        int nextCapture = displayIdx.load();
+        int nextInference = current;
+        int nextDisplay = inferenceIdx.load();
+        
+        captureIdx = nextCapture;
+        inferenceIdx = nextInference;
+        displayIdx = nextDisplay;
+    }
+    
+    SimpleCudaMat* getInferenceBuffer(cudaStream_t stream) {
+        int idx = inferenceIdx.load();
+        if (buffers[idx].isReady) {
+            cudaStreamWaitEvent(stream, buffers[idx].ready, 0);
+            buffers[idx].isReady = false;
+            return &buffers[idx].frame;
+        }
+        return nullptr;
+    }
 };
 
 void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
@@ -84,7 +138,12 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
     // RAII guard for CUDA cleanup
     CudaResourceGuard cudaGuard;
     
-    // 프레임 버퍼 풀 초기화
+    // Initialize capture buffers
+    for (int i = 0; i < FRAME_BUFFER_COUNT; ++i) {
+        captureGpuBuffer[i].create(CAPTURE_HEIGHT, CAPTURE_WIDTH, 3);
+    }
+    
+    // Frame buffer pool for CPU side
     if (!g_frameBufferPool) {
         g_frameBufferPool = std::make_unique<FrameBufferPool>(10);
     }
@@ -166,14 +225,8 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
         CUDA_CHECK_WARN(cudaStreamCreateWithFlags(&processStream, cudaStreamNonBlocking));
         CUDA_CHECK_WARN(cudaStreamCreateWithFlags(&uploadStream, cudaStreamNonBlocking));
         
-        // 파이프라인 버퍼 준비
-        constexpr int PIPELINE_DEPTH = 3;
-        std::array<PipelineFrame, PIPELINE_DEPTH> pipeline;
-        for (int i = 0; i < PIPELINE_DEPTH; ++i) {
-            pipeline[i].ready = true;
-            CUDA_CHECK_WARN(cudaEventCreateWithFlags(&pipeline[i].event, cudaEventDisableTiming));
-        }
-        int pipelineIdx = 0;
+        // Use existing capture buffers instead of pipeline
+        int currentBufferIdx = 0;
         
         HANDLE capture_event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
         auto target_interval = std::chrono::nanoseconds(1000000000 / ctx.config.capture_fps);
@@ -459,17 +512,9 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
             timeEndPeriod(1);
         }
         
-        // 파이프라인 정리
-        for (auto& pipe : pipeline) {
-            if (!pipe.ready && pipe.event) {
-                CUDA_CHECK_WARN(cudaEventSynchronize(pipe.event));
-            }
-            if (pipe.event) {
-                CUDA_CHECK_WARN(cudaEventDestroy(pipe.event));
-            }
-            if (!pipe.gpuFrame.empty()) {
-                g_frameBufferPool->releaseGpuBuffer(std::move(pipe.gpuFrame));
-            }
+        // Clean up capture buffers
+        for (auto& buffer : captureGpuBuffer) {
+            buffer.release();
         }
         
         // 스트림 정리

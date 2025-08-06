@@ -859,9 +859,10 @@ void Detector::inferenceThread()
                 // 파이프라인 최적화: 이전 프레임의 후처리와 현재 프레임의 전처리를 병렬화
                 static bool firstFrame = true;
                 
+                // OPTIMIZED: No sync - use event-based dependencies
                 if (!firstFrame) {
-                    // 이전 프레임의 후처리가 완료될 때까지 대기
-                    cudaEventSynchronize(processingDone);
+                    // Wait on event in stream instead of CPU sync
+                    cudaStreamWaitEvent(preprocessStream, processingDone, 0);
                 }
                 
                 // Execute preprocessing
@@ -913,22 +914,45 @@ void Detector::inferenceThread()
                 
                 firstFrame = false;
                 
-                // GPU에서 detection 결과 복사 (간단한 방식)
-                cudaMemcpyAsync(&m_finalDetectionsCountHost, m_finalDetectionsCountGpu.get(), 
-                               sizeof(int), cudaMemcpyDeviceToHost, postprocessStream);
+                // OPTIMIZED: GPU-persistent target selection without CPU transfer
+                // Mouse movement is calculated directly on GPU
+                static MouseMovement* d_mouseMovement = nullptr;
+                static MouseMovement h_mouseMovement = {0};
                 
-                // 먼저 count를 동기화해서 가져온 후 detection 데이터 복사
+                if (!d_mouseMovement) {
+                    cudaMalloc(&d_mouseMovement, sizeof(MouseMovement));
+                }
+                
+                // Execute GPU target selection and movement calculation
+                // Get detection count from GPU first
+                int detectionCount = 0;
+                cudaMemcpyAsync(&detectionCount, m_finalDetectionsCountGpu.get(),
+                               sizeof(int), cudaMemcpyDeviceToHost, postprocessStream);
                 cudaStreamSynchronize(postprocessStream);
                 
-                
-                // 검출된 객체가 있으면 detection 데이터도 복사
-                if (m_finalDetectionsCountHost > 0) {
-                    cudaMemcpyAsync(m_finalDetectionsHost.get(), m_finalDetectionsGpu.get(), 
-                                   m_finalDetectionsCountHost * sizeof(Detection), 
-                                   cudaMemcpyDeviceToHost, postprocessStream);
-                    cudaStreamSynchronize(postprocessStream);
+                if (detectionCount > 0) {
+                    extern void selectTargetAndCalculateMovementGpu(
+                        const Detection*, int, MouseMovement*, int*, float, cudaStream_t);
                     
+                    selectTargetAndCalculateMovementGpu(
+                    m_finalDetectionsGpu.get(),
+                    detectionCount,
+                    d_mouseMovement,
+                    m_bestTargetIndexGpu.get(),
+                    200.0f,  // max target distance
+                    postprocessStream
+                );
+                
+                    // Async copy only the small movement struct (16 bytes)
+                    cudaMemcpyAsync(&h_mouseMovement, d_mouseMovement, 
+                                   sizeof(MouseMovement), cudaMemcpyDeviceToHost, postprocessStream);
+                } else {
+                    h_mouseMovement.hasTarget = false;
+                    h_mouseMovement.dx = 0;
+                    h_mouseMovement.dy = 0;
                 }
+                
+                // NO SYNC HERE - Let it run async
 
                 auto inference_end_time = std::chrono::high_resolution_clock::now();
                 std::chrono::duration<float, std::milli> inference_duration_ms = inference_end_time - inference_start_time;
@@ -936,64 +960,31 @@ void Detector::inferenceThread()
                 ctx.add_to_history(ctx.g_inference_time_history, inference_duration_ms.count(), ctx.g_inference_history_mutex);
                 
                 
-                // GPU에서 거리 기반 타겟 선택
-                if (m_finalDetectionsCountHost > 0 && !ctx.should_exit) {
-                    // Crosshair is now always at center since capture region already includes offset
-                    float crosshairX = cached_config.detection_resolution / 2.0f;
-                    float crosshairY = cached_config.detection_resolution / 2.0f;
-                    
-                    // Find closest target on GPU
-                    cudaError_t target_err = findClosestTargetGpu(
-                        m_finalDetectionsGpu.get(),
-                        m_finalDetectionsCountHost,
-                        crosshairX,
-                        crosshairY,
-                        m_bestTargetIndexGpu.get(),
-                        m_bestTargetGpu.get(),
-                        postprocessStream
-                    );
-                    
-                    if (target_err == cudaSuccess) {
-                        // Copy results to host
-                        cudaMemcpyAsync(&m_bestTargetIndexHost, m_bestTargetIndexGpu.get(), 
-                                       sizeof(int), cudaMemcpyDeviceToHost, postprocessStream);
-                        cudaMemcpyAsync(&m_bestTargetHost, m_bestTargetGpu.get(), 
-                                       sizeof(Detection), cudaMemcpyDeviceToHost, postprocessStream);
-                        cudaStreamSynchronize(postprocessStream);
-                        
-                        // Update detection state
+                // OPTIMIZED: Check async result from previous frame
+                static bool hasMovementPending = false;
+                if (hasMovementPending) {
+                    // Check if async copy is complete (non-blocking)
+                    cudaError_t streamStatus = cudaStreamQuery(postprocessStream);
+                    if (streamStatus == cudaSuccess) {
+                        // Movement data is ready
                         {
                             std::lock_guard<std::mutex> lock(detectionMutex);
-                            
-                            if (m_bestTargetIndexHost >= 0) {
-                                m_hasBestTarget = true;
-                            } else {
-                                m_hasBestTarget = false;
-                                memset(&m_bestTargetHost, 0, sizeof(Detection));
+                            m_hasBestTarget = h_mouseMovement.hasTarget;
+                            if (h_mouseMovement.hasTarget) {
+                                // Store movement deltas for mouse thread
+                                ctx.g_movementDeltaX.store(h_mouseMovement.dx);
+                                ctx.g_movementDeltaY.store(h_mouseMovement.dy);
                             }
-                            
                             detectionVersion++;
                         }
                         detectionCV.notify_one();
-                    } else {
-                        std::cerr << "[Detector] Error in GPU target selection: " << cudaGetErrorString(target_err) << std::endl;
-                        
-                        std::lock_guard<std::mutex> lock(detectionMutex);
-                        m_hasBestTarget = false;
-                        memset(&m_bestTargetHost, 0, sizeof(Detection));
-                        m_bestTargetIndexHost = -1;
-                        detectionVersion++;
-                        detectionCV.notify_one();
+                        hasMovementPending = false;
                     }
-                } else {
-                    // No detections or should exit
-                    std::lock_guard<std::mutex> lock(detectionMutex);
-                    m_hasBestTarget = false;
-                    memset(&m_bestTargetHost, 0, sizeof(Detection));
-                    m_bestTargetIndexHost = -1;
-                    detectionVersion++;
-                    detectionCV.notify_one();
+                    // If not ready, will check next frame
                 }
+                
+                // Set flag for next frame check
+                hasMovementPending = true;
 
             }
             catch (const std::exception& e)
