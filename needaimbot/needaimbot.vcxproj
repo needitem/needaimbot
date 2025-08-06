@@ -65,10 +65,12 @@
   <ItemGroup>
     <CudaCompile Include="postprocess\filterGpu.cu" />
     <CudaCompile Include="postprocess\postProcessGpu.cu" />
+    <CudaCompile Include="postprocess\targetSelectionGpu.cu" />
     <CudaCompile Include="cuda\cuda_image_processing.cu" />
     <CudaCompile Include="cuda\cuda_float_processing.cu" />
     <CudaCompile Include="cuda\color_filter_kernel.cu" />
     <CudaCompile Include="cuda\color_conversion.cu" />
+    <CudaCompile Include="cuda\pipeline_optimization.cu" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="core\config_cache.h" />
