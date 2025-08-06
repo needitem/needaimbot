@@ -1731,15 +1731,15 @@ nvinfer1::ICudaEngine* buildEngineFromOnnx(const std::string& onnxPath)
         std::cout << "[TensorRT] FP16 optimization enabled" << std::endl;
     }
     
-    // INT8 양자화 활성화 (RTX 40 시리즈에 최적화)
-    if (builder->platformHasFastInt8()) {
-        config->setFlag(nvinfer1::BuilderFlag::kINT8);
-        std::cout << "[TensorRT] INT8 optimization enabled for maximum speed" << std::endl;
-        
-        // 더 강력한 양자화 설정
-        // config->setFlag(nvinfer1::BuilderFlag::kSTRICT_TYPES); // TensorRT 10에서는 제거됨
-        // INT8 캘리브레이션은 별도로 설정해야 함
-    }
+    // INT8 양자화 비활성화 - 캘리브레이션 이슈로 인해 기본적으로 사용하지 않음
+    // if (builder->platformHasFastInt8()) {
+    //     config->setFlag(nvinfer1::BuilderFlag::kINT8);
+    //     std::cout << "[TensorRT] INT8 optimization enabled for maximum speed" << std::endl;
+    //     
+    //     // 더 강력한 양자화 설정
+    //     // config->setFlag(nvinfer1::BuilderFlag::kSTRICT_TYPES); // TensorRT 10에서는 제거됨
+    //     // INT8 캘리브레이션은 별도로 설정해야 함
+    // }
     
     // 추가 최적화 플래그
     config->setFlag(nvinfer1::BuilderFlag::kGPU_FALLBACK); // DLA 사용 시 GPU 폴백
