@@ -218,8 +218,8 @@ public:
 private:
     void allocate() {
         if (width_ > 0 && height_ > 0 && channels_ > 0) {
-            // Align step to 32 bytes for better performance
-            step_ = ((width_ * channels_ + 31) / 32) * 32;
+            // Align step to 512 bytes for optimal GPU memory coalescing
+            step_ = ((width_ * channels_ + 511) / 512) * 512;
             size_t allocSize = step_ * height_;
             
             // Check available memory before allocation

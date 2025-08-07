@@ -386,10 +386,10 @@ bool SerialConnection::configurePort()
 
     is_open_ = true;
     
-    // Arduino 초기화 명령 전송 (is_open_ = true 이후)
-    Sleep(100);  // Arduino 부팅 대기
+    // Send Arduino initialization commands (after is_open_ = true)
+    Sleep(100);  // Wait for Arduino boot
     
-    // 직접 write 호출 (sendCommand는 write를 호출하는데 write는 is_open을 체크함)
+    // Direct write call (sendCommand calls write which checks is_open)
     const char* release_cmd = "r";
     const char* move_cmd = "m0,0\n";
     
