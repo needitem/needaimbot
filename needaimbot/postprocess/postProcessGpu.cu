@@ -1,13 +1,14 @@
 #include <cuda_runtime.h>
 #include <cuda_fp16.h> 
 #include <device_launch_parameters.h>
-#include <device_atomic_functions.h> 
+#include <device_atomic_functions.h>
 #include <vector>
 #include <algorithm> 
 #include <cmath>
 #include <thrust/device_vector.h>
 #include <thrust/host_vector.h>
 #include <thrust/sort.h>
+#include <thrust/scan.h>
 #include <thrust/execution_policy.h>
 #include <thrust/copy.h>       
 #include <thrust/iterator/counting_iterator.h> 
@@ -32,7 +33,7 @@ __global__ void initKeepKernel(bool* d_keep, int n) {
     }
 }
 
-// CUDA Graph compatible kernel to compact detections
+// Optimized compaction kernel with warp-level primitives
 __global__ void compactDetectionsKernel(
     const Detection* d_input_detections,
     const bool* d_keep,
@@ -41,29 +42,65 @@ __global__ void compactDetectionsKernel(
     int input_num_detections,
     int max_output_detections)
 {
-    __shared__ int shared_count;
+    // Use shared memory for block-level scan
+    extern __shared__ int shared_data[];
+    int* warp_sums = shared_data;
     
-    if (threadIdx.x == 0) {
-        shared_count = 0;
+    const int tid = threadIdx.x;
+    const int warp_id = tid / 32;
+    const int lane_id = tid % 32;
+    const int idx = blockIdx.x * blockDim.x + tid;
+    
+    // Load keep flag
+    int local_val = (idx < input_num_detections && d_keep[idx]) ? 1 : 0;
+    
+    // Warp-level inclusive scan using shuffle operations
+    int warp_scan = local_val;
+    for (int offset = 1; offset < 32; offset *= 2) {
+        int n = __shfl_up_sync(0xffffffff, warp_scan, offset);
+        if (lane_id >= offset) warp_scan += n;
+    }
+    
+    // Store warp sum to shared memory
+    if (lane_id == 31) {
+        warp_sums[warp_id] = warp_scan;
     }
     __syncthreads();
     
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    
-    if (idx < input_num_detections && d_keep[idx]) {
-        int write_idx = atomicAdd(&shared_count, 1);
-        __syncthreads();
-        
-        if (threadIdx.x == 0) {
-            write_idx = atomicAdd(d_output_count, shared_count);
+    // Block-level scan of warp sums (for up to 32 warps = 1024 threads)
+    if (tid < (blockDim.x / 32)) {
+        int val = warp_sums[tid];
+        // Simple sequential scan for small number of warps
+        for (int i = 0; i < tid; i++) {
+            val += warp_sums[i];
         }
-        __syncthreads();
-        
-        if (idx < input_num_detections && d_keep[idx]) {
-            int global_idx = atomicAdd(d_output_count, 1);
-            if (global_idx < max_output_detections) {
-                d_output_detections[global_idx] = d_input_detections[idx];
-            }
+        warp_sums[tid] = val;
+    }
+    __syncthreads();
+    
+    // Compute write position
+    int write_pos = warp_scan - local_val; // Convert to exclusive scan
+    if (warp_id > 0) {
+        write_pos += warp_sums[warp_id - 1];
+    }
+    
+    // Get global offset for this block
+    __shared__ int global_offset;
+    if (tid == 0) {
+        int block_total = (blockDim.x / 32 > 0) ? warp_sums[blockDim.x / 32 - 1] : 0;
+        if (block_total > 0) {
+            global_offset = atomicAdd(d_output_count, block_total);
+        } else {
+            global_offset = 0;
+        }
+    }
+    __syncthreads();
+    
+    // Write compacted output
+    if (local_val && idx < input_num_detections) {
+        int final_pos = global_offset + write_pos;
+        if (final_pos < max_output_detections) {
+            d_output_detections[final_pos] = d_input_detections[idx];
         }
     }
 }

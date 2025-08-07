@@ -523,8 +523,6 @@ void Detector::initialize(const std::string& modelFile)
         }
     }
     
-    // BGRA input support flag - can be added to detector.h if needed later
-    // bool m_supportBGRA = true; // RTX 40 series handles BGRA efficiently
     
     for (const auto& name : inputNames)
     {
@@ -637,13 +635,13 @@ void Detector::processFrame(const SimpleCudaMat& frame)
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    // 비동기 프레임 전달 - lock 시간 최소화
+    // Async frame transfer - minimize lock time
     {
         std::unique_lock<std::mutex> lock(inferenceMutex);
         
-        // 이전 프레임이 아직 처리 중이면 스킵 (프레임 드롭으로 낮은 지연시간 유지)
+        // Skip if previous frame still processing (frame drop for low latency)
         if (frameReady) {
-            return; // 추론이 캡처보다 느리면 프레임 스킵
+            return; // Skip frame if inference slower than capture
         }
         
         currentFrame = frame.clone();
@@ -845,11 +843,11 @@ void Detector::inferenceThread()
                     cached_config.update(ctx.config);
                 }
 
-                // 파이프라인 최적화: 이전 프레임의 후처리와 현재 프레임의 전처리를 병렬화
+                // Pipeline optimization: parallelize previous frame post-processing with current preprocessing
                 static bool firstFrame = true;
                 
                 if (!firstFrame) {
-                    // 이전 프레임의 후처리가 완료될 때까지 대기
+                    // Wait for previous frame post-processing to complete
                     cudaEventSynchronize(processingDone);
                 }
                 
@@ -857,7 +855,7 @@ void Detector::inferenceThread()
                 preProcess(frameGpu, preprocessStream);
                 cudaEventRecord(m_preprocessDone, preprocessStream);
                 
-                // CUDA Graph 기반 추론 (충분한 프레임 후 캡처)
+                // CUDA Graph based inference (capture after sufficient frames)
                 if (!m_graphCaptured && frame_counter > 30 && frame_counter % 10 == 0) {
                     captureInferenceGraph(frameGpu);
                 }
@@ -888,7 +886,7 @@ void Detector::inferenceThread()
                 
                 cudaEventRecord(m_inferenceDone, stream);
                 
-                // 후처리는 항상 별도로 실행 (동적 크기 때문에)
+                // Post-processing always runs separately (due to dynamic size)
                 cudaStreamWaitEvent(postprocessStream, m_inferenceDone, cudaEventWaitExternal);
                 performGpuPostProcessing(postprocessStream);
                 
@@ -1713,28 +1711,19 @@ nvinfer1::ICudaEngine* buildEngineFromOnnx(const std::string& onnxPath)
         std::cout << "[TensorRT] FP16 optimization enabled" << std::endl;
     }
     
-    // INT8 양자화 비활성화 - 캘리브레이션 이슈로 인해 기본적으로 사용하지 않음
-    // if (builder->platformHasFastInt8()) {
-    //     config->setFlag(nvinfer1::BuilderFlag::kINT8);
-    //     std::cout << "[TensorRT] INT8 optimization enabled for maximum speed" << std::endl;
-    //     
-    //     // 더 강력한 양자화 설정
-    //     // config->setFlag(nvinfer1::BuilderFlag::kSTRICT_TYPES); // TensorRT 10에서는 제거됨
-    //     // INT8 캘리브레이션은 별도로 설정해야 함
-    // }
     
-    // 추가 최적화 플래그
-    config->setFlag(nvinfer1::BuilderFlag::kGPU_FALLBACK); // DLA 사용 시 GPU 폴백
-    config->setFlag(nvinfer1::BuilderFlag::kPREFER_PRECISION_CONSTRAINTS); // 정밀도 제약 선호
+    // Additional optimization flags
+    config->setFlag(nvinfer1::BuilderFlag::kGPU_FALLBACK);
+    config->setFlag(nvinfer1::BuilderFlag::kPREFER_PRECISION_CONSTRAINTS);
     
-    // 더 많은 커널 선택을 위한 tactics 소스 활성화
+    // Enable tactics sources for better kernel selection
     config->setTacticSources(
         1U << static_cast<uint32_t>(nvinfer1::TacticSource::kCUBLAS) |
         1U << static_cast<uint32_t>(nvinfer1::TacticSource::kCUBLAS_LT) |
         1U << static_cast<uint32_t>(nvinfer1::TacticSource::kCUDNN)
     );
     
-    // 프로파일링을 통한 최적 커널 선택
+    // Profiling for optimal kernel selection
     config->setProfilingVerbosity(nvinfer1::ProfilingVerbosity::kDETAILED);
 
     // Create optimization profile for dynamic inputs

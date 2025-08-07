@@ -67,9 +67,7 @@ void saveScreenshot(const SimpleMat& frame, const std::string& directory) {
     
     std::string filepath = oss.str();
     
-    if (saveImage(frame, filepath)) {
-        std::cout << "[Screenshot] Saved: " << filepath << std::endl;
-    } else {
+    if (!saveImage(frame, filepath)) {
         std::cerr << "[Screenshot] Failed to save: " << filepath << std::endl;
     }
 }

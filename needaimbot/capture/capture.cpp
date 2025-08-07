@@ -67,68 +67,6 @@ std::chrono::time_point<std::chrono::steady_clock> captureFpsStartTime;
 std::array<SimpleCudaMat, FRAME_BUFFER_COUNT> captureGpuBuffer;
 std::atomic<int> captureGpuWriteIdx{0};
 
-// Forward declaration for triple buffer
-class TripleBufferCapture;
-std::unique_ptr<TripleBufferCapture> g_tripleBuffer;
-
-// Triple buffering for zero-latency pipeline (OPTIONAL - NOT USED)
-class TripleBufferCapture {
-private:
-    struct Buffer {
-        SimpleCudaMat frame;
-        cudaEvent_t ready;
-        std::atomic<bool> isReady{false};
-    };
-    
-    Buffer buffers[3];
-    std::atomic<int> captureIdx{0};
-    std::atomic<int> inferenceIdx{1};
-    std::atomic<int> displayIdx{2};
-    
-public:
-    TripleBufferCapture(int width, int height) {
-        for (int i = 0; i < 3; i++) {
-            buffers[i].frame.create(height, width, 3);
-            cudaEventCreateWithFlags(&buffers[i].ready, cudaEventDisableTiming | cudaEventBlockingSync);
-        }
-    }
-    
-    ~TripleBufferCapture() {
-        for (int i = 0; i < 3; i++) {
-            buffers[i].frame.release();
-            cudaEventDestroy(buffers[i].ready);
-        }
-    }
-    
-    SimpleCudaMat& getCaptureBuffer() {
-        return buffers[captureIdx].frame;
-    }
-    
-    void swapBuffers(cudaStream_t stream) {
-        int current = captureIdx.load();
-        cudaEventRecord(buffers[current].ready, stream);
-        buffers[current].isReady = true;
-        
-        // Atomic rotation: capture -> inference -> display -> capture
-        int nextCapture = displayIdx.load();
-        int nextInference = current;
-        int nextDisplay = inferenceIdx.load();
-        
-        captureIdx = nextCapture;
-        inferenceIdx = nextInference;
-        displayIdx = nextDisplay;
-    }
-    
-    SimpleCudaMat* getInferenceBuffer(cudaStream_t stream) {
-        int idx = inferenceIdx.load();
-        if (buffers[idx].isReady) {
-            cudaStreamWaitEvent(stream, buffers[idx].ready, 0);
-            buffers[idx].isReady = false;
-            return &buffers[idx].frame;
-        }
-        return nullptr;
-    }
-};
 
 void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 {
@@ -185,17 +123,17 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
         timeBeginPeriod(1);
         SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
         
-        // 개선된 스레드 친화도 설정 - NUMA 인식
+        // Set thread affinity for optimal performance
         SYSTEM_INFO sysInfo;
         GetSystemInfo(&sysInfo);
         DWORD_PTR affinityMask = 0;
         
-        // 물리 코어 선호 (하이퍼스레딩 회피)
+        // Prefer physical cores (avoid hyperthreading)
         for (DWORD i = 0; i < sysInfo.dwNumberOfProcessors; i += 2) {
             affinityMask |= (1ULL << i);
         }
         
-        if (affinityMask == 0) affinityMask = 1; // 최소한 하나의 코어
+        if (affinityMask == 0) affinityMask = 1;
         SetThreadAffinityMask(GetCurrentThread(), affinityMask);
         // Check if the selected capturer is initialized
         bool is_initialized = false;

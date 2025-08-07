@@ -60,7 +60,6 @@ std::unique_ptr<InputMethod> initializeInputMethod() {
     auto& ctx = AppContext::getInstance();
 
     if (ctx.config.input_method == "ARDUINO") {
-        std::cout << "[Mouse] Using Arduino method input." << std::endl;
         try {
             auto arduinoSerial = std::make_unique<SerialConnection>(ctx.config.arduino_port, ctx.config.arduino_baudrate);
             if (arduinoSerial->isOpen()) {
@@ -71,14 +70,12 @@ std::unique_ptr<InputMethod> initializeInputMethod() {
             std::cerr << "[Mouse] Arduino initialization failed: " << e.what() << ". Defaulting to Win32." << std::endl;
         }
     } else if (ctx.config.input_method == "GHUB") {
-        std::cout << "[Mouse] Using Ghub method input." << std::endl;
         auto gHub = std::make_unique<GhubMouse>();
         if (gHub->mouse_xy(0, 0)) {
             return std::make_unique<GHubInputMethod>(gHub.release());
         }
         std::cerr << "[Mouse] Failed to initialize GHub mouse driver. Defaulting to Win32." << std::endl;
     } else if (ctx.config.input_method == "KMBOX") {
-        std::cout << "[Mouse] Using kmboxNet method input.\n";
         char ip[256], port[256], mac[256];
         strncpy(ip, ctx.config.kmbox_ip.c_str(), sizeof(ip) - 1);
         ip[sizeof(ip) - 1] = '\0';
@@ -93,7 +90,6 @@ std::unique_ptr<InputMethod> initializeInputMethod() {
         }
         std::cerr << "[kmboxNet] init failed, code=" << rc << ". Defaulting to Win32.\n";
     } else if (ctx.config.input_method == "MAKCU") {
-        std::cout << "[Mouse] Using MAKCU method input." << std::endl;
         try {
             auto makcuConnection = std::make_unique<MakcuConnection>(ctx.config.makcu_port, ctx.config.makcu_baudrate);
             if (makcuConnection->isOpen()) {
@@ -104,7 +100,6 @@ std::unique_ptr<InputMethod> initializeInputMethod() {
             std::cerr << "[Mouse] MAKCU initialization failed: " << e.what() << ". Defaulting to Win32." << std::endl;
         }
     } else if (ctx.config.input_method == "RAZER") {
-        std::cout << "[Mouse] Using Razer method input." << std::endl;
         try {
             return std::make_unique<RZInputMethod>();
         } catch (const std::exception& e) {
@@ -112,7 +107,6 @@ std::unique_ptr<InputMethod> initializeInputMethod() {
         }
     }
 
-    std::cout << "[Mouse] Using default Win32 method input." << std::endl;
     return std::make_unique<Win32InputMethod>();
 }
 

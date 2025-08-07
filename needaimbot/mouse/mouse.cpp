@@ -102,11 +102,7 @@ MouseThread::MouseThread(
 
 MouseThread::~MouseThread() {
     // Stop the async worker thread
-    {
-        std::lock_guard<std::mutex> lock(queue_mutex_);
-        should_stop_thread_ = true;
-    }
-    queue_cv_.notify_all();
+    should_stop_thread_ = true;
     
     if (async_input_thread_.joinable()) {
         async_input_thread_.join();
@@ -505,7 +501,7 @@ void MouseThread::releaseMouse()
 
 void MouseThread::applyRecoilCompensation(float strength)
 {
-    // 항상 직접 반동 제어를 수행
+    // Always perform direct recoil control
     float current_norecoil_ms;
     {
         std::lock_guard<std::mutex> lock(member_data_mutex_); 
@@ -517,7 +513,7 @@ void MouseThread::applyRecoilCompensation(float strength)
 
 void MouseThread::applyWeaponRecoilCompensation(const WeaponRecoilProfile* profile, int scope_magnification)
 {
-    // 항상 직접 반동 제어를 수행
+    // Always perform direct recoil control
     if (!profile) {
         return;
     }
@@ -631,83 +627,60 @@ void MouseThread::resetAccumulatedStates()
     accumulated_y_ = 0.0f;
 }
 
-// IntegratedController 관련 함수들 제거됨
-
 void MouseThread::asyncInputWorker()
 {
     auto& ctx = AppContext::getInstance();
     
     while (!should_stop_thread_.load()) {
-        std::unique_lock<std::mutex> lock(queue_mutex_);
+        MouseCommand cmd;
         
-        // Wait for commands or stop signal
-        queue_cv_.wait(lock, [this] {
-            return !mouse_command_queue_.empty() || should_stop_thread_.load();
-        });
+        // Try to dequeue with small timeout for responsiveness (1ms)
+        if (!mouse_command_queue_.tryDequeue(cmd, 1)) {
+            if (should_stop_thread_.load()) {
+                break;
+            }
+            continue;
+        }
         
-        // Process all pending commands
-        while (!mouse_command_queue_.empty() && !should_stop_thread_.load()) {
-            MouseCommand cmd = mouse_command_queue_.front();
-            mouse_command_queue_.pop();
-            
-            // Release lock while executing command
-            lock.unlock();
-            
-            // Execute command based on type
-            {
-                std::lock_guard<std::mutex> input_lock(input_method_mutex);
-                if (input_method && input_method->isValid()) {
-                    auto exec_start = std::chrono::high_resolution_clock::now();
+        // Execute command based on type
+        {
+            std::lock_guard<std::mutex> input_lock(input_method_mutex);
+            if (input_method && input_method->isValid()) {
+                auto exec_start = std::chrono::high_resolution_clock::now();
+                
+                switch (cmd.type) {
+                    case MouseCommand::MOVE:
+                        if (cmd.dx != 0 || cmd.dy != 0) {
+                            input_method->move(cmd.dx, cmd.dy);
+                        }
+                        break;
+                    case MouseCommand::PRESS:
+                        input_method->press();
+                        break;
+                    case MouseCommand::RELEASE:
+                        input_method->release();
+                        break;
+                }
+                
+                // Track performance if needed
+                if (ctx.config.show_metrics) {
+                    auto exec_end = std::chrono::high_resolution_clock::now();
+                    float exec_duration_ms = std::chrono::duration<float, std::milli>(exec_end - exec_start).count();
+                    ctx.g_current_input_send_time_ms.store(exec_duration_ms, std::memory_order_relaxed);
+                    ctx.add_to_history(ctx.g_input_send_time_history, exec_duration_ms, ctx.g_input_send_history_mutex);
                     
-                    switch (cmd.type) {
-                        case MouseCommand::MOVE:
-                            if (cmd.dx != 0 || cmd.dy != 0) {
-                                input_method->move(cmd.dx, cmd.dy);
-                            }
-                            break;
-                        case MouseCommand::PRESS:
-                            input_method->press();
-                            break;
-                        case MouseCommand::RELEASE:
-                            input_method->release();
-                            break;
-                    }
-                    
-                    // Track performance if needed
-                    if (ctx.config.show_metrics) {
-                        auto exec_end = std::chrono::high_resolution_clock::now();
-                        float exec_duration_ms = std::chrono::duration<float, std::milli>(exec_end - exec_start).count();
-                        ctx.g_current_input_send_time_ms.store(exec_duration_ms, std::memory_order_relaxed);
-                        ctx.add_to_history(ctx.g_input_send_time_history, exec_duration_ms, ctx.g_input_send_history_mutex);
-                        
-                        // Also track queue latency (time from enqueue to execution)
-                        float queue_latency_ms = std::chrono::duration<float, std::milli>(exec_start - cmd.timestamp).count();
-                        // You can add a new metric for queue latency if needed
-                    }
+                    // Also track queue latency (time from enqueue to execution)
+                    float queue_latency_ms = std::chrono::duration<float, std::milli>(exec_start - cmd.timestamp).count();
+                    // You can add a new metric for queue latency if needed
                 }
             }
-            
-            // Reacquire lock for next iteration
-            lock.lock();
         }
     }
 }
 
 void MouseThread::enqueueMouseCommand(MouseCommand::Type type, int dx, int dy)
 {
-    {
-        std::lock_guard<std::mutex> lock(queue_mutex_);
-        
-        // Add command to queue with timestamp
-        MouseCommand cmd;
-        cmd.type = type;
-        cmd.dx = dx;
-        cmd.dy = dy;
-        cmd.timestamp = std::chrono::high_resolution_clock::now();
-        
-        mouse_command_queue_.push(cmd);
-    }
-    
-    // Notify worker thread
-    queue_cv_.notify_one();
+    // Direct enqueue to lockless queue - no locking needed
+    MouseCommand cmd(type, dx, dy);
+    mouse_command_queue_.enqueue(std::move(cmd));
 }
