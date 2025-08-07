@@ -84,6 +84,8 @@ bool Config::loadConfig(const std::string& filename)
         auto_aim = false;
         enable_aimbot = true;
         enable_triggerbot = false;
+        enable_rapidfire = false;
+        rapidfire_cps = 10;  // Default 10 clicks per second
 
         
         crosshair_offset_x = 0.0f;
@@ -273,6 +275,8 @@ bool Config::loadConfig(const std::string& filename)
     auto_aim = get_bool_ini("Target", "auto_aim", false);
     enable_aimbot = get_bool_ini("Target", "enable_aimbot", true);
     enable_triggerbot = get_bool_ini("Target", "enable_triggerbot", false);
+    enable_rapidfire = get_bool_ini("Target", "enable_rapidfire", false);
+    rapidfire_cps = static_cast<int>(get_long_ini("Target", "rapidfire_cps", 10));
 
     crosshair_offset_x = static_cast<float>(get_double_ini("Target", "crosshair_offset_x", 0.0));
     crosshair_offset_y = static_cast<float>(get_double_ini("Target", "crosshair_offset_y", 0.0));
@@ -566,7 +570,9 @@ bool Config::saveConfig(const std::string& filename)
     file << "shooting_range_targets = " << (shooting_range_targets ? "true" : "false") << "\n";
     file << "auto_aim = " << (auto_aim ? "true" : "false") << "\n";
     file << "enable_aimbot = " << (enable_aimbot ? "true" : "false") << "\n";
-    file << "enable_triggerbot = " << (enable_triggerbot ? "true" : "false") << "\n\n";
+    file << "enable_triggerbot = " << (enable_triggerbot ? "true" : "false") << "\n";
+    file << "enable_rapidfire = " << (enable_rapidfire ? "true" : "false") << "\n";
+    file << "rapidfire_cps = " << rapidfire_cps << "\n\n";
 
     file << "[Mouse]\n";
     file << "easynorecoil = " << (easynorecoil ? "true" : "false") << "\n";

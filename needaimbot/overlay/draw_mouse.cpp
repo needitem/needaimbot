@@ -12,7 +12,8 @@
 #include "overlay.h"
 #include "ui_helpers.h"
 #include "common_helpers.h"
-#include "draw_settings.h" 
+#include "draw_settings.h"
+#include "../mouse/mouse.h" 
 
 // GHub version check removed - not needed
 
@@ -391,6 +392,44 @@ static void draw_input_method_settings()
 void draw_mouse()
 {
     auto& ctx = AppContext::getInstance();
+    
+    // Add triggerbot and rapidfire toggles at the top
+    UIHelpers::BeginCard("Combat Features");
+    
+    if (UIHelpers::EnhancedCheckbox("Enable Triggerbot", &ctx.config.enable_triggerbot,
+                                   "Automatically fire when crosshair is on target")) {
+        SAVE_PROFILE();
+    }
+    
+    ImGui::SameLine();
+    
+    if (UIHelpers::EnhancedCheckbox("Enable Rapidfire", &ctx.config.enable_rapidfire,
+                                   "Rapid fire mode for semi-automatic weapons")) {
+        SAVE_PROFILE();
+        // Update rapidfire state in mouse thread
+        if (ctx.global_mouse_thread) {
+            ctx.global_mouse_thread->updateRapidFire();
+        }
+    }
+    
+    // CPS slider for rapidfire (only show when rapidfire is enabled)
+    if (ctx.config.enable_rapidfire) {
+        UIHelpers::CompactSpacer();
+        ImGui::Text("Clicks Per Second");
+        if (ImGui::SliderInt("##rapidfire_cps", &ctx.config.rapidfire_cps, 1, 30, "%d CPS")) {
+            SAVE_PROFILE();
+            // Update rapidfire CPS in mouse thread
+            if (ctx.global_mouse_thread) {
+                ctx.global_mouse_thread->updateRapidFire();
+            }
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Adjust the rapid fire speed (clicks per second)");
+        }
+    }
+    
+    UIHelpers::EndCard();
+    UIHelpers::Spacer();
     
     draw_pid_controls();
     UIHelpers::Spacer();

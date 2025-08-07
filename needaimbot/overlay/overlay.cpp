@@ -528,6 +528,14 @@ void OverlayThread()
             ImGui::Begin("Options", &show_overlay, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize);
             {
                 std::lock_guard<std::mutex> lock(configMutex);
+                
+                // Pause rapidfire when UI is shown
+                if (ctx.global_mouse_thread) {
+                    auto rapidfire = ctx.global_mouse_thread->getRapidFire();
+                    if (rapidfire) {
+                        rapidfire->setUIActive(true);
+                    }
+                }
 
                 if (ImGui::BeginTabBar("Options tab bar", ImGuiTabBarFlags_FittingPolicyResizeDown))
                 {
@@ -815,6 +823,15 @@ void OverlayThread()
             ImGui::TextColored(ImVec4(255, 255, 255, 100), "Do not test shooting and aiming with the overlay and debug window is open.");
 
             ImGui::End();
+            
+            // Resume rapidfire when UI is closed
+            if (ctx.global_mouse_thread) {
+                auto rapidfire = ctx.global_mouse_thread->getRapidFire();
+                if (rapidfire) {
+                    rapidfire->setUIActive(false);
+                }
+            }
+            
             ImGui::Render();
 
             // Optimized rendering

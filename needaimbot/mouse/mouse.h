@@ -24,6 +24,7 @@
 #include "input_drivers/kmboxNet.h"
 #include "input_drivers/rzctl.h"
 #include "input_drivers/InputMethod.h"
+#include "rapidfire.h"
 class PIDController2D;
 
 
@@ -41,7 +42,8 @@ private:
     std::mutex input_method_mutex;
     mutable std::mutex member_data_mutex_;
     
-
+    // RapidFire instance
+    std::unique_ptr<RapidFire> rapid_fire;
     
     std::mutex callback_mutex;
 
@@ -147,6 +149,10 @@ public:
     
     // Add method to reset all accumulated states
     void resetAccumulatedStates();
+    
+    // RapidFire control methods
+    void updateRapidFire();
+    RapidFire* getRapidFire() { return rapid_fire.get(); }
     
 private:
 };
