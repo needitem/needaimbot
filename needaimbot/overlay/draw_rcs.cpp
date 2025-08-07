@@ -191,6 +191,45 @@ void draw_rcs_settings() {
         
         
         ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+        
+        // Crouch Recoil Reduction Section
+        UIHelpers::BeginCard("Crouch Recoil Reduction");
+        
+        UIHelpers::BeautifulToggle("Enable Crouch Compensation Adjustment", &ctx.config.crouch_recoil_enabled,
+                                  "Adjust recoil compensation strength when crouching");
+        
+        if (ctx.config.crouch_recoil_enabled) {
+            ImGui::Spacing();
+            
+            // Reduction percentage slider
+            ImGui::Text("Compensation Adjustment:");
+            ImGui::SameLine();
+            if (ctx.config.crouch_recoil_reduction > 0) {
+                ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "+%.0f%% (More compensation)", ctx.config.crouch_recoil_reduction);
+            } else if (ctx.config.crouch_recoil_reduction < 0) {
+                ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.0f, 1.0f), "%.0f%% (Less compensation)", ctx.config.crouch_recoil_reduction);
+            } else {
+                ImGui::Text("0%% (No change)");
+            }
+            
+            if (UIHelpers::BeautifulSlider("##CrouchReduction", &ctx.config.crouch_recoil_reduction, -100.0f, 100.0f, "%.0f%%")) {
+                SAVE_PROFILE();
+            }
+            
+            ImGui::Spacing();
+            ImGui::Text("Crouch Key: Left Control");
+            ImGui::SameLine();
+            UIHelpers::HelpMarker("Hold Left Control while shooting to adjust compensation\n"
+                                 "-50% = Apply only 50% of recoil compensation\n"
+                                 "0% = Normal compensation\n"
+                                 "+50% = Apply 150% of recoil compensation");
+        }
+        
+        UIHelpers::EndCard();
+        
+        ImGui::Spacing();
         
         // Information Section
         UIHelpers::BeginCard("Quick Reference");
@@ -203,6 +242,7 @@ void draw_rcs_settings() {
         UIHelpers::BeautifulText("Key Bindings:", UIHelpers::GetAccentColor());
         ImGui::BulletText("Left/Right Arrow: Adjust recoil strength");
         ImGui::BulletText("Page Up/Down: Switch weapon profiles");
+        ImGui::BulletText("Left Control: Apply crouch recoil reduction");
         
         ImGui::Spacing();
         

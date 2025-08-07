@@ -198,6 +198,10 @@ public:
     float recoil_mult_3x;
     float recoil_mult_4x;
     float recoil_mult_6x;
+    
+    // Crouch recoil reduction
+    bool crouch_recoil_enabled;
+    float crouch_recoil_reduction; // -100% to +100%, default -50%
 
     
     std::vector<WeaponRecoilProfile> weapon_profiles;
