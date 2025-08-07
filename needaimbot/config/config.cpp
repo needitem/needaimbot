@@ -109,6 +109,10 @@ bool Config::loadConfig(const std::string& filename)
         recoil_mult_3x = 1.0f;
         recoil_mult_4x = 1.0f;
         recoil_mult_6x = 1.0f;
+        
+        // Crouch recoil reduction
+        crouch_recoil_enabled = true;
+        crouch_recoil_reduction = -50.0f; // Default -50% reduction
 
         
         
@@ -286,6 +290,8 @@ bool Config::loadConfig(const std::string& filename)
     easynorecoil_start_delay_ms = get_long_ini("Mouse", "easynorecoil_start_delay_ms", 0);
     easynorecoil_end_delay_ms = get_long_ini("Mouse", "easynorecoil_end_delay_ms", 0);
     bScope_multiplier = static_cast<float>(get_double_ini("Mouse", "bScope_multiplier", 1.2));
+    crouch_recoil_enabled = get_bool_ini("Mouse", "crouch_recoil_enabled", true);
+    crouch_recoil_reduction = static_cast<float>(get_double_ini("Mouse", "crouch_recoil_reduction", -50.0));
 
     active_scope_magnification = get_long_ini("Recoil", "active_scope_magnification", 0);
     recoil_mult_2x = static_cast<float>(get_double_ini("Recoil", "recoil_mult_2x", 1.0));
@@ -573,7 +579,9 @@ bool Config::saveConfig(const std::string& filename)
     file << std::fixed << std::setprecision(6);
     file << "easynorecoil_start_delay_ms = " << easynorecoil_start_delay_ms << "\n";
     file << "easynorecoil_end_delay_ms = " << easynorecoil_end_delay_ms << "\n";
-    file << "bScope_multiplier = " << bScope_multiplier << "\n\n";
+    file << "bScope_multiplier = " << bScope_multiplier << "\n";
+    file << "crouch_recoil_enabled = " << (crouch_recoil_enabled ? "true" : "false") << "\n";
+    file << "crouch_recoil_reduction = " << crouch_recoil_reduction << "\n\n";
 
     file << "[Recoil]\n";
     file << "active_scope_magnification = " << active_scope_magnification << "\n";
