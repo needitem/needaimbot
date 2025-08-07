@@ -747,6 +747,23 @@ cudaError_t decodeYolo10Gpu(
         return cudaErrorInvalidValue;
     }
 
+    // Initialize decoded count to zero (synchronous to ensure proper initialization)
+    cudaError_t init_err = cudaMemset(d_decoded_count, 0, sizeof(int));
+    if (init_err != cudaSuccess) {
+        fprintf(stderr, "[decodeYolo10Gpu] Failed to initialize d_decoded_count: %s\n", cudaGetErrorString(init_err));
+        return init_err;
+    }
+
+    // Clear any previous CUDA errors before kernel launch
+    cudaGetLastError();
+
+    // Validate parameters
+    if (grid_size <= 0 || block_size <= 0 || max_candidates <= 0 || stride <= 0 || max_detections <= 0) {
+        fprintf(stderr, "[decodeYolo10Gpu] Invalid parameters: grid_size=%d, block_size=%d, max_candidates=%d, stride=%d, max_detections=%d\n",
+                grid_size, block_size, max_candidates, (int)stride, max_detections);
+        return cudaErrorInvalidValue;
+    }
+
     decodeYolo10GpuKernel<<<grid_size, block_size, 0, stream>>>(
         d_raw_output, (int)output_type, max_candidates, (int)stride, num_classes,
         conf_threshold, img_scale, d_decoded_detections, d_decoded_count, max_detections);

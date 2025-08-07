@@ -308,7 +308,7 @@ bool Detector::initializeCudaContext()
         m_cudaContextInitialized = false; 
         return false; 
     }
-    std::cout << "[Detector] Successfully set CUDA device to " << ctx.config.cuda_device_id << "." << std::endl;
+    // Silent - device set successfully
 
     // Create multiple streams for pipeline optimization with priorities
     // Get stream priority range
@@ -342,28 +342,20 @@ bool Detector::initializeCudaContext()
     cudaDeviceGetDefaultMemPool(&mempool, ctx.config.cuda_device_id);
     cudaMemPoolSetAttribute(mempool, cudaMemPoolAttrReleaseThreshold, &pool_size);
     
-    std::cout << "[Detector] Memory pool initialized with " << (pool_size / (1024.0 * 1024.0)) << "MB" << std::endl;
+    // Memory pool initialized
     
     // GPU 메모리 병합 최적화
     size_t limit = 0;
     cudaDeviceGetLimit(&limit, cudaLimitStackSize);
     cudaDeviceSetLimit(cudaLimitStackSize, limit * 2);
     
-    // L2 캐시 크기 제한 확인 및 설정
+    // L2 캐시 설정
     size_t l2CacheSize = 0;
     cudaDeviceGetLimit(&l2CacheSize, cudaLimitPersistingL2CacheSize);
-    std::cout << "[Detector] Current L2 cache limit: " << (l2CacheSize / (1024.0 * 1024.0)) << "MB" << std::endl;
     
-    // 시스템이 지원하는 최대값으로 L2 캐시 설정
     if (l2CacheSize < 16 * 1024 * 1024) {
-        // 시스템이 16MB를 지원하지 않으면 현재 값을 유지하거나 약간 증가
-        size_t newL2CacheSize = std::min(l2CacheSize * 2, size_t(8 * 1024 * 1024)); // 최대 8MB까지만
-        cudaError_t err = cudaDeviceSetLimit(cudaLimitPersistingL2CacheSize, newL2CacheSize);
-        if (err == cudaSuccess) {
-            std::cout << "[Detector] L2 cache limit set to: " << (newL2CacheSize / (1024.0 * 1024.0)) << "MB" << std::endl;
-        } else {
-            std::cout << "[Detector] Failed to set L2 cache limit: " << cudaGetErrorString(err) << std::endl;
-        }
+        size_t newL2CacheSize = std::min(l2CacheSize * 2, size_t(8 * 1024 * 1024));
+        cudaDeviceSetLimit(cudaLimitPersistingL2CacheSize, newL2CacheSize);
     }
 
     m_cudaContextInitialized = true; 
@@ -381,14 +373,17 @@ void Detector::initialize(const std::string& modelFile)
     // Create a simple logger for TensorRT
     class SimpleLogger : public nvinfer1::ILogger {
         void log(Severity severity, const char* msg) noexcept override {
-            if (severity <= Severity::kWARNING) std::cout << msg << std::endl;
+            // Suppress TensorRT internal errors
+            if (severity <= Severity::kERROR && 
+                (strstr(msg, "defaultAllocator.cpp") == nullptr) &&
+                (strstr(msg, "enqueueV3") == nullptr)) {
+                std::cout << "[TensorRT] " << msg << std::endl;
+            }
         }
     };
     static SimpleLogger logger;
     
-    // TensorRT 버전 출력
-    std::cout << "[Detector] TensorRT version: " << NV_TENSORRT_MAJOR << "." 
-              << NV_TENSORRT_MINOR << "." << NV_TENSORRT_PATCH << std::endl;
+    // TensorRT initialized
     
     runtime.reset(nvinfer1::createInferRuntime(logger));
     loadEngine(modelFile);
@@ -407,10 +402,7 @@ void Detector::initialize(const std::string& modelFile)
     }
     
     // TensorRT 10.x 최적화 설정
-    // 메모리 할당 전략 최적화
-    if (context->setOptimizationProfileAsync(0, stream)) {
-        std::cout << "[Detector] Optimization profile set for better performance" << std::endl;
-    }
+    context->setOptimizationProfileAsync(0, stream);
     
     // CUDA 그래프 호환성 설정
     context->setEnqueueEmitsProfile(false);
@@ -423,9 +415,6 @@ void Detector::initialize(const std::string& modelFile)
     size_t actualCacheLimit = std::min(requestedCacheLimit, systemL2CacheLimit);
     
     context->setPersistentCacheLimit(actualCacheLimit);
-    std::cout << "[Detector] TensorRT L2 cache limit set to " << (actualCacheLimit / (1024.0 * 1024.0)) 
-              << "MB (requested: " << ctx.config.persistent_cache_limit_mb 
-              << "MB, system max: " << (systemL2CacheLimit / (1024.0 * 1024.0)) << "MB)" << std::endl;
 
     getInputNames();
     getOutputNames();
@@ -622,7 +611,7 @@ void Detector::loadEngine(const std::string& modelFile)
         return;
     }
 
-    std::cout << "[Detector] Loading engine: " << engineFilePath << std::endl;
+    // Loading engine
     engine.reset(loadEngineFromFile(engineFilePath));
 }
 
@@ -714,7 +703,7 @@ void Detector::inferenceThread()
         DWORD_PTR mask = 0x0F; // 첫 4개 코어 사용 (보통 성능 코어)
         SetThreadAffinityMask(thread, mask);
         SetThreadPriority(thread, THREAD_PRIORITY_HIGHEST);
-        std::cout << "[Detector] Thread affinity and priority set for optimal performance" << std::endl;
+        // Thread optimization set
     }
     
     // Cache frequently accessed config values to reduce mutex contention
@@ -1431,20 +1420,16 @@ void Detector::initializeBuffers() {
         const std::string& primaryOutputName = outputNames[0];
         const std::vector<int64_t>& shape = outputShapes[primaryOutputName];
         if (ctx.config.postprocess == "yolo10") {
+            // YOLO10: shape is [1, num_detections, 6] where 6 = bbox(4) + conf(1) + class_id(1)
+            // num_detections (shape[1]) is the actual number of candidates (e.g., 300)
             max_candidates = (shape.size() > 1) ? static_cast<int>(shape[1]) : 0;
         } else if (ctx.config.postprocess == "yolo8" || ctx.config.postprocess == "yolo9" || ctx.config.postprocess == "yolo11" || ctx.config.postprocess == "yolo12") {
+            // YOLO8/9/11/12: shape is [1, features, num_boxes] where features = bbox(4) + conf(1) + num_classes
+            // num_boxes (shape[2]) is the number of candidates (e.g., 8400)
             max_candidates = (shape.size() > 2) ? static_cast<int>(shape[2]) : 0;
         }
         
-        std::cout << "[Detector] Buffer allocation info:" << std::endl;
-        std::cout << "  - Primary output: " << primaryOutputName << std::endl;
-        std::cout << "  - Shape: [";
-        for (size_t i = 0; i < shape.size(); ++i) {
-            std::cout << shape[i];
-            if (i < shape.size() - 1) std::cout << ", ";
-        }
-        std::cout << "]" << std::endl;
-        std::cout << "  - Max candidates: " << max_candidates << std::endl;
+        // Buffer allocation completed for model output shape
     }
 
     if (max_candidates == 0) {
@@ -1454,7 +1439,6 @@ void Detector::initializeBuffers() {
     
     // Allocate extra buffer space for safety
     int buffer_size = max_candidates * 2;
-    std::cout << "[Detector] Allocating decoded detections buffer: " << buffer_size << " detections" << std::endl;
     m_decodedDetectionsGpu.allocate(buffer_size);
     m_decodedCountGpu.allocate(1);
     
@@ -1546,13 +1530,11 @@ SimpleCudaMat Detector::getColorMaskGpu() const {
 void Detector::warmupGPU()
 {
     auto& ctx = AppContext::getInstance();
-    std::cout << "[Detector] Warming up GPU..." << std::endl;
     
     // 더미 데이터로 GPU 워밍업
     if (inputBufferDevice && inputDims.nbDims >= 4) {
         size_t dummySize = static_cast<size_t>(inputDims.d[1]) * static_cast<size_t>(inputDims.d[2]) * static_cast<size_t>(inputDims.d[3]) * sizeof(float);
         
-        // 작은 더미 데이터 생성
         float* dummyData = nullptr;
         cudaMalloc(&dummyData, dummySize);
         cudaMemset(dummyData, 0, dummySize);
@@ -1567,7 +1549,6 @@ void Detector::warmupGPU()
         }
         
         cudaFree(dummyData);
-        std::cout << "[Detector] GPU warmup completed" << std::endl;
     }
 }
 
@@ -1576,73 +1557,76 @@ void Detector::captureInferenceGraph(const SimpleCudaMat& frameGpu)
 {
     if (m_graphCaptured || !context || !frameGpu.data()) return;
     
+    auto& ctx = AppContext::getInstance();
+    
+    // YOLO10 has dynamic output shape due to end-to-end NMS, skip graph capture
+    if (ctx.config.postprocess == "yolo10") {
+        return;
+    }
+    
     static int captureAttempts = 0;
     const int maxAttempts = 5;
     
     if (captureAttempts >= maxAttempts) {
-        std::cerr << "[Detector] CUDA Graph capture disabled after " << maxAttempts << " failed attempts" << std::endl;
         return;
     }
     
     captureAttempts++;
-    std::cout << "[Detector] Capturing CUDA Graph for inference only (attempt " << captureAttempts << "/" << maxAttempts << ")..." << std::endl;
     
     // Clear any previous CUDA errors
-    cudaError_t lastError = cudaGetLastError();
-    if (lastError != cudaSuccess) {
-        std::cerr << "[Detector] Clearing previous CUDA error: " << cudaGetErrorString(lastError) << std::endl;
-    }
+    cudaGetLastError();
     
-    // Ensure all streams are idle before capture
+    // Ensure all streams are idle
     cudaStreamSynchronize(preprocessStream);
     cudaStreamSynchronize(stream);
     cudaStreamSynchronize(postprocessStream);
     
-    // TensorRT 추론만 CUDA Graph로 캡처 (후처리는 제외)
-    cudaError_t captureResult = cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal);
+    // Multiple warmup runs to ensure all allocations are done
+    for (int i = 0; i < 3; i++) {
+        bool warmupResult = context->enqueueV3(stream);
+        cudaStreamSynchronize(stream);
+        if (!warmupResult) {
+            return;
+        }
+    }
+    
+    // Try to capture
+    cudaError_t captureResult = cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal);
     if (captureResult != cudaSuccess) {
-        std::cerr << "[Detector] Failed to begin CUDA Graph capture: " << cudaGetErrorString(captureResult) << std::endl;
         return;
     }
     
-    // 추론 실행만 캡처
+    // Capture inference only
     bool enqueueResult = context->enqueueV3(stream);
     
-    // Graph 캡처 종료
+    // End capture
     cudaGraph_t tempGraph = nullptr;
     captureResult = cudaStreamEndCapture(stream, &tempGraph);
     
     if (!enqueueResult || captureResult != cudaSuccess) {
-        std::cerr << "[Detector] TensorRT enqueue or capture failed during graph capture" << std::endl;
         if (tempGraph) cudaGraphDestroy(tempGraph);
         return;
     }
     
-    // Check if capture was successful
-    if (captureResult == cudaSuccess && tempGraph != nullptr) {
-        // Validate graph before instantiation
+    // Validate and instantiate
+    if (tempGraph != nullptr) {
         cudaGraphNode_t* nodes = nullptr;
         size_t numNodes = 0;
         cudaError_t getNodesResult = cudaGraphGetNodes(tempGraph, nullptr, &numNodes);
         
         if (getNodesResult == cudaSuccess && numNodes > 0) {
-            std::cout << "[Detector] CUDA Graph captured with " << numNodes << " nodes" << std::endl;
-            
-            // Graph 인스턴스 생성
             cudaError_t instantiateResult = cudaGraphInstantiate(&m_inferenceGraphExec, tempGraph, nullptr, nullptr, 0);
             
             if (instantiateResult == cudaSuccess && m_inferenceGraphExec != nullptr) {
                 m_inferenceGraph = tempGraph;
                 m_graphCaptured = true;
-                std::cout << "[Detector] CUDA Graph instantiated successfully" << std::endl;
                 
-                // Verify graph can be launched
+                // Test launch
                 cudaError_t launchResult = cudaGraphLaunch(m_inferenceGraphExec, stream);
                 if (launchResult == cudaSuccess) {
                     cudaStreamSynchronize(stream);
-                    std::cout << "[Detector] CUDA Graph test launch successful" << std::endl;
+                    std::cout << "[Graph] CUDA Graph enabled for " << ctx.config.postprocess << std::endl;
                 } else {
-                    std::cerr << "[Detector] CUDA Graph test launch failed: " << cudaGetErrorString(launchResult) << std::endl;
                     // Clean up
                     cudaGraphExecDestroy(m_inferenceGraphExec);
                     cudaGraphDestroy(m_inferenceGraph);
@@ -1651,18 +1635,11 @@ void Detector::captureInferenceGraph(const SimpleCudaMat& frameGpu)
                     m_graphCaptured = false;
                 }
             } else {
-                // Clean up on failure
                 if (tempGraph) cudaGraphDestroy(tempGraph);
-                std::cerr << "[Detector] Failed to instantiate CUDA Graph: " << cudaGetErrorString(instantiateResult) << std::endl;
             }
         } else {
-            std::cerr << "[Detector] CUDA Graph has no nodes or failed to get nodes" << std::endl;
             if (tempGraph) cudaGraphDestroy(tempGraph);
         }
-    } else {
-        std::cerr << "[Detector] CUDA Graph capture failed: " << cudaGetErrorString(captureResult) << std::endl;
-        // Clear any capture state
-        cudaGetLastError();
     }
 }
 
@@ -1699,7 +1676,12 @@ nvinfer1::ICudaEngine* buildEngineFromOnnx(const std::string& onnxPath)
 {
     class SimpleLogger : public nvinfer1::ILogger {
         void log(Severity severity, const char* msg) noexcept override {
-            if (severity <= Severity::kWARNING) std::cout << "[TensorRT] " << msg << std::endl;
+            // Suppress TensorRT internal errors
+            if (severity <= Severity::kERROR && 
+                (strstr(msg, "defaultAllocator.cpp") == nullptr) &&
+                (strstr(msg, "enqueueV3") == nullptr)) {
+                std::cout << "[TensorRT] " << msg << std::endl;
+            }
         }
     };
     static SimpleLogger logger;
@@ -1786,7 +1768,12 @@ nvinfer1::ICudaEngine* loadEngineFromFile(const std::string& enginePath)
 {
     class SimpleLogger : public nvinfer1::ILogger {
         void log(Severity severity, const char* msg) noexcept override {
-            if (severity <= Severity::kWARNING) std::cout << "[TensorRT] " << msg << std::endl;
+            // Suppress TensorRT internal errors
+            if (severity <= Severity::kERROR && 
+                (strstr(msg, "defaultAllocator.cpp") == nullptr) &&
+                (strstr(msg, "enqueueV3") == nullptr)) {
+                std::cout << "[TensorRT] " << msg << std::endl;
+            }
         }
     };
     static SimpleLogger logger;
