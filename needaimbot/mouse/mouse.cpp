@@ -96,11 +96,21 @@ MouseThread::MouseThread(
     pid_controller = std::make_unique<PIDController2D>(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
     initializeInputMethod(serialConnection, makcuConnection, gHub);
     
+    // Initialize RapidFire
+    rapid_fire = std::make_unique<RapidFire>();
+    rapid_fire->start();
+    updateRapidFire(); // Set initial state from config
+    
     // Start async input worker thread
     async_input_thread_ = std::thread(&MouseThread::asyncInputWorker, this);
 }
 
 MouseThread::~MouseThread() {
+    // Stop RapidFire
+    if (rapid_fire) {
+        rapid_fire->stop();
+    }
+    
     // Stop the async worker thread
     should_stop_thread_ = true;
     
@@ -111,21 +121,32 @@ MouseThread::~MouseThread() {
 
 void MouseThread::initializeInputMethod(SerialConnection *serialConnection, MakcuConnection *makcuConnection, GhubMouse *gHub)
 {
+    std::shared_ptr<InputMethod> shared_input_method;
+    
     if (serialConnection && serialConnection->isOpen())
     {
         input_method = std::make_unique<SerialInputMethod>(serialConnection);
+        shared_input_method = std::make_shared<SerialInputMethod>(serialConnection);
     }
     else if (makcuConnection && makcuConnection->isOpen())
     {
         input_method = std::make_unique<MakcuInputMethod>(makcuConnection);
+        shared_input_method = std::make_shared<MakcuInputMethod>(makcuConnection);
     }
     else if (gHub)
     {
         input_method = std::make_unique<GHubInputMethod>(gHub);
+        shared_input_method = std::make_shared<GHubInputMethod>(gHub);
     }
     else
     {
         input_method = std::make_unique<Win32InputMethod>();
+        shared_input_method = std::make_shared<Win32InputMethod>();
+    }
+    
+    // Update RapidFire with the same input method
+    if (rapid_fire) {
+        rapid_fire->setInputMethod(shared_input_method);
     }
 }
 
@@ -540,7 +561,32 @@ void MouseThread::applyWeaponRecoilCompensation(const WeaponRecoilProfile* profi
 void MouseThread::setInputMethod(std::unique_ptr<InputMethod> new_method)
 {
     std::lock_guard<std::mutex> lock(input_method_mutex);
+    
+    // Create a shared_ptr version for RapidFire
+    // We need to determine the actual type to create a proper shared_ptr
+    auto& ctx = AppContext::getInstance();
+    std::shared_ptr<InputMethod> shared_method;
+    
+    if (ctx.config.input_method == "ARDUINO") {
+        // Note: We can't directly share the unique_ptr, need to create a new instance
+        // This is a limitation - we'd need to refactor to use shared_ptr throughout
+        shared_method = std::make_shared<Win32InputMethod>();
+    } else if (ctx.config.input_method == "GHUB") {
+        shared_method = std::make_shared<Win32InputMethod>();
+    } else if (ctx.config.input_method == "KMBOX") {
+        shared_method = std::make_shared<KmboxInputMethod>();
+    } else if (ctx.config.input_method == "RAZER") {
+        shared_method = std::make_shared<RZInputMethod>();
+    } else {
+        shared_method = std::make_shared<Win32InputMethod>();
+    }
+    
     input_method = std::move(new_method);
+    
+    // Update RapidFire with the new input method
+    if (rapid_fire) {
+        rapid_fire->setInputMethod(shared_method);
+    }
 }
 
 
@@ -625,6 +671,19 @@ void MouseThread::resetAccumulatedStates()
     // Reset movement accumulation
     accumulated_x_ = 0.0f;
     accumulated_y_ = 0.0f;
+}
+
+void MouseThread::updateRapidFire()
+{
+    auto& ctx = AppContext::getInstance();
+    
+    if (rapid_fire) {
+        // Enable/disable based on config
+        rapid_fire->setEnabled(ctx.config.enable_rapidfire);
+        
+        // Set CPS (clicks per second) from config
+        rapid_fire->setClicksPerSecond(ctx.config.rapidfire_cps);
+    }
 }
 
 void MouseThread::asyncInputWorker()
