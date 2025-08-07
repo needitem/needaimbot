@@ -297,20 +297,35 @@ void mouseThreadFunction(MouseThread &mouseThread)
             static bool was_recoil_active = false;
             bool recoil_active = key_cache.left_mouse && key_cache.right_mouse;
             
-            // Debug logging removed
+            // Check if crouch key (Left Control) is pressed for recoil reduction
+            bool is_crouching = ctx.config.crouch_recoil_enabled && (GetAsyncKeyState(VK_LCONTROL) & 0x8000);
             
             was_recoil_active = recoil_active;
             
             if (recoil_active) {
+                // Calculate recoil compensation strength with crouch modification
+                float recoil_multiplier = 1.0f;
+                if (is_crouching) {
+                    // Apply crouch modification to recoil compensation
+                    // -50% = compensate only 50% of recoil (0.5x multiplier)
+                    // 0% = no change (1.0x multiplier)
+                    // +50% = compensate 150% of recoil (1.5x multiplier)
+                    recoil_multiplier = 1.0f + (ctx.config.crouch_recoil_reduction / 100.0f);
+                    recoil_multiplier = (std::max)(0.0f, recoil_multiplier); // Prevent negative multiplier
+                }
+                
                 // Check if we have an active weapon profile
                 if (ctx.config.active_weapon_profile_index >= 0 && 
                     ctx.config.active_weapon_profile_index < ctx.config.weapon_profiles.size()) {
                     
-                    const WeaponRecoilProfile& profile = ctx.config.weapon_profiles[ctx.config.active_weapon_profile_index];
+                    WeaponRecoilProfile profile = ctx.config.weapon_profiles[ctx.config.active_weapon_profile_index];
+                    // Apply crouch multiplier to the profile strength
+                    profile.base_strength *= recoil_multiplier;
                     mouseThread.applyWeaponRecoilCompensation(&profile, ctx.config.active_scope_magnification);
                 } else {
-                    // Use simple recoil compensation  
-                    mouseThread.applyRecoilCompensation(ctx.config.easynorecoilstrength);
+                    // Use simple recoil compensation with crouch multiplier
+                    float adjusted_strength = ctx.config.easynorecoilstrength * recoil_multiplier;
+                    mouseThread.applyRecoilCompensation(adjusted_strength);
                 }
             }
         }
