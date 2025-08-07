@@ -58,11 +58,6 @@ SimpleScreenCapture::SimpleScreenCapture(int width, int height)
     // Select bitmap into memory DC
     SelectObject(m_memoryDC, m_bitmap);
     
-    // Don't use external data wrapper for now - it seems to be causing issues
-    // m_hostFrame = SimpleMat(m_height, m_width, 4, m_bitmapData, m_width * 4);
-    
-    // std::cout << "[SimpleCapture] Host frame created: " << m_hostFrame.cols() << "x" << m_hostFrame.rows() 
-    //           << " channels=" << m_hostFrame.channels() << " empty=" << m_hostFrame.empty() << std::endl;
     
     // Pre-allocate GPU memory to avoid allocation during stream capture
     m_deviceFrame.create(m_height, m_width, 4); // BGRA first

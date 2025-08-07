@@ -13,9 +13,8 @@
 #include <chrono>
 #include <atomic>
 #include <random>
-#include <queue>
 #include <thread>
-#include <condition_variable>
+#include "lockless_queue.h"
 
 #include "config/config.h"
 #include "aimbot_components/AimbotTarget.h"
@@ -84,18 +83,9 @@ private:
     static constexpr float SMOOTHING_INCREASE_FACTOR = 0.001f;
     static constexpr float MAX_ADDITIONAL_SMOOTHING = 0.4f;
     
-    // Async mouse input queue system
-    struct MouseCommand {
-        enum Type { MOVE, PRESS, RELEASE };
-        Type type;
-        int dx;
-        int dy;
-        std::chrono::high_resolution_clock::time_point timestamp;
-    };
-    
-    std::queue<MouseCommand> mouse_command_queue_;
-    mutable std::mutex queue_mutex_;
-    std::condition_variable queue_cv_;
+    // Async mouse input queue system using lockless queue
+    // MouseCommand struct defined in lockless_queue.h
+    MouseCommandQueue mouse_command_queue_;
     std::thread async_input_thread_;
     std::atomic<bool> should_stop_thread_{false};
     
