@@ -3,7 +3,6 @@
 #include <iostream>
 #include <algorithm>
 #include <cstring>
-#include <thread>
 
 RapidFire::RapidFire() 
     : enabled(false), running(false), firing(false), clicks_per_second(10), just_sent_click(false), ui_active(false) {
@@ -96,12 +95,8 @@ void RapidFire::performClick() {
     std::lock_guard<std::mutex> lock(input_method_mutex);
     
     if (input_method && input_method->isValid()) {
-        // Send release with minimal delay for reliability
+        // Send release and press immediately
         input_method->release();
-        
-        // Use std::this_thread::sleep_for for more precise timing (1-2ms)
-        std::this_thread::sleep_for(std::chrono::microseconds(1500)); // 1.5ms delay
-        
         input_method->press();
     } else {
         // Fallback to WIN32 if no valid input method
@@ -111,14 +106,11 @@ void RapidFire::performClick() {
         inputs[0].type = INPUT_MOUSE;
         inputs[0].mi.dwFlags = MOUSEEVENTF_LEFTUP;
         
-        // Small delay using the same method
-        std::this_thread::sleep_for(std::chrono::microseconds(1500));
-        
-        // Press  
+        // Press
         inputs[1].type = INPUT_MOUSE;
         inputs[1].mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
         
-        SendInput(1, &inputs[1], sizeof(INPUT));
+        SendInput(2, inputs, sizeof(INPUT));
     }
 }
 
