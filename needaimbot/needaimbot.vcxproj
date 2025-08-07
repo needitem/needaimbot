@@ -37,6 +37,7 @@
     <ClCompile Include="mouse\\input_drivers\\ghub.cpp" />
     <ClCompile Include="mouse\\input_drivers\\kmboxNet.cpp" />
     <ClCompile Include="mouse\\mouse.cpp" />
+    <ClCompile Include="mouse\\rapidfire.cpp" />
     <ClCompile Include="mouse\\input_drivers\\my_enc.cpp" />
     <ClCompile Include="mouse\\aimbot_components\\PIDController2D.cpp" />
     <ClCompile Include="mouse\\aimbot_components\\IntegratedController.cpp" />
@@ -123,6 +124,7 @@
     <ClInclude Include="mouse\kmboxNet.h" />
     <ClInclude Include="mouse\LinearRegressionPredictor.h" />
     <ClInclude Include="mouse\mouse.h" />
+    <ClInclude Include="mouse\rapidfire.h" />
     <ClInclude Include="mouse\my_enc.h" />
     <ClInclude Include="mouse\PIDController2D.h" />
     <ClInclude Include="mouse\rzctl.h" />
