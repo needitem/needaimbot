@@ -21,6 +21,7 @@
 #include "mouse/mouse.h"
 #include "overlay/draw_settings.h"
 #include "overlay/draw_offset.h"
+#include "overlay/draw_tracker.h"
 #include "overlay/ui_helpers.h"
 #include "config.h"
 #include "keycodes.h"
@@ -561,6 +562,15 @@ void OverlayThread()
                     {
                         UIHelpers::BeginSettingsSection("Mouse Movement", "Configure mouse sensitivity and movement behavior");
                         draw_mouse();
+                        UIHelpers::EndSettingsSection();
+                        ImGui::EndTabItem();
+                    }
+
+                    // Tracker Settings
+                    if (ImGui::BeginTabItem("Tracker"))
+                    {
+                        UIHelpers::BeginSettingsSection("Target Tracking", "Configure tracking and prediction systems");
+                        draw_tracker();
                         UIHelpers::EndSettingsSection();
                         ImGui::EndTabItem();
                     }

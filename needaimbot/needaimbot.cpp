@@ -224,6 +224,7 @@ void mouseThreadFunction(MouseThread &mouseThread)
                     current_target.y,
                     current_target.width,
                     current_target.height,
+                    current_target.confidence,
                     current_target.classId
                 );
                 

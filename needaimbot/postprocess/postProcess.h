@@ -5,39 +5,16 @@
 // OpenCV removed - using custom structures
 #include <cuda_runtime.h>
 #include <NvInferRuntimeCommon.h> 
+#include "../core/Target.h"
 
+// Use Target as Detection for backwards compatibility
+using Detection = Target;
 
-
-// Cache-optimized Detection structure
-struct Detection
-{
-    // Most frequently accessed members first
-    float confidence;     // 4 bytes
-    int classId;         // 4 bytes
-    
-    // Box coordinates packed together
-    int x;               // 4 bytes
-    int y;               // 4 bytes
-    int width;           // 4 bytes
-    int height;          // 4 bytes
-    
-    // Helper methods for box access
-    void getBox(int& outX, int& outY, int& outWidth, int& outHeight) const {
-        outX = x;
-        outY = y;
-        outWidth = width;
-        outHeight = height;
-    }
-    
-    // Constructors
-    Detection() : confidence(-1.0f), classId(-1), x(-1), y(-1), width(-1), height(-1) {}
-    Detection(int x_, int y_, int width_, int height_, float conf, int cls) 
-        : confidence(conf), classId(cls), x(x_), y(y_), 
-          width(width_), height(height_) {}
-};
-
-
-
+// Validate and clean detections
+void validateDetectionsGpu(
+    Detection* d_detections,
+    int n,
+    cudaStream_t stream = 0);
 
 void NMSGpu(
     const Detection* d_input_detections, 

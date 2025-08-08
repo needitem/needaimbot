@@ -13,6 +13,7 @@
 #include <cuda_runtime.h> 
 #include "../postprocess/postProcess.h" 
 #include "../cuda/color_conversion.h"
+#include "../tracking/SORTTracker.h"
  
 
 
@@ -59,7 +60,19 @@ static bool g_crosshairHsvValid = false;
 // GPU-accelerated version with direct GPU memory handling
 void uploadDebugFrame(const SimpleCudaMat& bgrGpu)
 {
+    // Comprehensive safety checks
     if (bgrGpu.empty() || !g_pd3dDevice || !g_pd3dDeviceContext) {
+        return;
+    }
+    
+    // Validate dimensions
+    if (bgrGpu.cols() <= 0 || bgrGpu.rows() <= 0 || 
+        bgrGpu.cols() > 10000 || bgrGpu.rows() > 10000) {
+        return;
+    }
+    
+    // Check for valid GPU data pointer
+    if (bgrGpu.data() == nullptr) {
         return;
     }
 
@@ -101,9 +114,22 @@ void uploadDebugFrame(const SimpleCudaMat& bgrGpu)
         }
     }
 
-    // GPU-based color conversion
+    // GPU-based color conversion with error handling
     static SimpleCudaMat rgbaGpu;
-    rgbaGpu.create(bgrGpu.rows(), bgrGpu.cols(), 4);
+    
+    try {
+        rgbaGpu.create(bgrGpu.rows(), bgrGpu.cols(), 4);
+    } catch (...) {
+        std::cerr << "[Debug] Failed to create RGBA GPU buffer" << std::endl;
+        return;
+    }
+    
+    // Ensure CUDA operations are synchronized
+    cudaError_t sync_err = cudaDeviceSynchronize();
+    if (sync_err != cudaSuccess) {
+        std::cerr << "[Debug] CUDA sync failed before conversion: " << cudaGetErrorString(sync_err) << std::endl;
+        return;
+    }
     
     cudaError_t err;
     if (bgrGpu.channels() == 4) {
@@ -112,12 +138,15 @@ void uploadDebugFrame(const SimpleCudaMat& bgrGpu)
                              bgrGpu.cols(), bgrGpu.rows(),
                              static_cast<int>(bgrGpu.step()), 
                              static_cast<int>(rgbaGpu.step()));
-    } else {
+    } else if (bgrGpu.channels() == 3) {
         // BGR to RGBA conversion
         err = cuda_bgr2rgba(bgrGpu.data(), rgbaGpu.data(),
                             bgrGpu.cols(), bgrGpu.rows(),
                             static_cast<int>(bgrGpu.step()), 
                             static_cast<int>(rgbaGpu.step()));
+    } else {
+        std::cerr << "[Debug] Unsupported channel count: " << bgrGpu.channels() << std::endl;
+        return;
     }
     
     if (err != cudaSuccess) {
@@ -125,27 +154,70 @@ void uploadDebugFrame(const SimpleCudaMat& bgrGpu)
         return;
     }
     
-    // Download converted data from GPU
+    // Sync after conversion
+    sync_err = cudaDeviceSynchronize();
+    if (sync_err != cudaSuccess) {
+        std::cerr << "[Debug] CUDA sync failed after conversion: " << cudaGetErrorString(sync_err) << std::endl;
+        return;
+    }
+    
+    // Download converted data from GPU with error handling
     static SimpleMat rgba;
-    rgba.create(rgbaGpu.rows(), rgbaGpu.cols(), 4);
-    rgbaGpu.download(rgba.data(), rgba.step());
-
-    if (rgba.empty() || rgba.cols() <= 0 || rgba.rows() <= 0) { 
+    try {
+        rgba.create(rgbaGpu.rows(), rgbaGpu.cols(), 4);
+        
+        // Validate CPU buffer
+        if (rgba.data() == nullptr) {
+            std::cerr << "[Debug] Failed to allocate CPU buffer" << std::endl;
+            return;
+        }
+        
+        rgbaGpu.download(rgba.data(), rgba.step());
+        
+        // Final sync to ensure download is complete
+        cudaError_t download_sync = cudaDeviceSynchronize();
+        if (download_sync != cudaSuccess) {
+            std::cerr << "[Debug] CUDA sync failed after download: " << cudaGetErrorString(download_sync) << std::endl;
+            return;
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "[Debug] Exception during download: " << e.what() << std::endl;
+        return;
+    } catch (...) {
+        std::cerr << "[Debug] Unknown exception during download" << std::endl;
         return;
     }
 
-    D3D11_MAPPED_SUBRESOURCE ms;
+    if (rgba.empty() || rgba.cols() <= 0 || rgba.rows() <= 0 || rgba.data() == nullptr) { 
+        return;
+    }
+
+    D3D11_MAPPED_SUBRESOURCE ms = {};
     HRESULT hr_map = g_pd3dDeviceContext->Map(g_debugTex, 0, D3D11_MAP_WRITE_DISCARD, 0, &ms);
-    if (SUCCEEDED(hr_map))
+    if (SUCCEEDED(hr_map) && ms.pData != nullptr)
     {
-        // Copy row by row, handling different row pitches
-        size_t copy_width = texW * 4;  // Width in bytes for RGBA
-        for (int y = 0; y < texH; ++y) {
-            memcpy((uint8_t*)ms.pData + ms.RowPitch * y, 
-                   rgba.data() + y * rgba.step(), 
-                   copy_width);
+        try {
+            // Copy row by row, handling different row pitches
+            size_t copy_width = std::min<size_t>(texW * 4, ms.RowPitch);  // Ensure we don't overrun
+            uint8_t* src_data = rgba.data();
+            uint8_t* dst_data = static_cast<uint8_t*>(ms.pData);
+            
+            if (src_data && dst_data) {
+                for (int y = 0; y < texH; ++y) {
+                    // Bounds check
+                    if (y * rgba.step() + copy_width <= rgba.rows() * rgba.step()) {
+                        memcpy(dst_data + ms.RowPitch * y, 
+                               src_data + y * rgba.step(), 
+                               copy_width);
+                    }
+                }
+            }
+        } catch (...) {
+            std::cerr << "[Debug] Exception during texture copy" << std::endl;
         }
         g_pd3dDeviceContext->Unmap(g_debugTex, 0);
+    } else if (FAILED(hr_map)) {
+        std::cerr << "[Debug] Failed to map texture: HRESULT=" << std::hex << hr_map << std::dec << std::endl;
     }
 }
 
@@ -241,19 +313,27 @@ void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float debug_scale) 
     
     if (!ctx.detector) return;
     
+    // Validate parameters
+    if (!draw_list || debug_scale <= 0) return;
+    
     std::lock_guard<std::mutex> det_lock(ctx.detector->detectionMutex);
     
-    if (ctx.detector->m_finalDetectionsCountHost > 0 && ctx.detector->m_finalDetectionsGpu.get() != nullptr)
-    {
-        std::vector<Detection> host_detections(ctx.detector->m_finalDetectionsCountHost);
-        cudaError_t err = cudaMemcpy(host_detections.data(), ctx.detector->m_finalDetectionsGpu.get(),
-                                     ctx.detector->m_finalDetectionsCountHost * sizeof(Detection),
-                                     cudaMemcpyDeviceToHost);
+    // Validate detection count
+    if (ctx.detector->m_finalDetectionsCountHost <= 0 || 
+        ctx.detector->m_finalDetectionsCountHost > 1000 ||  // Sanity check
+        ctx.detector->m_finalDetectionsGpu.get() == nullptr) {
+        return;
+    }
+    
+    std::vector<Detection> host_detections(ctx.detector->m_finalDetectionsCountHost);
+    cudaError_t err = cudaMemcpy(host_detections.data(), ctx.detector->m_finalDetectionsGpu.get(),
+                                 ctx.detector->m_finalDetectionsCountHost * sizeof(Detection),
+                                 cudaMemcpyDeviceToHost);
 
-        if (err == cudaSuccess)
+    if (err == cudaSuccess)
+    {
+        for (const auto& det : host_detections)
         {
-            for (const auto& det : host_detections)
-            {
                 // Skip invalid detections - check multiple conditions
                 if (det.width <= 0 || det.height <= 0 || 
                     det.confidence <= 0.0f || det.classId < 0 ||
@@ -295,15 +375,49 @@ void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float debug_scale) 
 
                 draw_list->AddRect(p1, p2, color, 1.0f, 0, thickness); 
 
+                // Use track ID from detection if available
+                int track_id = det.id;  // Detection already has ID field from tracking
+                
+                // If tracking is disabled, ID will be -1
+                if (!ctx.config.enable_tracking) {
+                    track_id = -1;
+                }
+
+                // Build label safely
                 std::string className = CommonHelpers::getClassNameById(det.classId);
-                std::string label = className + " (" + std::to_string(static_cast<int>(det.confidence * 100.0f)) + "%)";
+                if (className.empty()) className = "Unknown";
+                
+                char conf_str[32];
+                snprintf(conf_str, sizeof(conf_str), "%.0f%%", det.confidence * 100.0f);
+                
+                std::string label = className + " (" + conf_str + ")";
+                
+                if (track_id >= 0 && track_id < 10000) {  // Sanity check
+                    label = "ID:" + std::to_string(track_id) + " " + label;
+                }
                 if (is_best_target) {
                     label = "[TARGET] " + label;
                 }
+                
+                // Ensure label isn't too long
+                if (label.length() > 100) {
+                    label = label.substr(0, 97) + "...";
+                }
+                
                 ImU32 text_color = is_best_target ? IM_COL32(0, 255, 0, 255) : 
                                   (det.confidence >= ctx.config.confidence_threshold ? IM_COL32(255, 255, 0, 255) : IM_COL32(255, 0, 0, 255));
-                draw_list->AddText(ImVec2(p1.x, p1.y - 16), text_color, label.c_str());
+                
+                // Check text position is valid
+                if (p1.x >= 0 && p1.y >= 16) {
+                    draw_list->AddText(ImVec2(p1.x, p1.y - 16), text_color, label.c_str());
+                }
             }
+    } else {
+        // Log CUDA error but don't crash
+        static int error_count = 0;
+        if (error_count < 5) {  // Limit error logging
+            std::cerr << "[drawDetections] CUDA memcpy failed: " << cudaGetErrorString(err) << std::endl;
+            error_count++;
         }
     }
 }

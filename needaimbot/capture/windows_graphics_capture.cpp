@@ -58,27 +58,59 @@ WindowsGraphicsCapture::WindowsGraphicsCapture(int captureWidth, int captureHeig
     impl->m_screenWidth = GetSystemMetrics(SM_CXSCREEN);
     impl->m_screenHeight = GetSystemMetrics(SM_CYSCREEN);
     
+    std::cout << "[WinGraphicsCapture] Screen dimensions: " 
+              << impl->m_screenWidth << "x" << impl->m_screenHeight << std::endl;
+    
     // Calculate center region
     impl->m_captureRegion.left = (impl->m_screenWidth - captureWidth) / 2;
     impl->m_captureRegion.top = (impl->m_screenHeight - captureHeight) / 2;
     impl->m_captureRegion.right = impl->m_captureRegion.left + captureWidth;
     impl->m_captureRegion.bottom = impl->m_captureRegion.top + captureHeight;
     
+    std::cout << "[WinGraphicsCapture] Calling InitializeCapture()" << std::endl;
     if (!InitializeCapture()) {
-        std::cerr << "[WinGraphicsCapture] Failed to initialize" << std::endl;
+        std::cerr << "[WinGraphicsCapture] Failed to initialize capture" << std::endl;
+        delete impl;
+        m_captureItem = nullptr;
         return;
     }
+    std::cout << "[WinGraphicsCapture] InitializeCapture() succeeded" << std::endl;
     
     // No need for pinned memory with direct GPU interop
     
     // Create CUDA resources with high priority
+    std::cout << "[WinGraphicsCapture] Creating CUDA resources" << std::endl;
     int leastPriority, greatestPriority;
-    cudaDeviceGetStreamPriorityRange(&leastPriority, &greatestPriority);
-    cudaStreamCreateWithPriority(&m_cudaStream, cudaStreamNonBlocking, greatestPriority);
-    cudaEventCreateWithFlags(&m_captureDoneEvent, cudaEventDisableTiming);
+    cudaError_t err = cudaDeviceGetStreamPriorityRange(&leastPriority, &greatestPriority);
+    if (err != cudaSuccess) {
+        std::cerr << "[WinGraphicsCapture] Failed to get stream priority range: " << cudaGetErrorString(err) << std::endl;
+        delete impl;
+        m_captureItem = nullptr;
+        return;
+    }
+    
+    err = cudaStreamCreateWithPriority(&m_cudaStream, cudaStreamNonBlocking, greatestPriority);
+    if (err != cudaSuccess) {
+        std::cerr << "[WinGraphicsCapture] Failed to create CUDA stream: " << cudaGetErrorString(err) << std::endl;
+        delete impl;
+        m_captureItem = nullptr;
+        return;
+    }
+    
+    err = cudaEventCreateWithFlags(&m_captureDoneEvent, cudaEventDisableTiming);
+    if (err != cudaSuccess) {
+        std::cerr << "[WinGraphicsCapture] Failed to create CUDA event: " << cudaGetErrorString(err) << std::endl;
+        cudaStreamDestroy(m_cudaStream);
+        delete impl;
+        m_captureItem = nullptr;
+        return;
+    }
+    
+    std::cout << "[WinGraphicsCapture] CUDA resources created successfully" << std::endl;
     
     m_initialized = true;
     impl->m_initialized = true;
+    std::cout << "[WinGraphicsCapture] Constructor completed successfully" << std::endl;
 }
 
 void WindowsGraphicsCapture::UpdateCaptureRegion(float offsetX, float offsetY)
@@ -159,6 +191,7 @@ bool WindowsGraphicsCapture::InitializeCapture()
     HRESULT hr;
     D3D_FEATURE_LEVEL featureLevels[] = { D3D_FEATURE_LEVEL_11_0 };
     
+    std::cout << "[WinGraphicsCapture] Creating D3D11 device" << std::endl;
     hr = D3D11CreateDevice(
         nullptr,
         D3D_DRIVER_TYPE_HARDWARE,
@@ -173,9 +206,11 @@ bool WindowsGraphicsCapture::InitializeCapture()
     );
     
     if (FAILED(hr)) {
-        std::cerr << "[WinGraphicsCapture] Failed to create D3D11 device" << std::endl;
+        std::cerr << "[WinGraphicsCapture] Failed to create D3D11 device. HRESULT: 0x" 
+                  << std::hex << hr << std::dec << std::endl;
         return false;
     }
+    std::cout << "[WinGraphicsCapture] D3D11 device created successfully" << std::endl;
     
     // Get DXGI device
     IDXGIDevice* dxgiDevice = nullptr;
@@ -209,12 +244,20 @@ bool WindowsGraphicsCapture::InitializeCapture()
     }
     
     // Create desktop duplication
+    std::cout << "[WinGraphicsCapture] Creating desktop duplication" << std::endl;
     hr = output1->DuplicateOutput(impl->m_device, &impl->m_duplication);
     output1->Release();
     if (FAILED(hr)) {
-        std::cerr << "[WinGraphicsCapture] Failed to create desktop duplication" << std::endl;
+        std::cerr << "[WinGraphicsCapture] Failed to create desktop duplication. HRESULT: 0x" 
+                  << std::hex << hr << std::dec << std::endl;
+        if (hr == DXGI_ERROR_NOT_CURRENTLY_AVAILABLE) {
+            std::cerr << "[WinGraphicsCapture] Screen is likely locked or another application is using Desktop Duplication" << std::endl;
+        } else if (hr == E_ACCESSDENIED) {
+            std::cerr << "[WinGraphicsCapture] Access denied - may need to run as administrator" << std::endl;
+        }
         return false;
     }
+    std::cout << "[WinGraphicsCapture] Desktop duplication created successfully" << std::endl;
     
     // Create region-sized texture (not full screen!)
     D3D11_TEXTURE2D_DESC desc = {};
@@ -233,6 +276,7 @@ bool WindowsGraphicsCapture::InitializeCapture()
     }
     
     // Register texture with CUDA for direct GPU access
+    std::cout << "[WinGraphicsCapture] Registering D3D11 texture with CUDA" << std::endl;
     cudaError_t cudaErr = cudaGraphicsD3D11RegisterResource(
         &impl->m_cudaResource,
         impl->m_regionTexture,
@@ -243,7 +287,9 @@ bool WindowsGraphicsCapture::InitializeCapture()
                   << cudaGetErrorString(cudaErr) << std::endl;
         return false;
     }
+    std::cout << "[WinGraphicsCapture] CUDA registration successful" << std::endl;
     
+    std::cout << "[WinGraphicsCapture] InitializeCapture completed successfully" << std::endl;
     return true;
 }
 
@@ -262,6 +308,7 @@ SimpleCudaMat WindowsGraphicsCapture::GetNextFrameGpu()
 {
     auto impl = reinterpret_cast<WindowsGraphicsCaptureImpl*>(m_captureItem);
     if (!impl || !impl->m_initialized) {
+        std::cerr << "[WinGraphicsCapture] GetNextFrameGpu: Not initialized" << std::endl;
         return SimpleCudaMat();
     }
     
@@ -271,10 +318,16 @@ SimpleCudaMat WindowsGraphicsCapture::GetNextFrameGpu()
     
     HRESULT hr = impl->m_duplication->AcquireNextFrame(0, &frameInfo, &resource);
     if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
+        // This is normal - no new frame available
         return SimpleCudaMat();
     }
     
     if (FAILED(hr)) {
+        if (hr == DXGI_ERROR_ACCESS_LOST) {
+            std::cerr << "[WinGraphicsCapture] Desktop duplication access lost - need to recreate" << std::endl;
+        } else {
+            std::cerr << "[WinGraphicsCapture] AcquireNextFrame failed: 0x" << std::hex << hr << std::dec << std::endl;
+        }
         impl->m_duplication->ReleaseFrame();
         return SimpleCudaMat();
     }
@@ -311,6 +364,7 @@ SimpleCudaMat WindowsGraphicsCapture::GetNextFrameGpu()
     // Map CUDA resource directly - no CPU copy needed!
     cudaError_t err = cudaGraphicsMapResources(1, &impl->m_cudaResource, m_cudaStream);
     if (err != cudaSuccess) {
+        std::cerr << "[WinGraphicsCapture] Failed to map CUDA resource: " << cudaGetErrorString(err) << std::endl;
         return SimpleCudaMat();
     }
     
@@ -318,12 +372,14 @@ SimpleCudaMat WindowsGraphicsCapture::GetNextFrameGpu()
     cudaArray_t cudaArray;
     err = cudaGraphicsSubResourceGetMappedArray(&cudaArray, impl->m_cudaResource, 0, 0);
     if (err != cudaSuccess) {
+        std::cerr << "[WinGraphicsCapture] Failed to get mapped array: " << cudaGetErrorString(err) << std::endl;
         cudaGraphicsUnmapResources(1, &impl->m_cudaResource, m_cudaStream);
         return SimpleCudaMat();
     }
     
     // Get GPU buffer
     if (!g_frameBufferPool) {
+        std::cout << "[WinGraphicsCapture] Creating FrameBufferPool" << std::endl;
         g_frameBufferPool = std::make_unique<FrameBufferPool>(10);
     }
     
@@ -344,6 +400,7 @@ SimpleCudaMat WindowsGraphicsCapture::GetNextFrameGpu()
     cudaGraphicsUnmapResources(1, &impl->m_cudaResource, m_cudaStream);
     
     if (err != cudaSuccess) {
+        std::cerr << "[WinGraphicsCapture] Failed to copy from CUDA array: " << cudaGetErrorString(err) << std::endl;
         g_frameBufferPool->releaseGpuBuffer(std::move(gpuFrame));
         return SimpleCudaMat();
     }

@@ -229,6 +229,18 @@ public:
     };
     std::vector<ErrorScalingRule> error_scaling_rules;
 
+    // SORT Tracker parameters
+    bool enable_tracking;       // Enable/disable target tracking
+    int tracker_max_age;        // Max frames to keep track without detection (default: 5)
+    int tracker_min_hits;       // Min hits before track is confirmed (default: 3)
+    float tracker_iou_threshold; // IOU threshold for matching (default: 0.3)
+    
+    // Kalman filter parameters for tracking
+    bool enable_kalman_filter;   // Enable/disable Kalman filtering
+    float kalman_process_noise;  // Process noise for Kalman filter (default: 1.0)
+    float kalman_measurement_noise; // Measurement noise (default: 10.0)
+    float kalman_lookahead_time; // Lookahead time for prediction in seconds (default: 0.016)
+    
     
 
     

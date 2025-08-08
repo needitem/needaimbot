@@ -372,25 +372,77 @@ void renderOffsetTab()
     if (ctx.config.show_window) {
         ImGui::Spacing();
         
-        if (!latestFrameGpu.empty()) {
-            // Upload GPU frame directly
-            uploadDebugFrame(latestFrameGpu);
+        // Safely check and upload frame with defensive programming
+        try {
+            // Synchronize CUDA before checking frame
+            cudaError_t sync_err = cudaDeviceSynchronize();
+            if (sync_err != cudaSuccess) {
+                ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "CUDA sync error: %s", cudaGetErrorString(sync_err));
+                UIHelpers::EndSettingsSection();
+                return;
+            }
+            
+            // Check if frame is available and valid
+            if (latestFrameGpu.data() != nullptr && 
+                latestFrameGpu.rows() > 0 && latestFrameGpu.cols() > 0 &&
+                latestFrameGpu.rows() < 10000 && latestFrameGpu.cols() < 10000) {
+                uploadDebugFrame(latestFrameGpu);
+            } else {
+                // Frame not ready yet
+                ImGui::TextUnformatted("Preview frame is being prepared...");
+                UIHelpers::EndSettingsSection();
+                return;
+            }
+        } catch (const std::exception& e) {
+            ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Error uploading frame: %s", e.what());
+            UIHelpers::EndSettingsSection();
+            return;
+        } catch (...) {
+            ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Unknown error uploading frame");
+            UIHelpers::EndSettingsSection();
+            return;
+        }
             
             ImGui::SliderFloat("Preview Scale", &debug_scale, 0.1f, 3.0f, "%.1fx");
             
-            if (g_debugSRV && texW > 0 && texH > 0) {
-                ImVec2 image_size(texW * debug_scale, texH * debug_scale);
-                ImGui::Image(g_debugSRV, image_size);
+            if (g_debugSRV && texW > 0 && texH > 0 && texW < 10000 && texH < 10000) {
+                // Validate scale
+                float safe_scale = debug_scale;
+                if (safe_scale <= 0 || safe_scale > 10.0f) safe_scale = 1.0f;
+                
+                ImVec2 image_size(texW * safe_scale, texH * safe_scale);
+                
+                // Safety check for ImGui rendering
+                if (image_size.x > 0 && image_size.y > 0 && image_size.x < 10000 && image_size.y < 10000) {
+                    ImGui::Image(g_debugSRV, image_size);
+                } else {
+                    ImGui::TextUnformatted("Invalid image dimensions for display");
+                    UIHelpers::EndSettingsSection();
+                    return;
+                }
                 
                 ImVec2 image_pos = ImGui::GetItemRectMin();
                 ImDrawList* draw_list = ImGui::GetWindowDrawList();
+                
+                // Validate draw list
+                if (!draw_list) {
+                    ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Failed to get draw list");
+                    UIHelpers::EndSettingsSection();
+                    return;
+                }
 
-                // Draw detections
-                drawDetections(draw_list, image_pos, debug_scale);
+                // Draw detections with safety check
+                if (draw_list && debug_scale > 0 && debug_scale < 10.0f) {
+                    drawDetections(draw_list, image_pos, debug_scale);
+                }
 
                 // Draw crosshair at center (no offset since capture region already includes offset)
-                float center_x = image_pos.x + (texW * debug_scale) / 2.0f;
-                float center_y = image_pos.y + (texH * debug_scale) / 2.0f;
+                // Validate texture dimensions
+                if (texW <= 0 || texH <= 0 || texW > 10000 || texH > 10000) {
+                    // Skip drawing crosshair for invalid frame
+                } else {
+                    float center_x = image_pos.x + (texW * debug_scale) / 2.0f;
+                    float center_y = image_pos.y + (texH * debug_scale) / 2.0f;
                 
                 // Determine which offset is currently active
                 bool is_aim_shoot_active = ctx.config.enable_aim_shoot_offset && ctx.aiming.load() && ctx.shooting.load();
@@ -437,12 +489,10 @@ void renderOffsetTab()
                             ctx.config.crosshair_offset_x, ctx.config.crosshair_offset_y);
                     draw_list->AddText(ImVec2(image_pos.x + 10, image_pos.y + 50), IM_COL32(255, 255, 255, 255), offset_info);
                 }
+                }  // Close the else block for texture validation
             } else {
                 ImGui::TextUnformatted("Preview texture unavailable for display.");
             }
-        } else {
-            ImGui::TextUnformatted("Preview frame unavailable. Make sure capture is running.");
-        }
     }
 
     UIHelpers::EndSettingsSection();

@@ -31,6 +31,7 @@
 
 #include "aimbot_components/PIDController2D.h"
 #include "aimbot_components/IntegratedController.h"
+#include "aimbot_components/KalmanFilter2D.h"
 
 
 extern std::atomic<bool> aiming;
@@ -94,6 +95,7 @@ MouseThread::MouseThread(
 {
     initializeScreen(resolution, bScope_multiplier, norecoil_ms);
     pid_controller = std::make_unique<PIDController2D>(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
+    kalman_filter = std::make_unique<KalmanFilter2D>();  // Initialize Kalman filter
     initializeInputMethod(serialConnection, makcuConnection, gHub);
     
     // Initialize RapidFire
@@ -274,7 +276,7 @@ float MouseThread::calculateTargetDistanceSquared(const AimbotTarget &target) co
         current_center_y = this->center_y;
     }
 
-    float dx = target.x + target.w * 0.5f - current_center_x;
+    float dx = target.x + target.width * 0.5f - current_center_x;
     float target_center_y_val;
 
     
@@ -302,9 +304,9 @@ float MouseThread::calculateTargetDistanceSquared(const AimbotTarget &target) co
     }
 
     if (local_apply_head_offset && target.classId == local_head_class_id_to_use) {
-        target_center_y_val = target.y + target.h * local_head_y_offset_val;
+        target_center_y_val = target.y + target.height * local_head_y_offset_val;
     } else {
-        target_center_y_val = target.y + target.h * local_body_y_offset_val;
+        target_center_y_val = target.y + target.height * local_body_y_offset_val;
     }
     float dy = target_center_y_val - current_center_y;
     return dx * dx + dy * dy;
@@ -367,7 +369,7 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     // No offset correction needed - capture already includes offset
 
     Point2D raw_target_pos;
-    raw_target_pos.x = target.x + target.w * 0.5f;
+    raw_target_pos.x = target.x + target.width * 0.5f;
     
     // Use cached config values
     float local_y_offset_multiplier_val;
@@ -376,7 +378,7 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     } else {
         local_y_offset_multiplier_val = config_cache.body_y_offset;
     }
-    raw_target_pos.y = target.y + target.h * local_y_offset_multiplier_val;
+    raw_target_pos.y = target.y + target.height * local_y_offset_multiplier_val;
 
     // Check disable upward aim with copied config
     bool local_disable_upward_aim_active = false;
@@ -386,8 +388,8 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     }
 
     // Calculate target center position (no prediction)
-    float target_x = target.x + target.w * 0.5f;
-    float target_y = target.y + target.h * 0.5f;
+    float target_x = target.x + target.width * 0.5f;
+    float target_y = target.y + target.height * 0.5f;
     
     // Apply y offset based on target type
     {
@@ -414,7 +416,25 @@ void MouseThread::moveMouse(const AimbotTarget &target)
             y_offset_multiplier = ctx.config.body_y_offset;
         }
         
-        target_y = target.y + target.h * y_offset_multiplier;
+        target_y = target.y + target.height * y_offset_multiplier;
+    }
+    
+    // Apply Kalman filtering if enabled
+    if (ctx.config.enable_kalman_filter && kalman_filter) {
+        // Initialize Kalman filter parameters if needed
+        kalman_filter->setProcessNoise(ctx.config.kalman_process_noise);
+        kalman_filter->setMeasurementNoise(ctx.config.kalman_measurement_noise);
+        
+        // Update Kalman filter with current target position
+        Eigen::Vector2f measured_pos(target_x, target_y);
+        Eigen::Vector2f filtered_pos = kalman_filter->update(measured_pos);
+        
+        // Get predicted position with lookahead
+        Eigen::Vector2f predicted_pos = kalman_filter->getPredictedPosition(ctx.config.kalman_lookahead_time);
+        
+        // Use predicted position for aiming
+        target_x = predicted_pos.x();
+        target_y = predicted_pos.y();
     }
     
     float error_x = target_x - current_center_x;
@@ -469,11 +489,10 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         enqueueMouseCommand(MouseCommand::MOVE, dx_int, dy_int);
     }
     
-    // Calculate pure detection-to-movement time (excluding FPS waiting)
+    // Detection timestamp removed from Target (tracking metrics now handled differently)
+    // Calculate movement completion time
     auto movement_completion_time = std::chrono::high_resolution_clock::now();
-    float detection_to_movement_ms = std::chrono::duration<float, std::milli>(movement_completion_time - target.detection_timestamp).count();
-    ctx.g_current_detection_to_movement_time_ms.store(detection_to_movement_ms, std::memory_order_relaxed);
-    ctx.add_to_history(ctx.g_detection_to_movement_time_history, detection_to_movement_ms, ctx.g_detection_to_movement_history_mutex);
+    // Note: Detection-to-movement time calculation removed as detection_timestamp is no longer in Target
 }
 
 void MouseThread::pressMouse(const AimbotTarget &target)
@@ -482,7 +501,7 @@ void MouseThread::pressMouse(const AimbotTarget &target)
 
     // For triggerbot, use a more lenient scope check (1.5x the normal multiplier)
     float triggerbot_scope_multiplier = bScope_multiplier * 1.5f;
-    auto bScope = checkTargetInScope(static_cast<float>(target.x), static_cast<float>(target.y), static_cast<float>(target.w), static_cast<float>(target.h), triggerbot_scope_multiplier);
+    auto bScope = checkTargetInScope(static_cast<float>(target.x), static_cast<float>(target.y), static_cast<float>(target.width), static_cast<float>(target.height), triggerbot_scope_multiplier);
 
     if (bScope && !mouse_pressed)
     {
@@ -666,6 +685,11 @@ void MouseThread::resetAccumulatedStates()
     // Reset PID controller
     if (pid_controller) {
         pid_controller->reset();
+    }
+    
+    // Reset Kalman filter
+    if (kalman_filter) {
+        kalman_filter->reset();
     }
     
     // Reset movement accumulation

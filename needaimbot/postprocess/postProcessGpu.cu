@@ -35,9 +35,9 @@ __global__ void initKeepKernel(bool* d_keep, int n) {
 
 // Optimized compaction kernel with warp-level primitives
 __global__ void compactDetectionsKernel(
-    const Detection* d_input_detections,
+    const Target* d_input_detections,
     const bool* d_keep,
-    Detection* d_output_detections,
+    Target* d_output_detections,
     int* d_output_count,
     int input_num_detections,
     int max_output_detections)
@@ -105,6 +105,41 @@ __global__ void compactDetectionsKernel(
     }
 }
 
+// Kernel to validate and clean detections
+__global__ void validateDetectionsKernel(
+    Target* d_detections,
+    int n)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < n) {
+        Target& det = d_detections[idx];
+        // Ensure positive dimensions
+        if (det.width <= 0) det.width = 1;
+        if (det.height <= 0) det.height = 1;
+        // Ensure non-negative position
+        if (det.x < 0) det.x = 0;
+        if (det.y < 0) det.y = 0;
+    }
+}
+
+// Export function for validation
+void validateDetectionsGpu(
+    Target* d_detections,
+    int n,
+    cudaStream_t stream)
+{
+    if (n <= 0 || !d_detections) return;
+    
+    const int block_size = 256;
+    const int grid_size = (n + block_size - 1) / block_size;
+    
+    validateDetectionsKernel<<<grid_size, block_size, 0, stream>>>(d_detections, n);
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        fprintf(stderr, "[validateDetectionsGpu] Kernel launch failed: %s\n", cudaGetErrorString(err));
+    }
+}
+
 // Simple kernel to count kept detections
 __global__ void countKeptDetectionsKernel(
     const bool* d_keep,
@@ -143,9 +178,9 @@ __global__ void countKeptDetectionsKernel(
 
 // More efficient kernel using atomic operations for gathering
 __global__ void gatherKeptDetectionsAtomicKernel(
-    const Detection* d_input_detections,
+    const Target* d_input_detections,
     const bool* d_keep,
-    Detection* d_output_detections,
+    Target* d_output_detections,
     int* d_write_index,  // Global write index
     int n,
     int max_output)
@@ -155,7 +190,20 @@ __global__ void gatherKeptDetectionsAtomicKernel(
     if (idx < n && d_keep[idx]) {
         int output_idx = atomicAdd(d_write_index, 1);
         if (output_idx < max_output) {
-            d_output_detections[output_idx] = d_input_detections[idx];
+            // Copy detection and ensure valid dimensions
+            Target& output_det = d_output_detections[output_idx];
+            const Target& input_det = d_input_detections[idx];
+            
+            // Copy all fields
+            output_det = input_det;
+            
+            // Ensure valid dimensions
+            if (output_det.width <= 0) {
+                output_det.width = 1;
+            }
+            if (output_det.height <= 0) {
+                output_det.height = 1;
+            }
         }
     }
 }
@@ -192,7 +240,7 @@ __global__ void decodeAndFilterYolo10Kernel(
     float img_scale,
     const unsigned char* __restrict__ d_allowed_class_ids,
     int max_check_id,
-    Detection* d_decoded_detections,
+    Target* d_decoded_detections,
     int* d_decoded_count,
     int max_detections)
 {
@@ -229,7 +277,7 @@ __global__ void decodeAndFilterYolo10Kernel(
                 int write_idx = atomicAdd(d_decoded_count, 1);
                 
                 if (write_idx < max_detections) {
-                    Detection& det = d_decoded_detections[write_idx];
+                    Target& det = d_decoded_detections[write_idx];
                     det.x = x;
                     det.y = y;
                     det.width = width;
@@ -253,7 +301,7 @@ __global__ void decodeAndFilterYolo11Kernel(
     float img_scale,
     const unsigned char* __restrict__ d_allowed_class_ids,
     int max_check_id,
-    Detection* d_decoded_detections,
+    Target* d_decoded_detections,
     int* d_decoded_count,
     int max_detections)
 {
@@ -300,7 +348,7 @@ __global__ void decodeAndFilterYolo11Kernel(
                 int write_idx = atomicAdd(d_decoded_count, 1);
                 
                 if (write_idx < max_detections) {
-                    Detection& det = d_decoded_detections[write_idx];
+                    Target& det = d_decoded_detections[write_idx];
                     det.x = x;
                     det.y = y;
                     det.width = width;
@@ -428,13 +476,13 @@ struct is_kept {
 
 
 __global__ void extractDataKernel(
-    const Detection* d_input_detections, int n, 
+    const Target* d_input_detections, int n, 
     int* d_x1, int* d_y1, int* d_x2, int* d_y2, 
     float* d_areas, float* d_scores, int* d_classIds)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {
-        const Detection& det = d_input_detections[idx];
+        const Target& det = d_input_detections[idx];
         d_x1[idx] = det.x;
         d_y1[idx] = det.y;
         d_x2[idx] = det.x + det.width;
@@ -450,9 +498,9 @@ __global__ void extractDataKernel(
 
 
 void NMSGpu(
-    const Detection* d_input_detections,
+    const Target* d_input_detections,
     int input_num_detections,
-    Detection* d_output_detections,
+    Target* d_output_detections,
     int* d_output_count_gpu,
     int max_output_detections,
     float nmsThreshold,
@@ -612,7 +660,7 @@ __global__ void decodeYolo10GpuKernel(
     int num_classes,                   
     float conf_threshold,              
     float img_scale,                   
-    Detection* d_decoded_detections,   
+    Target* d_decoded_detections,   
     int* d_decoded_count,              
     int max_detections)                
 {
@@ -646,7 +694,7 @@ __global__ void decodeYolo10GpuKernel(
                 // Remove max_detections check here - decode ALL valid detections
                 // Max detections will be applied AFTER NMS
                 if (write_idx < max_detections) {  // Keep buffer overflow protection
-                    Detection& det = d_decoded_detections[write_idx];
+                    Target& det = d_decoded_detections[write_idx];
                     det.x = x;
                     det.y = y;
                     det.width = width;
@@ -669,7 +717,7 @@ __global__ void decodeYolo11GpuKernel(
     int num_classes,                   
     float conf_threshold,              
     float img_scale,                   
-    Detection* d_decoded_detections,   
+    Target* d_decoded_detections,   
     int* d_decoded_count,              
     int max_detections)                
 {
@@ -729,7 +777,7 @@ __global__ void decodeYolo11GpuKernel(
                 // Remove max_detections check here - decode ALL valid detections
                 // Max detections will be applied AFTER NMS
                 if (write_idx < max_detections) {  // Keep buffer overflow protection
-                    Detection& det = d_decoded_detections[write_idx];
+                    Target& det = d_decoded_detections[write_idx];
                     det.x = x;
                     det.y = y;
                     det.width = width;
@@ -752,7 +800,7 @@ cudaError_t decodeYolo10Gpu(
     int num_classes,
     float conf_threshold,
     float img_scale,
-    Detection* d_decoded_detections,
+    Target* d_decoded_detections,
     int* d_decoded_count, 
     int max_candidates,
     int max_detections,
@@ -821,7 +869,7 @@ cudaError_t decodeYolo11Gpu(
     int num_classes,
     float conf_threshold,
     float img_scale,
-    Detection* d_decoded_detections,
+    Target* d_decoded_detections,
     int* d_decoded_count, 
     int max_candidates,
     int max_detections,
@@ -909,7 +957,7 @@ __device__ void atomicMinFloat(float* addr, float value, int index, int* index_a
 
 // GPU kernel for finding the closest target to crosshair
 __global__ void findClosestTargetKernel(
-    const Detection* d_detections,
+    const Target* d_detections,
     int num_detections,
     float crosshairX,
     float crosshairY,
@@ -968,12 +1016,12 @@ __global__ void findClosestTargetKernel(
 
 // Host function to find closest target on GPU
 cudaError_t findClosestTargetGpu(
-    const Detection* d_detections,
+    const Target* d_detections,
     int num_detections,
     float crosshairX,
     float crosshairY,
     int* d_best_index,
-    Detection* d_best_target,
+    Target* d_best_target,
     cudaStream_t stream)
 {
     if (num_detections <= 0 || !d_detections || !d_best_index || !d_best_target) {
@@ -981,8 +1029,11 @@ cudaError_t findClosestTargetGpu(
     }
     
     // Allocate temporary memory for best distance
-    float* d_best_distance;
-    cudaMalloc(&d_best_distance, sizeof(float));
+    float* d_best_distance = nullptr;
+    cudaError_t alloc_err = cudaMalloc(&d_best_distance, sizeof(float));
+    if (alloc_err != cudaSuccess || !d_best_distance) {
+        return alloc_err != cudaSuccess ? alloc_err : cudaErrorMemoryAllocation;
+    }
     
     // Initialize to FLT_MAX and -1
     float max_float = FLT_MAX;
@@ -1000,23 +1051,41 @@ cudaError_t findClosestTargetGpu(
         d_detections, num_detections, crosshairX, crosshairY,
         d_best_index, d_best_distance);
     
+    // Check for kernel launch errors
+    cudaError_t kernel_err = cudaGetLastError();
+    if (kernel_err != cudaSuccess) {
+        cudaFree(d_best_distance);
+        return kernel_err;
+    }
+    
     // Wait for kernel to complete
-    cudaStreamSynchronize(stream);
+    cudaError_t sync_err = cudaStreamSynchronize(stream);
+    if (sync_err != cudaSuccess) {
+        cudaFree(d_best_distance);
+        return sync_err;
+    }
     
     // Read the best index to decide if we need to copy
-    int best_index_host;
-    cudaMemcpy(&best_index_host, d_best_index, sizeof(int), cudaMemcpyDeviceToHost);
+    int best_index_host = -1;
+    cudaError_t copy_err = cudaMemcpy(&best_index_host, d_best_index, sizeof(int), cudaMemcpyDeviceToHost);
+    if (copy_err != cudaSuccess) {
+        cudaFree(d_best_distance);
+        return copy_err;
+    }
     
     if (best_index_host >= 0 && best_index_host < num_detections) {
-        // Copy the best detection to output
-        cudaMemcpyAsync(d_best_target, d_detections + best_index_host, 
-                        sizeof(Detection), cudaMemcpyDeviceToDevice, stream);
+        // Copy only the POD fields that are common between GPU and CPU versions
+        // This avoids issues with different struct sizes between GPU and CPU
+        const Target* src = d_detections + best_index_host;
+        
+        // Copy the entire Target structure (it's now POD)
+        cudaMemcpyAsync(d_best_target, src, sizeof(Target), cudaMemcpyDeviceToDevice, stream);
     }
     
     // Clean up
     cudaFree(d_best_distance);
     
-    return cudaGetLastError();
+    return cudaSuccess;
 }
 
  

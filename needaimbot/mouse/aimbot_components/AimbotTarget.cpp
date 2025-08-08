@@ -11,7 +11,7 @@
 #include "AimbotTarget.h"
 #include "config.h"
 
-AimbotTarget::AimbotTarget(int x, int y, int w, int h, int cls) : x(x), y(y), w(w), h(h), classId(cls), detection_timestamp(std::chrono::high_resolution_clock::now()) {}
+// Constructor is now provided by Target structure
+// AimbotTarget uses the Target(int x, int y, int width, int height, float conf, int cls) constructor
 
-
-static AimbotTarget s_targetInstance(0, 0, 0, 0, 0);
+static AimbotTarget s_targetInstance(0, 0, 0, 0, -1.0f, 0);

@@ -16,9 +16,9 @@ __device__ inline int warpReduceSum(int val) {
 
 // Simple copy kernel for pass-through when no filtering is needed
 __global__ void copyDetectionsKernel(
-    const Detection* __restrict__ input_detections,
+    const Target* __restrict__ input_detections,
     int num_input_detections,
-    Detection* __restrict__ output_detections,
+    Target* __restrict__ output_detections,
     int* __restrict__ output_count,
     int max_output_detections)
 {
@@ -37,9 +37,9 @@ __global__ void copyDetectionsKernel(
 
 // Optimized class filtering kernel (separated from color filtering)
 __global__ __launch_bounds__(256, 4) void filterDetectionsByClassIdKernel(
-    const Detection* __restrict__ input_detections,
+    const Target* __restrict__ input_detections,
     int num_input_detections,
-    Detection* __restrict__ output_detections,
+    Target* __restrict__ output_detections,
     int* __restrict__ output_count,
     const unsigned char* __restrict__ d_allowed_class_ids,
     int max_check_id,
@@ -69,9 +69,9 @@ __global__ __launch_bounds__(256, 4) void filterDetectionsByClassIdKernel(
 
 // Separate RGB color filtering kernel (to be run after class filtering, before NMS)
 __global__ __launch_bounds__(256, 4) void filterDetectionsByColorKernel(
-    const Detection* __restrict__ input_detections,
+    const Target* __restrict__ input_detections,
     int num_input_detections,
-    Detection* __restrict__ output_detections,
+    Target* __restrict__ output_detections,
     int* __restrict__ output_count,
     const unsigned char* __restrict__ d_color_mask,
     int mask_pitch,
@@ -145,9 +145,9 @@ __global__ __launch_bounds__(256, 4) void filterDetectionsByColorKernel(
 
 // Host function for class ID filtering only
 cudaError_t filterDetectionsByClassIdGpu(
-    const Detection* d_input_detections,
+    const Target* d_input_detections,
     int num_input_detections,
-    Detection* d_output_detections,
+    Target* d_output_detections,
     int* d_output_count,
     const unsigned char* d_allowed_class_ids,
     int max_check_id,
@@ -178,9 +178,9 @@ cudaError_t filterDetectionsByClassIdGpu(
 
 // New separate host function for RGB color filtering
 cudaError_t filterDetectionsByColorGpu(
-    const Detection* d_input_detections,
+    const Target* d_input_detections,
     int num_input_detections,
-    Detection* d_output_detections,
+    Target* d_output_detections,
     int* d_output_count,
     const unsigned char* d_color_mask,
     int mask_pitch,
