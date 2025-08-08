@@ -41,6 +41,11 @@
     <ClCompile Include="mouse\\input_drivers\\my_enc.cpp" />
     <ClCompile Include="mouse\\aimbot_components\\PIDController2D.cpp" />
     <ClCompile Include="mouse\\aimbot_components\\IntegratedController.cpp" />
+    <ClCompile Include="mouse\\aimbot_components\\KalmanFilter2D.cpp" />
+    <ClCompile Include="tracking\\Hungarian.cpp" />
+    <ClCompile Include="tracking\\SimpleKalmanTracker.cpp" />
+    <ClCompile Include="tracking\\SORTTracker.cpp" />
+    <ClCompile Include="cuda\\gpu_tracker_wrapper.cpp" />
     <ClCompile Include="mouse\\input_drivers\\rzctl.cpp" />
     <ClCompile Include="mouse\\input_drivers\\SerialConnection.cpp" />
     <ClCompile Include="mouse\\input_drivers\\MakcuConnection.cpp" />
@@ -54,6 +59,7 @@
     <ClCompile Include="overlay\draw_debug.cpp" />
     <ClCompile Include="overlay\draw_mouse.cpp" />
     <ClCompile Include="overlay\draw_offset.cpp" />
+    <ClCompile Include="overlay\draw_tracker.cpp" />
     <ClCompile Include="overlay\draw_overlay.cpp" />
     <ClCompile Include="overlay\draw_profile.cpp" />
     <ClCompile Include="overlay\draw_target.cpp" />
@@ -72,6 +78,7 @@
     <CudaCompile Include="cuda\color_filter_kernel.cu" />
     <CudaCompile Include="cuda\color_conversion.cu" />
     <CudaCompile Include="cuda\pipeline_optimization.cu" />
+    <CudaCompile Include="cuda\gpu_tracker.cu" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="core\config_cache.h" />
@@ -107,6 +114,10 @@
     <ClInclude Include="mouse\aimbot_components\AimbotTarget.h" />
     <ClInclude Include="mouse\aimbot_components\PIDController2D.h" />
     <ClInclude Include="mouse\aimbot_components\IntegratedController.h" />
+    <ClInclude Include="mouse\aimbot_components\KalmanFilter2D.h" />
+    <ClInclude Include="tracking\Hungarian.h" />
+    <ClInclude Include="tracking\SimpleKalmanTracker.h" />
+    <ClInclude Include="tracking\SORTTracker.h" />
     <ClInclude Include="mouse\ExponentialSmoothingPredictor.h" />
     <ClInclude Include="mouse\ghub.h" />
     <ClInclude Include="mouse\HidTable.h" />
@@ -133,6 +144,7 @@
     <ClInclude Include="overlay\common_helpers.h" />
     <ClInclude Include="overlay\draw_settings.h" />
     <ClInclude Include="overlay\draw_offset.h" />
+    <ClInclude Include="overlay\draw_tracker.h" />
     <ClInclude Include="overlay\overlay.h" />
     <ClInclude Include="overlay\ui_helpers.h" />
     <ClInclude Include="config\config_validator.h" />
@@ -299,7 +311,7 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>nvinfer_10.lib;nvonnxparser_10.lib;WindowsApp.lib;d3d11.lib;dxgi.lib;d2d1.lib;cuda.lib;cudart.lib;glfw3_mt.lib;glfw3dll.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>nvinfer_10.lib;nvonnxparser_10.lib;WindowsApp.lib;d3d11.lib;dxgi.lib;d2d1.lib;cuda.lib;cudart.lib;cublas.lib;glfw3_mt.lib;glfw3dll.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <Manifest>
