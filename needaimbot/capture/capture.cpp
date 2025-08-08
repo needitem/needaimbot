@@ -352,7 +352,17 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
             if (simple_capturer) {
                 screenshotGpu = simple_capturer->GetNextFrameGpu();
             } else if (wingraphics_capturer) {
+                static int capture_attempt = 0;
+                capture_attempt++;
+                if (capture_attempt <= 5) {
+                    std::cout << "[CaptureThread] Attempting frame capture #" << capture_attempt << std::endl;
+                }
                 screenshotGpu = wingraphics_capturer->GetNextFrameGpu();
+                if (!screenshotGpu.empty() && capture_attempt <= 5) {
+                    std::cout << "[CaptureThread] Successfully captured frame #" << capture_attempt 
+                              << " (" << screenshotGpu.cols() << "x" << screenshotGpu.rows() 
+                              << "x" << screenshotGpu.channels() << ")" << std::endl;
+                }
             }
             auto frame_acq_end_time = std::chrono::high_resolution_clock::now();
             
@@ -375,7 +385,15 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 {
                     captureFrameCount++;
                     if (ctx.detector) {
+                        static int process_attempt = 0;
+                        process_attempt++;
+                        if (process_attempt <= 5) {
+                            std::cout << "[CaptureThread] Sending frame #" << process_attempt << " to detector" << std::endl;
+                        }
                         ctx.detector->processFrame(screenshotGpu);
+                        if (process_attempt <= 5) {
+                            std::cout << "[CaptureThread] Frame #" << process_attempt << " sent to detector successfully" << std::endl;
+                        }
                     }
                 }
                 else

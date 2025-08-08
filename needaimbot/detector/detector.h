@@ -27,18 +27,10 @@
 
 
 
-/**
- * @brief Represents a target being tracked across frames
- * 
- * Contains detection information and temporal tracking data
- * for maintaining target continuity in video sequences.
- */
-struct TrackedTarget {
-    int id;                       ///< Unique identifier for this target
-    Detection detection;          ///< Latest detection information
-    int frames_since_last_seen;  ///< Number of frames since last detection
-    // TODO: Add velocity, acceleration, and prediction data
-};
+// Forward declarations for tracking
+class SORTTracker;
+class GPUTracker;
+struct GPUTrackingContext;
 
 // TensorRT utility functions
 nvinfer1::ICudaEngine* buildEngineFromOnnx(const std::string& onnxPath);
@@ -55,9 +47,12 @@ struct MouseMovement {
     float targetDistance;
 };
 
+#include "../core/Target.h"
 
+// Use Target as Detection and TrackedObject for backwards compatibility
+using Detection = Target;
+using TrackedObject = Target;
 
-struct Detection; 
 class Config; 
 
 
@@ -155,9 +150,17 @@ public:
     CudaBuffer<float> m_matchingScoreGpu;
     
 
-    // Target Tracking System
-    std::vector<TrackedTarget> m_tracked_targets;
-    int m_next_target_id = 0;
+    // GPU Tracking System
+    GPUTrackingContext* m_gpuTrackerContext = nullptr;
+    CudaBuffer<Target> m_trackedTargetsGpu;  // GPU buffer for tracked targets
+    int m_trackedTargetsCount = 0;
+    
+    std::vector<TrackedObject> m_trackedObjects;
+    std::mutex m_trackingMutex;  // Mutex to protect m_trackedObjects
+    
+    // Legacy CPU SORT (disabled when GPU tracking is used)
+    std::unique_ptr<SORTTracker> m_sortTracker;
+    std::unique_ptr<GPUTracker> m_gpuTracker;
 
     bool m_isTargetLocked;
     Detection m_lockedTargetInfo;

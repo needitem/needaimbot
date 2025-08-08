@@ -135,6 +135,17 @@ bool Config::loadConfig(const std::string& filename)
         error_scaling_rules.push_back(ErrorScalingRule(100.0f, 0.5f));  // Medium error: 50% scale
         error_scaling_rules.push_back(ErrorScalingRule(50.0f, 0.8f));   // Small error: 80% scale
         
+        // Initialize SORT tracker parameters
+        enable_tracking = true;
+        tracker_max_age = 5;
+        tracker_min_hits = 3;
+        tracker_iou_threshold = 0.3f;
+        
+        // Initialize Kalman filter parameters
+        enable_kalman_filter = true;
+        kalman_process_noise = 1.0f;
+        kalman_measurement_noise = 10.0f;
+        kalman_lookahead_time = 0.016f;  // 1 frame at 60 FPS
 
         
         arduino_baudrate = 115200;
@@ -349,6 +360,17 @@ bool Config::loadConfig(const std::string& filename)
     }
     // If num_rules is 0, keep the list empty (user explicitly wants no rules)
 
+    // Load SORT tracker parameters
+    enable_tracking = get_bool_ini("Tracking", "enable_tracking", true);
+    tracker_max_age = get_long_ini("Tracking", "tracker_max_age", 5);
+    tracker_min_hits = get_long_ini("Tracking", "tracker_min_hits", 3);
+    tracker_iou_threshold = static_cast<float>(get_double_ini("Tracking", "tracker_iou_threshold", 0.3));
+    
+    // Load Kalman filter parameters
+    enable_kalman_filter = get_bool_ini("Tracking", "enable_kalman_filter", true);
+    kalman_process_noise = static_cast<float>(get_double_ini("Tracking", "kalman_process_noise", 1.0));
+    kalman_measurement_noise = static_cast<float>(get_double_ini("Tracking", "kalman_measurement_noise", 10.0));
+    kalman_lookahead_time = static_cast<float>(get_double_ini("Tracking", "kalman_lookahead_time", 0.016));
     
     // Hybrid aim control settings
 
@@ -617,6 +639,17 @@ bool Config::saveConfig(const std::string& filename)
         file << prefix << "scale = " << error_scaling_rules[i].scale_factor << "\n";
     }
     file << "\n";
+
+    // Save SORT tracker parameters
+    file << "[Tracking]\n";
+    file << "enable_tracking = " << (enable_tracking ? "true" : "false") << "\n";
+    file << "tracker_max_age = " << tracker_max_age << "\n";
+    file << "tracker_min_hits = " << tracker_min_hits << "\n";
+    file << "tracker_iou_threshold = " << tracker_iou_threshold << "\n";
+    file << "enable_kalman_filter = " << (enable_kalman_filter ? "true" : "false") << "\n";
+    file << "kalman_process_noise = " << kalman_process_noise << "\n";
+    file << "kalman_measurement_noise = " << kalman_measurement_noise << "\n";
+    file << "kalman_lookahead_time = " << kalman_lookahead_time << "\n\n";
 
     file << "[Arduino]\n";
     file << std::noboolalpha;
