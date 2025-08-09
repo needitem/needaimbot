@@ -40,7 +40,7 @@ public:
     std::condition_variable frame_cv;
     std::atomic<bool> new_frame_available{false};
 
-    // Detection synchronization
+    // Target synchronization
     std::mutex detection_mutex;
     std::condition_variable detection_cv;
 
@@ -108,7 +108,7 @@ public:
 
     // Overlay Target Data (Synchronized for UI)
     std::atomic<bool> overlay_has_target{false};
-    Detection overlay_target_info{}; // Zero-initialized
+    Target overlay_target_info{}; // Zero-initialized
     std::mutex overlay_target_mutex;
     
     // Helper functions

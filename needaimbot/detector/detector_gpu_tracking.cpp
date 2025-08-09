@@ -5,7 +5,7 @@ void Detector::runGPUTracking(cudaStream_t stream) {
     auto& ctx = AppContext::getInstance();
     
     // GPU Tracking System
-    if (ctx.config.enable_tracking && m_finalDetectionsCountHost > 0 && m_gpuTrackerContext) {
+    if (ctx.config.enable_tracking && m_finalTargetsCountHost > 0 && m_gpuTrackerContext) {
         
         // Allocate tracked targets buffer if needed
         if (!m_trackedTargetsGpu.get()) {
@@ -18,8 +18,8 @@ void Detector::runGPUTracking(cudaStream_t stream) {
         // Run GPU tracking directly on GPU memory
         updateGPUTrackerDirect(
             m_gpuTrackerContext,
-            m_finalDetectionsGpu.get(),        // Input: detections already on GPU
-            m_finalDetectionsCountHost,         // Number of detections
+            m_finalTargetsGpu.get(),        // Input: detections already on GPU
+            m_finalTargetsCountHost,         // Number of detections
             m_trackedTargetsGpu.get(),          // Output: tracked targets on GPU
             trackedCountGpu.get(),               // Output: number of tracked targets
             stream,                              // CUDA stream
@@ -27,7 +27,7 @@ void Detector::runGPUTracking(cudaStream_t stream) {
         );
         
         // Replace final detections with tracked targets
-        cudaMemcpyAsync(m_finalDetectionsGpu.get(), 
+        cudaMemcpyAsync(m_finalTargetsGpu.get(), 
                        m_trackedTargetsGpu.get(),
                        Constants::MAX_DETECTIONS * sizeof(Target),
                        cudaMemcpyDeviceToDevice, 
@@ -44,17 +44,17 @@ void Detector::runGPUTracking(cudaStream_t stream) {
         
         // Update final count
         if (tracked_count > 0 && tracked_count <= Constants::MAX_DETECTIONS) {
-            m_finalDetectionsCountHost = tracked_count;
-            cudaMemcpyAsync(m_finalDetectionsCountGpu.get(), 
-                           &m_finalDetectionsCountHost,
+            m_finalTargetsCountHost = tracked_count;
+            cudaMemcpyAsync(m_finalTargetsCountGpu.get(), 
+                           &m_finalTargetsCountHost,
                            sizeof(int), 
                            cudaMemcpyHostToDevice, 
                            stream);
             
             // Copy to host for CPU-based operations if needed
-            cudaMemcpyAsync(m_finalDetectionsHost.get(),
-                           m_finalDetectionsGpu.get(),
-                           m_finalDetectionsCountHost * sizeof(Target),
+            cudaMemcpyAsync(m_finalTargetsHost.get(),
+                           m_finalTargetsGpu.get(),
+                           m_finalTargetsCountHost * sizeof(Target),
                            cudaMemcpyDeviceToHost,
                            stream);
             
@@ -67,13 +67,13 @@ void Detector::runGPUTracking(cudaStream_t stream) {
                 // After sync, copy tracked objects
                 cudaStreamSynchronize(stream);
                 for (int i = 0; i < tracked_count; i++) {
-                    m_trackedObjects.push_back(m_finalDetectionsHost[i]);
+                    m_trackedObjects.push_back(m_finalTargetsHost[i]);
                 }
             }
             
             std::cout << "[GPU Tracker] Tracked " << tracked_count << " targets" << std::endl;
         }
-    } else if (ctx.config.enable_tracking && m_finalDetectionsCountHost > 0) {
+    } else if (ctx.config.enable_tracking && m_finalTargetsCountHost > 0) {
         std::cout << "[GPU Tracker] Tracking enabled but GPU tracker not initialized" << std::endl;
     }
 }
