@@ -662,21 +662,17 @@ void Detector::processFrame(const SimpleCudaMat& frame)
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    // Async frame transfer - minimize lock time
-    {
-        std::unique_lock<std::mutex> lock(inferenceMutex);
-        
-        // Skip if previous frame still processing (frame drop for low latency)
-        if (frameReady) {
-            return; // Skip frame if inference slower than capture
-        }
-        
-        currentFrame = frame.clone();
-        frameIsGpu = true;
-        frameReady = true;
+    // Lock-free frame transfer
+    // Skip if previous frame still processing (frame drop for low latency)
+    if (frameReady.load(std::memory_order_acquire)) {
+        return; // Skip frame if inference slower than capture
     }
     
-    inferenceCV.notify_one();
+    currentFrame = frame.clone();
+    frameIsGpu.store(true, std::memory_order_release);
+    frameReady.store(true, std::memory_order_release);
+    
+    // No need to notify - using busy wait
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<float, std::milli> duration = end_time - start_time;
@@ -703,11 +699,15 @@ void Detector::processFrame(const SimpleMat& frame)
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    std::unique_lock<std::mutex> lock(inferenceMutex);
+    // Lock-free frame transfer
+    if (frameReady.load(std::memory_order_acquire)) {
+        return; // Skip frame if inference slower than capture
+    }
+    
     currentFrameCpu = frame;
-    frameIsGpu = false;
-    frameReady = true;
-    inferenceCV.notify_one();
+    frameIsGpu.store(false, std::memory_order_release);
+    frameReady.store(true, std::memory_order_release);
+    // No need to notify - using busy wait
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<float, std::milli> duration = end_time - start_time;
@@ -840,36 +840,33 @@ void Detector::inferenceThread()
             ctx.detector_model_changed.store(false);
         }
 
-        bool hasNewFrame = false;
-        {
-            std::unique_lock<std::mutex> lock(inferenceMutex);
-            // Wait indefinitely for a frame or exit signal - no timeout
-            inferenceCV.wait(lock, [this] { return frameReady || AppContext::getInstance().should_exit; });
-            
-            if (AppContext::getInstance().should_exit) {
-                std::cout << "[InferenceThread] Exit signal received" << std::endl;
-                break;
-            }
-            
-            if (frameReady) {
-                if (frameIsGpu) {
-                    frameGpu = std::move(currentFrame);
-                } else {
-                    frameGpu.create(currentFrameCpu.rows(), currentFrameCpu.cols(), currentFrameCpu.channels());
-                    frameGpu.upload(currentFrameCpu.data(), currentFrameCpu.step());
-                }
-                frameReady = false;
-                hasNewFrame = true;
-            }
+        if (AppContext::getInstance().should_exit) {
+            std::cout << "[InferenceThread] Exit signal received" << std::endl;
+            break;
         }
+        
+        // Try to get frame without lock - using atomic operations
+        if (!frameReady.load(std::memory_order_acquire)) {
+            continue;  // No frame available, skip this iteration
+        }
+        
+        // Process the frame
+        if (frameIsGpu.load(std::memory_order_acquire)) {
+            frameGpu = std::move(currentFrame);
+        } else {
+            frameGpu.create(currentFrameCpu.rows(), currentFrameCpu.cols(), currentFrameCpu.channels());
+            frameGpu.upload(currentFrameCpu.data(), currentFrameCpu.step());
+        }
+        
+        // Mark frame as processed
+        frameReady.store(false, std::memory_order_release);
 
         if (!context) {
             std::cerr << "[InferenceThread] TensorRT context not initialized!" << std::endl;
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
             continue;
         }
 
-        if (hasNewFrame && !frameGpu.empty())
+        if (!frameGpu.empty())
         {
             try
             {
@@ -1375,8 +1372,8 @@ void Detector::inferenceThread()
                                 m_bestTargetHost = Target();  // Use default constructor
                             }
                             
-                            detectionVersion++;
                         }
+                        detectionVersion++;
                         detectionCV.notify_one();
                     } else {
                         std::cerr << "[Detector] Error in GPU target selection: " << cudaGetErrorString(target_err) << std::endl;
@@ -1415,19 +1412,6 @@ void Detector::inferenceThread()
                 m_bestTargetIndexHost = -1;
                 m_finalTargetsCountHost = 0;
             }
-        } else if (hasNewFrame) {
-             {
-                std::lock_guard<std::mutex> lock(detectionMutex);
-                m_hasBestTarget = false;
-                m_bestTargetHost = Target();  // Use default constructor
-                m_bestTargetIndexHost = -1;
-                m_finalTargetsCountHost = 0;
-                detectionVersion++;
-             }
-             detectionCV.notify_one();
-        } else {
-            // No new frame received - keep previous detection state
-            // Don't clear target or increment version unnecessarily
         }
         NVTX_POP();
     }
@@ -2200,8 +2184,7 @@ void Detector::stop()
     auto& ctx = AppContext::getInstance();
     ctx.should_exit = true;
     
-    // Notify all condition variables to wake up waiting threads
-    inferenceCV.notify_all(); 
+    // Notify detection CV only (inference uses busy wait now)
     detectionCV.notify_all();
     
     if (m_captureThread.joinable())

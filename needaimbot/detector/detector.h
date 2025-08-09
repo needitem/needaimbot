@@ -104,8 +104,8 @@ public:
 
     SimpleCudaMat currentFrame;
     SimpleMat currentFrameCpu;
-    bool frameReady;
-    bool frameIsGpu;
+    std::atomic<bool> frameReady;
+    std::atomic<bool> frameIsGpu;
     
     HANDLE captureEvent = nullptr;
 
