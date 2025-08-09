@@ -87,7 +87,7 @@ void RapidFire::workerLoop() {
             was_pressed = false;
         }
         
-        Sleep(1); // Small delay to prevent CPU spinning
+        // No delay - pure busy wait for maximum responsiveness
     }
 }
 

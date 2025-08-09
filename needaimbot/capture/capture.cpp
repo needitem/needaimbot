@@ -169,7 +169,6 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 
         if (ctx.config.capture_fps > 0.0)
         {
-            timeBeginPeriod(1);
             frame_duration = std::chrono::duration<double, std::milli>(1000.0 / ctx.config.capture_fps);
             frameLimitingEnabled = true;
         }
@@ -182,6 +181,8 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 
         while (!should_exit)
         {
+            // Measure total capture cycle time
+            auto capture_cycle_start = std::chrono::high_resolution_clock::now();
             
             if (AppContext::getInstance().should_exit) {
                 break; 
@@ -190,20 +191,12 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
             {
                 if (ctx.config.capture_fps > 0.0)
                 {
-                    if (!frameLimitingEnabled)
-                    {
-                        timeBeginPeriod(1);
-                        frameLimitingEnabled = true;
-                    }
+                    frameLimitingEnabled = true;
                     frame_duration = std::chrono::duration<double, std::milli>(1000.0 / ctx.config.capture_fps);
                 }
                 else
                 {
-                    if (frameLimitingEnabled)
-                    {
-                        timeEndPeriod(1);
-                        frameLimitingEnabled = false;
-                    }
+                    frameLimitingEnabled = false;
                     frame_duration = std::nullopt;
                 }
                 ctx.capture_fps_changed.store(false);
@@ -416,6 +409,14 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 buttonPreviouslyPressed = buttonPressed;
             }
 
+            // Measure total capture cycle time before FPS limiting
+            auto capture_cycle_end = std::chrono::high_resolution_clock::now();
+            float capture_cycle_time = std::chrono::duration<float, std::milli>(capture_cycle_end - capture_cycle_start).count();
+            
+            // Store capture cycle time (excluding FPS delay)
+            ctx.g_current_capture_cycle_time_ms.store(capture_cycle_time, std::memory_order_relaxed);
+            ctx.add_to_history(ctx.g_capture_cycle_time_history, capture_cycle_time, ctx.g_capture_cycle_history_mutex);
+            
             if (frameLimitingEnabled && frame_duration.has_value())
             {
                 auto end_time = std::chrono::high_resolution_clock::now();
@@ -444,10 +445,7 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
             }
         }
 
-        if (frameLimitingEnabled)
-        {
-            timeEndPeriod(1);
-        }
+        // Timer period cleanup removed - handled globally
         
         // Clean up capture buffers
         for (auto& buffer : captureGpuBuffer) {
