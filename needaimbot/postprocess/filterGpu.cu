@@ -36,7 +36,7 @@ __global__ void copyDetectionsKernel(
 }
 
 // Optimized class filtering kernel (separated from color filtering)
-__global__ __launch_bounds__(256, 4) void filterDetectionsByClassIdKernel(
+__global__ __launch_bounds__(256, 4) void filterTargetsByClassIdKernel(
     const Target* __restrict__ input_detections,
     int num_input_detections,
     Target* __restrict__ output_detections,
@@ -49,7 +49,7 @@ __global__ __launch_bounds__(256, 4) void filterDetectionsByClassIdKernel(
     int stride = blockDim.x * gridDim.x;
     
     for (; idx < num_input_detections; idx += stride) {
-        const Detection det = input_detections[idx];
+        const Target det = input_detections[idx];
         
         // Class ID filtering only
         bool should_keep = true;
@@ -68,7 +68,7 @@ __global__ __launch_bounds__(256, 4) void filterDetectionsByClassIdKernel(
 }
 
 // Separate RGB color filtering kernel (to be run after class filtering, before NMS)
-__global__ __launch_bounds__(256, 4) void filterDetectionsByColorKernel(
+__global__ __launch_bounds__(256, 4) void filterTargetsByColorKernel(
     const Target* __restrict__ input_detections,
     int num_input_detections,
     Target* __restrict__ output_detections,
@@ -83,7 +83,7 @@ __global__ __launch_bounds__(256, 4) void filterDetectionsByColorKernel(
     int stride = blockDim.x * gridDim.x;
     
     for (; idx < num_input_detections; idx += stride) {
-        const Detection det = input_detections[idx];
+        const Target det = input_detections[idx];
         
         bool should_keep = true;
         
@@ -144,7 +144,7 @@ __global__ __launch_bounds__(256, 4) void filterDetectionsByColorKernel(
 }
 
 // Host function for class ID filtering only
-cudaError_t filterDetectionsByClassIdGpu(
+cudaError_t filterTargetsByClassIdGpu(
     const Target* d_input_detections,
     int num_input_detections,
     Target* d_output_detections,
@@ -163,7 +163,7 @@ cudaError_t filterDetectionsByClassIdGpu(
     int block_size = 256;
     int grid_size = (num_input_detections + block_size - 1) / block_size;
     
-    filterDetectionsByClassIdKernel<<<grid_size, block_size, 0, stream>>>(
+    filterTargetsByClassIdKernel<<<grid_size, block_size, 0, stream>>>(
         d_input_detections,
         num_input_detections,
         d_output_detections,
@@ -177,7 +177,7 @@ cudaError_t filterDetectionsByClassIdGpu(
 }
 
 // New separate host function for RGB color filtering
-cudaError_t filterDetectionsByColorGpu(
+cudaError_t filterTargetsByColorGpu(
     const Target* d_input_detections,
     int num_input_detections,
     Target* d_output_detections,
@@ -211,7 +211,7 @@ cudaError_t filterDetectionsByColorGpu(
     int block_size = 256;
     int grid_size = (num_input_detections + block_size - 1) / block_size;
     
-    filterDetectionsByColorKernel<<<grid_size, block_size, 0, stream>>>(
+    filterTargetsByColorKernel<<<grid_size, block_size, 0, stream>>>(
         d_input_detections,
         num_input_detections,
         d_output_detections,

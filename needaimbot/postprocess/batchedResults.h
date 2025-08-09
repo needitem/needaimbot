@@ -3,10 +3,10 @@
 
 #include <cuda_runtime.h>
 
-struct Detection;
+struct Target;
 
 extern "C" cudaError_t prepareBatchedResultsGpu(
-    const Detection* finalDetections,
+    const Target* finalDetections,
     const int* finalCount,
     const int* bestIndex,
     void* batchedResults,

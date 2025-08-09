@@ -33,7 +33,7 @@ extern "C" __host__ void updateTargetSelectionConstants(
 
 // Optimized kernel for target selection and movement calculation in one pass
 __global__ void selectTargetAndCalculateMovementKernel(
-    const Detection* detections,
+    const Target* detections,
     int numDetections,
     MouseMovement* movement,
     int* bestIdx,
@@ -50,7 +50,7 @@ __global__ void selectTargetAndCalculateMovementKernel(
     
     // Each thread processes multiple detections for better efficiency
     for (int idx = gid; idx < numDetections; idx += gridDim.x * blockDim.x) {
-        const Detection& det = detections[idx];
+        const Target& det = detections[idx];
         
         // Calculate target center with offset based on class
         float targetCenterX = det.x + det.width * 0.5f;
@@ -94,7 +94,7 @@ __global__ void selectTargetAndCalculateMovementKernel(
     if (tid == 0) {
         if (sharedBestIdx[0] >= 0) {
             *bestIdx = sharedBestIdx[0];
-            const Detection& bestDet = detections[sharedBestIdx[0]];
+            const Target& bestDet = detections[sharedBestIdx[0]];
             
             // Calculate target center with offset
             float targetCenterX = bestDet.x + bestDet.width * 0.5f;
@@ -122,7 +122,7 @@ __global__ void selectTargetAndCalculateMovementKernel(
 
 // Fused kernel for NMS + target selection
 __global__ void fusedNMSAndTargetSelectionKernel(
-    Detection* detections,
+    Target* detections,
     int* numDetections,
     MouseMovement* movement,
     float nmsThreshold,
@@ -144,12 +144,12 @@ __global__ void fusedNMSAndTargetSelectionKernel(
     for (int i = tid; i < numDets; i += blockDim.x) {
         if (!keep[i]) continue;
         
-        Detection& boxA = detections[i];
+        Target& boxA = detections[i];
         
         for (int j = i + 1; j < numDets; j++) {
             if (!keep[j]) continue;
             
-            Detection& boxB = detections[j];
+            Target& boxB = detections[j];
             
             // Same class check
             if (boxA.classId != boxB.classId) continue;
@@ -186,7 +186,7 @@ __global__ void fusedNMSAndTargetSelectionKernel(
     for (int i = tid; i < numDets; i += blockDim.x) {
         if (!keep[i]) continue;
         
-        const Detection& det = detections[i];
+        const Target& det = detections[i];
         
         float targetCenterX = det.x + det.width * 0.5f;
         float targetCenterY = (det.classId == g_headClassId) ? 
@@ -205,7 +205,7 @@ __global__ void fusedNMSAndTargetSelectionKernel(
     
     // Write movement command
     if (tid == 0 && bestIdx >= 0) {
-        const Detection& bestDet = detections[bestIdx];
+        const Target& bestDet = detections[bestIdx];
         
         float targetCenterX = bestDet.x + bestDet.width * 0.5f;
         float targetCenterY = (bestDet.classId == g_headClassId) ? 
@@ -226,7 +226,7 @@ __global__ void fusedNMSAndTargetSelectionKernel(
 
 // Export functions - remove extern "C" for C++ linkage
 void selectTargetAndCalculateMovementGpu(
-    const Detection* d_detections,
+    const Target* d_detections,
     int numDetections,
     MouseMovement* d_movement,
     int* d_bestIdx,
@@ -245,7 +245,7 @@ void selectTargetAndCalculateMovementGpu(
 }
 
 void fusedNMSAndTargetSelection(
-    Detection* d_detections,
+    Target* d_detections,
     int* d_numDetections,
     MouseMovement* d_movement,
     float nmsThreshold,

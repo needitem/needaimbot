@@ -319,15 +319,15 @@ void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float debug_scale) 
     std::lock_guard<std::mutex> det_lock(ctx.detector->detectionMutex);
     
     // Validate detection count
-    if (ctx.detector->m_finalDetectionsCountHost <= 0 || 
-        ctx.detector->m_finalDetectionsCountHost > 1000 ||  // Sanity check
-        ctx.detector->m_finalDetectionsGpu.get() == nullptr) {
+    if (ctx.detector->m_finalTargetsCountHost <= 0 || 
+        ctx.detector->m_finalTargetsCountHost > 1000 ||  // Sanity check
+        ctx.detector->m_finalTargetsGpu.get() == nullptr) {
         return;
     }
     
-    std::vector<Detection> host_detections(ctx.detector->m_finalDetectionsCountHost);
-    cudaError_t err = cudaMemcpy(host_detections.data(), ctx.detector->m_finalDetectionsGpu.get(),
-                                 ctx.detector->m_finalDetectionsCountHost * sizeof(Detection),
+    std::vector<Target> host_detections(ctx.detector->m_finalTargetsCountHost);
+    cudaError_t err = cudaMemcpy(host_detections.data(), ctx.detector->m_finalTargetsGpu.get(),
+                                 ctx.detector->m_finalTargetsCountHost * sizeof(Target),
                                  cudaMemcpyDeviceToHost);
 
     if (err == cudaSuccess)
