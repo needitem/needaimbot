@@ -115,7 +115,6 @@ std::unique_ptr<InputMethod> initializeInputMethod() {
 void mouseThreadFunction(MouseThread &mouseThread)
 {
     auto& ctx = AppContext::getInstance();
-    LOG_INFO("MouseThread", "Mouse thread started");
     
     // Reduce thread priority to prevent excessive CPU usage
     SetThreadPriority(GetCurrentThread(), Constants::MOUSE_THREAD_PRIORITY);

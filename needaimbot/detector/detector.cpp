@@ -116,7 +116,6 @@ Detector::Detector()
                 ctx.config.tracker_min_hits,
                 ctx.config.tracker_iou_threshold
             );
-            std::cout << "[Detector] GPU tracker context initialized successfully" << std::endl;
         } catch (const std::exception& e) {
             std::cerr << "[Detector] Failed to initialize GPU tracker: " << e.what() << std::endl;
             m_gpuTrackerContext = nullptr;
@@ -129,7 +128,6 @@ Detector::Detector()
 
 Detector::~Detector()
 {
-    std::cout << "[Detector] Starting resource cleanup..." << std::endl;
     
     try {
         // 1. 먼저 모든 CUDA 스트림 동기화 (가장 중요)
@@ -390,13 +388,11 @@ bool Detector::initializeCudaContext()
 
 void Detector::initialize(const std::string& modelFile)
 {
-    std::cout << "[Detector] Initializing with model: " << modelFile << std::endl;
     auto& ctx = AppContext::getInstance();
     if (!isCudaContextInitialized()) {
         std::cerr << "[Detector] CUDA context not initialized. Skipping TensorRT engine load and GPU memory allocation." << std::endl;
         return; 
     }
-    std::cout << "[Detector] CUDA context verified" << std::endl;
 
     // Create a simple logger for TensorRT
     class SimpleLogger : public nvinfer1::ILogger {
@@ -413,9 +409,7 @@ void Detector::initialize(const std::string& modelFile)
     
     // TensorRT initialized
     
-    std::cout << "[Detector] Creating TensorRT runtime" << std::endl;
     runtime.reset(nvinfer1::createInferRuntime(logger));
-    std::cout << "[Detector] Loading engine from: " << modelFile << std::endl;
     loadEngine(modelFile);
 
     if (!engine)
@@ -424,14 +418,12 @@ void Detector::initialize(const std::string& modelFile)
         return;
     }
 
-    std::cout << "[Detector] Creating execution context" << std::endl;
     context.reset(engine->createExecutionContext());
     if (!context)
     {
         std::cerr << "[Detector] Context creation failed" << std::endl;
         return;
     }
-    std::cout << "[Detector] Execution context created successfully" << std::endl;
     
     // TensorRT 10.x 최적화 설정
     context->setOptimizationProfileAsync(0, stream);
@@ -448,10 +440,8 @@ void Detector::initialize(const std::string& modelFile)
     
     context->setPersistentCacheLimit(actualCacheLimit);
 
-    std::cout << "[Detector] Getting input/output tensor names" << std::endl;
     getInputNames();
     getOutputNames();
-    std::cout << "[Detector] Found " << inputNames.size() << " inputs and " << outputNames.size() << " outputs" << std::endl;
 
     if (inputNames.empty())
     {
@@ -493,12 +483,10 @@ void Detector::initialize(const std::string& modelFile)
         outputShapes[outName] = shape;
     }
 
-    std::cout << "[Detector] Getting bindings" << std::endl;
     getBindings();
     
-    std::cout << "[Detector] Initializing buffers" << std::endl;
     initializeBuffers();
-    std::cout << "[Detector] Buffer initialization complete" << std::endl; 
+ 
 
     
     m_allow_flags_need_update = true;
@@ -654,9 +642,6 @@ void Detector::processFrame(const SimpleCudaMat& frame)
     
     static int process_call_count = 0;
     process_call_count++;
-    if (process_call_count <= 5) {
-        std::cout << "[Detector] processFrame called #" << process_call_count << std::endl;
-    }
     
     if (!isCudaContextInitialized()) {
         std::cerr << "[Detector] CUDA context not initialized!" << std::endl;
@@ -683,23 +668,14 @@ void Detector::processFrame(const SimpleCudaMat& frame)
         
         // Skip if previous frame still processing (frame drop for low latency)
         if (frameReady) {
-            if (process_call_count <= 5) {
-                std::cout << "[Detector] Skipping frame - previous still processing" << std::endl;
-            }
             return; // Skip frame if inference slower than capture
         }
         
-        if (process_call_count <= 5) {
-            std::cout << "[Detector] Cloning frame for inference" << std::endl;
-        }
         currentFrame = frame.clone();
         frameIsGpu = true;
         frameReady = true;
     }
     
-    if (process_call_count <= 5) {
-        std::cout << "[Detector] Notifying inference thread" << std::endl;
-    }
     inferenceCV.notify_one();
 
     auto end_time = std::chrono::high_resolution_clock::now();
@@ -1078,7 +1054,6 @@ void Detector::inferenceThread()
                             ctx.config.tracker_min_hits,
                             ctx.config.tracker_iou_threshold
                         );
-                        std::cout << "[Tracker] SORT tracker initialized at runtime" << std::endl;
                     } catch (const std::exception& e) {
                         std::cerr << "[Tracker] Failed to initialize SORT tracker: " << e.what() << std::endl;
                     }
@@ -1459,11 +1434,6 @@ void Detector::inferenceThread()
 }
 
 void Detector::performGpuPostProcessing(cudaStream_t stream) {
-    static int gpuPostProcessCount = 0;
-    gpuPostProcessCount++;
-    if (gpuPostProcessCount <= 5) {
-        std::cout << "[PostProcess] Starting GPU post-processing #" << gpuPostProcessCount << std::endl;
-    }
     
     auto& ctx = AppContext::getInstance();
     if (outputNames.empty()) {
@@ -1487,14 +1457,6 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         return;
     }
     
-    if (gpuPostProcessCount <= 5) {
-        std::cout << "[PostProcess] Output shape: ";
-        for (size_t i = 0; i < shape.size(); i++) {
-            std::cout << shape[i];
-            if (i < shape.size() - 1) std::cout << "x";
-        }
-        std::cout << std::endl;
-    }
 
     // Clear all detection buffers at the start of processing
     cudaMemsetAsync(m_decodedCountGpu.get(), 0, sizeof(int), stream);
@@ -1530,9 +1492,6 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         int max_candidates = (shape.size() > 1) ? static_cast<int>(shape[1]) : 0;
         
         // Pass large buffer size to decode ALL detections
-        if (gpuPostProcessCount <= 5) {
-            std::cout << "[PostProcess] Calling decodeYolo10Gpu for " << cached_postprocess << std::endl;
-        }
         decodeErr = decodeYolo10Gpu(
             d_rawOutputPtr,
             outputType,
@@ -1548,15 +1507,6 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
     } else if (cached_postprocess == "yolo8" || cached_postprocess == "yolo9" || cached_postprocess == "yolo11" || cached_postprocess == "yolo12") {
         int max_candidates = (shape.size() > 2) ? static_cast<int>(shape[2]) : 0;
         
-        if (gpuPostProcessCount <= 5) {
-            std::cout << "[PostProcess] Calling decodeYolo11Gpu for " << cached_postprocess << std::endl;
-            std::cout << "[PostProcess] Parameters: max_candidates=" << max_candidates 
-                      << ", maxDecodedTargets=" << maxDecodedTargets
-                      << ", numClasses=" << numClasses
-                      << ", conf_threshold=" << cached_confidence_threshold
-                      << ", img_scale=" << img_scale 
-                      << ", detection_resolution=" << ctx.config.detection_resolution << std::endl;
-        }
         
         // Validate parameters before calling
         if (!m_decodedTargetsGpu.get() || !m_decodedCountGpu.get()) {
@@ -1598,18 +1548,12 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         return;
     }
     
-    if (gpuPostProcessCount <= 5) {
-        std::cout << "[PostProcess] Decode completed successfully" << std::endl;
-    }
 
     // Always get the actual decoded count for correct processing
     int decodedCount = 0;
     int classFilteredCount = 0;
     
     // Get actual decoded count (needed for correct filtering)
-    if (gpuPostProcessCount <= 5) {
-        std::cout << "[PostProcess] Getting decoded count from GPU" << std::endl;
-    }
     cudaError_t countCopyErr = cudaMemcpyAsync(&decodedCount, m_decodedCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
     if (countCopyErr != cudaSuccess) {
         std::cerr << "[PostProcess] Failed to copy decoded count: " << cudaGetErrorString(countCopyErr) << std::endl;
@@ -1623,45 +1567,6 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         return;
     }
     
-    if (gpuPostProcessCount <= 5) {
-        std::cout << "[PostProcess] Decoded count: " << decodedCount << std::endl;
-        
-        // Debug: Copy first few detections to host to check values
-        if (decodedCount > 0) {
-            int debugCount = std::min(10, decodedCount);  // Check more detections
-            Target debugTargets[10];
-            cudaMemcpyAsync(debugTargets, m_decodedTargetsGpu.get(), 
-                          debugCount * sizeof(Target), cudaMemcpyDeviceToHost, stream);
-            cudaStreamSynchronize(stream);
-            
-            // PostProcess target debug logs removed
-            
-            // Count and log abnormal detections
-            int abnormalCount = 0;
-            for (int i = 0; i < decodedCount && i < 100; i++) {
-                Target det;
-                cudaMemcpyAsync(&det, m_decodedTargetsGpu.get() + i, 
-                              sizeof(Target), cudaMemcpyDeviceToHost, stream);
-                cudaStreamSynchronize(stream);
-                
-                if (det.classId < 0 || det.classId >= numClasses) {
-                    abnormalCount++;
-                    if (abnormalCount <= 5) {  // Log first 5 abnormal ones
-                        std::cout << "[PostProcess] ABNORMAL Target #" << i 
-                                  << ": classId=" << det.classId 
-                                  << " (should be 0-" << (numClasses-1) << ")"
-                                  << ", conf=" << det.confidence
-                                  << ", pos=(" << det.x << "," << det.y << ")"
-                                  << ", size=(" << det.width << "x" << det.height << ")" << std::endl;
-                    }
-                }
-            }
-            if (abnormalCount > 0) {
-                std::cout << "[PostProcess] Total abnormal detections: " << abnormalCount 
-                          << " out of " << decodedCount << std::endl;
-            }
-        }
-    }
     
     
     // If no detections were decoded, clear final count and return early
@@ -1676,9 +1581,6 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
     }
     
     // Step 1: Class ID filtering (after confidence filtering in decode)
-    if (gpuPostProcessCount <= 5) {
-        std::cout << "[PostProcess] Starting class ID filtering" << std::endl;
-    }
     cudaError_t filterErr = filterTargetsByClassIdGpu(
         m_decodedTargetsGpu.get(),
         decodedCount,  // Use actual count or max for graph mode
@@ -1695,9 +1597,6 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         return;
     }
     
-    if (gpuPostProcessCount <= 5) {
-        std::cout << "[PostProcess] Class ID filtering completed" << std::endl;
-    }
     
     // Always get class filtered count for correct processing
     cudaMemcpyAsync(&classFilteredCount, m_classFilteredCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
@@ -2132,10 +2031,8 @@ void Detector::warmupGPU()
 
 void Detector::captureInferenceGraph(const SimpleCudaMat& frameGpu)
 {
-    std::cout << "[Graph] Attempting to capture CUDA Graph" << std::endl;
     
     if (m_graphCaptured || !context || !frameGpu.data()) {
-        std::cout << "[Graph] Skipping capture - already captured or invalid state" << std::endl;
         return;
     }
     
@@ -2143,7 +2040,6 @@ void Detector::captureInferenceGraph(const SimpleCudaMat& frameGpu)
     
     // YOLO10 has dynamic output shape due to end-to-end NMS, skip graph capture
     if (ctx.config.postprocess == "yolo10") {
-        std::cout << "[Graph] Skipping capture for YOLO10 (dynamic output)" << std::endl;
         return;
     }
     
@@ -2151,12 +2047,10 @@ void Detector::captureInferenceGraph(const SimpleCudaMat& frameGpu)
     const int maxAttempts = 5;
     
     if (captureAttempts >= maxAttempts) {
-        std::cout << "[Graph] Max capture attempts reached" << std::endl;
         return;
     }
     
     captureAttempts++;
-    std::cout << "[Graph] Capture attempt #" << captureAttempts << std::endl;
     
     // Clear any previous CUDA errors and check
     cudaError_t prevError = cudaGetLastError();
@@ -2171,7 +2065,6 @@ void Detector::captureInferenceGraph(const SimpleCudaMat& frameGpu)
     cudaStreamSynchronize(postprocessStream);
     
     // Multiple warmup runs to ensure all allocations are done
-    std::cout << "[Graph] Running warmup inferences" << std::endl;
     for (int i = 0; i < 3; i++) {
         bool warmupResult = context->enqueueV3(stream);
         if (!warmupResult) {
@@ -2184,10 +2077,8 @@ void Detector::captureInferenceGraph(const SimpleCudaMat& frameGpu)
             return;
         }
     }
-    std::cout << "[Graph] Warmup complete" << std::endl;
     
     // Try to capture with relaxed mode to avoid conflicts with other CUDA operations
-    std::cout << "[Graph] Beginning stream capture" << std::endl;
     cudaError_t captureResult = cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal);
     if (captureResult != cudaSuccess) {
         std::cerr << "[Graph] Failed to begin capture: " << cudaGetErrorString(captureResult) << std::endl;
@@ -2195,7 +2086,6 @@ void Detector::captureInferenceGraph(const SimpleCudaMat& frameGpu)
     }
     
     // Capture inference only
-    std::cout << "[Graph] Capturing inference operation" << std::endl;
     bool enqueueResult = context->enqueueV3(stream);
     if (!enqueueResult) {
         std::cerr << "[Graph] Failed to enqueue during capture" << std::endl;
@@ -2204,7 +2094,6 @@ void Detector::captureInferenceGraph(const SimpleCudaMat& frameGpu)
     }
     
     // End capture
-    std::cout << "[Graph] Ending stream capture" << std::endl;
     cudaGraph_t tempGraph = nullptr;
     captureResult = cudaStreamEndCapture(stream, &tempGraph);
     
@@ -2220,16 +2109,13 @@ void Detector::captureInferenceGraph(const SimpleCudaMat& frameGpu)
         cudaError_t getNodesResult = cudaGraphGetNodes(tempGraph, nullptr, &numNodes);
         
         if (getNodesResult == cudaSuccess && numNodes > 0) {
-            std::cout << "[Graph] Graph has " << numNodes << " nodes, instantiating..." << std::endl;
             cudaError_t instantiateResult = cudaGraphInstantiate(&m_inferenceGraphExec, tempGraph, nullptr, nullptr, 0);
             
             if (instantiateResult == cudaSuccess && m_inferenceGraphExec != nullptr) {
-                std::cout << "[Graph] Graph instantiated successfully" << std::endl;
                 m_inferenceGraph = tempGraph;
                 m_graphCaptured = true;
                 
                 // Test launch
-                std::cout << "[Graph] Testing graph launch..." << std::endl;
                 cudaError_t launchResult = cudaGraphLaunch(m_inferenceGraphExec, stream);
                 if (launchResult == cudaSuccess) {
                     cudaError_t syncErr = cudaStreamSynchronize(stream);
@@ -2243,7 +2129,6 @@ void Detector::captureInferenceGraph(const SimpleCudaMat& frameGpu)
                         m_graphCaptured = false;
                         return;
                     }
-                    std::cout << "[Graph] CUDA Graph enabled successfully for " << ctx.config.postprocess << std::endl;
                 } else {
                     std::cerr << "[Graph] Test launch failed: " << cudaGetErrorString(launchResult) << std::endl;
                     // Clean up
@@ -2265,14 +2150,11 @@ void Detector::captureInferenceGraph(const SimpleCudaMat& frameGpu)
 
 void Detector::start()
 {
-    std::cout << "[Detector] Starting detector threads" << std::endl;
     auto& ctx = AppContext::getInstance();
     ctx.should_exit = false;
     
     // Note: capture thread is handled separately in capture.cpp
-    std::cout << "[Detector] Starting inference thread" << std::endl;
     m_inferenceThread = std::thread(&Detector::inferenceThread, this);
-    std::cout << "[Detector] Inference thread started" << std::endl;
 }
 
 void Detector::initializeKalmanFilter()
@@ -2283,10 +2165,6 @@ void Detector::initializeKalmanFilter()
     destroyKalmanFilter();
     
     if (ctx.config.enable_kalman_filter) {
-        std::cout << "[Detector] Initializing GPU Kalman filter..." << std::endl;
-        std::cout << "[Detector] Kalman settings: process_noise=" << ctx.config.kalman_process_noise 
-                  << ", measurement_noise=" << ctx.config.kalman_measurement_noise 
-                  << ", lookahead=" << ctx.config.kalman_lookahead_time << std::endl;
         
         try {
             m_gpuKalmanTracker = createGPUKalmanTracker(100, Constants::MAX_DETECTIONS);
@@ -2301,20 +2179,16 @@ void Detector::initializeKalmanFilter()
                 0  // Use default stream
             );
             
-            std::cout << "[Detector] GPU Kalman filter initialized successfully" << std::endl;
         } catch (const std::exception& e) {
             std::cerr << "[Detector] Failed to initialize GPU Kalman filter: " << e.what() << std::endl;
             m_gpuKalmanTracker = nullptr;
         }
-    } else {
-        std::cout << "[Detector] Kalman filter is disabled in config" << std::endl;
     }
 }
 
 void Detector::destroyKalmanFilter()
 {
     if (m_gpuKalmanTracker) {
-        std::cout << "[Detector] Destroying GPU Kalman filter..." << std::endl;
         destroyGPUKalmanTracker(m_gpuKalmanTracker);
         m_gpuKalmanTracker = nullptr;
         m_kalmanGraphInitialized = false;
