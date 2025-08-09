@@ -248,14 +248,26 @@ static void draw_kalman_filter_settings()
     UIHelpers::Spacer(10.0f);
     UIHelpers::SettingsSubHeader("Prediction Settings");
     
-    // Frame-based prediction slider
+    // Frame-based prediction slider with fine control
     float prediction_frames = ctx.config.kalman_lookahead_time * 60.0f; // Convert to frames (assuming 60fps base)
     if (UIHelpers::EnhancedSliderFloat("Prediction Frames", 
                                        &prediction_frames, 
-                                       0.0f, 3.0f, "%.1f frames",
-                                       "How many frames ahead to predict\n0 = no prediction, 3 = maximum")) {
+                                       0.0f, 10.0f, "%.2f frames",
+                                       "How many frames ahead to predict\nUse Ctrl+Click to input any value")) {
         ctx.config.kalman_lookahead_time = prediction_frames / 60.0f; // Store as time for compatibility
         SAVE_PROFILE();
+    }
+    
+    // Add input field for precise control
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(60);
+    if (ImGui::InputFloat("##PredictionFramesInput", &prediction_frames, 0.1f, 1.0f, "%.2f")) {
+        // No clamping - allow any value
+        ctx.config.kalman_lookahead_time = prediction_frames / 60.0f;
+        SAVE_PROFILE();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Enter exact frame count (any value)");
     }
     
     // Visual frame prediction display
