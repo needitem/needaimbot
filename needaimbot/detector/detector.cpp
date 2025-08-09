@@ -11,6 +11,7 @@
 #include "../cuda/cuda_image_processing.h"
 #include "../cuda/cuda_float_processing.h"
 #include "../cuda/color_filter.h"
+#include "../cuda/gpu_kalman_filter.h"
 
 #include <NvInfer.h>
 #include <NvOnnxParser.h>
@@ -121,6 +122,28 @@ Detector::Detector()
             m_gpuTrackerContext = nullptr;
         }
     }
+    
+    // Initialize GPU Kalman filter if enabled
+    if (ctx.config.enable_kalman_filter) {
+        try {
+            m_gpuKalmanTracker = createGPUKalmanTracker(100, Constants::MAX_DETECTIONS);
+            m_kalmanPredictionsGpu.allocate(Constants::MAX_DETECTIONS);
+            m_kalmanPredictionsCountGpu.allocate(1);
+            
+            // Initialize filter constants
+            updateKalmanFilterSettings(
+                ctx.config.kalman_dt,
+                ctx.config.kalman_process_noise,
+                ctx.config.kalman_measurement_noise,
+                0  // Use default stream
+            );
+            
+            std::cout << "[Detector] GPU Kalman filter initialized successfully" << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "[Detector] Failed to initialize GPU Kalman filter: " << e.what() << std::endl;
+            m_gpuKalmanTracker = nullptr;
+        }
+    }
 }
 
 Detector::~Detector()
@@ -187,7 +210,13 @@ Detector::~Detector()
             m_inferenceGraph = nullptr;
         }
         
-        // 7. 스트림 정리 (마지막에)
+        // 7. GPU Kalman filter cleanup
+        if (m_gpuKalmanTracker) {
+            destroyGPUKalmanTracker(m_gpuKalmanTracker);
+            m_gpuKalmanTracker = nullptr;
+        }
+        
+        // 8. 스트림 정리 (마지막에)
         if (stream) {
             cudaStreamDestroy(stream);
             stream = nullptr;
@@ -1202,6 +1231,43 @@ void Detector::inferenceThread()
                     }
                 } else if (ctx.config.enable_tracking && m_finalTargetsCountHost > 0) {
                     std::cout << "[GPU Tracker] Tracking enabled but GPU tracker not initialized" << std::endl;
+                }
+                
+                // Apply GPU Kalman filter if enabled
+                if (ctx.config.enable_kalman_filter && m_gpuKalmanTracker && m_finalTargetsCountHost > 0) {
+                    // Initialize CUDA graph on first use
+                    if (ctx.config.kalman_use_cuda_graph && !m_kalmanGraphInitialized) {
+                        initializeKalmanGraph(m_gpuKalmanTracker, postprocessStream);
+                        m_kalmanGraphInitialized = true;
+                        std::cout << "[Kalman] CUDA graph initialized for Kalman filter" << std::endl;
+                    }
+                    
+                    // Process with Kalman filter
+                    processKalmanFilter(
+                        m_gpuKalmanTracker,
+                        m_finalTargetsGpu.get(),
+                        m_finalTargetsCountHost,
+                        m_kalmanPredictionsGpu.get(),
+                        m_kalmanPredictionsCountGpu.get(),
+                        postprocessStream,
+                        ctx.config.kalman_use_cuda_graph
+                    );
+                    
+                    // Update final targets with Kalman predictions
+                    int kalmanCount = 0;
+                    cudaMemcpyAsync(&kalmanCount, m_kalmanPredictionsCountGpu.get(), 
+                                   sizeof(int), cudaMemcpyDeviceToHost, postprocessStream);
+                    cudaStreamSynchronize(postprocessStream);
+                    
+                    if (kalmanCount > 0) {
+                        // Replace targets with Kalman predictions
+                        cudaMemcpyAsync(m_finalTargetsGpu.get(), m_kalmanPredictionsGpu.get(),
+                                       kalmanCount * sizeof(Target), 
+                                       cudaMemcpyDeviceToDevice, postprocessStream);
+                        m_finalTargetsCountHost = kalmanCount;
+                        cudaMemcpyAsync(m_finalTargetsCountGpu.get(), &m_finalTargetsCountHost,
+                                       sizeof(int), cudaMemcpyHostToDevice, postprocessStream);
+                    }
                 }
                 
                 // GPU에서 거리 기반 타겟 선택
