@@ -19,7 +19,7 @@ extern "C" {
     void processKalmanFilter(GPUKalmanTracker* tracker,
                             const Target* d_measurements, int numMeasurements,
                             Target* d_output, int* d_outputCount,
-                            cudaStream_t stream, bool useGraph);
+                            cudaStream_t stream, bool useGraph, float lookaheadFrames = 1.0f);
     
     // Update filter settings
     void updateKalmanFilterSettings(float dt, float processNoise, 

@@ -124,26 +124,7 @@ Detector::Detector()
     }
     
     // Initialize GPU Kalman filter if enabled
-    if (ctx.config.enable_kalman_filter) {
-        try {
-            m_gpuKalmanTracker = createGPUKalmanTracker(100, Constants::MAX_DETECTIONS);
-            m_kalmanPredictionsGpu.allocate(Constants::MAX_DETECTIONS);
-            m_kalmanPredictionsCountGpu.allocate(1);
-            
-            // Initialize filter constants
-            updateKalmanFilterSettings(
-                ctx.config.kalman_dt,
-                ctx.config.kalman_process_noise,
-                ctx.config.kalman_measurement_noise,
-                0  // Use default stream
-            );
-            
-            std::cout << "[Detector] GPU Kalman filter initialized successfully" << std::endl;
-        } catch (const std::exception& e) {
-            std::cerr << "[Detector] Failed to initialize GPU Kalman filter: " << e.what() << std::endl;
-            m_gpuKalmanTracker = nullptr;
-        }
-    }
+    initializeKalmanFilter();
 }
 
 Detector::~Detector()
@@ -1235,6 +1216,18 @@ void Detector::inferenceThread()
                 
                 // Apply GPU Kalman filter if enabled
                 if (ctx.config.enable_kalman_filter && m_gpuKalmanTracker && m_finalTargetsCountHost > 0) {
+                    
+                    // Use fixed frame-based delta time (1 frame = 1.0)
+                    const float frameDelta = 1.0f;
+                    
+                    // Update Kalman filter settings with frame-based delta
+                    updateKalmanFilterSettings(
+                        frameDelta,
+                        ctx.config.kalman_process_noise,
+                        ctx.config.kalman_measurement_noise,
+                        postprocessStream
+                    );
+                    
                     // Initialize CUDA graph on first use
                     if (ctx.config.kalman_use_cuda_graph && !m_kalmanGraphInitialized) {
                         initializeKalmanGraph(m_gpuKalmanTracker, postprocessStream);
@@ -1243,6 +1236,9 @@ void Detector::inferenceThread()
                     }
                     
                     // Process with Kalman filter
+                    // Convert lookahead time to frames (assuming 60fps base)
+                    float lookaheadFrames = ctx.config.kalman_lookahead_time * 60.0f;
+                    
                     processKalmanFilter(
                         m_gpuKalmanTracker,
                         m_finalTargetsGpu.get(),
@@ -1250,7 +1246,8 @@ void Detector::inferenceThread()
                         m_kalmanPredictionsGpu.get(),
                         m_kalmanPredictionsCountGpu.get(),
                         postprocessStream,
-                        ctx.config.kalman_use_cuda_graph
+                        ctx.config.kalman_use_cuda_graph,
+                        lookaheadFrames
                     );
                     
                     // Update final targets with Kalman predictions
@@ -2276,6 +2273,52 @@ void Detector::start()
     std::cout << "[Detector] Starting inference thread" << std::endl;
     m_inferenceThread = std::thread(&Detector::inferenceThread, this);
     std::cout << "[Detector] Inference thread started" << std::endl;
+}
+
+void Detector::initializeKalmanFilter()
+{
+    auto& ctx = AppContext::getInstance();
+    
+    // Destroy existing Kalman filter if any
+    destroyKalmanFilter();
+    
+    if (ctx.config.enable_kalman_filter) {
+        std::cout << "[Detector] Initializing GPU Kalman filter..." << std::endl;
+        std::cout << "[Detector] Kalman settings: process_noise=" << ctx.config.kalman_process_noise 
+                  << ", measurement_noise=" << ctx.config.kalman_measurement_noise 
+                  << ", lookahead=" << ctx.config.kalman_lookahead_time << std::endl;
+        
+        try {
+            m_gpuKalmanTracker = createGPUKalmanTracker(100, Constants::MAX_DETECTIONS);
+            m_kalmanPredictionsGpu.allocate(Constants::MAX_DETECTIONS);
+            m_kalmanPredictionsCountGpu.allocate(1);
+            
+            // Initialize filter constants with frame-based delta
+            updateKalmanFilterSettings(
+                1.0f,  // Frame-based: 1 frame = 1.0
+                ctx.config.kalman_process_noise,
+                ctx.config.kalman_measurement_noise,
+                0  // Use default stream
+            );
+            
+            std::cout << "[Detector] GPU Kalman filter initialized successfully" << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "[Detector] Failed to initialize GPU Kalman filter: " << e.what() << std::endl;
+            m_gpuKalmanTracker = nullptr;
+        }
+    } else {
+        std::cout << "[Detector] Kalman filter is disabled in config" << std::endl;
+    }
+}
+
+void Detector::destroyKalmanFilter()
+{
+    if (m_gpuKalmanTracker) {
+        std::cout << "[Detector] Destroying GPU Kalman filter..." << std::endl;
+        destroyGPUKalmanTracker(m_gpuKalmanTracker);
+        m_gpuKalmanTracker = nullptr;
+        m_kalmanGraphInitialized = false;
+    }
 }
 
 void Detector::stop()

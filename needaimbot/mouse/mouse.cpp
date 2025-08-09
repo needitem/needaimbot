@@ -419,23 +419,8 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         target_y = target.y + target.height * y_offset_multiplier;
     }
     
-    // Apply Kalman filtering if enabled
-    if (ctx.config.enable_kalman_filter && kalman_filter) {
-        // Initialize Kalman filter parameters if needed
-        kalman_filter->setProcessNoise(ctx.config.kalman_process_noise);
-        kalman_filter->setMeasurementNoise(ctx.config.kalman_measurement_noise);
-        
-        // Update Kalman filter with current target position
-        Eigen::Vector2f measured_pos(target_x, target_y);
-        Eigen::Vector2f filtered_pos = kalman_filter->update(measured_pos);
-        
-        // Get predicted position with lookahead
-        Eigen::Vector2f predicted_pos = kalman_filter->getPredictedPosition(ctx.config.kalman_lookahead_time);
-        
-        // Use predicted position for aiming
-        target_x = predicted_pos.x();
-        target_y = predicted_pos.y();
-    }
+    // Kalman filtering is now done in the detector/tracker level
+    // Not in mouse movement to avoid double filtering and delays
     
     float error_x = target_x - current_center_x;
     float error_y = target_y - current_center_y;

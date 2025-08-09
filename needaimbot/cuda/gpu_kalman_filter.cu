@@ -159,9 +159,16 @@ __global__ void kalmanUpdateKernel(
     kf.P[28] *= (1.0f - K[16]);
     kf.P[35] *= (1.0f - K[23]);
     
-    // Update metadata
+    // Update metadata (keep existing trackId)
     kf.hits++;
     kf.timeSinceUpdate = 0;
+    // Track ID remains the same - continuity maintained
+    
+    // Debug: Print when track is updated (only first few for debugging)
+    if (measIdx < 3 && kf.trackId < 10) {
+        printf("[Kalman] Track %d updated: pos(%.1f,%.1f) vel(%.1f,%.1f) hits=%d\n", 
+               kf.trackId, kf.state[0], kf.state[1], kf.state[2], kf.state[3], kf.hits);
+    }
 }
 
 // Kernel: Extract predictions as Target structs
@@ -170,7 +177,8 @@ __global__ void extractPredictionsKernel(
     Target* predictions,
     int* numPredictions,
     int numStates,
-    int minHits)
+    int minHits,
+    float lookaheadFrames)  // How many frames to predict ahead
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= numStates) return;
@@ -182,13 +190,29 @@ __global__ void extractPredictionsKernel(
         int outIdx = atomicAdd(numPredictions, 1);
         
         Target& pred = predictions[outIdx];
-        pred.x = static_cast<int>(kf.state[0] - kf.state[4] * 0.5f);
-        pred.y = static_cast<int>(kf.state[1] - kf.state[5] * 0.5f);
+        
+        // Predict future position using velocity
+        float predicted_x = kf.state[0] + kf.state[2] * lookaheadFrames;  // x + vx * frames
+        float predicted_y = kf.state[1] + kf.state[3] * lookaheadFrames;  // y + vy * frames
+        
+        pred.x = static_cast<int>(predicted_x - kf.state[4] * 0.5f);
+        pred.y = static_cast<int>(predicted_y - kf.state[5] * 0.5f);
         pred.width = static_cast<int>(kf.state[4]);
         pred.height = static_cast<int>(kf.state[5]);
-        pred.id = kf.trackId;  // Use 'id' instead of 'trackId'
-        pred.confidence = min(1.0f, kf.hits / 10.0f);  // Confidence based on hits
-        pred.classId = 0;  // Will be updated from measurement
+        pred.id = kf.trackId;
+        pred.confidence = min(1.0f, kf.hits / 10.0f);
+        pred.classId = 0;
+        
+        // Store velocity in unused fields for debugging
+        pred.velocity_x = kf.state[2];
+        pred.velocity_y = kf.state[3];
+        
+        // Debug output for first few tracks
+        if (kf.trackId < 5 && lookaheadFrames > 0) {
+            printf("[Kalman] Track %d: current(%.1f,%.1f) vel(%.1f,%.1f) -> predicted(%.1f,%.1f)\n",
+                   kf.trackId, kf.state[0], kf.state[1], kf.state[2], kf.state[3], 
+                   predicted_x, predicted_y);
+        }
     }
 }
 
@@ -234,9 +258,105 @@ __global__ void createNewTracksKernel(
                 kf.hits = 1;
                 kf.timeSinceUpdate = 0;
                 
+                // Debug: Print when new track is created
+                if (kf.trackId < 10) {
+                    printf("[Kalman] New track %d created at pos(%.1f,%.1f) size(%.1f,%.1f)\n", 
+                           kf.trackId, kf.state[0], kf.state[1], kf.state[4], kf.state[5]);
+                }
+                
                 break;
             }
         }
+    }
+}
+
+// Kernel: Associate measurements with existing tracks using IOU
+__global__ void associateMeasurementsKernel(
+    const KalmanState* states,
+    const Target* measurements,
+    int* associations,
+    float* iouScores,
+    int numStates,
+    int numMeasurements,
+    float iouThreshold)
+{
+    int measIdx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (measIdx >= numMeasurements) return;
+    
+    const Target& meas = measurements[measIdx];
+    float bestIou = 0.0f;
+    int bestIdx = -1;
+    
+    // Find best matching track
+    for (int i = 0; i < numStates; i++) {
+        if (!states[i].isActive) continue;
+        
+        const KalmanState& kf = states[i];
+        
+        // Convert Kalman state to bounding box
+        float predX = kf.state[0] - kf.state[4] * 0.5f;
+        float predY = kf.state[1] - kf.state[5] * 0.5f;
+        float predW = kf.state[4];
+        float predH = kf.state[5];
+        
+        // Calculate IOU
+        float x1 = fmaxf(predX, (float)meas.x);
+        float y1 = fmaxf(predY, (float)meas.y);
+        float x2 = fminf(predX + predW, (float)(meas.x + meas.width));
+        float y2 = fminf(predY + predH, (float)(meas.y + meas.height));
+        
+        if (x2 > x1 && y2 > y1) {
+            float intersection = (x2 - x1) * (y2 - y1);
+            float area1 = predW * predH;
+            float area2 = (float)(meas.width * meas.height);
+            float iou = intersection / (area1 + area2 - intersection);
+            
+            if (iou > bestIou && iou > iouThreshold) {
+                bestIou = iou;
+                bestIdx = i;
+            }
+        }
+    }
+    
+    associations[measIdx] = bestIdx;
+    if (iouScores) iouScores[measIdx] = bestIou;
+}
+
+// Kernel: Mark associated tracks and resolve conflicts
+__global__ void markAssociatedKernel(
+    int* associations,
+    bool* isAssociated,
+    float* iouScores,
+    int numMeasurements)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= numMeasurements) return;
+    
+    int myAssoc = associations[idx];
+    if (myAssoc >= 0) {
+        // Check if another measurement has the same association with better score
+        bool keepAssociation = true;
+        if (iouScores) {
+            float myScore = iouScores[idx];
+            for (int i = 0; i < numMeasurements; i++) {
+                if (i != idx && associations[i] == myAssoc) {
+                    if (iouScores[i] > myScore || (iouScores[i] == myScore && i < idx)) {
+                        // Another measurement has better score or same score with lower index
+                        keepAssociation = false;
+                        break;
+                    }
+                }
+            }
+        }
+        
+        if (!keepAssociation) {
+            associations[idx] = -1;
+            isAssociated[idx] = false;
+        } else {
+            isAssociated[idx] = true;
+        }
+    } else {
+        isAssociated[idx] = false;
     }
 }
 
@@ -268,6 +388,7 @@ private:
     int* d_numPredictions;
     int* d_associations;
     bool* d_isAssociated;
+    float* d_iouScores;
     int* d_nextTrackId;
     
     cudaGraph_t kalmanGraph;
@@ -294,6 +415,7 @@ public:
         cudaMalloc(&d_numPredictions, sizeof(int));
         cudaMalloc(&d_associations, maxMeasurements * sizeof(int));
         cudaMalloc(&d_isAssociated, maxMeasurements * sizeof(bool));
+        cudaMalloc(&d_iouScores, maxMeasurements * sizeof(float));
         cudaMalloc(&d_nextTrackId, sizeof(int));
         
         // Initialize
@@ -314,6 +436,7 @@ public:
         cudaFree(d_numPredictions);
         cudaFree(d_associations);
         cudaFree(d_isAssociated);
+        cudaFree(d_iouScores);
         cudaFree(d_nextTrackId);
     }
     
@@ -338,8 +461,9 @@ public:
         );
         
         // Extract predictions
+        float lookaheadFrames = 1.0f;  // Default 1 frame ahead
         extractPredictionsKernel<<<gridSize, blockSize, 0, stream>>>(
-            d_states, d_predictions, d_numPredictions, maxStates, 3
+            d_states, d_predictions, d_numPredictions, maxStates, 3, lookaheadFrames
         );
         
         // Create new tracks
@@ -361,7 +485,7 @@ public:
     
     void process(const Target* d_measurements, int numMeasurements, 
                  Target* d_output, int* d_outputCount,
-                 cudaStream_t stream, bool useGraph) {
+                 cudaStream_t stream, bool useGraph, float lookaheadFrames = 1.0f) {
         
         if (useGraph && graphCreated) {
             // Update graph with new parameters
@@ -391,10 +515,10 @@ public:
                 );
             }
             
-            // Extract predictions
+            // Extract predictions with lookahead
             cudaMemset(d_numPredictions, 0, sizeof(int));
             extractPredictionsKernel<<<gridSize, blockSize, 0, stream>>>(
-                d_states, d_predictions, d_numPredictions, maxStates, 3
+                d_states, d_predictions, d_numPredictions, maxStates, 3, lookaheadFrames
             );
             
             // Create new tracks for unassociated measurements
@@ -418,6 +542,7 @@ public:
                        cudaMemcpyDeviceToDevice, stream);
         cudaMemcpyAsync(d_outputCount, d_numPredictions, 
                        sizeof(int), cudaMemcpyDeviceToDevice, stream);
+        
     }
     
 private:
@@ -429,12 +554,27 @@ private:
     
     void associateMeasurements(const Target* d_measurements, int numMeasurements, 
                                cudaStream_t stream) {
-        // Simple nearest neighbor association
-        // In production, use Hungarian algorithm or GNN
-        cudaMemset(d_associations, -1, numMeasurements * sizeof(int));
-        cudaMemset(d_isAssociated, 0, numMeasurements * sizeof(bool));
+        // Reset associations
+        cudaMemsetAsync(d_associations, -1, numMeasurements * sizeof(int), stream);
+        cudaMemsetAsync(d_isAssociated, 0, numMeasurements * sizeof(bool), stream);
         
-        // Association kernel would go here
+        if (numMeasurements > 0) {
+            // IOU-based association
+            dim3 blockSize(256);
+            dim3 gridSize((numMeasurements + blockSize.x - 1) / blockSize.x);
+            
+            // Associate measurements with tracks
+            float iouThreshold = 0.3f;  // Minimum IOU for association
+            associateMeasurementsKernel<<<gridSize, blockSize, 0, stream>>>(
+                d_states, d_measurements, d_associations, d_iouScores,
+                maxStates, numMeasurements, iouThreshold
+            );
+            
+            // Mark associated measurements and resolve conflicts
+            markAssociatedKernel<<<gridSize, blockSize, 0, stream>>>(
+                d_associations, d_isAssociated, d_iouScores, numMeasurements
+            );
+        }
     }
 };
 
@@ -455,9 +595,9 @@ extern "C" {
     void processKalmanFilter(GPUKalmanTracker* tracker,
                             const Target* d_measurements, int numMeasurements,
                             Target* d_output, int* d_outputCount,
-                            cudaStream_t stream, bool useGraph) {
+                            cudaStream_t stream, bool useGraph, float lookaheadFrames) {
         tracker->process(d_measurements, numMeasurements, 
-                        d_output, d_outputCount, stream, useGraph);
+                        d_output, d_outputCount, stream, useGraph, lookaheadFrames);
     }
     
     void updateKalmanFilterSettings(float dt, float processNoise, 
