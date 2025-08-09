@@ -214,6 +214,10 @@ public:
 
     void start();
     void stop();
+    
+    // Kalman filter management
+    void initializeKalmanFilter();
+    void destroyKalmanFilter();
 
 private:
     std::thread m_captureThread;
