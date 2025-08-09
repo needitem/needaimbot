@@ -62,10 +62,13 @@ public:
     // Performance metrics
     std::atomic<float> g_current_frame_acquisition_time_ms{0.0f};
     std::atomic<float> g_current_capture_fps{0.0f};
+    std::atomic<float> g_current_capture_cycle_time_ms{0.0f};
     std::vector<float> g_frame_acquisition_time_history;
     std::vector<float> g_capture_fps_history;
+    std::vector<float> g_capture_cycle_time_history;
     std::mutex g_frame_acquisition_history_mutex;
     std::mutex g_capture_history_mutex;
+    std::mutex g_capture_cycle_history_mutex;
     
     // Detector performance metrics
     std::atomic<float> g_current_process_frame_time_ms{0.0f};

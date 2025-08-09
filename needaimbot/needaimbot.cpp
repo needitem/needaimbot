@@ -3,6 +3,9 @@
 #include <winsock2.h>
 #include <Windows.h>
 #include <shellapi.h>  // For ShellExecuteEx
+#include <timeapi.h>   // For timeBeginPeriod
+
+#pragma comment(lib, "winmm.lib")
 
 // OpenCV removed - using custom CUDA image processing
 #include <iostream>
@@ -122,67 +125,44 @@ void mouseThreadFunction(MouseThread &mouseThread)
     // SetThreadAffinityMask(GetCurrentThread(), 1 << 1);
     
     static int loop_count = 0;
+    static bool had_target_before = false;
     
     // Cache for keyboard states to reduce system calls
     struct KeyStateCache {
         bool left_mouse = false;
         bool right_mouse = false;
-        std::chrono::steady_clock::time_point last_update;
-        const std::chrono::milliseconds update_interval{16}; // Update every 16ms (~60Hz)
         
         void update() {
-            auto now = std::chrono::steady_clock::now();
-            if (now - last_update >= update_interval) {
-                left_mouse = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
-                right_mouse = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
-                last_update = now;
-            }
+            left_mouse = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+            right_mouse = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
         }
     } key_cache;
     
-    // Dynamic wait time based on target availability
-    std::chrono::milliseconds wait_timeout(Constants::ACTIVE_WAIT_TIMEOUT_MS);
-    const std::chrono::milliseconds active_timeout(Constants::ACTIVE_WAIT_TIMEOUT_MS);
-    const std::chrono::milliseconds idle_timeout(Constants::IDLE_WAIT_TIMEOUT_MS);
-    
     while (!ctx.should_exit)
     {
+        // Measure total cycle time
+        auto cycle_start = std::chrono::high_resolution_clock::now();
+        
         // Clear state at the beginning of each cycle to ensure no stale data
         bool current_aiming = ctx.aiming;
         bool current_has_target = false;
         Target current_target = {};  // Always start with clean state
         
-        // Wait for detection update or exit signal
+        // Check for detection update without waiting
         static int last_detection_version = 0;
         
+        // Try to get new detection without waiting
         {
-            std::unique_lock<std::mutex> lock(ctx.detector->detectionMutex);
-            // Performance monitoring for wait time
-            PERF_TIMER("MouseThread.WaitForDetection");
-            
-            // Wait with dynamic timeout
-            bool wait_result = ctx.detector->detectionCV.wait_for(lock, wait_timeout, [&]() { 
-                return ctx.should_exit || ctx.input_method_changed.load() || 
-                       ctx.detector->detectionVersion != last_detection_version; 
-            });
-            
-            // Copy target data while mutex is held
+            std::lock_guard<std::mutex> lock(ctx.detector->detectionMutex);
+            // Always process current state, don't wait for changes
             if (ctx.detector) {
-                // If timeout occurred, treat as no target to prevent stale data usage
-                if (!wait_result) {
-                    current_has_target = false;
-                    current_target = {};
+                current_has_target = ctx.detector->m_hasBestTarget;
+                if (current_has_target) {
+                    current_target = ctx.detector->m_bestTargetHost;
                 } else {
-
-                    current_has_target = ctx.detector->m_hasBestTarget;
-                    if (current_has_target) {
-                        current_target = ctx.detector->m_bestTargetHost;
-                    } else {
-                        current_target = {}; // Zero-initialize the struct
-                    }
-                    last_detection_version = ctx.detector->detectionVersion;
-
+                    current_target = {}; // Zero-initialize the struct
                 }
+                last_detection_version = ctx.detector->detectionVersion;
             }
         }
 
@@ -206,50 +186,35 @@ void mouseThreadFunction(MouseThread &mouseThread)
 
         
         if (current_has_target) {
-            // Validate target is within screen bounds
-            bool target_valid = (current_target.x >= 0 && 
-                                current_target.y >= 0 &&
-                                current_target.width > 0 && 
-                                current_target.height > 0 &&
-                                current_target.x + current_target.width <= ctx.config.detection_resolution &&
-                                current_target.y + current_target.height <= ctx.config.detection_resolution &&
-                                current_target.confidence > 0.0f);
+            // Convert Detection to AimbotTarget using copied data
+            AimbotTarget target(
+                current_target.x,
+                current_target.y,
+                current_target.width,
+                current_target.height,
+                current_target.confidence,
+                current_target.classId
+            );
             
-            if (target_valid) {
-                
-                // Convert Detection to AimbotTarget using copied data
-                AimbotTarget target(
-                    current_target.x,
-                    current_target.y,
-                    current_target.width,
-                    current_target.height,
-                    current_target.confidence,
-                    current_target.classId
-                );
-                
-                // Move mouse to target if aimbot is enabled AND aiming key is pressed
-                if (current_aiming && ctx.config.enable_aimbot) {
-                    PERF_TIMER("MouseThread.MoveMouse");
-                    mouseThread.moveMouse(target);
-                }
-                
-                // Auto-shoot if triggerbot is enabled (works independently of aiming)
-                // Check if auto_shoot button is configured and pressed, or if no button is configured (always on)
-                bool auto_shoot_active = ctx.config.button_auto_shoot.empty() || 
-                                       ctx.config.button_auto_shoot[0] == "None" ||
-                                       isAnyKeyPressed(ctx.config.button_auto_shoot);
-                
-                // Use cached mouse state
-                bool manual_mouse_down = key_cache.left_mouse;
-                
-                if (ctx.config.enable_triggerbot && auto_shoot_active && !manual_mouse_down) {
-                    mouseThread.pressMouse(target);
-                } else if (!manual_mouse_down) {
-                    // Only release if user isn't manually holding mouse
-                    mouseThread.releaseMouse();
-                }
-            } else {
-                // Invalid target - release mouse
+            // Move mouse to target if aimbot is enabled AND aiming key is pressed
+            if (current_aiming && ctx.config.enable_aimbot) {
+                PERF_TIMER("MouseThread.MoveMouse");
+                mouseThread.moveMouse(target);
+            }
+            
+            // Auto-shoot if triggerbot is enabled (works independently of aiming)
+            // Check if auto_shoot button is configured and pressed, or if no button is configured (always on)
+            bool auto_shoot_active = ctx.config.button_auto_shoot.empty() || 
+                                   ctx.config.button_auto_shoot[0] == "None" ||
+                                   isAnyKeyPressed(ctx.config.button_auto_shoot);
+            
+            // Use cached mouse state
+            bool manual_mouse_down = key_cache.left_mouse;
+            
+            if (ctx.config.enable_triggerbot && auto_shoot_active && !manual_mouse_down) {
+                mouseThread.pressMouse(target);
+            } else if (!manual_mouse_down) {
+                // Only release if user isn't manually holding mouse
                 mouseThread.releaseMouse();
             }
             
@@ -258,7 +223,6 @@ void mouseThreadFunction(MouseThread &mouseThread)
             mouseThread.releaseMouse();
             
             // Only reset once when transitioning from target to no target
-            static bool had_target_before = false;
             if (had_target_before) {
                 mouseThread.resetAccumulatedStates();
                 had_target_before = false;
@@ -275,12 +239,8 @@ void mouseThreadFunction(MouseThread &mouseThread)
         
         // Update the flag when we have a target
         if (current_aiming && current_has_target) {
-            static bool& had_target_before = *[]() { static bool flag = false; return &flag; }();
             had_target_before = true;
         }
-        
-        // Update dynamic wait timeout based on target presence
-        wait_timeout = current_has_target ? active_timeout : idle_timeout;
         
         // Update key cache periodically (moved before the continue check)
         key_cache.update();
@@ -323,6 +283,14 @@ void mouseThreadFunction(MouseThread &mouseThread)
                 }
             }
         }
+        
+        // Measure end of cycle
+        auto cycle_end = std::chrono::high_resolution_clock::now();
+        float cycle_time_ms = std::chrono::duration<float, std::milli>(cycle_end - cycle_start).count();
+        
+        // Store the total cycle time
+        ctx.g_current_total_cycle_time_ms.store(cycle_time_ms);
+        ctx.add_to_history(ctx.g_total_cycle_time_history, cycle_time_ms, ctx.g_total_cycle_history_mutex);
     }
 
     mouseThread.releaseMouse();
@@ -426,6 +394,9 @@ bool RestartAsAdministrator()
 
 int main()
 {
+    // Set global timer resolution to 1ms for precise sleep timing
+    timeBeginPeriod(1);
+    
     // Initialize Gaming Performance Analyzer
     std::cout << "[INFO] Starting Gaming Performance Analyzer v1.0.0" << std::endl;
     
@@ -624,9 +595,9 @@ int main()
         }, THREAD_PRIORITY_LOWEST);
         perfMonitorMgr.start();
 
-        // Wait for keyboard thread to signal exit
+        // Wait for keyboard thread to signal exit - busy wait
         while (keyThreadMgr.isRunning() && !ctx.should_exit) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            // Pure busy wait
         }
 
         // 안전한 종료 시퀀스
@@ -690,6 +661,7 @@ int main()
         }
         
         std::cout << "\n[MAIN] Safe shutdown completed." << std::endl;
+        timeEndPeriod(1);  // Restore system timer
         std::exit(0);
     }
     catch (const std::exception &e)
@@ -697,6 +669,7 @@ int main()
         std::cerr << "[MAIN] An error has occurred in the main stream: " << e.what() << std::endl;
         std::cout << "Press Enter to exit...";
         std::cin.get();
+        timeEndPeriod(1);  // Restore system timer
         return -1;
     }
 }

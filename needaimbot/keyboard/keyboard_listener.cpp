@@ -89,11 +89,10 @@ void keyboardListener() {
 
         if (is_any_key_pressed(pause_vk_codes)) {
             ctx.detectionPaused = !ctx.detectionPaused;
-            Sleep(200); // Debounce
+            Sleep(50); // Shorter debounce for faster response
         }
 
         // Auto shoot functionality removed
-
-        Sleep(1);
+        // No delay - pure busy wait
     }
 }
