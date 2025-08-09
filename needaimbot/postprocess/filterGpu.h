@@ -4,7 +4,7 @@
 #include <cuda_runtime.h>
 
 // Class ID filtering function (optimized and separated)
-cudaError_t filterDetectionsByClassIdGpu(
+cudaError_t filterTargetsByClassIdGpu(
     const Target* d_input_detections,
     int num_input_detections,
     Target* d_output_detections,
@@ -16,7 +16,7 @@ cudaError_t filterDetectionsByClassIdGpu(
 );
 
 // RGB color filtering function (runs after class filtering, before NMS)
-cudaError_t filterDetectionsByColorGpu(
+cudaError_t filterTargetsByColorGpu(
     const Target* d_input_detections,
     int num_input_detections,
     Target* d_output_detections,

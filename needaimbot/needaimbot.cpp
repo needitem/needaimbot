@@ -151,7 +151,7 @@ void mouseThreadFunction(MouseThread &mouseThread)
         // Clear state at the beginning of each cycle to ensure no stale data
         bool current_aiming = ctx.aiming;
         bool current_has_target = false;
-        Detection current_target = {};  // Always start with clean state
+        Target current_target = {};  // Always start with clean state
         
         // Wait for detection update or exit signal
         static int last_detection_version = 0;

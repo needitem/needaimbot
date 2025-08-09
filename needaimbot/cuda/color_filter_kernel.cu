@@ -30,9 +30,9 @@ __global__ void rgbRangeFilter_kernel(
 }
 
 
-// Detection 필터링을 위한 효율적인 커널
-__global__ void filterDetectionsByColorMask_kernel(
-    const Detection* __restrict__ detections,
+// Target 필터링을 위한 효율적인 커널
+__global__ void filterTargetsByColorMask_kernel(
+    const Target* __restrict__ detections,
     const uint8_t* __restrict__ colorMask,
     bool* __restrict__ validFlags,
     int numDetections,
@@ -43,7 +43,7 @@ __global__ void filterDetectionsByColorMask_kernel(
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= numDetections) return;
     
-    const Detection& det = detections[idx];
+    const Target& det = detections[idx];
     
     // Bounding box 내의 마스크 픽셀 카운트
     int pixelCount = 0;

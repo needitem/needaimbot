@@ -15,11 +15,11 @@ extern "C" void launchRGBRangeFilter(
     uint8_t minB, uint8_t maxB,
     cudaStream_t stream = 0);
 
-// Detection을 색상 마스크로 필터링
-extern "C" cudaError_t filterDetectionsByColorMask(
-    const Detection* detections,
+// Target을 색상 마스크로 필터링
+extern "C" cudaError_t filterTargetsByColorMask(
+    const Target* targets,
     const uint8_t* colorMask,
-    Detection* filteredDetections,
+    Target* filteredTargets,
     int* filteredCount,
     int numDetections,
     int maskWidth,

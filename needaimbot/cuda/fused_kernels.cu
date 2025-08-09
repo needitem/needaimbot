@@ -73,7 +73,7 @@ fusedCapturePreprocessOptimized(
 __global__ void __launch_bounds__(256, 4)
 fusedDecodeNMSFilter(
     const float* __restrict__ modelOutput,
-    Detection* __restrict__ finalDetections,
+    Target* __restrict__ finalDetections,
     int* __restrict__ numDetections,
     int numBoxes, int numClasses,
     float confThreshold, float nmsThreshold,
@@ -85,7 +85,7 @@ fusedDecodeNMSFilter(
     
     // Shared memory for intermediate detections
     extern __shared__ char sharedMem[];
-    Detection* sharedDetections = (Detection*)sharedMem;
+    Target* sharedDetections = (Target*)sharedMem;
     float* sharedScores = (float*)&sharedDetections[256];
     
     const int tid = threadIdx.x;
@@ -126,7 +126,7 @@ fusedDecodeNMSFilter(
     if (warp.thread_rank() == 0 && maxConf > confThreshold) {
         int idx = atomicAdd(numDetections, 1);
         if (idx < maxDetections) {
-            Detection det;
+            Target det;
             det.x = bbox.x;
             det.y = bbox.y;
             det.width = bbox.z - bbox.x;
@@ -143,12 +143,12 @@ fusedDecodeNMSFilter(
     
     // Collaborative NMS using shared memory
     if (tid < *numDetections) {
-        Detection myDet = sharedDetections[tid];
+        Target myDet = sharedDetections[tid];
         bool keep = true;
         
         for (int i = 0; i < tid; ++i) {
             if (sharedScores[i] > sharedScores[tid]) {
-                Detection otherDet = sharedDetections[i];
+                Target otherDet = sharedDetections[i];
                 float iou = calculateIoU(myDet, otherDet);
                 if (iou > nmsThreshold) {
                     keep = false;
@@ -170,7 +170,7 @@ fusedDecodeNMSFilter(
 // Combines target selection, distance calculation, and movement in one kernel
 __global__ void __launch_bounds__(128, 4)
 fusedTargetMovement(
-    const Detection* __restrict__ detections,
+    const Target* __restrict__ detections,
     int numDetections,
     float2 crosshair,
     float2* __restrict__ movement,
@@ -191,7 +191,7 @@ fusedTargetMovement(
     
     // Each thread processes one detection
     if (detId < numDetections) {
-        Detection det = detections[detId];
+        Target det = detections[detId];
         
         // Calculate center point
         float2 center;
@@ -229,7 +229,7 @@ fusedTargetMovement(
     
     // First thread calculates movement and writes result
     if (tid == 0 && bestIndices[0] >= 0) {
-        Detection target = detections[bestIndices[0]];
+        Target target = detections[bestIndices[0]];
         
         float2 targetCenter;
         targetCenter.x = target.x + target.width * 0.5f;
@@ -245,7 +245,7 @@ fusedTargetMovement(
 }
 
 // Helper function for IoU calculation
-__device__ inline float calculateIoU(const Detection& a, const Detection& b) {
+__device__ inline float calculateIoU(const Target& a, const Target& b) {
     float x1 = fmaxf(a.x, b.x);
     float y1 = fmaxf(a.y, b.y);
     float x2 = fminf(a.x + a.width, b.x + b.width);
@@ -283,7 +283,7 @@ extern "C" void launchOptimizedPipeline(
     cudaTextureObject_t captureTexture,
     float* preprocessBuffer,
     float* modelOutput,
-    Detection* detections,
+    Target* detections,
     float2* movement,
     int srcW, int srcH,
     int dstW, int dstH,
@@ -310,7 +310,7 @@ extern "C" void launchOptimizedPipeline(
     // Launch fused decode+NMS+filter
     dim3 decodeBlock(256);
     dim3 decodeGrid((numBoxes + 255) / 256);
-    size_t sharedSize = sizeof(Detection) * 256 + sizeof(float) * 256;
+    size_t sharedSize = sizeof(Target) * 256 + sizeof(float) * 256;
     
     int numDet[2] = {0, 0}; // First for initial, second for final count
     cudaMemsetAsync(numDet, 0, sizeof(numDet), stream);

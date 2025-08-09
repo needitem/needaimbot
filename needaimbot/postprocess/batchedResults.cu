@@ -4,7 +4,7 @@
 
 // CUDA 커널: 모든 결과를 하나의 구조체로 통합
 __global__ void prepareBatchedResultsKernel(
-    const Detection* finalDetections,
+    const Target* finalDetections,
     const int* finalCount,
     const int* bestIndex,
     Detector::BatchedResults* batchedResults)
@@ -14,7 +14,7 @@ __global__ void prepareBatchedResultsKernel(
         batchedResults->finalCount = 0;
         batchedResults->bestIndex = -1;
         batchedResults->hasTarget = false;
-        memset(&batchedResults->bestTarget, 0, sizeof(Detection));
+        memset(&batchedResults->bestTarget, 0, sizeof(Target));
         
         // 실제 값 설정
         if (finalCount != nullptr) {
@@ -32,7 +32,7 @@ __global__ void prepareBatchedResultsKernel(
 }
 
 extern "C" cudaError_t prepareBatchedResultsGpu(
-    const Detection* finalDetections,
+    const Target* finalDetections,
     const int* finalCount,
     const int* bestIndex,
     void* batchedResults,
