@@ -70,7 +70,6 @@ std::atomic<int> captureGpuWriteIdx{0};
 
 void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 {
-    std::cout << "[CaptureThread] Starting capture thread with resolution: " << CAPTURE_WIDTH << "x" << CAPTURE_HEIGHT << std::endl;
     auto& ctx = AppContext::getInstance();
     
     // RAII guard for CUDA cleanup
@@ -93,12 +92,10 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
         std::unique_ptr<SimpleScreenCapture> simple_capturer;
         std::unique_ptr<WindowsGraphicsCapture> wingraphics_capturer;
         
-        std::cout << "[CaptureThread] Initializing capture method: " << ctx.config.capture_method << std::endl;
         
         // Create the appropriate capturer based on config
  if (ctx.config.capture_method == "wingraphics") {
             wingraphics_capturer = std::make_unique<WindowsGraphicsCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT);
-            std::cout << "[CaptureThread] Created WindowsGraphicsCapture" << std::endl;
             // Apply initial offset (check if aim+shoot is active)
             float initialOffsetX = ctx.config.crosshair_offset_x;
             float initialOffsetY = ctx.config.crosshair_offset_y;
@@ -109,7 +106,6 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
             wingraphics_capturer->UpdateCaptureRegion(initialOffsetX, initialOffsetY);
         } else {
             simple_capturer = std::make_unique<SimpleScreenCapture>(CAPTURE_WIDTH, CAPTURE_HEIGHT);
-            std::cout << "[CaptureThread] Created SimpleScreenCapture" << std::endl;
             // Apply initial offset (check if aim+shoot is active)
             float initialOffsetX = ctx.config.crosshair_offset_x;
             float initialOffsetY = ctx.config.crosshair_offset_y;
@@ -188,7 +184,6 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
         {
             
             if (AppContext::getInstance().should_exit) {
-                std::cout << "[CaptureThread] should_exit is true, breaking loop." << std::endl;
                 break; 
             }
             if (ctx.capture_fps_changed.load())
@@ -354,15 +349,7 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
             } else if (wingraphics_capturer) {
                 static int capture_attempt = 0;
                 capture_attempt++;
-                if (capture_attempt <= 5) {
-                    std::cout << "[CaptureThread] Attempting frame capture #" << capture_attempt << std::endl;
-                }
                 screenshotGpu = wingraphics_capturer->GetNextFrameGpu();
-                if (!screenshotGpu.empty() && capture_attempt <= 5) {
-                    std::cout << "[CaptureThread] Successfully captured frame #" << capture_attempt 
-                              << " (" << screenshotGpu.cols() << "x" << screenshotGpu.rows() 
-                              << "x" << screenshotGpu.channels() << ")" << std::endl;
-                }
             }
             auto frame_acq_end_time = std::chrono::high_resolution_clock::now();
             
@@ -387,13 +374,7 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                     if (ctx.detector) {
                         static int process_attempt = 0;
                         process_attempt++;
-                        if (process_attempt <= 5) {
-                            std::cout << "[CaptureThread] Sending frame #" << process_attempt << " to detector" << std::endl;
-                        }
                         ctx.detector->processFrame(screenshotGpu);
-                        if (process_attempt <= 5) {
-                            std::cout << "[CaptureThread] Frame #" << process_attempt << " sent to detector successfully" << std::endl;
-                        }
                     }
                 }
                 else
