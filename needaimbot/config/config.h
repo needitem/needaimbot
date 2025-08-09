@@ -184,6 +184,9 @@ public:
     bool enable_aim_shoot_offset;
     float aim_shoot_offset_x;
     float aim_shoot_offset_y;
+    
+    // Target lock feature
+    bool enable_target_lock;
 
     
     bool easynorecoil;

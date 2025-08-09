@@ -34,7 +34,7 @@ __global__ void initKeepKernel(bool* d_keep, int n) {
 }
 
 // Optimized compaction kernel with warp-level primitives
-__global__ void compactDetectionsKernel(
+__global__ void compactTargetsKernel(
     const Target* d_input_detections,
     const bool* d_keep,
     Target* d_output_detections,
@@ -106,7 +106,7 @@ __global__ void compactDetectionsKernel(
 }
 
 // Kernel to validate and clean detections
-__global__ void validateDetectionsKernel(
+__global__ void validateTargetsKernel(
     Target* d_detections,
     int n)
 {
@@ -123,7 +123,7 @@ __global__ void validateDetectionsKernel(
 }
 
 // Export function for validation
-void validateDetectionsGpu(
+void validateTargetsGpu(
     Target* d_detections,
     int n,
     cudaStream_t stream)
@@ -133,15 +133,15 @@ void validateDetectionsGpu(
     const int block_size = 256;
     const int grid_size = (n + block_size - 1) / block_size;
     
-    validateDetectionsKernel<<<grid_size, block_size, 0, stream>>>(d_detections, n);
+    validateTargetsKernel<<<grid_size, block_size, 0, stream>>>(d_detections, n);
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
-        fprintf(stderr, "[validateDetectionsGpu] Kernel launch failed: %s\n", cudaGetErrorString(err));
+        fprintf(stderr, "[validateTargetsGpu] Kernel launch failed: %s\n", cudaGetErrorString(err));
     }
 }
 
 // Simple kernel to count kept detections
-__global__ void countKeptDetectionsKernel(
+__global__ void countKeptTargetsKernel(
     const bool* d_keep,
     int* d_count,
     int n)
@@ -177,7 +177,7 @@ __global__ void countKeptDetectionsKernel(
 }
 
 // More efficient kernel using atomic operations for gathering
-__global__ void gatherKeptDetectionsAtomicKernel(
+__global__ void gatherKeptTargetsAtomicKernel(
     const Target* d_input_detections,
     const bool* d_keep,
     Target* d_output_detections,
@@ -623,14 +623,14 @@ void NMSGpu(
         // Single pass: gather kept detections and count simultaneously
         // Use fixed grid size for CUDA Graph compatibility
         const int gather_blocks = min((effective_detections + block_size - 1) / block_size, MAX_GRID_SIZE);
-        gatherKeptDetectionsAtomicKernel<<<gather_blocks, block_size, 0, stream>>>(
+        gatherKeptTargetsAtomicKernel<<<gather_blocks, block_size, 0, stream>>>(
             d_input_detections, d_keep, d_output_detections, 
             d_output_count_gpu,  // Use as atomic write index
             effective_detections, max_output_detections
         );
         err = cudaGetLastError(); 
         if (err != cudaSuccess) {
-            fprintf(stderr, "[NMSGpu] gatherKeptDetectionsAtomicKernel failed: %s\n", cudaGetErrorString(err));
+            fprintf(stderr, "[NMSGpu] gatherKeptTargetsAtomicKernel failed: %s\n", cudaGetErrorString(err));
             goto cleanup;
         }
     }
@@ -976,7 +976,7 @@ __global__ void findClosestTargetKernel(
     
     // Each thread computes distance for one detection
     if (idx < num_detections) {
-        const Detection& det = d_detections[idx];
+        const Target& det = d_detections[idx];
         
         // Skip invalid detections
         if (det.width > 0 && det.height > 0 && det.confidence > 0) {

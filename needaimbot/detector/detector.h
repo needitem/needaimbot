@@ -49,8 +49,7 @@ struct MouseMovement {
 
 #include "../core/Target.h"
 
-// Use Target as Detection and TrackedObject for backwards compatibility
-using Detection = Target;
+// Use only Target type for all detections
 using TrackedObject = Target;
 
 class Config; 
@@ -116,30 +115,30 @@ public:
     SimpleCudaMat m_colorMaskGpu;  // For RGB or HSV color filtering
 
     
-    CudaBuffer<Detection> m_decodedDetectionsGpu;
+    CudaBuffer<Target> m_decodedTargetsGpu;
     CudaBuffer<int> m_decodedCountGpu;
 
-    CudaBuffer<Detection> m_finalDetectionsGpu;
-    CudaBuffer<int> m_finalDetectionsCountGpu;
-    int m_finalDetectionsCountHost = 0;
-    std::unique_ptr<Detection[]> m_finalDetectionsHost;
-    CudaBuffer<Detection> m_classFilteredDetectionsGpu;
+    CudaBuffer<Target> m_finalTargetsGpu;
+    CudaBuffer<int> m_finalTargetsCountGpu;
+    int m_finalTargetsCountHost = 0;
+    std::unique_ptr<Target[]> m_finalTargetsHost;
+    CudaBuffer<Target> m_classFilteredTargetsGpu;
     CudaBuffer<int> m_classFilteredCountGpu;
     
     // RGB filtered detections buffer (for optimized pipeline)
-    CudaBuffer<Detection> m_colorFilteredDetectionsGpu;
+    CudaBuffer<Target> m_colorFilteredTargetsGpu;
     CudaBuffer<int> m_colorFilteredCountGpu;
 
     CudaBuffer<float> m_scoresGpu;
 
     int m_bestTargetIndexHost = -1;
-    Detection m_bestTargetHost;
+    Target m_bestTargetHost;
     bool m_hasBestTarget = false;
     int m_headClassId = -1;
     
     // GPU buffers for target selection
     CudaBuffer<int> m_bestTargetIndexGpu;
-    CudaBuffer<Detection> m_bestTargetGpu;
+    CudaBuffer<Target> m_bestTargetGpu;
     
     // Temporary buffers for multi-block reduction
     CudaBuffer<float> m_tempBlockScores;
@@ -163,7 +162,8 @@ public:
     std::unique_ptr<GPUTracker> m_gpuTracker;
 
     bool m_isTargetLocked;
-    Detection m_lockedTargetInfo;
+    Target m_lockedTargetInfo;
+    int m_lockedTrackId = -1;  // Track ID of locked target
 
     CudaBuffer<unsigned char> m_d_allow_flags_gpu;
 
@@ -222,7 +222,7 @@ private:
     bool m_graphCaptured = false;
     void captureInferenceGraph(const SimpleCudaMat& frameGpu);
 
-    static float calculate_host_iou(const Detection& det1, const Detection& det2); 
+    static float calculate_host_iou(const Target& det1, const Target& det2); 
     bool m_cudaContextInitialized = false; 
     std::unique_ptr<nvinfer1::IRuntime> runtime;
     std::unique_ptr<nvinfer1::ICudaEngine> engine;
