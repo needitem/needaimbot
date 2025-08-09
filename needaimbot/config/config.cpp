@@ -600,6 +600,7 @@ bool Config::saveConfig(const std::string& filename)
     file << "enable_aim_shoot_offset = " << (enable_aim_shoot_offset ? "true" : "false") << "\n";
     file << "aim_shoot_offset_x = " << aim_shoot_offset_x << "\n";
     file << "aim_shoot_offset_y = " << aim_shoot_offset_y << "\n";
+    file << "enable_target_lock = " << (enable_target_lock ? "true" : "false") << "\n";
     file << std::noboolalpha;
     file << "ignore_third_person = " << (ignore_third_person ? "true" : "false") << "\n";
     file << "shooting_range_targets = " << (shooting_range_targets ? "true" : "false") << "\n";
