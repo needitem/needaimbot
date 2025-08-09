@@ -157,6 +157,12 @@ public:
     std::vector<TrackedObject> m_trackedObjects;
     std::mutex m_trackingMutex;  // Mutex to protect m_trackedObjects
     
+    // GPU Kalman Filter
+    class GPUKalmanTracker* m_gpuKalmanTracker = nullptr;
+    CudaBuffer<Target> m_kalmanPredictionsGpu;
+    CudaBuffer<int> m_kalmanPredictionsCountGpu;
+    bool m_kalmanGraphInitialized = false;
+    
     // Legacy CPU SORT (disabled when GPU tracking is used)
     std::unique_ptr<SORTTracker> m_sortTracker;
     std::unique_ptr<GPUTracker> m_gpuTracker;

@@ -184,9 +184,22 @@ static void draw_kalman_filter_settings()
     }
     
     UIHelpers::CompactSpacer();
-    UIHelpers::BeautifulText("Smooths tracking and predicts future positions", UIHelpers::GetAccentColor(0.7f));
+    UIHelpers::BeautifulText("GPU-accelerated Kalman filter with CUDA graphs", UIHelpers::GetAccentColor(0.7f));
     UIHelpers::Spacer(10.0f);
     
+    // CUDA Graph optimization toggle
+    UIHelpers::SettingsSubHeader("GPU Optimization");
+    if (ImGui::Checkbox("Use CUDA Graph", &ctx.config.kalman_use_cuda_graph)) {
+        SAVE_PROFILE();
+        if (ctx.config.kalman_use_cuda_graph) {
+            UIHelpers::BeautifulText("Optimized execution with CUDA graphs", ImVec4(0.2f, 0.8f, 0.2f, 0.7f));
+        }
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("CUDA graphs optimize kernel launches for better performance\nDisable if experiencing issues");
+    }
+    
+    UIHelpers::Spacer(10.0f);
     UIHelpers::SettingsSubHeader("Filter Parameters");
     
     // Process Noise
@@ -206,24 +219,43 @@ static void draw_kalman_filter_settings()
     }
     
     UIHelpers::Spacer(10.0f);
-    UIHelpers::SettingsSubHeader("Prediction");
+    UIHelpers::SettingsSubHeader("Timing");
     
-    // Lookahead Time with visual indicator
-    float lookahead_ms = ctx.config.kalman_lookahead_time * 1000.0f;
-    if (UIHelpers::EnhancedSliderFloat("Lookahead", 
-                                       &lookahead_ms, 
-                                       0.0f, 100.0f, "%.1f ms",
-                                       "Time to predict ahead in milliseconds\n0 = no prediction, only smoothing")) {
-        ctx.config.kalman_lookahead_time = lookahead_ms / 1000.0f;
+    // Time Delta
+    float dt_ms = ctx.config.kalman_dt * 1000.0f;
+    if (UIHelpers::EnhancedSliderFloat("Time Delta", 
+                                       &dt_ms, 
+                                       16.0f, 100.0f, "%.1f ms",
+                                       "Time between frames for prediction\n16ms = 60 FPS, 33ms = 30 FPS")) {
+        ctx.config.kalman_dt = dt_ms / 1000.0f;
         SAVE_PROFILE();
     }
     
-    // Visual representation of lookahead frames
-    if (lookahead_ms > 0) {
-        float fps = 60.0f; // Assuming 60 FPS
-        float frames_ahead = (lookahead_ms / 1000.0f) * fps;
+    UIHelpers::Spacer(10.0f);
+    UIHelpers::SettingsSubHeader("Track Management");
+    
+    // Min Hits
+    if (UIHelpers::EnhancedSliderInt("Min Hits", 
+                                     &ctx.config.kalman_min_hits, 
+                                     1, 10,
+                                     "Minimum detections before track is confirmed")) {
+        SAVE_PROFILE();
+    }
+    
+    // Max Age
+    if (UIHelpers::EnhancedSliderInt("Max Age", 
+                                     &ctx.config.kalman_max_age, 
+                                     1, 20,
+                                     "Maximum frames without detection before track is removed")) {
+        SAVE_PROFILE();
+    }
+    
+    // Visual representation of timing
+    if (dt_ms > 0) {
+        float fps = 1000.0f / dt_ms;
+        float frames_ahead = 1.0f;  // Predicting 1 frame ahead
         
-        ImGui::Text("Predicting %.1f frames ahead at 60 FPS", frames_ahead);
+        ImGui::Text("Running at %.1f FPS (%.1f ms frame time)", fps, dt_ms);
         
         // Draw frame visualization
         ImDrawList* draw_list = ImGui::GetWindowDrawList();

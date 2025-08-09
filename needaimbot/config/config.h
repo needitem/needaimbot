@@ -238,11 +238,8 @@ public:
     int tracker_min_hits;       // Min hits before track is confirmed (default: 3)
     float tracker_iou_threshold; // IOU threshold for matching (default: 0.3)
     
-    // Kalman filter parameters for tracking
-    bool enable_kalman_filter;   // Enable/disable Kalman filtering
-    float kalman_process_noise;  // Process noise for Kalman filter (default: 1.0)
-    float kalman_measurement_noise; // Measurement noise (default: 10.0)
-    float kalman_lookahead_time; // Lookahead time for prediction in seconds (default: 0.016)
+    // Kalman filter parameters (old - deprecated, use new settings below)
+    float kalman_lookahead_time = 0.016f; // Deprecated - use kalman_dt instead
     
     
 
@@ -331,6 +328,15 @@ public:
     // Filter settings
     int min_color_pixels;
     bool remove_color_matches; 
+
+    // Kalman filter settings
+    bool enable_kalman_filter = false;
+    bool kalman_use_cuda_graph = true;
+    float kalman_dt = 0.033f;              // Time delta (30 FPS default)
+    float kalman_process_noise = 1.0f;     // Process noise scale
+    float kalman_measurement_noise = 1.0f; // Measurement noise scale
+    int kalman_min_hits = 3;               // Minimum hits before track is confirmed
+    int kalman_max_age = 5;                // Maximum frames without detection
 
     // Active profile management
     std::string active_profile_name = "Default";
