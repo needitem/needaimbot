@@ -150,12 +150,13 @@ void mouseThreadFunction(MouseThread &mouseThread)
         
         // Check for detection update without waiting
         static int last_detection_version = 0;
+        bool has_new_detection = false;
         
         // Try to get new detection without waiting
         {
             std::lock_guard<std::mutex> lock(ctx.detector->detectionMutex);
-            // Always process current state, don't wait for changes
-            if (ctx.detector) {
+            // Check if there's a new detection
+            if (ctx.detector && ctx.detector->detectionVersion != last_detection_version) {
                 current_has_target = ctx.detector->m_hasBestTarget;
                 if (current_has_target) {
                     current_target = ctx.detector->m_bestTargetHost;
@@ -163,7 +164,13 @@ void mouseThreadFunction(MouseThread &mouseThread)
                     current_target = {}; // Zero-initialize the struct
                 }
                 last_detection_version = ctx.detector->detectionVersion;
+                has_new_detection = true;
             }
+        }
+        
+        // Skip this iteration if no new detection
+        if (!has_new_detection) {
+            continue;
         }
 
         // Update AppContext for Overlay to read
