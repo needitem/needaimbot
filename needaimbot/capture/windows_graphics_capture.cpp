@@ -49,8 +49,6 @@ WindowsGraphicsCapture::WindowsGraphicsCapture(int captureWidth, int captureHeig
     auto impl = new WindowsGraphicsCaptureImpl();
     m_captureItem = impl;
     
-    std::cout << "[WinGraphicsCapture] Initializing optimized capture: " 
-              << captureWidth << "x" << captureHeight << std::endl;
     
     // Get screen dimensions
     impl->m_captureWidth = captureWidth;
@@ -58,8 +56,6 @@ WindowsGraphicsCapture::WindowsGraphicsCapture(int captureWidth, int captureHeig
     impl->m_screenWidth = GetSystemMetrics(SM_CXSCREEN);
     impl->m_screenHeight = GetSystemMetrics(SM_CYSCREEN);
     
-    std::cout << "[WinGraphicsCapture] Screen dimensions: " 
-              << impl->m_screenWidth << "x" << impl->m_screenHeight << std::endl;
     
     // Calculate center region
     impl->m_captureRegion.left = (impl->m_screenWidth - captureWidth) / 2;
@@ -67,19 +63,16 @@ WindowsGraphicsCapture::WindowsGraphicsCapture(int captureWidth, int captureHeig
     impl->m_captureRegion.right = impl->m_captureRegion.left + captureWidth;
     impl->m_captureRegion.bottom = impl->m_captureRegion.top + captureHeight;
     
-    std::cout << "[WinGraphicsCapture] Calling InitializeCapture()" << std::endl;
     if (!InitializeCapture()) {
         std::cerr << "[WinGraphicsCapture] Failed to initialize capture" << std::endl;
         delete impl;
         m_captureItem = nullptr;
         return;
     }
-    std::cout << "[WinGraphicsCapture] InitializeCapture() succeeded" << std::endl;
     
     // No need for pinned memory with direct GPU interop
     
     // Create CUDA resources with high priority
-    std::cout << "[WinGraphicsCapture] Creating CUDA resources" << std::endl;
     int leastPriority, greatestPriority;
     cudaError_t err = cudaDeviceGetStreamPriorityRange(&leastPriority, &greatestPriority);
     if (err != cudaSuccess) {
@@ -106,11 +99,9 @@ WindowsGraphicsCapture::WindowsGraphicsCapture(int captureWidth, int captureHeig
         return;
     }
     
-    std::cout << "[WinGraphicsCapture] CUDA resources created successfully" << std::endl;
     
     m_initialized = true;
     impl->m_initialized = true;
-    std::cout << "[WinGraphicsCapture] Constructor completed successfully" << std::endl;
 }
 
 void WindowsGraphicsCapture::UpdateCaptureRegion(float offsetX, float offsetY)
@@ -191,7 +182,6 @@ bool WindowsGraphicsCapture::InitializeCapture()
     HRESULT hr;
     D3D_FEATURE_LEVEL featureLevels[] = { D3D_FEATURE_LEVEL_11_0 };
     
-    std::cout << "[WinGraphicsCapture] Creating D3D11 device" << std::endl;
     hr = D3D11CreateDevice(
         nullptr,
         D3D_DRIVER_TYPE_HARDWARE,
@@ -210,7 +200,6 @@ bool WindowsGraphicsCapture::InitializeCapture()
                   << std::hex << hr << std::dec << std::endl;
         return false;
     }
-    std::cout << "[WinGraphicsCapture] D3D11 device created successfully" << std::endl;
     
     // Get DXGI device
     IDXGIDevice* dxgiDevice = nullptr;
@@ -244,7 +233,6 @@ bool WindowsGraphicsCapture::InitializeCapture()
     }
     
     // Create desktop duplication
-    std::cout << "[WinGraphicsCapture] Creating desktop duplication" << std::endl;
     hr = output1->DuplicateOutput(impl->m_device, &impl->m_duplication);
     output1->Release();
     if (FAILED(hr)) {
@@ -257,7 +245,6 @@ bool WindowsGraphicsCapture::InitializeCapture()
         }
         return false;
     }
-    std::cout << "[WinGraphicsCapture] Desktop duplication created successfully" << std::endl;
     
     // Create region-sized texture (not full screen!)
     D3D11_TEXTURE2D_DESC desc = {};
@@ -276,7 +263,6 @@ bool WindowsGraphicsCapture::InitializeCapture()
     }
     
     // Register texture with CUDA for direct GPU access
-    std::cout << "[WinGraphicsCapture] Registering D3D11 texture with CUDA" << std::endl;
     cudaError_t cudaErr = cudaGraphicsD3D11RegisterResource(
         &impl->m_cudaResource,
         impl->m_regionTexture,
@@ -287,9 +273,7 @@ bool WindowsGraphicsCapture::InitializeCapture()
                   << cudaGetErrorString(cudaErr) << std::endl;
         return false;
     }
-    std::cout << "[WinGraphicsCapture] CUDA registration successful" << std::endl;
     
-    std::cout << "[WinGraphicsCapture] InitializeCapture completed successfully" << std::endl;
     return true;
 }
 
@@ -379,7 +363,6 @@ SimpleCudaMat WindowsGraphicsCapture::GetNextFrameGpu()
     
     // Get GPU buffer
     if (!g_frameBufferPool) {
-        std::cout << "[WinGraphicsCapture] Creating FrameBufferPool" << std::endl;
         g_frameBufferPool = std::make_unique<FrameBufferPool>(10);
     }
     
