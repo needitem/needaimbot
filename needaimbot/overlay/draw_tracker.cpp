@@ -31,6 +31,7 @@ static void draw_tracking_toggle()
     ImGui::SetCursorPosX(ImGui::GetContentRegionAvail().x - 150);
     
     if (ImGui::Checkbox("##EnableTracking", &ctx.config.enable_tracking)) {
+        std::cout << "[UI] Tracking toggled to: " << (ctx.config.enable_tracking ? "ON" : "OFF") << std::endl;
         SAVE_PROFILE();
         
         // Reset tracker when toggling
@@ -172,7 +173,14 @@ static void draw_kalman_filter_settings()
     ImGui::SetCursorPosX(ImGui::GetContentRegionAvail().x - 150);
     
     if (ImGui::Checkbox("##EnableKalman", &ctx.config.enable_kalman_filter)) {
+        std::cout << "[UI] Kalman filter toggled to: " << (ctx.config.enable_kalman_filter ? "ON" : "OFF") << std::endl;
         SAVE_PROFILE();
+        
+        // Reinitialize Kalman filter
+        if (ctx.detector) {
+            std::cout << "[UI] Triggering Kalman filter reinitialization..." << std::endl;
+            ctx.detector->initializeKalmanFilter();
+        }
     }
     
     ImGui::PopStyleVar();
@@ -219,19 +227,6 @@ static void draw_kalman_filter_settings()
     }
     
     UIHelpers::Spacer(10.0f);
-    UIHelpers::SettingsSubHeader("Timing");
-    
-    // Time Delta
-    float dt_ms = ctx.config.kalman_dt * 1000.0f;
-    if (UIHelpers::EnhancedSliderFloat("Time Delta", 
-                                       &dt_ms, 
-                                       16.0f, 100.0f, "%.1f ms",
-                                       "Time between frames for prediction\n16ms = 60 FPS, 33ms = 30 FPS")) {
-        ctx.config.kalman_dt = dt_ms / 1000.0f;
-        SAVE_PROFILE();
-    }
-    
-    UIHelpers::Spacer(10.0f);
     UIHelpers::SettingsSubHeader("Track Management");
     
     // Min Hits
@@ -250,44 +245,52 @@ static void draw_kalman_filter_settings()
         ImGui::SetTooltip("Maximum frames without detection before track is removed");
     }
     
-    // Visual representation of timing
-    if (dt_ms > 0) {
-        float fps = 1000.0f / dt_ms;
-        float frames_ahead = 1.0f;  // Predicting 1 frame ahead
-        
-        ImGui::Text("Running at %.1f FPS (%.1f ms frame time)", fps, dt_ms);
-        
-        // Draw frame visualization
-        ImDrawList* draw_list = ImGui::GetWindowDrawList();
-        ImVec2 canvas_pos = ImGui::GetCursorScreenPos();
-        ImVec2 canvas_size(ImGui::GetContentRegionAvail().x, 30);
-        
-        // Draw frame boxes
-        float box_width = 20.0f;
-        float spacing = 5.0f;
-        int max_frames_to_show = 5;
-        
-        for (int i = 0; i <= std::min((int)frames_ahead, max_frames_to_show); i++) {
-            float x = canvas_pos.x + i * (box_width + spacing);
-            float y = canvas_pos.y;
-            
-            ImU32 color = (i <= frames_ahead) ? 
-                IM_COL32(100, 200, 100, 255) : 
-                IM_COL32(100, 100, 100, 255);
-            
-            if (i == 0) {
-                // Current frame
-                draw_list->AddRectFilled(ImVec2(x, y), ImVec2(x + box_width, y + 20), IM_COL32(200, 200, 100, 255));
-                draw_list->AddText(ImVec2(x + 5, y + 2), IM_COL32(0, 0, 0, 255), "0");
-            } else if (i <= frames_ahead) {
-                // Predicted frames
-                draw_list->AddRectFilled(ImVec2(x, y), ImVec2(x + box_width, y + 20), color);
-                draw_list->AddText(ImVec2(x + 5, y + 2), IM_COL32(255, 255, 255, 255), std::to_string(i).c_str());
-            }
-        }
-        
-        ImGui::Dummy(canvas_size);
+    UIHelpers::Spacer(10.0f);
+    UIHelpers::SettingsSubHeader("Prediction Settings");
+    
+    // Frame-based prediction slider
+    float prediction_frames = ctx.config.kalman_lookahead_time * 60.0f; // Convert to frames (assuming 60fps base)
+    if (UIHelpers::EnhancedSliderFloat("Prediction Frames", 
+                                       &prediction_frames, 
+                                       0.0f, 3.0f, "%.1f frames",
+                                       "How many frames ahead to predict\n0 = no prediction, 3 = maximum")) {
+        ctx.config.kalman_lookahead_time = prediction_frames / 60.0f; // Store as time for compatibility
+        SAVE_PROFILE();
     }
+    
+    // Visual frame prediction display
+    ImGui::Text("Frame-based prediction: %.1f frames ahead", prediction_frames);
+    
+    // Draw frame visualization
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    ImVec2 canvas_pos = ImGui::GetCursorScreenPos();
+    ImVec2 canvas_size(ImGui::GetContentRegionAvail().x, 30);
+    
+    // Draw frame boxes
+    float box_width = 30.0f;
+    float spacing = 5.0f;
+    int max_frames = 4;
+    
+    for (int i = 0; i < max_frames; i++) {
+        float x = canvas_pos.x + i * (box_width + spacing);
+        float y = canvas_pos.y;
+        
+        if (i == 0) {
+            // Current frame
+            draw_list->AddRectFilled(ImVec2(x, y), ImVec2(x + box_width, y + 20), IM_COL32(200, 200, 100, 255));
+            draw_list->AddText(ImVec2(x + 10, y + 2), IM_COL32(0, 0, 0, 255), "Now");
+        } else if (i <= prediction_frames) {
+            // Predicted frames
+            draw_list->AddRectFilled(ImVec2(x, y), ImVec2(x + box_width, y + 20), IM_COL32(100, 200, 100, 255));
+            draw_list->AddText(ImVec2(x + 12, y + 2), IM_COL32(255, 255, 255, 255), std::to_string(i).c_str());
+        } else {
+            // Future frames (not predicted)
+            draw_list->AddRect(ImVec2(x, y), ImVec2(x + box_width, y + 20), IM_COL32(100, 100, 100, 128));
+            draw_list->AddText(ImVec2(x + 12, y + 2), IM_COL32(100, 100, 100, 128), std::to_string(i).c_str());
+        }
+    }
+    
+    ImGui::Dummy(canvas_size);
     
     UIHelpers::Spacer(10.0f);
     UIHelpers::SettingsSubHeader("Kalman Presets");
@@ -300,63 +303,63 @@ static void draw_kalman_filter_settings()
         SAVE_PROFILE();
     }
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Pure smoothing without prediction\nGood for stable targets");
+        ImGui::SetTooltip("0 frames ahead\nPure smoothing without prediction");
     }
     
     ImGui::SameLine();
-    if (ImGui::Button("Low Latency##Kalman", ImVec2((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) / 2, 0))) {
-        ctx.config.kalman_lookahead_time = 0.008f;  // Half frame at 60fps
+    if (ImGui::Button("Half Frame##Kalman", ImVec2((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) / 2, 0))) {
+        ctx.config.kalman_lookahead_time = 0.008f;  // 0.5 frames at 60fps
         ctx.config.kalman_process_noise = 1.5f;
         ctx.config.kalman_measurement_noise = 12.0f;
         SAVE_PROFILE();
     }
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Predict 0.5 frames ahead\nCompensates for input lag");
+        ImGui::SetTooltip("0.5 frames ahead\nMinimal prediction");
     }
     
     ImGui::SameLine();
-    if (ImGui::Button("Standard##Kalman", ImVec2(-1, 0))) {
+    if (ImGui::Button("1 Frame##Kalman", ImVec2(-1, 0))) {
         ctx.config.kalman_lookahead_time = 0.016f;  // 1 frame at 60fps
         ctx.config.kalman_process_noise = 2.0f;
         ctx.config.kalman_measurement_noise = 15.0f;
         SAVE_PROFILE();
     }
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Predict 1 frame ahead\nBalanced prediction");
+        ImGui::SetTooltip("1 frame ahead\nStandard prediction");
     }
     
     // Second row of presets
-    if (ImGui::Button("Aggressive##Kalman", ImVec2((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x * 2) / 3, 0))) {
+    if (ImGui::Button("2 Frames##Kalman", ImVec2((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x * 2) / 3, 0))) {
         ctx.config.kalman_lookahead_time = 0.033f;  // 2 frames at 60fps
         ctx.config.kalman_process_noise = 3.0f;
         ctx.config.kalman_measurement_noise = 20.0f;
         SAVE_PROFILE();
     }
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Predict 2 frames ahead\nFor fast-moving targets");
+        ImGui::SetTooltip("2 frames ahead\nAggressive prediction");
     }
     
     ImGui::SameLine();
-    if (ImGui::Button("Ultra##Kalman", ImVec2((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) / 2, 0))) {
+    if (ImGui::Button("3 Frames##Kalman", ImVec2((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) / 2, 0))) {
         ctx.config.kalman_lookahead_time = 0.050f;  // 3 frames at 60fps
         ctx.config.kalman_process_noise = 4.0f;
         ctx.config.kalman_measurement_noise = 25.0f;
         SAVE_PROFILE();
     }
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Predict 3 frames ahead\nMaximum prediction");
+        ImGui::SetTooltip("3 frames ahead\nMaximum prediction");
     }
     
     ImGui::SameLine();
     if (ImGui::Button("Custom##Kalman", ImVec2(-1, 0))) {
         // Reset to allow custom configuration
-        ctx.config.kalman_lookahead_time = 0.025f;
+        ctx.config.kalman_lookahead_time = 0.025f;  // 1.5 frames at 60fps
         ctx.config.kalman_process_noise = 2.5f;
         ctx.config.kalman_measurement_noise = 18.0f;
         SAVE_PROFILE();
     }
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Configure your own settings");
+        ImGui::SetTooltip("Customize all parameters");
     }
     
     UIHelpers::EndCard();
