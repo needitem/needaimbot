@@ -86,14 +86,19 @@ batchIOUKernel(
         return;
     }
     
-    // Calculate IOU using fast min/max operations
-    float x1 = fmaxf(det.x, track.x);
-    float y1 = fmaxf(det.y, track.y);
-    float x2 = fminf(det.x + det.width, track.x + track.width);
-    float y2 = fminf(det.y + det.height, track.y + track.height);
+    // Calculate IOU using fast min/max operations (convert int to float)
+    float det_x = static_cast<float>(det.x);
+    float det_y = static_cast<float>(det.y);
+    float det_x2 = det_x + static_cast<float>(det.width);
+    float det_y2 = det_y + static_cast<float>(det.height);
+    
+    float x1 = fmaxf(det_x, track.x);
+    float y1 = fmaxf(det_y, track.y);
+    float x2 = fminf(det_x2, track.x + track.width);
+    float y2 = fminf(det_y2, track.y + track.height);
     
     float intersection = fmaxf(0.0f, x2 - x1) * fmaxf(0.0f, y2 - y1);
-    float area1 = det.width * det.height;
+    float area1 = static_cast<float>(det.width * det.height);
     float area2 = track.width * track.height;
     float union_area = area1 + area2 - intersection;
     
@@ -156,11 +161,11 @@ kalmanUpdateKernel(
     GPUTrackedObject& track = tracks[track_idx];
     const Target& det = detections[det_idx];
     
-    // Measurement: convert detection to state space
-    float meas_cx = det.x + det.width * 0.5f;
-    float meas_cy = det.y + det.height * 0.5f;
-    float meas_w = det.width;
-    float meas_h = det.height;
+    // Measurement: convert detection to state space (int to float)
+    float meas_cx = static_cast<float>(det.x) + static_cast<float>(det.width) * 0.5f;
+    float meas_cy = static_cast<float>(det.y) + static_cast<float>(det.height) * 0.5f;
+    float meas_w = static_cast<float>(det.width);
+    float meas_h = static_cast<float>(det.height);
     
     float* state = track.kalman_state;
     
@@ -195,7 +200,40 @@ kalmanUpdateKernel(
     track.time_since_update = 0;
 }
 
-// Convert GPUTrackedObject to Target format
+// Count active tracks kernel
+__global__ void countActiveTracks(
+    const GPUTrackedObject* __restrict__ tracks,
+    const int* __restrict__ num_tracks,
+    int* __restrict__ active_count)
+{
+    __shared__ int s_count;
+    
+    if (threadIdx.x == 0) {
+        s_count = 0;
+    }
+    __syncthreads();
+    
+    const int track_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int total_tracks = *num_tracks;
+    
+    if (track_idx < total_tracks) {
+        // Count only valid, active tracks (more lenient for stable tracking)
+        if (tracks[track_idx].active && 
+            tracks[track_idx].hits >= 1 &&  // Show tracks immediately
+            tracks[track_idx].time_since_update <= 5 &&  // Allow 5 frames without update
+            (tracks[track_idx].x != 0.0f || tracks[track_idx].y != 0.0f)) {
+            atomicAdd(&s_count, 1);
+        }
+    }
+    
+    __syncthreads();
+    
+    if (threadIdx.x == 0) {
+        atomicAdd(active_count, s_count);
+    }
+}
+
+// Convert GPUTrackedObject to Target format (compact output - only active tracks)
 __global__ void convertTracksToTargets(
     const GPUTrackedObject* __restrict__ tracks,
     Target* __restrict__ targets,
@@ -205,26 +243,34 @@ __global__ void convertTracksToTargets(
     const int track_idx = blockIdx.x * blockDim.x + threadIdx.x;
     const int total_tracks = *num_tracks;
     
-    if (track_idx >= MAX_TRACKS) return;
+    // Exit early if beyond total tracks or max buffer
+    if (track_idx >= total_tracks || track_idx >= MAX_TRACKS) return;
     
-    if (track_idx < total_tracks && tracks[track_idx].active && tracks[track_idx].hits >= 1) {
-        Target& target = targets[track_idx];
-        const GPUTrackedObject& track = tracks[track_idx];
+    // Check if track is active and valid (more lenient for stable tracking)
+    if (tracks[track_idx].active && 
+        tracks[track_idx].hits >= 1 &&  // Show immediately on first hit
+        tracks[track_idx].time_since_update <= 5 &&  // Allow 5 frames without update
+        (tracks[track_idx].x != 0.0f || tracks[track_idx].y != 0.0f)) {
         
-        target.x = static_cast<int>(track.x);
-        target.y = static_cast<int>(track.y);
-        target.width = static_cast<int>(track.width);
-        target.height = static_cast<int>(track.height);
-        target.confidence = track.confidence;
-        target.classId = track.classId;
-        target.id = track.track_id;
-        target.center_x = track.center_x;
-        target.center_y = track.center_y;
-        target.velocity_x = track.velocity_x;
-        target.velocity_y = track.velocity_y;
+        // Atomically get output index for this active track
+        int output_idx = atomicAdd(num_targets, 1);
         
-        if (track_idx == 0) {
-            *num_targets = total_tracks;
+        // Compact active tracks to beginning of output array
+        if (output_idx < MAX_DETECTIONS) {
+            Target& target = targets[output_idx];
+            const GPUTrackedObject& track = tracks[track_idx];
+            
+            target.x = static_cast<int>(track.x);
+            target.y = static_cast<int>(track.y);
+            target.width = static_cast<int>(track.width);
+            target.height = static_cast<int>(track.height);
+            target.confidence = track.confidence;
+            target.classId = track.classId;
+            target.id = track.track_id;
+            target.center_x = track.center_x;
+            target.center_y = track.center_y;
+            target.velocity_x = track.velocity_x;
+            target.velocity_y = track.velocity_y;
         }
     }
 }
@@ -289,8 +335,14 @@ trackManagementKernel(
 {
     const int tid = threadIdx.x;
     
+    // Ensure num_tracks doesn't exceed MAX_TRACKS
+    if (tid == 0 && *num_tracks > MAX_TRACKS) {
+        *num_tracks = MAX_TRACKS;
+    }
+    __syncthreads();
+    
     // Phase 1: Mark dead tracks for removal (parallel)
-    if (tid < *num_tracks) {
+    if (tid < *num_tracks && tid < MAX_TRACKS) {
         GPUTrackedObject& track = tracks[tid];
         if (track.active && track.time_since_update > max_age) {
             track.active = false;
@@ -298,36 +350,47 @@ trackManagementKernel(
     }
     __syncthreads();
     
-    // Phase 2: Create new tracks for unassigned detections (sequential)
+    // Phase 2: Compact tracks - remove inactive ones (sequential on thread 0)
+    if (tid == 0) {
+        int write_idx = 0;
+        for (int read_idx = 0; read_idx < *num_tracks && read_idx < MAX_TRACKS; read_idx++) {
+            if (tracks[read_idx].active) {
+                if (write_idx != read_idx) {
+                    tracks[write_idx] = tracks[read_idx];
+                }
+                write_idx++;
+            }
+        }
+        *num_tracks = write_idx;  // Update count to only active tracks
+    }
+    __syncthreads();
+    
+    // Phase 3: Create new tracks for unassigned detections (sequential)
     if (tid == 0) {
         for (int det_idx = 0; det_idx < num_detections; det_idx++) {
-            if (assignment[det_idx] < 0 && *num_tracks < max_tracks) {
-                // Find inactive slot or add new
-                int slot = -1;
-                for (int i = 0; i < *num_tracks; i++) {
-                    if (!tracks[i].active) {
-                        slot = i;
-                        break;
-                    }
-                }
+            if (assignment[det_idx] < 0 && *num_tracks < max_tracks && *num_tracks < MAX_TRACKS) {
+                // Add new track at the end
+                int slot = (*num_tracks)++;
                 
-                if (slot < 0 && *num_tracks < max_tracks) {
-                    slot = (*num_tracks)++;
-                }
-                
-                if (slot >= 0) {
+                if (slot >= 0 && slot < MAX_TRACKS) {
                     const Target& det = detections[det_idx];
                     GPUTrackedObject& track = tracks[slot];
                     
-                    // Initialize new track
+                    // Initialize new track (convert int to float)
                     track.active = true;
-                    track.track_id = atomicAdd(next_id, 1);
-                    track.x = det.x;
-                    track.y = det.y;
-                    track.width = det.width;
-                    track.height = det.height;
-                    track.center_x = det.x + det.width * 0.5f;
-                    track.center_y = det.y + det.height * 0.5f;
+                    int new_id = atomicAdd(next_id, 1);
+                    // Reset ID counter if it gets too large
+                    if (new_id > 10000) {
+                        atomicExch(next_id, 0);
+                        new_id = 0;
+                    }
+                    track.track_id = new_id;
+                    track.x = static_cast<float>(det.x);
+                    track.y = static_cast<float>(det.y);
+                    track.width = static_cast<float>(det.width);
+                    track.height = static_cast<float>(det.height);
+                    track.center_x = static_cast<float>(det.x) + static_cast<float>(det.width) * 0.5f;
+                    track.center_y = static_cast<float>(det.y) + static_cast<float>(det.height) * 0.5f;
                     track.velocity_x = 0.0f;
                     track.velocity_y = 0.0f;
                     track.confidence = det.confidence;
@@ -535,8 +598,17 @@ void updateGPUTrackerDirect(
         ctx->d_next_id, num_detections, ctx->d_num_tracks,
         MAX_TRACKS, ctx->max_age, ctx->min_hits);
     
-    // 6. Convert GPUTrackedObject to Target format and output
-    // This kernel needs to be created
+    // 6. Clear output count first, then convert active tracks
+    cudaMemsetAsync(d_num_output_tracks, 0, sizeof(int), stream);
+    
+    // Ensure num_tracks doesn't exceed MAX_TRACKS before conversion
+    int h_num_tracks_clamped = h_num_tracks;
+    if (h_num_tracks_clamped > MAX_TRACKS) {
+        h_num_tracks_clamped = MAX_TRACKS;
+        cudaMemcpyAsync(ctx->d_num_tracks, &h_num_tracks_clamped, sizeof(int), cudaMemcpyHostToDevice, stream);
+    }
+    
+    // Convert GPUTrackedObject to Target format and output (only active tracks)
     convertTracksToTargets<<<(MAX_TRACKS + 127) / 128, 128, 0, stream>>>(
         ctx->d_tracks, d_output_tracks, ctx->d_num_tracks, d_num_output_tracks);
 }

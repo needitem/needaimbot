@@ -13,6 +13,7 @@
 #include "needaimbot.h"
 #include "other_tools.h"
 #include "memory_images.h"
+#include "../detector/detector.h"
 
 ID3D11ShaderResourceView* bodyTexture = nullptr;
 ImVec2 bodyImageSize;
@@ -36,6 +37,26 @@ void draw_target()
     ImGui::Separator();
     ImGui::Spacing();
     ImGui::Checkbox("Auto Aim", &ctx.config.auto_aim);
+    
+    // Target Lock Settings
+    ImGui::Separator();
+    ImGui::Text("Target Lock Settings");
+    
+    if (ImGui::Checkbox("Enable Target Lock", &ctx.config.enable_target_lock)) {
+        SAVE_PROFILE();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("When enabled, locks onto a target and tracks it by ID until lost");
+    }
+    
+    if (ctx.config.enable_target_lock) {
+        // Show lock status
+        if (ctx.detector && ctx.detector->m_isTargetLocked) {
+            ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "🔒 LOCKED [Track ID: %d]", ctx.detector->m_lockedTrackId);
+        } else {
+            ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "🔓 NO LOCK");
+        }
+    }
 
     // Target selection is now fixed to closest target only
     // These settings are hidden but set to optimal values for closest target selection

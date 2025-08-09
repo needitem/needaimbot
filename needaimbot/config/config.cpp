@@ -95,6 +95,9 @@ bool Config::loadConfig(const std::string& filename)
         enable_aim_shoot_offset = false;
         aim_shoot_offset_x = 0.0f;
         aim_shoot_offset_y = 0.0f;
+        
+        // Target lock defaults
+        enable_target_lock = false;
 
         
         easynorecoil = false;
@@ -296,6 +299,9 @@ bool Config::loadConfig(const std::string& filename)
     enable_aim_shoot_offset = get_bool_ini("Target", "enable_aim_shoot_offset", false);
     aim_shoot_offset_x = static_cast<float>(get_double_ini("Target", "aim_shoot_offset_x", 0.0));
     aim_shoot_offset_y = static_cast<float>(get_double_ini("Target", "aim_shoot_offset_y", 0.0));
+    
+    // Target lock settings
+    enable_target_lock = get_bool_ini("Target", "enable_target_lock", false);
 
     easynorecoil = get_bool_ini("Mouse", "easynorecoil", false);
     easynorecoilstrength = static_cast<float>(get_double_ini("Mouse", "easynorecoilstrength", 0.0));

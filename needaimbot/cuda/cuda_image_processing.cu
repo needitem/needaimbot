@@ -54,8 +54,8 @@ void resize(const SimpleCudaMat& src, SimpleCudaMat& dst, int dstWidth, int dstH
     
     resizeKernel<<<gridSize, blockSize, 0, stream>>>(
         src.data(), dst.data(),
-        src.cols(), src.rows(), src.step(),
-        dstWidth, dstHeight, dst.step(),
+        src.cols(), src.rows(), static_cast<int>(src.step()),
+        dstWidth, dstHeight, static_cast<int>(dst.step()),
         src.channels()
     );
 }
@@ -86,7 +86,7 @@ void bgra2bgr(const SimpleCudaMat& src, SimpleCudaMat& dst, cudaStream_t stream)
     int gridSize = (pixels + blockSize - 1) / blockSize;
     
     bgra2bgrKernel<<<gridSize, blockSize, 0, stream>>>(
-        src.data(), dst.data(), pixels, src.step(), dst.step(), src.cols()
+        src.data(), dst.data(), pixels, static_cast<int>(src.step()), static_cast<int>(dst.step()), src.cols()
     );
 }
 
@@ -117,7 +117,7 @@ void bgr2bgra(const SimpleCudaMat& src, SimpleCudaMat& dst, cudaStream_t stream)
     int gridSize = (pixels + blockSize - 1) / blockSize;
     
     bgr2bgraKernel<<<gridSize, blockSize, 0, stream>>>(
-        src.data(), dst.data(), pixels, src.step(), dst.step(), src.cols()
+        src.data(), dst.data(), pixels, static_cast<int>(src.step()), static_cast<int>(dst.step()), src.cols()
     );
 }
 
@@ -183,7 +183,7 @@ void bgr2hsv(const SimpleCudaMat& src, SimpleCudaMat& dst, cudaStream_t stream) 
     int gridSize = (pixels + blockSize - 1) / blockSize;
     
     bgr2hsvKernel<<<gridSize, blockSize, 0, stream>>>(
-        src.data(), dst.data(), pixels, src.step(), dst.step(), src.cols()
+        src.data(), dst.data(), pixels, static_cast<int>(src.step()), static_cast<int>(dst.step()), src.cols()
     );
 }
 
@@ -213,7 +213,7 @@ void bgr2gray(const SimpleCudaMat& src, SimpleCudaMat& dst, cudaStream_t stream)
     int gridSize = (pixels + blockSize - 1) / blockSize;
     
     bgr2grayKernel<<<gridSize, blockSize, 0, stream>>>(
-        src.data(), dst.data(), pixels, src.step(), dst.step(), src.cols()
+        src.data(), dst.data(), pixels, static_cast<int>(src.step()), static_cast<int>(dst.step()), src.cols()
     );
 }
 
@@ -243,7 +243,7 @@ void gray2bgr(const SimpleCudaMat& src, SimpleCudaMat& dst, cudaStream_t stream)
     int gridSize = (pixels + blockSize - 1) / blockSize;
     
     gray2bgrKernel<<<gridSize, blockSize, 0, stream>>>(
-        src.data(), dst.data(), pixels, src.step(), dst.step(), src.cols()
+        src.data(), dst.data(), pixels, static_cast<int>(src.step()), static_cast<int>(dst.step()), src.cols()
     );
 }
 
@@ -259,10 +259,6 @@ void convertTo(const SimpleCudaMat& src, SimpleCudaMat& dst, float scale, float 
     if (src.empty()) return;
     
     // Note: This is a simplified version that assumes dst is already allocated as float
-    int pixels = src.rows() * src.cols() * src.channels();
-    int blockSize = 256;
-    int gridSize = (pixels + blockSize - 1) / blockSize;
-    
     // For now, we'll need the caller to handle float buffer allocation
     // This is a limitation we'll need to address based on usage patterns
 }
@@ -297,7 +293,7 @@ void applyMask(const SimpleCudaMat& src, SimpleCudaMat& dst, const SimpleCudaMat
     
     applyMaskKernel<<<gridSize, blockSize, 0, stream>>>(
         src.data(), dst.data(), mask.data(), 
-        pixels, src.channels(), src.step(), dst.step(), mask.step(), src.cols()
+        pixels, src.channels(), static_cast<int>(src.step()), static_cast<int>(dst.step()), static_cast<int>(mask.step()), src.cols()
     );
 }
 
@@ -337,7 +333,7 @@ void inRange(const SimpleCudaMat& src, const float* lowerBound, const float* upp
         src.data(), dst.data(),
         lowerBound[0], lowerBound[1], lowerBound[2],
         upperBound[0], upperBound[1], upperBound[2],
-        pixels, src.step(), dst.step(), src.cols()
+        pixels, static_cast<int>(src.step()), static_cast<int>(dst.step()), src.cols()
     );
 }
 
@@ -376,7 +372,7 @@ void split(const SimpleCudaMat& src, SimpleCudaMat* channels, cudaStream_t strea
     
     splitKernel<<<gridSize, blockSize, 0, stream>>>(
         src.data(), dst0, dst1, dst2,
-        pixels, src.step(), channels[0].step(), src.cols(), numChannels
+        pixels, static_cast<int>(src.step()), static_cast<int>(channels[0].step()), src.cols(), numChannels
     );
 }
 

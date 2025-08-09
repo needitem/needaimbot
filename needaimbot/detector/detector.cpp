@@ -64,10 +64,10 @@ extern std::mutex configMutex;
 
 
 // External filter functions (separated for better performance)
-extern cudaError_t filterDetectionsByClassIdGpu(
-    const Detection* decodedDetections,
-    int numDecodedDetections,
-    Detection* filteredDetections,
+extern cudaError_t filterTargetsByClassIdGpu(
+    const Target* decodedTargets,
+    int numDecodedTargets,
+    Target* filteredTargets,
     int* filteredCount,
     const unsigned char* d_ignored_class_ids,
     int max_check_id,
@@ -75,10 +75,10 @@ extern cudaError_t filterDetectionsByClassIdGpu(
     cudaStream_t stream
 );
 
-extern cudaError_t filterDetectionsByColorGpu(
-    const Detection* d_input_detections,
+extern cudaError_t filterTargetsByColorGpu(
+    const Target* d_input_detections,
     int num_input_detections,
-    Detection* d_output_detections,
+    Target* d_output_detections,
     int* d_output_count,
     const unsigned char* d_color_mask,
     int mask_pitch,
@@ -100,7 +100,7 @@ Detector::Detector()
     m_cudaContextInitialized(false),
     m_hasBestTarget(false),
     m_bestTargetIndexHost(-1),
-    m_finalDetectionsCountHost(0),
+    m_finalTargetsCountHost(0),
     m_host_allow_flags_uchar(MAX_CLASSES_FOR_FILTERING, 0), 
     m_allow_flags_need_update(true) 
     , m_isTargetLocked(false)
@@ -658,9 +658,9 @@ void Detector::processFrame(const SimpleCudaMat& frame)
         std::lock_guard<std::mutex> lock(detectionMutex);
         m_hasBestTarget = false;
         // Don't use memset on non-POD types, use assignment instead
-        m_bestTargetHost = Detection();  // Use default constructor
+        m_bestTargetHost = Target();  // Use default constructor
         m_bestTargetIndexHost = -1;
-        m_finalDetectionsCountHost = 0;
+        m_finalTargetsCountHost = 0;
         detectionVersion++;
         return;
     }
@@ -708,9 +708,9 @@ void Detector::processFrame(const SimpleMat& frame)
         std::lock_guard<std::mutex> lock(detectionMutex);
         m_hasBestTarget = false;
         // Don't use memset on non-POD types, use assignment instead
-        m_bestTargetHost = Detection();  // Use default constructor
+        m_bestTargetHost = Target();  // Use default constructor
         m_bestTargetIndexHost = -1;
-        m_finalDetectionsCountHost = 0;
+        m_finalTargetsCountHost = 0;
         detectionVersion++;
         return;
     }
@@ -961,7 +961,7 @@ void Detector::inferenceThread()
                 firstFrame = false;
                 
                 // GPU에서 detection 결과 복사 (간단한 방식)
-                cudaError_t copyErr = cudaMemcpyAsync(&m_finalDetectionsCountHost, m_finalDetectionsCountGpu.get(), 
+                cudaError_t copyErr = cudaMemcpyAsync(&m_finalTargetsCountHost, m_finalTargetsCountGpu.get(), 
                                sizeof(int), cudaMemcpyDeviceToHost, postprocessStream);
                 if (copyErr != cudaSuccess) {
                     std::cerr << "[InferenceThread] Failed to copy detection count: " << cudaGetErrorString(copyErr) << std::endl;
@@ -979,28 +979,28 @@ void Detector::inferenceThread()
                 static int frame_counter = 0;
                 int current_frame = ++frame_counter;
                 
-                if (m_finalDetectionsCountHost > 0) {
+                if (m_finalTargetsCountHost > 0) {
                     
                     // Validate buffer size
-                    if (m_finalDetectionsCountHost > Constants::MAX_DETECTIONS) {
-                        std::cerr << "[InferenceThread] Detection count exceeds buffer size: " 
-                                  << m_finalDetectionsCountHost << " > " << Constants::MAX_DETECTIONS << std::endl;
-                        m_finalDetectionsCountHost = Constants::MAX_DETECTIONS;
+                    if (m_finalTargetsCountHost > Constants::MAX_DETECTIONS) {
+                        std::cerr << "[InferenceThread] Target count exceeds buffer size: " 
+                                  << m_finalTargetsCountHost << " > " << Constants::MAX_DETECTIONS << std::endl;
+                        m_finalTargetsCountHost = Constants::MAX_DETECTIONS;
                     }
                     
                     // Ensure GPU buffer is valid before copying
-                    if (!m_finalDetectionsGpu.get()) {
+                    if (!m_finalTargetsGpu.get()) {
                         std::cerr << "[InferenceThread] GPU detection buffer is null!" << std::endl;
                         continue;
                     }
                     
-                    if (!m_finalDetectionsHost) {
+                    if (!m_finalTargetsHost) {
                         std::cerr << "[InferenceThread] Host detection buffer is null!" << std::endl;
                         continue;
                     }
                     
-                    copyErr = cudaMemcpyAsync(m_finalDetectionsHost.get(), m_finalDetectionsGpu.get(), 
-                                   m_finalDetectionsCountHost * sizeof(Detection), 
+                    copyErr = cudaMemcpyAsync(m_finalTargetsHost.get(), m_finalTargetsGpu.get(), 
+                                   m_finalTargetsCountHost * sizeof(Target), 
                                    cudaMemcpyDeviceToHost, postprocessStream);
                     if (copyErr != cudaSuccess) {
                         std::cerr << "[InferenceThread] Failed to copy detections: " << cudaGetErrorString(copyErr) << std::endl;
@@ -1020,13 +1020,13 @@ void Detector::inferenceThread()
                     const int screen_height = ctx.config.detection_resolution;
                     
                     // Safety check
-                    if (m_finalDetectionsCountHost > Constants::MAX_DETECTIONS) {
-                        std::cerr << "[ERROR] Detection count exceeds maximum: " << m_finalDetectionsCountHost << std::endl;
-                        m_finalDetectionsCountHost = Constants::MAX_DETECTIONS;
+                    if (m_finalTargetsCountHost > Constants::MAX_DETECTIONS) {
+                        std::cerr << "[ERROR] Target count exceeds maximum: " << m_finalTargetsCountHost << std::endl;
+                        m_finalTargetsCountHost = Constants::MAX_DETECTIONS;
                     }
                     
-                    for (int i = 0; i < m_finalDetectionsCountHost; i++) {
-                        Detection& det = m_finalDetectionsHost[i];
+                    for (int i = 0; i < m_finalTargetsCountHost; i++) {
+                        Target& det = m_finalTargetsHost[i];
                         
                         // Only filter if BOTH position is at edge AND size is unreasonably large
                         bool at_corner = (det.x <= edge_margin && det.y <= edge_margin);
@@ -1043,13 +1043,13 @@ void Detector::inferenceThread()
                         
                         // Copy valid detection (might overwrite itself, which is fine)
                         if (valid_count < Constants::MAX_DETECTIONS) {
-                            m_finalDetectionsHost[valid_count] = det;
+                            m_finalTargetsHost[valid_count] = det;
                             valid_count++;
                         }
                     }
                     
                     // Update count to only valid detections
-                    m_finalDetectionsCountHost = valid_count;
+                    m_finalTargetsCountHost = valid_count;
                 }
 
                 auto inference_end_time = std::chrono::high_resolution_clock::now();
@@ -1083,7 +1083,7 @@ void Detector::inferenceThread()
                 }
                 
                 // GPU Tracking System  
-                if (ctx.config.enable_tracking && m_finalDetectionsCountHost > 0 && m_gpuTrackerContext) {
+                if (ctx.config.enable_tracking && m_finalTargetsCountHost > 0 && m_gpuTrackerContext) {
                     
                     // Allocate tracked targets buffer if needed
                     if (!m_trackedTargetsGpu.get()) {
@@ -1096,8 +1096,8 @@ void Detector::inferenceThread()
                     // Run GPU tracking directly on GPU memory
                     updateGPUTrackerDirect(
                         m_gpuTrackerContext,
-                        m_finalDetectionsGpu.get(),        // Input: detections already on GPU
-                        m_finalDetectionsCountHost,         // Number of detections
+                        m_finalTargetsGpu.get(),        // Input: detections already on GPU
+                        m_finalTargetsCountHost,         // Number of detections
                         m_trackedTargetsGpu.get(),          // Output: tracked targets on GPU
                         trackedCountGpu.get(),               // Output: number of tracked targets
                         postprocessStream,                   // CUDA stream
@@ -1105,7 +1105,7 @@ void Detector::inferenceThread()
                     );
                     
                     // Replace final detections with tracked targets
-                    cudaMemcpyAsync(m_finalDetectionsGpu.get(), 
+                    cudaMemcpyAsync(m_finalTargetsGpu.get(), 
                                    m_trackedTargetsGpu.get(),
                                    Constants::MAX_DETECTIONS * sizeof(Target),
                                    cudaMemcpyDeviceToDevice, 
@@ -1122,17 +1122,17 @@ void Detector::inferenceThread()
                     
                     // Update final count
                     if (tracked_count > 0 && tracked_count <= Constants::MAX_DETECTIONS) {
-                        m_finalDetectionsCountHost = tracked_count;
-                        cudaMemcpyAsync(m_finalDetectionsCountGpu.get(), 
-                                       &m_finalDetectionsCountHost,
+                        m_finalTargetsCountHost = tracked_count;
+                        cudaMemcpyAsync(m_finalTargetsCountGpu.get(), 
+                                       &m_finalTargetsCountHost,
                                        sizeof(int), 
                                        cudaMemcpyHostToDevice, 
                                        postprocessStream);
                         
                         // Copy to host for CPU-based operations if needed
-                        cudaMemcpyAsync(m_finalDetectionsHost.get(),
-                                       m_finalDetectionsGpu.get(),
-                                       m_finalDetectionsCountHost * sizeof(Target),
+                        cudaMemcpyAsync(m_finalTargetsHost.get(),
+                                       m_finalTargetsGpu.get(),
+                                       m_finalTargetsCountHost * sizeof(Target),
                                        cudaMemcpyDeviceToHost,
                                        postprocessStream);
                         
@@ -1145,26 +1145,75 @@ void Detector::inferenceThread()
                             // After sync, copy tracked objects
                             cudaStreamSynchronize(postprocessStream);
                             for (int i = 0; i < tracked_count; i++) {
-                                m_trackedObjects.push_back(m_finalDetectionsHost[i]);
+                                m_trackedObjects.push_back(m_finalTargetsHost[i]);
+                            }
+                            
+                            // Handle target lock
+                            if (ctx.config.enable_target_lock) {
+                                // Check if locked target still exists
+                                if (m_isTargetLocked) {
+                                    bool lockStillValid = false;
+                                    for (int i = 0; i < tracked_count; i++) {
+                                        if (m_finalTargetsHost[i].id == m_lockedTrackId) {
+                                            lockStillValid = true;
+                                            break;
+                                        }
+                                    }
+                                    
+                                    if (!lockStillValid) {
+                                        // Lost lock
+                                        m_isTargetLocked = false;
+                                        m_lockedTrackId = -1;
+                                    }
+                                }
+                                
+                                // If not locked and targets available, lock onto closest target
+                                if (!m_isTargetLocked && tracked_count > 0) {
+                                    // Find closest target
+                                    float minDist = FLT_MAX;
+                                    int closestIdx = -1;
+                                    float centerX = cached_config.detection_resolution / 2.0f;
+                                    float centerY = cached_config.detection_resolution / 2.0f;
+                                    
+                                    for (int i = 0; i < tracked_count; i++) {
+                                        float dx = m_finalTargetsHost[i].x - centerX;
+                                        float dy = m_finalTargetsHost[i].y - centerY;
+                                        float dist = dx * dx + dy * dy;
+                                        
+                                        if (dist < minDist) {
+                                            minDist = dist;
+                                            closestIdx = i;
+                                        }
+                                    }
+                                    
+                                    if (closestIdx >= 0) {
+                                        m_isTargetLocked = true;
+                                        m_lockedTrackId = m_finalTargetsHost[closestIdx].id;
+                                    }
+                                }
+                            } else {
+                                // Target lock disabled
+                                m_isTargetLocked = false;
+                                m_lockedTrackId = -1;
                             }
                         }
                         
-                        std::cout << "[GPU Tracker] Tracked " << tracked_count << " targets" << std::endl;
+                        // GPU Tracker debug log removed
                     }
-                } else if (ctx.config.enable_tracking && m_finalDetectionsCountHost > 0) {
+                } else if (ctx.config.enable_tracking && m_finalTargetsCountHost > 0) {
                     std::cout << "[GPU Tracker] Tracking enabled but GPU tracker not initialized" << std::endl;
                 }
                 
                 // GPU에서 거리 기반 타겟 선택
-                if (m_finalDetectionsCountHost > 0 && !ctx.should_exit) {
+                if (m_finalTargetsCountHost > 0 && !ctx.should_exit) {
                     
                     // Crosshair is now always at center since capture region already includes offset
                     float crosshairX = cached_config.detection_resolution / 2.0f;
                     float crosshairY = cached_config.detection_resolution / 2.0f;
                     
                     // Validate buffers before GPU operation
-                    if (!m_finalDetectionsGpu.get()) {
-                        std::cerr << "[Aimbot] ERROR: m_finalDetectionsGpu is null!" << std::endl;
+                    if (!m_finalTargetsGpu.get()) {
+                        std::cerr << "[Aimbot] ERROR: m_finalTargetsGpu is null!" << std::endl;
                         continue;
                     }
                     
@@ -1173,16 +1222,42 @@ void Detector::inferenceThread()
                         continue;
                     }
                     
-                    // Find closest target on GPU
-                    cudaError_t target_err = findClosestTargetGpu(
-                        m_finalDetectionsGpu.get(),
-                        m_finalDetectionsCountHost,
-                        crosshairX,
-                        crosshairY,
-                        m_bestTargetIndexGpu.get(),
-                        m_bestTargetGpu.get(),
-                        postprocessStream
-                    );
+                    // Check if we have a locked target first
+                    bool useLockedTarget = false;
+                    int lockedTargetIndex = -1;
+                    
+                    if (ctx.config.enable_target_lock && m_isTargetLocked) {
+                        // Find the locked target in current frame
+                        for (int i = 0; i < m_finalTargetsCountHost; i++) {
+                            if (m_finalTargetsHost[i].id == m_lockedTrackId) {
+                                lockedTargetIndex = i;
+                                useLockedTarget = true;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    cudaError_t target_err;
+                    
+                    if (useLockedTarget) {
+                        // Use the locked target directly
+                        cudaMemcpyAsync(m_bestTargetIndexGpu.get(), &lockedTargetIndex, 
+                                       sizeof(int), cudaMemcpyHostToDevice, postprocessStream);
+                        cudaMemcpyAsync(m_bestTargetGpu.get(), &m_finalTargetsHost[lockedTargetIndex], 
+                                       sizeof(Target), cudaMemcpyHostToDevice, postprocessStream);
+                        target_err = cudaSuccess;
+                    } else {
+                        // Find closest target on GPU
+                        target_err = findClosestTargetGpu(
+                            m_finalTargetsGpu.get(),
+                            m_finalTargetsCountHost,
+                            crosshairX,
+                            crosshairY,
+                            m_bestTargetIndexGpu.get(),
+                            m_bestTargetGpu.get(),
+                            postprocessStream
+                        );
+                    }
                     
                     if (target_err == cudaSuccess) {
                         
@@ -1259,7 +1334,7 @@ void Detector::inferenceThread()
                                 m_hasBestTarget = true;
                             } else {
                                 m_hasBestTarget = false;
-                                m_bestTargetHost = Detection();  // Use default constructor
+                                m_bestTargetHost = Target();  // Use default constructor
                             }
                             
                             detectionVersion++;
@@ -1270,7 +1345,7 @@ void Detector::inferenceThread()
                         
                         std::lock_guard<std::mutex> lock(detectionMutex);
                         m_hasBestTarget = false;
-                        m_bestTargetHost = Detection();  // Use default constructor
+                        m_bestTargetHost = Target();  // Use default constructor
                         m_bestTargetIndexHost = -1;
                         detectionVersion++;
                         detectionCV.notify_one();
@@ -1279,7 +1354,7 @@ void Detector::inferenceThread()
                     // No detections or should exit
                     std::lock_guard<std::mutex> lock(detectionMutex);
                     m_hasBestTarget = false;
-                    m_bestTargetHost = Detection();  // Use default constructor
+                    m_bestTargetHost = Target();  // Use default constructor
                     m_bestTargetIndexHost = -1;
                     detectionVersion++;
                     detectionCV.notify_one();
@@ -1290,25 +1365,25 @@ void Detector::inferenceThread()
             {
                 std::cerr << "[InferenceThread] Exception caught in inference loop: " << e.what() << std::endl;
                 m_hasBestTarget = false;
-                m_bestTargetHost = Detection();  // Use default constructor
+                m_bestTargetHost = Target();  // Use default constructor
                 m_bestTargetIndexHost = -1;
-                m_finalDetectionsCountHost = 0;
+                m_finalTargetsCountHost = 0;
             }
             catch (...)
             {
                 std::cerr << "[InferenceThread] Unknown exception caught in inference loop" << std::endl;
                 m_hasBestTarget = false;
-                m_bestTargetHost = Detection();  // Use default constructor
+                m_bestTargetHost = Target();  // Use default constructor
                 m_bestTargetIndexHost = -1;
-                m_finalDetectionsCountHost = 0;
+                m_finalTargetsCountHost = 0;
             }
         } else if (hasNewFrame) {
              {
                 std::lock_guard<std::mutex> lock(detectionMutex);
                 m_hasBestTarget = false;
-                m_bestTargetHost = Detection();  // Use default constructor
+                m_bestTargetHost = Target();  // Use default constructor
                 m_bestTargetIndexHost = -1;
-                m_finalDetectionsCountHost = 0;
+                m_finalTargetsCountHost = 0;
                 detectionVersion++;
              }
              detectionCV.notify_one();
@@ -1330,7 +1405,7 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
     auto& ctx = AppContext::getInstance();
     if (outputNames.empty()) {
         std::cerr << "[PostProcess] No output names found for post-processing." << std::endl;
-        cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
+        cudaMemsetAsync(m_finalTargetsCountGpu.get(), 0, sizeof(int), stream);
         return;
     }
 
@@ -1345,7 +1420,7 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
 
     if (!d_rawOutputPtr) {
         std::cerr << "[PostProcess] Raw output GPU pointer is null for " << primaryOutputName << std::endl;
-        cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
+        cudaMemsetAsync(m_finalTargetsCountGpu.get(), 0, sizeof(int), stream);
         return;
     }
     
@@ -1361,7 +1436,7 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
     // Clear all detection buffers at the start of processing
     cudaMemsetAsync(m_decodedCountGpu.get(), 0, sizeof(int), stream);
     cudaMemsetAsync(m_classFilteredCountGpu.get(), 0, sizeof(int), stream);
-    cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
+    cudaMemsetAsync(m_finalTargetsCountGpu.get(), 0, sizeof(int), stream);
 
     cudaError_t decodeErr = cudaSuccess;
 
@@ -1385,7 +1460,7 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
 
     // Use a reasonable buffer for decoding - balance between capacity and memory
     // Too large buffers cause illegal memory access in NMS
-    int maxDecodedDetections = 300;  // Reasonable buffer for detections
+    int maxDecodedTargets = 300;  // Reasonable buffer for detections
     
     
     if (cached_postprocess == "yolo10") {
@@ -1402,10 +1477,10 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
             numClasses,
             cached_confidence_threshold,
             this->img_scale,
-            m_decodedDetectionsGpu.get(),
+            m_decodedTargetsGpu.get(),
             m_decodedCountGpu.get(),
             max_candidates,
-            maxDecodedDetections,  // Large buffer for all detections
+            maxDecodedTargets,  // Large buffer for all detections
             stream);
     } else if (cached_postprocess == "yolo8" || cached_postprocess == "yolo9" || cached_postprocess == "yolo11" || cached_postprocess == "yolo12") {
         int max_candidates = (shape.size() > 2) ? static_cast<int>(shape[2]) : 0;
@@ -1413,23 +1488,24 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         if (gpuPostProcessCount <= 5) {
             std::cout << "[PostProcess] Calling decodeYolo11Gpu for " << cached_postprocess << std::endl;
             std::cout << "[PostProcess] Parameters: max_candidates=" << max_candidates 
-                      << ", maxDecodedDetections=" << maxDecodedDetections
+                      << ", maxDecodedTargets=" << maxDecodedTargets
                       << ", numClasses=" << numClasses
                       << ", conf_threshold=" << cached_confidence_threshold
-                      << ", img_scale=" << img_scale << std::endl;
+                      << ", img_scale=" << img_scale 
+                      << ", detection_resolution=" << ctx.config.detection_resolution << std::endl;
         }
         
         // Validate parameters before calling
-        if (!m_decodedDetectionsGpu.get() || !m_decodedCountGpu.get()) {
-            std::cerr << "[PostProcess] Detection buffers not allocated!" << std::endl;
-            cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
+        if (!m_decodedTargetsGpu.get() || !m_decodedCountGpu.get()) {
+            std::cerr << "[PostProcess] Target buffers not allocated!" << std::endl;
+            cudaMemsetAsync(m_finalTargetsCountGpu.get(), 0, sizeof(int), stream);
             return;
         }
         
-        if (max_candidates <= 0 || maxDecodedDetections <= 0) {
+        if (max_candidates <= 0 || maxDecodedTargets <= 0) {
             std::cerr << "[PostProcess] Invalid buffer sizes: max_candidates=" << max_candidates 
-                      << ", maxDecodedDetections=" << maxDecodedDetections << std::endl;
-            cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
+                      << ", maxDecodedTargets=" << maxDecodedTargets << std::endl;
+            cudaMemsetAsync(m_finalTargetsCountGpu.get(), 0, sizeof(int), stream);
             return;
         }
         
@@ -1440,14 +1516,14 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
             numClasses,
             cached_confidence_threshold,
             this->img_scale,
-            m_decodedDetectionsGpu.get(),
+            m_decodedTargetsGpu.get(),
             m_decodedCountGpu.get(),
             max_candidates,
-            maxDecodedDetections,  // Large buffer for all detections
+            maxDecodedTargets,  // Large buffer for all detections
             stream);
     } else {
         std::cerr << "[Detector] Unsupported post-processing type for GPU decoding: " << cached_postprocess << std::endl;
-        cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
+        cudaMemsetAsync(m_finalTargetsCountGpu.get(), 0, sizeof(int), stream);
         return;
     }
 
@@ -1455,7 +1531,7 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         std::cerr << "[PostProcess] GPU decoding kernel launch/execution failed: " << cudaGetErrorString(decodeErr) << std::endl;
         std::cerr << "[PostProcess] CUDA Error Code: " << decodeErr << std::endl;
         std::cerr << "[PostProcess] Postprocess type: " << cached_postprocess << std::endl;
-        cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
+        cudaMemsetAsync(m_finalTargetsCountGpu.get(), 0, sizeof(int), stream);
         return;
     }
     
@@ -1474,24 +1550,60 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
     cudaError_t countCopyErr = cudaMemcpyAsync(&decodedCount, m_decodedCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
     if (countCopyErr != cudaSuccess) {
         std::cerr << "[PostProcess] Failed to copy decoded count: " << cudaGetErrorString(countCopyErr) << std::endl;
-        cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
+        cudaMemsetAsync(m_finalTargetsCountGpu.get(), 0, sizeof(int), stream);
         return;
     }
     cudaError_t syncErr = cudaStreamSynchronize(stream);
     if (syncErr != cudaSuccess) {
         std::cerr << "[PostProcess] Stream sync failed: " << cudaGetErrorString(syncErr) << std::endl;
-        cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
+        cudaMemsetAsync(m_finalTargetsCountGpu.get(), 0, sizeof(int), stream);
         return;
     }
     
     if (gpuPostProcessCount <= 5) {
         std::cout << "[PostProcess] Decoded count: " << decodedCount << std::endl;
+        
+        // Debug: Copy first few detections to host to check values
+        if (decodedCount > 0) {
+            int debugCount = std::min(10, decodedCount);  // Check more detections
+            Target debugTargets[10];
+            cudaMemcpyAsync(debugTargets, m_decodedTargetsGpu.get(), 
+                          debugCount * sizeof(Target), cudaMemcpyDeviceToHost, stream);
+            cudaStreamSynchronize(stream);
+            
+            // PostProcess target debug logs removed
+            
+            // Count and log abnormal detections
+            int abnormalCount = 0;
+            for (int i = 0; i < decodedCount && i < 100; i++) {
+                Target det;
+                cudaMemcpyAsync(&det, m_decodedTargetsGpu.get() + i, 
+                              sizeof(Target), cudaMemcpyDeviceToHost, stream);
+                cudaStreamSynchronize(stream);
+                
+                if (det.classId < 0 || det.classId >= numClasses) {
+                    abnormalCount++;
+                    if (abnormalCount <= 5) {  // Log first 5 abnormal ones
+                        std::cout << "[PostProcess] ABNORMAL Target #" << i 
+                                  << ": classId=" << det.classId 
+                                  << " (should be 0-" << (numClasses-1) << ")"
+                                  << ", conf=" << det.confidence
+                                  << ", pos=(" << det.x << "," << det.y << ")"
+                                  << ", size=(" << det.width << "x" << det.height << ")" << std::endl;
+                    }
+                }
+            }
+            if (abnormalCount > 0) {
+                std::cout << "[PostProcess] Total abnormal detections: " << abnormalCount 
+                          << " out of " << decodedCount << std::endl;
+            }
+        }
     }
     
     
     // If no detections were decoded, clear final count and return early
     if (decodedCount == 0) {
-        cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
+        cudaMemsetAsync(m_finalTargetsCountGpu.get(), 0, sizeof(int), stream);
         return;
     }
     
@@ -1504,10 +1616,10 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
     if (gpuPostProcessCount <= 5) {
         std::cout << "[PostProcess] Starting class ID filtering" << std::endl;
     }
-    cudaError_t filterErr = filterDetectionsByClassIdGpu(
-        m_decodedDetectionsGpu.get(),
+    cudaError_t filterErr = filterTargetsByClassIdGpu(
+        m_decodedTargetsGpu.get(),
         decodedCount,  // Use actual count or max for graph mode
-        m_classFilteredDetectionsGpu.get(),
+        m_classFilteredTargetsGpu.get(),
         m_classFilteredCountGpu.get(),
         m_d_allow_flags_gpu.get(),
         MAX_CLASSES_FOR_FILTERING,
@@ -1516,7 +1628,7 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
     );
     if (!checkCudaError(filterErr, "filtering detections by class ID GPU")) {
         std::cerr << "[PostProcess] Class ID filtering failed" << std::endl;
-        cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
+        cudaMemsetAsync(m_finalTargetsCountGpu.get(), 0, sizeof(int), stream);
         return;
     }
     
@@ -1535,7 +1647,7 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
     
     // Early exit if no detections after class filtering
     if (classFilteredCount == 0) {
-        cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
+        cudaMemsetAsync(m_finalTargetsCountGpu.get(), 0, sizeof(int), stream);
         return;
     }
     
@@ -1546,7 +1658,7 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
     int maskPitch = 0;
     
     // For non-graph mode, apply color filtering if mask exists
-    Detection* nmsInputDetections = nullptr;
+    Target* nmsInputTargets = nullptr;
     int effectiveFilteredCount = classFilteredCount;  // Use actual filtered count
     
     if (!m_graphCaptured && !colorMask.empty()) {
@@ -1554,10 +1666,10 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         maskPitch = static_cast<int>(colorMask.step());
         
         // Apply RGB filtering
-        cudaError_t colorFilterErr = filterDetectionsByColorGpu(
-            m_classFilteredDetectionsGpu.get(),
+        cudaError_t colorFilterErr = filterTargetsByColorGpu(
+            m_classFilteredTargetsGpu.get(),
             classFilteredCount,  // Process actual class-filtered count
-            m_colorFilteredDetectionsGpu.get(),
+            m_colorFilteredTargetsGpu.get(),
             m_colorFilteredCountGpu.get(),
             colorMaskPtr,
             maskPitch,
@@ -1568,12 +1680,12 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         );
         
         if (!checkCudaError(colorFilterErr, "filtering detections by color GPU")) {
-            cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
+            cudaMemsetAsync(m_finalTargetsCountGpu.get(), 0, sizeof(int), stream);
             return;
         }
         
         // Use color-filtered detections for NMS
-        nmsInputDetections = m_colorFilteredDetectionsGpu.get();
+        nmsInputTargets = m_colorFilteredTargetsGpu.get();
         
         // Check color filtered count
         int colorFilteredCount = 0;
@@ -1582,7 +1694,7 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         effectiveFilteredCount = colorFilteredCount;  // Update count for NMS
     } else {
         // No color filtering, use class-filtered detections directly
-        nmsInputDetections = m_classFilteredDetectionsGpu.get();
+        nmsInputTargets = m_classFilteredTargetsGpu.get();
     }
     
     // Step 3: NMS (after all filtering for maximum efficiency)
@@ -1600,17 +1712,17 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
             !m_nms_d_areas.get() || !m_nms_d_scores.get() || !m_nms_d_classIds.get() ||
             !m_nms_d_iou_matrix.get() || !m_nms_d_keep.get() || !m_nms_d_indices.get()) {
             std::cerr << "[Detector] ERROR: NMS buffers not properly allocated!" << std::endl;
-            cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
+            cudaMemsetAsync(m_finalTargetsCountGpu.get(), 0, sizeof(int), stream);
             return;
         }
         
         
         // NMS will process filtered detections and output only max_detections
         NMSGpu(
-            nmsInputDetections,
+            nmsInputTargets,
             effectiveFilteredCount, // Process all filtered detections
-            m_finalDetectionsGpu.get(),       
-            m_finalDetectionsCountGpu.get(),  
+            m_finalTargetsGpu.get(),       
+            m_finalTargetsCountGpu.get(),  
             cached_max_detections,  // Apply max_detections limit AFTER NMS 
             cached_nms_threshold,
             cached_frame_width,
@@ -1629,22 +1741,22 @@ void Detector::performGpuPostProcessing(cudaStream_t stream) {
         );
         
         // Validate detections after NMS to ensure no invalid dimensions
-        extern void validateDetectionsGpu(Detection* d_detections, int n, cudaStream_t stream);
+        extern void validateTargetsGpu(Target* d_detections, int n, cudaStream_t stream);
         
         // Get final count to validate only actual detections
         int finalCount = 0;
-        cudaMemcpyAsync(&finalCount, m_finalDetectionsCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
+        cudaMemcpyAsync(&finalCount, m_finalTargetsCountGpu.get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
         cudaStreamSynchronize(stream);
         
         if (finalCount > 0 && finalCount <= cached_max_detections) {
-            validateDetectionsGpu(m_finalDetectionsGpu.get(), finalCount, stream);
+            validateTargetsGpu(m_finalTargetsGpu.get(), finalCount, stream);
         }
         
         // Target selection will be done on CPU after copying results
         
     } catch (const std::exception& e) {
          std::cerr << "[Detector] Exception during NMSGpu call: " << e.what() << std::endl;
-         cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
+         cudaMemsetAsync(m_finalTargetsCountGpu.get(), 0, sizeof(int), stream);
     }
 }
 
@@ -1832,18 +1944,18 @@ void Detector::initializeBuffers() {
     
     // Allocate extra buffer space for safety
     int buffer_size = max_candidates * 2;
-    m_decodedDetectionsGpu.allocate(buffer_size);
+    m_decodedTargetsGpu.allocate(buffer_size);
     m_decodedCountGpu.allocate(1);
     
     // Allocate buffers - balanced to avoid illegal memory access
     const int graph_buffer_size = Constants::MAX_DETECTIONS; // Final output size
     const int intermediate_buffer_size = 300; // Reasonable buffer for intermediate processing
-    m_finalDetectionsGpu.allocate(graph_buffer_size);
-    m_finalDetectionsCountGpu.allocate(1);
-    m_finalDetectionsHost = std::unique_ptr<Detection[]>(new Detection[graph_buffer_size]);
-    m_classFilteredDetectionsGpu.allocate(intermediate_buffer_size);  // Buffer for class filtered detections
+    m_finalTargetsGpu.allocate(graph_buffer_size);
+    m_finalTargetsCountGpu.allocate(1);
+    m_finalTargetsHost = std::unique_ptr<Target[]>(new Target[graph_buffer_size]);
+    m_classFilteredTargetsGpu.allocate(intermediate_buffer_size);  // Buffer for class filtered detections
     m_classFilteredCountGpu.allocate(1);
-    m_colorFilteredDetectionsGpu.allocate(intermediate_buffer_size);  // Buffer for color filtered detections
+    m_colorFilteredTargetsGpu.allocate(intermediate_buffer_size);  // Buffer for color filtered detections
     m_colorFilteredCountGpu.allocate(1);
     m_scoresGpu.allocate(graph_buffer_size);
 
@@ -1872,28 +1984,28 @@ void Detector::initializeBuffers() {
     }
 
     if (m_decodedCountGpu.get()) cudaMemsetAsync(m_decodedCountGpu.get(), 0, sizeof(int), stream);
-    if (m_finalDetectionsCountGpu.get()) cudaMemsetAsync(m_finalDetectionsCountGpu.get(), 0, sizeof(int), stream);
+    if (m_finalTargetsCountGpu.get()) cudaMemsetAsync(m_finalTargetsCountGpu.get(), 0, sizeof(int), stream);
     if (m_classFilteredCountGpu.get()) cudaMemsetAsync(m_classFilteredCountGpu.get(), 0, sizeof(int), stream);
     
-    // Initialize Detection arrays to zero to prevent garbage values
+    // Initialize Target arrays to zero to prevent garbage values
     // Do NOT use 0xFF as it creates invalid float values (NaN)
-    if (m_decodedDetectionsGpu.get()) {
-        cudaMemsetAsync(m_decodedDetectionsGpu.get(), 0, buffer_size * sizeof(Detection), stream);
+    if (m_decodedTargetsGpu.get()) {
+        cudaMemsetAsync(m_decodedTargetsGpu.get(), 0, buffer_size * sizeof(Target), stream);
     }
-    if (m_finalDetectionsGpu.get()) {
-        cudaMemsetAsync(m_finalDetectionsGpu.get(), 0, graph_buffer_size * sizeof(Detection), stream);
+    if (m_finalTargetsGpu.get()) {
+        cudaMemsetAsync(m_finalTargetsGpu.get(), 0, graph_buffer_size * sizeof(Target), stream);
     }
-    if (m_classFilteredDetectionsGpu.get()) {
-        cudaMemsetAsync(m_classFilteredDetectionsGpu.get(), 0, intermediate_buffer_size * sizeof(Detection), stream);
+    if (m_classFilteredTargetsGpu.get()) {
+        cudaMemsetAsync(m_classFilteredTargetsGpu.get(), 0, intermediate_buffer_size * sizeof(Target), stream);
     }
-    if (m_colorFilteredDetectionsGpu.get()) {
-        cudaMemsetAsync(m_colorFilteredDetectionsGpu.get(), 0, intermediate_buffer_size * sizeof(Detection), stream);
+    if (m_colorFilteredTargetsGpu.get()) {
+        cudaMemsetAsync(m_colorFilteredTargetsGpu.get(), 0, intermediate_buffer_size * sizeof(Target), stream);
     }
 
 }
 
 
-float Detector::calculate_host_iou(const Detection& det1, const Detection& det2) {
+float Detector::calculate_host_iou(const Target& det1, const Target& det2) {
     int xA = (std::max)(det1.x, det2.x);
     int yA = (std::max)(det1.y, det2.y);
     int xB = (std::min)(det1.x + det1.width, det2.x + det2.width);
