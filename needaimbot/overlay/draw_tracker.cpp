@@ -235,19 +235,19 @@ static void draw_kalman_filter_settings()
     UIHelpers::SettingsSubHeader("Track Management");
     
     // Min Hits
-    if (UIHelpers::EnhancedSliderInt("Min Hits", 
-                                     &ctx.config.kalman_min_hits, 
-                                     1, 10,
-                                     "Minimum detections before track is confirmed")) {
+    if (ImGui::SliderInt("Min Hits", &ctx.config.kalman_min_hits, 1, 10)) {
         SAVE_PROFILE();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Minimum detections before track is confirmed");
     }
     
     // Max Age
-    if (UIHelpers::EnhancedSliderInt("Max Age", 
-                                     &ctx.config.kalman_max_age, 
-                                     1, 20,
-                                     "Maximum frames without detection before track is removed")) {
+    if (ImGui::SliderInt("Max Age", &ctx.config.kalman_max_age, 1, 20)) {
         SAVE_PROFILE();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Maximum frames without detection before track is removed");
     }
     
     // Visual representation of timing
