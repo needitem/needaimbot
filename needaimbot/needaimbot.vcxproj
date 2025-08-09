@@ -79,6 +79,7 @@
     <CudaCompile Include="cuda\color_conversion.cu" />
     <CudaCompile Include="cuda\pipeline_optimization.cu" />
     <CudaCompile Include="cuda\gpu_tracker.cu" />
+    <CudaCompile Include="cuda\gpu_kalman_filter.cu" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="core\config_cache.h" />
@@ -90,6 +91,7 @@
     <ClInclude Include="cuda\cuda_float_processing.h" />
     <ClInclude Include="cuda\image_io.h" />
     <ClInclude Include="cuda\color_conversion.h" />
+    <ClInclude Include="cuda\gpu_kalman_filter.h" />
     <ClInclude Include="capture\capture.h" />
     <ClInclude Include="capture\simple_capture.h" />
     <ClInclude Include="capture\windows_graphics_capture.h" />
