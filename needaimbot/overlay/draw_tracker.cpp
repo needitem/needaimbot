@@ -76,7 +76,7 @@ static void draw_sort_tracker_settings()
     UIHelpers::CompactSpacer();
     
     // Max Age setting (increased range for better persistence)
-    if (ImGui::SliderInt("Max Age", &ctx.config.tracker_max_age, 1, 60)) {
+    if (ImGui::SliderInt("Max Age##SORT", &ctx.config.tracker_max_age, 1, 60)) {
         SAVE_PROFILE();
         
         // Update tracker in real-time
@@ -89,7 +89,7 @@ static void draw_sort_tracker_settings()
     }
     
     // Min Hits setting
-    if (ImGui::SliderInt("Min Hits", &ctx.config.tracker_min_hits, 1, 10)) {
+    if (ImGui::SliderInt("Min Hits##SORT", &ctx.config.tracker_min_hits, 1, 10)) {
         SAVE_PROFILE();
         
         if (ctx.detector && ctx.detector->m_sortTracker) {
@@ -113,7 +113,7 @@ static void draw_sort_tracker_settings()
     UIHelpers::Spacer(10.0f);
     UIHelpers::SettingsSubHeader("Quick Presets");
     
-    if (ImGui::Button("Conservative", ImVec2((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x * 2) / 3, 0))) {
+    if (ImGui::Button("Conservative##SORT", ImVec2((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x * 2) / 3, 0))) {
         ctx.config.tracker_max_age = 10;
         ctx.config.tracker_min_hits = 3;
         ctx.config.tracker_iou_threshold = 0.3f;
@@ -124,7 +124,7 @@ static void draw_sort_tracker_settings()
     }
     
     ImGui::SameLine();
-    if (ImGui::Button("Balanced", ImVec2((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) / 2, 0))) {
+    if (ImGui::Button("Balanced##SORT", ImVec2((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) / 2, 0))) {
         ctx.config.tracker_max_age = 20;
         ctx.config.tracker_min_hits = 2;
         ctx.config.tracker_iou_threshold = 0.15f;
@@ -135,7 +135,7 @@ static void draw_sort_tracker_settings()
     }
     
     ImGui::SameLine();
-    if (ImGui::Button("Aggressive", ImVec2(-1, 0))) {
+    if (ImGui::Button("Aggressive##SORT", ImVec2(-1, 0))) {
         ctx.config.tracker_max_age = 30;
         ctx.config.tracker_min_hits = 1;
         ctx.config.tracker_iou_threshold = 0.1f;
@@ -235,7 +235,7 @@ static void draw_kalman_filter_settings()
     UIHelpers::SettingsSubHeader("Track Management");
     
     // Min Hits
-    if (ImGui::SliderInt("Min Hits", &ctx.config.kalman_min_hits, 1, 10)) {
+    if (ImGui::SliderInt("Min Hits##Kalman", &ctx.config.kalman_min_hits, 1, 10)) {
         SAVE_PROFILE();
     }
     if (ImGui::IsItemHovered()) {
@@ -243,7 +243,7 @@ static void draw_kalman_filter_settings()
     }
     
     // Max Age
-    if (ImGui::SliderInt("Max Age", &ctx.config.kalman_max_age, 1, 20)) {
+    if (ImGui::SliderInt("Max Age##Kalman", &ctx.config.kalman_max_age, 1, 20)) {
         SAVE_PROFILE();
     }
     if (ImGui::IsItemHovered()) {
@@ -293,7 +293,7 @@ static void draw_kalman_filter_settings()
     UIHelpers::SettingsSubHeader("Kalman Presets");
     
     // Preset buttons in a grid
-    if (ImGui::Button("No Prediction", ImVec2((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x * 2) / 3, 0))) {
+    if (ImGui::Button("No Prediction##Kalman", ImVec2((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x * 2) / 3, 0))) {
         ctx.config.kalman_lookahead_time = 0.0f;
         ctx.config.kalman_process_noise = 1.0f;
         ctx.config.kalman_measurement_noise = 10.0f;
@@ -304,7 +304,7 @@ static void draw_kalman_filter_settings()
     }
     
     ImGui::SameLine();
-    if (ImGui::Button("Low Latency", ImVec2((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) / 2, 0))) {
+    if (ImGui::Button("Low Latency##Kalman", ImVec2((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) / 2, 0))) {
         ctx.config.kalman_lookahead_time = 0.008f;  // Half frame at 60fps
         ctx.config.kalman_process_noise = 1.5f;
         ctx.config.kalman_measurement_noise = 12.0f;
@@ -315,7 +315,7 @@ static void draw_kalman_filter_settings()
     }
     
     ImGui::SameLine();
-    if (ImGui::Button("Standard", ImVec2(-1, 0))) {
+    if (ImGui::Button("Standard##Kalman", ImVec2(-1, 0))) {
         ctx.config.kalman_lookahead_time = 0.016f;  // 1 frame at 60fps
         ctx.config.kalman_process_noise = 2.0f;
         ctx.config.kalman_measurement_noise = 15.0f;
@@ -326,7 +326,7 @@ static void draw_kalman_filter_settings()
     }
     
     // Second row of presets
-    if (ImGui::Button("Aggressive", ImVec2((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x * 2) / 3, 0))) {
+    if (ImGui::Button("Aggressive##Kalman", ImVec2((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x * 2) / 3, 0))) {
         ctx.config.kalman_lookahead_time = 0.033f;  // 2 frames at 60fps
         ctx.config.kalman_process_noise = 3.0f;
         ctx.config.kalman_measurement_noise = 20.0f;
@@ -337,7 +337,7 @@ static void draw_kalman_filter_settings()
     }
     
     ImGui::SameLine();
-    if (ImGui::Button("Ultra", ImVec2((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) / 2, 0))) {
+    if (ImGui::Button("Ultra##Kalman", ImVec2((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) / 2, 0))) {
         ctx.config.kalman_lookahead_time = 0.050f;  // 3 frames at 60fps
         ctx.config.kalman_process_noise = 4.0f;
         ctx.config.kalman_measurement_noise = 25.0f;
@@ -348,7 +348,7 @@ static void draw_kalman_filter_settings()
     }
     
     ImGui::SameLine();
-    if (ImGui::Button("Custom", ImVec2(-1, 0))) {
+    if (ImGui::Button("Custom##Kalman", ImVec2(-1, 0))) {
         // Reset to allow custom configuration
         ctx.config.kalman_lookahead_time = 0.025f;
         ctx.config.kalman_process_noise = 2.5f;
