@@ -75,8 +75,8 @@ static void draw_sort_tracker_settings()
     UIHelpers::BeautifulText("Controls how targets are tracked between frames", UIHelpers::GetAccentColor(0.7f));
     UIHelpers::CompactSpacer();
     
-    // Max Age setting
-    if (ImGui::SliderInt("Max Age", &ctx.config.tracker_max_age, 1, 30)) {
+    // Max Age setting (increased range for better persistence)
+    if (ImGui::SliderInt("Max Age", &ctx.config.tracker_max_age, 1, 60)) {
         SAVE_PROFILE();
         
         // Update tracker in real-time
@@ -85,7 +85,7 @@ static void draw_sort_tracker_settings()
         }
     }
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Maximum frames to maintain a track without detection\nHigher = keeps tracking longer when target is occluded");
+        ImGui::SetTooltip("Maximum frames to maintain a track without detection\nHigher = keeps tracking longer when target is occluded\nRecommended: 30+ for stable tracking");
     }
     
     // Min Hits setting
@@ -100,9 +100,9 @@ static void draw_sort_tracker_settings()
         ImGui::SetTooltip("Minimum consecutive detections before confirming track\nHigher = more stable but slower to acquire");
     }
     
-    // IOU Threshold setting
-    if (UIHelpers::EnhancedSliderFloat("IOU Threshold", &ctx.config.tracker_iou_threshold, 0.1f, 0.9f, "%.2f",
-                                       "Minimum overlap for matching detections to tracks\nLower = more lenient matching")) {
+    // IOU Threshold setting (lower default for better matching)
+    if (UIHelpers::EnhancedSliderFloat("IOU Threshold", &ctx.config.tracker_iou_threshold, 0.05f, 0.5f, "%.2f",
+                                       "Minimum overlap for matching detections to tracks\nLower = more lenient matching\nRecommended: 0.1 or lower")) {
         SAVE_PROFILE();
         
         if (ctx.detector && ctx.detector->m_sortTracker) {
@@ -114,9 +114,9 @@ static void draw_sort_tracker_settings()
     UIHelpers::SettingsSubHeader("Quick Presets");
     
     if (ImGui::Button("Conservative", ImVec2((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x * 2) / 3, 0))) {
-        ctx.config.tracker_max_age = 3;
-        ctx.config.tracker_min_hits = 5;
-        ctx.config.tracker_iou_threshold = 0.5f;
+        ctx.config.tracker_max_age = 10;
+        ctx.config.tracker_min_hits = 3;
+        ctx.config.tracker_iou_threshold = 0.3f;
         SAVE_PROFILE();
     }
     if (ImGui::IsItemHovered()) {
@@ -125,24 +125,24 @@ static void draw_sort_tracker_settings()
     
     ImGui::SameLine();
     if (ImGui::Button("Balanced", ImVec2((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) / 2, 0))) {
-        ctx.config.tracker_max_age = 5;
-        ctx.config.tracker_min_hits = 3;
-        ctx.config.tracker_iou_threshold = 0.3f;
+        ctx.config.tracker_max_age = 20;
+        ctx.config.tracker_min_hits = 2;
+        ctx.config.tracker_iou_threshold = 0.15f;
         SAVE_PROFILE();
     }
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Default settings - good for most cases");
+        ImGui::SetTooltip("Balanced settings - good for most cases");
     }
     
     ImGui::SameLine();
     if (ImGui::Button("Aggressive", ImVec2(-1, 0))) {
-        ctx.config.tracker_max_age = 10;
+        ctx.config.tracker_max_age = 30;
         ctx.config.tracker_min_hits = 1;
-        ctx.config.tracker_iou_threshold = 0.2f;
+        ctx.config.tracker_iou_threshold = 0.1f;
         SAVE_PROFILE();
     }
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Lenient tracking - maintains tracks longer");
+        ImGui::SetTooltip("Most lenient - best ID persistence");
     }
     
     UIHelpers::EndCard();
@@ -201,7 +201,7 @@ static void draw_kalman_filter_settings()
     if (UIHelpers::EnhancedSliderFloat("Measurement Noise", 
                                        &ctx.config.kalman_measurement_noise, 
                                        1.0f, 50.0f, "%.1f",
-                                       "Detection uncertainty - how noisy the detections are\nHigher = more smoothing, less responsive")) {
+                                       "Target uncertainty - how noisy the detections are\nHigher = more smoothing, less responsive")) {
         SAVE_PROFILE();
     }
     
@@ -353,7 +353,7 @@ static void draw_tracking_statistics()
     
     UIHelpers::SettingsSubHeader("Current Status");
     ImGui::Text("Active Tracks:");
-    ImGui::Text("Detection FPS:");
+    ImGui::Text("Target FPS:");
     ImGui::Text("Tracking Latency:");
     
     ImGui::NextColumn();

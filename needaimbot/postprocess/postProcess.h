@@ -7,19 +7,17 @@
 #include <NvInferRuntimeCommon.h> 
 #include "../core/Target.h"
 
-// Use Target as Detection for backwards compatibility
-using Detection = Target;
 
 // Validate and clean detections
-void validateDetectionsGpu(
-    Detection* d_detections,
+void validateTargetsGpu(
+    Target* d_detections,
     int n,
     cudaStream_t stream = 0);
 
 void NMSGpu(
-    const Detection* d_input_detections, 
+    const Target* d_input_detections, 
     int input_num_detections,          
-    Detection* d_output_detections,       
+    Target* d_output_detections,       
     int* d_output_count_gpu,           
     int max_output_detections,         
     float nmsThreshold,
@@ -47,7 +45,7 @@ cudaError_t decodeYolo10Gpu(
     int num_classes,
     float conf_threshold,
     float img_scale,
-    Detection* d_decoded_detections,
+    Target* d_decoded_detections,
     int* d_decoded_count,
     int max_candidates,
     int max_detections,
@@ -61,7 +59,7 @@ cudaError_t decodeYolo11Gpu(
     int num_classes,
     float conf_threshold,
     float img_scale,
-    Detection* d_decoded_detections,
+    Target* d_decoded_detections,
     int* d_decoded_count,
     int max_candidates,
     int max_detections,
@@ -69,12 +67,12 @@ cudaError_t decodeYolo11Gpu(
 
 // GPU function to find closest target to crosshair
 cudaError_t findClosestTargetGpu(
-    const Detection* d_detections,
+    const Target* d_detections,
     int num_detections,
     float crosshairX,
     float crosshairY,
     int* d_best_index,
-    Detection* d_best_target,
+    Target* d_best_target,
     cudaStream_t stream);
 
 
