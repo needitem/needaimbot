@@ -111,10 +111,10 @@ __global__ void kalmanUpdateKernel(
     
     // Measurement vector z = [x, y, w, h]
     float z[4] = {
-        meas.x + meas.width * 0.5f,
-        meas.y + meas.height * 0.5f,
-        meas.width,
-        meas.height
+        static_cast<float>(meas.x) + static_cast<float>(meas.width) * 0.5f,
+        static_cast<float>(meas.y) + static_cast<float>(meas.height) * 0.5f,
+        static_cast<float>(meas.width),
+        static_cast<float>(meas.height)
     };
     
     // Innovation: y = z - H * x
@@ -148,8 +148,8 @@ __global__ void kalmanUpdateKernel(
     
     // Estimate velocities from position change
     if (kf.hits > 0) {
-        kf.state[2] = (kf.state[0] - (meas.x + meas.width * 0.5f)) / c_dt;
-        kf.state[3] = (kf.state[1] - (meas.y + meas.height * 0.5f)) / c_dt;
+        kf.state[2] = (kf.state[0] - (static_cast<float>(meas.x) + static_cast<float>(meas.width) * 0.5f)) / c_dt;
+        kf.state[3] = (kf.state[1] - (static_cast<float>(meas.y) + static_cast<float>(meas.height) * 0.5f)) / c_dt;
     }
     
     // Covariance update: P = (I - K * H) * P
@@ -182,11 +182,11 @@ __global__ void extractPredictionsKernel(
         int outIdx = atomicAdd(numPredictions, 1);
         
         Target& pred = predictions[outIdx];
-        pred.x = kf.state[0] - kf.state[4] * 0.5f;
-        pred.y = kf.state[1] - kf.state[5] * 0.5f;
-        pred.width = kf.state[4];
-        pred.height = kf.state[5];
-        pred.trackId = kf.trackId;
+        pred.x = static_cast<int>(kf.state[0] - kf.state[4] * 0.5f);
+        pred.y = static_cast<int>(kf.state[1] - kf.state[5] * 0.5f);
+        pred.width = static_cast<int>(kf.state[4]);
+        pred.height = static_cast<int>(kf.state[5]);
+        pred.id = kf.trackId;  // Use 'id' instead of 'trackId'
         pred.confidence = min(1.0f, kf.hits / 10.0f);  // Confidence based on hits
         pred.classId = 0;  // Will be updated from measurement
     }
@@ -215,12 +215,12 @@ __global__ void createNewTracksKernel(
                 const Target& meas = measurements[measIdx];
                 
                 // Initialize state
-                kf.state[0] = meas.x + meas.width * 0.5f;
-                kf.state[1] = meas.y + meas.height * 0.5f;
+                kf.state[0] = static_cast<float>(meas.x) + static_cast<float>(meas.width) * 0.5f;
+                kf.state[1] = static_cast<float>(meas.y) + static_cast<float>(meas.height) * 0.5f;
                 kf.state[2] = 0.0f;  // vx
                 kf.state[3] = 0.0f;  // vy
-                kf.state[4] = meas.width;
-                kf.state[5] = meas.height;
+                kf.state[4] = static_cast<float>(meas.width);
+                kf.state[5] = static_cast<float>(meas.height);
                 
                 // Initialize covariance
                 for (int j = 0; j < 36; j++) kf.P[j] = 0.0f;
