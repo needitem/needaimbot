@@ -135,8 +135,6 @@ bool Config::loadConfig(const std::string& filename)
         // PID derivative stabilization defaults
         pid_d_deadband = 0.05f;
         pid_d_disable_error = 1.0f;
-        pid_d_delta_max = 3.0f;
-        pid_d_output_max = 2.0f;
         pid_output_deadzone = 0.2f;
         pid_d_warmup_frames = 3;
         
@@ -338,8 +336,6 @@ bool Config::loadConfig(const std::string& filename)
     // Derivative stabilization
     pid_d_deadband = static_cast<float>(get_double_ini("PID", "d_deadband", 0.05));
     pid_d_disable_error = static_cast<float>(get_double_ini("PID", "d_disable_error", 1.0));
-    pid_d_delta_max = static_cast<float>(get_double_ini("PID", "d_delta_max", 3.0));
-    pid_d_output_max = static_cast<float>(get_double_ini("PID", "d_output_max", 2.0));
     pid_output_deadzone = static_cast<float>(get_double_ini("PID", "output_deadzone", 0.2));
     pid_d_warmup_frames = get_long_ini("PID", "d_warmup_frames", 3);
     
@@ -621,8 +617,6 @@ bool Config::saveConfig(const std::string& filename)
     // Derivative stabilization
     file << "d_deadband = " << pid_d_deadband << "\n";
     file << "d_disable_error = " << pid_d_disable_error << "\n";
-    file << "d_delta_max = " << pid_d_delta_max << "\n";
-    file << "d_output_max = " << pid_d_output_max << "\n";
     file << "output_deadzone = " << pid_output_deadzone << "\n";
     file << "d_warmup_frames = " << pid_d_warmup_frames << "\n";
     file << "\n";

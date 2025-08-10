@@ -66,10 +66,9 @@ Eigen::Vector2f PIDController2D::calculate(const Eigen::Vector2f &error)
     float med_dx = median3(recent_delta_x[0], recent_delta_x[1], recent_delta_x[2]);
     float med_dy = median3(recent_delta_y[0], recent_delta_y[1], recent_delta_y[2]);
 
-    // Clamp derivative delta per sample to limit D kicks
-    const float DERIV_DELTA_MAX = ctx.config.pid_d_delta_max; // pixels per sample
-    derivative.x() = std::clamp(med_dx, -DERIV_DELTA_MAX, DERIV_DELTA_MAX);
-    derivative.y() = std::clamp(med_dy, -DERIV_DELTA_MAX, DERIV_DELTA_MAX);
+    // Use median derivative deltas directly without clamping
+    derivative.x() = med_dx;
+    derivative.y() = med_dy;
 
     
     // Compose PID with capped D contribution to prevent D-dominant jitter
@@ -81,10 +80,7 @@ Eigen::Vector2f PIDController2D::calculate(const Eigen::Vector2f &error)
     float i_y = ki_y * integral.y();
     float d_y = kd_y * derivative.y();
 
-    // Cap D contribution per-axis
-    const float D_OUTPUT_MAX = ctx.config.pid_d_output_max; // pixels per update
-    d_x = std::clamp(d_x, -D_OUTPUT_MAX, D_OUTPUT_MAX);
-    d_y = std::clamp(d_y, -D_OUTPUT_MAX, D_OUTPUT_MAX);
+    // No output clamp for D contribution
 
     output.x() = p_x + i_x + d_x;
     output.y() = p_y + i_y + d_y;

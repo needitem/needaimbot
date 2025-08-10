@@ -121,14 +121,7 @@ static void draw_pid_controls()
                                       "Turn off D when |error| is small")) {
         SAVE_PROFILE();
     }
-    if (UIHelpers::EnhancedSliderFloat("D Delta Max (px/sample)", &ctx.config.pid_d_delta_max, 0.1f, 10.0f, "%.2f",
-                                      "Clamp per-sample derivative delta")) {
-        SAVE_PROFILE();
-    }
-    if (UIHelpers::EnhancedSliderFloat("D Output Max (px/update)", &ctx.config.pid_d_output_max, 0.1f, 10.0f, "%.2f",
-                                      "Clamp D contribution to output")) {
-        SAVE_PROFILE();
-    }
+    // Removed D delta/output clamps from UI
     if (UIHelpers::EnhancedSliderFloat("Output Deadzone (px)", &ctx.config.pid_output_deadzone, 0.0f, 2.0f, "%.2f",
                                       "Zero very small outputs to avoid jitter")) {
         SAVE_PROFILE();

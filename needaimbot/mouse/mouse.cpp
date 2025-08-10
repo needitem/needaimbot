@@ -31,7 +31,7 @@
 
 #include "aimbot_components/PIDController2D.h"
 #include "aimbot_components/IntegratedController.h"
-#include "aimbot_components/KalmanFilter2D.h"
+// Removed Kalman filter from mouse module
 
 
 extern std::atomic<bool> aiming;
@@ -95,7 +95,6 @@ MouseThread::MouseThread(
 {
     initializeScreen(resolution, bScope_multiplier, norecoil_ms);
     pid_controller = std::make_unique<PIDController2D>(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
-    kalman_filter = std::make_unique<KalmanFilter2D>();  // Initialize Kalman filter
     initializeInputMethod(serialConnection, makcuConnection, gHub);
     
     // Initialize RapidFire
@@ -649,10 +648,7 @@ void MouseThread::resetAccumulatedStates()
         pid_controller->reset();
     }
     
-    // Reset Kalman filter
-    if (kalman_filter) {
-        kalman_filter->reset();
-    }
+    // Kalman filter removed
     
     // Reset movement accumulation
     accumulated_x_ = 0.0f;

@@ -34,10 +34,7 @@
     <ClCompile Include="overlay\\draw_profile.cpp" />
     <ClCompile Include="mouse\\input_drivers\\kmboxNet.cpp" />
     <ClCompile Include="mouse\\input_drivers\\my_enc.cpp" />
-    <ClCompile Include="mouse\\predictors\\ExponentialSmoothingPredictor.cpp" />
-    <ClCompile Include="mouse\\predictors\\KalmanFilterPredictor.cpp" />
-    <ClCompile Include="mouse\\predictors\\LinearRegressionPredictor.cpp" />
-    <ClCompile Include="mouse\\predictors\\VelocityPredictor.cpp" />
+    
     <ClCompile Include="mouse\\input_drivers\\rzctl.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -84,11 +81,7 @@
     <ClInclude Include="mouse\\input_drivers\\HidTable.h" />
     <ClInclude Include="mouse\\input_drivers\\my_enc.h" />
     <ClInclude Include="mouse\\input_drivers\\rzctl.h" />
-    <ClInclude Include="mouse\\predictors\\ExponentialSmoothingPredictor.h" />
-    <ClInclude Include="mouse\\predictors\\KalmanFilterPredictor.h" />
-    <ClInclude Include="mouse\\predictors\\LinearRegressionPredictor.h" />
-    <ClInclude Include="mouse\\predictors\\VelocityPredictor.h" />
-    <ClInclude Include="mouse\\predictors\\IPredictor.h" />
+    
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
