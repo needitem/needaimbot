@@ -466,6 +466,9 @@ void OverlayThread()
 
     while (!should_exit && !AppContext::getInstance().should_exit)
     {
+        // Track frame start time for proper FPS limiting
+        auto frame_start_time = std::chrono::high_resolution_clock::now();
+        
         // Handle Windows messages
         while (::PeekMessage(&msg, NULL, 0U, 0U, PM_REMOVE))
         {
@@ -498,8 +501,15 @@ void OverlayThread()
         // When overlay is hidden, reduce CPU usage based on target_fps setting
         if (!show_overlay)
         {
-            int delay_ms = static_cast<int>(1000.0f / ctx.config.target_fps);
-            std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
+            auto now = std::chrono::high_resolution_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - frame_start_time);
+            int target_frame_time_ms = static_cast<int>(1000.0f / ctx.config.target_fps);
+            int remaining_time_ms = target_frame_time_ms - static_cast<int>(elapsed.count());
+            
+            if (remaining_time_ms > 0)
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(remaining_time_ms));
+            }
         }
 
         if (show_overlay)

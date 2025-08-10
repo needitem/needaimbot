@@ -15,12 +15,14 @@ PIDController2D::PIDController2D(float kp_x, float ki_x, float kd_x, float kp_y,
 
 Eigen::Vector2f PIDController2D::calculate(const Eigen::Vector2f &error)
 {
-    auto now = std::chrono::high_resolution_clock::now();
+    // Use steady_clock consistently for stable dt computation
+    auto now = std::chrono::steady_clock::now();
     float dt = std::chrono::duration<float, std::nano>(now - last_time_point).count() * 1e-9f;
     last_time_point = now;
     
-    static const float MIN_DT = 1e-6f;
-    static const float MAX_DT = 0.1f;
+    // Avoid extremely small dt causing derivative spikes
+    static const float MIN_DT = 1e-3f;  // 1 ms
+    static const float MAX_DT = 0.1f;   // 100 ms
     dt = std::clamp(dt, MIN_DT, MAX_DT);
 
     constexpr float INTEGRAL_CLAMP = 100.0f;
@@ -28,17 +30,69 @@ Eigen::Vector2f PIDController2D::calculate(const Eigen::Vector2f &error)
     integral.x() = std::clamp(integral.x() + error.x() * dt, -INTEGRAL_CLAMP, INTEGRAL_CLAMP);
     integral.y() = std::clamp(integral.y() + error.y() * dt, -INTEGRAL_CLAMP, INTEGRAL_CLAMP);
 
-    const float inv_dt = 1.0f / dt;
-    float current_derivative_x = (error.x() - prev_error.x()) * inv_dt;
-    float current_derivative_y = (error.y() - prev_error.y()) * inv_dt;
+    // Derivative based on per-sample delta (unit: pixels per sample),
+    // avoids huge spikes when dt fluctuates.
+    auto& ctx = AppContext::getInstance();
+    const float DERIV_DEADBAND = ctx.config.pid_d_deadband; // pixels
+    float delta_x = error.x() - prev_error.x();
+    float delta_y = error.y() - prev_error.y();
+    if (std::fabs(delta_x) < DERIV_DEADBAND) delta_x = 0.0f;
+    if (std::fabs(delta_y) < DERIV_DEADBAND) delta_y = 0.0f;
 
-    derivative.x() = current_derivative_x;
-    derivative.y() = current_derivative_y;
+    // Disable D when very close to target to prevent dithering
+    const float ERROR_FOR_D_DISABLE = ctx.config.pid_d_disable_error; // pixels
+    if (std::fabs(error.x()) < ERROR_FOR_D_DISABLE) delta_x = 0.0f;
+    if (std::fabs(error.y()) < ERROR_FOR_D_DISABLE) delta_y = 0.0f;
+
+    // During warmup frames, suppress derivative entirely
+    // Warmup frames configurable via config
+    if (warmup_frames_remaining > 0) {
+        delta_x = 0.0f;
+        delta_y = 0.0f;
+        warmup_frames_remaining--;
+    }
+
+    // Store deltas in tiny ring buffer and use median-of-three for robustness
+    recent_delta_x[delta_index] = delta_x;
+    recent_delta_y[delta_index] = delta_y;
+    delta_index = (delta_index + 1) % 3;
+
+    auto median3 = [](float a, float b, float c) {
+        if ((a <= b && b <= c) || (c <= b && b <= a)) return b;
+        if ((b <= a && a <= c) || (c <= a && a <= b)) return a;
+        return c;
+    };
+
+    float med_dx = median3(recent_delta_x[0], recent_delta_x[1], recent_delta_x[2]);
+    float med_dy = median3(recent_delta_y[0], recent_delta_y[1], recent_delta_y[2]);
+
+    // Clamp derivative delta per sample to limit D kicks
+    const float DERIV_DELTA_MAX = ctx.config.pid_d_delta_max; // pixels per sample
+    derivative.x() = std::clamp(med_dx, -DERIV_DELTA_MAX, DERIV_DELTA_MAX);
+    derivative.y() = std::clamp(med_dy, -DERIV_DELTA_MAX, DERIV_DELTA_MAX);
 
     
+    // Compose PID with capped D contribution to prevent D-dominant jitter
     Eigen::Vector2f output;
-    output.x() = kp_x * error.x() + ki_x * integral.x() + kd_x * derivative.x();
-    output.y() = kp_y * error.y() + ki_y * integral.y() + kd_y * derivative.y();
+    float p_x = kp_x * error.x();
+    float i_x = ki_x * integral.x();
+    float d_x = kd_x * derivative.x();
+    float p_y = kp_y * error.y();
+    float i_y = ki_y * integral.y();
+    float d_y = kd_y * derivative.y();
+
+    // Cap D contribution per-axis
+    const float D_OUTPUT_MAX = ctx.config.pid_d_output_max; // pixels per update
+    d_x = std::clamp(d_x, -D_OUTPUT_MAX, D_OUTPUT_MAX);
+    d_y = std::clamp(d_y, -D_OUTPUT_MAX, D_OUTPUT_MAX);
+
+    output.x() = p_x + i_x + d_x;
+    output.y() = p_y + i_y + d_y;
+
+    // Remove micro-movements that cause visible jitter but no real correction
+    const float OUTPUT_DEADZONE = ctx.config.pid_output_deadzone; // pixels
+    if (std::fabs(output.x()) < OUTPUT_DEADZONE) output.x() = 0.0f;
+    if (std::fabs(output.y()) < OUTPUT_DEADZONE) output.y() = 0.0f;
 
     prev_error = error;
     return output;
@@ -49,7 +103,10 @@ void PIDController2D::reset()
     prev_error = Eigen::Vector2f::Zero();
     integral = Eigen::Vector2f::Zero();
     derivative = Eigen::Vector2f::Zero();
+    // Keep clock consistent with calculate()
     last_time_point = std::chrono::steady_clock::now();
+    // Small warmup to avoid initial derivative kick
+    warmup_frames_remaining = AppContext::getInstance().config.pid_d_warmup_frames;
 }
 
 void PIDController2D::updateSeparatedParameters(float kp_x, float ki_x, float kd_x,

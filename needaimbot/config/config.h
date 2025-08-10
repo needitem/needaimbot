@@ -220,17 +220,14 @@ public:
     double kp_y;
     double ki_y;
     double kd_y;
-    
-    
-    // Error-based scaling for jitter and overshoot control
-    struct ErrorScalingRule {
-        float error_threshold;  // Error magnitude threshold
-        float scale_factor;     // Scale factor to apply (0.0 - 1.0)
-        
-        ErrorScalingRule(float threshold = 0.0f, float scale = 1.0f) 
-            : error_threshold(threshold), scale_factor(scale) {}
-    };
-    std::vector<ErrorScalingRule> error_scaling_rules;
+
+    // PID derivative stabilization parameters (UI adjustable)
+    float pid_d_deadband;          // pixels
+    float pid_d_disable_error;     // pixels
+    float pid_d_delta_max;         // pixels per sample
+    float pid_d_output_max;        // pixels per update
+    float pid_output_deadzone;     // pixels
+    int   pid_d_warmup_frames;     // frames
 
     // SORT Tracker parameters
     bool enable_tracking;       // Enable/disable target tracking

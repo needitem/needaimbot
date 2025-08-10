@@ -428,37 +428,19 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     // Debug logging for PID control values
 
 
-    // 원래의 PID 로직 사용
-    float error_magnitude = std::sqrt(error_x * error_x + error_y * error_y);
-    
+    // Simple PID calculation without hysteresis
     Eigen::Vector2f error(error_x, error_y);
     auto pid_start_time = std::chrono::steady_clock::now();
     
     Eigen::Vector2f pid_output = pid_controller->calculate(error);
     
-        
     auto pid_end_time = std::chrono::steady_clock::now();
     float pid_duration_ms = std::chrono::duration<float, std::milli>(pid_end_time - pid_start_time).count();
     ctx.g_current_pid_calc_time_ms.store(pid_duration_ms, std::memory_order_relaxed);
     ctx.add_to_history(ctx.g_pid_calc_time_history, pid_duration_ms, ctx.g_pid_calc_history_mutex);
 
-    float error_scale_factor = 1.0f;
-    
-    for (const auto& rule : ctx.config.error_scaling_rules) {
-        if (error_magnitude >= rule.error_threshold) {
-            error_scale_factor = rule.scale_factor;
-            break;
-        }
-    }
-    
-    move_x = pid_output.x() * current_move_scale_x * error_scale_factor;
-    move_y = pid_output.y() * current_move_scale_y * error_scale_factor;
-    
-    // Debug logging for final move values
-
-    // Simple dead zone without adaptive threshold
-    if (std::abs(move_x) < DEAD_ZONE) move_x = 0.0f;
-    if (std::abs(move_y) < DEAD_ZONE) move_y = 0.0f;
+    move_x = pid_output.x() * current_move_scale_x;
+    move_y = pid_output.y() * current_move_scale_y;
     
     // Process accumulated movement
     auto [dx_int, dy_int] = processAccumulatedMovement(move_x, move_y);
@@ -602,18 +584,13 @@ std::pair<int, int> MouseThread::processAccumulatedMovement(float move_x, float 
     accumulated_x_ += move_x;
     accumulated_y_ += move_y;
     
-    int dx_int = 0, dy_int = 0;
+    // Always floor the accumulated values
+    int dx_int = static_cast<int>(std::floor(accumulated_x_));
+    int dy_int = static_cast<int>(std::floor(accumulated_y_));
     
-    // Simple rounding without dithering (dithering was ineffective)
-    // Only move when accumulated movement exceeds threshold
-    if (std::abs(accumulated_x_) >= MICRO_MOVEMENT_THRESHOLD) {
-        dx_int = static_cast<int>(std::round(accumulated_x_));
-        accumulated_x_ -= dx_int;
-    }
-    if (std::abs(accumulated_y_) >= MICRO_MOVEMENT_THRESHOLD) {
-        dy_int = static_cast<int>(std::round(accumulated_y_));
-        accumulated_y_ -= dy_int;
-    }
+    // Subtract the integer part from accumulated values
+    accumulated_x_ -= dx_int;
+    accumulated_y_ -= dy_int;
     
     return {dx_int, dy_int};
 }

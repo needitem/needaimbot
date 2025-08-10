@@ -17,159 +17,6 @@
 
 // GHub version check removed - not needed
 
-static void draw_error_scaling_controls()
-{
-    auto& ctx = AppContext::getInstance();
-    
-    UIHelpers::BeginCard("Error-Based Scaling");
-    
-    UIHelpers::BeautifulText("Reduces jitter when error is large (recoil compensation)", UIHelpers::GetAccentColor(0.8f));
-    UIHelpers::CompactSpacer();
-    
-    // Static temporary rules for editing
-    static std::vector<Config::ErrorScalingRule> temp_rules;
-    static bool has_unsaved_changes = false;
-    static size_t last_config_size = 0;
-    
-    // Check if config has changed (e.g., after reload or profile switch)
-    // This ensures temp_rules stays in sync with loaded config
-    if (!has_unsaved_changes && (temp_rules.empty() || last_config_size != ctx.config.error_scaling_rules.size())) {
-        temp_rules = ctx.config.error_scaling_rules;
-        last_config_size = ctx.config.error_scaling_rules.size();
-        has_unsaved_changes = false;
-    }
-    
-    // Also check if the actual values have changed (in case size is same but values differ)
-    if (!has_unsaved_changes && temp_rules.size() == ctx.config.error_scaling_rules.size()) {
-        bool values_differ = false;
-        for (size_t i = 0; i < temp_rules.size(); i++) {
-            if (temp_rules[i].error_threshold != ctx.config.error_scaling_rules[i].error_threshold ||
-                temp_rules[i].scale_factor != ctx.config.error_scaling_rules[i].scale_factor) {
-                values_differ = true;
-                break;
-            }
-        }
-        if (values_differ) {
-            temp_rules = ctx.config.error_scaling_rules;
-            has_unsaved_changes = false;
-        }
-    }
-    
-    // Display current rules
-    ImGui::Text("Current Scaling Rules:");
-    ImGui::SameLine();
-    
-    // Show unsaved changes indicator
-    if (has_unsaved_changes) {
-        ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "(Unsaved Changes)");
-    }
-    
-    UIHelpers::CompactSpacer();
-    
-    // Sort rules by threshold for display
-    std::sort(temp_rules.begin(), temp_rules.end(), 
-        [](const Config::ErrorScalingRule& a, const Config::ErrorScalingRule& b) {
-            return a.error_threshold > b.error_threshold;
-        });
-    
-    // Table for rules
-    if (ImGui::BeginTable("error_scaling_table", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
-        ImGui::TableSetupColumn("Error Threshold", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("Scale Factor", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_WidthStretch, 0.2f);
-        ImGui::TableHeadersRow();
-        
-        for (size_t i = 0; i < temp_rules.size(); i++) {
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            
-            ImGui::PushID(static_cast<int>(i));
-            
-            float threshold = temp_rules[i].error_threshold;
-            if (ImGui::InputFloat("##threshold", &threshold, 0.0f, 0.0f, "%.0f")) {
-                temp_rules[i].error_threshold = threshold;
-                has_unsaved_changes = true;
-            }
-            
-            ImGui::TableSetColumnIndex(1);
-            float scale = temp_rules[i].scale_factor * 100.0f; // Convert to percentage
-            if (ImGui::SliderFloat("##scale", &scale, 0.0f, 100.0f, "%.0f%%")) {
-                temp_rules[i].scale_factor = scale / 100.0f;
-                has_unsaved_changes = true;
-            }
-            
-            ImGui::TableSetColumnIndex(2);
-            if (ImGui::Button("Remove##remove")) {
-                temp_rules.erase(temp_rules.begin() + i);
-                has_unsaved_changes = true;
-            }
-            
-            ImGui::PopID();
-        }
-        
-        ImGui::EndTable();
-    }
-    
-    UIHelpers::Spacer();
-    
-    // Add new rule
-    static float new_threshold = 200.0f;
-    static float new_scale = 30.0f;
-    
-    ImGui::Text("Add New Rule:");
-    ImGui::PushItemWidth(80);
-    ImGui::InputFloat("Threshold", &new_threshold, 0.0f, 0.0f, "%.0f");
-    ImGui::SameLine();
-    ImGui::InputFloat("Scale %", &new_scale, 0.0f, 0.0f, "%.0f");
-    ImGui::PopItemWidth();
-    ImGui::SameLine();
-    
-    if (ImGui::Button("Add Rule")) {
-        temp_rules.push_back(Config::ErrorScalingRule(new_threshold, new_scale / 100.0f));
-        has_unsaved_changes = true;
-    }
-    
-    UIHelpers::Spacer();
-    
-    // Apply and Cancel buttons
-    if (has_unsaved_changes) {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.7f, 0.0f, 0.9f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.0f, 0.8f, 0.0f, 1.0f));
-        if (ImGui::Button("Apply Changes", ImVec2(100, 0))) {
-            // Apply changes to actual config
-            ctx.config.error_scaling_rules = temp_rules;
-            SAVE_PROFILE();
-            has_unsaved_changes = false;
-        }
-        ImGui::PopStyleColor(2);
-        
-        ImGui::SameLine();
-        
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.0f, 0.0f, 0.9f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.0f, 0.0f, 1.0f));
-        if (ImGui::Button("Cancel", ImVec2(60, 0))) {
-            // Revert to saved config
-            temp_rules = ctx.config.error_scaling_rules;
-            has_unsaved_changes = false;
-        }
-        ImGui::PopStyleColor(2);
-    } else {
-        // Reset button when no changes
-        if (ImGui::Button("Reset to Defaults", ImVec2(120, 0))) {
-            temp_rules.clear();
-            temp_rules.push_back(Config::ErrorScalingRule(150.0f, 0.3f));
-            temp_rules.push_back(Config::ErrorScalingRule(100.0f, 0.5f));
-            temp_rules.push_back(Config::ErrorScalingRule(50.0f, 0.8f));
-            has_unsaved_changes = true;
-        }
-    }
-    
-    UIHelpers::Spacer();
-    UIHelpers::BeautifulText("Tip: Higher error thresholds apply first. When error >= threshold, movement is scaled down.", UIHelpers::GetAccentColor(0.6f));
-    
-    UIHelpers::EndCard();
-}
-
 static void draw_pid_controls()
 {
     auto& ctx = AppContext::getInstance();
@@ -260,6 +107,40 @@ static void draw_pid_controls()
         ImGui::SetTooltip("Fast tracking, may oscillate");
     }
     
+    UIHelpers::EndCard();
+
+    // Derivative stabilization advanced controls
+    UIHelpers::BeginCard("PID Derivative Stabilization");
+    UIHelpers::SettingsSubHeader("Noise Guards and Limits");
+
+    if (UIHelpers::EnhancedSliderFloat("D Deadband (px)", &ctx.config.pid_d_deadband, 0.0f, 2.0f, "%.3f",
+                                      "Ignore tiny error deltas below this")) {
+        SAVE_PROFILE();
+    }
+    if (UIHelpers::EnhancedSliderFloat("Disable D Near Error (px)", &ctx.config.pid_d_disable_error, 0.0f, 5.0f, "%.3f",
+                                      "Turn off D when |error| is small")) {
+        SAVE_PROFILE();
+    }
+    if (UIHelpers::EnhancedSliderFloat("D Delta Max (px/sample)", &ctx.config.pid_d_delta_max, 0.1f, 10.0f, "%.2f",
+                                      "Clamp per-sample derivative delta")) {
+        SAVE_PROFILE();
+    }
+    if (UIHelpers::EnhancedSliderFloat("D Output Max (px/update)", &ctx.config.pid_d_output_max, 0.1f, 10.0f, "%.2f",
+                                      "Clamp D contribution to output")) {
+        SAVE_PROFILE();
+    }
+    if (UIHelpers::EnhancedSliderFloat("Output Deadzone (px)", &ctx.config.pid_output_deadzone, 0.0f, 2.0f, "%.2f",
+                                      "Zero very small outputs to avoid jitter")) {
+        SAVE_PROFILE();
+    }
+    {
+        int warm = ctx.config.pid_d_warmup_frames;
+        if (ImGui::SliderInt("D Warmup Frames", &warm, 0, 10, "%d frames")) {
+            ctx.config.pid_d_warmup_frames = warm;
+            SAVE_PROFILE();
+        }
+    }
+
     UIHelpers::EndCard();
 }
 
@@ -432,9 +313,6 @@ void draw_mouse()
     UIHelpers::Spacer();
     
     draw_pid_controls();
-    UIHelpers::Spacer();
-    
-    draw_error_scaling_controls();
     UIHelpers::Spacer();
     
     draw_input_method_settings();

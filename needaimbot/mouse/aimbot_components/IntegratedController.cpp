@@ -38,8 +38,7 @@ IntegratedController::calculateMovement() {
     auto [final_movement, strategy] = resolveConflict(pid_movement, recoil_movement);
     debug.strategy = strategy;
     
-    // 3. 스무딩 적용
-    final_movement = applySmoothingSimple(final_movement);
+    // 3. 스무딩 제거 (원 요청: EMA 삭제)
     debug.final_movement = final_movement;
     
     // 충돌 점수 계산 (디버그용)
@@ -49,7 +48,7 @@ IntegratedController::calculateMovement() {
         debug.conflict_score = 0.0f;
     }
     
-    return {final_movement, debug};
+    return {debug.final_movement, debug};
 }
 
 Eigen::Vector2f IntegratedController::calculatePIDMovement() {
