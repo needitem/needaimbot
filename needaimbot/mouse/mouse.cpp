@@ -418,8 +418,7 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         target_y = target.y + target.height * y_offset_multiplier;
     }
     
-    // Kalman filtering is now done in the detector/tracker level
-    // Not in mouse movement to avoid double filtering and delays
+    // Do not apply Kalman/prediction at mouse level
     
     float error_x = target_x - current_center_x;
     float error_y = target_y - current_center_y;
