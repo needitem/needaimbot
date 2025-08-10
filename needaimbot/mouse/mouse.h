@@ -8,6 +8,7 @@
 #include "../modules/eigen/include/Eigen/Core"
 #include "../modules/eigen/include/Eigen/Dense"
 #include <shared_mutex>
+#include <array>
 #include <memory>
 #include <functional>
 #include <chrono>
@@ -68,13 +69,11 @@ private:
 
     int last_applied_dx_ = 0;
     
-    
     // Movement accumulation members (moved from static variables)
     float accumulated_x_ = 0.0f;
     float accumulated_y_ = 0.0f;
     
     // Constants
-    static constexpr float DEAD_ZONE = 0.3f;
     static constexpr float MICRO_MOVEMENT_THRESHOLD = 0.5f;
     static constexpr float SMALL_ERROR_THRESHOLD = 10.0f;
     static constexpr float MEDIUM_ERROR_THRESHOLD = 50.0f;
