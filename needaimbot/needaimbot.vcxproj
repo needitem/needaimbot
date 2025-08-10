@@ -41,7 +41,7 @@
     <ClCompile Include="mouse\\input_drivers\\my_enc.cpp" />
     <ClCompile Include="mouse\\aimbot_components\\PIDController2D.cpp" />
     <ClCompile Include="mouse\\aimbot_components\\IntegratedController.cpp" />
-    <ClCompile Include="mouse\\aimbot_components\\KalmanFilter2D.cpp" />
+    
     <ClCompile Include="tracking\\Hungarian.cpp" />
     <ClCompile Include="tracking\\SimpleKalmanTracker.cpp" />
     <ClCompile Include="tracking\\SORTTracker.cpp" />
@@ -116,11 +116,11 @@
     <ClInclude Include="mouse\aimbot_components\AimbotTarget.h" />
     <ClInclude Include="mouse\aimbot_components\PIDController2D.h" />
     <ClInclude Include="mouse\aimbot_components\IntegratedController.h" />
-    <ClInclude Include="mouse\aimbot_components\KalmanFilter2D.h" />
+    
     <ClInclude Include="tracking\Hungarian.h" />
     <ClInclude Include="tracking\SimpleKalmanTracker.h" />
     <ClInclude Include="tracking\SORTTracker.h" />
-    <ClInclude Include="mouse\ExponentialSmoothingPredictor.h" />
+    
     <ClInclude Include="mouse\ghub.h" />
     <ClInclude Include="mouse\HidTable.h" />
     <ClInclude Include="mouse\InputMethod.h" />
@@ -132,17 +132,16 @@
     <ClInclude Include="mouse\input_drivers\rzctl.h" />
     <ClInclude Include="mouse\input_drivers\SerialConnection.h" />
     <ClInclude Include="mouse\input_drivers\MakcuConnection.h" />
-    <ClInclude Include="mouse\IPredictor.h" />
-    <ClInclude Include="mouse\KalmanFilterPredictor.h" />
+    
     <ClInclude Include="mouse\kmboxNet.h" />
-    <ClInclude Include="mouse\LinearRegressionPredictor.h" />
+    
     <ClInclude Include="mouse\mouse.h" />
     <ClInclude Include="mouse\rapidfire.h" />
     <ClInclude Include="mouse\my_enc.h" />
     <ClInclude Include="mouse\PIDController2D.h" />
     <ClInclude Include="mouse\rzctl.h" />
     <ClInclude Include="mouse\AimbotTarget.h" />
-    <ClInclude Include="mouse\VelocityPredictor.h" />
+    
     <ClInclude Include="overlay\common_helpers.h" />
     <ClInclude Include="overlay\draw_settings.h" />
     <ClInclude Include="overlay\draw_offset.h" />

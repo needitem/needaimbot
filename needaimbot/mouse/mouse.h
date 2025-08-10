@@ -31,7 +31,6 @@ class PIDController2D;
 class InputMethod;
 class SerialConnection;
 class GhubMouse; 
-class KalmanFilter2D;
 struct Point2D { float x, y; }; 
 
 
@@ -39,7 +38,6 @@ class MouseThread
 {
 private:
     std::unique_ptr<PIDController2D> pid_controller;
-    std::unique_ptr<KalmanFilter2D> kalman_filter;  // Add Kalman filter
     std::unique_ptr<InputMethod> input_method;
     std::mutex input_method_mutex;
     mutable std::mutex member_data_mutex_;
@@ -83,7 +81,6 @@ private:
     static constexpr float FAR_RANGE_SCALE = 1.1f;
     static constexpr float MIN_DELTA_TIME = 0.001f;
     static constexpr float MAX_DELTA_TIME = 0.1f;
-    static constexpr float PREDICTION_TIME_FACTOR = 0.001f;
     static constexpr float SMOOTHING_INCREASE_FACTOR = 0.001f;
     static constexpr float MAX_ADDITIONAL_SMOOTHING = 0.4f;
     
