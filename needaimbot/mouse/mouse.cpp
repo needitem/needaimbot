@@ -31,7 +31,7 @@
 
 #include "aimbot_components/PIDController2D.h"
 #include "aimbot_components/IntegratedController.h"
-#include "aimbot_components/KalmanFilter2D.h"
+// Removed Kalman filter include for mouse-level prediction
 
 
 extern std::atomic<bool> aiming;
@@ -95,7 +95,6 @@ MouseThread::MouseThread(
 {
     initializeScreen(resolution, bScope_multiplier, norecoil_ms);
     pid_controller = std::make_unique<PIDController2D>(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
-    kalman_filter = std::make_unique<KalmanFilter2D>();  // Initialize Kalman filter
     initializeInputMethod(serialConnection, makcuConnection, gHub);
     
     // Initialize RapidFire
@@ -419,8 +418,7 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         target_y = target.y + target.height * y_offset_multiplier;
     }
     
-    // Kalman filtering is now done in the detector/tracker level
-    // Not in mouse movement to avoid double filtering and delays
+    // Do not apply Kalman/prediction at mouse level
     
     float error_x = target_x - current_center_x;
     float error_y = target_y - current_center_y;
@@ -672,10 +670,7 @@ void MouseThread::resetAccumulatedStates()
         pid_controller->reset();
     }
     
-    // Reset Kalman filter
-    if (kalman_filter) {
-        kalman_filter->reset();
-    }
+    // Kalman filter removed
     
     // Reset movement accumulation
     accumulated_x_ = 0.0f;
