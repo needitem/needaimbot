@@ -131,12 +131,14 @@ bool Config::loadConfig(const std::string& filename)
         kp_y = 0.4; 
         ki_y = 0.0;
         kd_y = 0.15;
-        
-        // Initialize default error scaling rules
-        error_scaling_rules.clear();
-        error_scaling_rules.push_back(ErrorScalingRule(150.0f, 0.3f));  // Large error: 30% scale
-        error_scaling_rules.push_back(ErrorScalingRule(100.0f, 0.5f));  // Medium error: 50% scale
-        error_scaling_rules.push_back(ErrorScalingRule(50.0f, 0.8f));   // Small error: 80% scale
+
+        // PID derivative stabilization defaults
+        pid_d_deadband = 0.05f;
+        pid_d_disable_error = 1.0f;
+        pid_d_delta_max = 3.0f;
+        pid_d_output_max = 2.0f;
+        pid_output_deadzone = 0.2f;
+        pid_d_warmup_frames = 3;
         
         // Initialize SORT tracker parameters
         enable_tracking = true;
@@ -332,43 +334,15 @@ bool Config::loadConfig(const std::string& filename)
     kp_y = get_double_ini("PID", "kp_y", 0.4);
     ki_y = get_double_ini("PID", "ki_y", 0.0);
     kd_y = get_double_ini("PID", "kd_y", 0.15);
+
+    // Derivative stabilization
+    pid_d_deadband = static_cast<float>(get_double_ini("PID", "d_deadband", 0.05));
+    pid_d_disable_error = static_cast<float>(get_double_ini("PID", "d_disable_error", 1.0));
+    pid_d_delta_max = static_cast<float>(get_double_ini("PID", "d_delta_max", 3.0));
+    pid_d_output_max = static_cast<float>(get_double_ini("PID", "d_output_max", 2.0));
+    pid_output_deadzone = static_cast<float>(get_double_ini("PID", "output_deadzone", 0.2));
+    pid_d_warmup_frames = get_long_ini("PID", "d_warmup_frames", 3);
     
-    
-    // Load error scaling rules
-    error_scaling_rules.clear();
-    int num_rules = get_long_ini("PID", "error_scaling_rule_count", -1);
-    
-    // If num_rules is -1, it means the key doesn't exist (new profile or old config)
-    if (num_rules == -1) {
-        // Load default rules for new profiles
-        error_scaling_rules.push_back(ErrorScalingRule(150.0f, 0.3f));
-        error_scaling_rules.push_back(ErrorScalingRule(100.0f, 0.5f));
-        error_scaling_rules.push_back(ErrorScalingRule(50.0f, 0.8f));
-    } else if (num_rules > 0) {
-        // Load saved rules
-        for (int i = 0; i < num_rules; i++) {
-            std::string prefix = "error_scaling_rule_" + std::to_string(i) + "_";
-            std::string threshold_key = prefix + "threshold";
-            std::string scale_key = prefix + "scale";
-            
-            // Get values with proper defaults
-            float threshold = static_cast<float>(get_double_ini("PID", threshold_key.c_str(), 0.0));
-            float scale = static_cast<float>(get_double_ini("PID", scale_key.c_str(), 1.0));
-            
-            // Validate and add rule
-            if (threshold > 0.0f && scale >= 0.0f && scale <= 1.0f) {
-                error_scaling_rules.push_back(ErrorScalingRule(threshold, scale));
-            }
-        }
-        
-        // If we couldn't load any valid rules, add defaults
-        if (error_scaling_rules.empty()) {
-            error_scaling_rules.push_back(ErrorScalingRule(150.0f, 0.3f));
-            error_scaling_rules.push_back(ErrorScalingRule(100.0f, 0.5f));
-            error_scaling_rules.push_back(ErrorScalingRule(50.0f, 0.8f));
-        }
-    }
-    // If num_rules is 0, keep the list empty (user explicitly wants no rules)
 
     // Load SORT tracker parameters
     enable_tracking = get_bool_ini("Tracking", "enable_tracking", true);
@@ -644,14 +618,13 @@ bool Config::saveConfig(const std::string& filename)
     file << "kp_y = " << kp_y << "\n";
     file << "ki_y = " << ki_y << "\n";
     file << "kd_y = " << kd_y << "\n";
-    
-    // Save error scaling rules
-    file << "error_scaling_rule_count = " << error_scaling_rules.size() << "\n";
-    for (size_t i = 0; i < error_scaling_rules.size(); i++) {
-        std::string prefix = "error_scaling_rule_" + std::to_string(i) + "_";
-        file << prefix << "threshold = " << error_scaling_rules[i].error_threshold << "\n";
-        file << prefix << "scale = " << error_scaling_rules[i].scale_factor << "\n";
-    }
+    // Derivative stabilization
+    file << "d_deadband = " << pid_d_deadband << "\n";
+    file << "d_disable_error = " << pid_d_disable_error << "\n";
+    file << "d_delta_max = " << pid_d_delta_max << "\n";
+    file << "d_output_max = " << pid_d_output_max << "\n";
+    file << "output_deadzone = " << pid_output_deadzone << "\n";
+    file << "d_warmup_frames = " << pid_d_warmup_frames << "\n";
     file << "\n";
 
     // Save SORT tracker parameters

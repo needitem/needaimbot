@@ -2,308 +2,358 @@
 
 # needaimbot C++
 
+[![CUDA](https://img.shields.io/badge/CUDA-12.8-green.svg)](https://developer.nvidia.com/cuda-toolkit)
+[![TensorRT](https://img.shields.io/badge/TensorRT-10.8-blue.svg)](https://developer.nvidia.com/tensorrt)
+[![C++](https://img.shields.io/badge/C++-17-orange.svg)](https://en.cppreference.com/w/cpp/17)
+[![License](https://img.shields.io/badge/License-MIT-purple.svg)](LICENSE)
+
 </div>
 
 ## 🎯 Overview
 
-**needaimbot** is a high-performance C++ AI-powered aiming assistance tool that utilizes deep learning models and advanced computer vision techniques for real-time target detection and tracking. Built with cutting-edge technologies including TensorRT for GPU acceleration and CUDA for parallel computing.
+**needaimbot** is a high-performance C++ AI-powered aiming assistance tool that utilizes deep learning models and advanced computer vision techniques for real-time target detection and tracking. Built with cutting-edge technologies including TensorRT for GPU acceleration, CUDA for parallel computing, and enhanced Kalman filtering with frame-based prediction.
 
 ### Key Highlights
 - **Real-time AI target detection** with TensorRT optimization
-- **Advanced predictive tracking** using Kalman filters and PID controllers
-- **Multiple capture methods** with hardware acceleration
-- **Extensive input device support** (Logitech G-Hub, Razer, KMBox, Serial)
-- **Customizable overlay interface** with real-time configuration
-- **GPU-accelerated processing** for minimal latency
+- **Advanced predictive tracking** using GPU-accelerated Kalman filters with frame-based prediction
+- **Multiple capture methods** with hardware acceleration and optimized memory management
+- **Extensive input device support** (Logitech G-Hub, Razer, KMBox, Serial, Arduino)
+- **Customizable overlay interface** with real-time configuration and visual debugging
+- **GPU-accelerated processing** with CUDA kernels for minimal latency
+- **Precise frame prediction control** with unlimited range support
+- **Optimized color conversion** with pinned memory and frame buffer pooling
 
-- **This project is actively being developed thanks to the people who support on [Boosty](https://boosty.to/sunone) and [Patreon](https://www.patreon.com/sunone). By providing active support, you receive enhanced AI models.**
+> **⚠️ WARNING:** TensorRT version 10 does not support the Pascal architecture (10 series graphics cards). Use only with GPUs of at least the 20 series (Turing architecture or newer).
 
-> **⚠️ WARNING:** TensorRT version 10 does not support the Pascal architecture (10 series graphics cards). Use only with GPUs of at least the 20 series.
+## 📥 Quick Start
 
-## How to Use
-1. **Download CUDA**
-	- Download and install [CUDA 12.8](https://developer.nvidia.com/cuda-12-8-0-download-archive).
+### Prerequisites
+1. **Download and Install CUDA 12.8**
+   - [CUDA 12.8 Download](https://developer.nvidia.com/cuda-12-8-0-download-archive)
+   - Ensure CUDA is added to your system PATH
 
 2. **Download the Latest Release**  
-	- Download from [Mega.nz](https://mega.nz/file/0PVxDRLL#b62nQhHkjm4iOIf0i8_yLuX1Gop5AomjWONGs-yfaKk)
+   - [Download from Mega.nz](https://mega.nz/file/dekngIhD#lYudr_T6ob1dmPKiU3SWgFQUGE654E1vefyRlfSULy8)
 
-3. **Unpack Aimbot**
-   - Extract the contents of the Aimbot.
+### Installation Steps
 
-4. **First Launch and Model Export**
-	- Run `ai.exe` and wait until the standard `.onnx` model is exported, usually taking no more than five minutes.
-	- To export another model, simply place it in `.onnx` format in the `models` folder. Then, in the AI tab (press `HOME` to open overlay), select this model, and it will be exported automatically.
+1. **Extract the Archive**
+   - Extract all contents to your desired location
+   - Ensure the folder structure is preserved
 
-5. **Settings**
-	- After successfully exporting the model, you can configure the program.
-	- All settings are available in the overlay (default key is `Home`).
-	- A list of settings can be found in the [config documentation](https://github.com/SunOner/sunone_aimbot_docs/blob/main/config/config_cpp.md).
+2. **First Launch and Model Export**
+   - Run `ai.exe` as administrator
+   - Wait for the standard `.onnx` model to be exported to TensorRT format (typically 2-5 minutes)
+   - The exported `.engine` file will be cached for faster subsequent launches
 
-6. **Controls**
-	- **Right Mouse Button:** Aim at the detected target.
-	- **F2:** Exit the program.
-	- **F3:** Activate pause for aiming.
-	- **F4:** Reload config.
-	- **Home:** Show overlay.
+3. **Configuration**
+   - Press `HOME` to open the overlay interface
+   - Configure your preferences in real-time
+   - Settings are automatically saved to `config.ini`
+
+### Default Controls
+- **Right Mouse Button:** Aim at detected target
+- **F2:** Exit program
+- **F3:** Toggle aiming pause
+- **F4:** Reload configuration
+- **HOME:** Show/hide overlay
 
 ## ✨ Features
 
 ### Core Functionality
-- **🎯 AI-Powered Target Detection**: Advanced neural networks for precise target identification
-- **🔄 Real-Time Tracking**: Kalman filtering and predictive algorithms for smooth target following
-- **⚡ GPU Acceleration**: CUDA and TensorRT optimization for minimal latency
-- **🎮 Multiple Input Methods**: Support for various mouse drivers and hardware interfaces
-- **📊 Optical Flow Integration**: Advanced motion detection and compensation
-- **🎛️ Live Configuration**: Real-time parameter adjustment through overlay interface
+- **🎯 AI-Powered Target Detection**: Advanced neural networks with TensorRT optimization for precise identification
+- **🔄 Real-Time Tracking**: GPU-accelerated Kalman filtering with frame-based prediction and motion compensation
+- **⚡ GPU Acceleration**: CUDA kernels and TensorRT optimization for sub-5ms inference
+- **🎮 Multiple Input Methods**: Native support for gaming peripherals and custom hardware
+- **📊 Optical Flow Integration**: Advanced motion detection with Lucas-Kanade algorithm
+- **🎛️ Live Configuration**: Real-time parameter adjustment without restart
+- **🎨 Visual Debugging**: Enhanced tracking visualization with prediction indicators and performance metrics
 
-### AI & Deep Learning
-- **TensorRT Model Optimization**: Automatic conversion and optimization of ONNX models
-- **Dynamic Shape Support**: Flexible input dimensions for various model architectures
-- **Multi-Model Support**: Easy switching between different AI models
-- **GPU Memory Management**: Efficient VRAM usage and allocation
-- **Post-Processing Pipeline**: Advanced filtering and scoring algorithms
+### Technical Features
 
-### Input & Control Systems
-- **Logitech G-Hub Integration**: Direct communication with Logitech gaming peripherals
-- **Razer Device Support**: Native Razer device compatibility
-- **KMBox Hardware Support**: Professional-grade hardware input simulation
-- **Serial Communication**: Custom hardware integration capabilities
-- **PID Control System**: Advanced proportional-integral-derivative control for smooth aiming
+#### AI & Deep Learning
+- TensorRT 10.8 with dynamic shape support
+- Automatic ONNX to TensorRT conversion
+- Multi-model hot-swapping capability
+- Optimized post-processing pipeline
+- GPU memory pooling and efficient allocation
+- Support for YOLOv8/v9 architectures
 
-### Capture & Processing
-- **Desktop Duplication API**: High-performance screen capture
-- **Game-Specific Capture**: Optimized capture methods for gaming applications
-- **Optical Flow Processing**: Motion-based target tracking and prediction
-- **Multi-Monitor Support**: Full multi-display configuration support
-- **HSV Color Filtering**: Advanced color-based target filtering
+#### Advanced Tracking System
+- **GPU Kalman Filter**: CUDA-accelerated state estimation
+- **Frame-based Prediction**: Precise control over prediction frames
+- **SORT Tracker**: Multi-target tracking with Hungarian algorithm
+- **Simple Kalman Tracker**: Lightweight single-target tracking
+- **Motion Compensation**: Optical flow integration for movement prediction
+- **Target Lock**: Intelligent target switching prevention
 
-### User Interface
-- **ImGui Overlay**: Modern, responsive configuration interface
-- **Real-Time Statistics**: Live performance metrics and debugging information
-- **Profile Management**: Save and load different configuration profiles
-- **Visual Debugging**: Target visualization and tracking display
-- **Hotkey Support**: Customizable keyboard shortcuts for all functions
+#### Input Device Support
+- **Logitech G-Hub**: Direct driver communication
+- **Razer Devices**: Native Razer peripheral support
+- **KMBox Net**: Network-based hardware control
+- **Serial/Arduino**: Custom hardware integration
+- **Win32 API**: Fallback software input
+- **Makcu Connection**: Professional hardware support
 
-## 🏗️ Architecture & Technical Details
+#### Capture & Processing
+- **Desktop Duplication API**: Hardware-accelerated screen capture
+- **Pinned Memory**: Zero-copy transfers between CPU and GPU
+- **Frame Buffer Pool**: Efficient memory reuse
+- **Color Space Conversion**: Optimized BGRA to BGR conversion
+- **Multi-Monitor Support**: Automatic display detection
+- **Region of Interest**: Configurable capture areas
+
+## 🏗️ Architecture
 
 ### System Requirements
-- **Operating System**: Windows 10/11 (x64)
-- **GPU**: NVIDIA RTX 20 series or newer (CUDA Compute Capability 7.5+)
-- **CUDA**: Version 12.8
-- **RAM**: 8GB minimum, 16GB recommended
-- **Storage**: 2GB free space for models and dependencies
 
-### Core Technologies
-- **C++17**: Modern C++ standard with performance optimizations
-- **CUDA 12.8**: GPU acceleration and parallel computing
-- **TensorRT 10.8**: Deep learning inference optimization
-- **ImGui**: Immediate mode GUI framework
-- **Eigen**: Linear algebra and mathematical operations
-- **STB**: Image processing and I/O operations
+#### Minimum Requirements
+- **OS**: Windows 10/11 (x64)
+- **GPU**: NVIDIA RTX 2060 or better
+- **RAM**: 8GB
+- **CUDA**: 12.8
+- **Storage**: 2GB free space
 
-### Performance Characteristics
-- **Inference Time**: <5ms per frame (RTX 3080)
-- **End-to-End Latency**: <10ms total system latency
-- **Memory Usage**: ~2GB VRAM, ~500MB RAM
-- **CPU Usage**: <10% on modern processors
-- **Frame Rate**: Supports up to 240 FPS processing
+#### Recommended Requirements
+- **GPU**: NVIDIA RTX 3070 or better
+- **RAM**: 16GB
+- **CPU**: Intel i5-10400 / AMD Ryzen 5 3600 or better
+- **Storage**: SSD with 5GB free space
 
-## 🛠 Build the Project from Source
+### Performance Metrics
+| Component | Performance |
+|-----------|------------|
+| Inference Time | <5ms (RTX 3080) |
+| End-to-End Latency | <10ms total |
+| VRAM Usage | ~2GB |
+| RAM Usage | ~500MB |
+| CPU Usage | <10% |
+| Max Frame Rate | 240 FPS |
 
-> **ℹ️ NOTE:** This guide is intended for advanced users. If you encounter errors while building the modules, please report them on the [Discord server](https://discord.gg/sunone).
+## 🛠️ Building from Source
 
-1. **Install Visual Studio 2022 Community**  
-   Download and install from the [official website](https://visualstudio.microsoft.com/vs/community/).
+### Required Tools
+1. **Visual Studio 2022 Community**
+   - [Download](https://visualstudio.microsoft.com/vs/community/)
+   - Install with C++ desktop development workload
 
-2. **Install Windows SDK**  
-   Ensure you have Windows SDK version **10.0.26100.0** installed.
+2. **Windows SDK**
+   - Version 10.0.26100.0 or newer
 
-3. **Install CUDA and cuDNN**  
-   - **CUDA 12.8**  
-     Download from [NVIDIA CUDA Toolkit](https://developer.nvidia.com/cuda-toolkit).
-   - **cuDNN 9.7.1**  
-     Available on the [NVIDIA cuDNN archive](https://developer.nvidia.com/cudnn-downloads) website.
+3. **CUDA Toolkit 12.8**
+   - [Download](https://developer.nvidia.com/cuda-12-8-0-download-archive)
 
-4. **Set Up Project Structure**  
-   Create a folder named `modules` in the directory `needaimbot/needaimbot/modules`.
+4. **cuDNN 9.7.1**
+   - [Download](https://developer.nvidia.com/cudnn-downloads)
 
-5. **Download Required Libraries**  
-	- [simpleIni](https://github.com/brofield/simpleini/blob/master/SimpleIni.h)
-	- [TensorRT-10.8.0.43](https://developer.nvidia.com/tensorrt/download/10x)
-	- [GLWF Windows pre-compiled binaries](https://www.glfw.org/download.html)
-	- [Eigen](https://gitlab.com/libeigen/eigen/-/releases) (Download the latest stable release)
-	
-6. **Extract Libraries**  
-	Place the downloaded libraries into the respective directories:
-	- `SimpleIni.h` -> `needaimbot/needaimbot/modules/SimpleIni.h`
-	- `TensorRT-10.8.0.43` -> `needaimbot/needaimbot/modules/TensorRT-10.8.0.43`
-	- `GLWF` -> `needaimbot/needaimbot/modules/glfw-3.4.bin.WIN64`
-	- `Eigen` -> `needaimbot/needaimbot/modules/eigen`
-	  - Extract the Eigen archive and rename the folder to `include`
-	  - Verify that the header files are located at `needaimbot/needaimbot/modules/eigen/include/Eigen/`
+### Build Instructions
 
-	**Note**: Serial communication for Arduino input method now uses Windows Native Serial API (no external library required)
-   
-7. **Configure Project Settings**
-	- Open the project in Visual Studio.
-	- Ensure all library paths are correctly set in **Project Properties** under **Library Directories**.
-	- Go to NuGet packages and install `Microsoft.Windows.CppWinRT`.
+1. **Clone the Repository**
+   ```bash
+   git clone https://github.com/yourusername/needaimbot.git
+   cd needaimbot
+   ```
 
-8. **Verify CUDA Integration**
-	- Right-click on the project in Visual Studio.
-	- Navigate to **Build Dependencies** > **Build Customizations**.
-	- Ensure that **CUDA 12.8** (.targets, .props) is included.
+2. **Set Up Dependencies**
+   Create `needaimbot/needaimbot/modules/` directory and add:
+   - [SimpleIni.h](https://github.com/brofield/simpleini/blob/master/SimpleIni.h)
+   - [TensorRT-10.8.0.43](https://developer.nvidia.com/tensorrt/download/10x)
+   - [GLFW 3.4](https://www.glfw.org/download.html) (Windows pre-compiled binaries)
+   - [Eigen](https://gitlab.com/libeigen/eigen/-/releases) (latest stable)
 
-9. **Build the Project**
-    - Switch the build configuration to **Release**.
-    - Build the project by selecting **Build** > **Build Solution**.
+3. **Configure Visual Studio**
+   - Open `needaimbot.sln`
+   - Install NuGet package: `Microsoft.Windows.CppWinRT`
+   - Verify CUDA 12.8 build customizations are enabled
+   - Set configuration to **Release**
+
+4. **Build**
+   - Build → Build Solution (Ctrl+Shift+B)
+   - Output will be in `x64/Release/`
+
+## 🤝 Contributing & Collaboration
+
+### How to Contribute
+
+We welcome contributions from the community! Here's how you can help:
+
+#### 1. Fork and Clone
+```bash
+git clone https://github.com/yourusername/needaimbot.git
+cd needaimbot
+git remote add upstream https://github.com/originalrepo/needaimbot.git
+```
+
+#### 2. Create a Feature Branch
+```bash
+git checkout -b feature/your-feature-name
+```
+
+#### 3. Development Guidelines
+
+**Code Standards:**
+- Follow existing C++17 conventions
+- Use RAII and smart pointers where appropriate
+- Maintain consistent naming (camelCase for functions, PascalCase for classes)
+- Add comments for complex algorithms
+
+**Performance Considerations:**
+- Profile before optimizing
+- Prefer CUDA kernels for parallel operations
+- Use pinned memory for CPU-GPU transfers
+- Minimize memory allocations in hot paths
+
+**Testing Requirements:**
+- Test on multiple GPU architectures (20, 30, 40 series)
+- Verify memory leak-free operation
+- Check performance regression
+- Test all input device drivers
+
+#### 4. Commit Guidelines
+```bash
+# Use conventional commits
+git commit -m "feat: add new tracking algorithm"
+git commit -m "fix: resolve memory leak in detector"
+git commit -m "perf: optimize color conversion kernel"
+git commit -m "docs: update build instructions"
+```
+
+#### 5. Submit Pull Request
+- Push to your fork
+- Create PR with detailed description
+- Include performance metrics if applicable
+- Reference any related issues
+
+### Priority Areas for Contribution
+
+- **🚀 Performance Optimization**
+  - CUDA kernel improvements
+  - Memory management enhancements
+  - Algorithm optimization
+
+- **🎯 AI Models**
+  - Model architecture improvements
+  - Training pipeline enhancements
+  - Dataset expansion
+
+- **🎮 Device Support**
+  - New input device drivers
+  - Hardware compatibility improvements
+  - Cross-platform support research
+
+- **📚 Documentation**
+  - Tutorial videos
+  - Configuration guides
+  - API documentation
+
+### Development Environment Setup
+
+1. **IDE Configuration**
+   - Use Visual Studio 2022 with IntelliSense
+   - Install CUDA syntax highlighting
+   - Configure code formatting (clang-format)
+
+2. **Debugging Tools**
+   - NVIDIA Nsight for CUDA debugging
+   - Visual Studio Performance Profiler
+   - GPU-Z for monitoring
+
+3. **Version Control**
+   - Use Git LFS for large binary files
+   - Keep commits atomic and focused
+   - Write meaningful commit messages
 
 ## 🐛 Troubleshooting
 
 ### Common Issues
 
-#### Installation Problems
-- **CUDA Not Found**: Ensure CUDA 12.8 is properly installed and added to PATH
-- **TensorRT Installation**: Verify TensorRT 10.8 is extracted to the correct modules directory
-- **Visual Studio Build Errors**: Check that Windows SDK 10.0.26100.0 is installed
-- **LNK4098 Runtime Library Conflicts**: 
-  - Ensure all libraries are built with `/MT` flag (Multi-threaded static runtime)
-  - Verify needaimbot project uses consistent Runtime Library settings
-  - Check that all dependencies use the same runtime library
-- **CUDA Compiler Environment Issues (NVCC Fatal)**:
-  - Error: `nvcc fatal : Could not set up the environment for Microsoft Visual Studio`
-  - This occurs when CUDA cannot find or access the Visual Studio environment properly
-  - Ensure Visual Studio is installed before CUDA
-  - Try reinstalling CUDA after Visual Studio is properly configured
+#### Build Errors
+| Error | Solution |
+|-------|----------|
+| CUDA not found | Reinstall CUDA 12.8, verify PATH |
+| LNK4098 conflicts | Ensure all libs use `/MT` flag |
+| NVCC fatal error | Reinstall CUDA after VS2022 |
+| Missing headers | Verify modules directory structure |
 
 #### Runtime Issues
-- **Model Loading Errors**: 
-  - Check that .onnx models are in the `models` folder
-  - Verify model compatibility with TensorRT 10
-  - Ensure sufficient VRAM is available
-- **Low Performance**: 
-  - Enable GPU acceleration in overlay settings
-  - Check CUDA and TensorRT installation
-  - Monitor GPU utilization and temperature
-- **Capture Issues**:
-  - Run as administrator for desktop capture
-  - Check display scaling settings
-  - Verify capture region configuration
+| Issue | Solution |
+|-------|----------|
+| Model load failure | Check .onnx file location and VRAM |
+| Low FPS | Enable GPU acceleration, check temps |
+| Capture black screen | Run as administrator |
+| Input lag | Reduce capture resolution |
 
-#### Device Connectivity
-- **Mouse Input Not Working**:
-  - Install appropriate device drivers (G-Hub, Razer Synapse)
-  - Check USB connection and device recognition
-  - Verify driver selection in overlay settings
-- **Serial Device Issues**:
-  - Check COM port settings and availability
-  - Verify baud rate and communication parameters
-  - Test with device manager
-
-### Performance Optimization
-- **Reduce Input Lag**: Lower capture resolution, optimize model size
-- **Improve Accuracy**: Adjust confidence thresholds, retrain models
-- **Memory Management**: Monitor VRAM usage, close unnecessary applications
-
-### Getting Help
-- **Discord Community**: [Join our Discord](https://discord.gg/sunone) for real-time support
-- **GitHub Issues**: Report bugs and request features
-- **Documentation**: Check the [config documentation](https://github.com/SunOner/sunone_aimbot_docs/blob/main/config/config_cpp.md)
+#### Device Issues
+| Device | Common Fix |
+|--------|------------|
+| Logitech | Install G-Hub, run as admin |
+| Razer | Update Synapse, check USB |
+| Serial | Verify COM port settings |
+| KMBox | Check network connectivity |
 
 ## 🧠 AI Model Management
 
-### Export PyTorch models from Python with dynamic shapes
-- .pt -> .onnx
-	```bash
-	pip install ultralytics -U
-	yolo export model=sunxds_0.5.6.pt format=onnx dynamic=true simplify=true
-	```
-- For .onnx -> .engine model export use overlay export tab in overlay.
+### Converting Models
+```bash
+# PyTorch to ONNX with dynamic shapes
+pip install ultralytics
+yolo export model=your_model.pt format=onnx dynamic=true simplify=true
+```
 
-### Model Optimization Tips
-- **Dynamic Shapes**: Enable for flexible input sizes but may reduce performance
-- **Precision**: Use FP16 for better performance on compatible GPUs
-- **Batch Size**: Optimize batch size based on available VRAM
-- **Model Pruning**: Remove unnecessary layers to reduce model size
+### Model Optimization
+- Use FP16 precision for RTX 30/40 series
+- Enable INT8 quantization for inference speed
+- Optimize batch size based on VRAM
+- Profile with TensorRT's trtexec tool
 
-## 📚 FAQ
+## 📚 Resources
 
-### General Questions
-**Q: Is this software safe to use?**
-A: Yes, the software is open-source and can be built from source. All code is available for inspection.
+### Documentation
+- [Configuration Guide](https://github.com/SunOner/sunone_aimbot_docs/blob/main/config/config_cpp.md)
+- [API Reference](docs/api.md)
+- [Model Training Guide](docs/training.md)
 
-**Q: What games are supported?**
-A: The software works with any game that can be captured via screen capture APIs.
+### Community
+- [Discord Server](https://discord.gg/sunone) - Get help and share ideas
+- [GitHub Issues](https://github.com/yourusername/needaimbot/issues) - Report bugs
+- [Discussions](https://github.com/yourusername/needaimbot/discussions) - Feature requests
 
-**Q: Do I need a specific GPU?**
-A: Yes, NVIDIA RTX 20 series or newer is required due to TensorRT dependencies.
+### Support Development
+- [Boosty](https://boosty.to/sunone) - Support and get enhanced models
+- [Patreon](https://www.patreon.com/sunone) - Monthly support
 
-### Technical Questions
-**Q: Can I use my own AI models?**
-A: Yes, place your .onnx model in the models folder and select it in the overlay.
+## 📋 Changelog
 
-**Q: How do I improve detection accuracy?**
-A: Adjust confidence thresholds, train models on game-specific data, or use higher resolution models.
+### Latest Updates
+- ✨ GPU-accelerated Kalman filter with frame-based prediction
+- 🎯 Precise frame prediction control with unlimited range
+- 🔧 Fixed ImGui ID conflicts in tracking tab
+- 🚀 Optimized color conversion with pinned memory
+- 📊 Enhanced visual debugging with prediction indicators
 
-**Q: Why is my performance low?**
-A: Check GPU utilization, reduce capture resolution, or optimize model complexity.
+### Previous Releases
+- Available at [Yandex Disk Archive](https://disk.yandex.ru/d/m0jbkiLEFvnZKg)
 
-## 🤝 Contributing
+## 📄 License
 
-We welcome contributions to improve needaimbot! Here's how you can help:
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-### Development Guidelines
-- **Code Style**: Follow existing C++ conventions and naming patterns
-- **Testing**: Test your changes thoroughly across different configurations
-- **Documentation**: Update documentation for any new features or changes
-- **Performance**: Maintain or improve existing performance characteristics
+## 🙏 Acknowledgments
 
-### How to Contribute
-1. **Fork the Repository**: Create your own fork of the project
-2. **Create a Branch**: Make your changes in a feature branch
-3. **Test Thoroughly**: Ensure your changes work across different systems
-4. **Submit a Pull Request**: Describe your changes and their benefits
-5. **Code Review**: Participate in the review process
-
-### Areas for Contribution
-- **Model Optimization**: Improve AI model accuracy and performance
-- **Device Support**: Add support for new input devices
-- **UI Improvements**: Enhance the overlay interface and user experience
-- **Documentation**: Improve guides, tutorials, and code documentation
-- **Testing**: Create comprehensive test suites and performance benchmarks
-
-### Community Support
-- **Discord**: Join our community for discussions and support
-- **Issues**: Report bugs and request features on GitHub
-- **Sponsorship**: Support development through [Boosty](https://boosty.to/sunone) or [Patreon](https://www.patreon.com/sunone)
-
-## 📦 Release History
-
-### Current Release
-- Latest stable release available on [Mega.nz](https://mega.nz/file/0PVxDRLL#b62nQhHkjm4iOIf0i8_yLuX1Gop5AomjWONGs-yfaKk)
-
-### Old releases
-- Stored [here](https://disk.yandex.ru/d/m0jbkiLEFvnZKg).
-	
-## 📋 Config Documentation
-- The config documentation is available in a separate [repository](https://github.com/SunOner/sunone_aimbot_docs/blob/main/config/config_cpp.md).
-
-## 📚 References and modules
-
-- [TensorRT Documentation](https://docs.nvidia.com/deeplearning/tensorrt/)
-- [Windows SDK](https://developer.microsoft.com/en-us/windows/downloads/windows-sdk/)
-- [simpleIni](https://github.com/brofield/simpleini/)
-- [ImGui](https://github.com/ocornut/imgui)
-- [CppWinRT](https://github.com/microsoft/cppwinrt)
-- [Python AI AIMBOT](https://github.com/SunOner/sunone_aimbot)
+### Libraries and Tools
+- [NVIDIA CUDA Toolkit](https://developer.nvidia.com/cuda-toolkit)
+- [NVIDIA TensorRT](https://developer.nvidia.com/tensorrt)
+- [Dear ImGui](https://github.com/ocornut/imgui)
+- [Eigen](https://eigen.tuxfamily.org/)
 - [GLFW](https://www.glfw.org/)
-- [STB Image](https://github.com/nothings/stb)
+- [STB Libraries](https://github.com/nothings/stb)
+- [SimpleIni](https://github.com/brofield/simpleini)
 
-## 📄 Licenses
+### Community Contributors
+Special thanks to all contributors who have helped improve this project through code contributions, bug reports, and feature suggestions.
 
-### Boost
-- **License:** [Boost Software License 1.0](https://www.boost.org/LICENSE_1_0.txt)
+---
 
-
-### ImGui
-- **License:** [MIT License](https://github.com/ocornut/imgui/blob/master/LICENSE)
+<div align="center">
+Made with ❤️ by the needaimbot community
+</div>

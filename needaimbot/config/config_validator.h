@@ -63,6 +63,14 @@ public:
         config.ki_y = (std::max)(0.0f, (std::min)(static_cast<float>(config.ki_y), 10.0f));
         config.kd_y = (std::max)(0.0f, (std::min)(static_cast<float>(config.kd_y), 10.0f));
 
+        // PID derivative stabilization bounds
+        config.pid_d_deadband = (std::max)(0.0f, (std::min)(config.pid_d_deadband, 5.0f));
+        config.pid_d_disable_error = (std::max)(0.0f, (std::min)(config.pid_d_disable_error, 10.0f));
+        config.pid_d_delta_max = (std::max)(0.1f, (std::min)(config.pid_d_delta_max, 50.0f));
+        config.pid_d_output_max = (std::max)(0.1f, (std::min)(config.pid_d_output_max, 50.0f));
+        config.pid_output_deadzone = (std::max)(0.0f, (std::min)(config.pid_output_deadzone, 5.0f));
+        config.pid_d_warmup_frames = (std::max)(0, (std::min)(config.pid_d_warmup_frames, 30));
+
         // Detection parameters
         config.confidence_threshold = std::clamp(config.confidence_threshold, 0.01f, 1.0f);
         config.nms_threshold = std::clamp(config.nms_threshold, 0.01f, 1.0f);

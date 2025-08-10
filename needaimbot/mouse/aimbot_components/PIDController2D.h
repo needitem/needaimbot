@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include "../modules/eigen/include/Eigen/Dense" 
+#include "../../AppContext.h"
 
 class PIDController2D
 {
@@ -18,6 +19,14 @@ private:
     Eigen::Vector2f integral;        
     Eigen::Vector2f derivative;      
     std::chrono::steady_clock::time_point last_time_point;  
+
+    // Recent error deltas for small-window robust derivative (median-of-three)
+    float recent_delta_x[3] = {0.0f, 0.0f, 0.0f};
+    float recent_delta_y[3] = {0.0f, 0.0f, 0.0f};
+    int delta_index = 0;
+
+    // Warmup frames after reset or target change to suppress derivative kick
+    int warmup_frames_remaining = 0;
 
 public:
     
