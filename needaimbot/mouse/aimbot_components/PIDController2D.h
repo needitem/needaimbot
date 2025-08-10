@@ -28,6 +28,10 @@ private:
     // Warmup frames after reset or target change to suppress derivative kick
     int warmup_frames_remaining = 0;
 
+    // Exponential moving average for derivative (low-pass filtered)
+    float filtered_deriv_x = 0.0f;
+    float filtered_deriv_y = 0.0f;
+
 public:
     
     PIDController2D(float kp_x, float ki_x, float kd_x, float kp_y, float ki_y, float kd_y);

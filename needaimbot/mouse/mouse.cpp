@@ -582,9 +582,9 @@ std::pair<int, int> MouseThread::processAccumulatedMovement(float move_x, float 
     accumulated_x_ += move_x;
     accumulated_y_ += move_y;
     
-    // Always floor the accumulated values
-    int dx_int = static_cast<int>(std::floor(accumulated_x_));
-    int dy_int = static_cast<int>(std::floor(accumulated_y_));
+    // Use round instead of floor to reduce bias and stick-slip near zero
+    int dx_int = static_cast<int>(std::round(accumulated_x_));
+    int dy_int = static_cast<int>(std::round(accumulated_y_));
     
     // Subtract the integer part from accumulated values
     accumulated_x_ -= dx_int;
