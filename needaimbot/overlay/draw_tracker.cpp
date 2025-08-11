@@ -35,8 +35,9 @@ static void draw_tracking_toggle()
         SAVE_PROFILE();
         
         // Reset tracker when toggling
-        if (ctx.detector && ctx.detector->m_sortTracker) {
-            ctx.detector->m_sortTracker->reset();
+        if (ctx.detector && ctx.detector->m_byteTracker) {
+            // ByteTracker doesn't have a reset method, recreate it
+            ctx.detector->m_byteTracker.reset(new ByteTracker());
         }
     }
     
@@ -81,8 +82,8 @@ static void draw_sort_tracker_settings()
         SAVE_PROFILE();
         
         // Update tracker in real-time
-        if (ctx.detector && ctx.detector->m_sortTracker) {
-            ctx.detector->m_sortTracker->setMaxAge(ctx.config.tracker_max_age);
+        if (ctx.detector && ctx.detector->m_byteTracker) {
+            ctx.detector->m_byteTracker->setMaxTimeLost(ctx.config.tracker_max_age);
         }
     }
     if (ImGui::IsItemHovered()) {
@@ -93,8 +94,8 @@ static void draw_sort_tracker_settings()
     if (ImGui::SliderInt("Min Hits##SORT", &ctx.config.tracker_min_hits, 1, 10)) {
         SAVE_PROFILE();
         
-        if (ctx.detector && ctx.detector->m_sortTracker) {
-            ctx.detector->m_sortTracker->setMinHits(ctx.config.tracker_min_hits);
+        if (ctx.detector && ctx.detector->m_byteTracker) {
+            ctx.detector->m_byteTracker->setMinHits(ctx.config.tracker_min_hits);
         }
     }
     if (ImGui::IsItemHovered()) {
@@ -106,8 +107,8 @@ static void draw_sort_tracker_settings()
                                        "Minimum overlap for matching detections to tracks\nLower = more lenient matching\nRecommended: 0.1 or lower")) {
         SAVE_PROFILE();
         
-        if (ctx.detector && ctx.detector->m_sortTracker) {
-            ctx.detector->m_sortTracker->setIOUThreshold(ctx.config.tracker_iou_threshold);
+        if (ctx.detector && ctx.detector->m_byteTracker) {
+            ctx.detector->m_byteTracker->setMatchThresh(ctx.config.tracker_iou_threshold);
         }
     }
     
