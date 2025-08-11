@@ -108,6 +108,24 @@ Detector::Detector()
     , m_isTargetLocked(false)
  
 {
+    // Initialize CUDA events for async pipeline
+    cudaEventCreateWithFlags(&m_preprocessDone, cudaEventDisableTiming);
+    cudaEventCreateWithFlags(&m_inferenceDone, cudaEventDisableTiming);
+    cudaEventCreateWithFlags(&processingDone, cudaEventDisableTiming);
+    cudaEventCreateWithFlags(&m_postprocessEvent, cudaEventDisableTiming);
+    cudaEventCreateWithFlags(&m_colorFilterEvent, cudaEventDisableTiming);
+    cudaEventCreateWithFlags(&m_trackingEvent, cudaEventDisableTiming);
+    cudaEventCreateWithFlags(&m_finalCopyEvent, cudaEventDisableTiming);
+    
+    // Initialize result buffer events
+    for (int i = 0; i < kNumResultBuffers; ++i) {
+        cudaEventCreateWithFlags(&m_resultBuffers[i].readyEvent, cudaEventDisableTiming);
+    }
+    
+    // Initialize double buffer events
+    cudaEventCreateWithFlags(&m_doubleBuffer.readyEvents[0], cudaEventDisableTiming);
+    cudaEventCreateWithFlags(&m_doubleBuffer.readyEvents[1], cudaEventDisableTiming);
+    
     // Initialize GPU tracker context
     auto& ctx = AppContext::getInstance();
     if (ctx.config.enable_tracking) {
@@ -155,6 +173,23 @@ Detector::~Detector()
             cudaEventDestroy(processingDone);
             processingDone = nullptr;
         }
+        
+        // Destroy additional events
+        if (m_postprocessEvent) cudaEventDestroy(m_postprocessEvent);
+        if (m_colorFilterEvent) cudaEventDestroy(m_colorFilterEvent);
+        if (m_trackingEvent) cudaEventDestroy(m_trackingEvent);
+        if (m_finalCopyEvent) cudaEventDestroy(m_finalCopyEvent);
+        
+        // Destroy result buffer events
+        for (int i = 0; i < kNumResultBuffers; ++i) {
+            if (m_resultBuffers[i].readyEvent) {
+                cudaEventDestroy(m_resultBuffers[i].readyEvent);
+            }
+        }
+        
+        // Destroy double buffer events
+        if (m_doubleBuffer.readyEvents[0]) cudaEventDestroy(m_doubleBuffer.readyEvents[0]);
+        if (m_doubleBuffer.readyEvents[1]) cudaEventDestroy(m_doubleBuffer.readyEvents[1]);
         
         // 3. 메모리 버퍼 정리
         
@@ -952,16 +987,15 @@ void Detector::inferenceThread()
                     continue;
                 }
                 
-                // 먼저 count를 동기화해서 가져온 후 detection 데이터 복사
-                copyErr = cudaStreamSynchronize(postprocessStream);
-                if (copyErr != cudaSuccess) {
-                    std::cerr << "[InferenceThread] Stream sync failed: " << cudaGetErrorString(copyErr) << std::endl;
-                    continue;
-                }
+                // Record event instead of sync - we'll check it later when needed
+                cudaEventRecord(m_postprocessEvent, postprocessStream);
                 
                 // 검출된 객체가 있으면 detection 데이터도 복사
                 static int frame_counter = 0;
                 int current_frame = ++frame_counter;
+                
+                // Wait for count to be ready before checking it
+                cudaEventSynchronize(m_postprocessEvent);
                 
                 if (m_finalTargetsCountHost > 0) {
                     
@@ -991,11 +1025,11 @@ void Detector::inferenceThread()
                         continue;
                     }
                     
-                    copyErr = cudaStreamSynchronize(postprocessStream);
-                    if (copyErr != cudaSuccess) {
-                        std::cerr << "[InferenceThread] Stream sync after detection copy failed: " << cudaGetErrorString(copyErr) << std::endl;
-                        continue;
-                    }
+                    // Record final copy event for later synchronization
+                    cudaEventRecord(m_finalCopyEvent, postprocessStream);
+                    
+                    // Wait for copy to complete before processing on CPU
+                    cudaEventSynchronize(m_finalCopyEvent);
                     
                     // Filter out detections touching screen edges (only for very edge cases)
                     int valid_count = 0;
@@ -1101,7 +1135,7 @@ void Detector::inferenceThread()
                                    sizeof(int), 
                                    cudaMemcpyDeviceToHost, 
                                    postprocessStream);
-                    cudaStreamSynchronize(postprocessStream);
+                    cudaEventRecord(m_trackingEvent, postprocessStream);
                     
                     // Update final count
                     if (tracked_count > 0 && tracked_count <= Constants::MAX_DETECTIONS) {
@@ -1125,8 +1159,8 @@ void Detector::inferenceThread()
                             m_trackedObjects.clear();
                             m_trackedObjects.reserve(tracked_count);
                             
-                            // After sync, copy tracked objects
-                            cudaStreamSynchronize(postprocessStream);
+                            // Wait for tracking data to be ready
+                            cudaEventSynchronize(m_trackingEvent);
                             for (int i = 0; i < tracked_count; i++) {
                                 m_trackedObjects.push_back(m_finalTargetsHost[i]);
                             }
