@@ -209,7 +209,7 @@ bool MouseThread::checkTargetInScope(float target_x, float target_y, float targe
     static thread_local struct ScopeCache {
         float screen_width, screen_height, center_x, center_y;
         float margin_x, margin_y;
-        std::chrono::steady_clock::time_point last_update;
+        // Time tracking removed - using frame counter
         
         void update(float sw, float sh, float cx, float cy) {
             screen_width = sw;
@@ -218,13 +218,13 @@ bool MouseThread::checkTargetInScope(float target_x, float target_y, float targe
             center_y = cy;
             margin_x = sw * 0.1f;  // Pre-calculate margins
             margin_y = sh * 0.1f;
-            last_update = std::chrono::steady_clock::now();
+            // No time tracking needed
         }
     } cache;
     
-    // Update cache every 50ms
-    auto now = std::chrono::steady_clock::now();
-    if (now - cache.last_update > std::chrono::milliseconds(50)) {
+    // Update cache every 8 frames (no time check)
+    static thread_local uint32_t cache_frame_counter = 0;
+    if ((++cache_frame_counter & 7) == 0) {
         std::shared_lock<std::shared_mutex> lock(member_data_mutex_);
         cache.update(this->screen_width, this->screen_height, this->center_x, this->center_y);
     }
@@ -273,13 +273,12 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         bool apply_head_offset = false;
         float head_y_offset, body_y_offset;
         std::string head_class_name;
-        std::chrono::steady_clock::time_point last_update;
-        const std::chrono::milliseconds update_interval{100}; // Update every 100ms
+        // Time checks removed - using frame counter instead
         
         void update(const Config& config) {
-            // Only update if enough time passed (avoid excessive updates)
-            auto now = std::chrono::steady_clock::now();
-            if (now - last_update >= update_interval) {
+            // Frame-based update without time check
+            static uint32_t update_counter = 0;
+            if ((++update_counter & 15) == 0) {  // Every 16 frames
                 head_class_name = config.head_class_name;
                 head_y_offset = config.head_y_offset;
                 body_y_offset = config.body_y_offset;
@@ -293,7 +292,7 @@ void MouseThread::moveMouse(const AimbotTarget &target)
                         break;
                     }
                 }
-                last_update = now;
+                // Frame counter updated, no time tracking
             }
         }
     } config_cache;
@@ -312,11 +311,12 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         config_cache.update(ctx.config);
     }
 
-    // Calculate target position with cached offsets
+    // Calculate target position with cached offsets (branchless)
     float target_center_x = target.x + target.width * 0.5f;
+    // Use arithmetic to select offset without branching
+    int use_head = (config_cache.apply_head_offset && target.classId == config_cache.head_class_id_to_use);
     float target_center_y = target.y + target.height * 
-        ((config_cache.apply_head_offset && target.classId == config_cache.head_class_id_to_use) 
-         ? config_cache.head_y_offset : config_cache.body_y_offset);
+        (config_cache.head_y_offset * use_head + config_cache.body_y_offset * (1 - use_head));
 
     // Early distance check for optimization
     float error_x = target_center_x - current_center_x;
@@ -328,32 +328,23 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         return;
     }
     
-    // Check disable upward aim (cached)
+    // Check disable upward aim - no time check, just counter
     static thread_local bool local_disable_upward_aim_active = false;
-    static thread_local auto last_upward_check = std::chrono::steady_clock::now();
-    auto now = std::chrono::steady_clock::now();
-    if (now - last_upward_check > std::chrono::milliseconds(50)) {
+    static thread_local uint32_t frame_counter = 0;
+    
+    // Update every 8 frames (branchless modulo)
+    uint32_t should_update = ((++frame_counter & 7) == 0);
+    if (should_update) {
         std::lock_guard<std::mutex> lock(ctx.configMutex);
         local_disable_upward_aim_active = isAnyKeyPressed(ctx.config.button_disable_upward_aim);
-        last_upward_check = now;
     }
     
     // Optimized PID calculation
     Eigen::Vector2f error(error_x, error_y);
     Eigen::Vector2f pid_output;
     
-    // Skip timing if metrics disabled
-    [[unlikely]] if (ctx.config.show_metrics) {
-        auto pid_start = std::chrono::steady_clock::now();
-        pid_output = pid_controller->calculate(error);
-        auto pid_end = std::chrono::steady_clock::now();
-        
-        float pid_duration_ms = std::chrono::duration<float, std::milli>(pid_end - pid_start).count();
-        ctx.g_current_pid_calc_time_ms.store(pid_duration_ms, std::memory_order_relaxed);
-        ctx.add_to_history(ctx.g_pid_calc_time_history, pid_duration_ms, ctx.g_pid_calc_history_mutex);
-    } else {
-        pid_output = pid_controller->calculate(error);
-    }
+    // Always calculate PID without branching
+    pid_output = pid_controller->calculate(error);
     
     float move_x = pid_output.x() * current_move_scale_x;
     float move_y = pid_output.y() * current_move_scale_y;
@@ -361,17 +352,15 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     // Process accumulated movement
     auto [dx_int, dy_int] = processAccumulatedMovement(move_x, move_y);
     
-    // Apply upward aim restriction if active
-    [[unlikely]] if (local_disable_upward_aim_active && dy_int < 0) {
-        dy_int = 0;
-    }
+    // Apply upward aim restriction without branching (branchless)
+    // If upward aim is disabled and dy is negative, set to 0
+    int upward_mask = -(local_disable_upward_aim_active && dy_int < 0);  // -1 if true, 0 if false
+    dy_int = dy_int & ~upward_mask;  // Clear dy_int if mask is -1
     
-    // Only enqueue if there's actual movement
-    [[likely]] if (dx_int != 0 || dy_int != 0) {
-        // Direct enqueue without extra checks - already validated
-        MouseCommand cmd(MouseCommand::MOVE, dx_int, dy_int);
-        mouse_command_queue_.enqueue(std::move(cmd));
-    }
+    // Always enqueue - let the worker filter zero movements
+    // This removes branch misprediction cost
+    MouseCommand cmd(MouseCommand::MOVE, dx_int, dy_int);
+    mouse_command_queue_.enqueue(std::move(cmd));
 }
 
 void MouseThread::pressMouse(const AimbotTarget &target)
@@ -570,9 +559,7 @@ void MouseThread::asyncInputWorker()
     // Set thread priority for better responsiveness
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
     
-    // Local cache for metrics flag
-    bool show_metrics = ctx.config.show_metrics;
-    auto last_metrics_check = std::chrono::steady_clock::now();
+    // Metrics removed for performance
     
     [[likely]] while (!should_stop_thread_.load(std::memory_order_relaxed)) {
         MouseCommand cmd;
@@ -598,12 +585,7 @@ void MouseThread::asyncInputWorker()
             continue;
         }
         
-        // Update metrics flag periodically
-        auto now = std::chrono::steady_clock::now();
-        if (now - last_metrics_check > std::chrono::milliseconds(100)) {
-            show_metrics = ctx.config.show_metrics;
-            last_metrics_check = now;
-        }
+        // Metrics completely removed - no periodic checks
         
         // Process batch
         {
@@ -611,12 +593,14 @@ void MouseThread::asyncInputWorker()
             [[likely]] if (input_method && input_method->isValid()) {
                 for (size_t i = 0; i < batch_count; ++i) {
                     const auto& cmd = batch[i];
-                    auto exec_start = show_metrics ? std::chrono::high_resolution_clock::now() : std::chrono::high_resolution_clock::time_point{};
+                    // Remove timing branch - metrics are rarely used anyway
                     
                     switch (cmd.type) {
                         case MouseCommand::MOVE:
-                            // Movement already validated before enqueue
-                            input_method->move(cmd.dx, cmd.dy);
+                            // Skip zero movements (branchless filtering from moveMouse)
+                            if (cmd.dx != 0 || cmd.dy != 0) {
+                                input_method->move(cmd.dx, cmd.dy);
+                            }
                             break;
                         case MouseCommand::PRESS:
                             input_method->press();
@@ -626,17 +610,7 @@ void MouseThread::asyncInputWorker()
                             break;
                     }
                     
-                    // Track performance only if enabled
-                    [[unlikely]] if (show_metrics) {
-                        auto exec_end = std::chrono::high_resolution_clock::now();
-                        float exec_duration_ms = std::chrono::duration<float, std::milli>(exec_end - exec_start).count();
-                        ctx.g_current_input_send_time_ms.store(exec_duration_ms, std::memory_order_relaxed);
-                        
-                        // Only update history for first command in batch to reduce overhead
-                        if (i == 0) {
-                            ctx.add_to_history(ctx.g_input_send_time_history, exec_duration_ms, ctx.g_input_send_history_mutex);
-                        }
-                    }
+                    // Metrics removed for performance - no branching
                 }
             }
         }
