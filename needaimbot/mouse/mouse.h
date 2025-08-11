@@ -44,7 +44,7 @@ private:
     std::unique_ptr<PIDController2D> pid_controller;
     std::unique_ptr<InputMethod> input_method;
     std::mutex input_method_mutex;
-    mutable std::mutex member_data_mutex_;
+    mutable std::shared_mutex member_data_mutex_;
     
     // RapidFire instance
     std::unique_ptr<RapidFire> rapid_fire;
@@ -73,6 +73,10 @@ private:
     // Movement accumulation members (moved from static variables)
     float accumulated_x_ = 0.0f;
     float accumulated_y_ = 0.0f;
+    
+    // Cached time for reducing chrono calls
+    mutable std::chrono::steady_clock::time_point cached_time_;
+    mutable std::atomic<int64_t> cached_time_frame_{0};
     
     // Constants
     static constexpr float MICRO_MOVEMENT_THRESHOLD = 0.5f;
@@ -130,9 +134,9 @@ public:
      
  
     
-    float getScreenWidth() { std::lock_guard<std::mutex> lock(member_data_mutex_); return screen_width; }
-    float getScreenHeight() { std::lock_guard<std::mutex> lock(member_data_mutex_); return screen_height; }
-    float getScopeMultiplier() { std::lock_guard<std::mutex> lock(member_data_mutex_); return bScope_multiplier; }
+    float getScreenWidth() { std::shared_lock<std::shared_mutex> lock(member_data_mutex_); return screen_width; }
+    float getScreenHeight() { std::shared_lock<std::shared_mutex> lock(member_data_mutex_); return screen_height; }
+    float getScopeMultiplier() { std::shared_lock<std::shared_mutex> lock(member_data_mutex_); return bScope_multiplier; }
     
     
     bool isTargetDetected() const { return target_detected.load(); }
