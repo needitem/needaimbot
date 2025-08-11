@@ -16,6 +16,7 @@
 #include <random>
 #include <thread>
 #include "lockless_queue.h"
+#include "optimized_mouse_queue.h"  // New optimized queue
 
 #include "config/config.h"
 #include "aimbot_components/AimbotTarget.h"
@@ -26,6 +27,8 @@
 #include "input_drivers/rzctl.h"
 #include "input_drivers/InputMethod.h"
 #include "rapidfire.h"
+
+// Forward declarations
 class PIDController2D;
 
 
@@ -83,20 +86,16 @@ private:
     static constexpr float SMOOTHING_INCREASE_FACTOR = 0.001f;
     static constexpr float MAX_ADDITIONAL_SMOOTHING = 0.4f;
     
-    // Async mouse input queue system using lockless queue
-    // MouseCommand struct defined in lockless_queue.h
-    MouseCommandQueue mouse_command_queue_;
+    // Async mouse input queue system
+    OptimizedMouseCommandQueue mouse_command_queue_;
     std::thread async_input_thread_;
     std::atomic<bool> should_stop_thread_{false};
     
     void asyncInputWorker();
     void enqueueMouseCommand(MouseCommand::Type type, int dx = 0, int dy = 0);
 
-    float calculateTargetDistanceSquared(const AimbotTarget &target) const;
     void initializeInputMethod(SerialConnection *serialConnection, MakcuConnection *makcuConnection, GhubMouse *gHub);
     void initializeScreen(int resolution, float bScope_multiplier, float norecoil_ms);
-    
-    // Latency compensation methods
 
 public:
     MouseThread(int resolution,
@@ -116,7 +115,6 @@ public:
                       float norecoil_ms);
     
 
-    Eigen::Vector2f calculateMovement(const Eigen::Vector2f &target_pos);
     bool checkTargetInScope(float target_x, float target_y, float target_w, float target_h, float reduction_factor);
     void moveMouse(const AimbotTarget &target);
     void pressMouse(const AimbotTarget &target);
@@ -128,7 +126,6 @@ public:
     
     // Helper methods for moveMouse refactoring
     std::pair<int, int> processAccumulatedMovement(float move_x, float move_y);
-    float calculateAdaptiveScale(float error_magnitude) const;
     void applyRecoilCompensationInternal(float strength, float delay_ms);
      
  

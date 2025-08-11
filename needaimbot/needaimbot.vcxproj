@@ -40,8 +40,6 @@
     <ClCompile Include="mouse\\rapidfire.cpp" />
     <ClCompile Include="mouse\\input_drivers\\my_enc.cpp" />
     <ClCompile Include="mouse\\aimbot_components\\PIDController2D.cpp" />
-    <ClCompile Include="mouse\\aimbot_components\\IntegratedController.cpp" />
-    
     <ClCompile Include="tracking\\Hungarian.cpp" />
     <ClCompile Include="tracking\\SimpleKalmanTracker.cpp" />
     <ClCompile Include="tracking\\ByteTracker.cpp" />
@@ -115,8 +113,6 @@
     <ClInclude Include="keyboard\keycodes.h" />
     <ClInclude Include="mouse\aimbot_components\AimbotTarget.h" />
     <ClInclude Include="mouse\aimbot_components\PIDController2D.h" />
-    <ClInclude Include="mouse\aimbot_components\IntegratedController.h" />
-    
     <ClInclude Include="tracking\Hungarian.h" />
     <ClInclude Include="tracking\SimpleKalmanTracker.h" />
     <ClInclude Include="tracking\ByteTracker.h" />
