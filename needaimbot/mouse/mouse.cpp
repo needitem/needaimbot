@@ -1,9 +1,7 @@
-// #include "../constants.h" // File removed
 #include "../AppContext.h"
 #include "mouse.h"
 #include "aimbot_components/AimbotTarget.h"
 #include "../capture/capture.h"
-// #include "../detector/optical_flow.h" // Optical flow removed
 #include "input_drivers/SerialConnection.h"
 #include "input_drivers/MakcuConnection.h"
 #include "../needaimbot.h"
@@ -30,8 +28,6 @@
 #endif
 
 #include "aimbot_components/PIDController2D.h"
-#include "aimbot_components/IntegratedController.h"
-// Removed Kalman filter from mouse module
 
 
 extern std::atomic<bool> aiming;
@@ -95,6 +91,7 @@ MouseThread::MouseThread(
 {
     initializeScreen(resolution, bScope_multiplier, norecoil_ms);
     pid_controller = std::make_unique<PIDController2D>(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
+    
     initializeInputMethod(serialConnection, makcuConnection, gHub);
     
     // Initialize RapidFire
@@ -201,126 +198,70 @@ void MouseThread::updateConfig(
 
 
 
-Eigen::Vector2f MouseThread::calculateMovement(const Eigen::Vector2f &target_pos)
-{
-    float current_center_x, current_center_y;
-    float current_move_scale_x, current_move_scale_y;
-    {
-        std::lock_guard<std::mutex> lock(member_data_mutex_); 
-        current_center_x = this->center_x;
-        current_center_y = this->center_y;
-        current_move_scale_x = this->move_scale_x;
-        current_move_scale_y = this->move_scale_y;
-    }
 
-    float error_x = target_pos[0] - current_center_x;
-    float error_y = target_pos[1] - current_center_y;
-    
-    Eigen::Vector2f error(error_x, error_y);
-    Eigen::Vector2f pid_output = pid_controller->calculate(error);
-
-    float result_x = pid_output[0] * current_move_scale_x;
-    float result_y = pid_output[1] * current_move_scale_y;
-    
-    return Eigen::Vector2f(result_x, result_y);
-}
 
 bool MouseThread::checkTargetInScope(float target_x, float target_y, float target_w, float target_h, float reduction_factor)
 {
-    float current_screen_width, current_screen_height, current_center_x, current_center_y;
-    {
-        std::lock_guard<std::mutex> lock(member_data_mutex_); 
-        current_screen_width = this->screen_width;
-        current_screen_height = this->screen_height;
-        current_center_x = this->center_x;
-        current_center_y = this->center_y;
+    // Cache screen values with reduced mutex access
+    static thread_local struct ScopeCache {
+        float screen_width, screen_height, center_x, center_y;
+        float margin_x, margin_y;
+        std::chrono::steady_clock::time_point last_update;
+        
+        void update(float sw, float sh, float cx, float cy) {
+            screen_width = sw;
+            screen_height = sh;
+            center_x = cx;
+            center_y = cy;
+            margin_x = sw * 0.1f;  // Pre-calculate margins
+            margin_y = sh * 0.1f;
+            last_update = std::chrono::steady_clock::now();
+        }
+    } cache;
+    
+    // Update cache every 50ms
+    auto now = std::chrono::steady_clock::now();
+    if (now - cache.last_update > std::chrono::milliseconds(50)) {
+        std::lock_guard<std::mutex> lock(member_data_mutex_);
+        cache.update(this->screen_width, this->screen_height, this->center_x, this->center_y);
     }
-
-    const float SCOPE_MARGIN = 0.1f; // Default scope margin
-    const float screen_margin_x = current_screen_width * SCOPE_MARGIN; 
-    const float screen_margin_y = current_screen_height * SCOPE_MARGIN; 
     
-    float target_center_x_val = target_x + target_w * 0.5f;
-    float target_center_y_val = target_y + target_h * 0.5f;
+    // Fast calculations without divisions
+    float target_center_x = target_x + target_w * 0.5f;
+    float target_center_y = target_y + target_h * 0.5f;
     
-    float diff_x = std::abs(target_center_x_val - current_center_x); 
-    float diff_y = std::abs(target_center_y_val - current_center_y); 
+    // Early exit with squared distance check (no abs/sqrt needed)
+    float dx = target_center_x - cache.center_x;
+    float dy = target_center_y - cache.center_y;
     
-    if (diff_x > screen_margin_x || diff_y > screen_margin_y)
-    {
+    // Quick margin check without abs()
+    if (dx > cache.margin_x || dx < -cache.margin_x || 
+        dy > cache.margin_y || dy < -cache.margin_y) {
         return false;
     }
     
-    float reduced_half_w = target_w * reduction_factor * 0.5f;
-    float reduced_half_h = target_h * reduction_factor * 0.5f;
+    // Precise box check
+    float half_w = target_w * reduction_factor * 0.5f;
+    float half_h = target_h * reduction_factor * 0.5f;
     
-    float min_x = target_center_x_val - reduced_half_w;
-    float max_x = target_center_x_val + reduced_half_w;
-    float min_y = target_center_y_val - reduced_half_h;
-    float max_y = target_center_y_val + reduced_half_h;
-    
-    return (current_center_x >= min_x && current_center_x <= max_x && 
-            current_center_y >= min_y && current_center_y <= max_y); 
+    return (dx >= -half_w && dx <= half_w && 
+            dy >= -half_h && dy <= half_h);
 }
 
-float MouseThread::calculateTargetDistanceSquared(const AimbotTarget &target) const
-{
-    auto& ctx = AppContext::getInstance();
-    float current_center_x, current_center_y;
-    
-    // Get center values (capture already includes offset)
-    {
-        std::lock_guard<std::mutex> lock(member_data_mutex_); 
-        current_center_x = this->center_x;
-        current_center_y = this->center_y;
-    }
 
-    float dx = target.x + target.width * 0.5f - current_center_x;
-    float target_center_y_val;
-
-    
-    int local_head_class_id_to_use = -1;
-    bool local_apply_head_offset = false;
-    float local_head_y_offset_val;
-    float local_body_y_offset_val;
-    std::string local_head_class_name_val;
-
-    {
-        auto& ctx = AppContext::getInstance();
-        std::lock_guard<std::mutex> lock(configMutex); 
-        local_head_class_name_val = ctx.config.head_class_name;
-        for (const auto& class_setting : ctx.config.class_settings) {
-            if (class_setting.name == local_head_class_name_val) {
-                local_head_class_id_to_use = class_setting.id;
-                if (class_setting.allow) {
-                    local_apply_head_offset = true;
-                }
-                break;
-            }
-        }
-        local_head_y_offset_val = ctx.config.head_y_offset;
-        local_body_y_offset_val = ctx.config.body_y_offset;
-    }
-
-    if (local_apply_head_offset && target.classId == local_head_class_id_to_use) {
-        target_center_y_val = target.y + target.height * local_head_y_offset_val;
-    } else {
-        target_center_y_val = target.y + target.height * local_body_y_offset_val;
-    }
-    float dy = target_center_y_val - current_center_y;
-    return dx * dx + dy * dy;
-}
 
 void MouseThread::moveMouse(const AimbotTarget &target)
 {
     auto& ctx = AppContext::getInstance();
     
+    // Fast path: early exit checks
+    if (target.width <= 0 || target.height <= 0) return;
+    
     float current_center_x, current_center_y;
     float current_move_scale_x, current_move_scale_y;
-    float move_x = 0.0f, move_y = 0.0f;
     
     // Cache for config values to reduce mutex locks
-    static struct ConfigCache {
+    static thread_local struct ConfigCache {
         int head_class_id_to_use = -1;
         bool apply_head_offset = false;
         float head_y_offset, body_y_offset;
@@ -340,9 +281,7 @@ void MouseThread::moveMouse(const AimbotTarget &target)
                 for (const auto& class_setting : config.class_settings) {
                     if (class_setting.name == head_class_name) {
                         head_class_id_to_use = class_setting.id;
-                        if (class_setting.allow) {
-                            apply_head_offset = true;
-                        }
+                        apply_head_offset = class_setting.allow;
                         break;
                     }
                 }
@@ -365,99 +304,66 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         config_cache.update(ctx.config);
     }
 
-    // No offset correction needed - capture already includes offset
+    // Calculate target position with cached offsets
+    float target_center_x = target.x + target.width * 0.5f;
+    float target_center_y = target.y + target.height * 
+        ((config_cache.apply_head_offset && target.classId == config_cache.head_class_id_to_use) 
+         ? config_cache.head_y_offset : config_cache.body_y_offset);
 
-    Point2D raw_target_pos;
-    raw_target_pos.x = target.x + target.width * 0.5f;
+    // Early distance check for optimization
+    float error_x = target_center_x - current_center_x;
+    float error_y = target_center_y - current_center_y;
     
-    // Use cached config values
-    float local_y_offset_multiplier_val;
-    if (config_cache.apply_head_offset && target.classId == config_cache.head_class_id_to_use) {
-        local_y_offset_multiplier_val = config_cache.head_y_offset;
-    } else {
-        local_y_offset_multiplier_val = config_cache.body_y_offset;
+    // Quick exit if error is too small
+    float error_magnitude_sq = error_x * error_x + error_y * error_y;
+    if (error_magnitude_sq < 0.25f) { // Less than 0.5 pixels
+        return;
     }
-    raw_target_pos.y = target.y + target.height * local_y_offset_multiplier_val;
-
-    // Check disable upward aim with copied config
-    bool local_disable_upward_aim_active = false;
-    {
+    
+    // Check disable upward aim (cached)
+    static thread_local bool local_disable_upward_aim_active = false;
+    static thread_local auto last_upward_check = std::chrono::steady_clock::now();
+    auto now = std::chrono::steady_clock::now();
+    if (now - last_upward_check > std::chrono::milliseconds(50)) {
         std::lock_guard<std::mutex> lock(ctx.configMutex);
         local_disable_upward_aim_active = isAnyKeyPressed(ctx.config.button_disable_upward_aim);
-    }
-
-    // Calculate target center position (no prediction)
-    float target_x = target.x + target.width * 0.5f;
-    float target_y = target.y + target.height * 0.5f;
-    
-    // Apply y offset based on target type
-    {
-        auto& ctx = AppContext::getInstance();
-        std::lock_guard<std::mutex> lock(ctx.configMutex);
-        
-        bool local_apply_head_offset = false;
-        int local_head_class_id_to_use = -1;
-        
-        for (const auto& class_setting : ctx.config.class_settings) {
-            if (class_setting.name == ctx.config.head_class_name) {
-                local_head_class_id_to_use = class_setting.id;
-                if (class_setting.allow) {
-                    local_apply_head_offset = true;
-                }
-                break;
-            }
-        }
-        
-        float y_offset_multiplier;
-        if (local_apply_head_offset && target.classId == local_head_class_id_to_use) {
-            y_offset_multiplier = ctx.config.head_y_offset;
-        } else {
-            y_offset_multiplier = ctx.config.body_y_offset;
-        }
-        
-        target_y = target.y + target.height * y_offset_multiplier;
+        last_upward_check = now;
     }
     
-    // Do not apply Kalman/prediction at mouse level
-    
-    float error_x = target_x - current_center_x;
-    float error_y = target_y - current_center_y;
-    
-    // Debug logging for PID control values
-
-
-    // Simple PID calculation without hysteresis
+    // Optimized PID calculation
     Eigen::Vector2f error(error_x, error_y);
-    auto pid_start_time = std::chrono::steady_clock::now();
+    Eigen::Vector2f pid_output;
     
-    Eigen::Vector2f pid_output = pid_controller->calculate(error);
+    // Skip timing if metrics disabled
+    if (ctx.config.show_metrics) {
+        auto pid_start = std::chrono::steady_clock::now();
+        pid_output = pid_controller->calculate(error);
+        auto pid_end = std::chrono::steady_clock::now();
+        
+        float pid_duration_ms = std::chrono::duration<float, std::milli>(pid_end - pid_start).count();
+        ctx.g_current_pid_calc_time_ms.store(pid_duration_ms, std::memory_order_relaxed);
+        ctx.add_to_history(ctx.g_pid_calc_time_history, pid_duration_ms, ctx.g_pid_calc_history_mutex);
+    } else {
+        pid_output = pid_controller->calculate(error);
+    }
     
-    auto pid_end_time = std::chrono::steady_clock::now();
-    float pid_duration_ms = std::chrono::duration<float, std::milli>(pid_end_time - pid_start_time).count();
-    ctx.g_current_pid_calc_time_ms.store(pid_duration_ms, std::memory_order_relaxed);
-    ctx.add_to_history(ctx.g_pid_calc_time_history, pid_duration_ms, ctx.g_pid_calc_history_mutex);
-
-    move_x = pid_output.x() * current_move_scale_x;
-    move_y = pid_output.y() * current_move_scale_y;
+    float move_x = pid_output.x() * current_move_scale_x;
+    float move_y = pid_output.y() * current_move_scale_y;
     
     // Process accumulated movement
     auto [dx_int, dy_int] = processAccumulatedMovement(move_x, move_y);
     
-    // Debug logging for final integer movement values
-    
+    // Apply upward aim restriction if active
     if (local_disable_upward_aim_active && dy_int < 0) {
-        dy_int = 0; 
-    }
-
-    if (dx_int != 0 || dy_int != 0) {
-        // Use async queue instead of direct call
-        enqueueMouseCommand(MouseCommand::MOVE, dx_int, dy_int);
+        dy_int = 0;
     }
     
-    // Detection timestamp removed from Target (tracking metrics now handled differently)
-    // Calculate movement completion time
-    auto movement_completion_time = std::chrono::high_resolution_clock::now();
-    // Note: Detection-to-movement time calculation removed as detection_timestamp is no longer in Target
+    // Only enqueue if there's actual movement
+    if (dx_int != 0 || dy_int != 0) {
+        // Direct enqueue without extra checks - already validated
+        MouseCommand cmd(MouseCommand::MOVE, dx_int, dy_int);
+        mouse_command_queue_.enqueue(std::move(cmd));
+    }
 }
 
 void MouseThread::pressMouse(const AimbotTarget &target)
@@ -576,7 +482,7 @@ void MouseThread::setInputMethod(std::unique_ptr<InputMethod> new_method)
 
 
 
-std::pair<int, int> MouseThread::processAccumulatedMovement(float move_x, float move_y)
+inline std::pair<int, int> MouseThread::processAccumulatedMovement(float move_x, float move_y)
 {
     // Accumulate sub-pixel movements
     accumulated_x_ += move_x;
@@ -594,23 +500,7 @@ std::pair<int, int> MouseThread::processAccumulatedMovement(float move_x, float 
 }
 
 
-float MouseThread::calculateAdaptiveScale(float error_magnitude) const
-{
-    // Maintain full speed until very close, then gentle reduction
-    // This keeps movement fast while providing precision at the end
-    
-    if (error_magnitude < 10.0f) {
-        // Very close range - slight reduction for precision
-        // 10px: 1.0x, 5px: 0.85x, 0px: 0.7x
-        return 0.7f + (error_magnitude / 10.0f) * 0.3f;
-    } else if (error_magnitude < MEDIUM_ERROR_THRESHOLD) {
-        // Normal range - maintain full speed
-        return NORMAL_RANGE_SCALE;
-    } else {
-        // Far range - slightly increased sensitivity for large corrections
-        return std::min(FAR_RANGE_SCALE, 1.0f + (error_magnitude - MEDIUM_ERROR_THRESHOLD) * 0.001f);
-    }
-}
+
 
 void MouseThread::applyRecoilCompensationInternal(float strength, float delay_ms)
 {
@@ -647,8 +537,6 @@ void MouseThread::resetAccumulatedStates()
         pid_controller->reset();
     }
     
-    // Kalman filter removed
-    
     // Reset movement accumulation
     accumulated_x_ = 0.0f;
     accumulated_y_ = 0.0f;
@@ -671,47 +559,76 @@ void MouseThread::asyncInputWorker()
 {
     auto& ctx = AppContext::getInstance();
     
-    while (!should_stop_thread_.load()) {
+    // Set thread priority for better responsiveness
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+    
+    // Local cache for metrics flag
+    bool show_metrics = ctx.config.show_metrics;
+    auto last_metrics_check = std::chrono::steady_clock::now();
+    
+    while (!should_stop_thread_.load(std::memory_order_relaxed)) {
         MouseCommand cmd;
         
-        // Try to dequeue with small timeout for responsiveness (1ms)
-        if (!mouse_command_queue_.tryDequeue(cmd, 1)) {
-            if (should_stop_thread_.load()) {
+        // Batch dequeue for better throughput
+        constexpr size_t BATCH_SIZE = 4;
+        MouseCommand batch[BATCH_SIZE];
+        size_t batch_count = 0;
+        
+        // Try to dequeue multiple commands at once
+        for (size_t i = 0; i < BATCH_SIZE; ++i) {
+            if (mouse_command_queue_.tryDequeue(batch[i], i == 0 ? 1 : 0)) {
+                batch_count++;
+            } else {
+                break;
+            }
+        }
+        
+        if (batch_count == 0) {
+            if (should_stop_thread_.load(std::memory_order_relaxed)) {
                 break;
             }
             continue;
         }
         
-        // Execute command based on type
+        // Update metrics flag periodically
+        auto now = std::chrono::steady_clock::now();
+        if (now - last_metrics_check > std::chrono::milliseconds(100)) {
+            show_metrics = ctx.config.show_metrics;
+            last_metrics_check = now;
+        }
+        
+        // Process batch
         {
             std::lock_guard<std::mutex> input_lock(input_method_mutex);
             if (input_method && input_method->isValid()) {
-                auto exec_start = std::chrono::high_resolution_clock::now();
-                
-                switch (cmd.type) {
-                    case MouseCommand::MOVE:
-                        if (cmd.dx != 0 || cmd.dy != 0) {
-                            input_method->move(cmd.dx, cmd.dy);
-                        }
-                        break;
-                    case MouseCommand::PRESS:
-                        input_method->press();
-                        break;
-                    case MouseCommand::RELEASE:
-                        input_method->release();
-                        break;
-                }
-                
-                // Track performance if needed
-                if (ctx.config.show_metrics) {
-                    auto exec_end = std::chrono::high_resolution_clock::now();
-                    float exec_duration_ms = std::chrono::duration<float, std::milli>(exec_end - exec_start).count();
-                    ctx.g_current_input_send_time_ms.store(exec_duration_ms, std::memory_order_relaxed);
-                    ctx.add_to_history(ctx.g_input_send_time_history, exec_duration_ms, ctx.g_input_send_history_mutex);
+                for (size_t i = 0; i < batch_count; ++i) {
+                    const auto& cmd = batch[i];
+                    auto exec_start = show_metrics ? std::chrono::high_resolution_clock::now() : std::chrono::high_resolution_clock::time_point{};
                     
-                    // Also track queue latency (time from enqueue to execution)
-                    float queue_latency_ms = std::chrono::duration<float, std::milli>(exec_start - cmd.timestamp).count();
-                    // You can add a new metric for queue latency if needed
+                    switch (cmd.type) {
+                        case MouseCommand::MOVE:
+                            // Movement already validated before enqueue
+                            input_method->move(cmd.dx, cmd.dy);
+                            break;
+                        case MouseCommand::PRESS:
+                            input_method->press();
+                            break;
+                        case MouseCommand::RELEASE:
+                            input_method->release();
+                            break;
+                    }
+                    
+                    // Track performance only if enabled
+                    if (show_metrics) {
+                        auto exec_end = std::chrono::high_resolution_clock::now();
+                        float exec_duration_ms = std::chrono::duration<float, std::milli>(exec_end - exec_start).count();
+                        ctx.g_current_input_send_time_ms.store(exec_duration_ms, std::memory_order_relaxed);
+                        
+                        // Only update history for first command in batch to reduce overhead
+                        if (i == 0) {
+                            ctx.add_to_history(ctx.g_input_send_time_history, exec_duration_ms, ctx.g_input_send_history_mutex);
+                        }
+                    }
                 }
             }
         }
