@@ -24,32 +24,42 @@ Eigen::Vector2f PIDController2D::calculate(const Eigen::Vector2f &error)
     static const float MIN_DT = 1e-3f;  // 1 ms
     static const float MAX_DT = 0.2f;   // 200 ms (relax clamp but scale D down if large)
     dt = std::clamp(dt, MIN_DT, MAX_DT);
-
-    constexpr float INTEGRAL_CLAMP = 100.0f;
     
-    integral.x() = std::clamp(integral.x() + error.x() * dt, -INTEGRAL_CLAMP, INTEGRAL_CLAMP);
-    integral.y() = std::clamp(integral.y() + error.y() * dt, -INTEGRAL_CLAMP, INTEGRAL_CLAMP);
-
-    // Derivative based on time (unit: pixels per second)
     auto& ctx = AppContext::getInstance();
-    const float DERIV_DEADBAND = ctx.config.pid_d_deadband; // pixels (apply on delta before normalization)
-    float delta_x = error.x() - prev_error.x();
-    float delta_y = error.y() - prev_error.y();
-    if (std::fabs(delta_x) < DERIV_DEADBAND) delta_x = 0.0f;
-    if (std::fabs(delta_y) < DERIV_DEADBAND) delta_y = 0.0f;
+    
+    // ============ SETPOINT FILTERING ============
+    // Smooth sudden target changes to reduce overshoot
+    Eigen::Vector2f current_error = error;
+    if (first_error) {
+        filtered_error = current_error;
+        first_error = false;
+    } else {
+        float error_alpha = ctx.config.pid_error_smoothing; // 0.3f = more smooth, 1.0f = no smoothing
+        filtered_error = error_alpha * current_error + (1.0f - error_alpha) * filtered_error;
+    }
+    
+    // Use filtered error for calculations
+    const Eigen::Vector2f& working_error = ctx.config.pid_use_error_filter ? filtered_error : current_error;
 
-    // Keep D active but will be smoothly scaled later near target
-
-    // During warmup frames, softly scale derivative rather than hard-suppress
-    float warmup_scale = 1.0f;
-    if (warmup_frames_remaining > 0) {
-        warmup_scale = std::max(0.0f, 1.0f - (static_cast<float>(warmup_frames_remaining) / std::max(1, AppContext::getInstance().config.pid_d_warmup_frames)));
-        warmup_frames_remaining--;
+    // ============ IMPROVED ANTI-WINDUP ============
+    constexpr float INTEGRAL_CLAMP = 100.0f;
+    constexpr float OUTPUT_SATURATION = 100.0f; // Max output before saturation
+    
+    // Conditional integration - stop integrating if output is saturated and error has same sign
+    if (integral_enabled_x) {
+        integral.x() = std::clamp(integral.x() + working_error.x() * dt, -INTEGRAL_CLAMP, INTEGRAL_CLAMP);
+    }
+    if (integral_enabled_y) {
+        integral.y() = std::clamp(integral.y() + working_error.y() * dt, -INTEGRAL_CLAMP, INTEGRAL_CLAMP);
     }
 
+    // ============ DERIVATIVE CALCULATION (properly normalized by dt) ============
+    float delta_x = working_error.x() - prev_error.x();
+    float delta_y = working_error.y() - prev_error.y();
+
     // Convert to time-normalized derivative (pixels per second)
-    float deriv_rate_x = (delta_x / dt) * warmup_scale;
-    float deriv_rate_y = (delta_y / dt) * warmup_scale;
+    float deriv_rate_x = delta_x / dt;
+    float deriv_rate_y = delta_y / dt;
 
     // Store derivative rates in tiny ring buffer and use median-of-three for robustness
     recent_delta_x[delta_index] = deriv_rate_x;
@@ -84,55 +94,67 @@ Eigen::Vector2f PIDController2D::calculate(const Eigen::Vector2f &error)
     derivative.y() = filtered_deriv_y * large_dt_scale;
 
     
-    // Compose PID with capped D contribution to prevent D-dominant jitter
+    // ============ PID COMPOSITION ============
     Eigen::Vector2f output;
-    float p_x = kp_x * error.x();
+    float p_x = kp_x * working_error.x();
     float i_x = ki_x * integral.x();
     float d_x = kd_x * derivative.x();
-    float p_y = kp_y * error.y();
+    float p_y = kp_y * working_error.y();
     float i_y = ki_y * integral.y();
     float d_y = kd_y * derivative.y();
-
-    // Near target, gradually scale D instead of hard-disable to keep damping
-    const float ERROR_FOR_D_DISABLE = ctx.config.pid_d_disable_error; // pixels
-    auto smooth_step01 = [](float t){ t = std::clamp(t, 0.0f, 1.0f); return t * t * (3.0f - 2.0f * t); };
-    float d_scale_x = 1.0f;
-    float d_scale_y = 1.0f;
-    if (ERROR_FOR_D_DISABLE > 0.0f) {
-        d_scale_x = smooth_step01(std::fabs(error.x()) / ERROR_FOR_D_DISABLE);
-        d_scale_y = smooth_step01(std::fabs(error.y()) / ERROR_FOR_D_DISABLE);
+    
+    // ============ VELOCITY FEEDFORWARD (Predictive Control) ============
+    // Predict overshoot based on current velocity and reduce P gain accordingly
+    if (ctx.config.pid_use_velocity_prediction) {
+        float prediction_time = ctx.config.pid_prediction_time; // seconds ahead to predict
+        float predicted_overshoot_x = derivative.x() * prediction_time;
+        float predicted_overshoot_y = derivative.y() * prediction_time;
+        
+        // If predicted position would overshoot, reduce proportional gain
+        if (std::abs(predicted_overshoot_x) > std::abs(working_error.x()) * 0.5f) {
+            p_x *= ctx.config.pid_overshoot_suppression; // e.g., 0.5f for aggressive suppression
+        }
+        if (std::abs(predicted_overshoot_y) > std::abs(working_error.y()) * 0.5f) {
+            p_y *= ctx.config.pid_overshoot_suppression;
+        }
     }
 
-    d_x *= d_scale_x;
-    d_y *= d_scale_y;
 
-    // Soft clamp D contribution to avoid domination
-    auto soft_clip = [](float v, float limit){
-        float a = std::fabs(v);
-        if (a <= limit) return v;
-        // smoothly compress beyond limit
-        float sign = (v >= 0.0f) ? 1.0f : -1.0f;
-        return sign * (limit + (a - limit) * 0.3f);
-    };
-    const float D_LIMIT = 5000.0f; // pixels/sec scaled by kd; conservative large cap
-    d_x = soft_clip(d_x, D_LIMIT);
-    d_y = soft_clip(d_y, D_LIMIT);
 
-    // Apply output deadzone ONLY to PI, then add D back so damping survives micro deadzone
-    float pi_x = p_x + i_x;
-    float pi_y = p_y + i_y;
-    const float OUTPUT_DEADZONE = ctx.config.pid_output_deadzone; // pixels
-    if (std::fabs(pi_x) < OUTPUT_DEADZONE) pi_x = 0.0f;
-    if (std::fabs(pi_y) < OUTPUT_DEADZONE) pi_y = 0.0f;
-
-    output.x() = pi_x + d_x;
-    output.y() = pi_y + d_y;
-
-    // Remove micro-movements that cause visible jitter but no real correction
-    if (std::fabs(output.x()) < OUTPUT_DEADZONE) output.x() = 0.0f;
-    if (std::fabs(output.y()) < OUTPUT_DEADZONE) output.y() = 0.0f;
-
-    prev_error = error;
+    // Combine PID components
+    output.x() = p_x + i_x + d_x;
+    output.y() = p_y + i_y + d_y;
+    
+    // ============ MOTION PROFILING (Velocity & Acceleration Limiting) ============
+    // Limit maximum velocity
+    const float MAX_VELOCITY = ctx.config.pid_max_velocity; // pixels per frame
+    output.x() = std::clamp(output.x(), -MAX_VELOCITY, MAX_VELOCITY);
+    output.y() = std::clamp(output.y(), -MAX_VELOCITY, MAX_VELOCITY);
+    
+    // Jerk limiting (smooth acceleration changes)
+    if (ctx.config.pid_use_jerk_limit) {
+        const float MAX_JERK = ctx.config.pid_max_jerk; // max change in acceleration
+        float accel_change_x = output.x() - prev_output.x();
+        float accel_change_y = output.y() - prev_output.y();
+        
+        if (std::abs(accel_change_x) > MAX_JERK) {
+            output.x() = prev_output.x() + std::copysign(MAX_JERK, accel_change_x);
+        }
+        if (std::abs(accel_change_y) > MAX_JERK) {
+            output.y() = prev_output.y() + std::copysign(MAX_JERK, accel_change_y);
+        }
+    }
+    
+    // Update anti-windup state for next iteration
+    integral_enabled_x = (std::abs(output.x()) < OUTPUT_SATURATION) || 
+                         (std::signbit(working_error.x()) != std::signbit(integral.x()));
+    integral_enabled_y = (std::abs(output.y()) < OUTPUT_SATURATION) || 
+                         (std::signbit(working_error.y()) != std::signbit(integral.y()));
+    
+    // Store state for next iteration
+    prev_error = working_error;
+    prev_output = output;
+    
     return output;
 }
 
@@ -141,10 +163,15 @@ void PIDController2D::reset()
     prev_error = Eigen::Vector2f::Zero();
     integral = Eigen::Vector2f::Zero();
     derivative = Eigen::Vector2f::Zero();
+    filtered_error = Eigen::Vector2f::Zero();
+    prev_output = Eigen::Vector2f::Zero();
+    first_error = true;
+    integral_enabled_x = true;
+    integral_enabled_y = true;
+    filtered_deriv_x = 0.0f;
+    filtered_deriv_y = 0.0f;
     // Keep clock consistent with calculate()
     last_time_point = std::chrono::steady_clock::now();
-    // Small warmup to avoid initial derivative kick
-    warmup_frames_remaining = AppContext::getInstance().config.pid_d_warmup_frames;
 }
 
 void PIDController2D::updateSeparatedParameters(float kp_x, float ki_x, float kd_x,

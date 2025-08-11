@@ -221,11 +221,15 @@ public:
     double ki_y;
     double kd_y;
 
-    // PID derivative stabilization parameters (UI adjustable)
-    float pid_d_deadband;          // pixels
-    float pid_d_disable_error;     // pixels
-    float pid_output_deadzone;     // pixels
-    int   pid_d_warmup_frames;     // frames
+    // PID overshoot reduction parameters
+    float pid_error_smoothing = 0.3f;      // Setpoint filter alpha (0=max smooth, 1=no smooth)
+    bool pid_use_error_filter = true;      // Enable setpoint filtering
+    bool pid_use_velocity_prediction = true; // Enable velocity feedforward
+    float pid_prediction_time = 0.05f;     // Seconds ahead to predict (50ms)
+    float pid_overshoot_suppression = 0.5f; // P gain reduction when overshoot predicted
+    float pid_max_velocity = 50.0f;        // Max pixels per frame
+    bool pid_use_jerk_limit = true;        // Enable jerk limiting
+    float pid_max_jerk = 10.0f;            // Max acceleration change per frame
 
     // SORT Tracker parameters
     bool enable_tracking;       // Enable/disable target tracking
