@@ -25,12 +25,20 @@ private:
     float recent_delta_y[3] = {0.0f, 0.0f, 0.0f};
     int delta_index = 0;
 
-    // Warmup frames after reset or target change to suppress derivative kick
-    int warmup_frames_remaining = 0;
-
     // Exponential moving average for derivative (low-pass filtered)
     float filtered_deriv_x = 0.0f;
     float filtered_deriv_y = 0.0f;
+
+    // Setpoint filtering for smooth target transitions
+    Eigen::Vector2f filtered_error;
+    bool first_error = true;
+    
+    // Previous output for jerk limiting
+    Eigen::Vector2f prev_output;
+    
+    // For improved anti-windup
+    bool integral_enabled_x = true;
+    bool integral_enabled_y = true;
 
 public:
     

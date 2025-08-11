@@ -108,32 +108,57 @@ static void draw_pid_controls()
     }
     
     UIHelpers::EndCard();
-
-    // Derivative stabilization advanced controls
-    UIHelpers::BeginCard("PID Derivative Stabilization");
-    UIHelpers::SettingsSubHeader("Noise Guards and Limits");
-
-    if (UIHelpers::EnhancedSliderFloat("D Deadband (px)", &ctx.config.pid_d_deadband, 0.0f, 2.0f, "%.3f",
-                                      "Ignore tiny error deltas below this")) {
+    
+    // Overshoot reduction parameters
+    UIHelpers::BeginCard("PID Overshoot Reduction");
+    UIHelpers::SettingsSubHeader("Advanced Anti-Overshoot Controls");
+    
+    // Setpoint filtering
+    if (ImGui::Checkbox("Enable Error Filtering", &ctx.config.pid_use_error_filter)) {
         SAVE_PROFILE();
     }
-    if (UIHelpers::EnhancedSliderFloat("Disable D Near Error (px)", &ctx.config.pid_d_disable_error, 0.0f, 5.0f, "%.3f",
-                                      "Turn off D when |error| is small")) {
-        SAVE_PROFILE();
-    }
-    // Removed D delta/output clamps from UI
-    if (UIHelpers::EnhancedSliderFloat("Output Deadzone (px)", &ctx.config.pid_output_deadzone, 0.0f, 2.0f, "%.2f",
-                                      "Zero very small outputs to avoid jitter")) {
-        SAVE_PROFILE();
-    }
-    {
-        int warm = ctx.config.pid_d_warmup_frames;
-        if (ImGui::SliderInt("D Warmup Frames", &warm, 0, 10, "%d frames")) {
-            ctx.config.pid_d_warmup_frames = warm;
+    if (ctx.config.pid_use_error_filter) {
+        if (UIHelpers::EnhancedSliderFloat("Error Smoothing", &ctx.config.pid_error_smoothing, 0.1f, 1.0f, "%.2f",
+                                          "Lower = more smooth, Higher = more responsive")) {
             SAVE_PROFILE();
         }
     }
-
+    
+    ImGui::Separator();
+    
+    // Velocity prediction
+    if (ImGui::Checkbox("Enable Velocity Prediction", &ctx.config.pid_use_velocity_prediction)) {
+        SAVE_PROFILE();
+    }
+    if (ctx.config.pid_use_velocity_prediction) {
+        if (UIHelpers::EnhancedSliderFloat("Prediction Time", &ctx.config.pid_prediction_time, 0.01f, 0.2f, "%.3fs",
+                                          "Look-ahead time for overshoot prediction")) {
+            SAVE_PROFILE();
+        }
+        if (UIHelpers::EnhancedSliderFloat("Overshoot Suppression", &ctx.config.pid_overshoot_suppression, 0.1f, 1.0f, "%.2f",
+                                          "P gain reduction when overshoot predicted")) {
+            SAVE_PROFILE();
+        }
+    }
+    
+    ImGui::Separator();
+    
+    // Motion profiling
+    if (UIHelpers::EnhancedSliderFloat("Max Velocity", &ctx.config.pid_max_velocity, 10.0f, 200.0f, "%.0f px/frame",
+                                      "Maximum movement speed limit")) {
+        SAVE_PROFILE();
+    }
+    
+    if (ImGui::Checkbox("Enable Jerk Limiting", &ctx.config.pid_use_jerk_limit)) {
+        SAVE_PROFILE();
+    }
+    if (ctx.config.pid_use_jerk_limit) {
+        if (UIHelpers::EnhancedSliderFloat("Max Jerk", &ctx.config.pid_max_jerk, 1.0f, 50.0f, "%.1f px/frame²",
+                                          "Maximum acceleration change rate")) {
+            SAVE_PROFILE();
+        }
+    }
+    
     UIHelpers::EndCard();
 }
 

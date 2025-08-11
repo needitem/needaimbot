@@ -63,11 +63,12 @@ public:
         config.ki_y = (std::max)(0.0f, (std::min)(static_cast<float>(config.ki_y), 10.0f));
         config.kd_y = (std::max)(0.0f, (std::min)(static_cast<float>(config.kd_y), 10.0f));
 
-        // PID derivative stabilization bounds
-        config.pid_d_deadband = (std::max)(0.0f, (std::min)(config.pid_d_deadband, 5.0f));
-        config.pid_d_disable_error = (std::max)(0.0f, (std::min)(config.pid_d_disable_error, 10.0f));
-        config.pid_output_deadzone = (std::max)(0.0f, (std::min)(config.pid_output_deadzone, 5.0f));
-        config.pid_d_warmup_frames = (std::max)(0, (std::min)(config.pid_d_warmup_frames, 30));
+        // PID overshoot reduction bounds
+        config.pid_error_smoothing = std::clamp(config.pid_error_smoothing, 0.1f, 1.0f);
+        config.pid_prediction_time = std::clamp(config.pid_prediction_time, 0.01f, 0.5f);
+        config.pid_overshoot_suppression = std::clamp(config.pid_overshoot_suppression, 0.1f, 1.0f);
+        config.pid_max_velocity = std::clamp(config.pid_max_velocity, 1.0f, 500.0f);
+        config.pid_max_jerk = std::clamp(config.pid_max_jerk, 0.1f, 100.0f);
 
         // Detection parameters
         config.confidence_threshold = std::clamp(config.confidence_threshold, 0.01f, 1.0f);
