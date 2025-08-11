@@ -202,10 +202,31 @@ public:
     };
     DoubleBuffer m_doubleBuffer;
     
+    // Event-based synchronization for pipeline stages
     cudaEvent_t m_inferenceDone;
     cudaEvent_t m_preprocessDone; 
     cudaEvent_t processingDone;
     HANDLE m_captureDoneEvent;
+    
+    // Additional events for fine-grained control
+    cudaEvent_t m_postprocessEvent;
+    cudaEvent_t m_colorFilterEvent;
+    cudaEvent_t m_trackingEvent;
+    cudaEvent_t m_finalCopyEvent;
+    
+    // Triple buffering for results
+    static constexpr int kNumResultBuffers = 3;
+    struct ResultBuffer {
+        CudaBuffer<Target> targets;
+        CudaBuffer<int> count;
+        cudaEvent_t readyEvent;
+        std::atomic<bool> isReady{false};
+        int frameId = -1;
+    };
+    ResultBuffer m_resultBuffers[kNumResultBuffers];
+    std::atomic<int> m_currentWriteBuffer{0};
+    std::atomic<int> m_currentReadBuffer{1};
+    std::atomic<int> m_processingBuffer{2};
 
     std::mutex colorMaskMutex; 
 
