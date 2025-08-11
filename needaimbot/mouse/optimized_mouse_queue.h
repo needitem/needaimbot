@@ -1,5 +1,9 @@
 #pragma once
 
+#ifdef _WIN32
+#include <Windows.h>
+#endif
+
 #include <atomic>
 #include <chrono>
 #include <cstring>
@@ -118,7 +122,12 @@ public:
             if (std::chrono::steady_clock::now() - start >= timeout) {
                 return false;
             }
-            std::this_thread::yield();
+            // Use Windows-specific SwitchToThread for better performance
+            #ifdef _WIN32
+                SwitchToThread();
+            #else
+                std::this_thread::yield();
+            #endif
         }
         return true;
     }
