@@ -2,7 +2,7 @@
 #include "../AppContext.h"
 #include "ui_helpers.h"
 #include "../detector/detector.h"
-#include "../tracking/SORTTracker.h"
+#include "../tracking/ByteTracker.h"
 #include <iomanip>
 #include <sstream>
 

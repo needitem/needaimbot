@@ -44,7 +44,7 @@
     
     <ClCompile Include="tracking\\Hungarian.cpp" />
     <ClCompile Include="tracking\\SimpleKalmanTracker.cpp" />
-    <ClCompile Include="tracking\\SORTTracker.cpp" />
+    <ClCompile Include="tracking\\ByteTracker.cpp" />
     <ClCompile Include="cuda\\gpu_tracker_wrapper.cpp" />
     <ClCompile Include="mouse\\input_drivers\\rzctl.cpp" />
     <ClCompile Include="mouse\\input_drivers\\SerialConnection.cpp" />
@@ -119,7 +119,7 @@
     
     <ClInclude Include="tracking\Hungarian.h" />
     <ClInclude Include="tracking\SimpleKalmanTracker.h" />
-    <ClInclude Include="tracking\SORTTracker.h" />
+    <ClInclude Include="tracking\ByteTracker.h" />
     
     <ClInclude Include="mouse\ghub.h" />
     <ClInclude Include="mouse\HidTable.h" />
