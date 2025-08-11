@@ -28,7 +28,7 @@
 
 
 // Forward declarations for tracking
-class SORTTracker;
+class ByteTracker;
 class GPUTracker;
 struct GPUTrackingContext;
 
@@ -163,8 +163,8 @@ public:
     CudaBuffer<int> m_kalmanPredictionsCountGpu;
     bool m_kalmanGraphInitialized = false;
     
-    // Legacy CPU SORT (disabled when GPU tracking is used)
-    std::unique_ptr<SORTTracker> m_sortTracker;
+    // ByteTracker for improved tracking with occlusion handling
+    std::unique_ptr<ByteTracker> m_byteTracker;
     std::unique_ptr<GPUTracker> m_gpuTracker;
 
     bool m_isTargetLocked;

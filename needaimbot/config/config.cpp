@@ -142,11 +142,12 @@ bool Config::loadConfig(const std::string& filename)
         pid_use_jerk_limit = true;
         pid_max_jerk = 10.0f;
         
-        // Initialize SORT tracker parameters
+        // Initialize ByteTracker parameters
         enable_tracking = true;
-        tracker_max_age = 5;
-        tracker_min_hits = 3;
-        tracker_iou_threshold = 0.3f;
+        byte_track_thresh = 0.5f;
+        byte_high_thresh = 0.6f;
+        byte_match_thresh = 0.8f;
+        byte_max_time_lost = 30;
         
         // Initialize Kalman filter parameters
         enable_kalman_filter = false;
@@ -348,11 +349,12 @@ bool Config::loadConfig(const std::string& filename)
     pid_max_jerk = static_cast<float>(get_double_ini("PID", "max_jerk", 10.0));
     
 
-    // Load SORT tracker parameters
+    // Load ByteTracker parameters
     enable_tracking = get_bool_ini("Tracking", "enable_tracking", true);
-    tracker_max_age = get_long_ini("Tracking", "tracker_max_age", 5);
-    tracker_min_hits = get_long_ini("Tracking", "tracker_min_hits", 3);
-    tracker_iou_threshold = static_cast<float>(get_double_ini("Tracking", "tracker_iou_threshold", 0.3));
+    byte_track_thresh = static_cast<float>(get_double_ini("Tracking", "byte_track_thresh", 0.5));
+    byte_high_thresh = static_cast<float>(get_double_ini("Tracking", "byte_high_thresh", 0.6));
+    byte_match_thresh = static_cast<float>(get_double_ini("Tracking", "byte_match_thresh", 0.8));
+    byte_max_time_lost = get_long_ini("Tracking", "byte_max_time_lost", 30);
     
     // Load Kalman filter parameters
     enable_kalman_filter = get_bool_ini("Tracking", "enable_kalman_filter", false);
@@ -633,12 +635,13 @@ bool Config::saveConfig(const std::string& filename)
     file << "max_jerk = " << pid_max_jerk << "\n";
     file << "\n";
 
-    // Save SORT tracker parameters
+    // Save ByteTracker parameters
     file << "[Tracking]\n";
     file << "enable_tracking = " << (enable_tracking ? "true" : "false") << "\n";
-    file << "tracker_max_age = " << tracker_max_age << "\n";
-    file << "tracker_min_hits = " << tracker_min_hits << "\n";
-    file << "tracker_iou_threshold = " << tracker_iou_threshold << "\n";
+    file << "byte_track_thresh = " << byte_track_thresh << "\n";
+    file << "byte_high_thresh = " << byte_high_thresh << "\n";
+    file << "byte_match_thresh = " << byte_match_thresh << "\n";
+    file << "byte_max_time_lost = " << byte_max_time_lost << "\n";
     file << "enable_kalman_filter = " << (enable_kalman_filter ? "true" : "false") << "\n";
     file << "kalman_use_cuda_graph = " << (kalman_use_cuda_graph ? "true" : "false") << "\n";
     file << "kalman_dt = " << kalman_dt << "\n";

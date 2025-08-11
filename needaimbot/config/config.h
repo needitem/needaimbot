@@ -231,11 +231,12 @@ public:
     bool pid_use_jerk_limit = true;        // Enable jerk limiting
     float pid_max_jerk = 10.0f;            // Max acceleration change per frame
 
-    // SORT Tracker parameters
+    // ByteTracker parameters
     bool enable_tracking;       // Enable/disable target tracking
-    int tracker_max_age;        // Max frames to keep track without detection (default: 5)
-    int tracker_min_hits;       // Min hits before track is confirmed (default: 3)
-    float tracker_iou_threshold; // IOU threshold for matching (default: 0.3)
+    float byte_track_thresh = 0.5f;     // Threshold for starting a track
+    float byte_high_thresh = 0.6f;      // High confidence threshold
+    float byte_match_thresh = 0.8f;     // IOU matching threshold
+    int byte_max_time_lost = 30;        // Max frames to keep lost track
     
     // Kalman filter parameters (old - deprecated, use new settings below)
     float kalman_lookahead_time = 0.016f; // Deprecated - use kalman_dt instead

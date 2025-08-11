@@ -32,7 +32,7 @@
 #include "../postprocess/postProcess.h"
 #include "../postprocess/filterGpu.h"
 #include "../config/config.h"
-#include "../tracking/SORTTracker.h"
+#include "../tracking/ByteTracker.h"
 #include "../cuda/gpu_tracker.h"
 
 #if defined(__has_include)
@@ -1044,24 +1044,24 @@ void Detector::inferenceThread()
                 std::vector<TrackedObject> tracked_targets;
                 
                 // Initialize or destroy tracker based on config
-                if (ctx.config.enable_tracking && !m_sortTracker) {
+                if (ctx.config.enable_tracking && !m_byteTracker) {
                     try {
-                        m_sortTracker = std::make_unique<SORTTracker>(
-                            ctx.config.tracker_max_age,
-                            ctx.config.tracker_min_hits,
-                            ctx.config.tracker_iou_threshold
-                        );
+                        m_byteTracker = std::make_unique<ByteTracker>();
+                        m_byteTracker->setTrackThresh(ctx.config.byte_track_thresh);
+                        m_byteTracker->setHighThresh(ctx.config.byte_high_thresh);
+                        m_byteTracker->setMatchThresh(ctx.config.byte_match_thresh);
+                        m_byteTracker->setMaxTimeLost(ctx.config.byte_max_time_lost);
                     } catch (const std::exception& e) {
-                        std::cerr << "[Tracker] Failed to initialize SORT tracker: " << e.what() << std::endl;
+                        std::cerr << "[Tracker] Failed to initialize ByteTracker: " << e.what() << std::endl;
                     }
-                } else if (!ctx.config.enable_tracking && m_sortTracker) {
+                } else if (!ctx.config.enable_tracking && m_byteTracker) {
                     // Clean up tracker if tracking is disabled
-                    m_sortTracker.reset();
+                    m_byteTracker.reset();
                     {
                         std::lock_guard<std::mutex> lock(m_trackingMutex);
                         m_trackedObjects.clear();
                     }
-                    std::cout << "[Tracker] SORT tracker disabled and cleaned up" << std::endl;
+                    std::cout << "[Tracker] ByteTracker disabled and cleaned up" << std::endl;
                 }
                 
                 // GPU Tracking System  
