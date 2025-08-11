@@ -22,6 +22,9 @@
 #include <iostream>
 #include <random>
 #include <functional>
+#ifdef _WIN32
+#include <intrin.h>  // For _mm_prefetch
+#endif
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -188,7 +191,7 @@ void MouseThread::updateConfig(
 {
     auto& ctx = AppContext::getInstance();
     {
-        std::lock_guard<std::mutex> lock(member_data_mutex_); 
+        std::unique_lock<std::shared_mutex> lock(member_data_mutex_); 
         initializeScreen(resolution, bScope_multiplier, norecoil_ms);
         
     }
@@ -222,7 +225,7 @@ bool MouseThread::checkTargetInScope(float target_x, float target_y, float targe
     // Update cache every 50ms
     auto now = std::chrono::steady_clock::now();
     if (now - cache.last_update > std::chrono::milliseconds(50)) {
-        std::lock_guard<std::mutex> lock(member_data_mutex_);
+        std::shared_lock<std::shared_mutex> lock(member_data_mutex_);
         cache.update(this->screen_width, this->screen_height, this->center_x, this->center_y);
     }
     
@@ -252,16 +255,20 @@ bool MouseThread::checkTargetInScope(float target_x, float target_y, float targe
 
 void MouseThread::moveMouse(const AimbotTarget &target)
 {
+#ifdef _WIN32
+    // Prefetch target data into cache for faster access
+    _mm_prefetch(reinterpret_cast<const char*>(&target), _MM_HINT_T0);
+#endif
     auto& ctx = AppContext::getInstance();
     
-    // Fast path: early exit checks
-    if (target.width <= 0 || target.height <= 0) return;
+    // Fast path: early exit checks (most likely failures first)
+    [[unlikely]] if ((target.width | target.height) <= 0) return;  // Bitwise OR for single comparison
     
     float current_center_x, current_center_y;
     float current_move_scale_x, current_move_scale_y;
     
     // Cache for config values to reduce mutex locks
-    static thread_local struct ConfigCache {
+    alignas(64) static thread_local struct ConfigCache {
         int head_class_id_to_use = -1;
         bool apply_head_offset = false;
         float head_y_offset, body_y_offset;
@@ -270,6 +277,7 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         const std::chrono::milliseconds update_interval{100}; // Update every 100ms
         
         void update(const Config& config) {
+            // Only update if enough time passed (avoid excessive updates)
             auto now = std::chrono::steady_clock::now();
             if (now - last_update >= update_interval) {
                 head_class_name = config.head_class_name;
@@ -291,7 +299,7 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     } config_cache;
 
     {
-        std::lock_guard<std::mutex> lock(member_data_mutex_); 
+        std::shared_lock<std::shared_mutex> lock(member_data_mutex_); 
         current_center_x = this->center_x;
         current_center_y = this->center_y;
         current_move_scale_x = this->move_scale_x;
@@ -316,7 +324,7 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     
     // Quick exit if error is too small
     float error_magnitude_sq = error_x * error_x + error_y * error_y;
-    if (error_magnitude_sq < 0.25f) { // Less than 0.5 pixels
+    [[unlikely]] if (error_magnitude_sq < 0.25f) { // Less than 0.5 pixels
         return;
     }
     
@@ -335,7 +343,7 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     Eigen::Vector2f pid_output;
     
     // Skip timing if metrics disabled
-    if (ctx.config.show_metrics) {
+    [[unlikely]] if (ctx.config.show_metrics) {
         auto pid_start = std::chrono::steady_clock::now();
         pid_output = pid_controller->calculate(error);
         auto pid_end = std::chrono::steady_clock::now();
@@ -354,12 +362,12 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     auto [dx_int, dy_int] = processAccumulatedMovement(move_x, move_y);
     
     // Apply upward aim restriction if active
-    if (local_disable_upward_aim_active && dy_int < 0) {
+    [[unlikely]] if (local_disable_upward_aim_active && dy_int < 0) {
         dy_int = 0;
     }
     
     // Only enqueue if there's actual movement
-    if (dx_int != 0 || dy_int != 0) {
+    [[likely]] if (dx_int != 0 || dy_int != 0) {
         // Direct enqueue without extra checks - already validated
         MouseCommand cmd(MouseCommand::MOVE, dx_int, dy_int);
         mouse_command_queue_.enqueue(std::move(cmd));
@@ -374,7 +382,7 @@ void MouseThread::pressMouse(const AimbotTarget &target)
     float triggerbot_scope_multiplier = bScope_multiplier * 1.5f;
     auto bScope = checkTargetInScope(static_cast<float>(target.x), static_cast<float>(target.y), static_cast<float>(target.width), static_cast<float>(target.height), triggerbot_scope_multiplier);
 
-    if (bScope && !mouse_pressed)
+    [[unlikely]] if (bScope && !mouse_pressed)
     {
         // Add a small delay after release to prevent rapid fire
         auto now = std::chrono::steady_clock::now();
@@ -393,7 +401,7 @@ void MouseThread::pressMouse(const AimbotTarget &target)
 void MouseThread::releaseMouse()
 {
     auto& ctx = AppContext::getInstance();
-    if (!mouse_pressed)
+    [[likely]] if (!mouse_pressed)
         return;
 
     // Add a small delay to prevent rapid press/release cycles
@@ -415,7 +423,7 @@ void MouseThread::applyRecoilCompensation(float strength)
     // Always perform direct recoil control
     float current_norecoil_ms;
     {
-        std::lock_guard<std::mutex> lock(member_data_mutex_); 
+        std::shared_lock<std::shared_mutex> lock(member_data_mutex_); 
         current_norecoil_ms = this->norecoil_ms;
     }
     
@@ -566,7 +574,7 @@ void MouseThread::asyncInputWorker()
     bool show_metrics = ctx.config.show_metrics;
     auto last_metrics_check = std::chrono::steady_clock::now();
     
-    while (!should_stop_thread_.load(std::memory_order_relaxed)) {
+    [[likely]] while (!should_stop_thread_.load(std::memory_order_relaxed)) {
         MouseCommand cmd;
         
         // Batch dequeue for better throughput
@@ -583,7 +591,7 @@ void MouseThread::asyncInputWorker()
             }
         }
         
-        if (batch_count == 0) {
+        [[unlikely]] if (batch_count == 0) {
             if (should_stop_thread_.load(std::memory_order_relaxed)) {
                 break;
             }
@@ -600,7 +608,7 @@ void MouseThread::asyncInputWorker()
         // Process batch
         {
             std::lock_guard<std::mutex> input_lock(input_method_mutex);
-            if (input_method && input_method->isValid()) {
+            [[likely]] if (input_method && input_method->isValid()) {
                 for (size_t i = 0; i < batch_count; ++i) {
                     const auto& cmd = batch[i];
                     auto exec_start = show_metrics ? std::chrono::high_resolution_clock::now() : std::chrono::high_resolution_clock::time_point{};
@@ -619,7 +627,7 @@ void MouseThread::asyncInputWorker()
                     }
                     
                     // Track performance only if enabled
-                    if (show_metrics) {
+                    [[unlikely]] if (show_metrics) {
                         auto exec_end = std::chrono::high_resolution_clock::now();
                         float exec_duration_ms = std::chrono::duration<float, std::milli>(exec_end - exec_start).count();
                         ctx.g_current_input_send_time_ms.store(exec_duration_ms, std::memory_order_relaxed);

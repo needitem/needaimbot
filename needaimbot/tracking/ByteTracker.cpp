@@ -182,10 +182,10 @@ void ByteTracker::associateDetectionsToTracks(
     
     if (tracks.empty() || detections.empty()) {
         for (size_t i = 0; i < tracks.size(); ++i) {
-            unmatched_tracks.push_back(i);
+            unmatched_tracks.push_back(static_cast<int>(i));
         }
         for (size_t i = 0; i < detections.size(); ++i) {
-            unmatched_detections.push_back(i);
+            unmatched_detections.push_back(static_cast<int>(i));
         }
         return;
     }
@@ -210,18 +210,18 @@ void ByteTracker::associateDetectionsToTracks(
     std::set<int> matched_det_set;
     for (size_t i = 0; i < assignment.size(); ++i) {
         if (assignment[i] >= 0 && iou_matrix[i][assignment[i]] >= thresh) {
-            matched_tracks.push_back(i);
+            matched_tracks.push_back(static_cast<int>(i));
             matched_detections.push_back(assignment[i]);
             matched_det_set.insert(assignment[i]);
         } else {
-            unmatched_tracks.push_back(i);
+            unmatched_tracks.push_back(static_cast<int>(i));
         }
     }
     
     // Find unmatched detections
     for (size_t j = 0; j < detections.size(); ++j) {
-        if (matched_det_set.find(j) == matched_det_set.end()) {
-            unmatched_detections.push_back(j);
+        if (matched_det_set.find(static_cast<int>(j)) == matched_det_set.end()) {
+            unmatched_detections.push_back(static_cast<int>(j));
         }
     }
 }
