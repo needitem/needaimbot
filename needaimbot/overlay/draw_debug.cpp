@@ -13,7 +13,7 @@
 #include <cuda_runtime.h> 
 #include "../postprocess/postProcess.h" 
 #include "../cuda/color_conversion.h"
-#include "../tracking/SORTTracker.h"
+#include "../tracking/ByteTracker.h"
  
 
 
