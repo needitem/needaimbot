@@ -5,7 +5,7 @@
 #include <memory>
 #include <set>
 #include "../modules/eigen/include/Eigen/Dense"
-#include "KalmanTracker.h"
+#include "SimpleKalmanTracker.h"
 #include "../core/Target.h"
 
 /**
@@ -30,7 +30,7 @@ public:
     // Track information
     struct Track {
         int track_id;
-        KalmanTracker kalman_tracker;
+        SimpleKalmanTracker kalman_tracker;
         TrackState state;
         int time_since_update;
         int hit_count;
@@ -38,7 +38,7 @@ public:
         Target target;  // Using existing Target structure
         
         Track(const Target& t, int id) 
-            : track_id(id), kalman_tracker(cv::Rect2f(t.x, t.y, t.width, t.height)), 
+            : track_id(id), kalman_tracker(SimpleRect(t.x, t.y, t.width, t.height)), 
               state(TrackState::NEW), time_since_update(0), hit_count(1), 
               start_frame(0), target(t) {
             target.id = id;

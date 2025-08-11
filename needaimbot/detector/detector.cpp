@@ -12,6 +12,7 @@
 #include "../cuda/cuda_float_processing.h"
 #include "../cuda/color_filter.h"
 #include "../cuda/gpu_kalman_filter.h"
+#include "../cuda/gpu_tracker.h"
 
 #include <NvInfer.h>
 #include <NvOnnxParser.h>

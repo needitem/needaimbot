@@ -238,6 +238,11 @@ public:
     float byte_match_thresh = 0.8f;     // IOU matching threshold
     int byte_max_time_lost = 30;        // Max frames to keep lost track
     
+    // Legacy tracker parameters (for compatibility)
+    int tracker_max_age = 30;            // Max frames without detection
+    int tracker_min_hits = 3;            // Min hits to confirm track
+    float tracker_iou_threshold = 0.3f;  // IOU threshold for matching
+    
     // Kalman filter parameters (old - deprecated, use new settings below)
     float kalman_lookahead_time = 0.016f; // Deprecated - use kalman_dt instead
     

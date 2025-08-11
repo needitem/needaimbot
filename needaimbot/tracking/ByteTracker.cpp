@@ -137,10 +137,10 @@ std::vector<std::vector<float>> ByteTracker::calculateIOUMatrix(
     std::vector<std::vector<float>> iou_matrix(num_tracks, std::vector<float>(num_dets, 0.0f));
     
     for (size_t i = 0; i < num_tracks; ++i) {
-        cv::Rect2f track_bbox = tracks[i]->kalman_tracker.get_state();
+        SimpleRect track_bbox = tracks[i]->kalman_tracker.get_state();
         
         for (size_t j = 0; j < num_dets; ++j) {
-            cv::Rect2f det_bbox(detections[j].x, detections[j].y, 
+            SimpleRect det_bbox(detections[j].x, detections[j].y, 
                                detections[j].width, detections[j].height);
             
             // Calculate intersection
@@ -227,11 +227,11 @@ void ByteTracker::associateDetectionsToTracks(
 }
 
 void ByteTracker::updateTrack(Track* track, const Target& det) {
-    cv::Rect2f bbox(det.x, det.y, det.width, det.height);
+    SimpleRect bbox(det.x, det.y, det.width, det.height);
     track->kalman_tracker.update(bbox);
     
     // Update velocity from Kalman filter state
-    cv::Rect2f state = track->kalman_tracker.get_state();
+    SimpleRect state = track->kalman_tracker.get_state();
     track->target = det;
     track->target.id = track->track_id;
     track->target.velocity_x = state.x - det.x;
