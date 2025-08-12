@@ -25,6 +25,9 @@ struct PIDConfig {
     float max_jerk;
     bool use_error_filter;
     bool use_jerk_limit;
+    // Final output processing (optimized for efficiency)
+    float sensitivity;           // Global sensitivity multiplier
+    float max_final_output;      // Final clamping value
 };
 
 // Constant memory for PID configuration (faster access)
@@ -116,7 +119,15 @@ __global__ void pidCalculateKernel(
     state->prev_error = working_error;
     state->prev_output = output;
     
-    // Write output
+    // Apply sensitivity multiplier
+    output.x *= d_pid_config.sensitivity;
+    output.y *= d_pid_config.sensitivity;
+    
+    // Final output clamping
+    output.x = fmaxf(-d_pid_config.max_final_output, fminf(d_pid_config.max_final_output, output.x));
+    output.y = fmaxf(-d_pid_config.max_final_output, fminf(d_pid_config.max_final_output, output.y));
+    
+    // Write final output
     *output_dx = output.x;
     *output_dy = output.y;
 }
@@ -195,6 +206,14 @@ __global__ void pidCalculateBatchKernel(
     state->prev_error = working_error;
     state->prev_output = output;
     
+    // Apply sensitivity multiplier
+    output.x *= d_pid_config.sensitivity;
+    output.y *= d_pid_config.sensitivity;
+    
+    // Final output clamping
+    output.x = fmaxf(-d_pid_config.max_final_output, fminf(d_pid_config.max_final_output, output.x));
+    output.y = fmaxf(-d_pid_config.max_final_output, fminf(d_pid_config.max_final_output, output.y));
+    
     outputs_dx[idx] = output.x;
     outputs_dy[idx] = output.y;
 }
@@ -217,6 +236,7 @@ void initializeGpuPID(
     float kp_x, float ki_x, float kd_x,
     float kp_y, float ki_y, float kd_y,
     float screen_center_x, float screen_center_y,
+    float sensitivity, float max_final_output,
     cudaStream_t stream
 ) {
     PIDConfig config;
@@ -233,6 +253,9 @@ void initializeGpuPID(
     config.max_jerk = 10.0f;
     config.use_error_filter = true;
     config.use_jerk_limit = true;
+    // Optimized final processing
+    config.sensitivity = sensitivity;
+    config.max_final_output = max_final_output;
     
     cudaMemcpyToSymbolAsync(d_pid_config, &config, sizeof(PIDConfig), 0, 
                             cudaMemcpyHostToDevice, stream);

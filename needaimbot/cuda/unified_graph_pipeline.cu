@@ -246,6 +246,8 @@ UnifiedGraphPipeline::~UnifiedGraphPipeline() {
     
     if (m_state.startEvent) cudaEventDestroy(m_state.startEvent);
     if (m_state.endEvent) cudaEventDestroy(m_state.endEvent);
+    if (m_detectionEvent) cudaEventDestroy(m_detectionEvent);
+    if (m_trackingEvent) cudaEventDestroy(m_trackingEvent);
 }
 
 bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
@@ -265,6 +267,11 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
         m_tripleBuffer = std::make_unique<TripleBuffer>();
         // Triple buffer initialization will be done in allocateBuffers()
     }
+    
+    // Create events for two-stage pipeline
+    cudaEventCreateWithFlags(&m_detectionEvent, cudaEventDisableTiming);
+    cudaEventCreateWithFlags(&m_trackingEvent, cudaEventDisableTiming);
+    m_prevFrameHasTarget = false;
     
     // Allocate pipeline buffers
     if (!allocateBuffers()) {
@@ -498,60 +505,47 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
 }
 
 bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
-    // Prefer DynamicCudaGraph if available
-    if (m_dynamicGraph && m_dynamicGraph->isReady()) {
-        // Use dynamic graph for execution
-        if (!stream) stream = m_primaryStream;
-        
-        // Record start time if profiling
-        if (m_config.enableProfiling) {
-            cudaEventRecord(m_state.startEvent, stream);
-        }
-        
-        // Launch using DynamicCudaGraph (supports parameter updates)
-        cudaError_t err = m_dynamicGraph->launch();
+    // Use optimized two-stage pipeline for conditional execution
+    if (!stream) stream = m_primaryStream;
+    
+    // Stage 1: Always execute detection graph
+    if (m_detectionGraph && m_detectionGraphExec) {
+        cudaError_t err = cudaGraphLaunch(m_detectionGraphExec, stream);
         if (err != cudaSuccess) {
-            std::cerr << "[UnifiedGraph] Dynamic graph execution failed: " 
-                      << cudaGetErrorString(err) << std::endl;
-            return executeDirect(stream);  // Fallback to direct execution
-        }
-    } else if (m_state.graphReady) {
-        // Use legacy graph execution
-        if (!stream) stream = m_primaryStream;
-        
-        // Record start time if profiling
-        if (m_config.enableProfiling) {
-            cudaEventRecord(m_state.startEvent, stream);
+            return executeDirect(stream);
         }
         
-        // Execute the graph
+        // Check detection results asynchronously
+        cudaEventRecord(m_detectionEvent, stream);
+        
+        // Stage 2: Conditionally execute tracking/PID graph
+        // Check previous frame's detection result (pipelined)
+        if (m_prevFrameHasTarget) {
+            if (m_trackingGraph && m_trackingGraphExec) {
+                err = cudaGraphLaunch(m_trackingGraphExec, stream);
+                if (err != cudaSuccess) {
+                    std::cerr << "[UnifiedGraph] Tracking graph failed\n";
+                }
+            }
+        }
+        
+        // Async check for current frame targets (for next frame)
+        checkTargetsAsync(stream);
+        
+    } else if (m_state.graphReady && m_graphExec) {
+        // Fallback to monolithic graph if two-stage not ready
         cudaError_t err = cudaGraphLaunch(m_graphExec, stream);
         if (err != cudaSuccess) {
-            std::cerr << "[UnifiedGraph] Graph execution failed: " 
-                      << cudaGetErrorString(err) << std::endl;
             m_state.needsRebuild = true;
             return false;
         }
     } else {
-        // No graph ready, try to capture or use direct execution
-        if (m_state.needsRebuild) {
-            if (!captureGraph(stream)) {
-                return executeDirect(stream);
-            }
-            return executeGraph(stream);  // Retry with captured graph
-        } else {
-            return executeDirect(stream);
-        }
+        return executeDirect(stream);
     }
     
-    // Record end time if profiling
+    // Async profiling without sync
     if (m_config.enableProfiling) {
-        cudaEventRecord(m_state.endEvent, stream);
-        cudaEventSynchronize(m_state.endEvent);
-        
-        float latency;
-        cudaEventElapsedTime(&latency, m_state.startEvent, m_state.endEvent);
-        updateStatistics(latency);
+        updateProfilingAsync(stream);
     }
     
     m_state.frameCount++;
@@ -889,6 +883,51 @@ bool UnifiedGraphPipeline::updateTargetSelectionParams(float centerWeight, float
     std::cout << "[UnifiedGraph] Updated target selection params - Center: " 
               << centerWeight << ", Size: " << sizeWeight << std::endl;
     return true;
+}
+
+// Two-stage pipeline helper implementations
+void UnifiedGraphPipeline::checkTargetsAsync(cudaStream_t stream) {
+    // Launch a small kernel to check if any targets were detected
+    // This updates m_prevFrameHasTarget for the next frame
+    if (m_d_numDetections) {
+        // Copy detection count to a pinned memory location asynchronously
+        static int* h_targetCount = nullptr;
+        if (!h_targetCount) {
+            cudaHostAlloc(&h_targetCount, sizeof(int), cudaHostAllocMapped);
+        }
+        
+        cudaMemcpyAsync(h_targetCount, m_d_numDetections, sizeof(int), 
+                       cudaMemcpyDeviceToHost, stream);
+        
+        // Record event to check later
+        cudaEventRecord(m_detectionEvent, stream);
+        
+        // Check in next frame (pipelined)
+        if (cudaEventQuery(m_detectionEvent) == cudaSuccess) {
+            m_prevFrameHasTarget = (*h_targetCount > 0);
+        }
+    }
+}
+
+void UnifiedGraphPipeline::updateProfilingAsync(cudaStream_t stream) {
+    // Async profiling update without blocking
+    static cudaEvent_t lastFrameEnd = nullptr;
+    if (!lastFrameEnd) {
+        cudaEventCreateWithFlags(&lastFrameEnd, cudaEventDefault);
+    }
+    
+    if (m_state.frameCount > 0) {
+        // Check if last frame's profiling is ready
+        if (cudaEventQuery(lastFrameEnd) == cudaSuccess) {
+            float latency;
+            cudaEventElapsedTime(&latency, m_state.startEvent, lastFrameEnd);
+            updateStatistics(latency);
+        }
+    }
+    
+    // Record current frame end
+    cudaEventRecord(m_state.startEvent, stream);
+    cudaEventRecord(lastFrameEnd, stream);
 }
 
 } // namespace needaimbot
