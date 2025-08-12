@@ -367,30 +367,78 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     
     // 3. TensorRT Inference
     if (m_config.enableDetection && m_detector) {
-        // TODO: Detector must expose async inference method
+        // Execute async inference using the detector
+        // Note: The detector should already have async capabilities
+        // We need to ensure the detector's processFrame method is async-compatible
+        // For now, using placeholder until detector exposes async API
         // m_detector->runInferenceAsync(m_d_yoloInput, m_d_inferenceOutput, stream);
+        
+        // Alternative: If detector has AsyncTensorRTInference member
+        // m_detector->getAsyncInference()->submitInference(m_d_yoloInput, stream);
     }
     
     // 4. Postprocessing (NMS, filtering, target selection)
-    if (m_config.enableDetection) {
-        // TODO: Integrate postprocessing kernels
-        // launchNMSKernel(m_d_inferenceOutput, m_d_nmsOutput, stream);
-        // launchFilterKernel(m_d_nmsOutput, m_d_filteredOutput, stream);
-        // launchTargetSelectionKernel(m_d_filteredOutput, m_d_selectedTarget, stream);
+    if (m_config.enableDetection && m_d_inferenceOutput && m_d_detections) {
+        // Apply NMS using pre-allocated buffers
+        int maxDetections = 100;
+        
+        NMSGpu(
+            reinterpret_cast<Target*>(m_d_inferenceOutput),
+            maxDetections,
+            m_d_detections,
+            m_d_numDetections,
+            maxDetections,
+            0.5f,  // NMS threshold
+            m_captureBuffer.cols(),
+            m_captureBuffer.rows(),
+            m_d_x1, m_d_y1, m_d_x2, m_d_y2,
+            m_d_areas, m_d_scores_nms, m_d_classIds_nms,
+            m_d_iou_matrix, m_d_keep, m_d_indices,
+            stream
+        );
+        
+        // Select best target (simplified - just take first detection for now)
+        cudaMemcpyAsync(m_d_selectedTarget, m_d_detections, 
+                       sizeof(Target), cudaMemcpyDeviceToDevice, stream);
     }
     
     // 5. Tracking (Kalman filter)
-    if (m_config.enableTracking && m_tracker) {
-        // TODO: Integrate GPU Kalman filter
-        // m_tracker->predictAsync(stream);
-        // m_tracker->updateAsync(m_d_selectedTarget, stream);
-        // m_tracker->getOutputAsync(m_d_trackedTarget, stream);
+    if (m_config.enableTracking && m_tracker && m_d_selectedTarget) {
+        // Process tracking with GPU Kalman filter using pre-allocated buffer
+        processKalmanFilter(
+            m_tracker,
+            m_d_selectedTarget,  // Input measurement
+            1,                   // Single target for now
+            m_d_trackedTarget,   // Output tracked target
+            m_d_outputCount,     // Output count (pre-allocated)
+            stream,
+            false,              // Don't use graph within graph capture
+            1.0f                // Lookahead frames
+        );
     }
     
     // 6. PID Control
-    if (m_config.enablePIDControl && m_pidController) {
-        // TODO: Integrate GPU PID controller
-        // m_pidController->computeAsync(m_d_trackedTarget, m_d_pidOutput, stream);
+    if (m_config.enablePIDControl && m_pidController && m_d_trackedTarget) {
+        // Extract target position from tracked target
+        // Note: We need to copy target position to host temporarily
+        // In a fully optimized version, we'd pass the Target struct directly to PID kernel
+        Target h_target;
+        cudaMemcpyAsync(&h_target, m_d_trackedTarget, sizeof(Target), 
+                       cudaMemcpyDeviceToHost, stream);
+        cudaStreamSynchronize(stream);
+        
+        // Calculate PID control output on GPU
+        float current_time = static_cast<float>(m_state.frameCount) * 0.033f; // 30 FPS assumed
+        
+        // Use the GpuPIDController's calculateGpu method
+        // This method handles the PID calculation internally
+        m_pidController->calculateGpu(h_target.x, h_target.y, current_time);
+        
+        // Copy PID output to the pipeline output buffer
+        cudaMemcpyAsync(m_d_pidOutput, m_pidController->getGpuOutputDx(), 
+                       sizeof(float), cudaMemcpyDeviceToDevice, stream);
+        cudaMemcpyAsync(m_d_pidOutput + 1, m_pidController->getGpuOutputDy(), 
+                       sizeof(float), cudaMemcpyDeviceToDevice, stream);
     }
     
     // 7. Final output copy (only 2 floats for mouse X,Y)
@@ -704,6 +752,20 @@ bool UnifiedGraphPipeline::allocateBuffers() {
     cudaMalloc(&m_d_trackedTargets, maxDetections * sizeof(Target));
     cudaMalloc(&m_d_pidOutput, 2 * sizeof(float));  // X, Y mouse delta
     
+    // Allocate NMS temporary buffers
+    cudaMalloc(&m_d_numDetections, sizeof(int));
+    cudaMalloc(&m_d_x1, maxDetections * sizeof(int));
+    cudaMalloc(&m_d_y1, maxDetections * sizeof(int));
+    cudaMalloc(&m_d_x2, maxDetections * sizeof(int));
+    cudaMalloc(&m_d_y2, maxDetections * sizeof(int));
+    cudaMalloc(&m_d_areas, maxDetections * sizeof(float));
+    cudaMalloc(&m_d_scores_nms, maxDetections * sizeof(float));
+    cudaMalloc(&m_d_classIds_nms, maxDetections * sizeof(int));
+    cudaMalloc(&m_d_iou_matrix, maxDetections * maxDetections * sizeof(float));
+    cudaMalloc(&m_d_keep, maxDetections * sizeof(bool));
+    cudaMalloc(&m_d_indices, maxDetections * sizeof(int));
+    cudaMalloc(&m_d_outputCount, sizeof(int));
+    
     // Allocate pinned host memory for zero-copy transfers
     cudaHostAlloc(&m_h_inputBuffer, width * height * 4, cudaHostAllocDefault);
     cudaHostAlloc(&m_h_outputBuffer, 2 * sizeof(float), cudaHostAllocMapped);
@@ -742,6 +804,20 @@ void UnifiedGraphPipeline::deallocateBuffers() {
     if (m_d_trackedTargets) cudaFree(m_d_trackedTargets);
     if (m_d_pidOutput) cudaFree(m_d_pidOutput);
     
+    // Free NMS temporary buffers
+    if (m_d_numDetections) cudaFree(m_d_numDetections);
+    if (m_d_x1) cudaFree(m_d_x1);
+    if (m_d_y1) cudaFree(m_d_y1);
+    if (m_d_x2) cudaFree(m_d_x2);
+    if (m_d_y2) cudaFree(m_d_y2);
+    if (m_d_areas) cudaFree(m_d_areas);
+    if (m_d_scores_nms) cudaFree(m_d_scores_nms);
+    if (m_d_classIds_nms) cudaFree(m_d_classIds_nms);
+    if (m_d_iou_matrix) cudaFree(m_d_iou_matrix);
+    if (m_d_keep) cudaFree(m_d_keep);
+    if (m_d_indices) cudaFree(m_d_indices);
+    if (m_d_outputCount) cudaFree(m_d_outputCount);
+    
     // Free pinned host memory
     if (m_h_inputBuffer) cudaFreeHost(m_h_inputBuffer);
     if (m_h_outputBuffer) cudaFreeHost(m_h_outputBuffer);
@@ -756,6 +832,18 @@ void UnifiedGraphPipeline::deallocateBuffers() {
     m_d_trackedTarget = nullptr;
     m_d_trackedTargets = nullptr;
     m_d_pidOutput = nullptr;
+    m_d_numDetections = nullptr;
+    m_d_x1 = nullptr;
+    m_d_y1 = nullptr;
+    m_d_x2 = nullptr;
+    m_d_y2 = nullptr;
+    m_d_areas = nullptr;
+    m_d_scores_nms = nullptr;
+    m_d_classIds_nms = nullptr;
+    m_d_iou_matrix = nullptr;
+    m_d_keep = nullptr;
+    m_d_indices = nullptr;
+    m_d_outputCount = nullptr;
     m_h_inputBuffer = nullptr;
     m_h_outputBuffer = nullptr;
 }
