@@ -6,6 +6,7 @@
 #include <memory>
 #include <atomic>
 #include <mutex>
+#include <unordered_map>
 #include "simple_cuda_mat.h"
 #include "../core/Target.h"
 
@@ -62,6 +63,10 @@ struct UnifiedPipelineConfig {
     int graphInstantiateFlags = 0;
 };
 
+// Forward declaration for internal classes
+class DynamicCudaGraph;
+class PipelineCoordinator;
+
 class UnifiedGraphPipeline {
 public:
     UnifiedGraphPipeline();
@@ -77,12 +82,17 @@ public:
     void setPIDController(GpuPIDController* pidController) { m_pidController = pidController; }
     
     // Main execution methods
-    bool captureGraph(cudaStream_t stream);
-    bool executeGraph(cudaStream_t stream);
-    bool updateGraph(cudaStream_t stream);
+    bool captureGraph(cudaStream_t stream = nullptr);
+    bool executeGraph(cudaStream_t stream = nullptr);
+    bool updateGraph(cudaStream_t stream = nullptr);
     
     // Direct execution (non-graph fallback)
-    bool executeDirect(cudaStream_t stream);
+    bool executeDirect(cudaStream_t stream = nullptr);
+    
+    // Dynamic parameter updates (no graph recapture needed)
+    bool updateConfidenceThreshold(float threshold);
+    bool updateNMSThreshold(float threshold);
+    bool updateTargetSelectionParams(float centerWeight, float sizeWeight);
     
     // Pipeline data management
     void setInputTexture(cudaGraphicsResource_t resource) { m_cudaResource = resource; }
@@ -94,7 +104,11 @@ public:
     bool isGraphReady() const { return m_state.graphReady; }
     
 private:
-    // Graph management
+    // Advanced graph and stream management
+    std::unique_ptr<DynamicCudaGraph> m_dynamicGraph;
+    std::unique_ptr<PipelineCoordinator> m_coordinator;
+    
+    // Legacy graph management (for compatibility)
     cudaGraph_t m_graph = nullptr;
     cudaGraphExec_t m_graphExec = nullptr;
     cudaStream_t m_primaryStream = nullptr;
@@ -105,6 +119,20 @@ private:
     std::vector<cudaGraphNode_t> m_postprocessNodes;
     std::vector<cudaGraphNode_t> m_trackingNodes;
     std::vector<cudaGraphNode_t> m_pidNodes;
+    
+    // Node name mapping for dynamic updates
+    std::unordered_map<std::string, cudaGraphNode_t> m_namedNodes;
+    
+    // Triple buffering for async pipeline
+    struct TripleBuffer {
+        SimpleCudaMat buffers[3];
+        std::atomic<int> captureIdx{0};
+        std::atomic<int> inferenceIdx{1};
+        std::atomic<int> displayIdx{2};
+        cudaEvent_t events[3];
+        bool isReady[3] = {false, false, false};
+    };
+    std::unique_ptr<TripleBuffer> m_tripleBuffer;
     
     // Component pointers
     ::Detector* m_detector = nullptr;
