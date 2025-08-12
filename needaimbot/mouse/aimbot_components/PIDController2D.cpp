@@ -13,7 +13,7 @@ PIDController2D::PIDController2D(float kp_x, float ki_x, float kd_x, float kp_y,
     reset();
 }
 
-Eigen::Vector2f PIDController2D::calculate(const Eigen::Vector2f &error)
+LA::Vector2f PIDController2D::calculate(const LA::Vector2f &error)
 {
     // Use steady_clock consistently for stable dt computation
     auto now = std::chrono::steady_clock::now();
@@ -29,7 +29,7 @@ Eigen::Vector2f PIDController2D::calculate(const Eigen::Vector2f &error)
     
     // ============ SETPOINT FILTERING ============
     // Smooth sudden target changes to reduce overshoot
-    Eigen::Vector2f current_error = error;
+    LA::Vector2f current_error = error;
     if (first_error) {
         filtered_error = current_error;
         first_error = false;
@@ -39,7 +39,7 @@ Eigen::Vector2f PIDController2D::calculate(const Eigen::Vector2f &error)
     }
     
     // Use filtered error for calculations
-    const Eigen::Vector2f& working_error = ctx.config.pid_use_error_filter ? filtered_error : current_error;
+    const LA::Vector2f& working_error = ctx.config.pid_use_error_filter ? filtered_error : current_error;
 
     // ============ IMPROVED ANTI-WINDUP ============
     constexpr float INTEGRAL_CLAMP = 100.0f;
@@ -95,7 +95,7 @@ Eigen::Vector2f PIDController2D::calculate(const Eigen::Vector2f &error)
 
     
     // ============ PID COMPOSITION ============
-    Eigen::Vector2f output;
+    LA::Vector2f output;
     float p_x = kp_x * working_error.x();
     float i_x = ki_x * integral.x();
     float d_x = kd_x * derivative.x();
@@ -160,11 +160,11 @@ Eigen::Vector2f PIDController2D::calculate(const Eigen::Vector2f &error)
 
 void PIDController2D::reset()
 {
-    prev_error = Eigen::Vector2f::Zero();
-    integral = Eigen::Vector2f::Zero();
-    derivative = Eigen::Vector2f::Zero();
-    filtered_error = Eigen::Vector2f::Zero();
-    prev_output = Eigen::Vector2f::Zero();
+    prev_error = LA::Vector2f::Zero();
+    integral = LA::Vector2f::Zero();
+    derivative = LA::Vector2f::Zero();
+    filtered_error = LA::Vector2f::Zero();
+    prev_output = LA::Vector2f::Zero();
     first_error = true;
     integral_enabled_x = true;
     integral_enabled_y = true;

@@ -63,9 +63,9 @@
     <ClCompile Include="overlay\draw_target.cpp" />
     <ClCompile Include="overlay\overlay.cpp" />
     <ClCompile Include="overlay\ui_helpers.cpp" />
-    <ClCompile Include="scr\other_tools.cpp" />
     <ClCompile Include="needaimbot.cpp" />
     <ClCompile Include="utils\image_io.cpp" />
+    <ClCompile Include="scr\other_tools.cpp" />
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="postprocess\filterGpu.cu" />
@@ -154,13 +154,9 @@
     <ClInclude Include="needaimbot.h" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="packages.config" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="version_info.rc" />
-  </ItemGroup>
-  <ItemGroup>
-    <AppxManifest Include="Package.appxmanifest" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>16.0</VCProjectVersion>

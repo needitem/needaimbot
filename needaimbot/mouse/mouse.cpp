@@ -340,8 +340,8 @@ void MouseThread::moveMouse(const AimbotTarget &target)
     }
     
     // Optimized PID calculation
-    Eigen::Vector2f error(error_x, error_y);
-    Eigen::Vector2f pid_output;
+    LA::Vector2f error(error_x, error_y);
+    LA::Vector2f pid_output;
     
     // Always calculate PID without branching
     pid_output = pid_controller->calculate(error);

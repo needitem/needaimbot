@@ -4,7 +4,7 @@
 #include <vector>
 #include <memory>
 #include <set>
-#include "../modules/eigen/include/Eigen/Dense"
+
 #include "SimpleKalmanTracker.h"
 #include "../core/Target.h"
 
