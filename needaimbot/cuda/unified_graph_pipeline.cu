@@ -286,29 +286,17 @@ bool UnifiedGraphPipeline::executeDirect(cudaStream_t stream) {
     
     // 2. Detection pipeline
     if (m_config.enableDetection && m_detector) {
-        // Preprocessing
-        // preprocessImage(m_captureBuffer, m_preprocessBuffer, stream); // TODO: implement
-        
-        // Inference (TensorRT)
-        // Note: We need detector to expose a method that works with our buffers
-        // For now, this is a placeholder
-        
-        // Postprocessing
-        int numDetections = 0;
-        // postprocessDetections(m_d_inferenceOutput, m_d_detections, 
-        //                     &numDetections, stream); // TODO: implement
+        // TODO: Implement detection pipeline
     }
     
     // 3. Tracking
     if (m_config.enableTracking && m_tracker) {
-        int numTracked = 0;
-        // processKalmanFilter(m_tracker, m_d_detections, 100,
-        //                   m_d_trackedTargets, &numTracked, stream, false); // TODO: fix namespace
+        // TODO: Implement tracking
     }
     
     // 4. PID Control
     if (m_config.enablePIDControl && m_pidController) {
-        // m_pidController->compute(m_d_trackedTargets, m_d_pidOutput, stream); // TODO: implement
+        // TODO: Implement PID control
     }
     
     // 5. Copy results
