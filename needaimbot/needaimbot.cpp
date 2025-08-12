@@ -116,7 +116,10 @@ std::unique_ptr<InputMethod> initializeInputMethod() {
 
 
 
-void mouseThreadFunction(MouseThread &mouseThread)
+// Event-based mouse thread function
+void mouseThreadFunctionEventBased(MouseThread& mouseThread);
+
+void mouseThreadFunction_OLD(MouseThread &mouseThread)
 {
     auto& ctx = AppContext::getInstance();
     
@@ -612,7 +615,7 @@ int main()
             THREAD_PRIORITY_NORMAL);
         
         ThreadManager mouseThreadMgr("MouseThread", 
-            [&mouseThread]() { mouseThreadFunction(mouseThread); },
+            [&mouseThread]() { mouseThreadFunctionEventBased(mouseThread); },
             THREAD_PRIORITY_TIME_CRITICAL);
         
         ThreadManager overlayThreadMgr("OverlayThread", 
@@ -647,9 +650,10 @@ int main()
         }, THREAD_PRIORITY_LOWEST);
         perfMonitorMgr.start();
 
-        // Wait for keyboard thread to signal exit - busy wait
+        // Wait for keyboard thread to signal exit with efficient polling
         while (keyThreadMgr.isRunning() && !ctx.should_exit) {
-            // Pure busy wait
+            // Sleep to reduce CPU usage while waiting
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
 
         // 안전한 종료 시퀀스

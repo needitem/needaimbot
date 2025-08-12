@@ -9,11 +9,11 @@
 #include <atomic>
 
 enum class LogLevel {
-    DEBUG = 0,
-    INFO = 1,
-    WARNING = 2,
-    ERROR = 3,
-    CRITICAL = 4
+    LOG_DEBUG = 0,
+    LOG_INFO = 1,
+    LOG_WARNING = 2,
+    LOG_ERROR = 3,
+    LOG_CRITICAL = 4
 };
 
 class Logger {
@@ -57,31 +57,31 @@ public:
     // Convenience methods
     template<typename... Args>
     void debug(const std::string& component, Args... args) {
-        log(LogLevel::DEBUG, component, args...);
+        log(LogLevel::LOG_DEBUG, component, args...);
     }
 
     template<typename... Args>
     void info(const std::string& component, Args... args) {
-        log(LogLevel::INFO, component, args...);
+        log(LogLevel::LOG_INFO, component, args...);
     }
 
     template<typename... Args>
     void warning(const std::string& component, Args... args) {
-        log(LogLevel::WARNING, component, args...);
+        log(LogLevel::LOG_WARNING, component, args...);
     }
 
     template<typename... Args>
     void error(const std::string& component, Args... args) {
-        log(LogLevel::ERROR, component, args...);
+        log(LogLevel::LOG_ERROR, component, args...);
     }
 
     template<typename... Args>
     void critical(const std::string& component, Args... args) {
-        log(LogLevel::CRITICAL, component, args...);
+        log(LogLevel::LOG_CRITICAL, component, args...);
     }
 
 private:
-    Logger() : currentLevel_(LogLevel::INFO), 
+    Logger() : currentLevel_(LogLevel::LOG_INFO), 
                consoleLoggingEnabled_(true), 
                fileLoggingEnabled_(false) {}
     
@@ -105,11 +105,11 @@ private:
 
     std::string getLevelString(LogLevel level) {
         switch (level) {
-            case LogLevel::DEBUG: return "DEBUG";
-            case LogLevel::INFO: return "INFO ";
-            case LogLevel::WARNING: return "WARN ";
-            case LogLevel::ERROR: return "ERROR";
-            case LogLevel::CRITICAL: return "CRIT ";
+            case LogLevel::LOG_DEBUG: return "DEBUG";
+            case LogLevel::LOG_INFO: return "INFO ";
+            case LogLevel::LOG_WARNING: return "WARN ";
+            case LogLevel::LOG_ERROR: return "ERROR";
+            case LogLevel::LOG_CRITICAL: return "CRIT ";
             default: return "UNKN ";
         }
     }
@@ -118,7 +118,7 @@ private:
         std::lock_guard<std::mutex> lock(mutex_);
         
         if (consoleLoggingEnabled_) {
-            if (level >= LogLevel::ERROR) {
+            if (level >= LogLevel::LOG_ERROR) {
                 std::cerr << message << std::endl;
             } else {
                 std::cout << message << std::endl;
