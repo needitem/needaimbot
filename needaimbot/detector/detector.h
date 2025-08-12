@@ -74,6 +74,12 @@ public:
     bool initializeCudaContext();
     void processFrame(const SimpleCudaMat &frame);
     void processFrame(const SimpleMat &frame);
+    
+    // CUDA Graph integration methods
+    bool runInferenceAsync(float* d_input, float* d_output, cudaStream_t stream);
+    void processFrameWithGraph(const unsigned char* h_frameData, cudaStream_t stream);
+    float2 getMouseCoordsAsync(cudaStream_t stream);  // Get final mouse coordinates
+    
     void inferenceThread();
     void setCaptureEvent(HANDLE event) { captureEvent = event; }
     
