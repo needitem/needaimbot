@@ -5,8 +5,7 @@
 #define _WINSOCKAPI_
 #include <winsock2.h>
 #include <Windows.h>
-#include "../modules/eigen/include/Eigen/Core"
-#include "../modules/eigen/include/Eigen/Dense"
+#include "../math/LinearAlgebra.h"
 #include <shared_mutex>
 #include <array>
 #include <memory>
