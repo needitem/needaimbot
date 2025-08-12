@@ -19,6 +19,7 @@
 #include "core/constants.h"
 #include "utils/constants.h"
 #include "detector/detector.h"
+#include "cuda/unified_graph_pipeline.h"
 #include "mouse/mouse.h"
 #include "needaimbot.h"
 #include "keyboard/keyboard_listener.h"
@@ -552,6 +553,50 @@ int main()
         }
 
         ctx.detector->initialize("models/" + ctx.config.ai_model);
+        
+        // Initialize CUDA Graph Pipeline for optimized GPU execution
+        std::cout << "[MAIN] Initializing CUDA Graph Pipeline..." << std::endl;
+        auto& pipelineManager = needaimbot::PipelineManager::getInstance();
+        
+        needaimbot::UnifiedPipelineConfig pipelineConfig;
+        pipelineConfig.enableCapture = true;
+        pipelineConfig.enableDetection = true;
+        pipelineConfig.enableTracking = ctx.config.enable_tracking;
+        pipelineConfig.enablePIDControl = true;
+        pipelineConfig.useGraphOptimization = true;  // Enable CUDA Graph
+        pipelineConfig.allowGraphUpdate = true;
+        pipelineConfig.enableProfiling = false;  // Set to true for performance metrics
+        
+        if (!pipelineManager.initializePipeline(pipelineConfig)) {
+            std::cerr << "[MAIN] Failed to initialize CUDA Graph Pipeline" << std::endl;
+            std::cerr << "[MAIN] Falling back to standard pipeline" << std::endl;
+            // Continue with standard pipeline
+        } else {
+            std::cout << "[MAIN] CUDA Graph Pipeline initialized successfully" << std::endl;
+            
+            // Set component references for the pipeline
+            auto* pipeline = pipelineManager.getPipeline();
+            if (pipeline) {
+                pipeline->setDetector(ctx.detector);
+                // TODO: Set tracker and PID controller when available
+                // pipeline->setTracker(gpuKalmanTracker);
+                // pipeline->setPIDController(gpuPidController);
+                
+                // Capture the graph on first execution
+                cudaStream_t graphStream = nullptr;
+                cudaStreamCreate(&graphStream);
+                
+                if (pipeline->captureGraph(graphStream)) {
+                    std::cout << "[MAIN] CUDA Graph captured successfully" << std::endl;
+                    ctx.use_cuda_graph = true;  // Flag to use graph in capture thread
+                } else {
+                    std::cout << "[MAIN] CUDA Graph capture failed, using direct execution" << std::endl;
+                    ctx.use_cuda_graph = false;
+                }
+                
+                cudaStreamDestroy(graphStream);
+            }
+        }
 
         SetThreadAffinityMask(GetCurrentThread(), 1 << 3);
         

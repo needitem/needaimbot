@@ -105,6 +105,9 @@ public:
     std::atomic<float> g_movementDeltaX{0.0f};
     std::atomic<float> g_movementDeltaY{0.0f};
 
+    // CUDA Graph optimization
+    std::atomic<bool> use_cuda_graph{false};
+    
     // Modules
     MouseThread* global_mouse_thread = nullptr;  // Stack allocated in main, so using raw pointer
     Detector* detector = nullptr;  // Raw pointer, lifetime managed externally

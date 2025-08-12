@@ -254,6 +254,56 @@ Detector::~Detector()
     // Note: Removed cudaDeviceReset() as it affects all CUDA contexts,
     // not just this instance. Proper cleanup is handled by destructors.
 }
+// CUDA Graph integration: Async inference without CPU synchronization
+bool Detector::runInferenceAsync(float* d_input, float* d_output, cudaStream_t stream) {
+    if (!context || !engine) {
+        return false;
+    }
+    
+    // Set input/output bindings
+    void* bindings[] = { d_input, d_output };
+    
+    // Run inference asynchronously on the provided stream
+    // TensorRT 8.5+ supports graph capture for enqueueV3
+    bool success = context->enqueueV3(stream);
+    
+    if (!success) {
+        std::cerr << "[Detector] Async inference failed" << std::endl;
+        return false;
+    }
+    
+    return true;
+}
+
+// Process frame using CUDA Graph pipeline
+void Detector::processFrameWithGraph(const unsigned char* h_frameData, cudaStream_t stream) {
+    // This method is called by UnifiedGraphPipeline
+    // All operations must be async and use the provided stream
+    
+    // The actual processing is handled by UnifiedGraphPipeline
+    // which orchestrates the entire pipeline including:
+    // 1. H2D copy
+    // 2. Preprocessing 
+    // 3. Inference (via runInferenceAsync)
+    // 4. Postprocessing
+    // 5. Tracking
+    // 6. PID control
+    // 7. D2H copy of results
+}
+
+// Get final mouse coordinates after graph execution
+float2 Detector::getMouseCoordsAsync(cudaStream_t stream) {
+    // Synchronize to ensure results are ready
+    cudaStreamSynchronize(stream);
+    
+    // Return the final mouse coordinates
+    // These should be in pinned memory for fast access
+    float2 coords;
+    coords.x = m_bestTargetHost.center_x;  // Use correct member name
+    coords.y = m_bestTargetHost.center_y;
+    
+    return coords;
+}
 
 void Detector::getInputNames()
 {
