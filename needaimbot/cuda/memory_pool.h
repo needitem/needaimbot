@@ -111,7 +111,7 @@ public:
     }
 
 private:
-    GpuMemoryPool() : maxPoolSize_(512 * 1024 * 1024), // 512MB max pool
+    GpuMemoryPool() : maxPoolSize_(64 * 1024 * 1024), // 64MB max pool (reduced for game compatibility)
                       totalAllocated_(0), 
                       totalPoolSize_(0) {}
 
