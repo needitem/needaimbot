@@ -12,12 +12,10 @@
 
 // Forward declarations outside namespace
 class Detector;
-
-namespace needaimbot {
-
-// Forward declarations inside namespace
 class GPUKalmanTracker;
 class GpuPIDController;
+
+namespace needaimbot {
 
 // Graph node types for tracking
 enum class GraphNodeType {
@@ -78,8 +76,8 @@ public:
     
     // Set component references
     void setDetector(::Detector* detector) { m_detector = detector; }
-    void setTracker(GPUKalmanTracker* tracker) { m_tracker = tracker; }
-    void setPIDController(GpuPIDController* pidController) { m_pidController = pidController; }
+    void setTracker(::GPUKalmanTracker* tracker) { m_tracker = tracker; }
+    void setPIDController(::GpuPIDController* pidController) { m_pidController = pidController; }
     
     // Main execution methods
     bool captureGraph(cudaStream_t stream = nullptr);
@@ -136,12 +134,26 @@ private:
     
     // Component pointers
     ::Detector* m_detector = nullptr;
-    GPUKalmanTracker* m_tracker = nullptr;
-    GpuPIDController* m_pidController = nullptr;
+    ::GPUKalmanTracker* m_tracker = nullptr;
+    ::GpuPIDController* m_pidController = nullptr;
     
     // Pipeline buffers (GPU memory)
     SimpleCudaMat m_captureBuffer;
     SimpleCudaMat m_preprocessBuffer;
+    
+    // NMS temporary buffers (allocated once, reused)
+    int* m_d_numDetections = nullptr;
+    int* m_d_x1 = nullptr;
+    int* m_d_y1 = nullptr;
+    int* m_d_x2 = nullptr;
+    int* m_d_y2 = nullptr;
+    float* m_d_areas = nullptr;
+    float* m_d_scores_nms = nullptr;
+    int* m_d_classIds_nms = nullptr;
+    float* m_d_iou_matrix = nullptr;
+    bool* m_d_keep = nullptr;
+    int* m_d_indices = nullptr;
+    int* m_d_outputCount = nullptr;
     float* m_d_yoloInput = nullptr;        // YOLO model input (640x640x3)
     float* m_d_inferenceOutput = nullptr;  // Raw inference output
     float* m_d_nmsOutput = nullptr;        // After NMS
