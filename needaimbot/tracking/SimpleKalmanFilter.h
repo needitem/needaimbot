@@ -1,7 +1,7 @@
 #ifndef SIMPLE_KALMAN_FILTER_H
 #define SIMPLE_KALMAN_FILTER_H
 
-#include "../modules/eigen/include/Eigen/Dense"
+#include "../math/LinearAlgebra.h"
 
 /**
  * Simple Kalman Filter for 2D bounding box tracking
@@ -26,12 +26,12 @@ public:
 
 private:
     // State vector: [x, y, w, h, vx, vy, vw, vh]
-    Eigen::VectorXf x_;  // State
-    Eigen::MatrixXf F_;  // State transition matrix
-    Eigen::MatrixXf H_;  // Measurement matrix
-    Eigen::MatrixXf P_;  // Error covariance
-    Eigen::MatrixXf Q_;  // Process noise covariance
-    Eigen::MatrixXf R_;  // Measurement noise covariance
+    LA::VectorXf x_;  // State
+    LA::MatrixXf F_;  // State transition matrix
+    LA::MatrixXf H_;  // Measurement matrix
+    LA::MatrixXf P_;  // Error covariance
+    LA::MatrixXf Q_;  // Process noise covariance
+    LA::MatrixXf R_;  // Measurement noise covariance
     
     void initializeMatrices();
 };

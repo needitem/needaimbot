@@ -302,7 +302,6 @@ yolo export model=your_model.pt format=onnx dynamic=true simplify=true
 
 ### Model Optimization
 - Use FP16 precision for RTX 30/40 series
-- Enable INT8 quantization for inference speed
 - Optimize batch size based on VRAM
 - Profile with TensorRT's trtexec tool
 
