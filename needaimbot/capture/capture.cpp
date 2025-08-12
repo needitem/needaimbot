@@ -178,6 +178,10 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 
         SimpleCudaMat screenshotGpu;
         
+        // Frame skip counter for high-end games
+        int frameSkipCounter = 0;
+        const int FRAME_SKIP_RATE = 2; // Process every 2nd frame for heavy games
+        bool enableFrameSkip = false; // Will auto-detect based on FPS
 
         while (!should_exit)
         {
@@ -364,7 +368,19 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
             if (!screenshotGpu.empty())
                 {
                     captureFrameCount++;
-                    if (ctx.detector) {
+                    
+                    // Auto-enable frame skip if FPS drops below 100
+                    if (ctx.g_current_capture_fps.load() < 100.0f && ctx.g_current_capture_fps.load() > 0.0f) {
+                        enableFrameSkip = true;
+                    } else if (ctx.g_current_capture_fps.load() > 150.0f) {
+                        enableFrameSkip = false;
+                    }
+                    
+                    // Skip frames for heavy games
+                    frameSkipCounter++;
+                    bool shouldProcess = !enableFrameSkip || (frameSkipCounter % FRAME_SKIP_RATE == 0);
+                    
+                    if (ctx.detector && shouldProcess) {
                         static int process_attempt = 0;
                         process_attempt++;
                         ctx.detector->processFrame(screenshotGpu);
