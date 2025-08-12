@@ -106,10 +106,19 @@ private:
     std::unique_ptr<DynamicCudaGraph> m_dynamicGraph;
     std::unique_ptr<PipelineCoordinator> m_coordinator;
     
-    // Legacy graph management (for compatibility)
-    cudaGraph_t m_graph = nullptr;
-    cudaGraphExec_t m_graphExec = nullptr;
+    // Two-stage graph pipeline for conditional execution
+    cudaGraph_t m_graph = nullptr;                    // Legacy monolithic graph
+    cudaGraphExec_t m_graphExec = nullptr;            // Legacy graph exec
+    cudaGraph_t m_detectionGraph = nullptr;           // Stage 1: Detection only
+    cudaGraphExec_t m_detectionGraphExec = nullptr;
+    cudaGraph_t m_trackingGraph = nullptr;            // Stage 2: Tracking + PID
+    cudaGraphExec_t m_trackingGraphExec = nullptr;
     cudaStream_t m_primaryStream = nullptr;
+    
+    // Pipeline synchronization
+    cudaEvent_t m_detectionEvent = nullptr;
+    cudaEvent_t m_trackingEvent = nullptr;
+    bool m_prevFrameHasTarget = false;
     
     // Graph nodes for dynamic updates
     std::vector<cudaGraphNode_t> m_captureNodes;
@@ -195,6 +204,10 @@ private:
     // Buffer allocation
     bool allocateBuffers();
     void deallocateBuffers();
+    
+    // Two-stage pipeline helpers
+    void checkTargetsAsync(cudaStream_t stream);
+    void updateProfilingAsync(cudaStream_t stream);
 };
 
 // Global pipeline instance manager
