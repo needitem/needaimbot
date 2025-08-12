@@ -343,12 +343,14 @@ SimpleCudaMat WindowsGraphicsCapture::GetNextFrameGpu()
     );
     
     texture->Release();
-    impl->m_duplication->ReleaseFrame();
+    // IMPORTANT: Delay ReleaseFrame until after CUDA processing is done
+    // to avoid VSync synchronization delays
     
     // Map CUDA resource directly - no CPU copy needed!
     cudaError_t err = cudaGraphicsMapResources(1, &impl->m_cudaResource, m_cudaStream);
     if (err != cudaSuccess) {
         std::cerr << "[WinGraphicsCapture] Failed to map CUDA resource: " << cudaGetErrorString(err) << std::endl;
+        impl->m_duplication->ReleaseFrame();  // Release frame on error
         return SimpleCudaMat();
     }
     
@@ -358,6 +360,7 @@ SimpleCudaMat WindowsGraphicsCapture::GetNextFrameGpu()
     if (err != cudaSuccess) {
         std::cerr << "[WinGraphicsCapture] Failed to get mapped array: " << cudaGetErrorString(err) << std::endl;
         cudaGraphicsUnmapResources(1, &impl->m_cudaResource, m_cudaStream);
+        impl->m_duplication->ReleaseFrame();  // Release frame on error
         return SimpleCudaMat();
     }
     
@@ -381,6 +384,9 @@ SimpleCudaMat WindowsGraphicsCapture::GetNextFrameGpu()
     
     // Unmap the resource
     cudaGraphicsUnmapResources(1, &impl->m_cudaResource, m_cudaStream);
+    
+    // NOW release the frame after all GPU processing is done
+    impl->m_duplication->ReleaseFrame();
     
     if (err != cudaSuccess) {
         std::cerr << "[WinGraphicsCapture] Failed to copy from CUDA array: " << cudaGetErrorString(err) << std::endl;

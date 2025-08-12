@@ -95,9 +95,11 @@ public:
 // ============================================================================
 class PipelineCoordinator {
 private:
-    static constexpr int CAPTURE_PRIORITY = -2;
-    static constexpr int INFERENCE_PRIORITY = -1;
-    static constexpr int POSTPROCESS_PRIORITY = 0;
+    // Use LOWEST priority to minimize game interference
+    // Higher number = lower priority = less GPU time
+    static constexpr int CAPTURE_PRIORITY = 1;  // Lowest priority
+    static constexpr int INFERENCE_PRIORITY = 1;
+    static constexpr int POSTPROCESS_PRIORITY = 1;
     
 public:
     cudaStream_t captureStream;
