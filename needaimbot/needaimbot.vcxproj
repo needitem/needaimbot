@@ -64,6 +64,7 @@
     <ClCompile Include="overlay\overlay.cpp" />
     <ClCompile Include="overlay\ui_helpers.cpp" />
     <ClCompile Include="needaimbot.cpp" />
+    <ClCompile Include="needaimbot_event.cpp" />
     <ClCompile Include="utils\image_io.cpp" />
     <ClCompile Include="scr\other_tools.cpp" />
   </ItemGroup>

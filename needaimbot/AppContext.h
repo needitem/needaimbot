@@ -12,9 +12,20 @@
 #include <memory>
 #include "config/config.h"
 #include "postprocess/postProcess.h"
+#include <queue>
+#include <chrono>
 
 class MouseThread; // Forward declaration
 class Detector;
+
+// Mouse movement event structure
+struct MouseEvent {
+    float dx;
+    float dy;
+    bool has_target;
+    Target target;
+    std::chrono::steady_clock::time_point timestamp;
+};
 
 struct AppContext {
 public:
@@ -101,9 +112,15 @@ public:
     std::atomic<bool> detector_model_changed{false};
     std::mutex configMutex;
     
-    // GPU-calculated movement deltas
+    // GPU-calculated movement deltas (deprecated - use event queue instead)
     std::atomic<float> g_movementDeltaX{0.0f};
     std::atomic<float> g_movementDeltaY{0.0f};
+    
+    // Event-based mouse control
+    std::queue<MouseEvent> mouse_event_queue;
+    std::mutex mouse_event_mutex;
+    std::condition_variable mouse_event_cv;
+    std::atomic<bool> mouse_events_available{false};
 
     // CUDA Graph optimization
     std::atomic<bool> use_cuda_graph{false};
