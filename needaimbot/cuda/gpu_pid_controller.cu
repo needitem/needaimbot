@@ -62,6 +62,7 @@ __global__ void pidCalculateKernel(
     // Error filtering (smooth sudden target changes)
     if (state->first_error) {
         state->filtered_error = error;
+        state->prev_error = error;  // Initialize prev_error to avoid derivative spike
         state->first_error = false;
     } else {
         float alpha = d_pid_config.error_smoothing;
@@ -156,6 +157,7 @@ __global__ void pidCalculateBatchKernel(
     
     if (state->first_error) {
         state->filtered_error = error;
+        state->prev_error = error;  // Initialize prev_error to avoid derivative spike
         state->first_error = false;
     } else {
         float alpha = d_pid_config.error_smoothing;

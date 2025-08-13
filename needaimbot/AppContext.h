@@ -17,6 +17,7 @@
 
 class MouseThread; // Forward declaration
 class Detector;
+class RecoilControlThread; // Forward declaration
 
 // Mouse movement event structure
 struct MouseEvent {

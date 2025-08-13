@@ -38,6 +38,7 @@
     <ClCompile Include="mouse\\input_drivers\\ghub.cpp" />
     <ClCompile Include="mouse\\input_drivers\\kmboxNet.cpp" />
     <ClCompile Include="mouse\\mouse.cpp" />
+    <ClCompile Include="mouse\\recoil_control_thread.cpp" />
     <ClCompile Include="mouse\\rapidfire.cpp" />
     <ClCompile Include="mouse\\input_drivers\\my_enc.cpp" />
     <ClCompile Include="mouse\\aimbot_components\\PIDController2D.cpp" />
@@ -138,6 +139,7 @@
     <ClInclude Include="mouse\kmboxNet.h" />
     
     <ClInclude Include="mouse\mouse.h" />
+    <ClInclude Include="mouse\recoil_control_thread.h" />
     <ClInclude Include="mouse\rapidfire.h" />
     <ClInclude Include="mouse\my_enc.h" />
     <ClInclude Include="mouse\PIDController2D.h" />
