@@ -93,7 +93,7 @@ void keyboardListener() {
         }
 
         // Auto shoot functionality removed
-        // Add small delay to reduce CPU usage
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        // Add delay to reduce CPU usage - 20ms is fast enough for keyboard input
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
 }

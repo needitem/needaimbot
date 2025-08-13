@@ -8,6 +8,7 @@
 #include "../cuda/simple_cuda_mat.h"
 #include "../cuda/cuda_image_processing.h"
 #include "../cuda/cuda_float_processing.h"
+#include "../cuda/unified_pipeline_graph.h"
 #include <NvInfer.h>
 #include <atomic>
 #include <mutex>
@@ -258,6 +259,10 @@ private:
     cudaGraphExec_t m_inferenceGraphExec = nullptr;
     bool m_graphCaptured = false;
     void captureInferenceGraph(const SimpleCudaMat& frameGpu);
+    
+    // Unified Pipeline Graph
+    UnifiedPipelineGraph* m_unifiedPipeline = nullptr;
+    bool m_useUnifiedPipeline = true;
 
     static float calculate_host_iou(const Target& det1, const Target& det2); 
     bool m_cudaContextInitialized = false; 
@@ -304,7 +309,15 @@ private:
 
     
     void performGpuPostProcessing(cudaStream_t stream);
-
+    
+public:
+    // GPU 감지 결과 직접 반환 (CPU 복사 없이)
+    std::pair<void*, int> getLatestDetectionsGPU() const {
+        if (m_finalTargetsCountHost > 0) {
+            return std::make_pair(m_finalTargetsGpu.get(), m_finalTargetsCountHost);
+        }
+        return std::make_pair(nullptr, 0);
+    }
 
     void synchronizeStreams(cudaStream_t stream1, cudaStream_t stream2)
     {

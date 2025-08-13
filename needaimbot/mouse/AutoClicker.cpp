@@ -17,7 +17,7 @@ void AutoClicker::ClickLoop() {
             input.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
             SendInput(1, &input, sizeof(INPUT));
             
-            Sleep(5);
+            Sleep(15);  // Reduce CPU usage - 15ms is still very responsive
             
             input.mi.dwFlags = MOUSEEVENTF_LEFTUP;
             SendInput(1, &input, sizeof(INPUT));
@@ -64,7 +64,7 @@ void AutoClicker::InputLoop() {
             break;
         }
         
-        Sleep(5);
+        Sleep(15);  // Reduce CPU usage - 15ms is still very responsive
     }
 }
 

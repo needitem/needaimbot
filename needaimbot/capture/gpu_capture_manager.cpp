@@ -78,6 +78,22 @@ bool GPUCaptureManager::Initialize() {
     // 4. GPU 프레임 버퍼 할당
     m_gpuFrameBuffer.create(m_height, m_width, 4); // BGRA
     
+    // 5. GPU 마우스 컨트롤러 초기화
+    m_mouseController = std::make_unique<needaimbot::cuda::GPUMouseController>();
+    needaimbot::cuda::GPUMouseConfig mouseConfig;
+    mouseConfig.screenWidth = m_width;
+    mouseConfig.screenHeight = m_height;
+    mouseConfig.sensitivity = 1.0f;
+    mouseConfig.smoothing = 0.3f;
+    mouseConfig.confidenceThreshold = 0.7f;
+    
+    if (!m_mouseController->Initialize(mouseConfig)) {
+        std::cerr << "[GPUCapture] Failed to initialize GPU mouse controller" << std::endl;
+        return false;
+    }
+    
+    std::cout << "[GPUCapture] GPU Mouse Controller initialized successfully" << std::endl;
+    
     return true;
 }
 
@@ -189,9 +205,8 @@ SimpleCudaMat& GPUCaptureManager::WaitForNextFrame() {
     DXGI_OUTDUPL_FRAME_INFO frameInfo;
     ComPtr<IDXGIResource> resource;
     
-    // INFINITE 대기 - 새 프레임이 올 때까지 CPU 대기 (이벤트 기반)
-    // 또는 16ms (60fps) 대기
-    HRESULT hr = m_duplication->AcquireNextFrame(16, &frameInfo, &resource);
+    // 더 빠른 폴링을 위해 타임아웃을 1ms로 설정 (1000 FPS까지 가능)
+    HRESULT hr = m_duplication->AcquireNextFrame(1, &frameInfo, &resource);
     
     if (FAILED(hr)) {
         if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
@@ -320,4 +335,22 @@ void GPUCaptureManager::StopCapture() {
     if (m_captureStream) {
         cudaStreamSynchronize(m_captureStream);
     }
+}
+
+bool GPUCaptureManager::ProcessDetectionsGPU(needaimbot::cuda::Detection* d_detections, int numDetections, 
+                                             needaimbot::cuda::MouseMovement& movement) {
+    if (!m_mouseController || !d_detections || numDetections <= 0) {
+        movement.dx = 0;
+        movement.dy = 0;
+        movement.shouldMove = false;
+        return false;
+    }
+    
+    // GPU에서 직접 마우스 이동량 계산 (비동기)
+    if (!m_mouseController->CalculateMovementAsync(d_detections, numDetections, m_captureStream)) {
+        return false;
+    }
+    
+    // 결과 가져오기 (필요시 대기)
+    return m_mouseController->GetMovementResult(movement);
 }
