@@ -1,4 +1,6 @@
 #include "gpu_capture_manager.h"
+#include "../AppContext.h"
+#include "../keyboard/keyboard_helper.h"
 #include <iostream>
 #include <chrono>
 
@@ -38,10 +40,10 @@ GPUCaptureManager::~GPUCaptureManager() {
 }
 
 bool GPUCaptureManager::Initialize() {
-    std::cout << "[GPUCapture] Initialize: Starting initialization..." << std::endl;
+    
     
     // 1. DXGI/D3D11 초기화
-    std::cout << "[GPUCapture] Initialize: Calling InitializeDXGI..." << std::endl;
+    
     InitializeDXGI();
     
     // 2. D3D11.4 인터페이스 획득 (Windows 10/11)
@@ -80,7 +82,7 @@ bool GPUCaptureManager::Initialize() {
 }
 
 void GPUCaptureManager::InitializeDXGI() {
-    std::cout << "[GPUCapture] InitializeDXGI: Creating D3D11 device..." << std::endl;
+    
     
     // D3D11 디바이스 생성
     D3D_FEATURE_LEVEL featureLevel;
@@ -102,10 +104,10 @@ void GPUCaptureManager::InitializeDXGI() {
         std::cerr << "[GPUCapture] ERROR: Failed to create D3D11 device! HRESULT=" << std::hex << hr << std::dec << std::endl;
         return;
     }
-    std::cout << "[GPUCapture] D3D11 device created successfully" << std::endl;
+    
     
     // DXGI Output Duplication 초기화
-    std::cout << "[GPUCapture] Getting DXGI interfaces..." << std::endl;
+    
     ComPtr<IDXGIDevice> dxgiDevice;
     hr = m_device.As(&dxgiDevice);
     if (FAILED(hr)) {
@@ -135,7 +137,6 @@ void GPUCaptureManager::InitializeDXGI() {
     }
     
     // Desktop Duplication API
-    std::cout << "[GPUCapture] Initializing Desktop Duplication..." << std::endl;
     hr = output1->DuplicateOutput(m_device.Get(), &m_duplication);
     if (FAILED(hr)) {
         std::cerr << "[GPUCapture] ERROR: Failed to duplicate output! HRESULT=" << std::hex << hr << std::dec << std::endl;
@@ -146,10 +147,9 @@ void GPUCaptureManager::InitializeDXGI() {
         }
         return;
     }
-    std::cout << "[GPUCapture] Desktop Duplication initialized successfully" << std::endl;
+    
     
     // Staging texture for GPU-GPU copy
-    std::cout << "[GPUCapture] Creating staging texture: " << m_width << "x" << m_height << std::endl;
     D3D11_TEXTURE2D_DESC desc = {};
     desc.Width = m_width;
     desc.Height = m_height;
@@ -214,9 +214,33 @@ SimpleCudaMat& GPUCaptureManager::WaitForNextFrame() {
     
     
     
-    // 캡처할 영역 계산 (화면 중앙)
-    int srcX = (fullDesc.Width - m_width) / 2;
-    int srcY = (fullDesc.Height - m_height) / 2;
+    // 캡처할 영역 계산 (화면 중앙 + 오프셋)
+    auto& ctx = AppContext::getInstance();
+    int centerX = fullDesc.Width / 2;
+    int centerY = fullDesc.Height / 2;
+    
+    // 오프셋 적용 (config에서 가져옴)
+    // 조준+사격 중이면 aim_shoot_offset 사용, 아니면 일반 offset 사용
+    bool useAimShootOffset = false;
+    if (ctx.config.enable_aim_shoot_offset) {
+        // 조준 버튼과 사격 버튼이 모두 눌렸는지 확인
+        bool aimPressed = !ctx.config.button_aim.empty() && 
+                         isAnyKeyPressed(ctx.config.button_aim);
+        bool shootPressed = !ctx.config.button_auto_shoot.empty() && 
+                           isAnyKeyPressed(ctx.config.button_auto_shoot);
+        useAimShootOffset = aimPressed && shootPressed;
+    }
+    
+    int offsetX = useAimShootOffset ? 
+                  static_cast<int>(ctx.config.aim_shoot_offset_x) : 
+                  static_cast<int>(ctx.config.crosshair_offset_x);
+    int offsetY = useAimShootOffset ? 
+                  static_cast<int>(ctx.config.aim_shoot_offset_y) : 
+                  static_cast<int>(ctx.config.crosshair_offset_y);
+    
+    // 캡처 영역의 좌상단 계산
+    int srcX = centerX + offsetX - (m_width / 2);
+    int srcY = centerY + offsetY - (m_height / 2);
     
     // 영역이 화면을 벗어나지 않도록 보정
     srcX = max(0, min(srcX, (int)fullDesc.Width - m_width));

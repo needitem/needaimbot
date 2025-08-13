@@ -11,13 +11,13 @@ void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
     auto& ctx = AppContext::getInstance();
     
     // GPU 캡처 매니저 초기화
-    std::cout << "[GPUCapture] Initializing GPU capture manager..." << std::endl;
+    
     GPUCaptureManager gpuCapture(CAPTURE_WIDTH, CAPTURE_HEIGHT);
     if (!gpuCapture.Initialize()) {
         std::cerr << "[GPUCapture] Failed to initialize GPU capture" << std::endl;
         return;
     }
-    std::cout << "[GPUCapture] GPU capture manager initialized successfully" << std::endl;
+    
     
     // 스레드 우선순위는 NORMAL로 설정 (CPU를 거의 안 쓰므로)
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
@@ -30,7 +30,6 @@ void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
     auto lastFpsTime = std::chrono::steady_clock::now();
     
     gpuCapture.StartCapture();
-    std::cout << "[GPUCapture] Capture started, entering main loop..." << std::endl;
     
     int debugFrameCount = 0;
     while (!ctx.should_exit) {
@@ -48,23 +47,14 @@ void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
             // 전역 GPU 버퍼 업데이트 (프리뷰용)
             latestFrameGpu.copyFrom(gpuFrame);
             
-            // 첫 번째 프레임에서 상태 확인
-            if (debugFrameCount == 1) {
-                std::cout << "[GPUCapture] latestFrameGpu updated: " 
-                         << latestFrameGpu.cols() << "x" << latestFrameGpu.rows() 
-                         << " data=" << (void*)latestFrameGpu.data() << std::endl;
-            }
+            
             
             // GPU에서 직접 Detector로 전달 (CPU 관여 없음)
             if (ctx.detector) {
-                if (debugFrameCount <= 3) {
-                    std::cout << "[GPUCapture] Processing frame with detector" << std::endl;
-                }
+                
                 ctx.detector->processFrame(gpuFrame);
             } else {
-                if (debugFrameCount <= 3) {
-                    std::cout << "[GPUCapture] WARNING: Detector is null!" << std::endl;
-                }
+                
             }
             
             // FPS 계산 (1초마다)
@@ -93,5 +83,5 @@ void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
     gpuCapture.StopCapture();
     CloseHandle(gpuFrameEvent);
     
-    std::cout << "[GPUCapture] GPU capture thread exiting" << std::endl;
+    
 }
