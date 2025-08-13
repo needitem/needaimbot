@@ -862,6 +862,7 @@ void Detector::inferenceThread()
     static auto last_cycle_start_time = std::chrono::high_resolution_clock::time_point{};
 
     std::cout << "[InferenceThread] Entering main loop" << std::endl;
+    int inferenceFrameCount = 0;
     static int inference_loop_count = 0;
     
     while (!ctx.should_exit)
@@ -933,18 +934,26 @@ void Detector::inferenceThread()
         
         // Try to get frame without lock - using atomic operations
         if (!frameReady.load(std::memory_order_acquire)) {
+            // Debug log for first few frames
+            if (inferenceFrameCount < 5) {
+                std::cout << "[InferenceThread] Frame not ready, waiting... (count=" << inferenceFrameCount << ")" << std::endl;
+            }
             // Sleep briefly to reduce CPU usage when no frame is available
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;  // No frame available, skip this iteration
         }
         
         // Process the frame
+        inferenceFrameCount++;
+        
         if (frameIsGpu.load(std::memory_order_acquire)) {
             frameGpu = std::move(currentFrame);
         } else {
             frameGpu.create(currentFrameCpu.rows(), currentFrameCpu.cols(), currentFrameCpu.channels());
             frameGpu.upload(currentFrameCpu.data(), currentFrameCpu.step());
         }
+        
+        
         
         // Mark frame as processed
         frameReady.store(false, std::memory_order_release);
@@ -956,9 +965,9 @@ void Detector::inferenceThread()
 
         if (!frameGpu.empty())
         {
+            auto inference_start_time = std::chrono::high_resolution_clock::now();
             try
             {
-                auto inference_start_time = std::chrono::high_resolution_clock::now();
                 
                 // Update config cache every 100 frames to reduce mutex contention
                 if (++frame_counter % 100 == 0) {
@@ -1038,6 +1047,8 @@ void Detector::inferenceThread()
                     std::cerr << "[InferenceThread] Failed to copy detection count: " << cudaGetErrorString(copyErr) << std::endl;
                     continue;
                 }
+                
+                
                 
                 // Record event instead of sync - we'll check it later when needed
                 cudaEventRecord(m_postprocessEvent, postprocessStream);
@@ -1466,6 +1477,8 @@ void Detector::inferenceThread()
                                     event.has_target = true;
                                     event.target = m_bestTargetHost;
                                     event.timestamp = std::chrono::steady_clock::now();
+                                    
+                                    
                                     
                                     {
                                         std::lock_guard<std::mutex> event_lock(ctx.mouse_event_mutex);

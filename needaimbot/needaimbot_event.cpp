@@ -47,9 +47,12 @@ void mouseThreadFunctionEventBased(MouseThread& mouseThread)
         if (ctx.should_exit) break;
         
         // Process all pending events
+        static int event_log_count = 0;
         while (!ctx.mouse_event_queue.empty()) {
             MouseEvent event = ctx.mouse_event_queue.front();
             ctx.mouse_event_queue.pop();
+            
+            
             
             // Release lock while processing
             lock.unlock();
@@ -89,6 +92,7 @@ void mouseThreadFunctionEventBased(MouseThread& mouseThread)
                 
                 // Move mouse to target if aimbot is enabled
                 if (ctx.config.enable_aimbot) {
+                    
                     mouseThread.moveMouse(target);
                 }
                 
