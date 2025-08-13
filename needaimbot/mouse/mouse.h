@@ -28,7 +28,7 @@
 #include "rapidfire.h"
 
 // Forward declarations
-class PIDController2D;
+class BezierController;
 
 
 class InputMethod;
@@ -40,7 +40,7 @@ struct Point2D { float x, y; };
 class MouseThread
 {
 private:
-    std::unique_ptr<PIDController2D> pid_controller;
+    std::unique_ptr<BezierController> bezier_controller;
     std::unique_ptr<InputMethod> input_method;
     std::mutex input_method_mutex;
     mutable std::shared_mutex member_data_mutex_;
@@ -102,8 +102,6 @@ private:
 
 public:
     MouseThread(int resolution,
-                float kp_x, float ki_x, float kd_x,
-                float kp_y, float ki_y, float kd_y,
                 float bScope_multiplier,
                 float norecoil_ms,
                 SerialConnection *serialConnection = nullptr,
@@ -112,8 +110,6 @@ public:
     ~MouseThread();
 
     void updateConfig(int resolution,
-                      float kp_x, float ki_x, float kd_x,
-                      float kp_y, float ki_y, float kd_y,
                       float bScope_multiplier,
                       float norecoil_ms);
     
@@ -140,8 +136,8 @@ public:
     
     bool isTargetDetected() const { return target_detected.load(); }
     
-    // Add method to access PID controller for resetting
-    PIDController2D* getPIDController() { return pid_controller.get(); }
+    // Add method to access Bezier controller for resetting
+    BezierController* getBezierController() { return bezier_controller.get(); }
     
     // Enable/disable snap aim mode
     

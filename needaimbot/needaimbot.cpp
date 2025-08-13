@@ -501,12 +501,6 @@ int main()
 
         MouseThread mouseThread(
             ctx.config.detection_resolution,
-            static_cast<float>(ctx.config.kp_x),
-            static_cast<float>(ctx.config.ki_x),
-            static_cast<float>(ctx.config.kd_x),
-            static_cast<float>(ctx.config.kp_y),
-            static_cast<float>(ctx.config.ki_y),
-            static_cast<float>(ctx.config.kd_y),
             ctx.config.bScope_multiplier,
             ctx.config.norecoil_ms,
             nullptr,
