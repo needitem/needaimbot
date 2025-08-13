@@ -30,7 +30,7 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-#include "aimbot_components/PIDController2D.h"
+#include "aimbot_components/BezierController.h"
 
 
 extern std::atomic<bool> aiming;
@@ -80,12 +80,6 @@ void QueueMove(int dx, int dy, std::function<void(int, int)> move_func) {
 
 MouseThread::MouseThread(
     int resolution,
-    float kp_x,
-    float ki_x,
-    float kd_x,
-    float kp_y,
-    float ki_y,
-    float kd_y,
     float bScope_multiplier,
     float norecoil_ms,
     SerialConnection *serialConnection,
@@ -93,7 +87,7 @@ MouseThread::MouseThread(
     GhubMouse *gHub)
 {
     initializeScreen(resolution, bScope_multiplier, norecoil_ms);
-    pid_controller = std::make_unique<PIDController2D>(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
+    bezier_controller = std::make_unique<BezierController>();
     
     initializeInputMethod(serialConnection, makcuConnection, gHub);
     
@@ -179,12 +173,6 @@ void MouseThread::initializeScreen(int resolution, float bScope_multiplier, floa
 
 void MouseThread::updateConfig(
     int resolution,
-    float kp_x,
-    float ki_x,
-    float kd_x,
-    float kp_y,
-    float ki_y,
-    float kd_y,
     float bScope_multiplier,
     float norecoil_ms
     )
@@ -193,10 +181,8 @@ void MouseThread::updateConfig(
     {
         std::unique_lock<std::shared_mutex> lock(member_data_mutex_); 
         initializeScreen(resolution, bScope_multiplier, norecoil_ms);
-        
     }
-    pid_controller->updateSeparatedParameters(kp_x, ki_x, kd_x, kp_y, ki_y, kd_y);
-    
+    // Bezier parameters are now managed through the controller's Parameters struct
 }
 
 
@@ -339,15 +325,15 @@ void MouseThread::moveMouse(const AimbotTarget &target)
         local_disable_upward_aim_active = isAnyKeyPressed(ctx.config.button_disable_upward_aim);
     }
     
-    // Optimized PID calculation
+    // Bezier curve calculation
     LA::Vector2f error(error_x, error_y);
-    LA::Vector2f pid_output;
+    LA::Vector2f bezier_output;
     
-    // Always calculate PID without branching
-    pid_output = pid_controller->calculate(error);
+    // Calculate movement using Bezier curve
+    bezier_output = bezier_controller->calculate(error);
     
-    float move_x = pid_output.x() * current_move_scale_x;
-    float move_y = pid_output.y() * current_move_scale_y;
+    float move_x = bezier_output.x() * current_move_scale_x;
+    float move_y = bezier_output.y() * current_move_scale_y;
     
     // Process accumulated movement
     auto [dx_int, dy_int] = processAccumulatedMovement(move_x, move_y);
@@ -529,9 +515,9 @@ void MouseThread::applyRecoilCompensationInternal(float strength, float delay_ms
 
 void MouseThread::resetAccumulatedStates()
 {
-    // Reset PID controller
-    if (pid_controller) {
-        pid_controller->reset();
+    // Reset Bezier controller
+    if (bezier_controller) {
+        bezier_controller->reset();
     }
     
     // Reset movement accumulation
