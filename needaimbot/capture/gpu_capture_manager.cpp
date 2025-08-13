@@ -1,6 +1,6 @@
 #include "gpu_capture_manager.h"
 #include "../AppContext.h"
-#include "../keyboard/keyboard_helper.h"
+#include "../keyboard/keyboard_listener.h"
 #include <iostream>
 #include <chrono>
 
@@ -224,8 +224,8 @@ SimpleCudaMat& GPUCaptureManager::WaitForNextFrame() {
     bool useAimShootOffset = false;
     if (ctx.config.enable_aim_shoot_offset) {
         // 조준 버튼과 사격 버튼이 모두 눌렸는지 확인
-        bool aimPressed = !ctx.config.button_aim.empty() && 
-                         isAnyKeyPressed(ctx.config.button_aim);
+        bool aimPressed = !ctx.config.button_targeting.empty() && 
+                         isAnyKeyPressed(ctx.config.button_targeting);
         bool shootPressed = !ctx.config.button_auto_shoot.empty() && 
                            isAnyKeyPressed(ctx.config.button_auto_shoot);
         useAimShootOffset = aimPressed && shootPressed;
