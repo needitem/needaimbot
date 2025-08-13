@@ -22,6 +22,7 @@ void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT);
 #include "detector/detector.h"
 #include "cuda/unified_graph_pipeline.h"
 #include "mouse/mouse.h"
+#include "mouse/recoil_control_thread.h"
 #include "needaimbot.h"
 #include "keyboard/keyboard_listener.h"
 #include "overlay/overlay.h"
@@ -257,44 +258,8 @@ void mouseThreadFunction_OLD(MouseThread &mouseThread)
         // Update key cache periodically (moved before the continue check)
         key_cache.update();
         
-        // Apply recoil compensation when both mouse buttons are pressed (ADS + Shooting)
-        // This should work even without a target
-        if (ctx.config.easynorecoil) {
-            static bool was_recoil_active = false;
-            bool recoil_active = key_cache.left_mouse && key_cache.right_mouse;
-            
-            // Check if crouch key (Left Control) is pressed for recoil reduction
-            bool is_crouching = ctx.config.crouch_recoil_enabled && (GetAsyncKeyState(VK_LCONTROL) & 0x8000);
-            
-            was_recoil_active = recoil_active;
-            
-            if (recoil_active) {
-                // Calculate recoil compensation strength with crouch modification
-                float recoil_multiplier = 1.0f;
-                if (is_crouching) {
-                    // Apply crouch modification to recoil compensation
-                    // -50% = compensate only 50% of recoil (0.5x multiplier)
-                    // 0% = no change (1.0x multiplier)
-                    // +50% = compensate 150% of recoil (1.5x multiplier)
-                    recoil_multiplier = 1.0f + (ctx.config.crouch_recoil_reduction / 100.0f);
-                    recoil_multiplier = (std::max)(0.0f, recoil_multiplier); // Prevent negative multiplier
-                }
-                
-                // Check if we have an active weapon profile
-                if (ctx.config.active_weapon_profile_index >= 0 && 
-                    ctx.config.active_weapon_profile_index < ctx.config.weapon_profiles.size()) {
-                    
-                    WeaponRecoilProfile profile = ctx.config.weapon_profiles[ctx.config.active_weapon_profile_index];
-                    // Apply crouch multiplier to the profile strength
-                    profile.base_strength *= recoil_multiplier;
-                    mouseThread.applyWeaponRecoilCompensation(&profile, ctx.config.active_scope_magnification);
-                } else {
-                    // Use simple recoil compensation with crouch multiplier
-                    float adjusted_strength = ctx.config.easynorecoilstrength * recoil_multiplier;
-                    mouseThread.applyRecoilCompensation(adjusted_strength);
-                }
-            }
-        }
+        // Recoil compensation is now handled by the dedicated RecoilControlThread
+        // No need for recoil logic here anymore
         
         // Measure end of cycle
         auto cycle_end = std::chrono::high_resolution_clock::now();
@@ -549,6 +514,13 @@ int main()
 
         ctx.global_mouse_thread = &mouseThread;
         ctx.global_mouse_thread->setInputMethod(initializeInputMethod());
+        
+        // Initialize and start Recoil Control Thread
+        RecoilControlThread recoilThread;
+        recoilThread.setInputMethod(initializeInputMethod());
+        recoilThread.setEnabled(true);
+        recoilThread.start();
+        std::cout << "[MAIN] Recoil Control Thread started" << std::endl;
 
         std::vector<std::string> availableModels = getAvailableModels();
         if (!loadAndValidateModel(ctx.config.ai_model, availableModels)) {

@@ -208,33 +208,9 @@ void mouseThreadFunctionEventBased(MouseThread& mouseThread)
             ctx.mouse_events_available = false;
         }
         
-        // Handle recoil compensation (runs even without events)
+        // Recoil compensation is now handled by the dedicated RecoilControlThread
         lock.unlock();
         key_cache.update();
-        
-        if (ctx.config.easynorecoil) {
-            bool recoil_active = key_cache.left_mouse && key_cache.right_mouse;
-            bool is_crouching = ctx.config.crouch_recoil_enabled && (GetAsyncKeyState(VK_LCONTROL) & 0x8000);
-            
-            if (recoil_active) {
-                float recoil_multiplier = 1.0f;
-                if (is_crouching) {
-                    recoil_multiplier = 1.0f + (ctx.config.crouch_recoil_reduction / 100.0f);
-                    recoil_multiplier = (std::max)(0.0f, recoil_multiplier);
-                }
-                
-                if (ctx.config.active_weapon_profile_index >= 0 && 
-                    ctx.config.active_weapon_profile_index < ctx.config.weapon_profiles.size()) {
-                    
-                    WeaponRecoilProfile profile = ctx.config.weapon_profiles[ctx.config.active_weapon_profile_index];
-                    profile.base_strength *= recoil_multiplier;
-                    mouseThread.applyWeaponRecoilCompensation(&profile, ctx.config.active_scope_magnification);
-                } else {
-                    float adjusted_strength = ctx.config.easynorecoilstrength * recoil_multiplier;
-                    mouseThread.applyRecoilCompensation(adjusted_strength);
-                }
-            }
-        }
     }
     
     mouseThread.releaseMouse();
