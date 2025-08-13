@@ -17,6 +17,21 @@ class GpuPIDController;
 
 namespace needaimbot {
 
+// Placeholder classes for graph management (to be implemented)
+class DynamicCudaGraph {
+public:
+    DynamicCudaGraph() = default;
+    ~DynamicCudaGraph() = default;
+    // TODO: Implement dynamic CUDA graph functionality
+};
+
+class PipelineCoordinator {
+public:
+    PipelineCoordinator() = default;
+    ~PipelineCoordinator() = default;
+    // TODO: Implement pipeline coordination functionality
+};
+
 // Graph node types for tracking
 enum class GraphNodeType {
     CAPTURE_MAP,
@@ -38,6 +53,7 @@ struct GraphExecutionState {
     bool needsRebuild = false;
     int frameCount = 0;
     float avgLatency = 0.0f;
+    float lastLatency = 0.0f;
     cudaEvent_t startEvent = nullptr;
     cudaEvent_t endEvent = nullptr;
 };
@@ -50,6 +66,10 @@ struct UnifiedPipelineConfig {
     bool enableTracking = true;
     bool enablePIDControl = true;
     
+    // Detection parameters
+    float confThreshold = 0.4f;
+    float nmsThreshold = 0.45f;
+    
     // Graph optimization flags
     bool useGraphOptimization = true;
     bool allowGraphUpdate = true;
@@ -61,9 +81,7 @@ struct UnifiedPipelineConfig {
     int graphInstantiateFlags = 0;
 };
 
-// Forward declaration for internal classes
-class DynamicCudaGraph;
-class PipelineCoordinator;
+
 
 class UnifiedGraphPipeline {
 public:
@@ -103,8 +121,8 @@ public:
     
 private:
     // Advanced graph and stream management
-    std::unique_ptr<DynamicCudaGraph> m_dynamicGraph;
-    std::unique_ptr<PipelineCoordinator> m_coordinator;
+    DynamicCudaGraph* m_dynamicGraph = nullptr;
+    PipelineCoordinator* m_coordinator = nullptr;
     
     // Two-stage graph pipeline for conditional execution
     cudaGraph_t m_graph = nullptr;                    // Legacy monolithic graph
@@ -149,6 +167,8 @@ private:
     // Pipeline buffers (GPU memory)
     SimpleCudaMat m_captureBuffer;
     SimpleCudaMat m_preprocessBuffer;
+    float* m_d_preprocessBuffer = nullptr;  // Raw preprocess buffer pointer
+    Target* m_d_tracks = nullptr;           // GPU tracking data
     
     // NMS temporary buffers (allocated once, reused)
     int* m_d_numDetections = nullptr;
@@ -206,8 +226,17 @@ private:
     void deallocateBuffers();
     
     // Two-stage pipeline helpers
-    void checkTargetsAsync(cudaStream_t stream);
+    bool checkTargetsAsync(cudaStream_t stream);
     void updateProfilingAsync(cudaStream_t stream);
+    
+    // Graph capture methods
+    bool capturePreprocessGraph(cudaStream_t stream);
+    bool captureInferenceGraph(cudaStream_t stream);
+    bool capturePostprocessGraph(cudaStream_t stream);
+    bool captureTrackingGraph(cudaStream_t stream);
+    
+    // Graph state
+    bool m_graphCaptured = false;
 };
 
 // Global pipeline instance manager

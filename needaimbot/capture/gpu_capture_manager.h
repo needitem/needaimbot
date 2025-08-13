@@ -9,7 +9,9 @@
 #include <cuda_d3d11_interop.h>
 #include <atomic>
 #include <thread>
+#include <memory>
 #include "../cuda/simple_cuda_mat.h"
+#include "../cuda/gpu_mouse_controller.h"
 
 // SimpleCudaMat typedef for compatibility
 using SimpleCudaMat = SimpleCudaMat;
@@ -27,6 +29,13 @@ public:
     
     // GPU 이벤트 기반 - CPU 대기 없음
     SimpleCudaMat& WaitForNextFrame();
+    
+    // GPU 마우스 컨트롤러 접근
+    needaimbot::cuda::GPUMouseController* GetMouseController() { return m_mouseController.get(); }
+    
+    // YOLO 감지 결과 처리 및 마우스 이동량 계산 (GPU에서 직접)
+    bool ProcessDetectionsGPU(needaimbot::cuda::Detection* d_detections, int numDetections, 
+                              needaimbot::cuda::MouseMovement& movement);
     
 private:
     // GPU 동기화를 위한 Fence (Windows 10/11)
@@ -57,6 +66,9 @@ private:
     
     // GPU 전용 프레임 버퍼
     SimpleCudaMat m_gpuFrameBuffer;
+    
+    // GPU 마우스 컨트롤러
+    std::unique_ptr<needaimbot::cuda::GPUMouseController> m_mouseController;
     
     void InitializeDXGI();
     void InitializeCUDAInterop();

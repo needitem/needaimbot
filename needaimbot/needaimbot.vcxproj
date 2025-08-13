@@ -26,6 +26,7 @@
     <ClCompile Include="capture\frame_buffer_pool.cpp" />
     <ClCompile Include="config\config.cpp" />
     <ClCompile Include="detector\detector.cpp" />
+    <ClCompile Include="cuda\unified_graph_pipeline.cpp" />
     <ClCompile Include="imgui\imgui.cpp" />
     <ClCompile Include="imgui\imgui_draw.cpp" />
     <ClCompile Include="imgui\imgui_impl_dx11.cpp" />
@@ -77,10 +78,12 @@
     <CudaCompile Include="cuda\color_filter_kernel.cu" />
     <CudaCompile Include="cuda\color_conversion.cu" />
     <CudaCompile Include="cuda\pipeline_optimization.cu" />
-    <CudaCompile Include="cuda\unified_graph_pipeline.cu" />
+    <CudaCompile Include="cuda\unified_pipeline_graph.cu" />
     <CudaCompile Include="cuda\gpu_tracker.cu" />
     <CudaCompile Include="cuda\gpu_kalman_filter.cu" />
     <CudaCompile Include="cuda\gpu_pid_controller.cu" />
+    <CudaCompile Include="cuda\gpu_mouse_controller.cu" />
+    <CudaCompile Include="cuda\gpu_workload_manager.cu" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="core\config_cache.h" />

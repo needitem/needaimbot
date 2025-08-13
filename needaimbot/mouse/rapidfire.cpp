@@ -87,7 +87,8 @@ void RapidFire::workerLoop() {
             was_pressed = false;
         }
         
-        // No delay - pure busy wait for maximum responsiveness
+        // Small delay to prevent CPU overuse while maintaining responsiveness
+        std::this_thread::sleep_for(std::chrono::microseconds(500));  // 0.5ms delay, 2000Hz polling
     }
 }
 
