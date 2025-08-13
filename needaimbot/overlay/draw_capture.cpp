@@ -10,7 +10,7 @@
 #include "AppContext.h"
 #include "config/config.h"
 #include "needaimbot.h"
-#include "../capture/capture.h"
+// #include "../capture/capture.h" - removed, using GPU capture now
 #include "include/other_tools.h"
 #include "draw_settings.h"
 #include "ui_helpers.h"
