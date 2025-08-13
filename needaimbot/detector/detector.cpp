@@ -934,10 +934,7 @@ void Detector::inferenceThread()
         
         // Try to get frame without lock - using atomic operations
         if (!frameReady.load(std::memory_order_acquire)) {
-            // Debug log for first few frames
-            if (inferenceFrameCount < 5) {
-                std::cout << "[InferenceThread] Frame not ready, waiting... (count=" << inferenceFrameCount << ")" << std::endl;
-            }
+            
             // Sleep briefly to reduce CPU usage when no frame is available
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;  // No frame available, skip this iteration
