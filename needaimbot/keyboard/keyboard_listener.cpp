@@ -15,7 +15,7 @@
 #include "../mouse/mouse.h"
 #include "keycodes.h"
 #include "needaimbot.h"
-#include "../capture/capture.h"
+// #include "../capture/capture.h" - removed, using GPU capture now
 
 
 

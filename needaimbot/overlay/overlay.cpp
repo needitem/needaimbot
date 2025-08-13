@@ -26,7 +26,7 @@
 #include "config.h"
 #include "keycodes.h"
 #include "needaimbot.h"
-#include "capture/capture.h"
+// #include "capture/capture.h" - removed, using GPU capture now
 #include "keyboard_listener.h"
 #include "other_tools.h"
 

@@ -15,7 +15,8 @@
 #include <condition_variable>
 
 #include "AppContext.h"
-#include "capture/capture.h"
+// Forward declaration for GPU capture thread
+void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT);
 #include "core/constants.h"
 #include "utils/constants.h"
 #include "detector/detector.h"
@@ -606,9 +607,9 @@ int main()
         ctx.detector->start();
 
         // Create thread managers for better resource management
-        ThreadManager captureThreadMgr("CaptureThread", 
-            [&]() { captureThread(ctx.config.detection_resolution, ctx.config.detection_resolution); },
-            THREAD_PRIORITY_ABOVE_NORMAL);
+        ThreadManager captureThreadMgr("GPUCaptureThread", 
+            [&]() { gpuOnlyCaptureThread(ctx.config.detection_resolution, ctx.config.detection_resolution); },
+            THREAD_PRIORITY_NORMAL);  // GPU 캡처는 CPU를 거의 안 씀
         
         ThreadManager keyThreadMgr("KeyboardThread", 
             keyboardListener,

@@ -10,7 +10,7 @@
 
 extern ID3D11ShaderResourceView* bodyTexture;
 extern ImVec2 bodyImageSize;
-extern SimpleCudaMat latestFrameGpu;
+#include "../capture/global_gpu_buffer.h"
 extern ID3D11ShaderResourceView* g_debugSRV;
 extern ID3D11Texture2D* g_debugTex;
 extern float debug_scale;
@@ -387,9 +387,16 @@ void renderOffsetTab()
                 latestFrameGpu.rows() > 0 && latestFrameGpu.cols() > 0 &&
                 latestFrameGpu.rows() < 10000 && latestFrameGpu.cols() < 10000) {
                 uploadDebugFrame(latestFrameGpu);
+                ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Frame uploaded: %dx%d", 
+                                  latestFrameGpu.cols(), latestFrameGpu.rows());
             } else {
                 // Frame not ready yet
                 ImGui::TextUnformatted("Preview frame is being prepared...");
+                ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), 
+                                  "Debug: data=%p, size=%dx%d", 
+                                  latestFrameGpu.data(), 
+                                  latestFrameGpu.cols(), 
+                                  latestFrameGpu.rows());
                 UIHelpers::EndSettingsSection();
                 return;
             }

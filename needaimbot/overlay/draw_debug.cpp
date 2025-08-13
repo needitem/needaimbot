@@ -8,8 +8,7 @@
 #include <vector>
 #include <string>
 #include <d3d11.h> 
-#include "../capture/capture.h"
-#include "../capture/capture.h" 
+// #include "../capture/capture.h" - removed, using GPU capture now 
 #include <cuda_runtime.h> 
 #include "../postprocess/postProcess.h" 
 #include "../cuda/color_conversion.h"
@@ -60,8 +59,18 @@ static bool g_crosshairHsvValid = false;
 // GPU-accelerated version with direct GPU memory handling
 void uploadDebugFrame(const SimpleCudaMat& bgrGpu)
 {
+    static int uploadCount = 0;
+    uploadCount++;
+    
+    
+    
     // Comprehensive safety checks
     if (bgrGpu.empty() || !g_pd3dDevice || !g_pd3dDeviceContext) {
+        if (uploadCount <= 3) {
+            std::cout << "[uploadDebugFrame] Early return - empty=" << bgrGpu.empty() 
+                      << " device=" << (g_pd3dDevice != nullptr)
+                      << " context=" << (g_pd3dDeviceContext != nullptr) << std::endl;
+        }
         return;
     }
     

@@ -1,7 +1,7 @@
 #include "../AppContext.h"
 #include "mouse.h"
 #include "aimbot_components/AimbotTarget.h"
-#include "../capture/capture.h"
+// #include "../capture/capture.h" - removed, using GPU capture now
 #include "input_drivers/SerialConnection.h"
 #include "input_drivers/MakcuConnection.h"
 #include "../needaimbot.h"
