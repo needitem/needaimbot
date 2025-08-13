@@ -143,6 +143,11 @@ Detector::Detector()
     
     // Initialize GPU Kalman filter if enabled
     initializeKalmanFilter();
+    
+    // Initialize Unified Pipeline Graph if enabled
+    if (m_useUnifiedPipeline) {
+        m_unifiedPipeline = new UnifiedPipelineGraph();
+    }
 }
 
 Detector::~Detector()
@@ -229,6 +234,12 @@ Detector::~Detector()
         if (m_gpuKalmanTracker) {
             destroyGPUKalmanTracker(m_gpuKalmanTracker);
             m_gpuKalmanTracker = nullptr;
+        }
+        
+        // 7.5. Unified Pipeline cleanup
+        if (m_unifiedPipeline) {
+            delete m_unifiedPipeline;
+            m_unifiedPipeline = nullptr;
         }
         
         // 8. 스트림 정리 (마지막에)
@@ -572,8 +583,29 @@ void Detector::initialize(const std::string& modelFile)
     getBindings();
     
     initializeBuffers();
- 
-
+    
+    // Initialize Unified Pipeline Graph if enabled
+    if (m_useUnifiedPipeline && m_unifiedPipeline) {
+        // Get input dimensions
+        nvinfer1::Dims dims = context->getTensorShape(inputNames[0].c_str());
+        int modelWidth = dims.d[3];  // Assuming NCHW format
+        int modelHeight = dims.d[2];
+        
+        bool success = m_unifiedPipeline->initialize(
+            ctx.config.detection_resolution,
+            ctx.config.detection_resolution,
+            modelWidth,
+            modelHeight,
+            context.get()
+        );
+        
+        if (!success) {
+            std::cerr << "[Detector] Failed to initialize Unified Pipeline Graph" << std::endl;
+            delete m_unifiedPipeline;
+            m_unifiedPipeline = nullptr;
+            m_useUnifiedPipeline = false;
+        }
+    }
     
     m_allow_flags_need_update = true;
 
@@ -748,6 +780,44 @@ void Detector::processFrame(const SimpleCudaMat& frame)
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
+    // Use Unified Pipeline if available
+    if (m_useUnifiedPipeline && m_unifiedPipeline && m_unifiedPipeline->isReady()) {
+        float dx, dy;
+        int targetCount;
+        
+        // Execute entire pipeline with single graph launch
+        bool success = m_unifiedPipeline->execute(
+            (void*)frame.data(),  // GPU buffer pointer (cast to void*)
+            dx, dy,
+            targetCount
+        );
+        
+        if (success) {
+            // Update results
+            std::lock_guard<std::mutex> lock(detectionMutex);
+            m_hasBestTarget = (targetCount > 0);
+            m_finalTargetsCountHost = targetCount;
+            
+            // Update mouse movement in velocity fields (repurpose for dx/dy)
+            if (m_hasBestTarget) {
+                // Store dx/dy in velocity fields for mouse controller to use
+                // These values represent the PID-calculated mouse movement
+                m_bestTargetHost.velocity_x = dx;
+                m_bestTargetHost.velocity_y = dy;
+            }
+            
+            detectionVersion++;
+            
+            auto end_time = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<float, std::milli> duration = end_time - start_time;
+            ctx.g_current_process_frame_time_ms.store(duration.count());
+            ctx.add_to_history(ctx.g_process_frame_time_history, duration.count(), ctx.g_process_frame_history_mutex);
+            return;
+        }
+        // Fall through to legacy path if unified pipeline fails
+    }
+
+    // Legacy path - use existing multi-stream approach
     // Lock-free frame transfer
     // Skip if previous frame still processing (frame drop for low latency)
     if (frameReady.load(std::memory_order_acquire)) {
@@ -758,7 +828,12 @@ void Detector::processFrame(const SimpleCudaMat& frame)
     frameIsGpu.store(true, std::memory_order_release);
     frameReady.store(true, std::memory_order_release);
     
-    // No need to notify - using busy wait
+    // Notify inference thread
+    {
+        std::lock_guard<std::mutex> lock(ctx.inference_frame_mutex);
+        ctx.inference_frame_ready = true;
+    }
+    ctx.inference_frame_cv.notify_one();
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<float, std::milli> duration = end_time - start_time;
@@ -793,7 +868,13 @@ void Detector::processFrame(const SimpleMat& frame)
     currentFrameCpu = frame;
     frameIsGpu.store(false, std::memory_order_release);
     frameReady.store(true, std::memory_order_release);
-    // No need to notify - using busy wait
+    
+    // Notify inference thread
+    {
+        std::lock_guard<std::mutex> lock(ctx.inference_frame_mutex);
+        ctx.inference_frame_ready = true;
+    }
+    ctx.inference_frame_cv.notify_one();
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<float, std::milli> duration = end_time - start_time;
@@ -932,12 +1013,22 @@ void Detector::inferenceThread()
             break;
         }
         
-        // Try to get frame without lock - using atomic operations
-        if (!frameReady.load(std::memory_order_acquire)) {
+        // Wait for new frame using condition variable (efficient event-based approach)
+        {
+            std::unique_lock<std::mutex> lock(ctx.inference_frame_mutex);
+            ctx.inference_frame_cv.wait(lock, [&ctx, this] {
+                return (ctx.inference_frame_ready.load() && frameReady.load(std::memory_order_acquire)) || ctx.should_exit;
+            });
             
-            // Sleep briefly to reduce CPU usage when no frame is available
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            continue;  // No frame available, skip this iteration
+            if (ctx.should_exit) break;
+            
+            // Reset the flag after waking up
+            ctx.inference_frame_ready = false;
+        }
+        
+        // Double-check frameReady after waking up
+        if (!frameReady.load(std::memory_order_acquire)) {
+            continue;  // Spurious wakeup or frame already processed
         }
         
         // Process the frame
@@ -1054,8 +1145,18 @@ void Detector::inferenceThread()
                 static int frame_counter = 0;
                 int current_frame = ++frame_counter;
                 
-                // Wait for count to be ready before checking it
-                cudaEventSynchronize(m_postprocessEvent);
+                // Check if post-processing is done without blocking
+                cudaError_t eventStatus = cudaEventQuery(m_postprocessEvent);
+                if (eventStatus == cudaSuccess) {
+                    // Post-processing complete, we can check the count
+                } else if (eventStatus == cudaErrorNotReady) {
+                    // Still processing, skip this iteration to avoid blocking
+                    continue;
+                } else {
+                    // Error occurred
+                    std::cerr << "[InferenceThread] Event query failed: " << cudaGetErrorString(eventStatus) << std::endl;
+                    continue;
+                }
                 
                 if (m_finalTargetsCountHost > 0) {
                     
@@ -1088,7 +1189,9 @@ void Detector::inferenceThread()
                     // Record final copy event for later synchronization
                     cudaEventRecord(m_finalCopyEvent, postprocessStream);
                     
-                    // Wait for copy to complete before processing on CPU
+                    // Process will continue asynchronously, sync only when needed
+                    
+                    // Now sync before CPU processing
                     cudaEventSynchronize(m_finalCopyEvent);
                     
                     // Filter out detections touching screen edges (only for very edge cases)
@@ -1321,7 +1424,13 @@ void Detector::inferenceThread()
                     int kalmanCount = 0;
                     cudaMemcpyAsync(&kalmanCount, m_kalmanPredictionsCountGpu.get(), 
                                    sizeof(int), cudaMemcpyDeviceToHost, postprocessStream);
-                    cudaStreamSynchronize(postprocessStream);
+                    
+                    // Use event instead of stream sync for better performance
+                    cudaEvent_t kalmanEvent;
+                    cudaEventCreate(&kalmanEvent);
+                    cudaEventRecord(kalmanEvent, postprocessStream);
+                    cudaEventSynchronize(kalmanEvent);
+                    cudaEventDestroy(kalmanEvent);
                     
                     if (kalmanCount > 0) {
                         // Replace targets with Kalman predictions

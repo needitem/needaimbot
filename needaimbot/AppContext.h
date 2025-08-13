@@ -121,6 +121,23 @@ public:
     std::mutex mouse_event_mutex;
     std::condition_variable mouse_event_cv;
     std::atomic<bool> mouse_events_available{false};
+    
+    // GPU 직접 계산된 마우스 이동량
+    struct GPUMouseMovement {
+        int dx = 0;
+        int dy = 0;
+        float confidence = 0.0f;
+        bool hasTarget = false;
+    };
+    GPUMouseMovement latestMouseMovement;
+    std::atomic<bool> mouseDataReady{false};
+    std::condition_variable mouseDataCV;
+    std::mutex mouseDataMutex;
+    
+    // Event-based inference control
+    std::mutex inference_frame_mutex;
+    std::condition_variable inference_frame_cv;
+    std::atomic<bool> inference_frame_ready{false};
 
     // CUDA Graph optimization
     std::atomic<bool> use_cuda_graph{false};

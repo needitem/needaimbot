@@ -20,6 +20,7 @@ void mouseThreadFunctionEventBased(MouseThread& mouseThread)
     // Track state for smooth transitions
     static bool had_target_before = false;
     static bool last_aiming_state = false;
+    static int event_log_count = 0;
     
     // Key cache for performance
     struct KeyStateCache {
@@ -34,20 +35,83 @@ void mouseThreadFunctionEventBased(MouseThread& mouseThread)
     
     while (!ctx.should_exit)
     {
-        // Wait for mouse events instead of polling
-        std::unique_lock<std::mutex> lock(ctx.mouse_event_mutex);
+        // Wait for GPU-calculated mouse movement data
+        std::unique_lock<std::mutex> lock(ctx.mouseDataMutex);
         
-        // Wait with timeout to handle recoil compensation and other periodic tasks
-        auto wait_result = ctx.mouse_event_cv.wait_for(lock, 
-            std::chrono::milliseconds(16), // 60Hz for recoil updates
-            [&ctx] {
-                return ctx.mouse_events_available.load() || ctx.should_exit;
-            });
+        // Wait for events - use timeout only when recoil compensation is active
+        bool needs_recoil_check = ctx.config.easynorecoil && 
+                                  ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) && (GetAsyncKeyState(VK_RBUTTON) & 0x8000));
+        
+        if (needs_recoil_check) {
+            // Use timeout for recoil compensation
+            ctx.mouseDataCV.wait_for(lock, 
+                std::chrono::milliseconds(16), // 60Hz for recoil updates when shooting
+                [&ctx] {
+                    return ctx.mouseDataReady.load() || ctx.mouse_events_available.load() || ctx.should_exit;
+                });
+        } else {
+            // Pure event-based wait when not shooting
+            ctx.mouseDataCV.wait(lock,
+                [&ctx] {
+                    return ctx.mouseDataReady.load() || ctx.mouse_events_available.load() || ctx.should_exit;
+                });
+        }
         
         if (ctx.should_exit) break;
         
+        // Process GPU-calculated movement if available
+        if (ctx.mouseDataReady.load()) {
+            ctx.mouseDataReady.store(false);
+            
+            // Get GPU-calculated movement
+            auto gpuMovement = ctx.latestMouseMovement;
+            
+            // Release lock while processing
+            lock.unlock();
+            
+            // Check if we should aim
+            bool current_aiming = ctx.aiming.load();
+            
+            if (gpuMovement.hasTarget && current_aiming) {
+                // Apply movement directly from GPU calculation
+                int final_dx = gpuMovement.dx;
+                int final_dy = gpuMovement.dy;
+                
+                // Apply PID error smoothing if needed
+                if (ctx.config.pid_error_smoothing > 0) {
+                    static float smooth_x = 0.0f;
+                    static float smooth_y = 0.0f;
+                    float alpha = ctx.config.pid_error_smoothing;
+                    smooth_x = alpha * final_dx + (1.0f - alpha) * smooth_x;
+                    smooth_y = alpha * final_dy + (1.0f - alpha) * smooth_y;
+                    final_dx = static_cast<int>(smooth_x);
+                    final_dy = static_cast<int>(smooth_y);
+                }
+                
+                // Send mouse movement directly through input method
+                if (final_dx != 0 || final_dy != 0) {
+                    // Create a minimal AimbotTarget for mouse movement
+                    // Target(x, y, width, height, confidence, classId)
+                    float centerX = ctx.config.detection_resolution / 2.0f;
+                    float centerY = ctx.config.detection_resolution / 2.0f;
+                    
+                    AimbotTarget moveTarget(
+                        static_cast<int>(centerX + final_dx),  // x
+                        static_cast<int>(centerY + final_dy),  // y
+                        10,  // width
+                        10,  // height
+                        gpuMovement.confidence,  // confidence
+                        0  // classId
+                    );
+                    mouseThread.moveMouse(moveTarget);
+                }
+            }
+            
+            // Re-acquire lock for next iteration
+            lock.lock();
+        }
+        
         // Process all pending events
-        static int event_log_count = 0;
         while (!ctx.mouse_event_queue.empty()) {
             MouseEvent event = ctx.mouse_event_queue.front();
             ctx.mouse_event_queue.pop();
