@@ -1463,30 +1463,41 @@ void Detector::inferenceThread()
                             if (m_bestTargetIndexHost >= 0) {
                                 m_hasBestTarget = true;
                                 
-                                // Calculate movement deltas and push to event queue
-                                if (ctx.aiming) {
-                                    float centerX = cached_config.detection_resolution / 2.0f;
-                                    float centerY = cached_config.detection_resolution / 2.0f;
-                                    
-                                    MouseEvent event;
-                                    event.dx = m_bestTargetHost.center_x - centerX;
-                                    event.dy = m_bestTargetHost.center_y - centerY;
-                                    event.has_target = true;
-                                    event.target = m_bestTargetHost;
-                                    event.timestamp = std::chrono::steady_clock::now();
-                                    
-                                    
-                                    
-                                    {
-                                        std::lock_guard<std::mutex> event_lock(ctx.mouse_event_mutex);
-                                        ctx.mouse_event_queue.push(event);
-                                    }
-                                    ctx.mouse_events_available = true;
-                                    ctx.mouse_event_cv.notify_one();
+                                // Always send event with target data - let mouse thread decide what to do
+                                float centerX = cached_config.detection_resolution / 2.0f;
+                                float centerY = cached_config.detection_resolution / 2.0f;
+                                
+                                MouseEvent event;
+                                event.dx = m_bestTargetHost.center_x - centerX;
+                                event.dy = m_bestTargetHost.center_y - centerY;
+                                event.has_target = true;
+                                event.target = m_bestTargetHost;
+                                event.timestamp = std::chrono::steady_clock::now();
+                                
+                                {
+                                    std::lock_guard<std::mutex> event_lock(ctx.mouse_event_mutex);
+                                    ctx.mouse_event_queue.push(event);
                                 }
+                                ctx.mouse_events_available = true;
+                                ctx.mouse_event_cv.notify_one();
                             } else {
                                 m_hasBestTarget = false;
                                 m_bestTargetHost = Target();  // Use default constructor
+                                
+                                // Always send event even without target - maintains consistent FPS
+                                MouseEvent event;
+                                event.dx = 0;
+                                event.dy = 0;
+                                event.has_target = false;
+                                event.target = Target();
+                                event.timestamp = std::chrono::steady_clock::now();
+                                
+                                {
+                                    std::lock_guard<std::mutex> event_lock(ctx.mouse_event_mutex);
+                                    ctx.mouse_event_queue.push(event);
+                                }
+                                ctx.mouse_events_available = true;
+                                ctx.mouse_event_cv.notify_one();
                             }
                             
                         }
@@ -1509,22 +1520,20 @@ void Detector::inferenceThread()
                     m_bestTargetHost = Target();  // Use default constructor
                     m_bestTargetIndexHost = -1;
                     
-                    // Send no-target event if aiming
-                    if (ctx.aiming) {
-                        MouseEvent event;
-                        event.dx = 0;
-                        event.dy = 0;
-                        event.has_target = false;
-                        event.target = Target();
-                        event.timestamp = std::chrono::steady_clock::now();
-                        
-                        {
-                            std::lock_guard<std::mutex> event_lock(ctx.mouse_event_mutex);
-                            ctx.mouse_event_queue.push(event);
-                        }
-                        ctx.mouse_events_available = true;
-                        ctx.mouse_event_cv.notify_one();
+                    // Always send no-target event to maintain consistent event rate
+                    MouseEvent event;
+                    event.dx = 0;
+                    event.dy = 0;
+                    event.has_target = false;
+                    event.target = Target();
+                    event.timestamp = std::chrono::steady_clock::now();
+                    
+                    {
+                        std::lock_guard<std::mutex> event_lock(ctx.mouse_event_mutex);
+                        ctx.mouse_event_queue.push(event);
                     }
+                    ctx.mouse_events_available = true;
+                    ctx.mouse_event_cv.notify_one();
                     
                     detectionVersion++;
                     detectionCV.notify_one();
