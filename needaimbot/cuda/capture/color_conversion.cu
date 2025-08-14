@@ -1,6 +1,6 @@
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
-#include "cuda_error_check.h"
+#include "../cuda_error_check.h"
 
 __global__ void bgra2bgr_kernel(const uint8_t* __restrict__ src, 
                                 uint8_t* __restrict__ dst, 

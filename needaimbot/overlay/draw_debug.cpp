@@ -10,8 +10,8 @@
 #include <d3d11.h> 
 // #include "../capture/capture.h" - removed, using GPU capture now 
 #include <cuda_runtime.h> 
-#include "../postprocess/postProcess.h" 
-#include "../cuda/color_conversion.h"
+#include "../cuda/detection/postProcess.h" 
+#include "../cuda/capture/color_conversion.h"
 #include "../tracking/ByteTracker.h"
  
 

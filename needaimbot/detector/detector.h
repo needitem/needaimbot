@@ -6,8 +6,8 @@
 #include <windows.h>
 
 #include "../cuda/simple_cuda_mat.h"
-#include "../cuda/cuda_image_processing.h"
-#include "../cuda/cuda_float_processing.h"
+#include "../cuda/detection/cuda_image_processing.h"
+#include "../cuda/detection/cuda_float_processing.h"
 #include <NvInfer.h>
 #include <atomic>
 #include <mutex>
@@ -22,7 +22,7 @@
 #include <cuda_runtime_api.h>
 #include <filesystem>
 
-#include "../postprocess/postProcess.h"
+#include "../cuda/detection/postProcess.h"
 #include "CudaBuffer.h"
 
 

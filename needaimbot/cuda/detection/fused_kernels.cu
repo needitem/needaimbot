@@ -2,7 +2,7 @@
 #include <cuda_fp16.h>
 #include <device_launch_parameters.h>
 #include <cooperative_groups.h>
-#include "../postprocess/postProcess.h"
+#include "postProcess.h"
 
 namespace cg = cooperative_groups;
 
@@ -10,8 +10,11 @@ namespace cg = cooperative_groups;
 // ULTRA-OPTIMIZED FUSED KERNELS FOR MAXIMUM PERFORMANCE
 // ============================================================================
 
-// Texture reference for hardware bilinear interpolation
-texture<float4, cudaTextureType2D, cudaReadModeNormalizedFloat> texCapture;
+// Forward declare IoU calculation
+__device__ inline float calculateIoU(const Target& a, const Target& b);
+
+// Texture object is now passed as parameter (CUDA 11+ style)
+// texture<float4, cudaTextureType2D, cudaReadModeNormalizedFloat> texCapture; // Deprecated
 
 // 1. Fused Capture + Resize + Normalize + Format Conversion
 // Uses texture memory, shared memory, vectorized loads, and warp shuffles
@@ -258,6 +261,18 @@ __device__ inline float calculateIoU(const Target& a, const Target& b) {
     
     return intersection / fmaxf(union_area, 1e-6f);
 }
+
+// Pipeline parameters structure
+struct PipelineParams {
+    int srcWidth;
+    int srcHeight;
+    int dstWidth;
+    int dstHeight;
+    float confThreshold;
+    float nmsThreshold;
+    float fovScale;
+    float smoothing;
+};
 
 // 4. Super-fused end-to-end kernel (experimental)
 // Processes entire pipeline in single kernel launch

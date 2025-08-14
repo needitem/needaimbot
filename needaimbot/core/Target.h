@@ -3,6 +3,13 @@
 
 #include <type_traits>
 
+// Define __host__ __device__ for CUDA compatibility
+#ifdef __CUDACC__
+    #define CUDA_HOSTDEV __host__ __device__
+#else
+    #define CUDA_HOSTDEV
+#endif
+
 /**
  * @brief Simple POD structure for detection and tracking
  * 
@@ -31,7 +38,7 @@ struct Target {
     // === Helper methods (inline for POD compatibility) ===
     
     // Default constructor
-    Target() : 
+    CUDA_HOSTDEV Target() : 
         classId(-1), x(-1), y(-1), width(-1), height(-1),
         id(-1), confidence(0.0f),
         center_x(0), center_y(0),
@@ -41,7 +48,7 @@ struct Target {
     }
     
     // Constructor for detection
-    Target(int x_, int y_, int width_, int height_, float conf, int cls) :
+    CUDA_HOSTDEV Target(int x_, int y_, int width_, int height_, float conf, int cls) :
         classId(cls), x(x_), y(y_), width(width_), height(height_),
         id(-1), confidence(conf),
         velocity_x(0), velocity_y(0)
@@ -50,13 +57,13 @@ struct Target {
     }
     
     // Update center point based on bounding box
-    void updateCenter() {
+    CUDA_HOSTDEV void updateCenter() {
         center_x = x + width / 2.0f;
         center_y = y + height / 2.0f;
     }
     
     // Check if this target has valid detection data
-    bool hasValidDetection() const {
+    CUDA_HOSTDEV bool hasValidDetection() const {
         return x >= 0 && y >= 0 && width > 0 && height > 0;
     }
 };

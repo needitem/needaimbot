@@ -1,10 +1,10 @@
 #include "unified_graph_pipeline.h"
 #include "../detector/detector.h"
-#include "cuda_image_processing.h"
-#include "gpu_kalman_filter.h"
-#include "gpu_pid_controller.h"
-#include "../postprocess/postProcessGpu.h"
-#include "../postprocess/filterGpu.h"
+#include "detection/cuda_image_processing.h"
+#include "tracking/gpu_kalman_filter.h"
+#include "control/gpu_pid_controller.h"
+#include "detection/postProcessGpu.h"
+#include "detection/filterGpu.h"
 #include "simple_cuda_mat.h"
 #include <iostream>
 #include <chrono>

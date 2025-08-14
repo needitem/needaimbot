@@ -8,11 +8,11 @@
 #include <fstream>
 #include <iostream>
 
-#include "../cuda/cuda_image_processing.h"
-#include "../cuda/cuda_float_processing.h"
-#include "../cuda/color_filter.h"
-#include "../cuda/gpu_kalman_filter.h"
-#include "../cuda/gpu_tracker.h"
+#include "../cuda/detection/cuda_image_processing.h"
+#include "../cuda/detection/cuda_float_processing.h"
+#include "../cuda/filter/color_filter.h"
+#include "../cuda/tracking/gpu_kalman_filter.h"
+#include "../cuda/tracking/gpu_tracker.h"
 
 #include <NvInfer.h>
 #include <NvOnnxParser.h>
@@ -30,11 +30,11 @@
 #include "../include/other_tools.h"
 #include "../core/constants.h"
 
-#include "../postprocess/postProcess.h"
-#include "../postprocess/filterGpu.h"
+#include "../cuda/detection/postProcess.h"
+#include "../cuda/detection/filterGpu.h"
 #include "../config/config.h"
 #include "../tracking/ByteTracker.h"
-#include "../cuda/gpu_tracker.h"
+#include "../cuda/tracking/gpu_tracker.h"
 
 #if defined(__has_include)
 #  if __has_include(<nvToolsExt.h>)

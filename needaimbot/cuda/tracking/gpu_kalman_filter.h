@@ -1,7 +1,7 @@
 #pragma once
 
 #include <cuda_runtime.h>
-#include "../postprocess/postProcess.h"
+#include "../detection/postProcess.h"
 
 // Forward declaration
 class GPUKalmanTracker;
