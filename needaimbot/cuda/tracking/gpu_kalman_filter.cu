@@ -2,7 +2,7 @@
 #include <cublas_v2.h>
 #include <device_launch_parameters.h>
 #include <cooperative_groups.h>
-#include "../postprocess/postProcess.h"
+#include "../detection/postProcess.h"
 
 namespace cg = cooperative_groups;
 

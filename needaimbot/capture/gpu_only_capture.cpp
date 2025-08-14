@@ -2,7 +2,7 @@
 #include "gpu_capture_manager.h"
 #include "global_gpu_buffer.h"
 #include "../detector/detector.h"
-#include "../cuda/gpu_mouse_controller.h"
+#include "../cuda/control/gpu_mouse_controller.h"
 #include "../mouse/mouse.h"
 #include <thread>
 #include <chrono>

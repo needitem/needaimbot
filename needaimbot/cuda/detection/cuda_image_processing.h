@@ -1,7 +1,7 @@
 #pragma once
 
 #include <cuda_runtime.h>
-#include "simple_cuda_mat.h"
+#include "../simple_cuda_mat.h"
 
 namespace CudaImageProcessing {
 

@@ -8,8 +8,8 @@
 #include <d3d11.h>
 #include <cuda_d3d11_interop.h>
 #endif
-#include "../cuda/simple_cuda_mat.h"
-#include "../postprocess/postProcess.h"
+#include "simple_cuda_mat.h"
+#include "detection/postProcess.h"
 
 // Unified pipeline optimization with CUDA Graphs, kernel fusion, and zero-copy memory
 

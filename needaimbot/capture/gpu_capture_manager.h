@@ -11,7 +11,7 @@
 #include <thread>
 #include <memory>
 #include "../cuda/simple_cuda_mat.h"
-#include "../cuda/gpu_mouse_controller.h"
+#include "../cuda/control/gpu_mouse_controller.h"
 
 // SimpleCudaMat typedef for compatibility
 using SimpleCudaMat = SimpleCudaMat;
