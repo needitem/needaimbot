@@ -4,13 +4,11 @@
 #include "AppContext.h"
 #include "draw_settings.h"
 #include "ui_helpers.h"
-#include "capture/frame_buffer_pool.h"
 #include "cuda/simple_cuda_mat.h"
 #include <d3d11.h>
 
 extern ID3D11ShaderResourceView* bodyTexture;
 extern ImVec2 bodyImageSize;
-#include "../capture/global_gpu_buffer.h"
 extern ID3D11ShaderResourceView* g_debugSRV;
 extern ID3D11Texture2D* g_debugTex;
 extern float debug_scale;
@@ -382,24 +380,8 @@ void renderOffsetTab()
                 return;
             }
             
-            // Check if frame is available and valid
-            if (latestFrameGpu.data() != nullptr && 
-                latestFrameGpu.rows() > 0 && latestFrameGpu.cols() > 0 &&
-                latestFrameGpu.rows() < 10000 && latestFrameGpu.cols() < 10000) {
-                uploadDebugFrame(latestFrameGpu);
-                ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Frame uploaded: %dx%d", 
-                                  latestFrameGpu.cols(), latestFrameGpu.rows());
-            } else {
-                // Frame not ready yet
-                ImGui::TextUnformatted("Preview frame is being prepared...");
-                ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), 
-                                  "Debug: data=%p, size=%dx%d", 
-                                  latestFrameGpu.data(), 
-                                  latestFrameGpu.cols(), 
-                                  latestFrameGpu.rows());
-                UIHelpers::EndSettingsSection();
-                return;
-            }
+            // Debug frame preview removed - not implemented
+            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Frame preview not available");
         } catch (const std::exception& e) {
             ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Error uploading frame: %s", e.what());
             UIHelpers::EndSettingsSection();

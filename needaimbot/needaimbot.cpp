@@ -8,8 +8,8 @@
 #include <condition_variable>
 
 #include "AppContext.h"
-// Forward declaration for GPU capture thread
-void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT);
+// GPU capture
+#include "capture/gpu_capture.h"
 #include "core/constants.h"
 #include "utils/constants.h"
 #include "detector/detector.h"
