@@ -1,6 +1,4 @@
-#define WIN32_LEAN_AND_MEAN
-#define _WINSOCKAPI_
-#include <windows.h>
+#include "../core/windows_headers.h"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -123,23 +121,6 @@ bool Config::loadConfig(const std::string& filename)
 
         
 
-        
-        kp_x = 0.5; 
-        ki_x = 0.0;
-        kd_x = 0.1;
-        kp_y = 0.4; 
-        ki_y = 0.0;
-        kd_y = 0.15;
-
-        // PID overshoot reduction defaults
-        pid_error_smoothing = 0.3f;
-        pid_use_error_filter = true;
-        pid_use_velocity_prediction = true;
-        pid_prediction_time = 0.05f;
-        pid_overshoot_suppression = 0.5f;
-        pid_max_velocity = 50.0f;
-        pid_use_jerk_limit = true;
-        pid_max_jerk = 10.0f;
         
         // Initialize ByteTracker parameters
         enable_tracking = true;
@@ -315,6 +296,9 @@ bool Config::loadConfig(const std::string& filename)
     easynorecoilstrength = static_cast<float>(get_double_ini("Mouse", "easynorecoilstrength", 0.0));
     norecoil_step = static_cast<float>(get_double_ini("Mouse", "norecoil_step", 5.0));
     norecoil_ms = static_cast<float>(get_double_ini("Mouse", "norecoil_ms", 10.0));
+    mouse_sensitivity = static_cast<float>(get_double_ini("Mouse", "mouse_sensitivity", 1.0));
+    movement_factor = static_cast<float>(get_double_ini("Mouse", "movement_factor", 0.3));
+    min_movement_threshold = static_cast<float>(get_double_ini("Mouse", "min_movement_threshold", 1.0));
     input_method = get_string_ini("Mouse", "input_method", "WIN32");
     easynorecoil_start_delay_ms = get_long_ini("Mouse", "easynorecoil_start_delay_ms", 0);
     easynorecoil_end_delay_ms = get_long_ini("Mouse", "easynorecoil_end_delay_ms", 0);
@@ -329,25 +313,6 @@ bool Config::loadConfig(const std::string& filename)
     recoil_mult_6x = static_cast<float>(get_double_ini("Recoil", "recoil_mult_6x", 1.0));
 
     
-    
-    kp_x = get_double_ini("PID", "kp_x", 0.5);
-    ki_x = get_double_ini("PID", "ki_x", 0.0);
-    kd_x = get_double_ini("PID", "kd_x", 0.1);
-    kp_y = get_double_ini("PID", "kp_y", 0.4);
-    ki_y = get_double_ini("PID", "ki_y", 0.0);
-    kd_y = get_double_ini("PID", "kd_y", 0.15);
-
-    // Overshoot reduction parameters
-    pid_error_smoothing = static_cast<float>(get_double_ini("PID", "error_smoothing", 0.3));
-    pid_use_error_filter = get_long_ini("PID", "use_error_filter", 1) != 0;
-    pid_use_velocity_prediction = get_long_ini("PID", "use_velocity_prediction", 1) != 0;
-    pid_prediction_time = static_cast<float>(get_double_ini("PID", "prediction_time", 0.05));
-    pid_overshoot_suppression = static_cast<float>(get_double_ini("PID", "overshoot_suppression", 0.5));
-    pid_max_velocity = static_cast<float>(get_double_ini("PID", "max_velocity", 50.0));
-    pid_use_jerk_limit = get_long_ini("PID", "use_jerk_limit", 1) != 0;
-    pid_max_jerk = static_cast<float>(get_double_ini("PID", "max_jerk", 10.0));
-    
-
     // Load ByteTracker parameters
     enable_tracking = get_bool_ini("Tracking", "enable_tracking", true);
     byte_track_thresh = static_cast<float>(get_double_ini("Tracking", "byte_track_thresh", 0.5));
@@ -591,6 +556,9 @@ bool Config::saveConfig(const std::string& filename)
     file << "easynorecoilstrength = " << easynorecoilstrength << "\n";
     file << "norecoil_step = " << norecoil_step << "\n";
     file << "norecoil_ms = " << norecoil_ms << "\n";
+    file << "mouse_sensitivity = " << mouse_sensitivity << "\n";
+    file << "movement_factor = " << movement_factor << "\n";
+    file << "min_movement_threshold = " << min_movement_threshold << "\n";
     file << std::noboolalpha;
     file << "input_method = " << input_method << "\n";
     file << std::fixed << std::setprecision(6);
@@ -610,25 +578,6 @@ bool Config::saveConfig(const std::string& filename)
 
     
     
-    
-    file << "[PID]\n";
-    file << std::fixed << std::setprecision(6);
-    file << "kp_x = " << kp_x << "\n";
-    file << "ki_x = " << ki_x << "\n";
-    file << "kd_x = " << kd_x << "\n";
-    file << "kp_y = " << kp_y << "\n";
-    file << "ki_y = " << ki_y << "\n";
-    file << "kd_y = " << kd_y << "\n";
-    // Overshoot reduction parameters
-    file << "error_smoothing = " << pid_error_smoothing << "\n";
-    file << "use_error_filter = " << (pid_use_error_filter ? 1 : 0) << "\n";
-    file << "use_velocity_prediction = " << (pid_use_velocity_prediction ? 1 : 0) << "\n";
-    file << "prediction_time = " << pid_prediction_time << "\n";
-    file << "overshoot_suppression = " << pid_overshoot_suppression << "\n";
-    file << "max_velocity = " << pid_max_velocity << "\n";
-    file << "use_jerk_limit = " << (pid_use_jerk_limit ? 1 : 0) << "\n";
-    file << "max_jerk = " << pid_max_jerk << "\n";
-    file << "\n";
 
     // Save ByteTracker parameters
     file << "[Tracking]\n";

@@ -1,6 +1,6 @@
 #include "recoil_control_thread.h"
+#include "../core/windows_headers.h"
 #include "../AppContext.h"
-#include <Windows.h>
 #include <iostream>
 
 RecoilControlThread::RecoilControlThread() 

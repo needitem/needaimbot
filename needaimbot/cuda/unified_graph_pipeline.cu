@@ -2,10 +2,11 @@
 #include "../detector/detector.h"
 #include "detection/cuda_image_processing.h"
 #include "tracking/gpu_kalman_filter.h"
-#include "control/gpu_pid_controller.h"
 #include "detection/postProcessGpu.h"
 #include "detection/filterGpu.h"
 #include "simple_cuda_mat.h"
+#include "mouse_interface.h"
+#include "../AppContext.h"
 #include <iostream>
 #include <chrono>
 #include <cuda.h>
@@ -269,7 +270,6 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
         m_tripleBuffer = std::make_unique<TripleBuffer>();
         // Triple buffer initialization will be done in allocateBuffers()
     }
-    
     // Create events for two-stage pipeline
     cudaEventCreateWithFlags(&m_detectionEvent, cudaEventDisableTiming);
     cudaEventCreateWithFlags(&m_trackingEvent, cudaEventDisableTiming);
@@ -283,7 +283,12 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
     
     // Initial graph capture if enabled
     if (m_config.useGraphOptimization) {
-        // We'll capture the graph on first execution with real data
+        // Capture detection graph immediately for preprocessing
+        if (!captureDetectionGraph(m_primaryStream)) {
+            std::cerr << "[UnifiedGraph] Warning: Failed to capture detection graph" << std::endl;
+        }
+        
+        // We'll capture the full graph on first execution with real data
         m_state.needsRebuild = true;
     }
     
@@ -300,7 +305,6 @@ void UnifiedGraphPipeline::shutdown() {
     
     cleanupGraph();
     deallocateBuffers();
-    
     if (m_primaryStream) {
         cudaStreamDestroy(m_primaryStream);
         m_primaryStream = nullptr;
@@ -342,7 +346,7 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
                        m_captureBuffer.sizeInBytes(), cudaMemcpyHostToDevice, stream);
     }
     
-    // 2. Preprocessing - Use FUSED kernel for optimal performance!
+    // 2. Preprocessing only for graph capture (detector has dynamic allocations)
     if (m_config.enableDetection && m_d_yoloInput) {
         // Calculate grid and block dimensions
         dim3 blockSize(16, 16);
@@ -387,28 +391,12 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     }
     
     // 4. Postprocessing (NMS, filtering, target selection)
-    if (m_config.enableDetection && m_d_inferenceOutput && m_d_detections) {
-        // Apply NMS using pre-allocated buffers
-        int maxDetections = 100;
-        
-        NMSGpu(
-            reinterpret_cast<Target*>(m_d_inferenceOutput),
-            maxDetections,
-            m_d_detections,
-            m_d_numDetections,
-            maxDetections,
-            0.5f,  // NMS threshold
-            m_captureBuffer.cols(),
-            m_captureBuffer.rows(),
-            m_d_x1, m_d_y1, m_d_x2, m_d_y2,
-            m_d_areas, m_d_scores_nms, m_d_classIds_nms,
-            m_d_iou_matrix, m_d_keep, m_d_indices,
-            stream
-        );
-        
-        // Select best target (simplified - just take first detection for now)
-        cudaMemcpyAsync(m_d_selectedTarget, m_d_detections, 
-                       sizeof(Target), cudaMemcpyDeviceToDevice, stream);
+    // Note: NMS is skipped during graph capture to avoid kernel errors
+    // NMS will be executed outside the graph in the actual execution
+    if (m_config.enableDetection && m_d_selectedTarget && m_d_detections) {
+        // Just initialize the target buffer during graph capture
+        cudaMemsetAsync(m_d_selectedTarget, 0, sizeof(Target), stream);
+        cudaMemsetAsync(m_d_numDetections, 0, sizeof(int), stream);
     }
     
     // 5. Tracking (Kalman filter)
@@ -426,40 +414,15 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
         );
     }
     
-    // 6. PID Control
-    if (m_config.enablePIDControl && m_pidController && m_d_trackedTarget) {
-        // Extract target position from tracked target
-        // Note: We need to copy target position to host temporarily
-        // In a fully optimized version, we'd pass the Target struct directly to PID kernel
-        Target h_target;
-        cudaMemcpyAsync(&h_target, m_d_trackedTarget, sizeof(Target), 
-                       cudaMemcpyDeviceToHost, stream);
-        cudaStreamSynchronize(stream);
-        
-        // Calculate PID control output on GPU
-        float current_time = static_cast<float>(m_state.frameCount) * 0.033f; // 30 FPS assumed
-        
-        // Use the GpuPIDController's calculateGpu method
-        // This method handles the PID calculation internally
-        m_pidController->calculateGpu(h_target.x, h_target.y, current_time);
-        
-        // Copy PID output to the pipeline output buffer
-        cudaMemcpyAsync(m_d_pidOutput, m_pidController->getGpuOutputDx(), 
-                       sizeof(float), cudaMemcpyDeviceToDevice, stream);
-        cudaMemcpyAsync(m_d_pidOutput + 1, m_pidController->getGpuOutputDy(), 
-                       sizeof(float), cudaMemcpyDeviceToDevice, stream);
-    }
+    // 6. Bezier Control (already handled in the main pipeline)
+    // The actual Bezier control is executed in executeDirect method
     
     // 7. Final output copy (only 2 floats for mouse X,Y)
-    if (m_d_outputBuffer && m_d_pidOutput) {
-        cudaMemcpyAsync(m_d_outputBuffer, m_d_pidOutput, 
-                       2 * sizeof(float), cudaMemcpyDeviceToDevice, stream);
-        
-        // Optional: Copy to pinned host memory for zero-copy access
-        if (m_h_outputBuffer) {
-            cudaMemcpyAsync(m_h_outputBuffer, m_d_outputBuffer,
-                           2 * sizeof(float), cudaMemcpyDeviceToHost, stream);
-        }
+    if (m_d_outputBuffer && m_h_outputBuffer) {
+        // Copy final movement to output buffer if needed
+        // This is mainly for debugging/monitoring purposes
+        cudaMemcpyAsync(m_h_outputBuffer, m_d_outputBuffer,
+                       2 * sizeof(float), cudaMemcpyDeviceToHost, stream);
     }
     
     // End capture
@@ -506,43 +469,246 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     return true;
 }
 
+bool UnifiedGraphPipeline::captureDetectionGraph(cudaStream_t stream) {
+    std::lock_guard<std::mutex> lock(m_graphMutex);
+    
+    if (!stream) stream = m_primaryStream;
+    
+    
+    // Clean up existing detection graph
+    if (m_detectionGraphExec) {
+        cudaGraphExecDestroy(m_detectionGraphExec);
+        m_detectionGraphExec = nullptr;
+    }
+    if (m_detectionGraph) {
+        cudaGraphDestroy(m_detectionGraph);
+        m_detectionGraph = nullptr;
+    }
+    
+    // Begin graph capture for detection only
+    cudaError_t err = cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal);
+    if (err != cudaSuccess) {
+        std::cerr << "[UnifiedGraph] Failed to begin detection graph capture: " 
+                  << cudaGetErrorString(err) << std::endl;
+        return false;
+    }
+    
+    // Capture only preprocessing operations
+    if (m_config.enableDetection && m_d_yoloInput) {
+        // Calculate grid and block dimensions
+        dim3 blockSize(16, 16);
+        dim3 gridSize(
+            (640 + blockSize.x - 1) / blockSize.x,
+            (640 + blockSize.y - 1) / blockSize.y
+        );
+        
+        // Get input dimensions
+        int srcWidth = m_captureBuffer.cols();
+        int srcHeight = m_captureBuffer.rows();
+        
+        // Launch fused kernel: BGRA→BGR + Resize + Normalize
+        fusedPreprocessKernel<<<gridSize, blockSize, 0, stream>>>(
+            reinterpret_cast<const uchar4*>(m_captureBuffer.data()),
+            m_d_yoloInput,
+            srcWidth, srcHeight,
+            640, 640,  // YOLO input size
+            static_cast<float>(srcWidth) / 640.0f,
+            static_cast<float>(srcHeight) / 640.0f,
+            0.5f, 0.5f,  // Normalization parameters
+            true  // Swap R and B channels
+        );
+    }
+    
+    // End capture
+    err = cudaStreamEndCapture(stream, &m_detectionGraph);
+    if (err != cudaSuccess) {
+        std::cerr << "[UnifiedGraph] Failed to end detection graph capture: " 
+                  << cudaGetErrorString(err) << std::endl;
+        if (m_detectionGraph) {
+            cudaGraphDestroy(m_detectionGraph);
+            m_detectionGraph = nullptr;
+        }
+        return false;
+    }
+    
+    // Instantiate graph for execution
+    err = cudaGraphInstantiate(&m_detectionGraphExec, m_detectionGraph, nullptr, nullptr, 0);
+    if (err != cudaSuccess) {
+        std::cerr << "[UnifiedGraph] Failed to instantiate detection graph: " 
+                  << cudaGetErrorString(err) << std::endl;
+        cudaGraphDestroy(m_detectionGraph);
+        m_detectionGraph = nullptr;
+        return false;
+    }
+    
+    // Get node count for debugging
+    size_t numNodes = 0;
+    cudaGraphGetNodes(m_detectionGraph, nullptr, &numNodes);
+    
+    
+    return true;
+}
+
+void UnifiedGraphPipeline::checkTargetsAsync(cudaStream_t stream) {
+    // Check if detector has targets from previous frame
+    if (m_detector) {
+        auto detections = m_detector->getLatestDetectionsGPU();
+        m_prevFrameHasTarget = (detections.second > 0);
+    }
+}
+
 bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
+    
     // Use optimized two-stage pipeline for conditional execution
     if (!stream) stream = m_primaryStream;
     
-    // Stage 1: Always execute detection graph
+    // First, capture the frame from D3D11 texture (skip if frame already set by setInputFrame)
+    // Note: gpu_only_capture.cpp calls setInputFrame() before executeGraph()
+    if (m_config.enableCapture && m_cudaResource && !m_hasFrameData) {
+        cudaError_t err = cudaGraphicsMapResources(1, &m_cudaResource, stream);
+        if (err != cudaSuccess) {
+            return false;
+        }
+        
+        cudaArray_t array;
+        err = cudaGraphicsSubResourceGetMappedArray(&array, m_cudaResource, 0, 0);
+        if (err != cudaSuccess) {
+            cudaGraphicsUnmapResources(1, &m_cudaResource, stream);
+            return false;
+        }
+        
+        
+        // Copy from D3D11 texture to our capture buffer
+        err = cudaMemcpy2DFromArrayAsync(
+            m_captureBuffer.data(),
+            m_captureBuffer.step(),
+            array,
+            0, 0,
+            m_captureBuffer.cols() * sizeof(uchar4),
+            m_captureBuffer.rows(),
+            cudaMemcpyDeviceToDevice,
+            stream
+        );
+        
+        if (err != cudaSuccess) {
+        }
+        
+        cudaGraphicsUnmapResources(1, &m_cudaResource, stream);
+        
+    } else {
+        if (!m_cudaResource) {
+            static int warnCounter = 0;
+            if (++warnCounter % 300 == 0) {
+                printf("[WARNING] m_cudaResource is NULL!\n");
+            }
+        }
+    }
+    
+    // Stage 1: Execute preprocessing graph (if available)
     if (m_detectionGraph && m_detectionGraphExec) {
         cudaError_t err = cudaGraphLaunch(m_detectionGraphExec, stream);
         if (err != cudaSuccess) {
             return executeDirect(stream);
         }
+    }
+    
+    // Always run detector after graph (or without graph)
+    auto& ctx = AppContext::getInstance();
+    
+    
+    if (!ctx.detectionPaused && m_detector) {
+        // Debug log
+        static int frameCount = 0;
+        frameCount++;
         
-        // Check detection results asynchronously
-        cudaEventRecord(m_detectionEvent, stream);
+        SimpleCudaMat frameWrapper(m_captureBuffer.rows(), m_captureBuffer.cols(), 
+                                  m_captureBuffer.channels());
         
-        // Stage 2: Conditionally execute tracking/PID graph
-        // Check previous frame's detection result (pipelined)
-        if (m_prevFrameHasTarget) {
-            if (m_trackingGraph && m_trackingGraphExec) {
-                err = cudaGraphLaunch(m_trackingGraphExec, stream);
-                if (err != cudaSuccess) {
-                    std::cerr << "[UnifiedGraph] Tracking graph failed\n";
-                }
+        size_t dataSize = m_captureBuffer.rows() * m_captureBuffer.cols() * 
+                         m_captureBuffer.channels() * sizeof(unsigned char);
+        
+        cudaMemcpyAsync(frameWrapper.data(), m_captureBuffer.data(),
+                       dataSize, cudaMemcpyDeviceToDevice, stream);
+        
+        // Synchronize before detector call
+        cudaStreamSynchronize(stream);
+        
+        m_detector->processFrame(frameWrapper);
+        
+        // Get detection results
+        auto detections = m_detector->getLatestDetectionsGPU();
+        
+        // Process mouse movement if target detected AND aiming is active
+        if (detections.second > 0 && detections.first && ctx.aiming) {
+            // Get the best target from detector
+            Target h_target;
+            cudaMemcpyAsync(&h_target, detections.first, sizeof(Target), 
+                           cudaMemcpyDeviceToHost, stream);
+            cudaStreamSynchronize(stream);
+            
+            // Ensure center is calculated
+            h_target.updateCenter();
+            
+            // Calculate mouse movement with simple percentage approach
+            float screenCenterX = ctx.config.detection_resolution / 2.0f;
+            float screenCenterY = ctx.config.detection_resolution / 2.0f;
+            
+            // Calculate error (distance from center)
+            float error_x = h_target.center_x - screenCenterX;
+            float error_y = h_target.center_y - screenCenterY;
+            
+            
+            // Apply movement factor (move only a percentage of the error)
+            float movement_x = error_x * ctx.config.movement_factor * ctx.config.mouse_sensitivity;
+            float movement_y = error_y * ctx.config.movement_factor * ctx.config.mouse_sensitivity;
+            
+            // Apply minimum threshold
+            if (fabs(error_x) < ctx.config.min_movement_threshold) movement_x = 0;
+            if (fabs(error_y) < ctx.config.min_movement_threshold) movement_y = 0;
+            
+            int dx = static_cast<int>(movement_x);
+            int dy = static_cast<int>(movement_y);
+            
+            printf("[UnifiedGraph] Calculated movement: dx=%d, dy=%d (%.1f%% of error)\n", 
+                   dx, dy, ctx.config.movement_factor * 100);
+            
+            // Execute mouse movement only when aiming
+            if (dx != 0 || dy != 0) {
+                cuda::executeMouseMovementFromGPU(dx, dy);
             }
         }
-        
-        // Async check for current frame targets (for next frame)
-        checkTargetsAsync(stream);
-        
-    } else if (m_state.graphReady && m_graphExec) {
-        // Fallback to monolithic graph if two-stage not ready
-        cudaError_t err = cudaGraphLaunch(m_graphExec, stream);
-        if (err != cudaSuccess) {
-            m_state.needsRebuild = true;
-            return false;
+    }
+    
+    // Check detection results asynchronously
+    cudaEventRecord(m_detectionEvent, stream);
+    
+    // Stage 2: Conditionally execute tracking/PID graph
+    // Check previous frame's detection result (pipelined)
+    if (m_prevFrameHasTarget) {
+        if (m_trackingGraph && m_trackingGraphExec) {
+            cudaError_t err = cudaGraphLaunch(m_trackingGraphExec, stream);
+            if (err != cudaSuccess) {
+                std::cerr << "[UnifiedGraph] Tracking graph failed\n";
+            }
         }
-    } else {
-        return executeDirect(stream);
+    }
+    
+    // Async check for current frame targets (for next frame)
+    checkTargetsAsync(stream);
+    
+    // Handle fallback cases if detection graph is not available
+    if (!m_detectionGraph) {
+        if (m_state.graphReady && m_graphExec) {
+            // Fallback to monolithic graph if two-stage not ready
+            cudaError_t err = cudaGraphLaunch(m_graphExec, stream);
+            if (err != cudaSuccess) {
+                m_state.needsRebuild = true;
+                return false;
+            }
+        } else {
+            // No graph available, use direct execution
+            return executeDirect(stream);
+        }
     }
     
     // Async profiling without sync
@@ -551,6 +717,10 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
     }
     
     m_state.frameCount++;
+    
+    // Reset frame data flag for next frame
+    m_hasFrameData = false;
+    
     return true;
 }
 
@@ -631,6 +801,40 @@ bool UnifiedGraphPipeline::executeDirect(cudaStream_t stream) {
         // Signal preprocessing completion
         m_coordinator->synchronizePreprocess(m_coordinator->inferenceStream);
         
+        // 2.5. YOLO 추론 실행 - Use existing processFrame for now
+        auto& ctx = AppContext::getInstance();
+        if (!ctx.detectionPaused && m_detector) {
+            // Debug logging
+            static int processCount = 0;
+            processCount++;
+            if (processCount <= 10 || processCount % 100 == 0) {
+                std::cout << "[UnifiedGraph] Calling detector->processFrame, count: " << processCount << std::endl;
+            }
+            
+            // Create SimpleCudaMat wrapper for the capture buffer (not preprocessed)
+            // The detector will handle preprocessing, inference, and postprocessing
+            SimpleCudaMat frameWrapper(m_captureBuffer.rows(), m_captureBuffer.cols(), 
+                                      m_captureBuffer.channels());
+            
+            // Calculate size manually
+            size_t dataSize = m_captureBuffer.rows() * m_captureBuffer.cols() * 
+                             m_captureBuffer.channels() * sizeof(unsigned char);
+            
+            // Copy data to wrapper
+            cudaMemcpyAsync(frameWrapper.data(), m_captureBuffer.data(),
+                           dataSize, cudaMemcpyDeviceToDevice, preprocessStream);
+            
+            // Call the full processFrame which handles everything
+            m_detector->processFrame(frameWrapper);
+            
+            // Signal completion
+            cudaEventRecord(m_coordinator->inferenceComplete, preprocessStream);
+            m_coordinator->synchronizeInference(m_coordinator->postprocessStream);
+            
+            // Get detection results
+            auto detections = m_detector->getLatestDetectionsGPU();
+        }
+        
         // Swap triple buffer if available
         if (m_tripleBuffer) {
             cudaEventRecord(m_tripleBuffer->events[m_tripleBuffer->captureIdx], preprocessStream);
@@ -659,18 +863,20 @@ bool UnifiedGraphPipeline::executeDirect(cudaStream_t stream) {
         // m_tracker->updateAsync(m_d_selectedTarget, trackingStream);
     }
     
-    // 4. PID Control
-    if (m_config.enablePIDControl && m_pidController) {
-        cudaStream_t trackingStream = m_coordinator->trackingStream;
+    // 4. Get detection results and calculate mouse movement with Bezier curve
+    auto& ctx = AppContext::getInstance();
+    if (m_detector && !ctx.detectionPaused && ctx.aiming) {
+        // Get latest detections from detector
+        auto detections = m_detector->getLatestDetectionsGPU();
         
-        // TODO: Implement GPU PID control
-        // m_pidController->computeAsync(m_d_trackedTarget, m_d_pidOutput, trackingStream);
-    }
-    
-    // 5. Copy results
-    if (m_d_outputBuffer && m_d_pidOutput) {
-        cudaMemcpyAsync(m_d_outputBuffer, m_d_pidOutput, 
-                       2 * sizeof(float), cudaMemcpyDeviceToDevice, stream);
+        if (detections.second > 0 && detections.first) {
+            // Get the first/best target
+            Target h_target;
+            cudaMemcpyAsync(&h_target, detections.first, sizeof(Target), 
+                           cudaMemcpyDeviceToHost, stream);
+            cudaStreamSynchronize(stream);
+            
+        }
     }
     
     return true;
@@ -716,15 +922,16 @@ void UnifiedGraphPipeline::updateStatistics(float latency) {
 }
 
 bool UnifiedGraphPipeline::allocateBuffers() {
-    const int width = 1920;  // Should come from config
-    const int height = 1080;
+    auto& ctx = AppContext::getInstance();
+    const int width = ctx.config.detection_resolution;   // Use actual detection resolution
+    const int height = ctx.config.detection_resolution;  // Square capture region
     const int yoloSize = 640;
     const int maxDetections = 100;
     
     // Initialize Triple Buffer System for async pipeline
     if (m_config.enableCapture && m_tripleBuffer) {
         for (int i = 0; i < 3; i++) {
-            m_tripleBuffer->buffers[i] = SimpleCudaMat(height, width, 4);  // BGRA
+            m_tripleBuffer->buffers[i].create(height, width, 4);  // BGRA
             cudaEventCreateWithFlags(&m_tripleBuffer->events[i], cudaEventDisableTiming);
             m_tripleBuffer->isReady[i] = false;
         }
@@ -732,8 +939,8 @@ bool UnifiedGraphPipeline::allocateBuffers() {
     }
     
     // Allocate GPU buffers
-    m_captureBuffer = SimpleCudaMat(height, width, 4);  // BGRA
-    m_preprocessBuffer = SimpleCudaMat(height, width, 3);  // BGR
+    m_captureBuffer.create(height, width, 4);  // BGRA
+    m_preprocessBuffer.create(height, width, 3);  // BGR
     
     // YOLO input buffer (640x640x3 in CHW format)
     cudaMalloc(&m_d_yoloInput, yoloSize * yoloSize * 3 * sizeof(float));
@@ -746,7 +953,6 @@ bool UnifiedGraphPipeline::allocateBuffers() {
     cudaMalloc(&m_d_selectedTarget, sizeof(Target));
     cudaMalloc(&m_d_trackedTarget, sizeof(Target));
     cudaMalloc(&m_d_trackedTargets, maxDetections * sizeof(Target));
-    cudaMalloc(&m_d_pidOutput, 2 * sizeof(float));  // X, Y mouse delta
     
     // Allocate NMS temporary buffers
     cudaMalloc(&m_d_numDetections, sizeof(int));
@@ -770,7 +976,7 @@ bool UnifiedGraphPipeline::allocateBuffers() {
     if (!m_captureBuffer.data() || !m_d_yoloInput || !m_d_inferenceOutput || 
         !m_d_nmsOutput || !m_d_filteredOutput || !m_d_detections || 
         !m_d_selectedTarget || !m_d_trackedTarget || !m_d_trackedTargets || 
-        !m_d_pidOutput || !m_h_inputBuffer || !m_h_outputBuffer) {
+        !m_h_inputBuffer || !m_h_outputBuffer) {
         std::cerr << "[UnifiedGraph] Buffer allocation failed" << std::endl;
         deallocateBuffers();
         return false;
@@ -781,6 +987,15 @@ bool UnifiedGraphPipeline::allocateBuffers() {
                              maxDetections * 20) * sizeof(float) / (1024 * 1024)) 
               << " MB, Pinned: " << ((width * height * 4 + 8) / (1024 * 1024)) 
               << " MB" << std::endl;
+    
+    // Debug: Print NMS buffer pointers
+    std::cout << "[UnifiedGraph] NMS buffer pointers:" << std::endl;
+    std::cout << "  m_d_x1=" << m_d_x1 << " m_d_y1=" << m_d_y1 << std::endl;
+    std::cout << "  m_d_x2=" << m_d_x2 << " m_d_y2=" << m_d_y2 << std::endl;
+    std::cout << "  m_d_areas=" << m_d_areas << " m_d_scores_nms=" << m_d_scores_nms << std::endl;
+    std::cout << "  m_d_classIds_nms=" << m_d_classIds_nms << std::endl;
+    std::cout << "  m_d_iou_matrix=" << m_d_iou_matrix << " m_d_keep=" << m_d_keep << std::endl;
+    std::cout << "  m_d_indices=" << m_d_indices << " m_d_numDetections=" << m_d_numDetections << std::endl;
     
     return true;
 }
@@ -798,7 +1013,6 @@ void UnifiedGraphPipeline::deallocateBuffers() {
     if (m_d_selectedTarget) cudaFree(m_d_selectedTarget);
     if (m_d_trackedTarget) cudaFree(m_d_trackedTarget);
     if (m_d_trackedTargets) cudaFree(m_d_trackedTargets);
-    if (m_d_pidOutput) cudaFree(m_d_pidOutput);
     
     // Free NMS temporary buffers
     if (m_d_numDetections) cudaFree(m_d_numDetections);
@@ -827,7 +1041,6 @@ void UnifiedGraphPipeline::deallocateBuffers() {
     m_d_selectedTarget = nullptr;
     m_d_trackedTarget = nullptr;
     m_d_trackedTargets = nullptr;
-    m_d_pidOutput = nullptr;
     m_d_numDetections = nullptr;
     m_d_x1 = nullptr;
     m_d_y1 = nullptr;
@@ -887,31 +1100,38 @@ bool UnifiedGraphPipeline::updateTargetSelectionParams(float centerWeight, float
     return true;
 }
 
-// Two-stage pipeline helper implementations
-bool UnifiedGraphPipeline::checkTargetsAsync(cudaStream_t stream) {
-    // Launch a small kernel to check if any targets were detected
-    // This updates m_prevFrameHasTarget for the next frame
-    if (m_d_numDetections) {
-        // Copy detection count to a pinned memory location asynchronously
-        static int* h_targetCount = nullptr;
-        if (!h_targetCount) {
-            cudaHostAlloc(&h_targetCount, sizeof(int), cudaHostAllocMapped);
-        }
-        
-        cudaMemcpyAsync(h_targetCount, m_d_numDetections, sizeof(int), 
-                       cudaMemcpyDeviceToHost, stream);
-        
-        // Record event to check later
-        cudaEventRecord(m_detectionEvent, stream);
-        
-        // Check in next frame (pipelined)
-        if (cudaEventQuery(m_detectionEvent) == cudaSuccess) {
-            m_prevFrameHasTarget = (*h_targetCount > 0);
-        }
+void UnifiedGraphPipeline::setInputFrame(const SimpleCudaMat& frame) {
+    // Copy frame data to capture buffer
+    if (frame.empty()) return;
+    
+    // Check if we have a valid stream
+    if (!m_primaryStream) {
+        printf("[ERROR] Primary stream not initialized\n");
+        return;
     }
-    return true;
+    
+    // Ensure buffer is the right size
+    if (m_captureBuffer.empty() || 
+        m_captureBuffer.rows() != frame.rows() || 
+        m_captureBuffer.cols() != frame.cols() || 
+        m_captureBuffer.channels() != frame.channels()) {
+        m_captureBuffer.create(frame.rows(), frame.cols(), frame.channels());
+    }
+    
+    // Copy data
+    size_t dataSize = frame.rows() * frame.cols() * frame.channels() * sizeof(unsigned char);
+    cudaError_t err = cudaMemcpyAsync(m_captureBuffer.data(), frame.data(), dataSize, 
+                                      cudaMemcpyDeviceToDevice, m_primaryStream);
+    if (err != cudaSuccess) {
+        printf("[ERROR] Failed to copy frame to buffer: %s\n", cudaGetErrorString(err));
+        return;
+    }
+    
+    // Mark that we have frame data
+    m_hasFrameData = true;
 }
 
+// Two-stage pipeline helper implementations
 void UnifiedGraphPipeline::updateProfilingAsync(cudaStream_t stream) {
     // Async profiling update without blocking
     static cudaEvent_t lastFrameEnd = nullptr;

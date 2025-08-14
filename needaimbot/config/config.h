@@ -214,22 +214,9 @@ public:
     std::string current_weapon_name;
 
     
-    double kp_x;
-    double ki_x;
-    double kd_x;
-    double kp_y;
-    double ki_y;
-    double kd_y;
-
-    // PID overshoot reduction parameters
-    float pid_error_smoothing = 0.3f;      // Setpoint filter alpha (0=max smooth, 1=no smooth)
-    bool pid_use_error_filter = true;      // Enable setpoint filtering
-    bool pid_use_velocity_prediction = true; // Enable velocity feedforward
-    float pid_prediction_time = 0.05f;     // Seconds ahead to predict (50ms)
-    float pid_overshoot_suppression = 0.5f; // P gain reduction when overshoot predicted
-    float pid_max_velocity = 50.0f;        // Max pixels per frame
-    bool pid_use_jerk_limit = true;        // Enable jerk limiting
-    float pid_max_jerk = 10.0f;            // Max acceleration change per frame
+    // Simple Movement Parameters
+    float movement_factor = 0.3f;          // Percentage of error to move (0.0-1.0)
+    float min_movement_threshold = 1.0f;   // Minimum pixels to trigger movement
 
     // ByteTracker parameters
     bool enable_tracking;       // Enable/disable target tracking
@@ -342,6 +329,9 @@ public:
     float kalman_measurement_noise = 1.0f; // Measurement noise scale
     int kalman_min_hits = 3;               // Minimum hits before track is confirmed
     int kalman_max_age = 5;                // Maximum frames without detection
+    
+    // Mouse control settings
+    float mouse_sensitivity = 1.0f;        // Mouse movement sensitivity
 
     // Active profile management
     std::string active_profile_name = "Default";

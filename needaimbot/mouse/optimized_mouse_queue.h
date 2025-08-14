@@ -1,7 +1,7 @@
 #pragma once
 
 #ifdef _WIN32
-#include <Windows.h>
+#include "../core/windows_headers.h"
 #endif
 
 #include <atomic>

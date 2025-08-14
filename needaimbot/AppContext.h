@@ -86,7 +86,6 @@ public:
     std::atomic<float> g_current_process_frame_time_ms{0.0f};
     std::atomic<float> g_current_detector_cycle_time_ms{0.0f};
     std::atomic<float> g_current_inference_time_ms{0.0f};
-    std::atomic<float> g_current_pid_calc_time_ms{0.0f};
     std::atomic<float> g_current_input_send_time_ms{0.0f};
     std::atomic<float> g_current_detection_to_movement_time_ms{0.0f};
     std::atomic<float> g_current_fps_delay_time_ms{0.0f};
@@ -94,7 +93,6 @@ public:
     std::vector<float> g_process_frame_time_history;
     std::vector<float> g_detector_cycle_time_history;
     std::vector<float> g_inference_time_history;
-    std::vector<float> g_pid_calc_time_history;
     std::vector<float> g_input_send_time_history;
     std::vector<float> g_detection_to_movement_time_history;
     std::vector<float> g_fps_delay_time_history;
@@ -102,7 +100,6 @@ public:
     std::mutex g_process_frame_history_mutex;
     std::mutex g_detector_cycle_history_mutex;
     std::mutex g_inference_history_mutex;
-    std::mutex g_pid_calc_history_mutex;
     std::mutex g_input_send_history_mutex;
     std::mutex g_detection_to_movement_history_mutex;
     std::mutex g_fps_delay_history_mutex;
@@ -144,7 +141,7 @@ public:
     std::atomic<bool> use_cuda_graph{false};
     
     // Modules
-    MouseThread* global_mouse_thread = nullptr;  // Stack allocated in main, so using raw pointer
+    MouseThread* mouseThread = nullptr;  // Stack allocated in main, so using raw pointer
     Detector* detector = nullptr;  // Raw pointer, lifetime managed externally
 
     // Overlay Target Data (Synchronized for UI)

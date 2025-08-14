@@ -1,11 +1,4 @@
-#define WIN32_LEAN_AND_MEAN
-#define _WINSOCKAPI_
-#include <winsock2.h>
-#include <Windows.h>
-#include <shellapi.h>  // For ShellExecuteEx
-#include <timeapi.h>   // For timeBeginPeriod
-
-#pragma comment(lib, "winmm.lib")
+#include "core/windows_headers.h"
 
 // OpenCV removed - using custom CUDA image processing
 #include <iostream>
@@ -46,7 +39,7 @@ void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT);
 #include <random>
 #include <tlhelp32.h>
 
-#include "mouse/aimbot_components/AimbotTarget.h"
+// #include "mouse/aimbot_components/AimbotTarget.h" - Removed, using core/Target.h
 #include <algorithm>
 
 // Global variable definitions
@@ -118,8 +111,7 @@ std::unique_ptr<InputMethod> initializeInputMethod() {
 
 
 
-// Event-based mouse thread function
-void mouseThreadFunctionEventBased(MouseThread& mouseThread);
+// Mouse thread function removed - GPU now handles mouse control directly
 
 bool loadAndValidateModel(std::string& modelName, const std::vector<std::string>& availableModels) {
     auto& ctx = AppContext::getInstance();
@@ -353,8 +345,8 @@ int main()
             nullptr,
             nullptr);
 
-        ctx.global_mouse_thread = &mouseThread;
-        ctx.global_mouse_thread->setInputMethod(initializeInputMethod());
+        ctx.mouseThread = &mouseThread;
+        ctx.mouseThread->setInputMethod(initializeInputMethod());
         
         // Initialize and start Recoil Control Thread
         RecoilControlThread recoilThread;
@@ -379,7 +371,6 @@ int main()
         pipelineConfig.enableCapture = true;
         pipelineConfig.enableDetection = true;
         pipelineConfig.enableTracking = ctx.config.enable_tracking;
-        pipelineConfig.enablePIDControl = true;
         pipelineConfig.useGraphOptimization = true;  // Enable CUDA Graph
         pipelineConfig.allowGraphUpdate = true;
         pipelineConfig.enableProfiling = false;  // Set to true for performance metrics
@@ -395,9 +386,8 @@ int main()
             auto* pipeline = pipelineManager.getPipeline();
             if (pipeline) {
                 pipeline->setDetector(ctx.detector);
-                // TODO: Set tracker and PID controller when available
+                // TODO: Set tracker when available
                 // pipeline->setTracker(gpuKalmanTracker);
-                // pipeline->setPIDController(gpuPidController);
                 
                 // Capture the graph on first execution
                 cudaStream_t graphStream = nullptr;
@@ -428,9 +418,8 @@ int main()
             keyboardListener,
             THREAD_PRIORITY_NORMAL);
         
-        ThreadManager mouseThreadMgr("MouseThread", 
-            [&mouseThread]() { mouseThreadFunctionEventBased(mouseThread); },
-            THREAD_PRIORITY_TIME_CRITICAL);
+        // Mouse thread removed - GPU handles mouse control directly
+        // ThreadManager mouseThreadMgr removed
         
         ThreadManager overlayThreadMgr("OverlayThread", 
             OverlayThread,
@@ -439,7 +428,7 @@ int main()
         // Start all threads
         captureThreadMgr.start();
         keyThreadMgr.start();
-        mouseThreadMgr.start();
+        // mouseThreadMgr.start(); - removed, GPU handles mouse directly
         overlayThreadMgr.start();
 
         welcome_message();
@@ -474,12 +463,12 @@ int main()
         std::cout << "[MAIN] Initiating safe shutdown..." << std::endl;
         
         // 1. 입력 메서드 명시적 정리 (특히 시리얼 연결)
-        if (ctx.global_mouse_thread) {
+        if (ctx.mouseThread) {
             std::cout << "[MAIN] Cleaning up input method..." << std::endl;
-            // 마우스 릴리스 확인
-            ctx.global_mouse_thread->releaseMouse();
+            // GPU handles mouse release now
+            executeMouseClick(false); // Release any pressed mouse button
             // 입력 메서드 안전하게 종료
-            ctx.global_mouse_thread->setInputMethod(nullptr);
+            ctx.mouseThread->setInputMethod(nullptr);
         }
         
         // 2. 검출기 중지
@@ -494,6 +483,10 @@ int main()
         // This happens in reverse order of construction (LIFO)
 
         // 4. 자원 정리
+        // Pipeline 정리를 먼저 수행 (detector 사용하므로)
+        pipelineManager.shutdownPipeline();
+        std::cout << "[MAIN] CUDA Graph Pipeline shut down." << std::endl;
+        
         if (ctx.detector) {
             delete ctx.detector;
             ctx.detector = nullptr;
