@@ -35,6 +35,7 @@
     <ClCompile Include="imgui\imgui_widgets.cpp" />
     <ClCompile Include="keyboard\keyboard_listener.cpp" />
     <ClCompile Include="keyboard\\keycodes.cpp" />
+    <ClCompile Include="mouse\aimbot_components\BezierController.cpp" />
     <ClCompile Include="mouse\\input_drivers\\ghub.cpp" />
     <ClCompile Include="mouse\\input_drivers\\kmboxNet.cpp" />
     <ClCompile Include="mouse\\mouse.cpp" />
@@ -104,6 +105,7 @@
     <ClInclude Include="detector\CudaBuffer.h" />
     <ClInclude Include="config\config.h" />
     <ClInclude Include="detector\detector.h" />
+    <ClInclude Include="mouse\aimbot_components\BezierController.h" />
     <ClInclude Include="postprocess\filterGpu.h" />
     <ClInclude Include="postprocess\postProcess.h" />
     <ClInclude Include="imgui\imconfig.h" />
@@ -123,7 +125,6 @@
     <ClInclude Include="tracking\Hungarian.h" />
     <ClInclude Include="tracking\SimpleKalmanTracker.h" />
     <ClInclude Include="tracking\ByteTracker.h" />
-    
     <ClInclude Include="mouse\ghub.h" />
     <ClInclude Include="mouse\HidTable.h" />
     <ClInclude Include="mouse\InputMethod.h" />
@@ -135,9 +136,7 @@
     <ClInclude Include="mouse\input_drivers\rzctl.h" />
     <ClInclude Include="mouse\input_drivers\SerialConnection.h" />
     <ClInclude Include="mouse\input_drivers\MakcuConnection.h" />
-    
     <ClInclude Include="mouse\kmboxNet.h" />
-    
     <ClInclude Include="mouse\mouse.h" />
     <ClInclude Include="mouse\recoil_control_thread.h" />
     <ClInclude Include="mouse\rapidfire.h" />
@@ -145,7 +144,6 @@
     <ClInclude Include="mouse\PIDController2D.h" />
     <ClInclude Include="mouse\rzctl.h" />
     <ClInclude Include="mouse\AimbotTarget.h" />
-    
     <ClInclude Include="overlay\common_helpers.h" />
     <ClInclude Include="overlay\draw_settings.h" />
     <ClInclude Include="overlay\draw_offset.h" />
