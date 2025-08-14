@@ -3,7 +3,7 @@
 
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
-#include "../core/types.h"
+#include "../../core/Target.h"
 
 // Helper kernel to check if any targets exist
 __global__ void checkHasTargets(const int* count, bool* hasTargets) {

@@ -45,7 +45,7 @@
     <ClCompile Include="tracking\\Hungarian.cpp" />
     <ClCompile Include="tracking\\SimpleKalmanTracker.cpp" />
     <ClCompile Include="tracking\\ByteTracker.cpp" />
-    <ClCompile Include="cuda\\gpu_tracker_wrapper.cpp" />
+    <ClCompile Include="cuda\tracking\gpu_tracker_wrapper.cpp" />
     <ClCompile Include="mouse\\input_drivers\\rzctl.cpp" />
     <ClCompile Include="mouse\\input_drivers\\SerialConnection.cpp" />
     <ClCompile Include="mouse\\input_drivers\\MakcuConnection.cpp" />
@@ -71,19 +71,23 @@
     <ClCompile Include="scr\other_tools.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <CudaCompile Include="postprocess\filterGpu.cu" />
-    <CudaCompile Include="postprocess\postProcessGpu.cu" />
-    <CudaCompile Include="postprocess\targetSelectionGpu.cu" />
-    <CudaCompile Include="cuda\cuda_image_processing.cu" />
-    <CudaCompile Include="cuda\cuda_float_processing.cu" />
-    <CudaCompile Include="cuda\color_filter_kernel.cu" />
-    <CudaCompile Include="cuda\color_conversion.cu" />
+    <CudaCompile Include="cuda\detection\filterGpu.cu" />
+    <CudaCompile Include="cuda\detection\postProcessGpu.cu" />
+    <CudaCompile Include="cuda\detection\targetSelectionGpu.cu" />
+    <CudaCompile Include="cuda\detection\batchedResults.cu" />
+    <CudaCompile Include="cuda\detection\gpu_chain_kernels.cu" />
+    <CudaCompile Include="cuda\detection\cuda_image_processing.cu" />
+    <CudaCompile Include="cuda\detection\cuda_float_processing.cu" />
+    <CudaCompile Include="cuda\filter\color_filter_kernel.cu" />
+    <CudaCompile Include="cuda\capture\color_conversion.cu" />
+    <CudaCompile Include="cuda\capture\bgra_to_bgr_kernel.cu" />
+    <CudaCompile Include="cuda\detection\fused_kernels.cu" />
     <CudaCompile Include="cuda\pipeline_optimization.cu" />
     <CudaCompile Include="cuda\unified_graph_pipeline.cu" />
-    <CudaCompile Include="cuda\gpu_tracker.cu" />
-    <CudaCompile Include="cuda\gpu_kalman_filter.cu" />
-    <CudaCompile Include="cuda\gpu_pid_controller.cu" />
-    <CudaCompile Include="cuda\gpu_mouse_controller.cu" />
+    <CudaCompile Include="cuda\tracking\gpu_tracker.cu" />
+    <CudaCompile Include="cuda\tracking\gpu_kalman_filter.cu" />
+    <CudaCompile Include="cuda\control\gpu_pid_controller.cu" />
+    <CudaCompile Include="cuda\control\gpu_mouse_controller.cu" />
     <CudaCompile Include="cuda\gpu_workload_manager.cu" />
   </ItemGroup>
   <ItemGroup>
@@ -92,12 +96,18 @@
     <ClInclude Include="core\error_handler.h" />
     <ClInclude Include="core\common_utils.h" />
     <ClInclude Include="cuda\simple_cuda_mat.h" />
-    <ClInclude Include="cuda\cuda_image_processing.h" />
-    <ClInclude Include="cuda\cuda_float_processing.h" />
+    <ClInclude Include="cuda\detection\cuda_image_processing.h" />
+    <ClInclude Include="cuda\detection\cuda_float_processing.h" />
     <ClInclude Include="cuda\image_io.h" />
-    <ClInclude Include="cuda\color_conversion.h" />
-    <ClInclude Include="cuda\gpu_kalman_filter.h" />
+    <ClInclude Include="cuda\capture\color_conversion.h" />
+    <ClInclude Include="cuda\tracking\gpu_kalman_filter.h" />
+    <ClInclude Include="cuda\tracking\gpu_tracker.h" />
+    <ClInclude Include="cuda\control\gpu_pid_controller.h" />
+    <ClInclude Include="cuda\control\gpu_mouse_controller.h" />
+    <ClInclude Include="cuda\filter\color_filter.h" />
     <ClInclude Include="cuda\unified_graph_pipeline.h" />
+    <ClInclude Include="cuda\memory_pool.h" />
+    <ClInclude Include="cuda\cuda_error_check.h" />
     <ClInclude Include="capture\gpu_capture_manager.h" />
     <ClInclude Include="capture\global_gpu_buffer.h" />
     <ClInclude Include="capture\frame_buffer_pool.h" />
@@ -105,7 +115,10 @@
     <ClInclude Include="config\config.h" />
     <ClInclude Include="detector\detector.h" />
     <ClInclude Include="mouse\aimbot_components\BezierController.h" />
-    <ClInclude Include="postprocess\filterGpu.h" />
+    <ClInclude Include="cuda\detection\filterGpu.h" />
+    <ClInclude Include="cuda\detection\postProcessGpu.h" />
+    <ClInclude Include="cuda\detection\batchedResults.h" />
+    <ClInclude Include="cuda\detection\postProcess.h" />
     <ClInclude Include="postprocess\postProcess.h" />
     <ClInclude Include="imgui\imconfig.h" />
     <ClInclude Include="imgui\imgui.h" />

@@ -1,13 +1,22 @@
 #include <cuda_runtime.h>
-#include "../detector/detector.h"
 #include "postProcess.h"
+#include "batchedResults.h"
+
+// Structure to hold batched detection results
+struct BatchedResults {
+    int finalCount;
+    int bestIndex;
+    bool hasTarget;
+    Target bestTarget;
+    Target detections[1000];  // Max detections
+};
 
 // CUDA 커널: 모든 결과를 하나의 구조체로 통합
 __global__ void prepareBatchedResultsKernel(
     const Target* finalDetections,
     const int* finalCount,
     const int* bestIndex,
-    Detector::BatchedResults* batchedResults)
+    BatchedResults* batchedResults)
 {
     if (threadIdx.x == 0) {
         // 먼저 모든 필드를 초기화
@@ -42,7 +51,7 @@ extern "C" cudaError_t prepareBatchedResultsGpu(
         finalDetections,
         finalCount,
         bestIndex,
-        (Detector::BatchedResults*)batchedResults
+        (BatchedResults*)batchedResults
     );
     
     return cudaGetLastError();

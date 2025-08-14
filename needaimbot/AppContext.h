@@ -11,7 +11,7 @@
 #include <vector>
 #include <memory>
 #include "config/config.h"
-#include "postprocess/postProcess.h"
+#include "cuda/detection/postProcess.h"
 #include <queue>
 #include <chrono>
 

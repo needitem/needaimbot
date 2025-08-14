@@ -1,6 +1,6 @@
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
-#include "../postprocess/postProcess.h"
+#include "../detection/postProcess.h"
 
 // RGB 범위 필터링 커널
 __global__ void rgbRangeFilter_kernel(
