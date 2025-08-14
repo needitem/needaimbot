@@ -17,20 +17,9 @@ class GpuPIDController;
 
 namespace needaimbot {
 
-// Placeholder classes for graph management (to be implemented)
-class DynamicCudaGraph {
-public:
-    DynamicCudaGraph() = default;
-    ~DynamicCudaGraph() = default;
-    // TODO: Implement dynamic CUDA graph functionality
-};
-
-class PipelineCoordinator {
-public:
-    PipelineCoordinator() = default;
-    ~PipelineCoordinator() = default;
-    // TODO: Implement pipeline coordination functionality
-};
+// Forward declarations for internal implementation classes
+class DynamicCudaGraph;
+class PipelineCoordinator;
 
 // Graph node types for tracking
 enum class GraphNodeType {
