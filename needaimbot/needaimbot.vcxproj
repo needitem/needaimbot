@@ -20,10 +20,7 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="capture\gpu_capture_manager.cpp" />
-    <ClCompile Include="capture\gpu_only_capture.cpp" />
-    <ClCompile Include="capture\global_gpu_buffer.cpp" />
-    <ClCompile Include="capture\frame_buffer_pool.cpp" />
+    <ClCompile Include="capture\gpu_capture.cpp" />
     <ClCompile Include="config\config.cpp" />
     <ClCompile Include="detector\detector.cpp" />
     <ClCompile Include="imgui\imgui.cpp" />
@@ -107,9 +104,7 @@
     <ClInclude Include="cuda\unified_graph_pipeline.h" />
     <ClInclude Include="cuda\memory_pool.h" />
     <ClInclude Include="cuda\cuda_error_check.h" />
-    <ClInclude Include="capture\gpu_capture_manager.h" />
-    <ClInclude Include="capture\global_gpu_buffer.h" />
-    <ClInclude Include="capture\frame_buffer_pool.h" />
+    <ClInclude Include="capture\gpu_capture.h" />
     <ClInclude Include="detector\CudaBuffer.h" />
     <ClInclude Include="config\config.h" />
     <ClInclude Include="detector\detector.h" />
