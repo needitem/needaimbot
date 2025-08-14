@@ -143,11 +143,6 @@ Detector::Detector()
     
     // Initialize GPU Kalman filter if enabled
     initializeKalmanFilter();
-    
-    // Initialize Unified Pipeline Graph if enabled
-    if (m_useUnifiedPipeline) {
-        m_unifiedPipeline = new UnifiedPipelineGraph();
-    }
 }
 
 Detector::~Detector()
@@ -237,11 +232,6 @@ Detector::~Detector()
         }
         
         // 7.5. Unified Pipeline cleanup
-        if (m_unifiedPipeline) {
-            delete m_unifiedPipeline;
-            m_unifiedPipeline = nullptr;
-        }
-        
         // 8. 스트림 정리 (마지막에)
         if (stream) {
             cudaStreamDestroy(stream);
@@ -584,29 +574,6 @@ void Detector::initialize(const std::string& modelFile)
     
     initializeBuffers();
     
-    // Initialize Unified Pipeline Graph if enabled
-    if (m_useUnifiedPipeline && m_unifiedPipeline) {
-        // Get input dimensions
-        nvinfer1::Dims dims = context->getTensorShape(inputNames[0].c_str());
-        int modelWidth = dims.d[3];  // Assuming NCHW format
-        int modelHeight = dims.d[2];
-        
-        bool success = m_unifiedPipeline->initialize(
-            ctx.config.detection_resolution,
-            ctx.config.detection_resolution,
-            modelWidth,
-            modelHeight,
-            context.get()
-        );
-        
-        if (!success) {
-            std::cerr << "[Detector] Failed to initialize Unified Pipeline Graph" << std::endl;
-            delete m_unifiedPipeline;
-            m_unifiedPipeline = nullptr;
-            m_useUnifiedPipeline = false;
-        }
-    }
-    
     m_allow_flags_need_update = true;
 
     
@@ -780,44 +747,7 @@ void Detector::processFrame(const SimpleCudaMat& frame)
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    // Use Unified Pipeline if available
-    if (m_useUnifiedPipeline && m_unifiedPipeline && m_unifiedPipeline->isReady()) {
-        float dx, dy;
-        int targetCount;
-        
-        // Execute entire pipeline with single graph launch
-        bool success = m_unifiedPipeline->execute(
-            (void*)frame.data(),  // GPU buffer pointer (cast to void*)
-            dx, dy,
-            targetCount
-        );
-        
-        if (success) {
-            // Update results
-            std::lock_guard<std::mutex> lock(detectionMutex);
-            m_hasBestTarget = (targetCount > 0);
-            m_finalTargetsCountHost = targetCount;
-            
-            // Update mouse movement in velocity fields (repurpose for dx/dy)
-            if (m_hasBestTarget) {
-                // Store dx/dy in velocity fields for mouse controller to use
-                // These values represent the PID-calculated mouse movement
-                m_bestTargetHost.velocity_x = dx;
-                m_bestTargetHost.velocity_y = dy;
-            }
-            
-            detectionVersion++;
-            
-            auto end_time = std::chrono::high_resolution_clock::now();
-            std::chrono::duration<float, std::milli> duration = end_time - start_time;
-            ctx.g_current_process_frame_time_ms.store(duration.count());
-            ctx.add_to_history(ctx.g_process_frame_time_history, duration.count(), ctx.g_process_frame_history_mutex);
-            return;
-        }
-        // Fall through to legacy path if unified pipeline fails
-    }
-
-    // Legacy path - use existing multi-stream approach
+    // Use existing multi-stream approach
     // Lock-free frame transfer
     // Skip if previous frame still processing (frame drop for low latency)
     if (frameReady.load(std::memory_order_acquire)) {
