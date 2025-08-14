@@ -668,10 +668,7 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
             
             int dx = static_cast<int>(movement_x);
             int dy = static_cast<int>(movement_y);
-            
-            printf("[UnifiedGraph] Calculated movement: dx=%d, dy=%d (%.1f%% of error)\n", 
-                   dx, dy, ctx.config.movement_factor * 100);
-            
+                        
             // Execute mouse movement only when aiming
             if (dx != 0 || dy != 0) {
                 cuda::executeMouseMovementFromGPU(dx, dy);

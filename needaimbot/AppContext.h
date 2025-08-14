@@ -110,7 +110,6 @@ public:
     std::atomic<bool> detector_model_changed{false};
     std::mutex configMutex;
     
-    // GPU-calculated movement deltas (deprecated - use event queue instead)
     std::atomic<float> g_movementDeltaX{0.0f};
     std::atomic<float> g_movementDeltaY{0.0f};
     
