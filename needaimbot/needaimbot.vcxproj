@@ -80,7 +80,6 @@
     <CudaCompile Include="cuda\color_filter_kernel.cu" />
     <CudaCompile Include="cuda\color_conversion.cu" />
     <CudaCompile Include="cuda\pipeline_optimization.cu" />
-    <CudaCompile Include="cuda\unified_pipeline_graph.cu" />
     <CudaCompile Include="cuda\gpu_tracker.cu" />
     <CudaCompile Include="cuda\gpu_kalman_filter.cu" />
     <CudaCompile Include="cuda\gpu_pid_controller.cu" />

@@ -8,7 +8,6 @@
 #include "../cuda/simple_cuda_mat.h"
 #include "../cuda/cuda_image_processing.h"
 #include "../cuda/cuda_float_processing.h"
-#include "../cuda/unified_pipeline_graph.h"
 #include <NvInfer.h>
 #include <atomic>
 #include <mutex>
@@ -259,10 +258,6 @@ private:
     cudaGraphExec_t m_inferenceGraphExec = nullptr;
     bool m_graphCaptured = false;
     void captureInferenceGraph(const SimpleCudaMat& frameGpu);
-    
-    // Unified Pipeline Graph
-    UnifiedPipelineGraph* m_unifiedPipeline = nullptr;
-    bool m_useUnifiedPipeline = true;
 
     static float calculate_host_iou(const Target& det1, const Target& det2); 
     bool m_cudaContextInitialized = false; 
