@@ -256,13 +256,13 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
     m_config = config;
     
     // Initialize Pipeline Coordinator for multi-stream management
-    m_coordinator = std::make_unique<PipelineCoordinator>();
+    m_coordinator = new PipelineCoordinator();
     
     // Use inference stream as primary for graph operations
     m_primaryStream = m_coordinator->inferenceStream;
     
     // Initialize Dynamic Graph Manager
-    m_dynamicGraph = std::make_unique<DynamicCudaGraph>(m_primaryStream);
+    m_dynamicGraph = new DynamicCudaGraph(m_primaryStream);
     
     // Initialize Triple Buffer for async pipeline
     if (m_config.enableCapture) {
@@ -888,7 +888,7 @@ bool UnifiedGraphPipeline::updateTargetSelectionParams(float centerWeight, float
 }
 
 // Two-stage pipeline helper implementations
-void UnifiedGraphPipeline::checkTargetsAsync(cudaStream_t stream) {
+bool UnifiedGraphPipeline::checkTargetsAsync(cudaStream_t stream) {
     // Launch a small kernel to check if any targets were detected
     // This updates m_prevFrameHasTarget for the next frame
     if (m_d_numDetections) {
@@ -909,6 +909,7 @@ void UnifiedGraphPipeline::checkTargetsAsync(cudaStream_t stream) {
             m_prevFrameHasTarget = (*h_targetCount > 0);
         }
     }
+    return true;
 }
 
 void UnifiedGraphPipeline::updateProfilingAsync(cudaStream_t stream) {
