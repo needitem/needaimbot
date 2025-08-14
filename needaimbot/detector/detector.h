@@ -1,9 +1,10 @@
 #ifndef NEEDAIMBOT_DETECTOR_DETECTOR_H
 #define NEEDAIMBOT_DETECTOR_DETECTOR_H
 
-#define NOMINMAX
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
+// Only include Windows headers when not compiling CUDA
+#ifndef __CUDACC__
+#include "../core/windows_headers.h"
+#endif
 
 #include "../cuda/simple_cuda_mat.h"
 #include "../cuda/detection/cuda_image_processing.h"

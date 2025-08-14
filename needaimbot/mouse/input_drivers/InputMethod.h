@@ -1,6 +1,7 @@
 #ifndef INPUT_METHOD_H
 #define INPUT_METHOD_H
 
+#include "../../core/windows_headers.h"
 #include "SerialConnection.h"
 #include "MakcuConnection.h"
 #include "ghub.h"
@@ -8,7 +9,6 @@
 #include "rzctl.h"
 #include <filesystem>
 #include <iostream>
-#include <Windows.h>
 
 
 class InputMethod

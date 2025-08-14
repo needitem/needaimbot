@@ -5,6 +5,13 @@
 #include <vector>
 #include <atomic>
 #ifdef _WIN32
+// Prevent winsock.h from being included
+#ifndef _WINSOCKAPI_
+#define _WINSOCKAPI_
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <d3d11.h>
 #include <cuda_d3d11_interop.h>
 #endif

@@ -1,7 +1,4 @@
-#define WIN32_LEAN_AND_MEAN
-#define _WINSOCKAPI_
-#include <winsock2.h>
-#include <Windows.h>
+#include "../core/windows_headers.h"
 
 #include <tchar.h>
 #include <thread>
@@ -19,6 +16,7 @@
 #include "AppContext.h"
 #include "overlay.h"
 #include "mouse/mouse.h"
+#include "mouse/rapidfire.h"
 #include "overlay/draw_settings.h"
 #include "overlay/draw_offset.h"
 #include "overlay/draw_tracker.h"
@@ -391,14 +389,6 @@ void OverlayThread()
     float prev_easynorecoilstrength = ctx.config.easynorecoilstrength;
 
     
-    float prev_kp_x = static_cast<float>(ctx.config.kp_x);
-    float prev_ki_x = static_cast<float>(ctx.config.ki_x);
-    float prev_kd_x = static_cast<float>(ctx.config.kd_x);
-    float prev_kp_y = static_cast<float>(ctx.config.kp_y);
-    float prev_ki_y = static_cast<float>(ctx.config.ki_y);
-    float prev_kd_y = static_cast<float>(ctx.config.kd_y);
-    
-    
 
     
     float prev_bScope_multiplier = ctx.config.bScope_multiplier;
@@ -541,8 +531,8 @@ void OverlayThread()
                 std::lock_guard<std::mutex> lock(configMutex);
                 
                 // Pause rapidfire when UI is shown
-                if (ctx.global_mouse_thread) {
-                    auto rapidfire = ctx.global_mouse_thread->getRapidFire();
+                if (ctx.mouseThread) {
+                    auto rapidfire = ctx.mouseThread->getRapidFire();
                     if (rapidfire) {
                         rapidfire->setUIActive(true);
                     }
@@ -677,8 +667,8 @@ void OverlayThread()
                         detector_model_changed.store(true); 
 
                         
-                        if (AppContext::getInstance().global_mouse_thread) {
-                            AppContext::getInstance().global_mouse_thread->updateConfig(
+                        if (AppContext::getInstance().mouseThread) {
+                            AppContext::getInstance().mouseThread->updateConfig(
                                 ctx.config.detection_resolution,
                                 ctx.config.bScope_multiplier,
                                 ctx.config.norecoil_ms
@@ -735,38 +725,12 @@ void OverlayThread()
                     }
 
                     
-                    if (prev_kp_x != ctx.config.kp_x ||
-                        prev_ki_x != ctx.config.ki_x ||
-                        prev_kd_x != ctx.config.kd_x ||
-                        prev_kp_y != ctx.config.kp_y ||
-                        prev_ki_y != ctx.config.ki_y ||
-                        prev_kd_y != ctx.config.kd_y)
-                    {
-                        prev_kp_x = static_cast<float>(ctx.config.kp_x);
-                        prev_ki_x = static_cast<float>(ctx.config.ki_x);
-                        prev_kd_x = static_cast<float>(ctx.config.kd_x);
-                        prev_kp_y = static_cast<float>(ctx.config.kp_y);
-                        prev_ki_y = static_cast<float>(ctx.config.ki_y);
-                        prev_kd_y = static_cast<float>(ctx.config.kd_y);
-
-                        if (AppContext::getInstance().global_mouse_thread) {
-                            AppContext::getInstance().global_mouse_thread->updateConfig(
-                                ctx.config.detection_resolution,
-                                ctx.config.bScope_multiplier,
-                                ctx.config.norecoil_ms
-                            );
-                        }
-
-                        config_needs_save = true;
-                    }
-
-                    
                     if (prev_bScope_multiplier != ctx.config.bScope_multiplier)
                     {
                         prev_bScope_multiplier = ctx.config.bScope_multiplier;
 
-                        if (AppContext::getInstance().global_mouse_thread) {
-                            AppContext::getInstance().global_mouse_thread->updateConfig(
+                        if (AppContext::getInstance().mouseThread) {
+                            AppContext::getInstance().mouseThread->updateConfig(
                             ctx.config.detection_resolution,
                             ctx.config.bScope_multiplier,
                             ctx.config.norecoil_ms
@@ -827,8 +791,8 @@ void OverlayThread()
             ImGui::End();
             
             // Resume rapidfire when UI is closed
-            if (ctx.global_mouse_thread) {
-                auto rapidfire = ctx.global_mouse_thread->getRapidFire();
+            if (ctx.mouseThread) {
+                auto rapidfire = ctx.mouseThread->getRapidFire();
                 if (rapidfire) {
                     rapidfire->setUIActive(false);
                 }

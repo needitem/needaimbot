@@ -1,11 +1,11 @@
 #ifndef THREAD_MANAGER_H
 #define THREAD_MANAGER_H
 
+#include "windows_headers.h"
 #include <thread>
 #include <atomic>
 #include <functional>
 #include <string>
-#include <Windows.h>
 #include <iostream>
 
 class ThreadManager {

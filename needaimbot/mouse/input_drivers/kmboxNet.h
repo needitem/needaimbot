@@ -1,6 +1,6 @@
 #pragma once
+#include "../../core/windows_headers.h"
 #include <stdio.h>
-#include <Winsock2.h>
 #include "math.h"
 #pragma warning(disable : 4996)
 

@@ -548,7 +548,8 @@ void NMSGpu(
     
     {
         // Use fixed grid size for CUDA Graph compatibility
-        const int grid_extract = min((effective_detections + block_size - 1) / block_size, MAX_GRID_SIZE);
+        // Ensure at least 1 block even if effective_detections is 0
+        const int grid_extract = max(1, min((effective_detections + block_size - 1) / block_size, MAX_GRID_SIZE));
         extractDataKernel<<<grid_extract, block_size, 0, stream>>>( 
             d_input_detections, effective_detections,
             d_x1, d_y1, d_x2, d_y2,
@@ -557,6 +558,8 @@ void NMSGpu(
         err = cudaGetLastError(); 
         if (err != cudaSuccess) {
             fprintf(stderr, "[NMSGpu] extractDataKernel failed: %s\n", cudaGetErrorString(err));
+            fprintf(stderr, "[NMSGpu] CUDA error occurred: %s (%d) - input_num_detections=%d, effective=%d, max_output=%d, grid=%d, block=%d\n", 
+                    cudaGetErrorString(err), err, input_num_detections, effective_detections, max_output_detections, grid_extract, block_size);
             goto cleanup;
         }
     }
@@ -568,7 +571,8 @@ void NMSGpu(
     // Initialize keep array to 1 (true)
     {
         // Use fixed grid size for CUDA Graph compatibility
-        int grid_init = min((effective_detections + block_size - 1) / block_size, MAX_GRID_SIZE);
+        // Ensure at least 1 block
+        int grid_init = max(1, min((effective_detections + block_size - 1) / block_size, MAX_GRID_SIZE));
         initKeepKernel<<<grid_init, block_size, 0, stream>>>(d_keep, effective_detections);
     }
     // Skip zeroing IoU matrix - kernel will only write non-zero values
@@ -582,7 +586,8 @@ void NMSGpu(
     {
         dim3 block_iou(16, 16); 
         // Fixed grid size for CUDA Graph compatibility
-        int grid_dim = min((effective_detections + block_iou.x - 1) / block_iou.x, 64);
+        // Ensure at least 1 block
+        int grid_dim = max(1, min((effective_detections + block_iou.x - 1) / block_iou.x, 64));
         dim3 grid_iou(grid_dim, grid_dim);
         
         // Pre-calculate inverse cell dimensions for faster division
@@ -603,7 +608,8 @@ void NMSGpu(
     
     {
         // Use fixed grid size for CUDA Graph compatibility
-        const int grid_nms = min((effective_detections + block_size - 1) / block_size, MAX_GRID_SIZE);
+        // Ensure at least 1 block
+        const int grid_nms = max(1, min((effective_detections + block_size - 1) / block_size, MAX_GRID_SIZE));
         nmsKernel<<<grid_nms, block_size, 0, stream>>>( 
             d_keep, d_iou_matrix, d_scores_nms, d_classIds_nms, effective_detections, nmsThreshold 
         );
@@ -622,7 +628,8 @@ void NMSGpu(
         
         // Single pass: gather kept detections and count simultaneously
         // Use fixed grid size for CUDA Graph compatibility
-        const int gather_blocks = min((effective_detections + block_size - 1) / block_size, MAX_GRID_SIZE);
+        // Ensure at least 1 block
+        const int gather_blocks = max(1, min((effective_detections + block_size - 1) / block_size, MAX_GRID_SIZE));
         gatherKeptTargetsAtomicKernel<<<gather_blocks, block_size, 0, stream>>>(
             d_input_detections, d_keep, d_output_detections, 
             d_output_count_gpu,  // Use as atomic write index

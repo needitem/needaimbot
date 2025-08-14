@@ -1,154 +1,96 @@
-#ifndef MOUSE_H
-#define MOUSE_H
+// Simplified mouse.h - Only handles input execution
+// All calculations are done on GPU via CUDA Graph pipeline
 
-#define WIN32_LEAN_AND_MEAN
-#define _WINSOCKAPI_
-#include <winsock2.h>
-#include <Windows.h>
-#include "../math/LinearAlgebra.h"
-#include <shared_mutex>
-#include <array>
+#ifndef MOUSE_SIMPLE_H
+#define MOUSE_SIMPLE_H
+
 #include <memory>
-#include <functional>
-#include <chrono>
-#include <atomic>
-#include <random>
 #include <thread>
-#include "lockless_queue.h"
-#include "optimized_mouse_queue.h"  // New optimized queue
-
-#include "config/config.h"
-#include "aimbot_components/AimbotTarget.h"
-#include "input_drivers/SerialConnection.h"
-#include "input_drivers/MakcuConnection.h"
-#include "input_drivers/ghub.h"
-#include "input_drivers/kmboxNet.h"
-#include "input_drivers/rzctl.h"
+#include <atomic>
+#include <mutex>
+#include "optimized_mouse_queue.h"
 #include "input_drivers/InputMethod.h"
-#include "rapidfire.h"
+#include "../core/Target.h"
 
 // Forward declarations
-class BezierController;
-
-
-class InputMethod;
 class SerialConnection;
-class GhubMouse; 
-struct Point2D { float x, y; }; 
+class MakcuConnection;
+class GhubMouse;
+class RapidFire;
 
+// Alias for compatibility with old code
+using AimbotTarget = Target;
 
-class MouseThread
-{
+class MouseThread {
 private:
-    std::unique_ptr<BezierController> bezier_controller;
+    // Input method for sending mouse commands
     std::unique_ptr<InputMethod> input_method;
     std::mutex input_method_mutex;
-    mutable std::shared_mutex member_data_mutex_;
     
-    // RapidFire instance
-    std::unique_ptr<RapidFire> rapid_fire;
-    
-    std::mutex callback_mutex;
-
-    float screen_width;
-    float screen_height;
-    float center_x;
-    float center_y;
-    float bScope_multiplier;
-    float move_scale_x; 
-    float move_scale_y; 
-    float norecoil_ms; 
- 
-
-    std::chrono::steady_clock::time_point last_target_time;
-    std::chrono::steady_clock::time_point last_recoil_compensation_time; 
-    std::atomic<bool> target_detected{false};
-    std::atomic<bool> mouse_pressed{false};
-    std::chrono::steady_clock::time_point last_mouse_release_time;
-    std::chrono::steady_clock::time_point last_mouse_press_time;
-
-    int last_applied_dx_ = 0;
-    
-    // Movement accumulation members (moved from static variables)
-    float accumulated_x_ = 0.0f;
-    float accumulated_y_ = 0.0f;
-    
-    // Cached time for reducing chrono calls
-    mutable std::chrono::steady_clock::time_point cached_time_;
-    mutable std::atomic<int64_t> cached_time_frame_{0};
-    
-    // Constants
-    static constexpr float MICRO_MOVEMENT_THRESHOLD = 0.5f;
-    static constexpr float SMALL_ERROR_THRESHOLD = 10.0f;
-    static constexpr float MEDIUM_ERROR_THRESHOLD = 50.0f;
-    static constexpr float CLOSE_RANGE_SCALE = 0.8f;
-    static constexpr float NORMAL_RANGE_SCALE = 1.0f;
-    static constexpr float FAR_RANGE_SCALE = 1.1f;
-    static constexpr float MIN_DELTA_TIME = 0.001f;
-    static constexpr float MAX_DELTA_TIME = 0.1f;
-    static constexpr float SMOOTHING_INCREASE_FACTOR = 0.001f;
-    static constexpr float MAX_ADDITIONAL_SMOOTHING = 0.4f;
-    
-    // Async mouse input queue system
-    OptimizedMouseCommandQueue mouse_command_queue_;
+    // Async command queue
+    MouseCommandQueue mouse_command_queue_;
     std::thread async_input_thread_;
     std::atomic<bool> should_stop_thread_{false};
     
+    // RapidFire support (stub for now)
+    std::unique_ptr<RapidFire> rapid_fire;
+    
+    // Screen configuration
+    float screen_width;
+    float screen_height;
+    float bScope_multiplier;
+    float norecoil_ms;
+    
+    // Initialize input method based on configuration
+    void initializeInputMethod(
+        SerialConnection *serialConnection,
+        MakcuConnection *makcuConnection,
+        GhubMouse *gHub
+    );
+    
+    // Worker thread for processing commands
     void asyncInputWorker();
-    void enqueueMouseCommand(MouseCommand::Type type, int dx = 0, int dy = 0);
-
-    void initializeInputMethod(SerialConnection *serialConnection, MakcuConnection *makcuConnection, GhubMouse *gHub);
-    void initializeScreen(int resolution, float bScope_multiplier, float norecoil_ms);
 
 public:
-    MouseThread(int resolution,
-                float bScope_multiplier,
-                float norecoil_ms,
-                SerialConnection *serialConnection = nullptr,
-                MakcuConnection *makcuConnection = nullptr,
-                GhubMouse *gHub = nullptr);
-    ~MouseThread();
-
-    void updateConfig(int resolution,
-                      float bScope_multiplier,
-                      float norecoil_ms);
+    // Original constructor for compatibility
+    MouseThread(
+        int resolution,
+        float bScope_multiplier,
+        float norecoil_ms,
+        SerialConnection *serialConnection = nullptr,
+        MakcuConnection *makcuConnection = nullptr,
+        GhubMouse *gHub = nullptr
+    );
     
-
-    bool checkTargetInScope(float target_x, float target_y, float target_w, float target_h, float reduction_factor);
-    void moveMouse(const AimbotTarget &target);
-    void pressMouse(const AimbotTarget &target);
-    void releaseMouse();
-    void applyRecoilCompensation(float strength);
-    void applyWeaponRecoilCompensation(const WeaponRecoilProfile* profile, int scope_magnification);
-
+    // Simplified constructor
+    MouseThread(
+        SerialConnection *serialConnection = nullptr,
+        MakcuConnection *makcuConnection = nullptr,
+        GhubMouse *gHub = nullptr
+    );
+    
+    ~MouseThread();
+    
+    // Set new input method
     void setInputMethod(std::unique_ptr<InputMethod> new_method);
     
-    // Helper methods for moveMouse refactoring
-    std::pair<int, int> processAccumulatedMovement(float move_x, float move_y);
-    void applyRecoilCompensationInternal(float strength, float delay_ms);
-     
- 
+    // Execute commands calculated by GPU
+    void executeMovement(int dx, int dy);
+    void executePress();
+    void executeRelease();
     
-    float getScreenWidth() { std::shared_lock<std::shared_mutex> lock(member_data_mutex_); return screen_width; }
-    float getScreenHeight() { std::shared_lock<std::shared_mutex> lock(member_data_mutex_); return screen_height; }
-    float getScopeMultiplier() { std::shared_lock<std::shared_mutex> lock(member_data_mutex_); return bScope_multiplier; }
+    // Configuration update
+    void updateConfig(int resolution, float bScope_multiplier, float norecoil_ms);
     
-    
-    bool isTargetDetected() const { return target_detected.load(); }
-    
-    // Add method to access Bezier controller for resetting
-    BezierController* getBezierController() { return bezier_controller.get(); }
-    
-    // Enable/disable snap aim mode
-    
-    // Add method to reset all accumulated states
-    void resetAccumulatedStates();
-    
-    // RapidFire control methods
+    // RapidFire methods (stubs for now)
     void updateRapidFire();
     RapidFire* getRapidFire() { return rapid_fire.get(); }
-    
-private:
 };
 
-#endif 
+// C interface for GPU to call
+extern "C" {
+    void executeMouseMovement(int dx, int dy);
+    void executeMouseClick(bool press);
+}
+
+#endif // MOUSE_SIMPLE_H

@@ -1,5 +1,4 @@
-#define WIN32_LEAN_AND_MEAN
-#include <Windows.h>
+#include "../core/windows_headers.h"
 #include "../imgui/imgui.h"
 #include "../imgui/imgui_internal.h"
 #include "AppContext.h"

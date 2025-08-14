@@ -1,7 +1,4 @@
-#define WIN32_LEAN_AND_MEAN
-#define _WINSOCKAPI_
-#include <winsock2.h>
-#include <Windows.h>
+#include "../core/windows_headers.h"
 
 #include "keycodes.h"
 

@@ -13,7 +13,6 @@
 // Forward declarations outside namespace
 class Detector;
 class GPUKalmanTracker;
-class GpuPIDController;
 
 namespace needaimbot {
 
@@ -32,7 +31,6 @@ enum class GraphNodeType {
     FILTERING,
     TRACKING_PREDICT,
     TRACKING_UPDATE,
-    PID_CONTROL,
     RESULT_COPY
 };
 
@@ -53,7 +51,6 @@ struct UnifiedPipelineConfig {
     bool enableCapture = true;
     bool enableDetection = true;
     bool enableTracking = true;
-    bool enablePIDControl = true;
     
     // Detection parameters
     float confThreshold = 0.4f;
@@ -84,10 +81,10 @@ public:
     // Set component references
     void setDetector(::Detector* detector) { m_detector = detector; }
     void setTracker(::GPUKalmanTracker* tracker) { m_tracker = tracker; }
-    void setPIDController(::GpuPIDController* pidController) { m_pidController = pidController; }
     
     // Main execution methods
     bool captureGraph(cudaStream_t stream = nullptr);
+    bool captureDetectionGraph(cudaStream_t stream = nullptr);
     bool executeGraph(cudaStream_t stream = nullptr);
     bool updateGraph(cudaStream_t stream = nullptr);
     
@@ -101,6 +98,7 @@ public:
     
     // Pipeline data management
     void setInputTexture(cudaGraphicsResource_t resource) { m_cudaResource = resource; }
+    void setInputFrame(const SimpleCudaMat& frame);
     void setOutputBuffer(float* d_output) { m_d_outputBuffer = d_output; }
     
     // State and statistics
@@ -151,8 +149,6 @@ private:
     // Component pointers
     ::Detector* m_detector = nullptr;
     ::GPUKalmanTracker* m_tracker = nullptr;
-    ::GpuPIDController* m_pidController = nullptr;
-    
     // Pipeline buffers (GPU memory)
     SimpleCudaMat m_captureBuffer;
     SimpleCudaMat m_preprocessBuffer;
@@ -180,7 +176,6 @@ private:
     Target* m_d_selectedTarget = nullptr;  // Selected target
     Target* m_d_trackedTarget = nullptr;   // After Kalman tracking
     Target* m_d_trackedTargets = nullptr;  // Multiple tracked targets
-    float* m_d_pidOutput = nullptr;        // PID controller output (x,y)
     float* m_d_outputBuffer = nullptr;     // Final output buffer
     
     // Pinned host memory for zero-copy access
@@ -195,6 +190,7 @@ private:
     UnifiedPipelineConfig m_config;
     GraphExecutionState m_state;
     std::mutex m_graphMutex;
+    bool m_hasFrameData = false;
     
     // Internal methods
     bool createGraphNodes(cudaStream_t stream);
@@ -215,7 +211,7 @@ private:
     void deallocateBuffers();
     
     // Two-stage pipeline helpers
-    bool checkTargetsAsync(cudaStream_t stream);
+    void checkTargetsAsync(cudaStream_t stream);
     void updateProfilingAsync(cudaStream_t stream);
     
     // Graph capture methods
