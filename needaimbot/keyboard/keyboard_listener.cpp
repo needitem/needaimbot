@@ -1,7 +1,4 @@
-#define WIN32_LEAN_AND_MEAN
-#define _WINSOCKAPI_
-#include <winsock2.h>
-#include <Windows.h>
+#include "../core/windows_headers.h"
 
 #include <atomic>
 #include <chrono>
@@ -19,14 +16,15 @@
 
 
 
-#include "../AppContext.h"
-#include "keyboard_listener.h"
-#include "../mouse/mouse.h"
-#include <iostream>
-#include <Windows.h>
-#include <atomic>
-#include <string>
-#include <vector>
+// Removed duplicate includes - already included above
+// #include "../AppContext.h"
+// #include "keyboard_listener.h"
+// #include "../mouse/mouse.h"
+// #include <iostream>
+// #include <Windows.h> - using windows_headers.h instead
+// #include <atomic>
+// #include <string>
+// #include <vector>
 
 std::vector<int> get_vk_codes(const std::vector<std::string>& keys) {
     std::vector<int> vk_codes;
@@ -60,6 +58,7 @@ void keyboardListener() {
 
     static bool last_aiming_state = false;
     static bool last_shooting_state = false;
+    static bool last_pause_state = false;
 
     while (!ctx.should_exit) {
         if (is_any_key_pressed(exit_vk_codes)) {
@@ -87,10 +86,14 @@ void keyboardListener() {
             last_shooting_state = current_shooting;
         }
 
-        if (is_any_key_pressed(pause_vk_codes)) {
+        // Improved pause key handling - only toggle on key press, not while held
+        bool current_pause = is_any_key_pressed(pause_vk_codes);
+        if (current_pause && !last_pause_state) {
+            // Key was just pressed (not held)
             ctx.detectionPaused = !ctx.detectionPaused;
-            Sleep(50); // Shorter debounce for faster response
+            std::cout << "[Keyboard] Detection " << (ctx.detectionPaused ? "PAUSED" : "RESUMED") << std::endl;
         }
+        last_pause_state = current_pause;
 
         // Auto shoot functionality removed
         // Add delay to reduce CPU usage - 20ms is fast enough for keyboard input

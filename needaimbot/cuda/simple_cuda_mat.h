@@ -62,7 +62,15 @@ public:
     // Release GPU memory
     void release() {
         if (data_) {
-            CUDA_CHECK_WARN(cudaFree(data_));
+            // Check if CUDA context is still valid
+            cudaError_t err = cudaGetLastError();
+            if (err == cudaSuccess) {
+                err = cudaFree(data_);
+                if (err != cudaSuccess && err != cudaErrorCudartUnloading) {
+                    // Only warn if it's not a shutdown-related error
+                    printf("[SimpleCudaMat] Warning: cudaFree failed: %s\n", cudaGetErrorString(err));
+                }
+            }
             data_ = nullptr;
         }
         width_ = height_ = channels_ = 0;

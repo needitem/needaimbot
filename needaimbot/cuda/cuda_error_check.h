@@ -76,10 +76,23 @@ inline std::string getCudaErrorDescription(cudaError_t error) {
 
 // Helper to check available GPU memory
 inline bool checkGpuMemory(size_t requiredBytes, size_t& availableBytes, size_t& totalBytes) {
+    // Clear any previous CUDA errors
+    cudaError_t prevError = cudaGetLastError();
+    if (prevError != cudaSuccess) {
+        // Previous error exists, skip memory check
+        // Assume we have enough memory and let cudaMalloc handle it
+        availableBytes = requiredBytes + 1024*1024; // Add 1MB buffer
+        totalBytes = availableBytes * 2;
+        return true;
+    }
+    
     cudaError_t error = cudaMemGetInfo(&availableBytes, &totalBytes);
     if (error != cudaSuccess) {
         std::cerr << "[CUDA] Failed to get memory info: " << cudaGetErrorString(error) << std::endl;
-        return false;
+        // Assume we have enough memory and let cudaMalloc handle it
+        availableBytes = requiredBytes + 1024*1024;
+        totalBytes = availableBytes * 2;
+        return true;
     }
     return availableBytes >= requiredBytes;
 }

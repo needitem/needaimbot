@@ -1,7 +1,7 @@
 #pragma once
 
 // Windows SDK 10.0.26100.0 compatible
-#include <windows.h>
+#include "../core/windows_headers.h"
 #include <d3d11_4.h>  // D3D11.4 for ID3D11Device5 and ID3D11Fence
 #include <dxgi1_5.h>  // DXGI 1.5
 #include <wrl/client.h>
@@ -11,7 +11,6 @@
 #include <thread>
 #include <memory>
 #include "../cuda/simple_cuda_mat.h"
-#include "../cuda/control/gpu_mouse_controller.h"
 
 // SimpleCudaMat typedef for compatibility
 using SimpleCudaMat = SimpleCudaMat;
@@ -28,14 +27,14 @@ public:
     void StopCapture();
     
     // GPU 이벤트 기반 - CPU 대기 없음
-    SimpleCudaMat& WaitForNextFrame();
+    // 프레임이 캡처되면 true 반환, 타임아웃이면 false
+    bool WaitForNextFrame();
     
-    // GPU 마우스 컨트롤러 접근
-    needaimbot::cuda::GPUMouseController* GetMouseController() { return m_mouseController.get(); }
+    // Pipeline integration methods
+    cudaGraphicsResource_t GetCudaResource() const { return m_cudaResource; }
+    // GetGPUBuffer 제거 - 더 이상 중간 버퍼 사용하지 않음
     
-    // YOLO 감지 결과 처리 및 마우스 이동량 계산 (GPU에서 직접)
-    bool ProcessDetectionsGPU(needaimbot::cuda::Detection* d_detections, int numDetections, 
-                              needaimbot::cuda::MouseMovement& movement);
+    // Mouse controller methods removed - handled by unified pipeline
     
 private:
     // GPU 동기화를 위한 Fence (Windows 10/11)
@@ -65,12 +64,11 @@ private:
     std::atomic<bool> m_isCapturing;
     
     // GPU 전용 프레임 버퍼
-    SimpleCudaMat m_gpuFrameBuffer;
+    // m_gpuFrameBuffer 제거 - 불필요한 중간 버퍼
     
-    // GPU 마우스 컨트롤러
-    std::unique_ptr<needaimbot::cuda::GPUMouseController> m_mouseController;
+    // Mouse controller removed - handled by unified pipeline
     
     void InitializeDXGI();
-    void InitializeCUDAInterop();
-    void ProcessGPUFrame();
+    bool InitializeCUDAInterop();
+    // ProcessGPUFrame 제거 - UnifiedGraphPipeline이 처리
 };

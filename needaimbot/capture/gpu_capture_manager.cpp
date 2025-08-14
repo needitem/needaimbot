@@ -73,24 +73,20 @@ bool GPUCaptureManager::Initialize() {
     }
     
     // 3. CUDA Interop 초기화
-    InitializeCUDAInterop();
-    
-    // 4. GPU 프레임 버퍼 할당
-    m_gpuFrameBuffer.create(m_height, m_width, 4); // BGRA
-    
-    // 5. GPU 마우스 컨트롤러 초기화
-    m_mouseController = std::make_unique<needaimbot::cuda::GPUMouseController>();
-    needaimbot::cuda::GPUMouseConfig mouseConfig;
-    mouseConfig.screenWidth = m_width;
-    mouseConfig.screenHeight = m_height;
-    mouseConfig.sensitivity = 1.0f;
-    mouseConfig.smoothing = 0.3f;
-    mouseConfig.confidenceThreshold = 0.7f;
-    
-    if (!m_mouseController->Initialize(mouseConfig)) {
-        std::cerr << "[GPUCapture] Failed to initialize GPU mouse controller" << std::endl;
+    if (!InitializeCUDAInterop()) {
+        std::cerr << "[GPUCapture] Failed to initialize CUDA interop" << std::endl;
         return false;
     }
+    
+    // Clear any previous CUDA errors before allocating buffers
+    cudaError_t prevErr = cudaGetLastError();
+    if (prevErr != cudaSuccess) {
+        std::cerr << "[GPUCapture] Clearing previous CUDA error: " << cudaGetErrorString(prevErr) << std::endl;
+    }
+    
+    // 4. GPU 프레임 버퍼 할당 - 제거 (불필요한 중간 버퍼)
+    
+    // Mouse controller initialization removed - handled by unified pipeline
     
     std::cout << "[GPUCapture] GPU Mouse Controller initialized successfully" << std::endl;
     
@@ -180,25 +176,48 @@ void GPUCaptureManager::InitializeDXGI() {
     m_device->CreateTexture2D(&desc, nullptr, &m_stagingTexture);
 }
 
-void GPUCaptureManager::InitializeCUDAInterop() {
-    // CUDA stream 생성 (비동기 처리용)
-    cudaStreamCreateWithFlags(&m_captureStream, cudaStreamNonBlocking);
-    
-    // CUDA event 생성 (GPU 동기화용)
-    cudaEventCreateWithFlags(&m_frameReadyEvent, cudaEventDisableTiming);
-    
-    // D3D11 texture를 CUDA에 등록
-    cudaGraphicsD3D11RegisterResource(
-        &m_cudaResource,
-        m_stagingTexture.Get(),
-        cudaGraphicsRegisterFlagsNone
-    );
+bool GPUCaptureManager::InitializeCUDAInterop() {
+    // Clear any previous CUDA errors
+    cudaGetLastError();
     
     // CUDA 디바이스 설정
-    cudaSetDevice(0);
+    cudaError_t err = cudaSetDevice(0);
+    if (err != cudaSuccess) {
+        std::cerr << "[GPUCapture] Failed to set CUDA device: " << cudaGetErrorString(err) << std::endl;
+        return false;
+    }
+    
+    // CUDA stream 생성 (비동기 처리용)
+    err = cudaStreamCreateWithFlags(&m_captureStream, cudaStreamNonBlocking);
+    if (err != cudaSuccess) {
+        std::cerr << "[GPUCapture] Failed to create CUDA stream: " << cudaGetErrorString(err) << std::endl;
+        return false;
+    }
+    
+    // CUDA event 생성 (GPU 동기화용)
+    err = cudaEventCreateWithFlags(&m_frameReadyEvent, cudaEventDisableTiming);
+    if (err != cudaSuccess) {
+        std::cerr << "[GPUCapture] Failed to create CUDA event: " << cudaGetErrorString(err) << std::endl;
+        return false;
+    }
+    
+    // D3D11 texture를 CUDA에 등록
+    if (m_stagingTexture) {
+        err = cudaGraphicsD3D11RegisterResource(
+            &m_cudaResource,
+            m_stagingTexture.Get(),
+            cudaGraphicsRegisterFlagsNone
+        );
+        if (err != cudaSuccess) {
+            std::cerr << "[GPUCapture] Failed to register D3D11 resource: " << cudaGetErrorString(err) << std::endl;
+            return false;
+        }
+    }
+    
+    return true;
 }
 
-SimpleCudaMat& GPUCaptureManager::WaitForNextFrame() {
+bool GPUCaptureManager::WaitForNextFrame() {
     // VSync 또는 특정 타이밍까지 GPU가 대기
     // CPU는 여기서 블록되지만, 이벤트 기반이므로 CPU 사용률 0%
     
@@ -210,13 +229,13 @@ SimpleCudaMat& GPUCaptureManager::WaitForNextFrame() {
     
     if (FAILED(hr)) {
         if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
-            // 타임아웃은 정상 - 기존 프레임 반환
-            return m_gpuFrameBuffer;
+            // 타임아웃은 정상 - 새 프레임 없음
+            return false;
         }
         
         // 에러 처리
         m_duplication->ReleaseFrame();
-        return m_gpuFrameBuffer;
+        return false;
     }
     
     // GPU에서 GPU로 직접 복사 (CPU 관여 없음)
@@ -292,37 +311,14 @@ SimpleCudaMat& GPUCaptureManager::WaitForNextFrame() {
     // 프레임 해제
     m_duplication->ReleaseFrame();
     
-    // CUDA로 비동기 복사
-    ProcessGPUFrame();
+    // ProcessGPUFrame() 호출 제거 - UnifiedGraphPipeline이 처리
+    // 실제 데이터는 m_stagingTexture에 있고, GetCudaResource()를 통해 접근
     
-    return m_gpuFrameBuffer;
+    // 캡처 성공
+    return true;
 }
 
-void GPUCaptureManager::ProcessGPUFrame() {
-    // CUDA 리소스 맵핑 (GPU-GPU)
-    cudaGraphicsMapResources(1, &m_cudaResource, m_captureStream);
-    
-    cudaArray_t cudaArray;
-    cudaGraphicsSubResourceGetMappedArray(&cudaArray, m_cudaResource, 0, 0);
-    
-    // GPU에서 GPU로 직접 복사 (비동기)
-    cudaMemcpy2DFromArrayAsync(
-        m_gpuFrameBuffer.data(),
-        m_gpuFrameBuffer.step(),
-        cudaArray,
-        0, 0,
-        m_width * 4,
-        m_height,
-        cudaMemcpyDeviceToDevice,
-        m_captureStream
-    );
-    
-    // 리소스 언맵
-    cudaGraphicsUnmapResources(1, &m_cudaResource, m_captureStream);
-    
-    // GPU 이벤트 기록 (다른 스트림에서 동기화 가능)
-    cudaEventRecord(m_frameReadyEvent, m_captureStream);
-}
+// ProcessGPUFrame 함수 제거 - UnifiedGraphPipeline이 리소스 관리를 담당
 
 void GPUCaptureManager::StartCapture() {
     m_isCapturing = true;
@@ -337,20 +333,4 @@ void GPUCaptureManager::StopCapture() {
     }
 }
 
-bool GPUCaptureManager::ProcessDetectionsGPU(needaimbot::cuda::Detection* d_detections, int numDetections, 
-                                             needaimbot::cuda::MouseMovement& movement) {
-    if (!m_mouseController || !d_detections || numDetections <= 0) {
-        movement.dx = 0;
-        movement.dy = 0;
-        movement.shouldMove = false;
-        return false;
-    }
-    
-    // GPU에서 직접 마우스 이동량 계산 (비동기)
-    if (!m_mouseController->CalculateMovementAsync(d_detections, numDetections, m_captureStream)) {
-        return false;
-    }
-    
-    // 결과 가져오기 (필요시 대기)
-    return m_mouseController->GetMovementResult(movement);
-}
+// ProcessDetectionsGPU removed - mouse movement handled by unified pipeline

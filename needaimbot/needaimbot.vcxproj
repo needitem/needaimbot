@@ -34,14 +34,13 @@
     <ClCompile Include="imgui\imgui_widgets.cpp" />
     <ClCompile Include="keyboard\keyboard_listener.cpp" />
     <ClCompile Include="keyboard\\keycodes.cpp" />
-    <ClCompile Include="mouse\aimbot_components\BezierController.cpp" />
     <ClCompile Include="mouse\\input_drivers\\ghub.cpp" />
     <ClCompile Include="mouse\\input_drivers\\kmboxNet.cpp" />
     <ClCompile Include="mouse\\mouse.cpp" />
+    <ClCompile Include="cuda\\mouse_interface.cpp" />
     <ClCompile Include="mouse\\recoil_control_thread.cpp" />
     <ClCompile Include="mouse\\rapidfire.cpp" />
     <ClCompile Include="mouse\\input_drivers\\my_enc.cpp" />
-    <ClCompile Include="mouse\\aimbot_components\\PIDController2D.cpp" />
     <ClCompile Include="tracking\\Hungarian.cpp" />
     <ClCompile Include="tracking\\SimpleKalmanTracker.cpp" />
     <ClCompile Include="tracking\\ByteTracker.cpp" />
@@ -49,7 +48,6 @@
     <ClCompile Include="mouse\\input_drivers\\rzctl.cpp" />
     <ClCompile Include="mouse\\input_drivers\\SerialConnection.cpp" />
     <ClCompile Include="mouse\\input_drivers\\MakcuConnection.cpp" />
-    <ClCompile Include="mouse\\aimbot_components\\AimbotTarget.cpp" />
     <ClCompile Include="overlay\draw_color_filter.cpp" />
     <ClCompile Include="overlay\draw_rcs.cpp" />
     <ClCompile Include="overlay\draw_stats.cpp" />
@@ -66,7 +64,6 @@
     <ClCompile Include="overlay\overlay.cpp" />
     <ClCompile Include="overlay\ui_helpers.cpp" />
     <ClCompile Include="needaimbot.cpp" />
-    <ClCompile Include="needaimbot_event.cpp" />
     <ClCompile Include="utils\image_io.cpp" />
     <ClCompile Include="scr\other_tools.cpp" />
   </ItemGroup>
@@ -86,8 +83,6 @@
     <CudaCompile Include="cuda\unified_graph_pipeline.cu" />
     <CudaCompile Include="cuda\tracking\gpu_tracker.cu" />
     <CudaCompile Include="cuda\tracking\gpu_kalman_filter.cu" />
-    <CudaCompile Include="cuda\control\gpu_pid_controller.cu" />
-    <CudaCompile Include="cuda\control\gpu_mouse_controller.cu" />
     <CudaCompile Include="cuda\gpu_workload_manager.cu" />
   </ItemGroup>
   <ItemGroup>
@@ -108,8 +103,6 @@
     <ClInclude Include="cuda\capture\color_conversion.h" />
     <ClInclude Include="cuda\tracking\gpu_kalman_filter.h" />
     <ClInclude Include="cuda\tracking\gpu_tracker.h" />
-    <ClInclude Include="cuda\control\gpu_pid_controller.h" />
-    <ClInclude Include="cuda\control\gpu_mouse_controller.h" />
     <ClInclude Include="cuda\filter\color_filter.h" />
     <ClInclude Include="cuda\unified_graph_pipeline.h" />
     <ClInclude Include="cuda\memory_pool.h" />
@@ -120,7 +113,6 @@
     <ClInclude Include="detector\CudaBuffer.h" />
     <ClInclude Include="config\config.h" />
     <ClInclude Include="detector\detector.h" />
-    <ClInclude Include="mouse\aimbot_components\BezierController.h" />
     <ClInclude Include="cuda\detection\filterGpu.h" />
     <ClInclude Include="cuda\detection\postProcessGpu.h" />
     <ClInclude Include="cuda\detection\batchedResults.h" />
@@ -138,8 +130,6 @@
     <ClInclude Include="include\other_tools.h" />
     <ClInclude Include="keyboard\keyboard_listener.h" />
     <ClInclude Include="keyboard\keycodes.h" />
-    <ClInclude Include="mouse\aimbot_components\AimbotTarget.h" />
-    <ClInclude Include="mouse\aimbot_components\PIDController2D.h" />
     <ClInclude Include="tracking\Hungarian.h" />
     <ClInclude Include="tracking\SimpleKalmanTracker.h" />
     <ClInclude Include="tracking\ByteTracker.h" />
@@ -159,9 +149,7 @@
     <ClInclude Include="mouse\recoil_control_thread.h" />
     <ClInclude Include="mouse\rapidfire.h" />
     <ClInclude Include="mouse\my_enc.h" />
-    <ClInclude Include="mouse\PIDController2D.h" />
     <ClInclude Include="mouse\rzctl.h" />
-    <ClInclude Include="mouse\AimbotTarget.h" />
     <ClInclude Include="overlay\common_helpers.h" />
     <ClInclude Include="overlay\draw_settings.h" />
     <ClInclude Include="overlay\draw_offset.h" />

@@ -1,6 +1,7 @@
 #ifndef PERFORMANCE_MONITOR_H
 #define PERFORMANCE_MONITOR_H
 
+#include "windows_headers.h"
 #include <atomic>
 #include <chrono>
 #include <string>
@@ -8,7 +9,6 @@
 #include <mutex>
 #include <vector>
 #include <algorithm>
-#include <Windows.h>
 #include <Psapi.h>
 
 class PerformanceMonitor {

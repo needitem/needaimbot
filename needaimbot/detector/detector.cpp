@@ -1,9 +1,6 @@
 #include "AppContext.h"
 
-#define WIN32_LEAN_AND_MEAN
-#define _WINSOCKAPI_
-#include <winsock2.h>
-#include <Windows.h>
+#include "../core/windows_headers.h"
 
 #include <fstream>
 #include <iostream>
@@ -288,7 +285,7 @@ void Detector::processFrameWithGraph(const unsigned char* h_frameData, cudaStrea
     // 3. Inference (via runInferenceAsync)
     // 4. Postprocessing
     // 5. Tracking
-    // 6. PID control
+    // 6. Mouse control
     // 7. D2H copy of results
 }
 
@@ -476,6 +473,8 @@ bool Detector::initializeCudaContext()
 void Detector::initialize(const std::string& modelFile)
 {
     auto& ctx = AppContext::getInstance();
+    std::cout << "[Detector] Initializing with model: " << modelFile << std::endl;
+    
     if (!isCudaContextInitialized()) {
         std::cerr << "[Detector] CUDA context not initialized. Skipping TensorRT engine load and GPU memory allocation." << std::endl;
         return; 
@@ -495,8 +494,10 @@ void Detector::initialize(const std::string& modelFile)
     static SimpleLogger logger;
     
     // TensorRT initialized
-    
+    std::cout << "[Detector] Creating TensorRT runtime..." << std::endl;
     runtime.reset(nvinfer1::createInferRuntime(logger));
+    
+    std::cout << "[Detector] Loading engine from: " << modelFile << std::endl;
     loadEngine(modelFile);
 
     if (!engine)
@@ -671,10 +672,14 @@ void Detector::loadEngine(const std::string& modelFile)
     std::string engineFilePath;
     std::filesystem::path modelPath(modelFile);
     std::string extension = modelPath.extension().string();
+    
+    std::cout << "[Detector] loadEngine called with: " << modelFile << std::endl;
+    std::cout << "[Detector] File extension: " << extension << std::endl;
 
     if (extension == ".engine")
     {
         engineFilePath = modelFile;
+        std::cout << "[Detector] Using engine file directly: " << engineFilePath << std::endl;
     }
     else if (extension == ".onnx")
     {
@@ -718,7 +723,14 @@ void Detector::loadEngine(const std::string& modelFile)
     }
 
     // Loading engine
+    std::cout << "[Detector] Loading engine from file: " << engineFilePath << std::endl;
     engine.reset(loadEngineFromFile(engineFilePath));
+    
+    if (engine) {
+        std::cout << "[Detector] Engine loaded successfully!" << std::endl;
+    } else {
+        std::cerr << "[Detector] Failed to load engine from: " << engineFilePath << std::endl;
+    }
 }
 
 void Detector::processFrame(const SimpleCudaMat& frame)
@@ -727,6 +739,7 @@ void Detector::processFrame(const SimpleCudaMat& frame)
     
     static int process_call_count = 0;
     process_call_count++;
+    
     
     if (!isCudaContextInitialized()) {
         std::cerr << "[Detector] CUDA context not initialized!" << std::endl;
@@ -814,13 +827,10 @@ void Detector::processFrame(const SimpleMat& frame)
 
 void Detector::inferenceThread()
 {
-    std::cout << "[InferenceThread] Starting inference thread" << std::endl;
     auto& ctx = AppContext::getInstance();
     if (!isCudaContextInitialized()) {
-        std::cerr << "[InferenceThread] CUDA context not initialized. Inference thread exiting." << std::endl;
         return;
     }
-    std::cout << "[InferenceThread] CUDA context initialized" << std::endl;
     
     // CPU 스레드 친화성 설정 (성능 코어에 고정)
     {
@@ -872,7 +882,6 @@ void Detector::inferenceThread()
     SimpleCudaMat frameGpu;
     static auto last_cycle_start_time = std::chrono::high_resolution_clock::time_point{};
 
-    std::cout << "[InferenceThread] Entering main loop" << std::endl;
     int inferenceFrameCount = 0;
     static int inference_loop_count = 0;
     
@@ -892,7 +901,6 @@ void Detector::inferenceThread()
         NVTX_PUSH("Detector Inference Loop");
 
         if (ctx.should_exit) {
-            std::cout << "[InferenceThread] Exit signal detected in main loop" << std::endl;
             break;
         }
 
@@ -939,7 +947,6 @@ void Detector::inferenceThread()
         }
 
         if (AppContext::getInstance().should_exit) {
-            std::cout << "[InferenceThread] Exit signal received" << std::endl;
             break;
         }
         
@@ -964,6 +971,7 @@ void Detector::inferenceThread()
         // Process the frame
         inferenceFrameCount++;
         
+        
         if (frameIsGpu.load(std::memory_order_acquire)) {
             frameGpu = std::move(currentFrame);
         } else {
@@ -977,7 +985,6 @@ void Detector::inferenceThread()
         frameReady.store(false, std::memory_order_release);
 
         if (!context) {
-            std::cerr << "[InferenceThread] TensorRT context not initialized!" << std::endl;
             continue;
         }
 
@@ -1026,7 +1033,6 @@ void Detector::inferenceThread()
                     // Graph 실행 (추론만)
                     cudaError_t graphLaunchResult = cudaGraphLaunch(m_inferenceGraphExec, stream);
                     if (graphLaunchResult != cudaSuccess) {
-                        std::cerr << "[InferenceThread] CUDA Graph launch failed: " << cudaGetErrorString(graphLaunchResult) << std::endl;
                         // Fallback to regular inference
                         m_graphCaptured = false;
                         cudaGraphExecDestroy(m_inferenceGraphExec);
@@ -1062,10 +1068,8 @@ void Detector::inferenceThread()
                 cudaError_t copyErr = cudaMemcpyAsync(&m_finalTargetsCountHost, m_finalTargetsCountGpu.get(), 
                                sizeof(int), cudaMemcpyDeviceToHost, postprocessStream);
                 if (copyErr != cudaSuccess) {
-                    std::cerr << "[InferenceThread] Failed to copy detection count: " << cudaGetErrorString(copyErr) << std::endl;
                     continue;
                 }
-                
                 
                 
                 // Record event instead of sync - we'll check it later when needed
@@ -1084,7 +1088,6 @@ void Detector::inferenceThread()
                     continue;
                 } else {
                     // Error occurred
-                    std::cerr << "[InferenceThread] Event query failed: " << cudaGetErrorString(eventStatus) << std::endl;
                     continue;
                 }
                 
@@ -1092,19 +1095,15 @@ void Detector::inferenceThread()
                     
                     // Validate buffer size
                     if (m_finalTargetsCountHost > Constants::MAX_DETECTIONS) {
-                        std::cerr << "[InferenceThread] Target count exceeds buffer size: " 
-                                  << m_finalTargetsCountHost << " > " << Constants::MAX_DETECTIONS << std::endl;
                         m_finalTargetsCountHost = Constants::MAX_DETECTIONS;
                     }
                     
                     // Ensure GPU buffer is valid before copying
                     if (!m_finalTargetsGpu.get()) {
-                        std::cerr << "[InferenceThread] GPU detection buffer is null!" << std::endl;
                         continue;
                     }
                     
                     if (!m_finalTargetsHost) {
-                        std::cerr << "[InferenceThread] Host detection buffer is null!" << std::endl;
                         continue;
                     }
                     
@@ -1112,7 +1111,6 @@ void Detector::inferenceThread()
                                    m_finalTargetsCountHost * sizeof(Target), 
                                    cudaMemcpyDeviceToHost, postprocessStream);
                     if (copyErr != cudaSuccess) {
-                        std::cerr << "[InferenceThread] Failed to copy detections: " << cudaGetErrorString(copyErr) << std::endl;
                         continue;
                     }
                     
@@ -1446,7 +1444,6 @@ void Detector::inferenceThread()
                         cudaError_t indexCopyErr = cudaMemcpyAsync(&m_bestTargetIndexHost, m_bestTargetIndexGpu.get(), 
                                        sizeof(int), cudaMemcpyDeviceToHost, postprocessStream);
                         if (indexCopyErr != cudaSuccess) {
-                            std::cerr << "[InferenceThread] Failed to copy target index: " << cudaGetErrorString(indexCopyErr) << std::endl;
                             continue;
                         }
                         
@@ -1457,13 +1454,11 @@ void Detector::inferenceThread()
                         cudaError_t targetCopyErr = cudaMemcpyAsync(&temp_detection, m_bestTargetGpu.get(), 
                                        sizeof(Target), cudaMemcpyDeviceToHost, postprocessStream);
                         if (targetCopyErr != cudaSuccess) {
-                            std::cerr << "[InferenceThread] Failed to copy target data: " << cudaGetErrorString(targetCopyErr) << std::endl;
                             continue;
                         }
                         
                         cudaError_t syncErr = cudaStreamSynchronize(postprocessStream);
                         if (syncErr != cudaSuccess) {
-                            std::cerr << "[InferenceThread] Stream sync after target copy failed: " << cudaGetErrorString(syncErr) << std::endl;
                             continue;
                         }
                         
@@ -1581,7 +1576,6 @@ void Detector::inferenceThread()
             }
             catch (const std::exception& e)
             {
-                std::cerr << "[InferenceThread] Exception caught in inference loop: " << e.what() << std::endl;
                 m_hasBestTarget = false;
                 m_bestTargetHost = Target();  // Use default constructor
                 m_bestTargetIndexHost = -1;
@@ -1589,7 +1583,6 @@ void Detector::inferenceThread()
             }
             catch (...)
             {
-                std::cerr << "[InferenceThread] Unknown exception caught in inference loop" << std::endl;
                 m_hasBestTarget = false;
                 m_bestTargetHost = Target();  // Use default constructor
                 m_bestTargetIndexHost = -1;
