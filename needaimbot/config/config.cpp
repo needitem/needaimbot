@@ -11,7 +11,6 @@
 #include <shlobj.h>
 
 #include "config.h"
-#include "config_validator.h"
 #include "modules/SimpleIni.h"
 #include "keyboard/keyboard_listener.h"
 
@@ -537,10 +536,6 @@ bool Config::loadConfig(const std::string& filename)
     if (weapon_profiles.empty()) {
         initializeDefaultWeaponProfiles();
     }
-
-    // Validate and correct all configuration values
-    ConfigValidator::validateAndCorrect(*this);
-
     return true;
 }
 
