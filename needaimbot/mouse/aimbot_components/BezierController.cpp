@@ -2,6 +2,7 @@
 #include <cmath>
 #include <algorithm>
 
+#define M_PI 3.14159265358979323846f
 BezierController::BezierController()
     : rng(std::chrono::steady_clock::now().time_since_epoch().count()),
       dist(-1.0f, 1.0f)
@@ -80,42 +81,17 @@ void BezierController::setTarget(const LA::Vector2f& current_mouse_pos,
 
 LA::Vector2f BezierController::calculate(const LA::Vector2f& error)
 {
-    // Check if we need to set a new target
-    LA::Vector2f target_pos = LA::Vector2f(0, 0) - error;  // Convert error to target position
-    
-    // If curve is complete or target moved significantly, recalculate
-    if (current_t >= 1.0f || needsRecalculation(target_pos)) {
-        // Estimate current mouse velocity (simple difference)
-        auto now = std::chrono::steady_clock::now();
-        float dt = std::chrono::duration<float>(now - last_time_point).count();
-        last_time_point = now;
-        
-        LA::Vector2f velocity = (last_calculated_pos - p0) / std::max(dt, 0.001f);
-        
-        // Set new target from current position
-        setTarget(last_calculated_pos, target_pos, velocity);
-    }
-    
-    // If curve is complete, no movement
-    if (current_t >= 1.0f) {
+    // If error is too small, no movement needed
+    if (error.norm() < 0.5f) {
         return LA::Vector2f::Zero();
     }
     
-    // Calculate elapsed time since curve start
-    auto now = std::chrono::steady_clock::now();
-    float elapsed = std::chrono::duration<float>(now - curve_start_time).count();
+    // Simple direct movement - using proportional control
+    // This provides smoother and more reliable aiming than complex Bezier curves
+    float speed_multiplier = 0.15f;  // Move 15% of the error per frame
+    LA::Vector2f movement = error * speed_multiplier;
     
-    // Update t based on elapsed time
-    current_t = std::min(1.0f, elapsed / total_duration);
-    
-    // Calculate current position on curve
-    LA::Vector2f current_pos = calculateBezierPoint(current_t);
-    
-    // Calculate delta movement
-    LA::Vector2f delta = current_pos - last_calculated_pos;
-    last_calculated_pos = current_pos;
-    
-    return delta;
+    return movement;
 }
 
 void BezierController::reset()
