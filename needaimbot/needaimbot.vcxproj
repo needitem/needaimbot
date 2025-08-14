@@ -95,6 +95,12 @@
     <ClInclude Include="core\constants.h" />
     <ClInclude Include="core\error_handler.h" />
     <ClInclude Include="core\common_utils.h" />
+    <ClInclude Include="core\error_manager.h" />
+    <ClInclude Include="core\logger.h" />
+    <ClInclude Include="core\performance_monitor.h" />
+    <ClInclude Include="core\sync_manager.h" />
+    <ClInclude Include="core\Target.h" />
+    <ClInclude Include="core\thread_manager.h" />
     <ClInclude Include="cuda\simple_cuda_mat.h" />
     <ClInclude Include="cuda\detection\cuda_image_processing.h" />
     <ClInclude Include="cuda\detection\cuda_float_processing.h" />
@@ -162,7 +168,6 @@
     <ClInclude Include="overlay\draw_tracker.h" />
     <ClInclude Include="overlay\overlay.h" />
     <ClInclude Include="overlay\ui_helpers.h" />
-    <ClInclude Include="config\config_validator.h" />
     <ClInclude Include="utils\constants.h" />
     <ClInclude Include="utils\AutoTuner.h" />
     <ClInclude Include="utils\CircularBuffer.h" />
