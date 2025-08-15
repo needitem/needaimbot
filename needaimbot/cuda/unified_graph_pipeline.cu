@@ -629,9 +629,7 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
         cudaMemcpyAsync(frameWrapper.data(), m_captureBuffer.data(),
                        dataSize, cudaMemcpyDeviceToDevice, stream);
         
-        // Synchronize before detector call
-        cudaStreamSynchronize(stream);
-        
+        // Process frame asynchronously - no sync needed
         m_detector->processFrame(frameWrapper);
         
         // Get detection results
@@ -643,7 +641,7 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
             Target h_target;
             cudaMemcpyAsync(&h_target, detections.first, sizeof(Target), 
                            cudaMemcpyDeviceToHost, stream);
-            cudaStreamSynchronize(stream);
+            // Removed sync - will sync only when needed
             
             // Ensure center is calculated
             h_target.updateCenter();
@@ -892,8 +890,7 @@ bool UnifiedGraphPipeline::executeDirect(cudaStream_t stream) {
             Target h_target;
             cudaMemcpyAsync(&h_target, detections.first, sizeof(Target), 
                            cudaMemcpyDeviceToHost, stream);
-            cudaStreamSynchronize(stream);
-            
+            // Removed sync - async copy is sufficient
         }
     }
     

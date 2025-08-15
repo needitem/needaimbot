@@ -17,6 +17,7 @@
 #include "../AppContext.h"
 #include "../cuda/simple_cuda_mat.h"
 #include "../cuda/unified_graph_pipeline.h"
+#include "../core/performance_monitor.h"
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -152,8 +153,8 @@ public:
         // Release previous frame if any
         m_duplication->ReleaseFrame();
         
-        // Try to acquire next frame (with timeout)
-        HRESULT hr = m_duplication->AcquireNextFrame(16, &frameInfo, &desktopResource);
+        // Try to acquire next frame (minimal timeout for lower latency)
+        HRESULT hr = m_duplication->AcquireNextFrame(0, &frameInfo, &desktopResource);
         
         if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
             return false;  // No new frame available
@@ -314,6 +315,7 @@ private:
 void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
     auto& ctx = AppContext::getInstance();
     
+    
     // Initialize GPU capture
     GPUCapture gpuCapture(CAPTURE_WIDTH, CAPTURE_HEIGHT);
     if (!gpuCapture.Initialize()) {
@@ -358,10 +360,15 @@ void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
             lastFrameTime = currentTime;
             
             // Execute pipeline (detection, tracking, mouse movement)
-            if (ctx.use_cuda_graph && pipeline && pipeline->isGraphReady()) {
-                pipeline->executeGraph();
-            } else if (pipeline) {
-                pipeline->executeDirect();
+            {
+                PERF_TIMER("Pipeline_Total");
+                if (ctx.use_cuda_graph && pipeline && pipeline->isGraphReady()) {
+                    PERF_TIMER("Pipeline_Graph");
+                    pipeline->executeGraph();
+                } else if (pipeline) {
+                    PERF_TIMER("Pipeline_Direct");
+                    pipeline->executeDirect();
+                }
             }
             
             // Calculate FPS
