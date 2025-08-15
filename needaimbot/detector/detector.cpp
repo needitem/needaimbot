@@ -149,12 +149,7 @@ Detector::~Detector()
         if (stream) {
             cudaStreamSynchronize(stream);
         }
-        if (preprocessStream) {
-            cudaStreamSynchronize(preprocessStream);
-        }
-        if (postprocessStream) {
-            cudaStreamSynchronize(postprocessStream);
-        }
+        // Streams will be synchronized in destructor if needed
         
         // 2. 이벤트 정리 (스트림보다 먼저)
         if (m_preprocessDone) {
