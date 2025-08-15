@@ -5,6 +5,7 @@
 #include "draw_settings.h"
 #include "ui_helpers.h"
 #include "cuda/simple_cuda_mat.h"
+#include "../detector/detector.h"
 #include <d3d11.h>
 
 extern ID3D11ShaderResourceView* bodyTexture;
@@ -380,8 +381,12 @@ void renderOffsetTab()
                 return;
             }
             
-            // Debug frame preview removed - not implemented
-            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Frame preview not available");
+            // Get current frame from detector and upload it
+            if (ctx.detector && !ctx.detector->currentFrame.empty()) {
+                uploadDebugFrame(ctx.detector->currentFrame);
+            } else {
+                ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Waiting for frame...");
+            }
         } catch (const std::exception& e) {
             ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Error uploading frame: %s", e.what());
             UIHelpers::EndSettingsSection();

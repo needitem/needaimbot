@@ -648,13 +648,35 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
             // Ensure center is calculated
             h_target.updateCenter();
             
+            // Apply head/body offset to target center
+            float targetCenterX = h_target.center_x;
+            float targetCenterY;
+            
+            // Find head class ID from class_settings
+            int head_class_id = -1;
+            for(const auto& cs : ctx.config.class_settings) {
+                if (cs.name == ctx.config.head_class_name) {
+                    head_class_id = cs.id;
+                    break;
+                }
+            }
+            
+            // Check if this is a head or body target and apply appropriate offset
+            if (h_target.classId == head_class_id) {
+                // Head target - apply head offset
+                targetCenterY = h_target.y + h_target.height * ctx.config.head_y_offset;
+            } else {
+                // Body target - apply body offset  
+                targetCenterY = h_target.y + h_target.height * ctx.config.body_y_offset;
+            }
+            
             // Calculate mouse movement with simple percentage approach
             float screenCenterX = ctx.config.detection_resolution / 2.0f;
             float screenCenterY = ctx.config.detection_resolution / 2.0f;
             
             // Calculate error (distance from center)
-            float error_x = h_target.center_x - screenCenterX;
-            float error_y = h_target.center_y - screenCenterY;
+            float error_x = targetCenterX - screenCenterX;
+            float error_y = targetCenterY - screenCenterY;
             
             
             // Apply movement factor (move only a percentage of the error)
