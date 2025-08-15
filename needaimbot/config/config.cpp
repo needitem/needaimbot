@@ -64,6 +64,7 @@ bool Config::loadConfig(const std::string& filename)
         capture_cursor = false;  // Disabled for better performance
  
         target_fps = 120.0f;
+        gpu_capture_method = 0;  // Default to Desktop Duplication
         capture_method = "simple";
         
         // NDI capture defaults
@@ -262,7 +263,9 @@ bool Config::loadConfig(const std::string& filename)
     capture_borders = get_bool_ini("Capture", "capture_borders", true);
     capture_cursor = get_bool_ini("Capture", "capture_cursor", true);
     target_fps = static_cast<float>(get_double_ini("Capture", "target_fps", 120.0));
+    gpu_capture_method = get_long_ini("Capture", "gpu_capture_method", 0);  // 0 = Desktop Duplication (default)
     capture_method = get_string_ini("Capture", "capture_method", "simple");
+    std::cout << "[Config] Loaded gpu_capture_method: " << gpu_capture_method << std::endl;
     std::cout << "[Config] Loaded capture_method: " << capture_method << std::endl;
     
     // NDI capture settings
@@ -533,6 +536,7 @@ bool Config::saveConfig(const std::string& filename)
     file << "capture_cursor = " << (capture_cursor ? "true" : "false") << "\n";
     
     file << "target_fps = " << target_fps << "\n";
+    file << "gpu_capture_method = " << gpu_capture_method << "\n";
     file << "capture_method = " << capture_method << "\n";
     file << "ndi_source_name = " << ndi_source_name << "\n";
     file << "ndi_network_url = " << ndi_network_url << "\n";

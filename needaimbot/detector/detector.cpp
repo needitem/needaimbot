@@ -756,12 +756,15 @@ void Detector::processFrame(const SimpleCudaMat& frame)
 
     // Use existing multi-stream approach
     // Lock-free frame transfer
+    
+    // Always update currentFrame for preview, even if inference is busy
+    currentFrame = frame.clone();
+    
     // Skip if previous frame still processing (frame drop for low latency)
     if (frameReady.load(std::memory_order_acquire)) {
         return; // Skip frame if inference slower than capture
     }
     
-    currentFrame = frame.clone();
     frameIsGpu.store(true, std::memory_order_release);
     frameReady.store(true, std::memory_order_release);
     
