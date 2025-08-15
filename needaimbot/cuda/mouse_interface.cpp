@@ -11,10 +11,6 @@ namespace needaimbot {
 namespace cuda {
 
 void executeMouseMovementFromGPU(int dx, int dy) {
-    // Log dx/dy values
-    if (dx != 0 || dy != 0) {
-        std::cout << "dx: " << dx << ", dy: " << dy << std::endl;
-    }
     // Call the actual mouse movement function
     executeMouseMovement(dx, dy);
 }
