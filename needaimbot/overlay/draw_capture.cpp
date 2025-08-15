@@ -97,37 +97,33 @@ static void draw_capture_behavior_settings()
     
     UIHelpers::CompactSpacer();
     
-    const char* capture_methods[] = { "Simple (BitBlt)", "Windows Graphics Capture", "Virtual Camera", "NDI Stream" };
+    const char* capture_methods[] = { 
+        "Desktop Duplication (Full GPU)", 
+        "Virtual Camera (OBS/XSplit)",
+        "OBS Game Hook (Ultra Low Latency)"
+    };
     
-    // Always initialize from config
-    int current_method = 0;
-    if (ctx.config.capture_method == "simple") current_method = 0;
-    else if (ctx.config.capture_method == "wingraphics") current_method = 1;
-    else if (ctx.config.capture_method == "virtual_camera") current_method = 2;
-    else if (ctx.config.capture_method == "ndi") current_method = 3;
+    // Initialize from config
+    int current_method = ctx.config.gpu_capture_method;
     
     // Debug log
     static bool logged = false;
     if (!logged) {
-        std::cout << "[UI] Current capture_method from config: " << ctx.config.capture_method << " -> index: " << current_method << std::endl;
+        std::cout << "[UI] Current gpu_capture_method from config: " << current_method << std::endl;
         logged = true;
     }
     
     int previous_method = current_method;
     UIHelpers::CompactCombo("Capture Method", &current_method, capture_methods, IM_ARRAYSIZE(capture_methods));
-    UIHelpers::InfoTooltip("Simple: Fast BitBlt screen capture (CPU-based, stable performance)\nWindows Graphics Capture: Modern GPU-accelerated API with direct CUDA interop (Windows 10 1903+)\nVirtual Camera: 2PC setup via virtual camera devices\nNDI Stream: Network video streaming for 2PC setup");
+    UIHelpers::InfoTooltip("Desktop Duplication: Captures full screen then crops to target area (current method)\nRegion Capture: Directly captures only the target region using Windows Graphics Capture API (Windows 10 1903+)\n\nRegion Capture uses less GPU memory and may have better performance.");
     
     // Check if the value actually changed
     if (current_method != previous_method)
     {
-        std::string old_method = ctx.config.capture_method;
-        if (current_method == 0) ctx.config.capture_method = "simple";
-        else if (current_method == 1) ctx.config.capture_method = "wingraphics";
-        else if (current_method == 2) ctx.config.capture_method = "virtual_camera";
-        else if (current_method == 3) ctx.config.capture_method = "ndi";
-        
-        std::cout << "[UI] Capture method changed from " << old_method << " to " << ctx.config.capture_method << std::endl;
-        SAVE_PROFILE();
+        ctx.config.gpu_capture_method = current_method;  // Save to config
+        ctx.capture_method.store(current_method);  // Update runtime value
+        std::cout << "[UI] GPU capture method changed from " << previous_method << " to " << current_method << std::endl;
+        SAVE_PROFILE();  // This will save to file
         ctx.capture_method_changed = true;
     }
     

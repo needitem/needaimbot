@@ -19,6 +19,10 @@
 #include "../cuda/unified_graph_pipeline.h"
 #include "../core/performance_monitor.h"
 
+// Include capture headers
+// #include "virtual_camera_capture.h"  // Commented out - incomplete implementation
+// #include "obs_game_capture.h"        // Commented out - incomplete implementation
+
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
 
@@ -83,12 +87,18 @@ public:
     }
     
     bool Initialize() {
+        std::cout << "[GPUCapture::Initialize] Starting initialization..." << std::endl;
+        
         // 1. Initialize DXGI and create device
+        std::cout << "[GPUCapture::Initialize] Initializing DXGI..." << std::endl;
         if (!InitializeDXGI()) {
+            std::cerr << "[GPUCapture::Initialize] ERROR: Failed to initialize DXGI!" << std::endl;
             return false;
         }
+        std::cout << "[GPUCapture::Initialize] DXGI initialized successfully" << std::endl;
         
         // 2. Setup Desktop Duplication
+        std::cout << "[GPUCapture::Initialize] Setting up Desktop Duplication..." << std::endl;
         ComPtr<IDXGIDevice> dxgiDevice;
         m_device->QueryInterface(IID_PPV_ARGS(&dxgiDevice));
         
@@ -96,16 +106,25 @@ public:
         dxgiDevice->GetAdapter(&adapter);
         
         ComPtr<IDXGIOutput> output;
-        adapter->EnumOutputs(0, &output);
+        HRESULT hr = adapter->EnumOutputs(0, &output);
+        if (FAILED(hr)) {
+            std::cerr << "[GPUCapture::Initialize] ERROR: Failed to enumerate outputs: 0x" << std::hex << hr << std::endl;
+            return false;
+        }
         
         ComPtr<IDXGIOutput1> output1;
         output->QueryInterface(IID_PPV_ARGS(&output1));
         
-        HRESULT hr = output1->DuplicateOutput(m_device.Get(), &m_duplication);
+        hr = output1->DuplicateOutput(m_device.Get(), &m_duplication);
         if (FAILED(hr)) {
-            std::cerr << "[GPUCapture] Failed to duplicate output: " << std::hex << hr << std::endl;
+            std::cerr << "[GPUCapture::Initialize] ERROR: Failed to duplicate output: 0x" << std::hex << hr << std::endl;
+            std::cerr << "[GPUCapture::Initialize] Common error codes:" << std::endl;
+            std::cerr << "  E_ACCESSDENIED (0x80070005): Another process already using Desktop Duplication" << std::endl;
+            std::cerr << "  DXGI_ERROR_NOT_CURRENTLY_AVAILABLE (0x887A0022): Desktop Duplication not available" << std::endl;
+            std::cerr << "  DXGI_ERROR_UNSUPPORTED (0x887A0004): Feature not supported" << std::endl;
             return false;
         }
+        std::cout << "[GPUCapture::Initialize] Desktop Duplication created successfully" << std::endl;
         
         // 3. Create staging texture for CUDA interop
         D3D11_TEXTURE2D_DESC desc = {};
@@ -151,16 +170,25 @@ public:
         ComPtr<IDXGIResource> desktopResource;
         
         // Release previous frame if any
-        m_duplication->ReleaseFrame();
+        HRESULT releaseHr = m_duplication->ReleaseFrame();
         
-        // Try to acquire next frame (minimal timeout for lower latency)
-        HRESULT hr = m_duplication->AcquireNextFrame(0, &frameInfo, &desktopResource);
+        // Try to acquire next frame (100ms timeout to wait for changes)
+        HRESULT hr = m_duplication->AcquireNextFrame(100, &frameInfo, &desktopResource);
         
         if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
+            // Log occasionally to debug
+            static int timeoutCount = 0;
+            timeoutCount++;
+            if (timeoutCount % 1000 == 0) {
+                std::cout << "[GPUCapture] Timeout waiting for frame (count: " << timeoutCount << ")" << std::endl;
+            }
             return false;  // No new frame available
         }
         
-        if (FAILED(hr)) {
+        if (hr == DXGI_ERROR_ACCESS_LOST) {
+            std::cerr << "[GPUCapture::WaitForNextFrame] Access lost, need to recreate duplication" << std::endl;
+        } else if (FAILED(hr)) {
+            std::cerr << "[GPUCapture::WaitForNextFrame] AcquireNextFrame failed: 0x" << std::hex << hr << std::dec << std::endl;
             // Recreate duplication on error
             m_duplication.Reset();
             
@@ -311,17 +339,12 @@ private:
     }
 };
 
-// GPU capture thread function
-void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
+// Removed RegionCapture - using Virtual Camera or OBS Hook instead
+/*
+void runRegionCaptureLoop(RegionCapture* regionCapture, int CAPTURE_WIDTH, int CAPTURE_HEIGHT, bool deleteOnExit = true) {
     auto& ctx = AppContext::getInstance();
     
-    
-    // Initialize GPU capture
-    GPUCapture gpuCapture(CAPTURE_WIDTH, CAPTURE_HEIGHT);
-    if (!gpuCapture.Initialize()) {
-        std::cerr << "[GPUCapture] Failed to initialize" << std::endl;
-        return;
-    }
+    std::cout << "[RegionCapture] Starting capture loop with resolution: " << CAPTURE_WIDTH << "x" << CAPTURE_HEIGHT << std::endl;
     
     // Set thread priority
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
@@ -331,20 +354,391 @@ void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
     auto lastFpsTime = std::chrono::steady_clock::now();
     auto lastFrameTime = std::chrono::steady_clock::now();
     
+    // Get pipeline instance
+    auto& pipelineManager = needaimbot::PipelineManager::getInstance();
+    auto* pipeline = pipelineManager.getPipeline();
+    
+    if (!pipeline) {
+        std::cerr << "[RegionCapture] ERROR: Pipeline not initialized!" << std::endl;
+        regionCapture->StopCapture();
+        return;
+    }
+    
+    // Set CUDA resource in pipeline
+    pipeline->setInputTexture(regionCapture->GetCudaResource());
+    
+    // Main capture loop
+    while (!ctx.should_exit) {
+        // Check for resolution changes
+        if (ctx.detection_resolution_changed.load()) {
+            std::cout << "[RegionCapture] Resolution changed, restarting capture..." << std::endl;
+            regionCapture->StopCapture();
+            
+            // Update with new resolution
+            int newResolution = ctx.config.detection_resolution;
+            delete regionCapture;
+            regionCapture = new RegionCapture(newResolution, newResolution);
+            
+            if (!regionCapture->Initialize() || !regionCapture->StartCapture()) {
+                std::cerr << "[RegionCapture] Failed to restart with new resolution" << std::endl;
+                break;
+            }
+            
+            pipeline->setInputTexture(regionCapture->GetCudaResource());
+            ctx.detection_resolution_changed.store(false);
+        }
+        
+        // Check for offset changes
+        if (ctx.crosshair_offset_changed.load()) {
+            std::cout << "[RegionCapture] Offset changed, restarting capture..." << std::endl;
+            regionCapture->StopCapture();
+            
+            // Restart capture with new offset
+            if (!regionCapture->StartCapture()) {
+                std::cerr << "[RegionCapture] Failed to restart with new offset" << std::endl;
+                break;
+            }
+            
+            ctx.crosshair_offset_changed.store(false);
+        }
+        
+        // Wait for next frame
+        bool frameAvailable = regionCapture->WaitForNextFrame();
+        
+        if (frameAvailable) {
+            frameCount++;
+            
+            // Log every 100 frames
+            if (frameCount % 100 == 0) {
+                std::cout << "[RegionCapture] Captured frame #" << frameCount << std::endl;
+            }
+            
+            // Measure frame interval
+            auto currentTime = std::chrono::steady_clock::now();
+            auto frameDelta = std::chrono::duration<float, std::milli>(currentTime - lastFrameTime).count();
+            lastFrameTime = currentTime;
+            
+            // Execute pipeline (detection, tracking, mouse movement)
+            {
+                PERF_TIMER("Pipeline_Total");
+                if (ctx.use_cuda_graph && pipeline && pipeline->isGraphReady()) {
+                    PERF_TIMER("Pipeline_Graph");
+                    std::cout << "[RegionCapture] Executing CUDA Graph pipeline" << std::endl;
+                    pipeline->executeGraph();
+                } else if (pipeline) {
+                    PERF_TIMER("Pipeline_Direct");
+                    if (frameCount <= 10) {
+                        std::cout << "[RegionCapture] Executing Direct pipeline for frame #" << frameCount << std::endl;
+                    }
+                    pipeline->executeDirect();
+                }
+            }
+        } else {
+            // Log when no frame is available
+            static int noFrameCount = 0;
+            noFrameCount++;
+            if (noFrameCount % 100 == 0) {
+                std::cout << "[RegionCapture] No frame available (count: " << noFrameCount << ")" << std::endl;
+            }
+            
+            // Calculate FPS
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration<float>(now - lastFpsTime).count();
+            if (elapsed >= 1.0f) {
+                float fps = frameCount / elapsed;
+                ctx.g_current_capture_fps.store(fps);
+                frameCount = 0;
+                lastFpsTime = now;
+            }
+        }
+        
+        // Check for configuration changes
+        if (ctx.capture_method_changed.load()) {
+            std::cout << "[RegionCapture] Capture method changed detected! New method: " << ctx.capture_method.load() << std::endl;
+            ctx.capture_method_changed.store(false);
+            
+            if (ctx.capture_method.load() != 1) {
+                // User switched to Desktop Duplication
+                std::cout << "[RegionCapture] Switching to Desktop Duplication mode, exiting Region Capture loop..." << std::endl;
+                break;
+            }
+        }
+        
+        // Check exit signal
+        if (ctx.should_exit) {
+            break;
+        }
+    }
+    
+    // Cleanup
+    regionCapture->StopCapture();
+    
+    // Check if we need to restart with Desktop Duplication
+    if (ctx.capture_method.load() == 0 && !ctx.should_exit) {
+        std::cout << "[RegionCapture] Restarting with Desktop Duplication mode..." << std::endl;
+        
+        // Delete is handled in the calling function if deleteOnExit is false
+        if (deleteOnExit) {
+            delete regionCapture;
+        }
+        
+        // Recursively call ourselves to restart with new capture method
+        gpuOnlyCaptureThread(CAPTURE_WIDTH, CAPTURE_HEIGHT);
+        return;
+    }
+    
+    if (deleteOnExit) {
+        delete regionCapture;
+    }
+}
+*/
+
+// GPU capture thread function
+void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
+    auto& ctx = AppContext::getInstance();
+    
+    std::cout << "[Capture] Starting capture thread with resolution: " << CAPTURE_WIDTH << "x" << CAPTURE_HEIGHT << std::endl;
+    std::cout << "[Capture] Capture method selected: " << ctx.capture_method.load() 
+              << " (0=Desktop Duplication, 1=Virtual Camera, 2=OBS Hook)" << std::endl;
+    
+    // Choose capture method based on user selection
+    if (ctx.capture_method.load() == 1) {
+        // Virtual Camera capture - currently disabled (incomplete implementation)
+        std::cerr << "[Capture] Virtual Camera capture is not available in this build" << std::endl;
+        return;  // Exit without fallback
+        /*
+        // Use Virtual Camera (OBS Virtual Camera or similar)
+        std::cout << "[Capture] Using Virtual Camera capture..." << std::endl;
+        
+        VirtualCameraCapture* virtualCapture = new VirtualCameraCapture(CAPTURE_WIDTH, CAPTURE_HEIGHT);
+        
+        // Try different virtual camera names
+        std::vector<std::string> cameraNames = {
+            "OBS Virtual Camera",
+            "OBS-Camera",
+            "OBS",
+            "Virtual Camera",
+            "XSplit VCam",
+            "ManyCam"
+        };
+        
+        bool initialized = false;
+        for (const auto& cameraName : cameraNames) {
+            std::cout << "[Capture] Trying to connect to: " << cameraName << std::endl;
+            if (virtualCapture->Initialize(cameraName)) {
+                initialized = true;
+                std::cout << "[Capture] Successfully connected to: " << cameraName << std::endl;
+                break;
+            }
+        }
+        
+        if (!initialized) {
+            std::cerr << "[Capture] Failed to initialize any virtual camera, falling back to Desktop Duplication" << std::endl;
+            delete virtualCapture;
+            ctx.capture_method.store(0);  // Fall back to Desktop Duplication
+        } else {
+            // Start virtual camera capture
+            if (virtualCapture->StartCapture()) {
+                std::cout << "[VirtualCamera] Capture started, entering main loop..." << std::endl;
+                
+                // Get pipeline instance
+                auto& pipelineManager = needaimbot::PipelineManager::getInstance();
+                auto* pipeline = pipelineManager.getPipeline();
+                
+                if (!pipeline) {
+                    std::cerr << "[VirtualCamera] Pipeline not initialized" << std::endl;
+                    virtualCapture->StopCapture();
+                    delete virtualCapture;
+                    return;
+                }
+                
+                // Set CUDA resource in pipeline
+                pipeline->setInputTexture(virtualCapture->GetCudaResource());
+                
+                // Main capture loop
+                int frameCount = 0;
+                auto lastFpsTime = std::chrono::steady_clock::now();
+                
+                while (!ctx.should_exit) {
+                    // Check for capture method change
+                    if (ctx.capture_method_changed.load()) {
+                        std::cout << "[VirtualCamera] Capture method changed, exiting virtual camera mode..." << std::endl;
+                        ctx.capture_method_changed.store(false);
+                        break;
+                    }
+                    
+                    // Wait for next frame
+                    bool frameAvailable = virtualCapture->WaitForNextFrame();
+                    
+                    if (frameAvailable) {
+                        frameCount++;
+                        
+                        // Execute pipeline
+                        if (ctx.use_cuda_graph && pipeline && pipeline->isGraphReady()) {
+                            pipeline->executeGraph();
+                        } else if (pipeline) {
+                            pipeline->executeDirect();
+                        }
+                        
+                        // Calculate FPS
+                        auto now = std::chrono::steady_clock::now();
+                        auto elapsed = std::chrono::duration<float>(now - lastFpsTime).count();
+                        if (elapsed >= 1.0f) {
+                            float fps = frameCount / elapsed;
+                            ctx.g_current_capture_fps.store(fps);
+                            std::cout << "[VirtualCamera] FPS: " << fps << std::endl;
+                            frameCount = 0;
+                            lastFpsTime = now;
+                        }
+                    }
+                    
+                    // Small sleep to prevent busy waiting
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
+                
+                virtualCapture->StopCapture();
+            } else {
+                std::cerr << "[VirtualCamera] Failed to start capture" << std::endl;
+            }
+            delete virtualCapture;
+            return;
+        }
+        */
+    }
+    
+    // Check for OBS Hook mode
+    if (ctx.capture_method.load() == 2) {
+        // OBS Game Capture Hook - currently disabled (incomplete implementation)
+        std::cerr << "[Capture] OBS Game Capture Hook is not available in this build" << std::endl;
+        return;  // Exit without fallback
+        /*
+        // Use OBS Game Capture Hook
+        std::cout << "[Capture] Using OBS Game Capture Hook..." << std::endl;
+        
+        // Get game name from config (you'll need to add this to config)
+        std::string gameName = ctx.config.game_window_name;
+        if (gameName.empty()) {
+            gameName = "Apex Legends";  // Default game name
+        }
+        
+        OBSGameCapture* obsCapture = new OBSGameCapture(CAPTURE_WIDTH, CAPTURE_HEIGHT, gameName);
+        
+        if (!obsCapture->Initialize()) {
+            std::cerr << "[Capture] Failed to initialize OBS hook, falling back to Desktop Duplication" << std::endl;
+            delete obsCapture;
+            ctx.capture_method.store(0);
+        } else {
+            // Start OBS hook capture
+            if (obsCapture->StartCapture()) {
+                std::cout << "[OBSGameCapture] Hook started, entering main loop..." << std::endl;
+                
+                // Get pipeline instance
+                auto& pipelineManager = needaimbot::PipelineManager::getInstance();
+                auto* pipeline = pipelineManager.getPipeline();
+                
+                if (!pipeline) {
+                    std::cerr << "[OBSGameCapture] Pipeline not initialized" << std::endl;
+                    obsCapture->StopCapture();
+                    delete obsCapture;
+                    return;
+                }
+                
+                // Set CUDA resource in pipeline
+                pipeline->setInputTexture(obsCapture->GetCudaResource());
+                
+                // Main capture loop
+                int frameCount = 0;
+                auto lastFpsTime = std::chrono::steady_clock::now();
+                
+                while (!ctx.should_exit) {
+                    // Check for capture method change
+                    if (ctx.capture_method_changed.load()) {
+                        std::cout << "[OBSGameCapture] Capture method changed, exiting OBS hook mode..." << std::endl;
+                        ctx.capture_method_changed.store(false);
+                        break;
+                    }
+                    
+                    // Wait for next frame
+                    bool frameAvailable = obsCapture->WaitForNextFrame();
+                    
+                    if (frameAvailable) {
+                        frameCount++;
+                        
+                        // Execute pipeline
+                        if (ctx.use_cuda_graph && pipeline && pipeline->isGraphReady()) {
+                            pipeline->executeGraph();
+                        } else if (pipeline) {
+                            pipeline->executeDirect();
+                        }
+                        
+                        // Calculate FPS
+                        auto now = std::chrono::steady_clock::now();
+                        auto elapsed = std::chrono::duration<float>(now - lastFpsTime).count();
+                        if (elapsed >= 1.0f) {
+                            float fps = frameCount / elapsed;
+                            ctx.g_current_capture_fps.store(fps);
+                            std::cout << "[OBSGameCapture] FPS: " << fps << std::endl;
+                            frameCount = 0;
+                            lastFpsTime = now;
+                        }
+                    }
+                    
+                    // Small sleep to prevent busy waiting
+                    std::this_thread::sleep_for(std::chrono::microseconds(100));
+                }
+                
+                obsCapture->StopCapture();
+            } else {
+                std::cerr << "[OBSGameCapture] Failed to start capture" << std::endl;
+            }
+            delete obsCapture;
+            return;
+        }
+        */
+    }
+    
+    // Use Desktop Duplication (default)
+    std::cout << "[Capture] Using Desktop Duplication API..." << std::endl;
+    GPUCapture gpuCapture(CAPTURE_WIDTH, CAPTURE_HEIGHT);
+    if (!gpuCapture.Initialize()) {
+        std::cerr << "[GPUCapture] Failed to initialize Desktop Duplication" << std::endl;
+        return;
+    }
+    std::cout << "[GPUCapture] Desktop Duplication initialized successfully" << std::endl;
+    
+    // Set thread priority
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
+    
+    // FPS counter
+    int frameCount = 0;
+    auto lastFpsTime = std::chrono::steady_clock::now();
+    auto lastFrameTime = std::chrono::steady_clock::now();
+    
+    // START CAPTURE - THIS WAS MISSING!
     gpuCapture.StartCapture();
+    std::cout << "[GPUCapture] Capture started!" << std::endl;
     
     // Get pipeline instance
     auto& pipelineManager = needaimbot::PipelineManager::getInstance();
     auto* pipeline = pipelineManager.getPipeline();
     
     if (!pipeline) {
-        std::cerr << "[GPUCapture] Pipeline not initialized" << std::endl;
+        std::cerr << "[GPUCapture] ERROR: Pipeline not initialized!" << std::endl;
         gpuCapture.StopCapture();
         return;
     }
+    std::cout << "[GPUCapture] Pipeline found and ready" << std::endl;
     
     // Set CUDA resource in pipeline
     pipeline->setInputTexture(gpuCapture.GetCudaResource());
+    std::cout << "[GPUCapture] CUDA resource set in pipeline" << std::endl;
+    
+    std::cout << "[GPUCapture] Starting main capture loop..." << std::endl;
+    
+    // Debug counter
+    int debugCounter = 0;
+    int noFrameCounter = 0;
+    int totalFrameCount = 0;  // Total frame count for debugging
     
     // Main capture loop
     while (!ctx.should_exit) {
@@ -353,6 +747,10 @@ void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
         
         if (frameAvailable) {
             frameCount++;
+            totalFrameCount++;
+            
+            // Log every 100th frame
+            // Removed frame count logging for cleaner output
             
             // Measure frame interval
             auto currentTime = std::chrono::steady_clock::now();
@@ -371,20 +769,34 @@ void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
                 }
             }
             
-            // Calculate FPS
+            // Calculate FPS (internal tracking only)
             auto now = std::chrono::steady_clock::now();
             auto elapsed = std::chrono::duration<float>(now - lastFpsTime).count();
             if (elapsed >= 1.0f) {
                 float fps = frameCount / elapsed;
                 ctx.g_current_capture_fps.store(fps);
+                // Removed FPS logging for cleaner output
                 frameCount = 0;
                 lastFpsTime = now;
+            }
+        } else {
+            noFrameCounter++;
+            // Log every 1000 attempts without frame
+            if (noFrameCounter % 1000 == 0) {
+                std::cout << "[GPUCapture] No frame available (attempt #" << noFrameCounter << ")" << std::endl;
             }
         }
         
         // Check for configuration changes
         if (ctx.capture_method_changed.load()) {
+            std::cout << "[GPUCapture] Capture method changed detected! New method: " << ctx.capture_method.load() << std::endl;
             ctx.capture_method_changed.store(false);
+            
+            // If changed to Region Capture, need to exit this loop and restart
+            if (ctx.capture_method.load() == 1) {
+                std::cout << "[GPUCapture] Switching to Region Capture mode, exiting Desktop Duplication loop..." << std::endl;
+                break;  // Exit the loop to restart with new capture method
+            }
         }
         
         // Check exit signal
@@ -395,4 +807,12 @@ void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
     
     // Cleanup
     gpuCapture.StopCapture();
+    
+    // Check if we need to restart with different capture method
+    if (ctx.capture_method.load() == 1 && !ctx.should_exit) {
+        std::cout << "[GPUCapture] Restarting with Region Capture mode..." << std::endl;
+        
+        // Recursively call ourselves to restart with new capture method
+        gpuOnlyCaptureThread(CAPTURE_WIDTH, CAPTURE_HEIGHT);
+    }
 }

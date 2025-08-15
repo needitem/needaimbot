@@ -345,12 +345,17 @@ int main()
             nullptr,
             nullptr);
 
+        // Initialize InputMethod once and share it between threads
+        auto inputMethod = initializeInputMethod();
+        
         ctx.mouseThread = &mouseThread;
-        ctx.mouseThread->setInputMethod(initializeInputMethod());
+        ctx.mouseThread->setInputMethod(std::move(inputMethod));
         
         // Initialize and start Recoil Control Thread
         RecoilControlThread recoilThread;
-        recoilThread.setInputMethod(initializeInputMethod());
+        // Note: RecoilThread should share the same input method or use a different approach
+        // For now, we'll let it use Win32 fallback since Arduino doesn't support multiple connections
+        recoilThread.setInputMethod(std::make_unique<Win32InputMethod>());
         recoilThread.setEnabled(true);
         recoilThread.start();
         std::cout << "[MAIN] Recoil Control Thread started" << std::endl;

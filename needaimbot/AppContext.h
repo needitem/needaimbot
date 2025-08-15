@@ -71,6 +71,9 @@ public:
     std::atomic<bool> capture_method_changed{false};
     std::atomic<bool> crosshair_offset_changed{false};
     
+    // Capture method selection (0 = Desktop Duplication, 1 = Region Capture)
+    std::atomic<int> capture_method{0};
+    
     // Performance metrics
     std::atomic<float> g_current_frame_acquisition_time_ms{0.0f};
     std::atomic<float> g_current_capture_fps{0.0f};
@@ -162,6 +165,9 @@ private:
         // Initialize capture buffers
         captureGpuBuffer.resize(4); // Use literal instead of FRAME_BUFFER_COUNT to avoid circular include
         captureCpuBuffer.resize(4);
+        
+        // Initialize capture_method from config after config is loaded
+        capture_method.store(config.gpu_capture_method);
     }
 };
 

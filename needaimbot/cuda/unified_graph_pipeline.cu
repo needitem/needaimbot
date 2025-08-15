@@ -752,9 +752,16 @@ bool UnifiedGraphPipeline::updateGraph(cudaStream_t stream) {
 }
 
 bool UnifiedGraphPipeline::executeDirect(cudaStream_t stream) {
+    static int executeCount = 0;
+    executeCount++;
+    
+    if (executeCount <= 10 || executeCount % 100 == 0) {
+        std::cout << "[UnifiedGraph::executeDirect] Call #" << executeCount << std::endl;
+    }
+    
     // Use multi-stream coordinator for optimal performance
     if (!m_coordinator) {
-        std::cerr << "[UnifiedGraph] Coordinator not initialized" << std::endl;
+        std::cerr << "[UnifiedGraph] ERROR: Coordinator not initialized!" << std::endl;
         return false;
     }
     

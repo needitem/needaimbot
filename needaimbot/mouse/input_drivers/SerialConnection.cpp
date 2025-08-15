@@ -53,7 +53,8 @@ SerialConnection::SerialConnection(const std::string& port, unsigned int baud_ra
             throw std::runtime_error("Failed to initialize serial connection to " + port_name_);
         }
         
-        std::cout << "[Arduino] Connected! PORT: " << port_name_ 
+        // 성공한 경우에만 메시지 출력
+        std::cout << "[Arduino] Successfully connected to PORT: " << port_name_ 
                   << " (Native Windows API - Ultra Low Latency)" << std::endl;
         
     } catch (const std::exception& e) {
@@ -277,24 +278,40 @@ bool SerialConnection::openPort()
 {
     std::string full_port = "\\\\.\\" + port_name_;
     
-    // 첫 번째 시도: 독점 액세스 (기존 방식)
-    serial_handle_ = CreateFileA(
-        full_port.c_str(),
-        GENERIC_READ | GENERIC_WRITE,
-        0,                         // 독점 액세스
-        NULL,
-        OPEN_EXISTING,
-        FILE_ATTRIBUTE_NORMAL,
-        NULL
-    );
-
-    if (serial_handle_ == INVALID_HANDLE_VALUE) {
-        DWORD error = GetLastError();
+    // 포트 열기 재시도 로직
+    const int MAX_OPEN_ATTEMPTS = 3;
+    DWORD last_error = 0;
+    
+    for (int attempt = 0; attempt < MAX_OPEN_ATTEMPTS; ++attempt) {
+        if (attempt > 0) {
+            std::cout << "[Arduino] Retry attempt " << attempt << " to open port..." << std::endl;
+            Sleep(500); // 재시도 전 대기
+        }
         
-        if (error == ERROR_ACCESS_DENIED || error == ERROR_SHARING_VIOLATION) {
-            std::cout << "[Arduino] Port in use, trying shared access..." << std::endl;
+        // 첫 번째 시도: 독점 액세스 (기존 방식)
+        serial_handle_ = CreateFileA(
+            full_port.c_str(),
+            GENERIC_READ | GENERIC_WRITE,
+            0,                         // 독점 액세스
+            NULL,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            NULL
+        );
+
+        if (serial_handle_ != INVALID_HANDLE_VALUE) {
+            std::cout << "[Arduino] Port opened successfully (exclusive access)" << std::endl;
+            return true;
+        }
+        
+        last_error = GetLastError();
+        
+        // ERROR_ACCESS_DENIED (5) 또는 ERROR_SHARING_VIOLATION 처리
+        if (last_error == ERROR_ACCESS_DENIED || last_error == ERROR_SHARING_VIOLATION) {
+            std::cout << "[Arduino] Port appears to be in use (Error " << last_error 
+                      << "), trying shared access..." << std::endl;
             
-            // 두 번째 시도: 공유 액세스
+            // 공유 액세스 시도
             serial_handle_ = CreateFileA(
                 full_port.c_str(),
                 GENERIC_READ | GENERIC_WRITE,
@@ -305,21 +322,50 @@ bool SerialConnection::openPort()
                 NULL
             );
             
-            if (serial_handle_ == INVALID_HANDLE_VALUE) {
-                std::cerr << "[Arduino] Failed to open port even with shared access: " 
-                          << port_name_ << " (Error: " << GetLastError() << ")" << std::endl;
-                return false;
-            } else {
+            if (serial_handle_ != INVALID_HANDLE_VALUE) {
                 std::cout << "[Arduino] Port opened with shared access" << std::endl;
+                return true;
             }
-        } else {
-            std::cerr << "[Arduino] Unable to open port: " << port_name_ 
-                      << " (Error: " << error << ")" << std::endl;
-            return false;
+            
+            last_error = GetLastError();
+            
+            // 그래도 실패하면 다시 시도
+            if (last_error == ERROR_ACCESS_DENIED) {
+                std::cout << "[Arduino] Still access denied. Possible causes:" << std::endl;
+                std::cout << "  - Another program is using the port (Arduino IDE?)" << std::endl;
+                std::cout << "  - Need administrator privileges" << std::endl;
+                std::cout << "  - Antivirus/firewall blocking access" << std::endl;
+            }
+        } else if (last_error == ERROR_FILE_NOT_FOUND) {
+            std::cerr << "[Arduino] Port " << port_name_ << " does not exist!" << std::endl;
+            return false; // 포트가 없으면 재시도 무의미
         }
     }
-
-    return true;
+    
+    // 모든 시도 실패
+    std::cerr << "[Arduino] Failed to open port " << port_name_ 
+              << " after " << MAX_OPEN_ATTEMPTS << " attempts." << std::endl;
+    std::cerr << "[Arduino] Last error code: " << last_error << std::endl;
+    
+    // Windows 에러 코드 설명
+    switch(last_error) {
+        case ERROR_ACCESS_DENIED:
+            std::cerr << "  ERROR_ACCESS_DENIED (5): Access is denied. Try:" << std::endl;
+            std::cerr << "  1. Close Arduino IDE and Serial Monitor" << std::endl;
+            std::cerr << "  2. Run as Administrator" << std::endl;
+            std::cerr << "  3. Check if another process is using the port" << std::endl;
+            break;
+        case ERROR_SHARING_VIOLATION:
+            std::cerr << "  ERROR_SHARING_VIOLATION: Port is locked by another process" << std::endl;
+            break;
+        case ERROR_FILE_NOT_FOUND:
+            std::cerr << "  ERROR_FILE_NOT_FOUND: Port does not exist" << std::endl;
+            break;
+        default:
+            std::cerr << "  Unknown error. Check system logs." << std::endl;
+    }
+    
+    return false;
 }
 
 bool SerialConnection::configurePort()

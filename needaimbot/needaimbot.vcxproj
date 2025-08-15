@@ -21,6 +21,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="capture\gpu_capture.cpp" />
+    <ClCompile Include="capture\region_capture.cpp" />
     <ClCompile Include="config\config.cpp" />
     <ClCompile Include="detector\detector.cpp" />
     <ClCompile Include="imgui\imgui.cpp" />
@@ -102,6 +103,7 @@
     <ClInclude Include="cuda\memory_pool.h" />
     <ClInclude Include="cuda\cuda_error_check.h" />
     <ClInclude Include="capture\gpu_capture.h" />
+    <ClInclude Include="capture\region_capture.h" />
     <ClInclude Include="detector\CudaBuffer.h" />
     <ClInclude Include="config\config.h" />
     <ClInclude Include="detector\detector.h" />
