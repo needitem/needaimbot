@@ -641,7 +641,8 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
             Target h_target;
             cudaMemcpyAsync(&h_target, detections.first, sizeof(Target), 
                            cudaMemcpyDeviceToHost, stream);
-            // Removed sync - will sync only when needed
+            // MUST sync here - we need accurate target coordinates before mouse movement
+            cudaStreamSynchronize(stream);
             
             // Ensure center is calculated
             h_target.updateCenter();
@@ -890,7 +891,8 @@ bool UnifiedGraphPipeline::executeDirect(cudaStream_t stream) {
             Target h_target;
             cudaMemcpyAsync(&h_target, detections.first, sizeof(Target), 
                            cudaMemcpyDeviceToHost, stream);
-            // Removed sync - async copy is sufficient
+            // Sync needed for accurate target data
+            cudaStreamSynchronize(stream);
         }
     }
     
