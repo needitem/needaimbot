@@ -12,10 +12,6 @@
 #include <cuda_runtime.h> 
 #include "../cuda/detection/postProcess.h" 
 #include "../cuda/capture/color_conversion.h"
-#include "../tracking/ByteTracker.h"
- 
-
-
 #include <array>
 #include <atomic>
 #include <chrono>
