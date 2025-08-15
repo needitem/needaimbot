@@ -297,8 +297,16 @@ bool Config::loadConfig(const std::string& filename)
     norecoil_step = static_cast<float>(get_double_ini("Mouse", "norecoil_step", 5.0));
     norecoil_ms = static_cast<float>(get_double_ini("Mouse", "norecoil_ms", 10.0));
     mouse_sensitivity = static_cast<float>(get_double_ini("Mouse", "mouse_sensitivity", 1.0));
+    mouse_sensitivity_x = static_cast<float>(get_double_ini("Mouse", "mouse_sensitivity_x", mouse_sensitivity));
+    mouse_sensitivity_y = static_cast<float>(get_double_ini("Mouse", "mouse_sensitivity_y", mouse_sensitivity));
+    
     movement_factor = static_cast<float>(get_double_ini("Mouse", "movement_factor", 0.3));
+    movement_factor_x = static_cast<float>(get_double_ini("Mouse", "movement_factor_x", movement_factor));
+    movement_factor_y = static_cast<float>(get_double_ini("Mouse", "movement_factor_y", movement_factor));
+    
     min_movement_threshold = static_cast<float>(get_double_ini("Mouse", "min_movement_threshold", 1.0));
+    min_movement_threshold_x = static_cast<float>(get_double_ini("Mouse", "min_movement_threshold_x", min_movement_threshold));
+    min_movement_threshold_y = static_cast<float>(get_double_ini("Mouse", "min_movement_threshold_y", min_movement_threshold));
     input_method = get_string_ini("Mouse", "input_method", "WIN32");
     easynorecoil_start_delay_ms = get_long_ini("Mouse", "easynorecoil_start_delay_ms", 0);
     easynorecoil_end_delay_ms = get_long_ini("Mouse", "easynorecoil_end_delay_ms", 0);
@@ -557,8 +565,14 @@ bool Config::saveConfig(const std::string& filename)
     file << "norecoil_step = " << norecoil_step << "\n";
     file << "norecoil_ms = " << norecoil_ms << "\n";
     file << "mouse_sensitivity = " << mouse_sensitivity << "\n";
+    file << "mouse_sensitivity_x = " << mouse_sensitivity_x << "\n";
+    file << "mouse_sensitivity_y = " << mouse_sensitivity_y << "\n";
     file << "movement_factor = " << movement_factor << "\n";
+    file << "movement_factor_x = " << movement_factor_x << "\n";
+    file << "movement_factor_y = " << movement_factor_y << "\n";
     file << "min_movement_threshold = " << min_movement_threshold << "\n";
+    file << "min_movement_threshold_x = " << min_movement_threshold_x << "\n";
+    file << "min_movement_threshold_y = " << min_movement_threshold_y << "\n";
     file << std::noboolalpha;
     file << "input_method = " << input_method << "\n";
     file << std::fixed << std::setprecision(6);

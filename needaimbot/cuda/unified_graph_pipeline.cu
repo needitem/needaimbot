@@ -658,12 +658,12 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
             
             
             // Apply movement factor (move only a percentage of the error)
-            float movement_x = error_x * ctx.config.movement_factor * ctx.config.mouse_sensitivity;
-            float movement_y = error_y * ctx.config.movement_factor * ctx.config.mouse_sensitivity;
+            float movement_x = error_x * ctx.config.movement_factor_x * ctx.config.mouse_sensitivity_x;
+            float movement_y = error_y * ctx.config.movement_factor_y * ctx.config.mouse_sensitivity_y;
             
             // Apply minimum threshold
-            if (fabs(error_x) < ctx.config.min_movement_threshold) movement_x = 0;
-            if (fabs(error_y) < ctx.config.min_movement_threshold) movement_y = 0;
+            if (fabs(error_x) < ctx.config.min_movement_threshold_x) movement_x = 0;
+            if (fabs(error_y) < ctx.config.min_movement_threshold_y) movement_y = 0;
             
             int dx = static_cast<int>(movement_x);
             int dy = static_cast<int>(movement_y);

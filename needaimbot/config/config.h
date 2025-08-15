@@ -215,8 +215,6 @@ public:
 
     
     // Simple Movement Parameters
-    float movement_factor = 0.3f;          // Percentage of error to move (0.0-1.0)
-    float min_movement_threshold = 1.0f;   // Minimum pixels to trigger movement
 
     // ByteTracker parameters
     bool enable_tracking;       // Enable/disable target tracking
@@ -331,7 +329,18 @@ public:
     int kalman_max_age = 5;                // Maximum frames without detection
     
     // Mouse control settings
-    float mouse_sensitivity = 1.0f;        // Mouse movement sensitivity
+    float mouse_sensitivity = 1.0f;        // Mouse movement sensitivity (legacy - will be removed)
+    float mouse_sensitivity_x = 1.0f;      // Mouse X-axis sensitivity
+    float mouse_sensitivity_y = 1.0f;      // Mouse Y-axis sensitivity
+    
+    // Movement parameters separated for X and Y
+    float movement_factor = 0.3f;          // Legacy - will be removed
+    float movement_factor_x = 0.3f;        // X-axis movement factor (% of error per frame)
+    float movement_factor_y = 0.3f;        // Y-axis movement factor (% of error per frame)
+    
+    float min_movement_threshold = 1.0f;   // Legacy - will be removed
+    float min_movement_threshold_x = 1.0f; // X-axis minimum movement threshold (deadzone)
+    float min_movement_threshold_y = 1.0f; // Y-axis minimum movement threshold (deadzone)
 
     // Active profile management
     std::string active_profile_name = "Default";
