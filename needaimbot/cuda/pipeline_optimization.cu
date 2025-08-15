@@ -450,15 +450,8 @@ void executeOptimizedPipeline(
 {
     PipelineCoordinator* pipeline = (PipelineCoordinator*)pipelineHandle;
     
-    // Update constants for target selection
-    extern void updateTargetSelectionConstants(
-        float, float, float, float, float, int, cudaStream_t);
-    
-    updateTargetSelectionConstants(
-        centerX, centerY, scopeMultiplier,
-        0.3f, 0.5f, 0,  // head/body offsets and class ID
-        pipeline->getTargetSelectionStream()
-    );
+    // LEGACY: Target selection constants are no longer used
+    // Mouse movement calculation is now done in unified_graph_pipeline.cu
     
     // Execute the full pipeline graph
     pipeline->executePipeline();
