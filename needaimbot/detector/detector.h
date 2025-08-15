@@ -29,7 +29,7 @@
 
 
 // Forward declarations for tracking
-class ByteTracker;
+// ByteTracker removed - tracking handled by GPU pipeline
 class GPUTracker;
 struct GPUTrackingContext;
 
@@ -170,8 +170,7 @@ public:
     CudaBuffer<int> m_kalmanPredictionsCountGpu;
     bool m_kalmanGraphInitialized = false;
     
-    // ByteTracker for improved tracking with occlusion handling
-    std::unique_ptr<ByteTracker> m_byteTracker;
+    // Tracking handled by GPU pipeline
     std::unique_ptr<GPUTracker> m_gpuTracker;
 
     bool m_isTargetLocked;
