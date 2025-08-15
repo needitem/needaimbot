@@ -272,6 +272,9 @@ bool Config::loadConfig(const std::string& filename)
     ndi_source_name = get_string_ini("Capture", "ndi_source_name", "");
     ndi_network_url = get_string_ini("Capture", "ndi_network_url", "");
     ndi_low_latency = get_bool_ini("Capture", "ndi_low_latency", false);
+    
+    // OBS Hook settings
+    game_window_name = get_string_ini("Capture", "game_window_name", "Apex Legends");
 
     body_y_offset = static_cast<float>(get_double_ini("Target", "body_y_offset", 0.15));
     head_y_offset = static_cast<float>(get_double_ini("Target", "head_y_offset", 0.05));
@@ -541,6 +544,7 @@ bool Config::saveConfig(const std::string& filename)
     file << "ndi_source_name = " << ndi_source_name << "\n";
     file << "ndi_network_url = " << ndi_network_url << "\n";
     file << "ndi_low_latency = " << (ndi_low_latency ? "true" : "false") << "\n";
+    file << "game_window_name = " << game_window_name << "\n";
 
     file << "[Target]\n";
     file << std::fixed << std::setprecision(6);

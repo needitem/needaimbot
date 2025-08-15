@@ -11,6 +11,7 @@
 #include "include/other_tools.h"
 #include "draw_settings.h"
 #include "ui_helpers.h"
+#include "../utils/window_enum.h"
 
 // Monitor count is now simplified - just count all monitors
 int monitors = GetSystemMetrics(SM_CMONITORS);
@@ -128,6 +129,118 @@ static void draw_capture_behavior_settings()
     }
     
     UIHelpers::CompactSpacer();
+    
+    // Show game window selection for OBS Hook mode
+    if (current_method == 2) { // OBS Game Hook
+        UIHelpers::BeautifulText("Game Window Selection", UIHelpers::GetAccentColor());
+        UIHelpers::CompactSpacer();
+        
+        // Get list of windows
+        static std::vector<std::string> windowTitles;
+        static std::vector<const char*> windowItems;
+        static bool windowsLoaded = false;
+        static int selectedWindow = -1;
+        static char customWindowName[256] = "";
+        static bool useCustomName = false;
+        
+        // Initialize custom window name with current config value
+        static bool firstInit = true;
+        if (firstInit) {
+            strncpy_s(customWindowName, ctx.config.game_window_name.c_str(), sizeof(customWindowName) - 1);
+            firstInit = false;
+        }
+        
+        // Refresh window list button
+        if (ImGui::Button("Refresh Window List")) {
+            windowTitles = WindowEnumerator::GetWindowTitles();
+            windowItems.clear();
+            windowItems.reserve(windowTitles.size());
+            
+            // Find current selection
+            selectedWindow = -1;
+            for (size_t i = 0; i < windowTitles.size(); ++i) {
+                windowItems.push_back(windowTitles[i].c_str());
+                if (windowTitles[i] == ctx.config.game_window_name) {
+                    selectedWindow = static_cast<int>(i);
+                }
+            }
+            windowsLoaded = true;
+        }
+        
+        ImGui::SameLine();
+        UIHelpers::InfoTooltip("Click to refresh the list of available windows");
+        
+        // Load windows on first display
+        if (!windowsLoaded) {
+            windowTitles = WindowEnumerator::GetWindowTitles();
+            windowItems.clear();
+            windowItems.reserve(windowTitles.size());
+            
+            // Find current selection
+            selectedWindow = -1;
+            for (size_t i = 0; i < windowTitles.size(); ++i) {
+                windowItems.push_back(windowTitles[i].c_str());
+                if (windowTitles[i] == ctx.config.game_window_name) {
+                    selectedWindow = static_cast<int>(i);
+                }
+            }
+            windowsLoaded = true;
+        }
+        
+        // Window selection combo
+        if (!windowItems.empty()) {
+            int prev_selected = selectedWindow;
+            UIHelpers::CompactCombo("Select Window", &selectedWindow, windowItems.data(), static_cast<int>(windowItems.size()));
+            UIHelpers::InfoTooltip("Select the game window from running applications");
+            
+            if (selectedWindow != prev_selected) {
+                if (selectedWindow >= 0 && selectedWindow < static_cast<int>(windowTitles.size())) {
+                    ctx.config.game_window_name = windowTitles[selectedWindow];
+                    strncpy_s(customWindowName, windowTitles[selectedWindow].c_str(), sizeof(customWindowName) - 1);
+                    useCustomName = false;
+                    SAVE_PROFILE();
+                    std::cout << "[UI] Game window changed to: " << ctx.config.game_window_name << std::endl;
+                }
+            }
+        }
+        
+        UIHelpers::CompactSpacer();
+        
+        // Custom window name option
+        if (UIHelpers::BeautifulToggle("Use Custom Window Name", &useCustomName, "Manually enter a window title instead of selecting from the list")) {
+            if (useCustomName) {
+                selectedWindow = -1;
+            }
+        }
+        
+        if (useCustomName) {
+            if (ImGui::InputText("Window Title", customWindowName, sizeof(customWindowName))) {
+                ctx.config.game_window_name = std::string(customWindowName);
+                SAVE_PROFILE();
+                std::cout << "[UI] Game window changed to custom: " << ctx.config.game_window_name << std::endl;
+            }
+            UIHelpers::InfoTooltip("Enter the exact window title of the game you want to capture");
+        }
+        
+        UIHelpers::CompactSpacer();
+        
+        // Show current selection
+        ImGui::Text("Current Target: %s", ctx.config.game_window_name.c_str());
+        
+        // Check if window exists
+        HWND hwnd = FindWindowA(nullptr, ctx.config.game_window_name.c_str());
+        if (hwnd) {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "(Found)");
+        } else {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "(Not Found)");
+        }
+        
+        UIHelpers::CompactSpacer();
+        ImGui::Separator();
+        UIHelpers::CompactSpacer();
+    }
     
     ImGui::Columns(2, "capture_options", false);
     
