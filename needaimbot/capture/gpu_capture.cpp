@@ -1,6 +1,7 @@
 // Unified GPU Capture Implementation
 // Combines gpu_only_capture and gpu_capture_manager into a single file
 
+#include "gpu_capture.h"
 #include "../core/windows_headers.h"
 #include <d3d11_4.h>
 #include <dxgi1_5.h>
@@ -11,10 +12,15 @@
 #include <thread>
 #include <chrono>
 #include <iostream>
+#include <algorithm>
 
 #include "../AppContext.h"
 #include "../cuda/simple_cuda_mat.h"
 #include "../cuda/unified_graph_pipeline.h"
+
+#pragma comment(lib, "d3d11.lib")
+#pragma comment(lib, "dxgi.lib")
+
 using Microsoft::WRL::ComPtr;
 
 class GPUCapture {
@@ -174,12 +180,38 @@ public:
         ComPtr<ID3D11Texture2D> desktopTexture;
         desktopResource->QueryInterface(IID_PPV_ARGS(&desktopTexture));
         
+        // Get actual screen resolution
+        D3D11_TEXTURE2D_DESC fullDesc;
+        desktopTexture->GetDesc(&fullDesc);
+        
+        // Calculate capture area (center + offset)
+        auto& ctx = AppContext::getInstance();
+        int centerX = fullDesc.Width / 2;
+        int centerY = fullDesc.Height / 2;
+        
+        // Apply offset from config
+        bool useAimShootOffset = ctx.aiming && ctx.shooting;
+        int offsetX = useAimShootOffset ? 
+                      static_cast<int>(ctx.config.aim_shoot_offset_x) : 
+                      static_cast<int>(ctx.config.crosshair_offset_x);
+        int offsetY = useAimShootOffset ? 
+                      static_cast<int>(ctx.config.aim_shoot_offset_y) : 
+                      static_cast<int>(ctx.config.crosshair_offset_y);
+        
+        // Calculate top-left corner of capture area
+        int srcX = centerX + offsetX - (m_width / 2);
+        int srcY = centerY + offsetY - (m_height / 2);
+        
+        // Clamp to screen bounds
+        srcX = (std::max)(0, (std::min)(srcX, (int)fullDesc.Width - m_width));
+        srcY = (std::max)(0, (std::min)(srcY, (int)fullDesc.Height - m_height));
+        
         // Copy to our staging texture (cropped to capture area)
         D3D11_BOX sourceBox = {};
-        sourceBox.left = (1920 - m_width) / 2;    // Center crop
-        sourceBox.right = sourceBox.left + m_width;
-        sourceBox.top = (1080 - m_height) / 2;
-        sourceBox.bottom = sourceBox.top + m_height;
+        sourceBox.left = srcX;
+        sourceBox.right = srcX + m_width;
+        sourceBox.top = srcY;
+        sourceBox.bottom = srcY + m_height;
         sourceBox.front = 0;
         sourceBox.back = 1;
         

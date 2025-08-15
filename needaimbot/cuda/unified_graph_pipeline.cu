@@ -615,7 +615,6 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
     // Always run detector after graph (or without graph)
     auto& ctx = AppContext::getInstance();
     
-    
     if (!ctx.detectionPaused && m_detector) {
         // Debug log
         static int frameCount = 0;
