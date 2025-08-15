@@ -40,13 +40,14 @@ nvinfer1::ICudaEngine* loadEngineFromFile(const std::string& enginePath);
 typedef struct CUstream_st* cudaStream_t;
 typedef struct CUevent_st* cudaEvent_t;
 
-// GPU-calculated mouse movement structure
-struct MouseMovement {
-    float dx;
-    float dy;
-    bool hasTarget;
-    float targetDistance;
-};
+// LEGACY: GPU-calculated mouse movement structure - no longer used
+// Mouse movement is now calculated in unified_graph_pipeline.cu
+// struct MouseMovement {
+//     float dx;
+//     float dy;
+//     bool hasTarget;
+//     float targetDistance;
+// };
 
 #include "../core/Target.h"
 
