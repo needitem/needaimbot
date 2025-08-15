@@ -158,7 +158,8 @@ public:
  
     float target_fps;
     
-    std::string capture_method; // "simple", "wingraphics", "virtual_camera", "ndi"
+    int gpu_capture_method; // 0 = Desktop Duplication, 1 = Region Capture
+    std::string capture_method; // "simple", "wingraphics", "virtual_camera", "ndi" (legacy)
     
     // NDI capture settings
     std::string ndi_source_name;
@@ -344,6 +345,9 @@ public:
 
     // Active profile management
     std::string active_profile_name = "Default";
+    
+    // OBS Hook settings
+    std::string game_window_name = "Apex Legends";  // Game window title for OBS hook
     
     // Path utilities
     std::string getExecutableDir();
