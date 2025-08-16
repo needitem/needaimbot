@@ -513,51 +513,15 @@ bool GameCapture::WaitForNextFrame() {
         return false;
     }
 
-    // Enhanced frame skip logic for better performance
-    auto now = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+    // Remove all frame limiting - let the game's frame rate dictate our capture rate
+    // This allows us to capture at the game's actual FPS (300+ if available)
     
-    // Calculate target frame time based on desired FPS (e.g., 60 FPS = 16.67ms)
-    constexpr uint64_t TARGET_FRAME_TIME_NS = 16666667; // ~60 FPS in nanoseconds
-    constexpr uint64_t MIN_FRAME_TIME_NS = 8333333;     // ~120 FPS max (don't process too fast)
-    
-    // Check if we should skip this frame
-    if (last_frame_time > 0) {
-        uint64_t elapsed = now - last_frame_time;
-        
-        // If we're processing too fast, add a small delay
-        if (elapsed < MIN_FRAME_TIME_NS) {
-            uint32_t sleep_ms = static_cast<uint32_t>((MIN_FRAME_TIME_NS - elapsed) / 1000000);
-            if (sleep_ms > 0) {
-                Sleep(sleep_ms);
-            }
-        }
-        
-        // Dynamic frame skipping based on performance
-        if (elapsed < TARGET_FRAME_TIME_NS && frame_skip_count < MAX_FRAME_SKIP) {
-            // We're ahead of schedule, can afford to skip a frame
-            frame_skip_count++;
-            
-            // Still need to check texture availability but with timeout
-            static int current_texture = 0;
-            DWORD wait_result = WaitForSingleObject(texture_mutexes[current_texture], 0);
-            if (wait_result == WAIT_OBJECT_0) {
-                ReleaseMutex(texture_mutexes[current_texture]);
-                current_texture = 1 - current_texture;
-            }
-            
-            return false; // Skip this frame
-        }
-    }
-    
-    // Reset skip counter when we process a frame
-    frame_skip_count = 0;
-
     // Wait for the texture to be available (double buffering synchronization)
     // OBS uses two texture mutexes for double buffering
     static int current_texture = 0;
     
-    // Use timeout to prevent indefinite blocking
-    constexpr DWORD FRAME_TIMEOUT_MS = 100; // 100ms timeout
+    // Use short timeout to prevent indefinite blocking but not limit FPS
+    constexpr DWORD FRAME_TIMEOUT_MS = 16; // 16ms timeout (allows up to ~60 attempts per second)
     DWORD wait_result = WaitForSingleObject(texture_mutexes[current_texture], FRAME_TIMEOUT_MS);
     
     if (wait_result == WAIT_OBJECT_0) {
@@ -565,28 +529,34 @@ bool GameCapture::WaitForNextFrame() {
         // Copy the region we need from shared resource to CUDA texture
         pContext->CopySubresourceRegion(m_cudaTexture, 0, 0, 0, 0, pSharedResource, 0, &sourceRegion);
         
-        // Release the mutex
+        // Release the mutex immediately to allow OBS to continue
         ReleaseMutex(texture_mutexes[current_texture]);
         
         // Switch to the other texture for next frame
         current_texture = 1 - current_texture;
         
-        // Update frame timing
-        last_frame_time = now;
+        // Update frame timing for statistics only (no limiting)
+        last_frame_time = std::chrono::high_resolution_clock::now().time_since_epoch().count();
         
         return true;
     } else if (wait_result == WAIT_TIMEOUT) {
-        // Timeout occurred - hook might be lagging
-        static int timeout_count = 0;
-        timeout_count++;
+        // Timeout occurred - try the other buffer immediately
+        // This can happen when one buffer is stuck, switching might get us a fresh frame
+        current_texture = 1 - current_texture;
         
-        if (timeout_count % 10 == 0) {
-            std::cout << "[GameCapture] WARNING: Frame timeout occurred " 
-                      << timeout_count << " times" << std::endl;
+        // Try the other buffer with zero timeout (non-blocking)
+        wait_result = WaitForSingleObject(texture_mutexes[current_texture], 0);
+        if (wait_result == WAIT_OBJECT_0) {
+            // Got the alternate buffer
+            pContext->CopySubresourceRegion(m_cudaTexture, 0, 0, 0, 0, pSharedResource, 0, &sourceRegion);
+            ReleaseMutex(texture_mutexes[current_texture]);
+            current_texture = 1 - current_texture;
+            last_frame_time = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+            return true;
         }
         
-        // Try the other texture buffer
-        current_texture = 1 - current_texture;
+        // Both buffers unavailable - this is normal when game isn't rendering new frames
+        // Don't log spam, just return false
     }
     
     return false;

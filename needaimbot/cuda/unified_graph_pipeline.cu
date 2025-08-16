@@ -579,12 +579,6 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
             return false;
         }
         
-        // Debug: Log capture buffer info
-        static int captureLogCount = 0;
-        if (++captureLogCount % 100 == 0) {
-            printf("[DEBUG] Copying from D3D11 to capture buffer: %dx%d, channels=%d, data=%p\n", 
-                   m_captureBuffer.cols(), m_captureBuffer.rows(), m_captureBuffer.channels(), m_captureBuffer.data());
-        }
         
         // Copy from D3D11 texture to our capture buffer
         err = cudaMemcpy2DFromArrayAsync(
@@ -638,13 +632,6 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
     auto& ctx = AppContext::getInstance();
     
     if (!ctx.detectionPaused && m_detector) {
-        // Debug log
-        static int frameCount = 0;
-        frameCount++;
-        if (frameCount % 100 == 0) {
-            printf("[DEBUG] Processing frame #%d, capture buffer: %dx%d, channels=%d, data=%p\n", 
-                   frameCount, m_captureBuffer.cols(), m_captureBuffer.rows(), m_captureBuffer.channels(), m_captureBuffer.data());
-        }
         
         // Pass capture buffer directly without creating wrapper
         // The detector can handle the SimpleCudaMat directly
