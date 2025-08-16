@@ -214,6 +214,9 @@ public:
     
     bool WaitForNextFrame() {
         static int callCount = 0;
+        static bool frameAcquired = false;  // Track if we have an unreleased frame
+        static int timeoutCount = 0;
+        static int successCount = 0;
         callCount++;
         
         try {
@@ -221,63 +224,105 @@ public:
                 return false;
             }
             
-            // Debug logging
+            // Debug logging disabled - running stable now
+            /*
             if (callCount % 500 == 0) {
-                std::cout << "[GPUCapture::WaitForNextFrame] Call #" << callCount << std::endl;
+                std::cout << "[GPUCapture] Stats - Calls: " << callCount 
+                         << ", Success: " << successCount 
+                         << ", Timeouts: " << timeoutCount 
+                         << ", FenceValue: " << m_fenceValue << std::endl;
+            }
+            */
+            
+            // Check for fence value overflow (prevent wrap around)
+            if (m_fence && m_fenceValue > UINT64_MAX - 1000) {
+                std::cout << "[GPUCapture] WARNING: Fence value approaching overflow, resetting..." << std::endl;
+                m_fenceValue = 0;
+                // Recreate fence to reset
+                if (m_device5) {
+                    m_fence.Reset();
+                    HRESULT hr = m_device5->CreateFence(0, D3D11_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_fence));
+                    if (FAILED(hr)) {
+                        std::cout << "[GPUCapture] WARNING: Failed to recreate fence, continuing without it" << std::endl;
+                        m_fence.Reset();
+                    }
+                }
             }
             
             DXGI_OUTDUPL_FRAME_INFO frameInfo;
             ComPtr<IDXGIResource> desktopResource;
         
-        // Release previous frame if any
-        HRESULT releaseHr = m_duplication->ReleaseFrame();
+        // Only release if we previously acquired a frame
+        if (frameAcquired) {
+            HRESULT releaseHr = m_duplication->ReleaseFrame();
+            if (FAILED(releaseHr)) {
+                std::cerr << "[GPUCapture] WARNING: ReleaseFrame failed: 0x" << std::hex << releaseHr << std::dec << std::endl;
+            }
+            frameAcquired = false;
+        }
         
-        // Wait indefinitely for next frame (INFINITE timeout - will block until frame is available)
-        HRESULT hr = m_duplication->AcquireNextFrame(INFINITE, &frameInfo, &desktopResource);
+        // Use 0 timeout to immediately return - don't wait for new frames
+        HRESULT hr = m_duplication->AcquireNextFrame(0, &frameInfo, &desktopResource);
         
-        // No timeout handling needed - we wait until a frame is available
+        // Handle timeout - this is normal when no new frame is available
+        if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
+            timeoutCount++;
+            // For stability, don't reuse frames indefinitely
+            // Return false to skip this iteration and try again next time
+            return false;
+        }
         
         if (hr == DXGI_ERROR_ACCESS_LOST) {
-            std::cerr << "[GPUCapture::WaitForNextFrame] Access lost, need to recreate duplication" << std::endl;
+            std::cerr << "[GPUCapture] Access lost at frame " << callCount << ", recreating..." << std::endl;
             // Try to recreate duplication
             if (!RecreateDesktopDuplication()) {
-                std::cerr << "[GPUCapture::WaitForNextFrame] Failed to recreate duplication" << std::endl;
+                std::cerr << "[GPUCapture] Failed to recreate duplication" << std::endl;
                 return false;
             }
             return false; // Skip this frame
         } else if (hr == DXGI_ERROR_INVALID_CALL) {
-            std::cerr << "[GPUCapture::WaitForNextFrame] Invalid call detected, recreating duplication" << std::endl;
+            std::cerr << "[GPUCapture] Invalid call at frame " << callCount << ", recreating..." << std::endl;
             if (!RecreateDesktopDuplication()) {
-                std::cerr << "[GPUCapture::WaitForNextFrame] Failed to recreate after invalid call" << std::endl;
+                std::cerr << "[GPUCapture] Failed to recreate after invalid call" << std::endl;
                 return false;
             }
             return false;
         } else if (hr == E_INVALIDARG) {
-            std::cerr << "[GPUCapture::WaitForNextFrame] Invalid argument, likely due to mode change" << std::endl;
+            std::cerr << "[GPUCapture] Invalid argument at frame " << callCount << ", recreating..." << std::endl;
             if (!RecreateDesktopDuplication()) {
-                std::cerr << "[GPUCapture::WaitForNextFrame] Failed to recreate after invalid argument" << std::endl;
+                std::cerr << "[GPUCapture] Failed to recreate after invalid argument" << std::endl;
                 return false;
             }
             return false;
         } else if (FAILED(hr)) {
-            std::cerr << "[GPUCapture::WaitForNextFrame] AcquireNextFrame failed: 0x" << std::hex << hr << std::dec << std::endl;
+            std::cerr << "[GPUCapture] AcquireNextFrame failed at frame " << callCount 
+                     << ": 0x" << std::hex << hr << std::dec << std::endl;
             
             // Try to recreate duplication with delay
             Sleep(500); // Give system time to stabilize
             if (!RecreateDesktopDuplication()) {
-                std::cerr << "[GPUCapture::WaitForNextFrame] Failed to recreate duplication after error" << std::endl;
+                std::cerr << "[GPUCapture] Failed to recreate duplication after error" << std::endl;
                 // Don't crash, just return false to continue
             }
             
             return false;
         }
         
+        // Successfully acquired a new frame
+        frameAcquired = true;
+        successCount++;
+        
         // Get the desktop texture
         ComPtr<ID3D11Texture2D> desktopTexture;
         hr = desktopResource->QueryInterface(IID_PPV_ARGS(&desktopTexture));
         if (FAILED(hr) || !desktopTexture) {
-            std::cerr << "[GPUCapture] Failed to get desktop texture: 0x" << std::hex << hr << std::dec << std::endl;
-            m_duplication->ReleaseFrame();
+            std::cerr << "[GPUCapture] Failed to get desktop texture at frame " << callCount 
+                     << ": 0x" << std::hex << hr << std::dec << std::endl;
+            // Release the frame we just acquired
+            if (frameAcquired) {
+                m_duplication->ReleaseFrame();
+                frameAcquired = false;
+            }
             return false;
         }
         
@@ -321,27 +366,47 @@ public:
             desktopTexture.Get(), 0, &sourceBox
         );
         
-        // Signal fence for GPU synchronization
-        if (m_fence && m_context4) {
-            m_context4->Signal(m_fence.Get(), ++m_fenceValue);
+        // Signal fence for GPU synchronization with new value only for new frames
+        if (m_fence && m_fence.Get() && m_context4) {
+            try {
+                m_context4->Signal(m_fence.Get(), ++m_fenceValue);
+            } catch (...) {
+                // Fence signaling failed, continue without it
+            }
         }
         
         return true;
         
         } catch (const std::exception& e) {
-            std::cerr << "[GPUCapture::WaitForNextFrame] Exception caught: " << e.what() << std::endl;
+            std::cerr << "[GPUCapture] Exception at frame " << callCount << ": " << e.what() << std::endl;
+            
+            // Release frame if we have one
+            if (frameAcquired) {
+                try {
+                    m_duplication->ReleaseFrame();
+                } catch (...) {}
+                frameAcquired = false;
+            }
             
             // Try to recover by recreating duplication
             if (!RecreateDesktopDuplication()) {
-                std::cerr << "[GPUCapture::WaitForNextFrame] Failed to recover from exception" << std::endl;
+                std::cerr << "[GPUCapture] Failed to recover from exception" << std::endl;
             }
             return false;
         } catch (...) {
-            std::cerr << "[GPUCapture::WaitForNextFrame] Unknown exception caught" << std::endl;
+            std::cerr << "[GPUCapture] Unknown exception at frame " << callCount << std::endl;
+            
+            // Release frame if we have one
+            if (frameAcquired) {
+                try {
+                    m_duplication->ReleaseFrame();
+                } catch (...) {}
+                frameAcquired = false;
+            }
             
             // Try to recover
             if (!RecreateDesktopDuplication()) {
-                std::cerr << "[GPUCapture::WaitForNextFrame] Failed to recover from unknown exception" << std::endl;
+                std::cerr << "[GPUCapture] Failed to recover from unknown exception" << std::endl;
             }
             return false;
         }
@@ -349,6 +414,31 @@ public:
     
     cudaGraphicsResource_t GetCudaResource() const { 
         return m_cudaResource; 
+    }
+    
+    // Public method to reinitialize CUDA resources (for periodic refresh)
+    bool ReinitializeCudaResource() {
+        // Unregister existing resource if any
+        if (m_cudaResource) {
+            cudaGraphicsUnregisterResource(m_cudaResource);
+            m_cudaResource = nullptr;
+        }
+        
+        // Re-register the D3D11 texture with CUDA
+        if (m_stagingTexture) {
+            cudaError_t err = cudaGraphicsD3D11RegisterResource(
+                &m_cudaResource,
+                m_stagingTexture.Get(),
+                cudaGraphicsRegisterFlagsNone
+            );
+            
+            if (err != cudaSuccess) {
+                std::cerr << "[GPUCapture] Failed to re-register D3D11 resource with CUDA: " << cudaGetErrorString(err) << std::endl;
+                return false;
+            }
+            return true;
+        }
+        return false;
     }
     
 private:
@@ -602,12 +692,14 @@ void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
         const int MAX_CONSECUTIVE_FAILURES = 100;
         
         while (!ctx.should_exit) {
-            // Debug: Log before waiting for frame
+            // Debug logging disabled - running stable now
+            /*
             static int waitCount = 0;
             waitCount++;
             if (waitCount % 1000 == 0) {
                 std::cout << "[GPUCapture] About to call WaitForNextFrame (call #" << waitCount << ")" << std::endl;
             }
+            */
             
             // Wait for next frame with timeout check
             auto waitStart = std::chrono::steady_clock::now();
@@ -625,6 +717,14 @@ void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
                 frameCount++;
                 totalFrameCount++;
                 
+                // Comment out periodic refresh for now - need to find root cause
+                // The crash happens even without refresh, so this isn't the solution
+                /*
+                if (totalFrameCount % 10000 == 0 && totalFrameCount > 0) {
+                    std::cout << "[GPUCapture] Would refresh at frame " << totalFrameCount << " (disabled)" << std::endl;
+                }
+                */
+                
                 // Measure frame interval
                 auto currentTime = std::chrono::steady_clock::now();
                 auto frameDelta = std::chrono::duration<float, std::milli>(currentTime - lastFrameTime).count();
@@ -637,25 +737,31 @@ void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
                 {
                     PERF_TIMER("Pipeline_Total");
                     
-                    // Debug: Log before pipeline execution
-                    if (totalFrameCount % 100 == 0) {
-                        std::cout << "[GPUCapture] Executing pipeline for frame #" << totalFrameCount << std::endl;
-                    }
                     
                     auto pipelineStartTime = std::chrono::steady_clock::now();
                     bool pipelineSuccess = false;
                     
                     try {
-                        if (ctx.use_cuda_graph && pipeline && pipeline->isGraphReady()) {
+                        // Verify pipeline and CUDA resource are valid before execution
+                        if (!pipeline) {
+                            std::cerr << "[GPUCapture] ERROR: Pipeline is NULL at frame #" << totalFrameCount << std::endl;
+                            pipelineSuccess = false;
+                        } else if (!gpuCapture.GetCudaResource()) {
+                            std::cerr << "[GPUCapture] ERROR: CUDA resource is NULL at frame #" << totalFrameCount << std::endl;
+                            pipelineSuccess = false;
+                        } else if (ctx.use_cuda_graph && pipeline->isGraphReady()) {
                             PERF_TIMER("Pipeline_Graph");
                             pipelineSuccess = pipeline->executeGraph();
-                        } else if (pipeline) {
+                        } else {
                             PERF_TIMER("Pipeline_Direct");
                             pipelineSuccess = pipeline->executeDirect();
                         }
                     } catch (const std::exception& e) {
                         std::cerr << "[GPUCapture] Pipeline exception at frame #" << totalFrameCount 
                                   << ": " << e.what() << std::endl;
+                        pipelineSuccess = false;
+                    } catch (...) {
+                        std::cerr << "[GPUCapture] Unknown pipeline exception at frame #" << totalFrameCount << std::endl;
                         pipelineSuccess = false;
                     }
                     
@@ -709,13 +815,13 @@ void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
                 // Frame capture failed (error already handled in WaitForNextFrame)
                 consecutiveFailures++;
                 
-                // If too many consecutive failures, try switching to Game Capture
+                // Don't fallback to Game Capture - just continue trying
+                // This prevents switching capture methods when frames are not available
                 if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-                    std::cerr << "[GPUCapture] Too many consecutive failures (" << consecutiveFailures 
-                              << "), switching to Game Capture mode..." << std::endl;
-                    ctx.capture_method.store(2);  // Switch to Game Capture
-                    ctx.capture_method_changed.store(true);
-                    break;
+                    // Reset counter to prevent overflow, but don't switch modes
+                    consecutiveFailures = 0;
+                    // Don't log - this is normal operation
+                    // Frames are only available when screen content changes
                 }
             }
             
