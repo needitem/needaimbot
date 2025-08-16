@@ -62,12 +62,18 @@ public:
     // Release GPU memory
     void release() {
         if (data_) {
-            // Check if CUDA context is still valid
-            cudaError_t err = cudaGetLastError();
-            if (err == cudaSuccess) {
-                err = cudaFree(data_);
-                if (err != cudaSuccess && err != cudaErrorCudartUnloading) {
-                    // Only warn if it's not a shutdown-related error
+            // Clear any previous errors first
+            cudaGetLastError();
+            
+            // Check if pointer is valid before freeing
+            cudaPointerAttributes attributes;
+            cudaError_t queryErr = cudaPointerGetAttributes(&attributes, data_);
+            
+            if (queryErr == cudaSuccess && attributes.type != cudaMemoryTypeUnregistered) {
+                // Valid CUDA memory, safe to free
+                cudaError_t err = cudaFree(data_);
+                if (err != cudaSuccess && err != cudaErrorCudartUnloading && err != cudaErrorInvalidValue) {
+                    // Only warn for real errors, not shutdown or invalid pointer errors
                     printf("[SimpleCudaMat] Warning: cudaFree failed: %s\n", cudaGetErrorString(err));
                 }
             }

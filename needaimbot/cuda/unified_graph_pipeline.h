@@ -55,6 +55,8 @@ struct UnifiedPipelineConfig {
     // Detection parameters
     float confThreshold = 0.4f;
     float nmsThreshold = 0.45f;
+    int detectionWidth = 256;   // Detection/capture width
+    int detectionHeight = 256;  // Detection/capture height
     
     // Graph optimization flags
     bool useGraphOptimization = true;
@@ -105,6 +107,7 @@ public:
     GraphExecutionState getState() const { return m_state; }
     float getAverageLatency() const { return m_state.avgLatency; }
     bool isGraphReady() const { return m_state.graphReady; }
+    
     
 private:
     // Advanced graph and stream management

@@ -2,7 +2,9 @@
 #include "../imgui/imgui.h"
 #include "needaimbot.h" 
 #include "overlay/draw_settings.h" 
-#include "../config/config.h" 
+#include "../config/config.h"
+#include "../cuda/unified_graph_pipeline.h"
+#include "../core/performance_monitor.h" 
 
 #include <string>   
 #include <vector>   
@@ -80,10 +82,65 @@ void draw_stat_plot(const char* label, const std::vector<float>& history, float 
 
 void draw_stats() {
     auto& ctx = AppContext::getInstance();
+    
+    // Get timing from PerformanceMonitor instead of pipeline
+    float captureTime = 0.0f;
+    float detectionTime = 0.0f;
+    float postprocessTime = 0.0f;
+    float trackingTime = 0.0f;
+    
+    // Use PerformanceMonitor for timing metrics
+    auto perfMetrics = PerformanceMonitor::getInstance().getMetrics("Pipeline_Total");
+    if (perfMetrics.sample_count > 0) {
+        // Use the average time from PerformanceMonitor
+        detectionTime = perfMetrics.avg_time_ms;
+    }
+    
     if (ImGui::BeginTable("stats_table", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp)) {
         ImGui::TableSetupColumn("Metric", ImGuiTableColumnFlags_WidthStretch, 0.4f);
         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 0.6f);
 
+        // New pipeline timing stats
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::Text("Pipeline Timing");
+        ImGui::TableNextColumn();
+        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "GPU Operations");
+        
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::Text("  Capture");
+        ImGui::TableNextColumn();
+        ImGui::Text("%.2f ms", captureTime);
+        
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::Text("  Detection");
+        ImGui::TableNextColumn();
+        ImGui::Text("%.2f ms", detectionTime);
+        
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::Text("  Postprocess");
+        ImGui::TableNextColumn();
+        ImGui::Text("%.2f ms", postprocessTime);
+        
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::Text("  Tracking");
+        ImGui::TableNextColumn();
+        ImGui::Text("%.2f ms", trackingTime);
+        
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::Text("  Total");
+        ImGui::TableNextColumn();
+        float totalTime = captureTime + detectionTime + postprocessTime + trackingTime;
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "%.2f ms (%.1f FPS)", totalTime, totalTime > 0 ? 1000.0f / totalTime : 0.0f);
+        
+        ImGui::Separator();
+        
+        // Legacy timing stats (keep for compatibility)
         draw_stat_plot("Capture Time", get_history_copy(ctx.g_frame_acquisition_time_history, ctx.g_frame_acquisition_history_mutex), ctx.g_current_frame_acquisition_time_ms.load(std::memory_order_relaxed), "ms");
         draw_stat_plot("Inference Time", get_history_copy(ctx.g_inference_time_history, ctx.g_inference_history_mutex), ctx.g_current_inference_time_ms.load(std::memory_order_relaxed), "ms");
         draw_stat_plot("Mouse Movement Time", get_history_copy(ctx.g_input_send_time_history, ctx.g_input_send_history_mutex), ctx.g_current_input_send_time_ms.load(std::memory_order_relaxed), "ms");
