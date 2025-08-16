@@ -6,6 +6,9 @@
 #include <atomic>
 #include <mutex>
 #include <condition_variable>
+#include <cstdlib>
+#include <DbgHelp.h>
+#pragma comment(lib, "dbghelp.lib")
 
 #include "AppContext.h"
 // GPU capture
@@ -208,13 +211,49 @@ bool RestartAsAdministrator()
     return false;
 }
 
+// Crash dump handler
+LONG WINAPI UnhandledExceptionHandler(EXCEPTION_POINTERS* pExceptionPointers) {
+    std::cerr << "\n[CRASH] Unhandled exception occurred!" << std::endl;
+    std::cerr << "[CRASH] Exception code: 0x" << std::hex << pExceptionPointers->ExceptionRecord->ExceptionCode << std::dec << std::endl;
+    std::cerr << "[CRASH] Exception address: 0x" << std::hex << pExceptionPointers->ExceptionRecord->ExceptionAddress << std::dec << std::endl;
+    
+    // Try to get more information about the crash location
+    if (pExceptionPointers->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
+        std::cerr << "[CRASH] Access violation - ";
+        if (pExceptionPointers->ExceptionRecord->NumberParameters >= 2) {
+            if (pExceptionPointers->ExceptionRecord->ExceptionInformation[0] == 0) {
+                std::cerr << "attempted to read from address: 0x" << std::hex 
+                         << pExceptionPointers->ExceptionRecord->ExceptionInformation[1] << std::dec << std::endl;
+            } else {
+                std::cerr << "attempted to write to address: 0x" << std::hex 
+                         << pExceptionPointers->ExceptionRecord->ExceptionInformation[1] << std::dec << std::endl;
+            }
+        }
+    }
+    
+    // Flush output
+    std::cerr.flush();
+    std::cout.flush();
+    
+    // Return EXCEPTION_CONTINUE_SEARCH to allow Windows Error Reporting to handle it
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
 int main()
 {
+    // Install crash handler
+    SetUnhandledExceptionFilter(UnhandledExceptionHandler);
+    
+    // Enable crash dumps
+    _set_error_mode(_OUT_TO_STDERR);
+    _set_abort_behavior(0, _WRITE_ABORT_MSG);
+    
     // Set global timer resolution to 1ms for precise sleep timing
     timeBeginPeriod(1);
     
     // Initialize Gaming Performance Analyzer
     std::cout << "[INFO] Starting Gaming Performance Analyzer v1.0.0" << std::endl;
+    std::cout << "[INFO] Crash handler installed for debugging" << std::endl;
     
     // Check for administrator privileges
     if (!IsRunAsAdministrator()) {
@@ -377,6 +416,8 @@ int main()
         pipelineConfig.enableDetection = true;
         pipelineConfig.enableTracking = ctx.config.enable_tracking;
         pipelineConfig.useGraphOptimization = true;  // Enable CUDA Graph
+        pipelineConfig.detectionWidth = ctx.config.detection_resolution;   // Use config value
+        pipelineConfig.detectionHeight = ctx.config.detection_resolution;  // Use config value
         pipelineConfig.allowGraphUpdate = true;
         pipelineConfig.enableProfiling = false;  // Set to true for performance metrics
         

@@ -567,16 +567,24 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
     if (m_config.enableCapture && m_cudaResource && !m_hasFrameData) {
         cudaError_t err = cudaGraphicsMapResources(1, &m_cudaResource, stream);
         if (err != cudaSuccess) {
+            printf("[ERROR] cudaGraphicsMapResources failed: %s\n", cudaGetErrorString(err));
             return false;
         }
         
         cudaArray_t array;
         err = cudaGraphicsSubResourceGetMappedArray(&array, m_cudaResource, 0, 0);
         if (err != cudaSuccess) {
+            printf("[ERROR] cudaGraphicsSubResourceGetMappedArray failed: %s\n", cudaGetErrorString(err));
             cudaGraphicsUnmapResources(1, &m_cudaResource, stream);
             return false;
         }
         
+        // Debug: Log capture buffer info
+        static int captureLogCount = 0;
+        if (++captureLogCount % 100 == 0) {
+            printf("[DEBUG] Copying from D3D11 to capture buffer: %dx%d, channels=%d, data=%p\n", 
+                   m_captureBuffer.cols(), m_captureBuffer.rows(), m_captureBuffer.channels(), m_captureBuffer.data());
+        }
         
         // Copy from D3D11 texture to our capture buffer
         err = cudaMemcpy2DFromArrayAsync(
@@ -591,15 +599,26 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
         );
         
         if (err != cudaSuccess) {
+            printf("[ERROR] cudaMemcpy2DFromArrayAsync failed: %s\n", cudaGetErrorString(err));
+            cudaGraphicsUnmapResources(1, &m_cudaResource, stream);
+            return false;
         }
         
         cudaGraphicsUnmapResources(1, &m_cudaResource, stream);
         
+        // Mark that we have frame data now
+        m_hasFrameData = true;
     } else {
         if (!m_cudaResource) {
             static int warnCounter = 0;
             if (++warnCounter % 300 == 0) {
                 printf("[WARNING] m_cudaResource is NULL!\n");
+            }
+        }
+        if (!m_config.enableCapture) {
+            static int warnCounter2 = 0;
+            if (++warnCounter2 % 300 == 0) {
+                printf("[WARNING] enableCapture is false!\n");
             }
         }
     }
@@ -608,6 +627,9 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
     if (m_detectionGraph && m_detectionGraphExec) {
         cudaError_t err = cudaGraphLaunch(m_detectionGraphExec, stream);
         if (err != cudaSuccess) {
+            printf("[ERROR] cudaGraphLaunch failed: %s\n", cudaGetErrorString(err));
+            // Reset CUDA error state
+            cudaGetLastError();
             return executeDirect(stream);
         }
     }
@@ -619,18 +641,14 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
         // Debug log
         static int frameCount = 0;
         frameCount++;
+        if (frameCount % 100 == 0) {
+            printf("[DEBUG] Processing frame #%d, capture buffer: %dx%d, channels=%d, data=%p\n", 
+                   frameCount, m_captureBuffer.cols(), m_captureBuffer.rows(), m_captureBuffer.channels(), m_captureBuffer.data());
+        }
         
-        SimpleCudaMat frameWrapper(m_captureBuffer.rows(), m_captureBuffer.cols(), 
-                                  m_captureBuffer.channels());
-        
-        size_t dataSize = m_captureBuffer.rows() * m_captureBuffer.cols() * 
-                         m_captureBuffer.channels() * sizeof(unsigned char);
-        
-        cudaMemcpyAsync(frameWrapper.data(), m_captureBuffer.data(),
-                       dataSize, cudaMemcpyDeviceToDevice, stream);
-        
-        // Process frame asynchronously - no sync needed
-        m_detector->processFrame(frameWrapper);
+        // Pass capture buffer directly without creating wrapper
+        // The detector can handle the SimpleCudaMat directly
+        m_detector->processFrame(m_captureBuffer);
         
         // Get detection results
         auto detections = m_detector->getLatestDetectionsGPU();
@@ -641,8 +659,13 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
             Target h_target;
             cudaMemcpyAsync(&h_target, detections.first, sizeof(Target), 
                            cudaMemcpyDeviceToHost, stream);
-            // MUST sync here - we need accurate target coordinates before mouse movement
-            cudaStreamSynchronize(stream);
+            // Sync only for mouse movement - critical for accuracy
+            cudaError_t syncErr = cudaStreamSynchronize(stream);
+            if (syncErr != cudaSuccess) {
+                printf("[ERROR] cudaStreamSynchronize failed: %s\n", cudaGetErrorString(syncErr));
+                cudaGetLastError(); // Reset error state
+                return false;
+            }
             
             // Ensure center is calculated
             h_target.updateCenter();
@@ -730,6 +753,7 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
     
     // Async profiling without sync
     if (m_config.enableProfiling) {
+        cudaStreamSynchronize(stream);  // Wait for all operations to complete
         updateProfilingAsync(stream);
     }
     
@@ -759,6 +783,34 @@ bool UnifiedGraphPipeline::executeDirect(cudaStream_t stream) {
         std::cout << "[UnifiedGraph::executeDirect] Call #" << executeCount << std::endl;
     }
     
+    // Check for CUDA errors periodically
+    if (executeCount % 50 == 0) {  // Check more frequently
+        cudaError_t err = cudaGetLastError();
+        if (err != cudaSuccess) {
+            std::cerr << "[UnifiedGraph] CUDA error detected at frame " << executeCount 
+                      << ": " << cudaGetErrorString(err) << std::endl;
+            
+            // Get more detailed error info
+            const char* errorName = cudaGetErrorName(err);
+            std::cerr << "[UnifiedGraph] Error name: " << errorName << std::endl;
+            
+            // DO NOT reset device - it will invalidate all resources!
+            // Just clear the error and continue
+            cudaGetLastError(); // Clear error state
+            return false;
+        }
+        
+        // Don't do full device sync in production - it kills performance
+        // Just check stream status instead
+        err = cudaStreamQuery(stream ? stream : m_primaryStream);
+        if (err != cudaSuccess && err != cudaErrorNotReady) {
+            std::cerr << "[UnifiedGraph] CUDA stream error at frame " << executeCount 
+                      << ": " << cudaGetErrorString(err) << std::endl;
+            cudaGetLastError(); // Clear error state
+            return false;
+        }
+    }
+    
     // Use multi-stream coordinator for optimal performance
     if (!m_coordinator) {
         std::cerr << "[UnifiedGraph] ERROR: Coordinator not initialized!" << std::endl;
@@ -767,33 +819,91 @@ bool UnifiedGraphPipeline::executeDirect(cudaStream_t stream) {
     
     // 1. Capture stage with ZERO-COPY optimization
     if (m_config.enableCapture && m_cudaResource) {
-        // Use capture stream for highest priority
-        cudaStream_t captureStream = m_coordinator->captureStream;
+        // Ensure capture buffer is initialized with correct dimensions
+        if (m_captureBuffer.empty() || m_captureBuffer.channels() != 4) {
+            // Get capture dimensions from config (passed to GameCapture constructor)
+            // These values are set in detector.cpp when creating GameCapture
+            int captureWidth = m_config.detectionWidth;  // Using detection width/height as capture size
+            int captureHeight = m_config.detectionHeight;
+            m_captureBuffer.create(captureHeight, captureWidth, 4);  // BGRA format
+            std::cout << "[UnifiedGraph] Initialized capture buffer: " << captureWidth << "x" << captureHeight << " with 4 channels" << std::endl;
+        }
         
-        // Map resource for zero-copy access
-        cudaGraphicsMapResources(1, &m_cudaResource, captureStream);
+        // Debug: Check capture buffer state
+        if (executeCount <= 5 || executeCount % 100 == 0) {
+            std::cout << "[UnifiedGraph] Capture buffer - rows: " << m_captureBuffer.rows() 
+                      << ", cols: " << m_captureBuffer.cols() 
+                      << ", channels: " << m_captureBuffer.channels() 
+                      << ", empty: " << m_captureBuffer.empty() << std::endl;
+        }
         
-        cudaArray_t array;
-        cudaGraphicsSubResourceGetMappedArray(&array, m_cudaResource, 0, 0);
+        try {
+            // Use capture stream for highest priority
+            cudaStream_t captureStream = m_coordinator->captureStream;
+            
+            // Debug: Log before mapping
+            if (executeCount <= 5 || executeCount % 100 == 0) {
+                std::cout << "[UnifiedGraph] Mapping CUDA resource (frame #" << executeCount << ")" << std::endl;
+            }
+            
+            // Map resource for zero-copy access
+            cudaError_t mapErr = cudaGraphicsMapResources(1, &m_cudaResource, captureStream);
+            if (mapErr != cudaSuccess) {
+                std::cerr << "[UnifiedGraph] Failed to map CUDA resource at frame #" << executeCount 
+                          << ": " << cudaGetErrorString(mapErr) << std::endl;
+                return false;
+            }
+            
+            cudaArray_t array;
+            cudaError_t arrayErr = cudaGraphicsSubResourceGetMappedArray(&array, m_cudaResource, 0, 0);
+            if (arrayErr != cudaSuccess) {
+                std::cerr << "[UnifiedGraph] Failed to get mapped array: " << cudaGetErrorString(arrayErr) << std::endl;
+                cudaGraphicsUnmapResources(1, &m_cudaResource, captureStream);
+                return false;
+            }
         
         // Get buffer from triple buffer system if available
         void* targetBuffer = m_tripleBuffer ? 
             m_tripleBuffer->buffers[m_tripleBuffer->captureIdx].data() :
             m_captureBuffer.data();
         
-        // Direct array to buffer copy (zero-copy when possible)
-        cudaMemcpy2DFromArrayAsync(
-            targetBuffer, m_captureBuffer.step(),
-            array, 0, 0,
-            m_captureBuffer.cols() * 4, m_captureBuffer.rows(),
-            cudaMemcpyDeviceToDevice, captureStream
-        );
-        
-        // Unmap resource
-        cudaGraphicsUnmapResources(1, &m_cudaResource, captureStream);
-        
-        // Signal capture completion
-        m_coordinator->synchronizeCapture(m_coordinator->preprocessStream);
+            // Direct array to buffer copy (zero-copy when possible)
+            cudaError_t copyErr = cudaMemcpy2DFromArrayAsync(
+                targetBuffer, m_captureBuffer.step(),
+                array, 0, 0,
+                m_captureBuffer.cols() * 4, m_captureBuffer.rows(),
+                cudaMemcpyDeviceToDevice, captureStream
+            );
+            
+            if (copyErr != cudaSuccess) {
+                std::cerr << "[UnifiedGraph] Memcpy2D failed: " << cudaGetErrorString(copyErr) << std::endl;
+            }
+            
+            // Debug: Log before unmapping
+            if (executeCount <= 5 || executeCount % 100 == 0) {
+                std::cout << "[UnifiedGraph] Unmapping CUDA resource (frame #" << executeCount << ")" << std::endl;
+            }
+            
+            // Always unmap resource, even on error
+            cudaError_t unmapErr = cudaGraphicsUnmapResources(1, &m_cudaResource, captureStream);
+            if (unmapErr != cudaSuccess) {
+                std::cerr << "[UnifiedGraph] Failed to unmap resource at frame #" << executeCount 
+                          << ": " << cudaGetErrorString(unmapErr) << std::endl;
+            }
+            
+            if (copyErr != cudaSuccess) {
+                return false;
+            }
+            
+            // Signal capture completion
+            m_coordinator->synchronizeCapture(m_coordinator->preprocessStream);
+        }
+        catch (const std::exception& e) {
+            std::cerr << "[UnifiedGraph] Exception in capture stage: " << e.what() << std::endl;
+            // Try to unmap resource if still mapped
+            cudaGraphicsUnmapResources(1, &m_cudaResource, m_coordinator->captureStream);
+            return false;
+        }
     }
     
     // 2. Detection pipeline with FUSED preprocessing
@@ -822,6 +932,13 @@ bool UnifiedGraphPipeline::executeDirect(cudaStream_t stream) {
             true
         );
         
+        // Check for kernel launch errors
+        cudaError_t kernelErr = cudaGetLastError();
+        if (kernelErr != cudaSuccess) {
+            std::cerr << "[UnifiedGraph] Preprocessing kernel launch failed: " << cudaGetErrorString(kernelErr) << std::endl;
+            return false;
+        }
+        
         // Signal preprocessing completion
         m_coordinator->synchronizePreprocess(m_coordinator->inferenceStream);
         
@@ -835,28 +952,22 @@ bool UnifiedGraphPipeline::executeDirect(cudaStream_t stream) {
                 std::cout << "[UnifiedGraph] Calling detector->processFrame, count: " << processCount << std::endl;
             }
             
-            // Create SimpleCudaMat wrapper for the capture buffer (not preprocessed)
-            // The detector will handle preprocessing, inference, and postprocessing
-            SimpleCudaMat frameWrapper(m_captureBuffer.rows(), m_captureBuffer.cols(), 
-                                      m_captureBuffer.channels());
-            
-            // Calculate size manually
-            size_t dataSize = m_captureBuffer.rows() * m_captureBuffer.cols() * 
-                             m_captureBuffer.channels() * sizeof(unsigned char);
-            
-            // Copy data to wrapper
-            cudaMemcpyAsync(frameWrapper.data(), m_captureBuffer.data(),
-                           dataSize, cudaMemcpyDeviceToDevice, preprocessStream);
-            
-            // Call the full processFrame which handles everything
-            m_detector->processFrame(frameWrapper);
-            
-            // Signal completion
-            cudaEventRecord(m_coordinator->inferenceComplete, preprocessStream);
-            m_coordinator->synchronizeInference(m_coordinator->postprocessStream);
-            
-            // Get detection results
-            auto detections = m_detector->getLatestDetectionsGPU();
+            try {
+                // Pass capture buffer directly to detector
+                // No need to create a new wrapper - avoids memory allocation/deallocation issues
+                m_detector->processFrame(m_captureBuffer);
+                
+                // Signal completion
+                cudaEventRecord(m_coordinator->inferenceComplete, preprocessStream);
+                m_coordinator->synchronizeInference(m_coordinator->postprocessStream);
+                
+                // Get detection results
+                auto detections = m_detector->getLatestDetectionsGPU();
+            }
+            catch (const std::exception& e) {
+                std::cerr << "[UnifiedGraph] Exception in detector->processFrame: " << e.what() << std::endl;
+                return false;
+            }
         }
         
         // Swap triple buffer if available
@@ -864,14 +975,14 @@ bool UnifiedGraphPipeline::executeDirect(cudaStream_t stream) {
             cudaEventRecord(m_tripleBuffer->events[m_tripleBuffer->captureIdx], preprocessStream);
             m_tripleBuffer->isReady[m_tripleBuffer->captureIdx] = true;
             
-            // Rotate buffer indices
+            // Rotate buffer indices with atomic operations to prevent race conditions
             int nextCapture = m_tripleBuffer->displayIdx.load();
             int nextInference = m_tripleBuffer->captureIdx.load();
             int nextDisplay = m_tripleBuffer->inferenceIdx.load();
             
-            m_tripleBuffer->captureIdx = nextCapture;
-            m_tripleBuffer->inferenceIdx = nextInference;
-            m_tripleBuffer->displayIdx = nextDisplay;
+            m_tripleBuffer->captureIdx.store(nextCapture);
+            m_tripleBuffer->inferenceIdx.store(nextInference);
+            m_tripleBuffer->displayIdx.store(nextDisplay);
         }
     }
     
@@ -890,16 +1001,36 @@ bool UnifiedGraphPipeline::executeDirect(cudaStream_t stream) {
     // 4. Get detection results and calculate mouse movement with Bezier curve
     auto& ctx = AppContext::getInstance();
     if (m_detector && !ctx.detectionPaused && ctx.aiming) {
-        // Get latest detections from detector
-        auto detections = m_detector->getLatestDetectionsGPU();
+        try {
+            // Get latest detections from detector
+            auto detections = m_detector->getLatestDetectionsGPU();
+            
+            if (detections.second > 0 && detections.first) {
+                // Get the first/best target
+                Target h_target;
+                cudaMemcpyAsync(&h_target, detections.first, sizeof(Target), 
+                               cudaMemcpyDeviceToHost, stream);
+                // Sync needed for accurate target data
+                cudaStreamSynchronize(stream);
+            }
+        }
+        catch (const std::exception& e) {
+            std::cerr << "[UnifiedGraph] Exception in mouse movement: " << e.what() << std::endl;
+        }
+    }
+    
+    // Memory health check every 1000 frames
+    if (executeCount % 1000 == 0) {
+        size_t free_mem, total_mem;
+        cudaMemGetInfo(&free_mem, &total_mem);
+        float used_gb = (total_mem - free_mem) / (1024.0f * 1024.0f * 1024.0f);
+        float free_gb = free_mem / (1024.0f * 1024.0f * 1024.0f);
         
-        if (detections.second > 0 && detections.first) {
-            // Get the first/best target
-            Target h_target;
-            cudaMemcpyAsync(&h_target, detections.first, sizeof(Target), 
-                           cudaMemcpyDeviceToHost, stream);
-            // Sync needed for accurate target data
-            cudaStreamSynchronize(stream);
+        std::cout << "[UnifiedGraph] GPU Memory - Used: " << used_gb << " GB, Free: " << free_gb << " GB" << std::endl;
+        
+        // Warning if memory is low
+        if (free_gb < 0.5f) {
+            std::cerr << "[UnifiedGraph] WARNING: Low GPU memory! Free: " << free_gb << " GB" << std::endl;
         }
     }
     

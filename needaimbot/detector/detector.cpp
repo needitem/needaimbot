@@ -734,6 +734,21 @@ void Detector::processFrame(const SimpleCudaMat& frame)
     static int process_call_count = 0;
     process_call_count++;
     
+    // Check if frame is valid before processing
+    if (frame.empty()) {
+        static int empty_frame_count = 0;
+        if (++empty_frame_count % 100 == 1) {  // Log every 100th empty frame
+            std::cerr << "[Detector] Warning: Empty frame received, skipping (count: " << empty_frame_count << ")" << std::endl;
+        }
+        return;
+    }
+    
+    // Check for critical dimensions
+    if (frame.rows() <= 0 || frame.cols() <= 0 || frame.channels() <= 0) {
+        std::cerr << "[Detector] Warning: Invalid frame dimensions: " 
+                  << frame.rows() << "x" << frame.cols() << "x" << frame.channels() << std::endl;
+        return;
+    }
     
     if (!isCudaContextInitialized()) {
         std::cerr << "[Detector] CUDA context not initialized!" << std::endl;
