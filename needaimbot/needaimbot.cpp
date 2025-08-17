@@ -49,7 +49,6 @@
 std::atomic<bool> should_exit{false};
 std::mutex configMutex;
 std::atomic<bool> detector_model_changed{false};
-std::atomic<bool> capture_fps_changed{false};
 std::atomic<bool> detection_resolution_changed{false};
 std::atomic<bool> capture_borders_changed{false};
 std::atomic<bool> capture_cursor_changed{false};
