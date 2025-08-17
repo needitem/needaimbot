@@ -36,6 +36,7 @@
     <ClCompile Include="mouse\\input_drivers\\kmboxNet.cpp" />
     <ClCompile Include="mouse\\mouse.cpp" />
     <ClCompile Include="cuda\\mouse_interface.cpp" />
+    <ClCompile Include="cuda\\pd_controller.cpp" />
     <ClCompile Include="mouse\\recoil_control_thread.cpp" />
     <ClCompile Include="mouse\\rapidfire.cpp" />
     <ClCompile Include="mouse\\input_drivers\\my_enc.cpp" />
@@ -105,6 +106,9 @@
     <ClInclude Include="cuda\unified_graph_pipeline.h" />
     <ClInclude Include="cuda\memory_pool.h" />
     <ClInclude Include="cuda\cuda_error_check.h" />
+    <ClInclude Include="cuda\pd_controller.h" />
+    <ClInclude Include="cuda\pd_controller_shared.h" />
+    <ClInclude Include="cuda\mouse_interface.h" />
     <ClInclude Include="capture\gpu_capture.h" />
     <ClInclude Include="capture\game_capture.h" />
     <ClInclude Include="detector\CudaBuffer.h" />

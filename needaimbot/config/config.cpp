@@ -311,6 +311,14 @@ bool Config::loadConfig(const std::string& filename)
     min_movement_threshold = static_cast<float>(get_double_ini("Mouse", "min_movement_threshold", 1.0));
     min_movement_threshold_x = static_cast<float>(get_double_ini("Mouse", "min_movement_threshold_x", min_movement_threshold));
     min_movement_threshold_y = static_cast<float>(get_double_ini("Mouse", "min_movement_threshold_y", min_movement_threshold));
+    
+    // Load PD controller settings
+    pd_kp_x = static_cast<float>(get_double_ini("PDController", "pd_kp_x", 0.4));
+    pd_kp_y = static_cast<float>(get_double_ini("PDController", "pd_kp_y", 0.4));
+    pd_kd_x = static_cast<float>(get_double_ini("PDController", "pd_kd_x", 0.15));
+    pd_kd_y = static_cast<float>(get_double_ini("PDController", "pd_kd_y", 0.15));
+    pd_derivative_filter = static_cast<float>(get_double_ini("PDController", "pd_derivative_filter", 0.7));
+    
     input_method = get_string_ini("Mouse", "input_method", "WIN32");
     easynorecoil_start_delay_ms = get_long_ini("Mouse", "easynorecoil_start_delay_ms", 0);
     easynorecoil_end_delay_ms = get_long_ini("Mouse", "easynorecoil_end_delay_ms", 0);
@@ -569,15 +577,12 @@ bool Config::saveConfig(const std::string& filename)
     file << "easynorecoilstrength = " << easynorecoilstrength << "\n";
     file << "norecoil_step = " << norecoil_step << "\n";
     file << "norecoil_ms = " << norecoil_ms << "\n";
-    file << "mouse_sensitivity = " << mouse_sensitivity << "\n";
-    file << "mouse_sensitivity_x = " << mouse_sensitivity_x << "\n";
-    file << "mouse_sensitivity_y = " << mouse_sensitivity_y << "\n";
-    file << "movement_factor = " << movement_factor << "\n";
-    file << "movement_factor_x = " << movement_factor_x << "\n";
-    file << "movement_factor_y = " << movement_factor_y << "\n";
+    // Legacy fields removed - using PD controller now
+    // Keep min_movement_threshold for deadzone
     file << "min_movement_threshold = " << min_movement_threshold << "\n";
     file << "min_movement_threshold_x = " << min_movement_threshold_x << "\n";
     file << "min_movement_threshold_y = " << min_movement_threshold_y << "\n";
+    
     file << std::noboolalpha;
     file << "input_method = " << input_method << "\n";
     file << std::fixed << std::setprecision(6);
@@ -586,6 +591,14 @@ bool Config::saveConfig(const std::string& filename)
     file << "bScope_multiplier = " << bScope_multiplier << "\n";
     file << "crouch_recoil_enabled = " << (crouch_recoil_enabled ? "true" : "false") << "\n";
     file << "crouch_recoil_reduction = " << crouch_recoil_reduction << "\n\n";
+
+    file << "[PDController]\n";
+    file << std::fixed << std::setprecision(6);
+    file << "pd_kp_x = " << pd_kp_x << "\n";
+    file << "pd_kp_y = " << pd_kp_y << "\n";
+    file << "pd_kd_x = " << pd_kd_x << "\n";
+    file << "pd_kd_y = " << pd_kd_y << "\n";
+    file << "pd_derivative_filter = " << pd_derivative_filter << "\n\n";
 
     file << "[Recoil]\n";
     file << "active_scope_magnification = " << active_scope_magnification << "\n";
