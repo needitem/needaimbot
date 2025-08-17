@@ -90,8 +90,13 @@ void keyboardListener() {
         bool current_pause = is_any_key_pressed(pause_vk_codes);
         if (current_pause && !last_pause_state) {
             // Key was just pressed (not held)
-            ctx.detectionPaused = !ctx.detectionPaused;
-            std::cout << "[Keyboard] Detection " << (ctx.detectionPaused ? "PAUSED" : "RESUMED") << std::endl;
+            if (ctx.getDetectionState().isPaused()) {
+                ctx.getDetectionState().resumeDetection();
+                std::cout << "[Keyboard] Detection RESUMED" << std::endl;
+            } else {
+                ctx.getDetectionState().pauseDetection();
+                std::cout << "[Keyboard] Detection PAUSED" << std::endl;
+            }
         }
         last_pause_state = current_pause;
 

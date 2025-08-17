@@ -20,7 +20,7 @@ void draw_target()
     auto& ctx = AppContext::getInstance();
     
     // Display pause status prominently at the top
-    if (ctx.detectionPaused.load()) {
+    if (ctx.getDetectionState().isPaused()) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.3f, 0.3f, 1.0f)); // Red color
         ImGui::Text("AIMBOT PAUSED (Press %s to resume)", 
                     ctx.config.button_pause.empty() ? "F3" : ctx.config.button_pause[0].c_str());

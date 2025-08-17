@@ -354,13 +354,14 @@ void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float debug_scale) 
                 // Check if this is the best target
                 bool is_best_target = false;
                 {
-                    std::lock_guard<std::mutex> lock(ctx.overlay_target_mutex);
-                    if (ctx.overlay_has_target.load() && 
-                        det.x == ctx.overlay_target_info.x &&
-                        det.y == ctx.overlay_target_info.y &&
-                        det.width == ctx.overlay_target_info.width &&
-                        det.height == ctx.overlay_target_info.height) {
-                        is_best_target = true;
+                    if (ctx.getDetectionState().hasOverlayTarget()) {
+                        auto overlayTarget = ctx.getDetectionState().getOverlayTarget();
+                        if (det.x == overlayTarget.x &&
+                            det.y == overlayTarget.y &&
+                            det.width == overlayTarget.width &&
+                            det.height == overlayTarget.height) {
+                            is_best_target = true;
+                        }
                     }
                 }
 
@@ -529,7 +530,7 @@ void draw_debug()
     auto& ctx = AppContext::getInstance();
     
     // Display pause status prominently
-    if (ctx.detectionPaused.load()) {
+    if (ctx.getDetectionState().isPaused()) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.3f, 0.3f, 1.0f)); // Red color
         ImGui::Text("AIMBOT PAUSED");
         ImGui::PopStyleColor();
@@ -540,8 +541,8 @@ void draw_debug()
     }
     
     if (ctx.config.show_fps) {
-        ImGui::Text("Capture FPS: %.1f", ctx.g_current_capture_fps.load());
-        ImGui::Text("Inference Time: %.2f ms", ctx.g_current_inference_time_ms.load());
+        ImGui::Text("Capture FPS: %.1f", ctx.getPerformanceMetrics().getCurrentCaptureFps());
+        ImGui::Text("Inference Time: %.2f ms", ctx.getPerformanceMetrics().getCurrentInferenceTime());
         
         ImGui::Separator();
         ImGui::Spacing();

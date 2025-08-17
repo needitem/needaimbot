@@ -14,6 +14,10 @@
 #include "cuda/detection/postProcess.h"
 #include <queue>
 #include <chrono>
+#include "core/states/CaptureState.h"
+#include "core/states/DetectionState.h"
+#include "core/metrics/PerformanceMetrics.h"
+
 
 class MouseThread; // Forward declaration
 class Detector;
@@ -33,6 +37,8 @@ public:
     AppContext(const AppContext&) = delete;
     AppContext& operator=(const AppContext&) = delete;
 
+#include "core/states/CaptureState.h"
+
     static AppContext& getInstance() {
         static AppContext instance;
         return instance;
@@ -41,13 +47,12 @@ public:
     // Config
     Config config;
 
-    // Capture buffers
-    std::vector<SimpleCudaMat> captureGpuBuffer;
-    std::atomic<int> captureGpuWriteIdx{0};
-    std::vector<SimpleMat> captureCpuBuffer;
-    std::atomic<int> captureCpuWriteIdx{0};
+    // State management - 새로운 상태 관리 시스템
+    std::unique_ptr<Core::CaptureState> captureState_;
+    std::unique_ptr<Core::DetectionState> detectionState_;
+    std::unique_ptr<Core::PerformanceMetrics> performanceMetrics_;
 
-    // Frame synchronization
+    // Legacy frame synchronization (will be moved to CaptureState gradually)
     std::mutex frame_mutex;
     std::condition_variable frame_cv;
     std::atomic<bool> new_frame_available{false};
@@ -62,55 +67,12 @@ public:
     std::atomic<bool> shooting{false};  // Track if auto_shoot button is pressed
     std::atomic<bool> input_method_changed{false};
     
-    // Capture state changes
-    std::atomic<bool> capture_fps_changed{false};
+    // Detection resolution changes (TODO: move to DetectionState)
     std::atomic<bool> detection_resolution_changed{false};
-    std::atomic<bool> capture_cursor_changed{false};
-    std::atomic<bool> capture_borders_changed{false};
-    std::atomic<bool> capture_timeout_changed{false};
-    std::atomic<bool> capture_method_changed{false};
-    std::atomic<bool> crosshair_offset_changed{false};
     
-    // Capture method selection (0 = Desktop Duplication, 1 = Region Capture)
-    std::atomic<int> capture_method{0};
+    // Performance metrics (TODO: PerformanceMetrics로 이동됨)
     
-    // Performance metrics
-    std::atomic<float> g_current_frame_acquisition_time_ms{0.0f};
-    std::atomic<float> g_current_capture_fps{0.0f};
-    std::atomic<float> g_current_capture_cycle_time_ms{0.0f};
-    std::vector<float> g_frame_acquisition_time_history;
-    std::vector<float> g_capture_fps_history;
-    std::vector<float> g_capture_cycle_time_history;
-    std::mutex g_frame_acquisition_history_mutex;
-    std::mutex g_capture_history_mutex;
-    std::mutex g_capture_cycle_history_mutex;
-    
-    // Detector performance metrics
-    std::atomic<float> g_current_process_frame_time_ms{0.0f};
-    std::atomic<float> g_current_detector_cycle_time_ms{0.0f};
-    std::atomic<float> g_current_inference_time_ms{0.0f};
-    std::atomic<float> g_current_input_send_time_ms{0.0f};
-    std::atomic<float> g_current_detection_to_movement_time_ms{0.0f};
-    std::atomic<float> g_current_fps_delay_time_ms{0.0f};
-    std::atomic<float> g_current_total_cycle_time_ms{0.0f};
-    std::vector<float> g_process_frame_time_history;
-    std::vector<float> g_detector_cycle_time_history;
-    std::vector<float> g_inference_time_history;
-    std::vector<float> g_input_send_time_history;
-    std::vector<float> g_detection_to_movement_time_history;
-    std::vector<float> g_fps_delay_time_history;
-    std::vector<float> g_total_cycle_time_history;
-    std::mutex g_process_frame_history_mutex;
-    std::mutex g_detector_cycle_history_mutex;
-    std::mutex g_inference_history_mutex;
-    std::mutex g_input_send_history_mutex;
-    std::mutex g_detection_to_movement_history_mutex;
-    std::mutex g_fps_delay_history_mutex;
-    std::mutex g_total_cycle_history_mutex;
-    
-    // Application control
-    std::atomic<bool> detectionPaused{false};
-    std::atomic<bool> detector_model_changed{false};
+    // Application control (TODO: 일부 기능은 DetectionState로 이동됨)
     std::mutex configMutex;
     
     std::atomic<float> g_movementDeltaX{0.0f};
@@ -146,11 +108,18 @@ public:
     MouseThread* mouseThread = nullptr;  // Stack allocated in main, so using raw pointer
     Detector* detector = nullptr;  // Raw pointer, lifetime managed externally
 
-    // Overlay Target Data (Synchronized for UI)
-    std::atomic<bool> overlay_has_target{false};
-    Target overlay_target_info{}; // Zero-initialized
-    std::mutex overlay_target_mutex;
+    // Overlay Target Data (TODO: DetectionState로 이동됨)
     
+    // State 접근자
+    Core::CaptureState& getCaptureState() { return *captureState_; }
+    const Core::CaptureState& getCaptureState() const { return *captureState_; }
+    
+    Core::DetectionState& getDetectionState() { return *detectionState_; }
+    const Core::DetectionState& getDetectionState() const { return *detectionState_; }
+    
+    Core::PerformanceMetrics& getPerformanceMetrics() { return *performanceMetrics_; }
+    const Core::PerformanceMetrics& getPerformanceMetrics() const { return *performanceMetrics_; }
+
     // Helper functions
     void add_to_history(std::vector<float>& history, float value, std::mutex& mutex) {
         std::lock_guard<std::mutex> lock(mutex);
@@ -161,13 +130,14 @@ public:
     }
 
 private:
-    AppContext() : captureGpuWriteIdx(0), captureCpuWriteIdx(0), new_frame_available(false) {
-        // Initialize capture buffers
-        captureGpuBuffer.resize(4); // Use literal instead of FRAME_BUFFER_COUNT to avoid circular include
-        captureCpuBuffer.resize(4);
+    AppContext() : new_frame_available(false) {
+        // Initialize new state management
+        captureState_ = std::make_unique<Core::CaptureState>(4);
+        detectionState_ = std::make_unique<Core::DetectionState>();
+        performanceMetrics_ = std::make_unique<Core::PerformanceMetrics>();
         
         // Initialize capture_method from config after config is loaded
-        capture_method.store(config.gpu_capture_method);
+        captureState_->setCaptureMethod(config.gpu_capture_method);
     }
 };
 

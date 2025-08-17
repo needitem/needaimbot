@@ -140,12 +140,13 @@ void draw_stats() {
         
         ImGui::Separator();
         
-        // Legacy timing stats (keep for compatibility)
-        draw_stat_plot("Capture Time", get_history_copy(ctx.g_frame_acquisition_time_history, ctx.g_frame_acquisition_history_mutex), ctx.g_current_frame_acquisition_time_ms.load(std::memory_order_relaxed), "ms");
-        draw_stat_plot("Inference Time", get_history_copy(ctx.g_inference_time_history, ctx.g_inference_history_mutex), ctx.g_current_inference_time_ms.load(std::memory_order_relaxed), "ms");
-        draw_stat_plot("Mouse Movement Time", get_history_copy(ctx.g_input_send_time_history, ctx.g_input_send_history_mutex), ctx.g_current_input_send_time_ms.load(std::memory_order_relaxed), "ms");
-        draw_stat_plot("Total Cycle Time", get_history_copy(ctx.g_total_cycle_time_history, ctx.g_total_cycle_history_mutex), ctx.g_current_total_cycle_time_ms.load(std::memory_order_relaxed), "ms");
-        draw_stat_plot("FPS Delay", get_history_copy(ctx.g_fps_delay_time_history, ctx.g_fps_delay_history_mutex), ctx.g_current_fps_delay_time_ms.load(std::memory_order_relaxed), "ms");
+        // Performance metrics using new PerformanceMetrics system
+        auto& metrics = ctx.getPerformanceMetrics();
+        draw_stat_plot("Capture Time", metrics.getHistory("frame_acquisition_time"), metrics.getCurrentFrameAcquisitionTime(), "ms");
+        draw_stat_plot("Inference Time", metrics.getHistory("inference_time"), metrics.getCurrentInferenceTime(), "ms");
+        draw_stat_plot("Mouse Movement Time", metrics.getHistory("input_send_time"), metrics.getCurrentInputSendTime(), "ms");
+        draw_stat_plot("Total Cycle Time", metrics.getHistory("total_cycle_time"), metrics.getCurrentTotalCycleTime(), "ms");
+        draw_stat_plot("FPS Delay", metrics.getHistory("fps_delay_time"), metrics.getCurrentFpsDelayTime(), "ms");
         
 
         ImGui::EndTable();

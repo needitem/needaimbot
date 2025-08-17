@@ -63,6 +63,9 @@
     <ClCompile Include="utils\image_io.cpp" />
     <ClCompile Include="utils\window_enum.cpp" />
     <ClCompile Include="scr\other_tools.cpp" />
+    <ClCompile Include="core\states\CaptureState.cpp" />
+    <ClCompile Include="core\states\DetectionState.cpp" />
+    <ClCompile Include="core\metrics\PerformanceMetrics.cpp" />
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="cuda\detection\filterGpu.cu" />

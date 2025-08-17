@@ -159,7 +159,7 @@ void renderOffsetTab()
                 if (ImGui::Button("UP##offset_up", ImVec2(button_size, button_size))) {
                     ctx.config.crosshair_offset_y -= adjustment_step;  // Negative to move capture up
                     offset_changed = true;
-                    ctx.crosshair_offset_changed.store(true);
+                    ctx.getCaptureState().markCrosshairOffsetChanged();
                 }
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move capture region up");
                 
@@ -167,7 +167,7 @@ void renderOffsetTab()
                 if (ImGui::Button("L##offset_left", ImVec2(button_size, button_size))) {
                     ctx.config.crosshair_offset_x -= adjustment_step;  // Negative to move capture left
                     offset_changed = true;
-                    ctx.crosshair_offset_changed.store(true);
+                    ctx.getCaptureState().markCrosshairOffsetChanged();
                 }
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move capture region left");
                 
@@ -178,7 +178,7 @@ void renderOffsetTab()
                 if (ImGui::Button("R##offset_right", ImVec2(button_size, button_size))) {
                     ctx.config.crosshair_offset_x += adjustment_step;  // Positive to move capture right
                     offset_changed = true;
-                    ctx.crosshair_offset_changed.store(true);
+                    ctx.getCaptureState().markCrosshairOffsetChanged();
                 }
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move capture region right");
                 
@@ -187,7 +187,7 @@ void renderOffsetTab()
                 if (ImGui::Button("DN##offset_down", ImVec2(button_size, button_size))) {
                     ctx.config.crosshair_offset_y += adjustment_step;  // Positive to move capture down
                     offset_changed = true;
-                    ctx.crosshair_offset_changed.store(true);
+                    ctx.getCaptureState().markCrosshairOffsetChanged();
                 }
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move capture region down");
             }
@@ -202,7 +202,7 @@ void renderOffsetTab()
                 ctx.config.crosshair_offset_x = 0.0f;
                 ctx.config.crosshair_offset_y = 0.0f;
                 offset_changed = true;
-                ctx.crosshair_offset_changed.store(true);
+                ctx.getCaptureState().markCrosshairOffsetChanged();
             }
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Reset capture region to center");
             
@@ -217,13 +217,13 @@ void renderOffsetTab()
             ImGui::Text("X"); ImGui::SameLine();
             if (ImGui::DragFloat("##offset_x_fine", &ctx.config.crosshair_offset_x, 0.1f, -100.0f, 100.0f, "%.1f")) {
                 offset_changed = true;
-                ctx.crosshair_offset_changed.store(true);
+                ctx.getCaptureState().markCrosshairOffsetChanged();
             }
             ImGui::SetNextItemWidth(60);
             ImGui::Text("Y"); ImGui::SameLine();
             if (ImGui::DragFloat("##offset_y_fine", &ctx.config.crosshair_offset_y, 0.1f, -100.0f, 100.0f, "%.1f")) {
                 offset_changed = true;
-                ctx.crosshair_offset_changed.store(true);
+                ctx.getCaptureState().markCrosshairOffsetChanged();
             }
             ImGui::PopItemWidth();
         }
@@ -256,7 +256,7 @@ void renderOffsetTab()
                     if (ImGui::Button("UP##aim_shoot_up", ImVec2(button_size, button_size))) {
                         ctx.config.aim_shoot_offset_y -= adjustment_step;  // Negative to move capture up
                         aim_shoot_offset_changed = true;
-                        ctx.crosshair_offset_changed.store(true);
+                        ctx.getCaptureState().markCrosshairOffsetChanged();
                     }
                     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move aim+shoot capture region up");
                     
@@ -264,7 +264,7 @@ void renderOffsetTab()
                     if (ImGui::Button("L##aim_shoot_left", ImVec2(button_size, button_size))) {
                         ctx.config.aim_shoot_offset_x -= adjustment_step;  // Negative to move capture left
                         aim_shoot_offset_changed = true;
-                        ctx.crosshair_offset_changed.store(true);
+                        ctx.getCaptureState().markCrosshairOffsetChanged();
                     }
                     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move aim+shoot capture region left");
                     
@@ -275,7 +275,7 @@ void renderOffsetTab()
                     if (ImGui::Button("R##aim_shoot_right", ImVec2(button_size, button_size))) {
                         ctx.config.aim_shoot_offset_x += adjustment_step;  // Positive to move capture right
                         aim_shoot_offset_changed = true;
-                        ctx.crosshair_offset_changed.store(true);
+                        ctx.getCaptureState().markCrosshairOffsetChanged();
                     }
                     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move aim+shoot capture region right");
                     
@@ -284,7 +284,7 @@ void renderOffsetTab()
                     if (ImGui::Button("DN##aim_shoot_down", ImVec2(button_size, button_size))) {
                         ctx.config.aim_shoot_offset_y += adjustment_step;  // Positive to move capture down
                         aim_shoot_offset_changed = true;
-                        ctx.crosshair_offset_changed.store(true);
+                        ctx.getCaptureState().markCrosshairOffsetChanged();
                     }
                     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move aim+shoot capture region down");
                 }
@@ -299,7 +299,7 @@ void renderOffsetTab()
                     ctx.config.aim_shoot_offset_x = ctx.config.crosshair_offset_x;
                     ctx.config.aim_shoot_offset_y = ctx.config.crosshair_offset_y;
                     aim_shoot_offset_changed = true;
-                    ctx.crosshair_offset_changed.store(true);
+                    ctx.getCaptureState().markCrosshairOffsetChanged();
                 }
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Copy offset values from normal crosshair");
                 
@@ -314,13 +314,13 @@ void renderOffsetTab()
                 ImGui::Text("X"); ImGui::SameLine();
                 if (ImGui::DragFloat("##aim_shoot_x_fine", &ctx.config.aim_shoot_offset_x, 0.1f, -100.0f, 100.0f, "%.1f")) {
                     aim_shoot_offset_changed = true;
-                    ctx.crosshair_offset_changed.store(true);
+                    ctx.getCaptureState().markCrosshairOffsetChanged();
                 }
                 ImGui::SetNextItemWidth(60);
                 ImGui::Text("Y"); ImGui::SameLine();
                 if (ImGui::DragFloat("##aim_shoot_y_fine", &ctx.config.aim_shoot_offset_y, 0.1f, -100.0f, 100.0f, "%.1f")) {
                     aim_shoot_offset_changed = true;
-                    ctx.crosshair_offset_changed.store(true);
+                    ctx.getCaptureState().markCrosshairOffsetChanged();
                 }
                 ImGui::PopItemWidth();
             } else {
