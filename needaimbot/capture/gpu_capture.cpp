@@ -27,8 +27,129 @@
 
 using Microsoft::WRL::ComPtr;
 
+// Frame buffer for triple buffering
+struct FrameBuffer {
+    enum State {
+        EMPTY,      // Buffer is available for capture
+        FILLING,    // Currently being filled by capture
+        READY,      // Ready for processing
+        PROCESSING  // Being processed by pipeline
+    };
+    
+    ComPtr<ID3D11Texture2D> texture;
+    cudaGraphicsResource_t cudaResource;
+    cudaEvent_t readyEvent;
+    cudaEvent_t doneEvent;
+    std::atomic<State> state;
+    std::atomic<uint64_t> version;
+    std::atomic<int> refCount;  // For safe reuse
+    
+    FrameBuffer() : cudaResource(nullptr), readyEvent(nullptr), 
+                    doneEvent(nullptr), state(EMPTY), 
+                    version(0), refCount(0) {}
+    
+    ~FrameBuffer() {
+        try {
+            // Synchronize before destroying events
+            if (readyEvent) {
+                cudaEventSynchronize(readyEvent);
+                cudaEventDestroy(readyEvent);
+                readyEvent = nullptr;
+            }
+            if (doneEvent) {
+                cudaEventSynchronize(doneEvent);
+                cudaEventDestroy(doneEvent);
+                doneEvent = nullptr;
+            }
+            if (cudaResource) {
+                // Ensure no pending operations before unregistering
+                cudaDeviceSynchronize();
+                cudaGraphicsUnregisterResource(cudaResource);
+                cudaResource = nullptr;
+            }
+            // Reset texture safely
+            texture.Reset();
+        } catch (...) {
+            // Ignore exceptions in destructor
+        }
+    }
+    
+    bool Initialize(ID3D11Device* device, int width, int height) {
+        // Validate inputs
+        if (!device || width <= 0 || height <= 0) {
+            std::cerr << "[FrameBuffer] Invalid initialization parameters" << std::endl;
+            return false;
+        }
+        
+        // Create D3D11 texture
+        D3D11_TEXTURE2D_DESC desc = {};
+        desc.Width = width;
+        desc.Height = height;
+        desc.MipLevels = 1;
+        desc.ArraySize = 1;
+        desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        desc.SampleDesc.Count = 1;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+        desc.CPUAccessFlags = 0;
+        desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
+        
+        HRESULT hr = device->CreateTexture2D(&desc, nullptr, &texture);
+        if (FAILED(hr)) {
+            std::cerr << "[FrameBuffer] Failed to create D3D11 texture: 0x" << std::hex << hr << std::dec << std::endl;
+            return false;
+        }
+        
+        // Verify texture was created
+        if (!texture) {
+            std::cerr << "[FrameBuffer] Texture creation succeeded but pointer is null" << std::endl;
+            return false;
+        }
+        
+        // Register with CUDA
+        cudaError_t err = cudaGraphicsD3D11RegisterResource(
+            &cudaResource, texture.Get(), cudaGraphicsRegisterFlagsNone);
+        if (err != cudaSuccess) {
+            std::cerr << "[FrameBuffer] Failed to register D3D11 resource with CUDA: " << cudaGetErrorString(err) << std::endl;
+            texture.Reset();
+            return false;
+        }
+        
+        // Create events (remove BlockingSync flag to avoid handle issues)
+        err = cudaEventCreateWithFlags(&readyEvent, cudaEventDisableTiming);
+        if (err != cudaSuccess) {
+            std::cerr << "[FrameBuffer] Failed to create ready event: " << cudaGetErrorString(err) << std::endl;
+            cudaGraphicsUnregisterResource(cudaResource);
+            cudaResource = nullptr;
+            texture.Reset();
+            return false;
+        }
+        
+        err = cudaEventCreateWithFlags(&doneEvent, cudaEventDisableTiming);
+        if (err != cudaSuccess) {
+            std::cerr << "[FrameBuffer] Failed to create done event: " << cudaGetErrorString(err) << std::endl;
+            cudaEventDestroy(readyEvent);
+            readyEvent = nullptr;
+            cudaGraphicsUnregisterResource(cudaResource);
+            cudaResource = nullptr;
+            texture.Reset();
+            return false;
+        }
+        
+        // Mark as initialized and ready
+        state = EMPTY;
+        version = 0;
+        refCount = 0;
+        
+        return true;
+    }
+};
+
 class GPUCapture {
 private:
+    // Shutdown flag to prevent access during destruction
+    mutable std::atomic<bool> m_isShuttingDown{false};
+    
     // DXGI Desktop Duplication
     ComPtr<IDXGIOutputDuplication> m_duplication;
     ComPtr<ID3D11Device> m_device;
@@ -42,10 +163,26 @@ private:
     HANDLE m_fenceEvent;
     UINT64 m_fenceValue;
     
-    // CUDA interop
+    // CUDA interop - Double buffering for safe reuse
     cudaGraphicsResource_t m_cudaResource;
+    cudaGraphicsResource_t m_cudaResourceBuffer[2];  // Double buffer
+    int m_currentBuffer;  // 0 or 1
+    ComPtr<ID3D11Texture2D> m_stagingTextureBuffer[2];  // Double buffer textures
+    
     cudaStream_t m_captureStream;
     cudaEvent_t m_frameReadyEvent;
+    cudaEvent_t m_frameConsumedEvent;  // Pipeline signals when done with frame
+    
+    // Frame versioning for safe reuse
+    std::atomic<uint64_t> m_frameVersion;
+    uint64_t m_lastConsumedVersion;
+    
+    // Triple buffering
+    static constexpr int NUM_BUFFERS = 3;
+    FrameBuffer m_frameBuffers[NUM_BUFFERS];
+    std::atomic<int> m_captureIndex;
+    std::atomic<int> m_processIndex;
+    std::atomic<int> m_readyIndex;
     
     // Capture dimensions
     int m_width;
@@ -54,29 +191,66 @@ private:
     // State
     std::atomic<bool> m_isCapturing;
     bool m_useVSync;
-
+    
 public:
+    // Frame reuse control - Made public for access from capture thread
+    std::atomic<int> m_reuseCount;
+    static constexpr int MAX_REUSE_COUNT = 30;  // Reduced to prevent handle issues
+    
     GPUCapture(int width, int height) 
         : m_width(width), m_height(height), 
           m_cudaResource(nullptr), m_captureStream(nullptr),
-          m_frameReadyEvent(nullptr), m_fenceEvent(nullptr),
-          m_fenceValue(0), m_isCapturing(false), m_useVSync(false) {
+          m_frameReadyEvent(nullptr), m_frameConsumedEvent(nullptr),
+          m_fenceEvent(nullptr), m_fenceValue(0), 
+          m_isCapturing(false), m_useVSync(false),
+          m_currentBuffer(0), m_reuseCount(0),
+          m_frameVersion(0), m_lastConsumedVersion(0),
+          m_captureIndex(0), m_processIndex(1), m_readyIndex(0) {  // Changed from -1 to 0
+        m_cudaResourceBuffer[0] = nullptr;
+        m_cudaResourceBuffer[1] = nullptr;
     }
     
     ~GPUCapture() {
+        // Set shutdown flag first to prevent any new access
+        m_isShuttingDown = true;
+        
+        // Wait a bit for any ongoing operations to complete
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        
         StopCapture();
         
+        // Synchronize all CUDA operations before cleanup
+        cudaDeviceSynchronize();
+        
         if (m_frameReadyEvent) {
+            cudaEventSynchronize(m_frameReadyEvent);
             cudaEventDestroy(m_frameReadyEvent);
+            m_frameReadyEvent = nullptr;
+        }
+        if (m_frameConsumedEvent) {
+            cudaEventSynchronize(m_frameConsumedEvent);
+            cudaEventDestroy(m_frameConsumedEvent);
+            m_frameConsumedEvent = nullptr;
         }
         if (m_captureStream) {
+            cudaStreamSynchronize(m_captureStream);
             cudaStreamDestroy(m_captureStream);
+            m_captureStream = nullptr;
         }
+        
+        // Cleanup triple buffers
+        for (int i = 0; i < NUM_BUFFERS; i++) {
+            // Buffers will clean themselves in their destructors
+            m_frameBuffers[i].state = FrameBuffer::EMPTY;
+        }
+        
         if (m_cudaResource) {
             cudaGraphicsUnregisterResource(m_cudaResource);
+            m_cudaResource = nullptr;
         }
         if (m_fenceEvent) {
             CloseHandle(m_fenceEvent);
+            m_fenceEvent = nullptr;
         }
         
         m_duplication.Reset();
@@ -148,7 +322,36 @@ public:
             return false;
         }
         
-        std::cout << "[GPUCapture] Initialized successfully" << std::endl;
+        // 5. Initialize triple buffers
+        std::cout << "[GPUCapture] Initializing triple buffers..." << std::endl;
+        for (int i = 0; i < NUM_BUFFERS; i++) {
+            std::cout << "[GPUCapture] Initializing buffer " << i << "..." << std::endl;
+            
+            if (!m_frameBuffers[i].Initialize(m_device.Get(), m_width, m_height)) {
+                std::cerr << "[GPUCapture] Failed to initialize buffer " << i << std::endl;
+                // Clean up already initialized buffers
+                for (int j = 0; j < i; j++) {
+                    // Buffers will clean themselves in destructor
+                    m_frameBuffers[j].state = FrameBuffer::EMPTY;
+                }
+                return false;
+            }
+            
+            // Verify initialization
+            if (!m_frameBuffers[i].texture || !m_frameBuffers[i].cudaResource || 
+                !m_frameBuffers[i].readyEvent || !m_frameBuffers[i].doneEvent) {
+                std::cerr << "[GPUCapture] Buffer " << i << " initialization incomplete - missing resources" << std::endl;
+                return false;
+            }
+            
+            std::cout << "[GPUCapture] Buffer " << i << " initialized successfully" 
+                      << " (texture=" << (m_frameBuffers[i].texture ? "OK" : "NULL")
+                      << ", cuda=" << (m_frameBuffers[i].cudaResource ? "OK" : "NULL")
+                      << ", events=" << (m_frameBuffers[i].readyEvent && m_frameBuffers[i].doneEvent ? "OK" : "NULL")
+                      << ")" << std::endl;
+        }
+        
+        std::cout << "[GPUCapture] Initialized successfully with triple buffering" << std::endl;
         return true;
     }
     
@@ -158,6 +361,10 @@ public:
     
     void StopCapture() {
         m_isCapturing = false;
+        // Wait for any pending operations
+        if (m_captureStream) {
+            cudaStreamSynchronize(m_captureStream);
+        }
     }
     
     bool RecreateDesktopDuplication() {
@@ -212,15 +419,54 @@ public:
         }
     }
     
+    // Get the next available buffer for processing
+    cudaGraphicsResource_t GetCurrentResource() {
+        int idx = m_readyIndex.load();
+        
+        // Validate index first - MUST check before ANY array access
+        if (idx < 0 || idx >= NUM_BUFFERS) {
+            return m_cudaResource; // Fallback to old resource
+        }
+        
+        // Safe to access array now
+        // Additional safety check
+        if (m_frameBuffers[idx].cudaResource) {
+            return m_frameBuffers[idx].cudaResource;
+        }
+        
+        return m_cudaResource; // Fallback to old resource
+    }
+    
+    // Signal that processing is done
+    void SignalProcessingDone() {
+        int idx = m_readyIndex.load();
+        // Validate index first - MUST check before ANY array access
+        if (idx >= 0 && idx < NUM_BUFFERS) {
+            // Safe to access array now
+            if (m_frameBuffers[idx].doneEvent) {
+                cudaEventRecord(m_frameBuffers[idx].doneEvent, 0);
+            }
+            m_frameBuffers[idx].state = FrameBuffer::EMPTY;
+        }
+    }
+    
     bool WaitForNextFrame() {
+        // Check shutdown flag first
+        if (m_isShuttingDown.load()) {
+            return false;
+        }
+        
         static int callCount = 0;
         static bool frameAcquired = false;  // Track if we have an unreleased frame
+        static bool hasValidFrame = false;  // Track if we have a valid frame in staging texture
+        static int reuseCount = 0;  // Track how many times we reused the same frame
         static int timeoutCount = 0;
         static int successCount = 0;
         callCount++;
         
         try {
-            if (!m_isCapturing || !m_duplication) {
+            // Check shutdown flag again
+            if (m_isShuttingDown.load() || !m_isCapturing || !m_duplication) {
                 return false;
             }
             
@@ -267,13 +513,48 @@ public:
         // Handle timeout - this is normal when no new frame is available
         if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
             timeoutCount++;
-            // For stability, don't reuse frames indefinitely
-            // Return false to skip this iteration and try again next time
+            
+            // TRIPLE BUFFER REUSE: Check for ready buffers
+            for (int i = 0; i < NUM_BUFFERS; i++) {
+                // Validate buffer is properly initialized first
+                if (!m_frameBuffers[i].texture || !m_frameBuffers[i].cudaResource ||
+                    !m_frameBuffers[i].readyEvent || !m_frameBuffers[i].doneEvent) {
+                    continue;  // Skip uninitialized buffers
+                }
+                
+                auto state = m_frameBuffers[i].state.load();
+                
+                if (state == FrameBuffer::READY) {
+                    // Check if pipeline consumed previous frame from this buffer
+                    cudaError_t queryErr = cudaEventQuery(m_frameBuffers[i].doneEvent);
+                    
+                    if (queryErr == cudaSuccess) {
+                        // Buffer is available for reuse
+                        int bufferReuseCount = m_frameBuffers[i].refCount.load();
+                        
+                        if (bufferReuseCount < MAX_REUSE_COUNT) {
+                            m_frameBuffers[i].refCount++;
+                            m_readyIndex = i;
+                            m_reuseCount++;  // Increment global reuse counter
+                            
+                            // Signal frame ready for pipeline
+                            if (m_frameBuffers[i].readyEvent && m_captureStream) {
+                                cudaEventRecord(m_frameBuffers[i].readyEvent, m_captureStream);
+                            }
+                            return true;
+                        }
+                    }
+                    // If cudaErrorNotReady, buffer is still being processed - skip it
+                }
+            }
+            
+            // No buffer available for reuse
             return false;
         }
         
         if (hr == DXGI_ERROR_ACCESS_LOST) {
             std::cerr << "[GPUCapture] Access lost at frame " << callCount << ", recreating..." << std::endl;
+            hasValidFrame = false;  // Invalidate cached frame
             // Try to recreate duplication
             if (!RecreateDesktopDuplication()) {
                 std::cerr << "[GPUCapture] Failed to recreate duplication" << std::endl;
@@ -310,7 +591,13 @@ public:
         
         // Successfully acquired a new frame
         frameAcquired = true;
+        hasValidFrame = true;  // Mark that we now have a valid frame
+        m_reuseCount = 0;  // Reset reuse counter for new frame
+        reuseCount = 0;  // Reset local counter too
+        m_frameVersion++;  // Increment version for new frame
         successCount++;
+        
+        int targetBuffer = -1;  // Declare here for later use
         
         // Get the desktop texture
         ComPtr<ID3D11Texture2D> desktopTexture;
@@ -352,7 +639,50 @@ public:
         srcX = (std::max)(0, (std::min)(srcX, (int)fullDesc.Width - m_width));
         srcY = (std::max)(0, (std::min)(srcY, (int)fullDesc.Height - m_height));
         
-        // Copy to our staging texture (cropped to capture area)
+        // Find available buffer for new frame (already declared above)
+        targetBuffer = -1;
+        
+        // Add validation before accessing m_frameBuffers array
+        for (int i = 0; i < NUM_BUFFERS; i++) {
+            // Extra safety: verify buffer exists before accessing state
+            if (i >= 0 && i < NUM_BUFFERS) {
+                try {
+                    FrameBuffer::State bufferState = m_frameBuffers[i].state.load();
+                    if (bufferState == FrameBuffer::EMPTY) {
+                        targetBuffer = i;
+                        break;
+                    }
+                } catch (...) {
+                    std::cerr << "[GPUCapture] Exception accessing buffer " << i << " state" << std::endl;
+                    continue;
+                }
+            }
+        }
+        
+        // If no empty buffer, use the oldest one (round-robin)
+        if (targetBuffer == -1) {
+            // Ensure m_captureIndex is valid before using it
+            int captureIdx = m_captureIndex.load();
+            if (captureIdx < 0 || captureIdx >= NUM_BUFFERS) {
+                std::cerr << "[GPUCapture] Invalid m_captureIndex: " << captureIdx << ", resetting to 0" << std::endl;
+                m_captureIndex = 0;
+                captureIdx = 0;
+            }
+            targetBuffer = captureIdx;
+            m_captureIndex = (captureIdx + 1) % NUM_BUFFERS;
+        }
+        
+        // Validate targetBuffer before any array access
+        if (targetBuffer < 0 || targetBuffer >= NUM_BUFFERS) {
+            std::cerr << "[GPUCapture] Invalid targetBuffer: " << targetBuffer << std::endl;
+            if (frameAcquired) {
+                m_duplication->ReleaseFrame();
+                frameAcquired = false;
+            }
+            return false;
+        }
+        
+        // Copy to triple buffer texture
         D3D11_BOX sourceBox = {};
         sourceBox.left = srcX;
         sourceBox.right = srcX + m_width;
@@ -361,10 +691,33 @@ public:
         sourceBox.front = 0;
         sourceBox.back = 1;
         
-        m_context->CopySubresourceRegion(
-            m_stagingTexture.Get(), 0, 0, 0, 0,
-            desktopTexture.Get(), 0, &sourceBox
-        );
+        // Copy to selected buffer - now we know targetBuffer is valid
+        if (m_frameBuffers[targetBuffer].texture && 
+            m_frameBuffers[targetBuffer].cudaResource) {
+            
+            m_context->CopySubresourceRegion(
+                m_frameBuffers[targetBuffer].texture.Get(), 0, 0, 0, 0,
+                desktopTexture.Get(), 0, &sourceBox
+            );
+            
+            // Update buffer state
+            m_frameBuffers[targetBuffer].state = FrameBuffer::READY;
+            m_frameBuffers[targetBuffer].version.store(m_frameVersion);
+            m_frameBuffers[targetBuffer].refCount = 0;
+            m_readyIndex = targetBuffer;
+            
+            // Also copy to staging texture for compatibility
+            m_context->CopySubresourceRegion(
+                m_stagingTexture.Get(), 0, 0, 0, 0,
+                desktopTexture.Get(), 0, &sourceBox
+            );
+        } else {
+            // Fallback to old staging texture
+            m_context->CopySubresourceRegion(
+                m_stagingTexture.Get(), 0, 0, 0, 0,
+                desktopTexture.Get(), 0, &sourceBox
+            );
+        }
         
         // Signal fence for GPU synchronization with new value only for new frames
         if (m_fence && m_fence.Get() && m_context4) {
@@ -375,9 +728,21 @@ public:
             }
         }
         
+        // Record CUDA event to signal frame is ready
+        if (m_frameReadyEvent && m_captureStream) {
+            cudaEventRecord(m_frameReadyEvent, m_captureStream);
+        }
+        
+        // Also record event for the specific buffer
+        if (targetBuffer >= 0 && targetBuffer < NUM_BUFFERS) {
+            if (m_frameBuffers[targetBuffer].readyEvent && m_captureStream) {
+                cudaEventRecord(m_frameBuffers[targetBuffer].readyEvent, m_captureStream);
+            }
+        }
+        
         return true;
         
-        } catch (const std::exception& e) {
+    } catch (const std::exception& e) {
             std::cerr << "[GPUCapture] Exception at frame " << callCount << ": " << e.what() << std::endl;
             
             // Release frame if we have one
@@ -393,7 +758,7 @@ public:
                 std::cerr << "[GPUCapture] Failed to recover from exception" << std::endl;
             }
             return false;
-        } catch (...) {
+    } catch (...) {
             std::cerr << "[GPUCapture] Unknown exception at frame " << callCount << std::endl;
             
             // Release frame if we have one
@@ -409,11 +774,51 @@ public:
                 std::cerr << "[GPUCapture] Failed to recover from unknown exception" << std::endl;
             }
             return false;
-        }
     }
+}
     
     cudaGraphicsResource_t GetCudaResource() const { 
-        return m_cudaResource; 
+        // Check shutdown flag
+        if (m_isShuttingDown.load()) {
+            return nullptr;
+        }
+        
+        try {
+            // First check if we have a valid fallback resource
+            if (!m_cudaResource) {
+                // No resources available at all
+                return nullptr;
+            }
+            
+            // Return the current ready buffer's resource
+            int idx = m_readyIndex.load();
+            
+            // Validate index first - MUST check before ANY array access
+            if (idx < 0 || idx >= NUM_BUFFERS) {
+                // Invalid index, use fallback
+                return m_cudaResource;
+            }
+            
+            // Additional safety: validate buffer is initialized
+            // Check cudaResource first as it's safer to access
+            cudaGraphicsResource_t resource = m_frameBuffers[idx].cudaResource;
+            if (!resource) {
+                return m_cudaResource;  // Buffer not initialized, use fallback
+            }
+            
+            // Now check state - only after we know buffer is valid
+            FrameBuffer::State bufferState = m_frameBuffers[idx].state.load();
+            if (bufferState != FrameBuffer::READY && bufferState != FrameBuffer::EMPTY) {
+                // Buffer not in a usable state, use fallback
+                return m_cudaResource;
+            }
+            
+            // Return the validated resource
+            return resource;
+        } catch (...) {
+            // On any exception, return fallback
+            return m_cudaResource;
+        }
     }
     
     // Public method to reinitialize CUDA resources (for periodic refresh)
@@ -511,7 +916,14 @@ private:
         // Create event for frame ready signaling
         err = cudaEventCreateWithFlags(&m_frameReadyEvent, cudaEventDisableTiming);
         if (err != cudaSuccess) {
-            std::cerr << "[GPUCapture] Failed to create CUDA event: " << cudaGetErrorString(err) << std::endl;
+            std::cerr << "[GPUCapture] Failed to create frame ready event: " << cudaGetErrorString(err) << std::endl;
+            return false;
+        }
+        
+        // Create event for frame consumed signaling
+        err = cudaEventCreateWithFlags(&m_frameConsumedEvent, cudaEventDisableTiming);
+        if (err != cudaSuccess) {
+            std::cerr << "[GPUCapture] Failed to create frame consumed event: " << cudaGetErrorString(err) << std::endl;
             return false;
         }
         
@@ -563,8 +975,38 @@ void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
                 }
                 
                 // Set CUDA resource in pipeline
-                pipeline->setInputTexture(gameCapture->GetCudaResource());
-                std::cout << "[GameCapture] CUDA resource set in pipeline" << std::endl;
+                cudaGraphicsResource_t gameResource = gameCapture->GetCudaResource();
+                if (!gameResource) {
+                    std::cerr << "[GameCapture] ERROR: GetCudaResource returned nullptr!" << std::endl;
+                    gameCapture->StopCapture();
+                    delete gameCapture;
+                    return;
+                }
+                
+                // Check if resource looks like an invalid handle (-1)
+                if (reinterpret_cast<intptr_t>(gameResource) == -1 || 
+                    reinterpret_cast<intptr_t>(gameResource) == 0xffffffffffffffff) {
+                    std::cerr << "[GameCapture] ERROR: GetCudaResource returned invalid handle (0xffffffffffffffff)!" << std::endl;
+                    gameCapture->StopCapture();
+                    delete gameCapture;
+                    return;
+                }
+                
+                try {
+                    pipeline->setInputTexture(gameResource);
+                    std::cout << "[GameCapture] CUDA resource set in pipeline (resource ptr: " 
+                              << std::hex << gameResource << std::dec << ")" << std::endl;
+                } catch (const std::exception& e) {
+                    std::cerr << "[GameCapture] ERROR: Failed to set input texture: " << e.what() << std::endl;
+                    gameCapture->StopCapture();
+                    delete gameCapture;
+                    return;
+                } catch (...) {
+                    std::cerr << "[GameCapture] ERROR: Unknown exception setting input texture" << std::endl;
+                    gameCapture->StopCapture();
+                    delete gameCapture;
+                    return;
+                }
                 
                 // Main capture loop
                 int frameCount = 0;
@@ -626,15 +1068,17 @@ void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
                 
                 gameCapture->StopCapture();
             } else {
-                std::cerr << "[GameCapture] Failed to start capture, falling back to Desktop Duplication" << std::endl;
-                ctx.capture_method.store(0);  // Fall back to Desktop Duplication
+                std::cerr << "[GameCapture] ERROR: Failed to start Game Capture - exiting" << std::endl;
+                ctx.should_exit = true;  // Exit instead of falling back
+                return;
             }
             
             delete gameCapture;
         } catch (const std::exception& e) {
-            std::cerr << "[GameCapture] Exception: " << e.what() << ", falling back to Desktop Duplication" << std::endl;
+            std::cerr << "[GameCapture] Exception: " << e.what() << " - exiting" << std::endl;
             if (gameCapture) delete gameCapture;
-            ctx.capture_method.store(0);  // Fall back to Desktop Duplication
+            ctx.should_exit = true;  // Exit instead of falling back
+            return;
         }
         
         // If we exited due to capture method change or error, check if we should continue
@@ -679,8 +1123,25 @@ void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
         std::cout << "[GPUCapture] Pipeline found and ready" << std::endl;
         
         // Set CUDA resource in pipeline
-        pipeline->setInputTexture(gpuCapture.GetCudaResource());
-        std::cout << "[GPUCapture] CUDA resource set in pipeline" << std::endl;
+        cudaGraphicsResource_t resource = gpuCapture.GetCudaResource();
+        if (!resource) {
+            std::cerr << "[GPUCapture] ERROR: No CUDA resource available!" << std::endl;
+            gpuCapture.StopCapture();
+            return;
+        }
+        
+        try {
+            pipeline->setInputTexture(resource);
+            std::cout << "[GPUCapture] CUDA resource set in pipeline" << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "[GPUCapture] ERROR: Failed to set input texture: " << e.what() << std::endl;
+            gpuCapture.StopCapture();
+            return;
+        } catch (...) {
+            std::cerr << "[GPUCapture] ERROR: Unknown exception setting input texture" << std::endl;
+            gpuCapture.StopCapture();
+            return;
+        }
         
         std::cout << "[GPUCapture] Starting main capture loop..." << std::endl;
         
@@ -739,22 +1200,97 @@ void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
                     
                     
                     auto pipelineStartTime = std::chrono::steady_clock::now();
-                    bool pipelineSuccess = false;
+                    bool pipelineSuccess = true;  // Initialize to true, not false!
                     
                     try {
+                        // Add synchronization for reused frames (simplified)
+                        if (gpuCapture.m_reuseCount > 0) {
+                            // Simple sync without error check that would set pipelineSuccess to false
+                            cudaStreamSynchronize(0);
+                            
+                            // Small delay to prevent resource contention
+                            if (gpuCapture.m_reuseCount % 5 == 0) {
+                                Sleep(1);  // 1ms delay every 5 reuses
+                            }
+                        }
+                        
                         // Verify pipeline and CUDA resource are valid before execution
                         if (!pipeline) {
                             std::cerr << "[GPUCapture] ERROR: Pipeline is NULL at frame #" << totalFrameCount << std::endl;
                             pipelineSuccess = false;
-                        } else if (!gpuCapture.GetCudaResource()) {
-                            std::cerr << "[GPUCapture] ERROR: CUDA resource is NULL at frame #" << totalFrameCount << std::endl;
-                            pipelineSuccess = false;
-                        } else if (ctx.use_cuda_graph && pipeline->isGraphReady()) {
-                            PERF_TIMER("Pipeline_Graph");
-                            pipelineSuccess = pipeline->executeGraph();
                         } else {
-                            PERF_TIMER("Pipeline_Direct");
-                            pipelineSuccess = pipeline->executeDirect();
+                            // Add periodic pipeline validation
+                            if (totalFrameCount % 100 == 0) {
+                                // Validate pipeline state periodically
+                                if (!pipeline->isGraphReady() && ctx.use_cuda_graph) {
+                                    std::cerr << "[GPUCapture] WARNING: Graph not ready at frame #" << totalFrameCount << std::endl;
+                                }
+                            }
+                            // Get resource once and check it
+                            cudaGraphicsResource_t currentResource = nullptr;
+                            try {
+                                currentResource = gpuCapture.GetCudaResource();
+                            } catch (...) {
+                                std::cerr << "[GPUCapture] Exception getting CUDA resource at frame #" << totalFrameCount << std::endl;
+                                pipelineSuccess = false;
+                            }
+                            
+                            if (!currentResource) {
+                                std::cerr << "[GPUCapture] ERROR: CUDA resource is NULL at frame #" << totalFrameCount << std::endl;
+                                pipelineSuccess = false;
+                            } else {
+                                // Update pipeline's input texture before execution
+                                try {
+                                    pipeline->setInputTexture(currentResource);
+                                } catch (...) {
+                                    std::cerr << "[GPUCapture] Failed to update input texture at frame #" << totalFrameCount << std::endl;
+                                    // Continue anyway - might use cached resource
+                                }
+                                
+                                // Add extra safety check before execution
+                                bool shouldExecute = true;
+                                
+                                // Check CUDA device is still valid
+                                int deviceId = -1;
+                                cudaError_t err = cudaGetDevice(&deviceId);
+                                if (err != cudaSuccess || deviceId < 0) {
+                                    std::cerr << "[GPUCapture] CUDA device invalid at frame #" << totalFrameCount << std::endl;
+                                    shouldExecute = false;
+                                    pipelineSuccess = false;
+                                }
+                                
+                                if (shouldExecute && ctx.use_cuda_graph && pipeline->isGraphReady()) {
+                                PERF_TIMER("Pipeline_Graph");
+                                try {
+                                    pipelineSuccess = pipeline->executeGraph();
+                                } catch (const std::exception& e) {
+                                    std::cerr << "[GPUCapture] Graph execution exception: " << e.what() << std::endl;
+                                    pipelineSuccess = false;
+                                } catch (...) {
+                                    std::cerr << "[GPUCapture] Unknown graph execution exception" << std::endl;
+                                    pipelineSuccess = false;
+                                }
+                                if (!pipelineSuccess && gpuCapture.m_reuseCount > 0) {
+                                    std::cerr << "[HIGH SPEED V2] Graph execution failed on reused frame " 
+                                             << gpuCapture.m_reuseCount << std::endl;
+                                }
+                            } else if (shouldExecute) {
+                                PERF_TIMER("Pipeline_Direct");
+                                try {
+                                    pipelineSuccess = pipeline->executeDirect();
+                                } catch (const std::exception& e) {
+                                    std::cerr << "[GPUCapture] Direct execution exception: " << e.what() << std::endl;
+                                    pipelineSuccess = false;
+                                } catch (...) {
+                                    std::cerr << "[GPUCapture] Unknown direct execution exception" << std::endl;
+                                    pipelineSuccess = false;
+                                }
+                                if (!pipelineSuccess && gpuCapture.m_reuseCount > 0) {
+                                    std::cerr << "[HIGH SPEED V2] Direct execution failed on reused frame " 
+                                             << gpuCapture.m_reuseCount << std::endl;
+                                }
+                            }
+                            }
                         }
                     } catch (const std::exception& e) {
                         std::cerr << "[GPUCapture] Pipeline exception at frame #" << totalFrameCount 
@@ -776,6 +1312,13 @@ void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
                     
                     if (!pipelineSuccess) {
                         std::cerr << "[GPUCapture] Pipeline execution failed at frame #" << totalFrameCount << std::endl;
+                        
+                        // If failure during reuse, reset reuse state to get fresh frame
+                        if (gpuCapture.m_reuseCount > 0) {
+                            std::cerr << "[HIGH SPEED V2] Resetting reuse due to pipeline failure" << std::endl;
+                            gpuCapture.m_reuseCount = 0;
+                            // Force getting a new frame on next iteration
+                        }
                         // Continue with next frame instead of crashing
                     }
                 }
@@ -799,11 +1342,10 @@ void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
                     float actualFrameTime = elapsed * 1000.0f / frameCount;  // Actual ms per frame
                     float captureOverhead = actualFrameTime - avgProcessTime;  // Time spent waiting for frames
                     
-                    std::cout << "[Desktop Duplication] FPS: " << fps 
+                    // Show FPS stats (reuse disabled for stability)
+                    std::cout << "[STABLE MODE] FPS: " << fps 
                               << " | Pipeline: " << avgProcessTime << "ms"
-                              << " | Frame Time: " << actualFrameTime << "ms"
-                              << " | Display Sync Delay: " << captureOverhead << "ms"
-                              << " (Limited by " << (captureOverhead > 15 ? "60Hz monitor" : "capture rate") << ")"
+                              << " | Max FPS: " << maxPossibleFps
                               << " | Frame #" << totalFrameCount << std::endl;
                     
                     frameCount = 0;

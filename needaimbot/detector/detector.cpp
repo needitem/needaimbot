@@ -145,6 +145,14 @@ Detector::~Detector()
 {
     
     try {
+        // 0. First signal all threads to stop
+        auto& ctx = AppContext::getInstance();
+        ctx.should_exit = true;
+        
+        // Wake up any waiting threads
+        ctx.inference_frame_cv.notify_all();
+        detectionCV.notify_all();
+        
         // 1. 먼저 모든 CUDA 스트림 동기화 (가장 중요)
         if (stream) {
             cudaStreamSynchronize(stream);
@@ -773,7 +781,27 @@ void Detector::processFrame(const SimpleCudaMat& frame)
     // Lock-free frame transfer
     
     // Always update currentFrame for preview, even if inference is busy
-    currentFrame = frame.clone();
+    // Need to use clone since copy assignment is deleted
+    
+    try {
+        // Validate frame before cloning
+        if (!frame.empty() && frame.data()) {
+            auto& ctx = AppContext::getInstance();
+            if (ctx.should_exit) {
+                return;
+            }
+            
+            SimpleCudaMat cloned = frame.clone();
+            if (!cloned.empty()) {
+                // Protect currentFrame update with mutex
+                std::lock_guard<std::mutex> lock(currentFrameMutex);
+                currentFrame = std::move(cloned);
+            }
+            // If clone fails, just skip updating currentFrame this time
+        }
+    } catch (...) {
+        // Ignore clone failures - will use previous frame
+    }
     
     // Skip if previous frame still processing (frame drop for low latency)
     if (frameReady.load(std::memory_order_acquire)) {
@@ -985,8 +1013,34 @@ void Detector::inferenceThread()
         
         
         if (frameIsGpu.load(std::memory_order_acquire)) {
-            frameGpu = std::move(currentFrame);
+            // Check if we're shutting down before moving GPU resources
+            if (ctx.should_exit) {
+                frameReady.store(false, std::memory_order_release);
+                break;
+            }
+            
+            // Clone instead of move to keep currentFrame valid for next iteration
+            {
+                std::lock_guard<std::mutex> lock(currentFrameMutex);
+                if (!currentFrame.empty()) {
+                    frameGpu = currentFrame.clone();  // Clone instead of move
+                    if (frameGpu.empty()) {
+                        // Clone failed, skip this iteration
+                        frameReady.store(false, std::memory_order_release);
+                        continue;
+                    }
+                } else {
+                    // Frame is invalid, skip this iteration
+                    frameReady.store(false, std::memory_order_release);
+                    continue;
+                }
+            }
         } else {
+            // Check if we're shutting down before creating GPU resources
+            if (ctx.should_exit) {
+                frameReady.store(false, std::memory_order_release);
+                break;
+            }
             frameGpu.create(currentFrameCpu.rows(), currentFrameCpu.cols(), currentFrameCpu.channels());
             frameGpu.upload(currentFrameCpu.data(), currentFrameCpu.step());
         }
@@ -1567,7 +1621,7 @@ void Detector::inferenceThread()
                 }
 
             }
-            catch (const std::exception& e)
+            catch (const std::exception&)
             {
                 m_hasBestTarget = false;
                 m_bestTargetHost = Target();  // Use default constructor
@@ -1583,6 +1637,26 @@ void Detector::inferenceThread()
             }
         }
         NVTX_POP();
+    }
+    
+    // Clean up GPU resources before thread exits
+    try {
+        // Release GPU frames
+        frameGpu.release();
+        currentFrame.release();
+        
+        // Synchronize all streams before exit
+        if (stream) {
+            cudaStreamSynchronize(stream);
+        }
+        if (postprocessStream) {
+            cudaStreamSynchronize(postprocessStream);
+        }
+        
+        // Clear any remaining CUDA errors
+        cudaGetLastError();
+    } catch (...) {
+        // Ignore errors during cleanup
     }
 }
 
