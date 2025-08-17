@@ -89,7 +89,7 @@ public:
     
 
     // Mutex-based detection system
-    std::mutex detectionMutex;
+    mutable std::mutex detectionMutex;  // Made mutable for const methods
     int detectionVersion;
     std::condition_variable detectionCV;
     
@@ -114,6 +114,7 @@ public:
     SimpleMat currentFrameCpu;
     std::atomic<bool> frameReady;
     std::atomic<bool> frameIsGpu;
+    std::mutex currentFrameMutex;  // Mutex to protect currentFrame access
     
     HANDLE captureEvent = nullptr;
 
@@ -307,8 +308,9 @@ private:
     void performGpuPostProcessing(cudaStream_t stream);
     
 public:
-    // GPU 감지 결과 직접 반환 (CPU 복사 없이)
+    // GPU 감지 결과 직접 반환 (CPU 복사 없이) - 스레드 안전
     std::pair<void*, int> getLatestDetectionsGPU() const {
+        std::lock_guard<std::mutex> lock(detectionMutex);
         if (m_finalTargetsCountHost > 0) {
             return std::make_pair(m_finalTargetsGpu.get(), m_finalTargetsCountHost);
         }

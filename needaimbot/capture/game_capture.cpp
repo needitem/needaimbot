@@ -128,7 +128,7 @@ bool GameCapture::initialize() {
         // Check for PUBG-related titles
         if (titleLower.find("pubg") != std::string::npos || 
             titleLower.find("battlegrounds") != std::string::npos ||
-            titleLower.find("배틀그라운드") != std::string::npos) {
+            titleLower.find("\ubc30\ud2c0\uadf8\ub77c\uc6b4\ub4dc") != std::string::npos) {
             hwnd = wnd;
             game_name = title; // Update game_name to actual window title
             std::cout << "[GameCapture] Auto-detected game window: " << title << std::endl;
@@ -171,6 +171,37 @@ bool GameCapture::initialize() {
 
     thread_id = GetWindowThreadProcessId(hwnd, &process_id);
     std::cout << "[GameCapture] Found game window - PID: " << process_id << ", TID: " << thread_id << std::endl;
+    
+    // Verify process access
+    HANDLE hTestProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, process_id);
+    if (!hTestProcess) {
+        DWORD error = GetLastError();
+        std::cout << "[GameCapture] WARNING: Cannot open process with PROCESS_ALL_ACCESS, error: " << error << std::endl;
+        
+        // Try with minimal access
+        hTestProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, process_id);
+        if (!hTestProcess) {
+            std::cout << "[GameCapture] ERROR: Cannot open process even with minimal access!" << std::endl;
+            std::cout << "[GameCapture] The game may be protected or running with higher privileges." << std::endl;
+            return false;
+        }
+        std::cout << "[GameCapture] Process opened with limited access" << std::endl;
+    } else {
+        std::cout << "[GameCapture] Process access verified successfully" << std::endl;
+    }
+    
+    // Check if process is 64-bit
+    BOOL isWow64 = FALSE;
+    if (IsWow64Process(hTestProcess, &isWow64)) {
+        if (isWow64) {
+            std::cout << "[GameCapture] WARNING: Target process is 32-bit, but we're using 64-bit hooks!" << std::endl;
+            CloseHandle(hTestProcess);
+            return false;
+        }
+        std::cout << "[GameCapture] Target process is 64-bit (compatible)" << std::endl;
+    }
+    
+    CloseHandle(hTestProcess);
 
     keepalive_mutex = CreateKeepaliveMutex(process_id);
     if (!keepalive_mutex) {
@@ -185,7 +216,7 @@ bool GameCapture::initialize() {
         SetEvent(hook_stop);
         CloseHandle(hook_stop);
         hook_stop = nullptr;
-        Sleep(1000); // Wait for hook to stop
+        Sleep(2000); // Wait longer for hook to stop
     }
     
     hook_restart = OpenEventPlusId(L"CaptureHook_Restart", process_id);
@@ -199,7 +230,7 @@ bool GameCapture::initialize() {
             SetEvent(hook_exit);
             CloseHandle(hook_exit);
             hook_exit = nullptr;
-            Sleep(1000);
+            Sleep(2000);
         }
         
         // Close and re-open handles
@@ -209,6 +240,14 @@ bool GameCapture::initialize() {
         // Try injecting fresh
         std::cout << "[GameCapture] Attempting fresh injection..." << std::endl;
     }
+    
+    // Check for anti-cheat before injection
+    // DISABLED: Force normal mode even with anti-cheat
+    /*
+    if (detectAntiCheat()) {
+        std::cout << "[GameCapture] Anti-cheat detected, using thread injection mode" << std::endl;
+    }
+    */
     
     // Always try to inject (whether hook existed or not)
     {
@@ -230,11 +269,21 @@ bool GameCapture::initialize() {
             std::cout << "[GameCapture] WARNING: Not running as administrator. Some games may require admin rights for hook injection." << std::endl;
         }
         
+        // Debug: Verify DLL exists before injection
+        if (GetFileAttributesW(hook_path.c_str()) == INVALID_FILE_ATTRIBUTES) {
+            std::cout << "[GameCapture] ERROR: graphics-hook64.dll not found at: ";
+            std::wcout << hook_path << std::endl;
+            return false;
+        }
+        std::cout << "[GameCapture] DLL found at: ";
+        std::wcout << hook_path << std::endl;
+        
         HANDLE injector = inject_hook(process_id);  // Pass process_id, inject_hook will use thread_id internally
         if (injector) {
-            DWORD wait_result = WaitForSingleObject(injector, 5000); // 5 second timeout
+            DWORD wait_result = WaitForSingleObject(injector, 30000); // Increase to 30 second timeout
             if (wait_result == WAIT_TIMEOUT) {
                 std::cout << "[GameCapture] WARNING: inject-helper is taking too long" << std::endl;
+                TerminateProcess(injector, 1);
             }
             
             DWORD exit_code = 0;
@@ -242,7 +291,33 @@ bool GameCapture::initialize() {
             CloseHandle(injector);
             
             if (exit_code != 0) {
-                std::cout << "[GameCapture] ERROR: Hook injection failed with code: " << exit_code << std::endl;
+                std::cout << "[GameCapture] ERROR: Hook injection failed with code: " << exit_code 
+                          << " (0x" << std::hex << exit_code << std::dec << ")" << std::endl;
+                
+                // Decode inject-helper exit codes
+                switch (exit_code) {
+                    case 1:
+                        std::cout << "[GameCapture] ERROR: Failed to open target process (ACCESS_DENIED or invalid PID)" << std::endl;
+                        break;
+                    case 2:
+                        std::cout << "[GameCapture] ERROR: Failed to get process info or allocate memory" << std::endl;
+                        break;
+                    case 3:
+                        std::cout << "[GameCapture] ERROR: Failed to create remote thread" << std::endl;
+                        break;
+                    case 4:
+                    case 0xFFFFFFFC:  // -4 as unsigned
+                        std::cout << "[GameCapture] ERROR: Failed to inject DLL - target process may have anti-injection protection" << std::endl;
+                        std::cout << "[GameCapture] Possible causes:" << std::endl;
+                        std::cout << "  - Process has anti-injection protection" << std::endl;
+                        std::cout << "  - Process architecture mismatch (32-bit vs 64-bit)" << std::endl;
+                        std::cout << "  - DLL is blocked by antivirus" << std::endl;
+                        break;
+                    default:
+                        std::cout << "[GameCapture] ERROR: Unknown injection error" << std::endl;
+                        break;
+                }
+                
                 std::cout << "[GameCapture] Try running the application as administrator." << std::endl;
                 return false;
             }
@@ -253,7 +328,13 @@ bool GameCapture::initialize() {
         }
     }
 
-    // IMPORTANT: Open these BEFORE trying to use them
+    // Give the hook time to initialize DLL
+    std::cout << "[GameCapture] Waiting for DLL to load..." << std::endl;
+    Sleep(2000);
+
+    // CRITICAL: Open ALL handles BEFORE SetEvent(hook_init) - following OBS order
+    
+    // 1. Open hook info map first
     hook_info_map = OpenMapPlusId(L"CaptureHook_HookInfo", process_id);
     if (!hook_info_map) {
         std::cout << "[GameCapture] ERROR: OpenMapPlusId (hook_info_map) failed!" << std::endl;
@@ -266,9 +347,93 @@ bool GameCapture::initialize() {
         return false;
     }
 
+    // 2. Initialize offsets BEFORE configuring hook_info
     initialize_offsets();
+    std::cout << "[GameCapture] Offsets initialized" << std::endl;
 
-    // Check hook version compatibility
+    // 3. Configure hook_info BEFORE opening mutexes
+    // DO NOT set window - let the hook set it
+    // shared_hook_info->window = (uint32_t)(uintptr_t)hwnd;
+    shared_hook_info->capture_overlay = false;
+    shared_hook_info->UNUSED_use_scale = false;
+    shared_hook_info->allow_srgb_alias = true;
+    shared_hook_info->force_shmem = false;
+    shared_hook_info->frame_interval = 0;
+
+    // 4. Open texture mutexes BEFORE events
+    texture_mutexes[0] = OpenMutexPlusId(L"CaptureHook_TextureMutex1", process_id);
+    texture_mutexes[1] = OpenMutexPlusId(L"CaptureHook_TextureMutex2", process_id);
+    if (!texture_mutexes[0] || !texture_mutexes[1]) {
+        std::cout << "[GameCapture] ERROR: OpenMutexPlusId failed!" << std::endl;
+        return false;
+    }
+
+    // 5. Open all event handles BEFORE SetEvent(hook_init)
+    hook_stop = OpenEventPlusId(L"CaptureHook_Stop", process_id);
+    hook_ready = OpenEventPlusId(L"CaptureHook_HookReady", process_id);
+    hook_exit = OpenEventPlusId(L"CaptureHook_Exit", process_id);
+    hook_init = OpenEventPlusId(L"CaptureHook_Initialize", process_id);
+    
+    if (!hook_stop || !hook_ready || !hook_exit || !hook_init) {
+        std::cout << "[GameCapture] ERROR: OpenEventPlusId (hook setup) failed!" << std::endl;
+        diagnoseInjectionError(process_id);
+        return false;
+    }
+
+    // 6. NOW signal hook to initialize
+    std::cout << "[GameCapture] Signaling hook to initialize..." << std::endl;
+    if (!SetEvent(hook_init)) {
+        std::cout << "[GameCapture] ERROR: SetEvent (hook_init) failed!" << std::endl;
+        return false;
+    }
+
+    // 7. Wait for hook to be ready
+    std::cout << "[GameCapture] Waiting for hook ready signal..." << std::endl;
+    DWORD wait_result = WaitForSingleObject(hook_ready, 30000);  // 30 second timeout
+    
+    if (wait_result == WAIT_TIMEOUT) {
+        std::cout << "[GameCapture] ERROR: Timeout waiting for hook ready signal" << std::endl;
+        std::cout << "[GameCapture] This might happen if:" << std::endl;
+        std::cout << "  - The game is using anti-cheat that blocks hooks" << std::endl;
+        std::cout << "  - The game is running in fullscreen exclusive mode" << std::endl;
+        std::cout << "  - The game is using DirectX 12 or Vulkan (OBS hook only supports DX9/10/11)" << std::endl;
+        
+        // Do not fallback to Desktop Duplication - just fail
+        return false;
+    } else if (wait_result == WAIT_FAILED) {
+        std::cout << "[GameCapture] ERROR: WaitForSingleObject failed: " << GetLastError() << std::endl;
+        return false;
+    }
+    
+    std::cout << "[GameCapture] Hook is ready!" << std::endl;
+    
+    // Re-open hook_info_map to get updated info from hook
+    if (shared_hook_info) {
+        UnmapViewOfFile(shared_hook_info);
+        shared_hook_info = nullptr;
+    }
+    if (hook_info_map) {
+        CloseHandle(hook_info_map);
+        hook_info_map = nullptr;
+    }
+    
+    hook_info_map = OpenMapPlusId(L"CaptureHook_HookInfo", process_id);
+    if (!hook_info_map) {
+        std::cout << "[GameCapture] ERROR: Failed to re-open hook_info_map after hook ready!" << std::endl;
+        return false;
+    }
+    
+    shared_hook_info = static_cast<hook_info*>(MapViewOfFile(hook_info_map, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(hook_info)));
+    if (!shared_hook_info) {
+        std::cout << "[GameCapture] ERROR: Failed to re-map hook_info after hook ready!" << std::endl;
+        return false;
+    }
+    
+    std::cout << "[GameCapture] Hook info updated - window: 0x" << std::hex << shared_hook_info->window 
+              << ", map_id: " << shared_hook_info->map_id 
+              << ", map_size: " << std::dec << shared_hook_info->map_size << std::endl;
+    
+    // Check hook version compatibility after hook is ready
     if (shared_hook_info->hook_ver_major > 0) {
         std::cout << "[GameCapture] OBS Hook version: " 
                   << shared_hook_info->hook_ver_major << "." 
@@ -281,55 +446,10 @@ bool GameCapture::initialize() {
             std::cout << "[GameCapture] WARNING: Hook version is newer than expected, may have compatibility issues" << std::endl;
         }
     }
-
-    shared_hook_info->capture_overlay = false;
-    shared_hook_info->UNUSED_use_scale = false;
-    shared_hook_info->allow_srgb_alias = true;
-    shared_hook_info->force_shmem = false;
-    shared_hook_info->frame_interval = 0;
-
-    texture_mutexes[0] = OpenMutexPlusId(L"CaptureHook_TextureMutex1", process_id);
-    texture_mutexes[1] = OpenMutexPlusId(L"CaptureHook_TextureMutex2", process_id);
-    if (!texture_mutexes[0] || !texture_mutexes[1]) {
-        std::cout << "[GameCapture] ERROR: OpenMutexPlusId failed!" << std::endl;
-        return false;
-    }
-
-    // Re-open the event handles after injection
-    hook_stop = OpenEventPlusId(L"CaptureHook_Stop", process_id);
-    hook_ready = OpenEventPlusId(L"CaptureHook_HookReady", process_id);
-    hook_exit = OpenEventPlusId(L"CaptureHook_Exit", process_id);
-    hook_init = OpenEventPlusId(L"CaptureHook_Initialize", process_id);
-    if (!hook_stop || !hook_ready || !hook_exit || !hook_init) {
-        std::cout << "[GameCapture] ERROR: OpenEventPlusId (hook setup) failed!" << std::endl;
-        return false;
-    }
-
-    if (!SetEvent(hook_init)) {
-        std::cout << "[GameCapture] ERROR: SetEvent (hook_init) failed!" << std::endl;
-        return false;
-    }
-
-    std::cout << "[GameCapture] Waiting for hook ready signal..." << std::endl;
-    DWORD wait_result = WaitForSingleObject(hook_ready, 10000);  // 10 second timeout
     
-    if (wait_result == WAIT_TIMEOUT) {
-        std::cout << "[GameCapture] ERROR: Timeout waiting for hook ready signal" << std::endl;
-        std::cout << "[GameCapture] This might happen if:" << std::endl;
-        std::cout << "  - The game is using anti-cheat that blocks hooks" << std::endl;
-        std::cout << "  - The game is running in fullscreen exclusive mode" << std::endl;
-        std::cout << "  - The game is using DirectX 12 or Vulkan (OBS hook only supports DX9/10/11)" << std::endl;
-        return false;
-    } else if (wait_result == WAIT_FAILED) {
-        std::cout << "[GameCapture] ERROR: WaitForSingleObject failed: " << GetLastError() << std::endl;
-        return false;
-    }
-    
-    std::cout << "[GameCapture] Hook is ready" << std::endl;
-    
-    // Give the hook some time to create the shared memory after signaling ready
+    // Give the hook time to create the shared memory after signaling ready
     std::cout << "[GameCapture] Waiting for shared memory initialization..." << std::endl;
-    Sleep(2000);  // Wait 2 seconds for hook to fully initialize shared memory
+    Sleep(3000);  // Wait for hook to fully initialize shared memory
 
     int try_count = 0;
     HRESULT hr;
@@ -340,7 +460,7 @@ bool GameCapture::initialize() {
 
         // Keep retrying until we get the hook_data_map
         int retry_count = 0;
-        while (!shared_shtex_data && retry_count < 30) {  // Increase retry count
+        while (!shared_shtex_data && retry_count < 50) {  // 50 retries
             if (hook_data_map) {
                 CloseHandle(hook_data_map);
                 hook_data_map = nullptr;
@@ -370,6 +490,7 @@ bool GameCapture::initialize() {
                                   << " (original was " << shared_hook_info->map_id << ")" << std::endl;
                         shared_hook_info->map_id = map_id_to_try;
                     }
+                    break;  // Success!
                 }
             } else {
                 DWORD error = GetLastError();
@@ -379,14 +500,13 @@ bool GameCapture::initialize() {
                 }
             }
             
-            if (!shared_shtex_data) {
-                retry_count++;
-                Sleep(500);  // Shorter sleep for faster retries
-            }
+            retry_count++;
+            Sleep(1000);  // Wait 1 second between retries
         }
         
         if (!shared_shtex_data) {
             std::cout << "[GameCapture] ERROR: Failed to get shared texture data after " << retry_count << " attempts" << std::endl;
+            std::cout << "[GameCapture] ERROR: Failed to initialize capture" << std::endl;
             return false;
         }
 
@@ -415,13 +535,13 @@ bool GameCapture::initialize() {
                 pDevice = nullptr;
             }
 
-            if (try_count >= 5) {
-                std::cout << "[GameCapture] ERROR: Failed to open shared D3D resource after 5 attempts" << std::endl;
+            if (try_count >= 10) {  // 10 attempts
+                std::cout << "[GameCapture] ERROR: Failed to open shared D3D resource after 10 attempts" << std::endl;
                 return false;
             }
 
-            std::cout << "[GameCapture] Retrying to open shared resource (attempt " << try_count << "/5)..." << std::endl;
-            Sleep(50);
+            std::cout << "[GameCapture] Retrying to open shared resource (attempt " << try_count << "/10)..." << std::endl;
+            Sleep(1000);
             continue;
         }
 
@@ -444,7 +564,8 @@ bool GameCapture::initialize() {
 
     hr = pDevice->CreateTexture2D(&desc, nullptr, &pStagingTexture);
     if (FAILED(hr)) {
-        std::cout << "[GameCapture] ERROR: CreateTexture2D (staging) failed!" << std::endl;
+        std::cout << "[GameCapture] ERROR: CreateTexture2D (staging) failed! HRESULT: 0x" << std::hex << hr << std::dec << std::endl;
+        cleanup();  // Clean up resources before returning
         return false;
     }
 
@@ -456,13 +577,22 @@ bool GameCapture::initialize() {
 
     hr = pDevice->CreateTexture2D(&desc, nullptr, &m_cudaTexture);
     if (FAILED(hr)) {
-        std::cout << "[GameCapture] ERROR: CreateTexture2D (CUDA) failed!" << std::endl;
+        std::cout << "[GameCapture] ERROR: CreateTexture2D (CUDA) failed! HRESULT: 0x" << std::hex << hr << std::dec << std::endl;
+        cleanup();  // Clean up resources before returning
+        return false;
+    }
+    
+    // Validate CUDA texture before proceeding
+    if (!m_cudaTexture) {
+        std::cout << "[GameCapture] ERROR: m_cudaTexture is null after CreateTexture2D!" << std::endl;
+        cleanup();
         return false;
     }
 
     // Initialize CUDA interop
     if (!initializeCUDAInterop()) {
         std::cout << "[GameCapture] ERROR: CUDA interop initialization failed!" << std::endl;
+        cleanup();  // Clean up resources before returning
         return false;
     }
 
@@ -475,6 +605,12 @@ bool GameCapture::initialize() {
 }
 
 bool GameCapture::initializeCUDAInterop() {
+    // Validate CUDA texture before proceeding
+    if (!m_cudaTexture) {
+        std::cerr << "[GameCapture] ERROR: m_cudaTexture is null in initializeCUDAInterop!" << std::endl;
+        return false;
+    }
+    
     // Create CUDA stream for capture operations
     cudaError_t err = cudaStreamCreate(&m_captureStream);
     if (err != cudaSuccess) {
@@ -490,11 +626,23 @@ bool GameCapture::initializeCUDAInterop() {
     );
     
     if (err != cudaSuccess) {
-        std::cerr << "[GameCapture] Failed to register D3D11 resource with CUDA: " << cudaGetErrorString(err) << std::endl;
+        std::cerr << "[GameCapture] Failed to register D3D11 resource with CUDA: " << cudaGetErrorString(err) 
+                  << " (texture ptr: " << std::hex << m_cudaTexture << std::dec << ")" << std::endl;
+        cudaStreamDestroy(m_captureStream);
+        m_captureStream = nullptr;
         return false;
     }
     
-    std::cout << "[GameCapture] CUDA interop initialized successfully" << std::endl;
+    // Validate CUDA resource after registration
+    if (!m_cudaResource) {
+        std::cerr << "[GameCapture] ERROR: m_cudaResource is null after registration!" << std::endl;
+        cudaStreamDestroy(m_captureStream);
+        m_captureStream = nullptr;
+        return false;
+    }
+    
+    std::cout << "[GameCapture] CUDA interop initialized successfully (resource ptr: " 
+              << std::hex << m_cudaResource << std::dec << ")" << std::endl;
     return true;
 }
 
@@ -602,7 +750,7 @@ HANDLE GameCapture::inject_hook(DWORD target_id) {
     // For anti-cheat games: anti_cheat=1 and target_id=thread_id
     // For normal games: anti_cheat=0 and target_id=process_id
     
-    // Enhanced anti-cheat detection
+    // Check if we should use anti-cheat mode
     bool is_anticheat_game = detectAntiCheat();
     
     // Use appropriate injection mode based on anti-cheat detection
@@ -614,7 +762,7 @@ HANDLE GameCapture::inject_hook(DWORD target_id) {
     } else {
         command_line = L"\"" + inject_path + L"\" \"" + hook_path + L"\" 0 " + 
                       std::to_wstring(process_id);  // Use process_id for normal mode
-        std::cout << "[GameCapture] Normal game detected, using process injection mode" << std::endl;
+        std::cout << "[GameCapture] Using normal process injection mode" << std::endl;
     }
     
     std::wcout << L"[GameCapture] Executing: " << command_line << std::endl;
@@ -623,6 +771,9 @@ HANDLE GameCapture::inject_hook(DWORD target_id) {
     PROCESS_INFORMATION pi{};
     si.cb = sizeof(si);
     
+    // Hide console window
+    DWORD creationFlags = CREATE_NO_WINDOW;
+    
     // Create the inject-helper process with proper arguments
     BOOL success = CreateProcessW(
         inject_path.c_str(),     // Application path
@@ -630,7 +781,7 @@ HANDLE GameCapture::inject_hook(DWORD target_id) {
         nullptr,                  // Process security attributes
         nullptr,                  // Thread security attributes
         FALSE,                    // Don't inherit handles
-        CREATE_NO_WINDOW,         // Creation flags
+        creationFlags,            // Creation flags
         nullptr,                  // Environment
         nullptr,                  // Current directory
         &si,                      // Startup info
@@ -709,13 +860,13 @@ D3D11_BOX GameCapture::get_region() {
         box.bottom -= box.top;
         box.top = 0;
     }
-    if (box.right > screen_width) {
-        box.left -= (box.right - screen_width);
-        box.right = screen_width;
+    if (box.right > static_cast<UINT>(screen_width)) {
+        box.left -= (box.right - static_cast<UINT>(screen_width));
+        box.right = static_cast<UINT>(screen_width);
     }
-    if (box.bottom > screen_height) {
-        box.top -= (box.bottom - screen_height);
-        box.bottom = screen_height;
+    if (box.bottom > static_cast<UINT>(screen_height)) {
+        box.top -= (box.bottom - static_cast<UINT>(screen_height));
+        box.bottom = static_cast<UINT>(screen_height);
     }
     
     return box;

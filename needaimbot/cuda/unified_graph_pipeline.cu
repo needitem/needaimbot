@@ -7,6 +7,7 @@
 #include "simple_cuda_mat.h"
 #include "mouse_interface.h"
 #include "../AppContext.h"
+#include "cuda_error_check.h"  // Use existing CUDA error checking macros
 #include <iostream>
 #include <chrono>
 #include <cuda.h>
@@ -1070,109 +1071,178 @@ bool UnifiedGraphPipeline::allocateBuffers() {
     const int yoloSize = 640;
     const int maxDetections = 100;
     
-    // Initialize Triple Buffer System for async pipeline
-    if (m_config.enableCapture && m_tripleBuffer) {
-        for (int i = 0; i < 3; i++) {
-            m_tripleBuffer->buffers[i].create(height, width, 4);  // BGRA
-            cudaEventCreateWithFlags(&m_tripleBuffer->events[i], cudaEventDisableTiming);
-            m_tripleBuffer->isReady[i] = false;
+    try {
+        // Initialize Triple Buffer System for async pipeline
+        if (m_config.enableCapture && m_tripleBuffer) {
+            for (int i = 0; i < 3; i++) {
+                m_tripleBuffer->buffers[i].create(height, width, 4);  // BGRA
+                CUDA_CHECK(cudaEventCreateWithFlags(&m_tripleBuffer->events[i], cudaEventDisableTiming));
+                m_tripleBuffer->isReady[i] = false;
+            }
+            std::cout << "[UnifiedGraph] Triple buffer system initialized" << std::endl;
         }
-        std::cout << "[UnifiedGraph] Triple buffer system initialized" << std::endl;
-    }
-    
-    // Allocate GPU buffers
-    m_captureBuffer.create(height, width, 4);  // BGRA
-    m_preprocessBuffer.create(height, width, 3);  // BGR
-    
-    // YOLO input buffer (640x640x3 in CHW format)
-    cudaMalloc(&m_d_yoloInput, yoloSize * yoloSize * 3 * sizeof(float));
-    
-    // Detection pipeline buffers
-    cudaMalloc(&m_d_inferenceOutput, maxDetections * 6 * sizeof(float));
-    cudaMalloc(&m_d_nmsOutput, maxDetections * 6 * sizeof(float));
-    cudaMalloc(&m_d_filteredOutput, maxDetections * 6 * sizeof(float));
-    cudaMalloc(&m_d_detections, maxDetections * sizeof(Target));
-    cudaMalloc(&m_d_selectedTarget, sizeof(Target));
-    cudaMalloc(&m_d_trackedTarget, sizeof(Target));
-    cudaMalloc(&m_d_trackedTargets, maxDetections * sizeof(Target));
-    
-    // Allocate NMS temporary buffers
-    cudaMalloc(&m_d_numDetections, sizeof(int));
-    cudaMalloc(&m_d_x1, maxDetections * sizeof(int));
-    cudaMalloc(&m_d_y1, maxDetections * sizeof(int));
-    cudaMalloc(&m_d_x2, maxDetections * sizeof(int));
-    cudaMalloc(&m_d_y2, maxDetections * sizeof(int));
-    cudaMalloc(&m_d_areas, maxDetections * sizeof(float));
-    cudaMalloc(&m_d_scores_nms, maxDetections * sizeof(float));
-    cudaMalloc(&m_d_classIds_nms, maxDetections * sizeof(int));
-    cudaMalloc(&m_d_iou_matrix, maxDetections * maxDetections * sizeof(float));
-    cudaMalloc(&m_d_keep, maxDetections * sizeof(bool));
-    cudaMalloc(&m_d_indices, maxDetections * sizeof(int));
-    cudaMalloc(&m_d_outputCount, sizeof(int));
-    
-    // Allocate pinned host memory for zero-copy transfers
-    cudaHostAlloc(&m_h_inputBuffer, width * height * 4, cudaHostAllocDefault);
-    cudaHostAlloc(&m_h_outputBuffer, 2 * sizeof(float), cudaHostAllocMapped);
-    
-    // Check all allocations
-    if (!m_captureBuffer.data() || !m_d_yoloInput || !m_d_inferenceOutput || 
-        !m_d_nmsOutput || !m_d_filteredOutput || !m_d_detections || 
-        !m_d_selectedTarget || !m_d_trackedTarget || !m_d_trackedTargets || 
-        !m_h_inputBuffer || !m_h_outputBuffer) {
-        std::cerr << "[UnifiedGraph] Buffer allocation failed" << std::endl;
+        
+        // Allocate GPU buffers
+        m_captureBuffer.create(height, width, 4);  // BGRA
+        m_preprocessBuffer.create(height, width, 3);  // BGR
+        
+        // YOLO input buffer (640x640x3 in CHW format)
+        CUDA_CHECK(cudaMalloc(&m_d_yoloInput, yoloSize * yoloSize * 3 * sizeof(float)));
+        if (!m_d_yoloInput) throw std::runtime_error("m_d_yoloInput allocation failed");
+        
+        // Detection pipeline buffers
+        CUDA_CHECK(cudaMalloc(&m_d_inferenceOutput, maxDetections * 6 * sizeof(float)));
+        if (!m_d_inferenceOutput) throw std::runtime_error("m_d_inferenceOutput allocation failed");
+        
+        CUDA_CHECK(cudaMalloc(&m_d_nmsOutput, maxDetections * 6 * sizeof(float)));
+        if (!m_d_nmsOutput) throw std::runtime_error("m_d_nmsOutput allocation failed");
+        
+        CUDA_CHECK(cudaMalloc(&m_d_filteredOutput, maxDetections * 6 * sizeof(float)));
+        if (!m_d_filteredOutput) throw std::runtime_error("m_d_filteredOutput allocation failed");
+        
+        CUDA_CHECK(cudaMalloc(&m_d_detections, maxDetections * sizeof(Target)));
+        if (!m_d_detections) throw std::runtime_error("m_d_detections allocation failed");
+        
+        CUDA_CHECK(cudaMalloc(&m_d_selectedTarget, sizeof(Target)));
+        if (!m_d_selectedTarget) throw std::runtime_error("m_d_selectedTarget allocation failed");
+        
+        CUDA_CHECK(cudaMalloc(&m_d_trackedTarget, sizeof(Target)));
+        if (!m_d_trackedTarget) throw std::runtime_error("m_d_trackedTarget allocation failed");
+        
+        CUDA_CHECK(cudaMalloc(&m_d_trackedTargets, maxDetections * sizeof(Target)));
+        if (!m_d_trackedTargets) throw std::runtime_error("m_d_trackedTargets allocation failed");
+        
+        // Allocate NMS temporary buffers
+        CUDA_CHECK(cudaMalloc(&m_d_numDetections, sizeof(int)));
+        if (!m_d_numDetections) throw std::runtime_error("m_d_numDetections allocation failed");
+        
+        CUDA_CHECK(cudaMalloc(&m_d_x1, maxDetections * sizeof(int)));
+        if (!m_d_x1) throw std::runtime_error("m_d_x1 allocation failed");
+        
+        CUDA_CHECK(cudaMalloc(&m_d_y1, maxDetections * sizeof(int)));
+        if (!m_d_y1) throw std::runtime_error("m_d_y1 allocation failed");
+        
+        CUDA_CHECK(cudaMalloc(&m_d_x2, maxDetections * sizeof(int)));
+        if (!m_d_x2) throw std::runtime_error("m_d_x2 allocation failed");
+        
+        CUDA_CHECK(cudaMalloc(&m_d_y2, maxDetections * sizeof(int)));
+        if (!m_d_y2) throw std::runtime_error("m_d_y2 allocation failed");
+        
+        CUDA_CHECK(cudaMalloc(&m_d_areas, maxDetections * sizeof(float)));
+        if (!m_d_areas) throw std::runtime_error("m_d_areas allocation failed");
+        
+        CUDA_CHECK(cudaMalloc(&m_d_scores_nms, maxDetections * sizeof(float)));
+        if (!m_d_scores_nms) throw std::runtime_error("m_d_scores_nms allocation failed");
+        
+        CUDA_CHECK(cudaMalloc(&m_d_classIds_nms, maxDetections * sizeof(int)));
+        if (!m_d_classIds_nms) throw std::runtime_error("m_d_classIds_nms allocation failed");
+        
+        CUDA_CHECK(cudaMalloc(&m_d_iou_matrix, maxDetections * maxDetections * sizeof(float)));
+        if (!m_d_iou_matrix) throw std::runtime_error("m_d_iou_matrix allocation failed");
+        
+        CUDA_CHECK(cudaMalloc(&m_d_keep, maxDetections * sizeof(bool)));
+        if (!m_d_keep) throw std::runtime_error("m_d_keep allocation failed");
+        
+        CUDA_CHECK(cudaMalloc(&m_d_indices, maxDetections * sizeof(int)));
+        if (!m_d_indices) throw std::runtime_error("m_d_indices allocation failed");
+        
+        CUDA_CHECK(cudaMalloc(&m_d_outputCount, sizeof(int)));
+        if (!m_d_outputCount) throw std::runtime_error("m_d_outputCount allocation failed");
+        
+        // Allocate pinned host memory for zero-copy transfers
+        CUDA_CHECK(cudaHostAlloc(&m_h_inputBuffer, width * height * 4, cudaHostAllocDefault));
+        if (!m_h_inputBuffer) throw std::runtime_error("m_h_inputBuffer allocation failed");
+        
+        CUDA_CHECK(cudaHostAlloc(&m_h_outputBuffer, 2 * sizeof(float), cudaHostAllocMapped));
+        if (!m_h_outputBuffer) throw std::runtime_error("m_h_outputBuffer allocation failed");
+        
+        // Additional validation for critical buffers
+        if (!m_captureBuffer.data() || !m_preprocessBuffer.data()) {
+            throw std::runtime_error("SimpleCudaMat buffer allocation failed");
+        }
+        
+        std::cout << "[UnifiedGraph] Allocated buffers: "
+                  << "GPU: " << ((width * height * 7 + yoloSize * yoloSize * 3 + 
+                                 maxDetections * 20) * sizeof(float) / (1024 * 1024)) 
+                  << " MB, Pinned: " << ((width * height * 4 + 8) / (1024 * 1024)) 
+                  << " MB" << std::endl;
+        
+        // Debug: Print NMS buffer pointers
+        std::cout << "[UnifiedGraph] NMS buffer pointers:" << std::endl;
+        std::cout << "  m_d_x1=" << m_d_x1 << " m_d_y1=" << m_d_y1 << std::endl;
+        std::cout << "  m_d_x2=" << m_d_x2 << " m_d_y2=" << m_d_y2 << std::endl;
+        std::cout << "  m_d_areas=" << m_d_areas << " m_d_scores_nms=" << m_d_scores_nms << std::endl;
+        std::cout << "  m_d_classIds_nms=" << m_d_classIds_nms << std::endl;
+        std::cout << "  m_d_iou_matrix=" << m_d_iou_matrix << " m_d_keep=" << m_d_keep << std::endl;
+        std::cout << "  m_d_indices=" << m_d_indices << " m_d_numDetections=" << m_d_numDetections << std::endl;
+        
+        return true;
+        
+    } catch (const std::exception& e) {
+        std::cerr << "[UnifiedGraph] Buffer allocation failed: " << e.what() << std::endl;
         deallocateBuffers();
         return false;
     }
-    
-    std::cout << "[UnifiedGraph] Allocated buffers: "
-              << "GPU: " << ((width * height * 7 + yoloSize * yoloSize * 3 + 
-                             maxDetections * 20) * sizeof(float) / (1024 * 1024)) 
-              << " MB, Pinned: " << ((width * height * 4 + 8) / (1024 * 1024)) 
-              << " MB" << std::endl;
-    
-    // Debug: Print NMS buffer pointers
-    std::cout << "[UnifiedGraph] NMS buffer pointers:" << std::endl;
-    std::cout << "  m_d_x1=" << m_d_x1 << " m_d_y1=" << m_d_y1 << std::endl;
-    std::cout << "  m_d_x2=" << m_d_x2 << " m_d_y2=" << m_d_y2 << std::endl;
-    std::cout << "  m_d_areas=" << m_d_areas << " m_d_scores_nms=" << m_d_scores_nms << std::endl;
-    std::cout << "  m_d_classIds_nms=" << m_d_classIds_nms << std::endl;
-    std::cout << "  m_d_iou_matrix=" << m_d_iou_matrix << " m_d_keep=" << m_d_keep << std::endl;
-    std::cout << "  m_d_indices=" << m_d_indices << " m_d_numDetections=" << m_d_numDetections << std::endl;
-    
-    return true;
 }
 
 void UnifiedGraphPipeline::deallocateBuffers() {
+    // Synchronize all CUDA operations before deallocating
+    cudaDeviceSynchronize();
+    
+    // Release SimpleCudaMat buffers
     m_captureBuffer.release();
     m_preprocessBuffer.release();
     
-    // Free GPU buffers
-    if (m_d_yoloInput) cudaFree(m_d_yoloInput);
-    if (m_d_inferenceOutput) cudaFree(m_d_inferenceOutput);
-    if (m_d_nmsOutput) cudaFree(m_d_nmsOutput);
-    if (m_d_filteredOutput) cudaFree(m_d_filteredOutput);
-    if (m_d_detections) cudaFree(m_d_detections);
-    if (m_d_selectedTarget) cudaFree(m_d_selectedTarget);
-    if (m_d_trackedTarget) cudaFree(m_d_trackedTarget);
-    if (m_d_trackedTargets) cudaFree(m_d_trackedTargets);
+    // Helper lambda to safely free CUDA memory
+    auto safeCudaFree = [](void*& ptr, const char* name) {
+        if (ptr) {
+            cudaError_t err = cudaFree(ptr);
+            if (err != cudaSuccess && err != cudaErrorCudartUnloading) {
+                std::cerr << "[UnifiedGraph] Warning: Failed to free " << name 
+                         << ": " << cudaGetErrorString(err) << std::endl;
+            }
+            ptr = nullptr;
+        }
+    };
+    
+    auto safeCudaFreeHost = [](void*& ptr, const char* name) {
+        if (ptr) {
+            cudaError_t err = cudaFreeHost(ptr);
+            if (err != cudaSuccess && err != cudaErrorCudartUnloading) {
+                std::cerr << "[UnifiedGraph] Warning: Failed to free host " << name 
+                         << ": " << cudaGetErrorString(err) << std::endl;
+            }
+            ptr = nullptr;
+        }
+    };
+    
+    // Free GPU buffers with error checking
+    safeCudaFree(reinterpret_cast<void*&>(m_d_yoloInput), "m_d_yoloInput");
+    safeCudaFree(reinterpret_cast<void*&>(m_d_inferenceOutput), "m_d_inferenceOutput");
+    safeCudaFree(reinterpret_cast<void*&>(m_d_nmsOutput), "m_d_nmsOutput");
+    safeCudaFree(reinterpret_cast<void*&>(m_d_filteredOutput), "m_d_filteredOutput");
+    safeCudaFree(reinterpret_cast<void*&>(m_d_detections), "m_d_detections");
+    safeCudaFree(reinterpret_cast<void*&>(m_d_selectedTarget), "m_d_selectedTarget");
+    safeCudaFree(reinterpret_cast<void*&>(m_d_trackedTarget), "m_d_trackedTarget");
+    safeCudaFree(reinterpret_cast<void*&>(m_d_trackedTargets), "m_d_trackedTargets");
     
     // Free NMS temporary buffers
-    if (m_d_numDetections) cudaFree(m_d_numDetections);
-    if (m_d_x1) cudaFree(m_d_x1);
-    if (m_d_y1) cudaFree(m_d_y1);
-    if (m_d_x2) cudaFree(m_d_x2);
-    if (m_d_y2) cudaFree(m_d_y2);
-    if (m_d_areas) cudaFree(m_d_areas);
-    if (m_d_scores_nms) cudaFree(m_d_scores_nms);
-    if (m_d_classIds_nms) cudaFree(m_d_classIds_nms);
-    if (m_d_iou_matrix) cudaFree(m_d_iou_matrix);
-    if (m_d_keep) cudaFree(m_d_keep);
-    if (m_d_indices) cudaFree(m_d_indices);
-    if (m_d_outputCount) cudaFree(m_d_outputCount);
+    safeCudaFree(reinterpret_cast<void*&>(m_d_numDetections), "m_d_numDetections");
+    safeCudaFree(reinterpret_cast<void*&>(m_d_x1), "m_d_x1");
+    safeCudaFree(reinterpret_cast<void*&>(m_d_y1), "m_d_y1");
+    safeCudaFree(reinterpret_cast<void*&>(m_d_x2), "m_d_x2");
+    safeCudaFree(reinterpret_cast<void*&>(m_d_y2), "m_d_y2");
+    safeCudaFree(reinterpret_cast<void*&>(m_d_areas), "m_d_areas");
+    safeCudaFree(reinterpret_cast<void*&>(m_d_scores_nms), "m_d_scores_nms");
+    safeCudaFree(reinterpret_cast<void*&>(m_d_classIds_nms), "m_d_classIds_nms");
+    safeCudaFree(reinterpret_cast<void*&>(m_d_iou_matrix), "m_d_iou_matrix");
+    safeCudaFree(reinterpret_cast<void*&>(m_d_keep), "m_d_keep");
+    safeCudaFree(reinterpret_cast<void*&>(m_d_indices), "m_d_indices");
+    safeCudaFree(reinterpret_cast<void*&>(m_d_outputCount), "m_d_outputCount");
     
     // Free pinned host memory
-    if (m_h_inputBuffer) cudaFreeHost(m_h_inputBuffer);
-    if (m_h_outputBuffer) cudaFreeHost(m_h_outputBuffer);
+    safeCudaFreeHost(reinterpret_cast<void*&>(m_h_inputBuffer), "m_h_inputBuffer");
+    safeCudaFreeHost(reinterpret_cast<void*&>(m_h_outputBuffer), "m_h_outputBuffer");
     
     // Reset all pointers
     m_d_yoloInput = nullptr;

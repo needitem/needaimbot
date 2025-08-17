@@ -11,8 +11,20 @@ public:
     SimpleCudaMat() : data_(nullptr), width_(0), height_(0), channels_(0), step_(0) {}
     
     SimpleCudaMat(int height, int width, int channels) 
-        : width_(width), height_(height), channels_(channels) {
-        allocate();
+        : data_(nullptr), width_(width), height_(height), channels_(channels), step_(0) {
+        if (width_ > 0 && height_ > 0 && channels_ > 0) {
+            try {
+                allocate();
+            } catch (const std::exception& e) {
+                // Reset on allocation failure
+                data_ = nullptr;
+                width_ = 0;
+                height_ = 0;
+                channels_ = 0;
+                step_ = 0;
+                std::cerr << "[SimpleCudaMat] Allocation failed: " << e.what() << std::endl;
+            }
+        }
     }
     
     ~SimpleCudaMat() {
@@ -31,15 +43,27 @@ public:
     // Move assignment
     SimpleCudaMat& operator=(SimpleCudaMat&& other) noexcept {
         if (this != &other) {
-            release();
-            data_ = other.data_;
-            width_ = other.width_;
-            height_ = other.height_;
-            channels_ = other.channels_;
-            step_ = other.step_;
+            // Save other's data first before releasing ours
+            uint8_t* temp_data = other.data_;
+            int temp_width = other.width_;
+            int temp_height = other.height_;
+            int temp_channels = other.channels_;
+            size_t temp_step = other.step_;
+            
+            // Clear other's pointers immediately to prevent double-free
             other.data_ = nullptr;
             other.width_ = other.height_ = other.channels_ = 0;
-        other.step_ = 0;
+            other.step_ = 0;
+            
+            // Now safely release our current data
+            release();
+            
+            // Take ownership of the data
+            data_ = temp_data;
+            width_ = temp_width;
+            height_ = temp_height;
+            channels_ = temp_channels;
+            step_ = temp_step;
         }
         return *this;
     }
@@ -55,28 +79,84 @@ public:
             width_ = width;
             height_ = height;
             channels_ = channels;
-            allocate();
+            step_ = 0;
+            data_ = nullptr;
+            
+            if (width_ > 0 && height_ > 0 && channels_ > 0) {
+                try {
+                    allocate();
+                } catch (const std::exception& e) {
+                    // Reset on allocation failure
+                    data_ = nullptr;
+                    width_ = 0;
+                height_ = 0;
+                channels_ = 0;
+                step_ = 0;
+                    std::cerr << "[SimpleCudaMat::create] Allocation failed: " << e.what() << std::endl;
+                }
+            }
         }
     }
     
     // Release GPU memory
     void release() {
         if (data_) {
+            // Validate pointer before attempting to free
+            // Check for obviously invalid pointers
+            uintptr_t ptr_val = reinterpret_cast<uintptr_t>(data_);
+            if (ptr_val == 0xffffffffffffffff ||
+                ptr_val == 0xcccccccccccccccc ||
+                ptr_val == 0xdddddddddddddddd ||
+                ptr_val == 0xfeeefeeefeeefeee ||
+                ptr_val == 0xabababababababab ||
+                ptr_val == 0xcdcdcdcdcdcdcdcd ||
+                ptr_val == 0xbaadf00dbaadf00d ||
+                ptr_val == 0xdeadbeefdeadbeef ||
+                ptr_val < 0x10000) {
+                // Invalid pointer, likely already freed or corrupted
+                data_ = nullptr;
+                width_ = height_ = channels_ = 0;
+                step_ = 0;
+                return;
+            }
+            
             // Clear any previous errors first
             cudaGetLastError();
             
+            // First check if CUDA runtime is still active
+            cudaError_t runtimeErr = cudaGetLastError();
+            if (runtimeErr == cudaErrorCudartUnloading) {
+                // CUDA runtime is shutting down, don't try to free
+                data_ = nullptr;
+                width_ = height_ = channels_ = 0;
+                step_ = 0;
+                return;
+            }
+            
             // Check if pointer is valid before freeing
             cudaPointerAttributes attributes;
+            memset(&attributes, 0, sizeof(attributes));
             cudaError_t queryErr = cudaPointerGetAttributes(&attributes, data_);
             
-            if (queryErr == cudaSuccess && attributes.type != cudaMemoryTypeUnregistered) {
-                // Valid CUDA memory, safe to free
-                cudaError_t err = cudaFree(data_);
-                if (err != cudaSuccess && err != cudaErrorCudartUnloading && err != cudaErrorInvalidValue) {
-                    // Only warn for real errors, not shutdown or invalid pointer errors
-                    printf("[SimpleCudaMat] Warning: cudaFree failed: %s\n", cudaGetErrorString(err));
+            // Only free if we can confirm it's valid CUDA memory
+            if (queryErr == cudaSuccess) {
+                // Additional validation - check if the memory type is valid
+                if (attributes.type == cudaMemoryTypeDevice || 
+                    attributes.type == cudaMemoryTypeManaged) {
+                    // Valid CUDA memory, attempt to free
+                    cudaError_t err = cudaFree(data_);
+                    if (err != cudaSuccess && 
+                        err != cudaErrorCudartUnloading && 
+                        err != cudaErrorInvalidValue) {
+                        // Only warn for unexpected errors
+                        printf("[SimpleCudaMat] Warning: cudaFree failed: %s (error code: %d)\n", 
+                               cudaGetErrorString(err), err);
+                    }
                 }
             }
+            // For any query error or invalid memory type, just clear the pointer
+            // This includes cudaErrorInvalidValue which happens during shutdown
+            
             data_ = nullptr;
         }
         width_ = height_ = channels_ = 0;
@@ -190,9 +270,60 @@ public:
     
     // Clone (deep copy)
     SimpleCudaMat clone() const {
+        if (empty() || !data_) {
+            return SimpleCudaMat();  // Return empty mat
+        }
+        
+        // Validate dimensions
+        if (height_ <= 0 || width_ <= 0 || channels_ <= 0) {
+            return SimpleCudaMat();
+        }
+        
+        // Validate source pointer before cloning
+        uintptr_t ptr_val = reinterpret_cast<uintptr_t>(data_);
+        if (ptr_val < 0x10000 || ptr_val == 0xffffffffffffffff ||
+            ptr_val == 0xcccccccccccccccc || ptr_val == 0xdddddddddddddddd) {
+            return SimpleCudaMat();
+        }
+        
+        // Check if CUDA runtime is still valid
+        cudaError_t lastErr = cudaGetLastError();
+        if (lastErr == cudaErrorCudartUnloading) {
+            return SimpleCudaMat();
+        }
+        
+        // Validate source memory with cudaPointerGetAttributes
+        cudaPointerAttributes attributes;
+        memset(&attributes, 0, sizeof(attributes));
+        cudaError_t queryErr = cudaPointerGetAttributes(&attributes, data_);
+        
+        if (queryErr != cudaSuccess) {
+            // Source memory is not valid CUDA memory
+            cudaGetLastError(); // Clear the error
+            return SimpleCudaMat();
+        }
+        
+        // Check if memory type is valid for copying
+        if (attributes.type != cudaMemoryTypeDevice && 
+            attributes.type != cudaMemoryTypeManaged) {
+            return SimpleCudaMat();
+        }
+        
         SimpleCudaMat result(height_, width_, channels_);
-        if (!empty()) {
-            CUDA_CHECK(cudaMemcpy(result.data_, data_, sizeInBytes(), cudaMemcpyDeviceToDevice));
+        
+        if (result.data_ && data_) {
+            size_t size = sizeInBytes();
+                   
+            if (size > 0 && size < (size_t)(2048 * 2048 * 4 * sizeof(float))) {  // Sanity check - max 2048x2048x4 float
+                cudaError_t err = cudaMemcpy(result.data_, data_, size, cudaMemcpyDeviceToDevice);
+                if (err != cudaSuccess) {
+                    result.release();
+                    return SimpleCudaMat();
+                }
+            } else {
+                result.release();
+                return SimpleCudaMat();
+            }
         }
         return result;
     }
