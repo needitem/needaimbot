@@ -149,7 +149,6 @@ public:
 
     
     int detection_resolution;
-    int capture_fps;
     int monitor_idx;
     bool circle_mask;
     bool capture_borders;

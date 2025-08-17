@@ -65,36 +65,20 @@ static void draw_capture_behavior_settings()
     
     UIHelpers::BeginCard("Capture Behavior");
     
-    // Use temporary float for the slider
-    float capture_fps_float = static_cast<float>(ctx.config.capture_fps);
+    // Target FPS slider for actual FPS limiting
+    float target_fps_float = ctx.config.target_fps;
+    float old_target_fps = ctx.config.target_fps;
     
-    // Store the old value to detect changes
-    int old_fps = ctx.config.capture_fps;
-    
-    UIHelpers::CompactSlider("Lock FPS", &capture_fps_float, 0.0f, 240.0f, "%.0f");
-    UIHelpers::InfoTooltip("Limits the screen capture rate. 0 = Unlocked (fastest possible).\nLower values reduce CPU usage but increase detection latency.");
+    UIHelpers::CompactSlider("Target FPS", &target_fps_float, 30.0f, 360.0f, "%.0f");
+    UIHelpers::InfoTooltip("Limits the actual capture frame rate. Higher values provide smoother tracking but use more resources.\nRecommended: 120-240 FPS for competitive gaming.");
     
     // Check if value changed
-    int new_fps = static_cast<int>(capture_fps_float);
-    if (new_fps != old_fps) {
-        ctx.config.capture_fps = new_fps;
+    if (target_fps_float != old_target_fps) {
+        ctx.config.target_fps = target_fps_float;
         SAVE_PROFILE();
-        
-        // Force update flags
-        extern std::atomic<bool> capture_fps_changed;
-        capture_fps_changed.store(true);
+        std::cout << "[UI] Target FPS changed to: " << target_fps_float << std::endl;
     }
     
-    if (ctx.config.capture_fps == 0)
-    {
-        ImGui::SameLine();
-        UIHelpers::BeautifulText("-> Unlocked", UIHelpers::GetErrorColor());
-    }
-    
-    if (ctx.config.capture_fps == 0 || ctx.config.capture_fps >= 61)
-    {
-        UIHelpers::BeautifulText("WARNING: High or unlocked FPS can significantly impact performance.", UIHelpers::GetWarningColor());
-    }
     
     UIHelpers::CompactSpacer();
     

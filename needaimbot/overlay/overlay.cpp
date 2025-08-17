@@ -371,7 +371,6 @@ void OverlayThread()
 
     
     int prev_detection_resolution = ctx.config.detection_resolution;
-    int prev_capture_fps = ctx.config.capture_fps;
     int prev_monitor_idx = ctx.config.monitor_idx;
     bool prev_circle_mask = ctx.config.circle_mask;
     bool prev_capture_borders = ctx.config.capture_borders;
@@ -694,12 +693,9 @@ void OverlayThread()
                     }
 
                     
-                    if (prev_capture_fps != ctx.config.capture_fps ||
-                        prev_monitor_idx != ctx.config.monitor_idx)
+                    if (prev_monitor_idx != ctx.config.monitor_idx)
                     {
-                        capture_fps_changed.store(true);
                         prev_monitor_idx = ctx.config.monitor_idx;
-                        prev_capture_fps = ctx.config.capture_fps;
                         config_needs_save = true;
                     }
 

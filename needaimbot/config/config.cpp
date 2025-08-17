@@ -57,7 +57,6 @@ bool Config::loadConfig(const std::string& filename)
 
         
         detection_resolution = 320;  // Lower resolution for better performance
-        capture_fps = 60;  // Cap at 60 FPS to reduce CPU load
         monitor_idx = 0;
         circle_mask = false;  // Disabled for better performance
         capture_borders = false;  // Disabled for better performance
@@ -257,7 +256,6 @@ bool Config::loadConfig(const std::string& filename)
 
     
     detection_resolution = get_long_ini("Capture", "detection_resolution", 320);
-    capture_fps = get_long_ini("Capture", "capture_fps", 0);  // 0 = unlimited FPS
     monitor_idx = get_long_ini("Capture", "monitor_idx", 0);
     circle_mask = get_bool_ini("Capture", "circle_mask", true);
     capture_borders = get_bool_ini("Capture", "capture_borders", true);
@@ -532,7 +530,6 @@ bool Config::saveConfig(const std::string& filename)
 
     file << "[Capture]\n";
     file << "detection_resolution = " << detection_resolution << "\n";
-    file << "capture_fps = " << capture_fps << "\n";
     file << "monitor_idx = " << monitor_idx << "\n";
     file << "circle_mask = " << (circle_mask ? "true" : "false") << "\n";
     file << "capture_borders = " << (capture_borders ? "true" : "false") << "\n";

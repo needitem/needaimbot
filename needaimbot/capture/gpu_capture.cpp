@@ -1013,9 +1013,16 @@ void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
                 auto lastFpsTime = std::chrono::steady_clock::now();
                 auto lastFrameTime = std::chrono::steady_clock::now();
                 
-                std::cout << "[GameCapture] Starting main capture loop..." << std::endl;
+                // FPS limiting variables
+                const float targetFps = ctx.config.target_fps;
+                const auto targetFrameTime = std::chrono::microseconds(static_cast<long long>(1000000.0f / targetFps));
+                
+                std::cout << "[GameCapture] Starting main capture loop with FPS limit: " << targetFps << std::endl;
                 
                 while (!ctx.should_exit) {
+                    // Frame timing start
+                    auto frameStartTime = std::chrono::high_resolution_clock::now();
+                    
                     // Check for capture method change
                     if (ctx.capture_method_changed.load()) {
                         std::cout << "[GameCapture] Capture method changed, exiting Game Capture mode..." << std::endl;
@@ -1058,12 +1065,25 @@ void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
                         if (elapsed >= 1.0f) {
                             float fps = frameCount / elapsed;
                             ctx.g_current_capture_fps.store(fps);
+                            
+                            // Show FPS stats with target FPS
+                            std::cout << "[GAME CAPTURE] FPS: " << fps << "/" << targetFps
+                                      << " | Frame interval: " << (1000.0f / fps) << "ms" << std::endl;
+                            
                             frameCount = 0;
                             lastFpsTime = now;
                         }
                     }
                     
-                    // No sleep needed - WaitForNextFrame handles timing
+                    // FPS limiting: Calculate time to sleep to maintain target FPS
+                    auto frameEndTime = std::chrono::high_resolution_clock::now();
+                    auto frameElapsed = frameEndTime - frameStartTime;
+                    
+                    if (frameElapsed < targetFrameTime) {
+                        // We finished processing faster than target frame time, need to wait
+                        auto sleepTime = targetFrameTime - frameElapsed;
+                        std::this_thread::sleep_for(sleepTime);
+                    }
                 }
                 
                 gameCapture->StopCapture();
@@ -1152,6 +1172,11 @@ void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
         int consecutiveFailures = 0;
         const int MAX_CONSECUTIVE_FAILURES = 100;
         
+        // FPS limiting variables
+        const float targetFps = ctx.config.target_fps;
+        const auto targetFrameTime = std::chrono::microseconds(static_cast<long long>(1000000.0f / targetFps));
+        auto lastFrameLimitTime = std::chrono::high_resolution_clock::now();
+        
         while (!ctx.should_exit) {
             // Debug logging disabled - running stable now
             /*
@@ -1161,6 +1186,9 @@ void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
                 std::cout << "[GPUCapture] About to call WaitForNextFrame (call #" << waitCount << ")" << std::endl;
             }
             */
+            
+            // Frame timing start
+            auto frameStartTime = std::chrono::high_resolution_clock::now();
             
             // Wait for next frame with timeout check
             auto waitStart = std::chrono::steady_clock::now();
@@ -1342,8 +1370,8 @@ void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
                     float actualFrameTime = elapsed * 1000.0f / frameCount;  // Actual ms per frame
                     float captureOverhead = actualFrameTime - avgProcessTime;  // Time spent waiting for frames
                     
-                    // Show FPS stats (reuse disabled for stability)
-                    std::cout << "[STABLE MODE] FPS: " << fps 
+                    // Show FPS stats with target FPS
+                    std::cout << "[DESKTOP DUPLICATION] FPS: " << fps << "/" << targetFps
                               << " | Pipeline: " << avgProcessTime << "ms"
                               << " | Max FPS: " << maxPossibleFps
                               << " | Frame #" << totalFrameCount << std::endl;
@@ -1383,6 +1411,19 @@ void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
             if (ctx.should_exit) {
                 break;
             }
+            
+            // FPS limiting: Calculate time to sleep to maintain target FPS
+            auto frameEndTime = std::chrono::high_resolution_clock::now();
+            auto frameElapsed = frameEndTime - frameStartTime;
+            
+            if (frameElapsed < targetFrameTime) {
+                // We finished processing faster than target frame time, need to wait
+                auto sleepTime = targetFrameTime - frameElapsed;
+                std::this_thread::sleep_for(sleepTime);
+            }
+            
+            // Update last frame time for accurate FPS limiting
+            lastFrameLimitTime = std::chrono::high_resolution_clock::now();
         }
         
         // Cleanup
