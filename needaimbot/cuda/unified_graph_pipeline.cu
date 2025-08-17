@@ -633,7 +633,7 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
     // Always run detector after graph (or without graph)
     auto& ctx = AppContext::getInstance();
     
-    if (!ctx.detectionPaused && m_detector) {
+    if (!ctx.getDetectionState().isPaused() && m_detector) {
         
         // Pass capture buffer directly without creating wrapper
         // The detector can handle the SimpleCudaMat directly
@@ -956,7 +956,7 @@ bool UnifiedGraphPipeline::executeDirect(cudaStream_t stream) {
         
         // 2.5. YOLO 추론 실행 - Use existing processFrame for now
         auto& ctx = AppContext::getInstance();
-        if (!ctx.detectionPaused && m_detector) {
+        if (!ctx.getDetectionState().isPaused() && m_detector) {
             // Debug logging
             static int processCount = 0;
             processCount++;
@@ -1012,7 +1012,7 @@ bool UnifiedGraphPipeline::executeDirect(cudaStream_t stream) {
     
     // 4. Get detection results and calculate mouse movement with Bezier curve
     auto& ctx = AppContext::getInstance();
-    if (m_detector && !ctx.detectionPaused && ctx.aiming) {
+    if (m_detector && !ctx.getDetectionState().isPaused() && ctx.aiming) {
         try {
             // Get latest detections from detector
             auto detections = m_detector->getLatestDetectionsGPU();
