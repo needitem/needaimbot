@@ -231,6 +231,47 @@ LONG WINAPI UnhandledExceptionHandler(EXCEPTION_POINTERS* pExceptionPointers) {
         }
     }
     
+    // Print stack trace
+    std::cerr << "\n[CRASH] Stack Trace:" << std::endl;
+    void* stack[100];
+    WORD frames = CaptureStackBackTrace(0, 100, stack, NULL);
+    
+    // Get process handle for symbol resolution
+    HANDLE process = GetCurrentProcess();
+    SymInitialize(process, NULL, TRUE);
+    
+    for (WORD i = 0; i < frames; i++) {
+        DWORD64 address = (DWORD64)(stack[i]);
+        
+        // Get symbol name
+        char buffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME * sizeof(TCHAR)];
+        PSYMBOL_INFO symbol = (PSYMBOL_INFO)buffer;
+        symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+        symbol->MaxNameLen = MAX_SYM_NAME;
+        
+        DWORD64 displacement = 0;
+        if (SymFromAddr(process, address, &displacement, symbol)) {
+            // Get line info
+            IMAGEHLP_LINE64 line;
+            line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
+            DWORD lineDisplacement = 0;
+            
+            if (SymGetLineFromAddr64(process, address, &lineDisplacement, &line)) {
+                std::cerr << "  [" << i << "] " << symbol->Name 
+                         << " + 0x" << std::hex << displacement << std::dec
+                         << " (" << line.FileName << ":" << line.LineNumber << ")" << std::endl;
+            } else {
+                std::cerr << "  [" << i << "] " << symbol->Name 
+                         << " + 0x" << std::hex << displacement << std::dec
+                         << " (0x" << std::hex << address << std::dec << ")" << std::endl;
+            }
+        } else {
+            std::cerr << "  [" << i << "] 0x" << std::hex << address << std::dec << std::endl;
+        }
+    }
+    
+    SymCleanup(process);
+    
     // Flush output
     std::cerr.flush();
     std::cout.flush();
