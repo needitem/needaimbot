@@ -6,6 +6,7 @@
 #include "detection/filterGpu.h"
 #include "simple_cuda_mat.h"
 #include "mouse_interface.h"
+#include "pd_controller_shared.h"
 #include "../AppContext.h"
 #include "cuda_error_check.h"  // Use existing CUDA error checking macros
 #include <iostream>
@@ -689,13 +690,36 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
             float error_y = targetCenterY - screenCenterY;
             
             
-            // Apply movement factor (move only a percentage of the error)
-            float movement_x = error_x * ctx.config.movement_factor_x * ctx.config.mouse_sensitivity_x;
-            float movement_y = error_y * ctx.config.movement_factor_y * ctx.config.mouse_sensitivity_y;
+            // Use PD controller for precise, stable movement
+            float movement_x, movement_y;
             
-            // Apply minimum threshold
-            if (fabs(error_x) < ctx.config.min_movement_threshold_x) movement_x = 0;
-            if (fabs(error_y) < ctx.config.min_movement_threshold_y) movement_y = 0;
+            // Create PD config from application settings
+            cuda::PDConfig pd_config = {
+                ctx.config.pd_kp_x,                      // kp_x
+                ctx.config.pd_kp_y,                      // kp_y
+                ctx.config.pd_kd_x,                      // kd_x
+                ctx.config.pd_kd_y,                      // kd_y
+                ctx.config.min_movement_threshold_x,     // deadzone_x
+                ctx.config.min_movement_threshold_y,     // deadzone_y
+                ctx.config.pd_derivative_filter,         // derivative_filter_alpha
+                100.0f,                                   // max_output_x
+                100.0f                                    // max_output_y
+            };
+            
+            // Calculate movement using PD controller with target ID if available
+            int target_id = h_target.id;  // Use tracking ID from Target struct
+            
+            // Calculate dt based on frame rate (approximate)
+            float dt = 1.0f / ctx.config.target_fps;
+            if (dt <= 0.0f || dt > 1.0f) dt = 0.016f;  // Default to 60 FPS if invalid
+            
+            cuda::calculatePDControlWithID(
+                target_id, 
+                error_x, error_y, 
+                movement_x, movement_y, 
+                pd_config, 
+                dt
+            );
             
             int dx = static_cast<int>(movement_x);
             int dy = static_cast<int>(movement_y);
