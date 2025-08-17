@@ -663,7 +663,7 @@ void OverlayThread()
                     {
                         prev_detection_resolution = ctx.config.detection_resolution;
                         detection_resolution_changed.store(true);
-                        detector_model_changed.store(true); 
+                        ctx.getDetectionState().markModelChanged(); 
 
                         
                         if (AppContext::getInstance().mouseThread) {
