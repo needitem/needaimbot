@@ -328,19 +328,25 @@ public:
     int kalman_min_hits = 3;               // Minimum hits before track is confirmed
     int kalman_max_age = 5;                // Maximum frames without detection
     
-    // Mouse control settings
-    float mouse_sensitivity = 1.0f;        // Mouse movement sensitivity (legacy - will be removed)
-    float mouse_sensitivity_x = 1.0f;      // Mouse X-axis sensitivity
-    float mouse_sensitivity_y = 1.0f;      // Mouse Y-axis sensitivity
+    // Legacy mouse control settings (kept for config compatibility, not used)
+    float mouse_sensitivity = 1.0f;        // DEPRECATED - Not used
+    float mouse_sensitivity_x = 1.0f;      // DEPRECATED - Not used
+    float mouse_sensitivity_y = 1.0f;      // DEPRECATED - Not used
+    float movement_factor = 0.3f;          // DEPRECATED - Not used
+    float movement_factor_x = 0.3f;        // DEPRECATED - Not used  
+    float movement_factor_y = 0.3f;        // DEPRECATED - Not used
+    float min_movement_threshold = 1.0f;   // DEPRECATED - Not used
     
-    // Movement parameters separated for X and Y
-    float movement_factor = 0.3f;          // Legacy - will be removed
-    float movement_factor_x = 0.3f;        // X-axis movement factor (% of error per frame)
-    float movement_factor_y = 0.3f;        // Y-axis movement factor (% of error per frame)
-    
-    float min_movement_threshold = 1.0f;   // Legacy - will be removed
+    // Deadzone settings (still used)
     float min_movement_threshold_x = 1.0f; // X-axis minimum movement threshold (deadzone)
     float min_movement_threshold_y = 1.0f; // Y-axis minimum movement threshold (deadzone)
+
+    // PD Controller settings
+    float pd_kp_x = 0.4f;  // Proportional gain for X axis
+    float pd_kp_y = 0.4f;  // Proportional gain for Y axis
+    float pd_kd_x = 0.15f;  // Derivative gain for X axis
+    float pd_kd_y = 0.15f;  // Derivative gain for Y axis
+    float pd_derivative_filter = 0.7f;  // Derivative filter alpha (0.0 = no filter, 1.0 = full filter)
 
     // Active profile management
     std::string active_profile_name = "Default";
