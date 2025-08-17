@@ -938,7 +938,7 @@ void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
         auto& ctx = AppContext::getInstance();
         
         std::cout << "[Capture] Starting capture thread with resolution: " << CAPTURE_WIDTH << "x" << CAPTURE_HEIGHT << std::endl;
-        std::cout << "[Capture] Capture method selected: " << ctx.capture_method.load() 
+        std::cout << "[Capture] Capture method selected: " << ctx.getCaptureState().getCaptureMethod() 
                   << " (0=Desktop Duplication, 1=Virtual Camera, 2=OBS Hook, 3=Game Capture)" << std::endl;
     
     // Check if game name is configured
@@ -953,7 +953,7 @@ void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
     int screenHeight = GetSystemMetrics(SM_CYSCREEN);
     
     // Try Game Capture first (OBS hook method)
-    if (ctx.capture_method.load() == 3 || ctx.capture_method.load() == 2) {
+    if (ctx.getCaptureState().getCaptureMethod() == 3 || ctx.getCaptureState().getCaptureMethod() == 2) {
         std::cout << "[Capture] Using Game Capture (OBS Hook) for: " << gameName << std::endl;
         
         GameCapture* gameCapture = nullptr;
@@ -1024,9 +1024,9 @@ void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
                     auto frameStartTime = std::chrono::high_resolution_clock::now();
                     
                     // Check for capture method change
-                    if (ctx.capture_method_changed.load()) {
+                    if (ctx.getCaptureState().checkAndResetMethodChange()) {
                         std::cout << "[GameCapture] Capture method changed, exiting Game Capture mode..." << std::endl;
-                        ctx.capture_method_changed.store(false);
+                        // Method change flag already reset by checkAndResetMethodChange();
                         break;
                     }
                     
@@ -1064,7 +1064,7 @@ void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
                         auto elapsed = std::chrono::duration<float>(now - lastFpsTime).count();
                         if (elapsed >= 1.0f) {
                             float fps = frameCount / elapsed;
-                            ctx.g_current_capture_fps.store(fps);
+                            ctx.getPerformanceMetrics().updateCaptureFps(fps);
                             
                             // Show FPS stats with target FPS
                             std::cout << "[GAME CAPTURE] FPS: " << fps << "/" << targetFps
@@ -1102,13 +1102,13 @@ void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
         }
         
         // If we exited due to capture method change or error, check if we should continue
-        if (ctx.capture_method.load() != 0 || ctx.should_exit) {
+        if (ctx.getCaptureState().getCaptureMethod() != 0 || ctx.should_exit) {
             return;
         }
     }
     
     // Use Desktop Duplication as fallback or if selected
-    if (ctx.capture_method.load() == 0 || ctx.capture_method.load() == 1) {
+    if (ctx.getCaptureState().getCaptureMethod() == 0 || ctx.getCaptureState().getCaptureMethod() == 1) {
         std::cout << "[Capture] Using Desktop Duplication API..." << std::endl;
         GPUCapture gpuCapture(CAPTURE_WIDTH, CAPTURE_HEIGHT);
         if (!gpuCapture.Initialize()) {
@@ -1364,7 +1364,7 @@ void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
                     float avgProcessTime = processedFrames > 0 ? totalProcessTime / processedFrames : 0.0f;
                     float maxPossibleFps = avgProcessTime > 0 ? 1000.0f / avgProcessTime : 0.0f;
                     
-                    ctx.g_current_capture_fps.store(fps);
+                    ctx.getPerformanceMetrics().updateCaptureFps(fps);
                     
                     // Always output FPS stats when calculated
                     float actualFrameTime = elapsed * 1000.0f / frameCount;  // Actual ms per frame
@@ -1396,12 +1396,12 @@ void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
             }
             
             // Check for configuration changes
-            if (ctx.capture_method_changed.load()) {
-                std::cout << "[GPUCapture] Capture method changed detected! New method: " << ctx.capture_method.load() << std::endl;
-                ctx.capture_method_changed.store(false);
+            if (ctx.getCaptureState().checkAndResetMethodChange()) {
+                std::cout << "[GPUCapture] Capture method changed detected! New method: " << ctx.getCaptureState().getCaptureMethod() << std::endl;
+                // Method change flag already reset by checkAndResetMethodChange();
                 
                 // If changed to Game Capture, need to exit this loop and restart
-                if (ctx.capture_method.load() == 2 || ctx.capture_method.load() == 3) {
+                if (ctx.getCaptureState().getCaptureMethod() == 2 || ctx.getCaptureState().getCaptureMethod() == 3) {
                     std::cout << "[GPUCapture] Switching to Game Capture mode, exiting Desktop Duplication loop..." << std::endl;
                     break;  // Exit the loop to restart with new capture method
                 }
@@ -1430,7 +1430,7 @@ void gpuOnlyCaptureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT) {
         gpuCapture.StopCapture();
         
         // Check if we need to restart with different capture method
-        if ((ctx.capture_method.load() == 2 || ctx.capture_method.load() == 3) && !ctx.should_exit) {
+        if ((ctx.getCaptureState().getCaptureMethod() == 2 || ctx.getCaptureState().getCaptureMethod() == 3) && !ctx.should_exit) {
             std::cout << "[GPUCapture] Restarting with Game Capture mode..." << std::endl;
             
             // Recursively call ourselves to restart with new capture method

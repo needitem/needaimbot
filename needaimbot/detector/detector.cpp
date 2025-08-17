@@ -48,9 +48,9 @@
 
 
 
-extern std::atomic<bool> detectionPaused;
+// detectionPaused is now managed by DetectionState
 
-extern std::atomic<bool> detector_model_changed;
+// detector_model_changed is now managed by DetectionState
 extern std::atomic<bool> detection_resolution_changed;
 
 
@@ -763,7 +763,7 @@ void Detector::processFrame(const SimpleCudaMat& frame)
         return;
     }
 
-    if (ctx.detectionPaused)
+    if (ctx.getDetectionState().isPaused())
     {
         std::lock_guard<std::mutex> lock(detectionMutex);
         m_hasBestTarget = false;
@@ -820,8 +820,8 @@ void Detector::processFrame(const SimpleCudaMat& frame)
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<float, std::milli> duration = end_time - start_time;
-    ctx.g_current_process_frame_time_ms.store(duration.count());
-    ctx.add_to_history(ctx.g_process_frame_time_history, duration.count(), ctx.g_process_frame_history_mutex);
+    ctx.getPerformanceMetrics().updateProcessFrameTime(duration.count());
+    // History now managed by PerformanceMetrics
 }
 
 void Detector::processFrame(const SimpleMat& frame)
@@ -829,7 +829,7 @@ void Detector::processFrame(const SimpleMat& frame)
     auto& ctx = AppContext::getInstance();
     if (!isCudaContextInitialized()) return; 
 
-    if (ctx.detectionPaused)
+    if (ctx.getDetectionState().isPaused())
     {
         std::lock_guard<std::mutex> lock(detectionMutex);
         m_hasBestTarget = false;
@@ -861,8 +861,8 @@ void Detector::processFrame(const SimpleMat& frame)
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<float, std::milli> duration = end_time - start_time;
-    ctx.g_current_process_frame_time_ms.store(duration.count());
-    ctx.add_to_history(ctx.g_process_frame_time_history, duration.count(), ctx.g_process_frame_history_mutex);
+    ctx.getPerformanceMetrics().updateProcessFrameTime(duration.count());
+    // History now managed by PerformanceMetrics
 }
 
 void Detector::inferenceThread()
@@ -933,8 +933,8 @@ void Detector::inferenceThread()
         // Calculate detector cycle time (time between cycle starts)
         if (last_cycle_start_time.time_since_epoch().count() != 0) {
             std::chrono::duration<float, std::milli> cycle_duration_ms = cycle_start_time - last_cycle_start_time;
-            ctx.g_current_detector_cycle_time_ms.store(cycle_duration_ms.count());
-            ctx.add_to_history(ctx.g_detector_cycle_time_history, cycle_duration_ms.count(), ctx.g_detector_cycle_history_mutex);
+            ctx.getPerformanceMetrics().updateDetectorCycleTime(cycle_duration_ms.count());
+            // History now managed by PerformanceMetrics
         }
         last_cycle_start_time = cycle_start_time;
         
@@ -966,7 +966,7 @@ void Detector::inferenceThread()
             
         }
 
-        if (ctx.detector_model_changed.load()) {
+        if (ctx.getDetectionState().checkAndResetModelChange()) {
             // CUDA Graph removed for optimization
 
             // Re-initialize detector components
@@ -983,7 +983,7 @@ void Detector::inferenceThread()
             }
             initialize("models/" + ctx.config.ai_model);
             img_scale = static_cast<float>(ctx.config.detection_resolution) / 640;
-            ctx.detector_model_changed.store(false);
+            // Model change flag already reset by checkAndResetModelChange();
         }
 
         if (AppContext::getInstance().should_exit) {
@@ -1229,8 +1229,8 @@ void Detector::inferenceThread()
 
                 auto inference_end_time = std::chrono::high_resolution_clock::now();
                 std::chrono::duration<float, std::milli> inference_duration_ms = inference_end_time - inference_start_time;
-                ctx.g_current_inference_time_ms.store(inference_duration_ms.count());
-                ctx.add_to_history(ctx.g_inference_time_history, inference_duration_ms.count(), ctx.g_inference_history_mutex);
+                ctx.getPerformanceMetrics().updateInferenceTime(inference_duration_ms.count());
+                // History now managed by PerformanceMetrics
                 
                 // Apply SORT tracking if enabled
                 std::vector<TrackedObject> tracked_targets;
