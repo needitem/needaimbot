@@ -8,7 +8,8 @@
 #include "mouse_interface.h"
 #include "pd_controller_shared.h"
 #include "../AppContext.h"
-#include "cuda_error_check.h"  // Use existing CUDA error checking macros
+#include "cuda_error_check.h"
+#include "preprocessing.h"  // Use existing CUDA error checking macros
 #include <d3d11.h>
 #include <dxgi1_2.h>
 #include "../include/other_tools.h"  // For fileExists function
@@ -261,7 +262,7 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
     if (m_config.useGraphOptimization) {
         std::cout << "[DEBUG] CUDA Graph optimization enabled with proper initialization" << std::endl;
         // Capture detection graph with proper input initialization
-        if (!captureDetectionGraph(m_primaryStream)) {
+        if (!captureGraph(m_primaryStream)) {
             std::cerr << "[UnifiedGraph] Warning: Failed to capture detection graph" << std::endl;
         }
         
@@ -461,63 +462,6 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     return true;
 }
 
-bool UnifiedGraphPipeline::captureDetectionGraph(cudaStream_t stream) {
-    std::lock_guard<std::mutex> lock(m_graphMutex);
-    auto& ctx = AppContext::getInstance();
-    
-    if (!stream) stream = m_primaryStream;
-    
-    
-    // Clean up existing detection graph
-    if (m_detectionGraphExec) {
-        cudaGraphExecDestroy(m_detectionGraphExec);
-        m_detectionGraphExec = nullptr;
-    }
-    if (m_detectionGraph) {
-        cudaGraphDestroy(m_detectionGraph);
-        m_detectionGraph = nullptr;
-    }
-    
-    // Begin graph capture for detection only
-    cudaError_t err = cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal);
-    if (err != cudaSuccess) {
-        std::cerr << "[UnifiedGraph] Failed to begin detection graph capture: " 
-                  << cudaGetErrorString(err) << std::endl;
-        return false;
-    }
-    
-    // Preprocessing removed - using CudaImageProcessing pipeline in executeGraph instead
-    
-    // End capture
-    err = cudaStreamEndCapture(stream, &m_detectionGraph);
-    if (err != cudaSuccess) {
-        std::cerr << "[UnifiedGraph] Failed to end detection graph capture: " 
-                  << cudaGetErrorString(err) << std::endl;
-        if (m_detectionGraph) {
-            cudaGraphDestroy(m_detectionGraph);
-            m_detectionGraph = nullptr;
-        }
-        return false;
-    }
-    
-    // Instantiate graph for execution
-    err = cudaGraphInstantiate(&m_detectionGraphExec, m_detectionGraph, nullptr, nullptr, 0);
-    if (err != cudaSuccess) {
-        std::cerr << "[UnifiedGraph] Failed to instantiate detection graph: " 
-                  << cudaGetErrorString(err) << std::endl;
-        cudaGraphDestroy(m_detectionGraph);
-        m_detectionGraph = nullptr;
-        return false;
-    }
-    
-    // Get node count for debugging
-    size_t numNodes = 0;
-    cudaGraphGetNodes(m_detectionGraph, nullptr, &numNodes);
-    
-    
-    return true;
-}
-
 void UnifiedGraphPipeline::checkTargetsAsync(cudaStream_t stream) {
     // Check if TensorRT has targets from previous frame (Phase 1)
     // TODO: Implement target checking from integrated TensorRT results
@@ -685,7 +629,7 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
                 std::cout << "  MAX VALUE:    " << std::fixed << std::setprecision(6) << max_val << std::endl;
                 std::cout << "  AVERAGE:      " << std::fixed << std::setprecision(6) << avg_val << std::endl;
                 std::cout << "  SAMPLE SIZE:  " << sample_size << " / " << total_elements << std::endl;
-                std::cout << "  FIRST PIXEL:  BGR(" << std::fixed << std::setprecision(6) << first_pixel[0] << ", " << first_pixel[1] << ", " << first_pixel[2] << ")" << std::endl;
+                std::cout << "  FIRST PIXEL:  RGB(" << std::fixed << std::setprecision(6) << first_pixel[0] << ", " << first_pixel[1] << ", " << first_pixel[2] << ")" << std::endl;
                 std::cout << "=====================================================================================" << std::endl;
             }
             
@@ -744,26 +688,24 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
         
         // Phase 2.3: Use integrated TensorRT pipeline with asynchronous execution
         
-        // 1. Preprocessing: Convert capture buffer to YOLO input
+        // 1. Unified Preprocessing: BGRA → RGB + Resize + Normalize + HWC→CHW
         if (m_d_yoloInput && !m_captureBuffer.empty()) {
-            // Phase 2.3: Optimized preprocessing pipeline with proper float handling
-            SimpleCudaMat tempResize;
-            SimpleCudaMatFloat tempFloat;
-            tempResize.create(ctx.config.onnx_input_resolution, ctx.config.onnx_input_resolution, 3);
-            tempFloat.create(ctx.config.onnx_input_resolution, ctx.config.onnx_input_resolution, 3);
+            // Use new unified preprocessing function
+            cudaError_t err = cuda_unified_preprocessing(
+                m_captureBuffer.data(),                    // BGRA 입력
+                m_d_yoloInput,                            // RGB CHW 출력
+                m_captureBuffer.cols(),                   // 입력 너비
+                m_captureBuffer.rows(),                   // 입력 높이
+                m_captureBuffer.step(),                   // 입력 스트라이드
+                ctx.config.onnx_input_resolution,         // 목표 너비
+                ctx.config.onnx_input_resolution,         // 목표 높이
+                stream
+            );
             
-            // Convert and resize in pipeline (BGRA → RGB for proper model input)
-            SimpleCudaMat rgbBuffer;
-            rgbBuffer.create(m_captureBuffer.rows(), m_captureBuffer.cols(), 3);
-            CudaImageProcessing::bgra2rgb(m_captureBuffer, rgbBuffer, stream);
-            CudaImageProcessing::resize(rgbBuffer, tempResize, ctx.config.onnx_input_resolution, ctx.config.onnx_input_resolution, stream);
-            
-            // Convert uint8 to float with proper normalization
-            CudaFloatProcessing::convertToFloat(tempResize, tempFloat, 1.0f/255.0f, 0.0f, stream);
-            
-            size_t inputSize = ctx.config.onnx_input_resolution * ctx.config.onnx_input_resolution * 3 * sizeof(float);
-            cudaMemcpyAsync(m_d_yoloInput, tempFloat.data(), inputSize, 
-                           cudaMemcpyDeviceToDevice, stream);
+            if (err != cudaSuccess) {
+                printf("[ERROR] Unified preprocessing failed: %s\n", cudaGetErrorString(err));
+                return false;
+            }
         }
         
         // 2. TensorRT Inference

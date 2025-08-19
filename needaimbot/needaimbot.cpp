@@ -605,20 +605,6 @@ int main()
                     return -1;
                 }
                 std::cout << "[MAIN] Screen capture initialized successfully" << std::endl;
-                
-                // Capture the graph on first execution
-                cudaStream_t graphStream = nullptr;
-                cudaStreamCreate(&graphStream);
-                
-                if (pipeline->captureGraph(graphStream)) {
-                    std::cout << "[MAIN] CUDA Graph captured successfully" << std::endl;
-                    ctx.use_cuda_graph = true;  // Flag to use graph in capture thread
-                } else {
-                    std::cout << "[MAIN] CUDA Graph capture failed, using direct execution" << std::endl;
-                    ctx.use_cuda_graph = false;
-                }
-                
-                cudaStreamDestroy(graphStream);
             }
         }
 
