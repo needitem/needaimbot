@@ -18,6 +18,10 @@
 #include <thread>
 #include <fstream>
 #include <filesystem>
+#include <vector>
+#include <algorithm>
+#include <numeric>
+#include <iomanip>
 #include <cuda.h>
 
 
@@ -353,6 +357,7 @@ void UnifiedGraphPipeline::shutdown() {
 
 bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     std::lock_guard<std::mutex> lock(m_graphMutex);
+    auto& ctx = AppContext::getInstance();
     
     if (!stream) stream = m_primaryStream;
     
@@ -391,8 +396,8 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
         // Calculate grid and block dimensions
         dim3 blockSize(16, 16);
         dim3 gridSize(
-            (640 + blockSize.x - 1) / blockSize.x,
-            (640 + blockSize.y - 1) / blockSize.y
+            (ctx.config.onnx_input_resolution + blockSize.x - 1) / blockSize.x,
+            (ctx.config.onnx_input_resolution + blockSize.y - 1) / blockSize.y
         );
         
         // Get input dimensions
@@ -404,9 +409,9 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
             reinterpret_cast<const uchar4*>(m_captureBuffer.data()),
             m_d_yoloInput,
             srcWidth, srcHeight,
-            640, 640,  // YOLO input size
-            static_cast<float>(srcWidth) / 640.0f,
-            static_cast<float>(srcHeight) / 640.0f,
+            ctx.config.onnx_input_resolution, ctx.config.onnx_input_resolution,  // YOLO input size
+            static_cast<float>(srcWidth) / static_cast<float>(ctx.config.onnx_input_resolution),
+            static_cast<float>(srcHeight) / static_cast<float>(ctx.config.onnx_input_resolution),
             0.0f, 1.0f,  // Normalization parameters
             false  // Keep BGR order (match stable branch)
         );
@@ -451,7 +456,7 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     }
     
     // 6. Bezier Control (already handled in the main pipeline)
-    // The actual Bezier control is executed in executeDirect method
+    // The actual Bezier control is executed in graph method
     
     // 7. Final output copy (only 2 floats for mouse X,Y)
     if (m_d_outputBuffer && m_h_outputBuffer) {
@@ -507,6 +512,7 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
 
 bool UnifiedGraphPipeline::captureDetectionGraph(cudaStream_t stream) {
     std::lock_guard<std::mutex> lock(m_graphMutex);
+    auto& ctx = AppContext::getInstance();
     
     if (!stream) stream = m_primaryStream;
     
@@ -534,8 +540,8 @@ bool UnifiedGraphPipeline::captureDetectionGraph(cudaStream_t stream) {
         // Calculate grid and block dimensions
         dim3 blockSize(16, 16);
         dim3 gridSize(
-            (640 + blockSize.x - 1) / blockSize.x,
-            (640 + blockSize.y - 1) / blockSize.y
+            (ctx.config.onnx_input_resolution + blockSize.x - 1) / blockSize.x,
+            (ctx.config.onnx_input_resolution + blockSize.y - 1) / blockSize.y
         );
         
         // Get input dimensions
@@ -547,9 +553,9 @@ bool UnifiedGraphPipeline::captureDetectionGraph(cudaStream_t stream) {
             reinterpret_cast<const uchar4*>(m_captureBuffer.data()),
             m_d_yoloInput,
             srcWidth, srcHeight,
-            640, 640,  // YOLO input size
-            static_cast<float>(srcWidth) / 640.0f,
-            static_cast<float>(srcHeight) / 640.0f,
+            ctx.config.onnx_input_resolution, ctx.config.onnx_input_resolution,  // YOLO input size
+            static_cast<float>(srcWidth) / static_cast<float>(ctx.config.onnx_input_resolution),
+            static_cast<float>(srcHeight) / static_cast<float>(ctx.config.onnx_input_resolution),
             0.0f, 1.0f,  // Normalization parameters
             false  // Keep BGR order (match stable branch)
         );
@@ -714,7 +720,7 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
             printf("[ERROR] cudaGraphLaunch failed: %s\n", cudaGetErrorString(err));
             // Reset CUDA error state
             cudaGetLastError();
-            return executeDirect(stream);
+            return false;
         }
         
         // Log model input/output after graph execution
@@ -722,13 +728,37 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
         if (graph_log_count < 5) {
             cudaStreamSynchronize(stream);
             
-            // Log model input
+            // Log model input with comprehensive statistics
             if (m_d_yoloInput) {
+                // Calculate total elements (configurable input size)
+                size_t total_elements = 3 * m_config.detectionWidth * m_config.detectionHeight;
+                size_t sample_size = std::min(size_t(10000), total_elements); // Sample 10k values for statistics
+                
+                // Allocate host memory for statistics calculation
+                std::vector<float> data_sample(sample_size);
+                cudaMemcpy(data_sample.data(), m_d_yoloInput, 
+                          sample_size * sizeof(float), cudaMemcpyDeviceToHost);
+                
+                // Calculate min, max, average
+                auto minmax_result = std::minmax_element(data_sample.begin(), data_sample.end());
+                float min_val = *minmax_result.first;
+                float max_val = *minmax_result.second;
+                float sum = std::accumulate(data_sample.begin(), data_sample.end(), 0.0f);
+                float avg_val = sum / sample_size;
+                
+                // Log first pixel for reference
                 float first_pixel[3];
                 cudaMemcpy(first_pixel, m_d_yoloInput, 3 * sizeof(float), cudaMemcpyDeviceToHost);
-                std::cout << "[MODEL INPUT] First pixel BGR: (" 
-                          << first_pixel[0] << ", " << first_pixel[1] << ", " << first_pixel[2] 
-                          << ") Frame: " << graph_log_count << std::endl;
+                
+                // Log comprehensive preprocessing statistics
+                std::cout << "=== UNIFIED PIPELINE PREPROCESSED DATA STATISTICS (Frame " << graph_log_count << ") ===" << std::endl;
+                std::cout << "  INPUT TENSOR: [3, " << m_config.detectionHeight << ", " << m_config.detectionWidth << "] (" << total_elements << " elements)" << std::endl;
+                std::cout << "  MIN VALUE:    " << std::fixed << std::setprecision(6) << min_val << std::endl;
+                std::cout << "  MAX VALUE:    " << std::fixed << std::setprecision(6) << max_val << std::endl;
+                std::cout << "  AVERAGE:      " << std::fixed << std::setprecision(6) << avg_val << std::endl;
+                std::cout << "  SAMPLE SIZE:  " << sample_size << " / " << total_elements << std::endl;
+                std::cout << "  FIRST PIXEL:  BGR(" << std::fixed << std::setprecision(6) << first_pixel[0] << ", " << first_pixel[1] << ", " << first_pixel[2] << ")" << std::endl;
+                std::cout << "=====================================================================================" << std::endl;
             }
             
             // Log model output if available
@@ -775,17 +805,17 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
         if (m_d_yoloInput && !m_captureBuffer.empty()) {
             // Phase 2.3: Optimized preprocessing pipeline
             SimpleCudaMat tempResize, tempFloat;
-            tempResize.create(640, 640, 3);
-            tempFloat.create(640, 640, 3);
+            tempResize.create(ctx.config.onnx_input_resolution, ctx.config.onnx_input_resolution, 3);
+            tempFloat.create(ctx.config.onnx_input_resolution, ctx.config.onnx_input_resolution, 3);
             
             // Convert and resize in pipeline
             SimpleCudaMat bgrBuffer;
             bgrBuffer.create(m_captureBuffer.rows(), m_captureBuffer.cols(), 3);
             CudaImageProcessing::bgra2bgr(m_captureBuffer, bgrBuffer, stream);
-            CudaImageProcessing::resize(bgrBuffer, tempResize, 640, 640, stream);
+            CudaImageProcessing::resize(bgrBuffer, tempResize, ctx.config.onnx_input_resolution, ctx.config.onnx_input_resolution, stream);
             CudaImageProcessing::convertTo(tempResize, tempFloat, m_imgScale, 0.0f, stream);
             
-            size_t inputSize = 640 * 640 * 3 * sizeof(float);
+            size_t inputSize = ctx.config.onnx_input_resolution * ctx.config.onnx_input_resolution * 3 * sizeof(float);
             cudaMemcpyAsync(m_d_yoloInput, tempFloat.data(), inputSize, 
                            cudaMemcpyDeviceToDevice, stream);
         }
@@ -794,7 +824,7 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
         if (m_inputBindings.find(m_inputName) != m_inputBindings.end() && m_d_yoloInput) {
             void* inputBinding = m_inputBindings[m_inputName];
             if (inputBinding != m_d_yoloInput) {
-                size_t inputSize = 640 * 640 * 3 * sizeof(float);
+                size_t inputSize = ctx.config.onnx_input_resolution * ctx.config.onnx_input_resolution * 3 * sizeof(float);
                 cudaMemcpyAsync(inputBinding, m_d_yoloInput, inputSize, 
                                cudaMemcpyDeviceToDevice, stream);
             }
@@ -962,7 +992,7 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
             }
         } else {
             // No graph available, use direct execution
-            return executeDirect(stream);
+            return false;
         }
     }
     
@@ -976,329 +1006,6 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
     
     // Reset frame data flag for next frame
     m_hasFrameData = false;
-    
-    return true;
-}
-
-bool UnifiedGraphPipeline::executeDirect(cudaStream_t stream) {
-    static int executeCount = 0;
-    executeCount++;
-    
-    if (executeCount <= 10 || executeCount % 100 == 0) {
-        std::cout << "[UnifiedGraph::executeDirect] Call #" << executeCount << std::endl;
-    }
-    
-    // Check for CUDA errors periodically
-    if (executeCount % 50 == 0) {  // Check more frequently
-        cudaError_t err = cudaGetLastError();
-        if (err != cudaSuccess) {
-            std::cerr << "[UnifiedGraph] CUDA error detected at frame " << executeCount 
-                      << ": " << cudaGetErrorString(err) << std::endl;
-            
-            // Get more detailed error info
-            const char* errorName = cudaGetErrorName(err);
-            std::cerr << "[UnifiedGraph] Error name: " << errorName << std::endl;
-            
-            // DO NOT reset device - it will invalidate all resources!
-            // Just clear the error and continue
-            cudaGetLastError(); // Clear error state
-            return false;
-        }
-        
-        // Don't do full device sync in production - it kills performance
-        // Just check stream status instead
-        err = cudaStreamQuery(stream ? stream : m_primaryStream);
-        if (err != cudaSuccess && err != cudaErrorNotReady) {
-            std::cerr << "[UnifiedGraph] CUDA stream error at frame " << executeCount 
-                      << ": " << cudaGetErrorString(err) << std::endl;
-            cudaGetLastError(); // Clear error state
-            return false;
-        }
-    }
-    
-    // Use multi-stream coordinator for optimal performance
-    if (!m_coordinator) {
-        std::cerr << "[UnifiedGraph] ERROR: Coordinator not initialized!" << std::endl;
-        return false;
-    }
-    
-    // 1. Capture stage with ZERO-COPY optimization
-    if (m_config.enableCapture && m_cudaResource) {
-        // Ensure capture buffer is initialized with correct dimensions
-        if (m_captureBuffer.empty() || m_captureBuffer.channels() != 4) {
-            // Get capture dimensions from config (passed to GameCapture constructor)
-            // These values are set in detector.cpp when creating GameCapture
-            int captureWidth = m_config.detectionWidth;  // Using detection width/height as capture size
-            int captureHeight = m_config.detectionHeight;
-            m_captureBuffer.create(captureHeight, captureWidth, 4);  // BGRA format
-            std::cout << "[UnifiedGraph] Initialized capture buffer: " << captureWidth << "x" << captureHeight << " with 4 channels" << std::endl;
-        }
-        
-        // Debug: Check capture buffer state
-        if (executeCount <= 5 || executeCount % 100 == 0) {
-            std::cout << "[UnifiedGraph] Capture buffer - rows: " << m_captureBuffer.rows() 
-                      << ", cols: " << m_captureBuffer.cols() 
-                      << ", channels: " << m_captureBuffer.channels() 
-                      << ", empty: " << m_captureBuffer.empty() << std::endl;
-        }
-        
-        try {
-            // Use capture stream for highest priority
-            cudaStream_t captureStream = m_coordinator->captureStream;
-            
-            // Debug: Log before mapping
-            if (executeCount <= 5 || executeCount % 100 == 0) {
-                std::cout << "[UnifiedGraph] Mapping CUDA resource (frame #" << executeCount << ")" << std::endl;
-            }
-            
-            // Map resource for zero-copy access
-            cudaError_t mapErr = cudaGraphicsMapResources(1, &m_cudaResource, captureStream);
-            if (mapErr != cudaSuccess) {
-                std::cerr << "[UnifiedGraph] Failed to map CUDA resource at frame #" << executeCount 
-                          << ": " << cudaGetErrorString(mapErr) << std::endl;
-                return false;
-            }
-            
-            cudaArray_t array;
-            cudaError_t arrayErr = cudaGraphicsSubResourceGetMappedArray(&array, m_cudaResource, 0, 0);
-            if (arrayErr != cudaSuccess) {
-                std::cerr << "[UnifiedGraph] Failed to get mapped array: " << cudaGetErrorString(arrayErr) << std::endl;
-                cudaGraphicsUnmapResources(1, &m_cudaResource, captureStream);
-                return false;
-            }
-        
-        // Get buffer from triple buffer system if available
-        void* targetBuffer = m_tripleBuffer ? 
-            m_tripleBuffer->buffers[m_tripleBuffer->captureIdx].data() :
-            m_captureBuffer.data();
-        
-            // Direct array to buffer copy (zero-copy when possible)
-            cudaError_t copyErr = cudaMemcpy2DFromArrayAsync(
-                targetBuffer, m_captureBuffer.step(),
-                array, 0, 0,
-                m_captureBuffer.cols() * 4, m_captureBuffer.rows(),
-                cudaMemcpyDeviceToDevice, captureStream
-            );
-            
-            if (copyErr != cudaSuccess) {
-                std::cerr << "[UnifiedGraph] Memcpy2D failed: " << cudaGetErrorString(copyErr) << std::endl;
-            }
-            
-            // Debug: Log before unmapping
-            if (executeCount <= 5 || executeCount % 100 == 0) {
-                std::cout << "[UnifiedGraph] Unmapping CUDA resource (frame #" << executeCount << ")" << std::endl;
-            }
-            
-            // Always unmap resource, even on error
-            cudaError_t unmapErr = cudaGraphicsUnmapResources(1, &m_cudaResource, captureStream);
-            if (unmapErr != cudaSuccess) {
-                std::cerr << "[UnifiedGraph] Failed to unmap resource at frame #" << executeCount 
-                          << ": " << cudaGetErrorString(unmapErr) << std::endl;
-            }
-            
-            if (copyErr != cudaSuccess) {
-                return false;
-            }
-            
-            // Signal capture completion
-            m_coordinator->synchronizeCapture(m_coordinator->preprocessStream);
-        }
-        catch (const std::exception& e) {
-            std::cerr << "[UnifiedGraph] Exception in capture stage: " << e.what() << std::endl;
-            // Try to unmap resource if still mapped
-            cudaGraphicsUnmapResources(1, &m_cudaResource, m_coordinator->captureStream);
-            return false;
-        }
-    }
-    
-    // 2. Detection pipeline with FUSED preprocessing
-    if (m_config.enableDetection && m_d_yoloInput) {
-        cudaStream_t preprocessStream = m_coordinator->preprocessStream;
-        
-        // Wait for capture to complete
-        cudaStreamWaitEvent(preprocessStream, m_coordinator->captureComplete, 0);
-        
-        // Launch fused preprocessing kernel
-        dim3 blockSize(16, 16);
-        dim3 gridSize((640 + 15) / 16, (640 + 15) / 16);
-        
-        void* inputBuffer = m_tripleBuffer ?
-            m_tripleBuffer->buffers[m_tripleBuffer->captureIdx].data() :
-            m_captureBuffer.data();
-        
-        fusedPreprocessKernel<<<gridSize, blockSize, 0, preprocessStream>>>(
-            reinterpret_cast<const uchar4*>(inputBuffer),
-            m_d_yoloInput,
-            m_captureBuffer.cols(), m_captureBuffer.rows(),
-            640, 640,
-            static_cast<float>(m_captureBuffer.cols()) / 640.0f,
-            static_cast<float>(m_captureBuffer.rows()) / 640.0f,
-            0.0f, 1.0f,
-            false
-        );
-        
-        // Check for kernel launch errors
-        cudaError_t kernelErr = cudaGetLastError();
-        if (kernelErr != cudaSuccess) {
-            std::cerr << "[UnifiedGraph] Preprocessing kernel launch failed: " << cudaGetErrorString(kernelErr) << std::endl;
-            return false;
-        }
-        
-        // Log first pixel of model input data for debugging
-        static int main_log_count = 0;
-        if (main_log_count < 5) {  // Log first 5 frames only
-            cudaStreamSynchronize(preprocessStream);  // Ensure preprocessing is done
-            float first_pixel[3];
-            cudaMemcpy(first_pixel, m_d_yoloInput, 3 * sizeof(float), cudaMemcpyDeviceToHost);
-            std::cout << "[MODEL INPUT] First pixel BGR: (" 
-                      << first_pixel[0] << ", " << first_pixel[1] << ", " << first_pixel[2] 
-                      << ") Frame: " << main_log_count << std::endl;
-            main_log_count++;
-        }
-        
-        // Signal preprocessing completion
-        m_coordinator->synchronizePreprocess(m_coordinator->inferenceStream);
-        
-        // 2.5. YOLO 추론 실행 - Use existing processFrame for now
-        auto& ctx = AppContext::getInstance();
-        if (!ctx.getDetectionState().isPaused()) {
-            // Use integrated TensorRT pipeline (Phase 1)
-            static int processCount = 0;
-            processCount++;
-            if (processCount <= 10 || processCount % 100 == 0) {
-                std::cout << "[UnifiedGraph] Running TensorRT inference, count: " << processCount << std::endl;
-            }
-            
-            try {
-                // Phase 2.3: Integrated TensorRT preprocessing and inference pipeline
-                
-                // 1. Preprocessing: Copy and convert capture to YOLO input format  
-                if (m_d_yoloInput && !m_captureBuffer.empty()) {
-                    // Phase 2.3: Optimized preprocessing with existing CudaImageProcessing functions
-                    // Create temporary buffers for processing pipeline
-                    SimpleCudaMat tempResize, tempFloat;
-                    tempResize.create(640, 640, 3);  // BGR format for YOLO
-                    tempFloat.create(640, 640, 3);   // Float format
-                    
-                    // Step 1: Convert BGRA to BGR and resize
-                    SimpleCudaMat bgrBuffer;
-                    bgrBuffer.create(m_captureBuffer.rows(), m_captureBuffer.cols(), 3);
-                    CudaImageProcessing::bgra2bgr(m_captureBuffer, bgrBuffer, preprocessStream);
-                    
-                    // Step 2: Resize to YOLO input dimensions
-                    CudaImageProcessing::resize(bgrBuffer, tempResize, 640, 640, preprocessStream);
-                    
-                    // Step 3: Convert to float and normalize (0-1 range)
-                    CudaImageProcessing::convertTo(tempResize, tempFloat, m_imgScale, 0.0f, preprocessStream);
-                    
-                    // Step 4: Copy to YOLO input buffer
-                    size_t inputSize = 640 * 640 * 3 * sizeof(float);
-                    cudaMemcpyAsync(m_d_yoloInput, tempFloat.data(), inputSize, 
-                                   cudaMemcpyDeviceToDevice, preprocessStream);
-                }
-                
-                // 2. TensorRT Inference with optimized stream handling
-                if (m_inputBindings.find(m_inputName) != m_inputBindings.end() && m_d_yoloInput) {
-                    // Connect preprocessing output to TensorRT input
-                    void* inputBinding = m_inputBindings[m_inputName];
-                    if (inputBinding != m_d_yoloInput) {
-                        // Copy to input binding if not using shared memory
-                        size_t inputSize = 640 * 640 * 3 * sizeof(float);
-                        cudaMemcpyAsync(inputBinding, m_d_yoloInput, inputSize, 
-                                       cudaMemcpyDeviceToDevice, preprocessStream);
-                    }
-                    
-                    // Execute TensorRT inference asynchronously
-                    if (!runInferenceAsync(preprocessStream)) {
-                        std::cerr << "[UnifiedGraph] TensorRT inference failed in executeDirect" << std::endl;
-                        return false;
-                    }
-                    
-                    // 3. Integrated post-processing (Phase 3: decode, filter, NMS, target selection)
-                    performIntegratedPostProcessing(preprocessStream);
-                    
-                    // 4. Target selection from post-processed results
-                    performTargetSelection(preprocessStream);
-                }
-                
-                // 5. Signal inference completion for pipeline synchronization
-                cudaEventRecord(m_coordinator->inferenceComplete, preprocessStream);
-                m_coordinator->synchronizeInference(m_coordinator->postprocessStream);
-            }
-            catch (const std::exception& e) {
-                std::cerr << "[UnifiedGraph] Exception in detector->processFrame: " << e.what() << std::endl;
-                return false;
-            }
-        }
-        
-        // Swap triple buffer if available
-        if (m_tripleBuffer) {
-            cudaEventRecord(m_tripleBuffer->events[m_tripleBuffer->captureIdx], preprocessStream);
-            m_tripleBuffer->isReady[m_tripleBuffer->captureIdx] = true;
-            
-            // Rotate buffer indices with atomic operations to prevent race conditions
-            int nextCapture = m_tripleBuffer->displayIdx.load();
-            int nextInference = m_tripleBuffer->captureIdx.load();
-            int nextDisplay = m_tripleBuffer->inferenceIdx.load();
-            
-            m_tripleBuffer->captureIdx.store(nextCapture);
-            m_tripleBuffer->inferenceIdx.store(nextInference);
-            m_tripleBuffer->displayIdx.store(nextDisplay);
-        }
-    }
-    
-    // 3. Tracking with dedicated stream
-    if (m_config.enableTracking && m_tracker) {
-        cudaStream_t trackingStream = m_coordinator->trackingStream;
-        
-        // Wait for postprocessing
-        cudaStreamWaitEvent(trackingStream, m_coordinator->postprocessComplete, 0);
-        
-        // TODO: Implement GPU tracking
-        // m_tracker->predictAsync(trackingStream);
-        // m_tracker->updateAsync(m_d_selectedTarget, trackingStream);
-    }
-    
-    // 4. Get detection results and calculate mouse movement with Bezier curve
-    auto& ctx = AppContext::getInstance();
-    if (!ctx.getDetectionState().isPaused() && ctx.aiming) {
-        try {
-            // Phase 2.3: Get latest detections from integrated TensorRT
-            // The detections should now be available from the asynchronous inference
-            void* rawOutput = nullptr;
-            if (!m_outputBindings.empty()) {
-                rawOutput = m_outputBindings.begin()->second;
-            }
-            std::pair<void*, int> detections = std::make_pair(rawOutput, rawOutput ? 1 : 0);
-            
-            if (detections.second > 0 && detections.first) {
-                // Get the first/best target
-                Target h_target;
-                cudaMemcpyAsync(&h_target, detections.first, sizeof(Target), 
-                               cudaMemcpyDeviceToHost, stream);
-                // Sync needed for accurate target data
-                cudaStreamSynchronize(stream);
-            }
-        }
-        catch (const std::exception& e) {
-            std::cerr << "[UnifiedGraph] Exception in mouse movement: " << e.what() << std::endl;
-        }
-    }
-    
-    // Memory health check every 1000 frames
-    if (executeCount % 1000 == 0) {
-        size_t free_mem, total_mem;
-        cudaMemGetInfo(&free_mem, &total_mem);
-        float used_gb = (total_mem - free_mem) / (1024.0f * 1024.0f * 1024.0f);
-        float free_gb = free_mem / (1024.0f * 1024.0f * 1024.0f);
-        
-        std::cout << "[UnifiedGraph] GPU Memory - Used: " << used_gb << " GB, Free: " << free_gb << " GB" << std::endl;
-        
-        // Warning if memory is low
-        if (free_gb < 0.5f) {
-            std::cerr << "[UnifiedGraph] WARNING: Low GPU memory! Free: " << free_gb << " GB" << std::endl;
-        }
-    }
     
     return true;
 }
@@ -1346,7 +1053,7 @@ bool UnifiedGraphPipeline::allocateBuffers() {
     auto& ctx = AppContext::getInstance();
     const int width = ctx.config.detection_resolution;   // Use actual detection resolution
     const int height = ctx.config.detection_resolution;  // Square capture region
-    const int yoloSize = 640;
+    const int yoloSize = ctx.config.onnx_input_resolution;
     const int maxDetections = 100;
     
     try {
@@ -1364,7 +1071,7 @@ bool UnifiedGraphPipeline::allocateBuffers() {
         m_captureBuffer.create(height, width, 4);  // BGRA
         m_preprocessBuffer.create(height, width, 3);  // BGR
         
-        // YOLO input buffer (640x640x3 in CHW format)
+        // YOLO input buffer (configurable size x3 in CHW format)
         CUDA_CHECK(cudaMalloc(&m_d_yoloInput, yoloSize * yoloSize * 3 * sizeof(float)));
         if (!m_d_yoloInput) throw std::runtime_error("m_d_yoloInput allocation failed");
         
@@ -2235,10 +1942,6 @@ bool UnifiedGraphPipeline::runInferenceAsync(cudaStream_t stream) {
         }
     }
     
-    // Debug: Print input buffer info before inference
-    std::cout << "[DEBUG] Running inference with input: " << m_inputName 
-              << ", dims: " << m_inputDims.d[0] << "x" << m_inputDims.d[1] 
-              << "x" << m_inputDims.d[2] << "x" << m_inputDims.d[3] << std::endl;
     
     // Execute TensorRT inference with enhanced error handling
     bool success = m_context->enqueueV3(stream);
@@ -2253,16 +1956,6 @@ bool UnifiedGraphPipeline::runInferenceAsync(cudaStream_t stream) {
         return false;
     }
     
-    // Debug: Print output shape after inference
-    for (const auto& outputName : m_outputNames) {
-        const auto& shape = m_outputShapes[outputName];
-        std::cout << "[DEBUG] Output '" << outputName << "' shape: ";
-        for (size_t i = 0; i < shape.size(); i++) {
-            std::cout << shape[i];
-            if (i < shape.size() - 1) std::cout << "x";
-        }
-        std::cout << std::endl;
-    }
     
     // Record inference completion event for pipeline synchronization
     if (m_detectionEvent) {
@@ -2328,13 +2021,6 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
     int maxDecodedTargets = 300;  // Reasonable buffer for detections
     cudaError_t decodeErr = cudaSuccess;
     
-    // Debug: Print which postprocess method is being used
-    std::cout << "[DEBUG] Using postprocess method: " << cached_postprocess << std::endl;
-    std::cout << "[DEBUG] Shape size: " << shape.size() << ", shape values: ";
-    for (auto s : shape) {
-        std::cout << s << " ";
-    }
-    std::cout << std::endl;
     
     if (cached_postprocess == "yolo10") {
         int max_candidates = (shape.size() > 1) ? static_cast<int>(shape[1]) : 0;
@@ -2422,8 +2108,6 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
         return;
     }
     
-    // Debug: Print decoded count
-    std::cout << "[DEBUG] Decoded detections count: " << decodedCount << std::endl;
 
     // Early exit if no detections were decoded
     if (decodedCount == 0) {
@@ -2495,8 +2179,8 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
         m_d_keep && m_d_indices) {
         
         // Use cached frame dimensions for CUDA Graph compatibility
-        static int cached_frame_width = 640;
-        static int cached_frame_height = 640;
+        static int cached_frame_width = ctx.config.onnx_input_resolution;
+        static int cached_frame_height = ctx.config.onnx_input_resolution;
         if (!m_graphCaptured) {
             cached_frame_width = ctx.config.detection_resolution;
             cached_frame_height = ctx.config.detection_resolution;
