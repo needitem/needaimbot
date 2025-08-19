@@ -1,7 +1,7 @@
 #pragma once
 
 #include <cuda_runtime.h>
-#include "../detector/detector.h"
+#include "../../core/Target.h"
 
 // RGB 범위 필터 함수
 extern "C" void launchRGBRangeFilter(
