@@ -86,7 +86,6 @@
     <CudaCompile Include="cuda\gpu_workload_manager.cu" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\..\Downloads\capture headers v2_[unknowncheats.me]_\hook_info.h" />
     <ClInclude Include="capture\hook_info.h" />
     <ClInclude Include="core\config_cache.h" />
     <ClInclude Include="core\constants.h" />
@@ -167,9 +166,6 @@
     <ClInclude Include="needaimbot.h" />
   </ItemGroup>
   <ItemGroup>
-  </ItemGroup>
-  <ItemGroup>
-    <ResourceCompile Include="version_info.rc" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>16.0</VCProjectVersion>
