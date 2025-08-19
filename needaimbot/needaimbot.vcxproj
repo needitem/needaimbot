@@ -21,7 +21,6 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="capture\gpu_capture.cpp" />
-    <ClCompile Include="capture\game_capture.cpp" />
     <ClCompile Include="config\config.cpp" />
     <ClCompile Include="detector\detector.cpp" />
     <ClCompile Include="imgui\imgui.cpp" />
@@ -86,7 +85,6 @@
     <CudaCompile Include="cuda\gpu_workload_manager.cu" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="capture\hook_info.h" />
     <ClInclude Include="core\config_cache.h" />
     <ClInclude Include="core\constants.h" />
     <ClInclude Include="core\error_handler.h" />
@@ -112,7 +110,6 @@
     <ClInclude Include="cuda\pd_controller_shared.h" />
     <ClInclude Include="cuda\mouse_interface.h" />
     <ClInclude Include="capture\gpu_capture.h" />
-    <ClInclude Include="capture\game_capture.h" />
     <ClInclude Include="detector\CudaBuffer.h" />
     <ClInclude Include="config\config.h" />
     <ClInclude Include="detector\detector.h" />

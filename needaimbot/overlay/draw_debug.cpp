@@ -80,6 +80,15 @@ void uploadDebugFrame(const SimpleCudaMat& bgrGpu)
     if (bgrGpu.data() == nullptr) {
         return;
     }
+    
+    // Validate CUDA pointer before operations
+    cudaPointerAttributes attributes;
+    cudaError_t queryErr = cudaPointerGetAttributes(&attributes, bgrGpu.data());
+    if (queryErr != cudaSuccess || 
+        (attributes.type != cudaMemoryTypeDevice && attributes.type != cudaMemoryTypeManaged)) {
+        // Invalid CUDA memory, skip upload
+        return;
+    }
 
     if (!g_debugTex || bgrGpu.cols() != texW || bgrGpu.rows() != texH)
     {
@@ -327,6 +336,14 @@ void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float debug_scale) 
     if (ctx.detector->m_finalTargetsCountHost <= 0 || 
         ctx.detector->m_finalTargetsCountHost > 1000 ||  // Sanity check
         ctx.detector->m_finalTargetsGpu.get() == nullptr) {
+        return;
+    }
+    
+    // Validate CUDA pointer before memcpy
+    cudaPointerAttributes attributes;
+    cudaError_t queryErr = cudaPointerGetAttributes(&attributes, ctx.detector->m_finalTargetsGpu.get());
+    if (queryErr != cudaSuccess || attributes.type != cudaMemoryTypeDevice) {
+        // Invalid CUDA memory, skip drawing
         return;
     }
     

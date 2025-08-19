@@ -11,7 +11,6 @@
 #pragma comment(lib, "dbghelp.lib")
 
 #include "AppContext.h"
-// GPU capture
 #include "capture/gpu_capture.h"
 #include "core/constants.h"
 #include "utils/constants.h"
@@ -496,9 +495,10 @@ int main()
         ctx.detector->start();
 
         // Create thread managers for better resource management
+        // Game Capture method removed. Using unified GPU capture thread (Desktop Duplication only).
         ThreadManager captureThreadMgr("GPUCaptureThread", 
             [&]() { gpuOnlyCaptureThread(ctx.config.detection_resolution, ctx.config.detection_resolution); },
-            THREAD_PRIORITY_NORMAL);  // GPU 캡처는 CPU를 거의 안 씀
+            THREAD_PRIORITY_NORMAL);
         
         ThreadManager keyThreadMgr("KeyboardThread", 
             keyboardListener,

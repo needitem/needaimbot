@@ -567,9 +567,14 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
     // First, capture the frame from D3D11 texture (skip if frame already set by setInputFrame)
     // Note: gpu_only_capture.cpp calls setInputFrame() before executeGraph()
     if (m_config.enableCapture && m_cudaResource && !m_hasFrameData) {
+        // Clear any previous CUDA errors
+        cudaGetLastError();
+        
         cudaError_t err = cudaGraphicsMapResources(1, &m_cudaResource, stream);
         if (err != cudaSuccess) {
             printf("[ERROR] cudaGraphicsMapResources failed: %s\n", cudaGetErrorString(err));
+            // Reset CUDA resource to prevent further errors
+            m_cudaResource = nullptr;
             return false;
         }
         

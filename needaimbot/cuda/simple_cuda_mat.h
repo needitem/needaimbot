@@ -147,12 +147,19 @@ public:
                     cudaError_t err = cudaFree(data_);
                     if (err != cudaSuccess && 
                         err != cudaErrorCudartUnloading && 
-                        err != cudaErrorInvalidValue) {
-                        // Only warn for unexpected errors
+                        err != cudaErrorInvalidValue &&
+                        err != cudaErrorInvalidDevicePointer &&
+                        err != cudaErrorIllegalAddress) {
+                        // Only warn for truly unexpected errors
                         printf("[SimpleCudaMat] Warning: cudaFree failed: %s (error code: %d)\n", 
                                cudaGetErrorString(err), err);
                     }
                 }
+            } else if (queryErr == cudaErrorInvalidValue || 
+                      queryErr == cudaErrorInvalidDevice ||
+                      queryErr == cudaErrorIllegalAddress) {
+                // These errors indicate the pointer is no longer valid
+                // Just clear it without trying to free
             }
             // For any query error or invalid memory type, just clear the pointer
             // This includes cudaErrorInvalidValue which happens during shutdown
