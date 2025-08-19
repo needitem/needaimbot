@@ -8,6 +8,8 @@
 #include "pd_controller_shared.h"
 #include "../AppContext.h"
 #include "cuda_error_check.h"  // Use existing CUDA error checking macros
+#include <d3d11.h>
+#include <dxgi1_2.h>
 #include "../include/other_tools.h"  // For fileExists function
 #include "../core/constants.h"
 #include "detection/postProcess.h"
@@ -595,7 +597,57 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
     
     // First, capture the frame from D3D11 texture (skip if frame already set by setInputFrame)
     // Note: gpu_only_capture.cpp calls setInputFrame() before executeGraph()
+    
+    
     if (m_config.enableCapture && m_cudaResource && !m_hasFrameData) {
+        // Capture current desktop frame using Desktop Duplication
+        if (m_desktopDuplication && m_d3dDevice && m_d3dContext && m_captureTextureD3D) {
+            auto* duplication = static_cast<IDXGIOutputDuplication*>(m_desktopDuplication);
+            auto* d3dContext = static_cast<ID3D11DeviceContext*>(m_d3dContext);
+            auto* captureTexture = static_cast<ID3D11Texture2D*>(m_captureTextureD3D);
+            
+            DXGI_OUTDUPL_FRAME_INFO frameInfo;
+            IDXGIResource* desktopResource = nullptr;
+            HRESULT hr = duplication->AcquireNextFrame(1, &frameInfo, &desktopResource);
+            
+            if (SUCCEEDED(hr) && desktopResource) {
+                ID3D11Texture2D* desktopTexture = nullptr;
+                hr = desktopResource->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&desktopTexture);
+                if (SUCCEEDED(hr) && desktopTexture) {
+                    // Get desktop texture description to calculate center crop
+                    D3D11_TEXTURE2D_DESC desktopDesc;
+                    desktopTexture->GetDesc(&desktopDesc);
+                    
+                    // Calculate center crop coordinates with offset
+                    auto& ctx = AppContext::getInstance();
+                    int centerX = desktopDesc.Width / 2 + static_cast<int>(ctx.config.crosshair_offset_x);
+                    int centerY = desktopDesc.Height / 2 + static_cast<int>(ctx.config.crosshair_offset_y);
+                    int captureSize = ctx.config.detection_resolution;  // 320x320
+                    
+                    // Calculate crop region (ensure it's within bounds)
+                    int cropX = std::max(0, centerX - captureSize / 2);
+                    int cropY = std::max(0, centerY - captureSize / 2);
+                    cropX = std::min(cropX, static_cast<int>(desktopDesc.Width) - captureSize);
+                    cropY = std::min(cropY, static_cast<int>(desktopDesc.Height) - captureSize);
+                    
+                    // Copy only the center region
+                    D3D11_BOX srcBox;
+                    srcBox.left = cropX;
+                    srcBox.top = cropY;
+                    srcBox.right = cropX + captureSize;
+                    srcBox.bottom = cropY + captureSize;
+                    srcBox.front = 0;
+                    srcBox.back = 1;
+                    
+                    d3dContext->CopySubresourceRegion(captureTexture, 0, 0, 0, 0, 
+                                                     desktopTexture, 0, &srcBox);
+                    desktopTexture->Release();
+                }
+                desktopResource->Release();
+                duplication->ReleaseFrame();
+            }
+        }
+        
         // Clear any previous CUDA errors
         cudaGetLastError();
         
@@ -606,6 +658,7 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
             m_cudaResource = nullptr;
             return false;
         }
+        
         
         cudaArray_t array;
         err = cudaGraphicsSubResourceGetMappedArray(&array, m_cudaResource, 0, 0);
@@ -633,6 +686,7 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
             cudaGraphicsUnmapResources(1, &m_cudaResource, stream);
             return false;
         }
+        
         
         cudaGraphicsUnmapResources(1, &m_cudaResource, stream);
         
@@ -852,16 +906,6 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
     m_hasFrameData = false;
     
     return true;
-}
-
-bool UnifiedGraphPipeline::updateGraph(cudaStream_t stream) {
-    if (!m_graph || !m_graphExec) {
-        return captureGraph(stream);
-    }
-    
-    // For now, we rebuild the entire graph
-    // In future, we can implement node-level updates
-    return captureGraph(stream);
 }
 
 bool UnifiedGraphPipeline::executeDirect(cudaStream_t stream) {
@@ -1485,45 +1529,6 @@ void UnifiedGraphPipeline::deallocateBuffers() {
 // ============================================================================
 // DYNAMIC PARAMETER UPDATE METHODS (No Graph Recapture Needed!)
 // ============================================================================
-
-bool UnifiedGraphPipeline::updateConfidenceThreshold(float threshold) {
-    if (!m_dynamicGraph || !m_dynamicGraph->isReady()) {
-        std::cerr << "[UnifiedGraph] Graph not ready for parameter updates" << std::endl;
-        return false;
-    }
-    
-    // Update confidence threshold in NMS kernel parameters
-    // This would update the kernel node that handles confidence filtering
-    cudaKernelNodeParams params;
-    // Setup params with new threshold...
-    // m_dynamicGraph->updateKernelParams("nms_kernel", params);
-    
-    std::cout << "[UnifiedGraph] Updated confidence threshold to: " << threshold << std::endl;
-    return true;
-}
-
-bool UnifiedGraphPipeline::updateNMSThreshold(float threshold) {
-    if (!m_dynamicGraph || !m_dynamicGraph->isReady()) {
-        return false;
-    }
-    
-    // Similar to confidence threshold update
-    // Update the NMS IoU threshold parameter
-    std::cout << "[UnifiedGraph] Updated NMS threshold to: " << threshold << std::endl;
-    return true;
-}
-
-bool UnifiedGraphPipeline::updateTargetSelectionParams(float centerWeight, float sizeWeight) {
-    if (!m_dynamicGraph || !m_dynamicGraph->isReady()) {
-        return false;
-    }
-    
-    // Update target selection kernel parameters
-    // These control how targets are prioritized (center vs size)
-    std::cout << "[UnifiedGraph] Updated target selection params - Center: " 
-              << centerWeight << ", Size: " << sizeWeight << std::endl;
-    return true;
-}
 
 void UnifiedGraphPipeline::setInputFrame(const SimpleCudaMat& frame) {
     // Copy frame data to capture buffer

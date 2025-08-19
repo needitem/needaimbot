@@ -61,11 +61,6 @@ void uploadDebugFrame(const SimpleCudaMat& bgrGpu)
     
     // Comprehensive safety checks
     if (bgrGpu.empty() || !g_pd3dDevice || !g_pd3dDeviceContext) {
-        if (uploadCount <= 3) {
-            std::cout << "[uploadDebugFrame] Early return - empty=" << bgrGpu.empty() 
-                      << " device=" << (g_pd3dDevice != nullptr)
-                      << " context=" << (g_pd3dDeviceContext != nullptr) << std::endl;
-        }
         return;
     }
     
@@ -88,9 +83,11 @@ void uploadDebugFrame(const SimpleCudaMat& bgrGpu)
         // Invalid CUDA memory, skip upload
         return;
     }
+    
 
     if (!g_debugTex || bgrGpu.cols() != texW || bgrGpu.rows() != texH)
     {
+        
         SAFE_RELEASE(g_debugTex);
         SAFE_RELEASE(g_debugSRV);
 
@@ -113,6 +110,7 @@ void uploadDebugFrame(const SimpleCudaMat& bgrGpu)
             std::cerr << "[Debug] Failed to create debug texture! HRESULT=" << std::hex << hr_tex << std::dec << std::endl;
             return;
         }
+        
 
         D3D11_SHADER_RESOURCE_VIEW_DESC sd = {};
         sd.Format = td.Format;
@@ -145,6 +143,7 @@ void uploadDebugFrame(const SimpleCudaMat& bgrGpu)
     }
     
     cudaError_t err;
+    
     if (bgrGpu.channels() == 4) {
         // BGRA to RGBA conversion
         err = cuda_bgra2rgba(bgrGpu.data(), rgbaGpu.data(),
@@ -162,6 +161,7 @@ void uploadDebugFrame(const SimpleCudaMat& bgrGpu)
         return;
     }
     
+    
     if (err != cudaSuccess) {
         std::cerr << "[Debug] CUDA color conversion failed: " << cudaGetErrorString(err) << std::endl;
         return;
@@ -177,6 +177,7 @@ void uploadDebugFrame(const SimpleCudaMat& bgrGpu)
     // Download converted data from GPU with error handling
     static SimpleMat rgba;
     try {
+        
         rgba.create(rgbaGpu.rows(), rgbaGpu.cols(), 4);
         
         // Validate CPU buffer
@@ -209,6 +210,7 @@ void uploadDebugFrame(const SimpleCudaMat& bgrGpu)
     HRESULT hr_map = g_pd3dDeviceContext->Map(g_debugTex, 0, D3D11_MAP_WRITE_DISCARD, 0, &ms);
     if (SUCCEEDED(hr_map) && ms.pData != nullptr)
     {
+        
         try {
             // Copy row by row, handling different row pitches
             size_t copy_width = std::min<size_t>(texW * 4, ms.RowPitch);  // Ensure we don't overrun
@@ -224,6 +226,7 @@ void uploadDebugFrame(const SimpleCudaMat& bgrGpu)
                                copy_width);
                     }
                 }
+                
             }
         } catch (...) {
             std::cerr << "[Debug] Exception during texture copy" << std::endl;
