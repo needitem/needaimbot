@@ -407,7 +407,7 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
             640, 640,  // YOLO input size
             static_cast<float>(srcWidth) / 640.0f,
             static_cast<float>(srcHeight) / 640.0f,
-            0.5f, 0.5f,  // Normalization parameters
+            0.0f, 1.0f,  // Normalization parameters
             false  // Keep BGR order (match stable branch)
         );
         
@@ -550,7 +550,7 @@ bool UnifiedGraphPipeline::captureDetectionGraph(cudaStream_t stream) {
             640, 640,  // YOLO input size
             static_cast<float>(srcWidth) / 640.0f,
             static_cast<float>(srcHeight) / 640.0f,
-            0.5f, 0.5f,  // Normalization parameters
+            0.0f, 1.0f,  // Normalization parameters
             false  // Keep BGR order (match stable branch)
         );
     }
@@ -1133,7 +1133,7 @@ bool UnifiedGraphPipeline::executeDirect(cudaStream_t stream) {
             640, 640,
             static_cast<float>(m_captureBuffer.cols()) / 640.0f,
             static_cast<float>(m_captureBuffer.rows()) / 640.0f,
-            0.5f, 0.5f,
+            0.0f, 1.0f,
             false
         );
         
@@ -1803,7 +1803,7 @@ bool UnifiedGraphPipeline::initializeTensorRT(const std::string& modelFile) {
     // Set up model-specific parameters
     // m_imgScale is used in post-processing to scale model output coordinates back to original image size
     // Model outputs coordinates in model input resolution space, need to scale to actual detection_resolution
-    auto& ctx = AppContext::getInstance();
+    // ctx is already declared at line 1735, so just use it here
     m_imgScale = static_cast<float>(ctx.config.detection_resolution) / static_cast<float>(ctx.config.onnx_input_resolution);
     
     // Determine number of classes from output shape
