@@ -408,7 +408,7 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
             static_cast<float>(srcWidth) / 640.0f,
             static_cast<float>(srcHeight) / 640.0f,
             0.5f, 0.5f,  // Normalization parameters
-            true  // Swap R and B channels
+            false  // Keep BGR order (match stable branch)
         );
         
         // Register this kernel node for dynamic updates
@@ -551,7 +551,7 @@ bool UnifiedGraphPipeline::captureDetectionGraph(cudaStream_t stream) {
             static_cast<float>(srcWidth) / 640.0f,
             static_cast<float>(srcHeight) / 640.0f,
             0.5f, 0.5f,  // Normalization parameters
-            true  // Swap R and B channels
+            false  // Keep BGR order (match stable branch)
         );
     }
     
@@ -1134,7 +1134,7 @@ bool UnifiedGraphPipeline::executeDirect(cudaStream_t stream) {
             static_cast<float>(m_captureBuffer.cols()) / 640.0f,
             static_cast<float>(m_captureBuffer.rows()) / 640.0f,
             0.5f, 0.5f,
-            true
+            false
         );
         
         // Check for kernel launch errors
