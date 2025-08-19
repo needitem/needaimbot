@@ -96,8 +96,6 @@ public:
     bool captureDetectionGraph(cudaStream_t stream = nullptr);
     bool executeGraph(cudaStream_t stream = nullptr);
     
-    // Direct execution (non-graph fallback)
-    bool executeDirect(cudaStream_t stream = nullptr);
         
     // Pipeline data management
     void setInputTexture(cudaGraphicsResource_t resource) { m_cudaResource = resource; }
