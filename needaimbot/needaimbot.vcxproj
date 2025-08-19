@@ -72,15 +72,11 @@
     <CudaCompile Include="cuda\detection\gpu_chain_kernels.cu" />
     <CudaCompile Include="cuda\detection\cuda_image_processing.cu" />
     <CudaCompile Include="cuda\detection\cuda_float_processing.cu" />
-    <CudaCompile Include="cuda\filter\color_filter_kernel.cu" />
-    <CudaCompile Include="cuda\capture\color_conversion.cu" />
-    <CudaCompile Include="cuda\capture\bgra_to_bgr_kernel.cu" />
-    <CudaCompile Include="cuda\detection\fused_kernels.cu" />
-    <CudaCompile Include="cuda\pipeline_optimization.cu" />
-    <CudaCompile Include="cuda\unified_graph_pipeline.cu" />
+    <CudaCompile Include="cuda\preprocessing.cu" />
     <CudaCompile Include="cuda\tracking\gpu_tracker.cu" />
     <CudaCompile Include="cuda\tracking\gpu_kalman_filter.cu" />
     <CudaCompile Include="cuda\gpu_workload_manager.cu" />
+    <CudaCompile Include="cuda\unified_graph_pipeline.cu" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="core\config_cache.h" />
@@ -93,14 +89,13 @@
     <ClInclude Include="core\sync_manager.h" />
     <ClInclude Include="core\Target.h" />
     <ClInclude Include="core\thread_manager.h" />
+    <ClInclude Include="cuda\preprocessing.h" />
     <ClInclude Include="cuda\simple_cuda_mat.h" />
     <ClInclude Include="cuda\detection\cuda_image_processing.h" />
     <ClInclude Include="cuda\detection\cuda_float_processing.h" />
     <ClInclude Include="cuda\image_io.h" />
-    <ClInclude Include="cuda\capture\color_conversion.h" />
     <ClInclude Include="cuda\tracking\gpu_kalman_filter.h" />
     <ClInclude Include="cuda\tracking\gpu_tracker.h" />
-    <ClInclude Include="cuda\filter\color_filter.h" />
     <ClInclude Include="cuda\unified_graph_pipeline.h" />
     <ClInclude Include="cuda\memory_pool.h" />
     <ClInclude Include="cuda\cuda_error_check.h" />
@@ -158,6 +153,7 @@
     <ClInclude Include="needaimbot.h" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="packages.config" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>16.0</VCProjectVersion>

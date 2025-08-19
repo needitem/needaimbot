@@ -93,7 +93,6 @@ public:
     
     // Main execution methods
     bool captureGraph(cudaStream_t stream = nullptr);
-    bool captureDetectionGraph(cudaStream_t stream = nullptr);
     bool executeGraph(cudaStream_t stream = nullptr);
     
         
