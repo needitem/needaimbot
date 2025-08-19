@@ -259,7 +259,8 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
     
     // Initial graph capture if enabled
     if (m_config.useGraphOptimization) {
-        // Capture detection graph immediately for preprocessing
+        std::cout << "[DEBUG] CUDA Graph optimization enabled with proper initialization" << std::endl;
+        // Capture detection graph with proper input initialization
         if (!captureDetectionGraph(m_primaryStream)) {
             std::cerr << "[UnifiedGraph] Warning: Failed to capture detection graph" << std::endl;
         }
@@ -321,9 +322,8 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     m_trackingNodes.clear();
     m_pidNodes.clear();
     
-    // Begin graph capture
-    cudaError_t err = cudaStreamBeginCapture(stream, 
-        static_cast<cudaStreamCaptureMode>(m_config.graphCaptureMode));
+    // Begin graph capture with relaxed mode to handle TensorRT stream dependencies
+    cudaError_t err = cudaStreamBeginCapture(stream, cudaStreamCaptureModeRelaxed);
     if (err != cudaSuccess) {
         std::cerr << "[UnifiedGraph] Failed to begin capture: " 
                   << cudaGetErrorString(err) << std::endl;
@@ -341,8 +341,41 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     
     // Preprocessing removed - using CudaImageProcessing pipeline in executeGraph instead
     
-    // 3. TensorRT Inference
+    // 3. TensorRT Inference  
     if (m_config.enableDetection) {
+        // Initialize input buffer with valid data for graph capture
+        if (m_d_yoloInput) {
+            // std::cout << "[DEBUG] Initializing input buffer for graph capture..." << std::endl;
+            
+            // Create host buffer with dummy normalized values
+            size_t inputSize = 640 * 640 * 3 * sizeof(float);
+            std::vector<float> dummyData(640 * 640 * 3, 0.5f); // Fill with 0.5 (normalized pixel value)
+            
+            // Copy from host to device
+            cudaMemcpyAsync(m_d_yoloInput, dummyData.data(), inputSize, cudaMemcpyHostToDevice, stream);
+            
+            // CRITICAL FIX: Also initialize TensorRT binding buffers
+            auto bindingIt = m_inputBindings.find(m_inputName);
+            if (bindingIt != m_inputBindings.end() && bindingIt->second != nullptr) {
+                std::cout << "[DEBUG] Found TensorRT binding for '" << m_inputName << "' at: " << bindingIt->second << std::endl;
+                if (bindingIt->second != m_d_yoloInput) {
+                    std::cout << "[DEBUG] Initializing TensorRT binding buffer (different from yolo buffer)" << std::endl;
+                    // First clear with zeros, then set dummy data
+                    cudaMemsetAsync(bindingIt->second, 0, inputSize, stream);
+                    cudaMemcpyAsync(bindingIt->second, dummyData.data(), inputSize, cudaMemcpyHostToDevice, stream);
+                } else {
+                    std::cout << "[DEBUG] TensorRT binding uses same buffer as yolo input" << std::endl;
+                }
+            } else {
+                std::cout << "[DEBUG] WARNING: TensorRT binding not found for '" << m_inputName << "'" << std::endl;
+            }
+            
+            // Wait for copy to complete before graph capture
+            cudaStreamSynchronize(stream);
+            
+            std::cout << "[DEBUG] Input buffer initialized with dummy data (0.5)" << std::endl;
+        }
+        
         // Use integrated TensorRT inference (Phase 1)
         if (!runInferenceAsync(stream)) {
             std::cerr << "[UnifiedGraph] TensorRT inference failed during graph capture" << std::endl;
@@ -736,6 +769,7 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
         // 2. TensorRT Inference
         if (m_inputBindings.find(m_inputName) != m_inputBindings.end() && m_d_yoloInput) {
             void* inputBinding = m_inputBindings[m_inputName];
+            
             if (inputBinding != m_d_yoloInput) {
                 size_t inputSize = ctx.config.onnx_input_resolution * ctx.config.onnx_input_resolution * 3 * sizeof(float);
                 cudaMemcpyAsync(inputBinding, m_d_yoloInput, inputSize, 
@@ -1380,12 +1414,21 @@ bool UnifiedGraphPipeline::initializeTensorRT(const std::string& modelFile) {
         return false;
     }
     
+    std::cout << "[Pipeline] Engine loaded successfully. Engine ptr: " << m_engine.get() << std::endl;
+    
     // Create execution context
     m_context.reset(m_engine->createExecutionContext());
     if (!m_context) {
         std::cerr << "[Pipeline] Failed to create execution context" << std::endl;
         return false;
     }
+    
+    // Set optimization profile for dynamic shapes if needed
+    if (m_engine->getNbOptimizationProfiles() > 0) {
+        m_context->setOptimizationProfileAsync(0, m_primaryStream);
+    }
+    
+    std::cout << "[Pipeline] Execution context created successfully. Context ptr: " << m_context.get() << std::endl;
     
     // Get input and output information
     getInputNames();
@@ -1552,7 +1595,9 @@ void UnifiedGraphPipeline::getBindings() {
             // Allocate new memory with alignment optimization
             cudaError_t err = cudaMalloc(&ptr, size);
             if (err == cudaSuccess && ptr != nullptr) {
-                std::cout << "[Pipeline] Allocated input '" << name << "': " << size << " bytes" << std::endl;
+                // Initialize allocated memory to zero to prevent garbage values
+                cudaMemset(ptr, 0, size);
+                std::cout << "[Pipeline] Allocated and initialized input '" << name << "': " << size << " bytes" << std::endl;
             } else {
                 std::cerr << "[Pipeline] Failed to allocate input memory for '" << name << "': " << cudaGetErrorString(err) << std::endl;
                 
@@ -1598,7 +1643,9 @@ void UnifiedGraphPipeline::getBindings() {
             // Allocate new memory with alignment optimization
             cudaError_t err = cudaMalloc(&ptr, size);
             if (err == cudaSuccess && ptr != nullptr) {
-                std::cout << "[Pipeline] Allocated output '" << name << "': " << size << " bytes" << std::endl;
+                // Initialize allocated memory to zero to prevent garbage values
+                cudaMemset(ptr, 0, size);
+                std::cout << "[Pipeline] Allocated and initialized output '" << name << "': " << size << " bytes" << std::endl;
             } else {
                 std::cerr << "[Pipeline] Failed to allocate output memory for '" << name << "': " << cudaGetErrorString(err) << std::endl;
                 
@@ -1887,6 +1934,25 @@ bool UnifiedGraphPipeline::runInferenceAsync(cudaStream_t stream) {
         return false;
     }
     
+    // Validate input data after tensor address setup (first few calls only)
+    static int input_validation_count = 0;
+    if (input_validation_count < 5) {
+        // Synchronize to ensure all async operations completed
+        cudaStreamSynchronize(stream);
+        
+        auto bindingIt = m_inputBindings.find(m_inputName);
+        if (bindingIt != m_inputBindings.end() && bindingIt->second != nullptr) {
+            float sample_input[20];
+            cudaMemcpy(sample_input, bindingIt->second, 20 * sizeof(float), cudaMemcpyDeviceToHost);
+            std::cout << "[INPUT VALIDATION] First 20 input values to TensorRT: ";
+            for (int i = 0; i < 20; i++) {
+                std::cout << std::fixed << std::setprecision(4) << sample_input[i];
+                if (i < 19) std::cout << ", ";
+            }
+            std::cout << " (binding addr: " << bindingIt->second << ", yolo addr: " << m_d_yoloInput << ")" << std::endl;
+        }
+        input_validation_count++;
+    }
     
     // Record inference completion event for pipeline synchronization
     if (m_detectionEvent) {
@@ -2039,6 +2105,26 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
         return;
     }
     
+
+    // Log confidence filtered results
+    static int conf_log_count = 0;
+    if (conf_log_count < 10) {  // First 10 frames
+        std::cout << "[CONFIDENCE FILTER] Decoded " << decodedCount << " targets after confidence threshold (" 
+                  << cached_confidence_threshold << ") - Frame " << conf_log_count << std::endl;
+        
+        if (decodedCount > 0 && decodedCount <= 5) {
+            // Log first few detections if reasonable count
+            std::vector<Target> decodedTargets(decodedCount);
+            cudaMemcpy(decodedTargets.data(), m_d_decodedTargets, decodedCount * sizeof(Target), cudaMemcpyDeviceToHost);
+            for (int i = 0; i < decodedCount; i++) {
+                std::cout << "  Decoded " << i << ": (" << decodedTargets[i].x << "," << decodedTargets[i].y 
+                          << ") " << decodedTargets[i].width << "×" << decodedTargets[i].height 
+                          << " conf:" << std::fixed << std::setprecision(3) << decodedTargets[i].confidence 
+                          << " class:" << decodedTargets[i].classId << std::endl;
+            }
+        }
+        conf_log_count++;
+    }
 
     // Early exit if no detections were decoded
     if (decodedCount == 0) {
