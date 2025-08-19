@@ -11,7 +11,6 @@
 #pragma comment(lib, "dbghelp.lib")
 
 #include "AppContext.h"
-#include "capture/gpu_capture.h"
 #include "core/constants.h"
 #include "utils/constants.h"
 #include "detector/detector.h"
@@ -386,28 +385,26 @@ int main()
         
 
 
-        ctx.detector = new Detector();
-        
-        // CUDA 초기화 및 검증
-        if (!ctx.detector->initializeCudaContext()) {
-            std::cerr << "[MAIN] CUDA context initialization failed. Cannot continue." << std::endl;
-            delete ctx.detector;
-            ctx.detector = nullptr;
-            std::cin.get();
-            return -1;
-        }
-
+        // Initialize CUDA context directly (Phase 1 integration)
         int cuda_devices = 0;
         cudaError_t err = cudaGetDeviceCount(&cuda_devices);
 
         if (err != cudaSuccess)
         {
             std::cout << "[MAIN] No GPU devices with CUDA support available." << std::endl;
-            delete ctx.detector;
-            ctx.detector = nullptr;
             std::cin.get();
             return -1;
         }
+        
+        // Initialize CUDA device
+        err = cudaSetDevice(0);
+        if (err != cudaSuccess) {
+            std::cerr << "[MAIN] Failed to set CUDA device: " << cudaGetErrorString(err) << std::endl;
+            std::cin.get();
+            return -1;
+        }
+        
+        std::cout << "[MAIN] CUDA initialization successful, " << cuda_devices << " device(s) found" << std::endl;
 
         if (!CreateDirectory(L"screenshots", NULL) && GetLastError() != ERROR_ALREADY_EXISTS)
         {
@@ -444,13 +441,12 @@ int main()
             return -1;
         }
 
-        ctx.detector->initialize("models/" + ctx.config.ai_model);
-        
-        // Initialize CUDA Graph Pipeline for optimized GPU execution
-        std::cout << "[MAIN] Initializing CUDA Graph Pipeline..." << std::endl;
+        // Initialize TensorRT Integrated Pipeline (Phase 1)
+        std::cout << "[MAIN] Initializing TensorRT Integrated Pipeline..." << std::endl;
         auto& pipelineManager = needaimbot::PipelineManager::getInstance();
         
         needaimbot::UnifiedPipelineConfig pipelineConfig;
+        pipelineConfig.modelPath = "models/" + ctx.config.ai_model;  // Set model path for TensorRT
         pipelineConfig.enableCapture = true;
         pipelineConfig.enableDetection = true;
         pipelineConfig.enableTracking = ctx.config.enable_tracking;
@@ -461,16 +457,15 @@ int main()
         pipelineConfig.enableProfiling = false;  // Set to true for performance metrics
         
         if (!pipelineManager.initializePipeline(pipelineConfig)) {
-            std::cerr << "[MAIN] Failed to initialize CUDA Graph Pipeline" << std::endl;
-            std::cerr << "[MAIN] Falling back to standard pipeline" << std::endl;
-            // Continue with standard pipeline
+            std::cerr << "[MAIN] Failed to initialize TensorRT Integrated Pipeline" << std::endl;
+            std::cin.get();
+            return -1;
         } else {
-            std::cout << "[MAIN] CUDA Graph Pipeline initialized successfully" << std::endl;
+            std::cout << "[MAIN] TensorRT Integrated Pipeline initialized successfully" << std::endl;
             
-            // Set component references for the pipeline
+            // Pipeline is now fully integrated - no need to set detector reference
             auto* pipeline = pipelineManager.getPipeline();
             if (pipeline) {
-                pipeline->setDetector(ctx.detector);
                 // TODO: Set tracker when available
                 // pipeline->setTracker(gpuKalmanTracker);
                 
@@ -492,13 +487,13 @@ int main()
 
         SetThreadAffinityMask(GetCurrentThread(), 1 << 3);
         
-        ctx.detector->start();
+        // TensorRT pipeline starts automatically when initialized
 
         // Create thread managers for better resource management
-        // Game Capture method removed. Using unified GPU capture thread (Desktop Duplication only).
-        ThreadManager captureThreadMgr("GPUCaptureThread", 
-            [&]() { gpuOnlyCaptureThread(ctx.config.detection_resolution, ctx.config.detection_resolution); },
-            THREAD_PRIORITY_NORMAL);
+        // Using unified pipeline thread for all GPU operations (capture, detection, mouse control)
+        ThreadManager pipelineThreadMgr("UnifiedPipelineThread", 
+            [&]() { pipelineManager.runMainLoop(); },
+            THREAD_PRIORITY_HIGHEST);
         
         ThreadManager keyThreadMgr("KeyboardThread", 
             keyboardListener,
@@ -512,7 +507,7 @@ int main()
             THREAD_PRIORITY_BELOW_NORMAL);
         
         // Start all threads
-        captureThreadMgr.start();
+        pipelineThreadMgr.start();
         keyThreadMgr.start();
         // mouseThreadMgr.start(); - removed, GPU handles mouse directly
         overlayThreadMgr.start();
@@ -548,7 +543,11 @@ int main()
         // 안전한 종료 시퀀스
         std::cout << "[MAIN] Initiating safe shutdown..." << std::endl;
         
-        // 1. 입력 메서드 명시적 정리 (특히 시리얼 연결)
+        // 1. 파이프라인 명시적 정리
+        std::cout << "[MAIN] Stopping unified pipeline..." << std::endl;
+        pipelineManager.stopMainLoop();
+        
+        // 2. 입력 메서드 명시적 정리 (특히 시리얼 연결)
         if (ctx.mouseThread) {
             std::cout << "[MAIN] Cleaning up input method..." << std::endl;
             // GPU handles mouse release now
@@ -557,29 +556,19 @@ int main()
             ctx.mouseThread->setInputMethod(nullptr);
         }
         
-        // 2. 검출기 중지
-        if (ctx.detector) {
-            ctx.detector->stop();
-        }
-
-        // 3. 스레드들을 안전하게 종료 (ThreadManager가 자동으로 처리)
+        // 3. 검출기 중지
+        // 4. 스레드들을 안전하게 종료 (ThreadManager가 자동으로 처리)
         std::cout << "[MAIN] Waiting for threads to finish..." << std::endl;
         
         // ThreadManager destructors will automatically stop and join threads
         // This happens in reverse order of construction (LIFO)
 
-        // 4. 자원 정리
-        // Pipeline 정리를 먼저 수행 (detector 사용하므로)
+        // 5. 자원 정리
+        // TensorRT integrated pipeline cleanup
         pipelineManager.shutdownPipeline();
-        std::cout << "[MAIN] CUDA Graph Pipeline shut down." << std::endl;
+        std::cout << "[MAIN] TensorRT Integrated Pipeline shut down." << std::endl;
         
-        if (ctx.detector) {
-            delete ctx.detector;
-            ctx.detector = nullptr;
-            std::cout << "[MAIN] Detector resources cleaned up." << std::endl;
-        }
-        
-        // 5. Windows 마우스 상태 정리
+        // 6. Windows 마우스 상태 정리
         std::cout << "[MAIN] Resetting Windows mouse state..." << std::endl;
         // 마우스 버튼이 눌려있을 수 있으므로 강제로 릴리스
         INPUT input = {0};

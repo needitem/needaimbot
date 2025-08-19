@@ -1,5 +1,4 @@
 #include "../AppContext.h"
-#include "../detector/detector.h"
 #include "needaimbot.h"
 #include "overlay.h"
 #include "include/other_tools.h"
@@ -325,8 +324,12 @@ static void uploadColorMaskTexture(const SimpleMat& grayMask)
 void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float debug_scale) {
     auto& ctx = AppContext::getInstance();
     
-    if (!ctx.detector) return;
+    // TODO: Implement detection display for TensorRT integration
+    // Detection visualization is temporarily disabled during Phase 1 integration
+    return;
     
+    /*
+    // DISABLED CODE - Original detector-based implementation
     // Validate parameters
     if (!draw_list || debug_scale <= 0) return;
     
@@ -533,6 +536,7 @@ void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float debug_scale) 
             error_count++;
         }
     }
+    */
 }
 
 
@@ -585,7 +589,7 @@ void draw_debug()
 
     if (ImGui::Checkbox("Enable RGB Color Filter (in Config)", &ctx.config.enable_color_filter)) {
         SAVE_PROFILE(); 
-        if (ctx.detector) ctx.detector->m_allow_flags_need_update = true; 
+        // TODO: Implement flag update for TensorRT integration 
     }
     if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Toggles the RGB color filtering logic (config.enable_color_filter)."); }
 
@@ -605,14 +609,8 @@ void draw_debug()
         if (show_color_mask_preview) {
             
             SimpleCudaMat colorMaskGpu;
-            if (ctx.detector) {
-                try {
-                    colorMaskGpu = ctx.detector->getColorMaskGpu();
-                } catch (const std::exception&) {
-                    // Handle any exceptions from getColorMaskGpu
-                    colorMaskGpu = SimpleCudaMat();
-                }
-            } 
+            // TODO: Implement color mask retrieval for TensorRT integration
+            // colorMaskGpu = nullptr; // Temporarily disabled 
             if (!colorMaskGpu.empty()) {
                 static SimpleMat colorMaskCpu; 
                 try {
