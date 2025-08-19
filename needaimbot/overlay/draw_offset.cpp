@@ -5,7 +5,6 @@
 #include "draw_settings.h"
 #include "ui_helpers.h"
 #include "cuda/simple_cuda_mat.h"
-#include "../detector/detector.h"
 #include <d3d11.h>
 
 extern ID3D11ShaderResourceView* bodyTexture;
@@ -381,10 +380,9 @@ void renderOffsetTab()
                 return;
             }
             
-            // Get current frame from detector and upload it
-            if (ctx.detector && !ctx.detector->currentFrame.empty()) {
-                uploadDebugFrame(ctx.detector->currentFrame);
-            } else {
+            // TODO: Get current frame from TensorRT integrated pipeline
+            // Frame upload temporarily disabled during Phase 1 integration
+            {
                 ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Waiting for frame...");
             }
         } catch (const std::exception& e) {
