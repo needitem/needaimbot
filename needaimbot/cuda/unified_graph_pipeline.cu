@@ -1,5 +1,6 @@
 #include "unified_graph_pipeline.h"
 #include "detection/cuda_image_processing.h"
+#include "detection/cuda_float_processing.h"
 #include "tracking/gpu_kalman_filter.h"
 #include "detection/postProcessGpu.h"
 #include "detection/filterGpu.h"
@@ -174,60 +175,7 @@ public:
 // OPTIMIZED CUDA KERNELS
 // ============================================================================
 
-// Fused kernel: BGRA→BGR + Resize + Normalize in one pass
-__global__ void fusedPreprocessKernel(
-    const uchar4* __restrict__ input,   // BGRA input from capture
-    float* __restrict__ output,         // Normalized float output for inference
-    int srcWidth, int srcHeight,
-    int dstWidth, int dstHeight,
-    float scaleX, float scaleY,
-    float normMean, float normStd,
-    bool swapRB)
-{
-    int dstX = blockIdx.x * blockDim.x + threadIdx.x;
-    int dstY = blockIdx.y * blockDim.y + threadIdx.y;
-    
-    if (dstX >= dstWidth || dstY >= dstHeight) return;
-    
-    // Calculate source coordinates with bilinear interpolation
-    float srcXf = dstX * scaleX;
-    float srcYf = dstY * scaleY;
-    
-    int srcX0 = __float2int_rd(srcXf);
-    int srcY0 = __float2int_rd(srcYf);
-    int srcX1 = min(srcX0 + 1, srcWidth - 1);
-    int srcY1 = min(srcY0 + 1, srcHeight - 1);
-    
-    float fx = srcXf - srcX0;
-    float fy = srcYf - srcY0;
-    
-    // Read 4 pixels for bilinear interpolation
-    uchar4 p00 = input[srcY0 * srcWidth + srcX0];
-    uchar4 p01 = input[srcY0 * srcWidth + srcX1];
-    uchar4 p10 = input[srcY1 * srcWidth + srcX0];
-    uchar4 p11 = input[srcY1 * srcWidth + srcX1];
-    
-    // Bilinear interpolation for each channel
-    float b = (1-fx)*(1-fy)*p00.x + fx*(1-fy)*p01.x + (1-fx)*fy*p10.x + fx*fy*p11.x;
-    float g = (1-fx)*(1-fy)*p00.y + fx*(1-fy)*p01.y + (1-fx)*fy*p10.y + fx*fy*p11.y;
-    float r = (1-fx)*(1-fy)*p00.z + fx*(1-fy)*p01.z + (1-fx)*fy*p10.z + fx*fy*p11.z;
-    
-    // Swap R and B if needed (BGRA to RGB)
-    if (swapRB) {
-        float temp = r;
-        r = b;
-        b = temp;
-    }
-    
-    // Normalize and write to CHW format (for YOLO)
-    int pixelIdx = dstY * dstWidth + dstX;
-    int channelStride = dstWidth * dstHeight;
-    
-    // Match stable branch: simple division by 255.0f (ignore normMean/normStd)
-    output[0 * channelStride + pixelIdx] = r / 255.0f;  // R channel
-    output[1 * channelStride + pixelIdx] = g / 255.0f;  // G channel
-    output[2 * channelStride + pixelIdx] = b / 255.0f;  // B channel
-}
+// fusedPreprocessKernel removed - using CudaImageProcessing pipeline instead
 
 // Helper kernel for copying D3D11 texture to CUDA buffer without CPU mapping
 __global__ void copyTextureToBuffer(cudaSurfaceObject_t surface, 
@@ -391,37 +339,7 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
                        m_captureBuffer.sizeInBytes(), cudaMemcpyHostToDevice, stream);
     }
     
-    // 2. Preprocessing only for graph capture (detector has dynamic allocations)
-    if (m_config.enableDetection && m_d_yoloInput) {
-        // Calculate grid and block dimensions
-        dim3 blockSize(16, 16);
-        dim3 gridSize(
-            (ctx.config.onnx_input_resolution + blockSize.x - 1) / blockSize.x,
-            (ctx.config.onnx_input_resolution + blockSize.y - 1) / blockSize.y
-        );
-        
-        // Get input dimensions
-        int srcWidth = m_captureBuffer.cols();
-        int srcHeight = m_captureBuffer.rows();
-        
-        // Launch fused kernel: BGRA→BGR + Resize + Normalize
-        fusedPreprocessKernel<<<gridSize, blockSize, 0, stream>>>(
-            reinterpret_cast<const uchar4*>(m_captureBuffer.data()),
-            m_d_yoloInput,
-            srcWidth, srcHeight,
-            ctx.config.onnx_input_resolution, ctx.config.onnx_input_resolution,  // YOLO input size
-            static_cast<float>(srcWidth) / static_cast<float>(ctx.config.onnx_input_resolution),
-            static_cast<float>(srcHeight) / static_cast<float>(ctx.config.onnx_input_resolution),
-            0.0f, 1.0f,  // Normalization parameters
-            false  // Keep BGR order (match stable branch)
-        );
-        
-        // Register this kernel node for dynamic updates
-        if (m_dynamicGraph) {
-            // This will be captured by the graph
-            m_namedNodes["preprocess_kernel"] = nullptr;  // Will be set during capture
-        }
-    }
+    // Preprocessing removed - using CudaImageProcessing pipeline in executeGraph instead
     
     // 3. TensorRT Inference
     if (m_config.enableDetection) {
@@ -535,31 +453,7 @@ bool UnifiedGraphPipeline::captureDetectionGraph(cudaStream_t stream) {
         return false;
     }
     
-    // Capture only preprocessing operations
-    if (m_config.enableDetection && m_d_yoloInput) {
-        // Calculate grid and block dimensions
-        dim3 blockSize(16, 16);
-        dim3 gridSize(
-            (ctx.config.onnx_input_resolution + blockSize.x - 1) / blockSize.x,
-            (ctx.config.onnx_input_resolution + blockSize.y - 1) / blockSize.y
-        );
-        
-        // Get input dimensions
-        int srcWidth = m_captureBuffer.cols();
-        int srcHeight = m_captureBuffer.rows();
-        
-        // Launch fused kernel: BGRA→BGR + Resize + Normalize
-        fusedPreprocessKernel<<<gridSize, blockSize, 0, stream>>>(
-            reinterpret_cast<const uchar4*>(m_captureBuffer.data()),
-            m_d_yoloInput,
-            srcWidth, srcHeight,
-            ctx.config.onnx_input_resolution, ctx.config.onnx_input_resolution,  // YOLO input size
-            static_cast<float>(srcWidth) / static_cast<float>(ctx.config.onnx_input_resolution),
-            static_cast<float>(srcHeight) / static_cast<float>(ctx.config.onnx_input_resolution),
-            0.0f, 1.0f,  // Normalization parameters
-            false  // Keep BGR order (match stable branch)
-        );
-    }
+    // Preprocessing removed - using CudaImageProcessing pipeline in executeGraph instead
     
     // End capture
     err = cudaStreamEndCapture(stream, &m_detectionGraph);
@@ -600,6 +494,7 @@ void UnifiedGraphPipeline::checkTargetsAsync(cudaStream_t stream) {
 bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
     // Use optimized two-stage pipeline for conditional execution
     if (!stream) stream = m_primaryStream;
+    auto& ctx = AppContext::getInstance();
     
     // First, capture the frame from D3D11 texture (skip if frame already set by setInputFrame)
     // Note: gpu_only_capture.cpp calls setInputFrame() before executeGraph()
@@ -731,7 +626,7 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
             // Log model input with comprehensive statistics
             if (m_d_yoloInput) {
                 // Calculate total elements (configurable input size)
-                size_t total_elements = 3 * m_config.detectionWidth * m_config.detectionHeight;
+                size_t total_elements = 3 * ctx.config.onnx_input_resolution * ctx.config.onnx_input_resolution;
                 size_t sample_size = std::min(size_t(10000), total_elements); // Sample 10k values for statistics
                 
                 // Allocate host memory for statistics calculation
@@ -752,7 +647,7 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
                 
                 // Log comprehensive preprocessing statistics
                 std::cout << "=== UNIFIED PIPELINE PREPROCESSED DATA STATISTICS (Frame " << graph_log_count << ") ===" << std::endl;
-                std::cout << "  INPUT TENSOR: [3, " << m_config.detectionHeight << ", " << m_config.detectionWidth << "] (" << total_elements << " elements)" << std::endl;
+                std::cout << "  INPUT TENSOR: [3, " << ctx.config.onnx_input_resolution << ", " << ctx.config.onnx_input_resolution << "] (" << total_elements << " elements)" << std::endl;
                 std::cout << "  MIN VALUE:    " << std::fixed << std::setprecision(6) << min_val << std::endl;
                 std::cout << "  MAX VALUE:    " << std::fixed << std::setprecision(6) << max_val << std::endl;
                 std::cout << "  AVERAGE:      " << std::fixed << std::setprecision(6) << avg_val << std::endl;
@@ -795,7 +690,6 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
     }
     
     // Always run detector after graph (or without graph)
-    auto& ctx = AppContext::getInstance();
     
     if (!ctx.getDetectionState().isPaused()) {
         
@@ -803,8 +697,9 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
         
         // 1. Preprocessing: Convert capture buffer to YOLO input
         if (m_d_yoloInput && !m_captureBuffer.empty()) {
-            // Phase 2.3: Optimized preprocessing pipeline
-            SimpleCudaMat tempResize, tempFloat;
+            // Phase 2.3: Optimized preprocessing pipeline with proper float handling
+            SimpleCudaMat tempResize;
+            SimpleCudaMatFloat tempFloat;
             tempResize.create(ctx.config.onnx_input_resolution, ctx.config.onnx_input_resolution, 3);
             tempFloat.create(ctx.config.onnx_input_resolution, ctx.config.onnx_input_resolution, 3);
             
@@ -813,7 +708,9 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
             bgrBuffer.create(m_captureBuffer.rows(), m_captureBuffer.cols(), 3);
             CudaImageProcessing::bgra2bgr(m_captureBuffer, bgrBuffer, stream);
             CudaImageProcessing::resize(bgrBuffer, tempResize, ctx.config.onnx_input_resolution, ctx.config.onnx_input_resolution, stream);
-            CudaImageProcessing::convertTo(tempResize, tempFloat, m_imgScale, 0.0f, stream);
+            
+            // Convert uint8 to float with proper normalization
+            CudaFloatProcessing::convertToFloat(tempResize, tempFloat, 1.0f/255.0f, 0.0f, stream);
             
             size_t inputSize = ctx.config.onnx_input_resolution * ctx.config.onnx_input_resolution * 3 * sizeof(float);
             cudaMemcpyAsync(m_d_yoloInput, tempFloat.data(), inputSize, 
