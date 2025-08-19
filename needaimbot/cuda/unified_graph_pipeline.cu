@@ -342,7 +342,7 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     // Preprocessing removed - using CudaImageProcessing pipeline in executeGraph instead
     
     // 3. TensorRT Inference  
-    if (m_config.enableDetection) {
+    if (false && m_config.enableDetection) {  // Temporarily disabled for Graph capture
         // Initialize input buffer with valid data for graph capture
         if (m_d_yoloInput) {
             // std::cout << "[DEBUG] Initializing input buffer for graph capture..." << std::endl;
@@ -781,21 +781,46 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
                 return false;
             }
             
+            // CRITICAL FIX: Connect m_d_inferenceOutput to actual TensorRT output
+            if (m_d_inferenceOutput && !m_outputNames.empty()) {
+                auto bindingIt = m_outputBindings.find(m_outputNames[0]);
+                if (bindingIt != m_outputBindings.end() && bindingIt->second != nullptr) {
+                    // Copy TensorRT output to our inference buffer for post-processing
+                    size_t outputSize = m_outputSizes[m_outputNames[0]];
+                    cudaMemcpyAsync(m_d_inferenceOutput, bindingIt->second, outputSize, 
+                                   cudaMemcpyDeviceToDevice, stream);
+                }
+            }
+            
             // Log raw TensorRT output for debugging (first few frames only)
             static int inference_log_count = 0;
             if (inference_log_count < 5 && m_d_inferenceOutput) {
                 cudaStreamSynchronize(stream);
                 std::cout << "[TENSORRT OUTPUT] Raw inference completed (Frame " << inference_log_count << ")" << std::endl;
                 
-                // Sample first few output values
+                // Sample first few output values from correct TensorRT buffer
                 float raw_output[20];
-                cudaMemcpy(raw_output, m_d_inferenceOutput, 20 * sizeof(float), cudaMemcpyDeviceToHost);
-                std::cout << "[TENSORRT OUTPUT] First 20 values: ";
-                for (int i = 0; i < 20; i++) {
-                    std::cout << std::fixed << std::setprecision(4) << raw_output[i];
-                    if (i < 19) std::cout << ", ";
+                void* correctOutputBuffer = nullptr;
+                
+                // Use TensorRT output binding instead of m_d_inferenceOutput
+                if (!m_outputNames.empty()) {
+                    auto bindingIt = m_outputBindings.find(m_outputNames[0]);
+                    if (bindingIt != m_outputBindings.end() && bindingIt->second != nullptr) {
+                        correctOutputBuffer = bindingIt->second;
+                    }
                 }
-                std::cout << std::endl;
+                
+                if (correctOutputBuffer) {
+                    cudaMemcpy(raw_output, correctOutputBuffer, 20 * sizeof(float), cudaMemcpyDeviceToHost);
+                    std::cout << "[TENSORRT OUTPUT] First 20 values from correct buffer: ";
+                    for (int i = 0; i < 20; i++) {
+                        std::cout << std::fixed << std::setprecision(4) << raw_output[i];
+                        if (i < 19) std::cout << ", ";
+                    }
+                    std::cout << std::endl;
+                } else {
+                    std::cout << "[TENSORRT OUTPUT] Warning: Could not find correct output buffer" << std::endl;
+                }
                 inference_log_count++;
             }
             
@@ -1922,6 +1947,7 @@ bool UnifiedGraphPipeline::runInferenceAsync(cudaStream_t stream) {
     
     
     // Execute TensorRT inference with enhanced error handling
+    
     bool success = m_context->enqueueV3(stream);
     if (!success) {
         // Get more detailed error information
@@ -1931,7 +1957,35 @@ bool UnifiedGraphPipeline::runInferenceAsync(cudaStream_t stream) {
             std::cerr << " - CUDA error: " << cudaGetErrorString(cudaErr);
         }
         std::cerr << std::endl;
+        
+        std::cout << "[DEBUG] TensorRT inference failed with unknown error" << std::endl;
+        
         return false;
+    }
+    
+    // Validate output data after inference (first few calls only)
+    static int output_validation_count = 0;
+    if (output_validation_count < 3) {
+        cudaStreamSynchronize(stream);
+        
+        for (const auto& name : m_outputNames) {
+            auto bindingIt = m_outputBindings.find(name);
+            if (bindingIt != m_outputBindings.end() && bindingIt->second != nullptr) {
+                float sample_output[20];
+                cudaMemcpy(sample_output, bindingIt->second, 20 * sizeof(float), cudaMemcpyDeviceToHost);
+                std::cout << "[OUTPUT VALIDATION] First 20 output values from '" << name << "': ";
+                for (int i = 0; i < 20; i++) {
+                    std::cout << std::fixed << std::setprecision(4) << sample_output[i];
+                    if (i < 19) std::cout << ", ";
+                }
+                std::cout << std::endl;
+                
+                // Check output buffer size
+                size_t outputSize = m_outputSizes[name];
+                std::cout << "[OUTPUT VALIDATION] Output '" << name << "' size: " << outputSize << " bytes" << std::endl;
+            }
+        }
+        output_validation_count++;
     }
     
     // Validate input data after tensor address setup (first few calls only)
