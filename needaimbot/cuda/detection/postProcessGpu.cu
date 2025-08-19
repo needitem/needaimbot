@@ -736,9 +736,13 @@ __global__ void decodeYolo11GpuKernel(
         
         float max_score = -1.0f;
         int max_class_id = -1;
+        
+        // YOLO12 always has 15 channels: 4 bbox + 11 classes (no objectness)
+        int class_start_idx = 4;
+        
         for (int c = 0; c < num_classes; ++c) {
-            
-            size_t score_idx = (4 + c) * num_boxes_raw + idx;
+            // Back to channel-first layout: [batch, channel, anchor]
+            size_t score_idx = (class_start_idx + c) * num_boxes_raw + idx;
             if (score_idx >= num_rows * num_boxes_raw) {
                 continue;
             }
@@ -749,9 +753,12 @@ __global__ void decodeYolo11GpuKernel(
             }
         }
 
+        // YOLO12: No objectness channel, use class confidence only
+        float final_confidence = max_score;
         
-        if (max_score > conf_threshold) {
+        if (final_confidence > conf_threshold) {
             
+            // Back to channel-first layout: [batch, channel, anchor]
             size_t cx_idx = 0 * num_boxes_raw + idx;
             size_t cy_idx = 1 * num_boxes_raw + idx;
             size_t ow_idx = 2 * num_boxes_raw + idx;

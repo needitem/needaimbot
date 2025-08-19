@@ -792,37 +792,7 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
                 }
             }
             
-            // Log raw TensorRT output for debugging (first few frames only)
-            static int inference_log_count = 0;
-            if (inference_log_count < 5 && m_d_inferenceOutput) {
-                cudaStreamSynchronize(stream);
-                std::cout << "[TENSORRT OUTPUT] Raw inference completed (Frame " << inference_log_count << ")" << std::endl;
-                
-                // Sample first few output values from correct TensorRT buffer
-                float raw_output[20];
-                void* correctOutputBuffer = nullptr;
-                
-                // Use TensorRT output binding instead of m_d_inferenceOutput
-                if (!m_outputNames.empty()) {
-                    auto bindingIt = m_outputBindings.find(m_outputNames[0]);
-                    if (bindingIt != m_outputBindings.end() && bindingIt->second != nullptr) {
-                        correctOutputBuffer = bindingIt->second;
-                    }
-                }
-                
-                if (correctOutputBuffer) {
-                    cudaMemcpy(raw_output, correctOutputBuffer, 20 * sizeof(float), cudaMemcpyDeviceToHost);
-                    std::cout << "[TENSORRT OUTPUT] First 20 values from correct buffer: ";
-                    for (int i = 0; i < 20; i++) {
-                        std::cout << std::fixed << std::setprecision(4) << raw_output[i];
-                        if (i < 19) std::cout << ", ";
-                    }
-                    std::cout << std::endl;
-                } else {
-                    std::cout << "[TENSORRT OUTPUT] Warning: Could not find correct output buffer" << std::endl;
-                }
-                inference_log_count++;
-            }
+            // Inference logging disabled
             
             // 3. Integrated post-processing (Phase 3: decode, filter, NMS, target selection)
             performIntegratedPostProcessing(stream);
@@ -2056,7 +2026,7 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
     // Use cached config values for CUDA Graph compatibility
     static int cached_max_detections = Constants::MAX_DETECTIONS;
     static float cached_nms_threshold = 0.45f;
-    static float cached_confidence_threshold = 0.25f;
+    static float cached_confidence_threshold = 0.001f;
     static std::string cached_postprocess = "yolo12";
     
     // Update cache from config when not in graph capture mode
@@ -2140,6 +2110,38 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
 
     // Step 2: Get decoded count for further processing
     int decodedCount = 0;
+    
+    // DEBUG: Check raw detection count after decoding
+    static int decode_debug_count = 0;
+    if (decode_debug_count < 5) {
+        cudaStreamSynchronize(stream);
+        if (m_d_decodedCount) {
+            cudaMemcpy(&decodedCount, m_d_decodedCount, sizeof(int), cudaMemcpyDeviceToHost);
+            std::cout << "[RAW DECODE] Frame " << decode_debug_count << ": Raw decoded count before any filtering: " << decodedCount << std::endl;
+            std::cout << "[RAW DECODE] Using threshold: " << cached_confidence_threshold << ", postprocess: " << cached_postprocess << std::endl;
+            std::cout << "[RAW DECODE] Output shape: ";
+            for (size_t i = 0; i < shape.size(); i++) {
+                std::cout << shape[i];
+                if (i < shape.size() - 1) std::cout << "x";
+            }
+            std::cout << std::endl;
+            std::cout << "[RAW DECODE] num_classes: " << m_numClasses << ", img_scale: " << m_imgScale << std::endl;
+            
+            // Sample first few raw detections if any exist
+            if (decodedCount > 0 && m_d_decodedTargets) {
+                Target sample_targets[5];
+                int samplesToCheck = std::min(decodedCount, 5);
+                cudaMemcpy(sample_targets, m_d_decodedTargets, samplesToCheck * sizeof(Target), cudaMemcpyDeviceToHost);
+                
+                for (int i = 0; i < samplesToCheck; i++) {
+                    std::cout << "[RAW DECODE] Target " << i << ": x=" << sample_targets[i].x 
+                              << ", y=" << sample_targets[i].y << ", conf=" << sample_targets[i].confidence 
+                              << ", class=" << sample_targets[i].classId << std::endl;
+                }
+            }
+        }
+        decode_debug_count++;
+    }
     cudaError_t countCopyErr = cudaMemcpyAsync(&decodedCount, m_d_decodedCount, sizeof(int), 
                                                cudaMemcpyDeviceToHost, stream);
     if (countCopyErr != cudaSuccess) {
