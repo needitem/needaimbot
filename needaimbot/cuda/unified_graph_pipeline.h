@@ -10,8 +10,12 @@
 #include "simple_cuda_mat.h"
 #include "../core/Target.h"
 
+// TensorRT includes for Phase 1 integration
+#include <NvInfer.h>
+#include <NvOnnxParser.h>
+#include <cuda_fp16.h>
+
 // Forward declarations outside namespace
-class Detector;
 class GPUKalmanTracker;
 
 namespace needaimbot {
@@ -52,6 +56,9 @@ struct UnifiedPipelineConfig {
     bool enableDetection = true;
     bool enableTracking = true;
     
+    // Model configuration (Phase 1 integration)
+    std::string modelPath;
+    
     // Detection parameters
     float confThreshold = 0.4f;
     float nmsThreshold = 0.45f;
@@ -81,7 +88,6 @@ public:
     void shutdown();
     
     // Set component references
-    void setDetector(::Detector* detector) { m_detector = detector; }
     void setTracker(::GPUKalmanTracker* tracker) { m_tracker = tracker; }
     
     // Main execution methods
@@ -102,6 +108,20 @@ public:
     void setInputTexture(cudaGraphicsResource_t resource) { m_cudaResource = resource; }
     void setInputFrame(const SimpleCudaMat& frame);
     void setOutputBuffer(float* d_output) { m_d_outputBuffer = d_output; }
+    
+    // TensorRT integration methods (Phase 1)
+    bool initializeTensorRT(const std::string& modelFile);
+    bool loadEngine(const std::string& modelFile);
+    nvinfer1::ICudaEngine* buildEngineFromOnnx(const std::string& onnxPath);
+    void getInputNames();
+    void getOutputNames();
+    void getBindings();
+    bool runInferenceAsync(cudaStream_t stream);
+    void performIntegratedPostProcessing(cudaStream_t stream);
+    
+    // Main loop methods
+    void runMainLoop();
+    void stopMainLoop();
     
     // State and statistics
     GraphExecutionState getState() const { return m_state; }
@@ -150,8 +170,26 @@ private:
     std::unique_ptr<TripleBuffer> m_tripleBuffer;
     
     // Component pointers
-    ::Detector* m_detector = nullptr;
     ::GPUKalmanTracker* m_tracker = nullptr;
+    
+    // TensorRT engine management (Phase 1 integration)
+    std::unique_ptr<nvinfer1::IRuntime> m_runtime;
+    std::unique_ptr<nvinfer1::ICudaEngine> m_engine;
+    std::unique_ptr<nvinfer1::IExecutionContext> m_context;
+    
+    // Input/Output binding management
+    std::vector<std::string> m_inputNames;
+    std::vector<std::string> m_outputNames;
+    std::unordered_map<std::string, size_t> m_inputSizes;
+    std::unordered_map<std::string, size_t> m_outputSizes;
+    std::unordered_map<std::string, void*> m_inputBindings;
+    std::unordered_map<std::string, void*> m_outputBindings;
+    
+    // Inference related information
+    std::string m_inputName;
+    nvinfer1::Dims m_inputDims;
+    float m_imgScale;
+    int m_numClasses;
     // Pipeline buffers (GPU memory)
     SimpleCudaMat m_captureBuffer;
     SimpleCudaMat m_preprocessBuffer;
@@ -194,6 +232,10 @@ private:
     GraphExecutionState m_state;
     std::mutex m_graphMutex;
     bool m_hasFrameData = false;
+    
+    // Main loop control
+    std::atomic<bool> m_shouldStop{false};
+    std::chrono::high_resolution_clock::time_point m_lastFrameTime;
     
     // Internal methods
     bool createGraphNodes(cudaStream_t stream);
@@ -246,6 +288,19 @@ public:
         if (m_pipeline) {
             m_pipeline->shutdown();
             m_pipeline.reset();
+        }
+    }
+    
+    // Main loop delegation
+    void runMainLoop() {
+        if (m_pipeline) {
+            m_pipeline->runMainLoop();
+        }
+    }
+    
+    void stopMainLoop() {
+        if (m_pipeline) {
+            m_pipeline->stopMainLoop();
         }
     }
     
