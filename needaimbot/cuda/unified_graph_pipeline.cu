@@ -1735,11 +1735,32 @@ void UnifiedGraphPipeline::getOutputNames() {
     auto& ctx = AppContext::getInstance();
     m_outputNames.clear();
     m_outputSizes.clear();
+    m_outputShapes.clear();
+    m_outputTypes.clear();
 
     for (int i = 0; i < m_engine->getNbIOTensors(); ++i) {
         const char* name = m_engine->getIOTensorName(i);
         if (m_engine->getTensorIOMode(name) == nvinfer1::TensorIOMode::kOUTPUT) {
             m_outputNames.emplace_back(name);
+            
+            // Get and store output shape information
+            auto dims = m_engine->getTensorShape(name);
+            std::vector<int64_t> shape;
+            for (int j = 0; j < dims.nbDims; ++j) {
+                shape.push_back(dims.d[j]);
+            }
+            m_outputShapes[name] = shape;
+            
+            // Get and store output data type
+            auto dataType = m_engine->getTensorDataType(name);
+            m_outputTypes[name] = dataType;
+            
+            std::cout << "[Pipeline] Output '" << name << "' dimensions: ";
+            for (int j = 0; j < dims.nbDims; ++j) {
+                std::cout << dims.d[j];
+                if (j < dims.nbDims - 1) std::cout << "x";
+            }
+            std::cout << std::endl;
         }
     }
 }
