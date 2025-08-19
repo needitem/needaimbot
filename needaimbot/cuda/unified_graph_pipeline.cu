@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <cuda.h>
 
+
 namespace needaimbot {
 
 // ============================================================================
@@ -1331,7 +1332,7 @@ bool UnifiedGraphPipeline::allocateBuffers() {
         if (!m_d_bestTarget) throw std::runtime_error("m_d_bestTarget allocation failed");
         
         // Class filtering control buffer (64 classes max)
-        CUDA_CHECK(cudaMalloc(&m_d_allowFlags, MAX_CLASSES_FOR_FILTERING * sizeof(unsigned char)));
+        CUDA_CHECK(cudaMalloc(&m_d_allowFlags, Constants::MAX_CLASSES_FOR_FILTERING * sizeof(unsigned char)));
         if (!m_d_allowFlags) throw std::runtime_error("m_d_allowFlags allocation failed");
         
         // Allocate pinned host memory for zero-copy transfers
@@ -2311,7 +2312,7 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
             m_d_classFilteredTargets,
             m_d_classFilteredCount,
             m_d_allowFlags,
-            MAX_CLASSES_FOR_FILTERING,
+            Constants::MAX_CLASSES_FOR_FILTERING,
             300,  // max output buffer
             stream
         );
