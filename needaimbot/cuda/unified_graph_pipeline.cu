@@ -1801,7 +1801,10 @@ bool UnifiedGraphPipeline::initializeTensorRT(const std::string& modelFile) {
     }
     
     // Set up model-specific parameters
-    m_imgScale = 1.0f / 255.0f;  // Standard normalization for YOLO models
+    // m_imgScale is used in post-processing to scale model output coordinates back to original image size
+    // Model outputs coordinates in model input resolution space, need to scale to actual detection_resolution
+    auto& ctx = AppContext::getInstance();
+    m_imgScale = static_cast<float>(ctx.config.detection_resolution) / static_cast<float>(ctx.config.onnx_input_resolution);
     
     // Determine number of classes from output shape
     // Output shape is typically [batch, rows, boxes] where rows = 4 + num_classes
