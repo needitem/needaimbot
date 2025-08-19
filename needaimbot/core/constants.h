@@ -26,6 +26,9 @@ namespace Constants {
     /// Non-Maximum Suppression threshold for duplicate removal
     constexpr float DEFAULT_NMS_THRESHOLD = 0.45f;
     
+    /// Image normalization factor for preprocessing (converts 0-255 to 0-1 range)
+    constexpr float IMAGE_NORMALIZATION_FACTOR = 1.0f / 255.0f;
+    
     // ============================================================================
     // Mouse Movement & Control Constants
     // ============================================================================
