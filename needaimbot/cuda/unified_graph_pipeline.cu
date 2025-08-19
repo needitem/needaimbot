@@ -219,9 +219,10 @@ __global__ void fusedPreprocessKernel(
     int pixelIdx = dstY * dstWidth + dstX;
     int channelStride = dstWidth * dstHeight;
     
-    output[0 * channelStride + pixelIdx] = (r / 255.0f - normMean) / normStd;  // R channel
-    output[1 * channelStride + pixelIdx] = (g / 255.0f - normMean) / normStd;  // G channel
-    output[2 * channelStride + pixelIdx] = (b / 255.0f - normMean) / normStd;  // B channel
+    // Match stable branch: simple division by 255.0f (ignore normMean/normStd)
+    output[0 * channelStride + pixelIdx] = r / 255.0f;  // R channel
+    output[1 * channelStride + pixelIdx] = g / 255.0f;  // G channel
+    output[2 * channelStride + pixelIdx] = b / 255.0f;  // B channel
 }
 
 // Helper kernel for copying D3D11 texture to CUDA buffer without CPU mapping
@@ -591,7 +592,6 @@ void UnifiedGraphPipeline::checkTargetsAsync(cudaStream_t stream) {
 }
 
 bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
-    
     // Use optimized two-stage pipeline for conditional execution
     if (!stream) stream = m_primaryStream;
     
@@ -715,6 +715,52 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
             // Reset CUDA error state
             cudaGetLastError();
             return executeDirect(stream);
+        }
+        
+        // Log model input/output after graph execution
+        static int graph_log_count = 0;
+        if (graph_log_count < 5) {
+            cudaStreamSynchronize(stream);
+            
+            // Log model input
+            if (m_d_yoloInput) {
+                float first_pixel[3];
+                cudaMemcpy(first_pixel, m_d_yoloInput, 3 * sizeof(float), cudaMemcpyDeviceToHost);
+                std::cout << "[MODEL INPUT] First pixel BGR: (" 
+                          << first_pixel[0] << ", " << first_pixel[1] << ", " << first_pixel[2] 
+                          << ") Frame: " << graph_log_count << std::endl;
+            }
+            
+            // Log model output if available
+            if (m_d_finalTargets && m_d_finalTargetsCount) {
+                int finalCount = 0;
+                cudaMemcpy(&finalCount, m_d_finalTargetsCount, sizeof(int), cudaMemcpyDeviceToHost);
+                if (finalCount > 0) {
+                    Target first_detection;
+                    cudaMemcpy(&first_detection, m_d_finalTargets, sizeof(Target), cudaMemcpyDeviceToHost);
+                    std::cout << "[MODEL OUTPUT] First detection - x:" << first_detection.x 
+                              << " y:" << first_detection.y << " w:" << first_detection.width 
+                              << " h:" << first_detection.height << " conf:" << first_detection.confidence 
+                              << " class:" << first_detection.classId << " Frame: " << graph_log_count << std::endl;
+                }
+            }
+            
+            // Log final selected target if available
+            if (m_d_bestTarget && m_d_bestTargetIndex) {
+                Target final_target;
+                int target_index;
+                cudaMemcpy(&final_target, m_d_bestTarget, sizeof(Target), cudaMemcpyDeviceToHost);
+                cudaMemcpy(&target_index, m_d_bestTargetIndex, sizeof(int), cudaMemcpyDeviceToHost);
+                if (target_index >= 0) {
+                    std::cout << "[FINAL TARGET] Selected target - x:" << final_target.x 
+                              << " y:" << final_target.y << " w:" << final_target.width 
+                              << " h:" << final_target.height << " conf:" << final_target.confidence 
+                              << " class:" << final_target.classId << " index:" << target_index 
+                              << " Frame: " << graph_log_count << std::endl;
+                }
+            }
+            
+            graph_log_count++;
         }
     }
     
@@ -887,6 +933,32 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
             if (err != cudaSuccess) {
                 m_state.needsRebuild = true;
                 return false;
+            }
+            
+            // Log model input/output after monolithic graph
+            static int mono_graph_log_count = 0;
+            if (mono_graph_log_count < 5 && m_d_yoloInput) {
+                cudaStreamSynchronize(stream);
+                float first_pixel[3];
+                cudaMemcpy(first_pixel, m_d_yoloInput, 3 * sizeof(float), cudaMemcpyDeviceToHost);
+                std::cout << "[MODEL INPUT] First pixel BGR: (" 
+                          << first_pixel[0] << ", " << first_pixel[1] << ", " << first_pixel[2] 
+                          << ") Frame: " << mono_graph_log_count << std::endl;
+                
+                // Also try to log output if available
+                if (m_d_finalTargets && m_d_finalTargetsCount) {
+                    int finalCount = 0;
+                    cudaMemcpy(&finalCount, m_d_finalTargetsCount, sizeof(int), cudaMemcpyDeviceToHost);
+                    if (finalCount > 0) {
+                        Target first_detection;
+                        cudaMemcpy(&first_detection, m_d_finalTargets, sizeof(Target), cudaMemcpyDeviceToHost);
+                        std::cout << "[MODEL OUTPUT] First detection - x:" << first_detection.x 
+                                  << " y:" << first_detection.y << " w:" << first_detection.width 
+                                  << " h:" << first_detection.height << " conf:" << first_detection.confidence 
+                                  << " class:" << first_detection.classId << " Frame: " << mono_graph_log_count << std::endl;
+                    }
+                }
+                mono_graph_log_count++;
             }
         } else {
             // No graph available, use direct execution
@@ -1070,6 +1142,18 @@ bool UnifiedGraphPipeline::executeDirect(cudaStream_t stream) {
         if (kernelErr != cudaSuccess) {
             std::cerr << "[UnifiedGraph] Preprocessing kernel launch failed: " << cudaGetErrorString(kernelErr) << std::endl;
             return false;
+        }
+        
+        // Log first pixel of model input data for debugging
+        static int main_log_count = 0;
+        if (main_log_count < 5) {  // Log first 5 frames only
+            cudaStreamSynchronize(preprocessStream);  // Ensure preprocessing is done
+            float first_pixel[3];
+            cudaMemcpy(first_pixel, m_d_yoloInput, 3 * sizeof(float), cudaMemcpyDeviceToHost);
+            std::cout << "[MODEL INPUT] First pixel BGR: (" 
+                      << first_pixel[0] << ", " << first_pixel[1] << ", " << first_pixel[2] 
+                      << ") Frame: " << main_log_count << std::endl;
+            main_log_count++;
         }
         
         // Signal preprocessing completion
@@ -2423,6 +2507,22 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
             cudaMemsetAsync(m_d_finalTargetsCount, 0, sizeof(int), stream);
         }
     }
+    
+    // Log first detection result for debugging
+    static int detection_log_count = 0;
+    if (detection_log_count < 5 && m_d_finalTargets && m_d_finalTargetsCount) {  // Log first 5 frames only
+        int finalCount = 0;
+        cudaMemcpy(&finalCount, m_d_finalTargetsCount, sizeof(int), cudaMemcpyDeviceToHost);
+        if (finalCount > 0) {
+            Target first_detection;
+            cudaMemcpy(&first_detection, m_d_finalTargets, sizeof(Target), cudaMemcpyDeviceToHost);
+            std::cout << "[MODEL OUTPUT] First detection - x:" << first_detection.x 
+                      << " y:" << first_detection.y << " w:" << first_detection.width 
+                      << " h:" << first_detection.height << " conf:" << first_detection.confidence 
+                      << " class:" << first_detection.classId << " Frame: " << detection_log_count << std::endl;
+        }
+        detection_log_count++;
+    }
 }
 
 void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
@@ -2494,6 +2594,22 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         // Clear best target on failure
         if (m_d_bestTargetIndex) {
             cudaMemsetAsync(m_d_bestTargetIndex, -1, sizeof(int), stream);
+        }
+    } else {
+        // Log final target data for debugging  
+        static int final_target_log_count = 0;
+        if (final_target_log_count < 5) {  // Log first 5 frames only
+            cudaStreamSynchronize(stream);  // Ensure target selection is done
+            Target final_target;
+            int target_index;
+            cudaMemcpy(&final_target, m_d_bestTarget, sizeof(Target), cudaMemcpyDeviceToHost);
+            cudaMemcpy(&target_index, m_d_bestTargetIndex, sizeof(int), cudaMemcpyDeviceToHost);
+            std::cout << "[FINAL TARGET] Selected target - x:" << final_target.x 
+                      << " y:" << final_target.y << " w:" << final_target.width 
+                      << " h:" << final_target.height << " conf:" << final_target.confidence 
+                      << " class:" << final_target.classId << " index:" << target_index 
+                      << " Frame: " << final_target_log_count << std::endl;
+            final_target_log_count++;
         }
     }
 }
