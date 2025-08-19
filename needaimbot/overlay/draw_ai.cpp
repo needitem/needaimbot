@@ -9,7 +9,6 @@
 #include "include/other_tools.h"
 #include "overlay.h"
 #include "AppContext.h"
-#include "detector/detector.h"
 #include "ui_helpers.h"
 #include "common_helpers.h"
 #include "draw_settings.h"
