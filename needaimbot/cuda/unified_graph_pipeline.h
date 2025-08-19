@@ -94,18 +94,18 @@ public:
     bool captureGraph(cudaStream_t stream = nullptr);
     bool captureDetectionGraph(cudaStream_t stream = nullptr);
     bool executeGraph(cudaStream_t stream = nullptr);
-    bool updateGraph(cudaStream_t stream = nullptr);
     
     // Direct execution (non-graph fallback)
     bool executeDirect(cudaStream_t stream = nullptr);
-    
-    // Dynamic parameter updates (no graph recapture needed)
-    bool updateConfidenceThreshold(float threshold);
-    bool updateNMSThreshold(float threshold);
-    bool updateTargetSelectionParams(float centerWeight, float sizeWeight);
-    
+        
     // Pipeline data management
     void setInputTexture(cudaGraphicsResource_t resource) { m_cudaResource = resource; }
+    void setDesktopDuplication(void* duplication, void* device, void* context, void* texture) {
+        m_desktopDuplication = duplication;
+        m_d3dDevice = device;
+        m_d3dContext = context;
+        m_captureTextureD3D = texture;
+    }
     void setInputFrame(const SimpleCudaMat& frame);
     void setOutputBuffer(float* d_output) { m_d_outputBuffer = d_output; }
     
@@ -129,6 +129,9 @@ public:
     GraphExecutionState getState() const { return m_state; }
     float getAverageLatency() const { return m_state.avgLatency; }
     bool isGraphReady() const { return m_state.graphReady; }
+    
+    // Frame access for preview
+    const SimpleCudaMat& getCaptureBuffer() const { return m_captureBuffer; }
     
     
 private:
@@ -250,6 +253,12 @@ private:
     cudaGraphicsResource_t m_cudaResource = nullptr;
     cudaArray_t m_cudaArray = nullptr;
     
+    // Desktop Duplication for screen capture
+    void* m_desktopDuplication = nullptr;  // IDXGIOutputDuplication*
+    void* m_d3dDevice = nullptr;           // ID3D11Device*
+    void* m_d3dContext = nullptr;          // ID3D11DeviceContext*
+    void* m_captureTextureD3D = nullptr;   // ID3D11Texture2D*
+    
     // Configuration and state
     UnifiedPipelineConfig m_config;
     GraphExecutionState m_state;
@@ -259,17 +268,7 @@ private:
     // Main loop control
     std::atomic<bool> m_shouldStop{false};
     std::chrono::high_resolution_clock::time_point m_lastFrameTime;
-    
-    // Internal methods
-    bool createGraphNodes(cudaStream_t stream);
-    bool addCaptureNode(cudaStream_t stream);
-    bool addPreprocessNode(cudaStream_t stream);
-    bool addInferenceNode(cudaStream_t stream);
-    bool addPostprocessNode(cudaStream_t stream);
-    bool addTrackingNode(cudaStream_t stream);
-    bool addPIDNode(cudaStream_t stream);
-    bool addResultCopyNode(cudaStream_t stream);
-    
+
     bool validateGraph();
     void cleanupGraph();
     void updateStatistics(float latency);
