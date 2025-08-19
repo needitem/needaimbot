@@ -660,6 +660,8 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
             if (m_d_finalTargets && m_d_finalTargetsCount) {
                 int finalCount = 0;
                 cudaMemcpy(&finalCount, m_d_finalTargetsCount, sizeof(int), cudaMemcpyDeviceToHost);
+                std::cout << "[MODEL OUTPUT] Detection count: " << finalCount << " (Frame " << graph_log_count << ")" << std::endl;
+                
                 if (finalCount > 0) {
                     Target first_detection;
                     cudaMemcpy(&first_detection, m_d_finalTargets, sizeof(Target), cudaMemcpyDeviceToHost);
@@ -667,6 +669,20 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
                               << " y:" << first_detection.y << " w:" << first_detection.width 
                               << " h:" << first_detection.height << " conf:" << first_detection.confidence 
                               << " class:" << first_detection.classId << " Frame: " << graph_log_count << std::endl;
+                    
+                    // Log all detections if count is reasonable
+                    if (finalCount <= 10) {
+                        std::vector<Target> allTargets(finalCount);
+                        cudaMemcpy(allTargets.data(), m_d_finalTargets, finalCount * sizeof(Target), cudaMemcpyDeviceToHost);
+                        for (int i = 0; i < finalCount; i++) {
+                            std::cout << "  Detection " << i << ": (" << allTargets[i].x << "," << allTargets[i].y 
+                                      << ") " << allTargets[i].width << "×" << allTargets[i].height 
+                                      << " conf:" << std::fixed << std::setprecision(3) << allTargets[i].confidence 
+                                      << " class:" << allTargets[i].classId << std::endl;
+                        }
+                    }
+                } else {
+                    std::cout << "[MODEL OUTPUT] No detections found (Frame " << graph_log_count << ")" << std::endl;
                 }
             }
             
@@ -703,11 +719,11 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
             tempResize.create(ctx.config.onnx_input_resolution, ctx.config.onnx_input_resolution, 3);
             tempFloat.create(ctx.config.onnx_input_resolution, ctx.config.onnx_input_resolution, 3);
             
-            // Convert and resize in pipeline
-            SimpleCudaMat bgrBuffer;
-            bgrBuffer.create(m_captureBuffer.rows(), m_captureBuffer.cols(), 3);
-            CudaImageProcessing::bgra2bgr(m_captureBuffer, bgrBuffer, stream);
-            CudaImageProcessing::resize(bgrBuffer, tempResize, ctx.config.onnx_input_resolution, ctx.config.onnx_input_resolution, stream);
+            // Convert and resize in pipeline (BGRA → RGB for proper model input)
+            SimpleCudaMat rgbBuffer;
+            rgbBuffer.create(m_captureBuffer.rows(), m_captureBuffer.cols(), 3);
+            CudaImageProcessing::bgra2rgb(m_captureBuffer, rgbBuffer, stream);
+            CudaImageProcessing::resize(rgbBuffer, tempResize, ctx.config.onnx_input_resolution, ctx.config.onnx_input_resolution, stream);
             
             // Convert uint8 to float with proper normalization
             CudaFloatProcessing::convertToFloat(tempResize, tempFloat, 1.0f/255.0f, 0.0f, stream);
@@ -729,6 +745,24 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
             if (!runInferenceAsync(stream)) {
                 std::cerr << "[UnifiedGraph] TensorRT inference failed in executeGraph" << std::endl;
                 return false;
+            }
+            
+            // Log raw TensorRT output for debugging (first few frames only)
+            static int inference_log_count = 0;
+            if (inference_log_count < 5 && m_d_inferenceOutput) {
+                cudaStreamSynchronize(stream);
+                std::cout << "[TENSORRT OUTPUT] Raw inference completed (Frame " << inference_log_count << ")" << std::endl;
+                
+                // Sample first few output values
+                float raw_output[20];
+                cudaMemcpy(raw_output, m_d_inferenceOutput, 20 * sizeof(float), cudaMemcpyDeviceToHost);
+                std::cout << "[TENSORRT OUTPUT] First 20 values: ";
+                for (int i = 0; i < 20; i++) {
+                    std::cout << std::fixed << std::setprecision(4) << raw_output[i];
+                    if (i < 19) std::cout << ", ";
+                }
+                std::cout << std::endl;
+                inference_log_count++;
             }
             
             // 3. Integrated post-processing (Phase 3: decode, filter, NMS, target selection)

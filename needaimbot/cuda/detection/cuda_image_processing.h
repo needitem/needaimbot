@@ -10,6 +10,7 @@ void resize(const SimpleCudaMat& src, SimpleCudaMat& dst, int dstWidth, int dstH
 
 // Color conversion functions
 void bgra2bgr(const SimpleCudaMat& src, SimpleCudaMat& dst, cudaStream_t stream = 0);
+void bgra2rgb(const SimpleCudaMat& src, SimpleCudaMat& dst, cudaStream_t stream = 0);
 void bgr2bgra(const SimpleCudaMat& src, SimpleCudaMat& dst, cudaStream_t stream = 0);
 void bgr2hsv(const SimpleCudaMat& src, SimpleCudaMat& dst, cudaStream_t stream = 0);
 void bgr2gray(const SimpleCudaMat& src, SimpleCudaMat& dst, cudaStream_t stream = 0);

@@ -76,6 +76,22 @@ __global__ void bgra2bgrKernel(const uint8_t* bgra, uint8_t* bgr, int pixels, in
     dstPixel[2] = srcPixel[2]; // R
 }
 
+// BGRA to RGB conversion kernel (swap R and B channels)
+__global__ void bgra2rgbKernel(const uint8_t* bgra, uint8_t* rgb, int pixels, int srcStep, int dstStep, int width) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= pixels) return;
+    
+    int x = idx % width;
+    int y = idx / width;
+    
+    const uint8_t* srcPixel = bgra + y * srcStep + x * 4;
+    uint8_t* dstPixel = rgb + y * dstStep + x * 3;
+    
+    dstPixel[0] = srcPixel[2]; // R (from B position)
+    dstPixel[1] = srcPixel[1]; // G 
+    dstPixel[2] = srcPixel[0]; // B (from R position)
+}
+
 void bgra2bgr(const SimpleCudaMat& src, SimpleCudaMat& dst, cudaStream_t stream) {
     if (src.empty() || src.channels() != 4) return;
     
@@ -86,6 +102,20 @@ void bgra2bgr(const SimpleCudaMat& src, SimpleCudaMat& dst, cudaStream_t stream)
     int gridSize = (pixels + blockSize - 1) / blockSize;
     
     bgra2bgrKernel<<<gridSize, blockSize, 0, stream>>>(
+        src.data(), dst.data(), pixels, static_cast<int>(src.step()), static_cast<int>(dst.step()), src.cols()
+    );
+}
+
+void bgra2rgb(const SimpleCudaMat& src, SimpleCudaMat& dst, cudaStream_t stream) {
+    if (src.empty() || src.channels() != 4) return;
+    
+    dst.create(src.rows(), src.cols(), 3);
+    
+    int pixels = src.rows() * src.cols();
+    int blockSize = 256;
+    int gridSize = (pixels + blockSize - 1) / blockSize;
+    
+    bgra2rgbKernel<<<gridSize, blockSize, 0, stream>>>(
         src.data(), dst.data(), pixels, static_cast<int>(src.step()), static_cast<int>(dst.step()), src.cols()
     );
 }
