@@ -1,5 +1,4 @@
 #include "unified_graph_pipeline.h"
-#include "../detector/detector.h"
 #include "detection/cuda_image_processing.h"
 #include "tracking/gpu_kalman_filter.h"
 #include "detection/postProcessGpu.h"
@@ -9,8 +8,12 @@
 #include "pd_controller_shared.h"
 #include "../AppContext.h"
 #include "cuda_error_check.h"  // Use existing CUDA error checking macros
+#include "../include/other_tools.h"  // For fileExists function
 #include <iostream>
 #include <chrono>
+#include <thread>
+#include <fstream>
+#include <filesystem>
 #include <cuda.h>
 
 namespace needaimbot {
@@ -277,6 +280,19 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
     cudaEventCreateWithFlags(&m_trackingEvent, cudaEventDisableTiming);
     m_prevFrameHasTarget = false;
     
+    // Initialize TensorRT (Phase 1 integration - now required)
+    if (m_config.modelPath.empty()) {
+        std::cerr << "[UnifiedGraph] ERROR: Model path is required for TensorRT integration" << std::endl;
+        return false;
+    }
+    
+    std::cout << "[UnifiedGraph] Initializing TensorRT with model: " << m_config.modelPath << std::endl;
+    if (!initializeTensorRT(m_config.modelPath)) {
+        std::cerr << "[UnifiedGraph] CRITICAL: TensorRT initialization failed" << std::endl;
+        return false;
+    }
+    std::cout << "[UnifiedGraph] TensorRT integration completed successfully" << std::endl;
+    
     // Allocate pipeline buffers
     if (!allocateBuffers()) {
         std::cerr << "[UnifiedGraph] Failed to allocate buffers" << std::endl;
@@ -295,6 +311,7 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
     }
     
     std::cout << "[UnifiedGraph] Pipeline initialized with:" << std::endl;
+    std::cout << "  - TensorRT integration: " << (!m_config.modelPath.empty() ? "Yes" : "No") << std::endl;
     std::cout << "  - Multi-stream coordinator: Yes" << std::endl;
     std::cout << "  - Dynamic graph updates: Yes" << std::endl;
     std::cout << "  - Triple buffering: " << (m_tripleBuffer ? "Yes" : "No") << std::endl;
@@ -304,6 +321,21 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
 
 void UnifiedGraphPipeline::shutdown() {
     std::lock_guard<std::mutex> lock(m_graphMutex);
+    
+    // Clean up TensorRT resources (Phase 1 integration)
+    for (auto& binding : m_inputBindings) {
+        if (binding.second) cudaFree(binding.second);
+    }
+    m_inputBindings.clear();
+    
+    for (auto& binding : m_outputBindings) {
+        if (binding.second) cudaFree(binding.second);
+    }
+    m_outputBindings.clear();
+    
+    m_context.reset();
+    m_engine.reset();
+    m_runtime.reset();
     
     cleanupGraph();
     deallocateBuffers();
@@ -381,15 +413,11 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     }
     
     // 3. TensorRT Inference
-    if (m_config.enableDetection && m_detector) {
-        // Execute async inference using the detector
-        // Note: The detector should already have async capabilities
-        // We need to ensure the detector's processFrame method is async-compatible
-        // For now, using placeholder until detector exposes async API
-        // m_detector->runInferenceAsync(m_d_yoloInput, m_d_inferenceOutput, stream);
-        
-        // Alternative: If detector has AsyncTensorRTInference member
-        // m_detector->getAsyncInference()->submitInference(m_d_yoloInput, stream);
+    if (m_config.enableDetection) {
+        // Use integrated TensorRT inference (Phase 1)
+        if (!runInferenceAsync(stream)) {
+            std::cerr << "[UnifiedGraph] TensorRT inference failed during graph capture" << std::endl;
+        }
     }
     
     // 4. Postprocessing (NMS, filtering, target selection)
@@ -552,11 +580,9 @@ bool UnifiedGraphPipeline::captureDetectionGraph(cudaStream_t stream) {
 }
 
 void UnifiedGraphPipeline::checkTargetsAsync(cudaStream_t stream) {
-    // Check if detector has targets from previous frame
-    if (m_detector) {
-        auto detections = m_detector->getLatestDetectionsGPU();
-        m_prevFrameHasTarget = (detections.second > 0);
-    }
+    // Check if TensorRT has targets from previous frame (Phase 1)
+    // TODO: Implement target checking from integrated TensorRT results
+    m_prevFrameHasTarget = false;  // Placeholder until full integration
 }
 
 bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
@@ -638,14 +664,50 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
     // Always run detector after graph (or without graph)
     auto& ctx = AppContext::getInstance();
     
-    if (!ctx.getDetectionState().isPaused() && m_detector) {
+    if (!ctx.getDetectionState().isPaused()) {
         
-        // Pass capture buffer directly without creating wrapper
-        // The detector can handle the SimpleCudaMat directly
-        m_detector->processFrame(m_captureBuffer);
+        // Phase 2.3: Use integrated TensorRT pipeline with asynchronous execution
         
-        // Get detection results
-        auto detections = m_detector->getLatestDetectionsGPU();
+        // 1. Preprocessing: Convert capture buffer to YOLO input
+        if (m_d_yoloInput && !m_captureBuffer.empty()) {
+            // Phase 2.3: Optimized preprocessing pipeline
+            SimpleCudaMat tempResize, tempFloat;
+            tempResize.create(640, 640, 3);
+            tempFloat.create(640, 640, 3);
+            
+            // Convert and resize in pipeline
+            SimpleCudaMat bgrBuffer;
+            bgrBuffer.create(m_captureBuffer.rows(), m_captureBuffer.cols(), 3);
+            CudaImageProcessing::bgra2bgr(m_captureBuffer, bgrBuffer, stream);
+            CudaImageProcessing::resize(bgrBuffer, tempResize, 640, 640, stream);
+            CudaImageProcessing::convertTo(tempResize, tempFloat, m_imgScale, 0.0f, stream);
+            
+            size_t inputSize = 640 * 640 * 3 * sizeof(float);
+            cudaMemcpyAsync(m_d_yoloInput, tempFloat.data(), inputSize, 
+                           cudaMemcpyDeviceToDevice, stream);
+        }
+        
+        // 2. TensorRT Inference
+        if (m_inputBindings.find(m_inputName) != m_inputBindings.end() && m_d_yoloInput) {
+            void* inputBinding = m_inputBindings[m_inputName];
+            if (inputBinding != m_d_yoloInput) {
+                size_t inputSize = 640 * 640 * 3 * sizeof(float);
+                cudaMemcpyAsync(inputBinding, m_d_yoloInput, inputSize, 
+                               cudaMemcpyDeviceToDevice, stream);
+            }
+            
+            if (!runInferenceAsync(stream)) {
+                std::cerr << "[UnifiedGraph] TensorRT inference failed in executeGraph" << std::endl;
+                return false;
+            }
+        }
+        
+        // 3. Get TensorRT results for detection processing
+        void* rawOutput = nullptr;
+        if (!m_outputBindings.empty()) {
+            rawOutput = m_outputBindings.begin()->second;
+        }
+        std::pair<void*, int> detections = std::make_pair(rawOutput, rawOutput ? 1 : 0);
         
         // Process mouse movement if target detected AND aiming is active
         if (detections.second > 0 && detections.first && ctx.aiming) {
@@ -924,7 +986,7 @@ bool UnifiedGraphPipeline::executeDirect(cudaStream_t stream) {
     }
     
     // 2. Detection pipeline with FUSED preprocessing
-    if (m_config.enableDetection && m_detector && m_d_yoloInput) {
+    if (m_config.enableDetection && m_d_yoloInput) {
         cudaStream_t preprocessStream = m_coordinator->preprocessStream;
         
         // Wait for capture to complete
@@ -961,25 +1023,73 @@ bool UnifiedGraphPipeline::executeDirect(cudaStream_t stream) {
         
         // 2.5. YOLO 추론 실행 - Use existing processFrame for now
         auto& ctx = AppContext::getInstance();
-        if (!ctx.getDetectionState().isPaused() && m_detector) {
-            // Debug logging
+        if (!ctx.getDetectionState().isPaused()) {
+            // Use integrated TensorRT pipeline (Phase 1)
             static int processCount = 0;
             processCount++;
             if (processCount <= 10 || processCount % 100 == 0) {
-                std::cout << "[UnifiedGraph] Calling detector->processFrame, count: " << processCount << std::endl;
+                std::cout << "[UnifiedGraph] Running TensorRT inference, count: " << processCount << std::endl;
             }
             
             try {
-                // Pass capture buffer directly to detector
-                // No need to create a new wrapper - avoids memory allocation/deallocation issues
-                m_detector->processFrame(m_captureBuffer);
+                // Phase 2.3: Integrated TensorRT preprocessing and inference pipeline
                 
-                // Signal completion
+                // 1. Preprocessing: Copy and convert capture to YOLO input format  
+                if (m_d_yoloInput && !m_captureBuffer.empty()) {
+                    // Phase 2.3: Optimized preprocessing with existing CudaImageProcessing functions
+                    // Create temporary buffers for processing pipeline
+                    SimpleCudaMat tempResize, tempFloat;
+                    tempResize.create(640, 640, 3);  // BGR format for YOLO
+                    tempFloat.create(640, 640, 3);   // Float format
+                    
+                    // Step 1: Convert BGRA to BGR and resize
+                    SimpleCudaMat bgrBuffer;
+                    bgrBuffer.create(m_captureBuffer.rows(), m_captureBuffer.cols(), 3);
+                    CudaImageProcessing::bgra2bgr(m_captureBuffer, bgrBuffer, preprocessStream);
+                    
+                    // Step 2: Resize to YOLO input dimensions
+                    CudaImageProcessing::resize(bgrBuffer, tempResize, 640, 640, preprocessStream);
+                    
+                    // Step 3: Convert to float and normalize (0-1 range)
+                    CudaImageProcessing::convertTo(tempResize, tempFloat, m_imgScale, 0.0f, preprocessStream);
+                    
+                    // Step 4: Copy to YOLO input buffer
+                    size_t inputSize = 640 * 640 * 3 * sizeof(float);
+                    cudaMemcpyAsync(m_d_yoloInput, tempFloat.data(), inputSize, 
+                                   cudaMemcpyDeviceToDevice, preprocessStream);
+                }
+                
+                // 2. TensorRT Inference with optimized stream handling
+                if (m_inputBindings.find(m_inputName) != m_inputBindings.end() && m_d_yoloInput) {
+                    // Connect preprocessing output to TensorRT input
+                    void* inputBinding = m_inputBindings[m_inputName];
+                    if (inputBinding != m_d_yoloInput) {
+                        // Copy to input binding if not using shared memory
+                        size_t inputSize = 640 * 640 * 3 * sizeof(float);
+                        cudaMemcpyAsync(inputBinding, m_d_yoloInput, inputSize, 
+                                       cudaMemcpyDeviceToDevice, preprocessStream);
+                    }
+                    
+                    // Execute TensorRT inference asynchronously
+                    if (!runInferenceAsync(preprocessStream)) {
+                        std::cerr << "[UnifiedGraph] TensorRT inference failed in executeDirect" << std::endl;
+                        return false;
+                    }
+                }
+                
+                // 3. Signal inference completion for pipeline synchronization
                 cudaEventRecord(m_coordinator->inferenceComplete, preprocessStream);
                 m_coordinator->synchronizeInference(m_coordinator->postprocessStream);
                 
-                // Get detection results
-                auto detections = m_detector->getLatestDetectionsGPU();
+                // 4. Get TensorRT output for post-processing
+                // The output bindings contain the raw inference results
+                void* rawOutput = nullptr;
+                if (!m_outputBindings.empty()) {
+                    rawOutput = m_outputBindings.begin()->second;
+                }
+                
+                // 5. Basic post-processing placeholder (Phase 3 will implement full NMS pipeline)
+                std::pair<void*, int> detections = std::make_pair(rawOutput, rawOutput ? 1 : 0);
             }
             catch (const std::exception& e) {
                 std::cerr << "[UnifiedGraph] Exception in detector->processFrame: " << e.what() << std::endl;
@@ -1017,10 +1127,15 @@ bool UnifiedGraphPipeline::executeDirect(cudaStream_t stream) {
     
     // 4. Get detection results and calculate mouse movement with Bezier curve
     auto& ctx = AppContext::getInstance();
-    if (m_detector && !ctx.getDetectionState().isPaused() && ctx.aiming) {
+    if (!ctx.getDetectionState().isPaused() && ctx.aiming) {
         try {
-            // Get latest detections from detector
-            auto detections = m_detector->getLatestDetectionsGPU();
+            // Phase 2.3: Get latest detections from integrated TensorRT
+            // The detections should now be available from the asynchronous inference
+            void* rawOutput = nullptr;
+            if (!m_outputBindings.empty()) {
+                rawOutput = m_outputBindings.begin()->second;
+            }
+            std::pair<void*, int> detections = std::make_pair(rawOutput, rawOutput ? 1 : 0);
             
             if (detections.second > 0 && detections.first) {
                 // Get the first/best target
@@ -1392,6 +1507,568 @@ void UnifiedGraphPipeline::updateProfilingAsync(cudaStream_t stream) {
     // Record current frame end
     cudaEventRecord(m_state.startEvent, stream);
     cudaEventRecord(lastFrameEnd, stream);
+}
+
+// ============================================================================
+// MAIN LOOP IMPLEMENTATION
+// ============================================================================
+
+void UnifiedGraphPipeline::runMainLoop() {
+    auto& ctx = AppContext::getInstance();
+    std::cout << "[UnifiedPipeline] Starting main loop (60 FPS target)" << std::endl;
+    
+    const auto targetFrameTime = std::chrono::microseconds(16667); // 60 FPS
+    m_lastFrameTime = std::chrono::high_resolution_clock::now();
+    
+    while (!m_shouldStop && !ctx.should_exit) {
+        auto frameStart = std::chrono::high_resolution_clock::now();
+        
+        // 전체 파이프라인 실행 (캡처→추론→마우스)
+        bool success = false;
+        try {
+            success = executeGraph(m_primaryStream);
+        } catch (const std::exception& e) {
+            std::cerr << "[UnifiedPipeline] Exception in pipeline: " << e.what() << std::endl;
+            success = false;
+        }
+        
+        if (!success) {
+            // 에러 시 짧은 대기 후 재시도
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
+        }
+        
+        // 60 FPS 유지를 위한 정밀 타이밍
+        auto frameEnd = std::chrono::high_resolution_clock::now();
+        auto frameTime = frameEnd - frameStart;
+        
+        if (frameTime < targetFrameTime) {
+            std::this_thread::sleep_for(targetFrameTime - frameTime);
+        }
+        
+        // 성능 통계 업데이트 (매 100프레임마다)
+        if (m_state.frameCount % 100 == 0) {
+            auto duration = std::chrono::duration_cast<std::chrono::microseconds>(frameTime);
+            float latencyMs = duration.count() / 1000.0f;
+            updateStatistics(latencyMs);
+            
+            if (m_state.frameCount % 1000 == 0) {
+                std::cout << "[UnifiedPipeline] Frame " << m_state.frameCount 
+                          << " - Avg latency: " << m_state.avgLatency << "ms" << std::endl;
+            }
+        }
+        
+        m_lastFrameTime = frameEnd;
+    }
+    
+    std::cout << "[UnifiedPipeline] Main loop stopped after " << m_state.frameCount << " frames" << std::endl;
+}
+
+void UnifiedGraphPipeline::stopMainLoop() {
+    std::cout << "[UnifiedPipeline] Stop requested" << std::endl;
+    m_shouldStop = true;
+}
+
+// ============================================================================
+// TENSORRT ENGINE MANAGEMENT (Phase 1 Integration)
+// ============================================================================
+
+bool UnifiedGraphPipeline::initializeTensorRT(const std::string& modelFile) {
+    auto& ctx = AppContext::getInstance();
+    
+    std::cout << "[Pipeline] Initializing TensorRT with model: " << modelFile << std::endl;
+    
+    // Load the engine
+    if (!loadEngine(modelFile)) {
+        std::cerr << "[Pipeline] Failed to load engine" << std::endl;
+        return false;
+    }
+    
+    // Create execution context
+    m_context.reset(m_engine->createExecutionContext());
+    if (!m_context) {
+        std::cerr << "[Pipeline] Failed to create execution context" << std::endl;
+        return false;
+    }
+    
+    // Get input and output information
+    getInputNames();
+    getOutputNames();
+    
+    // Set up input dimensions and calculate sizes
+    if (!m_inputNames.empty()) {
+        m_inputName = m_inputNames[0];
+        m_inputDims = m_engine->getTensorShape(m_inputName.c_str());
+        
+        // Calculate input size
+        size_t inputSize = 1;
+        for (int i = 0; i < m_inputDims.nbDims; ++i) {
+            inputSize *= m_inputDims.d[i];
+        }
+        inputSize *= sizeof(float);  // Assuming float32 input
+        m_inputSizes[m_inputName] = inputSize;
+        
+        std::cout << "[Pipeline] Input '" << m_inputName << "' dimensions: ";
+        for (int i = 0; i < m_inputDims.nbDims; ++i) {
+            std::cout << m_inputDims.d[i];
+            if (i < m_inputDims.nbDims - 1) std::cout << "x";
+        }
+        std::cout << " (size: " << inputSize << " bytes)" << std::endl;
+    }
+    
+    // Calculate output sizes
+    for (const auto& outputName : m_outputNames) {
+        nvinfer1::Dims outputDims = m_engine->getTensorShape(outputName.c_str());
+        size_t outputSize = 1;
+        for (int i = 0; i < outputDims.nbDims; ++i) {
+            outputSize *= outputDims.d[i];
+        }
+        outputSize *= sizeof(float);  // Assuming float32 output
+        m_outputSizes[outputName] = outputSize;
+        
+        std::cout << "[Pipeline] Output '" << outputName << "' dimensions: ";
+        for (int i = 0; i < outputDims.nbDims; ++i) {
+            std::cout << outputDims.d[i];
+            if (i < outputDims.nbDims - 1) std::cout << "x";
+        }
+        std::cout << " (size: " << outputSize << " bytes)" << std::endl;
+    }
+    
+    // Allocate GPU memory bindings with error handling
+    try {
+        getBindings();
+    } catch (const std::exception& e) {
+        std::cerr << "[Pipeline] Failed to allocate TensorRT bindings: " << e.what() << std::endl;
+        return false;
+    }
+    
+    // Set up model-specific parameters
+    m_imgScale = 1.0f / 255.0f;  // Standard normalization for YOLO models
+    m_numClasses = 80;  // Default COCO classes, should be configured properly
+    
+    std::cout << "[Pipeline] TensorRT initialization completed successfully" << std::endl;
+    return true;
+}
+
+void UnifiedGraphPipeline::getInputNames() {
+    auto& ctx = AppContext::getInstance();
+    m_inputNames.clear();
+    m_inputSizes.clear();
+
+    for (int i = 0; i < m_engine->getNbIOTensors(); ++i) {
+        const char* name = m_engine->getIOTensorName(i);
+        if (m_engine->getTensorIOMode(name) == nvinfer1::TensorIOMode::kINPUT) {
+            m_inputNames.emplace_back(name);
+        }
+    }
+}
+
+void UnifiedGraphPipeline::getOutputNames() {
+    auto& ctx = AppContext::getInstance();
+    m_outputNames.clear();
+    m_outputSizes.clear();
+
+    for (int i = 0; i < m_engine->getNbIOTensors(); ++i) {
+        const char* name = m_engine->getIOTensorName(i);
+        if (m_engine->getTensorIOMode(name) == nvinfer1::TensorIOMode::kOUTPUT) {
+            m_outputNames.emplace_back(name);
+        }
+    }
+}
+
+void UnifiedGraphPipeline::getBindings() {
+    auto& ctx = AppContext::getInstance();
+    
+    std::cout << "[Pipeline] Setting up optimized TensorRT bindings..." << std::endl;
+    
+    // Enhanced binding management with memory reuse optimization
+    
+    // Check for existing bindings that can be reused
+    std::unordered_map<std::string, void*> reusableInputs;
+    std::unordered_map<std::string, void*> reusableOutputs;
+    
+    // Store existing bindings for potential reuse
+    for (const auto& binding : m_inputBindings) {
+        if (binding.second) {
+            reusableInputs[binding.first] = binding.second;
+        }
+    }
+    for (const auto& binding : m_outputBindings) {
+        if (binding.second) {
+            reusableOutputs[binding.first] = binding.second;
+        }
+    }
+    
+    m_inputBindings.clear();
+    m_outputBindings.clear();
+
+    // Optimized input binding allocation with reuse
+    for (const auto& name : m_inputNames) {
+        size_t size = m_inputSizes[name];
+        if (size <= 0) {
+            std::cerr << "[Pipeline] Warning: Invalid size for input '" << name << "'" << std::endl;
+            continue;
+        }
+        
+        void* ptr = nullptr;
+        
+        // Try to reuse existing allocation if size matches
+        auto reusableIt = reusableInputs.find(name);
+        if (reusableIt != reusableInputs.end()) {
+            ptr = reusableIt->second;
+            reusableInputs.erase(reusableIt); // Remove from reusable list
+            std::cout << "[Pipeline] Reusing input '" << name << "': " << size << " bytes" << std::endl;
+        } else {
+            // Allocate new memory with alignment optimization
+            cudaError_t err = cudaMalloc(&ptr, size);
+            if (err == cudaSuccess && ptr != nullptr) {
+                std::cout << "[Pipeline] Allocated input '" << name << "': " << size << " bytes" << std::endl;
+            } else {
+                std::cerr << "[Pipeline] Failed to allocate input memory for '" << name << "': " << cudaGetErrorString(err) << std::endl;
+                
+                // Clean up reusable memory before throwing
+                for (auto& reusable : reusableInputs) {
+                    cudaFree(reusable.second);
+                }
+                for (auto& reusable : reusableOutputs) {
+                    cudaFree(reusable.second);
+                }
+                throw std::runtime_error("Failed to allocate TensorRT input memory");
+            }
+        }
+        
+        m_inputBindings[name] = ptr;
+        
+        // Connect to existing pipeline buffers where possible
+        if (name == m_inputName && m_d_yoloInput) {
+            // Use existing preprocessing buffer for YOLO input
+            if (ptr != m_d_yoloInput) {
+                std::cout << "[Pipeline] Input binding will use existing preprocessing buffer" << std::endl;
+            }
+        }
+    }
+
+    // Optimized output binding allocation with reuse
+    for (const auto& name : m_outputNames) {
+        size_t size = m_outputSizes[name];
+        if (size <= 0) {
+            std::cerr << "[Pipeline] Warning: Invalid size for output '" << name << "'" << std::endl;
+            continue;
+        }
+        
+        void* ptr = nullptr;
+        
+        // Try to reuse existing allocation if size matches
+        auto reusableIt = reusableOutputs.find(name);
+        if (reusableIt != reusableOutputs.end()) {
+            ptr = reusableIt->second;
+            reusableOutputs.erase(reusableIt); // Remove from reusable list
+            std::cout << "[Pipeline] Reusing output '" << name << "': " << size << " bytes" << std::endl;
+        } else {
+            // Allocate new memory with alignment optimization
+            cudaError_t err = cudaMalloc(&ptr, size);
+            if (err == cudaSuccess && ptr != nullptr) {
+                std::cout << "[Pipeline] Allocated output '" << name << "': " << size << " bytes" << std::endl;
+            } else {
+                std::cerr << "[Pipeline] Failed to allocate output memory for '" << name << "': " << cudaGetErrorString(err) << std::endl;
+                
+                // Clean up reusable memory before throwing
+                for (auto& reusable : reusableInputs) {
+                    cudaFree(reusable.second);
+                }
+                for (auto& reusable : reusableOutputs) {
+                    cudaFree(reusable.second);
+                }
+                throw std::runtime_error("Failed to allocate TensorRT output memory");
+            }
+        }
+        
+        m_outputBindings[name] = ptr;
+        
+        // Connect to existing pipeline buffers where possible
+        if (m_d_inferenceOutput == nullptr) {
+            m_d_inferenceOutput = (float*)ptr;
+            std::cout << "[Pipeline] Output binding connected to inference output buffer" << std::endl;
+        }
+    }
+    
+    // Clean up any unused reusable memory
+    for (auto& reusable : reusableInputs) {
+        cudaError_t err = cudaFree(reusable.second);
+        if (err != cudaSuccess) {
+            std::cerr << "[Pipeline] Warning: Failed to free unused input binding: " << cudaGetErrorString(err) << std::endl;
+        }
+    }
+    for (auto& reusable : reusableOutputs) {
+        cudaError_t err = cudaFree(reusable.second);
+        if (err != cudaSuccess) {
+            std::cerr << "[Pipeline] Warning: Failed to free unused output binding: " << cudaGetErrorString(err) << std::endl;
+        }
+    }
+    
+    // Validate all bindings are properly set
+    if (m_inputBindings.size() != m_inputNames.size()) {
+        std::cerr << "[Pipeline] Warning: Input binding count mismatch" << std::endl;
+    }
+    if (m_outputBindings.size() != m_outputNames.size()) {
+        std::cerr << "[Pipeline] Warning: Output binding count mismatch" << std::endl;
+    }
+    
+    std::cout << "[Pipeline] Optimized TensorRT bindings setup completed" << std::endl;
+}
+
+nvinfer1::ICudaEngine* UnifiedGraphPipeline::buildEngineFromOnnx(const std::string& onnxPath) {
+    class SimpleLogger : public nvinfer1::ILogger {
+        void log(Severity severity, const char* msg) noexcept override {
+            // Suppress TensorRT internal errors
+            if (severity <= Severity::kERROR && 
+                (strstr(msg, "defaultAllocator.cpp") == nullptr) &&
+                (strstr(msg, "enqueueV3") == nullptr)) {
+                std::cout << "[TensorRT] " << msg << std::endl;
+            }
+        }
+    };
+    static SimpleLogger logger;
+
+    auto& ctx = AppContext::getInstance();
+    
+    std::unique_ptr<nvinfer1::IBuilder> builder(nvinfer1::createInferBuilder(logger));
+    if (!builder) return nullptr;
+
+    std::unique_ptr<nvinfer1::INetworkDefinition> network(builder->createNetworkV2(1U << static_cast<uint32_t>(nvinfer1::NetworkDefinitionCreationFlag::kEXPLICIT_BATCH)));
+    if (!network) return nullptr;
+
+    std::unique_ptr<nvonnxparser::IParser> parser(nvonnxparser::createParser(*network, logger));
+    if (!parser) return nullptr;
+
+    if (!parser->parseFromFile(onnxPath.c_str(), static_cast<int>(nvinfer1::ILogger::Severity::kWARNING))) {
+        std::cerr << "[Pipeline] Failed to parse ONNX file: " << onnxPath << std::endl;
+        return nullptr;
+    }
+
+    std::unique_ptr<nvinfer1::IBuilderConfig> config(builder->createBuilderConfig());
+    if (!config) return nullptr;
+
+    config->setMemoryPoolLimit(nvinfer1::MemoryPoolType::kWORKSPACE, 1U << 30); // 1GB
+
+    // More aggressive TensorRT optimizations
+    if (ctx.config.tensorrt_fp16 && builder->platformHasFastFp16()) {
+        config->setFlag(nvinfer1::BuilderFlag::kFP16);
+        std::cout << "[Pipeline] FP16 optimization enabled" << std::endl;
+    }
+    
+    // Additional optimization flags
+    config->setFlag(nvinfer1::BuilderFlag::kGPU_FALLBACK);
+    config->setFlag(nvinfer1::BuilderFlag::kPREFER_PRECISION_CONSTRAINTS);
+    
+    // Enable tactics sources for better kernel selection
+    config->setTacticSources(
+        1U << static_cast<uint32_t>(nvinfer1::TacticSource::kCUBLAS) |
+        1U << static_cast<uint32_t>(nvinfer1::TacticSource::kCUBLAS_LT) |
+        1U << static_cast<uint32_t>(nvinfer1::TacticSource::kCUDNN)
+    );
+    
+    // Profiling for optimal kernel selection
+    config->setProfilingVerbosity(nvinfer1::ProfilingVerbosity::kDETAILED);
+
+    // Create optimization profile for dynamic inputs
+    auto profile = builder->createOptimizationProfile();
+    if (!profile) {
+        std::cerr << "[Pipeline] Failed to create optimization profile" << std::endl;
+        return nullptr;
+    }
+
+    // Set optimization profile for the input (assuming batch size = 1, channels = 3, and dynamic height/width)
+    const char* inputName = network->getInput(0)->getName();
+    nvinfer1::Dims inputDims = network->getInput(0)->getDimensions();
+    
+    // For YOLO models, typically the input is [1, 3, height, width]
+    // Set min, opt, and max dimensions - using the config's input resolution
+    int resolution = ctx.config.onnx_input_resolution;
+    nvinfer1::Dims minDims = nvinfer1::Dims4{1, 3, resolution, resolution};
+    nvinfer1::Dims optDims = nvinfer1::Dims4{1, 3, resolution, resolution};
+    nvinfer1::Dims maxDims = nvinfer1::Dims4{1, 3, resolution, resolution};
+    
+    profile->setDimensions(inputName, nvinfer1::OptProfileSelector::kMIN, minDims);
+    profile->setDimensions(inputName, nvinfer1::OptProfileSelector::kOPT, optDims);
+    profile->setDimensions(inputName, nvinfer1::OptProfileSelector::kMAX, maxDims);
+    
+    config->addOptimizationProfile(profile);
+
+    return builder->buildEngineWithConfig(*network, *config);
+}
+
+bool UnifiedGraphPipeline::loadEngine(const std::string& modelFile) {
+    auto& ctx = AppContext::getInstance();
+    std::string engineFilePath;
+    std::filesystem::path modelPath(modelFile);
+    std::string extension = modelPath.extension().string();
+    
+    std::cout << "[Pipeline] loadEngine called with: " << modelFile << std::endl;
+    std::cout << "[Pipeline] File extension: " << extension << std::endl;
+
+    if (extension == ".engine") {
+        engineFilePath = modelFile;
+        std::cout << "[Pipeline] Using engine file directly: " << engineFilePath << std::endl;
+    } else if (extension == ".onnx") {
+        // generate engine filename with resolution and precision suffixes
+        std::string baseName = modelPath.stem().string();
+        baseName += "_" + std::to_string(ctx.config.onnx_input_resolution);
+        if (ctx.config.export_enable_fp16) baseName += "_fp16";
+        if (ctx.config.export_enable_fp8)  baseName += "_fp8";
+        std::string engineFilename = baseName + ".engine";
+        engineFilePath = (modelPath.parent_path() / engineFilename).string();
+
+        if (!fileExists(engineFilePath)) {
+            std::cout << "[Pipeline] Building engine from ONNX model" << std::endl;
+
+            nvinfer1::ICudaEngine* builtEngine = buildEngineFromOnnx(modelFile);
+            if (builtEngine) {
+                nvinfer1::IHostMemory* serializedEngine = builtEngine->serialize();
+
+                if (serializedEngine) {
+                    std::ofstream engineFile(engineFilePath, std::ios::binary);
+                    if (engineFile) {
+                        engineFile.write(reinterpret_cast<const char*>(serializedEngine->data()), serializedEngine->size());
+                        engineFile.close();
+                        
+                        std::cout << "[Pipeline] Engine saved to: " << engineFilePath << std::endl;
+                    }
+                    delete serializedEngine;
+                }
+                delete builtEngine;
+            }
+        }
+    } else {
+        std::cerr << "[Pipeline] Unsupported model format: " << extension << std::endl;
+        return false;
+    }
+
+    // Load engine from file
+    class SimpleLogger : public nvinfer1::ILogger {
+        void log(Severity severity, const char* msg) noexcept override {
+            // Suppress TensorRT internal errors
+            if (severity <= Severity::kERROR && 
+                (strstr(msg, "defaultAllocator.cpp") == nullptr) &&
+                (strstr(msg, "enqueueV3") == nullptr)) {
+                std::cout << "[TensorRT] " << msg << std::endl;
+            }
+        }
+    };
+    static SimpleLogger logger;
+
+    std::ifstream file(engineFilePath, std::ios::binary);
+    if (!file.is_open()) {
+        std::cerr << "[Pipeline] Failed to open engine file: " << engineFilePath << std::endl;
+        return false;
+    }
+
+    file.seekg(0, std::ios::end);
+    size_t size = file.tellg();
+    file.seekg(0, std::ios::beg);
+
+    std::vector<char> buffer(size);
+    file.read(buffer.data(), size);
+    file.close();
+
+    if (!m_runtime) {
+        m_runtime.reset(nvinfer1::createInferRuntime(logger));
+        if (!m_runtime) {
+            std::cerr << "[Pipeline] Failed to create runtime" << std::endl;
+            return false;
+        }
+    }
+
+    m_engine.reset(m_runtime->deserializeCudaEngine(buffer.data(), size));
+    
+    if (m_engine) {
+        std::cout << "[Pipeline] Engine loaded successfully!" << std::endl;
+        return true;
+    } else {
+        std::cerr << "[Pipeline] Failed to load engine from: " << engineFilePath << std::endl;
+        return false;
+    }
+}
+
+bool UnifiedGraphPipeline::runInferenceAsync(cudaStream_t stream) {
+    // Validate TensorRT components
+    if (!m_context || !m_engine) {
+        std::cerr << "[Pipeline] TensorRT context or engine not initialized" << std::endl;
+        return false;
+    }
+    
+    // Use default stream if none provided
+    if (!stream) {
+        stream = m_primaryStream;
+    }
+    
+    // Clear any previous CUDA errors
+    cudaGetLastError();
+    
+    // Optimized tensor address setting with validation
+    // Pre-check input bindings before setting addresses
+    for (const auto& inputName : m_inputNames) {
+        auto bindingIt = m_inputBindings.find(inputName);
+        if (bindingIt == m_inputBindings.end() || bindingIt->second == nullptr) {
+            std::cerr << "[Pipeline] Input binding not found or null for: " << inputName << std::endl;
+            return false;
+        }
+        
+        if (!m_context->setTensorAddress(inputName.c_str(), bindingIt->second)) {
+            std::cerr << "[Pipeline] Failed to set input tensor address for: " << inputName << std::endl;
+            return false;
+        }
+    }
+    
+    // Set output tensor addresses with validation
+    for (const auto& outputName : m_outputNames) {
+        auto bindingIt = m_outputBindings.find(outputName);
+        if (bindingIt == m_outputBindings.end() || bindingIt->second == nullptr) {
+            std::cerr << "[Pipeline] Output binding not found or null for: " << outputName << std::endl;
+            return false;
+        }
+        
+        if (!m_context->setTensorAddress(outputName.c_str(), bindingIt->second)) {
+            std::cerr << "[Pipeline] Failed to set output tensor address for: " << outputName << std::endl;
+            return false;
+        }
+    }
+    
+    // Validate input data integrity before inference
+    if (m_inputBindings.find(m_inputName) != m_inputBindings.end()) {
+        cudaError_t memErr = cudaGetLastError();
+        if (memErr != cudaSuccess) {
+            std::cerr << "[Pipeline] CUDA memory error before inference: " << cudaGetErrorString(memErr) << std::endl;
+            return false;
+        }
+    }
+    
+    // Execute TensorRT inference with enhanced error handling
+    bool success = m_context->enqueueV3(stream);
+    if (!success) {
+        // Get more detailed error information
+        cudaError_t cudaErr = cudaGetLastError();
+        std::cerr << "[Pipeline] TensorRT inference failed";
+        if (cudaErr != cudaSuccess) {
+            std::cerr << " - CUDA error: " << cudaGetErrorString(cudaErr);
+        }
+        std::cerr << std::endl;
+        return false;
+    }
+    
+    // Record inference completion event for pipeline synchronization
+    if (m_detectionEvent) {
+        cudaEventRecord(m_detectionEvent, stream);
+    }
+    
+    return true;
+}
+
+void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) {
+    // Placeholder for Phase 3 - Post-processing integration
+    // This will be implemented when we integrate the post-processing pipeline
+    // For now, this is just a placeholder to complete the Phase 1 interface
+    std::cout << "[Pipeline] performIntegratedPostProcessing called (placeholder)" << std::endl;
 }
 
 } // namespace needaimbot
