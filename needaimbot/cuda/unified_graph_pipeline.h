@@ -5,6 +5,7 @@
 #include <vector>
 #include <memory>
 #include <atomic>
+#include <chrono>
 #include <mutex>
 #include <unordered_map>
 #include "simple_cuda_mat.h"

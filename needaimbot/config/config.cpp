@@ -165,7 +165,7 @@ bool Config::loadConfig(const std::string& filename)
         distance_weight = 1.0f;  // Only use distance
         sticky_target_threshold = 0.0f; // Always switch to closest target
         max_detections = 30;  // Reduced from 100 for better performance
-        postprocess = "yolo12";
+        postprocess = "yolo11";  // Changed from yolo12 to match common model format
         export_enable_fp8 = false;
         export_enable_fp16 = true;
         tensorrt_fp16 = true;
@@ -370,7 +370,7 @@ bool Config::loadConfig(const std::string& filename)
     distance_weight = static_cast<float>(get_double_ini("AI", "distance_weight", 1.0)); 
     sticky_target_threshold = static_cast<float>(get_double_ini("AI", "sticky_target_threshold", 0.0));
     max_detections = get_long_ini("AI", "max_detections", 30);
-    postprocess = get_string_ini("AI", "postprocess", "yolo12");
+    postprocess = get_string_ini("AI", "postprocess", "yolo11");  // Changed default from yolo12 to yolo11
     export_enable_fp8 = get_bool_ini("AI", "export_enable_fp8", false);
     export_enable_fp16 = get_bool_ini("AI", "export_enable_fp16", true);
     tensorrt_fp16 = get_bool_ini("AI", "tensorrt_fp16", true);
