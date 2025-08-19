@@ -1589,9 +1589,9 @@ void UnifiedGraphPipeline::updateProfilingAsync(cudaStream_t stream) {
 
 void UnifiedGraphPipeline::runMainLoop() {
     auto& ctx = AppContext::getInstance();
-    std::cout << "[UnifiedPipeline] Starting main loop (60 FPS target)" << std::endl;
+    std::cout << "[UnifiedPipeline] Starting main loop (" << ctx.config.target_fps << " FPS target)" << std::endl;
     
-    const auto targetFrameTime = std::chrono::microseconds(16667); // 60 FPS
+    const auto targetFrameTime = std::chrono::microseconds(static_cast<int64_t>(1000000.0f / ctx.config.target_fps));
     m_lastFrameTime = std::chrono::high_resolution_clock::now();
     
     while (!m_shouldStop && !ctx.should_exit) {
@@ -1612,7 +1612,7 @@ void UnifiedGraphPipeline::runMainLoop() {
             continue;
         }
         
-        // 60 FPS 유지를 위한 정밀 타이밍
+        // 목표 FPS 유지를 위한 정밀 타이밍
         auto frameEnd = std::chrono::high_resolution_clock::now();
         auto frameTime = frameEnd - frameStart;
         
