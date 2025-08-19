@@ -237,14 +237,14 @@ static void draw_class_settings()
             ImGui::TableSetColumnIndex(2);
             if (ImGui::Checkbox("##Allow", &setting.allow)) {
                 SAVE_PROFILE();
-                if (ctx.detector) ctx.detector->m_allow_flags_need_update = true;
+                // TODO: Implement flag update for TensorRT integration
             }
 
             ImGui::TableSetColumnIndex(3);
             if (UIHelpers::BeautifulButton("Remove", ImVec2(-1, 0))) {
                 ctx.config.class_settings.erase(ctx.config.class_settings.begin() + i);
                 SAVE_PROFILE();
-                if (ctx.detector) ctx.detector->m_allow_flags_need_update = true;
+                // TODO: Implement flag update for TensorRT integration
                 ImGui::PopID(); 
                 i--; 
                 continue; 
@@ -300,7 +300,7 @@ static void draw_class_settings()
         if (!id_exists && !temp_name.empty()) {
             ctx.config.class_settings.emplace_back(new_class_id, temp_name, new_class_allow);
             SAVE_PROFILE();
-            if (ctx.detector) ctx.detector->m_allow_flags_need_update = true;
+            // TODO: Implement flag update for TensorRT integration
             
             new_class_id = CommonHelpers::getNextClassId();
             new_class_name_buf[0] = '\0'; 

@@ -118,6 +118,8 @@ public:
     void getBindings();
     bool runInferenceAsync(cudaStream_t stream);
     void performIntegratedPostProcessing(cudaStream_t stream);
+
+    void performTargetSelection(cudaStream_t stream);
     
     // Main loop methods
     void runMainLoop();
@@ -217,6 +219,27 @@ private:
     Target* m_d_selectedTarget = nullptr;  // Selected target
     Target* m_d_trackedTarget = nullptr;   // After Kalman tracking
     Target* m_d_trackedTargets = nullptr;  // Multiple tracked targets
+    
+    // Post-processing buffers (Phase 3 integration)
+    Target* m_d_decodedTargets = nullptr;      // Decoded detections from inference
+    int* m_d_decodedCount = nullptr;           // Count of decoded detections
+    Target* m_d_finalTargets = nullptr;        // Final NMS output
+    int* m_d_finalTargetsCount = nullptr;      // Final count after NMS
+    Target* m_d_classFilteredTargets = nullptr; // After class filtering
+    int* m_d_classFilteredCount = nullptr;     // Count after class filtering
+    Target* m_d_colorFilteredTargets = nullptr; // After color filtering
+    int* m_d_colorFilteredCount = nullptr;     // Count after color filtering
+    
+    // Class filtering control buffer
+    unsigned char* m_d_allowFlags = nullptr;   // Class filtering flags
+    
+    // Additional post-processing metadata
+    std::unordered_map<std::string, std::vector<int64_t>> m_outputShapes;
+    std::unordered_map<std::string, nvinfer1::DataType> m_outputTypes;
+    
+    // Target selection buffers
+    int* m_d_bestTargetIndex = nullptr;        // Selected target index
+    Target* m_d_bestTarget = nullptr;          // Selected target data
     float* m_d_outputBuffer = nullptr;     // Final output buffer
     
     // Pinned host memory for zero-copy access

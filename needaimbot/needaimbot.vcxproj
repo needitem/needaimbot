@@ -20,9 +20,7 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="capture\gpu_capture.cpp" />
     <ClCompile Include="config\config.cpp" />
-    <ClCompile Include="detector\detector.cpp" />
     <ClCompile Include="imgui\imgui.cpp" />
     <ClCompile Include="imgui\imgui_draw.cpp" />
     <ClCompile Include="imgui\imgui_impl_dx11.cpp" />
@@ -109,10 +107,8 @@
     <ClInclude Include="cuda\pd_controller.h" />
     <ClInclude Include="cuda\pd_controller_shared.h" />
     <ClInclude Include="cuda\mouse_interface.h" />
-    <ClInclude Include="capture\gpu_capture.h" />
     <ClInclude Include="detector\CudaBuffer.h" />
     <ClInclude Include="config\config.h" />
-    <ClInclude Include="detector\detector.h" />
     <ClInclude Include="cuda\detection\filterGpu.h" />
     <ClInclude Include="cuda\detection\postProcessGpu.h" />
     <ClInclude Include="cuda\detection\batchedResults.h" />

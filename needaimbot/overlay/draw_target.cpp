@@ -10,7 +10,6 @@
 #include "needaimbot.h"
 #include "other_tools.h"
 #include "memory_images.h"
-#include "../detector/detector.h"
 
 ID3D11ShaderResourceView* bodyTexture = nullptr;
 ImVec2 bodyImageSize;
@@ -48,9 +47,8 @@ void draw_target()
     
     if (ctx.config.enable_target_lock) {
         // Show lock status
-        if (ctx.detector && ctx.detector->m_isTargetLocked) {
-            ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "🔒 LOCKED [Track ID: %d]", ctx.detector->m_lockedTrackId);
-        } else {
+        // TODO: Implement target lock status for TensorRT integration
+        {
             ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "🔓 NO LOCK");
         }
     }

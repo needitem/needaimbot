@@ -20,7 +20,6 @@
 
 
 class MouseThread; // Forward declaration
-class Detector;
 class RecoilControlThread; // Forward declaration
 
 // Mouse movement event structure
@@ -106,7 +105,7 @@ public:
     
     // Modules
     MouseThread* mouseThread = nullptr;  // Stack allocated in main, so using raw pointer
-    Detector* detector = nullptr;  // Raw pointer, lifetime managed externally
+    // Detector removed - TensorRT is now integrated into UnifiedGraphPipeline
 
     // Overlay Target Data (TODO: DetectionState로 이동됨)
     
