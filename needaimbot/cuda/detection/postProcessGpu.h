@@ -1,7 +1,7 @@
 #pragma once
 
 #include "postProcess.h"
-#include "../detector/detector.h"
+#include "../../core/Target.h"
 #include <cuda_runtime.h>
 #include <cstdint>
 

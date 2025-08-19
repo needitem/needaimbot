@@ -107,7 +107,6 @@
     <ClInclude Include="cuda\pd_controller.h" />
     <ClInclude Include="cuda\pd_controller_shared.h" />
     <ClInclude Include="cuda\mouse_interface.h" />
-    <ClInclude Include="detector\CudaBuffer.h" />
     <ClInclude Include="config\config.h" />
     <ClInclude Include="cuda\detection\filterGpu.h" />
     <ClInclude Include="cuda\detection\postProcessGpu.h" />
@@ -229,7 +228,7 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LinkIncremental>false</LinkIncremental>
-    <IncludePath>$(MSBuildProjectDirectory);$(MSBuildProjectDirectory)\imgui;$(MSBuildProjectDirectory)\keyboard;$(MSBuildProjectDirectory)\config;$(MSBuildProjectDirectory)\detector;$(MSBuildProjectDirectory)\capture;$(MSBuildProjectDirectory)\postprocess;$(MSBuildProjectDirectory)\mouse;$(MSBuildProjectDirectory)\overlay;$(WindowsSDK_IncludePath);$(WindowsSDK_IncludePath)\cppwinrt;$(MSBuildProjectDirectory)\modules\TensorRT-10.8.0.43\include;include;$(ProgramW6432)\NVIDIA GPU Computing Toolkit\CUDA\v12.8\include;$(ProgramW6432)\NVIDIA\CUDNN\v9.7\include\12.8;$(IncludePath)</IncludePath>
+    <IncludePath>$(MSBuildProjectDirectory);$(MSBuildProjectDirectory)\imgui;$(MSBuildProjectDirectory)\keyboard;$(MSBuildProjectDirectory)\config;$(MSBuildProjectDirectory)\capture;$(MSBuildProjectDirectory)\postprocess;$(MSBuildProjectDirectory)\mouse;$(MSBuildProjectDirectory)\overlay;$(WindowsSDK_IncludePath);$(WindowsSDK_IncludePath)\cppwinrt;$(MSBuildProjectDirectory)\modules\TensorRT-10.8.0.43\include;include;$(ProgramW6432)\NVIDIA GPU Computing Toolkit\CUDA\v12.8\include;$(ProgramW6432)\NVIDIA\CUDNN\v9.7\include\12.8;$(IncludePath)</IncludePath>
     <LibraryPath>$(MSBuildProjectDirectory)\modules\\TensorRT-10.8.0.43\lib;$(ProgramW6432)\NVIDIA GPU Computing Toolkit\CUDA\v12.8\lib\x64;$(ProgramW6432)\NVIDIA\CUDNN\v9.7\lib\12.8;$(MSBuildProjectDirectory)\modules\glfw-3.4.bin.WIN64\lib-vc2022;$(LibraryPath)</LibraryPath>
     <TargetName>GamePerformanceAnalyzer</TargetName>
   </PropertyGroup>
