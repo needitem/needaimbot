@@ -1802,7 +1802,17 @@ bool UnifiedGraphPipeline::initializeTensorRT(const std::string& modelFile) {
     
     // Set up model-specific parameters
     m_imgScale = 1.0f / 255.0f;  // Standard normalization for YOLO models
-    m_numClasses = 80;  // Default COCO classes, should be configured properly
+    
+    // Determine number of classes from output shape
+    // Output shape is typically [batch, rows, boxes] where rows = 4 + num_classes
+    const auto& outputShape = m_outputShapes[m_outputNames[0]];
+    if (outputShape.size() >= 2) {
+        m_numClasses = static_cast<int>(outputShape[1]) - 4;  // rows - 4 (bbox coords)
+        std::cout << "[Pipeline] Detected " << m_numClasses << " classes from model output shape" << std::endl;
+    } else {
+        m_numClasses = 80;  // Default COCO classes as fallback
+        std::cout << "[Pipeline] Using default 80 classes (COCO)" << std::endl;
+    }
     
     std::cout << "[Pipeline] TensorRT initialization completed successfully" << std::endl;
     return true;
@@ -2222,6 +2232,11 @@ bool UnifiedGraphPipeline::runInferenceAsync(cudaStream_t stream) {
         }
     }
     
+    // Debug: Print input buffer info before inference
+    std::cout << "[DEBUG] Running inference with input: " << m_inputName 
+              << ", dims: " << m_inputDims.d[0] << "x" << m_inputDims.d[1] 
+              << "x" << m_inputDims.d[2] << "x" << m_inputDims.d[3] << std::endl;
+    
     // Execute TensorRT inference with enhanced error handling
     bool success = m_context->enqueueV3(stream);
     if (!success) {
@@ -2233,6 +2248,17 @@ bool UnifiedGraphPipeline::runInferenceAsync(cudaStream_t stream) {
         }
         std::cerr << std::endl;
         return false;
+    }
+    
+    // Debug: Print output shape after inference
+    for (const auto& outputName : m_outputNames) {
+        const auto& shape = m_outputShapes[outputName];
+        std::cout << "[DEBUG] Output '" << outputName << "' shape: ";
+        for (size_t i = 0; i < shape.size(); i++) {
+            std::cout << shape[i];
+            if (i < shape.size() - 1) std::cout << "x";
+        }
+        std::cout << std::endl;
     }
     
     // Record inference completion event for pipeline synchronization
@@ -2298,6 +2324,14 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
     // Step 1: Decode YOLO output based on model type
     int maxDecodedTargets = 300;  // Reasonable buffer for detections
     cudaError_t decodeErr = cudaSuccess;
+    
+    // Debug: Print which postprocess method is being used
+    std::cout << "[DEBUG] Using postprocess method: " << cached_postprocess << std::endl;
+    std::cout << "[DEBUG] Shape size: " << shape.size() << ", shape values: ";
+    for (auto s : shape) {
+        std::cout << s << " ";
+    }
+    std::cout << std::endl;
     
     if (cached_postprocess == "yolo10") {
         int max_candidates = (shape.size() > 1) ? static_cast<int>(shape[1]) : 0;
@@ -2384,6 +2418,9 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
         }
         return;
     }
+    
+    // Debug: Print decoded count
+    std::cout << "[DEBUG] Decoded detections count: " << decodedCount << std::endl;
 
     // Early exit if no detections were decoded
     if (decodedCount == 0) {
