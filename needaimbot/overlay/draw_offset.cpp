@@ -5,6 +5,7 @@
 #include "draw_settings.h"
 #include "ui_helpers.h"
 #include "cuda/simple_cuda_mat.h"
+#include "cuda/unified_graph_pipeline.h"
 #include <d3d11.h>
 
 extern ID3D11ShaderResourceView* bodyTexture;
@@ -380,10 +381,24 @@ void renderOffsetTab()
                 return;
             }
             
-            // TODO: Get current frame from TensorRT integrated pipeline
-            // Frame upload temporarily disabled during Phase 1 integration
-            {
-                ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Waiting for frame...");
+            // Get current frame from TensorRT integrated pipeline
+            auto& pipelineManager = needaimbot::PipelineManager::getInstance();
+            auto* pipeline = pipelineManager.getPipeline();
+            
+            if (pipeline) {
+                // Get capture buffer from pipeline
+                const SimpleCudaMat& captureFrame = pipeline->getCaptureBuffer();
+                
+                
+                if (!captureFrame.empty()) {
+                    // Upload GPU frame directly to D3D11 texture for ImGui display
+                    uploadDebugFrame(captureFrame);
+                    
+                } else {
+                    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Capture buffer empty");
+                }
+            } else {
+                ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Pipeline not available");
             }
         } catch (const std::exception& e) {
             ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Error uploading frame: %s", e.what());
@@ -397,12 +412,14 @@ void renderOffsetTab()
             
             ImGui::SliderFloat("Preview Scale", &debug_scale, 0.1f, 3.0f, "%.1fx");
             
+            
             if (g_debugSRV && texW > 0 && texH > 0 && texW < 10000 && texH < 10000) {
                 // Validate scale
                 float safe_scale = debug_scale;
                 if (safe_scale <= 0 || safe_scale > 10.0f) safe_scale = 1.0f;
                 
                 ImVec2 image_size(texW * safe_scale, texH * safe_scale);
+                
                 
                 // Safety check for ImGui rendering
                 if (image_size.x > 0 && image_size.y > 0 && image_size.x < 10000 && image_size.y < 10000) {
