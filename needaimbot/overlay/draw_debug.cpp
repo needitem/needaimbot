@@ -10,13 +10,13 @@
 // #include "../capture/capture.h" - removed, using GPU capture now 
 #include <cuda_runtime.h> 
 #include "../cuda/detection/postProcess.h" 
-#include "../cuda/capture/color_conversion.h"
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <iostream>
 // OpenCV removed - using custom CUDA utilities
-#include "../cuda/simple_cuda_mat.h" 
+#include "../cuda/simple_cuda_mat.h"
+#include "../cuda/preprocessing.h" 
 
 
 
