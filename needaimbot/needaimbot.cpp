@@ -13,7 +13,6 @@
 #include "AppContext.h"
 #include "core/constants.h"
 #include "utils/constants.h"
-#include "detector/detector.h"
 #include "cuda/unified_graph_pipeline.h"
 #include "mouse/mouse.h"
 #include "mouse/recoil_control_thread.h"
@@ -46,7 +45,6 @@
 // Global variable definitions
 std::atomic<bool> should_exit{false};
 std::mutex configMutex;
-// std::atomic<bool> detector_model_changed{false}; // Moved to DetectionState
 std::atomic<bool> detection_resolution_changed{false};
 std::atomic<bool> capture_borders_changed{false};
 std::atomic<bool> capture_cursor_changed{false};
@@ -556,19 +554,18 @@ int main()
             ctx.mouseThread->setInputMethod(nullptr);
         }
         
-        // 3. 검출기 중지
-        // 4. 스레드들을 안전하게 종료 (ThreadManager가 자동으로 처리)
+        // 3. 스레드들을 안전하게 종료 (ThreadManager가 자동으로 처리)
         std::cout << "[MAIN] Waiting for threads to finish..." << std::endl;
         
         // ThreadManager destructors will automatically stop and join threads
         // This happens in reverse order of construction (LIFO)
 
-        // 5. 자원 정리
+        // 4. 자원 정리
         // TensorRT integrated pipeline cleanup
         pipelineManager.shutdownPipeline();
         std::cout << "[MAIN] TensorRT Integrated Pipeline shut down." << std::endl;
         
-        // 6. Windows 마우스 상태 정리
+        // 5. Windows 마우스 상태 정리
         std::cout << "[MAIN] Resetting Windows mouse state..." << std::endl;
         // 마우스 버튼이 눌려있을 수 있으므로 강제로 릴리스
         INPUT input = {0};
