@@ -433,30 +433,20 @@ int main()
     
     // Check for administrator privileges
     if (!IsRunAsAdministrator()) {
-        std::cout << "[INFO] Administrator privileges required for optimal performance." << std::endl;
-        std::cout << "[INFO] Requesting administrator privileges..." << std::endl;
+        std::cout << "[INFO] Administrator privileges required for optimal performance:" << std::endl;
+        std::cout << "[INFO] • High process priority (better performance)" << std::endl;
+        std::cout << "[INFO] • Access to system performance counters" << std::endl;
+        std::cout << "[INFO] • Optimal GPU scheduling" << std::endl;
+        std::cout << "[INFO] Automatically requesting administrator privileges..." << std::endl;
         
-        // Ask user if they want to restart with admin privileges
-        int result = MessageBoxW(NULL, 
-            L"Gaming Performance Analyzer requires administrator privileges for:\n\n"
-            L"• High process priority (better performance)\n"
-            L"• Access to system performance counters\n"
-            L"• Optimal GPU scheduling\n\n"
-            L"Would you like to restart with administrator privileges?",
-            L"Administrator Privileges Required", 
-            MB_YESNO | MB_ICONQUESTION);
-        
-        if (result == IDYES) {
-            if (RestartAsAdministrator()) {
-                // Exit current process as we're restarting with admin
-                return 0;
-            } else {
-                std::cout << "[WARNING] Failed to restart with administrator privileges." << std::endl;
-                std::cout << "[WARNING] Running with limited performance capabilities." << std::endl;
-            }
+        // Automatically restart with admin privileges
+        if (RestartAsAdministrator()) {
+            // Exit current process as we're restarting with admin
+            std::cout << "[INFO] Restarting with administrator privileges..." << std::endl;
+            return 0;
         } else {
-            std::cout << "[WARNING] Running without administrator privileges." << std::endl;
-            std::cout << "[WARNING] Performance may be limited in some scenarios." << std::endl;
+            std::cout << "[WARNING] Failed to restart with administrator privileges." << std::endl;
+            std::cout << "[WARNING] Running with limited performance capabilities." << std::endl;
         }
     } else {
         std::cout << "[INFO] Running with administrator privileges." << std::endl;
