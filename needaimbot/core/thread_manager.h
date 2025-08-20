@@ -12,8 +12,8 @@ class ThreadManager {
 public:
     using ThreadFunc = std::function<void()>;
     
-    ThreadManager(const std::string& name, ThreadFunc func, int priority = THREAD_PRIORITY_NORMAL)
-        : thread_name_(name), running_(false), priority_(priority) {
+    ThreadManager(const std::string& name, ThreadFunc func)
+        : thread_name_(name), running_(false) {
         thread_func_ = std::move(func);
     }
     
@@ -30,8 +30,7 @@ public:
         : thread_(std::move(other.thread_)),
           thread_name_(std::move(other.thread_name_)),
           thread_func_(std::move(other.thread_func_)),
-          running_(other.running_.load()),
-          priority_(other.priority_) {
+          running_(other.running_.load()) {
         other.running_ = false;
     }
     
@@ -42,7 +41,6 @@ public:
             thread_name_ = std::move(other.thread_name_);
             thread_func_ = std::move(other.thread_func_);
             running_ = other.running_.load();
-            priority_ = other.priority_;
             other.running_ = false;
         }
         return *this;
@@ -56,9 +54,6 @@ public:
         running_ = true;
         thread_ = std::thread([this]() {
             std::cout << "[Thread] " << thread_name_ << " started." << std::endl;
-            
-            // Set thread priority
-            SetThreadPriority(GetCurrentThread(), priority_);
             
             // Set thread name for debugging
             setThreadName(thread_name_);
@@ -95,12 +90,6 @@ public:
         return running_;
     }
     
-    void setPriority(int priority) {
-        priority_ = priority;
-        if (thread_.joinable()) {
-            SetThreadPriority(thread_.native_handle(), priority);
-        }
-    }
     
 private:
     void setThreadName(const std::string& name) {
@@ -119,7 +108,6 @@ private:
     std::string thread_name_;
     ThreadFunc thread_func_;
     std::atomic<bool> running_;
-    int priority_;
 };
 
 #endif // THREAD_MANAGER_H
