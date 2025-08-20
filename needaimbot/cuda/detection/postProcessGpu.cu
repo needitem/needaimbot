@@ -848,8 +848,8 @@ cudaError_t decodeYolo10Gpu(
         return cudaErrorInvalidValue;
     }
 
-    // Initialize decoded count to zero (synchronous to ensure proper initialization)
-    cudaError_t init_err = cudaMemset(d_decoded_count, 0, sizeof(int));
+    // Initialize decoded count to zero (asynchronous for better performance)
+    cudaError_t init_err = cudaMemsetAsync(d_decoded_count, 0, sizeof(int), stream);
     if (init_err != cudaSuccess) {
         fprintf(stderr, "[decodeYolo10Gpu] Failed to initialize d_decoded_count: %s\n", cudaGetErrorString(init_err));
         return init_err;
@@ -925,8 +925,8 @@ cudaError_t decodeYolo11Gpu(
         return cudaErrorInvalidValue;
     }
 
-    // Initialize decoded count to zero (synchronous to ensure proper initialization)
-    cudaError_t init_err = cudaMemset(d_decoded_count, 0, sizeof(int));
+    // Initialize decoded count to zero (asynchronous for better performance)
+    cudaError_t init_err = cudaMemsetAsync(d_decoded_count, 0, sizeof(int), stream);
     if (init_err != cudaSuccess) {
         return init_err;
     }
