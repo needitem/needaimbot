@@ -12,7 +12,7 @@
 #include "needaimbot.h"
 #include "SerialConnection.h"
 #include "../../AppContext.h"
-#include "../../core/common_utils.h"
+#include "../../core/constants.h"
 
 // 전역 정리 핸들러 클래스 (전방 선언)
 class GlobalSerialCleanupHandler {
@@ -178,7 +178,7 @@ void SerialConnection::cleanup() {
                 t.join();
             });
             
-            if (future.wait_for(std::chrono::milliseconds(NeedAimbot::Constants::THREAD_JOIN_TIMEOUT_MS)) == std::future_status::timeout) {
+            if (future.wait_for(std::chrono::milliseconds(Constants::THREAD_JOIN_TIMEOUT_MS)) == std::future_status::timeout) {
                 std::cout << "[Arduino] " << name << " thread timeout - detaching" << std::endl;
                 // TerminateThread 사용 회피 - 리소스 누수 가능
                 t.detach();
@@ -410,9 +410,9 @@ bool SerialConnection::configurePort()
     // 즉시 응답을 위한 타임아웃 설정
     timeouts_.ReadIntervalTimeout = 1;          // 바이트 간 간격 1ms
     timeouts_.ReadTotalTimeoutMultiplier = 0;   // 총 읽기 시간 승수
-    timeouts_.ReadTotalTimeoutConstant = NeedAimbot::Constants::SERIAL_READ_TIMEOUT_MS;
+    timeouts_.ReadTotalTimeoutConstant = Constants::SERIAL_READ_TIMEOUT_MS;
     timeouts_.WriteTotalTimeoutMultiplier = 0;  // 총 쓰기 시간 승수
-    timeouts_.WriteTotalTimeoutConstant = NeedAimbot::Constants::SERIAL_WRITE_TIMEOUT_MS;
+    timeouts_.WriteTotalTimeoutConstant = Constants::SERIAL_WRITE_TIMEOUT_MS;
 
     if (!SetCommTimeouts(serial_handle_, &timeouts_)) {
         std::cerr << "[Arduino] Failed to set timeouts" << std::endl;

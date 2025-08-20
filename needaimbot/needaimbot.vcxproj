@@ -71,18 +71,15 @@
     <CudaCompile Include="cuda\preprocessing.cu" />
     <CudaCompile Include="cuda\tracking\gpu_tracker.cu" />
     <CudaCompile Include="cuda\tracking\gpu_kalman_filter.cu" />
-    <CudaCompile Include="cuda\gpu_workload_manager.cu" />
     <CudaCompile Include="cuda\unified_graph_pipeline.cu" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="core\config_cache.h" />
     <ClInclude Include="core\constants.h" />
     <ClInclude Include="core\error_handler.h" />
-    <ClInclude Include="core\common_utils.h" />
     <ClInclude Include="core\error_manager.h" />
     <ClInclude Include="core\logger.h" />
     <ClInclude Include="core\performance_monitor.h" />
-    <ClInclude Include="core\sync_manager.h" />
     <ClInclude Include="core\Target.h" />
     <ClInclude Include="core\thread_manager.h" />
     <ClInclude Include="cuda\detection\filterGpu.h" />
@@ -93,7 +90,6 @@
     <ClInclude Include="cuda\tracking\gpu_kalman_filter.h" />
     <ClInclude Include="cuda\tracking\gpu_tracker.h" />
     <ClInclude Include="cuda\unified_graph_pipeline.h" />
-    <ClInclude Include="cuda\memory_pool.h" />
     <ClInclude Include="cuda\cuda_error_check.h" />
     <ClInclude Include="cuda\pd_controller.h" />
     <ClInclude Include="cuda\pd_controller_shared.h" />

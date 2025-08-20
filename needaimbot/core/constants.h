@@ -98,6 +98,11 @@ namespace Constants {
     constexpr int DETECTION_WAIT_TIMEOUT_MS = 10;
     constexpr int FRAME_WAIT_TIMEOUT_MS = 33;
     
+    // Serial Connection Timeouts
+    constexpr int SERIAL_READ_TIMEOUT_MS = 100;
+    constexpr int SERIAL_WRITE_TIMEOUT_MS = 100;
+    constexpr int THREAD_JOIN_TIMEOUT_MS = 1000;
+    
     // Capture constants
     constexpr int DEFAULT_CAPTURE_WIDTH = 320;
     constexpr int DEFAULT_CAPTURE_HEIGHT = 320;

@@ -25,7 +25,6 @@
 #include "mouse/input_drivers/kmboxNet.h"
 #include "include/other_tools.h"
 #include "core/thread_manager.h"
-#include "core/sync_manager.h"
 #include "core/error_manager.h"
 #include "core/performance_monitor.h"
 
