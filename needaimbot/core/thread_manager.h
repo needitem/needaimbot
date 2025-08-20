@@ -7,6 +7,7 @@
 #include <functional>
 #include <string>
 #include <iostream>
+#include <chrono>
 
 class ThreadManager {
 public:
@@ -81,8 +82,53 @@ public:
         
         if (thread_.joinable()) {
             std::cout << "[Thread] Waiting for " << thread_name_ << " to finish..." << std::endl;
-            thread_.join();
-            std::cout << "[Thread] " << thread_name_ << " stopped." << std::endl;
+            
+            // Try graceful shutdown with timeout
+            auto start_time = std::chrono::steady_clock::now();
+            const auto timeout = std::chrono::milliseconds(500);  // 500ms 타임아웃
+            
+            // Create a thread to wait for join with timeout
+            std::atomic<bool> thread_finished{false};
+            std::thread wait_thread([this, &thread_finished]() {
+                if (thread_.joinable()) {
+                    thread_.join();
+                    thread_finished = true;
+                }
+            });
+            
+            // Wait for thread to finish or timeout
+            while (!thread_finished) {
+                if (std::chrono::steady_clock::now() - start_time > timeout) {
+                    std::cerr << "[Thread] " << thread_name_ << " did not finish within timeout, forcing termination..." << std::endl;
+                    
+                    // Force terminate the thread (Windows specific)
+                    HANDLE hThread = thread_.native_handle();
+                    if (hThread != INVALID_HANDLE_VALUE && hThread != nullptr) {
+                        // Attempt to terminate the thread forcefully
+                        if (TerminateThread(hThread, 1)) {
+                            std::cerr << "[Thread] " << thread_name_ << " forcefully terminated." << std::endl;
+                        } else {
+                            std::cerr << "[Thread] Failed to terminate " << thread_name_ << " (error: " << GetLastError() << ")" << std::endl;
+                        }
+                    }
+                    
+                    // Detach the thread to avoid join issues
+                    if (thread_.joinable()) {
+                        thread_.detach();
+                    }
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            
+            // Clean up wait thread
+            if (wait_thread.joinable()) {
+                wait_thread.join();
+            }
+            
+            if (thread_finished) {
+                std::cout << "[Thread] " << thread_name_ << " stopped gracefully." << std::endl;
+            }
         }
     }
     
