@@ -816,19 +816,14 @@ cudaError_t decodeYolo10Gpu(
     float img_scale,
     Target* d_decoded_detections,
     int* d_decoded_count, 
-    int max_candidates,
     int max_detections,
+    int max_candidates,
     cudaStream_t stream)
 {
     
     if (shape.size() != 3) {
         fprintf(stderr, "[decodeYolo10Gpu] Error: Unexpected output shape size %zd\n", shape.size());
         return cudaErrorInvalidValue;
-    }
-
-    if (max_candidates <= 0) {
-        cudaMemsetAsync(d_decoded_count, 0, sizeof(int), stream);
-        return cudaSuccess;
     }
 
     int64_t stride = shape[2];
@@ -838,8 +833,15 @@ cudaError_t decodeYolo10Gpu(
         return cudaSuccess;
     }
 
+    // Use shape[1] as the actual number of candidates for YOLO10
+    int actual_candidates = static_cast<int>(shape[1]);
+    if (actual_candidates <= 0) {
+        cudaMemsetAsync(d_decoded_count, 0, sizeof(int), stream);
+        return cudaSuccess;
+    }
+
     const int block_size = 256;
-    const int grid_size = (max_candidates + block_size - 1) / block_size;
+    const int grid_size = (actual_candidates + block_size - 1) / block_size;
 
     if (d_raw_output == nullptr || d_decoded_detections == nullptr || d_decoded_count == nullptr) {
         fprintf(stderr, "[decodeYolo10Gpu] Error: Null pointer detected\n");
@@ -857,14 +859,14 @@ cudaError_t decodeYolo10Gpu(
     cudaGetLastError();
 
     // Validate parameters
-    if (grid_size <= 0 || block_size <= 0 || max_candidates <= 0 || stride <= 0 || max_detections <= 0) {
-        fprintf(stderr, "[decodeYolo10Gpu] Invalid parameters: grid_size=%d, block_size=%d, max_candidates=%d, stride=%d, max_detections=%d\n",
-                grid_size, block_size, max_candidates, (int)stride, max_detections);
+    if (grid_size <= 0 || block_size <= 0 || actual_candidates <= 0 || stride <= 0 || max_detections <= 0) {
+        fprintf(stderr, "[decodeYolo10Gpu] Invalid parameters: grid_size=%d, block_size=%d, actual_candidates=%d, stride=%d, max_detections=%d\n",
+                grid_size, block_size, actual_candidates, (int)stride, max_detections);
         return cudaErrorInvalidValue;
     }
 
     decodeYolo10GpuKernel<<<grid_size, block_size, 0, stream>>>(
-        d_raw_output, (int)output_type, max_candidates, (int)stride, num_classes,
+        d_raw_output, (int)output_type, actual_candidates, (int)stride, num_classes,
         conf_threshold, img_scale, d_decoded_detections, d_decoded_count, max_detections);
 
     cudaError_t kernel_err = cudaGetLastError();
@@ -885,8 +887,8 @@ cudaError_t decodeYolo11Gpu(
     float img_scale,
     Target* d_decoded_detections,
     int* d_decoded_count, 
-    int max_candidates,
     int max_detections,
+    int max_candidates,
     cudaStream_t stream)
 {
     // Fixed CUDA "invalid argument" error by:
@@ -900,11 +902,6 @@ cudaError_t decodeYolo11Gpu(
         return cudaErrorInvalidValue;
     }
 
-    if (max_candidates <= 0) {
-        cudaMemsetAsync(d_decoded_count, 0, sizeof(int), stream);
-        return cudaSuccess;
-    }
-
     int64_t num_rows = shape[1];
     int64_t num_boxes = shape[2];
     
@@ -913,8 +910,15 @@ cudaError_t decodeYolo11Gpu(
         return cudaSuccess;
     }
 
+    // Use num_boxes (shape[2]) as the actual number of anchor points for grid calculation
+    int actual_candidates = static_cast<int>(num_boxes);
+    if (actual_candidates <= 0) {
+        cudaMemsetAsync(d_decoded_count, 0, sizeof(int), stream);
+        return cudaSuccess;
+    }
+
     const int block_size = 256;
-    const int grid_size = (max_candidates + block_size - 1) / block_size;
+    const int grid_size = (actual_candidates + block_size - 1) / block_size;
 
     if (d_raw_output == nullptr || d_decoded_detections == nullptr || d_decoded_count == nullptr) {
         fprintf(stderr, "[decodeYolo11Gpu] Error: Null pointer detected\n");
@@ -931,7 +935,7 @@ cudaError_t decodeYolo11Gpu(
     cudaGetLastError();
     
     // Validate parameters
-    if (grid_size <= 0 || block_size <= 0 || max_candidates <= 0 || num_rows <= 0 || max_detections <= 0) {
+    if (grid_size <= 0 || block_size <= 0 || actual_candidates <= 0 || num_rows <= 0 || max_detections <= 0) {
         return cudaErrorInvalidValue;
     }
 
@@ -940,7 +944,7 @@ cudaError_t decodeYolo11Gpu(
     }
     
     decodeYolo11GpuKernel<<<grid_size, block_size, 0, stream>>>(
-        d_raw_output, (int)output_type, max_candidates, (int)num_rows, num_classes,
+        d_raw_output, (int)output_type, actual_candidates, (int)num_rows, num_classes,
         conf_threshold, img_scale, d_decoded_detections, d_decoded_count, max_detections);
 
     cudaError_t kernel_err = cudaGetLastError();
