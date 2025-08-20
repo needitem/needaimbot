@@ -106,12 +106,33 @@ std::string replace_extension(const std::string& filename, const std::string& ne
 
 void HideConsole()
 {
-    FreeConsole();
+    HWND consoleWindow = GetConsoleWindow();
+    if (consoleWindow) {
+        ShowWindow(consoleWindow, SW_HIDE);
+    }
 }
 
 void ShowConsole()
 {
-    AllocConsole();
+    if (!AllocConsole()) {
+        // Console already exists, just show it
+        HWND consoleWindow = GetConsoleWindow();
+        if (consoleWindow) {
+            ShowWindow(consoleWindow, SW_SHOW);
+        }
+    }
+    
+    // Redirect stdout, stdin, stderr to console
+    FILE* pCout;
+    freopen_s(&pCout, "CONOUT$", "w", stdout);
+    freopen_s(&pCout, "CONOUT$", "w", stderr);
+    freopen_s(&pCout, "CONIN$", "r", stdin);
+    
+    // Make cout, wcout, cin, wcin, wcerr, cerr, wclog and clog point to console as well
+    std::ios::sync_with_stdio();
+    
+    // Set console title
+    SetConsoleTitle(L"Gaming Performance Analyzer - Console");
 }
 
 bool IsConsoleVisible()
