@@ -2,7 +2,6 @@
 #include "detection/cuda_image_processing.h"
 #include "detection/cuda_float_processing.h"
 #include "tracking/gpu_kalman_filter.h"
-#include "detection/postProcessGpu.h"
 #include "detection/filterGpu.h"
 #include "simple_cuda_mat.h"
 #include "mouse_interface.h"
@@ -1816,8 +1815,12 @@ bool UnifiedGraphPipeline::runInferenceAsync(cudaStream_t stream) {
         stream = m_primaryStream;
     }
     
-    // Clear any previous CUDA errors
-    cudaGetLastError();
+    // Clear any previous CUDA errors and check for success
+    cudaError_t prevErr = cudaGetLastError();
+    if (prevErr != cudaSuccess) {
+        std::cerr << "[Pipeline] Previous CUDA error detected: " << cudaGetErrorString(prevErr) << std::endl;
+        // Continue execution but log the error
+    }
     
     // Optimized tensor address setting with validation
     // Pre-check input bindings before setting addresses
@@ -1825,6 +1828,15 @@ bool UnifiedGraphPipeline::runInferenceAsync(cudaStream_t stream) {
         auto bindingIt = m_inputBindings.find(inputName);
         if (bindingIt == m_inputBindings.end() || bindingIt->second == nullptr) {
             std::cerr << "[Pipeline] Input binding not found or null for: " << inputName << std::endl;
+            return false;
+        }
+        
+        // Validate memory pointer before setting tensor address
+        cudaPointerAttributes attrs;
+        cudaError_t ptrErr = cudaPointerGetAttributes(&attrs, bindingIt->second);
+        if (ptrErr != cudaSuccess) {
+            std::cerr << "[Pipeline] Invalid input memory pointer for: " << inputName 
+                      << " - " << cudaGetErrorString(ptrErr) << std::endl;
             return false;
         }
         
@@ -1839,6 +1851,15 @@ bool UnifiedGraphPipeline::runInferenceAsync(cudaStream_t stream) {
         auto bindingIt = m_outputBindings.find(outputName);
         if (bindingIt == m_outputBindings.end() || bindingIt->second == nullptr) {
             std::cerr << "[Pipeline] Output binding not found or null for: " << outputName << std::endl;
+            return false;
+        }
+        
+        // Validate memory pointer before setting tensor address
+        cudaPointerAttributes attrs;
+        cudaError_t ptrErr = cudaPointerGetAttributes(&attrs, bindingIt->second);
+        if (ptrErr != cudaSuccess) {
+            std::cerr << "[Pipeline] Invalid output memory pointer for: " << outputName 
+                      << " - " << cudaGetErrorString(ptrErr) << std::endl;
             return false;
         }
         
@@ -1874,55 +1895,14 @@ bool UnifiedGraphPipeline::runInferenceAsync(cudaStream_t stream) {
         
         return false;
     }
-    
-    // Validate output data after inference (first few calls only)
-    static int output_validation_count = 0;
-    if (output_validation_count < 3) {
-        cudaStreamSynchronize(stream);
-        
-        for (const auto& name : m_outputNames) {
-            auto bindingIt = m_outputBindings.find(name);
-            if (bindingIt != m_outputBindings.end() && bindingIt->second != nullptr) {
-                float sample_output[20];
-                cudaMemcpy(sample_output, bindingIt->second, 20 * sizeof(float), cudaMemcpyDeviceToHost);
-                std::cout << "[OUTPUT VALIDATION] First 20 output values from '" << name << "': ";
-                for (int i = 0; i < 20; i++) {
-                    std::cout << std::fixed << std::setprecision(4) << sample_output[i];
-                    if (i < 19) std::cout << ", ";
-                }
-                std::cout << std::endl;
-                
-                // Check output buffer size
-                size_t outputSize = m_outputSizes[name];
-                std::cout << "[OUTPUT VALIDATION] Output '" << name << "' size: " << outputSize << " bytes" << std::endl;
-            }
-        }
-        output_validation_count++;
-    }
-    
-    // Validate input data after tensor address setup (first few calls only)
-    static int input_validation_count = 0;
-    if (input_validation_count < 5) {
-        // Synchronize to ensure all async operations completed
-        cudaStreamSynchronize(stream);
-        
-        auto bindingIt = m_inputBindings.find(m_inputName);
-        if (bindingIt != m_inputBindings.end() && bindingIt->second != nullptr) {
-            float sample_input[20];
-            cudaMemcpy(sample_input, bindingIt->second, 20 * sizeof(float), cudaMemcpyDeviceToHost);
-            std::cout << "[INPUT VALIDATION] First 20 input values to TensorRT: ";
-            for (int i = 0; i < 20; i++) {
-                std::cout << std::fixed << std::setprecision(4) << sample_input[i];
-                if (i < 19) std::cout << ", ";
-            }
-            std::cout << " (binding addr: " << bindingIt->second << ", yolo addr: " << m_d_yoloInput << ")" << std::endl;
-        }
-        input_validation_count++;
-    }
-    
+     
     // Record inference completion event for pipeline synchronization
     if (m_detectionEvent) {
-        cudaEventRecord(m_detectionEvent, stream);
+        cudaError_t eventErr = cudaEventRecord(m_detectionEvent, stream);
+        if (eventErr != cudaSuccess) {
+            std::cerr << "[Pipeline] Failed to record detection event: " << cudaGetErrorString(eventErr) << std::endl;
+            // Continue execution as this is not critical
+        }
     }
     
     return true;
@@ -1997,8 +1977,8 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
             m_imgScale,
             m_d_decodedTargets,
             m_d_decodedCount,
-            max_candidates,
             maxDecodedTargets,
+            max_candidates,
             stream);
     } else if (cached_postprocess == "yolo8" || cached_postprocess == "yolo9" || 
                cached_postprocess == "yolo11" || cached_postprocess == "yolo12") {
@@ -2031,8 +2011,8 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
             m_imgScale,
             m_d_decodedTargets,
             m_d_decodedCount,
-            max_candidates,
             maxDecodedTargets,
+            max_candidates,
             stream);
     } else {
         std::cerr << "[Pipeline] Unsupported post-processing type: " << cached_postprocess << std::endl;

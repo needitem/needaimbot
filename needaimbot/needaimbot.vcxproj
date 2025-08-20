@@ -68,9 +68,6 @@
     <CudaCompile Include="cuda\detection\filterGpu.cu" />
     <CudaCompile Include="cuda\detection\postProcessGpu.cu" />
     <CudaCompile Include="cuda\detection\targetSelectionGpu.cu" />
-    <CudaCompile Include="cuda\detection\batchedResults.cu" />
-    <CudaCompile Include="cuda\detection\gpu_chain_kernels.cu" />
-    <CudaCompile Include="cuda\detection\cuda_image_processing.cu" />
     <CudaCompile Include="cuda\detection\cuda_float_processing.cu" />
     <CudaCompile Include="cuda\preprocessing.cu" />
     <CudaCompile Include="cuda\tracking\gpu_tracker.cu" />
@@ -89,9 +86,9 @@
     <ClInclude Include="core\sync_manager.h" />
     <ClInclude Include="core\Target.h" />
     <ClInclude Include="core\thread_manager.h" />
+    <ClInclude Include="cuda\detection\filterGpu.h" />
     <ClInclude Include="cuda\preprocessing.h" />
     <ClInclude Include="cuda\simple_cuda_mat.h" />
-    <ClInclude Include="cuda\detection\cuda_image_processing.h" />
     <ClInclude Include="cuda\detection\cuda_float_processing.h" />
     <ClInclude Include="cuda\image_io.h" />
     <ClInclude Include="cuda\tracking\gpu_kalman_filter.h" />
@@ -103,9 +100,6 @@
     <ClInclude Include="cuda\pd_controller_shared.h" />
     <ClInclude Include="cuda\mouse_interface.h" />
     <ClInclude Include="config\config.h" />
-    <ClInclude Include="cuda\detection\filterGpu.h" />
-    <ClInclude Include="cuda\detection\postProcessGpu.h" />
-    <ClInclude Include="cuda\detection\batchedResults.h" />
     <ClInclude Include="cuda\detection\postProcess.h" />
     <ClInclude Include="postprocess\postProcess.h" />
     <ClInclude Include="imgui\imconfig.h" />
