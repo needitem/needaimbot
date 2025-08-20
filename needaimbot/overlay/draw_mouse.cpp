@@ -10,8 +10,7 @@
 #include "ui_helpers.h"
 #include "common_helpers.h"
 #include "draw_settings.h"
-#include "../mouse/mouse.h"
-#include "../cuda/pd_controller.h" 
+#include "../mouse/mouse.h" 
 
 static void draw_movement_controls()
 {
@@ -109,11 +108,10 @@ static void draw_movement_controls()
         "0.95 = Heavy filtering (smooth but less responsive)"
     );
     
-    // Reset PD states button
-    if (ImGui::Button("Reset PD States")) {
-        needaimbot::cuda::resetAllPDStates();
-    }
-    UIHelpers::HelpMarker("Clear all stored error history for PD controller");
+    // Reset button placeholder - can be used for future functionality
+    // if (ImGui::Button("Reset States")) {
+    //     // Reset functionality can be added here
+    // }
     
     UIHelpers::Spacer();
     UIHelpers::SettingsSubHeader("Movement Info");
