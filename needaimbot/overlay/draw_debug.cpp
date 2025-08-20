@@ -327,219 +327,100 @@ static void uploadColorMaskTexture(const SimpleMat& grayMask)
 void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float debug_scale) {
     auto& ctx = AppContext::getInstance();
     
-    // TODO: Implement detection display for TensorRT integration
-    // Detection visualization is temporarily disabled during Phase 1 integration
-    return;
-    
-    /*
-    // DISABLED CODE - Original detector-based implementation
     // Validate parameters
     if (!draw_list || debug_scale <= 0) return;
     
-    std::lock_guard<std::mutex> det_lock(ctx.detector->detectionMutex);
+    // Get all detected targets from DetectionState
+    std::vector<Target> all_targets = ctx.getDetectionState().getAllTargets();
     
-    // Validate detection count
-    if (ctx.detector->m_finalTargetsCountHost <= 0 || 
-        ctx.detector->m_finalTargetsCountHost > 1000 ||  // Sanity check
-        ctx.detector->m_finalTargetsGpu.get() == nullptr) {
+    // Early exit if no targets
+    if (all_targets.empty()) {
         return;
     }
     
-    // Validate CUDA pointer before memcpy
-    cudaPointerAttributes attributes;
-    cudaError_t queryErr = cudaPointerGetAttributes(&attributes, ctx.detector->m_finalTargetsGpu.get());
-    if (queryErr != cudaSuccess || attributes.type != cudaMemoryTypeDevice) {
-        // Invalid CUDA memory, skip drawing
-        return;
+    // Get best target for highlighting
+    Target best_target{};
+    bool has_best_target = false;
+    try {
+        if (ctx.getDetectionState().hasValidTarget()) {
+            best_target = ctx.getDetectionState().getBestTarget();
+            has_best_target = true;
+        }
+    } catch (...) {
+        has_best_target = false;
     }
     
-    std::vector<Target> host_detections(ctx.detector->m_finalTargetsCountHost);
-    cudaError_t err = cudaMemcpy(host_detections.data(), ctx.detector->m_finalTargetsGpu.get(),
-                                 ctx.detector->m_finalTargetsCountHost * sizeof(Target),
-                                 cudaMemcpyDeviceToHost);
+    // Draw all targets
+    for (const auto& det : all_targets) {
+        // Skip invalid detections
+        if (det.width <= 0 || det.height <= 0 || 
+            det.confidence <= 0.0f || det.classId < 0 ||
+            det.x < 0 || det.y < 0) {
+            continue;
+        }
+        
+        // Calculate screen positions
+        ImVec2 p1(image_pos.x + det.x * debug_scale,
+                  image_pos.y + det.y * debug_scale);
+        ImVec2 p2(image_pos.x + (det.x + det.width) * debug_scale,
+                  image_pos.y + (det.y + det.height) * debug_scale);
 
-    if (err == cudaSuccess)
-    {
-        for (const auto& det : host_detections)
-        {
-                // Skip invalid detections - check multiple conditions
-                if (det.width <= 0 || det.height <= 0 || 
-                    det.confidence <= 0.0f || det.classId < 0 ||
-                    det.x < 0 || det.y < 0) {
-                    continue;
-                }
-                
-                ImVec2 p1(image_pos.x + det.x * debug_scale,
-                          image_pos.y + det.y * debug_scale);
-                ImVec2 p2(image_pos.x + (det.x + det.width) * debug_scale,
-                          image_pos.y + (det.y + det.height) * debug_scale);
-
-                // Check if this is the best target
-                bool is_best_target = false;
-                {
-                    if (ctx.getDetectionState().hasOverlayTarget()) {
-                        auto overlayTarget = ctx.getDetectionState().getOverlayTarget();
-                        if (det.x == overlayTarget.x &&
-                            det.y == overlayTarget.y &&
-                            det.width == overlayTarget.width &&
-                            det.height == overlayTarget.height) {
-                            is_best_target = true;
-                        }
-                    }
-                }
-
-                // Color coding: Green=best target, Yellow=valid target, Red=low confidence
-                ImU32 color;
-                float thickness;
-                if (is_best_target) {
-                    color = IM_COL32(0, 255, 0, 255);  // Green for best target
-                    thickness = 3.0f;
-                } else if (det.confidence >= ctx.config.confidence_threshold) {
-                    color = IM_COL32(255, 255, 0, 255);  // Yellow for valid targets
-                    thickness = 2.0f;
-                } else {
-                    color = IM_COL32(255, 0, 0, 255);   // Red for low confidence
-                    thickness = 1.0f;
-                }
-
-                draw_list->AddRect(p1, p2, color, 1.0f, 0, thickness); 
-                
-                // Draw predicted position if Kalman filter is enabled and velocity is available
-                if (ctx.config.enable_kalman_filter && ctx.config.enable_tracking) {
-                    // Check if velocity data is available (stored in velocity fields)
-                    if (det.velocity_x != 0 || det.velocity_y != 0) {
-                        // Calculate predicted position based on lookahead frames
-                        float lookahead_frames = ctx.config.kalman_lookahead_time * 60.0f;
-                        float pred_center_x = (det.x + det.width * 0.5f) + det.velocity_x * lookahead_frames;
-                        float pred_center_y = (det.y + det.height * 0.5f) + det.velocity_y * lookahead_frames;
-                        
-                        // Draw predicted box in cyan (lighter color)
-                        ImVec2 pred_p1(image_pos.x + (pred_center_x - det.width * 0.5f) * debug_scale,
-                                      image_pos.y + (pred_center_y - det.height * 0.5f) * debug_scale);
-                        ImVec2 pred_p2(image_pos.x + (pred_center_x + det.width * 0.5f) * debug_scale,
-                                      image_pos.y + (pred_center_y + det.height * 0.5f) * debug_scale);
-                        
-                        // Draw predicted box with dashed line (approximated with multiple small lines)
-                        ImU32 pred_color = IM_COL32(0, 255, 255, 180);  // Cyan with transparency
-                        float dash_length = 5.0f;
-                        float gap_length = 3.0f;
-                        
-                        // Top edge
-                        float x = pred_p1.x;
-                        while (x < pred_p2.x) {
-                            float end_x = std::min(x + dash_length, pred_p2.x);
-                            draw_list->AddLine(ImVec2(x, pred_p1.y), ImVec2(end_x, pred_p1.y), pred_color, 1.5f);
-                            x += dash_length + gap_length;
-                        }
-                        
-                        // Bottom edge
-                        x = pred_p1.x;
-                        while (x < pred_p2.x) {
-                            float end_x = std::min(x + dash_length, pred_p2.x);
-                            draw_list->AddLine(ImVec2(x, pred_p2.y), ImVec2(end_x, pred_p2.y), pred_color, 1.5f);
-                            x += dash_length + gap_length;
-                        }
-                        
-                        // Left edge
-                        float y = pred_p1.y;
-                        while (y < pred_p2.y) {
-                            float end_y = std::min(y + dash_length, pred_p2.y);
-                            draw_list->AddLine(ImVec2(pred_p1.x, y), ImVec2(pred_p1.x, end_y), pred_color, 1.5f);
-                            y += dash_length + gap_length;
-                        }
-                        
-                        // Right edge
-                        y = pred_p1.y;
-                        while (y < pred_p2.y) {
-                            float end_y = std::min(y + dash_length, pred_p2.y);
-                            draw_list->AddLine(ImVec2(pred_p2.x, y), ImVec2(pred_p2.x, end_y), pred_color, 1.5f);
-                            y += dash_length + gap_length;
-                        }
-                        
-                        // Draw velocity vector arrow
-                        ImVec2 current_center(image_pos.x + (det.x + det.width * 0.5f) * debug_scale,
-                                            image_pos.y + (det.y + det.height * 0.5f) * debug_scale);
-                        ImVec2 predicted_center(image_pos.x + pred_center_x * debug_scale,
-                                              image_pos.y + pred_center_y * debug_scale);
-                        
-                        // Draw arrow line
-                        draw_list->AddLine(current_center, predicted_center, IM_COL32(255, 0, 255, 255), 2.0f);
-                        
-                        // Draw arrowhead
-                        float arrow_size = 8.0f;
-                        ImVec2 dir = ImVec2(predicted_center.x - current_center.x, 
-                                          predicted_center.y - current_center.y);
-                        float len = sqrtf(dir.x * dir.x + dir.y * dir.y);
-                        if (len > 0) {
-                            dir.x /= len;
-                            dir.y /= len;
-                            
-                            ImVec2 perp(-dir.y, dir.x);
-                            ImVec2 arrow_p1(predicted_center.x - dir.x * arrow_size - perp.x * arrow_size * 0.5f,
-                                          predicted_center.y - dir.y * arrow_size - perp.y * arrow_size * 0.5f);
-                            ImVec2 arrow_p2(predicted_center.x - dir.x * arrow_size + perp.x * arrow_size * 0.5f,
-                                          predicted_center.y - dir.y * arrow_size + perp.y * arrow_size * 0.5f);
-                            
-                            draw_list->AddTriangleFilled(predicted_center, arrow_p1, arrow_p2, 
-                                                        IM_COL32(255, 0, 255, 255));
-                        }
-                    }
-                }
-
-                // Use track ID from detection if available
-                int track_id = det.id;  // Detection already has ID field from tracking
-                
-                // If tracking is disabled, ID will be -1
-                if (!ctx.config.enable_tracking) {
-                    track_id = -1;
-                }
-
-                // Build label safely
-                std::string className = CommonHelpers::getClassNameById(det.classId);
-                if (className.empty()) className = "Unknown";
-                
-                char conf_str[32];
-                snprintf(conf_str, sizeof(conf_str), "%.0f%%", det.confidence * 100.0f);
-                
-                std::string label = className + " (" + conf_str + ")";
-                
-                if (track_id >= 0 && track_id < 10000) {  // Sanity check
-                    label = "ID:" + std::to_string(track_id) + " " + label;
-                }
-                
-                // Add velocity info if available
-                if (ctx.config.enable_kalman_filter && (det.velocity_x != 0 || det.velocity_y != 0)) {
-                    char vel_str[64];
-                    snprintf(vel_str, sizeof(vel_str), " [V:%.1f,%.1f]", det.velocity_x, det.velocity_y);
-                    label += vel_str;
-                }
-                
-                if (is_best_target) {
-                    label = "[TARGET] " + label;
-                }
-                
-                // Ensure label isn't too long
-                if (label.length() > 100) {
-                    label = label.substr(0, 97) + "...";
-                }
-                
-                ImU32 text_color = is_best_target ? IM_COL32(0, 255, 0, 255) : 
-                                  (det.confidence >= ctx.config.confidence_threshold ? IM_COL32(255, 255, 0, 255) : IM_COL32(255, 0, 0, 255));
-                
-                // Check text position is valid
-                if (p1.x >= 0 && p1.y >= 16) {
-                    draw_list->AddText(ImVec2(p1.x, p1.y - 16), text_color, label.c_str());
-                }
+        // Check if this is the best target
+        bool is_best_target = false;
+        if (has_best_target) {
+            if (abs(det.x - best_target.x) < 1.0f &&
+                abs(det.y - best_target.y) < 1.0f &&
+                abs(det.width - best_target.width) < 1.0f &&
+                abs(det.height - best_target.height) < 1.0f) {
+                is_best_target = true;
             }
-    } else {
-        // Log CUDA error but don't crash
-        static int error_count = 0;
-        if (error_count < 5) {  // Limit error logging
-            std::cerr << "[drawDetections] CUDA memcpy failed: " << cudaGetErrorString(err) << std::endl;
-            error_count++;
+        }
+
+        // Color coding: Green=best target, Yellow=valid target, Red=low confidence
+        ImU32 color;
+        float thickness;
+        if (is_best_target) {
+            color = IM_COL32(0, 255, 0, 255);  // Green for best target
+            thickness = 3.0f;
+        } else if (det.confidence >= ctx.config.confidence_threshold) {
+            color = IM_COL32(255, 255, 0, 255);  // Yellow for valid targets
+            thickness = 2.0f;
+        } else {
+            color = IM_COL32(255, 0, 0, 255);   // Red for low confidence
+            thickness = 1.0f;
+        }
+
+        draw_list->AddRect(p1, p2, color, 1.0f, 0, thickness); 
+        
+        // Build label
+        std::string className = "Class" + std::to_string(det.classId);  // Simplified class name
+        
+        char conf_str[32];
+        snprintf(conf_str, sizeof(conf_str), "%.0f%%", det.confidence * 100.0f);
+        
+        std::string label = className + " (" + conf_str + ")";
+        
+        if (det.id >= 0 && det.id < 10000) {  // Show ID if valid
+            label = "ID:" + std::to_string(det.id) + " " + label;
+        }
+        
+        if (is_best_target) {
+            label = "[TARGET] " + label;
+        }
+        
+        // Ensure label isn't too long
+        if (label.length() > 100) {
+            label = label.substr(0, 97) + "...";
+        }
+        
+        ImU32 text_color = is_best_target ? IM_COL32(0, 255, 0, 255) : 
+                          (det.confidence >= ctx.config.confidence_threshold ? IM_COL32(255, 255, 0, 255) : IM_COL32(255, 0, 0, 255));
+        
+        // Check text position is valid
+        if (p1.x >= 0 && p1.y >= 16) {
+            draw_list->AddText(ImVec2(p1.x, p1.y - 16), text_color, label.c_str());
         }
     }
-    */
 }
 
 
