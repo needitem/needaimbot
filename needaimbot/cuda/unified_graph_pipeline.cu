@@ -1756,6 +1756,26 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         if (m_d_bestTargetIndex) {
             cudaMemsetAsync(m_d_bestTargetIndex, -1, sizeof(int), stream);
         }
+        
+        // Clear best target buffer to prevent previous frame data reuse
+        if (m_d_bestTarget) {
+            cudaMemsetAsync(m_d_bestTarget, 0, sizeof(Target), stream);
+        }
+        
+        // Clear final targets buffer
+        if (m_d_finalTargets) {
+            cudaMemsetAsync(m_d_finalTargets, 0, sizeof(Target) * 100, stream);
+        }
+        
+        // Reset final targets count to 0
+        if (m_d_finalTargetsCount) {
+            int zero = 0;
+            cudaMemcpyAsync(m_d_finalTargetsCount, &zero, sizeof(int), cudaMemcpyHostToDevice, stream);
+        }
+        
+        // Clear DetectionState to ensure aimbot stops when no targets
+        ctx.getDetectionState().clearTargets();
+        
         return;
     }
     
@@ -1795,6 +1815,9 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         // Clear best target on failure
         if (m_d_bestTargetIndex) {
             cudaMemsetAsync(m_d_bestTargetIndex, -1, sizeof(int), stream);
+        }
+        if (m_d_bestTarget) {
+            cudaMemsetAsync(m_d_bestTarget, 0, sizeof(Target), stream);
         }
     }
 }
