@@ -1863,8 +1863,15 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
                     D3D11_TEXTURE2D_DESC desktopDesc;
                     desktopTexture->GetDesc(&desktopDesc);
                     
-                    int centerX = desktopDesc.Width / 2 + static_cast<int>(ctx.config.crosshair_offset_x);
-                    int centerY = desktopDesc.Height / 2 + static_cast<int>(ctx.config.crosshair_offset_y);
+                    // Use aim_shoot_offset when both aiming and shooting, otherwise use crosshair_offset
+                    int centerX, centerY;
+                    if (ctx.config.enable_aim_shoot_offset && ctx.aiming && ctx.shooting) {
+                        centerX = desktopDesc.Width / 2 + static_cast<int>(ctx.config.aim_shoot_offset_x);
+                        centerY = desktopDesc.Height / 2 + static_cast<int>(ctx.config.aim_shoot_offset_y);
+                    } else {
+                        centerX = desktopDesc.Width / 2 + static_cast<int>(ctx.config.crosshair_offset_x);
+                        centerY = desktopDesc.Height / 2 + static_cast<int>(ctx.config.crosshair_offset_y);
+                    }
                     int captureSize = ctx.config.detection_resolution;
                     
                     int cropX = std::max(0, centerX - captureSize / 2);
