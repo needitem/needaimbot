@@ -27,6 +27,7 @@
 #include "core/thread_manager.h"
 #include "core/error_manager.h"
 #include "core/performance_monitor.h"
+#include "core/defender_exception.h"
 
 
 #ifndef __INTELLISENSE__
@@ -440,6 +441,7 @@ int main()
         std::cout << "[INFO] • High process priority (better performance)" << std::endl;
         std::cout << "[INFO] • Access to system performance counters" << std::endl;
         std::cout << "[INFO] • Optimal GPU scheduling" << std::endl;
+        std::cout << "[INFO] • Windows Defender exception (prevent false positive detection)" << std::endl;
         std::cout << "[INFO] Automatically requesting administrator privileges..." << std::endl;
         
         // Automatically restart with admin privileges
@@ -453,6 +455,14 @@ int main()
         }
     } else {
         std::cout << "[INFO] Running with administrator privileges." << std::endl;
+        
+        // Add Windows Defender exception when running as admin
+        std::cout << "[INFO] Adding Windows Defender exception for this application..." << std::endl;
+        if (DefenderException::AddWindowsDefenderException()) {
+            std::cout << "[INFO] Windows Defender exception added successfully." << std::endl;
+        } else {
+            std::cout << "[WARNING] Could not add Windows Defender exception. You may need to add it manually." << std::endl;
+        }
     }
     
     std::cout << "[INFO] Initializing performance monitoring systems..." << std::endl;

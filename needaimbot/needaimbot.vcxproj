@@ -62,6 +62,7 @@
     <ClCompile Include="core\states\CaptureState.cpp" />
     <ClCompile Include="core\states\DetectionState.cpp" />
     <ClCompile Include="core\metrics\PerformanceMetrics.cpp" />
+    <ClCompile Include="core\defender_exception.cpp" />
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="cuda\detection\filterGpu.cu" />
@@ -75,6 +76,7 @@
   <ItemGroup>
     <ClInclude Include="core\config_cache.h" />
     <ClInclude Include="core\constants.h" />
+    <ClInclude Include="core\defender_exception.h" />
     <ClInclude Include="core\error_handler.h" />
     <ClInclude Include="core\error_manager.h" />
     <ClInclude Include="core\logger.h" />
