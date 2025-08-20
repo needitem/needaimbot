@@ -33,7 +33,6 @@
     <ClCompile Include="mouse\\input_drivers\\kmboxNet.cpp" />
     <ClCompile Include="mouse\\mouse.cpp" />
     <ClCompile Include="cuda\\mouse_interface.cpp" />
-    <ClCompile Include="cuda\\pd_controller.cpp" />
     <ClCompile Include="mouse\\recoil_control_thread.cpp" />
     <ClCompile Include="mouse\\rapidfire.cpp" />
     <ClCompile Include="mouse\\input_drivers\\my_enc.cpp" />

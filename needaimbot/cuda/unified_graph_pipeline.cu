@@ -4,7 +4,7 @@
 #include "detection/filterGpu.h"
 #include "simple_cuda_mat.h"
 #include "mouse_interface.h"
-#include "pd_controller_shared.h"
+// #include "pd_controller_shared.h"  // Removed - using GPU-based PD controller
 #include "../AppContext.h"
 #include "../core/logger.h"
 #include "cuda_error_check.h"
@@ -2117,29 +2117,25 @@ void UnifiedGraphPipeline::processMouseMovementAsync() {
     // Use PD controller for precise, stable movement
     float movement_x, movement_y;
     
-    cuda::PDConfig pd_config = {
-        ctx.config.pd_kp_x,
-        ctx.config.pd_kp_y,
-        ctx.config.pd_kd_x,
-        ctx.config.pd_kd_y,
-        ctx.config.min_movement_threshold_x,
-        ctx.config.min_movement_threshold_y,
-        ctx.config.pd_derivative_filter,
-        100.0f,
-        100.0f
-    };
+    // Simple PD control parameters
+    float kp_x = ctx.config.pd_kp_x;
+    float kp_y = ctx.config.pd_kp_y;
+    float kd_x = ctx.config.pd_kd_x;
+    float kd_y = ctx.config.pd_kd_y;
+    float deadzone_x = ctx.config.min_movement_threshold_x;
+    float deadzone_y = ctx.config.min_movement_threshold_y;
     
     int target_id = h_target.id;
     float dt = 1.0f / ctx.config.target_fps;
     if (dt <= 0.0f || dt > 1.0f) dt = 0.016f;
     
-    cuda::calculatePDControlWithID(
-        target_id, 
-        error_x, error_y, 
-        movement_x, movement_y, 
-        pd_config, 
-        dt
-    );
+    // Apply deadzone
+    if (abs(error_x) < deadzone_x) error_x = 0;
+    if (abs(error_y) < deadzone_y) error_y = 0;
+    
+    // Simple proportional control (temporary until GPU PD controller is integrated)
+    movement_x = error_x * kp_x;
+    movement_y = error_y * kp_y;
     
     int dx = static_cast<int>(movement_x);
     int dy = static_cast<int>(movement_y);
