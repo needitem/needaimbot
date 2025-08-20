@@ -1,5 +1,4 @@
 #include "unified_graph_pipeline.h"
-#include "detection/cuda_image_processing.h"
 #include "detection/cuda_float_processing.h"
 #include "tracking/gpu_kalman_filter.h"
 #include "detection/filterGpu.h"
@@ -2081,27 +2080,6 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
             cudaMemsetAsync(m_d_finalTargetsCount, 0, sizeof(int), stream);
         }
         return;
-    }
-    
-
-    // Log confidence filtered results
-    static int conf_log_count = 0;
-    if (conf_log_count < 10) {  // First 10 frames
-        std::cout << "[CONFIDENCE FILTER] Decoded " << decodedCount << " targets after confidence threshold (" 
-                  << cached_confidence_threshold << ") - Frame " << conf_log_count << std::endl;
-        
-        if (decodedCount > 0 && decodedCount <= 5) {
-            // Log first few detections if reasonable count
-            std::vector<Target> decodedTargets(decodedCount);
-            cudaMemcpy(decodedTargets.data(), m_d_decodedTargets, decodedCount * sizeof(Target), cudaMemcpyDeviceToHost);
-            for (int i = 0; i < decodedCount; i++) {
-                std::cout << "  Decoded " << i << ": (" << decodedTargets[i].x << "," << decodedTargets[i].y 
-                          << ") " << decodedTargets[i].width << "×" << decodedTargets[i].height 
-                          << " conf:" << std::fixed << std::setprecision(3) << decodedTargets[i].confidence 
-                          << " class:" << decodedTargets[i].classId << std::endl;
-            }
-        }
-        conf_log_count++;
     }
 
     // Early exit if no detections were decoded
