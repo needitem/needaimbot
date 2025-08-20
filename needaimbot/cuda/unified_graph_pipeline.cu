@@ -467,335 +467,6 @@ void UnifiedGraphPipeline::checkTargetsAsync(cudaStream_t stream) {
     m_prevFrameHasTarget = false;  // Placeholder until full integration
 }
 
-bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
-    // Use optimized two-stage pipeline for conditional execution
-    if (!stream) stream = m_primaryStream;
-    auto& ctx = AppContext::getInstance();
-    
-    // First, capture the frame from D3D11 texture (skip if frame already set by setInputFrame)
-    // Note: gpu_only_capture.cpp calls setInputFrame() before executeGraph()
-    
-    
-    if (m_config.enableCapture && m_cudaResource && !m_hasFrameData) {
-        // Capture current desktop frame using Desktop Duplication
-        if (m_desktopDuplication && m_d3dDevice && m_d3dContext && m_captureTextureD3D) {
-            auto* duplication = static_cast<IDXGIOutputDuplication*>(m_desktopDuplication);
-            auto* d3dContext = static_cast<ID3D11DeviceContext*>(m_d3dContext);
-            auto* captureTexture = static_cast<ID3D11Texture2D*>(m_captureTextureD3D);
-            
-            DXGI_OUTDUPL_FRAME_INFO frameInfo;
-            IDXGIResource* desktopResource = nullptr;
-            HRESULT hr = duplication->AcquireNextFrame(1, &frameInfo, &desktopResource);
-            
-            if (SUCCEEDED(hr) && desktopResource) {
-                ID3D11Texture2D* desktopTexture = nullptr;
-                hr = desktopResource->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&desktopTexture);
-                if (SUCCEEDED(hr) && desktopTexture) {
-                    // Get desktop texture description to calculate center crop
-                    D3D11_TEXTURE2D_DESC desktopDesc;
-                    desktopTexture->GetDesc(&desktopDesc);
-                    
-                    // Calculate center crop coordinates with offset
-                    auto& ctx = AppContext::getInstance();
-                    int centerX = desktopDesc.Width / 2 + static_cast<int>(ctx.config.crosshair_offset_x);
-                    int centerY = desktopDesc.Height / 2 + static_cast<int>(ctx.config.crosshair_offset_y);
-                    int captureSize = ctx.config.detection_resolution;  // 320x320
-                    
-                    // Calculate crop region (ensure it's within bounds)
-                    int cropX = std::max(0, centerX - captureSize / 2);
-                    int cropY = std::max(0, centerY - captureSize / 2);
-                    cropX = std::min(cropX, static_cast<int>(desktopDesc.Width) - captureSize);
-                    cropY = std::min(cropY, static_cast<int>(desktopDesc.Height) - captureSize);
-                    
-                    // Copy only the center region
-                    D3D11_BOX srcBox;
-                    srcBox.left = cropX;
-                    srcBox.top = cropY;
-                    srcBox.right = cropX + captureSize;
-                    srcBox.bottom = cropY + captureSize;
-                    srcBox.front = 0;
-                    srcBox.back = 1;
-                    
-                    d3dContext->CopySubresourceRegion(captureTexture, 0, 0, 0, 0, 
-                                                     desktopTexture, 0, &srcBox);
-                    desktopTexture->Release();
-                }
-                desktopResource->Release();
-                duplication->ReleaseFrame();
-            }
-        }
-        
-        // Clear any previous CUDA errors
-        cudaGetLastError();
-        
-        cudaError_t err = cudaGraphicsMapResources(1, &m_cudaResource, stream);
-        if (err != cudaSuccess) {
-            printf("[ERROR] cudaGraphicsMapResources failed: %s\n", cudaGetErrorString(err));
-            // Reset CUDA resource to prevent further errors
-            m_cudaResource = nullptr;
-            return false;
-        }
-        
-        
-        cudaArray_t array;
-        err = cudaGraphicsSubResourceGetMappedArray(&array, m_cudaResource, 0, 0);
-        if (err != cudaSuccess) {
-            printf("[ERROR] cudaGraphicsSubResourceGetMappedArray failed: %s\n", cudaGetErrorString(err));
-            cudaGraphicsUnmapResources(1, &m_cudaResource, stream);
-            return false;
-        }
-        
-        
-        // Copy from D3D11 texture to our capture buffer
-        err = cudaMemcpy2DFromArrayAsync(
-            m_captureBuffer.data(),
-            m_captureBuffer.step(),
-            array,
-            0, 0,
-            m_captureBuffer.cols() * sizeof(uchar4),
-            m_captureBuffer.rows(),
-            cudaMemcpyDeviceToDevice,
-            stream
-        );
-        
-        if (err != cudaSuccess) {
-            printf("[ERROR] cudaMemcpy2DFromArrayAsync failed: %s\n", cudaGetErrorString(err));
-            cudaGraphicsUnmapResources(1, &m_cudaResource, stream);
-            return false;
-        }
-        
-        
-        cudaGraphicsUnmapResources(1, &m_cudaResource, stream);
-        
-        // Mark that we have frame data now
-        m_hasFrameData = true;
-    } else {
-        if (!m_cudaResource) {
-            static int warnCounter = 0;
-            if (++warnCounter % 300 == 0) {
-                printf("[WARNING] m_cudaResource is NULL!\n");
-            }
-        }
-        if (!m_config.enableCapture) {
-            static int warnCounter2 = 0;
-            if (++warnCounter2 % 300 == 0) {
-                printf("[WARNING] enableCapture is false!\n");
-            }
-        }
-    }
-    
-    // Stage 1: Execute preprocessing graph (if available)
-    if (m_detectionGraph && m_detectionGraphExec) {
-        cudaError_t err = cudaGraphLaunch(m_detectionGraphExec, stream);
-        if (err != cudaSuccess) {
-            printf("[ERROR] cudaGraphLaunch failed: %s\n", cudaGetErrorString(err));
-            // Reset CUDA error state
-            cudaGetLastError();
-            return false;
-        }
-    }
-    
-    // Always run detector after graph (or without graph)
-    
-    if (!ctx.getDetectionState().isPaused()) {
-
-        // 1. Unified Preprocessing: BGRA → RGB + Resize + Normalize + HWC→CHW
-        if (m_d_yoloInput && !m_captureBuffer.empty()) {
-            // Use new unified preprocessing function
-            cudaError_t err = cuda_unified_preprocessing(
-                m_captureBuffer.data(),                    // BGRA 입력
-                m_d_yoloInput,                            // RGB CHW 출력
-                m_captureBuffer.cols(),                   // 입력 너비
-                m_captureBuffer.rows(),                   // 입력 높이
-                m_captureBuffer.step(),                   // 입력 스트라이드
-                ctx.config.onnx_input_resolution,         // 목표 너비
-                ctx.config.onnx_input_resolution,         // 목표 높이
-                stream
-            );
-            
-            if (err != cudaSuccess) {
-                printf("[ERROR] Unified preprocessing failed: %s\n", cudaGetErrorString(err));
-                return false;
-            }
-        }
-        
-        // 2. TensorRT Inference
-        if (m_inputBindings.find(m_inputName) != m_inputBindings.end() && m_d_yoloInput) {
-            void* inputBinding = m_inputBindings[m_inputName];
-            
-            if (inputBinding != m_d_yoloInput) {
-                size_t inputSize = ctx.config.onnx_input_resolution * ctx.config.onnx_input_resolution * 3 * sizeof(float);
-                cudaMemcpyAsync(inputBinding, m_d_yoloInput, inputSize, 
-                               cudaMemcpyDeviceToDevice, stream);
-            }
-            
-            if (!runInferenceAsync(stream)) {
-                std::cerr << "[UnifiedGraph] TensorRT inference failed in executeGraph" << std::endl;
-                return false;
-            }
-            
-            // CRITICAL FIX: Connect m_d_inferenceOutput to actual TensorRT output
-            if (m_d_inferenceOutput && !m_outputNames.empty()) {
-                auto bindingIt = m_outputBindings.find(m_outputNames[0]);
-                if (bindingIt != m_outputBindings.end() && bindingIt->second != nullptr) {
-                    // Copy TensorRT output to our inference buffer for post-processing
-                    size_t outputSize = m_outputSizes[m_outputNames[0]];
-                    cudaMemcpyAsync(m_d_inferenceOutput, bindingIt->second, outputSize, 
-                                   cudaMemcpyDeviceToDevice, stream);
-                }
-            }
-                        
-            // 3. Integrated post-processing (Phase 3: decode, filter, NMS, target selection)
-            performIntegratedPostProcessing(stream);
-            
-            // 4. Target selection from post-processed results
-            performTargetSelection(stream);
-        }
-        
-        // 5. Get final processed results for mouse control
-        Target* finalTarget = m_d_bestTarget;  // Use selected target from post-processing
-        int targetCount = 0;
-        if (m_d_finalTargetsCount) {
-            cudaMemcpyAsync(&targetCount, m_d_finalTargetsCount, sizeof(int), 
-                           cudaMemcpyDeviceToHost, stream);
-        }
-        
-        // Process mouse movement if target detected AND aiming is active
-        if (targetCount > 0 && finalTarget && ctx.aiming) {
-            // Get the selected target from integrated post-processing
-            Target h_target;
-            cudaMemcpyAsync(&h_target, finalTarget, sizeof(Target), 
-                           cudaMemcpyDeviceToHost, stream);
-            // Sync only for mouse movement - critical for accuracy
-            cudaError_t syncErr = cudaStreamSynchronize(stream);
-            if (syncErr != cudaSuccess) {
-                printf("[ERROR] cudaStreamSynchronize failed: %s\n", cudaGetErrorString(syncErr));
-                cudaGetLastError(); // Reset error state
-                return false;
-            }
-            
-            // Ensure center is calculated
-            h_target.updateCenter();
-            
-            // Apply head/body offset to target center
-            float targetCenterX = h_target.center_x;
-            float targetCenterY;
-            
-            // Find head class ID from class_settings
-            int head_class_id = -1;
-            for(const auto& cs : ctx.config.class_settings) {
-                if (cs.name == ctx.config.head_class_name) {
-                    head_class_id = cs.id;
-                    break;
-                }
-            }
-            
-            // Check if this is a head or body target and apply appropriate offset
-            if (h_target.classId == head_class_id) {
-                // Head target - apply head offset
-                targetCenterY = h_target.y + h_target.height * ctx.config.head_y_offset;
-            } else {
-                // Body target - apply body offset  
-                targetCenterY = h_target.y + h_target.height * ctx.config.body_y_offset;
-            }
-            
-            // Calculate mouse movement with simple percentage approach
-            float screenCenterX = ctx.config.detection_resolution / 2.0f;
-            float screenCenterY = ctx.config.detection_resolution / 2.0f;
-            
-            // Calculate error (distance from center)
-            float error_x = targetCenterX - screenCenterX;
-            float error_y = targetCenterY - screenCenterY;
-            
-            
-            // Use PD controller for precise, stable movement
-            float movement_x, movement_y;
-            
-            // Create PD config from application settings
-            cuda::PDConfig pd_config = {
-                ctx.config.pd_kp_x,                      // kp_x
-                ctx.config.pd_kp_y,                      // kp_y
-                ctx.config.pd_kd_x,                      // kd_x
-                ctx.config.pd_kd_y,                      // kd_y
-                ctx.config.min_movement_threshold_x,     // deadzone_x
-                ctx.config.min_movement_threshold_y,     // deadzone_y
-                ctx.config.pd_derivative_filter,         // derivative_filter_alpha
-                100.0f,                                   // max_output_x
-                100.0f                                    // max_output_y
-            };
-            
-            // Calculate movement using PD controller with target ID if available
-            int target_id = h_target.id;  // Use tracking ID from Target struct
-            
-            // Calculate dt based on frame rate (approximate)
-            float dt = 1.0f / ctx.config.target_fps;
-            if (dt <= 0.0f || dt > 1.0f) dt = 0.016f;  // Default to 60 FPS if invalid
-            
-            cuda::calculatePDControlWithID(
-                target_id, 
-                error_x, error_y, 
-                movement_x, movement_y, 
-                pd_config, 
-                dt
-            );
-            
-            int dx = static_cast<int>(movement_x);
-            int dy = static_cast<int>(movement_y);
-                        
-            // Execute mouse movement only when aiming
-            if (dx != 0 || dy != 0) {
-                cuda::executeMouseMovementFromGPU(dx, dy);
-            }
-        }
-    }
-    
-    // Check detection results asynchronously
-    cudaEventRecord(m_detectionEvent, stream);
-    
-    // Stage 2: Conditionally execute tracking/PID graph
-    // Check previous frame's detection result (pipelined)
-    if (m_prevFrameHasTarget) {
-        if (m_trackingGraph && m_trackingGraphExec) {
-            cudaError_t err = cudaGraphLaunch(m_trackingGraphExec, stream);
-            if (err != cudaSuccess) {
-                std::cerr << "[UnifiedGraph] Tracking graph failed\n";
-            }
-        }
-    }
-    
-    // Async check for current frame targets (for next frame)
-    checkTargetsAsync(stream);
-    
-    // Handle fallback cases if detection graph is not available
-    if (!m_detectionGraph) {
-        if (m_state.graphReady && m_graphExec) {
-            // Fallback to monolithic graph if two-stage not ready
-            cudaError_t err = cudaGraphLaunch(m_graphExec, stream);
-            if (err != cudaSuccess) {
-                m_state.needsRebuild = true;
-                return false;
-            }
-           
-        } else {
-            // No graph available, use direct execution
-            return false;
-        }
-    }
-    
-    // Async profiling without sync
-    if (m_config.enableProfiling) {
-        cudaStreamSynchronize(stream);  // Wait for all operations to complete
-        updateProfilingAsync(stream);
-    }
-    
-    m_state.frameCount++;
-    
-    // Reset frame data flag for next frame
-    m_hasFrameData = false;
-    
-    return true;
-}
-
 
 
 
@@ -848,7 +519,10 @@ bool UnifiedGraphPipeline::allocateBuffers() {
             for (int i = 0; i < 3; i++) {
                 m_tripleBuffer->buffers[i].create(height, width, 4);  // BGRA
                 CUDA_CHECK(cudaEventCreateWithFlags(&m_tripleBuffer->events[i], cudaEventDisableTiming));
+                CUDA_CHECK(cudaEventCreateWithFlags(&m_tripleBuffer->target_ready_events[i], cudaEventDisableTiming));
                 m_tripleBuffer->isReady[i] = false;
+                m_tripleBuffer->target_data_valid[i] = false;
+                m_tripleBuffer->target_count[i] = 0;
             }
             std::cout << "[UnifiedGraph] Triple buffer system initialized" << std::endl;
         }
@@ -999,6 +673,18 @@ void UnifiedGraphPipeline::deallocateBuffers() {
     // Release SimpleCudaMat buffers
     m_captureBuffer.release();
     m_preprocessBuffer.release();
+    
+    // Clean up triple buffer events
+    if (m_tripleBuffer) {
+        for (int i = 0; i < 3; i++) {
+            if (m_tripleBuffer->events[i]) {
+                cudaEventDestroy(m_tripleBuffer->events[i]);
+            }
+            if (m_tripleBuffer->target_ready_events[i]) {
+                cudaEventDestroy(m_tripleBuffer->target_ready_events[i]);
+            }
+        }
+    }
     
     // Helper lambda to safely free CUDA memory
     auto safeCudaFree = [](void*& ptr, const char* name) {
@@ -1177,7 +863,7 @@ void UnifiedGraphPipeline::runMainLoop() {
         // 전체 파이프라인 실행 (캡처→추론→마우스)
         bool success = false;
         try {
-            success = executeGraph(m_primaryStream);
+            success = executeGraphNonBlocking(m_primaryStream);
         } catch (const std::exception& e) {
             std::cerr << "[UnifiedPipeline] Exception in pipeline: " << e.what() << std::endl;
             success = false;
@@ -2111,6 +1797,295 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
             cudaMemsetAsync(m_d_bestTargetIndex, -1, sizeof(int), stream);
         }
     }
+}
+
+// Non-blocking pipeline execution with improved performance
+bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
+    if (!stream) stream = m_primaryStream;
+    auto& ctx = AppContext::getInstance();
+    
+    // Get current and previous pipeline indices
+    int currentIdx = m_currentPipelineIdx.load();
+    int prevIdx = m_prevPipelineIdx.load();
+    
+    if (!m_tripleBuffer) {
+        // Fallback to original blocking execution if triple buffer not available
+        std::cerr << "[UnifiedGraph] Warning: Triple buffer not available, falling back to blocking mode" << std::endl;
+        return false;
+    }
+    
+    // Step 1: Process mouse movement from PREVIOUS frame results (non-blocking)
+    processMouseMovementAsync();
+    
+    // Step 2: Launch GPU work for CURRENT frame
+    // First, capture the frame from D3D11 texture (skip if frame already set by setInputFrame)
+    if (m_config.enableCapture && m_cudaResource && !m_hasFrameData) {
+        // Use current buffer for capture
+        SimpleCudaMat& currentBuffer = m_tripleBuffer->buffers[currentIdx];
+        
+        // Capture current desktop frame using Desktop Duplication
+        if (m_desktopDuplication && m_d3dDevice && m_d3dContext && m_captureTextureD3D) {
+            auto* duplication = static_cast<IDXGIOutputDuplication*>(m_desktopDuplication);
+            auto* d3dContext = static_cast<ID3D11DeviceContext*>(m_d3dContext);
+            auto* captureTexture = static_cast<ID3D11Texture2D*>(m_captureTextureD3D);
+            
+            DXGI_OUTDUPL_FRAME_INFO frameInfo;
+            IDXGIResource* desktopResource = nullptr;
+            HRESULT hr = duplication->AcquireNextFrame(1, &frameInfo, &desktopResource);
+            
+            if (SUCCEEDED(hr) && desktopResource) {
+                ID3D11Texture2D* desktopTexture = nullptr;
+                hr = desktopResource->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&desktopTexture);
+                if (SUCCEEDED(hr) && desktopTexture) {
+                    D3D11_TEXTURE2D_DESC desktopDesc;
+                    desktopTexture->GetDesc(&desktopDesc);
+                    
+                    int centerX = desktopDesc.Width / 2 + static_cast<int>(ctx.config.crosshair_offset_x);
+                    int centerY = desktopDesc.Height / 2 + static_cast<int>(ctx.config.crosshair_offset_y);
+                    int captureSize = ctx.config.detection_resolution;
+                    
+                    int cropX = std::max(0, centerX - captureSize / 2);
+                    int cropY = std::max(0, centerY - captureSize / 2);
+                    cropX = std::min(cropX, static_cast<int>(desktopDesc.Width) - captureSize);
+                    cropY = std::min(cropY, static_cast<int>(desktopDesc.Height) - captureSize);
+                    
+                    D3D11_BOX srcBox;
+                    srcBox.left = cropX;
+                    srcBox.top = cropY;
+                    srcBox.right = cropX + captureSize;
+                    srcBox.bottom = cropY + captureSize;
+                    srcBox.front = 0;
+                    srcBox.back = 1;
+                    
+                    d3dContext->CopySubresourceRegion(captureTexture, 0, 0, 0, 0, 
+                                                     desktopTexture, 0, &srcBox);
+                    desktopTexture->Release();
+                }
+                desktopResource->Release();
+                duplication->ReleaseFrame();
+            }
+        }
+        
+        cudaGetLastError();
+        
+        cudaError_t err = cudaGraphicsMapResources(1, &m_cudaResource, stream);
+        if (err == cudaSuccess) {
+            cudaArray_t array;
+            err = cudaGraphicsSubResourceGetMappedArray(&array, m_cudaResource, 0, 0);
+            if (err == cudaSuccess) {
+                err = cudaMemcpy2DFromArrayAsync(
+                    currentBuffer.data(),
+                    currentBuffer.step(),
+                    array,
+                    0, 0,
+                    currentBuffer.cols() * sizeof(uchar4),
+                    currentBuffer.rows(),
+                    cudaMemcpyDeviceToDevice,
+                    stream
+                );
+            }
+            cudaGraphicsUnmapResources(1, &m_cudaResource, stream);
+        }
+        
+        if (err != cudaSuccess) {
+            printf("[ERROR] Capture failed: %s\n", cudaGetErrorString(err));
+            return false;
+        }
+        
+        m_hasFrameData = true;
+    }
+    
+    // Step 3: Execute detection and inference pipeline on current frame
+    if (!ctx.getDetectionState().isPaused()) {
+        // Copy current buffer to main capture buffer for processing
+        if (!m_tripleBuffer->buffers[currentIdx].empty()) {
+            size_t dataSize = m_tripleBuffer->buffers[currentIdx].rows() * 
+                             m_tripleBuffer->buffers[currentIdx].cols() * 
+                             m_tripleBuffer->buffers[currentIdx].channels() * sizeof(unsigned char);
+            
+            cudaMemcpyAsync(m_captureBuffer.data(), 
+                           m_tripleBuffer->buffers[currentIdx].data(), 
+                           dataSize, cudaMemcpyDeviceToDevice, stream);
+        }
+        
+        // Unified Preprocessing: BGRA → RGB + Resize + Normalize + HWC→CHW
+        if (m_d_yoloInput && !m_captureBuffer.empty()) {
+            cudaError_t err = cuda_unified_preprocessing(
+                m_captureBuffer.data(),
+                m_d_yoloInput,
+                m_captureBuffer.cols(),
+                m_captureBuffer.rows(),
+                m_captureBuffer.step(),
+                ctx.config.onnx_input_resolution,
+                ctx.config.onnx_input_resolution,
+                stream
+            );
+            
+            if (err != cudaSuccess) {
+                printf("[ERROR] Unified preprocessing failed: %s\n", cudaGetErrorString(err));
+                return false;
+            }
+        }
+        
+        // TensorRT Inference
+        if (m_inputBindings.find(m_inputName) != m_inputBindings.end() && m_d_yoloInput) {
+            void* inputBinding = m_inputBindings[m_inputName];
+            
+            if (inputBinding != m_d_yoloInput) {
+                size_t inputSize = ctx.config.onnx_input_resolution * ctx.config.onnx_input_resolution * 3 * sizeof(float);
+                cudaMemcpyAsync(inputBinding, m_d_yoloInput, inputSize, 
+                               cudaMemcpyDeviceToDevice, stream);
+            }
+            
+            if (!runInferenceAsync(stream)) {
+                std::cerr << "[UnifiedGraph] TensorRT inference failed in executeGraphNonBlocking" << std::endl;
+                return false;
+            }
+            
+            // Connect TensorRT output to inference buffer
+            if (m_d_inferenceOutput && !m_outputNames.empty()) {
+                auto bindingIt = m_outputBindings.find(m_outputNames[0]);
+                if (bindingIt != m_outputBindings.end() && bindingIt->second != nullptr) {
+                    size_t outputSize = m_outputSizes[m_outputNames[0]];
+                    cudaMemcpyAsync(m_d_inferenceOutput, bindingIt->second, outputSize, 
+                                   cudaMemcpyDeviceToDevice, stream);
+                }
+            }
+            
+            // Integrated post-processing (decode, filter, NMS, target selection)
+            performIntegratedPostProcessing(stream);
+            performTargetSelection(stream);
+            
+            // Step 4: Copy target results to host memory (async)
+            Target* finalTarget = m_d_bestTarget;
+            if (finalTarget) {
+                cudaMemcpyAsync(&m_tripleBuffer->h_target_coords[currentIdx], finalTarget, sizeof(Target), 
+                               cudaMemcpyDeviceToHost, stream);
+                
+                // Record event when target data is ready
+                cudaEventRecord(m_tripleBuffer->target_ready_events[currentIdx], stream);
+                m_tripleBuffer->target_data_valid[currentIdx] = true;
+                
+                // Check if we have valid targets
+                if (m_d_finalTargetsCount) {
+                    int targetCount = 0;
+                    cudaMemcpyAsync(&targetCount, m_d_finalTargetsCount, sizeof(int), 
+                                   cudaMemcpyDeviceToHost, stream);
+                    m_tripleBuffer->target_count[currentIdx] = targetCount;
+                } else {
+                    m_tripleBuffer->target_count[currentIdx] = 1;
+                }
+            }
+        }
+    }
+    
+    // Step 5: Advance pipeline indices for next frame
+    int nextIdx = (currentIdx + 1) % 3;
+    m_prevPipelineIdx.store(currentIdx);
+    m_currentPipelineIdx.store(nextIdx);
+    
+    // Step 6: Ensure next buffer is ready (wait for completion of work that was 2 frames ago)
+    int nextNextIdx = (nextIdx + 1) % 3;
+    if (m_tripleBuffer->target_data_valid[nextNextIdx]) {
+        cudaEventSynchronize(m_tripleBuffer->target_ready_events[nextNextIdx]);
+    }
+    
+    m_state.frameCount++;
+    m_hasFrameData = false;
+    
+    return true;
+}
+
+void UnifiedGraphPipeline::processMouseMovementAsync() {
+    auto& ctx = AppContext::getInstance();
+    
+    if (!ctx.aiming || !m_tripleBuffer) {
+        return;
+    }
+    
+    int prevIdx = m_prevPipelineIdx.load();
+    
+    // Check if previous frame's target data is ready (non-blocking)
+    if (!m_tripleBuffer->target_data_valid[prevIdx] || 
+        m_tripleBuffer->target_count[prevIdx] == 0) {
+        return;
+    }
+    
+    cudaError_t eventStatus = cudaEventQuery(m_tripleBuffer->target_ready_events[prevIdx]);
+    if (eventStatus != cudaSuccess) {
+        return; // Data not ready yet, skip this frame
+    }
+    
+    // Target data is ready, process mouse movement
+    Target& h_target = m_tripleBuffer->h_target_coords[prevIdx];
+    
+    // Ensure center is calculated
+    h_target.updateCenter();
+    
+    // Apply head/body offset to target center
+    float targetCenterX = h_target.center_x;
+    float targetCenterY;
+    
+    // Find head class ID from class_settings
+    int head_class_id = -1;
+    for(const auto& cs : ctx.config.class_settings) {
+        if (cs.name == ctx.config.head_class_name) {
+            head_class_id = cs.id;
+            break;
+        }
+    }
+    
+    // Check if this is a head or body target and apply appropriate offset
+    if (h_target.classId == head_class_id) {
+        targetCenterY = h_target.y + h_target.height * ctx.config.head_y_offset;
+    } else {
+        targetCenterY = h_target.y + h_target.height * ctx.config.body_y_offset;
+    }
+    
+    // Calculate mouse movement
+    float screenCenterX = ctx.config.detection_resolution / 2.0f;
+    float screenCenterY = ctx.config.detection_resolution / 2.0f;
+    
+    float error_x = targetCenterX - screenCenterX;
+    float error_y = targetCenterY - screenCenterY;
+    
+    // Use PD controller for precise, stable movement
+    float movement_x, movement_y;
+    
+    cuda::PDConfig pd_config = {
+        ctx.config.pd_kp_x,
+        ctx.config.pd_kp_y,
+        ctx.config.pd_kd_x,
+        ctx.config.pd_kd_y,
+        ctx.config.min_movement_threshold_x,
+        ctx.config.min_movement_threshold_y,
+        ctx.config.pd_derivative_filter,
+        100.0f,
+        100.0f
+    };
+    
+    int target_id = h_target.id;
+    float dt = 1.0f / ctx.config.target_fps;
+    if (dt <= 0.0f || dt > 1.0f) dt = 0.016f;
+    
+    cuda::calculatePDControlWithID(
+        target_id, 
+        error_x, error_y, 
+        movement_x, movement_y, 
+        pd_config, 
+        dt
+    );
+    
+    int dx = static_cast<int>(movement_x);
+    int dy = static_cast<int>(movement_y);
+    
+    // Execute mouse movement (non-blocking)
+    if (dx != 0 || dy != 0) {
+        cuda::executeMouseMovementFromGPU(dx, dy);
+    }
+    
+    // Mark this buffer's data as processed
+    m_tripleBuffer->target_data_valid[prevIdx] = false;
 }
 
 } // namespace needaimbot

@@ -75,7 +75,7 @@ struct UnifiedPipelineConfig {
     int maxBatchSize = 1;
     int graphCaptureMode = cudaStreamCaptureModeGlobal;
     int graphInstantiateFlags = 0;
-};
+};;;
 
 
 
@@ -93,7 +93,10 @@ public:
     
     // Main execution methods
     bool captureGraph(cudaStream_t stream = nullptr);
-    bool executeGraph(cudaStream_t stream = nullptr);
+    
+    // Non-blocking pipeline execution methods
+    bool executeGraphNonBlocking(cudaStream_t stream = nullptr);
+    void processMouseMovementAsync();
     
         
     // Pipeline data management
@@ -169,7 +172,13 @@ private:
         std::atomic<int> displayIdx{2};
         cudaEvent_t events[3];
         bool isReady[3] = {false, false, false};
-    };
+        
+        // Add pipeline results for non-blocking mouse movement
+        Target h_target_coords[3];                // Host target coordinates for each buffer
+        cudaEvent_t target_ready_events[3];      // Events to signal when target data is ready
+        bool target_data_valid[3] = {false, false, false};  // Track if target data is valid
+        int target_count[3] = {0, 0, 0};         // Number of targets found for each buffer
+    };;
     std::unique_ptr<TripleBuffer> m_tripleBuffer;
     
     // Component pointers
@@ -262,6 +271,10 @@ private:
     GraphExecutionState m_state;
     std::mutex m_graphMutex;
     bool m_hasFrameData = false;
+    
+    // Pipeline state for non-blocking execution
+    std::atomic<int> m_currentPipelineIdx{0};    // Current pipeline buffer index
+    std::atomic<int> m_prevPipelineIdx{2};       // Previous pipeline buffer index
     
     // Main loop control
     std::atomic<bool> m_shouldStop{false};
