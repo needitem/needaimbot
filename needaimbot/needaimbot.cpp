@@ -280,17 +280,21 @@ bool initializeScreenCapture(needaimbot::UnifiedGraphPipeline* pipeline) {
 // Signal handler for clean shutdown
 static void signalHandler(int sig) {
     std::cout << "\n[MAIN] Received signal " << sig << ", initiating clean shutdown..." << std::endl;
-    AppContext::getInstance().should_exit = true;
+    auto& ctx = AppContext::getInstance();
+    ctx.should_exit = true;
+    ctx.frame_cv.notify_all();  // Wake up main thread
 }
 
 // Console control handler for Windows
 static BOOL WINAPI consoleHandler(DWORD signal) {
     if (signal == CTRL_C_EVENT || signal == CTRL_BREAK_EVENT || signal == CTRL_CLOSE_EVENT) {
         std::cout << "\n[MAIN] Console control event received, initiating clean shutdown..." << std::endl;
-        AppContext::getInstance().should_exit = true;
+        auto& ctx = AppContext::getInstance();
+        ctx.should_exit = true;
+        ctx.frame_cv.notify_all();  // Wake up main thread
         
-        // Give the main thread time to clean up properly
-        Sleep(2000);
+        // Give a short time for cleanup
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
         return TRUE;
     }
     return FALSE;
@@ -453,18 +457,7 @@ int main()
     
     std::cout << "[INFO] Initializing performance monitoring systems..." << std::endl;
     
-    // Set high process priority for better performance (requires admin)
-    if (IsRunAsAdministrator()) {
-        if (SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS)) {
-            std::cout << "[INFO] Process priority set to HIGH for optimal performance." << std::endl;
-        } else {
-            std::cout << "[WARNING] Failed to set high process priority." << std::endl;
-            SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
-        }
-    } else {
-        // Without admin, we can only set up to ABOVE_NORMAL
-        SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
-    }
+    // Process priority removed for better system stability
     
     // Set application title
     SetConsoleTitle(L"Gaming Performance Analyzer - Monitor & Optimize Gaming Performance");
@@ -610,26 +603,31 @@ int main()
             }
         }
 
-        SetThreadAffinityMask(GetCurrentThread(), 1 << 3);
+        // Get number of CPU cores and set affinity dynamically
+        SYSTEM_INFO sysInfo;
+        GetSystemInfo(&sysInfo);
+        DWORD numCores = sysInfo.dwNumberOfProcessors;
+        
+        // Use last core for main thread if available, otherwise use core 0
+        DWORD_PTR mask = numCores > 1 ? (1ULL << (numCores - 1)) : 1;
+        SetThreadAffinityMask(GetCurrentThread(), mask);
+        std::cout << "[INFO] Main thread affinity set to core " << (numCores > 1 ? numCores - 1 : 0) 
+                  << " (total cores: " << numCores << ")" << std::endl;
         
         // TensorRT pipeline starts automatically when initialized
 
         // Create thread managers for better resource management
         // Using unified pipeline thread for all GPU operations (capture, detection, mouse control)
         ThreadManager pipelineThreadMgr("UnifiedPipelineThread", 
-            [&]() { pipelineManager.runMainLoop(); },
-            THREAD_PRIORITY_HIGHEST);
+            [&]() { pipelineManager.runMainLoop(); });
         
         ThreadManager keyThreadMgr("KeyboardThread", 
-            keyboardListener,
-            THREAD_PRIORITY_NORMAL);
+            keyboardListener);
         
         // Mouse thread removed - GPU handles mouse control directly
         // ThreadManager mouseThreadMgr removed
         
-        ThreadManager overlayThreadMgr("OverlayThread", 
-            OverlayThread,
-            THREAD_PRIORITY_BELOW_NORMAL);
+        ThreadManager overlayThreadMgr("OverlayThread", OverlayThread);
         
         // Start all threads
         pipelineThreadMgr.start();
@@ -639,10 +637,18 @@ int main()
 
         welcome_message();
         
-        // Start performance monitoring thread
-        ThreadManager perfMonitorMgr("PerformanceMonitor", []() {
-            while (!AppContext::getInstance().should_exit) {
-                std::this_thread::sleep_for(std::chrono::seconds(10));
+        // Start performance monitoring thread with event-based wakeup
+        std::condition_variable perf_cv;
+        std::mutex perf_mutex;
+        ThreadManager perfMonitorMgr("PerformanceMonitor", [&perf_cv, &perf_mutex]() {
+            auto& ctx = AppContext::getInstance();
+            while (!ctx.should_exit) {
+                // Wait for 10 seconds or until signaled to exit
+                std::unique_lock<std::mutex> lock(perf_mutex);
+                if (perf_cv.wait_for(lock, std::chrono::seconds(10), 
+                    []() { return AppContext::getInstance().should_exit.load(); })) {
+                    break; // Exit signal received
+                }
                 
                 // Log system metrics
                 auto sysMetrics = PerformanceMonitor::getInstance().getSystemMetrics();
@@ -656,54 +662,43 @@ int main()
                 // Log slow operations
                 PerformanceMonitor::getInstance().logSlowOperations();
             }
-        }, THREAD_PRIORITY_LOWEST);
+        });
         perfMonitorMgr.start();
 
-        // Wait for keyboard thread to signal exit with efficient polling
-        while (keyThreadMgr.isRunning() && !ctx.should_exit) {
-            // Sleep to reduce CPU usage while waiting
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        // Wait for exit signal using condition variable instead of polling
+        {
+            std::unique_lock<std::mutex> lock(ctx.configMutex);
+            ctx.frame_cv.wait(lock, [&ctx]() { return ctx.should_exit.load(); });
         }
 
-        // 안전한 종료 시퀀스
+        // Optimized shutdown sequence
         std::cout << "[MAIN] Initiating safe shutdown..." << std::endl;
         
-        // 1. 파이프라인 명시적 정리
-        std::cout << "[MAIN] Stopping unified pipeline..." << std::endl;
+        // Signal all threads to exit
+        perf_cv.notify_all();
+        ctx.frame_cv.notify_all();
+        ctx.detection_cv.notify_all();
+        ctx.mouse_event_cv.notify_all();
+        ctx.mouseDataCV.notify_all();
+        ctx.inference_frame_cv.notify_all();
+        
+        // Stop pipeline first
         pipelineManager.stopMainLoop();
         
-        // 2. 입력 메서드 명시적 정리 (특히 시리얼 연결)
+        // Clean up input method
         if (ctx.mouseThread) {
-            std::cout << "[MAIN] Cleaning up input method..." << std::endl;
-            // GPU handles mouse release now
             executeMouseClick(false); // Release any pressed mouse button
-            // 입력 메서드 안전하게 종료
             ctx.mouseThread->setInputMethod(nullptr);
         }
         
-        // 3. 스레드들을 안전하게 종료 (ThreadManager가 자동으로 처리)
-        std::cout << "[MAIN] Waiting for threads to finish..." << std::endl;
-        
         // ThreadManager destructors will automatically stop and join threads
-        // This happens in reverse order of construction (LIFO)
-
-        // 4. 자원 정리
-        // TensorRT integrated pipeline cleanup
+        // Pipeline cleanup
         pipelineManager.shutdownPipeline();
-        std::cout << "[MAIN] TensorRT Integrated Pipeline shut down." << std::endl;
         
-        // 5. Windows 마우스 상태 정리
-        std::cout << "[MAIN] Resetting Windows mouse state..." << std::endl;
-        // 마우스 버튼이 눌려있을 수 있으므로 강제로 릴리스
+        // Reset Windows mouse state
         INPUT input = {0};
         input.type = INPUT_MOUSE;
         input.mi.dwFlags = MOUSEEVENTF_LEFTUP | MOUSEEVENTF_RIGHTUP | MOUSEEVENTF_MIDDLEUP;
-        SendInput(1, &input, sizeof(INPUT));
-        
-        // 마우스 위치를 현재 위치로 초기화 (움직임 없음)
-        input.mi.dwFlags = MOUSEEVENTF_MOVE;
-        input.mi.dx = 0;
-        input.mi.dy = 0;
         SendInput(1, &input, sizeof(INPUT));
         
         // Log final statistics
