@@ -11,7 +11,6 @@
 #include "../../config/config.h"
 #include "../../needaimbot.h"
 #include "../../AppContext.h"
-#include "../../core/common_utils.h"
 
 /* ---------- Makcu-specific constants ---------------------------- */
 static const uint32_t BOOT_BAUD = 115200;      // baud rate after initial connection
