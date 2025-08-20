@@ -67,7 +67,6 @@
   <ItemGroup>
     <CudaCompile Include="cuda\detection\filterGpu.cu" />
     <CudaCompile Include="cuda\detection\postProcessGpu.cu" />
-    <CudaCompile Include="cuda\detection\targetSelectionGpu.cu" />
     <CudaCompile Include="cuda\detection\cuda_float_processing.cu" />
     <CudaCompile Include="cuda\preprocessing.cu" />
     <CudaCompile Include="cuda\tracking\gpu_tracker.cu" />
