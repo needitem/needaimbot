@@ -38,7 +38,7 @@ __global__ void copyDetectionsKernel(
 // Optimized class filtering kernel (separated from color filtering)
 __global__ __launch_bounds__(256, 4) void filterTargetsByClassIdKernel(
     const Target* __restrict__ input_detections,
-    int num_input_detections,
+    const int* __restrict__ d_input_count,
     Target* __restrict__ output_detections,
     int* __restrict__ output_count,
     const unsigned char* __restrict__ d_allowed_class_ids,
@@ -47,6 +47,10 @@ __global__ __launch_bounds__(256, 4) void filterTargetsByClassIdKernel(
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
+    
+    // Read input count from GPU memory
+    int num_input_detections = *d_input_count;
+    if (num_input_detections <= 0) return;
     
     for (; idx < num_input_detections; idx += stride) {
         const Target det = input_detections[idx];
@@ -146,7 +150,7 @@ __global__ __launch_bounds__(256, 4) void filterTargetsByColorKernel(
 // Host function for class ID filtering only
 cudaError_t filterTargetsByClassIdGpu(
     const Target* d_input_detections,
-    int num_input_detections,
+    const int* d_input_count,
     Target* d_output_detections,
     int* d_output_count,
     const unsigned char* d_allowed_class_ids,
@@ -154,18 +158,17 @@ cudaError_t filterTargetsByClassIdGpu(
     int max_output_detections,
     cudaStream_t stream
 ) {
-    if (num_input_detections <= 0) return cudaSuccess;
     
     // Initialize output count to 0
     cudaMemsetAsync(d_output_count, 0, sizeof(int), stream);
     
-    // Launch class filtering kernel only
+    // Launch class filtering kernel - use sufficient grid size
     int block_size = 256;
-    int grid_size = (num_input_detections + block_size - 1) / block_size;
+    int grid_size = (max_output_detections + block_size - 1) / block_size;
     
     filterTargetsByClassIdKernel<<<grid_size, block_size, 0, stream>>>(
         d_input_detections,
-        num_input_detections,
+        d_input_count,
         d_output_detections,
         d_output_count,
         d_allowed_class_ids,
