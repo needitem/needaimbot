@@ -775,32 +775,7 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
                 m_state.needsRebuild = true;
                 return false;
             }
-            
-            // Log model input/output after monolithic graph
-            static int mono_graph_log_count = 0;
-            if (mono_graph_log_count < 5 && m_d_yoloInput) {
-                cudaStreamSynchronize(stream);
-                float first_pixel[3];
-                cudaMemcpy(first_pixel, m_d_yoloInput, 3 * sizeof(float), cudaMemcpyDeviceToHost);
-                std::cout << "[MODEL INPUT] First pixel BGR: (" 
-                          << first_pixel[0] << ", " << first_pixel[1] << ", " << first_pixel[2] 
-                          << ") Frame: " << mono_graph_log_count << std::endl;
-                
-                // Also try to log output if available
-                if (m_d_finalTargets && m_d_finalTargetsCount) {
-                    int finalCount = 0;
-                    cudaMemcpy(&finalCount, m_d_finalTargetsCount, sizeof(int), cudaMemcpyDeviceToHost);
-                    if (finalCount > 0) {
-                        Target first_detection;
-                        cudaMemcpy(&first_detection, m_d_finalTargets, sizeof(Target), cudaMemcpyDeviceToHost);
-                        std::cout << "[MODEL OUTPUT] First detection - x:" << first_detection.x 
-                                  << " y:" << first_detection.y << " w:" << first_detection.width 
-                                  << " h:" << first_detection.height << " conf:" << first_detection.confidence 
-                                  << " class:" << first_detection.classId << " Frame: " << mono_graph_log_count << std::endl;
-                    }
-                }
-                mono_graph_log_count++;
-            }
+           
         } else {
             // No graph available, use direct execution
             return false;
