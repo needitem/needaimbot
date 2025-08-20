@@ -6,6 +6,7 @@
 #include "mouse_interface.h"
 #include "pd_controller_shared.h"
 #include "../AppContext.h"
+#include "../core/logger.h"
 #include "cuda_error_check.h"
 #include "preprocessing.h"  // Use existing CUDA error checking macros
 #include <d3d11.h>
@@ -592,100 +593,12 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
             cudaGetLastError();
             return false;
         }
-        
-        // Log model input/output after graph execution
-        static int graph_log_count = 0;
-        if (graph_log_count < 5) {
-            cudaStreamSynchronize(stream);
-            
-            // Log model input with comprehensive statistics
-            if (m_d_yoloInput) {
-                // Calculate total elements (configurable input size)
-                size_t total_elements = 3 * ctx.config.onnx_input_resolution * ctx.config.onnx_input_resolution;
-                size_t sample_size = std::min(size_t(10000), total_elements); // Sample 10k values for statistics
-                
-                // Allocate host memory for statistics calculation
-                std::vector<float> data_sample(sample_size);
-                cudaMemcpy(data_sample.data(), m_d_yoloInput, 
-                          sample_size * sizeof(float), cudaMemcpyDeviceToHost);
-                
-                // Calculate min, max, average
-                auto minmax_result = std::minmax_element(data_sample.begin(), data_sample.end());
-                float min_val = *minmax_result.first;
-                float max_val = *minmax_result.second;
-                float sum = std::accumulate(data_sample.begin(), data_sample.end(), 0.0f);
-                float avg_val = sum / sample_size;
-                
-                // Log first pixel for reference
-                float first_pixel[3];
-                cudaMemcpy(first_pixel, m_d_yoloInput, 3 * sizeof(float), cudaMemcpyDeviceToHost);
-                
-                // Log comprehensive preprocessing statistics
-                std::cout << "=== UNIFIED PIPELINE PREPROCESSED DATA STATISTICS (Frame " << graph_log_count << ") ===" << std::endl;
-                std::cout << "  INPUT TENSOR: [3, " << ctx.config.onnx_input_resolution << ", " << ctx.config.onnx_input_resolution << "] (" << total_elements << " elements)" << std::endl;
-                std::cout << "  MIN VALUE:    " << std::fixed << std::setprecision(6) << min_val << std::endl;
-                std::cout << "  MAX VALUE:    " << std::fixed << std::setprecision(6) << max_val << std::endl;
-                std::cout << "  AVERAGE:      " << std::fixed << std::setprecision(6) << avg_val << std::endl;
-                std::cout << "  SAMPLE SIZE:  " << sample_size << " / " << total_elements << std::endl;
-                std::cout << "  FIRST PIXEL:  RGB(" << std::fixed << std::setprecision(6) << first_pixel[0] << ", " << first_pixel[1] << ", " << first_pixel[2] << ")" << std::endl;
-                std::cout << "=====================================================================================" << std::endl;
-            }
-            
-            // Log model output if available
-            if (m_d_finalTargets && m_d_finalTargetsCount) {
-                int finalCount = 0;
-                cudaMemcpy(&finalCount, m_d_finalTargetsCount, sizeof(int), cudaMemcpyDeviceToHost);
-                std::cout << "[MODEL OUTPUT] Detection count: " << finalCount << " (Frame " << graph_log_count << ")" << std::endl;
-                
-                if (finalCount > 0) {
-                    Target first_detection;
-                    cudaMemcpy(&first_detection, m_d_finalTargets, sizeof(Target), cudaMemcpyDeviceToHost);
-                    std::cout << "[MODEL OUTPUT] First detection - x:" << first_detection.x 
-                              << " y:" << first_detection.y << " w:" << first_detection.width 
-                              << " h:" << first_detection.height << " conf:" << first_detection.confidence 
-                              << " class:" << first_detection.classId << " Frame: " << graph_log_count << std::endl;
-                    
-                    // Log all detections if count is reasonable
-                    if (finalCount <= 10) {
-                        std::vector<Target> allTargets(finalCount);
-                        cudaMemcpy(allTargets.data(), m_d_finalTargets, finalCount * sizeof(Target), cudaMemcpyDeviceToHost);
-                        for (int i = 0; i < finalCount; i++) {
-                            std::cout << "  Detection " << i << ": (" << allTargets[i].x << "," << allTargets[i].y 
-                                      << ") " << allTargets[i].width << "×" << allTargets[i].height 
-                                      << " conf:" << std::fixed << std::setprecision(3) << allTargets[i].confidence 
-                                      << " class:" << allTargets[i].classId << std::endl;
-                        }
-                    }
-                } else {
-                    std::cout << "[MODEL OUTPUT] No detections found (Frame " << graph_log_count << ")" << std::endl;
-                }
-            }
-            
-            // Log final selected target if available
-            if (m_d_bestTarget && m_d_bestTargetIndex) {
-                Target final_target;
-                int target_index;
-                cudaMemcpy(&final_target, m_d_bestTarget, sizeof(Target), cudaMemcpyDeviceToHost);
-                cudaMemcpy(&target_index, m_d_bestTargetIndex, sizeof(int), cudaMemcpyDeviceToHost);
-                if (target_index >= 0) {
-                    std::cout << "[FINAL TARGET] Selected target - x:" << final_target.x 
-                              << " y:" << final_target.y << " w:" << final_target.width 
-                              << " h:" << final_target.height << " conf:" << final_target.confidence 
-                              << " class:" << final_target.classId << " index:" << target_index 
-                              << " Frame: " << graph_log_count << std::endl;
-                }
-            }
-            
-            graph_log_count++;
-        }
     }
     
     // Always run detector after graph (or without graph)
     
     if (!ctx.getDetectionState().isPaused()) {
-        
-        // Phase 2.3: Use integrated TensorRT pipeline with asynchronous execution
-        
+
         // 1. Unified Preprocessing: BGRA → RGB + Resize + Normalize + HWC→CHW
         if (m_d_yoloInput && !m_captureBuffer.empty()) {
             // Use new unified preprocessing function
@@ -731,9 +644,7 @@ bool UnifiedGraphPipeline::executeGraph(cudaStream_t stream) {
                                    cudaMemcpyDeviceToDevice, stream);
                 }
             }
-            
-            // Inference logging disabled
-            
+                        
             // 3. Integrated post-processing (Phase 3: decode, filter, NMS, target selection)
             performIntegratedPostProcessing(stream);
             
@@ -2031,38 +1942,6 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
 
     // Step 2: Get decoded count for further processing
     int decodedCount = 0;
-    
-    // DEBUG: Check raw detection count after decoding
-    static int decode_debug_count = 0;
-    if (decode_debug_count < 5) {
-        cudaStreamSynchronize(stream);
-        if (m_d_decodedCount) {
-            cudaMemcpy(&decodedCount, m_d_decodedCount, sizeof(int), cudaMemcpyDeviceToHost);
-            std::cout << "[RAW DECODE] Frame " << decode_debug_count << ": Raw decoded count before any filtering: " << decodedCount << std::endl;
-            std::cout << "[RAW DECODE] Using threshold: " << cached_confidence_threshold << ", postprocess: " << cached_postprocess << std::endl;
-            std::cout << "[RAW DECODE] Output shape: ";
-            for (size_t i = 0; i < shape.size(); i++) {
-                std::cout << shape[i];
-                if (i < shape.size() - 1) std::cout << "x";
-            }
-            std::cout << std::endl;
-            std::cout << "[RAW DECODE] num_classes: " << m_numClasses << ", img_scale: " << m_imgScale << std::endl;
-            
-            // Sample first few raw detections if any exist
-            if (decodedCount > 0 && m_d_decodedTargets) {
-                Target sample_targets[5];
-                int samplesToCheck = std::min(decodedCount, 5);
-                cudaMemcpy(sample_targets, m_d_decodedTargets, samplesToCheck * sizeof(Target), cudaMemcpyDeviceToHost);
-                
-                for (int i = 0; i < samplesToCheck; i++) {
-                    std::cout << "[RAW DECODE] Target " << i << ": x=" << sample_targets[i].x 
-                              << ", y=" << sample_targets[i].y << ", conf=" << sample_targets[i].confidence 
-                              << ", class=" << sample_targets[i].classId << std::endl;
-                }
-            }
-        }
-        decode_debug_count++;
-    }
     cudaError_t countCopyErr = cudaMemcpyAsync(&decodedCount, m_d_decodedCount, sizeof(int), 
                                                cudaMemcpyDeviceToHost, stream);
     if (countCopyErr != cudaSuccess) {
@@ -2081,7 +1960,7 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
         }
         return;
     }
-
+    
     // Early exit if no detections were decoded
     if (decodedCount == 0) {
         if (m_d_finalTargetsCount) {
@@ -2092,6 +1971,21 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
 
     // Step 3: Class ID filtering
     if (m_d_classFilteredTargets && m_d_classFilteredCount && m_d_allowFlags) {
+        // Update class filtering flags from config
+        unsigned char h_allowFlags[Constants::MAX_CLASSES_FOR_FILTERING];
+        memset(h_allowFlags, 0, Constants::MAX_CLASSES_FOR_FILTERING);
+        
+        // Copy class settings to allow flags
+        for (const auto& setting : ctx.config.class_settings) {
+            if (setting.id >= 0 && setting.id < Constants::MAX_CLASSES_FOR_FILTERING) {
+                h_allowFlags[setting.id] = setting.allow ? 1 : 0;
+            }
+        }
+        
+        // Copy to GPU
+        cudaMemcpyAsync(m_d_allowFlags, h_allowFlags, Constants::MAX_CLASSES_FOR_FILTERING * sizeof(unsigned char), cudaMemcpyHostToDevice, stream);
+        cudaStreamSynchronize(stream);
+        
         cudaError_t filterErr = filterTargetsByClassIdGpu(
             m_d_decodedTargets,
             decodedCount,
@@ -2203,22 +2097,6 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
         if (m_d_finalTargetsCount) {
             cudaMemsetAsync(m_d_finalTargetsCount, 0, sizeof(int), stream);
         }
-    }
-    
-    // Log first detection result for debugging
-    static int detection_log_count = 0;
-    if (detection_log_count < 5 && m_d_finalTargets && m_d_finalTargetsCount) {  // Log first 5 frames only
-        int finalCount = 0;
-        cudaMemcpy(&finalCount, m_d_finalTargetsCount, sizeof(int), cudaMemcpyDeviceToHost);
-        if (finalCount > 0) {
-            Target first_detection;
-            cudaMemcpy(&first_detection, m_d_finalTargets, sizeof(Target), cudaMemcpyDeviceToHost);
-            std::cout << "[MODEL OUTPUT] First detection - x:" << first_detection.x 
-                      << " y:" << first_detection.y << " w:" << first_detection.width 
-                      << " h:" << first_detection.height << " conf:" << first_detection.confidence 
-                      << " class:" << first_detection.classId << " Frame: " << detection_log_count << std::endl;
-        }
-        detection_log_count++;
     }
 }
 
