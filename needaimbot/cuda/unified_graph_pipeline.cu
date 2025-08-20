@@ -1741,14 +1741,7 @@ bool UnifiedGraphPipeline::runInferenceAsync(cudaStream_t stream) {
             return false;
         }
         
-        // Validate memory pointer before setting tensor address
-        cudaPointerAttributes attrs;
-        cudaError_t ptrErr = cudaPointerGetAttributes(&attrs, bindingIt->second);
-        if (ptrErr != cudaSuccess) {
-            std::cerr << "[Pipeline] Invalid input memory pointer for: " << inputName 
-                      << " - " << cudaGetErrorString(ptrErr) << std::endl;
-            return false;
-        }
+        // Pointer validation removed for performance - validation done at allocation time
         
         if (!m_context->setTensorAddress(inputName.c_str(), bindingIt->second)) {
             std::cerr << "[Pipeline] Failed to set input tensor address for: " << inputName << std::endl;
@@ -1764,14 +1757,7 @@ bool UnifiedGraphPipeline::runInferenceAsync(cudaStream_t stream) {
             return false;
         }
         
-        // Validate memory pointer before setting tensor address
-        cudaPointerAttributes attrs;
-        cudaError_t ptrErr = cudaPointerGetAttributes(&attrs, bindingIt->second);
-        if (ptrErr != cudaSuccess) {
-            std::cerr << "[Pipeline] Invalid output memory pointer for: " << outputName 
-                      << " - " << cudaGetErrorString(ptrErr) << std::endl;
-            return false;
-        }
+        // Pointer validation removed for performance - validation done at allocation time
         
         if (!m_context->setTensorAddress(outputName.c_str(), bindingIt->second)) {
             std::cerr << "[Pipeline] Failed to set output tensor address for: " << outputName << std::endl;
@@ -1957,7 +1943,6 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
         
         // Copy to GPU
         cudaMemcpyAsync(m_d_allowFlags, h_allowFlags, Constants::MAX_CLASSES_FOR_FILTERING * sizeof(unsigned char), cudaMemcpyHostToDevice, stream);
-        cudaStreamSynchronize(stream);
         
         cudaError_t filterErr = filterTargetsByClassIdGpu(
             m_d_decodedTargets,
@@ -2010,7 +1995,8 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
         
         // Get count for NMS input - only copy needed for NMS API
         int inputCount = 0;
-        cudaMemcpy(&inputCount, nmsInputCount, sizeof(int), cudaMemcpyDeviceToHost);
+        cudaMemcpyAsync(&inputCount, nmsInputCount, sizeof(int), cudaMemcpyDeviceToHost, stream);
+        cudaStreamSynchronize(stream); // Required for NMS API to read inputCount
         
         // Skip NMS if no input detections
         if (inputCount <= 0) {
@@ -2052,10 +2038,11 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
             if (finalCount > 0 && finalCount <= cached_max_detections) {
                 validateTargetsGpu(m_d_finalTargets, finalCount, stream);
                 
-                // Copy results to CPU and update DetectionState for preview window
+                // Copy results to CPU and update DetectionState for preview window (async)
                 std::vector<Target> finalTargets(finalCount);
-                cudaMemcpy(finalTargets.data(), m_d_finalTargets, 
-                          finalCount * sizeof(Target), cudaMemcpyDeviceToHost);
+                cudaMemcpyAsync(finalTargets.data(), m_d_finalTargets, 
+                              finalCount * sizeof(Target), cudaMemcpyDeviceToHost, stream);
+                cudaStreamSynchronize(stream); // Required for DetectionState update
                 ctx.getDetectionState().updateTargets(finalTargets);
             } else {
                 // Clear DetectionState if no valid targets
