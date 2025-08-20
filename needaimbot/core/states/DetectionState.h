@@ -21,6 +21,7 @@ namespace Core {
         // 상태 플래그
         std::atomic<bool> detectionPaused_{false};
         std::atomic<bool> modelChanged_{false};
+        std::atomic<bool> previewEnabled_{false};  // Preview window가 활성화되어 있는지
         
         // 성능 메트릭
         std::atomic<float> inferenceTime_{0.0f};
@@ -52,6 +53,12 @@ namespace Core {
         void pauseDetection() { detectionPaused_ = true; }
         void resumeDetection() { detectionPaused_ = false; }
         bool isPaused() const { return detectionPaused_.load(); }
+        
+        void enablePreview() { previewEnabled_ = true; }
+        void disablePreview() { previewEnabled_ = false; }
+        void setPreviewEnabled(bool enabled) { previewEnabled_ = enabled; }
+        bool isPreviewEnabled() const { return previewEnabled_.load(); }
+        bool needsUpdate() const { return previewEnabled_.load(); }  // Preview가 활성화되어 있을 때만 업데이트 필요
         
         void markModelChanged() { modelChanged_ = true; }
         bool checkAndResetModelChange();
