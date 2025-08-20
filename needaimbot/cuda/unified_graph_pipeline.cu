@@ -1940,34 +1940,7 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
         return;
     }
 
-    // Step 2: Get decoded count for further processing
-    int decodedCount = 0;
-    cudaError_t countCopyErr = cudaMemcpyAsync(&decodedCount, m_d_decodedCount, sizeof(int), 
-                                               cudaMemcpyDeviceToHost, stream);
-    if (countCopyErr != cudaSuccess) {
-        std::cerr << "[Pipeline] Failed to copy decoded count: " << cudaGetErrorString(countCopyErr) << std::endl;
-        if (m_d_finalTargetsCount) {
-            cudaMemsetAsync(m_d_finalTargetsCount, 0, sizeof(int), stream);
-        }
-        return;
-    }
-    
-    cudaError_t syncErr = cudaStreamSynchronize(stream);
-    if (syncErr != cudaSuccess) {
-        std::cerr << "[Pipeline] Stream sync failed: " << cudaGetErrorString(syncErr) << std::endl;
-        if (m_d_finalTargetsCount) {
-            cudaMemsetAsync(m_d_finalTargetsCount, 0, sizeof(int), stream);
-        }
-        return;
-    }
-    
-    // Early exit if no detections were decoded
-    if (decodedCount == 0) {
-        if (m_d_finalTargetsCount) {
-            cudaMemsetAsync(m_d_finalTargetsCount, 0, sizeof(int), stream);
-        }
-        return;
-    }
+    // Step 2: Continue processing - early exit checks will be done by GPU kernels
 
     // Step 3: Class ID filtering
     if (m_d_classFilteredTargets && m_d_classFilteredCount && m_d_allowFlags) {
@@ -1988,7 +1961,7 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
         
         cudaError_t filterErr = filterTargetsByClassIdGpu(
             m_d_decodedTargets,
-            decodedCount,
+            m_d_decodedCount,
             m_d_classFilteredTargets,
             m_d_classFilteredCount,
             m_d_allowFlags,
@@ -2005,36 +1978,18 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
             return;
         }
     } else {
-        // No class filtering - copy decoded targets directly
+        // No class filtering - copy decoded targets directly (max buffer size)
         if (m_d_classFilteredTargets && m_d_classFilteredCount) {
             cudaMemcpyAsync(m_d_classFilteredTargets, m_d_decodedTargets, 
-                          decodedCount * sizeof(Target), cudaMemcpyDeviceToDevice, stream);
+                          300 * sizeof(Target), cudaMemcpyDeviceToDevice, stream);
             cudaMemcpyAsync(m_d_classFilteredCount, m_d_decodedCount, 
                           sizeof(int), cudaMemcpyDeviceToDevice, stream);
         }
     }
 
-    // Get class filtered count
-    int classFilteredCount = 0;
-    if (m_d_classFilteredCount) {
-        cudaMemcpyAsync(&classFilteredCount, m_d_classFilteredCount, sizeof(int), 
-                       cudaMemcpyDeviceToHost, stream);
-        cudaStreamSynchronize(stream);
-    } else {
-        classFilteredCount = decodedCount;
-    }
-
-    // Early exit if no detections after class filtering
-    if (classFilteredCount == 0) {
-        if (m_d_finalTargetsCount) {
-            cudaMemsetAsync(m_d_finalTargetsCount, 0, sizeof(int), stream);
-        }
-        return;
-    }
-
-    // Step 4: Color filtering (if enabled and available)
+    // Step 4: Determine NMS input (class filtered targets or decoded targets)
     Target* nmsInputTargets = m_d_classFilteredTargets ? m_d_classFilteredTargets : m_d_decodedTargets;
-    int effectiveFilteredCount = classFilteredCount;
+    int* nmsInputCount = m_d_classFilteredCount ? m_d_classFilteredCount : m_d_decodedCount;
 
     // TODO: Color filtering will be implemented when color mask integration is complete
     // For now, we skip color filtering step
@@ -2053,10 +2008,22 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
             cached_frame_height = ctx.config.detection_resolution;
         }
         
+        // Get count for NMS input - only copy needed for NMS API
+        int inputCount = 0;
+        cudaMemcpy(&inputCount, nmsInputCount, sizeof(int), cudaMemcpyDeviceToHost);
+        
+        // Skip NMS if no input detections
+        if (inputCount <= 0) {
+            if (m_d_finalTargetsCount) {
+                cudaMemsetAsync(m_d_finalTargetsCount, 0, sizeof(int), stream);
+            }
+            return;
+        }
+        
         try {
             NMSGpu(
                 nmsInputTargets,
-                effectiveFilteredCount,
+                inputCount,
                 m_d_finalTargets,
                 m_d_finalTargetsCount,
                 cached_max_detections,
@@ -2084,6 +2051,15 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
             
             if (finalCount > 0 && finalCount <= cached_max_detections) {
                 validateTargetsGpu(m_d_finalTargets, finalCount, stream);
+                
+                // Copy results to CPU and update DetectionState for preview window
+                std::vector<Target> finalTargets(finalCount);
+                cudaMemcpy(finalTargets.data(), m_d_finalTargets, 
+                          finalCount * sizeof(Target), cudaMemcpyDeviceToHost);
+                ctx.getDetectionState().updateTargets(finalTargets);
+            } else {
+                // Clear DetectionState if no valid targets
+                ctx.getDetectionState().clearTargets();
             }
             
         } catch (const std::exception& e) {
@@ -2091,12 +2067,14 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
             if (m_d_finalTargetsCount) {
                 cudaMemsetAsync(m_d_finalTargetsCount, 0, sizeof(int), stream);
             }
+            ctx.getDetectionState().clearTargets();
         }
     } else {
         std::cerr << "[Pipeline] NMS buffers not properly allocated!" << std::endl;
         if (m_d_finalTargetsCount) {
             cudaMemsetAsync(m_d_finalTargetsCount, 0, sizeof(int), stream);
         }
+        ctx.getDetectionState().clearTargets();
     }
 }
 
@@ -2169,22 +2147,6 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         // Clear best target on failure
         if (m_d_bestTargetIndex) {
             cudaMemsetAsync(m_d_bestTargetIndex, -1, sizeof(int), stream);
-        }
-    } else {
-        // Log final target data for debugging  
-        static int final_target_log_count = 0;
-        if (final_target_log_count < 5) {  // Log first 5 frames only
-            cudaStreamSynchronize(stream);  // Ensure target selection is done
-            Target final_target;
-            int target_index;
-            cudaMemcpy(&final_target, m_d_bestTarget, sizeof(Target), cudaMemcpyDeviceToHost);
-            cudaMemcpy(&target_index, m_d_bestTargetIndex, sizeof(int), cudaMemcpyDeviceToHost);
-            std::cout << "[FINAL TARGET] Selected target - x:" << final_target.x 
-                      << " y:" << final_target.y << " w:" << final_target.width 
-                      << " h:" << final_target.height << " conf:" << final_target.confidence 
-                      << " class:" << final_target.classId << " index:" << target_index 
-                      << " Frame: " << final_target_log_count << std::endl;
-            final_target_log_count++;
         }
     }
 }

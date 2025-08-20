@@ -6,7 +6,7 @@
 // Class ID filtering function (optimized and separated)
 cudaError_t filterTargetsByClassIdGpu(
     const Target* d_input_detections,
-    int num_input_detections,
+    const int* d_input_count,
     Target* d_output_detections,
     int* d_output_count,
     const unsigned char* d_allowed_class_ids,
