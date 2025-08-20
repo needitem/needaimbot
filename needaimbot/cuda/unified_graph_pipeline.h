@@ -152,6 +152,7 @@ private:
     // Pipeline synchronization
     cudaEvent_t m_detectionEvent = nullptr;
     cudaEvent_t m_trackingEvent = nullptr;
+    cudaEvent_t m_previewReadyEvent = nullptr;  // Event for async preview updates
     bool m_prevFrameHasTarget = false;
     
     // Graph nodes for dynamic updates

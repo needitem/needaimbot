@@ -510,6 +510,9 @@ int main()
             return -1;
         }
         
+        // Initialize DetectionState preview flag based on config
+        ctx.getDetectionState().setPreviewEnabled(ctx.config.show_window);
+        
 
 
         // Initialize CUDA context directly (Phase 1 integration)

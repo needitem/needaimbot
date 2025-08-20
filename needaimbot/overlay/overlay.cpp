@@ -762,6 +762,10 @@ void OverlayThread()
                         prev_always_on_top = ctx.config.always_on_top;
                         show_window_changed.store(true);
                         prev_show_window = ctx.config.show_window;
+                        
+                        // Update DetectionState preview flag when show_window changes
+                        ctx.getDetectionState().setPreviewEnabled(ctx.config.show_window);
+                        
                         config_needs_save = true;
                     }
                     
