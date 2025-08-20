@@ -47,8 +47,8 @@ cudaError_t decodeYolo10Gpu(
     float img_scale,
     Target* d_decoded_detections,
     int* d_decoded_count,
-    int max_candidates,
     int max_detections,
+    int max_candidates,
     cudaStream_t stream);
 
 
@@ -61,8 +61,8 @@ cudaError_t decodeYolo11Gpu(
     float img_scale,
     Target* d_decoded_detections,
     int* d_decoded_count,
-    int max_candidates,
     int max_detections,
+    int max_candidates,
     cudaStream_t stream);
 
 // GPU function to find closest target to crosshair
