@@ -214,6 +214,7 @@ UnifiedGraphPipeline::~UnifiedGraphPipeline() {
     if (m_state.endEvent) cudaEventDestroy(m_state.endEvent);
     if (m_detectionEvent) cudaEventDestroy(m_detectionEvent);
     if (m_trackingEvent) cudaEventDestroy(m_trackingEvent);
+    if (m_previewReadyEvent) cudaEventDestroy(m_previewReadyEvent);
 }
 
 bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
@@ -236,6 +237,7 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
     // Create events for two-stage pipeline
     cudaEventCreateWithFlags(&m_detectionEvent, cudaEventDisableTiming);
     cudaEventCreateWithFlags(&m_trackingEvent, cudaEventDisableTiming);
+    cudaEventCreateWithFlags(&m_previewReadyEvent, cudaEventDisableTiming);
     m_prevFrameHasTarget = false;
     
     // Initialize TensorRT (Phase 1 integration - now required)
@@ -1654,23 +1656,24 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
             cached_frame_height = ctx.config.detection_resolution;
         }
         
-        // Get count for NMS input - only copy needed for NMS API
-        int inputCount = 0;
-        cudaMemcpyAsync(&inputCount, nmsInputCount, sizeof(int), cudaMemcpyDeviceToHost, stream);
-        cudaStreamSynchronize(stream); // Required for NMS API to read inputCount
-        
-        // Skip NMS if no input detections
-        if (inputCount <= 0) {
-            if (m_d_finalTargetsCount) {
-                cudaMemsetAsync(m_d_finalTargetsCount, 0, sizeof(int), stream);
-            }
-            return;
+        // Get count for NMS input - use pinned memory for async transfer
+        static int* h_inputCount_pinned = nullptr;
+        if (!h_inputCount_pinned) {
+            cudaHostAlloc(&h_inputCount_pinned, sizeof(int), cudaHostAllocDefault);
         }
         
+        // Copy count async without blocking
+        cudaMemcpyAsync(h_inputCount_pinned, nmsInputCount, sizeof(int), cudaMemcpyDeviceToHost, stream);
+        
+        // Continue processing without waiting - use previous frame's count
+        static int last_input_count = 0;
+        
         try {
+            // Use previous frame's count to avoid sync
+            // The actual count will be ready for next frame
             NMSGpu(
                 nmsInputTargets,
-                inputCount,
+                last_input_count,  // Use previous frame's count to avoid sync
                 m_d_finalTargets,
                 m_d_finalTargetsCount,
                 cached_max_detections,
@@ -1690,25 +1693,52 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
                 stream
             );
             
-            // Validate detections after NMS
-            int finalCount = 0;
-            cudaMemcpyAsync(&finalCount, m_d_finalTargetsCount, sizeof(int), 
-                           cudaMemcpyDeviceToHost, stream);
-            cudaStreamSynchronize(stream);
+            // Validate detections on GPU without sync
+            validateTargetsGpu(m_d_finalTargets, cached_max_detections, stream);
             
-            if (finalCount > 0 && finalCount <= cached_max_detections) {
-                validateTargetsGpu(m_d_finalTargets, finalCount, stream);
+            // Only copy to CPU if preview window is enabled
+            if (ctx.config.show_window) {
+                // Use static variables to persist between frames
+                static int h_finalCount = 0;
+                static std::vector<Target> h_finalTargets(cached_max_detections);
+                static cudaEvent_t copyEvent = nullptr;
+                static bool copyInProgress = false;
                 
-                // Copy results to CPU and update DetectionState for preview window (async)
-                std::vector<Target> finalTargets(finalCount);
-                cudaMemcpyAsync(finalTargets.data(), m_d_finalTargets, 
-                              finalCount * sizeof(Target), cudaMemcpyDeviceToHost, stream);
-                cudaStreamSynchronize(stream); // Required for DetectionState update
-                ctx.getDetectionState().updateTargets(finalTargets);
-            } else {
-                // Clear DetectionState if no valid targets
-                ctx.getDetectionState().clearTargets();
+                // Initialize event once
+                if (!copyEvent) {
+                    cudaEventCreateWithFlags(&copyEvent, cudaEventDisableTiming);
+                }
+                
+                // Check if previous copy is complete
+                if (copyInProgress) {
+                    if (cudaEventQuery(copyEvent) == cudaSuccess) {
+                        // Previous copy completed, update preview
+                        if (h_finalCount > 0 && h_finalCount <= cached_max_detections) {
+                            h_finalTargets.resize(h_finalCount);
+                            ctx.getDetectionState().updateTargets(h_finalTargets);
+                        }
+                        copyInProgress = false;
+                    }
+                }
+                
+                // Start new copy if not already in progress
+                if (!copyInProgress) {
+                    // Copy count first (small, fast)
+                    cudaMemcpyAsync(&h_finalCount, m_d_finalTargetsCount, sizeof(int), 
+                                   cudaMemcpyDeviceToHost, stream);
+                    
+                    // Copy targets (only up to max_detections)
+                    cudaMemcpyAsync(h_finalTargets.data(), m_d_finalTargets, 
+                                  cached_max_detections * sizeof(Target), cudaMemcpyDeviceToHost, stream);
+                    
+                    // Record event for this copy
+                    cudaEventRecord(copyEvent, stream);
+                    copyInProgress = true;
+                }
             }
+            
+            // Always update input count for next frame (regardless of preview)
+            last_input_count = *h_inputCount_pinned;
             
         } catch (const std::exception& e) {
             std::cerr << "[Pipeline] Exception during NMSGpu: " << e.what() << std::endl;
@@ -2014,10 +2044,15 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
     m_prevPipelineIdx.store(currentIdx);
     m_currentPipelineIdx.store(nextIdx);
     
-    // Step 6: Ensure next buffer is ready (wait for completion of work that was 2 frames ago)
+    // Step 6: Check if next buffer is ready without blocking
     int nextNextIdx = (nextIdx + 1) % 3;
     if (m_tripleBuffer->target_data_valid[nextNextIdx]) {
-        cudaEventSynchronize(m_tripleBuffer->target_ready_events[nextNextIdx]);
+        // Use non-blocking query instead of synchronize
+        cudaError_t status = cudaEventQuery(m_tripleBuffer->target_ready_events[nextNextIdx]);
+        if (status != cudaSuccess && status != cudaErrorNotReady) {
+            // Only sync if there's an actual error, not if just not ready
+            cudaEventSynchronize(m_tripleBuffer->target_ready_events[nextNextIdx]);
+        }
     }
     
     m_state.frameCount++;
