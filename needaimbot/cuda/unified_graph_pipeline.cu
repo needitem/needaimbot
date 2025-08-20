@@ -860,7 +860,20 @@ void UnifiedGraphPipeline::runMainLoop() {
     auto cycleStartTime = m_lastFrameTime;  // 1000사이클 시작 시간
     int cycleStartFrame = m_state.frameCount;  // 1000사이클 시작 프레임
     
+    // FPS 제한을 위한 변수
+    auto lastFrameTime = std::chrono::high_resolution_clock::now();
+    
     while (!m_shouldStop && !ctx.should_exit) {
+        // FPS 제한 로직 - 메인 루프 시작에서 적용
+        const auto targetFrameTime = std::chrono::microseconds(static_cast<int64_t>(1000000.0f / ctx.config.target_fps));
+        
+        auto currentTime = std::chrono::high_resolution_clock::now();
+        auto elapsed = currentTime - lastFrameTime;
+        
+        if (elapsed < targetFrameTime) {
+            std::this_thread::sleep_for(targetFrameTime - elapsed);
+        }
+        lastFrameTime = std::chrono::high_resolution_clock::now();
         // 전체 파이프라인 실행 (캡처→추론→마우스)
         bool success = false;
         try {
@@ -1874,18 +1887,6 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
         
         // Capture current desktop frame using Desktop Duplication
         if (m_desktopDuplication && m_d3dDevice && m_d3dContext && m_captureTextureD3D) {
-            // FPS 제한 로직 - 캡처 시점에서 적용
-            static auto lastCaptureTime = std::chrono::high_resolution_clock::now();
-            const auto targetFrameTime = std::chrono::microseconds(static_cast<int64_t>(1000000.0f / ctx.config.target_fps));
-            
-            auto currentTime = std::chrono::high_resolution_clock::now();
-            auto elapsed = currentTime - lastCaptureTime;
-            
-            if (elapsed < targetFrameTime) {
-                std::this_thread::sleep_for(targetFrameTime - elapsed);
-            }
-            lastCaptureTime = std::chrono::high_resolution_clock::now();
-            
             auto* duplication = static_cast<IDXGIOutputDuplication*>(m_desktopDuplication);
             auto* d3dContext = static_cast<ID3D11DeviceContext*>(m_d3dContext);
             auto* captureTexture = static_cast<ID3D11Texture2D*>(m_captureTextureD3D);
