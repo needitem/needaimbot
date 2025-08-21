@@ -865,10 +865,53 @@ void UnifiedGraphPipeline::runMainLoop() {
     CPUFrameLimiter frameLimiter(ctx.config.target_fps);
     frameLimiter.enable(true);
     
+    // Track aimbot state changes
+    bool wasAiming = false;
+    
     while (!m_shouldStop && !ctx.should_exit) {
+        // Only run pipeline when aimbot is active
+        if (!ctx.aiming) {
+            // Log state change
+            if (wasAiming) {
+                std::cout << "[UnifiedPipeline] Aimbot deactivated - suspending pipeline" << std::endl;
+                
+                // Synchronize to ensure all GPU work is complete
+                cudaStreamSynchronize(m_primaryStream);
+                
+                // Clear any pending targets
+                if (m_d_bestTargetIndex) {
+                    cudaMemsetAsync(m_d_bestTargetIndex, -1, sizeof(int), m_primaryStream);
+                }
+                if (m_d_bestTarget) {
+                    cudaMemsetAsync(m_d_bestTarget, 0, sizeof(Target), m_primaryStream);
+                }
+                
+                wasAiming = false;
+            }
+            
+            // When aimbot is inactive, sleep to save resources
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            
+            // Reset frame limiter timing after idle period
+            frameLimiter.reset();
+            continue;
+        }
+        
+        // Log activation
+        if (!wasAiming) {
+            std::cout << "[UnifiedPipeline] Aimbot activated - resuming pipeline" << std::endl;
+            wasAiming = true;
+            
+            // Reset statistics
+            m_state.frameCount = 0;
+            cycleStartTime = std::chrono::high_resolution_clock::now();
+            cycleStartFrame = 0;
+        }
+        
         // Apply CPU-based frame limiting to reduce GPU load
         frameLimiter.limitFrame();
-        // 전체 파이프라인 실행 (캡처→추론→마우스)
+        
+        // Execute full pipeline only when aiming
         bool success = false;
         try {
             success = executeGraphNonBlocking(m_primaryStream);
@@ -901,7 +944,8 @@ void UnifiedGraphPipeline::runMainLoop() {
                           << " - Avg FPS: " << std::fixed << std::setprecision(1) << averageFPS
                           << " | Target FPS: " << frameLimiter.getTargetFPS()
                           << " | GPU Mem: " << std::setprecision(1) << gpu_memory_usage << "%"
-                          << " | Latency: " << m_state.avgLatency << "ms" << std::endl;
+                          << " | Latency: " << m_state.avgLatency << "ms"
+                          << " | Mode: AIMING" << std::endl;
                 
                 // Dynamic FPS adjustment based on performance
                 if (averageFPS < frameLimiter.getTargetFPS() * 0.9f && gpu_memory_usage > 80.0f) {
