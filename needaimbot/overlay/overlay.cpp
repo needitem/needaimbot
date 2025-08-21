@@ -183,6 +183,7 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_DESTROY:
         should_exit = true;
         AppContext::getInstance().should_exit = true;
+        AppContext::getInstance().frame_cv.notify_all();  // Wake up main thread
         ::PostQuitMessage(0);
         return 0;
     default:
@@ -466,6 +467,8 @@ void OverlayThread()
             if (msg.message == WM_QUIT)
             {
                 should_exit = true;
+                AppContext::getInstance().should_exit = true;
+                AppContext::getInstance().frame_cv.notify_all();  // Wake up main thread
                 return;
             }
         }

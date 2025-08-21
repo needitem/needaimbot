@@ -63,6 +63,7 @@ void keyboardListener() {
     while (!ctx.should_exit) {
         if (is_any_key_pressed(exit_vk_codes)) {
             ctx.should_exit = true;
+            ctx.frame_cv.notify_all();  // Wake up main thread
             break;
         }
 
