@@ -165,7 +165,7 @@ private:
     // Node name mapping for dynamic updates
     std::unordered_map<std::string, cudaGraphNode_t> m_namedNodes;
     
-    // Triple buffering for async pipeline
+    // Triple buffering for async pipeline with pinned memory optimization
     struct TripleBuffer {
         SimpleCudaMat buffers[3];
         std::atomic<int> captureIdx{0};
@@ -174,11 +174,30 @@ private:
         cudaEvent_t events[3];
         bool isReady[3] = {false, false, false};
         
-        // Add pipeline results for non-blocking mouse movement
-        Target h_target_coords[3];                // Host target coordinates for each buffer
+        // Pinned memory for zero-copy transfers
+        Target* h_target_coords_pinned[3] = {nullptr, nullptr, nullptr};  // Pinned host memory
+        Target h_target_coords[3];                // Legacy non-pinned (fallback)
         cudaEvent_t target_ready_events[3];      // Events to signal when target data is ready
         bool target_data_valid[3] = {false, false, false};  // Track if target data is valid
         int target_count[3] = {0, 0, 0};         // Number of targets found for each buffer
+        
+        // Initialize pinned memory
+        void initPinnedMemory() {
+            for (int i = 0; i < 3; i++) {
+                if (!h_target_coords_pinned[i]) {
+                    cudaHostAlloc(&h_target_coords_pinned[i], sizeof(Target), cudaHostAllocDefault);
+                }
+            }
+        }
+        
+        // Cleanup pinned memory
+        ~TripleBuffer() {
+            for (int i = 0; i < 3; i++) {
+                if (h_target_coords_pinned[i]) {
+                    cudaFreeHost(h_target_coords_pinned[i]);
+                }
+            }
+        }
     };;
     std::unique_ptr<TripleBuffer> m_tripleBuffer;
     

@@ -14,6 +14,7 @@
 #include "../include/other_tools.h"  // For fileExists function
 #include "../core/constants.h"
 #include "detection/postProcess.h"
+#include "../core/CPUFrameLimiter.h"
 #include <iostream>
 #include <chrono>
 #include <thread>
@@ -854,26 +855,19 @@ void UnifiedGraphPipeline::updateProfilingAsync(cudaStream_t stream) {
 
 void UnifiedGraphPipeline::runMainLoop() {
     auto& ctx = AppContext::getInstance();
-    std::cout << "[UnifiedPipeline] Starting main loop" << std::endl;
+    std::cout << "[UnifiedPipeline] Starting main loop with CPU frame limiter" << std::endl;
     
     m_lastFrameTime = std::chrono::high_resolution_clock::now();
     auto cycleStartTime = m_lastFrameTime;  // 1000사이클 시작 시간
     int cycleStartFrame = m_state.frameCount;  // 1000사이클 시작 프레임
     
-    // FPS 제한을 위한 변수
-    auto lastFrameTime = std::chrono::high_resolution_clock::now();
+    // Initialize CPU frame limiter for efficient GPU usage
+    CPUFrameLimiter frameLimiter(ctx.config.target_fps);
+    frameLimiter.enable(true);
     
     while (!m_shouldStop && !ctx.should_exit) {
-        // FPS 제한 로직 - 메인 루프 시작에서 적용
-        const auto targetFrameTime = std::chrono::microseconds(static_cast<int64_t>(1000000.0f / ctx.config.target_fps));
-        
-        auto currentTime = std::chrono::high_resolution_clock::now();
-        auto elapsed = currentTime - lastFrameTime;
-        
-        if (elapsed < targetFrameTime) {
-            std::this_thread::sleep_for(targetFrameTime - elapsed);
-        }
-        lastFrameTime = std::chrono::high_resolution_clock::now();
+        // Apply CPU-based frame limiting to reduce GPU load
+        frameLimiter.limitFrame();
         // 전체 파이프라인 실행 (캡처→추론→마우스)
         bool success = false;
         try {
@@ -897,10 +891,25 @@ void UnifiedGraphPipeline::runMainLoop() {
             
             if (cycleElapsed.count() > 0 && framesProcessed > 0) {
                 double averageFPS = (framesProcessed * 1000.0) / cycleElapsed.count();
+                
+                // Get GPU utilization (simplified - in production use NVML)
+                size_t free_mem, total_mem;
+                cudaMemGetInfo(&free_mem, &total_mem);
+                float gpu_memory_usage = ((total_mem - free_mem) * 100.0f) / total_mem;
+                
                 std::cout << "[UnifiedPipeline] Frame " << m_state.frameCount 
-                          << " - Last 1000 cycles: " << framesProcessed << " frames in " 
-                          << cycleElapsed.count() << "ms (Avg FPS: " 
-                          << std::fixed << std::setprecision(1) << averageFPS << ")" << std::endl;
+                          << " - Avg FPS: " << std::fixed << std::setprecision(1) << averageFPS
+                          << " | Target FPS: " << frameLimiter.getTargetFPS()
+                          << " | GPU Mem: " << std::setprecision(1) << gpu_memory_usage << "%"
+                          << " | Latency: " << m_state.avgLatency << "ms" << std::endl;
+                
+                // Dynamic FPS adjustment based on performance
+                if (averageFPS < frameLimiter.getTargetFPS() * 0.9f && gpu_memory_usage > 80.0f) {
+                    // GPU is struggling, reduce target FPS
+                    int newFPS = std::max(60, frameLimiter.getTargetFPS() - 10);
+                    frameLimiter.setTargetFPS(newFPS);
+                    std::cout << "[UnifiedPipeline] Reducing target FPS to " << newFPS << " due to GPU load" << std::endl;
+                }
             }
             
             // 다음 1000사이클을 위한 시작점 리셋
@@ -1774,49 +1783,8 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         return;
     }
     
-    // Get the count of final targets
-    int finalCount = 0;
-    cudaError_t countErr = cudaMemcpyAsync(&finalCount, m_d_finalTargetsCount, sizeof(int), 
-                                          cudaMemcpyDeviceToHost, stream);
-    if (countErr != cudaSuccess) {
-        std::cerr << "[Pipeline] Failed to get final target count: " << cudaGetErrorString(countErr) << std::endl;
-        return;
-    }
-    
-    cudaError_t syncErr = cudaStreamSynchronize(stream);
-    if (syncErr != cudaSuccess) {
-        std::cerr << "[Pipeline] Stream sync failed in target selection: " << cudaGetErrorString(syncErr) << std::endl;
-        return;
-    }
-    
-    // Early exit if no targets available
-    if (finalCount <= 0) {
-        // Clear best target data
-        if (m_d_bestTargetIndex) {
-            cudaMemsetAsync(m_d_bestTargetIndex, -1, sizeof(int), stream);
-        }
-        
-        // Clear best target buffer to prevent previous frame data reuse
-        if (m_d_bestTarget) {
-            cudaMemsetAsync(m_d_bestTarget, 0, sizeof(Target), stream);
-        }
-        
-        // Clear final targets buffer
-        if (m_d_finalTargets) {
-            cudaMemsetAsync(m_d_finalTargets, 0, sizeof(Target) * 100, stream);
-        }
-        
-        // Reset final targets count to 0
-        if (m_d_finalTargetsCount) {
-            int zero = 0;
-            cudaMemcpyAsync(m_d_finalTargetsCount, &zero, sizeof(int), cudaMemcpyHostToDevice, stream);
-        }
-        
-        // Clear DetectionState to ensure aimbot stops when no targets
-        ctx.getDetectionState().clearTargets();
-        
-        return;
-    }
+    // Use the new GPU-only version to avoid synchronization
+    // The kernel will check count internally
     
     // Get crosshair position (center of screen)
     float crosshairX, crosshairY;
@@ -1838,10 +1806,10 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         return;
     }
     
-    // Call GPU target selection
+    // Call new GPU target selection with device pointer for count
     cudaError_t selectErr = findClosestTargetGpu(
         m_d_finalTargets,
-        finalCount,
+        m_d_finalTargetsCount,  // Pass device pointer directly
         crosshairX,
         crosshairY,
         m_d_bestTargetIndex,
@@ -2090,8 +2058,13 @@ void UnifiedGraphPipeline::processMouseMovementAsync() {
         return; // Data not ready yet, skip this frame
     }
     
-    // Target data is ready, process mouse movement
-    Target& h_target = m_tripleBuffer->h_target_coords[prevIdx];
+    // Target data is ready, use pinned memory if available
+    Target* h_target_ptr = m_tripleBuffer->h_target_coords_pinned[prevIdx];
+    if (!h_target_ptr) {
+        // Fallback to non-pinned memory
+        h_target_ptr = &m_tripleBuffer->h_target_coords[prevIdx];
+    }
+    Target& h_target = *h_target_ptr;
     
     // Ensure center is calculated
     h_target.updateCenter();
