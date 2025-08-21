@@ -438,11 +438,11 @@ GPUTrackingContext* initGPUTracker(int max_age, int min_hits, float iou_threshol
     cudaMalloc(&ctx->d_num_detections, sizeof(int));
     cudaMalloc(&ctx->d_next_id, sizeof(int));
     
-    // Initialize counters
+    // Initialize counters asynchronously
     int zero = 0;
-    cudaMemcpy(ctx->d_num_tracks, &zero, sizeof(int), cudaMemcpyHostToDevice);
-    cudaMemcpy(ctx->d_num_detections, &zero, sizeof(int), cudaMemcpyHostToDevice);
-    cudaMemcpy(ctx->d_next_id, &zero, sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpyAsync(ctx->d_num_tracks, &zero, sizeof(int), cudaMemcpyHostToDevice, 0);
+    cudaMemcpyAsync(ctx->d_num_detections, &zero, sizeof(int), cudaMemcpyHostToDevice, 0);
+    cudaMemcpyAsync(ctx->d_next_id, &zero, sizeof(int), cudaMemcpyHostToDevice, 0);
     
     // Clear tracks
     cudaMemset(ctx->d_tracks, 0, MAX_TRACKS * sizeof(GPUTrackedObject));
@@ -474,10 +474,9 @@ void updateGPUTracker(
     cudaMemcpyAsync(ctx->d_num_detections, &num_detections, 
                     sizeof(int), cudaMemcpyHostToDevice, stream);
     
-    int h_num_tracks;
-    cudaMemcpyAsync(&h_num_tracks, ctx->d_num_tracks, 
-                    sizeof(int), cudaMemcpyDeviceToHost, stream);
-    cudaStreamSynchronize(stream);
+    // Use device-side counter directly in kernels to avoid synchronization
+    // We'll pass d_num_tracks directly to kernels instead of copying to host
+    int h_num_tracks = MAX_TRACKS;  // Use max for grid size, kernel will check actual count
     
     // 1. Kalman Predict
     if (h_num_tracks > 0) {
@@ -551,10 +550,9 @@ void updateGPUTrackerDirect(
     cudaMemcpyAsync(ctx->d_num_detections, &num_detections, 
                     sizeof(int), cudaMemcpyHostToDevice, stream);
     
-    int h_num_tracks;
-    cudaMemcpyAsync(&h_num_tracks, ctx->d_num_tracks, 
-                    sizeof(int), cudaMemcpyDeviceToHost, stream);
-    cudaStreamSynchronize(stream);
+    // Use device-side counter directly in kernels to avoid synchronization
+    // We'll pass d_num_tracks directly to kernels instead of copying to host
+    int h_num_tracks = MAX_TRACKS;  // Use max for grid size, kernel will check actual count
     
     // 1. Kalman Predict
     if (h_num_tracks > 0) {
