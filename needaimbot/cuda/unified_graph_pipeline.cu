@@ -1021,7 +1021,7 @@ bool UnifiedGraphPipeline::initializeTensorRT(const std::string& modelFile) {
         m_numClasses = static_cast<int>(outputShape[1]) - 4;  // rows - 4 (bbox coords)
         std::cout << "[Pipeline] Detected " << m_numClasses << " classes from model output shape" << std::endl;
     } else {
-        m_numClasses = 80;  // Default COCO classes as fallback
+        m_numClasses = 80;  // Default COCO classes
         std::cout << "[Pipeline] Using default 80 classes (COCO)" << std::endl;
     }
     
@@ -2058,11 +2058,10 @@ void UnifiedGraphPipeline::processMouseMovementAsync() {
         return; // Data not ready yet, skip this frame
     }
     
-    // Target data is ready, use pinned memory if available
+    // Target data is ready, use pinned memory
     Target* h_target_ptr = m_tripleBuffer->h_target_coords_pinned[prevIdx];
     if (!h_target_ptr) {
-        // Fallback to non-pinned memory
-        h_target_ptr = &m_tripleBuffer->h_target_coords[prevIdx];
+        return; // Pinned memory not initialized
     }
     Target& h_target = *h_target_ptr;
     
