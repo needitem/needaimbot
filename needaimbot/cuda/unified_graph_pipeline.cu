@@ -854,14 +854,13 @@ void UnifiedGraphPipeline::updateProfilingAsync(cudaStream_t stream) {
 
 void UnifiedGraphPipeline::runMainLoop() {
     auto& ctx = AppContext::getInstance();
-    std::cout << "[UnifiedPipeline] Starting main loop (" << ctx.config.target_fps << " FPS target)" << std::endl;
+    std::cout << "[UnifiedPipeline] Starting main loop" << std::endl;
     
-    const auto targetFrameTime = std::chrono::microseconds(static_cast<int64_t>(1000000.0f / ctx.config.target_fps));
     m_lastFrameTime = std::chrono::high_resolution_clock::now();
+    auto cycleStartTime = m_lastFrameTime;  // 1000사이클 시작 시간
+    int cycleStartFrame = m_state.frameCount;  // 1000사이클 시작 프레임
     
     while (!m_shouldStop && !ctx.should_exit) {
-        auto frameStart = std::chrono::high_resolution_clock::now();
-        
         // 전체 파이프라인 실행 (캡처→추론→마우스)
         bool success = false;
         try {
@@ -877,27 +876,24 @@ void UnifiedGraphPipeline::runMainLoop() {
             continue;
         }
         
-        // 목표 FPS 유지를 위한 정밀 타이밍
-        auto frameEnd = std::chrono::high_resolution_clock::now();
-        auto frameTime = frameEnd - frameStart;
-        
-        if (frameTime < targetFrameTime) {
-            std::this_thread::sleep_for(targetFrameTime - frameTime);
-        }
-        
-        // 성능 통계 업데이트 (매 100프레임마다)
-        if (m_state.frameCount % 100 == 0) {
-            auto duration = std::chrono::duration_cast<std::chrono::microseconds>(frameTime);
-            float latencyMs = duration.count() / 1000.0f;
-            updateStatistics(latencyMs);
+        // 성능 통계 업데이트 (매 1000사이클마다)
+        if (m_state.frameCount % 1000 == 0 && m_state.frameCount > 0) {
+            auto currentTime = std::chrono::high_resolution_clock::now();
+            auto cycleElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(currentTime - cycleStartTime);
+            int framesProcessed = m_state.frameCount - cycleStartFrame;
             
-            if (m_state.frameCount % 1000 == 0) {
+            if (cycleElapsed.count() > 0 && framesProcessed > 0) {
+                double averageFPS = (framesProcessed * 1000.0) / cycleElapsed.count();
                 std::cout << "[UnifiedPipeline] Frame " << m_state.frameCount 
-                          << " - Avg latency: " << m_state.avgLatency << "ms" << std::endl;
+                          << " - Last 1000 cycles: " << framesProcessed << " frames in " 
+                          << cycleElapsed.count() << "ms (Avg FPS: " 
+                          << std::fixed << std::setprecision(1) << averageFPS << ")" << std::endl;
             }
+            
+            // 다음 1000사이클을 위한 시작점 리셋
+            cycleStartTime = currentTime;
+            cycleStartFrame = m_state.frameCount;
         }
-        
-        m_lastFrameTime = frameEnd;
     }
     
     std::cout << "[UnifiedPipeline] Main loop stopped after " << m_state.frameCount << " frames" << std::endl;
@@ -1878,6 +1874,18 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
         
         // Capture current desktop frame using Desktop Duplication
         if (m_desktopDuplication && m_d3dDevice && m_d3dContext && m_captureTextureD3D) {
+            // FPS 제한 로직 - 캡처 시점에서 적용
+            static auto lastCaptureTime = std::chrono::high_resolution_clock::now();
+            const auto targetFrameTime = std::chrono::microseconds(static_cast<int64_t>(1000000.0f / ctx.config.target_fps));
+            
+            auto currentTime = std::chrono::high_resolution_clock::now();
+            auto elapsed = currentTime - lastCaptureTime;
+            
+            if (elapsed < targetFrameTime) {
+                std::this_thread::sleep_for(targetFrameTime - elapsed);
+            }
+            lastCaptureTime = std::chrono::high_resolution_clock::now();
+            
             auto* duplication = static_cast<IDXGIOutputDuplication*>(m_desktopDuplication);
             auto* d3dContext = static_cast<ID3D11DeviceContext*>(m_d3dContext);
             auto* captureTexture = static_cast<ID3D11Texture2D*>(m_captureTextureD3D);
