@@ -14,7 +14,6 @@
 #include "../include/other_tools.h"  // For fileExists function
 #include "../core/constants.h"
 #include "detection/postProcess.h"
-#include "../core/CPUFrameLimiter.h"
 #include <iostream>
 #include <chrono>
 #include <thread>
@@ -857,15 +856,14 @@ void UnifiedGraphPipeline::updateProfilingAsync(cudaStream_t stream) {
 
 void UnifiedGraphPipeline::runMainLoop() {
     auto& ctx = AppContext::getInstance();
-    std::cout << "[UnifiedPipeline] Starting main loop with CPU frame limiter" << std::endl;
+    std::cout << "[UnifiedPipeline] Starting main loop - MAXIMUM PERFORMANCE MODE (No FPS Limit)" << std::endl;
     
     m_lastFrameTime = std::chrono::high_resolution_clock::now();
     auto cycleStartTime = m_lastFrameTime;  // 1000사이클 시작 시간
     int cycleStartFrame = m_state.frameCount;  // 1000사이클 시작 프레임
     
-    // Initialize CPU frame limiter for efficient GPU usage
-    CPUFrameLimiter frameLimiter(ctx.config.target_fps);
-    frameLimiter.enable(true);
+    // NO FPS LIMITING - Maximum performance when active
+    // Frame limiter removed for maximum responsiveness
     
     // Track aimbot state changes
     bool wasAiming = false;
@@ -891,17 +889,14 @@ void UnifiedGraphPipeline::runMainLoop() {
                 wasAiming = false;
             }
             
-            // When aimbot is inactive, sleep to save resources
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            
-            // Reset frame limiter timing after idle period
-            frameLimiter.reset();
+            // When aimbot is inactive, sleep with 1ms polling for ultra-fast response
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
         }
         
         // Log activation
         if (!wasAiming) {
-            std::cout << "[UnifiedPipeline] Aimbot activated - resuming pipeline" << std::endl;
+            std::cout << "[UnifiedPipeline] Aimbot activated - MAXIMUM PERFORMANCE MODE" << std::endl;
             wasAiming = true;
             
             // Reset statistics
@@ -910,8 +905,7 @@ void UnifiedGraphPipeline::runMainLoop() {
             cycleStartFrame = 0;
         }
         
-        // Apply CPU-based frame limiting to reduce GPU load
-        frameLimiter.limitFrame();
+        // NO FRAME LIMITING - Run at maximum speed for lowest latency
         
         // Execute full pipeline only when aiming
         bool success = false;
@@ -944,18 +938,9 @@ void UnifiedGraphPipeline::runMainLoop() {
                 
                 std::cout << "[UnifiedPipeline] Frame " << m_state.frameCount 
                           << " - Avg FPS: " << std::fixed << std::setprecision(1) << averageFPS
-                          << " | Target FPS: " << frameLimiter.getTargetFPS()
                           << " | GPU Mem: " << std::setprecision(1) << gpu_memory_usage << "%"
                           << " | Latency: " << m_state.avgLatency << "ms"
-                          << " | Mode: AIMING" << std::endl;
-                
-                // Dynamic FPS adjustment based on performance
-                if (averageFPS < frameLimiter.getTargetFPS() * 0.9f && gpu_memory_usage > 80.0f) {
-                    // GPU is struggling, reduce target FPS
-                    int newFPS = std::max(60, frameLimiter.getTargetFPS() - 10);
-                    frameLimiter.setTargetFPS(newFPS);
-                    std::cout << "[UnifiedPipeline] Reducing target FPS to " << newFPS << " due to GPU load" << std::endl;
-                }
+                          << " | Mode: MAX PERFORMANCE" << std::endl;
             }
             
             // 다음 1000사이클을 위한 시작점 리셋
