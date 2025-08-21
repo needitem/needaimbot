@@ -28,148 +28,7 @@
 
 namespace needaimbot {
 
-// ============================================================================
-// DYNAMIC CUDA GRAPH MANAGER
-// ============================================================================
-class DynamicCudaGraph {
-private:
-    cudaGraph_t graph_ = nullptr;
-    cudaGraphExec_t graphExec_ = nullptr;
-    cudaStream_t stream_ = nullptr;
-    
-    std::unordered_map<std::string, cudaGraphNode_t> kernelNodes_;
-    std::unordered_map<std::string, void*> kernelParams_;
-    
-    bool isCapturing_ = false;
-    bool isInstantiated_ = false;
-    
-public:
-    DynamicCudaGraph(cudaStream_t stream) : stream_(stream) {}
-    
-    ~DynamicCudaGraph() {
-        if (graphExec_) cudaGraphExecDestroy(graphExec_);
-        if (graph_) cudaGraphDestroy(graph_);
-    }
-    
-    cudaError_t beginCapture() {
-        if (isCapturing_) return cudaErrorInvalidValue;
-        cudaError_t err = cudaStreamBeginCapture(stream_, cudaStreamCaptureModeGlobal);
-        if (err == cudaSuccess) isCapturing_ = true;
-        return err;
-    }
-    
-    cudaError_t endCapture() {
-        if (!isCapturing_) return cudaErrorInvalidValue;
-        
-        cudaError_t err = cudaStreamEndCapture(stream_, &graph_);
-        if (err != cudaSuccess) {
-            isCapturing_ = false;
-            return err;
-        }
-        
-        size_t numNodes;
-        cudaGraphGetNodes(graph_, nullptr, &numNodes);
-        std::vector<cudaGraphNode_t> nodes(numNodes);
-        cudaGraphGetNodes(graph_, nodes.data(), &numNodes);
-        
-        for (auto node : nodes) {
-            cudaGraphNodeType nodeType;
-            cudaGraphNodeGetType(node, &nodeType);
-            if (nodeType == cudaGraphNodeTypeKernel) {
-                static int nodeId = 0;
-                kernelNodes_["kernel_" + std::to_string(nodeId++)] = node;
-            }
-        }
-        
-        err = cudaGraphInstantiate(&graphExec_, graph_, nullptr, nullptr, 0);
-        if (err == cudaSuccess) isInstantiated_ = true;
-        isCapturing_ = false;
-        return err;
-    }
-    
-    cudaError_t updateKernelParams(const std::string& nodeName, 
-                                   const cudaKernelNodeParams& params) {
-        if (!isInstantiated_) return cudaErrorInvalidValue;
-        auto it = kernelNodes_.find(nodeName);
-        if (it == kernelNodes_.end()) return cudaErrorInvalidValue;
-        return cudaGraphExecKernelNodeSetParams(graphExec_, it->second, &params);
-    }
-    
-    cudaError_t launch() {
-        if (!isInstantiated_) return cudaErrorInvalidValue;
-        return cudaGraphLaunch(graphExec_, stream_);
-    }
-    
-    bool isReady() const { return isInstantiated_; }
-    void registerNode(const std::string& name, cudaGraphNode_t node) {
-        kernelNodes_[name] = node;
-    }
-};
-
-// ============================================================================
-// PIPELINE COORDINATOR WITH MULTI-STREAM MANAGEMENT
-// ============================================================================
-class PipelineCoordinator {
-private:
-    // Use LOWEST priority to minimize game interference
-    // Higher number = lower priority = less GPU time
-    static constexpr int CAPTURE_PRIORITY = 1;  // Lowest priority
-    static constexpr int INFERENCE_PRIORITY = 1;
-    static constexpr int POSTPROCESS_PRIORITY = 1;
-    
-public:
-    cudaStream_t captureStream;
-    cudaStream_t preprocessStream;
-    cudaStream_t inferenceStream;
-    cudaStream_t postprocessStream;
-    cudaStream_t trackingStream;
-    
-    cudaEvent_t captureComplete;
-    cudaEvent_t preprocessComplete;
-    cudaEvent_t inferenceComplete;
-    cudaEvent_t postprocessComplete;
-    
-    PipelineCoordinator() {
-        cudaStreamCreateWithPriority(&captureStream, cudaStreamNonBlocking, CAPTURE_PRIORITY);
-        cudaStreamCreateWithPriority(&preprocessStream, cudaStreamNonBlocking, INFERENCE_PRIORITY);
-        cudaStreamCreateWithPriority(&inferenceStream, cudaStreamNonBlocking, INFERENCE_PRIORITY);
-        cudaStreamCreateWithPriority(&postprocessStream, cudaStreamNonBlocking, POSTPROCESS_PRIORITY);
-        cudaStreamCreateWithPriority(&trackingStream, cudaStreamNonBlocking, POSTPROCESS_PRIORITY);
-        
-        cudaEventCreateWithFlags(&captureComplete, cudaEventDisableTiming);
-        cudaEventCreateWithFlags(&preprocessComplete, cudaEventDisableTiming);
-        cudaEventCreateWithFlags(&inferenceComplete, cudaEventDisableTiming);
-        cudaEventCreateWithFlags(&postprocessComplete, cudaEventDisableTiming);
-    }
-    
-    ~PipelineCoordinator() {
-        cudaStreamDestroy(captureStream);
-        cudaStreamDestroy(preprocessStream);
-        cudaStreamDestroy(inferenceStream);
-        cudaStreamDestroy(postprocessStream);
-        cudaStreamDestroy(trackingStream);
-        
-        cudaEventDestroy(captureComplete);
-        cudaEventDestroy(preprocessComplete);
-        cudaEventDestroy(inferenceComplete);
-        cudaEventDestroy(postprocessComplete);
-    }
-    
-    void synchronizeCapture(cudaStream_t stream) {
-        cudaEventRecord(captureComplete, captureStream);
-        cudaStreamWaitEvent(stream, captureComplete, 0);
-    }
-    
-    void synchronizePreprocess(cudaStream_t stream) {
-        cudaEventRecord(preprocessComplete, preprocessStream);
-        cudaStreamWaitEvent(stream, preprocessComplete, 0);
-    }
-    
-    void synchronizeInference(cudaStream_t stream) {
-        cudaEventRecord(inferenceComplete, inferenceStream);
-        cudaStreamWaitEvent(stream, inferenceComplete, 0);
-    }
-};
+// All complex graph and coordinator code removed - using simple single stream
 
 // ============================================================================
 // OPTIMIZED CUDA KERNELS
@@ -201,9 +60,7 @@ UnifiedGraphPipeline::UnifiedGraphPipeline() {
     cudaEventCreate(&m_state.startEvent);
     cudaEventCreate(&m_state.endEvent);
     
-    // Initialize coordinator and dynamic graph (will be properly setup in initialize())
-    m_coordinator = nullptr;
-    m_dynamicGraph = nullptr;
+    // Simple initialization - no complex graph management needed
     m_tripleBuffer = nullptr;
 }
 
@@ -212,22 +69,15 @@ UnifiedGraphPipeline::~UnifiedGraphPipeline() {
     
     if (m_state.startEvent) cudaEventDestroy(m_state.startEvent);
     if (m_state.endEvent) cudaEventDestroy(m_state.endEvent);
-    if (m_detectionEvent) cudaEventDestroy(m_detectionEvent);
-    if (m_trackingEvent) cudaEventDestroy(m_trackingEvent);
+    // Events removed - using simple pipeline
     if (m_previewReadyEvent) cudaEventDestroy(m_previewReadyEvent);
 }
 
 bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
     m_config = config;
     
-    // Initialize Pipeline Coordinator for multi-stream management
-    m_coordinator = new PipelineCoordinator();
-    
-    // Use inference stream as primary for graph operations
-    m_primaryStream = m_coordinator->inferenceStream;
-    
-    // Initialize Dynamic Graph Manager
-    m_dynamicGraph = new DynamicCudaGraph(m_primaryStream);
+    // Create single CUDA stream for all operations
+    cudaStreamCreateWithFlags(&m_primaryStream, cudaStreamNonBlocking);
     
     // Initialize Triple Buffer for async pipeline
     if (m_config.enableCapture) {
@@ -236,9 +86,7 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
         m_tripleBuffer->initPinnedMemory();
         // Triple buffer initialization will be done in allocateBuffers()
     }
-    // Create events for two-stage pipeline
-    cudaEventCreateWithFlags(&m_detectionEvent, cudaEventDisableTiming);
-    cudaEventCreateWithFlags(&m_trackingEvent, cudaEventDisableTiming);
+    // No complex events needed
     cudaEventCreateWithFlags(&m_previewReadyEvent, cudaEventDisableTiming);
     m_prevFrameHasTarget = false;
     
@@ -1505,8 +1353,9 @@ bool UnifiedGraphPipeline::runInferenceAsync(cudaStream_t stream) {
     }
      
     // Record inference completion event for pipeline synchronization
-    if (m_detectionEvent) {
-        cudaError_t eventErr = cudaEventRecord(m_detectionEvent, stream);
+    // Event recording removed - simple pipeline
+    if (false) {
+        cudaError_t eventErr = cudaSuccess;
         if (eventErr != cudaSuccess) {
             std::cerr << "[Pipeline] Failed to record detection event: " << cudaGetErrorString(eventErr) << std::endl;
             // Continue execution as this is not critical
