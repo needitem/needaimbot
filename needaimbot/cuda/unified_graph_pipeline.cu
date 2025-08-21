@@ -1998,7 +1998,7 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
                 m_d_yoloInput,
                 m_captureBuffer.cols(),
                 m_captureBuffer.rows(),
-                m_captureBuffer.step(),
+                static_cast<int>(m_captureBuffer.step()),
                 ctx.config.onnx_input_resolution,
                 ctx.config.onnx_input_resolution,
                 stream
@@ -2147,14 +2147,9 @@ void UnifiedGraphPipeline::processMouseMovementAsync() {
     // Simple PD control parameters
     float kp_x = ctx.config.pd_kp_x;
     float kp_y = ctx.config.pd_kp_y;
-    float kd_x = ctx.config.pd_kd_x;
-    float kd_y = ctx.config.pd_kd_y;
+    // kd_x and kd_y removed - not used in simple proportional control
     float deadzone_x = ctx.config.min_movement_threshold_x;
     float deadzone_y = ctx.config.min_movement_threshold_y;
-    
-    int target_id = h_target.id;
-    float dt = 1.0f / ctx.config.target_fps;
-    if (dt <= 0.0f || dt > 1.0f) dt = 0.016f;
     
     // Apply deadzone
     if (abs(error_x) < deadzone_x) error_x = 0;
