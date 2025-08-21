@@ -33,6 +33,19 @@ __global__ void initKeepKernel(bool* d_keep, int n) {
     }
 }
 
+// Kernel to conditionally copy the best target based on d_best_index
+__global__ void copyBestTargetKernel(
+    const Target* d_detections,
+    const int* d_best_index,
+    Target* d_best_target,
+    int num_detections)
+{
+    int best_idx = *d_best_index;
+    if (best_idx >= 0 && best_idx < num_detections) {
+        *d_best_target = d_detections[best_idx];
+    }
+}
+
 // Optimized compaction kernel with warp-level primitives
 __global__ void compactTargetsKernel(
     const Target* d_input_detections,
@@ -1032,7 +1045,134 @@ __global__ void findClosestTargetKernel(
     }
 }
 
-// Host function to find closest target on GPU
+// New kernel that reads count from device memory
+__global__ void findClosestTargetKernelWithDeviceCount(
+    const Target* d_detections,
+    const int* d_num_detections,
+    float crosshairX,
+    float crosshairY,
+    float* d_best_distance,
+    int* d_best_index)
+{
+    // Read the count from device memory
+    int num_detections = *d_num_detections;
+    if (num_detections <= 0) {
+        if (threadIdx.x == 0 && blockIdx.x == 0) {
+            *d_best_index = -1;
+            *d_best_distance = FLT_MAX;
+        }
+        return;
+    }
+    
+    extern __shared__ char shared[];
+    float* s_distances = (float*)shared;
+    int* s_indices = (int*)&s_distances[blockDim.x];
+    
+    int tid = threadIdx.x;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    // Initialize shared memory
+    float min_distance = FLT_MAX;
+    int min_index = -1;
+    
+    // Each thread computes distance for one detection
+    if (idx < num_detections) {
+        const Target& det = d_detections[idx];
+        
+        // Skip invalid detections
+        if (det.width > 0 && det.height > 0 && det.confidence > 0) {
+            float centerX = det.x + det.width * 0.5f;
+            float centerY = det.y + det.height * 0.5f;
+            
+            float dx = fabsf(centerX - crosshairX);
+            float dy = fabsf(centerY - crosshairY);
+            float distance = dx + dy;
+            
+            min_distance = distance;
+            min_index = idx;
+        }
+    }
+    
+    // Store in shared memory
+    s_distances[tid] = min_distance;
+    s_indices[tid] = min_index;
+    __syncthreads();
+    
+    // Block-level reduction to find minimum distance
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            if (s_distances[tid + s] < s_distances[tid]) {
+                s_distances[tid] = s_distances[tid + s];
+                s_indices[tid] = s_indices[tid + s];
+            }
+        }
+        __syncthreads();
+    }
+    
+    // First thread writes block result
+    if (tid == 0) {
+        atomicMinFloat(d_best_distance, s_distances[0], s_indices[0], d_best_index);
+    }
+}
+
+// New host function that accepts device pointer for count
+cudaError_t findClosestTargetGpu(
+    const Target* d_detections,
+    int* d_num_detections,  // Device pointer
+    float crosshairX,
+    float crosshairY,
+    int* d_best_index,
+    Target* d_best_target,
+    cudaStream_t stream)
+{
+    if (!d_detections || !d_num_detections || !d_best_index || !d_best_target) {
+        return cudaErrorInvalidValue;
+    }
+    
+    // Allocate temporary buffer for best distance
+    float* d_best_distance;
+    cudaError_t alloc_err = cudaMalloc(&d_best_distance, sizeof(float));
+    if (alloc_err != cudaSuccess) return alloc_err;
+    
+    // Initialize best distance and index
+    cudaMemsetAsync(d_best_distance, 0x7F, sizeof(float), stream);  // Set to large value
+    cudaMemsetAsync(d_best_index, 0xFF, sizeof(int), stream);      // Set to -1
+    
+    // Use maximum possible detections for grid size
+    const int max_detections = 100;
+    const int block_size = 256;
+    const int grid_size = (max_detections + block_size - 1) / block_size;
+    const size_t shared_size = block_size * (sizeof(float) + sizeof(int));
+    
+    // Launch kernel that reads count from device
+    findClosestTargetKernelWithDeviceCount<<<grid_size, block_size, shared_size, stream>>>(
+        d_detections,
+        d_num_detections,
+        crosshairX,
+        crosshairY,
+        d_best_distance,
+        d_best_index
+    );
+    
+    // Check for kernel errors
+    cudaError_t kernel_err = cudaGetLastError();
+    if (kernel_err != cudaSuccess) {
+        cudaFree(d_best_distance);
+        return kernel_err;
+    }
+    
+    // Use the copyBestTargetKernel to conditionally copy based on d_best_index
+    // This avoids needing to read d_best_index on the host
+    copyBestTargetKernel<<<1, 1, 0, stream>>>(
+        d_detections, d_best_index, d_best_target, max_detections);
+    
+    // Clean up
+    cudaFree(d_best_distance);
+    
+    return cudaSuccess;
+}
+
+// Legacy host function for backward compatibility
 cudaError_t findClosestTargetGpu(
     const Target* d_detections,
     int num_detections,
@@ -1083,22 +1223,31 @@ cudaError_t findClosestTargetGpu(
         return sync_err;
     }
     
-    // Read the best index to decide if we need to copy
-    int best_index_host = -1;
-    cudaError_t copy_err = cudaMemcpy(&best_index_host, d_best_index, sizeof(int), cudaMemcpyDeviceToHost);
+    // Read the best index asynchronously to avoid blocking
+    int* h_best_index_pinned = nullptr;
+    cudaHostAlloc(&h_best_index_pinned, sizeof(int), cudaHostAllocDefault);
+    *h_best_index_pinned = -1;
+    
+    cudaError_t copy_err = cudaMemcpyAsync(h_best_index_pinned, d_best_index, sizeof(int), 
+                                           cudaMemcpyDeviceToHost, stream);
     if (copy_err != cudaSuccess) {
+        cudaFreeHost(h_best_index_pinned);
         cudaFree(d_best_distance);
         return copy_err;
     }
     
-    if (best_index_host >= 0 && best_index_host < num_detections) {
-        // Copy only the POD fields that are common between GPU and CPU versions
-        // This avoids issues with different struct sizes between GPU and CPU
-        const Target* src = d_detections + best_index_host;
-        
-        // Copy the entire Target structure (it's now POD)
-        cudaMemcpyAsync(d_best_target, src, sizeof(Target), cudaMemcpyDeviceToDevice, stream);
-    }
+    // Create an event to track when the index is ready
+    cudaEvent_t indexReady;
+    cudaEventCreate(&indexReady);
+    cudaEventRecord(indexReady, stream);
+    
+    // Launch a kernel to conditionally copy the best target based on d_best_index
+    // This avoids CPU-GPU synchronization
+    copyBestTargetKernel<<<1, 1, 0, stream>>>(d_detections, d_best_index, d_best_target, num_detections);
+    
+    // Clean up the event and pinned memory asynchronously
+    cudaEventDestroy(indexReady);
+    cudaFreeHost(h_best_index_pinned);
     
     // Clean up
     cudaFree(d_best_distance);
