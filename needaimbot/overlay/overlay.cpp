@@ -446,7 +446,7 @@ void OverlayThread()
     MSG msg;
     ZeroMemory(&msg, sizeof(msg));
 
-    // Overlay rendering frame timing - Use ctx.config.target_fps for user control
+    // Overlay rendering frame timing - Fixed 30 FPS for UI
     auto lastOverlayFrameTime = std::chrono::high_resolution_clock::now();
     
     // Config save batching to reduce I/O
@@ -495,7 +495,7 @@ void OverlayThread()
         {
             auto now = std::chrono::high_resolution_clock::now();
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - frame_start_time);
-            int target_frame_time_ms = static_cast<int>(1000.0f / ctx.config.target_fps);
+            int target_frame_time_ms = 33; // Fixed 30 FPS for overlay
             int remaining_time_ms = target_frame_time_ms - static_cast<int>(elapsed.count());
             
             if (remaining_time_ms > 0)

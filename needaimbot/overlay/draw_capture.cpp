@@ -65,20 +65,9 @@ static void draw_capture_behavior_settings()
     
     UIHelpers::BeginCard("Capture Behavior");
     
-    // Target FPS slider for actual FPS limiting
-    float target_fps_float = ctx.config.target_fps;
-    float old_target_fps = ctx.config.target_fps;
-    
-    UIHelpers::CompactSlider("Target FPS", &target_fps_float, 30.0f, 360.0f, "%.0f");
-    UIHelpers::InfoTooltip("Limits the actual capture frame rate. Higher values provide smoother tracking but use more resources.\nRecommended: 120-240 FPS for competitive gaming.");
-    
-    // Check if value changed
-    if (target_fps_float != old_target_fps) {
-        ctx.config.target_fps = target_fps_float;
-        SAVE_PROFILE();
-        std::cout << "[UI] Target FPS changed to: " << target_fps_float << std::endl;
-    }
-    
+    // FPS limiting removed - running at maximum performance when active
+    ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Maximum Performance Mode");
+    UIHelpers::InfoTooltip("No FPS limiting - runs at maximum speed when aimbot is active.\nGPU usage: 0%% when OFF, 100%% when ON.");
     
     UIHelpers::CompactSpacer();
     
