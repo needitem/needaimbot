@@ -88,7 +88,6 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
     }
     // No complex events needed
     cudaEventCreateWithFlags(&m_previewReadyEvent, cudaEventDisableTiming);
-    m_prevFrameHasTarget = false;
     
     // Initialize TensorRT (Phase 1 integration - now required)
     if (m_config.modelPath.empty()) {
@@ -314,9 +313,7 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
 }
 
 void UnifiedGraphPipeline::checkTargetsAsync(cudaStream_t stream) {
-    // Check if TensorRT has targets from previous frame (Phase 1)
-    // TODO: Implement target checking from integrated TensorRT results
-    m_prevFrameHasTarget = false;  // Placeholder until full integration
+    // Target checking removed - simplified pipeline
 }
 
 
