@@ -155,7 +155,7 @@ public:
     bool capture_cursor;
     
  
-    float target_fps; // DEPRECATED - No longer used, keeping for UI compatibility
+    // target_fps removed - no longer using FPS limiting
     
     int gpu_capture_method; // 0 = Desktop Duplication, 1 = Region Capture
     std::string capture_method; // "simple", "wingraphics", "virtual_camera", "ndi" (legacy)
