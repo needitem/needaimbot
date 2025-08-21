@@ -233,6 +233,8 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
     // Initialize Triple Buffer for async pipeline
     if (m_config.enableCapture) {
         m_tripleBuffer = std::make_unique<TripleBuffer>();
+        // Initialize pinned memory for zero-copy transfers
+        m_tripleBuffer->initPinnedMemory();
         // Triple buffer initialization will be done in allocateBuffers()
     }
     // Create events for two-stage pipeline
@@ -2037,10 +2039,10 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
             performIntegratedPostProcessing(stream);
             performTargetSelection(stream);
             
-            // Step 4: Copy target results to host memory (async)
+            // Step 4: Copy target results to host memory (async) using pinned memory
             Target* finalTarget = m_d_bestTarget;
-            if (finalTarget) {
-                cudaMemcpyAsync(&m_tripleBuffer->h_target_coords[currentIdx], finalTarget, sizeof(Target), 
+            if (finalTarget && m_tripleBuffer->h_target_coords_pinned[currentIdx]) {
+                cudaMemcpyAsync(m_tripleBuffer->h_target_coords_pinned[currentIdx], finalTarget, sizeof(Target), 
                                cudaMemcpyDeviceToHost, stream);
                 
                 // Record event when target data is ready
