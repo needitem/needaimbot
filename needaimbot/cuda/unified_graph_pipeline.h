@@ -141,8 +141,8 @@ private:
     PipelineCoordinator* m_coordinator = nullptr;
     
     // Two-stage graph pipeline for conditional execution
-    cudaGraph_t m_graph = nullptr;                    // Legacy monolithic graph
-    cudaGraphExec_t m_graphExec = nullptr;            // Legacy graph exec
+    cudaGraph_t m_graph = nullptr;
+    cudaGraphExec_t m_graphExec = nullptr;
     cudaGraph_t m_detectionGraph = nullptr;           // Stage 1: Detection only
     cudaGraphExec_t m_detectionGraphExec = nullptr;
     cudaGraph_t m_trackingGraph = nullptr;            // Stage 2: Tracking + PID
@@ -176,7 +176,6 @@ private:
         
         // Pinned memory for zero-copy transfers
         Target* h_target_coords_pinned[3] = {nullptr, nullptr, nullptr};  // Pinned host memory
-        Target h_target_coords[3];                // Legacy non-pinned (fallback)
         cudaEvent_t target_ready_events[3];      // Events to signal when target data is ready
         bool target_data_valid[3] = {false, false, false};  // Track if target data is valid
         int target_count[3] = {0, 0, 0};         // Number of targets found for each buffer

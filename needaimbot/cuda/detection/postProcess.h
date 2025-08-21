@@ -66,20 +66,10 @@ cudaError_t decodeYolo11Gpu(
     cudaStream_t stream);
 
 // GPU function to find closest target to crosshair
-// Now accepts d_num_detections as device pointer to avoid CPU-GPU sync
+// Accepts d_num_detections as device pointer to avoid CPU-GPU sync
 cudaError_t findClosestTargetGpu(
     const Target* d_detections,
-    int* d_num_detections,  // Changed to device pointer
-    float crosshairX,
-    float crosshairY,
-    int* d_best_index,
-    Target* d_best_target,
-    cudaStream_t stream);
-
-// Legacy version for backward compatibility  
-cudaError_t findClosestTargetGpu(
-    const Target* d_detections,
-    int num_detections,
+    int* d_num_detections,  // Device pointer
     float crosshairX,
     float crosshairY,
     int* d_best_index,
