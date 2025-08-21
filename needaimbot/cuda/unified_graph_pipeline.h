@@ -22,8 +22,6 @@ class GPUKalmanTracker;
 namespace needaimbot {
 
 // Forward declarations for internal implementation classes
-class DynamicCudaGraph;
-class PipelineCoordinator;
 
 // Graph node types for tracking
 enum class GraphNodeType {
@@ -137,23 +135,13 @@ public:
     
 private:
     // Advanced graph and stream management
-    DynamicCudaGraph* m_dynamicGraph = nullptr;
-    PipelineCoordinator* m_coordinator = nullptr;
-    
-    // Two-stage graph pipeline for conditional execution
+    // Simple graph management
     cudaGraph_t m_graph = nullptr;
     cudaGraphExec_t m_graphExec = nullptr;
-    cudaGraph_t m_detectionGraph = nullptr;           // Stage 1: Detection only
-    cudaGraphExec_t m_detectionGraphExec = nullptr;
-    cudaGraph_t m_trackingGraph = nullptr;            // Stage 2: Tracking + PID
-    cudaGraphExec_t m_trackingGraphExec = nullptr;
     cudaStream_t m_primaryStream = nullptr;
     
-    // Pipeline synchronization
-    cudaEvent_t m_detectionEvent = nullptr;
-    cudaEvent_t m_trackingEvent = nullptr;
-    cudaEvent_t m_previewReadyEvent = nullptr;  // Event for async preview updates
-    bool m_prevFrameHasTarget = false;
+    // Simple event for preview
+    cudaEvent_t m_previewReadyEvent = nullptr;
     
     // Graph nodes for dynamic updates
     std::vector<cudaGraphNode_t> m_captureNodes;

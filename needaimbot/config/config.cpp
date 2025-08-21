@@ -62,7 +62,7 @@ bool Config::loadConfig(const std::string& filename)
         capture_borders = false;  // Disabled for better performance
         capture_cursor = false;  // Disabled for better performance
  
-        target_fps = 120.0f;
+        target_fps = 120.0f; // DEPRECATED - No longer used
         gpu_capture_method = 0;  // Default to Desktop Duplication
         capture_method = "simple";
         
