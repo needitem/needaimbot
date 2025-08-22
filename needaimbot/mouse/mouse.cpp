@@ -29,9 +29,8 @@ MouseThread::MouseThread(
 {
     initializeInputMethod(serialConnection, makcuConnection, gHub);
     
-    // Start async input worker thread
+    // Direct input - no worker thread needed
     should_stop_thread_ = false;
-    async_input_thread_ = std::thread(&MouseThread::asyncInputWorker, this);
 }
 
 // Simplified constructor
@@ -44,19 +43,14 @@ MouseThread::MouseThread(
 {
     initializeInputMethod(serialConnection, makcuConnection, gHub);
     
-    // Start async input worker thread
+    // Direct input - no worker thread needed
     should_stop_thread_ = false;
-    async_input_thread_ = std::thread(&MouseThread::asyncInputWorker, this);
 }
 
 MouseThread::~MouseThread() 
 {
-    // Stop the async worker thread
+    // No worker thread to stop in direct input mode
     should_stop_thread_ = true;
-    
-    if (async_input_thread_.joinable()) {
-        async_input_thread_.join();
-    }
 }
 
 void MouseThread::initializeInputMethod(
@@ -84,79 +78,43 @@ void MouseThread::setInputMethod(std::unique_ptr<InputMethod> new_method)
     input_method = std::move(new_method);
 }
 
-// Main function - execute movement calculated by GPU
+// Main function - execute movement calculated by GPU (direct)
 void MouseThread::executeMovement(int dx, int dy)
 {
     if (dx != 0 || dy != 0) {
-        MouseCommand cmd(MouseCommand::MOVE, dx, dy);
-        mouse_command_queue_.enqueue(std::move(cmd));
+        directMouseMove(dx, dy);
     }
 }
 
-// Execute mouse press (calculated by GPU)
+// Execute mouse press (calculated by GPU) (direct)
 void MouseThread::executePress()
 {
-    MouseCommand cmd(MouseCommand::PRESS, 0, 0);
-    mouse_command_queue_.enqueue(std::move(cmd));
+    directMouseClick(true);
 }
 
-// Execute mouse release (calculated by GPU)
+// Execute mouse release (calculated by GPU) (direct)
 void MouseThread::executeRelease()
 {
-    MouseCommand cmd(MouseCommand::RELEASE, 0, 0);
-    mouse_command_queue_.enqueue(std::move(cmd));
+    directMouseClick(false);
 }
 
-// Worker thread - processes queued commands
-void MouseThread::asyncInputWorker()
+// Direct input helpers - no queue, immediate execution
+void MouseThread::directMouseMove(int dx, int dy)
 {
-    // Set thread priority for better responsiveness
-    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
-    
-    while (!should_stop_thread_.load(std::memory_order_relaxed)) {
-        // Batch dequeue for better throughput
-        constexpr size_t BATCH_SIZE = 4;
-        MouseCommand batch[BATCH_SIZE];
-        size_t batch_count = 0;
-        
-        // Try to dequeue multiple commands at once
-        for (size_t i = 0; i < BATCH_SIZE; ++i) {
-            if (mouse_command_queue_.tryDequeue(batch[i], i == 0 ? 1 : 0)) {
-                batch_count++;
-            } else {
-                break;
-            }
-        }
-        
-        if (batch_count == 0) {
-            if (should_stop_thread_.load(std::memory_order_relaxed)) {
-                break;
-            }
-            continue;
-        }
-        
-        // Process batch
-        {
-            std::lock_guard<std::mutex> input_lock(input_method_mutex);
-            if (input_method && input_method->isValid()) {
-                for (size_t i = 0; i < batch_count; ++i) {
-                    const auto& cmd = batch[i];
-                    
-                    switch (cmd.type) {
-                        case MouseCommand::MOVE:
-                            if (cmd.dx != 0 || cmd.dy != 0) {
-                                input_method->move(cmd.dx, cmd.dy);
-                            }
-                            break;
-                        case MouseCommand::PRESS:
-                            input_method->press();
-                            break;
-                        case MouseCommand::RELEASE:
-                            input_method->release();
-                            break;
-                    }
-                }
-            }
+    std::lock_guard<std::mutex> input_lock(input_method_mutex);
+    if (input_method && input_method->isValid()) {
+        input_method->move(dx, dy);
+    }
+}
+
+void MouseThread::directMouseClick(bool press)
+{
+    std::lock_guard<std::mutex> input_lock(input_method_mutex);
+    if (input_method && input_method->isValid()) {
+        if (press) {
+            input_method->press();
+        } else {
+            input_method->release();
         }
     }
 }

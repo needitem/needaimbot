@@ -8,7 +8,10 @@
 #include <thread>
 #include <atomic>
 #include <mutex>
-#include "optimized_mouse_queue.h"
+// Direct mouse input - no queue needed
+#ifdef _WIN32
+#include "../core/windows_headers.h"
+#endif
 #include "input_drivers/InputMethod.h"
 #include "../core/Target.h"
 
@@ -27,9 +30,7 @@ private:
     std::unique_ptr<InputMethod> input_method;
     std::mutex input_method_mutex;
     
-    // Async command queue
-    MouseCommandQueue mouse_command_queue_;
-    std::thread async_input_thread_;
+    // Direct input execution - no queue needed
     std::atomic<bool> should_stop_thread_{false};
     
     // RapidFire support (stub for now)
@@ -48,8 +49,9 @@ private:
         GhubMouse *gHub
     );
     
-    // Worker thread for processing commands
-    void asyncInputWorker();
+    // Direct input helpers
+    void directMouseMove(int dx, int dy);
+    void directMouseClick(bool press);
 
 public:
     // Original constructor for compatibility
