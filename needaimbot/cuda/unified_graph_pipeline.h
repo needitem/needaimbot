@@ -16,8 +16,6 @@
 #include <NvOnnxParser.h>
 #include <cuda_fp16.h>
 
-// Forward declarations outside namespace
-class GPUKalmanTracker;
 
 namespace needaimbot {
 
@@ -53,7 +51,6 @@ struct UnifiedPipelineConfig {
     // Pipeline stages enable flags
     bool enableCapture = true;
     bool enableDetection = true;
-    bool enableTracking = true;
     
     // Model configuration (Phase 1 integration)
     std::string modelPath;
@@ -86,8 +83,6 @@ public:
     bool initialize(const UnifiedPipelineConfig& config);
     void shutdown();
     
-    // Set component references
-    void setTracker(::GPUKalmanTracker* tracker) { m_tracker = tracker; }
     
     // Main execution methods
     bool captureGraph(cudaStream_t stream = nullptr);
@@ -188,8 +183,6 @@ private:
     };;
     std::unique_ptr<TripleBuffer> m_tripleBuffer;
     
-    // Component pointers
-    ::GPUKalmanTracker* m_tracker = nullptr;
     
     // TensorRT engine management (Phase 1 integration)
     std::unique_ptr<nvinfer1::IRuntime> m_runtime;
@@ -234,8 +227,6 @@ private:
     float* m_d_filteredOutput = nullptr;   // After filtering
     Target* m_d_detections = nullptr;      // Detection results
     Target* m_d_selectedTarget = nullptr;  // Selected target
-    Target* m_d_trackedTarget = nullptr;   // After Kalman tracking
-    Target* m_d_trackedTargets = nullptr;  // Multiple tracked targets
     
     // Post-processing buffers (Phase 3 integration)
     Target* m_d_decodedTargets = nullptr;      // Decoded detections from inference

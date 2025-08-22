@@ -122,22 +122,7 @@ bool Config::loadConfig(const std::string& filename)
         
 
         
-        // Initialize ByteTracker parameters
-        enable_tracking = true;
-        byte_track_thresh = 0.5f;
-        byte_high_thresh = 0.6f;
-        byte_match_thresh = 0.8f;
-        byte_max_time_lost = 30;
         
-        // Initialize Kalman filter parameters
-        enable_kalman_filter = false;
-        kalman_use_cuda_graph = true;
-        kalman_dt = 0.033f;
-        kalman_process_noise = 1.0f;
-        kalman_measurement_noise = 1.0f;
-        kalman_min_hits = 3;
-        kalman_max_age = 5;
-        kalman_lookahead_time = 0.016f;  // Deprecated
 
         
         arduino_baudrate = 115200;
@@ -333,21 +318,7 @@ bool Config::loadConfig(const std::string& filename)
     recoil_mult_6x = static_cast<float>(get_double_ini("Recoil", "recoil_mult_6x", 1.0));
 
     
-    // Load ByteTracker parameters
-    enable_tracking = get_bool_ini("Tracking", "enable_tracking", true);
-    byte_track_thresh = static_cast<float>(get_double_ini("Tracking", "byte_track_thresh", 0.5));
-    byte_high_thresh = static_cast<float>(get_double_ini("Tracking", "byte_high_thresh", 0.6));
-    byte_match_thresh = static_cast<float>(get_double_ini("Tracking", "byte_match_thresh", 0.8));
-    byte_max_time_lost = get_long_ini("Tracking", "byte_max_time_lost", 30);
     
-    // Load Kalman filter parameters
-    enable_kalman_filter = get_bool_ini("Tracking", "enable_kalman_filter", false);
-    kalman_use_cuda_graph = get_bool_ini("Tracking", "kalman_use_cuda_graph", true);
-    kalman_dt = static_cast<float>(get_double_ini("Tracking", "kalman_dt", 0.033));
-    kalman_process_noise = static_cast<float>(get_double_ini("Tracking", "kalman_process_noise", 1.0));
-    kalman_measurement_noise = static_cast<float>(get_double_ini("Tracking", "kalman_measurement_noise", 1.0));
-    kalman_min_hits = get_long_ini("Tracking", "kalman_min_hits", 3);
-    kalman_max_age = get_long_ini("Tracking", "kalman_max_age", 5);
     
     // Hybrid aim control settings
 
@@ -611,20 +582,6 @@ bool Config::saveConfig(const std::string& filename)
     
     
 
-    // Save ByteTracker parameters
-    file << "[Tracking]\n";
-    file << "enable_tracking = " << (enable_tracking ? "true" : "false") << "\n";
-    file << "byte_track_thresh = " << byte_track_thresh << "\n";
-    file << "byte_high_thresh = " << byte_high_thresh << "\n";
-    file << "byte_match_thresh = " << byte_match_thresh << "\n";
-    file << "byte_max_time_lost = " << byte_max_time_lost << "\n";
-    file << "enable_kalman_filter = " << (enable_kalman_filter ? "true" : "false") << "\n";
-    file << "kalman_use_cuda_graph = " << (kalman_use_cuda_graph ? "true" : "false") << "\n";
-    file << "kalman_dt = " << kalman_dt << "\n";
-    file << "kalman_process_noise = " << kalman_process_noise << "\n";
-    file << "kalman_measurement_noise = " << kalman_measurement_noise << "\n";
-    file << "kalman_min_hits = " << kalman_min_hits << "\n";
-    file << "kalman_max_age = " << kalman_max_age << "\n\n";
 
     file << "[Arduino]\n";
     file << std::noboolalpha;

@@ -579,7 +579,6 @@ int main()
         pipelineConfig.modelPath = "models/" + ctx.config.ai_model;  // Set model path for TensorRT
         pipelineConfig.enableCapture = true;
         pipelineConfig.enableDetection = true;
-        pipelineConfig.enableTracking = ctx.config.enable_tracking;
         pipelineConfig.useGraphOptimization = true;  // Enable CUDA Graph
         pipelineConfig.detectionWidth = ctx.config.detection_resolution;   // Use config value
         pipelineConfig.detectionHeight = ctx.config.detection_resolution;  // Use config value
@@ -596,8 +595,6 @@ int main()
             // Pipeline is now fully integrated - no need to set detector reference
             auto* pipeline = pipelineManager.getPipeline();
             if (pipeline) {
-                // TODO: Set tracker when available
-                // pipeline->setTracker(gpuKalmanTracker);
                 
                 // Initialize screen capture for the pipeline
                 std::cout << "[MAIN] Initializing screen capture..." << std::endl;

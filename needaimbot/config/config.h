@@ -216,20 +216,7 @@ public:
     
     // Simple Movement Parameters
 
-    // ByteTracker parameters
-    bool enable_tracking;       // Enable/disable target tracking
-    float byte_track_thresh = 0.5f;     // Threshold for starting a track
-    float byte_high_thresh = 0.6f;      // High confidence threshold
-    float byte_match_thresh = 0.8f;     // IOU matching threshold
-    int byte_max_time_lost = 30;        // Max frames to keep lost track
     
-    // Legacy tracker parameters (for compatibility)
-    int tracker_max_age = 30;            // Max frames without detection
-    int tracker_min_hits = 3;            // Min hits to confirm track
-    float tracker_iou_threshold = 0.3f;  // IOU threshold for matching
-    
-    // Kalman filter parameters (old - deprecated, use new settings below)
-    float kalman_lookahead_time = 0.016f; // Deprecated - use kalman_dt instead
     
     
 
@@ -319,14 +306,6 @@ public:
     int min_color_pixels;
     bool remove_color_matches; 
 
-    // Kalman filter settings
-    bool enable_kalman_filter = false;
-    bool kalman_use_cuda_graph = true;
-    float kalman_dt = 0.033f;              // Time delta (30 FPS default)
-    float kalman_process_noise = 1.0f;     // Process noise scale
-    float kalman_measurement_noise = 1.0f; // Measurement noise scale
-    int kalman_min_hits = 3;               // Minimum hits before track is confirmed
-    int kalman_max_age = 5;                // Maximum frames without detection
     
     // Legacy mouse control settings (kept for config compatibility, not used)
     float mouse_sensitivity = 1.0f;        // DEPRECATED - Not used
