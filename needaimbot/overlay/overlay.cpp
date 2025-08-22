@@ -641,10 +641,6 @@ void OverlayThread()
                     // Monitoring
                     if (ImGui::BeginTabItem("Monitor"))
                     {
-                        // Performance Stats
-                        UIHelpers::BeginSettingsSection("Performance", "Real-time performance metrics");
-                        draw_stats();
-                        UIHelpers::EndSettingsSection();
                         
                         // Debug Info
                         UIHelpers::BeginSettingsSection("Debug", "System information and troubleshooting");
