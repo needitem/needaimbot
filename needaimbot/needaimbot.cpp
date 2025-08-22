@@ -54,8 +54,6 @@ std::atomic<bool> capture_borders_changed{false};
 std::atomic<bool> capture_cursor_changed{false};
 std::atomic<bool> show_window_changed{false};
 
-// add_to_history function removed - use AppContext::getInstance().add_to_history() instead
-
 // Forward declarations
 bool initializeScreenCapture(needaimbot::UnifiedGraphPipeline* pipeline);
 
@@ -512,8 +510,8 @@ int main()
             return -1;
         }
         
-        // Initialize DetectionState preview flag based on config
-        ctx.getDetectionState().setPreviewEnabled(ctx.config.show_window);
+        // Initialize preview flag based on config
+        ctx.preview_enabled = ctx.config.show_window;
         
 
 

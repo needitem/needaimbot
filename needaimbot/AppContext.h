@@ -14,8 +14,6 @@
 #include "cuda/detection/postProcess.h"
 #include <queue>
 #include <chrono>
-#include "core/states/CaptureState.h"
-#include "core/states/DetectionState.h"
 
 
 class MouseThread; // Forward declaration
@@ -35,7 +33,6 @@ public:
     AppContext(const AppContext&) = delete;
     AppContext& operator=(const AppContext&) = delete;
 
-#include "core/states/CaptureState.h"
 
     static AppContext& getInstance() {
         static AppContext instance;
@@ -45,11 +42,20 @@ public:
     // Config
     Config config;
 
-    // State management - 새로운 상태 관리 시스템
-    std::unique_ptr<Core::CaptureState> captureState_;
-    std::unique_ptr<Core::DetectionState> detectionState_;
+    // State management - atomic variables replacing State classes
+    std::atomic<bool> detection_paused{false};
+    std::atomic<bool> preview_enabled{false};
+    std::atomic<bool> capture_method_changed{false};
+    std::atomic<bool> crosshair_offset_changed{false};
+    std::atomic<bool> model_changed{false};
+    
+    // Target data
+    mutable std::mutex target_mutex;
+    std::vector<Target> all_targets_;
+    Target current_target_;
+    std::atomic<bool> has_target_{false};
 
-    // Legacy frame synchronization (will be moved to CaptureState gradually)
+    // Frame synchronization
     std::mutex frame_mutex;
     std::condition_variable frame_cv;
     std::atomic<bool> new_frame_available{false};
@@ -64,11 +70,10 @@ public:
     std::atomic<bool> shooting{false};  // Track if auto_shoot button is pressed
     std::atomic<bool> input_method_changed{false};
     
-    // Detection resolution changes (TODO: move to DetectionState)
     std::atomic<bool> detection_resolution_changed{false};
     
     
-    // Application control (TODO: 일부 기능은 DetectionState로 이동됨)
+    // Application control
     std::mutex configMutex;
     
     std::atomic<float> g_movementDeltaX{0.0f};
@@ -104,33 +109,47 @@ public:
     MouseThread* mouseThread = nullptr;  // Stack allocated in main, so using raw pointer
     // Detector removed - TensorRT is now integrated into UnifiedGraphPipeline
 
-    // Overlay Target Data (TODO: DetectionState로 이동됨)
+    // Overlay Target Data
     
-    // State 접근자
-    Core::CaptureState& getCaptureState() { return *captureState_; }
-    const Core::CaptureState& getCaptureState() const { return *captureState_; }
-    
-    Core::DetectionState& getDetectionState() { return *detectionState_; }
-    const Core::DetectionState& getDetectionState() const { return *detectionState_; }
-    
-
-    // Helper functions
-    void add_to_history(std::vector<float>& history, float value, std::mutex& mutex) {
-        std::lock_guard<std::mutex> lock(mutex);
-        history.push_back(value);
-        if (history.size() > 100) {
-            history.erase(history.begin());
+    // Target management helpers
+    void updateTargets(const std::vector<Target>& targets) {
+        std::lock_guard<std::mutex> lock(target_mutex);
+        all_targets_ = targets;
+        has_target_ = !targets.empty();
+        
+        if (!targets.empty()) {
+            auto bestTarget = std::max_element(targets.begin(), targets.end(),
+                [](const Target& a, const Target& b) {
+                    return a.confidence < b.confidence;
+                });
+            current_target_ = *bestTarget;
         }
+    }
+    
+    Target getBestTarget() const {
+        std::lock_guard<std::mutex> lock(target_mutex);
+        return current_target_;
+    }
+    
+    std::vector<Target> getAllTargets() const {
+        std::lock_guard<std::mutex> lock(target_mutex);
+        return all_targets_;
+    }
+    
+    void clearTargets() {
+        std::lock_guard<std::mutex> lock(target_mutex);
+        all_targets_.clear();
+        has_target_ = false;
+        current_target_ = Target{};
+    }
+    
+    bool hasValidTarget() const {
+        return has_target_.load();
     }
 
 private:
     AppContext() : new_frame_available(false) {
-        // Initialize new state management
-        captureState_ = std::make_unique<Core::CaptureState>(4);
-        detectionState_ = std::make_unique<Core::DetectionState>();
-        
-        // Initialize capture_method from config after config is loaded
-        captureState_->setCaptureMethod(config.gpu_capture_method);
+        // State variables are initialized with their default values
     }
 };
 
