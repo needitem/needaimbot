@@ -26,7 +26,6 @@
 #include "include/other_tools.h"
 #include "core/thread_manager.h"
 #include "core/error_manager.h"
-#include "core/performance_monitor.h"
 #include "core/defender_exception.h"
 
 
@@ -647,33 +646,6 @@ int main()
 
         welcome_message();
         
-        // Start performance monitoring thread with event-based wakeup
-        std::condition_variable perf_cv;
-        std::mutex perf_mutex;
-        ThreadManager perfMonitorMgr("PerformanceMonitor", [&perf_cv, &perf_mutex]() {
-            auto& ctx = AppContext::getInstance();
-            while (!ctx.should_exit) {
-                // Wait for 10 seconds or until signaled to exit
-                std::unique_lock<std::mutex> lock(perf_mutex);
-                if (perf_cv.wait_for(lock, std::chrono::seconds(10), 
-                    []() { return AppContext::getInstance().should_exit.load(); })) {
-                    break; // Exit signal received
-                }
-                
-                // Log system metrics
-                auto sysMetrics = PerformanceMonitor::getInstance().getSystemMetrics();
-                if (sysMetrics.cpu_usage_percent > 80.0f) {
-                    LOG_WARNING("Performance", "High CPU usage: " + std::to_string(sysMetrics.cpu_usage_percent) + "%");
-                }
-                if (sysMetrics.memory_usage_mb > 1024) {
-                    LOG_WARNING("Performance", "High memory usage: " + std::to_string(sysMetrics.memory_usage_mb) + "MB");
-                }
-                
-                // Log slow operations
-                PerformanceMonitor::getInstance().logSlowOperations();
-            }
-        });
-        perfMonitorMgr.start();
 
         // Wait for exit signal using condition variable instead of polling
         {
@@ -685,7 +657,6 @@ int main()
         std::cout << "[MAIN] Initiating safe shutdown..." << std::endl;
         
         // Signal all threads to exit
-        perf_cv.notify_all();
         ctx.frame_cv.notify_all();
         ctx.detection_cv.notify_all();
         ctx.mouse_event_cv.notify_all();
@@ -717,15 +688,6 @@ int main()
         std::cout << "  Errors: " << ErrorManager::getInstance().getErrorCount() << std::endl;
         std::cout << "  Critical Errors: " << ErrorManager::getInstance().getCriticalCount() << std::endl;
         
-        std::cout << "\n[MAIN] Performance Summary:" << std::endl;
-        auto allMetrics = PerformanceMonitor::getInstance().getAllMetrics();
-        for (const auto& [name, metrics] : allMetrics) {
-            if (metrics.sample_count > 0) {
-                std::cout << "  " << name << ": avg=" << metrics.avg_time_ms 
-                          << "ms, min=" << metrics.min_time_ms 
-                          << "ms, max=" << metrics.max_time_ms << "ms" << std::endl;
-            }
-        }
         
         std::cout << "\n[MAIN] Safe shutdown completed." << std::endl;
         timeEndPeriod(1);  // Restore system timer

@@ -42,7 +42,6 @@
     <ClCompile Include="mouse\\input_drivers\\MakcuConnection.cpp" />
     <ClCompile Include="overlay\draw_color_filter.cpp" />
     <ClCompile Include="overlay\draw_rcs.cpp" />
-    <ClCompile Include="overlay\draw_stats.cpp" />
     <ClCompile Include="overlay\\draw_ai.cpp" />
     <ClCompile Include="overlay\draw_buttons.cpp" />
     <ClCompile Include="overlay\draw_capture.cpp" />
@@ -61,7 +60,6 @@
     <ClCompile Include="scr\other_tools.cpp" />
     <ClCompile Include="core\states\CaptureState.cpp" />
     <ClCompile Include="core\states\DetectionState.cpp" />
-    <ClCompile Include="core\metrics\PerformanceMetrics.cpp" />
     <ClCompile Include="core\defender_exception.cpp" />
   </ItemGroup>
   <ItemGroup>
