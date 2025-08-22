@@ -386,11 +386,6 @@ bool UnifiedGraphPipeline::allocateBuffers() {
         CUDA_CHECK(cudaMalloc(&m_d_selectedTarget, sizeof(Target)));
         if (!m_d_selectedTarget) throw std::runtime_error("m_d_selectedTarget allocation failed");
         
-        CUDA_CHECK(cudaMalloc(&m_d_trackedTarget, sizeof(Target)));
-        if (!m_d_trackedTarget) throw std::runtime_error("m_d_trackedTarget allocation failed");
-        
-        CUDA_CHECK(cudaMalloc(&m_d_trackedTargets, maxDetections * sizeof(Target)));
-        if (!m_d_trackedTargets) throw std::runtime_error("m_d_trackedTargets allocation failed");
         
         // Allocate NMS temporary buffers
         CUDA_CHECK(cudaMalloc(&m_d_numDetections, sizeof(int)));
@@ -551,8 +546,6 @@ void UnifiedGraphPipeline::deallocateBuffers() {
     safeCudaFree(reinterpret_cast<void*&>(m_d_filteredOutput), "m_d_filteredOutput");
     safeCudaFree(reinterpret_cast<void*&>(m_d_detections), "m_d_detections");
     safeCudaFree(reinterpret_cast<void*&>(m_d_selectedTarget), "m_d_selectedTarget");
-    safeCudaFree(reinterpret_cast<void*&>(m_d_trackedTarget), "m_d_trackedTarget");
-    safeCudaFree(reinterpret_cast<void*&>(m_d_trackedTargets), "m_d_trackedTargets");
     
     // Free NMS temporary buffers
     safeCudaFree(reinterpret_cast<void*&>(m_d_numDetections), "m_d_numDetections");
@@ -592,8 +585,6 @@ void UnifiedGraphPipeline::deallocateBuffers() {
     m_d_filteredOutput = nullptr;
     m_d_detections = nullptr;
     m_d_selectedTarget = nullptr;
-    m_d_trackedTarget = nullptr;
-    m_d_trackedTargets = nullptr;
     m_d_numDetections = nullptr;
     m_d_x1 = nullptr;
     m_d_y1 = nullptr;
