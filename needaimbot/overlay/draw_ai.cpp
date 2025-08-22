@@ -49,7 +49,7 @@ static void draw_model_settings()
             {
                 ctx.config.ai_model = availableModels[currentModelIndex];
                 SAVE_PROFILE();
-                ctx.getDetectionState().markModelChanged();
+                ctx.model_changed = true;
             }
         }
     }
@@ -74,7 +74,7 @@ static void draw_model_settings()
         {
             ctx.config.onnx_input_resolution = selected_resolution;
             SAVE_PROFILE();
-            ctx.getDetectionState().markModelChanged(); 
+            ctx.model_changed = true; 
         }
     }
     
@@ -83,13 +83,13 @@ static void draw_model_settings()
     if (UIHelpers::EnhancedCheckbox("Enable FP16 Precision", &ctx.config.export_enable_fp16, "Enable FP16 precision for the exported TensorRT engine. Reduces memory usage and improves performance on supported GPUs."))
     {
         SAVE_PROFILE();
-        ctx.getDetectionState().markModelChanged();
+        ctx.model_changed = true;
     }
     
     if (UIHelpers::EnhancedCheckbox("Enable FP8 Precision", &ctx.config.export_enable_fp8, "Enable FP8 precision for the exported TensorRT engine. Experimental feature for maximum performance on supported GPUs."))
     {
         SAVE_PROFILE();
-        ctx.getDetectionState().markModelChanged();
+        ctx.model_changed = true;
     }
     
     UIHelpers::CompactSpacer();
@@ -108,7 +108,7 @@ static void draw_model_settings()
         }
         ctx.config.ai_model = onnxPath.filename().string();
         SAVE_PROFILE();
-        ctx.getDetectionState().markModelChanged();
+        ctx.model_changed = true;
     }
     
     UIHelpers::EndCard();
@@ -142,7 +142,7 @@ static void draw_detection_settings()
     {
         ctx.config.postprocess = postprocessOptions[currentPostprocessIndex];
         SAVE_PROFILE();
-        ctx.getDetectionState().markModelChanged();
+        ctx.model_changed = true;
     }
     
     UIHelpers::Spacer();

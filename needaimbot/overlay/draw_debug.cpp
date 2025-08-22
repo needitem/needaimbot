@@ -330,8 +330,8 @@ void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float debug_scale) 
     // Validate parameters
     if (!draw_list || debug_scale <= 0) return;
     
-    // Get all detected targets from DetectionState
-    std::vector<Target> all_targets = ctx.getDetectionState().getAllTargets();
+    // Get all detected targets
+    std::vector<Target> all_targets = ctx.getAllTargets();
     
     // Early exit if no targets
     if (all_targets.empty()) {
@@ -342,8 +342,8 @@ void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float debug_scale) 
     Target best_target{};
     bool has_best_target = false;
     try {
-        if (ctx.getDetectionState().hasValidTarget()) {
-            best_target = ctx.getDetectionState().getBestTarget();
+        if (ctx.hasValidTarget()) {
+            best_target = ctx.getBestTarget();
             has_best_target = true;
         }
     } catch (...) {
@@ -435,7 +435,7 @@ void draw_debug()
     auto& ctx = AppContext::getInstance();
     
     // Display pause status prominently
-    if (ctx.getDetectionState().isPaused()) {
+    if (ctx.detection_paused.load()) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.3f, 0.3f, 1.0f)); // Red color
         ImGui::Text("AIMBOT PAUSED");
         ImGui::PopStyleColor();

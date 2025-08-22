@@ -36,7 +36,6 @@
     <ClCompile Include="mouse\\recoil_control_thread.cpp" />
     <ClCompile Include="mouse\\rapidfire.cpp" />
     <ClCompile Include="mouse\\input_drivers\\my_enc.cpp" />
-    <ClCompile Include="cuda\tracking\gpu_tracker_wrapper.cpp" />
     <ClCompile Include="mouse\\input_drivers\\rzctl.cpp" />
     <ClCompile Include="mouse\\input_drivers\\SerialConnection.cpp" />
     <ClCompile Include="mouse\\input_drivers\\MakcuConnection.cpp" />
@@ -58,8 +57,6 @@
     <ClCompile Include="utils\image_io.cpp" />
     <ClCompile Include="utils\window_enum.cpp" />
     <ClCompile Include="scr\other_tools.cpp" />
-    <ClCompile Include="core\states\CaptureState.cpp" />
-    <ClCompile Include="core\states\DetectionState.cpp" />
     <ClCompile Include="core\defender_exception.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -67,8 +64,6 @@
     <CudaCompile Include="cuda\detection\postProcessGpu.cu" />
     <CudaCompile Include="cuda\detection\cuda_float_processing.cu" />
     <CudaCompile Include="cuda\preprocessing.cu" />
-    <CudaCompile Include="cuda\tracking\gpu_tracker.cu" />
-    <CudaCompile Include="cuda\tracking\gpu_kalman_filter.cu" />
     <CudaCompile Include="cuda\unified_graph_pipeline.cu" />
   </ItemGroup>
   <ItemGroup>
@@ -86,8 +81,6 @@
     <ClInclude Include="cuda\simple_cuda_mat.h" />
     <ClInclude Include="cuda\detection\cuda_float_processing.h" />
     <ClInclude Include="cuda\image_io.h" />
-    <ClInclude Include="cuda\tracking\gpu_kalman_filter.h" />
-    <ClInclude Include="cuda\tracking\gpu_tracker.h" />
     <ClInclude Include="cuda\unified_graph_pipeline.h" />
     <ClInclude Include="cuda\cuda_error_check.h" />
     <ClInclude Include="cuda\pd_controller.h" />

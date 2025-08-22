@@ -1,6 +1,5 @@
 #include "unified_graph_pipeline.h"
 #include "detection/cuda_float_processing.h"
-#include "tracking/gpu_kalman_filter.h"
 #include "detection/filterGpu.h"
 #include "simple_cuda_mat.h"
 #include "mouse_interface.h"
@@ -242,20 +241,7 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
         cudaMemsetAsync(m_d_numDetections, 0, sizeof(int), stream);
     }
     
-    // 5. Tracking (Kalman filter)
-    if (m_config.enableTracking && m_tracker && m_d_selectedTarget) {
-        // Process tracking with GPU Kalman filter using pre-allocated buffer
-        processKalmanFilter(
-            m_tracker,
-            m_d_selectedTarget,  // Input measurement
-            1,                   // Single target for now
-            m_d_trackedTarget,   // Output tracked target
-            m_d_outputCount,     // Output count (pre-allocated)
-            stream,
-            false,              // Don't use graph within graph capture
-            1.0f                // Lookahead frames
-        );
-    }
+    // 5. Tracking removed - no longer needed
     
     // 6. Bezier Control (already handled in the main pipeline)
     // The actual Bezier control is executed in graph method
@@ -1610,7 +1596,7 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
                         // Previous copy completed, update preview
                         if (h_finalCount > 0 && h_finalCount <= cached_max_detections) {
                             h_finalTargets.resize(h_finalCount);
-                            ctx.getDetectionState().updateTargets(h_finalTargets);
+                            ctx.updateTargets(h_finalTargets);
                         }
                         copyInProgress = false;
                     }
@@ -1640,14 +1626,14 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
             if (m_d_finalTargetsCount) {
                 cudaMemsetAsync(m_d_finalTargetsCount, 0, sizeof(int), stream);
             }
-            ctx.getDetectionState().clearTargets();
+            ctx.clearTargets();
         }
     } else {
         std::cerr << "[Pipeline] NMS buffers not properly allocated!" << std::endl;
         if (m_d_finalTargetsCount) {
             cudaMemsetAsync(m_d_finalTargetsCount, 0, sizeof(int), stream);
         }
-        ctx.getDetectionState().clearTargets();
+        ctx.clearTargets();
     }
 }
 
@@ -1810,7 +1796,7 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
     }
     
     // Step 3: Execute detection and inference pipeline on current frame
-    if (!ctx.getDetectionState().isPaused()) {
+    if (!ctx.detection_paused.load()) {
         // Copy current buffer to main capture buffer for processing
         if (!m_tripleBuffer->buffers[currentIdx].empty()) {
             size_t dataSize = m_tripleBuffer->buffers[currentIdx].rows() * 
