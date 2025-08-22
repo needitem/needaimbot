@@ -400,9 +400,6 @@ void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float debug_scale) 
         
         std::string label = className + " (" + conf_str + ")";
         
-        if (det.id >= 0 && det.id < 10000) {  // Show ID if valid
-            label = "ID:" + std::to_string(det.id) + " " + label;
-        }
         
         if (is_best_target) {
             label = "[TARGET] " + label;
