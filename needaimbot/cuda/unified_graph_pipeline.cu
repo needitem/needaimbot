@@ -1928,11 +1928,8 @@ void UnifiedGraphPipeline::processMouseMovementAsync() {
     }
     Target& h_target = *h_target_ptr;
     
-    // Ensure center is calculated
-    h_target.updateCenter();
-    
     // Apply head/body offset to target center
-    float targetCenterX = h_target.center_x;
+    float targetCenterX = h_target.x + h_target.width / 2.0f;
     float targetCenterY;
     
     // Find head class ID from class_settings
