@@ -16,7 +16,6 @@
 #include <chrono>
 #include "core/states/CaptureState.h"
 #include "core/states/DetectionState.h"
-#include "core/metrics/PerformanceMetrics.h"
 
 
 class MouseThread; // Forward declaration
@@ -49,7 +48,6 @@ public:
     // State management - 새로운 상태 관리 시스템
     std::unique_ptr<Core::CaptureState> captureState_;
     std::unique_ptr<Core::DetectionState> detectionState_;
-    std::unique_ptr<Core::PerformanceMetrics> performanceMetrics_;
 
     // Legacy frame synchronization (will be moved to CaptureState gradually)
     std::mutex frame_mutex;
@@ -69,7 +67,6 @@ public:
     // Detection resolution changes (TODO: move to DetectionState)
     std::atomic<bool> detection_resolution_changed{false};
     
-    // Performance metrics (TODO: PerformanceMetrics로 이동됨)
     
     // Application control (TODO: 일부 기능은 DetectionState로 이동됨)
     std::mutex configMutex;
@@ -116,8 +113,6 @@ public:
     Core::DetectionState& getDetectionState() { return *detectionState_; }
     const Core::DetectionState& getDetectionState() const { return *detectionState_; }
     
-    Core::PerformanceMetrics& getPerformanceMetrics() { return *performanceMetrics_; }
-    const Core::PerformanceMetrics& getPerformanceMetrics() const { return *performanceMetrics_; }
 
     // Helper functions
     void add_to_history(std::vector<float>& history, float value, std::mutex& mutex) {
@@ -133,7 +128,6 @@ private:
         // Initialize new state management
         captureState_ = std::make_unique<Core::CaptureState>(4);
         detectionState_ = std::make_unique<Core::DetectionState>();
-        performanceMetrics_ = std::make_unique<Core::PerformanceMetrics>();
         
         // Initialize capture_method from config after config is loaded
         captureState_->setCaptureMethod(config.gpu_capture_method);

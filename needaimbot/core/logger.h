@@ -163,4 +163,3 @@ private:
     std::chrono::high_resolution_clock::time_point start_;
 };
 
-#define PERF_TIMER(name, component) PerformanceTimer _timer_##__LINE__(name, component)

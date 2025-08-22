@@ -445,13 +445,6 @@ void draw_debug()
         ImGui::PopStyleColor();
     }
     
-    if (ctx.config.show_fps) {
-        ImGui::Text("Capture FPS: %.1f", ctx.getPerformanceMetrics().getCurrentCaptureFps());
-        ImGui::Text("Inference Time: %.2f ms", ctx.getPerformanceMetrics().getCurrentInferenceTime());
-        
-        ImGui::Separator();
-        ImGui::Spacing();
-    }
 
     ImGui::SeparatorText("Preview Notice"); 
     ImGui::Spacing();
