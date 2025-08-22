@@ -41,7 +41,7 @@ static void draw_capture_area_settings()
         extern std::atomic<bool> detection_resolution_changed;
         // detector_model_changed is now managed by DetectionState
         detection_resolution_changed.store(true);
-        ctx.getDetectionState().markModelChanged();
+        ctx.model_changed = true;
     }
     
     if (ctx.config.detection_resolution >= 400)
@@ -95,10 +95,9 @@ static void draw_capture_behavior_settings()
     if (current_method != previous_method)
     {
         ctx.config.gpu_capture_method = current_method;  // Save to config
-        ctx.getCaptureState().setCaptureMethod(current_method);  // Update runtime value
         std::cout << "[UI] GPU capture method changed from " << previous_method << " to " << current_method << std::endl;
         SAVE_PROFILE();  // This will save to file
-        ctx.getCaptureState().markMethodChanged();
+        ctx.capture_method_changed = true;
     }
     
     UIHelpers::CompactSpacer();

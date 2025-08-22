@@ -662,7 +662,7 @@ void OverlayThread()
                     {
                         prev_detection_resolution = ctx.config.detection_resolution;
                         detection_resolution_changed.store(true);
-                        ctx.getDetectionState().markModelChanged(); 
+                        ctx.model_changed = true; 
 
                         
                         if (AppContext::getInstance().mouseThread) {
@@ -762,8 +762,8 @@ void OverlayThread()
                         show_window_changed.store(true);
                         prev_show_window = ctx.config.show_window;
                         
-                        // Update DetectionState preview flag when show_window changes
-                        ctx.getDetectionState().setPreviewEnabled(ctx.config.show_window);
+                        // Update preview flag when show_window changes
+                        ctx.preview_enabled = ctx.config.show_window;
                         
                         config_needs_save = true;
                     }
