@@ -5,12 +5,14 @@
 #include <vector>
 #include <memory>
 #include <atomic>
+#include <array>
 #include <chrono>
 #include <mutex>
 #include <unordered_map>
 #include "simple_cuda_mat.h"
 #include "cuda_resource_manager.h"
 #include "../core/Target.h"
+#include "../utils/cuda_utils.h"  // For CudaEvent and CudaStream
 
 // TensorRT includes for Phase 1 integration
 #include <NvInfer.h>
@@ -43,8 +45,40 @@ struct GraphExecutionState {
     int frameCount = 0;
     float avgLatency = 0.0f;
     float lastLatency = 0.0f;
-    cudaEvent_t startEvent = nullptr;
-    cudaEvent_t endEvent = nullptr;
+    std::unique_ptr<CudaEvent> startEvent;  // Using RAII wrapper
+    std::unique_ptr<CudaEvent> endEvent;    // Using RAII wrapper
+    
+    // Default constructor
+    GraphExecutionState() = default;
+    
+    // Move constructor
+    GraphExecutionState(GraphExecutionState&& other) noexcept
+        : graphReady(other.graphReady)
+        , needsRebuild(other.needsRebuild)
+        , frameCount(other.frameCount)
+        , avgLatency(other.avgLatency)
+        , lastLatency(other.lastLatency)
+        , startEvent(std::move(other.startEvent))
+        , endEvent(std::move(other.endEvent))
+    {}
+    
+    // Move assignment operator
+    GraphExecutionState& operator=(GraphExecutionState&& other) noexcept {
+        if (this != &other) {
+            graphReady = other.graphReady;
+            needsRebuild = other.needsRebuild;
+            frameCount = other.frameCount;
+            avgLatency = other.avgLatency;
+            lastLatency = other.lastLatency;
+            startEvent = std::move(other.startEvent);
+            endEvent = std::move(other.endEvent);
+        }
+        return *this;
+    }
+    
+    // Delete copy constructor and copy assignment
+    GraphExecutionState(const GraphExecutionState&) = delete;
+    GraphExecutionState& operator=(const GraphExecutionState&) = delete;
 };
 
 // Unified pipeline configuration
@@ -102,7 +136,12 @@ public:
         m_captureTextureD3D = texture;
     }
     void setInputFrame(const SimpleCudaMat& frame);
-    void setOutputBuffer(float* d_output) { m_d_outputBuffer = d_output; }
+    void setOutputBuffer(float* d_output) { 
+        // Note: This function is for compatibility with external code
+        // The actual output buffer is managed internally with RAII
+        // If needed, we can copy data to the external buffer after processing
+        m_externalOutputBuffer = d_output;
+    }
     
     // TensorRT integration methods (Phase 1)
     bool initializeTensorRT(const std::string& modelFile);
@@ -121,7 +160,7 @@ public:
     void stopMainLoop();
     
     // State and statistics
-    GraphExecutionState getState() const { return m_state; }
+    const GraphExecutionState& getState() const { return m_state; }
     float getAverageLatency() const { return m_state.avgLatency; }
     bool isGraphReady() const { return m_state.graphReady; }
     
@@ -134,10 +173,10 @@ private:
     // Simple graph management
     cudaGraph_t m_graph = nullptr;
     cudaGraphExec_t m_graphExec = nullptr;
-    cudaStream_t m_primaryStream = nullptr;
+    std::unique_ptr<CudaStream> m_primaryStream;  // Using RAII wrapper
     
-    // Simple event for preview
-    cudaEvent_t m_previewReadyEvent = nullptr;
+    // Simple event for preview (using RAII)
+    std::unique_ptr<CudaEvent> m_previewReadyEvent;
     
     // Graph nodes for dynamic updates
     std::vector<cudaGraphNode_t> m_captureNodes;
@@ -155,39 +194,32 @@ private:
         std::atomic<int> captureIdx{0};
         std::atomic<int> inferenceIdx{1};
         std::atomic<int> displayIdx{2};
-        cudaEvent_t events[3];
+        std::array<CudaEvent, 3> events;  // RAII-managed CUDA events
         bool isReady[3] = {false, false, false};
         
-        // Pinned memory for zero-copy transfers
-        Target* h_target_coords_pinned[3] = {nullptr, nullptr, nullptr};  // Pinned host memory
-        cudaEvent_t target_ready_events[3];      // Events to signal when target data is ready
+        // RAII-managed pinned memory for zero-copy transfers
+        std::array<CudaPinnedMemory<Target>, 3> h_target_coords_pinned;  // Pinned host memory
+        std::array<CudaEvent, 3> target_ready_events;  // Events to signal when target data is ready
         bool target_data_valid[3] = {false, false, false};  // Track if target data is valid
         int target_count[3] = {0, 0, 0};         // Number of targets found for each buffer
+        
+        // Constructor - initialize pinned memory
+        TripleBuffer() {
+            initPinnedMemory();
+        }
         
         // Initialize pinned memory
         void initPinnedMemory() {
             for (int i = 0; i < 3; i++) {
-                if (!h_target_coords_pinned[i]) {
-                    cudaHostAlloc(&h_target_coords_pinned[i], sizeof(Target), cudaHostAllocDefault);
+                // Initialize each pinned memory buffer with space for one Target
+                if (h_target_coords_pinned[i].size() == 0) {
+                    h_target_coords_pinned[i] = CudaPinnedMemory<Target>(1, cudaHostAllocDefault);
                 }
             }
         }
         
-        // Cleanup pinned memory
-        ~TripleBuffer() {
-            // Check if resource manager is shutting down
-            if (CudaResourceManager::GetInstance().IsShuttingDown()) {
-                // During shutdown, resource manager will handle cleanup
-                return;
-            }
-            
-            for (int i = 0; i < 3; i++) {
-                if (h_target_coords_pinned[i]) {
-                    cudaFreeHost(h_target_coords_pinned[i]);
-                    h_target_coords_pinned[i] = nullptr;
-                }
-            }
-        }
+        // Destructor - RAII wrappers handle cleanup automatically
+        ~TripleBuffer() = default;
     };;
     std::unique_ptr<TripleBuffer> m_tripleBuffer;
     
@@ -202,8 +234,8 @@ private:
     std::vector<std::string> m_outputNames;
     std::unordered_map<std::string, size_t> m_inputSizes;
     std::unordered_map<std::string, size_t> m_outputSizes;
-    std::unordered_map<std::string, void*> m_inputBindings;
-    std::unordered_map<std::string, void*> m_outputBindings;
+    std::unordered_map<std::string, std::unique_ptr<CudaMemory<uint8_t>>> m_inputBindings;
+    std::unordered_map<std::string, std::unique_ptr<CudaMemory<uint8_t>>> m_outputBindings;
     
     // Inference related information
     std::string m_inputName;
@@ -213,54 +245,57 @@ private:
     // Pipeline buffers (GPU memory)
     SimpleCudaMat m_captureBuffer;
     SimpleCudaMat m_preprocessBuffer;
-    float* m_d_preprocessBuffer = nullptr;  // Raw preprocess buffer pointer
-    Target* m_d_tracks = nullptr;           // GPU tracking data
+    std::unique_ptr<CudaMemory<float>> m_d_preprocessBuffer;  // Preprocess buffer 
+    std::unique_ptr<CudaMemory<Target>> m_d_tracks;           // GPU tracking data
     
-    // NMS temporary buffers (allocated once, reused)
-    int* m_d_numDetections = nullptr;
-    int* m_d_x1 = nullptr;
-    int* m_d_y1 = nullptr;
-    int* m_d_x2 = nullptr;
-    int* m_d_y2 = nullptr;
-    float* m_d_areas = nullptr;
-    float* m_d_scores_nms = nullptr;
-    int* m_d_classIds_nms = nullptr;
-    float* m_d_iou_matrix = nullptr;
-    bool* m_d_keep = nullptr;
-    int* m_d_indices = nullptr;
-    int* m_d_outputCount = nullptr;
-    float* m_d_yoloInput = nullptr;        // YOLO model input (640x640x3)
-    float* m_d_inferenceOutput = nullptr;  // Raw inference output
-    float* m_d_nmsOutput = nullptr;        // After NMS
-    float* m_d_filteredOutput = nullptr;   // After filtering
-    Target* m_d_detections = nullptr;      // Detection results
-    Target* m_d_selectedTarget = nullptr;  // Selected target
+    // NMS temporary buffers (allocated once, reused) - Using RAII
+    std::unique_ptr<CudaMemory<int>> m_d_numDetections;
+    std::unique_ptr<CudaMemory<int>> m_d_x1;
+    std::unique_ptr<CudaMemory<int>> m_d_y1;
+    std::unique_ptr<CudaMemory<int>> m_d_x2;
+    std::unique_ptr<CudaMemory<int>> m_d_y2;
+    std::unique_ptr<CudaMemory<float>> m_d_areas;
+    std::unique_ptr<CudaMemory<float>> m_d_scores_nms;
+    std::unique_ptr<CudaMemory<int>> m_d_classIds_nms;
+    std::unique_ptr<CudaMemory<float>> m_d_iou_matrix;
+    std::unique_ptr<CudaMemory<bool>> m_d_keep;
+    std::unique_ptr<CudaMemory<int>> m_d_indices;
+    std::unique_ptr<CudaMemory<int>> m_d_outputCount;
+    std::unique_ptr<CudaMemory<float>> m_d_yoloInput;        // YOLO model input (640x640x3)
+    std::unique_ptr<CudaMemory<float>> m_d_inferenceOutput;  // Inference output (managed by RAII)
+    std::unique_ptr<CudaMemory<float>> m_d_nmsOutput;        // After NMS
+    std::unique_ptr<CudaMemory<float>> m_d_filteredOutput;   // After filtering
+    std::unique_ptr<CudaMemory<Target>> m_d_detections;      // Detection results
+    std::unique_ptr<CudaMemory<Target>> m_d_selectedTarget;  // Selected target
     
-    // Post-processing buffers (Phase 3 integration)
-    Target* m_d_decodedTargets = nullptr;      // Decoded detections from inference
-    int* m_d_decodedCount = nullptr;           // Count of decoded detections
-    Target* m_d_finalTargets = nullptr;        // Final NMS output
-    int* m_d_finalTargetsCount = nullptr;      // Final count after NMS
-    Target* m_d_classFilteredTargets = nullptr; // After class filtering
-    int* m_d_classFilteredCount = nullptr;     // Count after class filtering
-    Target* m_d_colorFilteredTargets = nullptr; // After color filtering
-    int* m_d_colorFilteredCount = nullptr;     // Count after color filtering
+    // Post-processing buffers (Phase 3 integration) - Using RAII
+    std::unique_ptr<CudaMemory<Target>> m_d_decodedTargets;      // Decoded detections from inference
+    std::unique_ptr<CudaMemory<int>> m_d_decodedCount;           // Count of decoded detections
+    std::unique_ptr<CudaMemory<Target>> m_d_finalTargets;        // Final NMS output
+    std::unique_ptr<CudaMemory<int>> m_d_finalTargetsCount;      // Final count after NMS
+    std::unique_ptr<CudaMemory<Target>> m_d_classFilteredTargets; // After class filtering
+    std::unique_ptr<CudaMemory<int>> m_d_classFilteredCount;     // Count after class filtering
+    std::unique_ptr<CudaMemory<Target>> m_d_colorFilteredTargets; // After color filtering
+    std::unique_ptr<CudaMemory<int>> m_d_colorFilteredCount;     // Count after color filtering
     
-    // Class filtering control buffer
-    unsigned char* m_d_allowFlags = nullptr;   // Class filtering flags
+    // Class filtering control buffer - Using RAII
+    std::unique_ptr<CudaMemory<unsigned char>> m_d_allowFlags;   // Class filtering flags
     
     // Additional post-processing metadata
     std::unordered_map<std::string, std::vector<int64_t>> m_outputShapes;
     std::unordered_map<std::string, nvinfer1::DataType> m_outputTypes;
     
-    // Target selection buffers
-    int* m_d_bestTargetIndex = nullptr;        // Selected target index
-    Target* m_d_bestTarget = nullptr;          // Selected target data
-    float* m_d_outputBuffer = nullptr;     // Final output buffer
+    // Target selection buffers - Using RAII
+    std::unique_ptr<CudaMemory<int>> m_d_bestTargetIndex;        // Selected target index
+    std::unique_ptr<CudaMemory<Target>> m_d_bestTarget;          // Selected target data
+    std::unique_ptr<CudaMemory<float>> m_d_outputBuffer;     // Final output buffer
     
     // Pinned host memory for zero-copy access
-    unsigned char* m_h_inputBuffer = nullptr;  // Pinned input buffer
-    float* m_h_outputBuffer = nullptr;         // Pinned output buffer (x,y)
+    std::unique_ptr<CudaPinnedMemory<unsigned char>> m_h_inputBuffer;  // Pinned input buffer
+    std::unique_ptr<CudaPinnedMemory<float>> m_h_outputBuffer;         // Pinned output buffer (x,y)
+    
+    // External output buffer (for compatibility)
+    float* m_externalOutputBuffer = nullptr;
     
     // Resource management
     cudaGraphicsResource_t m_cudaResource = nullptr;
@@ -286,9 +321,9 @@ private:
     std::atomic<bool> m_shouldStop{false};
     std::chrono::high_resolution_clock::time_point m_lastFrameTime;
     
-    // Event management for profiling and synchronization
-    cudaEvent_t m_lastFrameEnd = nullptr;      // For frame timing
-    cudaEvent_t m_copyEvent = nullptr;         // For copy synchronization
+    // Event management for profiling and synchronization (using RAII)
+    std::unique_ptr<CudaEvent> m_lastFrameEnd;      // For frame timing
+    std::unique_ptr<CudaEvent> m_copyEvent;         // For copy synchronization
     
     // Copy state management for async preview updates
     bool m_copyInProgress = false;
