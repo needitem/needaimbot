@@ -11,6 +11,7 @@
  */
 
 #define NOMINMAX
+#include <windows.h>
 
 namespace Constants {
     // ============================================================================
@@ -137,8 +138,10 @@ namespace Constants {
     constexpr float MIN_MOVEMENT_THRESHOLD = 0.01f;
     
     // UI constants (overlay-specific)
-    constexpr float BASE_OVERLAY_WIDTH = 900.0f;
-    constexpr float BASE_OVERLAY_HEIGHT = 700.0f;
+    constexpr int BASE_OVERLAY_WIDTH = 800;
+    constexpr int BASE_OVERLAY_HEIGHT = 600;
+    constexpr int MIN_OVERLAY_WIDTH = 600;
+    constexpr int MIN_OVERLAY_HEIGHT = 400;
     constexpr int MIN_OVERLAY_OPACITY = 20;
     constexpr int MAX_OVERLAY_OPACITY = 255;
     constexpr int OVERLAY_TARGET_FPS = 30;
@@ -146,6 +149,36 @@ namespace Constants {
     // CUDA constants (utility-specific)
     constexpr int CUDA_BLOCK_SIZE = 256;
     constexpr int WARP_SIZE = 32;
+    
+    // UI Slider/Input Limits
+    constexpr int MAX_DETECTIONS_LIMIT = 100;
+    constexpr int MIN_COLOR_PIXELS_LIMIT = 100;
+    constexpr float OFFSET_DRAG_MIN = -100.0f;
+    constexpr float OFFSET_DRAG_MAX = 100.0f;
+    constexpr float OFFSET_DRAG_SPEED = 0.1f;
+    constexpr int SCREENSHOT_DELAY_STEP = 50;
+    constexpr int SCREENSHOT_DELAY_STEP_FAST = 500;
+    constexpr int RCS_DELAY_MAX = 500;
+    constexpr float CROUCH_REDUCTION_MIN = -100.0f;
+    constexpr float CROUCH_REDUCTION_MAX = 100.0f;
+    
+    // UI Widget Sizes
+    constexpr int SLIDER_WIDTH_SMALL = 100;
+    constexpr int SLIDER_WIDTH_MEDIUM = 200;
+    constexpr int COMBO_WIDTH_SMALL = 100;
+    constexpr int COMBO_WIDTH_MEDIUM = 200;
+    
+    // Thread Sleep Durations
+    constexpr int OVERLAY_OCCLUDED_SLEEP_MS = 100;
+    constexpr int OVERLAY_HIDDEN_SLEEP_MS = 100;
+    constexpr int OVERLAY_INIT_RETRY_SLEEP_MS = 200;
+    constexpr int CONFIG_SAVE_INTERVAL_MS = 500;
+    
+    // Performance Thresholds
+    constexpr int DETECTION_RESOLUTION_HIGH_PERF = 400;
+    
+    // String Limits
+    constexpr size_t MAX_DEBUG_LABEL_LENGTH = 100;
     
     // Error codes
     enum class ErrorCode {
