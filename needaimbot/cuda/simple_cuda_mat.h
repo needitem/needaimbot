@@ -5,20 +5,21 @@
 #include <cstring>
 #include "cuda_error_check.h"
 #include "cuda_resource_manager.h"
+#include "../utils/cuda_utils.h"  // For CudaMemory RAII wrapper
 
 // Simple GPU matrix class to replace cv::cuda::GpuMat
 class SimpleCudaMat {
 public:
-    SimpleCudaMat() : data_(nullptr), width_(0), height_(0), channels_(0), step_(0) {}
+    SimpleCudaMat() : width_(0), height_(0), channels_(0), step_(0) {}
     
     SimpleCudaMat(int height, int width, int channels) 
-        : data_(nullptr), width_(width), height_(height), channels_(channels), step_(0) {
+        : width_(width), height_(height), channels_(channels), step_(0) {
         if (width_ > 0 && height_ > 0 && channels_ > 0) {
             try {
                 allocate();
             } catch (const std::exception& e) {
                 // Reset on allocation failure
-                data_ = nullptr;
+                data_.reset();
                 width_ = 0;
                 height_ = 0;
                 channels_ = 0;
@@ -28,15 +29,13 @@ public:
         }
     }
     
-    ~SimpleCudaMat() {
-        release();
-    }
+    // Destructor - RAII wrapper handles cleanup automatically
+    ~SimpleCudaMat() = default;
     
     // Move constructor
     SimpleCudaMat(SimpleCudaMat&& other) noexcept 
-        : data_(other.data_), width_(other.width_), height_(other.height_), 
+        : data_(std::move(other.data_)), width_(other.width_), height_(other.height_), 
           channels_(other.channels_), step_(other.step_) {
-        other.data_ = nullptr;
         other.width_ = other.height_ = other.channels_ = 0;
         other.step_ = 0;
     }
@@ -44,27 +43,16 @@ public:
     // Move assignment
     SimpleCudaMat& operator=(SimpleCudaMat&& other) noexcept {
         if (this != &other) {
-            // Save other's data first before releasing ours
-            uint8_t* temp_data = other.data_;
-            int temp_width = other.width_;
-            int temp_height = other.height_;
-            int temp_channels = other.channels_;
-            size_t temp_step = other.step_;
+            // RAII wrapper handles cleanup automatically
+            data_ = std::move(other.data_);
+            width_ = other.width_;
+            height_ = other.height_;
+            channels_ = other.channels_;
+            step_ = other.step_;
             
-            // Clear other's pointers immediately to prevent double-free
-            other.data_ = nullptr;
+            // Clear other's dimensions
             other.width_ = other.height_ = other.channels_ = 0;
             other.step_ = 0;
-            
-            // Now safely release our current data
-            release();
-            
-            // Take ownership of the data
-            data_ = temp_data;
-            width_ = temp_width;
-            height_ = temp_height;
-            channels_ = temp_channels;
-            step_ = temp_step;
         }
         return *this;
     }
@@ -76,23 +64,22 @@ public:
     // Create with specific dimensions
     void create(int height, int width, int channels) {
         if (height != height_ || width != width_ || channels != channels_) {
-            release();
+            data_.reset();  // RAII wrapper handles cleanup
             width_ = width;
             height_ = height;
             channels_ = channels;
             step_ = 0;
-            data_ = nullptr;
             
             if (width_ > 0 && height_ > 0 && channels_ > 0) {
                 try {
                     allocate();
                 } catch (const std::exception& e) {
                     // Reset on allocation failure
-                    data_ = nullptr;
+                    data_.reset();
                     width_ = 0;
-                height_ = 0;
-                channels_ = 0;
-                step_ = 0;
+                    height_ = 0;
+                    channels_ = 0;
+                    step_ = 0;
                     std::cerr << "[SimpleCudaMat::create] Allocation failed: " << e.what() << std::endl;
                 }
             }
@@ -101,93 +88,15 @@ public:
     
     // Release GPU memory
     void release() {
-        if (data_) {
-            // Check if resource manager is shutting down
-            if (CudaResourceManager::GetInstance().IsShuttingDown()) {
-                // During shutdown, just clear pointers without freeing
-                // The resource manager will handle cleanup
-                data_ = nullptr;
-                width_ = height_ = channels_ = 0;
-                step_ = 0;
-                return;
-            }
-            
-            // Validate pointer before attempting to free
-            // Check for obviously invalid pointers
-            uintptr_t ptr_val = reinterpret_cast<uintptr_t>(data_);
-            if (ptr_val == 0xffffffffffffffff ||
-                ptr_val == 0xcccccccccccccccc ||
-                ptr_val == 0xdddddddddddddddd ||
-                ptr_val == 0xfeeefeeefeeefeee ||
-                ptr_val == 0xabababababababab ||
-                ptr_val == 0xcdcdcdcdcdcdcdcd ||
-                ptr_val == 0xbaadf00dbaadf00d ||
-                ptr_val == 0xdeadbeefdeadbeef ||
-                ptr_val < 0x10000) {
-                // Invalid pointer, likely already freed or corrupted
-                data_ = nullptr;
-                width_ = height_ = channels_ = 0;
-                step_ = 0;
-                return;
-            }
-            
-            // Clear any previous errors first
-            cudaGetLastError();
-            
-            // First check if CUDA runtime is still active
-            cudaError_t runtimeErr = cudaGetLastError();
-            if (runtimeErr == cudaErrorCudartUnloading) {
-                // CUDA runtime is shutting down, don't try to free
-                data_ = nullptr;
-                width_ = height_ = channels_ = 0;
-                step_ = 0;
-                return;
-            }
-            
-            // Check if pointer is valid before freeing
-            cudaPointerAttributes attributes;
-            memset(&attributes, 0, sizeof(attributes));
-            cudaError_t queryErr = cudaPointerGetAttributes(&attributes, data_);
-            
-            // Only free if we can confirm it's valid CUDA memory
-            if (queryErr == cudaSuccess) {
-                // Additional validation - check if the memory type is valid
-                if (attributes.type == cudaMemoryTypeDevice || 
-                    attributes.type == cudaMemoryTypeManaged) {
-                    // Unregister from resource manager BEFORE freeing
-                    // This prevents double-free if resource manager tries to clean up
-                    CudaResourceManager::GetInstance().UnregisterMemory(data_);
-                    
-                    // Valid CUDA memory, attempt to free
-                    cudaError_t err = cudaFree(data_);
-                    if (err != cudaSuccess && 
-                        err != cudaErrorCudartUnloading && 
-                        err != cudaErrorInvalidValue &&
-                        err != cudaErrorInvalidDevicePointer &&
-                        err != cudaErrorIllegalAddress) {
-                        // Only warn for truly unexpected errors
-                        printf("[SimpleCudaMat] Warning: cudaFree failed: %s (error code: %d)\n", 
-                               cudaGetErrorString(err), err);
-                    }
-                }
-            } else if (queryErr == cudaErrorInvalidValue || 
-                      queryErr == cudaErrorInvalidDevice ||
-                      queryErr == cudaErrorIllegalAddress) {
-                // These errors indicate the pointer is no longer valid
-                // Just clear it without trying to free
-            }
-            // For any query error or invalid memory type, just clear the pointer
-            // This includes cudaErrorInvalidValue which happens during shutdown
-            
-            data_ = nullptr;
-        }
+        // RAII wrapper handles cleanup automatically
+        data_.reset();
         width_ = height_ = channels_ = 0;
         step_ = 0;
     }
     
     // Check if empty
     bool empty() const {
-        return data_ == nullptr || width_ == 0 || height_ == 0;
+        return !data_ || width_ == 0 || height_ == 0;
     }
     
     // Get properties
@@ -195,8 +104,8 @@ public:
     int cols() const { return width_; }
     int channels() const { return channels_; }
     size_t step() const { return step_; }
-    uint8_t* data() { return data_; }
-    const uint8_t* data() const { return data_; }
+    uint8_t* data() { return data_ ? data_->get() : nullptr; }
+    const uint8_t* data() const { return data_ ? data_->get() : nullptr; }
     
     // Get size in bytes
     size_t sizeInBytes() const {
@@ -205,19 +114,20 @@ public:
     
     // Copy from host memory
     void upload(const void* hostData, size_t hostStep = 0) {
-        if (empty()) return;
+        if (empty() || !data_) return;
         
         if (hostStep == 0) {
             hostStep = width_ * channels_;
         }
         
+        uint8_t* devicePtr = data_->get();
         if (hostStep == step_) {
             // Simple copy
-            CUDA_CHECK(cudaMemcpy(data_, hostData, sizeInBytes(), cudaMemcpyHostToDevice));
+            CUDA_CHECK(cudaMemcpy(devicePtr, hostData, sizeInBytes(), cudaMemcpyHostToDevice));
         } else {
             // Row-by-row copy
             const uint8_t* src = static_cast<const uint8_t*>(hostData);
-            uint8_t* dst = data_;
+            uint8_t* dst = devicePtr;
             for (int y = 0; y < height_; ++y) {
                 CUDA_CHECK(cudaMemcpy(dst, src, width_ * channels_, cudaMemcpyHostToDevice));
                 src += hostStep;
@@ -228,19 +138,20 @@ public:
     
     // Copy to host memory
     void download(void* hostData, size_t hostStep = 0) const {
-        if (empty()) return;
+        if (empty() || !data_) return;
         
         if (hostStep == 0) {
             hostStep = width_ * channels_;
         }
         
+        const uint8_t* devicePtr = data_->get();
         if (hostStep == step_) {
             // Simple copy
-            CUDA_CHECK(cudaMemcpy(hostData, data_, sizeInBytes(), cudaMemcpyDeviceToHost));
+            CUDA_CHECK(cudaMemcpy(hostData, devicePtr, sizeInBytes(), cudaMemcpyDeviceToHost));
         } else {
             // Row-by-row copy
             uint8_t* dst = static_cast<uint8_t*>(hostData);
-            const uint8_t* src = data_;
+            const uint8_t* src = devicePtr;
             for (int y = 0; y < height_; ++y) {
                 CUDA_CHECK(cudaMemcpy(dst, src, width_ * channels_, cudaMemcpyDeviceToHost));
                 dst += hostStep;
@@ -251,17 +162,18 @@ public:
     
     // Async versions with stream
     void uploadAsync(const void* hostData, cudaStream_t stream, size_t hostStep = 0) {
-        if (empty()) return;
+        if (empty() || !data_) return;
         
         if (hostStep == 0) {
             hostStep = width_ * channels_;
         }
         
+        uint8_t* devicePtr = data_->get();
         if (hostStep == step_) {
-            cudaMemcpyAsync(data_, hostData, sizeInBytes(), cudaMemcpyHostToDevice, stream);
+            cudaMemcpyAsync(devicePtr, hostData, sizeInBytes(), cudaMemcpyHostToDevice, stream);
         } else {
             const uint8_t* src = static_cast<const uint8_t*>(hostData);
-            uint8_t* dst = data_;
+            uint8_t* dst = devicePtr;
             for (int y = 0; y < height_; ++y) {
                 cudaMemcpyAsync(dst, src, width_ * channels_, cudaMemcpyHostToDevice, stream);
                 src += hostStep;
@@ -271,17 +183,18 @@ public:
     }
     
     void downloadAsync(void* hostData, cudaStream_t stream, size_t hostStep = 0) const {
-        if (empty()) return;
+        if (empty() || !data_) return;
         
         if (hostStep == 0) {
             hostStep = width_ * channels_;
         }
         
+        const uint8_t* devicePtr = data_->get();
         if (hostStep == step_) {
-            cudaMemcpyAsync(hostData, data_, sizeInBytes(), cudaMemcpyDeviceToHost, stream);
+            cudaMemcpyAsync(hostData, devicePtr, sizeInBytes(), cudaMemcpyDeviceToHost, stream);
         } else {
             uint8_t* dst = static_cast<uint8_t*>(hostData);
-            const uint8_t* src = data_;
+            const uint8_t* src = devicePtr;
             for (int y = 0; y < height_; ++y) {
                 cudaMemcpyAsync(dst, src, width_ * channels_, cudaMemcpyDeviceToHost, stream);
                 dst += hostStep;
@@ -301,43 +214,13 @@ public:
             return SimpleCudaMat();
         }
         
-        // Validate source pointer before cloning
-        uintptr_t ptr_val = reinterpret_cast<uintptr_t>(data_);
-        if (ptr_val < 0x10000 || ptr_val == 0xffffffffffffffff ||
-            ptr_val == 0xcccccccccccccccc || ptr_val == 0xdddddddddddddddd) {
-            return SimpleCudaMat();
-        }
-        
-        // Check if CUDA runtime is still valid
-        cudaError_t lastErr = cudaGetLastError();
-        if (lastErr == cudaErrorCudartUnloading) {
-            return SimpleCudaMat();
-        }
-        
-        // Validate source memory with cudaPointerGetAttributes
-        cudaPointerAttributes attributes;
-        memset(&attributes, 0, sizeof(attributes));
-        cudaError_t queryErr = cudaPointerGetAttributes(&attributes, data_);
-        
-        if (queryErr != cudaSuccess) {
-            // Source memory is not valid CUDA memory
-            cudaGetLastError(); // Clear the error
-            return SimpleCudaMat();
-        }
-        
-        // Check if memory type is valid for copying
-        if (attributes.type != cudaMemoryTypeDevice && 
-            attributes.type != cudaMemoryTypeManaged) {
-            return SimpleCudaMat();
-        }
-        
         SimpleCudaMat result(height_, width_, channels_);
         
         if (result.data_ && data_) {
             size_t size = sizeInBytes();
                    
             if (size > 0 && size < (size_t)(2048 * 2048 * 4 * sizeof(float))) {  // Sanity check - max 2048x2048x4 float
-                cudaError_t err = cudaMemcpy(result.data_, data_, size, cudaMemcpyDeviceToDevice);
+                cudaError_t err = cudaMemcpy(result.data_->get(), data_->get(), size, cudaMemcpyDeviceToDevice);
                 if (err != cudaSuccess) {
                     result.release();
                     return SimpleCudaMat();
@@ -352,23 +235,28 @@ public:
     
     // Copy from another SimpleCudaMat
     void copyFrom(const SimpleCudaMat& other) {
-        if (other.empty()) {
+        if (other.empty() || !other.data_) {
             release();
             return;
         }
         
         create(other.height_, other.width_, other.channels_);
         
+        if (!data_) return;
+        
+        uint8_t* dstPtr = data_->get();
+        const uint8_t* srcPtr = other.data_->get();
+        
         // Handle different step sizes properly
         if (step_ == other.step_) {
             // Simple copy when steps match
-            CUDA_CHECK(cudaMemcpy(data_, other.data_, sizeInBytes(), cudaMemcpyDeviceToDevice));
+            CUDA_CHECK(cudaMemcpy(dstPtr, srcPtr, sizeInBytes(), cudaMemcpyDeviceToDevice));
         } else {
             // Row-by-row copy when steps differ
             size_t copy_width = width_ * channels_;
             for (int y = 0; y < height_; ++y) {
-                CUDA_CHECK(cudaMemcpy(data_ + y * step_, 
-                                     other.data_ + y * other.step_, 
+                CUDA_CHECK(cudaMemcpy(dstPtr + y * step_, 
+                                     srcPtr + y * other.step_, 
                                      copy_width, 
                                      cudaMemcpyDeviceToDevice));
             }
@@ -377,8 +265,8 @@ public:
     
     // Set to zero
     void setZero() {
-        if (!empty()) {
-            CUDA_CHECK(cudaMemset(data_, 0, sizeInBytes()));
+        if (!empty() && data_) {
+            CUDA_CHECK(cudaMemset(data_->get(), 0, sizeInBytes()));
         }
     }
     
@@ -395,20 +283,16 @@ private:
                 throw std::runtime_error("Insufficient GPU memory for allocation");
             }
             
-            cudaError_t err = cudaMalloc(&data_, allocSize);
-            if (err != cudaSuccess) {
+            // Use RAII wrapper for automatic memory management
+            data_ = std::make_unique<CudaMemory<uint8_t>>(allocSize);
+            if (!data_ || !data_->get()) {
                 step_ = 0;
-                throw std::runtime_error("GPU allocation failed: " + getCudaErrorDescription(err));
-            }
-            
-            // Register with resource manager for tracking
-            if (data_) {
-                CudaResourceManager::GetInstance().RegisterMemory(data_);
+                throw std::runtime_error("GPU allocation failed");
             }
         }
     }
     
-    uint8_t* data_;
+    std::unique_ptr<CudaMemory<uint8_t>> data_;  // RAII-managed GPU memory
     int width_;
     int height_;
     int channels_;

@@ -5,6 +5,7 @@
 #include <vector>
 #include <algorithm> 
 #include <cmath>
+#include <memory>
 #include <thrust/device_vector.h>
 #include <thrust/host_vector.h>
 #include <thrust/sort.h>
@@ -16,6 +17,7 @@
 
 #include "postProcess.h"
 #include <NvInferRuntimeCommon.h>
+#include "../../utils/cuda_utils.h"
 
 // For min/max functions
 #ifndef min
@@ -1072,10 +1074,13 @@ cudaError_t findClosestTargetGpu(
         return cudaErrorInvalidValue;
     }
     
-    // Allocate temporary buffer for best distance
-    float* d_best_distance;
-    cudaError_t alloc_err = cudaMalloc(&d_best_distance, sizeof(float));
-    if (alloc_err != cudaSuccess) return alloc_err;
+    // Allocate temporary buffer for best distance using RAII
+    // Use a static unique_ptr for reuse across calls to avoid allocation overhead
+    static thread_local std::unique_ptr<CudaMemory<float>> best_distance_buffer;
+    if (!best_distance_buffer) {
+        best_distance_buffer = std::make_unique<CudaMemory<float>>(1);
+    }
+    float* d_best_distance = best_distance_buffer->get();
     
     // Initialize best distance and index
     cudaMemsetAsync(d_best_distance, 0x7F, sizeof(float), stream);  // Set to large value
@@ -1100,7 +1105,6 @@ cudaError_t findClosestTargetGpu(
     // Check for kernel errors
     cudaError_t kernel_err = cudaGetLastError();
     if (kernel_err != cudaSuccess) {
-        cudaFree(d_best_distance);
         return kernel_err;
     }
     
@@ -1109,9 +1113,7 @@ cudaError_t findClosestTargetGpu(
     copyBestTargetKernel<<<1, 1, 0, stream>>>(
         d_detections, d_best_index, d_best_target, max_detections);
     
-    // Clean up
-    cudaFree(d_best_distance);
-    
+    // RAII handles cleanup automatically
     return cudaSuccess;
 }
 

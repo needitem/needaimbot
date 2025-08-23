@@ -55,9 +55,9 @@ __global__ void copyTextureToBuffer(cudaSurfaceObject_t surface,
 }
 
 UnifiedGraphPipeline::UnifiedGraphPipeline() {
-    // Initialize events for profiling
-    cudaEventCreate(&m_state.startEvent);
-    cudaEventCreate(&m_state.endEvent);
+    // Initialize events for profiling using RAII
+    m_state.startEvent = std::make_unique<CudaEvent>();
+    m_state.endEvent = std::make_unique<CudaEvent>();
     
     // Simple initialization - no complex graph management needed
     m_tripleBuffer = nullptr;
@@ -68,8 +68,8 @@ UnifiedGraphPipeline::UnifiedGraphPipeline() {
 bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
     m_config = config;
     
-    // Create single CUDA stream for all operations
-    cudaStreamCreateWithFlags(&m_primaryStream, cudaStreamNonBlocking);
+    // Create single CUDA stream for all operations using RAII
+    m_primaryStream = std::make_unique<CudaStream>();
     
     // Initialize Triple Buffer for async pipeline
     if (m_config.enableCapture) {
@@ -78,8 +78,8 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
         m_tripleBuffer->initPinnedMemory();
         // Triple buffer initialization will be done in allocateBuffers()
     }
-    // No complex events needed
-    cudaEventCreateWithFlags(&m_previewReadyEvent, cudaEventDisableTiming);
+    // No complex events needed - using RAII
+    m_previewReadyEvent = std::make_unique<CudaEvent>(cudaEventDisableTiming);
     
     // Initialize TensorRT (Phase 1 integration - now required)
     if (m_config.modelPath.empty()) {
@@ -104,7 +104,7 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
     if (m_config.useGraphOptimization) {
         std::cout << "[DEBUG] CUDA Graph optimization enabled with proper initialization" << std::endl;
         // Capture detection graph with proper input initialization
-        if (!captureGraph(m_primaryStream)) {
+        if (!captureGraph(m_primaryStream->get())) {
             std::cerr << "[UnifiedGraph] Warning: Failed to capture detection graph" << std::endl;
         }
         
@@ -127,7 +127,7 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     std::lock_guard<std::mutex> lock(m_graphMutex);
     auto& ctx = AppContext::getInstance();
     
-    if (!stream) stream = m_primaryStream;
+    if (!stream) stream = m_primaryStream->get();
     
     std::cout << "[UnifiedGraph] Starting graph capture..." << std::endl;
     
@@ -153,8 +153,8 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     // The graph will record all CUDA operations performed in this stream
     
     // 1. Input copy (if we have pinned host memory)
-    if (m_config.enableCapture && m_h_inputBuffer) {
-        cudaMemcpyAsync(m_captureBuffer.data(), m_h_inputBuffer,
+    if (m_config.enableCapture && m_h_inputBuffer && m_h_inputBuffer->get()) {
+        cudaMemcpyAsync(m_captureBuffer.data(), m_h_inputBuffer->get(),
                        m_captureBuffer.sizeInBytes(), cudaMemcpyHostToDevice, stream);
     }
     
@@ -171,17 +171,17 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
             std::vector<float> dummyData(640 * 640 * 3, 0.5f); // Fill with 0.5 (normalized pixel value)
             
             // Copy from host to device
-            cudaMemcpyAsync(m_d_yoloInput, dummyData.data(), inputSize, cudaMemcpyHostToDevice, stream);
+            cudaMemcpyAsync(m_d_yoloInput->get(), dummyData.data(), inputSize, cudaMemcpyHostToDevice, stream);
             
             // CRITICAL FIX: Also initialize TensorRT binding buffers
             auto bindingIt = m_inputBindings.find(m_inputName);
             if (bindingIt != m_inputBindings.end() && bindingIt->second != nullptr) {
-                std::cout << "[DEBUG] Found TensorRT binding for '" << m_inputName << "' at: " << bindingIt->second << std::endl;
-                if (bindingIt->second != m_d_yoloInput) {
+                std::cout << "[DEBUG] Found TensorRT binding for '" << m_inputName << "' at: " << bindingIt->second->get() << std::endl;
+                if (bindingIt->second->get() != reinterpret_cast<uint8_t*>(m_d_yoloInput->get())) {
                     std::cout << "[DEBUG] Initializing TensorRT binding buffer (different from yolo buffer)" << std::endl;
                     // First clear with zeros, then set dummy data
-                    cudaMemsetAsync(bindingIt->second, 0, inputSize, stream);
-                    cudaMemcpyAsync(bindingIt->second, dummyData.data(), inputSize, cudaMemcpyHostToDevice, stream);
+                    cudaMemsetAsync(bindingIt->second->get(), 0, inputSize, stream);
+                    cudaMemcpyAsync(bindingIt->second->get(), dummyData.data(), inputSize, cudaMemcpyHostToDevice, stream);
                 } else {
                     std::cout << "[DEBUG] TensorRT binding uses same buffer as yolo input" << std::endl;
                 }
@@ -206,8 +206,8 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     // NMS will be executed outside the graph in the actual execution
     if (m_config.enableDetection && m_d_selectedTarget && m_d_detections) {
         // Just initialize the target buffer during graph capture
-        cudaMemsetAsync(m_d_selectedTarget, 0, sizeof(Target), stream);
-        cudaMemsetAsync(m_d_numDetections, 0, sizeof(int), stream);
+        cudaMemsetAsync(m_d_selectedTarget->get(), 0, sizeof(Target), stream);
+        cudaMemsetAsync(m_d_numDetections->get(), 0, sizeof(int), stream);
     }
     
     // 5. Tracking removed - no longer needed
@@ -216,10 +216,10 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     // The actual Bezier control is executed in graph method
     
     // 7. Final output copy (only 2 floats for mouse X,Y)
-    if (m_d_outputBuffer && m_h_outputBuffer) {
+    if (m_d_outputBuffer && m_d_outputBuffer->get() && m_h_outputBuffer && m_h_outputBuffer->get()) {
         // Copy final movement to output buffer if needed
         // This is mainly for debugging/monitoring purposes
-        cudaMemcpyAsync(m_h_outputBuffer, m_d_outputBuffer,
+        cudaMemcpyAsync(m_h_outputBuffer->get(), m_d_outputBuffer->get(),
                        2 * sizeof(float), cudaMemcpyDeviceToHost, stream);
     }
     
@@ -322,8 +322,10 @@ bool UnifiedGraphPipeline::allocateBuffers() {
         if (m_config.enableCapture && m_tripleBuffer) {
             for (int i = 0; i < 3; i++) {
                 m_tripleBuffer->buffers[i].create(height, width, 4);  // BGRA
-                CUDA_CHECK(cudaEventCreateWithFlags(&m_tripleBuffer->events[i], cudaEventDisableTiming));
-                CUDA_CHECK(cudaEventCreateWithFlags(&m_tripleBuffer->target_ready_events[i], cudaEventDisableTiming));
+                // Events are already initialized by CudaEvent constructor with default flags
+                // Reinitialize with specific flags using move assignment:
+                m_tripleBuffer->events[i] = std::move(CudaEvent(cudaEventDisableTiming));
+                m_tripleBuffer->target_ready_events[i] = std::move(CudaEvent(cudaEventDisableTiming));
                 m_tripleBuffer->isReady[i] = false;
                 m_tripleBuffer->target_data_valid[i] = false;
                 m_tripleBuffer->target_count[i] = 0;
@@ -335,106 +337,73 @@ bool UnifiedGraphPipeline::allocateBuffers() {
         m_captureBuffer.create(height, width, 4);  // BGRA
         m_preprocessBuffer.create(height, width, 3);  // BGR
         
-        // YOLO input buffer (configurable size x3 in CHW format)
-        CUDA_CHECK(cudaMalloc(&m_d_yoloInput, yoloSize * yoloSize * 3 * sizeof(float)));
-        if (!m_d_yoloInput) throw std::runtime_error("m_d_yoloInput allocation failed");
+        // YOLO input buffer (configurable size x3 in CHW format) - Using RAII
+        m_d_yoloInput = std::make_unique<CudaMemory<float>>(yoloSize * yoloSize * 3);
         
-        // Detection pipeline buffers
-        CUDA_CHECK(cudaMalloc(&m_d_inferenceOutput, maxDetections * 6 * sizeof(float)));
-        if (!m_d_inferenceOutput) throw std::runtime_error("m_d_inferenceOutput allocation failed");
+        // Detection pipeline buffers - Using RAII
+        // Inference output will be allocated by TensorRT or manually
+        // m_d_inferenceOutput is handled separately
         
-        CUDA_CHECK(cudaMalloc(&m_d_nmsOutput, maxDetections * 6 * sizeof(float)));
-        if (!m_d_nmsOutput) throw std::runtime_error("m_d_nmsOutput allocation failed");
+        m_d_nmsOutput = std::make_unique<CudaMemory<float>>(maxDetections * 6);
         
-        CUDA_CHECK(cudaMalloc(&m_d_filteredOutput, maxDetections * 6 * sizeof(float)));
-        if (!m_d_filteredOutput) throw std::runtime_error("m_d_filteredOutput allocation failed");
+        m_d_filteredOutput = std::make_unique<CudaMemory<float>>(maxDetections * 6);
         
-        CUDA_CHECK(cudaMalloc(&m_d_detections, maxDetections * sizeof(Target)));
-        if (!m_d_detections) throw std::runtime_error("m_d_detections allocation failed");
+        m_d_detections = std::make_unique<CudaMemory<Target>>(maxDetections);
         
-        CUDA_CHECK(cudaMalloc(&m_d_selectedTarget, sizeof(Target)));
-        if (!m_d_selectedTarget) throw std::runtime_error("m_d_selectedTarget allocation failed");
+        m_d_selectedTarget = std::make_unique<CudaMemory<Target>>(1);
         
         
-        // Allocate NMS temporary buffers
-        CUDA_CHECK(cudaMalloc(&m_d_numDetections, sizeof(int)));
-        if (!m_d_numDetections) throw std::runtime_error("m_d_numDetections allocation failed");
+        // Allocate NMS temporary buffers - Using RAII
+        m_d_numDetections = std::make_unique<CudaMemory<int>>(1);
         
-        CUDA_CHECK(cudaMalloc(&m_d_x1, maxDetections * sizeof(int)));
-        if (!m_d_x1) throw std::runtime_error("m_d_x1 allocation failed");
+        m_d_x1 = std::make_unique<CudaMemory<int>>(maxDetections);
         
-        CUDA_CHECK(cudaMalloc(&m_d_y1, maxDetections * sizeof(int)));
-        if (!m_d_y1) throw std::runtime_error("m_d_y1 allocation failed");
+        m_d_y1 = std::make_unique<CudaMemory<int>>(maxDetections);
         
-        CUDA_CHECK(cudaMalloc(&m_d_x2, maxDetections * sizeof(int)));
-        if (!m_d_x2) throw std::runtime_error("m_d_x2 allocation failed");
+        m_d_x2 = std::make_unique<CudaMemory<int>>(maxDetections);
         
-        CUDA_CHECK(cudaMalloc(&m_d_y2, maxDetections * sizeof(int)));
-        if (!m_d_y2) throw std::runtime_error("m_d_y2 allocation failed");
+        m_d_y2 = std::make_unique<CudaMemory<int>>(maxDetections);
         
-        CUDA_CHECK(cudaMalloc(&m_d_areas, maxDetections * sizeof(float)));
-        if (!m_d_areas) throw std::runtime_error("m_d_areas allocation failed");
+        m_d_areas = std::make_unique<CudaMemory<float>>(maxDetections);
         
-        CUDA_CHECK(cudaMalloc(&m_d_scores_nms, maxDetections * sizeof(float)));
-        if (!m_d_scores_nms) throw std::runtime_error("m_d_scores_nms allocation failed");
+        m_d_scores_nms = std::make_unique<CudaMemory<float>>(maxDetections);
         
-        CUDA_CHECK(cudaMalloc(&m_d_classIds_nms, maxDetections * sizeof(int)));
-        if (!m_d_classIds_nms) throw std::runtime_error("m_d_classIds_nms allocation failed");
+        m_d_classIds_nms = std::make_unique<CudaMemory<int>>(maxDetections);
         
-        CUDA_CHECK(cudaMalloc(&m_d_iou_matrix, maxDetections * maxDetections * sizeof(float)));
-        if (!m_d_iou_matrix) throw std::runtime_error("m_d_iou_matrix allocation failed");
+        m_d_iou_matrix = std::make_unique<CudaMemory<float>>(maxDetections * maxDetections);
         
-        CUDA_CHECK(cudaMalloc(&m_d_keep, maxDetections * sizeof(bool)));
-        if (!m_d_keep) throw std::runtime_error("m_d_keep allocation failed");
+        m_d_keep = std::make_unique<CudaMemory<bool>>(maxDetections);
         
-        CUDA_CHECK(cudaMalloc(&m_d_indices, maxDetections * sizeof(int)));
-        if (!m_d_indices) throw std::runtime_error("m_d_indices allocation failed");
+        m_d_indices = std::make_unique<CudaMemory<int>>(maxDetections);
         
-        CUDA_CHECK(cudaMalloc(&m_d_outputCount, sizeof(int)));
-        if (!m_d_outputCount) throw std::runtime_error("m_d_outputCount allocation failed");
+        m_d_outputCount = std::make_unique<CudaMemory<int>>(1);
         
-        // Allocate post-processing buffers (Phase 3 integration)
-        CUDA_CHECK(cudaMalloc(&m_d_decodedTargets, maxDetections * sizeof(Target)));
-        if (!m_d_decodedTargets) throw std::runtime_error("m_d_decodedTargets allocation failed");
+        // Allocate post-processing buffers (Phase 3 integration) - Using RAII
+        m_d_decodedTargets = std::make_unique<CudaMemory<Target>>(maxDetections);
         
-        CUDA_CHECK(cudaMalloc(&m_d_decodedCount, sizeof(int)));
-        if (!m_d_decodedCount) throw std::runtime_error("m_d_decodedCount allocation failed");
+        m_d_decodedCount = std::make_unique<CudaMemory<int>>(1);
         
-        CUDA_CHECK(cudaMalloc(&m_d_finalTargets, maxDetections * sizeof(Target)));
-        if (!m_d_finalTargets) throw std::runtime_error("m_d_finalTargets allocation failed");
+        m_d_finalTargets = std::make_unique<CudaMemory<Target>>(maxDetections);
         
-        CUDA_CHECK(cudaMalloc(&m_d_finalTargetsCount, sizeof(int)));
-        if (!m_d_finalTargetsCount) throw std::runtime_error("m_d_finalTargetsCount allocation failed");
+        m_d_finalTargetsCount = std::make_unique<CudaMemory<int>>(1);
         
-        CUDA_CHECK(cudaMalloc(&m_d_classFilteredTargets, maxDetections * sizeof(Target)));
-        if (!m_d_classFilteredTargets) throw std::runtime_error("m_d_classFilteredTargets allocation failed");
+        m_d_classFilteredTargets = std::make_unique<CudaMemory<Target>>(maxDetections);
         
-        CUDA_CHECK(cudaMalloc(&m_d_classFilteredCount, sizeof(int)));
-        if (!m_d_classFilteredCount) throw std::runtime_error("m_d_classFilteredCount allocation failed");
+        m_d_classFilteredCount = std::make_unique<CudaMemory<int>>(1);
         
-        CUDA_CHECK(cudaMalloc(&m_d_colorFilteredTargets, maxDetections * sizeof(Target)));
-        if (!m_d_colorFilteredTargets) throw std::runtime_error("m_d_colorFilteredTargets allocation failed");
-        
-        CUDA_CHECK(cudaMalloc(&m_d_colorFilteredCount, sizeof(int)));
-        if (!m_d_colorFilteredCount) throw std::runtime_error("m_d_colorFilteredCount allocation failed");
+        m_d_colorFilteredTargets = std::make_unique<CudaMemory<Target>>(maxDetections);
+        m_d_colorFilteredCount = std::make_unique<CudaMemory<int>>(1);
         
         // Target selection buffers
-        CUDA_CHECK(cudaMalloc(&m_d_bestTargetIndex, sizeof(int)));
-        if (!m_d_bestTargetIndex) throw std::runtime_error("m_d_bestTargetIndex allocation failed");
+        m_d_bestTargetIndex = std::make_unique<CudaMemory<int>>(1);
+        m_d_bestTarget = std::make_unique<CudaMemory<Target>>(1);
         
-        CUDA_CHECK(cudaMalloc(&m_d_bestTarget, sizeof(Target)));
-        if (!m_d_bestTarget) throw std::runtime_error("m_d_bestTarget allocation failed");
+        // Class filtering control buffer (64 classes max) - Using RAII
+        m_d_allowFlags = std::make_unique<CudaMemory<unsigned char>>(Constants::MAX_CLASSES_FOR_FILTERING);
         
-        // Class filtering control buffer (64 classes max)
-        CUDA_CHECK(cudaMalloc(&m_d_allowFlags, Constants::MAX_CLASSES_FOR_FILTERING * sizeof(unsigned char)));
-        if (!m_d_allowFlags) throw std::runtime_error("m_d_allowFlags allocation failed");
-        
-        // Allocate pinned host memory for zero-copy transfers
-        CUDA_CHECK(cudaHostAlloc(&m_h_inputBuffer, width * height * 4, cudaHostAllocDefault));
-        if (!m_h_inputBuffer) throw std::runtime_error("m_h_inputBuffer allocation failed");
-        
-        CUDA_CHECK(cudaHostAlloc(&m_h_outputBuffer, 2 * sizeof(float), cudaHostAllocMapped));
-        if (!m_h_outputBuffer) throw std::runtime_error("m_h_outputBuffer allocation failed");
+        // Allocate pinned host memory for zero-copy transfers using RAII
+        m_h_inputBuffer = std::make_unique<CudaPinnedMemory<unsigned char>>(width * height * 4, cudaHostAllocDefault);
+        m_h_outputBuffer = std::make_unique<CudaPinnedMemory<float>>(2, cudaHostAllocMapped);
         
         // Additional validation for critical buffers
         if (!m_captureBuffer.data() || !m_preprocessBuffer.data()) {
@@ -473,115 +442,51 @@ void UnifiedGraphPipeline::deallocateBuffers() {
     m_captureBuffer.release();
     m_preprocessBuffer.release();
     
-    // Clean up triple buffer events
-    if (m_tripleBuffer) {
-        for (int i = 0; i < 3; i++) {
-            if (m_tripleBuffer->events[i]) {
-                cudaEventDestroy(m_tripleBuffer->events[i]);
-            }
-            if (m_tripleBuffer->target_ready_events[i]) {
-                cudaEventDestroy(m_tripleBuffer->target_ready_events[i]);
-            }
-        }
-    }
+    // RAII wrappers will automatically clean up all GPU memory
+    // Just reset the unique_ptrs - they handle deallocation automatically
+    m_d_numDetections.reset();
+    m_d_x1.reset();
+    m_d_y1.reset();
+    m_d_x2.reset();
+    m_d_y2.reset();
+    m_d_areas.reset();
+    m_d_scores_nms.reset();
+    m_d_classIds_nms.reset();
+    m_d_iou_matrix.reset();
+    m_d_keep.reset();
+    m_d_indices.reset();
+    m_d_outputCount.reset();
+    m_d_yoloInput.reset();
+    m_d_inferenceOutput.reset();
+    m_d_nmsOutput.reset();
+    m_d_filteredOutput.reset();
+    m_d_detections.reset();
+    m_d_selectedTarget.reset();
+    m_d_decodedTargets.reset();
+    m_d_decodedCount.reset();
+    m_d_finalTargets.reset();
+    m_d_finalTargetsCount.reset();
+    m_d_classFilteredTargets.reset();
+    m_d_classFilteredCount.reset();
+    m_d_colorFilteredTargets.reset();
+    m_d_colorFilteredCount.reset();
+    m_d_bestTargetIndex.reset();
+    m_d_bestTarget.reset();
+    m_d_allowFlags.reset();
+    m_d_preprocessBuffer.reset();
+    m_d_tracks.reset();
+    m_d_outputBuffer.reset();
     
-    // Helper lambda to safely free CUDA memory
-    auto safeCudaFree = [](void*& ptr, const char* name) {
-        if (ptr) {
-            cudaError_t err = cudaFree(ptr);
-            if (err != cudaSuccess && err != cudaErrorCudartUnloading) {
-                std::cerr << "[UnifiedGraph] Warning: Failed to free " << name 
-                         << ": " << cudaGetErrorString(err) << std::endl;
-            }
-            ptr = nullptr;
-        }
-    };
+    // Reset pinned host memory - RAII handles deallocation
+    m_h_inputBuffer.reset();
+    m_h_outputBuffer.reset();
     
-    auto safeCudaFreeHost = [](void*& ptr, const char* name) {
-        if (ptr) {
-            cudaError_t err = cudaFreeHost(ptr);
-            if (err != cudaSuccess && err != cudaErrorCudartUnloading) {
-                std::cerr << "[UnifiedGraph] Warning: Failed to free host " << name 
-                         << ": " << cudaGetErrorString(err) << std::endl;
-            }
-            ptr = nullptr;
-        }
-    };
+    // Clean up TensorRT bindings - RAII handles deallocation
+    m_inputBindings.clear();
+    m_outputBindings.clear();
     
-    // Free GPU buffers with error checking
-    safeCudaFree(reinterpret_cast<void*&>(m_d_yoloInput), "m_d_yoloInput");
-    safeCudaFree(reinterpret_cast<void*&>(m_d_inferenceOutput), "m_d_inferenceOutput");
-    safeCudaFree(reinterpret_cast<void*&>(m_d_nmsOutput), "m_d_nmsOutput");
-    safeCudaFree(reinterpret_cast<void*&>(m_d_filteredOutput), "m_d_filteredOutput");
-    safeCudaFree(reinterpret_cast<void*&>(m_d_detections), "m_d_detections");
-    safeCudaFree(reinterpret_cast<void*&>(m_d_selectedTarget), "m_d_selectedTarget");
-    
-    // Free NMS temporary buffers
-    safeCudaFree(reinterpret_cast<void*&>(m_d_numDetections), "m_d_numDetections");
-    safeCudaFree(reinterpret_cast<void*&>(m_d_x1), "m_d_x1");
-    safeCudaFree(reinterpret_cast<void*&>(m_d_y1), "m_d_y1");
-    safeCudaFree(reinterpret_cast<void*&>(m_d_x2), "m_d_x2");
-    safeCudaFree(reinterpret_cast<void*&>(m_d_y2), "m_d_y2");
-    safeCudaFree(reinterpret_cast<void*&>(m_d_areas), "m_d_areas");
-    safeCudaFree(reinterpret_cast<void*&>(m_d_scores_nms), "m_d_scores_nms");
-    safeCudaFree(reinterpret_cast<void*&>(m_d_classIds_nms), "m_d_classIds_nms");
-    safeCudaFree(reinterpret_cast<void*&>(m_d_iou_matrix), "m_d_iou_matrix");
-    safeCudaFree(reinterpret_cast<void*&>(m_d_keep), "m_d_keep");
-    safeCudaFree(reinterpret_cast<void*&>(m_d_indices), "m_d_indices");
-    safeCudaFree(reinterpret_cast<void*&>(m_d_outputCount), "m_d_outputCount");
-    
-    // Free post-processing buffers (Phase 3 integration)
-    safeCudaFree(reinterpret_cast<void*&>(m_d_decodedTargets), "m_d_decodedTargets");
-    safeCudaFree(reinterpret_cast<void*&>(m_d_decodedCount), "m_d_decodedCount");
-    safeCudaFree(reinterpret_cast<void*&>(m_d_finalTargets), "m_d_finalTargets");
-    safeCudaFree(reinterpret_cast<void*&>(m_d_finalTargetsCount), "m_d_finalTargetsCount");
-    safeCudaFree(reinterpret_cast<void*&>(m_d_classFilteredTargets), "m_d_classFilteredTargets");
-    safeCudaFree(reinterpret_cast<void*&>(m_d_classFilteredCount), "m_d_classFilteredCount");
-    safeCudaFree(reinterpret_cast<void*&>(m_d_colorFilteredTargets), "m_d_colorFilteredTargets");
-    safeCudaFree(reinterpret_cast<void*&>(m_d_colorFilteredCount), "m_d_colorFilteredCount");
-    safeCudaFree(reinterpret_cast<void*&>(m_d_bestTargetIndex), "m_d_bestTargetIndex");
-    safeCudaFree(reinterpret_cast<void*&>(m_d_bestTarget), "m_d_bestTarget");
-    safeCudaFree(reinterpret_cast<void*&>(m_d_allowFlags), "m_d_allowFlags");
-    
-    // Free pinned host memory
-    safeCudaFreeHost(reinterpret_cast<void*&>(m_h_inputBuffer), "m_h_inputBuffer");
-    safeCudaFreeHost(reinterpret_cast<void*&>(m_h_outputBuffer), "m_h_outputBuffer");
-    
-    // Reset all pointers
-    m_d_yoloInput = nullptr;
-    m_d_inferenceOutput = nullptr;
-    m_d_nmsOutput = nullptr;
-    m_d_filteredOutput = nullptr;
-    m_d_detections = nullptr;
-    m_d_selectedTarget = nullptr;
-    m_d_numDetections = nullptr;
-    m_d_x1 = nullptr;
-    m_d_y1 = nullptr;
-    m_d_x2 = nullptr;
-    m_d_y2 = nullptr;
-    m_d_areas = nullptr;
-    m_d_scores_nms = nullptr;
-    m_d_classIds_nms = nullptr;
-    m_d_iou_matrix = nullptr;
-    m_d_keep = nullptr;
-    m_d_indices = nullptr;
-    m_d_outputCount = nullptr;
-    
-    // Reset post-processing buffer pointers (Phase 3 integration)
-    m_d_decodedTargets = nullptr;
-    m_d_decodedCount = nullptr;
-    m_d_finalTargets = nullptr;
-    m_d_finalTargetsCount = nullptr;
-    m_d_classFilteredTargets = nullptr;
-    m_d_classFilteredCount = nullptr;
-    m_d_colorFilteredTargets = nullptr;
-    m_d_colorFilteredCount = nullptr;
-    m_d_bestTargetIndex = nullptr;
-    m_d_bestTarget = nullptr;
-    m_d_allowFlags = nullptr;
-    
-    m_h_inputBuffer = nullptr;
-    m_h_outputBuffer = nullptr;
+    // Triple buffer events are cleaned up automatically by CudaEvent destructor
+    // No manual cleanup needed due to RAII
 }
 
 // ============================================================================
@@ -593,7 +498,7 @@ void UnifiedGraphPipeline::setInputFrame(const SimpleCudaMat& frame) {
     if (frame.empty()) return;
     
     // Check if we have a valid stream
-    if (!m_primaryStream) {
+    if (!m_primaryStream || !m_primaryStream->get()) {
         printf("[ERROR] Primary stream not initialized\n");
         return;
     }
@@ -609,7 +514,7 @@ void UnifiedGraphPipeline::setInputFrame(const SimpleCudaMat& frame) {
     // Copy data
     size_t dataSize = frame.rows() * frame.cols() * frame.channels() * sizeof(unsigned char);
     cudaError_t err = cudaMemcpyAsync(m_captureBuffer.data(), frame.data(), dataSize, 
-                                      cudaMemcpyDeviceToDevice, m_primaryStream);
+                                      cudaMemcpyDeviceToDevice, m_primaryStream->get());
     if (err != cudaSuccess) {
         printf("[ERROR] Failed to copy frame to buffer: %s\n", cudaGetErrorString(err));
         return;
@@ -623,21 +528,21 @@ void UnifiedGraphPipeline::setInputFrame(const SimpleCudaMat& frame) {
 void UnifiedGraphPipeline::updateProfilingAsync(cudaStream_t stream) {
     // Async profiling update without blocking
     if (!m_lastFrameEnd) {
-        cudaEventCreateWithFlags(&m_lastFrameEnd, cudaEventDefault);
+        m_lastFrameEnd = std::make_unique<CudaEvent>(cudaEventDefault);
     }
     
     if (m_state.frameCount > 0) {
         // Check if last frame's profiling is ready
-        if (cudaEventQuery(m_lastFrameEnd) == cudaSuccess) {
+        if (m_lastFrameEnd->query() == cudaSuccess) {
             float latency;
-            cudaEventElapsedTime(&latency, m_state.startEvent, m_lastFrameEnd);
+            cudaEventElapsedTime(&latency, m_state.startEvent->get(), m_lastFrameEnd->get());
             updateStatistics(latency);
         }
     }
     
     // Record current frame end
-    cudaEventRecord(m_state.startEvent, stream);
-    cudaEventRecord(m_lastFrameEnd, stream);
+    m_state.startEvent->record(stream);
+    m_lastFrameEnd->record(stream);
 }
 
 // ============================================================================
@@ -666,14 +571,14 @@ void UnifiedGraphPipeline::runMainLoop() {
                 std::cout << "[UnifiedPipeline] Aimbot deactivated - suspending pipeline" << std::endl;
                 
                 // Synchronize to ensure all GPU work is complete
-                cudaStreamSynchronize(m_primaryStream);
+                cudaStreamSynchronize(m_primaryStream->get());
                 
                 // Clear any pending targets
                 if (m_d_bestTargetIndex) {
-                    cudaMemsetAsync(m_d_bestTargetIndex, -1, sizeof(int), m_primaryStream);
+                    cudaMemsetAsync(m_d_bestTargetIndex->get(), -1, sizeof(int), m_primaryStream->get());
                 }
                 if (m_d_bestTarget) {
-                    cudaMemsetAsync(m_d_bestTarget, 0, sizeof(Target), m_primaryStream);
+                    cudaMemsetAsync(m_d_bestTarget->get(), 0, sizeof(Target), m_primaryStream->get());
                 }
                 
                 wasAiming = false;
@@ -700,7 +605,7 @@ void UnifiedGraphPipeline::runMainLoop() {
         // Execute full pipeline only when aiming
         bool success = false;
         try {
-            success = executeGraphNonBlocking(m_primaryStream);
+            success = executeGraphNonBlocking(m_primaryStream->get());
         } catch (const std::exception& e) {
             std::cerr << "[UnifiedPipeline] Exception in pipeline: " << e.what() << std::endl;
             success = false;
@@ -773,7 +678,7 @@ bool UnifiedGraphPipeline::initializeTensorRT(const std::string& modelFile) {
     
     // Set optimization profile for dynamic shapes if needed
     if (m_engine->getNbOptimizationProfiles() > 0) {
-        m_context->setOptimizationProfileAsync(0, m_primaryStream);
+        m_context->setOptimizationProfileAsync(0, m_primaryStream->get());
     }
     
     std::cout << "[Pipeline] Execution context created successfully. Context ptr: " << m_context.get() << std::endl;
@@ -910,13 +815,13 @@ void UnifiedGraphPipeline::getBindings() {
     
     // Store existing bindings for potential reuse
     for (const auto& binding : m_inputBindings) {
-        if (binding.second) {
-            reusableInputs[binding.first] = binding.second;
+        if (binding.second && binding.second->get()) {
+            reusableInputs[binding.first] = binding.second->get();
         }
     }
     for (const auto& binding : m_outputBindings) {
-        if (binding.second) {
-            reusableOutputs[binding.first] = binding.second;
+        if (binding.second && binding.second->get()) {
+            reusableOutputs[binding.first] = binding.second->get();
         }
     }
     
@@ -931,47 +836,24 @@ void UnifiedGraphPipeline::getBindings() {
             continue;
         }
         
-        void* ptr = nullptr;
-        
-        // Try to reuse existing allocation if size matches
-        auto reusableIt = reusableInputs.find(name);
-        if (reusableIt != reusableInputs.end()) {
-            ptr = reusableIt->second;
-            reusableInputs.erase(reusableIt); // Remove from reusable list
-            std::cout << "[Pipeline] Reusing input '" << name << "': " << size << " bytes" << std::endl;
-        } else {
-            // Allocate new memory with alignment optimization
-            cudaError_t err = cudaMalloc(&ptr, size);
-            if (err == cudaSuccess && ptr != nullptr) {
-                // Initialize allocated memory to zero to prevent garbage values
-                cudaMemset(ptr, 0, size);
-                std::cout << "[Pipeline] Allocated and initialized input '" << name << "': " << size << " bytes" << std::endl;
-            } else {
-                std::cerr << "[Pipeline] Failed to allocate input memory for '" << name << "': " << cudaGetErrorString(err) << std::endl;
-                
-                // Clean up reusable memory before throwing
-                for (auto& reusable : reusableInputs) {
-                    cudaFree(reusable.second);
-                }
-                for (auto& reusable : reusableOutputs) {
-                    cudaFree(reusable.second);
-                }
-                throw std::runtime_error("Failed to allocate TensorRT input memory");
-            }
+        // Note: We're moving to RAII-based memory management, so we don't reuse raw pointers anymore
+        // The CudaMemory class will handle allocation and deallocation
+        try {
+            m_inputBindings[name] = std::make_unique<CudaMemory<uint8_t>>(size);
+            std::cout << "[Pipeline] Allocated input '" << name << "': " << size << " bytes" << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "[Pipeline] Failed to allocate input memory for '" << name << "': " << e.what() << std::endl;
+            throw;
         }
-        
-        m_inputBindings[name] = ptr;
         
         // Connect to existing pipeline buffers where possible
         if (name == m_inputName && m_d_yoloInput) {
-            // Use existing preprocessing buffer for YOLO input
-            if (ptr != m_d_yoloInput) {
-                std::cout << "[Pipeline] Input binding will use existing preprocessing buffer" << std::endl;
-            }
+            // Note: With RAII, each buffer manages its own memory
+            std::cout << "[Pipeline] Input binding created for YOLO input" << std::endl;
         }
     }
 
-    // Optimized output binding allocation with reuse
+    // Optimized output binding allocation with RAII
     for (const auto& name : m_outputNames) {
         size_t size = m_outputSizes[name];
         if (size <= 0) {
@@ -979,57 +861,24 @@ void UnifiedGraphPipeline::getBindings() {
             continue;
         }
         
-        void* ptr = nullptr;
-        
-        // Try to reuse existing allocation if size matches
-        auto reusableIt = reusableOutputs.find(name);
-        if (reusableIt != reusableOutputs.end()) {
-            ptr = reusableIt->second;
-            reusableOutputs.erase(reusableIt); // Remove from reusable list
-            std::cout << "[Pipeline] Reusing output '" << name << "': " << size << " bytes" << std::endl;
-        } else {
-            // Allocate new memory with alignment optimization
-            cudaError_t err = cudaMalloc(&ptr, size);
-            if (err == cudaSuccess && ptr != nullptr) {
-                // Initialize allocated memory to zero to prevent garbage values
-                cudaMemset(ptr, 0, size);
-                std::cout << "[Pipeline] Allocated and initialized output '" << name << "': " << size << " bytes" << std::endl;
-            } else {
-                std::cerr << "[Pipeline] Failed to allocate output memory for '" << name << "': " << cudaGetErrorString(err) << std::endl;
-                
-                // Clean up reusable memory before throwing
-                for (auto& reusable : reusableInputs) {
-                    cudaFree(reusable.second);
-                }
-                for (auto& reusable : reusableOutputs) {
-                    cudaFree(reusable.second);
-                }
-                throw std::runtime_error("Failed to allocate TensorRT output memory");
+        // Allocate with RAII wrapper
+        try {
+            m_outputBindings[name] = std::make_unique<CudaMemory<uint8_t>>(size);
+            std::cout << "[Pipeline] Allocated output '" << name << "': " << size << " bytes" << std::endl;
+            
+            // Connect to existing pipeline buffers where possible
+            if (m_d_inferenceOutput == nullptr) {
+                // Note: m_d_inferenceOutput is now managed separately with its own CudaMemory
+                std::cout << "[Pipeline] Output binding created for inference output" << std::endl;
             }
-        }
-        
-        m_outputBindings[name] = ptr;
-        
-        // Connect to existing pipeline buffers where possible
-        if (m_d_inferenceOutput == nullptr) {
-            m_d_inferenceOutput = (float*)ptr;
-            std::cout << "[Pipeline] Output binding connected to inference output buffer" << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "[Pipeline] Failed to allocate output memory for '" << name << "': " << e.what() << std::endl;
+            throw;
         }
     }
     
-    // Clean up any unused reusable memory
-    for (auto& reusable : reusableInputs) {
-        cudaError_t err = cudaFree(reusable.second);
-        if (err != cudaSuccess) {
-            std::cerr << "[Pipeline] Warning: Failed to free unused input binding: " << cudaGetErrorString(err) << std::endl;
-        }
-    }
-    for (auto& reusable : reusableOutputs) {
-        cudaError_t err = cudaFree(reusable.second);
-        if (err != cudaSuccess) {
-            std::cerr << "[Pipeline] Warning: Failed to free unused output binding: " << cudaGetErrorString(err) << std::endl;
-        }
-    }
+    // Note: With RAII, memory cleanup is handled automatically
+    // No need to manually free unused memory
     
     // Validate all bindings are properly set
     if (m_inputBindings.size() != m_inputNames.size()) {
@@ -1224,7 +1073,7 @@ bool UnifiedGraphPipeline::runInferenceAsync(cudaStream_t stream) {
     
     // Use default stream if none provided
     if (!stream) {
-        stream = m_primaryStream;
+        stream = m_primaryStream->get();
     }
     
     // Clear any previous CUDA errors and check for success
@@ -1245,7 +1094,7 @@ bool UnifiedGraphPipeline::runInferenceAsync(cudaStream_t stream) {
         
         // Pointer validation removed for performance - validation done at allocation time
         
-        if (!m_context->setTensorAddress(inputName.c_str(), bindingIt->second)) {
+        if (!m_context->setTensorAddress(inputName.c_str(), bindingIt->second->get())) {
             std::cerr << "[Pipeline] Failed to set input tensor address for: " << inputName << std::endl;
             return false;
         }
@@ -1261,7 +1110,7 @@ bool UnifiedGraphPipeline::runInferenceAsync(cudaStream_t stream) {
         
         // Pointer validation removed for performance - validation done at allocation time
         
-        if (!m_context->setTensorAddress(outputName.c_str(), bindingIt->second)) {
+        if (!m_context->setTensorAddress(outputName.c_str(), bindingIt->second->get())) {
             std::cerr << "[Pipeline] Failed to set output tensor address for: " << outputName << std::endl;
             return false;
         }
@@ -1314,34 +1163,34 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
     if (m_outputNames.empty()) {
         std::cerr << "[Pipeline] No output names found for post-processing." << std::endl;
         if (m_d_finalTargetsCount) {
-            cudaMemsetAsync(m_d_finalTargetsCount, 0, sizeof(int), stream);
+            cudaMemsetAsync(m_d_finalTargetsCount->get(), 0, sizeof(int), stream);
         }
         return;
     }
 
     // Get primary output from TensorRT inference
     const std::string& primaryOutputName = m_outputNames[0];
-    void* d_rawOutputPtr = m_outputBindings[primaryOutputName];
+    void* d_rawOutputPtr = m_outputBindings[primaryOutputName]->get();
     nvinfer1::DataType outputType = m_outputTypes[primaryOutputName];
     const std::vector<int64_t>& shape = m_outputShapes[primaryOutputName];
 
     if (!d_rawOutputPtr) {
         std::cerr << "[Pipeline] Raw output GPU pointer is null for " << primaryOutputName << std::endl;
         if (m_d_finalTargetsCount) {
-            cudaMemsetAsync(m_d_finalTargetsCount, 0, sizeof(int), stream);
+            cudaMemsetAsync(m_d_finalTargetsCount->get(), 0, sizeof(int), stream);
         }
         return;
     }
 
     // Clear all detection buffers at the start of processing
     if (m_d_decodedCount) {
-        cudaMemsetAsync(m_d_decodedCount, 0, sizeof(int), stream);
+        cudaMemsetAsync(m_d_decodedCount->get(), 0, sizeof(int), stream);
     }
     if (m_d_classFilteredCount) {
-        cudaMemsetAsync(m_d_classFilteredCount, 0, sizeof(int), stream);
+        cudaMemsetAsync(m_d_classFilteredCount->get(), 0, sizeof(int), stream);
     }
     if (m_d_finalTargetsCount) {
-        cudaMemsetAsync(m_d_finalTargetsCount, 0, sizeof(int), stream);
+        cudaMemsetAsync(m_d_finalTargetsCount->get(), 0, sizeof(int), stream);
     }
 
     // Use cached config values for CUDA Graph compatibility
@@ -1374,8 +1223,8 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
             m_numClasses,
             cached_confidence_threshold,
             m_imgScale,
-            m_d_decodedTargets,
-            m_d_decodedCount,
+            m_d_decodedTargets->get(),
+            m_d_decodedCount->get(),
             maxDecodedTargets,
             max_candidates,
             stream);
@@ -1387,7 +1236,7 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
         if (!m_d_decodedTargets || !m_d_decodedCount) {
             std::cerr << "[Pipeline] Target buffers not allocated!" << std::endl;
             if (m_d_finalTargetsCount) {
-                cudaMemsetAsync(m_d_finalTargetsCount, 0, sizeof(int), stream);
+                cudaMemsetAsync(m_d_finalTargetsCount->get(), 0, sizeof(int), stream);
             }
             return;
         }
@@ -1396,7 +1245,7 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
             std::cerr << "[Pipeline] Invalid buffer sizes: max_candidates=" << max_candidates 
                       << ", maxDecodedTargets=" << maxDecodedTargets << std::endl;
             if (m_d_finalTargetsCount) {
-                cudaMemsetAsync(m_d_finalTargetsCount, 0, sizeof(int), stream);
+                cudaMemsetAsync(m_d_finalTargetsCount->get(), 0, sizeof(int), stream);
             }
             return;
         }
@@ -1408,15 +1257,15 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
             m_numClasses,
             cached_confidence_threshold,
             m_imgScale,
-            m_d_decodedTargets,
-            m_d_decodedCount,
+            m_d_decodedTargets->get(),
+            m_d_decodedCount->get(),
             maxDecodedTargets,
             max_candidates,
             stream);
     } else {
         std::cerr << "[Pipeline] Unsupported post-processing type: " << cached_postprocess << std::endl;
         if (m_d_finalTargetsCount) {
-            cudaMemsetAsync(m_d_finalTargetsCount, 0, sizeof(int), stream);
+            cudaMemsetAsync(m_d_finalTargetsCount->get(), 0, sizeof(int), stream);
         }
         return;
     }
@@ -1424,7 +1273,7 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
     if (decodeErr != cudaSuccess) {
         std::cerr << "[Pipeline] GPU decoding failed: " << cudaGetErrorString(decodeErr) << std::endl;
         if (m_d_finalTargetsCount) {
-            cudaMemsetAsync(m_d_finalTargetsCount, 0, sizeof(int), stream);
+            cudaMemsetAsync(m_d_finalTargetsCount->get(), 0, sizeof(int), stream);
         }
         return;
     }
@@ -1445,14 +1294,14 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
         }
         
         // Copy to GPU
-        cudaMemcpyAsync(m_d_allowFlags, h_allowFlags, Constants::MAX_CLASSES_FOR_FILTERING * sizeof(unsigned char), cudaMemcpyHostToDevice, stream);
+        cudaMemcpyAsync(m_d_allowFlags->get(), h_allowFlags, Constants::MAX_CLASSES_FOR_FILTERING * sizeof(unsigned char), cudaMemcpyHostToDevice, stream);
         
         cudaError_t filterErr = filterTargetsByClassIdGpu(
-            m_d_decodedTargets,
-            m_d_decodedCount,
-            m_d_classFilteredTargets,
-            m_d_classFilteredCount,
-            m_d_allowFlags,
+            m_d_decodedTargets->get(),
+            m_d_decodedCount->get(),
+            m_d_classFilteredTargets->get(),
+            m_d_classFilteredCount->get(),
+            m_d_allowFlags->get(),
             Constants::MAX_CLASSES_FOR_FILTERING,
             300,  // max output buffer
             stream
@@ -1461,23 +1310,23 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
         if (filterErr != cudaSuccess) {
             std::cerr << "[Pipeline] Class ID filtering failed: " << cudaGetErrorString(filterErr) << std::endl;
             if (m_d_finalTargetsCount) {
-                cudaMemsetAsync(m_d_finalTargetsCount, 0, sizeof(int), stream);
+                cudaMemsetAsync(m_d_finalTargetsCount->get(), 0, sizeof(int), stream);
             }
             return;
         }
     } else {
         // No class filtering - copy decoded targets directly (max buffer size)
         if (m_d_classFilteredTargets && m_d_classFilteredCount) {
-            cudaMemcpyAsync(m_d_classFilteredTargets, m_d_decodedTargets, 
+            cudaMemcpyAsync(m_d_classFilteredTargets->get(), m_d_decodedTargets->get(), 
                           300 * sizeof(Target), cudaMemcpyDeviceToDevice, stream);
-            cudaMemcpyAsync(m_d_classFilteredCount, m_d_decodedCount, 
+            cudaMemcpyAsync(m_d_classFilteredCount->get(), m_d_decodedCount->get(), 
                           sizeof(int), cudaMemcpyDeviceToDevice, stream);
         }
     }
 
     // Step 4: Determine NMS input (class filtered targets or decoded targets)
-    Target* nmsInputTargets = m_d_classFilteredTargets ? m_d_classFilteredTargets : m_d_decodedTargets;
-    int* nmsInputCount = m_d_classFilteredCount ? m_d_classFilteredCount : m_d_decodedCount;
+    Target* nmsInputTargets = m_d_classFilteredTargets ? m_d_classFilteredTargets->get() : m_d_decodedTargets->get();
+    int* nmsInputCount = m_d_classFilteredCount ? m_d_classFilteredCount->get() : m_d_decodedCount->get();
 
     // TODO: Color filtering will be implemented when color mask integration is complete
     // For now, we skip color filtering step
@@ -1497,13 +1346,13 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
         }
         
         // Get count for NMS input - use pinned memory for async transfer
-        static int* h_inputCount_pinned = nullptr;
+        static std::unique_ptr<CudaPinnedMemory<int>> h_inputCount_pinned = nullptr;
         if (!h_inputCount_pinned) {
-            cudaHostAlloc(&h_inputCount_pinned, sizeof(int), cudaHostAllocDefault);
+            h_inputCount_pinned = std::make_unique<CudaPinnedMemory<int>>(1, cudaHostAllocDefault);
         }
         
         // Copy count async without blocking
-        cudaMemcpyAsync(h_inputCount_pinned, nmsInputCount, sizeof(int), cudaMemcpyDeviceToHost, stream);
+        cudaMemcpyAsync(h_inputCount_pinned->get(), nmsInputCount, sizeof(int), cudaMemcpyDeviceToHost, stream);
         
         // Continue processing without waiting - use previous frame's count
         static int last_input_count = 0;
@@ -1514,27 +1363,27 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
             NMSGpu(
                 nmsInputTargets,
                 last_input_count,  // Use previous frame's count to avoid sync
-                m_d_finalTargets,
-                m_d_finalTargetsCount,
+                m_d_finalTargets->get(),
+                m_d_finalTargetsCount->get(),
                 cached_max_detections,
                 cached_nms_threshold,
                 cached_frame_width,
                 cached_frame_height,
-                m_d_x1,
-                m_d_y1,
-                m_d_x2,
-                m_d_y2,
-                m_d_areas,
-                m_d_scores_nms,
-                m_d_classIds_nms,
-                m_d_iou_matrix,
-                m_d_keep,
-                m_d_indices,
+                m_d_x1->get(),
+                m_d_y1->get(),
+                m_d_x2->get(),
+                m_d_y2->get(),
+                m_d_areas->get(),
+                m_d_scores_nms->get(),
+                m_d_classIds_nms->get(),
+                m_d_iou_matrix->get(),
+                m_d_keep->get(),
+                m_d_indices->get(),
                 stream
             );
             
             // Validate detections on GPU without sync
-            validateTargetsGpu(m_d_finalTargets, cached_max_detections, stream);
+            validateTargetsGpu(m_d_finalTargets->get(), cached_max_detections, stream);
             
             // Only copy to CPU if preview window is enabled
             if (ctx.config.show_window) {
@@ -1545,12 +1394,12 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
                 
                 // Initialize event once
                 if (!m_copyEvent) {
-                    cudaEventCreateWithFlags(&m_copyEvent, cudaEventDisableTiming);
+                    m_copyEvent = std::make_unique<CudaEvent>(cudaEventDisableTiming);
                 }
                 
                 // Check if previous copy is complete
                 if (m_copyInProgress) {
-                    if (cudaEventQuery(m_copyEvent) == cudaSuccess) {
+                    if (m_copyEvent->query() == cudaSuccess) {
                         // Previous copy completed, update preview
                         if (m_h_finalCount > 0 && m_h_finalCount <= cached_max_detections) {
                             m_h_finalTargets.resize(m_h_finalCount);
@@ -1563,33 +1412,33 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
                 // Start new copy if not already in progress
                 if (!m_copyInProgress) {
                     // Copy count first (small, fast)
-                    cudaMemcpyAsync(&m_h_finalCount, m_d_finalTargetsCount, sizeof(int), 
+                    cudaMemcpyAsync(&m_h_finalCount, m_d_finalTargetsCount->get(), sizeof(int), 
                                    cudaMemcpyDeviceToHost, stream);
                     
                     // Copy targets (only up to max_detections)
-                    cudaMemcpyAsync(m_h_finalTargets.data(), m_d_finalTargets, 
+                    cudaMemcpyAsync(m_h_finalTargets.data(), m_d_finalTargets->get(), 
                                   cached_max_detections * sizeof(Target), cudaMemcpyDeviceToHost, stream);
                     
                     // Record event for this copy
-                    cudaEventRecord(m_copyEvent, stream);
+                    m_copyEvent->record(stream);
                     m_copyInProgress = true;
                 }
             }
             
             // Always update input count for next frame (regardless of preview)
-            last_input_count = *h_inputCount_pinned;
+            last_input_count = *h_inputCount_pinned->get();
             
         } catch (const std::exception& e) {
             std::cerr << "[Pipeline] Exception during NMSGpu: " << e.what() << std::endl;
             if (m_d_finalTargetsCount) {
-                cudaMemsetAsync(m_d_finalTargetsCount, 0, sizeof(int), stream);
+                cudaMemsetAsync(m_d_finalTargetsCount->get(), 0, sizeof(int), stream);
             }
             ctx.clearTargets();
         }
     } else {
         std::cerr << "[Pipeline] NMS buffers not properly allocated!" << std::endl;
         if (m_d_finalTargetsCount) {
-            cudaMemsetAsync(m_d_finalTargetsCount, 0, sizeof(int), stream);
+            cudaMemsetAsync(m_d_finalTargetsCount->get(), 0, sizeof(int), stream);
         }
         ctx.clearTargets();
     }
@@ -1629,12 +1478,12 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
     
     // Call new GPU target selection with device pointer for count
     cudaError_t selectErr = findClosestTargetGpu(
-        m_d_finalTargets,
-        m_d_finalTargetsCount,  // Pass device pointer directly
+        m_d_finalTargets->get(),
+        m_d_finalTargetsCount->get(),  // Pass device pointer directly
         crosshairX,
         crosshairY,
-        m_d_bestTargetIndex,
-        m_d_bestTarget,
+        m_d_bestTargetIndex->get(),
+        m_d_bestTarget->get(),
         stream
     );
     
@@ -1642,17 +1491,17 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         std::cerr << "[Pipeline] Target selection failed: " << cudaGetErrorString(selectErr) << std::endl;
         // Clear best target on failure
         if (m_d_bestTargetIndex) {
-            cudaMemsetAsync(m_d_bestTargetIndex, -1, sizeof(int), stream);
+            cudaMemsetAsync(m_d_bestTargetIndex->get(), -1, sizeof(int), stream);
         }
         if (m_d_bestTarget) {
-            cudaMemsetAsync(m_d_bestTarget, 0, sizeof(Target), stream);
+            cudaMemsetAsync(m_d_bestTarget->get(), 0, sizeof(Target), stream);
         }
     }
 }
 
 // Non-blocking pipeline execution with improved performance
 bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
-    if (!stream) stream = m_primaryStream;
+    if (!stream) stream = m_primaryStream->get();
     auto& ctx = AppContext::getInstance();
     
     // Get current and previous pipeline indices
@@ -1770,7 +1619,7 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
         if (m_d_yoloInput && !m_captureBuffer.empty()) {
             cudaError_t err = cuda_unified_preprocessing(
                 m_captureBuffer.data(),
-                m_d_yoloInput,
+                m_d_yoloInput->get(),
                 m_captureBuffer.cols(),
                 m_captureBuffer.rows(),
                 static_cast<int>(m_captureBuffer.step()),
@@ -1787,11 +1636,11 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
         
         // TensorRT Inference
         if (m_inputBindings.find(m_inputName) != m_inputBindings.end() && m_d_yoloInput) {
-            void* inputBinding = m_inputBindings[m_inputName];
+            void* inputBinding = m_inputBindings[m_inputName]->get();
             
-            if (inputBinding != m_d_yoloInput) {
+            if (inputBinding != m_d_yoloInput->get()) {
                 size_t inputSize = ctx.config.onnx_input_resolution * ctx.config.onnx_input_resolution * 3 * sizeof(float);
-                cudaMemcpyAsync(inputBinding, m_d_yoloInput, inputSize, 
+                cudaMemcpyAsync(inputBinding, m_d_yoloInput->get(), inputSize, 
                                cudaMemcpyDeviceToDevice, stream);
             }
             
@@ -1805,7 +1654,7 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
                 auto bindingIt = m_outputBindings.find(m_outputNames[0]);
                 if (bindingIt != m_outputBindings.end() && bindingIt->second != nullptr) {
                     size_t outputSize = m_outputSizes[m_outputNames[0]];
-                    cudaMemcpyAsync(m_d_inferenceOutput, bindingIt->second, outputSize, 
+                    cudaMemcpyAsync(m_d_inferenceOutput->get(), bindingIt->second->get(), outputSize, 
                                    cudaMemcpyDeviceToDevice, stream);
                 }
             }
@@ -1815,19 +1664,19 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
             performTargetSelection(stream);
             
             // Step 4: Copy target results to host memory (async) using pinned memory
-            Target* finalTarget = m_d_bestTarget;
-            if (finalTarget && m_tripleBuffer->h_target_coords_pinned[currentIdx]) {
-                cudaMemcpyAsync(m_tripleBuffer->h_target_coords_pinned[currentIdx], finalTarget, sizeof(Target), 
+            Target* finalTarget = m_d_bestTarget->get();
+            if (finalTarget && m_tripleBuffer->h_target_coords_pinned[currentIdx].get()) {
+                cudaMemcpyAsync(m_tripleBuffer->h_target_coords_pinned[currentIdx].get(), finalTarget, sizeof(Target), 
                                cudaMemcpyDeviceToHost, stream);
                 
                 // Record event when target data is ready
-                cudaEventRecord(m_tripleBuffer->target_ready_events[currentIdx], stream);
+                m_tripleBuffer->target_ready_events[currentIdx].record(stream);
                 m_tripleBuffer->target_data_valid[currentIdx] = true;
                 
                 // Check if we have valid targets
                 if (m_d_finalTargetsCount) {
                     int targetCount = 0;
-                    cudaMemcpyAsync(&targetCount, m_d_finalTargetsCount, sizeof(int), 
+                    cudaMemcpyAsync(&targetCount, m_d_finalTargetsCount->get(), sizeof(int), 
                                    cudaMemcpyDeviceToHost, stream);
                     m_tripleBuffer->target_count[currentIdx] = targetCount;
                 } else {
@@ -1846,10 +1695,10 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
     int nextNextIdx = (nextIdx + 1) % 3;
     if (m_tripleBuffer->target_data_valid[nextNextIdx]) {
         // Use non-blocking query instead of synchronize
-        cudaError_t status = cudaEventQuery(m_tripleBuffer->target_ready_events[nextNextIdx]);
+        cudaError_t status = m_tripleBuffer->target_ready_events[nextNextIdx].query();
         if (status != cudaSuccess && status != cudaErrorNotReady) {
             // Only sync if there's an actual error, not if just not ready
-            cudaEventSynchronize(m_tripleBuffer->target_ready_events[nextNextIdx]);
+            m_tripleBuffer->target_ready_events[nextNextIdx].synchronize();
         }
     }
     
@@ -1874,13 +1723,13 @@ void UnifiedGraphPipeline::processMouseMovementAsync() {
         return;
     }
     
-    cudaError_t eventStatus = cudaEventQuery(m_tripleBuffer->target_ready_events[prevIdx]);
+    cudaError_t eventStatus = m_tripleBuffer->target_ready_events[prevIdx].query();
     if (eventStatus != cudaSuccess) {
         return; // Data not ready yet, skip this frame
     }
     
     // Target data is ready, use pinned memory
-    Target* h_target_ptr = m_tripleBuffer->h_target_coords_pinned[prevIdx];
+    Target* h_target_ptr = m_tripleBuffer->h_target_coords_pinned[prevIdx].get();
     if (!h_target_ptr) {
         return; // Pinned memory not initialized
     }

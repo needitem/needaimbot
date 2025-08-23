@@ -1,43 +1,44 @@
 #pragma once
 
 #include <cuda_runtime.h>
+#include <memory>
+#include <stdexcept>
 #include "../simple_cuda_mat.h"
-#include "../cuda_resource_manager.h"
+#include "../../utils/cuda_utils.h"
 
-// Simple float GPU matrix class
+// Simple float GPU matrix class with full RAII support
 class SimpleCudaMatFloat {
 public:
-    SimpleCudaMatFloat() : data_(nullptr), width_(0), height_(0), channels_(0), step_(0) {}
+    SimpleCudaMatFloat() : width_(0), height_(0), channels_(0), step_(0) {}
     
     SimpleCudaMatFloat(int height, int width, int channels) 
-        : width_(width), height_(height), channels_(channels) {
+        : width_(width), height_(height), channels_(channels), step_(0) {
         allocate();
     }
     
-    ~SimpleCudaMatFloat() {
-        release();
-    }
+    ~SimpleCudaMatFloat() = default;  // CudaMemory handles cleanup automatically
     
-    // Move constructor and assignment
+    // Move constructor
     SimpleCudaMatFloat(SimpleCudaMatFloat&& other) noexcept 
-        : data_(other.data_), width_(other.width_), height_(other.height_), 
-          channels_(other.channels_), step_(other.step_) {
-        other.data_ = nullptr;
+        : memory_(std::move(other.memory_)), 
+          width_(other.width_), 
+          height_(other.height_), 
+          channels_(other.channels_), 
+          step_(other.step_) {
         other.width_ = other.height_ = other.channels_ = 0;
         other.step_ = 0;
     }
     
+    // Move assignment
     SimpleCudaMatFloat& operator=(SimpleCudaMatFloat&& other) noexcept {
         if (this != &other) {
-            release();
-            data_ = other.data_;
+            memory_ = std::move(other.memory_);
             width_ = other.width_;
             height_ = other.height_;
             channels_ = other.channels_;
             step_ = other.step_;
-            other.data_ = nullptr;
             other.width_ = other.height_ = other.channels_ = 0;
-        other.step_ = 0;
+            other.step_ = 0;
         }
         return *this;
     }
@@ -48,43 +49,30 @@ public:
     
     void create(int height, int width, int channels) {
         if (height != height_ || width != width_ || channels != channels_) {
-            release();
             width_ = width;
             height_ = height;
             channels_ = channels;
+            step_ = 0;
             allocate();
         }
     }
     
     void release() {
-        if (data_) {
-            // Check if resource manager is shutting down
-            if (CudaResourceManager::GetInstance().IsShuttingDown()) {
-                data_ = nullptr;
-                width_ = height_ = channels_ = 0;
-                step_ = 0;
-                return;
-            }
-            
-            // Unregister from resource manager before freeing
-            CudaResourceManager::GetInstance().UnregisterMemory(data_);
-            cudaFree(data_);
-            data_ = nullptr;
-        }
+        memory_.reset();  // CudaMemory handles cleanup automatically
         width_ = height_ = channels_ = 0;
         step_ = 0;
     }
     
     bool empty() const {
-        return data_ == nullptr || width_ == 0 || height_ == 0;
+        return !memory_.get() || width_ == 0 || height_ == 0 || channels_ == 0;
     }
     
     int rows() const { return height_; }
     int cols() const { return width_; }
     int channels() const { return channels_; }
     size_t step() const { return step_; }
-    float* data() { return data_; }
-    const float* data() const { return data_; }
+    float* data() { return memory_.get(); }
+    const float* data() const { return memory_.get(); }
     
     size_t sizeInBytes() const {
         return step_ * height_ * sizeof(float);
@@ -95,16 +83,20 @@ private:
         if (width_ > 0 && height_ > 0 && channels_ > 0) {
             // Align step to 32 floats (128 bytes) for better performance
             step_ = ((width_ * channels_ + 31) / 32) * 32;
-            cudaError_t err = cudaMalloc(&data_, step_ * height_ * sizeof(float));
+            size_t total_floats = step_ * height_;
             
-            // Register with resource manager for tracking
-            if (err == cudaSuccess && data_) {
-                CudaResourceManager::GetInstance().RegisterMemory(data_);
+            try {
+                memory_ = CudaMemory<float>(total_floats);
+            } catch (const std::exception& e) {
+                // Reset on allocation failure
+                width_ = height_ = channels_ = 0;
+                step_ = 0;
+                throw;  // Re-throw the exception
             }
         }
     }
     
-    float* data_;
+    CudaMemory<float> memory_;  // RAII wrapper for CUDA memory
     int width_;
     int height_;
     int channels_;
