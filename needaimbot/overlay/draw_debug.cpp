@@ -1,4 +1,5 @@
 #include "../AppContext.h"
+#include "../core/constants.h"
 #include "needaimbot.h"
 #include "overlay.h"
 #include "include/other_tools.h"
@@ -406,8 +407,8 @@ void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float debug_scale) 
         }
         
         // Ensure label isn't too long
-        if (label.length() > 100) {
-            label = label.substr(0, 97) + "...";
+        if (label.length() > Constants::MAX_DEBUG_LABEL_LENGTH) {
+            label = label.substr(0, Constants::MAX_DEBUG_LABEL_LENGTH - 3) + "...";
         }
         
         ImU32 text_color = is_best_target ? IM_COL32(0, 255, 0, 255) : 

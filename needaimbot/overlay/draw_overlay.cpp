@@ -1,6 +1,7 @@
 #include "../core/windows_headers.h"
 
 #include "AppContext.h"
+#include "../core/constants.h"
 #include "../imgui/imgui.h"
 #include "needaimbot.h"
 #include "overlay.h"
@@ -56,10 +57,8 @@ void draw_overlay()
         ctx.config.overlay_ui_scale = ui_scale;
         // Config will be saved by batch processing in overlay.cpp
 
-        extern const int BASE_OVERLAY_WIDTH;
-        extern const int BASE_OVERLAY_HEIGHT;
-        overlayWidth = static_cast<int>(BASE_OVERLAY_WIDTH * ui_scale);
-        overlayHeight = static_cast<int>(BASE_OVERLAY_HEIGHT * ui_scale);
+        overlayWidth = static_cast<int>(Constants::BASE_OVERLAY_WIDTH * ui_scale);
+        overlayHeight = static_cast<int>(Constants::BASE_OVERLAY_HEIGHT * ui_scale);
 
         SetWindowPos(g_hwnd, NULL, 0, 0, overlayWidth, overlayHeight, SWP_NOMOVE | SWP_NOZORDER);
     }

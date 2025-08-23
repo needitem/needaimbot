@@ -9,6 +9,7 @@
 #include "include/other_tools.h"
 #include "overlay.h"
 #include "AppContext.h"
+#include "../core/constants.h"
 #include "ui_helpers.h"
 #include "common_helpers.h"
 #include "draw_settings.h"
@@ -165,7 +166,7 @@ static void draw_detection_settings()
     ImGui::PushStyleColor(ImGuiCol_SliderGrab, UIHelpers::GetAccentColor(0.9f));
     ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, UIHelpers::GetAccentColor(1.0f));
     ImGui::SetNextItemWidth(-1);
-    if (ImGui::SliderInt("Max Detections", &ctx.config.max_detections, 1, 100, "%d detections")) {
+    if (ImGui::SliderInt("Max Detections", &ctx.config.max_detections, 1, Constants::MAX_DETECTIONS_LIMIT, "%d detections")) {
         SAVE_PROFILE();
     }
     ImGui::PopStyleColor(4);
