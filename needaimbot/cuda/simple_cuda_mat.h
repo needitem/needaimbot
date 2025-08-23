@@ -4,6 +4,7 @@
 #include <memory>
 #include <cstring>
 #include "cuda_error_check.h"
+#include "cuda_resource_manager.h"
 
 // Simple GPU matrix class to replace cv::cuda::GpuMat
 class SimpleCudaMat {
@@ -101,6 +102,16 @@ public:
     // Release GPU memory
     void release() {
         if (data_) {
+            // Check if resource manager is shutting down
+            if (CudaResourceManager::GetInstance().IsShuttingDown()) {
+                // During shutdown, just clear pointers without freeing
+                // The resource manager will handle cleanup
+                data_ = nullptr;
+                width_ = height_ = channels_ = 0;
+                step_ = 0;
+                return;
+            }
+            
             // Validate pointer before attempting to free
             // Check for obviously invalid pointers
             uintptr_t ptr_val = reinterpret_cast<uintptr_t>(data_);
@@ -143,6 +154,10 @@ public:
                 // Additional validation - check if the memory type is valid
                 if (attributes.type == cudaMemoryTypeDevice || 
                     attributes.type == cudaMemoryTypeManaged) {
+                    // Unregister from resource manager BEFORE freeing
+                    // This prevents double-free if resource manager tries to clean up
+                    CudaResourceManager::GetInstance().UnregisterMemory(data_);
+                    
                     // Valid CUDA memory, attempt to free
                     cudaError_t err = cudaFree(data_);
                     if (err != cudaSuccess && 
@@ -384,6 +399,11 @@ private:
             if (err != cudaSuccess) {
                 step_ = 0;
                 throw std::runtime_error("GPU allocation failed: " + getCudaErrorDescription(err));
+            }
+            
+            // Register with resource manager for tracking
+            if (data_) {
+                CudaResourceManager::GetInstance().RegisterMemory(data_);
             }
         }
     }

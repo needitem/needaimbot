@@ -13,6 +13,7 @@
 #include "AppContext.h"
 #include "core/constants.h"
 #include "cuda/unified_graph_pipeline.h"
+#include "cuda/cuda_resource_manager.h"
 #include "mouse/mouse.h"
 #include "mouse/recoil_control_thread.h"
 #include "needaimbot.h"
@@ -281,6 +282,9 @@ static void signalHandler(int sig) {
     auto& ctx = AppContext::getInstance();
     ctx.should_exit = true;
     ctx.frame_cv.notify_all();  // Wake up main thread
+    
+    // Clean up CUDA resources on signal
+    CudaResourceManager::Shutdown();
 }
 
 // Console control handler for Windows
@@ -290,6 +294,9 @@ static BOOL WINAPI consoleHandler(DWORD signal) {
         auto& ctx = AppContext::getInstance();
         ctx.should_exit = true;
         ctx.frame_cv.notify_all();  // Wake up main thread
+        
+        // Clean up CUDA resources on console event
+        CudaResourceManager::Shutdown();
         
         // Give a short time for cleanup
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -407,6 +414,15 @@ LONG WINAPI UnhandledExceptionHandler(EXCEPTION_POINTERS* pExceptionPointers) {
     }
     
     SymCleanup(process);
+    
+    // Clean up CUDA resources before crash
+    std::cerr << "\n[CRASH] Attempting to clean up CUDA resources..." << std::endl;
+    try {
+        CudaResourceManager::Shutdown();
+        std::cerr << "[CRASH] CUDA resources cleaned up successfully." << std::endl;
+    } catch (...) {
+        std::cerr << "[CRASH] Failed to clean up CUDA resources." << std::endl;
+    }
     
     // Flush output
     std::cerr.flush();
@@ -683,6 +699,9 @@ int main()
         std::cout << "  Errors: " << ErrorManager::getInstance().getErrorCount() << std::endl;
         std::cout << "  Critical Errors: " << ErrorManager::getInstance().getCriticalCount() << std::endl;
         
+        // Clean up CUDA resources
+        std::cout << "\n[MAIN] Cleaning up CUDA resources..." << std::endl;
+        CudaResourceManager::Shutdown();
         
         std::cout << "\n[MAIN] Safe shutdown completed." << std::endl;
         timeEndPeriod(1);  // Restore system timer
@@ -691,6 +710,11 @@ int main()
     catch (const std::exception &e)
     {
         std::cerr << "[MAIN] An error has occurred in the main stream: " << e.what() << std::endl;
+        
+        // Clean up CUDA resources even on error
+        std::cerr << "[MAIN] Cleaning up CUDA resources after error..." << std::endl;
+        CudaResourceManager::Shutdown();
+        
         std::cout << "Press Enter to exit...";
         std::cin.get();
         timeEndPeriod(1);  // Restore system timer

@@ -4,6 +4,7 @@
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
+#include "../cuda/cuda_resource_manager.h"
 
 // CUDA error checking macro
 #define CUDA_CHECK(call) \
@@ -43,12 +44,20 @@ inline void cudaSafeDestroy(T*& ptr) {
 class CudaStream {
 public:
     CudaStream() {
-        CUDA_CHECK(cudaStreamCreate(&stream_));
+        cudaError_t err = cudaStreamCreate(&stream_);
+        if (err == cudaSuccess && stream_) {
+            CudaResourceManager::GetInstance().RegisterStream(stream_);
+        } else if (err != cudaSuccess) {
+            throw std::runtime_error("cudaStreamCreate failed");
+        }
     }
     
     ~CudaStream() {
         if (stream_) {
-            cudaStreamDestroy(stream_);
+            if (!CudaResourceManager::GetInstance().IsShuttingDown()) {
+                CudaResourceManager::GetInstance().UnregisterStream(stream_);
+                cudaStreamDestroy(stream_);
+            }
         }
     }
     
@@ -62,7 +71,10 @@ public:
     CudaStream& operator=(CudaStream&& other) noexcept {
         if (this != &other) {
             if (stream_) {
-                cudaStreamDestroy(stream_);
+                if (!CudaResourceManager::GetInstance().IsShuttingDown()) {
+                    CudaResourceManager::GetInstance().UnregisterStream(stream_);
+                    cudaStreamDestroy(stream_);
+                }
             }
             stream_ = other.stream_;
             other.stream_ = nullptr;
@@ -84,7 +96,12 @@ public:
     
     explicit CudaMemory(size_t count) : count_(count) {
         if (count > 0) {
-            CUDA_CHECK(cudaMalloc(&ptr_, count * sizeof(T)));
+            cudaError_t err = cudaMalloc(&ptr_, count * sizeof(T));
+            if (err == cudaSuccess && ptr_) {
+                CudaResourceManager::GetInstance().RegisterMemory(ptr_);
+            } else if (err != cudaSuccess) {
+                throw std::runtime_error("cudaMalloc failed");
+            }
         }
     }
     
@@ -114,12 +131,21 @@ public:
     
     void reset(size_t new_count = 0) {
         if (ptr_) {
-            cudaFree(ptr_);
+            // Check if resource manager is shutting down
+            if (!CudaResourceManager::GetInstance().IsShuttingDown()) {
+                CudaResourceManager::GetInstance().UnregisterMemory(ptr_);
+                cudaFree(ptr_);
+            }
             ptr_ = nullptr;
         }
         count_ = new_count;
         if (new_count > 0) {
-            CUDA_CHECK(cudaMalloc(&ptr_, new_count * sizeof(T)));
+            cudaError_t err = cudaMalloc(&ptr_, new_count * sizeof(T));
+            if (err == cudaSuccess && ptr_) {
+                CudaResourceManager::GetInstance().RegisterMemory(ptr_);
+            } else if (err != cudaSuccess) {
+                throw std::runtime_error("cudaMalloc failed");
+            }
         }
     }
     

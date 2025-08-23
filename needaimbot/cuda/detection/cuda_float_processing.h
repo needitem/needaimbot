@@ -2,6 +2,7 @@
 
 #include <cuda_runtime.h>
 #include "../simple_cuda_mat.h"
+#include "../cuda_resource_manager.h"
 
 // Simple float GPU matrix class
 class SimpleCudaMatFloat {
@@ -57,6 +58,16 @@ public:
     
     void release() {
         if (data_) {
+            // Check if resource manager is shutting down
+            if (CudaResourceManager::GetInstance().IsShuttingDown()) {
+                data_ = nullptr;
+                width_ = height_ = channels_ = 0;
+                step_ = 0;
+                return;
+            }
+            
+            // Unregister from resource manager before freeing
+            CudaResourceManager::GetInstance().UnregisterMemory(data_);
             cudaFree(data_);
             data_ = nullptr;
         }
@@ -84,7 +95,12 @@ private:
         if (width_ > 0 && height_ > 0 && channels_ > 0) {
             // Align step to 32 floats (128 bytes) for better performance
             step_ = ((width_ * channels_ + 31) / 32) * 32;
-            cudaMalloc(&data_, step_ * height_ * sizeof(float));
+            cudaError_t err = cudaMalloc(&data_, step_ * height_ * sizeof(float));
+            
+            // Register with resource manager for tracking
+            if (err == cudaSuccess && data_) {
+                CudaResourceManager::GetInstance().RegisterMemory(data_);
+            }
         }
     }
     
