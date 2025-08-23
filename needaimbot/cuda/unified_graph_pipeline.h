@@ -9,6 +9,7 @@
 #include <mutex>
 #include <unordered_map>
 #include "simple_cuda_mat.h"
+#include "cuda_resource_manager.h"
 #include "../core/Target.h"
 
 // TensorRT includes for Phase 1 integration
@@ -174,9 +175,16 @@ private:
         
         // Cleanup pinned memory
         ~TripleBuffer() {
+            // Check if resource manager is shutting down
+            if (CudaResourceManager::GetInstance().IsShuttingDown()) {
+                // During shutdown, resource manager will handle cleanup
+                return;
+            }
+            
             for (int i = 0; i < 3; i++) {
                 if (h_target_coords_pinned[i]) {
                     cudaFreeHost(h_target_coords_pinned[i]);
+                    h_target_coords_pinned[i] = nullptr;
                 }
             }
         }
@@ -277,6 +285,15 @@ private:
     // Main loop control
     std::atomic<bool> m_shouldStop{false};
     std::chrono::high_resolution_clock::time_point m_lastFrameTime;
+    
+    // Event management for profiling and synchronization
+    cudaEvent_t m_lastFrameEnd = nullptr;      // For frame timing
+    cudaEvent_t m_copyEvent = nullptr;         // For copy synchronization
+    
+    // Copy state management for async preview updates
+    bool m_copyInProgress = false;
+    int m_h_finalCount = 0;
+    std::vector<Target> m_h_finalTargets;
 
     bool validateGraph();
     void cleanupGraph();

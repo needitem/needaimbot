@@ -63,14 +63,7 @@ UnifiedGraphPipeline::UnifiedGraphPipeline() {
     m_tripleBuffer = nullptr;
 }
 
-UnifiedGraphPipeline::~UnifiedGraphPipeline() {
-    shutdown();
-    
-    if (m_state.startEvent) cudaEventDestroy(m_state.startEvent);
-    if (m_state.endEvent) cudaEventDestroy(m_state.endEvent);
-    // Events removed - using simple pipeline
-    if (m_previewReadyEvent) cudaEventDestroy(m_previewReadyEvent);
-}
+// Note: Destructor is implemented in unified_graph_pipeline_cleanup.cpp
 
 bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
     m_config = config;
@@ -128,31 +121,7 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
     return true;
 }
 
-void UnifiedGraphPipeline::shutdown() {
-    std::lock_guard<std::mutex> lock(m_graphMutex);
-    
-    // Clean up TensorRT resources (Phase 1 integration)
-    for (auto& binding : m_inputBindings) {
-        if (binding.second) cudaFree(binding.second);
-    }
-    m_inputBindings.clear();
-    
-    for (auto& binding : m_outputBindings) {
-        if (binding.second) cudaFree(binding.second);
-    }
-    m_outputBindings.clear();
-    
-    m_context.reset();
-    m_engine.reset();
-    m_runtime.reset();
-    
-    cleanupGraph();
-    deallocateBuffers();
-    if (m_primaryStream) {
-        cudaStreamDestroy(m_primaryStream);
-        m_primaryStream = nullptr;
-    }
-}
+// Note: shutdown() is implemented in unified_graph_pipeline_cleanup.cpp
 
 bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     std::lock_guard<std::mutex> lock(m_graphMutex);
@@ -653,23 +622,22 @@ void UnifiedGraphPipeline::setInputFrame(const SimpleCudaMat& frame) {
 // Two-stage pipeline helper implementations
 void UnifiedGraphPipeline::updateProfilingAsync(cudaStream_t stream) {
     // Async profiling update without blocking
-    static cudaEvent_t lastFrameEnd = nullptr;
-    if (!lastFrameEnd) {
-        cudaEventCreateWithFlags(&lastFrameEnd, cudaEventDefault);
+    if (!m_lastFrameEnd) {
+        cudaEventCreateWithFlags(&m_lastFrameEnd, cudaEventDefault);
     }
     
     if (m_state.frameCount > 0) {
         // Check if last frame's profiling is ready
-        if (cudaEventQuery(lastFrameEnd) == cudaSuccess) {
+        if (cudaEventQuery(m_lastFrameEnd) == cudaSuccess) {
             float latency;
-            cudaEventElapsedTime(&latency, m_state.startEvent, lastFrameEnd);
+            cudaEventElapsedTime(&latency, m_state.startEvent, m_lastFrameEnd);
             updateStatistics(latency);
         }
     }
     
     // Record current frame end
     cudaEventRecord(m_state.startEvent, stream);
-    cudaEventRecord(lastFrameEnd, stream);
+    cudaEventRecord(m_lastFrameEnd, stream);
 }
 
 // ============================================================================
@@ -1570,42 +1538,41 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
             
             // Only copy to CPU if preview window is enabled
             if (ctx.config.show_window) {
-                // Use static variables to persist between frames
-                static int h_finalCount = 0;
-                static std::vector<Target> h_finalTargets(cached_max_detections);
-                static cudaEvent_t copyEvent = nullptr;
-                static bool copyInProgress = false;
+                // Initialize vectors once
+                if (m_h_finalTargets.empty()) {
+                    m_h_finalTargets.resize(cached_max_detections);
+                }
                 
                 // Initialize event once
-                if (!copyEvent) {
-                    cudaEventCreateWithFlags(&copyEvent, cudaEventDisableTiming);
+                if (!m_copyEvent) {
+                    cudaEventCreateWithFlags(&m_copyEvent, cudaEventDisableTiming);
                 }
                 
                 // Check if previous copy is complete
-                if (copyInProgress) {
-                    if (cudaEventQuery(copyEvent) == cudaSuccess) {
+                if (m_copyInProgress) {
+                    if (cudaEventQuery(m_copyEvent) == cudaSuccess) {
                         // Previous copy completed, update preview
-                        if (h_finalCount > 0 && h_finalCount <= cached_max_detections) {
-                            h_finalTargets.resize(h_finalCount);
-                            ctx.updateTargets(h_finalTargets);
+                        if (m_h_finalCount > 0 && m_h_finalCount <= cached_max_detections) {
+                            m_h_finalTargets.resize(m_h_finalCount);
+                            ctx.updateTargets(m_h_finalTargets);
                         }
-                        copyInProgress = false;
+                        m_copyInProgress = false;
                     }
                 }
                 
                 // Start new copy if not already in progress
-                if (!copyInProgress) {
+                if (!m_copyInProgress) {
                     // Copy count first (small, fast)
-                    cudaMemcpyAsync(&h_finalCount, m_d_finalTargetsCount, sizeof(int), 
+                    cudaMemcpyAsync(&m_h_finalCount, m_d_finalTargetsCount, sizeof(int), 
                                    cudaMemcpyDeviceToHost, stream);
                     
                     // Copy targets (only up to max_detections)
-                    cudaMemcpyAsync(h_finalTargets.data(), m_d_finalTargets, 
+                    cudaMemcpyAsync(m_h_finalTargets.data(), m_d_finalTargets, 
                                   cached_max_detections * sizeof(Target), cudaMemcpyDeviceToHost, stream);
                     
                     // Record event for this copy
-                    cudaEventRecord(copyEvent, stream);
-                    copyInProgress = true;
+                    cudaEventRecord(m_copyEvent, stream);
+                    m_copyInProgress = true;
                 }
             }
             
