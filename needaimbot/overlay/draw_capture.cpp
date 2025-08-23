@@ -5,6 +5,7 @@
 #include "../imgui/imgui_internal.h"
 
 #include "AppContext.h"
+#include "../core/constants.h"
 #include "config/config.h"
 #include "needaimbot.h"
 // #include "../capture/capture.h" - removed, using GPU capture now
@@ -44,7 +45,7 @@ static void draw_capture_area_settings()
         ctx.model_changed = true;
     }
     
-    if (ctx.config.detection_resolution >= 400)
+    if (ctx.config.detection_resolution >= Constants::DETECTION_RESOLUTION_HIGH_PERF)
     {
         UIHelpers::BeautifulText("WARNING: Large detection resolution can impact performance.", UIHelpers::GetWarningColor());
     }

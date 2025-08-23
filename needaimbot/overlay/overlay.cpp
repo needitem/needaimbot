@@ -26,7 +26,7 @@
 // #include "capture/capture.h" - removed, using GPU capture now
 #include "keyboard_listener.h"
 #include "other_tools.h"
-
+#include "../core/constants.h"
 
 std::atomic<bool> g_config_optical_flow_changed{false};
 
@@ -48,10 +48,6 @@ ID3D11BlendState* g_pBlendState = nullptr;
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
-const int BASE_OVERLAY_WIDTH = 800;
-const int BASE_OVERLAY_HEIGHT = 600;
-const int MIN_OVERLAY_WIDTH = 600;  // Minimum width
-const int MIN_OVERLAY_HEIGHT = 400;  // Minimum height
 int overlayWidth = 0;
 int overlayHeight = 0;
 
@@ -312,8 +308,8 @@ bool CreateOverlayWindow()
     auto& ctx = AppContext::getInstance();
     auto& config = ctx.config;  // Reference to avoid global config confusion
     
-    overlayWidth = static_cast<int>((std::max)(MIN_OVERLAY_WIDTH, static_cast<int>(BASE_OVERLAY_WIDTH * ctx.config.overlay_ui_scale)));
-    overlayHeight = static_cast<int>((std::max)(MIN_OVERLAY_HEIGHT, static_cast<int>(BASE_OVERLAY_HEIGHT * ctx.config.overlay_ui_scale)));
+    overlayWidth = static_cast<int>((std::max)(Constants::MIN_OVERLAY_WIDTH, static_cast<int>(Constants::BASE_OVERLAY_WIDTH * ctx.config.overlay_ui_scale)));
+    overlayHeight = static_cast<int>((std::max)(Constants::MIN_OVERLAY_HEIGHT, static_cast<int>(Constants::BASE_OVERLAY_HEIGHT * ctx.config.overlay_ui_scale)));
 
     WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, WndProc, 0L, 0L,
                       GetModuleHandle(NULL), NULL, NULL, NULL, NULL,
@@ -451,7 +447,7 @@ void OverlayThread()
     // Config save batching to reduce I/O
     bool config_needs_save = false;
     auto last_config_save_time = std::chrono::high_resolution_clock::now();
-    const std::chrono::milliseconds config_save_interval(500); // Save config every 500ms max
+    const std::chrono::milliseconds config_save_interval(Constants::CONFIG_SAVE_INTERVAL_MS);
 
     while (!should_exit && !AppContext::getInstance().should_exit)
     {
@@ -486,7 +482,7 @@ void OverlayThread()
                 ShowWindow(g_hwnd, SW_HIDE);
             }
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            std::this_thread::sleep_for(std::chrono::milliseconds(Constants::OVERLAY_INIT_RETRY_SLEEP_MS));
         }
 
         // When overlay is hidden, reduce CPU usage based on target_fps setting
@@ -804,7 +800,7 @@ void OverlayThread()
             if (result == DXGI_STATUS_OCCLUDED || result == DXGI_ERROR_ACCESS_LOST)
             {
                 // If occluded, back off
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                std::this_thread::sleep_for(std::chrono::milliseconds(Constants::OVERLAY_OCCLUDED_SLEEP_MS));
             }
             else
             {
@@ -822,7 +818,7 @@ void OverlayThread()
         else
         {
             // Window not visible: slow down loop
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            std::this_thread::sleep_for(std::chrono::milliseconds(Constants::OVERLAY_HIDDEN_SLEEP_MS));
         }
         
         // Batched config saving to reduce I/O overhead

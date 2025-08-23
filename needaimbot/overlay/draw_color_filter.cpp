@@ -2,6 +2,7 @@
 #include "../imgui/imgui.h"
 #include "../imgui/imgui_internal.h"
 #include "AppContext.h"
+#include "../core/constants.h"
 #include "config/config.h"
 #include "needaimbot.h"
 #include "ui_helpers.h"
@@ -46,7 +47,7 @@ void draw_color_filter_settings()
     ImGui::Text("RGB Color Range:");
     
     // Red channel
-    ImGui::PushItemWidth(200);
+    ImGui::PushItemWidth(Constants::SLIDER_WIDTH_MEDIUM);
     ImGui::Text("Red Channel:");
     ImGui::SameLine(120);
     changed |= ImGui::DragIntRange2("##RedRange", &ctx.config.rgb_min_r, &ctx.config.rgb_max_r, 1, 0, 255, "Min: %d", "Max: %d");
@@ -114,7 +115,7 @@ void draw_color_filter_settings()
     // Common settings
     ImGui::Text("Filter Settings:");
     
-    changed |= ImGui::SliderInt("Min Pixels", &ctx.config.min_color_pixels, 1, 100);
+    changed |= ImGui::SliderInt("Min Pixels", &ctx.config.min_color_pixels, 1, Constants::MIN_COLOR_PIXELS_LIMIT);
     ImGui::SameLine();
     HelpMarkerColorFilter("Minimum number of matching pixels required in target bounding box");
     

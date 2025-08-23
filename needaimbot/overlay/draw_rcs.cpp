@@ -1,4 +1,5 @@
 #include "AppContext.h"
+#include "../core/constants.h"
 #include "draw_settings.h"
 #include "needaimbot.h" 
 #include "overlay.h" 
@@ -52,10 +53,10 @@ void draw_rcs_settings() {
             if (UIHelpers::BeautifulSlider("Recoil Delay (ms)", &current_profile->recoil_ms, 0.1f, 50.0f, "%.1f")) {
                 SAVE_WEAPON_PROFILE();
             }
-            if (ImGui::SliderInt("Start Delay (ms)", &current_profile->start_delay_ms, 0, 500)) {
+            if (ImGui::SliderInt("Start Delay (ms)", &current_profile->start_delay_ms, 0, Constants::RCS_DELAY_MAX)) {
                 SAVE_WEAPON_PROFILE();
             }
-            if (ImGui::SliderInt("End Delay (ms)", &current_profile->end_delay_ms, 0, 500)) {
+            if (ImGui::SliderInt("End Delay (ms)", &current_profile->end_delay_ms, 0, Constants::RCS_DELAY_MAX)) {
                 SAVE_WEAPON_PROFILE();
             }
             
@@ -87,7 +88,7 @@ void draw_rcs_settings() {
             
             ImGui::Text("Select Scope:");
             ImGui::SameLine();
-            ImGui::PushItemWidth(100);
+            ImGui::PushItemWidth(Constants::COMBO_WIDTH_SMALL);
             if (ImGui::Combo("##ScopeSelector", &current_scope_index, scope_options, 6)) {
                 ctx.config.active_scope_magnification = scope_values[current_scope_index];
                 SAVE_PROFILE();
@@ -214,7 +215,7 @@ void draw_rcs_settings() {
                 ImGui::Text("0%% (No change)");
             }
             
-            if (UIHelpers::BeautifulSlider("##CrouchReduction", &ctx.config.crouch_recoil_reduction, -100.0f, 100.0f, "%.0f%%")) {
+            if (UIHelpers::BeautifulSlider("##CrouchReduction", &ctx.config.crouch_recoil_reduction, Constants::CROUCH_REDUCTION_MIN, Constants::CROUCH_REDUCTION_MAX, "%.0f%%")) {
                 SAVE_PROFILE();
             }
             

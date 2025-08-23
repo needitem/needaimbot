@@ -2,6 +2,7 @@
 #include "../imgui/imgui.h"
 #include "../imgui/imgui_internal.h"
 #include "AppContext.h"
+#include "../core/constants.h"
 #include "draw_settings.h"
 #include "ui_helpers.h"
 #include "cuda/simple_cuda_mat.h"
@@ -212,16 +213,16 @@ void renderOffsetTab()
             
             // Fine adjustment controls
             ImGui::Text("Fine Adjust:");
-            ImGui::PushItemWidth(100);
+            ImGui::PushItemWidth(Constants::SLIDER_WIDTH_SMALL);
             ImGui::SetNextItemWidth(60);
             ImGui::Text("X"); ImGui::SameLine();
-            if (ImGui::DragFloat("##offset_x_fine", &ctx.config.crosshair_offset_x, 0.1f, -100.0f, 100.0f, "%.1f")) {
+            if (ImGui::DragFloat("##offset_x_fine", &ctx.config.crosshair_offset_x, Constants::OFFSET_DRAG_SPEED, Constants::OFFSET_DRAG_MIN, Constants::OFFSET_DRAG_MAX, "%.1f")) {
                 offset_changed = true;
                 ctx.crosshair_offset_changed = true;
             }
             ImGui::SetNextItemWidth(60);
             ImGui::Text("Y"); ImGui::SameLine();
-            if (ImGui::DragFloat("##offset_y_fine", &ctx.config.crosshair_offset_y, 0.1f, -100.0f, 100.0f, "%.1f")) {
+            if (ImGui::DragFloat("##offset_y_fine", &ctx.config.crosshair_offset_y, Constants::OFFSET_DRAG_SPEED, Constants::OFFSET_DRAG_MIN, Constants::OFFSET_DRAG_MAX, "%.1f")) {
                 offset_changed = true;
                 ctx.crosshair_offset_changed = true;
             }
@@ -309,16 +310,16 @@ void renderOffsetTab()
                 
                 // Fine adjustment controls
                 ImGui::Text("Fine Adjust:");
-                ImGui::PushItemWidth(100);
+                ImGui::PushItemWidth(Constants::SLIDER_WIDTH_SMALL);
                 ImGui::SetNextItemWidth(60);
                 ImGui::Text("X"); ImGui::SameLine();
-                if (ImGui::DragFloat("##aim_shoot_x_fine", &ctx.config.aim_shoot_offset_x, 0.1f, -100.0f, 100.0f, "%.1f")) {
+                if (ImGui::DragFloat("##aim_shoot_x_fine", &ctx.config.aim_shoot_offset_x, Constants::OFFSET_DRAG_SPEED, Constants::OFFSET_DRAG_MIN, Constants::OFFSET_DRAG_MAX, "%.1f")) {
                     aim_shoot_offset_changed = true;
                     ctx.crosshair_offset_changed = true;
                 }
                 ImGui::SetNextItemWidth(60);
                 ImGui::Text("Y"); ImGui::SameLine();
-                if (ImGui::DragFloat("##aim_shoot_y_fine", &ctx.config.aim_shoot_offset_y, 0.1f, -100.0f, 100.0f, "%.1f")) {
+                if (ImGui::DragFloat("##aim_shoot_y_fine", &ctx.config.aim_shoot_offset_y, Constants::OFFSET_DRAG_SPEED, Constants::OFFSET_DRAG_MIN, Constants::OFFSET_DRAG_MAX, "%.1f")) {
                     aim_shoot_offset_changed = true;
                     ctx.crosshair_offset_changed = true;
                 }
