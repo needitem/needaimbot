@@ -990,6 +990,84 @@ __device__ void atomicMinFloat(float* addr, float value, int index, int* index_a
 
 // GPU kernel for finding the closest target to crosshair
 
+// Kernel with head-in-body priority selection
+__global__ void findBestTargetWithHeadPriority(
+    const Target* d_detections,
+    const int* d_num_detections,
+    float crosshairX,
+    float crosshairY,
+    int head_class_id,
+    int* d_best_index,
+    Target* d_best_target)
+{
+    int num = *d_num_detections;
+    if (num <= 0) {
+        if (threadIdx.x == 0 && blockIdx.x == 0) {
+            *d_best_index = -1;
+        }
+        return;
+    }
+    
+    // Only thread 0 does the work (since we have sequential dependencies)
+    if (threadIdx.x == 0 && blockIdx.x == 0) {
+        // Step 1: Check if any Head is inside a Body
+        for (int i = 0; i < num; i++) {
+            if (d_detections[i].classId == head_class_id) {
+                const Target& head = d_detections[i];
+                
+                // Check if this head is inside any body
+                for (int j = 0; j < num; j++) {
+                    if (i != j && d_detections[j].classId != head_class_id) {
+                        const Target& body = d_detections[j];
+                        
+                        // Check if head bounding box is completely inside body bounding box
+                        if (head.x >= body.x && 
+                            head.y >= body.y &&
+                            (head.x + head.width) <= (body.x + body.width) &&
+                            (head.y + head.height) <= (body.y + body.height)) {
+                            
+                            // Found a head inside a body - select it
+                            *d_best_index = i;
+                            *d_best_target = head;
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Step 2: No head inside body found, select closest target to crosshair
+        float min_distance = FLT_MAX;
+        int best_idx = -1;
+        
+        for (int i = 0; i < num; i++) {
+            const Target& det = d_detections[i];
+            
+            // Skip invalid detections
+            if (det.width > 0 && det.height > 0 && det.confidence > 0) {
+                float centerX = det.x + det.width * 0.5f;
+                float centerY = det.y + det.height * 0.5f;
+                
+                float dx = fabsf(centerX - crosshairX);
+                float dy = fabsf(centerY - crosshairY);
+                float distance = dx + dy;
+                
+                if (distance < min_distance) {
+                    min_distance = distance;
+                    best_idx = i;
+                }
+            }
+        }
+        
+        if (best_idx >= 0) {
+            *d_best_index = best_idx;
+            *d_best_target = d_detections[best_idx];
+        } else {
+            *d_best_index = -1;
+        }
+    }
+}
+
 // New kernel that reads count from device memory
 __global__ void findClosestTargetKernelWithDeviceCount(
     const Target* d_detections,
@@ -1114,6 +1192,45 @@ cudaError_t findClosestTargetGpu(
         d_detections, d_best_index, d_best_target, max_detections);
     
     // RAII handles cleanup automatically
+    return cudaSuccess;
+}
+
+// New function with head priority selection
+cudaError_t findBestTargetWithHeadPriorityGpu(
+    const Target* d_detections,
+    int* d_num_detections,
+    float crosshairX,
+    float crosshairY,
+    int head_class_id,
+    int* d_best_index,
+    Target* d_best_target,
+    cudaStream_t stream)
+{
+    if (!d_detections || !d_num_detections || !d_best_index || !d_best_target) {
+        return cudaErrorInvalidValue;
+    }
+    
+    // Initialize best index
+    cudaMemsetAsync(d_best_index, 0xFF, sizeof(int), stream);  // Set to -1
+    
+    // Launch kernel with a single thread block
+    // Since we have sequential dependencies, we use only one thread
+    findBestTargetWithHeadPriority<<<1, 1, 0, stream>>>(
+        d_detections,
+        d_num_detections,
+        crosshairX,
+        crosshairY,
+        head_class_id,
+        d_best_index,
+        d_best_target
+    );
+    
+    // Check for kernel errors
+    cudaError_t kernel_err = cudaGetLastError();
+    if (kernel_err != cudaSuccess) {
+        return kernel_err;
+    }
+    
     return cudaSuccess;
 }
 

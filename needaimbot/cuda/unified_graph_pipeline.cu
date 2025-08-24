@@ -1523,12 +1523,22 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         return;
     }
     
-    // Call new GPU target selection with device pointer for count
-    cudaError_t selectErr = findClosestTargetGpu(
+    // Find head class ID from config
+    int head_class_id = -1;
+    for (const auto& cs : ctx.config.class_settings) {
+        if (cs.name == ctx.config.head_class_name) {
+            head_class_id = cs.id;
+            break;
+        }
+    }
+    
+    // Always use head priority selection
+    cudaError_t selectErr = findBestTargetWithHeadPriorityGpu(
         m_d_finalTargets->get(),
         m_d_finalTargetsCount->get(),  // Pass device pointer directly
         crosshairX,
         crosshairY,
+        head_class_id,
         m_d_bestTargetIndex->get(),
         m_d_bestTarget->get(),
         stream
