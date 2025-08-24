@@ -1819,23 +1819,13 @@ void UnifiedGraphPipeline::processMouseMovementAsync() {
     float error_x = targetCenterX - screenCenterX;
     float error_y = targetCenterY - screenCenterY;
     
-    // Use PD controller for precise, stable movement
-    float movement_x, movement_y;
+    // Simple proportional control (P controller only)
+    float kp_x = ctx.config.pd_kp_x;  // TODO: rename config variable to just kp_x
+    float kp_y = ctx.config.pd_kp_y;  // TODO: rename config variable to just kp_y
     
-    // Simple PD control parameters
-    float kp_x = ctx.config.pd_kp_x;
-    float kp_y = ctx.config.pd_kp_y;
-    // kd_x and kd_y removed - not used in simple proportional control
-    float deadzone_x = ctx.config.min_movement_threshold_x;
-    float deadzone_y = ctx.config.min_movement_threshold_y;
-    
-    // Apply deadzone
-    if (abs(error_x) < deadzone_x) error_x = 0;
-    if (abs(error_y) < deadzone_y) error_y = 0;
-    
-    // Simple proportional control (temporary until GPU PD controller is integrated)
-    movement_x = error_x * kp_x;
-    movement_y = error_y * kp_y;
+    // Direct proportional control without deadzone
+    float movement_x = error_x * kp_x;
+    float movement_y = error_y * kp_y;
     
     int dx = static_cast<int>(movement_x);
     int dy = static_cast<int>(movement_y);
