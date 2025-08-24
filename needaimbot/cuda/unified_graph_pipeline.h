@@ -188,6 +188,10 @@ private:
     // Node name mapping for dynamic updates
     std::unordered_map<std::string, cudaGraphNode_t> m_namedNodes;
     
+    // Class filter caching to avoid redundant uploads
+    bool m_classFilterDirty = true;
+    std::vector<unsigned char> m_cachedClassFilter;
+    
     // Triple buffering for async pipeline with pinned memory optimization
     struct TripleBuffer {
         SimpleCudaMat buffers[3];
