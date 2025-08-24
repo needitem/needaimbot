@@ -42,8 +42,23 @@ SerialConnection::SerialConnection(const std::string& port, unsigned int baud_ra
       listening_(false),
       aiming_active(false),
       shooting_active(false), 
-      zooming_active(false)
+      zooming_active(false),
+      write_event_(NULL),
+      read_event_(NULL)
 {
+    // Initialize overlapped structures
+    ZeroMemory(&write_overlapped_, sizeof(write_overlapped_));
+    ZeroMemory(&read_overlapped_, sizeof(read_overlapped_));
+    
+    // Create events for async operations
+    write_event_ = CreateEvent(NULL, TRUE, FALSE, NULL);
+    read_event_ = CreateEvent(NULL, TRUE, FALSE, NULL);
+    
+    if (write_event_ && read_event_) {
+        write_overlapped_.hEvent = write_event_;
+        read_overlapped_.hEvent = read_event_;
+    }
+    
     try {
         // 사용된 포트 등록 (정리 대상으로 추가)
         GlobalSerialCleanupHandler::registerPort(port_name_);
@@ -55,7 +70,7 @@ SerialConnection::SerialConnection(const std::string& port, unsigned int baud_ra
         
         // 성공한 경우에만 메시지 출력
         std::cout << "[Arduino] Successfully connected to PORT: " << port_name_ 
-                  << " (Native Windows API - Ultra Low Latency)" << std::endl;
+                  << " (Native Windows API - Async I/O)" << std::endl;
         
     } catch (const std::exception& e) {
         // 초기화 실패 시 간단한 정리만 수행 (스레드는 아직 생성되지 않음)
@@ -63,6 +78,8 @@ SerialConnection::SerialConnection(const std::string& port, unsigned int baud_ra
             CloseHandle(serial_handle_);
             serial_handle_ = INVALID_HANDLE_VALUE;
         }
+        if (write_event_) CloseHandle(write_event_);
+        if (read_event_) CloseHandle(read_event_);
         is_open_ = false;
         std::cerr << "[Arduino] Initialization error: " << e.what() << std::endl;
         // 객체는 생성되지만 is_open_은 false로 유지됨
@@ -105,14 +122,19 @@ void SerialConnection::safeSerialClose() {
         // 1. 즉시 I/O 취소 (강제 종료 대비)
         CancelIo(serial_handle_);
         
-        // 2. Arduino를 안전한 상태로 리셋 - 여러 명령 전송
+        // 2. Arduino를 안전한 상태로 리셋 - 비동기 명령 전송
         std::cout << "[Arduino] Resetting Arduino to safe state..." << std::endl;
-        sendCommand("r");  // 마우스 릴리스
-        Sleep(10);
-        sendCommand("m0,0\n");  // 움직임 중지
-        Sleep(10);
-        sendCommand("r");  // 한 번 더 릴리스 확인
-        Sleep(50);
+        const char* release_cmd = "r";
+        const char* move_cmd = "m0,0\n";
+        
+        writeAsync(release_cmd, static_cast<DWORD>(strlen(release_cmd)));
+        writeAsync(move_cmd, static_cast<DWORD>(strlen(move_cmd)));
+        writeAsync(release_cmd, static_cast<DWORD>(strlen(release_cmd))); // 한 번 더 릴리스
+        
+        // Wait for async operations to complete
+        if (write_event_) {
+            WaitForSingleObject(write_event_, 20);
+        }
         
         // 3. 출력 버퍼 플러시 (전송 완료 보장)
         if (!FlushFileBuffers(serial_handle_)) {
@@ -129,10 +151,11 @@ void SerialConnection::safeSerialClose() {
         // DTR과 RTS를 LOW로 설정하여 Arduino가 깨끗한 상태를 유지하도록 함
         EscapeCommFunction(serial_handle_, CLRDTR);
         EscapeCommFunction(serial_handle_, CLRRTS);
-        Sleep(10);
         
-        // 7. 짧은 대기
-        Sleep(50);
+        // 7. Wait for hardware stabilization using event
+        if (write_event_) {
+            WaitForSingleObject(write_event_, 30);
+        }
         
         // 8. 포트 안전하게 닫기 (강화된 방식)
         if (serial_handle_ != INVALID_HANDLE_VALUE) {
@@ -211,6 +234,16 @@ SerialConnection::~SerialConnection()
     std::cout << "[Arduino] Destructor called for port: " << port_name_ << std::endl;
     cleanup();
     
+    // Clean up event handles
+    if (write_event_) {
+        CloseHandle(write_event_);
+        write_event_ = NULL;
+    }
+    if (read_event_) {
+        CloseHandle(read_event_);
+        read_event_ = NULL;
+    }
+    
     // 포트 등록 해제
     GlobalSerialCleanupHandler::unregisterPort(port_name_);
     std::cout << "[Arduino] Port " << port_name_ << " unregistered from cleanup handler" << std::endl;
@@ -285,22 +318,25 @@ bool SerialConnection::openPort()
     for (int attempt = 0; attempt < MAX_OPEN_ATTEMPTS; ++attempt) {
         if (attempt > 0) {
             std::cout << "[Arduino] Retry attempt " << attempt << " to open port..." << std::endl;
-            Sleep(500); // 재시도 전 대기
+            // Use event-based wait instead of Sleep
+            if (write_event_) {
+                WaitForSingleObject(write_event_, 100); // Short non-blocking wait
+            }
         }
         
-        // 첫 번째 시도: 독점 액세스 (기존 방식)
+        // Open with OVERLAPPED flag for async I/O
         serial_handle_ = CreateFileA(
             full_port.c_str(),
             GENERIC_READ | GENERIC_WRITE,
             0,                         // 독점 액세스
             NULL,
             OPEN_EXISTING,
-            FILE_ATTRIBUTE_NORMAL,
+            FILE_FLAG_OVERLAPPED,      // Enable async I/O
             NULL
         );
 
         if (serial_handle_ != INVALID_HANDLE_VALUE) {
-            std::cout << "[Arduino] Port opened successfully (exclusive access)" << std::endl;
+            std::cout << "[Arduino] Port opened successfully (async I/O enabled)" << std::endl;
             return true;
         }
         
@@ -311,19 +347,19 @@ bool SerialConnection::openPort()
             std::cout << "[Arduino] Port appears to be in use (Error " << last_error 
                       << "), trying shared access..." << std::endl;
             
-            // 공유 액세스 시도
+            // 공유 액세스 시도 with overlapped I/O
             serial_handle_ = CreateFileA(
                 full_port.c_str(),
                 GENERIC_READ | GENERIC_WRITE,
                 FILE_SHARE_READ | FILE_SHARE_WRITE,  // 공유 액세스 허용
                 NULL,
                 OPEN_EXISTING,
-                FILE_ATTRIBUTE_NORMAL,
+                FILE_FLAG_OVERLAPPED,      // Enable async I/O
                 NULL
             );
             
             if (serial_handle_ != INVALID_HANDLE_VALUE) {
-                std::cout << "[Arduino] Port opened with shared access" << std::endl;
+                std::cout << "[Arduino] Port opened with shared access (async I/O)" << std::endl;
                 return true;
             }
             
@@ -432,18 +468,13 @@ bool SerialConnection::configurePort()
 
     is_open_ = true;
     
-    // Send Arduino initialization commands (after is_open_ = true)
-    Sleep(100);  // Wait for Arduino boot
-    
-    // Direct write call (sendCommand calls write which checks is_open)
+    // Send Arduino initialization commands using async I/O
     const char* release_cmd = "r";
     const char* move_cmd = "m0,0\n";
     
-    DWORD bytes_written;
-    WriteFile(serial_handle_, release_cmd, static_cast<DWORD>(strlen(release_cmd)), &bytes_written, NULL);
-    Sleep(10);
-    WriteFile(serial_handle_, move_cmd, static_cast<DWORD>(strlen(move_cmd)), &bytes_written, NULL);
-    Sleep(10);
+    // Use async write for initialization
+    writeAsync(release_cmd, static_cast<DWORD>(strlen(release_cmd)));
+    writeAsync(move_cmd, static_cast<DWORD>(strlen(move_cmd)));
     
     return true;
 }
@@ -671,6 +702,86 @@ GlobalSerialCleanupHandler::~GlobalSerialCleanupHandler() {
             std::cout << std::endl;
         }
     }
+
+// Async I/O helper functions
+bool SerialConnection::writeAsync(const void* data, DWORD size)
+{
+    if (!is_open_ || serial_handle_ == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    
+    // Reset event
+    ResetEvent(write_overlapped_.hEvent);
+    
+    DWORD bytes_written = 0;
+    BOOL result = WriteFile(
+        serial_handle_,
+        data,
+        size,
+        &bytes_written,
+        &write_overlapped_
+    );
+    
+    if (!result) {
+        DWORD error = GetLastError();
+        if (error == ERROR_IO_PENDING) {
+            // Wait for async operation to complete
+            return waitForAsyncOperation(&write_overlapped_, 50);
+        }
+        return false;
+    }
+    
+    return true;
+}
+
+bool SerialConnection::readAsync(void* buffer, DWORD size, DWORD* bytesRead)
+{
+    if (!is_open_ || serial_handle_ == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    
+    // Reset event
+    ResetEvent(read_overlapped_.hEvent);
+    
+    BOOL result = ReadFile(
+        serial_handle_,
+        buffer,
+        size,
+        bytesRead,
+        &read_overlapped_
+    );
+    
+    if (!result) {
+        DWORD error = GetLastError();
+        if (error == ERROR_IO_PENDING) {
+            // Wait for async operation to complete
+            if (waitForAsyncOperation(&read_overlapped_, 50)) {
+                GetOverlappedResult(serial_handle_, &read_overlapped_, bytesRead, FALSE);
+                return true;
+            }
+            return false;
+        }
+        return false;
+    }
+    
+    return true;
+}
+
+bool SerialConnection::waitForAsyncOperation(OVERLAPPED* overlapped, DWORD timeout_ms)
+{
+    DWORD result = WaitForSingleObject(overlapped->hEvent, timeout_ms);
+    if (result == WAIT_OBJECT_0) {
+        DWORD bytes_transferred;
+        return GetOverlappedResult(serial_handle_, overlapped, &bytes_transferred, FALSE) != 0;
+    }
+    
+    if (result == WAIT_TIMEOUT) {
+        // Cancel pending I/O if timeout
+        CancelIo(serial_handle_);
+    }
+    
+    return false;
+}
 
 // 전역 정리 객체 (프로그램 종료 시 자동 실행)
 static GlobalSerialCleanupHandler global_serial_cleanup;
