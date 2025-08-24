@@ -202,12 +202,67 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     }
     
     // 4. Postprocessing (NMS, filtering, target selection)
-    // Note: NMS is skipped during graph capture to avoid kernel errors
-    // NMS will be executed outside the graph in the actual execution
+    // Include NMS in graph capture with dummy data
     if (m_config.enableDetection && m_d_selectedTarget && m_d_detections) {
-        // Just initialize the target buffer during graph capture
+        // Initialize buffers for graph capture
         cudaMemsetAsync(m_d_selectedTarget->get(), 0, sizeof(Target), stream);
         cudaMemsetAsync(m_d_numDetections->get(), 0, sizeof(int), stream);
+        
+        // Initialize NMS input buffers with dummy data for graph capture
+        if (m_d_decodedTargets && m_d_decodedCount) {
+            // Set a dummy count for graph capture
+            int dummyCount = 10;  // Small number for graph capture
+            cudaMemcpyAsync(m_d_decodedCount->get(), &dummyCount, sizeof(int), cudaMemcpyHostToDevice, stream);
+            
+            // Initialize decoded targets with dummy data
+            std::vector<Target> dummyTargets(10);
+            for (int i = 0; i < 10; i++) {
+                dummyTargets[i].x = 100.0f + i * 10;
+                dummyTargets[i].y = 100.0f + i * 10;
+                dummyTargets[i].width = 50.0f;
+                dummyTargets[i].height = 50.0f;
+                dummyTargets[i].confidence = 0.5f;
+                dummyTargets[i].classId = i % 3;
+            }
+            cudaMemcpyAsync(m_d_decodedTargets->get(), dummyTargets.data(), 
+                          10 * sizeof(Target), cudaMemcpyHostToDevice, stream);
+        }
+        
+        // Execute NMS with dummy data for graph capture
+        if (m_d_finalTargets && m_d_finalTargetsCount && 
+            m_d_x1 && m_d_y1 && m_d_x2 && m_d_y2 && m_d_areas && 
+            m_d_scores_nms && m_d_classIds_nms && m_d_iou_matrix && 
+            m_d_keep && m_d_indices && m_d_decodedTargets && m_d_decodedCount) {
+            
+            // Use static config values for graph capture
+            int maxDetections = 100;
+            float nmsThreshold = 0.45f;
+            int frameWidth = ctx.config.detection_resolution;
+            int frameHeight = ctx.config.detection_resolution;
+            
+            // Call NMS with dummy data
+            NMSGpu(
+                m_d_decodedTargets->get(),
+                10,  // Use fixed count for graph capture
+                m_d_finalTargets->get(),
+                m_d_finalTargetsCount->get(),
+                maxDetections,
+                nmsThreshold,
+                frameWidth,
+                frameHeight,
+                m_d_x1->get(),
+                m_d_y1->get(),
+                m_d_x2->get(),
+                m_d_y2->get(),
+                m_d_areas->get(),
+                m_d_scores_nms->get(),
+                m_d_classIds_nms->get(),
+                m_d_iou_matrix->get(),
+                m_d_keep->get(),
+                m_d_indices->get(),
+                stream
+            );
+        }
     }
     
     // 5. Tracking removed - no longer needed
