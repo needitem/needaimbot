@@ -384,8 +384,13 @@ bool UnifiedGraphPipeline::allocateBuffers() {
                 m_tripleBuffer->isReady[i] = false;
                 m_tripleBuffer->target_data_valid[i] = false;
                 m_tripleBuffer->target_count[i] = 0;
+                
+                // CRITICAL: Initialize pinned memory with zeros to prevent garbage values
+                if (m_tripleBuffer->h_target_coords_pinned[i].get()) {
+                    memset(m_tripleBuffer->h_target_coords_pinned[i].get(), 0, sizeof(Target));
+                }
             }
-            std::cout << "[UnifiedGraph] Triple buffer system initialized" << std::endl;
+            std::cout << "[UnifiedGraph] Triple buffer system initialized with cleared pinned memory" << std::endl;
         }
         
         // Allocate GPU buffers
@@ -1795,6 +1800,9 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
             // Step 4: Copy target results to host memory (async) using pinned memory
             Target* finalTarget = m_d_bestTarget->get();
             if (finalTarget && m_tripleBuffer->h_target_coords_pinned[currentIdx].get()) {
+                // CRITICAL: Clear the pinned memory before copying to prevent garbage values
+                memset(m_tripleBuffer->h_target_coords_pinned[currentIdx].get(), 0, sizeof(Target));
+                
                 // Copy best target to pinned memory
                 cudaMemcpyAsync(m_tripleBuffer->h_target_coords_pinned[currentIdx].get(), finalTarget, sizeof(Target), 
                                cudaMemcpyDeviceToHost, stream);
@@ -1819,6 +1827,10 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
                 // No target buffer available
                 m_tripleBuffer->target_data_valid[currentIdx] = false;
                 m_tripleBuffer->target_count[currentIdx] = 0;
+                // Clear pinned memory when no target
+                if (m_tripleBuffer->h_target_coords_pinned[currentIdx].get()) {
+                    memset(m_tripleBuffer->h_target_coords_pinned[currentIdx].get(), 0, sizeof(Target));
+                }
             }
         }
     }
@@ -1872,6 +1884,32 @@ void UnifiedGraphPipeline::processMouseMovementAsync() {
     }
     Target& h_target = *h_target_ptr;
     
+    // CRITICAL: Validate target data to prevent using corrupted memory
+    // Check for reasonable bounds (detection_resolution is typically 263 or similar)
+    const float maxCoord = 10000.0f;  // Reasonable upper bound for coordinates
+    const float minCoord = -1000.0f;  // Allow some negative values but not extreme
+    
+    if (h_target.x < minCoord || h_target.x > maxCoord ||
+        h_target.y < minCoord || h_target.y > maxCoord ||
+        h_target.width <= 0 || h_target.width > maxCoord ||
+        h_target.height <= 0 || h_target.height > maxCoord ||
+        h_target.confidence < 0.0f || h_target.confidence > 1.0f ||
+        h_target.classId < 0 || h_target.classId >= 100) {
+        
+        // Corrupted data detected, log and skip
+        if (h_target.x > maxCoord || h_target.y > maxCoord) {
+            std::cerr << "[MOUSE MOVEMENT] Corrupted target data detected - extreme coordinates: "
+                      << "x=" << h_target.x << ", y=" << h_target.y 
+                      << ", w=" << h_target.width << ", h=" << h_target.height
+                      << ", classId=" << h_target.classId << std::endl;
+        }
+        
+        // Clear the corrupted data and mark as invalid
+        memset(h_target_ptr, 0, sizeof(Target));
+        m_tripleBuffer->target_data_valid[prevIdx] = false;
+        return;
+    }
+    
     // Check if this is a valid target (not the invalid marker)
     if (!h_target.hasValidDetection()) {
         // No valid target was selected, skip mouse movement
@@ -1903,8 +1941,36 @@ void UnifiedGraphPipeline::processMouseMovementAsync() {
     float screenCenterX = ctx.config.detection_resolution / 2.0f;
     float screenCenterY = ctx.config.detection_resolution / 2.0f;
     
+    // Additional validation for calculated target center
+    if (targetCenterX < 0 || targetCenterX > ctx.config.detection_resolution ||
+        targetCenterY < 0 || targetCenterY > ctx.config.detection_resolution) {
+        
+        // Target center is outside expected bounds
+        std::cerr << "[MOUSE MOVEMENT] Target center out of bounds: "
+                  << "centerX=" << targetCenterX << ", centerY=" << targetCenterY
+                  << " (expected range: 0-" << ctx.config.detection_resolution << ")" << std::endl;
+        
+        // Clear and invalidate this buffer
+        memset(h_target_ptr, 0, sizeof(Target));
+        m_tripleBuffer->target_data_valid[prevIdx] = false;
+        return;
+    }
+    
     float error_x = targetCenterX - screenCenterX;
     float error_y = targetCenterY - screenCenterY;
+    
+    // Sanity check errors - they should be within detection_resolution range
+    if (abs(error_x) > ctx.config.detection_resolution || 
+        abs(error_y) > ctx.config.detection_resolution) {
+        
+        std::cerr << "[MOUSE MOVEMENT] Error values out of bounds: "
+                  << "error_x=" << error_x << ", error_y=" << error_y << std::endl;
+        
+        // Clear and invalidate
+        memset(h_target_ptr, 0, sizeof(Target));
+        m_tripleBuffer->target_data_valid[prevIdx] = false;
+        return;
+    }
     
     // Simple proportional control (P controller only)
     float kp_x = ctx.config.pd_kp_x;  // TODO: rename config variable to just kp_x
@@ -1913,6 +1979,11 @@ void UnifiedGraphPipeline::processMouseMovementAsync() {
     // Direct proportional control without deadzone
     float movement_x = error_x * kp_x;
     float movement_y = error_y * kp_y;
+    
+    // Clamp movements to reasonable values to prevent extreme jumps
+    const float MAX_MOVEMENT = 200.0f;  // Maximum pixels to move in one frame
+    movement_x = std::max(-MAX_MOVEMENT, std::min(MAX_MOVEMENT, movement_x));
+    movement_y = std::max(-MAX_MOVEMENT, std::min(MAX_MOVEMENT, movement_y));
     
     int dx = static_cast<int>(movement_x);
     int dy = static_cast<int>(movement_y);
@@ -1929,6 +2000,11 @@ void UnifiedGraphPipeline::processMouseMovementAsync() {
         std::cout << "[LARGE MOVEMENT TARGET] classId=" << h_target.classId 
                   << ", box: x=" << h_target.x << ", y=" << h_target.y 
                   << ", w=" << h_target.width << ", h=" << h_target.height << std::endl;
+        
+        // For extreme movements, skip this frame
+        if (abs(dx) > MAX_MOVEMENT || abs(dy) > MAX_MOVEMENT) {
+            std::cerr << "[MOUSE MOVEMENT] Movement clamped to max: " << MAX_MOVEMENT << std::endl;
+        }
     }
     
     // Execute mouse movement (non-blocking)

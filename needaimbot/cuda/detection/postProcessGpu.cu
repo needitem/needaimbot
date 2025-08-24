@@ -733,22 +733,44 @@ __global__ void decodeYolo10GpuKernel(
             float x2 = readOutputValue(d_raw_output, output_type, base_idx + 2); 
             float y2 = readOutputValue(d_raw_output, output_type, base_idx + 3);
 
+            // CRITICAL: Validate bbox values before processing
+            if (!isfinite(x1) || !isfinite(y1) || !isfinite(x2) || !isfinite(y2)) {
+                return;  // Skip NaN or infinity values
+            }
+            
+            // Reasonable bounds check
+            const float MAX_COORD = 10000.0f;
+            if (x1 < 0 || x1 > MAX_COORD || y1 < 0 || y1 > MAX_COORD ||
+                x2 < 0 || x2 > MAX_COORD || y2 < 0 || y2 > MAX_COORD) {
+                return;  // Skip out-of-bounds values
+            }
+
             // Convert to pixel coordinates
             int x = static_cast<int>(x1 * img_scale);
             int y = static_cast<int>(y1 * img_scale);
             int width = static_cast<int>((x2 - x1) * img_scale);
             int height = static_cast<int>((y2 - y1) * img_scale);
 
+            // Additional validation after scaling
+            const int MAX_SCALED_COORD = 10000;
+            if (x < -1000 || x > MAX_SCALED_COORD || 
+                y < -1000 || y > MAX_SCALED_COORD ||
+                width <= 0 || width > MAX_SCALED_COORD ||
+                height <= 0 || height > MAX_SCALED_COORD) {
+                return;  // Skip invalid scaled values
+            }
             
             if (width > 0 && height > 0) {
                 
-                int write_idx = ::atomicAdd(d_decoded_count, 1);
-
-                // Apply max_detections limit during decoding
-                if (write_idx >= max_detections) {
-                    ::atomicSub(d_decoded_count, 1);  // Revert count increment
+                // Check current count before incrementing
+                int current_count = *d_decoded_count;
+                if (current_count >= max_detections) {
                     return;  // Stop decoding when limit reached
                 }
+                
+                int write_idx = ::atomicAdd(d_decoded_count, 1);
+                
+                // Double-check after atomic operation (race condition protection)
                 if (write_idx < max_detections) {  // Buffer overflow protection
                     Target& det = d_decoded_detections[write_idx];
                     det.x = x;
@@ -824,6 +846,19 @@ __global__ void decodeYolo11GpuKernel(
             float oh = readOutputValue(d_raw_output, output_type, oh_idx);
 
             
+            // CRITICAL: Validate bbox values before processing
+            // Check for NaN, infinity, or unreasonable values
+            if (!isfinite(cx) || !isfinite(cy) || !isfinite(ow) || !isfinite(oh)) {
+                return;  // Skip invalid values
+            }
+            
+            // Reasonable bounds check (model output should be within input resolution)
+            const float MAX_COORD = 10000.0f;  // Very generous upper bound
+            if (cx < 0 || cx > MAX_COORD || cy < 0 || cy > MAX_COORD ||
+                ow <= 0 || ow > MAX_COORD || oh <= 0 || oh > MAX_COORD) {
+                return;  // Skip out-of-bounds values
+            }
+            
             if (ow > 0 && oh > 0) {
                 
                 const float half_ow = 0.5f * ow;
@@ -833,15 +868,24 @@ __global__ void decodeYolo11GpuKernel(
                 int width = static_cast<int>(ow * img_scale);
                 int height = static_cast<int>(oh * img_scale);
 
-
+                // Additional validation after scaling
+                const int MAX_SCALED_COORD = 10000;  // Reasonable upper bound for scaled coordinates
+                if (x < -1000 || x > MAX_SCALED_COORD || 
+                    y < -1000 || y > MAX_SCALED_COORD ||
+                    width <= 0 || width > MAX_SCALED_COORD ||
+                    height <= 0 || height > MAX_SCALED_COORD) {
+                    return;  // Skip invalid scaled values
+                }
                  
-                int write_idx = ::atomicAdd(d_decoded_count, 1);
-
-                // Apply max_detections limit during decoding
-                if (write_idx >= max_detections) {
-                    ::atomicSub(d_decoded_count, 1);  // Revert count increment
+                // Check current count before incrementing
+                int current_count = *d_decoded_count;
+                if (current_count >= max_detections) {
                     return;  // Stop decoding when limit reached
                 }
+                
+                int write_idx = ::atomicAdd(d_decoded_count, 1);
+                
+                // Double-check after atomic operation (race condition protection)
                 if (write_idx < max_detections) {  // Buffer overflow protection
                     Target& det = d_decoded_detections[write_idx];
                     det.x = x;
