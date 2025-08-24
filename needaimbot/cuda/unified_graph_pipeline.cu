@@ -573,13 +573,45 @@ void UnifiedGraphPipeline::runMainLoop() {
                 // Synchronize to ensure all GPU work is complete
                 cudaStreamSynchronize(m_primaryStream->get());
                 
-                // Clear any pending targets
+                // Only clear count values (not the entire buffers) for efficiency
+                // This prevents UI from showing garbage data while maintaining performance
+                if (m_d_finalTargetsCount) {
+                    cudaMemsetAsync(m_d_finalTargetsCount->get(), 0, sizeof(int), m_primaryStream->get());
+                }
+                if (m_d_decodedCount) {
+                    cudaMemsetAsync(m_d_decodedCount->get(), 0, sizeof(int), m_primaryStream->get());
+                }
+                if (m_d_classFilteredCount) {
+                    cudaMemsetAsync(m_d_classFilteredCount->get(), 0, sizeof(int), m_primaryStream->get());
+                }
+                
+                // Clear best target index to indicate no target selected
                 if (m_d_bestTargetIndex) {
                     cudaMemsetAsync(m_d_bestTargetIndex->get(), -1, sizeof(int), m_primaryStream->get());
                 }
-                if (m_d_bestTarget) {
-                    cudaMemsetAsync(m_d_bestTarget->get(), 0, sizeof(Target), m_primaryStream->get());
+                
+                // Invalidate triple buffer data to prevent mouse movement on old targets
+                if (m_tripleBuffer) {
+                    for (int i = 0; i < 3; i++) {
+                        m_tripleBuffer->target_data_valid[i] = false;
+                        m_tripleBuffer->target_count[i] = 0;
+                        // Clear pinned memory targets
+                        if (m_tripleBuffer->h_target_coords_pinned[i].get()) {
+                            memset(m_tripleBuffer->h_target_coords_pinned[i].get(), 0, sizeof(Target));
+                        }
+                    }
                 }
+                
+                // Clear host-side preview data
+                m_h_finalTargets.clear();
+                m_h_finalCount = 0;
+                m_copyInProgress = false;
+                
+                // Clear preview window targets
+                ctx.clearTargets();
+                
+                // Ensure all async operations complete
+                cudaStreamSynchronize(m_primaryStream->get());
                 
                 wasAiming = false;
             }
@@ -1402,8 +1434,23 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
                     if (m_copyEvent->query() == cudaSuccess) {
                         // Previous copy completed, update preview
                         if (m_h_finalCount > 0 && m_h_finalCount <= cached_max_detections) {
-                            m_h_finalTargets.resize(m_h_finalCount);
-                            ctx.updateTargets(m_h_finalTargets);
+                            // Only pass valid targets to preview, not garbage data
+                            std::vector<Target> validTargets;
+                            validTargets.reserve(m_h_finalCount);
+                            for (int i = 0; i < m_h_finalCount; i++) {
+                                // Filter out invalid targets with garbage classId
+                                if (m_h_finalTargets[i].classId >= 0 && m_h_finalTargets[i].classId < 100 &&
+                                    m_h_finalTargets[i].confidence > 0.0f && m_h_finalTargets[i].confidence <= 1.0f) {
+                                    validTargets.push_back(m_h_finalTargets[i]);
+                                }
+                            }
+                            if (!validTargets.empty()) {
+                                ctx.updateTargets(validTargets);
+                            } else {
+                                ctx.clearTargets();
+                            }
+                        } else {
+                            ctx.clearTargets();
                         }
                         m_copyInProgress = false;
                     }
