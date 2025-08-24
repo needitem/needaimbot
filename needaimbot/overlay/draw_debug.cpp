@@ -136,12 +136,8 @@ void uploadDebugFrame(const SimpleCudaMat& bgrGpu)
         return;
     }
     
-    // Ensure CUDA operations are synchronized
-    cudaError_t sync_err = cudaDeviceSynchronize();
-    if (sync_err != cudaSuccess) {
-        std::cerr << "[Debug] CUDA sync failed before conversion: " << cudaGetErrorString(sync_err) << std::endl;
-        return;
-    }
+    // Removed unnecessary synchronization for performance
+    // CUDA operations are already synchronized by stream dependencies
     
     cudaError_t err;
     
@@ -168,12 +164,8 @@ void uploadDebugFrame(const SimpleCudaMat& bgrGpu)
         return;
     }
     
-    // Sync after conversion
-    sync_err = cudaDeviceSynchronize();
-    if (sync_err != cudaSuccess) {
-        std::cerr << "[Debug] CUDA sync failed after conversion: " << cudaGetErrorString(sync_err) << std::endl;
-        return;
-    }
+    // Removed unnecessary synchronization for performance
+    // The download operation below will ensure data is ready
     
     // Download converted data from GPU with error handling
     static SimpleMat rgba;
@@ -189,12 +181,8 @@ void uploadDebugFrame(const SimpleCudaMat& bgrGpu)
         
         rgbaGpu.download(rgba.data(), rgba.step());
         
-        // Final sync to ensure download is complete
-        cudaError_t download_sync = cudaDeviceSynchronize();
-        if (download_sync != cudaSuccess) {
-            std::cerr << "[Debug] CUDA sync failed after download: " << cudaGetErrorString(download_sync) << std::endl;
-            return;
-        }
+        // Download is synchronous, no additional sync needed
+        // The download() function already waits for completion
     } catch (const std::exception& e) {
         std::cerr << "[Debug] Exception during download: " << e.what() << std::endl;
         return;

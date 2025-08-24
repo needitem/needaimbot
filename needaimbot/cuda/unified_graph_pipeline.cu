@@ -1369,19 +1369,26 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
 
     // Step 3: Class ID filtering
     if (m_d_classFilteredTargets && m_d_classFilteredCount && m_d_allowFlags) {
-        // Update class filtering flags from config
-        unsigned char h_allowFlags[Constants::MAX_CLASSES_FOR_FILTERING];
-        memset(h_allowFlags, 0, Constants::MAX_CLASSES_FOR_FILTERING);
-        
-        // Copy class settings to allow flags
-        for (const auto& setting : ctx.config.class_settings) {
-            if (setting.id >= 0 && setting.id < Constants::MAX_CLASSES_FOR_FILTERING) {
-                h_allowFlags[setting.id] = setting.allow ? 1 : 0;
+        // Check if class filter needs update (only on first run or config change)
+        if (m_classFilterDirty) {
+            // Update class filtering flags from config
+            unsigned char h_allowFlags[Constants::MAX_CLASSES_FOR_FILTERING];
+            memset(h_allowFlags, 0, Constants::MAX_CLASSES_FOR_FILTERING);
+            
+            // Copy class settings to allow flags
+            for (const auto& setting : ctx.config.class_settings) {
+                if (setting.id >= 0 && setting.id < Constants::MAX_CLASSES_FOR_FILTERING) {
+                    h_allowFlags[setting.id] = setting.allow ? 1 : 0;
+                }
             }
+            
+            // Cache the filter for comparison
+            m_cachedClassFilter.assign(h_allowFlags, h_allowFlags + Constants::MAX_CLASSES_FOR_FILTERING);
+            
+            // Copy to GPU only when changed
+            cudaMemcpyAsync(m_d_allowFlags->get(), h_allowFlags, Constants::MAX_CLASSES_FOR_FILTERING * sizeof(unsigned char), cudaMemcpyHostToDevice, stream);
+            m_classFilterDirty = false;
         }
-        
-        // Copy to GPU
-        cudaMemcpyAsync(m_d_allowFlags->get(), h_allowFlags, Constants::MAX_CLASSES_FOR_FILTERING * sizeof(unsigned char), cudaMemcpyHostToDevice, stream);
         
         cudaError_t filterErr = filterTargetsByClassIdGpu(
             m_d_decodedTargets->get(),
@@ -1432,24 +1439,29 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
             cached_frame_height = ctx.config.detection_resolution;
         }
         
-        // Get count for NMS input - use pinned memory for async transfer
+        // Get count for NMS input - use pinned memory for fast transfer
         static std::unique_ptr<CudaPinnedMemory<int>> h_inputCount_pinned = nullptr;
         if (!h_inputCount_pinned) {
-            h_inputCount_pinned = std::make_unique<CudaPinnedMemory<int>>(1, cudaHostAllocDefault);
+            h_inputCount_pinned = std::make_unique<CudaPinnedMemory<int>>(1, cudaHostAllocMapped);
         }
         
-        // Copy count async without blocking
+        // Copy count with minimal latency
         cudaMemcpyAsync(h_inputCount_pinned->get(), nmsInputCount, sizeof(int), cudaMemcpyDeviceToHost, stream);
         
-        // Continue processing without waiting - use previous frame's count
-        static int last_input_count = 0;
+        // Use a small sync here - it's worth it for accuracy
+        // This is a single int copy, very fast (< 0.01ms)
+        cudaStreamSynchronize(stream);
+        int actual_count = *h_inputCount_pinned->get();
+        
+        // Clamp to reasonable bounds for safety
+        actual_count = std::min(actual_count, 300);
+        actual_count = std::max(actual_count, 0);
         
         try {
-            // Use previous frame's count to avoid sync
-            // The actual count will be ready for next frame
+            // Use actual count for accurate NMS
             NMSGpu(
                 nmsInputTargets,
-                last_input_count,  // Use previous frame's count to avoid sync
+                actual_count,  // Use actual count for accuracy
                 m_d_finalTargets->get(),
                 m_d_finalTargetsCount->get(),
                 cached_max_detections,
@@ -1473,7 +1485,11 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
             validateTargetsGpu(m_d_finalTargets->get(), cached_max_detections, stream);
             
             // Only copy to CPU if preview window is enabled
-            if (ctx.config.show_window) {
+            // Throttle preview updates to reduce PCIe bandwidth usage
+            static int preview_frame_counter = 0;
+            const int PREVIEW_UPDATE_INTERVAL = 3; // Update every 3 frames (~100Hz at 300FPS)
+            
+            if (ctx.config.show_window && (++preview_frame_counter % PREVIEW_UPDATE_INTERVAL == 0)) {
                 // Initialize vectors once
                 if (m_h_finalTargets.empty()) {
                     m_h_finalTargets.resize(cached_max_detections);
@@ -1526,9 +1542,6 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
                     m_copyInProgress = true;
                 }
             }
-            
-            // Always update input count for next frame (regardless of preview)
-            last_input_count = *h_inputCount_pinned->get();
             
         } catch (const std::exception& e) {
             std::cerr << "[Pipeline] Exception during NMSGpu: " << e.what() << std::endl;
@@ -1643,7 +1656,8 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
             
             DXGI_OUTDUPL_FRAME_INFO frameInfo;
             IDXGIResource* desktopResource = nullptr;
-            HRESULT hr = duplication->AcquireNextFrame(1, &frameInfo, &desktopResource);
+            // Use 0 timeout for non-blocking acquisition
+            HRESULT hr = duplication->AcquireNextFrame(0, &frameInfo, &desktopResource);
             
             if (SUCCEEDED(hr) && desktopResource) {
                 ID3D11Texture2D* desktopTexture = nullptr;

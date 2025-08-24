@@ -263,6 +263,7 @@ public:
         }
     }
     
+    
     ~CudaMemory() {
         reset();
     }
