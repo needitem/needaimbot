@@ -76,5 +76,17 @@ cudaError_t findClosestTargetGpu(
     Target* d_best_target,
     cudaStream_t stream);
 
+// GPU function with head-in-body priority selection
+// Selects head if it's inside a body, otherwise closest target
+cudaError_t findBestTargetWithHeadPriorityGpu(
+    const Target* d_detections,
+    int* d_num_detections,  // Device pointer
+    float crosshairX,
+    float crosshairY,
+    int head_class_id,
+    int* d_best_index,
+    Target* d_best_target,
+    cudaStream_t stream);
+
 
 #endif 
