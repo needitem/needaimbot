@@ -370,7 +370,7 @@ bool UnifiedGraphPipeline::allocateBuffers() {
     const int width = ctx.config.detection_resolution;   // Use actual detection resolution
     const int height = ctx.config.detection_resolution;  // Square capture region
     const int yoloSize = ctx.config.onnx_input_resolution;
-    const int maxDetections = 100;
+    const int maxDetections = ctx.config.max_detections;  // Use UI configured value
     
     try {
         // Initialize Triple Buffer System for async pipeline
@@ -1296,7 +1296,8 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
     }
 
     // Step 1: Decode YOLO output based on model type
-    int maxDecodedTargets = 300;  // Reasonable buffer for detections
+    // Use the cached max_detections from UI config (same as buffer allocation)
+    int maxDecodedTargets = cached_max_detections;  // Use UI configured value
     cudaError_t decodeErr = cudaSuccess;
     
     
@@ -1397,7 +1398,7 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
             m_d_classFilteredCount->get(),
             m_d_allowFlags->get(),
             Constants::MAX_CLASSES_FOR_FILTERING,
-            300,  // max output buffer
+            cached_max_detections,  // max output buffer - use UI configured value
             stream
         );
         
@@ -1412,7 +1413,7 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
         // No class filtering - copy decoded targets directly (max buffer size)
         if (m_d_classFilteredTargets && m_d_classFilteredCount) {
             cudaMemcpyAsync(m_d_classFilteredTargets->get(), m_d_decodedTargets->get(), 
-                          300 * sizeof(Target), cudaMemcpyDeviceToDevice, stream);
+                          cached_max_detections * sizeof(Target), cudaMemcpyDeviceToDevice, stream);
             cudaMemcpyAsync(m_d_classFilteredCount->get(), m_d_decodedCount->get(), 
                           sizeof(int), cudaMemcpyDeviceToDevice, stream);
         }
@@ -1464,7 +1465,7 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
                 actual_count,  // Use actual count for accuracy
                 m_d_finalTargets->get(),
                 m_d_finalTargetsCount->get(),
-                cached_max_detections,
+                cached_max_detections,  // Use UI configured value
                 cached_nms_threshold,
                 cached_frame_width,
                 cached_frame_height,
@@ -1493,6 +1494,8 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
                 // Initialize vectors once
                 if (m_h_finalTargets.empty()) {
                     m_h_finalTargets.resize(cached_max_detections);
+                    // Initialize to zero to prevent garbage values
+                    std::fill(m_h_finalTargets.begin(), m_h_finalTargets.end(), Target());
                 }
                 
                 // Initialize event once
@@ -1792,22 +1795,30 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
             // Step 4: Copy target results to host memory (async) using pinned memory
             Target* finalTarget = m_d_bestTarget->get();
             if (finalTarget && m_tripleBuffer->h_target_coords_pinned[currentIdx].get()) {
+                // Copy best target to pinned memory
                 cudaMemcpyAsync(m_tripleBuffer->h_target_coords_pinned[currentIdx].get(), finalTarget, sizeof(Target), 
                                cudaMemcpyDeviceToHost, stream);
                 
                 // Record event when target data is ready
                 m_tripleBuffer->target_ready_events[currentIdx].record(stream);
-                m_tripleBuffer->target_data_valid[currentIdx] = true;
                 
-                // Check if we have valid targets
+                // Get the actual count of valid targets
+                int targetCount = 0;
                 if (m_d_finalTargetsCount) {
-                    int targetCount = 0;
                     cudaMemcpyAsync(&targetCount, m_d_finalTargetsCount->get(), sizeof(int), 
                                    cudaMemcpyDeviceToHost, stream);
                     m_tripleBuffer->target_count[currentIdx] = targetCount;
                 } else {
-                    m_tripleBuffer->target_count[currentIdx] = 1;
+                    m_tripleBuffer->target_count[currentIdx] = 0;
                 }
+                
+                // Only mark as valid if we actually have targets
+                // This prevents using invalid/garbage targets
+                m_tripleBuffer->target_data_valid[currentIdx] = true;
+            } else {
+                // No target buffer available
+                m_tripleBuffer->target_data_valid[currentIdx] = false;
+                m_tripleBuffer->target_count[currentIdx] = 0;
             }
         }
     }
@@ -1861,6 +1872,13 @@ void UnifiedGraphPipeline::processMouseMovementAsync() {
     }
     Target& h_target = *h_target_ptr;
     
+    // Check if this is a valid target (not the invalid marker)
+    if (!h_target.hasValidDetection()) {
+        // No valid target was selected, skip mouse movement
+        m_tripleBuffer->target_data_valid[prevIdx] = false;
+        return;
+    }
+    
     // Apply head/body offset to target center
     float targetCenterX = h_target.x + h_target.width / 2.0f;
     float targetCenterY;
@@ -1898,6 +1916,20 @@ void UnifiedGraphPipeline::processMouseMovementAsync() {
     
     int dx = static_cast<int>(movement_x);
     int dy = static_cast<int>(movement_y);
+    
+    // Log large mouse movements (potential cause of aim jumping)
+    if (abs(dx) > 100 || abs(dy) > 100) {
+        std::cout << "[LARGE MOVEMENT WARNING] dx=" << dx << ", dy=" << dy 
+                  << " (targetCenter: " << targetCenterX << "," << targetCenterY 
+                  << ", screenCenter: " << screenCenterX << "," << screenCenterY 
+                  << ", error: " << error_x << "," << error_y 
+                  << ", kp: " << kp_x << "," << kp_y << ")" << std::endl;
+                  
+        // Also log the target details
+        std::cout << "[LARGE MOVEMENT TARGET] classId=" << h_target.classId 
+                  << ", box: x=" << h_target.x << ", y=" << h_target.y 
+                  << ", w=" << h_target.width << ", h=" << h_target.height << std::endl;
+    }
     
     // Execute mouse movement (non-blocking)
     if (dx != 0 || dy != 0) {

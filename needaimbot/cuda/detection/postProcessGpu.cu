@@ -45,6 +45,14 @@ __global__ void copyBestTargetKernel(
     int best_idx = *d_best_index;
     if (best_idx >= 0 && best_idx < num_detections) {
         *d_best_target = d_detections[best_idx];
+    } else {
+        // Initialize to invalid target when no target is selected
+        d_best_target->classId = -1;
+        d_best_target->x = -1;
+        d_best_target->y = -1;
+        d_best_target->width = -1;
+        d_best_target->height = -1;
+        d_best_target->confidence = 0.0f;
     }
 }
 
@@ -128,6 +136,19 @@ __global__ void validateTargetsKernel(
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {
         Target& det = d_detections[idx];
+        
+        // Log if target is outside boundaries (before fixing)
+        if (det.x < 0 || det.y < 0 || 
+            det.x >= 640 || det.y >= 640 ||
+            (det.x + det.width) > 640 || 
+            (det.y + det.height) > 640) {
+            if (idx == 0) { // Only log from first thread to avoid spam
+                printf("[BOUNDARY WARNING] Target %d out of bounds: x=%d, y=%d, w=%d, h=%d (x+w=%d, y+h=%d)\n", 
+                       idx, det.x, det.y, det.width, det.height, 
+                       det.x + det.width, det.y + det.height);
+            }
+        }
+        
         // Ensure positive dimensions
         if (det.width <= 0) det.width = 1;
         if (det.height <= 0) det.height = 1;
@@ -287,8 +308,18 @@ __global__ void decodeAndFilterYolo10Kernel(
             int width = static_cast<int>((x2 - x1) * img_scale);
             int height = static_cast<int>((y2 - y1) * img_scale);
             
-            // Validate dimensions
-            if (width > 0 && height > 0) {
+            // Detect abnormal values (likely memory corruption or bad decoding)
+            if (width > 1000 || height > 1000 || x > 1000 || y > 1000 || 
+                x < -1000 || y < -1000) {
+                if (threadIdx.x == 0 && blockIdx.x == 0) {
+                    printf("[YOLO DECODE ERROR] Abnormal values detected: x=%d, y=%d, w=%d, h=%d (raw: x1=%.2f, y1=%.2f, x2=%.2f, y2=%.2f, conf=%.3f, cls=%d)\n",
+                           x, y, width, height, x1, y1, x2, y2, confidence, classId);
+                }
+                return; // Skip this detection
+            }
+            
+            // Validate dimensions (reasonable range: 1-640 pixels)
+            if (width > 0 && height > 0 && width <= 640 && height <= 640) {
                 int write_idx = atomicAdd(d_decoded_count, 1);
                 
                 if (write_idx < max_detections) {
@@ -713,9 +744,12 @@ __global__ void decodeYolo10GpuKernel(
                 
                 int write_idx = ::atomicAdd(d_decoded_count, 1);
 
-                // Remove max_detections check here - decode ALL valid detections
-                // Max detections will be applied AFTER NMS
-                if (write_idx < max_detections) {  // Keep buffer overflow protection
+                // Apply max_detections limit during decoding
+                if (write_idx >= max_detections) {
+                    ::atomicSub(d_decoded_count, 1);  // Revert count increment
+                    return;  // Stop decoding when limit reached
+                }
+                if (write_idx < max_detections) {  // Buffer overflow protection
                     Target& det = d_decoded_detections[write_idx];
                     det.x = x;
                     det.y = y;
@@ -803,9 +837,12 @@ __global__ void decodeYolo11GpuKernel(
                  
                 int write_idx = ::atomicAdd(d_decoded_count, 1);
 
-                // Remove max_detections check here - decode ALL valid detections
-                // Max detections will be applied AFTER NMS
-                if (write_idx < max_detections) {  // Keep buffer overflow protection
+                // Apply max_detections limit during decoding
+                if (write_idx >= max_detections) {
+                    ::atomicSub(d_decoded_count, 1);  // Revert count increment
+                    return;  // Stop decoding when limit reached
+                }
+                if (write_idx < max_detections) {  // Buffer overflow protection
                     Target& det = d_decoded_detections[write_idx];
                     det.x = x;
                     det.y = y;
@@ -1048,6 +1085,12 @@ __global__ void findBestTargetWithHeadPriority(
                 float centerX = det.x + det.width * 0.5f;
                 float centerY = det.y + det.height * 0.5f;
                 
+                // Log suspicious targets (center outside screen bounds)
+                if (centerX < 0 || centerX >= 640 || centerY < 0 || centerY >= 640) {
+                    printf("[TARGET SELECT WARNING] Target %d center out of bounds: centerX=%.1f, centerY=%.1f (box: x=%d,y=%d,w=%d,h=%d)\n",
+                           i, centerX, centerY, det.x, det.y, det.width, det.height);
+                }
+                
                 float dx = fabsf(centerX - crosshairX);
                 float dy = fabsf(centerY - crosshairY);
                 float distance = dx + dy;
@@ -1062,6 +1105,18 @@ __global__ void findBestTargetWithHeadPriority(
         if (best_idx >= 0) {
             *d_best_index = best_idx;
             *d_best_target = d_detections[best_idx];
+            
+            // Log when selecting a target with large offset
+            const Target& selected = d_detections[best_idx];
+            float selectedCenterX = selected.x + selected.width * 0.5f;
+            float selectedCenterY = selected.y + selected.height * 0.5f;
+            float offsetX = fabsf(selectedCenterX - crosshairX);
+            float offsetY = fabsf(selectedCenterY - crosshairY);
+            
+            if (offsetX > 200 || offsetY > 200) {
+                printf("[TARGET SELECT] Large offset target selected: idx=%d, centerX=%.1f, centerY=%.1f, offsetX=%.1f, offsetY=%.1f\n",
+                       best_idx, selectedCenterX, selectedCenterY, offsetX, offsetY);
+            }
         } else {
             *d_best_index = -1;
         }
