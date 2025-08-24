@@ -60,6 +60,11 @@ private:
     void closeHandle();
     void safeSerialClose();
     
+    // Async I/O functions
+    bool writeAsync(const void* data, DWORD size);
+    bool readAsync(void* buffer, DWORD size, DWORD* bytesRead);
+    bool waitForAsyncOperation(OVERLAPPED* overlapped, DWORD timeout_ms = 100);
+    
     // Helper for thread-safe operations
     template<typename Func>
     auto executeThreadSafe(Func&& func) const -> decltype(func()) {
@@ -77,6 +82,12 @@ private:
 
     std::thread listening_thread_;
     std::atomic<bool> listening_;
+    
+    // Overlapped I/O structures
+    OVERLAPPED write_overlapped_;
+    OVERLAPPED read_overlapped_;
+    HANDLE write_event_;
+    HANDLE read_event_;
 
 };
 
