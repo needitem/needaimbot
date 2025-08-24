@@ -48,6 +48,11 @@ private:
     void cleanup();
     void closeHandle();
     void safeMakcuClose();  // wjwwood/serial 방식의 안전한 종료
+    
+    // Async I/O functions
+    bool writeAsync(const void* data, DWORD size);
+    bool readAsync(void* buffer, DWORD size, DWORD* bytesRead);
+    bool waitForAsyncOperation(OVERLAPPED* overlapped, DWORD timeout_ms = 100);
 
 private:
     HANDLE serial_handle_;
@@ -58,6 +63,12 @@ private:
     std::thread       listening_thread_;
     std::mutex        write_mutex_;
     std::string       port_name_;  // 포트 이름 저장
+    
+    // Overlapped I/O structures
+    OVERLAPPED write_overlapped_;
+    OVERLAPPED read_overlapped_;
+    HANDLE write_event_;
+    HANDLE read_event_;
 };
 
 #endif // MAKCUCONNECTION_H

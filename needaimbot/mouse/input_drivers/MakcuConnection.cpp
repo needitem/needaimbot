@@ -27,18 +27,35 @@ MakcuConnection::MakcuConnection(const std::string& port, unsigned int /*baud_ra
       aiming_active(false), 
       shooting_active(false), 
       zooming_active(false),
-      port_name_(port)
+      port_name_(port),
+      write_event_(NULL),
+      read_event_(NULL)
 {
+    // Initialize overlapped structures
+    ZeroMemory(&write_overlapped_, sizeof(write_overlapped_));
+    ZeroMemory(&read_overlapped_, sizeof(read_overlapped_));
+    
+    // Create events for async operations
+    write_event_ = CreateEvent(NULL, TRUE, FALSE, NULL);
+    read_event_ = CreateEvent(NULL, TRUE, FALSE, NULL);
+    
+    if (write_event_ && read_event_) {
+        write_overlapped_.hEvent = write_event_;
+        read_overlapped_.hEvent = read_event_;
+    }
+    
     try {
         if (!initializeMakcuConnection()) {
             throw std::runtime_error("Failed to initialize Makcu connection to " + port);
         }
         
         std::cout << "[Makcu] Connected at 4Mbps! PORT: " << port 
-                  << " (Native Windows API - Ultra Low Latency)" << std::endl;
+                  << " (Native Windows API - Async I/O)" << std::endl;
                   
     } catch (const std::exception& e) {
         cleanup();
+        if (write_event_) CloseHandle(write_event_);
+        if (read_event_) CloseHandle(read_event_);
         std::cerr << "[Makcu] Initialization error: " << e.what() << std::endl;
         // 객체는 생성되지만 is_open_은 false로 유지됨
     }
@@ -70,18 +87,21 @@ bool MakcuConnection::initializeMakcuConnection() {
         return false;
     }
 
-    // 2단계: baud rate 변경 명령 전송
-    DWORD bytes_written = 0;
-    if (!WriteFile(serial_handle_, BAUD_CHANGE_CMD, sizeof(BAUD_CHANGE_CMD), &bytes_written, NULL)) {
+    // 2단계: baud rate 변경 명령 전송 (async I/O)
+    if (!writeAsync(BAUD_CHANGE_CMD, sizeof(BAUD_CHANGE_CMD))) {
         std::cerr << "[Makcu] Failed to send baud change command" << std::endl;
         closeHandle();
         return false;
     }
 
-    // 포트 닫고 MCU 리셋 대기
+    // 포트 닫고 MCU 리셋 대기 (event-based wait)
     CloseHandle(serial_handle_);
     serial_handle_ = INVALID_HANDLE_VALUE;
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    
+    // Use event-based wait instead of sleep
+    if (write_event_) {
+        WaitForSingleObject(write_event_, 100);
+    }
 
     // 3단계: 4Mbps로 재연결
     serial_handle_ = CreateFileA(
@@ -189,12 +209,20 @@ void MakcuConnection::safeMakcuClose() {
     std::cout << "[Makcu] Starting safe Makcu port closure (wjwwood/serial method)..." << std::endl;
     
     try {
-        // 1. 릴리스 명령 전송 (포트 닫기 전에)
-        sendCommand("LR\n");  // Left Release
-        sendCommand("RR\n");  // Right Release
-        Sleep(10);
-        sendCommand("M0,0\n");  // 중립 위치
-        Sleep(10);
+        // 1. 릴리스 명령 전송 (async I/O)
+        const char* left_release = "LR\n";
+        const char* right_release = "RR\n";
+        const char* neutral_pos = "M0,0\n";
+        const char* stop_cmd = "STOP\n";
+        
+        writeAsync(left_release, static_cast<DWORD>(strlen(left_release)));
+        writeAsync(right_release, static_cast<DWORD>(strlen(right_release)));
+        writeAsync(neutral_pos, static_cast<DWORD>(strlen(neutral_pos)));
+        
+        // Wait for commands to complete
+        if (write_event_) {
+            WaitForSingleObject(write_event_, 10);
+        }
         
         // 2. 출력 버퍼 플러시 (전송 완료 보장)
         if (!FlushFileBuffers(serial_handle_)) {
@@ -211,12 +239,13 @@ void MakcuConnection::safeMakcuClose() {
             std::cerr << "[Makcu] Warning: PURGE_TXCLEAR failed" << std::endl;
         }
         
-        // 5. Makcu 정지 명령
-        sendCommand("STOP\n");
-        Sleep(20);
+        // 5. Makcu 정지 명령 (async)
+        writeAsync(stop_cmd, static_cast<DWORD>(strlen(stop_cmd)));
         
-        // 6. 하드웨어 안정화 대기 (4Mbps 고려)
-        Sleep(100);
+        // 6. 하드웨어 안정화 대기 (event-based)
+        if (write_event_) {
+            WaitForSingleObject(write_event_, 50);
+        }
         
         // 7. 포트 안전하게 닫기 (wjwwood/serial 방식)
         if (serial_handle_ != INVALID_HANDLE_VALUE) {
@@ -265,6 +294,16 @@ void MakcuConnection::closeHandle() {
 MakcuConnection::~MakcuConnection()
 {
     cleanup();
+    
+    // Clean up event handles
+    if (write_event_) {
+        CloseHandle(write_event_);
+        write_event_ = NULL;
+    }
+    if (read_event_) {
+        CloseHandle(read_event_);
+        read_event_ = NULL;
+    }
 }
 
 bool MakcuConnection::isOpen() const
@@ -478,4 +517,84 @@ void MakcuConnection::processIncomingLine(const std::string& line)
             zooming_active = false;
         }
     }
+}
+
+// Async I/O helper functions
+bool MakcuConnection::writeAsync(const void* data, DWORD size)
+{
+    if (!is_open_ || serial_handle_ == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    
+    // Reset event
+    ResetEvent(write_overlapped_.hEvent);
+    
+    DWORD bytes_written = 0;
+    BOOL result = WriteFile(
+        serial_handle_,
+        data,
+        size,
+        &bytes_written,
+        &write_overlapped_
+    );
+    
+    if (!result) {
+        DWORD error = GetLastError();
+        if (error == ERROR_IO_PENDING) {
+            // Wait for async operation to complete
+            return waitForAsyncOperation(&write_overlapped_, 50);
+        }
+        return false;
+    }
+    
+    return true;
+}
+
+bool MakcuConnection::readAsync(void* buffer, DWORD size, DWORD* bytesRead)
+{
+    if (!is_open_ || serial_handle_ == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    
+    // Reset event
+    ResetEvent(read_overlapped_.hEvent);
+    
+    BOOL result = ReadFile(
+        serial_handle_,
+        buffer,
+        size,
+        bytesRead,
+        &read_overlapped_
+    );
+    
+    if (!result) {
+        DWORD error = GetLastError();
+        if (error == ERROR_IO_PENDING) {
+            // Wait for async operation to complete
+            if (waitForAsyncOperation(&read_overlapped_, 50)) {
+                GetOverlappedResult(serial_handle_, &read_overlapped_, bytesRead, FALSE);
+                return true;
+            }
+            return false;
+        }
+        return false;
+    }
+    
+    return true;
+}
+
+bool MakcuConnection::waitForAsyncOperation(OVERLAPPED* overlapped, DWORD timeout_ms)
+{
+    DWORD result = WaitForSingleObject(overlapped->hEvent, timeout_ms);
+    if (result == WAIT_OBJECT_0) {
+        DWORD bytes_transferred;
+        return GetOverlappedResult(serial_handle_, overlapped, &bytes_transferred, FALSE) != 0;
+    }
+    
+    if (result == WAIT_TIMEOUT) {
+        // Cancel pending I/O if timeout
+        CancelIo(serial_handle_);
+    }
+    
+    return false;
 }
