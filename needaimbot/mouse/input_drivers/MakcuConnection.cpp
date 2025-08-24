@@ -317,33 +317,11 @@ void MakcuConnection::write(const std::string& data)
         return;
 
     std::lock_guard<std::mutex> lock(write_mutex_);
-
-    DWORD bytes_written = 0;
-    OVERLAPPED overlapped = {0};
-    overlapped.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
     
-    if (overlapped.hEvent == NULL) return;
-
-    BOOL result = WriteFile(
-        serial_handle_,
-        data.c_str(),
-        static_cast<DWORD>(data.length()),
-        &bytes_written,
-        &overlapped
-    );
-
-    if (!result && GetLastError() == ERROR_IO_PENDING) {
-        // Wait with proper timeout for high-speed communication
-        DWORD waitResult = WaitForSingleObject(overlapped.hEvent, 10);  // 10ms timeout
-        if (waitResult == WAIT_OBJECT_0) {
-            GetOverlappedResult(serial_handle_, &overlapped, &bytes_written, FALSE);
-        } else {
-            std::cerr << "[Makcu] Write operation timeout" << std::endl;
-        }
+    // Use the async write helper function
+    if (!writeAsync(data.c_str(), static_cast<DWORD>(data.length()))) {
+        std::cerr << "[Makcu] Write operation failed" << std::endl;
     }
-
-    CloseHandle(overlapped.hEvent);
-    FlushFileBuffers(serial_handle_);
 }
 
 std::string MakcuConnection::read()
@@ -353,27 +331,9 @@ std::string MakcuConnection::read()
 
     char buffer[256];
     DWORD bytes_read = 0;
-    OVERLAPPED overlapped = {0};
-    overlapped.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
     
-    if (overlapped.hEvent == NULL) return "";
-
-    BOOL result = ReadFile(
-        serial_handle_,
-        buffer,
-        sizeof(buffer) - 1,
-        &bytes_read,
-        &overlapped
-    );
-
-    if (!result && GetLastError() == ERROR_IO_PENDING) {
-        WaitForSingleObject(overlapped.hEvent, 1);
-        GetOverlappedResult(serial_handle_, &overlapped, &bytes_read, FALSE);
-    }
-
-    CloseHandle(overlapped.hEvent);
-
-    if (bytes_read > 0) {
+    // Use async read helper function
+    if (readAsync(buffer, sizeof(buffer) - 1, &bytes_read) && bytes_read > 0) {
         buffer[bytes_read] = '\0';
         return std::string(buffer);
     }

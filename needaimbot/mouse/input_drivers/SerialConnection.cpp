@@ -496,19 +496,8 @@ void SerialConnection::write(const std::string& data)
         }
     }
 
-    // 동기 방식으로 단순화 - 즉시 전송
-    DWORD bytes_written = 0;
-    BOOL result = WriteFile(
-        serial_handle_,
-        data.c_str(),
-        static_cast<DWORD>(data.length()),
-        &bytes_written,
-        NULL  // 동기 I/O
-    );
-
-    if (result && bytes_written == data.length()) {
-        // 즉시 플러시하여 확실한 전송
-        FlushFileBuffers(serial_handle_);
+    // Use the async write helper function
+    if (writeAsync(data.c_str(), static_cast<DWORD>(data.length()))) {
         return; // 성공
     }
 
@@ -517,18 +506,8 @@ void SerialConnection::write(const std::string& data)
     for (int retry = 0; retry < MAX_RETRIES; ++retry) {
         Sleep(5); // 짧은 대기
         
-        bytes_written = 0;
-        result = WriteFile(
-            serial_handle_,
-            data.c_str(),
-            static_cast<DWORD>(data.length()),
-            &bytes_written,
-            NULL
-        );
-
-        if (result && bytes_written == data.length()) {
-            FlushFileBuffers(serial_handle_);
-            return; // 성공
+        if (writeAsync(data.c_str(), static_cast<DWORD>(data.length()))) {
+            return; // 재시도 성공
         }
 
     }
