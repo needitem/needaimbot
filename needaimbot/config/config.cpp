@@ -447,7 +447,7 @@ bool Config::loadConfig(const std::string& filename)
             
             // Actually load the profile if it's not Default
             if (active_profile_name != "Default" && active_profile_name != "") {
-                std::string profileFile = active_profile_name + ".ini";
+                std::string profileFile = getConfigPath(active_profile_name + ".ini");
                 if (std::filesystem::exists(profileFile)) {
                     std::cout << "[Config] Loading profile: " << profileFile << std::endl;
                     // Load profile on top of default config
@@ -706,10 +706,10 @@ bool Config::saveConfig(const std::string& filename)
 
 std::vector<std::string> Config::listProfiles() {
     std::vector<std::string> profiles;
-    std::string current_path_str = "."; 
+    std::string config_dir = getExecutableDir(); 
     
     try {
-        for (const auto& entry : std::filesystem::directory_iterator(current_path_str)) {
+        for (const auto& entry : std::filesystem::directory_iterator(config_dir)) {
             if (entry.is_regular_file()) {
                 std::string filename = entry.path().filename().string();
                 std::string extension = entry.path().extension().string();
@@ -732,7 +732,7 @@ bool Config::saveProfile(const std::string& profileName) {
     if (profileName.empty() || profileName == "config") {
         return false;
     }
-    std::string filename = profileName + ".ini";
+    std::string filename = getConfigPath(profileName + ".ini");
     return saveConfig(filename); 
 }
 
@@ -740,7 +740,7 @@ bool Config::loadProfile(const std::string& profileName) {
      if (profileName.empty()) {
         return false;
     }
-    std::string filename = profileName + ".ini";
+    std::string filename = getConfigPath(profileName + ".ini");
 
     if (!std::filesystem::exists(filename)) {
          return false; 
@@ -752,7 +752,7 @@ bool Config::deleteProfile(const std::string& profileName) {
     if (profileName.empty() || profileName == "config") {
         return false;
     }
-    std::string filename = profileName + ".ini";
+    std::string filename = getConfigPath(profileName + ".ini");
 
     try {
         if (std::filesystem::exists(filename)) {
