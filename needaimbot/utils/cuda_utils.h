@@ -252,11 +252,15 @@ class CudaMemory {
 public:
     CudaMemory() = default;
     
-    explicit CudaMemory(size_t count) : count_(count) {
+    explicit CudaMemory(size_t count, bool zero_initialize = false) : count_(count) {
         if (count > 0) {
             cudaError_t err = cudaMalloc(&ptr_, count * sizeof(T));
             if (err == cudaSuccess && ptr_) {
                 CudaResourceManager::GetInstance().RegisterMemory(ptr_);
+                // Initialize memory to zero if requested (important for preventing garbage values)
+                if (zero_initialize) {
+                    cudaMemset(ptr_, 0, count * sizeof(T));
+                }
             } else if (err != cudaSuccess) {
                 throw std::runtime_error("cudaMalloc failed");
             }
@@ -288,7 +292,7 @@ public:
         return *this;
     }
     
-    void reset(size_t new_count = 0) {
+    void reset(size_t new_count = 0, bool zero_initialize = false) {
         if (ptr_) {
             // Check if resource manager is shutting down
             if (!CudaResourceManager::GetInstance().IsShuttingDown()) {
@@ -302,6 +306,10 @@ public:
             cudaError_t err = cudaMalloc(&ptr_, new_count * sizeof(T));
             if (err == cudaSuccess && ptr_) {
                 CudaResourceManager::GetInstance().RegisterMemory(ptr_);
+                // Initialize memory to zero if requested
+                if (zero_initialize) {
+                    cudaMemset(ptr_, 0, new_count * sizeof(T));
+                }
             } else if (err != cudaSuccess) {
                 throw std::runtime_error("cudaMalloc failed");
             }

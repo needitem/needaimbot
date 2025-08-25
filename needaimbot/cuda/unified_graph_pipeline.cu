@@ -439,24 +439,25 @@ bool UnifiedGraphPipeline::allocateBuffers() {
         m_d_outputCount = std::make_unique<CudaMemory<int>>(1);
         
         // Allocate post-processing buffers (Phase 3 integration) - Using RAII
-        m_d_decodedTargets = std::make_unique<CudaMemory<Target>>(maxDetections);
+        // IMPORTANT: Initialize Target buffers to zero to prevent garbage values in center coordinates
+        m_d_decodedTargets = std::make_unique<CudaMemory<Target>>(maxDetections, true);  // zero_initialize = true
         
-        m_d_decodedCount = std::make_unique<CudaMemory<int>>(1);
+        m_d_decodedCount = std::make_unique<CudaMemory<int>>(1, true);  // zero_initialize = true
         
-        m_d_finalTargets = std::make_unique<CudaMemory<Target>>(maxDetections);
+        m_d_finalTargets = std::make_unique<CudaMemory<Target>>(maxDetections, true);  // zero_initialize = true
         
-        m_d_finalTargetsCount = std::make_unique<CudaMemory<int>>(1);
+        m_d_finalTargetsCount = std::make_unique<CudaMemory<int>>(1, true);  // zero_initialize = true
         
-        m_d_classFilteredTargets = std::make_unique<CudaMemory<Target>>(maxDetections);
+        m_d_classFilteredTargets = std::make_unique<CudaMemory<Target>>(maxDetections, true);  // zero_initialize = true
         
-        m_d_classFilteredCount = std::make_unique<CudaMemory<int>>(1);
+        m_d_classFilteredCount = std::make_unique<CudaMemory<int>>(1, true);  // zero_initialize = true
         
-        m_d_colorFilteredTargets = std::make_unique<CudaMemory<Target>>(maxDetections);
-        m_d_colorFilteredCount = std::make_unique<CudaMemory<int>>(1);
+        m_d_colorFilteredTargets = std::make_unique<CudaMemory<Target>>(maxDetections, true);  // zero_initialize = true
+        m_d_colorFilteredCount = std::make_unique<CudaMemory<int>>(1, true);  // zero_initialize = true
         
         // Target selection buffers
-        m_d_bestTargetIndex = std::make_unique<CudaMemory<int>>(1);
-        m_d_bestTarget = std::make_unique<CudaMemory<Target>>(1);
+        m_d_bestTargetIndex = std::make_unique<CudaMemory<int>>(1, true);  // zero_initialize = true
+        m_d_bestTarget = std::make_unique<CudaMemory<Target>>(1, true);  // zero_initialize = true
         
         // Class filtering control buffer (64 classes max) - Using RAII
         m_d_allowFlags = std::make_unique<CudaMemory<unsigned char>>(Constants::MAX_CLASSES_FOR_FILTERING);
@@ -1275,6 +1276,12 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
     }
 
     // Clear all detection buffers at the start of processing
+    // IMPORTANT: Clear decoded targets buffer to prevent garbage values from appearing
+    if (m_d_decodedTargets && cached_max_detections > 0) {
+        // Clear only the first few entries for performance (most frames have <10 detections)
+        int clear_count = min(10, cached_max_detections);
+        cudaMemsetAsync(m_d_decodedTargets->get(), 0, clear_count * sizeof(Target), stream);
+    }
     if (m_d_decodedCount) {
         cudaMemsetAsync(m_d_decodedCount->get(), 0, sizeof(int), stream);
     }
