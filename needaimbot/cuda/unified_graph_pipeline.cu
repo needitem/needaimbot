@@ -1275,6 +1275,9 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
         return;
     }
 
+    // Use cached config values for CUDA Graph compatibility
+    static int cached_max_detections = Constants::MAX_DETECTIONS;
+    
     // Clear all detection buffers at the start of processing
     // IMPORTANT: Clear decoded targets buffer to prevent garbage values from appearing
     if (m_d_decodedTargets && cached_max_detections > 0) {
@@ -1291,9 +1294,6 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
     if (m_d_finalTargetsCount) {
         cudaMemsetAsync(m_d_finalTargetsCount->get(), 0, sizeof(int), stream);
     }
-
-    // Use cached config values for CUDA Graph compatibility
-    static int cached_max_detections = Constants::MAX_DETECTIONS;
     static float cached_nms_threshold = 0.45f;
     static float cached_confidence_threshold = 0.001f;
     static std::string cached_postprocess = "yolo12";
