@@ -894,6 +894,14 @@ __global__ void decodeYolo11GpuKernel(
                     det.height = height;
                     det.confidence = max_score;
                     det.classId = max_class_id;
+                    
+                    // Debug assertion to catch any remaining issues
+                    #ifdef DEBUG
+                    if (abs(x + width/2) > 1000000 || abs(y + height/2) > 1000000) {
+                        printf("[DEBUG] Warning: Large center coordinates detected - x:%d y:%d w:%d h:%d\n", 
+                               x, y, width, height);
+                    }
+                    #endif
                 }
             }
         }
