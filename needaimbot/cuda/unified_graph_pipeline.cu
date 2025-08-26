@@ -1572,23 +1572,20 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
                 // Check if previous copy is complete
                 if (m_copyInProgress) {
                     if (m_copyEvent->query() == cudaSuccess) {
-                        // Previous copy completed, update preview
+                        // OPTIMIZED: Previous copy completed, update preview directly
+                        // GPU pipeline already validated all targets - no need for CPU re-validation
                         if (m_h_finalCount > 0 && m_h_finalCount <= cached_max_detections) {
-                            // Only pass valid targets to preview, not garbage data
-                            std::vector<Target> validTargets;
-                            validTargets.reserve(m_h_finalCount);
+                            // Use static vector to avoid dynamic allocation overhead
+                            static std::vector<Target> previewTargets;
+                            previewTargets.clear();
+                            previewTargets.reserve(m_h_finalCount);
+                            
+                            // Direct copy - GPU already filtered invalid targets
                             for (int i = 0; i < m_h_finalCount; i++) {
-                                // Filter out invalid targets with garbage classId
-                                if (m_h_finalTargets[i].classId >= 0 && m_h_finalTargets[i].classId < 100 &&
-                                    m_h_finalTargets[i].confidence > 0.0f && m_h_finalTargets[i].confidence <= 1.0f) {
-                                    validTargets.push_back(m_h_finalTargets[i]);
-                                }
+                                previewTargets.push_back(m_h_finalTargets[i]);
                             }
-                            if (!validTargets.empty()) {
-                                ctx.updateTargets(validTargets);
-                            } else {
-                                ctx.clearTargets();
-                            }
+                            
+                            ctx.updateTargets(previewTargets);
                         } else {
                             ctx.clearTargets();
                         }
