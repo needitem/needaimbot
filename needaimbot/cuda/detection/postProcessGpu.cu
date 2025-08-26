@@ -308,11 +308,14 @@ __global__ void decodeAndFilterYolo10Kernel(
             int width = static_cast<int>((x2 - x1) * img_scale);
             int height = static_cast<int>((y2 - y1) * img_scale);
             
-            // Detect abnormal values (likely memory corruption or bad decoding)
+            // Enhanced abnormal value detection (catch 5억 같은 극단값)
             if (width > 1000 || height > 1000 || x > 1000 || y > 1000 || 
-                x < -1000 || y < -1000) {
+                x < -1000 || y < -1000 ||
+                abs(x) > 100000000 || abs(y) > 100000000 ||  // 5억 같은 극단값
+                abs(width) > 100000000 || abs(height) > 100000000 ||
+                !isfinite(x1) || !isfinite(y1) || !isfinite(x2) || !isfinite(y2)) {  // NaN/Inf 체크
                 if (threadIdx.x == 0 && blockIdx.x == 0) {
-                    printf("[YOLO DECODE ERROR] Abnormal values detected: x=%d, y=%d, w=%d, h=%d (raw: x1=%.2f, y1=%.2f, x2=%.2f, y2=%.2f, conf=%.3f, cls=%d)\n",
+                    printf("[YOLO DECODE ERROR] Extreme/invalid values detected: x=%d, y=%d, w=%d, h=%d (raw: x1=%.6f, y1=%.6f, x2=%.6f, y2=%.6f, conf=%.3f, cls=%d)\n",
                            x, y, width, height, x1, y1, x2, y2, confidence, classId);
                 }
                 return; // Skip this detection
@@ -390,6 +393,19 @@ __global__ void decodeAndFilterYolo11Kernel(
                 int y = static_cast<int>((cy - half_oh) * img_scale);
                 int width = static_cast<int>(ow * img_scale);
                 int height = static_cast<int>(oh * img_scale);
+                
+                // Enhanced abnormal value detection for YOLO11 (catch 5억 같은 극단값)
+                if (width > 1000 || height > 1000 || x > 1000 || y > 1000 || 
+                    x < -1000 || y < -1000 ||
+                    abs(x) > 100000000 || abs(y) > 100000000 ||  // 5억 같은 극단값
+                    abs(width) > 100000000 || abs(height) > 100000000 ||
+                    !isfinite(cx) || !isfinite(cy) || !isfinite(ow) || !isfinite(oh)) {  // NaN/Inf 체크
+                    if (threadIdx.x == 0 && blockIdx.x == 0) {
+                        printf("[YOLO11 DECODE ERROR] Extreme/invalid values detected: x=%d, y=%d, w=%d, h=%d (raw: cx=%.6f, cy=%.6f, ow=%.6f, oh=%.6f, score=%.3f, cls=%d)\n",
+                               x, y, width, height, cx, cy, ow, oh, max_score, max_class_id);
+                    }
+                    return; // Skip this detection
+                }
                 
                 int write_idx = atomicAdd(d_decoded_count, 1);
                 
@@ -762,16 +778,11 @@ __global__ void decodeYolo10GpuKernel(
             
             if (width > 0 && height > 0) {
                 
-                // Check current count before incrementing
-                int current_count = *d_decoded_count;
-                if (current_count >= max_detections) {
-                    return;  // Stop decoding when limit reached
-                }
-                
+                // Atomic increment first, then check (thread-safe)
                 int write_idx = ::atomicAdd(d_decoded_count, 1);
                 
-                // Double-check after atomic operation (race condition protection)
-                if (write_idx < max_detections) {  // Buffer overflow protection
+                // Only proceed if we got a valid index
+                if (write_idx < max_detections) {
                     Target& det = d_decoded_detections[write_idx];
                     det.x = x;
                     det.y = y;
@@ -877,16 +888,11 @@ __global__ void decodeYolo11GpuKernel(
                     return;  // Skip invalid scaled values
                 }
                  
-                // Check current count before incrementing
-                int current_count = *d_decoded_count;
-                if (current_count >= max_detections) {
-                    return;  // Stop decoding when limit reached
-                }
-                
+                // Atomic increment first, then check (thread-safe)
                 int write_idx = ::atomicAdd(d_decoded_count, 1);
                 
-                // Double-check after atomic operation (race condition protection)
-                if (write_idx < max_detections) {  // Buffer overflow protection
+                // Only proceed if we got a valid index
+                if (write_idx < max_detections) {
                     Target& det = d_decoded_detections[write_idx];
                     det.x = x;
                     det.y = y;

@@ -1891,40 +1891,15 @@ void UnifiedGraphPipeline::processMouseMovementAsync() {
     }
     Target& h_target = *h_target_ptr;
     
-    // CRITICAL: Validate target data to prevent using corrupted memory
-    // Check for reasonable bounds (detection_resolution is typically 263 or similar)
-    const float maxCoord = 10000.0f;  // Reasonable upper bound for coordinates
-    const float minCoord = -1000.0f;  // Allow some negative values but not extreme
-    
-    if (h_target.x < minCoord || h_target.x > maxCoord ||
-        h_target.y < minCoord || h_target.y > maxCoord ||
-        h_target.width <= 0 || h_target.width > maxCoord ||
-        h_target.height <= 0 || h_target.height > maxCoord ||
-        h_target.confidence < 0.0f || h_target.confidence > 1.0f ||
-        h_target.classId < 0 || h_target.classId >= 100) {
-        
-        // Corrupted data detected, log and skip
-        if (h_target.x > maxCoord || h_target.y > maxCoord) {
-            std::cerr << "[MOUSE MOVEMENT] Corrupted target data detected - extreme coordinates: "
-                      << "x=" << h_target.x << ", y=" << h_target.y 
-                      << ", w=" << h_target.width << ", h=" << h_target.height
-                      << ", classId=" << h_target.classId << std::endl;
-        }
-        
-        // Clear the corrupted data and mark as invalid
-        memset(h_target_ptr, 0, sizeof(Target));
+    // Simplified corruption check - only check for extreme values that would cause immediate problems
+    if (h_target.width <= 0 || h_target.height <= 0 || 
+        h_target.x < -1000.0f || h_target.x > 10000.0f ||
+        h_target.y < -1000.0f || h_target.y > 10000.0f) {
         m_tripleBuffer->target_data_valid[prevIdx] = false;
         return;
     }
     
-    // Check if this is a valid target (not the invalid marker)
-    if (!h_target.hasValidDetection()) {
-        // No valid target was selected, skip mouse movement
-        m_tripleBuffer->target_data_valid[prevIdx] = false;
-        return;
-    }
-    
-    // Apply head/body offset to target center
+    // Calculate center coordinates (back to original method)
     float targetCenterX = h_target.x + h_target.width / 2.0f;
     float targetCenterY;
     
@@ -1944,40 +1919,19 @@ void UnifiedGraphPipeline::processMouseMovementAsync() {
         targetCenterY = h_target.y + h_target.height * ctx.config.body_y_offset;
     }
     
-    // Calculate mouse movement
+    // Single validation for calculated target center - if this passes, proceed with mouse movement
+    if (targetCenterX < 0 || targetCenterX > ctx.config.detection_resolution ||
+        targetCenterY < 0 || targetCenterY > ctx.config.detection_resolution) {
+        m_tripleBuffer->target_data_valid[prevIdx] = false;
+        return;
+    }
+    
+    // Calculate mouse movement (no additional validations needed)
     float screenCenterX = ctx.config.detection_resolution / 2.0f;
     float screenCenterY = ctx.config.detection_resolution / 2.0f;
     
-    // Additional validation for calculated target center
-    if (targetCenterX < 0 || targetCenterX > ctx.config.detection_resolution ||
-        targetCenterY < 0 || targetCenterY > ctx.config.detection_resolution) {
-        
-        // Target center is outside expected bounds
-        std::cerr << "[MOUSE MOVEMENT] Target center out of bounds: "
-                  << "centerX=" << targetCenterX << ", centerY=" << targetCenterY
-                  << " (expected range: 0-" << ctx.config.detection_resolution << ")" << std::endl;
-        
-        // Clear and invalidate this buffer
-        memset(h_target_ptr, 0, sizeof(Target));
-        m_tripleBuffer->target_data_valid[prevIdx] = false;
-        return;
-    }
-    
     float error_x = targetCenterX - screenCenterX;
     float error_y = targetCenterY - screenCenterY;
-    
-    // Sanity check errors - they should be within detection_resolution range
-    if (abs(error_x) > ctx.config.detection_resolution || 
-        abs(error_y) > ctx.config.detection_resolution) {
-        
-        std::cerr << "[MOUSE MOVEMENT] Error values out of bounds: "
-                  << "error_x=" << error_x << ", error_y=" << error_y << std::endl;
-        
-        // Clear and invalidate
-        memset(h_target_ptr, 0, sizeof(Target));
-        m_tripleBuffer->target_data_valid[prevIdx] = false;
-        return;
-    }
     
     // Simple proportional control (P controller only)
     float kp_x = ctx.config.pd_kp_x;  // TODO: rename config variable to just kp_x
@@ -1995,29 +1949,10 @@ void UnifiedGraphPipeline::processMouseMovementAsync() {
     int dx = static_cast<int>(movement_x);
     int dy = static_cast<int>(movement_y);
     
-    // Log large mouse movements (potential cause of aim jumping)
-    if (abs(dx) > 100 || abs(dy) > 100) {
-        std::cout << "[LARGE MOVEMENT WARNING] dx=" << dx << ", dy=" << dy 
-                  << " (targetCenter: " << targetCenterX << "," << targetCenterY 
-                  << ", screenCenter: " << screenCenterX << "," << screenCenterY 
-                  << ", error: " << error_x << "," << error_y 
-                  << ", kp: " << kp_x << "," << kp_y << ")" << std::endl;
-                  
-        // Also log the target details
-        std::cout << "[LARGE MOVEMENT TARGET] classId=" << h_target.classId 
-                  << ", box: x=" << h_target.x << ", y=" << h_target.y 
-                  << ", w=" << h_target.width << ", h=" << h_target.height << std::endl;
-        
-        // For extreme movements, skip this frame
-        if (abs(dx) > MAX_MOVEMENT || abs(dy) > MAX_MOVEMENT) {
-            std::cerr << "[MOUSE MOVEMENT] Movement clamped to max: " << MAX_MOVEMENT << std::endl;
-        }
-    }
+    // No clamping - allow full movement range for maximum precision
     
-    // Execute mouse movement (non-blocking)
-    if (dx != 0 || dy != 0) {
-        cuda::executeMouseMovementFromGPU(dx, dy);
-    }
+    // Execute mouse movement (non-blocking) - no need to check for zero movement
+    cuda::executeMouseMovementFromGPU(dx, dy);
     
     // Mark this buffer's data as processed
     m_tripleBuffer->target_data_valid[prevIdx] = false;
