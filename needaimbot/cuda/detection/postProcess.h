@@ -14,6 +14,18 @@ void validateTargetsGpu(
     int n,
     cudaStream_t stream = 0);
 
+// Final validation to remove extreme values
+void finalValidateTargetsGpu(
+    Target* d_targets,
+    int* d_count,
+    int max_targets,
+    cudaStream_t stream = 0);
+
+// Validate single best target before host copy
+void validateBestTargetGpu(
+    Target* d_best_target,
+    cudaStream_t stream = 0);
+
 void NMSGpu(
     const Target* d_input_detections, 
     int input_num_detections,          
@@ -63,7 +75,9 @@ cudaError_t decodeYolo11Gpu(
     int* d_decoded_count,
     int max_detections,
     int max_candidates,
-    cudaStream_t stream);
+    const unsigned char* d_class_filter = nullptr,
+    int max_class_filter_size = 0,
+    cudaStream_t stream = 0);
 
 // GPU function to find closest target to crosshair
 // Accepts d_num_detections as device pointer to avoid CPU-GPU sync
