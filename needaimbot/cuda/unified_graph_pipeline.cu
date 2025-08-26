@@ -1790,6 +1790,22 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
         // This eliminates 0.03ms of unnecessary memory copy per frame
         SimpleCudaMat& currentBuffer = m_tripleBuffer->buffers[currentIdx];
         
+        // Update preview buffer for debug window (only when preview is enabled)
+        if (ctx.preview_enabled && !currentBuffer.empty()) {
+            // Ensure preview buffer is the right size
+            if (m_captureBuffer.empty() || 
+                m_captureBuffer.rows() != currentBuffer.rows() || 
+                m_captureBuffer.cols() != currentBuffer.cols() || 
+                m_captureBuffer.channels() != currentBuffer.channels()) {
+                m_captureBuffer.create(currentBuffer.rows(), currentBuffer.cols(), currentBuffer.channels());
+            }
+            
+            // Copy current frame to preview buffer
+            size_t dataSize = currentBuffer.rows() * currentBuffer.cols() * currentBuffer.channels() * sizeof(unsigned char);
+            cudaMemcpyAsync(m_captureBuffer.data(), currentBuffer.data(), dataSize, 
+                          cudaMemcpyDeviceToDevice, stream);
+        }
+        
         // Unified Preprocessing: BGRA → RGB + Resize + Normalize + HWC→CHW
         // Process directly from triple buffer for maximum efficiency
         if (m_d_yoloInput && !currentBuffer.empty()) {
