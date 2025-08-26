@@ -270,8 +270,8 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
             m_d_scores_nms && m_d_classIds_nms && m_d_iou_matrix && 
             m_d_keep && m_d_indices && m_d_decodedTargets && m_d_decodedCount) {
             
-            // Use static config values for graph capture
-            int maxDetections = 100;
+            // Use config max detections for graph capture
+            int maxDetections = ctx.config.max_detections;
             float nmsThreshold = 0.45f;
             int frameWidth = ctx.config.detection_resolution;
             int frameHeight = ctx.config.detection_resolution;
@@ -279,7 +279,7 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
             // Call NMS with dummy data
             NMSGpu(
                 m_d_decodedTargets->get(),
-                10,  // Use fixed count for graph capture
+                maxDetections,  // Use max detections for stable graph capture
                 m_d_finalTargets->get(),
                 m_d_finalTargetsCount->get(),
                 maxDetections,
@@ -1316,12 +1316,12 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
     if (m_d_decodedTargets && m_d_decodedCount && m_d_classFilteredCount && 
         m_d_finalTargetsCount && cached_max_detections > 0) {
         
-        // Clear only first 10 targets for performance (most frames have <10 detections)
-        int clear_count = min(10, cached_max_detections);
+        // Clear all max_detections targets to prevent garbage values
+        int clear_count = cached_max_detections;
         
         // Launch unified clearing kernel (much faster than 4 separate calls)
         int blockSize = 256;
-        int gridSize = min((clear_count + blockSize - 1) / blockSize, 16);
+        int gridSize = (clear_count + blockSize - 1) / blockSize;
         
         clearAllDetectionBuffersKernel<<<gridSize, blockSize, 0, stream>>>(
             m_d_decodedTargets->get(),
@@ -1401,6 +1401,27 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
             return;
         }
         
+        // Update class filter flags if needed
+        if (m_classFilterDirty && m_d_allowFlags) {
+            unsigned char h_allowFlags[Constants::MAX_CLASSES_FOR_FILTERING];
+            memset(h_allowFlags, 0, Constants::MAX_CLASSES_FOR_FILTERING);
+            
+            // Copy class settings to allow flags
+            for (const auto& setting : ctx.config.class_settings) {
+                if (setting.id >= 0 && setting.id < Constants::MAX_CLASSES_FOR_FILTERING) {
+                    h_allowFlags[setting.id] = setting.allow ? 1 : 0;
+                }
+            }
+            
+            // Update cached filter
+            m_cachedClassFilter.assign(h_allowFlags, h_allowFlags + Constants::MAX_CLASSES_FOR_FILTERING);
+            
+            // Copy to GPU
+            cudaMemcpyAsync(m_d_allowFlags->get(), h_allowFlags, Constants::MAX_CLASSES_FOR_FILTERING * sizeof(unsigned char), cudaMemcpyHostToDevice, stream);
+            m_classFilterDirty = false;
+        }
+
+        // Decode with integrated class filtering
         decodeErr = decodeYolo11Gpu(
             d_rawOutputPtr,
             outputType,
@@ -1412,6 +1433,8 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
             m_d_decodedCount->get(),
             maxDecodedTargets,
             max_candidates,
+            m_d_allowFlags ? m_d_allowFlags->get() : nullptr,  // Pass class filter
+            Constants::MAX_CLASSES_FOR_FILTERING,
             stream);
     } else {
         std::cerr << "[Pipeline] Unsupported post-processing type: " << cached_postprocess << std::endl;
@@ -1429,62 +1452,12 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
         return;
     }
 
-    // Step 2: Continue processing - early exit checks will be done by GPU kernels
+    // Step 2: Class and score filtering is now done during decoding stage
+    // Decoded targets already contain only valid, filtered targets
 
-    // Step 3: Class ID filtering
-    if (m_d_classFilteredTargets && m_d_classFilteredCount && m_d_allowFlags) {
-        // Check if class filter needs update (only on first run or config change)
-        if (m_classFilterDirty) {
-            // Update class filtering flags from config
-            unsigned char h_allowFlags[Constants::MAX_CLASSES_FOR_FILTERING];
-            memset(h_allowFlags, 0, Constants::MAX_CLASSES_FOR_FILTERING);
-            
-            // Copy class settings to allow flags
-            for (const auto& setting : ctx.config.class_settings) {
-                if (setting.id >= 0 && setting.id < Constants::MAX_CLASSES_FOR_FILTERING) {
-                    h_allowFlags[setting.id] = setting.allow ? 1 : 0;
-                }
-            }
-            
-            // Cache the filter for comparison
-            m_cachedClassFilter.assign(h_allowFlags, h_allowFlags + Constants::MAX_CLASSES_FOR_FILTERING);
-            
-            // Copy to GPU only when changed
-            cudaMemcpyAsync(m_d_allowFlags->get(), h_allowFlags, Constants::MAX_CLASSES_FOR_FILTERING * sizeof(unsigned char), cudaMemcpyHostToDevice, stream);
-            m_classFilterDirty = false;
-        }
-        
-        cudaError_t filterErr = filterTargetsByClassIdGpu(
-            m_d_decodedTargets->get(),
-            m_d_decodedCount->get(),
-            m_d_classFilteredTargets->get(),
-            m_d_classFilteredCount->get(),
-            m_d_allowFlags->get(),
-            Constants::MAX_CLASSES_FOR_FILTERING,
-            cached_max_detections,  // max output buffer - use UI configured value
-            stream
-        );
-        
-        if (filterErr != cudaSuccess) {
-            std::cerr << "[Pipeline] Class ID filtering failed: " << cudaGetErrorString(filterErr) << std::endl;
-            if (m_d_finalTargetsCount) {
-                cudaMemsetAsync(m_d_finalTargetsCount->get(), 0, sizeof(int), stream);
-            }
-            return;
-        }
-    } else {
-        // No class filtering - copy decoded targets directly (max buffer size)
-        if (m_d_classFilteredTargets && m_d_classFilteredCount) {
-            cudaMemcpyAsync(m_d_classFilteredTargets->get(), m_d_decodedTargets->get(), 
-                          cached_max_detections * sizeof(Target), cudaMemcpyDeviceToDevice, stream);
-            cudaMemcpyAsync(m_d_classFilteredCount->get(), m_d_decodedCount->get(), 
-                          sizeof(int), cudaMemcpyDeviceToDevice, stream);
-        }
-    }
-
-    // Step 4: Determine NMS input (class filtered targets or decoded targets)
-    Target* nmsInputTargets = m_d_classFilteredTargets ? m_d_classFilteredTargets->get() : m_d_decodedTargets->get();
-    int* nmsInputCount = m_d_classFilteredCount ? m_d_classFilteredCount->get() : m_d_decodedCount->get();
+    // Step 3: NMS input uses decoded targets directly (already filtered)
+    Target* nmsInputTargets = m_d_decodedTargets->get();
+    int* nmsInputCount = m_d_decodedCount->get();
 
     // TODO: Color filtering will be implemented when color mask integration is complete
     // For now, we skip color filtering step
@@ -1636,6 +1609,13 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         return;
     }
     
+    // Use cached max detections for CUDA Graph compatibility
+    static int cached_max_detections = Constants::MAX_DETECTIONS;
+    if (!m_graphCaptured) {
+        std::lock_guard<std::mutex> lock(ctx.configMutex);
+        cached_max_detections = ctx.config.max_detections;
+    }
+    
     // Use the new GPU-only version to avoid synchronization
     // The kernel will check count internally
     
@@ -1667,6 +1647,14 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
             break;
         }
     }
+    
+    // Final validation: clean any extreme values that might have survived
+    finalValidateTargetsGpu(
+        m_d_finalTargets->get(),
+        m_d_finalTargetsCount->get(),
+        cached_max_detections,
+        stream
+    );
     
     // Always use head priority selection
     cudaError_t selectErr = findBestTargetWithHeadPriorityGpu(
@@ -1856,6 +1844,9 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
             if (finalTarget && m_tripleBuffer->h_target_coords_pinned[currentIdx].get()) {
                 // OPTIMIZED: No need to clear - cudaMemcpyAsync overwrites all data
                 // This saves ~0.001ms per frame (small but eliminates unnecessary work)
+                
+                // Final validation of best target before host copy
+                validateBestTargetGpu(finalTarget, stream);
                 
                 // Copy best target to pinned memory
                 cudaMemcpyAsync(m_tripleBuffer->h_target_coords_pinned[currentIdx].get(), finalTarget, sizeof(Target), 
