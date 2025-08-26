@@ -137,6 +137,11 @@ __global__ void validateTargetsKernel(
     if (idx < n) {
         Target& det = d_detections[idx];
         
+        // Skip already invalidated targets
+        if (det.classId < 0) {
+            return;
+        }
+        
         // Log if target is outside boundaries (before fixing)
         if (det.x < 0 || det.y < 0 || 
             det.x >= 640 || det.y >= 640 ||
@@ -158,6 +163,45 @@ __global__ void validateTargetsKernel(
     }
 }
 
+// Final validation kernel to remove extreme values after NMS
+__global__ void finalValidateAndCleanKernel(
+    Target* d_targets,
+    int* d_count,
+    int max_targets)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < max_targets) {
+        Target& target = d_targets[idx];
+        
+        // Skip already invalidated targets
+        if (target.classId < 0) {
+            return;
+        }
+        
+        // Check for extreme values and mark as invalid
+        if (abs(target.x) > 1000000 || abs(target.y) > 1000000 ||
+            target.x < -100 || target.x > 2000 || target.y < -100 || target.y > 2000 ||
+            target.width <= 0 || target.width > 1000 || target.height <= 0 || target.height > 1000 ||
+            target.confidence <= 0.0f || target.confidence > 1.0f ||
+            target.classId < 0 || target.classId > 100) {
+            
+            // Log the garbage value before cleaning it
+            if (abs(target.x) > 1000000 || abs(target.y) > 1000000) {
+                printf("[FINAL VALIDATION] Cleaning garbage target %d: x=%d, y=%d, w=%d, h=%d, conf=%.3f, cls=%d\n",
+                       idx, target.x, target.y, target.width, target.height, target.confidence, target.classId);
+            }
+            
+            // Mark as invalid by setting negative class ID
+            target.classId = -1;
+            target.confidence = 0.0f;
+            target.x = -1;
+            target.y = -1;
+            target.width = 0;
+            target.height = 0;
+        }
+    }
+}
+
 // Export function for validation
 void validateTargetsGpu(
     Target* d_detections,
@@ -173,6 +217,66 @@ void validateTargetsGpu(
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
         fprintf(stderr, "[validateTargetsGpu] Kernel launch failed: %s\n", cudaGetErrorString(err));
+    }
+}
+
+// Kernel to validate single best target
+__global__ void validateBestTargetKernel(
+    Target* d_best_target)
+{
+    if (threadIdx.x == 0 && blockIdx.x == 0) {
+        Target& target = *d_best_target;
+        
+        // Check if target is invalid and clear it
+        if (target.classId < 0 || 
+            abs(target.x) > 1000000 || abs(target.y) > 1000000 ||
+            target.x < -100 || target.x > 2000 ||
+            target.y < -100 || target.y > 2000 ||
+            target.width <= 0 || target.width > 1000 ||
+            target.height <= 0 || target.height > 1000 ||
+            target.confidence <= 0.0f || target.confidence > 1.0f) {
+            
+            // Clear invalid target
+            target.classId = -1;
+            target.confidence = 0.0f;
+            target.x = -1;
+            target.y = -1;
+            target.width = 0;
+            target.height = 0;
+        }
+    }
+}
+
+// Final validation function to clean extreme values
+void finalValidateTargetsGpu(
+    Target* d_targets,
+    int* d_count,
+    int max_targets,
+    cudaStream_t stream)
+{
+    if (!d_targets || max_targets <= 0) return;
+    
+    const int block_size = 256;
+    const int grid_size = (max_targets + block_size - 1) / block_size;
+    
+    finalValidateAndCleanKernel<<<grid_size, block_size, 0, stream>>>(d_targets, d_count, max_targets);
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        fprintf(stderr, "[finalValidateTargetsGpu] Kernel launch failed: %s\n", cudaGetErrorString(err));
+    }
+}
+
+// Validate single best target before host copy
+void validateBestTargetGpu(
+    Target* d_best_target,
+    cudaStream_t stream)
+{
+    if (!d_best_target) return;
+    
+    validateBestTargetKernel<<<1, 1, 0, stream>>>(d_best_target);
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        fprintf(stderr, "[validateBestTargetGpu] Kernel launch failed: %s\n", cudaGetErrorString(err));
     }
 }
 
@@ -230,7 +334,19 @@ __global__ void gatherKeptTargetsAtomicKernel(
             Target& output_det = d_output_detections[output_idx];
             const Target& input_det = d_input_detections[idx];
             
-            // Copy all fields
+            // Additional validation before copying - reject extreme values
+            if (abs(input_det.x) > 1000000 || abs(input_det.y) > 1000000 ||
+                input_det.x < -100 || input_det.x > 2000 || input_det.y < -100 || input_det.y > 2000 ||
+                input_det.width <= 0 || input_det.width > 1000 || 
+                input_det.height <= 0 || input_det.height > 1000 ||
+                input_det.classId < 0) {
+                
+                // Skip this garbage target - don't copy it
+                atomicSub(d_write_index, 1);  // Revert the index increment
+                return;
+            }
+            
+            // Copy all fields (now validated)
             output_det = input_det;
             
             // Ensure valid dimensions
@@ -308,12 +424,14 @@ __global__ void decodeAndFilterYolo10Kernel(
             int width = static_cast<int>((x2 - x1) * img_scale);
             int height = static_cast<int>((y2 - y1) * img_scale);
             
-            // Enhanced abnormal value detection (catch 5억 같은 극단값)
-            if (width > 1000 || height > 1000 || x > 1000 || y > 1000 || 
-                x < -1000 || y < -1000 ||
-                abs(x) > 100000000 || abs(y) > 100000000 ||  // 5억 같은 극단값
-                abs(width) > 100000000 || abs(height) > 100000000 ||
-                !isfinite(x1) || !isfinite(y1) || !isfinite(x2) || !isfinite(y2)) {  // NaN/Inf 체크
+            // STRICT validation to prevent garbage values like 1061249024
+            if (width > 2000 || height > 2000 || x > 2000 || y > 2000 || 
+                x < -100 || y < -100 || width <= 0 || height <= 0 ||
+                abs(x) > 1000000 || abs(y) > 1000000 ||  // Catch 10억대 극단값
+                abs(width) > 1000000 || abs(height) > 1000000 ||
+                !isfinite(x1) || !isfinite(y1) || !isfinite(x2) || !isfinite(y2) ||
+                !isfinite(static_cast<float>(x)) || !isfinite(static_cast<float>(y)) ||
+                !isfinite(static_cast<float>(width)) || !isfinite(static_cast<float>(height))) {
                 if (threadIdx.x == 0 && blockIdx.x == 0) {
                     printf("[YOLO DECODE ERROR] Extreme/invalid values detected: x=%d, y=%d, w=%d, h=%d (raw: x1=%.6f, y1=%.6f, x2=%.6f, y2=%.6f, conf=%.3f, cls=%d)\n",
                            x, y, width, height, x1, y1, x2, y2, confidence, classId);
@@ -394,12 +512,14 @@ __global__ void decodeAndFilterYolo11Kernel(
                 int width = static_cast<int>(ow * img_scale);
                 int height = static_cast<int>(oh * img_scale);
                 
-                // Enhanced abnormal value detection for YOLO11 (catch 5억 같은 극단값)
-                if (width > 1000 || height > 1000 || x > 1000 || y > 1000 || 
-                    x < -1000 || y < -1000 ||
-                    abs(x) > 100000000 || abs(y) > 100000000 ||  // 5억 같은 극단값
-                    abs(width) > 100000000 || abs(height) > 100000000 ||
-                    !isfinite(cx) || !isfinite(cy) || !isfinite(ow) || !isfinite(oh)) {  // NaN/Inf 체크
+                // STRICT validation to prevent garbage values like 1061249024
+                if (width > 2000 || height > 2000 || x > 2000 || y > 2000 || 
+                    x < -100 || y < -100 || width <= 0 || height <= 0 ||
+                    abs(x) > 1000000 || abs(y) > 1000000 ||  // Catch 10억대 극단값
+                    abs(width) > 1000000 || abs(height) > 1000000 ||
+                    !isfinite(cx) || !isfinite(cy) || !isfinite(ow) || !isfinite(oh) ||
+                    !isfinite(static_cast<float>(x)) || !isfinite(static_cast<float>(y)) ||
+                    !isfinite(static_cast<float>(width)) || !isfinite(static_cast<float>(height))) {
                     if (threadIdx.x == 0 && blockIdx.x == 0) {
                         printf("[YOLO11 DECODE ERROR] Extreme/invalid values detected: x=%d, y=%d, w=%d, h=%d (raw: cx=%.6f, cy=%.6f, ow=%.6f, oh=%.6f, score=%.3f, cls=%d)\n",
                                x, y, width, height, cx, cy, ow, oh, max_score, max_class_id);
@@ -584,14 +704,26 @@ void NMSGpu(
     
     cudaError_t err = cudaSuccess;
     const int block_size = 256;
-    // Use fixed grid sizes for CUDA Graph compatibility
-    const int MAX_GRID_SIZE = 256; // Fixed maximum grid size 
+    // Remove fixed MAX_GRID_SIZE constraint for dynamic grid calculation 
 
-    // Validate input parameters
-    if (!d_input_detections || !d_output_detections || !d_output_count_gpu ||
-        !d_x1 || !d_y1 || !d_x2 || !d_y2 || !d_areas || !d_scores_nms || 
+    // Validate input parameters with detailed logging
+    if (!d_input_detections) {
+        fprintf(stderr, "[NMSGpu] Error: d_input_detections is NULL\n");
+        return;
+    }
+    if (!d_output_detections) {
+        fprintf(stderr, "[NMSGpu] Error: d_output_detections is NULL\n"); 
+        return;
+    }
+    if (!d_output_count_gpu) {
+        fprintf(stderr, "[NMSGpu] Error: d_output_count_gpu is NULL\n");
+        return;
+    }
+    if (!d_x1 || !d_y1 || !d_x2 || !d_y2 || !d_areas || !d_scores_nms || 
         !d_classIds_nms || !d_iou_matrix || !d_keep || !d_indices) {
-        fprintf(stderr, "[NMSGpu] Error: NULL pointer passed to NMSGpu\n");
+        fprintf(stderr, "[NMSGpu] Error: One of the temporary buffers is NULL\n");
+        fprintf(stderr, "[NMSGpu] Pointers: x1=%p, y1=%p, x2=%p, y2=%p, areas=%p, scores=%p, classIds=%p, iou=%p, keep=%p, indices=%p\n",
+                d_x1, d_y1, d_x2, d_y2, d_areas, d_scores_nms, d_classIds_nms, d_iou_matrix, d_keep, d_indices);
         if (d_output_count_gpu) cudaMemsetAsync(d_output_count_gpu, 0, sizeof(int), stream);
         return;
     }
@@ -609,9 +741,28 @@ void NMSGpu(
 
     
     {
-        // Use fixed grid size for CUDA Graph compatibility
-        // Ensure at least 1 block even if effective_detections is 0
-        const int grid_extract = max(1, min((effective_detections + block_size - 1) / block_size, MAX_GRID_SIZE));
+        // Calculate grid size based on actual detections count with safety bounds
+        const int grid_extract = max(1, min((effective_detections + block_size - 1) / block_size, 1024));
+        
+        // Additional validation before kernel launch
+        if (grid_extract <= 0) {
+            fprintf(stderr, "[NMSGpu] Invalid grid size: %d (effective_detections=%d, block_size=%d)\n", 
+                    grid_extract, effective_detections, block_size);
+            goto cleanup;
+        }
+        
+        // Clear previous CUDA errors
+        cudaGetLastError();
+        
+        // Quick memory accessibility test
+        cudaError_t mem_err = cudaSuccess;
+        mem_err = cudaPointerGetAttributes(nullptr, d_input_detections);
+        if (mem_err != cudaSuccess && mem_err != cudaErrorInvalidValue) {
+            fprintf(stderr, "[NMSGpu] d_input_detections memory invalid: %s\n", cudaGetErrorString(mem_err));
+            goto cleanup;
+        }
+        cudaGetLastError(); // Clear the error
+        
         extractDataKernel<<<grid_extract, block_size, 0, stream>>>( 
             d_input_detections, effective_detections,
             d_x1, d_y1, d_x2, d_y2,
@@ -632,9 +783,8 @@ void NMSGpu(
     
     // Initialize keep array to 1 (true)
     {
-        // Use fixed grid size for CUDA Graph compatibility
-        // Ensure at least 1 block
-        int grid_init = max(1, min((effective_detections + block_size - 1) / block_size, MAX_GRID_SIZE));
+        // Calculate grid size based on actual detections count
+        int grid_init = (effective_detections + block_size - 1) / block_size;
         initKeepKernel<<<grid_init, block_size, 0, stream>>>(d_keep, effective_detections);
     }
     // Skip zeroing IoU matrix - kernel will only write non-zero values
@@ -647,9 +797,8 @@ void NMSGpu(
     
     {
         dim3 block_iou(16, 16); 
-        // Fixed grid size for CUDA Graph compatibility
-        // Ensure at least 1 block
-        int grid_dim = max(1, min((effective_detections + block_iou.x - 1) / block_iou.x, 64));
+        // Calculate grid size based on actual detections count
+        int grid_dim = (effective_detections + block_iou.x - 1) / block_iou.x;
         dim3 grid_iou(grid_dim, grid_dim);
         
         // Pre-calculate inverse cell dimensions for faster division
@@ -669,9 +818,8 @@ void NMSGpu(
 
     
     {
-        // Use fixed grid size for CUDA Graph compatibility
-        // Ensure at least 1 block
-        const int grid_nms = max(1, min((effective_detections + block_size - 1) / block_size, MAX_GRID_SIZE));
+        // Calculate grid size based on actual detections count
+        const int grid_nms = (effective_detections + block_size - 1) / block_size;
         nmsKernel<<<grid_nms, block_size, 0, stream>>>( 
             d_keep, d_iou_matrix, d_scores_nms, d_classIds_nms, effective_detections, nmsThreshold 
         );
@@ -689,9 +837,8 @@ void NMSGpu(
         cudaMemsetAsync(d_output_count_gpu, 0, sizeof(int), stream);
         
         // Single pass: gather kept detections and count simultaneously
-        // Use fixed grid size for CUDA Graph compatibility
-        // Ensure at least 1 block
-        const int gather_blocks = max(1, min((effective_detections + block_size - 1) / block_size, MAX_GRID_SIZE));
+        // Calculate grid size based on actual detections count
+        const int gather_blocks = (effective_detections + block_size - 1) / block_size;
         gatherKeptTargetsAtomicKernel<<<gather_blocks, block_size, 0, stream>>>(
             d_input_detections, d_keep, d_output_detections, 
             d_output_count_gpu,  // Use as atomic write index
@@ -808,7 +955,9 @@ __global__ void decodeYolo11GpuKernel(
     float img_scale,                   
     Target* d_decoded_detections,   
     int* d_decoded_count,              
-    int max_detections)                
+    int max_detections,
+    const unsigned char* d_class_filter,
+    int max_class_filter_size)                
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x; 
 
@@ -839,6 +988,13 @@ __global__ void decodeYolo11GpuKernel(
         float final_confidence = max_score;
         
         if (final_confidence > conf_threshold) {
+            // Class filtering: check if this class is allowed
+            if (d_class_filter && max_class_filter_size > 0) {
+                if (max_class_id < 0 || max_class_id >= max_class_filter_size || 
+                    d_class_filter[max_class_id] == 0) {
+                    return;  // Skip filtered out class
+                }
+            }
             
             // Back to channel-first layout: [batch, channel, anchor]
             size_t cx_idx = 0 * num_boxes_raw + idx;
@@ -999,6 +1155,8 @@ cudaError_t decodeYolo11Gpu(
     int* d_decoded_count, 
     int max_detections,
     int max_candidates,
+    const unsigned char* d_class_filter,
+    int max_class_filter_size,
     cudaStream_t stream)
 {
     // Fixed CUDA "invalid argument" error by:
@@ -1055,7 +1213,8 @@ cudaError_t decodeYolo11Gpu(
     
     decodeYolo11GpuKernel<<<grid_size, block_size, 0, stream>>>(
         d_raw_output, (int)output_type, actual_candidates, (int)num_rows, num_classes,
-        conf_threshold, img_scale, d_decoded_detections, d_decoded_count, max_detections);
+        conf_threshold, img_scale, d_decoded_detections, d_decoded_count, max_detections,
+        d_class_filter, max_class_filter_size);
 
     cudaError_t kernel_err = cudaGetLastError();
     if (kernel_err != cudaSuccess) {
@@ -1107,12 +1266,12 @@ __global__ void findBestTargetWithHeadPriority(
     if (threadIdx.x == 0 && blockIdx.x == 0) {
         // Step 1: Check if any Head is inside a Body
         for (int i = 0; i < num; i++) {
-            if (d_detections[i].classId == head_class_id) {
+            if (d_detections[i].classId == head_class_id && d_detections[i].classId >= 0) {
                 const Target& head = d_detections[i];
                 
                 // Check if this head is inside any body
                 for (int j = 0; j < num; j++) {
-                    if (i != j && d_detections[j].classId != head_class_id) {
+                    if (i != j && d_detections[j].classId != head_class_id && d_detections[j].classId >= 0) {
                         const Target& body = d_detections[j];
                         
                         // Check if head bounding box is completely inside body bounding box
@@ -1138,20 +1297,34 @@ __global__ void findBestTargetWithHeadPriority(
         for (int i = 0; i < num; i++) {
             const Target& det = d_detections[i];
             
-            // Skip invalid detections
-            if (det.width > 0 && det.height > 0 && det.confidence > 0) {
+            // Skip invalid detections and extreme values
+            if (det.width > 0 && det.height > 0 && det.confidence > 0 && det.classId >= 0 &&
+                det.x > -100 && det.x < 2000 && det.y > -100 && det.y < 2000 &&
+                det.width < 1000 && det.height < 1000 &&
+                abs(det.x) < 1000000 && abs(det.y) < 1000000) {
                 float centerX = det.x + det.width * 0.5f;
                 float centerY = det.y + det.height * 0.5f;
                 
-                // Log suspicious targets (center outside screen bounds)
-                if (centerX < 0 || centerX >= 640 || centerY < 0 || centerY >= 640) {
-                    printf("[TARGET SELECT WARNING] Target %d center out of bounds: centerX=%.1f, centerY=%.1f (box: x=%d,y=%d,w=%d,h=%d)\n",
-                           i, centerX, centerY, det.x, det.y, det.width, det.height);
+                // Additional validation for center coordinates
+                if (!isfinite(centerX) || !isfinite(centerY) ||
+                    abs(centerX) > 10000 || abs(centerY) > 10000) {
+                    continue; // Skip targets with extreme center coordinates
                 }
                 
                 float dx = fabsf(centerX - crosshairX);
                 float dy = fabsf(centerY - crosshairY);
+                
+                // Validate dx, dy calculations
+                if (!isfinite(dx) || !isfinite(dy) || dx > 10000 || dy > 10000) {
+                    continue; // Skip targets with extreme distance values
+                }
+                
                 float distance = dx + dy;
+                
+                // Final distance validation
+                if (!isfinite(distance) || distance > 20000) {
+                    continue; // Skip targets with extreme distances
+                }
                 
                 if (distance < min_distance) {
                     min_distance = distance;
@@ -1215,17 +1388,33 @@ __global__ void findClosestTargetKernelWithDeviceCount(
     if (idx < num_detections) {
         const Target& det = d_detections[idx];
         
-        // Skip invalid detections
-        if (det.width > 0 && det.height > 0 && det.confidence > 0) {
+        // Skip invalid detections and extreme values
+        if (det.width > 0 && det.height > 0 && det.confidence > 0 && det.classId >= 0 &&
+            det.x > -100 && det.x < 2000 && det.y > -100 && det.y < 2000 &&
+            det.width < 1000 && det.height < 1000 &&
+            abs(det.x) < 1000000 && abs(det.y) < 1000000) {
             float centerX = det.x + det.width * 0.5f;
             float centerY = det.y + det.height * 0.5f;
             
-            float dx = fabsf(centerX - crosshairX);
-            float dy = fabsf(centerY - crosshairY);
-            float distance = dx + dy;
-            
-            min_distance = distance;
-            min_index = idx;
+            // Additional validation for center coordinates
+            if (!isfinite(centerX) || !isfinite(centerY) ||
+                abs(centerX) > 10000 || abs(centerY) > 10000) {
+                // Skip this target - keep default min_distance = FLT_MAX
+            } else {
+                float dx = fabsf(centerX - crosshairX);
+                float dy = fabsf(centerY - crosshairY);
+                
+                // Validate dx, dy calculations  
+                if (isfinite(dx) && isfinite(dy) && dx < 10000 && dy < 10000) {
+                    float distance = dx + dy;
+                    
+                    // Final distance validation
+                    if (isfinite(distance) && distance < 20000) {
+                        min_distance = distance;
+                        min_index = idx;
+                    }
+                }
+            }
         }
     }
     
