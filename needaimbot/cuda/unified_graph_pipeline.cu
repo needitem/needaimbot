@@ -1829,21 +1829,14 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
             }
         }
         
-        // TensorRT Inference - OPTIMIZED: Use direct pointer to avoid redundant copy
+        // TensorRT Inference
         if (m_inputBindings.find(m_inputName) != m_inputBindings.end() && m_d_yoloInput) {
             void* inputBinding = m_inputBindings[m_inputName]->get();
             
-            // OPTIMIZATION: Directly set tensor address instead of copying data
-            // This eliminates 0.05ms of unnecessary GPU memory copy
-            if (!m_context->setTensorAddress(m_inputName.c_str(), m_d_yoloInput->get())) {
-                std::cerr << "[UnifiedGraph] Failed to set direct tensor address for: " << m_inputName << std::endl;
-                
-                // Fallback to memory copy only if direct addressing fails
-                if (inputBinding != m_d_yoloInput->get()) {
-                    size_t inputSize = ctx.config.onnx_input_resolution * ctx.config.onnx_input_resolution * 3 * sizeof(float);
-                    cudaMemcpyAsync(inputBinding, m_d_yoloInput->get(), inputSize, 
-                                   cudaMemcpyDeviceToDevice, stream);
-                }
+            if (inputBinding != m_d_yoloInput->get()) {
+                size_t inputSize = ctx.config.onnx_input_resolution * ctx.config.onnx_input_resolution * 3 * sizeof(float);
+                cudaMemcpyAsync(inputBinding, m_d_yoloInput->get(), inputSize, 
+                               cudaMemcpyDeviceToDevice, stream);
             }
             
             if (!runInferenceAsync(stream)) {
