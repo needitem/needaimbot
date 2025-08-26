@@ -692,10 +692,7 @@ void UnifiedGraphPipeline::runMainLoop() {
                     for (int i = 0; i < 3; i++) {
                         m_tripleBuffer->target_data_valid[i] = false;
                         m_tripleBuffer->target_count[i] = 0;
-                        // Clear pinned memory targets
-                        if (m_tripleBuffer->h_target_coords_pinned[i].get()) {
-                            memset(m_tripleBuffer->h_target_coords_pinned[i].get(), 0, sizeof(Target));
-                        }
+                        // OPTIMIZED: No need to clear pinned memory - target_data_valid[i]=false prevents usage
                     }
                 }
                 
@@ -1857,8 +1854,8 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
             // Step 4: Copy target results to host memory (async) using pinned memory
             Target* finalTarget = m_d_bestTarget->get();
             if (finalTarget && m_tripleBuffer->h_target_coords_pinned[currentIdx].get()) {
-                // CRITICAL: Clear the pinned memory before copying to prevent garbage values
-                memset(m_tripleBuffer->h_target_coords_pinned[currentIdx].get(), 0, sizeof(Target));
+                // OPTIMIZED: No need to clear - cudaMemcpyAsync overwrites all data
+                // This saves ~0.001ms per frame (small but eliminates unnecessary work)
                 
                 // Copy best target to pinned memory
                 cudaMemcpyAsync(m_tripleBuffer->h_target_coords_pinned[currentIdx].get(), finalTarget, sizeof(Target), 
@@ -1884,10 +1881,8 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
                 // No target buffer available
                 m_tripleBuffer->target_data_valid[currentIdx] = false;
                 m_tripleBuffer->target_count[currentIdx] = 0;
-                // Clear pinned memory when no target
-                if (m_tripleBuffer->h_target_coords_pinned[currentIdx].get()) {
-                    memset(m_tripleBuffer->h_target_coords_pinned[currentIdx].get(), 0, sizeof(Target));
-                }
+                // OPTIMIZED: No need to clear pinned memory when no target
+                // Invalid target_data_valid flag prevents usage anyway
             }
         }
     }
