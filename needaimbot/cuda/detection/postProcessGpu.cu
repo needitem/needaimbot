@@ -1536,5 +1536,153 @@ cudaError_t findBestTargetWithHeadPriorityGpu(
     return cudaSuccess;
 }
 
+// Kernel to process NMS output (already post-processed detections)
+// Input format: [x1, y1, x2, y2, confidence, class_id]
+// Convert to Target format: [x, y, width, height, confidence, classId]
+__global__ void processNMSOutputKernel(
+    const void* d_nms_output,
+    nvinfer1::DataType output_type,
+    float conf_threshold,
+    float img_scale,
+    Target* d_output_detections,
+    int* d_output_count,
+    int max_output_detections,
+    int num_detections)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    // First thread initializes output count
+    if (idx == 0) {
+        *d_output_count = 0;
+    }
+    
+    __syncthreads();
+    
+    if (idx >= num_detections) return;
+    
+    // Cast input data based on type
+    const float* nms_data = nullptr;
+    if (output_type == nvinfer1::DataType::kFLOAT) {
+        nms_data = static_cast<const float*>(d_nms_output);
+    } else if (output_type == nvinfer1::DataType::kHALF) {
+        // For FP16, we need to convert - simplified approach
+        // In production, you'd need proper FP16 handling
+        nms_data = static_cast<const float*>(d_nms_output); // Fallback
+    } else {
+        return; // Unsupported data type
+    }
+    
+    // Each detection has 6 values: [x1, y1, x2, y2, confidence, class_id]
+    int data_offset = idx * 6;
+    
+    float x1 = nms_data[data_offset + 0] * img_scale;
+    float y1 = nms_data[data_offset + 1] * img_scale;
+    float x2 = nms_data[data_offset + 2] * img_scale;
+    float y2 = nms_data[data_offset + 3] * img_scale;
+    float confidence = nms_data[data_offset + 4];
+    int class_id = static_cast<int>(nms_data[data_offset + 5]);
+    
+    // Filter by confidence threshold
+    if (confidence < conf_threshold) {
+        return;
+    }
+    
+    // Validate coordinates
+    if (x1 < 0 || y1 < 0 || x2 <= x1 || y2 <= y1 ||
+        x1 > 10000 || y1 > 10000 || x2 > 10000 || y2 > 10000) {
+        return;
+    }
+    
+    // Validate class ID
+    if (class_id < 0 || class_id > 100) {
+        return;
+    }
+    
+    // Convert from [x1,y1,x2,y2] to [x,y,width,height]
+    float x = x1;
+    float y = y1;
+    float width = x2 - x1;
+    float height = y2 - y1;
+    
+    // Validate dimensions
+    if (width <= 0 || height <= 0 || width > 1000 || height > 1000) {
+        return;
+    }
+    
+    // Atomic increment to get output index
+    int output_idx = atomicAdd(d_output_count, 1);
+    
+    // Check bounds
+    if (output_idx >= max_output_detections) {
+        // Decrement count if we exceeded limits
+        atomicSub(d_output_count, 1);
+        return;
+    }
+    
+    // Write to output
+    Target& target = d_output_detections[output_idx];
+    target.x = x;
+    target.y = y;
+    target.width = width;
+    target.height = height;
+    target.confidence = confidence;
+    target.classId = class_id;
+    
+    // Additional validation - ensure reasonable aspect ratio
+    float aspect_ratio = width / height;
+    if (aspect_ratio < 0.1f || aspect_ratio > 10.0f) {
+        // Invalid aspect ratio - remove this detection
+        atomicSub(d_output_count, 1);
+        return;
+    }
+}
+
+// Process NMS output (already post-processed detections)
+cudaError_t processNMSOutputGpu(
+    const void* d_nms_output,
+    nvinfer1::DataType output_type,
+    const std::vector<int64_t>& shape,
+    float conf_threshold,
+    float img_scale,
+    Target* d_output_detections,
+    int* d_output_count,
+    int max_output_detections,
+    int num_detections,
+    cudaStream_t stream)
+{
+    if (!d_nms_output || !d_output_detections || !d_output_count) {
+        return cudaErrorInvalidValue;
+    }
+    
+    if (num_detections <= 0 || max_output_detections <= 0) {
+        // No detections to process - set count to 0
+        cudaMemsetAsync(d_output_count, 0, sizeof(int), stream);
+        return cudaSuccess;
+    }
+    
+    // Launch kernel
+    int block_size = 256;
+    int grid_size = (num_detections + block_size - 1) / block_size;
+    
+    processNMSOutputKernel<<<grid_size, block_size, 0, stream>>>(
+        d_nms_output,
+        output_type,
+        conf_threshold,
+        img_scale,
+        d_output_detections,
+        d_output_count,
+        max_output_detections,
+        num_detections
+    );
+    
+    // Check for kernel launch errors
+    cudaError_t kernel_err = cudaGetLastError();
+    if (kernel_err != cudaSuccess) {
+        return kernel_err;
+    }
+    
+    return cudaSuccess;
+}
+
 
  

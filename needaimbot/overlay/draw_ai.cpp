@@ -70,7 +70,7 @@ static void draw_detection_settings()
     
     UIHelpers::BeginCard("Detection Parameters");
     
-    std::vector<std::string> postprocessOptions = { "yolo8", "yolo9", "yolo10", "yolo11", "yolo12" };
+    std::vector<std::string> postprocessOptions = { "yolo8", "yolo9", "yolo10", "yolo11", "yolo12", "yolo_nms" };
     std::vector<const char*> postprocessItems;
     for (const auto& option : postprocessOptions)
     {

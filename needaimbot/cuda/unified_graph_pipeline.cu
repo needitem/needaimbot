@@ -409,6 +409,13 @@ bool UnifiedGraphPipeline::allocateBuffers() {
     const int yoloSize = getModelInputResolution();
     const int maxDetections = ctx.config.max_detections;  // Use UI configured value
     
+    // DEBUG: 해상도 설정값 확인
+    std::cout << "[DEBUG] allocateBuffers() - Config values:" << std::endl;
+    std::cout << "  detection_resolution: " << ctx.config.detection_resolution << std::endl;
+    std::cout << "  getModelInputResolution(): " << yoloSize << std::endl;
+    std::cout << "  max_detections: " << maxDetections << std::endl;
+    std::cout << "  Buffer dimensions: " << width << "x" << height << std::endl;
+    
     try {
         // Initialize Triple Buffer System for async pipeline
         if (m_config.enableCapture && m_tripleBuffer) {
@@ -851,6 +858,11 @@ bool UnifiedGraphPipeline::initializeTensorRT(const std::string& modelFile) {
             if (i < outputDims.nbDims - 1) std::cout << "x";
         }
         std::cout << " (size: " << outputSize << " bytes)" << std::endl;
+        
+        // DEBUG: 각 출력 텐서의 상세 정보
+        std::cout << "[DEBUG] Output tensor '" << outputName << "' details:" << std::endl;
+        std::cout << "  Data type: " << static_cast<int>(m_engine->getTensorDataType(outputName.c_str())) << std::endl;
+        std::cout << "  Format: " << static_cast<int>(m_engine->getTensorFormat(outputName.c_str())) << std::endl;
     }
     
     // Allocate GPU memory bindings with error handling
@@ -865,7 +877,13 @@ bool UnifiedGraphPipeline::initializeTensorRT(const std::string& modelFile) {
     // m_imgScale is used in post-processing to scale model output coordinates back to original image size
     // Model outputs coordinates in model input resolution space, need to scale to actual detection_resolution
     // ctx is already declared at line 1735, so just use it here
-    m_imgScale = 1.0f; // Engine and detection resolution should match
+    m_imgScale = static_cast<float>(ctx.config.detection_resolution) / getModelInputResolution();
+    
+    // DEBUG: 스케일링 팩터 확인
+    std::cout << "[DEBUG] TensorRT initialization - Scaling setup:" << std::endl;
+    std::cout << "  detection_resolution: " << ctx.config.detection_resolution << std::endl;
+    std::cout << "  model_input_resolution: " << getModelInputResolution() << std::endl;
+    std::cout << "  m_imgScale: " << m_imgScale << std::endl;
     
     // Determine number of classes from output shape
     // Output shape is typically [batch, rows, boxes] where rows = 4 + num_classes
@@ -1259,6 +1277,19 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
         cached_confidence_threshold = ctx.config.confidence_threshold;
         cached_postprocess = ctx.config.postprocess;
     }
+    
+    // DEBUG: 후처리 파라미터 확인 (한 번만 출력)
+    static bool postprocess_debug_logged = false;
+    if (!postprocess_debug_logged) {
+        std::cout << "[DEBUG] Post-processing parameters:" << std::endl;
+        std::cout << "  cached_max_detections: " << cached_max_detections << std::endl;
+        std::cout << "  cached_nms_threshold: " << cached_nms_threshold << std::endl;
+        std::cout << "  cached_confidence_threshold: " << cached_confidence_threshold << std::endl;
+        std::cout << "  cached_postprocess: " << cached_postprocess << std::endl;
+        std::cout << "  m_imgScale: " << m_imgScale << std::endl;
+        std::cout << "  m_numClasses: " << m_numClasses << std::endl;
+        postprocess_debug_logged = true;
+    }
 
     // Step 1: Decode YOLO output based on model type
     // Use the cached max_detections from UI config (same as buffer allocation)
@@ -1268,6 +1299,9 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
     
     if (cached_postprocess == "yolo10") {
         int max_candidates = (shape.size() > 1) ? static_cast<int>(shape[1]) : 0;
+        
+        // DEBUG: YOLO10 경로 진입
+        std::cout << "[DEBUG] Using YOLO10 post-processing path" << std::endl;
         
         decodeErr = decodeYolo10Gpu(
             d_rawOutputPtr,
@@ -1281,9 +1315,55 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
             maxDecodedTargets,
             max_candidates,
             stream);
+    } else if (cached_postprocess == "yolo_nms") {
+        // NMS가 포함된 모델 - 이미 후처리된 출력
+        // 출력 형식: [batch, num_detections, 6] where 6 = [x1, y1, x2, y2, confidence, class_id]
+        
+        // DEBUG: YOLO_NMS 경로 진입
+        std::cout << "[DEBUG] Using YOLO_NMS post-processing path" << std::endl;
+        std::cout << "[DEBUG] NMS output shape analysis:" << std::endl;
+        for (size_t i = 0; i < shape.size(); i++) {
+            std::cout << "  shape[" << i << "] = " << shape[i] << std::endl;
+        }
+        
+        int num_detections = (shape.size() > 1) ? static_cast<int>(shape[1]) : 0;
+        int output_features = (shape.size() > 2) ? static_cast<int>(shape[2]) : 0;
+        
+        std::cout << "[DEBUG] num_detections: " << num_detections << std::endl;
+        std::cout << "[DEBUG] output_features: " << output_features << std::endl;
+        
+        if (output_features != 6) {
+            std::cerr << "[Pipeline] Invalid NMS output format. Expected 6 features [x1,y1,x2,y2,conf,class], got " << output_features << std::endl;
+            if (m_d_finalTargetsCount) {
+                cudaMemsetAsync(m_d_finalTargetsCount->get(), 0, sizeof(int), stream);
+            }
+            return;
+        }
+        
+        // NMS 출력을 직접 처리 - 디코딩 불필요
+        decodeErr = processNMSOutputGpu(
+            d_rawOutputPtr,
+            outputType,
+            shape,
+            cached_confidence_threshold,
+            m_imgScale,
+            m_d_decodedTargets->get(),
+            m_d_decodedCount->get(),
+            maxDecodedTargets,
+            num_detections,
+            stream);
+            
     } else if (cached_postprocess == "yolo8" || cached_postprocess == "yolo9" || 
                cached_postprocess == "yolo11" || cached_postprocess == "yolo12") {
         int max_candidates = (shape.size() > 2) ? static_cast<int>(shape[2]) : 0;
+        
+        // DEBUG: YOLO11/12 경로 진입 및 shape 분석
+        std::cout << "[DEBUG] Using YOLO11/12 post-processing path" << std::endl;
+        std::cout << "[DEBUG] Output shape analysis:" << std::endl;
+        for (size_t i = 0; i < shape.size(); i++) {
+            std::cout << "  shape[" << i << "] = " << shape[i] << std::endl;
+        }
+        std::cout << "[DEBUG] max_candidates calculated: " << max_candidates << std::endl;
         
         // Validate parameters before calling
         if (!m_d_decodedTargets || !m_d_decodedCount) {
@@ -1301,6 +1381,17 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
                 cudaMemsetAsync(m_d_finalTargetsCount->get(), 0, sizeof(int), stream);
             }
             return;
+        }
+        
+        // DEBUG: YOLO 디코딩 파라미터 확인 (처음 몇 번만)
+        static int decode_debug_count = 0;
+        if (decode_debug_count < 3) {
+            std::cout << "[DEBUG] YOLO decoding parameters (frame " << decode_debug_count << "):" << std::endl;
+            std::cout << "  max_candidates: " << max_candidates << std::endl;
+            std::cout << "  maxDecodedTargets: " << maxDecodedTargets << std::endl;
+            std::cout << "  confidence_threshold: " << cached_confidence_threshold << std::endl;
+            std::cout << "  img_scale: " << m_imgScale << std::endl;
+            decode_debug_count++;
         }
         
         // Update class filter flags if needed
@@ -1361,6 +1452,42 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
     // For now, we skip color filtering step
 
     // Step 5: NMS (Non-Maximum Suppression)
+    // Skip NMS for yolo_nms models - already post-processed
+    bool skipNMS = (cached_postprocess == "yolo_nms");
+    
+    if (skipNMS) {
+        // For NMS models, copy decoded targets directly to final targets
+        std::cout << "[DEBUG] Skipping NMS - using pre-processed detections" << std::endl;
+        
+        if (m_d_finalTargets && m_d_finalTargetsCount && m_d_decodedTargets && m_d_decodedCount) {
+            // Copy count
+            cudaMemcpyAsync(m_d_finalTargetsCount->get(), m_d_decodedCount->get(), sizeof(int), cudaMemcpyDeviceToDevice, stream);
+            
+            // Copy targets (up to max limit)
+            static std::unique_ptr<CudaPinnedMemory<int>> h_decoded_count_temp = nullptr;
+            if (!h_decoded_count_temp) {
+                h_decoded_count_temp = std::make_unique<CudaPinnedMemory<int>>(1, cudaHostAllocMapped);
+            }
+            
+            // Get actual count to limit copy size
+            cudaMemcpyAsync(h_decoded_count_temp->get(), m_d_decodedCount->get(), sizeof(int), cudaMemcpyDeviceToHost, stream);
+            cudaStreamSynchronize(stream); // Need to sync to get count
+            
+            int actual_decoded = *h_decoded_count_temp->get();
+            int copy_count = std::min(actual_decoded, cached_max_detections);
+            
+            if (copy_count > 0) {
+                cudaMemcpyAsync(m_d_finalTargets->get(), m_d_decodedTargets->get(), 
+                              copy_count * sizeof(Target), cudaMemcpyDeviceToDevice, stream);
+                
+                // Update final count with actual copied count
+                cudaMemcpyAsync(m_d_finalTargetsCount->get(), &copy_count, sizeof(int), cudaMemcpyHostToDevice, stream);
+                
+                std::cout << "[DEBUG] Copied " << copy_count << " pre-processed detections to final targets" << std::endl;
+            }
+        }
+    } else {
+        // Normal NMS processing for raw YOLO models
     if (m_d_finalTargets && m_d_finalTargetsCount && 
         m_d_x1 && m_d_y1 && m_d_x2 && m_d_y2 && m_d_areas && 
         m_d_scores_nms && m_d_classIds_nms && m_d_iou_matrix && 
@@ -1369,6 +1496,14 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
         // Use frame dimensions from config - always detection_resolution for NMS
         int cached_frame_width = ctx.config.detection_resolution;
         int cached_frame_height = ctx.config.detection_resolution;
+        
+        // DEBUG: NMS 프레임 크기 확인
+        static bool nms_debug_logged = false;
+        if (!nms_debug_logged) {
+            std::cout << "[DEBUG] NMS frame dimensions: " << cached_frame_width << "x" << cached_frame_height << std::endl;
+            std::cout << "[DEBUG] NMS threshold: " << cached_nms_threshold << std::endl;
+            nms_debug_logged = true;
+        }
         
         // Get count for NMS input - use pinned memory for fast transfer
         // OPTIMIZATION: Zero-copy mapped pinned memory access
@@ -1394,6 +1529,13 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
         // Clamp to reasonable bounds for safety
         actual_count = std::min(actual_count, 300);
         actual_count = std::max(actual_count, 0);
+        
+        // DEBUG: NMS 입력 카운트 확인
+        static int debug_frame_count = 0;
+        if (debug_frame_count < 5) {  // 처음 5프레임만 로그
+            std::cout << "[DEBUG] NMS input count: " << actual_count << " (frame " << debug_frame_count << ")" << std::endl;
+            debug_frame_count++;
+        }
         
         try {
             // Use actual count for accurate NMS
@@ -1494,6 +1636,7 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
         // OPTIMIZATION: Count already cleared by unified clearing kernel
         ctx.clearTargets();
     }
+    } // End of skipNMS condition
 }
 
 void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
@@ -1695,14 +1838,26 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
         // Unified Preprocessing: BGRA → RGB + Resize + Normalize + HWC→CHW
         // Process directly from triple buffer for maximum efficiency
         if (m_d_yoloInput && !currentBuffer.empty()) {
+            int modelRes = getModelInputResolution();
+            
+            // DEBUG: 전처리 파라미터 확인
+            static bool debug_logged = false;
+            if (!debug_logged) {
+                std::cout << "[DEBUG] Preprocessing parameters:" << std::endl;
+                std::cout << "  Input buffer: " << currentBuffer.cols() << "x" << currentBuffer.rows() 
+                          << " (step: " << currentBuffer.step() << ")" << std::endl;
+                std::cout << "  Model resolution: " << modelRes << "x" << modelRes << std::endl;
+                debug_logged = true;
+            }
+            
             cudaError_t err = cuda_unified_preprocessing(
                 currentBuffer.data(),  // Direct from triple buffer - no copy needed!
                 m_d_yoloInput->get(),
                 currentBuffer.cols(),
                 currentBuffer.rows(),
                 static_cast<int>(currentBuffer.step()),
-                getModelInputResolution(),
-                getModelInputResolution(),
+                modelRes,
+                modelRes,
                 stream
             );
             
