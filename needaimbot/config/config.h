@@ -247,10 +247,7 @@ public:
     float sticky_target_threshold;  // How much better a new target must be to switch (0.0-1.0)
     int max_detections;
     std::string postprocess;
-    bool export_enable_fp8;
-    bool export_enable_fp16;
     bool tensorrt_fp16;
-    int onnx_input_resolution;
 
     
     int cuda_device_id = 0;

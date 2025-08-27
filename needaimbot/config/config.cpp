@@ -151,10 +151,7 @@ bool Config::loadConfig(const std::string& filename)
         sticky_target_threshold = 0.0f; // Always switch to closest target
         max_detections = 30;  // Reduced from 100 for better performance
         postprocess = "yolo11";  // Changed from yolo12 to match common model format
-        export_enable_fp8 = false;
-        export_enable_fp16 = true;
         tensorrt_fp16 = true;
-        onnx_input_resolution = 640;
 
         
         cuda_device_id = 0;
@@ -342,10 +339,7 @@ bool Config::loadConfig(const std::string& filename)
     sticky_target_threshold = static_cast<float>(get_double_ini("AI", "sticky_target_threshold", 0.0));
     max_detections = get_long_ini("AI", "max_detections", 30);
     postprocess = get_string_ini("AI", "postprocess", "yolo11");  // Changed default from yolo12 to yolo11
-    export_enable_fp8 = get_bool_ini("AI", "export_enable_fp8", false);
-    export_enable_fp16 = get_bool_ini("AI", "export_enable_fp16", true);
     tensorrt_fp16 = get_bool_ini("AI", "tensorrt_fp16", true);
-    onnx_input_resolution = get_long_ini("AI", "onnx_input_resolution", 640);
 
     cuda_device_id = get_long_ini("CUDA", "cuda_device_id", 0);
     
@@ -610,10 +604,7 @@ bool Config::saveConfig(const std::string& filename)
     file << std::noboolalpha;
     file << "max_detections = " << max_detections << "\n";
     file << "postprocess = " << postprocess << "\n";
-    file << "export_enable_fp8 = " << (export_enable_fp8 ? "true" : "false") << "\n";
-    file << "export_enable_fp16 = " << (export_enable_fp16 ? "true" : "false") << "\n";
-    file << "tensorrt_fp16 = " << (tensorrt_fp16 ? "true" : "false") << "\n";
-    file << "onnx_input_resolution = " << onnx_input_resolution << "\n\n";
+    file << "tensorrt_fp16 = " << (tensorrt_fp16 ? "true" : "false") << "\n\n";
 
     file << "[CUDA]\n";
     file << "cuda_device_id = " << cuda_device_id << "\n\n";

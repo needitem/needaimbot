@@ -10,6 +10,7 @@ namespace UIHelpers
     bool BeautifulSlider(const char* label, float* value, float min, float max, const char* format = "%.3f");
     void BeautifulSeparator(const char* text = nullptr);
     void BeautifulText(const char* text, ImVec4 color = ImVec4(0.95f, 0.95f, 0.95f, 1.0f));
+    void TextColored(const ImVec4& color, const char* text);
     void BeautifulSection(const char* title, bool* open = nullptr);
     void StatusIndicator(const char* label, bool status, const char* description = nullptr);
     void InfoTooltip(const char* description);
