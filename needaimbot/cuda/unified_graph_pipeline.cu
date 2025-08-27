@@ -110,9 +110,7 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
     // Initialize Triple Buffer for async pipeline
     if (m_config.enableCapture) {
         m_tripleBuffer = std::make_unique<TripleBuffer>();
-        // Initialize pinned memory for zero-copy transfers
-        m_tripleBuffer->initPinnedMemory();
-        // Triple buffer initialization will be done in allocateBuffers()
+        // Pinned memory is automatically initialized by PipelineBuffer constructors
     }
     // No complex events needed - using RAII
     m_previewReadyEvent = std::make_unique<CudaEvent>(cudaEventDisableTiming);
@@ -417,24 +415,27 @@ bool UnifiedGraphPipeline::allocateBuffers() {
     std::cout << "  Buffer dimensions: " << width << "x" << height << std::endl;
     
     try {
-        // Initialize Triple Buffer System for async pipeline
+        // Initialize Safe Triple Buffer System with atomic state management
         if (m_config.enableCapture && m_tripleBuffer) {
             for (int i = 0; i < 3; i++) {
-                m_tripleBuffer->buffers[i].create(height, width, 4);  // BGRA
-                // Events are already initialized by CudaEvent constructor with default flags
-                // Reinitialize with specific flags using move assignment:
-                m_tripleBuffer->events[i] = std::move(CudaEvent(cudaEventDisableTiming));
-                m_tripleBuffer->target_ready_events[i] = std::move(CudaEvent(cudaEventDisableTiming));
-                m_tripleBuffer->isReady[i] = false;
-                m_tripleBuffer->target_data_valid[i] = false;
-                m_tripleBuffer->target_count[i] = 0;
+                m_tripleBuffer->buffers[i].frameBuffer.create(height, width, 4);  // BGRA
                 
-                // CRITICAL: Initialize pinned memory with zeros to prevent garbage values
-                if (m_tripleBuffer->h_target_coords_pinned[i].get()) {
-                    memset(m_tripleBuffer->h_target_coords_pinned[i].get(), 0, sizeof(Target));
+                // Initialize events with optimal flags for async pipeline
+                m_tripleBuffer->buffers[i].captureCompleteEvent = CudaEvent(cudaEventDisableTiming);
+                m_tripleBuffer->buffers[i].inferenceCompleteEvent = CudaEvent(cudaEventDisableTiming);
+                m_tripleBuffer->buffers[i].copyCompleteEvent = CudaEvent(cudaEventDisableTiming);
+                
+                // Initialize atomic states
+                m_tripleBuffer->buffers[i].state.store(TripleBuffer::BufferState::FREE, std::memory_order_relaxed);
+                m_tripleBuffer->buffers[i].hasValidTargets.store(false, std::memory_order_relaxed);
+                m_tripleBuffer->buffers[i].targetCount.store(0, std::memory_order_relaxed);
+                
+                // Clear pinned memory to prevent garbage values
+                if (m_tripleBuffer->buffers[i].h_target_coords_pinned.get()) {
+                    memset(m_tripleBuffer->buffers[i].h_target_coords_pinned.get(), 0, sizeof(Target));
                 }
             }
-            std::cout << "[UnifiedGraph] Triple buffer system initialized with cleared pinned memory" << std::endl;
+            std::cout << "[UnifiedGraph] Safe triple buffer system initialized with atomic state management" << std::endl;
         }
         
         // Allocate GPU buffers
@@ -695,12 +696,10 @@ void UnifiedGraphPipeline::runMainLoop() {
                     cudaMemsetAsync(m_d_bestTargetIndex->get(), -1, sizeof(int), m_primaryStream->get());
                 }
                 
-                // Invalidate triple buffer data to prevent mouse movement on old targets
+                // Invalidate all triple buffer data to prevent mouse movement on old targets
                 if (m_tripleBuffer) {
                     for (int i = 0; i < 3; i++) {
-                        m_tripleBuffer->target_data_valid[i] = false;
-                        m_tripleBuffer->target_count[i] = 0;
-                        // OPTIMIZED: No need to clear pinned memory - target_data_valid[i]=false prevents usage
+                        m_tripleBuffer->releaseBuffer(i);
                     }
                 }
                 
@@ -1698,29 +1697,32 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
     }
 }
 
-// Non-blocking pipeline execution with improved performance
+// Safe non-blocking pipeline execution with atomic state management
 bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
     if (!stream) stream = m_primaryStream->get();
     auto& ctx = AppContext::getInstance();
     
-    // Get current and previous pipeline indices
-    int currentIdx = m_currentPipelineIdx.load();
-    int prevIdx = m_prevPipelineIdx.load();
-    
     if (!m_tripleBuffer) {
-        // Fallback to original blocking execution if triple buffer not available
         std::cerr << "[UnifiedGraph] Warning: Triple buffer not available, falling back to blocking mode" << std::endl;
         return false;
     }
     
-    // Step 1: Process mouse movement from PREVIOUS frame results (non-blocking)
+    // Step 1: Process mouse movement from READY buffer results (non-blocking)
     processMouseMovementAsync();
     
-    // Step 2: Launch GPU work for CURRENT frame
-    // First, capture the frame from D3D11 texture (skip if frame already set by setInputFrame)
+    // Step 2: Acquire write buffer for current frame (atomic, non-blocking)
+    auto* writeBuffer = m_tripleBuffer->acquireWriteBuffer();
+    if (!writeBuffer) {
+        // Natural backpressure: all buffers busy, skip frame
+        return true;
+    }
+    
+    int writeIdx = m_tripleBuffer->getCurrentWriteIndex();
+    
+    // Step 3: Frame capture with event chain
     if (m_config.enableCapture && m_cudaResource && !m_hasFrameData) {
-        // Use current buffer for capture
-        SimpleCudaMat& currentBuffer = m_tripleBuffer->buffers[currentIdx];
+        // Use acquired buffer for capture
+        SimpleCudaMat& currentBuffer = writeBuffer->frameBuffer;
         
         // Capture current desktop frame using Desktop Duplication
         if (m_desktopDuplication && m_d3dDevice && m_d3dContext && m_captureTextureD3D) {
@@ -1796,17 +1798,25 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
         
         if (err != cudaSuccess) {
             printf("[ERROR] Capture failed: %s\n", cudaGetErrorString(err));
+            // Release buffer back to free state on capture failure
+            m_tripleBuffer->releaseBuffer(writeIdx);
+            return false;
+        }
+        
+        // Record capture completion and transition to processing state
+        writeBuffer->captureCompleteEvent.record(stream);
+        if (!m_tripleBuffer->transitionStage(writeIdx, TripleBuffer::BufferState::CAPTURING, TripleBuffer::BufferState::PROCESSING)) {
+            printf("[ERROR] Failed to transition buffer state after capture\n");
+            m_tripleBuffer->releaseBuffer(writeIdx);
             return false;
         }
         
         m_hasFrameData = true;
     }
     
-    // Step 3: Execute detection and inference pipeline on current frame
+    // Step 4: Execute detection and inference pipeline with event chain
     if (!ctx.detection_paused.load()) {
-        // OPTIMIZED: Process directly from triple buffer (no intermediate copy needed)
-        // This eliminates 0.03ms of unnecessary memory copy per frame
-        SimpleCudaMat& currentBuffer = m_tripleBuffer->buffers[currentIdx];
+        SimpleCudaMat& currentBuffer = writeBuffer->frameBuffer;
         
         // Update preview buffer for debug window (only when preview is enabled)
         if (ctx.preview_enabled && !currentBuffer.empty()) {
@@ -1824,23 +1834,15 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
                           cudaMemcpyDeviceToDevice, stream);
         }
         
+        // Wait for capture completion before processing
+        cudaStreamWaitEvent(stream, writeBuffer->captureCompleteEvent.get(), 0);
+        
         // Unified Preprocessing: BGRA → RGB + Resize + Normalize + HWC→CHW
-        // Process directly from triple buffer for maximum efficiency
         if (m_d_yoloInput && !currentBuffer.empty()) {
             int modelRes = getModelInputResolution();
             
-            // DEBUG: 전처리 파라미터 확인
-            static bool debug_logged = false;
-            if (!debug_logged) {
-                std::cout << "[DEBUG] Preprocessing parameters:" << std::endl;
-                std::cout << "  Input buffer: " << currentBuffer.cols() << "x" << currentBuffer.rows() 
-                          << " (step: " << currentBuffer.step() << ")" << std::endl;
-                std::cout << "  Model resolution: " << modelRes << "x" << modelRes << std::endl;
-                debug_logged = true;
-            }
-            
             cudaError_t err = cuda_unified_preprocessing(
-                currentBuffer.data(),  // Direct from triple buffer - no copy needed!
+                currentBuffer.data(),  // Process from safe buffer
                 m_d_yoloInput->get(),
                 currentBuffer.cols(),
                 currentBuffer.rows(),
@@ -1852,6 +1854,7 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
             
             if (err != cudaSuccess) {
                 printf("[ERROR] Unified preprocessing failed: %s\n", cudaGetErrorString(err));
+                m_tripleBuffer->releaseBuffer(writeIdx);
                 return false;
             }
         }
@@ -1871,69 +1874,52 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
             
             if (!runInferenceAsync(stream)) {
                 std::cerr << "[UnifiedGraph] TensorRT inference failed in executeGraphNonBlocking" << std::endl;
+                m_tripleBuffer->releaseBuffer(writeIdx);
                 return false;
             }
             
-            // OPTIMIZATION: TensorRT output buffer is now aliased - no copy needed
-            // The output binding directly points to m_d_inferenceOutput memory
-            // This eliminates the device-to-device copy completely (~0.1-0.2ms saved per frame)
+            // Record inference completion
+            writeBuffer->inferenceCompleteEvent.record(stream);
             
             // Integrated post-processing (decode, filter, NMS, target selection)
             performIntegratedPostProcessing(stream);
             performTargetSelection(stream);
             
-            // Step 4: Copy target results to host memory (async) using pinned memory
+            // Step 5: Copy target results to host memory with safe event synchronization
             Target* finalTarget = m_d_bestTarget->get();
-            if (finalTarget && m_tripleBuffer->h_target_coords_pinned[currentIdx].get()) {
-                // OPTIMIZED: No need to clear - cudaMemcpyAsync overwrites all data
-                // This saves ~0.001ms per frame (small but eliminates unnecessary work)
-                
+            if (finalTarget && writeBuffer->h_target_coords_pinned.get()) {
                 // Final validation of best target before host copy
                 validateBestTargetGpu(finalTarget, stream);
                 
                 // Copy best target to pinned memory
-                cudaMemcpyAsync(m_tripleBuffer->h_target_coords_pinned[currentIdx].get(), finalTarget, sizeof(Target), 
+                cudaMemcpyAsync(writeBuffer->h_target_coords_pinned.get(), finalTarget, sizeof(Target), 
                                cudaMemcpyDeviceToHost, stream);
                 
-                // Record event when target data is ready
-                m_tripleBuffer->target_ready_events[currentIdx].record(stream);
-                
-                // Get the actual count of valid targets
+                // Get the actual count of valid targets atomically
                 int targetCount = 0;
                 if (m_d_finalTargetsCount) {
                     cudaMemcpyAsync(&targetCount, m_d_finalTargetsCount->get(), sizeof(int), 
                                    cudaMemcpyDeviceToHost, stream);
-                    m_tripleBuffer->target_count[currentIdx] = targetCount;
+                    writeBuffer->targetCount.store(targetCount, std::memory_order_relaxed);
                 } else {
-                    m_tripleBuffer->target_count[currentIdx] = 0;
+                    writeBuffer->targetCount.store(0, std::memory_order_relaxed);
                 }
                 
-                // Only mark as valid if we actually have targets
-                // This prevents using invalid/garbage targets
-                m_tripleBuffer->target_data_valid[currentIdx] = true;
+                // Record copy completion and mark targets as valid
+                writeBuffer->copyCompleteEvent.record(stream);
+                writeBuffer->hasValidTargets.store(true, std::memory_order_release);
             } else {
-                // No target buffer available
-                m_tripleBuffer->target_data_valid[currentIdx] = false;
-                m_tripleBuffer->target_count[currentIdx] = 0;
-                // OPTIMIZED: No need to clear pinned memory when no target
-                // Invalid target_data_valid flag prevents usage anyway
+                // No target buffer available - mark as invalid
+                writeBuffer->hasValidTargets.store(false, std::memory_order_relaxed);
+                writeBuffer->targetCount.store(0, std::memory_order_relaxed);
             }
-        }
-    }
-    
-    // Step 5: Advance pipeline indices for next frame
-    int nextIdx = (currentIdx + 1) % 3;
-    m_prevPipelineIdx.store(currentIdx);
-    m_currentPipelineIdx.store(nextIdx);
-    
-    // Step 6: Check if next buffer is ready without blocking
-    int nextNextIdx = (nextIdx + 1) % 3;
-    if (m_tripleBuffer->target_data_valid[nextNextIdx]) {
-        // Use non-blocking query instead of synchronize
-        cudaError_t status = m_tripleBuffer->target_ready_events[nextNextIdx].query();
-        if (status != cudaSuccess && status != cudaErrorNotReady) {
-            // Only sync if there's an actual error, not if just not ready
-            m_tripleBuffer->target_ready_events[nextNextIdx].synchronize();
+            
+            // Transition to ready state for consumer
+            if (!m_tripleBuffer->transitionStage(writeIdx, TripleBuffer::BufferState::PROCESSING, TripleBuffer::BufferState::READY)) {
+                printf("[ERROR] Failed to transition buffer to ready state\n");
+                m_tripleBuffer->releaseBuffer(writeIdx);
+                return false;
+            }
         }
     }
     
@@ -1950,31 +1936,40 @@ void UnifiedGraphPipeline::processMouseMovementAsync() {
         return;
     }
     
-    int prevIdx = m_prevPipelineIdx.load();
+    // Get ready buffer for consumption (atomic, non-blocking)
+    auto* readyBuffer = m_tripleBuffer->getReadyBuffer();
+    if (!readyBuffer) {
+        return; // No ready data available
+    }
     
-    // Check if previous frame's target data is ready (non-blocking)
-    if (!m_tripleBuffer->target_data_valid[prevIdx] || 
-        m_tripleBuffer->target_count[prevIdx] == 0) {
+    int readIdx = m_tripleBuffer->getCurrentReadIndex();
+    
+    // Check if buffer has valid target data
+    if (!readyBuffer->hasValidTargets.load(std::memory_order_acquire) || 
+        readyBuffer->targetCount.load(std::memory_order_relaxed) == 0) {
+        m_tripleBuffer->releaseBuffer(readIdx);
         return;
     }
     
-    cudaError_t eventStatus = m_tripleBuffer->target_ready_events[prevIdx].query();
-    if (eventStatus != cudaSuccess) {
-        return; // Data not ready yet, skip this frame
+    // Check if copy operation is complete (non-blocking)
+    if (readyBuffer->copyCompleteEvent.query() != cudaSuccess) {
+        m_tripleBuffer->releaseBuffer(readIdx);
+        return; // Data not ready yet
     }
     
-    // Target data is ready, use pinned memory
-    Target* h_target_ptr = m_tripleBuffer->h_target_coords_pinned[prevIdx].get();
+    // Target data is ready and safe to use
+    Target* h_target_ptr = readyBuffer->h_target_coords_pinned.get();
     if (!h_target_ptr) {
+        m_tripleBuffer->releaseBuffer(readIdx);
         return; // Pinned memory not initialized
     }
     Target& h_target = *h_target_ptr;
     
-    // Simplified corruption check - only check for extreme values that would cause immediate problems
+    // Simplified corruption check
     if (h_target.width <= 0 || h_target.height <= 0 || 
         h_target.x < -1000.0f || h_target.x > 10000.0f ||
         h_target.y < -1000.0f || h_target.y > 10000.0f) {
-        m_tripleBuffer->target_data_valid[prevIdx] = false;
+        m_tripleBuffer->releaseBuffer(readIdx);
         return;
     }
     
@@ -1998,43 +1993,40 @@ void UnifiedGraphPipeline::processMouseMovementAsync() {
         targetCenterY = h_target.y + h_target.height * ctx.config.body_y_offset;
     }
     
-    // Single validation for calculated target center - if this passes, proceed with mouse movement
+    // Single validation for calculated target center
     if (targetCenterX < 0 || targetCenterX > ctx.config.detection_resolution ||
         targetCenterY < 0 || targetCenterY > ctx.config.detection_resolution) {
-        m_tripleBuffer->target_data_valid[prevIdx] = false;
+        m_tripleBuffer->releaseBuffer(readIdx);
         return;
     }
     
-    // Calculate mouse movement (no additional validations needed)
+    // Calculate mouse movement
     float screenCenterX = ctx.config.detection_resolution / 2.0f;
     float screenCenterY = ctx.config.detection_resolution / 2.0f;
     
     float error_x = targetCenterX - screenCenterX;
     float error_y = targetCenterY - screenCenterY;
     
-    // Simple proportional control (P controller only)
-    float kp_x = ctx.config.pd_kp_x;  // TODO: rename config variable to just kp_x
-    float kp_y = ctx.config.pd_kp_y;  // TODO: rename config variable to just kp_y
+    // Simple proportional control
+    float kp_x = ctx.config.pd_kp_x;
+    float kp_y = ctx.config.pd_kp_y;
     
-    // Direct proportional control without deadzone
     float movement_x = error_x * kp_x;
     float movement_y = error_y * kp_y;
     
-    // Clamp movements to reasonable values to prevent extreme jumps
-    const float MAX_MOVEMENT = 200.0f;  // Maximum pixels to move in one frame
+    // Clamp movements to prevent extreme jumps
+    const float MAX_MOVEMENT = 200.0f;
     movement_x = std::max(-MAX_MOVEMENT, std::min(MAX_MOVEMENT, movement_x));
     movement_y = std::max(-MAX_MOVEMENT, std::min(MAX_MOVEMENT, movement_y));
     
     int dx = static_cast<int>(movement_x);
     int dy = static_cast<int>(movement_y);
     
-    // No clamping - allow full movement range for maximum precision
-    
-    // Execute mouse movement (non-blocking) - no need to check for zero movement
+    // Execute mouse movement (non-blocking)
     cuda::executeMouseMovementFromGPU(dx, dy);
     
-    // Mark this buffer's data as processed
-    m_tripleBuffer->target_data_valid[prevIdx] = false;
+    // Release consumed buffer back to free state
+    m_tripleBuffer->releaseBuffer(readIdx);
 }
 
 } // namespace needaimbot
