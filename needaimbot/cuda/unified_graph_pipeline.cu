@@ -35,6 +35,69 @@ namespace needaimbot {
 
 // fusedPreprocessKernel removed - using CudaImageProcessing pipeline instead
 
+// GPU kernel to calculate mouse movement directly from target (eliminates CPU copying)
+__global__ void calculateMouseMovementKernel(
+    const Target* __restrict__ best_target,
+    float screen_center_x,
+    float screen_center_y, 
+    float kp_x,
+    float kp_y,
+    int head_class_id,
+    float head_y_offset,
+    float body_y_offset,
+    int detection_resolution,
+    int* __restrict__ output_dx,
+    int* __restrict__ output_dy
+) {
+    // Only first thread does the work
+    if (threadIdx.x == 0 && blockIdx.x == 0) {
+        // Initialize output (invalid case)
+        *output_dx = 0;
+        *output_dy = 0;
+        
+        // Validate target
+        if (!best_target || best_target->width <= 0 || best_target->height <= 0 ||
+            best_target->x < -1000.0f || best_target->x > 10000.0f ||
+            best_target->y < -1000.0f || best_target->y > 10000.0f) {
+            return; // Invalid case: dx=0, dy=0
+        }
+        
+        // Calculate target center
+        float target_center_x = best_target->x + best_target->width / 2.0f;
+        float target_center_y;
+        
+        // Apply class-specific Y offset
+        if (best_target->classId == head_class_id) {
+            target_center_y = best_target->y + best_target->height * head_y_offset;
+        } else {
+            target_center_y = best_target->y + best_target->height * body_y_offset;
+        }
+        
+        // Validate calculated center
+        if (target_center_x < 0 || target_center_x > detection_resolution ||
+            target_center_y < 0 || target_center_y > detection_resolution) {
+            return; // Invalid case: dx=0, dy=0
+        }
+        
+        // Calculate error
+        float error_x = target_center_x - screen_center_x;
+        float error_y = target_center_y - screen_center_y;
+        
+        // Apply proportional control
+        float movement_x = error_x * kp_x;
+        float movement_y = error_y * kp_y;
+        
+        // Clamp movements
+        const float MAX_MOVEMENT = 200.0f;
+        movement_x = fmaxf(-MAX_MOVEMENT, fminf(MAX_MOVEMENT, movement_x));
+        movement_y = fmaxf(-MAX_MOVEMENT, fminf(MAX_MOVEMENT, movement_y));
+        
+        // Convert to integers (valid case)
+        *output_dx = static_cast<int>(movement_x);
+        *output_dy = static_cast<int>(movement_y);
+    }
+}
+
 // Unified buffer clearing kernel - replaces 8 separate cudaMemsetAsync calls for 0.07ms improvement
 __global__ void clearAllDetectionBuffersKernel(
     Target* decodedTargets,
@@ -215,23 +278,16 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
             // CRITICAL FIX: Also initialize TensorRT binding buffers
             auto bindingIt = m_inputBindings.find(m_inputName);
             if (bindingIt != m_inputBindings.end() && bindingIt->second != nullptr) {
-                std::cout << "[DEBUG] Found TensorRT binding for '" << m_inputName << "' at: " << bindingIt->second->get() << std::endl;
                 if (bindingIt->second->get() != reinterpret_cast<uint8_t*>(m_d_yoloInput->get())) {
-                    std::cout << "[DEBUG] Initializing TensorRT binding buffer (different from yolo buffer)" << std::endl;
                     // First clear with zeros, then set dummy data
                     cudaMemsetAsync(bindingIt->second->get(), 0, inputSize, stream);
                     cudaMemcpyAsync(bindingIt->second->get(), dummyData.data(), inputSize, cudaMemcpyHostToDevice, stream);
-                } else {
-                    std::cout << "[DEBUG] TensorRT binding uses same buffer as yolo input" << std::endl;
                 }
-            } else {
-                std::cout << "[DEBUG] WARNING: TensorRT binding not found for '" << m_inputName << "'" << std::endl;
             }
             
             // Wait for copy to complete before graph capture
             cudaStreamSynchronize(stream);
             
-            std::cout << "[DEBUG] Input buffer initialized with dummy data (0.5)" << std::endl;
         }
         
         // Use integrated TensorRT inference (Phase 1)
@@ -311,10 +367,7 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     
     // 7. Final output copy (only 2 floats for mouse X,Y)
     if (m_d_outputBuffer && m_d_outputBuffer->get() && m_h_outputBuffer && m_h_outputBuffer->get()) {
-        // Copy final movement to output buffer if needed
-        // This is mainly for debugging/monitoring purposes
-        cudaMemcpyAsync(m_h_outputBuffer->get(), m_d_outputBuffer->get(),
-                       2 * sizeof(float), cudaMemcpyDeviceToHost, stream);
+        // Skip debug copy to eliminate GPU-CPU transfer
     }
     
     // End capture
@@ -411,12 +464,6 @@ bool UnifiedGraphPipeline::allocateBuffers() {
     const int yoloSize = getModelInputResolution();
     const int maxDetections = ctx.config.max_detections;  // Use UI configured value
     
-    // DEBUG: 해상도 설정값 확인
-    std::cout << "[DEBUG] allocateBuffers() - Config values:" << std::endl;
-    std::cout << "  detection_resolution: " << ctx.config.detection_resolution << std::endl;
-    std::cout << "  getModelInputResolution(): " << yoloSize << std::endl;
-    std::cout << "  max_detections: " << maxDetections << std::endl;
-    std::cout << "  Buffer dimensions: " << width << "x" << height << std::endl;
     
     try {
         // Initialize Simple Triple Buffer System with stream-based ordering
@@ -492,6 +539,10 @@ bool UnifiedGraphPipeline::allocateBuffers() {
         m_d_bestTargetIndex = std::make_unique<CudaMemory<int>>(1);  // No zero init
         m_d_bestTarget = std::make_unique<CudaMemory<Target>>(1);  // No zero init
         
+        // Mouse movement GPU output buffers (eliminates CPU copying)
+        m_d_mouseDx = std::make_unique<CudaMemory<int>>(1);  // No zero init
+        m_d_mouseDy = std::make_unique<CudaMemory<int>>(1);  // No zero init
+        
         // Class filtering control buffer (64 classes max) - Using RAII
         m_d_allowFlags = std::make_unique<CudaMemory<unsigned char>>(Constants::MAX_CLASSES_FOR_FILTERING);
         
@@ -510,14 +561,6 @@ bool UnifiedGraphPipeline::allocateBuffers() {
                   << " MB, Pinned: " << ((width * height * 4 + 8) / (1024 * 1024)) 
                   << " MB" << std::endl;
         
-        // Debug: Print NMS buffer pointers
-        std::cout << "[UnifiedGraph] NMS buffer pointers:" << std::endl;
-        std::cout << "  m_d_x1=" << m_d_x1 << " m_d_y1=" << m_d_y1 << std::endl;
-        std::cout << "  m_d_x2=" << m_d_x2 << " m_d_y2=" << m_d_y2 << std::endl;
-        std::cout << "  m_d_areas=" << m_d_areas << " m_d_scores_nms=" << m_d_scores_nms << std::endl;
-        std::cout << "  m_d_classIds_nms=" << m_d_classIds_nms << std::endl;
-        std::cout << "  m_d_iou_matrix=" << m_d_iou_matrix << " m_d_keep=" << m_d_keep << std::endl;
-        std::cout << "  m_d_indices=" << m_d_indices << " m_d_numDetections=" << m_d_numDetections << std::endl;
         
         return true;
         
@@ -851,10 +894,6 @@ bool UnifiedGraphPipeline::initializeTensorRT(const std::string& modelFile) {
         }
         std::cout << " (size: " << outputSize << " bytes)" << std::endl;
         
-        // DEBUG: 각 출력 텐서의 상세 정보
-        std::cout << "[DEBUG] Output tensor '" << outputName << "' details:" << std::endl;
-        std::cout << "  Data type: " << static_cast<int>(m_engine->getTensorDataType(outputName.c_str())) << std::endl;
-        std::cout << "  Format: " << static_cast<int>(m_engine->getTensorFormat(outputName.c_str())) << std::endl;
     }
     
     // Allocate GPU memory bindings with error handling
@@ -871,11 +910,6 @@ bool UnifiedGraphPipeline::initializeTensorRT(const std::string& modelFile) {
     // ctx is already declared at line 1735, so just use it here
     m_imgScale = static_cast<float>(ctx.config.detection_resolution) / getModelInputResolution();
     
-    // DEBUG: 스케일링 팩터 확인
-    std::cout << "[DEBUG] TensorRT initialization - Scaling setup:" << std::endl;
-    std::cout << "  detection_resolution: " << ctx.config.detection_resolution << std::endl;
-    std::cout << "  model_input_resolution: " << getModelInputResolution() << std::endl;
-    std::cout << "  m_imgScale: " << m_imgScale << std::endl;
     
     // Determine number of classes from output shape
     // Output shape is typically [batch, rows, boxes] where rows = 4 + num_classes
@@ -1178,7 +1212,6 @@ bool UnifiedGraphPipeline::runInferenceAsync(cudaStream_t stream) {
         }
         std::cerr << std::endl;
         
-        std::cout << "[DEBUG] TensorRT inference failed with unknown error" << std::endl;
         
         return false;
     }
@@ -1261,18 +1294,6 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
         cached_postprocess = ctx.config.postprocess;
     }
     
-    // DEBUG: 후처리 파라미터 확인 (한 번만 출력)
-    static bool postprocess_debug_logged = false;
-    if (!postprocess_debug_logged) {
-        std::cout << "[DEBUG] Post-processing parameters:" << std::endl;
-        std::cout << "  cached_max_detections: " << cached_max_detections << std::endl;
-        std::cout << "  cached_nms_threshold: " << cached_nms_threshold << std::endl;
-        std::cout << "  cached_confidence_threshold: " << cached_confidence_threshold << std::endl;
-        std::cout << "  cached_postprocess: " << cached_postprocess << std::endl;
-        std::cout << "  m_imgScale: " << m_imgScale << std::endl;
-        std::cout << "  m_numClasses: " << m_numClasses << std::endl;
-        postprocess_debug_logged = true;
-    }
 
     // Step 1: Decode YOLO output based on model type
     // Use the cached max_detections from UI config (same as buffer allocation)
@@ -1283,8 +1304,7 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
     if (cached_postprocess == "yolo10") {
         int max_candidates = (shape.size() > 1) ? static_cast<int>(shape[1]) : 0;
         
-        // DEBUG: YOLO10 경로 진입
-        std::cout << "[DEBUG] Using YOLO10 post-processing path" << std::endl;
+        // Using YOLO10 post-processing path
         
         decodeErr = decodeYolo10Gpu(
             d_rawOutputPtr,
@@ -1302,7 +1322,6 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
         // NMS가 포함된 모델 - 이미 후처리된 출력
         // 출력 형식: [batch, num_detections, 6] where 6 = [x1, y1, x2, y2, confidence, class_id]
         
-        // YOLO_NMS 경로 진입 (디버그 로그 제거)
         int num_detections = (shape.size() > 1) ? static_cast<int>(shape[1]) : 0;
         int output_features = (shape.size() > 2) ? static_cast<int>(shape[2]) : 0;
         
@@ -1331,13 +1350,7 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
                cached_postprocess == "yolo11" || cached_postprocess == "yolo12") {
         int max_candidates = (shape.size() > 2) ? static_cast<int>(shape[2]) : 0;
         
-        // DEBUG: YOLO11/12 경로 진입 및 shape 분석
-        std::cout << "[DEBUG] Using YOLO11/12 post-processing path" << std::endl;
-        std::cout << "[DEBUG] Output shape analysis:" << std::endl;
-        for (size_t i = 0; i < shape.size(); i++) {
-            std::cout << "  shape[" << i << "] = " << shape[i] << std::endl;
-        }
-        std::cout << "[DEBUG] max_candidates calculated: " << max_candidates << std::endl;
+        // Use YOLO11/12 post-processing path
         
         // Validate parameters before calling
         if (!m_d_decodedTargets || !m_d_decodedCount) {
@@ -1552,15 +1565,17 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
                 
                 // Start new copy if not already in progress
                 if (!m_copyInProgress) {
-                    // OPTIMIZED: Copy only actual targets instead of full buffer
-                    // First copy count to determine how many targets to copy
-                    cudaMemcpyAsync(&m_h_finalCount, m_d_finalTargetsCount->get(), sizeof(int), 
-                                   cudaMemcpyDeviceToHost, stream);
-                    
-                    // OPTIMIZATION: Use pre-allocated buffer - no resize needed
-                    int copyCount = std::min(actual_count, static_cast<int>(m_h_finalTargets.size()));
-                    cudaMemcpyAsync(m_h_finalTargets.data(), m_d_finalTargets->get(), 
-                                  copyCount * sizeof(Target), cudaMemcpyDeviceToHost, stream);
+                    // MINIMAL UI COPY: Only every 16th frame (240fps→15fps UI updates) when window shown
+                    static int ui_copy_counter = 0;
+                    if (ctx.config.show_window && (++ui_copy_counter % 16 == 0)) {
+                        // Copy minimal data for UI preview only
+                        cudaMemcpyAsync(&m_h_finalCount, m_d_finalTargetsCount->get(), sizeof(int), 
+                                       cudaMemcpyDeviceToHost, stream);
+                        
+                        int copyCount = std::min(actual_count, static_cast<int>(m_h_finalTargets.size()));
+                        cudaMemcpyAsync(m_h_finalTargets.data(), m_d_finalTargets->get(), 
+                                      copyCount * sizeof(Target), cudaMemcpyDeviceToHost, stream);
+                    }
                     
                     // Record event for this copy
                     m_copyEvent->record(stream);
@@ -1828,30 +1843,46 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
         cudaStreamWaitEvent(m_copyStream->get(), m_tripleBuffer->inferenceComplete[writeIdx].get(), 0);
         
         Target* finalTarget = m_d_bestTarget->get();
-        if (finalTarget && m_tripleBuffer->h_target_coords_pinned[writeIdx].get()) {
-            // Final validation and copy to pinned memory
-            validateBestTargetGpu(finalTarget, m_copyStream->get());
+        if (finalTarget && m_tripleBuffer->h_movement_dx_pinned[writeIdx].get()) {
+            // Calculate mouse movement on GPU and copy only dx/dy (8 bytes instead of 32+ bytes)
+            auto& ctx = AppContext::getInstance();
             
-            cudaMemcpyAsync(m_tripleBuffer->h_target_coords_pinned[writeIdx].get(), finalTarget, sizeof(Target), 
-                           cudaMemcpyDeviceToHost, m_copyStream->get());
-            
-            // Get target count
-            int targetCount = 0;
-            if (m_d_finalTargetsCount) {
-                cudaMemcpyAsync(&targetCount, m_d_finalTargetsCount->get(), sizeof(int), 
-                               cudaMemcpyDeviceToHost, m_copyStream->get());
-                m_tripleBuffer->target_count[writeIdx] = targetCount;
-            } else {
-                m_tripleBuffer->target_count[writeIdx] = 0;
+            // Find head class ID
+            int head_class_id = -1;
+            for(const auto& cs : ctx.config.class_settings) {
+                if (cs.name == ctx.config.head_class_name) {
+                    head_class_id = cs.id;
+                    break;
+                }
             }
             
-            // Record copy completion and mark data ready
+            // Launch GPU kernel to calculate mouse movement directly (single thread)
+            calculateMouseMovementKernel<<<1, 1, 0, m_copyStream->get()>>>(
+                finalTarget,
+                ctx.config.detection_resolution / 2.0f,  // screen center X
+                ctx.config.detection_resolution / 2.0f,  // screen center Y
+                ctx.config.pd_kp_x,                      // kp_x
+                ctx.config.pd_kp_y,                      // kp_y
+                head_class_id,
+                ctx.config.head_y_offset,
+                ctx.config.body_y_offset,
+                ctx.config.detection_resolution,
+                m_d_mouseDx->get(),
+                m_d_mouseDy->get()
+            );
+            
+            // Copy only dx/dy (8 bytes total instead of 32+ bytes)
+            cudaMemcpyAsync(m_tripleBuffer->h_movement_dx_pinned[writeIdx].get(), m_d_mouseDx->get(), sizeof(int), 
+                           cudaMemcpyDeviceToHost, m_copyStream->get());
+            cudaMemcpyAsync(m_tripleBuffer->h_movement_dy_pinned[writeIdx].get(), m_d_mouseDy->get(), sizeof(int), 
+                           cudaMemcpyDeviceToHost, m_copyStream->get());
+            
+            // Record copy completion and mark movement data ready
             m_tripleBuffer->copyComplete[writeIdx].record(m_copyStream->get());
-            m_tripleBuffer->target_data_valid[writeIdx] = true;  // Simple flag, no complex states
+            m_tripleBuffer->movement_data_ready[writeIdx] = true;
         } else {
-            // No valid data
-            m_tripleBuffer->target_data_valid[writeIdx] = false;
-            m_tripleBuffer->target_count[writeIdx] = 0;
+            // No valid movement data
+            m_tripleBuffer->movement_data_ready[writeIdx] = false;
         }
     }
     
@@ -1868,88 +1899,23 @@ void UnifiedGraphPipeline::processMouseMovementAsync() {
         return;
     }
     
-    // Find any ready data (simple non-blocking check)
-    int readIdx = m_tripleBuffer->findReadyData();
+    // Find ready movement data (dx/dy already calculated on GPU)
+    int readIdx = m_tripleBuffer->findReadyMovementData();
     if (readIdx < 0) {
-        return; // No ready data available
+        return; // No ready movement data
     }
     
-    // Check target count
-    if (m_tripleBuffer->target_count[readIdx] == 0) {
-        m_tripleBuffer->markConsumed(readIdx);
-        return;
+    // Get pre-calculated dx/dy from GPU (no complex CPU calculations needed!)
+    int dx = *m_tripleBuffer->h_movement_dx_pinned[readIdx].get();
+    int dy = *m_tripleBuffer->h_movement_dy_pinned[readIdx].get();
+    
+    // Execute mouse movement (dx=0,dy=0 if invalid target - handled by GPU)
+    if (dx != 0 || dy != 0) {
+        cuda::executeMouseMovementFromGPU(dx, dy);
     }
     
-    // Target data is ready and safe to use
-    Target* h_target_ptr = m_tripleBuffer->h_target_coords_pinned[readIdx].get();
-    if (!h_target_ptr) {
-        m_tripleBuffer->markConsumed(readIdx);
-        return;
-    }
-    Target& h_target = *h_target_ptr;
-    
-    // Simple corruption check
-    if (h_target.width <= 0 || h_target.height <= 0 || 
-        h_target.x < -1000.0f || h_target.x > 10000.0f ||
-        h_target.y < -1000.0f || h_target.y > 10000.0f) {
-        m_tripleBuffer->markConsumed(readIdx);
-        return;
-    }
-    
-    // Calculate center coordinates (back to original method)
-    float targetCenterX = h_target.x + h_target.width / 2.0f;
-    float targetCenterY;
-    
-    // Find head class ID from class_settings
-    int head_class_id = -1;
-    for(const auto& cs : ctx.config.class_settings) {
-        if (cs.name == ctx.config.head_class_name) {
-            head_class_id = cs.id;
-            break;
-        }
-    }
-    
-    // Check if this is a head or body target and apply appropriate offset
-    if (h_target.classId == head_class_id) {
-        targetCenterY = h_target.y + h_target.height * ctx.config.head_y_offset;
-    } else {
-        targetCenterY = h_target.y + h_target.height * ctx.config.body_y_offset;
-    }
-    
-    // Single validation for calculated target center
-    if (targetCenterX < 0 || targetCenterX > ctx.config.detection_resolution ||
-        targetCenterY < 0 || targetCenterY > ctx.config.detection_resolution) {
-        m_tripleBuffer->markConsumed(readIdx);
-        return;
-    }
-    
-    // Calculate mouse movement
-    float screenCenterX = ctx.config.detection_resolution / 2.0f;
-    float screenCenterY = ctx.config.detection_resolution / 2.0f;
-    
-    float error_x = targetCenterX - screenCenterX;
-    float error_y = targetCenterY - screenCenterY;
-    
-    // Simple proportional control
-    float kp_x = ctx.config.pd_kp_x;
-    float kp_y = ctx.config.pd_kp_y;
-    
-    float movement_x = error_x * kp_x;
-    float movement_y = error_y * kp_y;
-    
-    // Clamp movements to prevent extreme jumps
-    const float MAX_MOVEMENT = 200.0f;
-    movement_x = std::max(-MAX_MOVEMENT, std::min(MAX_MOVEMENT, movement_x));
-    movement_y = std::max(-MAX_MOVEMENT, std::min(MAX_MOVEMENT, movement_y));
-    
-    int dx = static_cast<int>(movement_x);
-    int dy = static_cast<int>(movement_y);
-    
-    // Execute mouse movement (non-blocking)
-    cuda::executeMouseMovementFromGPU(dx, dy);
-    
-    // Mark data as consumed (simple cleanup)
-    m_tripleBuffer->markConsumed(readIdx);
+    // Mark movement data as consumed
+    m_tripleBuffer->markMovementConsumed(readIdx);
 }
 
 } // namespace needaimbot
