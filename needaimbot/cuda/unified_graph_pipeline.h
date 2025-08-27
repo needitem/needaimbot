@@ -146,7 +146,7 @@ public:
     // TensorRT integration methods (Phase 1)
     bool initializeTensorRT(const std::string& modelFile);
     bool loadEngine(const std::string& modelFile);
-    nvinfer1::ICudaEngine* buildEngineFromOnnx(const std::string& onnxPath);
+    int getModelInputResolution() const;
     void getInputNames();
     void getOutputNames();
     void getBindings();

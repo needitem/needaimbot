@@ -57,60 +57,9 @@ static void draw_model_settings()
     
     UIHelpers::CompactSpacer();
     
-    const char* resolution_items[] = { "160", "320", "640" };
-    int current_resolution_index = 0;
-    if (ctx.config.onnx_input_resolution == 160)      current_resolution_index = 0;
-    else if (ctx.config.onnx_input_resolution == 320) current_resolution_index = 1;
-    else if (ctx.config.onnx_input_resolution == 640) current_resolution_index = 2;
-    
-    if (UIHelpers::EnhancedCombo("Input Resolution", &current_resolution_index, resolution_items, IM_ARRAYSIZE(resolution_items),
-                                "Select the input resolution for the ONNX model (e.g., 640 for 640x640 input). Changing this will require the .engine file to be rebuilt if it doesn't match."))
-    {
-        int selected_resolution = 160; 
-        if (current_resolution_index == 0)      selected_resolution = 160;
-        else if (current_resolution_index == 1) selected_resolution = 320;
-        else if (current_resolution_index == 2) selected_resolution = 640;
-
-        if (ctx.config.onnx_input_resolution != selected_resolution)
-        {
-            ctx.config.onnx_input_resolution = selected_resolution;
-            SAVE_PROFILE();
-            ctx.model_changed = true; 
-        }
-    }
-    
-    UIHelpers::CompactSpacer();
-    
-    if (UIHelpers::EnhancedCheckbox("Enable FP16 Precision", &ctx.config.export_enable_fp16, "Enable FP16 precision for the exported TensorRT engine. Reduces memory usage and improves performance on supported GPUs."))
-    {
-        SAVE_PROFILE();
-        ctx.model_changed = true;
-    }
-    
-    if (UIHelpers::EnhancedCheckbox("Enable FP8 Precision", &ctx.config.export_enable_fp8, "Enable FP8 precision for the exported TensorRT engine. Experimental feature for maximum performance on supported GPUs."))
-    {
-        SAVE_PROFILE();
-        ctx.model_changed = true;
-    }
-    
-    UIHelpers::CompactSpacer();
-    
-    if (UIHelpers::EnhancedButton("Rebuild Engine", ImVec2(-1, 0), "Force rebuild of the TensorRT engine from ONNX. Use this when changing precision settings or if the engine has issues."))
-    {
-        std::filesystem::path modelPath(std::string("models/") + ctx.config.ai_model);
-        std::filesystem::path onnxPath = modelPath;
-        if (modelPath.extension() == ".engine")
-            onnxPath.replace_extension(".onnx");
-        std::filesystem::path enginePath = onnxPath;
-        enginePath.replace_extension(".engine");
-        if (std::filesystem::exists(enginePath))
-        {
-            std::filesystem::remove(enginePath);
-        }
-        ctx.config.ai_model = onnxPath.filename().string();
-        SAVE_PROFILE();
-        ctx.model_changed = true;
-    }
+    // Engine conversion info
+    UIHelpers::TextColored(ImVec4(0.8f, 0.8f, 0.2f, 1.0f), "Engine Conversion:");
+    ImGui::TextWrapped("Use: https://github.com/needitem/EngineExport");
     
     UIHelpers::EndCard();
 }

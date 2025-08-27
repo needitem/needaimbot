@@ -202,9 +202,10 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
         if (m_d_yoloInput) {
             // std::cout << "[DEBUG] Initializing input buffer for graph capture..." << std::endl;
             
-            // Create host buffer with dummy normalized values
-            size_t inputSize = 640 * 640 * 3 * sizeof(float);
-            std::vector<float> dummyData(640 * 640 * 3, 0.5f); // Fill with 0.5 (normalized pixel value)
+            // Create host buffer with dummy normalized values using dynamic resolution
+            int resolution = getModelInputResolution();
+            size_t inputSize = resolution * resolution * 3 * sizeof(float);
+            std::vector<float> dummyData(resolution * resolution * 3, 0.5f); // Fill with 0.5 (normalized pixel value)
             
             // Copy from host to device
             cudaMemcpyAsync(m_d_yoloInput->get(), dummyData.data(), inputSize, cudaMemcpyHostToDevice, stream);
@@ -405,7 +406,7 @@ bool UnifiedGraphPipeline::allocateBuffers() {
     auto& ctx = AppContext::getInstance();
     const int width = ctx.config.detection_resolution;   // Use actual detection resolution
     const int height = ctx.config.detection_resolution;  // Square capture region
-    const int yoloSize = ctx.config.onnx_input_resolution;
+    const int yoloSize = getModelInputResolution();
     const int maxDetections = ctx.config.max_detections;  // Use UI configured value
     
     try {
@@ -864,7 +865,7 @@ bool UnifiedGraphPipeline::initializeTensorRT(const std::string& modelFile) {
     // m_imgScale is used in post-processing to scale model output coordinates back to original image size
     // Model outputs coordinates in model input resolution space, need to scale to actual detection_resolution
     // ctx is already declared at line 1735, so just use it here
-    m_imgScale = static_cast<float>(ctx.config.detection_resolution) / static_cast<float>(ctx.config.onnx_input_resolution);
+    m_imgScale = 1.0f; // Engine and detection resolution should match
     
     // Determine number of classes from output shape
     // Output shape is typically [batch, rows, boxes] where rows = 4 + num_classes
@@ -1022,132 +1023,26 @@ void UnifiedGraphPipeline::getBindings() {
     std::cout << "[Pipeline] Optimized TensorRT bindings setup completed" << std::endl;
 }
 
-nvinfer1::ICudaEngine* UnifiedGraphPipeline::buildEngineFromOnnx(const std::string& onnxPath) {
-    class SimpleLogger : public nvinfer1::ILogger {
-        void log(Severity severity, const char* msg) noexcept override {
-            // Suppress TensorRT internal errors
-            if (severity <= Severity::kERROR && 
-                (strstr(msg, "defaultAllocator.cpp") == nullptr) &&
-                (strstr(msg, "enqueueV3") == nullptr)) {
-                std::cout << "[TensorRT] " << msg << std::endl;
-            }
-        }
-    };
-    static SimpleLogger logger;
-
-    auto& ctx = AppContext::getInstance();
-    
-    std::unique_ptr<nvinfer1::IBuilder> builder(nvinfer1::createInferBuilder(logger));
-    if (!builder) return nullptr;
-
-    std::unique_ptr<nvinfer1::INetworkDefinition> network(builder->createNetworkV2(1U << static_cast<uint32_t>(nvinfer1::NetworkDefinitionCreationFlag::kEXPLICIT_BATCH)));
-    if (!network) return nullptr;
-
-    std::unique_ptr<nvonnxparser::IParser> parser(nvonnxparser::createParser(*network, logger));
-    if (!parser) return nullptr;
-
-    if (!parser->parseFromFile(onnxPath.c_str(), static_cast<int>(nvinfer1::ILogger::Severity::kWARNING))) {
-        std::cerr << "[Pipeline] Failed to parse ONNX file: " << onnxPath << std::endl;
-        return nullptr;
-    }
-
-    std::unique_ptr<nvinfer1::IBuilderConfig> config(builder->createBuilderConfig());
-    if (!config) return nullptr;
-
-    config->setMemoryPoolLimit(nvinfer1::MemoryPoolType::kWORKSPACE, 1U << 30); // 1GB
-
-    // More aggressive TensorRT optimizations
-    if (ctx.config.tensorrt_fp16 && builder->platformHasFastFp16()) {
-        config->setFlag(nvinfer1::BuilderFlag::kFP16);
-        std::cout << "[Pipeline] FP16 optimization enabled" << std::endl;
-    }
-    
-    // Additional optimization flags
-    config->setFlag(nvinfer1::BuilderFlag::kGPU_FALLBACK);
-    config->setFlag(nvinfer1::BuilderFlag::kPREFER_PRECISION_CONSTRAINTS);
-    
-    // Enable tactics sources for better kernel selection
-    config->setTacticSources(
-        1U << static_cast<uint32_t>(nvinfer1::TacticSource::kCUBLAS) |
-        1U << static_cast<uint32_t>(nvinfer1::TacticSource::kCUBLAS_LT) |
-        1U << static_cast<uint32_t>(nvinfer1::TacticSource::kCUDNN)
-    );
-    
-    // Profiling for optimal kernel selection
-    config->setProfilingVerbosity(nvinfer1::ProfilingVerbosity::kDETAILED);
-
-    // Create optimization profile for dynamic inputs
-    auto profile = builder->createOptimizationProfile();
-    if (!profile) {
-        std::cerr << "[Pipeline] Failed to create optimization profile" << std::endl;
-        return nullptr;
-    }
-
-    // Set optimization profile for the input (assuming batch size = 1, channels = 3, and dynamic height/width)
-    const char* inputName = network->getInput(0)->getName();
-    nvinfer1::Dims inputDims = network->getInput(0)->getDimensions();
-    
-    // For YOLO models, typically the input is [1, 3, height, width]
-    // Set min, opt, and max dimensions - using the config's input resolution
-    int resolution = ctx.config.onnx_input_resolution;
-    nvinfer1::Dims minDims = nvinfer1::Dims4{1, 3, resolution, resolution};
-    nvinfer1::Dims optDims = nvinfer1::Dims4{1, 3, resolution, resolution};
-    nvinfer1::Dims maxDims = nvinfer1::Dims4{1, 3, resolution, resolution};
-    
-    profile->setDimensions(inputName, nvinfer1::OptProfileSelector::kMIN, minDims);
-    profile->setDimensions(inputName, nvinfer1::OptProfileSelector::kOPT, optDims);
-    profile->setDimensions(inputName, nvinfer1::OptProfileSelector::kMAX, maxDims);
-    
-    config->addOptimizationProfile(profile);
-
-    return builder->buildEngineWithConfig(*network, *config);
-}
 
 bool UnifiedGraphPipeline::loadEngine(const std::string& modelFile) {
-    auto& ctx = AppContext::getInstance();
-    std::string engineFilePath;
     std::filesystem::path modelPath(modelFile);
     std::string extension = modelPath.extension().string();
     
     std::cout << "[Pipeline] loadEngine called with: " << modelFile << std::endl;
     std::cout << "[Pipeline] File extension: " << extension << std::endl;
 
-    if (extension == ".engine") {
-        engineFilePath = modelFile;
-        std::cout << "[Pipeline] Using engine file directly: " << engineFilePath << std::endl;
-    } else if (extension == ".onnx") {
-        // generate engine filename with resolution and precision suffixes
-        std::string baseName = modelPath.stem().string();
-        baseName += "_" + std::to_string(ctx.config.onnx_input_resolution);
-        if (ctx.config.export_enable_fp16) baseName += "_fp16";
-        if (ctx.config.export_enable_fp8)  baseName += "_fp8";
-        std::string engineFilename = baseName + ".engine";
-        engineFilePath = (modelPath.parent_path() / engineFilename).string();
-
-        if (!fileExists(engineFilePath)) {
-            std::cout << "[Pipeline] Building engine from ONNX model" << std::endl;
-
-            nvinfer1::ICudaEngine* builtEngine = buildEngineFromOnnx(modelFile);
-            if (builtEngine) {
-                nvinfer1::IHostMemory* serializedEngine = builtEngine->serialize();
-
-                if (serializedEngine) {
-                    std::ofstream engineFile(engineFilePath, std::ios::binary);
-                    if (engineFile) {
-                        engineFile.write(reinterpret_cast<const char*>(serializedEngine->data()), serializedEngine->size());
-                        engineFile.close();
-                        
-                        std::cout << "[Pipeline] Engine saved to: " << engineFilePath << std::endl;
-                    }
-                    delete serializedEngine;
-                }
-                delete builtEngine;
-            }
-        }
-    } else {
-        std::cerr << "[Pipeline] Unsupported model format: " << extension << std::endl;
+    if (extension != ".engine") {
+        std::cerr << "[Pipeline] Error: Only .engine files are supported. Please use EngineExport tool to convert ONNX to engine format." << std::endl;
         return false;
     }
+
+    if (!fileExists(modelFile)) {
+        std::cerr << "[Pipeline] Engine file does not exist: " << modelFile << std::endl;
+        return false;
+    }
+
+    std::string engineFilePath = modelFile;
+    std::cout << "[Pipeline] Loading engine file: " << engineFilePath << std::endl;
 
     // Load engine from file
     class SimpleLogger : public nvinfer1::ILogger {
@@ -1193,6 +1088,19 @@ bool UnifiedGraphPipeline::loadEngine(const std::string& modelFile) {
         std::cerr << "[Pipeline] Failed to load engine from: " << engineFilePath << std::endl;
         return false;
     }
+}
+
+int UnifiedGraphPipeline::getModelInputResolution() const {
+    if (m_inputDims.nbDims >= 3) {
+        // For YOLO models: [batch, channels, height, width] or [batch, height, width, channels]
+        // Assuming height == width (square input)
+        if (m_inputDims.nbDims == 4) {
+            return m_inputDims.d[2]; // height dimension for [N,C,H,W] format
+        } else if (m_inputDims.nbDims == 3) {
+            return m_inputDims.d[1]; // height dimension for [C,H,W] format
+        }
+    }
+    return 640; // default fallback
 }
 
 bool UnifiedGraphPipeline::runInferenceAsync(cudaStream_t stream) {
@@ -1458,13 +1366,9 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
         m_d_scores_nms && m_d_classIds_nms && m_d_iou_matrix && 
         m_d_keep && m_d_indices) {
         
-        // Use cached frame dimensions for CUDA Graph compatibility
-        static int cached_frame_width = ctx.config.onnx_input_resolution;
-        static int cached_frame_height = ctx.config.onnx_input_resolution;
-        if (!m_graphCaptured) {
-            cached_frame_width = ctx.config.detection_resolution;
-            cached_frame_height = ctx.config.detection_resolution;
-        }
+        // Use frame dimensions from config - always detection_resolution for NMS
+        int cached_frame_width = ctx.config.detection_resolution;
+        int cached_frame_height = ctx.config.detection_resolution;
         
         // Get count for NMS input - use pinned memory for fast transfer
         // OPTIMIZATION: Zero-copy mapped pinned memory access
@@ -1611,19 +1515,9 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
     // Use the new GPU-only version to avoid synchronization
     // The kernel will check count internally
     
-    // Get crosshair position (center of screen)
-    float crosshairX, crosshairY;
-    if (!m_graphCaptured) {
-        std::lock_guard<std::mutex> lock(ctx.configMutex);
-        crosshairX = ctx.config.detection_resolution / 2.0f;
-        crosshairY = ctx.config.detection_resolution / 2.0f;
-    } else {
-        // Use cached values for graph mode
-        static float cached_crosshair_x = 320.0f;
-        static float cached_crosshair_y = 320.0f;
-        crosshairX = cached_crosshair_x;
-        crosshairY = cached_crosshair_y;
-    }
+    // Get crosshair position (center of screen) - always calculate from config
+    float crosshairX = ctx.config.detection_resolution / 2.0f;
+    float crosshairY = ctx.config.detection_resolution / 2.0f;
     
     // Ensure target selection buffers are allocated
     if (!m_d_bestTargetIndex || !m_d_bestTarget) {
@@ -1807,8 +1701,8 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
                 currentBuffer.cols(),
                 currentBuffer.rows(),
                 static_cast<int>(currentBuffer.step()),
-                ctx.config.onnx_input_resolution,
-                ctx.config.onnx_input_resolution,
+                getModelInputResolution(),
+                getModelInputResolution(),
                 stream
             );
             
@@ -1824,7 +1718,7 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
             
             // OPTIMIZATION: Skip unnecessary device-to-device copy if buffers can be aliased
             if (inputBinding != m_d_yoloInput->get()) {
-                size_t inputSize = ctx.config.onnx_input_resolution * ctx.config.onnx_input_resolution * 3 * sizeof(float);
+                size_t inputSize = getModelInputResolution() * getModelInputResolution() * 3 * sizeof(float);
                 // Only copy if buffers are actually different (saves ~0.1ms per frame)
                 cudaMemcpyAsync(inputBinding, m_d_yoloInput->get(), inputSize, 
                                cudaMemcpyDeviceToDevice, stream);
