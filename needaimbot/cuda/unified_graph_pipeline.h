@@ -192,39 +192,104 @@ private:
     bool m_classFilterDirty = true;
     std::vector<unsigned char> m_cachedClassFilter;
     
-    // Triple buffering for async pipeline with pinned memory optimization
+    // Safe and efficient triple buffering with atomic state management
     struct TripleBuffer {
-        SimpleCudaMat buffers[3];
-        std::atomic<int> captureIdx{0};
-        std::atomic<int> inferenceIdx{1};
-        std::atomic<int> displayIdx{2};
-        std::array<CudaEvent, 3> events;  // RAII-managed CUDA events
-        bool isReady[3] = {false, false, false};
+        // Pipeline buffer states for safe transitions
+        enum class BufferState {
+            FREE,           // Available for use
+            CAPTURING,      // Frame capture in progress
+            PROCESSING,     // GPU processing in progress
+            READY,          // Results ready for consumption
+            CONSUMING       // Being processed by mouse movement
+        };
         
-        // RAII-managed pinned memory for zero-copy transfers
-        std::array<CudaPinnedMemory<Target>, 3> h_target_coords_pinned;  // Pinned host memory
-        std::array<CudaEvent, 3> target_ready_events;  // Events to signal when target data is ready
-        bool target_data_valid[3] = {false, false, false};  // Track if target data is valid
-        int target_count[3] = {0, 0, 0};         // Number of targets found for each buffer
+        struct PipelineBuffer {
+            SimpleCudaMat frameBuffer;
+            std::atomic<BufferState> state{BufferState::FREE};
+            
+            // Stage completion events for dependency chain
+            CudaEvent captureCompleteEvent;
+            CudaEvent inferenceCompleteEvent;
+            CudaEvent copyCompleteEvent;
+            
+            // Target data with atomic validity flags
+            CudaPinnedMemory<Target> h_target_coords_pinned;
+            std::atomic<bool> hasValidTargets{false};
+            std::atomic<int> targetCount{0};
+            
+            PipelineBuffer() : h_target_coords_pinned(1, cudaHostAllocDefault) {}
+        };
         
-        // Constructor - initialize pinned memory
-        TripleBuffer() {
-            initPinnedMemory();
+        std::array<PipelineBuffer, 3> buffers;
+        std::atomic<int> writeIndex{0};
+        std::atomic<int> readIndex{-1};  // -1 indicates no data ready for reading
+        
+        // Atomic buffer acquisition for writing (non-blocking)
+        PipelineBuffer* acquireWriteBuffer() {
+            for (int i = 0; i < 3; ++i) {
+                int idx = (writeIndex.load(std::memory_order_acquire) + i) % 3;
+                BufferState expected = BufferState::FREE;
+                if (buffers[idx].state.compare_exchange_strong(expected, BufferState::CAPTURING,
+                    std::memory_order_acq_rel, std::memory_order_relaxed)) {
+                    writeIndex.store(idx, std::memory_order_release);
+                    return &buffers[idx];
+                }
+            }
+            return nullptr; // All buffers in use - natural backpressure
         }
         
-        // Initialize pinned memory
-        void initPinnedMemory() {
-            for (int i = 0; i < 3; i++) {
-                // Initialize each pinned memory buffer with space for one Target
-                if (h_target_coords_pinned[i].size() == 0) {
-                    h_target_coords_pinned[i] = CudaPinnedMemory<Target>(1, cudaHostAllocDefault);
+        // Safe stage transition with atomic compare-exchange
+        bool transitionStage(int bufferIdx, BufferState from, BufferState to) {
+            if (bufferIdx < 0 || bufferIdx >= 3) return false;
+            return buffers[bufferIdx].state.compare_exchange_strong(from, to,
+                std::memory_order_acq_rel, std::memory_order_relaxed);
+        }
+        
+        // Non-blocking ready buffer acquisition for reading
+        PipelineBuffer* getReadyBuffer() {
+            for (int i = 0; i < 3; ++i) {
+                if (buffers[i].state.load(std::memory_order_acquire) == BufferState::READY) {
+                    // Check if copy operation is complete
+                    if (buffers[i].copyCompleteEvent.query() == cudaSuccess) {
+                        BufferState expected = BufferState::READY;
+                        if (buffers[i].state.compare_exchange_strong(expected, BufferState::CONSUMING,
+                            std::memory_order_acq_rel, std::memory_order_relaxed)) {
+                            readIndex.store(i, std::memory_order_release);
+                            return &buffers[i];
+                        }
+                    }
                 }
+            }
+            return nullptr;
+        }
+        
+        // Release consumed buffer back to free state
+        void releaseBuffer(int bufferIdx) {
+            if (bufferIdx >= 0 && bufferIdx < 3) {
+                buffers[bufferIdx].hasValidTargets.store(false, std::memory_order_relaxed);
+                buffers[bufferIdx].targetCount.store(0, std::memory_order_relaxed);
+                buffers[bufferIdx].state.store(BufferState::FREE, std::memory_order_release);
             }
         }
         
-        // Destructor - RAII wrappers handle cleanup automatically
+        // Get current write buffer index (for debugging/monitoring)
+        int getCurrentWriteIndex() const {
+            return writeIndex.load(std::memory_order_acquire);
+        }
+        
+        // Get current read buffer index (for debugging/monitoring)
+        int getCurrentReadIndex() const {
+            return readIndex.load(std::memory_order_acquire);
+        }
+        
+        // Constructor
+        TripleBuffer() {
+            // Buffers initialize themselves via PipelineBuffer constructor
+        }
+        
+        // Destructor - RAII handles cleanup
         ~TripleBuffer() = default;
-    };;
+    };
     std::unique_ptr<TripleBuffer> m_tripleBuffer;
     
     
