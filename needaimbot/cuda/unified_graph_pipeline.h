@@ -244,6 +244,7 @@ private:
     // Inference related information
     std::string m_inputName;
     nvinfer1::Dims m_inputDims;
+    int m_modelInputResolution = 320; // 캐시된 모델 입력 해상도
     float m_imgScale;
     int m_numClasses;
     // Pipeline buffers (GPU memory)

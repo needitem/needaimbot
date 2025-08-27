@@ -826,6 +826,13 @@ bool UnifiedGraphPipeline::initializeTensorRT(const std::string& modelFile) {
         m_inputName = m_inputNames[0];
         m_inputDims = m_engine->getTensorShape(m_inputName.c_str());
         
+        // 모델 입력 해상도 캐싱
+        if (m_inputDims.nbDims == 4) {
+            m_modelInputResolution = m_inputDims.d[2]; // [N,C,H,W] format
+        } else if (m_inputDims.nbDims == 3) {
+            m_modelInputResolution = m_inputDims.d[1]; // [C,H,W] format
+        }
+        
         // Calculate input size
         size_t inputSize = 1;
         for (int i = 0; i < m_inputDims.nbDims; ++i) {
@@ -1109,16 +1116,7 @@ bool UnifiedGraphPipeline::loadEngine(const std::string& modelFile) {
 }
 
 int UnifiedGraphPipeline::getModelInputResolution() const {
-    if (m_inputDims.nbDims >= 3) {
-        // For YOLO models: [batch, channels, height, width] or [batch, height, width, channels]
-        // Assuming height == width (square input)
-        if (m_inputDims.nbDims == 4) {
-            return m_inputDims.d[2]; // height dimension for [N,C,H,W] format
-        } else if (m_inputDims.nbDims == 3) {
-            return m_inputDims.d[1]; // height dimension for [C,H,W] format
-        }
-    }
-    return 640; // default fallback
+    return m_modelInputResolution;
 }
 
 bool UnifiedGraphPipeline::runInferenceAsync(cudaStream_t stream) {
@@ -1319,18 +1317,9 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
         // NMS가 포함된 모델 - 이미 후처리된 출력
         // 출력 형식: [batch, num_detections, 6] where 6 = [x1, y1, x2, y2, confidence, class_id]
         
-        // DEBUG: YOLO_NMS 경로 진입
-        std::cout << "[DEBUG] Using YOLO_NMS post-processing path" << std::endl;
-        std::cout << "[DEBUG] NMS output shape analysis:" << std::endl;
-        for (size_t i = 0; i < shape.size(); i++) {
-            std::cout << "  shape[" << i << "] = " << shape[i] << std::endl;
-        }
-        
+        // YOLO_NMS 경로 진입 (디버그 로그 제거)
         int num_detections = (shape.size() > 1) ? static_cast<int>(shape[1]) : 0;
         int output_features = (shape.size() > 2) ? static_cast<int>(shape[2]) : 0;
-        
-        std::cout << "[DEBUG] num_detections: " << num_detections << std::endl;
-        std::cout << "[DEBUG] output_features: " << output_features << std::endl;
         
         if (output_features != 6) {
             std::cerr << "[Pipeline] Invalid NMS output format. Expected 6 features [x1,y1,x2,y2,conf,class], got " << output_features << std::endl;
@@ -1457,7 +1446,7 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
     
     if (skipNMS) {
         // For NMS models, copy decoded targets directly to final targets
-        std::cout << "[DEBUG] Skipping NMS - using pre-processed detections" << std::endl;
+        // Skipping NMS - using pre-processed detections
         
         if (m_d_finalTargets && m_d_finalTargetsCount && m_d_decodedTargets && m_d_decodedCount) {
             // Copy count
@@ -1483,7 +1472,7 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
                 // Update final count with actual copied count
                 cudaMemcpyAsync(m_d_finalTargetsCount->get(), &copy_count, sizeof(int), cudaMemcpyHostToDevice, stream);
                 
-                std::cout << "[DEBUG] Copied " << copy_count << " pre-processed detections to final targets" << std::endl;
+                // Copied pre-processed detections to final targets
             }
         }
     } else {
