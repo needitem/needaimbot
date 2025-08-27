@@ -120,6 +120,13 @@ namespace UIHelpers
         ImGui::PopStyleColor();
     }
 
+    void TextColored(const ImVec4& color, const char* text)
+    {
+        ImGui::PushStyleColor(ImGuiCol_Text, color);
+        ImGui::Text("%s", text);
+        ImGui::PopStyleColor();
+    }
+
     void BeautifulSection(const char* title, bool* open)
     {
         ImGui::PushStyleColor(ImGuiCol_Header, GetAccentColor(0.3f));
