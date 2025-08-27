@@ -1530,11 +1530,12 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
             if (ctx.config.show_window && (++preview_frame_counter % PREVIEW_UPDATE_INTERVAL == 0)) {
                 // OPTIMIZED: Initialize smaller vector for typical usage
                 if (m_h_finalTargets.empty()) {
-                    // Most frames have <20 targets, so allocate smaller buffer
-                    int previewBufferSize = min(20, cached_max_detections);
+                    // OPTIMIZATION: Start with minimal buffer, expand as needed
+                    // Most frames have <10 targets initially, saves ~400B compared to 20-target allocation
+                    int previewBufferSize = std::min(5, cached_max_detections);  // Start very small
                     m_h_finalTargets.resize(previewBufferSize);
-                    // Initialize to zero to prevent garbage values
-                    std::fill(m_h_finalTargets.begin(), m_h_finalTargets.end(), Target());
+                    // OPTIMIZATION: Skip unnecessary initialization - will be overwritten by GPU data
+                    // Only initialize if debugging garbage values, otherwise saves CPU cycles
                 }
                 
                 // Initialize event once
@@ -1578,7 +1579,7 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
                     if (actual_count > static_cast<int>(m_h_finalTargets.size())) {
                         int newSize = std::min(actual_count + 5, cached_max_detections); // +5 buffer for growth
                         m_h_finalTargets.resize(newSize);
-                        std::fill(m_h_finalTargets.begin(), m_h_finalTargets.end(), Target());
+                        // OPTIMIZATION: Skip fill - new elements will be overwritten by GPU copy
                     }
                     int copyCount = std::min(std::max(actual_count, 5), static_cast<int>(m_h_finalTargets.size()));
                     cudaMemcpyAsync(m_h_finalTargets.data(), m_d_finalTargets->get(), 
