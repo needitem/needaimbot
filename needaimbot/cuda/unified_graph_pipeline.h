@@ -208,10 +208,10 @@ private:
         std::array<CudaEvent, 3> inferenceComplete; 
         std::array<CudaEvent, 3> copyComplete;
         
-        // Target data with simple validity flags
-        std::array<CudaPinnedMemory<Target>, 3> h_target_coords_pinned;
-        bool target_data_valid[3] = {false, false, false};
-        int target_count[3] = {0, 0, 0};
+        // Mouse movement data (only 8 bytes per frame instead of 32+ bytes)
+        std::array<CudaPinnedMemory<int>, 3> h_movement_dx_pinned;   // 4 bytes
+        std::array<CudaPinnedMemory<int>, 3> h_movement_dy_pinned;   // 4 bytes  
+        bool movement_data_ready[3] = {false, false, false};         // Validity managed here
         
         // Constructor with proper initialization
         TripleBuffer() {
@@ -221,10 +221,10 @@ private:
                 inferenceComplete[i] = CudaEvent(cudaEventDisableTiming);
                 copyComplete[i] = CudaEvent(cudaEventDisableTiming);
                 
-                // Initialize pinned memory for zero-copy transfers
-                h_target_coords_pinned[i] = CudaPinnedMemory<Target>(1, cudaHostAllocDefault);
-                target_data_valid[i] = false;
-                target_count[i] = 0;
+                // Initialize pinned memory for mouse movement data
+                h_movement_dx_pinned[i] = CudaPinnedMemory<int>(1, cudaHostAllocDefault);
+                h_movement_dy_pinned[i] = CudaPinnedMemory<int>(1, cudaHostAllocDefault);
+                movement_data_ready[i] = false;
             }
         }
         
@@ -233,21 +233,20 @@ private:
             return writeIdx.fetch_add(1, std::memory_order_relaxed) % 3;
         }
         
-        // Find ready data for consumption (non-blocking check)
-        int findReadyData() {
+        // Find ready mouse movement data (non-blocking check)
+        int findReadyMovementData() {
             for (int i = 0; i < 3; ++i) {
-                if (target_data_valid[i] && copyComplete[i].query() == cudaSuccess) {
+                if (movement_data_ready[i] && copyComplete[i].query() == cudaSuccess) {
                     return i;
                 }
             }
             return -1; // No ready data
         }
         
-        // Mark data as consumed
-        void markConsumed(int idx) {
+        // Mark movement data as consumed
+        void markMovementConsumed(int idx) {
             if (idx >= 0 && idx < 3) {
-                target_data_valid[idx] = false;
-                target_count[idx] = 0;
+                movement_data_ready[idx] = false;
             }
         }
         
@@ -258,18 +257,18 @@ private:
                     buffers[i].create(height, width, channels);
                     
                     // Clear pinned memory to prevent garbage values
-                    if (h_target_coords_pinned[i].get()) {
-                        memset(h_target_coords_pinned[i].get(), 0, sizeof(Target));
+                    if (h_movement_dx_pinned[i].get()) {
+                        *h_movement_dx_pinned[i].get() = 0;
+                        *h_movement_dy_pinned[i].get() = 0;
                     }
                 }
             }
         }
         
-        // Clear all pending data (for cleanup/reset)
+        // Clear all pending movement data (for cleanup/reset)
         void clearAllData() {
             for (int i = 0; i < 3; i++) {
-                target_data_valid[i] = false;
-                target_count[i] = 0;
+                movement_data_ready[i] = false;
             }
         }
         
@@ -344,7 +343,11 @@ private:
     // Target selection buffers - Using RAII
     std::unique_ptr<CudaMemory<int>> m_d_bestTargetIndex;        // Selected target index
     std::unique_ptr<CudaMemory<Target>> m_d_bestTarget;          // Selected target data
-    std::unique_ptr<CudaMemory<float>> m_d_outputBuffer;     // Final output buffer
+    std::unique_ptr<CudaMemory<float>> m_d_outputBuffer;         // Final output buffer
+    
+    // GPU output buffers for mouse movement (no CPU copying needed)
+    std::unique_ptr<CudaMemory<int>> m_d_mouseDx;                // Mouse movement X
+    std::unique_ptr<CudaMemory<int>> m_d_mouseDy;                // Mouse movement Y
     
     // Pinned host memory for zero-copy access
     std::unique_ptr<CudaPinnedMemory<unsigned char>> m_h_inputBuffer;  // Pinned input buffer
