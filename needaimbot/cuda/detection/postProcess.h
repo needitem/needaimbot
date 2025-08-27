@@ -79,6 +79,20 @@ cudaError_t decodeYolo11Gpu(
     int max_class_filter_size = 0,
     cudaStream_t stream = 0);
 
+// Process NMS output (already post-processed detections)
+// Input format: [x1, y1, x2, y2, confidence, class_id]
+cudaError_t processNMSOutputGpu(
+    const void* d_nms_output,
+    nvinfer1::DataType output_type,
+    const std::vector<int64_t>& shape,
+    float conf_threshold,
+    float img_scale,
+    Target* d_output_detections,
+    int* d_output_count,
+    int max_output_detections,
+    int num_detections,
+    cudaStream_t stream = 0);
+
 // GPU function to find closest target to crosshair
 // Accepts d_num_detections as device pointer to avoid CPU-GPU sync
 cudaError_t findClosestTargetGpu(
