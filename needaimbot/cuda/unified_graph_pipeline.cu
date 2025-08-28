@@ -691,8 +691,6 @@ void UnifiedGraphPipeline::runMainLoop() {
     std::cout << "[UnifiedPipeline] Starting main loop - MAXIMUM PERFORMANCE MODE (No FPS Limit)" << std::endl;
     
     m_lastFrameTime = std::chrono::high_resolution_clock::now();
-    auto cycleStartTime = m_lastFrameTime;  // 1000사이클 시작 시간
-    int cycleStartFrame = m_state.frameCount;  // 1000사이클 시작 프레임
     
     // NO FPS LIMITING - Maximum performance when active
     // Frame limiter removed for maximum responsiveness
@@ -758,10 +756,8 @@ void UnifiedGraphPipeline::runMainLoop() {
             std::cout << "[UnifiedPipeline] Aimbot activated - MAXIMUM PERFORMANCE MODE" << std::endl;
             wasAiming = true;
             
-            // Reset statistics
+            // Reset frame counter only
             m_state.frameCount = 0;
-            cycleStartTime = std::chrono::high_resolution_clock::now();
-            cycleStartFrame = 0;
         }
         
         // NO FRAME LIMITING - Run at maximum speed for lowest latency
@@ -781,31 +777,8 @@ void UnifiedGraphPipeline::runMainLoop() {
             continue;
         }
         
-        // 성능 통계 업데이트 (매 1000사이클마다)
-        if (m_state.frameCount % 1000 == 0 && m_state.frameCount > 0) {
-            auto currentTime = std::chrono::high_resolution_clock::now();
-            auto cycleElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(currentTime - cycleStartTime);
-            int framesProcessed = m_state.frameCount - cycleStartFrame;
-            
-            if (cycleElapsed.count() > 0 && framesProcessed > 0) {
-                double averageFPS = (framesProcessed * 1000.0) / cycleElapsed.count();
-                
-                // Get GPU utilization (simplified - in production use NVML)
-                size_t free_mem, total_mem;
-                cudaMemGetInfo(&free_mem, &total_mem);
-                float gpu_memory_usage = ((total_mem - free_mem) * 100.0f) / total_mem;
-                
-                std::cout << "[UnifiedPipeline] Frame " << m_state.frameCount 
-                          << " - Avg FPS: " << std::fixed << std::setprecision(1) << averageFPS
-                          << " | GPU Mem: " << std::setprecision(1) << gpu_memory_usage << "%"
-                          << " | Latency: " << m_state.avgLatency << "ms"
-                          << " | Mode: MAX PERFORMANCE" << std::endl;
-            }
-            
-            // 다음 1000사이클을 위한 시작점 리셋
-            cycleStartTime = currentTime;
-            cycleStartFrame = m_state.frameCount;
-        }
+        // Performance logging removed for maximum throughput
+        // Statistics are still calculated internally for monitoring purposes
     }
     
     std::cout << "[UnifiedPipeline] Main loop stopped after " << m_state.frameCount << " frames" << std::endl;
@@ -1264,12 +1237,16 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
         // Clear all max_detections targets to prevent garbage values
         int clear_count = cached_max_detections;
         
-        // OPTIMIZATION: Launch unified clearing kernel with optimal occupancy
-        int minGridSize, blockSize;
-        cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, clearAllDetectionBuffersKernel, 0, 0);
-        int gridSize = std::min((clear_count + blockSize - 1) / blockSize, minGridSize);
+        // OPTIMIZATION: Use cached optimal kernel configuration
+        static int cached_blockSize = 0;
+        static int cached_minGridSize = 0;
+        if (cached_blockSize == 0) {
+            // Calculate optimal configuration once
+            cudaOccupancyMaxPotentialBlockSize(&cached_minGridSize, &cached_blockSize, clearAllDetectionBuffersKernel, 0, 0);
+        }
+        int gridSize = std::min((clear_count + cached_blockSize - 1) / cached_blockSize, cached_minGridSize);
         
-        clearAllDetectionBuffersKernel<<<gridSize, blockSize, 0, stream>>>(
+        clearAllDetectionBuffersKernel<<<gridSize, cached_blockSize, 0, stream>>>(
             m_d_decodedTargets->get(),
             m_d_decodedCount->get(),
             m_d_classFilteredCount->get(),
@@ -1372,16 +1349,7 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
             return;
         }
         
-        // DEBUG: YOLO 디코딩 파라미터 확인 (처음 몇 번만)
-        static int decode_debug_count = 0;
-        if (decode_debug_count < 3) {
-            std::cout << "[DEBUG] YOLO decoding parameters (frame " << decode_debug_count << "):" << std::endl;
-            std::cout << "  max_candidates: " << max_candidates << std::endl;
-            std::cout << "  maxDecodedTargets: " << maxDecodedTargets << std::endl;
-            std::cout << "  confidence_threshold: " << cached_confidence_threshold << std::endl;
-            std::cout << "  img_scale: " << m_imgScale << std::endl;
-            decode_debug_count++;
-        }
+        // Debug output removed for maximum performance
         
         // Update class filter flags if needed
         if (m_classFilterDirty && m_d_allowFlags) {
@@ -1473,13 +1441,7 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
         int cached_frame_width = ctx.config.detection_resolution;
         int cached_frame_height = ctx.config.detection_resolution;
         
-        // DEBUG: NMS 프레임 크기 확인
-        static bool nms_debug_logged = false;
-        if (!nms_debug_logged) {
-            std::cout << "[DEBUG] NMS frame dimensions: " << cached_frame_width << "x" << cached_frame_height << std::endl;
-            std::cout << "[DEBUG] NMS threshold: " << cached_nms_threshold << std::endl;
-            nms_debug_logged = true;
-        }
+        // NMS debug output removed for performance
         
         // Get count for NMS input - use pinned memory for fast transfer
         // OPTIMIZATION: Zero-copy mapped pinned memory access
