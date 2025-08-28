@@ -285,8 +285,8 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
                 }
             }
             
-            // Wait for copy to complete before graph capture
-            cudaStreamSynchronize(stream);
+            // Copy operations are properly ordered in stream - no sync needed
+            // cudaStreamSynchronize(stream); // REMOVED: Unnecessary blocking synchronization
             
         }
         
@@ -707,8 +707,10 @@ void UnifiedGraphPipeline::runMainLoop() {
             if (wasAiming) {
                 std::cout << "[UnifiedPipeline] Aimbot deactivated - suspending pipeline" << std::endl;
                 
-                // Synchronize to ensure all GPU work is complete
-                cudaStreamSynchronize(m_primaryStream->get());
+                // Only synchronize if there's active work to avoid unnecessary blocking
+                if (m_tripleBuffer && m_tripleBuffer->hasActiveWork()) {
+                    cudaStreamSynchronize(m_primaryStream->get());
+                }
                 
                 // Only clear count values (not the entire buffers) for efficiency
                 // This prevents UI from showing garbage data while maintaining performance
@@ -1809,11 +1811,17 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
                 printf("[ERROR] Unified preprocessing failed: %s\n", cudaGetErrorString(err));
                 return false;
             }
+            
+            // Record preprocessing completion for proper pipeline ordering
+            m_tripleBuffer->preprocessComplete[writeIdx].record(m_inferenceStream->get());
         }
         
         // OPTIMIZATION: TensorRT Inference with zero-copy when possible
         if (m_inputBindings.find(m_inputName) != m_inputBindings.end() && m_d_yoloInput) {
             void* inputBinding = m_inputBindings[m_inputName]->get();
+            
+            // Wait for preprocessing completion before TensorRT input copy
+            cudaStreamWaitEvent(m_inferenceStream->get(), m_tripleBuffer->preprocessComplete[writeIdx].get(), 0);
             
             // OPTIMIZATION: Skip unnecessary device-to-device copy if buffers can be aliased
             if (inputBinding != m_d_yoloInput->get()) {
