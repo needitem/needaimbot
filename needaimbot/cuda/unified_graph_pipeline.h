@@ -205,6 +205,7 @@ private:
         
         // Stage completion events for non-blocking dependency management
         std::array<CudaEvent, 3> captureComplete;
+        std::array<CudaEvent, 3> preprocessComplete;  // Added for preprocessing completion
         std::array<CudaEvent, 3> inferenceComplete; 
         std::array<CudaEvent, 3> copyComplete;
         
@@ -218,6 +219,7 @@ private:
             // Initialize events with optimal flags
             for (int i = 0; i < 3; i++) {
                 captureComplete[i] = CudaEvent(cudaEventDisableTiming);
+                preprocessComplete[i] = CudaEvent(cudaEventDisableTiming);
                 inferenceComplete[i] = CudaEvent(cudaEventDisableTiming);
                 copyComplete[i] = CudaEvent(cudaEventDisableTiming);
                 
@@ -270,6 +272,19 @@ private:
             for (int i = 0; i < 3; i++) {
                 movement_data_ready[i] = false;
             }
+        }
+        
+        // Check if any GPU work is still active (non-blocking)
+        bool hasActiveWork() {
+            for (int i = 0; i < 3; i++) {
+                if (captureComplete[i].query() != cudaSuccess ||
+                    preprocessComplete[i].query() != cudaSuccess ||
+                    inferenceComplete[i].query() != cudaSuccess ||
+                    copyComplete[i].query() != cudaSuccess) {
+                    return true;  // Some work is still pending
+                }
+            }
+            return false;  // All work completed
         }
         
         // Destructor - RAII handles cleanup
