@@ -134,6 +134,56 @@ struct SmallBufferArena {
     }
 };
 
+// OPTIMIZATION: Unified GPU Memory Arena (replaces 15+ individual allocations)
+struct UnifiedGPUArena {
+    std::unique_ptr<CudaMemory<uint8_t>> megaArena;
+    
+    // Pointers to different buffer types within the arena
+    float* yoloInput;              // YOLO model input buffer
+    float* nmsOutput;              // NMS algorithm output
+    float* filteredOutput;         // Post-filtering output
+    Target* decodedTargets;        // Decoded detection targets
+    Target* finalTargets;          // Final processed targets
+    Target* classFilteredTargets;  // Class-filtered targets
+    Target* colorFilteredTargets;  // Color-filtered targets  
+    Target* detections;            // Raw detections
+    
+    // NMS working buffers
+    int* x1; int* y1; int* x2; int* y2;  // Bounding box coordinates
+    float* areas;                         // Target areas
+    float* scores_nms;                   // NMS scores
+    int* classIds_nms;                   // NMS class IDs
+    float* iou_matrix;                   // IOU calculation matrix
+    bool* keep;                          // NMS keep flags
+    int* indices;                        // Target indices
+    
+    void initializePointers(uint8_t* basePtr, int maxDetections, int yoloSize);
+    static size_t calculateArenaSize(int maxDetections, int yoloSize);
+};
+
+// OPTIMIZATION: Double Buffer (replaces Triple Buffer for 33% memory savings)
+class DoubleBuffer {
+public:
+    SimpleCudaMat buffers[2];  // Only 2 buffers instead of 3
+    std::array<CudaEvent, 2> captureComplete;
+    std::array<CudaEvent, 2> preprocessComplete;
+    std::array<CudaEvent, 2> inferenceComplete;
+    std::array<CudaEvent, 2> copyComplete;
+    
+    // Pinned host memory for results
+    std::array<std::unique_ptr<CudaPinnedMemory<MouseMovement>>, 2> h_movement_pinned;
+    std::array<bool, 2> movement_data_ready{false, false};
+    
+    std::atomic<int> writeIndex{0};
+    std::atomic<int> readIndex{1};
+    
+    void initializeFrameBuffers(int height, int width, int channels);
+    int getNextWriteIndex();
+    int findReadyMovementData();
+    void markMovementConsumed(int index);
+    void clearAllData();
+};
+
 // Forward declarations for internal implementation classes
 
 // Graph node types for tracking
@@ -295,12 +345,9 @@ private:
     // Simple graph management
     cudaGraph_t m_graph = nullptr;
     cudaGraphExec_t m_graphExec = nullptr;
-    std::unique_ptr<CudaStream> m_primaryStream;  // Using RAII wrapper
-    
-    // Dedicated streams for pipeline stages (ordered execution within each stream)
-    std::unique_ptr<CudaStream> m_captureStream;    // Frame capture only
-    std::unique_ptr<CudaStream> m_inferenceStream;  // Preprocessing + inference + postprocessing
-    std::unique_ptr<CudaStream> m_copyStream;       // Host memory transfers
+    // OPTIMIZATION: Unified CUDA streams (4→2 reduction for better performance)
+    std::unique_ptr<CudaStream> m_pipelineStream;   // capture + inference + preprocessing
+    std::unique_ptr<CudaStream> m_outputStream;     // postprocessing + copy + output
     
     // Simple event for preview (using RAII)
     std::unique_ptr<CudaEvent> m_previewReadyEvent;
@@ -410,7 +457,8 @@ private:
         // Destructor - RAII handles cleanup
         ~TripleBuffer() = default;
     };
-    std::unique_ptr<TripleBuffer> m_tripleBuffer;
+    // OPTIMIZATION: Double buffer instead of triple buffer (33% memory savings)
+    std::unique_ptr<DoubleBuffer> m_doubleBuffer;
     
     
     // TensorRT engine management (Phase 1 integration)
@@ -438,28 +486,8 @@ private:
     std::unique_ptr<CudaMemory<float>> m_d_preprocessBuffer;  // Preprocess buffer 
     std::unique_ptr<CudaMemory<Target>> m_d_tracks;           // GPU tracking data
     
-    // NMS temporary buffers (large arrays, keep separate) - Using RAII
-    std::unique_ptr<CudaMemory<int>> m_d_x1;
-    std::unique_ptr<CudaMemory<int>> m_d_y1;
-    std::unique_ptr<CudaMemory<int>> m_d_x2;
-    std::unique_ptr<CudaMemory<int>> m_d_y2;
-    std::unique_ptr<CudaMemory<float>> m_d_areas;
-    std::unique_ptr<CudaMemory<float>> m_d_scores_nms;
-    std::unique_ptr<CudaMemory<int>> m_d_classIds_nms;
-    std::unique_ptr<CudaMemory<float>> m_d_iou_matrix;
-    std::unique_ptr<CudaMemory<bool>> m_d_keep;
-    std::unique_ptr<CudaMemory<int>> m_d_indices;
-    std::unique_ptr<CudaMemory<float>> m_d_yoloInput;        // YOLO model input (640x640x3)
-    std::unique_ptr<CudaMemory<float>> m_d_inferenceOutput;  // Inference output (managed by RAII)
-    std::unique_ptr<CudaMemory<float>> m_d_nmsOutput;        // After NMS
-    std::unique_ptr<CudaMemory<float>> m_d_filteredOutput;   // After filtering
-    
-    // Post-processing buffers (large arrays, keep separate) - Using RAII
-    std::unique_ptr<CudaMemory<Target>> m_d_decodedTargets;      // Decoded detections from inference
-    std::unique_ptr<CudaMemory<Target>> m_d_finalTargets;        // Final NMS output
-    std::unique_ptr<CudaMemory<Target>> m_d_classFilteredTargets; // After class filtering
-    std::unique_ptr<CudaMemory<Target>> m_d_colorFilteredTargets; // After color filtering
-    std::unique_ptr<CudaMemory<Target>> m_d_detections;          // Detection results
+    // OPTIMIZATION: All buffers moved to UnifiedGPUArena (20+ allocations → 1)
+    std::unique_ptr<CudaMemory<float>> m_d_inferenceOutput;  // TensorRT inference output (separate from arena)
     
     // Class filtering control buffer - Using RAII
     // m_d_allowFlags moved to SmallBufferArena for memory efficiency
@@ -470,6 +498,9 @@ private:
     
     // Memory arena for small frequently allocated buffers (OPTIMIZATION)
     SmallBufferArena m_smallBufferArena;
+    
+    // OPTIMIZATION: Unified GPU memory arena (replaces 15+ individual allocations)
+    UnifiedGPUArena m_unifiedArena;
     
     std::unique_ptr<CudaMemory<float>> m_d_outputBuffer;         // Final output buffer
     
@@ -534,7 +565,7 @@ private:
     // Main loop helper methods
     void handleAimbotDeactivation();
     void clearCountBuffers();
-    void clearTripleBufferData();
+    void clearDoubleBufferData();
     void clearHostPreviewData(AppContext& ctx);
     void handleAimbotActivation();
     bool executePipelineWithErrorHandling();
