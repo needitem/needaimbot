@@ -32,6 +32,74 @@ struct MouseMovement {
     int dy;
 };
 
+// Memory arena structure for small frequently used buffers
+struct SmallBufferArena {
+    // Integer counters (7 total)
+    int* numDetections;           // Detection count
+    int* outputCount;            // Output count
+    int* decodedCount;           // Decoded detections count  
+    int* finalTargetsCount;      // Final NMS count
+    int* classFilteredCount;     // Class filtered count
+    int* colorFilteredCount;     // Color filtered count  
+    int* bestTargetIndex;        // Selected target index
+    
+    // Structure data (3 total)
+    Target* selectedTarget;      // Selected target (1)
+    Target* bestTarget;          // Best target (1) 
+    MouseMovement* mouseMovement; // Mouse movement result (1)
+    
+    // Raw arena memory
+    std::unique_ptr<CudaMemory<uint8_t>> arenaBuffer;
+    
+    // Initialize pointers to arena offsets
+    void initializePointers(uint8_t* basePtr) {
+        size_t offset = 0;
+        
+        // Integer counters (aligned to int boundary)
+        numDetections = reinterpret_cast<int*>(basePtr + offset);
+        offset += sizeof(int);
+        outputCount = reinterpret_cast<int*>(basePtr + offset);
+        offset += sizeof(int);
+        decodedCount = reinterpret_cast<int*>(basePtr + offset);
+        offset += sizeof(int);
+        finalTargetsCount = reinterpret_cast<int*>(basePtr + offset);
+        offset += sizeof(int);
+        classFilteredCount = reinterpret_cast<int*>(basePtr + offset);
+        offset += sizeof(int);
+        colorFilteredCount = reinterpret_cast<int*>(basePtr + offset);
+        offset += sizeof(int);
+        bestTargetIndex = reinterpret_cast<int*>(basePtr + offset);
+        offset += sizeof(int);
+        
+        // Align to Target boundary (typically 8-byte aligned)
+        offset = (offset + alignof(Target) - 1) & ~(alignof(Target) - 1);
+        
+        selectedTarget = reinterpret_cast<Target*>(basePtr + offset);
+        offset += sizeof(Target);
+        bestTarget = reinterpret_cast<Target*>(basePtr + offset);
+        offset += sizeof(Target);
+        
+        // Align to MouseMovement boundary
+        offset = (offset + alignof(MouseMovement) - 1) & ~(alignof(MouseMovement) - 1);
+        mouseMovement = reinterpret_cast<MouseMovement*>(basePtr + offset);
+    }
+    
+    // Calculate total arena size needed
+    static size_t calculateArenaSize() {
+        size_t size = sizeof(int) * 7;  // 7 integer counters
+        
+        // Align for Target structures
+        size = (size + alignof(Target) - 1) & ~(alignof(Target) - 1);
+        size += sizeof(Target) * 2;  // selectedTarget, bestTarget
+        
+        // Align for MouseMovement
+        size = (size + alignof(MouseMovement) - 1) & ~(alignof(MouseMovement) - 1);
+        size += sizeof(MouseMovement);
+        
+        return size;
+    }
+};
+
 // Forward declarations for internal implementation classes
 
 // Graph node types for tracking
@@ -336,8 +404,7 @@ private:
     std::unique_ptr<CudaMemory<float>> m_d_preprocessBuffer;  // Preprocess buffer 
     std::unique_ptr<CudaMemory<Target>> m_d_tracks;           // GPU tracking data
     
-    // NMS temporary buffers (allocated once, reused) - Using RAII
-    std::unique_ptr<CudaMemory<int>> m_d_numDetections;
+    // NMS temporary buffers (large arrays, keep separate) - Using RAII
     std::unique_ptr<CudaMemory<int>> m_d_x1;
     std::unique_ptr<CudaMemory<int>> m_d_y1;
     std::unique_ptr<CudaMemory<int>> m_d_x2;
@@ -348,23 +415,17 @@ private:
     std::unique_ptr<CudaMemory<float>> m_d_iou_matrix;
     std::unique_ptr<CudaMemory<bool>> m_d_keep;
     std::unique_ptr<CudaMemory<int>> m_d_indices;
-    std::unique_ptr<CudaMemory<int>> m_d_outputCount;
     std::unique_ptr<CudaMemory<float>> m_d_yoloInput;        // YOLO model input (640x640x3)
     std::unique_ptr<CudaMemory<float>> m_d_inferenceOutput;  // Inference output (managed by RAII)
     std::unique_ptr<CudaMemory<float>> m_d_nmsOutput;        // After NMS
     std::unique_ptr<CudaMemory<float>> m_d_filteredOutput;   // After filtering
-    std::unique_ptr<CudaMemory<Target>> m_d_detections;      // Detection results
-    std::unique_ptr<CudaMemory<Target>> m_d_selectedTarget;  // Selected target
     
-    // Post-processing buffers (Phase 3 integration) - Using RAII
+    // Post-processing buffers (large arrays, keep separate) - Using RAII
     std::unique_ptr<CudaMemory<Target>> m_d_decodedTargets;      // Decoded detections from inference
-    std::unique_ptr<CudaMemory<int>> m_d_decodedCount;           // Count of decoded detections
     std::unique_ptr<CudaMemory<Target>> m_d_finalTargets;        // Final NMS output
-    std::unique_ptr<CudaMemory<int>> m_d_finalTargetsCount;      // Final count after NMS
     std::unique_ptr<CudaMemory<Target>> m_d_classFilteredTargets; // After class filtering
-    std::unique_ptr<CudaMemory<int>> m_d_classFilteredCount;     // Count after class filtering
     std::unique_ptr<CudaMemory<Target>> m_d_colorFilteredTargets; // After color filtering
-    std::unique_ptr<CudaMemory<int>> m_d_colorFilteredCount;     // Count after color filtering
+    std::unique_ptr<CudaMemory<Target>> m_d_detections;          // Detection results
     
     // Class filtering control buffer - Using RAII
     std::unique_ptr<CudaMemory<unsigned char>> m_d_allowFlags;   // Class filtering flags
@@ -373,13 +434,10 @@ private:
     std::unordered_map<std::string, std::vector<int64_t>> m_outputShapes;
     std::unordered_map<std::string, nvinfer1::DataType> m_outputTypes;
     
-    // Target selection buffers - Using RAII
-    std::unique_ptr<CudaMemory<int>> m_d_bestTargetIndex;        // Selected target index
-    std::unique_ptr<CudaMemory<Target>> m_d_bestTarget;          // Selected target data
-    std::unique_ptr<CudaMemory<float>> m_d_outputBuffer;         // Final output buffer
+    // Memory arena for small frequently allocated buffers (OPTIMIZATION)
+    SmallBufferArena m_smallBufferArena;
     
-    // GPU output buffer for unified mouse movement (optimized single transfer)
-    std::unique_ptr<CudaMemory<MouseMovement>> m_d_mouseMovement;  // Combined dx, dy
+    std::unique_ptr<CudaMemory<float>> m_d_outputBuffer;         // Final output buffer
     
     // Pinned host memory for zero-copy access
     std::unique_ptr<CudaPinnedMemory<unsigned char>> m_h_inputBuffer;  // Pinned input buffer

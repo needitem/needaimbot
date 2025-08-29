@@ -298,16 +298,16 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     
     // 4. Postprocessing (NMS, filtering, target selection)
     // Include NMS in graph capture with dummy data
-    if (m_config.enableDetection && m_d_selectedTarget && m_d_detections) {
+    if (m_config.enableDetection && m_smallBufferArena.selectedTarget && m_d_detections) {
         // Initialize buffers for graph capture
-        cudaMemsetAsync(m_d_selectedTarget->get(), 0, sizeof(Target), stream);
-        cudaMemsetAsync(m_d_numDetections->get(), 0, sizeof(int), stream);
+        cudaMemsetAsync(m_smallBufferArena.selectedTarget, 0, sizeof(Target), stream);
+        cudaMemsetAsync(m_smallBufferArena.numDetections, 0, sizeof(int), stream);
         
         // Initialize NMS input buffers with dummy data for graph capture
-        if (m_d_decodedTargets && m_d_decodedCount) {
+        if (m_d_decodedTargets && m_smallBufferArena.decodedCount) {
             // Set a dummy count for graph capture
             int dummyCount = 10;  // Small number for graph capture
-            cudaMemcpyAsync(m_d_decodedCount->get(), &dummyCount, sizeof(int), cudaMemcpyHostToDevice, stream);
+            cudaMemcpyAsync(m_smallBufferArena.decodedCount, &dummyCount, sizeof(int), cudaMemcpyHostToDevice, stream);
             
             // Initialize decoded targets with dummy data
             std::vector<Target> dummyTargets(10);
@@ -324,10 +324,10 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
         }
         
         // Execute NMS with dummy data for graph capture
-        if (m_d_finalTargets && m_d_finalTargetsCount && 
+        if (m_d_finalTargets && m_smallBufferArena.finalTargetsCount && 
             m_d_x1 && m_d_y1 && m_d_x2 && m_d_y2 && m_d_areas && 
             m_d_scores_nms && m_d_classIds_nms && m_d_iou_matrix && 
-            m_d_keep && m_d_indices && m_d_decodedTargets && m_d_decodedCount) {
+            m_d_keep && m_d_indices && m_d_decodedTargets && m_smallBufferArena.decodedCount) {
             
             // Use config max detections for graph capture
             int maxDetections = ctx.config.max_detections;
@@ -340,7 +340,7 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
                 m_d_decodedTargets->get(),
                 maxDetections,  // Use max detections for stable graph capture
                 m_d_finalTargets->get(),
-                m_d_finalTargetsCount->get(),
+                m_smallBufferArena.finalTargetsCount,
                 maxDetections,
                 nmsThreshold,
                 frameWidth,
@@ -490,12 +490,16 @@ bool UnifiedGraphPipeline::allocateBuffers() {
         
         m_d_detections = std::make_unique<CudaMemory<Target>>(maxDetections);
         
-        m_d_selectedTarget = std::make_unique<CudaMemory<Target>>(1);
         
+        // OPTIMIZATION: Allocate memory arena for small frequently used buffers
+        size_t arenaSize = SmallBufferArena::calculateArenaSize();
+        m_smallBufferArena.arenaBuffer = std::make_unique<CudaMemory<uint8_t>>(arenaSize);
+        m_smallBufferArena.initializePointers(m_smallBufferArena.arenaBuffer->get());
         
-        // Allocate NMS temporary buffers - Using RAII
-        m_d_numDetections = std::make_unique<CudaMemory<int>>(1);
+        std::cout << "[UnifiedGraph] Memory arena allocated: " << arenaSize 
+                  << " bytes for 10 small buffers (replaces 10 separate cudaMalloc calls)" << std::endl;
         
+        // Allocate NMS temporary buffers (large arrays, keep separate) - Using RAII
         m_d_x1 = std::make_unique<CudaMemory<int>>(maxDetections);
         
         m_d_y1 = std::make_unique<CudaMemory<int>>(maxDetections);
@@ -516,31 +520,17 @@ bool UnifiedGraphPipeline::allocateBuffers() {
         
         m_d_indices = std::make_unique<CudaMemory<int>>(maxDetections);
         
-        m_d_outputCount = std::make_unique<CudaMemory<int>>(1);
-        
         // OPTIMIZATION: Allocate post-processing buffers without zero-initialization
         // These buffers are cleared every frame by unified clearing kernel, so no initial zero needed
         m_d_decodedTargets = std::make_unique<CudaMemory<Target>>(maxDetections);  // No zero init
         
-        m_d_decodedCount = std::make_unique<CudaMemory<int>>(1);  // No zero init
-        
         m_d_finalTargets = std::make_unique<CudaMemory<Target>>(maxDetections);  // No zero init
-        
-        m_d_finalTargetsCount = std::make_unique<CudaMemory<int>>(1);  // No zero init
         
         m_d_classFilteredTargets = std::make_unique<CudaMemory<Target>>(maxDetections);  // No zero init
         
-        m_d_classFilteredCount = std::make_unique<CudaMemory<int>>(1);  // No zero init
-        
         m_d_colorFilteredTargets = std::make_unique<CudaMemory<Target>>(maxDetections);  // No zero init
-        m_d_colorFilteredCount = std::make_unique<CudaMemory<int>>(1);  // No zero init
         
-        // Target selection buffers - cleared by pipeline
-        m_d_bestTargetIndex = std::make_unique<CudaMemory<int>>(1);  // No zero init
-        m_d_bestTarget = std::make_unique<CudaMemory<Target>>(1);  // No zero init
-        
-        // Unified mouse movement GPU output buffer (optimized single allocation)
-        m_d_mouseMovement = std::make_unique<CudaMemory<MouseMovement>>(1);  // No zero init
+        m_d_detections = std::make_unique<CudaMemory<Target>>(maxDetections);  // No zero init
         
         // Class filtering control buffer (64 classes max) - Using RAII
         m_d_allowFlags = std::make_unique<CudaMemory<unsigned char>>(Constants::MAX_CLASSES_FOR_FILTERING);
@@ -581,9 +571,11 @@ void UnifiedGraphPipeline::deallocateBuffers() {
     m_captureBuffer.release();
     m_preprocessBuffer.release();
     
-    // RAII wrappers will automatically clean up all GPU memory
+    // OPTIMIZATION: Memory arena cleanup (single deallocation replaces 10+ individual deallocations)
+    m_smallBufferArena.arenaBuffer.reset();
+    
+    // RAII wrappers will automatically clean up all remaining GPU memory
     // Just reset the unique_ptrs - they handle deallocation automatically
-    m_d_numDetections.reset();
     m_d_x1.reset();
     m_d_y1.reset();
     m_d_x2.reset();
@@ -594,24 +586,15 @@ void UnifiedGraphPipeline::deallocateBuffers() {
     m_d_iou_matrix.reset();
     m_d_keep.reset();
     m_d_indices.reset();
-    m_d_outputCount.reset();
     m_d_yoloInput.reset();
     m_d_inferenceOutput.reset();
     m_d_nmsOutput.reset();
     m_d_filteredOutput.reset();
     m_d_detections.reset();
-    m_d_selectedTarget.reset();
     m_d_decodedTargets.reset();
-    m_d_decodedCount.reset();
     m_d_finalTargets.reset();
-    m_d_finalTargetsCount.reset();
     m_d_classFilteredTargets.reset();
-    m_d_classFilteredCount.reset();
     m_d_colorFilteredTargets.reset();
-    m_d_colorFilteredCount.reset();
-    m_d_bestTargetIndex.reset();
-    m_d_bestTarget.reset();
-    m_d_mouseMovement.reset();
     m_d_allowFlags.reset();
     m_d_preprocessBuffer.reset();
     m_d_tracks.reset();
@@ -701,20 +684,20 @@ void UnifiedGraphPipeline::handleAimbotDeactivation() {
 }
 
 void UnifiedGraphPipeline::clearCountBuffers() {
-    // Only clear count values (not the entire buffers) for efficiency
-    if (m_d_finalTargetsCount) {
-        cudaMemsetAsync(m_d_finalTargetsCount->get(), 0, sizeof(int), m_primaryStream->get());
+    // OPTIMIZATION: Clear count values from memory arena (single stream operation)
+    if (m_smallBufferArena.finalTargetsCount) {
+        cudaMemsetAsync(m_smallBufferArena.finalTargetsCount, 0, sizeof(int), m_primaryStream->get());
     }
-    if (m_d_decodedCount) {
-        cudaMemsetAsync(m_d_decodedCount->get(), 0, sizeof(int), m_primaryStream->get());
+    if (m_smallBufferArena.decodedCount) {
+        cudaMemsetAsync(m_smallBufferArena.decodedCount, 0, sizeof(int), m_primaryStream->get());
     }
-    if (m_d_classFilteredCount) {
-        cudaMemsetAsync(m_d_classFilteredCount->get(), 0, sizeof(int), m_primaryStream->get());
+    if (m_smallBufferArena.classFilteredCount) {
+        cudaMemsetAsync(m_smallBufferArena.classFilteredCount, 0, sizeof(int), m_primaryStream->get());
     }
     
     // Clear best target index to indicate no target selected
-    if (m_d_bestTargetIndex) {
-        cudaMemsetAsync(m_d_bestTargetIndex->get(), -1, sizeof(int), m_primaryStream->get());
+    if (m_smallBufferArena.bestTargetIndex) {
+        cudaMemsetAsync(m_smallBufferArena.bestTargetIndex, -1, sizeof(int), m_primaryStream->get());
     }
 }
 
@@ -1220,8 +1203,8 @@ void needaimbot::PostProcessingConfig::updateFromContext(const AppContext& ctx, 
 }
 
 void UnifiedGraphPipeline::clearDetectionBuffers(const PostProcessingConfig& config, cudaStream_t stream) {
-    if (!m_d_decodedTargets || !m_d_decodedCount || !m_d_classFilteredCount || 
-        !m_d_finalTargetsCount || config.max_detections <= 0) {
+    if (!m_d_decodedTargets || !m_smallBufferArena.decodedCount || !m_smallBufferArena.classFilteredCount || 
+        !m_smallBufferArena.finalTargetsCount || config.max_detections <= 0) {
         return;
     }
     
@@ -1236,12 +1219,12 @@ void UnifiedGraphPipeline::clearDetectionBuffers(const PostProcessingConfig& con
     
     clearAllDetectionBuffersKernel<<<gridSize, cached_blockSize, 0, stream>>>(
         m_d_decodedTargets->get(),
-        m_d_decodedCount->get(),
-        m_d_classFilteredCount->get(),
-        m_d_finalTargetsCount->get(),
-        m_d_colorFilteredCount ? m_d_colorFilteredCount->get() : nullptr,
-        m_d_bestTargetIndex ? m_d_bestTargetIndex->get() : nullptr,
-        m_d_bestTarget ? m_d_bestTarget->get() : nullptr,
+        m_smallBufferArena.decodedCount,
+        m_smallBufferArena.classFilteredCount,
+        m_smallBufferArena.finalTargetsCount,
+        m_smallBufferArena.colorFilteredCount,
+        m_smallBufferArena.bestTargetIndex,
+        m_smallBufferArena.bestTarget,
         config.max_detections
     );
 }
@@ -1257,7 +1240,7 @@ cudaError_t UnifiedGraphPipeline::decodeYoloOutput(void* d_rawOutputPtr, nvinfer
         return decodeYolo10Gpu(
             d_rawOutputPtr, outputType, shape, m_numClasses,
             config.confidence_threshold, m_imgScale,
-            m_d_decodedTargets->get(), m_d_decodedCount->get(),
+            m_d_decodedTargets->get(), m_smallBufferArena.decodedCount,
             maxDecodedTargets, max_candidates, stream);
             
     } else if (config.postprocess == "yolo_nms") {
@@ -1271,7 +1254,7 @@ cudaError_t UnifiedGraphPipeline::decodeYoloOutput(void* d_rawOutputPtr, nvinfer
         
         return processNMSOutputGpu(
             d_rawOutputPtr, outputType, shape, config.confidence_threshold,
-            m_imgScale, m_d_decodedTargets->get(), m_d_decodedCount->get(),
+            m_imgScale, m_d_decodedTargets->get(), m_smallBufferArena.decodedCount,
             maxDecodedTargets, num_detections, stream);
             
     } else if (config.postprocess == "yolo8" || config.postprocess == "yolo9" || 
@@ -1287,7 +1270,7 @@ cudaError_t UnifiedGraphPipeline::decodeYoloOutput(void* d_rawOutputPtr, nvinfer
         return decodeYolo11Gpu(
             d_rawOutputPtr, outputType, shape, m_numClasses,
             config.confidence_threshold, m_imgScale,
-            m_d_decodedTargets->get(), m_d_decodedCount->get(),
+            m_d_decodedTargets->get(), m_smallBufferArena.decodedCount,
             maxDecodedTargets, max_candidates,
             m_d_allowFlags ? m_d_allowFlags->get() : nullptr,
             Constants::MAX_CLASSES_FOR_FILTERING, stream);
@@ -1298,7 +1281,7 @@ cudaError_t UnifiedGraphPipeline::decodeYoloOutput(void* d_rawOutputPtr, nvinfer
 }
 
 bool UnifiedGraphPipeline::validateYoloDecodeBuffers(int maxDecodedTargets, int max_candidates) {
-    if (!m_d_decodedTargets || !m_d_decodedCount) {
+    if (!m_d_decodedTargets || !m_smallBufferArena.decodedCount) {
         std::cerr << "[Pipeline] Target buffers not allocated!" << std::endl;
         return false;
     }
@@ -1385,12 +1368,12 @@ void UnifiedGraphPipeline::performNMSProcessing(const PostProcessingConfig& conf
 }
 
 void UnifiedGraphPipeline::copyDecodedToFinalTargets(const PostProcessingConfig& config, cudaStream_t stream) {
-    if (!m_d_finalTargets || !m_d_finalTargetsCount || !m_d_decodedTargets || !m_d_decodedCount) {
+    if (!m_d_finalTargets || !m_smallBufferArena.finalTargetsCount || !m_d_decodedTargets || !m_smallBufferArena.decodedCount) {
         return;
     }
     
     // Copy count
-    cudaMemcpyAsync(m_d_finalTargetsCount->get(), m_d_decodedCount->get(), sizeof(int), 
+    cudaMemcpyAsync(m_smallBufferArena.finalTargetsCount, m_smallBufferArena.decodedCount, sizeof(int), 
                    cudaMemcpyDeviceToDevice, stream);
     
     // Copy targets using fixed max size (eliminates synchronization!)
@@ -1412,15 +1395,15 @@ void UnifiedGraphPipeline::performStandardNMS(const PostProcessingConfig& config
         handleNMSResults(config, stream);
     } catch (const std::exception& e) {
         std::cerr << "[Pipeline] Exception during NMSGpu: " << e.what() << std::endl;
-        if (m_d_finalTargetsCount) {
-            cudaMemsetAsync(m_d_finalTargetsCount->get(), 0, sizeof(int), stream);
+        if (m_smallBufferArena.finalTargetsCount) {
+            cudaMemsetAsync(m_smallBufferArena.finalTargetsCount, 0, sizeof(int), stream);
         }
         ctx.clearTargets();
     }
 }
 
 bool UnifiedGraphPipeline::validateNMSBuffers() {
-    return (m_d_finalTargets && m_d_finalTargetsCount && 
+    return (m_d_finalTargets && m_smallBufferArena.finalTargetsCount && 
             m_d_x1 && m_d_y1 && m_d_x2 && m_d_y2 && m_d_areas && 
             m_d_scores_nms && m_d_classIds_nms && m_d_iou_matrix && 
             m_d_keep && m_d_indices);
@@ -1437,7 +1420,7 @@ void UnifiedGraphPipeline::executeNMSKernel(const PostProcessingConfig& config, 
         nmsInputTargets,
         config.max_detections,
         m_d_finalTargets->get(),
-        m_d_finalTargetsCount->get(),
+        m_smallBufferArena.finalTargetsCount,
         config.max_detections,
         config.nms_threshold,
         cached_frame_width,
@@ -1525,7 +1508,7 @@ void UnifiedGraphPipeline::startPreviewCopy(const PostProcessingConfig& config, 
     static int ui_copy_counter = 0;
     if (ctx.config.show_window && ctx.preview_enabled && (++ui_copy_counter % 16 == 0)) {
         // Copy minimal data for UI preview only when both conditions are met
-        cudaMemcpyAsync(&m_h_finalCount, m_d_finalTargetsCount->get(), sizeof(int), 
+        cudaMemcpyAsync(&m_h_finalCount, m_smallBufferArena.finalTargetsCount, sizeof(int), 
                        cudaMemcpyDeviceToHost, stream);
         
         int copyCount = std::min(config.max_detections, static_cast<int>(m_h_finalTargets.size()));
@@ -1546,7 +1529,7 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
     auto& ctx = AppContext::getInstance();
     
     // Check if we have final targets to select from
-    if (!m_d_finalTargets || !m_d_finalTargetsCount) {
+    if (!m_d_finalTargets || !m_smallBufferArena.finalTargetsCount) {
         std::cerr << "[Pipeline] No final targets available for selection" << std::endl;
         return;
     }
@@ -1566,7 +1549,7 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
     float crosshairY = ctx.config.detection_resolution / 2.0f;
     
     // Ensure target selection buffers are allocated
-    if (!m_d_bestTargetIndex || !m_d_bestTarget) {
+    if (!m_smallBufferArena.bestTargetIndex || !m_smallBufferArena.bestTarget) {
         std::cerr << "[Pipeline] Target selection buffers not allocated!" << std::endl;
         return;
     }
@@ -1583,7 +1566,7 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
     // Final validation: clean any extreme values that might have survived
     finalValidateTargetsGpu(
         m_d_finalTargets->get(),
-        m_d_finalTargetsCount->get(),
+        m_smallBufferArena.finalTargetsCount,
         cached_max_detections,
         stream
     );
@@ -1591,23 +1574,23 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
     // Always use head priority selection
     cudaError_t selectErr = findBestTargetWithHeadPriorityGpu(
         m_d_finalTargets->get(),
-        m_d_finalTargetsCount->get(),  // Pass device pointer directly
+        m_smallBufferArena.finalTargetsCount,  // Pass device pointer directly
         crosshairX,
         crosshairY,
         head_class_id,
-        m_d_bestTargetIndex->get(),
-        m_d_bestTarget->get(),
+        m_smallBufferArena.bestTargetIndex,
+        m_smallBufferArena.bestTarget,
         stream
     );
     
     if (selectErr != cudaSuccess) {
         std::cerr << "[Pipeline] Target selection failed: " << cudaGetErrorString(selectErr) << std::endl;
         // Clear best target on failure
-        if (m_d_bestTargetIndex) {
-            cudaMemsetAsync(m_d_bestTargetIndex->get(), -1, sizeof(int), stream);
+        if (m_smallBufferArena.bestTargetIndex) {
+            cudaMemsetAsync(m_smallBufferArena.bestTargetIndex, -1, sizeof(int), stream);
         }
-        if (m_d_bestTarget) {
-            cudaMemsetAsync(m_d_bestTarget->get(), 0, sizeof(Target), stream);
+        if (m_smallBufferArena.bestTarget) {
+            cudaMemsetAsync(m_smallBufferArena.bestTarget, 0, sizeof(Target), stream);
         }
     }
 }
@@ -1823,7 +1806,7 @@ bool UnifiedGraphPipeline::performResultCopy(int writeIdx) {
     // Wait for inference completion
     cudaStreamWaitEvent(m_copyStream->get(), m_tripleBuffer->inferenceComplete[writeIdx].get(), 0);
     
-    Target* finalTarget = m_d_bestTarget->get();
+    Target* finalTarget = m_smallBufferArena.bestTarget;
     if (!finalTarget || !m_tripleBuffer->h_movement_pinned[writeIdx].get()) {
         m_tripleBuffer->movement_data_ready[writeIdx] = false;
         return true;
@@ -1842,11 +1825,11 @@ bool UnifiedGraphPipeline::performResultCopy(int writeIdx) {
         ctx.config.head_y_offset,
         ctx.config.body_y_offset,
         ctx.config.detection_resolution,
-        m_d_mouseMovement->get()
+        m_smallBufferArena.mouseMovement
     );
     
     // OPTIMIZATION: Single unified memory transfer (reduces CPU overhead by ~5-8%)
-    cudaMemcpyAsync(m_tripleBuffer->h_movement_pinned[writeIdx].get(), m_d_mouseMovement->get(), 
+    cudaMemcpyAsync(m_tripleBuffer->h_movement_pinned[writeIdx].get(), m_smallBufferArena.mouseMovement, 
                    sizeof(MouseMovement), cudaMemcpyDeviceToHost, m_copyStream->get());
     
     // Record completion
