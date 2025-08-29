@@ -58,6 +58,25 @@ std::atomic<bool> show_window_changed{false};
 // Forward declarations
 bool initializeScreenCapture(needaimbot::UnifiedGraphPipeline* pipeline);
 
+// Combined UI thread function for keyboard + overlay
+void combinedUIThread() {
+    auto& ctx = AppContext::getInstance();
+    
+    // Launch keyboard and overlay in alternating pattern
+    std::thread keyboardThread(keyboardListener);
+    std::thread overlayThread(OverlayThread);
+    
+    // Set thread names for debugging
+    #ifdef _WIN32
+    SetThreadDescription(keyboardThread.native_handle(), L"KeyboardListener");
+    SetThreadDescription(overlayThread.native_handle(), L"OverlayRenderer");
+    #endif
+    
+    // Wait for both to complete
+    keyboardThread.join();
+    overlayThread.join();
+}
+
 std::unique_ptr<InputMethod> initializeInputMethod() {
     auto& ctx = AppContext::getInstance();
 
@@ -276,7 +295,7 @@ bool initializeScreenCapture(needaimbot::UnifiedGraphPipeline* pipeline) {
     return true;
 }
 
-// Signal handler for clean shutdown
+// Signal handler for clean shutdown  
 static void signalHandler(int sig) {
     std::cout << "\n[MAIN] Received signal " << sig << ", initiating clean shutdown..." << std::endl;
     auto& ctx = AppContext::getInstance();
@@ -641,22 +660,17 @@ int main()
         ThreadManager pipelineThreadMgr("UnifiedPipelineThread", 
             [&]() { pipelineManager.runMainLoop(); }, 0);
         
-        // Keyboard input on separate core to avoid interference with GPU work
-        ThreadManager keyThreadMgr("KeyboardThread", 
-            keyboardListener, numCores > 2 ? 1 : -1);
+        // OPTIMIZATION: Combined UI thread (keyboard + overlay) to reduce thread overhead
+        ThreadManager uiThreadMgr("CombinedUIThread", 
+            combinedUIThread, numCores > 2 ? 1 : -1);
         
         // Mouse thread removed - GPU handles mouse control directly
         // ThreadManager mouseThreadMgr removed
         
-        // UI overlay on separate core for smooth rendering (if enough cores available)
-        ThreadManager overlayThreadMgr("OverlayThread", OverlayThread, 
-            numCores > 3 ? 2 : -1);
-        
         // Start all threads
         pipelineThreadMgr.start();
-        keyThreadMgr.start();
+        uiThreadMgr.start();
         // mouseThreadMgr.start(); - removed, GPU handles mouse directly
-        overlayThreadMgr.start();
 
         welcome_message();
         
@@ -670,12 +684,8 @@ int main()
         // Optimized shutdown sequence
         std::cout << "[MAIN] Initiating safe shutdown..." << std::endl;
         
-        // Signal all threads to exit
+        // Signal main waiting thread to exit (only necessary notify)
         ctx.frame_cv.notify_all();
-        ctx.detection_cv.notify_all();
-        ctx.mouse_event_cv.notify_all();
-        ctx.mouseDataCV.notify_all();
-        ctx.inference_frame_cv.notify_all();
         
         // Stop pipeline first
         pipelineManager.stopMainLoop();
