@@ -636,18 +636,21 @@ int main()
         
         // TensorRT pipeline starts automatically when initialized
 
-        // Create thread managers for better resource management
-        // Using unified pipeline thread for all GPU operations (capture, detection, mouse control)
+        // OPTIMIZATION: Create thread managers with optimized core affinity for better cache locality
+        // GPU-intensive pipeline gets dedicated first core (best GPU driver performance)
         ThreadManager pipelineThreadMgr("UnifiedPipelineThread", 
-            [&]() { pipelineManager.runMainLoop(); });
+            [&]() { pipelineManager.runMainLoop(); }, 0);
         
+        // Keyboard input on separate core to avoid interference with GPU work
         ThreadManager keyThreadMgr("KeyboardThread", 
-            keyboardListener);
+            keyboardListener, numCores > 2 ? 1 : -1);
         
         // Mouse thread removed - GPU handles mouse control directly
         // ThreadManager mouseThreadMgr removed
         
-        ThreadManager overlayThreadMgr("OverlayThread", OverlayThread);
+        // UI overlay on separate core for smooth rendering (if enough cores available)
+        ThreadManager overlayThreadMgr("OverlayThread", OverlayThread, 
+            numCores > 3 ? 2 : -1);
         
         // Start all threads
         pipelineThreadMgr.start();
