@@ -5,6 +5,7 @@
 #include "mouse_interface.h"
 // #include "pd_controller_shared.h"  // Removed - using GPU-based PD controller
 #include "../AppContext.h"
+#include <d3d11.h>
 #include "../core/logger.h"
 #include "cuda_error_check.h"
 #include "preprocessing.h"  // Use existing CUDA error checking macros
@@ -547,8 +548,8 @@ bool UnifiedGraphPipeline::allocateBuffers() {
         m_d_allowFlags = std::make_unique<CudaMemory<unsigned char>>(Constants::MAX_CLASSES_FOR_FILTERING);
         
         // Allocate pinned host memory for zero-copy transfers using RAII
-        m_h_inputBuffer = std::make_unique<CudaPinnedMemory<unsigned char>>(width * height * 4, cudaHostAllocDefault);
-        m_h_outputBuffer = std::make_unique<CudaPinnedMemory<float>>(2, cudaHostAllocMapped);
+        m_h_inputBuffer = std::make_unique<CudaPinnedMemory<unsigned char>>(width * height * 4);
+        m_h_outputBuffer = std::make_unique<CudaPinnedMemory<float>>(2);
         
         // Additional validation for critical buffers
         if (!m_captureBuffer.data() || !m_preprocessBuffer.data()) {
@@ -686,63 +687,88 @@ void UnifiedGraphPipeline::updateProfilingAsync(cudaStream_t stream) {
 // MAIN LOOP IMPLEMENTATION
 // ============================================================================
 
+void UnifiedGraphPipeline::handleAimbotDeactivation() {
+    auto& ctx = AppContext::getInstance();
+    std::cout << "[UnifiedPipeline] Aimbot deactivated - suspending pipeline" << std::endl;
+    
+    // Only synchronize if there's active work to avoid unnecessary blocking
+    if (m_tripleBuffer && m_tripleBuffer->hasActiveWork()) {
+        cudaStreamSynchronize(m_primaryStream->get());
+    }
+    
+    clearCountBuffers();
+    clearTripleBufferData();
+    clearHostPreviewData(ctx);
+    
+    // Ensure all async operations complete
+    cudaStreamSynchronize(m_primaryStream->get());
+}
+
+void UnifiedGraphPipeline::clearCountBuffers() {
+    // Only clear count values (not the entire buffers) for efficiency
+    if (m_d_finalTargetsCount) {
+        cudaMemsetAsync(m_d_finalTargetsCount->get(), 0, sizeof(int), m_primaryStream->get());
+    }
+    if (m_d_decodedCount) {
+        cudaMemsetAsync(m_d_decodedCount->get(), 0, sizeof(int), m_primaryStream->get());
+    }
+    if (m_d_classFilteredCount) {
+        cudaMemsetAsync(m_d_classFilteredCount->get(), 0, sizeof(int), m_primaryStream->get());
+    }
+    
+    // Clear best target index to indicate no target selected
+    if (m_d_bestTargetIndex) {
+        cudaMemsetAsync(m_d_bestTargetIndex->get(), -1, sizeof(int), m_primaryStream->get());
+    }
+}
+
+void UnifiedGraphPipeline::clearTripleBufferData() {
+    // Clear all triple buffer data to prevent mouse movement on old targets
+    if (m_tripleBuffer) {
+        m_tripleBuffer->clearAllData();
+    }
+}
+
+void UnifiedGraphPipeline::clearHostPreviewData(AppContext& ctx) {
+    // Clear host-side preview data
+    m_h_finalTargets.clear();
+    m_h_finalCount = 0;
+    m_copyInProgress = false;
+    
+    // Clear preview window targets
+    ctx.clearTargets();
+}
+
+void UnifiedGraphPipeline::handleAimbotActivation() {
+    std::cout << "[UnifiedPipeline] Aimbot activated - MAXIMUM PERFORMANCE MODE" << std::endl;
+    
+    // Reset frame counter only
+    m_state.frameCount = 0;
+}
+
+bool UnifiedGraphPipeline::executePipelineWithErrorHandling() {
+    try {
+        return executeGraphNonBlocking(m_primaryStream->get());
+    } catch (const std::exception& e) {
+        std::cerr << "[UnifiedPipeline] Exception in pipeline: " << e.what() << std::endl;
+        return false;
+    }
+}
+
 void UnifiedGraphPipeline::runMainLoop() {
     auto& ctx = AppContext::getInstance();
     std::cout << "[UnifiedPipeline] Starting main loop - MAXIMUM PERFORMANCE MODE (No FPS Limit)" << std::endl;
     
     m_lastFrameTime = std::chrono::high_resolution_clock::now();
     
-    // NO FPS LIMITING - Maximum performance when active
-    // Frame limiter removed for maximum responsiveness
-    
     // Track aimbot state changes
     bool wasAiming = false;
     
     while (!m_shouldStop && !ctx.should_exit) {
-        // Only run pipeline when aimbot is active
+        // Handle aimbot state changes
         if (!ctx.aiming) {
-            // Log state change
             if (wasAiming) {
-                std::cout << "[UnifiedPipeline] Aimbot deactivated - suspending pipeline" << std::endl;
-                
-                // Only synchronize if there's active work to avoid unnecessary blocking
-                if (m_tripleBuffer && m_tripleBuffer->hasActiveWork()) {
-                    cudaStreamSynchronize(m_primaryStream->get());
-                }
-                
-                // Only clear count values (not the entire buffers) for efficiency
-                // This prevents UI from showing garbage data while maintaining performance
-                if (m_d_finalTargetsCount) {
-                    cudaMemsetAsync(m_d_finalTargetsCount->get(), 0, sizeof(int), m_primaryStream->get());
-                }
-                if (m_d_decodedCount) {
-                    cudaMemsetAsync(m_d_decodedCount->get(), 0, sizeof(int), m_primaryStream->get());
-                }
-                if (m_d_classFilteredCount) {
-                    cudaMemsetAsync(m_d_classFilteredCount->get(), 0, sizeof(int), m_primaryStream->get());
-                }
-                
-                // Clear best target index to indicate no target selected
-                if (m_d_bestTargetIndex) {
-                    cudaMemsetAsync(m_d_bestTargetIndex->get(), -1, sizeof(int), m_primaryStream->get());
-                }
-                
-                // Clear all triple buffer data to prevent mouse movement on old targets
-                if (m_tripleBuffer) {
-                    m_tripleBuffer->clearAllData();
-                }
-                
-                // Clear host-side preview data
-                m_h_finalTargets.clear();
-                m_h_finalCount = 0;
-                m_copyInProgress = false;
-                
-                // Clear preview window targets
-                ctx.clearTargets();
-                
-                // Ensure all async operations complete
-                cudaStreamSynchronize(m_primaryStream->get());
-                
+                handleAimbotDeactivation();
                 wasAiming = false;
             }
             
@@ -751,34 +777,17 @@ void UnifiedGraphPipeline::runMainLoop() {
             continue;
         }
         
-        // Log activation
+        // Handle activation
         if (!wasAiming) {
-            std::cout << "[UnifiedPipeline] Aimbot activated - MAXIMUM PERFORMANCE MODE" << std::endl;
+            handleAimbotActivation();
             wasAiming = true;
-            
-            // Reset frame counter only
-            m_state.frameCount = 0;
         }
         
-        // NO FRAME LIMITING - Run at maximum speed for lowest latency
-        
-        // Execute full pipeline only when aiming
-        bool success = false;
-        try {
-            success = executeGraphNonBlocking(m_primaryStream->get());
-        } catch (const std::exception& e) {
-            std::cerr << "[UnifiedPipeline] Exception in pipeline: " << e.what() << std::endl;
-            success = false;
-        }
-        
-        if (!success) {
-            // 에러 시 짧은 대기 후 재시도
+        // Execute pipeline
+        if (!executePipelineWithErrorHandling()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
         }
-        
-        // Performance logging removed for maximum throughput
-        // Statistics are still calculated internally for monitoring purposes
     }
     
     std::cout << "[UnifiedPipeline] Main loop stopped after " << m_state.frameCount << " frames" << std::endl;
@@ -1204,13 +1213,137 @@ bool UnifiedGraphPipeline::runInferenceAsync(cudaStream_t stream) {
     return true;
 }
 
+void needaimbot::PostProcessingConfig::updateFromContext(const AppContext& ctx, bool graphCaptured) {
+    if (!graphCaptured) {
+        // CUDA compiler workaround - use const_cast for mutex access
+        std::lock_guard<std::mutex> lock(const_cast<std::mutex&>(ctx.configMutex));
+        max_detections = ctx.config.max_detections;
+        nms_threshold = ctx.config.nms_threshold;
+        confidence_threshold = ctx.config.confidence_threshold;
+        postprocess = ctx.config.postprocess;
+    }
+}
+
+void UnifiedGraphPipeline::clearDetectionBuffers(const PostProcessingConfig& config, cudaStream_t stream) {
+    if (!m_d_decodedTargets || !m_d_decodedCount || !m_d_classFilteredCount || 
+        !m_d_finalTargetsCount || config.max_detections <= 0) {
+        return;
+    }
+    
+    // OPTIMIZATION: Use cached optimal kernel configuration
+    static int cached_blockSize = 0;
+    static int cached_minGridSize = 0;
+    if (cached_blockSize == 0) {
+        cudaOccupancyMaxPotentialBlockSize(&cached_minGridSize, &cached_blockSize, clearAllDetectionBuffersKernel, 0, 0);
+    }
+    
+    int gridSize = std::min((config.max_detections + cached_blockSize - 1) / cached_blockSize, cached_minGridSize);
+    
+    clearAllDetectionBuffersKernel<<<gridSize, cached_blockSize, 0, stream>>>(
+        m_d_decodedTargets->get(),
+        m_d_decodedCount->get(),
+        m_d_classFilteredCount->get(),
+        m_d_finalTargetsCount->get(),
+        m_d_colorFilteredCount ? m_d_colorFilteredCount->get() : nullptr,
+        m_d_bestTargetIndex ? m_d_bestTargetIndex->get() : nullptr,
+        m_d_bestTarget ? m_d_bestTarget->get() : nullptr,
+        config.max_detections
+    );
+}
+
+cudaError_t UnifiedGraphPipeline::decodeYoloOutput(void* d_rawOutputPtr, nvinfer1::DataType outputType, 
+                                                   const std::vector<int64_t>& shape, 
+                                                   const PostProcessingConfig& config, cudaStream_t stream) {
+    int maxDecodedTargets = config.max_detections;
+    
+    if (config.postprocess == "yolo10") {
+        int max_candidates = (shape.size() > 1) ? static_cast<int>(shape[1]) : 0;
+        
+        return decodeYolo10Gpu(
+            d_rawOutputPtr, outputType, shape, m_numClasses,
+            config.confidence_threshold, m_imgScale,
+            m_d_decodedTargets->get(), m_d_decodedCount->get(),
+            maxDecodedTargets, max_candidates, stream);
+            
+    } else if (config.postprocess == "yolo_nms") {
+        int num_detections = (shape.size() > 1) ? static_cast<int>(shape[1]) : 0;
+        int output_features = (shape.size() > 2) ? static_cast<int>(shape[2]) : 0;
+        
+        if (output_features != 6) {
+            std::cerr << "[Pipeline] Invalid NMS output format. Expected 6 features, got " << output_features << std::endl;
+            return cudaErrorInvalidValue;
+        }
+        
+        return processNMSOutputGpu(
+            d_rawOutputPtr, outputType, shape, config.confidence_threshold,
+            m_imgScale, m_d_decodedTargets->get(), m_d_decodedCount->get(),
+            maxDecodedTargets, num_detections, stream);
+            
+    } else if (config.postprocess == "yolo8" || config.postprocess == "yolo9" || 
+               config.postprocess == "yolo11" || config.postprocess == "yolo12") {
+        int max_candidates = (shape.size() > 2) ? static_cast<int>(shape[2]) : 0;
+        
+        if (!validateYoloDecodeBuffers(maxDecodedTargets, max_candidates)) {
+            return cudaErrorInvalidValue;
+        }
+        
+        updateClassFilterIfNeeded(stream);
+        
+        return decodeYolo11Gpu(
+            d_rawOutputPtr, outputType, shape, m_numClasses,
+            config.confidence_threshold, m_imgScale,
+            m_d_decodedTargets->get(), m_d_decodedCount->get(),
+            maxDecodedTargets, max_candidates,
+            m_d_allowFlags ? m_d_allowFlags->get() : nullptr,
+            Constants::MAX_CLASSES_FOR_FILTERING, stream);
+    }
+    
+    std::cerr << "[Pipeline] Unsupported post-processing type: " << config.postprocess << std::endl;
+    return cudaErrorNotSupported;
+}
+
+bool UnifiedGraphPipeline::validateYoloDecodeBuffers(int maxDecodedTargets, int max_candidates) {
+    if (!m_d_decodedTargets || !m_d_decodedCount) {
+        std::cerr << "[Pipeline] Target buffers not allocated!" << std::endl;
+        return false;
+    }
+    
+    if (max_candidates <= 0 || maxDecodedTargets <= 0) {
+        std::cerr << "[Pipeline] Invalid buffer sizes: max_candidates=" << max_candidates 
+                  << ", maxDecodedTargets=" << maxDecodedTargets << std::endl;
+        return false;
+    }
+    
+    return true;
+}
+
+void UnifiedGraphPipeline::updateClassFilterIfNeeded(cudaStream_t stream) {
+    if (!m_classFilterDirty || !m_d_allowFlags) {
+        return;
+    }
+    
+    auto& ctx = AppContext::getInstance();
+    unsigned char h_allowFlags[Constants::MAX_CLASSES_FOR_FILTERING];
+    memset(h_allowFlags, 0, Constants::MAX_CLASSES_FOR_FILTERING);
+    
+    for (const auto& setting : ctx.config.class_settings) {
+        if (setting.id >= 0 && setting.id < Constants::MAX_CLASSES_FOR_FILTERING) {
+            h_allowFlags[setting.id] = setting.allow ? 1 : 0;
+        }
+    }
+    
+    m_cachedClassFilter.assign(h_allowFlags, h_allowFlags + Constants::MAX_CLASSES_FOR_FILTERING);
+    cudaMemcpyAsync(m_d_allowFlags->get(), h_allowFlags, 
+                   Constants::MAX_CLASSES_FOR_FILTERING * sizeof(unsigned char), 
+                   cudaMemcpyHostToDevice, stream);
+    m_classFilterDirty = false;
+}
+
 void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) {
     auto& ctx = AppContext::getInstance();
     
-    // Ensure we have valid output names from TensorRT inference
     if (m_outputNames.empty()) {
         std::cerr << "[Pipeline] No output names found for post-processing." << std::endl;
-        // OPTIMIZATION: Count already cleared by unified clearing kernel
         return;
     }
 
@@ -1222,345 +1355,192 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
 
     if (!d_rawOutputPtr) {
         std::cerr << "[Pipeline] Raw output GPU pointer is null for " << primaryOutputName << std::endl;
-        // OPTIMIZATION: Count already cleared by unified clearing kernel
         return;
     }
 
-    // Use cached config values for CUDA Graph compatibility
-    static int cached_max_detections = Constants::MAX_DETECTIONS;
+    // Initialize config with cached values for CUDA Graph compatibility
+    static PostProcessingConfig config{Constants::MAX_DETECTIONS, 0.45f, 0.001f, "yolo12"};
+    config.updateFromContext(ctx, m_graphCaptured);
     
-    // OPTIMIZED: Single unified buffer clear kernel (replaces 4 separate calls)
-    // Clear all detection buffers in one efficient kernel launch
-    if (m_d_decodedTargets && m_d_decodedCount && m_d_classFilteredCount && 
-        m_d_finalTargetsCount && cached_max_detections > 0) {
-        
-        // Clear all max_detections targets to prevent garbage values
-        int clear_count = cached_max_detections;
-        
-        // OPTIMIZATION: Use cached optimal kernel configuration
-        static int cached_blockSize = 0;
-        static int cached_minGridSize = 0;
-        if (cached_blockSize == 0) {
-            // Calculate optimal configuration once
-            cudaOccupancyMaxPotentialBlockSize(&cached_minGridSize, &cached_blockSize, clearAllDetectionBuffersKernel, 0, 0);
-        }
-        int gridSize = std::min((clear_count + cached_blockSize - 1) / cached_blockSize, cached_minGridSize);
-        
-        clearAllDetectionBuffersKernel<<<gridSize, cached_blockSize, 0, stream>>>(
-            m_d_decodedTargets->get(),
-            m_d_decodedCount->get(),
-            m_d_classFilteredCount->get(),
-            m_d_finalTargetsCount->get(),
-            m_d_colorFilteredCount ? m_d_colorFilteredCount->get() : nullptr,
-            m_d_bestTargetIndex ? m_d_bestTargetIndex->get() : nullptr,
-            m_d_bestTarget ? m_d_bestTarget->get() : nullptr,
-            clear_count
-        );
-        
-        // OPTIMIZATION: Unified clearing always used - no fallback needed
-        // All required buffers are guaranteed to be allocated at this point
-    }
-    static float cached_nms_threshold = 0.45f;
-    static float cached_confidence_threshold = 0.001f;
-    static std::string cached_postprocess = "yolo12";
+    // Clear detection buffers
+    clearDetectionBuffers(config, stream);
     
-    // Update cache from config when not in graph capture mode
-    if (!m_graphCaptured) {
-        std::lock_guard<std::mutex> lock(ctx.configMutex);
-        cached_max_detections = ctx.config.max_detections;
-        cached_nms_threshold = ctx.config.nms_threshold;
-        cached_confidence_threshold = ctx.config.confidence_threshold;
-        cached_postprocess = ctx.config.postprocess;
-    }
-    
-
-    // Step 1: Decode YOLO output based on model type
-    // Use the cached max_detections from UI config (same as buffer allocation)
-    int maxDecodedTargets = cached_max_detections;  // Use UI configured value
-    cudaError_t decodeErr = cudaSuccess;
-    
-    
-    if (cached_postprocess == "yolo10") {
-        int max_candidates = (shape.size() > 1) ? static_cast<int>(shape[1]) : 0;
-        
-        // Using YOLO10 post-processing path
-        
-        decodeErr = decodeYolo10Gpu(
-            d_rawOutputPtr,
-            outputType,
-            shape,
-            m_numClasses,
-            cached_confidence_threshold,
-            m_imgScale,
-            m_d_decodedTargets->get(),
-            m_d_decodedCount->get(),
-            maxDecodedTargets,
-            max_candidates,
-            stream);
-    } else if (cached_postprocess == "yolo_nms") {
-        // NMS가 포함된 모델 - 이미 후처리된 출력
-        // 출력 형식: [batch, num_detections, 6] where 6 = [x1, y1, x2, y2, confidence, class_id]
-        
-        int num_detections = (shape.size() > 1) ? static_cast<int>(shape[1]) : 0;
-        int output_features = (shape.size() > 2) ? static_cast<int>(shape[2]) : 0;
-        
-        if (output_features != 6) {
-            std::cerr << "[Pipeline] Invalid NMS output format. Expected 6 features [x1,y1,x2,y2,conf,class], got " << output_features << std::endl;
-            if (m_d_finalTargetsCount) {
-                cudaMemsetAsync(m_d_finalTargetsCount->get(), 0, sizeof(int), stream);
-            }
-            return;
-        }
-        
-        // NMS 출력을 직접 처리 - 디코딩 불필요
-        decodeErr = processNMSOutputGpu(
-            d_rawOutputPtr,
-            outputType,
-            shape,
-            cached_confidence_threshold,
-            m_imgScale,
-            m_d_decodedTargets->get(),
-            m_d_decodedCount->get(),
-            maxDecodedTargets,
-            num_detections,
-            stream);
-            
-    } else if (cached_postprocess == "yolo8" || cached_postprocess == "yolo9" || 
-               cached_postprocess == "yolo11" || cached_postprocess == "yolo12") {
-        int max_candidates = (shape.size() > 2) ? static_cast<int>(shape[2]) : 0;
-        
-        // Use YOLO11/12 post-processing path
-        
-        // Validate parameters before calling
-        if (!m_d_decodedTargets || !m_d_decodedCount) {
-            std::cerr << "[Pipeline] Target buffers not allocated!" << std::endl;
-            if (m_d_finalTargetsCount) {
-                cudaMemsetAsync(m_d_finalTargetsCount->get(), 0, sizeof(int), stream);
-            }
-            return;
-        }
-        
-        if (max_candidates <= 0 || maxDecodedTargets <= 0) {
-            std::cerr << "[Pipeline] Invalid buffer sizes: max_candidates=" << max_candidates 
-                      << ", maxDecodedTargets=" << maxDecodedTargets << std::endl;
-            if (m_d_finalTargetsCount) {
-                cudaMemsetAsync(m_d_finalTargetsCount->get(), 0, sizeof(int), stream);
-            }
-            return;
-        }
-        
-        // Debug output removed for maximum performance
-        
-        // Update class filter flags if needed
-        if (m_classFilterDirty && m_d_allowFlags) {
-            unsigned char h_allowFlags[Constants::MAX_CLASSES_FOR_FILTERING];
-            memset(h_allowFlags, 0, Constants::MAX_CLASSES_FOR_FILTERING);
-            
-            // Copy class settings to allow flags
-            for (const auto& setting : ctx.config.class_settings) {
-                if (setting.id >= 0 && setting.id < Constants::MAX_CLASSES_FOR_FILTERING) {
-                    h_allowFlags[setting.id] = setting.allow ? 1 : 0;
-                }
-            }
-            
-            // Update cached filter
-            m_cachedClassFilter.assign(h_allowFlags, h_allowFlags + Constants::MAX_CLASSES_FOR_FILTERING);
-            
-            // Copy to GPU
-            cudaMemcpyAsync(m_d_allowFlags->get(), h_allowFlags, Constants::MAX_CLASSES_FOR_FILTERING * sizeof(unsigned char), cudaMemcpyHostToDevice, stream);
-            m_classFilterDirty = false;
-        }
-
-        // Decode with integrated class filtering
-        decodeErr = decodeYolo11Gpu(
-            d_rawOutputPtr,
-            outputType,
-            shape,
-            m_numClasses,
-            cached_confidence_threshold,
-            m_imgScale,
-            m_d_decodedTargets->get(),
-            m_d_decodedCount->get(),
-            maxDecodedTargets,
-            max_candidates,
-            m_d_allowFlags ? m_d_allowFlags->get() : nullptr,  // Pass class filter
-            Constants::MAX_CLASSES_FOR_FILTERING,
-            stream);
-    } else {
-        std::cerr << "[Pipeline] Unsupported post-processing type: " << cached_postprocess << std::endl;
-        // OPTIMIZATION: Count already cleared by unified clearing kernel
-        return;
-    }
-
+    // Decode YOLO output
+    cudaError_t decodeErr = decodeYoloOutput(d_rawOutputPtr, outputType, shape, config, stream);
     if (decodeErr != cudaSuccess) {
         std::cerr << "[Pipeline] GPU decoding failed: " << cudaGetErrorString(decodeErr) << std::endl;
-        // OPTIMIZATION: Count already cleared by unified clearing kernel
         return;
     }
 
-    // Step 2: Class and score filtering is now done during decoding stage
-    // Decoded targets already contain only valid, filtered targets
+    // NMS processing
+    performNMSProcessing(config, stream);
+}
 
-    // Step 3: NMS input uses decoded targets directly (already filtered)
-    Target* nmsInputTargets = m_d_decodedTargets->get();
-    int* nmsInputCount = m_d_decodedCount->get();
-
-    // TODO: Color filtering will be implemented when color mask integration is complete
-    // For now, we skip color filtering step
-
-    // Step 5: NMS (Non-Maximum Suppression)
-    // Skip NMS for yolo_nms models - already post-processed
-    bool skipNMS = (cached_postprocess == "yolo_nms");
+void UnifiedGraphPipeline::performNMSProcessing(const PostProcessingConfig& config, cudaStream_t stream) {
+    auto& ctx = AppContext::getInstance();
     
-    if (skipNMS) {
-        // For NMS models, copy decoded targets directly to final targets
-        // Skipping NMS - using pre-processed detections
-        
-        if (m_d_finalTargets && m_d_finalTargetsCount && m_d_decodedTargets && m_d_decodedCount) {
-            // Copy count
-            cudaMemcpyAsync(m_d_finalTargetsCount->get(), m_d_decodedCount->get(), sizeof(int), cudaMemcpyDeviceToDevice, stream);
-            
-            // Copy targets using fixed max size (eliminates synchronization!)
-            // Always copy max_detections amount - GPU kernels will handle actual count internally
-            cudaMemcpyAsync(m_d_finalTargets->get(), m_d_decodedTargets->get(), 
-                          cached_max_detections * sizeof(Target), cudaMemcpyDeviceToDevice, stream);
-            
-            // Copy count directly without synchronization
-            cudaMemcpyAsync(m_d_finalTargetsCount->get(), m_d_decodedCount->get(), sizeof(int), cudaMemcpyDeviceToDevice, stream);
-            
-            // 💥 SYNCHRONIZATION ELIMINATED! 2-3ms latency improvement
-        }
-    } else {
-        // Normal NMS processing for raw YOLO models
-    if (m_d_finalTargets && m_d_finalTargetsCount && 
-        m_d_x1 && m_d_y1 && m_d_x2 && m_d_y2 && m_d_areas && 
-        m_d_scores_nms && m_d_classIds_nms && m_d_iou_matrix && 
-        m_d_keep && m_d_indices) {
-        
-        // Use frame dimensions from config - always detection_resolution for NMS
-        int cached_frame_width = ctx.config.detection_resolution;
-        int cached_frame_height = ctx.config.detection_resolution;
-        
-        // NMS debug output removed for performance
-        
-        // Get count for NMS input - use pinned memory for fast transfer
-        // OPTIMIZATION: Zero-copy mapped pinned memory access
-        static std::unique_ptr<CudaPinnedMemory<int>> h_inputCount_pinned = nullptr;
-        static int* d_mapped_count = nullptr;
-        if (!h_inputCount_pinned) {
-            h_inputCount_pinned = std::make_unique<CudaPinnedMemory<int>>(1, cudaHostAllocMapped);
-            cudaHostGetDevicePointer((void**)&d_mapped_count, h_inputCount_pinned->get(), 0);
-        }
-        
-        // Use fixed max size instead of dynamic count (eliminates synchronization!)
-        int actual_count = cached_max_detections;  // Use UI configured max_detections
-        
-        // NMS will internally handle the actual count from GPU kernels
-        // This eliminates the need for host-device synchronization
-        
-        try {
-            // Use actual count for accurate NMS
-            NMSGpu(
-                nmsInputTargets,
-                actual_count,  // Use actual count for accuracy
-                m_d_finalTargets->get(),
-                m_d_finalTargetsCount->get(),
-                cached_max_detections,  // Use UI configured value
-                cached_nms_threshold,
-                cached_frame_width,
-                cached_frame_height,
-                m_d_x1->get(),
-                m_d_y1->get(),
-                m_d_x2->get(),
-                m_d_y2->get(),
-                m_d_areas->get(),
-                m_d_scores_nms->get(),
-                m_d_classIds_nms->get(),
-                m_d_iou_matrix->get(),
-                m_d_keep->get(),
-                m_d_indices->get(),
-                stream
-            );
-            
-            // Validate detections on GPU without sync
-            validateTargetsGpu(m_d_finalTargets->get(), cached_max_detections, stream);
-            
-            // Only copy to CPU if preview window is enabled
-            // Throttle preview updates to reduce PCIe bandwidth usage
-            static int preview_frame_counter = 0;
-            const int PREVIEW_UPDATE_INTERVAL = 3; // Update every 3 frames (~100Hz at 300FPS)
-            
-            if (ctx.config.show_window && (++preview_frame_counter % PREVIEW_UPDATE_INTERVAL == 0)) {
-                // OPTIMIZATION: Pre-allocate maximum size buffer to avoid dynamic resizing
-                if (m_h_finalTargets.empty()) {
-                    // Pre-allocate full capacity to eliminate resize overhead during runtime
-                    m_h_finalTargets.resize(cached_max_detections);
-                    // No initialization needed - buffer will be overwritten by GPU data
-                }
-                
-                // Initialize event once
-                if (!m_copyEvent) {
-                    m_copyEvent = std::make_unique<CudaEvent>(cudaEventDisableTiming);
-                }
-                
-                // Check if previous copy is complete
-                if (m_copyInProgress) {
-                    if (m_copyEvent->query() == cudaSuccess) {
-                        // OPTIMIZED: Previous copy completed, update preview directly
-                        // GPU pipeline already validated all targets - no need for CPU re-validation
-                        if (m_h_finalCount > 0 && m_h_finalCount <= cached_max_detections) {
-                            // Use static vector to avoid dynamic allocation overhead
-                            static std::vector<Target> previewTargets;
-                            previewTargets.clear();
-                            previewTargets.reserve(m_h_finalCount);
-                            
-                            // Direct copy - GPU already filtered invalid targets
-                            for (int i = 0; i < m_h_finalCount; i++) {
-                                previewTargets.push_back(m_h_finalTargets[i]);
-                            }
-                            
-                            ctx.updateTargets(previewTargets);
-                        } else {
-                            ctx.clearTargets();
-                        }
-                        m_copyInProgress = false;
-                    }
-                }
-                
-                // Start new copy if not already in progress
-                if (!m_copyInProgress) {
-                    // MINIMAL UI COPY: Only every 16th frame (240fps→15fps UI updates) when window shown
-                    static int ui_copy_counter = 0;
-                    if (ctx.config.show_window && (++ui_copy_counter % 16 == 0)) {
-                        // Copy minimal data for UI preview only
-                        cudaMemcpyAsync(&m_h_finalCount, m_d_finalTargetsCount->get(), sizeof(int), 
-                                       cudaMemcpyDeviceToHost, stream);
-                        
-                        int copyCount = std::min(actual_count, static_cast<int>(m_h_finalTargets.size()));
-                        cudaMemcpyAsync(m_h_finalTargets.data(), m_d_finalTargets->get(), 
-                                      copyCount * sizeof(Target), cudaMemcpyDeviceToHost, stream);
-                    }
-                    
-                    // Record event for this copy
-                    m_copyEvent->record(stream);
-                    m_copyInProgress = true;
-                }
-            }
-            
-        } catch (const std::exception& e) {
-            std::cerr << "[Pipeline] Exception during NMSGpu: " << e.what() << std::endl;
-            if (m_d_finalTargetsCount) {
-                cudaMemsetAsync(m_d_finalTargetsCount->get(), 0, sizeof(int), stream);
-            }
-            ctx.clearTargets();
-        }
-    } else {
+    // Skip NMS for yolo_nms models - already post-processed
+    if (config.postprocess == "yolo_nms") {
+        copyDecodedToFinalTargets(config, stream);
+        return;
+    }
+    
+    // Normal NMS processing for raw YOLO models
+    performStandardNMS(config, stream);
+}
+
+void UnifiedGraphPipeline::copyDecodedToFinalTargets(const PostProcessingConfig& config, cudaStream_t stream) {
+    if (!m_d_finalTargets || !m_d_finalTargetsCount || !m_d_decodedTargets || !m_d_decodedCount) {
+        return;
+    }
+    
+    // Copy count
+    cudaMemcpyAsync(m_d_finalTargetsCount->get(), m_d_decodedCount->get(), sizeof(int), 
+                   cudaMemcpyDeviceToDevice, stream);
+    
+    // Copy targets using fixed max size (eliminates synchronization!)
+    cudaMemcpyAsync(m_d_finalTargets->get(), m_d_decodedTargets->get(), 
+                   config.max_detections * sizeof(Target), cudaMemcpyDeviceToDevice, stream);
+}
+
+void UnifiedGraphPipeline::performStandardNMS(const PostProcessingConfig& config, cudaStream_t stream) {
+    auto& ctx = AppContext::getInstance();
+    
+    if (!validateNMSBuffers()) {
         std::cerr << "[Pipeline] NMS buffers not properly allocated!" << std::endl;
-        // OPTIMIZATION: Count already cleared by unified clearing kernel
+        ctx.clearTargets();
+        return;
+    }
+    
+    try {
+        executeNMSKernel(config, stream);
+        handleNMSResults(config, stream);
+    } catch (const std::exception& e) {
+        std::cerr << "[Pipeline] Exception during NMSGpu: " << e.what() << std::endl;
+        if (m_d_finalTargetsCount) {
+            cudaMemsetAsync(m_d_finalTargetsCount->get(), 0, sizeof(int), stream);
+        }
         ctx.clearTargets();
     }
-    } // End of skipNMS condition
 }
+
+bool UnifiedGraphPipeline::validateNMSBuffers() {
+    return (m_d_finalTargets && m_d_finalTargetsCount && 
+            m_d_x1 && m_d_y1 && m_d_x2 && m_d_y2 && m_d_areas && 
+            m_d_scores_nms && m_d_classIds_nms && m_d_iou_matrix && 
+            m_d_keep && m_d_indices);
+}
+
+void UnifiedGraphPipeline::executeNMSKernel(const PostProcessingConfig& config, cudaStream_t stream) {
+    auto& ctx = AppContext::getInstance();
+    
+    Target* nmsInputTargets = m_d_decodedTargets->get();
+    int cached_frame_width = ctx.config.detection_resolution;
+    int cached_frame_height = ctx.config.detection_resolution;
+    
+    NMSGpu(
+        nmsInputTargets,
+        config.max_detections,
+        m_d_finalTargets->get(),
+        m_d_finalTargetsCount->get(),
+        config.max_detections,
+        config.nms_threshold,
+        cached_frame_width,
+        cached_frame_height,
+        m_d_x1->get(),
+        m_d_y1->get(),
+        m_d_x2->get(),
+        m_d_y2->get(),
+        m_d_areas->get(),
+        m_d_scores_nms->get(),
+        m_d_classIds_nms->get(),
+        m_d_iou_matrix->get(),
+        m_d_keep->get(),
+        m_d_indices->get(),
+        stream
+    );
+    
+    // Validate detections on GPU without sync
+    validateTargetsGpu(m_d_finalTargets->get(), config.max_detections, stream);
+}
+
+void UnifiedGraphPipeline::handleNMSResults(const PostProcessingConfig& config, cudaStream_t stream) {
+    auto& ctx = AppContext::getInstance();
+    
+    // Only copy to CPU if preview window is enabled
+    static int preview_frame_counter = 0;
+    const int PREVIEW_UPDATE_INTERVAL = 3;
+    
+    if (!ctx.config.show_window || (++preview_frame_counter % PREVIEW_UPDATE_INTERVAL != 0)) {
+        return;
+    }
+    
+    handlePreviewUpdate(config, stream);
+}
+
+void UnifiedGraphPipeline::handlePreviewUpdate(const PostProcessingConfig& config, cudaStream_t stream) {
+    auto& ctx = AppContext::getInstance();
+    
+    // Pre-allocate buffer if needed
+    if (m_h_finalTargets.empty()) {
+        m_h_finalTargets.resize(config.max_detections);
+    }
+    
+    // Initialize event once
+    if (!m_copyEvent) {
+        m_copyEvent = std::make_unique<CudaEvent>(cudaEventDisableTiming);
+    }
+    
+    // Check if previous copy is complete
+    if (m_copyInProgress && m_copyEvent->query() == cudaSuccess) {
+        updatePreviewTargets(config);
+        m_copyInProgress = false;
+    }
+    
+    // Start new copy if not already in progress
+    if (!m_copyInProgress) {
+        startPreviewCopy(config, stream);
+    }
+}
+
+void UnifiedGraphPipeline::updatePreviewTargets(const PostProcessingConfig& config) {
+    auto& ctx = AppContext::getInstance();
+    
+    if (m_h_finalCount > 0 && m_h_finalCount <= config.max_detections) {
+        static std::vector<Target> previewTargets;
+        previewTargets.clear();
+        previewTargets.reserve(m_h_finalCount);
+        
+        for (int i = 0; i < m_h_finalCount; i++) {
+            previewTargets.push_back(m_h_finalTargets[i]);
+        }
+        
+        ctx.updateTargets(previewTargets);
+    } else {
+        ctx.clearTargets();
+    }
+}
+
+void UnifiedGraphPipeline::startPreviewCopy(const PostProcessingConfig& config, cudaStream_t stream) {
+    auto& ctx = AppContext::getInstance();
+    
+    // Minimal UI copy every 16th frame when window shown
+    static int ui_copy_counter = 0;
+    if (ctx.config.show_window && (++ui_copy_counter % 16 == 0)) {
+        // Copy minimal data for UI preview
+        cudaMemcpyAsync(&m_h_finalCount, m_d_finalTargetsCount->get(), sizeof(int), 
+                       cudaMemcpyDeviceToHost, stream);
+        
+        int copyCount = std::min(config.max_detections, static_cast<int>(m_h_finalTargets.size()));
+        cudaMemcpyAsync(m_h_finalTargets.data(), m_d_finalTargets->get(), 
+                       copyCount * sizeof(Target), cudaMemcpyDeviceToHost, stream);
+    }
+    
+    // Record event for this copy
+    m_copyEvent->record(stream);
+    m_copyInProgress = true;
+}
+
 
 void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
     auto& ctx = AppContext::getInstance();
@@ -1632,6 +1612,253 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
     }
 }
 
+std::pair<int, int> UnifiedGraphPipeline::calculateCaptureCenter(const AppContext& ctx, const D3D11_TEXTURE2D_DESC& desktopDesc) {
+    int centerX, centerY;
+    if (ctx.config.enable_aim_shoot_offset && ctx.aiming && ctx.shooting) {
+        centerX = desktopDesc.Width / 2 + static_cast<int>(ctx.config.aim_shoot_offset_x);
+        centerY = desktopDesc.Height / 2 + static_cast<int>(ctx.config.aim_shoot_offset_y);
+    } else {
+        centerX = desktopDesc.Width / 2 + static_cast<int>(ctx.config.crosshair_offset_x);
+        centerY = desktopDesc.Height / 2 + static_cast<int>(ctx.config.crosshair_offset_y);
+    }
+    return {centerX, centerY};
+}
+
+D3D11_BOX UnifiedGraphPipeline::createCaptureBox(int centerX, int centerY, int captureSize, const D3D11_TEXTURE2D_DESC& desktopDesc) {
+    int cropX = std::max(0, centerX - captureSize / 2);
+    int cropY = std::max(0, centerY - captureSize / 2);
+    cropX = std::min(cropX, static_cast<int>(desktopDesc.Width) - captureSize);
+    cropY = std::min(cropY, static_cast<int>(desktopDesc.Height) - captureSize);
+    
+    D3D11_BOX srcBox;
+    srcBox.left = cropX;
+    srcBox.top = cropY;
+    srcBox.right = cropX + captureSize;
+    srcBox.bottom = cropY + captureSize;
+    srcBox.front = 0;
+    srcBox.back = 1;
+    
+    return srcBox;
+}
+
+bool UnifiedGraphPipeline::performDesktopCapture(int writeIdx, const AppContext& ctx) {
+    if (!m_desktopDuplication || !m_d3dDevice || !m_d3dContext || !m_captureTextureD3D) {
+        return false;
+    }
+    
+    auto* duplication = static_cast<IDXGIOutputDuplication*>(m_desktopDuplication);
+    auto* d3dContext = static_cast<ID3D11DeviceContext*>(m_d3dContext);
+    auto* captureTexture = static_cast<ID3D11Texture2D*>(m_captureTextureD3D);
+    
+    DXGI_OUTDUPL_FRAME_INFO frameInfo;
+    IDXGIResource* desktopResource = nullptr;
+    HRESULT hr = duplication->AcquireNextFrame(0, &frameInfo, &desktopResource);
+    
+    if (!SUCCEEDED(hr) || !desktopResource) {
+        return false;
+    }
+    
+    ID3D11Texture2D* desktopTexture = nullptr;
+    hr = desktopResource->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&desktopTexture);
+    
+    if (SUCCEEDED(hr) && desktopTexture) {
+        D3D11_TEXTURE2D_DESC desktopDesc;
+        desktopTexture->GetDesc(&desktopDesc);
+        
+        auto [centerX, centerY] = calculateCaptureCenter(ctx, desktopDesc);
+        D3D11_BOX srcBox = createCaptureBox(centerX, centerY, ctx.config.detection_resolution, desktopDesc);
+        
+        d3dContext->CopySubresourceRegion(captureTexture, 0, 0, 0, 0, desktopTexture, 0, &srcBox);
+        desktopTexture->Release();
+    }
+    
+    desktopResource->Release();
+    duplication->ReleaseFrame();
+    return true;
+}
+
+bool UnifiedGraphPipeline::performFrameCapture(int writeIdx) {
+    auto& ctx = AppContext::getInstance();
+    
+    if (!m_config.enableCapture || !m_cudaResource || m_hasFrameData) {
+        return true;
+    }
+    
+    SimpleCudaMat& currentBuffer = m_tripleBuffer->buffers[writeIdx];
+    
+    if (!performDesktopCapture(writeIdx, ctx)) {
+        return false;
+    }
+    
+    cudaGetLastError();
+    
+    cudaError_t err = cudaGraphicsMapResources(1, &m_cudaResource, m_captureStream->get());
+    if (err != cudaSuccess) {
+        printf("[ERROR] Graphics map failed: %s\n", cudaGetErrorString(err));
+        return false;
+    }
+    
+    cudaArray_t array;
+    err = cudaGraphicsSubResourceGetMappedArray(&array, m_cudaResource, 0, 0);
+    if (err == cudaSuccess) {
+        err = cudaMemcpy2DFromArrayAsync(
+            currentBuffer.data(),
+            currentBuffer.step(),
+            array,
+            0, 0,
+            currentBuffer.cols() * sizeof(uchar4),
+            currentBuffer.rows(),
+            cudaMemcpyDeviceToDevice,
+            m_captureStream->get()
+        );
+    }
+    
+    cudaGraphicsUnmapResources(1, &m_cudaResource, m_captureStream->get());
+    
+    if (err != cudaSuccess) {
+        printf("[ERROR] Capture failed: %s\n", cudaGetErrorString(err));
+        return false;
+    }
+    
+    m_tripleBuffer->captureComplete[writeIdx].record(m_captureStream->get());
+    m_hasFrameData = true;
+    return true;
+}
+
+bool UnifiedGraphPipeline::performPreprocessing(int writeIdx) {
+    auto& ctx = AppContext::getInstance();
+    SimpleCudaMat& currentBuffer = m_tripleBuffer->buffers[writeIdx];
+    
+    // Wait for capture completion
+    cudaStreamWaitEvent(m_inferenceStream->get(), m_tripleBuffer->captureComplete[writeIdx].get(), 0);
+    
+    // Update preview buffer if needed
+    if (ctx.preview_enabled && !currentBuffer.empty()) {
+        updatePreviewBuffer(currentBuffer);
+    }
+    
+    // Unified preprocessing
+    if (!m_d_yoloInput || currentBuffer.empty()) {
+        return false;
+    }
+    
+    int modelRes = getModelInputResolution();
+    cudaError_t err = cuda_unified_preprocessing(
+        currentBuffer.data(),
+        m_d_yoloInput->get(),
+        currentBuffer.cols(),
+        currentBuffer.rows(),
+        static_cast<int>(currentBuffer.step()),
+        modelRes,
+        modelRes,
+        m_inferenceStream->get()
+    );
+    
+    if (err != cudaSuccess) {
+        printf("[ERROR] Unified preprocessing failed: %s\n", cudaGetErrorString(err));
+        return false;
+    }
+    
+    m_tripleBuffer->preprocessComplete[writeIdx].record(m_inferenceStream->get());
+    return true;
+}
+
+void UnifiedGraphPipeline::updatePreviewBuffer(const SimpleCudaMat& currentBuffer) {
+    if (m_captureBuffer.empty() || 
+        m_captureBuffer.rows() != currentBuffer.rows() || 
+        m_captureBuffer.cols() != currentBuffer.cols() || 
+        m_captureBuffer.channels() != currentBuffer.channels()) {
+        m_captureBuffer.create(currentBuffer.rows(), currentBuffer.cols(), currentBuffer.channels());
+    }
+    
+    size_t dataSize = currentBuffer.rows() * currentBuffer.cols() * currentBuffer.channels() * sizeof(unsigned char);
+    cudaMemcpyAsync(m_captureBuffer.data(), currentBuffer.data(), dataSize, 
+                   cudaMemcpyDeviceToDevice, m_inferenceStream->get());
+}
+
+bool UnifiedGraphPipeline::performInference(int writeIdx) {
+    if (m_inputBindings.find(m_inputName) == m_inputBindings.end() || !m_d_yoloInput) {
+        return false;
+    }
+    
+    void* inputBinding = m_inputBindings[m_inputName]->get();
+    
+    // Wait for preprocessing completion
+    cudaStreamWaitEvent(m_inferenceStream->get(), m_tripleBuffer->preprocessComplete[writeIdx].get(), 0);
+    
+    // Copy input if needed
+    if (inputBinding != m_d_yoloInput->get()) {
+        size_t inputSize = getModelInputResolution() * getModelInputResolution() * 3 * sizeof(float);
+        cudaMemcpyAsync(inputBinding, m_d_yoloInput->get(), inputSize, 
+                       cudaMemcpyDeviceToDevice, m_inferenceStream->get());
+    }
+    
+    // Run inference
+    if (!runInferenceAsync(m_inferenceStream->get())) {
+        std::cerr << "[UnifiedGraph] TensorRT inference failed" << std::endl;
+        return false;
+    }
+    
+    // Post-processing
+    performIntegratedPostProcessing(m_inferenceStream->get());
+    performTargetSelection(m_inferenceStream->get());
+    
+    // Record completion
+    m_tripleBuffer->inferenceComplete[writeIdx].record(m_inferenceStream->get());
+    return true;
+}
+
+int UnifiedGraphPipeline::findHeadClassId(const AppContext& ctx) {
+    for(const auto& cs : ctx.config.class_settings) {
+        if (cs.name == ctx.config.head_class_name) {
+            return cs.id;
+        }
+    }
+    return -1;
+}
+
+bool UnifiedGraphPipeline::performResultCopy(int writeIdx) {
+    auto& ctx = AppContext::getInstance();
+    
+    // Wait for inference completion
+    cudaStreamWaitEvent(m_copyStream->get(), m_tripleBuffer->inferenceComplete[writeIdx].get(), 0);
+    
+    Target* finalTarget = m_d_bestTarget->get();
+    if (!finalTarget || !m_tripleBuffer->h_movement_dx_pinned[writeIdx].get()) {
+        m_tripleBuffer->movement_data_ready[writeIdx] = false;
+        return true;
+    }
+    
+    int head_class_id = findHeadClassId(ctx);
+    
+    // Launch GPU kernel for mouse movement calculation
+    calculateMouseMovementKernel<<<1, 1, 0, m_copyStream->get()>>>(
+        finalTarget,
+        ctx.config.detection_resolution / 2.0f,
+        ctx.config.detection_resolution / 2.0f,
+        ctx.config.pd_kp_x,
+        ctx.config.pd_kp_y,
+        head_class_id,
+        ctx.config.head_y_offset,
+        ctx.config.body_y_offset,
+        ctx.config.detection_resolution,
+        m_d_mouseDx->get(),
+        m_d_mouseDy->get()
+    );
+    
+    // Copy results
+    cudaMemcpyAsync(m_tripleBuffer->h_movement_dx_pinned[writeIdx].get(), m_d_mouseDx->get(), sizeof(int), 
+                   cudaMemcpyDeviceToHost, m_copyStream->get());
+    cudaMemcpyAsync(m_tripleBuffer->h_movement_dy_pinned[writeIdx].get(), m_d_mouseDy->get(), sizeof(int), 
+                   cudaMemcpyDeviceToHost, m_copyStream->get());
+    
+    // Record completion
+    m_tripleBuffer->copyComplete[writeIdx].record(m_copyStream->get());
+    m_tripleBuffer->movement_data_ready[writeIdx] = true;
+    
+    return true;
+}
+
 // Simple stream-based pipeline with ordered execution and no synchronization
 bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
     auto& ctx = AppContext::getInstance();
@@ -1647,212 +1874,26 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
     // Step 2: Get next write index (single atomic operation, no contention)
     int writeIdx = m_tripleBuffer->getNextWriteIndex();
     
-    // Step 3: Frame capture stage (captureStream ensures ordering)
-    if (m_config.enableCapture && m_cudaResource && !m_hasFrameData) {
-        SimpleCudaMat& currentBuffer = m_tripleBuffer->buffers[writeIdx];
-        
-        // Capture current desktop frame using Desktop Duplication
-        if (m_desktopDuplication && m_d3dDevice && m_d3dContext && m_captureTextureD3D) {
-            auto* duplication = static_cast<IDXGIOutputDuplication*>(m_desktopDuplication);
-            auto* d3dContext = static_cast<ID3D11DeviceContext*>(m_d3dContext);
-            auto* captureTexture = static_cast<ID3D11Texture2D*>(m_captureTextureD3D);
-            
-            DXGI_OUTDUPL_FRAME_INFO frameInfo;
-            IDXGIResource* desktopResource = nullptr;
-            // Use 0 timeout for non-blocking acquisition
-            HRESULT hr = duplication->AcquireNextFrame(0, &frameInfo, &desktopResource);
-            
-            if (SUCCEEDED(hr) && desktopResource) {
-                ID3D11Texture2D* desktopTexture = nullptr;
-                hr = desktopResource->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&desktopTexture);
-                if (SUCCEEDED(hr) && desktopTexture) {
-                    D3D11_TEXTURE2D_DESC desktopDesc;
-                    desktopTexture->GetDesc(&desktopDesc);
-                    
-                    // Use aim_shoot_offset when both aiming and shooting, otherwise use crosshair_offset
-                    int centerX, centerY;
-                    if (ctx.config.enable_aim_shoot_offset && ctx.aiming && ctx.shooting) {
-                        centerX = desktopDesc.Width / 2 + static_cast<int>(ctx.config.aim_shoot_offset_x);
-                        centerY = desktopDesc.Height / 2 + static_cast<int>(ctx.config.aim_shoot_offset_y);
-                    } else {
-                        centerX = desktopDesc.Width / 2 + static_cast<int>(ctx.config.crosshair_offset_x);
-                        centerY = desktopDesc.Height / 2 + static_cast<int>(ctx.config.crosshair_offset_y);
-                    }
-                    int captureSize = ctx.config.detection_resolution;
-                    
-                    int cropX = std::max(0, centerX - captureSize / 2);
-                    int cropY = std::max(0, centerY - captureSize / 2);
-                    cropX = std::min(cropX, static_cast<int>(desktopDesc.Width) - captureSize);
-                    cropY = std::min(cropY, static_cast<int>(desktopDesc.Height) - captureSize);
-                    
-                    D3D11_BOX srcBox;
-                    srcBox.left = cropX;
-                    srcBox.top = cropY;
-                    srcBox.right = cropX + captureSize;
-                    srcBox.bottom = cropY + captureSize;
-                    srcBox.front = 0;
-                    srcBox.back = 1;
-                    
-                    d3dContext->CopySubresourceRegion(captureTexture, 0, 0, 0, 0, 
-                                                     desktopTexture, 0, &srcBox);
-                    desktopTexture->Release();
-                }
-                desktopResource->Release();
-                duplication->ReleaseFrame();
-            }
-        }
-        
-        cudaGetLastError();
-        
-        cudaError_t err = cudaGraphicsMapResources(1, &m_cudaResource, stream);
-        if (err == cudaSuccess) {
-            cudaArray_t array;
-            err = cudaGraphicsSubResourceGetMappedArray(&array, m_cudaResource, 0, 0);
-            if (err == cudaSuccess) {
-                err = cudaMemcpy2DFromArrayAsync(
-                    currentBuffer.data(),
-                    currentBuffer.step(),
-                    array,
-                    0, 0,
-                    currentBuffer.cols() * sizeof(uchar4),
-                    currentBuffer.rows(),
-                    cudaMemcpyDeviceToDevice,
-                    m_captureStream->get()  // Use dedicated capture stream
-                );
-            }
-            cudaGraphicsUnmapResources(1, &m_cudaResource, m_captureStream->get());
-        }
-        
-        if (err != cudaSuccess) {
-            printf("[ERROR] Capture failed: %s\n", cudaGetErrorString(err));
-            return false;
-        }
-        
-        // Record capture completion (no blocking synchronization)
-        m_tripleBuffer->captureComplete[writeIdx].record(m_captureStream->get());
-        m_hasFrameData = true;
+    // Step 3: Frame capture stage
+    if (!performFrameCapture(writeIdx)) {
+        return false;
     }
     
     // Step 4: Inference stage with event dependency (no blocking)
     if (!ctx.detection_paused.load()) {
-        SimpleCudaMat& currentBuffer = m_tripleBuffer->buffers[writeIdx];
-        
-        // Wait for capture completion on inference stream (non-blocking dependency)
-        cudaStreamWaitEvent(m_inferenceStream->get(), m_tripleBuffer->captureComplete[writeIdx].get(), 0);
-        
-        // Update preview buffer for debug window (optional, on inference stream)
-        if (ctx.preview_enabled && !currentBuffer.empty()) {
-            if (m_captureBuffer.empty() || 
-                m_captureBuffer.rows() != currentBuffer.rows() || 
-                m_captureBuffer.cols() != currentBuffer.cols() || 
-                m_captureBuffer.channels() != currentBuffer.channels()) {
-                m_captureBuffer.create(currentBuffer.rows(), currentBuffer.cols(), currentBuffer.channels());
-            }
-            
-            size_t dataSize = currentBuffer.rows() * currentBuffer.cols() * currentBuffer.channels() * sizeof(unsigned char);
-            cudaMemcpyAsync(m_captureBuffer.data(), currentBuffer.data(), dataSize, 
-                          cudaMemcpyDeviceToDevice, m_inferenceStream->get());
+        if (!performPreprocessing(writeIdx)) {
+            return false;
         }
         
-        // Unified Preprocessing: BGRA → RGB + Resize + Normalize + HWC→CHW
-        if (m_d_yoloInput && !currentBuffer.empty()) {
-            int modelRes = getModelInputResolution();
-            
-            cudaError_t err = cuda_unified_preprocessing(
-                currentBuffer.data(),
-                m_d_yoloInput->get(),
-                currentBuffer.cols(),
-                currentBuffer.rows(),
-                static_cast<int>(currentBuffer.step()),
-                modelRes,
-                modelRes,
-                m_inferenceStream->get()  // All on inference stream
-            );
-            
-            if (err != cudaSuccess) {
-                printf("[ERROR] Unified preprocessing failed: %s\n", cudaGetErrorString(err));
-                return false;
-            }
-            
-            // Record preprocessing completion for proper pipeline ordering
-            m_tripleBuffer->preprocessComplete[writeIdx].record(m_inferenceStream->get());
-        }
-        
-        // OPTIMIZATION: TensorRT Inference with zero-copy when possible
-        if (m_inputBindings.find(m_inputName) != m_inputBindings.end() && m_d_yoloInput) {
-            void* inputBinding = m_inputBindings[m_inputName]->get();
-            
-            // Wait for preprocessing completion before TensorRT input copy
-            cudaStreamWaitEvent(m_inferenceStream->get(), m_tripleBuffer->preprocessComplete[writeIdx].get(), 0);
-            
-            // OPTIMIZATION: Skip unnecessary device-to-device copy if buffers can be aliased
-            if (inputBinding != m_d_yoloInput->get()) {
-                size_t inputSize = getModelInputResolution() * getModelInputResolution() * 3 * sizeof(float);
-                cudaMemcpyAsync(inputBinding, m_d_yoloInput->get(), inputSize, 
-                               cudaMemcpyDeviceToDevice, m_inferenceStream->get());
-            }
-            
-            // TensorRT inference on inference stream
-            if (!runInferenceAsync(m_inferenceStream->get())) {
-                std::cerr << "[UnifiedGraph] TensorRT inference failed" << std::endl;
-                return false;
-            }
-            
-            // Post-processing (decode, filter, NMS, target selection) - all on inference stream
-            performIntegratedPostProcessing(m_inferenceStream->get());
-            performTargetSelection(m_inferenceStream->get());
-            
-            // Record inference completion
-            m_tripleBuffer->inferenceComplete[writeIdx].record(m_inferenceStream->get());
+        if (!performInference(writeIdx)) {
+            return false;
         }
     }
     
-    // Step 5: Copy results to host memory (copy stream with event dependency)
+    // Step 5: Copy results to host memory
     if (!ctx.detection_paused.load()) {
-        // Wait for inference completion on copy stream
-        cudaStreamWaitEvent(m_copyStream->get(), m_tripleBuffer->inferenceComplete[writeIdx].get(), 0);
-        
-        Target* finalTarget = m_d_bestTarget->get();
-        if (finalTarget && m_tripleBuffer->h_movement_dx_pinned[writeIdx].get()) {
-            // Calculate mouse movement on GPU and copy only dx/dy (8 bytes instead of 32+ bytes)
-            auto& ctx = AppContext::getInstance();
-            
-            // Find head class ID
-            int head_class_id = -1;
-            for(const auto& cs : ctx.config.class_settings) {
-                if (cs.name == ctx.config.head_class_name) {
-                    head_class_id = cs.id;
-                    break;
-                }
-            }
-            
-            // Launch GPU kernel to calculate mouse movement directly (single thread)
-            calculateMouseMovementKernel<<<1, 1, 0, m_copyStream->get()>>>(
-                finalTarget,
-                ctx.config.detection_resolution / 2.0f,  // screen center X
-                ctx.config.detection_resolution / 2.0f,  // screen center Y
-                ctx.config.pd_kp_x,                      // kp_x
-                ctx.config.pd_kp_y,                      // kp_y
-                head_class_id,
-                ctx.config.head_y_offset,
-                ctx.config.body_y_offset,
-                ctx.config.detection_resolution,
-                m_d_mouseDx->get(),
-                m_d_mouseDy->get()
-            );
-            
-            // Copy only dx/dy (8 bytes total instead of 32+ bytes)
-            cudaMemcpyAsync(m_tripleBuffer->h_movement_dx_pinned[writeIdx].get(), m_d_mouseDx->get(), sizeof(int), 
-                           cudaMemcpyDeviceToHost, m_copyStream->get());
-            cudaMemcpyAsync(m_tripleBuffer->h_movement_dy_pinned[writeIdx].get(), m_d_mouseDy->get(), sizeof(int), 
-                           cudaMemcpyDeviceToHost, m_copyStream->get());
-            
-            // Record copy completion and mark movement data ready
-            m_tripleBuffer->copyComplete[writeIdx].record(m_copyStream->get());
-            m_tripleBuffer->movement_data_ready[writeIdx] = true;
-        } else {
-            // No valid movement data
-            m_tripleBuffer->movement_data_ready[writeIdx] = false;
+        if (!performResultCopy(writeIdx)) {
+            return false;
         }
     }
     
