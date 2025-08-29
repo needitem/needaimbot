@@ -26,6 +26,12 @@ struct D3D11_BOX;
 
 namespace needaimbot {
 
+// Mouse movement result structure for unified GPU-CPU transfer
+struct MouseMovement {
+    int dx;
+    int dy;
+};
+
 // Forward declarations for internal implementation classes
 
 // Graph node types for tracking
@@ -223,10 +229,9 @@ private:
         std::array<CudaEvent, 3> inferenceComplete; 
         std::array<CudaEvent, 3> copyComplete;
         
-        // Mouse movement data (only 8 bytes per frame instead of 32+ bytes)
-        std::array<CudaPinnedMemory<int>, 3> h_movement_dx_pinned;   // 4 bytes
-        std::array<CudaPinnedMemory<int>, 3> h_movement_dy_pinned;   // 4 bytes  
-        bool movement_data_ready[3] = {false, false, false};         // Validity managed here
+        // Mouse movement data unified structure (8 bytes per frame)
+        std::array<CudaPinnedMemory<MouseMovement>, 3> h_movement_pinned;  // Combined dx, dy
+        bool movement_data_ready[3] = {false, false, false};              // Validity managed here
         
         // Constructor with proper initialization
         TripleBuffer() {
@@ -237,9 +242,8 @@ private:
                 inferenceComplete[i] = CudaEvent(cudaEventDisableTiming);
                 copyComplete[i] = CudaEvent(cudaEventDisableTiming);
                 
-                // Initialize pinned memory for mouse movement data
-                h_movement_dx_pinned[i] = CudaPinnedMemory<int>(1, cudaHostAllocDefault);
-                h_movement_dy_pinned[i] = CudaPinnedMemory<int>(1, cudaHostAllocDefault);
+                // Initialize pinned memory for unified mouse movement data
+                h_movement_pinned[i] = CudaPinnedMemory<MouseMovement>(1, cudaHostAllocDefault);
                 movement_data_ready[i] = false;
             }
         }
@@ -273,9 +277,9 @@ private:
                     buffers[i].create(height, width, channels);
                     
                     // Clear pinned memory to prevent garbage values
-                    if (h_movement_dx_pinned[i].get()) {
-                        *h_movement_dx_pinned[i].get() = 0;
-                        *h_movement_dy_pinned[i].get() = 0;
+                    if (h_movement_pinned[i].get()) {
+                        h_movement_pinned[i].get()->dx = 0;
+                        h_movement_pinned[i].get()->dy = 0;
                     }
                 }
             }
@@ -374,9 +378,8 @@ private:
     std::unique_ptr<CudaMemory<Target>> m_d_bestTarget;          // Selected target data
     std::unique_ptr<CudaMemory<float>> m_d_outputBuffer;         // Final output buffer
     
-    // GPU output buffers for mouse movement (no CPU copying needed)
-    std::unique_ptr<CudaMemory<int>> m_d_mouseDx;                // Mouse movement X
-    std::unique_ptr<CudaMemory<int>> m_d_mouseDy;                // Mouse movement Y
+    // GPU output buffer for unified mouse movement (optimized single transfer)
+    std::unique_ptr<CudaMemory<MouseMovement>> m_d_mouseMovement;  // Combined dx, dy
     
     // Pinned host memory for zero-copy access
     std::unique_ptr<CudaPinnedMemory<unsigned char>> m_h_inputBuffer;  // Pinned input buffer
