@@ -691,17 +691,11 @@ void UnifiedGraphPipeline::handleAimbotDeactivation() {
     auto& ctx = AppContext::getInstance();
     std::cout << "[UnifiedPipeline] Aimbot deactivated - suspending pipeline" << std::endl;
     
-    // Only synchronize if there's active work to avoid unnecessary blocking
-    if (m_tripleBuffer && m_tripleBuffer->hasActiveWork()) {
-        cudaStreamSynchronize(m_primaryStream->get());
-    }
-    
+    // Event-based approach: clear operations are async and self-coordinated
+    // No synchronization needed - pipeline suspension prevents new work
     clearCountBuffers();
     clearTripleBufferData();
     clearHostPreviewData(ctx);
-    
-    // Clear operations are async but don't require additional sync since
-    // the pipeline is suspended and no new work will be enqueued
 }
 
 void UnifiedGraphPipeline::clearCountBuffers() {
