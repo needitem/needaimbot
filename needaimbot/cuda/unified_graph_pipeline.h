@@ -32,7 +32,7 @@ struct MouseMovement {
     int dy;
 };
 
-// Memory arena structure for small frequently used buffers
+// Enhanced memory arena structure for small frequently used buffers
 struct SmallBufferArena {
     // Integer counters (7 total)
     int* numDetections;           // Detection count
@@ -47,6 +47,12 @@ struct SmallBufferArena {
     Target* selectedTarget;      // Selected target (1)
     Target* bestTarget;          // Best target (1) 
     MouseMovement* mouseMovement; // Mouse movement result (1)
+    
+    // Additional small buffers to reduce allocation overhead (NEW)
+    unsigned char* allowFlags;    // Class filtering flags (64 bytes)
+    bool* keepFlags;             // NMS keep flags (small buffer)
+    int* tempIndices;            // Temporary indices for sorting (small buffer)
+    float* tempScores;           // Temporary scores buffer (small buffer)
     
     // Raw arena memory
     std::unique_ptr<CudaMemory<uint8_t>> arenaBuffer;
@@ -82,9 +88,28 @@ struct SmallBufferArena {
         // Align to MouseMovement boundary
         offset = (offset + alignof(MouseMovement) - 1) & ~(alignof(MouseMovement) - 1);
         mouseMovement = reinterpret_cast<MouseMovement*>(basePtr + offset);
+        offset += sizeof(MouseMovement);
+        
+        // Additional small buffers (NEW)
+        allowFlags = reinterpret_cast<unsigned char*>(basePtr + offset);
+        offset += 64; // Constants::MAX_CLASSES_FOR_FILTERING
+        
+        // Align to bool boundary
+        offset = (offset + alignof(bool) - 1) & ~(alignof(bool) - 1);
+        keepFlags = reinterpret_cast<bool*>(basePtr + offset);
+        offset += sizeof(bool) * 128; // Small buffer for NMS keep flags
+        
+        // Align to int boundary
+        offset = (offset + alignof(int) - 1) & ~(alignof(int) - 1);
+        tempIndices = reinterpret_cast<int*>(basePtr + offset);
+        offset += sizeof(int) * 64; // Temporary indices buffer
+        
+        // Align to float boundary  
+        offset = (offset + alignof(float) - 1) & ~(alignof(float) - 1);
+        tempScores = reinterpret_cast<float*>(basePtr + offset);
     }
     
-    // Calculate total arena size needed
+    // Calculate total arena size needed (ENHANCED)
     static size_t calculateArenaSize() {
         size_t size = sizeof(int) * 7;  // 7 integer counters
         
@@ -95,6 +120,15 @@ struct SmallBufferArena {
         // Align for MouseMovement
         size = (size + alignof(MouseMovement) - 1) & ~(alignof(MouseMovement) - 1);
         size += sizeof(MouseMovement);
+        
+        // Additional small buffers (NEW - reduces individual allocations)
+        size += 64;                    // allowFlags (class filtering)
+        size = (size + alignof(bool) - 1) & ~(alignof(bool) - 1);
+        size += sizeof(bool) * 128;    // keepFlags (NMS)
+        size = (size + alignof(int) - 1) & ~(alignof(int) - 1);
+        size += sizeof(int) * 64;      // tempIndices
+        size = (size + alignof(float) - 1) & ~(alignof(float) - 1);
+        size += sizeof(float) * 64;    // tempScores
         
         return size;
     }
@@ -428,7 +462,7 @@ private:
     std::unique_ptr<CudaMemory<Target>> m_d_detections;          // Detection results
     
     // Class filtering control buffer - Using RAII
-    std::unique_ptr<CudaMemory<unsigned char>> m_d_allowFlags;   // Class filtering flags
+    // m_d_allowFlags moved to SmallBufferArena for memory efficiency
     
     // Additional post-processing metadata
     std::unordered_map<std::string, std::vector<int64_t>> m_outputShapes;
