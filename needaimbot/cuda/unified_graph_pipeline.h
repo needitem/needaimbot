@@ -19,6 +19,10 @@
 #include <NvOnnxParser.h>
 #include <cuda_fp16.h>
 
+// Forward declarations
+class AppContext;
+struct D3D11_TEXTURE2D_DESC;
+struct D3D11_BOX;
 
 namespace needaimbot {
 
@@ -106,6 +110,16 @@ struct UnifiedPipelineConfig {
     int graphCaptureMode = cudaStreamCaptureModeGlobal;
     int graphInstantiateFlags = 0;
 };;;
+
+// Forward declaration of PostProcessingConfig struct
+struct PostProcessingConfig {
+    int max_detections;
+    float nms_threshold;
+    float confidence_threshold;
+    std::string postprocess;
+    
+    void updateFromContext(const AppContext& ctx, bool graphCaptured);
+};
 
 
 
@@ -421,6 +435,44 @@ private:
     bool captureInferenceGraph(cudaStream_t stream);
     bool capturePostprocessGraph(cudaStream_t stream);
     bool captureTrackingGraph(cudaStream_t stream);
+
+    // Main loop helper methods
+    void handleAimbotDeactivation();
+    void clearCountBuffers();
+    void clearTripleBufferData();
+    void clearHostPreviewData(AppContext& ctx);
+    void handleAimbotActivation();
+    bool executePipelineWithErrorHandling();
+
+    // Pipeline execution helper methods
+    std::pair<int, int> calculateCaptureCenter(const AppContext& ctx, const D3D11_TEXTURE2D_DESC& desktopDesc);
+    D3D11_BOX createCaptureBox(int centerX, int centerY, int captureSize, const D3D11_TEXTURE2D_DESC& desktopDesc);
+    bool performDesktopCapture(int writeIdx, const AppContext& ctx);
+    bool performFrameCapture(int writeIdx);
+    bool performPreprocessing(int writeIdx);
+    void updatePreviewBuffer(const SimpleCudaMat& currentBuffer);
+    bool performInference(int writeIdx);
+    int findHeadClassId(const AppContext& ctx);
+    bool performResultCopy(int writeIdx);
+
+    // Post-processing helper methods
+    void clearDetectionBuffers(const PostProcessingConfig& config, cudaStream_t stream);
+    cudaError_t decodeYoloOutput(void* d_rawOutputPtr, nvinfer1::DataType outputType, 
+                                const std::vector<int64_t>& shape, 
+                                const PostProcessingConfig& config, cudaStream_t stream);
+    bool validateYoloDecodeBuffers(int maxDecodedTargets, int max_candidates);
+    void updateClassFilterIfNeeded(cudaStream_t stream);
+
+    // NMS processing methods
+    void performNMSProcessing(const PostProcessingConfig& config, cudaStream_t stream);
+    void copyDecodedToFinalTargets(const PostProcessingConfig& config, cudaStream_t stream);
+    void performStandardNMS(const PostProcessingConfig& config, cudaStream_t stream);
+    bool validateNMSBuffers();
+    void executeNMSKernel(const PostProcessingConfig& config, cudaStream_t stream);
+    void handleNMSResults(const PostProcessingConfig& config, cudaStream_t stream);
+    void handlePreviewUpdate(const PostProcessingConfig& config, cudaStream_t stream);
+    void updatePreviewTargets(const PostProcessingConfig& config);
+    void startPreviewCopy(const PostProcessingConfig& config, cudaStream_t stream);
     
     // Graph state
     bool m_graphCaptured = false;
