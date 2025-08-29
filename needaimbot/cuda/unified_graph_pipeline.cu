@@ -700,8 +700,8 @@ void UnifiedGraphPipeline::handleAimbotDeactivation() {
     clearTripleBufferData();
     clearHostPreviewData(ctx);
     
-    // Ensure all async operations complete
-    cudaStreamSynchronize(m_primaryStream->get());
+    // Clear operations are async but don't require additional sync since
+    // the pipeline is suspended and no new work will be enqueued
 }
 
 void UnifiedGraphPipeline::clearCountBuffers() {
