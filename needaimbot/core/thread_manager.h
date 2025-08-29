@@ -13,8 +13,8 @@ class ThreadManager {
 public:
     using ThreadFunc = std::function<void()>;
     
-    ThreadManager(const std::string& name, ThreadFunc func)
-        : thread_name_(name), running_(false) {
+    ThreadManager(const std::string& name, ThreadFunc func, int affinity_core = -1)
+        : thread_name_(name), running_(false), affinity_core_(affinity_core) {
         thread_func_ = std::move(func);
     }
     
@@ -58,6 +58,16 @@ public:
             
             // Set thread name for debugging
             setThreadName(thread_name_);
+            
+            // OPTIMIZATION: Set thread affinity for better cache locality
+            if (affinity_core_ >= 0) {
+                DWORD_PTR mask = 1ULL << affinity_core_;
+                if (SetThreadAffinityMask(GetCurrentThread(), mask)) {
+                    std::cout << "[Thread] " << thread_name_ << " affinity set to core " << affinity_core_ << std::endl;
+                } else {
+                    std::cerr << "[Thread] Failed to set affinity for " << thread_name_ << " to core " << affinity_core_ << std::endl;
+                }
+            }
             
             try {
                 thread_func_();
@@ -154,6 +164,7 @@ private:
     std::string thread_name_;
     ThreadFunc thread_func_;
     std::atomic<bool> running_;
+    int affinity_core_; // -1 for no affinity, >=0 for specific core
 };
 
 #endif // THREAD_MANAGER_H
