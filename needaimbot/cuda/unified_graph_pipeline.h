@@ -134,7 +134,7 @@ struct SmallBufferArena {
     }
 };
 
-// OPTIMIZATION: Unified GPU Memory Arena (replaces 15+ individual allocations)
+// OPTIMIZATION: Unified GPU Memory Arena with dynamic IOU allocation
 struct UnifiedGPUArena {
     std::unique_ptr<CudaMemory<uint8_t>> megaArena;
     
@@ -153,12 +153,20 @@ struct UnifiedGPUArena {
     float* areas;                         // Target areas
     float* scores_nms;                   // NMS scores
     int* classIds_nms;                   // NMS class IDs
-    float* iou_matrix;                   // IOU calculation matrix
     bool* keep;                          // NMS keep flags
     int* indices;                        // Target indices
     
+    // OPTIMIZATION: Dynamic IOU matrix allocation (saves 4-64MB)
+    std::unique_ptr<CudaMemory<float>> iou_matrix_dynamic;  // Allocated on-demand based on actual detections
+    float* iou_matrix = nullptr;                           // Points to dynamic allocation
+    size_t current_iou_size = 0;                          // Track current allocation size
+    
     void initializePointers(uint8_t* basePtr, int maxDetections, int yoloSize);
     static size_t calculateArenaSize(int maxDetections, int yoloSize);
+    
+    // Dynamic IOU matrix management
+    bool allocateIOUMatrix(int actualDetections, cudaStream_t stream = nullptr);
+    void releaseIOUMatrix();
 };
 
 // OPTIMIZATION: Double Buffer (replaces Triple Buffer for 33% memory savings)
@@ -337,7 +345,9 @@ public:
     bool isGraphReady() const { return m_state.graphReady; }
     
     // Frame access for preview
-    const SimpleCudaMat& getCaptureBuffer() const { return m_captureBuffer; }
+    const SimpleCudaMat& getCaptureBuffer() const { 
+        return m_preview.enabled && !m_preview.previewBuffer.empty() ? m_preview.previewBuffer : m_unifiedCaptureBuffer; 
+    }
     
     
 private:
@@ -478,9 +488,9 @@ private:
     int m_modelInputResolution = 320; // 캐시된 모델 입력 해상도
     float m_imgScale;
     int m_numClasses;
-    // Pipeline buffers (GPU memory)
-    SimpleCudaMat m_captureBuffer;
-    SimpleCudaMat m_preprocessBuffer;
+    // OPTIMIZATION: Unified buffer for capture and preprocessing (in-place processing)
+    // Saves 25% memory by eliminating redundant buffer
+    SimpleCudaMat m_unifiedCaptureBuffer;  // Single buffer for capture + preprocessing
     std::unique_ptr<CudaMemory<float>> m_d_preprocessBuffer;  // Preprocess buffer 
     
     // OPTIMIZATION: All buffers moved to UnifiedGPUArena (20+ allocations → 1)
@@ -532,14 +542,48 @@ private:
     std::atomic<bool> m_shouldStop{false};
     std::chrono::high_resolution_clock::time_point m_lastFrameTime;
     
-    // Event management for profiling and synchronization (using RAII)
-    std::unique_ptr<CudaEvent> m_lastFrameEnd;      // For frame timing
-    std::unique_ptr<CudaEvent> m_copyEvent;         // For copy synchronization
+    // OPTIMIZATION: Event Pool for reusing CUDA events
+    struct EventPool {
+        std::vector<std::unique_ptr<CudaEvent>> available;
+        std::vector<std::unique_ptr<CudaEvent>> inUse;
+        
+        CudaEvent* acquire() {
+            if (available.empty()) {
+                inUse.push_back(std::make_unique<CudaEvent>(cudaEventDisableTiming));
+                return inUse.back().get();
+            }
+            inUse.push_back(std::move(available.back()));
+            available.pop_back();
+            return inUse.back().get();
+        }
+        
+        void release(CudaEvent* event) {
+            auto it = std::find_if(inUse.begin(), inUse.end(),
+                [event](const std::unique_ptr<CudaEvent>& e) { return e.get() == event; });
+            if (it != inUse.end()) {
+                available.push_back(std::move(*it));
+                inUse.erase(it);
+            }
+        }
+        
+        void clear() {
+            available.clear();
+            inUse.clear();
+        }
+    } m_eventPool;
     
-    // Copy state management for async preview updates
-    bool m_copyInProgress = false;
-    int m_h_finalCount = 0;
-    std::vector<Target> m_h_finalTargets;
+    // Event management using pool
+    CudaEvent* m_lastFrameEnd = nullptr;      // From event pool
+    CudaEvent* m_copyEvent = nullptr;         // From event pool
+    
+    // OPTIMIZATION: Preview-conditional state (only allocated when show_window=true)
+    struct PreviewState {
+        bool enabled = false;
+        bool copyInProgress = false;
+        int finalCount = 0;
+        std::vector<Target> finalTargets;
+        SimpleCudaMat previewBuffer;  // Only allocated when preview enabled
+    } m_preview;
 
     bool validateGraph();
     void cleanupGraph();
