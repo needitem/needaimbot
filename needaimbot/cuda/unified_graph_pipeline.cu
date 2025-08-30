@@ -140,6 +140,14 @@ void DoubleBuffer::initializeFrameBuffers(int height, int width, int channels) {
         buffers[i].create(height, width, channels);
         h_movement_pinned[i] = std::make_unique<CudaPinnedMemory<MouseMovement>>(1);
         movement_data_ready[i] = false;
+        
+        // CRITICAL FIX: Initialize events only once
+        if (!captureComplete[i]) {
+            captureComplete[i] = std::make_unique<CudaEvent>(cudaEventDisableTiming);
+            preprocessComplete[i] = std::make_unique<CudaEvent>(cudaEventDisableTiming);
+            inferenceComplete[i] = std::make_unique<CudaEvent>(cudaEventDisableTiming);
+            copyComplete[i] = std::make_unique<CudaEvent>(cudaEventDisableTiming);
+        }
     }
 }
 
@@ -154,7 +162,7 @@ int DoubleBuffer::getNextWriteIndex() {
 int DoubleBuffer::findReadyMovementData() {
     // Check both buffers for ready data
     for (int i = 0; i < 2; i++) {
-        if (movement_data_ready[i] && copyComplete[i].query() == cudaSuccess) {
+        if (movement_data_ready[i] && copyComplete[i] && copyComplete[i]->query() == cudaSuccess) {
             return i;
         }
     }
@@ -771,10 +779,17 @@ void UnifiedGraphPipeline::updateProfilingAsync(cudaStream_t stream) {
             float latency;
             cudaEventElapsedTime(&latency, m_state.startEvent->get(), m_lastFrameEnd->get());
             updateStatistics(latency);
+            
+            // CRITICAL FIX: Return event to pool after use
+            m_eventPool.release(m_lastFrameEnd);
+            m_lastFrameEnd = nullptr;
         }
     }
     
     // Record current frame end
+    if (!m_lastFrameEnd) {
+        m_lastFrameEnd = m_eventPool.acquire();
+    }
     if (m_lastFrameEnd) {
         m_state.startEvent->record(stream);
         m_lastFrameEnd->record(stream);
@@ -1790,7 +1805,9 @@ bool UnifiedGraphPipeline::performFrameCapture(int writeIdx) {
         return false;
     }
     
-    m_doubleBuffer->captureComplete[writeIdx].record(m_pipelineStream->get());
+    if (m_doubleBuffer->captureComplete[writeIdx]) {
+        m_doubleBuffer->captureComplete[writeIdx]->record(m_pipelineStream->get());
+    }
     m_hasFrameData = true;
     return true;
 }
@@ -1829,7 +1846,9 @@ bool UnifiedGraphPipeline::performPreprocessing(int writeIdx) {
         return false;
     }
     
-    m_doubleBuffer->preprocessComplete[writeIdx].record(m_pipelineStream->get());
+    if (m_doubleBuffer->preprocessComplete[writeIdx]) {
+        m_doubleBuffer->preprocessComplete[writeIdx]->record(m_pipelineStream->get());
+    }
     return true;
 }
 
@@ -1878,7 +1897,9 @@ bool UnifiedGraphPipeline::performInference(int writeIdx) {
     performTargetSelection(m_pipelineStream->get());
     
     // Record completion
-    m_doubleBuffer->inferenceComplete[writeIdx].record(m_pipelineStream->get());
+    if (m_doubleBuffer->inferenceComplete[writeIdx]) {
+        m_doubleBuffer->inferenceComplete[writeIdx]->record(m_pipelineStream->get());
+    }
     return true;
 }
 
@@ -1895,7 +1916,9 @@ bool UnifiedGraphPipeline::performResultCopy(int writeIdx) {
     auto& ctx = AppContext::getInstance();
     
     // Wait for inference completion from pipeline stream
-    cudaStreamWaitEvent(m_outputStream->get(), m_doubleBuffer->inferenceComplete[writeIdx].get(), 0);
+    if (m_doubleBuffer->inferenceComplete[writeIdx]) {
+        cudaStreamWaitEvent(m_outputStream->get(), m_doubleBuffer->inferenceComplete[writeIdx]->get(), 0);
+    }
     
     // Check if we have valid mouse movement data (already calculated by fused kernel)
     if (!m_smallBufferArena.mouseMovement || !m_doubleBuffer->h_movement_pinned[writeIdx]->get()) {
@@ -1909,7 +1932,9 @@ bool UnifiedGraphPipeline::performResultCopy(int writeIdx) {
                    sizeof(MouseMovement), cudaMemcpyDeviceToHost, m_outputStream->get());
     
     // Record completion
-    m_doubleBuffer->copyComplete[writeIdx].record(m_outputStream->get());
+    if (m_doubleBuffer->copyComplete[writeIdx]) {
+        m_doubleBuffer->copyComplete[writeIdx]->record(m_outputStream->get());
+    }
     m_doubleBuffer->movement_data_ready[writeIdx] = true;
     
     return true;
