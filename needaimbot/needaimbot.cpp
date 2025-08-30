@@ -27,7 +27,6 @@
 #include "include/other_tools.h"
 #include "core/thread_manager.h"
 #include "core/error_manager.h"
-#include "core/defender_exception.h"
 
 
 #ifndef __INTELLISENSE__
@@ -334,46 +333,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 }
 #endif
 
-// Check if running with administrator privileges
-bool IsRunAsAdministrator()
-{
-    BOOL isAdmin = FALSE;
-    HANDLE hToken = NULL;
-    
-    if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken)) {
-        TOKEN_ELEVATION elevation;
-        DWORD cbSize = sizeof(TOKEN_ELEVATION);
-        if (GetTokenInformation(hToken, TokenElevation, &elevation, sizeof(elevation), &cbSize)) {
-            isAdmin = elevation.TokenIsElevated;
-        }
-        CloseHandle(hToken);
-    }
-    
-    return isAdmin;
-}
-
-// Restart the application with administrator privileges
-bool RestartAsAdministrator()
-{
-    wchar_t szPath[MAX_PATH];
-    if (GetModuleFileNameW(NULL, szPath, ARRAYSIZE(szPath))) {
-        SHELLEXECUTEINFOW sei = { sizeof(sei) };
-        sei.lpVerb = L"runas";
-        sei.lpFile = szPath;
-        sei.hwnd = NULL;
-        sei.nShow = SW_NORMAL;
-        
-        if (!ShellExecuteExW(&sei)) {
-            DWORD dwError = GetLastError();
-            if (dwError == ERROR_CANCELLED) {
-                // User refused the elevation
-                return false;
-            }
-        }
-        return true;
-    }
-    return false;
-}
+// Administrator privilege check removed - not required for normal operation
 
 // Crash dump handler
 LONG WINAPI UnhandledExceptionHandler(EXCEPTION_POINTERS* pExceptionPointers) {
@@ -468,38 +428,8 @@ int main()
     std::cout << "[INFO] Starting Gaming Performance Analyzer v1.0.0" << std::endl;
     std::cout << "[INFO] Crash handler installed for debugging" << std::endl;
     
-    // Optional administrator privileges check
-    bool requireAdmin = false;  // Changed to false - no longer required by default
-    
-    if (requireAdmin && !IsRunAsAdministrator()) {
-        std::cout << "[INFO] Administrator privileges can provide:" << std::endl;
-        std::cout << "[INFO] • Windows Defender exception" << std::endl;
-        std::cout << "[INFO] • Real-time priority (marginal benefit)" << std::endl;
-        std::cout << "[INFO] Would you like to restart with administrator privileges? (y/n): ";
-        
-        char response;
-        std::cin >> response;
-        std::cin.ignore();  // Clear the input buffer
-        
-        if (response == 'y' || response == 'Y') {
-            if (RestartAsAdministrator()) {
-                std::cout << "[INFO] Restarting with administrator privileges..." << std::endl;
-                return 0;
-            } else {
-                std::cout << "[WARNING] Failed to restart with administrator privileges." << std::endl;
-            }
-        }
-    } else if (IsRunAsAdministrator()) {
-        std::cout << "[INFO] Running with administrator privileges." << std::endl;
-        
-        // Only add Defender exception if running as admin
-        std::cout << "[INFO] Adding Windows Defender exception..." << std::endl;
-        if (DefenderException::AddWindowsDefenderException()) {
-            std::cout << "[INFO] Windows Defender exception added successfully." << std::endl;
-        } else {
-            std::cout << "[WARNING] Could not add Windows Defender exception." << std::endl;
-        }
-    }
+    // Administrator privileges not required - application runs fine without elevation
+    // This improves user experience and reduces security prompts
     
     // Try to set high priority (doesn't require admin)
     if (SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS)) {
@@ -589,18 +519,9 @@ int main()
             return -1;
         }
 
-        MouseThread mouseThread(
-            ctx.config.detection_resolution,
-            ctx.config.bScope_multiplier,
-            ctx.config.norecoil_ms,
-            nullptr,
-            nullptr);
-
-        // Initialize InputMethod once and share it between threads
+        // MouseThread removed - GPU handles mouse control directly
+        // Initialize InputMethod for recoil control only
         auto inputMethod = initializeInputMethod();
-        
-        ctx.mouseThread = &mouseThread;
-        ctx.mouseThread->setInputMethod(std::move(inputMethod));
         
         // Initialize and start Recoil Control Thread
         RecoilControlThread recoilThread;
@@ -702,10 +623,7 @@ int main()
         pipelineManager.stopMainLoop();
         
         // Clean up input method
-        if (ctx.mouseThread) {
-            executeMouseClick(false); // Release any pressed mouse button
-            ctx.mouseThread->setInputMethod(nullptr);
-        }
+        executeMouseClick(false); // Release any pressed mouse button
         
         // ThreadManager destructors will automatically stop and join threads
         // Pipeline cleanup

@@ -135,21 +135,38 @@ void MouseThread::updateRapidFire()
 }
 
 // Simplified interface for GPU to call
+// Static input method for direct GPU->mouse control
+static std::unique_ptr<InputMethod> g_directInputMethod;
+static std::mutex g_inputMethodMutex;
+
+static void initializeDirectInput() {
+    if (!g_directInputMethod) {
+        // Use Win32 as default for direct GPU control
+        g_directInputMethod = std::make_unique<Win32InputMethod>();
+    }
+}
+
 extern "C" {
     void executeMouseMovement(int dx, int dy) {
-        auto& ctx = AppContext::getInstance();
-        if (ctx.mouseThread) {
-            ctx.mouseThread->executeMovement(dx, dy);
+        std::lock_guard<std::mutex> lock(g_inputMethodMutex);
+        if (!g_directInputMethod) {
+            initializeDirectInput();
+        }
+        if (g_directInputMethod) {
+            g_directInputMethod->move(dx, dy);
         }
     }
     
     void executeMouseClick(bool press) {
-        auto& ctx = AppContext::getInstance();
-        if (ctx.mouseThread) {
+        std::lock_guard<std::mutex> lock(g_inputMethodMutex);
+        if (!g_directInputMethod) {
+            initializeDirectInput();
+        }
+        if (g_directInputMethod) {
             if (press) {
-                ctx.mouseThread->executePress();
+                g_directInputMethod->press();
             } else {
-                ctx.mouseThread->executeRelease();
+                g_directInputMethod->release();
             }
         }
     }

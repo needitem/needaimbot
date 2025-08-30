@@ -216,7 +216,6 @@ __global__ void fusedTargetSelectionAndMovementKernel(
         }
         
         // Parallel search for best target with validation
-        float bestDistance = 1e9f;
         int localBestIdx = -1;
         float localBestDist = 1e9f;
         
@@ -462,7 +461,6 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
             
             // Initialize with dummy detection data
             int modelRes = getModelInputResolution();
-            int numBoxes = 8400;  // Common YOLO output size
             size_t outputSize = m_outputSizes[primaryOutputName];
             
             // Clear output buffer
@@ -808,7 +806,7 @@ bool UnifiedGraphPipeline::executePipelineWithErrorHandling() {
 
 void UnifiedGraphPipeline::runMainLoop() {
     auto& ctx = AppContext::getInstance();
-    std::cout << "[UnifiedPipeline] Starting main loop - MAXIMUM PERFORMANCE MODE (No FPS Limit)" << std::endl;
+    std::cout << "[UnifiedPipeline] Starting main loop - MAXIMUM PERFORMANCE MODE (Event-Driven)" << std::endl;
     
     m_lastFrameTime = std::chrono::high_resolution_clock::now();
     
@@ -816,19 +814,23 @@ void UnifiedGraphPipeline::runMainLoop() {
     bool wasAiming = false;
     
     while (!m_shouldStop && !ctx.should_exit) {
+        // Event-driven wait for activation - Zero CPU usage when idle
+        {
+            std::unique_lock<std::mutex> lock(ctx.pipeline_activation_mutex);
+            ctx.pipeline_activation_cv.wait(lock, [&ctx, this]() {
+                return ctx.aiming || m_shouldStop || ctx.should_exit;
+            });
+        }
+        
+        // Exit check after wait
+        if (m_shouldStop || ctx.should_exit) break;
+        
         // Handle aimbot state changes
         if (!ctx.aiming) {
             if (wasAiming) {
                 handleAimbotDeactivation();
                 wasAiming = false;
             }
-            
-            // OPTIMIZATION: Efficient idle with minimal CPU usage
-            if (ctx.should_exit) break; // Fast exit check
-            
-            // Use short sleep instead of yield for better CPU efficiency
-            // This is more efficient than condition_variable for high-frequency state changes
-            std::this_thread::sleep_for(std::chrono::microseconds(100)); // 0.1ms sleep, minimal latency
             continue;
         }
         
@@ -838,11 +840,18 @@ void UnifiedGraphPipeline::runMainLoop() {
             wasAiming = true;
         }
         
-        // Execute pipeline
-        if (!executePipelineWithErrorHandling()) {
-            // OPTIMIZATION: Use yield instead of sleep for faster error recovery
-            std::this_thread::yield();
-            continue;
+        // Execute pipeline while aiming
+        while (ctx.aiming && !m_shouldStop && !ctx.should_exit) {
+            if (!executePipelineWithErrorHandling()) {
+                // OPTIMIZATION: Use yield instead of sleep for faster error recovery
+                std::this_thread::yield();
+            }
+        }
+        
+        // Handle deactivation after exiting the loop
+        if (wasAiming && !ctx.aiming) {
+            handleAimbotDeactivation();
+            wasAiming = false;
         }
     }
     
@@ -852,6 +861,10 @@ void UnifiedGraphPipeline::runMainLoop() {
 void UnifiedGraphPipeline::stopMainLoop() {
     std::cout << "[UnifiedPipeline] Stop requested" << std::endl;
     m_shouldStop = true;
+    
+    // Wake up the pipeline thread if it's waiting
+    auto& ctx = AppContext::getInstance();
+    ctx.pipeline_activation_cv.notify_all();
 }
 
 // ============================================================================
