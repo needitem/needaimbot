@@ -527,13 +527,7 @@ void OverlayThread()
             {
                 std::lock_guard<std::mutex> lock(configMutex);
                 
-                // Pause rapidfire when UI is shown
-                if (ctx.mouseThread) {
-                    auto rapidfire = ctx.mouseThread->getRapidFire();
-                    if (rapidfire) {
-                        rapidfire->setUIActive(true);
-                    }
-                }
+                // Rapidfire pause removed - MouseThread no longer exists
 
                 if (ImGui::BeginTabBar("Options tab bar", ImGuiTabBarFlags_FittingPolicyResizeDown))
                 {
@@ -652,13 +646,7 @@ void OverlayThread()
                         ctx.model_changed = true; 
 
                         
-                        if (AppContext::getInstance().mouseThread) {
-                            AppContext::getInstance().mouseThread->updateConfig(
-                                ctx.config.detection_resolution,
-                                ctx.config.bScope_multiplier,
-                                ctx.config.norecoil_ms
-                            );
-                        }
+                        // MouseThread config update removed - GPU handles mouse control directly
                         config_needs_save = true;
                     }
 
@@ -711,13 +699,7 @@ void OverlayThread()
                     {
                         prev_bScope_multiplier = ctx.config.bScope_multiplier;
 
-                        if (AppContext::getInstance().mouseThread) {
-                            AppContext::getInstance().mouseThread->updateConfig(
-                            ctx.config.detection_resolution,
-                            ctx.config.bScope_multiplier,
-                            ctx.config.norecoil_ms
-                            );
-                        }
+                        // MouseThread config update removed - GPU handles mouse control directly
 
                         config_needs_save = true;
                     }
@@ -776,13 +758,7 @@ void OverlayThread()
 
             ImGui::End();
             
-            // Resume rapidfire when UI is closed
-            if (ctx.mouseThread) {
-                auto rapidfire = ctx.mouseThread->getRapidFire();
-                if (rapidfire) {
-                    rapidfire->setUIActive(false);
-                }
-            }
+            // Rapidfire resume removed - MouseThread no longer exists
             
             ImGui::Render();
 
