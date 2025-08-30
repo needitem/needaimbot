@@ -56,7 +56,7 @@ bool Config::loadConfig(const std::string& filename)
     {
 
         
-        detection_resolution = 320;  // Lower resolution for better performance
+        detection_resolution = 256;  // Optimized resolution for faster inference
         monitor_idx = 0;
         circle_mask = false;  // Disabled for better performance
         capture_borders = false;  // Disabled for better performance
