@@ -74,7 +74,9 @@ void keyboardListener() {
         
         // Notify pipeline thread on state change
         if (current_aiming != last_aiming_state) {
-            ctx.aiming_cv.notify_one();  // Wake up pipeline thread if waiting
+            // Wake up pipeline thread using event-driven mechanism
+            ctx.pipeline_activation_cv.notify_one();  
+            ctx.aiming_cv.notify_one();  // Keep for compatibility
             last_aiming_state = current_aiming;
         }
 

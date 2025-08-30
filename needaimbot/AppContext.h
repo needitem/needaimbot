@@ -74,6 +74,10 @@ public:
     std::mutex aiming_mutex;
     std::condition_variable aiming_cv;
     
+    // Pipeline activation for event-driven idle (CPU optimization)
+    std::mutex pipeline_activation_mutex;
+    std::condition_variable pipeline_activation_cv;
+    
     std::atomic<bool> detection_resolution_changed{false};
     
     
@@ -110,7 +114,7 @@ public:
     std::atomic<bool> use_cuda_graph{false};
     
     // Modules
-    MouseThread* mouseThread = nullptr;  // Stack allocated in main, so using raw pointer
+    // MouseThread removed - GPU handles mouse control directly
     // Detector removed - TensorRT is now integrated into UnifiedGraphPipeline
 
     // Overlay Target Data
