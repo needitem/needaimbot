@@ -413,7 +413,26 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
     // Initial graph capture if enabled
     if (m_config.useGraphOptimization) {
         std::cout << "[DEBUG] CUDA Graph optimization enabled with proper initialization" << std::endl;
-        // Capture detection graph with proper input initialization
+        
+        // CRITICAL: Run warm-up iterations before graph capture
+        // This ensures TensorRT completes autotuning and all allocations are done
+        std::cout << "[UnifiedGraph] Running warm-up iterations for TensorRT..." << std::endl;
+        for (int i = 0; i < 3; i++) {
+            // Create dummy input data
+            if (m_inputBindings.find(m_inputName) != m_inputBindings.end()) {
+                auto inputBuffer = m_inputBindings[m_inputName].get();
+                cudaMemsetAsync(inputBuffer->get(), 0, inputBuffer->size() * sizeof(uint8_t), m_pipelineStream->get());
+            }
+            
+            // Execute inference to warm up TensorRT
+            if (m_context) {
+                m_context->enqueueV3(m_pipelineStream->get());
+            }
+        }
+        cudaStreamSynchronize(m_pipelineStream->get());
+        std::cout << "[UnifiedGraph] Warm-up complete, capturing graph..." << std::endl;
+        
+        // Now capture the graph with warmed-up TensorRT
         if (!captureGraph(m_pipelineStream->get())) {
             std::cerr << "[UnifiedGraph] Warning: Failed to capture detection graph" << std::endl;
         }
@@ -468,15 +487,19 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     
     // Preprocessing removed - using CudaImageProcessing pipeline in executeGraph instead
     
-    // 3. TensorRT Inference - EXCLUDED from graph capture to avoid dynamic allocation issues
-    // TensorRT will be called separately outside the graph
+    // 3. TensorRT Inference - INCLUDE in graph for maximum performance
+    // Important: Ensure TensorRT context is configured for graph capture:
+    // - Use cudaStreamCaptureModeRelaxed for TensorRT stream dependencies
+    // - Pre-allocate all buffers to avoid dynamic allocation
+    // - Run warm-up iterations before graph capture to complete autotuning
     
-    // Note: We skip TensorRT inference during graph capture because:
-    // - TensorRT may perform dynamic memory allocation
-    // - Internal stream creation/synchronization breaks graph capture
-    // - CUDNN autotuning can modify kernel selection
-    
-    // The graph will capture pre-processing and post-processing only
+    if (m_context && m_config.enableDetection) {
+        // Execute inference within the graph capture
+        // This will significantly reduce kernel launch overhead
+        if (!m_context->enqueueV3(stream)) {
+            std::cerr << "[UnifiedGraph] Warning: TensorRT enqueue failed during graph capture" << std::endl;
+        }
+    }
     
     // 4. Postprocessing (NMS, filtering, target selection) - INCLUDE in graph
     // We CAN capture post-processing because it doesn't do dynamic allocation
