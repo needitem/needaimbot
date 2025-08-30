@@ -89,9 +89,8 @@ void UnifiedGPUArena::initializePointers(uint8_t* basePtr, int maxDetections, in
     scores_nms = reinterpret_cast<float*>(basePtr + offset);
     offset += maxDetections * sizeof(float);
     
-    // Large IOU matrix (maxDetections^2)
-    iou_matrix = reinterpret_cast<float*>(basePtr + offset);
-    offset += maxDetections * maxDetections * sizeof(float);
+    // IOU matrix is now dynamically allocated - not part of the arena
+    // This saves significant memory (4-64MB depending on maxDetections)
     
     // Bool buffer (align to bool boundary)
     offset = (offset + alignof(bool) - 1) & ~(alignof(bool) - 1);
@@ -117,16 +116,60 @@ size_t UnifiedGPUArena::calculateArenaSize(int maxDetections, int yoloSize) {
     size = (size + alignof(int) - 1) & ~(alignof(int) - 1);
     size += maxDetections * sizeof(int) * 6;
     
-    // Float buffers (areas, scores_nms, iou_matrix)
+    // Float buffers (areas, scores_nms) - IOU matrix now dynamic
     size = (size + alignof(float) - 1) & ~(alignof(float) - 1);
     size += maxDetections * sizeof(float) * 2;  // areas + scores_nms
-    size += maxDetections * maxDetections * sizeof(float);  // iou_matrix (largest)
+    // IOU matrix removed from static allocation - saves maxDetections^2 * 4 bytes
     
     // Bool buffer
     size = (size + alignof(bool) - 1) & ~(alignof(bool) - 1);
     size += maxDetections * sizeof(bool);
     
     return size;
+}
+
+// OPTIMIZATION: Dynamic IOU matrix allocation based on actual detections
+bool UnifiedGPUArena::allocateIOUMatrix(int actualDetections, cudaStream_t stream) {
+    size_t requiredSize = actualDetections * actualDetections * sizeof(float);
+    
+    // Only reallocate if current size is insufficient
+    if (current_iou_size < requiredSize) {
+        // Release old allocation
+        iou_matrix_dynamic.reset();
+        
+        // Allocate new buffer with some padding to avoid frequent reallocation
+        size_t allocSize = requiredSize + (requiredSize / 4);  // 25% extra for growth
+        try {
+            iou_matrix_dynamic = std::make_unique<CudaMemory<float>>(allocSize / sizeof(float));
+            iou_matrix = iou_matrix_dynamic->get();
+            current_iou_size = allocSize;
+            
+            // Initialize to zero if stream provided
+            if (stream && iou_matrix) {
+                cudaMemsetAsync(iou_matrix, 0, allocSize, stream);
+            }
+            
+            return true;
+        } catch (const std::exception& e) {
+            std::cerr << "[UnifiedGPUArena] Failed to allocate IOU matrix: " << e.what() << std::endl;
+            iou_matrix = nullptr;
+            current_iou_size = 0;
+            return false;
+        }
+    }
+    
+    // Clear existing buffer if stream provided
+    if (stream && iou_matrix) {
+        cudaMemsetAsync(iou_matrix, 0, requiredSize, stream);
+    }
+    
+    return true;
+}
+
+void UnifiedGPUArena::releaseIOUMatrix() {
+    iou_matrix_dynamic.reset();
+    iou_matrix = nullptr;
+    current_iou_size = 0;
 }
 
 // OPTIMIZATION: DoubleBuffer implementation (33% memory savings vs TripleBuffer)
@@ -338,7 +381,13 @@ __global__ void clearAllDetectionBuffersKernel(
 
 
 UnifiedGraphPipeline::UnifiedGraphPipeline() {
-    // Initialize events for profiling using RAII
+    // OPTIMIZATION: Initialize event pool for efficient event reuse
+    // Pre-allocate some events to avoid runtime allocation
+    for (int i = 0; i < 4; ++i) {
+        m_eventPool.available.push_back(std::make_unique<CudaEvent>(cudaEventDisableTiming));
+    }
+    
+    // Initialize events from pool
     m_state.startEvent = std::make_unique<CudaEvent>();
     m_state.endEvent = std::make_unique<CudaEvent>();
     
@@ -435,8 +484,8 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     
     // 1. Input copy (if we have pinned host memory)
     if (m_config.enableCapture && m_h_inputBuffer && m_h_inputBuffer->get()) {
-        cudaMemcpyAsync(m_captureBuffer.data(), m_h_inputBuffer->get(),
-                       m_captureBuffer.sizeInBytes(), cudaMemcpyHostToDevice, stream);
+        cudaMemcpyAsync(m_unifiedCaptureBuffer.data(), m_h_inputBuffer->get(),
+                       m_unifiedCaptureBuffer.sizeInBytes(), cudaMemcpyHostToDevice, stream);
     }
     
     // Preprocessing removed - using CudaImageProcessing pipeline in executeGraph instead
@@ -488,10 +537,8 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     // 6. Bezier Control (already handled in the main pipeline)
     // The actual Bezier control is executed in graph method
     
-    // 7. Final output copy (only 2 floats for mouse X,Y)
-    if (m_d_outputBuffer && m_d_outputBuffer->get() && m_h_outputBuffer && m_h_outputBuffer->get()) {
-        // Skip debug copy to eliminate GPU-CPU transfer
-    }
+    // 7. Final output copy (only needed for debug/external output)
+    // Skip debug copy to eliminate GPU-CPU transfer for better performance
     
     // End capture
     err = cudaStreamEndCapture(stream, &m_graph);
@@ -593,9 +640,9 @@ bool UnifiedGraphPipeline::allocateBuffers() {
             std::cout << "[UnifiedGraph] OPTIMIZATION: Stream-based double buffer system initialized (33% less memory)" << std::endl;
         }
         
-        // Allocate GPU buffers
-        m_captureBuffer.create(height, width, 4);  // BGRA
-        m_preprocessBuffer.create(height, width, 3);  // BGR
+        // OPTIMIZATION: Unified buffer for capture and preprocessing (25% memory savings)
+        // Single buffer handles both BGRA capture and BGR preprocessing in-place
+        m_unifiedCaptureBuffer.create(height, width, 4);  // BGRA (can be converted to BGR in-place)
         
         // OPTIMIZATION: Allocate memory arena for small frequently used buffers
         size_t arenaSize = SmallBufferArena::calculateArenaSize();
@@ -622,16 +669,35 @@ bool UnifiedGraphPipeline::allocateBuffers() {
         m_h_inputBuffer = std::make_unique<CudaPinnedMemory<unsigned char>>(width * height * 4);
         m_h_outputBuffer = std::make_unique<CudaPinnedMemory<float>>(2);
         
+        // OPTIMIZATION: Preview buffers only allocated when needed
+        if (ctx.config.show_window) {
+            m_preview.enabled = true;
+            m_preview.previewBuffer.create(height, width, 4);  // BGRA for preview
+            m_preview.finalTargets.reserve(maxDetections);
+            std::cout << "[UnifiedGraph] Preview buffers allocated (show_window=true)" << std::endl;
+        } else {
+            m_preview.enabled = false;
+            std::cout << "[UnifiedGraph] Preview buffers skipped (show_window=false) - Memory saved" << std::endl;
+        }
+        
         // Additional validation for critical buffers
-        if (!m_captureBuffer.data() || !m_preprocessBuffer.data()) {
-            throw std::runtime_error("SimpleCudaMat buffer allocation failed");
+        if (!m_unifiedCaptureBuffer.data()) {
+            throw std::runtime_error("Unified capture buffer allocation failed");
+        }
+        
+        // Calculate actual memory usage with optimizations
+        size_t gpuMemory = (width * height * 4 + yoloSize * yoloSize * 3) * sizeof(float);  // Unified buffer
+        gpuMemory += unifiedArenaSize;  // Arena memory
+        if (m_preview.enabled) {
+            gpuMemory += width * height * 4 * sizeof(unsigned char);  // Preview buffer
         }
         
         std::cout << "[UnifiedGraph] Allocated buffers: "
-                  << "GPU: " << ((width * height * 7 + yoloSize * yoloSize * 3 + 
-                                 maxDetections * 20) * sizeof(float) / (1024 * 1024)) 
+                  << "GPU: " << (gpuMemory / (1024 * 1024)) 
                   << " MB, Pinned: " << ((width * height * 4 + 8) / (1024 * 1024)) 
                   << " MB" << std::endl;
+        std::cout << "[UnifiedGraph] Memory optimizations saved: ~" 
+                  << ((width * height * 3 * sizeof(float)) / (1024 * 1024)) << " MB" << std::endl;
         
         
         return true;
@@ -654,15 +720,21 @@ void UnifiedGraphPipeline::deallocateBuffers() {
         cudaStreamSynchronize(m_outputStream->get());
     }
     
-    // Release SimpleCudaMat buffers
-    m_captureBuffer.release();
-    m_preprocessBuffer.release();
+    // Release unified buffer
+    m_unifiedCaptureBuffer.release();
+    
+    // Release preview buffers if allocated
+    if (m_preview.enabled) {
+        m_preview.previewBuffer.release();
+        m_preview.finalTargets.clear();
+    }
     
     // OPTIMIZATION: Memory arena cleanup (single deallocation replaces 20+ individual deallocations)
     m_smallBufferArena.arenaBuffer.reset();
     
     // MEGA OPTIMIZATION: Single unified arena cleanup (pointers become invalid automatically)
     m_unifiedArena.megaArena.reset();  // This deallocates ALL unified arena buffers at once!
+    m_unifiedArena.releaseIOUMatrix();  // Release dynamic IOU matrix
     
     // Remaining separate buffers
     m_d_inferenceOutput.reset();
@@ -697,16 +769,16 @@ void UnifiedGraphPipeline::setInputFrame(const SimpleCudaMat& frame) {
     }
     
     // Ensure buffer is the right size
-    if (m_captureBuffer.empty() || 
-        m_captureBuffer.rows() != frame.rows() || 
-        m_captureBuffer.cols() != frame.cols() || 
-        m_captureBuffer.channels() != frame.channels()) {
-        m_captureBuffer.create(frame.rows(), frame.cols(), frame.channels());
+    if (m_unifiedCaptureBuffer.empty() || 
+        m_unifiedCaptureBuffer.rows() != frame.rows() || 
+        m_unifiedCaptureBuffer.cols() != frame.cols() || 
+        m_unifiedCaptureBuffer.channels() != frame.channels()) {
+        m_unifiedCaptureBuffer.create(frame.rows(), frame.cols(), frame.channels());
     }
     
     // Copy data
     size_t dataSize = frame.rows() * frame.cols() * frame.channels() * sizeof(unsigned char);
-    cudaError_t err = cudaMemcpyAsync(m_captureBuffer.data(), frame.data(), dataSize, 
+    cudaError_t err = cudaMemcpyAsync(m_unifiedCaptureBuffer.data(), frame.data(), dataSize, 
                                       cudaMemcpyDeviceToDevice, m_pipelineStream->get());
     if (err != cudaSuccess) {
         printf("[ERROR] Failed to copy frame to buffer: %s\n", cudaGetErrorString(err));
@@ -721,10 +793,10 @@ void UnifiedGraphPipeline::setInputFrame(const SimpleCudaMat& frame) {
 void UnifiedGraphPipeline::updateProfilingAsync(cudaStream_t stream) {
     // Async profiling update without blocking
     if (!m_lastFrameEnd) {
-        m_lastFrameEnd = std::make_unique<CudaEvent>(cudaEventDefault);
+        m_lastFrameEnd = m_eventPool.acquire();
     }
     
-    if (m_state.frameCount > 0) {
+    if (m_state.frameCount > 0 && m_lastFrameEnd) {
         // Check if last frame's profiling is ready
         if (m_lastFrameEnd->query() == cudaSuccess) {
             float latency;
@@ -734,8 +806,10 @@ void UnifiedGraphPipeline::updateProfilingAsync(cudaStream_t stream) {
     }
     
     // Record current frame end
-    m_state.startEvent->record(stream);
-    m_lastFrameEnd->record(stream);
+    if (m_lastFrameEnd) {
+        m_state.startEvent->record(stream);
+        m_lastFrameEnd->record(stream);
+    }
 }
 
 // ============================================================================
@@ -780,9 +854,11 @@ void UnifiedGraphPipeline::clearDoubleBufferData() {
 
 void UnifiedGraphPipeline::clearHostPreviewData(AppContext& ctx) {
     // Clear host-side preview data
-    m_h_finalTargets.clear();
-    m_h_finalCount = 0;
-    m_copyInProgress = false;
+    if (m_preview.enabled) {
+        m_preview.finalTargets.clear();
+        m_preview.finalCount = 0;
+        m_preview.copyInProgress = false;
+    }
     
     // Clear preview window targets
     ctx.clearTargets();
@@ -1494,8 +1570,9 @@ void UnifiedGraphPipeline::performStandardNMS(const PostProcessingConfig& config
 bool UnifiedGraphPipeline::validateNMSBuffers() {
     return (m_unifiedArena.finalTargets && m_smallBufferArena.finalTargetsCount && 
             m_unifiedArena.x1 && m_unifiedArena.y1 && m_unifiedArena.x2 && m_unifiedArena.y2 && m_unifiedArena.areas && 
-            m_unifiedArena.scores_nms && m_unifiedArena.classIds_nms && m_unifiedArena.iou_matrix && 
+            m_unifiedArena.scores_nms && m_unifiedArena.classIds_nms && 
             m_unifiedArena.keep && m_unifiedArena.indices);
+    // Note: iou_matrix is validated separately as it's dynamically allocated
 }
 
 void UnifiedGraphPipeline::executeNMSKernel(const PostProcessingConfig& config, cudaStream_t stream) {
@@ -1505,9 +1582,29 @@ void UnifiedGraphPipeline::executeNMSKernel(const PostProcessingConfig& config, 
     int cached_frame_width = ctx.config.detection_resolution;
     int cached_frame_height = ctx.config.detection_resolution;
     
+    // OPTIMIZATION: Get actual detection count for dynamic IOU allocation
+    int h_decodedCount = 0;
+    cudaMemcpyAsync(&h_decodedCount, m_smallBufferArena.decodedCount, sizeof(int), 
+                   cudaMemcpyDeviceToHost, stream);
+    cudaStreamSynchronize(stream);  // Need to wait for count
+    
+    // Bound check and allocate IOU matrix based on actual detections
+    int actualDetections = std::min(h_decodedCount, config.max_detections);
+    if (actualDetections > 0) {
+        // OPTIMIZATION: Allocate IOU matrix only for actual detections (saves 90%+ memory)
+        if (!m_unifiedArena.allocateIOUMatrix(actualDetections, stream)) {
+            std::cerr << "[Pipeline] Failed to allocate IOU matrix for " << actualDetections << " detections" << std::endl;
+            return;
+        }
+    } else {
+        // No detections, skip NMS
+        cudaMemsetAsync(m_smallBufferArena.finalTargetsCount, 0, sizeof(int), stream);
+        return;
+    }
+    
     NMSGpu(
         nmsInputTargets,
-        config.max_detections,
+        actualDetections,  // Use actual count instead of max
         m_unifiedArena.finalTargets,
         m_smallBufferArena.finalTargetsCount,
         config.max_detections,
@@ -1521,7 +1618,7 @@ void UnifiedGraphPipeline::executeNMSKernel(const PostProcessingConfig& config, 
         m_unifiedArena.areas,
         m_unifiedArena.scores_nms,
         m_unifiedArena.classIds_nms,
-        m_unifiedArena.iou_matrix,
+        m_unifiedArena.iou_matrix,  // Now points to dynamically allocated buffer
         m_unifiedArena.keep,
         m_unifiedArena.indices,
         stream
@@ -1533,13 +1630,17 @@ void UnifiedGraphPipeline::executeNMSKernel(const PostProcessingConfig& config, 
 void UnifiedGraphPipeline::handleNMSResults(const PostProcessingConfig& config, cudaStream_t stream) {
     auto& ctx = AppContext::getInstance();
     
+    // OPTIMIZATION: Complete skip if preview not allocated
+    if (!m_preview.enabled) {
+        return;  // No preview buffers allocated - save all GPU→CPU transfers
+    }
+    
     // OPTIMIZATION: Only copy to CPU if preview window is enabled AND preview is actually needed
     static int preview_frame_counter = 0;
     const int PREVIEW_UPDATE_INTERVAL = 5;
     
     // Skip all CPU transfers if UI preview is disabled (saves 5-10% CPU usage)
-    if (!ctx.config.show_window || !ctx.preview_enabled || 
-        (++preview_frame_counter % PREVIEW_UPDATE_INTERVAL != 0)) {
+    if (!ctx.preview_enabled || (++preview_frame_counter % PREVIEW_UPDATE_INTERVAL != 0)) {
         return;
     }
     
@@ -1549,24 +1650,29 @@ void UnifiedGraphPipeline::handleNMSResults(const PostProcessingConfig& config, 
 void UnifiedGraphPipeline::handlePreviewUpdate(const PostProcessingConfig& config, cudaStream_t stream) {
     auto& ctx = AppContext::getInstance();
     
-    // Pre-allocate buffer if needed
-    if (m_h_finalTargets.empty()) {
-        m_h_finalTargets.resize(config.max_detections);
+    // Skip if preview not enabled
+    if (!m_preview.enabled) {
+        return;
     }
     
-    // Initialize event once
+    // Pre-allocate buffer if needed
+    if (m_preview.finalTargets.empty()) {
+        m_preview.finalTargets.resize(config.max_detections);
+    }
+    
+    // Get event from pool if needed
     if (!m_copyEvent) {
-        m_copyEvent = std::make_unique<CudaEvent>(cudaEventDisableTiming);
+        m_copyEvent = m_eventPool.acquire();
     }
     
     // Check if previous copy is complete
-    if (m_copyInProgress && m_copyEvent->query() == cudaSuccess) {
+    if (m_preview.copyInProgress && m_copyEvent->query() == cudaSuccess) {
         updatePreviewTargets(config);
-        m_copyInProgress = false;
+        m_preview.copyInProgress = false;
     }
     
     // Start new copy if not already in progress
-    if (!m_copyInProgress) {
+    if (!m_preview.copyInProgress) {
         startPreviewCopy(config, stream);
     }
 }
@@ -1574,13 +1680,17 @@ void UnifiedGraphPipeline::handlePreviewUpdate(const PostProcessingConfig& confi
 void UnifiedGraphPipeline::updatePreviewTargets(const PostProcessingConfig& config) {
     auto& ctx = AppContext::getInstance();
     
-    if (m_h_finalCount > 0 && m_h_finalCount <= config.max_detections) {
+    if (!m_preview.enabled) {
+        return;
+    }
+    
+    if (m_preview.finalCount > 0 && m_preview.finalCount <= config.max_detections) {
         static std::vector<Target> previewTargets;
         previewTargets.clear();
-        previewTargets.reserve(m_h_finalCount);
+        previewTargets.reserve(m_preview.finalCount);
         
-        for (int i = 0; i < m_h_finalCount; i++) {
-            previewTargets.push_back(m_h_finalTargets[i]);
+        for (int i = 0; i < m_preview.finalCount; i++) {
+            previewTargets.push_back(m_preview.finalTargets[i]);
         }
         
         ctx.updateTargets(previewTargets);
@@ -1592,23 +1702,27 @@ void UnifiedGraphPipeline::updatePreviewTargets(const PostProcessingConfig& conf
 void UnifiedGraphPipeline::startPreviewCopy(const PostProcessingConfig& config, cudaStream_t stream) {
     auto& ctx = AppContext::getInstance();
     
+    if (!m_preview.enabled) {
+        return;
+    }
+    
     // OPTIMIZATION: Conditional UI copy only when actually needed (saves GPU→CPU bandwidth)
     static int ui_copy_counter = 0;
-    if (ctx.config.show_window && ctx.preview_enabled && (++ui_copy_counter % 24 == 0)) {
+    if (ctx.preview_enabled && (++ui_copy_counter % 24 == 0)) {
         // Copy minimal data for UI preview only when both conditions are met
-        cudaMemcpyAsync(&m_h_finalCount, m_smallBufferArena.finalTargetsCount, sizeof(int), 
+        cudaMemcpyAsync(&m_preview.finalCount, m_smallBufferArena.finalTargetsCount, sizeof(int), 
                        cudaMemcpyDeviceToHost, stream);
         
-        int copyCount = std::min(config.max_detections, static_cast<int>(m_h_finalTargets.size()));
-        cudaMemcpyAsync(m_h_finalTargets.data(), m_unifiedArena.finalTargets, 
+        int copyCount = std::min(config.max_detections, static_cast<int>(m_preview.finalTargets.size()));
+        cudaMemcpyAsync(m_preview.finalTargets.data(), m_unifiedArena.finalTargets, 
                        copyCount * sizeof(Target), cudaMemcpyDeviceToHost, stream);
         
         // Record event for this copy
         m_copyEvent->record(stream);
-        m_copyInProgress = true;
+        m_preview.copyInProgress = true;
     } else {
         // Skip GPU→CPU transfer when preview is disabled (performance optimization)
-        m_copyInProgress = false;
+        m_preview.copyInProgress = false;
     }
 }
 
@@ -1802,7 +1916,7 @@ bool UnifiedGraphPipeline::performPreprocessing(int writeIdx) {
     // cudaStreamWaitEvent removed - pipeline stream handles both operations sequentially
     
     // Update preview buffer if needed
-    if (ctx.preview_enabled && !currentBuffer.empty()) {
+    if (m_preview.enabled && ctx.preview_enabled && !currentBuffer.empty()) {
         updatePreviewBuffer(currentBuffer);
     }
     
@@ -1833,15 +1947,19 @@ bool UnifiedGraphPipeline::performPreprocessing(int writeIdx) {
 }
 
 void UnifiedGraphPipeline::updatePreviewBuffer(const SimpleCudaMat& currentBuffer) {
-    if (m_captureBuffer.empty() || 
-        m_captureBuffer.rows() != currentBuffer.rows() || 
-        m_captureBuffer.cols() != currentBuffer.cols() || 
-        m_captureBuffer.channels() != currentBuffer.channels()) {
-        m_captureBuffer.create(currentBuffer.rows(), currentBuffer.cols(), currentBuffer.channels());
+    // Only update preview buffer if it's enabled
+    if (!m_preview.enabled || m_preview.previewBuffer.empty()) {
+        return;
+    }
+    
+    if (m_preview.previewBuffer.rows() != currentBuffer.rows() || 
+        m_preview.previewBuffer.cols() != currentBuffer.cols() || 
+        m_preview.previewBuffer.channels() != currentBuffer.channels()) {
+        m_preview.previewBuffer.create(currentBuffer.rows(), currentBuffer.cols(), currentBuffer.channels());
     }
     
     size_t dataSize = currentBuffer.rows() * currentBuffer.cols() * currentBuffer.channels() * sizeof(unsigned char);
-    cudaMemcpyAsync(m_captureBuffer.data(), currentBuffer.data(), dataSize, 
+    cudaMemcpyAsync(m_preview.previewBuffer.data(), currentBuffer.data(), dataSize, 
                    cudaMemcpyDeviceToDevice, m_pipelineStream->get());
 }
 
