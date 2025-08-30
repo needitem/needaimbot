@@ -1587,102 +1587,27 @@ void UnifiedGraphPipeline::executeNMSKernel(const PostProcessingConfig& config, 
 }
 
 void UnifiedGraphPipeline::handleNMSResults(const PostProcessingConfig& config, cudaStream_t stream) {
-    auto& ctx = AppContext::getInstance();
-    
-    // OPTIMIZATION: Complete skip if preview not allocated
-    if (!m_preview.enabled) {
-        return;  // No preview buffers allocated - save all GPU→CPU transfers
-    }
-    
-    // OPTIMIZATION: Only copy to CPU if preview window is enabled AND preview is actually needed
-    static int preview_frame_counter = 0;
-    const int PREVIEW_UPDATE_INTERVAL = 5;
-    
-    // Skip all CPU transfers if UI preview is disabled (saves 5-10% CPU usage)
-    if (!ctx.preview_enabled || (++preview_frame_counter % PREVIEW_UPDATE_INTERVAL != 0)) {
-        return;
-    }
-    
-    handlePreviewUpdate(config, stream);
+    // UI-Pipeline separation: No GPU→CPU copies here
+    // UI thread will read directly from GPU memory when needed
+    // This eliminates all synchronization and copy overhead
+    return;
 }
 
+// UI-Pipeline separation: These functions are no longer needed
+// UI thread will handle all preview logic independently
 void UnifiedGraphPipeline::handlePreviewUpdate(const PostProcessingConfig& config, cudaStream_t stream) {
-    auto& ctx = AppContext::getInstance();
-    
-    // Skip if preview not enabled
-    if (!m_preview.enabled) {
-        return;
-    }
-    
-    // Pre-allocate buffer if needed
-    if (m_preview.finalTargets.empty()) {
-        m_preview.finalTargets.resize(config.max_detections);
-    }
-    
-    // Get event from pool if needed
-    if (!m_copyEvent) {
-        m_copyEvent = m_eventPool.acquire();
-    }
-    
-    // Check if previous copy is complete
-    if (m_preview.copyInProgress && m_copyEvent->query() == cudaSuccess) {
-        updatePreviewTargets(config);
-        m_preview.copyInProgress = false;
-    }
-    
-    // Start new copy if not already in progress
-    if (!m_preview.copyInProgress) {
-        startPreviewCopy(config, stream);
-    }
+    // Deprecated - UI handles this
+    return;
 }
 
 void UnifiedGraphPipeline::updatePreviewTargets(const PostProcessingConfig& config) {
-    auto& ctx = AppContext::getInstance();
-    
-    if (!m_preview.enabled) {
-        return;
-    }
-    
-    if (m_preview.finalCount > 0 && m_preview.finalCount <= config.max_detections) {
-        static std::vector<Target> previewTargets;
-        previewTargets.clear();
-        previewTargets.reserve(m_preview.finalCount);
-        
-        for (int i = 0; i < m_preview.finalCount; i++) {
-            previewTargets.push_back(m_preview.finalTargets[i]);
-        }
-        
-        ctx.updateTargets(previewTargets);
-    } else {
-        ctx.clearTargets();
-    }
+    // Deprecated - UI handles this
+    return;
 }
 
 void UnifiedGraphPipeline::startPreviewCopy(const PostProcessingConfig& config, cudaStream_t stream) {
-    auto& ctx = AppContext::getInstance();
-    
-    if (!m_preview.enabled) {
-        return;
-    }
-    
-    // OPTIMIZATION: Conditional UI copy only when actually needed (saves GPU→CPU bandwidth)
-    static int ui_copy_counter = 0;
-    if (ctx.preview_enabled && (++ui_copy_counter % 24 == 0)) {
-        // Copy minimal data for UI preview only when both conditions are met
-        cudaMemcpyAsync(&m_preview.finalCount, m_smallBufferArena.finalTargetsCount, sizeof(int), 
-                       cudaMemcpyDeviceToHost, stream);
-        
-        int copyCount = std::min(config.max_detections, static_cast<int>(m_preview.finalTargets.size()));
-        cudaMemcpyAsync(m_preview.finalTargets.data(), m_unifiedArena.finalTargets, 
-                       copyCount * sizeof(Target), cudaMemcpyDeviceToHost, stream);
-        
-        // Record event for this copy
-        m_copyEvent->record(stream);
-        m_preview.copyInProgress = true;
-    } else {
-        // Skip GPU→CPU transfer when preview is disabled (performance optimization)
-        m_preview.copyInProgress = false;
-    }
+    // Deprecated - UI handles this
+    return;
 }
 
 

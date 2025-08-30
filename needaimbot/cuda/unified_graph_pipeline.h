@@ -20,7 +20,7 @@
 #include <cuda_fp16.h>
 
 // Forward declarations
-class AppContext;
+struct AppContext;
 struct D3D11_TEXTURE2D_DESC;
 struct D3D11_BOX;
 
@@ -343,8 +343,33 @@ public:
         return m_preview.enabled && !m_preview.previewBuffer.empty() ? m_preview.previewBuffer : m_unifiedCaptureBuffer; 
     }
     
+    // UI-Pipeline separation: Direct GPU buffer access for UI
+    struct UIGPUBuffers {
+        Target* finalTargets;        // GPU buffer for final targets
+        int* finalTargetsCount;      // GPU buffer for count
+        Target* bestTarget;          // GPU buffer for best target
+        int* bestTargetIndex;        // GPU buffer for best target index
+        cudaStream_t uiStream;       // Dedicated stream for UI reads
+    };
+    
+    // Get GPU buffers for UI to read directly (zero-copy approach)
+    UIGPUBuffers getUIGPUBuffers() {
+        UIGPUBuffers buffers;
+        buffers.finalTargets = m_unifiedArena.finalTargets;
+        buffers.finalTargetsCount = m_smallBufferArena.finalTargetsCount;
+        buffers.bestTarget = m_smallBufferArena.bestTarget;
+        buffers.bestTargetIndex = m_smallBufferArena.bestTargetIndex;
+        buffers.uiStream = nullptr;  // UI will create its own stream
+        return buffers;
+    }
+    
+    // Check if new frame data is available (non-blocking)
+    bool hasNewFrameData() const { return m_state.frameCount > m_lastUIReadFrame; }
+    void markUIFrameRead() { m_lastUIReadFrame = m_state.frameCount; }
     
 private:
+    // UI synchronization
+    mutable std::atomic<uint64_t> m_lastUIReadFrame{0};
     // Advanced graph and stream management
     // Simple graph management
     cudaGraph_t m_graph = nullptr;

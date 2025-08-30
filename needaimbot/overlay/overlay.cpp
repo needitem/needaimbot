@@ -27,6 +27,9 @@
 #include "keyboard_listener.h"
 #include "other_tools.h"
 #include "../core/constants.h"
+#include "../cuda/unified_graph_pipeline.h"
+#include "../cuda/cuda_resource_manager.h"
+#include <cuda_runtime.h>
 
 std::atomic<bool> g_config_optical_flow_changed{false};
 
@@ -35,6 +38,106 @@ ID3D11DeviceContext* g_pd3dDeviceContext = NULL;
 IDXGISwapChain* g_pSwapChain = NULL;
 ID3D11RenderTargetView* g_mainRenderTargetView = NULL;
 HWND g_hwnd = NULL;
+
+// UI-Pipeline separation: GPU read infrastructure
+struct UIGPUReader {
+    cudaStream_t uiStream = nullptr;
+    std::vector<Target> h_targets;  // Host buffer for targets
+    int h_targetCount = 0;
+    Target h_bestTarget = {};
+    int h_bestTargetIndex = -1;
+    cudaEvent_t copyCompleteEvent = nullptr;
+    bool copyInProgress = false;
+    uint64_t lastFrameRead = 0;
+    
+    void initialize() {
+        if (!uiStream) {
+            cudaStreamCreate(&uiStream);
+            cudaEventCreate(&copyCompleteEvent);
+            h_targets.resize(Constants::MAX_DETECTIONS);
+        }
+    }
+    
+    void cleanup() {
+        if (uiStream) {
+            cudaStreamDestroy(uiStream);
+            uiStream = nullptr;
+        }
+        if (copyCompleteEvent) {
+            cudaEventDestroy(copyCompleteEvent);
+            copyCompleteEvent = nullptr;
+        }
+    }
+    
+    // Non-blocking read from GPU buffers
+    bool tryReadFromGPU(needaimbot::UnifiedGraphPipeline* pipeline) {
+        if (!pipeline || !uiStream) return false;
+        
+        // Check if new data is available
+        if (!pipeline->hasNewFrameData()) {
+            return false;  // No new data
+        }
+        
+        // Check if previous copy is complete
+        if (copyInProgress) {
+            if (cudaEventQuery(copyCompleteEvent) != cudaSuccess) {
+                return false;  // Previous copy still in progress
+            }
+            copyInProgress = false;
+        }
+        
+        // Get GPU buffers
+        auto gpuBuffers = pipeline->getUIGPUBuffers();
+        
+        // Start async copy from GPU to host
+        cudaMemcpyAsync(&h_targetCount, gpuBuffers.finalTargetsCount, 
+                       sizeof(int), cudaMemcpyDeviceToHost, uiStream);
+        cudaMemcpyAsync(&h_bestTargetIndex, gpuBuffers.bestTargetIndex,
+                       sizeof(int), cudaMemcpyDeviceToHost, uiStream);
+        cudaMemcpyAsync(&h_bestTarget, gpuBuffers.bestTarget,
+                       sizeof(Target), cudaMemcpyDeviceToHost, uiStream);
+        
+        // Copy targets (only up to MAX_DETECTIONS)
+        int copyCount = (Constants::MAX_DETECTIONS < (int)h_targets.size()) ? Constants::MAX_DETECTIONS : (int)h_targets.size();
+        cudaMemcpyAsync(h_targets.data(), gpuBuffers.finalTargets,
+                       copyCount * sizeof(Target), cudaMemcpyDeviceToHost, uiStream);
+        
+        // Record event for completion check
+        cudaEventRecord(copyCompleteEvent, uiStream);
+        copyInProgress = true;
+        
+        // Mark frame as read
+        pipeline->markUIFrameRead();
+        lastFrameRead++;
+        
+        return true;
+    }
+    
+    // Get the latest read data (if ready)
+    bool getLatestData(std::vector<Target>& targets, int& targetCount, Target& bestTarget) {
+        if (copyInProgress) {
+            if (cudaEventQuery(copyCompleteEvent) != cudaSuccess) {
+                return false;  // Copy not complete
+            }
+            copyInProgress = false;
+        }
+        
+        if (h_targetCount > 0 && h_targetCount <= Constants::MAX_DETECTIONS) {
+            targets.clear();
+            targets.reserve(h_targetCount);
+            for (int i = 0; i < h_targetCount; i++) {
+                targets.push_back(h_targets[i]);
+            }
+            targetCount = h_targetCount;
+            bestTarget = h_bestTarget;
+            return true;
+        }
+        
+        return false;
+    }
+};
+
+static UIGPUReader g_uiGPUReader;
 
 extern std::mutex configMutex;
 extern std::atomic<bool> should_exit;
@@ -362,6 +465,9 @@ void OverlayThread()
     }
 
     SetupImGui();
+    
+    // Initialize GPU reader for UI
+    g_uiGPUReader.initialize();
 
     bool show_overlay = false;
 
@@ -453,6 +559,29 @@ void OverlayThread()
     {
         // Track frame start time for proper FPS limiting
         auto frame_start_time = std::chrono::high_resolution_clock::now();
+        
+        // UI-Pipeline separation: Try to read GPU data at UI's own pace (30 FPS)
+        // This is completely independent from pipeline's processing speed
+        if (ctx.config.show_window && ctx.preview_enabled) {
+            // Get pipeline instance
+            auto& pipelineManager = needaimbot::PipelineManager::getInstance();
+            auto* pipeline = pipelineManager.getPipeline();
+            
+            if (pipeline) {
+                // Non-blocking GPU read attempt
+                g_uiGPUReader.tryReadFromGPU(pipeline);
+                
+                // Update UI targets if data is ready
+                std::vector<Target> uiTargets;
+                int targetCount = 0;
+                Target bestTarget = {};
+                
+                if (g_uiGPUReader.getLatestData(uiTargets, targetCount, bestTarget)) {
+                    // Update AppContext with the latest targets for UI display
+                    ctx.updateTargets(uiTargets);
+                } 
+            }
+        }
         
         // Handle Windows messages
         while (::PeekMessage(&msg, NULL, 0U, 0U, PM_REMOVE))
@@ -808,6 +937,9 @@ void OverlayThread()
         }
     }
 
+    // Cleanup GPU reader
+    g_uiGPUReader.cleanup();
+    
     release_body_texture();
 
     ImGui_ImplDX11_Shutdown();

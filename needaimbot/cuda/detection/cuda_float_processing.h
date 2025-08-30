@@ -87,7 +87,7 @@ private:
             
             try {
                 memory_ = CudaMemory<float>(total_floats);
-            } catch (const std::exception& e) {
+            } catch (const std::exception&) {
                 // Reset on allocation failure
                 width_ = height_ = channels_ = 0;
                 step_ = 0;
