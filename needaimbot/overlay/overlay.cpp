@@ -30,6 +30,7 @@
 #include "../cuda/unified_graph_pipeline.h"
 #include "../cuda/cuda_resource_manager.h"
 #include <cuda_runtime.h>
+#include <cstring>  // For std::memcpy
 
 std::atomic<bool> g_config_optical_flow_changed{false};
 
@@ -53,7 +54,11 @@ struct UIGPUReader {
     void initialize() {
         if (!uiStream) {
             cudaStreamCreate(&uiStream);
+        }
+        if (!copyCompleteEvent) {
             cudaEventCreate(&copyCompleteEvent);
+        }
+        if (h_targets.empty()) {
             h_targets.resize(Constants::MAX_DETECTIONS);
         }
     }
@@ -123,11 +128,10 @@ struct UIGPUReader {
         }
         
         if (h_targetCount > 0 && h_targetCount <= Constants::MAX_DETECTIONS) {
-            targets.clear();
-            targets.reserve(h_targetCount);
-            for (int i = 0; i < h_targetCount; i++) {
-                targets.push_back(h_targets[i]);
-            }
+            // OPTIMIZATION: Resize instead of clear+push_back to avoid reallocations
+            targets.resize(h_targetCount);
+            // Direct memory copy instead of individual push_backs
+            std::memcpy(targets.data(), h_targets.data(), h_targetCount * sizeof(Target));
             targetCount = h_targetCount;
             bestTarget = h_bestTarget;
             return true;
@@ -572,9 +576,10 @@ void OverlayThread()
                 g_uiGPUReader.tryReadFromGPU(pipeline);
                 
                 // Update UI targets if data is ready
-                std::vector<Target> uiTargets;
-                int targetCount = 0;
-                Target bestTarget = {};
+                // OPTIMIZATION: Use static vector to avoid repeated allocations
+                static std::vector<Target> uiTargets;
+                static int targetCount = 0;
+                static Target bestTarget = {};
                 
                 if (g_uiGPUReader.getLatestData(uiTargets, targetCount, bestTarget)) {
                     // Update AppContext with the latest targets for UI display
