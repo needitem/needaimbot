@@ -89,8 +89,11 @@ void UnifiedGPUArena::initializePointers(uint8_t* basePtr, int maxDetections, in
     scores_nms = reinterpret_cast<float*>(basePtr + offset);
     offset += maxDetections * sizeof(float);
     
-    // IOU matrix is now dynamically allocated - not part of the arena
-    // This saves significant memory (4-64MB depending on maxDetections)
+    // OPTIMIZATION: IOU matrix now statically allocated in arena
+    // Eliminates cudaStreamSynchronize bottleneck at the cost of ~4MB memory
+    offset = (offset + alignof(float) - 1) & ~(alignof(float) - 1);
+    iou_matrix = reinterpret_cast<float*>(basePtr + offset);
+    offset += maxDetections * maxDetections * sizeof(float);
     
     // Bool buffer (align to bool boundary)
     offset = (offset + alignof(bool) - 1) & ~(alignof(bool) - 1);
@@ -116,10 +119,10 @@ size_t UnifiedGPUArena::calculateArenaSize(int maxDetections, int yoloSize) {
     size = (size + alignof(int) - 1) & ~(alignof(int) - 1);
     size += maxDetections * sizeof(int) * 6;
     
-    // Float buffers (areas, scores_nms) - IOU matrix now dynamic
+    // Float buffers (areas, scores_nms, IOU matrix)
     size = (size + alignof(float) - 1) & ~(alignof(float) - 1);
     size += maxDetections * sizeof(float) * 2;  // areas + scores_nms
-    // IOU matrix removed from static allocation - saves maxDetections^2 * 4 bytes
+    size += maxDetections * maxDetections * sizeof(float);  // IOU matrix statically allocated
     
     // Bool buffer
     size = (size + alignof(bool) - 1) & ~(alignof(bool) - 1);
@@ -128,49 +131,7 @@ size_t UnifiedGPUArena::calculateArenaSize(int maxDetections, int yoloSize) {
     return size;
 }
 
-// OPTIMIZATION: Dynamic IOU matrix allocation based on actual detections
-bool UnifiedGPUArena::allocateIOUMatrix(int actualDetections, cudaStream_t stream) {
-    size_t requiredSize = actualDetections * actualDetections * sizeof(float);
-    
-    // Only reallocate if current size is insufficient
-    if (current_iou_size < requiredSize) {
-        // Release old allocation
-        iou_matrix_dynamic.reset();
-        
-        // Allocate new buffer with some padding to avoid frequent reallocation
-        size_t allocSize = requiredSize + (requiredSize / 4);  // 25% extra for growth
-        try {
-            iou_matrix_dynamic = std::make_unique<CudaMemory<float>>(allocSize / sizeof(float));
-            iou_matrix = iou_matrix_dynamic->get();
-            current_iou_size = allocSize;
-            
-            // Initialize to zero if stream provided
-            if (stream && iou_matrix) {
-                cudaMemsetAsync(iou_matrix, 0, allocSize, stream);
-            }
-            
-            return true;
-        } catch (const std::exception& e) {
-            std::cerr << "[UnifiedGPUArena] Failed to allocate IOU matrix: " << e.what() << std::endl;
-            iou_matrix = nullptr;
-            current_iou_size = 0;
-            return false;
-        }
-    }
-    
-    // Clear existing buffer if stream provided
-    if (stream && iou_matrix) {
-        cudaMemsetAsync(iou_matrix, 0, requiredSize, stream);
-    }
-    
-    return true;
-}
-
-void UnifiedGPUArena::releaseIOUMatrix() {
-    iou_matrix_dynamic.reset();
-    iou_matrix = nullptr;
-    current_iou_size = 0;
-}
+// Dynamic IOU matrix functions removed - now using static allocation in arena
 
 // OPTIMIZATION: DoubleBuffer implementation (33% memory savings vs TripleBuffer)
 void DoubleBuffer::initializeFrameBuffers(int height, int width, int channels) {
@@ -743,7 +704,6 @@ void UnifiedGraphPipeline::deallocateBuffers() {
     
     // MEGA OPTIMIZATION: Single unified arena cleanup (pointers become invalid automatically)
     m_unifiedArena.megaArena.reset();  // This deallocates ALL unified arena buffers at once!
-    m_unifiedArena.releaseIOUMatrix();  // Release dynamic IOU matrix
     
     // Remaining separate buffers
     m_d_inferenceOutput.reset();
@@ -1591,29 +1551,19 @@ void UnifiedGraphPipeline::executeNMSKernel(const PostProcessingConfig& config, 
     int cached_frame_width = ctx.config.detection_resolution;
     int cached_frame_height = ctx.config.detection_resolution;
     
-    // OPTIMIZATION: Get actual detection count for dynamic IOU allocation
-    int h_decodedCount = 0;
-    cudaMemcpyAsync(&h_decodedCount, m_smallBufferArena.decodedCount, sizeof(int), 
-                   cudaMemcpyDeviceToHost, stream);
-    cudaStreamSynchronize(stream);  // Need to wait for count
+    // OPTIMIZATION: No synchronization needed - use max_detections directly
+    // IOU matrix is pre-allocated in arena, no dynamic allocation needed
     
-    // Bound check and allocate IOU matrix based on actual detections
-    int actualDetections = std::min(h_decodedCount, config.max_detections);
-    if (actualDetections > 0) {
-        // OPTIMIZATION: Allocate IOU matrix only for actual detections (saves 90%+ memory)
-        if (!m_unifiedArena.allocateIOUMatrix(actualDetections, stream)) {
-            std::cerr << "[Pipeline] Failed to allocate IOU matrix for " << actualDetections << " detections" << std::endl;
-            return;
-        }
-    } else {
-        // No detections, skip NMS
-        cudaMemsetAsync(m_smallBufferArena.finalTargetsCount, 0, sizeof(int), stream);
-        return;
+    // Clear IOU matrix for this frame (async, no sync needed)
+    if (m_unifiedArena.iou_matrix) {
+        size_t iou_size = config.max_detections * config.max_detections * sizeof(float);
+        cudaMemsetAsync(m_unifiedArena.iou_matrix, 0, iou_size, stream);
     }
     
+    // Use max_detections for NMS - kernel will handle actual count internally
     NMSGpu(
         nmsInputTargets,
-        actualDetections,  // Use actual count instead of max
+        config.max_detections,  // Use max instead of syncing for actual count
         m_unifiedArena.finalTargets,
         m_smallBufferArena.finalTargetsCount,
         config.max_detections,
@@ -1627,7 +1577,7 @@ void UnifiedGraphPipeline::executeNMSKernel(const PostProcessingConfig& config, 
         m_unifiedArena.areas,
         m_unifiedArena.scores_nms,
         m_unifiedArena.classIds_nms,
-        m_unifiedArena.iou_matrix,  // Now points to dynamically allocated buffer
+        m_unifiedArena.iou_matrix,  // Now points to statically allocated buffer in arena
         m_unifiedArena.keep,
         m_unifiedArena.indices,
         stream
