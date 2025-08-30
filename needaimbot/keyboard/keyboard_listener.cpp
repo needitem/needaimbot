@@ -68,9 +68,13 @@ void keyboardListener() {
         }
 
         bool current_aiming = is_any_key_pressed(aim_vk_codes);
+        
+        // Always update aiming state atomically
         ctx.aiming = current_aiming;
         
+        // Notify pipeline thread on state change
         if (current_aiming != last_aiming_state) {
+            ctx.aiming_cv.notify_one();  // Wake up pipeline thread if waiting
             last_aiming_state = current_aiming;
         }
 

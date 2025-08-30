@@ -301,6 +301,7 @@ static void signalHandler(int sig) {
     auto& ctx = AppContext::getInstance();
     ctx.should_exit = true;
     ctx.frame_cv.notify_all();  // Wake up main thread
+    ctx.aiming_cv.notify_all();  // Wake up pipeline thread if waiting
     
     // Clean up CUDA resources on signal
     CudaResourceManager::Shutdown();
@@ -313,6 +314,7 @@ static BOOL WINAPI consoleHandler(DWORD signal) {
         auto& ctx = AppContext::getInstance();
         ctx.should_exit = true;
         ctx.frame_cv.notify_all();  // Wake up main thread
+        ctx.aiming_cv.notify_all();  // Wake up pipeline thread if waiting
         
         // Clean up CUDA resources on console event
         CudaResourceManager::Shutdown();
@@ -460,41 +462,50 @@ int main()
     _set_error_mode(_OUT_TO_STDERR);
     _set_abort_behavior(0, _WRITE_ABORT_MSG);
     
-    // Set global timer resolution to 1ms for precise sleep timing
-    timeBeginPeriod(1);
+    // Timer resolution modification removed - using event-driven architecture instead
     
     // Initialize Gaming Performance Analyzer
     std::cout << "[INFO] Starting Gaming Performance Analyzer v1.0.0" << std::endl;
     std::cout << "[INFO] Crash handler installed for debugging" << std::endl;
     
-    // Check for administrator privileges
-    if (!IsRunAsAdministrator()) {
-        std::cout << "[INFO] Administrator privileges required for optimal performance:" << std::endl;
-        std::cout << "[INFO] • High process priority (better performance)" << std::endl;
-        std::cout << "[INFO] • Access to system performance counters" << std::endl;
-        std::cout << "[INFO] • Optimal GPU scheduling" << std::endl;
-        std::cout << "[INFO] • Windows Defender exception (prevent false positive detection)" << std::endl;
-        std::cout << "[INFO] Automatically requesting administrator privileges..." << std::endl;
+    // Optional administrator privileges check
+    bool requireAdmin = false;  // Changed to false - no longer required by default
+    
+    if (requireAdmin && !IsRunAsAdministrator()) {
+        std::cout << "[INFO] Administrator privileges can provide:" << std::endl;
+        std::cout << "[INFO] • Windows Defender exception" << std::endl;
+        std::cout << "[INFO] • Real-time priority (marginal benefit)" << std::endl;
+        std::cout << "[INFO] Would you like to restart with administrator privileges? (y/n): ";
         
-        // Automatically restart with admin privileges
-        if (RestartAsAdministrator()) {
-            // Exit current process as we're restarting with admin
-            std::cout << "[INFO] Restarting with administrator privileges..." << std::endl;
-            return 0;
-        } else {
-            std::cout << "[WARNING] Failed to restart with administrator privileges." << std::endl;
-            std::cout << "[WARNING] Running with limited performance capabilities." << std::endl;
+        char response;
+        std::cin >> response;
+        std::cin.ignore();  // Clear the input buffer
+        
+        if (response == 'y' || response == 'Y') {
+            if (RestartAsAdministrator()) {
+                std::cout << "[INFO] Restarting with administrator privileges..." << std::endl;
+                return 0;
+            } else {
+                std::cout << "[WARNING] Failed to restart with administrator privileges." << std::endl;
+            }
         }
-    } else {
+    } else if (IsRunAsAdministrator()) {
         std::cout << "[INFO] Running with administrator privileges." << std::endl;
         
-        // Add Windows Defender exception when running as admin
-        std::cout << "[INFO] Adding Windows Defender exception for this application..." << std::endl;
+        // Only add Defender exception if running as admin
+        std::cout << "[INFO] Adding Windows Defender exception..." << std::endl;
         if (DefenderException::AddWindowsDefenderException()) {
             std::cout << "[INFO] Windows Defender exception added successfully." << std::endl;
         } else {
-            std::cout << "[WARNING] Could not add Windows Defender exception. You may need to add it manually." << std::endl;
+            std::cout << "[WARNING] Could not add Windows Defender exception." << std::endl;
         }
+    }
+    
+    // Try to set high priority (doesn't require admin)
+    if (SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS)) {
+        std::cout << "[INFO] Process priority set to HIGH (no admin required)." << std::endl;
+    } else {
+        std::cout << "[INFO] Running with normal process priority." << std::endl;
     }
     
     std::cout << "[INFO] Initializing performance monitoring systems..." << std::endl;
@@ -717,7 +728,6 @@ int main()
         CudaResourceManager::Shutdown();
         
         std::cout << "\n[MAIN] Safe shutdown completed." << std::endl;
-        timeEndPeriod(1);  // Restore system timer
         std::exit(0);
     }
     catch (const std::exception &e)
@@ -730,7 +740,6 @@ int main()
         
         std::cout << "Press Enter to exit...";
         std::cin.get();
-        timeEndPeriod(1);  // Restore system timer
         return -1;
     }
 }
