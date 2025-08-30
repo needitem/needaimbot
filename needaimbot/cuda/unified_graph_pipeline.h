@@ -167,10 +167,13 @@ struct UnifiedGPUArena {
 class DoubleBuffer {
 public:
     SimpleCudaMat buffers[2];  // Only 2 buffers instead of 3
-    std::array<CudaEvent, 2> captureComplete;
-    std::array<CudaEvent, 2> preprocessComplete;
-    std::array<CudaEvent, 2> inferenceComplete;
-    std::array<CudaEvent, 2> copyComplete;
+    
+    // CRITICAL FIX: Use pointers to avoid automatic creation
+    // Events will be created only when needed and properly managed
+    std::array<std::unique_ptr<CudaEvent>, 2> captureComplete;
+    std::array<std::unique_ptr<CudaEvent>, 2> preprocessComplete;
+    std::array<std::unique_ptr<CudaEvent>, 2> inferenceComplete;
+    std::array<std::unique_ptr<CudaEvent>, 2> copyComplete;
     
     // Pinned host memory for results
     std::array<std::unique_ptr<CudaPinnedMemory<MouseMovement>>, 2> h_movement_pinned;
@@ -565,23 +568,55 @@ private:
     struct EventPool {
         std::vector<std::unique_ptr<CudaEvent>> available;
         std::vector<std::unique_ptr<CudaEvent>> inUse;
+        static constexpr size_t MAX_EVENTS = 32;  // Prevent unlimited growth
         
         CudaEvent* acquire() {
+            // Auto-cleanup completed events before acquiring new ones
+            cleanupCompletedEvents();
+            
             if (available.empty()) {
-                inUse.push_back(std::make_unique<CudaEvent>(cudaEventDisableTiming));
+                // Prevent memory leak - limit pool size
+                if (inUse.size() >= MAX_EVENTS) {
+                    // Reuse oldest event if pool is full
+                    if (!inUse.empty()) {
+                        cudaEventSynchronize(inUse.front()->get());  // Ensure it's done
+                        available.push_back(std::move(inUse.front()));
+                        inUse.erase(inUse.begin());
+                    }
+                } else {
+                    inUse.push_back(std::make_unique<CudaEvent>(cudaEventDisableTiming));
+                    return inUse.back().get();
+                }
+            }
+            
+            if (!available.empty()) {
+                inUse.push_back(std::move(available.back()));
+                available.pop_back();
                 return inUse.back().get();
             }
-            inUse.push_back(std::move(available.back()));
-            available.pop_back();
-            return inUse.back().get();
+            return nullptr;
         }
         
         void release(CudaEvent* event) {
+            if (!event) return;
             auto it = std::find_if(inUse.begin(), inUse.end(),
                 [event](const std::unique_ptr<CudaEvent>& e) { return e.get() == event; });
             if (it != inUse.end()) {
                 available.push_back(std::move(*it));
                 inUse.erase(it);
+            }
+        }
+        
+        // Automatically return completed events to available pool
+        void cleanupCompletedEvents() {
+            auto it = inUse.begin();
+            while (it != inUse.end()) {
+                if ((*it) && (*it)->query() == cudaSuccess) {
+                    available.push_back(std::move(*it));
+                    it = inUse.erase(it);
+                } else {
+                    ++it;
+                }
             }
         }
         
