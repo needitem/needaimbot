@@ -156,17 +156,11 @@ struct UnifiedGPUArena {
     bool* keep;                          // NMS keep flags
     int* indices;                        // Target indices
     
-    // OPTIMIZATION: Dynamic IOU matrix allocation (saves 4-64MB)
-    std::unique_ptr<CudaMemory<float>> iou_matrix_dynamic;  // Allocated on-demand based on actual detections
-    float* iou_matrix = nullptr;                           // Points to dynamic allocation
-    size_t current_iou_size = 0;                          // Track current allocation size
+    // OPTIMIZATION: Static IOU matrix allocation in arena (trades 4MB memory for eliminating sync bottleneck)
+    float* iou_matrix;                               // Points to static allocation in arena
     
     void initializePointers(uint8_t* basePtr, int maxDetections, int yoloSize);
     static size_t calculateArenaSize(int maxDetections, int yoloSize);
-    
-    // Dynamic IOU matrix management
-    bool allocateIOUMatrix(int actualDetections, cudaStream_t stream = nullptr);
-    void releaseIOUMatrix();
 };
 
 // OPTIMIZATION: Double Buffer (replaces Triple Buffer for 33% memory savings)
