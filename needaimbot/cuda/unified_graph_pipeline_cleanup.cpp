@@ -41,9 +41,17 @@ void UnifiedGraphPipeline::shutdown() {
     m_engine.reset();
     m_runtime.reset();
     
-    // Clear all GPU buffers (SimpleCudaMat destructor will handle memory)
-    m_captureBuffer.release();
-    m_preprocessBuffer.release();
+    // Clear unified buffer (SimpleCudaMat destructor will handle memory)
+    m_unifiedCaptureBuffer.release();
+    
+    // Clear preview buffers if allocated
+    if (m_preview.enabled) {
+        m_preview.previewBuffer.release();
+        m_preview.finalTargets.clear();
+    }
+    
+    // Clear event pool
+    m_eventPool.clear();
     
     // OPTIMIZATION: Clear double buffer pipeline component (33% memory savings vs triple)
     m_doubleBuffer.reset();
