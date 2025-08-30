@@ -177,67 +177,129 @@ void DoubleBuffer::clearAllData() {
 
 // fusedPreprocessKernel removed - using CudaImageProcessing pipeline instead
 
-// GPU kernel to calculate mouse movement directly from target (optimized unified output)
-__global__ void calculateMouseMovementKernel(
-    const Target* __restrict__ best_target,
+// OPTIMIZED: Fused kernel combining validation, selection, and mouse movement calculation
+// Reduces 3 kernel calls (validateTargetsGpu + findBestTargetWithHeadPriorityGpu + calculateMouseMovementKernel) to 1
+__global__ void fusedTargetSelectionAndMovementKernel(
+    Target* __restrict__ finalTargets,
+    int* __restrict__ finalTargetsCount,
+    int maxDetections,
     float screen_center_x,
-    float screen_center_y, 
+    float screen_center_y,
+    int head_class_id,
     float kp_x,
     float kp_y,
-    int head_class_id,
     float head_y_offset,
     float body_y_offset,
     int detection_resolution,
+    int* __restrict__ bestTargetIndex,
+    Target* __restrict__ bestTarget,
     needaimbot::MouseMovement* __restrict__ output_movement
 ) {
-    // Only first thread does the work
-    if (threadIdx.x == 0 && blockIdx.x == 0) {
-        // Initialize output (invalid case)
-        output_movement->dx = 0;
-        output_movement->dy = 0;
+    // Only first warp processes (more efficient than single thread)
+    if (threadIdx.x < 32 && blockIdx.x == 0) {
+        // Initialize outputs
+        if (threadIdx.x == 0) {
+            *bestTargetIndex = -1;
+            output_movement->dx = 0;
+            output_movement->dy = 0;
+            
+            // Clear best target
+            Target emptyTarget = {};
+            *bestTarget = emptyTarget;
+        }
+        __syncwarp();
         
-        // Validate target
-        if (!best_target || best_target->width <= 0 || best_target->height <= 0 ||
-            best_target->x < -1000.0f || best_target->x > 10000.0f ||
-            best_target->y < -1000.0f || best_target->y > 10000.0f) {
-            return; // Invalid case: dx=0, dy=0
+        // Get actual count (bounded check)
+        int count = *finalTargetsCount;
+        if (count <= 0 || count > maxDetections) {
+            return;
         }
         
-        // Calculate target center
-        float target_center_x = best_target->x + best_target->width / 2.0f;
-        float target_center_y;
+        // Parallel search for best target with validation
+        float bestDistance = 1e9f;
+        int localBestIdx = -1;
+        float localBestDist = 1e9f;
         
-        // Apply class-specific Y offset
-        if (best_target->classId == head_class_id) {
-            target_center_y = best_target->y + best_target->height * head_y_offset;
-        } else {
-            target_center_y = best_target->y + best_target->height * body_y_offset;
+        // Each thread in warp checks different targets
+        for (int i = threadIdx.x; i < count; i += 32) {
+            Target& t = finalTargets[i];
+            
+            // Validation: remove extreme/invalid values
+            if (t.x < -1000.0f || t.x > 10000.0f ||
+                t.y < -1000.0f || t.y > 10000.0f ||
+                t.width <= 0 || t.width > detection_resolution ||
+                t.height <= 0 || t.height > detection_resolution ||
+                t.confidence <= 0 || t.confidence > 1.0f) {
+                // Mark as invalid
+                t.confidence = 0;
+                continue;
+            }
+            
+            // Calculate distance with head priority
+            float centerX = t.x + t.width / 2.0f;
+            float centerY = t.y + t.height / 2.0f;
+            float dx = centerX - screen_center_x;
+            float dy = centerY - screen_center_y;
+            float distance = sqrtf(dx * dx + dy * dy);
+            
+            // Apply head priority (50% distance reduction for heads)
+            if (t.classId == head_class_id) {
+                distance *= 0.5f;
+            }
+            
+            if (distance < localBestDist) {
+                localBestDist = distance;
+                localBestIdx = i;
+            }
         }
         
-        // Validate calculated center
-        if (target_center_x < 0 || target_center_x > detection_resolution ||
-            target_center_y < 0 || target_center_y > detection_resolution) {
-            return; // Invalid case: dx=0, dy=0
+        // Warp-level reduction to find global best
+        #pragma unroll
+        for (int offset = 16; offset >= 1; offset /= 2) {
+            float otherDist = __shfl_down_sync(0xFFFFFFFF, localBestDist, offset);
+            int otherIdx = __shfl_down_sync(0xFFFFFFFF, localBestIdx, offset);
+            if (otherDist < localBestDist) {
+                localBestDist = otherDist;
+                localBestIdx = otherIdx;
+            }
         }
         
-        // Calculate error
-        float error_x = target_center_x - screen_center_x;
-        float error_y = target_center_y - screen_center_y;
-        
-        // Apply proportional control
-        float movement_x = error_x * kp_x;
-        float movement_y = error_y * kp_y;
-        
-        // Clamp movements
-        const float MAX_MOVEMENT = 200.0f;
-        movement_x = fmaxf(-MAX_MOVEMENT, fminf(MAX_MOVEMENT, movement_x));
-        movement_y = fmaxf(-MAX_MOVEMENT, fminf(MAX_MOVEMENT, movement_y));
-        
-        // Convert to integers and store in unified structure (valid case)
-        output_movement->dx = static_cast<int>(movement_x);
-        output_movement->dy = static_cast<int>(movement_y);
+        // Thread 0 writes results and calculates movement
+        if (threadIdx.x == 0 && localBestIdx >= 0) {
+            *bestTargetIndex = localBestIdx;
+            *bestTarget = finalTargets[localBestIdx];
+            
+            // Calculate mouse movement for best target
+            Target& best = *bestTarget;
+            float target_center_x = best.x + best.width / 2.0f;
+            float target_center_y;
+            
+            // Apply class-specific Y offset
+            if (best.classId == head_class_id) {
+                target_center_y = best.y + best.height * head_y_offset;
+            } else {
+                target_center_y = best.y + best.height * body_y_offset;
+            }
+            
+            // Calculate error and movement
+            float error_x = target_center_x - screen_center_x;
+            float error_y = target_center_y - screen_center_y;
+            
+            float movement_x = error_x * kp_x;
+            float movement_y = error_y * kp_y;
+            
+            // Clamp movements
+            const float MAX_MOVEMENT = 200.0f;
+            movement_x = fmaxf(-MAX_MOVEMENT, fminf(MAX_MOVEMENT, movement_x));
+            movement_y = fmaxf(-MAX_MOVEMENT, fminf(MAX_MOVEMENT, movement_y));
+            
+            // Store unified output
+            output_movement->dx = static_cast<int>(movement_x);
+            output_movement->dy = static_cast<int>(movement_y);
+        }
     }
 }
+
 
 // Unified buffer clearing kernel - replaces 8 separate cudaMemsetAsync calls for 0.07ms improvement
 __global__ void clearAllDetectionBuffersKernel(
@@ -275,24 +337,6 @@ __global__ void clearAllDetectionBuffersKernel(
     }
 }
 
-// Helper kernel for copying D3D11 texture to CUDA buffer without CPU mapping
-__global__ void copyTextureToBuffer(cudaSurfaceObject_t surface, 
-                                   unsigned char* output,
-                                   int width, int height) {
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
-    int y = blockIdx.y * blockDim.y + threadIdx.y;
-    
-    if (x < width && y < height) {
-        uchar4 pixel;
-        surf2Dread(&pixel, surface, x * sizeof(uchar4), y);
-        
-        int idx = (y * width + x) * 4;
-        output[idx] = pixel.x;
-        output[idx + 1] = pixel.y;
-        output[idx + 2] = pixel.z;
-        output[idx + 3] = pixel.w;
-    }
-}
 
 UnifiedGraphPipeline::UnifiedGraphPipeline() {
     // Initialize events for profiling using RAII
@@ -378,8 +422,6 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     m_captureNodes.clear();
     m_inferenceNodes.clear();
     m_postprocessNodes.clear();
-    m_trackingNodes.clear();
-    m_pidNodes.clear();
     
     // Begin graph capture with relaxed mode to handle TensorRT stream dependencies
     cudaError_t err = cudaStreamBeginCapture(stream, cudaStreamCaptureModeRelaxed);
@@ -400,103 +442,47 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     
     // Preprocessing removed - using CudaImageProcessing pipeline in executeGraph instead
     
-    // 3. TensorRT Inference  
-    if (false && m_config.enableDetection) {  // Temporarily disabled for Graph capture
-        // Initialize input buffer with valid data for graph capture
-        if (m_unifiedArena.yoloInput) {
-            // std::cout << "[DEBUG] Initializing input buffer for graph capture..." << std::endl;
-            
-            // Create host buffer with dummy normalized values using dynamic resolution
-            int resolution = getModelInputResolution();
-            size_t inputSize = resolution * resolution * 3 * sizeof(float);
-            std::vector<float> dummyData(resolution * resolution * 3, 0.5f); // Fill with 0.5 (normalized pixel value)
-            
-            // Copy from host to device
-            cudaMemcpyAsync(m_unifiedArena.yoloInput, dummyData.data(), inputSize, cudaMemcpyHostToDevice, stream);
-            
-            // CRITICAL FIX: Also initialize TensorRT binding buffers
-            auto bindingIt = m_inputBindings.find(m_inputName);
-            if (bindingIt != m_inputBindings.end() && bindingIt->second != nullptr) {
-                if (bindingIt->second->get() != reinterpret_cast<uint8_t*>(m_unifiedArena.yoloInput)) {
-                    // First clear with zeros, then set dummy data
-                    cudaMemsetAsync(bindingIt->second->get(), 0, inputSize, stream);
-                    cudaMemcpyAsync(bindingIt->second->get(), dummyData.data(), inputSize, cudaMemcpyHostToDevice, stream);
-                }
-            }
-            
-            // Copy operations are properly ordered in stream - no sync needed
-            // cudaStreamSynchronize(stream); // REMOVED: Unnecessary blocking synchronization
-            
-        }
-        
-        // Use integrated TensorRT inference (Phase 1)
-        if (!runInferenceAsync(stream)) {
-            std::cerr << "[UnifiedGraph] TensorRT inference failed during graph capture" << std::endl;
-        }
-    }
+    // 3. TensorRT Inference - EXCLUDED from graph capture to avoid dynamic allocation issues
+    // TensorRT will be called separately outside the graph
     
-    // 4. Postprocessing (NMS, filtering, target selection)
-    // Include NMS in graph capture with dummy data
-    if (m_config.enableDetection && m_smallBufferArena.selectedTarget && m_unifiedArena.detections) {
-        // Initialize buffers for graph capture
-        cudaMemsetAsync(m_smallBufferArena.selectedTarget, 0, sizeof(Target), stream);
-        cudaMemsetAsync(m_smallBufferArena.numDetections, 0, sizeof(int), stream);
-        
-        // Initialize NMS input buffers with dummy data for graph capture
-        if (m_unifiedArena.decodedTargets && m_smallBufferArena.decodedCount) {
-            // Set a dummy count for graph capture
-            int dummyCount = 10;  // Small number for graph capture
-            cudaMemcpyAsync(m_smallBufferArena.decodedCount, &dummyCount, sizeof(int), cudaMemcpyHostToDevice, stream);
+    // Note: We skip TensorRT inference during graph capture because:
+    // - TensorRT may perform dynamic memory allocation
+    // - Internal stream creation/synchronization breaks graph capture
+    // - CUDNN autotuning can modify kernel selection
+    
+    // The graph will capture pre-processing and post-processing only
+    
+    // 4. Postprocessing (NMS, filtering, target selection) - INCLUDE in graph
+    // We CAN capture post-processing because it doesn't do dynamic allocation
+    if (m_config.enableDetection) {
+        // Create dummy output data to simulate TensorRT output for graph capture
+        if (m_outputBindings.size() > 0 && m_outputNames.size() > 0) {
+            const std::string& primaryOutputName = m_outputNames[0];
+            void* outputBuffer = m_outputBindings[primaryOutputName]->get();
             
-            // Initialize decoded targets with dummy data
-            std::vector<Target> dummyTargets(10);
-            for (int i = 0; i < 10; i++) {
-                dummyTargets[i].x = 100.0f + i * 10;
-                dummyTargets[i].y = 100.0f + i * 10;
-                dummyTargets[i].width = 50.0f;
-                dummyTargets[i].height = 50.0f;
-                dummyTargets[i].confidence = 0.5f;
-                dummyTargets[i].classId = i % 3;
-            }
-            cudaMemcpyAsync(m_unifiedArena.decodedTargets, dummyTargets.data(), 
-                          10 * sizeof(Target), cudaMemcpyHostToDevice, stream);
+            // Initialize with dummy detection data
+            int modelRes = getModelInputResolution();
+            int numBoxes = 8400;  // Common YOLO output size
+            size_t outputSize = m_outputSizes[primaryOutputName];
+            
+            // Clear output buffer
+            cudaMemsetAsync(outputBuffer, 0, outputSize, stream);
+            
+            // Simulate some detections for graph capture
+            // This ensures all post-processing kernels are captured
         }
         
-        // Execute NMS with dummy data for graph capture
-        if (m_unifiedArena.finalTargets && m_smallBufferArena.finalTargetsCount && 
-            m_unifiedArena.x1 && m_unifiedArena.y1 && m_unifiedArena.x2 && m_unifiedArena.y2 && m_unifiedArena.areas && 
-            m_unifiedArena.scores_nms && m_unifiedArena.classIds_nms && m_unifiedArena.iou_matrix && 
-            m_unifiedArena.keep && m_unifiedArena.indices && m_unifiedArena.decodedTargets && m_smallBufferArena.decodedCount) {
-            
-            // Use config max detections for graph capture
-            int maxDetections = ctx.config.max_detections;
-            float nmsThreshold = 0.45f;
-            int frameWidth = ctx.config.detection_resolution;
-            int frameHeight = ctx.config.detection_resolution;
-            
-            // Call NMS with dummy data
-            NMSGpu(
-                m_unifiedArena.decodedTargets,
-                maxDetections,  // Use max detections for stable graph capture
-                m_unifiedArena.finalTargets,
-                m_smallBufferArena.finalTargetsCount,
-                maxDetections,
-                nmsThreshold,
-                frameWidth,
-                frameHeight,
-                m_unifiedArena.x1,
-                m_unifiedArena.y1,
-                m_unifiedArena.x2,
-                m_unifiedArena.y2,
-                m_unifiedArena.areas,
-                m_unifiedArena.scores_nms,
-                m_unifiedArena.classIds_nms,
-                m_unifiedArena.iou_matrix,
-                m_unifiedArena.keep,
-                m_unifiedArena.indices,
-                stream
-            );
-        }
+        // Clear all detection buffers
+        clearDetectionBuffers(PostProcessingConfig{Constants::MAX_DETECTIONS, 0.45f, 0.001f, "yolo12"}, stream);
+        
+        // Run integrated post-processing (will be captured in graph)
+        performIntegratedPostProcessing(stream);
+        
+        // Run target selection (will be captured in graph)
+        performTargetSelection(stream);
+        
+        // Mouse movement calculation is now part of performTargetSelection (fused kernel)
+        // No separate kernel needed here
     }
     
     // 5. Tracking removed - no longer needed
@@ -553,9 +539,6 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     return true;
 }
 
-void UnifiedGraphPipeline::checkTargetsAsync(cudaStream_t stream) {
-    // Target checking removed - simplified pipeline
-}
 
 
 
@@ -687,7 +670,6 @@ void UnifiedGraphPipeline::deallocateBuffers() {
     m_d_inferenceOutput.reset();
     // m_d_allowFlags.reset(); // Now handled by SmallBufferArena
     m_d_preprocessBuffer.reset();
-    m_d_tracks.reset();
     m_d_outputBuffer.reset();
     
     // Reset pinned host memory - RAII handles deallocation
@@ -1531,8 +1513,7 @@ void UnifiedGraphPipeline::executeNMSKernel(const PostProcessingConfig& config, 
         stream
     );
     
-    // Validate detections on GPU without sync
-    validateTargetsGpu(m_unifiedArena.finalTargets, config.max_detections, stream);
+    // OPTIMIZED: Validation moved to fused kernel - no separate validation needed here
 }
 
 void UnifiedGraphPipeline::handleNMSResults(const PostProcessingConfig& config, cudaStream_t stream) {
@@ -1540,7 +1521,7 @@ void UnifiedGraphPipeline::handleNMSResults(const PostProcessingConfig& config, 
     
     // OPTIMIZATION: Only copy to CPU if preview window is enabled AND preview is actually needed
     static int preview_frame_counter = 0;
-    const int PREVIEW_UPDATE_INTERVAL = 3;
+    const int PREVIEW_UPDATE_INTERVAL = 5;
     
     // Skip all CPU transfers if UI preview is disabled (saves 5-10% CPU usage)
     if (!ctx.config.show_window || !ctx.preview_enabled || 
@@ -1599,7 +1580,7 @@ void UnifiedGraphPipeline::startPreviewCopy(const PostProcessingConfig& config, 
     
     // OPTIMIZATION: Conditional UI copy only when actually needed (saves GPU→CPU bandwidth)
     static int ui_copy_counter = 0;
-    if (ctx.config.show_window && ctx.preview_enabled && (++ui_copy_counter % 16 == 0)) {
+    if (ctx.config.show_window && ctx.preview_enabled && (++ui_copy_counter % 24 == 0)) {
         // Copy minimal data for UI preview only when both conditions are met
         cudaMemcpyAsync(&m_h_finalCount, m_smallBufferArena.finalTargetsCount, sizeof(int), 
                        cudaMemcpyDeviceToHost, stream);
@@ -1627,64 +1608,62 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         return;
     }
     
-    // Use cached max detections for CUDA Graph compatibility
-    static int cached_max_detections = Constants::MAX_DETECTIONS;
-    if (!m_graphCaptured) {
-        std::lock_guard<std::mutex> lock(ctx.configMutex);
-        cached_max_detections = ctx.config.max_detections;
-    }
-    
-    // Use the new GPU-only version to avoid synchronization
-    // The kernel will check count internally
-    
-    // Get crosshair position (center of screen) - always calculate from config
-    float crosshairX = ctx.config.detection_resolution / 2.0f;
-    float crosshairY = ctx.config.detection_resolution / 2.0f;
-    
-    // Ensure target selection buffers are allocated
-    if (!m_smallBufferArena.bestTargetIndex || !m_smallBufferArena.bestTarget) {
+    // Ensure all required buffers are allocated
+    if (!m_smallBufferArena.bestTargetIndex || !m_smallBufferArena.bestTarget || !m_smallBufferArena.mouseMovement) {
         std::cerr << "[Pipeline] Target selection buffers not allocated!" << std::endl;
         return;
     }
     
-    // Find head class ID from config
-    int head_class_id = -1;
-    for (const auto& cs : ctx.config.class_settings) {
-        if (cs.name == ctx.config.head_class_name) {
-            head_class_id = cs.id;
-            break;
-        }
+    // Use cached values for CUDA Graph compatibility
+    static int cached_max_detections = Constants::MAX_DETECTIONS;
+    static float cached_kp_x = 0.1f;
+    static float cached_kp_y = 0.1f;
+    static float cached_head_y_offset = 0.2f;
+    static float cached_body_y_offset = 0.5f;
+    
+    if (!m_graphCaptured) {
+        std::lock_guard<std::mutex> lock(ctx.configMutex);
+        cached_max_detections = ctx.config.max_detections;
+        cached_kp_x = ctx.config.pd_kp_x;
+        cached_kp_y = ctx.config.pd_kp_y;
+        cached_head_y_offset = ctx.config.head_y_offset;
+        cached_body_y_offset = ctx.config.body_y_offset;
     }
     
-    // Final validation: clean any extreme values that might have survived
-    finalValidateTargetsGpu(
+    // Get crosshair position (center of screen)
+    float crosshairX = ctx.config.detection_resolution / 2.0f;
+    float crosshairY = ctx.config.detection_resolution / 2.0f;
+    
+    // Find head class ID from config
+    int head_class_id = findHeadClassId(ctx);
+    
+    // OPTIMIZED: Use fused kernel for validation + selection + movement calculation
+    // This replaces 3 separate kernel calls with 1
+    fusedTargetSelectionAndMovementKernel<<<1, 32, 0, stream>>>(
         m_unifiedArena.finalTargets,
         m_smallBufferArena.finalTargetsCount,
         cached_max_detections,
-        stream
-    );
-    
-    // Always use head priority selection
-    cudaError_t selectErr = findBestTargetWithHeadPriorityGpu(
-        m_unifiedArena.finalTargets,
-        m_smallBufferArena.finalTargetsCount,  // Pass device pointer directly
         crosshairX,
         crosshairY,
         head_class_id,
+        cached_kp_x,
+        cached_kp_y,
+        cached_head_y_offset,
+        cached_body_y_offset,
+        ctx.config.detection_resolution,
         m_smallBufferArena.bestTargetIndex,
         m_smallBufferArena.bestTarget,
-        stream
+        m_smallBufferArena.mouseMovement
     );
     
-    if (selectErr != cudaSuccess) {
-        std::cerr << "[Pipeline] Target selection failed: " << cudaGetErrorString(selectErr) << std::endl;
-        // Clear best target on failure
-        if (m_smallBufferArena.bestTargetIndex) {
-            cudaMemsetAsync(m_smallBufferArena.bestTargetIndex, -1, sizeof(int), stream);
-        }
-        if (m_smallBufferArena.bestTarget) {
-            cudaMemsetAsync(m_smallBufferArena.bestTarget, 0, sizeof(Target), stream);
-        }
+    // Check for kernel launch errors
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        std::cerr << "[Pipeline] Fused kernel launch failed: " << cudaGetErrorString(err) << std::endl;
+        // Clear outputs on failure
+        cudaMemsetAsync(m_smallBufferArena.bestTargetIndex, -1, sizeof(int), stream);
+        cudaMemsetAsync(m_smallBufferArena.bestTarget, 0, sizeof(Target), stream);
+        cudaMemsetAsync(m_smallBufferArena.mouseMovement, 0, sizeof(MouseMovement), stream);
     }
 }
 
@@ -1899,29 +1878,14 @@ bool UnifiedGraphPipeline::performResultCopy(int writeIdx) {
     // Wait for inference completion from pipeline stream
     cudaStreamWaitEvent(m_outputStream->get(), m_doubleBuffer->inferenceComplete[writeIdx].get(), 0);
     
-    Target* finalTarget = m_smallBufferArena.bestTarget;
-    if (!finalTarget || !m_doubleBuffer->h_movement_pinned[writeIdx]->get()) {
+    // Check if we have valid mouse movement data (already calculated by fused kernel)
+    if (!m_smallBufferArena.mouseMovement || !m_doubleBuffer->h_movement_pinned[writeIdx]->get()) {
         m_doubleBuffer->movement_data_ready[writeIdx] = false;
         return true;
     }
     
-    int head_class_id = findHeadClassId(ctx);
-    
-    // Launch GPU kernel for mouse movement calculation (unified output)
-    calculateMouseMovementKernel<<<1, 1, 0, m_outputStream->get()>>>(
-        finalTarget,
-        ctx.config.detection_resolution / 2.0f,
-        ctx.config.detection_resolution / 2.0f,
-        ctx.config.pd_kp_x,
-        ctx.config.pd_kp_y,
-        head_class_id,
-        ctx.config.head_y_offset,
-        ctx.config.body_y_offset,
-        ctx.config.detection_resolution,
-        m_smallBufferArena.mouseMovement
-    );
-    
-    // OPTIMIZATION: Single unified memory transfer (reduces CPU overhead by ~5-8%)
+    // OPTIMIZED: Mouse movement already calculated by fusedTargetSelectionAndMovementKernel
+    // Just copy the pre-calculated result (saves 1 kernel launch)
     cudaMemcpyAsync(m_doubleBuffer->h_movement_pinned[writeIdx]->get(), m_smallBufferArena.mouseMovement, 
                    sizeof(MouseMovement), cudaMemcpyDeviceToHost, m_outputStream->get());
     

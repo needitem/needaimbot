@@ -356,8 +356,6 @@ private:
     std::vector<cudaGraphNode_t> m_captureNodes;
     std::vector<cudaGraphNode_t> m_inferenceNodes;
     std::vector<cudaGraphNode_t> m_postprocessNodes;
-    std::vector<cudaGraphNode_t> m_trackingNodes;
-    std::vector<cudaGraphNode_t> m_pidNodes;
     
     // Node name mapping for dynamic updates
     std::unordered_map<std::string, cudaGraphNode_t> m_namedNodes;
@@ -484,7 +482,6 @@ private:
     SimpleCudaMat m_captureBuffer;
     SimpleCudaMat m_preprocessBuffer;
     std::unique_ptr<CudaMemory<float>> m_d_preprocessBuffer;  // Preprocess buffer 
-    std::unique_ptr<CudaMemory<Target>> m_d_tracks;           // GPU tracking data
     
     // OPTIMIZATION: All buffers moved to UnifiedGPUArena (20+ allocations → 1)
     std::unique_ptr<CudaMemory<float>> m_d_inferenceOutput;  // TensorRT inference output (separate from arena)
@@ -553,7 +550,6 @@ private:
     void deallocateBuffers();
     
     // Two-stage pipeline helpers
-    void checkTargetsAsync(cudaStream_t stream);
     void updateProfilingAsync(cudaStream_t stream);
     
     // Graph capture methods
