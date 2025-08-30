@@ -823,11 +823,12 @@ void UnifiedGraphPipeline::runMainLoop() {
                 wasAiming = false;
             }
             
-            // OPTIMIZATION: Enhanced idle state handling for maximum efficiency
+            // OPTIMIZATION: Efficient idle with minimal CPU usage
             if (ctx.should_exit) break; // Fast exit check
             
-            // Use yield with adaptive timing based on system load
-            std::this_thread::yield(); // More responsive than sleep, less CPU than busy wait
+            // Use short sleep instead of yield for better CPU efficiency
+            // This is more efficient than condition_variable for high-frequency state changes
+            std::this_thread::sleep_for(std::chrono::microseconds(100)); // 0.1ms sleep, minimal latency
             continue;
         }
         
