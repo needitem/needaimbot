@@ -238,8 +238,9 @@ __global__ void fusedTargetSelectionAndMovementKernel(
     Target* __restrict__ bestTarget,
     needaimbot::MouseMovement* __restrict__ output_movement
 ) {
-    // Only first warp processes (more efficient than single thread)
-    if (threadIdx.x < 32 && blockIdx.x == 0) {
+    // Use more threads for better parallelization
+    // Process with full block instead of just first warp
+    if (blockIdx.x == 0) {
         // Initialize outputs
         if (threadIdx.x == 0) {
             *bestTargetIndex = -1;
@@ -250,7 +251,7 @@ __global__ void fusedTargetSelectionAndMovementKernel(
             Target emptyTarget = {};
             *bestTarget = emptyTarget;
         }
-        __syncwarp();
+        __syncthreads();
         
         // Get actual count (bounded check)
         int count = *finalTargetsCount;
@@ -262,8 +263,8 @@ __global__ void fusedTargetSelectionAndMovementKernel(
         int localBestIdx = -1;
         float localBestDist = 1e9f;
         
-        // Each thread in warp checks different targets
-        for (int i = threadIdx.x; i < count; i += 32) {
+        // Each thread checks different targets (use all threads in block)
+        for (int i = threadIdx.x; i < count; i += blockDim.x) {
             Target& t = finalTargets[i];
             
             // Validation: remove extreme/invalid values
@@ -295,21 +296,29 @@ __global__ void fusedTargetSelectionAndMovementKernel(
             }
         }
         
-        // Warp-level reduction to find global best
-        #pragma unroll
-        for (int offset = 16; offset >= 1; offset /= 2) {
-            float otherDist = __shfl_down_sync(0xFFFFFFFF, localBestDist, offset);
-            int otherIdx = __shfl_down_sync(0xFFFFFFFF, localBestIdx, offset);
-            if (otherDist < localBestDist) {
-                localBestDist = otherDist;
-                localBestIdx = otherIdx;
+        // Use shared memory for block-level reduction
+        __shared__ float s_distances[256];
+        __shared__ int s_indices[256];
+        
+        s_distances[threadIdx.x] = localBestDist;
+        s_indices[threadIdx.x] = localBestIdx;
+        __syncthreads();
+        
+        // Block-level reduction to find minimum distance
+        for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+            if (threadIdx.x < s) {
+                if (s_distances[threadIdx.x + s] < s_distances[threadIdx.x]) {
+                    s_distances[threadIdx.x] = s_distances[threadIdx.x + s];
+                    s_indices[threadIdx.x] = s_indices[threadIdx.x + s];
+                }
             }
+            __syncthreads();
         }
         
         // Thread 0 writes results and calculates movement
-        if (threadIdx.x == 0 && localBestIdx >= 0) {
-            *bestTargetIndex = localBestIdx;
-            *bestTarget = finalTargets[localBestIdx];
+        if (threadIdx.x == 0 && s_indices[0] >= 0) {
+            *bestTargetIndex = s_indices[0];
+            *bestTarget = finalTargets[s_indices[0]];
             
             // Calculate mouse movement for best target
             Target& best = *bestTarget;
@@ -1765,9 +1774,12 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
     // Find head class ID from config
     int head_class_id = findHeadClassId(ctx);
     
-    // OPTIMIZED: Use fused kernel for validation + selection + movement calculation
-    // This replaces 3 separate kernel calls with 1
-    fusedTargetSelectionAndMovementKernel<<<1, 32, 0, stream>>>(
+    // OPTIMIZED: Use more threads for better parallelization
+    // Dynamic grid size based on max detections for better GPU utilization
+    const int blockSize = 256;  // Use full warp multiples for better occupancy
+    const int gridSize = (cached_max_detections + blockSize - 1) / blockSize;
+    
+    fusedTargetSelectionAndMovementKernel<<<gridSize, blockSize, 0, stream>>>(
         m_unifiedArena.finalTargets,
         m_smallBufferArena.finalTargetsCount,
         cached_max_detections,
