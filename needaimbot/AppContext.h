@@ -70,6 +70,10 @@ public:
     std::atomic<bool> shooting{false};  // Track if auto_shoot button is pressed
     std::atomic<bool> input_method_changed{false};
     
+    // Aiming state synchronization for CPU efficiency
+    std::mutex aiming_mutex;
+    std::condition_variable aiming_cv;
+    
     std::atomic<bool> detection_resolution_changed{false};
     
     
