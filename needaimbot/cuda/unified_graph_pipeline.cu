@@ -408,7 +408,7 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
         return false;
     }
     
-    // Initial graph capture if enabled
+    // Initial warm-up if enabled (but don't capture graph yet)
     if (m_config.useGraphOptimization) {
         
         // CRITICAL: Run warm-up iterations before graph capture
@@ -420,6 +420,18 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
                 cudaMemsetAsync(inputBuffer->get(), 0, inputBuffer->size() * sizeof(uint8_t), m_pipelineStream->get());
             }
             
+            // Set tensor addresses for warm-up
+            for (const auto& [name, buffer] : m_inputBindings) {
+                if (buffer && buffer->get()) {
+                    m_context->setTensorAddress(name.c_str(), buffer->get());
+                }
+            }
+            for (const auto& [name, buffer] : m_outputBindings) {
+                if (buffer && buffer->get()) {
+                    m_context->setTensorAddress(name.c_str(), buffer->get());
+                }
+            }
+            
             // Execute inference to warm up TensorRT
             if (m_context) {
                 m_context->enqueueV3(m_pipelineStream->get());
@@ -427,12 +439,8 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
         }
         cudaStreamSynchronize(m_pipelineStream->get());
         
-        // Now capture the graph with warmed-up TensorRT
-        if (!captureGraph(m_pipelineStream->get())) {
-            std::cerr << "[UnifiedGraph] Warning: Failed to capture detection graph" << std::endl;
-        }
-        
-        // We'll capture the full graph on first execution with real data
+        // Don't capture graph here - wait for first real execution
+        // This avoids capturing with potentially incorrect settings
         m_state.needsRebuild = true;
     }
     
@@ -482,10 +490,22 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     // - Run warm-up iterations before graph capture to complete autotuning
     
     if (m_context && m_config.enableDetection) {
+        // Set tensor addresses before inference in graph capture
+        for (const auto& [name, buffer] : m_inputBindings) {
+            if (buffer && buffer->get()) {
+                m_context->setTensorAddress(name.c_str(), buffer->get());
+            }
+        }
+        for (const auto& [name, buffer] : m_outputBindings) {
+            if (buffer && buffer->get()) {
+                m_context->setTensorAddress(name.c_str(), buffer->get());
+            }
+        }
+        
         // Execute inference within the graph capture
         // This will significantly reduce kernel launch overhead
         if (!m_context->enqueueV3(stream)) {
-            std::cerr << "[UnifiedGraph] Warning: TensorRT enqueue failed during graph capture" << std::endl;
+            std::cerr << "Warning: TensorRT enqueue failed during graph capture" << std::endl;
         }
     }
     
@@ -979,12 +999,6 @@ bool UnifiedGraphPipeline::initializeTensorRT(const std::string& modelFile) {
         outputSize *= sizeof(float);  // Assuming float32 output
         m_outputSizes[outputName] = outputSize;
         
-        std::cout << "[Pipeline] Output '" << outputName << "' dimensions: ";
-        for (int i = 0; i < outputDims.nbDims; ++i) {
-            std::cout << outputDims.d[i];
-            if (i < outputDims.nbDims - 1) std::cout << "x";
-        }
-        std::cout << " (size: " << outputSize << " bytes)" << std::endl;
         
     }
     
@@ -1008,13 +1022,10 @@ bool UnifiedGraphPipeline::initializeTensorRT(const std::string& modelFile) {
     const auto& outputShape = m_outputShapes[m_outputNames[0]];
     if (outputShape.size() >= 2) {
         m_numClasses = static_cast<int>(outputShape[1]) - 4;  // rows - 4 (bbox coords)
-        std::cout << "[Pipeline] Detected " << m_numClasses << " classes from model output shape" << std::endl;
     } else {
         m_numClasses = 80;  // Default COCO classes
-        std::cout << "[Pipeline] Using default 80 classes (COCO)" << std::endl;
     }
     
-    std::cout << "[Pipeline] TensorRT initialization completed successfully" << std::endl;
     return true;
 }
 
@@ -1055,12 +1066,6 @@ void UnifiedGraphPipeline::getOutputNames() {
             auto dataType = m_engine->getTensorDataType(name);
             m_outputTypes[name] = dataType;
             
-            std::cout << "[Pipeline] Output '" << name << "' dimensions: ";
-            for (int j = 0; j < dims.nbDims; ++j) {
-                std::cout << dims.d[j];
-                if (j < dims.nbDims - 1) std::cout << "x";
-            }
-            std::cout << std::endl;
         }
     }
 }
@@ -1068,7 +1073,6 @@ void UnifiedGraphPipeline::getOutputNames() {
 void UnifiedGraphPipeline::getBindings() {
     auto& ctx = AppContext::getInstance();
     
-    std::cout << "[Pipeline] Setting up optimized TensorRT bindings..." << std::endl;
     
     // Enhanced binding management with memory reuse optimization
     
@@ -1103,7 +1107,6 @@ void UnifiedGraphPipeline::getBindings() {
         // The CudaMemory class will handle allocation and deallocation
         try {
             m_inputBindings[name] = std::make_unique<CudaMemory<uint8_t>>(size);
-            std::cout << "[Pipeline] Allocated input '" << name << "': " << size << " bytes" << std::endl;
         } catch (const std::exception& e) {
             std::cerr << "[Pipeline] Failed to allocate input memory for '" << name << "': " << e.what() << std::endl;
             throw;
@@ -1112,7 +1115,6 @@ void UnifiedGraphPipeline::getBindings() {
         // Connect to existing pipeline buffers where possible  
         if (name == m_inputName && m_unifiedArena.yoloInput) {
             // Note: With RAII, each buffer manages its own memory
-            std::cout << "[Pipeline] Input binding created for YOLO input" << std::endl;
         }
     }
 
@@ -1129,12 +1131,9 @@ void UnifiedGraphPipeline::getBindings() {
             if (name == m_outputNames[0]) {
                 // OPTIMIZATION: Share buffer between TensorRT binding and inference output (saves 15-25MB)
                 m_outputBindings[name] = std::make_unique<CudaMemory<uint8_t>>(size);
-                std::cout << "[Pipeline] Allocated primary output buffer '" << name << "': " 
-                          << size / (1024*1024) << "MB (will be shared with inference)" << std::endl;
             } else {
                 // Allocate separate buffer for non-primary outputs
                 m_outputBindings[name] = std::make_unique<CudaMemory<uint8_t>>(size);
-                std::cout << "[Pipeline] Allocated output '" << name << "': " << size << " bytes" << std::endl;
             }
         } catch (const std::exception& e) {
             std::cerr << "[Pipeline] Failed to allocate output memory for '" << name << "': " << e.what() << std::endl;
@@ -1153,7 +1152,6 @@ void UnifiedGraphPipeline::getBindings() {
         std::cerr << "[Pipeline] Warning: Output binding count mismatch" << std::endl;
     }
     
-    std::cout << "[Pipeline] Optimized TensorRT bindings setup completed" << std::endl;
 }
 
 
@@ -1161,8 +1159,6 @@ bool UnifiedGraphPipeline::loadEngine(const std::string& modelFile) {
     std::filesystem::path modelPath(modelFile);
     std::string extension = modelPath.extension().string();
     
-    std::cout << "[Pipeline] loadEngine called with: " << modelFile << std::endl;
-    std::cout << "[Pipeline] File extension: " << extension << std::endl;
 
     if (extension != ".engine") {
         std::cerr << "[Pipeline] Error: Only .engine files are supported. Please use EngineExport tool to convert ONNX to engine format." << std::endl;
@@ -1175,7 +1171,6 @@ bool UnifiedGraphPipeline::loadEngine(const std::string& modelFile) {
     }
 
     std::string engineFilePath = modelFile;
-    std::cout << "[Pipeline] Loading engine file: " << engineFilePath << std::endl;
 
     // Load engine from file
     class SimpleLogger : public nvinfer1::ILogger {
@@ -1215,7 +1210,6 @@ bool UnifiedGraphPipeline::loadEngine(const std::string& modelFile) {
     m_engine.reset(m_runtime->deserializeCudaEngine(buffer.data(), size));
     
     if (m_engine) {
-        std::cout << "[Pipeline] Engine loaded successfully!" << std::endl;
         return true;
     } else {
         std::cerr << "[Pipeline] Failed to load engine from: " << engineFilePath << std::endl;
@@ -1475,6 +1469,18 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
     cudaError_t decodeErr = decodeYoloOutput(d_rawOutputPtr, outputType, shape, config, stream);
     if (decodeErr != cudaSuccess) {
         std::cerr << "[Pipeline] GPU decoding failed: " << cudaGetErrorString(decodeErr) << std::endl;
+        // Add debug info
+        std::cerr << "  - Output pointer: " << d_rawOutputPtr << std::endl;
+        std::cerr << "  - Shape size: " << shape.size() << std::endl;
+        if (!shape.empty()) {
+            std::cerr << "  - Shape: ";
+            for (size_t i = 0; i < shape.size(); i++) {
+                std::cerr << shape[i];
+                if (i < shape.size() - 1) std::cerr << "x";
+            }
+            std::cerr << std::endl;
+        }
+        std::cerr << "  - Post-process type: " << config.postprocess << std::endl;
         return;
     }
 
