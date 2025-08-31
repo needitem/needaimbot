@@ -161,6 +161,12 @@ void uploadDebugFrame(const SimpleCudaMat& bgrGpu)
     
     if (err != cudaSuccess) {
         std::cerr << "[Debug] CUDA color conversion failed: " << cudaGetErrorString(err) << std::endl;
+        std::cerr << "  - Input: " << bgrGpu.cols() << "x" << bgrGpu.rows() 
+                  << ", channels=" << bgrGpu.channels() 
+                  << ", step=" << bgrGpu.step() << std::endl;
+        std::cerr << "  - Output: " << rgbaGpu.cols() << "x" << rgbaGpu.rows() 
+                  << ", step=" << rgbaGpu.step() << std::endl;
+        std::cerr << "  - BGR ptr: " << bgrGpu.data() << ", RGBA ptr: " << rgbaGpu.data() << std::endl;
         return;
     }
     
