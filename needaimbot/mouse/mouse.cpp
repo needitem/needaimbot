@@ -135,38 +135,48 @@ void MouseThread::updateRapidFire()
 }
 
 // Simplified interface for GPU to call
-// Static input method for direct GPU->mouse control
-static std::unique_ptr<InputMethod> g_directInputMethod;
-static std::mutex g_inputMethodMutex;
+// Global input method for direct GPU->mouse control
+static std::unique_ptr<InputMethod> g_globalInputMethod;
+static std::mutex g_globalInputMutex;
 
-static void initializeDirectInput() {
-    if (!g_directInputMethod) {
-        // Use Win32 as default for direct GPU control
-        g_directInputMethod = std::make_unique<Win32InputMethod>();
+// Call this from main initialization to set the correct input method
+void setGlobalInputMethod(std::unique_ptr<InputMethod> method) {
+    std::lock_guard<std::mutex> lock(g_globalInputMutex);
+    g_globalInputMethod = std::move(method);
+}
+
+// Public API to configure input from SerialConnection, MakcuConnection, or GhubMouse
+void configureGlobalInput(SerialConnection* serial, MakcuConnection* makcu, GhubMouse* ghub) {
+    std::unique_ptr<InputMethod> method;
+    
+    if (serial && serial->isOpen()) {
+        method = std::make_unique<SerialInputMethod>(serial);
+    } else if (makcu && makcu->isOpen()) {
+        method = std::make_unique<MakcuInputMethod>(makcu);
+    } else if (ghub) {
+        method = std::make_unique<GHubInputMethod>(ghub);
+    } else {
+        method = std::make_unique<Win32InputMethod>();
     }
+    
+    setGlobalInputMethod(std::move(method));
 }
 
 extern "C" {
     void executeMouseMovement(int dx, int dy) {
-        std::lock_guard<std::mutex> lock(g_inputMethodMutex);
-        if (!g_directInputMethod) {
-            initializeDirectInput();
-        }
-        if (g_directInputMethod) {
-            g_directInputMethod->move(dx, dy);
+        std::lock_guard<std::mutex> lock(g_globalInputMutex);
+        if (g_globalInputMethod && g_globalInputMethod->isValid()) {
+            g_globalInputMethod->move(dx, dy);
         }
     }
     
     void executeMouseClick(bool press) {
-        std::lock_guard<std::mutex> lock(g_inputMethodMutex);
-        if (!g_directInputMethod) {
-            initializeDirectInput();
-        }
-        if (g_directInputMethod) {
+        std::lock_guard<std::mutex> lock(g_globalInputMutex);
+        if (g_globalInputMethod && g_globalInputMethod->isValid()) {
             if (press) {
-                g_directInputMethod->press();
+                g_globalInputMethod->press();
             } else {
-                g_directInputMethod->release();
+                g_globalInputMethod->release();
             }
         }
     }

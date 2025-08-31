@@ -89,6 +89,10 @@ public:
     RapidFire* getRapidFire() { return rapid_fire.get(); }
 };
 
+// Global input configuration
+void configureGlobalInput(SerialConnection* serial, MakcuConnection* makcu, GhubMouse* ghub);
+void setGlobalInputMethod(std::unique_ptr<InputMethod> method);
+
 // C interface for GPU to call
 extern "C" {
     void executeMouseMovement(int dx, int dy);

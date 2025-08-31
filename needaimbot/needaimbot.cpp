@@ -83,7 +83,9 @@ std::unique_ptr<InputMethod> initializeInputMethod() {
         try {
             auto arduinoSerial = std::make_unique<SerialConnection>(ctx.config.arduino_port, ctx.config.arduino_baudrate);
             if (arduinoSerial->isOpen()) {
-                return std::make_unique<SerialInputMethod>(arduinoSerial.release());
+                auto method = std::make_unique<SerialInputMethod>(arduinoSerial.release());
+                setGlobalInputMethod(std::move(method));
+                return nullptr;  // Don't return local copy, use global only
             }
             std::cerr << "[Mouse] Failed to open Arduino serial port " << ctx.config.arduino_port << ". Defaulting to Win32." << std::endl;
         } catch (const std::exception& e) {
@@ -92,7 +94,9 @@ std::unique_ptr<InputMethod> initializeInputMethod() {
     } else if (ctx.config.input_method == "GHUB") {
         auto gHub = std::make_unique<GhubMouse>();
         if (gHub->mouse_xy(0, 0)) {
-            return std::make_unique<GHubInputMethod>(gHub.release());
+            auto method = std::make_unique<GHubInputMethod>(gHub.release());
+            setGlobalInputMethod(std::move(method));
+            return nullptr;  // Don't return local copy, use global only
         }
         std::cerr << "[Mouse] Failed to initialize GHub mouse driver. Defaulting to Win32." << std::endl;
     } else if (ctx.config.input_method == "KMBOX") {
@@ -113,7 +117,9 @@ std::unique_ptr<InputMethod> initializeInputMethod() {
         try {
             auto makcuConnection = std::make_unique<MakcuConnection>(ctx.config.makcu_port, ctx.config.makcu_baudrate);
             if (makcuConnection->isOpen()) {
-                return std::make_unique<MakcuInputMethod>(makcuConnection.release());
+                auto method = std::make_unique<MakcuInputMethod>(makcuConnection.release());
+                setGlobalInputMethod(std::move(method));
+                return nullptr;  // Don't return local copy, use global only
             }
             std::cerr << "[Mouse] Failed to open MAKCU port " << ctx.config.makcu_port << ". Defaulting to Win32." << std::endl;
         } catch (const std::exception& e) {
@@ -127,7 +133,10 @@ std::unique_ptr<InputMethod> initializeInputMethod() {
         }
     }
 
-    return std::make_unique<Win32InputMethod>();
+    // Set Win32 as global
+    auto method = std::make_unique<Win32InputMethod>();
+    setGlobalInputMethod(std::move(method));
+    return nullptr;  // Don't return local copy, use global only
 }
 
 
