@@ -397,12 +397,10 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
         return false;
     }
     
-    std::cout << "[UnifiedGraph] Initializing TensorRT with model: " << m_config.modelPath << std::endl;
     if (!initializeTensorRT(m_config.modelPath)) {
         std::cerr << "[UnifiedGraph] CRITICAL: TensorRT initialization failed" << std::endl;
         return false;
     }
-    std::cout << "[UnifiedGraph] TensorRT integration completed successfully" << std::endl;
     
     // Allocate pipeline buffers
     if (!allocateBuffers()) {
@@ -412,11 +410,9 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
     
     // Initial graph capture if enabled
     if (m_config.useGraphOptimization) {
-        std::cout << "[DEBUG] CUDA Graph optimization enabled with proper initialization" << std::endl;
         
         // CRITICAL: Run warm-up iterations before graph capture
         // This ensures TensorRT completes autotuning and all allocations are done
-        std::cout << "[UnifiedGraph] Running warm-up iterations for TensorRT..." << std::endl;
         for (int i = 0; i < 3; i++) {
             // Create dummy input data
             if (m_inputBindings.find(m_inputName) != m_inputBindings.end()) {
@@ -430,7 +426,6 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
             }
         }
         cudaStreamSynchronize(m_pipelineStream->get());
-        std::cout << "[UnifiedGraph] Warm-up complete, capturing graph..." << std::endl;
         
         // Now capture the graph with warmed-up TensorRT
         if (!captureGraph(m_pipelineStream->get())) {
@@ -441,12 +436,6 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
         m_state.needsRebuild = true;
     }
     
-    std::cout << "[UnifiedGraph] Pipeline initialized with:" << std::endl;
-    std::cout << "  - TensorRT integration: " << (!m_config.modelPath.empty() ? "Yes" : "No") << std::endl;
-    std::cout << "  - Multi-stream coordinator: Yes" << std::endl;
-    std::cout << "  - Dynamic graph updates: Yes" << std::endl;
-    std::cout << "  - Double buffering: " << (m_doubleBuffer ? "Yes" : "No") << std::endl;
-    std::cout << "  - Graph optimization: " << (m_config.useGraphOptimization ? "Yes" : "No") << std::endl;
     return true;
 }
 
@@ -458,7 +447,6 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     
     if (!stream) stream = m_pipelineStream->get();
     
-    std::cout << "[UnifiedGraph] Starting graph capture..." << std::endl;
     
     // Clean up existing graph
     cleanupGraph();
@@ -579,8 +567,6 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     size_t numNodes = 0;
     cudaGraphGetNodes(m_graph, nullptr, &numNodes);
     
-    std::cout << "[UnifiedGraph] Graph captured successfully with " 
-              << numNodes << " nodes" << std::endl;
     
     return true;
 }
@@ -601,7 +587,6 @@ bool UnifiedGraphPipeline::validateGraph() {
         return false;
     }
     
-    std::cout << "[UnifiedGraph] Graph validated with " << numNodes << " nodes" << std::endl;
     return true;
 }
 
@@ -638,7 +623,6 @@ bool UnifiedGraphPipeline::allocateBuffers() {
         if (m_config.enableCapture && m_doubleBuffer) {
             // Initialize frame buffers and pinned memory
             m_doubleBuffer->initializeFrameBuffers(height, width, 4);  // BGRA
-            std::cout << "[UnifiedGraph] OPTIMIZATION: Stream-based double buffer system initialized (33% less memory)" << std::endl;
         }
         
         // OPTIMIZATION: Unified buffer for capture and preprocessing (25% memory savings)
@@ -650,18 +634,12 @@ bool UnifiedGraphPipeline::allocateBuffers() {
         m_smallBufferArena.arenaBuffer = std::make_unique<CudaMemory<uint8_t>>(arenaSize);
         m_smallBufferArena.initializePointers(m_smallBufferArena.arenaBuffer->get());
         
-        std::cout << "[UnifiedGraph] Small buffer arena allocated: " << arenaSize 
-                  << " bytes for 14 small buffers" << std::endl;
         
         // OPTIMIZATION: Allocate unified GPU arena (replaces 20+ individual allocations!)
         size_t unifiedArenaSize = UnifiedGPUArena::calculateArenaSize(maxDetections, yoloSize);
         m_unifiedArena.megaArena = std::make_unique<CudaMemory<uint8_t>>(unifiedArenaSize);
         m_unifiedArena.initializePointers(m_unifiedArena.megaArena->get(), maxDetections, yoloSize);
         
-        std::cout << "[UnifiedGraph] MEGA OPTIMIZATION: Unified GPU arena allocated: " 
-                  << unifiedArenaSize / (1024*1024) << "MB" << std::endl;
-        std::cout << "[UnifiedGraph] Replaced 20+ individual cudaMalloc calls with single allocation!" << std::endl;
-        std::cout << "[UnifiedGraph] Memory allocation overhead reduced by ~75%" << std::endl;
         
         // Class filtering control buffer now handled by SmallBufferArena (OPTIMIZED)
         // m_d_allowFlags removed - using m_smallBufferArena.allowFlags instead
@@ -675,10 +653,8 @@ bool UnifiedGraphPipeline::allocateBuffers() {
             m_preview.enabled = true;
             m_preview.previewBuffer.create(height, width, 4);  // BGRA for preview
             m_preview.finalTargets.reserve(maxDetections);
-            std::cout << "[UnifiedGraph] Preview buffers allocated (show_window=true)" << std::endl;
         } else {
             m_preview.enabled = false;
-            std::cout << "[UnifiedGraph] Preview buffers skipped (show_window=false) - Memory saved" << std::endl;
         }
         
         // Additional validation for critical buffers
@@ -693,12 +669,6 @@ bool UnifiedGraphPipeline::allocateBuffers() {
             gpuMemory += width * height * 4 * sizeof(unsigned char);  // Preview buffer
         }
         
-        std::cout << "[UnifiedGraph] Allocated buffers: "
-                  << "GPU: " << (gpuMemory / (1024 * 1024)) 
-                  << " MB, Pinned: " << ((width * height * 4 + 8) / (1024 * 1024)) 
-                  << " MB" << std::endl;
-        std::cout << "[UnifiedGraph] Memory optimizations saved: ~" 
-                  << ((width * height * 3 * sizeof(float)) / (1024 * 1024)) << " MB" << std::endl;
         
         
         return true;
@@ -825,7 +795,6 @@ void UnifiedGraphPipeline::updateProfilingAsync(cudaStream_t stream) {
 
 void UnifiedGraphPipeline::handleAimbotDeactivation() {
     auto& ctx = AppContext::getInstance();
-    std::cout << "[UnifiedPipeline] Aimbot deactivated - suspending pipeline" << std::endl;
     
     // Event-based approach: clear operations are async and self-coordinated
     // No synchronization needed - pipeline suspension prevents new work
@@ -872,7 +841,6 @@ void UnifiedGraphPipeline::clearHostPreviewData(AppContext& ctx) {
 }
 
 void UnifiedGraphPipeline::handleAimbotActivation() {
-    std::cout << "[UnifiedPipeline] Aimbot activated - MAXIMUM PERFORMANCE MODE" << std::endl;
     
     // Reset frame counter only
     m_state.frameCount = 0;
@@ -889,7 +857,6 @@ bool UnifiedGraphPipeline::executePipelineWithErrorHandling() {
 
 void UnifiedGraphPipeline::runMainLoop() {
     auto& ctx = AppContext::getInstance();
-    std::cout << "[UnifiedPipeline] Starting main loop - MAXIMUM PERFORMANCE MODE (Event-Driven)" << std::endl;
     
     m_lastFrameTime = std::chrono::high_resolution_clock::now();
     
@@ -938,11 +905,9 @@ void UnifiedGraphPipeline::runMainLoop() {
         }
     }
     
-    std::cout << "[UnifiedPipeline] Main loop stopped after " << m_state.frameCount << " frames" << std::endl;
 }
 
 void UnifiedGraphPipeline::stopMainLoop() {
-    std::cout << "[UnifiedPipeline] Stop requested" << std::endl;
     m_shouldStop = true;
     
     // Wake up the pipeline thread if it's waiting
@@ -957,7 +922,6 @@ void UnifiedGraphPipeline::stopMainLoop() {
 bool UnifiedGraphPipeline::initializeTensorRT(const std::string& modelFile) {
     auto& ctx = AppContext::getInstance();
     
-    std::cout << "[Pipeline] Initializing TensorRT with model: " << modelFile << std::endl;
     
     // Load the engine
     if (!loadEngine(modelFile)) {
@@ -965,7 +929,6 @@ bool UnifiedGraphPipeline::initializeTensorRT(const std::string& modelFile) {
         return false;
     }
     
-    std::cout << "[Pipeline] Engine loaded successfully. Engine ptr: " << m_engine.get() << std::endl;
     
     // Create execution context
     m_context.reset(m_engine->createExecutionContext());
@@ -979,7 +942,6 @@ bool UnifiedGraphPipeline::initializeTensorRT(const std::string& modelFile) {
         m_context->setOptimizationProfileAsync(0, m_pipelineStream->get());
     }
     
-    std::cout << "[Pipeline] Execution context created successfully. Context ptr: " << m_context.get() << std::endl;
     
     // Get input and output information
     getInputNames();
@@ -1005,12 +967,6 @@ bool UnifiedGraphPipeline::initializeTensorRT(const std::string& modelFile) {
         inputSize *= sizeof(float);  // Assuming float32 input
         m_inputSizes[m_inputName] = inputSize;
         
-        std::cout << "[Pipeline] Input '" << m_inputName << "' dimensions: ";
-        for (int i = 0; i < m_inputDims.nbDims; ++i) {
-            std::cout << m_inputDims.d[i];
-            if (i < m_inputDims.nbDims - 1) std::cout << "x";
-        }
-        std::cout << " (size: " << inputSize << " bytes)" << std::endl;
     }
     
     // Calculate output sizes

@@ -245,8 +245,6 @@ bool Config::loadConfig(const std::string& filename)
     // target_fps removed - no longer used
     gpu_capture_method = get_long_ini("Capture", "gpu_capture_method", 0);  // 0 = Desktop Duplication (default)
     capture_method = get_string_ini("Capture", "capture_method", "simple");
-    std::cout << "[Config] Loaded gpu_capture_method: " << gpu_capture_method << std::endl;
-    std::cout << "[Config] Loaded capture_method: " << capture_method << std::endl;
     
     // NDI capture settings
     ndi_source_name = get_string_ini("Capture", "ndi_source_name", "");

@@ -54,7 +54,6 @@ public:
         
         running_ = true;
         thread_ = std::thread([this]() {
-            std::cout << "[Thread] " << thread_name_ << " started." << std::endl;
             
             // Set thread name for debugging
             setThreadName(thread_name_);
@@ -63,7 +62,6 @@ public:
             if (affinity_core_ >= 0) {
                 DWORD_PTR mask = 1ULL << affinity_core_;
                 if (SetThreadAffinityMask(GetCurrentThread(), mask)) {
-                    std::cout << "[Thread] " << thread_name_ << " affinity set to core " << affinity_core_ << std::endl;
                 } else {
                     std::cerr << "[Thread] Failed to set affinity for " << thread_name_ << " to core " << affinity_core_ << std::endl;
                 }
@@ -77,7 +75,6 @@ public:
                 std::cerr << "[Thread] " << thread_name_ << " unknown exception." << std::endl;
             }
             
-            std::cout << "[Thread] " << thread_name_ << " exiting." << std::endl;
         });
         
         return true;
@@ -91,7 +88,6 @@ public:
         running_ = false;
         
         if (thread_.joinable()) {
-            std::cout << "[Thread] Waiting for " << thread_name_ << " to finish..." << std::endl;
             
             // Try graceful shutdown with timeout
             auto start_time = std::chrono::steady_clock::now();
@@ -137,7 +133,6 @@ public:
             }
             
             if (thread_finished) {
-                std::cout << "[Thread] " << thread_name_ << " stopped gracefully." << std::endl;
             }
         }
     }

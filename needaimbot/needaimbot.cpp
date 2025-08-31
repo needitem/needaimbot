@@ -139,7 +139,6 @@ bool loadAndValidateModel(std::string& modelName, const std::vector<std::string>
     if (modelName.empty() && !availableModels.empty()) {
         modelName = availableModels[0];
         ctx.config.saveConfig();
-        std::cout << "[MAIN] No AI model specified in config. Loaded first available model: " << modelName << std::endl;
         return true;
     }
     
@@ -150,7 +149,6 @@ bool loadAndValidateModel(std::string& modelName, const std::vector<std::string>
         if (!availableModels.empty()) {
             modelName = availableModels[0];
             ctx.config.saveConfig();
-            std::cout << "[MAIN] Loaded first available model: " << modelName << std::endl;
             return true;
         } else {
             std::cerr << "[MAIN] No models found in 'models' directory." << std::endl;
@@ -226,7 +224,6 @@ bool initializeScreenCapture(needaimbot::UnifiedGraphPipeline* pipeline) {
     int width = outputDesc.DesktopCoordinates.right - outputDesc.DesktopCoordinates.left;
     int height = outputDesc.DesktopCoordinates.bottom - outputDesc.DesktopCoordinates.top;
     
-    std::cout << "[CAPTURE] Desktop resolution: " << width << "x" << height << std::endl;
     
     // Create texture for screen capture (only detection resolution size)
     auto& ctx = AppContext::getInstance();
@@ -288,15 +285,12 @@ bool initializeScreenCapture(needaimbot::UnifiedGraphPipeline* pipeline) {
         s_captureTexture.Get()
     );
     
-    std::cout << "[CAPTURE] Successfully registered " << captureSize << "x" << captureSize 
-              << " texture with CUDA for center capture" << std::endl;
     
     return true;
 }
 
 // Signal handler for clean shutdown  
 static void signalHandler(int sig) {
-    std::cout << "\n[MAIN] Received signal " << sig << ", initiating clean shutdown..." << std::endl;
     auto& ctx = AppContext::getInstance();
     ctx.should_exit = true;
     ctx.frame_cv.notify_all();  // Wake up main thread
@@ -309,7 +303,6 @@ static void signalHandler(int sig) {
 // Console control handler for Windows
 static BOOL WINAPI consoleHandler(DWORD signal) {
     if (signal == CTRL_C_EVENT || signal == CTRL_BREAK_EVENT || signal == CTRL_CLOSE_EVENT) {
-        std::cout << "\n[MAIN] Console control event received, initiating clean shutdown..." << std::endl;
         auto& ctx = AppContext::getInstance();
         ctx.should_exit = true;
         ctx.frame_cv.notify_all();  // Wake up main thread
@@ -425,20 +418,13 @@ int main()
     // Timer resolution modification removed - using event-driven architecture instead
     
     // Initialize Gaming Performance Analyzer
-    std::cout << "[INFO] Starting Gaming Performance Analyzer v1.0.0" << std::endl;
-    std::cout << "[INFO] Crash handler installed for debugging" << std::endl;
     
     // Administrator privileges not required - application runs fine without elevation
     // This improves user experience and reduces security prompts
     
     // Try to set high priority (doesn't require admin)
-    if (SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS)) {
-        std::cout << "[INFO] Process priority set to HIGH (no admin required)." << std::endl;
-    } else {
-        std::cout << "[INFO] Running with normal process priority." << std::endl;
-    }
+    SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
     
-    std::cout << "[INFO] Initializing performance monitoring systems..." << std::endl;
     
     // Process priority removed for better system stability
     
@@ -462,7 +448,6 @@ int main()
     ZeroMemory(&osvi, sizeof(OSVERSIONINFOEX));
     osvi.dwOSVersionInfoSize = sizeof(OSVERSIONINFOEX);
     if (GetVersionEx((OSVERSIONINFO*)&osvi)) {
-        std::cout << "[INFO] Operating System: Windows " << osvi.dwMajorVersion << "." << osvi.dwMinorVersion << std::endl;
     }
     
     auto& ctx = AppContext::getInstance();
@@ -497,7 +482,7 @@ int main()
 
         if (err != cudaSuccess)
         {
-            std::cout << "[MAIN] No GPU devices with CUDA support available." << std::endl;
+            std::cerr << "[MAIN] No GPU devices with CUDA support available." << std::endl;
             std::cin.get();
             return -1;
         }
@@ -510,11 +495,10 @@ int main()
             return -1;
         }
         
-        std::cout << "[MAIN] CUDA initialization successful, " << cuda_devices << " device(s) found" << std::endl;
 
         if (!CreateDirectory(L"screenshots", NULL) && GetLastError() != ERROR_ALREADY_EXISTS)
         {
-            std::cout << "[MAIN] Error with screenshoot folder" << std::endl;
+            std::cerr << "[MAIN] Error with screenshot folder" << std::endl;
             std::cin.get();
             return -1;
         }
@@ -530,7 +514,6 @@ int main()
         recoilThread.setInputMethod(std::make_unique<Win32InputMethod>());
         recoilThread.setEnabled(true);
         recoilThread.start();
-        std::cout << "[MAIN] Recoil Control Thread started" << std::endl;
 
         std::vector<std::string> availableModels = getAvailableModels();
         if (!loadAndValidateModel(ctx.config.ai_model, availableModels)) {
@@ -539,7 +522,6 @@ int main()
         }
 
         // Initialize TensorRT Integrated Pipeline (Phase 1)
-        std::cout << "[MAIN] Initializing TensorRT Integrated Pipeline..." << std::endl;
         auto& pipelineManager = needaimbot::PipelineManager::getInstance();
         
         needaimbot::UnifiedPipelineConfig pipelineConfig;
@@ -557,20 +539,17 @@ int main()
             std::cin.get();
             return -1;
         } else {
-            std::cout << "[MAIN] TensorRT Integrated Pipeline initialized successfully" << std::endl;
             
             // Pipeline is now fully integrated - no need to set detector reference
             auto* pipeline = pipelineManager.getPipeline();
             if (pipeline) {
                 
                 // Initialize screen capture for the pipeline
-                std::cout << "[MAIN] Initializing screen capture..." << std::endl;
                 if (!initializeScreenCapture(pipeline)) {
                     std::cerr << "[MAIN] Failed to initialize screen capture" << std::endl;
                     std::cin.get();
                     return -1;
                 }
-                std::cout << "[MAIN] Screen capture initialized successfully" << std::endl;
             }
         }
 
@@ -582,8 +561,6 @@ int main()
         // Use last core for main thread if available, otherwise use core 0
         DWORD_PTR mask = numCores > 1 ? (1ULL << (numCores - 1)) : 1;
         SetThreadAffinityMask(GetCurrentThread(), mask);
-        std::cout << "[INFO] Main thread affinity set to core " << (numCores > 1 ? numCores - 1 : 0) 
-                  << " (total cores: " << numCores << ")" << std::endl;
         
         // TensorRT pipeline starts automatically when initialized
 
@@ -614,7 +591,6 @@ int main()
         }
 
         // Optimized shutdown sequence
-        std::cout << "[MAIN] Initiating safe shutdown..." << std::endl;
         
         // Signal main waiting thread to exit (only necessary notify)
         ctx.frame_cv.notify_all();
@@ -636,16 +612,10 @@ int main()
         SendInput(1, &input, sizeof(INPUT));
         
         // Log final statistics
-        std::cout << "\n[MAIN] Final Statistics:" << std::endl;
-        std::cout << "  Warnings: " << ErrorManager::getInstance().getWarningCount() << std::endl;
-        std::cout << "  Errors: " << ErrorManager::getInstance().getErrorCount() << std::endl;
-        std::cout << "  Critical Errors: " << ErrorManager::getInstance().getCriticalCount() << std::endl;
         
         // Clean up CUDA resources
-        std::cout << "\n[MAIN] Cleaning up CUDA resources..." << std::endl;
         CudaResourceManager::Shutdown();
         
-        std::cout << "\n[MAIN] Safe shutdown completed." << std::endl;
         std::exit(0);
     }
     catch (const std::exception &e)
