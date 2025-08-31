@@ -84,7 +84,6 @@ static void draw_capture_behavior_settings()
     // Debug log
     static bool logged = false;
     if (!logged) {
-        std::cout << "[UI] Current gpu_capture_method from config: " << current_method << std::endl;
         logged = true;
     }
     
@@ -96,7 +95,6 @@ static void draw_capture_behavior_settings()
     if (current_method != previous_method)
     {
         ctx.config.gpu_capture_method = current_method;  // Save to config
-        std::cout << "[UI] GPU capture method changed from " << previous_method << " to " << current_method << std::endl;
         SAVE_PROFILE();  // This will save to file
         ctx.capture_method_changed = true;
     }
@@ -172,7 +170,6 @@ static void draw_capture_behavior_settings()
                     strncpy_s(customWindowName, windowTitles[selectedWindow].c_str(), sizeof(customWindowName) - 1);
                     useCustomName = false;
                     SAVE_PROFILE();
-                    std::cout << "[UI] Game window changed to: " << ctx.config.game_window_name << std::endl;
                 }
             }
         }
@@ -190,7 +187,6 @@ static void draw_capture_behavior_settings()
             if (ImGui::InputText("Window Title", customWindowName, sizeof(customWindowName))) {
                 ctx.config.game_window_name = std::string(customWindowName);
                 SAVE_PROFILE();
-                std::cout << "[UI] Game window changed to custom: " << ctx.config.game_window_name << std::endl;
             }
             UIHelpers::InfoTooltip("Enter the exact window title of the game you want to capture");
         }
