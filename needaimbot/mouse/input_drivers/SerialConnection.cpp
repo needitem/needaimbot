@@ -68,9 +68,6 @@ SerialConnection::SerialConnection(const std::string& port, unsigned int baud_ra
             throw std::runtime_error("Failed to initialize serial connection to " + port_name_);
         }
         
-        // 성공한 경우에만 메시지 출력
-        std::cout << "[Arduino] Successfully connected to PORT: " << port_name_ 
-                  << " (Native Windows API - Async I/O)" << std::endl;
         
     } catch (const std::exception& e) {
         // 초기화 실패 시 간단한 정리만 수행 (스레드는 아직 생성되지 않음)
@@ -116,14 +113,12 @@ void SerialConnection::safeSerialClose() {
         return;
     }
     
-    std::cout << "[Arduino] Starting safe serial port closure..." << std::endl;
     
     try {
         // 1. 즉시 I/O 취소 (강제 종료 대비)
         CancelIo(serial_handle_);
         
         // 2. Arduino를 안전한 상태로 리셋 - 비동기 명령 전송
-        std::cout << "[Arduino] Resetting Arduino to safe state..." << std::endl;
         const char* release_cmd = "r";
         const char* move_cmd = "m0,0\n";
         
@@ -165,7 +160,6 @@ void SerialConnection::safeSerialClose() {
                 std::cerr << "[Arduino] Error closing serial port: " << error << std::endl;
             } else {
                 serial_handle_ = INVALID_HANDLE_VALUE;
-                std::cout << "[Arduino] Serial port closed successfully." << std::endl;
             }
         }
         
@@ -187,7 +181,6 @@ void SerialConnection::cleanup() {
     // 플래그 설정
     listening_ = false;
     
-    std::cout << "[Arduino] Starting cleanup..." << std::endl;
     
     // I/O 작업 취소 먼저 수행
     if (serial_handle_ != INVALID_HANDLE_VALUE) {
@@ -202,11 +195,9 @@ void SerialConnection::cleanup() {
             });
             
             if (future.wait_for(std::chrono::milliseconds(Constants::THREAD_JOIN_TIMEOUT_MS)) == std::future_status::timeout) {
-                std::cout << "[Arduino] " << name << " thread timeout - detaching" << std::endl;
                 // TerminateThread 사용 회피 - 리소스 누수 가능
                 t.detach();
             } else {
-                std::cout << "[Arduino] " << name << " thread terminated gracefully" << std::endl;
             }
         }
     };
@@ -217,7 +208,6 @@ void SerialConnection::cleanup() {
     // 그 다음 포트 안전하게 종료
     safeSerialClose();
     
-    std::cout << "[Arduino] Cleanup completed" << std::endl;
 }
 
 
@@ -231,7 +221,6 @@ void SerialConnection::closeHandle() {
 
 SerialConnection::~SerialConnection()
 {
-    std::cout << "[Arduino] Destructor called for port: " << port_name_ << std::endl;
     cleanup();
     
     // Clean up event handles
@@ -246,7 +235,6 @@ SerialConnection::~SerialConnection()
     
     // 포트 등록 해제
     GlobalSerialCleanupHandler::unregisterPort(port_name_);
-    std::cout << "[Arduino] Port " << port_name_ << " unregistered from cleanup handler" << std::endl;
 }
 
 bool SerialConnection::isOpen() const
@@ -317,7 +305,6 @@ bool SerialConnection::openPort()
     
     for (int attempt = 0; attempt < MAX_OPEN_ATTEMPTS; ++attempt) {
         if (attempt > 0) {
-            std::cout << "[Arduino] Retry attempt " << attempt << " to open port..." << std::endl;
             // Use event-based wait instead of Sleep
             if (write_event_) {
                 WaitForSingleObject(write_event_, 100); // Short non-blocking wait
@@ -336,7 +323,6 @@ bool SerialConnection::openPort()
         );
 
         if (serial_handle_ != INVALID_HANDLE_VALUE) {
-            std::cout << "[Arduino] Port opened successfully (async I/O enabled)" << std::endl;
             return true;
         }
         
@@ -344,8 +330,6 @@ bool SerialConnection::openPort()
         
         // ERROR_ACCESS_DENIED (5) 또는 ERROR_SHARING_VIOLATION 처리
         if (last_error == ERROR_ACCESS_DENIED || last_error == ERROR_SHARING_VIOLATION) {
-            std::cout << "[Arduino] Port appears to be in use (Error " << last_error 
-                      << "), trying shared access..." << std::endl;
             
             // 공유 액세스 시도 with overlapped I/O
             serial_handle_ = CreateFileA(
@@ -359,7 +343,6 @@ bool SerialConnection::openPort()
             );
             
             if (serial_handle_ != INVALID_HANDLE_VALUE) {
-                std::cout << "[Arduino] Port opened with shared access (async I/O)" << std::endl;
                 return true;
             }
             
@@ -367,10 +350,6 @@ bool SerialConnection::openPort()
             
             // 그래도 실패하면 다시 시도
             if (last_error == ERROR_ACCESS_DENIED) {
-                std::cout << "[Arduino] Still access denied. Possible causes:" << std::endl;
-                std::cout << "  - Another program is using the port (Arduino IDE?)" << std::endl;
-                std::cout << "  - Need administrator privileges" << std::endl;
-                std::cout << "  - Antivirus/firewall blocking access" << std::endl;
             }
         } else if (last_error == ERROR_FILE_NOT_FOUND) {
             std::cerr << "[Arduino] Port " << port_name_ << " does not exist!" << std::endl;
