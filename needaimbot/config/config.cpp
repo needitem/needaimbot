@@ -435,13 +435,11 @@ bool Config::loadConfig(const std::string& filename)
         const char* profile_value = ini.GetValue("Profile", "active_profile");
         if (profile_value) {
             active_profile_name = profile_value;
-            std::cout << "[Config] Active profile set to: " << active_profile_name << std::endl;
             
             // Actually load the profile if it's not Default
             if (active_profile_name != "Default" && active_profile_name != "") {
                 std::string profileFile = getConfigPath(active_profile_name + ".ini");
                 if (std::filesystem::exists(profileFile)) {
-                    std::cout << "[Config] Loading profile: " << profileFile << std::endl;
                     // Load profile on top of default config
                     loadConfig(profileFile);
                 }
