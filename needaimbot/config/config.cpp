@@ -280,17 +280,8 @@ bool Config::loadConfig(const std::string& filename)
     easynorecoilstrength = static_cast<float>(get_double_ini("Mouse", "easynorecoilstrength", 0.0));
     norecoil_step = static_cast<float>(get_double_ini("Mouse", "norecoil_step", 5.0));
     norecoil_ms = static_cast<float>(get_double_ini("Mouse", "norecoil_ms", 10.0));
-    mouse_sensitivity = static_cast<float>(get_double_ini("Mouse", "mouse_sensitivity", 1.0));
-    mouse_sensitivity_x = static_cast<float>(get_double_ini("Mouse", "mouse_sensitivity_x", mouse_sensitivity));
-    mouse_sensitivity_y = static_cast<float>(get_double_ini("Mouse", "mouse_sensitivity_y", mouse_sensitivity));
-    
-    movement_factor = static_cast<float>(get_double_ini("Mouse", "movement_factor", 0.3));
-    movement_factor_x = static_cast<float>(get_double_ini("Mouse", "movement_factor_x", movement_factor));
-    movement_factor_y = static_cast<float>(get_double_ini("Mouse", "movement_factor_y", movement_factor));
-    
-    min_movement_threshold = static_cast<float>(get_double_ini("Mouse", "min_movement_threshold", 1.0));
-    min_movement_threshold_x = static_cast<float>(get_double_ini("Mouse", "min_movement_threshold_x", min_movement_threshold));
-    min_movement_threshold_y = static_cast<float>(get_double_ini("Mouse", "min_movement_threshold_y", min_movement_threshold));
+    min_movement_threshold_x = static_cast<float>(get_double_ini("Mouse", "min_movement_threshold_x", 1.0));
+    min_movement_threshold_y = static_cast<float>(get_double_ini("Mouse", "min_movement_threshold_y", 1.0));
     
     // Load PD controller settings
     pd_kp_x = static_cast<float>(get_double_ini("PDController", "pd_kp_x", 0.4));
@@ -538,9 +529,6 @@ bool Config::saveConfig(const std::string& filename)
     file << "easynorecoilstrength = " << easynorecoilstrength << "\n";
     file << "norecoil_step = " << norecoil_step << "\n";
     file << "norecoil_ms = " << norecoil_ms << "\n";
-    // Legacy fields removed - using PD controller now
-    // Keep min_movement_threshold for deadzone
-    file << "min_movement_threshold = " << min_movement_threshold << "\n";
     file << "min_movement_threshold_x = " << min_movement_threshold_x << "\n";
     file << "min_movement_threshold_y = " << min_movement_threshold_y << "\n";
     
