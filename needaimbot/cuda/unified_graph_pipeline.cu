@@ -998,7 +998,25 @@ cudaError_t UnifiedGraphPipeline::decodeYoloOutput(void* d_rawOutputPtr, nvinfer
                                                    const PostProcessingConfig& config, cudaStream_t stream) {
     int maxDecodedTargets = config.max_detections;
     
-    if (config.postprocess == "yolo10") {
+    if (config.postprocess == "yolo_nms") {
+        // NMS가 포함된 모델 - 이미 후처리된 출력
+        // 출력 형식: [batch, num_detections, 6] where 6 = [x1, y1, x2, y2, confidence, class_id]
+        int num_detections = (shape.size() > 1) ? static_cast<int>(shape[1]) : 0;
+        int output_features = (shape.size() > 2) ? static_cast<int>(shape[2]) : 0;
+        
+        if (output_features != 6) {
+            std::cerr << "[Pipeline] Invalid NMS output format. Expected 6 features [x1,y1,x2,y2,conf,class], got " << output_features << std::endl;
+            return cudaErrorInvalidValue;
+        }
+        
+        // Use existing decodeYolo10Gpu which handles pre-processed format
+        return decodeYolo10Gpu(
+            d_rawOutputPtr, outputType, shape, m_numClasses,
+            config.confidence_threshold, m_imgScale,
+            m_unifiedArena.decodedTargets, m_smallBufferArena.decodedCount,
+            maxDecodedTargets, num_detections, stream);
+            
+    } else if (config.postprocess == "yolo10") {
         int max_candidates = (shape.size() > 1) ? static_cast<int>(shape[1]) : 0;
         
         return decodeYolo10Gpu(
@@ -1007,20 +1025,7 @@ cudaError_t UnifiedGraphPipeline::decodeYoloOutput(void* d_rawOutputPtr, nvinfer
             m_unifiedArena.decodedTargets, m_smallBufferArena.decodedCount,
             maxDecodedTargets, max_candidates, stream);
             
-    } else if (config.postprocess == "yolo_nms") {
-        int num_detections = (shape.size() > 1) ? static_cast<int>(shape[1]) : 0;
-        int output_features = (shape.size() > 2) ? static_cast<int>(shape[2]) : 0;
-        
-        if (output_features != 6) {
-            std::cerr << "[Pipeline] Invalid NMS output format. Expected 6 features, got " << output_features << std::endl;
-            return cudaErrorInvalidValue;
-        }
-        
-        return processNMSOutputGpu(
-            d_rawOutputPtr, outputType, shape, config.confidence_threshold,
-            m_imgScale, m_unifiedArena.decodedTargets, m_smallBufferArena.decodedCount,
-            maxDecodedTargets, num_detections, stream);
-            
+    // NMS removed for performance - not needed for aimbot
     } else if (config.postprocess == "yolo8" || config.postprocess == "yolo9" || 
                config.postprocess == "yolo11" || config.postprocess == "yolo12") {
         int max_candidates = (shape.size() > 2) ? static_cast<int>(shape[2]) : 0;
@@ -1121,24 +1126,19 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
         return;
     }
 
-    performNMSProcessing(config, stream);
-}
-
-void UnifiedGraphPipeline::performNMSProcessing(const PostProcessingConfig& config, cudaStream_t stream) {
-    copyDecodedToFinalTargets(config, stream);
-}
-
-void UnifiedGraphPipeline::copyDecodedToFinalTargets(const PostProcessingConfig& config, cudaStream_t stream) {
-    if (!m_unifiedArena.finalTargets || !m_smallBufferArena.finalTargetsCount || !m_unifiedArena.decodedTargets || !m_smallBufferArena.decodedCount) {
-        return;
+    // Direct use of decoded targets as final (no NMS needed for aimbot)
+    if (m_unifiedArena.finalTargets && m_smallBufferArena.finalTargetsCount && 
+        m_unifiedArena.decodedTargets && m_smallBufferArena.decodedCount) {
+        
+        cudaMemcpyAsync(m_smallBufferArena.finalTargetsCount, m_smallBufferArena.decodedCount, sizeof(int), 
+                       cudaMemcpyDeviceToDevice, stream);
+        
+        cudaMemcpyAsync(m_unifiedArena.finalTargets, m_unifiedArena.decodedTargets, 
+                       config.max_detections * sizeof(Target), cudaMemcpyDeviceToDevice, stream);
     }
-    
-    cudaMemcpyAsync(m_smallBufferArena.finalTargetsCount, m_smallBufferArena.decodedCount, sizeof(int), 
-                   cudaMemcpyDeviceToDevice, stream);
-    
-    cudaMemcpyAsync(m_unifiedArena.finalTargets, m_unifiedArena.decodedTargets, 
-                   config.max_detections * sizeof(Target), cudaMemcpyDeviceToDevice, stream);
 }
+
+// Removed redundant NMS and copy functions
 
 
 void UnifiedGraphPipeline::handlePreviewUpdate(const PostProcessingConfig& config, cudaStream_t stream) {
@@ -1413,9 +1413,9 @@ bool UnifiedGraphPipeline::performResultCopy() {
         return true;
     }
     
-    // 직접 동기 복사로 변경 - 어차피 작은 데이터
-    cudaMemcpy(m_h_movement->get(), m_smallBufferArena.mouseMovement, 
-               sizeof(MouseMovement), cudaMemcpyDeviceToHost);
+    // 비동기 복사 사용 - 파이프라인 블로킹 방지
+    cudaMemcpyAsync(m_h_movement->get(), m_smallBufferArena.mouseMovement, 
+                    sizeof(MouseMovement), cudaMemcpyDeviceToHost, m_pipelineStream->get());
     
     return true;
 }
@@ -1423,19 +1423,22 @@ bool UnifiedGraphPipeline::performResultCopy() {
 bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
     auto& ctx = AppContext::getInstance();
     
-    // 프레임 스킵 제거 - 오히려 FPS 저하 원인
-    // if (m_inferenceInProgress.load()) {
-    //     m_skippedFrames++;
-    //     return true;
-    // }
+    // 이전 프레임의 마우스 이동 처리 (비동기 복사가 완료되었다면)
+    static cudaEvent_t copyCompleteEvent = nullptr;
+    if (copyCompleteEvent) {
+        cudaError_t eventStatus = cudaEventQuery(copyCompleteEvent);
+        if (eventStatus == cudaSuccess) {
+            processMouseMovement();
+            cudaEventDestroy(copyCompleteEvent);
+            copyCompleteEvent = nullptr;
+        }
+    }
     
     if (!performFrameCapture()) {
         return false;
     }
     
     if (!ctx.detection_paused.load()) {
-        // m_inferenceInProgress 제거 - 불필요한 atomic 연산
-        
         if (!performPreprocessing()) {
             return false;
         }
@@ -1448,8 +1451,11 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
             return false;
         }
         
-        // 동기 복사 후 바로 마우스 이동
-        processMouseMovement();
+        // 복사 완료 이벤트 기록
+        if (!copyCompleteEvent) {
+            cudaEventCreate(&copyCompleteEvent);
+        }
+        cudaEventRecord(copyCompleteEvent, m_pipelineStream->get());
     }
     
     m_state.frameCount++;

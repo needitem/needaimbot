@@ -317,48 +317,7 @@ __global__ void countKeptTargetsKernel(
 }
 
 // More efficient kernel using atomic operations for gathering
-__global__ void gatherKeptTargetsAtomicKernel(
-    const Target* d_input_detections,
-    const bool* d_keep,
-    Target* d_output_detections,
-    int* d_write_index,  // Global write index
-    int n,
-    int max_output)
-{
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    
-    if (idx < n && d_keep[idx]) {
-        int output_idx = atomicAdd(d_write_index, 1);
-        if (output_idx < max_output) {
-            // Copy detection and ensure valid dimensions
-            Target& output_det = d_output_detections[output_idx];
-            const Target& input_det = d_input_detections[idx];
-            
-            // Additional validation before copying - reject extreme values
-            if (abs(input_det.x) > 1000000 || abs(input_det.y) > 1000000 ||
-                input_det.x < -100 || input_det.x > 2000 || input_det.y < -100 || input_det.y > 2000 ||
-                input_det.width <= 0 || input_det.width > 1000 || 
-                input_det.height <= 0 || input_det.height > 1000 ||
-                input_det.classId < 0) {
-                
-                // Skip this garbage target - don't copy it
-                atomicSub(d_write_index, 1);  // Revert the index increment
-                return;
-            }
-            
-            // Copy all fields (now validated)
-            output_det = input_det;
-            
-            // Ensure valid dimensions
-            if (output_det.width <= 0) {
-                output_det.width = 1;
-            }
-            if (output_det.height <= 0) {
-                output_det.height = 1;
-            }
-        }
-    }
-}
+// NMS gather kernel removed
 
 
 // Optimized spatial indexing constants
@@ -554,316 +513,15 @@ __device__ inline bool cellsAreNear(int2 cell1, int2 cell2, int threshold = 1) {
     return abs(cell1.x - cell2.x) <= threshold && abs(cell1.y - cell2.y) <= threshold;
 }
 
-__global__ __launch_bounds__(256, 4) void calculateIoUKernel(
-    const int* __restrict__ d_x1, const int* __restrict__ d_y1, 
-    const int* __restrict__ d_x2, const int* __restrict__ d_y2,
-    const float* __restrict__ d_areas, float* __restrict__ d_iou_matrix,
-    int num_boxes, float nms_threshold, float inv_cell_width, float inv_cell_height) 
-{
-    // No shared memory for CUDA Graph compatibility - read directly from global
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int idy = blockIdx.y * blockDim.y + threadIdx.y;
-    
-    if (idx < num_boxes && idy < num_boxes && idx < idy) {
-        // Load first box data
-        int x1_a = d_x1[idx];
-        int y1_a = d_y1[idx];
-        int x2_a = d_x2[idx];
-        int y2_a = d_y2[idx];
-        float area_a = d_areas[idx];
-        
-        // Calculate spatial cell for first box
-        float cx_a = (x1_a + x2_a) * 0.5f;
-        float cy_a = (y1_a + y2_a) * 0.5f;
-        int2 cell_a = getSpatialCell(cx_a, cy_a, inv_cell_width, inv_cell_height);
-        
-        // Load second box data
-        int x1_b = d_x1[idy];
-        int y1_b = d_y1[idy];
-        int x2_b = d_x2[idy];
-        int y2_b = d_y2[idy];
-        float area_b = d_areas[idy];
-        
-        // Calculate spatial cell for second box
-        float cx_b = (x1_b + x2_b) * 0.5f;
-        float cy_b = (y1_b + y2_b) * 0.5f;
-        int2 cell_b = getSpatialCell(cx_b, cy_b, inv_cell_width, inv_cell_height);
-        
-        // Early spatial rejection
-        if (!cellsAreNear(cell_a, cell_b, 1)) {
-            return; // Matrix is initialized to 0
-        }
-        
-        // Calculate intersection using min/max intrinsics
-        int x1 = max(x1_a, x1_b);
-        int y1 = max(y1_a, y1_b);
-        int x2 = min(x2_a, x2_b);
-        int y2 = min(y2_a, y2_b);
-        
-        // Early exit if no overlap
-        if (x2 <= x1 || y2 <= y1) {
-            return;
-        }
-        
-        // Use FMA for better performance
-        float intersection_area = __int2float_rn(x2 - x1) * __int2float_rn(y2 - y1);
-        float union_area = fmaf(-1.0f, intersection_area, area_a + area_b);
-        float iou = __fdiv_rn(intersection_area, union_area);
-        
-        // Single coalesced write (symmetric matrix)
-        if (iou > nms_threshold) {
-            d_iou_matrix[idx * num_boxes + idy] = iou;
-            d_iou_matrix[idy * num_boxes + idx] = iou;
-        }
-    }
-}
+// IoU calculation kernel removed
 
 
-__global__ void nmsKernel(
-    bool* d_keep, const float* d_iou_matrix,
-    const float* d_scores, const int* d_classIds,
-    int num_boxes, float nms_threshold) 
-{
-    // No shared memory needed - reading directly from global memory
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    
-    if (idx < num_boxes) {
-        if (!d_keep[idx]) return; 
-        
-        // Unroll loop for better performance
-        #pragma unroll 4
-        for (int i = 0; i < num_boxes; i++) {
-            if (idx == i) continue; 
-            
-            
-            if (d_classIds[idx] == d_classIds[i]) {
-                
-                if (d_scores[idx] > d_scores[i] && d_iou_matrix[idx * num_boxes + i] > nms_threshold) {
-                    d_keep[i] = false; 
-                }
-            }
-        }
-    }
-}
+// NMS kernel removed
 
 
-struct is_kept {
-    const bool* d_keep_ptr;
-    is_kept(const bool* ptr) : d_keep_ptr(ptr) {}
-    __host__ __device__
-    bool operator()(const int& i) const {
-        return d_keep_ptr[i];
-    }
-};
+// NMS helper struct and extract kernel removed
 
-
-__global__ void extractDataKernel(
-    const Target* d_input_detections, int n, 
-    int* d_x1, int* d_y1, int* d_x2, int* d_y2, 
-    float* d_areas, float* d_scores, int* d_classIds)
-{
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < n) {
-        const Target& det = d_input_detections[idx];
-        d_x1[idx] = det.x;
-        d_y1[idx] = det.y;
-        d_x2[idx] = det.x + det.width;
-        d_y2[idx] = det.y + det.height;
-        
-        float width = max(0.0f, (float)det.width); 
-        float height = max(0.0f, (float)det.height);
-        d_areas[idx] = width * height; 
-        d_scores[idx] = det.confidence;
-        d_classIds[idx] = det.classId; 
-    }
-}
-
-
-void NMSGpu(
-    const Target* d_input_detections,
-    int input_num_detections,
-    Target* d_output_detections,
-    int* d_output_count_gpu,
-    int max_output_detections,
-    float nmsThreshold,
-    int frame_width,
-    int frame_height,
-    
-    int* d_x1,
-    int* d_y1,
-    int* d_x2,
-    int* d_y2,
-    float* d_areas,
-    float* d_scores_nms,      
-    int* d_classIds_nms,      
-    float* d_iou_matrix,
-    bool* d_keep,
-    int* d_indices,
-    cudaStream_t stream)
-{
-    
-    cudaError_t err = cudaSuccess;
-    const int block_size = 256;
-    // Remove fixed MAX_GRID_SIZE constraint for dynamic grid calculation 
-
-    // Validate input parameters with detailed logging
-    if (!d_input_detections) {
-        fprintf(stderr, "[NMSGpu] Error: d_input_detections is NULL\n");
-        return;
-    }
-    if (!d_output_detections) {
-        fprintf(stderr, "[NMSGpu] Error: d_output_detections is NULL\n"); 
-        return;
-    }
-    if (!d_output_count_gpu) {
-        fprintf(stderr, "[NMSGpu] Error: d_output_count_gpu is NULL\n");
-        return;
-    }
-    if (!d_x1 || !d_y1 || !d_x2 || !d_y2 || !d_areas || !d_scores_nms || 
-        !d_classIds_nms || !d_iou_matrix || !d_keep || !d_indices) {
-        fprintf(stderr, "[NMSGpu] Error: One of the temporary buffers is NULL\n");
-        fprintf(stderr, "[NMSGpu] Pointers: x1=%p, y1=%p, x2=%p, y2=%p, areas=%p, scores=%p, classIds=%p, iou=%p, keep=%p, indices=%p\n",
-                d_x1, d_y1, d_x2, d_y2, d_areas, d_scores_nms, d_classIds_nms, d_iou_matrix, d_keep, d_indices);
-        if (d_output_count_gpu) cudaMemsetAsync(d_output_count_gpu, 0, sizeof(int), stream);
-        return;
-    }
-
-    if (input_num_detections <= 0 || max_output_detections <= 0) {
-        cudaMemsetAsync(d_output_count_gpu, 0, sizeof(int), stream);
-        return; 
-    }
-    
-    // Use actual input count for processing, output will be limited later
-    int effective_detections = input_num_detections;
-
-    
-    
-
-    
-    {
-        // Calculate grid size based on actual detections count with safety bounds
-        const int grid_extract = max(1, min((effective_detections + block_size - 1) / block_size, 1024));
-        
-        // Additional validation before kernel launch
-        if (grid_extract <= 0) {
-            fprintf(stderr, "[NMSGpu] Invalid grid size: %d (effective_detections=%d, block_size=%d)\n", 
-                    grid_extract, effective_detections, block_size);
-            goto cleanup;
-        }
-        
-        // Clear previous CUDA errors
-        cudaGetLastError();
-        
-        // Quick memory accessibility test
-        cudaError_t mem_err = cudaSuccess;
-        mem_err = cudaPointerGetAttributes(nullptr, d_input_detections);
-        if (mem_err != cudaSuccess && mem_err != cudaErrorInvalidValue) {
-            fprintf(stderr, "[NMSGpu] d_input_detections memory invalid: %s\n", cudaGetErrorString(mem_err));
-            goto cleanup;
-        }
-        cudaGetLastError(); // Clear the error
-        
-        extractDataKernel<<<grid_extract, block_size, 0, stream>>>( 
-            d_input_detections, effective_detections,
-            d_x1, d_y1, d_x2, d_y2,
-            d_areas, d_scores_nms, d_classIds_nms 
-        );
-        err = cudaGetLastError(); 
-        if (err != cudaSuccess) {
-            fprintf(stderr, "[NMSGpu] extractDataKernel failed: %s\n", cudaGetErrorString(err));
-            fprintf(stderr, "[NMSGpu] CUDA error occurred: %s (%d) - input_num_detections=%d, effective=%d, max_output=%d, grid=%d, block=%d\n", 
-                    cudaGetErrorString(err), err, input_num_detections, effective_detections, max_output_detections, grid_extract, block_size);
-            goto cleanup;
-        }
-    }
-
-
-    
-    
-    
-    // Initialize keep array to 1 (true)
-    {
-        // Calculate grid size based on actual detections count
-        int grid_init = (effective_detections + block_size - 1) / block_size;
-        initKeepKernel<<<grid_init, block_size, 0, stream>>>(d_keep, effective_detections);
-    }
-    // Skip zeroing IoU matrix - kernel will only write non-zero values
-    err = cudaGetLastError(); 
-    if (err != cudaSuccess) {
-        fprintf(stderr, "[NMSGpu] initKeepKernel failed: %s\n", cudaGetErrorString(err));
-        goto cleanup;
-    }
-
-    
-    {
-        dim3 block_iou(16, 16); 
-        // Calculate grid size based on actual detections count
-        int grid_dim = (effective_detections + block_iou.x - 1) / block_iou.x;
-        dim3 grid_iou(grid_dim, grid_dim);
-        
-        // Pre-calculate inverse cell dimensions for faster division
-        float inv_cell_width = static_cast<float>(HOST_GRID_SIZE) / frame_width;
-        float inv_cell_height = static_cast<float>(HOST_GRID_SIZE) / frame_height;
-        
-        // No dynamic shared memory for CUDA Graph compatibility
-        calculateIoUKernel<<<grid_iou, block_iou, 0, stream>>>( 
-            d_x1, d_y1, d_x2, d_y2, d_areas, d_iou_matrix, effective_detections, nmsThreshold, inv_cell_width, inv_cell_height
-        );
-        err = cudaGetLastError(); 
-        if (err != cudaSuccess) {
-            fprintf(stderr, "[NMSGpu] calculateIoUKernel failed: %s\n", cudaGetErrorString(err));
-            goto cleanup;
-        }
-    }
-
-    
-    {
-        // Calculate grid size based on actual detections count
-        const int grid_nms = (effective_detections + block_size - 1) / block_size;
-        nmsKernel<<<grid_nms, block_size, 0, stream>>>( 
-            d_keep, d_iou_matrix, d_scores_nms, d_classIds_nms, effective_detections, nmsThreshold 
-        );
-        err = cudaGetLastError(); 
-        if (err != cudaSuccess) {
-            fprintf(stderr, "[NMSGpu] nmsKernel failed: %s\n", cudaGetErrorString(err));
-            goto cleanup;
-        }
-    }
-
-
-    // Replace Thrust with CUDA Graph compatible kernels
-    {
-        // Reset output count to use as write index
-        cudaMemsetAsync(d_output_count_gpu, 0, sizeof(int), stream);
-        
-        // Single pass: gather kept detections and count simultaneously
-        // Calculate grid size based on actual detections count
-        const int gather_blocks = (effective_detections + block_size - 1) / block_size;
-        gatherKeptTargetsAtomicKernel<<<gather_blocks, block_size, 0, stream>>>(
-            d_input_detections, d_keep, d_output_detections, 
-            d_output_count_gpu,  // Use as atomic write index
-            effective_detections, max_output_detections
-        );
-        err = cudaGetLastError(); 
-        if (err != cudaSuccess) {
-            fprintf(stderr, "[NMSGpu] gatherKeptTargetsAtomicKernel failed: %s\n", cudaGetErrorString(err));
-            goto cleanup;
-        }
-    }
-
-
-cleanup: 
-    
-    cudaError_t lastErr = cudaGetLastError(); 
-    if (err != cudaSuccess || lastErr != cudaSuccess) {
-        cudaError_t errorToReport = (err != cudaSuccess) ? err : lastErr;
-        fprintf(stderr, "[NMSGpu] CUDA error occurred: %s (%d) - input_num_detections=%d, effective=%d, max_output=%d\n", 
-                cudaGetErrorString(errorToReport), errorToReport, input_num_detections, effective_detections, max_output_detections);
-        if (err != cudaSuccess) { 
-             cudaMemsetAsync(d_output_count_gpu, 0, sizeof(int), stream);
-        }
-    }
-}
+// NMS removed for performance - not needed for aimbot
 
 
 
@@ -962,16 +620,21 @@ __global__ void decodeYolo11GpuKernel(
     int idx = blockIdx.x * blockDim.x + threadIdx.x; 
 
     if (idx < num_boxes_raw) {
-        // box_base_idx variable removed as it was unused 
-
-        
         float max_score = -1.0f;
         int max_class_id = -1;
         
         // YOLO12 always has 15 channels: 4 bbox + 11 classes (no objectness)
         int class_start_idx = 4;
         
+        // Early class filtering during score search
         for (int c = 0; c < num_classes; ++c) {
+            // Skip non-allowed classes early
+            if (d_class_filter && max_class_filter_size > 0) {
+                if (c >= max_class_filter_size || d_class_filter[c] == 0) {
+                    continue;  // Skip this class entirely
+                }
+            }
+            
             // Back to channel-first layout: [batch, channel, anchor]
             size_t score_idx = (class_start_idx + c) * num_boxes_raw + idx;
             if (score_idx >= num_rows * num_boxes_raw) {
@@ -984,87 +647,79 @@ __global__ void decodeYolo11GpuKernel(
             }
         }
 
-        // YOLO12: No objectness channel, use class confidence only
-        float final_confidence = max_score;
+        // Early exit if no valid class or confidence too low
+        if (max_class_id < 0 || max_score <= conf_threshold) {
+            return;
+        }
         
-        if (final_confidence > conf_threshold) {
-            // Class filtering: check if this class is allowed
-            if (d_class_filter && max_class_filter_size > 0) {
-                if (max_class_id < 0 || max_class_id >= max_class_filter_size || 
-                    d_class_filter[max_class_id] == 0) {
-                    return;  // Skip filtered out class
-                }
-            }
-            
-            // Back to channel-first layout: [batch, channel, anchor]
-            size_t cx_idx = 0 * num_boxes_raw + idx;
-            size_t cy_idx = 1 * num_boxes_raw + idx;
-            size_t ow_idx = 2 * num_boxes_raw + idx;
-            size_t oh_idx = 3 * num_boxes_raw + idx;
-            
-            if (cx_idx >= num_rows * num_boxes_raw || cy_idx >= num_rows * num_boxes_raw || 
-                ow_idx >= num_rows * num_boxes_raw || oh_idx >= num_rows * num_boxes_raw) {
-                return;
-            }
-            
-            float cx = readOutputValue(d_raw_output, output_type, cx_idx);
-            float cy = readOutputValue(d_raw_output, output_type, cy_idx);
-            float ow = readOutputValue(d_raw_output, output_type, ow_idx);
-            float oh = readOutputValue(d_raw_output, output_type, oh_idx);
+        // Back to channel-first layout: [batch, channel, anchor]
+        size_t cx_idx = 0 * num_boxes_raw + idx;
+        size_t cy_idx = 1 * num_boxes_raw + idx;
+        size_t ow_idx = 2 * num_boxes_raw + idx;
+        size_t oh_idx = 3 * num_boxes_raw + idx;
+        
+        if (cx_idx >= num_rows * num_boxes_raw || cy_idx >= num_rows * num_boxes_raw || 
+            ow_idx >= num_rows * num_boxes_raw || oh_idx >= num_rows * num_boxes_raw) {
+            return;
+        }
+        
+        float cx = readOutputValue(d_raw_output, output_type, cx_idx);
+        float cy = readOutputValue(d_raw_output, output_type, cy_idx);
+        float ow = readOutputValue(d_raw_output, output_type, ow_idx);
+        float oh = readOutputValue(d_raw_output, output_type, oh_idx);
 
+        
+        // CRITICAL: Validate bbox values before processing
+        // Check for NaN, infinity, or unreasonable values
+        if (!isfinite(cx) || !isfinite(cy) || !isfinite(ow) || !isfinite(oh)) {
+            return;  // Skip invalid values
+        }
+        
+        // Reasonable bounds check (model output should be within input resolution)
+        const float MAX_COORD = 10000.0f;  // Very generous upper bound
+        if (cx < 0 || cx > MAX_COORD || cy < 0 || cy > MAX_COORD ||
+            ow <= 0 || ow > MAX_COORD || oh <= 0 || oh > MAX_COORD) {
+            return;  // Skip out-of-bounds values
+        }
+        
+        if (ow > 0 && oh > 0) {
             
-            // CRITICAL: Validate bbox values before processing
-            // Check for NaN, infinity, or unreasonable values
-            if (!isfinite(cx) || !isfinite(cy) || !isfinite(ow) || !isfinite(oh)) {
-                return;  // Skip invalid values
-            }
-            
-            // Reasonable bounds check (model output should be within input resolution)
-            const float MAX_COORD = 10000.0f;  // Very generous upper bound
-            if (cx < 0 || cx > MAX_COORD || cy < 0 || cy > MAX_COORD ||
-                ow <= 0 || ow > MAX_COORD || oh <= 0 || oh > MAX_COORD) {
-                return;  // Skip out-of-bounds values
-            }
-            
-            if (ow > 0 && oh > 0) {
-                
-                const float half_ow = 0.5f * ow;
-                const float half_oh = 0.5f * oh;
-                int x = static_cast<int>((cx - half_ow) * img_scale);
-                int y = static_cast<int>((cy - half_oh) * img_scale);
-                int width = static_cast<int>(ow * img_scale);
-                int height = static_cast<int>(oh * img_scale);
+            const float half_ow = 0.5f * ow;
+            const float half_oh = 0.5f * oh;
+            int x = static_cast<int>((cx - half_ow) * img_scale);
+            int y = static_cast<int>((cy - half_oh) * img_scale);
+            int width = static_cast<int>(ow * img_scale);
+            int height = static_cast<int>(oh * img_scale);
 
-                // Additional validation after scaling
-                const int MAX_SCALED_COORD = 10000;  // Reasonable upper bound for scaled coordinates
-                if (x < -1000 || x > MAX_SCALED_COORD || 
-                    y < -1000 || y > MAX_SCALED_COORD ||
-                    width <= 0 || width > MAX_SCALED_COORD ||
-                    height <= 0 || height > MAX_SCALED_COORD) {
-                    return;  // Skip invalid scaled values
-                }
-                 
-                // Atomic increment first, then check (thread-safe)
-                int write_idx = ::atomicAdd(d_decoded_count, 1);
+            // Additional validation after scaling
+            const int MAX_SCALED_COORD = 10000;  // Reasonable upper bound for scaled coordinates
+            if (x < -1000 || x > MAX_SCALED_COORD || 
+                y < -1000 || y > MAX_SCALED_COORD ||
+                width <= 0 || width > MAX_SCALED_COORD ||
+                height <= 0 || height > MAX_SCALED_COORD) {
+                return;  // Skip invalid scaled values
+            }
+             
+            // Atomic increment first, then check (thread-safe)
+            int write_idx = ::atomicAdd(d_decoded_count, 1);
+            
+            // Only proceed if we got a valid index
+            if (write_idx < max_detections) {
+                Target& det = d_decoded_detections[write_idx];
+                det.x = x;
+                det.y = y;
+                det.width = width;
+                det.height = height;
+                det.confidence = max_score;
+                det.classId = max_class_id;
                 
-                // Only proceed if we got a valid index
-                if (write_idx < max_detections) {
-                    Target& det = d_decoded_detections[write_idx];
-                    det.x = x;
-                    det.y = y;
-                    det.width = width;
-                    det.height = height;
-                    det.confidence = max_score;
-                    det.classId = max_class_id;
-                    
-                    // Debug assertion to catch any remaining issues
-                    #ifdef DEBUG
-                    if (abs(x + width/2) > 1000000 || abs(y + height/2) > 1000000) {
-                        printf("[DEBUG] Warning: Large center coordinates detected - x:%d y:%d w:%d h:%d\n", 
-                               x, y, width, height);
-                    }
-                    #endif
+                // Debug assertion to catch any remaining issues
+                #ifdef DEBUG
+                if (abs(x + width/2) > 1000000 || abs(y + height/2) > 1000000) {
+                    printf("[DEBUG] Warning: Large center coordinates detected - x:%d y:%d w:%d h:%d\n", 
+                           x, y, width, height);
                 }
+                #endif
             }
         }
     }
@@ -1536,153 +1191,9 @@ cudaError_t findBestTargetWithHeadPriorityGpu(
     return cudaSuccess;
 }
 
-// Kernel to process NMS output (already post-processed detections)
-// Input format: [x1, y1, x2, y2, confidence, class_id]
-// Convert to Target format: [x, y, width, height, confidence, classId]
-__global__ void processNMSOutputKernel(
-    const void* d_nms_output,
-    nvinfer1::DataType output_type,
-    float conf_threshold,
-    float img_scale,
-    Target* d_output_detections,
-    int* d_output_count,
-    int max_output_detections,
-    int num_detections)
-{
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    
-    // First thread initializes output count
-    if (idx == 0) {
-        *d_output_count = 0;
-    }
-    
-    __syncthreads();
-    
-    if (idx >= num_detections) return;
-    
-    // Cast input data based on type
-    const float* nms_data = nullptr;
-    if (output_type == nvinfer1::DataType::kFLOAT) {
-        nms_data = static_cast<const float*>(d_nms_output);
-    } else if (output_type == nvinfer1::DataType::kHALF) {
-        // For FP16, we need to convert - simplified approach
-        // In production, you'd need proper FP16 handling
-        nms_data = static_cast<const float*>(d_nms_output); // Fallback
-    } else {
-        return; // Unsupported data type
-    }
-    
-    // Each detection has 6 values: [x1, y1, x2, y2, confidence, class_id]
-    int data_offset = idx * 6;
-    
-    float x1 = nms_data[data_offset + 0] * img_scale;
-    float y1 = nms_data[data_offset + 1] * img_scale;
-    float x2 = nms_data[data_offset + 2] * img_scale;
-    float y2 = nms_data[data_offset + 3] * img_scale;
-    float confidence = nms_data[data_offset + 4];
-    int class_id = static_cast<int>(nms_data[data_offset + 5]);
-    
-    // Filter by confidence threshold
-    if (confidence < conf_threshold) {
-        return;
-    }
-    
-    // Validate coordinates
-    if (x1 < 0 || y1 < 0 || x2 <= x1 || y2 <= y1 ||
-        x1 > 10000 || y1 > 10000 || x2 > 10000 || y2 > 10000) {
-        return;
-    }
-    
-    // Validate class ID
-    if (class_id < 0 || class_id > 100) {
-        return;
-    }
-    
-    // Convert from [x1,y1,x2,y2] to [x,y,width,height]
-    float x = x1;
-    float y = y1;
-    float width = x2 - x1;
-    float height = y2 - y1;
-    
-    // Validate dimensions
-    if (width <= 0 || height <= 0 || width > 1000 || height > 1000) {
-        return;
-    }
-    
-    // Atomic increment to get output index
-    int output_idx = atomicAdd(d_output_count, 1);
-    
-    // Check bounds
-    if (output_idx >= max_output_detections) {
-        // Decrement count if we exceeded limits
-        atomicSub(d_output_count, 1);
-        return;
-    }
-    
-    // Write to output
-    Target& target = d_output_detections[output_idx];
-    target.x = x;
-    target.y = y;
-    target.width = width;
-    target.height = height;
-    target.confidence = confidence;
-    target.classId = class_id;
-    
-    // Additional validation - ensure reasonable aspect ratio
-    float aspect_ratio = width / height;
-    if (aspect_ratio < 0.1f || aspect_ratio > 10.0f) {
-        // Invalid aspect ratio - remove this detection
-        atomicSub(d_output_count, 1);
-        return;
-    }
-}
+// processNMSOutputKernel removed - NMS not needed for aimbot
 
-// Process NMS output (already post-processed detections)
-cudaError_t processNMSOutputGpu(
-    const void* d_nms_output,
-    nvinfer1::DataType output_type,
-    const std::vector<int64_t>& shape,
-    float conf_threshold,
-    float img_scale,
-    Target* d_output_detections,
-    int* d_output_count,
-    int max_output_detections,
-    int num_detections,
-    cudaStream_t stream)
-{
-    if (!d_nms_output || !d_output_detections || !d_output_count) {
-        return cudaErrorInvalidValue;
-    }
-    
-    if (num_detections <= 0 || max_output_detections <= 0) {
-        // No detections to process - set count to 0
-        cudaMemsetAsync(d_output_count, 0, sizeof(int), stream);
-        return cudaSuccess;
-    }
-    
-    // Launch kernel
-    int block_size = 256;
-    int grid_size = (num_detections + block_size - 1) / block_size;
-    
-    processNMSOutputKernel<<<grid_size, block_size, 0, stream>>>(
-        d_nms_output,
-        output_type,
-        conf_threshold,
-        img_scale,
-        d_output_detections,
-        d_output_count,
-        max_output_detections,
-        num_detections
-    );
-    
-    // Check for kernel launch errors
-    cudaError_t kernel_err = cudaGetLastError();
-    if (kernel_err != cudaSuccess) {
-        return kernel_err;
-    }
-    
-    return cudaSuccess;
-}
+// processNMSOutputGpu removed - NMS not needed for aimbot
 
 
  

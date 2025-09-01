@@ -26,27 +26,8 @@ void validateBestTargetGpu(
     Target* d_best_target,
     cudaStream_t stream = 0);
 
-void NMSGpu(
-    const Target* d_input_detections, 
-    int input_num_detections,          
-    Target* d_output_detections,       
-    int* d_output_count_gpu,           
-    int max_output_detections,         
-    float nmsThreshold,
-    int frame_width,
-    int frame_height,
-    
-    int* d_x1,
-    int* d_y1,
-    int* d_x2,
-    int* d_y2,
-    float* d_areas,
-    float* d_scores_nms,      
-    int* d_classIds_nms,      
-    float* d_iou_matrix,
-    bool* d_keep,
-    int* d_indices,
-    cudaStream_t stream = 0);
+// NMS removed for performance - not needed for aimbot
+// void NMSGpu(...) removed
 
 
 
@@ -79,19 +60,7 @@ cudaError_t decodeYolo11Gpu(
     int max_class_filter_size = 0,
     cudaStream_t stream = 0);
 
-// Process NMS output (already post-processed detections)
-// Input format: [x1, y1, x2, y2, confidence, class_id]
-cudaError_t processNMSOutputGpu(
-    const void* d_nms_output,
-    nvinfer1::DataType output_type,
-    const std::vector<int64_t>& shape,
-    float conf_threshold,
-    float img_scale,
-    Target* d_output_detections,
-    int* d_output_count,
-    int max_output_detections,
-    int num_detections,
-    cudaStream_t stream = 0);
+// processNMSOutputGpu removed - NMS not needed for aimbot
 
 // GPU function to find closest target to crosshair
 // Accepts d_num_detections as device pointer to avoid CPU-GPU sync
