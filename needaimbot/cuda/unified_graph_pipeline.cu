@@ -891,10 +891,7 @@ bool UnifiedGraphPipeline::runInferenceAsync(cudaStream_t stream) {
         stream = m_pipelineStream->get();
     }
     
-    cudaError_t prevErr = cudaGetLastError();
-    if (prevErr != cudaSuccess) {
-        std::cerr << "[Pipeline] Previous CUDA error detected: " << cudaGetErrorString(prevErr) << std::endl;
-    }
+    // Removed previous error check for performance
     
     for (const auto& inputName : m_inputNames) {
         auto bindingIt = m_inputBindings.find(inputName);
@@ -925,13 +922,7 @@ bool UnifiedGraphPipeline::runInferenceAsync(cudaStream_t stream) {
         }
     }
     
-    if (m_inputBindings.find(m_inputName) != m_inputBindings.end()) {
-        cudaError_t memErr = cudaGetLastError();
-        if (memErr != cudaSuccess) {
-            std::cerr << "[Pipeline] CUDA memory error before inference: " << cudaGetErrorString(memErr) << std::endl;
-            return false;
-        }
-    }
+    // Removed memory error check for performance
     
     
     
