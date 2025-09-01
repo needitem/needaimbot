@@ -133,53 +133,7 @@ size_t UnifiedGPUArena::calculateArenaSize(int maxDetections, int yoloSize) {
 
 // Dynamic IOU matrix functions removed - now using static allocation in arena
 
-// OPTIMIZATION: DoubleBuffer implementation (33% memory savings vs TripleBuffer)
-void DoubleBuffer::initializeFrameBuffers(int height, int width, int channels) {
-    // Initialize both frame buffers
-    for (int i = 0; i < 2; i++) {
-        buffers[i].create(height, width, channels);
-        h_movement_pinned[i] = std::make_unique<CudaPinnedMemory<MouseMovement>>(1);
-        movement_data_ready[i] = false;
-        
-        // CRITICAL FIX: Initialize events only once
-        if (!captureComplete[i]) {
-            captureComplete[i] = std::make_unique<CudaEvent>(cudaEventDisableTiming);
-            preprocessComplete[i] = std::make_unique<CudaEvent>(cudaEventDisableTiming);
-            inferenceComplete[i] = std::make_unique<CudaEvent>(cudaEventDisableTiming);
-            copyComplete[i] = std::make_unique<CudaEvent>(cudaEventDisableTiming);
-        }
-    }
-}
-
-int DoubleBuffer::getNextWriteIndex() {
-    // Simple ping-pong buffering
-    int current = writeIndex.load();
-    int next = (current + 1) % 2;
-    writeIndex.store(next);
-    return current;
-}
-
-int DoubleBuffer::findReadyMovementData() {
-    // Check both buffers for ready data
-    for (int i = 0; i < 2; i++) {
-        if (movement_data_ready[i] && copyComplete[i] && copyComplete[i]->query() == cudaSuccess) {
-            return i;
-        }
-    }
-    return -1;  // No ready data
-}
-
-void DoubleBuffer::markMovementConsumed(int index) {
-    if (index >= 0 && index < 2) {
-        movement_data_ready[index] = false;
-    }
-}
-
-void DoubleBuffer::clearAllData() {
-    for (int i = 0; i < 2; i++) {
-        movement_data_ready[i] = false;
-    }
-}
+// Single buffer implementation - removed DoubleBuffer as we're not doing parallel processing
 
 // All complex graph and coordinator code removed - using simple single stream
 
@@ -359,18 +313,11 @@ __global__ void clearAllDetectionBuffersKernel(
 
 
 UnifiedGraphPipeline::UnifiedGraphPipeline() {
-    // OPTIMIZATION: Initialize event pool for efficient event reuse
-    // Pre-allocate some events to avoid runtime allocation
-    for (int i = 0; i < 4; ++i) {
-        m_eventPool.available.push_back(std::make_unique<CudaEvent>(cudaEventDisableTiming));
-    }
-    
-    // Initialize events from pool
+    // Initialize events for profiling
     m_state.startEvent = std::make_unique<CudaEvent>();
     m_state.endEvent = std::make_unique<CudaEvent>();
     
-    // Simple initialization - no complex graph management needed
-    m_doubleBuffer = nullptr;
+    // Simple initialization - single buffer, no complex management needed
 }
 
 // Note: Destructor is implemented in unified_graph_pipeline_cleanup.cpp
@@ -378,15 +325,8 @@ UnifiedGraphPipeline::UnifiedGraphPipeline() {
 bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
     m_config = config;
     
-    // OPTIMIZATION: Create 2 unified CUDA streams instead of 4 (reduces context switching overhead)
-    m_pipelineStream = std::make_unique<CudaStream>();  // capture + inference + preprocessing 
-    m_outputStream = std::make_unique<CudaStream>();    // postprocessing + copy + output
-    
-    // Initialize Double Buffer for async pipeline (OPTIMIZATION: 33% memory savings)
-    if (m_config.enableCapture) {
-        m_doubleBuffer = std::make_unique<DoubleBuffer>();
-        // Events and pinned memory are automatically initialized by constructor
-    }
+    // Single unified CUDA stream for sequential processing
+    m_pipelineStream = std::make_unique<CudaStream>();  // All operations in sequence
     
     // Simple event for preview (using RAII)
     m_previewReadyEvent = std::make_unique<CudaEvent>(cudaEventDisableTiming);
@@ -475,9 +415,9 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     // Execute the entire pipeline once to capture all operations
     // The graph will record all CUDA operations performed in this stream
     
-    // 1. Input copy (if we have pinned host memory)
-    if (m_config.enableCapture && m_h_inputBuffer && m_h_inputBuffer->get()) {
-        cudaMemcpyAsync(m_unifiedCaptureBuffer.data(), m_h_inputBuffer->get(),
+    // 1. Input copy (if we have capture buffer)
+    if (m_config.enableCapture && !m_captureBuffer.empty()) {
+        cudaMemcpyAsync(m_unifiedCaptureBuffer.data(), m_captureBuffer.data(),
                        m_unifiedCaptureBuffer.sizeInBytes(), cudaMemcpyHostToDevice, stream);
     }
     
@@ -639,11 +579,8 @@ bool UnifiedGraphPipeline::allocateBuffers() {
     
     
     try {
-        // Initialize Simple Triple Buffer System with stream-based ordering
-        if (m_config.enableCapture && m_doubleBuffer) {
-            // Initialize frame buffers and pinned memory
-            m_doubleBuffer->initializeFrameBuffers(height, width, 4);  // BGRA
-        }
+        // Single capture buffer for sequential processing
+        m_captureBuffer.create(height, width, 4);  // BGRA
         
         // OPTIMIZATION: Unified buffer for capture and preprocessing (25% memory savings)
         // Single buffer handles both BGRA capture and BGR preprocessing in-place
@@ -664,9 +601,8 @@ bool UnifiedGraphPipeline::allocateBuffers() {
         // Class filtering control buffer now handled by SmallBufferArena (OPTIMIZED)
         // m_d_allowFlags removed - using m_smallBufferArena.allowFlags instead
         
-        // Allocate pinned host memory for zero-copy transfers using RAII
-        m_h_inputBuffer = std::make_unique<CudaPinnedMemory<unsigned char>>(width * height * 4);
-        m_h_outputBuffer = std::make_unique<CudaPinnedMemory<float>>(2);
+        // Allocate single pinned host memory for mouse movement using RAII
+        m_h_movement = std::make_unique<CudaPinnedMemory<MouseMovement>>(1);
         
         // OPTIMIZATION: Preview buffers only allocated when needed
         if (ctx.config.show_window) {
@@ -701,17 +637,13 @@ bool UnifiedGraphPipeline::allocateBuffers() {
 }
 
 void UnifiedGraphPipeline::deallocateBuffers() {
-    // OPTIMIZATION: Use event-based synchronization instead of blocking device sync
+    // Wait for pipeline stream completion
     if (m_pipelineStream && m_pipelineStream->get()) {
-        // Wait for pipeline stream completion
         cudaStreamSynchronize(m_pipelineStream->get());
     }
-    if (m_outputStream && m_outputStream->get()) {
-        // Wait for output stream completion  
-        cudaStreamSynchronize(m_outputStream->get());
-    }
     
-    // Release unified buffer
+    // Release buffers
+    m_captureBuffer.release();
     m_unifiedCaptureBuffer.release();
     
     // Release preview buffers if allocated
@@ -733,14 +665,13 @@ void UnifiedGraphPipeline::deallocateBuffers() {
     m_d_outputBuffer.reset();
     
     // Reset pinned host memory - RAII handles deallocation
-    m_h_inputBuffer.reset();
-    m_h_outputBuffer.reset();
+    m_h_movement.reset();
     
     // Clean up TensorRT bindings - RAII handles deallocation
     m_inputBindings.clear();
     m_outputBindings.clear();
     
-    // Triple buffer events are cleaned up automatically by CudaEvent destructor
+    // Events are cleaned up automatically by CudaEvent destructor
     // No manual cleanup needed due to RAII
 }
 
@@ -779,34 +710,19 @@ void UnifiedGraphPipeline::setInputFrame(const SimpleCudaMat& frame) {
     m_hasFrameData = true;
 }
 
-// Two-stage pipeline helper implementations
+// Profiling helper
 void UnifiedGraphPipeline::updateProfilingAsync(cudaStream_t stream) {
-    // Async profiling update without blocking
-    if (!m_lastFrameEnd) {
-        m_lastFrameEnd = m_eventPool.acquire();
+    // Simple profiling for single buffer
+    if (m_state.frameCount > 0) {
+        m_state.endEvent->record(stream);
+        cudaEventSynchronize(m_state.endEvent->get());
+        
+        float latency;
+        cudaEventElapsedTime(&latency, m_state.startEvent->get(), m_state.endEvent->get());
+        updateStatistics(latency);
     }
     
-    if (m_state.frameCount > 0 && m_lastFrameEnd) {
-        // Check if last frame's profiling is ready
-        if (m_lastFrameEnd->query() == cudaSuccess) {
-            float latency;
-            cudaEventElapsedTime(&latency, m_state.startEvent->get(), m_lastFrameEnd->get());
-            updateStatistics(latency);
-            
-            // CRITICAL FIX: Return event to pool after use
-            m_eventPool.release(m_lastFrameEnd);
-            m_lastFrameEnd = nullptr;
-        }
-    }
-    
-    // Record current frame end
-    if (!m_lastFrameEnd) {
-        m_lastFrameEnd = m_eventPool.acquire();
-    }
-    if (m_lastFrameEnd) {
-        m_state.startEvent->record(stream);
-        m_lastFrameEnd->record(stream);
-    }
+    m_state.startEvent->record(stream);
 }
 
 // ============================================================================
@@ -816,35 +732,35 @@ void UnifiedGraphPipeline::updateProfilingAsync(cudaStream_t stream) {
 void UnifiedGraphPipeline::handleAimbotDeactivation() {
     auto& ctx = AppContext::getInstance();
     
-    // Event-based approach: clear operations are async and self-coordinated
-    // No synchronization needed - pipeline suspension prevents new work
+    // Clear all data when aimbot is deactivated
     clearCountBuffers();
-    clearDoubleBufferData();
+    clearMovementData();
     clearHostPreviewData(ctx);
 }
 
 void UnifiedGraphPipeline::clearCountBuffers() {
-    // OPTIMIZATION: Clear count values from memory arena (single stream operation)
+    // Clear count values from memory arena (single stream operation)
     if (m_smallBufferArena.finalTargetsCount) {
-        cudaMemsetAsync(m_smallBufferArena.finalTargetsCount, 0, sizeof(int), m_outputStream->get());
+        cudaMemsetAsync(m_smallBufferArena.finalTargetsCount, 0, sizeof(int), m_pipelineStream->get());
     }
     if (m_smallBufferArena.decodedCount) {
-        cudaMemsetAsync(m_smallBufferArena.decodedCount, 0, sizeof(int), m_outputStream->get());
+        cudaMemsetAsync(m_smallBufferArena.decodedCount, 0, sizeof(int), m_pipelineStream->get());
     }
     if (m_smallBufferArena.classFilteredCount) {
-        cudaMemsetAsync(m_smallBufferArena.classFilteredCount, 0, sizeof(int), m_outputStream->get());
+        cudaMemsetAsync(m_smallBufferArena.classFilteredCount, 0, sizeof(int), m_pipelineStream->get());
     }
     
     // Clear best target index to indicate no target selected
     if (m_smallBufferArena.bestTargetIndex) {
-        cudaMemsetAsync(m_smallBufferArena.bestTargetIndex, -1, sizeof(int), m_outputStream->get());
+        cudaMemsetAsync(m_smallBufferArena.bestTargetIndex, -1, sizeof(int), m_pipelineStream->get());
     }
 }
 
-void UnifiedGraphPipeline::clearDoubleBufferData() {
-    // Clear all double buffer data to prevent mouse movement on old targets
-    if (m_doubleBuffer) {
-        m_doubleBuffer->clearAllData();
+void UnifiedGraphPipeline::clearMovementData() {
+    // Clear movement data to prevent mouse movement on old targets
+    if (m_h_movement && m_h_movement->get()) {
+        m_h_movement->get()->dx = 0;
+        m_h_movement->get()->dy = 0;
     }
 }
 
@@ -1711,7 +1627,7 @@ D3D11_BOX UnifiedGraphPipeline::createCaptureBox(int centerX, int centerY, int c
     return srcBox;
 }
 
-bool UnifiedGraphPipeline::performDesktopCapture(int writeIdx, const AppContext& ctx) {
+bool UnifiedGraphPipeline::performDesktopCapture(const AppContext& ctx) {
     if (!m_desktopDuplication || !m_d3dDevice || !m_d3dContext || !m_captureTextureD3D) {
         return false;
     }
@@ -1747,16 +1663,14 @@ bool UnifiedGraphPipeline::performDesktopCapture(int writeIdx, const AppContext&
     return true;
 }
 
-bool UnifiedGraphPipeline::performFrameCapture(int writeIdx) {
+bool UnifiedGraphPipeline::performFrameCapture() {
     auto& ctx = AppContext::getInstance();
     
     if (!m_config.enableCapture || !m_cudaResource || m_hasFrameData) {
         return true;
     }
     
-    SimpleCudaMat& currentBuffer = m_doubleBuffer->buffers[writeIdx];
-    
-    if (!performDesktopCapture(writeIdx, ctx)) {
+    if (!performDesktopCapture(ctx)) {
         return false;
     }
     
@@ -1772,12 +1686,12 @@ bool UnifiedGraphPipeline::performFrameCapture(int writeIdx) {
     err = cudaGraphicsSubResourceGetMappedArray(&array, m_cudaResource, 0, 0);
     if (err == cudaSuccess) {
         err = cudaMemcpy2DFromArrayAsync(
-            currentBuffer.data(),
-            currentBuffer.step(),
+            m_captureBuffer.data(),
+            m_captureBuffer.step(),
             array,
             0, 0,
-            currentBuffer.cols() * sizeof(uchar4),
-            currentBuffer.rows(),
+            m_captureBuffer.cols() * sizeof(uchar4),
+            m_captureBuffer.rows(),
             cudaMemcpyDeviceToDevice,
             m_pipelineStream->get()
         );
@@ -1790,37 +1704,30 @@ bool UnifiedGraphPipeline::performFrameCapture(int writeIdx) {
         return false;
     }
     
-    if (m_doubleBuffer->captureComplete[writeIdx]) {
-        m_doubleBuffer->captureComplete[writeIdx]->record(m_pipelineStream->get());
-    }
     m_hasFrameData = true;
     return true;
 }
 
-bool UnifiedGraphPipeline::performPreprocessing(int writeIdx) {
+bool UnifiedGraphPipeline::performPreprocessing() {
     auto& ctx = AppContext::getInstance();
-    SimpleCudaMat& currentBuffer = m_doubleBuffer->buffers[writeIdx];
-    
-    // OPTIMIZATION: No wait needed - same stream handles both capture and inference
-    // cudaStreamWaitEvent removed - pipeline stream handles both operations sequentially
     
     // Update preview buffer if needed
-    if (m_preview.enabled && ctx.preview_enabled && !currentBuffer.empty()) {
-        updatePreviewBuffer(currentBuffer);
+    if (m_preview.enabled && ctx.preview_enabled && !m_captureBuffer.empty()) {
+        updatePreviewBuffer(m_captureBuffer);
     }
     
     // Unified preprocessing
-    if (!m_unifiedArena.yoloInput || currentBuffer.empty()) {
+    if (!m_unifiedArena.yoloInput || m_captureBuffer.empty()) {
         return false;
     }
     
     int modelRes = getModelInputResolution();
     cudaError_t err = cuda_unified_preprocessing(
-        currentBuffer.data(),
+        m_captureBuffer.data(),
         m_unifiedArena.yoloInput,
-        currentBuffer.cols(),
-        currentBuffer.rows(),
-        static_cast<int>(currentBuffer.step()),
+        m_captureBuffer.cols(),
+        m_captureBuffer.rows(),
+        static_cast<int>(m_captureBuffer.step()),
         modelRes,
         modelRes,
         m_pipelineStream->get()
@@ -1831,9 +1738,6 @@ bool UnifiedGraphPipeline::performPreprocessing(int writeIdx) {
         return false;
     }
     
-    if (m_doubleBuffer->preprocessComplete[writeIdx]) {
-        m_doubleBuffer->preprocessComplete[writeIdx]->record(m_pipelineStream->get());
-    }
     return true;
 }
 
@@ -1854,15 +1758,12 @@ void UnifiedGraphPipeline::updatePreviewBuffer(const SimpleCudaMat& currentBuffe
                    cudaMemcpyDeviceToDevice, m_pipelineStream->get());
 }
 
-bool UnifiedGraphPipeline::performInference(int writeIdx) {
+bool UnifiedGraphPipeline::performInference() {
     if (m_inputBindings.find(m_inputName) == m_inputBindings.end() || !m_unifiedArena.yoloInput) {
         return false;
     }
     
     void* inputBinding = m_inputBindings[m_inputName]->get();
-    
-    // OPTIMIZATION: No wait needed - same pipeline stream handles preprocessing→inference sequentially
-    // cudaStreamWaitEvent removed - sequential execution in same stream
     
     // Copy input if needed
     if (inputBinding != m_unifiedArena.yoloInput) {
@@ -1881,10 +1782,6 @@ bool UnifiedGraphPipeline::performInference(int writeIdx) {
     performIntegratedPostProcessing(m_pipelineStream->get());
     performTargetSelection(m_pipelineStream->get());
     
-    // Record completion
-    if (m_doubleBuffer->inferenceComplete[writeIdx]) {
-        m_doubleBuffer->inferenceComplete[writeIdx]->record(m_pipelineStream->get());
-    }
     return true;
 }
 
@@ -1897,101 +1794,71 @@ int UnifiedGraphPipeline::findHeadClassId(const AppContext& ctx) {
     return -1;
 }
 
-bool UnifiedGraphPipeline::performResultCopy(int writeIdx) {
+bool UnifiedGraphPipeline::performResultCopy() {
     auto& ctx = AppContext::getInstance();
     
-    // Wait for inference completion from pipeline stream
-    if (m_doubleBuffer->inferenceComplete[writeIdx]) {
-        cudaStreamWaitEvent(m_outputStream->get(), m_doubleBuffer->inferenceComplete[writeIdx]->get(), 0);
-    }
-    
     // Check if we have valid mouse movement data (already calculated by fused kernel)
-    if (!m_smallBufferArena.mouseMovement || !m_doubleBuffer->h_movement_pinned[writeIdx]->get()) {
-        m_doubleBuffer->movement_data_ready[writeIdx] = false;
+    if (!m_smallBufferArena.mouseMovement || !m_h_movement || !m_h_movement->get()) {
         return true;
     }
     
     // OPTIMIZED: Mouse movement already calculated by fusedTargetSelectionAndMovementKernel
     // Just copy the pre-calculated result (saves 1 kernel launch)
-    cudaMemcpyAsync(m_doubleBuffer->h_movement_pinned[writeIdx]->get(), m_smallBufferArena.mouseMovement, 
-                   sizeof(MouseMovement), cudaMemcpyDeviceToHost, m_outputStream->get());
-    
-    // Record completion
-    if (m_doubleBuffer->copyComplete[writeIdx]) {
-        m_doubleBuffer->copyComplete[writeIdx]->record(m_outputStream->get());
-    }
-    m_doubleBuffer->movement_data_ready[writeIdx] = true;
+    cudaMemcpyAsync(m_h_movement->get(), m_smallBufferArena.mouseMovement, 
+                   sizeof(MouseMovement), cudaMemcpyDeviceToHost, m_pipelineStream->get());
     
     return true;
 }
 
-// Simple stream-based pipeline with ordered execution and no synchronization
+// Simple single-buffer pipeline with sequential execution
 bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
     auto& ctx = AppContext::getInstance();
     
-    if (!m_doubleBuffer) {
-        std::cerr << "[UnifiedGraph] Warning: Triple buffer not available" << std::endl;
+    // Step 1: Frame capture
+    if (!performFrameCapture()) {
         return false;
     }
     
-    // Step 1: Process mouse movement from any ready data (non-blocking)
-    processMouseMovementAsync();
-    
-    // Step 2: Get next write index (single atomic operation, no contention)
-    int writeIdx = m_doubleBuffer->getNextWriteIndex();
-    
-    // Step 3: Frame capture stage
-    if (!performFrameCapture(writeIdx)) {
-        return false;
-    }
-    
-    // Step 4: Inference stage with event dependency (no blocking)
+    // Step 2: Processing and inference
     if (!ctx.detection_paused.load()) {
-        if (!performPreprocessing(writeIdx)) {
+        if (!performPreprocessing()) {
             return false;
         }
         
-        if (!performInference(writeIdx)) {
+        if (!performInference()) {
             return false;
         }
-    }
-    
-    // Step 5: Copy results to host memory
-    if (!ctx.detection_paused.load()) {
-        if (!performResultCopy(writeIdx)) {
+        
+        // Step 3: Copy results to host memory
+        if (!performResultCopy()) {
             return false;
         }
+        
+        // Step 4: Synchronize and execute mouse movement
+        cudaStreamSynchronize(m_pipelineStream->get());
+        processMouseMovement();
     }
     
     m_state.frameCount++;
     m_hasFrameData = false;
     
-    return true;  // Returns immediately, all work is asynchronous
+    return true;
 }
 
-void UnifiedGraphPipeline::processMouseMovementAsync() {
+void UnifiedGraphPipeline::processMouseMovement() {
     auto& ctx = AppContext::getInstance();
     
-    if (!ctx.aiming || !m_doubleBuffer) {
+    if (!ctx.aiming || !m_h_movement || !m_h_movement->get()) {
         return;
     }
     
-    // Find ready movement data (dx/dy already calculated on GPU)
-    int readIdx = m_doubleBuffer->findReadyMovementData();
-    if (readIdx < 0) {
-        return; // No ready movement data
-    }
-    
-    // Get pre-calculated movement from GPU (optimized unified access)
-    const MouseMovement* movement = m_doubleBuffer->h_movement_pinned[readIdx]->get();
+    // Get pre-calculated movement from GPU (already copied in performResultCopy)
+    const MouseMovement* movement = m_h_movement->get();
     
     // Execute mouse movement (dx=0,dy=0 if invalid target - handled by GPU)
     if (movement->dx != 0 || movement->dy != 0) {
         cuda::executeMouseMovementFromGPU(movement->dx, movement->dy);
     }
-    
-    // Mark movement data as consumed
-    m_doubleBuffer->markMovementConsumed(readIdx);
 }
 
 } // namespace needaimbot

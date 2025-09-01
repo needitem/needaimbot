@@ -163,31 +163,7 @@ struct UnifiedGPUArena {
     static size_t calculateArenaSize(int maxDetections, int yoloSize);
 };
 
-// OPTIMIZATION: Double Buffer (replaces Triple Buffer for 33% memory savings)
-class DoubleBuffer {
-public:
-    SimpleCudaMat buffers[2];  // Only 2 buffers instead of 3
-    
-    // CRITICAL FIX: Use pointers to avoid automatic creation
-    // Events will be created only when needed and properly managed
-    std::array<std::unique_ptr<CudaEvent>, 2> captureComplete;
-    std::array<std::unique_ptr<CudaEvent>, 2> preprocessComplete;
-    std::array<std::unique_ptr<CudaEvent>, 2> inferenceComplete;
-    std::array<std::unique_ptr<CudaEvent>, 2> copyComplete;
-    
-    // Pinned host memory for results
-    std::array<std::unique_ptr<CudaPinnedMemory<MouseMovement>>, 2> h_movement_pinned;
-    std::array<bool, 2> movement_data_ready{false, false};
-    
-    std::atomic<int> writeIndex{0};
-    std::atomic<int> readIndex{1};
-    
-    void initializeFrameBuffers(int height, int width, int channels);
-    int getNextWriteIndex();
-    int findReadyMovementData();
-    void markMovementConsumed(int index);
-    void clearAllData();
-};
+// Single buffer implementation - removed DoubleBuffer as we're not doing parallel processing
 
 // Forward declarations for internal implementation classes
 
@@ -301,7 +277,7 @@ public:
     
     // Non-blocking pipeline execution methods
     bool executeGraphNonBlocking(cudaStream_t stream = nullptr);
-    void processMouseMovementAsync();
+    void processMouseMovement();
     
         
     // Pipeline data management
@@ -377,9 +353,8 @@ private:
     // Simple graph management
     cudaGraph_t m_graph = nullptr;
     cudaGraphExec_t m_graphExec = nullptr;
-    // OPTIMIZATION: Unified CUDA streams (4→2 reduction for better performance)
-    std::unique_ptr<CudaStream> m_pipelineStream;   // capture + inference + preprocessing
-    std::unique_ptr<CudaStream> m_outputStream;     // postprocessing + copy + output
+    // Single unified CUDA stream for sequential processing
+    std::unique_ptr<CudaStream> m_pipelineStream;   // All operations in sequence
     
     // Simple event for preview (using RAII)
     std::unique_ptr<CudaEvent> m_previewReadyEvent;
@@ -396,99 +371,9 @@ private:
     bool m_classFilterDirty = true;
     std::vector<unsigned char> m_cachedClassFilter;
     
-    // Simple and efficient stream-based pipeline with ordered execution
-    struct TripleBuffer {
-        // Shared frame buffers for memory efficiency (8MB total vs 24MB)
-        SimpleCudaMat buffers[3];
-        std::atomic<int> writeIdx{0};  // Single atomic for write index
-        
-        // Stage completion events for non-blocking dependency management
-        std::array<CudaEvent, 3> captureComplete;
-        std::array<CudaEvent, 3> preprocessComplete;  // Added for preprocessing completion
-        std::array<CudaEvent, 3> inferenceComplete; 
-        std::array<CudaEvent, 3> copyComplete;
-        
-        // Mouse movement data unified structure (8 bytes per frame)
-        std::array<CudaPinnedMemory<MouseMovement>, 3> h_movement_pinned;  // Combined dx, dy
-        bool movement_data_ready[3] = {false, false, false};              // Validity managed here
-        
-        // Constructor with proper initialization
-        TripleBuffer() {
-            // Initialize events with optimal flags
-            for (int i = 0; i < 3; i++) {
-                captureComplete[i] = CudaEvent(cudaEventDisableTiming);
-                preprocessComplete[i] = CudaEvent(cudaEventDisableTiming);
-                inferenceComplete[i] = CudaEvent(cudaEventDisableTiming);
-                copyComplete[i] = CudaEvent(cudaEventDisableTiming);
-                
-                // Initialize pinned memory for unified mouse movement data
-                h_movement_pinned[i] = CudaPinnedMemory<MouseMovement>(1, cudaHostAllocDefault);
-                movement_data_ready[i] = false;
-            }
-        }
-        
-        // Get next write index (atomic increment, no complex state management)
-        int getNextWriteIndex() {
-            return writeIdx.fetch_add(1, std::memory_order_relaxed) % 3;
-        }
-        
-        // Find ready mouse movement data (non-blocking check)
-        int findReadyMovementData() {
-            for (int i = 0; i < 3; ++i) {
-                if (movement_data_ready[i] && copyComplete[i].query() == cudaSuccess) {
-                    return i;
-                }
-            }
-            return -1; // No ready data
-        }
-        
-        // Mark movement data as consumed
-        void markMovementConsumed(int idx) {
-            if (idx >= 0 && idx < 3) {
-                movement_data_ready[idx] = false;
-            }
-        }
-        
-        // Initialize frame buffers (called once during setup)
-        void initializeFrameBuffers(int height, int width, int channels) {
-            for (int i = 0; i < 3; i++) {
-                if (buffers[i].empty()) {
-                    buffers[i].create(height, width, channels);
-                    
-                    // Clear pinned memory to prevent garbage values
-                    if (h_movement_pinned[i].get()) {
-                        h_movement_pinned[i].get()->dx = 0;
-                        h_movement_pinned[i].get()->dy = 0;
-                    }
-                }
-            }
-        }
-        
-        // Clear all pending movement data (for cleanup/reset)
-        void clearAllData() {
-            for (int i = 0; i < 3; i++) {
-                movement_data_ready[i] = false;
-            }
-        }
-        
-        // Check if any GPU work is still active (non-blocking)
-        bool hasActiveWork() {
-            for (int i = 0; i < 3; i++) {
-                if (captureComplete[i].query() != cudaSuccess ||
-                    preprocessComplete[i].query() != cudaSuccess ||
-                    inferenceComplete[i].query() != cudaSuccess ||
-                    copyComplete[i].query() != cudaSuccess) {
-                    return true;  // Some work is still pending
-                }
-            }
-            return false;  // All work completed
-        }
-        
-        // Destructor - RAII handles cleanup
-        ~TripleBuffer() = default;
-    };
-    // OPTIMIZATION: Double buffer instead of triple buffer (33% memory savings)
-    std::unique_ptr<DoubleBuffer> m_doubleBuffer;
+    // Removed TripleBuffer - not needed for single buffer sequential processing
+    // Single buffer for sequential processing
+    SimpleCudaMat m_captureBuffer;
     
     
     // TensorRT engine management (Phase 1 integration)
@@ -533,9 +418,8 @@ private:
     
     std::unique_ptr<CudaMemory<float>> m_d_outputBuffer;         // Final output buffer
     
-    // Pinned host memory for zero-copy access
-    std::unique_ptr<CudaPinnedMemory<unsigned char>> m_h_inputBuffer;  // Pinned input buffer
-    std::unique_ptr<CudaPinnedMemory<float>> m_h_outputBuffer;         // Pinned output buffer (x,y)
+    // Single pinned host memory for mouse movement
+    std::unique_ptr<CudaPinnedMemory<MouseMovement>> m_h_movement;
     
     // External output buffer (for compatibility)
     float* m_externalOutputBuffer = nullptr;
@@ -564,71 +448,8 @@ private:
     std::atomic<bool> m_shouldStop{false};
     std::chrono::high_resolution_clock::time_point m_lastFrameTime;
     
-    // OPTIMIZATION: Event Pool for reusing CUDA events
-    struct EventPool {
-        std::vector<std::unique_ptr<CudaEvent>> available;
-        std::vector<std::unique_ptr<CudaEvent>> inUse;
-        static constexpr size_t MAX_EVENTS = 32;  // Prevent unlimited growth
-        
-        CudaEvent* acquire() {
-            // Auto-cleanup completed events before acquiring new ones
-            cleanupCompletedEvents();
-            
-            if (available.empty()) {
-                // Prevent memory leak - limit pool size
-                if (inUse.size() >= MAX_EVENTS) {
-                    // Reuse oldest event if pool is full
-                    if (!inUse.empty()) {
-                        cudaEventSynchronize(inUse.front()->get());  // Ensure it's done
-                        available.push_back(std::move(inUse.front()));
-                        inUse.erase(inUse.begin());
-                    }
-                } else {
-                    inUse.push_back(std::make_unique<CudaEvent>(cudaEventDisableTiming));
-                    return inUse.back().get();
-                }
-            }
-            
-            if (!available.empty()) {
-                inUse.push_back(std::move(available.back()));
-                available.pop_back();
-                return inUse.back().get();
-            }
-            return nullptr;
-        }
-        
-        void release(CudaEvent* event) {
-            if (!event) return;
-            auto it = std::find_if(inUse.begin(), inUse.end(),
-                [event](const std::unique_ptr<CudaEvent>& e) { return e.get() == event; });
-            if (it != inUse.end()) {
-                available.push_back(std::move(*it));
-                inUse.erase(it);
-            }
-        }
-        
-        // Automatically return completed events to available pool
-        void cleanupCompletedEvents() {
-            auto it = inUse.begin();
-            while (it != inUse.end()) {
-                if ((*it) && (*it)->query() == cudaSuccess) {
-                    available.push_back(std::move(*it));
-                    it = inUse.erase(it);
-                } else {
-                    ++it;
-                }
-            }
-        }
-        
-        void clear() {
-            available.clear();
-            inUse.clear();
-        }
-    } m_eventPool;
-    
-    // Event management using pool
-    CudaEvent* m_lastFrameEnd = nullptr;      // From event pool
-    CudaEvent* m_copyEvent = nullptr;         // From event pool
+    // Simple event management for profiling
+    // Events are in GraphExecutionState
     
     // OPTIMIZATION: Preview-conditional state (only allocated when show_window=true)
     struct PreviewState {
@@ -659,7 +480,7 @@ private:
     // Main loop helper methods
     void handleAimbotDeactivation();
     void clearCountBuffers();
-    void clearDoubleBufferData();
+    void clearMovementData();
     void clearHostPreviewData(AppContext& ctx);
     void handleAimbotActivation();
     bool executePipelineWithErrorHandling();
@@ -667,13 +488,13 @@ private:
     // Pipeline execution helper methods
     std::pair<int, int> calculateCaptureCenter(const AppContext& ctx, const D3D11_TEXTURE2D_DESC& desktopDesc);
     D3D11_BOX createCaptureBox(int centerX, int centerY, int captureSize, const D3D11_TEXTURE2D_DESC& desktopDesc);
-    bool performDesktopCapture(int writeIdx, const AppContext& ctx);
-    bool performFrameCapture(int writeIdx);
-    bool performPreprocessing(int writeIdx);
+    bool performDesktopCapture(const AppContext& ctx);
+    bool performFrameCapture();
+    bool performPreprocessing();
     void updatePreviewBuffer(const SimpleCudaMat& currentBuffer);
-    bool performInference(int writeIdx);
+    bool performInference();
     int findHeadClassId(const AppContext& ctx);
-    bool performResultCopy(int writeIdx);
+    bool performResultCopy();
 
     // Post-processing helper methods
     void clearDetectionBuffers(const PostProcessingConfig& config, cudaStream_t stream);
