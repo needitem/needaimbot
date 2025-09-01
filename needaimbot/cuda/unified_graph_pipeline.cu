@@ -328,8 +328,7 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
             
         }
         
-        clearDetectionBuffers(PostProcessingConfig{Constants::MAX_DETECTIONS, 0.001f, "yolo12"}, stream);
-        
+        // Buffer clearing moved inside performIntegratedPostProcessing
         performIntegratedPostProcessing(stream);
         
         performTargetSelection(stream);
