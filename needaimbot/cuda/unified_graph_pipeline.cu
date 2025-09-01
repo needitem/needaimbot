@@ -1814,6 +1814,14 @@ bool UnifiedGraphPipeline::performResultCopy() {
 bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
     auto& ctx = AppContext::getInstance();
     
+    // Frame skip strategy: Skip new frames if inference is still running
+    // This ensures we always process the most recent frame
+    if (m_inferenceInProgress.load()) {
+        m_skippedFrames++;
+        // Skip this frame to maintain real-time responsiveness
+        return true;
+    }
+    
     // Step 1: Frame capture
     if (!performFrameCapture()) {
         return false;
@@ -1821,22 +1829,31 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
     
     // Step 2: Processing and inference
     if (!ctx.detection_paused.load()) {
+        // Mark inference as in-progress
+        m_inferenceInProgress = true;
+        
         if (!performPreprocessing()) {
+            m_inferenceInProgress = false;
             return false;
         }
         
         if (!performInference()) {
+            m_inferenceInProgress = false;
             return false;
         }
         
         // Step 3: Copy results to host memory
         if (!performResultCopy()) {
+            m_inferenceInProgress = false;
             return false;
         }
         
         // Step 4: Synchronize and execute mouse movement
         cudaStreamSynchronize(m_pipelineStream->get());
         processMouseMovement();
+        
+        // Mark inference as complete
+        m_inferenceInProgress = false;
     }
     
     m_state.frameCount++;
