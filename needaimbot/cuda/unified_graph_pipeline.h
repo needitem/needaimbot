@@ -407,8 +407,7 @@ private:
     bool validateYoloDecodeBuffers(int maxDecodedTargets, int max_candidates);
     void updateClassFilterIfNeeded(cudaStream_t stream);
 
-    void performNMSProcessing(const PostProcessingConfig& config, cudaStream_t stream);
-    void copyDecodedToFinalTargets(const PostProcessingConfig& config, cudaStream_t stream);
+    // Removed redundant NMS and copy functions - integrated into main processing
     void handlePreviewUpdate(const PostProcessingConfig& config, cudaStream_t stream);
     void updatePreviewTargets(const PostProcessingConfig& config);
     void startPreviewCopy(const PostProcessingConfig& config, cudaStream_t stream);
