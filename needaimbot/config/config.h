@@ -10,7 +10,7 @@
 struct ConfigCache {
     float detection_resolution;
     float confidence_threshold;
-    float nms_threshold;
+    // NMS removed - no longer needed
     bool enable_aimbot;
     float mouse_sensitivity;
     int target_priority;
@@ -22,7 +22,6 @@ struct ConfigCache {
     ConfigCache(const ConfigCache& other) 
         : detection_resolution(other.detection_resolution)
         , confidence_threshold(other.confidence_threshold)
-        , nms_threshold(other.nms_threshold)
         , enable_aimbot(other.enable_aimbot)
         , mouse_sensitivity(other.mouse_sensitivity)
         , target_priority(other.target_priority)
@@ -33,7 +32,6 @@ struct ConfigCache {
         if (this != &other) {
             detection_resolution = other.detection_resolution;
             confidence_threshold = other.confidence_threshold;
-            nms_threshold = other.nms_threshold;
             enable_aimbot = other.enable_aimbot;
             mouse_sensitivity = other.mouse_sensitivity;
             target_priority = other.target_priority;
@@ -50,12 +48,12 @@ private:
     mutable std::mutex cache_mutex;
     
 public:
-    void updateCache(float resolution, float confidence, float nms, bool aimbot, 
+    void updateCache(float resolution, float confidence, bool aimbot, 
                     float sensitivity, int priority) {
         std::lock_guard<std::mutex> lock(cache_mutex); // 스레드 안전성 보장
         cache.detection_resolution = resolution;
         cache.confidence_threshold = confidence; 
-        cache.nms_threshold = nms;
+        // NMS removed
         cache.enable_aimbot = aimbot;
         cache.mouse_sensitivity = sensitivity;
         cache.target_priority = priority;
@@ -241,7 +239,7 @@ public:
     
     std::string ai_model;
     float confidence_threshold;
-    float nms_threshold;
+    // NMS removed - no longer needed
     float confidence_weight;
     float distance_weight;
     float sticky_target_threshold;  // How much better a new target must be to switch (0.0-1.0)

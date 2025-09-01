@@ -20,6 +20,9 @@ extern int texW, texH;
 void uploadDebugFrame(const SimpleCudaMat& frameMat);
 void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float scale);
 
+// Mutex for thread-safe D3D11 resource access (defined in draw_debug.cpp)
+extern std::mutex g_debugTexMutex;
+
 void renderOffsetTab()
 {
     auto& ctx = AppContext::getInstance();
@@ -382,24 +385,24 @@ void renderOffsetTab()
                 return;
             }
             
-            // Get current frame from TensorRT integrated pipeline
+            // Get current frame from TensorRT integrated pipeline (read-only access)
             auto& pipelineManager = needaimbot::PipelineManager::getInstance();
             auto* pipeline = pipelineManager.getPipeline();
             
-            if (pipeline) {
-                // Get capture buffer from pipeline
-                const SimpleCudaMat& captureFrame = pipeline->getCaptureBuffer();
+            if (pipeline && pipeline->isPreviewAvailable()) {
+                // Read-only access to preview buffer is thread-safe
+                // Pipeline only writes, UI only reads
+                const SimpleCudaMat& previewFrame = pipeline->getPreviewBuffer();
                 
-                
-                if (!captureFrame.empty()) {
+                if (!previewFrame.empty()) {
                     // Upload GPU frame directly to D3D11 texture for ImGui display
-                    uploadDebugFrame(captureFrame);
-                    
+                    // This is safe as we're only reading the buffer
+                    uploadDebugFrame(previewFrame);
                 } else {
-                    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Capture buffer empty");
+                    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Preview buffer empty");
                 }
             } else {
-                ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Pipeline not available");
+                ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Preview not available");
             }
         } catch (const std::exception& e) {
             ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Error uploading frame: %s", e.what());
@@ -413,22 +416,25 @@ void renderOffsetTab()
             
             ImGui::SliderFloat("Preview Scale", &debug_scale, 0.1f, 3.0f, "%.1fx");
             
-            
-            if (g_debugSRV && texW > 0 && texH > 0 && texW < 10000 && texH < 10000) {
-                // Validate scale
-                float safe_scale = debug_scale;
-                if (safe_scale <= 0 || safe_scale > 10.0f) safe_scale = 1.0f;
+            // Lock mutex before accessing D3D11 resources
+            {
+                std::lock_guard<std::mutex> lock(g_debugTexMutex);
                 
-                ImVec2 image_size(texW * safe_scale, texH * safe_scale);
-                
-                
-                // Safety check for ImGui rendering
-                if (image_size.x > 0 && image_size.y > 0 && image_size.x < 10000 && image_size.y < 10000) {
-                    ImGui::Image(g_debugSRV, image_size);
-                } else {
-                    ImGui::TextUnformatted("Invalid image dimensions for display");
-                    UIHelpers::EndSettingsSection();
-                    return;
+                if (g_debugSRV && texW > 0 && texH > 0 && texW < 10000 && texH < 10000) {
+                    // Validate scale
+                    float safe_scale = debug_scale;
+                    if (safe_scale <= 0 || safe_scale > 10.0f) safe_scale = 1.0f;
+                    
+                    ImVec2 image_size(texW * safe_scale, texH * safe_scale);
+                    
+                    
+                    // Safety check for ImGui rendering
+                    if (image_size.x > 0 && image_size.y > 0 && image_size.x < 10000 && image_size.y < 10000) {
+                        ImGui::Image(g_debugSRV, image_size);
+                    } else {
+                        ImGui::TextUnformatted("Invalid image dimensions for display");
+                        UIHelpers::EndSettingsSection();
+                        return;
                 }
                 
                 ImVec2 image_pos = ImGui::GetItemRectMin();
@@ -503,7 +509,8 @@ void renderOffsetTab()
             } else {
                 ImGui::TextUnformatted("Preview texture unavailable for display.");
             }
-    }
+            }  // Close the mutex lock scope
+    }  // Close the if (ctx.config.show_window) block
 
     UIHelpers::EndSettingsSection();
 }

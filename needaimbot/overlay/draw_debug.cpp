@@ -37,7 +37,10 @@
 ID3D11Texture2D* g_debugTex = nullptr;
 ID3D11ShaderResourceView* g_debugSRV = nullptr;
 int texW = 0, texH = 0;
-float debug_scale = 1.0f; 
+float debug_scale = 1.0f;
+
+// Mutex for thread-safe D3D11 resource access
+std::mutex g_debugTexMutex; 
 
 
 static ID3D11Texture2D* g_colorMaskTex = nullptr;
@@ -58,7 +61,8 @@ void uploadDebugFrame(const SimpleCudaMat& bgrGpu)
     static int uploadCount = 0;
     uploadCount++;
     
-    
+    // Lock mutex for thread-safe D3D11 resource access
+    std::lock_guard<std::mutex> lock(g_debugTexMutex);
     
     // Comprehensive safety checks
     if (bgrGpu.empty() || !g_pd3dDevice || !g_pd3dDeviceContext) {

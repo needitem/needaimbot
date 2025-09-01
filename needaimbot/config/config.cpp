@@ -145,7 +145,7 @@ bool Config::loadConfig(const std::string& filename)
         
         ai_model = "sunxds_0.5.6.engine"; 
         confidence_threshold = 0.25f;  // Higher threshold = fewer detections = better performance
-        nms_threshold = 0.45f;  // Slightly lower for better duplicate removal
+        // NMS removed - no longer needed
         confidence_weight = 0.0f;  // Ignore confidence completely
         distance_weight = 1.0f;  // Only use distance
         sticky_target_threshold = 0.0f; // Always switch to closest target
@@ -322,7 +322,7 @@ bool Config::loadConfig(const std::string& filename)
 
     ai_model = get_string_ini("AI", "ai_model", "sunxds_0.5.6.engine");
     confidence_threshold = static_cast<float>(get_double_ini("AI", "confidence_threshold", 0.25));
-    nms_threshold = static_cast<float>(get_double_ini("AI", "nms_threshold", 0.45));
+    // NMS removed - no longer needed
     confidence_weight = static_cast<float>(get_double_ini("AI", "confidence_weight", 0.0)); 
     distance_weight = static_cast<float>(get_double_ini("AI", "distance_weight", 1.0)); 
     sticky_target_threshold = static_cast<float>(get_double_ini("AI", "sticky_target_threshold", 0.0));
@@ -581,7 +581,7 @@ bool Config::saveConfig(const std::string& filename)
     file << "ai_model = " << ai_model << "\n";
     file << std::fixed << std::setprecision(6);
     file << "confidence_threshold = " << confidence_threshold << "\n";
-    file << "nms_threshold = " << nms_threshold << "\n";
+    // NMS removed - no longer saved
     file << "confidence_weight = " << confidence_weight << "\n";
     file << "distance_weight = " << distance_weight << "\n";
     file << "sticky_target_threshold = " << sticky_target_threshold << "\n";

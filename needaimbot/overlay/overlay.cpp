@@ -500,7 +500,7 @@ void OverlayThread()
 
     
     float prev_confidence_threshold = ctx.config.confidence_threshold;
-    float prev_nms_threshold = ctx.config.nms_threshold;
+    // NMS removed - no longer needed
     int prev_max_detections = ctx.config.max_detections;
 
     
@@ -848,10 +848,8 @@ void OverlayThread()
 
                     
                     if (prev_confidence_threshold != ctx.config.confidence_threshold ||
-                        prev_nms_threshold != ctx.config.nms_threshold ||
                         prev_max_detections != ctx.config.max_detections)
                     {
-                        prev_nms_threshold = ctx.config.nms_threshold;
                         prev_confidence_threshold = ctx.config.confidence_threshold;
                         prev_max_detections = ctx.config.max_detections;
                         config_needs_save = true;

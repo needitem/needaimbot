@@ -148,16 +148,7 @@ struct UnifiedGPUArena {
     Target* colorFilteredTargets;  // Color-filtered targets  
     Target* detections;            // Raw detections
     
-    // NMS working buffers
-    int* x1; int* y1; int* x2; int* y2;  // Bounding box coordinates
-    float* areas;                         // Target areas
-    float* scores_nms;                   // NMS scores
-    int* classIds_nms;                   // NMS class IDs
-    bool* keep;                          // NMS keep flags
-    int* indices;                        // Target indices
-    
-    // OPTIMIZATION: Static IOU matrix allocation in arena (trades 4MB memory for eliminating sync bottleneck)
-    float* iou_matrix;                               // Points to static allocation in arena
+    // NMS buffers removed - no longer needed
     
     void initializePointers(uint8_t* basePtr, int maxDetections, int yoloSize);
     static size_t calculateArenaSize(int maxDetections, int yoloSize);
@@ -253,7 +244,7 @@ struct UnifiedPipelineConfig {
 // Forward declaration of PostProcessingConfig struct
 struct PostProcessingConfig {
     int max_detections;
-    float nms_threshold;
+    // NMS removed - no longer needed
     float confidence_threshold;
     std::string postprocess;
     
@@ -317,9 +308,19 @@ public:
     float getAverageLatency() const { return m_state.avgLatency; }
     bool isGraphReady() const { return m_state.graphReady; }
     
-    // Frame access for preview
-    const SimpleCudaMat& getCaptureBuffer() const { 
-        return m_preview.enabled && !m_preview.previewBuffer.empty() ? m_preview.previewBuffer : m_unifiedCaptureBuffer; 
+    // Thread-safe read-only access to preview buffer
+    // UI can safely read this buffer as pipeline only writes to it
+    const SimpleCudaMat& getPreviewBuffer() const { 
+        // Return preview buffer if available, otherwise empty buffer
+        // This is safe because:
+        // 1. UI only reads (no writes)
+        // 2. Pipeline writes are atomic (single cudaMemcpy)
+        // 3. Worst case: UI sees old frame or partial update (acceptable for preview)
+        return m_preview.previewBuffer; 
+    }
+    
+    bool isPreviewAvailable() const {
+        return m_preview.enabled && !m_preview.previewBuffer.empty();
     }
     
     // UI-Pipeline separation: Direct GPU buffer access for UI
@@ -511,10 +512,7 @@ private:
     // NMS processing methods
     void performNMSProcessing(const PostProcessingConfig& config, cudaStream_t stream);
     void copyDecodedToFinalTargets(const PostProcessingConfig& config, cudaStream_t stream);
-    void performStandardNMS(const PostProcessingConfig& config, cudaStream_t stream);
-    bool validateNMSBuffers();
-    void executeNMSKernel(const PostProcessingConfig& config, cudaStream_t stream);
-    void handleNMSResults(const PostProcessingConfig& config, cudaStream_t stream);
+    // NMS methods removed - no longer needed
     void handlePreviewUpdate(const PostProcessingConfig& config, cudaStream_t stream);
     void updatePreviewTargets(const PostProcessingConfig& config);
     void startPreviewCopy(const PostProcessingConfig& config, cudaStream_t stream);

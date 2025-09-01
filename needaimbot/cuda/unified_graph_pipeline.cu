@@ -61,44 +61,7 @@ void UnifiedGPUArena::initializePointers(uint8_t* basePtr, int maxDetections, in
     detections = reinterpret_cast<Target*>(basePtr + offset);
     offset += maxDetections * sizeof(Target);
     
-    // NMS working buffers (align to int/float boundaries)
-    offset = (offset + alignof(int) - 1) & ~(alignof(int) - 1);
-    x1 = reinterpret_cast<int*>(basePtr + offset);
-    offset += maxDetections * sizeof(int);
-    
-    y1 = reinterpret_cast<int*>(basePtr + offset);
-    offset += maxDetections * sizeof(int);
-    
-    x2 = reinterpret_cast<int*>(basePtr + offset);
-    offset += maxDetections * sizeof(int);
-    
-    y2 = reinterpret_cast<int*>(basePtr + offset);
-    offset += maxDetections * sizeof(int);
-    
-    classIds_nms = reinterpret_cast<int*>(basePtr + offset);
-    offset += maxDetections * sizeof(int);
-    
-    indices = reinterpret_cast<int*>(basePtr + offset);
-    offset += maxDetections * sizeof(int);
-    
-    // Float buffers
-    offset = (offset + alignof(float) - 1) & ~(alignof(float) - 1);
-    areas = reinterpret_cast<float*>(basePtr + offset);
-    offset += maxDetections * sizeof(float);
-    
-    scores_nms = reinterpret_cast<float*>(basePtr + offset);
-    offset += maxDetections * sizeof(float);
-    
-    // OPTIMIZATION: IOU matrix now statically allocated in arena
-    // Eliminates cudaStreamSynchronize bottleneck at the cost of ~4MB memory
-    offset = (offset + alignof(float) - 1) & ~(alignof(float) - 1);
-    iou_matrix = reinterpret_cast<float*>(basePtr + offset);
-    offset += maxDetections * maxDetections * sizeof(float);
-    
-    // Bool buffer (align to bool boundary)
-    offset = (offset + alignof(bool) - 1) & ~(alignof(bool) - 1);
-    keep = reinterpret_cast<bool*>(basePtr + offset);
-    offset += maxDetections * sizeof(bool);
+    // NMS buffers removed - no longer needed
 }
 
 size_t UnifiedGPUArena::calculateArenaSize(int maxDetections, int yoloSize) {
@@ -108,25 +71,14 @@ size_t UnifiedGPUArena::calculateArenaSize(int maxDetections, int yoloSize) {
     size = (size + alignof(float) - 1) & ~(alignof(float) - 1);
     size += yoloSize * yoloSize * 3 * sizeof(float);
     
-    // NMS output buffers
+    // Output buffers (removed NMS buffers)
     size += maxDetections * 6 * sizeof(float) * 2;  // nmsOutput + filteredOutput
     
     // Target buffers (5 buffers)
     size = (size + alignof(Target) - 1) & ~(alignof(Target) - 1);
     size += maxDetections * sizeof(Target) * 5;
     
-    // Int buffers (6 buffers: x1,y1,x2,y2,classIds,indices)
-    size = (size + alignof(int) - 1) & ~(alignof(int) - 1);
-    size += maxDetections * sizeof(int) * 6;
-    
-    // Float buffers (areas, scores_nms, IOU matrix)
-    size = (size + alignof(float) - 1) & ~(alignof(float) - 1);
-    size += maxDetections * sizeof(float) * 2;  // areas + scores_nms
-    size += maxDetections * maxDetections * sizeof(float);  // IOU matrix statically allocated
-    
-    // Bool buffer
-    size = (size + alignof(bool) - 1) & ~(alignof(bool) - 1);
-    size += maxDetections * sizeof(bool);
+    // NMS buffers removed - significant memory savings!
     
     return size;
 }
@@ -476,7 +428,7 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
         }
         
         // Clear all detection buffers
-        clearDetectionBuffers(PostProcessingConfig{Constants::MAX_DETECTIONS, 0.45f, 0.001f, "yolo12"}, stream);
+        clearDetectionBuffers(PostProcessingConfig{Constants::MAX_DETECTIONS, 0.001f, "yolo12"}, stream);
         
         // Run integrated post-processing (will be captured in graph)
         performIntegratedPostProcessing(stream);
@@ -1241,7 +1193,7 @@ void needaimbot::PostProcessingConfig::updateFromContext(const AppContext& ctx, 
         // CUDA compiler workaround - use const_cast for mutex access
         std::lock_guard<std::mutex> lock(const_cast<std::mutex&>(ctx.configMutex));
         max_detections = ctx.config.max_detections;
-        nms_threshold = ctx.config.nms_threshold;
+        // NMS removed - no longer needed
         confidence_threshold = ctx.config.confidence_threshold;
         postprocess = ctx.config.postprocess;
     }
@@ -1382,7 +1334,7 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
     }
 
     // Initialize config with cached values for CUDA Graph compatibility
-    static PostProcessingConfig config{Constants::MAX_DETECTIONS, 0.45f, 0.001f, "yolo12"};
+    static PostProcessingConfig config{Constants::MAX_DETECTIONS, 0.001f, "yolo12"};
     config.updateFromContext(ctx, m_graphCaptured);
     
     // Clear detection buffers
@@ -1412,16 +1364,8 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
 }
 
 void UnifiedGraphPipeline::performNMSProcessing(const PostProcessingConfig& config, cudaStream_t stream) {
-    auto& ctx = AppContext::getInstance();
-    
-    // Skip NMS for yolo_nms models - already post-processed
-    if (config.postprocess == "yolo_nms") {
-        copyDecodedToFinalTargets(config, stream);
-        return;
-    }
-    
-    // Normal NMS processing for raw YOLO models
-    performStandardNMS(config, stream);
+    // NMS completely removed - directly copy decoded targets to final
+    copyDecodedToFinalTargets(config, stream);
 }
 
 void UnifiedGraphPipeline::copyDecodedToFinalTargets(const PostProcessingConfig& config, cudaStream_t stream) {
@@ -1438,83 +1382,7 @@ void UnifiedGraphPipeline::copyDecodedToFinalTargets(const PostProcessingConfig&
                    config.max_detections * sizeof(Target), cudaMemcpyDeviceToDevice, stream);
 }
 
-void UnifiedGraphPipeline::performStandardNMS(const PostProcessingConfig& config, cudaStream_t stream) {
-    auto& ctx = AppContext::getInstance();
-    
-    if (!validateNMSBuffers()) {
-        std::cerr << "[Pipeline] NMS buffers not properly allocated!" << std::endl;
-        ctx.clearTargets();
-        return;
-    }
-    
-    try {
-        executeNMSKernel(config, stream);
-        handleNMSResults(config, stream);
-    } catch (const std::exception& e) {
-        std::cerr << "[Pipeline] Exception during NMSGpu: " << e.what() << std::endl;
-        if (m_smallBufferArena.finalTargetsCount) {
-            cudaMemsetAsync(m_smallBufferArena.finalTargetsCount, 0, sizeof(int), stream);
-        }
-        ctx.clearTargets();
-    }
-}
-
-bool UnifiedGraphPipeline::validateNMSBuffers() {
-    return (m_unifiedArena.finalTargets && m_smallBufferArena.finalTargetsCount && 
-            m_unifiedArena.x1 && m_unifiedArena.y1 && m_unifiedArena.x2 && m_unifiedArena.y2 && m_unifiedArena.areas && 
-            m_unifiedArena.scores_nms && m_unifiedArena.classIds_nms && 
-            m_unifiedArena.keep && m_unifiedArena.indices);
-    // Note: iou_matrix is validated separately as it's dynamically allocated
-}
-
-void UnifiedGraphPipeline::executeNMSKernel(const PostProcessingConfig& config, cudaStream_t stream) {
-    auto& ctx = AppContext::getInstance();
-    
-    Target* nmsInputTargets = m_unifiedArena.decodedTargets;
-    int cached_frame_width = ctx.config.detection_resolution;
-    int cached_frame_height = ctx.config.detection_resolution;
-    
-    // OPTIMIZATION: No synchronization needed - use max_detections directly
-    // IOU matrix is pre-allocated in arena, no dynamic allocation needed
-    
-    // Clear IOU matrix for this frame (async, no sync needed)
-    if (m_unifiedArena.iou_matrix) {
-        size_t iou_size = config.max_detections * config.max_detections * sizeof(float);
-        cudaMemsetAsync(m_unifiedArena.iou_matrix, 0, iou_size, stream);
-    }
-    
-    // Use max_detections for NMS - kernel will handle actual count internally
-    NMSGpu(
-        nmsInputTargets,
-        config.max_detections,  // Use max instead of syncing for actual count
-        m_unifiedArena.finalTargets,
-        m_smallBufferArena.finalTargetsCount,
-        config.max_detections,
-        config.nms_threshold,
-        cached_frame_width,
-        cached_frame_height,
-        m_unifiedArena.x1,
-        m_unifiedArena.y1,
-        m_unifiedArena.x2,
-        m_unifiedArena.y2,
-        m_unifiedArena.areas,
-        m_unifiedArena.scores_nms,
-        m_unifiedArena.classIds_nms,
-        m_unifiedArena.iou_matrix,  // Now points to statically allocated buffer in arena
-        m_unifiedArena.keep,
-        m_unifiedArena.indices,
-        stream
-    );
-    
-    // OPTIMIZED: Validation moved to fused kernel - no separate validation needed here
-}
-
-void UnifiedGraphPipeline::handleNMSResults(const PostProcessingConfig& config, cudaStream_t stream) {
-    // UI-Pipeline separation: No GPU→CPU copies here
-    // UI thread will read directly from GPU memory when needed
-    // This eliminates all synchronization and copy overhead
-    return;
-}
+// NMS functions removed - no longer needed
 
 // UI-Pipeline separation: These functions are no longer needed
 // UI thread will handle all preview logic independently
