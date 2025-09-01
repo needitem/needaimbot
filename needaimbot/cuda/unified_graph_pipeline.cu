@@ -201,17 +201,12 @@ __global__ void fusedTargetSelectionAndMovementKernel(
                 continue;
             }
             
-            // Calculate distance with head priority
+            // Calculate distance (no head priority)
             float centerX = t.x + t.width / 2.0f;
             float centerY = t.y + t.height / 2.0f;
             float dx = centerX - screen_center_x;
             float dy = centerY - screen_center_y;
             float distance = sqrtf(dx * dx + dy * dy);
-            
-            // Apply head priority (50% distance reduction for heads)
-            if (t.classId == head_class_id) {
-                distance *= 0.5f;
-            }
             
             if (distance < localBestDist) {
                 localBestDist = distance;
@@ -262,12 +257,7 @@ __global__ void fusedTargetSelectionAndMovementKernel(
             float movement_x = error_x * kp_x;
             float movement_y = error_y * kp_y;
             
-            // Clamp movements
-            const float MAX_MOVEMENT = 200.0f;
-            movement_x = fmaxf(-MAX_MOVEMENT, fminf(MAX_MOVEMENT, movement_x));
-            movement_y = fmaxf(-MAX_MOVEMENT, fminf(MAX_MOVEMENT, movement_y));
-            
-            // Store unified output
+            // Store unified output (no clamping)
             output_movement->dx = static_cast<int>(movement_x);
             output_movement->dy = static_cast<int>(movement_y);
         }
