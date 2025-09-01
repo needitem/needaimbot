@@ -58,14 +58,10 @@ static void draw_movement_controls()
         ImGui::TableSetColumnIndex(0);
         ImGui::Text("X-Axis Settings:");
         ImGui::BulletText("Gain: %.2f", ctx.config.pd_kp_x);
-        ImGui::BulletText("Movement: %.0f%%", ctx.config.movement_factor_x * 100);
-        ImGui::BulletText("Sensitivity: %.2fx", ctx.config.mouse_sensitivity_x);
         
         ImGui::TableSetColumnIndex(1);
         ImGui::Text("Y-Axis Settings:");
         ImGui::BulletText("Gain: %.2f", ctx.config.pd_kp_y);
-        ImGui::BulletText("Movement: %.0f%%", ctx.config.movement_factor_y * 100);
-        ImGui::BulletText("Sensitivity: %.2fx", ctx.config.mouse_sensitivity_y);
         
         ImGui::EndTable();
     }

@@ -158,7 +158,7 @@ public:
     // target_fps removed - no longer using FPS limiting
     
     int gpu_capture_method; // 0 = Desktop Duplication, 1 = Region Capture
-    std::string capture_method; // "simple", "wingraphics", "virtual_camera", "ndi" (legacy)
+    std::string capture_method; // "simple", "wingraphics", "virtual_camera", "ndi"
     
     // NDI capture settings
     std::string ndi_source_name;
@@ -303,15 +303,6 @@ public:
     int min_color_pixels;
     bool remove_color_matches; 
 
-    
-    // Legacy mouse control settings (kept for config compatibility, not used)
-    float mouse_sensitivity = 1.0f;        // DEPRECATED - Not used
-    float mouse_sensitivity_x = 1.0f;      // DEPRECATED - Not used
-    float mouse_sensitivity_y = 1.0f;      // DEPRECATED - Not used
-    float movement_factor = 0.3f;          // DEPRECATED - Not used
-    float movement_factor_x = 0.3f;        // DEPRECATED - Not used  
-    float movement_factor_y = 0.3f;        // DEPRECATED - Not used
-    float min_movement_threshold = 1.0f;   // DEPRECATED - Not used
     
     // Deadzone settings (still used)
     float min_movement_threshold_x = 1.0f; // X-axis minimum movement threshold (deadzone)
