@@ -103,11 +103,7 @@ static void draw_detection_settings()
         SAVE_PROFILE();
     }
     
-    if (UIHelpers::EnhancedSliderFloat("NMS Threshold", &ctx.config.nms_threshold, 0.01f, 1.00f, "%.2f",
-                                      "Non-Maximum Suppression threshold for removing overlapping detections. Lower values = less overlap allowed."))
-    {
-        SAVE_PROFILE();
-    }
+    // NMS removed - no longer needed
     
     // Max detections slider with better styling
     ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.15f, 0.15f, 0.18f, 0.95f));
