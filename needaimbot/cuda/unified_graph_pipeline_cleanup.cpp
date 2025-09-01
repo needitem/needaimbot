@@ -32,9 +32,8 @@ void UnifiedGraphPipeline::shutdown() {
         m_graphExec = nullptr;
     }
     
-    // OPTIMIZATION: RAII wrappers automatically handle unified streams cleanup  
+    // RAII wrappers automatically handle stream cleanup  
     m_pipelineStream.reset();  // Synchronize and destroy pipeline stream
-    m_outputStream.reset();    // Synchronize and destroy output stream
     
     // Clear TensorRT resources (unique_ptr will handle deletion)
     m_context.reset();
@@ -50,11 +49,8 @@ void UnifiedGraphPipeline::shutdown() {
         m_preview.finalTargets.clear();
     }
     
-    // Clear event pool
-    m_eventPool.clear();
-    
-    // OPTIMIZATION: Clear double buffer pipeline component (33% memory savings vs triple)
-    m_doubleBuffer.reset();
+    // Clear capture buffer
+    m_captureBuffer.release();
     
     // Clean up graph and buffers
     cleanupGraph();
