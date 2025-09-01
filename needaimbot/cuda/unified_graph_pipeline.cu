@@ -324,7 +324,7 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
             int modelRes = getModelInputResolution();
             size_t outputSize = m_outputSizes[primaryOutputName];
             
-            cudaMemsetAsync(outputBuffer, 0, outputSize, stream);
+            // Output buffer memset removed - not needed in graph capture
             
         }
         
@@ -938,12 +938,7 @@ bool UnifiedGraphPipeline::runInferenceAsync(cudaStream_t stream) {
         return false;
     }
      
-    if (false) {
-        cudaError_t eventErr = cudaSuccess;
-        if (eventErr != cudaSuccess) {
-            std::cerr << "[Pipeline] Failed to record detection event: " << cudaGetErrorString(eventErr) << std::endl;
-        }
-    }
+    // Removed dead code block
     
     return true;
 }
@@ -1270,7 +1265,7 @@ bool UnifiedGraphPipeline::performFrameCapture() {
         return false;
     }
     
-    cudaGetLastError();
+    // Removed unnecessary cudaGetLastError() call
     
     cudaError_t err = cudaGraphicsMapResources(1, &m_cudaResource, m_pipelineStream->get());
     if (err != cudaSuccess) {
