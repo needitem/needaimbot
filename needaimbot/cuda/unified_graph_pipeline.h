@@ -440,6 +440,10 @@ private:
     std::mutex m_graphMutex;
     bool m_hasFrameData = false;
     
+    // Frame skip state for real-time optimization
+    std::atomic<bool> m_inferenceInProgress{false};
+    std::atomic<size_t> m_skippedFrames{0};
+    
     // Pipeline state for non-blocking execution
     std::atomic<int> m_currentPipelineIdx{0};    // Current pipeline buffer index
     std::atomic<int> m_prevPipelineIdx{2};       // Previous pipeline buffer index
