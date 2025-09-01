@@ -1139,19 +1139,7 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
 }
 
 // Removed redundant NMS and copy functions
-
-
-void UnifiedGraphPipeline::handlePreviewUpdate(const PostProcessingConfig& config, cudaStream_t stream) {
-    return;
-}
-
-void UnifiedGraphPipeline::updatePreviewTargets(const PostProcessingConfig& config) {
-    return;
-}
-
-void UnifiedGraphPipeline::startPreviewCopy(const PostProcessingConfig& config, cudaStream_t stream) {
-    return;
-}
+// Empty preview functions removed for performance
 
 
 void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
