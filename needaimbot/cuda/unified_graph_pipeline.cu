@@ -325,8 +325,25 @@ UnifiedGraphPipeline::UnifiedGraphPipeline() {
 bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
     m_config = config;
     
-    // Single unified CUDA stream for sequential processing
-    m_pipelineStream = std::make_unique<CudaStream>();  // All operations in sequence
+    // Create high-priority CUDA stream for inference pipeline
+    // This ensures inference tasks get GPU priority over other operations
+    int leastPriority, greatestPriority;
+    cudaError_t err = cudaDeviceGetStreamPriorityRange(&leastPriority, &greatestPriority);
+    
+    if (err == cudaSuccess) {
+        // Create stream with highest priority (greatest priority value)
+        cudaStream_t priorityStream;
+        err = cudaStreamCreateWithPriority(&priorityStream, cudaStreamNonBlocking, greatestPriority);
+        if (err == cudaSuccess) {
+            m_pipelineStream = std::make_unique<CudaStream>(priorityStream);
+        } else {
+            // Fallback to normal stream if priority creation fails
+            m_pipelineStream = std::make_unique<CudaStream>();
+        }
+    } else {
+        // Fallback to normal stream if priority range query fails
+        m_pipelineStream = std::make_unique<CudaStream>();
+    }
     
     // Simple event for preview (using RAII)
     m_previewReadyEvent = std::make_unique<CudaEvent>(cudaEventDisableTiming);

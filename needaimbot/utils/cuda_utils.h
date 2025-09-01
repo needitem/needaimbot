@@ -57,8 +57,15 @@ public:
         }
     }
     
-    ~CudaStream() {
+    // Constructor that takes an existing stream (for priority streams)
+    explicit CudaStream(cudaStream_t existingStream) : stream_(existingStream), ownsStream_(true) {
         if (stream_) {
+            CudaResourceManager::GetInstance().RegisterStream(stream_);
+        }
+    }
+    
+    ~CudaStream() {
+        if (stream_ && ownsStream_) {
             if (!CudaResourceManager::GetInstance().IsShuttingDown()) {
                 CudaResourceManager::GetInstance().UnregisterStream(stream_);
                 cudaStreamDestroy(stream_);
@@ -69,20 +76,23 @@ public:
     CudaStream(const CudaStream&) = delete;
     CudaStream& operator=(const CudaStream&) = delete;
     
-    CudaStream(CudaStream&& other) noexcept : stream_(other.stream_) {
+    CudaStream(CudaStream&& other) noexcept : stream_(other.stream_), ownsStream_(other.ownsStream_) {
         other.stream_ = nullptr;
+        other.ownsStream_ = true;
     }
     
     CudaStream& operator=(CudaStream&& other) noexcept {
         if (this != &other) {
-            if (stream_) {
+            if (stream_ && ownsStream_) {
                 if (!CudaResourceManager::GetInstance().IsShuttingDown()) {
                     CudaResourceManager::GetInstance().UnregisterStream(stream_);
                     cudaStreamDestroy(stream_);
                 }
             }
             stream_ = other.stream_;
+            ownsStream_ = other.ownsStream_;
             other.stream_ = nullptr;
+            other.ownsStream_ = true;
         }
         return *this;
     }
@@ -91,6 +101,7 @@ public:
     
 private:
     cudaStream_t stream_ = nullptr;
+    bool ownsStream_ = true;  // Whether this object owns the stream and should destroy it
 };
 
 // RAII wrapper for CUDA pinned host memory
