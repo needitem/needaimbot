@@ -32,7 +32,6 @@
     <ClCompile Include="mouse\\input_drivers\\ghub.cpp" />
     <ClCompile Include="mouse\\input_drivers\\kmboxNet.cpp" />
     <ClCompile Include="mouse\\mouse.cpp" />
-    <ClCompile Include="cuda\\mouse_interface.cpp" />
     <ClCompile Include="cuda\\unified_graph_pipeline_cleanup.cpp" />
     <ClCompile Include="mouse\\recoil_control_thread.cpp" />
     <ClCompile Include="mouse\\rapidfire.cpp" />
@@ -83,7 +82,6 @@
     <ClInclude Include="cuda\cuda_error_check.h" />
     <ClInclude Include="cuda\pd_controller.h" />
     <ClInclude Include="cuda\pd_controller_shared.h" />
-    <ClInclude Include="cuda\mouse_interface.h" />
     <ClInclude Include="config\config.h" />
     <ClInclude Include="cuda\detection\postProcess.h" />
     <ClInclude Include="postprocess\postProcess.h" />
