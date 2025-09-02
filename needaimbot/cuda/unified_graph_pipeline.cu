@@ -291,10 +291,33 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
         return false;
     }
     
-    
+    // 캡처 버퍼에서 통합 버퍼로 복사 (Graph 실행 시 업데이트됨)
     if (m_config.enableCapture && !m_captureBuffer.empty()) {
         cudaMemcpyAsync(m_unifiedCaptureBuffer.data(), m_captureBuffer.data(),
                        m_unifiedCaptureBuffer.sizeInBytes(), cudaMemcpyHostToDevice, stream);
+    }
+    
+    // 전처리도 Graph에 포함
+    if (m_unifiedArena.yoloInput && !m_unifiedCaptureBuffer.empty()) {
+        int modelRes = getModelInputResolution();
+        cuda_unified_preprocessing(
+            m_unifiedCaptureBuffer.data(),
+            m_unifiedArena.yoloInput,
+            m_unifiedCaptureBuffer.cols(),
+            m_unifiedCaptureBuffer.rows(),
+            static_cast<int>(m_unifiedCaptureBuffer.step()),
+            modelRes,
+            modelRes,
+            stream
+        );
+        
+        // 전처리된 데이터를 TensorRT 입력 버퍼로 복사
+        if (m_inputBindings.find(m_inputName) != m_inputBindings.end()) {
+            void* inputBinding = m_inputBindings[m_inputName]->get();
+            size_t inputSize = modelRes * modelRes * 3 * sizeof(float);
+            cudaMemcpyAsync(inputBinding, m_unifiedArena.yoloInput, inputSize, 
+                           cudaMemcpyDeviceToDevice, stream);
+        }
     }
     
     // TensorRT 추론 포함 (Graph 호환 모델만 사용)
@@ -316,26 +339,9 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     }
     
     if (m_config.enableDetection) {
-        if (m_outputBindings.size() > 0 && m_outputNames.size() > 0) {
-            const std::string& primaryOutputName = m_outputNames[0];
-            void* outputBuffer = m_outputBindings[primaryOutputName]->get();
-            
-            int modelRes = getModelInputResolution();
-            size_t outputSize = m_outputSizes[primaryOutputName];
-            
-            // Output buffer memset removed - not needed in graph capture
-            
-        }
-        
-        // Buffer clearing moved inside performIntegratedPostProcessing
         performIntegratedPostProcessing(stream);
-        
         performTargetSelection(stream);
-        
     }
-    
-    
-    
     
     err = cudaStreamEndCapture(stream, &m_graph);
     if (err != cudaSuccess) {
@@ -367,10 +373,7 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     
     m_state.graphReady = true;
     m_state.needsRebuild = false;
-    
-    size_t numNodes = 0;
-    cudaGraphGetNodes(m_graph, nullptr, &numNodes);
-    
+    m_graphCaptured = true;  // Graph 캡처 완료 플래그 설정
     
     return true;
 }
@@ -629,6 +632,7 @@ void UnifiedGraphPipeline::runMainLoop() {
             if (!executePipelineWithErrorHandling()) {
                 std::this_thread::yield();
             }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1)); // 최소한의 딜레이 추가
         }
         
         if (wasAiming && !ctx.aiming) {
@@ -1110,20 +1114,9 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
     cudaError_t decodeErr = decodeYoloOutput(d_rawOutputPtr, outputType, shape, config, stream);
     if (decodeErr != cudaSuccess) {
         std::cerr << "[Pipeline] GPU decoding failed: " << cudaGetErrorString(decodeErr) << std::endl;
-        std::cerr << "  - Output pointer: " << d_rawOutputPtr << std::endl;
-        std::cerr << "  - Shape size: " << shape.size() << std::endl;
-        if (!shape.empty()) {
-            std::cerr << "  - Shape: ";
-            for (size_t i = 0; i < shape.size(); i++) {
-                std::cerr << shape[i];
-                if (i < shape.size() - 1) std::cerr << "x";
-            }
-            std::cerr << std::endl;
-        }
-        std::cerr << "  - Post-process type: " << config.postprocess << std::endl;
         return;
     }
-
+    
     // Direct use of decoded targets as final (no NMS needed for aimbot)
     if (m_unifiedArena.finalTargets && m_smallBufferArena.finalTargetsCount && 
         m_unifiedArena.decodedTargets && m_smallBufferArena.decodedCount) {
@@ -1413,11 +1406,7 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
     // Graph 재빌드가 필요한 경우
     if (m_state.needsRebuild || (ctx.config.use_cuda_graph && !m_state.graphReady)) {
         if (ctx.config.use_cuda_graph) {
-            std::cout << "[UnifiedGraph] Rebuilding CUDA Graph..." << std::endl;
-            if (captureGraph(stream)) {
-                std::cout << "[UnifiedGraph] Graph captured successfully" << std::endl;
-            } else {
-                std::cerr << "[UnifiedGraph] Graph capture failed, falling back to normal execution" << std::endl;
+            if (!captureGraph(stream)) {
                 ctx.config.use_cuda_graph = false;
             }
         } else if (m_state.graphReady) {
@@ -1428,17 +1417,32 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
     
     // Graph 모드이고 Graph가 준비된 경우
     if (ctx.config.use_cuda_graph && m_state.graphReady && m_graphExec) {
-        // Graph 실행 (전체 파이프라인을 한 번에)
+        // Graph 실행 전에 새로운 프레임 캡처만 수행 (전처리는 Graph에 포함됨)
+        if (!performFrameCapture()) {
+            return false;
+        }
+        
+        // 캡처된 프레임을 통합 버퍼로 복사 (Graph가 이 데이터를 사용함)
+        if (!m_captureBuffer.empty() && !m_unifiedCaptureBuffer.empty()) {
+            size_t dataSize = m_captureBuffer.rows() * m_captureBuffer.cols() * 
+                             m_captureBuffer.channels() * sizeof(unsigned char);
+            cudaMemcpyAsync(m_unifiedCaptureBuffer.data(), m_captureBuffer.data(), dataSize,
+                           cudaMemcpyDeviceToDevice, m_pipelineStream->get());
+        }
+        
+        // Graph 실행 (전처리, 추론, 후처리 모두 포함)
         cudaError_t err = cudaGraphLaunch(m_graphExec, stream ? stream : m_pipelineStream->get());
         if (err != cudaSuccess) {
-            std::cerr << "[UnifiedGraph] Graph launch failed: " << cudaGetErrorString(err) 
-                      << ", falling back to normal execution" << std::endl;
             m_state.needsRebuild = true;
             return executeNormalPipeline(stream);
         }
         
-        // Graph 실행 후 마우스 이동 처리
+        // Graph 실행 후 결과 복사
+        cudaMemcpyAsync(m_h_movement->get(), m_smallBufferArena.mouseMovement, 
+                       sizeof(MouseMovement), cudaMemcpyDeviceToHost, m_pipelineStream->get());
+        
         cudaStreamSynchronize(stream ? stream : m_pipelineStream->get());
+        
         processMouseMovement();
         
         m_state.frameCount++;
