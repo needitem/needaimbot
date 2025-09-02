@@ -285,6 +285,7 @@ public:
 
     // GPU performance settings
     int persistent_cache_limit_mb = 32; // TensorRT persistent L2 cache size in MB (default: 32MB for RTX 40 series)
+    bool use_cuda_graph = false; // Enable CUDA Graph optimization (faster but not compatible with all models)
     
     // RGB Color filter settings
     bool enable_color_filter;

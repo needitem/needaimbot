@@ -221,6 +221,7 @@ public:
     bool captureGraph(cudaStream_t stream = nullptr);
     
     bool executeGraphNonBlocking(cudaStream_t stream = nullptr);
+    bool executeNormalPipeline(cudaStream_t stream = nullptr);
     void processMouseMovement();
     
         
@@ -253,6 +254,7 @@ public:
     const GraphExecutionState& getState() const { return m_state; }
     float getAverageLatency() const { return m_state.avgLatency; }
     bool isGraphReady() const { return m_state.graphReady; }
+    void setGraphRebuildNeeded() { m_state.needsRebuild = true; }
     
     const SimpleCudaMat& getPreviewBuffer() const { 
         return m_preview.previewBuffer; 
