@@ -261,10 +261,11 @@ static void draw_advanced_settings()
 {
     auto& ctx = AppContext::getInstance();
     
-    static bool advanced_open = false;
-    UIHelpers::BeginCard(nullptr);
+    static bool advanced_open = true;  // 기본적으로 열려있게 변경
+    UIHelpers::BeginCard("Advanced Settings");
     
-    if (ImGui::CollapsingHeader("Advanced Settings", &advanced_open)) {
+    // CollapsingHeader 대신 항상 표시되도록 변경 (디버깅용)
+    if (true) {  // if (ImGui::CollapsingHeader("Advanced Settings", &advanced_open)) {
         UIHelpers::CompactSpacer();
         
         ImGui::PushItemWidth(-1);
