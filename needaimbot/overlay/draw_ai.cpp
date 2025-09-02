@@ -291,6 +291,21 @@ static void draw_advanced_settings()
         ImGui::SameLine();
         ImGui::Text("Persistent L2 Cache (MB)");
         UIHelpers::InfoTooltip("TensorRT persistent L2 cache size in MB. RTX 40 series: 24-72MB, RTX 30 series: 4-6MB, RTX 20 series: 4-5MB. Default: 32MB");
+        
+        ImGui::Spacing();
+        
+        if (ImGui::Checkbox("Use CUDA Graph", &ctx.config.use_cuda_graph)) {
+            SAVE_PROFILE();
+            // Graph 모드 변경 시 재빌드 필요
+            if (ctx.unifiedPipeline) {
+                ctx.unifiedPipeline->setGraphRebuildNeeded();
+            }
+        }
+        ImGui::SameLine();
+        UIHelpers::InfoTooltip("Enable CUDA Graph optimization for faster execution.\n"
+                              "⚠️ Not compatible with all models (disable if inference fails).\n"
+                              "✅ Works with: YOLO v8/v9/v10 without NMS\n"
+                              "❌ May not work with: Models with dynamic shapes or built-in NMS");
     }
     
     UIHelpers::EndCard();

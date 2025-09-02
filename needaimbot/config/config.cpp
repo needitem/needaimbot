@@ -334,6 +334,7 @@ bool Config::loadConfig(const std::string& filename)
     
     // GPU performance settings
     persistent_cache_limit_mb = get_long_ini("GPU", "persistent_cache_limit_mb", 32);
+    use_cuda_graph = get_bool_ini("GPU", "use_cuda_graph", false);
 
     button_targeting = splitString(get_string_ini("Buttons", "button_targeting", "RightMouseButton"));
     button_exit = splitString(get_string_ini("Buttons", "button_exit", "F2"));
@@ -594,7 +595,8 @@ bool Config::saveConfig(const std::string& filename)
     file << "cuda_device_id = " << cuda_device_id << "\n\n";
     
     file << "[GPU]\n";
-    file << "persistent_cache_limit_mb = " << persistent_cache_limit_mb << "\n\n";
+    file << "persistent_cache_limit_mb = " << persistent_cache_limit_mb << "\n";
+    file << "use_cuda_graph = " << (use_cuda_graph ? "true" : "false") << "\n\n";
 
     file << "[Buttons]\n";
     file << "button_targeting = " << joinStrings(button_targeting) << "\n";
