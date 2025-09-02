@@ -1,7 +1,6 @@
 #include "unified_graph_pipeline.h"
 #include "detection/cuda_float_processing.h"
 #include "simple_cuda_mat.h"
-#include "mouse_interface.h"
 #include "../AppContext.h"
 #include <d3d11.h>
 #include "../core/logger.h"
@@ -23,6 +22,10 @@
 #include <iomanip>
 #include <cuda.h>
 
+// Forward declare the mouse control function
+extern "C" {
+    void executeMouseMovement(int dx, int dy);
+}
 
 namespace needaimbot {
 
@@ -95,7 +98,7 @@ __global__ void fusedTargetSelectionAndMovementKernel(
         }
         
         int localBestIdx = -1;
-        float localBestDist = 1e9f;
+        float localBestDistX = 1e9f;  // X축 거리만 사용
         
         for (int i = threadIdx.x; i < count; i += blockDim.x) {
             Target& t = finalTargets[i];
@@ -110,28 +113,25 @@ __global__ void fusedTargetSelectionAndMovementKernel(
             }
             
             float centerX = t.x + t.width / 2.0f;
-            float centerY = t.y + t.height / 2.0f;
-            float dx = centerX - screen_center_x;
-            float dy = centerY - screen_center_y;
-            float distance = sqrtf(dx * dx + dy * dy);
+            float dx = fabsf(centerX - screen_center_x);  // X축 거리만 계산 (절댓값)
             
-            if (distance < localBestDist) {
-                localBestDist = distance;
+            if (dx < localBestDistX) {
+                localBestDistX = dx;
                 localBestIdx = i;
             }
         }
         
-        __shared__ float s_distances[256];
+        __shared__ float s_distancesX[256];  // X축 거리 배열
         __shared__ int s_indices[256];
         
-        s_distances[threadIdx.x] = localBestDist;
+        s_distancesX[threadIdx.x] = localBestDistX;
         s_indices[threadIdx.x] = localBestIdx;
         __syncthreads();
         
         for (int s = blockDim.x / 2; s > 0; s >>= 1) {
             if (threadIdx.x < s) {
-                if (s_distances[threadIdx.x + s] < s_distances[threadIdx.x]) {
-                    s_distances[threadIdx.x] = s_distances[threadIdx.x + s];
+                if (s_distancesX[threadIdx.x + s] < s_distancesX[threadIdx.x]) {
+                    s_distancesX[threadIdx.x] = s_distancesX[threadIdx.x + s];
                     s_indices[threadIdx.x] = s_indices[threadIdx.x + s];
                 }
             }
@@ -1578,9 +1578,13 @@ void UnifiedGraphPipeline::processMouseMovement() {
     
     const MouseMovement* movement = m_h_movement->get();
     
-    if (movement->dx != 0 || movement->dy != 0) {
-        cuda::executeMouseMovementFromGPU(movement->dx, movement->dy);
+    // Skip if no movement needed - check early to avoid function call overhead
+    if (movement->dx == 0 && movement->dy == 0) {
+        return;
     }
+    
+    // Direct call without wrapper - removed executeMouseMovementFromGPU layer
+    executeMouseMovement(movement->dx, movement->dy);
 }
 
 }
