@@ -792,16 +792,8 @@ void UnifiedGraphPipeline::getBindings() {
         }
         
         try {
-            // TensorRT 직접 포인터 사용 최적화
-            if (name == m_inputName && m_unifiedArena.yoloInput) {
-                // yoloInput 포인터를 직접 TensorRT 입력으로 사용
-                // CudaMemory 래퍼를 사용하되, 메모리 소유권은 가지지 않음
-                void* yoloPtr = static_cast<void*>(m_unifiedArena.yoloInput);
-                m_inputBindings[name] = std::make_unique<CudaMemory<uint8_t>>(
-                    static_cast<uint8_t*>(yoloPtr), size, false);
-            } else {
-                m_inputBindings[name] = std::make_unique<CudaMemory<uint8_t>>(size);
-            }
+            // 일단 원래대로 복구 - 직접 포인터 사용은 TensorRT 바인딩과 호환성 문제 있음
+            m_inputBindings[name] = std::make_unique<CudaMemory<uint8_t>>(size);
         } catch (const std::exception& e) {
             std::cerr << "[Pipeline] Failed to allocate input memory for '" << name << "': " << e.what() << std::endl;
             throw;
@@ -1373,8 +1365,14 @@ bool UnifiedGraphPipeline::performInference() {
         return false;
     }
     
-    // TensorRT 직접 포인터 사용으로 memcpy 제거됨
-    // inputBinding이 이미 yoloInput을 가리키므로 복사 불필요
+    void* inputBinding = m_inputBindings[m_inputName]->get();
+    
+    // 복사 최적화: 동일한 포인터면 복사 생략
+    if (inputBinding != m_unifiedArena.yoloInput) {
+        size_t inputSize = getModelInputResolution() * getModelInputResolution() * 3 * sizeof(float);
+        cudaMemcpyAsync(inputBinding, m_unifiedArena.yoloInput, inputSize, 
+                       cudaMemcpyDeviceToDevice, m_pipelineStream->get());
+    }
     
     if (!runInferenceAsync(m_pipelineStream->get())) {
         std::cerr << "[UnifiedGraph] TensorRT inference failed" << std::endl;
