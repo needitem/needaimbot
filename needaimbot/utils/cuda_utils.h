@@ -278,6 +278,13 @@ public:
         }
     }
     
+    // Constructor for wrapping external pointer (no ownership)
+    CudaMemory(T* external_ptr, size_t count, bool owns_memory) 
+        : ptr_(external_ptr), count_(count), owns_memory_(owns_memory) {
+        if (external_ptr && owns_memory_) {
+            CudaResourceManager::GetInstance().RegisterMemory(ptr_);
+        }
+    }
     
     ~CudaMemory() {
         reset();
@@ -287,9 +294,10 @@ public:
     CudaMemory& operator=(const CudaMemory&) = delete;
     
     CudaMemory(CudaMemory&& other) noexcept 
-        : ptr_(other.ptr_), count_(other.count_) {
+        : ptr_(other.ptr_), count_(other.count_), owns_memory_(other.owns_memory_) {
         other.ptr_ = nullptr;
         other.count_ = 0;
+        other.owns_memory_ = true;
     }
     
     CudaMemory& operator=(CudaMemory&& other) noexcept {
@@ -297,22 +305,28 @@ public:
             reset();
             ptr_ = other.ptr_;
             count_ = other.count_;
+            owns_memory_ = other.owns_memory_;
             other.ptr_ = nullptr;
             other.count_ = 0;
+            other.owns_memory_ = true;
         }
         return *this;
     }
     
     void reset(size_t new_count = 0, bool zero_initialize = false) {
-        if (ptr_) {
+        if (ptr_ && owns_memory_) {
             // Check if resource manager is shutting down
             if (!CudaResourceManager::GetInstance().IsShuttingDown()) {
                 CudaResourceManager::GetInstance().UnregisterMemory(ptr_);
                 cudaFree(ptr_);
             }
             ptr_ = nullptr;
+        } else if (ptr_ && !owns_memory_) {
+            // Just clear the pointer, don't free
+            ptr_ = nullptr;
         }
         count_ = new_count;
+        owns_memory_ = true;  // Reset always creates owned memory
         if (new_count > 0) {
             cudaError_t err = cudaMalloc(&ptr_, new_count * sizeof(T));
             if (err == cudaSuccess && ptr_) {
@@ -334,6 +348,7 @@ public:
 private:
     T* ptr_ = nullptr;
     size_t count_ = 0;
+    bool owns_memory_ = true;  // Whether this object owns the memory and should free it
 };
 
 #endif // CUDA_UTILS_H

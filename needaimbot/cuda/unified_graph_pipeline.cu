@@ -457,7 +457,23 @@ bool UnifiedGraphPipeline::allocateBuffers() {
             gpuMemory += width * height * 4 * sizeof(unsigned char);
         }
         
+        // Pinned Memory 힌트 추가 - GPU 메모리 상주 최적화
+        if (m_unifiedArena.megaArena && m_unifiedArena.megaArena->get()) {
+            // GPU 0번 디바이스에 메모리 선호 위치 설정
+            cudaMemAdvise(m_unifiedArena.megaArena->get(), unifiedArenaSize,
+                         cudaMemAdviseSetPreferredLocation, 0);
+            // GPU 0번 디바이스에서 접근 예정임을 알림
+            cudaMemAdvise(m_unifiedArena.megaArena->get(), unifiedArenaSize,
+                         cudaMemAdviseSetAccessedBy, 0);
+        }
         
+        // Small buffer arena에도 동일한 힌트 적용
+        if (m_smallBufferArena.arenaBuffer && m_smallBufferArena.arenaBuffer->get()) {
+            cudaMemAdvise(m_smallBufferArena.arenaBuffer->get(), arenaSize,
+                         cudaMemAdviseSetPreferredLocation, 0);
+            cudaMemAdvise(m_smallBufferArena.arenaBuffer->get(), arenaSize,
+                         cudaMemAdviseSetAccessedBy, 0);
+        }
         
         return true;
         
@@ -776,13 +792,19 @@ void UnifiedGraphPipeline::getBindings() {
         }
         
         try {
-            m_inputBindings[name] = std::make_unique<CudaMemory<uint8_t>>(size);
+            // TensorRT 직접 포인터 사용 최적화
+            if (name == m_inputName && m_unifiedArena.yoloInput) {
+                // yoloInput 포인터를 직접 TensorRT 입력으로 사용
+                // CudaMemory 래퍼를 사용하되, 메모리 소유권은 가지지 않음
+                void* yoloPtr = static_cast<void*>(m_unifiedArena.yoloInput);
+                m_inputBindings[name] = std::make_unique<CudaMemory<uint8_t>>(
+                    static_cast<uint8_t*>(yoloPtr), size, false);
+            } else {
+                m_inputBindings[name] = std::make_unique<CudaMemory<uint8_t>>(size);
+            }
         } catch (const std::exception& e) {
             std::cerr << "[Pipeline] Failed to allocate input memory for '" << name << "': " << e.what() << std::endl;
             throw;
-        }
-        
-        if (name == m_inputName && m_unifiedArena.yoloInput) {
         }
     }
 
@@ -1351,13 +1373,8 @@ bool UnifiedGraphPipeline::performInference() {
         return false;
     }
     
-    void* inputBinding = m_inputBindings[m_inputName]->get();
-    
-    if (inputBinding != m_unifiedArena.yoloInput) {
-        size_t inputSize = getModelInputResolution() * getModelInputResolution() * 3 * sizeof(float);
-        cudaMemcpyAsync(inputBinding, m_unifiedArena.yoloInput, inputSize, 
-                       cudaMemcpyDeviceToDevice, m_pipelineStream->get());
-    }
+    // TensorRT 직접 포인터 사용으로 memcpy 제거됨
+    // inputBinding이 이미 yoloInput을 가리키므로 복사 불필요
     
     if (!runInferenceAsync(m_pipelineStream->get())) {
         std::cerr << "[UnifiedGraph] TensorRT inference failed" << std::endl;
