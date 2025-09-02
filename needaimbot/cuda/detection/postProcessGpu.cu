@@ -536,7 +536,9 @@ __global__ void decodeYolo10GpuKernel(
     float img_scale,                   
     Target* d_decoded_detections,   
     int* d_decoded_count,              
-    int max_detections)                
+    int max_detections,
+    const unsigned char* d_class_filter,
+    int max_class_filter_size)                
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -547,6 +549,13 @@ __global__ void decodeYolo10GpuKernel(
 
         if (confidence > conf_threshold) {
             int classId = static_cast<int>(readOutputValue(d_raw_output, output_type, base_idx + 5));
+            
+            // Apply class filter if provided
+            if (d_class_filter && max_class_filter_size > 0) {
+                if (classId >= max_class_filter_size || d_class_filter[classId] == 0) {
+                    return;  // Skip this class
+                }
+            }
 
             // YOLO10 outputs x1, y1, x2, y2 (top-left and bottom-right corners)
             float x1 = readOutputValue(d_raw_output, output_type, base_idx + 0);
@@ -739,6 +748,8 @@ cudaError_t decodeYolo10Gpu(
     int* d_decoded_count, 
     int max_detections,
     int max_candidates,
+    const unsigned char* d_class_filter,
+    int max_class_filter_size,
     cudaStream_t stream)
 {
     
@@ -788,7 +799,8 @@ cudaError_t decodeYolo10Gpu(
 
     decodeYolo10GpuKernel<<<grid_size, block_size, 0, stream>>>(
         d_raw_output, (int)output_type, actual_candidates, (int)stride, num_classes,
-        conf_threshold, img_scale, d_decoded_detections, d_decoded_count, max_detections);
+        conf_threshold, img_scale, d_decoded_detections, d_decoded_count, max_detections,
+        d_class_filter, max_class_filter_size);
 
     cudaError_t kernel_err = cudaGetLastError();
     if (kernel_err != cudaSuccess) {

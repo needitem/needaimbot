@@ -1,6 +1,5 @@
 #include "unified_graph_pipeline.h"
 #include "detection/cuda_float_processing.h"
-#include "detection/filterGpu.h"
 #include "simple_cuda_mat.h"
 #include "mouse_interface.h"
 #include "../AppContext.h"
@@ -632,7 +631,6 @@ void UnifiedGraphPipeline::runMainLoop() {
             if (!executePipelineWithErrorHandling()) {
                 std::this_thread::yield();
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(1)); // 최소한의 딜레이 추가
         }
         
         if (wasAiming && !ctx.aiming) {
@@ -1011,21 +1009,29 @@ cudaError_t UnifiedGraphPipeline::decodeYoloOutput(void* d_rawOutputPtr, nvinfer
             return cudaErrorInvalidValue;
         }
         
+        // Update class filter if needed
+        updateClassFilterIfNeeded(stream);
+        
         // Use existing decodeYolo10Gpu which handles pre-processed format
         return decodeYolo10Gpu(
             d_rawOutputPtr, outputType, shape, m_numClasses,
             config.confidence_threshold, m_imgScale,
             m_unifiedArena.decodedTargets, m_smallBufferArena.decodedCount,
-            maxDecodedTargets, num_detections, stream);
+            maxDecodedTargets, num_detections,
+            m_smallBufferArena.allowFlags, m_numClasses, stream);
             
     } else if (config.postprocess == "yolo10") {
         int max_candidates = (shape.size() > 1) ? static_cast<int>(shape[1]) : 0;
+        
+        // Update class filter if needed
+        updateClassFilterIfNeeded(stream);
         
         return decodeYolo10Gpu(
             d_rawOutputPtr, outputType, shape, m_numClasses,
             config.confidence_threshold, m_imgScale,
             m_unifiedArena.decodedTargets, m_smallBufferArena.decodedCount,
-            maxDecodedTargets, max_candidates, stream);
+            maxDecodedTargets, max_candidates,
+            m_smallBufferArena.allowFlags, m_numClasses, stream);
             
     // NMS removed for performance - not needed for aimbot
     } else if (config.postprocess == "yolo8" || config.postprocess == "yolo9" || 
@@ -1301,6 +1307,60 @@ bool UnifiedGraphPipeline::performFrameCapture() {
         return false;
     }
     
+    // Update preview buffer immediately after capture if preview is enabled
+    if (m_preview.enabled && ctx.config.show_window && !m_captureBuffer.empty()) {
+        updatePreviewBuffer(m_captureBuffer);
+    }
+    
+    m_hasFrameData = true;
+    return true;
+}
+
+bool UnifiedGraphPipeline::performFrameCaptureDirectToUnified() {
+    auto& ctx = AppContext::getInstance();
+    
+    if (!m_config.enableCapture || !m_cudaResource || m_hasFrameData) {
+        return true;
+    }
+    
+    if (!performDesktopCapture(ctx)) {
+        return false;
+    }
+    
+    cudaError_t err = cudaGraphicsMapResources(1, &m_cudaResource, m_pipelineStream->get());
+    if (err != cudaSuccess) {
+        printf("[ERROR] Graphics map failed: %s\n", cudaGetErrorString(err));
+        return false;
+    }
+    
+    cudaArray_t array;
+    err = cudaGraphicsSubResourceGetMappedArray(&array, m_cudaResource, 0, 0);
+    if (err == cudaSuccess) {
+        // 직접 통합 버퍼로 복사 (중간 단계 제거)
+        err = cudaMemcpy2DFromArrayAsync(
+            m_unifiedCaptureBuffer.data(),
+            m_unifiedCaptureBuffer.step(),
+            array,
+            0, 0,
+            m_unifiedCaptureBuffer.cols() * sizeof(uchar4),
+            m_unifiedCaptureBuffer.rows(),
+            cudaMemcpyDeviceToDevice,
+            m_pipelineStream->get()
+        );
+        
+        // Preview 업데이트가 필요한 경우 통합 버퍼에서 직접 복사
+        if (m_preview.enabled && ctx.config.show_window) {
+            updatePreviewBuffer(m_unifiedCaptureBuffer);
+        }
+    }
+    
+    cudaGraphicsUnmapResources(1, &m_cudaResource, m_pipelineStream->get());
+    
+    if (err != cudaSuccess) {
+        printf("[ERROR] Capture failed: %s\n", cudaGetErrorString(err));
+        return false;
+    }
+    
     m_hasFrameData = true;
     return true;
 }
@@ -1308,9 +1368,7 @@ bool UnifiedGraphPipeline::performFrameCapture() {
 bool UnifiedGraphPipeline::performPreprocessing() {
     auto& ctx = AppContext::getInstance();
     
-    if (m_preview.enabled && ctx.preview_enabled && !m_captureBuffer.empty()) {
-        updatePreviewBuffer(m_captureBuffer);
-    }
+    // Preview buffer is now updated in performFrameCapture() instead
     
     if (!m_unifiedArena.yoloInput || m_captureBuffer.empty()) {
         return false;
@@ -1417,6 +1475,17 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
     
     // Graph 모드이고 Graph가 준비된 경우
     if (ctx.config.use_cuda_graph && m_state.graphReady && m_graphExec) {
+        // 이전 프레임의 마우스 이동 처리 (비동기 복사가 완료되었다면)
+        static cudaEvent_t graphCopyEvent = nullptr;
+        if (graphCopyEvent) {
+            cudaError_t eventStatus = cudaEventQuery(graphCopyEvent);
+            if (eventStatus == cudaSuccess) {
+                processMouseMovement();
+                cudaEventDestroy(graphCopyEvent);
+                graphCopyEvent = nullptr;
+            }
+        }
+        
         // Graph 실행 전에 새로운 프레임 캡처만 수행 (전처리는 Graph에 포함됨)
         if (!performFrameCapture()) {
             return false;
@@ -1437,13 +1506,15 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
             return executeNormalPipeline(stream);
         }
         
-        // Graph 실행 후 결과 복사
+        // Graph 실행 후 결과 복사 (비동기)
         cudaMemcpyAsync(m_h_movement->get(), m_smallBufferArena.mouseMovement, 
                        sizeof(MouseMovement), cudaMemcpyDeviceToHost, m_pipelineStream->get());
         
-        cudaStreamSynchronize(stream ? stream : m_pipelineStream->get());
-        
-        processMouseMovement();
+        // 복사 완료 이벤트 기록 (동기화 대신)
+        if (!graphCopyEvent) {
+            cudaEventCreateWithFlags(&graphCopyEvent, cudaEventDisableTiming);
+        }
+        cudaEventRecord(graphCopyEvent, m_pipelineStream->get());
         
         m_state.frameCount++;
         m_hasFrameData = false;

@@ -396,6 +396,7 @@ private:
     D3D11_BOX createCaptureBox(int centerX, int centerY, int captureSize, const D3D11_TEXTURE2D_DESC& desktopDesc);
     bool performDesktopCapture(const AppContext& ctx);
     bool performFrameCapture();
+    bool performFrameCaptureDirectToUnified();
     bool performPreprocessing();
     void updatePreviewBuffer(const SimpleCudaMat& currentBuffer);
     bool performInference();

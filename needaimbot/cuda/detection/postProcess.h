@@ -42,7 +42,9 @@ cudaError_t decodeYolo10Gpu(
     int* d_decoded_count,
     int max_detections,
     int max_candidates,
-    cudaStream_t stream);
+    const unsigned char* d_class_filter = nullptr,
+    int max_class_filter_size = 0,
+    cudaStream_t stream = 0);
 
 
 cudaError_t decodeYolo11Gpu(

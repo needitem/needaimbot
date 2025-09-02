@@ -60,7 +60,6 @@
     <ClCompile Include="core\defender_exception.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <CudaCompile Include="cuda\detection\filterGpu.cu" />
     <CudaCompile Include="cuda\detection\postProcessGpu.cu" />
     <CudaCompile Include="cuda\detection\cuda_float_processing.cu" />
     <CudaCompile Include="cuda\preprocessing.cu" />
@@ -76,7 +75,6 @@
     <ClInclude Include="core\performance_monitor.h" />
     <ClInclude Include="core\Target.h" />
     <ClInclude Include="core\thread_manager.h" />
-    <ClInclude Include="cuda\detection\filterGpu.h" />
     <ClInclude Include="cuda\preprocessing.h" />
     <ClInclude Include="cuda\simple_cuda_mat.h" />
     <ClInclude Include="cuda\detection\cuda_float_processing.h" />
