@@ -297,8 +297,7 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
                        m_unifiedCaptureBuffer.sizeInBytes(), cudaMemcpyHostToDevice, stream);
     }
     
-    
-    
+    // TensorRT 추론 포함 (Graph 호환 모델만 사용)
     if (m_context && m_config.enableDetection) {
         for (const auto& [name, buffer] : m_inputBindings) {
             if (buffer && buffer->get()) {
