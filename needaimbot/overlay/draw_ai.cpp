@@ -13,6 +13,7 @@
 #include "ui_helpers.h"
 #include "common_helpers.h"
 #include "draw_settings.h"
+#include "../cuda/unified_graph_pipeline.h"
 
 static void draw_model_settings()
 {
@@ -297,8 +298,9 @@ static void draw_advanced_settings()
         if (ImGui::Checkbox("Use CUDA Graph", &ctx.config.use_cuda_graph)) {
             SAVE_PROFILE();
             // Graph 모드 변경 시 재빌드 필요
-            if (ctx.unifiedPipeline) {
-                ctx.unifiedPipeline->setGraphRebuildNeeded();
+            auto& pipelineManager = needaimbot::PipelineManager::getInstance();
+            if (pipelineManager.getPipeline()) {
+                pipelineManager.getPipeline()->setGraphRebuildNeeded();
             }
         }
         ImGui::SameLine();
