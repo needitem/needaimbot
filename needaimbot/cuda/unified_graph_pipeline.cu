@@ -1411,6 +1411,49 @@ bool UnifiedGraphPipeline::performResultCopy() {
 bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
     auto& ctx = AppContext::getInstance();
     
+    // Graph 재빌드가 필요한 경우
+    if (m_state.needsRebuild || (ctx.config.use_cuda_graph && !m_state.graphReady)) {
+        if (ctx.config.use_cuda_graph) {
+            std::cout << "[UnifiedGraph] Rebuilding CUDA Graph..." << std::endl;
+            if (captureGraph(stream)) {
+                std::cout << "[UnifiedGraph] Graph captured successfully" << std::endl;
+            } else {
+                std::cerr << "[UnifiedGraph] Graph capture failed, falling back to normal execution" << std::endl;
+                ctx.config.use_cuda_graph = false;
+            }
+        } else if (m_state.graphReady) {
+            // Graph 모드가 꺼졌는데 Graph가 있으면 정리
+            cleanupGraph();
+        }
+    }
+    
+    // Graph 모드이고 Graph가 준비된 경우
+    if (ctx.config.use_cuda_graph && m_state.graphReady && m_graphExec) {
+        // Graph 실행 (전체 파이프라인을 한 번에)
+        cudaError_t err = cudaGraphLaunch(m_graphExec, stream ? stream : m_pipelineStream->get());
+        if (err != cudaSuccess) {
+            std::cerr << "[UnifiedGraph] Graph launch failed: " << cudaGetErrorString(err) 
+                      << ", falling back to normal execution" << std::endl;
+            m_state.needsRebuild = true;
+            return executeNormalPipeline(stream);
+        }
+        
+        // Graph 실행 후 마우스 이동 처리
+        cudaStreamSynchronize(stream ? stream : m_pipelineStream->get());
+        processMouseMovement();
+        
+        m_state.frameCount++;
+        m_hasFrameData = false;
+        return true;
+    }
+    
+    // Normal 실행 경로
+    return executeNormalPipeline(stream);
+}
+
+bool UnifiedGraphPipeline::executeNormalPipeline(cudaStream_t stream) {
+    auto& ctx = AppContext::getInstance();
+    
     // 이전 프레임의 마우스 이동 처리 (비동기 복사가 완료되었다면)
     static cudaEvent_t copyCompleteEvent = nullptr;
     if (copyCompleteEvent) {
