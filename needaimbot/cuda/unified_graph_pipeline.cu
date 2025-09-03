@@ -1506,6 +1506,11 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
             return executeNormalPipeline(stream);
         }
         
+        // Graph 실행 후 preview buffer 업데이트 (Graph 외부에서 처리)
+        if (m_preview.enabled && ctx.config.show_window && !m_unifiedCaptureBuffer.empty()) {
+            updatePreviewBuffer(m_unifiedCaptureBuffer);
+        }
+        
         // Graph 실행 후 결과 복사 (비동기)
         cudaMemcpyAsync(m_h_movement->get(), m_smallBufferArena.mouseMovement, 
                        sizeof(MouseMovement), cudaMemcpyDeviceToHost, m_pipelineStream->get());

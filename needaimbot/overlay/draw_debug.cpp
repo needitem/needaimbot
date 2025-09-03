@@ -133,11 +133,14 @@ void uploadDebugFrame(const SimpleCudaMat& bgrGpu)
     // GPU-based color conversion with error handling
     static SimpleCudaMat rgbaGpu;
     
-    try {
-        rgbaGpu.create(bgrGpu.rows(), bgrGpu.cols(), 4);
-    } catch (...) {
-        std::cerr << "[Debug] Failed to create RGBA GPU buffer" << std::endl;
-        return;
+    // Only recreate if size changes to avoid memory allocation overhead
+    if (rgbaGpu.empty() || rgbaGpu.rows() != bgrGpu.rows() || rgbaGpu.cols() != bgrGpu.cols()) {
+        try {
+            rgbaGpu.create(bgrGpu.rows(), bgrGpu.cols(), 4);
+        } catch (...) {
+            std::cerr << "[Debug] Failed to create RGBA GPU buffer" << std::endl;
+            return;
+        }
     }
     
     // Removed unnecessary synchronization for performance
@@ -165,12 +168,7 @@ void uploadDebugFrame(const SimpleCudaMat& bgrGpu)
     
     if (err != cudaSuccess) {
         std::cerr << "[Debug] CUDA color conversion failed: " << cudaGetErrorString(err) << std::endl;
-        std::cerr << "  - Input: " << bgrGpu.cols() << "x" << bgrGpu.rows() 
-                  << ", channels=" << bgrGpu.channels() 
-                  << ", step=" << bgrGpu.step() << std::endl;
-        std::cerr << "  - Output: " << rgbaGpu.cols() << "x" << rgbaGpu.rows() 
-                  << ", step=" << rgbaGpu.step() << std::endl;
-        std::cerr << "  - BGR ptr: " << bgrGpu.data() << ", RGBA ptr: " << rgbaGpu.data() << std::endl;
+        // Don't try to access GPU memory pointers during error conditions
         return;
     }
     
@@ -180,14 +178,19 @@ void uploadDebugFrame(const SimpleCudaMat& bgrGpu)
     // Download converted data from GPU with error handling
     static SimpleMat rgba;
     try {
-        
-        rgba.create(rgbaGpu.rows(), rgbaGpu.cols(), 4);
-        
-        // Validate CPU buffer
-        if (rgba.data() == nullptr) {
-            std::cerr << "[Debug] Failed to allocate CPU buffer" << std::endl;
-            return;
+        // Only recreate if size changes
+        if (rgba.empty() || rgba.rows() != rgbaGpu.rows() || rgba.cols() != rgbaGpu.cols()) {
+            rgba.create(rgbaGpu.rows(), rgbaGpu.cols(), 4);
+            
+            // Validate CPU buffer
+            if (rgba.data() == nullptr) {
+                std::cerr << "[Debug] Failed to allocate CPU buffer" << std::endl;
+                return;
+            }
         }
+        
+        // Synchronize before download to ensure GPU operations are complete
+        cudaDeviceSynchronize();
         
         rgbaGpu.download(rgba.data(), rgba.step());
         
