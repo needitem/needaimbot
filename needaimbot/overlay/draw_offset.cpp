@@ -394,10 +394,16 @@ void renderOffsetTab()
                 // Pipeline only writes, UI only reads
                 const SimpleCudaMat& previewFrame = pipeline->getPreviewBuffer();
                 
-                if (!previewFrame.empty()) {
-                    // Upload GPU frame directly to D3D11 texture for ImGui display
-                    // This is safe as we're only reading the buffer
-                    uploadDebugFrame(previewFrame);
+                if (!previewFrame.empty() && previewFrame.data() != nullptr) {
+                    // Additional validation before upload
+                    if (previewFrame.cols() > 0 && previewFrame.rows() > 0 &&
+                        previewFrame.cols() <= 10000 && previewFrame.rows() <= 10000) {
+                        // Upload GPU frame directly to D3D11 texture for ImGui display
+                        // This is safe as we're only reading the buffer
+                        uploadDebugFrame(previewFrame);
+                    } else {
+                        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Preview buffer invalid dimensions");
+                    }
                 } else {
                     ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Preview buffer empty");
                 }
