@@ -317,7 +317,7 @@ static BOOL WINAPI consoleHandler(DWORD signal) {
         ctx.frame_cv.notify_all();  // Wake up main thread
         ctx.aiming_cv.notify_all();  // Wake up pipeline thread if waiting
         
-        // Clean up CUDA resources on console event
+        // Clean up CUDA resources on console event (selective cleanup, no device reset)
         CudaResourceManager::Shutdown();
         
         // Give a short time for cleanup
