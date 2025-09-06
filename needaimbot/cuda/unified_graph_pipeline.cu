@@ -340,6 +340,26 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     if (m_config.enableDetection) {
         performIntegratedPostProcessing(stream);
         performTargetSelection(stream);
+        
+        // 결과를 호스트로 복사 (Graph 내부)
+        cudaMemcpyAsync(m_h_movement->get(), m_smallBufferArena.mouseMovement,
+                       sizeof(MouseMovement), cudaMemcpyDeviceToHost, stream);
+        
+        // 마우스 이동 콜백을 Graph에 포함 - 복사 완료 후 자동 실행
+        cudaLaunchHostFunc(stream,
+            [](void* userData) {
+                auto* pipeline = static_cast<UnifiedGraphPipeline*>(userData);
+                auto& ctx = AppContext::getInstance();
+                
+                if (!ctx.aiming || !pipeline->m_h_movement || !pipeline->m_h_movement->get()) {
+                    return;
+                }
+                
+                const MouseMovement* movement = pipeline->m_h_movement->get();
+                if (movement->dx != 0 || movement->dy != 0) {
+                    executeMouseMovement(movement->dx, movement->dy);
+                }
+            }, this);
     }
     
     err = cudaStreamEndCapture(stream, &m_graph);
@@ -1444,19 +1464,7 @@ int UnifiedGraphPipeline::findHeadClassId(const AppContext& ctx) {
     return -1;
 }
 
-bool UnifiedGraphPipeline::performResultCopy() {
-    auto& ctx = AppContext::getInstance();
-    
-    if (!m_smallBufferArena.mouseMovement || !m_h_movement || !m_h_movement->get()) {
-        return true;
-    }
-    
-    // 비동기 복사 사용 - 파이프라인 블로킹 방지
-    cudaMemcpyAsync(m_h_movement->get(), m_smallBufferArena.mouseMovement, 
-                    sizeof(MouseMovement), cudaMemcpyDeviceToHost, m_pipelineStream->get());
-    
-    return true;
-}
+// performResultCopy는 더 이상 필요 없음 - Graph와 콜백에서 직접 처리
 
 bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
     auto& ctx = AppContext::getInstance();
@@ -1475,18 +1483,7 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
     
     // Graph 모드이고 Graph가 준비된 경우
     if (ctx.config.use_cuda_graph && m_state.graphReady && m_graphExec) {
-        // 이전 프레임의 마우스 이동 처리 (비동기 복사가 완료되었다면)
-        static cudaEvent_t graphCopyEvent = nullptr;
-        if (graphCopyEvent) {
-            cudaError_t eventStatus = cudaEventQuery(graphCopyEvent);
-            if (eventStatus == cudaSuccess) {
-                processMouseMovement();
-                cudaEventDestroy(graphCopyEvent);
-                graphCopyEvent = nullptr;
-            }
-        }
-        
-        // Graph 실행 전에 새로운 프레임 캡처만 수행 (전처리는 Graph에 포함됨)
+        // Graph 실행 전에 새로운 프레임 캡처만 수행 (D3D11 interop은 Graph 외부)
         if (!performFrameCapture()) {
             return false;
         }
@@ -1499,7 +1496,8 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
                            cudaMemcpyDeviceToDevice, m_pipelineStream->get());
         }
         
-        // Graph 실행 (전처리, 추론, 후처리 모두 포함)
+        // Graph 실행 (전처리, 추론, 후처리, 마우스 이동 모두 포함)
+        // 동기화나 이벤트 없이 모든 작업이 자동으로 순서대로 실행됨
         cudaError_t err = cudaGraphLaunch(m_graphExec, stream ? stream : m_pipelineStream->get());
         if (err != cudaSuccess) {
             m_state.needsRebuild = true;
@@ -1510,16 +1508,6 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
         if (m_preview.enabled && ctx.config.show_window && !m_unifiedCaptureBuffer.empty()) {
             updatePreviewBuffer(m_unifiedCaptureBuffer);
         }
-        
-        // Graph 실행 후 결과 복사 (비동기)
-        cudaMemcpyAsync(m_h_movement->get(), m_smallBufferArena.mouseMovement, 
-                       sizeof(MouseMovement), cudaMemcpyDeviceToHost, m_pipelineStream->get());
-        
-        // 복사 완료 이벤트 기록 (동기화 대신)
-        if (!graphCopyEvent) {
-            cudaEventCreateWithFlags(&graphCopyEvent, cudaEventDisableTiming);
-        }
-        cudaEventRecord(graphCopyEvent, m_pipelineStream->get());
         
         m_state.frameCount++;
         m_hasFrameData = false;
@@ -1533,16 +1521,7 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
 bool UnifiedGraphPipeline::executeNormalPipeline(cudaStream_t stream) {
     auto& ctx = AppContext::getInstance();
     
-    // 이전 프레임의 마우스 이동 처리 (비동기 복사가 완료되었다면)
-    static cudaEvent_t copyCompleteEvent = nullptr;
-    if (copyCompleteEvent) {
-        cudaError_t eventStatus = cudaEventQuery(copyCompleteEvent);
-        if (eventStatus == cudaSuccess) {
-            processMouseMovement();
-            cudaEventDestroy(copyCompleteEvent);
-            copyCompleteEvent = nullptr;
-        }
-    }
+    // 이벤트 및 동기화 제거 - 콜백 체인만 사용
     
     if (!performFrameCapture()) {
         return false;
@@ -1557,15 +1536,29 @@ bool UnifiedGraphPipeline::executeNormalPipeline(cudaStream_t stream) {
             return false;
         }
         
-        if (!performResultCopy()) {
-            return false;
-        }
+        // 후처리
+        performIntegratedPostProcessing(m_pipelineStream->get());
+        performTargetSelection(m_pipelineStream->get());
         
-        // 복사 완료 이벤트 기록
-        if (!copyCompleteEvent) {
-            cudaEventCreate(&copyCompleteEvent);
-        }
-        cudaEventRecord(copyCompleteEvent, m_pipelineStream->get());
+        // 결과 복사
+        cudaMemcpyAsync(m_h_movement->get(), m_smallBufferArena.mouseMovement,
+                       sizeof(MouseMovement), cudaMemcpyDeviceToHost, m_pipelineStream->get());
+        
+        // 마우스 이동 콜백 - 복사 완료 후 자동 실행
+        cudaLaunchHostFunc(m_pipelineStream->get(),
+            [](void* userData) {
+                auto* pipeline = static_cast<UnifiedGraphPipeline*>(userData);
+                auto& ctx = AppContext::getInstance();
+                
+                if (!ctx.aiming || !pipeline->m_h_movement || !pipeline->m_h_movement->get()) {
+                    return;
+                }
+                
+                const MouseMovement* movement = pipeline->m_h_movement->get();
+                if (movement->dx != 0 || movement->dy != 0) {
+                    executeMouseMovement(movement->dx, movement->dy);
+                }
+            }, this);
     }
     
     m_state.frameCount++;
@@ -1574,22 +1567,6 @@ bool UnifiedGraphPipeline::executeNormalPipeline(cudaStream_t stream) {
     return true;
 }
 
-void UnifiedGraphPipeline::processMouseMovement() {
-    auto& ctx = AppContext::getInstance();
-    
-    if (!ctx.aiming || !m_h_movement || !m_h_movement->get()) {
-        return;
-    }
-    
-    const MouseMovement* movement = m_h_movement->get();
-    
-    // Skip if no movement needed - check early to avoid function call overhead
-    if (movement->dx == 0 && movement->dy == 0) {
-        return;
-    }
-    
-    // Direct call without wrapper - removed executeMouseMovementFromGPU layer
-    executeMouseMovement(movement->dx, movement->dy);
-}
+// processMouseMovement는 이제 Graph와 콜백 내부에서 인라인으로 처리됨
 
 }
