@@ -161,15 +161,35 @@ public:
         // We just clear our tracking list to avoid double-free
         allocated_memory_.clear();
         
-        // Reset all devices
+        // Selective cleanup instead of cudaDeviceReset
         if (err == cudaSuccess) {
             for (int i = 0; i < device_count; ++i) {
                 cudaSetDevice(i);
-                cudaDeviceReset();
+                
+                // Clear L2 cache
+                cudaCtxResetPersistingL2Cache();
+                
+                // Trim memory pools to free cached memory
+                cudaMemPoolTrimTo(nullptr, 0);
+                
+                // Clear graph memory pool
+                cudaDeviceGraphMemTrim(i);
+                
+                // Free default memory pool resources
+                cudaMemPool_t memPool;
+                if (cudaDeviceGetDefaultMemPool(&memPool, i) == cudaSuccess) {
+                    cudaMemPoolTrimTo(memPool, 0);
+                }
+                
+                // Flush GPU L2 cache
+                cudaDeviceSynchronize();
+                
+                // Note: We intentionally DO NOT call cudaDeviceReset() here
+                // to avoid reinitalization overhead on next program start
             }
         }
         
-        std::cout << "[CudaResourceManager] Cleanup completed." << std::endl;
+        std::cout << "[CudaResourceManager] Cleanup completed (without device reset)." << std::endl;
     }
     
     bool IsShuttingDown() const {
