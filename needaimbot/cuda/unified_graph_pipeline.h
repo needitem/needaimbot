@@ -222,7 +222,6 @@ public:
     
     bool executeGraphNonBlocking(cudaStream_t stream = nullptr);
     bool executeNormalPipeline(cudaStream_t stream = nullptr);
-    void processMouseMovement();
     
         
     void setInputTexture(cudaGraphicsResource_t resource) { m_cudaResource = resource; }
@@ -401,7 +400,6 @@ private:
     void updatePreviewBuffer(const SimpleCudaMat& currentBuffer);
     bool performInference();
     int findHeadClassId(const AppContext& ctx);
-    bool performResultCopy();
 
     void clearDetectionBuffers(const PostProcessingConfig& config, cudaStream_t stream);
     cudaError_t decodeYoloOutput(void* d_rawOutputPtr, nvinfer1::DataType outputType, 
