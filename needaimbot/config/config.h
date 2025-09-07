@@ -312,6 +312,13 @@ public:
     float pd_kp_y = 0.4f;  // Proportional gain for Y axis
     float pd_kd_x = 0.15f;  // Derivative gain for X axis
     float pd_kd_y = 0.15f;  // Derivative gain for Y axis
+    
+    // Advanced movement control settings
+    float movement_dead_zone = 2.0f;  // Pixels - no movement below this distance
+    float movement_near_distance = 10.0f;  // Distance for precision mode
+    float movement_far_distance = 50.0f;  // Distance for full speed mode
+    float movement_near_scale = 0.3f;  // Speed multiplier for precision (0-1)
+    float movement_max_speed = 120.0f;  // Maximum pixels per frame
     float pd_derivative_filter = 0.7f;  // Derivative filter alpha (0.0 = no filter, 1.0 = full filter)
 
     // Active profile management

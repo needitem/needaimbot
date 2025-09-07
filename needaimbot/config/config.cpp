@@ -290,6 +290,9 @@ bool Config::loadConfig(const std::string& filename)
     pd_kd_y = static_cast<float>(get_double_ini("PDController", "pd_kd_y", 0.15));
     pd_derivative_filter = static_cast<float>(get_double_ini("PDController", "pd_derivative_filter", 0.7));
     
+    // Load movement control settings
+    movement_dead_zone = static_cast<float>(get_double_ini("PDController", "movement_dead_zone", 2.0));
+    
     input_method = get_string_ini("Mouse", "input_method", "WIN32");
     easynorecoil_start_delay_ms = get_long_ini("Mouse", "easynorecoil_start_delay_ms", 0);
     easynorecoil_end_delay_ms = get_long_ini("Mouse", "easynorecoil_end_delay_ms", 0);
@@ -548,7 +551,8 @@ bool Config::saveConfig(const std::string& filename)
     file << "pd_kp_y = " << pd_kp_y << "\n";
     file << "pd_kd_x = " << pd_kd_x << "\n";
     file << "pd_kd_y = " << pd_kd_y << "\n";
-    file << "pd_derivative_filter = " << pd_derivative_filter << "\n\n";
+    file << "pd_derivative_filter = " << pd_derivative_filter << "\n";
+    file << "movement_dead_zone = " << movement_dead_zone << "\n\n";
 
     file << "[Recoil]\n";
     file << "active_scope_magnification = " << active_scope_magnification << "\n";
