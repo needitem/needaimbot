@@ -82,9 +82,32 @@ static void draw_movement_controls()
     UIHelpers::EndCard();
 }
 
+static void draw_dead_zone_settings()
+{
+    auto& ctx = AppContext::getInstance();
+    
+    UIHelpers::BeginCard("Dead Zone Settings");
+    
+    UIHelpers::BeautifulText("Prevent micro-adjustments when target is very close", UIHelpers::GetAccentColor(0.8f));
+    UIHelpers::CompactSpacer();
+    
+    // Dead zone
+    ImGui::Text("Dead Zone (pixels)");
+    ImGui::SameLine(150);
+    ImGui::PushItemWidth(200);
+    if (ImGui::SliderFloat("##DeadZone", &ctx.config.movement_dead_zone, 0.0f, 10.0f, "%.1f")) {
+        SAVE_PROFILE();
+    }
+    ImGui::PopItemWidth();
+    UIHelpers::HelpMarker("No movement when target is closer than this distance. Helps prevent jittery aiming.");
+    
+    UIHelpers::EndCard();
+}
+
 void draw_mouse()
 {
     auto& ctx = AppContext::getInstance();
     
     draw_movement_controls();
+    draw_dead_zone_settings();
 }

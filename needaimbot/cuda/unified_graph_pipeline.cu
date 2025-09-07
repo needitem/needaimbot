@@ -79,7 +79,8 @@ __global__ void fusedTargetSelectionAndMovementKernel(
     int detection_resolution,
     int* __restrict__ bestTargetIndex,
     Target* __restrict__ bestTarget,
-    needaimbot::MouseMovement* __restrict__ output_movement
+    needaimbot::MouseMovement* __restrict__ output_movement,
+    float dead_zone
 ) {
     if (blockIdx.x == 0) {
         if (threadIdx.x == 0) {
@@ -155,8 +156,9 @@ __global__ void fusedTargetSelectionAndMovementKernel(
             float error_x = target_center_x - screen_center_x;
             float error_y = target_center_y - screen_center_y;
             
-            float movement_x = error_x * kp_x;
-            float movement_y = error_y * kp_y;
+            // Simple proportional control with dead zone only
+            float movement_x = (fabsf(error_x) > dead_zone) ? error_x * kp_x : 0.0f;
+            float movement_y = (fabsf(error_y) > dead_zone) ? error_y * kp_y : 0.0f;
             
             output_movement->dx = static_cast<int>(movement_x);
             output_movement->dy = static_cast<int>(movement_y);
@@ -1177,6 +1179,7 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
     static float cached_kp_y = 0.1f;
     static float cached_head_y_offset = 0.2f;
     static float cached_body_y_offset = 0.5f;
+    static float cached_dead_zone = 2.0f;
     
     if (!m_graphCaptured) {
         std::lock_guard<std::mutex> lock(ctx.configMutex);
@@ -1185,6 +1188,7 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         cached_kp_y = ctx.config.pd_kp_y;
         cached_head_y_offset = ctx.config.head_y_offset;
         cached_body_y_offset = ctx.config.body_y_offset;
+        cached_dead_zone = ctx.config.movement_dead_zone;
     }
     
     float crosshairX = ctx.config.detection_resolution / 2.0f;
@@ -1209,7 +1213,8 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         ctx.config.detection_resolution,
         m_smallBufferArena.bestTargetIndex,
         m_smallBufferArena.bestTarget,
-        m_smallBufferArena.mouseMovement
+        m_smallBufferArena.mouseMovement,
+        cached_dead_zone
     );
     
     cudaError_t err = cudaGetLastError();
