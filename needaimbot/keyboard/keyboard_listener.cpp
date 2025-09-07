@@ -108,7 +108,8 @@ void keyboardListener() {
         last_pause_state = current_pause;
 
         // Auto shoot functionality removed
-        // OPTIMIZATION: Use yield for keyboard polling to reduce latency while saving CPU
-        std::this_thread::yield();
+        // Add small sleep to reduce CPU usage while maintaining responsiveness
+        // 10ms polling rate is sufficient for keyboard input (100Hz)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 }

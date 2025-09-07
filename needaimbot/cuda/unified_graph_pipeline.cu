@@ -432,8 +432,7 @@ void UnifiedGraphPipeline::cleanupGraph() {
 }
 
 void UnifiedGraphPipeline::updateStatistics(float latency) {
-    const float alpha = 0.1f;
-    m_state.avgLatency = (1.0f - alpha) * m_state.avgLatency + alpha * latency;
+    // 통계 업데이트 제거 - CPU 사용 감소
 }
 
 bool UnifiedGraphPipeline::allocateBuffers() {
@@ -611,12 +610,9 @@ void UnifiedGraphPipeline::handleAimbotActivation() {
 }
 
 bool UnifiedGraphPipeline::executePipelineWithErrorHandling() {
-    try {
-        return executeGraphNonBlocking(m_pipelineStream->get());
-    } catch (const std::exception& e) {
-        std::cerr << "[UnifiedPipeline] Exception in pipeline: " << e.what() << std::endl;
-        return false;
-    }
+    // 에러 처리 제거 - GPU가 알아서 처리
+    executeGraphNonBlocking(m_pipelineStream->get());
+    return true;  // 항상 성공으로 간주
 }
 
 void UnifiedGraphPipeline::runMainLoop() {
@@ -650,9 +646,7 @@ void UnifiedGraphPipeline::runMainLoop() {
         }
         
         while (ctx.aiming && !m_shouldStop && !ctx.should_exit) {
-            if (!executePipelineWithErrorHandling()) {
-                std::this_thread::yield();
-            }
+            executePipelineWithErrorHandling();
         }
         
         if (wasAiming && !ctx.aiming) {
@@ -1474,16 +1468,11 @@ int UnifiedGraphPipeline::findHeadClassId(const AppContext& ctx) {
 bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
     auto& ctx = AppContext::getInstance();
     
-    // Graph 재빌드가 필요한 경우
-    if (m_state.needsRebuild || (ctx.config.use_cuda_graph && !m_state.graphReady)) {
-        if (ctx.config.use_cuda_graph) {
-            if (!captureGraph(stream)) {
-                ctx.config.use_cuda_graph = false;
-            }
-        } else if (m_state.graphReady) {
-            // Graph 모드가 꺼졌는데 Graph가 있으면 정리
-            cleanupGraph();
-        }
+    // Graph 초기 빌드만 체크 (재빌드 체크 제거)
+    static bool graphInitialized = false;
+    if (!graphInitialized && ctx.config.use_cuda_graph) {
+        captureGraph(stream);
+        graphInitialized = true;
     }
     
     // Graph 모드이고 Graph가 준비된 경우
@@ -1501,20 +1490,15 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
                            cudaMemcpyDeviceToDevice, m_pipelineStream->get());
         }
         
-        // Graph 실행 (전처리, 추론, 후처리, 마우스 이동 모두 포함)
-        // 동기화나 이벤트 없이 모든 작업이 자동으로 순서대로 실행됨
-        cudaError_t err = cudaGraphLaunch(m_graphExec, stream ? stream : m_pipelineStream->get());
-        if (err != cudaSuccess) {
-            m_state.needsRebuild = true;
-            return executeNormalPipeline(stream);
-        }
+        // Graph 실행 - 에러 체크 없이 바로 실행
+        cudaGraphLaunch(m_graphExec, stream ? stream : m_pipelineStream->get());
         
         // Graph 실행 후 preview buffer 업데이트 (Graph 외부에서 처리)
         if (m_preview.enabled && ctx.config.show_window && !m_unifiedCaptureBuffer.empty()) {
             updatePreviewBuffer(m_unifiedCaptureBuffer);
         }
         
-        m_state.frameCount++;
+        // 프레임 카운트 제거 - 불필요한 CPU 작업
         m_hasFrameData = false;
         return true;
     }
@@ -1566,7 +1550,7 @@ bool UnifiedGraphPipeline::executeNormalPipeline(cudaStream_t stream) {
             }, this);
     }
     
-    m_state.frameCount++;
+    // 프레임 카운트 제거
     m_hasFrameData = false;
     
     return true;
