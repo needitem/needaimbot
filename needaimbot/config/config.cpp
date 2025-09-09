@@ -13,8 +13,10 @@
 #include "keyboard/keyboard_listener.h"
 
 std::string Config::getExecutableDir() {
-    std::filesystem::path exePath = std::filesystem::current_path();
-    return exePath.string();
+    char buffer[MAX_PATH];
+    GetModuleFileNameA(NULL, buffer, MAX_PATH);
+    std::filesystem::path exePath(buffer);
+    return exePath.parent_path().string();
 }
 
 std::string Config::getConfigPath(const std::string& filename) {
@@ -759,6 +761,10 @@ bool Config::setActiveProfile(const std::string& profileName) {
     // Load the profile
     if (loadProfile(profileName)) {
         active_profile_name = profileName;
+        
+        // Save the active profile name to main config.ini
+        saveConfig(getConfigPath("config.ini"));
+        
         return true;
     }
     
