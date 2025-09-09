@@ -208,7 +208,7 @@ void uploadDebugFrame(const SimpleCudaMat& bgrGpu)
         cudaEventRecord(downloadComplete, debugStream);
         
         // Only wait if necessary (can be made fully async in future)
-        cudaEventSynchronize(downloadComplete)
+        cudaEventSynchronize(downloadComplete);
     } catch (const std::exception& e) {
         std::cerr << "[Debug] Exception during download: " << e.what() << std::endl;
         return;
