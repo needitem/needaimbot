@@ -290,11 +290,8 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
         return false;
     }
     
-    // 캡처 버퍼에서 통합 버퍼로 복사 (Graph 실행 시 업데이트됨)
-    if (m_config.enableCapture && !m_captureBuffer.empty()) {
-        cudaMemcpyAsync(m_unifiedCaptureBuffer.data(), m_captureBuffer.data(),
-                       m_unifiedCaptureBuffer.sizeInBytes(), cudaMemcpyHostToDevice, stream);
-    }
+    // Graph 내부에서는 복사 불필요 - executeGraphNonBlocking에서 직접 통합 버퍼로 캡처함
+    // 캡처는 Graph 외부에서 performFrameCaptureDirectToUnified()로 처리
     
     // 전처리도 Graph에 포함
     if (m_unifiedArena.yoloInput && !m_unifiedCaptureBuffer.empty()) {
@@ -1472,17 +1469,9 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
     
     // Graph 모드이고 Graph가 준비된 경우
     if (ctx.config.use_cuda_graph && m_state.graphReady && m_graphExec) {
-        // Graph 실행 전에 새로운 프레임 캡처만 수행 (D3D11 interop은 Graph 외부)
-        if (!performFrameCapture()) {
+        // Graph 실행 전에 직접 통합 버퍼로 캡처 (중복 복사 제거)
+        if (!performFrameCaptureDirectToUnified()) {
             return false;
-        }
-        
-        // 캡처된 프레임을 통합 버퍼로 복사 (Graph가 이 데이터를 사용함)
-        if (!m_captureBuffer.empty() && !m_unifiedCaptureBuffer.empty()) {
-            size_t dataSize = m_captureBuffer.rows() * m_captureBuffer.cols() * 
-                             m_captureBuffer.channels() * sizeof(unsigned char);
-            cudaMemcpyAsync(m_unifiedCaptureBuffer.data(), m_captureBuffer.data(), dataSize,
-                           cudaMemcpyDeviceToDevice, m_pipelineStream->get());
         }
         
         // Graph 실행 - 에러 체크 없이 바로 실행
