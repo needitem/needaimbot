@@ -136,7 +136,7 @@ public:
         if (err == cudaSuccess) {
             for (int i = 0; i < device_count; ++i) {
                 cudaSetDevice(i);
-                cudaDeviceSynchronize();
+                // cudaDeviceSynchronize() removed for performance
             }
         }
         
@@ -181,8 +181,8 @@ public:
                     cudaMemPoolTrimTo(memPool, 0);
                 }
                 
-                // Flush GPU L2 cache
-                cudaDeviceSynchronize();
+                // Flush GPU L2 cache - sync removed for performance
+                // cudaDeviceSynchronize();
                 
                 // Note: We intentionally DO NOT call cudaDeviceReset() here
                 // to avoid reinitalization overhead on next program start
