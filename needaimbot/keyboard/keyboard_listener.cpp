@@ -108,8 +108,13 @@ void keyboardListener() {
         last_pause_state = current_pause;
 
         // Auto shoot functionality removed
-        // Add small sleep to reduce CPU usage while maintaining responsiveness
-        // 10ms polling rate is sufficient for keyboard input (100Hz)
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        // Adaptive polling: faster when aiming, slower when idle
+        if (current_aiming) {
+            // Fast polling (500Hz) when aiming for better responsiveness
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        } else {
+            // Slow polling (100Hz) when not aiming to save CPU
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
     }
 }
