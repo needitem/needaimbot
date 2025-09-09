@@ -25,8 +25,22 @@ static void draw_model_settings()
     static std::vector<std::string> availableModels;
     static std::vector<const char*> modelsItems;
     static bool models_initialized = false;
+    static std::filesystem::file_time_type last_model_check;
     
-    if (!models_initialized || ctx.model_changed) {
+    // Only refresh if not initialized or model folder changed
+    auto current_time = std::filesystem::file_time_type::clock::now();
+    bool should_refresh = !models_initialized || ctx.model_changed;
+    
+    // Check for model folder changes every 5 seconds
+    if (!should_refresh && models_initialized) {
+        auto time_diff = std::chrono::duration_cast<std::chrono::seconds>(current_time - last_model_check).count();
+        if (time_diff > 5) {
+            should_refresh = true;
+            last_model_check = current_time;
+        }
+    }
+    
+    if (should_refresh) {
         availableModels = getAvailableModels();
         modelsItems.clear();
         modelsItems.reserve(availableModels.size());
@@ -34,6 +48,7 @@ static void draw_model_settings()
             modelsItems.push_back(modelName.c_str());
         }
         models_initialized = true;
+        ctx.model_changed = false;
     }
     
     if (availableModels.empty())
@@ -77,17 +92,16 @@ static void draw_detection_settings()
     
     UIHelpers::BeginCard("Detection Parameters");
     
-    // Cache postprocess options - static initialization
-    static std::vector<std::string> postprocessOptions = { "yolo8", "yolo9", "yolo10", "yolo11", "yolo12", "yolo_nms" };
-    static std::vector<const char*> postprocessItems;
-    static bool postprocess_initialized = false;
-    
-    if (!postprocess_initialized) {
+    // Cache postprocess options - initialize once
+    static const std::vector<std::string> postprocessOptions = { "yolo8", "yolo9", "yolo10", "yolo11", "yolo12", "yolo_nms" };
+    static std::vector<const char*> postprocessItems = [](){
+        std::vector<const char*> items;
+        items.reserve(postprocessOptions.size());
         for (const auto& option : postprocessOptions) {
-            postprocessItems.push_back(option.c_str());
+            items.push_back(option.c_str());
         }
-        postprocess_initialized = true;
-    }
+        return items;
+    }();
 
     int currentPostprocessIndex = 0;
     for (size_t i = 0; i < postprocessOptions.size(); ++i)

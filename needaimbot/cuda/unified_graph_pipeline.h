@@ -399,6 +399,7 @@ private:
     bool performFrameCaptureDirectToUnified();
     bool performPreprocessing();
     void updatePreviewBuffer(const SimpleCudaMat& currentBuffer);
+    void updatePreviewBufferAllocation();  // Dynamic allocation based on show_window state
     bool performInference();
     int findHeadClassId(const AppContext& ctx);
 
