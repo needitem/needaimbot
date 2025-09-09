@@ -553,10 +553,7 @@ void OverlayThread()
     // Overlay rendering frame timing - Fixed 30 FPS for UI
     auto lastOverlayFrameTime = std::chrono::high_resolution_clock::now();
     
-    // Config save batching to reduce I/O
-    bool config_needs_save = false;
-    auto last_config_save_time = std::chrono::high_resolution_clock::now();
-    const std::chrono::milliseconds config_save_interval(Constants::CONFIG_SAVE_INTERVAL_MS);
+    // Config saves immediately on change - no batching needed
 
     while (!should_exit && !AppContext::getInstance().should_exit)
     {
@@ -780,7 +777,6 @@ void OverlayThread()
 
                         
                         // MouseThread config update removed - GPU handles mouse control directly
-                        config_needs_save = true;
                     }
 
                     
@@ -788,7 +784,6 @@ void OverlayThread()
                     {
                         capture_cursor_changed.store(true);
                         prev_capture_cursor = ctx.config.capture_cursor;
-                        config_needs_save = true;
                     }
 
                     
@@ -796,14 +791,12 @@ void OverlayThread()
                     {
                         capture_borders_changed.store(true);
                         prev_capture_borders = ctx.config.capture_borders;
-                        config_needs_save = true;
                     }
 
                     
                     if (prev_monitor_idx != ctx.config.monitor_idx)
                     {
                         prev_monitor_idx = ctx.config.monitor_idx;
-                        config_needs_save = true;
                     }
 
                     
@@ -824,7 +817,6 @@ void OverlayThread()
                         prev_auto_aim = ctx.config.auto_aim;
                         prev_easynorecoil = ctx.config.easynorecoil;
                         prev_easynorecoilstrength = ctx.config.easynorecoilstrength;
-                        config_needs_save = true;
                     }
 
                     
@@ -833,8 +825,6 @@ void OverlayThread()
                         prev_bScope_multiplier = ctx.config.bScope_multiplier;
 
                         // MouseThread config update removed - GPU handles mouse control directly
-
-                        config_needs_save = true;
                     }
 
                     
@@ -842,7 +832,6 @@ void OverlayThread()
                     {
                         BYTE opacity = ctx.config.overlay_opacity;
                         SetLayeredWindowAttributes(g_hwnd, 0, opacity, LWA_ALPHA);
-                        config_needs_save = true;
                     }
 
                     
@@ -851,7 +840,6 @@ void OverlayThread()
                     {
                         prev_confidence_threshold = ctx.config.confidence_threshold;
                         prev_max_detections = ctx.config.max_detections;
-                        config_needs_save = true;
                     }
 
                     
@@ -864,8 +852,6 @@ void OverlayThread()
                         
                         // Update preview flag when show_window changes
                         ctx.preview_enabled = ctx.config.show_window;
-                        
-                        config_needs_save = true;
                     }
                     
                     
@@ -876,7 +862,6 @@ void OverlayThread()
                         prev_show_fps = ctx.config.show_fps;
                         prev_window_size = ctx.config.window_size;
                         prev_screenshot_delay = ctx.config.screenshot_delay;
-                        config_needs_save = true;
                     }
                 }
 
@@ -926,16 +911,6 @@ void OverlayThread()
         {
             // Window not visible: slow down loop
             std::this_thread::sleep_for(std::chrono::milliseconds(Constants::OVERLAY_HIDDEN_SLEEP_MS));
-        }
-        
-        // Batched config saving to reduce I/O overhead
-        auto now = std::chrono::high_resolution_clock::now();
-        if (ctx.config_dirty.load() && 
-            std::chrono::duration_cast<std::chrono::milliseconds>(now - last_config_save_time) >= config_save_interval)
-        {
-            ctx.config.saveActiveProfile();
-            ctx.config_dirty = false;
-            last_config_save_time = now;
         }
     }
 

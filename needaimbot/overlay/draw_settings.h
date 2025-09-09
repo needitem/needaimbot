@@ -1,14 +1,14 @@
 #ifndef DRAW_SETTINGS_H
 #define DRAW_SETTINGS_H
 
-// Macro for marking config as dirty - batched save will handle it
+// Macro for immediately saving to active profile
 #define SAVE_PROFILE() do { \
-    AppContext::getInstance().config_dirty = true; \
+    AppContext::getInstance().config.saveActiveProfile(); \
 } while(0)
 
-// Macro for marking weapon profile as dirty - batched save will handle it
+// Macro for immediately saving weapon profile
 #define SAVE_WEAPON_PROFILE() do { \
-    AppContext::getInstance().config_dirty = true; \
+    AppContext::getInstance().config.saveActiveProfile(); \
 } while(0)
 
 void draw_capture_settings();
