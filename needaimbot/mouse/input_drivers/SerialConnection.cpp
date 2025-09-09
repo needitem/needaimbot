@@ -278,8 +278,10 @@ bool SerialConnection::reconnect()
     }
     is_open_ = false;
     
-    // 잠시 대기 (Arduino 재시작 시간 확보)
-    Sleep(100);
+    // Use event-based wait for Arduino restart instead of Sleep
+    if (write_event_) {
+        WaitForSingleObject(write_event_, 100);
+    }
     
     // 재연결 시도
     if (openPort() && configurePort()) {
@@ -483,7 +485,7 @@ void SerialConnection::write(const std::string& data)
     // 실패한 경우 재시도
     const int MAX_RETRIES = 2;
     for (int retry = 0; retry < MAX_RETRIES; ++retry) {
-        Sleep(5); // 짧은 대기
+        // Remove unnecessary delay - async operation handles timing
         
         if (writeAsync(data.c_str(), static_cast<DWORD>(data.length()))) {
             return; // 재시도 성공
