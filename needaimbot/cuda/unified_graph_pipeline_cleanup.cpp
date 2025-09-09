@@ -97,8 +97,7 @@ void UnifiedGraphPipeline::shutdown() {
     m_engine.reset();   // Then engine
     m_runtime.reset();  // Finally runtime
     
-    // Clear unified buffer (SimpleCudaMat destructor will handle memory)
-    m_unifiedCaptureBuffer.release();
+    // m_unifiedCaptureBuffer removed - using m_captureBuffer
     
     // Clear preview buffers if allocated
     if (m_preview.enabled) {
