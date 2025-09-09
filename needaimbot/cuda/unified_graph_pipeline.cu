@@ -294,14 +294,14 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     // 캡처는 Graph 외부에서 performFrameCaptureDirectToUnified()로 처리
     
     // 전처리도 Graph에 포함
-    if (m_unifiedArena.yoloInput && !m_unifiedCaptureBuffer.empty()) {
+    if (m_unifiedArena.yoloInput && !m_captureBuffer.empty()) {
         int modelRes = getModelInputResolution();
         cuda_unified_preprocessing(
-            m_unifiedCaptureBuffer.data(),
+            m_captureBuffer.data(),
             m_unifiedArena.yoloInput,
-            m_unifiedCaptureBuffer.cols(),
-            m_unifiedCaptureBuffer.rows(),
-            static_cast<int>(m_unifiedCaptureBuffer.step()),
+            m_captureBuffer.cols(),
+            m_captureBuffer.rows(),
+            static_cast<int>(m_captureBuffer.step()),
             modelRes,
             modelRes,
             stream
@@ -441,8 +441,6 @@ bool UnifiedGraphPipeline::allocateBuffers() {
     try {
         m_captureBuffer.create(height, width, 4);
         
-        m_unifiedCaptureBuffer.create(height, width, 4);
-        
         size_t arenaSize = SmallBufferArena::calculateArenaSize();
         m_smallBufferArena.arenaBuffer = std::make_unique<CudaMemory<uint8_t>>(arenaSize);
         m_smallBufferArena.initializePointers(m_smallBufferArena.arenaBuffer->get());
@@ -464,8 +462,8 @@ bool UnifiedGraphPipeline::allocateBuffers() {
             m_preview.enabled = false;
         }
         
-        if (!m_unifiedCaptureBuffer.data()) {
-            throw std::runtime_error("Unified capture buffer allocation failed");
+        if (!m_captureBuffer.data()) {
+            throw std::runtime_error("Capture buffer allocation failed");
         }
         
         size_t gpuMemory = (width * height * 4 + yoloSize * yoloSize * 3) * sizeof(float);
@@ -504,7 +502,7 @@ bool UnifiedGraphPipeline::allocateBuffers() {
 void UnifiedGraphPipeline::deallocateBuffers() {
     
     m_captureBuffer.release();
-    m_unifiedCaptureBuffer.release();
+    // m_unifiedCaptureBuffer removed - using m_captureBuffer
     
     if (m_preview.enabled) {
         m_preview.previewBuffer.release();
@@ -535,15 +533,15 @@ void UnifiedGraphPipeline::setInputFrame(const SimpleCudaMat& frame) {
         return;
     }
     
-    if (m_unifiedCaptureBuffer.empty() || 
-        m_unifiedCaptureBuffer.rows() != frame.rows() || 
-        m_unifiedCaptureBuffer.cols() != frame.cols() || 
-        m_unifiedCaptureBuffer.channels() != frame.channels()) {
-        m_unifiedCaptureBuffer.create(frame.rows(), frame.cols(), frame.channels());
+    if (m_captureBuffer.empty() || 
+        m_captureBuffer.rows() != frame.rows() || 
+        m_captureBuffer.cols() != frame.cols() || 
+        m_captureBuffer.channels() != frame.channels()) {
+        m_captureBuffer.create(frame.rows(), frame.cols(), frame.channels());
     }
     
     size_t dataSize = frame.rows() * frame.cols() * frame.channels() * sizeof(unsigned char);
-    cudaError_t err = cudaMemcpyAsync(m_unifiedCaptureBuffer.data(), frame.data(), dataSize, 
+    cudaError_t err = cudaMemcpyAsync(m_captureBuffer.data(), frame.data(), dataSize, 
                                       cudaMemcpyDeviceToDevice, m_pipelineStream->get());
     if (err != cudaSuccess) {
         printf("[ERROR] Failed to copy frame to buffer: %s\n", cudaGetErrorString(err));
@@ -1349,19 +1347,19 @@ bool UnifiedGraphPipeline::performFrameCaptureDirectToUnified() {
     if (err == cudaSuccess) {
         // 직접 통합 버퍼로 복사 (중간 단계 제거)
         err = cudaMemcpy2DFromArrayAsync(
-            m_unifiedCaptureBuffer.data(),
-            m_unifiedCaptureBuffer.step(),
+            m_captureBuffer.data(),
+            m_captureBuffer.step(),
             array,
             0, 0,
-            m_unifiedCaptureBuffer.cols() * sizeof(uchar4),
-            m_unifiedCaptureBuffer.rows(),
+            m_captureBuffer.cols() * sizeof(uchar4),
+            m_captureBuffer.rows(),
             cudaMemcpyDeviceToDevice,
             m_pipelineStream->get()
         );
         
         // Preview 업데이트가 필요한 경우 통합 버퍼에서 직접 복사
         if (m_preview.enabled && ctx.config.show_window) {
-            updatePreviewBuffer(m_unifiedCaptureBuffer);
+            updatePreviewBuffer(m_captureBuffer);
         }
     }
     
@@ -1406,7 +1404,10 @@ bool UnifiedGraphPipeline::performPreprocessing() {
 }
 
 void UnifiedGraphPipeline::updatePreviewBuffer(const SimpleCudaMat& currentBuffer) {
-    if (!m_preview.enabled || m_preview.previewBuffer.empty()) {
+    auto& ctx = AppContext::getInstance();
+    
+    // Check both m_preview.enabled AND current show_window state
+    if (!m_preview.enabled || !ctx.config.show_window || m_preview.previewBuffer.empty()) {
         return;
     }
     
@@ -1478,8 +1479,8 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
         cudaGraphLaunch(m_graphExec, stream ? stream : m_pipelineStream->get());
         
         // Graph 실행 후 preview buffer 업데이트 (Graph 외부에서 처리)
-        if (m_preview.enabled && ctx.config.show_window && !m_unifiedCaptureBuffer.empty()) {
-            updatePreviewBuffer(m_unifiedCaptureBuffer);
+        if (m_preview.enabled && ctx.config.show_window && !m_captureBuffer.empty()) {
+            updatePreviewBuffer(m_captureBuffer);
         }
         
         // 프레임 카운트 제거 - 불필요한 CPU 작업
