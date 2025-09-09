@@ -55,12 +55,15 @@ void keyboardListener() {
     std::vector<int> auto_shoot_vk_codes = get_vk_codes(ctx.config.button_auto_shoot);
     std::vector<int> exit_vk_codes = get_vk_codes(ctx.config.button_exit);
 
-
     static bool last_aiming_state = false;
     static bool last_shooting_state = false;
     static bool last_pause_state = false;
-
+    
+    // Event-driven keyboard monitoring using Windows events
+    HANDLE hKeyboardEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
+    
     while (!ctx.should_exit) {
+        // Check for exit key
         if (is_any_key_pressed(exit_vk_codes)) {
             ctx.should_exit = true;
             ctx.frame_cv.notify_all();  // Wake up main thread
@@ -72,7 +75,7 @@ void keyboardListener() {
         // Always update aiming state atomically
         ctx.aiming = current_aiming;
         
-        // Notify pipeline thread on state change
+        // Notify pipeline thread on state change (event-driven)
         if (current_aiming != last_aiming_state) {
             // Wake up pipeline thread using event-driven mechanism
             ctx.pipeline_activation_cv.notify_one();  
@@ -81,7 +84,6 @@ void keyboardListener() {
         }
 
         // Track auto_shoot button state
-        // If button_auto_shoot is empty or "None", shooting is always false
         bool current_shooting = false;
         if (!ctx.config.button_auto_shoot.empty() && 
             ctx.config.button_auto_shoot[0] != "None") {
@@ -107,14 +109,13 @@ void keyboardListener() {
         }
         last_pause_state = current_pause;
 
-        // Auto shoot functionality removed
-        // Adaptive polling: faster when aiming, slower when idle
-        if (current_aiming) {
-            // Fast polling (500Hz) when aiming for better responsiveness
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        } else {
-            // Slow polling (100Hz) when not aiming to save CPU
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }
+        // Event-driven adaptive delay - use wait with timeout for better CPU efficiency
+        DWORD waitTime = current_aiming ? 2 : 10; // 2ms when aiming, 10ms when idle
+        
+        // Use WaitForSingleObject with timeout instead of sleep for better responsiveness
+        // This allows the thread to wake immediately if signaled
+        WaitForSingleObject(hKeyboardEvent, waitTime);
     }
+    
+    CloseHandle(hKeyboardEvent);
 }

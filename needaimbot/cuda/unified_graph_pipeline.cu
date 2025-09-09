@@ -454,13 +454,8 @@ bool UnifiedGraphPipeline::allocateBuffers() {
         
         m_h_movement = std::make_unique<CudaPinnedMemory<MouseMovement>>(1);
         
-        if (ctx.config.show_window) {
-            m_preview.enabled = true;
-            m_preview.previewBuffer.create(height, width, 4);
-            m_preview.finalTargets.reserve(maxDetections);
-        } else {
-            m_preview.enabled = false;
-        }
+        // Dynamic preview buffer allocation based on current state
+        updatePreviewBufferAllocation();
         
         if (!m_captureBuffer.data()) {
             throw std::runtime_error("Capture buffer allocation failed");
@@ -504,10 +499,10 @@ void UnifiedGraphPipeline::deallocateBuffers() {
     m_captureBuffer.release();
     // m_unifiedCaptureBuffer removed - using m_captureBuffer
     
-    if (m_preview.enabled) {
-        m_preview.previewBuffer.release();
-        m_preview.finalTargets.clear();
-    }
+    // Always release preview buffer if allocated
+    m_preview.previewBuffer.release();
+    m_preview.finalTargets.clear();
+    m_preview.enabled = false;
     
     m_smallBufferArena.arenaBuffer.reset();
     
@@ -1397,8 +1392,30 @@ bool UnifiedGraphPipeline::performPreprocessing() {
     return true;
 }
 
+void UnifiedGraphPipeline::updatePreviewBufferAllocation() {
+    auto& ctx = AppContext::getInstance();
+    
+    // Dynamically allocate/deallocate preview buffer based on show_window state
+    if (ctx.config.show_window && !m_preview.enabled) {
+        // Need to allocate preview buffer
+        int width = ctx.config.detection_resolution;
+        int height = ctx.config.detection_resolution;
+        m_preview.previewBuffer.create(height, width, 4);
+        m_preview.finalTargets.reserve(ctx.config.max_detections);
+        m_preview.enabled = true;
+    } else if (!ctx.config.show_window && m_preview.enabled) {
+        // Need to deallocate preview buffer
+        m_preview.previewBuffer.release();
+        m_preview.finalTargets.clear();
+        m_preview.enabled = false;
+    }
+}
+
 void UnifiedGraphPipeline::updatePreviewBuffer(const SimpleCudaMat& currentBuffer) {
     auto& ctx = AppContext::getInstance();
+    
+    // First ensure preview buffer allocation is correct
+    updatePreviewBufferAllocation();
     
     // Check both m_preview.enabled AND current show_window state
     if (!m_preview.enabled || !ctx.config.show_window || m_preview.previewBuffer.empty()) {

@@ -84,6 +84,9 @@ public:
     // Application control
     std::mutex configMutex;
     
+    // Config save batching - reduces disk I/O
+    std::atomic<bool> config_dirty{false};
+    
     std::atomic<float> g_movementDeltaX{0.0f};
     std::atomic<float> g_movementDeltaY{0.0f};
     

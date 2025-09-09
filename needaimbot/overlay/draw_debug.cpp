@@ -189,13 +189,26 @@ void uploadDebugFrame(const SimpleCudaMat& bgrGpu)
             }
         }
         
-        // Synchronize before download to ensure GPU operations are complete
-        cudaDeviceSynchronize();
+        // Use async download with stream for non-blocking operation
+        static cudaStream_t debugStream = nullptr;
+        if (!debugStream) {
+            cudaStreamCreate(&debugStream);
+        }
         
-        rgbaGpu.download(rgba.data(), rgba.step());
+        // Async download to CPU memory
+        cudaMemcpyAsync(rgba.data(), rgbaGpu.data(), 
+                       rgbaGpu.rows() * rgbaGpu.step(), 
+                       cudaMemcpyDeviceToHost, debugStream);
         
-        // Download is synchronous, no additional sync needed
-        // The download() function already waits for completion
+        // Use event for completion check instead of blocking sync
+        static cudaEvent_t downloadComplete = nullptr;
+        if (!downloadComplete) {
+            cudaEventCreate(&downloadComplete);
+        }
+        cudaEventRecord(downloadComplete, debugStream);
+        
+        // Only wait if necessary (can be made fully async in future)
+        cudaEventSynchronize(downloadComplete)
     } catch (const std::exception& e) {
         std::cerr << "[Debug] Exception during download: " << e.what() << std::endl;
         return;

@@ -3,12 +3,9 @@
 #include <iostream>
 
 std::vector<GameWindow> WindowHelper::EnumerateGameWindows() {
-    std::vector<GameWindow>* windows = new std::vector<GameWindow>();
-    EnumWindows(EnumWindowsProc, reinterpret_cast<LPARAM>(windows));
-    
-    std::vector<GameWindow> result = *windows;
-    delete windows;
-    return result;
+    std::vector<GameWindow> windows;
+    EnumWindows(EnumWindowsProc, reinterpret_cast<LPARAM>(&windows));
+    return windows;
 }
 
 BOOL CALLBACK WindowHelper::EnumWindowsProc(HWND hwnd, LPARAM lParam) {
