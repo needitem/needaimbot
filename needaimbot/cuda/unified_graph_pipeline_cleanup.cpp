@@ -23,7 +23,7 @@ void UnifiedGraphPipeline::shutdown() {
     if (m_pipelineStream) {
         cudaStreamSynchronize(m_pipelineStream->get());
     }
-    cudaDeviceSynchronize();
+    // cudaDeviceSynchronize() removed for performance - stream sync is sufficient
     
     // Clear TensorRT L2 persistent cache explicitly
     if (m_context) {

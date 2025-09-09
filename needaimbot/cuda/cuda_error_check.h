@@ -54,7 +54,7 @@ class CudaResourceGuard {
 public:
     CudaResourceGuard() = default;
     ~CudaResourceGuard() {
-        // Ensure all CUDA operations are complete
+        // Ensure all CUDA operations are complete (only in destructor for safety)
         cudaDeviceSynchronize();
         cudaError_t error = cudaGetLastError();
         if (error != cudaSuccess) {
