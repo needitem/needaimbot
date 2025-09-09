@@ -2,7 +2,6 @@
 // All calculations are done on GPU via CUDA Graph pipeline
 
 #include "mouse.h"
-#include "rapidfire.h"
 #include "input_drivers/SerialConnection.h"
 #include "input_drivers/MakcuConnection.h"
 #include "input_drivers/ghub.h"
@@ -128,11 +127,6 @@ void MouseThread::updateConfig(int resolution, float bScope_multiplier, float no
     this->norecoil_ms = norecoil_ms;
 }
 
-void MouseThread::updateRapidFire()
-{
-    // Stub implementation - RapidFire not yet integrated
-    // TODO: Implement when RapidFire is needed
-}
 
 // Simplified interface for GPU to call
 // Global input method for direct GPU->mouse control
