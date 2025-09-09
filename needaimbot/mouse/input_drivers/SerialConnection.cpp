@@ -595,16 +595,25 @@ void SerialConnection::startListening()
 void SerialConnection::listeningThreadFunc()
 {
     std::string buffer;
+    DWORD wait_time = 10;  // Start with 10ms wait
+    int empty_reads = 0;
     
     while (listening_) {
         if (!is_open_) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            // Use event wait instead of sleep when port is closed
+            if (write_event_) {
+                WaitForSingleObject(write_event_, 50);
+            } else {
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
             continue;
         }
 
         std::string data = read();
         if (!data.empty()) {
             buffer += data;
+            empty_reads = 0;  // Reset counter on successful read
+            wait_time = 1;    // Minimal wait when data is flowing
             
             size_t pos = 0;
             while ((pos = buffer.find('\n')) != std::string::npos) {
@@ -616,7 +625,22 @@ void SerialConnection::listeningThreadFunc()
                 }
             }
         } else {
-            std::this_thread::sleep_for(std::chrono::microseconds(100)); // 100μs 대기
+            empty_reads++;
+            // Adaptive wait: increase delay when no data, decrease when active
+            if (empty_reads < 10) {
+                wait_time = 1;  // 1ms for first 10 empty reads
+            } else if (empty_reads < 100) {
+                wait_time = 5;  // 5ms for next 90 empty reads
+            } else {
+                wait_time = 20; // 20ms for idle state
+            }
+            
+            if (read_event_) {
+                // Use event-based wait with timeout for better responsiveness
+                WaitForSingleObject(read_event_, wait_time);
+            } else {
+                std::this_thread::sleep_for(std::chrono::milliseconds(wait_time));
+            }
         }
     }
 }

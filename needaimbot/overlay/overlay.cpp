@@ -16,7 +16,6 @@
 #include "AppContext.h"
 #include "overlay.h"
 #include "mouse/mouse.h"
-#include "mouse/rapidfire.h"
 #include "overlay/draw_settings.h"
 #include "overlay/draw_offset.h"
 #include "overlay/ui_helpers.h"

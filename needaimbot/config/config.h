@@ -171,8 +171,6 @@ public:
     bool auto_aim;
     bool enable_aimbot;
     bool enable_triggerbot;
-    bool enable_rapidfire;
-    int rapidfire_cps;  // Clicks per second for rapidfire
 
     
     float crosshair_offset_x;

@@ -40,7 +40,8 @@ void RecoilControlThread::threadLoop() {
         
         // Check if recoil control is enabled
         if (!ctx.config.easynorecoil || !enabled_) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            // Longer sleep when disabled to save CPU
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
             continue;
         }
         
@@ -59,7 +60,7 @@ void RecoilControlThread::threadLoop() {
             // Apply recoil compensation
             applyRecoilCompensation();
             
-            // Control loop timing based on weapon profile or config
+            // Dynamic delay based on weapon profile or config
             float delay_ms = 10.0f; // Default delay
             if (ctx.config.active_weapon_profile_index >= 0 && 
                 ctx.config.active_weapon_profile_index < ctx.config.weapon_profiles.size()) {
@@ -69,10 +70,28 @@ void RecoilControlThread::threadLoop() {
                 delay_ms = ctx.config.norecoil_ms;
             }
             
-            std::this_thread::sleep_for(std::chrono::microseconds(static_cast<int>(delay_ms * 1000)));
+            // Adaptive delay: faster during initial recoil, slower later
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - recoil_start_time_).count();
+            if (elapsed_ms < 500) {
+                // First 500ms: use configured delay for responsiveness
+                std::this_thread::sleep_for(std::chrono::microseconds(static_cast<int>(delay_ms * 1000)));
+            } else {
+                // After 500ms: slightly longer delay to save CPU
+                std::this_thread::sleep_for(std::chrono::microseconds(static_cast<int>(delay_ms * 1500)));
+            }
         } else {
             was_recoil_active_ = false;
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            // Adaptive polling: faster check when mouse buttons were recently active
+            auto now = std::chrono::steady_clock::now();
+            auto time_since_active = std::chrono::duration_cast<std::chrono::milliseconds>(now - recoil_start_time_).count();
+            if (time_since_active < 1000) {
+                // Recently active: check more frequently
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            } else {
+                // Idle: slower polling to save CPU
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
         }
     }
 }

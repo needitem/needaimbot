@@ -1316,10 +1316,7 @@ bool UnifiedGraphPipeline::performFrameCapture() {
         return false;
     }
     
-    // Update preview buffer immediately after capture if preview is enabled
-    if (m_preview.enabled && ctx.config.show_window && !m_captureBuffer.empty()) {
-        updatePreviewBuffer(m_captureBuffer);
-    }
+    // Preview buffer update moved to executeGraphNonBlocking to avoid duplication
     
     m_hasFrameData = true;
     return true;
@@ -1357,10 +1354,7 @@ bool UnifiedGraphPipeline::performFrameCaptureDirectToUnified() {
             m_pipelineStream->get()
         );
         
-        // Preview 업데이트가 필요한 경우 통합 버퍼에서 직접 복사
-        if (m_preview.enabled && ctx.config.show_window) {
-            updatePreviewBuffer(m_captureBuffer);
-        }
+        // Preview buffer update moved to executeGraphNonBlocking to avoid duplication
     }
     
     cudaGraphicsUnmapResources(1, &m_cudaResource, m_pipelineStream->get());

@@ -34,7 +34,6 @@
     <ClCompile Include="mouse\\mouse.cpp" />
     <ClCompile Include="cuda\\unified_graph_pipeline_cleanup.cpp" />
     <ClCompile Include="mouse\\recoil_control_thread.cpp" />
-    <ClCompile Include="mouse\\rapidfire.cpp" />
     <ClCompile Include="mouse\\input_drivers\\my_enc.cpp" />
     <ClCompile Include="mouse\\input_drivers\\rzctl.cpp" />
     <ClCompile Include="mouse\\input_drivers\\SerialConnection.cpp" />
@@ -111,7 +110,6 @@
     <ClInclude Include="mouse\kmboxNet.h" />
     <ClInclude Include="mouse\mouse.h" />
     <ClInclude Include="mouse\recoil_control_thread.h" />
-    <ClInclude Include="mouse\rapidfire.h" />
     <ClInclude Include="mouse\my_enc.h" />
     <ClInclude Include="mouse\rzctl.h" />
     <ClInclude Include="overlay\common_helpers.h" />
