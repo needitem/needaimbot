@@ -21,7 +21,21 @@ static void draw_model_settings()
     
     UIHelpers::BeginCard("Model & Engine Settings");
     
-    std::vector<std::string> availableModels = getAvailableModels();
+    // Cache model list - only refresh when needed
+    static std::vector<std::string> availableModels;
+    static std::vector<const char*> modelsItems;
+    static bool models_initialized = false;
+    
+    if (!models_initialized || ctx.model_changed) {
+        availableModels = getAvailableModels();
+        modelsItems.clear();
+        modelsItems.reserve(availableModels.size());
+        for (const auto& modelName : availableModels) {
+            modelsItems.push_back(modelName.c_str());
+        }
+        models_initialized = true;
+    }
+    
     if (availableModels.empty())
     {
         UIHelpers::BeautifulText("No models available in the 'models' folder.", UIHelpers::GetWarningColor());
@@ -34,14 +48,6 @@ static void draw_model_settings()
         if (it != availableModels.end())
         {
             currentModelIndex = static_cast<int>(std::distance(availableModels.begin(), it));
-        }
-
-        std::vector<const char*> modelsItems;
-        modelsItems.reserve(availableModels.size());
-
-        for (const auto& modelName : availableModels)
-        {
-            modelsItems.push_back(modelName.c_str());
         }
 
         if (UIHelpers::EnhancedCombo("AI Model", &currentModelIndex, modelsItems.data(), static_cast<int>(modelsItems.size()), 
@@ -71,11 +77,16 @@ static void draw_detection_settings()
     
     UIHelpers::BeginCard("Detection Parameters");
     
-    std::vector<std::string> postprocessOptions = { "yolo8", "yolo9", "yolo10", "yolo11", "yolo12", "yolo_nms" };
-    std::vector<const char*> postprocessItems;
-    for (const auto& option : postprocessOptions)
-    {
-        postprocessItems.push_back(option.c_str());
+    // Cache postprocess options - static initialization
+    static std::vector<std::string> postprocessOptions = { "yolo8", "yolo9", "yolo10", "yolo11", "yolo12", "yolo_nms" };
+    static std::vector<const char*> postprocessItems;
+    static bool postprocess_initialized = false;
+    
+    if (!postprocess_initialized) {
+        for (const auto& option : postprocessOptions) {
+            postprocessItems.push_back(option.c_str());
+        }
+        postprocess_initialized = true;
     }
 
     int currentPostprocessIndex = 0;

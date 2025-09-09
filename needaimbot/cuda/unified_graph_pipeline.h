@@ -301,6 +301,7 @@ private:
     bool m_classFilterDirty = true;
     std::vector<unsigned char> m_cachedClassFilter;
     
+    // Unified capture buffer - removed duplicate m_unifiedCaptureBuffer
     SimpleCudaMat m_captureBuffer;
     
     
@@ -320,7 +321,7 @@ private:
     int m_modelInputResolution = 320;
     float m_imgScale;
     int m_numClasses;
-    SimpleCudaMat m_unifiedCaptureBuffer;
+    // m_unifiedCaptureBuffer removed - using m_captureBuffer instead
     std::unique_ptr<CudaMemory<float>> m_d_preprocessBuffer;
     
     std::unique_ptr<CudaMemory<float>> m_d_inferenceOutput;
