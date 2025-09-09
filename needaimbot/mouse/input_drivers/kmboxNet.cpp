@@ -6,6 +6,8 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <windows.h>
+#include <thread>
+#include <chrono>
 
 
 SOCKET sockClientfd = 0;   
@@ -98,7 +100,7 @@ int kmNet_init(char* ip, char* port, char* mac)
     
     
     sendto(sockClientfd, (const char*)&tx, sizeof(cmd_head_t), 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
-    Sleep(5); // Reduced from 20ms to 5ms for faster initialization
+    // Remove Sleep - use non-blocking socket with timeout instead
     SOCKADDR_IN sclient;
     int clen = sizeof(sclient);
     recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
@@ -298,9 +300,13 @@ int kmNet_keyup(int vk_key)
 int kmNet_keypress(int vk_key, int ms)
 {
     kmNet_keydown(vk_key);
-    Sleep(ms / 2);
+    if (ms > 1) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(ms / 2));
+    }
     kmNet_keyup(vk_key);
-    Sleep(ms / 2);
+    if (ms > 1) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(ms / 2));
+    }
     return success;
 }
 
