@@ -930,11 +930,11 @@ void OverlayThread()
         
         // Batched config saving to reduce I/O overhead
         auto now = std::chrono::high_resolution_clock::now();
-        if (config_needs_save && 
+        if (ctx.config_dirty.load() && 
             std::chrono::duration_cast<std::chrono::milliseconds>(now - last_config_save_time) >= config_save_interval)
         {
-            ctx.config.saveConfig();
-            config_needs_save = false;
+            ctx.config.saveActiveProfile();
+            ctx.config_dirty = false;
             last_config_save_time = now;
         }
     }

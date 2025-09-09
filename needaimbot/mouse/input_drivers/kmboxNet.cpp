@@ -115,7 +115,7 @@ int kmNet_mouse_move(short x, short y)
     int err;
     if (sockClientfd <= 0)
         return err_creat_socket;
-    WaitForSingleObject(m_hMutex_lock, INFINITE);
+    WaitForSingleObject(m_hMutex_lock, 100);  // 100ms timeout to prevent deadlock
     tx.head.indexpts++;
     tx.head.cmd = cmd_mouse_move;
     tx.head.rand = rand();
@@ -144,7 +144,7 @@ int kmNet_enc_mouse_move(short x, short y)
     client_tx tx_enc = { 0 };
     if (sockClientfd <= 0)
         return err_creat_socket;
-    WaitForSingleObject(m_hMutex_lock, INFINITE);
+    WaitForSingleObject(m_hMutex_lock, 100);  // 100ms timeout to prevent deadlock
     tx.head.indexpts++;
     tx.head.cmd = cmd_mouse_move;
     tx.head.rand = rand();
@@ -169,7 +169,7 @@ int kmNet_mouse_left(int isdown)
     int err;
     if (sockClientfd <= 0)
         return err_creat_socket;
-    WaitForSingleObject(m_hMutex_lock, INFINITE);
+    WaitForSingleObject(m_hMutex_lock, 100);  // 100ms timeout to prevent deadlock
     tx.head.indexpts++;
     tx.head.cmd = cmd_mouse_left;
     tx.head.rand = rand();
@@ -188,7 +188,7 @@ int kmNet_enc_mouse_left(int isdown)
     client_tx tx_enc = { 0 };
     if (sockClientfd <= 0)
         return err_creat_socket;
-    WaitForSingleObject(m_hMutex_lock, INFINITE);
+    WaitForSingleObject(m_hMutex_lock, 100);  // 100ms timeout to prevent deadlock
     tx.head.indexpts++;
     tx.head.cmd = cmd_mouse_left;
     tx.head.rand = rand();
@@ -217,7 +217,7 @@ int kmNet_keydown(int vk_key)
     int i, err;
     if (sockClientfd <= 0)
         return err_creat_socket;
-    WaitForSingleObject(m_hMutex_lock, INFINITE);
+    WaitForSingleObject(m_hMutex_lock, 100);  // 100ms timeout to prevent deadlock
     if (vk_key >= KEY_LEFTCONTROL && vk_key <= KEY_RIGHT_GUI) {
         switch (vk_key) {
         case KEY_LEFTCONTROL: softkeyboard.ctrl |= BIT0; break;
@@ -263,7 +263,7 @@ int kmNet_keyup(int vk_key)
     int i, err;
     if (sockClientfd <= 0)
         return err_creat_socket;
-    WaitForSingleObject(m_hMutex_lock, INFINITE);
+    WaitForSingleObject(m_hMutex_lock, 100);  // 100ms timeout to prevent deadlock
     if (vk_key >= KEY_LEFTCONTROL && vk_key <= KEY_RIGHT_GUI) {
         switch (vk_key) {
         case KEY_LEFTCONTROL: softkeyboard.ctrl &= ~BIT0; break;
@@ -322,7 +322,7 @@ int kmNet_reboot(void)
     int err;
     if (sockClientfd <= 0)
         return err_creat_socket;
-    WaitForSingleObject(m_hMutex_lock, INFINITE);
+    WaitForSingleObject(m_hMutex_lock, 100);  // 100ms timeout to prevent deadlock
     tx.head.indexpts++;
     tx.head.cmd = cmd_reboot;
     tx.head.rand = rand();
@@ -342,7 +342,7 @@ int kmNet_enc_reboot(void)
     client_tx tx_enc = { 0 };
     if (sockClientfd <= 0)
         return err_creat_socket;
-    WaitForSingleObject(m_hMutex_lock, INFINITE);
+    WaitForSingleObject(m_hMutex_lock, 100);  // 100ms timeout to prevent deadlock
     tx.head.indexpts++;
     tx.head.cmd = cmd_reboot;
     tx.head.rand = rand();
