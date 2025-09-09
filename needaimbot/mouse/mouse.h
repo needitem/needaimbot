@@ -19,7 +19,6 @@
 class SerialConnection;
 class MakcuConnection;
 class GhubMouse;
-class RapidFire;
 
 // Alias for compatibility with old code
 using AimbotTarget = Target;
@@ -33,8 +32,6 @@ private:
     // Direct input execution - no queue needed
     std::atomic<bool> should_stop_thread_{false};
     
-    // RapidFire support (stub for now)
-    std::unique_ptr<RapidFire> rapid_fire;
     
     // Screen configuration
     float screen_width;
@@ -84,9 +81,6 @@ public:
     // Configuration update
     void updateConfig(int resolution, float bScope_multiplier, float norecoil_ms);
     
-    // RapidFire methods (stubs for now)
-    void updateRapidFire();
-    RapidFire* getRapidFire() { return rapid_fire.get(); }
 };
 
 // Global input configuration

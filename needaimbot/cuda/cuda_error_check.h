@@ -54,8 +54,8 @@ class CudaResourceGuard {
 public:
     CudaResourceGuard() = default;
     ~CudaResourceGuard() {
-        // Ensure all CUDA operations are complete (only in destructor for safety)
-        cudaDeviceSynchronize();
+        // Check for errors without forcing synchronization
+        // Stream-specific synchronization should be done explicitly where needed
         cudaError_t error = cudaGetLastError();
         if (error != cudaSuccess) {
             std::cerr << "[CUDA Resource Guard] Cleanup error: " << cudaGetErrorString(error) << std::endl;
