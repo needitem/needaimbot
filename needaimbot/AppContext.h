@@ -9,6 +9,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <vector>
+#include <array>
 #include <memory>
 #include "config/config.h"
 #include "cuda/detection/postProcess.h"
@@ -49,9 +50,11 @@ public:
     bool crosshair_offset_changed{false};  // Rare change  
     bool model_changed{false};  // Rare change
     
-    // Target data
+    // Target data - Optimize with fixed-size array for cache locality
+    static constexpr size_t MAX_TARGETS = 100;
     mutable std::mutex target_mutex;
-    std::vector<Target> all_targets_;
+    std::array<Target, MAX_TARGETS> all_targets_;  // Fixed size for better cache
+    size_t num_targets_ = 0;
     Target current_target_;
     std::atomic<bool> has_target_{false};
 
@@ -87,11 +90,12 @@ public:
     std::atomic<float> g_movementDeltaX{0.0f};
     std::atomic<float> g_movementDeltaY{0.0f};
     
-    // Event-based mouse control
-    std::queue<MouseEvent> mouse_event_queue;
-    std::mutex mouse_event_mutex;
+    // Event-based mouse control - Ring buffer for lock-free access
+    static constexpr size_t MOUSE_EVENT_BUFFER_SIZE = 64;
+    std::array<MouseEvent, MOUSE_EVENT_BUFFER_SIZE> mouse_event_buffer;
+    std::atomic<size_t> mouse_event_write_pos{0};
+    std::atomic<size_t> mouse_event_read_pos{0};
     std::condition_variable mouse_event_cv;
-    std::atomic<bool> mouse_events_available{false};
     
     // GPU 직접 계산된 마우스 이동량 - Lock-free structure
     struct GPUMouseMovement {
@@ -122,7 +126,11 @@ public:
     // Target management helpers
     void updateTargets(const std::vector<Target>& targets) {
         std::lock_guard<std::mutex> lock(target_mutex);
-        all_targets_ = targets;
+        // Copy to fixed array
+        num_targets_ = (targets.size() < MAX_TARGETS) ? targets.size() : MAX_TARGETS;
+        for (size_t i = 0; i < num_targets_; ++i) {
+            all_targets_[i] = targets[i];
+        }
         has_target_ = !targets.empty();
         
         if (!targets.empty()) {
@@ -141,12 +149,13 @@ public:
     
     std::vector<Target> getAllTargets() const {
         std::lock_guard<std::mutex> lock(target_mutex);
-        return all_targets_;
+        // Convert array to vector for compatibility
+        return std::vector<Target>(all_targets_.begin(), all_targets_.begin() + num_targets_);
     }
     
     void clearTargets() {
         std::lock_guard<std::mutex> lock(target_mutex);
-        all_targets_.clear();
+        num_targets_ = 0;
         has_target_ = false;
         current_target_ = Target{};
     }

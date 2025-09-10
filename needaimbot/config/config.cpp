@@ -255,9 +255,12 @@ bool Config::loadConfig(const std::string& filename)
     // OBS Hook settings
     game_window_name = get_string_ini("Capture", "game_window_name", "Apex Legends");
 
+    // Batch load floats for better cache locality
     body_y_offset = static_cast<float>(get_double_ini("Target", "body_y_offset", 0.15));
     head_y_offset = static_cast<float>(get_double_ini("Target", "head_y_offset", 0.05));
     offset_step = static_cast<float>(get_double_ini("Target", "offset_step", 0.01));
+    
+    // Batch load booleans
     ignore_third_person = get_bool_ini("Target", "ignore_third_person", false);
     shooting_range_targets = get_bool_ini("Target", "shooting_range_targets", false);
     auto_aim = get_bool_ini("Target", "auto_aim", false);
@@ -283,9 +286,10 @@ bool Config::loadConfig(const std::string& filename)
     min_movement_threshold_y = static_cast<float>(get_double_ini("Mouse", "min_movement_threshold_y", 1.0));
     
     // Load PD controller settings
+    // Load PD controller settings - group by axis for cache
     pd_kp_x = static_cast<float>(get_double_ini("PDController", "pd_kp_x", 0.4));
-    pd_kp_y = static_cast<float>(get_double_ini("PDController", "pd_kp_y", 0.4));
     pd_kd_x = static_cast<float>(get_double_ini("PDController", "pd_kd_x", 0.15));
+    pd_kp_y = static_cast<float>(get_double_ini("PDController", "pd_kp_y", 0.4));
     pd_kd_y = static_cast<float>(get_double_ini("PDController", "pd_kd_y", 0.15));
     pd_derivative_filter = static_cast<float>(get_double_ini("PDController", "pd_derivative_filter", 0.7));
     
