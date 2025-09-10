@@ -176,7 +176,7 @@ protected:
         
         while (listening_) {
             if (!is_open_) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));  // Reduced from 10ms for better responsiveness
                 continue;
             }
 
@@ -194,7 +194,7 @@ protected:
                     }
                 }
             } else {
-                std::this_thread::sleep_for(std::chrono::microseconds(100));
+                std::this_thread::sleep_for(std::chrono::microseconds(50));  // Reduced from 100us for lower latency
             }
         }
     }
