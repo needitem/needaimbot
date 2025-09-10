@@ -28,6 +28,7 @@
 
 std::vector<int> get_vk_codes(const std::vector<std::string>& keys) {
     std::vector<int> vk_codes;
+    vk_codes.reserve(keys.size());  // Pre-allocate for better performance
     for (const auto& key : keys) {
         vk_codes.push_back(KeyCodes::getKeyCode(key));
     }
@@ -35,8 +36,9 @@ std::vector<int> get_vk_codes(const std::vector<std::string>& keys) {
 }
 
 bool is_any_key_pressed(const std::vector<int>& vk_codes) {
+    // Check most likely keys first for early exit
     for (int code : vk_codes) {
-        if (code != 0 && (GetAsyncKeyState(code) & 0x8000)) {
+        if (code && (GetAsyncKeyState(code) & 0x8000)) {
             return true;
         }
     }
