@@ -813,11 +813,8 @@ void UnifiedGraphPipeline::getBindings() {
         }
         
         try {
-            if (name == m_outputNames[0]) {
-                m_outputBindings[name] = std::make_unique<CudaMemory<uint8_t>>(size);
-            } else {
-                m_outputBindings[name] = std::make_unique<CudaMemory<uint8_t>>(size);
-            }
+            // Simplified - same allocation for all outputs
+            m_outputBindings[name] = std::make_unique<CudaMemory<uint8_t>>(size);
         } catch (const std::exception& e) {
             std::cerr << "[Pipeline] Failed to allocate output memory for '" << name << "': " << e.what() << std::endl;
             throw;
@@ -854,11 +851,16 @@ bool UnifiedGraphPipeline::loadEngine(const std::string& modelFile) {
 
     class SimpleLogger : public nvinfer1::ILogger {
         void log(Severity severity, const char* msg) noexcept override {
+#ifdef _DEBUG
             if (severity <= Severity::kERROR && 
                 (strstr(msg, "defaultAllocator.cpp") == nullptr) &&
                 (strstr(msg, "enqueueV3") == nullptr)) {
                 std::cout << "[TensorRT] " << msg << std::endl;
             }
+#else
+            (void)severity;
+            (void)msg;
+#endif
         }
     };
     static SimpleLogger logger;
