@@ -260,6 +260,7 @@ public:
     
     int overlay_opacity;
     float overlay_ui_scale;
+    float overlay_target_fps = 60.0f;  // Configurable overlay FPS (default 60 for better responsiveness)
 
     
     bool show_window;

@@ -43,7 +43,13 @@ public:
 
     template<typename... Args>
     void log(LogLevel level, const std::string& component, Args... args) {
+        // Early return for performance
         if (level < currentLevel_) return;
+        
+#ifndef _DEBUG
+        // In release builds, skip debug/info/warning logs
+        if (level < LogLevel::LOG_ERROR) return;
+#endif
 
         std::stringstream ss;
         ss << "[" << getCurrentTime() << "] ";
@@ -81,8 +87,8 @@ public:
     }
 
 private:
-    Logger() : currentLevel_(LogLevel::LOG_INFO), 
-               consoleLoggingEnabled_(true), 
+    Logger() : currentLevel_(LogLevel::LOG_ERROR),  // Default to ERROR level for performance
+               consoleLoggingEnabled_(false),  // Disable console by default for performance
                fileLoggingEnabled_(false) {}
     
     ~Logger() {
@@ -138,10 +144,19 @@ private:
     std::mutex mutex_;
 };
 
-// Convenience macros
-#define LOG_DEBUG(component, ...) Logger::getInstance().debug(component, __VA_ARGS__)
-#define LOG_INFO(component, ...) Logger::getInstance().info(component, __VA_ARGS__)
-#define LOG_WARNING(component, ...) Logger::getInstance().warning(component, __VA_ARGS__)
+// Convenience macros - Optimized for release builds
+#ifdef _DEBUG
+    #define LOG_DEBUG(component, ...) Logger::getInstance().debug(component, __VA_ARGS__)
+    #define LOG_INFO(component, ...) Logger::getInstance().info(component, __VA_ARGS__)
+    #define LOG_WARNING(component, ...) Logger::getInstance().warning(component, __VA_ARGS__)
+#else
+    // In release builds, disable debug/info/warning logs for performance
+    #define LOG_DEBUG(component, ...) ((void)0)
+    #define LOG_INFO(component, ...) ((void)0)
+    #define LOG_WARNING(component, ...) ((void)0)
+#endif
+
+// Always keep error and critical logs even in release
 #define LOG_ERROR(component, ...) Logger::getInstance().error(component, __VA_ARGS__)
 #define LOG_CRITICAL(component, ...) Logger::getInstance().critical(component, __VA_ARGS__)
 
@@ -152,9 +167,11 @@ public:
         : name_(name), component_(component), start_(std::chrono::high_resolution_clock::now()) {}
     
     ~PerformanceTimer() {
+#ifdef _DEBUG
         auto end = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start_).count();
         LOG_DEBUG(component_, name_, " took ", duration, " microseconds");
+#endif
     }
 
 private:
