@@ -40,8 +40,8 @@ void RecoilControlThread::threadLoop() {
         
         // Check if recoil control is enabled
         if (!ctx.config.easynorecoil || !enabled_) {
-            // Longer sleep when disabled to save CPU
-            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            // Optimized sleep when disabled
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
             continue;
         }
         
@@ -70,27 +70,27 @@ void RecoilControlThread::threadLoop() {
                 delay_ms = ctx.config.norecoil_ms;
             }
             
-            // Adaptive delay: faster during initial recoil, slower later
+            // Optimized delay: maintain responsiveness throughout
             auto now = std::chrono::steady_clock::now();
             auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - recoil_start_time_).count();
             if (elapsed_ms < 500) {
                 // First 500ms: use configured delay for responsiveness
                 std::this_thread::sleep_for(std::chrono::microseconds(static_cast<int>(delay_ms * 1000)));
             } else {
-                // After 500ms: slightly longer delay to save CPU
-                std::this_thread::sleep_for(std::chrono::microseconds(static_cast<int>(delay_ms * 1500)));
+                // After 500ms: slightly longer but still responsive
+                std::this_thread::sleep_for(std::chrono::microseconds(static_cast<int>(delay_ms * 1200)));
             }
         } else {
             was_recoil_active_ = false;
-            // Adaptive polling: faster check when mouse buttons were recently active
+            // Optimized polling: more responsive
             auto now = std::chrono::steady_clock::now();
             auto time_since_active = std::chrono::duration_cast<std::chrono::milliseconds>(now - recoil_start_time_).count();
             if (time_since_active < 1000) {
-                // Recently active: check more frequently
-                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                // Recently active: very responsive
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
             } else {
-                // Idle: slower polling to save CPU
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                // Idle: still responsive but save some CPU
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
             }
         }
     }
@@ -105,19 +105,16 @@ void RecoilControlThread::applyRecoilCompensation() {
     auto now = std::chrono::steady_clock::now();
     auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - recoil_start_time_).count();
     
-    // Check for start delay
-    int start_delay = 0;
-    int end_delay = 0;
+    // Optimize: use branchless selection for common case
+    const int profile_idx = ctx.config.active_weapon_profile_index;
+    const bool has_profile = (profile_idx >= 0 && profile_idx < ctx.config.weapon_profiles.size());
     
-    if (ctx.config.active_weapon_profile_index >= 0 && 
-        ctx.config.active_weapon_profile_index < ctx.config.weapon_profiles.size()) {
-        const auto& profile = ctx.config.weapon_profiles[ctx.config.active_weapon_profile_index];
-        start_delay = profile.start_delay_ms;
-        end_delay = profile.end_delay_ms;
-    } else {
-        start_delay = ctx.config.easynorecoil_start_delay_ms;
-        end_delay = ctx.config.easynorecoil_end_delay_ms;
-    }
+    const int start_delay = has_profile ? 
+        ctx.config.weapon_profiles[profile_idx].start_delay_ms : 
+        ctx.config.easynorecoil_start_delay_ms;
+    const int end_delay = has_profile ? 
+        ctx.config.weapon_profiles[profile_idx].end_delay_ms : 
+        ctx.config.easynorecoil_end_delay_ms;
     
     // Skip if in start delay period
     if (elapsed_ms < start_delay) {
@@ -132,14 +129,10 @@ void RecoilControlThread::applyRecoilCompensation() {
     float strength = calculateRecoilStrength();
     
     // Apply downward mouse movement to compensate for recoil
-    if (std::abs(strength) > 0.001f) {
-        // Move mouse down to compensate for upward recoil
-        // The strength value determines how much to move
-        int move_y = static_cast<int>(strength);
-        
-        if (move_y > 0) {
-            input_method_->move(0, move_y);
-        }
+    // Optimize: single branch instead of nested
+    int move_y = static_cast<int>(strength);
+    if (move_y > 0) {
+        input_method_->move(0, move_y);
     }
 }
 

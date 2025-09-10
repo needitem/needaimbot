@@ -169,6 +169,7 @@ bool Config::loadConfig(const std::string& filename)
         
         overlay_opacity = 225;
         overlay_ui_scale = 1.0f;
+        overlay_target_fps = 60.0f;  // Default 60 FPS for overlay
 
         
         head_class_name = "Head";
@@ -345,6 +346,7 @@ bool Config::loadConfig(const std::string& filename)
 
     overlay_opacity = get_long_ini("Overlay", "overlay_opacity", 225);
     overlay_ui_scale = static_cast<float>(get_double_ini("Overlay", "overlay_ui_scale", 1.0));
+    overlay_target_fps = static_cast<float>(get_double_ini("Overlay", "overlay_target_fps", 60.0));
 
     show_window = get_bool_ini("Debug", "show_window", true);
     show_fps = get_bool_ini("Debug", "show_fps", true);
@@ -610,6 +612,7 @@ bool Config::saveConfig(const std::string& filename)
     file << "[Overlay]\n";
     file << "overlay_opacity = " << overlay_opacity << "\n";
     file << std::fixed << std::setprecision(6);
+    file << "overlay_target_fps = " << overlay_target_fps << "\n";
     file << "overlay_ui_scale = " << overlay_ui_scale << "\n\n";
 
     file << "[Debug]\n";
@@ -754,31 +757,21 @@ void Config::resetConfig()
 }
 
 bool Config::setActiveProfile(const std::string& profileName) {
-    if (profileName.empty()) {
-        return false;
-    }
+    // Early return for empty
+    if (profileName.empty()) return false;
     
-    // Load the profile
-    if (loadProfile(profileName)) {
-        active_profile_name = profileName;
-        
-        // Save the active profile name to main config.ini
-        saveConfig(getConfigPath("config.ini"));
-        
-        return true;
-    }
+    // Load and save in one flow
+    if (!loadProfile(profileName)) return false;
     
-    return false;
+    active_profile_name = profileName;
+    saveConfig(getConfigPath("config.ini"));
+    return true;
 }
 
 bool Config::saveActiveProfile() {
-    if (active_profile_name.empty() || active_profile_name == "Default") {
-        // For default profile, save to main config
-        return saveConfig();
-    } else {
-        // Save to the active profile
-        return saveProfile(active_profile_name);
-    }
+    // Optimize: single return with ternary
+    return (active_profile_name.empty() || active_profile_name == "Default") ?
+           saveConfig() : saveProfile(active_profile_name);
 }
 
 bool Config::isProfileModified() const {

@@ -27,6 +27,9 @@
 #define max(a,b) ((a) > (b) ? (a) : (b))
 #endif 
 
+// Define GRID_SIZE for spatial hashing
+#define GRID_SIZE 10
+
 // Fast initialization kernel
 __global__ void initKeepKernel(bool* d_keep, int n) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -214,10 +217,12 @@ void validateTargetsGpu(
     const int grid_size = (n + block_size - 1) / block_size;
     
     validateTargetsKernel<<<grid_size, block_size, 0, stream>>>(d_detections, n);
+#ifdef _DEBUG
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
         fprintf(stderr, "[validateTargetsGpu] Kernel launch failed: %s\n", cudaGetErrorString(err));
     }
+#endif
 }
 
 // Kernel to validate single best target
@@ -227,14 +232,14 @@ __global__ void validateBestTargetKernel(
     if (threadIdx.x == 0 && blockIdx.x == 0) {
         Target& target = *d_best_target;
         
-        // Check if target is invalid and clear it
-        if (target.classId < 0 || 
-            abs(target.x) > 1000000 || abs(target.y) > 1000000 ||
-            target.x < -100 || target.x > 2000 ||
-            target.y < -100 || target.y > 2000 ||
-            target.width <= 0 || target.width > 1000 ||
-            target.height <= 0 || target.height > 1000 ||
-            target.confidence <= 0.0f || target.confidence > 1.0f) {
+        // Optimize: combine checks to reduce branches
+        bool invalid_position = (target.x < -100) | (target.x > 2000) | 
+                                (target.y < -100) | (target.y > 2000);
+        bool invalid_size = (target.width <= 0) | (target.width > 1000) |
+                            (target.height <= 0) | (target.height > 1000);
+        bool invalid_meta = (target.classId < 0) | (target.confidence <= 0.0f) | (target.confidence > 1.0f);
+        
+        if (invalid_position | invalid_size | invalid_meta) {
             
             // Clear invalid target
             target.classId = -1;
@@ -260,10 +265,12 @@ void finalValidateTargetsGpu(
     const int grid_size = (max_targets + block_size - 1) / block_size;
     
     finalValidateAndCleanKernel<<<grid_size, block_size, 0, stream>>>(d_targets, d_count, max_targets);
+#ifdef _DEBUG
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
         fprintf(stderr, "[finalValidateTargetsGpu] Kernel launch failed: %s\n", cudaGetErrorString(err));
     }
+#endif
 }
 
 // Validate single best target before host copy
@@ -274,10 +281,12 @@ void validateBestTargetGpu(
     if (!d_best_target) return;
     
     validateBestTargetKernel<<<1, 1, 0, stream>>>(d_best_target);
+#ifdef _DEBUG
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
-        fprintf(stderr, "[validateBestTargetGpu] Kernel launch failed: %s\n", cudaGetErrorString(err));
+        fprintf(stderr, "[validateBestTargetGpu] Kernel launch failed: %s\n", cudaGetErrorString(err));  
     }
+#endif
 }
 
 // Simple kernel to count kept detections
@@ -322,7 +331,7 @@ __global__ void countKeptTargetsKernel(
 
 // Optimized spatial indexing constants
 #define HOST_GRID_SIZE 64  // Increased for better spatial partitioning
-__constant__ int GRID_SIZE = 64;  // 64x64 spatial grid for finer granularity
+__constant__ int CUDA_GRID_SIZE = 64;  // 64x64 spatial grid for finer granularity
 __constant__ int GRID_SHIFT = 6;  // log2(64) for faster division
 __constant__ int GRID_MASK = 63;  // For fast modulo
 

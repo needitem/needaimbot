@@ -42,20 +42,10 @@ static void draw_hotkey_section(const char* title, std::vector<std::string>& hot
     {
         std::string& current_key_name = hotkeys[i];
         
-        int current_index = -1;
-        for (size_t k = 0; k < key_names.size(); ++k)
-        {
-            if (key_names[k] == current_key_name)
-            {
-                current_index = static_cast<int>(k);
-                break;
-            }
-        }
-        
-        if (current_index == -1)
-        {
-            current_index = 0;
-        }
+        // Optimize: use std::find
+        auto it = std::find(key_names.begin(), key_names.end(), current_key_name);
+        int current_index = (it != key_names.end()) ? 
+            static_cast<int>(std::distance(key_names.begin(), it)) : 0;
         
         // Use unique ID combining section name and index
         std::string unique_id = std::string(add_id) + "_" + std::to_string(i);
@@ -222,20 +212,10 @@ static void draw_button_section(const char* title, const char* description, std:
     {
         std::string& current_key_name = button_list[i];
         
-        int current_index = -1;
-        for (size_t k = 0; k < key_names.size(); ++k)
-        {
-            if (key_names[k] == current_key_name)
-            {
-                current_index = static_cast<int>(k);
-                break;
-            }
-        }
-        
-        if (current_index == -1)
-        {
-            current_index = 0;
-        }
+        // Optimize: use std::find
+        auto it = std::find(key_names.begin(), key_names.end(), current_key_name);
+        int current_index = (it != key_names.end()) ? 
+            static_cast<int>(std::distance(key_names.begin(), it)) : 0;
         
         ImGui::PushID(static_cast<int>(i));
         

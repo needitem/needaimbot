@@ -83,12 +83,10 @@ void keyboardListener() {
             last_aiming_state = current_aiming;
         }
 
-        // Track auto_shoot button state
-        bool current_shooting = false;
-        if (!ctx.config.button_auto_shoot.empty() && 
-            ctx.config.button_auto_shoot[0] != "None") {
-            current_shooting = is_any_key_pressed(auto_shoot_vk_codes);
-        }
+        // Track auto_shoot button state - optimize branch
+        bool current_shooting = (!ctx.config.button_auto_shoot.empty() && 
+                                 ctx.config.button_auto_shoot[0] != "None") ?
+                                 is_any_key_pressed(auto_shoot_vk_codes) : false;
         ctx.shooting = current_shooting;
         
         if (current_shooting != last_shooting_state) {
@@ -99,13 +97,12 @@ void keyboardListener() {
         bool current_pause = is_any_key_pressed(pause_vk_codes);
         if (current_pause && !last_pause_state) {
             // Key was just pressed (not held)
-            if (ctx.detection_paused.load()) {
-                ctx.detection_paused = false;
-                std::cout << "[Keyboard] Detection RESUMED" << std::endl;
-            } else {
-                ctx.detection_paused = true;
-                std::cout << "[Keyboard] Detection PAUSED" << std::endl;
-            }
+            // Toggle and print in one flow
+            bool new_state = !ctx.detection_paused.load();
+            ctx.detection_paused = new_state;
+#ifdef _DEBUG
+            std::cout << "[Keyboard] Detection " << (new_state ? "PAUSED" : "RESUMED") << std::endl;
+#endif
         }
         last_pause_state = current_pause;
 

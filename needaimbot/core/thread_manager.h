@@ -8,13 +8,15 @@
 #include <string>
 #include <iostream>
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
 
 class ThreadManager {
 public:
     using ThreadFunc = std::function<void()>;
     
     ThreadManager(const std::string& name, ThreadFunc func, int affinity_core = -1)
-        : thread_name_(name), running_(false), affinity_core_(affinity_core) {
+        : thread_name_(name), running_(false), thread_finished_(false), affinity_core_(affinity_core) {
         thread_func_ = std::move(func);
     }
     
@@ -53,6 +55,7 @@ public:
         }
         
         running_ = true;
+        thread_finished_ = false;
         thread_ = std::thread([this]() {
             
             // Set thread name for debugging
@@ -61,20 +64,29 @@ public:
             // OPTIMIZATION: Set thread affinity for better cache locality
             if (affinity_core_ >= 0) {
                 DWORD_PTR mask = 1ULL << affinity_core_;
-                if (SetThreadAffinityMask(GetCurrentThread(), mask)) {
-                } else {
-                    std::cerr << "[Thread] Failed to set affinity for " << thread_name_ << " to core " << affinity_core_ << std::endl;
-                }
+                SetThreadAffinityMask(GetCurrentThread(), mask);
             }
             
             try {
                 thread_func_();
             } catch (const std::exception& e) {
+#ifdef _DEBUG
                 std::cerr << "[Thread] " << thread_name_ << " exception: " << e.what() << std::endl;
+#else
+                (void)e;  // Suppress unused variable warning
+#endif
             } catch (...) {
+#ifdef _DEBUG
                 std::cerr << "[Thread] " << thread_name_ << " unknown exception." << std::endl;
+#endif
             }
             
+            // Signal thread completion
+            {
+                std::lock_guard<std::mutex> lock(finish_mutex_);
+                thread_finished_ = true;
+            }
+            finish_cv_.notify_all();
         });
         
         return true;
@@ -88,51 +100,26 @@ public:
         running_ = false;
         
         if (thread_.joinable()) {
-            
-            // Try graceful shutdown with timeout
-            auto start_time = std::chrono::steady_clock::now();
-            const auto timeout = std::chrono::milliseconds(500);  // 500ms 타임아웃
-            
-            // Create a thread to wait for join with timeout
-            std::atomic<bool> thread_finished{false};
-            std::thread wait_thread([this, &thread_finished]() {
+            // Use condition variable for efficient waiting
+            std::unique_lock<std::mutex> lock(finish_mutex_);
+            if (!finish_cv_.wait_for(lock, std::chrono::milliseconds(500),
+                                     [this] { return thread_finished_.load(); })) {
+                // Timeout: force termination
+#ifdef _DEBUG
+                std::cerr << "[Thread] " << thread_name_ << " timeout, forcing termination..." << std::endl;
+#endif
+                HANDLE hThread = thread_.native_handle();
+                if (hThread != INVALID_HANDLE_VALUE && hThread != nullptr) {
+                    TerminateThread(hThread, 1);
+                }
+                if (thread_.joinable()) {
+                    thread_.detach();
+                }
+            } else {
+                // Thread finished normally
                 if (thread_.joinable()) {
                     thread_.join();
-                    thread_finished = true;
                 }
-            });
-            
-            // Wait for thread to finish or timeout
-            while (!thread_finished) {
-                if (std::chrono::steady_clock::now() - start_time > timeout) {
-                    std::cerr << "[Thread] " << thread_name_ << " did not finish within timeout, forcing termination..." << std::endl;
-                    
-                    // Force terminate the thread (Windows specific)
-                    HANDLE hThread = thread_.native_handle();
-                    if (hThread != INVALID_HANDLE_VALUE && hThread != nullptr) {
-                        // Attempt to terminate the thread forcefully
-                        if (TerminateThread(hThread, 1)) {
-                            std::cerr << "[Thread] " << thread_name_ << " forcefully terminated." << std::endl;
-                        } else {
-                            std::cerr << "[Thread] Failed to terminate " << thread_name_ << " (error: " << GetLastError() << ")" << std::endl;
-                        }
-                    }
-                    
-                    // Detach the thread to avoid join issues
-                    if (thread_.joinable()) {
-                        thread_.detach();
-                    }
-                    break;
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            }
-            
-            // Clean up wait thread
-            if (wait_thread.joinable()) {
-                wait_thread.join();
-            }
-            
-            if (thread_finished) {
             }
         }
     }
@@ -159,6 +146,9 @@ private:
     std::string thread_name_;
     ThreadFunc thread_func_;
     std::atomic<bool> running_;
+    std::atomic<bool> thread_finished_;
+    std::condition_variable finish_cv_;
+    std::mutex finish_mutex_;
     int affinity_core_; // -1 for no affinity, >=0 for specific core
 };
 

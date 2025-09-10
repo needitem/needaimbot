@@ -42,12 +42,12 @@ public:
     // Config
     Config config;
 
-    // State management - atomic variables replacing State classes
+    // State management - use regular bool with mutex for less frequently accessed
     std::atomic<bool> detection_paused{false};
-    std::atomic<bool> preview_enabled{false};
-    std::atomic<bool> capture_method_changed{false};
-    std::atomic<bool> crosshair_offset_changed{false};
-    std::atomic<bool> model_changed{false};
+    bool preview_enabled{false};  // Not hot path - regular bool is fine
+    bool capture_method_changed{false};  // Rare change
+    bool crosshair_offset_changed{false};  // Rare change  
+    bool model_changed{false};  // Rare change
     
     // Target data
     mutable std::mutex target_mutex;
@@ -68,7 +68,7 @@ public:
     std::atomic<bool> should_exit{false};
     std::atomic<bool> aiming{false};
     std::atomic<bool> shooting{false};  // Track if auto_shoot button is pressed
-    std::atomic<bool> input_method_changed{false};
+    bool input_method_changed{false};  // Rare change - no need for atomic
     
     // Aiming state synchronization for CPU efficiency
     std::mutex aiming_mutex;
@@ -78,7 +78,7 @@ public:
     std::mutex pipeline_activation_mutex;
     std::condition_variable pipeline_activation_cv;
     
-    std::atomic<bool> detection_resolution_changed{false};
+    bool detection_resolution_changed{false};  // Rare change - no need for atomic
     
     
     // Application control
@@ -93,17 +93,17 @@ public:
     std::condition_variable mouse_event_cv;
     std::atomic<bool> mouse_events_available{false};
     
-    // GPU 직접 계산된 마우스 이동량
+    // GPU 직접 계산된 마우스 이동량 - Lock-free structure
     struct GPUMouseMovement {
-        int dx = 0;
-        int dy = 0;
-        float confidence = 0.0f;
-        bool hasTarget = false;
+        std::atomic<int> dx{0};
+        std::atomic<int> dy{0};
+        std::atomic<float> confidence{0.0f};
+        std::atomic<bool> hasTarget{false};
     };
     GPUMouseMovement latestMouseMovement;
     std::atomic<bool> mouseDataReady{false};
     std::condition_variable mouseDataCV;
-    std::mutex mouseDataMutex;
+    std::mutex mouseDataMutex;  // Keep mutex for CV, but data access is lock-free
     
     // Event-based inference control
     std::mutex inference_frame_mutex;

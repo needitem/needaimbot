@@ -103,15 +103,10 @@ static void draw_detection_settings()
         return items;
     }();
 
-    int currentPostprocessIndex = 0;
-    for (size_t i = 0; i < postprocessOptions.size(); ++i)
-    {
-        if (postprocessOptions[i] == ctx.config.postprocess)
-        {
-            currentPostprocessIndex = static_cast<int>(i);
-            break;
-        }
-    }
+    // Optimize: use std::find instead of manual loop
+    auto it = std::find(postprocessOptions.begin(), postprocessOptions.end(), ctx.config.postprocess);
+    int currentPostprocessIndex = (it != postprocessOptions.end()) ? 
+        static_cast<int>(std::distance(postprocessOptions.begin(), it)) : 0;
 
     if (UIHelpers::EnhancedCombo("Postprocess Algorithm", &currentPostprocessIndex, postprocessItems.data(), static_cast<int>(postprocessItems.size()),
                                 "Select the YOLO postprocessing algorithm that matches your model version."))

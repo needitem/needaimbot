@@ -301,11 +301,15 @@ int kmNet_keypress(int vk_key, int ms)
 {
     kmNet_keydown(vk_key);
     if (ms > 1) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(ms / 2));
+        // Optimized delay for better responsiveness
+        int delay = (ms / 4) > 1 ? (ms / 4) : 1;
+        std::this_thread::sleep_for(std::chrono::milliseconds(delay));
     }
     kmNet_keyup(vk_key);
     if (ms > 1) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(ms / 2));
+        // Optimized delay for better responsiveness
+        int delay = (ms / 4) > 1 ? (ms / 4) : 1;
+        std::this_thread::sleep_for(std::chrono::milliseconds(delay));
     }
     return success;
 }

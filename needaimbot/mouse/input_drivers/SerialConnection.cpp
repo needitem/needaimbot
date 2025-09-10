@@ -604,7 +604,7 @@ void SerialConnection::listeningThreadFunc()
             if (write_event_) {
                 WaitForSingleObject(write_event_, 50);
             } else {
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));  // Reduced from 50ms for better responsiveness
             }
             continue;
         }
@@ -632,7 +632,7 @@ void SerialConnection::listeningThreadFunc()
             } else if (empty_reads < 100) {
                 wait_time = 5;  // 5ms for next 90 empty reads
             } else {
-                wait_time = 20; // 20ms for idle state
+                wait_time = 5; // Reduced from 20ms for better responsiveness
             }
             
             if (read_event_) {

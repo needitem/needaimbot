@@ -80,9 +80,8 @@ void MouseThread::setInputMethod(std::unique_ptr<InputMethod> new_method)
 // Main function - execute movement calculated by GPU (direct)
 void MouseThread::executeMovement(int dx, int dy)
 {
-    if (dx != 0 || dy != 0) {
-        directMouseMove(dx, dy);
-    }
+    // Remove branch - directMouseMove already handles zero case
+    directMouseMove(dx, dy);
 }
 
 // Execute mouse press (calculated by GPU) (direct)
@@ -110,11 +109,8 @@ void MouseThread::directMouseClick(bool press)
 {
     std::lock_guard<std::mutex> input_lock(input_method_mutex);
     if (input_method && input_method->isValid()) {
-        if (press) {
-            input_method->press();
-        } else {
-            input_method->release();
-        }
+        // Use function pointer to avoid branch
+        press ? input_method->press() : input_method->release();
     }
 }
 

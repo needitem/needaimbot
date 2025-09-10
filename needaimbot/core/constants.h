@@ -168,11 +168,11 @@ namespace Constants {
     constexpr int COMBO_WIDTH_SMALL = 100;
     constexpr int COMBO_WIDTH_MEDIUM = 200;
     
-    // Thread Sleep Durations
-    constexpr int OVERLAY_OCCLUDED_SLEEP_MS = 100;
-    constexpr int OVERLAY_HIDDEN_SLEEP_MS = 100;
-    constexpr int OVERLAY_INIT_RETRY_SLEEP_MS = 200;
-    constexpr int CONFIG_SAVE_INTERVAL_MS = 500;
+    // Thread Sleep Durations - Optimized for lower latency
+    constexpr int OVERLAY_OCCLUDED_SLEEP_MS = 30;  // Reduced from 100ms for better responsiveness
+    constexpr int OVERLAY_HIDDEN_SLEEP_MS = 20;    // Reduced from 100ms for faster wake-up
+    constexpr int OVERLAY_INIT_RETRY_SLEEP_MS = 50; // Reduced from 200ms for faster init
+    constexpr int CONFIG_SAVE_INTERVAL_MS = 500;    // Keep as-is (removed in latest commit)
     
     // Performance Thresholds
     constexpr int DETECTION_RESOLUTION_HIGH_PERF = 400;

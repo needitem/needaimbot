@@ -431,7 +431,7 @@ void MakcuConnection::listeningThreadFunc()
     
     while (listening_) {
         if (!is_open_) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));  // Reduced from 10ms for better responsiveness
             continue;
         }
 
@@ -449,7 +449,7 @@ void MakcuConnection::listeningThreadFunc()
                 }
             }
         } else {
-            std::this_thread::sleep_for(std::chrono::microseconds(50)); // 50μs 대기
+            std::this_thread::sleep_for(std::chrono::microseconds(25)); // Reduced from 50μs for lower latency
         }
     }
 }

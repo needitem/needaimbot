@@ -762,17 +762,13 @@ void OverlayThread()
 
                 }
 
-                // Reduce frequency of config change detection to every 5 frames for performance
-                static int config_check_frame_counter = 0;
-                config_check_frame_counter++;
-                bool should_check_config = (config_check_frame_counter % 5 == 0);
-                
-                if (should_check_config) {
+                // Remove frame counter branch - check every frame is fast enough
+                {
                     
                     if (prev_detection_resolution != ctx.config.detection_resolution)
                     {
                         prev_detection_resolution = ctx.config.detection_resolution;
-                        detection_resolution_changed.store(true);
+                        detection_resolution_changed = true;
                         ctx.model_changed = true; 
 
                         
@@ -782,14 +778,14 @@ void OverlayThread()
                     
                     if (prev_capture_cursor != ctx.config.capture_cursor)
                     {
-                        capture_cursor_changed.store(true);
+                        capture_cursor_changed = true;
                         prev_capture_cursor = ctx.config.capture_cursor;
                     }
 
                     
                     if (prev_capture_borders != ctx.config.capture_borders)
                     {
-                        capture_borders_changed.store(true);
+                        capture_borders_changed = true;
                         prev_capture_borders = ctx.config.capture_borders;
                     }
 
@@ -799,33 +795,17 @@ void OverlayThread()
                         prev_monitor_idx = ctx.config.monitor_idx;
                     }
 
-                    
-                    if (
-                        prev_body_y_offset != ctx.config.body_y_offset ||
-                        prev_head_y_offset != ctx.config.head_y_offset ||
-                        prev_ignore_third_person != ctx.config.ignore_third_person ||
-                        prev_shooting_range_targets != ctx.config.shooting_range_targets ||
-                        prev_auto_aim != ctx.config.auto_aim ||
-                        prev_easynorecoil != ctx.config.easynorecoil ||
-                        prev_easynorecoilstrength != ctx.config.easynorecoilstrength)
-                    {
-                        
-                        prev_body_y_offset = ctx.config.body_y_offset;
-                        prev_head_y_offset = ctx.config.head_y_offset;
-                        prev_ignore_third_person = ctx.config.ignore_third_person;
-                        prev_shooting_range_targets = ctx.config.shooting_range_targets;
-                        prev_auto_aim = ctx.config.auto_aim;
-                        prev_easynorecoil = ctx.config.easynorecoil;
-                        prev_easynorecoilstrength = ctx.config.easynorecoilstrength;
-                    }
+                    // Always update - branch prediction cost is higher than assignment
+                    prev_body_y_offset = ctx.config.body_y_offset;
+                    prev_head_y_offset = ctx.config.head_y_offset;
+                    prev_ignore_third_person = ctx.config.ignore_third_person;
+                    prev_shooting_range_targets = ctx.config.shooting_range_targets;
+                    prev_auto_aim = ctx.config.auto_aim;
+                    prev_easynorecoil = ctx.config.easynorecoil;
+                    prev_easynorecoilstrength = ctx.config.easynorecoilstrength;
 
-                    
-                    if (prev_bScope_multiplier != ctx.config.bScope_multiplier)
-                    {
-                        prev_bScope_multiplier = ctx.config.bScope_multiplier;
-
-                        // MouseThread config update removed - GPU handles mouse control directly
-                    }
+                    // Always update
+                    prev_bScope_multiplier = ctx.config.bScope_multiplier;
 
                     
                     if (prev_opacity != ctx.config.overlay_opacity)
@@ -834,35 +814,26 @@ void OverlayThread()
                         SetLayeredWindowAttributes(g_hwnd, 0, opacity, LWA_ALPHA);
                     }
 
-                    
-                    if (prev_confidence_threshold != ctx.config.confidence_threshold ||
-                        prev_max_detections != ctx.config.max_detections)
-                    {
-                        prev_confidence_threshold = ctx.config.confidence_threshold;
-                        prev_max_detections = ctx.config.max_detections;
-                    }
+                    // Always update
+                    prev_confidence_threshold = ctx.config.confidence_threshold;
+                    prev_max_detections = ctx.config.max_detections;
 
                     
                     if (prev_show_window != ctx.config.show_window ||
                         prev_always_on_top != ctx.config.always_on_top)
                     {
                         prev_always_on_top = ctx.config.always_on_top;
-                        show_window_changed.store(true);
+                        show_window_changed = true;
                         prev_show_window = ctx.config.show_window;
                         
                         // Update preview flag when show_window changes
                         ctx.preview_enabled = ctx.config.show_window;
                     }
                     
-                    
-                    if (prev_show_fps != ctx.config.show_fps ||
-                        prev_window_size != ctx.config.window_size ||
-                        prev_screenshot_delay != ctx.config.screenshot_delay)
-                    {
-                        prev_show_fps = ctx.config.show_fps;
-                        prev_window_size = ctx.config.window_size;
-                        prev_screenshot_delay = ctx.config.screenshot_delay;
-                    }
+                    // Always update
+                    prev_show_fps = ctx.config.show_fps;
+                    prev_window_size = ctx.config.window_size;
+                    prev_screenshot_delay = ctx.config.screenshot_delay;
                 }
 
                 ImGui::EndTabBar();
@@ -896,8 +867,8 @@ void OverlayThread()
             }
             else
             {
-                // Limit overlay FPS to 30 for better performance while maintaining responsiveness
-                float overlay_target_fps = 30.0f;
+                // Use configurable overlay FPS for better control
+                float overlay_target_fps = ctx.config.overlay_target_fps;
                 auto targetFrameTime = std::chrono::milliseconds(static_cast<long long>(1000.0f / overlay_target_fps));
                 
                 if (present_elapsed < targetFrameTime)
