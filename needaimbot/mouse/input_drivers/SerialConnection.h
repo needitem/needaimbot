@@ -26,6 +26,7 @@ public:
     void close();
 
     void write(const std::string& data);
+    void writeBinary(const uint8_t* data, size_t size);
     std::string read();
 
     void click();
@@ -39,6 +40,7 @@ public:
 
 private:
     void sendCommand(const std::string& command);
+    void sendBinaryCommand(uint8_t cmd, int8_t param1, int8_t param2);
     std::vector<int> splitValue(int value);
     
     // Disable copy and move operations for thread safety
