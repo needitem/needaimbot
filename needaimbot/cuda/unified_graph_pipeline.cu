@@ -354,6 +354,7 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
                 
                 const MouseMovement* movement = pipeline->m_h_movement->get();
                 if (movement->dx != 0 || movement->dy != 0) {
+                    std::cout << "[UnifiedGraph] Mouse movement - dx: " << movement->dx << ", dy: " << movement->dy << std::endl;
                     executeMouseMovement(movement->dx, movement->dy);
                 }
             }, this);
@@ -440,12 +441,11 @@ bool UnifiedGraphPipeline::allocateBuffers() {
     
     try {
         m_captureBuffer.create(height, width, 4);
-        
+
         size_t arenaSize = SmallBufferArena::calculateArenaSize();
         m_smallBufferArena.arenaBuffer = std::make_unique<CudaMemory<uint8_t>>(arenaSize);
         m_smallBufferArena.initializePointers(m_smallBufferArena.arenaBuffer->get());
-        
-        
+
         size_t unifiedArenaSize = UnifiedGPUArena::calculateArenaSize(maxDetections, yoloSize);
         m_unifiedArena.megaArena = std::make_unique<CudaMemory<uint8_t>>(unifiedArenaSize);
         m_unifiedArena.initializePointers(m_unifiedArena.megaArena->get(), maxDetections, yoloSize);
@@ -629,6 +629,7 @@ void UnifiedGraphPipeline::runMainLoop() {
         }
         
         if (!wasAiming) {
+            std::cout << "[UnifiedGraph] Main loop activated (Right-click detected)" << std::endl;
             handleAimbotActivation();
             wasAiming = true;
         }
@@ -1238,20 +1239,23 @@ D3D11_BOX UnifiedGraphPipeline::createCaptureBox(int centerX, int centerY, int c
 
 bool UnifiedGraphPipeline::performDesktopCapture(const AppContext& ctx) {
     if (!m_desktopDuplication || !m_d3dDevice || !m_d3dContext || !m_captureTextureD3D) {
+        std::cout << "[Capture] Desktop duplication resources not available" << std::endl;
         return false;
     }
-    
+
     auto* duplication = static_cast<IDXGIOutputDuplication*>(m_desktopDuplication);
     auto* d3dContext = static_cast<ID3D11DeviceContext*>(m_d3dContext);
     auto* captureTexture = static_cast<ID3D11Texture2D*>(m_captureTextureD3D);
-    
+
     DXGI_OUTDUPL_FRAME_INFO frameInfo;
     IDXGIResource* desktopResource = nullptr;
     HRESULT hr = duplication->AcquireNextFrame(0, &frameInfo, &desktopResource);
-    
+
     if (!SUCCEEDED(hr) || !desktopResource) {
+        // No new frame - fail fast and let pipeline retry immediately
         return false;
     }
+
     
     ID3D11Texture2D* desktopTexture = nullptr;
     hr = desktopResource->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&desktopTexture);
@@ -1274,11 +1278,11 @@ bool UnifiedGraphPipeline::performDesktopCapture(const AppContext& ctx) {
 
 bool UnifiedGraphPipeline::performFrameCapture() {
     auto& ctx = AppContext::getInstance();
-    
+
     if (!m_config.enableCapture || !m_cudaResource || m_hasFrameData) {
         return true;
     }
-    
+
     if (!performDesktopCapture(ctx)) {
         return false;
     }
@@ -1304,17 +1308,23 @@ bool UnifiedGraphPipeline::performFrameCapture() {
             cudaMemcpyDeviceToDevice,
             m_pipelineStream->get()
         );
+        if (err == cudaSuccess) {
+            static int successCount = 0;
+            if (++successCount % 10 == 0) {  // Log every 10th successful capture
+                std::cout << "[Capture] Successful captures: " << successCount << std::endl;
+            }
+        }
     }
-    
+
     cudaGraphicsUnmapResources(1, &m_cudaResource, m_pipelineStream->get());
-    
+
     if (err != cudaSuccess) {
         printf("[ERROR] Capture failed: %s\n", cudaGetErrorString(err));
         return false;
     }
-    
+
     // Preview buffer update moved to executeGraphNonBlocking to avoid duplication
-    
+
     m_hasFrameData = true;
     return true;
 }
@@ -1543,6 +1553,7 @@ bool UnifiedGraphPipeline::executeNormalPipeline(cudaStream_t stream) {
                 
                 const MouseMovement* movement = pipeline->m_h_movement->get();
                 if (movement->dx != 0 || movement->dy != 0) {
+                    std::cout << "[UnifiedGraph] Mouse movement - dx: " << movement->dx << ", dy: " << movement->dy << std::endl;
                     executeMouseMovement(movement->dx, movement->dy);
                 }
             }, this);

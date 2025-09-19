@@ -150,7 +150,7 @@ bool loadAndValidateModel(std::string& modelName, const std::vector<std::string>
         ctx.config.saveConfig();
         return true;
     }
-    
+
     std::string modelPath = "models/" + modelName;
     if (!std::filesystem::exists(modelPath)) {
         std::cerr << "[MAIN] Specified model does not exist: " << modelPath << std::endl;
@@ -164,7 +164,7 @@ bool loadAndValidateModel(std::string& modelName, const std::vector<std::string>
             return false;
         }
     }
-    
+
     return true;
 }
 
