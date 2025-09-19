@@ -118,13 +118,13 @@ void SerialConnection::safeSerialClose() {
         // 1. 즉시 I/O 취소 (강제 종료 대비)
         CancelIo(serial_handle_);
         
-        // 2. Arduino를 안전한 상태로 리셋 - 비동기 명령 전송
-        const char* release_cmd = "r";
-        const char* move_cmd = "m0,0\n";
-        
-        writeAsync(release_cmd, static_cast<DWORD>(strlen(release_cmd)));
-        writeAsync(move_cmd, static_cast<DWORD>(strlen(move_cmd)));
-        writeAsync(release_cmd, static_cast<DWORD>(strlen(release_cmd))); // 한 번 더 릴리스
+        // 2. Arduino를 안전한 상태로 리셋 - 바이너리 명령 전송
+        uint8_t release_cmd[3] = {0x02, 0, 0}; // release command
+        uint8_t move_cmd[3] = {0x04, 0, 0};    // move 0,0 command
+
+        writeAsync(release_cmd, 3);
+        writeAsync(move_cmd, 3);
+        writeAsync(release_cmd, 3); // 한 번 더 릴리스
         
         // Wait for async operations to complete
         if (write_event_) {
@@ -449,13 +449,13 @@ bool SerialConnection::configurePort()
 
     is_open_ = true;
     
-    // Send Arduino initialization commands using async I/O
-    const char* release_cmd = "r";
-    const char* move_cmd = "m0,0\n";
-    
+    // Send Arduino initialization commands using binary protocol
+    uint8_t release_cmd[3] = {0x02, 0, 0}; // release command
+    uint8_t move_cmd[3] = {0x04, 0, 0};    // move 0,0 command
+
     // Use async write for initialization
-    writeAsync(release_cmd, static_cast<DWORD>(strlen(release_cmd)));
-    writeAsync(move_cmd, static_cast<DWORD>(strlen(move_cmd)));
+    writeAsync(release_cmd, 3);
+    writeAsync(move_cmd, 3);
     
     return true;
 }
@@ -486,11 +486,46 @@ void SerialConnection::write(const std::string& data)
     const int MAX_RETRIES = 2;
     for (int retry = 0; retry < MAX_RETRIES; ++retry) {
         // Remove unnecessary delay - async operation handles timing
-        
+
         if (writeAsync(data.c_str(), static_cast<DWORD>(data.length()))) {
             return; // 재시도 성공
         }
 
+    }
+
+    // 모든 재시도 실패 - 마지막 재연결 시도 (조용히 처리)
+    if (!reconnect()) {
+        is_open_ = false;
+    }
+}
+
+void SerialConnection::writeBinary(const uint8_t* data, size_t size)
+{
+    // 연결 상태 확인 및 복구 시도
+    if (!is_open_ || serial_handle_ == INVALID_HANDLE_VALUE) {
+        if (!reconnect()) {
+            return;
+        }
+    }
+
+    // 연결 건강도 확인
+    if (!isHealthy()) {
+        if (!reconnect()) {
+            return;
+        }
+    }
+
+    // Use the async write helper function
+    if (writeAsync(data, static_cast<DWORD>(size))) {
+        return; // 성공
+    }
+
+    // 실패한 경우 재시도
+    const int MAX_RETRIES = 2;
+    for (int retry = 0; retry < MAX_RETRIES; ++retry) {
+        if (writeAsync(data, static_cast<DWORD>(size))) {
+            return; // 재시도 성공
+        }
     }
 
     // 모든 재시도 실패 - 마지막 재연결 시도 (조용히 처리)
@@ -526,34 +561,39 @@ std::string SerialConnection::read()
 
 void SerialConnection::click()
 {
-    sendCommand("c");
+    sendBinaryCommand(0x01, 0, 0);
 }
 
 void SerialConnection::press()
 {
-    sendCommand("p");
+    sendBinaryCommand(0x03, 0, 0);
 }
 
 void SerialConnection::release()
 {
-    sendCommand("r");
+    sendBinaryCommand(0x02, 0, 0);
 }
 
 void SerialConnection::move(int x, int y)
 {
     if (x == 0 && y == 0) return;
-    
-    // Arduino 호환 명령 포맷 (소문자 m)
-    char command[32];
-    snprintf(command, sizeof(command), "m%d,%d\n", x, y);
-    
-    
-    sendCommand(std::string(command));
+
+    // 값 범위 제한 (-127 to 127)
+    int8_t clampedX = static_cast<int8_t>(x > 127 ? 127 : (x < -127 ? -127 : x));
+    int8_t clampedY = static_cast<int8_t>(y > 127 ? 127 : (y < -127 ? -127 : y));
+
+    sendBinaryCommand(0x04, clampedX, clampedY);
 }
 
 void SerialConnection::sendCommand(const std::string& command)
 {
     write(command);
+}
+
+void SerialConnection::sendBinaryCommand(uint8_t cmd, int8_t param1, int8_t param2)
+{
+    uint8_t buffer[3] = { cmd, static_cast<uint8_t>(param1), static_cast<uint8_t>(param2) };
+    writeBinary(buffer, 3);
 }
 
 std::vector<int> SerialConnection::splitValue(int value)

@@ -12,7 +12,6 @@ struct ConfigCache {
     float confidence_threshold;
     // NMS removed - no longer needed
     bool enable_aimbot;
-    float mouse_sensitivity;
     int target_priority;
     uint64_t version; // atomic 제거하여 복사 가능하게 함
     
@@ -23,7 +22,6 @@ struct ConfigCache {
         : detection_resolution(other.detection_resolution)
         , confidence_threshold(other.confidence_threshold)
         , enable_aimbot(other.enable_aimbot)
-        , mouse_sensitivity(other.mouse_sensitivity)
         , target_priority(other.target_priority)
         , version(other.version) {}
     
@@ -33,7 +31,6 @@ struct ConfigCache {
             detection_resolution = other.detection_resolution;
             confidence_threshold = other.confidence_threshold;
             enable_aimbot = other.enable_aimbot;
-            mouse_sensitivity = other.mouse_sensitivity;
             target_priority = other.target_priority;
             version = other.version;
         }
@@ -48,14 +45,13 @@ private:
     mutable std::mutex cache_mutex;
     
 public:
-    void updateCache(float resolution, float confidence, bool aimbot, 
-                    float sensitivity, int priority) {
+    void updateCache(float resolution, float confidence, bool aimbot,
+                    int priority) {
         std::lock_guard<std::mutex> lock(cache_mutex); // 스레드 안전성 보장
         cache.detection_resolution = resolution;
         cache.confidence_threshold = confidence; 
         // NMS removed
         cache.enable_aimbot = aimbot;
-        cache.mouse_sensitivity = sensitivity;
         cache.target_priority = priority;
         cache.version = ++current_version;
     }
@@ -302,16 +298,10 @@ public:
     bool remove_color_matches; 
 
     
-    // Deadzone settings (still used)
-    float min_movement_threshold_x = 1.0f; // X-axis minimum movement threshold (deadzone)
-    float min_movement_threshold_y = 1.0f; // Y-axis minimum movement threshold (deadzone)
 
     // PD Controller settings
     float pd_kp_x = 0.4f;  // Proportional gain for X axis
     float pd_kp_y = 0.4f;  // Proportional gain for Y axis
-    float pd_kd_x = 0.15f;  // Derivative gain for X axis
-    float pd_kd_y = 0.15f;  // Derivative gain for Y axis
-    float pd_derivative_filter = 0.7f;  // Derivative filter alpha (0.0 = no filter, 1.0 = full filter)
 
     // Active profile management
     std::string active_profile_name = "Default";

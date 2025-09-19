@@ -125,7 +125,7 @@ bool Config::loadConfig(const std::string& filename)
         
 
         
-        arduino_baudrate = 115200;
+        arduino_baudrate = 2000000;
         arduino_port = "COM0";
         arduino_16_bit_mouse = false;
         arduino_enable_keys = false;
@@ -282,16 +282,11 @@ bool Config::loadConfig(const std::string& filename)
     easynorecoilstrength = static_cast<float>(get_double_ini("Mouse", "easynorecoilstrength", 0.0));
     norecoil_step = static_cast<float>(get_double_ini("Mouse", "norecoil_step", 5.0));
     norecoil_ms = static_cast<float>(get_double_ini("Mouse", "norecoil_ms", 10.0));
-    min_movement_threshold_x = static_cast<float>(get_double_ini("Mouse", "min_movement_threshold_x", 1.0));
-    min_movement_threshold_y = static_cast<float>(get_double_ini("Mouse", "min_movement_threshold_y", 1.0));
     
     // Load PD controller settings
     // Load PD controller settings - group by axis for cache
     pd_kp_x = static_cast<float>(get_double_ini("PDController", "pd_kp_x", 0.4));
-    pd_kd_x = static_cast<float>(get_double_ini("PDController", "pd_kd_x", 0.15));
     pd_kp_y = static_cast<float>(get_double_ini("PDController", "pd_kp_y", 0.4));
-    pd_kd_y = static_cast<float>(get_double_ini("PDController", "pd_kd_y", 0.15));
-    pd_derivative_filter = static_cast<float>(get_double_ini("PDController", "pd_derivative_filter", 0.7));
     
     input_method = get_string_ini("Mouse", "input_method", "WIN32");
     easynorecoil_start_delay_ms = get_long_ini("Mouse", "easynorecoil_start_delay_ms", 0);
@@ -311,7 +306,7 @@ bool Config::loadConfig(const std::string& filename)
     
     // Hybrid aim control settings
 
-    arduino_baudrate = get_long_ini("Arduino", "arduino_baudrate", 115200);
+    arduino_baudrate = get_long_ini("Arduino", "arduino_baudrate", 2000000);
     arduino_port = get_string_ini("Arduino", "arduino_port", "COM0");
     arduino_16_bit_mouse = get_bool_ini("Arduino", "arduino_16_bit_mouse", false);
     arduino_enable_keys = get_bool_ini("Arduino", "arduino_enable_keys", false);
@@ -535,8 +530,6 @@ bool Config::saveConfig(const std::string& filename)
     file << "easynorecoilstrength = " << easynorecoilstrength << "\n";
     file << "norecoil_step = " << norecoil_step << "\n";
     file << "norecoil_ms = " << norecoil_ms << "\n";
-    file << "min_movement_threshold_x = " << min_movement_threshold_x << "\n";
-    file << "min_movement_threshold_y = " << min_movement_threshold_y << "\n";
     
     file << std::noboolalpha;
     file << "input_method = " << input_method << "\n";
@@ -551,9 +544,6 @@ bool Config::saveConfig(const std::string& filename)
     file << std::fixed << std::setprecision(6);
     file << "pd_kp_x = " << pd_kp_x << "\n";
     file << "pd_kp_y = " << pd_kp_y << "\n";
-    file << "pd_kd_x = " << pd_kd_x << "\n";
-    file << "pd_kd_y = " << pd_kd_y << "\n";
-    file << "pd_derivative_filter = " << pd_derivative_filter << "\n\n";
 
     file << "[Recoil]\n";
     file << "active_scope_magnification = " << active_scope_magnification << "\n";
