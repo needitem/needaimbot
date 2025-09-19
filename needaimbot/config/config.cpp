@@ -69,9 +69,6 @@ bool Config::loadConfig(const std::string& filename)
         capture_method = "simple";
         
         // NDI capture defaults
-        ndi_source_name = "";
-        ndi_network_url = "";
-        ndi_low_latency = false;
  
 
         
@@ -247,13 +244,7 @@ bool Config::loadConfig(const std::string& filename)
     gpu_capture_method = get_long_ini("Capture", "gpu_capture_method", 0);  // 0 = Desktop Duplication (default)
     capture_method = get_string_ini("Capture", "capture_method", "simple");
     
-    // NDI capture settings
-    ndi_source_name = get_string_ini("Capture", "ndi_source_name", "");
-    ndi_network_url = get_string_ini("Capture", "ndi_network_url", "");
-    ndi_low_latency = get_bool_ini("Capture", "ndi_low_latency", false);
     
-    // OBS Hook settings
-    game_window_name = get_string_ini("Capture", "game_window_name", "Apex Legends");
 
     // Batch load floats for better cache locality
     body_y_offset = static_cast<float>(get_double_ini("Target", "body_y_offset", 0.15));
@@ -499,10 +490,6 @@ bool Config::saveConfig(const std::string& filename)
     // target_fps removed - no longer saved
     file << "gpu_capture_method = " << gpu_capture_method << "\n";
     file << "capture_method = " << capture_method << "\n";
-    file << "ndi_source_name = " << ndi_source_name << "\n";
-    file << "ndi_network_url = " << ndi_network_url << "\n";
-    file << "ndi_low_latency = " << (ndi_low_latency ? "true" : "false") << "\n";
-    file << "game_window_name = " << game_window_name << "\n";
 
     file << "[Target]\n";
     file << std::fixed << std::setprecision(6);

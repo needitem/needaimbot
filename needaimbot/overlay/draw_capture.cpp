@@ -12,7 +12,6 @@
 #include "include/other_tools.h"
 #include "draw_settings.h"
 #include "ui_helpers.h"
-#include "../utils/window_enum.h"
 
 // Monitor count is now simplified - just count all monitors
 int monitors = GetSystemMetrics(SM_CMONITORS);
@@ -72,10 +71,8 @@ static void draw_capture_behavior_settings()
     
     UIHelpers::CompactSpacer();
     
-    const char* capture_methods[] = { 
-        "Desktop Duplication (Full GPU)", 
-        "Virtual Camera (OBS/XSplit)",
-        "OBS Game Hook (Ultra Low Latency)"
+    const char* capture_methods[] = {
+        "Desktop Duplication (Full GPU)"
     };
     
     // Initialize from config
@@ -101,115 +98,6 @@ static void draw_capture_behavior_settings()
     
     UIHelpers::CompactSpacer();
     
-    // Show game window selection for OBS Hook mode
-    if (current_method == 2) { // OBS Game Hook
-        UIHelpers::BeautifulText("Game Window Selection", UIHelpers::GetAccentColor());
-        UIHelpers::CompactSpacer();
-        
-        // Get list of windows
-        static std::vector<std::string> windowTitles;
-        static std::vector<const char*> windowItems;
-        static bool windowsLoaded = false;
-        static int selectedWindow = -1;
-        static char customWindowName[256] = "";
-        static bool useCustomName = false;
-        
-        // Initialize custom window name with current config value
-        static bool firstInit = true;
-        if (firstInit) {
-            strncpy_s(customWindowName, ctx.config.game_window_name.c_str(), sizeof(customWindowName) - 1);
-            firstInit = false;
-        }
-        
-        // Refresh window list button
-        if (ImGui::Button("Refresh Window List")) {
-            windowTitles = WindowEnumerator::GetWindowTitles();
-            windowItems.clear();
-            windowItems.reserve(windowTitles.size());
-            
-            // Find current selection
-            selectedWindow = -1;
-            for (size_t i = 0; i < windowTitles.size(); ++i) {
-                windowItems.push_back(windowTitles[i].c_str());
-                if (windowTitles[i] == ctx.config.game_window_name) {
-                    selectedWindow = static_cast<int>(i);
-                }
-            }
-            windowsLoaded = true;
-        }
-        
-        ImGui::SameLine();
-        UIHelpers::InfoTooltip("Click to refresh the list of available windows");
-        
-        // Load windows on first display
-        if (!windowsLoaded) {
-            windowTitles = WindowEnumerator::GetWindowTitles();
-            windowItems.clear();
-            windowItems.reserve(windowTitles.size());
-            
-            // Find current selection
-            selectedWindow = -1;
-            for (size_t i = 0; i < windowTitles.size(); ++i) {
-                windowItems.push_back(windowTitles[i].c_str());
-                if (windowTitles[i] == ctx.config.game_window_name) {
-                    selectedWindow = static_cast<int>(i);
-                }
-            }
-            windowsLoaded = true;
-        }
-        
-        // Window selection combo
-        if (!windowItems.empty()) {
-            int prev_selected = selectedWindow;
-            UIHelpers::CompactCombo("Select Window", &selectedWindow, windowItems.data(), static_cast<int>(windowItems.size()));
-            UIHelpers::InfoTooltip("Select the game window from running applications");
-            
-            if (selectedWindow != prev_selected) {
-                if (selectedWindow >= 0 && selectedWindow < static_cast<int>(windowTitles.size())) {
-                    ctx.config.game_window_name = windowTitles[selectedWindow];
-                    strncpy_s(customWindowName, windowTitles[selectedWindow].c_str(), sizeof(customWindowName) - 1);
-                    useCustomName = false;
-                    SAVE_PROFILE();
-                }
-            }
-        }
-        
-        UIHelpers::CompactSpacer();
-        
-        // Custom window name option
-        if (UIHelpers::BeautifulToggle("Use Custom Window Name", &useCustomName, "Manually enter a window title instead of selecting from the list")) {
-            if (useCustomName) {
-                selectedWindow = -1;
-            }
-        }
-        
-        if (useCustomName) {
-            if (ImGui::InputText("Window Title", customWindowName, sizeof(customWindowName))) {
-                ctx.config.game_window_name = std::string(customWindowName);
-                SAVE_PROFILE();
-            }
-            UIHelpers::InfoTooltip("Enter the exact window title of the game you want to capture");
-        }
-        
-        UIHelpers::CompactSpacer();
-        
-        // Show current selection
-        ImGui::Text("Current Target: %s", ctx.config.game_window_name.c_str());
-        
-        // Check if window exists
-        HWND hwnd = FindWindowA(nullptr, ctx.config.game_window_name.c_str());
-        if (hwnd) {
-            ImGui::SameLine();
-            ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "(Found)");
-        } else {
-            ImGui::SameLine();
-            ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "(Not Found)");
-        }
-        
-        UIHelpers::CompactSpacer();
-        ImGui::Separator();
-        UIHelpers::CompactSpacer();
-    }
     
     ImGui::Columns(2, "capture_options", false);
     
@@ -265,97 +153,16 @@ static void draw_capture_source_settings()
     UIHelpers::EndCard();
 }
 
-static void draw_2pc_capture_settings()
-{
-    auto& ctx = AppContext::getInstance();
-    
-    if (ctx.config.capture_method == "virtual_camera" || ctx.config.capture_method == "ndi")
-    {
-        UIHelpers::BeginCard("2PC Capture Settings");
-        
-        if (ctx.config.capture_method == "virtual_camera")
-        {
-            UIHelpers::BeautifulText("Virtual Camera Configuration", UIHelpers::GetAccentColor());
-            UIHelpers::CompactSpacer();
-            
-            // Virtual camera device selection
-            static int selected_camera = 0;
-            const char* camera_devices[] = { "OBS Virtual Camera", "XSplit VCam", "Streamlabs Virtual Camera", "NVIDIA Broadcast", "Custom Device 1", "Custom Device 2" };
-            
-            UIHelpers::CompactCombo("Virtual Camera Device", &selected_camera, camera_devices, IM_ARRAYSIZE(camera_devices));
-            UIHelpers::InfoTooltip("Select the virtual camera device to capture from your streaming PC.\nMake sure the virtual camera is enabled in your streaming software.");
-            
-            UIHelpers::CompactSpacer();
-            
-            ImGui::BulletText("Enable virtual camera in streaming software");
-            ImGui::BulletText("Select matching device above");
-            ImGui::BulletText("Start capture on both PCs");
-        }
-        else if (ctx.config.capture_method == "ndi")
-        {
-            UIHelpers::BeautifulText("NDI Stream Configuration", UIHelpers::GetAccentColor());
-            UIHelpers::CompactSpacer();
-            
-            // NDI source selection
-            static char ndi_source_name[256] = "";
-            static bool first_init = true;
-            if (first_init) {
-                strncpy_s(ndi_source_name, ctx.config.ndi_source_name.c_str(), sizeof(ndi_source_name) - 1);
-                first_init = false;
-            }
-            
-            if (ImGui::InputText("NDI Source Name", ndi_source_name, sizeof(ndi_source_name))) {
-                ctx.config.ndi_source_name = std::string(ndi_source_name);
-                SAVE_PROFILE();
-            }
-            UIHelpers::InfoTooltip("Enter the NDI source name from your streaming PC.\nLeave empty to auto-detect first available source.");
-            
-            UIHelpers::CompactSpacer();
-            
-            // Network fallback URL
-            static char network_url[512] = "";
-            static bool first_url_init = true;
-            if (first_url_init) {
-                strncpy_s(network_url, ctx.config.ndi_network_url.empty() ? "http://localhost:8080/video.mjpg" : ctx.config.ndi_network_url.c_str(), sizeof(network_url) - 1);
-                first_url_init = false;
-            }
-            
-            if (ImGui::InputText("Network Stream URL", network_url, sizeof(network_url))) {
-                ctx.config.ndi_network_url = std::string(network_url);
-                SAVE_PROFILE();
-            }
-            UIHelpers::InfoTooltip("Fallback network stream URL when NDI is not available.\nCommon formats: HTTP MJPEG, RTMP, UDP streams.");
-            
-            UIHelpers::CompactSpacer();
-            
-            if (UIHelpers::BeautifulToggle("Low Latency Mode", &ctx.config.ndi_low_latency, "Enables high bandwidth mode for lowest possible latency."))
-            {
-                SAVE_PROFILE();
-            }
-            
-            UIHelpers::CompactSpacer();
-            
-            ImGui::BulletText("Install NDI Tools on both PCs");
-            ImGui::BulletText("Enable NDI output in streaming software");
-            ImGui::BulletText("Ensure network connectivity");
-        }
-        
-        UIHelpers::EndCard();
-    }
-}
 
 void draw_capture_settings()
 {
     auto& ctx = AppContext::getInstance();
-    
+
     draw_capture_area_settings();
     UIHelpers::Spacer();
-    
+
     draw_capture_behavior_settings();
     UIHelpers::Spacer();
-    
+
     draw_capture_source_settings();
-    UIHelpers::Spacer();
-    
-    draw_2pc_capture_settings();
 }
