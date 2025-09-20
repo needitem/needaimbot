@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <numeric>
 #include <iomanip>
+#include <sstream>
 #include <cmath>
 #include <limits>
 #include <mutex>
@@ -642,11 +643,41 @@ bool UnifiedGraphPipeline::executePipelineWithErrorHandling() {
 
 void UnifiedGraphPipeline::runMainLoop() {
     auto& ctx = AppContext::getInstance();
-    
+
     m_lastFrameTime = std::chrono::high_resolution_clock::now();
-    
+    auto fpsLastLogTime = m_lastFrameTime;
+    std::size_t framesSinceLog = 0;
+
+    auto flushAverageFps = [&](std::chrono::high_resolution_clock::time_point now, bool force) {
+        auto elapsed = now - fpsLastLogTime;
+        if (!force && elapsed < std::chrono::seconds(2)) {
+            return;
+        }
+
+        if (framesSinceLog == 0) {
+            fpsLastLogTime = now;
+            return;
+        }
+
+        double seconds = std::chrono::duration<double>(elapsed).count();
+        if (seconds <= 0.0) {
+            fpsLastLogTime = now;
+            framesSinceLog = 0;
+            return;
+        }
+
+        std::ostringstream fpsStream;
+        fpsStream << std::fixed << std::setprecision(2)
+                  << "[UnifiedGraph] Average FPS over last " << framesSinceLog
+                  << " frames: " << (static_cast<double>(framesSinceLog) / seconds);
+        std::cout << fpsStream.str() << std::endl;
+
+        fpsLastLogTime = now;
+        framesSinceLog = 0;
+    };
+
     bool wasAiming = false;
-    
+
     while (!m_shouldStop && !ctx.should_exit) {
         {
             std::unique_lock<std::mutex> lock(ctx.pipeline_activation_mutex);
@@ -659,28 +690,56 @@ void UnifiedGraphPipeline::runMainLoop() {
         
         if (!ctx.aiming) {
             if (wasAiming) {
+                auto now = std::chrono::high_resolution_clock::now();
+                flushAverageFps(now, true);
+                fpsLastLogTime = now;
+                framesSinceLog = 0;
                 handleAimbotDeactivation();
                 wasAiming = false;
             }
             continue;
         }
-        
+
         if (!wasAiming) {
             std::cout << "[UnifiedGraph] Main loop activated (Right-click detected)" << std::endl;
             handleAimbotActivation();
             wasAiming = true;
+            m_lastFrameTime = std::chrono::high_resolution_clock::now();
+            fpsLastLogTime = m_lastFrameTime;
+            framesSinceLog = 0;
         }
-        
+
         while (ctx.aiming && !m_shouldStop && !ctx.should_exit) {
             executePipelineWithErrorHandling();
+
+            ++framesSinceLog;
+            auto now = std::chrono::high_resolution_clock::now();
+            flushAverageFps(now, false);
+            m_lastFrameTime = now;
         }
-        
+
+        if (wasAiming && (m_shouldStop || ctx.should_exit)) {
+            auto now = std::chrono::high_resolution_clock::now();
+            flushAverageFps(now, true);
+            fpsLastLogTime = now;
+            framesSinceLog = 0;
+        }
+
         if (wasAiming && !ctx.aiming) {
+            auto now = std::chrono::high_resolution_clock::now();
+            flushAverageFps(now, true);
+            fpsLastLogTime = now;
+            framesSinceLog = 0;
             handleAimbotDeactivation();
             wasAiming = false;
         }
     }
-    
+
+    if (wasAiming && framesSinceLog > 0) {
+        auto now = std::chrono::high_resolution_clock::now();
+        flushAverageFps(now, true);
+    }
+
 }
 
 void UnifiedGraphPipeline::stopMainLoop() {
