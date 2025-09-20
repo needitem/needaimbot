@@ -19,6 +19,11 @@
 #define WIN32
 #endif
 
+// Ensure std::min/std::max remain functions instead of macros
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 // CRITICAL: Include winsock2 first, then ws2tcpip, then windows
 #include <winsock2.h>
 #include <ws2tcpip.h>

@@ -146,9 +146,6 @@ public:
  
     // target_fps removed - no longer using FPS limiting
     
-    int gpu_capture_method; // 0 = Desktop Duplication, 1 = Region Capture
-    std::string capture_method; // "simple", "wingraphics"
-    
     float body_y_offset;
     float head_y_offset;
     float offset_step;  

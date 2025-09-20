@@ -71,30 +71,8 @@ static void draw_capture_behavior_settings()
     
     UIHelpers::CompactSpacer();
     
-    const char* capture_methods[] = {
-        "Desktop Duplication (Full GPU)"
-    };
-    
-    // Initialize from config
-    int current_method = ctx.config.gpu_capture_method;
-    
-    // Debug log
-    static bool logged = false;
-    if (!logged) {
-        logged = true;
-    }
-    
-    int previous_method = current_method;
-    UIHelpers::CompactCombo("Capture Method", &current_method, capture_methods, IM_ARRAYSIZE(capture_methods));
-    UIHelpers::InfoTooltip("Desktop Duplication: Captures full screen then crops to target area (current method)\nRegion Capture: Directly captures only the target region using Windows Graphics Capture API (Windows 10 1903+)\n\nRegion Capture uses less GPU memory and may have better performance.");
-    
-    // Check if the value actually changed
-    if (current_method != previous_method)
-    {
-        ctx.config.gpu_capture_method = current_method;  // Save to config
-        SAVE_PROFILE();  // This will save to file
-        ctx.capture_method_changed = true;
-    }
+    ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "NVFBC Capture Active");
+    UIHelpers::InfoTooltip("NVFBC (NVIDIA Frame Buffer Capture) is the exclusive capture path.\nDesktop Duplication and other fallbacks have been removed for maximum performance and low latency.");
     
     UIHelpers::CompactSpacer();
     

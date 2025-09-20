@@ -44,8 +44,7 @@ public:
     // State management - use regular bool with mutex for less frequently accessed
     std::atomic<bool> detection_paused{false};
     bool preview_enabled{false};  // Not hot path - regular bool is fine
-    bool capture_method_changed{false};  // Rare change
-    bool crosshair_offset_changed{false};  // Rare change  
+    bool crosshair_offset_changed{false};  // Rare change
     bool model_changed{false};  // Rare change
     
     // Target data - Optimize with fixed-size array for cache locality

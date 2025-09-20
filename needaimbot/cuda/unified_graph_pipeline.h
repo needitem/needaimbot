@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cuda_runtime.h>
-#include <cuda_d3d11_interop.h>
 #include <vector>
 #include <memory>
 #include <atomic>
@@ -19,8 +18,7 @@
 #include <cuda_fp16.h>
 
 struct AppContext;
-struct D3D11_TEXTURE2D_DESC;
-struct D3D11_BOX;
+class NVFBCCapture;
 
 namespace needaimbot {
 
@@ -224,13 +222,7 @@ public:
     bool executeNormalPipeline(cudaStream_t stream = nullptr);
     
         
-    void setInputTexture(cudaGraphicsResource_t resource) { m_cudaResource = resource; }
-    void setDesktopDuplication(void* duplication, void* device, void* context, void* texture) {
-        m_desktopDuplication = duplication;
-        m_d3dDevice = device;
-        m_d3dContext = context;
-        m_captureTextureD3D = texture;
-    }
+    void setNVFBCCapture(NVFBCCapture* capture) { m_nvfbcCapture = capture; }
     void setInputFrame(const SimpleCudaMat& frame);
     void setOutputBuffer(float* d_output) { 
         m_externalOutputBuffer = d_output;
@@ -339,14 +331,8 @@ private:
     std::unique_ptr<CudaPinnedMemory<MouseMovement>> m_h_movement;
     
     float* m_externalOutputBuffer = nullptr;
-    
-    cudaGraphicsResource_t m_cudaResource = nullptr;
-    cudaArray_t m_cudaArray = nullptr;
-    
-    void* m_desktopDuplication = nullptr;
-    void* m_d3dDevice = nullptr;
-    void* m_d3dContext = nullptr;
-    void* m_captureTextureD3D = nullptr;
+
+    NVFBCCapture* m_nvfbcCapture = nullptr;
     
     UnifiedPipelineConfig m_config;
     GraphExecutionState m_state;
@@ -392,11 +378,10 @@ private:
     void handleAimbotActivation();
     bool executePipelineWithErrorHandling();
 
-    std::pair<int, int> calculateCaptureCenter(const AppContext& ctx, const D3D11_TEXTURE2D_DESC& desktopDesc);
-    D3D11_BOX createCaptureBox(int centerX, int centerY, int captureSize, const D3D11_TEXTURE2D_DESC& desktopDesc);
-    bool performDesktopCapture(const AppContext& ctx);
+    bool updateNVFBCCaptureRegion(const AppContext& ctx);
     bool performFrameCapture();
     bool performFrameCaptureDirectToUnified();
+    bool copyNVFBCFrameToGPU(void* frameData, unsigned int width, unsigned int height);
     bool performPreprocessing();
     void updatePreviewBuffer(const SimpleCudaMat& currentBuffer);
     void updatePreviewBufferAllocation();  // Dynamic allocation based on show_window state

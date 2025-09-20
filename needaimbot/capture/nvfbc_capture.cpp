@@ -251,11 +251,16 @@ void NVFBCCapture::CaptureThreadProc() {
     std::cout << "[NVFBCCapture] Capture thread stopped" << std::endl;
 }
 
-void NVFBCCapture::SetCaptureRegion(int x, int y, int width, int height) {
+bool NVFBCCapture::SetCaptureRegion(int x, int y, int width, int height) {
     // Validate input parameters
     if (x < 0 || y < 0 || width <= 0 || height <= 0) {
         std::cerr << "[NVFBCCapture] Invalid capture region parameters" << std::endl;
-        return;
+        return false;
+    }
+
+    if (x + width > m_screenWidth || y + height > m_screenHeight) {
+        std::cerr << "[NVFBCCapture] Capture region exceeds screen bounds" << std::endl;
+        return false;
     }
 
     m_captureRegion.left = x;
@@ -284,6 +289,8 @@ void NVFBCCapture::SetCaptureRegion(int x, int y, int width, int height) {
             StartCapture();
         }
     }
+
+    return true;
 }
 
 void NVFBCCapture::GetCaptureRegion(int* x, int* y, int* width, int* height) const {
