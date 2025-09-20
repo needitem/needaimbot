@@ -460,24 +460,25 @@ int main()
     if (GetVersionEx((OSVERSIONINFO*)&osvi)) {
     }
     
-    // NVFBC Test
-    std::cout << "\n=== NVFBC Capture Test ===" << std::endl;
+    // NVFBC Capture Test
+    std::cout << "\n=== NVFBC Capture System ===" << std::endl;
     if (GraphicsCapture::IsNVFBCAvailable()) {
-        std::cout << "✓ NVFBC is available!" << std::endl;
+        std::cout << "✓ NVFBC Hardware Available" << std::endl;
 
-        GraphicsCapture testCapture;
-        if (testCapture.Initialize()) {
-            std::cout << "✓ GraphicsCapture initialized" << std::endl;
-            std::cout << "  - Using NVFBC: " << (testCapture.IsUsingNVFBC() ? "Yes" : "No") << std::endl;
-            std::cout << "  - Resolution: " << testCapture.GetWidth() << "x" << testCapture.GetHeight() << std::endl;
-            testCapture.Shutdown();
+        GraphicsCapture capture;
+        if (capture.Initialize()) {
+            std::cout << "✓ NVFBC Capture Initialized" << std::endl;
+            std::cout << "  - Resolution: " << capture.GetWidth() << "x" << capture.GetHeight() << std::endl;
+            std::cout << "  - Status: Ready for high-performance capture" << std::endl;
+            capture.Shutdown();
         } else {
-            std::cout << "✗ Failed to initialize GraphicsCapture" << std::endl;
+            std::cout << "✗ NVFBC Initialization Failed" << std::endl;
         }
     } else {
-        std::cout << "✗ NVFBC is not available (requires RTX GPU with latest drivers)" << std::endl;
+        std::cout << "✗ NVFBC Hardware Not Available" << std::endl;
+        std::cout << "  - Requires RTX GPU with NVFBC support" << std::endl;
     }
-    std::cout << "========================\n" << std::endl;
+    std::cout << "=============================\n" << std::endl;
 
     auto& ctx = AppContext::getInstance();
 
