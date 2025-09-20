@@ -27,7 +27,7 @@
 #include "include/other_tools.h"
 #include "core/thread_manager.h"
 #include "core/error_manager.h"
-#include "capture/nvfbc_capture.h"
+#include "capture/dda_capture.h"
 
 
 #ifndef __INTELLISENSE__
@@ -180,22 +180,22 @@ bool loadAndValidateModel(std::string& modelName, const std::vector<std::string>
 bool initializeScreenCapture(needaimbot::UnifiedGraphPipeline* pipeline) {
     auto& ctx = AppContext::getInstance();
 
-    if (!NVFBCCapture::IsNVFBCAvailable()) {
-        std::cerr << "[CAPTURE] NVFBC hardware capture is not available on this system" << std::endl;
+    if (!DDACapture::IsDDACaptureAvailable()) {
+        std::cerr << "[CAPTURE] Desktop Duplication is not available on this system" << std::endl;
         return false;
     }
 
-    static NVFBCCapture s_nvfbcCapture;
+    static DDACapture s_ddaCapture;
 
-    if (!s_nvfbcCapture.Initialize()) {
-        std::cerr << "[CAPTURE] Failed to initialize NVFBC capture session" << std::endl;
+    if (!s_ddaCapture.Initialize()) {
+        std::cerr << "[CAPTURE] Failed to initialize Desktop Duplication capture" << std::endl;
         return false;
     }
 
-    int screenW = s_nvfbcCapture.GetScreenWidth();
-    int screenH = s_nvfbcCapture.GetScreenHeight();
+    int screenW = s_ddaCapture.GetScreenWidth();
+    int screenH = s_ddaCapture.GetScreenHeight();
     if (screenW <= 0 || screenH <= 0) {
-        std::cerr << "[CAPTURE] NVFBC reported invalid screen dimensions" << std::endl;
+        std::cerr << "[CAPTURE] Desktop Duplication reported invalid screen dimensions" << std::endl;
         return false;
     }
 
@@ -211,17 +211,17 @@ bool initializeScreenCapture(needaimbot::UnifiedGraphPipeline* pipeline) {
     int left = std::clamp(centerX - captureSize / 2, 0, maxLeft);
     int top = std::clamp(centerY - captureSize / 2, 0, maxTop);
 
-    if (!s_nvfbcCapture.SetCaptureRegion(left, top, captureSize, captureSize)) {
-        std::cerr << "[CAPTURE] Failed to configure NVFBC capture region" << std::endl;
+    if (!s_ddaCapture.SetCaptureRegion(left, top, captureSize, captureSize)) {
+        std::cerr << "[CAPTURE] Failed to configure Desktop Duplication capture region" << std::endl;
         return false;
     }
 
-    if (!s_nvfbcCapture.IsCapturing() && !s_nvfbcCapture.StartCapture()) {
-        std::cerr << "[CAPTURE] Failed to start NVFBC capture thread" << std::endl;
+    if (!s_ddaCapture.IsCapturing() && !s_ddaCapture.StartCapture()) {
+        std::cerr << "[CAPTURE] Failed to start Desktop Duplication capture thread" << std::endl;
         return false;
     }
 
-    pipeline->setNVFBCCapture(&s_nvfbcCapture);
+    pipeline->setDDACapture(&s_ddaCapture);
     return true;
 }
 
@@ -386,17 +386,16 @@ int main()
     if (GetVersionEx((OSVERSIONINFO*)&osvi)) {
     }
     
-    // NVFBC Capture System
-    std::cout << "\n=== NVFBC Capture System ===" << std::endl;
-    if (NVFBCCapture::IsNVFBCAvailable()) {
-        std::cout << "✓ NVFBC Hardware Available" << std::endl;
+    // Desktop Duplication Capture System
+    std::cout << "\n=== Desktop Duplication Capture ===" << std::endl;
+    if (DDACapture::IsDDACaptureAvailable()) {
+        std::cout << "✓ Desktop Duplication Available" << std::endl;
 
-        NVFBCCapture capture;
+        DDACapture capture;
         if (capture.Initialize()) {
-            std::cout << "✓ NVFBC Capture Initialized" << std::endl;
+            std::cout << "✓ DDA Capture Initialized" << std::endl;
             std::cout << "  - Full Screen: " << capture.GetWidth() << "x" << capture.GetHeight() << std::endl;
 
-            // Test partial capture (center quarter of screen)
             int centerX = capture.GetWidth() / 4;
             int centerY = capture.GetHeight() / 4;
             int centerW = capture.GetWidth() / 2;
@@ -412,11 +411,11 @@ int main()
 
             capture.Shutdown();
         } else {
-            std::cout << "✗ NVFBC Initialization Failed" << std::endl;
+            std::cout << "✗ DDA Initialization Failed" << std::endl;
         }
     } else {
-        std::cout << "✗ NVFBC Hardware Not Available" << std::endl;
-        std::cout << "  - Requires RTX GPU with NVFBC support" << std::endl;
+        std::cout << "✗ Desktop Duplication Unavailable" << std::endl;
+        std::cout << "  - Requires Windows 8+ with WDDM 1.2 drivers" << std::endl;
     }
     std::cout << "=============================\n" << std::endl;
 
