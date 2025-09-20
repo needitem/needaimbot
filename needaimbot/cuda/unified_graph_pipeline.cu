@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <numeric>
 #include <iomanip>
+#include <cmath>
 #include <limits>
 #include <mutex>
 #include <cstring>
@@ -158,9 +159,19 @@ __global__ void fusedTargetSelectionAndMovementKernel(
             
             float movement_x = error_x * kp_x;
             float movement_y = error_y * kp_y;
-            
-            output_movement->dx = static_cast<int>(movement_x);
-            output_movement->dy = static_cast<int>(movement_y);
+
+            int computed_dx = static_cast<int>(roundf(movement_x));
+            int computed_dy = static_cast<int>(roundf(movement_y));
+
+            if (computed_dx == 0 && movement_x != 0.0f) {
+                computed_dx = (movement_x > 0.0f) ? 1 : -1;
+            }
+            if (computed_dy == 0 && movement_y != 0.0f) {
+                computed_dy = (movement_y > 0.0f) ? 1 : -1;
+            }
+
+            output_movement->dx = computed_dx;
+            output_movement->dy = computed_dy;
         }
     }
 }
@@ -354,53 +365,6 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
                 }
 
                 const MouseMovement* movement = pipeline->m_h_movement->get();
-                const int decodedCount = (pipeline->m_h_debugDecodedCount && pipeline->m_h_debugDecodedCount->get())
-                    ? *pipeline->m_h_debugDecodedCount->get()
-                    : -1;
-                const int finalCount = (pipeline->m_h_debugFinalCount && pipeline->m_h_debugFinalCount->get())
-                    ? *pipeline->m_h_debugFinalCount->get()
-                    : -1;
-                const int bestIdx = (pipeline->m_h_debugBestIndex && pipeline->m_h_debugBestIndex->get())
-                    ? *pipeline->m_h_debugBestIndex->get()
-                    : -1;
-                const Target* bestTarget = (pipeline->m_h_debugBestTarget && pipeline->m_h_debugBestTarget->get())
-                    ? pipeline->m_h_debugBestTarget->get()
-                    : nullptr;
-
-                const bool zeroMovement = (movement->dx == 0 && movement->dy == 0);
-                static int lastDecoded = std::numeric_limits<int>::min();
-                static int lastFinal = std::numeric_limits<int>::min();
-                static int lastBest = std::numeric_limits<int>::min();
-                static bool lastZeroMovement = false;
-
-                const bool stateChanged = (decodedCount != lastDecoded ||
-                                           finalCount != lastFinal ||
-                                           bestIdx != lastBest ||
-                                           zeroMovement != lastZeroMovement);
-                const bool shouldLog = stateChanged &&
-                    (zeroMovement || bestIdx < 0 || decodedCount > 0 || finalCount > 0);
-
-                if (shouldLog) {
-                    std::cerr << "[GraphDebug] "
-                              << (zeroMovement ? "Zero mouse movement" : "Negative best target index")
-                              << " after graph execution. decodedCount=" << decodedCount
-                              << ", finalTargets=" << finalCount
-                              << ", bestIndex=" << bestIdx;
-                    if (bestTarget) {
-                        std::cerr << ", bestTarget={x=" << bestTarget->x
-                                  << ", y=" << bestTarget->y
-                                  << ", w=" << bestTarget->width
-                                  << ", h=" << bestTarget->height
-                                  << ", conf=" << bestTarget->confidence
-                                  << ", class=" << bestTarget->classId << "}";
-                    }
-                    std::cerr << std::endl;
-
-                    lastDecoded = decodedCount;
-                    lastFinal = finalCount;
-                    lastBest = bestIdx;
-                    lastZeroMovement = zeroMovement;
-                }
 
                 if (movement->dx != 0 || movement->dy != 0) {
                     executeMouseMovement(movement->dx, movement->dy);
@@ -1788,53 +1752,6 @@ bool UnifiedGraphPipeline::executeNormalPipeline(cudaStream_t stream) {
                 }
 
                 const MouseMovement* movement = pipeline->m_h_movement->get();
-                const int decodedCount = (pipeline->m_h_debugDecodedCount && pipeline->m_h_debugDecodedCount->get())
-                    ? *pipeline->m_h_debugDecodedCount->get()
-                    : -1;
-                const int finalCount = (pipeline->m_h_debugFinalCount && pipeline->m_h_debugFinalCount->get())
-                    ? *pipeline->m_h_debugFinalCount->get()
-                    : -1;
-                const int bestIdx = (pipeline->m_h_debugBestIndex && pipeline->m_h_debugBestIndex->get())
-                    ? *pipeline->m_h_debugBestIndex->get()
-                    : -1;
-                const Target* bestTarget = (pipeline->m_h_debugBestTarget && pipeline->m_h_debugBestTarget->get())
-                    ? pipeline->m_h_debugBestTarget->get()
-                    : nullptr;
-
-                const bool zeroMovement = (movement->dx == 0 && movement->dy == 0);
-                static int lastDecoded = std::numeric_limits<int>::min();
-                static int lastFinal = std::numeric_limits<int>::min();
-                static int lastBest = std::numeric_limits<int>::min();
-                static bool lastZeroMovement = false;
-
-                const bool stateChanged = (decodedCount != lastDecoded ||
-                                           finalCount != lastFinal ||
-                                           bestIdx != lastBest ||
-                                           zeroMovement != lastZeroMovement);
-                const bool shouldLog = stateChanged &&
-                    (zeroMovement || bestIdx < 0 || decodedCount > 0 || finalCount > 0);
-
-                if (shouldLog) {
-                    std::cerr << "[GraphDebug] "
-                              << (zeroMovement ? "Zero mouse movement" : "Negative best target index")
-                              << " in normal pipeline. decodedCount=" << decodedCount
-                              << ", finalTargets=" << finalCount
-                              << ", bestIndex=" << bestIdx;
-                    if (bestTarget) {
-                        std::cerr << ", bestTarget={x=" << bestTarget->x
-                                  << ", y=" << bestTarget->y
-                                  << ", w=" << bestTarget->width
-                                  << ", h=" << bestTarget->height
-                                  << ", conf=" << bestTarget->confidence
-                                  << ", class=" << bestTarget->classId << "}";
-                    }
-                    std::cerr << std::endl;
-
-                    lastDecoded = decodedCount;
-                    lastFinal = finalCount;
-                    lastBest = bestIdx;
-                    lastZeroMovement = zeroMovement;
-                }
 
                 if (movement->dx != 0 || movement->dy != 0) {
                     executeMouseMovement(movement->dx, movement->dy);
