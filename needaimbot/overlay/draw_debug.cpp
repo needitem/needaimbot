@@ -7,17 +7,16 @@
 #include "draw_settings.h"
 #include <vector>
 #include <string>
-#include <d3d11.h> 
-// #include "../capture/capture.h" - removed, using GPU capture now 
-#include <cuda_runtime.h> 
-#include "../cuda/detection/postProcess.h" 
+#include <d3d11.h>
+// #include "../capture/capture.h" - removed, using GPU capture now
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <iostream>
+#include <algorithm>
+#include <cstring>
 // OpenCV removed - using custom CUDA utilities
 #include "../cuda/simple_cuda_mat.h"
-#include "../cuda/preprocessing.h" 
 
 
 
@@ -55,48 +54,30 @@ static bool g_crosshairHsvValid = false;
 
 
 
-// GPU-accelerated version with direct GPU memory handling
-void uploadDebugFrame(const SimpleCudaMat& bgrGpu)
+// Upload a CPU RGBA frame into the debug texture for ImGui rendering
+void uploadDebugFrame(const SimpleMat& rgbaCpu)
 {
-    static int uploadCount = 0;
-    uploadCount++;
-    
-    // Lock mutex for thread-safe D3D11 resource access
     std::lock_guard<std::mutex> lock(g_debugTexMutex);
-    
-    // Comprehensive safety checks
-    if (bgrGpu.empty() || !g_pd3dDevice || !g_pd3dDeviceContext) {
-        return;
-    }
-    
-    // Validate dimensions
-    if (bgrGpu.cols() <= 0 || bgrGpu.rows() <= 0 || 
-        bgrGpu.cols() > 10000 || bgrGpu.rows() > 10000) {
-        return;
-    }
-    
-    // Check for valid GPU data pointer
-    if (bgrGpu.data() == nullptr) {
-        return;
-    }
-    
-    // Validate CUDA pointer before operations
-    cudaPointerAttributes attributes;
-    cudaError_t queryErr = cudaPointerGetAttributes(&attributes, bgrGpu.data());
-    if (queryErr != cudaSuccess || 
-        (attributes.type != cudaMemoryTypeDevice && attributes.type != cudaMemoryTypeManaged)) {
-        // Invalid CUDA memory, skip upload
-        return;
-    }
-    
 
-    if (!g_debugTex || bgrGpu.cols() != texW || bgrGpu.rows() != texH)
+    if (rgbaCpu.empty() || !g_pd3dDevice || !g_pd3dDeviceContext) {
+        return;
+    }
+
+    if (rgbaCpu.cols() <= 0 || rgbaCpu.rows() <= 0 ||
+        rgbaCpu.cols() > 10000 || rgbaCpu.rows() > 10000) {
+        return;
+    }
+
+    if (rgbaCpu.data() == nullptr) {
+        return;
+    }
+
+    if (!g_debugTex || rgbaCpu.cols() != texW || rgbaCpu.rows() != texH)
     {
-        
         SAFE_RELEASE(g_debugTex);
         SAFE_RELEASE(g_debugSRV);
 
-        texW = bgrGpu.cols();  texH = bgrGpu.rows();
+        texW = rgbaCpu.cols();  texH = rgbaCpu.rows();
 
         D3D11_TEXTURE2D_DESC td = {};
         td.Width = texW;
@@ -115,7 +96,6 @@ void uploadDebugFrame(const SimpleCudaMat& bgrGpu)
             std::cerr << "[Debug] Failed to create debug texture! HRESULT=" << std::hex << hr_tex << std::dec << std::endl;
             return;
         }
-        
 
         D3D11_SHADER_RESOURCE_VIEW_DESC sd = {};
         sd.Format = td.Format;
@@ -126,131 +106,41 @@ void uploadDebugFrame(const SimpleCudaMat& bgrGpu)
         {
             SAFE_RELEASE(g_debugTex);
             SAFE_RELEASE(g_debugSRV);
+            std::cerr << "[Debug] Failed to create shader resource view for preview texture. HRESULT="
+                      << std::hex << hr_srv << std::dec << std::endl;
             return;
         }
     }
 
-    // GPU-based color conversion with error handling
-    static SimpleCudaMat rgbaGpu;
-    
-    // Only recreate if size changes to avoid memory allocation overhead
-    if (rgbaGpu.empty() || rgbaGpu.rows() != bgrGpu.rows() || rgbaGpu.cols() != bgrGpu.cols()) {
-        try {
-            rgbaGpu.create(bgrGpu.rows(), bgrGpu.cols(), 4);
-        } catch (...) {
-            std::cerr << "[Debug] Failed to create RGBA GPU buffer" << std::endl;
-            return;
-        }
-    }
-    
-    // Removed unnecessary synchronization for performance
-    // CUDA operations are already synchronized by stream dependencies
-    
-    cudaError_t err;
-    
-    if (bgrGpu.channels() == 4) {
-        // BGRA to RGBA conversion
-        err = cuda_bgra2rgba(bgrGpu.data(), rgbaGpu.data(),
-                             bgrGpu.cols(), bgrGpu.rows(),
-                             static_cast<int>(bgrGpu.step()), 
-                             static_cast<int>(rgbaGpu.step()));
-    } else if (bgrGpu.channels() == 3) {
-        // BGR to RGBA conversion
-        err = cuda_bgr2rgba(bgrGpu.data(), rgbaGpu.data(),
-                            bgrGpu.cols(), bgrGpu.rows(),
-                            static_cast<int>(bgrGpu.step()), 
-                            static_cast<int>(rgbaGpu.step()));
-    } else {
-        std::cerr << "[Debug] Unsupported channel count: " << bgrGpu.channels() << std::endl;
-        return;
-    }
-    
-    
-    if (err != cudaSuccess) {
-        std::cerr << "[Debug] CUDA color conversion failed: " << cudaGetErrorString(err) << std::endl;
-        // Don't try to access GPU memory pointers during error conditions
-        return;
-    }
-    
-    // Removed unnecessary synchronization for performance
-    // The download operation below will ensure data is ready
-    
-    // Download converted data from GPU with error handling
-    static SimpleMat rgba;
-    try {
-        // Only recreate if size changes
-        if (rgba.empty() || rgba.rows() != rgbaGpu.rows() || rgba.cols() != rgbaGpu.cols()) {
-            rgba.create(rgbaGpu.rows(), rgbaGpu.cols(), 4);
-            
-            // Validate CPU buffer
-            if (rgba.data() == nullptr) {
-                std::cerr << "[Debug] Failed to allocate CPU buffer" << std::endl;
-                return;
-            }
-        }
-        
-        // Use async download with stream for non-blocking operation
-        static cudaStream_t debugStream = nullptr;
-        if (!debugStream) {
-            cudaStreamCreate(&debugStream);
-        }
-        
-        // Async download to CPU memory
-        cudaMemcpyAsync(rgba.data(), rgbaGpu.data(), 
-                       rgbaGpu.rows() * rgbaGpu.step(), 
-                       cudaMemcpyDeviceToHost, debugStream);
-        
-        // Use event for completion check instead of blocking sync
-        static cudaEvent_t downloadComplete = nullptr;
-        if (!downloadComplete) {
-            cudaEventCreate(&downloadComplete);
-        }
-        cudaEventRecord(downloadComplete, debugStream);
-        
-        // Only wait if necessary (can be made fully async in future)
-        cudaEventSynchronize(downloadComplete);
-    } catch (const std::exception& e) {
-        std::cerr << "[Debug] Exception during download: " << e.what() << std::endl;
-        return;
-    } catch (...) {
-        std::cerr << "[Debug] Unknown exception during download" << std::endl;
-        return;
-    }
-
-    if (rgba.empty() || rgba.cols() <= 0 || rgba.rows() <= 0 || rgba.data() == nullptr) { 
+    if (!g_debugTex || !g_pd3dDeviceContext) {
         return;
     }
 
     D3D11_MAPPED_SUBRESOURCE ms = {};
     HRESULT hr_map = g_pd3dDeviceContext->Map(g_debugTex, 0, D3D11_MAP_WRITE_DISCARD, 0, &ms);
-    if (SUCCEEDED(hr_map) && ms.pData != nullptr)
+    if (FAILED(hr_map) || ms.pData == nullptr)
     {
-        
-        try {
-            // Copy row by row, handling different row pitches
-            size_t copy_width = std::min<size_t>(texW * 4, ms.RowPitch);  // Ensure we don't overrun
-            uint8_t* src_data = rgba.data();
-            uint8_t* dst_data = static_cast<uint8_t*>(ms.pData);
-            
-            if (src_data && dst_data) {
-                for (int y = 0; y < texH; ++y) {
-                    // Bounds check
-                    if (y * rgba.step() + copy_width <= rgba.rows() * rgba.step()) {
-                        memcpy(dst_data + ms.RowPitch * y, 
-                               src_data + y * rgba.step(), 
-                               copy_width);
-                    }
-                }
-                
-            }
-        } catch (...) {
-            std::cerr << "[Debug] Exception during texture copy" << std::endl;
-        }
-        g_pd3dDeviceContext->Unmap(g_debugTex, 0);
-    } else if (FAILED(hr_map)) {
         std::cerr << "[Debug] Failed to map texture: HRESULT=" << std::hex << hr_map << std::dec << std::endl;
+        return;
     }
+
+    try {
+        const uint8_t* src = rgbaCpu.data();
+        size_t srcPitch = rgbaCpu.step();
+        size_t rowBytes = std::min<size_t>(texW * 4, ms.RowPitch);
+
+        for (int y = 0; y < texH; ++y) {
+            std::memcpy(static_cast<uint8_t*>(ms.pData) + ms.RowPitch * y,
+                        src + srcPitch * y,
+                        rowBytes);
+        }
+    } catch (...) {
+        std::cerr << "[Debug] Exception during texture copy" << std::endl;
+    }
+
+    g_pd3dDeviceContext->Unmap(g_debugTex, 0);
 }
+
 
 
 
@@ -458,14 +348,6 @@ void draw_debug()
     }
     
 
-    ImGui::SeparatorText("Preview Notice"); 
-    ImGui::Spacing();
-    
-    ImGui::Text("The preview window has been moved to the Offset tab.");
-    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Please switch to the Offset tab to see the live preview.");
-    
-    ImGui::Spacing();
-    
     if (ImGui::Checkbox("Enable FPS Display", &ctx.config.show_fps)) { SAVE_PROFILE(); }
 
     ImGui::Spacing();
