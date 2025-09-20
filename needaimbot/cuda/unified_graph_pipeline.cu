@@ -708,6 +708,32 @@ bool UnifiedGraphPipeline::enqueueFrameCompletionCallback(cudaStream_t stream) {
     return true;
 }
 
+bool UnifiedGraphPipeline::enqueueMovementResetCallback(cudaStream_t stream) {
+    if (!stream) {
+        return false;
+    }
+
+    cudaError_t err = cudaLaunchHostFunc(stream,
+        [](void* userData) {
+            auto* pipeline = static_cast<UnifiedGraphPipeline*>(userData);
+            if (!pipeline) {
+                return;
+            }
+
+            pipeline->m_allowMovement.store(false, std::memory_order_release);
+            pipeline->clearMovementData();
+        }, this);
+
+    if (err != cudaSuccess) {
+        std::cerr << "[UnifiedGraph] Failed to enqueue movement reset callback: "
+                  << cudaGetErrorString(err) << std::endl;
+        m_allowMovement.store(false, std::memory_order_release);
+        return false;
+    }
+
+    return true;
+}
+
 void UnifiedGraphPipeline::runMainLoop() {
     auto& ctx = AppContext::getInstance();
 
@@ -1928,9 +1954,25 @@ bool UnifiedGraphPipeline::executeNormalPipeline(cudaStream_t stream) {
     }
 
     m_allowMovement.store(shouldRunDetection, std::memory_order_release);
-    if (!enqueueFrameCompletionCallback(activeStream)) {
-        m_allowMovement.store(false, std::memory_order_release);
-        return false;
+    if (shouldRunDetection) {
+        if (!enqueueFrameCompletionCallback(activeStream)) {
+            m_allowMovement.store(false, std::memory_order_release);
+            return false;
+        }
+    } else {
+        cudaError_t streamState = cudaStreamQuery(activeStream);
+        if (streamState == cudaSuccess) {
+            clearMovementData();
+        } else {
+            if (streamState != cudaErrorNotReady) {
+                std::cerr << "[UnifiedGraph] Stream query failed while resetting movement: "
+                          << cudaGetErrorString(streamState) << std::endl;
+            }
+
+            if (!enqueueMovementResetCallback(activeStream)) {
+                return false;
+            }
+        }
     }
 
     m_hasFrameData = false;
