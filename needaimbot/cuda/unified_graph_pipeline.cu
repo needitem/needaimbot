@@ -79,7 +79,6 @@ __global__ void fusedTargetSelectionAndMovementKernel(
     int head_class_id,
     float kp_x,
     float kp_y,
-    float delta_seconds,
     float head_y_offset,
     float body_y_offset,
     int detection_resolution,
@@ -164,24 +163,8 @@ __global__ void fusedTargetSelectionAndMovementKernel(
                 float error_x = target_center_x - screen_center_x;
                 float error_y = target_center_y - screen_center_y;
 
-                const float safe_delta = fmaxf(delta_seconds, 1.0f / 1000.0f);
-                const float inv_delta = 1.0f / safe_delta;
-
-                float last_error_x = previousErrorX ? previousErrorX[0] : 0.0f;
-                float last_error_y = previousErrorY ? previousErrorY[0] : 0.0f;
-
-                float proportional_x = kp_x * error_x;
-                float proportional_y = kp_y * error_y;
-
-                const float max_velocity_per_second = 10000.0f;
-                float control_velocity_x = proportional_x;
-                float control_velocity_y = proportional_y;
-
-                control_velocity_x = fminf(fmaxf(control_velocity_x, -max_velocity_per_second), max_velocity_per_second);
-                control_velocity_y = fminf(fmaxf(control_velocity_y, -max_velocity_per_second), max_velocity_per_second);
-
-                float movement_x = control_velocity_x * safe_delta;
-                float movement_y = control_velocity_y * safe_delta;
+                float movement_x = kp_x * error_x;
+                float movement_y = kp_y * error_y;
 
                 if (previousErrorX) {
                     previousErrorX[0] = error_x;
@@ -669,7 +652,6 @@ void UnifiedGraphPipeline::handleAimbotActivation() {
     m_currentFrameStartNs.store(0, std::memory_order_relaxed);
     m_inferenceInProgress.store(false, std::memory_order_release);
     m_pendingMovementDispatch.store(false, std::memory_order_release);
-    m_frameDeltaSeconds = 1.0f / 60.0f;
 
     if (m_smallBufferArena.previousErrorX && m_smallBufferArena.previousErrorY) {
         cudaError_t resetErr = cudaMemset(m_smallBufferArena.previousErrorX, 0, sizeof(float));
@@ -869,11 +851,6 @@ void UnifiedGraphPipeline::runMainLoop() {
             executePipelineWithErrorHandling();
 
             auto now = std::chrono::high_resolution_clock::now();
-            float deltaSeconds = std::chrono::duration<float>(now - m_lastFrameTime).count();
-            const float minDelta = 1.0f / 1000.0f;  // clamp extremely high FPS
-            const float maxDelta = 1.0f / 15.0f;    // clamp very low FPS spikes
-            deltaSeconds = std::clamp(deltaSeconds, minDelta, maxDelta);
-            m_frameDeltaSeconds = deltaSeconds;
             logPerformanceStats(now, false);
             m_lastFrameTime = now;
         }
@@ -1504,8 +1481,6 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
     const int blockSize = 256;
     const int gridSize = (cached_max_detections + blockSize - 1) / blockSize;
 
-    const float clampedDelta = std::clamp(m_frameDeltaSeconds, 1.0f / 1000.0f, 1.0f / 15.0f);
-    
     cudaError_t staleError = cudaGetLastError();
     if (staleError != cudaSuccess) {
         std::cerr << "[Pipeline] Clearing stale CUDA error before target selection: "
@@ -1521,7 +1496,6 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         head_class_id,
         cached_kp_x,
         cached_kp_y,
-        clampedDelta,
         cached_head_y_offset,
         cached_body_y_offset,
         ctx.config.detection_resolution,
