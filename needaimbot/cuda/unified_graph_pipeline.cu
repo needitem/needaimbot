@@ -354,7 +354,6 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
                 
                 const MouseMovement* movement = pipeline->m_h_movement->get();
                 if (movement->dx != 0 || movement->dy != 0) {
-                    std::cout << "[UnifiedGraph] Mouse movement - dx: " << movement->dx << ", dy: " << movement->dy << std::endl;
                     executeMouseMovement(movement->dx, movement->dy);
                 }
             }, this);
@@ -1249,28 +1248,43 @@ bool UnifiedGraphPipeline::performDesktopCapture(const AppContext& ctx) {
 
     DXGI_OUTDUPL_FRAME_INFO frameInfo;
     IDXGIResource* desktopResource = nullptr;
-    HRESULT hr = duplication->AcquireNextFrame(0, &frameInfo, &desktopResource);
+    HRESULT hr = duplication->AcquireNextFrame(1, &frameInfo, &desktopResource);
 
     if (!SUCCEEDED(hr) || !desktopResource) {
-        // No new frame - fail fast and let pipeline retry immediately
         return false;
     }
 
-    
     ID3D11Texture2D* desktopTexture = nullptr;
     hr = desktopResource->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&desktopTexture);
-    
+
     if (SUCCEEDED(hr) && desktopTexture) {
-        D3D11_TEXTURE2D_DESC desktopDesc;
-        desktopTexture->GetDesc(&desktopDesc);
-        
-        auto [centerX, centerY] = calculateCaptureCenter(ctx, desktopDesc);
-        D3D11_BOX srcBox = createCaptureBox(centerX, centerY, ctx.config.detection_resolution, desktopDesc);
-        
-        d3dContext->CopySubresourceRegion(captureTexture, 0, 0, 0, 0, desktopTexture, 0, &srcBox);
+        // 캐시된 값들 사용 - 해상도나 설정이 바뀔 때만 재계산
+        static D3D11_TEXTURE2D_DESC cachedDesktopDesc = {};
+        static D3D11_BOX cachedSrcBox = {};
+        static int lastDetectionRes = 0;
+        static float lastOffsetX = 0, lastOffsetY = 0;
+        static bool cacheValid = false;
+
+        bool needRecalc = !cacheValid ||
+                         lastDetectionRes != ctx.config.detection_resolution ||
+                         lastOffsetX != ctx.config.crosshair_offset_x ||
+                         lastOffsetY != ctx.config.crosshair_offset_y;
+
+        if (needRecalc) {
+            desktopTexture->GetDesc(&cachedDesktopDesc);
+            auto [centerX, centerY] = calculateCaptureCenter(ctx, cachedDesktopDesc);
+            cachedSrcBox = createCaptureBox(centerX, centerY, ctx.config.detection_resolution, cachedDesktopDesc);
+
+            lastDetectionRes = ctx.config.detection_resolution;
+            lastOffsetX = ctx.config.crosshair_offset_x;
+            lastOffsetY = ctx.config.crosshair_offset_y;
+            cacheValid = true;
+        }
+
+        d3dContext->CopySubresourceRegion(captureTexture, 0, 0, 0, 0, desktopTexture, 0, &cachedSrcBox);
         desktopTexture->Release();
     }
-    
+
     desktopResource->Release();
     duplication->ReleaseFrame();
     return true;
@@ -1308,12 +1322,7 @@ bool UnifiedGraphPipeline::performFrameCapture() {
             cudaMemcpyDeviceToDevice,
             m_pipelineStream->get()
         );
-        if (err == cudaSuccess) {
-            static int successCount = 0;
-            if (++successCount % 10 == 0) {  // Log every 10th successful capture
-                std::cout << "[Capture] Successful captures: " << successCount << std::endl;
-            }
-        }
+        // 로깅 제거 - 성능 향상을 위해
     }
 
     cudaGraphicsUnmapResources(1, &m_cudaResource, m_pipelineStream->get());
@@ -1553,7 +1562,6 @@ bool UnifiedGraphPipeline::executeNormalPipeline(cudaStream_t stream) {
                 
                 const MouseMovement* movement = pipeline->m_h_movement->get();
                 if (movement->dx != 0 || movement->dy != 0) {
-                    std::cout << "[UnifiedGraph] Mouse movement - dx: " << movement->dx << ", dy: " << movement->dy << std::endl;
                     executeMouseMovement(movement->dx, movement->dy);
                 }
             }, this);
