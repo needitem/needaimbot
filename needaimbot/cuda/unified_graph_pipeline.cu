@@ -336,8 +336,10 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
         performTargetSelection(stream);
         
         // 결과를 호스트로 복사 (Graph 내부)
-        cudaMemcpyAsync(m_h_movement->get(), m_smallBufferArena.mouseMovement,
-                       sizeof(MouseMovement), cudaMemcpyDeviceToHost, stream);
+        if (!m_mouseMovementUsesMappedMemory) {
+            cudaMemcpyAsync(m_h_movement->get(), m_smallBufferArena.mouseMovement,
+                           sizeof(MouseMovement), cudaMemcpyDeviceToHost, stream);
+        }
         
         // 마우스 이동 콜백을 Graph에 포함 - 복사 완료 후 자동 실행
         if (!enqueueFrameCompletionCallback(stream)) {
@@ -452,7 +454,13 @@ bool UnifiedGraphPipeline::allocateBuffers() {
         
         
         
-        m_h_movement = std::make_unique<CudaPinnedMemory<MouseMovement>>(1);
+        m_h_movement = std::make_unique<CudaPinnedMemory<MouseMovement>>(
+            1, cudaHostAllocMapped | cudaHostAllocPortable);
+        if (m_h_movement && m_h_movement->get()) {
+            m_h_movement->get()->dx = 0;
+            m_h_movement->get()->dy = 0;
+        }
+        m_mouseMovementUsesMappedMemory = configureMouseMovementBuffer();
         m_h_allowFlags = std::make_unique<CudaPinnedMemory<unsigned char>>(
             Constants::MAX_CLASSES_FOR_FILTERING);
 
@@ -521,8 +529,10 @@ void UnifiedGraphPipeline::deallocateBuffers() {
     m_preview.hasValidHostPreview = false;
     
     m_smallBufferArena.arenaBuffer.reset();
-    
+    m_smallBufferArena = SmallBufferArena{};
+
     m_unifiedArena.megaArena.reset();
+    m_unifiedArena = UnifiedGPUArena{};
     
     m_d_inferenceOutput.reset();
     m_d_preprocessBuffer.reset();
@@ -530,6 +540,7 @@ void UnifiedGraphPipeline::deallocateBuffers() {
 
     m_h_movement.reset();
     m_h_allowFlags.reset();
+    m_mouseMovementUsesMappedMemory = false;
     m_cachedClassFilter.clear();
     m_classFilterDirty.store(true, std::memory_order_release);
     m_cachedHeadClassId.store(-1, std::memory_order_release);
@@ -539,6 +550,34 @@ void UnifiedGraphPipeline::deallocateBuffers() {
     m_inputBindings.clear();
     m_outputBindings.clear();
     
+}
+
+bool UnifiedGraphPipeline::configureMouseMovementBuffer() {
+    if (!m_smallBufferArena.mouseMovement) {
+        return false;
+    }
+
+    if (!m_h_movement || !m_h_movement->get()) {
+        return false;
+    }
+
+    MouseMovement* mappedPtr = nullptr;
+    cudaError_t mapErr = cudaHostGetDevicePointer(
+        reinterpret_cast<void**>(&mappedPtr),
+        m_h_movement->get(),
+        0);
+
+    if (mapErr == cudaSuccess && mappedPtr) {
+        m_smallBufferArena.mouseMovement = mappedPtr;
+        return true;
+    }
+
+    if (mapErr != cudaErrorInvalidValue && mapErr != cudaErrorNotSupported) {
+        std::cerr << "[UnifiedGraph] Failed to map mouse movement buffer: "
+                  << cudaGetErrorString(mapErr) << std::endl;
+    }
+
+    return false;
 }
 
 
@@ -2034,8 +2073,10 @@ bool UnifiedGraphPipeline::executeNormalPipeline(cudaStream_t stream) {
         performTargetSelection(m_pipelineStream->get());
 
         // 결과 복사
-        cudaMemcpyAsync(m_h_movement->get(), m_smallBufferArena.mouseMovement,
-                       sizeof(MouseMovement), cudaMemcpyDeviceToHost, m_pipelineStream->get());
+        if (!m_mouseMovementUsesMappedMemory) {
+            cudaMemcpyAsync(m_h_movement->get(), m_smallBufferArena.mouseMovement,
+                           sizeof(MouseMovement), cudaMemcpyDeviceToHost, m_pipelineStream->get());
+        }
     }
 
     m_pendingMovementDispatch.store(shouldRunDetection, std::memory_order_release);
