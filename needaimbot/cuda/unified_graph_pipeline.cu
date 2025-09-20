@@ -65,8 +65,20 @@ size_t UnifiedGPUArena::calculateArenaSize(int maxDetections, int yoloSize) {
 }
 
 
+namespace {
 
+int computeTargetSelectionBlockSize(int maxDetections) {
+    const int cappedDetections = std::max(1, std::min(maxDetections, 256));
 
+    int pow2 = 1;
+    while (pow2 < cappedDetections && pow2 < 256) {
+        pow2 <<= 1;
+    }
+
+    return pow2;
+}
+
+}  // namespace
 
 
 __global__ void fusedTargetSelectionAndMovementKernel(
@@ -87,94 +99,93 @@ __global__ void fusedTargetSelectionAndMovementKernel(
     float* __restrict__ previousErrorY,
     needaimbot::MouseMovement* __restrict__ output_movement
 ) {
-    if (blockIdx.x == 0) {
-        if (threadIdx.x == 0) {
-            *bestTargetIndex = -1;
-            output_movement->dx = 0;
-            output_movement->dy = 0;
+    extern __shared__ unsigned char sharedMem[];
+    float* s_distancesX = reinterpret_cast<float*>(sharedMem);
+    int* s_indices = reinterpret_cast<int*>(s_distancesX + blockDim.x);
 
-            Target emptyTarget = {};
-            *bestTarget = emptyTarget;
+    if (threadIdx.x == 0) {
+        *bestTargetIndex = -1;
+        output_movement->dx = 0;
+        output_movement->dy = 0;
+
+        Target emptyTarget = {};
+        *bestTarget = emptyTarget;
+    }
+    __syncthreads();
+
+    int count = *finalTargetsCount;
+    if (count <= 0 || count > maxDetections) {
+        return;
+    }
+
+    int localBestIdx = -1;
+    float localBestDistX = 1e9f;  // X축 거리만 사용
+
+    for (int i = threadIdx.x; i < count; i += blockDim.x) {
+        Target& t = finalTargets[i];
+
+        if (t.x < -1000.0f || t.x > 10000.0f ||
+            t.y < -1000.0f || t.y > 10000.0f ||
+            t.width <= 0 || t.width > detection_resolution ||
+            t.height <= 0 || t.height > detection_resolution ||
+            t.confidence <= 0 || t.confidence > 1.0f) {
+            t.confidence = 0;
+            continue;
+        }
+
+        float centerX = t.x + t.width / 2.0f;
+        float dx = fabsf(centerX - screen_center_x);  // X축 거리만 계산 (절댓값)
+
+        if (dx < localBestDistX) {
+            localBestDistX = dx;
+            localBestIdx = i;
+        }
+    }
+
+    s_distancesX[threadIdx.x] = localBestDistX;
+    s_indices[threadIdx.x] = localBestIdx;
+    __syncthreads();
+
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (threadIdx.x < s) {
+            if (s_distancesX[threadIdx.x + s] < s_distancesX[threadIdx.x]) {
+                s_distancesX[threadIdx.x] = s_distancesX[threadIdx.x + s];
+                s_indices[threadIdx.x] = s_indices[threadIdx.x + s];
+            }
         }
         __syncthreads();
+    }
 
-        int count = *finalTargetsCount;
-        if (count <= 0 || count > maxDetections) {
-            return;
-        }
-        
-        int localBestIdx = -1;
-        float localBestDistX = 1e9f;  // X축 거리만 사용
-        
-        for (int i = threadIdx.x; i < count; i += blockDim.x) {
-            Target& t = finalTargets[i];
-            
-            if (t.x < -1000.0f || t.x > 10000.0f ||
-                t.y < -1000.0f || t.y > 10000.0f ||
-                t.width <= 0 || t.width > detection_resolution ||
-                t.height <= 0 || t.height > detection_resolution ||
-                t.confidence <= 0 || t.confidence > 1.0f) {
-                t.confidence = 0;
-                continue;
+    if (threadIdx.x == 0) {
+        if (s_indices[0] >= 0) {
+            *bestTargetIndex = s_indices[0];
+            *bestTarget = finalTargets[s_indices[0]];
+
+            Target& best = *bestTarget;
+            float target_center_x = best.x + best.width / 2.0f;
+            float target_center_y;
+
+            if (best.classId == head_class_id) {
+                target_center_y = best.y + best.height * head_y_offset;
+            } else {
+                target_center_y = best.y + best.height * body_y_offset;
             }
-            
-            float centerX = t.x + t.width / 2.0f;
-            float dx = fabsf(centerX - screen_center_x);  // X축 거리만 계산 (절댓값)
-            
-            if (dx < localBestDistX) {
-                localBestDistX = dx;
-                localBestIdx = i;
+
+            float error_x = target_center_x - screen_center_x;
+            float error_y = target_center_y - screen_center_y;
+
+            float movement_x = kp_x * error_x;
+            float movement_y = kp_y * error_y;
+
+            if (previousErrorX) {
+                previousErrorX[0] = error_x;
             }
-        }
-        
-        __shared__ float s_distancesX[256];  // X축 거리 배열
-        __shared__ int s_indices[256];
-        
-        s_distancesX[threadIdx.x] = localBestDistX;
-        s_indices[threadIdx.x] = localBestIdx;
-        __syncthreads();
-        
-        for (int s = blockDim.x / 2; s > 0; s >>= 1) {
-            if (threadIdx.x < s) {
-                if (s_distancesX[threadIdx.x + s] < s_distancesX[threadIdx.x]) {
-                    s_distancesX[threadIdx.x] = s_distancesX[threadIdx.x + s];
-                    s_indices[threadIdx.x] = s_indices[threadIdx.x + s];
-                }
+            if (previousErrorY) {
+                previousErrorY[0] = error_y;
             }
-            __syncthreads();
-        }
-        
-        if (threadIdx.x == 0) {
-            if (s_indices[0] >= 0) {
-                *bestTargetIndex = s_indices[0];
-                *bestTarget = finalTargets[s_indices[0]];
 
-                Target& best = *bestTarget;
-                float target_center_x = best.x + best.width / 2.0f;
-                float target_center_y;
-
-                if (best.classId == head_class_id) {
-                    target_center_y = best.y + best.height * head_y_offset;
-                } else {
-                    target_center_y = best.y + best.height * body_y_offset;
-                }
-
-                float error_x = target_center_x - screen_center_x;
-                float error_y = target_center_y - screen_center_y;
-
-                float movement_x = kp_x * error_x;
-                float movement_y = kp_y * error_y;
-
-                if (previousErrorX) {
-                    previousErrorX[0] = error_x;
-                }
-                if (previousErrorY) {
-                    previousErrorY[0] = error_y;
-                }
-
-                output_movement->dx = __float2int_rn(movement_x);
-                output_movement->dy = __float2int_rn(movement_y);
-            }
+            output_movement->dx = __float2int_rn(movement_x);
+            output_movement->dy = __float2int_rn(movement_y);
         }
     }
 }
@@ -1462,8 +1473,9 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
 
     int head_class_id = findHeadClassId(ctx);
 
-    const int blockSize = 256;
-    const int gridSize = (cached_max_detections + blockSize - 1) / blockSize;
+    const int blockSize = computeTargetSelectionBlockSize(cached_max_detections);
+    const int gridSize = 1;
+    const size_t sharedBytes = static_cast<size_t>(blockSize) * (sizeof(float) + sizeof(int));
 
     cudaError_t staleError = cudaGetLastError();
     if (staleError != cudaSuccess) {
@@ -1471,7 +1483,7 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
                   << cudaGetErrorString(staleError) << std::endl;
     }
 
-    fusedTargetSelectionAndMovementKernel<<<gridSize, blockSize, 0, stream>>>(
+    fusedTargetSelectionAndMovementKernel<<<gridSize, blockSize, sharedBytes, stream>>>(
         m_unifiedArena.finalTargets,
         m_smallBufferArena.finalTargetsCount,
         cached_max_detections,
