@@ -39,7 +39,7 @@ struct SmallBufferArena {
     Target* selectedTarget;
     Target* bestTarget;
     MouseMovement* mouseMovement;
-    
+
     unsigned char* allowFlags;
     bool* keepFlags;
     int* tempIndices;
@@ -75,10 +75,10 @@ struct SmallBufferArena {
         offset = (offset + alignof(MouseMovement) - 1) & ~(alignof(MouseMovement) - 1);
         mouseMovement = reinterpret_cast<MouseMovement*>(basePtr + offset);
         offset += sizeof(MouseMovement);
-        
+
         allowFlags = reinterpret_cast<unsigned char*>(basePtr + offset);
         offset += 64;
-        
+
         offset = (offset + alignof(bool) - 1) & ~(alignof(bool) - 1);
         keepFlags = reinterpret_cast<bool*>(basePtr + offset);
         offset += sizeof(bool) * 128;
@@ -99,7 +99,7 @@ struct SmallBufferArena {
         
         size = (size + alignof(MouseMovement) - 1) & ~(alignof(MouseMovement) - 1);
         size += sizeof(MouseMovement);
-        
+
         size += 64;
         size = (size + alignof(bool) - 1) & ~(alignof(bool) - 1);
         size += sizeof(bool) * 128;
