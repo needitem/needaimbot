@@ -75,9 +75,12 @@ bool Config::loadConfig(const std::string& filename)
         shooting_range_targets = false;
         auto_aim = false;
 
-        
+
         crosshair_offset_x = 0.0f;
         crosshair_offset_y = 0.0f;
+
+        pd_kp_x = 0.4f;
+        pd_kp_y = 0.4f;
         
         // Aim+shoot offset defaults
         enable_aim_shoot_offset = false;
