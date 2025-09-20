@@ -56,6 +56,8 @@
     <ClCompile Include="utils\window_enum.cpp" />
     <ClCompile Include="scr\other_tools.cpp" />
     <ClCompile Include="core\defender_exception.cpp" />
+    <ClCompile Include="capture\graphics_capture.cpp" />
+    <ClCompile Include="capture\nvfbc_capture.cpp" />
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="cuda\detection\postProcessGpu.cu" />
@@ -125,6 +127,8 @@
     <ClInclude Include="utils\window_enum.h" />
     <ClInclude Include="AppContext.h" />
     <ClInclude Include="needaimbot.h" />
+    <ClInclude Include="capture\graphics_capture.h" />
+    <ClInclude Include="capture\nvfbc_capture.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
