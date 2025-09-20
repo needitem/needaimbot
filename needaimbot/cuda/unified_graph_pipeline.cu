@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <numeric>
 #include <iomanip>
+#include <limits>
 #include <cuda.h>
 
 // Forward declare the mouse control function
@@ -1408,6 +1409,16 @@ void UnifiedGraphPipeline::updatePreviewBuffer(const SimpleCudaMat& currentBuffe
         return;
     }
 
+    if (currentBuffer.channels() != 4) {
+        std::cerr << "[Preview] Unexpected channel count for capture buffer: "
+                  << currentBuffer.channels() << std::endl;
+        return;
+    }
+
+    if (currentBuffer.empty() || !currentBuffer.data()) {
+        return;
+    }
+
     if (m_preview.previewBuffer.rows() != currentBuffer.rows() ||
         m_preview.previewBuffer.cols() != currentBuffer.cols() ||
         m_preview.previewBuffer.channels() != currentBuffer.channels()) {
@@ -1415,12 +1426,35 @@ void UnifiedGraphPipeline::updatePreviewBuffer(const SimpleCudaMat& currentBuffe
         m_preview.hostPreview.create(currentBuffer.rows(), currentBuffer.cols(), currentBuffer.channels());
     }
 
-    size_t dataSize = static_cast<size_t>(currentBuffer.rows()) * currentBuffer.cols() * currentBuffer.channels();
-    cudaError_t copyErr = cudaMemcpyAsync(m_preview.previewBuffer.data(), currentBuffer.data(),
-                                          dataSize * sizeof(unsigned char),
-                                          cudaMemcpyDeviceToDevice, m_pipelineStream->get());
-    if (copyErr != cudaSuccess) {
-        std::cerr << "[Preview] Failed to copy preview buffer: " << cudaGetErrorString(copyErr) << std::endl;
+    if (m_preview.previewBuffer.empty() || !m_preview.previewBuffer.data()) {
+        return;
+    }
+
+    if (!m_pipelineStream || !m_pipelineStream->get()) {
+        return;
+    }
+
+    size_t srcStep = currentBuffer.step();
+    size_t dstStep = m_preview.previewBuffer.step();
+
+    if (srcStep > static_cast<size_t>(std::numeric_limits<int>::max()) ||
+        dstStep > static_cast<size_t>(std::numeric_limits<int>::max())) {
+        std::cerr << "[Preview] Capture pitch exceeds supported range" << std::endl;
+        return;
+    }
+
+    cudaError_t convertErr = cuda_bgra2rgba(
+        currentBuffer.data(),
+        m_preview.previewBuffer.data(),
+        currentBuffer.cols(),
+        currentBuffer.rows(),
+        static_cast<int>(srcStep),
+        static_cast<int>(dstStep),
+        m_pipelineStream->get());
+
+    if (convertErr != cudaSuccess) {
+        std::cerr << "[Preview] Failed to convert capture buffer for preview: "
+                  << cudaGetErrorString(convertErr) << std::endl;
         return;
     }
 }

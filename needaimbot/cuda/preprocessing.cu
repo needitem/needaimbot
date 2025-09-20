@@ -158,11 +158,11 @@ __global__ void bgra2rgba_kernel(const uint8_t* __restrict__ src,
     const uint8_t* src_pixel = src + y * src_pitch + x * 4;  // BGRA
     uint8_t* dst_pixel = dst + y * dst_pitch + x * 4;        // RGBA
     
-    // BGRA → RGBA 변환 (B와 R 교환)
+    // BGRA → RGBA 변환 (B와 R 교환) - 알파는 항상 255로 설정
     dst_pixel[0] = src_pixel[2];  // R (from BGRA[2])
     dst_pixel[1] = src_pixel[1];  // G (from BGRA[1])
     dst_pixel[2] = src_pixel[0];  // B (from BGRA[0])
-    dst_pixel[3] = src_pixel[3];  // A (from BGRA[3])
+    dst_pixel[3] = 255;           // Opaque alpha for preview usage
 }
 
 // BGR to RGBA 변환 함수
