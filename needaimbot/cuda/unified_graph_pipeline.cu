@@ -2,7 +2,7 @@
 #include "detection/cuda_float_processing.h"
 #include "simple_cuda_mat.h"
 #include "../AppContext.h"
-#include "../capture/nvfbc_capture.h"
+#include "../capture/dda_capture.h"
 #include "../core/logger.h"
 #include "cuda_error_check.h"
 #include "preprocessing.h"
@@ -1506,8 +1506,8 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
     }
 }
 
-bool UnifiedGraphPipeline::updateNVFBCCaptureRegion(const AppContext& ctx) {
-    if (!m_nvfbcCapture) {
+bool UnifiedGraphPipeline::updateDDACaptureRegion(const AppContext& ctx) {
+    if (!m_ddaCapture) {
         return false;
     }
 
@@ -1532,8 +1532,8 @@ bool UnifiedGraphPipeline::updateNVFBCCaptureRegion(const AppContext& ctx) {
         return true;
     }
 
-    int screenW = m_nvfbcCapture->GetScreenWidth();
-    int screenH = m_nvfbcCapture->GetScreenHeight();
+    int screenW = m_ddaCapture->GetScreenWidth();
+    int screenH = m_ddaCapture->GetScreenHeight();
     if (screenW <= 0 || screenH <= 0) {
         return false;
     }
@@ -1552,7 +1552,7 @@ bool UnifiedGraphPipeline::updateNVFBCCaptureRegion(const AppContext& ctx) {
     int left = std::clamp(centerX - captureSize / 2, 0, maxLeft);
     int top = std::clamp(centerY - captureSize / 2, 0, maxTop);
 
-    if (!m_nvfbcCapture->SetCaptureRegion(left, top, captureSize, captureSize)) {
+    if (!m_ddaCapture->SetCaptureRegion(left, top, captureSize, captureSize)) {
         return false;
     }
 
@@ -1563,7 +1563,7 @@ bool UnifiedGraphPipeline::updateNVFBCCaptureRegion(const AppContext& ctx) {
     return true;
 }
 
-bool UnifiedGraphPipeline::copyNVFBCFrameToGPU(void* frameData, unsigned int width, unsigned int height) {
+bool UnifiedGraphPipeline::copyDDAFrameToGPU(void* frameData, unsigned int width, unsigned int height) {
     if (!frameData || width == 0 || height == 0) {
         return false;
     }
@@ -1592,7 +1592,7 @@ bool UnifiedGraphPipeline::copyNVFBCFrameToGPU(void* frameData, unsigned int wid
     );
 
     if (err != cudaSuccess) {
-        std::cerr << "[Capture] NVFBC frame copy failed: " << cudaGetErrorString(err) << std::endl;
+        std::cerr << "[Capture] DDA frame copy failed: " << cudaGetErrorString(err) << std::endl;
         return false;
     }
 
@@ -1606,12 +1606,12 @@ bool UnifiedGraphPipeline::performFrameCapture() {
         return true;
     }
 
-    if (!m_nvfbcCapture) {
-        std::cerr << "[Capture] NVFBC capture interface not set" << std::endl;
+    if (!m_ddaCapture) {
+        std::cerr << "[Capture] DDA capture interface not set" << std::endl;
         return false;
     }
 
-    if (!updateNVFBCCaptureRegion(ctx)) {
+    if (!updateDDACaptureRegion(ctx)) {
         return false;
     }
 
@@ -1620,11 +1620,11 @@ bool UnifiedGraphPipeline::performFrameCapture() {
     unsigned int height = 0;
     unsigned int size = 0;
 
-    if (!m_nvfbcCapture->GetLatestFrame(&frameData, &width, &height, &size)) {
+    if (!m_ddaCapture->GetLatestFrame(&frameData, &width, &height, &size)) {
         return false;
     }
 
-    if (!copyNVFBCFrameToGPU(frameData, width, height)) {
+    if (!copyDDAFrameToGPU(frameData, width, height)) {
         return false;
     }
 

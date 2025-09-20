@@ -71,8 +71,8 @@ static void draw_capture_behavior_settings()
     
     UIHelpers::CompactSpacer();
     
-    ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "NVFBC Capture Active");
-    UIHelpers::InfoTooltip("NVFBC (NVIDIA Frame Buffer Capture) is the exclusive capture path.\nDesktop Duplication and other fallbacks have been removed for maximum performance and low latency.");
+    ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "Desktop Duplication Capture Active");
+    UIHelpers::InfoTooltip("The Windows Desktop Duplication API (DDA) powers high-quality capture with low latency.\nThis path delivers consistent results across modern GPUs without requiring vendor-specific drivers.");
     
     UIHelpers::CompactSpacer();
     

@@ -18,7 +18,7 @@
 #include <cuda_fp16.h>
 
 struct AppContext;
-class NVFBCCapture;
+class DDACapture;
 
 namespace needaimbot {
 
@@ -222,7 +222,7 @@ public:
     bool executeNormalPipeline(cudaStream_t stream = nullptr);
     
         
-    void setNVFBCCapture(NVFBCCapture* capture) { m_nvfbcCapture = capture; }
+    void setDDACapture(DDACapture* capture) { m_ddaCapture = capture; }
     void setInputFrame(const SimpleCudaMat& frame);
     void setOutputBuffer(float* d_output) { 
         m_externalOutputBuffer = d_output;
@@ -341,7 +341,7 @@ private:
     
     float* m_externalOutputBuffer = nullptr;
 
-    NVFBCCapture* m_nvfbcCapture = nullptr;
+    DDACapture* m_ddaCapture = nullptr;
     
     UnifiedPipelineConfig m_config;
     GraphExecutionState m_state;
@@ -398,10 +398,10 @@ private:
 
     bool enqueueFrameCompletionCallback(cudaStream_t stream);
 
-    bool updateNVFBCCaptureRegion(const AppContext& ctx);
+    bool updateDDACaptureRegion(const AppContext& ctx);
     bool performFrameCapture();
     bool performFrameCaptureDirectToUnified();
-    bool copyNVFBCFrameToGPU(void* frameData, unsigned int width, unsigned int height);
+    bool copyDDAFrameToGPU(void* frameData, unsigned int width, unsigned int height);
     bool performPreprocessing();
     void updatePreviewBuffer(const SimpleCudaMat& currentBuffer);
     void updatePreviewBufferAllocation();  // Dynamic allocation based on show_window state
