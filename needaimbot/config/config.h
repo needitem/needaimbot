@@ -277,8 +277,8 @@ public:
     
 
     // PD Controller settings
-    float pd_kp_x = 0.4f;  // Proportional gain for X axis
-    float pd_kp_y = 0.4f;  // Proportional gain for Y axis
+    float pd_kp_x = 0.4f;   // Proportional gain for X axis
+    float pd_kp_y = 0.4f;   // Proportional gain for Y axis
 
     // Active profile management
     std::string active_profile_name = "Default";

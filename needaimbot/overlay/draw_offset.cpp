@@ -8,6 +8,8 @@
 #include "cuda/simple_cuda_mat.h"
 #include "cuda/unified_graph_pipeline.h"
 #include <d3d11.h>
+#include <algorithm>
+#include <vector>
 
 extern ID3D11ShaderResourceView* bodyTexture;
 extern ImVec2 bodyImageSize;
@@ -381,6 +383,19 @@ void renderOffsetTab()
         auto& pipelineManager = needaimbot::PipelineManager::getInstance();
         auto* pipeline = pipelineManager.getPipeline();
 
+        std::vector<Target> previewTargets;
+        Target previewBestTarget;
+        bool hasPreviewBestTarget = false;
+
+        if (ctx.hasValidTarget()) {
+            try {
+                previewBestTarget = ctx.getBestTarget();
+                hasPreviewBestTarget = previewBestTarget.hasValidDetection();
+            } catch (...) {
+                hasPreviewBestTarget = false;
+            }
+        }
+
         if (pipeline && pipeline->isPreviewAvailable()) {
             if (pipeline->getPreviewSnapshot(previewHostFrame) &&
                 !previewHostFrame.empty() &&
@@ -403,7 +418,15 @@ void renderOffsetTab()
                 return;
             }
 
+            previewTargets = ctx.getAllTargets();
+            if (previewTargets.empty()) {
+                hasPreviewBestTarget = false;
+            }
+
             ImGui::SliderFloat("Preview Scale", &debug_scale, 0.1f, 3.0f, "%.1fx");
+            ImGui::Text("Detections: %zu%s",
+                        previewTargets.size(),
+                        hasPreviewBestTarget ? "" : (previewTargets.empty() ? "" : " (no active target)"));
 
             std::lock_guard<std::mutex> lock(g_debugTexMutex);
 
@@ -432,6 +455,51 @@ void renderOffsetTab()
 
                 if (debug_scale > 0 && debug_scale < 10.0f) {
                     drawDetections(draw_list, image_pos, debug_scale);
+
+                    if (hasPreviewBestTarget && previewBestTarget.hasValidDetection()) {
+                        float targetCenterX = image_pos.x +
+                                              (previewBestTarget.x + previewBestTarget.width / 2.0f) * debug_scale;
+                        float targetCenterY = image_pos.y +
+                                              (previewBestTarget.y + previewBestTarget.height / 2.0f) * debug_scale;
+
+                        float previewMinX = image_pos.x;
+                        float previewMinY = image_pos.y;
+                        float previewMaxX = image_pos.x + texW * debug_scale;
+                        float previewMaxY = image_pos.y + texH * debug_scale;
+
+                        if (targetCenterX >= previewMinX && targetCenterX <= previewMaxX &&
+                            targetCenterY >= previewMinY && targetCenterY <= previewMaxY) {
+                            float radiusPixels = static_cast<float>(
+                                std::max(previewBestTarget.width, previewBestTarget.height)) * 0.5f * debug_scale;
+                            if (radiusPixels < 6.0f) {
+                                radiusPixels = 6.0f;
+                            } else if (radiusPixels > 80.0f) {
+                                radiusPixels = 80.0f;
+                            }
+
+                            draw_list->AddCircle(ImVec2(targetCenterX, targetCenterY), radiusPixels,
+                                                 IM_COL32(0, 255, 0, 200), 0, 2.5f);
+                            draw_list->AddCircleFilled(ImVec2(targetCenterX, targetCenterY), 4.0f,
+                                                       IM_COL32(0, 255, 0, 255));
+                            draw_list->AddLine(ImVec2(targetCenterX - radiusPixels * 0.5f, targetCenterY),
+                                               ImVec2(targetCenterX + radiusPixels * 0.5f, targetCenterY),
+                                               IM_COL32(0, 255, 0, 200), 2.0f);
+                            draw_list->AddLine(ImVec2(targetCenterX, targetCenterY - radiusPixels * 0.5f),
+                                               ImVec2(targetCenterX, targetCenterY + radiusPixels * 0.5f),
+                                               IM_COL32(0, 255, 0, 200), 2.0f);
+
+                            char selectedLabel[128];
+                            snprintf(selectedLabel, sizeof(selectedLabel),
+                                     "Selected Target (ID %d, %.0f%%)",
+                                     previewBestTarget.classId,
+                                     previewBestTarget.confidence * 100.0f);
+
+                            draw_list->AddText(ImVec2(targetCenterX + radiusPixels + 6.0f,
+                                                      targetCenterY - 12.0f),
+                                               IM_COL32(0, 255, 0, 255),
+                                               selectedLabel);
+                        }
+                    }
                 }
 
                 if (texW > 0 && texH > 0 && texW < 10000 && texH < 10000) {
