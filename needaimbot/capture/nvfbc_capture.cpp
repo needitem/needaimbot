@@ -3,17 +3,18 @@
 #include <thread>
 #include <chrono>
 #include <cstring>
-#include <algorithm>
-
-#define NVFBC_CREATE_CAPTURE_SESSION_PARAMS_VER 1
-#define NVFBC_DESTROY_CAPTURE_SESSION_PARAMS_VER 1
-#define NVFBC_TOBUFFER_GRAB_FRAME_PARAMS_VER 1
 
 NVFBCCapture::NVFBCCapture()
     : m_nvfbcLib(nullptr)
     , m_pfnNvFBCCreate(nullptr)
     , m_pfnNvFBCGetStatus(nullptr)
+    , m_pfnCreateCaptureSession(nullptr)
+    , m_pfnDestroyCaptureSession(nullptr)
+    , m_pfnToSysSetUp(nullptr)
+    , m_pfnToSysGrabFrame(nullptr)
     , m_captureSession(nullptr)
+    , m_useNvFBC(false)
+    , m_nvFBCConfigured(false)
     , m_bufferSize(0)
     , m_isInitialized(false)
     , m_isCapturing(false)
@@ -87,6 +88,7 @@ bool NVFBCCapture::StartCapture() {
     }
 
     m_shouldStop = false;
+    m_nvFBCConfigured = false;
     m_isCapturing = true;
     m_captureThread = std::thread(&NVFBCCapture::CaptureThreadProc, this);
 
@@ -158,6 +160,34 @@ bool NVFBCCapture::LoadNVFBCLibrary() {
         return false;
     }
 
+    m_pfnCreateCaptureSession = reinterpret_cast<PFN_NvFBCCreateCaptureSession>(m_nvfbcAPI.nvFBCCreateCaptureSession);
+    m_pfnDestroyCaptureSession = reinterpret_cast<PFN_NvFBCDestroyCaptureSession>(m_nvfbcAPI.nvFBCDestroyCaptureSession);
+    m_pfnToSysSetUp = nullptr;
+    m_pfnToSysGrabFrame = nullptr;
+
+    if (!m_pfnCreateCaptureSession) {
+        m_pfnCreateCaptureSession = reinterpret_cast<PFN_NvFBCCreateCaptureSession>(
+            GetProcAddress(m_nvfbcLib, "NvFBCCreateCaptureSession"));
+    }
+    if (!m_pfnDestroyCaptureSession) {
+        m_pfnDestroyCaptureSession = reinterpret_cast<PFN_NvFBCDestroyCaptureSession>(
+            GetProcAddress(m_nvfbcLib, "NvFBCDestroyCaptureSession"));
+    }
+    if (!m_pfnToSysSetUp) {
+        m_pfnToSysSetUp = reinterpret_cast<PFN_NvFBCToSysSetUp>(
+            GetProcAddress(m_nvfbcLib, "NvFBCToSysSetUp"));
+    }
+    if (!m_pfnToSysGrabFrame) {
+        m_pfnToSysGrabFrame = reinterpret_cast<PFN_NvFBCToSysGrabFrame>(
+            GetProcAddress(m_nvfbcLib, "NvFBCToSysGrabFrame"));
+    }
+
+    if (!m_pfnCreateCaptureSession || !m_pfnDestroyCaptureSession || !m_pfnToSysSetUp || !m_pfnToSysGrabFrame) {
+        std::cerr << "[NVFBCCapture] Failed to resolve required NVFBC entry points" << std::endl;
+        UnloadNVFBCLibrary();
+        return false;
+    }
+
     std::cout << "[NVFBCCapture] NVFBC library loaded successfully" << std::endl;
     return true;
 }
@@ -169,6 +199,12 @@ void NVFBCCapture::UnloadNVFBCLibrary() {
     }
     m_pfnNvFBCCreate = nullptr;
     m_pfnNvFBCGetStatus = nullptr;
+    m_pfnCreateCaptureSession = nullptr;
+    m_pfnDestroyCaptureSession = nullptr;
+    m_pfnToSysSetUp = nullptr;
+    m_pfnToSysGrabFrame = nullptr;
+    m_useNvFBC = false;
+    m_nvFBCConfigured = false;
     memset(&m_nvfbcAPI, 0, sizeof(m_nvfbcAPI));
 }
 
@@ -210,6 +246,41 @@ bool NVFBCCapture::CreateCaptureSession(HWND targetWindow) {
     m_bufferSize = m_captureWidth * m_captureHeight * 4;
     m_frameBuffer = std::make_unique<unsigned char[]>(m_bufferSize);
 
+    m_useNvFBC = m_pfnCreateCaptureSession && m_pfnDestroyCaptureSession && m_pfnToSysSetUp && m_pfnToSysGrabFrame;
+    m_nvFBCConfigured = false;
+    m_captureSession = nullptr;
+
+    if (m_useNvFBC) {
+        NVFBC_CREATE_CAPTURE_SESSION_PARAMS createParams{};
+        createParams.dwVersion = NVFBC_CREATE_CAPTURE_SESSION_PARAMS_VER;
+        createParams.eCaptureType = NVFBC_CAPTURE_TO_SYS;
+        createParams.bWithCursor = NVFBC_TRUE;
+        createParams.bDisableHotKeyReset = NVFBC_TRUE;
+        createParams.hWnd = targetWindow;
+        createParams.bStereoGrab = NVFBC_FALSE;
+        createParams.bEnableDirectCapture = NVFBC_FALSE;
+        createParams.dwReserved = 0;
+        createParams.captureBox = m_captureRegion;
+
+        NVFBC_RESULT createResult = m_pfnCreateCaptureSession(&createParams);
+        if (createResult != NVFBC_SUCCESS || !createParams.hCaptureSession) {
+            std::cerr << "[NVFBCCapture] NvFBC session creation failed: " << createResult
+                      << ". Falling back to GDI capture." << std::endl;
+            m_useNvFBC = false;
+        } else {
+            m_captureSession = createParams.hCaptureSession;
+            if (!ConfigureNvFBCToSys()) {
+                std::cerr << "[NVFBCCapture] NvFBC ToSys setup failed. Falling back to GDI capture." << std::endl;
+                NVFBC_DESTROY_CAPTURE_SESSION_PARAMS destroyParams{};
+                destroyParams.dwVersion = NVFBC_DESTROY_CAPTURE_SESSION_PARAMS_VER;
+                destroyParams.hCaptureSession = m_captureSession;
+                m_pfnDestroyCaptureSession(&destroyParams);
+                m_captureSession = nullptr;
+                m_useNvFBC = false;
+            }
+        }
+    }
+
     if (m_useCustomRegion) {
         std::cout << "[NVFBCCapture] Partial capture setup completed" << std::endl;
         std::cout << "  - Screen: " << m_screenWidth << "x" << m_screenHeight << std::endl;
@@ -220,18 +291,142 @@ bool NVFBCCapture::CreateCaptureSession(HWND targetWindow) {
         std::cout << "[NVFBCCapture] Full screen capture setup completed. Resolution: " << m_captureWidth << "x" << m_captureHeight << std::endl;
     }
 
+    if (!m_useNvFBC) {
+        std::cout << "[NVFBCCapture] Using GDI BitBlt fallback path" << std::endl;
+    } else {
+        std::cout << "[NVFBCCapture] NVFBC ToSys capture path configured" << std::endl;
+    }
+
     return true;
 }
 
 void NVFBCCapture::DestroyCaptureSession() {
-    // Simple cleanup
+    if (m_useNvFBC && m_captureSession && m_pfnDestroyCaptureSession) {
+        NVFBC_DESTROY_CAPTURE_SESSION_PARAMS params{};
+        params.dwVersion = NVFBC_DESTROY_CAPTURE_SESSION_PARAMS_VER;
+        params.hCaptureSession = m_captureSession;
+        m_pfnDestroyCaptureSession(&params);
+    }
+
     m_captureSession = nullptr;
+    m_useNvFBC = false;
+    m_nvFBCConfigured = false;
     m_frameBuffer.reset();
     m_bufferSize = 0;
 }
 
+bool NVFBCCapture::ConfigureNvFBCToSys() {
+    if (!m_useNvFBC || !m_captureSession || !m_pfnToSysSetUp) {
+        m_nvFBCConfigured = false;
+        return false;
+    }
+
+    NVFBC_TOSYS_SETUP_PARAMS setupParams{};
+    setupParams.dwVersion = NVFBC_TOSYS_SETUP_PARAMS_VER;
+    setupParams.hCaptureSession = m_captureSession;
+    setupParams.bUseKVMFrameLock = NVFBC_FALSE;
+    setupParams.bEnableCursor = NVFBC_TRUE;
+    setupParams.bStereoGrab = NVFBC_FALSE;
+    setupParams.dwFlags = 0;
+    setupParams.eMode = NVFBC_TOSYS_GRAB_MODE_CROP;
+    setupParams.eBufferFormat = NVFBC_BUFFER_FORMAT_ARGB;
+    setupParams.dwTargetWidth = static_cast<unsigned int>(m_captureWidth);
+    setupParams.dwTargetHeight = static_cast<unsigned int>(m_captureHeight);
+    setupParams.dwNumBuffers = 1;
+    setupParams.dwReserved = 0;
+    setupParams.captureBox = m_captureRegion;
+
+    NVFBC_RESULT setupResult = m_pfnToSysSetUp(&setupParams);
+    if (setupResult != NVFBC_SUCCESS) {
+        std::cerr << "[NVFBCCapture] NvFBCToSysSetUp failed with error: " << setupResult << std::endl;
+        m_nvFBCConfigured = false;
+        return false;
+    }
+
+    m_nvFBCConfigured = true;
+    return true;
+}
+
+void NVFBCCapture::CaptureThreadProcNvFBC() {
+    std::cout << "[NVFBCCapture] NVFBC capture path active" << std::endl;
+
+    while (!m_shouldStop) {
+        if (!m_nvFBCConfigured) {
+            if (!ConfigureNvFBCToSys()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                continue;
+            }
+        }
+
+        unsigned int width = 0;
+        unsigned int height = 0;
+        unsigned int bufferSize = 0;
+        unsigned char* bufferPtr = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(m_frameMutex);
+            width = static_cast<unsigned int>(m_captureWidth);
+            height = static_cast<unsigned int>(m_captureHeight);
+            bufferSize = width * height * 4;
+            if (!m_frameBuffer || m_bufferSize != bufferSize) {
+                m_frameBuffer = std::make_unique<unsigned char[]>(bufferSize);
+                m_bufferSize = bufferSize;
+            }
+            bufferPtr = m_frameBuffer.get();
+        }
+
+        if (!bufferPtr || width == 0 || height == 0) {
+            std::this_thread::yield();
+            continue;
+        }
+
+        NVFBC_TOSYS_GRAB_FRAME_PARAMS grabParams{};
+        grabParams.dwVersion = NVFBC_TOSYS_GRAB_FRAME_PARAMS_VER;
+        grabParams.hCaptureSession = m_captureSession;
+        grabParams.dwFlags = NVFBC_TOSYS_GRAB_FLAGS_NOWAIT;
+        grabParams.pSysmemBuffer = bufferPtr;
+        grabParams.dwBufferWidth = width;
+        grabParams.dwBufferHeight = height;
+        grabParams.dwBufferPitch = width * 4;
+        grabParams.dwBufferSize = bufferSize;
+        NVFBC_FRAME_GRAB_INFO frameInfo{};
+        grabParams.pFrameGrabInfo = &frameInfo;
+
+        NVFBC_RESULT grabResult = m_pfnToSysGrabFrame(&grabParams);
+        if (grabResult == NVFBC_ERROR_INVALIDATED_SESSION) {
+            m_nvFBCConfigured = false;
+            std::this_thread::yield();
+            continue;
+        }
+        if (grabResult != NVFBC_SUCCESS) {
+            std::cerr << "[NVFBCCapture] NvFBCToSysGrabFrame failed: " << grabResult << std::endl;
+            std::this_thread::yield();
+            continue;
+        }
+
+        std::function<void(void*, unsigned int, unsigned int, unsigned int)> callback;
+        void* framePtr = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(m_frameMutex);
+            framePtr = m_frameBuffer.get();
+            callback = m_frameCallback;
+        }
+
+        if (callback && framePtr) {
+            callback(framePtr, width, height, bufferSize);
+        }
+    }
+
+    std::cout << "[NVFBCCapture] NVFBC capture thread stopping" << std::endl;
+}
+
 void NVFBCCapture::CaptureThreadProc() {
     std::cout << "[NVFBCCapture] Capture thread started" << std::endl;
+
+    if (m_useNvFBC && m_pfnToSysGrabFrame && m_captureSession) {
+        CaptureThreadProcNvFBC();
+        std::cout << "[NVFBCCapture] Capture thread stopped" << std::endl;
+        return;
+    }
 
     HDC screenDC = GetDC(nullptr);
     if (!screenDC) {
@@ -307,18 +502,16 @@ void NVFBCCapture::CaptureThreadProc() {
         int top = 0;
         int width = 0;
         int height = 0;
-        size_t expectedSize = 0;
         {
             std::lock_guard<std::mutex> lock(m_frameMutex);
             left = static_cast<int>(m_captureRegion.left);
             top = static_cast<int>(m_captureRegion.top);
             width = m_captureWidth;
             height = m_captureHeight;
-            expectedSize = m_bufferSize;
         }
 
         if (!recreateBitmapIfNeeded(width, height)) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            std::this_thread::yield();
             continue;
         }
 
@@ -327,7 +520,7 @@ void NVFBCCapture::CaptureThreadProc() {
                 std::cerr << "[NVFBCCapture] BitBlt failed" << std::endl;
                 bitbltErrorLogged = true;
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            std::this_thread::yield();
             continue;
         }
         bitbltErrorLogged = false;
@@ -335,24 +528,16 @@ void NVFBCCapture::CaptureThreadProc() {
         std::function<void(void*, unsigned int, unsigned int, unsigned int)> callback;
         void* framePtr = nullptr;
         size_t copySize = static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
-        bool skipFrame = false;
         {
             std::lock_guard<std::mutex> lock(m_frameMutex);
-            if (expectedSize != m_bufferSize || !m_frameBuffer) {
-                skipFrame = true;
+            if (!m_frameBuffer || m_bufferSize != copySize) {
+                m_frameBuffer = std::make_unique<unsigned char[]>(copySize);
+                m_bufferSize = static_cast<unsigned int>(copySize);
             }
 
-            if (!skipFrame) {
-                const size_t safeCopy = std::min(copySize, static_cast<size_t>(m_bufferSize));
-                std::memcpy(m_frameBuffer.get(), dibData, safeCopy);
-                framePtr = m_frameBuffer.get();
-                callback = m_frameCallback;
-            }
-        }
-
-        if (skipFrame) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-            continue;
+            std::memcpy(m_frameBuffer.get(), dibData, copySize);
+            framePtr = m_frameBuffer.get();
+            callback = m_frameCallback;
         }
 
         if (callback && framePtr) {
@@ -360,13 +545,12 @@ void NVFBCCapture::CaptureThreadProc() {
                      static_cast<unsigned int>(copySize));
         }
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+        std::this_thread::yield();
     }
 
     cleanupBitmap();
     DeleteDC(memoryDC);
     ReleaseDC(nullptr, screenDC);
-
     std::cout << "[NVFBCCapture] Capture thread stopped" << std::endl;
 }
 
@@ -401,8 +585,12 @@ bool NVFBCCapture::SetCaptureRegion(int x, int y, int width, int height) {
         // Update capture dimensions and buffer
         m_captureWidth = width;
         m_captureHeight = height;
-        m_bufferSize = width * height * 4;
+        m_bufferSize = static_cast<unsigned int>(width * height * 4);
         m_frameBuffer = std::make_unique<unsigned char[]>(m_bufferSize);
+        m_nvFBCConfigured = false;
+        if (m_useNvFBC && m_captureSession) {
+            ConfigureNvFBCToSys();
+        }
 
         if (wasCapturing) {
             StartCapture();
@@ -437,8 +625,12 @@ void NVFBCCapture::ResetToFullScreen() {
         // Update capture dimensions and buffer
         m_captureWidth = m_screenWidth;
         m_captureHeight = m_screenHeight;
-        m_bufferSize = m_captureWidth * m_captureHeight * 4;
+        m_bufferSize = static_cast<unsigned int>(m_captureWidth * m_captureHeight * 4);
         m_frameBuffer = std::make_unique<unsigned char[]>(m_bufferSize);
+        m_nvFBCConfigured = false;
+        if (m_useNvFBC && m_captureSession) {
+            ConfigureNvFBCToSys();
+        }
 
         if (wasCapturing) {
             StartCapture();
