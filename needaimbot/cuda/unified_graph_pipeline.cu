@@ -521,6 +521,7 @@ void UnifiedGraphPipeline::deallocateBuffers() {
     m_preview.hostPreview.release();
     m_preview.finalTargets.clear();
     m_preview.enabled = false;
+    m_preview.hasValidHostPreview = false;
     
     m_smallBufferArena.arenaBuffer.reset();
     
@@ -618,6 +619,7 @@ void UnifiedGraphPipeline::clearHostPreviewData(AppContext& ctx) {
             m_preview.finalCount = 0;
             m_preview.copyInProgress = false;
             m_preview.hostPreview.release();
+            m_preview.hasValidHostPreview = false;
         }
     }
 
@@ -1678,11 +1680,13 @@ void UnifiedGraphPipeline::updatePreviewBufferAllocation() {
         int height = ctx.config.detection_resolution;
         m_preview.previewBuffer.create(height, width, 4);
         m_preview.hostPreview.create(height, width, 4);
+        m_preview.hasValidHostPreview = false;
         m_preview.finalTargets.reserve(ctx.config.max_detections);
         m_preview.enabled = true;
     } else if (!ctx.config.show_window && m_preview.enabled) {
         m_preview.previewBuffer.release();
         m_preview.hostPreview.release();
+        m_preview.hasValidHostPreview = false;
         m_preview.finalTargets.clear();
         m_preview.enabled = false;
     }
@@ -1775,6 +1779,7 @@ bool UnifiedGraphPipeline::getPreviewSnapshot(SimpleMat& outFrame) {
         m_preview.hostPreview.create(m_preview.previewBuffer.rows(),
                                      m_preview.previewBuffer.cols(),
                                      m_preview.previewBuffer.channels());
+        m_preview.hasValidHostPreview = false;
     }
 
     if (m_preview.copyInProgress) {
@@ -1782,28 +1787,36 @@ bool UnifiedGraphPipeline::getPreviewSnapshot(SimpleMat& outFrame) {
             cudaError_t queryStatus = cudaEventQuery(m_previewReadyEvent->get());
             if (queryStatus == cudaSuccess) {
                 m_preview.copyInProgress = false;
-                outFrame = m_preview.hostPreview;
-                return true;
-            }
-
-            if (queryStatus != cudaErrorNotReady) {
+                m_preview.hasValidHostPreview = true;
+            } else if (queryStatus != cudaErrorNotReady) {
                 std::cerr << "[Preview] Event query failed: " << cudaGetErrorString(queryStatus) << std::endl;
                 m_preview.copyInProgress = false;
+                m_preview.hasValidHostPreview = false;
             }
         } else if (m_pipelineStream && m_pipelineStream->get()) {
             cudaError_t queryStatus = cudaStreamQuery(m_pipelineStream->get());
             if (queryStatus == cudaSuccess) {
                 m_preview.copyInProgress = false;
+                m_preview.hasValidHostPreview = true;
+            } else if (queryStatus != cudaErrorNotReady) {
+                std::cerr << "[Preview] Stream query failed: " << cudaGetErrorString(queryStatus) << std::endl;
+                m_preview.copyInProgress = false;
+                m_preview.hasValidHostPreview = false;
+            }
+        }
+        if (m_preview.copyInProgress) {
+            if (m_preview.hasValidHostPreview) {
                 outFrame = m_preview.hostPreview;
                 return true;
             }
-
-            if (queryStatus != cudaErrorNotReady) {
-                std::cerr << "[Preview] Stream query failed: " << cudaGetErrorString(queryStatus) << std::endl;
-                m_preview.copyInProgress = false;
-            }
+            return false;
         }
-        return false;
+    }
+
+    bool hasFrameToReturn = false;
+    if (m_preview.hasValidHostPreview && m_preview.hostPreview.data()) {
+        outFrame = m_preview.hostPreview;
+        hasFrameToReturn = true;
     }
 
     size_t rowBytes = static_cast<size_t>(m_preview.previewBuffer.cols()) * m_preview.previewBuffer.channels();
@@ -1818,7 +1831,8 @@ bool UnifiedGraphPipeline::getPreviewSnapshot(SimpleMat& outFrame) {
         m_pipelineStream->get());
     if (copyErr != cudaSuccess) {
         std::cerr << "[Preview] Failed to copy preview to host: " << cudaGetErrorString(copyErr) << std::endl;
-        return false;
+        m_preview.hasValidHostPreview = false;
+        return hasFrameToReturn;
     }
 
     if (m_previewReadyEvent && m_previewReadyEvent->get()) {
@@ -1826,7 +1840,7 @@ bool UnifiedGraphPipeline::getPreviewSnapshot(SimpleMat& outFrame) {
     }
 
     m_preview.copyInProgress = true;
-    return false;
+    return hasFrameToReturn;
 }
 
 bool UnifiedGraphPipeline::performInference() {

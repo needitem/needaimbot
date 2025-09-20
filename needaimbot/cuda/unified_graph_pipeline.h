@@ -369,6 +369,7 @@ private:
     struct PreviewState {
         bool enabled = false;
         bool copyInProgress = false;
+        bool hasValidHostPreview = false;
         int finalCount = 0;
         std::vector<Target> finalTargets;
         SimpleCudaMat previewBuffer;
