@@ -22,8 +22,8 @@
 #include <cmath>
 #include <limits>
 #include <mutex>
-#include <cstring>
 #include <atomic>
+#include <functional>
 #include <cuda.h>
 #include <cuda_runtime_api.h>
 
@@ -45,9 +45,8 @@ void UnifiedGPUArena::initializePointers(uint8_t* basePtr, int maxDetections, in
     offset = (offset + alignof(Target) - 1) & ~(alignof(Target) - 1);
     decodedTargets = reinterpret_cast<Target*>(basePtr + offset);
     offset += maxDetections * sizeof(Target);
-    
-    finalTargets = reinterpret_cast<Target*>(basePtr + offset);
-    offset += maxDetections * sizeof(Target);
+
+    finalTargets = decodedTargets;  // Alias final targets to decoded buffer
     
     
 }
@@ -59,7 +58,7 @@ size_t UnifiedGPUArena::calculateArenaSize(int maxDetections, int yoloSize) {
     size += yoloSize * yoloSize * 3 * sizeof(float);
     
     size = (size + alignof(Target) - 1) & ~(alignof(Target) - 1);
-    size += maxDetections * sizeof(Target) * 2;
+    size += maxDetections * sizeof(Target);
     
     
     return size;
@@ -181,38 +180,6 @@ __global__ void fusedTargetSelectionAndMovementKernel(
 }
 
 
-__global__ void clearAllDetectionBuffersKernel(
-    Target* decodedTargets,
-    int* decodedCount,
-    int* classFilteredCount,
-    int* finalTargetsCount,
-    int* colorFilteredCount,
-    int* bestTargetIndex,
-    Target* bestTarget,
-    int maxTargetsToClear
-) {
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-    int gridSize = blockDim.x * gridDim.x;
-
-    if (tid < 6) {
-        if (tid == 0) *decodedCount = 0;
-        else if (tid == 1) *classFilteredCount = 0;
-        else if (tid == 2) *finalTargetsCount = 0;
-        else if (tid == 3 && colorFilteredCount) *colorFilteredCount = 0;
-        else if (tid == 4 && bestTargetIndex) *bestTargetIndex = -1;
-        else if (tid == 5 && bestTarget) {
-            Target emptyTarget = {};
-            *bestTarget = emptyTarget;
-        }
-    }
-
-    for (int i = tid; i < maxTargetsToClear; i += gridSize) {
-        Target emptyTarget = {};
-        decodedTargets[i] = emptyTarget;
-    }
-}
-
-
 UnifiedGraphPipeline::UnifiedGraphPipeline() {
     constexpr unsigned int kBlockingEventFlags = cudaEventDisableTiming | cudaEventBlockingSync;
     m_state.startEvent = std::make_unique<CudaEvent>(kBlockingEventFlags);
@@ -327,9 +294,11 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
         // 전처리된 데이터를 TensorRT 입력 버퍼로 복사
         if (m_inputBindings.find(m_inputName) != m_inputBindings.end()) {
             void* inputBinding = m_inputBindings[m_inputName]->get();
-            size_t inputSize = modelRes * modelRes * 3 * sizeof(float);
-            cudaMemcpyAsync(inputBinding, m_unifiedArena.yoloInput, inputSize, 
-                           cudaMemcpyDeviceToDevice, stream);
+            if (inputBinding != m_unifiedArena.yoloInput) {
+                size_t inputSize = modelRes * modelRes * 3 * sizeof(float);
+                cudaMemcpyAsync(inputBinding, m_unifiedArena.yoloInput, inputSize,
+                               cudaMemcpyDeviceToDevice, stream);
+            }
         }
     }
     
@@ -475,10 +444,6 @@ bool UnifiedGraphPipeline::allocateBuffers() {
         m_h_movement = std::make_unique<CudaPinnedMemory<MouseMovement>>(1);
         m_h_allowFlags = std::make_unique<CudaPinnedMemory<unsigned char>>(
             Constants::MAX_CLASSES_FOR_FILTERING);
-        m_h_debugDecodedCount = std::make_unique<CudaPinnedMemory<int>>(1);
-        m_h_debugFinalCount = std::make_unique<CudaPinnedMemory<int>>(1);
-        m_h_debugBestIndex = std::make_unique<CudaPinnedMemory<int>>(1);
-        m_h_debugBestTarget = std::make_unique<CudaPinnedMemory<Target>>(1);
 
         if (m_h_allowFlags && m_h_allowFlags->get()) {
             std::fill_n(m_h_allowFlags->get(),
@@ -486,21 +451,24 @@ bool UnifiedGraphPipeline::allocateBuffers() {
                         static_cast<unsigned char>(0));
         }
 
-        if (m_h_debugDecodedCount && m_h_debugDecodedCount->get()) {
-            *m_h_debugDecodedCount->get() = 0;
-        }
-        if (m_h_debugFinalCount && m_h_debugFinalCount->get()) {
-            *m_h_debugFinalCount->get() = 0;
-        }
-        if (m_h_debugBestIndex && m_h_debugBestIndex->get()) {
-            *m_h_debugBestIndex->get() = -1;
-        }
-        if (m_h_debugBestTarget && m_h_debugBestTarget->get()) {
-            std::memset(m_h_debugBestTarget->get(), 0, sizeof(Target));
+        if (m_unifiedArena.yoloInput) {
+            auto bindingIt = m_inputBindings.find(m_inputName);
+            auto sizeIt = m_inputSizes.find(m_inputName);
+            if (bindingIt != m_inputBindings.end() && sizeIt != m_inputSizes.end()) {
+                size_t inputSize = sizeIt->second;
+                auto arenaAlias = std::make_unique<CudaMemory<uint8_t>>(
+                    reinterpret_cast<uint8_t*>(m_unifiedArena.yoloInput),
+                    inputSize,
+                    false);
+                bindingIt->second = std::move(arenaAlias);
+            }
         }
 
         m_cachedClassFilter.assign(Constants::MAX_CLASSES_FOR_FILTERING, 0);
-        m_classFilterDirty = true;
+        m_classFilterDirty.store(true, std::memory_order_release);
+        m_cachedHeadClassId.store(-1, std::memory_order_release);
+        m_cachedHeadClassNameHash.store(0, std::memory_order_release);
+        m_cachedClassSettingsSize.store(0, std::memory_order_release);
         
         {
             std::lock_guard<std::mutex> previewLock(m_previewMutex);
@@ -528,7 +496,9 @@ bool UnifiedGraphPipeline::allocateBuffers() {
 }
 
 void UnifiedGraphPipeline::deallocateBuffers() {
-    
+
+    releaseRegisteredCaptureBuffers();
+
     m_captureBuffer.release();
     // m_unifiedCaptureBuffer removed - using m_captureBuffer
     
@@ -549,12 +519,11 @@ void UnifiedGraphPipeline::deallocateBuffers() {
 
     m_h_movement.reset();
     m_h_allowFlags.reset();
-    m_h_debugDecodedCount.reset();
-    m_h_debugFinalCount.reset();
-    m_h_debugBestIndex.reset();
-    m_h_debugBestTarget.reset();
     m_cachedClassFilter.clear();
-    m_classFilterDirty = true;
+    m_classFilterDirty.store(true, std::memory_order_release);
+    m_cachedHeadClassId.store(-1, std::memory_order_release);
+    m_cachedHeadClassNameHash.store(0, std::memory_order_release);
+    m_cachedClassSettingsSize.store(0, std::memory_order_release);
     
     m_inputBindings.clear();
     m_outputBindings.clear();
@@ -608,7 +577,8 @@ void UnifiedGraphPipeline::clearCountBuffers() {
     if (m_smallBufferArena.finalTargetsCount) {
         cudaMemsetAsync(m_smallBufferArena.finalTargetsCount, 0, sizeof(int), m_pipelineStream->get());
     }
-    if (m_smallBufferArena.decodedCount) {
+    if (m_smallBufferArena.decodedCount &&
+        m_smallBufferArena.decodedCount != m_smallBufferArena.finalTargetsCount) {
         cudaMemsetAsync(m_smallBufferArena.decodedCount, 0, sizeof(int), m_pipelineStream->get());
     }
     if (m_smallBufferArena.classFilteredCount) {
@@ -1212,29 +1182,32 @@ void needaimbot::PostProcessingConfig::updateFromContext(const AppContext& ctx, 
 }
 
 void UnifiedGraphPipeline::clearDetectionBuffers(const PostProcessingConfig& config, cudaStream_t stream) {
-    if (!m_unifiedArena.decodedTargets || !m_smallBufferArena.decodedCount || !m_smallBufferArena.classFilteredCount || 
-        !m_smallBufferArena.finalTargetsCount || config.max_detections <= 0) {
+    if (!m_smallBufferArena.decodedCount || config.max_detections <= 0) {
         return;
     }
-    
-    static int cached_blockSize = 0;
-    static int cached_minGridSize = 0;
-    if (cached_blockSize == 0) {
-        cudaOccupancyMaxPotentialBlockSize(&cached_minGridSize, &cached_blockSize, clearAllDetectionBuffersKernel, 0, 0);
+
+    cudaMemsetAsync(m_smallBufferArena.decodedCount, 0, sizeof(int), stream);
+
+    if (m_smallBufferArena.finalTargetsCount &&
+        m_smallBufferArena.finalTargetsCount != m_smallBufferArena.decodedCount) {
+        cudaMemsetAsync(m_smallBufferArena.finalTargetsCount, 0, sizeof(int), stream);
     }
-    
-    int gridSize = std::min((config.max_detections + cached_blockSize - 1) / cached_blockSize, cached_minGridSize);
-    
-    clearAllDetectionBuffersKernel<<<gridSize, cached_blockSize, 0, stream>>>(
-        m_unifiedArena.decodedTargets,
-        m_smallBufferArena.decodedCount,
-        m_smallBufferArena.classFilteredCount,
-        m_smallBufferArena.finalTargetsCount,
-        m_smallBufferArena.colorFilteredCount,
-        m_smallBufferArena.bestTargetIndex,
-        m_smallBufferArena.bestTarget,
-        config.max_detections
-    );
+
+    if (m_smallBufferArena.classFilteredCount) {
+        cudaMemsetAsync(m_smallBufferArena.classFilteredCount, 0, sizeof(int), stream);
+    }
+
+    if (m_smallBufferArena.colorFilteredCount) {
+        cudaMemsetAsync(m_smallBufferArena.colorFilteredCount, 0, sizeof(int), stream);
+    }
+
+    if (m_smallBufferArena.bestTargetIndex) {
+        cudaMemsetAsync(m_smallBufferArena.bestTargetIndex, -1, sizeof(int), stream);
+    }
+
+    if (m_smallBufferArena.bestTarget) {
+        cudaMemsetAsync(m_smallBufferArena.bestTarget, 0, sizeof(Target), stream);
+    }
 }
 
 cudaError_t UnifiedGraphPipeline::decodeYoloOutput(void* d_rawOutputPtr, nvinfer1::DataType outputType, 
@@ -1321,7 +1294,7 @@ void UnifiedGraphPipeline::updateClassFilterIfNeeded(cudaStream_t stream) {
         return;
     }
 
-    if (!m_classFilterDirty) {
+    if (!m_classFilterDirty.load(std::memory_order_acquire)) {
         return;
     }
 
@@ -1342,8 +1315,14 @@ void UnifiedGraphPipeline::updateClassFilterIfNeeded(cudaStream_t stream) {
     }
 
     auto& ctx = AppContext::getInstance();
+    size_t classSettingsSize = 0;
+    size_t headNameHash = 0;
+    int newHeadId = -1;
+
     {
         std::lock_guard<std::mutex> lock(ctx.configMutex);
+        classSettingsSize = ctx.config.class_settings.size();
+        headNameHash = std::hash<std::string>{}(ctx.config.head_class_name);
         std::fill_n(hostFlags,
                     Constants::MAX_CLASSES_FOR_FILTERING,
                     static_cast<unsigned char>(0));
@@ -1351,27 +1330,53 @@ void UnifiedGraphPipeline::updateClassFilterIfNeeded(cudaStream_t stream) {
         for (const auto& setting : ctx.config.class_settings) {
             if (setting.id >= 0 && setting.id < Constants::MAX_CLASSES_FOR_FILTERING) {
                 hostFlags[setting.id] = setting.allow ? 1 : 0;
+                if (setting.name == ctx.config.head_class_name) {
+                    newHeadId = setting.id;
+                }
             }
         }
     }
 
-    m_cachedClassFilter.assign(hostFlags,
-                               hostFlags + Constants::MAX_CLASSES_FOR_FILTERING);
+    bool filterChanged = m_cachedClassFilter.size() != Constants::MAX_CLASSES_FOR_FILTERING;
+    if (!filterChanged) {
+        filterChanged = !std::equal(
+            hostFlags,
+            hostFlags + Constants::MAX_CLASSES_FOR_FILTERING,
+            m_cachedClassFilter.begin());
+    }
 
-    cudaError_t copyErr = cudaMemcpyAsync(
-        m_smallBufferArena.allowFlags,
-        hostFlags,
-        Constants::MAX_CLASSES_FOR_FILTERING * sizeof(unsigned char),
-        cudaMemcpyHostToDevice,
-        stream);
+    bool headChanged = newHeadId != m_cachedHeadClassId.load(std::memory_order_acquire);
+    headChanged = headChanged ||
+        headNameHash != m_cachedHeadClassNameHash.load(std::memory_order_acquire) ||
+        classSettingsSize != m_cachedClassSettingsSize.load(std::memory_order_acquire);
 
-    if (copyErr != cudaSuccess) {
-        std::cerr << "[Pipeline] Failed to upload class filter flags: "
-                  << cudaGetErrorString(copyErr) << std::endl;
+    if (!filterChanged && !headChanged) {
+        m_classFilterDirty.store(false, std::memory_order_release);
         return;
     }
 
-    m_classFilterDirty = false;
+    if (filterChanged) {
+        m_cachedClassFilter.assign(hostFlags,
+                                   hostFlags + Constants::MAX_CLASSES_FOR_FILTERING);
+
+        cudaError_t copyErr = cudaMemcpyAsync(
+            m_smallBufferArena.allowFlags,
+            hostFlags,
+            Constants::MAX_CLASSES_FOR_FILTERING * sizeof(unsigned char),
+            cudaMemcpyHostToDevice,
+            stream);
+
+        if (copyErr != cudaSuccess) {
+            std::cerr << "[Pipeline] Failed to upload class filter flags: "
+                      << cudaGetErrorString(copyErr) << std::endl;
+            return;
+        }
+    }
+
+    m_cachedHeadClassId.store(newHeadId, std::memory_order_release);
+    m_cachedHeadClassNameHash.store(headNameHash, std::memory_order_release);
+    m_cachedClassSettingsSize.store(classSettingsSize, std::memory_order_release);
+    m_classFilterDirty.store(false, std::memory_order_release);
 }
 
 void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) {
@@ -1407,38 +1412,17 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
     if (m_unifiedArena.finalTargets && m_smallBufferArena.finalTargetsCount &&
         m_unifiedArena.decodedTargets && m_smallBufferArena.decodedCount) {
 
-        cudaMemcpyAsync(m_smallBufferArena.finalTargetsCount, m_smallBufferArena.decodedCount, sizeof(int),
-                       cudaMemcpyDeviceToDevice, stream);
+        if (m_smallBufferArena.finalTargetsCount != m_smallBufferArena.decodedCount) {
+            cudaMemcpyAsync(m_smallBufferArena.finalTargetsCount, m_smallBufferArena.decodedCount, sizeof(int),
+                           cudaMemcpyDeviceToDevice, stream);
+        }
 
-        cudaMemcpyAsync(m_unifiedArena.finalTargets, m_unifiedArena.decodedTargets,
-                       config.max_detections * sizeof(Target), cudaMemcpyDeviceToDevice, stream);
-    }
-
-    if (m_h_debugDecodedCount && m_h_debugDecodedCount->get() && m_smallBufferArena.decodedCount) {
-        cudaError_t debugCopyErr = cudaMemcpyAsync(
-            m_h_debugDecodedCount->get(),
-            m_smallBufferArena.decodedCount,
-            sizeof(int),
-            cudaMemcpyDeviceToHost,
-            stream);
-        if (debugCopyErr != cudaSuccess) {
-            std::cerr << "[Pipeline] Failed to copy decoded count for debug: "
-                      << cudaGetErrorString(debugCopyErr) << std::endl;
+        if (m_unifiedArena.finalTargets != m_unifiedArena.decodedTargets) {
+            cudaMemcpyAsync(m_unifiedArena.finalTargets, m_unifiedArena.decodedTargets,
+                           config.max_detections * sizeof(Target), cudaMemcpyDeviceToDevice, stream);
         }
     }
 
-    if (m_h_debugFinalCount && m_h_debugFinalCount->get() && m_smallBufferArena.finalTargetsCount) {
-        cudaError_t debugCopyErr = cudaMemcpyAsync(
-            m_h_debugFinalCount->get(),
-            m_smallBufferArena.finalTargetsCount,
-            sizeof(int),
-            cudaMemcpyDeviceToHost,
-            stream);
-        if (debugCopyErr != cudaSuccess) {
-            std::cerr << "[Pipeline] Failed to copy final target count for debug: "
-                      << cudaGetErrorString(debugCopyErr) << std::endl;
-        }
-    }
 }
 
 // Removed redundant NMS and copy functions
@@ -1512,31 +1496,6 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
                   << cudaGetErrorString(err) << std::endl;
     }
 
-    if (m_h_debugBestIndex && m_h_debugBestIndex->get() && m_smallBufferArena.bestTargetIndex) {
-        cudaError_t debugCopyErr = cudaMemcpyAsync(
-            m_h_debugBestIndex->get(),
-            m_smallBufferArena.bestTargetIndex,
-            sizeof(int),
-            cudaMemcpyDeviceToHost,
-            stream);
-        if (debugCopyErr != cudaSuccess) {
-            std::cerr << "[Pipeline] Failed to copy best target index for debug: "
-                      << cudaGetErrorString(debugCopyErr) << std::endl;
-        }
-    }
-
-    if (m_h_debugBestTarget && m_h_debugBestTarget->get() && m_smallBufferArena.bestTarget) {
-        cudaError_t debugCopyErr = cudaMemcpyAsync(
-            m_h_debugBestTarget->get(),
-            m_smallBufferArena.bestTarget,
-            sizeof(Target),
-            cudaMemcpyDeviceToHost,
-            stream);
-        if (debugCopyErr != cudaSuccess) {
-            std::cerr << "[Pipeline] Failed to copy best target for debug: "
-                      << cudaGetErrorString(debugCopyErr) << std::endl;
-        }
-    }
 }
 
 bool UnifiedGraphPipeline::updateDDACaptureRegion(const AppContext& ctx) {
@@ -1612,6 +1571,9 @@ bool UnifiedGraphPipeline::copyDDAFrameToGPU(void* frameData, unsigned int width
         return false;
     }
 
+    size_t totalBytes = static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
+    ensureCaptureBufferRegistered(frameData, totalBytes);
+
     size_t hostPitch = static_cast<size_t>(width) * 4;
     cudaError_t err = cudaMemcpy2DAsync(
         m_captureBuffer.data(),
@@ -1630,6 +1592,60 @@ bool UnifiedGraphPipeline::copyDDAFrameToGPU(void* frameData, unsigned int width
     }
 
     return true;
+}
+
+bool UnifiedGraphPipeline::ensureCaptureBufferRegistered(void* frameData, size_t size) {
+    if (!frameData || size == 0) {
+        return false;
+    }
+
+    auto it = m_registeredCaptureBuffers.find(frameData);
+    if (it != m_registeredCaptureBuffers.end()) {
+        if (it->second.registered) {
+            return true;
+        }
+        if (it->second.permanentFailure) {
+            return false;
+        }
+    }
+
+    RegisteredHostBuffer bufferInfo;
+    bufferInfo.size = size;
+
+    cudaError_t regErr = cudaHostRegister(frameData, size, cudaHostRegisterPortable);
+    if (regErr == cudaSuccess || regErr == cudaErrorHostMemoryAlreadyRegistered) {
+        bufferInfo.registered = true;
+        bufferInfo.permanentFailure = false;
+        m_registeredCaptureBuffers[frameData] = bufferInfo;
+        return true;
+    }
+
+    bufferInfo.registered = false;
+    bufferInfo.permanentFailure = true;
+    m_registeredCaptureBuffers[frameData] = bufferInfo;
+
+    if (regErr != cudaErrorInvalidValue && regErr != cudaErrorNotSupported) {
+        std::cerr << "[Capture] Failed to register capture buffer for async copy: "
+                  << cudaGetErrorString(regErr) << std::endl;
+    }
+
+    return false;
+}
+
+void UnifiedGraphPipeline::releaseRegisteredCaptureBuffers() {
+    for (auto& entry : m_registeredCaptureBuffers) {
+        if (!entry.first || !entry.second.registered) {
+            continue;
+        }
+
+        cudaError_t err = cudaHostUnregister(entry.first);
+        if (err != cudaSuccess && err != cudaErrorHostMemoryNotRegistered) {
+            std::cerr << "[Capture] Failed to unregister capture buffer: "
+                      << cudaGetErrorString(err) << std::endl;
+        }
+    }
+
+    m_registeredCaptureBuffers.clear();
 }
 
 bool UnifiedGraphPipeline::performFrameCapture() {
@@ -1892,20 +1908,37 @@ bool UnifiedGraphPipeline::performInference() {
         std::cerr << "[UnifiedGraph] TensorRT inference failed" << std::endl;
         return false;
     }
-    
-    performIntegratedPostProcessing(m_pipelineStream->get());
-    performTargetSelection(m_pipelineStream->get());
-    
+
     return true;
 }
 
 int UnifiedGraphPipeline::findHeadClassId(const AppContext& ctx) {
-    for(const auto& cs : ctx.config.class_settings) {
-        if (cs.name == ctx.config.head_class_name) {
-            return cs.id;
+    const size_t headNameHash = std::hash<std::string>{}(ctx.config.head_class_name);
+    const size_t classSettingsSize = ctx.config.class_settings.size();
+
+    const size_t cachedSize = m_cachedClassSettingsSize.load(std::memory_order_acquire);
+    const size_t cachedHash = m_cachedHeadClassNameHash.load(std::memory_order_acquire);
+
+    if (classSettingsSize != cachedSize || headNameHash != cachedHash) {
+        int resolvedId = -1;
+        {
+            std::lock_guard<std::mutex> lock(ctx.configMutex);
+            for (const auto& cs : ctx.config.class_settings) {
+                if (cs.name == ctx.config.head_class_name) {
+                    resolvedId = cs.id;
+                    break;
+                }
+            }
         }
+
+        m_cachedHeadClassId.store(resolvedId, std::memory_order_release);
+        m_cachedHeadClassNameHash.store(headNameHash, std::memory_order_release);
+        m_cachedClassSettingsSize.store(classSettingsSize, std::memory_order_release);
+        m_classFilterDirty.store(true, std::memory_order_release);
+        return resolvedId;
     }
-    return -1;
+
+    return m_cachedHeadClassId.load(std::memory_order_acquire);
 }
 
 // performResultCopy는 더 이상 필요 없음 - Graph와 콜백에서 직접 처리
