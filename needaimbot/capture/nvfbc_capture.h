@@ -51,6 +51,14 @@ typedef struct NVFBC_API_FUNCTION_LIST {
 typedef NVFBC_RESULT(*PFN_NvFBC_Create)(NVFBC_API_FUNCTION_LIST* api);
 typedef NVFBC_RESULT(*PFN_NvFBC_GetStatus)(void);
 
+// Capture region rectangle
+typedef struct {
+    unsigned int left;
+    unsigned int top;
+    unsigned int right;
+    unsigned int bottom;
+} NVFBC_RECT;
+
 // For the session management we'll use a simplified approach
 typedef struct {
     unsigned int dwVersion;
@@ -60,6 +68,7 @@ typedef struct {
     void* pBuffer;
     unsigned int dwBufSize;
     unsigned int dwFlags;
+    NVFBC_RECT captureBox;  // Region to capture
 } NVFBC_TOSYS_SETUP_PARAMS;
 
 class NVFBCCapture {
@@ -84,6 +93,15 @@ public:
     // Get capture dimensions
     int GetWidth() const { return m_captureWidth; }
     int GetHeight() const { return m_captureHeight; }
+
+    // Set capture region (x, y, width, height)
+    void SetCaptureRegion(int x, int y, int width, int height);
+
+    // Get current capture region
+    void GetCaptureRegion(int* x, int* y, int* width, int* height) const;
+
+    // Reset to full screen capture
+    void ResetToFullScreen();
 
     // Check if NVFBC is available
     static bool IsNVFBCAvailable();
@@ -114,6 +132,14 @@ private:
     bool m_isCapturing;
     int m_captureWidth;
     int m_captureHeight;
+
+    // Screen dimensions (full screen)
+    int m_screenWidth;
+    int m_screenHeight;
+
+    // Capture region
+    NVFBC_RECT m_captureRegion;
+    bool m_useCustomRegion;
 
     // Capture thread
     std::thread m_captureThread;

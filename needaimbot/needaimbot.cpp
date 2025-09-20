@@ -27,7 +27,7 @@
 #include "include/other_tools.h"
 #include "core/thread_manager.h"
 #include "core/error_manager.h"
-#include "capture/graphics_capture.h"
+#include "capture/nvfbc_capture.h"
 
 
 #ifndef __INTELLISENSE__
@@ -460,16 +460,26 @@ int main()
     if (GetVersionEx((OSVERSIONINFO*)&osvi)) {
     }
     
-    // NVFBC Capture Test
+    // NVFBC Capture System
     std::cout << "\n=== NVFBC Capture System ===" << std::endl;
-    if (GraphicsCapture::IsNVFBCAvailable()) {
+    if (NVFBCCapture::IsNVFBCAvailable()) {
         std::cout << "✓ NVFBC Hardware Available" << std::endl;
 
-        GraphicsCapture capture;
+        NVFBCCapture capture;
         if (capture.Initialize()) {
             std::cout << "✓ NVFBC Capture Initialized" << std::endl;
-            std::cout << "  - Resolution: " << capture.GetWidth() << "x" << capture.GetHeight() << std::endl;
-            std::cout << "  - Status: Ready for high-performance capture" << std::endl;
+            std::cout << "  - Full Screen: " << capture.GetWidth() << "x" << capture.GetHeight() << std::endl;
+
+            // Test partial capture (center quarter of screen)
+            int centerX = capture.GetWidth() / 4;
+            int centerY = capture.GetHeight() / 4;
+            int centerW = capture.GetWidth() / 2;
+            int centerH = capture.GetHeight() / 2;
+
+            capture.SetCaptureRegion(centerX, centerY, centerW, centerH);
+            std::cout << "  - Partial Region: " << centerW << "x" << centerH << " at (" << centerX << "," << centerY << ")" << std::endl;
+            std::cout << "  - Status: Ready for efficient region capture" << std::endl;
+
             capture.Shutdown();
         } else {
             std::cout << "✗ NVFBC Initialization Failed" << std::endl;
