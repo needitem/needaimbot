@@ -4,7 +4,7 @@
 #include <iostream>
 
 namespace {
-constexpr UINT kFrameTimeoutMs = 16; // ~60 FPS polling
+constexpr UINT kFrameTimeoutMs = 1; // Wait without timeout for new frames
 constexpr UINT kBytesPerPixel = 4;   // BGRA
 }
 
