@@ -428,7 +428,7 @@ private:
     void updatePreviewBuffer(const SimpleCudaMat& currentBuffer);
     void updatePreviewBufferAllocation();  // Dynamic allocation based on show_window state
     bool performInference();
-    int findHeadClassId(const AppContext& ctx);
+    int findHeadClassId(AppContext& ctx);
 
     void clearDetectionBuffers(const PostProcessingConfig& config, cudaStream_t stream);
     cudaError_t decodeYoloOutput(void* d_rawOutputPtr, nvinfer1::DataType outputType, 
