@@ -32,20 +32,14 @@
 
 #ifndef __INTELLISENSE__
 #include <cuda_runtime_api.h>
-#include <cuda_d3d11_interop.h>
 #endif
 #include <iomanip> 
 #include <csignal>
 #include <random>
 #include <tlhelp32.h>
-#include <d3d11.h>
-#include <dxgi1_2.h>
-#include <wrl/client.h>
 #include <array>
 #include <cstdio>
 #include <string_view>
-
-using Microsoft::WRL::ComPtr;
 
 // #include "mouse/aimbot_components/AimbotTarget.h" - Removed, using core/Target.h
 #include <algorithm>
@@ -184,131 +178,50 @@ bool loadAndValidateModel(std::string& modelName, const std::vector<std::string>
 
 // Initialize screen capture for the pipeline
 bool initializeScreenCapture(needaimbot::UnifiedGraphPipeline* pipeline) {
-    // Create D3D11 device for screen capture
-    ComPtr<ID3D11Device> device;
-    ComPtr<ID3D11DeviceContext> context;
-    D3D_FEATURE_LEVEL featureLevel;
-    
-    HRESULT hr = D3D11CreateDevice(
-        nullptr,
-        D3D_DRIVER_TYPE_HARDWARE,
-        nullptr,
-        0,
-        nullptr,
-        0,
-        D3D11_SDK_VERSION,
-        &device,
-        &featureLevel,
-        &context
-    );
-    
-    if (FAILED(hr)) {
-        std::cerr << "[CAPTURE] Failed to create D3D11 device for screen capture" << std::endl;
-        return false;
-    }
-    
-    // Get DXGI adapter and output for desktop duplication
-    ComPtr<IDXGIDevice> dxgiDevice;
-    hr = device.As(&dxgiDevice);
-    if (FAILED(hr)) {
-        std::cerr << "[CAPTURE] Failed to get DXGI device" << std::endl;
-        return false;
-    }
-    
-    ComPtr<IDXGIAdapter> dxgiAdapter;
-    hr = dxgiDevice->GetAdapter(&dxgiAdapter);
-    if (FAILED(hr)) {
-        std::cerr << "[CAPTURE] Failed to get DXGI adapter" << std::endl;
-        return false;
-    }
-    
-    ComPtr<IDXGIOutput> dxgiOutput;
-    hr = dxgiAdapter->EnumOutputs(0, &dxgiOutput);
-    if (FAILED(hr)) {
-        std::cerr << "[CAPTURE] Failed to enumerate DXGI outputs" << std::endl;
-        return false;
-    }
-    
-    ComPtr<IDXGIOutput1> dxgiOutput1;
-    hr = dxgiOutput.As(&dxgiOutput1);
-    if (FAILED(hr)) {
-        std::cerr << "[CAPTURE] Failed to get DXGI Output1 interface" << std::endl;
-        return false;
-    }
-    
-    // Get desktop dimensions
-    DXGI_OUTPUT_DESC outputDesc;
-    hr = dxgiOutput->GetDesc(&outputDesc);
-    if (FAILED(hr)) {
-        std::cerr << "[CAPTURE] Failed to get output description" << std::endl;
-        return false;
-    }
-    
-    int width = outputDesc.DesktopCoordinates.right - outputDesc.DesktopCoordinates.left;
-    int height = outputDesc.DesktopCoordinates.bottom - outputDesc.DesktopCoordinates.top;
-    
-    
-    // Create texture for screen capture (only detection resolution size)
     auto& ctx = AppContext::getInstance();
-    int captureSize = ctx.config.detection_resolution;  // 320x320
-    D3D11_TEXTURE2D_DESC textureDesc = {};
-    textureDesc.Width = captureSize;
-    textureDesc.Height = captureSize;
-    textureDesc.MipLevels = 1;
-    textureDesc.ArraySize = 1;
-    textureDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-    textureDesc.SampleDesc.Count = 1;
-    textureDesc.Usage = D3D11_USAGE_DEFAULT;
-    textureDesc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-    textureDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
-    
-    ComPtr<ID3D11Texture2D> captureTexture;
-    hr = device->CreateTexture2D(&textureDesc, nullptr, &captureTexture);
-    if (FAILED(hr)) {
-        std::cerr << "[CAPTURE] Failed to create capture texture" << std::endl;
+
+    if (!NVFBCCapture::IsNVFBCAvailable()) {
+        std::cerr << "[CAPTURE] NVFBC hardware capture is not available on this system" << std::endl;
         return false;
     }
-    
-    // Register texture with CUDA
-    cudaGraphicsResource_t cudaResource;
-    cudaError_t cudaErr = cudaGraphicsD3D11RegisterResource(
-        &cudaResource,
-        captureTexture.Get(),
-        cudaGraphicsRegisterFlagsNone
-    );
-    
-    if (cudaErr != cudaSuccess) {
-        std::cerr << "[CAPTURE] Failed to register D3D11 texture with CUDA: " 
-                  << cudaGetErrorString(cudaErr) << std::endl;
+
+    static NVFBCCapture s_nvfbcCapture;
+
+    if (!s_nvfbcCapture.Initialize()) {
+        std::cerr << "[CAPTURE] Failed to initialize NVFBC capture session" << std::endl;
         return false;
     }
-    
-    // Set the CUDA resource in the pipeline
-    pipeline->setInputTexture(cudaResource);
-    
-    // Create Desktop Duplication interface and store in pipeline
-    ComPtr<IDXGIOutputDuplication> desktopDuplication;
-    hr = dxgiOutput1->DuplicateOutput(device.Get(), &desktopDuplication);
-    if (FAILED(hr)) {
-        std::cerr << "[CAPTURE] Failed to create Desktop Duplication interface" << std::endl;
+
+    int screenW = s_nvfbcCapture.GetScreenWidth();
+    int screenH = s_nvfbcCapture.GetScreenHeight();
+    if (screenW <= 0 || screenH <= 0) {
+        std::cerr << "[CAPTURE] NVFBC reported invalid screen dimensions" << std::endl;
         return false;
     }
-    
-    // Store references to prevent destruction
-    static ComPtr<IDXGIOutputDuplication> s_desktopDuplication = desktopDuplication;
-    static ComPtr<ID3D11Device> s_device = device;
-    static ComPtr<ID3D11DeviceContext> s_context = context;
-    static ComPtr<ID3D11Texture2D> s_captureTexture = captureTexture;
-    
-    // Pass Desktop Duplication interfaces to pipeline
-    pipeline->setDesktopDuplication(
-        s_desktopDuplication.Get(),
-        s_device.Get(), 
-        s_context.Get(),
-        s_captureTexture.Get()
-    );
-    
-    
+
+    int detectionRes = std::max(1, ctx.config.detection_resolution);
+    int captureSize = std::min(detectionRes, std::min(screenW, screenH));
+
+    int centerX = screenW / 2 + static_cast<int>(ctx.config.crosshair_offset_x);
+    int centerY = screenH / 2 + static_cast<int>(ctx.config.crosshair_offset_y);
+
+    int maxLeft = std::max(0, screenW - captureSize);
+    int maxTop = std::max(0, screenH - captureSize);
+
+    int left = std::clamp(centerX - captureSize / 2, 0, maxLeft);
+    int top = std::clamp(centerY - captureSize / 2, 0, maxTop);
+
+    if (!s_nvfbcCapture.SetCaptureRegion(left, top, captureSize, captureSize)) {
+        std::cerr << "[CAPTURE] Failed to configure NVFBC capture region" << std::endl;
+        return false;
+    }
+
+    if (!s_nvfbcCapture.IsCapturing() && !s_nvfbcCapture.StartCapture()) {
+        std::cerr << "[CAPTURE] Failed to start NVFBC capture thread" << std::endl;
+        return false;
+    }
+
+    pipeline->setNVFBCCapture(&s_nvfbcCapture);
     return true;
 }
 
@@ -489,9 +402,13 @@ int main()
             int centerW = capture.GetWidth() / 2;
             int centerH = capture.GetHeight() / 2;
 
-            capture.SetCaptureRegion(centerX, centerY, centerW, centerH);
-            std::cout << "  - Partial Region: " << centerW << "x" << centerH << " at (" << centerX << "," << centerY << ")" << std::endl;
-            std::cout << "  - Status: Ready for efficient region capture" << std::endl;
+            if (capture.SetCaptureRegion(centerX, centerY, centerW, centerH)) {
+                std::cout << "  - Partial Region: " << centerW << "x" << centerH
+                          << " at (" << centerX << "," << centerY << ")" << std::endl;
+                std::cout << "  - Status: Ready for efficient region capture" << std::endl;
+            } else {
+                std::cout << "  - Failed to configure partial capture region" << std::endl;
+            }
 
             capture.Shutdown();
         } else {

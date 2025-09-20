@@ -47,11 +47,8 @@ SerialConnection::SerialConnection(const std::string& port, unsigned int baud_ra
       accumulated_move_x_(0),
       accumulated_move_y_(0),
       has_accumulated_move_(false),
-<<<<<<< ours
-=======
       consecutive_write_failures_(0),
       last_reconnect_time_(std::chrono::steady_clock::now()),
->>>>>>> theirs
       write_event_(NULL),
       read_event_(NULL)
 {
@@ -206,11 +203,7 @@ void SerialConnection::startWriterThread() {
 
 #ifdef _WIN32
     SetThreadDescription(writer_thread_.native_handle(), L"ArduinoSerialWriter");
-<<<<<<< ours
-    SetThreadPriority(writer_thread_.native_handle(), THREAD_PRIORITY_HIGHEST);
-=======
     SetThreadPriority(writer_thread_.native_handle(), Constants::MOUSE_THREAD_PRIORITY);
->>>>>>> theirs
 #endif
 }
 
@@ -254,11 +247,7 @@ void SerialConnection::enqueueBinaryCommand(uint8_t cmd, int param1, int param2,
     writer_cv_.notify_one();
 }
 
-<<<<<<< ours
-void SerialConnection::sendBinaryImmediate(uint8_t cmd, int param1, int param2) {
-=======
 bool SerialConnection::sendBinaryImmediate(uint8_t cmd, int param1, int param2) {
->>>>>>> theirs
     int clampedX = std::clamp(param1, -127, 127);
     int clampedY = std::clamp(param2, -127, 127);
 
@@ -268,20 +257,12 @@ bool SerialConnection::sendBinaryImmediate(uint8_t cmd, int param1, int param2) 
         static_cast<uint8_t>(static_cast<int8_t>(clampedY))
     };
 
-<<<<<<< ours
-    writeBinary(buffer, 3);
-=======
     return writeBinary(buffer, 3);
->>>>>>> theirs
 }
 
 void SerialConnection::writerThreadFunc() {
 #ifdef _WIN32
-<<<<<<< ours
-    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
-=======
     SetThreadPriority(GetCurrentThread(), Constants::MOUSE_THREAD_PRIORITY);
->>>>>>> theirs
 #endif
 
     while (writer_running_.load()) {
@@ -322,15 +303,6 @@ void SerialConnection::writerThreadFunc() {
             while (remainingX != 0 || remainingY != 0) {
                 int stepX = std::clamp(remainingX, -127, 127);
                 int stepY = std::clamp(remainingY, -127, 127);
-<<<<<<< ours
-                remainingX -= stepX;
-                remainingY -= stepY;
-
-                sendBinaryImmediate(command.cmd, stepX, stepY);
-            }
-        } else {
-            sendBinaryImmediate(command.cmd, command.param1, command.param2);
-=======
 
                 if (sendBinaryImmediate(command.cmd, stepX, stepY)) {
                     remainingX -= stepX;
@@ -357,7 +329,6 @@ void SerialConnection::writerThreadFunc() {
                 }
                 writer_cv_.notify_one();
             }
->>>>>>> theirs
         }
     }
 }
@@ -964,13 +935,8 @@ bool SerialConnection::writeAsync(const void* data, DWORD size)
     if (!result) {
         DWORD error = GetLastError();
         if (error == ERROR_IO_PENDING) {
-<<<<<<< ours
-            // Wait for async operation to complete with a very short deadline to avoid stalling input
-            return waitForAsyncOperation(&write_overlapped_, 5);
-=======
             // Wait for async operation to complete with a balanced deadline
             return waitForAsyncOperation(&write_overlapped_, 30);
->>>>>>> theirs
         }
         return false;
     }

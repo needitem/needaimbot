@@ -2,12 +2,10 @@
 #include "detection/cuda_float_processing.h"
 #include "simple_cuda_mat.h"
 #include "../AppContext.h"
-#include <d3d11.h>
+#include "../capture/nvfbc_capture.h"
 #include "../core/logger.h"
 #include "cuda_error_check.h"
 #include "preprocessing.h"
-#include <d3d11.h>
-#include <dxgi1_2.h>
 #include "../include/other_tools.h"
 #include "../core/constants.h"
 #include "detection/postProcess.h"
@@ -1207,181 +1205,134 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
     }
 }
 
-std::pair<int, int> UnifiedGraphPipeline::calculateCaptureCenter(const AppContext& ctx, const D3D11_TEXTURE2D_DESC& desktopDesc) {
-    int centerX, centerY;
-    if (ctx.config.enable_aim_shoot_offset && ctx.aiming && ctx.shooting) {
-        centerX = desktopDesc.Width / 2 + static_cast<int>(ctx.config.aim_shoot_offset_x);
-        centerY = desktopDesc.Height / 2 + static_cast<int>(ctx.config.aim_shoot_offset_y);
-    } else {
-        centerX = desktopDesc.Width / 2 + static_cast<int>(ctx.config.crosshair_offset_x);
-        centerY = desktopDesc.Height / 2 + static_cast<int>(ctx.config.crosshair_offset_y);
-    }
-    return {centerX, centerY};
-}
-
-D3D11_BOX UnifiedGraphPipeline::createCaptureBox(int centerX, int centerY, int captureSize, const D3D11_TEXTURE2D_DESC& desktopDesc) {
-    int cropX = std::max(0, centerX - captureSize / 2);
-    int cropY = std::max(0, centerY - captureSize / 2);
-    cropX = std::min(cropX, static_cast<int>(desktopDesc.Width) - captureSize);
-    cropY = std::min(cropY, static_cast<int>(desktopDesc.Height) - captureSize);
-    
-    D3D11_BOX srcBox;
-    srcBox.left = cropX;
-    srcBox.top = cropY;
-    srcBox.right = cropX + captureSize;
-    srcBox.bottom = cropY + captureSize;
-    srcBox.front = 0;
-    srcBox.back = 1;
-    
-    return srcBox;
-}
-
-bool UnifiedGraphPipeline::performDesktopCapture(const AppContext& ctx) {
-    if (!m_desktopDuplication || !m_d3dDevice || !m_d3dContext || !m_captureTextureD3D) {
-        std::cout << "[Capture] Desktop duplication resources not available" << std::endl;
+bool UnifiedGraphPipeline::updateNVFBCCaptureRegion(const AppContext& ctx) {
+    if (!m_nvfbcCapture) {
         return false;
     }
 
-    auto* duplication = static_cast<IDXGIOutputDuplication*>(m_desktopDuplication);
-    auto* d3dContext = static_cast<ID3D11DeviceContext*>(m_d3dContext);
-    auto* captureTexture = static_cast<ID3D11Texture2D*>(m_captureTextureD3D);
+    static int lastDetectionRes = 0;
+    static float lastOffsetX = 0.0f;
+    static float lastOffsetY = 0.0f;
+    static bool lastAimShoot = false;
 
-    DXGI_OUTDUPL_FRAME_INFO frameInfo;
-    IDXGIResource* desktopResource = nullptr;
-    HRESULT hr = duplication->AcquireNextFrame(1, &frameInfo, &desktopResource);
-
-    if (!SUCCEEDED(hr) || !desktopResource) {
+    int detectionRes = ctx.config.detection_resolution;
+    if (detectionRes <= 0) {
         return false;
     }
 
-    ID3D11Texture2D* desktopTexture = nullptr;
-    hr = desktopResource->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&desktopTexture);
+    bool useAimShootOffset = ctx.config.enable_aim_shoot_offset && ctx.aiming && ctx.shooting;
+    float offsetX = useAimShootOffset ? ctx.config.aim_shoot_offset_x : ctx.config.crosshair_offset_x;
+    float offsetY = useAimShootOffset ? ctx.config.aim_shoot_offset_y : ctx.config.crosshair_offset_y;
 
-    if (SUCCEEDED(hr) && desktopTexture) {
-        // 캐시된 값들 사용 - 해상도나 설정이 바뀔 때만 재계산
-        static D3D11_TEXTURE2D_DESC cachedDesktopDesc = {};
-        static D3D11_BOX cachedSrcBox = {};
-        static int lastDetectionRes = 0;
-        static float lastOffsetX = 0, lastOffsetY = 0;
-        static bool cacheValid = false;
-
-        bool needRecalc = !cacheValid ||
-                         lastDetectionRes != ctx.config.detection_resolution ||
-                         lastOffsetX != ctx.config.crosshair_offset_x ||
-                         lastOffsetY != ctx.config.crosshair_offset_y;
-
-        if (needRecalc) {
-            desktopTexture->GetDesc(&cachedDesktopDesc);
-            auto [centerX, centerY] = calculateCaptureCenter(ctx, cachedDesktopDesc);
-            cachedSrcBox = createCaptureBox(centerX, centerY, ctx.config.detection_resolution, cachedDesktopDesc);
-
-            lastDetectionRes = ctx.config.detection_resolution;
-            lastOffsetX = ctx.config.crosshair_offset_x;
-            lastOffsetY = ctx.config.crosshair_offset_y;
-            cacheValid = true;
-        }
-
-        d3dContext->CopySubresourceRegion(captureTexture, 0, 0, 0, 0, desktopTexture, 0, &cachedSrcBox);
-        desktopTexture->Release();
+    if (lastDetectionRes == detectionRes &&
+        lastOffsetX == offsetX &&
+        lastOffsetY == offsetY &&
+        lastAimShoot == useAimShootOffset) {
+        return true;
     }
 
-    desktopResource->Release();
-    duplication->ReleaseFrame();
+    int screenW = m_nvfbcCapture->GetScreenWidth();
+    int screenH = m_nvfbcCapture->GetScreenHeight();
+    if (screenW <= 0 || screenH <= 0) {
+        return false;
+    }
+
+    int captureSize = std::min(detectionRes, std::min(screenW, screenH));
+    if (captureSize <= 0) {
+        return false;
+    }
+
+    int centerX = screenW / 2 + static_cast<int>(offsetX);
+    int centerY = screenH / 2 + static_cast<int>(offsetY);
+
+    int maxLeft = std::max(0, screenW - captureSize);
+    int maxTop = std::max(0, screenH - captureSize);
+
+    int left = std::clamp(centerX - captureSize / 2, 0, maxLeft);
+    int top = std::clamp(centerY - captureSize / 2, 0, maxTop);
+
+    if (!m_nvfbcCapture->SetCaptureRegion(left, top, captureSize, captureSize)) {
+        return false;
+    }
+
+    lastDetectionRes = detectionRes;
+    lastOffsetX = offsetX;
+    lastOffsetY = offsetY;
+    lastAimShoot = useAimShootOffset;
+    return true;
+}
+
+bool UnifiedGraphPipeline::copyNVFBCFrameToGPU(void* frameData, unsigned int width, unsigned int height) {
+    if (!frameData || width == 0 || height == 0) {
+        return false;
+    }
+
+    if (m_captureBuffer.empty() ||
+        m_captureBuffer.cols() != static_cast<int>(width) ||
+        m_captureBuffer.rows() != static_cast<int>(height) ||
+        m_captureBuffer.channels() != 4) {
+        m_captureBuffer.create(static_cast<int>(height), static_cast<int>(width), 4);
+    }
+
+    if (m_captureBuffer.empty() || !m_pipelineStream) {
+        return false;
+    }
+
+    size_t hostPitch = static_cast<size_t>(width) * 4;
+    cudaError_t err = cudaMemcpy2DAsync(
+        m_captureBuffer.data(),
+        m_captureBuffer.step(),
+        frameData,
+        hostPitch,
+        hostPitch,
+        height,
+        cudaMemcpyHostToDevice,
+        m_pipelineStream->get()
+    );
+
+    if (err != cudaSuccess) {
+        std::cerr << "[Capture] NVFBC frame copy failed: " << cudaGetErrorString(err) << std::endl;
+        return false;
+    }
+
     return true;
 }
 
 bool UnifiedGraphPipeline::performFrameCapture() {
     auto& ctx = AppContext::getInstance();
 
-    if (!m_config.enableCapture || !m_cudaResource || m_hasFrameData) {
+    if (!m_config.enableCapture || m_hasFrameData) {
         return true;
     }
 
-    if (!performDesktopCapture(ctx)) {
-        return false;
-    }
-    
-    // Removed unnecessary cudaGetLastError() call
-    
-    cudaError_t err = cudaGraphicsMapResources(1, &m_cudaResource, m_pipelineStream->get());
-    if (err != cudaSuccess) {
-        printf("[ERROR] Graphics map failed: %s\n", cudaGetErrorString(err));
-        return false;
-    }
-    
-    cudaArray_t array;
-    err = cudaGraphicsSubResourceGetMappedArray(&array, m_cudaResource, 0, 0);
-    if (err == cudaSuccess) {
-        err = cudaMemcpy2DFromArrayAsync(
-            m_captureBuffer.data(),
-            m_captureBuffer.step(),
-            array,
-            0, 0,
-            m_captureBuffer.cols() * sizeof(uchar4),
-            m_captureBuffer.rows(),
-            cudaMemcpyDeviceToDevice,
-            m_pipelineStream->get()
-        );
-        // 로깅 제거 - 성능 향상을 위해
-    }
-
-    cudaGraphicsUnmapResources(1, &m_cudaResource, m_pipelineStream->get());
-
-    if (err != cudaSuccess) {
-        printf("[ERROR] Capture failed: %s\n", cudaGetErrorString(err));
+    if (!m_nvfbcCapture) {
+        std::cerr << "[Capture] NVFBC capture interface not set" << std::endl;
         return false;
     }
 
-    // Preview buffer update moved to executeGraphNonBlocking to avoid duplication
+    if (!updateNVFBCCaptureRegion(ctx)) {
+        return false;
+    }
+
+    void* frameData = nullptr;
+    unsigned int width = 0;
+    unsigned int height = 0;
+    unsigned int size = 0;
+
+    if (!m_nvfbcCapture->GetLatestFrame(&frameData, &width, &height, &size)) {
+        return false;
+    }
+
+    if (!copyNVFBCFrameToGPU(frameData, width, height)) {
+        return false;
+    }
 
     m_hasFrameData = true;
     return true;
 }
 
 bool UnifiedGraphPipeline::performFrameCaptureDirectToUnified() {
-    auto& ctx = AppContext::getInstance();
-    
-    if (!m_config.enableCapture || !m_cudaResource || m_hasFrameData) {
-        return true;
-    }
-    
-    if (!performDesktopCapture(ctx)) {
-        return false;
-    }
-    
-    cudaError_t err = cudaGraphicsMapResources(1, &m_cudaResource, m_pipelineStream->get());
-    if (err != cudaSuccess) {
-        printf("[ERROR] Graphics map failed: %s\n", cudaGetErrorString(err));
-        return false;
-    }
-    
-    cudaArray_t array;
-    err = cudaGraphicsSubResourceGetMappedArray(&array, m_cudaResource, 0, 0);
-    if (err == cudaSuccess) {
-        // 직접 통합 버퍼로 복사 (중간 단계 제거)
-        err = cudaMemcpy2DFromArrayAsync(
-            m_captureBuffer.data(),
-            m_captureBuffer.step(),
-            array,
-            0, 0,
-            m_captureBuffer.cols() * sizeof(uchar4),
-            m_captureBuffer.rows(),
-            cudaMemcpyDeviceToDevice,
-            m_pipelineStream->get()
-        );
-        
-        // Preview buffer update moved to executeGraphNonBlocking to avoid duplication
-    }
-    
-    cudaGraphicsUnmapResources(1, &m_cudaResource, m_pipelineStream->get());
-    
-    if (err != cudaSuccess) {
-        printf("[ERROR] Capture failed: %s\n", cudaGetErrorString(err));
-        return false;
-    }
-    
-    m_hasFrameData = true;
-    return true;
+    return performFrameCapture();
 }
 
 bool UnifiedGraphPipeline::performPreprocessing() {
