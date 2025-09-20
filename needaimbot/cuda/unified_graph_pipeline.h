@@ -254,7 +254,9 @@ public:
     bool isPreviewAvailable() const {
         return m_preview.enabled && !m_preview.previewBuffer.empty();
     }
-    
+
+    bool getPreviewSnapshot(SimpleMat& outFrame);
+
     struct UIGPUBuffers {
         Target* finalTargets;
         int* finalTargetsCount;
@@ -347,6 +349,7 @@ private:
     
     std::atomic<bool> m_shouldStop{false};
     std::chrono::high_resolution_clock::time_point m_lastFrameTime;
+    mutable std::mutex m_previewMutex;
     
     
     struct PreviewState {
@@ -355,6 +358,7 @@ private:
         int finalCount = 0;
         std::vector<Target> finalTargets;
         SimpleCudaMat previewBuffer;
+        SimpleMat hostPreview;
     } m_preview;
 
     bool validateGraph();

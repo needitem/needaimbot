@@ -17,7 +17,7 @@ extern float debug_scale;
 extern int texW, texH;
 
 // Functions from draw_debug.cpp
-void uploadDebugFrame(const SimpleCudaMat& frameMat);
+void uploadDebugFrame(const SimpleMat& frameMat);
 void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float scale);
 
 // Mutex for thread-safe D3D11 resource access (defined in draw_debug.cpp)
@@ -374,149 +374,123 @@ void renderOffsetTab()
 
     if (ctx.config.show_window) {
         ImGui::Spacing();
-        
-        // Safely check and upload frame with defensive programming
-        try {
-            // Synchronize CUDA before checking frame
-            cudaError_t sync_err = cudaDeviceSynchronize();
-            if (sync_err != cudaSuccess) {
-                ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "CUDA sync error: %s", cudaGetErrorString(sync_err));
+
+        SimpleMat* frameToDisplay = nullptr;
+        static SimpleMat previewHostFrame;
+
+        auto& pipelineManager = needaimbot::PipelineManager::getInstance();
+        auto* pipeline = pipelineManager.getPipeline();
+
+        if (pipeline && pipeline->isPreviewAvailable()) {
+            if (pipeline->getPreviewSnapshot(previewHostFrame) &&
+                !previewHostFrame.empty() &&
+                previewHostFrame.cols() > 0 && previewHostFrame.rows() > 0 &&
+                previewHostFrame.cols() <= 10000 && previewHostFrame.rows() <= 10000) {
+                frameToDisplay = &previewHostFrame;
+            } else {
+                ImGui::TextColored(ImVec4(0.8f, 0.5f, 0.0f, 1.0f), "Preview data not ready");
+            }
+        } else {
+            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Preview not available");
+        }
+
+        if (frameToDisplay) {
+            try {
+                uploadDebugFrame(*frameToDisplay);
+            } catch (const std::exception& e) {
+                ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Preview upload failed: %s", e.what());
                 UIHelpers::EndSettingsSection();
                 return;
             }
-            
-            // Get current frame from TensorRT integrated pipeline (read-only access)
-            auto& pipelineManager = needaimbot::PipelineManager::getInstance();
-            auto* pipeline = pipelineManager.getPipeline();
-            
-            if (pipeline && pipeline->isPreviewAvailable()) {
-                // Read-only access to preview buffer is thread-safe
-                // Pipeline only writes, UI only reads
-                const SimpleCudaMat& previewFrame = pipeline->getPreviewBuffer();
-                
-                if (!previewFrame.empty() && previewFrame.data() != nullptr) {
-                    // Additional validation before upload
-                    if (previewFrame.cols() > 0 && previewFrame.rows() > 0 &&
-                        previewFrame.cols() <= 10000 && previewFrame.rows() <= 10000) {
-                        // Upload GPU frame directly to D3D11 texture for ImGui display
-                        // This is safe as we're only reading the buffer
-                        uploadDebugFrame(previewFrame);
-                    } else {
-                        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Preview buffer invalid dimensions");
-                    }
-                } else {
-                    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Preview buffer empty");
-                }
-            } else {
-                ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Preview not available");
-            }
-        } catch (const std::exception& e) {
-            ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Error uploading frame: %s", e.what());
-            UIHelpers::EndSettingsSection();
-            return;
-        } catch (...) {
-            ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Unknown error uploading frame");
-            UIHelpers::EndSettingsSection();
-            return;
-        }
-            
+
             ImGui::SliderFloat("Preview Scale", &debug_scale, 0.1f, 3.0f, "%.1fx");
-            
-            // Lock mutex before accessing D3D11 resources
-            {
-                std::lock_guard<std::mutex> lock(g_debugTexMutex);
-                
-                if (g_debugSRV && texW > 0 && texH > 0 && texW < 10000 && texH < 10000) {
-                    // Validate scale
-                    float safe_scale = debug_scale;
-                    if (safe_scale <= 0 || safe_scale > 10.0f) safe_scale = 1.0f;
-                    
-                    ImVec2 image_size(texW * safe_scale, texH * safe_scale);
-                    
-                    
-                    // Safety check for ImGui rendering
-                    if (image_size.x > 0 && image_size.y > 0 && image_size.x < 10000 && image_size.y < 10000) {
-                        ImGui::Image(g_debugSRV, image_size);
-                    } else {
-                        ImGui::TextUnformatted("Invalid image dimensions for display");
-                        UIHelpers::EndSettingsSection();
-                        return;
+
+            std::lock_guard<std::mutex> lock(g_debugTexMutex);
+
+            if (g_debugSRV && texW > 0 && texH > 0 && texW < 10000 && texH < 10000) {
+                float safe_scale = debug_scale;
+                if (safe_scale <= 0 || safe_scale > 10.0f) {
+                    safe_scale = 1.0f;
                 }
-                
+
+                ImVec2 image_size(texW * safe_scale, texH * safe_scale);
+                if (image_size.x > 0 && image_size.y > 0 && image_size.x < 10000 && image_size.y < 10000) {
+                    ImGui::Image(g_debugSRV, image_size);
+                } else {
+                    ImGui::TextUnformatted("Invalid image dimensions for display");
+                    UIHelpers::EndSettingsSection();
+                    return;
+                }
+
                 ImVec2 image_pos = ImGui::GetItemRectMin();
                 ImDrawList* draw_list = ImGui::GetWindowDrawList();
-                
-                // Validate draw list
                 if (!draw_list) {
                     ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Failed to get draw list");
                     UIHelpers::EndSettingsSection();
                     return;
                 }
 
-                // Draw detections with safety check
-                if (draw_list && debug_scale > 0 && debug_scale < 10.0f) {
+                if (debug_scale > 0 && debug_scale < 10.0f) {
                     drawDetections(draw_list, image_pos, debug_scale);
                 }
 
-                // Draw crosshair at center (no offset since capture region already includes offset)
-                // Validate texture dimensions
-                if (texW <= 0 || texH <= 0 || texW > 10000 || texH > 10000) {
-                    // Skip drawing crosshair for invalid frame
-                } else {
+                if (texW > 0 && texH > 0 && texW < 10000 && texH < 10000) {
                     float center_x = image_pos.x + (texW * debug_scale) / 2.0f;
                     float center_y = image_pos.y + (texH * debug_scale) / 2.0f;
-                
-                // Determine which offset is currently active
-                bool is_aim_shoot_active = ctx.config.enable_aim_shoot_offset && ctx.aiming.load() && ctx.shooting.load();
-                ImU32 crosshair_color = is_aim_shoot_active ? IM_COL32(255, 128, 0, 255) : IM_COL32(255, 255, 255, 255);
-                
-                // Draw crosshair lines
-                draw_list->AddLine(ImVec2(center_x - 10, center_y), ImVec2(center_x + 10, center_y), crosshair_color, 2.0f);
-                draw_list->AddLine(ImVec2(center_x, center_y - 10), ImVec2(center_x, center_y + 10), crosshair_color, 2.0f);
-                
-                // Draw center circle
-                draw_list->AddCircle(ImVec2(center_x, center_y), 3.0f, crosshair_color, 0, 2.0f);
-                
-                // Always show debug info
-                char debug_info[256];
-                snprintf(debug_info, sizeof(debug_info), "Debug: Aim=%d, Shoot=%d, Enabled=%d", 
-                        ctx.aiming.load() ? 1 : 0, 
-                        ctx.shooting.load() ? 1 : 0,
-                        ctx.config.enable_aim_shoot_offset ? 1 : 0);
-                draw_list->AddText(ImVec2(image_pos.x + 10, image_pos.y + 10), IM_COL32(255, 255, 0, 255), debug_info);
-                
-                // Show current offset info
-                if (ctx.config.enable_aim_shoot_offset) {
-                    const char* offset_text = is_aim_shoot_active ? "Aim+Shoot Offset Active" : "Normal Offset Active";
-                    ImU32 text_color = is_aim_shoot_active ? IM_COL32(255, 128, 0, 255) : IM_COL32(255, 255, 255, 255);
-                    
-                    // Display current offset status
-                    draw_list->AddText(ImVec2(image_pos.x + 10, image_pos.y + 30), text_color, offset_text);
-                    
-                    // Show offset values
-                    char offset_info[256];
-                    if (is_aim_shoot_active) {
-                        snprintf(offset_info, sizeof(offset_info), "Offset: X=%.0f, Y=%.0f", 
-                                ctx.config.aim_shoot_offset_x, ctx.config.aim_shoot_offset_y);
+
+                    bool is_aim_shoot_active = ctx.config.enable_aim_shoot_offset && ctx.aiming.load() && ctx.shooting.load();
+                    ImU32 crosshair_color = is_aim_shoot_active ? IM_COL32(255, 128, 0, 255) : IM_COL32(255, 255, 255, 255);
+
+                    draw_list->AddLine(ImVec2(center_x - 10, center_y), ImVec2(center_x + 10, center_y), crosshair_color, 2.0f);
+                    draw_list->AddLine(ImVec2(center_x, center_y - 10), ImVec2(center_x, center_y + 10), crosshair_color, 2.0f);
+                    draw_list->AddCircle(ImVec2(center_x, center_y), 3.0f, crosshair_color, 0, 2.0f);
+
+                    char debug_info[256];
+                    snprintf(debug_info, sizeof(debug_info), "Debug: Aim=%d, Shoot=%d, Enabled=%d",
+                             ctx.aiming.load() ? 1 : 0,
+                             ctx.shooting.load() ? 1 : 0,
+                             ctx.config.enable_aim_shoot_offset ? 1 : 0);
+                    draw_list->AddText(ImVec2(image_pos.x + 10, image_pos.y + 10), IM_COL32(255, 255, 0, 255), debug_info);
+
+                    if (ctx.config.enable_aim_shoot_offset) {
+                        const bool isActive = is_aim_shoot_active;
+                        const char* offset_text = isActive ? "Aim+Shoot Offset Active" : "Normal Offset Active";
+                        ImU32 text_color = isActive ? IM_COL32(255, 128, 0, 255) : IM_COL32(255, 255, 255, 255);
+                        draw_list->AddText(ImVec2(image_pos.x + 10, image_pos.y + 30), text_color, offset_text);
+
+                        char offset_info[256];
+                        if (isActive) {
+                            snprintf(offset_info, sizeof(offset_info), "Offset: X=%.0f, Y=%.0f",
+                                     ctx.config.aim_shoot_offset_x, ctx.config.aim_shoot_offset_y);
+                        } else {
+                            snprintf(offset_info, sizeof(offset_info), "Offset: X=%.0f, Y=%.0f",
+                                     ctx.config.crosshair_offset_x, ctx.config.crosshair_offset_y);
+                        }
+                        draw_list->AddText(ImVec2(image_pos.x + 10, image_pos.y + 50), text_color, offset_info);
                     } else {
-                        snprintf(offset_info, sizeof(offset_info), "Offset: X=%.0f, Y=%.0f", 
-                                ctx.config.crosshair_offset_x, ctx.config.crosshair_offset_y);
+                        draw_list->AddText(ImVec2(image_pos.x + 10, image_pos.y + 30), IM_COL32(255, 255, 255, 255), "Normal Offset Active");
+                        char offset_info[256];
+                        snprintf(offset_info, sizeof(offset_info), "Offset: X=%.0f, Y=%.0f",
+                                 ctx.config.crosshair_offset_x, ctx.config.crosshair_offset_y);
+                        draw_list->AddText(ImVec2(image_pos.x + 10, image_pos.y + 50), IM_COL32(255, 255, 255, 255), offset_info);
                     }
-                    draw_list->AddText(ImVec2(image_pos.x + 10, image_pos.y + 50), text_color, offset_info);
-                } else {
-                    // Show normal offset when aim+shoot is disabled
-                    draw_list->AddText(ImVec2(image_pos.x + 10, image_pos.y + 30), IM_COL32(255, 255, 255, 255), "Normal Offset Active");
-                    char offset_info[256];
-                    snprintf(offset_info, sizeof(offset_info), "Offset: X=%.0f, Y=%.0f", 
-                            ctx.config.crosshair_offset_x, ctx.config.crosshair_offset_y);
-                    draw_list->AddText(ImVec2(image_pos.x + 10, image_pos.y + 50), IM_COL32(255, 255, 255, 255), offset_info);
                 }
-                }  // Close the else block for texture validation
             } else {
                 ImGui::TextUnformatted("Preview texture unavailable for display.");
             }
-            }  // Close the mutex lock scope
-    }  // Close the if (ctx.config.show_window) block
-
+        } else {
+            std::lock_guard<std::mutex> lock(g_debugTexMutex);
+            if (g_debugSRV) {
+                g_debugSRV->Release();
+                g_debugSRV = nullptr;
+            }
+            if (g_debugTex) {
+                g_debugTex->Release();
+                g_debugTex = nullptr;
+            }
+            texW = 0;
+            texH = 0;
+        }
+    }
     UIHelpers::EndSettingsSection();
 }
