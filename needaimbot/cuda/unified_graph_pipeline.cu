@@ -357,25 +357,11 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
                        sizeof(MouseMovement), cudaMemcpyDeviceToHost, stream);
         
         // 마우스 이동 콜백을 Graph에 포함 - 복사 완료 후 자동 실행
-        cudaLaunchHostFunc(stream,
-            [](void* userData) {
-                auto* pipeline = static_cast<UnifiedGraphPipeline*>(userData);
-                auto& ctx = AppContext::getInstance();
-
-                if (!ctx.aiming || !pipeline->m_h_movement || !pipeline->m_h_movement->get()) {
-                    return;
-                }
-
-                const MouseMovement* movement = pipeline->m_h_movement->get();
-
-                if (movement->dx != 0 || movement->dy != 0) {
-                    executeMouseMovement(movement->dx, movement->dy);
-                }
-
-                pipeline->markFrameCompleted();
-            }, this);
+        if (!enqueueFrameCompletionCallback(stream)) {
+            std::cerr << "[UnifiedGraph] Failed to attach completion callback during graph capture" << std::endl;
+        }
     }
-    
+
     err = cudaStreamEndCapture(stream, &m_graph);
     if (err != cudaSuccess) {
         std::cerr << "[UnifiedGraph] Failed to end capture: " 
@@ -590,10 +576,13 @@ void UnifiedGraphPipeline::updateProfilingAsync(cudaStream_t stream) {
 
 void UnifiedGraphPipeline::handleAimbotDeactivation() {
     auto& ctx = AppContext::getInstance();
-    
+
     clearCountBuffers();
     clearMovementData();
     clearHostPreviewData(ctx);
+    m_currentFrameStartNs.store(0, std::memory_order_relaxed);
+    m_inferenceInProgress.store(false, std::memory_order_release);
+    m_pendingMovementDispatch.store(false, std::memory_order_release);
 }
 
 void UnifiedGraphPipeline::clearCountBuffers() {
@@ -637,65 +626,155 @@ void UnifiedGraphPipeline::handleAimbotActivation() {
 
     m_state.frameCount = 0;
     m_completedFrames.store(0, std::memory_order_relaxed);
+    m_mouseDispatches.store(0, std::memory_order_relaxed);
+    m_totalInferenceTimeNs.store(0, std::memory_order_relaxed);
+    m_lastInferenceLatencyNs.store(0, std::memory_order_relaxed);
+    m_currentFrameStartNs.store(0, std::memory_order_relaxed);
+    m_inferenceInProgress.store(false, std::memory_order_release);
+    m_pendingMovementDispatch.store(false, std::memory_order_release);
 }
 
 void UnifiedGraphPipeline::markFrameCompleted() {
+    auto now = std::chrono::high_resolution_clock::now();
+    uint64_t endNs = std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
+    uint64_t startNs = m_currentFrameStartNs.exchange(0, std::memory_order_acq_rel);
+    if (startNs != 0 && endNs > startNs) {
+        uint64_t latency = endNs - startNs;
+        m_totalInferenceTimeNs.fetch_add(latency, std::memory_order_relaxed);
+        m_lastInferenceLatencyNs.store(latency, std::memory_order_relaxed);
+    }
+
     m_completedFrames.fetch_add(1, std::memory_order_relaxed);
+    m_state.frameCount++;
+    m_inferenceInProgress.store(false, std::memory_order_release);
+    m_pendingMovementDispatch.store(false, std::memory_order_release);
+}
+
+bool UnifiedGraphPipeline::enqueueFrameCompletionCallback(cudaStream_t stream) {
+    if (!stream) {
+        return false;
+    }
+
+    cudaError_t err = cudaLaunchHostFunc(stream,
+        [](void* userData) {
+            auto* pipeline = static_cast<UnifiedGraphPipeline*>(userData);
+            if (!pipeline) {
+                return;
+            }
+
+            auto& ctx = AppContext::getInstance();
+
+            bool allowMovement = pipeline->m_pendingMovementDispatch.load(std::memory_order_acquire);
+            pipeline->m_pendingMovementDispatch.store(false, std::memory_order_release);
+
+            if (allowMovement && ctx.aiming && pipeline->m_h_movement && pipeline->m_h_movement->get()) {
+                const MouseMovement* movement = pipeline->m_h_movement->get();
+                if (movement->dx != 0 || movement->dy != 0) {
+                    pipeline->m_mouseDispatches.fetch_add(1, std::memory_order_relaxed);
+                    executeMouseMovement(movement->dx, movement->dy);
+                }
+            } else if (!allowMovement && pipeline->m_h_movement && pipeline->m_h_movement->get()) {
+                pipeline->m_h_movement->get()->dx = 0;
+                pipeline->m_h_movement->get()->dy = 0;
+            }
+
+            pipeline->markFrameCompleted();
+        }, this);
+
+    if (err != cudaSuccess) {
+        std::cerr << "[UnifiedGraph] Failed to enqueue completion callback: "
+                  << cudaGetErrorString(err) << std::endl;
+        m_pendingMovementDispatch.store(false, std::memory_order_release);
+        m_inferenceInProgress.store(false, std::memory_order_release);
+        return false;
+    }
+
+    return true;
 }
 
 bool UnifiedGraphPipeline::executePipelineWithErrorHandling() {
-    // 에러 처리 제거 - GPU가 알아서 처리
-    executeGraphNonBlocking(m_pipelineStream->get());
-
-    if (m_pipelineStream) {
-        cudaError_t syncErr = cudaStreamSynchronize(m_pipelineStream->get());
-        if (syncErr != cudaSuccess) {
-            std::cerr << "[UnifiedGraph] Failed to synchronize pipeline stream: "
-                      << cudaGetErrorString(syncErr) << std::endl;
-            return false;
-        }
+    if (!m_pipelineStream || !m_pipelineStream->get()) {
+        return false;
     }
 
-    return true;  // 항상 성공으로 간주
+    if (m_inferenceInProgress.load(std::memory_order_acquire)) {
+        if (m_state.endEvent && m_state.endEvent->get()) {
+            cudaError_t queryStatus = cudaEventQuery(m_state.endEvent->get());
+            if (queryStatus != cudaSuccess && queryStatus != cudaErrorNotReady) {
+                std::cerr << "[UnifiedGraph] Event query failed: "
+                          << cudaGetErrorString(queryStatus) << std::endl;
+            }
+        }
+
+        std::this_thread::yield();
+        return true;
+    }
+
+    if (!executeGraphNonBlocking(m_pipelineStream->get())) {
+        m_inferenceInProgress.store(false, std::memory_order_release);
+        m_currentFrameStartNs.store(0, std::memory_order_relaxed);
+        return false;
+    }
+
+    if (m_state.endEvent && m_state.endEvent->get()) {
+        m_state.endEvent->record(m_pipelineStream->get());
+    }
+
+    auto launchTime = std::chrono::high_resolution_clock::now();
+    uint64_t launchNs = std::chrono::duration_cast<std::chrono::nanoseconds>(launchTime.time_since_epoch()).count();
+    m_currentFrameStartNs.store(launchNs, std::memory_order_release);
+
+    m_inferenceInProgress.store(true, std::memory_order_release);
+    return true;
 }
 
 void UnifiedGraphPipeline::runMainLoop() {
     auto& ctx = AppContext::getInstance();
 
     m_lastFrameTime = std::chrono::high_resolution_clock::now();
-    auto fpsLastLogTime = m_lastFrameTime;
+    auto statsLastLogTime = m_lastFrameTime;
     uint64_t framesAtLastLog = m_completedFrames.load(std::memory_order_relaxed);
+    uint64_t mouseAtLastLog = m_mouseDispatches.load(std::memory_order_relaxed);
+    uint64_t inferenceTimeAtLastLog = m_totalInferenceTimeNs.load(std::memory_order_relaxed);
 
-    auto flushAverageFps = [&](std::chrono::high_resolution_clock::time_point now, bool force) {
-        uint64_t completedFrames = m_completedFrames.load(std::memory_order_relaxed);
-        uint64_t producedFrames = completedFrames - framesAtLastLog;
-
-        if (producedFrames == 0) {
-            fpsLastLogTime = now;
-            framesAtLastLog = completedFrames;
-            return;
-        }
-
-        auto elapsed = now - fpsLastLogTime;
+    auto logPerformanceStats = [&](std::chrono::high_resolution_clock::time_point now, bool force) {
+        auto elapsed = now - statsLastLogTime;
         if (!force && elapsed < std::chrono::seconds(2)) {
             return;
         }
 
         double seconds = std::chrono::duration<double>(elapsed).count();
         if (seconds <= 0.0) {
-            fpsLastLogTime = now;
-            framesAtLastLog = completedFrames;
+            statsLastLogTime = now;
             return;
         }
 
-        std::ostringstream fpsStream;
-        fpsStream << std::fixed << std::setprecision(2)
-                  << "[UnifiedGraph] Average FPS over last " << producedFrames
-                  << " frames: " << (static_cast<double>(producedFrames) / seconds);
-        std::cout << fpsStream.str() << std::endl;
+        uint64_t completedFrames = m_completedFrames.load(std::memory_order_relaxed);
+        uint64_t producedFrames = completedFrames - framesAtLastLog;
+        uint64_t mouseDispatches = m_mouseDispatches.load(std::memory_order_relaxed);
+        uint64_t mouseDelta = mouseDispatches - mouseAtLastLog;
+        uint64_t totalInferenceNs = m_totalInferenceTimeNs.load(std::memory_order_relaxed);
+        uint64_t inferenceDelta = totalInferenceNs - inferenceTimeAtLastLog;
 
-        fpsLastLogTime = now;
+        double avgLatencyMs = 0.0;
+        if (producedFrames > 0 && inferenceDelta > 0) {
+            avgLatencyMs = static_cast<double>(inferenceDelta) / static_cast<double>(producedFrames) / 1'000'000.0;
+        }
+        double lastLatencyMs = static_cast<double>(m_lastInferenceLatencyNs.load(std::memory_order_relaxed)) / 1'000'000.0;
+        double mouseFps = static_cast<double>(mouseDelta) / seconds;
+
+        std::ostringstream statStream;
+        statStream << std::fixed << std::setprecision(2)
+                   << "[UnifiedGraph] Inference avg latency: " << avgLatencyMs << " ms"
+                   << " (last: " << lastLatencyMs << " ms, frames: " << producedFrames << ")"
+                   << ", Mouse update rate: " << mouseFps << " FPS (" << mouseDelta
+                   << " updates over " << seconds << " s)";
+        std::cout << statStream.str() << std::endl;
+
+        statsLastLogTime = now;
         framesAtLastLog = completedFrames;
+        mouseAtLastLog = mouseDispatches;
+        inferenceTimeAtLastLog = totalInferenceNs;
     };
 
     bool wasAiming = false;
@@ -713,9 +792,11 @@ void UnifiedGraphPipeline::runMainLoop() {
         if (!ctx.aiming) {
             if (wasAiming) {
                 auto now = std::chrono::high_resolution_clock::now();
-                flushAverageFps(now, true);
-                fpsLastLogTime = now;
+                logPerformanceStats(now, true);
+                statsLastLogTime = now;
                 framesAtLastLog = m_completedFrames.load(std::memory_order_relaxed);
+                mouseAtLastLog = m_mouseDispatches.load(std::memory_order_relaxed);
+                inferenceTimeAtLastLog = m_totalInferenceTimeNs.load(std::memory_order_relaxed);
                 handleAimbotDeactivation();
                 wasAiming = false;
             }
@@ -727,30 +808,36 @@ void UnifiedGraphPipeline::runMainLoop() {
             handleAimbotActivation();
             wasAiming = true;
             m_lastFrameTime = std::chrono::high_resolution_clock::now();
-            fpsLastLogTime = m_lastFrameTime;
+            statsLastLogTime = m_lastFrameTime;
             framesAtLastLog = m_completedFrames.load(std::memory_order_relaxed);
+            mouseAtLastLog = m_mouseDispatches.load(std::memory_order_relaxed);
+            inferenceTimeAtLastLog = m_totalInferenceTimeNs.load(std::memory_order_relaxed);
         }
 
         while (ctx.aiming && !m_shouldStop && !ctx.should_exit) {
             executePipelineWithErrorHandling();
 
             auto now = std::chrono::high_resolution_clock::now();
-            flushAverageFps(now, false);
+            logPerformanceStats(now, false);
             m_lastFrameTime = now;
         }
 
         if (wasAiming && (m_shouldStop || ctx.should_exit)) {
             auto now = std::chrono::high_resolution_clock::now();
-            flushAverageFps(now, true);
-            fpsLastLogTime = now;
+            logPerformanceStats(now, true);
+            statsLastLogTime = now;
             framesAtLastLog = m_completedFrames.load(std::memory_order_relaxed);
+            mouseAtLastLog = m_mouseDispatches.load(std::memory_order_relaxed);
+            inferenceTimeAtLastLog = m_totalInferenceTimeNs.load(std::memory_order_relaxed);
         }
 
         if (wasAiming && !ctx.aiming) {
             auto now = std::chrono::high_resolution_clock::now();
-            flushAverageFps(now, true);
-            fpsLastLogTime = now;
+            logPerformanceStats(now, true);
+            statsLastLogTime = now;
             framesAtLastLog = m_completedFrames.load(std::memory_order_relaxed);
+            mouseAtLastLog = m_mouseDispatches.load(std::memory_order_relaxed);
+            inferenceTimeAtLastLog = m_totalInferenceTimeNs.load(std::memory_order_relaxed);
             handleAimbotDeactivation();
             wasAiming = false;
         }
@@ -758,7 +845,7 @@ void UnifiedGraphPipeline::runMainLoop() {
 
     if (wasAiming) {
         auto now = std::chrono::high_resolution_clock::now();
-        flushAverageFps(now, true);
+        logPerformanceStats(now, true);
     }
 
 }
@@ -1688,6 +1775,35 @@ bool UnifiedGraphPipeline::getPreviewSnapshot(SimpleMat& outFrame) {
                                      m_preview.previewBuffer.channels());
     }
 
+    if (m_preview.copyInProgress) {
+        if (m_previewReadyEvent && m_previewReadyEvent->get()) {
+            cudaError_t queryStatus = cudaEventQuery(m_previewReadyEvent->get());
+            if (queryStatus == cudaSuccess) {
+                m_preview.copyInProgress = false;
+                outFrame = m_preview.hostPreview;
+                return true;
+            }
+
+            if (queryStatus != cudaErrorNotReady) {
+                std::cerr << "[Preview] Event query failed: " << cudaGetErrorString(queryStatus) << std::endl;
+                m_preview.copyInProgress = false;
+            }
+        } else if (m_pipelineStream && m_pipelineStream->get()) {
+            cudaError_t queryStatus = cudaStreamQuery(m_pipelineStream->get());
+            if (queryStatus == cudaSuccess) {
+                m_preview.copyInProgress = false;
+                outFrame = m_preview.hostPreview;
+                return true;
+            }
+
+            if (queryStatus != cudaErrorNotReady) {
+                std::cerr << "[Preview] Stream query failed: " << cudaGetErrorString(queryStatus) << std::endl;
+                m_preview.copyInProgress = false;
+            }
+        }
+        return false;
+    }
+
     size_t rowBytes = static_cast<size_t>(m_preview.previewBuffer.cols()) * m_preview.previewBuffer.channels();
     cudaError_t copyErr = cudaMemcpy2DAsync(
         m_preview.hostPreview.data(),
@@ -1703,14 +1819,12 @@ bool UnifiedGraphPipeline::getPreviewSnapshot(SimpleMat& outFrame) {
         return false;
     }
 
-    copyErr = cudaStreamSynchronize(m_pipelineStream->get());
-    if (copyErr != cudaSuccess) {
-        std::cerr << "[Preview] Failed to synchronize preview copy: " << cudaGetErrorString(copyErr) << std::endl;
-        return false;
+    if (m_previewReadyEvent && m_previewReadyEvent->get()) {
+        m_previewReadyEvent->record(m_pipelineStream->get());
     }
 
-    outFrame = m_preview.hostPreview;
-    return true;
+    m_preview.copyInProgress = true;
+    return false;
 }
 
 bool UnifiedGraphPipeline::performInference() {
@@ -1763,15 +1877,20 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
     if (ctx.config.use_cuda_graph && m_state.graphReady && m_graphExec) {
         // Graph 실행 전에 직접 통합 버퍼로 캡처 (중복 복사 제거)
         if (!performFrameCaptureDirectToUnified()) {
+            m_pendingMovementDispatch.store(false, std::memory_order_release);
             return false;
         }
-        
+
+        bool shouldDispatchMovement = m_config.enableDetection && !ctx.detection_paused.load();
+        m_pendingMovementDispatch.store(shouldDispatchMovement, std::memory_order_release);
+
         // Graph 실행 - 에러 체크 추가
         cudaStream_t launchStream = stream ? stream : m_pipelineStream->get();
         cudaError_t launchErr = cudaGraphLaunch(m_graphExec, launchStream);
         if (launchErr != cudaSuccess) {
             std::cerr << "[UnifiedGraph] Graph launch failed: "
                       << cudaGetErrorString(launchErr) << std::endl;
+            m_pendingMovementDispatch.store(false, std::memory_order_release);
             return false;
         }
 
@@ -1804,46 +1923,34 @@ bool UnifiedGraphPipeline::executeNormalPipeline(cudaStream_t stream) {
         return false;
     }
     
-    if (!ctx.detection_paused.load()) {
+    bool shouldRunDetection = m_config.enableDetection && !ctx.detection_paused.load();
+
+    if (shouldRunDetection) {
         if (!performPreprocessing()) {
             return false;
         }
-        
+
         if (!performInference()) {
             return false;
         }
-        
+
         // 후처리
         performIntegratedPostProcessing(m_pipelineStream->get());
         performTargetSelection(m_pipelineStream->get());
-        
+
         // 결과 복사
         cudaMemcpyAsync(m_h_movement->get(), m_smallBufferArena.mouseMovement,
                        sizeof(MouseMovement), cudaMemcpyDeviceToHost, m_pipelineStream->get());
-        
-        // 마우스 이동 콜백 - 복사 완료 후 자동 실행
-        cudaLaunchHostFunc(m_pipelineStream->get(),
-            [](void* userData) {
-                auto* pipeline = static_cast<UnifiedGraphPipeline*>(userData);
-                auto& ctx = AppContext::getInstance();
-
-                if (!ctx.aiming || !pipeline->m_h_movement || !pipeline->m_h_movement->get()) {
-                    return;
-                }
-
-                const MouseMovement* movement = pipeline->m_h_movement->get();
-
-                if (movement->dx != 0 || movement->dy != 0) {
-                    executeMouseMovement(movement->dx, movement->dy);
-                }
-
-                pipeline->markFrameCompleted();
-            }, this);
     }
-    
+
+    m_pendingMovementDispatch.store(shouldRunDetection, std::memory_order_release);
+    if (!enqueueFrameCompletionCallback(m_pipelineStream->get())) {
+        return false;
+    }
+
     // 프레임 카운트 제거
     m_hasFrameData = false;
-    
+
     return true;
 }
 
