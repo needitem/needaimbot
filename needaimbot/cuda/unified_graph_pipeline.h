@@ -403,6 +403,7 @@ private:
     void handleAimbotActivation();
 
     bool enqueueFrameCompletionCallback(cudaStream_t stream);
+    bool enqueueMovementResetCallback(cudaStream_t stream);
 
     bool updateDDACaptureRegion(const AppContext& ctx);
     bool performFrameCapture();
