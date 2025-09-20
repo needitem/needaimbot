@@ -277,6 +277,8 @@ public:
     
     bool hasNewFrameData() const { return m_state.frameCount > m_lastUIReadFrame; }
     void markUIFrameRead() { m_lastUIReadFrame = m_state.frameCount; }
+
+    void markFrameCompleted();
     
 private:
     mutable std::atomic<uint64_t> m_lastUIReadFrame{0};
@@ -351,6 +353,8 @@ private:
     
     std::atomic<int> m_currentPipelineIdx{0};
     std::atomic<int> m_prevPipelineIdx{2};
+
+    std::atomic<uint64_t> m_completedFrames{0};
     
     std::atomic<bool> m_shouldStop{false};
     std::chrono::high_resolution_clock::time_point m_lastFrameTime;
