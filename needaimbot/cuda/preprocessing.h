@@ -40,6 +40,6 @@ extern "C" cudaError_t cuda_bgra2rgba(const uint8_t* src, uint8_t* dst,
  * 3. 정규화 (0-255 → 0.0-1.0)
  * 4. 채널 순서 변경 (HWC → CHW)
  * 
- * 입력: BGRA uchar4 형식 (Desktop Duplication 출력)
+ * 입력: BGRA uchar4 형식 (NVFBC 출력)
  * 출력: RGB float CHW 형식 (YOLO 모델 입력)
  */

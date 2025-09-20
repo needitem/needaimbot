@@ -93,9 +93,11 @@ public:
     // Get capture dimensions
     int GetWidth() const { return m_captureWidth; }
     int GetHeight() const { return m_captureHeight; }
+    int GetScreenWidth() const { return m_screenWidth; }
+    int GetScreenHeight() const { return m_screenHeight; }
 
     // Set capture region (x, y, width, height)
-    void SetCaptureRegion(int x, int y, int width, int height);
+    bool SetCaptureRegion(int x, int y, int width, int height);
 
     // Get current capture region
     void GetCaptureRegion(int* x, int* y, int* width, int* height) const;

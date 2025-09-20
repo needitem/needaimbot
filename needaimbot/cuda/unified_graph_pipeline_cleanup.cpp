@@ -3,7 +3,6 @@
 #include <iostream>
 #include <mutex>
 #include <cuda_runtime.h>
-#include <d3d11.h>
 
 namespace needaimbot {
 
@@ -55,40 +54,6 @@ void UnifiedGraphPipeline::shutdown() {
         cudaDeviceGraphMemTrim(0);
     }
     
-    // Clear D3D11 resources explicitly before CUDA cleanup
-    if (m_cudaResource) {
-        cudaGraphicsUnregisterResource(m_cudaResource);
-        m_cudaResource = nullptr;
-    }
-    
-    // Release D3D11 texture references
-    if (m_captureTextureD3D) {
-        ID3D11Texture2D* texture = static_cast<ID3D11Texture2D*>(m_captureTextureD3D);
-        if (texture) {
-            texture->Release();
-            m_captureTextureD3D = nullptr;
-        }
-    }
-    
-    // Release D3D11 context and device references
-    if (m_d3dContext) {
-        ID3D11DeviceContext* context = static_cast<ID3D11DeviceContext*>(m_d3dContext);
-        if (context) {
-            context->ClearState();  // Clear all bindings
-            context->Flush();       // Flush pending commands
-            context->Release();
-            m_d3dContext = nullptr;
-        }
-    }
-    
-    if (m_d3dDevice) {
-        ID3D11Device* device = static_cast<ID3D11Device*>(m_d3dDevice);
-        if (device) {
-            device->Release();
-            m_d3dDevice = nullptr;
-        }
-    }
-    
     // RAII wrappers automatically handle stream cleanup  
     m_pipelineStream.reset();  // Synchronize and destroy pipeline stream
     
@@ -107,11 +72,13 @@ void UnifiedGraphPipeline::shutdown() {
     
     // Clear capture buffer
     m_captureBuffer.release();
-    
+
     // Clean up graph and buffers
     cleanupGraph();
     deallocateBuffers();
-    
+
+    m_nvfbcCapture = nullptr;
+
     // Clear GPU memory pools but don't reset device
     cudaError_t err = cudaMemPoolTrimTo(nullptr, 0);
     if (err == cudaSuccess) {
