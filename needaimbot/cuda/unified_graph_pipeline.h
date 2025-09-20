@@ -331,6 +331,11 @@ private:
     std::unique_ptr<CudaMemory<float>> m_d_outputBuffer;
     
     std::unique_ptr<CudaPinnedMemory<MouseMovement>> m_h_movement;
+    std::unique_ptr<CudaPinnedMemory<unsigned char>> m_h_allowFlags;
+    std::unique_ptr<CudaPinnedMemory<int>> m_h_debugDecodedCount;
+    std::unique_ptr<CudaPinnedMemory<int>> m_h_debugFinalCount;
+    std::unique_ptr<CudaPinnedMemory<int>> m_h_debugBestIndex;
+    std::unique_ptr<CudaPinnedMemory<Target>> m_h_debugBestTarget;
     
     float* m_externalOutputBuffer = nullptr;
 

@@ -19,6 +19,8 @@
 #include <numeric>
 #include <iomanip>
 #include <limits>
+#include <mutex>
+#include <cstring>
 #include <cuda.h>
 
 // Forward declare the mouse control function
@@ -346,12 +348,60 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
             [](void* userData) {
                 auto* pipeline = static_cast<UnifiedGraphPipeline*>(userData);
                 auto& ctx = AppContext::getInstance();
-                
+
                 if (!ctx.aiming || !pipeline->m_h_movement || !pipeline->m_h_movement->get()) {
                     return;
                 }
-                
+
                 const MouseMovement* movement = pipeline->m_h_movement->get();
+                const int decodedCount = (pipeline->m_h_debugDecodedCount && pipeline->m_h_debugDecodedCount->get())
+                    ? *pipeline->m_h_debugDecodedCount->get()
+                    : -1;
+                const int finalCount = (pipeline->m_h_debugFinalCount && pipeline->m_h_debugFinalCount->get())
+                    ? *pipeline->m_h_debugFinalCount->get()
+                    : -1;
+                const int bestIdx = (pipeline->m_h_debugBestIndex && pipeline->m_h_debugBestIndex->get())
+                    ? *pipeline->m_h_debugBestIndex->get()
+                    : -1;
+                const Target* bestTarget = (pipeline->m_h_debugBestTarget && pipeline->m_h_debugBestTarget->get())
+                    ? pipeline->m_h_debugBestTarget->get()
+                    : nullptr;
+
+                const bool zeroMovement = (movement->dx == 0 && movement->dy == 0);
+                static int lastDecoded = std::numeric_limits<int>::min();
+                static int lastFinal = std::numeric_limits<int>::min();
+                static int lastBest = std::numeric_limits<int>::min();
+                static bool lastZeroMovement = false;
+
+                const bool stateChanged = (decodedCount != lastDecoded ||
+                                           finalCount != lastFinal ||
+                                           bestIdx != lastBest ||
+                                           zeroMovement != lastZeroMovement);
+                const bool shouldLog = stateChanged &&
+                    (zeroMovement || bestIdx < 0 || decodedCount > 0 || finalCount > 0);
+
+                if (shouldLog) {
+                    std::cerr << "[GraphDebug] "
+                              << (zeroMovement ? "Zero mouse movement" : "Negative best target index")
+                              << " after graph execution. decodedCount=" << decodedCount
+                              << ", finalTargets=" << finalCount
+                              << ", bestIndex=" << bestIdx;
+                    if (bestTarget) {
+                        std::cerr << ", bestTarget={x=" << bestTarget->x
+                                  << ", y=" << bestTarget->y
+                                  << ", w=" << bestTarget->width
+                                  << ", h=" << bestTarget->height
+                                  << ", conf=" << bestTarget->confidence
+                                  << ", class=" << bestTarget->classId << "}";
+                    }
+                    std::cerr << std::endl;
+
+                    lastDecoded = decodedCount;
+                    lastFinal = finalCount;
+                    lastBest = bestIdx;
+                    lastZeroMovement = zeroMovement;
+                }
+
                 if (movement->dx != 0 || movement->dy != 0) {
                     executeMouseMovement(movement->dx, movement->dy);
                 }
@@ -451,6 +501,34 @@ bool UnifiedGraphPipeline::allocateBuffers() {
         
         
         m_h_movement = std::make_unique<CudaPinnedMemory<MouseMovement>>(1);
+        m_h_allowFlags = std::make_unique<CudaPinnedMemory<unsigned char>>(
+            Constants::MAX_CLASSES_FOR_FILTERING);
+        m_h_debugDecodedCount = std::make_unique<CudaPinnedMemory<int>>(1);
+        m_h_debugFinalCount = std::make_unique<CudaPinnedMemory<int>>(1);
+        m_h_debugBestIndex = std::make_unique<CudaPinnedMemory<int>>(1);
+        m_h_debugBestTarget = std::make_unique<CudaPinnedMemory<Target>>(1);
+
+        if (m_h_allowFlags && m_h_allowFlags->get()) {
+            std::fill_n(m_h_allowFlags->get(),
+                        Constants::MAX_CLASSES_FOR_FILTERING,
+                        static_cast<unsigned char>(0));
+        }
+
+        if (m_h_debugDecodedCount && m_h_debugDecodedCount->get()) {
+            *m_h_debugDecodedCount->get() = 0;
+        }
+        if (m_h_debugFinalCount && m_h_debugFinalCount->get()) {
+            *m_h_debugFinalCount->get() = 0;
+        }
+        if (m_h_debugBestIndex && m_h_debugBestIndex->get()) {
+            *m_h_debugBestIndex->get() = -1;
+        }
+        if (m_h_debugBestTarget && m_h_debugBestTarget->get()) {
+            std::memset(m_h_debugBestTarget->get(), 0, sizeof(Target));
+        }
+
+        m_cachedClassFilter.assign(Constants::MAX_CLASSES_FOR_FILTERING, 0);
+        m_classFilterDirty = true;
         
         {
             std::lock_guard<std::mutex> previewLock(m_previewMutex);
@@ -466,24 +544,6 @@ bool UnifiedGraphPipeline::allocateBuffers() {
         gpuMemory += unifiedArenaSize;
         if (m_preview.enabled) {
             gpuMemory += width * height * 4 * sizeof(unsigned char);
-        }
-        
-        // Pinned Memory 힌트 추가 - GPU 메모리 상주 최적화
-        if (m_unifiedArena.megaArena && m_unifiedArena.megaArena->get()) {
-            // GPU 0번 디바이스에 메모리 선호 위치 설정
-            cudaMemAdvise(m_unifiedArena.megaArena->get(), unifiedArenaSize,
-                         cudaMemAdviseSetPreferredLocation, 0);
-            // GPU 0번 디바이스에서 접근 예정임을 알림
-            cudaMemAdvise(m_unifiedArena.megaArena->get(), unifiedArenaSize,
-                         cudaMemAdviseSetAccessedBy, 0);
-        }
-        
-        // Small buffer arena에도 동일한 힌트 적용
-        if (m_smallBufferArena.arenaBuffer && m_smallBufferArena.arenaBuffer->get()) {
-            cudaMemAdvise(m_smallBufferArena.arenaBuffer->get(), arenaSize,
-                         cudaMemAdviseSetPreferredLocation, 0);
-            cudaMemAdvise(m_smallBufferArena.arenaBuffer->get(), arenaSize,
-                         cudaMemAdviseSetAccessedBy, 0);
         }
         
         return true;
@@ -513,8 +573,15 @@ void UnifiedGraphPipeline::deallocateBuffers() {
     m_d_inferenceOutput.reset();
     m_d_preprocessBuffer.reset();
     m_d_outputBuffer.reset();
-    
+
     m_h_movement.reset();
+    m_h_allowFlags.reset();
+    m_h_debugDecodedCount.reset();
+    m_h_debugFinalCount.reset();
+    m_h_debugBestIndex.reset();
+    m_h_debugBestTarget.reset();
+    m_cachedClassFilter.clear();
+    m_classFilterDirty = true;
     
     m_inputBindings.clear();
     m_outputBindings.clear();
@@ -1086,24 +1153,60 @@ bool UnifiedGraphPipeline::validateYoloDecodeBuffers(int maxDecodedTargets, int 
 }
 
 void UnifiedGraphPipeline::updateClassFilterIfNeeded(cudaStream_t stream) {
-    if (!m_classFilterDirty || !m_smallBufferArena.allowFlags) {
+    if (!m_smallBufferArena.allowFlags) {
         return;
     }
-    
-    auto& ctx = AppContext::getInstance();
-    unsigned char h_allowFlags[Constants::MAX_CLASSES_FOR_FILTERING];
-    memset(h_allowFlags, 0, Constants::MAX_CLASSES_FOR_FILTERING);
-    
-    for (const auto& setting : ctx.config.class_settings) {
-        if (setting.id >= 0 && setting.id < Constants::MAX_CLASSES_FOR_FILTERING) {
-            h_allowFlags[setting.id] = setting.allow ? 1 : 0;
+
+    if (!m_classFilterDirty) {
+        return;
+    }
+
+    if (!m_h_allowFlags || m_h_allowFlags->size() < Constants::MAX_CLASSES_FOR_FILTERING) {
+        m_h_allowFlags = std::make_unique<CudaPinnedMemory<unsigned char>>(
+            Constants::MAX_CLASSES_FOR_FILTERING);
+        if (m_h_allowFlags && m_h_allowFlags->get()) {
+            std::fill_n(m_h_allowFlags->get(),
+                        Constants::MAX_CLASSES_FOR_FILTERING,
+                        static_cast<unsigned char>(0));
         }
     }
-    
-    m_cachedClassFilter.assign(h_allowFlags, h_allowFlags + Constants::MAX_CLASSES_FOR_FILTERING);
-    cudaMemcpyAsync(m_smallBufferArena.allowFlags, h_allowFlags, 
-                   Constants::MAX_CLASSES_FOR_FILTERING * sizeof(unsigned char), 
-                   cudaMemcpyHostToDevice, stream);
+
+    unsigned char* hostFlags = m_h_allowFlags ? m_h_allowFlags->get() : nullptr;
+    if (!hostFlags) {
+        std::cerr << "[Pipeline] Failed to allocate host class filter buffer" << std::endl;
+        return;
+    }
+
+    auto& ctx = AppContext::getInstance();
+    {
+        std::lock_guard<std::mutex> lock(ctx.configMutex);
+        std::fill_n(hostFlags,
+                    Constants::MAX_CLASSES_FOR_FILTERING,
+                    static_cast<unsigned char>(0));
+
+        for (const auto& setting : ctx.config.class_settings) {
+            if (setting.id >= 0 && setting.id < Constants::MAX_CLASSES_FOR_FILTERING) {
+                hostFlags[setting.id] = setting.allow ? 1 : 0;
+            }
+        }
+    }
+
+    m_cachedClassFilter.assign(hostFlags,
+                               hostFlags + Constants::MAX_CLASSES_FOR_FILTERING);
+
+    cudaError_t copyErr = cudaMemcpyAsync(
+        m_smallBufferArena.allowFlags,
+        hostFlags,
+        Constants::MAX_CLASSES_FOR_FILTERING * sizeof(unsigned char),
+        cudaMemcpyHostToDevice,
+        stream);
+
+    if (copyErr != cudaSuccess) {
+        std::cerr << "[Pipeline] Failed to upload class filter flags: "
+                  << cudaGetErrorString(copyErr) << std::endl;
+        return;
+    }
+
     m_classFilterDirty = false;
 }
 
@@ -1137,14 +1240,40 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
     }
     
     // Direct use of decoded targets as final (no NMS needed for aimbot)
-    if (m_unifiedArena.finalTargets && m_smallBufferArena.finalTargetsCount && 
+    if (m_unifiedArena.finalTargets && m_smallBufferArena.finalTargetsCount &&
         m_unifiedArena.decodedTargets && m_smallBufferArena.decodedCount) {
-        
-        cudaMemcpyAsync(m_smallBufferArena.finalTargetsCount, m_smallBufferArena.decodedCount, sizeof(int), 
+
+        cudaMemcpyAsync(m_smallBufferArena.finalTargetsCount, m_smallBufferArena.decodedCount, sizeof(int),
                        cudaMemcpyDeviceToDevice, stream);
-        
-        cudaMemcpyAsync(m_unifiedArena.finalTargets, m_unifiedArena.decodedTargets, 
+
+        cudaMemcpyAsync(m_unifiedArena.finalTargets, m_unifiedArena.decodedTargets,
                        config.max_detections * sizeof(Target), cudaMemcpyDeviceToDevice, stream);
+    }
+
+    if (m_h_debugDecodedCount && m_h_debugDecodedCount->get() && m_smallBufferArena.decodedCount) {
+        cudaError_t debugCopyErr = cudaMemcpyAsync(
+            m_h_debugDecodedCount->get(),
+            m_smallBufferArena.decodedCount,
+            sizeof(int),
+            cudaMemcpyDeviceToHost,
+            stream);
+        if (debugCopyErr != cudaSuccess) {
+            std::cerr << "[Pipeline] Failed to copy decoded count for debug: "
+                      << cudaGetErrorString(debugCopyErr) << std::endl;
+        }
+    }
+
+    if (m_h_debugFinalCount && m_h_debugFinalCount->get() && m_smallBufferArena.finalTargetsCount) {
+        cudaError_t debugCopyErr = cudaMemcpyAsync(
+            m_h_debugFinalCount->get(),
+            m_smallBufferArena.finalTargetsCount,
+            sizeof(int),
+            cudaMemcpyDeviceToHost,
+            stream);
+        if (debugCopyErr != cudaSuccess) {
+            std::cerr << "[Pipeline] Failed to copy final target count for debug: "
+                      << cudaGetErrorString(debugCopyErr) << std::endl;
+        }
     }
 }
 
@@ -1188,6 +1317,12 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
     const int blockSize = 256;
     const int gridSize = (cached_max_detections + blockSize - 1) / blockSize;
     
+    cudaError_t staleError = cudaGetLastError();
+    if (staleError != cudaSuccess) {
+        std::cerr << "[Pipeline] Clearing stale CUDA error before target selection: "
+                  << cudaGetErrorString(staleError) << std::endl;
+    }
+
     fusedTargetSelectionAndMovementKernel<<<gridSize, blockSize, 0, stream>>>(
         m_unifiedArena.finalTargets,
         m_smallBufferArena.finalTargetsCount,
@@ -1204,13 +1339,37 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         m_smallBufferArena.bestTarget,
         m_smallBufferArena.mouseMovement
     );
-    
+
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
-        std::cerr << "[Pipeline] Fused kernel launch failed: " << cudaGetErrorString(err) << std::endl;
-        cudaMemsetAsync(m_smallBufferArena.bestTargetIndex, -1, sizeof(int), stream);
-        cudaMemsetAsync(m_smallBufferArena.bestTarget, 0, sizeof(Target), stream);
-        cudaMemsetAsync(m_smallBufferArena.mouseMovement, 0, sizeof(MouseMovement), stream);
+        std::cerr << "[Pipeline] Fused kernel launch failed: "
+                  << cudaGetErrorString(err) << std::endl;
+    }
+
+    if (m_h_debugBestIndex && m_h_debugBestIndex->get() && m_smallBufferArena.bestTargetIndex) {
+        cudaError_t debugCopyErr = cudaMemcpyAsync(
+            m_h_debugBestIndex->get(),
+            m_smallBufferArena.bestTargetIndex,
+            sizeof(int),
+            cudaMemcpyDeviceToHost,
+            stream);
+        if (debugCopyErr != cudaSuccess) {
+            std::cerr << "[Pipeline] Failed to copy best target index for debug: "
+                      << cudaGetErrorString(debugCopyErr) << std::endl;
+        }
+    }
+
+    if (m_h_debugBestTarget && m_h_debugBestTarget->get() && m_smallBufferArena.bestTarget) {
+        cudaError_t debugCopyErr = cudaMemcpyAsync(
+            m_h_debugBestTarget->get(),
+            m_smallBufferArena.bestTarget,
+            sizeof(Target),
+            cudaMemcpyDeviceToHost,
+            stream);
+        if (debugCopyErr != cudaSuccess) {
+            std::cerr << "[Pipeline] Failed to copy best target for debug: "
+                      << cudaGetErrorString(debugCopyErr) << std::endl;
+        }
     }
 }
 
@@ -1563,9 +1722,21 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
             return false;
         }
         
-        // Graph 실행 - 에러 체크 없이 바로 실행
-        cudaGraphLaunch(m_graphExec, stream ? stream : m_pipelineStream->get());
-        
+        // Graph 실행 - 에러 체크 추가
+        cudaStream_t launchStream = stream ? stream : m_pipelineStream->get();
+        cudaError_t launchErr = cudaGraphLaunch(m_graphExec, launchStream);
+        if (launchErr != cudaSuccess) {
+            std::cerr << "[UnifiedGraph] Graph launch failed: "
+                      << cudaGetErrorString(launchErr) << std::endl;
+            return false;
+        }
+
+        cudaError_t postLaunchErr = cudaPeekAtLastError();
+        if (postLaunchErr != cudaSuccess) {
+            std::cerr << "[UnifiedGraph] CUDA error detected immediately after graph launch: "
+                      << cudaGetErrorString(postLaunchErr) << std::endl;
+        }
+
         // Graph 실행 후 preview buffer 업데이트 (Graph 외부에서 처리)
         if (m_preview.enabled && ctx.config.show_window && !m_captureBuffer.empty()) {
             updatePreviewBuffer(m_captureBuffer);
@@ -1611,12 +1782,60 @@ bool UnifiedGraphPipeline::executeNormalPipeline(cudaStream_t stream) {
             [](void* userData) {
                 auto* pipeline = static_cast<UnifiedGraphPipeline*>(userData);
                 auto& ctx = AppContext::getInstance();
-                
+
                 if (!ctx.aiming || !pipeline->m_h_movement || !pipeline->m_h_movement->get()) {
                     return;
                 }
-                
+
                 const MouseMovement* movement = pipeline->m_h_movement->get();
+                const int decodedCount = (pipeline->m_h_debugDecodedCount && pipeline->m_h_debugDecodedCount->get())
+                    ? *pipeline->m_h_debugDecodedCount->get()
+                    : -1;
+                const int finalCount = (pipeline->m_h_debugFinalCount && pipeline->m_h_debugFinalCount->get())
+                    ? *pipeline->m_h_debugFinalCount->get()
+                    : -1;
+                const int bestIdx = (pipeline->m_h_debugBestIndex && pipeline->m_h_debugBestIndex->get())
+                    ? *pipeline->m_h_debugBestIndex->get()
+                    : -1;
+                const Target* bestTarget = (pipeline->m_h_debugBestTarget && pipeline->m_h_debugBestTarget->get())
+                    ? pipeline->m_h_debugBestTarget->get()
+                    : nullptr;
+
+                const bool zeroMovement = (movement->dx == 0 && movement->dy == 0);
+                static int lastDecoded = std::numeric_limits<int>::min();
+                static int lastFinal = std::numeric_limits<int>::min();
+                static int lastBest = std::numeric_limits<int>::min();
+                static bool lastZeroMovement = false;
+
+                const bool stateChanged = (decodedCount != lastDecoded ||
+                                           finalCount != lastFinal ||
+                                           bestIdx != lastBest ||
+                                           zeroMovement != lastZeroMovement);
+                const bool shouldLog = stateChanged &&
+                    (zeroMovement || bestIdx < 0 || decodedCount > 0 || finalCount > 0);
+
+                if (shouldLog) {
+                    std::cerr << "[GraphDebug] "
+                              << (zeroMovement ? "Zero mouse movement" : "Negative best target index")
+                              << " in normal pipeline. decodedCount=" << decodedCount
+                              << ", finalTargets=" << finalCount
+                              << ", bestIndex=" << bestIdx;
+                    if (bestTarget) {
+                        std::cerr << ", bestTarget={x=" << bestTarget->x
+                                  << ", y=" << bestTarget->y
+                                  << ", w=" << bestTarget->width
+                                  << ", h=" << bestTarget->height
+                                  << ", conf=" << bestTarget->confidence
+                                  << ", class=" << bestTarget->classId << "}";
+                    }
+                    std::cerr << std::endl;
+
+                    lastDecoded = decodedCount;
+                    lastFinal = finalCount;
+                    lastBest = bestIdx;
+                    lastZeroMovement = zeroMovement;
+                }
+
                 if (movement->dx != 0 || movement->dy != 0) {
                     executeMouseMovement(movement->dx, movement->dy);
                 }
