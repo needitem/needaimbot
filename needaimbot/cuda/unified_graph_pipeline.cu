@@ -25,6 +25,7 @@
 #include <cstring>
 #include <atomic>
 #include <cuda.h>
+#include <cuda_runtime_api.h>
 
 // Forward declare the mouse control function
 extern "C" {
@@ -212,9 +213,10 @@ __global__ void clearAllDetectionBuffersKernel(
 
 
 UnifiedGraphPipeline::UnifiedGraphPipeline() {
-    m_state.startEvent = std::make_unique<CudaEvent>();
-    m_state.endEvent = std::make_unique<CudaEvent>();
-    
+    constexpr unsigned int kBlockingEventFlags = cudaEventDisableTiming | cudaEventBlockingSync;
+    m_state.startEvent = std::make_unique<CudaEvent>(kBlockingEventFlags);
+    m_state.endEvent = std::make_unique<CudaEvent>(kBlockingEventFlags);
+
 }
 
 
@@ -1904,12 +1906,15 @@ bool UnifiedGraphPipeline::executeGraphNonBlocking(cudaStream_t stream) {
         if (m_preview.enabled && ctx.config.show_window && !m_captureBuffer.empty()) {
             updatePreviewBuffer(m_captureBuffer);
         }
-        
+
         // 프레임 카운트 제거 - 불필요한 CPU 작업
         m_hasFrameData = false;
+        if (m_state.endEvent) {
+            m_state.endEvent->record(launchStream);
+        }
         return true;
     }
-    
+
     // Normal 실행 경로
     return executeNormalPipeline(stream);
 }
