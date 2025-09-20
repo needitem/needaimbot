@@ -27,6 +27,7 @@
 #include "include/other_tools.h"
 #include "core/thread_manager.h"
 #include "core/error_manager.h"
+#include "capture/graphics_capture.h"
 
 
 #ifndef __INTELLISENSE__
@@ -459,8 +460,27 @@ int main()
     if (GetVersionEx((OSVERSIONINFO*)&osvi)) {
     }
     
+    // NVFBC Test
+    std::cout << "\n=== NVFBC Capture Test ===" << std::endl;
+    if (GraphicsCapture::IsNVFBCAvailable()) {
+        std::cout << "✓ NVFBC is available!" << std::endl;
+
+        GraphicsCapture testCapture;
+        if (testCapture.Initialize()) {
+            std::cout << "✓ GraphicsCapture initialized" << std::endl;
+            std::cout << "  - Using NVFBC: " << (testCapture.IsUsingNVFBC() ? "Yes" : "No") << std::endl;
+            std::cout << "  - Resolution: " << testCapture.GetWidth() << "x" << testCapture.GetHeight() << std::endl;
+            testCapture.Shutdown();
+        } else {
+            std::cout << "✗ Failed to initialize GraphicsCapture" << std::endl;
+        }
+    } else {
+        std::cout << "✗ NVFBC is not available (requires RTX GPU with latest drivers)" << std::endl;
+    }
+    std::cout << "========================\n" << std::endl;
+
     auto& ctx = AppContext::getInstance();
-    
+
     // Set up error handling
     ErrorManager::getInstance().setCriticalHandler([](const ErrorManager::ErrorEntry& error) {
         std::cerr << "[CRITICAL ERROR] " << error.component << ": " << error.message << std::endl;
