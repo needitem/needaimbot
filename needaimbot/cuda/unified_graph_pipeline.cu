@@ -451,8 +451,11 @@ bool UnifiedGraphPipeline::allocateBuffers() {
         
         m_h_movement = std::make_unique<CudaPinnedMemory<MouseMovement>>(1);
         
-        // Dynamic preview buffer allocation based on current state
-        updatePreviewBufferAllocation();
+        {
+            std::lock_guard<std::mutex> previewLock(m_previewMutex);
+            // Dynamic preview buffer allocation based on current state
+            updatePreviewBufferAllocation();
+        }
         
         if (!m_captureBuffer.data()) {
             throw std::runtime_error("Capture buffer allocation failed");
@@ -498,6 +501,7 @@ void UnifiedGraphPipeline::deallocateBuffers() {
     
     // Always release preview buffer if allocated
     m_preview.previewBuffer.release();
+    m_preview.hostPreview.release();
     m_preview.finalTargets.clear();
     m_preview.enabled = false;
     
@@ -580,12 +584,16 @@ void UnifiedGraphPipeline::clearMovementData() {
 }
 
 void UnifiedGraphPipeline::clearHostPreviewData(AppContext& ctx) {
-    if (m_preview.enabled) {
-        m_preview.finalTargets.clear();
-        m_preview.finalCount = 0;
-        m_preview.copyInProgress = false;
+    {
+        std::lock_guard<std::mutex> lock(m_previewMutex);
+        if (m_preview.enabled) {
+            m_preview.finalTargets.clear();
+            m_preview.finalCount = 0;
+            m_preview.copyInProgress = false;
+            m_preview.hostPreview.release();
+        }
     }
-    
+
     ctx.clearTargets();
 }
 
@@ -1369,15 +1377,15 @@ void UnifiedGraphPipeline::updatePreviewBufferAllocation() {
     
     // Dynamically allocate/deallocate preview buffer based on show_window state
     if (ctx.config.show_window && !m_preview.enabled) {
-        // Need to allocate preview buffer
         int width = ctx.config.detection_resolution;
         int height = ctx.config.detection_resolution;
         m_preview.previewBuffer.create(height, width, 4);
+        m_preview.hostPreview.create(height, width, 4);
         m_preview.finalTargets.reserve(ctx.config.max_detections);
         m_preview.enabled = true;
     } else if (!ctx.config.show_window && m_preview.enabled) {
-        // Need to deallocate preview buffer
         m_preview.previewBuffer.release();
+        m_preview.hostPreview.release();
         m_preview.finalTargets.clear();
         m_preview.enabled = false;
     }
@@ -1385,24 +1393,83 @@ void UnifiedGraphPipeline::updatePreviewBufferAllocation() {
 
 void UnifiedGraphPipeline::updatePreviewBuffer(const SimpleCudaMat& currentBuffer) {
     auto& ctx = AppContext::getInstance();
-    
+
+    std::lock_guard<std::mutex> lock(m_previewMutex);
+
     // First ensure preview buffer allocation is correct
     updatePreviewBufferAllocation();
-    
+
     // Check both m_preview.enabled AND current show_window state
     if (!m_preview.enabled || !ctx.config.show_window || m_preview.previewBuffer.empty()) {
         return;
     }
-    
-    if (m_preview.previewBuffer.rows() != currentBuffer.rows() || 
-        m_preview.previewBuffer.cols() != currentBuffer.cols() || 
+
+    if (m_preview.previewBuffer.rows() != currentBuffer.rows() ||
+        m_preview.previewBuffer.cols() != currentBuffer.cols() ||
         m_preview.previewBuffer.channels() != currentBuffer.channels()) {
         m_preview.previewBuffer.create(currentBuffer.rows(), currentBuffer.cols(), currentBuffer.channels());
+        m_preview.hostPreview.create(currentBuffer.rows(), currentBuffer.cols(), currentBuffer.channels());
     }
-    
-    size_t dataSize = currentBuffer.rows() * currentBuffer.cols() * currentBuffer.channels() * sizeof(unsigned char);
-    cudaMemcpyAsync(m_preview.previewBuffer.data(), currentBuffer.data(), dataSize, 
-                   cudaMemcpyDeviceToDevice, m_pipelineStream->get());
+
+    size_t dataSize = static_cast<size_t>(currentBuffer.rows()) * currentBuffer.cols() * currentBuffer.channels();
+    cudaError_t copyErr = cudaMemcpyAsync(m_preview.previewBuffer.data(), currentBuffer.data(),
+                                          dataSize * sizeof(unsigned char),
+                                          cudaMemcpyDeviceToDevice, m_pipelineStream->get());
+    if (copyErr != cudaSuccess) {
+        std::cerr << "[Preview] Failed to copy preview buffer: " << cudaGetErrorString(copyErr) << std::endl;
+        return;
+    }
+}
+
+bool UnifiedGraphPipeline::getPreviewSnapshot(SimpleMat& outFrame) {
+    auto& ctx = AppContext::getInstance();
+
+    if (!m_preview.enabled || !ctx.config.show_window) {
+        return false;
+    }
+
+    if (!m_pipelineStream || !m_pipelineStream->get()) {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(m_previewMutex);
+
+    if (m_preview.previewBuffer.empty() || m_preview.previewBuffer.data() == nullptr) {
+        return false;
+    }
+
+    if (m_preview.hostPreview.empty() ||
+        m_preview.hostPreview.rows() != m_preview.previewBuffer.rows() ||
+        m_preview.hostPreview.cols() != m_preview.previewBuffer.cols() ||
+        m_preview.hostPreview.channels() != m_preview.previewBuffer.channels()) {
+        m_preview.hostPreview.create(m_preview.previewBuffer.rows(),
+                                     m_preview.previewBuffer.cols(),
+                                     m_preview.previewBuffer.channels());
+    }
+
+    size_t rowBytes = static_cast<size_t>(m_preview.previewBuffer.cols()) * m_preview.previewBuffer.channels();
+    cudaError_t copyErr = cudaMemcpy2DAsync(
+        m_preview.hostPreview.data(),
+        m_preview.hostPreview.step(),
+        m_preview.previewBuffer.data(),
+        m_preview.previewBuffer.step(),
+        rowBytes,
+        m_preview.previewBuffer.rows(),
+        cudaMemcpyDeviceToHost,
+        m_pipelineStream->get());
+    if (copyErr != cudaSuccess) {
+        std::cerr << "[Preview] Failed to copy preview to host: " << cudaGetErrorString(copyErr) << std::endl;
+        return false;
+    }
+
+    copyErr = cudaStreamSynchronize(m_pipelineStream->get());
+    if (copyErr != cudaSuccess) {
+        std::cerr << "[Preview] Failed to synchronize preview copy: " << cudaGetErrorString(copyErr) << std::endl;
+        return false;
+    }
+
+    outFrame = m_preview.hostPreview;
+    return true;
 }
 
 bool UnifiedGraphPipeline::performInference() {
