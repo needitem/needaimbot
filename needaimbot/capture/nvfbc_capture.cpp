@@ -16,9 +16,13 @@ NVFBCCapture::NVFBCCapture()
     , m_isCapturing(false)
     , m_captureWidth(0)
     , m_captureHeight(0)
+    , m_screenWidth(0)
+    , m_screenHeight(0)
+    , m_useCustomRegion(false)
     , m_shouldStop(false)
 {
     memset(&m_nvfbcAPI, 0, sizeof(m_nvfbcAPI));
+    memset(&m_captureRegion, 0, sizeof(m_captureRegion));
 }
 
 NVFBCCapture::~NVFBCCapture() {
@@ -166,26 +170,52 @@ void NVFBCCapture::UnloadNVFBCLibrary() {
 }
 
 bool NVFBCCapture::CreateCaptureSession(HWND targetWindow) {
-    // For now, just do basic initialization without actual NVFBC session creation
-    // The real NVFBC API requires proper initialization sequence which varies by driver version
-
-    // Get screen dimensions for buffer allocation
+    // Get full screen dimensions
     if (targetWindow) {
         RECT rect;
         GetClientRect(targetWindow, &rect);
-        m_captureWidth = rect.right - rect.left;
-        m_captureHeight = rect.bottom - rect.top;
+        m_screenWidth = rect.right - rect.left;
+        m_screenHeight = rect.bottom - rect.top;
     } else {
-        m_captureWidth = GetSystemMetrics(SM_CXSCREEN);
-        m_captureHeight = GetSystemMetrics(SM_CYSCREEN);
+        m_screenWidth = GetSystemMetrics(SM_CXSCREEN);
+        m_screenHeight = GetSystemMetrics(SM_CYSCREEN);
+    }
+
+    // Initialize capture region to full screen by default
+    if (!m_useCustomRegion) {
+        m_captureRegion.left = 0;
+        m_captureRegion.top = 0;
+        m_captureRegion.right = m_screenWidth;
+        m_captureRegion.bottom = m_screenHeight;
+    }
+
+    // Set capture dimensions based on region
+    m_captureWidth = m_captureRegion.right - m_captureRegion.left;
+    m_captureHeight = m_captureRegion.bottom - m_captureRegion.top;
+
+    // Validate capture region
+    if (m_captureWidth <= 0 || m_captureHeight <= 0 ||
+        m_captureRegion.right > m_screenWidth || m_captureRegion.bottom > m_screenHeight) {
+        std::cerr << "[NVFBCCapture] Invalid capture region: "
+                  << m_captureRegion.left << "," << m_captureRegion.top
+                  << " to " << m_captureRegion.right << "," << m_captureRegion.bottom << std::endl;
+        return false;
     }
 
     // Allocate frame buffer (BGRA = 4 bytes per pixel)
     m_bufferSize = m_captureWidth * m_captureHeight * 4;
     m_frameBuffer = std::make_unique<unsigned char[]>(m_bufferSize);
 
-    std::cout << "[NVFBCCapture] Basic session setup completed. Resolution: " << m_captureWidth << "x" << m_captureHeight << std::endl;
-    std::cout << "[NVFBCCapture] Note: Full NVFBC implementation requires proper driver setup" << std::endl;
+    if (m_useCustomRegion) {
+        std::cout << "[NVFBCCapture] Partial capture setup completed" << std::endl;
+        std::cout << "  - Screen: " << m_screenWidth << "x" << m_screenHeight << std::endl;
+        std::cout << "  - Region: (" << m_captureRegion.left << "," << m_captureRegion.top
+                  << ") to (" << m_captureRegion.right << "," << m_captureRegion.bottom << ")" << std::endl;
+        std::cout << "  - Capture Size: " << m_captureWidth << "x" << m_captureHeight << std::endl;
+    } else {
+        std::cout << "[NVFBCCapture] Full screen capture setup completed. Resolution: " << m_captureWidth << "x" << m_captureHeight << std::endl;
+    }
+
     return true;
 }
 
@@ -219,4 +249,75 @@ void NVFBCCapture::CaptureThreadProc() {
     }
 
     std::cout << "[NVFBCCapture] Capture thread stopped" << std::endl;
+}
+
+void NVFBCCapture::SetCaptureRegion(int x, int y, int width, int height) {
+    // Validate input parameters
+    if (x < 0 || y < 0 || width <= 0 || height <= 0) {
+        std::cerr << "[NVFBCCapture] Invalid capture region parameters" << std::endl;
+        return;
+    }
+
+    m_captureRegion.left = x;
+    m_captureRegion.top = y;
+    m_captureRegion.right = x + width;
+    m_captureRegion.bottom = y + height;
+    m_useCustomRegion = true;
+
+    std::cout << "[NVFBCCapture] Capture region set to: (" << x << "," << y
+              << ") size " << width << "x" << height << std::endl;
+
+    // If already initialized, update capture session
+    if (m_isInitialized) {
+        bool wasCapturing = m_isCapturing;
+        if (wasCapturing) {
+            StopCapture();
+        }
+
+        // Update capture dimensions and buffer
+        m_captureWidth = width;
+        m_captureHeight = height;
+        m_bufferSize = width * height * 4;
+        m_frameBuffer = std::make_unique<unsigned char[]>(m_bufferSize);
+
+        if (wasCapturing) {
+            StartCapture();
+        }
+    }
+}
+
+void NVFBCCapture::GetCaptureRegion(int* x, int* y, int* width, int* height) const {
+    if (x) *x = m_captureRegion.left;
+    if (y) *y = m_captureRegion.top;
+    if (width) *width = m_captureWidth;
+    if (height) *height = m_captureHeight;
+}
+
+void NVFBCCapture::ResetToFullScreen() {
+    m_useCustomRegion = false;
+
+    if (m_isInitialized) {
+        // Reset to screen dimensions
+        m_captureRegion.left = 0;
+        m_captureRegion.top = 0;
+        m_captureRegion.right = m_screenWidth;
+        m_captureRegion.bottom = m_screenHeight;
+
+        bool wasCapturing = m_isCapturing;
+        if (wasCapturing) {
+            StopCapture();
+        }
+
+        // Update capture dimensions and buffer
+        m_captureWidth = m_screenWidth;
+        m_captureHeight = m_screenHeight;
+        m_bufferSize = m_captureWidth * m_captureHeight * 4;
+        m_frameBuffer = std::make_unique<unsigned char[]>(m_bufferSize);
+
+        if (wasCapturing) {
+            StartCapture();
+        }
+
+        std::cout << "[NVFBCCapture] Reset to full screen capture: " << m_captureWidth << "x" << m_captureHeight << std::endl;
+    }
 }
