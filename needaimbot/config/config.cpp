@@ -78,8 +78,6 @@ bool Config::loadConfig(const std::string& filename)
         ignore_third_person = false;
         shooting_range_targets = false;
         auto_aim = false;
-        enable_aimbot = true;
-        enable_triggerbot = false;
 
         
         crosshair_offset_x = 0.0f;
@@ -96,7 +94,6 @@ bool Config::loadConfig(const std::string& filename)
         
         easynorecoil = false;
         easynorecoilstrength = 0.0f;
-        norecoil_step = 5.0f;
         norecoil_ms = 10.0f;
         input_method = "WIN32";  // Default value, will be overridden by config file if present
         easynorecoil_start_delay_ms = 0;
@@ -104,10 +101,6 @@ bool Config::loadConfig(const std::string& filename)
 
         
         active_scope_magnification = 0;
-        recoil_mult_2x = 1.0f;
-        recoil_mult_3x = 1.0f;
-        recoil_mult_4x = 1.0f;
-        recoil_mult_6x = 1.0f;
         
         // Crouch recoil reduction
         crouch_recoil_enabled = true;
@@ -124,7 +117,6 @@ bool Config::loadConfig(const std::string& filename)
         
         arduino_baudrate = 2000000;
         arduino_port = "COM0";
-        arduino_16_bit_mouse = false;
         arduino_enable_keys = false;
 
 		
@@ -148,7 +140,6 @@ bool Config::loadConfig(const std::string& filename)
         sticky_target_threshold = 0.0f; // Always switch to closest target
         max_detections = 30;  // Reduced from 100 for better performance
         postprocess = "yolo11";  // Changed from yolo12 to match common model format
-        tensorrt_fp16 = true;
 
         
         cuda_device_id = 0;
@@ -255,8 +246,6 @@ bool Config::loadConfig(const std::string& filename)
     ignore_third_person = get_bool_ini("Target", "ignore_third_person", false);
     shooting_range_targets = get_bool_ini("Target", "shooting_range_targets", false);
     auto_aim = get_bool_ini("Target", "auto_aim", false);
-    enable_aimbot = get_bool_ini("Target", "enable_aimbot", true);
-    enable_triggerbot = get_bool_ini("Target", "enable_triggerbot", false);
 
     crosshair_offset_x = static_cast<float>(get_double_ini("Target", "crosshair_offset_x", 0.0));
     crosshair_offset_y = static_cast<float>(get_double_ini("Target", "crosshair_offset_y", 0.0));
@@ -271,7 +260,6 @@ bool Config::loadConfig(const std::string& filename)
 
     easynorecoil = get_bool_ini("Mouse", "easynorecoil", false);
     easynorecoilstrength = static_cast<float>(get_double_ini("Mouse", "easynorecoilstrength", 0.0));
-    norecoil_step = static_cast<float>(get_double_ini("Mouse", "norecoil_step", 5.0));
     norecoil_ms = static_cast<float>(get_double_ini("Mouse", "norecoil_ms", 10.0));
     
     // Load PD controller settings
@@ -287,10 +275,6 @@ bool Config::loadConfig(const std::string& filename)
     crouch_recoil_reduction = static_cast<float>(get_double_ini("Mouse", "crouch_recoil_reduction", -50.0));
 
     active_scope_magnification = get_long_ini("Recoil", "active_scope_magnification", 0);
-    recoil_mult_2x = static_cast<float>(get_double_ini("Recoil", "recoil_mult_2x", 1.0));
-    recoil_mult_3x = static_cast<float>(get_double_ini("Recoil", "recoil_mult_3x", 1.0));
-    recoil_mult_4x = static_cast<float>(get_double_ini("Recoil", "recoil_mult_4x", 1.0));
-    recoil_mult_6x = static_cast<float>(get_double_ini("Recoil", "recoil_mult_6x", 1.0));
 
     
     
@@ -299,7 +283,6 @@ bool Config::loadConfig(const std::string& filename)
 
     arduino_baudrate = get_long_ini("Arduino", "arduino_baudrate", 2000000);
     arduino_port = get_string_ini("Arduino", "arduino_port", "COM0");
-    arduino_16_bit_mouse = get_bool_ini("Arduino", "arduino_16_bit_mouse", false);
     arduino_enable_keys = get_bool_ini("Arduino", "arduino_enable_keys", false);
 
     kmbox_ip = get_string_ini("KMBOX", "ip", "192.168.2.188");
@@ -317,7 +300,6 @@ bool Config::loadConfig(const std::string& filename)
     sticky_target_threshold = static_cast<float>(get_double_ini("AI", "sticky_target_threshold", 0.0));
     max_detections = get_long_ini("AI", "max_detections", 30);
     postprocess = get_string_ini("AI", "postprocess", "yolo11");  // Changed default from yolo12 to yolo11
-    tensorrt_fp16 = get_bool_ini("AI", "tensorrt_fp16", true);
 
     cuda_device_id = get_long_ini("CUDA", "cuda_device_id", 0);
     
@@ -506,8 +488,6 @@ bool Config::saveConfig(const std::string& filename)
     file << "ignore_third_person = " << (ignore_third_person ? "true" : "false") << "\n";
     file << "shooting_range_targets = " << (shooting_range_targets ? "true" : "false") << "\n";
     file << "auto_aim = " << (auto_aim ? "true" : "false") << "\n";
-    file << "enable_aimbot = " << (enable_aimbot ? "true" : "false") << "\n";
-    file << "enable_triggerbot = " << (enable_triggerbot ? "true" : "false") << "\n";
     file << "\n";
 
 
@@ -515,7 +495,6 @@ bool Config::saveConfig(const std::string& filename)
     file << "easynorecoil = " << (easynorecoil ? "true" : "false") << "\n";
     file << std::fixed << std::setprecision(6);
     file << "easynorecoilstrength = " << easynorecoilstrength << "\n";
-    file << "norecoil_step = " << norecoil_step << "\n";
     file << "norecoil_ms = " << norecoil_ms << "\n";
     
     file << std::noboolalpha;
@@ -533,12 +512,7 @@ bool Config::saveConfig(const std::string& filename)
     file << "pd_kp_y = " << pd_kp_y << "\n";
 
     file << "[Recoil]\n";
-    file << "active_scope_magnification = " << active_scope_magnification << "\n";
-    file << std::fixed << std::setprecision(6);
-    file << "recoil_mult_2x = " << recoil_mult_2x << "\n";
-    file << "recoil_mult_3x = " << recoil_mult_3x << "\n";
-    file << "recoil_mult_4x = " << recoil_mult_4x << "\n";
-    file << "recoil_mult_6x = " << recoil_mult_6x << "\n\n";
+    file << "active_scope_magnification = " << active_scope_magnification << "\n\n";
 
     
     
@@ -548,7 +522,6 @@ bool Config::saveConfig(const std::string& filename)
     file << std::noboolalpha;
     file << "arduino_baudrate = " << arduino_baudrate << "\n";
     file << "arduino_port = " << arduino_port << "\n";
-    file << "arduino_16_bit_mouse = " << (arduino_16_bit_mouse ? "true" : "false") << "\n";
     file << "arduino_enable_keys = " << (arduino_enable_keys ? "true" : "false") << "\n\n";
 
     file << "[KMBOX]\n";
@@ -570,8 +543,7 @@ bool Config::saveConfig(const std::string& filename)
     file << "sticky_target_threshold = " << sticky_target_threshold << "\n";
     file << std::noboolalpha;
     file << "max_detections = " << max_detections << "\n";
-    file << "postprocess = " << postprocess << "\n";
-    file << "tensorrt_fp16 = " << (tensorrt_fp16 ? "true" : "false") << "\n\n";
+    file << "postprocess = " << postprocess << "\n\n";
 
     file << "[CUDA]\n";
     file << "cuda_device_id = " << cuda_device_id << "\n\n";
@@ -764,9 +736,6 @@ bool Config::isProfileModified() const {
 
 Config::Config()
 {
-    // Initialize show_metrics to false by default
-    show_metrics = false;
-    
     // Ensure we use the correct path for config files
     std::string exePath = getExecutableDir();
     
