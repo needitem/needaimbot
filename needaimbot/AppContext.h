@@ -16,8 +16,6 @@
 #include <queue>
 #include <chrono>
 
-
-class MouseThread; // Forward declaration
 class RecoilControlThread; // Forward declaration
 
 // Mouse movement event structure
