@@ -40,9 +40,13 @@ SerialConnection::SerialConnection(const std::string& port, unsigned int baud_ra
       port_name_(port),
       baud_rate_(baud_rate),
       listening_(false),
+      writer_running_(false),
       aiming_active(false),
-      shooting_active(false), 
+      shooting_active(false),
       zooming_active(false),
+      accumulated_move_x_(0),
+      accumulated_move_y_(0),
+      has_accumulated_move_(false),
       write_event_(NULL),
       read_event_(NULL)
 {
@@ -67,8 +71,8 @@ SerialConnection::SerialConnection(const std::string& port, unsigned int baud_ra
         if (!initializeSerial()) {
             throw std::runtime_error("Failed to initialize serial connection to " + port_name_);
         }
-        
-        
+
+        startWriterThread();
     } catch (const std::exception& e) {
         // 초기화 실패 시 간단한 정리만 수행 (스레드는 아직 생성되지 않음)
         if (serial_handle_ != INVALID_HANDLE_VALUE) {
@@ -177,11 +181,145 @@ void SerialConnection::safeSerialClose() {
 }
 
 
+void SerialConnection::startWriterThread() {
+    if (writer_running_.load()) {
+        return;
+    }
+
+    accumulated_move_x_ = 0;
+    accumulated_move_y_ = 0;
+    has_accumulated_move_ = false;
+
+    writer_running_.store(true);
+
+    try {
+        writer_thread_ = std::thread(&SerialConnection::writerThreadFunc, this);
+    } catch (...) {
+        writer_running_.store(false);
+        throw;
+    }
+
+#ifdef _WIN32
+    SetThreadDescription(writer_thread_.native_handle(), L"ArduinoSerialWriter");
+    SetThreadPriority(writer_thread_.native_handle(), THREAD_PRIORITY_HIGHEST);
+#endif
+}
+
+void SerialConnection::stopWriterThread() {
+    if (!writer_running_.load()) {
+        return;
+    }
+
+    writer_running_.store(false);
+    writer_cv_.notify_all();
+
+    if (writer_thread_.joinable()) {
+        auto future = std::async(std::launch::async, [this]() {
+            writer_thread_.join();
+        });
+
+        if (future.wait_for(std::chrono::milliseconds(Constants::THREAD_JOIN_TIMEOUT_MS)) == std::future_status::timeout) {
+            writer_thread_.detach();
+        }
+    }
+
+    std::lock_guard<std::mutex> lock(writer_mutex_);
+    writer_queue_.clear();
+    accumulated_move_x_ = 0;
+    accumulated_move_y_ = 0;
+    has_accumulated_move_ = false;
+}
+
+void SerialConnection::enqueueBinaryCommand(uint8_t cmd, int param1, int param2, bool coalesce) {
+    {
+        std::lock_guard<std::mutex> lock(writer_mutex_);
+        if (coalesce) {
+            accumulated_move_x_ = std::clamp(accumulated_move_x_ + param1, -4096, 4096);
+            accumulated_move_y_ = std::clamp(accumulated_move_y_ + param2, -4096, 4096);
+            has_accumulated_move_ = true;
+        } else {
+            writer_queue_.push_back(PendingBinaryCommand{cmd, param1, param2, false});
+        }
+    }
+
+    writer_cv_.notify_one();
+}
+
+void SerialConnection::sendBinaryImmediate(uint8_t cmd, int param1, int param2) {
+    int clampedX = std::clamp(param1, -127, 127);
+    int clampedY = std::clamp(param2, -127, 127);
+
+    uint8_t buffer[3] = {
+        cmd,
+        static_cast<uint8_t>(static_cast<int8_t>(clampedX)),
+        static_cast<uint8_t>(static_cast<int8_t>(clampedY))
+    };
+
+    writeBinary(buffer, 3);
+}
+
+void SerialConnection::writerThreadFunc() {
+#ifdef _WIN32
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+#endif
+
+    while (writer_running_.load()) {
+        PendingBinaryCommand command{0x00, 0, 0, false};
+        bool hasCommand = false;
+
+        {
+            std::unique_lock<std::mutex> lock(writer_mutex_);
+            writer_cv_.wait(lock, [this]() {
+                return !writer_running_.load() || has_accumulated_move_ || !writer_queue_.empty();
+            });
+
+            if (!writer_running_.load()) {
+                break;
+            }
+
+            if (has_accumulated_move_) {
+                command = PendingBinaryCommand{0x04, accumulated_move_x_, accumulated_move_y_, true};
+                accumulated_move_x_ = 0;
+                accumulated_move_y_ = 0;
+                has_accumulated_move_ = false;
+                hasCommand = true;
+            } else if (!writer_queue_.empty()) {
+                command = writer_queue_.front();
+                writer_queue_.pop_front();
+                hasCommand = true;
+            }
+        }
+
+        if (!hasCommand) {
+            continue;
+        }
+
+        if (command.coalesce) {
+            int remainingX = command.param1;
+            int remainingY = command.param2;
+
+            while (remainingX != 0 || remainingY != 0) {
+                int stepX = std::clamp(remainingX, -127, 127);
+                int stepY = std::clamp(remainingY, -127, 127);
+                remainingX -= stepX;
+                remainingY -= stepY;
+
+                sendBinaryImmediate(command.cmd, stepX, stepY);
+            }
+        } else {
+            sendBinaryImmediate(command.cmd, command.param1, command.param2);
+        }
+    }
+}
+
+
 void SerialConnection::cleanup() {
     // 플래그 설정
     listening_ = false;
-    
-    
+
+    stopWriterThread();
+
+
     // I/O 작업 취소 먼저 수행
     if (serial_handle_ != INVALID_HANDLE_VALUE) {
         CancelIo(serial_handle_);
@@ -578,11 +716,7 @@ void SerialConnection::move(int x, int y)
 {
     if (x == 0 && y == 0) return;
 
-    // 값 범위 제한 (-127 to 127)
-    int8_t clampedX = static_cast<int8_t>(x > 127 ? 127 : (x < -127 ? -127 : x));
-    int8_t clampedY = static_cast<int8_t>(y > 127 ? 127 : (y < -127 ? -127 : y));
-
-    sendBinaryCommand(0x04, clampedX, clampedY);
+    sendBinaryCommand(0x04, x, y);
 }
 
 void SerialConnection::sendCommand(const std::string& command)
@@ -590,10 +724,13 @@ void SerialConnection::sendCommand(const std::string& command)
     write(command);
 }
 
-void SerialConnection::sendBinaryCommand(uint8_t cmd, int8_t param1, int8_t param2)
+void SerialConnection::sendBinaryCommand(uint8_t cmd, int param1, int param2)
 {
-    uint8_t buffer[3] = { cmd, static_cast<uint8_t>(param1), static_cast<uint8_t>(param2) };
-    writeBinary(buffer, 3);
+    if (writer_running_.load()) {
+        enqueueBinaryCommand(cmd, param1, param2, cmd == 0x04);
+    } else {
+        sendBinaryImmediate(cmd, param1, param2);
+    }
 }
 
 std::vector<int> SerialConnection::splitValue(int value)
@@ -749,12 +886,12 @@ bool SerialConnection::writeAsync(const void* data, DWORD size)
     if (!result) {
         DWORD error = GetLastError();
         if (error == ERROR_IO_PENDING) {
-            // Wait for async operation to complete
-            return waitForAsyncOperation(&write_overlapped_, 50);
+            // Wait for async operation to complete with a very short deadline to avoid stalling input
+            return waitForAsyncOperation(&write_overlapped_, 5);
         }
         return false;
     }
-    
+
     return true;
 }
 
