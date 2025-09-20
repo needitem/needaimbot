@@ -8,6 +8,7 @@
 #include <chrono>
 #include <mutex>
 #include <unordered_map>
+#include <functional>
 #include "simple_cuda_mat.h"
 #include "cuda_resource_manager.h"
 #include "../core/Target.h"
@@ -58,8 +59,7 @@ struct SmallBufferArena {
         offset += sizeof(int);
         decodedCount = reinterpret_cast<int*>(basePtr + offset);
         offset += sizeof(int);
-        finalTargetsCount = reinterpret_cast<int*>(basePtr + offset);
-        offset += sizeof(int);
+        finalTargetsCount = decodedCount;  // Share count storage with decoded results
         classFilteredCount = reinterpret_cast<int*>(basePtr + offset);
         offset += sizeof(int);
         colorFilteredCount = reinterpret_cast<int*>(basePtr + offset);
@@ -100,7 +100,7 @@ struct SmallBufferArena {
     }
     
     static size_t calculateArenaSize() {
-        size_t size = sizeof(int) * 7;
+        size_t size = sizeof(int) * 6;
         
         size = (size + alignof(Target) - 1) & ~(alignof(Target) - 1);
         size += sizeof(Target) * 2;
@@ -292,6 +292,12 @@ public:
     void markFrameCompleted();
 
 private:
+    struct RegisteredHostBuffer {
+        size_t size = 0;
+        bool registered = false;
+        bool permanentFailure = false;
+    };
+
     mutable std::atomic<uint64_t> m_lastUIReadFrame{0};
     cudaGraph_t m_graph = nullptr;
     cudaGraphExec_t m_graphExec = nullptr;
@@ -305,8 +311,11 @@ private:
     
     std::unordered_map<std::string, cudaGraphNode_t> m_namedNodes;
     
-    bool m_classFilterDirty = true;
+    std::atomic<bool> m_classFilterDirty{true};
     std::vector<unsigned char> m_cachedClassFilter;
+    std::atomic<int> m_cachedHeadClassId{-1};
+    std::atomic<size_t> m_cachedHeadClassNameHash{0};
+    std::atomic<size_t> m_cachedClassSettingsSize{0};
     
     // Unified capture buffer - removed duplicate m_unifiedCaptureBuffer
     SimpleCudaMat m_captureBuffer;
@@ -345,14 +354,12 @@ private:
     
     std::unique_ptr<CudaPinnedMemory<MouseMovement>> m_h_movement;
     std::unique_ptr<CudaPinnedMemory<unsigned char>> m_h_allowFlags;
-    std::unique_ptr<CudaPinnedMemory<int>> m_h_debugDecodedCount;
-    std::unique_ptr<CudaPinnedMemory<int>> m_h_debugFinalCount;
-    std::unique_ptr<CudaPinnedMemory<int>> m_h_debugBestIndex;
-    std::unique_ptr<CudaPinnedMemory<Target>> m_h_debugBestTarget;
-    
+
     float* m_externalOutputBuffer = nullptr;
 
     DDACapture* m_ddaCapture = nullptr;
+
+    std::unordered_map<void*, RegisteredHostBuffer> m_registeredCaptureBuffers;
     
     UnifiedPipelineConfig m_config;
     GraphExecutionState m_state;
@@ -415,6 +422,8 @@ private:
     bool performFrameCapture();
     bool performFrameCaptureDirectToUnified();
     bool copyDDAFrameToGPU(void* frameData, unsigned int width, unsigned int height);
+    bool ensureCaptureBufferRegistered(void* frameData, size_t size);
+    void releaseRegisteredCaptureBuffers();
     bool performPreprocessing();
     void updatePreviewBuffer(const SimpleCudaMat& currentBuffer);
     void updatePreviewBufferAllocation();  // Dynamic allocation based on show_window state
