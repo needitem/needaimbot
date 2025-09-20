@@ -11,6 +11,8 @@
 #include <mutex>
 #include <memory>
 #include <chrono>
+#include <condition_variable>
+#include <deque>
 
 // Windows Native Serial API - 최고 성능을 위해
 
@@ -40,9 +42,9 @@ public:
 
 private:
     void sendCommand(const std::string& command);
-    void sendBinaryCommand(uint8_t cmd, int8_t param1, int8_t param2);
+    void sendBinaryCommand(uint8_t cmd, int param1, int param2);
     std::vector<int> splitValue(int value);
-    
+
     // Disable copy and move operations for thread safety
     SerialConnection(const SerialConnection&) = delete;
     SerialConnection& operator=(const SerialConnection&) = delete;
@@ -61,7 +63,21 @@ private:
     void cleanup();
     void closeHandle();
     void safeSerialClose();
-    
+
+    void startWriterThread();
+    void stopWriterThread();
+    void writerThreadFunc();
+
+    struct PendingBinaryCommand {
+        uint8_t cmd;
+        int param1;
+        int param2;
+        bool coalesce;
+    };
+
+    void enqueueBinaryCommand(uint8_t cmd, int param1, int param2, bool coalesce);
+    void sendBinaryImmediate(uint8_t cmd, int param1, int param2);
+
     // Async I/O functions
     bool writeAsync(const void* data, DWORD size);
     bool readAsync(void* buffer, DWORD size, DWORD* bytesRead);
@@ -84,7 +100,16 @@ private:
 
     std::thread listening_thread_;
     std::atomic<bool> listening_;
-    
+
+    std::thread writer_thread_;
+    std::atomic<bool> writer_running_;
+    std::mutex writer_mutex_;
+    std::condition_variable writer_cv_;
+    std::deque<PendingBinaryCommand> writer_queue_;
+    int accumulated_move_x_;
+    int accumulated_move_y_;
+    bool has_accumulated_move_;
+
     // Overlapped I/O structures
     OVERLAPPED write_overlapped_;
     OVERLAPPED read_overlapped_;
