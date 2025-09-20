@@ -23,6 +23,7 @@
 #include <limits>
 #include <mutex>
 #include <cstring>
+#include <atomic>
 #include <cuda.h>
 
 // Forward declare the mouse control function
@@ -370,6 +371,8 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
                 if (movement->dx != 0 || movement->dy != 0) {
                     executeMouseMovement(movement->dx, movement->dy);
                 }
+
+                pipeline->markFrameCompleted();
             }, this);
     }
     
@@ -631,13 +634,28 @@ void UnifiedGraphPipeline::clearHostPreviewData(AppContext& ctx) {
 }
 
 void UnifiedGraphPipeline::handleAimbotActivation() {
-    
+
     m_state.frameCount = 0;
+    m_completedFrames.store(0, std::memory_order_relaxed);
+}
+
+void UnifiedGraphPipeline::markFrameCompleted() {
+    m_completedFrames.fetch_add(1, std::memory_order_relaxed);
 }
 
 bool UnifiedGraphPipeline::executePipelineWithErrorHandling() {
     // 에러 처리 제거 - GPU가 알아서 처리
     executeGraphNonBlocking(m_pipelineStream->get());
+
+    if (m_pipelineStream) {
+        cudaError_t syncErr = cudaStreamSynchronize(m_pipelineStream->get());
+        if (syncErr != cudaSuccess) {
+            std::cerr << "[UnifiedGraph] Failed to synchronize pipeline stream: "
+                      << cudaGetErrorString(syncErr) << std::endl;
+            return false;
+        }
+    }
+
     return true;  // 항상 성공으로 간주
 }
 
@@ -646,34 +664,38 @@ void UnifiedGraphPipeline::runMainLoop() {
 
     m_lastFrameTime = std::chrono::high_resolution_clock::now();
     auto fpsLastLogTime = m_lastFrameTime;
-    std::size_t framesSinceLog = 0;
+    uint64_t framesAtLastLog = m_completedFrames.load(std::memory_order_relaxed);
 
     auto flushAverageFps = [&](std::chrono::high_resolution_clock::time_point now, bool force) {
-        auto elapsed = now - fpsLastLogTime;
-        if (!force && elapsed < std::chrono::seconds(2)) {
+        uint64_t completedFrames = m_completedFrames.load(std::memory_order_relaxed);
+        uint64_t producedFrames = completedFrames - framesAtLastLog;
+
+        if (producedFrames == 0) {
+            fpsLastLogTime = now;
+            framesAtLastLog = completedFrames;
             return;
         }
 
-        if (framesSinceLog == 0) {
-            fpsLastLogTime = now;
+        auto elapsed = now - fpsLastLogTime;
+        if (!force && elapsed < std::chrono::seconds(2)) {
             return;
         }
 
         double seconds = std::chrono::duration<double>(elapsed).count();
         if (seconds <= 0.0) {
             fpsLastLogTime = now;
-            framesSinceLog = 0;
+            framesAtLastLog = completedFrames;
             return;
         }
 
         std::ostringstream fpsStream;
         fpsStream << std::fixed << std::setprecision(2)
-                  << "[UnifiedGraph] Average FPS over last " << framesSinceLog
-                  << " frames: " << (static_cast<double>(framesSinceLog) / seconds);
+                  << "[UnifiedGraph] Average FPS over last " << producedFrames
+                  << " frames: " << (static_cast<double>(producedFrames) / seconds);
         std::cout << fpsStream.str() << std::endl;
 
         fpsLastLogTime = now;
-        framesSinceLog = 0;
+        framesAtLastLog = completedFrames;
     };
 
     bool wasAiming = false;
@@ -693,7 +715,7 @@ void UnifiedGraphPipeline::runMainLoop() {
                 auto now = std::chrono::high_resolution_clock::now();
                 flushAverageFps(now, true);
                 fpsLastLogTime = now;
-                framesSinceLog = 0;
+                framesAtLastLog = m_completedFrames.load(std::memory_order_relaxed);
                 handleAimbotDeactivation();
                 wasAiming = false;
             }
@@ -706,13 +728,12 @@ void UnifiedGraphPipeline::runMainLoop() {
             wasAiming = true;
             m_lastFrameTime = std::chrono::high_resolution_clock::now();
             fpsLastLogTime = m_lastFrameTime;
-            framesSinceLog = 0;
+            framesAtLastLog = m_completedFrames.load(std::memory_order_relaxed);
         }
 
         while (ctx.aiming && !m_shouldStop && !ctx.should_exit) {
             executePipelineWithErrorHandling();
 
-            ++framesSinceLog;
             auto now = std::chrono::high_resolution_clock::now();
             flushAverageFps(now, false);
             m_lastFrameTime = now;
@@ -722,20 +743,20 @@ void UnifiedGraphPipeline::runMainLoop() {
             auto now = std::chrono::high_resolution_clock::now();
             flushAverageFps(now, true);
             fpsLastLogTime = now;
-            framesSinceLog = 0;
+            framesAtLastLog = m_completedFrames.load(std::memory_order_relaxed);
         }
 
         if (wasAiming && !ctx.aiming) {
             auto now = std::chrono::high_resolution_clock::now();
             flushAverageFps(now, true);
             fpsLastLogTime = now;
-            framesSinceLog = 0;
+            framesAtLastLog = m_completedFrames.load(std::memory_order_relaxed);
             handleAimbotDeactivation();
             wasAiming = false;
         }
     }
 
-    if (wasAiming && framesSinceLog > 0) {
+    if (wasAiming) {
         auto now = std::chrono::high_resolution_clock::now();
         flushAverageFps(now, true);
     }
@@ -1815,6 +1836,8 @@ bool UnifiedGraphPipeline::executeNormalPipeline(cudaStream_t stream) {
                 if (movement->dx != 0 || movement->dy != 0) {
                     executeMouseMovement(movement->dx, movement->dy);
                 }
+
+                pipeline->markFrameCompleted();
             }, this);
     }
     
