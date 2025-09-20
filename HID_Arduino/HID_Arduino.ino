@@ -28,7 +28,7 @@ MouseRptParser Prs;
 
 void setup()
 {
-    Serial.begin(115200);
+    Serial.begin(2000000);
     Serial.println("Arduino Started");
 
     if (Usb.Init() == -1) {
