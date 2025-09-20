@@ -6,6 +6,7 @@
 #include <atomic>
 #include <array>
 #include <chrono>
+#include <condition_variable>
 #include <mutex>
 #include <unordered_map>
 #include <functional>
@@ -384,6 +385,9 @@ private:
     std::atomic<uint64_t> m_currentFrameStartNs{0};
 
     std::atomic<bool> m_shouldStop{false};
+    std::mutex m_frameMutex;
+    std::condition_variable m_frameCv;
+    bool m_frameCompleted = false;
     std::chrono::high_resolution_clock::time_point m_lastFrameTime;
     float m_frameDeltaSeconds = 1.0f / 60.0f;
     mutable std::mutex m_previewMutex;
@@ -418,7 +422,10 @@ private:
     void clearMovementData();
     void clearHostPreviewData(AppContext& ctx);
     void handleAimbotActivation();
-    bool executePipelineWithErrorHandling();
+    bool tryLaunchNextFrame();
+    void waitForFrameCompletion(const AppContext& ctx);
+    void resetFrameCompletionSignal();
+    void notifyFrameCompleted();
 
     bool enqueueFrameCompletionCallback(cudaStream_t stream);
 

@@ -621,6 +621,7 @@ void UnifiedGraphPipeline::handleAimbotDeactivation() {
     m_currentFrameStartNs.store(0, std::memory_order_relaxed);
     m_inferenceInProgress.store(false, std::memory_order_release);
     m_pendingMovementDispatch.store(false, std::memory_order_release);
+    notifyFrameCompleted();
 }
 
 void UnifiedGraphPipeline::clearCountBuffers() {
@@ -672,6 +673,7 @@ void UnifiedGraphPipeline::handleAimbotActivation() {
     m_currentFrameStartNs.store(0, std::memory_order_relaxed);
     m_inferenceInProgress.store(false, std::memory_order_release);
     m_pendingMovementDispatch.store(false, std::memory_order_release);
+    resetFrameCompletionSignal();
 
     if (m_smallBufferArena.previousErrorX && m_smallBufferArena.previousErrorY) {
         cudaError_t resetErr = cudaMemset(m_smallBufferArena.previousErrorX, 0, sizeof(float));
@@ -701,6 +703,20 @@ void UnifiedGraphPipeline::markFrameCompleted() {
     m_state.frameCount++;
     m_inferenceInProgress.store(false, std::memory_order_release);
     m_pendingMovementDispatch.store(false, std::memory_order_release);
+    notifyFrameCompleted();
+}
+
+void UnifiedGraphPipeline::resetFrameCompletionSignal() {
+    std::lock_guard<std::mutex> lock(m_frameMutex);
+    m_frameCompleted = false;
+}
+
+void UnifiedGraphPipeline::notifyFrameCompleted() {
+    {
+        std::lock_guard<std::mutex> lock(m_frameMutex);
+        m_frameCompleted = true;
+    }
+    m_frameCv.notify_all();
 }
 
 bool UnifiedGraphPipeline::enqueueFrameCompletionCallback(cudaStream_t stream) {
@@ -745,27 +761,21 @@ bool UnifiedGraphPipeline::enqueueFrameCompletionCallback(cudaStream_t stream) {
     return true;
 }
 
-bool UnifiedGraphPipeline::executePipelineWithErrorHandling() {
+bool UnifiedGraphPipeline::tryLaunchNextFrame() {
     if (!m_pipelineStream || !m_pipelineStream->get()) {
         return false;
     }
 
-    if (m_inferenceInProgress.load(std::memory_order_acquire)) {
-        if (m_state.endEvent && m_state.endEvent->get()) {
-            cudaError_t queryStatus = cudaEventQuery(m_state.endEvent->get());
-            if (queryStatus != cudaSuccess && queryStatus != cudaErrorNotReady) {
-                std::cerr << "[UnifiedGraph] Event query failed: "
-                          << cudaGetErrorString(queryStatus) << std::endl;
-            }
-        }
-
-        std::this_thread::yield();
-        return true;
+    bool expected = false;
+    if (!m_inferenceInProgress.compare_exchange_strong(
+            expected, true, std::memory_order_acq_rel)) {
+        return false;
     }
 
     if (!executeGraphNonBlocking(m_pipelineStream->get())) {
         m_inferenceInProgress.store(false, std::memory_order_release);
         m_currentFrameStartNs.store(0, std::memory_order_relaxed);
+        resetFrameCompletionSignal();
         return false;
     }
 
@@ -774,11 +784,23 @@ bool UnifiedGraphPipeline::executePipelineWithErrorHandling() {
     }
 
     auto launchTime = std::chrono::high_resolution_clock::now();
-    uint64_t launchNs = std::chrono::duration_cast<std::chrono::nanoseconds>(launchTime.time_since_epoch()).count();
+    uint64_t launchNs =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(launchTime.time_since_epoch()).count();
     m_currentFrameStartNs.store(launchNs, std::memory_order_release);
-
-    m_inferenceInProgress.store(true, std::memory_order_release);
+    resetFrameCompletionSignal();
     return true;
+}
+
+void UnifiedGraphPipeline::waitForFrameCompletion(const AppContext& ctx) {
+    std::unique_lock<std::mutex> lock(m_frameMutex);
+    m_frameCv.wait_for(lock, std::chrono::milliseconds(2), [&]() {
+        return m_frameCompleted || !ctx.aiming || m_shouldStop.load(std::memory_order_relaxed) ||
+               ctx.should_exit;
+    });
+
+    if (m_frameCompleted) {
+        m_frameCompleted = false;
+    }
 }
 
 void UnifiedGraphPipeline::runMainLoop() {
@@ -786,9 +808,18 @@ void UnifiedGraphPipeline::runMainLoop() {
 
     m_lastFrameTime = std::chrono::high_resolution_clock::now();
     auto statsLastLogTime = m_lastFrameTime;
-    uint64_t framesAtLastLog = m_completedFrames.load(std::memory_order_relaxed);
-    uint64_t mouseAtLastLog = m_mouseDispatches.load(std::memory_order_relaxed);
-    uint64_t inferenceTimeAtLastLog = m_totalInferenceTimeNs.load(std::memory_order_relaxed);
+    uint64_t framesAtLastLog = 0;
+    uint64_t mouseAtLastLog = 0;
+    uint64_t inferenceTimeAtLastLog = 0;
+
+    auto resetStatsTracking = [&](std::chrono::high_resolution_clock::time_point now) {
+        statsLastLogTime = now;
+        framesAtLastLog = m_completedFrames.load(std::memory_order_relaxed);
+        mouseAtLastLog = m_mouseDispatches.load(std::memory_order_relaxed);
+        inferenceTimeAtLastLog = m_totalInferenceTimeNs.load(std::memory_order_relaxed);
+    };
+
+    resetStatsTracking(m_lastFrameTime);
 
     auto logPerformanceStats = [&](std::chrono::high_resolution_clock::time_point now, bool force) {
         auto elapsed = now - statsLastLogTime;
@@ -811,9 +842,11 @@ void UnifiedGraphPipeline::runMainLoop() {
 
         double avgLatencyMs = 0.0;
         if (producedFrames > 0 && inferenceDelta > 0) {
-            avgLatencyMs = static_cast<double>(inferenceDelta) / static_cast<double>(producedFrames) / 1'000'000.0;
+            avgLatencyMs = static_cast<double>(inferenceDelta) /
+                           static_cast<double>(producedFrames) / 1'000'000.0;
         }
-        double lastLatencyMs = static_cast<double>(m_lastInferenceLatencyNs.load(std::memory_order_relaxed)) / 1'000'000.0;
+        double lastLatencyMs =
+            static_cast<double>(m_lastInferenceLatencyNs.load(std::memory_order_relaxed)) / 1'000'000.0;
         double mouseFps = static_cast<double>(mouseDelta) / seconds;
 
         std::ostringstream statStream;
@@ -824,10 +857,7 @@ void UnifiedGraphPipeline::runMainLoop() {
                    << " updates over " << seconds << " s)";
         std::cout << statStream.str() << std::endl;
 
-        statsLastLogTime = now;
-        framesAtLastLog = completedFrames;
-        mouseAtLastLog = mouseDispatches;
-        inferenceTimeAtLastLog = totalInferenceNs;
+        resetStatsTracking(now);
     };
 
     bool wasAiming = false;
@@ -846,10 +876,7 @@ void UnifiedGraphPipeline::runMainLoop() {
             if (wasAiming) {
                 auto now = std::chrono::high_resolution_clock::now();
                 logPerformanceStats(now, true);
-                statsLastLogTime = now;
-                framesAtLastLog = m_completedFrames.load(std::memory_order_relaxed);
-                mouseAtLastLog = m_mouseDispatches.load(std::memory_order_relaxed);
-                inferenceTimeAtLastLog = m_totalInferenceTimeNs.load(std::memory_order_relaxed);
+                resetStatsTracking(now);
                 handleAimbotDeactivation();
                 wasAiming = false;
             }
@@ -861,14 +888,20 @@ void UnifiedGraphPipeline::runMainLoop() {
             handleAimbotActivation();
             wasAiming = true;
             m_lastFrameTime = std::chrono::high_resolution_clock::now();
-            statsLastLogTime = m_lastFrameTime;
-            framesAtLastLog = m_completedFrames.load(std::memory_order_relaxed);
-            mouseAtLastLog = m_mouseDispatches.load(std::memory_order_relaxed);
-            inferenceTimeAtLastLog = m_totalInferenceTimeNs.load(std::memory_order_relaxed);
+            resetStatsTracking(m_lastFrameTime);
         }
 
         while (ctx.aiming && !m_shouldStop && !ctx.should_exit) {
-            executePipelineWithErrorHandling();
+            if (tryLaunchNextFrame()) {
+                continue;
+            }
+
+            if (!m_inferenceInProgress.load(std::memory_order_acquire)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                continue;
+            }
+
+            waitForFrameCompletion(ctx);
 
             auto now = std::chrono::high_resolution_clock::now();
             logPerformanceStats(now, false);
@@ -878,19 +911,13 @@ void UnifiedGraphPipeline::runMainLoop() {
         if (wasAiming && (m_shouldStop || ctx.should_exit)) {
             auto now = std::chrono::high_resolution_clock::now();
             logPerformanceStats(now, true);
-            statsLastLogTime = now;
-            framesAtLastLog = m_completedFrames.load(std::memory_order_relaxed);
-            mouseAtLastLog = m_mouseDispatches.load(std::memory_order_relaxed);
-            inferenceTimeAtLastLog = m_totalInferenceTimeNs.load(std::memory_order_relaxed);
+            resetStatsTracking(now);
         }
 
         if (wasAiming && !ctx.aiming) {
             auto now = std::chrono::high_resolution_clock::now();
             logPerformanceStats(now, true);
-            statsLastLogTime = now;
-            framesAtLastLog = m_completedFrames.load(std::memory_order_relaxed);
-            mouseAtLastLog = m_mouseDispatches.load(std::memory_order_relaxed);
-            inferenceTimeAtLastLog = m_totalInferenceTimeNs.load(std::memory_order_relaxed);
+            resetStatsTracking(now);
             handleAimbotDeactivation();
             wasAiming = false;
         }
@@ -905,9 +932,10 @@ void UnifiedGraphPipeline::runMainLoop() {
 
 void UnifiedGraphPipeline::stopMainLoop() {
     m_shouldStop = true;
-    
+
     auto& ctx = AppContext::getInstance();
     ctx.pipeline_activation_cv.notify_all();
+    m_frameCv.notify_all();
 }
 
 
