@@ -1335,6 +1335,10 @@ bool UnifiedGraphPipeline::performFrameCapture() {
         return false;
     }
 
+    if ((m_preview.enabled || ctx.config.show_window) && m_pipelineStream && m_pipelineStream->get()) {
+        updatePreviewBuffer(m_captureBuffer);
+    }
+
     m_hasFrameData = true;
     return true;
 }

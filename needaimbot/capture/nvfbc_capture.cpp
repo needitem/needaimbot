@@ -1,6 +1,9 @@
 #include "nvfbc_capture.h"
 #include <iostream>
 #include <thread>
+#include <chrono>
+#include <cstring>
+#include <algorithm>
 
 #define NVFBC_CREATE_CAPTURE_SESSION_PARAMS_VER 1
 #define NVFBC_DESTROY_CAPTURE_SESSION_PARAMS_VER 1
@@ -195,7 +198,8 @@ bool NVFBCCapture::CreateCaptureSession(HWND targetWindow) {
 
     // Validate capture region
     if (m_captureWidth <= 0 || m_captureHeight <= 0 ||
-        m_captureRegion.right > m_screenWidth || m_captureRegion.bottom > m_screenHeight) {
+        static_cast<int>(m_captureRegion.right) > m_screenWidth ||
+        static_cast<int>(m_captureRegion.bottom) > m_screenHeight) {
         std::cerr << "[NVFBCCapture] Invalid capture region: "
                   << m_captureRegion.left << "," << m_captureRegion.top
                   << " to " << m_captureRegion.right << "," << m_captureRegion.bottom << std::endl;
@@ -227,26 +231,141 @@ void NVFBCCapture::DestroyCaptureSession() {
 }
 
 void NVFBCCapture::CaptureThreadProc() {
-    std::cout << "[NVFBCCapture] Capture thread started (demo mode)" << std::endl;
+    std::cout << "[NVFBCCapture] Capture thread started" << std::endl;
+
+    HDC screenDC = GetDC(nullptr);
+    if (!screenDC) {
+        std::cerr << "[NVFBCCapture] Failed to get screen DC" << std::endl;
+        return;
+    }
+
+    HDC memoryDC = CreateCompatibleDC(screenDC);
+    if (!memoryDC) {
+        std::cerr << "[NVFBCCapture] Failed to create memory DC" << std::endl;
+        ReleaseDC(nullptr, screenDC);
+        return;
+    }
+
+    HBITMAP hBitmap = nullptr;
+    HGDIOBJ oldBitmap = nullptr;
+    void* dibData = nullptr;
+    int currentWidth = 0;
+    int currentHeight = 0;
+
+    auto cleanupBitmap = [&]() {
+        if (oldBitmap) {
+            SelectObject(memoryDC, oldBitmap);
+            oldBitmap = nullptr;
+        }
+        if (hBitmap) {
+            DeleteObject(hBitmap);
+            hBitmap = nullptr;
+        }
+        dibData = nullptr;
+        currentWidth = 0;
+        currentHeight = 0;
+    };
+
+    auto recreateBitmapIfNeeded = [&](int width, int height) {
+        if (width <= 0 || height <= 0) {
+            cleanupBitmap();
+            return false;
+        }
+
+        if (width == currentWidth && height == currentHeight && hBitmap && dibData) {
+            return true;
+        }
+
+        cleanupBitmap();
+
+        BITMAPINFO bmi;
+        std::memset(&bmi, 0, sizeof(bmi));
+        bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        bmi.bmiHeader.biWidth = width;
+        bmi.bmiHeader.biHeight = -height; // top-down DIB
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+
+        hBitmap = CreateDIBSection(screenDC, &bmi, DIB_RGB_COLORS, &dibData, nullptr, 0);
+        if (!hBitmap || !dibData) {
+            std::cerr << "[NVFBCCapture] Failed to create capture bitmap" << std::endl;
+            cleanupBitmap();
+            return false;
+        }
+
+        oldBitmap = SelectObject(memoryDC, hBitmap);
+        currentWidth = width;
+        currentHeight = height;
+        return true;
+    };
+
+    bool bitbltErrorLogged = false;
 
     while (!m_shouldStop) {
-        // For demonstration, just simulate frame capture
-        std::this_thread::sleep_for(std::chrono::milliseconds(16)); // ~60 FPS
+        int left = 0;
+        int top = 0;
+        int width = 0;
+        int height = 0;
+        size_t expectedSize = 0;
+        {
+            std::lock_guard<std::mutex> lock(m_frameMutex);
+            left = static_cast<int>(m_captureRegion.left);
+            top = static_cast<int>(m_captureRegion.top);
+            width = m_captureWidth;
+            height = m_captureHeight;
+            expectedSize = m_bufferSize;
+        }
 
-        std::lock_guard<std::mutex> lock(m_frameMutex);
+        if (!recreateBitmapIfNeeded(width, height)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            continue;
+        }
 
-        // Fill buffer with test pattern (optional)
-        if (m_frameBuffer && m_bufferSize > 0) {
-            // Simple test pattern - alternating colors
-            static unsigned char colorValue = 0;
-            memset(m_frameBuffer.get(), colorValue++, m_bufferSize);
+        if (!BitBlt(memoryDC, 0, 0, width, height, screenDC, left, top, SRCCOPY | CAPTUREBLT)) {
+            if (!bitbltErrorLogged) {
+                std::cerr << "[NVFBCCapture] BitBlt failed" << std::endl;
+                bitbltErrorLogged = true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            continue;
+        }
+        bitbltErrorLogged = false;
 
-            // Call frame callback if set
-            if (m_frameCallback) {
-                m_frameCallback(m_frameBuffer.get(), m_captureWidth, m_captureHeight, m_bufferSize);
+        std::function<void(void*, unsigned int, unsigned int, unsigned int)> callback;
+        void* framePtr = nullptr;
+        size_t copySize = static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
+        bool skipFrame = false;
+        {
+            std::lock_guard<std::mutex> lock(m_frameMutex);
+            if (expectedSize != m_bufferSize || !m_frameBuffer) {
+                skipFrame = true;
+            }
+
+            if (!skipFrame) {
+                const size_t safeCopy = std::min(copySize, static_cast<size_t>(m_bufferSize));
+                std::memcpy(m_frameBuffer.get(), dibData, safeCopy);
+                framePtr = m_frameBuffer.get();
+                callback = m_frameCallback;
             }
         }
+
+        if (skipFrame) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            continue;
+        }
+
+        if (callback && framePtr) {
+            callback(framePtr, static_cast<unsigned int>(width), static_cast<unsigned int>(height),
+                     static_cast<unsigned int>(copySize));
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
     }
+
+    cleanupBitmap();
+    DeleteDC(memoryDC);
+    ReleaseDC(nullptr, screenDC);
 
     std::cout << "[NVFBCCapture] Capture thread stopped" << std::endl;
 }
