@@ -41,6 +41,9 @@
 #include <d3d11.h>
 #include <dxgi1_2.h>
 #include <wrl/client.h>
+#include <array>
+#include <cstdio>
+#include <string_view>
 
 using Microsoft::WRL::ComPtr;
 
@@ -57,6 +60,7 @@ std::atomic<bool> show_window_changed{false};
 
 // Forward declarations
 bool initializeScreenCapture(needaimbot::UnifiedGraphPipeline* pipeline);
+bool initializeInputMethod();
 
 // Combined UI thread function for keyboard + overlay
 void combinedUIThread() {
@@ -77,67 +81,76 @@ void combinedUIThread() {
     overlayThread.join();
 }
 
-std::unique_ptr<InputMethod> initializeInputMethod() {
+namespace {
+    void logInputMethodFallback(std::string_view method, std::string reason) {
+        std::cerr << "[Mouse] " << method << " initialization failed: " << std::move(reason)
+                  << ". Defaulting to Win32." << std::endl;
+    }
+
+    template <std::size_t N>
+    std::array<char, N> copyToBuffer(const std::string& value) {
+        std::array<char, N> buffer{};
+        if constexpr (N > 0) {
+            std::snprintf(buffer.data(), buffer.size(), "%s", value.c_str());
+        }
+        return buffer;
+    }
+}
+
+bool initializeInputMethod() {
     auto& ctx = AppContext::getInstance();
+
+    const auto setMethod = [](std::unique_ptr<InputMethod> method) {
+        setGlobalInputMethod(std::move(method));
+        return true;
+    };
 
     if (ctx.config.input_method == "ARDUINO") {
         try {
             auto arduinoSerial = std::make_unique<SerialConnection>(ctx.config.arduino_port, ctx.config.arduino_baudrate);
             if (arduinoSerial->isOpen()) {
-                auto method = std::make_unique<SerialInputMethod>(arduinoSerial.release());
-                setGlobalInputMethod(std::move(method));
-                return nullptr;  // Don't return local copy, use global only
+                return setMethod(std::make_unique<SerialInputMethod>(arduinoSerial.release()));
             }
-            std::cerr << "[Mouse] Failed to open Arduino serial port " << ctx.config.arduino_port << ". Defaulting to Win32." << std::endl;
+            logInputMethodFallback("Arduino", "failed to open serial port " + ctx.config.arduino_port);
         } catch (const std::exception& e) {
-            std::cerr << "[Mouse] Arduino initialization failed: " << e.what() << ". Defaulting to Win32." << std::endl;
+            logInputMethodFallback("Arduino", e.what());
         }
     } else if (ctx.config.input_method == "GHUB") {
         auto gHub = std::make_unique<GhubMouse>();
         if (gHub->mouse_xy(0, 0)) {
-            auto method = std::make_unique<GHubInputMethod>(gHub.release());
-            setGlobalInputMethod(std::move(method));
-            return nullptr;  // Don't return local copy, use global only
+            return setMethod(std::make_unique<GHubInputMethod>(gHub.release()));
         }
-        std::cerr << "[Mouse] Failed to initialize GHub mouse driver. Defaulting to Win32." << std::endl;
+        logInputMethodFallback("GHub", "failed to initialize mouse driver");
     } else if (ctx.config.input_method == "KMBOX") {
-        char ip[256], port[256], mac[256];
-        strncpy(ip, ctx.config.kmbox_ip.c_str(), sizeof(ip) - 1);
-        ip[sizeof(ip) - 1] = '\0';
-        strncpy(port, ctx.config.kmbox_port.c_str(), sizeof(port) - 1);
-        port[sizeof(port) - 1] = '\0';
-        strncpy(mac, ctx.config.kmbox_mac.c_str(), sizeof(mac) - 1);
-        mac[sizeof(mac) - 1] = '\0';
+        auto ip = copyToBuffer<256>(ctx.config.kmbox_ip);
+        auto port = copyToBuffer<256>(ctx.config.kmbox_port);
+        auto mac = copyToBuffer<256>(ctx.config.kmbox_mac);
 
-        int rc = kmNet_init(ip, port, mac);
+        const int rc = kmNet_init(ip.data(), port.data(), mac.data());
         if (rc == 0) {
-            return std::make_unique<KmboxInputMethod>();
+            return setMethod(std::make_unique<KmboxInputMethod>());
         }
-        std::cerr << "[kmboxNet] init failed, code=" << rc << ". Defaulting to Win32.\n";
+        logInputMethodFallback("kmboxNet", "init failed, code=" + std::to_string(rc));
     } else if (ctx.config.input_method == "MAKCU") {
         try {
             auto makcuConnection = std::make_unique<MakcuConnection>(ctx.config.makcu_port, ctx.config.makcu_baudrate);
             if (makcuConnection->isOpen()) {
-                auto method = std::make_unique<MakcuInputMethod>(makcuConnection.release());
-                setGlobalInputMethod(std::move(method));
-                return nullptr;  // Don't return local copy, use global only
+                return setMethod(std::make_unique<MakcuInputMethod>(makcuConnection.release()));
             }
-            std::cerr << "[Mouse] Failed to open MAKCU port " << ctx.config.makcu_port << ". Defaulting to Win32." << std::endl;
+            logInputMethodFallback("MAKCU", "failed to open port " + ctx.config.makcu_port);
         } catch (const std::exception& e) {
-            std::cerr << "[Mouse] MAKCU initialization failed: " << e.what() << ". Defaulting to Win32." << std::endl;
+            logInputMethodFallback("MAKCU", e.what());
         }
     } else if (ctx.config.input_method == "RAZER") {
         try {
-            return std::make_unique<RZInputMethod>();
+            return setMethod(std::make_unique<RZInputMethod>());
         } catch (const std::exception& e) {
-            std::cerr << "[Mouse] Razer initialization failed: " << e.what() << ". Defaulting to Win32." << std::endl;
+            logInputMethodFallback("Razer", e.what());
         }
     }
 
-    // Set Win32 as global
-    auto method = std::make_unique<Win32InputMethod>();
-    setGlobalInputMethod(std::move(method));
-    return nullptr;  // Don't return local copy, use global only
+    setMethod(std::make_unique<Win32InputMethod>());
+    return false;
 }
 
 
@@ -545,7 +558,7 @@ int main()
 
         // MouseThread removed - GPU handles mouse control directly
         // Initialize InputMethod for recoil control only
-        auto inputMethod = initializeInputMethod();
+        (void)initializeInputMethod();
         
         // Initialize and start Recoil Control Thread
         RecoilControlThread recoilThread;
