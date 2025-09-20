@@ -1912,7 +1912,7 @@ bool UnifiedGraphPipeline::performInference() {
     return true;
 }
 
-int UnifiedGraphPipeline::findHeadClassId(const AppContext& ctx) {
+int UnifiedGraphPipeline::findHeadClassId(AppContext& ctx) {
     const size_t headNameHash = std::hash<std::string>{}(ctx.config.head_class_name);
     const size_t classSettingsSize = ctx.config.class_settings.size();
 
