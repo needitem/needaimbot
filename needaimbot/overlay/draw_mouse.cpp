@@ -35,7 +35,7 @@ static void draw_movement_controls()
         ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x - 60);
         if (ImGui::InputFloat("##KpX", &ctx.config.pd_kp_x, 0.0f, 0.0f, "%.3f")) {
             if (ctx.config.pd_kp_x < 0.0f) ctx.config.pd_kp_x = 0.0f;
-            if (ctx.config.pd_kp_x > 10.0f) ctx.config.pd_kp_x = 10.0f;
+            if (ctx.config.pd_kp_x > 100.0f) ctx.config.pd_kp_x = 100.0f;
             SAVE_PROFILE();
         }
         ImGui::PopItemWidth();
@@ -48,7 +48,7 @@ static void draw_movement_controls()
         ImGui::SameLine();
         if (ImGui::Button("+##KpXPlus", ImVec2(25, 0))) {
             ctx.config.pd_kp_x += 0.01f;
-            if (ctx.config.pd_kp_x > 10.0f) ctx.config.pd_kp_x = 10.0f;
+            if (ctx.config.pd_kp_x > 100.0f) ctx.config.pd_kp_x = 100.0f;
             SAVE_PROFILE();
         }
         UIHelpers::HelpMarker("How strongly to respond to target distance");
@@ -58,7 +58,7 @@ static void draw_movement_controls()
         ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x - 60);
         if (ImGui::InputFloat("##KpY", &ctx.config.pd_kp_y, 0.0f, 0.0f, "%.3f")) {
             if (ctx.config.pd_kp_y < 0.0f) ctx.config.pd_kp_y = 0.0f;
-            if (ctx.config.pd_kp_y > 10.0f) ctx.config.pd_kp_y = 10.0f;
+            if (ctx.config.pd_kp_y > 100.0f) ctx.config.pd_kp_y = 100.0f;
             SAVE_PROFILE();
         }
         ImGui::PopItemWidth();
@@ -71,7 +71,7 @@ static void draw_movement_controls()
         ImGui::SameLine();
         if (ImGui::Button("+##KpYPlus", ImVec2(25, 0))) {
             ctx.config.pd_kp_y += 0.01f;
-            if (ctx.config.pd_kp_y > 10.0f) ctx.config.pd_kp_y = 10.0f;
+            if (ctx.config.pd_kp_y > 100.0f) ctx.config.pd_kp_y = 100.0f;
             SAVE_PROFILE();
         }
         UIHelpers::HelpMarker("How strongly to respond to target distance");
