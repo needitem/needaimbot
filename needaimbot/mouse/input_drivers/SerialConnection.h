@@ -28,7 +28,7 @@ public:
     void close();
 
     void write(const std::string& data);
-    void writeBinary(const uint8_t* data, size_t size);
+    bool writeBinary(const uint8_t* data, size_t size);
     std::string read();
 
     void click();
@@ -76,12 +76,19 @@ private:
     };
 
     void enqueueBinaryCommand(uint8_t cmd, int param1, int param2, bool coalesce);
+<<<<<<< ours
     void sendBinaryImmediate(uint8_t cmd, int param1, int param2);
+=======
+    bool sendBinaryImmediate(uint8_t cmd, int param1, int param2);
+>>>>>>> theirs
 
     // Async I/O functions
     bool writeAsync(const void* data, DWORD size);
     bool readAsync(void* buffer, DWORD size, DWORD* bytesRead);
     bool waitForAsyncOperation(OVERLAPPED* overlapped, DWORD timeout_ms = 100);
+
+    bool ensureConnectionReady();
+    bool performWrite(const void* data, DWORD size);
     
     // Helper for thread-safe operations
     template<typename Func>
@@ -110,6 +117,13 @@ private:
     int accumulated_move_y_;
     bool has_accumulated_move_;
 
+<<<<<<< ours
+=======
+    std::mutex failure_mutex_;
+    int consecutive_write_failures_;
+    std::chrono::steady_clock::time_point last_reconnect_time_;
+
+>>>>>>> theirs
     // Overlapped I/O structures
     OVERLAPPED write_overlapped_;
     OVERLAPPED read_overlapped_;

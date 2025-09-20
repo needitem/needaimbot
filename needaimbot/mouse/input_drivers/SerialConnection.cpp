@@ -47,6 +47,11 @@ SerialConnection::SerialConnection(const std::string& port, unsigned int baud_ra
       accumulated_move_x_(0),
       accumulated_move_y_(0),
       has_accumulated_move_(false),
+<<<<<<< ours
+=======
+      consecutive_write_failures_(0),
+      last_reconnect_time_(std::chrono::steady_clock::now()),
+>>>>>>> theirs
       write_event_(NULL),
       read_event_(NULL)
 {
@@ -201,7 +206,11 @@ void SerialConnection::startWriterThread() {
 
 #ifdef _WIN32
     SetThreadDescription(writer_thread_.native_handle(), L"ArduinoSerialWriter");
+<<<<<<< ours
     SetThreadPriority(writer_thread_.native_handle(), THREAD_PRIORITY_HIGHEST);
+=======
+    SetThreadPriority(writer_thread_.native_handle(), Constants::MOUSE_THREAD_PRIORITY);
+>>>>>>> theirs
 #endif
 }
 
@@ -245,7 +254,11 @@ void SerialConnection::enqueueBinaryCommand(uint8_t cmd, int param1, int param2,
     writer_cv_.notify_one();
 }
 
+<<<<<<< ours
 void SerialConnection::sendBinaryImmediate(uint8_t cmd, int param1, int param2) {
+=======
+bool SerialConnection::sendBinaryImmediate(uint8_t cmd, int param1, int param2) {
+>>>>>>> theirs
     int clampedX = std::clamp(param1, -127, 127);
     int clampedY = std::clamp(param2, -127, 127);
 
@@ -255,12 +268,20 @@ void SerialConnection::sendBinaryImmediate(uint8_t cmd, int param1, int param2) 
         static_cast<uint8_t>(static_cast<int8_t>(clampedY))
     };
 
+<<<<<<< ours
     writeBinary(buffer, 3);
+=======
+    return writeBinary(buffer, 3);
+>>>>>>> theirs
 }
 
 void SerialConnection::writerThreadFunc() {
 #ifdef _WIN32
+<<<<<<< ours
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+=======
+    SetThreadPriority(GetCurrentThread(), Constants::MOUSE_THREAD_PRIORITY);
+>>>>>>> theirs
 #endif
 
     while (writer_running_.load()) {
@@ -301,6 +322,7 @@ void SerialConnection::writerThreadFunc() {
             while (remainingX != 0 || remainingY != 0) {
                 int stepX = std::clamp(remainingX, -127, 127);
                 int stepY = std::clamp(remainingY, -127, 127);
+<<<<<<< ours
                 remainingX -= stepX;
                 remainingY -= stepY;
 
@@ -308,6 +330,34 @@ void SerialConnection::writerThreadFunc() {
             }
         } else {
             sendBinaryImmediate(command.cmd, command.param1, command.param2);
+=======
+
+                if (sendBinaryImmediate(command.cmd, stepX, stepY)) {
+                    remainingX -= stepX;
+                    remainingY -= stepY;
+                    continue;
+                }
+
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                {
+                    std::lock_guard<std::mutex> lock(writer_mutex_);
+                    accumulated_move_x_ = std::clamp(accumulated_move_x_ + remainingX, -4096, 4096);
+                    accumulated_move_y_ = std::clamp(accumulated_move_y_ + remainingY, -4096, 4096);
+                    has_accumulated_move_ = true;
+                }
+                writer_cv_.notify_one();
+                break;
+            }
+        } else {
+            if (!sendBinaryImmediate(command.cmd, command.param1, command.param2)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                {
+                    std::lock_guard<std::mutex> lock(writer_mutex_);
+                    writer_queue_.push_front(command);
+                }
+                writer_cv_.notify_one();
+            }
+>>>>>>> theirs
         }
     }
 }
@@ -423,10 +473,15 @@ bool SerialConnection::reconnect()
     
     // 재연결 시도
     if (openPort() && configurePort()) {
+        {
+            std::lock_guard<std::mutex> failure_lock(failure_mutex_);
+            last_reconnect_time_ = std::chrono::steady_clock::now();
+            consecutive_write_failures_ = 0;
+        }
         return true;
-    } else {
-        return false;
     }
+
+    return false;
 }
 
 void SerialConnection::close()
@@ -601,75 +656,98 @@ bool SerialConnection::configurePort()
 
 void SerialConnection::write(const std::string& data)
 {
-    // 연결 상태 확인 및 복구 시도
-    if (!is_open_ || serial_handle_ == INVALID_HANDLE_VALUE) {
-        if (!reconnect()) {
-            return;
-        }
+    if (data.empty()) {
+        return;
     }
 
-    // 연결 건강도 확인
-    if (!isHealthy()) {
-        if (!reconnect()) {
-            return;
-        }
+    if (!ensureConnectionReady()) {
+        return;
     }
 
-    // Use the async write helper function
-    if (writeAsync(data.c_str(), static_cast<DWORD>(data.length()))) {
-        return; // 성공
-    }
-
-    // 실패한 경우 재시도
-    const int MAX_RETRIES = 2;
-    for (int retry = 0; retry < MAX_RETRIES; ++retry) {
-        // Remove unnecessary delay - async operation handles timing
-
-        if (writeAsync(data.c_str(), static_cast<DWORD>(data.length()))) {
-            return; // 재시도 성공
-        }
-
-    }
-
-    // 모든 재시도 실패 - 마지막 재연결 시도 (조용히 처리)
-    if (!reconnect()) {
-        is_open_ = false;
-    }
+    performWrite(data.c_str(), static_cast<DWORD>(data.length()));
 }
 
-void SerialConnection::writeBinary(const uint8_t* data, size_t size)
+bool SerialConnection::writeBinary(const uint8_t* data, size_t size)
 {
-    // 연결 상태 확인 및 복구 시도
-    if (!is_open_ || serial_handle_ == INVALID_HANDLE_VALUE) {
+    if (size == 0 || data == nullptr) {
+        return true;
+    }
+
+    if (!ensureConnectionReady()) {
+        return false;
+    }
+
+    return performWrite(data, static_cast<DWORD>(size));
+}
+
+bool SerialConnection::ensureConnectionReady()
+{
+    HANDLE handle_snapshot = INVALID_HANDLE_VALUE;
+    {
+        std::lock_guard<std::mutex> lock(connection_mutex_);
+        handle_snapshot = serial_handle_;
+    }
+
+    if (!is_open_.load() || handle_snapshot == INVALID_HANDLE_VALUE) {
         if (!reconnect()) {
-            return;
+            return false;
         }
     }
 
-    // 연결 건강도 확인
     if (!isHealthy()) {
         if (!reconnect()) {
-            return;
+            return false;
         }
     }
 
-    // Use the async write helper function
-    if (writeAsync(data, static_cast<DWORD>(size))) {
-        return; // 성공
+    HANDLE current_handle = INVALID_HANDLE_VALUE;
+    {
+        std::lock_guard<std::mutex> lock(connection_mutex_);
+        current_handle = serial_handle_;
     }
 
-    // 실패한 경우 재시도
-    const int MAX_RETRIES = 2;
-    for (int retry = 0; retry < MAX_RETRIES; ++retry) {
-        if (writeAsync(data, static_cast<DWORD>(size))) {
-            return; // 재시도 성공
+    return is_open_.load() && current_handle != INVALID_HANDLE_VALUE;
+}
+
+bool SerialConnection::performWrite(const void* data, DWORD size)
+{
+    if (size == 0) {
+        std::lock_guard<std::mutex> failure_lock(failure_mutex_);
+        consecutive_write_failures_ = 0;
+        return true;
+    }
+
+    constexpr int MAX_ATTEMPTS = 3;
+    for (int attempt = 0; attempt < MAX_ATTEMPTS; ++attempt) {
+        if (writeAsync(data, size)) {
+            std::lock_guard<std::mutex> failure_lock(failure_mutex_);
+            consecutive_write_failures_ = 0;
+            return true;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+
+    auto now = std::chrono::steady_clock::now();
+    bool shouldReconnect = false;
+    {
+        std::lock_guard<std::mutex> failure_lock(failure_mutex_);
+        ++consecutive_write_failures_;
+
+        if (consecutive_write_failures_ >= 3 &&
+            (now - last_reconnect_time_) > std::chrono::milliseconds(250)) {
+            shouldReconnect = true;
+            last_reconnect_time_ = now;
+            consecutive_write_failures_ = 0;
         }
     }
 
-    // 모든 재시도 실패 - 마지막 재연결 시도 (조용히 처리)
-    if (!reconnect()) {
-        is_open_ = false;
+    if (shouldReconnect) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        reconnect();
     }
+
+    return false;
 }
 
 std::string SerialConnection::read()
@@ -886,8 +964,13 @@ bool SerialConnection::writeAsync(const void* data, DWORD size)
     if (!result) {
         DWORD error = GetLastError();
         if (error == ERROR_IO_PENDING) {
+<<<<<<< ours
             // Wait for async operation to complete with a very short deadline to avoid stalling input
             return waitForAsyncOperation(&write_overlapped_, 5);
+=======
+            // Wait for async operation to complete with a balanced deadline
+            return waitForAsyncOperation(&write_overlapped_, 30);
+>>>>>>> theirs
         }
         return false;
     }
@@ -937,10 +1020,10 @@ bool SerialConnection::waitForAsyncOperation(OVERLAPPED* overlapped, DWORD timeo
     }
     
     if (result == WAIT_TIMEOUT) {
-        // Cancel pending I/O if timeout
-        CancelIo(serial_handle_);
+        // Cancel only the specific overlapped operation to avoid disrupting other I/O
+        CancelIoEx(serial_handle_, overlapped);
     }
-    
+
     return false;
 }
 
