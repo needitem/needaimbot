@@ -1892,15 +1892,6 @@ bool UnifiedGraphPipeline::executeFrame(cudaStream_t stream) {
         }
     }
 
-    cudaError_t syncErr = cudaStreamSynchronize(launchStream);
-    if (syncErr != cudaSuccess) {
-        std::cerr << "[UnifiedGraph] Stream synchronization failed: "
-                  << cudaGetErrorString(syncErr) << std::endl;
-        m_allowMovement.store(false, std::memory_order_release);
-        return false;
-    }
-
-    m_allowMovement.store(false, std::memory_order_release);
     return true;
 }
 
