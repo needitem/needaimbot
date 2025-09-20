@@ -355,6 +355,10 @@ private:
     std::unique_ptr<CudaPinnedMemory<MouseMovement>> m_h_movement;
     std::unique_ptr<CudaPinnedMemory<unsigned char>> m_h_allowFlags;
 
+    bool m_mouseMovementUsesMappedMemory = false;
+
+    bool configureMouseMovementBuffer();
+
     float* m_externalOutputBuffer = nullptr;
 
     DDACapture* m_ddaCapture = nullptr;
