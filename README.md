@@ -367,8 +367,8 @@ dynamic_shapes = true           # 동적 크기 지원
 UnifiedGraphPipeline pipeline(config);
 pipeline.initialize();
 
-// 비동기 실행
-pipeline.executeGraphNonBlocking(stream);
+// 프레임 실행
+pipeline.executeFrame(stream);
 
 // 결과 획득
 Target* targets = pipeline.getTargets();
@@ -496,8 +496,7 @@ TEST(PipelineTest, InferenceLatency) {
     UnifiedGraphPipeline pipeline(testConfig);
     
     auto start = std::chrono::high_resolution_clock::now();
-    pipeline.executeGraphNonBlocking();
-    cudaStreamSynchronize(0);
+    pipeline.executeFrame();
     auto end = std::chrono::high_resolution_clock::now();
     
     auto latency = std::chrono::duration<float, std::milli>(end - start).count();
