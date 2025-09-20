@@ -279,7 +279,7 @@ public:
     void markUIFrameRead() { m_lastUIReadFrame = m_state.frameCount; }
 
     void markFrameCompleted();
-    
+
 private:
     mutable std::atomic<uint64_t> m_lastUIReadFrame{0};
     cudaGraph_t m_graph = nullptr;
@@ -349,13 +349,18 @@ private:
     bool m_hasFrameData = false;
     
     std::atomic<bool> m_inferenceInProgress{false};
+    std::atomic<bool> m_pendingMovementDispatch{false};
     std::atomic<size_t> m_skippedFrames{0};
     
     std::atomic<int> m_currentPipelineIdx{0};
     std::atomic<int> m_prevPipelineIdx{2};
 
     std::atomic<uint64_t> m_completedFrames{0};
-    
+    std::atomic<uint64_t> m_mouseDispatches{0};
+    std::atomic<uint64_t> m_totalInferenceTimeNs{0};
+    std::atomic<uint64_t> m_lastInferenceLatencyNs{0};
+    std::atomic<uint64_t> m_currentFrameStartNs{0};
+
     std::atomic<bool> m_shouldStop{false};
     std::chrono::high_resolution_clock::time_point m_lastFrameTime;
     mutable std::mutex m_previewMutex;
@@ -390,6 +395,8 @@ private:
     void clearHostPreviewData(AppContext& ctx);
     void handleAimbotActivation();
     bool executePipelineWithErrorHandling();
+
+    bool enqueueFrameCompletionCallback(cudaStream_t stream);
 
     bool updateNVFBCCaptureRegion(const AppContext& ctx);
     bool performFrameCapture();
