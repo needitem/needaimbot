@@ -91,12 +91,12 @@ __global__ void fusedTargetSelectionAndMovementKernel(
             *bestTargetIndex = -1;
             output_movement->dx = 0;
             output_movement->dy = 0;
-            
+
             Target emptyTarget = {};
             *bestTarget = emptyTarget;
         }
         __syncthreads();
-        
+
         int count = *finalTargetsCount;
         if (count <= 0 || count > maxDetections) {
             return;
@@ -143,38 +143,30 @@ __global__ void fusedTargetSelectionAndMovementKernel(
             __syncthreads();
         }
         
-        if (threadIdx.x == 0 && s_indices[0] >= 0) {
-            *bestTargetIndex = s_indices[0];
-            *bestTarget = finalTargets[s_indices[0]];
-            
-            Target& best = *bestTarget;
-            float target_center_x = best.x + best.width / 2.0f;
-            float target_center_y;
-            
-            if (best.classId == head_class_id) {
-                target_center_y = best.y + best.height * head_y_offset;
-            } else {
-                target_center_y = best.y + best.height * body_y_offset;
-            }
-            
-            float error_x = target_center_x - screen_center_x;
-            float error_y = target_center_y - screen_center_y;
-            
-            float movement_x = error_x * kp_x;
-            float movement_y = error_y * kp_y;
+        if (threadIdx.x == 0) {
+            if (s_indices[0] >= 0) {
+                *bestTargetIndex = s_indices[0];
+                *bestTarget = finalTargets[s_indices[0]];
 
-            int computed_dx = static_cast<int>(roundf(movement_x));
-            int computed_dy = static_cast<int>(roundf(movement_y));
+                Target& best = *bestTarget;
+                float target_center_x = best.x + best.width / 2.0f;
+                float target_center_y;
 
-            if (computed_dx == 0 && movement_x != 0.0f) {
-                computed_dx = (movement_x > 0.0f) ? 1 : -1;
-            }
-            if (computed_dy == 0 && movement_y != 0.0f) {
-                computed_dy = (movement_y > 0.0f) ? 1 : -1;
-            }
+                if (best.classId == head_class_id) {
+                    target_center_y = best.y + best.height * head_y_offset;
+                } else {
+                    target_center_y = best.y + best.height * body_y_offset;
+                }
 
-            output_movement->dx = computed_dx;
-            output_movement->dy = computed_dy;
+                float error_x = target_center_x - screen_center_x;
+                float error_y = target_center_y - screen_center_y;
+
+                float movement_x = error_x * kp_x;
+                float movement_y = error_y * kp_y;
+
+                output_movement->dx = static_cast<int>(floorf(movement_x));
+                output_movement->dy = static_cast<int>(floorf(movement_y));
+            }
         }
     }
 }
@@ -192,7 +184,7 @@ __global__ void clearAllDetectionBuffersKernel(
 ) {
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
     int gridSize = blockDim.x * gridDim.x;
-    
+
     if (tid < 6) {
         if (tid == 0) *decodedCount = 0;
         else if (tid == 1) *classFilteredCount = 0;
@@ -204,7 +196,7 @@ __global__ void clearAllDetectionBuffersKernel(
             *bestTarget = emptyTarget;
         }
     }
-    
+
     for (int i = tid; i < maxTargetsToClear; i += gridSize) {
         Target emptyTarget = {};
         decodedTargets[i] = emptyTarget;
@@ -1434,7 +1426,7 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
     static float cached_kp_y = 0.1f;
     static float cached_head_y_offset = 0.2f;
     static float cached_body_y_offset = 0.5f;
-    
+
     if (!m_graphCaptured) {
         std::lock_guard<std::mutex> lock(ctx.configMutex);
         cached_max_detections = ctx.config.max_detections;
