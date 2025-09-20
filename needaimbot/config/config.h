@@ -11,7 +11,6 @@ struct ConfigCache {
     float detection_resolution;
     float confidence_threshold;
     // NMS removed - no longer needed
-    bool enable_aimbot;
     int target_priority;
     uint64_t version; // atomic 제거하여 복사 가능하게 함
     
@@ -21,7 +20,6 @@ struct ConfigCache {
     ConfigCache(const ConfigCache& other) 
         : detection_resolution(other.detection_resolution)
         , confidence_threshold(other.confidence_threshold)
-        , enable_aimbot(other.enable_aimbot)
         , target_priority(other.target_priority)
         , version(other.version) {}
     
@@ -30,7 +28,6 @@ struct ConfigCache {
         if (this != &other) {
             detection_resolution = other.detection_resolution;
             confidence_threshold = other.confidence_threshold;
-            enable_aimbot = other.enable_aimbot;
             target_priority = other.target_priority;
             version = other.version;
         }
@@ -45,13 +42,11 @@ private:
     mutable std::mutex cache_mutex;
     
 public:
-    void updateCache(float resolution, float confidence, bool aimbot,
-                    int priority) {
+    void updateCache(float resolution, float confidence, int priority) {
         std::lock_guard<std::mutex> lock(cache_mutex); // 스레드 안전성 보장
         cache.detection_resolution = resolution;
-        cache.confidence_threshold = confidence; 
+        cache.confidence_threshold = confidence;
         // NMS removed
-        cache.enable_aimbot = aimbot;
         cache.target_priority = priority;
         cache.version = ++current_version;
     }
@@ -160,8 +155,6 @@ public:
     bool ignore_third_person;
     bool shooting_range_targets;
     bool auto_aim;
-    bool enable_aimbot;
-    bool enable_triggerbot;
 
     
     float crosshair_offset_x;
@@ -178,18 +171,13 @@ public:
     
     bool easynorecoil;
     float easynorecoilstrength;
-    float norecoil_step;  
     float norecoil_ms;    
     std::string input_method; 
     int easynorecoil_start_delay_ms; 
     int easynorecoil_end_delay_ms;   
 
     
-    int active_scope_magnification; 
-    float recoil_mult_2x;
-    float recoil_mult_3x;
-    float recoil_mult_4x;
-    float recoil_mult_6x;
+    int active_scope_magnification;
     
     // Crouch recoil reduction
     bool crouch_recoil_enabled;
@@ -210,7 +198,6 @@ public:
     
     int arduino_baudrate;
     std::string arduino_port;
-    bool arduino_16_bit_mouse;
     bool arduino_enable_keys;
 
     
@@ -234,7 +221,6 @@ public:
     float sticky_target_threshold;  // How much better a new target must be to switch (0.0-1.0)
     int max_detections;
     std::string postprocess;
-    bool tensorrt_fp16;
 
     
     int cuda_device_id = 0;
@@ -261,7 +247,6 @@ public:
     std::vector<std::string> screenshot_button;
     int screenshot_delay;
     bool always_on_top;
-    bool show_metrics;  // For performance metrics display
 
     
     std::vector<ClassSetting> class_settings;

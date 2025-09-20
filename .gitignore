@@ -40,14 +40,8 @@ x64
 packages
 needaimbot/cudnn64_9.dll
 needaimbot/opencv_world4100.dll
-/needaimbot/modules/glfw-3.4
-/needaimbot/modules/glfw-3.4.bin.WIN64
-/needaimbot/modules/TensorRT-10.8.0.43
 needaimbot/imgui.ini
 /needaimbot/models
-needaimbot/modules/SimpleIni.h
-/needaimbot/modules/serial
-/needaimbot/modules/cudnn
 
 # Claude Code
 .claude/
