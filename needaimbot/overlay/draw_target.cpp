@@ -32,7 +32,9 @@ void draw_target()
     
     ImGui::Separator();
     ImGui::Spacing();
-    ImGui::Checkbox("Auto Aim", &ctx.config.auto_aim);
+    if (ImGui::Checkbox("Auto Aim", &ctx.config.auto_aim)) {
+        SAVE_PROFILE();
+    }
     
     // Target Lock Settings
     ImGui::Separator();

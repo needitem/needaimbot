@@ -2,6 +2,10 @@
 
 #include <shellapi.h>
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <string>
 
 #include "AppContext.h"
 #include "needaimbot.h"
@@ -15,7 +19,7 @@
 static void draw_movement_controls()
 {
     auto& ctx = AppContext::getInstance();
-    
+
     UIHelpers::BeginCard("Mouse Movement Settings");
     
     UIHelpers::BeautifulText("Simple proportional controller for aiming.", UIHelpers::GetAccentColor(0.8f));
@@ -82,9 +86,151 @@ static void draw_movement_controls()
     UIHelpers::EndCard();
 }
 
-void draw_mouse()
+static void draw_input_device_settings()
 {
     auto& ctx = AppContext::getInstance();
-    
+
+    UIHelpers::BeginCard("Mouse Input Device");
+
+    static constexpr const char* INPUT_METHODS[] = {
+        "WIN32",
+        "GHUB",
+        "ARDUINO",
+        "KMBOX",
+        "MAKCU",
+        "RAZER"
+    };
+
+    int method_index = 0;
+    for (int i = 0; i < IM_ARRAYSIZE(INPUT_METHODS); ++i) {
+        if (ctx.config.input_method == INPUT_METHODS[i]) {
+            method_index = i;
+            break;
+        }
+    }
+
+    const int previous_method = method_index;
+    if (UIHelpers::EnhancedCombo("Input Method", &method_index, INPUT_METHODS, IM_ARRAYSIZE(INPUT_METHODS),
+        "Select which driver handles mouse movement"))
+    {
+        ctx.config.input_method = INPUT_METHODS[method_index];
+        ctx.input_method_changed = true;
+        SAVE_PROFILE();
+    }
+
+    UIHelpers::CompactSpacer();
+
+    const char* active_method = INPUT_METHODS[method_index];
+
+    if (std::strcmp(active_method, "ARDUINO") == 0) {
+        UIHelpers::SettingsSubHeader("Arduino Serial Settings");
+
+        static char arduino_port_buffer[64] = "";
+        static char arduino_baud_buffer[64] = "";
+        static bool buffers_initialized = false;
+
+        if (!buffers_initialized || previous_method != method_index || ctx.config.arduino_port != arduino_port_buffer) {
+            std::snprintf(arduino_port_buffer, IM_ARRAYSIZE(arduino_port_buffer), "%s", ctx.config.arduino_port.c_str());
+        }
+        if (!buffers_initialized || previous_method != method_index || std::to_string(ctx.config.arduino_baudrate) != arduino_baud_buffer) {
+            std::snprintf(arduino_baud_buffer, IM_ARRAYSIZE(arduino_baud_buffer), "%d", ctx.config.arduino_baudrate);
+        }
+        buffers_initialized = true;
+
+        if (ImGui::InputText("Serial Port", arduino_port_buffer, IM_ARRAYSIZE(arduino_port_buffer))) {
+            ctx.config.arduino_port = arduino_port_buffer;
+            SAVE_PROFILE();
+        }
+        UIHelpers::HelpMarker("COM port that the Arduino is connected to");
+
+        if (ImGui::InputText("Baud Rate", arduino_baud_buffer, IM_ARRAYSIZE(arduino_baud_buffer), ImGuiInputTextFlags_CharsDecimal)) {
+            ctx.config.arduino_baudrate = std::max(0, std::atoi(arduino_baud_buffer));
+            SAVE_PROFILE();
+        }
+        UIHelpers::HelpMarker("Serial speed used for communicating with the Arduino");
+
+        if (UIHelpers::EnhancedCheckbox("Enable Key Passthrough", &ctx.config.arduino_enable_keys,
+            "Forward keyboard events to the Arduino for on-board handling"))
+        {
+            SAVE_PROFILE();
+        }
+    }
+    else if (std::strcmp(active_method, "KMBOX") == 0) {
+        UIHelpers::SettingsSubHeader("KMBOX Network Settings");
+
+        static char kmbox_ip_buffer[64] = "";
+        static char kmbox_port_buffer[16] = "";
+        static char kmbox_mac_buffer[64] = "";
+        static bool buffers_initialized = false;
+
+        if (!buffers_initialized || previous_method != method_index || ctx.config.kmbox_ip != kmbox_ip_buffer) {
+            std::snprintf(kmbox_ip_buffer, IM_ARRAYSIZE(kmbox_ip_buffer), "%s", ctx.config.kmbox_ip.c_str());
+        }
+        if (!buffers_initialized || previous_method != method_index || ctx.config.kmbox_port != kmbox_port_buffer) {
+            std::snprintf(kmbox_port_buffer, IM_ARRAYSIZE(kmbox_port_buffer), "%s", ctx.config.kmbox_port.c_str());
+        }
+        if (!buffers_initialized || previous_method != method_index || ctx.config.kmbox_mac != kmbox_mac_buffer) {
+            std::snprintf(kmbox_mac_buffer, IM_ARRAYSIZE(kmbox_mac_buffer), "%s", ctx.config.kmbox_mac.c_str());
+        }
+        buffers_initialized = true;
+
+        if (ImGui::InputText("Device IP", kmbox_ip_buffer, IM_ARRAYSIZE(kmbox_ip_buffer))) {
+            ctx.config.kmbox_ip = kmbox_ip_buffer;
+            SAVE_PROFILE();
+        }
+        if (ImGui::InputText("Device Port", kmbox_port_buffer, IM_ARRAYSIZE(kmbox_port_buffer), ImGuiInputTextFlags_CharsDecimal)) {
+            ctx.config.kmbox_port = kmbox_port_buffer;
+            SAVE_PROFILE();
+        }
+        if (ImGui::InputText("Device MAC", kmbox_mac_buffer, IM_ARRAYSIZE(kmbox_mac_buffer), ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_CharsUppercase)) {
+            ctx.config.kmbox_mac = kmbox_mac_buffer;
+            SAVE_PROFILE();
+        }
+        UIHelpers::HelpMarker("Enter MAC without separators, e.g. 46405C53");
+    }
+    else if (std::strcmp(active_method, "MAKCU") == 0) {
+        UIHelpers::SettingsSubHeader("MAKCU Serial Settings");
+
+        static char makcu_port_buffer[64] = "";
+        static char makcu_baud_buffer[64] = "";
+        static bool buffers_initialized = false;
+
+        if (!buffers_initialized || previous_method != method_index || ctx.config.makcu_port != makcu_port_buffer) {
+            std::snprintf(makcu_port_buffer, IM_ARRAYSIZE(makcu_port_buffer), "%s", ctx.config.makcu_port.c_str());
+        }
+        if (!buffers_initialized || previous_method != method_index || std::to_string(ctx.config.makcu_baudrate) != makcu_baud_buffer) {
+            std::snprintf(makcu_baud_buffer, IM_ARRAYSIZE(makcu_baud_buffer), "%d", ctx.config.makcu_baudrate);
+        }
+        buffers_initialized = true;
+
+        if (ImGui::InputText("Serial Port", makcu_port_buffer, IM_ARRAYSIZE(makcu_port_buffer))) {
+            ctx.config.makcu_port = makcu_port_buffer;
+            SAVE_PROFILE();
+        }
+        if (ImGui::InputText("Baud Rate", makcu_baud_buffer, IM_ARRAYSIZE(makcu_baud_buffer), ImGuiInputTextFlags_CharsDecimal)) {
+            ctx.config.makcu_baudrate = std::max(0, std::atoi(makcu_baud_buffer));
+            SAVE_PROFILE();
+        }
+    }
+    else if (std::strcmp(active_method, "GHUB") == 0) {
+        UIHelpers::SettingsSubHeader("G HUB Integration");
+        UIHelpers::BeautifulText("Logitech G HUB must be running for this mode to work.", UIHelpers::GetWarningColor());
+    }
+    else if (std::strcmp(active_method, "RAZER") == 0) {
+        UIHelpers::SettingsSubHeader("Razer Synapse");
+        UIHelpers::BeautifulText("Requires Razer Synapse with the SDK enabled.", UIHelpers::GetWarningColor());
+    }
+    else {
+        UIHelpers::SettingsSubHeader("Windows API");
+        UIHelpers::BeautifulText("Uses the default Win32 mouse events. No extra setup required.", UIHelpers::GetAccentColor());
+    }
+
+    UIHelpers::EndCard();
+}
+
+void draw_mouse()
+{
+    draw_input_device_settings();
+    UIHelpers::Spacer();
     draw_movement_controls();
 }

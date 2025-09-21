@@ -32,7 +32,7 @@ namespace CommonHelpers {
     inline void updateConfigAndSave(T& configValue, const T& newValue) {
         if (configValue != newValue) {
             configValue = newValue;
-            AppContext::getInstance().config.saveConfig();
+            AppContext::getInstance().config.saveActiveProfile();
         }
     }
     
@@ -83,7 +83,7 @@ namespace CommonHelpers {
             
             if (ImGui::Combo(combo_label.c_str(), &current_index, key_names_cstrs.data(), static_cast<int>(key_names_cstrs.size()))) {
                 current_key_name = key_names[current_index];
-                ctx.config.saveConfig();
+                ctx.config.saveActiveProfile();
             }
             
             ImGui::SameLine();
@@ -91,11 +91,11 @@ namespace CommonHelpers {
             if (ImGui::Button(remove_button_label.c_str())) {
                 if (bindings.size() <= 1) {
                     bindings[0] = std::string("None");
-                    ctx.config.saveConfig();
+                    ctx.config.saveActiveProfile();
                     continue;
                 } else {
                     bindings.erase(bindings.begin() + i);
-                    ctx.config.saveConfig();
+                    ctx.config.saveActiveProfile();
                     continue;
                 }
             }
@@ -106,7 +106,7 @@ namespace CommonHelpers {
         std::string add_button_label = std::string("Add New ") + label;
         if (ImGui::Button(add_button_label.c_str())) {
             bindings.push_back("None");
-            ctx.config.saveConfig();
+            ctx.config.saveActiveProfile();
         }
     }
 }
