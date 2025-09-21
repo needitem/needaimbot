@@ -195,7 +195,7 @@ UnifiedGraphPipeline::UnifiedGraphPipeline() {
     constexpr unsigned int kBlockingEventFlags = cudaEventDisableTiming | cudaEventBlockingSync;
     m_state.startEvent = std::make_unique<CudaEvent>(kBlockingEventFlags);
     m_state.endEvent = std::make_unique<CudaEvent>(kBlockingEventFlags);
-
+    resetMovementFilter();
 }
 
 
@@ -611,6 +611,7 @@ void UnifiedGraphPipeline::handleAimbotDeactivation() {
     clearMovementData();
     clearHostPreviewData(ctx);
     m_allowMovement.store(false, std::memory_order_release);
+    m_captureRegionCache = {};
 }
 
 void UnifiedGraphPipeline::clearCountBuffers() {
@@ -635,6 +636,84 @@ void UnifiedGraphPipeline::clearMovementData() {
         m_h_movement->get()->dx = 0;
         m_h_movement->get()->dy = 0;
     }
+    resetMovementFilter();
+}
+
+void UnifiedGraphPipeline::resetMovementFilter() {
+    std::lock_guard<std::mutex> lock(m_movementFilterMutex);
+
+    m_lastFilteredMovement = {0, 0};
+    m_lastMovementTimestamp = std::chrono::steady_clock::now();
+    m_hasFilteredMovement = true;
+}
+
+MouseMovement UnifiedGraphPipeline::filterMouseMovement(const MouseMovement& rawMovement, bool movementEnabled) {
+    std::lock_guard<std::mutex> lock(m_movementFilterMutex);
+
+    auto now = std::chrono::steady_clock::now();
+
+    if (!movementEnabled) {
+        m_lastFilteredMovement = {0, 0};
+        m_lastMovementTimestamp = now;
+        m_hasFilteredMovement = true;
+        return m_lastFilteredMovement;
+    }
+
+    MouseMovement filtered = rawMovement;
+
+    if (!m_hasFilteredMovement) {
+        m_lastMovementTimestamp = now;
+        m_lastFilteredMovement = {0, 0};
+        m_hasFilteredMovement = true;
+    }
+
+    const float deltaSeconds = std::max(0.0f, std::chrono::duration<float>(now - m_lastMovementTimestamp).count());
+    constexpr float kSmoothingRate = 6.5f;
+    float alpha = std::clamp(deltaSeconds * kSmoothingRate, 0.12f, 1.0f);
+
+    auto computeStepLimit = [&](float dt) {
+        constexpr int kBaseStep = 8;
+        constexpr float kStepPerSecond = 140.0f;
+        int dynamic = static_cast<int>(std::lround(dt * kStepPerSecond));
+        int maxStep = kBaseStep + dynamic;
+        if (maxStep > 64) {
+            maxStep = 64;
+        }
+        if (maxStep < kBaseStep) {
+            maxStep = kBaseStep;
+        }
+        return maxStep;
+    };
+
+    const int maxStep = computeStepLimit(deltaSeconds);
+
+    auto smoothAxis = [&](int previous, int desired) {
+        float blended = static_cast<float>(previous) + alpha * (static_cast<float>(desired - previous));
+        int proposed = static_cast<int>(std::lround(blended));
+        int delta = proposed - previous;
+        if (delta > maxStep) {
+            delta = maxStep;
+        } else if (delta < -maxStep) {
+            delta = -maxStep;
+        }
+        return previous + delta;
+    };
+
+    filtered.dx = smoothAxis(m_lastFilteredMovement.dx, rawMovement.dx);
+    filtered.dy = smoothAxis(m_lastFilteredMovement.dy, rawMovement.dy);
+
+    if (std::abs(filtered.dx) <= 1 && rawMovement.dx == 0) {
+        filtered.dx = 0;
+    }
+    if (std::abs(filtered.dy) <= 1 && rawMovement.dy == 0) {
+        filtered.dy = 0;
+    }
+
+    m_lastFilteredMovement = filtered;
+    m_lastMovementTimestamp = now;
+    m_hasFilteredMovement = true;
+
+    return filtered;
 }
 
 void UnifiedGraphPipeline::clearHostPreviewData(AppContext& ctx) {
@@ -655,6 +734,8 @@ void UnifiedGraphPipeline::clearHostPreviewData(AppContext& ctx) {
 void UnifiedGraphPipeline::handleAimbotActivation() {
     m_state.frameCount = 0;
     m_allowMovement.store(false, std::memory_order_release);
+    resetMovementFilter();
+    m_captureRegionCache = {};
 
     if (m_smallBufferArena.previousErrorX && m_smallBufferArena.previousErrorY) {
         cudaError_t resetErr = cudaMemset(m_smallBufferArena.previousErrorX, 0, sizeof(float));
@@ -687,14 +768,21 @@ bool UnifiedGraphPipeline::enqueueFrameCompletionCallback(cudaStream_t stream) {
             bool allowMovement = pipeline->m_allowMovement.load(std::memory_order_acquire);
             pipeline->m_allowMovement.store(false, std::memory_order_release);
 
-            if (allowMovement && ctx.aiming && pipeline->m_h_movement && pipeline->m_h_movement->get()) {
-                const MouseMovement* movement = pipeline->m_h_movement->get();
-                if (movement->dx != 0 || movement->dy != 0) {
-                    executeMouseMovement(movement->dx, movement->dy);
+            if (pipeline->m_h_movement && pipeline->m_h_movement->get()) {
+                if (allowMovement && ctx.aiming) {
+                    MouseMovement rawMovement = *pipeline->m_h_movement->get();
+                    MouseMovement filtered = pipeline->filterMouseMovement(rawMovement, true);
+                    pipeline->m_h_movement->get()->dx = filtered.dx;
+                    pipeline->m_h_movement->get()->dy = filtered.dy;
+
+                    if (filtered.dx != 0 || filtered.dy != 0) {
+                        executeMouseMovement(filtered.dx, filtered.dy);
+                    }
+                } else {
+                    pipeline->filterMouseMovement({0, 0}, false);
+                    pipeline->m_h_movement->get()->dx = 0;
+                    pipeline->m_h_movement->get()->dy = 0;
                 }
-            } else if (!allowMovement && pipeline->m_h_movement && pipeline->m_h_movement->get()) {
-                pipeline->m_h_movement->get()->dx = 0;
-                pipeline->m_h_movement->get()->dy = 0;
             }
         }, this);
 
@@ -1435,11 +1523,6 @@ bool UnifiedGraphPipeline::updateDDACaptureRegion(const AppContext& ctx) {
         return false;
     }
 
-    static int lastDetectionRes = 0;
-    static float lastOffsetX = 0.0f;
-    static float lastOffsetY = 0.0f;
-    static bool lastAimShoot = false;
-
     int detectionRes = ctx.config.detection_resolution;
     if (detectionRes <= 0) {
         return false;
@@ -1449,10 +1532,10 @@ bool UnifiedGraphPipeline::updateDDACaptureRegion(const AppContext& ctx) {
     float offsetX = useAimShootOffset ? ctx.config.aim_shoot_offset_x : ctx.config.crosshair_offset_x;
     float offsetY = useAimShootOffset ? ctx.config.aim_shoot_offset_y : ctx.config.crosshair_offset_y;
 
-    if (lastDetectionRes == detectionRes &&
-        lastOffsetX == offsetX &&
-        lastOffsetY == offsetY &&
-        lastAimShoot == useAimShootOffset) {
+    if (m_captureRegionCache.detectionRes == detectionRes &&
+        m_captureRegionCache.offsetX == offsetX &&
+        m_captureRegionCache.offsetY == offsetY &&
+        m_captureRegionCache.usingAimShootOffset == useAimShootOffset) {
         return true;
     }
 
@@ -1480,10 +1563,10 @@ bool UnifiedGraphPipeline::updateDDACaptureRegion(const AppContext& ctx) {
         return false;
     }
 
-    lastDetectionRes = detectionRes;
-    lastOffsetX = offsetX;
-    lastOffsetY = offsetY;
-    lastAimShoot = useAimShootOffset;
+    m_captureRegionCache.detectionRes = detectionRes;
+    m_captureRegionCache.offsetX = offsetX;
+    m_captureRegionCache.offsetY = offsetY;
+    m_captureRegionCache.usingAimShootOffset = useAimShootOffset;
     return true;
 }
 
