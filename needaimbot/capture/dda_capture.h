@@ -44,13 +44,19 @@ public:
     static bool IsDDACaptureAvailable();
 
 private:
+    enum class FrameAcquireResult {
+        kFrameCaptured,
+        kNoFrame,
+        kError,
+    };
+
     bool InitializeDeviceAndOutput(HWND targetWindow);
     bool CreateDuplicationInterface();
     void ReleaseDuplication();
 
     bool EnsureStagingTexture(UINT width, UINT height, DXGI_FORMAT format);
     bool EnsureFrameBuffer(size_t requiredSize);
-    bool AcquireFrame();
+    FrameAcquireResult AcquireFrame();
     void CaptureThreadProc();
 
     Microsoft::WRL::ComPtr<ID3D11Device> m_device;
