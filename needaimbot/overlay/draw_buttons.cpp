@@ -81,7 +81,7 @@ static void draw_hotkey_section(const char* title, std::vector<std::string>& hot
             if (!detected_key.empty() && detected_key != "LeftMouseButton") // Ignore left click which would cancel
             {
                 current_key_name = detected_key;
-                AppContext::getInstance().config.saveConfig();
+                SAVE_PROFILE();
                 g_detecting_key_index = -1;
                 g_detecting_section = "";
                 g_detecting_hotkeys = nullptr;
@@ -102,7 +102,7 @@ static void draw_hotkey_section(const char* title, std::vector<std::string>& hot
             if (ImGui::Combo(combo_label.c_str(), &current_index, key_names_cstrs.data(), static_cast<int>(key_names_cstrs.size())))
             {
                 current_key_name = key_names[current_index];
-                AppContext::getInstance().config.saveConfig();
+                SAVE_PROFILE();
             }
             ImGui::PopStyleColor(6);
             
@@ -123,14 +123,14 @@ static void draw_hotkey_section(const char* title, std::vector<std::string>& hot
             if (hotkeys.size() <= 1)
             {
                 hotkeys[0] = std::string("None");
-                AppContext::getInstance().config.saveConfig();
+                SAVE_PROFILE();
                 ImGui::PopID();
                 continue;
             }
             else
             {
                 hotkeys.erase(hotkeys.begin() + i);
-                AppContext::getInstance().config.saveConfig();
+                SAVE_PROFILE();
                 ImGui::PopID();
                 continue;
             }
@@ -145,7 +145,7 @@ static void draw_hotkey_section(const char* title, std::vector<std::string>& hot
     if (UIHelpers::BeautifulButton(add_button_label.c_str(), ImVec2(-1, 0)))
     {
         hotkeys.push_back("None");
-        AppContext::getInstance().config.saveConfig();
+        SAVE_PROFILE();
     }
 }
 
@@ -248,7 +248,7 @@ static void draw_button_section(const char* title, const char* description, std:
             if (!detected_key.empty() && detected_key != "LeftMouseButton") // Ignore left click which would cancel
             {
                 current_key_name = detected_key;
-                AppContext::getInstance().config.saveConfig();
+                SAVE_PROFILE();
                 g_detecting_key_index = -1;
                 g_detecting_section = "";
                 g_detecting_hotkeys = nullptr;
@@ -270,7 +270,7 @@ static void draw_button_section(const char* title, const char* description, std:
             if (ImGui::Combo(combo_label.c_str(), &current_index, key_names_cstrs.data(), static_cast<int>(key_names_cstrs.size())))
             {
                 current_key_name = key_names[current_index];
-                AppContext::getInstance().config.saveConfig();
+                SAVE_PROFILE();
             }
             ImGui::PopStyleColor(6);
             
@@ -291,14 +291,14 @@ static void draw_button_section(const char* title, const char* description, std:
             if (!allow_empty && button_list.size() <= 1)
             {
                 button_list[0] = std::string("None");
-                AppContext::getInstance().config.saveConfig();
+                SAVE_PROFILE();
                 ImGui::PopID();
                 continue;
             }
             else
             {
                 button_list.erase(button_list.begin() + i);
-                AppContext::getInstance().config.saveConfig();
+                SAVE_PROFILE();
                 ImGui::PopID();
                 continue;
             }
@@ -313,7 +313,7 @@ static void draw_button_section(const char* title, const char* description, std:
     if (UIHelpers::BeautifulButton(add_button_label.c_str(), ImVec2(-FLT_MIN, 0)))
     {
         button_list.push_back("None");
-        AppContext::getInstance().config.saveConfig();
+        SAVE_PROFILE();
     }
     
     UIHelpers::EndCard();
