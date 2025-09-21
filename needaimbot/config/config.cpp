@@ -456,8 +456,16 @@ bool Config::loadConfig(const std::string& filename)
 
 bool Config::saveConfig(const std::string& filename)
 {
-    std::string configFile = filename.empty() ? getConfigPath("config.ini") : filename;
-    bool is_main_config = (configFile == getConfigPath("config.ini"));
+    std::string configFile;
+    bool is_main_config = false;
+
+    if (filename.empty()) {
+        std::string target_profile = active_profile_name.empty() ? "Default" : active_profile_name;
+        configFile = getConfigPath(target_profile + ".ini");
+    } else {
+        configFile = filename;
+        is_main_config = (configFile == getConfigPath("config.ini"));
+    }
     std::ofstream file(configFile);
     if (!file.is_open())
     {
