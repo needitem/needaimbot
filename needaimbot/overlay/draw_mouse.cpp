@@ -32,7 +32,7 @@ static void draw_movement_controls()
         ImGui::TableSetupColumn("X-Axis (Horizontal)", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("Y-Axis (Vertical)", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableHeadersRow();
-        
+
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
         ImGui::Text("Gain (Kp)");
@@ -79,10 +79,73 @@ static void draw_movement_controls()
             SAVE_PROFILE();
         }
         UIHelpers::HelpMarker("How strongly to respond to target distance");
-        
+
         ImGui::EndTable();
     }
-    
+
+    UIHelpers::CompactSpacer();
+    UIHelpers::SettingsSubHeader("Smoothing Filter Tuning");
+    UIHelpers::HelpMarker(
+        "Applies an exponential smoothing step with a configurable acceleration cap. "
+        "Higher rates and step limits chase moving targets faster, lower values make small "
+        "adjustments steadier."
+    );
+
+    if (ImGui::SliderFloat("Response Rate (Hz)", &ctx.config.smoothing_rate, 0.1f, 60.0f, "%.2f")) {
+        if (ctx.config.smoothing_rate < 0.1f) ctx.config.smoothing_rate = 0.1f;
+        SAVE_PROFILE();
+    }
+    UIHelpers::HelpMarker("Base frequency for the exponential lerp – higher means quicker convergence.");
+
+    if (ImGui::SliderFloat("Minimum Alpha", &ctx.config.smoothing_min_alpha, 0.0f, 1.0f, "%.3f")) {
+        ctx.config.smoothing_min_alpha = std::clamp(ctx.config.smoothing_min_alpha, 0.0f, 1.0f);
+        SAVE_PROFILE();
+    }
+    UIHelpers::HelpMarker("Lower bound for interpolation so micro-corrections still move the cursor.");
+
+    if (ImGui::SliderFloat("Boost Scale (px)", &ctx.config.smoothing_alpha_boost_scale, 1.0f, 60.0f, "%.1f")) {
+        if (ctx.config.smoothing_alpha_boost_scale < 1.0f) ctx.config.smoothing_alpha_boost_scale = 1.0f;
+        SAVE_PROFILE();
+    }
+    UIHelpers::HelpMarker("How many pixels of error are needed before alpha starts accelerating.");
+
+    if (ImGui::SliderFloat("Boost Limit (x)", &ctx.config.smoothing_alpha_boost_limit, 0.0f, 4.0f, "%.2f")) {
+        if (ctx.config.smoothing_alpha_boost_limit < 0.0f) ctx.config.smoothing_alpha_boost_limit = 0.0f;
+        SAVE_PROFILE();
+    }
+
+    if (ImGui::SliderInt("Base Step (px)", &ctx.config.smoothing_step_base, 0, 64)) {
+        if (ctx.config.smoothing_step_base < 0) ctx.config.smoothing_step_base = 0;
+        if (ctx.config.smoothing_step_cap < ctx.config.smoothing_step_base) {
+            ctx.config.smoothing_step_cap = ctx.config.smoothing_step_base;
+        }
+        SAVE_PROFILE();
+    }
+
+    if (ImGui::SliderFloat("Step per Second (px/s)", &ctx.config.smoothing_step_per_second, 0.0f, 600.0f, "%.1f")) {
+        if (ctx.config.smoothing_step_per_second < 0.0f) ctx.config.smoothing_step_per_second = 0.0f;
+        SAVE_PROFILE();
+    }
+
+    if (ImGui::SliderInt("Step Cap (px)", &ctx.config.smoothing_step_cap, 0, 256)) {
+        if (ctx.config.smoothing_step_cap < ctx.config.smoothing_step_base) {
+            ctx.config.smoothing_step_cap = ctx.config.smoothing_step_base;
+        }
+        SAVE_PROFILE();
+    }
+
+    if (ImGui::SliderFloat("Burst Multiplier", &ctx.config.smoothing_burst_multiplier, 0.0f, 2.0f, "%.3f")) {
+        if (ctx.config.smoothing_burst_multiplier < 0.0f) ctx.config.smoothing_burst_multiplier = 0.0f;
+        SAVE_PROFILE();
+    }
+    UIHelpers::HelpMarker("Extra allowance = request * multiplier, helps catch sudden large deltas.");
+
+    if (ImGui::SliderInt("Rest Deadzone (px)", &ctx.config.smoothing_rest_deadzone, 0, 5)) {
+        if (ctx.config.smoothing_rest_deadzone < 0) ctx.config.smoothing_rest_deadzone = 0;
+        SAVE_PROFILE();
+    }
+    UIHelpers::HelpMarker("Residual pixels below this threshold snap to 0 so the cursor stops drifting.");
+
     UIHelpers::EndCard();
 }
 

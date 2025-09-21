@@ -82,6 +82,16 @@ bool Config::loadConfig(const std::string& filename)
 
         pd_kp_x = 0.4f;
         pd_kp_y = 0.4f;
+
+        smoothing_rate = 8.5f;
+        smoothing_min_alpha = 0.18f;
+        smoothing_alpha_boost_scale = 14.0f;
+        smoothing_alpha_boost_limit = 1.75f;
+        smoothing_step_base = 10;
+        smoothing_step_per_second = 180.0f;
+        smoothing_step_cap = 96;
+        smoothing_burst_multiplier = 1.0f / 3.0f;
+        smoothing_rest_deadzone = 1;
         
         // Aim+shoot offset defaults
         enable_aim_shoot_offset = false;
@@ -294,7 +304,17 @@ bool Config::loadConfig(const std::string& filename)
     // Load PD controller settings - group by axis for cache
     pd_kp_x = static_cast<float>(get_double_ini("PDController", "pd_kp_x", 0.4));
     pd_kp_y = static_cast<float>(get_double_ini("PDController", "pd_kp_y", 0.4));
-    
+
+    smoothing_rate = static_cast<float>(get_double_ini("MouseSmoothing", "smoothing_rate", 8.5));
+    smoothing_min_alpha = static_cast<float>(get_double_ini("MouseSmoothing", "smoothing_min_alpha", 0.18));
+    smoothing_alpha_boost_scale = static_cast<float>(get_double_ini("MouseSmoothing", "smoothing_alpha_boost_scale", 14.0));
+    smoothing_alpha_boost_limit = static_cast<float>(get_double_ini("MouseSmoothing", "smoothing_alpha_boost_limit", 1.75));
+    smoothing_step_base = get_long_ini("MouseSmoothing", "smoothing_step_base", 10);
+    smoothing_step_per_second = static_cast<float>(get_double_ini("MouseSmoothing", "smoothing_step_per_second", 180.0));
+    smoothing_step_cap = get_long_ini("MouseSmoothing", "smoothing_step_cap", 96);
+    smoothing_burst_multiplier = static_cast<float>(get_double_ini("MouseSmoothing", "smoothing_burst_multiplier", 1.0 / 3.0));
+    smoothing_rest_deadzone = get_long_ini("MouseSmoothing", "smoothing_rest_deadzone", 1);
+
     input_method = get_string_ini("Mouse", "input_method", "WIN32");
     easynorecoil_start_delay_ms = get_long_ini("Mouse", "easynorecoil_start_delay_ms", 0);
     easynorecoil_end_delay_ms = get_long_ini("Mouse", "easynorecoil_end_delay_ms", 0);
@@ -527,6 +547,18 @@ bool Config::saveConfig(const std::string& filename)
     file << std::fixed << std::setprecision(6);
     file << "pd_kp_x = " << pd_kp_x << "\n";
     file << "pd_kp_y = " << pd_kp_y << "\n";
+
+    file << "[MouseSmoothing]\n";
+    file << std::fixed << std::setprecision(6);
+    file << "smoothing_rate = " << smoothing_rate << "\n";
+    file << "smoothing_min_alpha = " << smoothing_min_alpha << "\n";
+    file << "smoothing_alpha_boost_scale = " << smoothing_alpha_boost_scale << "\n";
+    file << "smoothing_alpha_boost_limit = " << smoothing_alpha_boost_limit << "\n";
+    file << "smoothing_step_base = " << smoothing_step_base << "\n";
+    file << "smoothing_step_per_second = " << smoothing_step_per_second << "\n";
+    file << "smoothing_step_cap = " << smoothing_step_cap << "\n";
+    file << "smoothing_burst_multiplier = " << smoothing_burst_multiplier << "\n";
+    file << "smoothing_rest_deadzone = " << smoothing_rest_deadzone << "\n\n";
 
     file << "[Recoil]\n";
     file << "active_scope_magnification = " << active_scope_magnification << "\n\n";
