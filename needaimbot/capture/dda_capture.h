@@ -75,6 +75,8 @@ private:
     int m_screenWidth = 0;
     int m_screenHeight = 0;
 
+    DXGI_FORMAT m_duplicationFormat = DXGI_FORMAT_UNKNOWN;
+
     RECT m_captureRegion{0, 0, 0, 0};
     unsigned int m_captureWidth = 0;
     unsigned int m_captureHeight = 0;
