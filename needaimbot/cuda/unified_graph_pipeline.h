@@ -373,6 +373,10 @@ private:
     
     std::atomic<bool> m_allowMovement{false};
     std::atomic<bool> m_shouldStop{false};
+    mutable std::mutex m_movementFilterMutex;
+    MouseMovement m_lastFilteredMovement{};
+    std::chrono::steady_clock::time_point m_lastMovementTimestamp{};
+    bool m_hasFilteredMovement{false};
     mutable std::mutex m_previewMutex;
     
     
@@ -385,6 +389,13 @@ private:
         SimpleCudaMat previewBuffer;
         SimpleMat hostPreview;
     } m_preview;
+
+    struct CaptureRegionCache {
+        int detectionRes = 0;
+        float offsetX = 0.0f;
+        float offsetY = 0.0f;
+        bool usingAimShootOffset = false;
+    } m_captureRegionCache;
 
     bool validateGraph();
     void cleanupGraph();
@@ -399,6 +410,8 @@ private:
     void handleAimbotDeactivation();
     void clearCountBuffers();
     void clearMovementData();
+    void resetMovementFilter();
+    MouseMovement filterMouseMovement(const MouseMovement& rawMovement, bool movementEnabled);
     void clearHostPreviewData(AppContext& ctx);
     void handleAimbotActivation();
 

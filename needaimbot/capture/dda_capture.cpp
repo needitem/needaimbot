@@ -1,6 +1,7 @@
 #include "dda_capture.h"
 
 #include <algorithm>
+#include <cstring>
 #include <iostream>
 
 namespace {
@@ -292,8 +293,11 @@ bool DDACapture::CreateDuplicationInterface() {
 
     DXGI_OUTDUPL_DESC dupDesc{};
     m_duplication->GetDesc(&dupDesc);
+    m_duplicationFormat = dupDesc.ModeDesc.Format;
+    m_stagingTexture.Reset();
+    m_frameDesc = {};
 
-    return EnsureStagingTexture(dupDesc.ModeDesc.Width, dupDesc.ModeDesc.Height, dupDesc.ModeDesc.Format);
+    return true;
 }
 
 void DDACapture::ReleaseDuplication() {
@@ -391,14 +395,58 @@ bool DDACapture::AcquireFrame() {
 
     D3D11_TEXTURE2D_DESC textureDesc{};
     frameTexture->GetDesc(&textureDesc);
-    if (!EnsureStagingTexture(textureDesc.Width, textureDesc.Height, textureDesc.Format)) {
+
+    UINT captureWidth = m_captureWidth;
+    UINT captureHeight = m_captureHeight;
+    UINT startX = static_cast<UINT>(m_captureRegion.left);
+    UINT startY = static_cast<UINT>(m_captureRegion.top);
+
+    if (captureWidth == 0 || captureHeight == 0 ||
+        startX + captureWidth > textureDesc.Width ||
+        startY + captureHeight > textureDesc.Height) {
+        captureWidth = textureDesc.Width;
+        captureHeight = textureDesc.Height;
+        startX = 0;
+        startY = 0;
+    }
+
+    DXGI_FORMAT captureFormat = textureDesc.Format != DXGI_FORMAT_UNKNOWN
+        ? textureDesc.Format
+        : m_duplicationFormat;
+
+    if (!EnsureStagingTexture(captureWidth, captureHeight, captureFormat)) {
         if (frameAcquired) {
             m_duplication->ReleaseFrame();
         }
         return false;
     }
 
-    m_context->CopyResource(m_stagingTexture.Get(), frameTexture.Get());
+    D3D11_BOX captureBox{};
+    captureBox.left = startX;
+    captureBox.top = startY;
+    captureBox.front = 0;
+    captureBox.right = startX + captureWidth;
+    captureBox.bottom = startY + captureHeight;
+    captureBox.back = 1;
+
+    const bool useBox = !(startX == 0 && startY == 0 &&
+                          captureWidth == textureDesc.Width &&
+                          captureHeight == textureDesc.Height);
+
+    if (useBox) {
+        m_context->CopySubresourceRegion(
+            m_stagingTexture.Get(),
+            0,
+            0,
+            0,
+            0,
+            frameTexture.Get(),
+            0,
+            &captureBox
+        );
+    } else {
+        m_context->CopyResource(m_stagingTexture.Get(), frameTexture.Get());
+    }
 
     hr = m_duplication->ReleaseFrame();
     frameAcquired = false;
@@ -412,14 +460,6 @@ bool DDACapture::AcquireFrame() {
     if (FAILED(hr)) {
         std::cerr << "[DDACapture] Failed to map staging texture: 0x" << std::hex << hr << std::dec << std::endl;
         return false;
-    }
-
-    unsigned int captureWidth = m_captureRegion.right - m_captureRegion.left;
-    unsigned int captureHeight = m_captureRegion.bottom - m_captureRegion.top;
-
-    if (captureWidth == 0 || captureHeight == 0) {
-        captureWidth = static_cast<unsigned int>(m_screenWidth);
-        captureHeight = static_cast<unsigned int>(m_screenHeight);
     }
 
     size_t requiredSize = static_cast<size_t>(captureWidth) * captureHeight * kBytesPerPixel;
@@ -446,12 +486,13 @@ bool DDACapture::AcquireFrame() {
         const UINT srcPitch = mapped.RowPitch;
         const UINT bytesPerRow = captureWidth * kBytesPerPixel;
 
-        const UINT startX = static_cast<UINT>(m_captureRegion.left);
-        const UINT startY = static_cast<UINT>(m_captureRegion.top);
-
-        for (UINT row = 0; row < captureHeight; ++row) {
-            const unsigned char* srcRow = srcBase + (startY + row) * srcPitch + startX * kBytesPerPixel;
-            std::copy_n(srcRow, bytesPerRow, dst + row * bytesPerRow);
+        if (srcPitch == bytesPerRow) {
+            std::memcpy(dst, srcBase, bytesPerRow * captureHeight);
+        } else {
+            for (UINT row = 0; row < captureHeight; ++row) {
+                const unsigned char* srcRow = srcBase + row * srcPitch;
+                std::memcpy(dst + row * bytesPerRow, srcRow, bytesPerRow);
+            }
         }
 
         m_captureWidth = captureWidth;
