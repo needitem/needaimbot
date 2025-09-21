@@ -357,9 +357,9 @@ bool DDACapture::EnsureFrameBuffer(size_t requiredSize) {
     }
 }
 
-bool DDACapture::AcquireFrame() {
+DDACapture::FrameAcquireResult DDACapture::AcquireFrame() {
     if (!m_duplication || !m_context) {
-        return false;
+        return FrameAcquireResult::kError;
     }
 
     Microsoft::WRL::ComPtr<IDXGIResource> desktopResource;
@@ -368,17 +368,17 @@ bool DDACapture::AcquireFrame() {
 
     HRESULT hr = m_duplication->AcquireNextFrame(kFrameTimeoutMs, &frameInfo, &desktopResource);
     if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
-        return true; // No new frame yet
+        return FrameAcquireResult::kNoFrame;
     }
 
     if (hr == DXGI_ERROR_ACCESS_LOST) {
         CreateDuplicationInterface();
-        return false;
+        return FrameAcquireResult::kError;
     }
 
     if (FAILED(hr)) {
         std::cerr << "[DDACapture] AcquireNextFrame failed: 0x" << std::hex << hr << std::dec << std::endl;
-        return false;
+        return FrameAcquireResult::kError;
     }
 
     frameAcquired = true;
@@ -390,7 +390,7 @@ bool DDACapture::AcquireFrame() {
         if (frameAcquired) {
             m_duplication->ReleaseFrame();
         }
-        return false;
+        return FrameAcquireResult::kError;
     }
 
     D3D11_TEXTURE2D_DESC textureDesc{};
@@ -418,7 +418,7 @@ bool DDACapture::AcquireFrame() {
         if (frameAcquired) {
             m_duplication->ReleaseFrame();
         }
-        return false;
+        return FrameAcquireResult::kError;
     }
 
     D3D11_BOX captureBox{};
@@ -452,20 +452,20 @@ bool DDACapture::AcquireFrame() {
     frameAcquired = false;
     if (FAILED(hr)) {
         std::cerr << "[DDACapture] ReleaseFrame failed: 0x" << std::hex << hr << std::dec << std::endl;
-        return false;
+        return FrameAcquireResult::kError;
     }
 
     D3D11_MAPPED_SUBRESOURCE mapped{};
     hr = m_context->Map(m_stagingTexture.Get(), 0, D3D11_MAP_READ, 0, &mapped);
     if (FAILED(hr)) {
         std::cerr << "[DDACapture] Failed to map staging texture: 0x" << std::hex << hr << std::dec << std::endl;
-        return false;
+        return FrameAcquireResult::kError;
     }
 
     size_t requiredSize = static_cast<size_t>(captureWidth) * captureHeight * kBytesPerPixel;
     if (!EnsureFrameBuffer(requiredSize)) {
         m_context->Unmap(m_stagingTexture.Get(), 0);
-        return false;
+        return FrameAcquireResult::kError;
     }
 
     std::function<void(void*, unsigned int, unsigned int, unsigned int)> callback;
@@ -478,7 +478,7 @@ bool DDACapture::AcquireFrame() {
         std::lock_guard<std::mutex> lock(m_frameMutex);
         if (!m_frameBuffer) {
             m_context->Unmap(m_stagingTexture.Get(), 0);
-            return false;
+            return FrameAcquireResult::kError;
         }
 
         unsigned char* dst = m_frameBuffer.get();
@@ -511,12 +511,16 @@ bool DDACapture::AcquireFrame() {
         callback(callbackData, callbackWidth, callbackHeight, callbackSize);
     }
 
-    return true;
+    return FrameAcquireResult::kFrameCaptured;
 }
 
 void DDACapture::CaptureThreadProc() {
     while (m_isCapturing.load()) {
-        if (!AcquireFrame()) {
+        const auto result = AcquireFrame();
+        if (result == FrameAcquireResult::kError) {
+            // Back off briefly only when an actual error occurs. When AcquireNextFrame
+            // returns DXGI_ERROR_WAIT_TIMEOUT we rely on its 1 ms timeout to throttle
+            // the loop so new frames are delivered with minimal latency.
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
     }
