@@ -636,144 +636,41 @@ void UnifiedGraphPipeline::clearMovementData() {
         m_h_movement->get()->dx = 0;
         m_h_movement->get()->dy = 0;
     }
+
+    if (m_smallBufferArena.mouseMovement && !m_mouseMovementUsesMappedMemory) {
+        cudaError_t resetErr = cudaMemset(m_smallBufferArena.mouseMovement, 0, sizeof(MouseMovement));
+        if (resetErr != cudaSuccess) {
+            std::cerr << "[UnifiedGraph] Failed to reset device movement buffer: "
+                      << cudaGetErrorString(resetErr) << std::endl;
+        }
+    }
+
     resetMovementFilter();
 }
 
 void UnifiedGraphPipeline::resetMovementFilter() {
     std::lock_guard<std::mutex> lock(m_movementFilterMutex);
-
-    m_lastFilteredMovement = {0, 0};
-    m_lastMovementTimestamp = std::chrono::steady_clock::now();
-    m_hasFilteredMovement = true;
+    m_skipNextMovement = true;
 }
 
 MouseMovement UnifiedGraphPipeline::filterMouseMovement(const MouseMovement& rawMovement, bool movementEnabled) {
     std::lock_guard<std::mutex> lock(m_movementFilterMutex);
-
-    auto now = std::chrono::steady_clock::now();
-
     if (!movementEnabled) {
-        m_lastFilteredMovement = {0, 0};
-        m_lastMovementTimestamp = now;
-        m_hasFilteredMovement = true;
-        return m_lastFilteredMovement;
+        m_skipNextMovement = true;
+        return {0, 0};
     }
 
-    // The filter models a critically damped first-order response (exponential smoothing) with an
-    // explicit acceleration cap instead of a Bézier curve.  Larger requested corrections simply
-    // raise the lerp factor and expand the per-frame step limit so that the pointer eases in
-    // smoothly without overshooting when the target delta collapses again.
-
-    MouseMovement filtered = rawMovement;
-
-    if (!m_hasFilteredMovement) {
-        m_lastMovementTimestamp = now;
-        m_lastFilteredMovement = {0, 0};
-        m_hasFilteredMovement = true;
+    if (m_skipNextMovement) {
+        // Drop the first real movement after (re)activation to avoid large corrections
+        // caused by any stale delta in the shared buffer.
+        if (rawMovement.dx != 0 || rawMovement.dy != 0) {
+            m_skipNextMovement = false;
+            return {0, 0};
+        }
+        return rawMovement;
     }
 
-    auto refreshTuning = [&]() {
-        // Avoid blocking the aiming thread if the UI thread is editing settings right now.
-        constexpr auto kMinRefreshPeriod = std::chrono::milliseconds(8);
-        if (now - m_lastTuningRefresh < kMinRefreshPeriod) {
-            return;
-        }
-
-        auto& ctx = AppContext::getInstance();
-        std::unique_lock<std::mutex> cfgLock(ctx.configMutex, std::try_to_lock);
-        if (!cfgLock.owns_lock()) {
-            return;
-        }
-
-        m_movementTuning.smoothingRate = std::max(0.01f, ctx.config.smoothing_rate);
-        m_movementTuning.minSmoothingAlpha = std::clamp(ctx.config.smoothing_min_alpha, 0.0f, 1.0f);
-        m_movementTuning.alphaBoostScale = std::max(1.0f, ctx.config.smoothing_alpha_boost_scale);
-        m_movementTuning.alphaBoostLimit = std::max(0.0f, ctx.config.smoothing_alpha_boost_limit);
-        m_movementTuning.stepBase = std::max(0, ctx.config.smoothing_step_base);
-        m_movementTuning.stepPerSecond = std::max(0.0f, ctx.config.smoothing_step_per_second);
-        m_movementTuning.stepCap = std::max(m_movementTuning.stepBase, ctx.config.smoothing_step_cap);
-        m_movementTuning.burstMultiplier = std::max(0.0f, ctx.config.smoothing_burst_multiplier);
-        m_movementTuning.restDeadzone = std::max(0, ctx.config.smoothing_rest_deadzone);
-
-        m_lastTuningRefresh = now;
-    };
-
-    refreshTuning();
-
-    const float deltaSeconds = std::max(0.0f, std::chrono::duration<float>(now - m_lastMovementTimestamp).count());
-    const float baseAlpha = std::clamp(
-        deltaSeconds * m_movementTuning.smoothingRate,
-        m_movementTuning.minSmoothingAlpha,
-        1.0f);
-
-    auto computeAlphaForAxis = [&](int previous, int desired) {
-        int delta = desired - previous;
-        float magnitude = static_cast<float>(std::abs(delta));
-        if (magnitude <= 1.0f) {
-            return baseAlpha;
-        }
-
-        float boost = m_movementTuning.alphaBoostScale > 0.0f
-            ? magnitude / m_movementTuning.alphaBoostScale
-            : magnitude;
-        boost = std::clamp(boost, 0.0f, m_movementTuning.alphaBoostLimit);
-        float adjusted = baseAlpha * (1.0f + boost);
-        return std::clamp(adjusted, baseAlpha, 1.0f);
-    };
-
-    int requestedDelta = std::max(
-        std::abs(rawMovement.dx - m_lastFilteredMovement.dx),
-        std::abs(rawMovement.dy - m_lastFilteredMovement.dy));
-
-    auto computeStepLimit = [&](float dt, int requestMagnitude) {
-        int maxStep = m_movementTuning.stepBase;
-
-        if (m_movementTuning.stepPerSecond > 0.0f) {
-            maxStep += static_cast<int>(std::lround(dt * m_movementTuning.stepPerSecond));
-        }
-
-        if (m_movementTuning.burstMultiplier > 0.0f) {
-            float burstAllowance = static_cast<float>(requestMagnitude) * m_movementTuning.burstMultiplier;
-            maxStep += static_cast<int>(std::lround(burstAllowance));
-        }
-
-        if (m_movementTuning.stepCap > 0) {
-            maxStep = std::min(maxStep, m_movementTuning.stepCap);
-        }
-
-        return std::max(maxStep, m_movementTuning.stepBase);
-    };
-
-    const int maxStep = computeStepLimit(deltaSeconds, requestedDelta);
-
-    auto smoothAxis = [&](int previous, int desired) {
-        float alpha = computeAlphaForAxis(previous, desired);
-        float blended = static_cast<float>(previous) + alpha * (static_cast<float>(desired - previous));
-        int proposed = static_cast<int>(std::lround(blended));
-        int delta = proposed - previous;
-        if (delta > maxStep) {
-            delta = maxStep;
-        } else if (delta < -maxStep) {
-            delta = -maxStep;
-        }
-        return previous + delta;
-    };
-
-    filtered.dx = smoothAxis(m_lastFilteredMovement.dx, rawMovement.dx);
-    filtered.dy = smoothAxis(m_lastFilteredMovement.dy, rawMovement.dy);
-
-    if (std::abs(filtered.dx) <= m_movementTuning.restDeadzone && rawMovement.dx == 0) {
-        filtered.dx = 0;
-    }
-    if (std::abs(filtered.dy) <= m_movementTuning.restDeadzone && rawMovement.dy == 0) {
-        filtered.dy = 0;
-    }
-
-    m_lastFilteredMovement = filtered;
-    m_lastMovementTimestamp = now;
-    m_hasFilteredMovement = true;
-
-    return filtered;
+    return rawMovement;
 }
 
 void UnifiedGraphPipeline::clearHostPreviewData(AppContext& ctx) {
@@ -794,8 +691,9 @@ void UnifiedGraphPipeline::clearHostPreviewData(AppContext& ctx) {
 void UnifiedGraphPipeline::handleAimbotActivation() {
     m_state.frameCount = 0;
     m_allowMovement.store(false, std::memory_order_release);
-    resetMovementFilter();
+    clearMovementData();
     m_captureRegionCache = {};
+    m_hasFrameData = false;
 
     if (m_smallBufferArena.previousErrorX && m_smallBufferArena.previousErrorY) {
         cudaError_t resetErr = cudaMemset(m_smallBufferArena.previousErrorX, 0, sizeof(float));

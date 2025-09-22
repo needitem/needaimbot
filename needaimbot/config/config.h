@@ -280,17 +280,6 @@ public:
     float pd_kp_x = 0.4f;   // Proportional gain for X axis
     float pd_kp_y = 0.4f;   // Proportional gain for Y axis
 
-    // Mouse smoothing filter tuning
-    float smoothing_rate = 8.5f;                 // Base exponential smoothing rate (Hz)
-    float smoothing_min_alpha = 0.18f;           // Minimum interpolation factor
-    float smoothing_alpha_boost_scale = 14.0f;   // How quickly alpha scales with error magnitude
-    float smoothing_alpha_boost_limit = 1.75f;   // Maximum alpha boost multiplier
-    int smoothing_step_base = 10;                // Minimum per-frame step in pixels
-    float smoothing_step_per_second = 180.0f;    // Additional per-second step allowance
-    int smoothing_step_cap = 96;                 // Upper clamp for per-frame movement
-    float smoothing_burst_multiplier = 1.0f / 3.0f; // Additional allowance based on requested delta
-    int smoothing_rest_deadzone = 1;             // Residual pixels that should snap to rest
-
     // Active profile management
     std::string active_profile_name = "Default";
     
