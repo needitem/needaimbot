@@ -374,22 +374,7 @@ private:
     std::atomic<bool> m_allowMovement{false};
     std::atomic<bool> m_shouldStop{false};
     mutable std::mutex m_movementFilterMutex;
-    MouseMovement m_lastFilteredMovement{};
-    std::chrono::steady_clock::time_point m_lastMovementTimestamp{};
-    bool m_hasFilteredMovement{false};
-
-    struct MovementFilterTuning {
-        float smoothingRate = 8.5f;              // How fast the exponential filter reacts (Hz)
-        float minSmoothingAlpha = 0.18f;         // Lower bound for lerp factor
-        float alphaBoostScale = 14.0f;           // Larger deltas ramp alpha faster
-        float alphaBoostLimit = 1.75f;           // Maximum boost multiplier (1.0 -> no boost)
-        int stepBase = 10;                       // Minimum per-frame movement (pixels)
-        float stepPerSecond = 180.0f;            // Additional step allowance scaled by frame time
-        int stepCap = 96;                        // Upper bound on per-frame movement (pixels)
-        float burstMultiplier = 1.0f / 3.0f;     // Extra allowance based on requested delta size
-        int restDeadzone = 1;                    // Residual pixels that should snap to rest
-    } m_movementTuning;
-    std::chrono::steady_clock::time_point m_lastTuningRefresh{};
+    bool m_skipNextMovement{true};
     mutable std::mutex m_previewMutex;
     
     
