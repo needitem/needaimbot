@@ -332,6 +332,10 @@ private:
     std::unordered_map<std::string, size_t> m_outputSizes;
     std::unordered_map<std::string, std::unique_ptr<CudaMemory<uint8_t>>> m_inputBindings;
     std::unordered_map<std::string, std::unique_ptr<CudaMemory<uint8_t>>> m_outputBindings;
+    std::vector<void*> m_inputAddressCache;
+    std::vector<void*> m_outputAddressCache;
+    bool m_bindingsNeedUpdate = true;
+    int m_primaryInputIndex = -1;
     
     std::string m_inputName;
     nvinfer1::Dims m_inputDims;
@@ -439,8 +443,11 @@ private:
     void handlePreviewUpdate(const PostProcessingConfig& config, cudaStream_t stream);
     void updatePreviewTargets(const PostProcessingConfig& config);
     void startPreviewCopy(const PostProcessingConfig& config, cudaStream_t stream);
-    
+
     bool m_graphCaptured = false;
+
+    void refreshCachedBindings();
+    bool bindStaticTensorAddresses();
 };
 
 class PipelineManager {
