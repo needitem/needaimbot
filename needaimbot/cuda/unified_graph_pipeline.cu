@@ -235,29 +235,24 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
     }
     
     if (m_config.useGraphOptimization) {
-        
+
         for (int i = 0; i < 3; i++) {
-            if (m_inputBindings.find(m_inputName) != m_inputBindings.end()) {
-                auto inputBuffer = m_inputBindings[m_inputName].get();
-                cudaMemsetAsync(inputBuffer->get(), 0, inputBuffer->size() * sizeof(uint8_t), m_pipelineStream->get());
+            auto bindingIt = m_inputBindings.find(m_inputName);
+            if (bindingIt != m_inputBindings.end() && bindingIt->second) {
+                cudaMemsetAsync(bindingIt->second->get(), 0,
+                                bindingIt->second->size(),
+                                m_pipelineStream->get());
             }
-            
-            for (const auto& [name, buffer] : m_inputBindings) {
-                if (buffer && buffer->get()) {
-                    m_context->setTensorAddress(name.c_str(), buffer->get());
-                }
+
+            if (!bindStaticTensorAddresses()) {
+                break;
             }
-            for (const auto& [name, buffer] : m_outputBindings) {
-                if (buffer && buffer->get()) {
-                    m_context->setTensorAddress(name.c_str(), buffer->get());
-                }
-            }
-            
+
             if (m_context) {
                 m_context->enqueueV3(m_pipelineStream->get());
             }
         }
-        
+
         m_state.needsRebuild = true;
     }
     
@@ -278,6 +273,10 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     m_inferenceNodes.clear();
     m_postprocessNodes.clear();
     
+    if (!bindStaticTensorAddresses()) {
+        return false;
+    }
+
     cudaError_t err = cudaStreamBeginCapture(stream, cudaStreamCaptureModeRelaxed);
     if (err != cudaSuccess) {
         std::cerr << "[UnifiedGraph] Failed to begin capture: " 
@@ -302,30 +301,19 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
             stream
         );
         
-        // 전처리된 데이터를 TensorRT 입력 버퍼로 복사
-        if (m_inputBindings.find(m_inputName) != m_inputBindings.end()) {
-            void* inputBinding = m_inputBindings[m_inputName]->get();
-            if (inputBinding != m_unifiedArena.yoloInput) {
-                size_t inputSize = modelRes * modelRes * 3 * sizeof(float);
-                cudaMemcpyAsync(inputBinding, m_unifiedArena.yoloInput, inputSize,
-                               cudaMemcpyDeviceToDevice, stream);
-            }
+        void* inputBinding = (m_primaryInputIndex >= 0 &&
+                              m_primaryInputIndex < static_cast<int>(m_inputAddressCache.size()))
+                                 ? m_inputAddressCache[m_primaryInputIndex]
+                                 : nullptr;
+        if (inputBinding && inputBinding != m_unifiedArena.yoloInput) {
+            size_t inputSize = modelRes * modelRes * 3 * sizeof(float);
+            cudaMemcpyAsync(inputBinding, m_unifiedArena.yoloInput, inputSize,
+                           cudaMemcpyDeviceToDevice, stream);
         }
     }
-    
+
     // TensorRT 추론 포함 (Graph 호환 모델만 사용)
     if (m_context && m_config.enableDetection) {
-        for (const auto& [name, buffer] : m_inputBindings) {
-            if (buffer && buffer->get()) {
-                m_context->setTensorAddress(name.c_str(), buffer->get());
-            }
-        }
-        for (const auto& [name, buffer] : m_outputBindings) {
-            if (buffer && buffer->get()) {
-                m_context->setTensorAddress(name.c_str(), buffer->get());
-            }
-        }
-        
         if (!m_context->enqueueV3(stream)) {
             std::cerr << "Warning: TensorRT enqueue failed during graph capture" << std::endl;
         }
@@ -476,6 +464,7 @@ bool UnifiedGraphPipeline::allocateBuffers() {
                     inputSize,
                     false);
                 bindingIt->second = std::move(arenaAlias);
+                refreshCachedBindings();
             }
         }
 
@@ -542,10 +531,14 @@ void UnifiedGraphPipeline::deallocateBuffers() {
     m_cachedHeadClassId.store(-1, std::memory_order_release);
     m_cachedHeadClassNameHash.store(0, std::memory_order_release);
     m_cachedClassSettingsSize.store(0, std::memory_order_release);
-    
+
     m_inputBindings.clear();
     m_outputBindings.clear();
-    
+    m_inputAddressCache.clear();
+    m_outputAddressCache.clear();
+    m_bindingsNeedUpdate = true;
+    m_primaryInputIndex = -1;
+
 }
 
 bool UnifiedGraphPipeline::configureMouseMovementBuffer() {
@@ -864,6 +857,7 @@ bool UnifiedGraphPipeline::initializeTensorRT(const std::string& modelFile) {
     
     if (!m_inputNames.empty()) {
         m_inputName = m_inputNames[0];
+        m_primaryInputIndex = 0;
         m_inputDims = m_engine->getTensorShape(m_inputName.c_str());
         
         if (m_inputDims.nbDims == 4) {
@@ -953,24 +947,6 @@ void UnifiedGraphPipeline::getOutputNames() {
 }
 
 void UnifiedGraphPipeline::getBindings() {
-    auto& ctx = AppContext::getInstance();
-    
-    
-    
-    std::unordered_map<std::string, void*> reusableInputs;
-    std::unordered_map<std::string, void*> reusableOutputs;
-    
-    for (const auto& binding : m_inputBindings) {
-        if (binding.second && binding.second->get()) {
-            reusableInputs[binding.first] = binding.second->get();
-        }
-    }
-    for (const auto& binding : m_outputBindings) {
-        if (binding.second && binding.second->get()) {
-            reusableOutputs[binding.first] = binding.second->get();
-        }
-    }
-    
     m_inputBindings.clear();
     m_outputBindings.clear();
 
@@ -1013,7 +989,77 @@ void UnifiedGraphPipeline::getBindings() {
     if (m_outputBindings.size() != m_outputNames.size()) {
         std::cerr << "[Pipeline] Warning: Output binding count mismatch" << std::endl;
     }
-    
+
+    for (size_t i = 0; i < m_inputNames.size(); ++i) {
+        if (m_inputNames[i] == m_inputName) {
+            m_primaryInputIndex = static_cast<int>(i);
+            break;
+        }
+    }
+
+    refreshCachedBindings();
+
+}
+
+void UnifiedGraphPipeline::refreshCachedBindings() {
+    m_inputAddressCache.assign(m_inputNames.size(), nullptr);
+    for (size_t i = 0; i < m_inputNames.size(); ++i) {
+        const auto& name = m_inputNames[i];
+        auto bindingIt = m_inputBindings.find(name);
+        if (bindingIt != m_inputBindings.end() && bindingIt->second) {
+            m_inputAddressCache[i] = bindingIt->second->get();
+        }
+    }
+
+    m_outputAddressCache.assign(m_outputNames.size(), nullptr);
+    for (size_t i = 0; i < m_outputNames.size(); ++i) {
+        const auto& name = m_outputNames[i];
+        auto bindingIt = m_outputBindings.find(name);
+        if (bindingIt != m_outputBindings.end() && bindingIt->second) {
+            m_outputAddressCache[i] = bindingIt->second->get();
+        }
+    }
+
+    m_bindingsNeedUpdate = true;
+}
+
+bool UnifiedGraphPipeline::bindStaticTensorAddresses() {
+    if (!m_bindingsNeedUpdate) {
+        return true;
+    }
+
+    if (!m_context) {
+        return false;
+    }
+
+    for (size_t i = 0; i < m_inputNames.size(); ++i) {
+        void* address = m_inputAddressCache[i];
+        if (!address) {
+            std::cerr << "[Pipeline] Input binding address missing for: " << m_inputNames[i] << std::endl;
+            return false;
+        }
+
+        if (!m_context->setTensorAddress(m_inputNames[i].c_str(), address)) {
+            std::cerr << "[Pipeline] Failed to bind input tensor: " << m_inputNames[i] << std::endl;
+            return false;
+        }
+    }
+
+    for (size_t i = 0; i < m_outputNames.size(); ++i) {
+        void* address = m_outputAddressCache[i];
+        if (!address) {
+            std::cerr << "[Pipeline] Output binding address missing for: " << m_outputNames[i] << std::endl;
+            return false;
+        }
+
+        if (!m_context->setTensorAddress(m_outputNames[i].c_str(), address)) {
+            std::cerr << "[Pipeline] Failed to bind output tensor: " << m_outputNames[i] << std::endl;
+            return false;
+        }
+    }
+
+    m_bindingsNeedUpdate = false;
+    return true;
 }
 
 
@@ -1096,40 +1142,10 @@ bool UnifiedGraphPipeline::runInferenceAsync(cudaStream_t stream) {
         stream = m_pipelineStream->get();
     }
     
-    // Removed previous error check for performance
-    
-    for (const auto& inputName : m_inputNames) {
-        auto bindingIt = m_inputBindings.find(inputName);
-        if (bindingIt == m_inputBindings.end() || bindingIt->second == nullptr) {
-            std::cerr << "[Pipeline] Input binding not found or null for: " << inputName << std::endl;
-            return false;
-        }
-        
-        
-        if (!m_context->setTensorAddress(inputName.c_str(), bindingIt->second->get())) {
-            std::cerr << "[Pipeline] Failed to set input tensor address for: " << inputName << std::endl;
-            return false;
-        }
+    if (!bindStaticTensorAddresses()) {
+        return false;
     }
-    
-    for (const auto& outputName : m_outputNames) {
-        auto bindingIt = m_outputBindings.find(outputName);
-        if (bindingIt == m_outputBindings.end() || bindingIt->second == nullptr) {
-            std::cerr << "[Pipeline] Output binding not found or null for: " << outputName << std::endl;
-            return false;
-        }
-        
-        void* tensorAddress = bindingIt->second->get();
-        
-        if (!m_context->setTensorAddress(outputName.c_str(), tensorAddress)) {
-            std::cerr << "[Pipeline] Failed to set output tensor address for: " << outputName << std::endl;
-            return false;
-        }
-    }
-    
-    // Removed memory error check for performance
-    
-    
+
     
     bool success = m_context->enqueueV3(stream);
     if (!success) {
@@ -1365,7 +1381,7 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
     }
 
     const std::string& primaryOutputName = m_outputNames[0];
-    void* d_rawOutputPtr = m_outputBindings[primaryOutputName]->get();
+    void* d_rawOutputPtr = m_outputAddressCache.empty() ? nullptr : m_outputAddressCache[0];
     nvinfer1::DataType outputType = m_outputTypes[primaryOutputName];
     const std::vector<int64_t>& shape = m_outputShapes[primaryOutputName];
 
@@ -1864,11 +1880,16 @@ bool UnifiedGraphPipeline::getPreviewSnapshot(SimpleMat& outFrame) {
 }
 
 bool UnifiedGraphPipeline::performInference() {
-    if (m_inputBindings.find(m_inputName) == m_inputBindings.end() || !m_unifiedArena.yoloInput) {
+    if (m_primaryInputIndex < 0 ||
+        m_primaryInputIndex >= static_cast<int>(m_inputAddressCache.size()) ||
+        !m_unifiedArena.yoloInput) {
         return false;
     }
-    
-    void* inputBinding = m_inputBindings[m_inputName]->get();
+
+    void* inputBinding = m_inputAddressCache[m_primaryInputIndex];
+    if (!inputBinding) {
+        return false;
+    }
     
     // 복사 최적화: 동일한 포인터면 복사 생략
     if (inputBinding != m_unifiedArena.yoloInput) {

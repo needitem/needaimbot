@@ -38,6 +38,10 @@ void UnifiedGraphPipeline::shutdown() {
     // Clear TensorRT bindings - RAII handles memory deallocation
     m_inputBindings.clear();
     m_outputBindings.clear();
+    m_inputAddressCache.clear();
+    m_outputAddressCache.clear();
+    m_bindingsNeedUpdate = true;
+    m_primaryInputIndex = -1;
     
     // Destroy CUDA graph and clear graph cache
     if (m_graphExec) {
