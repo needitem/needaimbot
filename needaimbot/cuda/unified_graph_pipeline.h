@@ -320,6 +320,17 @@ private:
     
     // Unified capture buffer - removed duplicate m_unifiedCaptureBuffer
     SimpleCudaMat m_captureBuffer;
+    SimpleCudaMat m_nextCaptureBuffer;
+
+    std::unique_ptr<CudaStream> m_captureStream;
+    std::unique_ptr<CudaEvent> m_captureReadyEvent;
+    bool m_captureInFlight = false;
+
+    bool ensureFrameReady();
+    bool scheduleNextFrameCapture(bool forceSync);
+    bool waitForCaptureCompletion();
+    bool copyFrameToBuffer(void* frameData, unsigned int width, unsigned int height,
+                           SimpleCudaMat& targetBuffer, cudaStream_t stream);
     
     
     std::unique_ptr<nvinfer1::IRuntime> m_runtime;
