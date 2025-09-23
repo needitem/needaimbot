@@ -204,7 +204,7 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
     
     int leastPriority, greatestPriority;
     cudaError_t err = cudaDeviceGetStreamPriorityRange(&leastPriority, &greatestPriority);
-    
+
     if (err == cudaSuccess) {
         cudaStream_t priorityStream;
         err = cudaStreamCreateWithPriority(&priorityStream, cudaStreamNonBlocking, greatestPriority);
@@ -216,8 +216,25 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
     } else {
         m_pipelineStream = std::make_unique<CudaStream>();
     }
-    
+
+    cudaStream_t captureStreamHandle = nullptr;
+    cudaError_t captureErr = cudaSuccess;
+    if (err == cudaSuccess) {
+        captureErr = cudaStreamCreateWithPriority(&captureStreamHandle, cudaStreamNonBlocking, leastPriority);
+    }
+
+    if (captureErr == cudaSuccess && captureStreamHandle) {
+        m_captureStream = std::make_unique<CudaStream>(captureStreamHandle);
+    } else {
+        try {
+            m_captureStream = std::make_unique<CudaStream>();
+        } catch (...) {
+            m_captureStream.reset();
+        }
+    }
+
     m_previewReadyEvent = std::make_unique<CudaEvent>(cudaEventDisableTiming);
+    m_captureReadyEvent = std::make_unique<CudaEvent>(cudaEventDisableTiming);
     
     if (m_config.modelPath.empty()) {
         std::cerr << "[UnifiedGraph] ERROR: Model path is required for TensorRT integration" << std::endl;
@@ -605,6 +622,7 @@ void UnifiedGraphPipeline::handleAimbotDeactivation() {
     clearHostPreviewData(ctx);
     m_allowMovement.store(false, std::memory_order_release);
     m_captureRegionCache = {};
+    m_captureInFlight = false;
 }
 
 void UnifiedGraphPipeline::clearCountBuffers() {
@@ -687,6 +705,7 @@ void UnifiedGraphPipeline::handleAimbotActivation() {
     clearMovementData();
     m_captureRegionCache = {};
     m_hasFrameData = false;
+    m_captureInFlight = false;
 
     if (m_smallBufferArena.previousErrorX && m_smallBufferArena.previousErrorY) {
         cudaError_t resetErr = cudaMemset(m_smallBufferArena.previousErrorX, 0, sizeof(float));
@@ -1544,35 +1563,38 @@ bool UnifiedGraphPipeline::updateDDACaptureRegion(const AppContext& ctx) {
     return true;
 }
 
-bool UnifiedGraphPipeline::copyDDAFrameToGPU(void* frameData, unsigned int width, unsigned int height) {
-    if (!frameData || width == 0 || height == 0) {
+bool UnifiedGraphPipeline::copyFrameToBuffer(
+    void* frameData,
+    unsigned int width,
+    unsigned int height,
+    SimpleCudaMat& targetBuffer,
+    cudaStream_t stream
+) {
+    if (!frameData || width == 0 || height == 0 || !stream) {
         return false;
     }
 
-    if (m_captureBuffer.empty() ||
-        m_captureBuffer.cols() != static_cast<int>(width) ||
-        m_captureBuffer.rows() != static_cast<int>(height) ||
-        m_captureBuffer.channels() != 4) {
-        m_captureBuffer.create(static_cast<int>(height), static_cast<int>(width), 4);
+    if (targetBuffer.empty() ||
+        targetBuffer.cols() != static_cast<int>(width) ||
+        targetBuffer.rows() != static_cast<int>(height) ||
+        targetBuffer.channels() != 4) {
+        targetBuffer.create(static_cast<int>(height), static_cast<int>(width), 4);
     }
 
-    if (m_captureBuffer.empty() || !m_pipelineStream) {
+    if (targetBuffer.empty()) {
         return false;
     }
-
-    size_t totalBytes = static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
-    ensureCaptureBufferRegistered(frameData, totalBytes);
 
     size_t hostPitch = static_cast<size_t>(width) * 4;
     cudaError_t err = cudaMemcpy2DAsync(
-        m_captureBuffer.data(),
-        m_captureBuffer.step(),
+        targetBuffer.data(),
+        targetBuffer.step(),
         frameData,
         hostPitch,
         hostPitch,
         height,
         cudaMemcpyHostToDevice,
-        m_pipelineStream->get()
+        stream
     );
 
     if (err != cudaSuccess) {
@@ -1581,6 +1603,17 @@ bool UnifiedGraphPipeline::copyDDAFrameToGPU(void* frameData, unsigned int width
     }
 
     return true;
+}
+
+bool UnifiedGraphPipeline::copyDDAFrameToGPU(void* frameData, unsigned int width, unsigned int height) {
+    if (!m_pipelineStream) {
+        return false;
+    }
+
+    size_t totalBytes = static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
+    ensureCaptureBufferRegistered(frameData, totalBytes);
+
+    return copyFrameToBuffer(frameData, width, height, m_captureBuffer, m_pipelineStream->get());
 }
 
 bool UnifiedGraphPipeline::ensureCaptureBufferRegistered(void* frameData, size_t size) {
@@ -1637,10 +1670,38 @@ void UnifiedGraphPipeline::releaseRegisteredCaptureBuffers() {
     m_registeredCaptureBuffers.clear();
 }
 
-bool UnifiedGraphPipeline::performFrameCapture() {
-    auto& ctx = AppContext::getInstance();
+bool UnifiedGraphPipeline::waitForCaptureCompletion() {
+    if (!m_captureInFlight) {
+        return m_hasFrameData;
+    }
 
-    if (!m_config.enableCapture || m_hasFrameData) {
+    if (!m_captureReadyEvent || !m_captureReadyEvent->get()) {
+        return false;
+    }
+
+    cudaError_t syncErr = cudaEventSynchronize(m_captureReadyEvent->get());
+    if (syncErr != cudaSuccess) {
+        std::cerr << "[Capture] Failed to synchronize capture event: "
+                  << cudaGetErrorString(syncErr) << std::endl;
+        m_captureInFlight = false;
+        return false;
+    }
+
+    m_captureInFlight = false;
+    std::swap(m_captureBuffer, m_nextCaptureBuffer);
+    m_hasFrameData = true;
+
+    auto& ctx = AppContext::getInstance();
+    if ((m_preview.enabled || ctx.config.show_window) &&
+        m_pipelineStream && m_pipelineStream->get()) {
+        updatePreviewBuffer(m_captureBuffer);
+    }
+
+    return true;
+}
+
+bool UnifiedGraphPipeline::scheduleNextFrameCapture(bool forceSync) {
+    if (!m_config.enableCapture) {
         return true;
     }
 
@@ -1649,6 +1710,11 @@ bool UnifiedGraphPipeline::performFrameCapture() {
         return false;
     }
 
+    if (m_captureInFlight && !forceSync) {
+        return true;
+    }
+
+    auto& ctx = AppContext::getInstance();
     if (!updateDDACaptureRegion(ctx)) {
         return false;
     }
@@ -1662,16 +1728,101 @@ bool UnifiedGraphPipeline::performFrameCapture() {
         return false;
     }
 
-    if (!copyDDAFrameToGPU(frameData, width, height)) {
+    if (!frameData || width == 0 || height == 0) {
         return false;
     }
 
-    if ((m_preview.enabled || ctx.config.show_window) && m_pipelineStream && m_pipelineStream->get()) {
-        updatePreviewBuffer(m_captureBuffer);
+    ensureCaptureBufferRegistered(frameData, size);
+
+    cudaStream_t copyStream = nullptr;
+    if (m_captureStream && m_captureStream->get()) {
+        copyStream = m_captureStream->get();
+    } else if (m_pipelineStream && m_pipelineStream->get()) {
+        copyStream = m_pipelineStream->get();
     }
 
-    m_hasFrameData = true;
+    if (!copyStream) {
+        return false;
+    }
+
+    bool useGraphCapture = ctx.config.use_cuda_graph;
+
+    SimpleCudaMat& targetBuffer = useGraphCapture ? m_captureBuffer : m_nextCaptureBuffer;
+
+    if (!copyFrameToBuffer(frameData, width, height, targetBuffer, copyStream)) {
+        return false;
+    }
+
+    if (!m_captureReadyEvent) {
+        m_captureReadyEvent = std::make_unique<CudaEvent>(cudaEventDisableTiming);
+    }
+
+    if (!m_captureReadyEvent || !m_captureReadyEvent->get()) {
+        return false;
+    }
+
+    cudaError_t recordErr = cudaEventRecord(m_captureReadyEvent->get(), copyStream);
+    if (recordErr != cudaSuccess) {
+        std::cerr << "[Capture] Failed to record capture completion event: "
+                  << cudaGetErrorString(recordErr) << std::endl;
+        return false;
+    }
+
+    if (useGraphCapture) {
+        cudaError_t syncErr = cudaEventSynchronize(m_captureReadyEvent->get());
+        if (syncErr != cudaSuccess) {
+            std::cerr << "[Capture] Failed to synchronize graph capture copy: "
+                      << cudaGetErrorString(syncErr) << std::endl;
+            return false;
+        }
+
+        m_hasFrameData = true;
+
+        if ((m_preview.enabled || ctx.config.show_window) &&
+            m_pipelineStream && m_pipelineStream->get()) {
+            updatePreviewBuffer(m_captureBuffer);
+        }
+
+        return true;
+    }
+
+    m_captureInFlight = true;
+
+    if (forceSync) {
+        return waitForCaptureCompletion();
+    }
+
     return true;
+}
+
+bool UnifiedGraphPipeline::ensureFrameReady() {
+    if (!m_config.enableCapture) {
+        return true;
+    }
+
+    if (m_captureInFlight) {
+        if (!waitForCaptureCompletion()) {
+            return false;
+        }
+    }
+
+    if (!m_hasFrameData) {
+        if (!scheduleNextFrameCapture(true)) {
+            return false;
+        }
+    }
+
+    return m_hasFrameData;
+}
+
+bool UnifiedGraphPipeline::performFrameCapture() {
+    auto& ctx = AppContext::getInstance();
+
+    if (!m_config.enableCapture || m_hasFrameData) {
+        return true;
+    }
+
+    return scheduleNextFrameCapture(true);
 }
 
 bool UnifiedGraphPipeline::performFrameCaptureDirectToUnified() {
@@ -1991,7 +2142,7 @@ bool UnifiedGraphPipeline::executeNormalPipeline(cudaStream_t stream) {
         return false;
     }
 
-    if (!performFrameCapture()) {
+    if (!ensureFrameReady()) {
         return false;
     }
 
@@ -1999,6 +2150,10 @@ bool UnifiedGraphPipeline::executeNormalPipeline(cudaStream_t stream) {
 
     if (shouldRunDetection) {
         if (!performPreprocessing()) {
+            return false;
+        }
+
+        if (!scheduleNextFrameCapture(false)) {
             return false;
         }
 
@@ -2022,6 +2177,10 @@ bool UnifiedGraphPipeline::executeNormalPipeline(cudaStream_t stream) {
             return false;
         }
     } else {
+        if (!scheduleNextFrameCapture(false)) {
+            return false;
+        }
+
         cudaError_t streamState = cudaStreamQuery(activeStream);
         if (streamState == cudaSuccess) {
             clearMovementData();
