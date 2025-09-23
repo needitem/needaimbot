@@ -51,6 +51,21 @@ An ultra-low latency AI targeting assistant for Windows that keeps the entire ca
    ```
    or open `needaimbot.sln`, choose *Release | x64*, and build the `needaimbot` project.
 
+## 🚀 Export an optimized TensorRT engine (recommended)
+TensorRT engines bundled in `models/` work out of the box, but you will get the lowest latency by generating your own engine with the matching TensorRT/CUDA toolchain.
+
+1. **Clone the exporter repo** – Grab the dedicated exporter from [needitem/EngineExport](https://github.com/needitem/EngineExport) and follow its README. Place it next to this project for convenience:
+   ```powershell
+   git clone https://github.com/needitem/EngineExport.git
+   cd EngineExport
+   ```
+2. **Prepare the environment** – Create/activate a Python 3.10+ virtual environment and install the dependencies listed in `requirements.txt` inside the exporter repository. The tool needs the same CUDA, cuDNN, and TensorRT versions that you installed above.
+3. **Run the export script** – Point the exporter at your ONNX (or supported source) model and select the desired precision profile (FP16/INT8). The exporter builds the TensorRT engine and writes the resulting `.engine` file to the path you provide, e.g. `..\needaimbot\models\custom_fp16.engine`.
+4. **Plan for build time** – TensorRT’s builder phase performs layer fusion, calibration, and tactic selection; expect the process to take roughly **20 minutes** on a modern RTX GPU.
+5. **Deploy** – Copy the generated `.engine` file into `needaimbot/models/` and reference it via `ai_model` in your profile INI.
+
+> 💡 EngineExport’s scripts expose additional knobs such as workspace size and calibration data paths. Match them to the resolution and precision you intend to run in-game so the generated engine aligns perfectly with this application.
+
 ## ▶️ First Launch
 1. Copy the built `needaimbot.exe`, accompanying DLLs, and your `.engine` model into the same directory.
 2. Run `needaimbot.exe` as Administrator so the selected input driver can inject mouse events.
