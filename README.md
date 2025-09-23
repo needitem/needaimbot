@@ -13,11 +13,6 @@ An ultra-low latency AI targeting assistant for Windows that keeps the entire ca
 |-----------|---------|-------|
 | OS | Windows 10/11 64-bit | Desktop Duplication is required for capture. |
 | GPU | NVIDIA RTX-class with CUDA 12.x drivers | TensorRT engines must match the installed CUDA/CuDNN toolchain. |
-<<<<<<< ours
-| SDKs | CUDA Toolkit 12.8, TensorRT 10.8, Visual Studio 2022 (MSVC v143, Desktop C++ workload) | `build.bat` uses MSBuild from Visual Studio 2022. |
-| Runtime | Microsoft Visual C++ Redistributable (x64) | Required for MSVC-built binaries. |
-
-=======
 | SDKs | CUDA Toolkit 12.8, cuDNN 9.7.1, TensorRT 10.8.0.43, Visual Studio 2022 (MSVC v143, Desktop C++ workload) | `build.bat` uses MSBuild from Visual Studio 2022. |
 | Runtime | Microsoft Visual C++ Redistributable (x64) | Required for MSVC-built binaries. |
 
@@ -42,18 +37,13 @@ An ultra-low latency AI targeting assistant for Windows that keeps the entire ca
    ```
    After building, copy the DLLs from `modules/TensorRT-10.8.0.43/bin/` (and `CUDNN\v9.7\bin\12.8\`) next to `needaimbot.exe` or add them to your `PATH` so the runtime can locate them.
 
->>>>>>> theirs
 ## ⬇️ Download & Build
 1. **Clone the repository**
    ```powershell
    git clone https://github.com/needitem/needaimbot.git
    cd needaimbot
    ```
-<<<<<<< ours
-2. **Install prerequisites** (CUDA 12.8, TensorRT 10.8, Visual Studio 2022).
-=======
 2. **Install prerequisites** (CUDA 12.8, cuDNN 9.7.1, TensorRT 10.8, Visual Studio 2022).
->>>>>>> theirs
 3. **Place your TensorRT engine** in `needaimbot/models/`. The default configuration expects `sunxds_0.5.6.engine` but any `.engine` file can be selected through the config.
 4. **Build** using the supplied script or Visual Studio:
    ```powershell
