@@ -318,6 +318,8 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
             stream
         );
         
+        ensurePrimaryInputBindingAliased();
+
         void* inputBinding = (m_primaryInputIndex >= 0 &&
                               m_primaryInputIndex < static_cast<int>(m_inputAddressCache.size()))
                                  ? m_inputAddressCache[m_primaryInputIndex]
@@ -472,18 +474,12 @@ bool UnifiedGraphPipeline::allocateBuffers() {
         }
 
         if (m_unifiedArena.yoloInput) {
-            auto bindingIt = m_inputBindings.find(m_inputName);
-            auto sizeIt = m_inputSizes.find(m_inputName);
-            if (bindingIt != m_inputBindings.end() && sizeIt != m_inputSizes.end()) {
-                size_t inputSize = sizeIt->second;
-                auto arenaAlias = std::make_unique<CudaMemory<uint8_t>>(
-                    reinterpret_cast<uint8_t*>(m_unifiedArena.yoloInput),
-                    inputSize,
-                    false);
-                bindingIt->second = std::move(arenaAlias);
-                refreshCachedBindings();
+            if (!ensurePrimaryInputBindingAliased()) {
+                std::cerr << "[UnifiedGraph] Warning: Failed to alias TensorRT input binding to unified arena" << std::endl;
             }
         }
+
+        ensureFinalTargetAliases();
 
         m_cachedClassFilter.assign(Constants::MAX_CLASSES_FOR_FILTERING, 0);
         m_classFilterDirty.store(true, std::memory_order_release);
@@ -535,7 +531,7 @@ void UnifiedGraphPipeline::deallocateBuffers() {
 
     m_unifiedArena.megaArena.reset();
     m_unifiedArena = UnifiedGPUArena{};
-    
+
     m_d_inferenceOutput.reset();
     m_d_preprocessBuffer.reset();
     m_d_outputBuffer.reset();
@@ -555,6 +551,68 @@ void UnifiedGraphPipeline::deallocateBuffers() {
     m_outputAddressCache.clear();
     m_bindingsNeedUpdate = true;
     m_primaryInputIndex = -1;
+
+}
+
+bool UnifiedGraphPipeline::ensurePrimaryInputBindingAliased() {
+    if (m_primaryInputIndex < 0 ||
+        m_primaryInputIndex >= static_cast<int>(m_inputAddressCache.size()) ||
+        !m_unifiedArena.yoloInput) {
+        return false;
+    }
+
+    void* currentBinding = m_inputAddressCache[m_primaryInputIndex];
+    if (currentBinding == m_unifiedArena.yoloInput) {
+        return true;
+    }
+
+    auto bindingIt = m_inputBindings.find(m_inputName);
+    auto sizeIt = m_inputSizes.find(m_inputName);
+    if (bindingIt == m_inputBindings.end() ||
+        sizeIt == m_inputSizes.end() ||
+        sizeIt->second == 0) {
+        return false;
+    }
+
+    try {
+        bindingIt->second = std::make_unique<CudaMemory<uint8_t>>(
+            reinterpret_cast<uint8_t*>(m_unifiedArena.yoloInput),
+            sizeIt->second,
+            false);
+    } catch (const std::exception& e) {
+        std::cerr << "[UnifiedGraph] Failed to alias TensorRT input binding: "
+                  << e.what() << std::endl;
+        return false;
+    }
+
+    refreshCachedBindings();
+
+    if (m_primaryInputIndex < static_cast<int>(m_inputAddressCache.size()) &&
+        m_inputAddressCache[m_primaryInputIndex] == m_unifiedArena.yoloInput) {
+        m_bindingsNeedUpdate = true;
+        return true;
+    }
+
+    return false;
+}
+
+void UnifiedGraphPipeline::ensureFinalTargetAliases() {
+    bool updated = false;
+    if (m_unifiedArena.decodedTargets &&
+        m_unifiedArena.finalTargets != m_unifiedArena.decodedTargets) {
+        m_unifiedArena.finalTargets = m_unifiedArena.decodedTargets;
+        updated = true;
+    }
+
+    if (m_smallBufferArena.decodedCount &&
+        m_smallBufferArena.finalTargetsCount != m_smallBufferArena.decodedCount) {
+        m_smallBufferArena.finalTargetsCount = m_smallBufferArena.decodedCount;
+        updated = true;
+    }
+
+    if (updated) {
+        std::cerr << "[UnifiedGraph] Realigned post-processing buffers to decoded targets" << std::endl;
+    }
 
 }
 
@@ -1421,19 +1479,7 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
     }
     
     // Direct use of decoded targets as final (no NMS needed for aimbot)
-    if (m_unifiedArena.finalTargets && m_smallBufferArena.finalTargetsCount &&
-        m_unifiedArena.decodedTargets && m_smallBufferArena.decodedCount) {
-
-        if (m_smallBufferArena.finalTargetsCount != m_smallBufferArena.decodedCount) {
-            cudaMemcpyAsync(m_smallBufferArena.finalTargetsCount, m_smallBufferArena.decodedCount, sizeof(int),
-                           cudaMemcpyDeviceToDevice, stream);
-        }
-
-        if (m_unifiedArena.finalTargets != m_unifiedArena.decodedTargets) {
-            cudaMemcpyAsync(m_unifiedArena.finalTargets, m_unifiedArena.decodedTargets,
-                           config.max_detections * sizeof(Target), cudaMemcpyDeviceToDevice, stream);
-        }
-    }
+    ensureFinalTargetAliases();
 
 }
 
@@ -2044,9 +2090,14 @@ bool UnifiedGraphPipeline::performInference() {
     
     // 복사 최적화: 동일한 포인터면 복사 생략
     if (inputBinding != m_unifiedArena.yoloInput) {
-        size_t inputSize = getModelInputResolution() * getModelInputResolution() * 3 * sizeof(float);
-        cudaMemcpyAsync(inputBinding, m_unifiedArena.yoloInput, inputSize, 
-                       cudaMemcpyDeviceToDevice, m_pipelineStream->get());
+        ensurePrimaryInputBindingAliased();
+        inputBinding = m_inputAddressCache[m_primaryInputIndex];
+
+        if (inputBinding != m_unifiedArena.yoloInput) {
+            size_t inputSize = getModelInputResolution() * getModelInputResolution() * 3 * sizeof(float);
+            cudaMemcpyAsync(inputBinding, m_unifiedArena.yoloInput, inputSize,
+                           cudaMemcpyDeviceToDevice, m_pipelineStream->get());
+        }
     }
     
     if (!runInferenceAsync(m_pipelineStream->get())) {
