@@ -385,7 +385,7 @@ private:
     GraphExecutionState m_state;
     std::mutex m_graphMutex;
     bool m_hasFrameData = false;
-    
+
     std::atomic<bool> m_allowMovement{false};
     std::atomic<bool> m_shouldStop{false};
     mutable std::mutex m_movementFilterMutex;
@@ -414,7 +414,10 @@ private:
     void cleanupGraph();
     bool allocateBuffers();
     void deallocateBuffers();
-    
+
+    bool ensurePrimaryInputBindingAliased();
+    void ensureFinalTargetAliases();
+
     bool capturePreprocessGraph(cudaStream_t stream);
     bool captureInferenceGraph(cudaStream_t stream);
     bool capturePostprocessGraph(cudaStream_t stream);
