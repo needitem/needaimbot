@@ -9,6 +9,9 @@
 #include <dxgi1_2.h>
 #include <wrl/client.h>
 
+// Use CUDA pinned host memory for faster H2D copies
+#include "../utils/cuda_utils.h"
+
 #include <atomic>
 #include <chrono>
 #include <functional>
@@ -68,7 +71,8 @@ private:
     DXGI_OUTPUT_DESC m_outputDesc{};
     D3D11_TEXTURE2D_DESC m_frameDesc{};
 
-    std::unique_ptr<unsigned char[]> m_frameBuffer;
+    // Pinned host buffer to accelerate async cudaMemcpy2DAsync
+    std::unique_ptr<CudaPinnedMemory<unsigned char>> m_frameBuffer;
     size_t m_bufferSize = 0;
 
     mutable std::mutex m_frameMutex;

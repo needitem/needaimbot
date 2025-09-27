@@ -105,7 +105,7 @@ bool DDACapture::GetLatestFrame(void** frameData, unsigned int* width, unsigned 
     }
 
     if (frameData) {
-        *frameData = m_frameBuffer.get();
+        *frameData = m_frameBuffer ? static_cast<void*>(m_frameBuffer->get()) : nullptr;
     }
     if (width) {
         *width = m_captureWidth;
@@ -345,12 +345,15 @@ bool DDACapture::EnsureFrameBuffer(size_t requiredSize) {
     }
 
     try {
-        auto newBuffer = std::make_unique<unsigned char[]>(requiredSize);
+        // Prefer write-combined for CPU write → GPU read pattern
+        // Use Portable to survive context changes
+        auto newBuffer = std::make_unique<CudaPinnedMemory<unsigned char>>(
+            requiredSize, cudaHostAllocWriteCombined | cudaHostAllocPortable);
         m_frameBuffer = std::move(newBuffer);
         m_bufferSize = requiredSize;
         return true;
-    } catch (const std::bad_alloc&) {
-        std::cerr << "[DDACapture] Failed to allocate frame buffer" << std::endl;
+    } catch (const std::exception&) {
+        std::cerr << "[DDACapture] Failed to allocate pinned frame buffer" << std::endl;
         m_frameBuffer.reset();
         m_bufferSize = 0;
         return false;
@@ -481,7 +484,7 @@ DDACapture::FrameAcquireResult DDACapture::AcquireFrame() {
             return FrameAcquireResult::kError;
         }
 
-        unsigned char* dst = m_frameBuffer.get();
+        unsigned char* dst = m_frameBuffer->get();
         const unsigned char* srcBase = static_cast<const unsigned char*>(mapped.pData);
         const UINT srcPitch = mapped.RowPitch;
         const UINT bytesPerRow = captureWidth * kBytesPerPixel;
