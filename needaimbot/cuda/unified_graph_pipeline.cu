@@ -95,8 +95,6 @@ __global__ void fusedTargetSelectionAndMovementKernel(
     int detection_resolution,
     int* __restrict__ bestTargetIndex,
     Target* __restrict__ bestTarget,
-    float* __restrict__ previousErrorX,
-    float* __restrict__ previousErrorY,
     needaimbot::MouseMovement* __restrict__ output_movement
 ) {
     extern __shared__ unsigned char sharedMem[];
@@ -176,13 +174,6 @@ __global__ void fusedTargetSelectionAndMovementKernel(
 
             float movement_x = kp_x * error_x;
             float movement_y = kp_y * error_y;
-
-            if (previousErrorX) {
-                previousErrorX[0] = error_x;
-            }
-            if (previousErrorY) {
-                previousErrorY[0] = error_y;
-            }
 
             output_movement->dx = __float2int_rn(movement_x);
             output_movement->dy = __float2int_rn(movement_y);
@@ -435,21 +426,6 @@ bool UnifiedGraphPipeline::allocateBuffers() {
         size_t arenaSize = SmallBufferArena::calculateArenaSize();
         m_smallBufferArena.arenaBuffer = std::make_unique<CudaMemory<uint8_t>>(arenaSize);
         m_smallBufferArena.initializePointers(m_smallBufferArena.arenaBuffer->get());
-
-        if (m_smallBufferArena.previousErrorX && m_smallBufferArena.previousErrorY) {
-            cudaError_t zeroErr = cudaMemset(m_smallBufferArena.previousErrorX, 0, sizeof(float));
-            if (zeroErr != cudaSuccess) {
-                std::cerr << "[UnifiedGraph] Failed to zero previousErrorX: "
-                          << cudaGetErrorString(zeroErr) << std::endl;
-                return false;
-            }
-            zeroErr = cudaMemset(m_smallBufferArena.previousErrorY, 0, sizeof(float));
-            if (zeroErr != cudaSuccess) {
-                std::cerr << "[UnifiedGraph] Failed to zero previousErrorY: "
-                          << cudaGetErrorString(zeroErr) << std::endl;
-                return false;
-            }
-        }
 
         size_t unifiedArenaSize = UnifiedGPUArena::calculateArenaSize(maxDetections, yoloSize);
         m_unifiedArena.megaArena = std::make_unique<CudaMemory<uint8_t>>(unifiedArenaSize);
@@ -765,18 +741,6 @@ void UnifiedGraphPipeline::handleAimbotActivation() {
     m_hasFrameData = false;
     m_captureInFlight = false;
 
-    if (m_smallBufferArena.previousErrorX && m_smallBufferArena.previousErrorY) {
-        cudaError_t resetErr = cudaMemset(m_smallBufferArena.previousErrorX, 0, sizeof(float));
-        if (resetErr != cudaSuccess) {
-            std::cerr << "[UnifiedGraph] Failed to reset previousErrorX: "
-                      << cudaGetErrorString(resetErr) << std::endl;
-        }
-        resetErr = cudaMemset(m_smallBufferArena.previousErrorY, 0, sizeof(float));
-        if (resetErr != cudaSuccess) {
-            std::cerr << "[UnifiedGraph] Failed to reset previousErrorY: "
-                      << cudaGetErrorString(resetErr) << std::endl;
-        }
-    }
 }
 
 bool UnifiedGraphPipeline::enqueueFrameCompletionCallback(cudaStream_t stream) {
@@ -1544,8 +1508,6 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         ctx.config.detection_resolution,
         m_smallBufferArena.bestTargetIndex,
         m_smallBufferArena.bestTarget,
-        m_smallBufferArena.previousErrorX,
-        m_smallBufferArena.previousErrorY,
         m_smallBufferArena.mouseMovement
     );
 
