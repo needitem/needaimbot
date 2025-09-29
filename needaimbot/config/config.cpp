@@ -188,7 +188,7 @@ bool Config::loadConfig(const std::string& filename)
         always_on_top = true;
 
 
-        // Color filter removed
+        
 
         active_profile_name = "Default";
 
@@ -351,7 +351,7 @@ bool Config::loadConfig(const std::string& filename)
     movement_deadzone = static_cast<float>(get_double_ini("AimFilter", "movement_deadzone", 0.75));
     movement_max_step = get_long_ini("AimFilter", "movement_max_step", 25);
 
-    // Color filter removed
+    
 
     
     head_class_name = get_string_ini("Classes", "HeadClassName", "Head");
@@ -596,7 +596,7 @@ bool Config::saveConfig(const std::string& filename)
     file << "\n";
 
 
-    // Color filter removed
+    
     
     // Save weapon profiles with each profile
     file << "[WeaponProfiles]\n";

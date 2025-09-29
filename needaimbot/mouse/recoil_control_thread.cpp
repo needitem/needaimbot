@@ -115,26 +115,7 @@ void RecoilControlThread::applyRecoilCompensation() {
     auto now = std::chrono::steady_clock::now();
     auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - recoil_start_time_).count();
     
-    // Optimize: use branchless selection for common case
-    const int profile_idx = ctx.config.active_weapon_profile_index;
-    const bool has_profile = (profile_idx >= 0 && profile_idx < ctx.config.weapon_profiles.size());
-    
-    const int start_delay = has_profile ? 
-        ctx.config.weapon_profiles[profile_idx].start_delay_ms : 
-        
-    const int end_delay = has_profile ? 
-        ctx.config.weapon_profiles[profile_idx].end_delay_ms : 
-        
-    
-    // Skip if in start delay period
-    if (elapsed_ms < start_delay) {
-        return;
-    }
-    
-    // Stop if past end delay
-    if (end_delay > 0 && elapsed_ms > end_delay) {
-        return;
-    }
+    // Removed start/end delay gating; rely solely on profile timing in main loop
     
     float strength = calculateRecoilStrength();
     
