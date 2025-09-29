@@ -38,7 +38,6 @@
     <ClCompile Include="mouse\\input_drivers\\rzctl.cpp" />
     <ClCompile Include="mouse\\input_drivers\\SerialConnection.cpp" />
     <ClCompile Include="mouse\\input_drivers\\MakcuConnection.cpp" />
-    <ClCompile Include="overlay\draw_color_filter.cpp" />
     <ClCompile Include="overlay\draw_rcs.cpp" />
     <ClCompile Include="overlay\\draw_ai.cpp" />
     <ClCompile Include="overlay\draw_buttons.cpp" />
@@ -93,7 +92,6 @@
     <ClInclude Include="imgui\imstb_rectpack.h" />
     <ClInclude Include="imgui\imstb_textedit.h" />
     <ClInclude Include="imgui\imstb_truetype.h" />
-    <ClInclude Include="include\memory_images.h" />
     <ClInclude Include="include\other_tools.h" />
     <ClInclude Include="keyboard\keyboard_listener.h" />
     <ClInclude Include="keyboard\keycodes.h" />
