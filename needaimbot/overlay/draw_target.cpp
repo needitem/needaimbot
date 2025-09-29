@@ -55,11 +55,17 @@ void draw_target()
         }
     }
 
-    // Target selection is now fixed to closest target only
-    // These settings are hidden but set to optimal values for closest target selection
-    ctx.config.distance_weight = 1.0f;  // Maximum distance priority
-    ctx.config.confidence_weight = 0.0f;  // Ignore confidence
-    ctx.config.sticky_target_threshold = 0.0f;  // Always switch to closest
+    ImGui::Separator();
+    ImGui::Text("Target Selection");
+    
+    if (ImGui::SliderFloat("Sticky Threshold", &ctx.config.sticky_target_threshold, 0.0f, 1.0f, "%.2f")) {
+        if (ctx.config.sticky_target_threshold < 0.0f) ctx.config.sticky_target_threshold = 0.0f;
+        if (ctx.config.sticky_target_threshold > 1.0f) ctx.config.sticky_target_threshold = 1.0f;
+        SAVE_PROFILE();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("How much better a new target must be to switch.\n0.00 = always switch to closest, 0.30~0.50 = moderate stickiness.");
+    }
     
 }
 
