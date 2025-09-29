@@ -83,6 +83,15 @@ bool Config::loadConfig(const std::string& filename)
         pd_kp_x = 0.4f;
         pd_kp_y = 0.4f;
 
+        // Movement filter defaults
+        normalize_movement_rate = true;
+        movement_rate_ema_alpha = 0.10f;
+        movement_warmup_frames = 5;
+        rate_use_fixed_reference_fps = false;
+        rate_fixed_reference_fps = 120.0f;
+        movement_deadzone = 0.75f;
+        movement_max_step = 25;
+
         // Aim+shoot offset defaults
         enable_aim_shoot_offset = false;
         aim_shoot_offset_x = 0.0f;
@@ -356,6 +365,15 @@ bool Config::loadConfig(const std::string& filename)
     screenshot_delay = get_long_ini("Debug", "screenshot_delay", 500);
     always_on_top = get_bool_ini("Debug", "always_on_top", true);
 
+    // Aim/movement filter
+    normalize_movement_rate = get_bool_ini("AimFilter", "normalize_movement_rate", true);
+    movement_rate_ema_alpha = static_cast<float>(get_double_ini("AimFilter", "movement_rate_ema_alpha", 0.10));
+    movement_warmup_frames = get_long_ini("AimFilter", "movement_warmup_frames", 5);
+    rate_use_fixed_reference_fps = get_bool_ini("AimFilter", "use_fixed_reference_fps", false);
+    rate_fixed_reference_fps = static_cast<float>(get_double_ini("AimFilter", "fixed_reference_fps", 120.0));
+    movement_deadzone = static_cast<float>(get_double_ini("AimFilter", "movement_deadzone", 0.75));
+    movement_max_step = get_long_ini("AimFilter", "movement_max_step", 25);
+
     // RGB Color filter settings
     enable_color_filter = get_bool_ini("ColorFilter", "enable_color_filter", false);
     
@@ -593,6 +611,17 @@ bool Config::saveConfig(const std::string& filename)
     file << "screenshot_button = " << joinStrings(screenshot_button) << "\n";
     file << "screenshot_delay = " << screenshot_delay << "\n";
     file << "always_on_top = " << (always_on_top ? "true" : "false") << "\n\n";
+
+    // Aim/movement filter
+    file << "[AimFilter]\n";
+    file << "normalize_movement_rate = " << (normalize_movement_rate ? "true" : "false") << "\n";
+    file << std::fixed << std::setprecision(6);
+    file << "movement_rate_ema_alpha = " << movement_rate_ema_alpha << "\n";
+    file << "movement_warmup_frames = " << movement_warmup_frames << "\n";
+    file << "use_fixed_reference_fps = " << (rate_use_fixed_reference_fps ? "true" : "false") << "\n";
+    file << "fixed_reference_fps = " << rate_fixed_reference_fps << "\n";
+    file << "movement_deadzone = " << movement_deadzone << "\n";
+    file << "movement_max_step = " << movement_max_step << "\n\n";
 
     file << "[Classes]\n";
     file << "HeadClassName = " << head_class_name << "\n\n";

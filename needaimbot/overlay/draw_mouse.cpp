@@ -83,6 +83,65 @@ static void draw_movement_controls()
         ImGui::EndTable();
     }
 
+    UIHelpers::CompactSpacer();
+
+    UIHelpers::SettingsSubHeader("Rate Normalization & Filter");
+
+    if (UIHelpers::EnhancedCheckbox("Normalize by Frame Time", &ctx.config.normalize_movement_rate,
+        "Keep response per second consistent across FPS"))
+    {
+        SAVE_PROFILE();
+    }
+
+    ImGui::BeginDisabled(!ctx.config.normalize_movement_rate);
+    {
+        float alpha = ctx.config.movement_rate_ema_alpha;
+        if (ImGui::SliderFloat("EMA Alpha", &alpha, 0.01f, 0.5f, "%.2f")) {
+            ctx.config.movement_rate_ema_alpha = alpha;
+            SAVE_PROFILE();
+        }
+        UIHelpers::HelpMarker("Smoothing factor for dt estimate (lower = smoother, higher = quicker)");
+
+        int warmup = ctx.config.movement_warmup_frames;
+        if (ImGui::SliderInt("Warmup Frames", &warmup, 0, 60)) {
+            ctx.config.movement_warmup_frames = warmup;
+            SAVE_PROFILE();
+        }
+        UIHelpers::HelpMarker("Frames to establish baseline dt when not using fixed FPS");
+
+        if (UIHelpers::EnhancedCheckbox("Use Fixed Reference FPS", &ctx.config.rate_use_fixed_reference_fps,
+            "Bypass warmup and assume this FPS as the baseline"))
+        {
+            SAVE_PROFILE();
+        }
+
+        ImGui::BeginDisabled(!ctx.config.rate_use_fixed_reference_fps);
+        float ref_fps = ctx.config.rate_fixed_reference_fps;
+        if (ImGui::InputFloat("Reference FPS", &ref_fps, 0.0f, 0.0f, "%.1f")) {
+            if (ref_fps < 1.0f) ref_fps = 1.0f;
+            ctx.config.rate_fixed_reference_fps = ref_fps;
+            SAVE_PROFILE();
+        }
+        ImGui::EndDisabled();
+    }
+    ImGui::EndDisabled();
+
+    UIHelpers::CompactSpacer();
+
+    float deadzone = ctx.config.movement_deadzone;
+    if (ImGui::SliderFloat("Deadzone (px)", &deadzone, 0.0f, 5.0f, "%.2f")) {
+        ctx.config.movement_deadzone = deadzone;
+        SAVE_PROFILE();
+    }
+    UIHelpers::HelpMarker("Suppress tiny oscillations near zero movement");
+
+    int max_step = ctx.config.movement_max_step;
+    if (ImGui::SliderInt("Max Step (px)", &max_step, 1, 100)) {
+        ctx.config.movement_max_step = max_step;
+        SAVE_PROFILE();
+    }
+    UIHelpers::HelpMarker("Clamp per-dispatch mouse step to limit spikes");
+
     UIHelpers::EndCard();
 }
 

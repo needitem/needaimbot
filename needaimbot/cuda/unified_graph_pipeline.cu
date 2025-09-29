@@ -81,6 +81,40 @@ int computeTargetSelectionBlockSize(int maxDetections) {
 }  // namespace
 
 
+__device__ float computeBoundingBoxIoU(const Target& a, const Target& b) {
+    if (a.classId < 0 || b.classId < 0 || a.width <= 0 || a.height <= 0 ||
+        b.width <= 0 || b.height <= 0) {
+        return 0.0f;
+    }
+
+    int a_x2 = a.x + a.width;
+    int a_y2 = a.y + a.height;
+    int b_x2 = b.x + b.width;
+    int b_y2 = b.y + b.height;
+
+    int inter_x1 = (a.x > b.x) ? a.x : b.x;
+    int inter_y1 = (a.y > b.y) ? a.y : b.y;
+    int inter_x2 = (a_x2 < b_x2) ? a_x2 : b_x2;
+    int inter_y2 = (a_y2 < b_y2) ? a_y2 : b_y2;
+
+    int inter_w = inter_x2 - inter_x1;
+    int inter_h = inter_y2 - inter_y1;
+    if (inter_w <= 0 || inter_h <= 0) {
+        return 0.0f;
+    }
+
+    int inter_area = inter_w * inter_h;
+    int area_a = a.width * a.height;
+    int area_b = b.width * b.height;
+    int union_area = area_a + area_b - inter_area;
+
+    if (union_area <= 0) {
+        return 0.0f;
+    }
+
+    return static_cast<float>(inter_area) / static_cast<float>(union_area);
+}
+
 __global__ void fusedTargetSelectionAndMovementKernel(
     Target* __restrict__ finalTargets,
     int* __restrict__ finalTargetsCount,
@@ -93,6 +127,8 @@ __global__ void fusedTargetSelectionAndMovementKernel(
     float head_y_offset,
     float body_y_offset,
     int detection_resolution,
+    Target* __restrict__ selectedTarget,
+    float sticky_threshold,
     int* __restrict__ bestTargetIndex,
     Target* __restrict__ bestTarget,
     needaimbot::MouseMovement* __restrict__ output_movement
@@ -100,24 +136,47 @@ __global__ void fusedTargetSelectionAndMovementKernel(
     extern __shared__ unsigned char sharedMem[];
     float* s_distancesX = reinterpret_cast<float*>(sharedMem);
     int* s_indices = reinterpret_cast<int*>(s_distancesX + blockDim.x);
+    float* s_prevIoU = reinterpret_cast<float*>(s_indices + blockDim.x);
+    int* s_prevIndices = reinterpret_cast<int*>(s_prevIoU + blockDim.x);
+
+    __shared__ Target s_prevTarget;
+    __shared__ bool s_prevValid;
 
     if (threadIdx.x == 0) {
+        Target emptyTarget = {};
+        s_prevTarget = emptyTarget;
+        s_prevValid = false;
+
+        if (selectedTarget) {
+            Target cached = *selectedTarget;
+            s_prevTarget = cached;
+            s_prevValid = (cached.classId >= 0) && (cached.confidence > 0.0f) &&
+                          (cached.width > 0) && (cached.height > 0);
+        }
+
         *bestTargetIndex = -1;
+        *bestTarget = emptyTarget;
         output_movement->dx = 0;
         output_movement->dy = 0;
-
-        Target emptyTarget = {};
-        *bestTarget = emptyTarget;
     }
     __syncthreads();
 
     int count = *finalTargetsCount;
     if (count <= 0 || count > maxDetections) {
+        if (threadIdx.x == 0 && selectedTarget) {
+            Target emptyTarget = {};
+            *selectedTarget = emptyTarget;
+        }
         return;
     }
 
+    Target prevTarget = s_prevTarget;
+    bool prevValid = s_prevValid;
+
     int localBestIdx = -1;
-    float localBestDistX = 1e9f;  // X축 거리만 사용
+    float localBestDistX = 1e9f;
+    float localBestIoU = -1.0f;
+    int localBestIoUIdx = -1;
 
     for (int i = threadIdx.x; i < count; i += blockDim.x) {
         Target& t = finalTargets[i];
@@ -126,22 +185,32 @@ __global__ void fusedTargetSelectionAndMovementKernel(
             t.y < -1000.0f || t.y > 10000.0f ||
             t.width <= 0 || t.width > detection_resolution ||
             t.height <= 0 || t.height > detection_resolution ||
-            t.confidence <= 0 || t.confidence > 1.0f) {
-            t.confidence = 0;
+            t.confidence <= 0.0f || t.confidence > 1.0f) {
+            t.confidence = 0.0f;
             continue;
         }
 
         float centerX = t.x + t.width / 2.0f;
-        float dx = fabsf(centerX - screen_center_x);  // X축 거리만 계산 (절댓값)
+        float dx = fabsf(centerX - screen_center_x);
 
         if (dx < localBestDistX) {
             localBestDistX = dx;
             localBestIdx = i;
         }
+
+        if (prevValid) {
+            float iou = computeBoundingBoxIoU(t, prevTarget);
+            if (iou > localBestIoU) {
+                localBestIoU = iou;
+                localBestIoUIdx = i;
+            }
+        }
     }
 
     s_distancesX[threadIdx.x] = localBestDistX;
     s_indices[threadIdx.x] = localBestIdx;
+    s_prevIoU[threadIdx.x] = localBestIoU;
+    s_prevIndices[threadIdx.x] = localBestIoUIdx;
     __syncthreads();
 
     for (int s = blockDim.x / 2; s > 0; s >>= 1) {
@@ -150,23 +219,67 @@ __global__ void fusedTargetSelectionAndMovementKernel(
                 s_distancesX[threadIdx.x] = s_distancesX[threadIdx.x + s];
                 s_indices[threadIdx.x] = s_indices[threadIdx.x + s];
             }
+
+            if (s_prevIoU[threadIdx.x + s] > s_prevIoU[threadIdx.x]) {
+                s_prevIoU[threadIdx.x] = s_prevIoU[threadIdx.x + s];
+                s_prevIndices[threadIdx.x] = s_prevIndices[threadIdx.x + s];
+            }
         }
         __syncthreads();
     }
 
     if (threadIdx.x == 0) {
-        if (s_indices[0] >= 0) {
-            *bestTargetIndex = s_indices[0];
-            *bestTarget = finalTargets[s_indices[0]];
+        const float kPrevMatchIouThreshold = 0.15f;
 
-            Target& best = *bestTarget;
-            float target_center_x = best.x + best.width / 2.0f;
+        int candidateIndex = s_indices[0];
+        bool candidateValid = candidateIndex >= 0;
+        Target candidateTarget = candidateValid ? finalTargets[candidateIndex] : Target{};
+
+        int prevMatchIndex = s_prevIndices[0];
+        float prevMatchIoU = s_prevIoU[0];
+        bool prevMatched = prevValid && prevMatchIndex >= 0 && prevMatchIoU >= kPrevMatchIouThreshold;
+        Target prevMatchedTarget = prevMatched ? finalTargets[prevMatchIndex] : Target{};
+
+        Target chosenTarget = candidateTarget;
+        int chosenIndex = candidateIndex;
+        bool haveTarget = candidateValid;
+
+        if (prevMatched) {
+            float prevCenterX = prevMatchedTarget.x + prevMatchedTarget.width / 2.0f;
+            float prevDist = fabsf(prevCenterX - screen_center_x);
+
+            bool switchToCandidate = false;
+            if (candidateValid) {
+                float candidateDist = s_distancesX[0];
+                float improvement = prevDist - candidateDist;
+                float denom = (fabsf(prevDist) < 1e-3f) ? 1.0f : prevDist;
+                float improvementRatio = improvement / denom;
+
+                switchToCandidate = (candidateDist < prevDist) &&
+                                    (improvementRatio >= sticky_threshold);
+            }
+
+            if (!switchToCandidate) {
+                chosenTarget = prevMatchedTarget;
+                chosenIndex = prevMatchIndex;
+                haveTarget = true;
+            }
+        }
+
+        if (haveTarget) {
+            *bestTargetIndex = chosenIndex;
+            *bestTarget = chosenTarget;
+            if (selectedTarget) {
+                *selectedTarget = chosenTarget;
+            }
+
+            float target_center_x = chosenTarget.x + chosenTarget.width / 2.0f;
             float target_center_y;
 
-            if (best.classId == head_class_id) {
-                target_center_y = best.y + best.height * head_y_offset;
+            if (chosenTarget.classId == head_class_id) {
+                target_center_y = chosenTarget.y + chosenTarget.height * head_y_offset;
             } else {
-                target_center_y = best.y + best.height * body_y_offset;
+                target_center_y = chosenTarget.y + chosenTarget.height * body_y_offset;
             }
 
             float error_x = target_center_x - screen_center_x;
@@ -177,6 +290,15 @@ __global__ void fusedTargetSelectionAndMovementKernel(
 
             output_movement->dx = __float2int_rn(movement_x);
             output_movement->dy = __float2int_rn(movement_y);
+        } else {
+            Target emptyTarget = {};
+            *bestTargetIndex = -1;
+            *bestTarget = emptyTarget;
+            if (selectedTarget) {
+                *selectedTarget = emptyTarget;
+            }
+            output_movement->dx = 0;
+            output_movement->dy = 0;
         }
     }
 }
@@ -426,6 +548,7 @@ bool UnifiedGraphPipeline::allocateBuffers() {
         size_t arenaSize = SmallBufferArena::calculateArenaSize();
         m_smallBufferArena.arenaBuffer = std::make_unique<CudaMemory<uint8_t>>(arenaSize);
         m_smallBufferArena.initializePointers(m_smallBufferArena.arenaBuffer->get());
+        invalidateSelectedTarget(nullptr);
 
         size_t unifiedArenaSize = UnifiedGPUArena::calculateArenaSize(maxDetections, yoloSize);
         m_unifiedArena.megaArena = std::make_unique<CudaMemory<uint8_t>>(unifiedArenaSize);
@@ -674,6 +797,8 @@ void UnifiedGraphPipeline::clearCountBuffers() {
     if (m_smallBufferArena.bestTargetIndex) {
         cudaMemsetAsync(m_smallBufferArena.bestTargetIndex, -1, sizeof(int), m_pipelineStream->get());
     }
+
+    invalidateSelectedTarget(m_pipelineStream ? m_pipelineStream->get() : nullptr);
 }
 
 void UnifiedGraphPipeline::clearMovementData() {
@@ -690,6 +815,7 @@ void UnifiedGraphPipeline::clearMovementData() {
         }
     }
 
+    invalidateSelectedTarget(m_pipelineStream ? m_pipelineStream->get() : nullptr);
     resetMovementFilter();
 }
 
@@ -698,14 +824,67 @@ void UnifiedGraphPipeline::resetMovementFilter() {
     m_skipNextMovement = true;
 }
 
+void UnifiedGraphPipeline::invalidateSelectedTarget(cudaStream_t stream) {
+    if (!m_smallBufferArena.selectedTarget) {
+        return;
+    }
+
+    Target invalidTarget{};
+    invalidTarget.classId = -1;
+    invalidTarget.x = -1;
+    invalidTarget.y = -1;
+    invalidTarget.width = -1;
+    invalidTarget.height = -1;
+    invalidTarget.confidence = 0.0f;
+
+    cudaError_t err;
+    if (stream) {
+        err = cudaMemcpyAsync(
+            m_smallBufferArena.selectedTarget,
+            &invalidTarget,
+            sizeof(Target),
+            cudaMemcpyHostToDevice,
+            stream);
+    } else {
+        err = cudaMemcpy(
+            m_smallBufferArena.selectedTarget,
+            &invalidTarget,
+            sizeof(Target),
+            cudaMemcpyHostToDevice);
+    }
+
+    if (err != cudaSuccess) {
+        std::cerr << "[UnifiedGraph] Failed to invalidate selected target: "
+                  << cudaGetErrorString(err) << std::endl;
+    }
+}
+
 MouseMovement UnifiedGraphPipeline::filterMouseMovement(const MouseMovement& rawMovement, bool movementEnabled) {
     std::lock_guard<std::mutex> lock(m_movementFilterMutex);
+    auto& ctx = AppContext::getInstance();
+
     if (!movementEnabled) {
         m_skipNextMovement = true;
+        // Reset rate-normalization state when disabled
+        m_lastMovementTs = {};
+        m_dtRefSec = 0.0;
+        m_dtEmaSec = 0.0;
+        m_accumulatedDx = 0.0f;
+        m_accumulatedDy = 0.0f;
+        m_rateWarmupCount = 0;
         return {0, 0};
     }
 
+    auto now = std::chrono::steady_clock::now();
     if (m_skipNextMovement) {
+        // Initialize timing/accumulators on first activation
+        m_lastMovementTs = now;
+        m_dtRefSec = 0.0;
+        m_dtEmaSec = 0.0;
+        m_accumulatedDx = 0.0f;
+        m_accumulatedDy = 0.0f;
+        m_rateWarmupCount = 0;
+
         // Drop the first real movement after (re)activation to avoid large corrections
         // caused by any stale delta in the shared buffer.
         if (rawMovement.dx != 0 || rawMovement.dy != 0) {
@@ -715,7 +894,81 @@ MouseMovement UnifiedGraphPipeline::filterMouseMovement(const MouseMovement& raw
         return rawMovement;
     }
 
-    return rawMovement;
+    // Compute frame time (dt) and maintain an EMA for stability
+    double dtSec = 0.0;
+    if (m_lastMovementTs.time_since_epoch().count() != 0) {
+        dtSec = std::chrono::duration<double>(now - m_lastMovementTs).count();
+    }
+    m_lastMovementTs = now;
+
+    // Sanitize dt to prevent extreme scaling from spikes
+    if (dtSec <= 0.0 || dtSec > 0.5) {
+        dtSec = 1.0 / 60.0; // fallback
+    }
+
+    // Read config values with safety clamps
+    double alpha = std::clamp(static_cast<double>(ctx.config.movement_rate_ema_alpha), 0.01, 0.5);
+    int warmupFrames = std::clamp(ctx.config.movement_warmup_frames, 0, 60);
+    float deadzone = std::max(0.0f, ctx.config.movement_deadzone);
+    int maxStep = std::max(1, ctx.config.movement_max_step);
+    bool useFixed = ctx.config.rate_use_fixed_reference_fps;
+    double fixedFps = std::max(0.0, static_cast<double>(ctx.config.rate_fixed_reference_fps));
+    bool normalize = ctx.config.normalize_movement_rate;
+
+    if (m_dtEmaSec <= 0.0) {
+        m_dtEmaSec = dtSec;
+    } else {
+        m_dtEmaSec = alpha * dtSec + (1.0 - alpha) * m_dtEmaSec;
+    }
+
+    // Establish or use reference dt
+    double refDt = 0.0;
+    if (useFixed && fixedFps > 1.0) {
+        refDt = 1.0 / fixedFps;
+    } else {
+        if (m_dtRefSec <= 0.0) {
+            m_rateWarmupCount++;
+            if (m_rateWarmupCount >= warmupFrames) {
+                m_dtRefSec = m_dtEmaSec;
+            }
+        }
+        refDt = m_dtRefSec > 0.0 ? m_dtRefSec : m_dtEmaSec;
+    }
+
+    double scale = 1.0;
+    if (normalize && refDt > 0.0) {
+        scale = dtSec / refDt; // keep per-second effect consistent across FPS
+        // Clamp to avoid wild swings
+        if (scale < 0.25) scale = 0.25;
+        if (scale > 4.0) scale = 4.0;
+    }
+
+    // Apply scaling and accumulate fractional movement to avoid chatter
+    float sx = static_cast<float>(rawMovement.dx) * static_cast<float>(scale);
+    float sy = static_cast<float>(rawMovement.dy) * static_cast<float>(scale);
+    m_accumulatedDx += sx;
+    m_accumulatedDy += sy;
+
+    // Small deadzone to suppress sub-pixel oscillation
+    float mag = std::hypot(m_accumulatedDx, m_accumulatedDy);
+    if (mag < deadzone) {
+        return {0, 0};
+    }
+
+    int outDx = static_cast<int>(std::lrint(m_accumulatedDx));
+    int outDy = static_cast<int>(std::lrint(m_accumulatedDy));
+
+    // Remove the portion we've emitted, keep fractional remainder
+    m_accumulatedDx -= static_cast<float>(outDx);
+    m_accumulatedDy -= static_cast<float>(outDy);
+
+    // Conservative per-dispatch clamp to avoid spikes due to timing jitter
+    if (outDx > maxStep) outDx = maxStep;
+    if (outDx < -maxStep) outDx = -maxStep;
+    if (outDy > maxStep) outDy = maxStep;
+    if (outDy < -maxStep) outDy = -maxStep;
+
+    return {outDx, outDy};
 }
 
 void UnifiedGraphPipeline::clearHostPreviewData(AppContext& ctx) {
@@ -741,6 +994,17 @@ void UnifiedGraphPipeline::handleAimbotActivation() {
     m_hasFrameData = false;
     m_captureInFlight = false;
 
+    // Reset rate-normalized movement filter state
+    {
+        std::lock_guard<std::mutex> lock(m_movementFilterMutex);
+        m_lastMovementTs = {};
+        m_dtRefSec = 0.0;
+        m_dtEmaSec = 0.0;
+        m_accumulatedDx = 0.0f;
+        m_accumulatedDy = 0.0f;
+        m_rateWarmupCount = 0;
+        m_skipNextMovement = true;
+    }
 }
 
 bool UnifiedGraphPipeline::enqueueFrameCompletionCallback(cudaStream_t stream) {
@@ -1242,6 +1506,8 @@ void UnifiedGraphPipeline::clearDetectionBuffers(const PostProcessingConfig& con
     if (m_smallBufferArena.bestTarget) {
         cudaMemsetAsync(m_smallBufferArena.bestTarget, 0, sizeof(Target), stream);
     }
+
+    invalidateSelectedTarget(stream);
 }
 
 cudaError_t UnifiedGraphPipeline::decodeYoloOutput(void* d_rawOutputPtr, nvinfer1::DataType outputType, 
@@ -1469,6 +1735,7 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
     static float cached_kp_y = 0.1f;
     static float cached_head_y_offset = 0.2f;
     static float cached_body_y_offset = 0.5f;
+    static float cached_sticky_threshold = 0.0f;
 
     if (!m_graphCaptured) {
         std::lock_guard<std::mutex> lock(ctx.configMutex);
@@ -1477,6 +1744,7 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         cached_kp_y = ctx.config.pd_kp_y;
         cached_head_y_offset = ctx.config.head_y_offset;
         cached_body_y_offset = ctx.config.body_y_offset;
+        cached_sticky_threshold = ctx.config.sticky_target_threshold;
     }
     
     float crosshairX = ctx.config.detection_resolution / 2.0f;
@@ -1486,12 +1754,20 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
 
     const int blockSize = computeTargetSelectionBlockSize(cached_max_detections);
     const int gridSize = 1;
-    const size_t sharedBytes = static_cast<size_t>(blockSize) * (sizeof(float) + sizeof(int));
+    const size_t sharedBytes = static_cast<size_t>(blockSize) *
+                               (sizeof(float) + sizeof(int) + sizeof(float) + sizeof(int));
 
     cudaError_t staleError = cudaGetLastError();
     if (staleError != cudaSuccess) {
         std::cerr << "[Pipeline] Clearing stale CUDA error before target selection: "
                   << cudaGetErrorString(staleError) << std::endl;
+    }
+
+    float stickyThreshold = cached_sticky_threshold;
+    if (stickyThreshold < 0.0f) {
+        stickyThreshold = 0.0f;
+    } else if (stickyThreshold > 1.0f) {
+        stickyThreshold = 1.0f;
     }
 
     fusedTargetSelectionAndMovementKernel<<<gridSize, blockSize, sharedBytes, stream>>>(
@@ -1506,6 +1782,8 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         cached_head_y_offset,
         cached_body_y_offset,
         ctx.config.detection_resolution,
+        m_smallBufferArena.selectedTarget,
+        stickyThreshold,
         m_smallBufferArena.bestTargetIndex,
         m_smallBufferArena.bestTarget,
         m_smallBufferArena.mouseMovement
