@@ -42,10 +42,7 @@ float debug_scale = 1.0f;
 std::mutex g_debugTexMutex; 
 
 
-static ID3D11Texture2D* g_colorMaskTex = nullptr;
-static ID3D11ShaderResourceView* g_colorMaskSRV = nullptr;
-static int colorTexW = 0, colorTexH = 0;
-static float color_mask_preview_scale = 0.5f; 
+// Color filter debug removed
 
 
 
@@ -144,90 +141,7 @@ void uploadDebugFrame(const SimpleMat& rgbaCpu)
 
 
 
-static void uploadColorMaskTexture(const SimpleMat& grayMask)
-{
-    if (grayMask.empty() || !g_pd3dDevice || !g_pd3dDeviceContext) {
-        return;
-    }
-
-    if (grayMask.channels() != 1) {
-        // Not a single channel mask
-        return;
-    }
-
-    if (!g_colorMaskTex || grayMask.cols() != colorTexW || grayMask.rows() != colorTexH)
-    {
-        SAFE_RELEASE(g_colorMaskTex);
-        SAFE_RELEASE(g_colorMaskSRV);
-
-        colorTexW = grayMask.cols();  colorTexH = grayMask.rows();
-
-        D3D11_TEXTURE2D_DESC td = {};
-        td.Width = colorTexW;
-        td.Height = colorTexH;
-        td.MipLevels = td.ArraySize = 1;
-        td.Format = DXGI_FORMAT_R8G8B8A8_UNORM; 
-        td.SampleDesc.Count = 1;
-        td.Usage = D3D11_USAGE_DYNAMIC;
-        td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-        td.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-
-        HRESULT hr_tex = g_pd3dDevice->CreateTexture2D(&td, nullptr, &g_colorMaskTex);
-        if (FAILED(hr_tex))
-        {
-            SAFE_RELEASE(g_colorMaskTex);
-            
-            return;
-        }
-
-        D3D11_SHADER_RESOURCE_VIEW_DESC sd = {};
-        sd.Format = td.Format;
-        sd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-        sd.Texture2D.MipLevels = 1;
-        HRESULT hr_srv = g_pd3dDevice->CreateShaderResourceView(g_colorMaskTex, &sd, &g_colorMaskSRV);
-        if (FAILED(hr_srv))
-        {
-            SAFE_RELEASE(g_colorMaskTex);
-            SAFE_RELEASE(g_colorMaskSRV);
-            
-            return;
-        }
-    }
-
-    // Convert grayscale mask to RGBA
-    static SimpleMat rgbaMask;
-    rgbaMask.create(grayMask.rows(), grayMask.cols(), 4);
-    
-    // Manual GRAY to RGBA conversion
-    const uint8_t* src = grayMask.data();
-    uint8_t* dst = rgbaMask.data();
-    for (int y = 0; y < grayMask.rows(); y++) {
-        for (int x = 0; x < grayMask.cols(); x++) {
-            uint8_t gray_val = src[y * grayMask.step() + x];
-            int dst_idx = static_cast<int>(y * rgbaMask.step() + x * 4);
-            dst[dst_idx + 0] = gray_val; // R
-            dst[dst_idx + 1] = gray_val; // G
-            dst[dst_idx + 2] = gray_val; // B
-            dst[dst_idx + 3] = 255;       // A
-        }
-    }
-
-    if (rgbaMask.empty() || rgbaMask.cols() <= 0 || rgbaMask.rows() <= 0) {
-        
-        return;
-    }
-
-    D3D11_MAPPED_SUBRESOURCE ms;
-    HRESULT hr_map = g_pd3dDeviceContext->Map(g_colorMaskTex, 0, D3D11_MAP_WRITE_DISCARD, 0, &ms);
-    if (SUCCEEDED(hr_map))
-    {
-        for (int y = 0; y < colorTexH; ++y)
-            memcpy((uint8_t*)ms.pData + ms.RowPitch * y, rgbaMask.data() + y * rgbaMask.step(), colorTexW * 4); 
-        g_pd3dDeviceContext->Unmap(g_colorMaskTex, 0);
-    } else {
-        
-    }
-}
+// uploadColorMaskTexture removed
 
 void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float debug_scale) {
     auto& ctx = AppContext::getInstance();
@@ -355,65 +269,7 @@ void draw_debug()
     ImGui::Spacing();
 
     
-    ImGui::SeparatorText("RGB Color Filter Debug");
-    ImGui::Spacing();
-
-    if (ImGui::Checkbox("Enable RGB Color Filter (in Config)", &ctx.config.enable_color_filter)) {
-        SAVE_PROFILE(); 
-        // TODO: Implement flag update for TensorRT integration 
-    }
-    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Toggles the RGB color filtering logic (config.enable_color_filter)."); }
-
-    if (ctx.config.enable_color_filter) {
-        ImGui::Text("Min Color Pixels: %d", ctx.config.min_color_pixels);
-        ImGui::SameLine(); ImGui::Spacing(); ImGui::SameLine();
-        ImGui::Text(ctx.config.remove_color_matches ? "Mode: Remove if color matches" : "Mode: Keep if color matches");
-
-        ImGui::Text("Red Range: %3d - %3d", ctx.config.rgb_min_r, ctx.config.rgb_max_r);
-        ImGui::Text("Green Range: %3d - %3d", ctx.config.rgb_min_g, ctx.config.rgb_max_g);
-        ImGui::Text("Blue Range: %3d - %3d", ctx.config.rgb_min_b, ctx.config.rgb_max_b);
-        ImGui::Spacing();
-
-        static bool show_color_mask_preview = false;
-        ImGui::Checkbox("Show Color Mask Preview", &show_color_mask_preview);
-
-        if (show_color_mask_preview) {
-            
-            SimpleCudaMat colorMaskGpu;
-            // TODO: Implement color mask retrieval for TensorRT integration
-            // colorMaskGpu = nullptr; // Temporarily disabled 
-            if (!colorMaskGpu.empty()) {
-                static SimpleMat colorMaskCpu; 
-                try {
-                    colorMaskCpu.create(colorMaskGpu.rows(), colorMaskGpu.cols(), colorMaskGpu.channels());
-                    colorMaskGpu.download(colorMaskCpu.data(), colorMaskCpu.step()); 
-                } catch (...) {
-                    ImGui::Text("Error downloading Color Mask");
-                    colorMaskCpu.release(); 
-                }
-
-                if (!colorMaskCpu.empty()) {
-                    uploadColorMaskTexture(colorMaskCpu); 
-                    if (g_colorMaskSRV && colorTexW > 0 && colorTexH > 0) {
-                        ImGui::SliderFloat("Color Mask Scale", &color_mask_preview_scale, 0.1f, 2.0f, "%.1fx");
-                        ImVec2 mask_img_size(colorTexW * color_mask_preview_scale, colorTexH * color_mask_preview_scale);
-                        ImGui::Image(g_colorMaskSRV, mask_img_size);
-                    } else {
-                        ImGui::Text("Color Mask Texture not available for display.");
-                    }
-                } else {
-                    ImGui::Text("Color Mask (CPU) is empty or download failed.");
-                }
-            } else {
-                ImGui::Text("HSV Mask (GPU) is not available from detector or not generated.");
-            }
-        }
-    } else {
-        ImGui::TextUnformatted("HSV Filter is currently disabled in config.");
-    }
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
+    // Color filter debug removed
 
     
     ImGui::SeparatorText("Screenshot Settings");

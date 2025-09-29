@@ -75,8 +75,6 @@ void RecoilControlThread::threadLoop() {
                 ctx.config.active_weapon_profile_index < ctx.config.weapon_profiles.size()) {
                 const auto& profile = ctx.config.weapon_profiles[ctx.config.active_weapon_profile_index];
                 delay_ms = profile.recoil_ms;
-            } else {
-                delay_ms = ctx.config.norecoil_ms;
             }
             
             // Optimized delay: maintain responsiveness throughout
@@ -123,10 +121,10 @@ void RecoilControlThread::applyRecoilCompensation() {
     
     const int start_delay = has_profile ? 
         ctx.config.weapon_profiles[profile_idx].start_delay_ms : 
-        ctx.config.easynorecoil_start_delay_ms;
+        
     const int end_delay = has_profile ? 
         ctx.config.weapon_profiles[profile_idx].end_delay_ms : 
-        ctx.config.easynorecoil_end_delay_ms;
+        
     
     // Skip if in start delay period
     if (elapsed_ms < start_delay) {
