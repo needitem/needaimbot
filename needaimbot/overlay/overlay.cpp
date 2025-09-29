@@ -406,7 +406,7 @@ void SetupImGui()
     colors[ImGuiCol_NavWindowingDimBg] = ImVec4(0.80f, 0.80f, 0.80f, 0.20f);
     colors[ImGuiCol_ModalWindowDimBg] = ImVec4(0.80f, 0.80f, 0.80f, 0.35f); 
 
-    load_body_texture();
+    
 }
 
 bool CreateOverlayWindow()
@@ -484,8 +484,7 @@ void OverlayThread()
     
     float prev_body_y_offset = ctx.config.body_y_offset;
     float prev_head_y_offset = ctx.config.head_y_offset;
-    bool prev_ignore_third_person = ctx.config.ignore_third_person;
-    bool prev_shooting_range_targets = ctx.config.shooting_range_targets;
+    
     bool prev_auto_aim = ctx.config.auto_aim;
 
     
@@ -508,7 +507,7 @@ void OverlayThread()
     
     bool prev_show_window = ctx.config.show_window;
     bool prev_show_fps = ctx.config.show_fps;
-    int prev_window_size = ctx.config.window_size;
+    
     int prev_screenshot_delay = ctx.config.screenshot_delay;
     bool prev_always_on_top = ctx.config.always_on_top;
 
@@ -727,11 +726,6 @@ void OverlayThread()
                     // Visual Settings
                     if (ImGui::BeginTabItem("Visual"))
                     {
-                        // Color Filter (RGB/HSV)
-                        UIHelpers::BeginSettingsSection("Color Filter", "Configure color-based filtering");
-                        draw_color_filter_settings();
-                        UIHelpers::EndSettingsSection();
-                        
                         // Overlay Settings
                         UIHelpers::BeginSettingsSection("Overlay", "Configure overlay appearance");
                         draw_overlay();
@@ -798,8 +792,7 @@ void OverlayThread()
                     // Always update - branch prediction cost is higher than assignment
                     prev_body_y_offset = ctx.config.body_y_offset;
                     prev_head_y_offset = ctx.config.head_y_offset;
-                    prev_ignore_third_person = ctx.config.ignore_third_person;
-                    prev_shooting_range_targets = ctx.config.shooting_range_targets;
+                    
                     prev_auto_aim = ctx.config.auto_aim;
                     prev_easynorecoil = ctx.config.easynorecoil;
                     prev_easynorecoilstrength = ctx.config.easynorecoilstrength;
@@ -832,7 +825,7 @@ void OverlayThread()
                     
                     // Always update
                     prev_show_fps = ctx.config.show_fps;
-                    prev_window_size = ctx.config.window_size;
+                    
                     prev_screenshot_delay = ctx.config.screenshot_delay;
                 }
 
@@ -868,8 +861,7 @@ void OverlayThread()
             else
             {
                 // Use configurable overlay FPS for better control
-                float overlay_target_fps = ctx.config.overlay_target_fps;
-                auto targetFrameTime = std::chrono::milliseconds(static_cast<long long>(1000.0f / overlay_target_fps));
+                auto targetFrameTime = std::chrono::milliseconds(static_cast<long long>(1000.0f / Constants::OVERLAY_TARGET_FPS));
                 
                 if (present_elapsed < targetFrameTime)
                 {
@@ -888,7 +880,7 @@ void OverlayThread()
     // Cleanup GPU reader
     g_uiGPUReader.cleanup();
     
-    release_body_texture();
+    
 
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();

@@ -152,7 +152,7 @@ namespace Constants {
     
     // UI Slider/Input Limits
     constexpr int MAX_DETECTIONS_LIMIT = 100;
-    constexpr int MIN_COLOR_PIXELS_LIMIT = 100;
+    // Color filter limits removed
     constexpr float OFFSET_DRAG_MIN = -100.0f;
     constexpr float OFFSET_DRAG_MAX = 100.0f;
     constexpr float OFFSET_DRAG_SPEED = 0.1f;

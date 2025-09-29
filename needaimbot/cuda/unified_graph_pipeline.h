@@ -35,7 +35,6 @@ struct SmallBufferArena {
     int* decodedCount;
     int* finalTargetsCount;
     int* classFilteredCount;
-    int* colorFilteredCount;
     int* bestTargetIndex;
     
     Target* selectedTarget;
@@ -60,8 +59,6 @@ struct SmallBufferArena {
         offset += sizeof(int);
         finalTargetsCount = decodedCount;  // Share count storage with decoded results
         classFilteredCount = reinterpret_cast<int*>(basePtr + offset);
-        offset += sizeof(int);
-        colorFilteredCount = reinterpret_cast<int*>(basePtr + offset);
         offset += sizeof(int);
         bestTargetIndex = reinterpret_cast<int*>(basePtr + offset);
         offset += sizeof(int);
@@ -93,7 +90,7 @@ struct SmallBufferArena {
     }
     
     static size_t calculateArenaSize() {
-        size_t size = sizeof(int) * 6;
+        size_t size = sizeof(int) * 5;
         
         size = (size + alignof(Target) - 1) & ~(alignof(Target) - 1);
         size += sizeof(Target) * 2;

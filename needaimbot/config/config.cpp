@@ -72,8 +72,7 @@ bool Config::loadConfig(const std::string& filename)
         body_y_offset = 0.15f;
         head_y_offset = 0.05f;
         offset_step = 0.01f;
-        ignore_third_person = false;
-        shooting_range_targets = false;
+        
         auto_aim = false;
 
 
@@ -97,16 +96,14 @@ bool Config::loadConfig(const std::string& filename)
         aim_shoot_offset_x = 0.0f;
         aim_shoot_offset_y = 0.0f;
         
-        // Target lock defaults
-        enable_target_lock = false;
+        // Target lock removed
 
         
         easynorecoil = false;
         easynorecoilstrength = 0.0f;
-        norecoil_ms = 10.0f;
+        
         input_method = "WIN32";  // Default value, will be overridden by config file if present
-        easynorecoil_start_delay_ms = 0;
-        easynorecoil_end_delay_ms = 0;
+        
 
         
         active_scope_magnification = 0;
@@ -144,8 +141,7 @@ bool Config::loadConfig(const std::string& filename)
         ai_model = "sunxds_0.5.6.engine"; 
         confidence_threshold = 0.25f;  // Higher threshold = fewer detections = better performance
         // NMS removed - no longer needed
-        confidence_weight = 0.0f;  // Ignore confidence completely
-        distance_weight = 1.0f;  // Only use distance
+        
         sticky_target_threshold = 0.0f; // Always switch to closest target
         max_detections = 30;  // Reduced from 100 for better performance
         postprocess = "yolo11";  // Changed from yolo12 to match common model format
@@ -166,7 +162,7 @@ bool Config::loadConfig(const std::string& filename)
         
         overlay_opacity = 225;
         overlay_ui_scale = 1.0f;
-        overlay_target_fps = 60.0f;  // Default 60 FPS for overlay
+        
 
         
         head_class_name = "Head";
@@ -186,27 +182,13 @@ bool Config::loadConfig(const std::string& filename)
         
         show_window = true;
         show_fps = true;
-        window_name = "Debug";
-        window_size = 80;
+        
         screenshot_button = splitString("None");
         screenshot_delay = 500;
         always_on_top = true;
 
 
-        // RGB Color filter defaults
-        enable_color_filter = false;
-        
-        // RGB defaults (detect red enemies)
-        rgb_min_r = 180;
-        rgb_max_r = 255;
-        rgb_min_g = 0;
-        rgb_max_g = 80;
-        rgb_min_b = 0;
-        rgb_max_b = 80;
-        
-        // Filter settings
-        min_color_pixels = 10;
-        remove_color_matches = false;
+        // Color filter removed
 
         active_profile_name = "Default";
 
@@ -280,8 +262,7 @@ bool Config::loadConfig(const std::string& filename)
     offset_step = static_cast<float>(get_double_ini("Target", "offset_step", 0.01));
     
     // Batch load booleans
-    ignore_third_person = get_bool_ini("Target", "ignore_third_person", false);
-    shooting_range_targets = get_bool_ini("Target", "shooting_range_targets", false);
+    
     auto_aim = get_bool_ini("Target", "auto_aim", false);
 
     crosshair_offset_x = static_cast<float>(get_double_ini("Target", "crosshair_offset_x", 0.0));
@@ -292,12 +273,11 @@ bool Config::loadConfig(const std::string& filename)
     aim_shoot_offset_x = static_cast<float>(get_double_ini("Target", "aim_shoot_offset_x", 0.0));
     aim_shoot_offset_y = static_cast<float>(get_double_ini("Target", "aim_shoot_offset_y", 0.0));
     
-    // Target lock settings
-    enable_target_lock = get_bool_ini("Target", "enable_target_lock", false);
+    // Target lock removed
 
     easynorecoil = get_bool_ini("Mouse", "easynorecoil", false);
     easynorecoilstrength = static_cast<float>(get_double_ini("Mouse", "easynorecoilstrength", 0.0));
-    norecoil_ms = static_cast<float>(get_double_ini("Mouse", "norecoil_ms", 10.0));
+    
     
     // Load PD controller settings
     // Load PD controller settings - group by axis for cache
@@ -305,8 +285,7 @@ bool Config::loadConfig(const std::string& filename)
     pd_kp_y = static_cast<float>(get_double_ini("PDController", "pd_kp_y", 0.4));
 
     input_method = get_string_ini("Mouse", "input_method", "WIN32");
-    easynorecoil_start_delay_ms = get_long_ini("Mouse", "easynorecoil_start_delay_ms", 0);
-    easynorecoil_end_delay_ms = get_long_ini("Mouse", "easynorecoil_end_delay_ms", 0);
+    
     bScope_multiplier = static_cast<float>(get_double_ini("Mouse", "bScope_multiplier", 1.2));
     crouch_recoil_enabled = get_bool_ini("Mouse", "crouch_recoil_enabled", true);
     crouch_recoil_reduction = static_cast<float>(get_double_ini("Mouse", "crouch_recoil_reduction", -50.0));
@@ -332,8 +311,7 @@ bool Config::loadConfig(const std::string& filename)
     ai_model = get_string_ini("AI", "ai_model", "sunxds_0.5.6.engine");
     confidence_threshold = static_cast<float>(get_double_ini("AI", "confidence_threshold", 0.25));
     // NMS removed - no longer needed
-    confidence_weight = static_cast<float>(get_double_ini("AI", "confidence_weight", 0.0)); 
-    distance_weight = static_cast<float>(get_double_ini("AI", "distance_weight", 1.0)); 
+    
     sticky_target_threshold = static_cast<float>(get_double_ini("AI", "sticky_target_threshold", 0.0));
     max_detections = get_long_ini("AI", "max_detections", 30);
     postprocess = get_string_ini("AI", "postprocess", "yolo11");  // Changed default from yolo12 to yolo11
@@ -355,12 +333,11 @@ bool Config::loadConfig(const std::string& filename)
 
     overlay_opacity = get_long_ini("Overlay", "overlay_opacity", 225);
     overlay_ui_scale = static_cast<float>(get_double_ini("Overlay", "overlay_ui_scale", 1.0));
-    overlay_target_fps = static_cast<float>(get_double_ini("Overlay", "overlay_target_fps", 60.0));
+    
 
     show_window = get_bool_ini("Debug", "show_window", true);
     show_fps = get_bool_ini("Debug", "show_fps", true);
-    window_name = get_string_ini("Debug", "window_name", "Debug");
-    window_size = get_long_ini("Debug", "window_size", 80);
+    
     screenshot_button = splitString(get_string_ini("Debug", "screenshot_button", "None"));
     screenshot_delay = get_long_ini("Debug", "screenshot_delay", 500);
     always_on_top = get_bool_ini("Debug", "always_on_top", true);
@@ -374,20 +351,7 @@ bool Config::loadConfig(const std::string& filename)
     movement_deadzone = static_cast<float>(get_double_ini("AimFilter", "movement_deadzone", 0.75));
     movement_max_step = get_long_ini("AimFilter", "movement_max_step", 25);
 
-    // RGB Color filter settings
-    enable_color_filter = get_bool_ini("ColorFilter", "enable_color_filter", false);
-    
-    // RGB settings
-    rgb_min_r = get_long_ini("ColorFilter", "rgb_min_r", 180);
-    rgb_max_r = get_long_ini("ColorFilter", "rgb_max_r", 255);
-    rgb_min_g = get_long_ini("ColorFilter", "rgb_min_g", 0);
-    rgb_max_g = get_long_ini("ColorFilter", "rgb_max_g", 80);
-    rgb_min_b = get_long_ini("ColorFilter", "rgb_min_b", 0);
-    rgb_max_b = get_long_ini("ColorFilter", "rgb_max_b", 80);
-    
-    // Filter settings
-    min_color_pixels = get_long_ini("ColorFilter", "min_color_pixels", 10);
-    remove_color_matches = get_bool_ini("ColorFilter", "remove_color_matches", false);
+    // Color filter removed
 
     
     head_class_name = get_string_ini("Classes", "HeadClassName", "Head");
@@ -518,10 +482,9 @@ bool Config::saveConfig(const std::string& filename)
     file << "enable_aim_shoot_offset = " << (enable_aim_shoot_offset ? "true" : "false") << "\n";
     file << "aim_shoot_offset_x = " << aim_shoot_offset_x << "\n";
     file << "aim_shoot_offset_y = " << aim_shoot_offset_y << "\n";
-    file << "enable_target_lock = " << (enable_target_lock ? "true" : "false") << "\n";
+    // enable_target_lock removed
     file << std::noboolalpha;
-    file << "ignore_third_person = " << (ignore_third_person ? "true" : "false") << "\n";
-    file << "shooting_range_targets = " << (shooting_range_targets ? "true" : "false") << "\n";
+    
     file << "auto_aim = " << (auto_aim ? "true" : "false") << "\n";
     file << "\n";
 
@@ -530,13 +493,12 @@ bool Config::saveConfig(const std::string& filename)
     file << "easynorecoil = " << (easynorecoil ? "true" : "false") << "\n";
     file << std::fixed << std::setprecision(6);
     file << "easynorecoilstrength = " << easynorecoilstrength << "\n";
-    file << "norecoil_ms = " << norecoil_ms << "\n";
+    
     
     file << std::noboolalpha;
     file << "input_method = " << input_method << "\n";
     file << std::fixed << std::setprecision(6);
-    file << "easynorecoil_start_delay_ms = " << easynorecoil_start_delay_ms << "\n";
-    file << "easynorecoil_end_delay_ms = " << easynorecoil_end_delay_ms << "\n";
+    
     file << "bScope_multiplier = " << bScope_multiplier << "\n";
     file << "crouch_recoil_enabled = " << (crouch_recoil_enabled ? "true" : "false") << "\n";
     file << "crouch_recoil_reduction = " << crouch_recoil_reduction << "\n\n";
@@ -573,8 +535,7 @@ bool Config::saveConfig(const std::string& filename)
     file << std::fixed << std::setprecision(6);
     file << "confidence_threshold = " << confidence_threshold << "\n";
     // NMS removed - no longer saved
-    file << "confidence_weight = " << confidence_weight << "\n";
-    file << "distance_weight = " << distance_weight << "\n";
+    
     file << "sticky_target_threshold = " << sticky_target_threshold << "\n";
     file << std::noboolalpha;
     file << "max_detections = " << max_detections << "\n";
@@ -600,14 +561,13 @@ bool Config::saveConfig(const std::string& filename)
     file << "[Overlay]\n";
     file << "overlay_opacity = " << overlay_opacity << "\n";
     file << std::fixed << std::setprecision(6);
-    file << "overlay_target_fps = " << overlay_target_fps << "\n";
+    
     file << "overlay_ui_scale = " << overlay_ui_scale << "\n\n";
 
     file << "[Debug]\n";
     file << "show_window = " << (show_window ? "true" : "false") << "\n";
     file << "show_fps = " << (show_fps ? "true" : "false") << "\n";
-    file << "window_name = " << window_name << "\n";
-    file << "window_size = " << window_size << "\n";
+    
     file << "screenshot_button = " << joinStrings(screenshot_button) << "\n";
     file << "screenshot_delay = " << screenshot_delay << "\n";
     file << "always_on_top = " << (always_on_top ? "true" : "false") << "\n\n";
@@ -636,17 +596,7 @@ bool Config::saveConfig(const std::string& filename)
     file << "\n";
 
 
-    // RGB ColorFilter section
-    file << "[ColorFilter]\n";
-    file << "enable_color_filter = " << (enable_color_filter ? "true" : "false") << "\n";
-    file << "rgb_min_r = " << rgb_min_r << "\n";
-    file << "rgb_max_r = " << rgb_max_r << "\n";
-    file << "rgb_min_g = " << rgb_min_g << "\n";
-    file << "rgb_max_g = " << rgb_max_g << "\n";
-    file << "rgb_min_b = " << rgb_min_b << "\n";
-    file << "rgb_max_b = " << rgb_max_b << "\n";
-    file << "min_color_pixels = " << min_color_pixels << "\n";
-    file << "remove_color_matches = " << (remove_color_matches ? "true" : "false") << "\n\n";
+    // Color filter removed
     
     // Save weapon profiles with each profile
     file << "[WeaponProfiles]\n";

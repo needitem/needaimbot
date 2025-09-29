@@ -7,7 +7,7 @@
 #include <atomic>
 
 // 설정값 캐싱 시스템
-struct ConfigCache {
+/* struct ConfigCache {
     float detection_resolution;
     float confidence_threshold;
     // NMS removed - no longer needed
@@ -63,7 +63,7 @@ public:
     uint64_t getCurrentVersion() const {
         return current_version.load();
     }
-};
+}; */
 
 
 /**
@@ -149,8 +149,7 @@ public:
     float body_y_offset;
     float head_y_offset;
     float offset_step;  
-    bool ignore_third_person;
-    bool shooting_range_targets;
+    
     bool auto_aim;
 
     
@@ -162,16 +161,12 @@ public:
     float aim_shoot_offset_x;
     float aim_shoot_offset_y;
     
-    // Target lock feature
-    bool enable_target_lock;
+    // Target lock feature removed
 
     
     bool easynorecoil;
     float easynorecoilstrength;
-    float norecoil_ms;    
     std::string input_method; 
-    int easynorecoil_start_delay_ms; 
-    int easynorecoil_end_delay_ms;   
 
     
     int active_scope_magnification;
@@ -213,8 +208,6 @@ public:
     std::string ai_model;
     float confidence_threshold;
     // NMS removed - no longer needed
-    float confidence_weight;
-    float distance_weight;
     float sticky_target_threshold;  // How much better a new target must be to switch (0.0-1.0)
     int max_detections;
     std::string postprocess;
@@ -234,13 +227,12 @@ public:
     
     int overlay_opacity;
     float overlay_ui_scale;
-    float overlay_target_fps = 60.0f;  // Configurable overlay FPS (default 60 for better responsiveness)
+    
 
     
     bool show_window;
     bool show_fps;
-    std::string window_name;
-    int window_size;
+    
     std::vector<std::string> screenshot_button;
     int screenshot_delay;
     bool always_on_top;
@@ -259,23 +251,7 @@ public:
     int persistent_cache_limit_mb = 32; // TensorRT persistent L2 cache size in MB (default: 32MB for RTX 40 series)
     bool use_cuda_graph = false; // Enable CUDA Graph optimization (faster but not compatible with all models)
     
-    // RGB Color filter settings
-    bool enable_color_filter;
     
-    // RGB filter ranges
-    int rgb_min_r;
-    int rgb_max_r;
-    int rgb_min_g;
-    int rgb_max_g;
-    int rgb_min_b;
-    int rgb_max_b;
-    
-    // Filter settings
-    int min_color_pixels;
-    bool remove_color_matches; 
-
-    
-
     // PD Controller settings
     float pd_kp_x = 0.4f;   // Proportional gain for X axis
     float pd_kp_y = 0.4f;   // Proportional gain for Y axis
