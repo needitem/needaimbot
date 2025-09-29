@@ -42,7 +42,7 @@ float debug_scale = 1.0f;
 std::mutex g_debugTexMutex; 
 
 
-// Color filter debug removed
+ 
 
 
 

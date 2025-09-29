@@ -1495,7 +1495,7 @@ void UnifiedGraphPipeline::clearDetectionBuffers(const PostProcessingConfig& con
         cudaMemsetAsync(m_smallBufferArena.classFilteredCount, 0, sizeof(int), stream);
     }
 
-    // Color filter removed
+    
 
     if (m_smallBufferArena.bestTargetIndex) {
         cudaMemsetAsync(m_smallBufferArena.bestTargetIndex, -1, sizeof(int), stream);
