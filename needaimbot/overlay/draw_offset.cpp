@@ -11,8 +11,6 @@
 #include <algorithm>
 #include <vector>
 
-extern ID3D11ShaderResourceView* bodyTexture;
-extern ImVec2 bodyImageSize;
 extern ID3D11ShaderResourceView* g_debugSRV;
 extern ID3D11Texture2D* g_debugTex;
 extern float debug_scale;
@@ -59,67 +57,65 @@ void renderOffsetTab()
     ImGui::Separator();
     ImGui::Spacing();
 
-    // Visual representation of offsets (static image)
+    // Visual representation of offsets using loaded image
     ImGui::Text("Body/Head Offset Preview:");
     ImGui::Spacing();
-    
+
+    extern ID3D11ShaderResourceView* bodyTexture;
+    extern ImVec2 bodyImageSize;
+
     if (bodyTexture && bodyImageSize.x > 0 && bodyImageSize.y > 0)
     {
-        // Scale the image to fit nicely in the UI
-        float scale = 0.5f;  // Scale down to 50% for better UI fit
-        ImVec2 scaledImageSize(bodyImageSize.x * scale, bodyImageSize.y * scale);
-        
-        // Draw the body image with offset indicators
-        ImGui::Image((void*)bodyTexture, scaledImageSize);
+        // Display the body image
+        ImGui::Image((void*)bodyTexture, bodyImageSize);
 
         ImVec2 image_pos = ImGui::GetItemRectMin();
         ImVec2 image_size = ImGui::GetItemRectSize();
         ImDrawList* draw_list = ImGui::GetWindowDrawList();
 
-        // Ensure we have valid image dimensions
         if (image_size.x > 0 && image_size.y > 0)
         {
-            // Draw body offset line (red)
+            // Body offset line calculation (from SunOne's code)
             float normalized_body_value = (ctx.config.body_y_offset - 1.0f) / 1.0f;
             float body_line_y = image_pos.y + (1.0f + normalized_body_value) * image_size.y;
-            
-            draw_list->AddLine(
-                ImVec2(image_pos.x, body_line_y), 
-                ImVec2(image_pos.x + image_size.x, body_line_y), 
-                IM_COL32(255, 0, 0, 255), 
-                2.0f
-            );
-            
-            // Draw head offset line (green)
-            // Head offset is calculated relative to body offset at 0.15
+
+            // Head offset line calculation (from SunOne's code)
             float body_y_pos_at_015 = image_pos.y + (1.0f + (0.15f - 1.0f) / 1.0f) * image_size.y;
             float head_top_pos = image_pos.y;
             float head_line_y = head_top_pos + (ctx.config.head_y_offset * (body_y_pos_at_015 - head_top_pos));
-            
+
+            // Draw body offset line (red)
             draw_list->AddLine(
-                ImVec2(image_pos.x, head_line_y), 
-                ImVec2(image_pos.x + image_size.x, head_line_y), 
-                IM_COL32(0, 255, 0, 255), 
+                ImVec2(image_pos.x, body_line_y),
+                ImVec2(image_pos.x + image_size.x, body_line_y),
+                IM_COL32(255, 0, 0, 255),
                 2.0f
             );
-            
-            // Add text labels
+
+            // Draw head offset line (green)
+            draw_list->AddLine(
+                ImVec2(image_pos.x, head_line_y),
+                ImVec2(image_pos.x + image_size.x, head_line_y),
+                IM_COL32(0, 255, 0, 255),
+                2.0f
+            );
+
+            // Labels
             draw_list->AddText(
-                ImVec2(image_pos.x + image_size.x + 5, body_line_y - 7), 
-                IM_COL32(255, 0, 0, 255), 
+                ImVec2(image_pos.x + image_size.x + 5, body_line_y - 7),
+                IM_COL32(255, 0, 0, 255),
                 "Body"
             );
             draw_list->AddText(
-                ImVec2(image_pos.x + image_size.x + 5, head_line_y - 7), 
-                IM_COL32(0, 255, 0, 255), 
+                ImVec2(image_pos.x + image_size.x + 5, head_line_y - 7),
+                IM_COL32(0, 255, 0, 255),
                 "Head"
             );
         }
     }
     else
     {
-        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "Preview image not available");
-        ImGui::Text("Debug: bodyTexture=%p, size=%.0fx%.0f", bodyTexture, bodyImageSize.x, bodyImageSize.y);
+        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "Body image not loaded");
     }
 
     UIHelpers::EndSettingsSection();

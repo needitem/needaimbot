@@ -1,4 +1,4 @@
-﻿#ifndef MEMORY_IMAGES_H
+#ifndef MEMORY_IMAGES_H
 #define MEMORY_IMAGES_H
 
 // Decoded body image as base64 format in chanks

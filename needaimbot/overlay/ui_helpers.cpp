@@ -208,8 +208,13 @@ namespace UIHelpers
     void BeginCard(const char* title)
     {
         if (title) {
-            ImGui::PushStyleColor(ImGuiCol_Text, GetAccentColor());
+            ImGui::PushStyleColor(ImGuiCol_Text, GetAccentColor(0.9f));
+            float original_scale = ImGui::GetFont()->Scale;
+            ImGui::GetFont()->Scale *= 1.05f;
+            ImGui::PushFont(ImGui::GetFont());
             ImGui::Text("%s", title);
+            ImGui::GetFont()->Scale = original_scale;
+            ImGui::PopFont();
             ImGui::PopStyleColor();
             ImGui::Separator();
             CompactSpacer();
@@ -311,10 +316,15 @@ namespace UIHelpers
     
     void SettingsSubHeader(const char* title)
     {
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.8f, 0.8f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.75f, 0.75f, 0.75f, 1.0f));
+        float original_scale = ImGui::GetFont()->Scale;
+        ImGui::GetFont()->Scale *= 0.95f;
+        ImGui::PushFont(ImGui::GetFont());
         ImGui::Text("%s", title);
+        ImGui::GetFont()->Scale = original_scale;
+        ImGui::PopFont();
         ImGui::PopStyleColor();
-        Spacer(2.0f);
+        Spacer(1.5f);
     }
     
     void HelpMarker(const char* desc)
