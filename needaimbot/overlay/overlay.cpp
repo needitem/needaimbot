@@ -406,7 +406,7 @@ void SetupImGui()
     colors[ImGuiCol_NavWindowingDimBg] = ImVec4(0.80f, 0.80f, 0.80f, 0.20f);
     colors[ImGuiCol_ModalWindowDimBg] = ImVec4(0.80f, 0.80f, 0.80f, 0.35f); 
 
-    
+    load_body_texture();
 }
 
 bool CreateOverlayWindow()
@@ -484,7 +484,7 @@ void OverlayThread()
     
     float prev_body_y_offset = ctx.config.body_y_offset;
     float prev_head_y_offset = ctx.config.head_y_offset;
-    
+    release_body_texture();
     bool prev_auto_aim = ctx.config.auto_aim;
 
     
@@ -630,14 +630,6 @@ void OverlayThread()
 
         if (show_overlay)
         {
-            // Control frame rate to 30 FPS when visible
-            auto now = std::chrono::high_resolution_clock::now();
-            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastOverlayFrameTime);
-            if (elapsed.count() < 33) { // ~30 FPS
-                std::this_thread::sleep_for(std::chrono::milliseconds(33 - elapsed.count()));
-            }
-            lastOverlayFrameTime = std::chrono::high_resolution_clock::now();
-            
             // Optimized ImGui frame setup
             ImGui_ImplDX11_NewFrame();
             ImGui_ImplWin32_NewFrame();
