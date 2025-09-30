@@ -652,95 +652,111 @@ void OverlayThread()
 
                 if (ImGui::BeginTabBar("Options tab bar", ImGuiTabBarFlags_FittingPolicyResizeDown))
                 {
-                    // Main Controls - Essential aimbot/triggerbot settings
-                    if (ImGui::BeginTabItem("Main"))
+                    // ═══════════════════════════════════════════════════════════
+                    // CORE FEATURES - Main functionality controls
+                    // ═══════════════════════════════════════════════════════════
+
+                    if (ImGui::BeginTabItem("[CORE] Aimbot"))
                     {
-                        // Main aimbot and triggerbot controls from draw_target
-                        UIHelpers::BeginSettingsSection("Main Controls", "Essential aimbot and triggerbot settings");
-                        draw_target();  // This now contains the enable checkboxes
+                        UIHelpers::BeginSettingsSection("Aimbot Configuration",
+                            "Enable/disable auto-aim and configure target selection behavior");
+                        draw_target();
                         UIHelpers::EndSettingsSection();
                         ImGui::EndTabItem();
                     }
 
-                    // Offset Settings
-                    if (ImGui::BeginTabItem("Offset"))
+                    if (ImGui::BeginTabItem("[CORE] Recoil"))
                     {
-                        renderOffsetTab();
-                        ImGui::EndTabItem();
-                    }
-
-                    // Mouse Movement
-                    if (ImGui::BeginTabItem("Mouse"))
-                    {
-                        UIHelpers::BeginSettingsSection("Mouse Movement", "Configure mouse sensitivity and movement behavior");
-                        draw_mouse();
-                        UIHelpers::EndSettingsSection();
-                        ImGui::EndTabItem();
-                    }
-
-
-                    // Recoil Control
-                    if (ImGui::BeginTabItem("Recoil"))
-                    {
-                        UIHelpers::BeginSettingsSection("Recoil Control", "Configure automatic recoil compensation");
+                        UIHelpers::BeginSettingsSection("Recoil Compensation",
+                            "Automatic spray control to reduce weapon recoil patterns");
                         draw_rcs_settings();
                         UIHelpers::EndSettingsSection();
                         ImGui::EndTabItem();
                     }
 
-                    // Key Bindings
-                    if (ImGui::BeginTabItem("Keybinds"))
+                    // ═══════════════════════════════════════════════════════════
+                    // AIMING CONTROLS - Fine-tune aiming behavior
+                    // ═══════════════════════════════════════════════════════════
+
+                    if (ImGui::BeginTabItem("[AIM] Mouse"))
                     {
-                        UIHelpers::BeginSettingsSection("Key Bindings", "Configure all hotkeys and control buttons");
-                        draw_buttons();
+                        UIHelpers::BeginSettingsSection("Mouse Configuration",
+                            "Input device selection and mouse movement parameters");
+                        draw_mouse();
                         UIHelpers::EndSettingsSection();
                         ImGui::EndTabItem();
                     }
 
-                    // AI Model
-                    if (ImGui::BeginTabItem("AI Model"))
+                    if (ImGui::BeginTabItem("[AIM] Offset"))
                     {
-                        UIHelpers::BeginSettingsSection("AI Configuration", "Configure AI detection model and parameters");
+                        UIHelpers::BeginSettingsSection("Aim Offset Adjustment",
+                            "Fine-tune aim position relative to detected targets");
+                        renderOffsetTab();
+                        UIHelpers::EndSettingsSection();
+                        ImGui::EndTabItem();
+                    }
+
+                    // ═══════════════════════════════════════════════════════════
+                    // AI & DETECTION - Detection engine configuration
+                    // ═══════════════════════════════════════════════════════════
+
+                    if (ImGui::BeginTabItem("[AI] Model"))
+                    {
+                        UIHelpers::BeginSettingsSection("AI Detection Engine",
+                            "Model selection, confidence threshold, and detection parameters");
                         draw_ai();
                         UIHelpers::EndSettingsSection();
                         ImGui::EndTabItem();
                     }
 
-                    // Screen Capture
-                    if (ImGui::BeginTabItem("Capture"))
+                    if (ImGui::BeginTabItem("[AI] Capture"))
                     {
-                        UIHelpers::BeginSettingsSection("Screen Capture", "Configure capture area and performance");
+                        UIHelpers::BeginSettingsSection("Capture Configuration",
+                            "Capture area size, resolution, and performance settings");
                         draw_capture_settings();
                         UIHelpers::EndSettingsSection();
                         ImGui::EndTabItem();
                     }
 
-                    // Visual Settings
-                    if (ImGui::BeginTabItem("Visual"))
+                    // ═══════════════════════════════════════════════════════════
+                    // CONTROLS - Input configuration
+                    // ═══════════════════════════════════════════════════════════
+
+                    if (ImGui::BeginTabItem("[INPUT] Hotkeys"))
                     {
-                        // Overlay Settings
-                        UIHelpers::BeginSettingsSection("Overlay", "Configure overlay appearance");
-                        draw_overlay();
+                        UIHelpers::BeginSettingsSection("Hotkey Configuration",
+                            "Customize all keyboard shortcuts and activation keys");
+                        draw_buttons();
                         UIHelpers::EndSettingsSection();
                         ImGui::EndTabItem();
                     }
 
-                    // Profile Management
-                    if (ImGui::BeginTabItem("Profiles"))
+                    // ═══════════════════════════════════════════════════════════
+                    // SYSTEM - Application settings
+                    // ═══════════════════════════════════════════════════════════
+
+                    if (ImGui::BeginTabItem("[SYS] Profiles"))
                     {
-                        UIHelpers::BeginSettingsSection("Profile Management", "Save and load configurations");
+                        UIHelpers::BeginSettingsSection("Profile Management",
+                            "Save, load, and manage different configuration profiles");
                         draw_profile();
                         UIHelpers::EndSettingsSection();
                         ImGui::EndTabItem();
                     }
 
-
-                    // Monitoring
-                    if (ImGui::BeginTabItem("Monitor"))
+                    if (ImGui::BeginTabItem("[SYS] Visual"))
                     {
-                        
-                        // Debug Info
-                        UIHelpers::BeginSettingsSection("Debug", "System information and troubleshooting");
+                        UIHelpers::BeginSettingsSection("Overlay Appearance",
+                            "Customize UI transparency, scale, and display options");
+                        draw_overlay();
+                        UIHelpers::EndSettingsSection();
+                        ImGui::EndTabItem();
+                    }
+
+                    if (ImGui::BeginTabItem("[SYS] Monitor"))
+                    {
+                        UIHelpers::BeginSettingsSection("System Monitor",
+                            "Performance metrics, FPS counter, and debug information");
                         draw_debug();
                         UIHelpers::EndSettingsSection();
                         ImGui::EndTabItem();
