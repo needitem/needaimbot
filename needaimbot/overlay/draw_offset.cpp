@@ -59,7 +59,7 @@ void renderOffsetTab()
     ImGui::Separator();
     ImGui::Spacing();
 
-    // Visual representation of offsets
+    // Visual representation of offsets (static image)
     ImGui::Text("Body/Head Offset Preview:");
     ImGui::Spacing();
     
@@ -380,6 +380,12 @@ void renderOffsetTab()
         SimpleMat* frameToDisplay = nullptr;
         static SimpleMat previewHostFrame;
 
+        // Throttle preview updates to 15 FPS (every ~66ms) to reduce GPU->CPU copy overhead
+        static auto lastPreviewUpdate = std::chrono::high_resolution_clock::now();
+        auto now = std::chrono::high_resolution_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastPreviewUpdate);
+        bool shouldUpdatePreview = (elapsed.count() >= 66);
+
         auto& pipelineManager = needaimbot::PipelineManager::getInstance();
         auto* pipeline = pipelineManager.getPipeline();
 
@@ -396,17 +402,21 @@ void renderOffsetTab()
             }
         }
 
-        if (pipeline && pipeline->isPreviewAvailable()) {
+        if (pipeline && pipeline->isPreviewAvailable() && shouldUpdatePreview) {
             if (pipeline->getPreviewSnapshot(previewHostFrame) &&
                 !previewHostFrame.empty() &&
                 previewHostFrame.cols() > 0 && previewHostFrame.rows() > 0 &&
                 previewHostFrame.cols() <= 10000 && previewHostFrame.rows() <= 10000) {
                 frameToDisplay = &previewHostFrame;
+                lastPreviewUpdate = now;
             } else {
                 ImGui::TextColored(ImVec4(0.8f, 0.5f, 0.0f, 1.0f), "Preview data not ready");
             }
-        } else {
+        } else if (!pipeline || !pipeline->isPreviewAvailable()) {
             ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Preview not available");
+        } else if (!shouldUpdatePreview && !previewHostFrame.empty()) {
+            // Reuse previous frame
+            frameToDisplay = &previewHostFrame;
         }
 
         if (frameToDisplay) {

@@ -9,9 +9,46 @@
 #include "draw_settings.h"
 #include "needaimbot.h"
 #include "other_tools.h"
- 
+#include "memory_images.h"
 
- 
+ID3D11ShaderResourceView* bodyTexture = nullptr;
+ImVec2 bodyImageSize;
+
+void load_body_texture()
+{
+    int image_width = 0;
+    int image_height = 0;
+
+    std::string body_image = std::string(bodyImageBase64_1);
+    if (strlen(bodyImageBase64_1) > 0) {
+        // Concatenate chunks if provided in multiple parts
+        if (strlen(bodyImageBase64_1) > 0 && strlen(bodyImageBase64_1) < 10) {
+            // no-op safeguard
+        }
+    }
+    // Try to append optional parts if they exist
+    #ifdef bodyImageBase64_2
+    body_image += std::string(bodyImageBase64_2);
+    #endif
+    #ifdef bodyImageBase64_3
+    body_image += std::string(bodyImageBase64_3);
+    #endif
+
+    bool ret = LoadTextureFromMemory(body_image, g_pd3dDevice, &bodyTexture, &image_width, &image_height);
+    if (ret)
+    {
+        bodyImageSize = ImVec2((float)image_width, (float)image_height);
+    }
+}
+
+void release_body_texture()
+{
+    if (bodyTexture)
+    {
+        bodyTexture->Release();
+        bodyTexture = nullptr;
+    }
+}
 
 void draw_target()
 {
