@@ -21,8 +21,9 @@ static void draw_movement_controls()
     auto& ctx = AppContext::getInstance();
 
     UIHelpers::BeginCard("Mouse Movement Settings");
-    
-    UIHelpers::BeautifulText("Simple proportional controller for aiming.", UIHelpers::GetAccentColor(0.8f));
+
+    UIHelpers::BeautifulText("Controls how the aimbot moves the mouse to track targets.", UIHelpers::GetAccentColor(0.8f));
+    UIHelpers::BeautifulText("Adjust Kp values to control aiming speed and responsiveness.", ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
     UIHelpers::CompactSpacer();
     
     UIHelpers::SettingsSubHeader("Proportional Gain Settings");
@@ -87,6 +88,9 @@ static void draw_movement_controls()
 
     UIHelpers::SettingsSubHeader("Rate Normalization & Filter");
 
+    UIHelpers::BeautifulText("Compensates for varying frame rates to maintain consistent aiming speed.", ImVec4(0.65f, 0.65f, 0.65f, 1.0f));
+    UIHelpers::CompactSpacer();
+
     if (UIHelpers::EnhancedCheckbox("Normalize by Frame Time", &ctx.config.normalize_movement_rate,
         "Keep response per second consistent across FPS"))
     {
@@ -100,14 +104,14 @@ static void draw_movement_controls()
             ctx.config.movement_rate_ema_alpha = alpha;
             SAVE_PROFILE();
         }
-        UIHelpers::HelpMarker("Smoothing factor for dt estimate (lower = smoother, higher = quicker)");
+        UIHelpers::HelpMarker("Exponential Moving Average smoothing factor. Lower values (0.01-0.1) = smoother but slower to adapt. Higher values (0.3-0.5) = faster response but less stable.");
 
         int warmup = ctx.config.movement_warmup_frames;
         if (ImGui::SliderInt("Warmup Frames", &warmup, 0, 60)) {
             ctx.config.movement_warmup_frames = warmup;
             SAVE_PROFILE();
         }
-        UIHelpers::HelpMarker("Frames to establish baseline dt when not using fixed FPS");
+        UIHelpers::HelpMarker("Number of frames to collect before normalizing. Helps establish a stable baseline frame time. Use 30-60 for variable FPS games, 0 if using fixed reference FPS.");
 
         if (UIHelpers::EnhancedCheckbox("Use Fixed Reference FPS", &ctx.config.rate_use_fixed_reference_fps,
             "Bypass warmup and assume this FPS as the baseline"))
@@ -122,10 +126,14 @@ static void draw_movement_controls()
             ctx.config.rate_fixed_reference_fps = ref_fps;
             SAVE_PROFILE();
         }
+        UIHelpers::HelpMarker("Target FPS to normalize against. Set to your game's typical FPS (e.g., 60, 144, 240). Skips warmup period.");
         ImGui::EndDisabled();
     }
     ImGui::EndDisabled();
 
+    UIHelpers::CompactSpacer();
+
+    UIHelpers::BeautifulText("Movement limits to prevent jitter and excessive corrections.", ImVec4(0.65f, 0.65f, 0.65f, 1.0f));
     UIHelpers::CompactSpacer();
 
     float deadzone = ctx.config.movement_deadzone;
@@ -133,14 +141,14 @@ static void draw_movement_controls()
         ctx.config.movement_deadzone = deadzone;
         SAVE_PROFILE();
     }
-    UIHelpers::HelpMarker("Suppress tiny oscillations near zero movement");
+    UIHelpers::HelpMarker("Ignores movements smaller than this value to reduce jitter. If mouse shakes when on target, increase this. Recommended: 0.5-2.0px.");
 
     int max_step = ctx.config.movement_max_step;
     if (ImGui::SliderInt("Max Step (px)", &max_step, 1, 100)) {
         ctx.config.movement_max_step = max_step;
         SAVE_PROFILE();
     }
-    UIHelpers::HelpMarker("Clamp per-dispatch mouse step to limit spikes");
+    UIHelpers::HelpMarker("Maximum pixels moved per frame. Prevents large sudden jumps. Lower = smoother but slower. Higher = faster but may look snappy. Recommended: 20-50px.");
 
     UIHelpers::EndCard();
 }
@@ -150,6 +158,10 @@ static void draw_input_device_settings()
     auto& ctx = AppContext::getInstance();
 
     UIHelpers::BeginCard("Mouse Input Device");
+
+    UIHelpers::BeautifulText("Select the hardware/driver used to send mouse movements.", UIHelpers::GetAccentColor(0.8f));
+    UIHelpers::BeautifulText("WIN32 works for most cases. Hardware options may bypass detection.", ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
+    UIHelpers::CompactSpacer();
 
     static constexpr const char* INPUT_METHODS[] = {
         "WIN32",

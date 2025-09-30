@@ -404,9 +404,7 @@ void SetupImGui()
     colors[ImGuiCol_NavHighlight] = ImVec4(0.20f, 0.60f, 0.90f, 1.00f);
     colors[ImGuiCol_NavWindowingHighlight] = ImVec4(1.00f, 1.00f, 1.00f, 0.70f);
     colors[ImGuiCol_NavWindowingDimBg] = ImVec4(0.80f, 0.80f, 0.80f, 0.20f);
-    colors[ImGuiCol_ModalWindowDimBg] = ImVec4(0.80f, 0.80f, 0.80f, 0.35f); 
-
-    load_body_texture();
+    colors[ImGuiCol_ModalWindowDimBg] = ImVec4(0.80f, 0.80f, 0.80f, 0.35f);
 }
 
 bool CreateOverlayWindow()
@@ -468,23 +466,25 @@ void OverlayThread()
     }
 
     SetupImGui();
-    
+
     // Initialize GPU reader for UI
     g_uiGPUReader.initialize();
 
+    // Load body texture after D3D device is created
+    load_body_texture();
+
     bool show_overlay = false;
 
-    
+
     int prev_detection_resolution = ctx.config.detection_resolution;
     int prev_monitor_idx = ctx.config.monitor_idx;
     bool prev_circle_mask = ctx.config.circle_mask;
     bool prev_capture_borders = ctx.config.capture_borders;
     bool prev_capture_cursor = ctx.config.capture_cursor;
 
-    
+
     float prev_body_y_offset = ctx.config.body_y_offset;
     float prev_head_y_offset = ctx.config.head_y_offset;
-    release_body_texture();
     bool prev_auto_aim = ctx.config.auto_aim;
 
     

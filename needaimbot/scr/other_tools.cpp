@@ -249,6 +249,9 @@ bool LoadTextureFromMemory(const std::string& imageBase64, ID3D11Device* device,
 {
     std::vector<unsigned char> decodedData = Base64Decode(imageBase64);
 
+    std::cerr << "Base64 input length: " << imageBase64.length() << std::endl;
+    std::cerr << "Decoded data size: " << decodedData.size() << std::endl;
+
     int image_width = 0;
     int image_height = 0;
     int channels = 0;
@@ -260,9 +263,12 @@ bool LoadTextureFromMemory(const std::string& imageBase64, ID3D11Device* device,
 
     if (image_data == NULL)
     {
-        std::cerr << "Can't load image from memory." << std::endl;
+        const char* error = stbi_failure_reason();
+        std::cerr << "Can't load image from memory. STB Error: " << (error ? error : "unknown") << std::endl;
         return false;
     }
+
+    std::cerr << "Image loaded successfully: " << image_width << "x" << image_height << ", channels: " << channels << std::endl;
 
     D3D11_TEXTURE2D_DESC desc;
     ZeroMemory(&desc, sizeof(desc));
@@ -283,7 +289,14 @@ bool LoadTextureFromMemory(const std::string& imageBase64, ID3D11Device* device,
     subResource.pSysMem = image_data;
     subResource.SysMemPitch = desc.Width * 4;
     subResource.SysMemSlicePitch = 0;
-    device->CreateTexture2D(&desc, &subResource, &pTexture);
+
+    HRESULT hr = device->CreateTexture2D(&desc, &subResource, &pTexture);
+    if (FAILED(hr) || !pTexture)
+    {
+        std::cerr << "Failed to create D3D11 texture. HRESULT: 0x" << std::hex << hr << std::dec << std::endl;
+        stbi_image_free(image_data);
+        return false;
+    }
 
     D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
     ZeroMemory(&srvDesc, sizeof(srvDesc));
@@ -291,8 +304,18 @@ bool LoadTextureFromMemory(const std::string& imageBase64, ID3D11Device* device,
     srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
     srvDesc.Texture2D.MipLevels = desc.MipLevels;
     srvDesc.Texture2D.MostDetailedMip = 0;
-    device->CreateShaderResourceView(pTexture, &srvDesc, out_srv);
+
+    hr = device->CreateShaderResourceView(pTexture, &srvDesc, out_srv);
     pTexture->Release();
+
+    if (FAILED(hr) || !(*out_srv))
+    {
+        std::cerr << "Failed to create shader resource view. HRESULT: 0x" << std::hex << hr << std::dec << std::endl;
+        stbi_image_free(image_data);
+        return false;
+    }
+
+    std::cerr << "D3D11 texture and SRV created successfully" << std::endl;
 
     *out_width = image_width;
     *out_height = image_height;
