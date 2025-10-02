@@ -50,6 +50,16 @@ void DDACapture::Shutdown() {
     StopCapture();
 
     std::lock_guard<std::mutex> lock(m_frameMutex);
+
+    // Cleanup CUDA interop
+    if (m_cudaGraphicsResource) {
+        cudaGraphicsUnregisterResource(m_cudaGraphicsResource);
+        m_cudaGraphicsResource = nullptr;
+    }
+    m_cudaMappedArray = nullptr;
+    m_sharedTexture.Reset();
+    m_cudaInteropEnabled = false;
+
     m_frameBuffer.reset();
     m_bufferSize = 0;
     m_captureWidth = 0;
@@ -123,6 +133,26 @@ bool DDACapture::GetLatestFrame(void** frameData, unsigned int* width, unsigned 
 void DDACapture::SetFrameCallback(std::function<void(void*, unsigned int, unsigned int, unsigned int)> callback) {
     std::lock_guard<std::mutex> lock(m_frameMutex);
     m_frameCallback = std::move(callback);
+}
+
+bool DDACapture::GetLatestFrameGPU(cudaArray_t* cudaArray, unsigned int* width, unsigned int* height) {
+    std::lock_guard<std::mutex> lock(m_frameMutex);
+
+    if (!m_cudaInteropEnabled || !m_cudaMappedArray) {
+        return false;
+    }
+
+    if (cudaArray) {
+        *cudaArray = m_cudaMappedArray;
+    }
+    if (width) {
+        *width = m_captureWidth;
+    }
+    if (height) {
+        *height = m_captureHeight;
+    }
+
+    return true;
 }
 
 bool DDACapture::SetCaptureRegion(int x, int y, int width, int height) {
@@ -305,36 +335,110 @@ void DDACapture::ReleaseDuplication() {
 }
 
 bool DDACapture::EnsureStagingTexture(UINT width, UINT height, DXGI_FORMAT format) {
-    if (m_stagingTexture) {
+    // Check if we need to recreate
+    bool needRecreate = false;
+    if (m_sharedTexture) {
         D3D11_TEXTURE2D_DESC currentDesc;
-        m_stagingTexture->GetDesc(&currentDesc);
-        if (currentDesc.Width == width && currentDesc.Height == height && currentDesc.Format == format) {
-            return true;
+        m_sharedTexture->GetDesc(&currentDesc);
+        if (currentDesc.Width != width || currentDesc.Height != height || currentDesc.Format != format) {
+            needRecreate = true;
         }
+    } else {
+        needRecreate = true;
     }
 
-    D3D11_TEXTURE2D_DESC desc{};
-    desc.Width = width;
-    desc.Height = height;
-    desc.MipLevels = 1;
-    desc.ArraySize = 1;
-    desc.Format = format;
-    desc.SampleDesc.Count = 1;
-    desc.SampleDesc.Quality = 0;
-    desc.Usage = D3D11_USAGE_STAGING;
-    desc.BindFlags = 0;
-    desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-    desc.MiscFlags = 0;
+    if (needRecreate) {
+        // Cleanup old CUDA resource
+        if (m_cudaGraphicsResource) {
+            cudaGraphicsUnregisterResource(m_cudaGraphicsResource);
+            m_cudaGraphicsResource = nullptr;
+        }
+        m_cudaMappedArray = nullptr;
+        m_sharedTexture.Reset();
+        m_stagingTexture.Reset();
+        m_cudaInteropEnabled = false;
 
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
-    HRESULT hr = m_device->CreateTexture2D(&desc, nullptr, &texture);
-    if (FAILED(hr)) {
-        std::cerr << "[DDACapture] Failed to create staging texture: 0x" << std::hex << hr << std::dec << std::endl;
-        return false;
+        // Create shared texture for CUDA (D3D11_USAGE_DEFAULT)
+        D3D11_TEXTURE2D_DESC sharedDesc{};
+        sharedDesc.Width = width;
+        sharedDesc.Height = height;
+        sharedDesc.MipLevels = 1;
+        sharedDesc.ArraySize = 1;
+        sharedDesc.Format = format;
+        sharedDesc.SampleDesc.Count = 1;
+        sharedDesc.SampleDesc.Quality = 0;
+        sharedDesc.Usage = D3D11_USAGE_DEFAULT;  // CUDA requires DEFAULT
+        sharedDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        sharedDesc.CPUAccessFlags = 0;
+        sharedDesc.MiscFlags = 0;
+
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> sharedTex;
+        HRESULT hr = m_device->CreateTexture2D(&sharedDesc, nullptr, &sharedTex);
+        if (FAILED(hr)) {
+            std::cerr << "[DDACapture] Failed to create shared texture: 0x" << std::hex << hr << std::dec << std::endl;
+            return false;
+        }
+
+        m_sharedTexture = sharedTex;
+
+        // Try to register with CUDA
+        cudaError_t cudaErr = cudaGraphicsD3D11RegisterResource(
+            &m_cudaGraphicsResource,
+            m_sharedTexture.Get(),
+            cudaGraphicsRegisterFlagsNone
+        );
+
+        if (cudaErr == cudaSuccess) {
+            // Map immediately and keep mapped
+            cudaErr = cudaGraphicsMapResources(1, &m_cudaGraphicsResource, 0);
+            if (cudaErr == cudaSuccess) {
+                cudaErr = cudaGraphicsSubResourceGetMappedArray(&m_cudaMappedArray, m_cudaGraphicsResource, 0, 0);
+                if (cudaErr == cudaSuccess) {
+                    m_cudaInteropEnabled = true;
+                    std::cout << "[DDACapture] CUDA interop enabled successfully!" << std::endl;
+                } else {
+                    std::cerr << "[DDACapture] cudaGraphicsSubResourceGetMappedArray failed: "
+                              << cudaGetErrorString(cudaErr) << std::endl;
+                    cudaGraphicsUnmapResources(1, &m_cudaGraphicsResource, 0);
+                    cudaGraphicsUnregisterResource(m_cudaGraphicsResource);
+                    m_cudaGraphicsResource = nullptr;
+                }
+            } else {
+                std::cerr << "[DDACapture] cudaGraphicsMapResources failed: "
+                          << cudaGetErrorString(cudaErr) << std::endl;
+                cudaGraphicsUnregisterResource(m_cudaGraphicsResource);
+                m_cudaGraphicsResource = nullptr;
+            }
+        } else {
+            std::cerr << "[DDACapture] CUDA interop not available: " << cudaGetErrorString(cudaErr)
+                      << " - using CPU fallback" << std::endl;
+        }
+
+        // Create CPU staging texture for fallback
+        D3D11_TEXTURE2D_DESC stagingDesc{};
+        stagingDesc.Width = width;
+        stagingDesc.Height = height;
+        stagingDesc.MipLevels = 1;
+        stagingDesc.ArraySize = 1;
+        stagingDesc.Format = format;
+        stagingDesc.SampleDesc.Count = 1;
+        stagingDesc.SampleDesc.Quality = 0;
+        stagingDesc.Usage = D3D11_USAGE_STAGING;
+        stagingDesc.BindFlags = 0;
+        stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        stagingDesc.MiscFlags = 0;
+
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> stagingTex;
+        hr = m_device->CreateTexture2D(&stagingDesc, nullptr, &stagingTex);
+        if (FAILED(hr)) {
+            std::cerr << "[DDACapture] Failed to create CPU staging texture: 0x" << std::hex << hr << std::dec << std::endl;
+            return false;
+        }
+
+        m_stagingTexture = stagingTex;
+        m_frameDesc = sharedDesc;
     }
 
-    m_stagingTexture = texture;
-    m_frameDesc = desc;
     return true;
 }
 
@@ -436,6 +540,25 @@ DDACapture::FrameAcquireResult DDACapture::AcquireFrame() {
                           captureWidth == textureDesc.Width &&
                           captureHeight == textureDesc.Height);
 
+    // Copy to shared texture for CUDA interop if enabled
+    if (m_cudaInteropEnabled && m_sharedTexture) {
+        if (useBox) {
+            m_context->CopySubresourceRegion(
+                m_sharedTexture.Get(),
+                0,
+                0,
+                0,
+                0,
+                frameTexture.Get(),
+                0,
+                &captureBox
+            );
+        } else {
+            m_context->CopyResource(m_sharedTexture.Get(), frameTexture.Get());
+        }
+    }
+
+    // Also copy to staging texture for CPU fallback path
     if (useBox) {
         m_context->CopySubresourceRegion(
             m_stagingTexture.Get(),

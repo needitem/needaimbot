@@ -2003,20 +2003,18 @@ bool UnifiedGraphPipeline::scheduleNextFrameCapture(bool forceSync) {
         return false;
     }
 
-    void* frameData = nullptr;
+    // Try GPU-direct path first (zero-copy CUDA interop)
+    cudaArray_t cudaArray = nullptr;
     unsigned int width = 0;
     unsigned int height = 0;
-    unsigned int size = 0;
 
-    if (!m_ddaCapture->GetLatestFrame(&frameData, &width, &height, &size)) {
-        return false;
+    bool useGPUDirect = m_ddaCapture->GetLatestFrameGPU(&cudaArray, &width, &height);
+
+    static bool gpuDirectLoggedOnce = false;
+    if (!gpuDirectLoggedOnce && useGPUDirect) {
+        std::cout << "[Capture] CUDA Interop enabled - using GPU-direct zero-copy path" << std::endl;
+        gpuDirectLoggedOnce = true;
     }
-
-    if (!frameData || width == 0 || height == 0) {
-        return false;
-    }
-
-    ensureCaptureBufferRegistered(frameData, size);
 
     cudaStream_t copyStream = nullptr;
     if (m_captureStream && m_captureStream->get()) {
@@ -2030,11 +2028,62 @@ bool UnifiedGraphPipeline::scheduleNextFrameCapture(bool forceSync) {
     }
 
     bool useGraphCapture = ctx.config.use_cuda_graph;
-
     SimpleCudaMat& targetBuffer = useGraphCapture ? m_captureBuffer : m_nextCaptureBuffer;
 
-    if (!copyFrameToBuffer(frameData, width, height, targetBuffer, copyStream)) {
-        return false;
+    if (useGPUDirect && cudaArray) {
+        // Zero-copy GPU path: copy directly from CUDA array
+        int heightInt = (int)height;
+        int widthInt = (int)width;
+
+        // Call member functions to extract values
+        uint8_t* bufferData = targetBuffer.data();
+        int bufferRows = targetBuffer.rows();
+        int bufferCols = targetBuffer.cols();
+        int bufferChannels = targetBuffer.channels();
+        size_t bufferStep = targetBuffer.step();
+
+        if (bufferData && bufferRows == heightInt &&
+            bufferCols == widthInt && bufferChannels == 4) {
+
+            cudaError_t err = cudaMemcpy2DFromArrayAsync(
+                bufferData,
+                bufferStep,
+                cudaArray,
+                0,
+                0,
+                width * 4,  // 4 bytes per pixel (BGRA)
+                height,
+                cudaMemcpyDeviceToDevice,
+                copyStream
+            );
+
+            if (err != cudaSuccess) {
+                std::cerr << "[Capture] GPU-direct copy failed: " << cudaGetErrorString(err) << std::endl;
+                useGPUDirect = false;  // Fall back to CPU path
+            }
+        } else {
+            useGPUDirect = false;  // Buffer size mismatch, fall back
+        }
+    }
+
+    // CPU fallback path
+    if (!useGPUDirect) {
+        void* frameData = nullptr;
+        unsigned int size = 0;
+
+        if (!m_ddaCapture->GetLatestFrame(&frameData, &width, &height, &size)) {
+            return false;
+        }
+
+        if (!frameData || width == 0 || height == 0) {
+            return false;
+        }
+
+        ensureCaptureBufferRegistered(frameData, size);
+
+        if (!copyFrameToBuffer(frameData, width, height, targetBuffer, copyStream)) {
+            return false;
+        }
     }
 
     if (!m_captureReadyEvent) {
