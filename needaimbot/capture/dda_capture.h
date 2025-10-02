@@ -9,7 +9,9 @@
 #include <dxgi1_2.h>
 #include <wrl/client.h>
 
-// Use CUDA pinned host memory for faster H2D copies
+// CUDA interop
+#include <cuda_runtime.h>
+#include <cuda_d3d11_interop.h>
 #include "../utils/cuda_utils.h"
 
 #include <atomic>
@@ -34,6 +36,9 @@ public:
 
     bool GetLatestFrame(void** frameData, unsigned int* width, unsigned int* height, unsigned int* size);
     void SetFrameCallback(std::function<void(void*, unsigned int, unsigned int, unsigned int)> callback);
+
+    // GPU-direct API - returns CUDA array pointer (zero-copy)
+    bool GetLatestFrameGPU(cudaArray_t* cudaArray, unsigned int* width, unsigned int* height);
 
     int GetWidth() const { return m_screenWidth; }
     int GetHeight() const { return m_screenHeight; }
@@ -74,6 +79,12 @@ private:
     // Pinned host buffer to accelerate async cudaMemcpy2DAsync
     std::unique_ptr<CudaPinnedMemory<unsigned char>> m_frameBuffer;
     size_t m_bufferSize = 0;
+
+    // CUDA interop - shared texture for zero-copy
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> m_sharedTexture;
+    cudaGraphicsResource* m_cudaGraphicsResource = nullptr;
+    cudaArray_t m_cudaMappedArray = nullptr;
+    bool m_cudaInteropEnabled = false;
 
     mutable std::mutex m_frameMutex;
     std::function<void(void*, unsigned int, unsigned int, unsigned int)> m_frameCallback;
