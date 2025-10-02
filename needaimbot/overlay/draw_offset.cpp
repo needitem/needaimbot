@@ -18,7 +18,7 @@ extern int texW, texH;
 
 // Functions from draw_debug.cpp
 void uploadDebugFrame(const SimpleMat& frameMat);
-void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float scale);
+void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float scale, const std::vector<Target>* targets_override = nullptr);
 
 // Mutex for thread-safe D3D11 resource access (defined in draw_debug.cpp)
 extern std::mutex g_debugTexMutex;
@@ -460,7 +460,7 @@ void renderOffsetTab()
                 }
 
                 if (debug_scale > 0 && debug_scale < 10.0f) {
-                    drawDetections(draw_list, image_pos, debug_scale);
+                    drawDetections(draw_list, image_pos, debug_scale, &previewTargets);
 
                     if (hasPreviewBestTarget && previewBestTarget.hasValidDetection()) {
                         float targetCenterX = image_pos.x +

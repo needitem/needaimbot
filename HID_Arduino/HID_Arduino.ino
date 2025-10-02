@@ -145,9 +145,29 @@ inline void ParseBinaryCommand(uint8_t* cmd)
 {
     switch(cmd[0])
     {
-        case 0x01: Mouse.click(); break;
-        case 0x02: Mouse.release(); break;
-        case 0x03: Mouse.press(); break;
-        case 0x04: Mouse.move((int8_t)cmd[1], (int8_t)cmd[2]); break;
+        case 0x01:
+            Mouse.click();
+            Serial.print("[CMD] Click\n");
+            break;
+        case 0x02:
+            Mouse.release();
+            Serial.print("[CMD] Release\n");
+            break;
+        case 0x03:
+            Mouse.press();
+            Serial.print("[CMD] Press\n");
+            break;
+        case 0x04:
+            {
+                int8_t dx = (int8_t)cmd[1];
+                int8_t dy = (int8_t)cmd[2];
+                Mouse.move(dx, dy);
+                Serial.print("[CMD] Move: dx=");
+                Serial.print(dx);
+                Serial.print(" dy=");
+                Serial.print(dy);
+                Serial.print("\n");
+            }
+            break;
     }
 }
