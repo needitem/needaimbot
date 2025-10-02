@@ -143,15 +143,20 @@ void uploadDebugFrame(const SimpleMat& rgbaCpu)
 
 // uploadColorMaskTexture removed
 
-void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float debug_scale) {
+void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float debug_scale, const std::vector<Target>* targets_override) {
     auto& ctx = AppContext::getInstance();
-    
+
     // Validate parameters
     if (!draw_list || debug_scale <= 0) return;
-    
-    // Get all detected targets
-    std::vector<Target> all_targets = ctx.getAllTargets();
-    
+
+    // Get all detected targets - use override if provided, otherwise get from context
+    std::vector<Target> all_targets;
+    if (targets_override && !targets_override->empty()) {
+        all_targets = *targets_override;
+    } else {
+        all_targets = ctx.getAllTargets();
+    }
+
     // Early exit if no targets
     if (all_targets.empty()) {
         return;
