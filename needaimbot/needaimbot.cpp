@@ -475,6 +475,9 @@ int main()
         // MouseThread removed - GPU handles mouse control directly
         // Initialize InputMethod for recoil control only
         (void)initializeInputMethod();
+
+        // Start lock-free mouse consumer thread
+        startMouseConsumer();
         
         // Initialize and start Recoil Control Thread
         RecoilControlThread recoilThread;
@@ -567,6 +570,9 @@ int main()
         // Stop pipeline first
         pipelineManager.stopMainLoop();
         
+        // Stop mouse consumer thread
+        stopMouseConsumer();
+
         // Clean up input method
         executeMouseClick(false); // Release any pressed mouse button
         

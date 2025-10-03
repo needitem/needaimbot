@@ -11,6 +11,10 @@
 // Global input configuration
 void setGlobalInputMethod(std::unique_ptr<InputMethod> method);
 
+// Consumer thread management
+void startMouseConsumer();
+void stopMouseConsumer();
+
 // C interface for GPU to call
 extern "C" {
     void executeMouseMovement(int dx, int dy);
