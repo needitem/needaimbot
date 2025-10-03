@@ -56,9 +56,20 @@ if spoof_power == "y":
 else:
     custom_power_limit = None
  
-boards_path = r"C:\Program Files (x86)\Arduino\hardware\arduino\avr\boards.txt"
-if not os.path.exists(boards_path):
-    raise FileNotFoundError(f"boards.txt not found at: {boards_path}")
+boards_paths = [
+    r"C:\Users\th072\AppData\Local\Arduino15\packages\arduino\hardware\avr\1.8.6\boards.txt",
+    r"C:\Program Files (x86)\Arduino\hardware\arduino\avr\boards.txt"
+]
+
+boards_path = None
+for path in boards_paths:
+    if os.path.exists(path):
+        boards_path = path
+        print(f"Found boards.txt at: {path}")
+        break
+
+if not boards_path:
+    raise FileNotFoundError(f"boards.txt not found at any of: {boards_paths}")
  
 os.chmod(boards_path, stat.S_IWRITE)
  
@@ -98,9 +109,20 @@ with open(boards_path, "w", encoding="utf-8") as file:
 os.chmod(boards_path, stat.S_IREAD)
 print("\n boards.txt updated")
  
-usbcore_path = r"C:\Program Files (x86)\Arduino\hardware\arduino\avr\cores\arduino\USBCore.cpp"
-if not os.path.exists(usbcore_path):
-    raise FileNotFoundError(f"USBCore.cpp not found at {usbcore_path}. Do you have Arduino IDE 1.8.19?")
+usbcore_paths = [
+    r"C:\Users\th072\AppData\Local\Arduino15\packages\arduino\hardware\avr\1.8.6\cores\arduino\USBCore.cpp",
+    r"C:\Program Files (x86)\Arduino\hardware\arduino\avr\cores\arduino\USBCore.cpp"
+]
+
+usbcore_path = None
+for path in usbcore_paths:
+    if os.path.exists(path):
+        usbcore_path = path
+        print(f"Found USBCore.cpp at: {path}")
+        break
+
+if not usbcore_path:
+    raise FileNotFoundError(f"USBCore.cpp not found at any of: {usbcore_paths}")
  
 with open(usbcore_path, "r", encoding="utf-8") as file:
     lines = file.readlines()
@@ -126,9 +148,20 @@ else:
     print(" Descriptor spoofing skipped.")
  
 if spoof_power == "y":
-    usbcoreh_path = r"C:\Program Files (x86)\Arduino\hardware\arduino\avr\cores\arduino\USBCore.h"
-    if not os.path.exists(usbcoreh_path):
-        raise FileNotFoundError(f"USBCore.h not found at {usbcoreh_path}. Do you have Arduino IDE 1.8.19?")
+    usbcoreh_paths = [
+        r"C:\Users\th072\AppData\Local\Arduino15\packages\arduino\hardware\avr\1.8.6\cores\arduino\USBCore.h",
+        r"C:\Program Files (x86)\Arduino\hardware\arduino\avr\cores\arduino\USBCore.h"
+    ]
+
+    usbcoreh_path = None
+    for path in usbcoreh_paths:
+        if os.path.exists(path):
+            usbcoreh_path = path
+            print(f"Found USBCore.h at: {path}")
+            break
+
+    if not usbcoreh_path:
+        raise FileNotFoundError(f"USBCore.h not found at any of: {usbcoreh_paths}")
  
     with open(usbcoreh_path, "r", encoding="utf-8") as file:
         lines = file.readlines()
