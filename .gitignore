@@ -31,7 +31,6 @@
 *.app
 
 # modules
-needaimbot/modules/opencv
 needaimbot/screenshots/
 .vs
 .vscode
@@ -41,7 +40,6 @@ packages
 needaimbot/cudnn64_9.dll
 needaimbot/opencv_world4100.dll
 needaimbot/imgui.ini
-/needaimbot/models
 
 # Claude Code
 .claude/
