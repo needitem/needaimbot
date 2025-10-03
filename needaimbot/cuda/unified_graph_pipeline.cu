@@ -2429,6 +2429,11 @@ int UnifiedGraphPipeline::findHeadClassId(AppContext& ctx) {
 bool UnifiedGraphPipeline::executeFrame(cudaStream_t stream) {
     auto& ctx = AppContext::getInstance();
 
+    // Performance tracking
+    static uint64_t frameCount = 0;
+    static double totalLatencyMs = 0.0;
+    auto frameStart = std::chrono::steady_clock::now();
+
     static bool graphInitialized = false;
     if (!graphInitialized && ctx.config.use_cuda_graph) {
         captureGraph(stream);
@@ -2467,6 +2472,20 @@ bool UnifiedGraphPipeline::executeFrame(cudaStream_t stream) {
             m_allowMovement.store(false, std::memory_order_release);
             return false;
         }
+    }
+
+    // Log performance every 200 frames
+    auto frameEnd = std::chrono::steady_clock::now();
+    auto latencyMs = std::chrono::duration<double, std::milli>(frameEnd - frameStart).count();
+
+    totalLatencyMs += latencyMs;
+    frameCount++;
+
+    if (frameCount % 200 == 0) {
+        double avgLatencyMs = totalLatencyMs / 200.0;
+        printf("[Pipeline] executeFrame avg (last 200): %.2f ms (%.1f FPS)\n",
+               avgLatencyMs, 1000.0 / avgLatencyMs);
+        totalLatencyMs = 0.0;
     }
 
     return true;
