@@ -19,8 +19,10 @@ void draw_rcs_settings() {
     
     UIHelpers::BeautifulSection("Recoil Control System");
     
-    UIHelpers::BeautifulToggle("Enable Recoil Compensation", &ctx.config.easynorecoil, 
-                               "Enables automatic recoil compensation. Adjust the strength to match your game's recoil patterns.");
+    if (UIHelpers::BeautifulToggle("Enable Recoil Compensation", &ctx.config.easynorecoil,
+                                   "Enables automatic recoil compensation. Adjust the strength to match your game's recoil patterns.")) {
+        SAVE_PROFILE();
+    }
     
     if (ctx.config.easynorecoil)
     {
@@ -198,8 +200,10 @@ void draw_rcs_settings() {
         // Crouch Recoil Reduction Section
         UIHelpers::BeginCard("Crouch Recoil Reduction");
         
-        UIHelpers::BeautifulToggle("Enable Crouch Compensation Adjustment", &ctx.config.crouch_recoil_enabled,
-                                  "Adjust recoil compensation strength when crouching");
+        if (UIHelpers::BeautifulToggle("Enable Crouch Compensation Adjustment", &ctx.config.crouch_recoil_enabled,
+                                      "Adjust recoil compensation strength when crouching")) {
+            SAVE_PROFILE();
+        }
         
         if (ctx.config.crouch_recoil_enabled) {
             ImGui::Spacing();
