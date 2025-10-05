@@ -68,13 +68,17 @@ SerialConnection::SerialConnection(const std::string& port, unsigned int baud_ra
     try {
         // 사용된 포트 등록 (정리 대상으로 추가)
         GlobalSerialCleanupHandler::registerPort(port_name_);
-        
+
+        std::cout << "[Arduino] Attempting to connect to " << port_name_ << " at " << baud_rate_ << " baud" << std::endl;
+
         // 원자적 초기화 시도
         if (!initializeSerial()) {
             throw std::runtime_error("Failed to initialize serial connection to " + port_name_);
         }
 
+        std::cout << "[Arduino] Successfully connected to " << port_name_ << std::endl;
         startWriterThread();
+        std::cout << "[Arduino] Writer thread started" << std::endl;
     } catch (const std::exception& e) {
         // 초기화 실패 시 간단한 정리만 수행 (스레드는 아직 생성되지 않음)
         if (serial_handle_ != INVALID_HANDLE_VALUE) {
@@ -764,6 +768,13 @@ void SerialConnection::release()
 void SerialConnection::move(int x, int y)
 {
     if (x == 0 && y == 0) return;
+
+    static int move_count = 0;
+    if (++move_count % 100 == 0) {
+        std::cout << "[Arduino] move() called: x=" << x << ", y=" << y
+                  << ", is_open=" << is_open_.load()
+                  << ", writer_running=" << writer_running_.load() << std::endl;
+    }
 
     sendBinaryCommand(0x04, x, y);
 }
