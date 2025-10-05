@@ -5,7 +5,7 @@
 
 std::atomic<RecoilControlThread*> RecoilControlThread::instance_{nullptr};
 
-RecoilControlThread::RecoilControlThread() 
+RecoilControlThread::RecoilControlThread()
     : running_(false), enabled_(false) {
 }
 
@@ -43,25 +43,26 @@ void RecoilControlThread::setInputMethod(std::unique_ptr<InputMethod> method) {
 
 void RecoilControlThread::threadLoop() {
     instance_.store(this, std::memory_order_release);
-    hook_installed_ = installMouseHook();
+    // REMOVED: Mouse hook was causing input interference and amplification issues
+    // hook_installed_ = installMouseHook();
 
     while (running_) {
-        processPendingMessages();
+        // REMOVED: No need to process messages without hook
+        // processPendingMessages();
 
         auto& ctx = AppContext::getInstance();
 
         // Check if recoil control is enabled
         if (!ctx.config.easynorecoil || !enabled_) {
             // Optimized sleep when disabled
-            waitForEventOrTimeout(std::chrono::milliseconds(5));
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
             continue;
         }
 
         // Check if both mouse buttons are pressed (shooting while ADS)
-        bool left_mouse = hook_installed_ ? left_button_pressed_.load(std::memory_order_acquire)
-                                          : (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
-        bool right_mouse = hook_installed_ ? right_button_pressed_.load(std::memory_order_acquire)
-                                           : (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+        // Use GetAsyncKeyState directly - no hook needed
+        bool left_mouse = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+        bool right_mouse = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
         bool recoil_active = left_mouse && right_mouse;
         
         if (recoil_active) {
@@ -87,10 +88,10 @@ void RecoilControlThread::threadLoop() {
             auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - recoil_start_time_).count();
             if (elapsed_ms < 500) {
                 // First 500ms: use configured delay for responsiveness
-                waitForEventOrTimeout(std::chrono::microseconds(static_cast<int>(delay_ms * 1000)));
+                std::this_thread::sleep_for(std::chrono::microseconds(static_cast<int>(delay_ms * 1000)));
             } else {
                 // After 500ms: slightly longer but still responsive
-                waitForEventOrTimeout(std::chrono::microseconds(static_cast<int>(delay_ms * 1200)));
+                std::this_thread::sleep_for(std::chrono::microseconds(static_cast<int>(delay_ms * 1200)));
             }
         } else {
             was_recoil_active_ = false;
@@ -99,33 +100,27 @@ void RecoilControlThread::threadLoop() {
             auto time_since_active = std::chrono::duration_cast<std::chrono::milliseconds>(now - recoil_start_time_).count();
             if (time_since_active < 1000) {
                 // Recently active: very responsive
-                waitForEventOrTimeout(std::chrono::milliseconds(1));
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
             } else {
                 // Idle: still responsive but save some CPU
-                waitForEventOrTimeout(std::chrono::milliseconds(5));
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
             }
         }
     }
 
-    uninstallMouseHook();
+    // REMOVED: No hook to uninstall
+    // uninstallMouseHook();
     instance_.store(nullptr, std::memory_order_release);
 }
 
 void RecoilControlThread::applyRecoilCompensation() {
     auto& ctx = AppContext::getInstance();
-    
+
     if (!input_method_) return;
-    
-    // Calculate time since recoil started
-    auto now = std::chrono::steady_clock::now();
-    auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - recoil_start_time_).count();
-    
-    // Removed start/end delay gating; rely solely on profile timing in main loop
-    
+
     float strength = calculateRecoilStrength();
-    
+
     // Apply downward mouse movement to compensate for recoil
-    // Optimize: single branch instead of nested
     int move_y = static_cast<int>(strength);
     if (move_y > 0) {
         input_method_->move(0, move_y);
@@ -214,30 +209,40 @@ void RecoilControlThread::waitForEventOrTimeout(std::chrono::microseconds timeou
 
 LRESULT CALLBACK RecoilControlThread::LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
     auto* instance = instance_.load(std::memory_order_acquire);
+
+    // ALWAYS pass through mouse events immediately - we only want to observe, not interfere
+    LRESULT result = CallNextHookEx(instance ? instance->mouse_hook_ : nullptr, nCode, wParam, lParam);
+
     if (nCode >= HC_ACTION && instance) {
-        switch (wParam) {
-            case WM_LBUTTONDOWN:
-            case WM_NCLBUTTONDOWN:
-                instance->left_button_pressed_.store(true, std::memory_order_release);
-                break;
-            case WM_LBUTTONUP:
-            case WM_NCLBUTTONUP:
-                instance->left_button_pressed_.store(false, std::memory_order_release);
-                break;
-            case WM_RBUTTONDOWN:
-            case WM_NCRBUTTONDOWN:
-                instance->right_button_pressed_.store(true, std::memory_order_release);
-                break;
-            case WM_RBUTTONUP:
-            case WM_NCRBUTTONUP:
-                instance->right_button_pressed_.store(false, std::memory_order_release);
-                break;
-            default:
-                break;
+        auto* msll = reinterpret_cast<MSLLHOOKSTRUCT*>(lParam);
+
+        // CRITICAL: Only process non-injected events (real user/hardware input)
+        // Injected events are from our own SendInput calls - ignore them completely
+        if (!(msll->flags & LLMHF_INJECTED)) {
+            switch (wParam) {
+                case WM_LBUTTONDOWN:
+                case WM_NCLBUTTONDOWN:
+                    instance->left_button_pressed_.store(true, std::memory_order_release);
+                    break;
+                case WM_LBUTTONUP:
+                case WM_NCLBUTTONUP:
+                    instance->left_button_pressed_.store(false, std::memory_order_release);
+                    break;
+                case WM_RBUTTONDOWN:
+                case WM_NCRBUTTONDOWN:
+                    instance->right_button_pressed_.store(true, std::memory_order_release);
+                    break;
+                case WM_RBUTTONUP:
+                case WM_NCRBUTTONUP:
+                    instance->right_button_pressed_.store(false, std::memory_order_release);
+                    break;
+                default:
+                    break;
+            }
         }
     }
 
-    return CallNextHookEx(instance ? instance->mouse_hook_ : nullptr, nCode, wParam, lParam);
+    return result;
 }
 
 void RecoilControlThread::processPendingMessages() {
