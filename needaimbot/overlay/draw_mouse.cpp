@@ -100,7 +100,7 @@ static void draw_movement_controls()
     ImGui::BeginDisabled(!ctx.config.normalize_movement_rate);
     {
         float alpha = ctx.config.movement_rate_ema_alpha;
-        if (ImGui::SliderFloat("EMA Alpha", &alpha, 0.01f, 0.5f, "%.2f")) {
+        if (ImGui::SliderFloat("EMA Alpha", &alpha, 0.01f, 1.0f, "%.2f")) {
             ctx.config.movement_rate_ema_alpha = alpha;
             SAVE_PROFILE();
         }
