@@ -18,10 +18,15 @@ void RecoilControlThread::start() {
 
     running_ = true;
     worker_thread_ = std::thread(&RecoilControlThread::threadLoop, this);
-    
-    // Set thread priority for consistent timing
+
+    // Set high thread priority for consistent timing and minimal jitter
     if (worker_thread_.joinable()) {
-        SetThreadPriority(worker_thread_.native_handle(), THREAD_PRIORITY_ABOVE_NORMAL);
+        HANDLE threadHandle = worker_thread_.native_handle();
+        SetThreadPriority(threadHandle, THREAD_PRIORITY_HIGHEST);
+
+        #ifdef _WIN32
+        SetThreadDescription(threadHandle, L"RecoilControl-HighPriority");
+        #endif
     }
 }
 
