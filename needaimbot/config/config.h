@@ -6,64 +6,6 @@
 #include <mutex>
 #include <atomic>
 
-// 설정값 캐싱 시스템
-/* struct ConfigCache {
-    float detection_resolution;
-    float confidence_threshold;
-    // NMS removed - no longer needed
-    int target_priority;
-    uint64_t version; // atomic 제거하여 복사 가능하게 함
-    
-    ConfigCache() : version(0) {}
-    
-    // 복사 생성자 명시적 정의
-    ConfigCache(const ConfigCache& other) 
-        : detection_resolution(other.detection_resolution)
-        , confidence_threshold(other.confidence_threshold)
-        , target_priority(other.target_priority)
-        , version(other.version) {}
-    
-    // 대입 연산자 명시적 정의
-    ConfigCache& operator=(const ConfigCache& other) {
-        if (this != &other) {
-            detection_resolution = other.detection_resolution;
-            confidence_threshold = other.confidence_threshold;
-            target_priority = other.target_priority;
-            version = other.version;
-        }
-        return *this;
-    }
-};
-
-class CachedConfig {
-private:
-    ConfigCache cache;
-    std::atomic<uint64_t> current_version{0};
-    mutable std::mutex cache_mutex;
-    
-public:
-    void updateCache(float resolution, float confidence, int priority) {
-        std::lock_guard<std::mutex> lock(cache_mutex); // 스레드 안전성 보장
-        cache.detection_resolution = resolution;
-        cache.confidence_threshold = confidence;
-        // NMS removed
-        cache.target_priority = priority;
-        cache.version = ++current_version;
-    }
-    
-    ConfigCache getCache() const {
-        std::lock_guard<std::mutex> lock(cache_mutex);
-        return cache; // 스레드 안전한 복사
-    }
-    
-    bool needsUpdate(uint64_t last_version) const {
-        return last_version != current_version.load();
-    }
-    
-    uint64_t getCurrentVersion() const {
-        return current_version.load();
-    }
-}; */
 
 
 /**

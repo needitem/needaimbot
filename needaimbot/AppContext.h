@@ -48,7 +48,7 @@ public:
     bool model_changed{false};  // Rare change
     
     // Target data - Optimize with fixed-size array for cache locality
-    static constexpr size_t MAX_TARGETS = 100;
+    static constexpr size_t MAX_TARGETS = 64;
     mutable std::mutex target_mutex;
     std::array<Target, MAX_TARGETS> all_targets_;  // Fixed size for better cache
     size_t num_targets_ = 0;
@@ -88,7 +88,7 @@ public:
     std::atomic<float> g_movementDeltaY{0.0f};
     
     // Event-based mouse control - Ring buffer for lock-free access
-    static constexpr size_t MOUSE_EVENT_BUFFER_SIZE = 64;
+    static constexpr size_t MOUSE_EVENT_BUFFER_SIZE = 32;
     std::array<MouseEvent, MOUSE_EVENT_BUFFER_SIZE> mouse_event_buffer;
     std::atomic<size_t> mouse_event_write_pos{0};
     std::atomic<size_t> mouse_event_read_pos{0};
