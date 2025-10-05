@@ -1,4 +1,5 @@
 #include "core/windows_headers.h"
+#include <timeapi.h>
 
 // OpenCV removed - using custom CUDA image processing
 #include <iostream>
@@ -351,12 +352,21 @@ int main()
 {
     // Install crash handler
     SetUnhandledExceptionFilter(UnhandledExceptionHandler);
-    
+
     // Enable crash dumps
     _set_error_mode(_OUT_TO_STDERR);
     _set_abort_behavior(0, _WRITE_ABORT_MSG);
-    
-    // Timer resolution modification removed - using event-driven architecture instead
+
+    // OPTIMIZATION: Improve system timer resolution for better timing accuracy
+    // This reduces jitter in sleep/wait operations under high CPU load
+    #pragma comment(lib, "winmm.lib")
+    TIMECAPS tc;
+    if (timeGetDevCaps(&tc, sizeof(TIMECAPS)) == TIMERR_NOERROR) {
+        UINT targetResolution = std::max(1u, tc.wPeriodMin);  // 1ms or best available
+        if (timeBeginPeriod(targetResolution) == TIMERR_NOERROR) {
+            std::cout << "[TIMER] Set system timer resolution to " << targetResolution << "ms" << std::endl;
+        }
+    }
     
     // Initialize Gaming Performance Analyzer
     
@@ -541,14 +551,18 @@ int main()
         
         // TensorRT pipeline starts automatically when initialized
 
-        // OPTIMIZATION: Create thread managers with optimized core affinity for better cache locality
-        // GPU-intensive pipeline gets dedicated first core (best GPU driver performance)
-        ThreadManager pipelineThreadMgr("UnifiedPipelineThread", 
-            [&]() { pipelineManager.runMainLoop(); }, 0);
-        
-        // OPTIMIZATION: Combined UI thread (keyboard + overlay) to reduce thread overhead
-        ThreadManager uiThreadMgr("CombinedUIThread", 
-            combinedUIThread, numCores > 2 ? 1 : -1);
+        // OPTIMIZATION: Create thread managers with optimized core affinity and priority for minimal jitter
+        // GPU-intensive pipeline gets TIME_CRITICAL priority and dedicated first core (best GPU driver performance)
+        ThreadManager pipelineThreadMgr("UnifiedPipelineThread",
+            [&]() { pipelineManager.runMainLoop(); },
+            0,
+            ThreadManager::Priority::TIME_CRITICAL);
+
+        // OPTIMIZATION: Combined UI thread (keyboard + overlay) gets ABOVE_NORMAL priority to reduce thread overhead
+        ThreadManager uiThreadMgr("CombinedUIThread",
+            combinedUIThread,
+            numCores > 2 ? 1 : -1,
+            ThreadManager::Priority::ABOVE_NORMAL);
         
         // Mouse thread removed - GPU handles mouse control directly
         // ThreadManager mouseThreadMgr removed
@@ -595,7 +609,13 @@ int main()
         
         // Clean up CUDA resources
         CudaResourceManager::Shutdown();
-        
+
+        // Restore system timer resolution
+        TIMECAPS tc;
+        if (timeGetDevCaps(&tc, sizeof(TIMECAPS)) == TIMERR_NOERROR) {
+            timeEndPeriod(std::max(1u, tc.wPeriodMin));
+        }
+
         std::exit(0);
     }
     catch (const std::exception &e)
