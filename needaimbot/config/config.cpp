@@ -81,6 +81,8 @@ bool Config::loadConfig(const std::string& filename)
 
         pd_kp_x = 0.4f;
         pd_kp_y = 0.4f;
+        pd_kd_x = 0.15f; // Light damping by default
+        pd_kd_y = 0.15f;
 
         // Movement filter defaults
         normalize_movement_rate = true;
@@ -89,7 +91,6 @@ bool Config::loadConfig(const std::string& filename)
         rate_use_fixed_reference_fps = false;
         rate_fixed_reference_fps = 120.0f;
         movement_deadzone = 0.75f;
-        movement_max_step = 25;
 
         // Aim+shoot offset defaults
         enable_aim_shoot_offset = false;
@@ -283,6 +284,8 @@ bool Config::loadConfig(const std::string& filename)
     // Load PD controller settings - group by axis for cache
     pd_kp_x = static_cast<float>(get_double_ini("PDController", "pd_kp_x", 0.4));
     pd_kp_y = static_cast<float>(get_double_ini("PDController", "pd_kp_y", 0.4));
+    pd_kd_x = static_cast<float>(get_double_ini("PDController", "pd_kd_x", 0.15));
+    pd_kd_y = static_cast<float>(get_double_ini("PDController", "pd_kd_y", 0.15));
 
     input_method = get_string_ini("Mouse", "input_method", "WIN32");
     
@@ -349,11 +352,10 @@ bool Config::loadConfig(const std::string& filename)
     rate_use_fixed_reference_fps = get_bool_ini("AimFilter", "use_fixed_reference_fps", false);
     rate_fixed_reference_fps = static_cast<float>(get_double_ini("AimFilter", "fixed_reference_fps", 120.0));
     movement_deadzone = static_cast<float>(get_double_ini("AimFilter", "movement_deadzone", 0.75));
-    movement_max_step = get_long_ini("AimFilter", "movement_max_step", 25);
 
-    
 
-    
+
+
     head_class_name = get_string_ini("Classes", "HeadClassName", "Head");
 
     int classSettingsCount = ini.GetLongValue("ClassSettings", "Count", -1); 
@@ -507,6 +509,8 @@ bool Config::saveConfig(const std::string& filename)
     file << std::fixed << std::setprecision(6);
     file << "pd_kp_x = " << pd_kp_x << "\n";
     file << "pd_kp_y = " << pd_kp_y << "\n";
+    file << "pd_kd_x = " << pd_kd_x << "\n";
+    file << "pd_kd_y = " << pd_kd_y << "\n";
 
     file << "[Recoil]\n";
     file << "active_scope_magnification = " << active_scope_magnification << "\n\n";
@@ -580,8 +584,7 @@ bool Config::saveConfig(const std::string& filename)
     file << "movement_warmup_frames = " << movement_warmup_frames << "\n";
     file << "use_fixed_reference_fps = " << (rate_use_fixed_reference_fps ? "true" : "false") << "\n";
     file << "fixed_reference_fps = " << rate_fixed_reference_fps << "\n";
-    file << "movement_deadzone = " << movement_deadzone << "\n";
-    file << "movement_max_step = " << movement_max_step << "\n\n";
+    file << "movement_deadzone = " << movement_deadzone << "\n\n";
 
     file << "[Classes]\n";
     file << "HeadClassName = " << head_class_name << "\n\n";

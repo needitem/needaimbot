@@ -197,15 +197,16 @@ public:
     // PD Controller settings
     float pd_kp_x = 0.4f;   // Proportional gain for X axis
     float pd_kp_y = 0.4f;   // Proportional gain for Y axis
+    float pd_kd_x = 0.0f;   // Derivative gain for X axis (damping)
+    float pd_kd_y = 0.0f;   // Derivative gain for Y axis (damping)
 
     // Movement rate normalization + filter settings
     bool normalize_movement_rate = true;          // Enable dt-based scaling
-    float movement_rate_ema_alpha = 0.10f;        // EMA smoothing factor for dt (0.01-0.5)
+    float movement_rate_ema_alpha = 0.10f;        // EMA smoothing factor for dt (0.01-1.0)
     int movement_warmup_frames = 5;               // Frames to establish reference dt
     bool rate_use_fixed_reference_fps = false;    // If true, use fixed_reference_fps instead of warmup
     float rate_fixed_reference_fps = 120.0f;      // Reference FPS when fixed is enabled
     float movement_deadzone = 0.75f;              // Deadzone in pixels to reduce chatter
-    int movement_max_step = 25;                   // Per-dispatch clamp in pixels
 
     // Active profile management
     std::string active_profile_name = "Default";
