@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 #include <iostream>
+#include "AppContext.h"
 
 namespace {
 constexpr UINT kFrameTimeoutMs = 1;  // Poll for new frames without blocking indefinitely
@@ -641,6 +642,8 @@ DDACapture::FrameAcquireResult DDACapture::AcquireFrame() {
 }
 
 void DDACapture::CaptureThreadProc() {
+    auto nextFrameTime = std::chrono::high_resolution_clock::now();
+
     while (m_isCapturing.load()) {
         const auto result = AcquireFrame();
         if (result == FrameAcquireResult::kError) {
@@ -648,6 +651,23 @@ void DDACapture::CaptureThreadProc() {
             // returns DXGI_ERROR_WAIT_TIMEOUT we rely on its 1 ms timeout to throttle
             // the loop so new frames are delivered with minimal latency.
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+
+        // FPS limiting: sleep until next frame time
+        if (result == FrameAcquireResult::kFrameCaptured) {
+            auto& ctx = AppContext::getInstance();
+            int target_fps = ctx.config.target_fps;
+            if (target_fps > 0 && target_fps <= 500) {  // Sanity check
+                auto frameDuration = std::chrono::microseconds(1000000 / target_fps);
+                nextFrameTime += frameDuration;
+                auto now = std::chrono::high_resolution_clock::now();
+                if (nextFrameTime > now) {
+                    std::this_thread::sleep_until(nextFrameTime);
+                } else {
+                    // Fell behind, reset to now
+                    nextFrameTime = now;
+                }
+            }
         }
     }
 }

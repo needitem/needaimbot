@@ -124,9 +124,6 @@ __global__ void fusedTargetSelectionAndMovementKernel(
     int head_class_id,
     float kp_x,
     float kp_y,
-    float kd_x,
-    float kd_y,
-    float dt_norm,
     float head_y_offset,
     float body_y_offset,
     int detection_resolution,
@@ -134,7 +131,9 @@ __global__ void fusedTargetSelectionAndMovementKernel(
     float sticky_threshold,
     int* __restrict__ bestTargetIndex,
     Target* __restrict__ bestTarget,
-    needaimbot::MouseMovement* __restrict__ output_movement
+    needaimbot::MouseMovement* __restrict__ output_movement,
+    float max_movement_speed,
+    float dt_sec
 ) {
     extern __shared__ unsigned char sharedMem[];
     float* s_distancesX = reinterpret_cast<float*>(sharedMem);
@@ -289,66 +288,14 @@ __global__ void fusedTargetSelectionAndMovementKernel(
             float error_x = target_center_x - screen_center_x;
             float error_y = target_center_y - screen_center_y;
 
-            // Previous error from last selected target (if valid)
-            float prev_center_x = s_prevTarget.x + s_prevTarget.width / 2.0f;
-            float prev_center_y;
-            if (s_prevValid) {
-                if (s_prevTarget.classId == head_class_id) {
-                    prev_center_y = s_prevTarget.y + s_prevTarget.height * head_y_offset;
-                } else {
-                    prev_center_y = s_prevTarget.y + s_prevTarget.height * body_y_offset;
-                }
-            } else {
-                prev_center_y = screen_center_y; // zero previous error
-                prev_center_x = screen_center_x;
-            }
+            // P controller with dt normalization (pixels/second -> pixels/frame)
+            // kp is in pixels/second, multiply by dt to get pixels this frame
+            float movement_x = kp_x * error_x * dt_sec;
+            float movement_y = kp_y * error_y * dt_sec;
 
-            float prev_error_x = prev_center_x - screen_center_x;
-            float prev_error_y = prev_center_y - screen_center_y;
-
-            // PD control for faster convergence with damping
-            // Derivative gating: only use D when we are continuing the same track
-            // Otherwise large target switches can create big derivative "kicks"
-            float d_err_x = 0.0f;
-            float d_err_y = 0.0f;
-            {
-                // Recompute minimal prev-match condition: if s_prevValid and the chosen target
-                // was the same as the best IoU match in this frame, allow derivative.
-                // Note: prevMatchedIndex was computed above as 'prevMatchIndex'.
-                // If unavailable in this scope, fall back to requiring s_prevValid and high IoU by geometry.
-            }
-            // The previous reduction used s_prevValid only. For stability, keep D only if previous target
-            // is close in position to current target center (heuristic threshold = 0.5 * width/height)
-            if (s_prevValid) {
-                float prev_cx = s_prevTarget.x + s_prevTarget.width * 0.5f;
-                float prev_cy = s_prevTarget.y + s_prevTarget.height * 0.5f;
-                float tol_x = (s_prevTarget.width > 0 ? 0.5f * s_prevTarget.width : 8.0f);
-                float tol_y = (s_prevTarget.height > 0 ? 0.5f * s_prevTarget.height : 8.0f);
-                if (fabsf((target_center_x - prev_cx)) <= tol_x && fabsf((target_center_y - prev_cy)) <= tol_y) {
-                    d_err_x = error_x - prev_error_x;
-                    d_err_y = error_y - prev_error_y;
-                }
-            }
-
-            float p_x = kp_x * error_x;
-            float p_y = kp_y * error_y;
-            float d_x = kd_x * d_err_x * dt_norm;
-            float d_y = kd_y * d_err_y * dt_norm;
-
-            // Limit D vs P to reduce noise amplification
-            float d_limit_x = fabsf(p_x) * 0.75f;
-            float d_limit_y = fabsf(p_y) * 0.75f;
-            if (fabsf(d_x) > d_limit_x) d_x = copysignf(d_limit_x, d_x);
-            if (fabsf(d_y) > d_limit_y) d_y = copysignf(d_limit_y, d_y);
-
-            float movement_x = p_x + d_x;
-            float movement_y = p_y + d_y;
-
-            // Prevent overshoot: do not step past the target in a single update
-            float max_step_x = fabsf(error_x);
-            float max_step_y = fabsf(error_y);
-            if (fabsf(movement_x) > max_step_x) movement_x = copysignf(max_step_x, movement_x);
-            if (fabsf(movement_y) > max_step_y) movement_y = copysignf(max_step_y, movement_y);
+            // Absolute speed limit to prevent oscillation with large errors
+            if (fabsf(movement_x) > max_movement_speed) movement_x = copysignf(max_movement_speed, movement_x);
+            if (fabsf(movement_y) > max_movement_speed) movement_y = copysignf(max_movement_speed, movement_y);
 
             // Round to nearest int for balanced response
             int emit_dx = static_cast<int>(lroundf(movement_x));
@@ -847,18 +794,9 @@ void UnifiedGraphPipeline::handleAimbotDeactivation() {
     m_captureRegionCache = {};
     m_captureInFlight = false;
 
-    // Fully reset filter state so any historical error/accumulation
-    // does not leak across inactive periods
+    // Reset filter state
     {
         std::lock_guard<std::mutex> lock(m_movementFilterMutex);
-        m_lastMovementTs = {};
-        m_dtRefSec = 0.0;
-        m_dtEmaSec = 0.0;
-        m_accumulatedDx = 0.0f;
-        m_accumulatedDy = 0.0f;
-        m_rateWarmupCount = 0;
-        m_lastOutSignX = 0;
-        m_lastOutSignY = 0;
         m_skipNextMovement = true;
     }
 }
@@ -903,8 +841,7 @@ void UnifiedGraphPipeline::clearMovementData() {
 void UnifiedGraphPipeline::resetMovementFilter() {
     std::lock_guard<std::mutex> lock(m_movementFilterMutex);
     m_skipNextMovement = true;
-    m_lastOutSignX = 0;
-    m_lastOutSignY = 0;
+    m_lastFrameTime = {};
 }
 
 void UnifiedGraphPipeline::invalidateSelectedTarget(cudaStream_t stream) {
@@ -948,30 +885,11 @@ MouseMovement UnifiedGraphPipeline::filterMouseMovement(const MouseMovement& raw
 
     if (!movementEnabled) {
         m_skipNextMovement = true;
-        // Reset rate-normalization state when disabled
-        m_lastMovementTs = {};
-        m_dtRefSec = 0.0;
-        m_dtEmaSec = 0.0;
-        m_accumulatedDx = 0.0f;
-        m_accumulatedDy = 0.0f;
-        m_rateWarmupCount = 0;
         return {0, 0};
     }
 
-    auto now = std::chrono::steady_clock::now();
     if (m_skipNextMovement) {
-        // Initialize timing/accumulators on first activation
-        m_lastMovementTs = now;
-        m_dtRefSec = 0.0;
-        m_dtEmaSec = 0.0;
-        m_accumulatedDx = 0.0f;
-        m_accumulatedDy = 0.0f;
-        m_rateWarmupCount = 0;
-        m_lastOutSignX = 0;
-        m_lastOutSignY = 0;
-
         // Drop the first real movement after (re)activation to avoid large corrections
-        // caused by any stale delta in the shared buffer.
         if (rawMovement.dx != 0 || rawMovement.dy != 0) {
             m_skipNextMovement = false;
             return {0, 0};
@@ -979,101 +897,7 @@ MouseMovement UnifiedGraphPipeline::filterMouseMovement(const MouseMovement& raw
         return rawMovement;
     }
 
-    // Compute frame time (dt) and maintain an EMA for stability
-    double dtSec = 0.0;
-    if (m_lastMovementTs.time_since_epoch().count() != 0) {
-        dtSec = std::chrono::duration<double>(now - m_lastMovementTs).count();
-    }
-    m_lastMovementTs = now;
-
-    // Sanitize dt to prevent extreme scaling from spikes
-    if (dtSec <= 0.0 || dtSec > 0.5) {
-        dtSec = 1.0 / 60.0; // fallback
-    }
-
-    // Read config values with safety clamps
-    double alpha = std::clamp(static_cast<double>(ctx.config.movement_rate_ema_alpha), 0.01, 1.0);
-    int warmupFrames = std::clamp(ctx.config.movement_warmup_frames, 0, 60);
-    float deadzone = std::max(0.0f, ctx.config.movement_deadzone);
-    // maxStep removed for faster convergence
-    bool useFixed = ctx.config.rate_use_fixed_reference_fps;
-    double fixedFps = std::max(0.0, static_cast<double>(ctx.config.rate_fixed_reference_fps));
-    bool normalize = ctx.config.normalize_movement_rate;
-
-    if (m_dtEmaSec <= 0.0) {
-        m_dtEmaSec = dtSec;
-    } else {
-        m_dtEmaSec = alpha * dtSec + (1.0 - alpha) * m_dtEmaSec;
-    }
-
-    // Establish or use reference dt
-    double refDt = 0.0;
-    if (useFixed && fixedFps > 1.0) {
-        refDt = 1.0 / fixedFps;
-    } else {
-        if (m_dtRefSec <= 0.0) {
-            m_rateWarmupCount++;
-            if (m_rateWarmupCount >= warmupFrames) {
-                m_dtRefSec = m_dtEmaSec;
-            }
-        }
-        refDt = m_dtRefSec > 0.0 ? m_dtRefSec : m_dtEmaSec;
-    }
-
-    double scale = 1.0;
-    if (normalize && refDt > 0.0) {
-        scale = dtSec / refDt; // keep per-second effect consistent across FPS
-        // Clamp to avoid wild swings
-        if (scale < 0.25) scale = 0.25;
-        if (scale > 4.0) scale = 4.0;
-    }
-
-    // Apply scaling and accumulate fractional movement to avoid chatter
-    float sx = static_cast<float>(rawMovement.dx) * static_cast<float>(scale);
-    float sy = static_cast<float>(rawMovement.dy) * static_cast<float>(scale);
-    m_accumulatedDx += sx;
-    m_accumulatedDy += sy;
-
-    // Small deadzone to suppress sub-pixel oscillation
-    float mag = std::hypot(m_accumulatedDx, m_accumulatedDy);
-    if (mag < deadzone) {
-        return {0, 0};
-    }
-
-    // Sub-pixel emission with anti-jitter hysteresis
-    int emitDx = 0;
-    int emitDy = 0;
-
-    if (std::abs(m_accumulatedDx) >= 0.3f) {
-        emitDx = static_cast<int>(std::lrint(m_accumulatedDx));
-    }
-    
-    if (std::abs(m_accumulatedDy) >= 0.3f) {
-        emitDy = static_cast<int>(std::lrint(m_accumulatedDy));
-    }
-
-    auto sgn = [](int v) { return (v > 0) - (v < 0); };
-    int signX = sgn(emitDx);
-    int signY = sgn(emitDy);
-
-    // Gate tiny opposite-direction steps to avoid visible jitter
-    if (signX != 0 && signX != m_lastOutSignX && std::abs(emitDx) <= 1) {
-        emitDx = 0;
-    }
-    if (signY != 0 && signY != m_lastOutSignY && std::abs(emitDy) <= 1) {
-        emitDy = 0;
-    }
-
-    if (emitDx != 0) {
-        m_accumulatedDx -= static_cast<float>(emitDx);
-        m_lastOutSignX = sgn(emitDx);
-    }
-    if (emitDy != 0) {
-        m_accumulatedDy -= static_cast<float>(emitDy);
-        m_lastOutSignY = sgn(emitDy);
-    }
-
-    return {emitDx, emitDy};
+    return rawMovement;
 }
 
 void UnifiedGraphPipeline::clearHostPreviewData(AppContext& ctx) {
@@ -1099,15 +923,9 @@ void UnifiedGraphPipeline::handleAimbotActivation() {
     m_hasFrameData = false;
     m_captureInFlight = false;
 
-    // Reset rate-normalized movement filter state
+    // Reset movement filter state
     {
         std::lock_guard<std::mutex> lock(m_movementFilterMutex);
-        m_lastMovementTs = {};
-        m_dtRefSec = 0.0;
-        m_dtEmaSec = 0.0;
-        m_accumulatedDx = 0.0f;
-        m_accumulatedDy = 0.0f;
-        m_rateWarmupCount = 0;
         m_skipNextMovement = true;
     }
 }
@@ -1839,8 +1657,7 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
     static float cached_head_y_offset = 0.2f;
     static float cached_body_y_offset = 0.5f;
     static float cached_sticky_threshold = 0.0f;
-    static float cached_kd_x = 0.15f;
-    static float cached_kd_y = 0.15f;
+    static float cached_max_movement_speed = 20.0f;
 
     if (!m_graphCaptured) {
         std::lock_guard<std::mutex> lock(ctx.configMutex);
@@ -1850,8 +1667,7 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         cached_head_y_offset = ctx.config.head_y_offset;
         cached_body_y_offset = ctx.config.body_y_offset;
         cached_sticky_threshold = ctx.config.sticky_target_threshold;
-        cached_kd_x = ctx.config.pd_kd_x;
-        cached_kd_y = ctx.config.pd_kd_y;
+        cached_max_movement_speed = ctx.config.max_movement_speed;
     }
     
     float crosshairX = ctx.config.detection_resolution / 2.0f;
@@ -1877,18 +1693,19 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         stickyThreshold = 1.0f;
     }
 
-    // Calculate dt normalization for D term (refDt / dt)
-    float dtNorm = 1.0f;
+    // Calculate frame time for dt normalization
+    float dt_sec = 1.0f / 60.0f; // default fallback
     {
         std::lock_guard<std::mutex> lock(m_movementFilterMutex);
-        double refDt = (m_dtRefSec > 0.0) ? m_dtRefSec : m_dtEmaSec;
-        double dtEst = (m_dtEmaSec > 0.0) ? m_dtEmaSec : refDt;
-        if (refDt > 0.0 && dtEst > 0.0) {
-            dtNorm = static_cast<float>(refDt / dtEst);
-            // Clamp to prevent extreme values
-            if (dtNorm < 0.25f) dtNorm = 0.25f;
-            if (dtNorm > 4.0f) dtNorm = 4.0f;
+        auto now = std::chrono::steady_clock::now();
+        if (m_lastFrameTime.time_since_epoch().count() != 0) {
+            double dt = std::chrono::duration<double>(now - m_lastFrameTime).count();
+            // Clamp to reasonable range (10-250 fps)
+            if (dt > 0.004 && dt < 0.1) {
+                dt_sec = static_cast<float>(dt);
+            }
         }
+        m_lastFrameTime = now;
     }
 
     fusedTargetSelectionAndMovementKernel<<<gridSize, blockSize, sharedBytes, stream>>>(
@@ -1900,9 +1717,6 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         head_class_id,
         cached_kp_x,
         cached_kp_y,
-        cached_kd_x,
-        cached_kd_y,
-        dtNorm,
         cached_head_y_offset,
         cached_body_y_offset,
         ctx.config.detection_resolution,
@@ -1910,7 +1724,9 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         stickyThreshold,
         m_smallBufferArena.bestTargetIndex,
         m_smallBufferArena.bestTarget,
-        m_smallBufferArena.mouseMovement
+        m_smallBufferArena.mouseMovement,
+        cached_max_movement_speed,
+        dt_sec
     );
 
     cudaError_t err = cudaGetLastError();
