@@ -383,6 +383,8 @@ private:
     float m_accumulatedDx{0.0f};
     float m_accumulatedDy{0.0f};
     int m_rateWarmupCount{0};
+    int m_lastOutSignX{0};
+    int m_lastOutSignY{0};
     mutable std::mutex m_previewMutex;
     
     
