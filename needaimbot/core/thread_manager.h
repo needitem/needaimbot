@@ -14,9 +14,20 @@
 class ThreadManager {
 public:
     using ThreadFunc = std::function<void()>;
-    
-    ThreadManager(const std::string& name, ThreadFunc func, int affinity_core = -1)
-        : thread_name_(name), running_(false), thread_finished_(false), affinity_core_(affinity_core) {
+
+    // Thread priority levels for better control under high CPU load
+    enum class Priority {
+        IDLE = THREAD_PRIORITY_IDLE,
+        LOWEST = THREAD_PRIORITY_LOWEST,
+        BELOW_NORMAL = THREAD_PRIORITY_BELOW_NORMAL,
+        NORMAL = THREAD_PRIORITY_NORMAL,
+        ABOVE_NORMAL = THREAD_PRIORITY_ABOVE_NORMAL,
+        HIGHEST = THREAD_PRIORITY_HIGHEST,
+        TIME_CRITICAL = THREAD_PRIORITY_TIME_CRITICAL
+    };
+
+    ThreadManager(const std::string& name, ThreadFunc func, int affinity_core = -1, Priority priority = Priority::NORMAL)
+        : thread_name_(name), running_(false), thread_finished_(false), affinity_core_(affinity_core), priority_(priority) {
         thread_func_ = std::move(func);
     }
     
@@ -66,6 +77,9 @@ public:
                 DWORD_PTR mask = 1ULL << affinity_core_;
                 SetThreadAffinityMask(GetCurrentThread(), mask);
             }
+
+            // OPTIMIZATION: Set thread priority to reduce jitter under high CPU load
+            SetThreadPriority(GetCurrentThread(), static_cast<int>(priority_));
             
             try {
                 thread_func_();
@@ -150,6 +164,7 @@ private:
     std::condition_variable finish_cv_;
     std::mutex finish_mutex_;
     int affinity_core_; // -1 for no affinity, >=0 for specific core
+    Priority priority_;  // Thread priority for scheduling
 };
 
 #endif // THREAD_MANAGER_H

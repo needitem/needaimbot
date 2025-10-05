@@ -81,15 +81,16 @@ namespace {
                         break;
                 }
             } else {
-                // Queue empty - use adaptive sleep
+                // Queue empty - use adaptive busy-wait for minimal jitter
                 emptyCount++;
-                if (emptyCount > 10) {
-                    // Only sleep if queue has been empty for a while
+                if (emptyCount > 200) {
+                    // After many empty iterations, yield to avoid CPU waste
                     std::this_thread::sleep_for(std::chrono::microseconds(50));
-                } else {
-                    // Spin briefly to catch new data faster
+                } else if (emptyCount > 20) {
+                    // Light yielding for moderate empty periods
                     std::this_thread::yield();
                 }
+                // For first 20 iterations: pure spin for ultra-low latency
             }
         }
     }
@@ -100,10 +101,18 @@ void setGlobalInputMethod(std::unique_ptr<InputMethod> method) {
     g_globalInputMethod = std::move(method);
 }
 
-// Start the consumer thread
+// Start the consumer thread with high priority for minimal jitter
 void startMouseConsumer() {
     if (!g_running.exchange(true, std::memory_order_release)) {
         g_consumerThread = std::thread(mouseConsumerThread);
+
+        // Set high priority for mouse consumer thread to minimize jitter
+        HANDLE threadHandle = g_consumerThread.native_handle();
+        SetThreadPriority(threadHandle, THREAD_PRIORITY_HIGHEST);
+
+        #ifdef _WIN32
+        SetThreadDescription(threadHandle, L"MouseConsumer-HighPriority");
+        #endif
     }
 }
 
