@@ -153,10 +153,11 @@ bool initializeInputMethod() {
 
 bool loadAndValidateModel(std::string& modelName, const std::vector<std::string>& availableModels) {
     auto& ctx = AppContext::getInstance();
+    bool model_changed = false;
+
     if (modelName.empty() && !availableModels.empty()) {
         modelName = availableModels[0];
-        ctx.config.saveConfig();
-        return true;
+        model_changed = true;
     }
 
     std::string modelPath = "models/" + modelName;
@@ -165,12 +166,16 @@ bool loadAndValidateModel(std::string& modelName, const std::vector<std::string>
 
         if (!availableModels.empty()) {
             modelName = availableModels[0];
-            ctx.config.saveConfig();
-            return true;
+            model_changed = true;
         } else {
             std::cerr << "[MAIN] No models found in 'models' directory." << std::endl;
             return false;
         }
+    }
+
+    // Save config only if model was changed
+    if (model_changed) {
+        ctx.config.saveConfig();
     }
 
     return true;

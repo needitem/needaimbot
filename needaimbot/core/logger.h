@@ -144,21 +144,21 @@ private:
     std::mutex mutex_;
 };
 
-// Convenience macros - Optimized for release builds
+// Convenience macros - Renamed to avoid conflict with error_manager.h
 #ifdef _DEBUG
-    #define LOG_DEBUG(component, ...) Logger::getInstance().debug(component, __VA_ARGS__)
-    #define LOG_INFO(component, ...) Logger::getInstance().info(component, __VA_ARGS__)
-    #define LOG_WARNING(component, ...) Logger::getInstance().warning(component, __VA_ARGS__)
+    #define LOGGER_DEBUG(component, ...) Logger::getInstance().debug(component, __VA_ARGS__)
+    #define LOGGER_INFO(component, ...) Logger::getInstance().info(component, __VA_ARGS__)
+    #define LOGGER_WARNING(component, ...) Logger::getInstance().warning(component, __VA_ARGS__)
 #else
     // In release builds, disable debug/info/warning logs for performance
-    #define LOG_DEBUG(component, ...) ((void)0)
-    #define LOG_INFO(component, ...) ((void)0)
-    #define LOG_WARNING(component, ...) ((void)0)
+    #define LOGGER_DEBUG(component, ...) ((void)0)
+    #define LOGGER_INFO(component, ...) ((void)0)
+    #define LOGGER_WARNING(component, ...) ((void)0)
 #endif
 
 // Always keep error and critical logs even in release
-#define LOG_ERROR(component, ...) Logger::getInstance().error(component, __VA_ARGS__)
-#define LOG_CRITICAL(component, ...) Logger::getInstance().critical(component, __VA_ARGS__)
+#define LOGGER_ERROR(component, ...) Logger::getInstance().error(component, __VA_ARGS__)
+#define LOGGER_CRITICAL(component, ...) Logger::getInstance().critical(component, __VA_ARGS__)
 
 // Performance logging helper
 class PerformanceTimer {
