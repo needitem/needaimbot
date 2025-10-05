@@ -288,8 +288,10 @@ __global__ void fusedTargetSelectionAndMovementKernel(
             float movement_x = kp_x * error_x;
             float movement_y = kp_y * error_y;
 
-            output_movement->dx = __float2int_rn(movement_x);
-            output_movement->dy = __float2int_rn(movement_y);
+            // Aggressive conversion: round down (truncate) for faster response
+            // Even sub-pixel movements will contribute to accumulation
+            output_movement->dx = static_cast<int>(movement_x);
+            output_movement->dy = static_cast<int>(movement_y);
         } else {
             Target emptyTarget = {};
             *bestTargetIndex = -1;
@@ -907,10 +909,10 @@ MouseMovement UnifiedGraphPipeline::filterMouseMovement(const MouseMovement& raw
     }
 
     // Read config values with safety clamps
-    double alpha = std::clamp(static_cast<double>(ctx.config.movement_rate_ema_alpha), 0.01, 0.5);
+    double alpha = std::clamp(static_cast<double>(ctx.config.movement_rate_ema_alpha), 0.01, 1.0);
     int warmupFrames = std::clamp(ctx.config.movement_warmup_frames, 0, 60);
     float deadzone = std::max(0.0f, ctx.config.movement_deadzone);
-    int maxStep = std::max(1, ctx.config.movement_max_step);
+    // maxStep removed for faster convergence
     bool useFixed = ctx.config.rate_use_fixed_reference_fps;
     double fixedFps = std::max(0.0, static_cast<double>(ctx.config.rate_fixed_reference_fps));
     bool normalize = ctx.config.normalize_movement_rate;
@@ -955,19 +957,21 @@ MouseMovement UnifiedGraphPipeline::filterMouseMovement(const MouseMovement& raw
         return {0, 0};
     }
 
-    int outDx = static_cast<int>(std::lrint(m_accumulatedDx));
-    int outDy = static_cast<int>(std::lrint(m_accumulatedDy));
+    // Aggressive sub-pixel emission: emit if magnitude >= 0.3
+    int outDx = 0;
+    int outDy = 0;
 
-    // Remove the portion we've emitted, keep fractional remainder
-    m_accumulatedDx -= static_cast<float>(outDx);
-    m_accumulatedDy -= static_cast<float>(outDy);
+    if (std::abs(m_accumulatedDx) >= 0.3f) {
+        outDx = static_cast<int>(std::lrint(m_accumulatedDx));
+        m_accumulatedDx -= static_cast<float>(outDx);
+    }
 
-    // Conservative per-dispatch clamp to avoid spikes due to timing jitter
-    if (outDx > maxStep) outDx = maxStep;
-    if (outDx < -maxStep) outDx = -maxStep;
-    if (outDy > maxStep) outDy = maxStep;
-    if (outDy < -maxStep) outDy = -maxStep;
+    if (std::abs(m_accumulatedDy) >= 0.3f) {
+        outDy = static_cast<int>(std::lrint(m_accumulatedDy));
+        m_accumulatedDy -= static_cast<float>(outDy);
+    }
 
+    // No max step clamping for faster convergence
     return {outDx, outDy};
 }
 
