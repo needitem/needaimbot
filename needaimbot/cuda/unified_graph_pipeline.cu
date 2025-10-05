@@ -126,6 +126,7 @@ __global__ void fusedTargetSelectionAndMovementKernel(
     float kp_y,
     float kd_x,
     float kd_y,
+    float dt_norm,
     float head_y_offset,
     float body_y_offset,
     int detection_resolution,
@@ -306,11 +307,42 @@ __global__ void fusedTargetSelectionAndMovementKernel(
             float prev_error_y = prev_center_y - screen_center_y;
 
             // PD control for faster convergence with damping
-            float d_err_x = error_x - prev_error_x;
-            float d_err_y = error_y - prev_error_y;
+            // Derivative gating: only use D when we are continuing the same track
+            // Otherwise large target switches can create big derivative "kicks"
+            float d_err_x = 0.0f;
+            float d_err_y = 0.0f;
+            {
+                // Recompute minimal prev-match condition: if s_prevValid and the chosen target
+                // was the same as the best IoU match in this frame, allow derivative.
+                // Note: prevMatchedIndex was computed above as 'prevMatchIndex'.
+                // If unavailable in this scope, fall back to requiring s_prevValid and high IoU by geometry.
+            }
+            // The previous reduction used s_prevValid only. For stability, keep D only if previous target
+            // is close in position to current target center (heuristic threshold = 0.5 * width/height)
+            if (s_prevValid) {
+                float prev_cx = s_prevTarget.x + s_prevTarget.width * 0.5f;
+                float prev_cy = s_prevTarget.y + s_prevTarget.height * 0.5f;
+                float tol_x = (s_prevTarget.width > 0 ? 0.5f * s_prevTarget.width : 8.0f);
+                float tol_y = (s_prevTarget.height > 0 ? 0.5f * s_prevTarget.height : 8.0f);
+                if (fabsf((target_center_x - prev_cx)) <= tol_x && fabsf((target_center_y - prev_cy)) <= tol_y) {
+                    d_err_x = error_x - prev_error_x;
+                    d_err_y = error_y - prev_error_y;
+                }
+            }
 
-            float movement_x = kp_x * error_x + kd_x * d_err_x;
-            float movement_y = kp_y * error_y + kd_y * d_err_y;
+            float p_x = kp_x * error_x;
+            float p_y = kp_y * error_y;
+            float d_x = kd_x * d_err_x * dt_norm;
+            float d_y = kd_y * d_err_y * dt_norm;
+
+            // Limit D vs P to reduce noise amplification
+            float d_limit_x = fabsf(p_x) * 0.75f;
+            float d_limit_y = fabsf(p_y) * 0.75f;
+            if (fabsf(d_x) > d_limit_x) d_x = copysignf(d_limit_x, d_x);
+            if (fabsf(d_y) > d_limit_y) d_y = copysignf(d_limit_y, d_y);
+
+            float movement_x = p_x + d_x;
+            float movement_y = p_y + d_y;
 
             // Prevent overshoot: do not step past the target in a single update
             float max_step_x = fabsf(error_x);
@@ -1845,6 +1877,20 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         stickyThreshold = 1.0f;
     }
 
+    // Calculate dt normalization for D term (refDt / dt)
+    float dtNorm = 1.0f;
+    {
+        std::lock_guard<std::mutex> lock(m_movementFilterMutex);
+        double refDt = (m_dtRefSec > 0.0) ? m_dtRefSec : m_dtEmaSec;
+        double dtEst = (m_dtEmaSec > 0.0) ? m_dtEmaSec : refDt;
+        if (refDt > 0.0 && dtEst > 0.0) {
+            dtNorm = static_cast<float>(refDt / dtEst);
+            // Clamp to prevent extreme values
+            if (dtNorm < 0.25f) dtNorm = 0.25f;
+            if (dtNorm > 4.0f) dtNorm = 4.0f;
+        }
+    }
+
     fusedTargetSelectionAndMovementKernel<<<gridSize, blockSize, sharedBytes, stream>>>(
         m_unifiedArena.finalTargets,
         m_smallBufferArena.finalTargetsCount,
@@ -1856,6 +1902,7 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         cached_kp_y,
         cached_kd_x,
         cached_kd_y,
+        dtNorm,
         cached_head_y_offset,
         cached_body_y_offset,
         ctx.config.detection_resolution,
