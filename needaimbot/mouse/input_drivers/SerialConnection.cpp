@@ -769,13 +769,6 @@ void SerialConnection::move(int x, int y)
 {
     if (x == 0 && y == 0) return;
 
-    static int move_count = 0;
-    if (++move_count % 100 == 0) {
-        std::cout << "[Arduino] move() called: x=" << x << ", y=" << y
-                  << ", is_open=" << is_open_.load()
-                  << ", writer_running=" << writer_running_.load() << std::endl;
-    }
-
     sendBinaryCommand(0x04, x, y);
 }
 
