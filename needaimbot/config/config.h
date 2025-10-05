@@ -84,10 +84,8 @@ public:
     bool circle_mask;
     bool capture_borders;
     bool capture_cursor;
-    
- 
-    // target_fps removed - no longer using FPS limiting
-    
+    int target_fps;
+
     float body_y_offset;
     float head_y_offset;
     float offset_step;  
@@ -194,19 +192,12 @@ public:
     bool use_cuda_graph = false; // Enable CUDA Graph optimization (faster but not compatible with all models)
     
     
-    // PD Controller settings
-    float pd_kp_x = 0.4f;   // Proportional gain for X axis
-    float pd_kp_y = 0.4f;   // Proportional gain for Y axis
-    float pd_kd_x = 0.0f;   // Derivative gain for X axis (damping)
-    float pd_kd_y = 0.0f;   // Derivative gain for Y axis (damping)
+    // P Controller settings (pixels/second)
+    float pd_kp_x = 24.0f;   // Proportional gain for X axis (pixels/second)
+    float pd_kp_y = 24.0f;   // Proportional gain for Y axis (pixels/second)
 
-    // Movement rate normalization + filter settings
-    bool normalize_movement_rate = true;          // Enable dt-based scaling
-    float movement_rate_ema_alpha = 0.10f;        // EMA smoothing factor for dt (0.01-1.0)
-    int movement_warmup_frames = 5;               // Frames to establish reference dt
-    bool rate_use_fixed_reference_fps = false;    // If true, use fixed_reference_fps instead of warmup
-    float rate_fixed_reference_fps = 120.0f;      // Reference FPS when fixed is enabled
-    float movement_deadzone = 0.75f;              // Deadzone in pixels to reduce chatter
+    // Movement filter settings
+    float max_movement_speed = 20.0f;             // Maximum movement speed per frame in pixels
 
     // Active profile management
     std::string active_profile_name = "Default";
