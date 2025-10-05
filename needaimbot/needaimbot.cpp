@@ -552,12 +552,11 @@ int main()
         // TensorRT pipeline starts automatically when initialized
 
         // OPTIMIZATION: Create thread managers with optimized core affinity and priority for minimal jitter
-        // GPU-intensive pipeline gets HIGHEST priority and dedicated first core (best GPU driver performance)
-        // TIME_CRITICAL removed to prevent I/O starvation (Arduino Serial)
+        // GPU-intensive pipeline gets TIME_CRITICAL priority and dedicated first core (best GPU driver performance)
         ThreadManager pipelineThreadMgr("UnifiedPipelineThread",
             [&]() { pipelineManager.runMainLoop(); },
             0,
-            ThreadManager::Priority::HIGHEST);
+            ThreadManager::Priority::TIME_CRITICAL);
 
         // OPTIMIZATION: Combined UI thread (keyboard + overlay) gets ABOVE_NORMAL priority to reduce thread overhead
         ThreadManager uiThreadMgr("CombinedUIThread",
