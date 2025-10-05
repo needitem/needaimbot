@@ -376,15 +376,7 @@ private:
     std::atomic<bool> m_shouldStop{false};
     mutable std::mutex m_movementFilterMutex;
     bool m_skipNextMovement{true};
-    // Rate-normalized movement filter state
-    std::chrono::steady_clock::time_point m_lastMovementTs{};
-    double m_dtRefSec{0.0};
-    double m_dtEmaSec{0.0};
-    float m_accumulatedDx{0.0f};
-    float m_accumulatedDy{0.0f};
-    int m_rateWarmupCount{0};
-    int m_lastOutSignX{0};
-    int m_lastOutSignY{0};
+    std::chrono::steady_clock::time_point m_lastFrameTime{};
     mutable std::mutex m_previewMutex;
     
     

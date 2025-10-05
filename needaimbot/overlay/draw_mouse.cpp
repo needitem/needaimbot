@@ -23,10 +23,10 @@ static void draw_movement_controls()
     UIHelpers::BeginCard("Mouse Movement Settings");
 
     UIHelpers::BeautifulText("Controls how the aimbot moves the mouse to track targets.", UIHelpers::GetAccentColor(0.8f));
-    UIHelpers::BeautifulText("Adjust Kp values to control aiming speed and responsiveness.", ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
+    UIHelpers::BeautifulText("Kp is in pixels/second. Higher = faster aiming. FPS-independent.", ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
     UIHelpers::CompactSpacer();
-    
-    UIHelpers::SettingsSubHeader("Proportional Gain (Kp)");
+
+    UIHelpers::SettingsSubHeader("Proportional Gain (Kp) - pixels/second");
     
     // Simple P controller gains in two columns
     if (ImGui::BeginTable("GainsTable", 2, ImGuiTableFlags_None)) {
@@ -79,163 +79,41 @@ static void draw_movement_controls()
             if (ctx.config.pd_kp_y > 100.0f) ctx.config.pd_kp_y = 100.0f;
             SAVE_PROFILE();
         }
-        UIHelpers::HelpMarker("How strongly to respond to target distance (higher = faster but can overshoot)");
+        UIHelpers::HelpMarker("Aiming speed in pixels/second. Consistent across all FPS. Higher = faster tracking.");
 
         ImGui::EndTable();
     }
 
     UIHelpers::CompactSpacer();
+    UIHelpers::SettingsSubHeader("Movement Limits");
 
-    // Derivative damping section
-    UIHelpers::SettingsSubHeader("Derivative Damping (Kd)");
-    UIHelpers::BeautifulText("Damps overshoot and reduces end-point wobble. Set to 0 to disable.", ImVec4(0.65f, 0.65f, 0.65f, 1.0f));
-
-    bool kd_enabled = (ctx.config.pd_kd_x > 0.0f) || (ctx.config.pd_kd_y > 0.0f);
-    if (UIHelpers::EnhancedCheckbox("Enable Derivative Damping", &kd_enabled,
-        "Turn off if jitter increases on your setup"))
-    {
-        if (!kd_enabled) {
-            ctx.config.pd_kd_x = 0.0f;
-            ctx.config.pd_kd_y = 0.0f;
-        } else {
-            if (ctx.config.pd_kd_x == 0.0f && ctx.config.pd_kd_y == 0.0f) {
-                ctx.config.pd_kd_x = 0.15f;
-                ctx.config.pd_kd_y = 0.20f;
-            }
-        }
-        SAVE_PROFILE();
-    }
-
-    ImGui::BeginDisabled(!kd_enabled);
-    if (ImGui::BeginTable("KdTable", 2, ImGuiTableFlags_SizingStretchProp)) {
-        ImGui::TableSetupColumn("X-Axis (Horizontal)");
-        ImGui::TableSetupColumn("Y-Axis (Vertical)");
-        ImGui::TableHeadersRow();
-
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        ImGui::Text("Damping (Kd)");
-        ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x - 60);
-        if (ImGui::InputFloat("##KdX", &ctx.config.pd_kd_x, 0.0f, 0.0f, "%.3f")) {
-            if (ctx.config.pd_kd_x < 0.0f) ctx.config.pd_kd_x = 0.0f;
-            if (ctx.config.pd_kd_x > 5.0f) ctx.config.pd_kd_x = 5.0f;
-            SAVE_PROFILE();
-        }
-        ImGui::PopItemWidth();
-        ImGui::SameLine();
-        if (ImGui::Button("-##KdXMinus", ImVec2(25, 0))) {
-            ctx.config.pd_kd_x = (std::max)(0.0f, ctx.config.pd_kd_x - 0.01f);
-            SAVE_PROFILE();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("+##KdXPlus", ImVec2(25, 0))) {
-            ctx.config.pd_kd_x = (std::min)(5.0f, ctx.config.pd_kd_x + 0.01f);
-            SAVE_PROFILE();
-        }
-        UIHelpers::HelpMarker("Damping for X. Higher = less overshoot but slower.");
-
-        ImGui::TableSetColumnIndex(1);
-        ImGui::Text("Damping (Kd)");
-        ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x - 60);
-        if (ImGui::InputFloat("##KdY", &ctx.config.pd_kd_y, 0.0f, 0.0f, "%.3f")) {
-            if (ctx.config.pd_kd_y < 0.0f) ctx.config.pd_kd_y = 0.0f;
-            if (ctx.config.pd_kd_y > 5.0f) ctx.config.pd_kd_y = 5.0f;
-            SAVE_PROFILE();
-        }
-        ImGui::PopItemWidth();
-        ImGui::SameLine();
-        if (ImGui::Button("-##KdYMinus", ImVec2(25, 0))) {
-            ctx.config.pd_kd_y = (std::max)(0.0f, ctx.config.pd_kd_y - 0.01f);
-            SAVE_PROFILE();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("+##KdYPlus", ImVec2(25, 0))) {
-            ctx.config.pd_kd_y = (std::min)(5.0f, ctx.config.pd_kd_y + 0.01f);
-            SAVE_PROFILE();
-        }
-        UIHelpers::HelpMarker("Damping for Y. Higher = less overshoot but slower.");
-
-        ImGui::EndTable();
-    }
-    ImGui::EndDisabled();
-
-    UIHelpers::SettingsSubHeader("Rate Normalization & Filter");
-
-    UIHelpers::BeautifulText("Compensates for varying frame rates to maintain consistent aiming speed.", ImVec4(0.65f, 0.65f, 0.65f, 1.0f));
+    UIHelpers::BeautifulText("Limits maximum movement per frame to prevent oscillation.", ImVec4(0.65f, 0.65f, 0.65f, 1.0f));
     UIHelpers::CompactSpacer();
 
-    if (UIHelpers::EnhancedCheckbox("Normalize by Frame Time", &ctx.config.normalize_movement_rate,
-        "Keep response per second consistent across FPS"))
-    {
+    float max_speed = ctx.config.max_movement_speed;
+    if (ImGui::SliderFloat("Max Speed (px/frame)", &max_speed, 5.0f, 100.0f, "%.1f")) {
+        ctx.config.max_movement_speed = max_speed;
         SAVE_PROFILE();
     }
-
-    ImGui::BeginDisabled(!ctx.config.normalize_movement_rate);
-    {
-        float alpha = ctx.config.movement_rate_ema_alpha;
-        if (ImGui::SliderFloat("EMA Alpha", &alpha, 0.01f, 1.0f, "%.2f")) {
-            ctx.config.movement_rate_ema_alpha = alpha;
-            SAVE_PROFILE();
-        }
-        UIHelpers::HelpMarker("Exponential Moving Average smoothing factor. Lower values (0.01-0.1) = smoother but slower to adapt. Higher values (0.3-0.5) = faster response but less stable.");
-
-        int warmup = ctx.config.movement_warmup_frames;
-        if (ImGui::SliderInt("Warmup Frames", &warmup, 0, 60)) {
-            ctx.config.movement_warmup_frames = warmup;
-            SAVE_PROFILE();
-        }
-        UIHelpers::HelpMarker("Number of frames to collect before normalizing. Helps establish a stable baseline frame time. Use 30-60 for variable FPS games, 0 if using fixed reference FPS.");
-
-        if (UIHelpers::EnhancedCheckbox("Use Fixed Reference FPS", &ctx.config.rate_use_fixed_reference_fps,
-            "Bypass warmup and assume this FPS as the baseline"))
-        {
-            SAVE_PROFILE();
-        }
-
-        ImGui::BeginDisabled(!ctx.config.rate_use_fixed_reference_fps);
-        float ref_fps = ctx.config.rate_fixed_reference_fps;
-        if (ImGui::InputFloat("Reference FPS", &ref_fps, 0.0f, 0.0f, "%.1f")) {
-            if (ref_fps < 1.0f) ref_fps = 1.0f;
-            ctx.config.rate_fixed_reference_fps = ref_fps;
-            SAVE_PROFILE();
-        }
-        UIHelpers::HelpMarker("Target FPS to normalize against. Set to your game's typical FPS (e.g., 60, 144, 240). Skips warmup period.");
-        ImGui::EndDisabled();
-    }
-    ImGui::EndDisabled();
-
-    UIHelpers::CompactSpacer();
-
-    UIHelpers::BeautifulText("Movement limits to prevent jitter and excessive corrections.", ImVec4(0.65f, 0.65f, 0.65f, 1.0f));
-    UIHelpers::CompactSpacer();
-
-    float deadzone = ctx.config.movement_deadzone;
-    if (ImGui::SliderFloat("Deadzone (px)", &deadzone, 0.0f, 5.0f, "%.2f")) {
-        ctx.config.movement_deadzone = deadzone;
-        SAVE_PROFILE();
-    }
-    UIHelpers::HelpMarker("Ignores movements smaller than this value to reduce jitter. If mouse shakes when on target, increase this. Recommended: 0.5-2.0px.");
+    UIHelpers::HelpMarker("Maximum mouse movement per frame. Prevents oscillation when error is large. If aim fails to converge on distant targets, increase this. Recommended: 20-50px.");
 
     UIHelpers::CompactSpacer();
     UIHelpers::SettingsSubHeader("Quick Presets");
     if (ImGui::Button("Balanced")) {
-        ctx.config.pd_kp_x = 0.6f; ctx.config.pd_kp_y = 0.8f;
-        ctx.config.pd_kd_x = 0.20f; ctx.config.pd_kd_y = 0.28f;
-        ctx.config.movement_deadzone = 0.8f;
+        ctx.config.pd_kp_x = 36.0f; ctx.config.pd_kp_y = 48.0f;  // 0.6*60, 0.8*60
+        ctx.config.max_movement_speed = 20.0f;
         SAVE_PROFILE();
     }
     ImGui::SameLine();
-    if (ImGui::Button("Fast (Less Jitter)")) {
-        ctx.config.pd_kp_x = 0.8f; ctx.config.pd_kp_y = 1.1f;
-        ctx.config.pd_kd_x = 0.22f; ctx.config.pd_kd_y = 0.30f;
-        ctx.config.movement_deadzone = 0.7f;
+    if (ImGui::Button("Fast")) {
+        ctx.config.pd_kp_x = 48.0f; ctx.config.pd_kp_y = 66.0f;  // 0.8*60, 1.1*60
+        ctx.config.max_movement_speed = 30.0f;
         SAVE_PROFILE();
     }
     ImGui::SameLine();
-    if (ImGui::Button("P-Only (No Kd)")) {
-        ctx.config.pd_kp_x = 0.6f; ctx.config.pd_kp_y = 0.8f;
-        ctx.config.pd_kd_x = 0.0f; ctx.config.pd_kd_y = 0.0f;
-        ctx.config.movement_deadzone = 1.0f;
+    if (ImGui::Button("Smooth")) {
+        ctx.config.pd_kp_x = 24.0f; ctx.config.pd_kp_y = 36.0f;  // 0.4*60, 0.6*60
+        ctx.config.max_movement_speed = 15.0f;
         SAVE_PROFILE();
     }
 

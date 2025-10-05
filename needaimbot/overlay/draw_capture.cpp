@@ -64,11 +64,15 @@ static void draw_capture_behavior_settings()
     auto& ctx = AppContext::getInstance();
     
     UIHelpers::BeginCard("Capture Behavior");
-    
-    // FPS limiting removed - running at maximum performance when active
-    ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Maximum Performance Mode");
-    UIHelpers::InfoTooltip("No FPS limiting - runs at maximum speed when aimbot is active.\nGPU usage: 0%% when OFF, 100%% when ON.");
-    
+
+    // FPS Limit Control
+    int target_fps = ctx.config.target_fps;
+    if (ImGui::SliderInt("Target FPS", &target_fps, 30, 500, "%d fps")) {
+        ctx.config.target_fps = target_fps;
+        SAVE_PROFILE();
+    }
+    UIHelpers::InfoTooltip("Limits AI pipeline FPS to save GPU/CPU resources.\n120 fps recommended for balanced performance.\nHigher = more responsive but uses more power.");
+
     UIHelpers::CompactSpacer();
     
     ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "Desktop Duplication Capture Active");

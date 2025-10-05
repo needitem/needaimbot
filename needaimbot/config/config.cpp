@@ -64,11 +64,8 @@ bool Config::loadConfig(const std::string& filename)
         circle_mask = false;  // Disabled for better performance
         capture_borders = false;  // Disabled for better performance
         capture_cursor = false;  // Disabled for better performance
- 
-        // NDI capture defaults
- 
+        target_fps = 120;  // Default FPS limit for balanced performance
 
-        
         body_y_offset = 0.15f;
         head_y_offset = 0.05f;
         offset_step = 0.01f;
@@ -79,18 +76,11 @@ bool Config::loadConfig(const std::string& filename)
         crosshair_offset_x = 0.0f;
         crosshair_offset_y = 0.0f;
 
-        pd_kp_x = 0.4f;
-        pd_kp_y = 0.4f;
-        pd_kd_x = 0.15f; // Light damping by default
-        pd_kd_y = 0.15f;
+        pd_kp_x = 24.0f;  // pixels/second (0.4 pixels/frame * 60fps)
+        pd_kp_y = 24.0f;
 
         // Movement filter defaults
-        normalize_movement_rate = true;
-        movement_rate_ema_alpha = 0.10f;
-        movement_warmup_frames = 5;
-        rate_use_fixed_reference_fps = false;
-        rate_fixed_reference_fps = 120.0f;
-        movement_deadzone = 0.75f;
+        max_movement_speed = 20.0f;
 
         // Aim+shoot offset defaults
         enable_aim_shoot_offset = false;
@@ -254,7 +244,7 @@ bool Config::loadConfig(const std::string& filename)
     circle_mask = get_bool_ini("Capture", "circle_mask", true);
     capture_borders = get_bool_ini("Capture", "capture_borders", true);
     capture_cursor = get_bool_ini("Capture", "capture_cursor", true);
-    // target_fps removed - no longer used
+    target_fps = get_long_ini("Capture", "target_fps", 120);
     
 
     // Batch load floats for better cache locality
@@ -280,12 +270,9 @@ bool Config::loadConfig(const std::string& filename)
     easynorecoilstrength = static_cast<float>(get_double_ini("Mouse", "easynorecoilstrength", 0.0));
     
     
-    // Load PD controller settings
-    // Load PD controller settings - group by axis for cache
-    pd_kp_x = static_cast<float>(get_double_ini("PDController", "pd_kp_x", 0.4));
-    pd_kp_y = static_cast<float>(get_double_ini("PDController", "pd_kp_y", 0.4));
-    pd_kd_x = static_cast<float>(get_double_ini("PDController", "pd_kd_x", 0.15));
-    pd_kd_y = static_cast<float>(get_double_ini("PDController", "pd_kd_y", 0.15));
+    // Load P controller settings (pixels/second)
+    pd_kp_x = static_cast<float>(get_double_ini("PController", "pd_kp_x", 24.0));
+    pd_kp_y = static_cast<float>(get_double_ini("PController", "pd_kp_y", 24.0));
 
     input_method = get_string_ini("Mouse", "input_method", "WIN32");
     
@@ -345,13 +332,8 @@ bool Config::loadConfig(const std::string& filename)
     screenshot_delay = get_long_ini("Debug", "screenshot_delay", 500);
     always_on_top = get_bool_ini("Debug", "always_on_top", true);
 
-    // Aim/movement filter
-    normalize_movement_rate = get_bool_ini("AimFilter", "normalize_movement_rate", true);
-    movement_rate_ema_alpha = static_cast<float>(get_double_ini("AimFilter", "movement_rate_ema_alpha", 0.10));
-    movement_warmup_frames = get_long_ini("AimFilter", "movement_warmup_frames", 5);
-    rate_use_fixed_reference_fps = get_bool_ini("AimFilter", "use_fixed_reference_fps", false);
-    rate_fixed_reference_fps = static_cast<float>(get_double_ini("AimFilter", "fixed_reference_fps", 120.0));
-    movement_deadzone = static_cast<float>(get_double_ini("AimFilter", "movement_deadzone", 0.75));
+    // Movement filter
+    max_movement_speed = static_cast<float>(get_double_ini("AimFilter", "max_movement_speed", 20.0));
 
 
 
@@ -472,8 +454,8 @@ bool Config::saveConfig(const std::string& filename)
     file << "circle_mask = " << (circle_mask ? "true" : "false") << "\n";
     file << "capture_borders = " << (capture_borders ? "true" : "false") << "\n";
     file << "capture_cursor = " << (capture_cursor ? "true" : "false") << "\n";
-    
-    // target_fps removed - no longer saved
+    file << "target_fps = " << target_fps << "\n\n";
+
     file << "[Target]\n";
     file << std::fixed << std::setprecision(6);
     file << "body_y_offset = " << body_y_offset << "\n";
@@ -505,12 +487,10 @@ bool Config::saveConfig(const std::string& filename)
     file << "crouch_recoil_enabled = " << (crouch_recoil_enabled ? "true" : "false") << "\n";
     file << "crouch_recoil_reduction = " << crouch_recoil_reduction << "\n\n";
 
-    file << "[PDController]\n";
+    file << "[PController]\n";
     file << std::fixed << std::setprecision(6);
     file << "pd_kp_x = " << pd_kp_x << "\n";
     file << "pd_kp_y = " << pd_kp_y << "\n";
-    file << "pd_kd_x = " << pd_kd_x << "\n";
-    file << "pd_kd_y = " << pd_kd_y << "\n";
 
     file << "[Recoil]\n";
     file << "active_scope_magnification = " << active_scope_magnification << "\n\n";
@@ -578,13 +558,8 @@ bool Config::saveConfig(const std::string& filename)
 
     // Aim/movement filter
     file << "[AimFilter]\n";
-    file << "normalize_movement_rate = " << (normalize_movement_rate ? "true" : "false") << "\n";
     file << std::fixed << std::setprecision(6);
-    file << "movement_rate_ema_alpha = " << movement_rate_ema_alpha << "\n";
-    file << "movement_warmup_frames = " << movement_warmup_frames << "\n";
-    file << "use_fixed_reference_fps = " << (rate_use_fixed_reference_fps ? "true" : "false") << "\n";
-    file << "fixed_reference_fps = " << rate_fixed_reference_fps << "\n";
-    file << "movement_deadzone = " << movement_deadzone << "\n\n";
+    file << "max_movement_speed = " << max_movement_speed << "\n\n";
 
     file << "[Classes]\n";
     file << "HeadClassName = " << head_class_name << "\n\n";
