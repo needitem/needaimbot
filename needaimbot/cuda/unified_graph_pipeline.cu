@@ -133,7 +133,11 @@ __global__ void fusedTargetSelectionAndMovementKernel(
     Target* __restrict__ bestTarget,
     needaimbot::MouseMovement* __restrict__ output_movement,
     float max_movement_speed,
-    float dt_sec
+    float dt_sec,
+    float smoothing_tau,
+    float deadzone,
+    float* __restrict__ smoothed_x,
+    float* __restrict__ smoothed_y
 ) {
     extern __shared__ unsigned char sharedMem[];
     float* s_distancesX = reinterpret_cast<float*>(sharedMem);
@@ -288,14 +292,28 @@ __global__ void fusedTargetSelectionAndMovementKernel(
             float error_x = target_center_x - screen_center_x;
             float error_y = target_center_y - screen_center_y;
 
+            // Deadzone: ignore small errors to prevent chattering
+            if (fabsf(error_x) < deadzone) error_x = 0.0f;
+            if (fabsf(error_y) < deadzone) error_y = 0.0f;
+
             // P controller with dt normalization (pixels/second -> pixels/frame)
             // kp is in pixels/second, multiply by dt to get pixels this frame
-            float movement_x = kp_x * error_x * dt_sec;
-            float movement_y = kp_y * error_y * dt_sec;
+            float raw_movement_x = kp_x * error_x * dt_sec;
+            float raw_movement_y = kp_y * error_y * dt_sec;
 
-            // Absolute speed limit to prevent oscillation with large errors
-            if (fabsf(movement_x) > max_movement_speed) movement_x = copysignf(max_movement_speed, movement_x);
-            if (fabsf(movement_y) > max_movement_speed) movement_y = copysignf(max_movement_speed, movement_y);
+            // Absolute speed limit (px/s) converted to px/frame
+            float max_speed_this_frame = max_movement_speed * dt_sec;
+            if (fabsf(raw_movement_x) > max_speed_this_frame) raw_movement_x = copysignf(max_speed_this_frame, raw_movement_x);
+            if (fabsf(raw_movement_y) > max_speed_this_frame) raw_movement_y = copysignf(max_speed_this_frame, raw_movement_y);
+
+            // EMA smoothing: alpha = exp(-dt/tau)
+            float alpha = expf(-dt_sec / smoothing_tau);
+            float movement_x = alpha * (*smoothed_x) + (1.0f - alpha) * raw_movement_x;
+            float movement_y = alpha * (*smoothed_y) + (1.0f - alpha) * raw_movement_y;
+
+            // Update EMA state
+            *smoothed_x = movement_x;
+            *smoothed_y = movement_y;
 
             // Round to nearest int for balanced response
             int emit_dx = static_cast<int>(lroundf(movement_x));
@@ -312,6 +330,10 @@ __global__ void fusedTargetSelectionAndMovementKernel(
             }
             output_movement->dx = 0;
             output_movement->dy = 0;
+
+            // Reset EMA state when no target
+            *smoothed_x = 0.0f;
+            *smoothed_y = 0.0f;
         }
     }
 }
@@ -963,6 +985,9 @@ bool UnifiedGraphPipeline::enqueueFrameCompletionCallback(cudaStream_t stream) {
                     pipeline->m_h_movement->get()->dy = 0;
                 }
             }
+
+            // Release frame-in-flight flag
+            pipeline->m_frameInFlight.store(false, std::memory_order_release);
         }, this);
 
     if (err != cudaSuccess) {
@@ -989,6 +1014,9 @@ bool UnifiedGraphPipeline::enqueueMovementResetCallback(cudaStream_t stream) {
 
             pipeline->m_allowMovement.store(false, std::memory_order_release);
             pipeline->clearMovementData();
+
+            // Release frame-in-flight flag
+            pipeline->m_frameInFlight.store(false, std::memory_order_release);
         }, this);
 
     if (err != cudaSuccess) {
@@ -1657,7 +1685,9 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
     static float cached_head_y_offset = 0.2f;
     static float cached_body_y_offset = 0.5f;
     static float cached_sticky_threshold = 0.0f;
-    static float cached_max_movement_speed = 20.0f;
+    static float cached_max_movement_speed = 1200.0f;
+    static float cached_smoothing_tau = 0.05f;
+    static float cached_deadzone = 2.0f;
 
     if (!m_graphCaptured) {
         std::lock_guard<std::mutex> lock(ctx.configMutex);
@@ -1668,6 +1698,10 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         cached_body_y_offset = ctx.config.body_y_offset;
         cached_sticky_threshold = ctx.config.sticky_target_threshold;
         cached_max_movement_speed = ctx.config.max_movement_speed;
+        // If smoothing disabled, use very small tau to make EMA pass-through
+        cached_smoothing_tau = ctx.config.enable_movement_smoothing ?
+                               ctx.config.movement_smoothing_tau : 0.001f;
+        cached_deadzone = ctx.config.movement_deadzone;
     }
     
     float crosshairX = ctx.config.detection_resolution / 2.0f;
@@ -1694,16 +1728,15 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
     }
 
     // Calculate frame time for dt normalization
-    float dt_sec = 1.0f / 60.0f; // default fallback
+    float dt_sec;
     {
         std::lock_guard<std::mutex> lock(m_movementFilterMutex);
         auto now = std::chrono::steady_clock::now();
         if (m_lastFrameTime.time_since_epoch().count() != 0) {
             double dt = std::chrono::duration<double>(now - m_lastFrameTime).count();
-            // Clamp to reasonable range (10-250 fps)
-            if (dt > 0.004 && dt < 0.1) {
-                dt_sec = static_cast<float>(dt);
-            }
+            dt_sec = static_cast<float>(dt);
+        } else {
+            dt_sec = 1.0f / 60.0f; // first frame only
         }
         m_lastFrameTime = now;
     }
@@ -1726,7 +1759,11 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         m_smallBufferArena.bestTarget,
         m_smallBufferArena.mouseMovement,
         cached_max_movement_speed,
-        dt_sec
+        dt_sec,
+        cached_smoothing_tau,
+        cached_deadzone,
+        m_smallBufferArena.smoothedMovementX,
+        m_smallBufferArena.smoothedMovementY
     );
 
     cudaError_t err = cudaGetLastError();
@@ -2371,6 +2408,13 @@ int UnifiedGraphPipeline::findHeadClassId(AppContext& ctx) {
 bool UnifiedGraphPipeline::executeFrame(cudaStream_t stream) {
     auto& ctx = AppContext::getInstance();
 
+    // Latest-only semantic: skip if previous frame still in flight
+    bool expected = false;
+    if (!m_frameInFlight.compare_exchange_strong(expected, true, std::memory_order_acquire)) {
+        // Frame already in flight, skip this one
+        return true;
+    }
+
     // Performance tracking
     static uint64_t frameCount = 0;
     static double totalLatencyMs = 0.0;
@@ -2384,12 +2428,14 @@ bool UnifiedGraphPipeline::executeFrame(cudaStream_t stream) {
 
     cudaStream_t launchStream = stream ? stream : (m_pipelineStream ? m_pipelineStream->get() : nullptr);
     if (!launchStream) {
+        m_frameInFlight.store(false, std::memory_order_release);
         return false;
     }
 
     if (ctx.config.use_cuda_graph && m_state.graphReady && m_graphExec) {
         if (!performFrameCaptureDirectToUnified()) {
             m_allowMovement.store(false, std::memory_order_release);
+            m_frameInFlight.store(false, std::memory_order_release);
             return false;
         }
 
@@ -2401,6 +2447,7 @@ bool UnifiedGraphPipeline::executeFrame(cudaStream_t stream) {
             std::cerr << "[UnifiedGraph] Graph launch failed: "
                       << cudaGetErrorString(launchErr) << std::endl;
             m_allowMovement.store(false, std::memory_order_release);
+            m_frameInFlight.store(false, std::memory_order_release);
             return false;
         }
 
@@ -2412,6 +2459,7 @@ bool UnifiedGraphPipeline::executeFrame(cudaStream_t stream) {
     } else {
         if (!executeNormalPipeline(launchStream)) {
             m_allowMovement.store(false, std::memory_order_release);
+            m_frameInFlight.store(false, std::memory_order_release);
             return false;
         }
     }
@@ -2483,6 +2531,7 @@ bool UnifiedGraphPipeline::executeNormalPipeline(cudaStream_t stream) {
         cudaError_t streamState = cudaStreamQuery(activeStream);
         if (streamState == cudaSuccess) {
             clearMovementData();
+            m_frameInFlight.store(false, std::memory_order_release);
         } else {
             if (streamState != cudaErrorNotReady) {
                 std::cerr << "[UnifiedGraph] Stream query failed while resetting movement: "
