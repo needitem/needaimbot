@@ -80,7 +80,10 @@ bool Config::loadConfig(const std::string& filename)
         pd_kp_y = 24.0f;
 
         // Movement filter defaults
-        max_movement_speed = 20.0f;
+        max_movement_speed = 1200.0f;
+        enable_movement_smoothing = true;
+        movement_smoothing_tau = 0.05f;
+        movement_deadzone = 2.0f;
 
         // Aim+shoot offset defaults
         enable_aim_shoot_offset = false;
@@ -333,7 +336,10 @@ bool Config::loadConfig(const std::string& filename)
     always_on_top = get_bool_ini("Debug", "always_on_top", true);
 
     // Movement filter
-    max_movement_speed = static_cast<float>(get_double_ini("AimFilter", "max_movement_speed", 20.0));
+    max_movement_speed = static_cast<float>(get_double_ini("AimFilter", "max_movement_speed", 1200.0));
+    enable_movement_smoothing = get_bool_ini("AimFilter", "enable_movement_smoothing", true);
+    movement_smoothing_tau = static_cast<float>(get_double_ini("AimFilter", "movement_smoothing_tau", 0.05));
+    movement_deadzone = static_cast<float>(get_double_ini("AimFilter", "movement_deadzone", 2.0));
 
 
 
@@ -559,7 +565,10 @@ bool Config::saveConfig(const std::string& filename)
     // Aim/movement filter
     file << "[AimFilter]\n";
     file << std::fixed << std::setprecision(6);
-    file << "max_movement_speed = " << max_movement_speed << "\n\n";
+    file << "max_movement_speed = " << max_movement_speed << "\n";
+    file << "enable_movement_smoothing = " << (enable_movement_smoothing ? "true" : "false") << "\n";
+    file << "movement_smoothing_tau = " << movement_smoothing_tau << "\n";
+    file << "movement_deadzone = " << movement_deadzone << "\n\n";
 
     file << "[Classes]\n";
     file << "HeadClassName = " << head_class_name << "\n\n";

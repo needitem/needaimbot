@@ -197,7 +197,10 @@ public:
     float pd_kp_y = 24.0f;   // Proportional gain for Y axis (pixels/second)
 
     // Movement filter settings
-    float max_movement_speed = 20.0f;             // Maximum movement speed per frame in pixels
+    float max_movement_speed = 1200.0f;           // Maximum movement speed in pixels/second
+    bool enable_movement_smoothing = true;        // Enable EMA smoothing
+    float movement_smoothing_tau = 0.05f;         // EMA time constant in seconds (lower = smoother)
+    float movement_deadzone = 2.0f;               // Deadzone threshold in pixels (ignore errors below this)
 
     // Active profile management
     std::string active_profile_name = "Default";

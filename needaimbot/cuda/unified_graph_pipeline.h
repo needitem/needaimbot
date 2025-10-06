@@ -40,6 +40,8 @@ struct SmallBufferArena {
     Target* selectedTarget;
     Target* bestTarget;
     MouseMovement* mouseMovement;
+    float* smoothedMovementX;  // EMA state for X
+    float* smoothedMovementY;  // EMA state for Y
 
     unsigned char* allowFlags;
     bool* keepFlags;
@@ -74,6 +76,12 @@ struct SmallBufferArena {
         mouseMovement = reinterpret_cast<MouseMovement*>(basePtr + offset);
         offset += sizeof(MouseMovement);
 
+        offset = (offset + alignof(float) - 1) & ~(alignof(float) - 1);
+        smoothedMovementX = reinterpret_cast<float*>(basePtr + offset);
+        offset += sizeof(float);
+        smoothedMovementY = reinterpret_cast<float*>(basePtr + offset);
+        offset += sizeof(float);
+
         allowFlags = reinterpret_cast<unsigned char*>(basePtr + offset);
         offset += 64;
 
@@ -91,12 +99,15 @@ struct SmallBufferArena {
     
     static size_t calculateArenaSize() {
         size_t size = sizeof(int) * 5;
-        
+
         size = (size + alignof(Target) - 1) & ~(alignof(Target) - 1);
         size += sizeof(Target) * 2;
-        
+
         size = (size + alignof(MouseMovement) - 1) & ~(alignof(MouseMovement) - 1);
         size += sizeof(MouseMovement);
+
+        size = (size + alignof(float) - 1) & ~(alignof(float) - 1);
+        size += sizeof(float) * 2; // smoothedMovementX, smoothedMovementY
 
         size += 64;
         size = (size + alignof(bool) - 1) & ~(alignof(bool) - 1);
@@ -105,7 +116,7 @@ struct SmallBufferArena {
         size += sizeof(int) * 64;
         size = (size + alignof(float) - 1) & ~(alignof(float) - 1);
         size += sizeof(float) * 64;
-        
+
         return size;
     }
 };
@@ -374,6 +385,7 @@ private:
 
     std::atomic<bool> m_allowMovement{false};
     std::atomic<bool> m_shouldStop{false};
+    std::atomic<bool> m_frameInFlight{false};
     mutable std::mutex m_movementFilterMutex;
     bool m_skipNextMovement{true};
     std::chrono::steady_clock::time_point m_lastFrameTime{};

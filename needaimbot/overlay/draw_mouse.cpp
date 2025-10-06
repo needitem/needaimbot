@@ -87,34 +87,41 @@ static void draw_movement_controls()
     UIHelpers::CompactSpacer();
     UIHelpers::SettingsSubHeader("Movement Limits");
 
-    UIHelpers::BeautifulText("Limits maximum movement per frame to prevent oscillation.", ImVec4(0.65f, 0.65f, 0.65f, 1.0f));
+    UIHelpers::BeautifulText("Limits maximum movement speed to prevent oscillation.", ImVec4(0.65f, 0.65f, 0.65f, 1.0f));
     UIHelpers::CompactSpacer();
 
     float max_speed = ctx.config.max_movement_speed;
-    if (ImGui::SliderFloat("Max Speed (px/frame)", &max_speed, 5.0f, 100.0f, "%.1f")) {
+    if (ImGui::SliderFloat("Max Speed (px/s)", &max_speed, 300.0f, 3000.0f, "%.0f")) {
         ctx.config.max_movement_speed = max_speed;
         SAVE_PROFILE();
     }
-    UIHelpers::HelpMarker("Maximum mouse movement per frame. Prevents oscillation when error is large. If aim fails to converge on distant targets, increase this. Recommended: 20-50px.");
+    UIHelpers::HelpMarker("Maximum mouse movement speed in pixels per second. Prevents oscillation when error is large. FPS-independent. Recommended: 1200-1800px/s.");
 
     UIHelpers::CompactSpacer();
-    UIHelpers::SettingsSubHeader("Quick Presets");
-    if (ImGui::Button("Balanced")) {
-        ctx.config.pd_kp_x = 36.0f; ctx.config.pd_kp_y = 48.0f;  // 0.6*60, 0.8*60
-        ctx.config.max_movement_speed = 20.0f;
+
+    float deadzone = ctx.config.movement_deadzone;
+    if (ImGui::SliderFloat("Deadzone (px)", &deadzone, 0.0f, 10.0f, "%.1f")) {
+        ctx.config.movement_deadzone = deadzone;
         SAVE_PROFILE();
     }
-    ImGui::SameLine();
-    if (ImGui::Button("Fast")) {
-        ctx.config.pd_kp_x = 48.0f; ctx.config.pd_kp_y = 66.0f;  // 0.8*60, 1.1*60
-        ctx.config.max_movement_speed = 30.0f;
+    UIHelpers::HelpMarker("Ignore errors smaller than this to prevent micro-jitter near target. 0 = disabled. Recommended: 1-3px.");
+
+    UIHelpers::CompactSpacer();
+
+    bool enable_smoothing = ctx.config.enable_movement_smoothing;
+    if (ImGui::Checkbox("Enable EMA Smoothing", &enable_smoothing)) {
+        ctx.config.enable_movement_smoothing = enable_smoothing;
         SAVE_PROFILE();
     }
-    ImGui::SameLine();
-    if (ImGui::Button("Smooth")) {
-        ctx.config.pd_kp_x = 24.0f; ctx.config.pd_kp_y = 36.0f;  // 0.4*60, 0.6*60
-        ctx.config.max_movement_speed = 15.0f;
-        SAVE_PROFILE();
+    UIHelpers::HelpMarker("Apply exponential moving average to smooth movements. Reduces jitter but may add slight latency.");
+
+    if (ctx.config.enable_movement_smoothing) {
+        float smoothing = ctx.config.movement_smoothing_tau;
+        if (ImGui::SliderFloat("Smoothing Time (s)", &smoothing, 0.01f, 0.2f, "%.3f")) {
+            ctx.config.movement_smoothing_tau = smoothing;
+            SAVE_PROFILE();
+        }
+        UIHelpers::HelpMarker("Time constant: how quickly smoothing responds to changes. Lower = faster response, Higher = smoother but slower. Recommended: 0.03-0.07s.");
     }
 
     UIHelpers::EndCard();
