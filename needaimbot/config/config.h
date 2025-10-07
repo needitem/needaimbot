@@ -84,7 +84,6 @@ public:
     bool circle_mask;
     bool capture_borders;
     bool capture_cursor;
-    int target_fps;
 
     float body_y_offset;
     float head_y_offset;

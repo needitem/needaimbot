@@ -156,6 +156,24 @@ bool DDACapture::GetLatestFrameGPU(cudaArray_t* cudaArray, unsigned int* width, 
     return true;
 }
 
+bool DDACapture::WaitForNewFrameSince(uint64_t minPresentQpc, uint32_t timeoutMs) {
+    if (!m_isCapturing.load() || minPresentQpc == 0) {
+        return true;
+    }
+
+    // Fast-path: already satisfied
+    if (m_lastPresentQpc.load(std::memory_order_acquire) >= minPresentQpc) {
+        return true;
+    }
+
+    std::unique_lock<std::mutex> lk(m_presentMutex);
+    const auto timeout = std::chrono::milliseconds(timeoutMs);
+    const auto ok = m_presentCv.wait_for(lk, timeout, [&]() {
+        return !m_isCapturing.load() || m_lastPresentQpc.load(std::memory_order_acquire) >= minPresentQpc;
+    });
+    return ok && m_isCapturing.load();
+}
+
 bool DDACapture::SetCaptureRegion(int x, int y, int width, int height) {
     if (!m_isInitialized || width <= 0 || height <= 0) {
         return false;
@@ -634,6 +652,14 @@ DDACapture::FrameAcquireResult DDACapture::AcquireFrame() {
 
     m_context->Unmap(m_stagingTexture.Get(), 0);
 
+    // Update present time/frame counter and notify after CPU buffer is valid
+    {
+        std::lock_guard<std::mutex> lk(m_presentMutex);
+        m_lastPresentQpc.store(frameInfo.LastPresentTime.QuadPart, std::memory_order_release);
+        m_frameCounter.fetch_add(1, std::memory_order_acq_rel);
+    }
+    m_presentCv.notify_all();
+
     if (callback) {
         callback(callbackData, callbackWidth, callbackHeight, callbackSize);
     }
@@ -642,8 +668,6 @@ DDACapture::FrameAcquireResult DDACapture::AcquireFrame() {
 }
 
 void DDACapture::CaptureThreadProc() {
-    auto nextFrameTime = std::chrono::high_resolution_clock::now();
-
     while (m_isCapturing.load()) {
         const auto result = AcquireFrame();
         if (result == FrameAcquireResult::kError) {
@@ -654,23 +678,6 @@ void DDACapture::CaptureThreadProc() {
         } else if (result == FrameAcquireResult::kNoFrame) {
             // No frame available within timeout; yield briefly to reduce CPU polling
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-
-        // FPS limiting: sleep until next frame time
-        if (result == FrameAcquireResult::kFrameCaptured) {
-            auto& ctx = AppContext::getInstance();
-            int target_fps = ctx.config.target_fps;
-            if (target_fps > 0 && target_fps <= 500) {  // Sanity check
-                auto frameDuration = std::chrono::microseconds(1000000 / target_fps);
-                nextFrameTime += frameDuration;
-                auto now = std::chrono::high_resolution_clock::now();
-                if (nextFrameTime > now) {
-                    std::this_thread::sleep_until(nextFrameTime);
-                } else {
-                    // Fell behind, reset to now
-                    nextFrameTime = now;
-                }
-            }
         }
     }
 }

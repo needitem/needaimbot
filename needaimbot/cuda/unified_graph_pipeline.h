@@ -398,6 +398,10 @@ private:
         bool usingAimShootOffset = false;
     } m_captureRegionCache;
 
+    // Timestamp (QPC) of the last mouse input injection we issued.
+    // Next capture waits until a frame with LastPresentTime >= this value.
+    std::atomic<uint64_t> m_pendingInputQpc{0};
+
     bool validateGraph();
     void cleanupGraph();
     bool allocateBuffers();
