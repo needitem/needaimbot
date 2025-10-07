@@ -370,9 +370,21 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
         std::cerr << "[UnifiedGraph] CRITICAL: TensorRT initialization failed" << std::endl;
         return false;
     }
-    
+
+    // Allocate GPU arenas and small buffers first to avoid duplicate
+    // allocations with TensorRT input bindings.
     if (!allocateBuffers()) {
         std::cerr << "[UnifiedGraph] Failed to allocate buffers" << std::endl;
+        return false;
+    }
+
+    // Allocate TensorRT bindings after arena allocation so we can alias
+    // the primary input directly to the unified arena instead of
+    // temporarily allocating a duplicate input buffer.
+    try {
+        getBindings();
+    } catch (const std::exception& e) {
+        std::cerr << "[Pipeline] Failed to allocate TensorRT bindings: " << e.what() << std::endl;
         return false;
     }
     
@@ -584,10 +596,9 @@ bool UnifiedGraphPipeline::allocateBuffers() {
                         static_cast<unsigned char>(0));
         }
 
-        if (m_unifiedArena.yoloInput) {
-            if (!ensurePrimaryInputBindingAliased()) {
-                std::cerr << "[UnifiedGraph] Warning: Failed to alias TensorRT input binding to unified arena" << std::endl;
-            }
+        // Defer aliasing until TensorRT bindings are created to avoid spurious warnings
+        if (m_unifiedArena.yoloInput && !m_inputBindings.empty()) {
+            (void)ensurePrimaryInputBindingAliased();
         }
 
         ensureFinalTargetAliases();
@@ -1126,12 +1137,8 @@ bool UnifiedGraphPipeline::initializeTensorRT(const std::string& modelFile) {
         
     }
     
-    try {
-        getBindings();
-    } catch (const std::exception& e) {
-        std::cerr << "[Pipeline] Failed to allocate TensorRT bindings: " << e.what() << std::endl;
-        return false;
-    }
+    // Defer getBindings() until after arena allocation so we can alias
+    // the primary input to the unified arena and avoid duplicate memory.
     
     m_imgScale = static_cast<float>(ctx.config.detection_resolution) / getModelInputResolution();
     
@@ -1198,7 +1205,12 @@ void UnifiedGraphPipeline::getBindings() {
         
         try {
             // 일단 원래대로 복구 - 직접 포인터 사용은 TensorRT 바인딩과 호환성 문제 있음
-            m_inputBindings[name] = std::make_unique<CudaMemory<uint8_t>>(size);
+            m_inputBindings[name] = (name == m_inputName && m_unifiedArena.yoloInput)
+                ? std::unique_ptr<CudaMemory<uint8_t>>(new CudaMemory<uint8_t>(
+                      reinterpret_cast<uint8_t*>(m_unifiedArena.yoloInput),
+                      size,
+                      false))
+                : std::unique_ptr<CudaMemory<uint8_t>>(new CudaMemory<uint8_t>(size));
         } catch (const std::exception& e) {
             std::cerr << "[Pipeline] Failed to allocate input memory for '" << name << "': " << e.what() << std::endl;
             throw;
