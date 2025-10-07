@@ -439,6 +439,7 @@ private:
     bool performFrameCaptureDirectToUnified();
     bool copyDDAFrameToGPU(void* frameData, unsigned int width, unsigned int height);
     bool ensureCaptureBufferRegistered(void* frameData, size_t size);
+    void unregisterStaleCaptureBuffers(void* keepPtr);
     void releaseRegisteredCaptureBuffers();
     bool performPreprocessing();
     void updatePreviewBuffer(const SimpleCudaMat& currentBuffer);

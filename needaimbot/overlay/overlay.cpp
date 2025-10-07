@@ -887,8 +887,9 @@ void OverlayThread()
 
     // Cleanup GPU reader
     g_uiGPUReader.cleanup();
-    
-    
+
+    // Release any overlay textures we created
+    release_body_texture();
 
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();

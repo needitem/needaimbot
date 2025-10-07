@@ -1902,6 +1902,8 @@ bool UnifiedGraphPipeline::ensureCaptureBufferRegistered(void* frameData, size_t
         bufferInfo.registered = true;
         bufferInfo.permanentFailure = false;
         m_registeredCaptureBuffers[frameData] = bufferInfo;
+        // Trim any stale registrations to keep the map bounded in long runs
+        unregisterStaleCaptureBuffers(frameData);
         return true;
     }
 
@@ -1915,6 +1917,28 @@ bool UnifiedGraphPipeline::ensureCaptureBufferRegistered(void* frameData, size_t
     }
 
     return false;
+}
+
+void UnifiedGraphPipeline::unregisterStaleCaptureBuffers(void* keepPtr) {
+    if (m_registeredCaptureBuffers.size() <= 1) return;
+    std::vector<void*> toErase;
+    toErase.reserve(m_registeredCaptureBuffers.size());
+    for (const auto& entry : m_registeredCaptureBuffers) {
+        void* ptr = entry.first;
+        const auto& info = entry.second;
+        if (ptr == keepPtr) continue;
+        if (info.registered) {
+            cudaError_t err = cudaHostUnregister(ptr);
+            if (err != cudaSuccess && err != cudaErrorHostMemoryNotRegistered) {
+                std::cerr << "[Capture] Failed to unregister stale capture buffer: "
+                          << cudaGetErrorString(err) << std::endl;
+            }
+        }
+        toErase.push_back(ptr);
+    }
+    for (void* ptr : toErase) {
+        m_registeredCaptureBuffers.erase(ptr);
+    }
 }
 
 void UnifiedGraphPipeline::releaseRegisteredCaptureBuffers() {
@@ -2476,6 +2500,16 @@ bool UnifiedGraphPipeline::executeFrame(cudaStream_t stream) {
         printf("[Pipeline] executeFrame avg (last 200): %.2f ms (%.1f FPS)\n",
                avgLatencyMs, 1000.0 / avgLatencyMs);
         totalLatencyMs = 0.0;
+    }
+
+    // Periodic CUDA memory maintenance for long-running sessions
+    static auto lastTrim = std::chrono::steady_clock::now();
+    auto now = std::chrono::steady_clock::now();
+    if (std::chrono::duration_cast<std::chrono::minutes>(now - lastTrim).count() >= 10) {
+        cudaMemPoolTrimTo(nullptr, 0);
+        // Trim graph memory pool for the current device (0 used elsewhere in code)
+        cudaDeviceGraphMemTrim(0);
+        lastTrim = now;
     }
 
     return true;

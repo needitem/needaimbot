@@ -651,6 +651,9 @@ void DDACapture::CaptureThreadProc() {
             // returns DXGI_ERROR_WAIT_TIMEOUT we rely on its 1 ms timeout to throttle
             // the loop so new frames are delivered with minimal latency.
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        } else if (result == FrameAcquireResult::kNoFrame) {
+            // No frame available within timeout; yield briefly to reduce CPU polling
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
 
         // FPS limiting: sleep until next frame time
