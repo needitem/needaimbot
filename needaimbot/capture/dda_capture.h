@@ -40,6 +40,13 @@ public:
     // GPU-direct API - returns CUDA array pointer (zero-copy)
     bool GetLatestFrameGPU(cudaArray_t* cudaArray, unsigned int* width, unsigned int* height);
 
+    // Synchronization helpers
+    // Blocks until a frame with DXGI LastPresentTime >= minPresentQpc is captured
+    // or timeoutMs elapses. Returns true if condition met, false on timeout or stop.
+    bool WaitForNewFrameSince(uint64_t minPresentQpc, uint32_t timeoutMs);
+    uint64_t GetLastPresentQpc() const { return m_lastPresentQpc.load(std::memory_order_acquire); }
+    uint64_t GetFrameCounter() const { return m_frameCounter.load(std::memory_order_acquire); }
+
     int GetWidth() const { return m_screenWidth; }
     int GetHeight() const { return m_screenHeight; }
     int GetScreenWidth() const { return m_screenWidth; }
@@ -101,4 +108,10 @@ private:
     RECT m_captureRegion{0, 0, 0, 0};
     unsigned int m_captureWidth = 0;
     unsigned int m_captureHeight = 0;
+
+    // Frame timing/state for synchronization with consumers
+    std::atomic<uint64_t> m_lastPresentQpc{0};
+    std::atomic<uint64_t> m_frameCounter{0};
+    mutable std::mutex m_presentMutex;
+    std::condition_variable m_presentCv;
 };

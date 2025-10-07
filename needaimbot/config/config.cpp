@@ -64,7 +64,6 @@ bool Config::loadConfig(const std::string& filename)
         circle_mask = false;  // Disabled for better performance
         capture_borders = false;  // Disabled for better performance
         capture_cursor = false;  // Disabled for better performance
-        target_fps = 120;  // Default FPS limit for balanced performance
 
         body_y_offset = 0.15f;
         head_y_offset = 0.05f;
@@ -241,8 +240,6 @@ bool Config::loadConfig(const std::string& filename)
     circle_mask = get_bool_ini("Capture", "circle_mask", true);
     capture_borders = get_bool_ini("Capture", "capture_borders", true);
     capture_cursor = get_bool_ini("Capture", "capture_cursor", true);
-    target_fps = get_long_ini("Capture", "target_fps", 120);
-    
 
     // Batch load floats for better cache locality
     body_y_offset = static_cast<float>(get_double_ini("Target", "body_y_offset", 0.15));
@@ -446,8 +443,7 @@ bool Config::saveConfig(const std::string& filename)
     file << "monitor_idx = " << monitor_idx << "\n";
     file << "circle_mask = " << (circle_mask ? "true" : "false") << "\n";
     file << "capture_borders = " << (capture_borders ? "true" : "false") << "\n";
-    file << "capture_cursor = " << (capture_cursor ? "true" : "false") << "\n";
-    file << "target_fps = " << target_fps << "\n\n";
+    file << "capture_cursor = " << (capture_cursor ? "true" : "false") << "\n\n";
 
     file << "[Target]\n";
     file << std::fixed << std::setprecision(6);
