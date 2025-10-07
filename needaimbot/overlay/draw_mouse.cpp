@@ -79,49 +79,9 @@ static void draw_movement_controls()
             if (ctx.config.pd_kp_y > 100.0f) ctx.config.pd_kp_y = 100.0f;
             SAVE_PROFILE();
         }
-        UIHelpers::HelpMarker("Aiming speed in pixels/second. Consistent across all FPS. Higher = faster tracking.");
+        UIHelpers::HelpMarker("Proportional gain multiplier. 1.0 = move exactly by error distance. Higher = faster but may overshoot. Recommended: 0.3-1.0.");
 
         ImGui::EndTable();
-    }
-
-    UIHelpers::CompactSpacer();
-    UIHelpers::SettingsSubHeader("Movement Limits");
-
-    UIHelpers::BeautifulText("Limits maximum movement speed to prevent oscillation.", ImVec4(0.65f, 0.65f, 0.65f, 1.0f));
-    UIHelpers::CompactSpacer();
-
-    float max_speed = ctx.config.max_movement_speed;
-    if (ImGui::SliderFloat("Max Speed (px/s)", &max_speed, 20.0f, 1000.0f, "%.0f")) {
-        ctx.config.max_movement_speed = max_speed;
-        SAVE_PROFILE();
-    }
-    UIHelpers::HelpMarker("Maximum mouse movement speed in pixels per second. Prevents oscillation when error is large. FPS-independent. Recommended: 1200-1800px/s.");
-
-    UIHelpers::CompactSpacer();
-
-    float deadzone = ctx.config.movement_deadzone;
-    if (ImGui::SliderFloat("Deadzone (px)", &deadzone, 0.0f, 10.0f, "%.1f")) {
-        ctx.config.movement_deadzone = deadzone;
-        SAVE_PROFILE();
-    }
-    UIHelpers::HelpMarker("Ignore errors smaller than this to prevent micro-jitter near target. 0 = disabled. Recommended: 1-3px.");
-
-    UIHelpers::CompactSpacer();
-
-    bool enable_smoothing = ctx.config.enable_movement_smoothing;
-    if (ImGui::Checkbox("Enable EMA Smoothing", &enable_smoothing)) {
-        ctx.config.enable_movement_smoothing = enable_smoothing;
-        SAVE_PROFILE();
-    }
-    UIHelpers::HelpMarker("Apply exponential moving average to smooth movements. Reduces jitter but may add slight latency.");
-
-    if (ctx.config.enable_movement_smoothing) {
-        float smoothing = ctx.config.movement_smoothing_tau;
-        if (ImGui::SliderFloat("Smoothing Time (s)", &smoothing, 0.01f, 0.2f, "%.3f")) {
-            ctx.config.movement_smoothing_tau = smoothing;
-            SAVE_PROFILE();
-        }
-        UIHelpers::HelpMarker("Time constant: how quickly smoothing responds to changes. Lower = faster response, Higher = smoother but slower. Recommended: 0.03-0.07s.");
     }
 
     UIHelpers::EndCard();
