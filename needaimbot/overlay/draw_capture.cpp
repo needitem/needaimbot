@@ -62,19 +62,9 @@ static void draw_capture_area_settings()
 static void draw_capture_behavior_settings()
 {
     auto& ctx = AppContext::getInstance();
-    
+
     UIHelpers::BeginCard("Capture Behavior");
 
-    // FPS Limit Control
-    int target_fps = ctx.config.target_fps;
-    if (ImGui::SliderInt("Target FPS", &target_fps, 30, 500, "%d fps")) {
-        ctx.config.target_fps = target_fps;
-        SAVE_PROFILE();
-    }
-    UIHelpers::InfoTooltip("Limits AI pipeline FPS to save GPU/CPU resources.\n120 fps recommended for balanced performance.\nHigher = more responsive but uses more power.");
-
-    UIHelpers::CompactSpacer();
-    
     ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "Desktop Duplication Capture Active");
     UIHelpers::InfoTooltip("The Windows Desktop Duplication API (DDA) powers high-quality capture with low latency.\nThis path delivers consistent results across modern GPUs without requiring vendor-specific drivers.");
     

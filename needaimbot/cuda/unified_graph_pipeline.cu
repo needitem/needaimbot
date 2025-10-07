@@ -27,6 +27,12 @@
 #include <cuda.h>
 #include <cuda_runtime_api.h>
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+
 // Forward declare the mouse control function
 extern "C" {
     void executeMouseMovement(int dx, int dy);
@@ -949,6 +955,12 @@ bool UnifiedGraphPipeline::enqueueFrameCompletionCallback(cudaStream_t stream) {
 
                     if (filtered.dx != 0 || filtered.dy != 0) {
                         executeMouseMovement(filtered.dx, filtered.dy);
+
+                        // Record input injection timestamp (QPC)
+                        LARGE_INTEGER qpc{};
+                        if (QueryPerformanceCounter(&qpc)) {
+                            pipeline->m_pendingInputQpc.store(static_cast<uint64_t>(qpc.QuadPart), std::memory_order_release);
+                        }
                     }
                 } else {
                     pipeline->filterMouseMovement({0, 0}, false);
@@ -1942,6 +1954,16 @@ bool UnifiedGraphPipeline::scheduleNextFrameCapture(bool forceSync) {
 
     if (m_captureInFlight && !forceSync) {
         return true;
+    }
+    // If we issued mouse input last frame, wait for a new desktop frame
+    // that includes it (DXGI LastPresentTime >= input QPC).
+    {
+        uint64_t minQpc = m_pendingInputQpc.exchange(0, std::memory_order_acq_rel);
+        if (minQpc != 0 && m_ddaCapture) {
+            // Give the game 1-2 frames to present; cap wait to ~50ms
+            const uint32_t waitMs = 50;
+            (void)m_ddaCapture->WaitForNewFrameSince(minQpc, waitMs);
+        }
     }
 
     auto& ctx = AppContext::getInstance();
