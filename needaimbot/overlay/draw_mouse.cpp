@@ -91,7 +91,7 @@ static void draw_movement_controls()
     UIHelpers::CompactSpacer();
 
     float max_speed = ctx.config.max_movement_speed;
-    if (ImGui::SliderFloat("Max Speed (px/s)", &max_speed, 300.0f, 3000.0f, "%.0f")) {
+    if (ImGui::SliderFloat("Max Speed (px/s)", &max_speed, 20.0f, 1000.0f, "%.0f")) {
         ctx.config.max_movement_speed = max_speed;
         SAVE_PROFILE();
     }
