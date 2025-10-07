@@ -76,14 +76,8 @@ bool Config::loadConfig(const std::string& filename)
         crosshair_offset_x = 0.0f;
         crosshair_offset_y = 0.0f;
 
-        pd_kp_x = 24.0f;  // pixels/second (0.4 pixels/frame * 60fps)
-        pd_kp_y = 24.0f;
-
-        // Movement filter defaults
-        max_movement_speed = 1200.0f;
-        enable_movement_smoothing = true;
-        movement_smoothing_tau = 0.05f;
-        movement_deadzone = 2.0f;
+        pd_kp_x = 0.5f;  // Proportional gain (0-1 typical)
+        pd_kp_y = 0.5f;
 
         // Aim+shoot offset defaults
         enable_aim_shoot_offset = false;
@@ -335,13 +329,6 @@ bool Config::loadConfig(const std::string& filename)
     screenshot_delay = get_long_ini("Debug", "screenshot_delay", 500);
     always_on_top = get_bool_ini("Debug", "always_on_top", true);
 
-    // Movement filter
-    max_movement_speed = static_cast<float>(get_double_ini("AimFilter", "max_movement_speed", 1200.0));
-    enable_movement_smoothing = get_bool_ini("AimFilter", "enable_movement_smoothing", true);
-    movement_smoothing_tau = static_cast<float>(get_double_ini("AimFilter", "movement_smoothing_tau", 0.05));
-    movement_deadzone = static_cast<float>(get_double_ini("AimFilter", "movement_deadzone", 2.0));
-
-
 
 
     head_class_name = get_string_ini("Classes", "HeadClassName", "Head");
@@ -561,14 +548,6 @@ bool Config::saveConfig(const std::string& filename)
     file << "screenshot_button = " << joinStrings(screenshot_button) << "\n";
     file << "screenshot_delay = " << screenshot_delay << "\n";
     file << "always_on_top = " << (always_on_top ? "true" : "false") << "\n\n";
-
-    // Aim/movement filter
-    file << "[AimFilter]\n";
-    file << std::fixed << std::setprecision(6);
-    file << "max_movement_speed = " << max_movement_speed << "\n";
-    file << "enable_movement_smoothing = " << (enable_movement_smoothing ? "true" : "false") << "\n";
-    file << "movement_smoothing_tau = " << movement_smoothing_tau << "\n";
-    file << "movement_deadzone = " << movement_deadzone << "\n\n";
 
     file << "[Classes]\n";
     file << "HeadClassName = " << head_class_name << "\n\n";

@@ -192,15 +192,9 @@ public:
     bool use_cuda_graph = false; // Enable CUDA Graph optimization (faster but not compatible with all models)
     
     
-    // P Controller settings (pixels/second)
-    float pd_kp_x = 24.0f;   // Proportional gain for X axis (pixels/second)
-    float pd_kp_y = 24.0f;   // Proportional gain for Y axis (pixels/second)
-
-    // Movement filter settings
-    float max_movement_speed = 1200.0f;           // Maximum movement speed in pixels/second
-    bool enable_movement_smoothing = true;        // Enable EMA smoothing
-    float movement_smoothing_tau = 0.05f;         // EMA time constant in seconds (lower = smoother)
-    float movement_deadzone = 2.0f;               // Deadzone threshold in pixels (ignore errors below this)
+    // P Controller settings
+    float pd_kp_x = 0.5f;   // Proportional gain for X axis (0-1 typical, 1.0 = move by full error)
+    float pd_kp_y = 0.5f;   // Proportional gain for Y axis (0-1 typical, 1.0 = move by full error)
 
     // Active profile management
     std::string active_profile_name = "Default";

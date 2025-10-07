@@ -40,8 +40,6 @@ struct SmallBufferArena {
     Target* selectedTarget;
     Target* bestTarget;
     MouseMovement* mouseMovement;
-    float* smoothedMovementX;  // EMA state for X
-    float* smoothedMovementY;  // EMA state for Y
 
     unsigned char* allowFlags;
     bool* keepFlags;
@@ -76,12 +74,6 @@ struct SmallBufferArena {
         mouseMovement = reinterpret_cast<MouseMovement*>(basePtr + offset);
         offset += sizeof(MouseMovement);
 
-        offset = (offset + alignof(float) - 1) & ~(alignof(float) - 1);
-        smoothedMovementX = reinterpret_cast<float*>(basePtr + offset);
-        offset += sizeof(float);
-        smoothedMovementY = reinterpret_cast<float*>(basePtr + offset);
-        offset += sizeof(float);
-
         allowFlags = reinterpret_cast<unsigned char*>(basePtr + offset);
         offset += 64;
 
@@ -105,9 +97,6 @@ struct SmallBufferArena {
 
         size = (size + alignof(MouseMovement) - 1) & ~(alignof(MouseMovement) - 1);
         size += sizeof(MouseMovement);
-
-        size = (size + alignof(float) - 1) & ~(alignof(float) - 1);
-        size += sizeof(float) * 2; // smoothedMovementX, smoothedMovementY
 
         size += 64;
         size = (size + alignof(bool) - 1) & ~(alignof(bool) - 1);
