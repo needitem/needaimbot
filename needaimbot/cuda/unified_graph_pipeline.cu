@@ -131,13 +131,7 @@ __global__ void fusedTargetSelectionAndMovementKernel(
     float sticky_threshold,
     int* __restrict__ bestTargetIndex,
     Target* __restrict__ bestTarget,
-    needaimbot::MouseMovement* __restrict__ output_movement,
-    float max_movement_speed,
-    float dt_sec,
-    float smoothing_tau,
-    float deadzone,
-    float* __restrict__ smoothed_x,
-    float* __restrict__ smoothed_y
+    needaimbot::MouseMovement* __restrict__ output_movement
 ) {
     extern __shared__ unsigned char sharedMem[];
     float* s_distancesX = reinterpret_cast<float*>(sharedMem);
@@ -292,30 +286,11 @@ __global__ void fusedTargetSelectionAndMovementKernel(
             float error_x = target_center_x - screen_center_x;
             float error_y = target_center_y - screen_center_y;
 
-            // Deadzone: ignore small errors to prevent chattering
-            if (fabsf(error_x) < deadzone) error_x = 0.0f;
-            if (fabsf(error_y) < deadzone) error_y = 0.0f;
+            // P controller: kp is a simple multiplier (0-1 typical range)
+            float movement_x = kp_x * error_x;
+            float movement_y = kp_y * error_y;
 
-            // P controller with dt normalization (pixels/second -> pixels/frame)
-            // kp is in pixels/second, multiply by dt to get pixels this frame
-            float raw_movement_x = kp_x * error_x * dt_sec;
-            float raw_movement_y = kp_y * error_y * dt_sec;
-
-            // Absolute speed limit (px/s) converted to px/frame
-            float max_speed_this_frame = max_movement_speed * dt_sec;
-            if (fabsf(raw_movement_x) > max_speed_this_frame) raw_movement_x = copysignf(max_speed_this_frame, raw_movement_x);
-            if (fabsf(raw_movement_y) > max_speed_this_frame) raw_movement_y = copysignf(max_speed_this_frame, raw_movement_y);
-
-            // EMA smoothing: alpha = exp(-dt/tau)
-            float alpha = expf(-dt_sec / smoothing_tau);
-            float movement_x = alpha * (*smoothed_x) + (1.0f - alpha) * raw_movement_x;
-            float movement_y = alpha * (*smoothed_y) + (1.0f - alpha) * raw_movement_y;
-
-            // Update EMA state
-            *smoothed_x = movement_x;
-            *smoothed_y = movement_y;
-
-            // Round to nearest int for balanced response
+            // Round to nearest int
             int emit_dx = static_cast<int>(lroundf(movement_x));
             int emit_dy = static_cast<int>(lroundf(movement_y));
 
@@ -330,10 +305,6 @@ __global__ void fusedTargetSelectionAndMovementKernel(
             }
             output_movement->dx = 0;
             output_movement->dy = 0;
-
-            // Reset EMA state when no target
-            *smoothed_x = 0.0f;
-            *smoothed_y = 0.0f;
         }
     }
 }
@@ -1685,9 +1656,6 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
     static float cached_head_y_offset = 0.2f;
     static float cached_body_y_offset = 0.5f;
     static float cached_sticky_threshold = 0.0f;
-    static float cached_max_movement_speed = 1200.0f;
-    static float cached_smoothing_tau = 0.05f;
-    static float cached_deadzone = 2.0f;
 
     if (!m_graphCaptured) {
         std::lock_guard<std::mutex> lock(ctx.configMutex);
@@ -1697,11 +1665,6 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         cached_head_y_offset = ctx.config.head_y_offset;
         cached_body_y_offset = ctx.config.body_y_offset;
         cached_sticky_threshold = ctx.config.sticky_target_threshold;
-        cached_max_movement_speed = ctx.config.max_movement_speed;
-        // If smoothing disabled, use very small tau to make EMA pass-through
-        cached_smoothing_tau = ctx.config.enable_movement_smoothing ?
-                               ctx.config.movement_smoothing_tau : 0.001f;
-        cached_deadzone = ctx.config.movement_deadzone;
     }
     
     float crosshairX = ctx.config.detection_resolution / 2.0f;
@@ -1727,20 +1690,6 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         stickyThreshold = 1.0f;
     }
 
-    // Calculate frame time for dt normalization
-    float dt_sec;
-    {
-        std::lock_guard<std::mutex> lock(m_movementFilterMutex);
-        auto now = std::chrono::steady_clock::now();
-        if (m_lastFrameTime.time_since_epoch().count() != 0) {
-            double dt = std::chrono::duration<double>(now - m_lastFrameTime).count();
-            dt_sec = static_cast<float>(dt);
-        } else {
-            dt_sec = 1.0f / 60.0f; // first frame only
-        }
-        m_lastFrameTime = now;
-    }
-
     fusedTargetSelectionAndMovementKernel<<<gridSize, blockSize, sharedBytes, stream>>>(
         m_unifiedArena.finalTargets,
         m_smallBufferArena.finalTargetsCount,
@@ -1757,13 +1706,7 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         stickyThreshold,
         m_smallBufferArena.bestTargetIndex,
         m_smallBufferArena.bestTarget,
-        m_smallBufferArena.mouseMovement,
-        cached_max_movement_speed,
-        dt_sec,
-        cached_smoothing_tau,
-        cached_deadzone,
-        m_smallBufferArena.smoothedMovementX,
-        m_smallBufferArena.smoothedMovementY
+        m_smallBufferArena.mouseMovement
     );
 
     cudaError_t err = cudaGetLastError();
