@@ -110,47 +110,7 @@ void draw_target()
     // TARGET SELECTION SETTINGS
     // ═══════════════════════════════════════════════════════════
 
-    ImGui::Text("Target Selection Behavior");
-    ImGui::Spacing();
-
-    float sticky = ctx.config.sticky_target_threshold;
-    ImGui::Text("Sticky Target Threshold");
-    ImGui::SetNextItemWidth(-1);
-    if (ImGui::SliderFloat("##StickyThreshold", &sticky, 0.0f, 1.0f, "%.2f")) {
-        // Clamp value between 0.0 and 1.0
-        if (sticky < 0.0f) sticky = 0.0f;
-        if (sticky > 1.0f) sticky = 1.0f;
-        ctx.config.sticky_target_threshold = sticky;
-        SAVE_PROFILE();
-    }
-
-    if (ImGui::IsItemHovered()) {
-        ImGui::BeginTooltip();
-        ImGui::Text("Target Switching Sensitivity");
-        ImGui::Separator();
-        ImGui::TextColored(ImVec4(0.5f, 0.9f, 1.0f, 1.0f), "Controls how easily the aim switches between targets:");
-        ImGui::BulletText("0.00 = Always switch to closest target");
-        ImGui::BulletText("0.30 = Moderate stickiness (Recommended)");
-        ImGui::BulletText("0.50 = High stickiness");
-        ImGui::BulletText("1.00 = Never switch targets");
-        ImGui::Spacing();
-        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
-                          "Higher values keep aim locked on current target longer,\neven when closer targets appear.");
-        ImGui::EndTooltip();
-    }
-
-    ImGui::Spacing();
-
-    // Visual feedback for current setting
-    ImGui::ProgressBar(ctx.config.sticky_target_threshold, ImVec2(-1, 0), "");
-    ImGui::SameLine(0, 10);
-    if (ctx.config.sticky_target_threshold < 0.2f) {
-        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1.0f), "Agile");
-    } else if (ctx.config.sticky_target_threshold < 0.6f) {
-        ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.5f, 1.0f), "Balanced");
-    } else {
-        ImGui::TextColored(ImVec4(0.5f, 0.5f, 1.0f, 1.0f), "Sticky");
-    }
+    ImGui::Text("Target Selection: Always closest to crosshair");
 }
 
  

@@ -2,7 +2,7 @@
 #include "detection/cuda_float_processing.h"
 #include "simple_cuda_mat.h"
 #include "../AppContext.h"
-#include "../capture/dda_capture.h"
+#include "../capture/capture_interface.h"
 #include "../core/logger.h"
 #include "cuda_error_check.h"
 #include "preprocessing.h"
@@ -134,7 +134,6 @@ __global__ void fusedTargetSelectionAndMovementKernel(
     float body_y_offset,
     int detection_resolution,
     Target* __restrict__ selectedTarget,
-    float sticky_threshold,
     int* __restrict__ bestTargetIndex,
     Target* __restrict__ bestTarget,
     needaimbot::MouseMovement* __restrict__ output_movement
@@ -235,42 +234,13 @@ __global__ void fusedTargetSelectionAndMovementKernel(
     }
 
     if (threadIdx.x == 0) {
-        const float kPrevMatchIouThreshold = 0.15f;
-
         int candidateIndex = s_indices[0];
         bool candidateValid = candidateIndex >= 0;
         Target candidateTarget = candidateValid ? finalTargets[candidateIndex] : Target{};
 
-        int prevMatchIndex = s_prevIndices[0];
-        float prevMatchIoU = s_prevIoU[0];
-        bool prevMatched = prevValid && prevMatchIndex >= 0 && prevMatchIoU >= kPrevMatchIouThreshold;
-        Target prevMatchedTarget = prevMatched ? finalTargets[prevMatchIndex] : Target{};
-
         Target chosenTarget = candidateTarget;
         int chosenIndex = candidateIndex;
         bool haveTarget = candidateValid;
-
-        if (prevMatched) {
-            float prevCenterX = prevMatchedTarget.x + prevMatchedTarget.width / 2.0f;
-            float prevDist = fabsf(prevCenterX - screen_center_x);
-
-            bool switchToCandidate = false;
-            if (candidateValid) {
-                float candidateDist = s_distancesX[0];
-                float improvement = prevDist - candidateDist;
-                float denom = (fabsf(prevDist) < 1e-3f) ? 1.0f : prevDist;
-                float improvementRatio = improvement / denom;
-
-                switchToCandidate = (candidateDist < prevDist) &&
-                                    (improvementRatio >= sticky_threshold);
-            }
-
-            if (!switchToCandidate) {
-                chosenTarget = prevMatchedTarget;
-                chosenIndex = prevMatchIndex;
-                haveTarget = true;
-            }
-        }
 
         if (haveTarget) {
             *bestTargetIndex = chosenIndex;
@@ -438,10 +408,10 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
         return false;
     }
     
-    // Graph 내부에서는 복사 불필요 - executeFrame에서 직접 통합 버퍼로 캡처함
-    // 캡처는 Graph 외부에서 performFrameCaptureDirectToUnified()로 처리
+    // Graph ?대??먯꽌??蹂듭궗 遺덊븘??- executeFrame?먯꽌 吏곸젒 ?듯빀 踰꾪띁濡?罹≪쿂??
+    // 罹≪쿂??Graph ?몃??먯꽌 performFrameCaptureDirectToUnified()濡?泥섎━
     
-    // 전처리도 Graph에 포함
+    // ?꾩쿂由щ룄 Graph???ы븿
     if (m_unifiedArena.yoloInput && !m_captureBuffer.empty()) {
         int modelRes = getModelInputResolution();
         cuda_unified_preprocessing(
@@ -468,7 +438,7 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
         }
     }
 
-    // TensorRT 추론 포함 (Graph 호환 모델만 사용)
+    // TensorRT 異붾줎 ?ы븿 (Graph ?명솚 紐⑤뜽留??ъ슜)
     if (m_context && m_config.enableDetection) {
         if (!m_context->enqueueV3(stream)) {
             std::cerr << "Warning: TensorRT enqueue failed during graph capture" << std::endl;
@@ -479,13 +449,13 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
         performIntegratedPostProcessing(stream);
         performTargetSelection(stream);
         
-        // 결과를 호스트로 복사 (Graph 내부)
+        // 寃곌낵瑜??몄뒪?몃줈 蹂듭궗 (Graph ?대?)
         if (!m_mouseMovementUsesMappedMemory) {
             cudaMemcpyAsync(m_h_movement->get(), m_smallBufferArena.mouseMovement,
                            sizeof(MouseMovement), cudaMemcpyDeviceToHost, stream);
         }
         
-        // 마우스 이동 콜백을 Graph에 포함 - 복사 완료 후 자동 실행
+        // 留덉슦???대룞 肄쒕갚??Graph???ы븿 - 蹂듭궗 ?꾨즺 ???먮룞 ?ㅽ뻾
         if (!enqueueFrameCompletionCallback(stream)) {
             std::cerr << "[UnifiedGraph] Failed to attach completion callback during graph capture" << std::endl;
         }
@@ -521,7 +491,7 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     
     m_state.graphReady = true;
     m_state.needsRebuild = false;
-    m_graphCaptured = true;  // Graph 캡처 완료 플래그 설정
+    m_graphCaptured = true;  // Graph 罹≪쿂 ?꾨즺 ?뚮옒洹??ㅼ젙
     
     return true;
 }
@@ -1204,7 +1174,7 @@ void UnifiedGraphPipeline::getBindings() {
         }
         
         try {
-            // 일단 원래대로 복구 - 직접 포인터 사용은 TensorRT 바인딩과 호환성 문제 있음
+            // ?쇰떒 ?먮옒?濡?蹂듦뎄 - 吏곸젒 ?ъ씤???ъ슜? TensorRT 諛붿씤?⑷낵 ?명솚??臾몄젣 ?덉쓬
             m_inputBindings[name] = (name == m_inputName && m_unifiedArena.yoloInput)
                 ? std::unique_ptr<CudaMemory<uint8_t>>(new CudaMemory<uint8_t>(
                       reinterpret_cast<uint8_t*>(m_unifiedArena.yoloInput),
@@ -1460,8 +1430,8 @@ cudaError_t UnifiedGraphPipeline::decodeYoloOutput(void* d_rawOutputPtr, nvinfer
     int maxDecodedTargets = config.max_detections;
     
     if (config.postprocess == "yolo_nms") {
-        // NMS가 포함된 모델 - 이미 후처리된 출력
-        // 출력 형식: [batch, num_detections, 6] where 6 = [x1, y1, x2, y2, confidence, class_id]
+        // NMS媛 ?ы븿??紐⑤뜽 - ?대? ?꾩쿂由щ맂 異쒕젰
+        // 異쒕젰 ?뺤떇: [batch, num_detections, 6] where 6 = [x1, y1, x2, y2, confidence, class_id]
         int num_detections = (shape.size() > 1) ? static_cast<int>(shape[1]) : 0;
         int output_features = (shape.size() > 2) ? static_cast<int>(shape[2]) : 0;
         
@@ -1679,7 +1649,6 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
     static float cached_kp_y = 0.1f;
     static float cached_head_y_offset = 0.2f;
     static float cached_body_y_offset = 0.5f;
-    static float cached_sticky_threshold = 0.0f;
 
     if (!m_graphCaptured) {
         std::lock_guard<std::mutex> lock(ctx.configMutex);
@@ -1688,7 +1657,6 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         cached_kp_y = ctx.config.pd_kp_y;
         cached_head_y_offset = ctx.config.head_y_offset;
         cached_body_y_offset = ctx.config.body_y_offset;
-        cached_sticky_threshold = ctx.config.sticky_target_threshold;
     }
     
     float crosshairX = ctx.config.detection_resolution / 2.0f;
@@ -1707,13 +1675,6 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
                   << cudaGetErrorString(staleError) << std::endl;
     }
 
-    float stickyThreshold = cached_sticky_threshold;
-    if (stickyThreshold < 0.0f) {
-        stickyThreshold = 0.0f;
-    } else if (stickyThreshold > 1.0f) {
-        stickyThreshold = 1.0f;
-    }
-
     fusedTargetSelectionAndMovementKernel<<<gridSize, blockSize, sharedBytes, stream>>>(
         m_unifiedArena.finalTargets,
         m_smallBufferArena.finalTargetsCount,
@@ -1727,7 +1688,6 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         cached_body_y_offset,
         ctx.config.detection_resolution,
         m_smallBufferArena.selectedTarget,
-        stickyThreshold,
         m_smallBufferArena.bestTargetIndex,
         m_smallBufferArena.bestTarget,
         m_smallBufferArena.mouseMovement
@@ -1742,7 +1702,7 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
 }
 
 bool UnifiedGraphPipeline::updateDDACaptureRegion(const AppContext& ctx) {
-    if (!m_ddaCapture) {
+    if (!m_capture) {
         return false;
     }
 
@@ -1762,8 +1722,8 @@ bool UnifiedGraphPipeline::updateDDACaptureRegion(const AppContext& ctx) {
         return true;
     }
 
-    int screenW = m_ddaCapture->GetScreenWidth();
-    int screenH = m_ddaCapture->GetScreenHeight();
+    int screenW = m_capture->GetScreenWidth();
+    int screenH = m_capture->GetScreenHeight();
     if (screenW <= 0 || screenH <= 0) {
         return false;
     }
@@ -1782,7 +1742,7 @@ bool UnifiedGraphPipeline::updateDDACaptureRegion(const AppContext& ctx) {
     int left = std::clamp(centerX - captureSize / 2, 0, maxLeft);
     int top = std::clamp(centerY - captureSize / 2, 0, maxTop);
 
-    if (!m_ddaCapture->SetCaptureRegion(left, top, captureSize, captureSize)) {
+    if (!m_capture->SetCaptureRegion(left, top, captureSize, captureSize)) {
         return false;
     }
 
@@ -1790,6 +1750,9 @@ bool UnifiedGraphPipeline::updateDDACaptureRegion(const AppContext& ctx) {
     m_captureRegionCache.offsetX = offsetX;
     m_captureRegionCache.offsetY = offsetY;
     m_captureRegionCache.usingAimShootOffset = useAimShootOffset;
+    m_captureRegionCache.left = left;
+    m_captureRegionCache.top = top;
+    m_captureRegionCache.size = captureSize;
     return true;
 }
 
@@ -1959,7 +1922,7 @@ bool UnifiedGraphPipeline::scheduleNextFrameCapture(bool forceSync) {
         return true;
     }
 
-    if (!m_ddaCapture) {
+    if (!m_capture) {
         std::cerr << "[Capture] DDA capture interface not set" << std::endl;
         return false;
     }
@@ -1971,10 +1934,10 @@ bool UnifiedGraphPipeline::scheduleNextFrameCapture(bool forceSync) {
     // that includes it (DXGI LastPresentTime >= input QPC).
     {
         uint64_t minQpc = m_pendingInputQpc.exchange(0, std::memory_order_acq_rel);
-        if (minQpc != 0 && m_ddaCapture) {
+        if (minQpc != 0 && m_capture) {
             // Give the game 1-2 frames to present; cap wait to ~50ms
             const uint32_t waitMs = 50;
-            (void)m_ddaCapture->WaitForNewFrameSince(minQpc, waitMs);
+            (void)m_capture->WaitForNewFrameSince(minQpc, waitMs);
         }
     }
 
@@ -1988,7 +1951,7 @@ bool UnifiedGraphPipeline::scheduleNextFrameCapture(bool forceSync) {
     unsigned int width = 0;
     unsigned int height = 0;
 
-    bool useGPUDirect = m_ddaCapture->GetLatestFrameGPU(&cudaArray, &width, &height);
+    bool useGPUDirect = m_capture->GetLatestFrameGPU(&cudaArray, &width, &height);
 
     static bool gpuDirectLoggedOnce = false;
     if (!gpuDirectLoggedOnce && useGPUDirect) {
@@ -2051,7 +2014,7 @@ bool UnifiedGraphPipeline::scheduleNextFrameCapture(bool forceSync) {
         void* frameData = nullptr;
         unsigned int size = 0;
 
-        if (!m_ddaCapture->GetLatestFrame(&frameData, &width, &height, &size)) {
+        if (!m_capture->GetLatestFrame(&frameData, &width, &height, &size)) {
             return false;
         }
 
@@ -2090,6 +2053,9 @@ bool UnifiedGraphPipeline::scheduleNextFrameCapture(bool forceSync) {
         }
 
         m_hasFrameData = true;
+        m_lastCaptureW = static_cast<int>(width);
+        m_lastCaptureH = static_cast<int>(height);
+        m_lastGpuDirect = useGPUDirect;
 
         if ((m_preview.enabled || ctx.config.show_window) &&
             m_pipelineStream && m_pipelineStream->get()) {
@@ -2100,6 +2066,9 @@ bool UnifiedGraphPipeline::scheduleNextFrameCapture(bool forceSync) {
     }
 
     m_captureInFlight = true;
+    m_lastCaptureW = static_cast<int>(width);
+    m_lastCaptureH = static_cast<int>(height);
+    m_lastGpuDirect = useGPUDirect;
 
     if (forceSync) {
         return waitForCaptureCompletion();
@@ -2355,7 +2324,7 @@ bool UnifiedGraphPipeline::performInference() {
         return false;
     }
     
-    // 복사 최적화: 동일한 포인터면 복사 생략
+    // 蹂듭궗 理쒖쟻?? ?숈씪???ъ씤?곕㈃ 蹂듭궗 ?앸왂
     if (inputBinding != m_unifiedArena.yoloInput) {
         ensurePrimaryInputBindingAliased();
         inputBinding = m_inputAddressCache[m_primaryInputIndex];
@@ -2404,7 +2373,7 @@ int UnifiedGraphPipeline::findHeadClassId(AppContext& ctx) {
     return m_cachedHeadClassId.load(std::memory_order_acquire);
 }
 
-// performResultCopy는 더 이상 필요 없음 - Graph와 콜백에서 직접 처리
+// performResultCopy?????댁긽 ?꾩슂 ?놁쓬 - Graph? 肄쒕갚?먯꽌 吏곸젒 泥섎━
 
 bool UnifiedGraphPipeline::executeFrame(cudaStream_t stream) {
     auto& ctx = AppContext::getInstance();
@@ -2561,6 +2530,19 @@ bool UnifiedGraphPipeline::executeNormalPipeline(cudaStream_t stream) {
 }
 
 
-// processMouseMovement는 이제 Graph와 콜백 내부에서 인라인으로 처리됨
+// processMouseMovement???댁젣 Graph? 肄쒕갚 ?대??먯꽌 ?몃씪?몄쑝濡?泥섎━??
 
+}
+void needaimbot::UnifiedGraphPipeline::getCaptureStats(needaimbot::UnifiedGraphPipeline::CaptureStats& out) const {
+    auto& ctx = AppContext::getInstance();
+    out.lastWidth = m_lastCaptureW;
+    out.lastHeight = m_lastCaptureH;
+    out.roiLeft = m_captureRegionCache.left;
+    out.roiTop = m_captureRegionCache.top;
+    out.roiSize = m_captureRegionCache.size;
+    out.gpuDirect = m_lastGpuDirect;
+    out.hasFrame = m_hasFrameData;
+    out.previewEnabled = m_preview.enabled;
+    out.previewHasHost = m_preview.hasValidHostPreview;
+    out.backend = ctx.config.capture_method.c_str();
 }

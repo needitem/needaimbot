@@ -84,6 +84,12 @@ public:
     bool circle_mask;
     bool capture_borders;
     bool capture_cursor;
+    // Capture backend: "DDA" or "OBS_HOOK"
+    std::string capture_method;
+    // OBS Hook: target game window title (exact match)
+    std::string obs_window_title;
+    // OBS Hook: optional source directory to auto-copy required binaries
+    std::string obs_hook_source_dir;
 
     float body_y_offset;
     float head_y_offset;
@@ -147,7 +153,6 @@ public:
     std::string ai_model;
     float confidence_threshold;
     // NMS removed - no longer needed
-    float sticky_target_threshold;  // How much better a new target must be to switch (0.0-1.0)
     int max_detections;
     std::string postprocess;
 

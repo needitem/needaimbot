@@ -64,6 +64,9 @@ bool Config::loadConfig(const std::string& filename)
         circle_mask = false;  // Disabled for better performance
         capture_borders = false;  // Disabled for better performance
         capture_cursor = false;  // Disabled for better performance
+        capture_method = "DDA";  // Default capture backend
+        obs_window_title = "";   // No default window title
+        obs_hook_source_dir = ""; // No default source directory
 
         body_y_offset = 0.15f;
         head_y_offset = 0.05f;
@@ -125,11 +128,9 @@ bool Config::loadConfig(const std::string& filename)
         bScope_multiplier = 1.0f;
 
         
-        ai_model = "sunxds_0.5.6.engine"; 
+        ai_model = "sunxds_0.5.6.engine";
         confidence_threshold = 0.25f;  // Higher threshold = fewer detections = better performance
         // NMS removed - no longer needed
-        
-        sticky_target_threshold = 0.0f; // Always switch to closest target
         max_detections = 30;  // Reduced from 100 for better performance
         postprocess = "yolo11";  // Changed from yolo12 to match common model format
 
@@ -240,6 +241,9 @@ bool Config::loadConfig(const std::string& filename)
     circle_mask = get_bool_ini("Capture", "circle_mask", true);
     capture_borders = get_bool_ini("Capture", "capture_borders", true);
     capture_cursor = get_bool_ini("Capture", "capture_cursor", true);
+    capture_method = get_string_ini("Capture", "capture_method", "DDA");
+    obs_window_title = get_string_ini("Capture", "obs_window_title", "");
+    obs_hook_source_dir = get_string_ini("Capture", "obs_hook_source_dir", "");
 
     // Batch load floats for better cache locality
     body_y_offset = static_cast<float>(get_double_ini("Target", "body_y_offset", 0.15));
@@ -295,8 +299,6 @@ bool Config::loadConfig(const std::string& filename)
     ai_model = get_string_ini("AI", "ai_model", "sunxds_0.5.6.engine");
     confidence_threshold = static_cast<float>(get_double_ini("AI", "confidence_threshold", 0.25));
     // NMS removed - no longer needed
-    
-    sticky_target_threshold = static_cast<float>(get_double_ini("AI", "sticky_target_threshold", 0.0));
     max_detections = get_long_ini("AI", "max_detections", 30);
     postprocess = get_string_ini("AI", "postprocess", "yolo11");  // Changed default from yolo12 to yolo11
 
@@ -443,7 +445,10 @@ bool Config::saveConfig(const std::string& filename)
     file << "monitor_idx = " << monitor_idx << "\n";
     file << "circle_mask = " << (circle_mask ? "true" : "false") << "\n";
     file << "capture_borders = " << (capture_borders ? "true" : "false") << "\n";
-    file << "capture_cursor = " << (capture_cursor ? "true" : "false") << "\n\n";
+    file << "capture_cursor = " << (capture_cursor ? "true" : "false") << "\n";
+    file << "capture_method = " << capture_method << "\n";
+    file << "obs_window_title = " << obs_window_title << "\n";
+    file << "obs_hook_source_dir = " << obs_hook_source_dir << "\n\n";
 
     file << "[Target]\n";
     file << std::fixed << std::setprecision(6);
@@ -508,8 +513,6 @@ bool Config::saveConfig(const std::string& filename)
     file << std::fixed << std::setprecision(6);
     file << "confidence_threshold = " << confidence_threshold << "\n";
     // NMS removed - no longer saved
-    
-    file << "sticky_target_threshold = " << sticky_target_threshold << "\n";
     file << std::noboolalpha;
     file << "max_detections = " << max_detections << "\n";
     file << "postprocess = " << postprocess << "\n\n";

@@ -81,7 +81,7 @@ void UnifiedGraphPipeline::shutdown() {
     cleanupGraph();
     deallocateBuffers();
 
-    m_ddaCapture = nullptr;
+    m_capture = nullptr;
 
     // Clear GPU memory pools but don't reset device
     cudaError_t err = cudaMemPoolTrimTo(nullptr, 0);
