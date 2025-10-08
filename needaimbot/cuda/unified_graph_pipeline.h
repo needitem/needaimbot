@@ -20,7 +20,7 @@
 #include <cuda_fp16.h>
 
 struct AppContext;
-class DDACapture;
+class ICaptureProvider;
 
 namespace needaimbot {
 
@@ -220,7 +220,22 @@ public:
     bool executeNormalPipeline(cudaStream_t stream = nullptr);
     
         
-    void setDDACapture(DDACapture* capture) { m_ddaCapture = capture; }
+    void setCapture(ICaptureProvider* capture) { m_capture = capture; }
+
+    struct CaptureStats {
+        int lastWidth = 0;
+        int lastHeight = 0;
+        int roiLeft = 0;
+        int roiTop = 0;
+        int roiSize = 0;
+        bool gpuDirect = false;
+        bool hasFrame = false;
+        bool previewEnabled = false;
+        bool previewHasHost = false;
+        const char* backend = nullptr;
+    };
+
+    void getCaptureStats(CaptureStats& out) const;
     void setInputFrame(const SimpleCudaMat& frame);
     void setOutputBuffer(float* d_output) { 
         m_externalOutputBuffer = d_output;
@@ -363,7 +378,10 @@ private:
 
     float* m_externalOutputBuffer = nullptr;
 
-    DDACapture* m_ddaCapture = nullptr;
+    ICaptureProvider* m_capture = nullptr;
+    int m_lastCaptureW = 0;
+    int m_lastCaptureH = 0;
+    bool m_lastGpuDirect = false;
 
     std::unordered_map<void*, RegisteredHostBuffer> m_registeredCaptureBuffers;
     
@@ -396,6 +414,9 @@ private:
         float offsetX = 0.0f;
         float offsetY = 0.0f;
         bool usingAimShootOffset = false;
+        int left = 0;
+        int top = 0;
+        int size = 0;
     } m_captureRegionCache;
 
     // Timestamp (QPC) of the last mouse input injection we issued.

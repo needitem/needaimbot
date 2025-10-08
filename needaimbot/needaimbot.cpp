@@ -29,6 +29,10 @@
 #include "core/thread_manager.h"
 #include "core/error_manager.h"
 #include "capture/dda_capture.h"
+#include "capture/capture_interface.h"
+#include "capture/dda_capture_adapter.h"
+#include "capture/obs_hook_capture_adapter.h"
+#include "capture/game_capture.h"
 
 
 #ifndef __INTELLISENSE__
@@ -41,6 +45,8 @@
 #include <array>
 #include <cstdio>
 #include <string_view>
+#include <memory>
+#include <filesystem>
 
 // #include "mouse/aimbot_components/AimbotTarget.h" - Removed, using core/Target.h
 #include <algorithm>
@@ -186,12 +192,93 @@ bool loadAndValidateModel(std::string& modelName, const std::vector<std::string>
 bool initializeScreenCapture(needaimbot::UnifiedGraphPipeline* pipeline) {
     auto& ctx = AppContext::getInstance();
 
+    // Try OBS Hook backend if selected
+    if (_stricmp(ctx.config.capture_method.c_str(), "OBS_HOOK") == 0) {
+        // If required binaries are missing and source folder is provided, attempt auto-copy
+        {
+            namespace fs = std::filesystem;
+            bool haveAll = fs::exists("obs_stuff\\inject-helper64.exe") &&
+                           fs::exists("obs_stuff\\graphics-hook64.dll") &&
+                           fs::exists("obs_stuff\\get-graphics-offsets64.exe");
+            auto try_copy_from_base = [&](const std::string& base) {
+                try {
+                    fs::create_directories("obs_stuff");
+                    // Prefer direct known paths first
+                    std::vector<std::pair<std::string, std::string>> direct = {
+                        {base + "\\bin\\64bit\\inject-helper64.exe", "obs_stuff\\inject-helper64.exe"},
+                        {base + "\\obs-plugins\\64bit\\graphics-hook64.dll", "obs_stuff\\graphics-hook64.dll"},
+                        {base + "\\bin\\64bit\\get-graphics-offsets64.exe", "obs_stuff\\get-graphics-offsets64.exe"}
+                    };
+                    bool any = false;
+                    for (auto& f : direct) {
+                        if (fs::exists(f.first)) {
+                            fs::copy_file(f.first, f.second, fs::copy_options::overwrite_existing);
+                            any = true;
+                        }
+                    }
+                    // If some missing, search recursively by filename
+                    auto find_and_copy = [&](const char* name, const char* dst) {
+                        if (fs::exists(dst)) return true;
+                        std::error_code ec;
+                        for (fs::recursive_directory_iterator it(base, fs::directory_options::skip_permission_denied, ec), end; it != end; it.increment(ec)) {
+                            if (ec) continue;
+                            if (!it->is_regular_file(ec)) continue;
+                            if (it->path().filename().string() == name) {
+                                fs::copy_file(it->path(), dst, fs::copy_options::overwrite_existing, ec);
+                                return fs::exists(dst);
+                            }
+                        }
+                        return false;
+                    };
+                    bool ok1 = fs::exists("obs_stuff\\inject-helper64.exe") || find_and_copy("inject-helper64.exe", "obs_stuff\\inject-helper64.exe");
+                    bool ok2 = fs::exists("obs_stuff\\graphics-hook64.dll") || find_and_copy("graphics-hook64.dll", "obs_stuff\\graphics-hook64.dll");
+                    bool ok3 = fs::exists("obs_stuff\\get-graphics-offsets64.exe") || find_and_copy("get-graphics-offsets64.exe", "obs_stuff\\get-graphics-offsets64.exe");
+                    (void)any; // suppress unused warning
+                    return ok1 && ok2 && ok3;
+                } catch (...) {
+                    return false;
+                }
+            };
+
+            if (!haveAll) {
+                bool copied = false;
+                if (!ctx.config.obs_hook_source_dir.empty()) {
+                    copied = try_copy_from_base(ctx.config.obs_hook_source_dir);
+                }
+                if (!copied) {
+                    // Try default OBS install path
+                    copied = try_copy_from_base("C:\\Program Files\\obs-studio");
+                }
+                (void)copied; // we still proceed; fallback to DDA if missing
+            }
+        }
+        const int screenW = GetSystemMetrics(SM_CXSCREEN);
+        const int screenH = GetSystemMetrics(SM_CYSCREEN);
+        const int detectionRes = std::max(1, ctx.config.detection_resolution);
+        const int captureSize = std::min(detectionRes, std::min(screenW, screenH));
+        if (ctx.config.obs_window_title.empty()) {
+            std::cerr << "[CAPTURE] OBS Hook selected but window title is empty. Falling back to DDA." << std::endl;
+        } else {
+            try {
+                static std::unique_ptr<GameCapture> s_gameCap;
+                s_gameCap.reset(new GameCapture(captureSize, captureSize, screenW, screenH, ctx.config.obs_window_title));
+                static ObsHookCaptureAdapter s_obsAdapter(s_gameCap.get());
+                s_obsAdapter.StartCapture();
+                pipeline->setCapture(&s_obsAdapter);
+                return true;
+            } catch (const std::exception& e) {
+                std::cerr << "[CAPTURE] OBS Hook initialization failed: " << e.what() << ". Falling back to DDA." << std::endl;
+            }
+        }
+    }
+
     if (!DDACapture::IsDDACaptureAvailable()) {
         std::cerr << "[CAPTURE] Desktop Duplication is not available on this system" << std::endl;
         return false;
     }
 
     static DDACapture s_ddaCapture;
+    static DDACaptureAdapter s_ddaAdapter(&s_ddaCapture);
 
     if (!s_ddaCapture.Initialize()) {
         std::cerr << "[CAPTURE] Failed to initialize Desktop Duplication capture" << std::endl;
@@ -227,7 +314,7 @@ bool initializeScreenCapture(needaimbot::UnifiedGraphPipeline* pipeline) {
         return false;
     }
 
-    pipeline->setDDACapture(&s_ddaCapture);
+    pipeline->setCapture(&s_ddaAdapter);
     return true;
 }
 
@@ -369,6 +456,10 @@ int main()
     }
     
     // Initialize Gaming Performance Analyzer
+
+    // Ensure console prints UTF-8 to avoid '??' for non-ASCII
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
     
     // Administrator privileges not required - application runs fine without elevation
     // This improves user experience and reduces security prompts

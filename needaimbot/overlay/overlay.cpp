@@ -307,6 +307,18 @@ void SetupImGui()
 
     ImGui::StyleColorsDark();
 
+    // Load a font with Korean glyphs to avoid '??' for Hangul
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        const ImWchar* ranges = io.Fonts->GetGlyphRangesKorean();
+        // Try Malgun Gothic (Windows default Korean font)
+        ImFont* font = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\malgun.ttf", 18.0f, nullptr, ranges);
+        if (!font) {
+            // Fallback to default font if loading fails
+            io.Fonts->AddFontDefault();
+        }
+    }
+
     
     ImGuiStyle& style = ImGui::GetStyle();
     
