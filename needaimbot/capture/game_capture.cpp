@@ -346,27 +346,30 @@ Image GameCapture::get_frame() {
     int row_size = width * 4;
     int data_size = height * row_size;
 
-    // Try to use pinned memory for better CUDA transfer performance
-    BYTE* targetBuffer = nullptr;
-
+    // Try to allocate pinned memory for better CUDA performance, but keep malloc fallback
     if (!m_frameBufferPinned || m_frameBufferPinned->size() != (size_t)data_size) {
         try {
             m_frameBufferPinned = std::make_unique<CudaPinnedMemory<unsigned char>>(
                 data_size, cudaHostAllocWriteCombined | cudaHostAllocPortable);
-            targetBuffer = m_frameBufferPinned->get();
-        } catch (const std::exception& e) {
-            // Fallback to malloc if pinned memory fails
+            // Free old malloc buffer if we successfully allocated pinned memory
+            if (FrameBuffer) {
+                free(FrameBuffer);
+                FrameBuffer = nullptr;
+            }
+        } catch (const std::exception&) {
+            // If pinned memory fails, fall back to malloc
+            m_frameBufferPinned.reset();
             static int prev_data_size = 0;
             if (!FrameBuffer || prev_data_size != data_size) {
                 if (FrameBuffer) free(FrameBuffer);
                 FrameBuffer = (BYTE*)malloc(data_size);
                 prev_data_size = data_size;
             }
-            targetBuffer = FrameBuffer;
         }
-    } else {
-        targetBuffer = m_frameBufferPinned->get();
     }
+
+    // Use pinned memory if available, otherwise use malloc buffer
+    BYTE* targetBuffer = m_frameBufferPinned ? m_frameBufferPinned->get() : FrameBuffer;
 
     for (int y = 0; y < height; ++y) {
         memcpy(targetBuffer + y * row_size, (BYTE*)mapped.pData + y * mapped.RowPitch, row_size);
