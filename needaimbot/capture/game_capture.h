@@ -8,8 +8,9 @@
 #include <stdio.h>
 #include <memory>
 
-// CUDA utilities for pinned memory
+// CUDA utilities for pinned memory and interop
 #include <cuda_runtime.h>
+#include <cuda_d3d11_interop.h>
 #include "../utils/cuda_utils.h"
 
 #ifdef _MSC_VER
