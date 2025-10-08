@@ -56,7 +56,12 @@
     <ClCompile Include="scr\other_tools.cpp" />
     <ClCompile Include="core\defender_exception.cpp" />
     <ClCompile Include="capture\dda_capture.cpp" />
+    <ClCompile Include="capture\game_capture.cpp" />
     <ClInclude Include="include\memory_images.h" />
+    <ClInclude Include="capture\capture_interface.h" />
+    <ClInclude Include="capture\dda_capture_adapter.h" />
+    <ClInclude Include="capture\obs_hook_capture_adapter.h" />
+    <ClInclude Include="capture\game_capture.h" />
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="cuda\detection\postProcessGpu.cu" />
