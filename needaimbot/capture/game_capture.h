@@ -6,10 +6,15 @@
 #include <sstream>
 #include <iostream>
 #include <stdio.h>
+#include <memory>
+
+// CUDA utilities for pinned memory
+#include <cuda_runtime.h>
+#include "../utils/cuda_utils.h"
 
 #ifdef _MSC_VER
 #pragma comment(lib, "d3d11.lib")
-#pragma comment(lib, "dxgi.lib") 
+#pragma comment(lib, "dxgi.lib")
 #endif
 
 struct Image {
@@ -51,9 +56,12 @@ private:
 	ID3D11Texture2D* pStagingTexture;
     D3D11_BOX sourceRegion;
 	Image frame;
-	BYTE* FrameBuffer;
+	BYTE* FrameBuffer;  // Legacy fallback
 	int width, height;
 	std::string game_name;
+
+	// Pinned memory for faster CPU transfers
+	std::unique_ptr<CudaPinnedMemory<unsigned char>> m_frameBufferPinned;
 	HANDLE inject_hook(DWORD target_id);
 	HANDLE OpenMapPlusId(const std::wstring& base_name, DWORD id);
 	HANDLE OpenDataMap(uint32_t window, uint32_t map_id);
