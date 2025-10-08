@@ -20,8 +20,8 @@ public:
     void StopCapture() override { m_started = false; }
     bool IsCapturing() const override { return m_started.load(); }
 
-    bool GetLatestFrameGPU(cudaArray_t* /*cudaArray*/, unsigned int* /*width*/, unsigned int* /*height*/) override {
-        return false; // Not supported via OBS hook path in this adapter
+    bool GetLatestFrameGPU(cudaArray_t* cudaArray, unsigned int* width, unsigned int* height) override {
+        return m_impl ? m_impl->GetLatestFrameGPU(cudaArray, width, height) : false;
     }
 
     bool GetLatestFrame(void** frameData, unsigned int* width, unsigned int* height, unsigned int* size) override {
