@@ -31,6 +31,8 @@ public:
     ~GameCapture();
     bool initialize();
     Image get_frame();
+    // GPU-direct (zero-copy) path similar to DDACapture
+    bool GetLatestFrameGPU(cudaArray_t* cudaArray, unsigned int* outWidth, unsigned int* outHeight);
     bool SaveBMP(const char* filename, const Image& img);
     // Added helpers for pipeline compatibility
     bool SetCaptureRegion(int x, int y, int w, int h);
@@ -51,25 +53,33 @@ private:
 	HANDLE texture_mutexes[2];
 	hook_info* shared_hook_info;
 	shtex_data* shared_shtex_data;
-	ID3D11Device* pDevice;
-	ID3D11DeviceContext* pContext;
-	ID3D11Resource* pSharedResource;
-	ID3D11Texture2D* pStagingTexture;
+    ID3D11Device* pDevice;
+    ID3D11DeviceContext* pContext;
+    ID3D11Resource* pSharedResource;
+    ID3D11Texture2D* pStagingTexture;
+    // CUDA interop shared texture (GPU-side ROI buffer)
+    ID3D11Texture2D* pCudaSharedTexture = nullptr;
+    cudaGraphicsResource* m_cudaGraphicsResource = nullptr;
+    cudaArray_t m_cudaMappedArray = nullptr;
+    bool m_cudaInteropEnabled = false;
     D3D11_BOX sourceRegion;
-	Image frame;
-	BYTE* FrameBuffer;  // Legacy fallback
-	int width, height;
-	std::string game_name;
+    Image frame;
+    BYTE* FrameBuffer;  // Legacy fallback
+    int width, height;
+    std::string game_name;
 
 	// Pinned memory for faster CPU transfers
-	std::unique_ptr<CudaPinnedMemory<unsigned char>> m_frameBufferPinned;
-	HANDLE inject_hook(DWORD target_id);
-	HANDLE OpenMapPlusId(const std::wstring& base_name, DWORD id);
-	HANDLE OpenDataMap(uint32_t window, uint32_t map_id);
-	HANDLE OpenEventPlusId(const std::wstring& base_name, DWORD id);
-	HANDLE OpenMutexPlusId(const std::wstring& base_name, DWORD id);
-	HANDLE CreateKeepaliveMutex(int pid);
-	D3D11_BOX get_region();
-	void initialize_offsets();
-	std::string run_get_graphics_offsets();
+    std::unique_ptr<CudaPinnedMemory<unsigned char>> m_frameBufferPinned;
+    HANDLE inject_hook(DWORD target_id);
+    HANDLE OpenMapPlusId(const std::wstring& base_name, DWORD id);
+    HANDLE OpenDataMap(uint32_t window, uint32_t map_id);
+    HANDLE OpenEventPlusId(const std::wstring& base_name, DWORD id);
+    HANDLE OpenMutexPlusId(const std::wstring& base_name, DWORD id);
+    HANDLE CreateKeepaliveMutex(int pid);
+    D3D11_BOX get_region();
+    void initialize_offsets();
+    std::string run_get_graphics_offsets();
+
+    // Ensure CUDA shared texture exists and is registered/mapped
+    bool ensureCudaSharedTexture(unsigned int w, unsigned int h, DXGI_FORMAT format);
 };

@@ -24,7 +24,16 @@ GameCapture::~GameCapture() {
         SetEvent(hook_stop);
         CloseHandle(hook_stop);
     }
+    // First, clean up CUDA interop to drop references before releasing D3D texture
+    if (m_cudaGraphicsResource) {
+        cudaGraphicsUnregisterResource(m_cudaGraphicsResource);
+        m_cudaGraphicsResource = nullptr;
+    }
+    m_cudaMappedArray = nullptr;
+    m_cudaInteropEnabled = false;
+
     if (pStagingTexture) pStagingTexture->Release();
+    if (pCudaSharedTexture) pCudaSharedTexture->Release();
     if (pSharedResource) pSharedResource->Release();
     if (pContext) pContext->Release();
     if (pDevice) pDevice->Release();
@@ -52,9 +61,12 @@ GameCapture::~GameCapture() {
     hook_data_map = nullptr;
     hook_info_map = nullptr;
     pStagingTexture = nullptr;
+    pCudaSharedTexture = nullptr;
     pSharedResource = nullptr;
     pContext = nullptr;
     pDevice = nullptr;
+
+    // Already unregistered above
 }
 
 bool GameCapture::initialize() {
@@ -315,6 +327,12 @@ bool GameCapture::initialize() {
     if ((int)sourceRegion.right > (int)srcW) sourceRegion.right = srcW;
     if ((int)sourceRegion.bottom > (int)srcH) sourceRegion.bottom = srcH;
 
+    // Prepare CUDA interop shared texture for zero-copy GPU path
+    if (!ensureCudaSharedTexture(static_cast<unsigned int>(width), static_cast<unsigned int>(height), DXGI_FORMAT_B8G8R8A8_UNORM)) {
+        // Not fatal: we keep CPU fallback
+        std::cout << "[GameCapture] CUDA interop not available; using CPU fallback" << std::endl;
+    }
+
 	std::cout << "GameCapture initialized successfully for game: " << game_name << std::endl;
     return true;
 }
@@ -383,6 +401,49 @@ Image GameCapture::get_frame() {
     img.data = targetBuffer;
 
     return img;
+}
+
+bool GameCapture::GetLatestFrameGPU(cudaArray_t* cudaArray, unsigned int* outWidth, unsigned int* outHeight) {
+    if (!pContext || !pSharedResource) {
+        return false;
+    }
+
+    // Ensure CUDA shared texture is ready and sized to current ROI
+    if (!ensureCudaSharedTexture(static_cast<unsigned int>(width), static_cast<unsigned int>(height), DXGI_FORMAT_B8G8R8A8_UNORM)) {
+        return false;
+    }
+
+    // Ensure CUDA interop sync: unmap before D3D writes, then remap for CUDA reads
+    if (m_cudaGraphicsResource && m_cudaMappedArray) {
+        cudaGraphicsUnmapResources(1, &m_cudaGraphicsResource, 0);
+        m_cudaMappedArray = nullptr;
+    }
+
+    // Copy current ROI from shared source to CUDA-shared texture (GPU copy, zero CPU)
+    pContext->CopySubresourceRegion(pCudaSharedTexture, 0, 0, 0, 0, pSharedResource, 0, &sourceRegion);
+    // Optionally flush context to push copy promptly
+    // pContext->Flush();
+
+    // Remap so CUDA sees the updated contents
+    if (m_cudaGraphicsResource) {
+        if (cudaGraphicsMapResources(1, &m_cudaGraphicsResource, 0) != cudaSuccess) {
+            return false;
+        }
+        if (cudaGraphicsSubResourceGetMappedArray(&m_cudaMappedArray, m_cudaGraphicsResource, 0, 0) != cudaSuccess) {
+            cudaGraphicsUnmapResources(1, &m_cudaGraphicsResource, 0);
+            m_cudaMappedArray = nullptr;
+            return false;
+        }
+    }
+
+    if (!m_cudaInteropEnabled || !m_cudaMappedArray) {
+        return false;
+    }
+
+    if (cudaArray) *cudaArray = m_cudaMappedArray;
+    if (outWidth) *outWidth = static_cast<unsigned int>(width);
+    if (outHeight) *outHeight = static_cast<unsigned int>(height);
+    return true;
 }
 
 HANDLE GameCapture::inject_hook(DWORD target_id) {
@@ -587,6 +648,12 @@ bool GameCapture::SetCaptureRegion(int x, int y, int w, int h) {
             std::cout << "ERROR: Recreate pStagingTexture failed!" << std::endl;
             return false;
         }
+
+        // Recreate CUDA shared texture for GPU path
+        if (!ensureCudaSharedTexture(static_cast<unsigned int>(width), static_cast<unsigned int>(height), DXGI_FORMAT_B8G8R8A8_UNORM)) {
+            // If failed, keep CPU fallback; don't fail region update.
+            m_cudaInteropEnabled = false;
+        }
     }
     return true;
 }
@@ -596,4 +663,76 @@ void GameCapture::GetCaptureRegion(int* x, int* y, int* w, int* h) const {
     if (y) *y = static_cast<int>(sourceRegion.top);
     if (w) *w = static_cast<int>(sourceRegion.right - sourceRegion.left);
     if (h) *h = static_cast<int>(sourceRegion.bottom - sourceRegion.top);
+}
+
+bool GameCapture::ensureCudaSharedTexture(unsigned int w, unsigned int h, DXGI_FORMAT format) {
+    // If texture exists and matches, nothing to do
+    if (pCudaSharedTexture) {
+        D3D11_TEXTURE2D_DESC cur{};
+        pCudaSharedTexture->GetDesc(&cur);
+        if (cur.Width == w && cur.Height == h && cur.Format == format) {
+            return m_cudaInteropEnabled && m_cudaMappedArray != nullptr;
+        }
+    }
+
+    // Cleanup previous CUDA interop objects
+    if (m_cudaGraphicsResource) {
+        cudaGraphicsUnregisterResource(m_cudaGraphicsResource);
+        m_cudaGraphicsResource = nullptr;
+    }
+    m_cudaMappedArray = nullptr;
+    m_cudaInteropEnabled = false;
+    if (pCudaSharedTexture) {
+        pCudaSharedTexture->Release();
+        pCudaSharedTexture = nullptr;
+    }
+
+    if (!pDevice) return false;
+
+    // Create a DEFAULT-usage texture suitable for CUDA interop
+    D3D11_TEXTURE2D_DESC desc{};
+    desc.Width = w;
+    desc.Height = h;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = format;
+    desc.SampleDesc.Count = 1;
+    desc.SampleDesc.Quality = 0;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    desc.CPUAccessFlags = 0;
+    desc.MiscFlags = 0;
+
+    HRESULT hr = pDevice->CreateTexture2D(&desc, nullptr, &pCudaSharedTexture);
+    if (FAILED(hr) || !pCudaSharedTexture) {
+        std::cout << "[GameCapture] Failed to create CUDA shared texture" << std::endl;
+        return false;
+    }
+
+    // Register and map with CUDA
+    cudaError_t cerr = cudaGraphicsD3D11RegisterResource(&m_cudaGraphicsResource, pCudaSharedTexture, cudaGraphicsRegisterFlagsNone);
+    if (cerr != cudaSuccess) {
+        std::cout << "[GameCapture] cudaGraphicsD3D11RegisterResource failed: " << cudaGetErrorString(cerr) << std::endl;
+        return false;
+    }
+
+    cerr = cudaGraphicsMapResources(1, &m_cudaGraphicsResource, 0);
+    if (cerr != cudaSuccess) {
+        std::cout << "[GameCapture] cudaGraphicsMapResources failed: " << cudaGetErrorString(cerr) << std::endl;
+        cudaGraphicsUnregisterResource(m_cudaGraphicsResource);
+        m_cudaGraphicsResource = nullptr;
+        return false;
+    }
+
+    cerr = cudaGraphicsSubResourceGetMappedArray(&m_cudaMappedArray, m_cudaGraphicsResource, 0, 0);
+    if (cerr != cudaSuccess) {
+        std::cout << "[GameCapture] cudaGraphicsSubResourceGetMappedArray failed: " << cudaGetErrorString(cerr) << std::endl;
+        cudaGraphicsUnmapResources(1, &m_cudaGraphicsResource, 0);
+        cudaGraphicsUnregisterResource(m_cudaGraphicsResource);
+        m_cudaGraphicsResource = nullptr;
+        return false;
+    }
+
+    m_cudaInteropEnabled = true;
+    return true;
 }
