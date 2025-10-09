@@ -1896,10 +1896,14 @@ bool UnifiedGraphPipeline::waitForCaptureCompletion() {
         return false;
     }
 
-    cudaError_t syncErr = cudaEventSynchronize(m_captureReadyEvent->get());
-    if (syncErr != cudaSuccess) {
-        std::cerr << "[Capture] Failed to synchronize capture event: "
-                  << cudaGetErrorString(syncErr) << std::endl;
+    cudaError_t q = cudaEventQuery(m_captureReadyEvent->get());
+    if (q == cudaErrorNotReady) {
+        // Non-blocking: capture still in flight
+        return false;
+    }
+    if (q != cudaSuccess) {
+        std::cerr << "[Capture] Failed to query capture event: "
+                  << cudaGetErrorString(q) << std::endl;
         m_captureInFlight = false;
         return false;
     }
@@ -1930,14 +1934,21 @@ bool UnifiedGraphPipeline::scheduleNextFrameCapture(bool forceSync) {
     if (m_captureInFlight && !forceSync) {
         return true;
     }
-    // If we issued mouse input last frame, wait for a new desktop frame
-    // that includes it (DXGI LastPresentTime >= input QPC).
+    // If we issued mouse input last frame, ensure we only process after a frame
+    // that includes it (DXGI LastPresentTime >= input QPC), but do not block.
     {
-        uint64_t minQpc = m_pendingInputQpc.exchange(0, std::memory_order_acq_rel);
+        uint64_t minQpc = m_pendingInputQpc.load(std::memory_order_acquire);
         if (minQpc != 0 && m_capture) {
-            // Give the game 1-2 frames to present; cap wait to ~50ms
-            const uint32_t waitMs = 50;
-            (void)m_capture->WaitForNewFrameSince(minQpc, waitMs);
+            // Query last present time if available; if not yet satisfied, skip scheduling this cycle
+            uint64_t lastQpc = 0;
+            // Optional interface: if not implemented, returns 0 and we treat as unknown (no gating)
+            lastQpc = m_capture->GetLastPresentQpc();
+            if (lastQpc != 0 && lastQpc < minQpc) {
+                // Not yet a new frame that includes our input; do not block host
+                return true;
+            }
+            // Condition satisfied or unsupported: clear pending flag
+            (void)m_pendingInputQpc.exchange(0, std::memory_order_acq_rel);
         }
     }
 
@@ -2045,13 +2056,7 @@ bool UnifiedGraphPipeline::scheduleNextFrameCapture(bool forceSync) {
     }
 
     if (useGraphCapture) {
-        cudaError_t syncErr = cudaEventSynchronize(m_captureReadyEvent->get());
-        if (syncErr != cudaSuccess) {
-            std::cerr << "[Capture] Failed to synchronize graph capture copy: "
-                      << cudaGetErrorString(syncErr) << std::endl;
-            return false;
-        }
-
+        // Non-blocking: downstream will insert a GPU-side wait on this event
         m_hasFrameData = true;
         m_lastCaptureW = static_cast<int>(width);
         m_lastCaptureH = static_cast<int>(height);
@@ -2411,7 +2416,10 @@ bool UnifiedGraphPipeline::executeFrame(cudaStream_t stream) {
 
         bool shouldDispatchMovement = m_config.enableDetection && !ctx.detection_paused.load();
         m_allowMovement.store(shouldDispatchMovement, std::memory_order_release);
-
+        // Ensure graph waits for capture copy completion without blocking the host
+        if (m_captureReadyEvent && m_captureReadyEvent->get()) {
+            cudaStreamWaitEvent(launchStream, m_captureReadyEvent->get(), 0);
+        }
         cudaError_t launchErr = cudaGraphLaunch(m_graphExec, launchStream);
         if (launchErr != cudaSuccess) {
             std::cerr << "[UnifiedGraph] Graph launch failed: "
@@ -2476,6 +2484,10 @@ bool UnifiedGraphPipeline::executeNormalPipeline(cudaStream_t stream) {
     bool shouldRunDetection = m_config.enableDetection && !ctx.detection_paused.load();
 
     if (shouldRunDetection) {
+        // Ensure any pending capture copy is visible to the pipeline stream
+        if (m_captureReadyEvent && m_captureReadyEvent->get()) {
+            cudaStreamWaitEvent(activeStream, m_captureReadyEvent->get(), 0);
+        }
         if (!performPreprocessing()) {
             return false;
         }
