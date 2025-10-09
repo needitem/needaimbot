@@ -130,13 +130,19 @@ __global__ void fusedTargetSelectionAndMovementKernel(
     int head_class_id,
     float kp_x,
     float kp_y,
+    float ki_x,
+    float ki_y,
+    float kd_x,
+    float kd_y,
+    float integral_max,
     float head_y_offset,
     float body_y_offset,
     int detection_resolution,
     Target* __restrict__ selectedTarget,
     int* __restrict__ bestTargetIndex,
     Target* __restrict__ bestTarget,
-    needaimbot::MouseMovement* __restrict__ output_movement
+    needaimbot::MouseMovement* __restrict__ output_movement,
+    needaimbot::PIDState* __restrict__ pidState
 ) {
     extern __shared__ unsigned char sharedMem[];
     float* s_distancesX = reinterpret_cast<float*>(sharedMem);
@@ -262,9 +268,35 @@ __global__ void fusedTargetSelectionAndMovementKernel(
             float error_x = target_center_x - screen_center_x;
             float error_y = target_center_y - screen_center_y;
 
-            // P controller: kp is a simple multiplier (0-1 typical range)
-            float movement_x = kp_x * error_x;
-            float movement_y = kp_y * error_y;
+            // Load previous PID state
+            float prev_error_x = pidState->prev_error_x;
+            float prev_error_y = pidState->prev_error_y;
+            float integral_x = pidState->integral_x;
+            float integral_y = pidState->integral_y;
+
+            // Update integral (with anti-windup clamping)
+            integral_x += error_x;
+            integral_y += error_y;
+
+            // Clamp integral to prevent windup
+            if (integral_x > integral_max) integral_x = integral_max;
+            if (integral_x < -integral_max) integral_x = -integral_max;
+            if (integral_y > integral_max) integral_y = integral_max;
+            if (integral_y < -integral_max) integral_y = -integral_max;
+
+            // Calculate derivative (error change)
+            float derivative_x = error_x - prev_error_x;
+            float derivative_y = error_y - prev_error_y;
+
+            // PID controller: P + I + D
+            float movement_x = kp_x * error_x + ki_x * integral_x + kd_x * derivative_x;
+            float movement_y = kp_y * error_y + ki_y * integral_y + kd_y * derivative_y;
+
+            // Save current state for next iteration
+            pidState->prev_error_x = error_x;
+            pidState->prev_error_y = error_y;
+            pidState->integral_x = integral_x;
+            pidState->integral_y = integral_y;
 
             // Round to nearest int
             int emit_dx = static_cast<int>(lroundf(movement_x));
@@ -281,6 +313,12 @@ __global__ void fusedTargetSelectionAndMovementKernel(
             }
             output_movement->dx = 0;
             output_movement->dy = 0;
+
+            // Reset PID state when no target
+            pidState->prev_error_x = 0.0f;
+            pidState->prev_error_y = 0.0f;
+            pidState->integral_x = 0.0f;
+            pidState->integral_y = 0.0f;
         }
     }
 }
@@ -811,6 +849,15 @@ void UnifiedGraphPipeline::clearMovementData() {
         if (resetErr != cudaSuccess) {
             std::cerr << "[UnifiedGraph] Failed to reset device movement buffer: "
                       << cudaGetErrorString(resetErr) << std::endl;
+        }
+    }
+
+    // Reset PID state when aimbot is deactivated
+    if (m_smallBufferArena.pidState) {
+        cudaError_t pidResetErr = cudaMemset(m_smallBufferArena.pidState, 0, sizeof(PIDState));
+        if (pidResetErr != cudaSuccess) {
+            std::cerr << "[UnifiedGraph] Failed to reset PID state buffer: "
+                      << cudaGetErrorString(pidResetErr) << std::endl;
         }
     }
 
@@ -1639,22 +1686,32 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         return;
     }
     
-    if (!m_smallBufferArena.bestTargetIndex || !m_smallBufferArena.bestTarget || !m_smallBufferArena.mouseMovement) {
+    if (!m_smallBufferArena.bestTargetIndex || !m_smallBufferArena.bestTarget || !m_smallBufferArena.mouseMovement || !m_smallBufferArena.pidState) {
         std::cerr << "[Pipeline] Target selection buffers not allocated!" << std::endl;
         return;
     }
-    
+
     static int cached_max_detections = Constants::MAX_DETECTIONS;
-    static float cached_kp_x = 0.1f;
-    static float cached_kp_y = 0.1f;
+    static float cached_kp_x = 0.5f;
+    static float cached_kp_y = 0.5f;
+    static float cached_ki_x = 0.0f;
+    static float cached_ki_y = 0.0f;
+    static float cached_kd_x = 0.3f;
+    static float cached_kd_y = 0.3f;
+    static float cached_integral_max = 100.0f;
     static float cached_head_y_offset = 0.2f;
     static float cached_body_y_offset = 0.5f;
 
     if (!m_graphCaptured) {
         std::lock_guard<std::mutex> lock(ctx.configMutex);
         cached_max_detections = ctx.config.max_detections;
-        cached_kp_x = ctx.config.pd_kp_x;
-        cached_kp_y = ctx.config.pd_kp_y;
+        cached_kp_x = ctx.config.pid_kp_x;
+        cached_kp_y = ctx.config.pid_kp_y;
+        cached_ki_x = ctx.config.pid_ki_x;
+        cached_ki_y = ctx.config.pid_ki_y;
+        cached_kd_x = ctx.config.pid_kd_x;
+        cached_kd_y = ctx.config.pid_kd_y;
+        cached_integral_max = ctx.config.pid_integral_max;
         cached_head_y_offset = ctx.config.head_y_offset;
         cached_body_y_offset = ctx.config.body_y_offset;
     }
@@ -1684,13 +1741,19 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         head_class_id,
         cached_kp_x,
         cached_kp_y,
+        cached_ki_x,
+        cached_ki_y,
+        cached_kd_x,
+        cached_kd_y,
+        cached_integral_max,
         cached_head_y_offset,
         cached_body_y_offset,
         ctx.config.detection_resolution,
         m_smallBufferArena.selectedTarget,
         m_smallBufferArena.bestTargetIndex,
         m_smallBufferArena.bestTarget,
-        m_smallBufferArena.mouseMovement
+        m_smallBufferArena.mouseMovement,
+        m_smallBufferArena.pidState
     );
 
     cudaError_t err = cudaGetLastError();
