@@ -577,20 +577,22 @@ DDACapture::FrameAcquireResult DDACapture::AcquireFrame() {
         }
     }
 
-    // Also copy to staging texture for CPU fallback path
-    if (useBox) {
-        m_context->CopySubresourceRegion(
-            m_stagingTexture.Get(),
-            0,
-            0,
-            0,
-            0,
-            frameTexture.Get(),
-            0,
-            &captureBox
-        );
-    } else {
-        m_context->CopyResource(m_stagingTexture.Get(), frameTexture.Get());
+    // Also copy to staging texture for CPU fallback path (only if CUDA interop is not available)
+    if (!m_cudaInteropEnabled) {
+        if (useBox) {
+            m_context->CopySubresourceRegion(
+                m_stagingTexture.Get(),
+                0,
+                0,
+                0,
+                0,
+                frameTexture.Get(),
+                0,
+                &captureBox
+            );
+        } else {
+            m_context->CopyResource(m_stagingTexture.Get(), frameTexture.Get());
+        }
     }
 
     hr = m_duplication->ReleaseFrame();
@@ -600,59 +602,7 @@ DDACapture::FrameAcquireResult DDACapture::AcquireFrame() {
         return FrameAcquireResult::kError;
     }
 
-    D3D11_MAPPED_SUBRESOURCE mapped{};
-    hr = m_context->Map(m_stagingTexture.Get(), 0, D3D11_MAP_READ, 0, &mapped);
-    if (FAILED(hr)) {
-        std::cerr << "[DDACapture] Failed to map staging texture: 0x" << std::hex << hr << std::dec << std::endl;
-        return FrameAcquireResult::kError;
-    }
-
-    size_t requiredSize = static_cast<size_t>(captureWidth) * captureHeight * kBytesPerPixel;
-    if (!EnsureFrameBuffer(requiredSize)) {
-        m_context->Unmap(m_stagingTexture.Get(), 0);
-        return FrameAcquireResult::kError;
-    }
-
-    std::function<void(void*, unsigned int, unsigned int, unsigned int)> callback;
-    void* callbackData = nullptr;
-    unsigned int callbackWidth = captureWidth;
-    unsigned int callbackHeight = captureHeight;
-    unsigned int callbackSize = static_cast<unsigned int>(requiredSize);
-
-    {
-        std::lock_guard<std::mutex> lock(m_frameMutex);
-        if (!m_frameBuffer) {
-            m_context->Unmap(m_stagingTexture.Get(), 0);
-            return FrameAcquireResult::kError;
-        }
-
-        unsigned char* dst = m_frameBuffer->get();
-        const unsigned char* srcBase = static_cast<const unsigned char*>(mapped.pData);
-        const UINT srcPitch = mapped.RowPitch;
-        const UINT bytesPerRow = captureWidth * kBytesPerPixel;
-
-        if (srcPitch == bytesPerRow) {
-            std::memcpy(dst, srcBase, bytesPerRow * captureHeight);
-        } else {
-            for (UINT row = 0; row < captureHeight; ++row) {
-                const unsigned char* srcRow = srcBase + row * srcPitch;
-                std::memcpy(dst + row * bytesPerRow, srcRow, bytesPerRow);
-            }
-        }
-
-        m_captureWidth = captureWidth;
-        m_captureHeight = captureHeight;
-        m_bufferSize = requiredSize;
-        callback = m_frameCallback;
-        callbackData = dst;
-        callbackWidth = m_captureWidth;
-        callbackHeight = m_captureHeight;
-        callbackSize = static_cast<unsigned int>(m_bufferSize);
-    }
-
-    m_context->Unmap(m_stagingTexture.Get(), 0);
-
-    // Update present time/frame counter and notify after CPU buffer is valid
+    // Update present time/frame counter and notify as soon as the GPU/CPU copy is issued
     {
         std::lock_guard<std::mutex> lk(m_presentMutex);
         m_lastPresentQpc.store(frameInfo.LastPresentTime.QuadPart, std::memory_order_release);
@@ -660,8 +610,65 @@ DDACapture::FrameAcquireResult DDACapture::AcquireFrame() {
     }
     m_presentCv.notify_all();
 
-    if (callback) {
-        callback(callbackData, callbackWidth, callbackHeight, callbackSize);
+    // Always set the current capture dimensions
+    m_captureWidth = captureWidth;
+    m_captureHeight = captureHeight;
+
+    // CPU fallback copy only when CUDA interop is disabled
+    if (!m_cudaInteropEnabled) {
+        D3D11_MAPPED_SUBRESOURCE mapped{};
+        hr = m_context->Map(m_stagingTexture.Get(), 0, D3D11_MAP_READ, 0, &mapped);
+        if (FAILED(hr)) {
+            std::cerr << "[DDACapture] Failed to map staging texture: 0x" << std::hex << hr << std::dec << std::endl;
+            return FrameAcquireResult::kError;
+        }
+
+        size_t requiredSize = static_cast<size_t>(captureWidth) * captureHeight * kBytesPerPixel;
+        if (!EnsureFrameBuffer(requiredSize)) {
+            m_context->Unmap(m_stagingTexture.Get(), 0);
+            return FrameAcquireResult::kError;
+        }
+
+        std::function<void(void*, unsigned int, unsigned int, unsigned int)> callback;
+        void* callbackData = nullptr;
+        unsigned int callbackWidth = captureWidth;
+        unsigned int callbackHeight = captureHeight;
+        unsigned int callbackSize = static_cast<unsigned int>(requiredSize);
+
+        {
+            std::lock_guard<std::mutex> lock(m_frameMutex);
+            if (!m_frameBuffer) {
+                m_context->Unmap(m_stagingTexture.Get(), 0);
+                return FrameAcquireResult::kError;
+            }
+
+            unsigned char* dst = m_frameBuffer->get();
+            const unsigned char* srcBase = static_cast<const unsigned char*>(mapped.pData);
+            const UINT srcPitch = mapped.RowPitch;
+            const UINT bytesPerRow = captureWidth * kBytesPerPixel;
+
+            if (srcPitch == bytesPerRow) {
+                std::memcpy(dst, srcBase, bytesPerRow * captureHeight);
+            } else {
+                for (UINT row = 0; row < captureHeight; ++row) {
+                    const unsigned char* srcRow = srcBase + row * srcPitch;
+                    std::memcpy(dst + row * bytesPerRow, srcRow, bytesPerRow);
+                }
+            }
+
+            m_bufferSize = requiredSize;
+            callback = m_frameCallback;
+            callbackData = dst;
+            callbackWidth = m_captureWidth;
+            callbackHeight = m_captureHeight;
+            callbackSize = static_cast<unsigned int>(m_bufferSize);
+        }
+
+        m_context->Unmap(m_stagingTexture.Get(), 0);
+
+        if (callback) {
+            callback(callbackData, callbackWidth, callbackHeight, callbackSize);
+        }
     }
 
     return FrameAcquireResult::kFrameCaptured;
