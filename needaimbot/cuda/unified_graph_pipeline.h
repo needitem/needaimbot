@@ -29,6 +29,13 @@ struct MouseMovement {
     int dy;
 };
 
+struct PIDState {
+    float prev_error_x;
+    float prev_error_y;
+    float integral_x;
+    float integral_y;
+};
+
 struct SmallBufferArena {
     int* numDetections;
     int* outputCount;
@@ -40,6 +47,7 @@ struct SmallBufferArena {
     Target* selectedTarget;
     Target* bestTarget;
     MouseMovement* mouseMovement;
+    PIDState* pidState;
 
     unsigned char* allowFlags;
     bool* keepFlags;
@@ -74,6 +82,10 @@ struct SmallBufferArena {
         mouseMovement = reinterpret_cast<MouseMovement*>(basePtr + offset);
         offset += sizeof(MouseMovement);
 
+        offset = (offset + alignof(PIDState) - 1) & ~(alignof(PIDState) - 1);
+        pidState = reinterpret_cast<PIDState*>(basePtr + offset);
+        offset += sizeof(PIDState);
+
         allowFlags = reinterpret_cast<unsigned char*>(basePtr + offset);
         offset += 64;
 
@@ -97,6 +109,9 @@ struct SmallBufferArena {
 
         size = (size + alignof(MouseMovement) - 1) & ~(alignof(MouseMovement) - 1);
         size += sizeof(MouseMovement);
+
+        size = (size + alignof(PIDState) - 1) & ~(alignof(PIDState) - 1);
+        size += sizeof(PIDState);
 
         size += 64;
         size = (size + alignof(bool) - 1) & ~(alignof(bool) - 1);

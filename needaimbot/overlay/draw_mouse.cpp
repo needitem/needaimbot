@@ -20,68 +20,118 @@ static void draw_movement_controls()
 {
     auto& ctx = AppContext::getInstance();
 
-    UIHelpers::BeginCard("Mouse Movement Settings");
+    UIHelpers::BeginCard("PID Controller Settings");
 
-    UIHelpers::BeautifulText("Controls how the aimbot moves the mouse to track targets.", UIHelpers::GetAccentColor(0.8f));
-    UIHelpers::BeautifulText("Kp is in pixels/second. Higher = faster aiming. FPS-independent.", ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
+    UIHelpers::BeautifulText("PID controller provides smooth, accurate tracking with oscillation suppression.", UIHelpers::GetAccentColor(0.8f));
+    UIHelpers::BeautifulText("P = Responsiveness, I = Tracking moving targets, D = Dampening oscillation", ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
     UIHelpers::CompactSpacer();
 
-    UIHelpers::SettingsSubHeader("Proportional Gain (Kp) - pixels/second");
-    
-    // Simple P controller gains in two columns
-    if (ImGui::BeginTable("GainsTable", 2, ImGuiTableFlags_None)) {
-        ImGui::TableSetupColumn("X-Axis (Horizontal)", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("Y-Axis (Vertical)", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableHeadersRow();
+    if (ImGui::BeginTabBar("PIDTabs")) {
+        if (ImGui::BeginTabItem("Proportional (P)")) {
+            UIHelpers::SettingsSubHeader("Proportional Gain (Kp)");
+            UIHelpers::BeautifulText("Controls response speed. Higher = faster aiming, but may overshoot.", ImVec4(0.8f, 0.8f, 0.8f, 1.0f));
+            UIHelpers::CompactSpacer();
 
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        ImGui::Text("Gain (Kp)");
-        ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x - 60);
-        if (ImGui::InputFloat("##KpX", &ctx.config.pd_kp_x, 0.0f, 0.0f, "%.3f")) {
-            if (ctx.config.pd_kp_x < 0.0f) ctx.config.pd_kp_x = 0.0f;
-            if (ctx.config.pd_kp_x > 100.0f) ctx.config.pd_kp_x = 100.0f;
-            SAVE_PROFILE();
-        }
-        ImGui::PopItemWidth();
-        ImGui::SameLine();
-        if (ImGui::Button("-##KpXMinus", ImVec2(25, 0))) {
-            ctx.config.pd_kp_x -= 0.01f;
-            if (ctx.config.pd_kp_x < 0.0f) ctx.config.pd_kp_x = 0.0f;
-            SAVE_PROFILE();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("+##KpXPlus", ImVec2(25, 0))) {
-            ctx.config.pd_kp_x += 0.01f;
-            if (ctx.config.pd_kp_x > 100.0f) ctx.config.pd_kp_x = 100.0f;
-            SAVE_PROFILE();
-        }
-        UIHelpers::HelpMarker("How strongly to respond to target distance (higher = faster but can overshoot)");
-        
-        ImGui::TableSetColumnIndex(1);
-        ImGui::Text("Gain (Kp)");
-        ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x - 60);
-        if (ImGui::InputFloat("##KpY", &ctx.config.pd_kp_y, 0.0f, 0.0f, "%.3f")) {
-            if (ctx.config.pd_kp_y < 0.0f) ctx.config.pd_kp_y = 0.0f;
-            if (ctx.config.pd_kp_y > 100.0f) ctx.config.pd_kp_y = 100.0f;
-            SAVE_PROFILE();
-        }
-        ImGui::PopItemWidth();
-        ImGui::SameLine();
-        if (ImGui::Button("-##KpYMinus", ImVec2(25, 0))) {
-            ctx.config.pd_kp_y -= 0.01f;
-            if (ctx.config.pd_kp_y < 0.0f) ctx.config.pd_kp_y = 0.0f;
-            SAVE_PROFILE();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("+##KpYPlus", ImVec2(25, 0))) {
-            ctx.config.pd_kp_y += 0.01f;
-            if (ctx.config.pd_kp_y > 100.0f) ctx.config.pd_kp_y = 100.0f;
-            SAVE_PROFILE();
-        }
-        UIHelpers::HelpMarker("Proportional gain multiplier. 1.0 = move exactly by error distance. Higher = faster but may overshoot. Recommended: 0.3-1.0.");
+            if (ImGui::BeginTable("KpTable", 2, ImGuiTableFlags_None)) {
+                ImGui::TableSetupColumn("X-Axis", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn("Y-Axis", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableHeadersRow();
 
-        ImGui::EndTable();
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::PushItemWidth(-1);
+                if (ImGui::SliderFloat("##KpX", &ctx.config.pid_kp_x, 0.0f, 2.0f, "%.3f")) {
+                    SAVE_PROFILE();
+                }
+                ImGui::PopItemWidth();
+
+                ImGui::TableSetColumnIndex(1);
+                ImGui::PushItemWidth(-1);
+                if (ImGui::SliderFloat("##KpY", &ctx.config.pid_kp_y, 0.0f, 2.0f, "%.3f")) {
+                    SAVE_PROFILE();
+                }
+                ImGui::PopItemWidth();
+
+                ImGui::EndTable();
+            }
+            UIHelpers::HelpMarker("Recommended: 0.3-0.8. Higher values = faster response but more overshoot.");
+            ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem("Integral (I)")) {
+            UIHelpers::SettingsSubHeader("Integral Gain (Ki)");
+            UIHelpers::BeautifulText("Eliminates steady-state error. Essential for tracking moving targets.", ImVec4(0.8f, 0.8f, 0.8f, 1.0f));
+            UIHelpers::BeautifulText("Set to 0 for PD controller (no integral). Use small values (0.01-0.1).", UIHelpers::GetWarningColor());
+            UIHelpers::CompactSpacer();
+
+            if (ImGui::BeginTable("KiTable", 2, ImGuiTableFlags_None)) {
+                ImGui::TableSetupColumn("X-Axis", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn("Y-Axis", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableHeadersRow();
+
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::PushItemWidth(-1);
+                if (ImGui::SliderFloat("##KiX", &ctx.config.pid_ki_x, 0.0f, 0.3f, "%.4f")) {
+                    SAVE_PROFILE();
+                }
+                ImGui::PopItemWidth();
+
+                ImGui::TableSetColumnIndex(1);
+                ImGui::PushItemWidth(-1);
+                if (ImGui::SliderFloat("##KiY", &ctx.config.pid_ki_y, 0.0f, 0.3f, "%.4f")) {
+                    SAVE_PROFILE();
+                }
+                ImGui::PopItemWidth();
+
+                ImGui::EndTable();
+            }
+            UIHelpers::HelpMarker("Start with 0 (PD mode). Increase gradually to 0.05-0.1 if target tracking lags.");
+
+            UIHelpers::CompactSpacer();
+            UIHelpers::SettingsSubHeader("Anti-Windup Limit");
+            ImGui::PushItemWidth(-1);
+            if (ImGui::SliderFloat("##IntegralMax", &ctx.config.pid_integral_max, 10.0f, 500.0f, "%.0f px")) {
+                SAVE_PROFILE();
+            }
+            ImGui::PopItemWidth();
+            UIHelpers::HelpMarker("Prevents integral from accumulating too much (windup protection). Default: 100px.");
+
+            ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem("Derivative (D)")) {
+            UIHelpers::SettingsSubHeader("Derivative Gain (Kd)");
+            UIHelpers::BeautifulText("Suppresses oscillation by damping sudden changes. Higher = smoother.", ImVec4(0.8f, 0.8f, 0.8f, 1.0f));
+            UIHelpers::CompactSpacer();
+
+            if (ImGui::BeginTable("KdTable", 2, ImGuiTableFlags_None)) {
+                ImGui::TableSetupColumn("X-Axis", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn("Y-Axis", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableHeadersRow();
+
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::PushItemWidth(-1);
+                if (ImGui::SliderFloat("##KdX", &ctx.config.pid_kd_x, 0.0f, 1.0f, "%.3f")) {
+                    SAVE_PROFILE();
+                }
+                ImGui::PopItemWidth();
+
+                ImGui::TableSetColumnIndex(1);
+                ImGui::PushItemWidth(-1);
+                if (ImGui::SliderFloat("##KdY", &ctx.config.pid_kd_y, 0.0f, 1.0f, "%.3f")) {
+                    SAVE_PROFILE();
+                }
+                ImGui::PopItemWidth();
+
+                ImGui::EndTable();
+            }
+            UIHelpers::HelpMarker("Recommended: 0.2-0.5. Higher values reduce oscillation but may slow response.");
+            ImGui::EndTabItem();
+        }
+
+        ImGui::EndTabBar();
     }
 
     UIHelpers::EndCard();

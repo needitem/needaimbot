@@ -10,7 +10,7 @@ GameCapture::GameCapture(int fw, int fh, int sw, int sh, const std::string& game
 	screen_width(sw), screen_height(sh), width(fw), height(fh), game_name(game), hwnd(nullptr), process_id(0), thread_id(0),
     hook_restart(nullptr), hook_stop(nullptr), hook_ready(nullptr), hook_exit(nullptr), hook_init(nullptr),
     keepalive_mutex(nullptr), hook_info_map(nullptr), hook_data_map(nullptr),
-    shared_hook_info(nullptr), shared_shtex_data(nullptr),
+    shared_hook_info(nullptr), shared_data(nullptr),
 	pDevice(nullptr), pContext(nullptr), pSharedResource(nullptr), pStagingTexture(nullptr), texture_mutexes{ nullptr, nullptr }
 {
 	if (!initialize()) {
@@ -38,7 +38,7 @@ GameCapture::~GameCapture() {
     if (pContext) pContext->Release();
     if (pDevice) pDevice->Release();
     if (shared_hook_info) UnmapViewOfFile(shared_hook_info);
-    if (shared_shtex_data) UnmapViewOfFile(shared_shtex_data);
+    if (shared_data) UnmapViewOfFile(shared_data);
     if (texture_mutexes[0]) CloseHandle(texture_mutexes[0]);
     if (texture_mutexes[1]) CloseHandle(texture_mutexes[1]);
     if (hook_data_map) CloseHandle(hook_data_map);
@@ -55,7 +55,7 @@ GameCapture::~GameCapture() {
     hook_exit = nullptr;
     hook_init = nullptr;
     shared_hook_info = nullptr;
-    shared_shtex_data = nullptr;
+    shared_data = nullptr;
     texture_mutexes[0] = nullptr;
     texture_mutexes[1] = nullptr;
     hook_data_map = nullptr;
@@ -230,12 +230,12 @@ bool GameCapture::initialize() {
     HRESULT hr;
 
     while (true) {
-        shared_shtex_data = nullptr;
+        shared_data = nullptr;
         try_count++;
 
         // Keep retrying until we get the hook_data_map
         int inner_tries = 0;
-        while (!shared_shtex_data) {
+        while (!shared_data) {
             if (hook_data_map) {
                 CloseHandle(hook_data_map);
                 hook_data_map = nullptr;
@@ -244,8 +244,8 @@ bool GameCapture::initialize() {
             hook_data_map = OpenDataMap(shared_hook_info->window, shared_hook_info->map_id);
 
             if (hook_data_map)
-                shared_shtex_data = static_cast<shtex_data*>(MapViewOfFile(hook_data_map, FILE_MAP_ALL_ACCESS, 0, 0, shared_hook_info->map_size));
-            if (shared_shtex_data) break;
+                shared_data = MapViewOfFile(hook_data_map, FILE_MAP_ALL_ACCESS, 0, 0, shared_hook_info->map_size);
+            if (shared_data) break;
             Sleep(100);
             inner_tries++;
             if (inner_tries > 100) { // ~10s max
@@ -253,8 +253,8 @@ bool GameCapture::initialize() {
             }
         }
 
-        if (!shared_shtex_data) {
-            std::cout << "Failed to map shared texture data" << std::endl;
+        if (!shared_data) {
+            std::cout << "Failed to map shared data" << std::endl;
             return false;
         }
 
@@ -264,30 +264,62 @@ bool GameCapture::initialize() {
             return false;
         }
 
-        hr = pDevice->OpenSharedResource((HANDLE)(uintptr_t)shared_shtex_data->tex_handle, __uuidof(ID3D11Resource), (void**)&pSharedResource);
-        if (FAILED(hr)) {
-            if (pSharedResource) {
-                pSharedResource->Release();
-                pSharedResource = nullptr;
+        // Handle different capture types
+        if (shared_hook_info->type == CAPTURE_TYPE_TEXTURE) {
+            shtex_data* shtex = static_cast<shtex_data*>(shared_data);
+            hr = pDevice->OpenSharedResource((HANDLE)(uintptr_t)shtex->tex_handle, __uuidof(ID3D11Resource), (void**)&pSharedResource);
+            if (FAILED(hr)) {
+                if (pSharedResource) {
+                    pSharedResource->Release();
+                    pSharedResource = nullptr;
+                }
+                if (pContext) {
+                    pContext->Release();
+                    pContext = nullptr;
+                }
+                if (pDevice) {
+                    pDevice->Release();
+                    pDevice = nullptr;
+                }
+
+                if (try_count >= 5) {
+                    std::cout << "ERROR: Failed to open shared D3D resource (texture mode)" << std::endl;
+                    return false;
+                }
+
+                // Keep retrying to get the new valid tex_handle,
+                // since minimizing the game window sometimes causes the tex_handle to become invalid
+                Sleep(50);
+                continue;
             }
-            if (pContext) {
-                pContext->Release();
+        } else if (shared_hook_info->type == CAPTURE_TYPE_MEMORY) {
+            shmem_data* shmem = static_cast<shmem_data*>(shared_data);
+            // For memory mode, we'll handle texture access in get_frame() using offsets
+            // For now, we need to create a texture based on hook_info dimensions
+            D3D11_TEXTURE2D_DESC memDesc = {};
+            memDesc.Width = shared_hook_info->cx;
+            memDesc.Height = shared_hook_info->cy;
+            memDesc.MipLevels = 1;
+            memDesc.ArraySize = 1;
+            memDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+            memDesc.SampleDesc.Count = 1;
+            memDesc.Usage = D3D11_USAGE_DYNAMIC;
+            memDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            memDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+
+            ID3D11Texture2D* tempTex = nullptr;
+            hr = pDevice->CreateTexture2D(&memDesc, nullptr, &tempTex);
+            if (FAILED(hr)) {
+                std::cout << "ERROR: Failed to create texture for memory mode" << std::endl;
+                if (pContext) pContext->Release();
+                if (pDevice) pDevice->Release();
                 pContext = nullptr;
-            }
-            if (pDevice) {
-                pDevice->Release();
                 pDevice = nullptr;
+                if (try_count >= 5) return false;
+                Sleep(50);
+                continue;
             }
-
-            if (try_count >= 5) {
-                std::cout << "ERROR: Failed to open shared D3D resource" << std::endl;
-                return false;
-            }
-
-            // Keep retrying to get the new valid tex_handle, 
-            // since minimizing the game window sometimes causes the tex_handle to become invalid
-            Sleep(50);
-            continue;
+            pSharedResource = tempTex;
         }
 
         break;
@@ -352,7 +384,56 @@ Image GameCapture::get_frame() {
         return img;
     }
 
-    pContext->CopySubresourceRegion(pStagingTexture, 0, 0, 0, 0, pSharedResource, 0, &sourceRegion);
+    // Handle different capture types
+    if (shared_hook_info->type == CAPTURE_TYPE_TEXTURE) {
+        // Texture mode: direct GPU texture copy (original implementation)
+        pContext->CopySubresourceRegion(pStagingTexture, 0, 0, 0, 0, pSharedResource, 0, &sourceRegion);
+    } else if (shared_hook_info->type == CAPTURE_TYPE_MEMORY) {
+        // Memory mode: copy from shared memory with mutex synchronization
+        shmem_data* shmem = static_cast<shmem_data*>(shared_data);
+        int tex_index = shmem->last_tex;
+
+        if (tex_index < 0 || tex_index >= 2) {
+            std::cout << "ERROR: Invalid texture index: " << tex_index << std::endl;
+            return img;
+        }
+
+        HANDLE mutex = texture_mutexes[tex_index];
+        DWORD wait_result = WaitForSingleObject(mutex, 100);
+
+        if (wait_result != WAIT_OBJECT_0) {
+            std::cout << "ERROR: Failed to acquire texture mutex (timeout)" << std::endl;
+            return img;
+        }
+
+        // Get pointer to shared memory texture data
+        uint32_t offset = (tex_index == 0) ? shmem->tex1_offset : shmem->tex2_offset;
+        BYTE* shmem_ptr = reinterpret_cast<BYTE*>(shared_data) + offset;
+
+        // Map the staging texture and copy from shared memory
+        D3D11_MAPPED_SUBRESOURCE mapped = {};
+        HRESULT hr = pContext->Map(pStagingTexture, 0, D3D11_MAP_WRITE, 0, &mapped);
+        if (SUCCEEDED(hr)) {
+            // Copy ROI from shared memory
+            int copy_width = min(width, (int)shared_hook_info->cx);
+            int copy_height = min(height, (int)shared_hook_info->cy);
+            int src_pitch = shared_hook_info->pitch;
+            int row_bytes = copy_width * 4;
+
+            for (int y = 0; y < copy_height; y++) {
+                memcpy((BYTE*)mapped.pData + y * mapped.RowPitch,
+                       shmem_ptr + y * src_pitch,
+                       row_bytes);
+            }
+            pContext->Unmap(pStagingTexture, 0);
+        } else {
+            std::cout << "ERROR: Failed to map staging texture for memory mode" << std::endl;
+        }
+
+        ReleaseMutex(mutex);
+
+        // For memory mode, we already have data in staging texture, no need to copy from pSharedResource
+    }
 
     D3D11_MAPPED_SUBRESOURCE mapped = {};
     HRESULT hr = pContext->Map(pStagingTexture, 0, D3D11_MAP_READ, 0, &mapped);
@@ -419,10 +500,55 @@ bool GameCapture::GetLatestFrameGPU(cudaArray_t* cudaArray, unsigned int* outWid
         m_cudaMappedArray = nullptr;
     }
 
-    // Copy current ROI from shared source to CUDA-shared texture (GPU copy, zero CPU)
-    pContext->CopySubresourceRegion(pCudaSharedTexture, 0, 0, 0, 0, pSharedResource, 0, &sourceRegion);
-    // Optionally flush context to push copy promptly
-    // pContext->Flush();
+    // Handle different capture types
+    if (shared_hook_info->type == CAPTURE_TYPE_TEXTURE) {
+        // Texture mode: direct GPU texture copy (original implementation)
+        pContext->CopySubresourceRegion(pCudaSharedTexture, 0, 0, 0, 0, pSharedResource, 0, &sourceRegion);
+    } else if (shared_hook_info->type == CAPTURE_TYPE_MEMORY) {
+        // Memory mode: copy from shared memory with mutex synchronization, then upload to GPU
+        shmem_data* shmem = static_cast<shmem_data*>(shared_data);
+        int tex_index = shmem->last_tex;
+
+        if (tex_index < 0 || tex_index >= 2) {
+            return false;
+        }
+
+        HANDLE mutex = texture_mutexes[tex_index];
+        DWORD wait_result = WaitForSingleObject(mutex, 100);
+
+        if (wait_result != WAIT_OBJECT_0) {
+            return false;
+        }
+
+        // Get pointer to shared memory texture data
+        uint32_t offset = (tex_index == 0) ? shmem->tex1_offset : shmem->tex2_offset;
+        BYTE* shmem_ptr = reinterpret_cast<BYTE*>(shared_data) + offset;
+
+        // Upload from shared memory to staging texture first (CPU accessible)
+        D3D11_MAPPED_SUBRESOURCE mapped = {};
+        HRESULT hr = pContext->Map(pStagingTexture, 0, D3D11_MAP_WRITE, 0, &mapped);
+        if (SUCCEEDED(hr)) {
+            int copy_width = min(width, (int)shared_hook_info->cx);
+            int copy_height = min(height, (int)shared_hook_info->cy);
+            int src_pitch = shared_hook_info->pitch;
+            int row_bytes = copy_width * 4;
+
+            for (int y = 0; y < copy_height; y++) {
+                memcpy((BYTE*)mapped.pData + y * mapped.RowPitch,
+                       shmem_ptr + y * src_pitch,
+                       row_bytes);
+            }
+            pContext->Unmap(pStagingTexture, 0);
+
+            // Now copy from staging to CUDA shared texture (GPU copy)
+            pContext->CopyResource(pCudaSharedTexture, pStagingTexture);
+        } else {
+            ReleaseMutex(mutex);
+            return false;
+        }
+
+        ReleaseMutex(mutex);
+    }
 
     // Remap so CUDA sees the updated contents
     if (m_cudaGraphicsResource) {

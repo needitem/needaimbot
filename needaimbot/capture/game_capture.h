@@ -52,7 +52,7 @@ private:
 	HANDLE keepalive_mutex, hook_info_map, hook_data_map;
 	HANDLE texture_mutexes[2];
 	hook_info* shared_hook_info;
-	shtex_data* shared_shtex_data;
+	void* shared_data;  // Can be shtex_data* or shmem_data* depending on capture type
     ID3D11Device* pDevice;
     ID3D11DeviceContext* pContext;
     ID3D11Resource* pSharedResource;
