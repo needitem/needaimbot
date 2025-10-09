@@ -1945,7 +1945,8 @@ bool UnifiedGraphPipeline::scheduleNextFrameCapture(bool forceSync) {
             lastQpc = m_capture->GetLastPresentQpc();
             if (lastQpc != 0 && lastQpc < minQpc) {
                 // Not yet a new frame that includes our input; do not block host
-                return true;
+                // Signal caller that no capture was scheduled this cycle
+                return false;
             }
             // Condition satisfied or unsupported: clear pending flag
             (void)m_pendingInputQpc.exchange(0, std::memory_order_acq_rel);
