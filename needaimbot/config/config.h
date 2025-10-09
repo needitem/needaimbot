@@ -196,9 +196,14 @@ public:
     bool use_cuda_graph = false; // Enable CUDA Graph optimization (faster but not compatible with all models)
     
     
-    // P Controller settings
-    float pd_kp_x = 0.5f;   // Proportional gain for X axis (0-1 typical, 1.0 = move by full error)
-    float pd_kp_y = 0.5f;   // Proportional gain for Y axis (0-1 typical, 1.0 = move by full error)
+    // PID Controller settings
+    float pid_kp_x = 0.5f;   // Proportional gain for X axis (0-1 typical, 1.0 = move by full error)
+    float pid_kp_y = 0.5f;   // Proportional gain for Y axis (0-1 typical, 1.0 = move by full error)
+    float pid_ki_x = 0.0f;   // Integral gain for X axis (0-0.1 typical, for tracking moving targets)
+    float pid_ki_y = 0.0f;   // Integral gain for Y axis (0-0.1 typical, for tracking moving targets)
+    float pid_kd_x = 0.3f;   // Derivative gain for X axis (0-1 typical, for oscillation dampening)
+    float pid_kd_y = 0.3f;   // Derivative gain for Y axis (0-1 typical, for oscillation dampening)
+    float pid_integral_max = 100.0f;  // Max integral windup limit (pixels)
 
     // Active profile management
     std::string active_profile_name = "Default";

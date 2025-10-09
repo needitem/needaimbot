@@ -78,8 +78,13 @@ bool Config::loadConfig(const std::string& filename)
         crosshair_offset_x = 0.0f;
         crosshair_offset_y = 0.0f;
 
-        pd_kp_x = 0.5f;  // Proportional gain (0-1 typical)
-        pd_kp_y = 0.5f;
+        pid_kp_x = 0.5f;  // Proportional gain (0-1 typical)
+        pid_kp_y = 0.5f;
+        pid_ki_x = 0.0f;  // Integral gain (0 = PD controller)
+        pid_ki_y = 0.0f;
+        pid_kd_x = 0.3f;  // Derivative gain for dampening
+        pid_kd_y = 0.3f;
+        pid_integral_max = 100.0f;  // Windup limit
 
         // Aim+shoot offset defaults
         enable_aim_shoot_offset = false;
@@ -267,10 +272,15 @@ bool Config::loadConfig(const std::string& filename)
     easynorecoil = get_bool_ini("Mouse", "easynorecoil", false);
     easynorecoilstrength = static_cast<float>(get_double_ini("Mouse", "easynorecoilstrength", 0.0));
     
-    
-    // Load P controller settings (pixels/second)
-    pd_kp_x = static_cast<float>(get_double_ini("PController", "pd_kp_x", 24.0));
-    pd_kp_y = static_cast<float>(get_double_ini("PController", "pd_kp_y", 24.0));
+
+    // Load PID controller settings
+    pid_kp_x = static_cast<float>(get_double_ini("PIDController", "pid_kp_x", 0.5));
+    pid_kp_y = static_cast<float>(get_double_ini("PIDController", "pid_kp_y", 0.5));
+    pid_ki_x = static_cast<float>(get_double_ini("PIDController", "pid_ki_x", 0.0));
+    pid_ki_y = static_cast<float>(get_double_ini("PIDController", "pid_ki_y", 0.0));
+    pid_kd_x = static_cast<float>(get_double_ini("PIDController", "pid_kd_x", 0.3));
+    pid_kd_y = static_cast<float>(get_double_ini("PIDController", "pid_kd_y", 0.3));
+    pid_integral_max = static_cast<float>(get_double_ini("PIDController", "pid_integral_max", 100.0));
 
     input_method = get_string_ini("Mouse", "input_method", "WIN32");
     
@@ -481,10 +491,15 @@ bool Config::saveConfig(const std::string& filename)
     file << "crouch_recoil_enabled = " << (crouch_recoil_enabled ? "true" : "false") << "\n";
     file << "crouch_recoil_reduction = " << crouch_recoil_reduction << "\n\n";
 
-    file << "[PController]\n";
+    file << "[PIDController]\n";
     file << std::fixed << std::setprecision(6);
-    file << "pd_kp_x = " << pd_kp_x << "\n";
-    file << "pd_kp_y = " << pd_kp_y << "\n";
+    file << "pid_kp_x = " << pid_kp_x << "\n";
+    file << "pid_kp_y = " << pid_kp_y << "\n";
+    file << "pid_ki_x = " << pid_ki_x << "\n";
+    file << "pid_ki_y = " << pid_ki_y << "\n";
+    file << "pid_kd_x = " << pid_kd_x << "\n";
+    file << "pid_kd_y = " << pid_kd_y << "\n";
+    file << "pid_integral_max = " << pid_integral_max << "\n\n";
 
     file << "[Recoil]\n";
     file << "active_scope_magnification = " << active_scope_magnification << "\n\n";
