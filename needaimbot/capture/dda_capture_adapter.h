@@ -25,6 +25,10 @@ public:
         return m_impl ? m_impl->WaitForNewFrameSince(minPresentQpc, timeoutMs) : true;
     }
 
+    uint64_t GetLastPresentQpc() const override {
+        return m_impl ? m_impl->GetLastPresentQpc() : 0;
+    }
+
     int GetScreenWidth() const override { return m_impl ? m_impl->GetScreenWidth() : 0; }
     int GetScreenHeight() const override { return m_impl ? m_impl->GetScreenHeight() : 0; }
     bool SetCaptureRegion(int x, int y, int width, int height) override {
@@ -37,4 +41,3 @@ public:
 private:
     DDACapture* m_impl;
 };
-

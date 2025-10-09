@@ -26,6 +26,8 @@ public:
 
     // Synchronize to a frame presented after given QPC; return true on success/timeout handled.
     virtual bool WaitForNewFrameSince(uint64_t minPresentQpc, uint32_t timeoutMs) = 0;
+    // Optional: last DXGI LastPresentTime (QPC). Return 0 if unsupported.
+    virtual uint64_t GetLastPresentQpc() const { return 0; }
 
     // Screen and region management
     virtual int GetScreenWidth() const = 0;
@@ -33,4 +35,3 @@ public:
     virtual bool SetCaptureRegion(int x, int y, int width, int height) = 0;
     virtual void GetCaptureRegion(int* x, int* y, int* width, int* height) const = 0;
 };
-
