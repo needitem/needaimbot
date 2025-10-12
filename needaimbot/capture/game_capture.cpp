@@ -394,50 +394,10 @@ Image GameCapture::get_frame() {
         // Texture mode: direct GPU texture copy (original implementation)
         pContext->CopySubresourceRegion(pStagingTexture, 0, 0, 0, 0, pSharedResource, 0, &sourceRegion);
     } else if (shared_hook_info->type == CAPTURE_TYPE_MEMORY) {
-        // Memory mode: copy from shared memory with mutex synchronization
-        shmem_data* shmem = static_cast<shmem_data*>(shared_data);
-        int tex_index = shmem->last_tex;
-
-        if (tex_index < 0 || tex_index >= 2) {
-            std::cout << "ERROR: Invalid texture index: " << tex_index << std::endl;
-            return img;
-        }
-
-        HANDLE mutex = texture_mutexes[tex_index];
-        DWORD wait_result = WaitForSingleObject(mutex, 100);
-
-        if (wait_result != WAIT_OBJECT_0) {
-            std::cout << "ERROR: Failed to acquire texture mutex (timeout)" << std::endl;
-            return img;
-        }
-
-        // Get pointer to shared memory texture data
-        uint32_t offset = (tex_index == 0) ? shmem->tex1_offset : shmem->tex2_offset;
-        BYTE* shmem_ptr = reinterpret_cast<BYTE*>(shared_data) + offset;
-
-        // Map the staging texture and copy from shared memory
-        D3D11_MAPPED_SUBRESOURCE mapped = {};
-        HRESULT hr = pContext->Map(pStagingTexture, 0, D3D11_MAP_WRITE, 0, &mapped);
-        if (SUCCEEDED(hr)) {
-            // Copy ROI from shared memory
-            int copy_width = min(width, (int)shared_hook_info->cx);
-            int copy_height = min(height, (int)shared_hook_info->cy);
-            int src_pitch = shared_hook_info->pitch;
-            int row_bytes = copy_width * 4;
-
-            for (int y = 0; y < copy_height; y++) {
-                memcpy((BYTE*)mapped.pData + y * mapped.RowPitch,
-                       shmem_ptr + y * src_pitch,
-                       row_bytes);
-            }
-            pContext->Unmap(pStagingTexture, 0);
-        } else {
-            std::cout << "ERROR: Failed to map staging texture for memory mode" << std::endl;
-        }
-
-        ReleaseMutex(mutex);
-
-        // For memory mode, we already have data in staging texture, no need to copy from pSharedResource
+        // Memory mode: CPU fallback not supported in get_frame()
+        // Use GetLatestFrameGPU() for GPU-direct path with CUDA interop
+        std::cout << "ERROR: Memory mode requires GPU-direct path (use GetLatestFrameGPU)" << std::endl;
+        return img;
     }
 
     D3D11_MAPPED_SUBRESOURCE mapped = {};
