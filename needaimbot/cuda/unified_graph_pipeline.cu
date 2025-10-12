@@ -1909,6 +1909,21 @@ bool UnifiedGraphPipeline::ensureCaptureBufferRegistered(void* frameData, size_t
     RegisteredHostBuffer bufferInfo;
     bufferInfo.size = size;
 
+    // Check if this is already pinned memory (from cudaHostAlloc) to skip registration
+    cudaPointerAttributes attrs{};
+    cudaError_t attrErr = cudaPointerGetAttributes(&attrs, frameData);
+    if (attrErr == cudaSuccess && (attrs.type == cudaMemoryTypeHost)) {
+        // Already pinned memory, no need to register
+        bufferInfo.registered = true;
+        bufferInfo.permanentFailure = false;
+        m_registeredCaptureBuffers[frameData] = bufferInfo;
+        return true;
+    }
+    // Clear any error from cudaPointerGetAttributes
+    if (attrErr != cudaSuccess) {
+        cudaGetLastError();
+    }
+
     cudaError_t regErr = cudaHostRegister(frameData, size, cudaHostRegisterPortable);
     if (regErr == cudaSuccess || regErr == cudaErrorHostMemoryAlreadyRegistered) {
         bufferInfo.registered = true;
@@ -2079,9 +2094,20 @@ bool UnifiedGraphPipeline::scheduleNextFrameCapture(bool forceSync) {
         int bufferChannels = targetBuffer.channels();
         size_t bufferStep = targetBuffer.step();
 
-        if (bufferData && bufferRows == heightInt &&
-            bufferCols == widthInt && bufferChannels == 4) {
+        // Auto-reallocate buffer if size mismatches to maintain GPU-direct path
+        if (!bufferData || bufferRows != heightInt || bufferCols != widthInt || bufferChannels != 4) {
+            try {
+                targetBuffer.create(heightInt, widthInt, 4);
+                bufferData = targetBuffer.data();
+                bufferStep = targetBuffer.step();
+                std::cout << "[Capture] Reallocated GPU-direct buffer: " << widthInt << "x" << heightInt << std::endl;
+            } catch (const std::exception& e) {
+                std::cerr << "[Capture] Failed to reallocate GPU buffer: " << e.what() << std::endl;
+                useGPUDirect = false;
+            }
+        }
 
+        if (useGPUDirect && bufferData) {
             cudaError_t err = cudaMemcpy2DFromArrayAsync(
                 bufferData,
                 bufferStep,
@@ -2098,8 +2124,6 @@ bool UnifiedGraphPipeline::scheduleNextFrameCapture(bool forceSync) {
                 std::cerr << "[Capture] GPU-direct copy failed: " << cudaGetErrorString(err) << std::endl;
                 useGPUDirect = false;  // Fall back to CPU path
             }
-        } else {
-            useGPUDirect = false;  // Buffer size mismatch, fall back
         }
     }
 
