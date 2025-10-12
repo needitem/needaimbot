@@ -194,6 +194,7 @@ public:
     // GPU performance settings
     int persistent_cache_limit_mb = 32; // TensorRT persistent L2 cache size in MB (default: 32MB for RTX 40 series)
     bool use_cuda_graph = false; // Enable CUDA Graph optimization (faster but not compatible with all models)
+    int graph_warmup_iterations = 3; // Number of warmup iterations for TensorRT/Graph setup
     
     
     // PID Controller settings

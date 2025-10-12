@@ -375,8 +375,13 @@ Image GameCapture::get_frame() {
     if (WaitForSingleObject(hook_restart, 0) == WAIT_OBJECT_0) {
         if (!initialize()) {
             std::cout << "ERROR: Re-initialization failed" << std::endl;
-            return img;
+            m_failureCount++;
+            if (m_failureCount > MAX_RETRIES) {
+                throw std::runtime_error("Persistent capture failure");
+            }
+            return img; // empty on failure
         }
+        m_failureCount = 0;
     }
 
     if (!pContext || !pSharedResource || !pStagingTexture) {
@@ -505,17 +510,15 @@ bool GameCapture::GetLatestFrameGPU(cudaArray_t* cudaArray, unsigned int* outWid
         // Texture mode: direct GPU texture copy (original implementation)
         pContext->CopySubresourceRegion(pCudaSharedTexture, 0, 0, 0, 0, pSharedResource, 0, &sourceRegion);
     } else if (shared_hook_info->type == CAPTURE_TYPE_MEMORY) {
-        // Memory mode: copy from shared memory with mutex synchronization, then upload to GPU
+        // Memory mode: copy directly from shared memory to CUDA-mapped array, avoiding D3D staging
         shmem_data* shmem = static_cast<shmem_data*>(shared_data);
         int tex_index = shmem->last_tex;
-
         if (tex_index < 0 || tex_index >= 2) {
             return false;
         }
 
         HANDLE mutex = texture_mutexes[tex_index];
         DWORD wait_result = WaitForSingleObject(mutex, 100);
-
         if (wait_result != WAIT_OBJECT_0) {
             return false;
         }
@@ -524,34 +527,51 @@ bool GameCapture::GetLatestFrameGPU(cudaArray_t* cudaArray, unsigned int* outWid
         uint32_t offset = (tex_index == 0) ? shmem->tex1_offset : shmem->tex2_offset;
         BYTE* shmem_ptr = reinterpret_cast<BYTE*>(shared_data) + offset;
 
-        // Upload from shared memory to staging texture first (CPU accessible)
-        D3D11_MAPPED_SUBRESOURCE mapped = {};
-        HRESULT hr = pContext->Map(pStagingTexture, 0, D3D11_MAP_WRITE, 0, &mapped);
-        if (SUCCEEDED(hr)) {
-            int copy_width = min(width, (int)shared_hook_info->cx);
-            int copy_height = min(height, (int)shared_hook_info->cy);
-            int src_pitch = shared_hook_info->pitch;
-            int row_bytes = copy_width * 4;
-
-            for (int y = 0; y < copy_height; y++) {
-                memcpy((BYTE*)mapped.pData + y * mapped.RowPitch,
-                       shmem_ptr + y * src_pitch,
-                       row_bytes);
+        // Map CUDA resource if needed
+        if (m_cudaGraphicsResource && !m_cudaMappedArray) {
+            if (cudaGraphicsMapResources(1, &m_cudaGraphicsResource, 0) != cudaSuccess) {
+                ReleaseMutex(mutex);
+                return false;
             }
-            pContext->Unmap(pStagingTexture, 0);
+            if (cudaGraphicsSubResourceGetMappedArray(&m_cudaMappedArray, m_cudaGraphicsResource, 0, 0) != cudaSuccess) {
+                cudaGraphicsUnmapResources(1, &m_cudaGraphicsResource, 0);
+                m_cudaMappedArray = nullptr;
+                ReleaseMutex(mutex);
+                return false;
+            }
+        }
 
-            // Now copy from staging to CUDA shared texture (GPU copy)
-            pContext->CopyResource(pCudaSharedTexture, pStagingTexture);
-        } else {
+        if (!m_cudaMappedArray) {
             ReleaseMutex(mutex);
             return false;
         }
 
+        int copy_width = min(width, (int)shared_hook_info->cx);
+        int copy_height = min(height, (int)shared_hook_info->cy);
+        size_t src_pitch = static_cast<size_t>(shared_hook_info->pitch);
+        size_t row_bytes = static_cast<size_t>(copy_width) * 4;
+
+        cudaError_t cpy = cudaMemcpy2DToArray(
+            m_cudaMappedArray,
+            0, 0,
+            shmem_ptr,
+            src_pitch,
+            row_bytes,
+            static_cast<size_t>(copy_height),
+            cudaMemcpyHostToDevice);
+
         ReleaseMutex(mutex);
+
+        if (cpy != cudaSuccess) {
+            // On failure, clear mapped array to trigger remap/retry next call
+            cudaGraphicsUnmapResources(1, &m_cudaGraphicsResource, 0);
+            m_cudaMappedArray = nullptr;
+            return false;
+        }
     }
 
-    // Remap so CUDA sees the updated contents
-    if (m_cudaGraphicsResource) {
+    // Remap so CUDA sees the updated contents (if not already mapped in memory mode)
+    if (m_cudaGraphicsResource && !m_cudaMappedArray) {
         if (cudaGraphicsMapResources(1, &m_cudaGraphicsResource, 0) != cudaSuccess) {
             return false;
         }

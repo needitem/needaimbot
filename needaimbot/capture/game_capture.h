@@ -82,4 +82,8 @@ private:
 
     // Ensure CUDA shared texture exists and is registered/mapped
     bool ensureCudaSharedTexture(unsigned int w, unsigned int h, DXGI_FORMAT format);
+
+    // Failure tracking for robust restart handling
+    int m_failureCount = 0;
+    static constexpr int MAX_RETRIES = 3;
 };
