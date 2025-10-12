@@ -230,7 +230,11 @@ bool GameCapture::initialize() {
     HRESULT hr;
 
     while (true) {
-        shared_data = nullptr;
+        // Unmap previous shared_data view to avoid leaks on retry
+        if (shared_data) {
+            UnmapViewOfFile(shared_data);
+            shared_data = nullptr;
+        }
         try_count++;
 
         // Keep retrying until we get the hook_data_map
@@ -256,6 +260,16 @@ bool GameCapture::initialize() {
         if (!shared_data) {
             std::cout << "Failed to map shared data" << std::endl;
             return false;
+        }
+
+        // Release previous D3D resources before recreating to prevent handle churn
+        if (pContext) {
+            pContext->Release();
+            pContext = nullptr;
+        }
+        if (pDevice) {
+            pDevice->Release();
+            pDevice = nullptr;
         }
 
         hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &pDevice, nullptr, &pContext);
@@ -506,15 +520,21 @@ bool GameCapture::GetLatestFrameGPU(cudaArray_t* cudaArray, unsigned int* outWid
             return false;
         }
 
-        int copy_width = min(width, (int)shared_hook_info->cx);
-        int copy_height = min(height, (int)shared_hook_info->cy);
+        // Apply ROI offsets from sourceRegion to honor crop region
+        int x0 = static_cast<int>(sourceRegion.left);
+        int y0 = static_cast<int>(sourceRegion.top);
+        int copy_width = min(width, (int)shared_hook_info->cx - x0);
+        int copy_height = min(height, (int)shared_hook_info->cy - y0);
         size_t src_pitch = static_cast<size_t>(shared_hook_info->pitch);
         size_t row_bytes = static_cast<size_t>(copy_width) * 4;
+
+        // Offset into shared memory to start from ROI origin
+        BYTE* roi_shmem_ptr = shmem_ptr + (y0 * src_pitch) + (x0 * 4);
 
         cudaError_t cpy = cudaMemcpy2DToArray(
             m_cudaMappedArray,
             0, 0,
-            shmem_ptr,
+            roi_shmem_ptr,
             src_pitch,
             row_bytes,
             static_cast<size_t>(copy_height),
