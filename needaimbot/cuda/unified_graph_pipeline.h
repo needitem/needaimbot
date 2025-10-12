@@ -341,6 +341,7 @@ private:
     std::unique_ptr<CudaStream> m_captureStream;
     std::unique_ptr<CudaEvent> m_captureReadyEvent;
     bool m_captureInFlight = false;
+    bool m_graphPrimed = false;
 
     bool ensureFrameReady();
     bool scheduleNextFrameCapture(bool forceSync);
@@ -369,8 +370,7 @@ private:
     int m_modelInputResolution = 320;
     float m_imgScale;
     int m_numClasses;
-    // m_unifiedCaptureBuffer removed - using m_captureBuffer instead
-    std::unique_ptr<CudaMemory<float>> m_d_preprocessBuffer;
+    // Removed legacy preprocess buffer; unified arena's yoloInput is the sole source
     
     std::unique_ptr<CudaMemory<float>> m_d_inferenceOutput;
     

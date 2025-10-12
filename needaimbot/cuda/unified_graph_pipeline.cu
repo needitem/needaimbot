@@ -244,9 +244,19 @@ __global__ void fusedTargetSelectionAndMovementKernel(
         bool candidateValid = candidateIndex >= 0;
         Target candidateTarget = candidateValid ? finalTargets[candidateIndex] : Target{};
 
-        Target chosenTarget = candidateTarget;
+        // Hysteresis: prefer previous target if IoU stays above threshold
+        float bestIoU = s_prevIoU[0];
+        int bestIoUIdx = s_prevIndices[0];
+        const float iouStickinessThreshold = 0.30f;
+
         int chosenIndex = candidateIndex;
+        Target chosenTarget = candidateTarget;
         bool haveTarget = candidateValid;
+        if (prevValid && bestIoUIdx >= 0 && bestIoU > iouStickinessThreshold) {
+            chosenIndex = bestIoUIdx;
+            chosenTarget = finalTargets[bestIoUIdx];
+            haveTarget = true;
+        }
 
         if (haveTarget) {
             *bestTargetIndex = chosenIndex;
@@ -397,8 +407,18 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
     }
     
     if (m_config.useGraphOptimization) {
+        // Configurable warmup iterations to stabilize TensorRT/cuBLAS autotuning
+        int warmupIters = 3;
+        {
+            auto& ctx = AppContext::getInstance();
+            // Safely read from config under mutex only if graph not yet captured
+            std::lock_guard<std::mutex> lock(ctx.configMutex);
+            if (ctx.config.graph_warmup_iterations > 0 && ctx.config.graph_warmup_iterations < 64) {
+                warmupIters = ctx.config.graph_warmup_iterations;
+            }
+        }
 
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < warmupIters; i++) {
             auto bindingIt = m_inputBindings.find(m_inputName);
             if (bindingIt != m_inputBindings.end() && bindingIt->second) {
                 cudaMemsetAsync(bindingIt->second->get(), 0,
@@ -663,7 +683,6 @@ void UnifiedGraphPipeline::deallocateBuffers() {
     m_unifiedArena = UnifiedGPUArena{};
 
     m_d_inferenceOutput.reset();
-    m_d_preprocessBuffer.reset();
     m_d_outputBuffer.reset();
 
     m_h_movement.reset();
@@ -2045,8 +2064,8 @@ bool UnifiedGraphPipeline::scheduleNextFrameCapture(bool forceSync) {
         return false;
     }
 
-    bool useGraphCapture = ctx.config.use_cuda_graph;
-    SimpleCudaMat& targetBuffer = useGraphCapture ? m_captureBuffer : m_nextCaptureBuffer;
+    // Always capture into the 'next' buffer to enable double-buffering
+    SimpleCudaMat& targetBuffer = m_nextCaptureBuffer;
 
     if (useGPUDirect && cudaArray) {
         // Zero-copy GPU path: copy directly from CUDA array
@@ -2119,21 +2138,7 @@ bool UnifiedGraphPipeline::scheduleNextFrameCapture(bool forceSync) {
         return false;
     }
 
-    if (useGraphCapture) {
-        // Non-blocking: downstream will insert a GPU-side wait on this event
-        m_hasFrameData = true;
-        m_lastCaptureW = static_cast<int>(width);
-        m_lastCaptureH = static_cast<int>(height);
-        m_lastGpuDirect = useGPUDirect;
-
-        if ((m_preview.enabled || ctx.config.show_window) &&
-            m_pipelineStream && m_pipelineStream->get()) {
-            updatePreviewBuffer(m_captureBuffer);
-        }
-
-        return true;
-    }
-
+    // Capture is now in flight into m_nextCaptureBuffer
     m_captureInFlight = true;
     m_lastCaptureW = static_cast<int>(width);
     m_lastCaptureH = static_cast<int>(height);
@@ -2472,18 +2477,56 @@ bool UnifiedGraphPipeline::executeFrame(cudaStream_t stream) {
     }
 
     if (ctx.config.use_cuda_graph && m_state.graphReady && m_graphExec) {
-        if (!performFrameCaptureDirectToUnified()) {
-            m_allowMovement.store(false, std::memory_order_release);
-            m_frameInFlight.store(false, std::memory_order_release);
-            return false;
+        // Prime buffers on first entry
+        if (!m_graphPrimed) {
+            if (!scheduleNextFrameCapture(false)) {
+                m_allowMovement.store(false, std::memory_order_release);
+                m_frameInFlight.store(false, std::memory_order_release);
+                return false;
+            }
+            if (m_captureReadyEvent && m_captureReadyEvent->get()) {
+                cudaEventSynchronize(m_captureReadyEvent->get());
+            }
+            if (!waitForCaptureCompletion()) {
+                m_allowMovement.store(false, std::memory_order_release);
+                m_frameInFlight.store(false, std::memory_order_release);
+                return false;
+            }
+            // Primed: m_captureBuffer now contains valid frame
+            m_graphPrimed = true;
+        }
+
+        // Schedule next capture if nothing in flight
+        (void)scheduleNextFrameCapture(false);
+
+        // If a fresh frame is ready in m_nextCaptureBuffer, wait on capture event and copy it into m_captureBuffer
+        if (m_captureReadyEvent && m_captureReadyEvent->get()) {
+            cudaStreamWaitEvent(launchStream, m_captureReadyEvent->get(), 0);
+
+            // Ensure destination allocation matches
+            if (m_captureBuffer.empty() ||
+                m_captureBuffer.rows() != m_nextCaptureBuffer.rows() ||
+                m_captureBuffer.cols() != m_nextCaptureBuffer.cols() ||
+                m_captureBuffer.channels() != m_nextCaptureBuffer.channels()) {
+                m_captureBuffer.create(m_nextCaptureBuffer.rows(), m_nextCaptureBuffer.cols(), m_nextCaptureBuffer.channels());
+            }
+
+            size_t rowBytes = static_cast<size_t>(m_nextCaptureBuffer.cols()) * m_nextCaptureBuffer.channels();
+            cudaMemcpy2DAsync(
+                m_captureBuffer.data(), m_captureBuffer.step(),
+                m_nextCaptureBuffer.data(), m_nextCaptureBuffer.step(),
+                rowBytes, m_nextCaptureBuffer.rows(),
+                cudaMemcpyDeviceToDevice, launchStream);
+
+            if (m_preview.enabled && ctx.config.show_window && !m_captureBuffer.empty()) {
+                updatePreviewBuffer(m_captureBuffer);
+            }
         }
 
         bool shouldDispatchMovement = m_config.enableDetection && !ctx.detection_paused.load();
         m_allowMovement.store(shouldDispatchMovement, std::memory_order_release);
-        // Ensure graph waits for capture copy completion without blocking the host
-        if (m_captureReadyEvent && m_captureReadyEvent->get()) {
-            cudaStreamWaitEvent(launchStream, m_captureReadyEvent->get(), 0);
-        }
+
+        // Launch the graph using the stabilized m_captureBuffer pointer
         cudaError_t launchErr = cudaGraphLaunch(m_graphExec, launchStream);
         if (launchErr != cudaSuccess) {
             std::cerr << "[UnifiedGraph] Graph launch failed: "
@@ -2493,10 +2536,7 @@ bool UnifiedGraphPipeline::executeFrame(cudaStream_t stream) {
             return false;
         }
 
-        if (m_preview.enabled && ctx.config.show_window && !m_captureBuffer.empty()) {
-            updatePreviewBuffer(m_captureBuffer);
-        }
-
+        // Clear flag to indicate that the frame was consumed; the next capture will refill m_nextCaptureBuffer
         m_hasFrameData = false;
     } else {
         if (!executeNormalPipeline(launchStream)) {
