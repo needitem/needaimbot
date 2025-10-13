@@ -7,6 +7,7 @@
 #include <iostream>
 #include <stdio.h>
 #include <memory>
+#include <chrono>
 
 // CUDA utilities for pinned memory and interop
 #include <cuda_runtime.h>
@@ -83,7 +84,9 @@ private:
     // Ensure CUDA shared texture exists and is registered/mapped
     bool ensureCudaSharedTexture(unsigned int w, unsigned int h, DXGI_FORMAT format);
 
-    // Failure tracking for robust restart handling
+    // Failure tracking for robust restart handling with exponential backoff
     int m_failureCount = 0;
-    static constexpr int MAX_RETRIES = 3;
+    std::chrono::steady_clock::time_point m_lastFailureTime;
+    static constexpr int MAX_RETRIES = 5;
+    static constexpr int BASE_BACKOFF_MS = 50;  // Base backoff time in milliseconds
 };
