@@ -1,9 +1,14 @@
 #include <sstream>
+
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #include <d3d11.h>
 #include <iostream>
 #include <stdio.h>
 #include <cwctype>
+#include <algorithm>
 #include "game_capture.h"
 
 GameCapture::GameCapture(int fw, int fh, int sw, int sh, const std::string& game) :
@@ -387,14 +392,32 @@ Image GameCapture::get_frame() {
     Image img = {};
 
     if (WaitForSingleObject(hook_restart, 0) == WAIT_OBJECT_0) {
+        // Apply exponential backoff if we've had recent failures
+        auto now = std::chrono::steady_clock::now();
+        if (m_failureCount > 0) {
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_lastFailureTime).count();
+            int backoffTime = BASE_BACKOFF_MS * (1 << (m_failureCount - 1));  // 50ms, 100ms, 200ms, 400ms, 800ms
+            backoffTime = std::min(backoffTime, 2000);  // Cap at 2 seconds
+
+            if (elapsed < backoffTime) {
+                // Still in backoff period - don't retry yet
+                return img;
+            }
+        }
+
         if (!initialize()) {
-            std::cout << "ERROR: Re-initialization failed" << std::endl;
+            std::cout << "ERROR: Re-initialization failed (attempt " << (m_failureCount + 1) << "/" << MAX_RETRIES << ")" << std::endl;
             m_failureCount++;
-            if (m_failureCount > MAX_RETRIES) {
-                throw std::runtime_error("Persistent capture failure");
+            m_lastFailureTime = now;
+
+            if (m_failureCount >= MAX_RETRIES) {
+                throw std::runtime_error("Persistent capture failure after " + std::to_string(MAX_RETRIES) + " retries");
             }
             return img; // empty on failure
         }
+
+        // Success - reset failure counter
+        std::cout << "Re-initialization successful after " << m_failureCount << " failures" << std::endl;
         m_failureCount = 0;
     }
 
@@ -523,8 +546,8 @@ bool GameCapture::GetLatestFrameGPU(cudaArray_t* cudaArray, unsigned int* outWid
         // Apply ROI offsets from sourceRegion to honor crop region
         int x0 = static_cast<int>(sourceRegion.left);
         int y0 = static_cast<int>(sourceRegion.top);
-        int copy_width = min(width, (int)shared_hook_info->cx - x0);
-        int copy_height = min(height, (int)shared_hook_info->cy - y0);
+        int copy_width = (std::min)(width, (int)shared_hook_info->cx - x0);
+        int copy_height = (std::min)(height, (int)shared_hook_info->cy - y0);
         size_t src_pitch = static_cast<size_t>(shared_hook_info->pitch);
         size_t row_bytes = static_cast<size_t>(copy_width) * 4;
 

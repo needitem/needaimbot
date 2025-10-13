@@ -47,6 +47,11 @@ public:
     uint64_t GetLastPresentQpc() const { return m_lastPresentQpc.load(std::memory_order_acquire); }
     uint64_t GetFrameCounter() const { return m_frameCounter.load(std::memory_order_acquire); }
 
+    // Performance monitoring getters
+    uint64_t GetFrameDropCount() const { return m_frameDropCount.load(std::memory_order_relaxed); }
+    uint64_t GetCaptureErrorCount() const { return m_captureErrorCount.load(std::memory_order_relaxed); }
+    uint64_t GetAccessLostCount() const { return m_accessLostCount.load(std::memory_order_relaxed); }
+
     int GetWidth() const { return m_screenWidth; }
     int GetHeight() const { return m_screenHeight; }
     int GetScreenWidth() const { return m_screenWidth; }
@@ -93,6 +98,10 @@ private:
     cudaArray_t m_cudaMappedArray = nullptr;
     bool m_cudaInteropEnabled = false;
 
+    // CPU fallback control - only update CPU buffer when needed
+    std::atomic<bool> m_cpuFallbackNeeded{false};
+    bool m_cpuBufferValid = false;
+
     mutable std::mutex m_frameMutex;
     std::function<void(void*, unsigned int, unsigned int, unsigned int)> m_frameCallback;
 
@@ -114,4 +123,9 @@ private:
     std::atomic<uint64_t> m_frameCounter{0};
     mutable std::mutex m_presentMutex;
     std::condition_variable m_presentCv;
+
+    // Performance monitoring
+    std::atomic<uint64_t> m_frameDropCount{0};
+    std::atomic<uint64_t> m_captureErrorCount{0};
+    std::atomic<uint64_t> m_accessLostCount{0};
 };

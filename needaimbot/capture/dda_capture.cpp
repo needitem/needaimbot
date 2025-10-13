@@ -110,8 +110,13 @@ void DDACapture::StopCapture() {
 }
 
 bool DDACapture::GetLatestFrame(void** frameData, unsigned int* width, unsigned int* height, unsigned int* size) {
+    // Signal that CPU fallback is needed
+    m_cpuFallbackNeeded.store(true, std::memory_order_release);
+
     std::lock_guard<std::mutex> lock(m_frameMutex);
-    if (!m_frameBuffer || m_bufferSize == 0 || m_captureWidth == 0 || m_captureHeight == 0) {
+
+    // If CPU buffer is not valid, we can't provide frame data
+    if (!m_cpuBufferValid || !m_frameBuffer || m_bufferSize == 0 || m_captureWidth == 0 || m_captureHeight == 0) {
         return false;
     }
 
@@ -498,16 +503,38 @@ DDACapture::FrameAcquireResult DDACapture::AcquireFrame() {
     }
 
     if (hr == DXGI_ERROR_ACCESS_LOST) {
-        CreateDuplicationInterface();
-        return FrameAcquireResult::kError;
+        // Desktop duplication interface lost - typically due to mode change, desktop switch, etc.
+        m_accessLostCount.fetch_add(1, std::memory_order_relaxed);
+        std::cerr << "[DDACapture] DXGI_ERROR_ACCESS_LOST - recreating duplication interface" << std::endl;
+
+        if (CreateDuplicationInterface()) {
+            // Successfully recreated - immediately retry acquisition
+            hr = m_duplication->AcquireNextFrame(kFrameTimeoutMs, &frameInfo, &desktopResource);
+            if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
+                return FrameAcquireResult::kNoFrame;
+            }
+            if (SUCCEEDED(hr)) {
+                frameAcquired = true;
+                // Continue with normal frame processing below
+            } else {
+                std::cerr << "[DDACapture] Retry after ACCESS_LOST failed: 0x" << std::hex << hr << std::dec << std::endl;
+                return FrameAcquireResult::kError;
+            }
+        } else {
+            std::cerr << "[DDACapture] Failed to recreate duplication interface after ACCESS_LOST" << std::endl;
+            return FrameAcquireResult::kError;
+        }
     }
 
     if (FAILED(hr)) {
+        m_captureErrorCount.fetch_add(1, std::memory_order_relaxed);
         std::cerr << "[DDACapture] AcquireNextFrame failed: 0x" << std::hex << hr << std::dec << std::endl;
         return FrameAcquireResult::kError;
     }
 
-    frameAcquired = true;
+    if (!frameAcquired) {
+        frameAcquired = true;
+    }
 
     Microsoft::WRL::ComPtr<ID3D11Texture2D> frameTexture;
     hr = desktopResource.As(&frameTexture);
@@ -577,21 +604,9 @@ DDACapture::FrameAcquireResult DDACapture::AcquireFrame() {
         }
     }
 
-    // Also copy to staging texture for CPU fallback path (always keep CPU buffer updated for robustness)
-    if (useBox) {
-        m_context->CopySubresourceRegion(
-            m_stagingTexture.Get(),
-            0,
-            0,
-            0,
-            0,
-            frameTexture.Get(),
-            0,
-            &captureBox
-        );
-    } else {
-        m_context->CopyResource(m_stagingTexture.Get(), frameTexture.Get());
-    }
+    // Only copy to staging texture if CPU fallback is needed
+    // This eliminates redundant CPU path when GPU-direct is working
+    const bool needCpuCopy = !m_cudaInteropEnabled || m_cpuFallbackNeeded.load(std::memory_order_acquire);
 
     hr = m_duplication->ReleaseFrame();
     frameAcquired = false;
@@ -600,57 +615,68 @@ DDACapture::FrameAcquireResult DDACapture::AcquireFrame() {
         return FrameAcquireResult::kError;
     }
 
-    D3D11_MAPPED_SUBRESOURCE mapped{};
-    hr = m_context->Map(m_stagingTexture.Get(), 0, D3D11_MAP_READ, 0, &mapped);
-    if (FAILED(hr)) {
-        std::cerr << "[DDACapture] Failed to map staging texture: 0x" << std::hex << hr << std::dec << std::endl;
-        return FrameAcquireResult::kError;
-    }
-
-    size_t requiredSize = static_cast<size_t>(captureWidth) * captureHeight * kBytesPerPixel;
-    if (!EnsureFrameBuffer(requiredSize)) {
-        m_context->Unmap(m_stagingTexture.Get(), 0);
-        return FrameAcquireResult::kError;
-    }
-
     std::function<void(void*, unsigned int, unsigned int, unsigned int)> callback;
     void* callbackData = nullptr;
     unsigned int callbackWidth = captureWidth;
     unsigned int callbackHeight = captureHeight;
+    size_t requiredSize = static_cast<size_t>(captureWidth) * captureHeight * kBytesPerPixel;
     unsigned int callbackSize = static_cast<unsigned int>(requiredSize);
 
-    {
-        std::lock_guard<std::mutex> lock(m_frameMutex);
-        if (!m_frameBuffer) {
-            m_context->Unmap(m_stagingTexture.Get(), 0);
-            return FrameAcquireResult::kError;
+    // Only perform CPU staging copy and map if needed
+    if (needCpuCopy) {
+        // Need to re-acquire frame for CPU path (frameTexture already released)
+        // Instead, copy from sharedTexture to staging
+        if (m_sharedTexture) {
+            m_context->CopyResource(m_stagingTexture.Get(), m_sharedTexture.Get());
         }
 
-        unsigned char* dst = m_frameBuffer->get();
-        const unsigned char* srcBase = static_cast<const unsigned char*>(mapped.pData);
-        const UINT srcPitch = mapped.RowPitch;
-        const UINT bytesPerRow = captureWidth * kBytesPerPixel;
-
-        if (srcPitch == bytesPerRow) {
-            std::memcpy(dst, srcBase, bytesPerRow * captureHeight);
+        D3D11_MAPPED_SUBRESOURCE mapped{};
+        hr = m_context->Map(m_stagingTexture.Get(), 0, D3D11_MAP_READ, 0, &mapped);
+        if (FAILED(hr)) {
+            std::cerr << "[DDACapture] Failed to map staging texture: 0x" << std::hex << hr << std::dec << std::endl;
+            m_cpuBufferValid = false;
+            // Don't fail - GPU path may still work
         } else {
-            for (UINT row = 0; row < captureHeight; ++row) {
-                const unsigned char* srcRow = srcBase + row * srcPitch;
-                std::memcpy(dst + row * bytesPerRow, srcRow, bytesPerRow);
+            if (!EnsureFrameBuffer(requiredSize)) {
+                m_context->Unmap(m_stagingTexture.Get(), 0);
+                m_cpuBufferValid = false;
+            } else {
+                std::lock_guard<std::mutex> lock(m_frameMutex);
+                if (m_frameBuffer) {
+                    unsigned char* dst = m_frameBuffer->get();
+                    const unsigned char* srcBase = static_cast<const unsigned char*>(mapped.pData);
+                    const UINT srcPitch = mapped.RowPitch;
+                    const UINT bytesPerRow = captureWidth * kBytesPerPixel;
+
+                    if (srcPitch == bytesPerRow) {
+                        std::memcpy(dst, srcBase, bytesPerRow * captureHeight);
+                    } else {
+                        for (UINT row = 0; row < captureHeight; ++row) {
+                            const unsigned char* srcRow = srcBase + row * srcPitch;
+                            std::memcpy(dst + row * bytesPerRow, srcRow, bytesPerRow);
+                        }
+                    }
+
+                    m_captureWidth = captureWidth;
+                    m_captureHeight = captureHeight;
+                    m_bufferSize = requiredSize;
+                    m_cpuBufferValid = true;
+                    callback = m_frameCallback;
+                    callbackData = dst;
+                    callbackWidth = m_captureWidth;
+                    callbackHeight = m_captureHeight;
+                    callbackSize = static_cast<unsigned int>(m_bufferSize);
+                }
+                m_context->Unmap(m_stagingTexture.Get(), 0);
             }
         }
-
+    } else {
+        // GPU-direct path - just update dimensions
+        std::lock_guard<std::mutex> lock(m_frameMutex);
         m_captureWidth = captureWidth;
         m_captureHeight = captureHeight;
-        m_bufferSize = requiredSize;
-        callback = m_frameCallback;
-        callbackData = dst;
-        callbackWidth = m_captureWidth;
-        callbackHeight = m_captureHeight;
-        callbackSize = static_cast<unsigned int>(m_bufferSize);
+        m_cpuBufferValid = false;  // CPU buffer not updated
     }
-
-    m_context->Unmap(m_stagingTexture.Get(), 0);
 
     // Update present time/frame counter and notify after CPU buffer is valid
     {
@@ -668,16 +694,29 @@ DDACapture::FrameAcquireResult DDACapture::AcquireFrame() {
 }
 
 void DDACapture::CaptureThreadProc() {
+    int consecutiveNoFrames = 0;
+    constexpr int spinCount = 32;  // Spin without sleep for high refresh rate monitors
+
     while (m_isCapturing.load()) {
         const auto result = AcquireFrame();
+
         if (result == FrameAcquireResult::kError) {
-            // Back off briefly only when an actual error occurs. When AcquireNextFrame
-            // returns DXGI_ERROR_WAIT_TIMEOUT we rely on its 1 ms timeout to throttle
-            // the loop so new frames are delivered with minimal latency.
+            consecutiveNoFrames = 0;
+            // Back off briefly only when an actual error occurs
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        } else if (result == FrameAcquireResult::kNoFrame) {
-            // No frame available within timeout; yield briefly to reduce CPU polling
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        else if (result == FrameAcquireResult::kNoFrame) {
+            // AcquireNextFrame already waited 1ms via kFrameTimeoutMs
+            // Only add minimal backoff after sustained no-frame periods
+            if (++consecutiveNoFrames > spinCount) {
+                // Very short sleep to prevent CPU saturation while maintaining low latency
+                std::this_thread::sleep_for(std::chrono::microseconds(100));
+            }
+            // else: immediate retry for minimal latency on high refresh rate displays
+        }
+        else {
+            // Successfully captured frame - reset counter
+            consecutiveNoFrames = 0;
         }
     }
 }
