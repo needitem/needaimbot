@@ -70,6 +70,13 @@ private:
         kError,
     };
 
+    // Capture mode state machine
+    enum class CaptureMode {
+        kGpuDirect,      // Zero-copy CUDA interop (fast path)
+        kCpuFallback,    // CPU staging + pinned memory (slow path)
+        kProbing         // Testing GPU direct availability
+    };
+
     bool InitializeDeviceAndOutput(HWND targetWindow);
     bool CreateDuplicationInterface();
     void ReleaseDuplication();
@@ -78,6 +85,12 @@ private:
     bool EnsureFrameBuffer(size_t requiredSize);
     FrameAcquireResult AcquireFrame();
     void CaptureThreadProc();
+
+    // State machine helpers
+    void TransitionToCaptureMode(CaptureMode newMode);
+    bool ProbeGpuDirectCapability();
+    FrameAcquireResult AcquireFrameGpuDirect();
+    FrameAcquireResult AcquireFrameCpuFallback();
 
     Microsoft::WRL::ComPtr<ID3D11Device> m_device;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> m_context;
@@ -98,9 +111,27 @@ private:
     cudaArray_t m_cudaMappedArray = nullptr;
     bool m_cudaInteropEnabled = false;
 
-    // CPU fallback control - only update CPU buffer when needed
-    std::atomic<bool> m_cpuFallbackNeeded{false};
+    // State machine for capture path selection
+    std::atomic<CaptureMode> m_currentMode{CaptureMode::kProbing};
+    std::atomic<bool> m_cpuFallbackNeeded{false};  // External signal to force CPU path
     bool m_cpuBufferValid = false;
+
+    // Probing state
+    std::chrono::steady_clock::time_point m_lastProbeTime;
+    int m_consecutiveGpuFailures = 0;
+    static constexpr int kMaxGpuFailuresBeforeFallback = 3;
+    static constexpr std::chrono::milliseconds kProbeInterval{5000};
+
+    // Adaptive backoff state
+    enum class BackoffLevel {
+        kNone,           // 0: Immediate retry (success)
+        kMinimal,        // 1: SwitchToThread (1-32 failures)
+        kShort,          // 2: Sleep(0) / yield (33-64 failures)
+        kMedium,         // 3: Sleep(1ms) (65-128 failures)
+        kLong            // 4: Sleep(2ms) (128+ failures)
+    };
+    int m_consecutiveNoFrames = 0;
+    BackoffLevel m_currentBackoffLevel = BackoffLevel::kNone;
 
     mutable std::mutex m_frameMutex;
     std::function<void(void*, unsigned int, unsigned int, unsigned int)> m_frameCallback;
