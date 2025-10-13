@@ -228,9 +228,10 @@ public:
     bool initialize(const UnifiedPipelineConfig& config);
     void shutdown();
     
-    
+
     bool captureGraph(cudaStream_t stream = nullptr);
-    
+    bool updateGraphExec();  // Update existing graph without recapture
+
     bool executeFrame(cudaStream_t stream = nullptr);
     bool executeNormalPipeline(cudaStream_t stream = nullptr);
     
@@ -327,16 +328,29 @@ private:
     std::vector<cudaGraphNode_t> m_postprocessNodes;
     
     std::unordered_map<std::string, cudaGraphNode_t> m_namedNodes;
-    
+
+    // Graph update tracking
+    cudaGraph_t m_updateGraph = nullptr;  // Temporary graph for update comparison
+    cudaGraphNode_t m_preprocessNode = nullptr;
+    cudaGraphNode_t m_inferenceNode = nullptr;
+    std::vector<cudaGraphNode_t> m_postprocessKernelNodes;
+
     std::atomic<bool> m_classFilterDirty{true};
     std::vector<unsigned char> m_cachedClassFilter;
     std::atomic<int> m_cachedHeadClassId{-1};
     std::atomic<size_t> m_cachedHeadClassNameHash{0};
     std::atomic<size_t> m_cachedClassSettingsSize{0};
     
-    // Unified capture buffer - removed duplicate m_unifiedCaptureBuffer
+    // Capture buffers
+    // Triple-buffer ring for latest-wins capture ingestion
+    static constexpr int kCaptureRingSize = 3;
+    std::array<SimpleCudaMat, kCaptureRingSize> m_captureRing;
+    // Stable buffer used by CUDA Graph path to avoid per-frame graph pointer changes
     SimpleCudaMat m_captureBuffer;
-    SimpleCudaMat m_nextCaptureBuffer;
+    // Ring indices
+    int m_captureWriteIdx = 0;     // Next slot to write
+    int m_captureReadIdx = -1;     // Last completed slot ready for consumers
+    int m_capturePendingIdx = -1;  // Slot with an in-flight copy associated with m_captureReadyEvent
 
     std::unique_ptr<CudaStream> m_captureStream;
     std::unique_ptr<CudaEvent> m_captureReadyEvent;
