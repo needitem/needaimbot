@@ -554,6 +554,140 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     return true;
 }
 
+bool UnifiedGraphPipeline::updateGraphExec() {
+    if (!m_graphExec || !m_graph) {
+        std::cerr << "[UnifiedGraph] Cannot update: graph not instantiated" << std::endl;
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(m_graphMutex);
+    auto& ctx = AppContext::getInstance();
+
+    // Create a new graph with updated parameters
+    cudaGraph_t newGraph = nullptr;
+    cudaStream_t stream = m_pipelineStream->get();
+
+    if (!bindStaticTensorAddresses()) {
+        return false;
+    }
+
+    // Begin capture to create updated graph topology
+    cudaError_t err = cudaStreamBeginCapture(stream, cudaStreamCaptureModeRelaxed);
+    if (err != cudaSuccess) {
+        std::cerr << "[UnifiedGraph] Failed to begin update capture: "
+                  << cudaGetErrorString(err) << std::endl;
+        return false;
+    }
+
+    // Capture same operations as original graph
+    if (m_unifiedArena.yoloInput && !m_captureBuffer.empty()) {
+        int modelRes = getModelInputResolution();
+        cuda_unified_preprocessing(
+            m_captureBuffer.data(),
+            m_unifiedArena.yoloInput,
+            m_captureBuffer.cols(),
+            m_captureBuffer.rows(),
+            static_cast<int>(m_captureBuffer.step()),
+            modelRes,
+            modelRes,
+            stream
+        );
+
+        ensurePrimaryInputBindingAliased();
+
+        void* inputBinding = (m_primaryInputIndex >= 0 &&
+                              m_primaryInputIndex < static_cast<int>(m_inputAddressCache.size()))
+                                 ? m_inputAddressCache[m_primaryInputIndex]
+                                 : nullptr;
+        if (inputBinding && inputBinding != m_unifiedArena.yoloInput) {
+            size_t inputSize = modelRes * modelRes * 3 * sizeof(float);
+            cudaMemcpyAsync(inputBinding, m_unifiedArena.yoloInput, inputSize,
+                           cudaMemcpyDeviceToDevice, stream);
+        }
+    }
+
+    if (m_context && m_config.enableDetection) {
+        if (!m_context->enqueueV3(stream)) {
+            cudaStreamEndCapture(stream, &newGraph);
+            if (newGraph) cudaGraphDestroy(newGraph);
+            return false;
+        }
+    }
+
+    if (m_config.enableDetection) {
+        performIntegratedPostProcessing(stream);
+        performTargetSelection(stream);
+
+        if (!m_mouseMovementUsesMappedMemory) {
+            cudaMemcpyAsync(m_h_movement->get(), m_smallBufferArena.mouseMovement,
+                           sizeof(MouseMovement), cudaMemcpyDeviceToHost, stream);
+        }
+
+        if (!enqueueFrameCompletionCallback(stream)) {
+            cudaStreamEndCapture(stream, &newGraph);
+            if (newGraph) cudaGraphDestroy(newGraph);
+            return false;
+        }
+    }
+
+    err = cudaStreamEndCapture(stream, &newGraph);
+    if (err != cudaSuccess) {
+        std::cerr << "[UnifiedGraph] Failed to end update capture: "
+                  << cudaGetErrorString(err) << std::endl;
+        if (newGraph) cudaGraphDestroy(newGraph);
+        return false;
+    }
+
+    // Try to update the existing executable
+    cudaGraphExecUpdateResultInfo updateResultInfo{};
+    err = cudaGraphExecUpdate(m_graphExec, newGraph, &updateResultInfo);
+
+    if (err == cudaSuccess && updateResultInfo.result == cudaGraphExecUpdateSuccess) {
+        // Update succeeded - just clean up the temporary graph
+        cudaGraphDestroy(newGraph);
+        std::cout << "[UnifiedGraph] Graph exec updated successfully (fast path)" << std::endl;
+        m_state.needsRebuild = false;
+        return true;
+    }
+
+    // Update failed or topology changed - need full reinstantiation
+    if (updateResultInfo.result == cudaGraphExecUpdateErrorTopologyChanged) {
+        std::cout << "[UnifiedGraph] Topology changed, performing full graph reinstantiation" << std::endl;
+    } else if (updateResultInfo.result == cudaGraphExecUpdateErrorNodeTypeChanged) {
+        std::cout << "[UnifiedGraph] Node type changed, performing full graph reinstantiation" << std::endl;
+    } else if (updateResultInfo.result == cudaGraphExecUpdateErrorUnsupportedFunctionChange) {
+        std::cout << "[UnifiedGraph] Function signature changed, performing full graph reinstantiation" << std::endl;
+    } else {
+        std::cerr << "[UnifiedGraph] Graph update failed: " << cudaGetErrorString(err)
+                  << ", result=" << updateResultInfo.result << std::endl;
+    }
+
+    // Destroy old exec and reinstantiate with new graph
+    if (m_graphExec) {
+        cudaGraphExecDestroy(m_graphExec);
+        m_graphExec = nullptr;
+    }
+
+    if (m_graph) {
+        cudaGraphDestroy(m_graph);
+    }
+
+    m_graph = newGraph;
+
+    err = cudaGraphInstantiate(&m_graphExec, m_graph, nullptr, nullptr,
+                               m_config.graphInstantiateFlags);
+    if (err != cudaSuccess) {
+        std::cerr << "[UnifiedGraph] Failed to reinstantiate graph: "
+                  << cudaGetErrorString(err) << std::endl;
+        cudaGraphDestroy(m_graph);
+        m_graph = nullptr;
+        return false;
+    }
+
+    std::cout << "[UnifiedGraph] Graph reinstantiated successfully (slow path)" << std::endl;
+    m_state.needsRebuild = false;
+    return true;
+}
 
 
 
@@ -577,12 +711,17 @@ void UnifiedGraphPipeline::cleanupGraph() {
         cudaGraphExecDestroy(m_graphExec);
         m_graphExec = nullptr;
     }
-    
+
     if (m_graph) {
         cudaGraphDestroy(m_graph);
         m_graph = nullptr;
     }
-    
+
+    if (m_updateGraph) {
+        cudaGraphDestroy(m_updateGraph);
+        m_updateGraph = nullptr;
+    }
+
     m_state.graphReady = false;
 }
 
@@ -802,22 +941,30 @@ void UnifiedGraphPipeline::setInputFrame(const SimpleCudaMat& frame) {
         return;
     }
     
-    if (m_captureBuffer.empty() || 
-        m_captureBuffer.rows() != frame.rows() || 
-        m_captureBuffer.cols() != frame.cols() || 
-        m_captureBuffer.channels() != frame.channels()) {
-        m_captureBuffer.create(frame.rows(), frame.cols(), frame.channels());
+    // Write into ring at write index and mark ready immediately (no event)
+    int writeIdx = m_captureWriteIdx;
+    if (writeIdx < 0 || writeIdx >= kCaptureRingSize) {
+        writeIdx = 0;
+        m_captureWriteIdx = 0;
     }
-    
-    size_t dataSize = frame.rows() * frame.cols() * frame.channels() * sizeof(unsigned char);
-    cudaError_t err = cudaMemcpyAsync(m_captureBuffer.data(), frame.data(), dataSize, 
+
+    SimpleCudaMat& dst = m_captureRing[writeIdx];
+    if (dst.empty() || dst.rows() != frame.rows() || dst.cols() != frame.cols() || dst.channels() != frame.channels()) {
+        dst.create(frame.rows(), frame.cols(), frame.channels());
+    }
+
+    size_t dataSize = static_cast<size_t>(frame.rows()) * static_cast<size_t>(frame.cols()) * static_cast<size_t>(frame.channels()) * sizeof(unsigned char);
+    cudaError_t err = cudaMemcpyAsync(dst.data(), frame.data(), dataSize, 
                                       cudaMemcpyDeviceToDevice, m_pipelineStream->get());
     if (err != cudaSuccess) {
-        printf("[ERROR] Failed to copy frame to buffer: %s\n", cudaGetErrorString(err));
+        printf("[ERROR] Failed to copy frame to ring buffer: %s\n", cudaGetErrorString(err));
         return;
     }
-    
+
+    // Latest-wins: publish as current and advance write index
+    m_captureReadIdx = writeIdx;
     m_hasFrameData = true;
+    m_captureWriteIdx = (writeIdx + 1) % kCaptureRingSize;
 }
 
 
@@ -2005,14 +2152,19 @@ bool UnifiedGraphPipeline::waitForCaptureCompletion() {
         return false;
     }
 
+    // Mark capture complete for the pending slot
     m_captureInFlight = false;
-    std::swap(m_captureBuffer, m_nextCaptureBuffer);
+    if (m_capturePendingIdx >= 0 && m_capturePendingIdx < kCaptureRingSize) {
+        m_captureReadIdx = m_capturePendingIdx; // latest-wins
+    }
+    m_capturePendingIdx = -1;
     m_hasFrameData = true;
 
     auto& ctx = AppContext::getInstance();
     if ((m_preview.enabled || ctx.config.show_window) &&
-        m_pipelineStream && m_pipelineStream->get()) {
-        updatePreviewBuffer(m_captureBuffer);
+        m_pipelineStream && m_pipelineStream->get() &&
+        m_captureReadIdx >= 0) {
+        updatePreviewBuffer(m_captureRing[m_captureReadIdx]);
     }
 
     return true;
@@ -2079,8 +2231,13 @@ bool UnifiedGraphPipeline::scheduleNextFrameCapture(bool forceSync) {
         return false;
     }
 
-    // Always capture into the 'next' buffer to enable double-buffering
-    SimpleCudaMat& targetBuffer = m_nextCaptureBuffer;
+    // Select ring write slot for capture
+    int writeIdx = m_captureWriteIdx;
+    if (writeIdx < 0 || writeIdx >= kCaptureRingSize) {
+        writeIdx = 0;
+        m_captureWriteIdx = 0;
+    }
+    SimpleCudaMat& targetBuffer = m_captureRing[writeIdx];
 
     if (useGPUDirect && cudaArray) {
         // Zero-copy GPU path: copy directly from CUDA array
@@ -2162,11 +2319,14 @@ bool UnifiedGraphPipeline::scheduleNextFrameCapture(bool forceSync) {
         return false;
     }
 
-    // Capture is now in flight into m_nextCaptureBuffer
+    // Capture is now in flight into ring[writeIdx]
     m_captureInFlight = true;
     m_lastCaptureW = static_cast<int>(width);
     m_lastCaptureH = static_cast<int>(height);
     m_lastGpuDirect = useGPUDirect;
+    m_capturePendingIdx = writeIdx;
+    // Advance write index to keep a free slot available
+    m_captureWriteIdx = (writeIdx + 1) % kCaptureRingSize;
 
     if (forceSync) {
         return waitForCaptureCompletion();
@@ -2214,17 +2374,22 @@ bool UnifiedGraphPipeline::performPreprocessing() {
     
     // Preview buffer is now updated in performFrameCapture() instead
     
-    if (!m_unifiedArena.yoloInput || m_captureBuffer.empty()) {
+    // Select source from ring (non-graph path uses ring directly)
+    if (!m_unifiedArena.yoloInput || m_captureReadIdx < 0) {
+        return false;
+    }
+    const SimpleCudaMat& src = m_captureRing[m_captureReadIdx];
+    if (src.empty()) {
         return false;
     }
     
     int modelRes = getModelInputResolution();
     cudaError_t err = cuda_unified_preprocessing(
-        m_captureBuffer.data(),
+        src.data(),
         m_unifiedArena.yoloInput,
-        m_captureBuffer.cols(),
-        m_captureBuffer.rows(),
-        static_cast<int>(m_captureBuffer.step()),
+        src.cols(),
+        src.rows(),
+        static_cast<int>(src.step()),
         modelRes,
         modelRes,
         m_pipelineStream->get()
@@ -2494,6 +2659,18 @@ bool UnifiedGraphPipeline::executeFrame(cudaStream_t stream) {
         graphInitialized = true;
     }
 
+    // Check if graph needs rebuild (e.g., config changed)
+    if (graphInitialized && m_state.needsRebuild && ctx.config.use_cuda_graph) {
+        // Try fast update first, falls back to full recapture if needed
+        if (!updateGraphExec()) {
+            std::cerr << "[UnifiedGraph] Graph update failed, attempting full recapture" << std::endl;
+            if (!captureGraph(stream)) {
+                std::cerr << "[UnifiedGraph] Graph recapture failed" << std::endl;
+                m_state.graphReady = false;
+            }
+        }
+    }
+
     cudaStream_t launchStream = stream ? stream : (m_pipelineStream ? m_pipelineStream->get() : nullptr);
     if (!launchStream) {
         m_frameInFlight.store(false, std::memory_order_release);
@@ -2523,27 +2700,32 @@ bool UnifiedGraphPipeline::executeFrame(cudaStream_t stream) {
         // Schedule next capture if nothing in flight
         (void)scheduleNextFrameCapture(false);
 
-        // If a fresh frame is ready in m_nextCaptureBuffer, wait on capture event and copy it into m_captureBuffer
+        // If a fresh frame is pending/ready in the ring, wait on event and copy it into the stable graph input buffer
         if (m_captureReadyEvent && m_captureReadyEvent->get()) {
             cudaStreamWaitEvent(launchStream, m_captureReadyEvent->get(), 0);
 
-            // Ensure destination allocation matches
-            if (m_captureBuffer.empty() ||
-                m_captureBuffer.rows() != m_nextCaptureBuffer.rows() ||
-                m_captureBuffer.cols() != m_nextCaptureBuffer.cols() ||
-                m_captureBuffer.channels() != m_nextCaptureBuffer.channels()) {
-                m_captureBuffer.create(m_nextCaptureBuffer.rows(), m_nextCaptureBuffer.cols(), m_nextCaptureBuffer.channels());
-            }
+            int srcIdx = (m_capturePendingIdx >= 0) ? m_capturePendingIdx : m_captureReadIdx;
+            if (srcIdx >= 0 && srcIdx < kCaptureRingSize) {
+                const SimpleCudaMat& srcBuf = m_captureRing[srcIdx];
 
-            size_t rowBytes = static_cast<size_t>(m_nextCaptureBuffer.cols()) * m_nextCaptureBuffer.channels();
-            cudaMemcpy2DAsync(
-                m_captureBuffer.data(), m_captureBuffer.step(),
-                m_nextCaptureBuffer.data(), m_nextCaptureBuffer.step(),
-                rowBytes, m_nextCaptureBuffer.rows(),
-                cudaMemcpyDeviceToDevice, launchStream);
+                // Ensure destination allocation matches
+                if (m_captureBuffer.empty() ||
+                    m_captureBuffer.rows() != srcBuf.rows() ||
+                    m_captureBuffer.cols() != srcBuf.cols() ||
+                    m_captureBuffer.channels() != srcBuf.channels()) {
+                    m_captureBuffer.create(srcBuf.rows(), srcBuf.cols(), srcBuf.channels());
+                }
 
-            if (m_preview.enabled && ctx.config.show_window && !m_captureBuffer.empty()) {
-                updatePreviewBuffer(m_captureBuffer);
+                size_t rowBytes = static_cast<size_t>(srcBuf.cols()) * srcBuf.channels();
+                cudaMemcpy2DAsync(
+                    m_captureBuffer.data(), m_captureBuffer.step(),
+                    srcBuf.data(), srcBuf.step(),
+                    rowBytes, srcBuf.rows(),
+                    cudaMemcpyDeviceToDevice, launchStream);
+
+                if (m_preview.enabled && ctx.config.show_window && !m_captureBuffer.empty()) {
+                    updatePreviewBuffer(m_captureBuffer);
+                }
             }
         }
 
@@ -2560,7 +2742,7 @@ bool UnifiedGraphPipeline::executeFrame(cudaStream_t stream) {
             return false;
         }
 
-        // Clear flag to indicate that the frame was consumed; the next capture will refill m_nextCaptureBuffer
+        // Clear flag to indicate that the frame was consumed; the next capture will update the ring
         m_hasFrameData = false;
     } else {
         if (!executeNormalPipeline(launchStream)) {
