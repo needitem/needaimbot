@@ -476,7 +476,6 @@ bool DDACapture::EnsureStagingTexture(UINT width, UINT height, DXGI_FORMAT forma
 }
 
 bool DDACapture::EnsureFrameBuffer(size_t requiredSize) {
-    std::lock_guard<std::mutex> lock(m_frameMutex);
     if (requiredSize <= m_bufferSize && m_frameBuffer) {
         return true;
     }
@@ -613,9 +612,9 @@ DDACapture::FrameAcquireResult DDACapture::AcquireFrame() {
         }
     }
 
-    // Only copy to staging texture if CPU fallback is needed
-    // This eliminates redundant CPU path when GPU-direct is working
-    const bool needCpuCopy = !m_cudaInteropEnabled || m_cpuFallbackNeeded.load(std::memory_order_acquire);
+    // Only copy to staging texture if CPU fallback is truly needed
+    // Skip redundant CPU path when GPU-direct is active and working
+    const bool needCpuCopy = (!m_cudaInteropEnabled) && m_cpuFallbackNeeded.load(std::memory_order_acquire);
 
     hr = m_duplication->ReleaseFrame();
     frameAcquired = false;
@@ -646,37 +645,38 @@ DDACapture::FrameAcquireResult DDACapture::AcquireFrame() {
             m_cpuBufferValid = false;
             // Don't fail - GPU path may still work
         } else {
+            std::lock_guard<std::mutex> lock(m_frameMutex);
             if (!EnsureFrameBuffer(requiredSize)) {
                 m_context->Unmap(m_stagingTexture.Get(), 0);
                 m_cpuBufferValid = false;
-            } else {
-                std::lock_guard<std::mutex> lock(m_frameMutex);
-                if (m_frameBuffer) {
-                    unsigned char* dst = m_frameBuffer->get();
-                    const unsigned char* srcBase = static_cast<const unsigned char*>(mapped.pData);
-                    const UINT srcPitch = mapped.RowPitch;
-                    const UINT bytesPerRow = captureWidth * kBytesPerPixel;
+            } else if (m_frameBuffer) {
+                unsigned char* dst = m_frameBuffer->get();
+                const unsigned char* srcBase = static_cast<const unsigned char*>(mapped.pData);
+                const UINT srcPitch = mapped.RowPitch;
+                const UINT bytesPerRow = captureWidth * kBytesPerPixel;
 
-                    if (srcPitch == bytesPerRow) {
-                        std::memcpy(dst, srcBase, bytesPerRow * captureHeight);
-                    } else {
-                        for (UINT row = 0; row < captureHeight; ++row) {
-                            const unsigned char* srcRow = srcBase + row * srcPitch;
-                            std::memcpy(dst + row * bytesPerRow, srcRow, bytesPerRow);
-                        }
+                if (srcPitch == bytesPerRow) {
+                    std::memcpy(dst, srcBase, bytesPerRow * captureHeight);
+                } else {
+                    for (UINT row = 0; row < captureHeight; ++row) {
+                        const unsigned char* srcRow = srcBase + row * srcPitch;
+                        std::memcpy(dst + row * bytesPerRow, srcRow, bytesPerRow);
                     }
-
-                    m_captureWidth = captureWidth;
-                    m_captureHeight = captureHeight;
-                    m_bufferSize = requiredSize;
-                    m_cpuBufferValid = true;
-                    callback = m_frameCallback;
-                    callbackData = dst;
-                    callbackWidth = m_captureWidth;
-                    callbackHeight = m_captureHeight;
-                    callbackSize = static_cast<unsigned int>(m_bufferSize);
                 }
+
+                m_captureWidth = captureWidth;
+                m_captureHeight = captureHeight;
+                m_bufferSize = requiredSize;
+                m_cpuBufferValid = true;
+                callback = m_frameCallback;
+                callbackData = dst;
+                callbackWidth = m_captureWidth;
+                callbackHeight = m_captureHeight;
+                callbackSize = static_cast<unsigned int>(m_bufferSize);
                 m_context->Unmap(m_stagingTexture.Get(), 0);
+            } else {
+                m_context->Unmap(m_stagingTexture.Get(), 0);
+                m_cpuBufferValid = false;
             }
         }
     } else {
@@ -945,18 +945,17 @@ DDACapture::FrameAcquireResult DDACapture::AcquireFrameCpuFallback() {
     }
 
     size_t requiredSize = static_cast<size_t>(captureWidth) * captureHeight * kBytesPerPixel;
-    if (!EnsureFrameBuffer(requiredSize)) {
-        m_context->Unmap(m_stagingTexture.Get(), 0);
-        std::lock_guard<std::mutex> lock(m_frameMutex);
-        m_cpuBufferValid = false;
-        return FrameAcquireResult::kError;
-    }
-
-    std::function<void(void*, unsigned int, unsigned int, unsigned int)> callback;
-    void* callbackData = nullptr;
-
     {
         std::lock_guard<std::mutex> lock(m_frameMutex);
+        if (!EnsureFrameBuffer(requiredSize)) {
+            m_context->Unmap(m_stagingTexture.Get(), 0);
+            m_cpuBufferValid = false;
+            return FrameAcquireResult::kError;
+        }
+
+        std::function<void(void*, unsigned int, unsigned int, unsigned int)> callback;
+        void* callbackData = nullptr;
+
         if (m_frameBuffer) {
             unsigned char* dst = m_frameBuffer->get();
             const unsigned char* srcBase = static_cast<const unsigned char*>(mapped.pData);
@@ -979,20 +978,20 @@ DDACapture::FrameAcquireResult DDACapture::AcquireFrameCpuFallback() {
             callback = m_frameCallback;
             callbackData = dst;
         }
-    }
 
-    m_context->Unmap(m_stagingTexture.Get(), 0);
+        m_context->Unmap(m_stagingTexture.Get(), 0);
 
-    // Update frame timing
-    {
-        std::lock_guard<std::mutex> lk(m_presentMutex);
-        m_lastPresentQpc.store(frameInfo.LastPresentTime.QuadPart, std::memory_order_release);
-        m_frameCounter.fetch_add(1, std::memory_order_acq_rel);
-    }
-    m_presentCv.notify_all();
+        // Update frame timing
+        {
+            std::lock_guard<std::mutex> lk(m_presentMutex);
+            m_lastPresentQpc.store(frameInfo.LastPresentTime.QuadPart, std::memory_order_release);
+            m_frameCounter.fetch_add(1, std::memory_order_acq_rel);
+        }
+        m_presentCv.notify_all();
 
-    if (callback && callbackData) {
-        callback(callbackData, m_captureWidth, m_captureHeight, static_cast<unsigned int>(m_bufferSize));
+        if (callback && callbackData) {
+            callback(callbackData, m_captureWidth, m_captureHeight, static_cast<unsigned int>(m_bufferSize));
+        }
     }
 
     return FrameAcquireResult::kFrameCaptured;
