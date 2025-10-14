@@ -212,7 +212,9 @@ bool GameCapture::initialize() {
         return false;
     }
 
-    if (WaitForSingleObject(hook_ready, 10000) != WAIT_OBJECT_0) { // 10s timeout
+    // Use adaptive timeout: long for first init, short for re-init
+    DWORD hookTimeout = m_hasInitializedOnce ? m_hookReadyTimeoutReinitMs : m_hookReadyTimeoutInitialMs;
+    if (WaitForSingleObject(hook_ready, hookTimeout) != WAIT_OBJECT_0) { // adaptive timeout
         std::cout << "ERROR: Hook not ready (timeout)" << std::endl;
         return false;
     }
@@ -228,6 +230,9 @@ bool GameCapture::initialize() {
         std::cout << "ERROR: MapViewOfFile (shared_hook_info) failed!" << std::endl;
         return false;
     }
+
+    // Mark that we have successfully initialized at least once
+    m_hasInitializedOnce = true;
 
     // std::cout << shared_hook_info->window << " " << shared_hook_info->map_id << std::endl;
 
@@ -416,9 +421,11 @@ Image GameCapture::get_frame() {
             return img; // empty on failure
         }
 
-        // Success - reset failure counter
+        // Success - reset failure counter and backoff timing baseline
         std::cout << "Re-initialization successful after " << m_failureCount << " failures" << std::endl;
         m_failureCount = 0;
+        // Push last failure time sufficiently into the past so next failure doesn't inherit short backoff
+        m_lastFailureTime = std::chrono::steady_clock::time_point{};
     }
 
     if (!pContext || !pSharedResource || !pStagingTexture) {
