@@ -356,6 +356,11 @@ private:
     std::unique_ptr<CudaEvent> m_captureReadyEvent;
     bool m_captureInFlight = false;
     bool m_graphPrimed = false;
+    // Track stable capture buffer shape to avoid per-frame reallocation checks
+    int m_stableCaptureRows = 0;
+    int m_stableCaptureCols = 0;
+    int m_stableCaptureChannels = 0;
+    bool m_captureBufferShapeDirty = true;
 
     bool ensureFrameReady();
     bool scheduleNextFrameCapture(bool forceSync);

@@ -1237,10 +1237,25 @@ void UnifiedGraphPipeline::runMainLoop() {
             wasAiming = true;
         }
 
+        // Adaptive backoff on frame execution failures to reduce CPU usage
+        int consecutiveFails = 0;
         while (ctx.aiming.load() && !m_shouldStop.load(std::memory_order_acquire) &&
                !ctx.should_exit.load()) {
             if (!executeFrame()) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                ++consecutiveFails;
+                if (consecutiveFails <= 16) {
+                    // spin
+                } else if (consecutiveFails <= 32) {
+                    std::this_thread::yield();
+                } else if (consecutiveFails <= 64) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(0));
+                } else if (consecutiveFails <= 128) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                } else {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                }
+            } else {
+                consecutiveFails = 0;
             }
         }
 
@@ -2325,6 +2340,12 @@ bool UnifiedGraphPipeline::scheduleNextFrameCapture(bool forceSync) {
     m_lastCaptureH = static_cast<int>(height);
     m_lastGpuDirect = useGPUDirect;
     m_capturePendingIdx = writeIdx;
+    // Mark shape dirty if upcoming frame dims differ from stable buffer
+    if (m_stableCaptureRows != static_cast<int>(height) ||
+        m_stableCaptureCols != static_cast<int>(width) ||
+        m_stableCaptureChannels != 4) {
+        m_captureBufferShapeDirty = true;
+    }
     // Advance write index to keep a free slot available
     m_captureWriteIdx = (writeIdx + 1) % kCaptureRingSize;
 
@@ -2432,8 +2453,8 @@ void UnifiedGraphPipeline::updatePreviewBuffer(const SimpleCudaMat& currentBuffe
     // First ensure preview buffer allocation is correct
     updatePreviewBufferAllocation();
 
-    // Check both m_preview.enabled AND current show_window state
-    if (!m_preview.enabled || !ctx.config.show_window || m_preview.previewBuffer.empty()) {
+    // m_preview.enabled reflects show_window state; avoid redundant check
+    if (!m_preview.enabled || m_preview.previewBuffer.empty()) {
         return;
     }
 
@@ -2490,7 +2511,7 @@ void UnifiedGraphPipeline::updatePreviewBuffer(const SimpleCudaMat& currentBuffe
 bool UnifiedGraphPipeline::getPreviewSnapshot(SimpleMat& outFrame) {
     auto& ctx = AppContext::getInstance();
 
-    if (!m_preview.enabled || !ctx.config.show_window) {
+    if (!m_preview.enabled) {
         return false;
     }
 
@@ -2708,12 +2729,13 @@ bool UnifiedGraphPipeline::executeFrame(cudaStream_t stream) {
             if (srcIdx >= 0 && srcIdx < kCaptureRingSize) {
                 const SimpleCudaMat& srcBuf = m_captureRing[srcIdx];
 
-                // Ensure destination allocation matches
-                if (m_captureBuffer.empty() ||
-                    m_captureBuffer.rows() != srcBuf.rows() ||
-                    m_captureBuffer.cols() != srcBuf.cols() ||
-                    m_captureBuffer.channels() != srcBuf.channels()) {
+                // Ensure destination allocation matches only when shape flagged dirty
+                if (m_captureBufferShapeDirty) {
                     m_captureBuffer.create(srcBuf.rows(), srcBuf.cols(), srcBuf.channels());
+                    m_stableCaptureRows = srcBuf.rows();
+                    m_stableCaptureCols = srcBuf.cols();
+                    m_stableCaptureChannels = srcBuf.channels();
+                    m_captureBufferShapeDirty = false;
                 }
 
                 size_t rowBytes = static_cast<size_t>(srcBuf.cols()) * srcBuf.channels();
@@ -2723,7 +2745,7 @@ bool UnifiedGraphPipeline::executeFrame(cudaStream_t stream) {
                     rowBytes, srcBuf.rows(),
                     cudaMemcpyDeviceToDevice, launchStream);
 
-                if (m_preview.enabled && ctx.config.show_window && !m_captureBuffer.empty()) {
+                if (m_preview.enabled && !m_captureBuffer.empty()) {
                     updatePreviewBuffer(m_captureBuffer);
                 }
             }

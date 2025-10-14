@@ -89,4 +89,8 @@ private:
     std::chrono::steady_clock::time_point m_lastFailureTime;
     static constexpr int MAX_RETRIES = 5;
     static constexpr int BASE_BACKOFF_MS = 50;  // Base backoff time in milliseconds
+    // Hook ready timeout control: longer for cold start, shorter for re-init
+    bool m_hasInitializedOnce = false;
+    DWORD m_hookReadyTimeoutInitialMs = 10000; // 10s on first init
+    DWORD m_hookReadyTimeoutReinitMs = 3000;   // 3s on subsequent re-inits
 };
