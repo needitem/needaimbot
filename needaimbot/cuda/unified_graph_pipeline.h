@@ -10,6 +10,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <functional>
+#include <cstdint>
 #include "simple_cuda_mat.h"
 #include "cuda_resource_manager.h"
 #include "../core/Target.h"
@@ -34,6 +35,70 @@ struct PIDState {
     float prev_error_y;
     float integral_x;
     float integral_y;
+};
+
+// Unified capture state machine
+enum class CaptureState : uint8_t {
+    IDLE,           // No capture scheduled
+    CAPTURING,      // Async copy in flight
+    READY,          // Frame ready for consumption
+    CONSUMED        // Frame consumed by pipeline, needs new capture
+};
+
+// Frame execution failure reasons for smart waiting
+enum class FrameFailureReason : uint8_t {
+    NO_FRAME_READY,     // Waiting for capture completion - short yield
+    INPUT_PENDING,      // Waiting for input to be reflected - event wait
+    GRAPH_NOT_READY,    // Graph initialization - longer wait
+    GPU_BUSY,           // GPU still processing previous frame - yield
+    CAPTURE_FAILED,     // Capture error - backoff
+    NONE                // Success
+};
+
+// Performance metrics for before/after comparison
+struct PerformanceMetrics {
+    uint64_t totalFrames = 0;
+    double totalLatencyMs = 0.0;
+    uint64_t busySpinCount = 0;
+    uint64_t yieldCount = 0;
+    uint64_t sleepCount = 0;
+    uint64_t captureWaitCount = 0;
+    uint64_t inputPendingCount = 0;
+    uint64_t frameSkipCount = 0;
+    uint64_t memcpySkipCount = 0;
+    std::chrono::steady_clock::time_point lastReportTime;
+    
+    void reset() {
+        totalFrames = 0;
+        totalLatencyMs = 0.0;
+        busySpinCount = 0;
+        yieldCount = 0;
+        sleepCount = 0;
+        captureWaitCount = 0;
+        inputPendingCount = 0;
+        frameSkipCount = 0;
+        memcpySkipCount = 0;
+        lastReportTime = std::chrono::steady_clock::now();
+    }
+    
+    void logIfNeeded(const char* prefix = "[Perf]") {
+        if (totalFrames == 0) return;
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - lastReportTime).count();
+        if (elapsed >= 10) {  // Log every 10 seconds
+            double avgMs = totalLatencyMs / totalFrames;
+            printf("%s Last 10s: %llu frames, %.2fms avg (%.1f FPS)\n",
+                   prefix, (unsigned long long)totalFrames, avgMs, 1000.0 / avgMs);
+            printf("%s   Waits: busySpin=%llu, yield=%llu, sleep=%llu\n",
+                   prefix, (unsigned long long)busySpinCount, 
+                   (unsigned long long)yieldCount, (unsigned long long)sleepCount);
+            printf("%s   Optimizations: captureWait=%llu, inputPending=%llu, frameSkip=%llu, memcpySkip=%llu\n",
+                   prefix, (unsigned long long)captureWaitCount, 
+                   (unsigned long long)inputPendingCount, (unsigned long long)frameSkipCount,
+                   (unsigned long long)memcpySkipCount);
+            reset();
+        }
+    }
 };
 
 struct SmallBufferArena {
@@ -232,7 +297,7 @@ public:
     bool captureGraph(cudaStream_t stream = nullptr);
     bool updateGraphExec();  // Update existing graph without recapture
 
-    bool executeFrame(cudaStream_t stream = nullptr);
+    bool executeFrame(FrameFailureReason* outReason = nullptr, cudaStream_t stream = nullptr);
     bool executeNormalPipeline(cudaStream_t stream = nullptr);
     
         
@@ -354,19 +419,27 @@ private:
 
     std::unique_ptr<CudaStream> m_captureStream;
     std::unique_ptr<CudaEvent> m_captureReadyEvent;
-    bool m_captureInFlight = false;
+    
+    // Unified capture state (replaces m_captureInFlight, m_hasFrameData, m_frameInFlight)
+    std::atomic<CaptureState> m_captureState{CaptureState::IDLE};
     bool m_graphPrimed = false;
+    bool m_qpcSupportChecked = false;
+    bool m_qpcSupported = false;
     // Track stable capture buffer shape to avoid per-frame reallocation checks
     int m_stableCaptureRows = 0;
     int m_stableCaptureCols = 0;
     int m_stableCaptureChannels = 0;
     bool m_captureBufferShapeDirty = true;
 
-    bool ensureFrameReady();
-    bool scheduleNextFrameCapture(bool forceSync);
+    FrameFailureReason ensureFrameReady();
+    FrameFailureReason scheduleNextFrameCapture(bool forceSync);
     bool waitForCaptureCompletion();
     bool copyFrameToBuffer(void* frameData, unsigned int width, unsigned int height,
                            SimpleCudaMat& targetBuffer, cudaStream_t stream);
+    
+    // Smart waiting based on failure reason
+    void handleFrameFailure(FrameFailureReason reason, int& consecutiveFails);
+    bool checkQPCSupport();
     
     
     std::unique_ptr<nvinfer1::IRuntime> m_runtime;
@@ -422,7 +495,9 @@ private:
     UnifiedPipelineConfig m_config;
     GraphExecutionState m_state;
     std::mutex m_graphMutex;
-    bool m_hasFrameData = false;
+    
+    // Performance tracking
+    PerformanceMetrics m_perfMetrics;
 
     std::atomic<bool> m_allowMovement{false};
     std::atomic<bool> m_shouldStop{false};
