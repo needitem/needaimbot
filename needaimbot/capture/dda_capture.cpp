@@ -6,7 +6,10 @@
 #include "AppContext.h"
 
 namespace {
-constexpr UINT kFrameTimeoutMs = 1;  // Poll for new frames without blocking indefinitely
+// OPTIMIZATION: Short timeout (2ms) for 360Hz+ displays; aggressive backoff prevents busyspin
+// Desktop Duplication returns immediately (<1ms) when new frame is available
+// Backoff strategy handles prolonged no-frame periods to eliminate CPU waste
+constexpr UINT kFrameTimeoutMs = 2;  // 2ms timeout supports up to 500Hz displays
 constexpr UINT kBytesPerPixel = 4;   // BGRA
 }
 
@@ -1053,18 +1056,19 @@ void DDACapture::CaptureThreadProc() {
             // No frame available - adaptive backoff
             m_consecutiveNoFrames++;
 
-            // Determine backoff level based on consecutive failures
+            // OPTIMIZATION: Ultra-aggressive backoff to eliminate busyspin
+            // Transition to thread yield/sleep very quickly after initial spin attempts
             BackoffLevel newLevel;
-            if (m_consecutiveNoFrames <= 16) {
-                newLevel = BackoffLevel::kNone;        // Spin (high refresh rate)
-            } else if (m_consecutiveNoFrames <= 32) {
-                newLevel = BackoffLevel::kMinimal;     // SwitchToThread
-            } else if (m_consecutiveNoFrames <= 64) {
-                newLevel = BackoffLevel::kShort;       // Sleep(0)
-            } else if (m_consecutiveNoFrames <= 128) {
-                newLevel = BackoffLevel::kMedium;      // Sleep(1ms)
+            if (m_consecutiveNoFrames <= 1) {
+                newLevel = BackoffLevel::kNone;        // Single immediate retry for 360Hz+
+            } else if (m_consecutiveNoFrames <= 3) {
+                newLevel = BackoffLevel::kMinimal;     // SwitchToThread (240Hz)
+            } else if (m_consecutiveNoFrames <= 6) {
+                newLevel = BackoffLevel::kShort;       // Sleep(0) (144Hz)
+            } else if (m_consecutiveNoFrames <= 12) {
+                newLevel = BackoffLevel::kMedium;      // Sleep(1ms) (60Hz/idle)
             } else {
-                newLevel = BackoffLevel::kLong;        // Sleep(2ms)
+                newLevel = BackoffLevel::kLong;        // Sleep(2ms) (minimized)
             }
 
             // Apply backoff only if level increased (hysteresis)
