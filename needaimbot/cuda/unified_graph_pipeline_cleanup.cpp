@@ -60,6 +60,8 @@ void UnifiedGraphPipeline::shutdown() {
     
     // RAII wrappers automatically handle stream cleanup  
     m_pipelineStream.reset();  // Synchronize and destroy pipeline stream
+    if (m_captureStream) m_captureStream.reset();
+    if (m_previewStream) m_previewStream.reset();
     
     // Clear TensorRT resources with proper cleanup order
     m_context.reset();  // Destroy context first

@@ -116,11 +116,8 @@ bool DDACapture::GetLatestFrame(void** frameData, unsigned int* width, unsigned 
     // Signal that CPU fallback is needed
     m_cpuFallbackNeeded.store(true, std::memory_order_release);
 
-    // If currently in GPU direct mode, transition to CPU fallback
-    CaptureMode currentMode = m_currentMode.load(std::memory_order_acquire);
-    if (currentMode == CaptureMode::kGpuDirect) {
-        TransitionToCaptureMode(CaptureMode::kCpuFallback);
-    }
+    // Hint CPU fallback; capture thread decides mode. Avoid immediate mode switch.
+    (void)m_currentMode; // keep variable referenced to avoid warnings
 
     std::lock_guard<std::mutex> lock(m_frameMutex);
 
@@ -447,28 +444,32 @@ bool DDACapture::EnsureStagingTexture(UINT width, UINT height, DXGI_FORMAT forma
                       << " - using CPU fallback" << std::endl;
         }
 
-        // Create CPU staging texture for fallback
-        D3D11_TEXTURE2D_DESC stagingDesc{};
-        stagingDesc.Width = width;
-        stagingDesc.Height = height;
-        stagingDesc.MipLevels = 1;
-        stagingDesc.ArraySize = 1;
-        stagingDesc.Format = format;
-        stagingDesc.SampleDesc.Count = 1;
-        stagingDesc.SampleDesc.Quality = 0;
-        stagingDesc.Usage = D3D11_USAGE_STAGING;
-        stagingDesc.BindFlags = 0;
-        stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-        stagingDesc.MiscFlags = 0;
+        // Create CPU staging texture for fallback only if needed now
+        bool needCpuNow = (m_currentMode.load(std::memory_order_acquire) == CaptureMode::kCpuFallback) ||
+                          m_cpuFallbackNeeded.load(std::memory_order_acquire);
+        if (needCpuNow) {
+            D3D11_TEXTURE2D_DESC stagingDesc{};
+            stagingDesc.Width = width;
+            stagingDesc.Height = height;
+            stagingDesc.MipLevels = 1;
+            stagingDesc.ArraySize = 1;
+            stagingDesc.Format = format;
+            stagingDesc.SampleDesc.Count = 1;
+            stagingDesc.SampleDesc.Quality = 0;
+            stagingDesc.Usage = D3D11_USAGE_STAGING;
+            stagingDesc.BindFlags = 0;
+            stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+            stagingDesc.MiscFlags = 0;
 
-        Microsoft::WRL::ComPtr<ID3D11Texture2D> stagingTex;
-        hr = m_device->CreateTexture2D(&stagingDesc, nullptr, &stagingTex);
-        if (FAILED(hr)) {
-            std::cerr << "[DDACapture] Failed to create CPU staging texture: 0x" << std::hex << hr << std::dec << std::endl;
-            return false;
+            Microsoft::WRL::ComPtr<ID3D11Texture2D> stagingTex;
+            hr = m_device->CreateTexture2D(&stagingDesc, nullptr, &stagingTex);
+            if (FAILED(hr)) {
+                std::cerr << "[DDACapture] Failed to create CPU staging texture: 0x" << std::hex << hr << std::dec << std::endl;
+                return false;
+            }
+
+            m_stagingTexture = stagingTex;
         }
-
-        m_stagingTexture = stagingTex;
         m_frameDesc = sharedDesc;
     }
 
