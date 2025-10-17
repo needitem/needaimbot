@@ -377,6 +377,22 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
         }
     }
 
+    // Create a low-priority stream for preview conversions/copies
+    cudaStream_t previewStreamHandle = nullptr;
+    cudaError_t previewErr = cudaSuccess;
+    if (err == cudaSuccess) {
+        previewErr = cudaStreamCreateWithPriority(&previewStreamHandle, cudaStreamNonBlocking, leastPriority);
+    }
+    if (previewErr == cudaSuccess && previewStreamHandle) {
+        m_previewStream = std::make_unique<CudaStream>(previewStreamHandle);
+    } else {
+        try {
+            m_previewStream = std::make_unique<CudaStream>();
+        } catch (...) {
+            m_previewStream.reset();
+        }
+    }
+
     m_previewReadyEvent = std::make_unique<CudaEvent>(cudaEventDisableTiming);
     m_captureReadyEvent = std::make_unique<CudaEvent>(cudaEventDisableTiming);
     
@@ -803,6 +819,11 @@ void UnifiedGraphPipeline::deallocateBuffers() {
     // m_unifiedCaptureBuffer removed - using m_captureBuffer
     
     // Always release preview buffer if allocated
+    if (m_preview.hostPreviewPinned && m_preview.hostPreview.data()) {
+        cudaHostUnregister(m_preview.hostPreview.data());
+        m_preview.hostPreviewPinned = false;
+        m_preview.hostPreviewPinnedSize = 0;
+    }
     m_preview.previewBuffer.release();
     m_preview.hostPreview.release();
     m_preview.finalTargets.clear();
@@ -2286,10 +2307,8 @@ FrameFailureReason UnifiedGraphPipeline::scheduleNextFrameCapture(bool forceSync
     uint64_t minQpc = m_pendingInputQpc.load(std::memory_order_acquire);
     if (minQpc != 0) {
         if (m_qpcSupported) {
-            // QPC-based gating (accurate)
-            uint64_t lastQpc = m_capture->GetLastPresentQpc();
-            if (lastQpc != 0 && lastQpc < minQpc) {
-                // Frame not yet presented with our input
+            // Block briefly until a frame with LastPresentQpc >= minQpc is available
+            if (!m_capture->WaitForNewFrameSince(minQpc, 3)) {
                 m_perfMetrics.frameSkipCount++;
                 return FrameFailureReason::INPUT_PENDING;
             }
@@ -2535,7 +2554,25 @@ void UnifiedGraphPipeline::updatePreviewBufferAllocation() {
         m_preview.hasValidHostPreview = false;
         m_preview.finalTargets.reserve(ctx.config.max_detections);
         m_preview.enabled = true;
+        // Pin host preview buffer for faster async copies
+        size_t bytes = static_cast<size_t>(m_preview.hostPreview.step()) * m_preview.hostPreview.rows();
+        if (bytes > 0) {
+            if (cudaHostRegister(m_preview.hostPreview.data(), bytes, cudaHostRegisterPortable) == cudaSuccess) {
+                m_preview.hostPreviewPinned = true;
+                m_preview.hostPreviewPinnedSize = bytes;
+            } else {
+                m_preview.hostPreviewPinned = false;
+                m_preview.hostPreviewPinnedSize = 0;
+            }
+        }
+        m_preview.lastCopyTime = {};
     } else if (!ctx.config.show_window && m_preview.enabled) {
+        // Unregister pinned memory if registered
+        if (m_preview.hostPreviewPinned && m_preview.hostPreview.data()) {
+            cudaHostUnregister(m_preview.hostPreview.data());
+            m_preview.hostPreviewPinned = false;
+            m_preview.hostPreviewPinnedSize = 0;
+        }
         m_preview.previewBuffer.release();
         m_preview.hostPreview.release();
         m_preview.hasValidHostPreview = false;
@@ -2570,8 +2607,22 @@ void UnifiedGraphPipeline::updatePreviewBuffer(const SimpleCudaMat& currentBuffe
     if (m_preview.previewBuffer.rows() != currentBuffer.rows() ||
         m_preview.previewBuffer.cols() != currentBuffer.cols() ||
         m_preview.previewBuffer.channels() != currentBuffer.channels()) {
+        // If host preview was pinned, unregister before reallocating
+        if (m_preview.hostPreviewPinned && m_preview.hostPreview.data()) {
+            cudaHostUnregister(m_preview.hostPreview.data());
+            m_preview.hostPreviewPinned = false;
+            m_preview.hostPreviewPinnedSize = 0;
+        }
         m_preview.previewBuffer.create(currentBuffer.rows(), currentBuffer.cols(), currentBuffer.channels());
         m_preview.hostPreview.create(currentBuffer.rows(), currentBuffer.cols(), currentBuffer.channels());
+        // Re-pin host preview buffer after reallocation
+        size_t bytes = static_cast<size_t>(m_preview.hostPreview.step()) * m_preview.hostPreview.rows();
+        if (bytes > 0 && m_preview.enabled) {
+            if (cudaHostRegister(m_preview.hostPreview.data(), bytes, cudaHostRegisterPortable) == cudaSuccess) {
+                m_preview.hostPreviewPinned = true;
+                m_preview.hostPreviewPinnedSize = bytes;
+            }
+        }
     }
 
     if (m_preview.previewBuffer.empty() || !m_preview.previewBuffer.data()) {
@@ -2598,7 +2649,7 @@ void UnifiedGraphPipeline::updatePreviewBuffer(const SimpleCudaMat& currentBuffe
         currentBuffer.rows(),
         static_cast<int>(srcStep),
         static_cast<int>(dstStep),
-        m_pipelineStream->get());
+        (m_previewStream && m_previewStream->get()) ? m_previewStream->get() : m_pipelineStream->get());
 
     if (convertErr != cudaSuccess) {
         std::cerr << "[Preview] Failed to convert capture buffer for preview: "
@@ -2671,7 +2722,20 @@ bool UnifiedGraphPipeline::getPreviewSnapshot(SimpleMat& outFrame) {
         hasFrameToReturn = true;
     }
 
+    // Throttle preview copies to ~30 FPS to reduce overhead
+    auto now = std::chrono::steady_clock::now();
+    if (m_preview.lastCopyTime.time_since_epoch().count() != 0) {
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_preview.lastCopyTime).count();
+        if (elapsed < 33) {
+            return hasFrameToReturn;
+        }
+    }
+
     size_t rowBytes = static_cast<size_t>(m_preview.previewBuffer.cols()) * m_preview.previewBuffer.channels();
+    cudaStream_t pstream = (m_previewStream && m_previewStream->get()) ? m_previewStream->get() : (m_pipelineStream ? m_pipelineStream->get() : nullptr);
+    if (!pstream) {
+        return hasFrameToReturn;
+    }
     cudaError_t copyErr = cudaMemcpy2DAsync(
         m_preview.hostPreview.data(),
         m_preview.hostPreview.step(),
@@ -2680,7 +2744,7 @@ bool UnifiedGraphPipeline::getPreviewSnapshot(SimpleMat& outFrame) {
         rowBytes,
         m_preview.previewBuffer.rows(),
         cudaMemcpyDeviceToHost,
-        m_pipelineStream->get());
+        pstream);
     if (copyErr != cudaSuccess) {
         std::cerr << "[Preview] Failed to copy preview to host: " << cudaGetErrorString(copyErr) << std::endl;
         m_preview.hasValidHostPreview = false;
@@ -2688,10 +2752,11 @@ bool UnifiedGraphPipeline::getPreviewSnapshot(SimpleMat& outFrame) {
     }
 
     if (m_previewReadyEvent && m_previewReadyEvent->get()) {
-        m_previewReadyEvent->record(m_pipelineStream->get());
+        m_previewReadyEvent->record(pstream);
     }
 
     m_preview.copyInProgress = true;
+    m_preview.lastCopyTime = now;
     return hasFrameToReturn;
 }
 
@@ -2771,18 +2836,16 @@ bool UnifiedGraphPipeline::executeFrame(FrameFailureReason* outReason, cudaStrea
     // Performance tracking with new metrics
     auto frameStart = std::chrono::steady_clock::now();
 
-    static bool graphInitialized = false;
-    if (!graphInitialized && ctx.config.use_cuda_graph) {
+    if (ctx.config.use_cuda_graph && !m_state.graphReady) {
         if (!captureGraph(stream)) {
             m_frameInFlight.store(false, std::memory_order_release);
             if (outReason) *outReason = FrameFailureReason::GRAPH_NOT_READY;
             return false;
         }
-        graphInitialized = true;
     }
 
     // Check if graph needs rebuild (e.g., config changed)
-    if (graphInitialized && m_state.needsRebuild && ctx.config.use_cuda_graph) {
+    if (m_state.graphReady && m_state.needsRebuild && ctx.config.use_cuda_graph) {
         // Try fast update first, falls back to full recapture if needed
         if (!updateGraphExec()) {
             std::cerr << "[UnifiedGraph] Graph update failed, attempting full recapture" << std::endl;

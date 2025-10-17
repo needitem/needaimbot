@@ -418,6 +418,7 @@ private:
     int m_capturePendingIdx = -1;  // Slot with an in-flight copy associated with m_captureReadyEvent
 
     std::unique_ptr<CudaStream> m_captureStream;
+    std::unique_ptr<CudaStream> m_previewStream;
     std::unique_ptr<CudaEvent> m_captureReadyEvent;
     
     // Unified capture state (replaces m_captureInFlight, m_hasFrameData, m_frameInFlight)
@@ -516,6 +517,11 @@ private:
         std::vector<Target> finalTargets;
         SimpleCudaMat previewBuffer;
         SimpleMat hostPreview;
+        // Host preview pinning for faster D2H copies
+        bool hostPreviewPinned = false;
+        size_t hostPreviewPinnedSize = 0;
+        // Throttle preview copies to reduce overhead
+        std::chrono::steady_clock::time_point lastCopyTime{};
     } m_preview;
 
     struct CaptureRegionCache {
