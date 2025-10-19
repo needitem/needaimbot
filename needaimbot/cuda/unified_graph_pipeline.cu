@@ -1056,39 +1056,51 @@ void UnifiedGraphPipeline::resetMovementFilter() {
 
 void UnifiedGraphPipeline::handleFrameFailure(FrameFailureReason reason, int& consecutiveFails) {
     consecutiveFails++;
-    
+
     switch (reason) {
     case FrameFailureReason::NO_FRAME_READY:
-        // Capture pending - short yield to avoid burning CPU
+        // Capture pending - use event-based polling instead of busy-spin
         m_perfMetrics.captureWaitCount++;
-        if (consecutiveFails <= 4) {
-            // Brief spin for very fast captures
-            m_perfMetrics.busySpinCount++;
+
+        // Check capture event status to avoid blind spinning
+        if (m_captureReadyEvent && m_captureReadyEvent->get()) {
+            cudaError_t status = cudaEventQuery(m_captureReadyEvent->get());
+            if (status == cudaErrorNotReady) {
+                // Event not ready yet - yield CPU to other threads
+                std::this_thread::yield();
+                m_perfMetrics.yieldCount++;
+            } else if (status != cudaSuccess) {
+                // Error occurred - back off slightly
+                std::this_thread::yield();
+                m_perfMetrics.yieldCount++;
+            }
+            // If status == cudaSuccess, capture is ready - no wait needed
         } else {
+            // Fallback: always yield instead of spin
             std::this_thread::yield();
             m_perfMetrics.yieldCount++;
         }
         break;
-        
+
     case FrameFailureReason::INPUT_PENDING:
         // Waiting for input to be reflected in frame - yield
         m_perfMetrics.inputPendingCount++;
         std::this_thread::yield();
         m_perfMetrics.yieldCount++;
         break;
-        
+
     case FrameFailureReason::GPU_BUSY:
         // Previous frame still processing - yield
         std::this_thread::yield();
         m_perfMetrics.yieldCount++;
         break;
-        
+
     case FrameFailureReason::GRAPH_NOT_READY:
         // Graph initialization - longer wait
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
         m_perfMetrics.sleepCount++;
         break;
-        
+
     case FrameFailureReason::CAPTURE_FAILED:
         // Capture error - exponential backoff
         if (consecutiveFails <= 8) {
@@ -1102,7 +1114,7 @@ void UnifiedGraphPipeline::handleFrameFailure(FrameFailureReason reason, int& co
             m_perfMetrics.sleepCount++;
         }
         break;
-        
+
     case FrameFailureReason::NONE:
     default:
         break;
@@ -1954,41 +1966,45 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
 
 void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
     auto& ctx = AppContext::getInstance();
-    
+
     if (!m_unifiedArena.finalTargets || !m_smallBufferArena.finalTargetsCount) {
         std::cerr << "[Pipeline] No final targets available for selection" << std::endl;
         return;
     }
-    
+
     if (!m_smallBufferArena.bestTargetIndex || !m_smallBufferArena.bestTarget || !m_smallBufferArena.mouseMovement || !m_smallBufferArena.pidState) {
         std::cerr << "[Pipeline] Target selection buffers not allocated!" << std::endl;
         return;
     }
 
-    static int cached_max_detections = Constants::MAX_DETECTIONS;
-    static float cached_kp_x = 0.5f;
-    static float cached_kp_y = 0.5f;
-    static float cached_ki_x = 0.0f;
-    static float cached_ki_y = 0.0f;
-    static float cached_kd_x = 0.3f;
-    static float cached_kd_y = 0.3f;
-    static float cached_integral_max = 100.0f;
-    static float cached_head_y_offset = 0.2f;
-    static float cached_body_y_offset = 0.5f;
-
-    if (!m_graphCaptured) {
+    // Lock-free config access using cached values
+    if (!m_graphCaptured && m_pidConfigDirty.load(std::memory_order_acquire)) {
+        // Update cached config only when dirty flag is set
         std::lock_guard<std::mutex> lock(ctx.configMutex);
-        cached_max_detections = ctx.config.max_detections;
-        cached_kp_x = ctx.config.pid_kp_x;
-        cached_kp_y = ctx.config.pid_kp_y;
-        cached_ki_x = ctx.config.pid_ki_x;
-        cached_ki_y = ctx.config.pid_ki_y;
-        cached_kd_x = ctx.config.pid_kd_x;
-        cached_kd_y = ctx.config.pid_kd_y;
-        cached_integral_max = ctx.config.pid_integral_max;
-        cached_head_y_offset = ctx.config.head_y_offset;
-        cached_body_y_offset = ctx.config.body_y_offset;
+        m_cachedPIDConfig.max_detections = ctx.config.max_detections;
+        m_cachedPIDConfig.kp_x = ctx.config.pid_kp_x;
+        m_cachedPIDConfig.kp_y = ctx.config.pid_kp_y;
+        m_cachedPIDConfig.ki_x = ctx.config.pid_ki_x;
+        m_cachedPIDConfig.ki_y = ctx.config.pid_ki_y;
+        m_cachedPIDConfig.kd_x = ctx.config.pid_kd_x;
+        m_cachedPIDConfig.kd_y = ctx.config.pid_kd_y;
+        m_cachedPIDConfig.integral_max = ctx.config.pid_integral_max;
+        m_cachedPIDConfig.head_y_offset = ctx.config.head_y_offset;
+        m_cachedPIDConfig.body_y_offset = ctx.config.body_y_offset;
+        m_pidConfigDirty.store(false, std::memory_order_release);
     }
+
+    // Use cached values (lock-free)
+    int cached_max_detections = m_cachedPIDConfig.max_detections;
+    float cached_kp_x = m_cachedPIDConfig.kp_x;
+    float cached_kp_y = m_cachedPIDConfig.kp_y;
+    float cached_ki_x = m_cachedPIDConfig.ki_x;
+    float cached_ki_y = m_cachedPIDConfig.ki_y;
+    float cached_kd_x = m_cachedPIDConfig.kd_x;
+    float cached_kd_y = m_cachedPIDConfig.kd_y;
+    float cached_integral_max = m_cachedPIDConfig.integral_max;
+    float cached_head_y_offset = m_cachedPIDConfig.head_y_offset;
+    float cached_body_y_offset = m_cachedPIDConfig.body_y_offset;
     
     float crosshairX = ctx.config.detection_resolution / 2.0f;
     float crosshairY = ctx.config.detection_resolution / 2.0f;
@@ -2294,9 +2310,23 @@ FrameFailureReason UnifiedGraphPipeline::scheduleNextFrameCapture(bool forceSync
     }
 
     CaptureState state = m_captureState.load(std::memory_order_acquire);
-    
-    // If already capturing and not forcing sync, return success (capture in progress)
-    if (state == CaptureState::CAPTURING && !forceSync) {
+
+    // Optimized state transitions
+    if (state == CaptureState::CAPTURING) {
+        if (!forceSync) {
+            // Already capturing - return immediately (most common case in async path)
+            return FrameFailureReason::NONE;
+        } else {
+            // forceSync requested - wait for current capture to complete
+            if (!waitForCaptureCompletion()) {
+                return FrameFailureReason::NO_FRAME_READY;
+            }
+            state = m_captureState.load(std::memory_order_acquire);
+        }
+    }
+
+    // If frame is ready, return immediately (no need to schedule)
+    if (state == CaptureState::READY && !forceSync) {
         return FrameFailureReason::NONE;
     }
     
@@ -2544,40 +2574,54 @@ bool UnifiedGraphPipeline::performPreprocessing() {
 
 void UnifiedGraphPipeline::updatePreviewBufferAllocation() {
     auto& ctx = AppContext::getInstance();
-    
-    // Dynamically allocate/deallocate preview buffer based on show_window state
+
+    // Lazy allocation/deallocation - keep buffers allocated for fast re-enable
     if (ctx.config.show_window && !m_preview.enabled) {
         int width = ctx.config.detection_resolution;
         int height = ctx.config.detection_resolution;
-        m_preview.previewBuffer.create(height, width, 4);
-        m_preview.hostPreview.create(height, width, 4);
+
+        // Reuse existing buffers if they match dimensions
+        bool needRealloc = m_preview.previewBuffer.empty() ||
+                          m_preview.previewBuffer.rows() != height ||
+                          m_preview.previewBuffer.cols() != width;
+
+        if (needRealloc) {
+            // Release old buffers first if they exist
+            if (m_preview.hostPreviewPinned && m_preview.hostPreview.data()) {
+                cudaHostUnregister(m_preview.hostPreview.data());
+                m_preview.hostPreviewPinned = false;
+            }
+            m_preview.previewBuffer.release();
+            m_preview.hostPreview.release();
+
+            // Allocate new buffers
+            m_preview.previewBuffer.create(height, width, 4);
+            m_preview.hostPreview.create(height, width, 4);
+
+            // Pin host preview buffer for faster async copies
+            size_t bytes = static_cast<size_t>(m_preview.hostPreview.step()) * m_preview.hostPreview.rows();
+            if (bytes > 0) {
+                if (cudaHostRegister(m_preview.hostPreview.data(), bytes, cudaHostRegisterPortable) == cudaSuccess) {
+                    m_preview.hostPreviewPinned = true;
+                    m_preview.hostPreviewPinnedSize = bytes;
+                } else {
+                    m_preview.hostPreviewPinned = false;
+                    m_preview.hostPreviewPinnedSize = 0;
+                }
+            }
+        }
+
         m_preview.hasValidHostPreview = false;
         m_preview.finalTargets.reserve(ctx.config.max_detections);
         m_preview.enabled = true;
-        // Pin host preview buffer for faster async copies
-        size_t bytes = static_cast<size_t>(m_preview.hostPreview.step()) * m_preview.hostPreview.rows();
-        if (bytes > 0) {
-            if (cudaHostRegister(m_preview.hostPreview.data(), bytes, cudaHostRegisterPortable) == cudaSuccess) {
-                m_preview.hostPreviewPinned = true;
-                m_preview.hostPreviewPinnedSize = bytes;
-            } else {
-                m_preview.hostPreviewPinned = false;
-                m_preview.hostPreviewPinnedSize = 0;
-            }
-        }
         m_preview.lastCopyTime = {};
     } else if (!ctx.config.show_window && m_preview.enabled) {
-        // Unregister pinned memory if registered
-        if (m_preview.hostPreviewPinned && m_preview.hostPreview.data()) {
-            cudaHostUnregister(m_preview.hostPreview.data());
-            m_preview.hostPreviewPinned = false;
-            m_preview.hostPreviewPinnedSize = 0;
-        }
-        m_preview.previewBuffer.release();
-        m_preview.hostPreview.release();
-        m_preview.hasValidHostPreview = false;
-        m_preview.finalTargets.clear();
+        // Lazy deallocation - just disable without releasing memory
+        // Buffers stay allocated for instant re-enable
         m_preview.enabled = false;
+        m_preview.hasValidHostPreview = false;
+        // NOTE: Actual deallocation happens only in shutdown() to avoid
+        // allocation churn when user rapidly toggles preview window
     }
 }
 
@@ -2872,9 +2916,7 @@ bool UnifiedGraphPipeline::executeFrame(FrameFailureReason* outReason, cudaStrea
                 if (outReason) *outReason = primeReason;
                 return false;
             }
-            if (m_captureReadyEvent && m_captureReadyEvent->get()) {
-                cudaEventSynchronize(m_captureReadyEvent->get());
-            }
+            // Single synchronization point - waitForCaptureCompletion handles event sync internally
             if (!waitForCaptureCompletion()) {
                 m_allowMovement.store(false, std::memory_order_release);
                 m_frameInFlight.store(false, std::memory_order_release);
