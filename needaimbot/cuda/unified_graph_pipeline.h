@@ -405,6 +405,22 @@ private:
     std::atomic<int> m_cachedHeadClassId{-1};
     std::atomic<size_t> m_cachedHeadClassNameHash{0};
     std::atomic<size_t> m_cachedClassSettingsSize{0};
+
+    // Cached config for lock-free access in hot path
+    struct CachedPIDConfig {
+        int max_detections = 128;
+        float kp_x = 0.5f;
+        float kp_y = 0.5f;
+        float ki_x = 0.0f;
+        float ki_y = 0.0f;
+        float kd_x = 0.3f;
+        float kd_y = 0.3f;
+        float integral_max = 100.0f;
+        float head_y_offset = 0.2f;
+        float body_y_offset = 0.5f;
+    };
+    CachedPIDConfig m_cachedPIDConfig;
+    std::atomic<bool> m_pidConfigDirty{true};
     
     // Capture buffers
     // Triple-buffer ring for latest-wins capture ingestion

@@ -522,9 +522,14 @@ bool GameCapture::GetLatestFrameGPU(cudaArray_t* cudaArray, unsigned int* outWid
         }
 
         HANDLE mutex = texture_mutexes[tex_index];
-        DWORD wait_result = WaitForSingleObject(mutex, 100);
+        // Reduced timeout with fast retry for better responsiveness
+        DWORD wait_result = WaitForSingleObject(mutex, 5);
         if (wait_result != WAIT_OBJECT_0) {
-            return false;
+            // Quick retry once before giving up
+            wait_result = WaitForSingleObject(mutex, 2);
+            if (wait_result != WAIT_OBJECT_0) {
+                return false;
+            }
         }
 
         // Get pointer to shared memory texture data
