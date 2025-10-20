@@ -159,6 +159,11 @@ public:
     
     int cuda_device_id = 0;
 
+    // Capture timing tuning
+    // Scale factor applied to EMA of present interval when computing AcquireNextFrame timeout.
+    // Typical range 0.55–0.65; default 0.60.
+    float capture_timeout_scale = 0.60f;
+
     
     std::vector<std::string> button_targeting;
     std::vector<std::string> button_exit;

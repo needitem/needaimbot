@@ -11,6 +11,19 @@ namespace {
 constexpr UINT kBytesPerPixel = 4;   // BGRA
 }
 
+UINT DDACapture::AcquireTimeoutMs() const {
+    const auto& ctx = AppContext::getInstance();
+    double scale = 0.60; // fallback
+    double cfg = static_cast<double>(ctx.config.capture_timeout_scale);
+    if (cfg >= 0.3 && cfg <= 1.0) {
+        scale = cfg;
+    }
+    double base = m_estimatedIntervalMs * scale;
+    if (base < 1.0) base = 1.0;
+    if (base > 8.0) base = 8.0;
+    return static_cast<UINT>(base + 0.5);
+}
+
 DDACapture::DDACapture()
     : m_lastProbeTime(std::chrono::steady_clock::now()) {
     LARGE_INTEGER freq{};
