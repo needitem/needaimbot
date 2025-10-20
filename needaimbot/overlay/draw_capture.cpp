@@ -4,6 +4,7 @@
 #include "../imgui/imgui.h"
 #include "../imgui/imgui_internal.h"
 #include <cstring>
+#include <cmath>
 #include <vector>
 #include <string>
 #include <filesystem>
@@ -100,6 +101,19 @@ static void draw_capture_behavior_settings()
     if (current == 0) {
         ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "Desktop Duplication Capture Active");
         UIHelpers::InfoTooltip("The Windows Desktop Duplication API (DDA) powers high-quality capture with low latency.\nThis path delivers consistent results across modern GPUs without requiring vendor-specific drivers.");
+
+        // DDA tuning: AcquireNextFrame timeout scale
+        float scale = ctx.config.capture_timeout_scale;
+        UIHelpers::CompactSlider("Capture Timeout Scale", &scale, 0.55f, 0.65f, "%.2f");
+        UIHelpers::WrappedTooltip("Scale applied to EMA-estimated frame interval to compute AcquireNextFrame timeout.\nLower = wake earlier (lower jitter, slightly more wake-ups). Typical 0.55–0.65.");
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+            if (scale < 0.50f) scale = 0.50f;
+            if (scale > 0.80f) scale = 0.80f; // hard safety bounds
+            if (fabsf(scale - ctx.config.capture_timeout_scale) > 1e-3f) {
+                ctx.config.capture_timeout_scale = scale;
+                SAVE_PROFILE();
+            }
+        }
     } else {
         ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.6f, 1.0f), "OBS Hook Capture Selected");
         UIHelpers::InfoTooltip("Uses an OBS-style game capture hook. Requires specifying the game window title.\nGPU-direct is not available in this path.");
