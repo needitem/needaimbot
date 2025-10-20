@@ -166,10 +166,10 @@ private:
     double m_estimatedIntervalMs{6.9}; // start near 144Hz
 
     // Computes an appropriate AcquireNextFrame timeout based on recent frame interval.
-    // Clamped to [2, 8] ms: 2ms supports up to ~500Hz; 8ms keeps latency low at 60-144Hz.
+    // Clamped to [1, 8] ms: 1ms supports up to ~1000Hz; 8ms keeps latency low at 60-144Hz.
     UINT AcquireTimeoutMs() const {
         double base = m_estimatedIntervalMs * 0.60; // wake earlier to reduce jitter
-        if (base < 2.0) base = 2.0;
+        if (base < 1.0) base = 1.0;
         if (base > 8.0) base = 8.0;
         return static_cast<UINT>(base + 0.5);
     }
