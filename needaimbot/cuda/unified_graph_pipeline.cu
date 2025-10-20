@@ -1098,7 +1098,7 @@ void UnifiedGraphPipeline::handleFrameFailure(FrameFailureReason reason, int& co
         // Previous frame still processing - wait on a CV signaled on completion
         {
             std::unique_lock<std::mutex> lk(m_inflightMutex);
-            m_inflightCv.wait_for(lk, std::chrono::milliseconds(2), [this]() {
+            m_inflightCv.wait_for(lk, std::chrono::milliseconds(1), [this]() {
                 return !m_frameInFlight.load(std::memory_order_acquire);
             });
         }
@@ -1335,6 +1335,9 @@ bool UnifiedGraphPipeline::enqueueMovementResetCallback(cudaStream_t stream) {
 
 void UnifiedGraphPipeline::runMainLoop() {
     auto& ctx = AppContext::getInstance();
+
+    // Raise priority to reduce wake-up jitter after blocking waits
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
 
     bool wasAiming = false;
 
