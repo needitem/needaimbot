@@ -40,6 +40,9 @@ extern "C" {
 
 namespace needaimbot {
 
+// Use blocking CUDA events to avoid CPU yield storms while waiting for GPU work
+static constexpr unsigned int kBlockingEventFlags = cudaEventDisableTiming | cudaEventBlockingSync;
+
 void UnifiedGPUArena::initializePointers(uint8_t* basePtr, int maxDetections, int yoloSize) {
     size_t offset = 0;
     
@@ -335,7 +338,6 @@ __global__ void fusedTargetSelectionAndMovementKernel(
 
 
 UnifiedGraphPipeline::UnifiedGraphPipeline() {
-    constexpr unsigned int kBlockingEventFlags = cudaEventDisableTiming | cudaEventBlockingSync;
     m_state.startEvent = std::make_unique<CudaEvent>(kBlockingEventFlags);
     m_state.endEvent = std::make_unique<CudaEvent>(kBlockingEventFlags);
     resetMovementFilter();
@@ -393,8 +395,8 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
         }
     }
 
-    m_previewReadyEvent = std::make_unique<CudaEvent>(cudaEventDisableTiming);
-    m_captureReadyEvent = std::make_unique<CudaEvent>(cudaEventDisableTiming);
+    m_previewReadyEvent = std::make_unique<CudaEvent>(kBlockingEventFlags);
+    m_captureReadyEvent = std::make_unique<CudaEvent>(kBlockingEventFlags);
     
     if (m_config.modelPath.empty()) {
         std::cerr << "[UnifiedGraph] ERROR: Model path is required for TensorRT integration" << std::endl;
@@ -1059,40 +1061,47 @@ void UnifiedGraphPipeline::handleFrameFailure(FrameFailureReason reason, int& co
 
     switch (reason) {
     case FrameFailureReason::NO_FRAME_READY:
-        // Capture pending - use event-based polling instead of busy-spin
+        // Capture pending - prefer blocking sync to avoid excessive yields
         m_perfMetrics.captureWaitCount++;
-
-        // Check capture event status to avoid blind spinning
         if (m_captureReadyEvent && m_captureReadyEvent->get()) {
-            cudaError_t status = cudaEventQuery(m_captureReadyEvent->get());
-            if (status == cudaErrorNotReady) {
-                // Event not ready yet - yield CPU to other threads
-                std::this_thread::yield();
-                m_perfMetrics.yieldCount++;
-            } else if (status != cudaSuccess) {
-                // Error occurred - back off slightly
-                std::this_thread::yield();
-                m_perfMetrics.yieldCount++;
+            // Event created with cudaEventBlockingSync; this will sleep the thread until ready
+            cudaEventSynchronize(m_captureReadyEvent->get());
+        } else if (m_capture) {
+            // Fallback: wait for next present if provider exposes QPC
+            uint64_t cur = m_capture->GetLastPresentQpc();
+            if (cur) {
+                (void)m_capture->WaitForNewFrameSince(cur + 1, 6);
+            } else {
+                // Minimal backoff if no timing available
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                m_perfMetrics.sleepCount++;
             }
-            // If status == cudaSuccess, capture is ready - no wait needed
-        } else {
-            // Fallback: always yield instead of spin
-            std::this_thread::yield();
-            m_perfMetrics.yieldCount++;
         }
         break;
 
     case FrameFailureReason::INPUT_PENDING:
-        // Waiting for input to be reflected in frame - yield
+        // Waiting for input to be reflected in frame - block briefly on provider signal
         m_perfMetrics.inputPendingCount++;
-        std::this_thread::yield();
-        m_perfMetrics.yieldCount++;
+        if (m_capture) {
+            uint64_t cur = m_capture->GetLastPresentQpc();
+            if (cur) {
+                (void)m_capture->WaitForNewFrameSince(cur + 1, 6);
+                break;
+            }
+        }
+        // Fallback: short sleep instead of yield to avoid skyrocketing yield counts
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        m_perfMetrics.sleepCount++;
         break;
 
     case FrameFailureReason::GPU_BUSY:
-        // Previous frame still processing - yield
-        std::this_thread::yield();
-        m_perfMetrics.yieldCount++;
+        // Previous frame still processing - wait on a CV signaled on completion
+        {
+            std::unique_lock<std::mutex> lk(m_inflightMutex);
+            m_inflightCv.wait_for(lk, std::chrono::milliseconds(2), [this]() {
+                return !m_frameInFlight.load(std::memory_order_acquire);
+            });
+        }
         break;
 
     case FrameFailureReason::GRAPH_NOT_READY:
@@ -1102,11 +1111,8 @@ void UnifiedGraphPipeline::handleFrameFailure(FrameFailureReason reason, int& co
         break;
 
     case FrameFailureReason::CAPTURE_FAILED:
-        // Capture error - exponential backoff
-        if (consecutiveFails <= 8) {
-            std::this_thread::yield();
-            m_perfMetrics.yieldCount++;
-        } else if (consecutiveFails <= 32) {
+        // Capture error - exponential backoff without yield storms
+        if (consecutiveFails <= 32) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             m_perfMetrics.sleepCount++;
         } else {
@@ -1278,6 +1284,10 @@ bool UnifiedGraphPipeline::enqueueFrameCompletionCallback(cudaStream_t stream) {
 
             // Release frame-in-flight flag
             pipeline->m_frameInFlight.store(false, std::memory_order_release);
+            {
+                std::lock_guard<std::mutex> g(pipeline->m_inflightMutex);
+            }
+            pipeline->m_inflightCv.notify_all();
         }, this);
 
     if (err != cudaSuccess) {
@@ -1307,6 +1317,10 @@ bool UnifiedGraphPipeline::enqueueMovementResetCallback(cudaStream_t stream) {
 
             // Release frame-in-flight flag
             pipeline->m_frameInFlight.store(false, std::memory_order_release);
+            {
+                std::lock_guard<std::mutex> g(pipeline->m_inflightMutex);
+            }
+            pipeline->m_inflightCv.notify_all();
         }, this);
 
     if (err != cudaSuccess) {
@@ -2338,7 +2352,7 @@ FrameFailureReason UnifiedGraphPipeline::scheduleNextFrameCapture(bool forceSync
     if (minQpc != 0) {
         if (m_qpcSupported) {
             // Block briefly until a frame with LastPresentQpc >= minQpc is available
-            if (!m_capture->WaitForNewFrameSince(minQpc, 3)) {
+            if (!m_capture->WaitForNewFrameSince(minQpc, 6)) {
                 m_perfMetrics.frameSkipCount++;
                 return FrameFailureReason::INPUT_PENDING;
             }
@@ -2883,6 +2897,10 @@ bool UnifiedGraphPipeline::executeFrame(FrameFailureReason* outReason, cudaStrea
     if (ctx.config.use_cuda_graph && !m_state.graphReady) {
         if (!captureGraph(stream)) {
             m_frameInFlight.store(false, std::memory_order_release);
+            {
+                std::lock_guard<std::mutex> g(m_inflightMutex);
+            }
+            m_inflightCv.notify_all();
             if (outReason) *outReason = FrameFailureReason::GRAPH_NOT_READY;
             return false;
         }
@@ -2903,6 +2921,10 @@ bool UnifiedGraphPipeline::executeFrame(FrameFailureReason* outReason, cudaStrea
     cudaStream_t launchStream = stream ? stream : (m_pipelineStream ? m_pipelineStream->get() : nullptr);
     if (!launchStream) {
         m_frameInFlight.store(false, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> g(m_inflightMutex);
+        }
+        m_inflightCv.notify_all();
         return false;
     }
 
@@ -2913,6 +2935,10 @@ bool UnifiedGraphPipeline::executeFrame(FrameFailureReason* outReason, cudaStrea
             if (primeReason != FrameFailureReason::NONE) {
                 m_allowMovement.store(false, std::memory_order_release);
                 m_frameInFlight.store(false, std::memory_order_release);
+                {
+                    std::lock_guard<std::mutex> g(m_inflightMutex);
+                }
+                m_inflightCv.notify_all();
                 if (outReason) *outReason = primeReason;
                 return false;
             }
@@ -2920,6 +2946,10 @@ bool UnifiedGraphPipeline::executeFrame(FrameFailureReason* outReason, cudaStrea
             if (!waitForCaptureCompletion()) {
                 m_allowMovement.store(false, std::memory_order_release);
                 m_frameInFlight.store(false, std::memory_order_release);
+                {
+                    std::lock_guard<std::mutex> g(m_inflightMutex);
+                }
+                m_inflightCv.notify_all();
                 return false;
             }
             // Primed: m_captureBuffer now contains valid frame
@@ -2969,6 +2999,10 @@ bool UnifiedGraphPipeline::executeFrame(FrameFailureReason* outReason, cudaStrea
                       << cudaGetErrorString(launchErr) << std::endl;
             m_allowMovement.store(false, std::memory_order_release);
             m_frameInFlight.store(false, std::memory_order_release);
+            {
+                std::lock_guard<std::mutex> g(m_inflightMutex);
+            }
+            m_inflightCv.notify_all();
             return false;
         }
 
@@ -2978,6 +3012,10 @@ bool UnifiedGraphPipeline::executeFrame(FrameFailureReason* outReason, cudaStrea
         if (!executeNormalPipeline(launchStream)) {
             m_allowMovement.store(false, std::memory_order_release);
             m_frameInFlight.store(false, std::memory_order_release);
+            {
+                std::lock_guard<std::mutex> g(m_inflightMutex);
+            }
+            m_inflightCv.notify_all();
             if (outReason) *outReason = FrameFailureReason::NO_FRAME_READY;
             return false;
         }
@@ -3058,6 +3096,10 @@ bool UnifiedGraphPipeline::executeNormalPipeline(cudaStream_t stream) {
         if (streamState == cudaSuccess) {
             clearMovementData();
             m_frameInFlight.store(false, std::memory_order_release);
+            {
+                std::lock_guard<std::mutex> g(m_inflightMutex);
+            }
+            m_inflightCv.notify_all();
         } else {
             if (streamState != cudaErrorNotReady) {
                 std::cerr << "[UnifiedGraph] Stream query failed while resetting movement: "
