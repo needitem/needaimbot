@@ -1116,8 +1116,7 @@ void DDACapture::CaptureThreadProc() {
                     break;
 
                 case BackoffLevel::kShort:
-                    // Light alignment to vblank without increasing yield counters
-                    if (m_output) { m_output->WaitForVBlank(); }
+                    // No explicit yield; rely on AcquireNextFrame blocking
                     break;
 
                 case BackoffLevel::kMedium:

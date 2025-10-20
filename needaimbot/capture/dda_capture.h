@@ -126,7 +126,7 @@ private:
     enum class BackoffLevel {
         kNone,           // 0: Immediate retry (success)
         kMinimal,        // 1: light retry, no explicit yield
-        kShort,          // 2: align to vblank when idle
+        kShort,          // 2: additional backoff stage, no yield
         kMedium,         // 3: Sleep(1ms) (65-128 failures)
         kLong            // 4: Sleep(2ms) (128+ failures)
     };
@@ -166,11 +166,11 @@ private:
     double m_estimatedIntervalMs{6.9}; // start near 144Hz
 
     // Computes an appropriate AcquireNextFrame timeout based on recent frame interval.
-    // Clamped to [2, 12] ms: 2ms supports up to ~500Hz; 12ms keeps latency low at 60-120Hz.
+    // Clamped to [2, 8] ms: 2ms supports up to ~500Hz; 8ms keeps latency low at 60-144Hz.
     UINT AcquireTimeoutMs() const {
-        double base = m_estimatedIntervalMs * 0.75; // wake a bit before typical next present
+        double base = m_estimatedIntervalMs * 0.60; // wake earlier to reduce jitter
         if (base < 2.0) base = 2.0;
-        if (base > 12.0) base = 12.0;
+        if (base > 8.0) base = 8.0;
         return static_cast<UINT>(base + 0.5);
     }
 };
