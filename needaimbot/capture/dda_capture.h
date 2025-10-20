@@ -125,8 +125,8 @@ private:
     // Adaptive backoff state
     enum class BackoffLevel {
         kNone,           // 0: Immediate retry (success)
-        kMinimal,        // 1: SwitchToThread (1-32 failures)
-        kShort,          // 2: Sleep(0) / yield (33-64 failures)
+        kMinimal,        // 1: light retry, no explicit yield
+        kShort,          // 2: align to vblank when idle
         kMedium,         // 3: Sleep(1ms) (65-128 failures)
         kLong            // 4: Sleep(2ms) (128+ failures)
     };
@@ -159,4 +159,18 @@ private:
     std::atomic<uint64_t> m_frameDropCount{0};
     std::atomic<uint64_t> m_captureErrorCount{0};
     std::atomic<uint64_t> m_accessLostCount{0};
+
+    // Adaptive timing state (to reduce excessive yields without adding jitter)
+    uint64_t m_prevPresentQpc{0};
+    double m_qpcToMs{0.0};
+    double m_estimatedIntervalMs{6.9}; // start near 144Hz
+
+    // Computes an appropriate AcquireNextFrame timeout based on recent frame interval.
+    // Clamped to [2, 12] ms: 2ms supports up to ~500Hz; 12ms keeps latency low at 60-120Hz.
+    UINT AcquireTimeoutMs() const {
+        double base = m_estimatedIntervalMs * 0.75; // wake a bit before typical next present
+        if (base < 2.0) base = 2.0;
+        if (base > 12.0) base = 12.0;
+        return static_cast<UINT>(base + 0.5);
+    }
 };
