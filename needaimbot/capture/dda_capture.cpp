@@ -6,15 +6,17 @@
 #include "AppContext.h"
 
 namespace {
-// OPTIMIZATION: Short timeout (2ms) for 360Hz+ displays; aggressive backoff prevents busyspin
-// Desktop Duplication returns immediately (<1ms) when new frame is available
-// Backoff strategy handles prolonged no-frame periods to eliminate CPU waste
-constexpr UINT kFrameTimeoutMs = 2;  // 2ms timeout supports up to 500Hz displays
+// Desktop Duplication returns immediately when a new frame is available.
+// We'll compute an adaptive AcquireNextFrame timeout dynamically.
 constexpr UINT kBytesPerPixel = 4;   // BGRA
 }
 
 DDACapture::DDACapture()
     : m_lastProbeTime(std::chrono::steady_clock::now()) {
+    LARGE_INTEGER freq{};
+    if (QueryPerformanceFrequency(&freq) && freq.QuadPart > 0) {
+        m_qpcToMs = 1000.0 / static_cast<double>(freq.QuadPart);
+    }
 }
 
 DDACapture::~DDACapture() { Shutdown(); }
@@ -509,7 +511,7 @@ DDACapture::FrameAcquireResult DDACapture::AcquireFrame() {
     DXGI_OUTDUPL_FRAME_INFO frameInfo{};
     bool frameAcquired = false;
 
-    HRESULT hr = m_duplication->AcquireNextFrame(kFrameTimeoutMs, &frameInfo, &desktopResource);
+    HRESULT hr = m_duplication->AcquireNextFrame(AcquireTimeoutMs(), &frameInfo, &desktopResource);
     if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
         return FrameAcquireResult::kNoFrame;
     }
@@ -521,7 +523,7 @@ DDACapture::FrameAcquireResult DDACapture::AcquireFrame() {
 
         if (CreateDuplicationInterface()) {
             // Successfully recreated - immediately retry acquisition
-            hr = m_duplication->AcquireNextFrame(kFrameTimeoutMs, &frameInfo, &desktopResource);
+            hr = m_duplication->AcquireNextFrame(AcquireTimeoutMs(), &frameInfo, &desktopResource);
             if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
                 return FrameAcquireResult::kNoFrame;
             }
@@ -693,8 +695,17 @@ DDACapture::FrameAcquireResult DDACapture::AcquireFrame() {
 
     // Update present time/frame counter and notify after CPU buffer is valid
     {
+        const uint64_t lastQpc = static_cast<uint64_t>(frameInfo.LastPresentTime.QuadPart);
+        if (m_qpcToMs > 0.0 && m_prevPresentQpc != 0 && lastQpc > m_prevPresentQpc) {
+            double deltaMs = (lastQpc - m_prevPresentQpc) * m_qpcToMs;
+            if (deltaMs < 2.0) deltaMs = 2.0;
+            if (deltaMs > 33.4) deltaMs = 33.4;
+            m_estimatedIntervalMs = 0.9 * m_estimatedIntervalMs + 0.1 * deltaMs;
+        }
+        m_prevPresentQpc = lastQpc;
+
         std::lock_guard<std::mutex> lk(m_presentMutex);
-        m_lastPresentQpc.store(frameInfo.LastPresentTime.QuadPart, std::memory_order_release);
+        m_lastPresentQpc.store(lastQpc, std::memory_order_release);
         m_frameCounter.fetch_add(1, std::memory_order_acq_rel);
     }
     m_presentCv.notify_all();
@@ -747,7 +758,7 @@ DDACapture::FrameAcquireResult DDACapture::AcquireFrameGpuDirect() {
 
     Microsoft::WRL::ComPtr<IDXGIResource> desktopResource;
     DXGI_OUTDUPL_FRAME_INFO frameInfo{};
-    HRESULT hr = m_duplication->AcquireNextFrame(kFrameTimeoutMs, &frameInfo, &desktopResource);
+    HRESULT hr = m_duplication->AcquireNextFrame(AcquireTimeoutMs(), &frameInfo, &desktopResource);
 
     if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
         return FrameAcquireResult::kNoFrame;
@@ -756,7 +767,7 @@ DDACapture::FrameAcquireResult DDACapture::AcquireFrameGpuDirect() {
     if (hr == DXGI_ERROR_ACCESS_LOST) {
         m_accessLostCount.fetch_add(1, std::memory_order_relaxed);
         if (CreateDuplicationInterface()) {
-            hr = m_duplication->AcquireNextFrame(kFrameTimeoutMs, &frameInfo, &desktopResource);
+            hr = m_duplication->AcquireNextFrame(AcquireTimeoutMs(), &frameInfo, &desktopResource);
             if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
                 return FrameAcquireResult::kNoFrame;
             }
@@ -839,8 +850,17 @@ DDACapture::FrameAcquireResult DDACapture::AcquireFrameGpuDirect() {
 
     // Update frame timing
     {
+        const uint64_t lastQpc = static_cast<uint64_t>(frameInfo.LastPresentTime.QuadPart);
+        if (m_qpcToMs > 0.0 && m_prevPresentQpc != 0 && lastQpc > m_prevPresentQpc) {
+            double deltaMs = (lastQpc - m_prevPresentQpc) * m_qpcToMs;
+            if (deltaMs < 2.0) deltaMs = 2.0;
+            if (deltaMs > 33.4) deltaMs = 33.4;
+            m_estimatedIntervalMs = 0.9 * m_estimatedIntervalMs + 0.1 * deltaMs;
+        }
+        m_prevPresentQpc = lastQpc;
+
         std::lock_guard<std::mutex> lk(m_presentMutex);
-        m_lastPresentQpc.store(frameInfo.LastPresentTime.QuadPart, std::memory_order_release);
+        m_lastPresentQpc.store(lastQpc, std::memory_order_release);
         m_frameCounter.fetch_add(1, std::memory_order_acq_rel);
     }
     m_presentCv.notify_all();
@@ -859,7 +879,7 @@ DDACapture::FrameAcquireResult DDACapture::AcquireFrameCpuFallback() {
 
     Microsoft::WRL::ComPtr<IDXGIResource> desktopResource;
     DXGI_OUTDUPL_FRAME_INFO frameInfo{};
-    HRESULT hr = m_duplication->AcquireNextFrame(kFrameTimeoutMs, &frameInfo, &desktopResource);
+    HRESULT hr = m_duplication->AcquireNextFrame(AcquireTimeoutMs(), &frameInfo, &desktopResource);
 
     if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
         return FrameAcquireResult::kNoFrame;
@@ -868,7 +888,7 @@ DDACapture::FrameAcquireResult DDACapture::AcquireFrameCpuFallback() {
     if (hr == DXGI_ERROR_ACCESS_LOST) {
         m_accessLostCount.fetch_add(1, std::memory_order_relaxed);
         if (CreateDuplicationInterface()) {
-            hr = m_duplication->AcquireNextFrame(kFrameTimeoutMs, &frameInfo, &desktopResource);
+            hr = m_duplication->AcquireNextFrame(AcquireTimeoutMs(), &frameInfo, &desktopResource);
             if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
                 return FrameAcquireResult::kNoFrame;
             }
@@ -987,8 +1007,17 @@ DDACapture::FrameAcquireResult DDACapture::AcquireFrameCpuFallback() {
 
         // Update frame timing
         {
+            const uint64_t lastQpc = static_cast<uint64_t>(frameInfo.LastPresentTime.QuadPart);
+            if (m_qpcToMs > 0.0 && m_prevPresentQpc != 0 && lastQpc > m_prevPresentQpc) {
+                double deltaMs = (lastQpc - m_prevPresentQpc) * m_qpcToMs;
+                if (deltaMs < 2.0) deltaMs = 2.0;
+                if (deltaMs > 33.4) deltaMs = 33.4;
+                m_estimatedIntervalMs = 0.9 * m_estimatedIntervalMs + 0.1 * deltaMs;
+            }
+            m_prevPresentQpc = lastQpc;
+
             std::lock_guard<std::mutex> lk(m_presentMutex);
-            m_lastPresentQpc.store(frameInfo.LastPresentTime.QuadPart, std::memory_order_release);
+            m_lastPresentQpc.store(lastQpc, std::memory_order_release);
             m_frameCounter.fetch_add(1, std::memory_order_acq_rel);
         }
         m_presentCv.notify_all();
@@ -1079,20 +1108,16 @@ void DDACapture::CaptureThreadProc() {
             // Execute backoff strategy
             switch (m_currentBackoffLevel) {
                 case BackoffLevel::kNone:
-                    // No backoff - immediate retry for high refresh rate (240Hz+)
-                    // AcquireNextFrame already waited kFrameTimeoutMs (1ms)
+                    // No backoff - immediate retry. AcquireNextFrame blocks by AcquireTimeoutMs().
                     break;
 
                 case BackoffLevel::kMinimal:
-                    // Yield to other threads without sleeping
-                    // Windows: gives up remainder of time slice but stays scheduled
-                    SwitchToThread();
+                    // Avoid active yielding; rely on next AcquireNextFrame blocking
                     break;
 
                 case BackoffLevel::kShort:
-                    // Yield and possibly context switch
-                    // Sleep(0) only yields to equal/higher priority threads
-                    Sleep(0);
+                    // Light alignment to vblank without increasing yield counters
+                    if (m_output) { m_output->WaitForVBlank(); }
                     break;
 
                 case BackoffLevel::kMedium:

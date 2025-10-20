@@ -519,6 +519,9 @@ private:
     std::atomic<bool> m_allowMovement{false};
     std::atomic<bool> m_shouldStop{false};
     std::atomic<bool> m_frameInFlight{false};
+    // Signal when a frame-in-flight completes to avoid active yielding
+    mutable std::mutex m_inflightMutex;
+    std::condition_variable m_inflightCv;
     mutable std::mutex m_movementFilterMutex;
     bool m_skipNextMovement{true};
     std::chrono::steady_clock::time_point m_lastFrameTime{};
