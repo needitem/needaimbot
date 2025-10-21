@@ -13,14 +13,14 @@ constexpr UINT kBytesPerPixel = 4;   // BGRA
 
 UINT DDACapture::AcquireTimeoutMs() const {
     const auto& ctx = AppContext::getInstance();
-    double scale = 0.60; // fallback
+    double scale = 0.45; // fallback - lower for faster frame detection
     double cfg = static_cast<double>(ctx.config.capture_timeout_scale);
     if (cfg >= 0.3 && cfg <= 1.0) {
         scale = cfg;
     }
     double base = m_estimatedIntervalMs * scale;
     if (base < 1.0) base = 1.0;
-    if (base > 8.0) base = 8.0;
+    if (base > 5.0) base = 5.0; // Lower max for faster polling
     return static_cast<UINT>(base + 0.5);
 }
 
