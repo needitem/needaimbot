@@ -959,30 +959,26 @@ void UnifiedGraphPipeline::setInputFrame(const SimpleCudaMat& frame) {
         return;
     }
     
-    // Write into ring at write index and mark ready immediately (no event)
-    int writeIdx = m_captureWriteIdx;
-    if (writeIdx < 0 || writeIdx >= kCaptureRingSize) {
-        writeIdx = 0;
-        m_captureWriteIdx = 0;
-    }
-
-    SimpleCudaMat& dst = m_captureRing[writeIdx];
+    // Write directly to m_captureBuffer (consistent with scheduleNextFrameCapture)
+    SimpleCudaMat& dst = m_captureBuffer;
     if (dst.empty() || dst.rows() != frame.rows() || dst.cols() != frame.cols() || dst.channels() != frame.channels()) {
         dst.create(frame.rows(), frame.cols(), frame.channels());
+        m_stableCaptureRows = frame.rows();
+        m_stableCaptureCols = frame.cols();
+        m_stableCaptureChannels = frame.channels();
+        m_captureBufferShapeDirty = false;
     }
 
     size_t dataSize = static_cast<size_t>(frame.rows()) * static_cast<size_t>(frame.cols()) * static_cast<size_t>(frame.channels()) * sizeof(unsigned char);
     cudaError_t err = cudaMemcpyAsync(dst.data(), frame.data(), dataSize, 
                                       cudaMemcpyDeviceToDevice, m_pipelineStream->get());
     if (err != cudaSuccess) {
-        printf("[ERROR] Failed to copy frame to ring buffer: %s\n", cudaGetErrorString(err));
+        printf("[ERROR] Failed to copy frame to m_captureBuffer: %s\n", cudaGetErrorString(err));
         return;
     }
 
-    // Latest-wins: publish as current and advance write index
-    m_captureReadIdx = writeIdx;
+    // Mark frame as ready
     m_captureState.store(CaptureState::READY, std::memory_order_release);
-    m_captureWriteIdx = (writeIdx + 1) % kCaptureRingSize;
 }
 
 
@@ -1062,22 +1058,23 @@ void UnifiedGraphPipeline::handleFrameFailure(FrameFailureReason reason, int& co
 
     switch (reason) {
     case FrameFailureReason::NO_FRAME_READY:
-        // Capture pending - use short QPC-based wait to avoid blocking
+        // Capture pending - use event sync with QPC fallback
         m_perfMetrics.captureWaitCount++;
-        if (m_capture) {
-            // Short QPC wait (2ms max) instead of blocking event sync
+        if (m_captureReadyEvent && m_captureReadyEvent->get()) {
+            // Event sync is efficient - blocks until capture completes
+            cudaError_t syncErr = cudaEventSynchronize(m_captureReadyEvent->get());
+            if (syncErr != cudaSuccess && syncErr != cudaErrorNotReady) {
+                std::cerr << "[Capture] Event sync failed: " << cudaGetErrorString(syncErr) << std::endl;
+            }
+        } else if (m_capture) {
+            // Fallback: QPC-based wait
             uint64_t cur = m_capture->GetLastPresentQpc();
             if (cur) {
-                (void)m_capture->WaitForNewFrameSince(cur + 1, 2);
+                (void)m_capture->WaitForNewFrameSince(cur + 1, 4);
             } else {
-                // Minimal backoff if no timing available
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 m_perfMetrics.sleepCount++;
             }
-        } else {
-            // No capture provider - minimal sleep
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            m_perfMetrics.sleepCount++;
         }
         break;
 
@@ -2513,7 +2510,7 @@ FrameFailureReason UnifiedGraphPipeline::ensureFrameReady() {
 
     CaptureState state = m_captureState.load(std::memory_order_acquire);
     
-    // If capturing, check completion without blocking
+    // If capturing, wait for completion
     if (state == CaptureState::CAPTURING) {
         if (!waitForCaptureCompletion()) {
             return FrameFailureReason::NO_FRAME_READY;
@@ -2521,9 +2518,9 @@ FrameFailureReason UnifiedGraphPipeline::ensureFrameReady() {
         state = m_captureState.load(std::memory_order_acquire);
     }
 
-    // If no frame ready, schedule async capture (don't force sync)
+    // If no frame ready, schedule capture with sync
     if (state != CaptureState::READY) {
-        return scheduleNextFrameCapture(false);
+        return scheduleNextFrameCapture(true);
     }
 
     return FrameFailureReason::NONE;
