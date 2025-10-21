@@ -363,10 +363,11 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
         m_pipelineStream = std::make_unique<CudaStream>();
     }
 
+    // Capture stream uses highest priority to minimize capture-to-preprocess latency
     cudaStream_t captureStreamHandle = nullptr;
     cudaError_t captureErr = cudaSuccess;
     if (err == cudaSuccess) {
-        captureErr = cudaStreamCreateWithPriority(&captureStreamHandle, cudaStreamNonBlocking, leastPriority);
+        captureErr = cudaStreamCreateWithPriority(&captureStreamHandle, cudaStreamNonBlocking, greatestPriority);
     }
 
     if (captureErr == cudaSuccess && captureStreamHandle) {
@@ -1061,21 +1062,22 @@ void UnifiedGraphPipeline::handleFrameFailure(FrameFailureReason reason, int& co
 
     switch (reason) {
     case FrameFailureReason::NO_FRAME_READY:
-        // Capture pending - prefer blocking sync to avoid excessive yields
+        // Capture pending - use short QPC-based wait to avoid blocking
         m_perfMetrics.captureWaitCount++;
-        if (m_captureReadyEvent && m_captureReadyEvent->get()) {
-            // Event created with cudaEventBlockingSync; this will sleep the thread until ready
-            cudaEventSynchronize(m_captureReadyEvent->get());
-        } else if (m_capture) {
-            // Fallback: wait for next present if provider exposes QPC
+        if (m_capture) {
+            // Short QPC wait (2ms max) instead of blocking event sync
             uint64_t cur = m_capture->GetLastPresentQpc();
             if (cur) {
-                (void)m_capture->WaitForNewFrameSince(cur + 1, 6);
+                (void)m_capture->WaitForNewFrameSince(cur + 1, 2);
             } else {
                 // Minimal backoff if no timing available
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 m_perfMetrics.sleepCount++;
             }
+        } else {
+            // No capture provider - minimal sleep
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            m_perfMetrics.sleepCount++;
         }
         break;
 
@@ -2297,20 +2299,14 @@ bool UnifiedGraphPipeline::waitForCaptureCompletion() {
         return false;
     }
 
-    // Capture complete - update read index
-    if (m_capturePendingIdx >= 0 && m_capturePendingIdx < kCaptureRingSize) {
-        m_captureReadIdx = m_capturePendingIdx; // latest-wins
-    }
-    m_capturePendingIdx = -1;
-    
     // Transition to READY state
     m_captureState.store(CaptureState::READY, std::memory_order_release);
 
     auto& ctx = AppContext::getInstance();
     if ((m_preview.enabled || ctx.config.show_window) &&
         m_pipelineStream && m_pipelineStream->get() &&
-        m_captureReadIdx >= 0) {
-        updatePreviewBuffer(m_captureRing[m_captureReadIdx]);
+        !m_captureBuffer.empty()) {
+        updatePreviewBuffer(m_captureBuffer);
     }
 
     return true;
@@ -2403,16 +2399,11 @@ FrameFailureReason UnifiedGraphPipeline::scheduleNextFrameCapture(bool forceSync
         return FrameFailureReason::CAPTURE_FAILED;
     }
 
-    // Select ring write slot for capture
-    int writeIdx = m_captureWriteIdx;
-    if (writeIdx < 0 || writeIdx >= kCaptureRingSize) {
-        writeIdx = 0;
-        m_captureWriteIdx = 0;
-    }
-    SimpleCudaMat& targetBuffer = m_captureRing[writeIdx];
+    // Direct capture to stable m_captureBuffer (skip ring for lower latency)
+    SimpleCudaMat& targetBuffer = m_captureBuffer;
 
     if (useGPUDirect && cudaArray) {
-        // Zero-copy GPU path: copy directly from CUDA array
+        // Zero-copy GPU path: copy directly from CUDA array to m_captureBuffer
         int heightInt = (int)height;
         int widthInt = (int)width;
 
@@ -2429,6 +2420,10 @@ FrameFailureReason UnifiedGraphPipeline::scheduleNextFrameCapture(bool forceSync
                 targetBuffer.create(heightInt, widthInt, 4);
                 bufferData = targetBuffer.data();
                 bufferStep = targetBuffer.step();
+                m_stableCaptureRows = heightInt;
+                m_stableCaptureCols = widthInt;
+                m_stableCaptureChannels = 4;
+                m_captureBufferShapeDirty = false;
                 std::cout << "[Capture] Reallocated GPU-direct buffer: " << widthInt << "x" << heightInt << std::endl;
             } catch (const std::exception& e) {
                 std::cerr << "[Capture] Failed to reallocate GPU buffer: " << e.what() << std::endl;
@@ -2491,20 +2486,17 @@ FrameFailureReason UnifiedGraphPipeline::scheduleNextFrameCapture(bool forceSync
         return FrameFailureReason::CAPTURE_FAILED;
     }
 
-    // Capture is now in flight into ring[writeIdx]
+    // Capture is now in flight directly to m_captureBuffer
     m_captureState.store(CaptureState::CAPTURING, std::memory_order_release);
     m_lastCaptureW = static_cast<int>(width);
     m_lastCaptureH = static_cast<int>(height);
     m_lastGpuDirect = useGPUDirect;
-    m_capturePendingIdx = writeIdx;
     // Mark shape dirty if upcoming frame dims differ from stable buffer
     if (m_stableCaptureRows != static_cast<int>(height) ||
         m_stableCaptureCols != static_cast<int>(width) ||
         m_stableCaptureChannels != 4) {
         m_captureBufferShapeDirty = true;
     }
-    // Advance write index to keep a free slot available
-    m_captureWriteIdx = (writeIdx + 1) % kCaptureRingSize;
 
     if (forceSync) {
         bool success = waitForCaptureCompletion();
@@ -2521,7 +2513,7 @@ FrameFailureReason UnifiedGraphPipeline::ensureFrameReady() {
 
     CaptureState state = m_captureState.load(std::memory_order_acquire);
     
-    // If capturing, wait for completion
+    // If capturing, check completion without blocking
     if (state == CaptureState::CAPTURING) {
         if (!waitForCaptureCompletion()) {
             return FrameFailureReason::NO_FRAME_READY;
@@ -2529,9 +2521,9 @@ FrameFailureReason UnifiedGraphPipeline::ensureFrameReady() {
         state = m_captureState.load(std::memory_order_acquire);
     }
 
-    // If no frame ready, schedule capture
+    // If no frame ready, schedule async capture (don't force sync)
     if (state != CaptureState::READY) {
-        return scheduleNextFrameCapture(true);
+        return scheduleNextFrameCapture(false);
     }
 
     return FrameFailureReason::NONE;
@@ -2558,16 +2550,13 @@ bool UnifiedGraphPipeline::performFrameCaptureDirectToUnified() {
 bool UnifiedGraphPipeline::performPreprocessing() {
     auto& ctx = AppContext::getInstance();
     
-    // Preview buffer is now updated in performFrameCapture() instead
+    // Preview buffer is now updated in waitForCaptureCompletion()
     
-    // Select source from ring (non-graph path uses ring directly)
-    if (!m_unifiedArena.yoloInput || m_captureReadIdx < 0) {
+    // Use m_captureBuffer directly (already populated by scheduleNextFrameCapture)
+    if (!m_unifiedArena.yoloInput || m_captureBuffer.empty()) {
         return false;
     }
-    const SimpleCudaMat& src = m_captureRing[m_captureReadIdx];
-    if (src.empty()) {
-        return false;
-    }
+    const SimpleCudaMat& src = m_captureBuffer;
     
     int modelRes = getModelInputResolution();
     cudaError_t err = cuda_unified_preprocessing(
@@ -2783,11 +2772,11 @@ bool UnifiedGraphPipeline::getPreviewSnapshot(SimpleMat& outFrame) {
         hasFrameToReturn = true;
     }
 
-    // Throttle preview copies to ~30 FPS to reduce overhead
+    // Throttle preview copies to ~15 FPS to reduce overhead
     auto now = std::chrono::steady_clock::now();
     if (m_preview.lastCopyTime.time_since_epoch().count() != 0) {
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_preview.lastCopyTime).count();
-        if (elapsed < 33) {
+        if (elapsed < 66) {
             return hasFrameToReturn;
         }
     }
@@ -2962,34 +2951,9 @@ bool UnifiedGraphPipeline::executeFrame(FrameFailureReason* outReason, cudaStrea
         // Schedule next capture if nothing in flight
         (void)scheduleNextFrameCapture(false);
 
-        // If a fresh frame is pending/ready in the ring, wait on event and copy it into the stable graph input buffer
+        // Wait for capture event (m_captureBuffer is already populated directly)
         if (m_captureReadyEvent && m_captureReadyEvent->get()) {
             cudaStreamWaitEvent(launchStream, m_captureReadyEvent->get(), 0);
-
-            int srcIdx = (m_capturePendingIdx >= 0) ? m_capturePendingIdx : m_captureReadIdx;
-            if (srcIdx >= 0 && srcIdx < kCaptureRingSize) {
-                const SimpleCudaMat& srcBuf = m_captureRing[srcIdx];
-
-                // Ensure destination allocation matches only when shape flagged dirty
-                if (m_captureBufferShapeDirty) {
-                    m_captureBuffer.create(srcBuf.rows(), srcBuf.cols(), srcBuf.channels());
-                    m_stableCaptureRows = srcBuf.rows();
-                    m_stableCaptureCols = srcBuf.cols();
-                    m_stableCaptureChannels = srcBuf.channels();
-                    m_captureBufferShapeDirty = false;
-                }
-
-                size_t rowBytes = static_cast<size_t>(srcBuf.cols()) * srcBuf.channels();
-                cudaMemcpy2DAsync(
-                    m_captureBuffer.data(), m_captureBuffer.step(),
-                    srcBuf.data(), srcBuf.step(),
-                    rowBytes, srcBuf.rows(),
-                    cudaMemcpyDeviceToDevice, launchStream);
-
-                if (m_preview.enabled && !m_captureBuffer.empty()) {
-                    updatePreviewBuffer(m_captureBuffer);
-                }
-            }
         }
 
         bool shouldDispatchMovement = m_config.enableDetection && !ctx.detection_paused.load();
