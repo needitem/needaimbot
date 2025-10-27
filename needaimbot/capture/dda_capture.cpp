@@ -115,6 +115,18 @@ bool DDACapture::StartCapture() {
         }
     }
 
+    // Pre-initialize CUDA interop for GPU-direct path
+    // Use screen dimensions for initial allocation
+    if (!EnsureStagingTexture(m_screenWidth, m_screenHeight, DXGI_FORMAT_B8G8R8A8_UNORM)) {
+        std::cerr << "[DDACapture] Failed to initialize CUDA interop. GPU-direct required." << std::endl;
+        return false;
+    }
+
+    if (!m_cudaInteropEnabled) {
+        std::cerr << "[DDACapture] CUDA interop not available. GPU-direct is mandatory (CPU fallback removed)." << std::endl;
+        return false;
+    }
+
     m_isCapturing = true;
     m_captureThread = std::thread(&DDACapture::CaptureThreadProc, this);
     return true;
@@ -131,33 +143,9 @@ void DDACapture::StopCapture() {
 }
 
 bool DDACapture::GetLatestFrame(void** frameData, unsigned int* width, unsigned int* height, unsigned int* size) {
-    // Signal that CPU fallback is needed
-    m_cpuFallbackNeeded.store(true, std::memory_order_release);
-
-    // Hint CPU fallback; capture thread decides mode. Avoid immediate mode switch.
-    (void)m_currentMode; // keep variable referenced to avoid warnings
-
-    std::lock_guard<std::mutex> lock(m_frameMutex);
-
-    // If CPU buffer is not valid, we can't provide frame data
-    if (!m_cpuBufferValid || !m_frameBuffer || m_bufferSize == 0 || m_captureWidth == 0 || m_captureHeight == 0) {
-        return false;
-    }
-
-    if (frameData) {
-        *frameData = m_frameBuffer ? static_cast<void*>(m_frameBuffer->get()) : nullptr;
-    }
-    if (width) {
-        *width = m_captureWidth;
-    }
-    if (height) {
-        *height = m_captureHeight;
-    }
-    if (size) {
-        *size = static_cast<unsigned int>(m_bufferSize);
-    }
-
-    return true;
+    // CPU fallback removed - only GPU-direct supported
+    std::cerr << "[DDACapture] GetLatestFrame: CPU path not supported. Use GetLatestFrameGPU() instead." << std::endl;
+    return false;
 }
 
 void DDACapture::SetFrameCallback(std::function<void(void*, unsigned int, unsigned int, unsigned int)> callback) {
@@ -462,10 +450,8 @@ bool DDACapture::EnsureStagingTexture(UINT width, UINT height, DXGI_FORMAT forma
                       << " - using CPU fallback" << std::endl;
         }
 
-        // Create CPU staging texture for fallback only if needed now
-        bool needCpuNow = (m_currentMode.load(std::memory_order_acquire) == CaptureMode::kCpuFallback) ||
-                          m_cpuFallbackNeeded.load(std::memory_order_acquire);
-        if (needCpuNow) {
+        // CPU staging texture removed - GPU-direct only
+        if (false) {  // Never create staging texture for CPU path
             D3D11_TEXTURE2D_DESC stagingDesc{};
             stagingDesc.Width = width;
             stagingDesc.Height = height;
@@ -633,7 +619,7 @@ DDACapture::FrameAcquireResult DDACapture::AcquireFrame() {
 
     // Only copy to staging texture if CPU fallback is truly needed
     // Skip redundant CPU path when GPU-direct is active and working
-    const bool needCpuCopy = (!m_cudaInteropEnabled) && m_cpuFallbackNeeded.load(std::memory_order_acquire);
+    const bool needCpuCopy = false;  // CPU fallback removed
 
     hr = m_duplication->ReleaseFrame();
     frameAcquired = false;
@@ -733,14 +719,12 @@ DDACapture::FrameAcquireResult DDACapture::AcquireFrame() {
 void DDACapture::TransitionToCaptureMode(CaptureMode newMode) {
     CaptureMode oldMode = m_currentMode.exchange(newMode, std::memory_order_release);
     if (oldMode != newMode) {
-        const char* modeNames[] = {"GpuDirect", "CpuFallback", "Probing"};
+        const char* modeNames[] = {"GpuDirect", "Probing"};
         std::cout << "[DDACapture] Mode transition: " << modeNames[static_cast<int>(oldMode)]
                   << " -> " << modeNames[static_cast<int>(newMode)] << std::endl;
 
         if (newMode == CaptureMode::kGpuDirect) {
             m_consecutiveGpuFailures = 0;
-        } else if (newMode == CaptureMode::kCpuFallback) {
-            m_cpuFallbackNeeded.store(true, std::memory_order_release);
         }
     }
 }
@@ -748,6 +732,9 @@ void DDACapture::TransitionToCaptureMode(CaptureMode newMode) {
 bool DDACapture::ProbeGpuDirectCapability() {
     // Only probe if CUDA interop is supposedly available
     if (!m_cudaInteropEnabled || !m_cudaMappedArray) {
+        std::cerr << "[DDACapture] ProbeGpuDirectCapability: CUDA interop not initialized (m_cudaInteropEnabled="
+                  << (m_cudaInteropEnabled ? "true" : "false") << ", m_cudaMappedArray="
+                  << (m_cudaMappedArray ? "OK" : "NULL") << ")" << std::endl;
         return false;
     }
 
@@ -759,6 +746,11 @@ bool DDACapture::ProbeGpuDirectCapability() {
     cudaExtent extent;
     unsigned int flags;
     err = cudaArrayGetInfo(&desc, &extent, &flags, m_cudaMappedArray);
+
+    if (err != cudaSuccess) {
+        std::cerr << "[DDACapture] ProbeGpuDirectCapability: CUDA array query failed: "
+                  << cudaGetErrorString(err) << std::endl;
+    }
 
     return (err == cudaSuccess);
 }
@@ -793,7 +785,7 @@ DDACapture::FrameAcquireResult DDACapture::AcquireFrameGpuDirect() {
         m_captureErrorCount.fetch_add(1, std::memory_order_relaxed);
         m_consecutiveGpuFailures++;
         if (m_consecutiveGpuFailures >= kMaxGpuFailuresBeforeFallback) {
-            TransitionToCaptureMode(CaptureMode::kCpuFallback);
+            std::cerr << "[DDACapture] GPU-direct failed repeatedly. No CPU fallback available." << std::endl;
         }
         return FrameAcquireResult::kError;
     }
@@ -1051,36 +1043,21 @@ void DDACapture::CaptureThreadProc() {
         // Check if we should probe for GPU direct capability
         CaptureMode currentMode = m_currentMode.load(std::memory_order_acquire);
 
+        // GPU-direct only - no CPU fallback
         if (currentMode == CaptureMode::kProbing) {
             bool gpuAvailable = ProbeGpuDirectCapability();
             if (gpuAvailable) {
                 TransitionToCaptureMode(CaptureMode::kGpuDirect);
+                currentMode = CaptureMode::kGpuDirect;
             } else {
-                TransitionToCaptureMode(CaptureMode::kCpuFallback);
-            }
-            currentMode = m_currentMode.load(std::memory_order_acquire);
-        }
-
-        // Periodically re-probe if in CPU fallback mode
-        if (currentMode == CaptureMode::kCpuFallback &&
-            !m_cpuFallbackNeeded.load(std::memory_order_acquire)) {
-            auto now = std::chrono::steady_clock::now();
-            if (now - m_lastProbeTime >= kProbeInterval) {
-                m_lastProbeTime = now;
-                if (ProbeGpuDirectCapability()) {
-                    TransitionToCaptureMode(CaptureMode::kGpuDirect);
-                    currentMode = CaptureMode::kGpuDirect;
-                }
+                std::cerr << "[DDACapture] GPU-direct not available. CPU fallback removed - stopping capture." << std::endl;
+                m_isCapturing.store(false);
+                break;
             }
         }
 
-        // Select acquisition path based on current mode
-        FrameAcquireResult result;
-        if (currentMode == CaptureMode::kGpuDirect) {
-            result = AcquireFrameGpuDirect();
-        } else {
-            result = AcquireFrameCpuFallback();
-        }
+        // Only GPU-direct path
+        FrameAcquireResult result = AcquireFrameGpuDirect();
 
         // Adaptive backoff based on result
         if (result == FrameAcquireResult::kFrameCaptured) {

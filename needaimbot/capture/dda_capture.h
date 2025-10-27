@@ -70,10 +70,9 @@ private:
         kError,
     };
 
-    // Capture mode state machine
+    // Capture mode state machine - GPU-direct only
     enum class CaptureMode {
-        kGpuDirect,      // Zero-copy CUDA interop (fast path)
-        kCpuFallback,    // CPU staging + pinned memory (slow path)
+        kGpuDirect,      // Zero-copy CUDA interop (only supported mode)
         kProbing         // Testing GPU direct availability
     };
 
