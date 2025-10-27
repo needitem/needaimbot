@@ -815,9 +815,6 @@ bool UnifiedGraphPipeline::allocateBuffers() {
 }
 
 void UnifiedGraphPipeline::deallocateBuffers() {
-
-    releaseRegisteredCaptureBuffers();
-
     m_captureBuffer.release();
     // m_unifiedCaptureBuffer removed - using m_captureBuffer
     
@@ -2125,151 +2122,7 @@ bool UnifiedGraphPipeline::updateDDACaptureRegion(const AppContext& ctx) {
     return true;
 }
 
-bool UnifiedGraphPipeline::copyFrameToBuffer(
-    void* frameData,
-    unsigned int width,
-    unsigned int height,
-    SimpleCudaMat& targetBuffer,
-    cudaStream_t stream
-) {
-    if (!frameData || width == 0 || height == 0 || !stream) {
-        return false;
-    }
-
-    if (targetBuffer.empty() ||
-        targetBuffer.cols() != static_cast<int>(width) ||
-        targetBuffer.rows() != static_cast<int>(height) ||
-        targetBuffer.channels() != 4) {
-        targetBuffer.create(static_cast<int>(height), static_cast<int>(width), 4);
-    }
-
-    if (targetBuffer.empty()) {
-        return false;
-    }
-
-    size_t hostPitch = static_cast<size_t>(width) * 4;
-    cudaError_t err = cudaMemcpy2DAsync(
-        targetBuffer.data(),
-        targetBuffer.step(),
-        frameData,
-        hostPitch,
-        hostPitch,
-        height,
-        cudaMemcpyHostToDevice,
-        stream
-    );
-
-    if (err != cudaSuccess) {
-        std::cerr << "[Capture] DDA frame copy failed: " << cudaGetErrorString(err) << std::endl;
-        return false;
-    }
-
-    return true;
-}
-
-bool UnifiedGraphPipeline::copyDDAFrameToGPU(void* frameData, unsigned int width, unsigned int height) {
-    if (!m_pipelineStream) {
-        return false;
-    }
-
-    size_t totalBytes = static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
-    ensureCaptureBufferRegistered(frameData, totalBytes);
-
-    return copyFrameToBuffer(frameData, width, height, m_captureBuffer, m_pipelineStream->get());
-}
-
-bool UnifiedGraphPipeline::ensureCaptureBufferRegistered(void* frameData, size_t size) {
-    if (!frameData || size == 0) {
-        return false;
-    }
-
-    auto it = m_registeredCaptureBuffers.find(frameData);
-    if (it != m_registeredCaptureBuffers.end()) {
-        if (it->second.registered) {
-            return true;
-        }
-        if (it->second.permanentFailure) {
-            return false;
-        }
-    }
-
-    RegisteredHostBuffer bufferInfo;
-    bufferInfo.size = size;
-
-    // Check if this is already pinned memory (from cudaHostAlloc) to skip registration
-    cudaPointerAttributes attrs{};
-    cudaError_t attrErr = cudaPointerGetAttributes(&attrs, frameData);
-    if (attrErr == cudaSuccess && (attrs.type == cudaMemoryTypeHost)) {
-        // Already pinned memory, no need to register
-        bufferInfo.registered = true;
-        bufferInfo.permanentFailure = false;
-        m_registeredCaptureBuffers[frameData] = bufferInfo;
-        return true;
-    }
-    // Clear any error from cudaPointerGetAttributes
-    if (attrErr != cudaSuccess) {
-        cudaGetLastError();
-    }
-
-    cudaError_t regErr = cudaHostRegister(frameData, size, cudaHostRegisterPortable);
-    if (regErr == cudaSuccess || regErr == cudaErrorHostMemoryAlreadyRegistered) {
-        bufferInfo.registered = true;
-        bufferInfo.permanentFailure = false;
-        m_registeredCaptureBuffers[frameData] = bufferInfo;
-        // Trim any stale registrations to keep the map bounded in long runs
-        unregisterStaleCaptureBuffers(frameData);
-        return true;
-    }
-
-    bufferInfo.registered = false;
-    bufferInfo.permanentFailure = true;
-    m_registeredCaptureBuffers[frameData] = bufferInfo;
-
-    if (regErr != cudaErrorInvalidValue && regErr != cudaErrorNotSupported) {
-        std::cerr << "[Capture] Failed to register capture buffer for async copy: "
-                  << cudaGetErrorString(regErr) << std::endl;
-    }
-
-    return false;
-}
-
-void UnifiedGraphPipeline::unregisterStaleCaptureBuffers(void* keepPtr) {
-    if (m_registeredCaptureBuffers.size() <= 1) return;
-    std::vector<void*> toErase;
-    toErase.reserve(m_registeredCaptureBuffers.size());
-    for (const auto& entry : m_registeredCaptureBuffers) {
-        void* ptr = entry.first;
-        const auto& info = entry.second;
-        if (ptr == keepPtr) continue;
-        if (info.registered) {
-            cudaError_t err = cudaHostUnregister(ptr);
-            if (err != cudaSuccess && err != cudaErrorHostMemoryNotRegistered) {
-                std::cerr << "[Capture] Failed to unregister stale capture buffer: "
-                          << cudaGetErrorString(err) << std::endl;
-            }
-        }
-        toErase.push_back(ptr);
-    }
-    for (void* ptr : toErase) {
-        m_registeredCaptureBuffers.erase(ptr);
-    }
-}
-
-void UnifiedGraphPipeline::releaseRegisteredCaptureBuffers() {
-    for (auto& entry : m_registeredCaptureBuffers) {
-        if (!entry.first || !entry.second.registered) {
-            continue;
-        }
-
-        cudaError_t err = cudaHostUnregister(entry.first);
-        if (err != cudaSuccess && err != cudaErrorHostMemoryNotRegistered) {
-            std::cerr << "[Capture] Failed to unregister capture buffer: "
-                      << cudaGetErrorString(err) << std::endl;
-        }
-    }
-
-    m_registeredCaptureBuffers.clear();
-}
+// CPU fallback functions removed - GPU-direct only path
 
 bool UnifiedGraphPipeline::waitForCaptureCompletion() {
     CaptureState state = m_captureState.load(std::memory_order_acquire);
@@ -2443,29 +2296,15 @@ FrameFailureReason UnifiedGraphPipeline::scheduleNextFrameCapture(bool forceSync
 
             if (err != cudaSuccess) {
                 std::cerr << "[Capture] GPU-direct copy failed: " << cudaGetErrorString(err) << std::endl;
-                useGPUDirect = false;  // Fall back to CPU path
+                return FrameFailureReason::CAPTURE_FAILED;
             }
         }
     }
 
-    // CPU fallback path
-    if (!useGPUDirect) {
-        void* frameData = nullptr;
-        unsigned int size = 0;
-
-        if (!m_capture->GetLatestFrame(&frameData, &width, &height, &size)) {
-            return FrameFailureReason::CAPTURE_FAILED;
-        }
-
-        if (!frameData || width == 0 || height == 0) {
-            return FrameFailureReason::CAPTURE_FAILED;
-        }
-
-        ensureCaptureBufferRegistered(frameData, size);
-
-        if (!copyFrameToBuffer(frameData, width, height, targetBuffer, copyStream)) {
-            return FrameFailureReason::CAPTURE_FAILED;
-        }
+    // GPU-direct is mandatory - no CPU fallback
+    if (!useGPUDirect || !cudaArray) {
+        std::cerr << "[Capture] GPU-direct path required but not available" << std::endl;
+        return FrameFailureReason::CAPTURE_FAILED;
     }
 
     if (!m_captureReadyEvent) {
