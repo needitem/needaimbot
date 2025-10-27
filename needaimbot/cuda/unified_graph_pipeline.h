@@ -375,11 +375,7 @@ public:
     void markFrameCompleted();
 
 private:
-    struct RegisteredHostBuffer {
-        size_t size = 0;
-        bool registered = false;
-        bool permanentFailure = false;
-    };
+    // CPU fallback removed - GPU-direct only
 
     mutable std::atomic<uint64_t> m_lastUIReadFrame{0};
     cudaGraph_t m_graph = nullptr;
@@ -451,9 +447,6 @@ private:
     FrameFailureReason ensureFrameReady();
     FrameFailureReason scheduleNextFrameCapture(bool forceSync);
     bool waitForCaptureCompletion();
-    bool copyFrameToBuffer(void* frameData, unsigned int width, unsigned int height,
-                           SimpleCudaMat& targetBuffer, cudaStream_t stream);
-    
     // Smart waiting based on failure reason
     void handleFrameFailure(FrameFailureReason reason, int& consecutiveFails);
     bool checkQPCSupport();
@@ -507,8 +500,6 @@ private:
     int m_lastCaptureH = 0;
     bool m_lastGpuDirect = false;
 
-    std::unordered_map<void*, RegisteredHostBuffer> m_registeredCaptureBuffers;
-    
     UnifiedPipelineConfig m_config;
     GraphExecutionState m_state;
     std::mutex m_graphMutex;
@@ -585,10 +576,6 @@ private:
     bool updateDDACaptureRegion(const AppContext& ctx);
     bool performFrameCapture();
     bool performFrameCaptureDirectToUnified();
-    bool copyDDAFrameToGPU(void* frameData, unsigned int width, unsigned int height);
-    bool ensureCaptureBufferRegistered(void* frameData, size_t size);
-    void unregisterStaleCaptureBuffers(void* keepPtr);
-    void releaseRegisteredCaptureBuffers();
     bool performPreprocessing();
     void updatePreviewBuffer(const SimpleCudaMat& currentBuffer);
     void updatePreviewBufferAllocation();  // Dynamic allocation based on show_window state

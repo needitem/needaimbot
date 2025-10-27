@@ -317,33 +317,13 @@ bool GameCapture::initialize() {
                 continue;
             }
         } else if (shared_hook_info->type == CAPTURE_TYPE_MEMORY) {
-            shmem_data* shmem = static_cast<shmem_data*>(shared_data);
-            // For memory mode, we'll handle texture access in get_frame() using offsets
-            // For now, we need to create a texture based on hook_info dimensions
-            D3D11_TEXTURE2D_DESC memDesc = {};
-            memDesc.Width = shared_hook_info->cx;
-            memDesc.Height = shared_hook_info->cy;
-            memDesc.MipLevels = 1;
-            memDesc.ArraySize = 1;
-            memDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-            memDesc.SampleDesc.Count = 1;
-            memDesc.Usage = D3D11_USAGE_DYNAMIC;
-            memDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-            memDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-
-            ID3D11Texture2D* tempTex = nullptr;
-            hr = pDevice->CreateTexture2D(&memDesc, nullptr, &tempTex);
-            if (FAILED(hr)) {
-                std::cout << "ERROR: Failed to create texture for memory mode" << std::endl;
-                if (pContext) pContext->Release();
-                if (pDevice) pDevice->Release();
-                pContext = nullptr;
-                pDevice = nullptr;
-                if (try_count >= 5) return false;
-                Sleep(50);
-                continue;
-            }
-            pSharedResource = tempTex;
+            // MEMORY mode not supported - GPU-direct only
+            std::cout << "ERROR: CAPTURE_TYPE_MEMORY not supported. Only CAPTURE_TYPE_TEXTURE (GPU-direct) is supported." << std::endl;
+            if (pContext) pContext->Release();
+            if (pDevice) pDevice->Release();
+            pContext = nullptr;
+            pDevice = nullptr;
+            return false;
         }
 
         break;
@@ -383,10 +363,10 @@ bool GameCapture::initialize() {
     if ((int)sourceRegion.right > (int)srcW) sourceRegion.right = srcW;
     if ((int)sourceRegion.bottom > (int)srcH) sourceRegion.bottom = srcH;
 
-    // Prepare CUDA interop shared texture for zero-copy GPU path
+    // Prepare CUDA interop shared texture for zero-copy GPU path - MANDATORY
     if (!ensureCudaSharedTexture(static_cast<unsigned int>(width), static_cast<unsigned int>(height), DXGI_FORMAT_B8G8R8A8_UNORM)) {
-        // Not fatal: we keep CPU fallback
-        std::cout << "[GameCapture] CUDA interop not available; using CPU fallback" << std::endl;
+        std::cout << "[GameCapture] ERROR: CUDA interop failed. GPU-direct is required (CPU fallback removed)." << std::endl;
+        return false;
     }
 
 	std::cout << "GameCapture initialized successfully for game: " << game_name << std::endl;
@@ -510,82 +490,16 @@ bool GameCapture::GetLatestFrameGPU(cudaArray_t* cudaArray, unsigned int* outWid
     }
 
     // Handle different capture types
-    if (shared_hook_info->type == CAPTURE_TYPE_TEXTURE) {
-        // Texture mode: direct GPU texture copy (original implementation)
-        pContext->CopySubresourceRegion(pCudaSharedTexture, 0, 0, 0, 0, pSharedResource, 0, &sourceRegion);
-    } else if (shared_hook_info->type == CAPTURE_TYPE_MEMORY) {
-        // Memory mode: copy directly from shared memory to CUDA-mapped array, avoiding D3D staging
-        shmem_data* shmem = static_cast<shmem_data*>(shared_data);
-        int tex_index = shmem->last_tex;
-        if (tex_index < 0 || tex_index >= 2) {
-            return false;
-        }
-
-        HANDLE mutex = texture_mutexes[tex_index];
-        // Reduced timeout with fast retry for better responsiveness
-        DWORD wait_result = WaitForSingleObject(mutex, 5);
-        if (wait_result != WAIT_OBJECT_0) {
-            // Quick retry once before giving up
-            wait_result = WaitForSingleObject(mutex, 2);
-            if (wait_result != WAIT_OBJECT_0) {
-                return false;
-            }
-        }
-
-        // Get pointer to shared memory texture data
-        uint32_t offset = (tex_index == 0) ? shmem->tex1_offset : shmem->tex2_offset;
-        BYTE* shmem_ptr = reinterpret_cast<BYTE*>(shared_data) + offset;
-
-        // Map CUDA resource if needed
-        if (m_cudaGraphicsResource && !m_cudaMappedArray) {
-            if (cudaGraphicsMapResources(1, &m_cudaGraphicsResource, 0) != cudaSuccess) {
-                ReleaseMutex(mutex);
-                return false;
-            }
-            if (cudaGraphicsSubResourceGetMappedArray(&m_cudaMappedArray, m_cudaGraphicsResource, 0, 0) != cudaSuccess) {
-                cudaGraphicsUnmapResources(1, &m_cudaGraphicsResource, 0);
-                m_cudaMappedArray = nullptr;
-                ReleaseMutex(mutex);
-                return false;
-            }
-        }
-
-        if (!m_cudaMappedArray) {
-            ReleaseMutex(mutex);
-            return false;
-        }
-
-        // Apply ROI offsets from sourceRegion to honor crop region
-        int x0 = static_cast<int>(sourceRegion.left);
-        int y0 = static_cast<int>(sourceRegion.top);
-        int copy_width = (std::min)(width, (int)shared_hook_info->cx - x0);
-        int copy_height = (std::min)(height, (int)shared_hook_info->cy - y0);
-        size_t src_pitch = static_cast<size_t>(shared_hook_info->pitch);
-        size_t row_bytes = static_cast<size_t>(copy_width) * 4;
-
-        // Offset into shared memory to start from ROI origin
-        BYTE* roi_shmem_ptr = shmem_ptr + (y0 * src_pitch) + (x0 * 4);
-
-        cudaError_t cpy = cudaMemcpy2DToArray(
-            m_cudaMappedArray,
-            0, 0,
-            roi_shmem_ptr,
-            src_pitch,
-            row_bytes,
-            static_cast<size_t>(copy_height),
-            cudaMemcpyHostToDevice);
-
-        ReleaseMutex(mutex);
-
-        if (cpy != cudaSuccess) {
-            // On failure, clear mapped array to trigger remap/retry next call
-            cudaGraphicsUnmapResources(1, &m_cudaGraphicsResource, 0);
-            m_cudaMappedArray = nullptr;
-            return false;
-        }
+    // Only TEXTURE mode supported - GPU-direct only (no CPU fallback)
+    if (shared_hook_info->type != CAPTURE_TYPE_TEXTURE) {
+        std::cout << "[GameCapture] ERROR: Only TEXTURE capture mode supported (GPU-direct). MEMORY mode is not supported." << std::endl;
+        return false;
     }
 
-    // Remap so CUDA sees the updated contents (if not already mapped in memory mode)
+    // Texture mode: direct GPU-to-GPU texture copy
+    pContext->CopySubresourceRegion(pCudaSharedTexture, 0, 0, 0, 0, pSharedResource, 0, &sourceRegion);
+
+    // Remap so CUDA sees the updated contents
     if (m_cudaGraphicsResource && !m_cudaMappedArray) {
         if (cudaGraphicsMapResources(1, &m_cudaGraphicsResource, 0) != cudaSuccess) {
             return false;
