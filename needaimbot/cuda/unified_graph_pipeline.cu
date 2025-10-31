@@ -1204,6 +1204,7 @@ MouseMovement UnifiedGraphPipeline::filterMouseMovement(const MouseMovement& raw
         return rawMovement;
     }
 
+    // No smoothing/deadzone: return raw movement
     return rawMovement;
 }
 
@@ -2308,7 +2309,7 @@ FrameFailureReason UnifiedGraphPipeline::scheduleNextFrameCapture(bool forceSync
     }
 
     if (!m_captureReadyEvent) {
-        m_captureReadyEvent = std::make_unique<CudaEvent>(cudaEventDisableTiming);
+        m_captureReadyEvent = std::make_unique<CudaEvent>(kBlockingEventFlags);
     }
 
     if (!m_captureReadyEvent || !m_captureReadyEvent->get()) {
