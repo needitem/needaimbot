@@ -418,16 +418,8 @@ private:
     CachedPIDConfig m_cachedPIDConfig;
     std::atomic<bool> m_pidConfigDirty{true};
     
-    // Capture buffers
-    // Triple-buffer ring for latest-wins capture ingestion
-    static constexpr int kCaptureRingSize = 3;
-    std::array<SimpleCudaMat, kCaptureRingSize> m_captureRing;
-    // Stable buffer used by CUDA Graph path to avoid per-frame graph pointer changes
+    // Capture buffer - single buffer for CUDA Graph stability
     SimpleCudaMat m_captureBuffer;
-    // Ring indices
-    int m_captureWriteIdx = 0;     // Next slot to write
-    int m_captureReadIdx = -1;     // Last completed slot ready for consumers
-    int m_capturePendingIdx = -1;  // Slot with an in-flight copy associated with m_captureReadyEvent
 
     std::unique_ptr<CudaStream> m_captureStream;
     std::unique_ptr<CudaStream> m_previewStream;
