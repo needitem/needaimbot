@@ -76,10 +76,7 @@ void UnifiedGraphPipeline::shutdown() {
         m_preview.finalTargets.clear();
     }
     
-    // Clear capture buffers
-    for (auto& buf : m_captureRing) {
-        buf.release();
-    }
+    // Clear capture buffer
     m_captureBuffer.release();
 
     // Clean up graph and buffers
