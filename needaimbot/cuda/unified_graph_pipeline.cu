@@ -2357,12 +2357,27 @@ FrameFailureReason UnifiedGraphPipeline::ensureFrameReady() {
         state = m_captureState.load(std::memory_order_acquire);
     }
 
-    // If no frame ready, schedule capture with sync
-    if (state != CaptureState::READY) {
-        return scheduleNextFrameCapture(true);
+    // If a frame is ready, ensure it reflects the last input (QPC gating).
+    if (state == CaptureState::READY) {
+        uint64_t minQpc = m_pendingInputQpc.load(std::memory_order_acquire);
+        if (minQpc != 0 && m_capture) {
+            uint64_t lastQpc = m_capture->GetLastPresentQpc();
+            if (lastQpc != 0 && lastQpc < minQpc) {
+                // Stale frame (pre-input) – discard and fetch a fresh one.
+                m_perfMetrics.frameSkipCount++;
+                m_captureState.store(CaptureState::CONSUMED, std::memory_order_release);
+                FrameFailureReason sched = scheduleNextFrameCapture(true);
+                return sched == FrameFailureReason::NONE ? FrameFailureReason::INPUT_PENDING : sched;
+            }
+            // Satisfied – clear
+            m_pendingInputQpc.store(0, std::memory_order_release);
+        }
+        return FrameFailureReason::NONE;
     }
 
-    return FrameFailureReason::NONE;
+    // If no frame ready, schedule capture with sync
+    return scheduleNextFrameCapture(true);
+
 }
 
 bool UnifiedGraphPipeline::performFrameCapture() {
@@ -2790,6 +2805,23 @@ bool UnifiedGraphPipeline::executeFrame(FrameFailureReason* outReason, cudaStrea
         // Wait for capture event (m_captureBuffer is already populated directly)
         if (m_captureReadyEvent && m_captureReadyEvent->get()) {
             cudaStreamWaitEvent(launchStream, m_captureReadyEvent->get(), 0);
+        }
+
+        // Validate freshness after wait; if frame is stale vs last input, fetch a fresh one.
+        if (m_capture) {
+            uint64_t minQpc = m_pendingInputQpc.load(std::memory_order_acquire);
+            if (minQpc != 0) {
+                uint64_t lastQpc = m_capture->GetLastPresentQpc();
+                if (lastQpc != 0 && lastQpc < minQpc) {
+                    // Need a newer frame; do a synchronous capture and re-wait on event.
+                    (void)scheduleNextFrameCapture(true);
+                    if (m_captureReadyEvent && m_captureReadyEvent->get()) {
+                        cudaStreamWaitEvent(launchStream, m_captureReadyEvent->get(), 0);
+                    }
+                } else if (lastQpc != 0) {
+                    m_pendingInputQpc.store(0, std::memory_order_release);
+                }
+            }
         }
 
         bool shouldDispatchMovement = m_config.enableDetection && !ctx.detection_paused.load();
