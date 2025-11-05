@@ -68,6 +68,8 @@ public:
     std::atomic<bool> should_exit{false};
     std::atomic<bool> aiming{false};
     std::atomic<bool> shooting{false};  // Track if auto_shoot button is pressed
+    std::atomic<bool> single_shot_requested{false};  // Single shot trigger (F8)
+    std::atomic<bool> single_shot_mode{false};  // Flag to indicate if currently in single shot mode
     bool input_method_changed{false};  // Rare change - no need for atomic
     
     // Aiming state synchronization for CPU efficiency
