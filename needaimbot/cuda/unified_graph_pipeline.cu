@@ -138,6 +138,7 @@ __global__ void fusedTargetSelectionAndMovementKernel(
     float kd_x,
     float kd_y,
     float integral_max,
+    float derivative_max,
     float head_y_offset,
     float body_y_offset,
     int detection_resolution,
@@ -308,6 +309,12 @@ __global__ void fusedTargetSelectionAndMovementKernel(
             // Calculate derivative (error change)
             float derivative_x = error_x - prev_error_x;
             float derivative_y = error_y - prev_error_y;
+
+            // Clamp derivative to prevent excessive oscillation from large movements
+            if (derivative_x > derivative_max) derivative_x = derivative_max;
+            if (derivative_x < -derivative_max) derivative_x = -derivative_max;
+            if (derivative_y > derivative_max) derivative_y = derivative_max;
+            if (derivative_y < -derivative_max) derivative_y = -derivative_max;
 
             // PID controller: P + I + D
             float movement_x = kp_x * error_x + ki_x * integral_x + kd_x * derivative_x;
@@ -2038,6 +2045,7 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         m_cachedPIDConfig.kd_x = ctx.config.pid_kd_x;
         m_cachedPIDConfig.kd_y = ctx.config.pid_kd_y;
         m_cachedPIDConfig.integral_max = ctx.config.pid_integral_max;
+        m_cachedPIDConfig.derivative_max = ctx.config.pid_derivative_max;
         m_cachedPIDConfig.head_y_offset = ctx.config.head_y_offset;
         m_cachedPIDConfig.body_y_offset = ctx.config.body_y_offset;
         m_pidConfigDirty.store(false, std::memory_order_release);
@@ -2052,6 +2060,7 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
     float cached_kd_x = m_cachedPIDConfig.kd_x;
     float cached_kd_y = m_cachedPIDConfig.kd_y;
     float cached_integral_max = m_cachedPIDConfig.integral_max;
+    float cached_derivative_max = m_cachedPIDConfig.derivative_max;
     float cached_head_y_offset = m_cachedPIDConfig.head_y_offset;
     float cached_body_y_offset = m_cachedPIDConfig.body_y_offset;
     
@@ -2085,6 +2094,7 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         cached_kd_x,
         cached_kd_y,
         cached_integral_max,
+        cached_derivative_max,
         cached_head_y_offset,
         cached_body_y_offset,
         ctx.config.detection_resolution,
