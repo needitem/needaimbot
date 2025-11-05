@@ -128,6 +128,16 @@ static void draw_movement_controls()
                 ImGui::EndTable();
             }
             UIHelpers::HelpMarker("Recommended: 0.2-0.5. Higher values reduce oscillation but may slow response.");
+
+            UIHelpers::CompactSpacer();
+            UIHelpers::SettingsSubHeader("Derivative Clamp Limit");
+            ImGui::PushItemWidth(-1);
+            if (ImGui::SliderFloat("##DerivativeMax", &ctx.config.pid_derivative_max, 10.0f, 200.0f, "%.0f px")) {
+                SAVE_PROFILE();
+            }
+            ImGui::PopItemWidth();
+            UIHelpers::HelpMarker("Limits maximum derivative value to prevent excessive oscillation from large movements. Default: 50px.");
+
             ImGui::EndTabItem();
         }
 
