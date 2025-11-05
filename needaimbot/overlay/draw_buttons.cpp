@@ -177,9 +177,18 @@ static void draw_aiming_settings()
     UIHelpers::SettingsSubHeader("Movement Restrictions");
     UIHelpers::BeautifulText("Control when aimbot should avoid certain movements", UIHelpers::GetAccentColor(0.7f));
     UIHelpers::CompactSpacer();
-    
+
     draw_hotkey_section("Disable Upward Aim Keys", ctx.config.button_disable_upward_aim, "disable_upward_keys");
-    
+
+    UIHelpers::Spacer(12.0f);
+
+    // Single Shot Section
+    UIHelpers::SettingsSubHeader("Single Shot Trigger");
+    UIHelpers::BeautifulText("Perform one capture and one mouse move per keypress", UIHelpers::GetAccentColor(0.7f));
+    UIHelpers::CompactSpacer();
+
+    draw_hotkey_section("Single Shot Keys", ctx.config.button_single_shot, "single_shot_keys");
+
     UIHelpers::EndCard();
     
     UIHelpers::CompactSpacer();
