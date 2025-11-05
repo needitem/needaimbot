@@ -287,6 +287,14 @@ __global__ void fusedTargetSelectionAndMovementKernel(
             float integral_x = pidState->integral_x;
             float integral_y = pidState->integral_y;
 
+            // Reset integral when very close to target (deadzone)
+            const float deadzone_threshold = 5.0f;  // pixels
+            float error_magnitude = sqrtf(error_x * error_x + error_y * error_y);
+            if (error_magnitude < deadzone_threshold) {
+                integral_x = 0.0f;
+                integral_y = 0.0f;
+            }
+
             // Update integral (with anti-windup clamping)
             integral_x += error_x;
             integral_y += error_y;
