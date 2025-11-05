@@ -211,6 +211,7 @@ public:
     float pid_kd_x = 0.3f;   // Derivative gain for X axis (0-1 typical, for oscillation dampening)
     float pid_kd_y = 0.3f;   // Derivative gain for Y axis (0-1 typical, for oscillation dampening)
     float pid_integral_max = 100.0f;  // Max integral windup limit (pixels)
+    float pid_derivative_max = 50.0f; // Max derivative clamp (pixels, prevents oscillation from large movements)
 
     // Active profile management
     std::string active_profile_name = "Default";
