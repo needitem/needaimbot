@@ -56,10 +56,12 @@ void keyboardListener() {
     std::vector<int> pause_vk_codes = get_vk_codes(ctx.config.button_pause);
     std::vector<int> auto_shoot_vk_codes = get_vk_codes(ctx.config.button_auto_shoot);
     std::vector<int> exit_vk_codes = get_vk_codes(ctx.config.button_exit);
+    std::vector<int> single_shot_vk_codes = get_vk_codes(ctx.config.button_single_shot);
 
     static bool last_aiming_state = false;
     static bool last_shooting_state = false;
     static bool last_pause_state = false;
+    static bool last_single_shot_state = false;
     
     // Event-driven keyboard monitoring using Windows events
     HANDLE hKeyboardEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
@@ -107,6 +109,18 @@ void keyboardListener() {
 #endif
         }
         last_pause_state = current_pause;
+
+        // Single shot trigger - only on key press, not while held
+        bool current_single_shot = is_any_key_pressed(single_shot_vk_codes);
+        if (current_single_shot && !last_single_shot_state) {
+            // Key was just pressed - trigger single shot
+            ctx.single_shot_requested = true;
+            ctx.pipeline_activation_cv.notify_one();  // Wake up pipeline
+#ifdef _DEBUG
+            std::cout << "[Keyboard] Single shot triggered" << std::endl;
+#endif
+        }
+        last_single_shot_state = current_single_shot;
 
         // Event-driven adaptive delay - use wait with timeout for better CPU efficiency
         DWORD waitTime = current_aiming ? 2 : 10; // 2ms when aiming, 10ms when idle

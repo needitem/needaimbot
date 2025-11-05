@@ -1257,7 +1257,11 @@ bool UnifiedGraphPipeline::enqueueFrameCompletionCallback(cudaStream_t stream) {
             pipeline->m_allowMovement.store(false, std::memory_order_release);
 
             if (pipeline->m_h_movement && pipeline->m_h_movement->get()) {
-                if (allowMovement && ctx.aiming) {
+                // Allow movement if: (allowMovement is true) AND (aiming is true OR single_shot_mode is true)
+                bool isSingleShot = ctx.single_shot_mode.load();
+                bool shouldMove = allowMovement && (ctx.aiming || isSingleShot);
+
+                if (shouldMove) {
                     MouseMovement rawMovement = *pipeline->m_h_movement->get();
                     MouseMovement filtered = pipeline->filterMouseMovement(rawMovement, true);
                     pipeline->m_h_movement->get()->dx = filtered.dx;
@@ -1276,6 +1280,11 @@ bool UnifiedGraphPipeline::enqueueFrameCompletionCallback(cudaStream_t stream) {
                     pipeline->filterMouseMovement({0, 0}, false);
                     pipeline->m_h_movement->get()->dx = 0;
                     pipeline->m_h_movement->get()->dy = 0;
+                }
+
+                // Reset single shot mode after processing (whether moved or not)
+                if (isSingleShot) {
+                    ctx.single_shot_mode = false;
                 }
             }
 
@@ -1342,13 +1351,31 @@ void UnifiedGraphPipeline::runMainLoop() {
         {
             std::unique_lock<std::mutex> lock(ctx.pipeline_activation_mutex);
             ctx.pipeline_activation_cv.wait(lock, [&ctx, this]() {
-                return ctx.aiming.load() || m_shouldStop.load(std::memory_order_acquire) ||
+                return ctx.aiming.load() || ctx.single_shot_requested.load() ||
+                       m_shouldStop.load(std::memory_order_acquire) ||
                        ctx.should_exit.load();
             });
         }
 
         if (m_shouldStop.load(std::memory_order_acquire) || ctx.should_exit.load()) {
             break;
+        }
+
+        // Handle single shot mode
+        if (ctx.single_shot_requested.load()) {
+            ctx.single_shot_requested = false;  // Reset flag
+            ctx.single_shot_mode = true;  // Enable single shot mode - will be reset by callback
+
+            // Execute single frame without activation/deactivation overhead
+            FrameFailureReason failReason = FrameFailureReason::NONE;
+            bool success = executeFrame(&failReason);
+
+            if (!success) {
+                ctx.single_shot_mode = false;  // Reset on failure
+            }
+            // Note: single_shot_mode will be reset by the callback after mouse movement
+
+            continue;  // Skip normal aiming loop
         }
 
         if (!ctx.aiming.load()) {
