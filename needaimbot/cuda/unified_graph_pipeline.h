@@ -500,7 +500,6 @@ private:
     // Performance tracking
     PerformanceMetrics m_perfMetrics;
 
-    std::atomic<bool> m_allowMovement{false};
     std::atomic<bool> m_shouldStop{false};
     std::atomic<bool> m_frameInFlight{false};
     // Signal when a frame-in-flight completes to avoid active yielding
@@ -562,9 +561,6 @@ private:
     MouseMovement filterMouseMovement(const MouseMovement& rawMovement, bool movementEnabled);
     void clearHostPreviewData(AppContext& ctx);
     void handleAimbotActivation();
-
-    bool enqueueFrameCompletionCallback(cudaStream_t stream);
-    bool enqueueMovementResetCallback(cudaStream_t stream);
 
     bool updateDDACaptureRegion(const AppContext& ctx);
     bool performFrameCapture();

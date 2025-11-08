@@ -541,10 +541,6 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
                            sizeof(MouseMovement), cudaMemcpyDeviceToHost, stream);
         }
         
-        // 留덉슦???대룞 肄쒕갚??Graph???ы븿 - 蹂듭궗 ?꾨즺 ???먮룞 ?ㅽ뻾
-        if (!enqueueFrameCompletionCallback(stream)) {
-            std::cerr << "[UnifiedGraph] Failed to attach completion callback during graph capture" << std::endl;
-        }
     }
 
     err = cudaStreamEndCapture(stream, &m_graph);
@@ -651,11 +647,6 @@ bool UnifiedGraphPipeline::updateGraphExec() {
                            sizeof(MouseMovement), cudaMemcpyDeviceToHost, stream);
         }
 
-        if (!enqueueFrameCompletionCallback(stream)) {
-            cudaStreamEndCapture(stream, &newGraph);
-            if (newGraph) cudaGraphDestroy(newGraph);
-            return false;
-        }
     }
 
     err = cudaStreamEndCapture(stream, &newGraph);
@@ -1000,7 +991,6 @@ void UnifiedGraphPipeline::handleAimbotDeactivation() {
     clearCountBuffers();
     clearMovementData();
     clearHostPreviewData(ctx);
-    m_allowMovement.store(false, std::memory_order_release);
     m_captureRegionCache = {};
     
     // Reset unified capture state
@@ -1240,7 +1230,6 @@ void UnifiedGraphPipeline::clearHostPreviewData(AppContext& ctx) {
 
 void UnifiedGraphPipeline::handleAimbotActivation() {
     m_state.frameCount = 0;
-    m_allowMovement.store(false, std::memory_order_release);
     clearMovementData();
     m_captureRegionCache = {};
     
@@ -1252,106 +1241,6 @@ void UnifiedGraphPipeline::handleAimbotActivation() {
         std::lock_guard<std::mutex> lock(m_movementFilterMutex);
         m_skipNextMovement = true;
     }
-}
-
-bool UnifiedGraphPipeline::enqueueFrameCompletionCallback(cudaStream_t stream) {
-    if (!stream) {
-        return false;
-    }
-
-    cudaError_t err = cudaLaunchHostFunc(stream,
-        [](void* userData) {
-            auto* pipeline = static_cast<UnifiedGraphPipeline*>(userData);
-            if (!pipeline) {
-                return;
-            }
-
-            auto& ctx = AppContext::getInstance();
-
-            bool allowMovement = pipeline->m_allowMovement.load(std::memory_order_acquire);
-            pipeline->m_allowMovement.store(false, std::memory_order_release);
-
-            if (pipeline->m_h_movement && pipeline->m_h_movement->get()) {
-                // Allow movement if: (allowMovement is true) AND (aiming is true OR single_shot_mode is true)
-                bool isSingleShot = ctx.single_shot_mode.load();
-                bool shouldMove = allowMovement && (ctx.aiming || isSingleShot);
-
-                if (shouldMove) {
-                    MouseMovement rawMovement = *pipeline->m_h_movement->get();
-                    MouseMovement filtered = pipeline->filterMouseMovement(rawMovement, true);
-                    pipeline->m_h_movement->get()->dx = filtered.dx;
-                    pipeline->m_h_movement->get()->dy = filtered.dy;
-
-                    if (filtered.dx != 0 || filtered.dy != 0) {
-                        executeMouseMovement(filtered.dx, filtered.dy);
-
-                        // Record input injection timestamp (QPC)
-                        LARGE_INTEGER qpc{};
-                        if (QueryPerformanceCounter(&qpc)) {
-                            pipeline->m_pendingInputQpc.store(static_cast<uint64_t>(qpc.QuadPart), std::memory_order_release);
-                        }
-                    }
-                } else {
-                    pipeline->filterMouseMovement({0, 0}, false);
-                    pipeline->m_h_movement->get()->dx = 0;
-                    pipeline->m_h_movement->get()->dy = 0;
-                }
-
-                // Reset single shot mode after processing (whether moved or not)
-                if (isSingleShot) {
-                    ctx.single_shot_mode = false;
-                }
-            }
-
-            // Release frame-in-flight flag
-            pipeline->m_frameInFlight.store(false, std::memory_order_release);
-            {
-                std::lock_guard<std::mutex> g(pipeline->m_inflightMutex);
-            }
-            pipeline->m_inflightCv.notify_all();
-        }, this);
-
-    if (err != cudaSuccess) {
-        std::cerr << "[UnifiedGraph] Failed to enqueue completion callback: "
-                  << cudaGetErrorString(err) << std::endl;
-        m_allowMovement.store(false, std::memory_order_release);
-        return false;
-    }
-
-    return true;
-}
-
-bool UnifiedGraphPipeline::enqueueMovementResetCallback(cudaStream_t stream) {
-    if (!stream) {
-        return false;
-    }
-
-    cudaError_t err = cudaLaunchHostFunc(stream,
-        [](void* userData) {
-            auto* pipeline = static_cast<UnifiedGraphPipeline*>(userData);
-            if (!pipeline) {
-                return;
-            }
-
-            pipeline->m_allowMovement.store(false, std::memory_order_release);
-            pipeline->clearMovementData();
-
-            // Release frame-in-flight flag
-            pipeline->m_frameInFlight.store(false, std::memory_order_release);
-            {
-                std::lock_guard<std::mutex> g(pipeline->m_inflightMutex);
-            }
-            pipeline->m_inflightCv.notify_all();
-        }, this);
-
-    if (err != cudaSuccess) {
-        std::cerr << "[UnifiedGraph] Failed to enqueue movement reset callback: "
-                  << cudaGetErrorString(err) << std::endl;
-        m_allowMovement.store(false, std::memory_order_release);
-        return false;
-    }
-
-    return true;
 }
 
 void UnifiedGraphPipeline::runMainLoop() {
@@ -1417,13 +1306,7 @@ void UnifiedGraphPipeline::runMainLoop() {
                 handleFrameFailure(failReason, consecutiveFails);
             } else {
                 consecutiveFails = 0;
-
-                // Wait for the current frame to fully complete (including mouse movement)
-                // before starting the next frame to prevent oscillation
-                std::unique_lock<std::mutex> lk(m_inflightMutex);
-                m_inflightCv.wait(lk, [this]() {
-                    return !m_frameInFlight.load(std::memory_order_acquire);
-                });
+                // executeFrame now waits for completion synchronously, no need to wait here
             }
         }
 
@@ -2829,7 +2712,6 @@ bool UnifiedGraphPipeline::executeFrame(FrameFailureReason* outReason, cudaStrea
         if (!m_graphPrimed) {
             FrameFailureReason primeReason = scheduleNextFrameCapture(false);
             if (primeReason != FrameFailureReason::NONE) {
-                m_allowMovement.store(false, std::memory_order_release);
                 m_frameInFlight.store(false, std::memory_order_release);
                 {
                     std::lock_guard<std::mutex> g(m_inflightMutex);
@@ -2840,7 +2722,6 @@ bool UnifiedGraphPipeline::executeFrame(FrameFailureReason* outReason, cudaStrea
             }
             // Single synchronization point - waitForCaptureCompletion handles event sync internally
             if (!waitForCaptureCompletion()) {
-                m_allowMovement.store(false, std::memory_order_release);
                 m_frameInFlight.store(false, std::memory_order_release);
                 {
                     std::lock_guard<std::mutex> g(m_inflightMutex);
@@ -2878,14 +2759,12 @@ bool UnifiedGraphPipeline::executeFrame(FrameFailureReason* outReason, cudaStrea
         }
 
         bool shouldDispatchMovement = m_config.enableDetection && !ctx.detection_paused.load();
-        m_allowMovement.store(shouldDispatchMovement, std::memory_order_release);
 
         // Launch the graph using the stabilized m_captureBuffer pointer
         cudaError_t launchErr = cudaGraphLaunch(m_graphExec, launchStream);
         if (launchErr != cudaSuccess) {
             std::cerr << "[UnifiedGraph] Graph launch failed: "
                       << cudaGetErrorString(launchErr) << std::endl;
-            m_allowMovement.store(false, std::memory_order_release);
             m_frameInFlight.store(false, std::memory_order_release);
             {
                 std::lock_guard<std::mutex> g(m_inflightMutex);
@@ -2898,7 +2777,6 @@ bool UnifiedGraphPipeline::executeFrame(FrameFailureReason* outReason, cudaStrea
         m_captureState.store(CaptureState::CONSUMED, std::memory_order_release);
     } else {
         if (!executeNormalPipeline(launchStream)) {
-            m_allowMovement.store(false, std::memory_order_release);
             m_frameInFlight.store(false, std::memory_order_release);
             {
                 std::lock_guard<std::mutex> g(m_inflightMutex);
@@ -2909,14 +2787,69 @@ bool UnifiedGraphPipeline::executeFrame(FrameFailureReason* outReason, cudaStrea
         }
     }
 
+    // Synchronize stream to ensure all operations complete before processing mouse movement
+    cudaError_t syncErr = cudaStreamSynchronize(launchStream);
+    if (syncErr != cudaSuccess) {
+        std::cerr << "[UnifiedGraph] Stream synchronization failed: "
+                  << cudaGetErrorString(syncErr) << std::endl;
+        m_frameInFlight.store(false, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> g(m_inflightMutex);
+        }
+        m_inflightCv.notify_all();
+        return false;
+    }
+
+    // Process mouse movement synchronously after pipeline completes
+    bool shouldMove = m_config.enableDetection && !ctx.detection_paused.load();
+    if (shouldMove && m_h_movement && m_h_movement->get()) {
+        bool isSingleShot = ctx.single_shot_mode.load();
+        shouldMove = shouldMove && (ctx.aiming || isSingleShot);
+
+        if (shouldMove) {
+            MouseMovement rawMovement = *m_h_movement->get();
+            MouseMovement filtered = filterMouseMovement(rawMovement, true);
+            m_h_movement->get()->dx = filtered.dx;
+            m_h_movement->get()->dy = filtered.dy;
+
+            if (filtered.dx != 0 || filtered.dy != 0) {
+                executeMouseMovement(filtered.dx, filtered.dy);
+
+                // Record input injection timestamp (QPC)
+                LARGE_INTEGER qpc{};
+                if (QueryPerformanceCounter(&qpc)) {
+                    m_pendingInputQpc.store(static_cast<uint64_t>(qpc.QuadPart), std::memory_order_release);
+                }
+            }
+        } else {
+            filterMouseMovement({0, 0}, false);
+            m_h_movement->get()->dx = 0;
+            m_h_movement->get()->dy = 0;
+        }
+
+        // Reset single shot mode after processing
+        if (isSingleShot) {
+            ctx.single_shot_mode = false;
+        }
+    } else {
+        clearMovementData();
+    }
+
+    // Release frame-in-flight flag
+    m_frameInFlight.store(false, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> g(m_inflightMutex);
+    }
+    m_inflightCv.notify_all();
+
     // Update performance metrics
     auto frameEnd = std::chrono::steady_clock::now();
     auto latencyMs = std::chrono::duration<double, std::milli>(frameEnd - frameStart).count();
-    
+
     m_perfMetrics.totalFrames++;
     m_perfMetrics.totalLatencyMs += latencyMs;
     m_perfMetrics.logIfNeeded("[Perf]");
-    
+
     if (outReason) *outReason = FrameFailureReason::NONE;
 
     // Periodic CUDA memory maintenance for long-running sessions
@@ -2968,35 +2901,6 @@ bool UnifiedGraphPipeline::executeNormalPipeline(cudaStream_t stream) {
         if (!m_mouseMovementUsesMappedMemory) {
             cudaMemcpyAsync(m_h_movement->get(), m_smallBufferArena.mouseMovement,
                            sizeof(MouseMovement), cudaMemcpyDeviceToHost, activeStream);
-        }
-    }
-
-    m_allowMovement.store(shouldRunDetection, std::memory_order_release);
-    if (shouldRunDetection) {
-        if (!enqueueFrameCompletionCallback(activeStream)) {
-            m_allowMovement.store(false, std::memory_order_release);
-            return false;
-        }
-    } else {
-        (void)scheduleNextFrameCapture(false); // Non-blocking schedule
-
-        cudaError_t streamState = cudaStreamQuery(activeStream);
-        if (streamState == cudaSuccess) {
-            clearMovementData();
-            m_frameInFlight.store(false, std::memory_order_release);
-            {
-                std::lock_guard<std::mutex> g(m_inflightMutex);
-            }
-            m_inflightCv.notify_all();
-        } else {
-            if (streamState != cudaErrorNotReady) {
-                std::cerr << "[UnifiedGraph] Stream query failed while resetting movement: "
-                          << cudaGetErrorString(streamState) << std::endl;
-            }
-
-            if (!enqueueMovementResetCallback(activeStream)) {
-                return false;
-            }
         }
     }
 
