@@ -8,14 +8,12 @@
 #include <vector>
 #include <string>
 #include <d3d11.h>
-// #include "../capture/capture.h" - removed, using GPU capture now
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <iostream>
 #include <algorithm>
 #include <cstring>
-// OpenCV removed - using custom CUDA utilities
 #include "../cuda/simple_cuda_mat.h"
 
 
@@ -137,11 +135,6 @@ void uploadDebugFrame(const SimpleMat& rgbaCpu)
 
     g_pd3dDeviceContext->Unmap(g_debugTex, 0);
 }
-
-
-
-
-// uploadColorMaskTexture removed
 
 void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float debug_scale, const std::vector<Target>* targets_override) {
     auto& ctx = AppContext::getInstance();

@@ -2,7 +2,6 @@ import hid
 import os
 import stat
 import time
-import os
 import re
 import ctypes
 import sys
