@@ -247,18 +247,6 @@ void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float debug_scale, 
 void draw_debug()
 {
     auto& ctx = AppContext::getInstance();
-    
-    // Display pause status prominently
-    if (ctx.detection_paused.load()) {
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.3f, 0.3f, 1.0f)); // Red color
-        ImGui::Text("AIMBOT PAUSED");
-        ImGui::PopStyleColor();
-    } else {
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.3f, 1.0f, 0.3f, 1.0f)); // Green color
-        ImGui::Text("AIMBOT ACTIVE");
-        ImGui::PopStyleColor();
-    }
-    
 
     if (ImGui::Checkbox("Enable FPS Display", &ctx.config.show_fps)) { SAVE_PROFILE(); }
 
@@ -289,23 +277,5 @@ void draw_debug()
     if (ImGui::Checkbox("Always On Top", &ctx.config.always_on_top)) { SAVE_PROFILE(); }
     if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Keeps the overlay window always on top of other windows."); }
 
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    ImGui::SeparatorText("Console Window Control");
-    ImGui::Spacing();
-
-    if (ImGui::Button("Hide Console"))
-    {
-        HideConsole();
-    }
-    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Hides the black console window."); }
-    ImGui::SameLine();
-    if (ImGui::Button("Show Console"))
-    {
-        ShowConsole();
-    }
-    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Shows the black console window if it's hidden."); }
     ImGui::Spacing();
 }
