@@ -180,13 +180,6 @@ void draw_profile()
     ImGui::InputTextWithHint("##NewProfileName", "Enter new profile name", new_profile_name, IM_ARRAYSIZE(new_profile_name));
     ImGui::PopItemWidth();
     
-    UIHelpers::CompactSpacer();
-    
-    UIHelpers::BeautifulText("Description (Optional)");
-    ImGui::PushItemWidth(-1);
-    ImGui::InputTextMultiline("##ProfileDesc", profile_description, IM_ARRAYSIZE(profile_description), ImVec2(-1, 50));
-    ImGui::PopItemWidth();
-    
     UIHelpers::Spacer();
     
     if (UIHelpers::EnhancedButton("Create Profile", ImVec2(-1, 0), "Create a new profile with current settings"))
