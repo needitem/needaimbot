@@ -1417,6 +1417,13 @@ void UnifiedGraphPipeline::runMainLoop() {
                 handleFrameFailure(failReason, consecutiveFails);
             } else {
                 consecutiveFails = 0;
+
+                // Wait for the current frame to fully complete (including mouse movement)
+                // before starting the next frame to prevent oscillation
+                std::unique_lock<std::mutex> lk(m_inflightMutex);
+                m_inflightCv.wait(lk, [this]() {
+                    return !m_frameInFlight.load(std::memory_order_acquire);
+                });
             }
         }
 
