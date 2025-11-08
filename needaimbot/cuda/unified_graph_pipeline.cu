@@ -139,6 +139,7 @@ __global__ void fusedTargetSelectionAndMovementKernel(
     float kd_y,
     float integral_max,
     float derivative_max,
+    float iou_stickiness_threshold,
     float head_y_offset,
     float body_y_offset,
     int detection_resolution,
@@ -251,7 +252,7 @@ __global__ void fusedTargetSelectionAndMovementKernel(
         // Hysteresis: prefer previous target if IoU stays above threshold
         float bestIoU = s_prevIoU[0];
         int bestIoUIdx = s_prevIndices[0];
-        const float iouStickinessThreshold = 0.30f;
+        const float iouStickinessThreshold = iou_stickiness_threshold;
 
         int chosenIndex = candidateIndex;
         Target chosenTarget = candidateTarget;
@@ -289,10 +290,12 @@ __global__ void fusedTargetSelectionAndMovementKernel(
             float integral_y = pidState->integral_y;
 
             // Reset integral when very close to target (deadzone)
+            // Decouple axes: apply deadzone per-axis, not by combined magnitude
             const float deadzone_threshold = 5.0f;  // pixels
-            float error_magnitude = sqrtf(error_x * error_x + error_y * error_y);
-            if (error_magnitude < deadzone_threshold) {
+            if (fabsf(error_x) < deadzone_threshold) {
                 integral_x = 0.0f;
+            }
+            if (fabsf(error_y) < deadzone_threshold) {
                 integral_y = 0.0f;
             }
 
@@ -1063,6 +1066,10 @@ void UnifiedGraphPipeline::resetMovementFilter() {
     std::lock_guard<std::mutex> lock(m_movementFilterMutex);
     m_skipNextMovement = true;
     m_lastFrameTime = {};
+    m_inSettleX = false;
+    m_inSettleY = false;
+    m_lastEmitX = 0;
+    m_lastEmitY = 0;
 }
 
 void UnifiedGraphPipeline::handleFrameFailure(FrameFailureReason reason, int& consecutiveFails) {
@@ -1207,6 +1214,11 @@ MouseMovement UnifiedGraphPipeline::filterMouseMovement(const MouseMovement& raw
 
     if (!movementEnabled) {
         m_skipNextMovement = true;
+        // Reset settle state when movement disabled
+        m_inSettleX = false;
+        m_inSettleY = false;
+        m_lastEmitX = 0;
+        m_lastEmitY = 0;
         return {0, 0};
     }
 
@@ -1219,8 +1231,64 @@ MouseMovement UnifiedGraphPipeline::filterMouseMovement(const MouseMovement& raw
         return rawMovement;
     }
 
-    // No smoothing/deadzone: return raw movement
-    return rawMovement;
+    // Apply small-oscillation suppression and hysteresis deadband PER-AXIS
+    int dx = rawMovement.dx;
+    int dy = rawMovement.dy;
+
+    // X axis: sign-flip suppression for tiny steps
+    int emitDx = dx;
+    if (abs(dx) <= 1 && dx == -m_lastEmitX) {
+        emitDx = 0;
+    }
+    // Y axis: sign-flip suppression for tiny steps
+    int emitDy = dy;
+    if (abs(dy) <= 1 && dy == -m_lastEmitY) {
+        emitDy = 0;
+    }
+
+    // X axis hysteresis
+    {
+        const int enter2X = m_deadbandEnterX * m_deadbandEnterX;
+        const int exit2X  = m_deadbandExitX * m_deadbandExitX;
+        const int mag2X = emitDx * emitDx; // per-axis magnitude
+        if (m_inSettleX) {
+            if (mag2X < exit2X) {
+                emitDx = 0;
+            } else {
+                m_inSettleX = false;
+            }
+        } else {
+            if (mag2X <= enter2X) {
+                m_inSettleX = true;
+                emitDx = 0;
+            }
+        }
+    }
+
+    // Y axis hysteresis
+    {
+        const int enter2Y = m_deadbandEnterY * m_deadbandEnterY;
+        const int exit2Y  = m_deadbandExitY * m_deadbandExitY;
+        const int mag2Y = emitDy * emitDy;
+        if (m_inSettleY) {
+            if (mag2Y < exit2Y) {
+                emitDy = 0;
+            } else {
+                m_inSettleY = false;
+            }
+        } else {
+            if (mag2Y <= enter2Y) {
+                m_inSettleY = true;
+                emitDy = 0;
+            }
+        }
+    }
+
+    // Update last emitted per-axis (only if we actually emit non-zero on that axis)
+    if (emitDx != 0) m_lastEmitX = emitDx; else m_lastEmitX = 0;
+    if (emitDy != 0) m_lastEmitY = emitDy; else m_lastEmitY = 0;
+
+    return {emitDx, emitDy};
 }
 
 void UnifiedGraphPipeline::clearHostPreviewData(AppContext& ctx) {
@@ -2055,8 +2123,15 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         m_cachedPIDConfig.derivative_max = ctx.config.pid_derivative_max;
         m_cachedPIDConfig.head_y_offset = ctx.config.head_y_offset;
         m_cachedPIDConfig.body_y_offset = ctx.config.body_y_offset;
+        m_cachedPIDConfig.iou_stickiness_threshold = ctx.config.iou_stickiness_threshold;
         m_pidConfigDirty.store(false, std::memory_order_release);
     }
+
+    // Always refresh CPU-side deadband thresholds for filter (cheap update)
+    m_deadbandEnterX = ctx.config.deadband_enter_x;
+    m_deadbandExitX  = ctx.config.deadband_exit_x;
+    m_deadbandEnterY = ctx.config.deadband_enter_y;
+    m_deadbandExitY  = ctx.config.deadband_exit_y;
 
     // Use cached values (lock-free)
     int cached_max_detections = m_cachedPIDConfig.max_detections;
@@ -2102,6 +2177,7 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         cached_kd_y,
         cached_integral_max,
         cached_derivative_max,
+        m_cachedPIDConfig.iou_stickiness_threshold,
         cached_head_y_offset,
         cached_body_y_offset,
         ctx.config.detection_resolution,

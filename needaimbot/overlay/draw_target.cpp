@@ -1,6 +1,7 @@
 #include "../core/windows_headers.h"
 
 #include <iostream>
+#include <algorithm>
 #include "d3d11.h"
 #include "../imgui/imgui.h"
 
@@ -8,6 +9,7 @@
 #include "overlay.h"
 #include "draw_settings.h"
 #include "needaimbot.h"
+#include "../cuda/unified_graph_pipeline.h"
 #include "other_tools.h"
 #include "memory_images.h"
 
@@ -108,6 +110,21 @@ void draw_target()
     // Target selection info
     ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.2f, 1.0f), "Target Selection");
     ImGui::TextWrapped("Always targets the enemy closest to your crosshair");
+    ImGui::Spacing();
+    ImGui::PushItemWidth(-1);
+    if (ImGui::SliderFloat("IoU Stickiness", &ctx.config.iou_stickiness_threshold, 0.0f, 0.9f, "%.2f")) {
+        ctx.config.iou_stickiness_threshold = std::clamp(ctx.config.iou_stickiness_threshold, 0.0f, 0.99f);
+        SAVE_PROFILE();
+        auto* pipeline = needaimbot::PipelineManager::getInstance().getPipeline();
+        if (pipeline) {
+            pipeline->markPidConfigDirty();
+            pipeline->setGraphRebuildNeeded();
+        }
+    }
+    ImGui::PopItemWidth();
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Prefer previous target while overlap (IoU) stays above this threshold. Higher = less switching");
+    }
 
     ImGui::Spacing();
     ImGui::Separator();

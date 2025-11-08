@@ -211,6 +211,15 @@ public:
     float pid_integral_max = 100.0f;  // Max integral windup limit (pixels)
     float pid_derivative_max = 50.0f; // Max derivative clamp (pixels, prevents oscillation from large movements)
 
+    // Jitter filter (deadband) settings - per axis
+    int deadband_enter_x = 2;  // pixels to enter settle zone on X
+    int deadband_exit_x  = 5;  // pixels to exit settle zone on X
+    int deadband_enter_y = 2;  // pixels to enter settle zone on Y
+    int deadband_exit_y  = 5;  // pixels to exit settle zone on Y
+
+    // Target selection stickiness (IoU threshold)
+    float iou_stickiness_threshold = 0.30f; // prefer previous target if IoU > threshold
+
     // Active profile management
     std::string active_profile_name = "Default";
     

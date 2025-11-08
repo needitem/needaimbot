@@ -89,6 +89,15 @@ bool Config::loadConfig(const std::string& filename)
         pid_kd_y = 0.3f;
         pid_integral_max = 100.0f;  // Windup limit
 
+        // Deadband defaults (per-axis jitter filter)
+        deadband_enter_x = 2;
+        deadband_exit_x  = 5;
+        deadband_enter_y = 2;
+        deadband_exit_y  = 5;
+
+        // Target stickiness default
+        iou_stickiness_threshold = 0.30f;
+
         // Aim+shoot offset defaults
         enable_aim_shoot_offset = false;
         aim_shoot_offset_x = 0.0f;
@@ -282,6 +291,15 @@ bool Config::loadConfig(const std::string& filename)
     pid_kd_y = static_cast<float>(get_double_ini("PIDController", "pid_kd_y", 0.3));
     pid_integral_max = static_cast<float>(get_double_ini("PIDController", "pid_integral_max", 100.0));
     pid_derivative_max = static_cast<float>(get_double_ini("PIDController", "pid_derivative_max", 50.0));
+
+    // Load deadband per-axis (Mouse)
+    deadband_enter_x = get_long_ini("Mouse", "deadband_enter_x", 2);
+    deadband_exit_x  = get_long_ini("Mouse", "deadband_exit_x", 5);
+    deadband_enter_y = get_long_ini("Mouse", "deadband_enter_y", 2);
+    deadband_exit_y  = get_long_ini("Mouse", "deadband_exit_y", 5);
+
+    // Load IoU stickiness (Target)
+    iou_stickiness_threshold = static_cast<float>(get_double_ini("Target", "iou_stickiness_threshold", 0.30));
 
     input_method = get_string_ini("Mouse", "input_method", "WIN32");
     
@@ -478,6 +496,8 @@ bool Config::saveConfig(const std::string& filename)
     file << "enable_aim_shoot_offset = " << (enable_aim_shoot_offset ? "true" : "false") << "\n";
     file << "aim_shoot_offset_x = " << aim_shoot_offset_x << "\n";
     file << "aim_shoot_offset_y = " << aim_shoot_offset_y << "\n";
+    // Target stickiness (IoU)
+    file << "iou_stickiness_threshold = " << iou_stickiness_threshold << "\n";
     file << std::noboolalpha;
     file << "\n";
 
@@ -495,6 +515,12 @@ bool Config::saveConfig(const std::string& filename)
     file << "bScope_multiplier = " << bScope_multiplier << "\n";
     file << "crouch_recoil_enabled = " << (crouch_recoil_enabled ? "true" : "false") << "\n";
     file << "crouch_recoil_reduction = " << crouch_recoil_reduction << "\n\n";
+
+    // Deadband settings (per-axis)
+    file << "deadband_enter_x = " << deadband_enter_x << "\n";
+    file << "deadband_exit_x = " << deadband_exit_x << "\n";
+    file << "deadband_enter_y = " << deadband_enter_y << "\n";
+    file << "deadband_exit_y = " << deadband_exit_y << "\n\n";
 
     file << "[PIDController]\n";
     file << std::fixed << std::setprecision(6);

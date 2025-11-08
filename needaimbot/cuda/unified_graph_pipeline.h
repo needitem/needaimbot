@@ -415,6 +415,7 @@ private:
         float derivative_max = 50.0f;
         float head_y_offset = 0.2f;
         float body_y_offset = 0.5f;
+        float iou_stickiness_threshold = 0.30f;
     };
     CachedPIDConfig m_cachedPIDConfig;
     std::atomic<bool> m_pidConfigDirty{true};
@@ -509,6 +510,17 @@ private:
     mutable std::mutex m_movementFilterMutex;
     bool m_skipNextMovement{true};
     std::chrono::steady_clock::time_point m_lastFrameTime{};
+    // Movement filtering state (to reduce micro jitter near target)
+    // Per-axis hysteresis deadband: X and Y are independent
+    int m_deadbandEnterX{2};
+    int m_deadbandExitX{5};
+    int m_deadbandEnterY{2};
+    int m_deadbandExitY{5};
+    bool m_inSettleX{false};
+    bool m_inSettleY{false};
+    // Track last emitted movement per axis to suppress immediate sign-flip oscillation (e.g., +1 then -1)
+    int m_lastEmitX{0};
+    int m_lastEmitY{0};
     mutable std::mutex m_previewMutex;
     
     
@@ -591,6 +603,10 @@ private:
 
     void refreshCachedBindings();
     bool bindStaticTensorAddresses();
+
+public:
+    // Mark runtime-controlled parameters dirty so pipeline refreshes cached values
+    void markPidConfigDirty() { m_pidConfigDirty.store(true, std::memory_order_release); }
 };
 
 class PipelineManager {

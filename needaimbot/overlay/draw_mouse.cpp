@@ -14,6 +14,7 @@
 #include "ui_helpers.h"
 #include "common_helpers.h"
 #include "draw_settings.h"
+#include "../cuda/unified_graph_pipeline.h"
 #include "../mouse/mouse.h" 
 
 static void draw_movement_controls()
@@ -298,4 +299,46 @@ void draw_mouse()
     draw_input_device_settings();
     UIHelpers::Spacer();
     draw_movement_controls();
+    UIHelpers::Spacer();
+    // Deadband / jitter filter controls
+    auto& ctx = AppContext::getInstance();
+    UIHelpers::BeginCard("Jitter Filter (Deadband)");
+    UIHelpers::BeautifulText("Suppress micro-oscillation near target. Enter <= Exit. Per-axis.", UIHelpers::GetAccentColor(0.8f));
+
+    int prev_enter_x = ctx.config.deadband_enter_x;
+    int prev_exit_x  = ctx.config.deadband_exit_x;
+    int prev_enter_y = ctx.config.deadband_enter_y;
+    int prev_exit_y  = ctx.config.deadband_exit_y;
+
+    if (ImGui::SliderInt("Enter X (px)", &ctx.config.deadband_enter_x, 0, 10)) {
+        ctx.config.deadband_enter_x = std::max(0, std::min(ctx.config.deadband_enter_x, ctx.config.deadband_exit_x));
+        SAVE_PROFILE();
+        if (auto* p = needaimbot::PipelineManager::getInstance().getPipeline()) p->markPidConfigDirty();
+    }
+    if (ImGui::SliderInt("Exit X (px)", &ctx.config.deadband_exit_x, 1, 20)) {
+        ctx.config.deadband_exit_x = std::max(ctx.config.deadband_exit_x, ctx.config.deadband_enter_x);
+        SAVE_PROFILE();
+        if (auto* p = needaimbot::PipelineManager::getInstance().getPipeline()) p->markPidConfigDirty();
+    }
+    if (ImGui::SliderInt("Enter Y (px)", &ctx.config.deadband_enter_y, 0, 10)) {
+        ctx.config.deadband_enter_y = std::max(0, std::min(ctx.config.deadband_enter_y, ctx.config.deadband_exit_y));
+        SAVE_PROFILE();
+        if (auto* p = needaimbot::PipelineManager::getInstance().getPipeline()) p->markPidConfigDirty();
+    }
+    if (ImGui::SliderInt("Exit Y (px)", &ctx.config.deadband_exit_y, 1, 20)) {
+        ctx.config.deadband_exit_y = std::max(ctx.config.deadband_exit_y, ctx.config.deadband_enter_y);
+        SAVE_PROFILE();
+        if (auto* p = needaimbot::PipelineManager::getInstance().getPipeline()) p->markPidConfigDirty();
+    }
+
+    if (ImGui::Button("Reset Deadband to Defaults")) {
+        ctx.config.deadband_enter_x = 2;
+        ctx.config.deadband_exit_x  = 5;
+        ctx.config.deadband_enter_y = 2;
+        ctx.config.deadband_exit_y  = 5;
+        SAVE_PROFILE();
+        if (auto* p = needaimbot::PipelineManager::getInstance().getPipeline()) p->markPidConfigDirty();
+    }
+
+    UIHelpers::EndCard();
 }
