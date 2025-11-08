@@ -79,8 +79,8 @@ void combinedUIThread() {
 }
 
 namespace {
-    void logInputMethodFallback(std::string_view method, std::string reason) {
-        std::cerr << "[Mouse] " << method << " initialization failed: " << std::move(reason)
+    void logInputMethodFallback(std::string_view method, std::string_view reason) {
+        std::cerr << "[Mouse] " << method << " initialization failed: " << reason
                   << ". Defaulting to Win32." << std::endl;
     }
 
@@ -92,61 +92,77 @@ namespace {
         }
         return buffer;
     }
+
+    // Generic input method initializer with automatic error handling
+    template<typename InitFunc>
+    bool tryInitMethod(const char* name, InitFunc&& init) {
+        try {
+            if (auto method = init()) {
+                setGlobalInputMethod(std::move(method));
+                return true;
+            }
+        } catch (const std::exception& e) {
+            logInputMethodFallback(name, e.what());
+        }
+        return false;
+    }
 }
 
 bool initializeInputMethod() {
     auto& ctx = AppContext::getInstance();
 
-    const auto setMethod = [](std::unique_ptr<InputMethod> method) {
-        setGlobalInputMethod(std::move(method));
-        return true;
-    };
-
     if (ctx.config.input_method == "ARDUINO") {
-        try {
-            auto arduinoSerial = std::make_unique<SerialConnection>(ctx.config.arduino_port, ctx.config.arduino_baudrate);
-            if (arduinoSerial->isOpen()) {
-                return setMethod(std::make_unique<SerialInputMethod>(arduinoSerial.release()));
+        return tryInitMethod("Arduino", [&]() -> std::unique_ptr<InputMethod> {
+            auto serial = std::make_unique<SerialConnection>(ctx.config.arduino_port, ctx.config.arduino_baudrate);
+            if (!serial->isOpen()) {
+                logInputMethodFallback("Arduino", "failed to open serial port " + ctx.config.arduino_port);
+                return nullptr;
             }
-            logInputMethodFallback("Arduino", "failed to open serial port " + ctx.config.arduino_port);
-        } catch (const std::exception& e) {
-            logInputMethodFallback("Arduino", e.what());
-        }
-    } else if (ctx.config.input_method == "GHUB") {
-        auto gHub = std::make_unique<GhubMouse>();
-        if (gHub->mouse_xy(0, 0)) {
-            return setMethod(std::make_unique<GHubInputMethod>(gHub.release()));
-        }
-        logInputMethodFallback("GHub", "failed to initialize mouse driver");
-    } else if (ctx.config.input_method == "KMBOX") {
-        auto ip = copyToBuffer<256>(ctx.config.kmbox_ip);
-        auto port = copyToBuffer<256>(ctx.config.kmbox_port);
-        auto mac = copyToBuffer<256>(ctx.config.kmbox_mac);
-
-        const int rc = kmNet_init(ip.data(), port.data(), mac.data());
-        if (rc == 0) {
-            return setMethod(std::make_unique<KmboxInputMethod>());
-        }
-        logInputMethodFallback("kmboxNet", "init failed, code=" + std::to_string(rc));
-    } else if (ctx.config.input_method == "MAKCU") {
-        try {
-            auto makcuConnection = std::make_unique<MakcuConnection>(ctx.config.makcu_port, ctx.config.makcu_baudrate);
-            if (makcuConnection->isOpen()) {
-                return setMethod(std::make_unique<MakcuInputMethod>(makcuConnection.release()));
-            }
-            logInputMethodFallback("MAKCU", "failed to open port " + ctx.config.makcu_port);
-        } catch (const std::exception& e) {
-            logInputMethodFallback("MAKCU", e.what());
-        }
-    } else if (ctx.config.input_method == "RAZER") {
-        try {
-            return setMethod(std::make_unique<RZInputMethod>());
-        } catch (const std::exception& e) {
-            logInputMethodFallback("Razer", e.what());
-        }
+            return std::make_unique<SerialInputMethod>(serial.release());
+        });
     }
 
-    setMethod(std::make_unique<Win32InputMethod>());
+    if (ctx.config.input_method == "GHUB") {
+        return tryInitMethod("GHub", [&]() -> std::unique_ptr<InputMethod> {
+            auto gHub = std::make_unique<GhubMouse>();
+            if (!gHub->mouse_xy(0, 0)) {
+                logInputMethodFallback("GHub", "failed to initialize mouse driver");
+                return nullptr;
+            }
+            return std::make_unique<GHubInputMethod>(gHub.release());
+        });
+    }
+
+    if (ctx.config.input_method == "KMBOX") {
+        return tryInitMethod("kmboxNet", [&]() -> std::unique_ptr<InputMethod> {
+            auto ip = copyToBuffer<256>(ctx.config.kmbox_ip);
+            auto port = copyToBuffer<256>(ctx.config.kmbox_port);
+            auto mac = copyToBuffer<256>(ctx.config.kmbox_mac);
+            if (kmNet_init(ip.data(), port.data(), mac.data()) != 0) {
+                return nullptr;
+            }
+            return std::make_unique<KmboxInputMethod>();
+        });
+    }
+
+    if (ctx.config.input_method == "MAKCU") {
+        return tryInitMethod("MAKCU", [&]() -> std::unique_ptr<InputMethod> {
+            auto conn = std::make_unique<MakcuConnection>(ctx.config.makcu_port, ctx.config.makcu_baudrate);
+            if (!conn->isOpen()) {
+                logInputMethodFallback("MAKCU", "failed to open port " + ctx.config.makcu_port);
+                return nullptr;
+            }
+            return std::make_unique<MakcuInputMethod>(conn.release());
+        });
+    }
+
+    if (ctx.config.input_method == "RAZER") {
+        return tryInitMethod("Razer", []() -> std::unique_ptr<InputMethod> {
+            return std::make_unique<RZInputMethod>();
+        });
+    }
+
+    setGlobalInputMethod(std::make_unique<Win32InputMethod>());
     return false;
 }
 

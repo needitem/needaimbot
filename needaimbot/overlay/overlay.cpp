@@ -487,40 +487,12 @@ void OverlayThread()
 
     bool show_overlay = false;
 
-
+    // Only track values that need actual comparison for state changes
     int prev_detection_resolution = ctx.config.detection_resolution;
-    int prev_monitor_idx = ctx.config.monitor_idx;
-    bool prev_circle_mask = ctx.config.circle_mask;
     bool prev_capture_borders = ctx.config.capture_borders;
     bool prev_capture_cursor = ctx.config.capture_cursor;
-
-
-    float prev_body_y_offset = ctx.config.body_y_offset;
-    float prev_head_y_offset = ctx.config.head_y_offset;
-    bool prev_auto_aim = ctx.config.auto_aim;
-
-    
-    bool prev_easynorecoil = ctx.config.easynorecoil;
-    float prev_easynorecoilstrength = ctx.config.easynorecoilstrength;
-
-    
-
-    
-    float prev_bScope_multiplier = ctx.config.bScope_multiplier;
-
-    
-    float prev_confidence_threshold = ctx.config.confidence_threshold;
-    // NMS removed - no longer needed
-    int prev_max_detections = ctx.config.max_detections;
-
-    
     int prev_opacity = ctx.config.overlay_opacity;
-
-    
     bool prev_show_window = ctx.config.show_window;
-    bool prev_show_fps = ctx.config.show_fps;
-    
-    int prev_screenshot_delay = ctx.config.screenshot_delay;
     bool prev_always_on_top = ctx.config.always_on_top;
 
     for (const auto& pair : KeyCodes::key_code_map)
@@ -723,77 +695,40 @@ void OverlayThread()
 
                 }
 
-                // Remove frame counter branch - check every frame is fast enough
+                // Efficient config change detection - only check values that trigger actions
                 {
-                    
                     if (prev_detection_resolution != ctx.config.detection_resolution)
                     {
                         prev_detection_resolution = ctx.config.detection_resolution;
                         detection_resolution_changed = true;
-                        ctx.model_changed = true; 
-
-                        
-                        // MouseThread config update removed - GPU handles mouse control directly
+                        ctx.model_changed = true;
                     }
 
-                    
                     if (prev_capture_cursor != ctx.config.capture_cursor)
                     {
                         capture_cursor_changed = true;
                         prev_capture_cursor = ctx.config.capture_cursor;
                     }
 
-                    
                     if (prev_capture_borders != ctx.config.capture_borders)
                     {
                         capture_borders_changed = true;
                         prev_capture_borders = ctx.config.capture_borders;
                     }
 
-                    
-                    if (prev_monitor_idx != ctx.config.monitor_idx)
-                    {
-                        prev_monitor_idx = ctx.config.monitor_idx;
-                    }
-
-                    // Always update - branch prediction cost is higher than assignment
-                    prev_body_y_offset = ctx.config.body_y_offset;
-                    prev_head_y_offset = ctx.config.head_y_offset;
-                    
-                    prev_auto_aim = ctx.config.auto_aim;
-                    prev_easynorecoil = ctx.config.easynorecoil;
-                    prev_easynorecoilstrength = ctx.config.easynorecoilstrength;
-
-                    // Always update
-                    prev_bScope_multiplier = ctx.config.bScope_multiplier;
-
-                    
                     if (prev_opacity != ctx.config.overlay_opacity)
                     {
-                        BYTE opacity = ctx.config.overlay_opacity;
-                        SetLayeredWindowAttributes(g_hwnd, 0, opacity, LWA_ALPHA);
+                        prev_opacity = ctx.config.overlay_opacity;
+                        SetLayeredWindowAttributes(g_hwnd, 0, static_cast<BYTE>(ctx.config.overlay_opacity), LWA_ALPHA);
                     }
 
-                    // Always update
-                    prev_confidence_threshold = ctx.config.confidence_threshold;
-                    prev_max_detections = ctx.config.max_detections;
-
-                    
-                    if (prev_show_window != ctx.config.show_window ||
-                        prev_always_on_top != ctx.config.always_on_top)
+                    if (prev_show_window != ctx.config.show_window || prev_always_on_top != ctx.config.always_on_top)
                     {
                         prev_always_on_top = ctx.config.always_on_top;
-                        show_window_changed = true;
                         prev_show_window = ctx.config.show_window;
-                        
-                        // Update preview flag when show_window changes
+                        show_window_changed = true;
                         ctx.preview_enabled = ctx.config.show_window;
                     }
-                    
-                    // Always update
-                    prev_show_fps = ctx.config.show_fps;
-                    
-                    prev_screenshot_delay = ctx.config.screenshot_delay;
                 }
 
                 ImGui::EndTabBar();
