@@ -35,6 +35,8 @@ struct PIDState {
     float prev_error_y;
     float integral_x;
     float integral_y;
+    float prev_movement_x;  // Previous control output for derivative kick prevention
+    float prev_movement_y;
 };
 
 // Unified capture state machine

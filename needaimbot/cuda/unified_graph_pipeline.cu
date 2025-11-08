@@ -288,6 +288,8 @@ __global__ void fusedTargetSelectionAndMovementKernel(
             float prev_error_y = pidState->prev_error_y;
             float integral_x = pidState->integral_x;
             float integral_y = pidState->integral_y;
+            float prev_movement_x = pidState->prev_movement_x;
+            float prev_movement_y = pidState->prev_movement_y;
 
             // Reset integral when very close to target (deadzone)
             // Decouple axes: apply deadzone per-axis, not by combined magnitude
@@ -309,9 +311,13 @@ __global__ void fusedTargetSelectionAndMovementKernel(
             if (integral_y > integral_max) integral_y = integral_max;
             if (integral_y < -integral_max) integral_y = -integral_max;
 
-            // Calculate derivative (error change)
-            float derivative_x = error_x - prev_error_x;
-            float derivative_y = error_y - prev_error_y;
+            // Calculate derivative with derivative kick prevention
+            // Use "expected error" based on previous control output
+            // This prevents D-term from reacting to our own movement
+            float expected_error_x = prev_error_x - prev_movement_x;
+            float expected_error_y = prev_error_y - prev_movement_y;
+            float derivative_x = error_x - expected_error_x;
+            float derivative_y = error_y - expected_error_y;
 
             // Clamp derivative to prevent excessive oscillation from large movements
             if (derivative_x > derivative_max) derivative_x = derivative_max;
@@ -328,6 +334,8 @@ __global__ void fusedTargetSelectionAndMovementKernel(
             pidState->prev_error_y = error_y;
             pidState->integral_x = integral_x;
             pidState->integral_y = integral_y;
+            pidState->prev_movement_x = movement_x;
+            pidState->prev_movement_y = movement_y;
 
             // Round to nearest int
             int emit_dx = static_cast<int>(lroundf(movement_x));
