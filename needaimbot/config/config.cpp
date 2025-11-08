@@ -72,8 +72,10 @@ bool Config::loadConfig(const std::string& filename)
         body_y_offset = 0.15f;
         head_y_offset = 0.05f;
         offset_step = 0.01f;
-        
+
         auto_aim = false;
+        auto_shoot = false;
+        ignore_up_aim = false;
 
 
         crosshair_offset_x = 0.0f;
@@ -254,8 +256,10 @@ bool Config::loadConfig(const std::string& filename)
     offset_step = static_cast<float>(get_double_ini("Target", "offset_step", 0.01));
     
     // Batch load booleans
-    
+
     auto_aim = get_bool_ini("Target", "auto_aim", false);
+    auto_shoot = get_bool_ini("Target", "auto_shoot", false);
+    ignore_up_aim = get_bool_ini("Target", "ignore_up_aim", false);
 
     crosshair_offset_x = static_cast<float>(get_double_ini("Target", "crosshair_offset_x", 0.0));
     crosshair_offset_y = static_cast<float>(get_double_ini("Target", "crosshair_offset_y", 0.0));
@@ -468,13 +472,13 @@ bool Config::saveConfig(const std::string& filename)
     file << "offset_step = " << offset_step << "\n";
     file << "crosshair_offset_x = " << crosshair_offset_x << "\n";
     file << "crosshair_offset_y = " << crosshair_offset_y << "\n";
+    file << "auto_aim = " << (auto_aim ? "true" : "false") << "\n";
+    file << "auto_shoot = " << (auto_shoot ? "true" : "false") << "\n";
+    file << "ignore_up_aim = " << (ignore_up_aim ? "true" : "false") << "\n";
     file << "enable_aim_shoot_offset = " << (enable_aim_shoot_offset ? "true" : "false") << "\n";
     file << "aim_shoot_offset_x = " << aim_shoot_offset_x << "\n";
     file << "aim_shoot_offset_y = " << aim_shoot_offset_y << "\n";
-    // enable_target_lock removed
     file << std::noboolalpha;
-    
-    file << "auto_aim = " << (auto_aim ? "true" : "false") << "\n";
     file << "\n";
 
 
