@@ -1,0 +1,117 @@
+1188:             cudaMemcpyHostToDevice,
+1189:             stream);
+1190:     } else {
+1191:         err = cudaMemcpy(
+1192:             m_smallBufferArena.selectedTarget,
+1193:             &invalidTarget,
+1194:             sizeof(Target),
+1195:             cudaMemcpyHostToDevice);
+1196:     }
+1197: 
+1198:     if (err != cudaSuccess) {
+1199:         std::cerr << "[UnifiedGraph] Failed to invalidate selected target: "
+1200:                   << cudaGetErrorString(err) << std::endl;
+1201:     }
+1202: }
+1203: 
+1204: MouseMovement UnifiedGraphPipeline::filterMouseMovement(const MouseMovement& rawMovement, bool movementEnabled) {
+1205:     std::lock_guard<std::mutex> lock(m_movementFilterMutex);
+1206:     auto& ctx = AppContext::getInstance();
+1207: 
+1208:     if (!movementEnabled) {
+1209:         m_skipNextMovement = true;
+1210:         return {0, 0};
+1211:     }
+1212: 
+1213:     if (m_skipNextMovement) {
+1214:         // Drop the first real movement after (re)activation to avoid large corrections
+1215:         if (rawMovement.dx != 0 || rawMovement.dy != 0) {
+1216:             m_skipNextMovement = false;
+1217:             return {0, 0};
+1218:         }
+1219:         return rawMovement;
+1220:     }
+1221: 
+1222:     // No smoothing/deadzone: return raw movement
+1223:     return rawMovement;
+1224: }
+1225: 
+1226: void UnifiedGraphPipeline::clearHostPreviewData(AppContext& ctx) {
+1227:     {
+1228:         std::lock_guard<std::mutex> lock(m_previewMutex);
+1229:         if (m_preview.enabled) {
+1230:             m_preview.finalTargets.clear();
+1231:             m_preview.finalCount = 0;
+1232:             m_preview.copyInProgress = false;
+1233:             m_preview.hostPreview.release();
+1234:             m_preview.hasValidHostPreview = false;
+1235:         }
+1236:     }
+1237: 
+1238:     ctx.clearTargets();
+1239: }
+1240: 
+1241: void UnifiedGraphPipeline::handleAimbotActivation() {
+1242:     m_state.frameCount = 0;
+1243:     m_allowMovement.store(false, std::memory_order_release);
+1244:     clearMovementData();
+1245:     m_captureRegionCache = {};
+1246:     
+1247:     // Reset unified capture state
+1248:     m_captureState.store(CaptureState::IDLE, std::memory_order_release);
+1249: 
+1250:     // Reset movement filter state
+1251:     {
+1252:         std::lock_guard<std::mutex> lock(m_movementFilterMutex);
+1253:         m_skipNextMovement = true;
+1254:     }
+1255: }
+1256: 
+1257: bool UnifiedGraphPipeline::enqueueFrameCompletionCallback(cudaStream_t stream) {
+1258:     if (!stream) {
+1259:         return false;
+1260:     }
+1261: 
+1262:     cudaError_t err = cudaLaunchHostFunc(stream,
+1263:         [](void* userData) {
+1264:             auto* pipeline = static_cast<UnifiedGraphPipeline*>(userData);
+1265:             if (!pipeline) {
+1266:                 return;
+1267:             }
+1268: 
+1269:             auto& ctx = AppContext::getInstance();
+1270: 
+1271:             bool allowMovement = pipeline->m_allowMovement.load(std::memory_order_acquire);
+1272:             pipeline->m_allowMovement.store(false, std::memory_order_release);
+1273: 
+1274:             if (pipeline->m_h_movement && pipeline->m_h_movement->get()) {
+1275:                 // Allow movement if: (allowMovement is true) AND (aiming is true OR single_shot_mode is true)
+1276:                 bool isSingleShot = ctx.single_shot_mode.load();
+1277:                 bool shouldMove = allowMovement && (ctx.aiming || isSingleShot);
+1278: 
+1279:                 if (shouldMove) {
+1280:                     MouseMovement rawMovement = *pipeline->m_h_movement->get();
+1281:                     MouseMovement filtered = pipeline->filterMouseMovement(rawMovement, true);
+1282:                     pipeline->m_h_movement->get()->dx = filtered.dx;
+1283:                     pipeline->m_h_movement->get()->dy = filtered.dy;
+1284: 
+1285:                     if (filtered.dx != 0 || filtered.dy != 0) {
+1286:                         executeMouseMovement(filtered.dx, filtered.dy);
+1287: 
+1288:                         // Record input injection timestamp (QPC)
+1289:                         LARGE_INTEGER qpc{};
+1290:                         if (QueryPerformanceCounter(&qpc)) {
+1291:                             pipeline->m_pendingInputQpc.store(static_cast<uint64_t>(qpc.QuadPart), std::memory_order_release);
+1292:                         }
+1293:                     }
+1294:                 } else {
+1295:                     pipeline->filterMouseMovement({0, 0}, false);
+1296:                     pipeline->m_h_movement->get()->dx = 0;
+1297:                     pipeline->m_h_movement->get()->dy = 0;
+1298:                 }
+1299: 
+1300:                 // Reset single shot mode after processing (whether moved or not)
+1301:                 if (isSingleShot) {
+1302:                     ctx.single_shot_mode = false;
+1303:                 }
+1304:             }
