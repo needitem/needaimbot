@@ -4,9 +4,6 @@
 #include <cstdint>
 #include <cuda_runtime.h>
 
-// Generic capture provider interface used by the pipeline.
-// Implementations should mirror the semantics used by DDACapture
-// so the pipeline can consume frames uniformly.
 class ICaptureProvider {
 public:
     virtual ~ICaptureProvider() = default;
