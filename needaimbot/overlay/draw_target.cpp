@@ -54,38 +54,28 @@ void draw_target()
 {
     auto& ctx = AppContext::getInstance();
 
-    // ═══════════════════════════════════════════════════════════
-    // STATUS INDICATOR
-    // ═══════════════════════════════════════════════════════════
-
-    ImGui::PushFont(ImGui::GetIO().Fonts->Fonts[0]); // Use default font for status
-
+    // Status indicator
+    ImGui::PushFont(ImGui::GetIO().Fonts->Fonts[0]);
     if (ctx.detection_paused.load()) {
-        // Paused state - Red indicator
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
-        ImGui::Text("[PAUSED] AIMBOT PAUSED");
+        ImGui::Text("[PAUSED]");
         ImGui::PopStyleColor();
         ImGui::SameLine();
-        ImGui::TextDisabled(" - Press %s to resume",
+        ImGui::TextDisabled("Aimbot is paused - Press %s to resume",
                     ctx.config.button_pause.empty() ? "F3" : ctx.config.button_pause[0].c_str());
     } else {
-        // Active state - Green indicator
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
-        ImGui::Text("[ACTIVE] AIMBOT READY");
+        ImGui::Text("[ACTIVE]");
         ImGui::PopStyleColor();
         ImGui::SameLine();
-        ImGui::TextDisabled(" - Tracking enabled");
+        ImGui::TextDisabled("Aimbot is ready");
     }
-
     ImGui::PopFont();
-
+    ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
 
-    // ═══════════════════════════════════════════════════════════
-    // MAIN TOGGLE
-    // ═══════════════════════════════════════════════════════════
-
+    // Main toggle
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 6));
     bool auto_aim = ctx.config.auto_aim;
     if (ImGui::Checkbox("Enable Auto Aim", &auto_aim)) {
@@ -93,24 +83,42 @@ void draw_target()
         SAVE_PROFILE();
     }
     ImGui::PopStyleVar();
-
     if (ImGui::IsItemHovered()) {
-        ImGui::BeginTooltip();
-        ImGui::Text("Enable automatic aim assistance");
-        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
-                          "When enabled, the cursor will automatically track detected targets");
-        ImGui::EndTooltip();
+        ImGui::SetTooltip("Enable automatic aim assistance to track detected targets");
+    }
+
+    ImGui::Spacing();
+
+    // Auto shoot
+    if (ImGui::Checkbox("Enable Auto Shoot", &ctx.config.auto_shoot)) { SAVE_PROFILE(); }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Automatically fire when a target is locked");
+    }
+
+    ImGui::Spacing();
+    if (ImGui::Checkbox("Disable Upward Aim", &ctx.config.ignore_up_aim)) { SAVE_PROFILE(); }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Prevent aim from moving upward - useful for ground-only combat");
     }
 
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
 
-    // ═══════════════════════════════════════════════════════════
-    // TARGET SELECTION SETTINGS
-    // ═══════════════════════════════════════════════════════════
+    // Target selection info
+    ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.2f, 1.0f), "Target Selection");
+    ImGui::TextWrapped("Always targets the enemy closest to your crosshair");
 
-    ImGui::Text("Target Selection: Always closest to crosshair");
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // Quick tips
+    ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "Quick Tips");
+    ImGui::BulletText("Use Mouse tab to adjust aim speed and smoothness");
+    ImGui::BulletText("Use Aim Offset tab to fine-tune aim position");
+    ImGui::BulletText("Use Recoil tab to control weapon spray patterns");
+    ImGui::BulletText("Use Detection tab to adjust AI confidence threshold");
 }
 
  
