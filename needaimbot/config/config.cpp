@@ -291,6 +291,7 @@ bool Config::loadConfig(const std::string& filename)
     pid_kd_y = static_cast<float>(get_double_ini("PIDController", "pid_kd_y", 0.3));
     pid_integral_max = static_cast<float>(get_double_ini("PIDController", "pid_integral_max", 100.0));
     pid_derivative_max = static_cast<float>(get_double_ini("PIDController", "pid_derivative_max", 50.0));
+    pid_integral_reset_threshold = static_cast<float>(get_double_ini("PIDController", "pid_integral_reset_threshold", 5.0));
 
     // Load deadband per-axis (Mouse)
     deadband_enter_x = get_long_ini("Mouse", "deadband_enter_x", 2);
@@ -531,7 +532,8 @@ bool Config::saveConfig(const std::string& filename)
     file << "pid_kd_x = " << pid_kd_x << "\n";
     file << "pid_kd_y = " << pid_kd_y << "\n";
     file << "pid_integral_max = " << pid_integral_max << "\n";
-    file << "pid_derivative_max = " << pid_derivative_max << "\n\n";
+    file << "pid_derivative_max = " << pid_derivative_max << "\n";
+    file << "pid_integral_reset_threshold = " << pid_integral_reset_threshold << "\n\n";
 
     file << "[Recoil]\n";
     file << "active_scope_magnification = " << active_scope_magnification << "\n\n";

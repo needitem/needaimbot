@@ -210,6 +210,7 @@ public:
     float pid_kd_y = 0.3f;   // Derivative gain for Y axis (0-1 typical, for oscillation dampening)
     float pid_integral_max = 100.0f;  // Max integral windup limit (pixels)
     float pid_derivative_max = 50.0f; // Max derivative clamp (pixels, prevents oscillation from large movements)
+    float pid_integral_reset_threshold = 5.0f;  // Reset integral when error is below this threshold (pixels)
 
     // Jitter filter (deadband) settings - per axis
     int deadband_enter_x = 2;  // pixels to enter settle zone on X

@@ -139,6 +139,7 @@ __global__ void fusedTargetSelectionAndMovementKernel(
     float kd_y,
     float integral_max,
     float derivative_max,
+    float integral_reset_threshold,
     float iou_stickiness_threshold,
     float head_y_offset,
     float body_y_offset,
@@ -293,11 +294,10 @@ __global__ void fusedTargetSelectionAndMovementKernel(
 
             // Reset integral when very close to target (deadzone)
             // Decouple axes: apply deadzone per-axis, not by combined magnitude
-            const float deadzone_threshold = 5.0f;  // pixels
-            if (fabsf(error_x) < deadzone_threshold) {
+            if (fabsf(error_x) < integral_reset_threshold) {
                 integral_x = 0.0f;
             }
-            if (fabsf(error_y) < deadzone_threshold) {
+            if (fabsf(error_y) < integral_reset_threshold) {
                 integral_y = 0.0f;
             }
 
@@ -2129,6 +2129,7 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         m_cachedPIDConfig.kd_y = ctx.config.pid_kd_y;
         m_cachedPIDConfig.integral_max = ctx.config.pid_integral_max;
         m_cachedPIDConfig.derivative_max = ctx.config.pid_derivative_max;
+        m_cachedPIDConfig.integral_reset_threshold = ctx.config.pid_integral_reset_threshold;
         m_cachedPIDConfig.head_y_offset = ctx.config.head_y_offset;
         m_cachedPIDConfig.body_y_offset = ctx.config.body_y_offset;
         m_cachedPIDConfig.iou_stickiness_threshold = ctx.config.iou_stickiness_threshold;
@@ -2151,6 +2152,7 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
     float cached_kd_y = m_cachedPIDConfig.kd_y;
     float cached_integral_max = m_cachedPIDConfig.integral_max;
     float cached_derivative_max = m_cachedPIDConfig.derivative_max;
+    float cached_integral_reset_threshold = m_cachedPIDConfig.integral_reset_threshold;
     float cached_head_y_offset = m_cachedPIDConfig.head_y_offset;
     float cached_body_y_offset = m_cachedPIDConfig.body_y_offset;
     
@@ -2185,6 +2187,7 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         cached_kd_y,
         cached_integral_max,
         cached_derivative_max,
+        cached_integral_reset_threshold,
         m_cachedPIDConfig.iou_stickiness_threshold,
         cached_head_y_offset,
         cached_body_y_offset,

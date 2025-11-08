@@ -98,6 +98,15 @@ static void draw_movement_controls()
             ImGui::PopItemWidth();
             UIHelpers::HelpMarker("Prevents integral from accumulating too much (windup protection). Default: 100px.");
 
+            UIHelpers::CompactSpacer();
+            UIHelpers::SettingsSubHeader("Integral Reset Threshold");
+            ImGui::PushItemWidth(-1);
+            if (ImGui::SliderFloat("##IntegralResetThreshold", &ctx.config.pid_integral_reset_threshold, 0.0f, 20.0f, "%.1f px")) {
+                SAVE_PROFILE();
+            }
+            ImGui::PopItemWidth();
+            UIHelpers::HelpMarker("Reset integral when error is below this threshold. Prevents integral windup near target. Default: 5px.");
+
             ImGui::EndTabItem();
         }
 

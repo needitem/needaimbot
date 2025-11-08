@@ -415,6 +415,7 @@ private:
         float kd_y = 0.3f;
         float integral_max = 100.0f;
         float derivative_max = 50.0f;
+        float integral_reset_threshold = 5.0f;
         float head_y_offset = 0.2f;
         float body_y_offset = 0.5f;
         float iou_stickiness_threshold = 0.30f;
