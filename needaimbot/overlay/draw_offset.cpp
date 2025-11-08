@@ -23,6 +23,81 @@ void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float scale, const 
 // Mutex for thread-safe D3D11 resource access (defined in draw_debug.cpp)
 extern std::mutex g_debugTexMutex;
 
+// Helper: Render D-pad controls for offset adjustment
+static void renderOffsetDPad(const char* id_prefix, float& offset_x, float& offset_y, bool& changed_flag, float adjustment_step = 1.0f)
+{
+    auto& ctx = AppContext::getInstance();
+
+    float button_size = 25.0f;
+    float spacing = 2.0f;
+    float group_width = button_size * 3 + spacing * 2;
+    float center_offset = (ImGui::GetContentRegionAvail().x - group_width) * 0.5f;
+
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + center_offset);
+    ImGui::BeginGroup();
+    {
+        // Top button (Up)
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + button_size + spacing);
+        if (ImGui::Button((std::string("UP##") + id_prefix + "_up").c_str(), ImVec2(button_size, button_size))) {
+            offset_y -= adjustment_step;
+            changed_flag = true;
+            ctx.crosshair_offset_changed = true;
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move capture region up");
+
+        // Middle row (Left, Center, Right)
+        if (ImGui::Button((std::string("L##") + id_prefix + "_left").c_str(), ImVec2(button_size, button_size))) {
+            offset_x -= adjustment_step;
+            changed_flag = true;
+            ctx.crosshair_offset_changed = true;
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move capture region left");
+
+        ImGui::SameLine(0, spacing);
+        ImGui::Dummy(ImVec2(button_size, button_size));
+
+        ImGui::SameLine(0, spacing);
+        if (ImGui::Button((std::string("R##") + id_prefix + "_right").c_str(), ImVec2(button_size, button_size))) {
+            offset_x += adjustment_step;
+            changed_flag = true;
+            ctx.crosshair_offset_changed = true;
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move capture region right");
+
+        // Bottom button (Down)
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + button_size + spacing);
+        if (ImGui::Button((std::string("DN##") + id_prefix + "_down").c_str(), ImVec2(button_size, button_size))) {
+            offset_y += adjustment_step;
+            changed_flag = true;
+            ctx.crosshair_offset_changed = true;
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move capture region down");
+    }
+    ImGui::EndGroup();
+}
+
+// Helper: Render fine adjustment drag floats for offset
+static void renderFineAdjustment(const char* id_prefix, float& offset_x, float& offset_y, bool& changed_flag)
+{
+    auto& ctx = AppContext::getInstance();
+
+    ImGui::Text("Fine Adjust:");
+    ImGui::PushItemWidth(Constants::SLIDER_WIDTH_SMALL);
+    ImGui::SetNextItemWidth(60);
+    ImGui::Text("X"); ImGui::SameLine();
+    if (ImGui::DragFloat((std::string("##") + id_prefix + "_x_fine").c_str(), &offset_x, Constants::OFFSET_DRAG_SPEED, Constants::OFFSET_DRAG_MIN, Constants::OFFSET_DRAG_MAX, "%.1f")) {
+        changed_flag = true;
+        ctx.crosshair_offset_changed = true;
+    }
+    ImGui::SetNextItemWidth(60);
+    ImGui::Text("Y"); ImGui::SameLine();
+    if (ImGui::DragFloat((std::string("##") + id_prefix + "_y_fine").c_str(), &offset_y, Constants::OFFSET_DRAG_SPEED, Constants::OFFSET_DRAG_MIN, Constants::OFFSET_DRAG_MAX, "%.1f")) {
+        changed_flag = true;
+        ctx.crosshair_offset_changed = true;
+    }
+    ImGui::PopItemWidth();
+}
+
 void renderOffsetTab()
 {
     auto& ctx = AppContext::getInstance();
@@ -146,57 +221,11 @@ void renderOffsetTab()
             UIHelpers::InfoTooltip("Moves the capture region while keeping crosshair centered on screen");
             ImGui::Text("X=%.0f, Y=%.0f", ctx.config.crosshair_offset_x, ctx.config.crosshair_offset_y);
             ImGui::Spacing();
-            
-            // Center the D-pad controls
-            float button_size = 25.0f;
-            float spacing = 2.0f;
-            float group_width = button_size * 3 + spacing * 2;
-            float center_offset = (ImGui::GetContentRegionAvail().x - group_width) * 0.5f;
-            
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + center_offset);
-            ImGui::BeginGroup();
-            {
-                // Top button (Up)
-                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + button_size + spacing);
-                if (ImGui::Button("UP##offset_up", ImVec2(button_size, button_size))) {
-                    ctx.config.crosshair_offset_y -= adjustment_step;  // Negative to move capture up
-                    offset_changed = true;
-                    ctx.crosshair_offset_changed = true;
-                }
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move capture region up");
-                
-                // Middle row (Left, Center, Right)
-                if (ImGui::Button("L##offset_left", ImVec2(button_size, button_size))) {
-                    ctx.config.crosshair_offset_x -= adjustment_step;  // Negative to move capture left
-                    offset_changed = true;
-                    ctx.crosshair_offset_changed = true;
-                }
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move capture region left");
-                
-                ImGui::SameLine(0, spacing);
-                ImGui::Dummy(ImVec2(button_size, button_size)); // Center space
-                
-                ImGui::SameLine(0, spacing);
-                if (ImGui::Button("R##offset_right", ImVec2(button_size, button_size))) {
-                    ctx.config.crosshair_offset_x += adjustment_step;  // Positive to move capture right
-                    offset_changed = true;
-                    ctx.crosshair_offset_changed = true;
-                }
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move capture region right");
-                
-                // Bottom button (Down)
-                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + button_size + spacing);
-                if (ImGui::Button("DN##offset_down", ImVec2(button_size, button_size))) {
-                    ctx.config.crosshair_offset_y += adjustment_step;  // Positive to move capture down
-                    offset_changed = true;
-                    ctx.crosshair_offset_changed = true;
-                }
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move capture region down");
-            }
-            ImGui::EndGroup();
-            
+
+            renderOffsetDPad("offset", ctx.config.crosshair_offset_x, ctx.config.crosshair_offset_y, offset_changed, adjustment_step);
+
             ImGui::Spacing();
-            
+
             // Reset button centered
             float reset_width = 60.0f;
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (ImGui::GetContentRegionAvail().x - reset_width) * 0.5f);
@@ -207,27 +236,12 @@ void renderOffsetTab()
                 ctx.crosshair_offset_changed = true;
             }
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Reset capture region to center");
-            
+
             ImGui::Spacing();
             ImGui::Separator();
             ImGui::Spacing();
-            
-            // Fine adjustment controls
-            ImGui::Text("Fine Adjust:");
-            ImGui::PushItemWidth(Constants::SLIDER_WIDTH_SMALL);
-            ImGui::SetNextItemWidth(60);
-            ImGui::Text("X"); ImGui::SameLine();
-            if (ImGui::DragFloat("##offset_x_fine", &ctx.config.crosshair_offset_x, Constants::OFFSET_DRAG_SPEED, Constants::OFFSET_DRAG_MIN, Constants::OFFSET_DRAG_MAX, "%.1f")) {
-                offset_changed = true;
-                ctx.crosshair_offset_changed = true;
-            }
-            ImGui::SetNextItemWidth(60);
-            ImGui::Text("Y"); ImGui::SameLine();
-            if (ImGui::DragFloat("##offset_y_fine", &ctx.config.crosshair_offset_y, Constants::OFFSET_DRAG_SPEED, Constants::OFFSET_DRAG_MIN, Constants::OFFSET_DRAG_MAX, "%.1f")) {
-                offset_changed = true;
-                ctx.crosshair_offset_changed = true;
-            }
-            ImGui::PopItemWidth();
+
+            renderFineAdjustment("offset", ctx.config.crosshair_offset_x, ctx.config.crosshair_offset_y, offset_changed);
         }
         
         ImGui::TableNextColumn();
@@ -243,57 +257,11 @@ void renderOffsetTab()
             if (ctx.config.enable_aim_shoot_offset) {
                 ImGui::Text("X=%.0f, Y=%.0f", ctx.config.aim_shoot_offset_x, ctx.config.aim_shoot_offset_y);
                 ImGui::Spacing();
-                
-                // Center the D-pad controls
-                float button_size = 25.0f;
-                float spacing = 2.0f;
-                float group_width = button_size * 3 + spacing * 2;
-                float center_offset = (ImGui::GetContentRegionAvail().x - group_width) * 0.5f;
-                
-                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + center_offset);
-                ImGui::BeginGroup();
-                {
-                    // Top button (Up)
-                    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + button_size + spacing);
-                    if (ImGui::Button("UP##aim_shoot_up", ImVec2(button_size, button_size))) {
-                        ctx.config.aim_shoot_offset_y -= adjustment_step;  // Negative to move capture up
-                        aim_shoot_offset_changed = true;
-                        ctx.crosshair_offset_changed = true;
-                    }
-                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move aim+shoot capture region up");
-                    
-                    // Middle row (Left, Center, Right)
-                    if (ImGui::Button("L##aim_shoot_left", ImVec2(button_size, button_size))) {
-                        ctx.config.aim_shoot_offset_x -= adjustment_step;  // Negative to move capture left
-                        aim_shoot_offset_changed = true;
-                        ctx.crosshair_offset_changed = true;
-                    }
-                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move aim+shoot capture region left");
-                    
-                    ImGui::SameLine(0, spacing);
-                    ImGui::Dummy(ImVec2(button_size, button_size)); // Center space
-                    
-                    ImGui::SameLine(0, spacing);
-                    if (ImGui::Button("R##aim_shoot_right", ImVec2(button_size, button_size))) {
-                        ctx.config.aim_shoot_offset_x += adjustment_step;  // Positive to move capture right
-                        aim_shoot_offset_changed = true;
-                        ctx.crosshair_offset_changed = true;
-                    }
-                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move aim+shoot capture region right");
-                    
-                    // Bottom button (Down)
-                    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + button_size + spacing);
-                    if (ImGui::Button("DN##aim_shoot_down", ImVec2(button_size, button_size))) {
-                        ctx.config.aim_shoot_offset_y += adjustment_step;  // Positive to move capture down
-                        aim_shoot_offset_changed = true;
-                        ctx.crosshair_offset_changed = true;
-                    }
-                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move aim+shoot capture region down");
-                }
-                ImGui::EndGroup();
-                
+
+                renderOffsetDPad("aim_shoot", ctx.config.aim_shoot_offset_x, ctx.config.aim_shoot_offset_y, aim_shoot_offset_changed, adjustment_step);
+
                 ImGui::Spacing();
-                
+
                 // Copy Normal button centered
                 float copy_width = 85.0f;
                 ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (ImGui::GetContentRegionAvail().x - copy_width) * 0.5f);
@@ -304,27 +272,12 @@ void renderOffsetTab()
                     ctx.crosshair_offset_changed = true;
                 }
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Copy offset values from normal crosshair");
-                
+
                 ImGui::Spacing();
                 ImGui::Separator();
                 ImGui::Spacing();
-                
-                // Fine adjustment controls
-                ImGui::Text("Fine Adjust:");
-                ImGui::PushItemWidth(Constants::SLIDER_WIDTH_SMALL);
-                ImGui::SetNextItemWidth(60);
-                ImGui::Text("X"); ImGui::SameLine();
-                if (ImGui::DragFloat("##aim_shoot_x_fine", &ctx.config.aim_shoot_offset_x, Constants::OFFSET_DRAG_SPEED, Constants::OFFSET_DRAG_MIN, Constants::OFFSET_DRAG_MAX, "%.1f")) {
-                    aim_shoot_offset_changed = true;
-                    ctx.crosshair_offset_changed = true;
-                }
-                ImGui::SetNextItemWidth(60);
-                ImGui::Text("Y"); ImGui::SameLine();
-                if (ImGui::DragFloat("##aim_shoot_y_fine", &ctx.config.aim_shoot_offset_y, Constants::OFFSET_DRAG_SPEED, Constants::OFFSET_DRAG_MIN, Constants::OFFSET_DRAG_MAX, "%.1f")) {
-                    aim_shoot_offset_changed = true;
-                    ctx.crosshair_offset_changed = true;
-                }
-                ImGui::PopItemWidth();
+
+                renderFineAdjustment("aim_shoot", ctx.config.aim_shoot_offset_x, ctx.config.aim_shoot_offset_y, aim_shoot_offset_changed);
             } else {
                 ImGui::Spacing();
                 ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Aim+Shoot offset is disabled");
