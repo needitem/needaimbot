@@ -115,17 +115,15 @@ static void draw_detection_settings()
         SAVE_PROFILE();
         ctx.model_changed = true;
     }
-    
+
     UIHelpers::Spacer();
-    
-    if (UIHelpers::EnhancedSliderFloat("Confidence Threshold", &ctx.config.confidence_threshold, 0.01f, 1.00f, "%.2f", 
+
+    if (UIHelpers::EnhancedSliderFloat("Confidence Threshold", &ctx.config.confidence_threshold, 0.01f, 1.00f, "%.2f",
                                       "Minimum confidence score required for target detection. Higher values = fewer false positives."))
     {
         SAVE_PROFILE();
     }
-    
-    // NMS removed - no longer needed
-    
+
     // Max detections slider with better styling
     ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.15f, 0.15f, 0.18f, 0.95f));
     ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.20f, 0.20f, 0.25f, 1.0f));
@@ -203,14 +201,12 @@ static void draw_class_settings()
             ImGui::TableSetColumnIndex(2);
             if (ImGui::Checkbox("##Allow", &setting.allow)) {
                 SAVE_PROFILE();
-                // TODO: Implement flag update for TensorRT integration
             }
 
             ImGui::TableSetColumnIndex(3);
             if (UIHelpers::BeautifulButton("Remove", ImVec2(-1, 0))) {
                 ctx.config.class_settings.erase(ctx.config.class_settings.begin() + i);
                 SAVE_PROFILE();
-                // TODO: Implement flag update for TensorRT integration
                 ImGui::PopID(); 
                 i--; 
                 continue; 
@@ -266,8 +262,7 @@ static void draw_class_settings()
         if (!id_exists && !temp_name.empty()) {
             ctx.config.class_settings.emplace_back(new_class_id, temp_name, new_class_allow);
             SAVE_PROFILE();
-            // TODO: Implement flag update for TensorRT integration
-            
+
             new_class_id = CommonHelpers::getNextClassId();
             new_class_name_buf[0] = '\0'; 
             new_class_allow = true;
@@ -280,12 +275,11 @@ static void draw_class_settings()
 static void draw_advanced_settings()
 {
     auto& ctx = AppContext::getInstance();
-    
-    static bool advanced_open = true;  // 기본적으로 열려있게 변경
+
+    static bool advanced_open = true;
     UIHelpers::BeginCard("Advanced Settings");
-    
-    // CollapsingHeader 대신 항상 표시되도록 변경 (디버깅용)
-    if (true) {  // if (ImGui::CollapsingHeader("Advanced Settings", &advanced_open)) {
+
+    if (true) {
         UIHelpers::CompactSpacer();
         
         ImGui::PushItemWidth(-1);
@@ -318,7 +312,6 @@ static void draw_advanced_settings()
         
         if (ImGui::Checkbox("Use CUDA Graph", &ctx.config.use_cuda_graph)) {
             SAVE_PROFILE();
-            // Graph 모드 변경 시 재빌드 필요
             auto& pipelineManager = needaimbot::PipelineManager::getInstance();
             if (pipelineManager.getPipeline()) {
                 pipelineManager.getPipeline()->setGraphRebuildNeeded();

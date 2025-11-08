@@ -104,12 +104,6 @@ void draw_profile()
                     status_message = "[OK] Saved settings to: " + profile_list[n];
                     status_time = std::chrono::steady_clock::now();
                 }
-                if (ImGui::MenuItem("Rename...")) {
-                    // TODO: Implement rename
-                }
-                if (ImGui::MenuItem("Duplicate")) {
-                    // TODO: Implement duplicate
-                }
                 ImGui::Separator();
                 if (profile_list[n] != "Default" && ImGui::MenuItem("Delete")) {
                     show_confirm_delete = true;
@@ -225,23 +219,6 @@ void draw_profile()
         }
     }
     
-    
-    UIHelpers::Spacer();
-    UIHelpers::BeautifulSeparator("Profile Actions");
-    UIHelpers::CompactSpacer();
-    
-    // Export/Import buttons
-    if (UIHelpers::BeautifulButton("Export Profile", ImVec2(ImGui::GetContentRegionAvail().x * 0.48f, 0))) {
-        // TODO: Implement export
-        status_message = "[INFO] Export feature coming soon";
-        status_time = std::chrono::steady_clock::now();
-    }
-    ImGui::SameLine();
-    if (UIHelpers::BeautifulButton("Import Profile", ImVec2(-1, 0))) {
-        // TODO: Implement import
-        status_message = "[INFO] Import feature coming soon";
-        status_time = std::chrono::steady_clock::now();
-    }
     
     UIHelpers::EndCard();
     

@@ -2,6 +2,7 @@ import os
 import stat
 import ctypes
 import sys
+import re
 
 def is_admin():
     try:
@@ -73,7 +74,6 @@ for i, line in enumerate(lines):
         new_lines.append(f'leonardo.build.usb_manufacturer="{default_manufacturer}"\n')
     elif line.startswith("leonardo.build.extra_flags="):
         # COM 포트 활성화 (CDC_DISABLED 제거)
-        import re
         new_line = re.sub(r"\s*-DCDC_DISABLED", "", line)
         new_lines.append(new_line)
     else:

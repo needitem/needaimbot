@@ -1,7 +1,5 @@
 #include "core/windows_headers.h"
 #include <timeapi.h>
-
-// OpenCV removed - using custom CUDA image processing
 #include <iostream>
 #include <thread>
 #include <atomic>
@@ -47,8 +45,6 @@
 #include <string_view>
 #include <memory>
 #include <filesystem>
-
-// #include "mouse/aimbot_components/AimbotTarget.h" - Removed, using core/Target.h
 #include <algorithm>
 
 // Global variable definitions
@@ -355,8 +351,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 }
 #endif
 
-// Administrator privilege check removed - not required for normal operation
-
 // Crash dump handler
 LONG WINAPI UnhandledExceptionHandler(EXCEPTION_POINTERS* pExceptionPointers) {
     std::cerr << "\n[CRASH] Unhandled exception occurred!" << std::endl;
@@ -466,10 +460,7 @@ int main()
     
     // Try to set high priority (doesn't require admin)
     SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
-    
-    
-    // Process priority removed for better system stability
-    
+
     // Set application title
     SetConsoleTitle(L"Gaming Performance Analyzer - Monitor & Optimize Gaming Performance");
     
@@ -578,7 +569,6 @@ int main()
             return -1;
         }
 
-        // MouseThread removed - GPU handles mouse control directly
         // Initialize InputMethod for recoil control only
         (void)initializeInputMethod();
 
@@ -654,14 +644,10 @@ int main()
             combinedUIThread,
             numCores > 2 ? 1 : -1,
             ThreadManager::Priority::ABOVE_NORMAL);
-        
-        // Mouse thread removed - GPU handles mouse control directly
-        // ThreadManager mouseThreadMgr removed
-        
+
         // Start all threads
         pipelineThreadMgr.start();
         uiThreadMgr.start();
-        // mouseThreadMgr.start(); - removed, GPU handles mouse directly
 
         welcome_message();
         
