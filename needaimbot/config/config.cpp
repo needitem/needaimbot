@@ -91,10 +91,7 @@ bool Config::loadConfig(const std::string& filename)
         enable_aim_shoot_offset = false;
         aim_shoot_offset_x = 0.0f;
         aim_shoot_offset_y = 0.0f;
-        
-        // Target lock removed
 
-        
         easynorecoil = false;
         easynorecoilstrength = 0.0f;
         
@@ -133,10 +130,9 @@ bool Config::loadConfig(const std::string& filename)
         
         bScope_multiplier = 1.0f;
 
-        
+
         ai_model = "sunxds_0.5.6.engine";
         confidence_threshold = 0.25f;  // Higher threshold = fewer detections = better performance
-        // NMS removed - no longer needed
         max_detections = 30;  // Reduced from 100 for better performance
         postprocess = "yolo11";  // Changed from yolo12 to match common model format
 
@@ -268,8 +264,6 @@ bool Config::loadConfig(const std::string& filename)
     enable_aim_shoot_offset = get_bool_ini("Target", "enable_aim_shoot_offset", false);
     aim_shoot_offset_x = static_cast<float>(get_double_ini("Target", "aim_shoot_offset_x", 0.0));
     aim_shoot_offset_y = static_cast<float>(get_double_ini("Target", "aim_shoot_offset_y", 0.0));
-    
-    // Target lock removed
 
     easynorecoil = get_bool_ini("Mouse", "easynorecoil", false);
     easynorecoilstrength = static_cast<float>(get_double_ini("Mouse", "easynorecoilstrength", 0.0));
@@ -311,7 +305,6 @@ bool Config::loadConfig(const std::string& filename)
 
     ai_model = get_string_ini("AI", "ai_model", "sunxds_0.5.6.engine");
     confidence_threshold = static_cast<float>(get_double_ini("AI", "confidence_threshold", 0.25));
-    // NMS removed - no longer needed
     max_detections = get_long_ini("AI", "max_detections", 30);
     postprocess = get_string_ini("AI", "postprocess", "yolo11");  // Changed default from yolo12 to yolo11
 
@@ -536,7 +529,6 @@ bool Config::saveConfig(const std::string& filename)
     file << "ai_model = " << ai_model << "\n";
     file << std::fixed << std::setprecision(6);
     file << "confidence_threshold = " << confidence_threshold << "\n";
-    // NMS removed - no longer saved
     file << std::noboolalpha;
     file << "max_detections = " << max_detections << "\n";
     file << "postprocess = " << postprocess << "\n\n";
