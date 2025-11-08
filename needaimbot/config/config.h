@@ -93,11 +93,13 @@ public:
 
     float body_y_offset;
     float head_y_offset;
-    float offset_step;  
-    
-    bool auto_aim;
+    float offset_step;
 
-    
+    bool auto_aim;
+    bool auto_shoot;
+    bool ignore_up_aim;
+
+
     float crosshair_offset_x;
     float crosshair_offset_y;
     
