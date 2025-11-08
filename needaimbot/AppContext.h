@@ -115,10 +115,6 @@ public:
 
     // CUDA Graph optimization
     std::atomic<bool> use_cuda_graph{false};
-    
-    // Modules
-    // MouseThread removed - GPU handles mouse control directly
-    // Detector removed - TensorRT is now integrated into UnifiedGraphPipeline
 
     // Overlay Target Data
     

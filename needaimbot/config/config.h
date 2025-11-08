@@ -105,10 +105,7 @@ public:
     bool enable_aim_shoot_offset;
     float aim_shoot_offset_x;
     float aim_shoot_offset_y;
-    
-    // Target lock feature removed
 
-    
     bool easynorecoil;
     float easynorecoilstrength;
     std::string input_method; 
@@ -149,10 +146,9 @@ public:
     
     float bScope_multiplier;
 
-    
+
     std::string ai_model;
     float confidence_threshold;
-    // NMS removed - no longer needed
     int max_detections;
     std::string postprocess;
 
