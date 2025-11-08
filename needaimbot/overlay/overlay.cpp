@@ -664,113 +664,60 @@ void OverlayThread()
 
                 if (ImGui::BeginTabBar("Options tab bar", ImGuiTabBarFlags_FittingPolicyResizeDown))
                 {
-                    // ═══════════════════════════════════════════════════════════
-                    // CORE FEATURES - Main functionality controls
-                    // ═══════════════════════════════════════════════════════════
-
-                    if (ImGui::BeginTabItem("[CORE] Aimbot"))
+                    if (ImGui::BeginTabItem("Aimbot"))
                     {
-                        UIHelpers::BeginSettingsSection("Aimbot Configuration",
-                            "Enable/disable auto-aim and configure target selection behavior");
                         draw_target();
-                        UIHelpers::EndSettingsSection();
                         ImGui::EndTabItem();
                     }
 
-                    if (ImGui::BeginTabItem("[CORE] Recoil"))
+                    if (ImGui::BeginTabItem("Mouse"))
                     {
-                        UIHelpers::BeginSettingsSection("Recoil Compensation",
-                            "Automatic spray control to reduce weapon recoil patterns");
-                        draw_rcs_settings();
-                        UIHelpers::EndSettingsSection();
-                        ImGui::EndTabItem();
-                    }
-
-                    // ═══════════════════════════════════════════════════════════
-                    // AIMING CONTROLS - Fine-tune aiming behavior
-                    // ═══════════════════════════════════════════════════════════
-
-                    if (ImGui::BeginTabItem("[AIM] Mouse"))
-                    {
-                        UIHelpers::BeginSettingsSection("Mouse Configuration",
-                            "Input device selection and mouse movement parameters");
                         draw_mouse();
-                        UIHelpers::EndSettingsSection();
                         ImGui::EndTabItem();
                     }
 
-                    if (ImGui::BeginTabItem("[AIM] Offset"))
+                    if (ImGui::BeginTabItem("Aim Offset"))
                     {
-                        UIHelpers::BeginSettingsSection("Aim Offset Adjustment",
-                            "Fine-tune aim position relative to detected targets");
                         renderOffsetTab();
-                        UIHelpers::EndSettingsSection();
                         ImGui::EndTabItem();
                     }
 
-                    // ═══════════════════════════════════════════════════════════
-                    // AI & DETECTION - Detection engine configuration
-                    // ═══════════════════════════════════════════════════════════
-
-                    if (ImGui::BeginTabItem("[AI] Model"))
+                    if (ImGui::BeginTabItem("Recoil"))
                     {
-                        UIHelpers::BeginSettingsSection("AI Detection Engine",
-                            "Model selection, confidence threshold, and detection parameters");
+                        draw_rcs_settings();
+                        ImGui::EndTabItem();
+                    }
+
+                    if (ImGui::BeginTabItem("Detection"))
+                    {
+                        ImGui::SeparatorText("AI Model");
                         draw_ai();
-                        UIHelpers::EndSettingsSection();
-                        ImGui::EndTabItem();
-                    }
-
-                    if (ImGui::BeginTabItem("[AI] Capture"))
-                    {
-                        UIHelpers::BeginSettingsSection("Capture Configuration",
-                            "Capture area size, resolution, and performance settings");
+                        ImGui::Spacing();
+                        ImGui::Spacing();
+                        ImGui::SeparatorText("Screen Capture");
                         draw_capture_settings();
-                        UIHelpers::EndSettingsSection();
                         ImGui::EndTabItem();
                     }
 
-                    // ═══════════════════════════════════════════════════════════
-                    // CONTROLS - Input configuration
-                    // ═══════════════════════════════════════════════════════════
-
-                    if (ImGui::BeginTabItem("[INPUT] Hotkeys"))
+                    if (ImGui::BeginTabItem("Hotkeys"))
                     {
-                        UIHelpers::BeginSettingsSection("Hotkey Configuration",
-                            "Customize all keyboard shortcuts and activation keys");
                         draw_buttons();
-                        UIHelpers::EndSettingsSection();
                         ImGui::EndTabItem();
                     }
 
-                    // ═══════════════════════════════════════════════════════════
-                    // SYSTEM - Application settings
-                    // ═══════════════════════════════════════════════════════════
-
-                    if (ImGui::BeginTabItem("[SYS] Profiles"))
+                    if (ImGui::BeginTabItem("Profiles"))
                     {
-                        UIHelpers::BeginSettingsSection("Profile Management",
-                            "Save, load, and manage different configuration profiles");
                         draw_profile();
-                        UIHelpers::EndSettingsSection();
                         ImGui::EndTabItem();
                     }
 
-                    if (ImGui::BeginTabItem("[SYS] Visual"))
+                    if (ImGui::BeginTabItem("Display"))
                     {
-                        UIHelpers::BeginSettingsSection("Overlay Appearance",
-                            "Customize UI transparency, scale, and display options");
                         draw_overlay();
-                        UIHelpers::EndSettingsSection();
-                        ImGui::EndTabItem();
-                    }
-
-                    if (ImGui::BeginTabItem("[SYS] Monitor"))
-                    {
-                        UIHelpers::BeginSettingsSection("System Monitor",
-                            "Performance metrics, FPS counter, and debug information");
+                        ImGui::Spacing();
+                        ImGui::Spacing();
+                        ImGui::SeparatorText("Debug");
                         draw_debug();
-                        UIHelpers::EndSettingsSection();
                         ImGui::EndTabItem();
                     }
 

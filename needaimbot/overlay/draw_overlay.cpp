@@ -65,17 +65,4 @@ void draw_overlay()
     if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Scales the size of the entire settings UI. May require restart for some elements."); }
     
     ImGui::Spacing();
-    ImGui::SeparatorText("Performance");
-    ImGui::Spacing();
-    
-    // Display overlay FPS
-    ImGui::Text("Overlay FPS: 30.0");
-    if (ImGui::IsItemHovered()) { 
-        ImGui::SetTooltip("Overlay runs at fixed 30 FPS for UI responsiveness."); 
-    }
-    
-    // Show current frame time
-    ImGui::Text("Frame Time: 33.33 ms");
-    
-    ImGui::Spacing();
 }
