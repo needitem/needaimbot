@@ -37,28 +37,32 @@ struct PIDState {
     float integral_y;
 };
 
-// Unified capture state machine
-enum class CaptureState : uint8_t {
-    IDLE,           // No capture scheduled
-    CAPTURING,      // Async copy in flight
-    READY,          // Frame ready for consumption
-    CONSUMED        // Frame consumed by pipeline, needs new capture
+// v2: Frame metadata used for ring-buffered capture
+struct FrameMetadata {
+    uint64_t frameId = 0;          // Monotonic frame counter
+    uint64_t presentQpc = 0;       // DXGI LastPresentQpc (0 if unsupported)
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint64_t captureTimeQpc = 0;   // CPU QPC at capture time
 };
 
-// Frame execution failure reasons for smart waiting
-enum class FrameFailureReason : uint8_t {
-    NO_FRAME_READY,     // Waiting for capture completion - short yield
-    INPUT_PENDING,      // Waiting for input to be reflected - event wait
-    GRAPH_NOT_READY,    // Graph initialization - longer wait
-    GPU_BUSY,           // GPU still processing previous frame - yield
-    CAPTURE_FAILED,     // Capture error - backoff
-    NONE                // Success
+// Single slot in the frame ring buffer
+struct FrameSlot {
+    FrameMetadata metadata{};
+    SimpleCudaMat image;
+    std::atomic<bool> ready{false};
+    std::atomic<bool> consumed{true};
 };
+
+// Small ring (2 slots) is enough for 1 producer + 1 consumer
+static constexpr size_t FRAME_RING_SIZE = 2;
 
 // Performance metrics for before/after comparison
 struct PerformanceMetrics {
     uint64_t totalFrames = 0;
     double totalLatencyMs = 0.0;
+    uint64_t droppedFrames = 0;
+    uint64_t duplicateFrames = 0;
     uint64_t busySpinCount = 0;
     uint64_t yieldCount = 0;
     uint64_t sleepCount = 0;
@@ -71,6 +75,8 @@ struct PerformanceMetrics {
     void reset() {
         totalFrames = 0;
         totalLatencyMs = 0.0;
+        droppedFrames = 0;
+        duplicateFrames = 0;
         busySpinCount = 0;
         yieldCount = 0;
         sleepCount = 0;
@@ -87,14 +93,23 @@ struct PerformanceMetrics {
         auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - lastReportTime).count();
         if (elapsed >= 10) {  // Log every 10 seconds
             double avgMs = totalLatencyMs / totalFrames;
-            printf("%s Last 10s: %llu frames, %.2fms avg (%.1f FPS)\n",
-                   prefix, (unsigned long long)totalFrames, avgMs, 1000.0 / avgMs);
+            printf("%s Last 10s: %llu frames (dropped=%llu, dup=%llu), %.2fms avg (%.1f FPS)\n",
+                   prefix,
+                   (unsigned long long)totalFrames,
+                   (unsigned long long)droppedFrames,
+                   (unsigned long long)duplicateFrames,
+                   avgMs,
+                   1000.0 / avgMs);
             printf("%s   Waits: busySpin=%llu, yield=%llu, sleep=%llu\n",
-                   prefix, (unsigned long long)busySpinCount, 
-                   (unsigned long long)yieldCount, (unsigned long long)sleepCount);
+                   prefix,
+                   (unsigned long long)busySpinCount,
+                   (unsigned long long)yieldCount,
+                   (unsigned long long)sleepCount);
             printf("%s   Optimizations: captureWait=%llu, inputPending=%llu, frameSkip=%llu, memcpySkip=%llu\n",
-                   prefix, (unsigned long long)captureWaitCount, 
-                   (unsigned long long)inputPendingCount, (unsigned long long)frameSkipCount,
+                   prefix,
+                   (unsigned long long)captureWaitCount,
+                   (unsigned long long)inputPendingCount,
+                   (unsigned long long)frameSkipCount,
                    (unsigned long long)memcpySkipCount);
             reset();
         }
@@ -297,8 +312,8 @@ public:
     bool captureGraph(cudaStream_t stream = nullptr);
     bool updateGraphExec();  // Update existing graph without recapture
 
-    bool executeFrame(FrameFailureReason* outReason = nullptr, cudaStream_t stream = nullptr);
-    bool executeNormalPipeline(cudaStream_t stream = nullptr);
+    // v2: single unified execution entry point (no failure enums)
+    bool executeFrame(cudaStream_t stream = nullptr);
     
         
     void setCapture(ICaptureProvider* capture) { m_capture = capture; }
@@ -402,48 +417,58 @@ private:
     std::atomic<size_t> m_cachedHeadClassNameHash{0};
     std::atomic<size_t> m_cachedClassSettingsSize{0};
 
-    // Cached config for lock-free access in hot path
-    struct CachedPIDConfig {
-        int max_detections = 128;
-        float kp_x = 0.5f;
-        float kp_y = 0.5f;
-        float ki_x = 0.0f;
-        float ki_y = 0.0f;
-        float kd_x = 0.3f;
-        float kd_y = 0.3f;
-        float integral_max = 100.0f;
-        float derivative_max = 50.0f;
-        float head_y_offset = 0.2f;
-        float body_y_offset = 0.5f;
-        float iou_stickiness_threshold = 0.30f;
-    };
-    CachedPIDConfig m_cachedPIDConfig;
-    std::atomic<bool> m_pidConfigDirty{true};
-    
-    // Capture buffer - single buffer for CUDA Graph stability
+    // v2 Lock-free config cache - updated explicitly or from background, read without locks in hot path
+    struct CachedConfig {
+        // PID parameters
+        struct {
+            float kp_x, kp_y;
+            float ki_x, ki_y;
+            float kd_x, kd_y;
+            float integral_max;
+            float derivative_max;
+        } pid;
+
+        // Target selection
+        struct {
+            float head_y_offset;
+            float body_y_offset;
+            float iou_stickiness_threshold;
+            int head_class_id;
+        } targeting;
+
+        // Detection
+        struct {
+            int max_detections;
+            float confidence_threshold;
+            std::array<unsigned char, 80> class_filter;  // Fixed size for cache-friendly access
+        } detection;
+
+        // Movement filtering
+        struct {
+            int deadband_enter_x = 0;
+            int deadband_exit_x = 0;
+            int deadband_enter_y = 0;
+            int deadband_exit_y = 0;
+        } filtering;
+
+        // Generation counter - incremented when config changes
+        std::atomic<uint32_t> generation{0};
+    } m_cachedConfig;
+
+    // Legacy single-buffer capture (used by CUDA Graph path and preview)
     SimpleCudaMat m_captureBuffer;
 
     std::unique_ptr<CudaStream> m_captureStream;
     std::unique_ptr<CudaStream> m_previewStream;
     std::unique_ptr<CudaEvent> m_captureReadyEvent;
     
-    // Unified capture state (replaces m_captureInFlight, m_hasFrameData, m_frameInFlight)
-    std::atomic<CaptureState> m_captureState{CaptureState::IDLE};
-    bool m_graphPrimed = false;
-    bool m_qpcSupportChecked = false;
-    bool m_qpcSupported = false;
-    // Track stable capture buffer shape to avoid per-frame reallocation checks
-    int m_stableCaptureRows = 0;
-    int m_stableCaptureCols = 0;
-    int m_stableCaptureChannels = 0;
-    bool m_captureBufferShapeDirty = true;
-
-    FrameFailureReason ensureFrameReady();
-    FrameFailureReason scheduleNextFrameCapture(bool forceSync);
-    bool waitForCaptureCompletion();
-    // Smart waiting based on failure reason
-    void handleFrameFailure(FrameFailureReason reason, int& consecutiveFails);
-    bool checkQPCSupport();
+    // v2: Frame ring buffer (lock-free producer/consumer)
+    FrameSlot m_frameRing[FRAME_RING_SIZE];
+    std::atomic<uint64_t> m_nextCaptureSlot{0};
+    std::atomic<uint64_t> m_nextProcessSlot{0};
+    std::atomic<uint64_t> m_nextFrameId{0};
+    std::atomic<uint64_t> m_lastProcessedFrameId{0};
+    std::atomic<uint64_t> m_lastProcessedPresentQpc{0};
     
     
     std::unique_ptr<nvinfer1::IRuntime> m_runtime;
@@ -507,20 +532,17 @@ private:
     // Signal when a frame-in-flight completes to avoid active yielding
     mutable std::mutex m_inflightMutex;
     std::condition_variable m_inflightCv;
-    mutable std::mutex m_movementFilterMutex;
-    bool m_skipNextMovement{true};
+
+    // Movement filter state - per-thread, no lock needed in callback
+    struct MovementFilterState {
+        bool skipNext = true;
+        bool inSettleX = false;
+        bool inSettleY = false;
+        int lastEmitX = 0;
+        int lastEmitY = 0;
+    } m_filterState;
+
     std::chrono::steady_clock::time_point m_lastFrameTime{};
-    // Movement filtering state (to reduce micro jitter near target)
-    // Per-axis hysteresis deadband: X and Y are independent
-    int m_deadbandEnterX{2};
-    int m_deadbandExitX{5};
-    int m_deadbandEnterY{2};
-    int m_deadbandExitY{5};
-    bool m_inSettleX{false};
-    bool m_inSettleY{false};
-    // Track last emitted movement per axis to suppress immediate sign-flip oscillation (e.g., +1 then -1)
-    int m_lastEmitX{0};
-    int m_lastEmitY{0};
     mutable std::mutex m_previewMutex;
     
     
@@ -553,6 +575,13 @@ private:
     // Next capture waits until a frame with LastPresentTime >= this value.
     std::atomic<uint64_t> m_pendingInputQpc{0};
 
+    // Whether DXGI LastPresentQpc is supported by the capture backend.
+    bool m_qpcSupported = false;
+
+    // Legacy QPC tracking for graph-based path (kept for compatibility).
+    std::atomic<uint64_t> m_lastMovementPresentQpc{0};
+    std::atomic<uint64_t> m_currentFramePresentQpc{0};
+
     bool validateGraph();
     void cleanupGraph();
     bool allocateBuffers();
@@ -571,28 +600,27 @@ private:
     void clearMovementData();
     void resetMovementFilter();
     void invalidateSelectedTarget(cudaStream_t stream = nullptr);
-    MouseMovement filterMouseMovement(const MouseMovement& rawMovement, bool movementEnabled);
+    MouseMovement filterMouseMovement(const MouseMovement& raw, bool enabled);
     void clearHostPreviewData(AppContext& ctx);
     void handleAimbotActivation();
 
+    // Legacy graph path callbacks (kept for compatibility)
     bool enqueueFrameCompletionCallback(cudaStream_t stream);
     bool enqueueMovementResetCallback(cudaStream_t stream);
 
     bool updateDDACaptureRegion(const AppContext& ctx);
-    bool performFrameCapture();
-    bool performFrameCaptureDirectToUnified();
-    bool performPreprocessing();
+
+    // v2 pipeline helpers
+    bool performPreprocessing(const SimpleCudaMat& frame, cudaStream_t stream);
     void updatePreviewBuffer(const SimpleCudaMat& currentBuffer);
     void updatePreviewBufferAllocation();  // Dynamic allocation based on show_window state
-    bool performInference();
-    int findHeadClassId(AppContext& ctx);
+    bool performInference(cudaStream_t stream);
 
     void clearDetectionBuffers(const PostProcessingConfig& config, cudaStream_t stream);
     cudaError_t decodeYoloOutput(void* d_rawOutputPtr, nvinfer1::DataType outputType, 
                                 const std::vector<int64_t>& shape, 
                                 const PostProcessingConfig& config, cudaStream_t stream);
     bool validateYoloDecodeBuffers(int maxDecodedTargets, int max_candidates);
-    void updateClassFilterIfNeeded(cudaStream_t stream);
 
     // Removed redundant NMS and copy functions - integrated into main processing
     void handlePreviewUpdate(const PostProcessingConfig& config, cudaStream_t stream);
@@ -604,9 +632,18 @@ private:
     void refreshCachedBindings();
     bool bindStaticTensorAddresses();
 
+    // v2 config/cache helpers
+    void refreshConfigCache(const AppContext& ctx);
+    void updateConfig(const AppContext& ctx);
+
+    // v2 frame ring helpers
+    bool scheduleCapture();
+    bool tryConsumeFrame(FrameMetadata& outMetadata, SimpleCudaMat& outImage);
+    bool enqueueFrameCompletionCallback(cudaStream_t stream, const FrameMetadata& metadata);
+
 public:
-    // Mark runtime-controlled parameters dirty so pipeline refreshes cached values
-    void markPidConfigDirty() { m_pidConfigDirty.store(true, std::memory_order_release); }
+    // Mark runtime-controlled parameters dirty; in v2 this triggers a config cache refresh.
+    void markPidConfigDirty();
 };
 
 class PipelineManager {
