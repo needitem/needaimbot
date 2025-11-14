@@ -43,89 +43,6 @@ namespace needaimbot {
 // Use blocking CUDA events to avoid CPU yield storms while waiting for GPU work
 static constexpr unsigned int kBlockingEventFlags = cudaEventDisableTiming | cudaEventBlockingSync;
 
-// ============================================================================
-// LOCK-FREE CONFIG UPDATE (v2)
-// ============================================================================
-
-void UnifiedGraphPipeline::refreshConfigCache(const AppContext& ctx) {
-    // Called periodically from main loop or when config changes.
-    // NOT called in the hot path (executeFrame).
-
-    uint32_t currentGen = m_cachedConfig.generation.load(std::memory_order_acquire);
-
-    // Atomic read of config with single mutex lock
-    AppContext& mutableCtx = const_cast<AppContext&>(ctx);
-    {
-        std::lock_guard<std::mutex> lock(mutableCtx.configMutex);
-
-        // PID
-        m_cachedConfig.pid.kp_x = ctx.config.pid_kp_x;
-        m_cachedConfig.pid.kp_y = ctx.config.pid_kp_y;
-        m_cachedConfig.pid.ki_x = ctx.config.pid_ki_x;
-        m_cachedConfig.pid.ki_y = ctx.config.pid_ki_y;
-        m_cachedConfig.pid.kd_x = ctx.config.pid_kd_x;
-        m_cachedConfig.pid.kd_y = ctx.config.pid_kd_y;
-        m_cachedConfig.pid.integral_max = ctx.config.pid_integral_max;
-        m_cachedConfig.pid.derivative_max = ctx.config.pid_derivative_max;
-
-        // Targeting
-        m_cachedConfig.targeting.head_y_offset = ctx.config.head_y_offset;
-        m_cachedConfig.targeting.body_y_offset = ctx.config.body_y_offset;
-        m_cachedConfig.targeting.iou_stickiness_threshold = ctx.config.iou_stickiness_threshold;
-
-        // Resolve head class ID
-        m_cachedConfig.targeting.head_class_id = -1;
-        for (const auto& cs : ctx.config.class_settings) {
-            if (cs.name == ctx.config.head_class_name) {
-                m_cachedConfig.targeting.head_class_id = cs.id;
-                break;
-            }
-        }
-
-        // Detection
-        m_cachedConfig.detection.max_detections = ctx.config.max_detections;
-        m_cachedConfig.detection.confidence_threshold = ctx.config.confidence_threshold;
-
-        // Class filter - fixed size array (cache-friendly)
-        m_cachedConfig.detection.class_filter.fill(0);
-        for (const auto& cs : ctx.config.class_settings) {
-            if (cs.id >= 0 && cs.id < 80) {
-                m_cachedConfig.detection.class_filter[cs.id] = cs.allow ? 1 : 0;
-            }
-        }
-
-        // Movement filtering
-        m_cachedConfig.filtering.deadband_enter_x = ctx.config.deadband_enter_x;
-        m_cachedConfig.filtering.deadband_exit_x  = ctx.config.deadband_exit_x;
-        m_cachedConfig.filtering.deadband_enter_y = ctx.config.deadband_enter_y;
-        m_cachedConfig.filtering.deadband_exit_y  = ctx.config.deadband_exit_y;
-
-        // Increment generation to signal update
-        m_cachedConfig.generation.store(currentGen + 1, std::memory_order_release);
-    }
-}
-
-void UnifiedGraphPipeline::updateConfig(const AppContext& ctx) {
-    refreshConfigCache(ctx);
-
-    // Upload class filter to GPU (async)
-    if (m_smallBufferArena.allowFlags && m_pipelineStream && m_pipelineStream->get()) {
-        cudaMemcpyAsync(
-            m_smallBufferArena.allowFlags,
-            m_cachedConfig.detection.class_filter.data(),
-            80 * sizeof(unsigned char),
-            cudaMemcpyHostToDevice,
-            m_pipelineStream->get());
-    }
-}
-
-void UnifiedGraphPipeline::markPidConfigDirty() {
-    // In v2, PID/movement config is refreshed via the lock-free cache.
-    // Treat "dirty" as a request to update the cache immediately.
-    auto& ctx = AppContext::getInstance();
-    updateConfig(ctx);
-}
-
 void UnifiedGPUArena::initializePointers(uint8_t* basePtr, int maxDetections, int yoloSize) {
     size_t offset = 0;
     
@@ -550,12 +467,6 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
         }
 
         m_state.needsRebuild = true;
-    }
-
-    // Initialize cached config and upload class filter to GPU once at startup.
-    {
-        auto& ctx = AppContext::getInstance();
-        updateConfig(ctx);
     }
     
     return true;
@@ -1056,9 +967,33 @@ bool UnifiedGraphPipeline::configureMouseMovementBuffer() {
 
 
 void UnifiedGraphPipeline::setInputFrame(const SimpleCudaMat& frame) {
-    // Legacy CPU-injected frame path no longer used in v2.
-    // Kept as a no-op to preserve API compatibility.
-    (void)frame;
+    if (frame.empty()) return;
+    
+    if (!m_pipelineStream || !m_pipelineStream->get()) {
+        printf("[ERROR] Pipeline stream not initialized\n");
+        return;
+    }
+    
+    // Write directly to m_captureBuffer (consistent with scheduleNextFrameCapture)
+    SimpleCudaMat& dst = m_captureBuffer;
+    if (dst.empty() || dst.rows() != frame.rows() || dst.cols() != frame.cols() || dst.channels() != frame.channels()) {
+        dst.create(frame.rows(), frame.cols(), frame.channels());
+        m_stableCaptureRows = frame.rows();
+        m_stableCaptureCols = frame.cols();
+        m_stableCaptureChannels = frame.channels();
+        m_captureBufferShapeDirty = false;
+    }
+
+    size_t dataSize = static_cast<size_t>(frame.rows()) * static_cast<size_t>(frame.cols()) * static_cast<size_t>(frame.channels()) * sizeof(unsigned char);
+    cudaError_t err = cudaMemcpyAsync(dst.data(), frame.data(), dataSize, 
+                                      cudaMemcpyDeviceToDevice, m_pipelineStream->get());
+    if (err != cudaSuccess) {
+        printf("[ERROR] Failed to copy frame to m_captureBuffer: %s\n", cudaGetErrorString(err));
+        return;
+    }
+
+    // Mark frame as ready
+    m_captureState.store(CaptureState::READY, std::memory_order_release);
 }
 
 
@@ -1069,21 +1004,16 @@ void UnifiedGraphPipeline::handleAimbotDeactivation() {
     clearMovementData();
     clearHostPreviewData(ctx);
     m_allowMovement.store(false, std::memory_order_release);
-
-    // Clear frame ring (v2)
-    for (auto& slot : m_frameRing) {
-        slot.ready.store(false, std::memory_order_release);
-        slot.consumed.store(true, std::memory_order_release);
-    }
-
     m_captureRegionCache = {};
+    
+    // Reset unified capture state
+    m_captureState.store(CaptureState::IDLE, std::memory_order_release);
 
-    // Reset filter state (lock-free)
-    m_filterState.skipNext = true;
-    m_filterState.inSettleX = false;
-    m_filterState.inSettleY = false;
-    m_filterState.lastEmitX = 0;
-    m_filterState.lastEmitY = 0;
+    // Reset filter state
+    {
+        std::lock_guard<std::mutex> lock(m_movementFilterMutex);
+        m_skipNextMovement = true;
+    }
 }
 
 void UnifiedGraphPipeline::clearCountBuffers() {
@@ -1133,13 +1063,114 @@ void UnifiedGraphPipeline::clearMovementData() {
 }
 
 void UnifiedGraphPipeline::resetMovementFilter() {
-    // Lock-free: direct member access
-    m_filterState.skipNext = true;
+    std::lock_guard<std::mutex> lock(m_movementFilterMutex);
+    m_skipNextMovement = true;
     m_lastFrameTime = {};
-    m_filterState.inSettleX = false;
-    m_filterState.inSettleY = false;
-    m_filterState.lastEmitX = 0;
-    m_filterState.lastEmitY = 0;
+    m_inSettleX = false;
+    m_inSettleY = false;
+    m_lastEmitX = 0;
+    m_lastEmitY = 0;
+}
+
+void UnifiedGraphPipeline::handleFrameFailure(FrameFailureReason reason, int& consecutiveFails) {
+    consecutiveFails++;
+
+    switch (reason) {
+    case FrameFailureReason::NO_FRAME_READY:
+        // Capture pending - use event sync with QPC fallback
+        m_perfMetrics.captureWaitCount++;
+        if (m_captureReadyEvent && m_captureReadyEvent->get()) {
+            // Event sync is efficient - blocks until capture completes
+            cudaError_t syncErr = cudaEventSynchronize(m_captureReadyEvent->get());
+            if (syncErr != cudaSuccess && syncErr != cudaErrorNotReady) {
+                std::cerr << "[Capture] Event sync failed: " << cudaGetErrorString(syncErr) << std::endl;
+            }
+        } else if (m_capture) {
+            // Fallback: QPC-based wait
+            uint64_t cur = m_capture->GetLastPresentQpc();
+            if (cur) {
+                (void)m_capture->WaitForNewFrameSince(cur + 1, 4);
+            } else {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                m_perfMetrics.sleepCount++;
+            }
+        }
+        break;
+
+    case FrameFailureReason::INPUT_PENDING:
+        // Waiting for input to be reflected in frame - block briefly on provider signal
+        m_perfMetrics.inputPendingCount++;
+        if (m_capture) {
+            uint64_t cur = m_capture->GetLastPresentQpc();
+            if (cur) {
+                (void)m_capture->WaitForNewFrameSince(cur + 1, 6);
+                break;
+            }
+        }
+        // Fallback: short sleep instead of yield to avoid skyrocketing yield counts
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        m_perfMetrics.sleepCount++;
+        break;
+
+    case FrameFailureReason::GPU_BUSY:
+        // Previous frame still processing - wait on a CV signaled on completion
+        {
+            std::unique_lock<std::mutex> lk(m_inflightMutex);
+            m_inflightCv.wait_for(lk, std::chrono::milliseconds(1), [this]() {
+                return !m_frameInFlight.load(std::memory_order_acquire);
+            });
+        }
+        break;
+
+    case FrameFailureReason::GRAPH_NOT_READY:
+        // Graph initialization - longer wait
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        m_perfMetrics.sleepCount++;
+        break;
+
+    case FrameFailureReason::CAPTURE_FAILED:
+        // Capture error - exponential backoff without yield storms
+        if (consecutiveFails <= 32) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            m_perfMetrics.sleepCount++;
+        } else {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            m_perfMetrics.sleepCount++;
+        }
+        break;
+
+    case FrameFailureReason::NONE:
+    default:
+        break;
+    }
+}
+
+bool UnifiedGraphPipeline::checkQPCSupport() {
+    if (m_qpcSupportChecked) {
+        return m_qpcSupported;
+    }
+    
+    m_qpcSupportChecked = true;
+    
+    if (!m_capture) {
+        m_qpcSupported = false;
+        return false;
+    }
+    
+    // Test if GetLastPresentQpc returns valid data
+    uint64_t testQpc = m_capture->GetLastPresentQpc();
+    
+    // If returns 0, either not supported or no frames yet
+    // We'll assume not supported for safety
+    m_qpcSupported = (testQpc != 0);
+    
+    if (m_qpcSupported) {
+        std::cout << "[Capture] QPC-based input latency reduction enabled" << std::endl;
+    } else {
+        std::cout << "[Capture] QPC not available, using timer-based input gating" << std::endl;
+    }
+    
+    return m_qpcSupported;
 }
 
 void UnifiedGraphPipeline::invalidateSelectedTarget(cudaStream_t stream) {
@@ -1177,85 +1208,85 @@ void UnifiedGraphPipeline::invalidateSelectedTarget(cudaStream_t stream) {
     }
 }
 
-MouseMovement UnifiedGraphPipeline::filterMouseMovement(const MouseMovement& raw, bool enabled) {
-    if (!enabled) {
-        m_filterState.skipNext = true;
-        m_filterState.inSettleX = false;
-        m_filterState.inSettleY = false;
-        m_filterState.lastEmitX = 0;
-        m_filterState.lastEmitY = 0;
+MouseMovement UnifiedGraphPipeline::filterMouseMovement(const MouseMovement& rawMovement, bool movementEnabled) {
+    std::lock_guard<std::mutex> lock(m_movementFilterMutex);
+    auto& ctx = AppContext::getInstance();
+
+    if (!movementEnabled) {
+        m_skipNextMovement = true;
+        // Reset settle state when movement disabled
+        m_inSettleX = false;
+        m_inSettleY = false;
+        m_lastEmitX = 0;
+        m_lastEmitY = 0;
         return {0, 0};
     }
 
-    if (m_filterState.skipNext) {
-        if (raw.dx != 0 || raw.dy != 0) {
-            m_filterState.skipNext = false;
+    if (m_skipNextMovement) {
+        // Drop the first real movement after (re)activation to avoid large corrections
+        if (rawMovement.dx != 0 || rawMovement.dy != 0) {
+            m_skipNextMovement = false;
             return {0, 0};
         }
-        return raw;
+        return rawMovement;
     }
 
-    // Read cached filter config (NO LOCKS)
-    const auto& cfg = m_cachedConfig.filtering;
+    // Apply small-oscillation suppression and hysteresis deadband PER-AXIS
+    int dx = rawMovement.dx;
+    int dy = rawMovement.dy;
 
-    int dx = raw.dx;
-    int dy = raw.dy;
-
-    // X-axis: sign-flip suppression
+    // X axis: sign-flip suppression for tiny steps
     int emitDx = dx;
-    if (abs(dx) <= 1 && dx == -m_filterState.lastEmitX) {
+    if (abs(dx) <= 1 && dx == -m_lastEmitX) {
         emitDx = 0;
     }
-
-    // Y-axis: sign-flip suppression
+    // Y axis: sign-flip suppression for tiny steps
     int emitDy = dy;
-    if (abs(dy) <= 1 && dy == -m_filterState.lastEmitY) {
+    if (abs(dy) <= 1 && dy == -m_lastEmitY) {
         emitDy = 0;
     }
 
-    // X-axis hysteresis
+    // X axis hysteresis
     {
-        const int enter2 = cfg.deadband_enter_x * cfg.deadband_enter_x;
-        const int exit2  = cfg.deadband_exit_x * cfg.deadband_exit_x;
-        const int mag2   = emitDx * emitDx;
-
-        if (m_filterState.inSettleX) {
-            if (mag2 < exit2) {
+        const int enter2X = m_deadbandEnterX * m_deadbandEnterX;
+        const int exit2X  = m_deadbandExitX * m_deadbandExitX;
+        const int mag2X = emitDx * emitDx; // per-axis magnitude
+        if (m_inSettleX) {
+            if (mag2X < exit2X) {
                 emitDx = 0;
             } else {
-                m_filterState.inSettleX = false;
+                m_inSettleX = false;
             }
         } else {
-            if (mag2 <= enter2) {
-                m_filterState.inSettleX = true;
+            if (mag2X <= enter2X) {
+                m_inSettleX = true;
                 emitDx = 0;
             }
         }
     }
 
-    // Y-axis hysteresis
+    // Y axis hysteresis
     {
-        const int enter2 = cfg.deadband_enter_y * cfg.deadband_enter_y;
-        const int exit2  = cfg.deadband_exit_y * cfg.deadband_exit_y;
-        const int mag2   = emitDy * emitDy;
-
-        if (m_filterState.inSettleY) {
-            if (mag2 < exit2) {
+        const int enter2Y = m_deadbandEnterY * m_deadbandEnterY;
+        const int exit2Y  = m_deadbandExitY * m_deadbandExitY;
+        const int mag2Y = emitDy * emitDy;
+        if (m_inSettleY) {
+            if (mag2Y < exit2Y) {
                 emitDy = 0;
             } else {
-                m_filterState.inSettleY = false;
+                m_inSettleY = false;
             }
         } else {
-            if (mag2 <= enter2) {
-                m_filterState.inSettleY = true;
+            if (mag2Y <= enter2Y) {
+                m_inSettleY = true;
                 emitDy = 0;
             }
         }
     }
 
-    // Update last emit (cache-local, no atomics)
-    m_filterState.lastEmitX = (emitDx != 0) ? emitDx : 0;
-    m_filterState.lastEmitY = (emitDy != 0) ? emitDy : 0;
+    // Update last emitted per-axis (only if we actually emit non-zero on that axis)
+    if (emitDx != 0) m_lastEmitX = emitDx; else m_lastEmitX = 0;
+    if (emitDy != 0) m_lastEmitY = emitDy; else m_lastEmitY = 0;
 
     return {emitDx, emitDy};
 }
@@ -1279,50 +1310,29 @@ void UnifiedGraphPipeline::handleAimbotActivation() {
     m_state.frameCount = 0;
     m_allowMovement.store(false, std::memory_order_release);
     clearMovementData();
-
-    // Reset frame tracking (v2 ring buffer)
-    m_nextCaptureSlot.store(0, std::memory_order_release);
-    m_nextProcessSlot.store(0, std::memory_order_release);
-    m_lastProcessedFrameId.store(0, std::memory_order_release);
-    m_lastProcessedPresentQpc.store(0, std::memory_order_release);
-    m_pendingInputQpc.store(0, std::memory_order_release);
-
-    // Reset capture region cache
     m_captureRegionCache = {};
+    
+    // Reset unified capture state
+    m_captureState.store(CaptureState::IDLE, std::memory_order_release);
 
-    // Reset movement filter state (lock-free)
-    m_filterState.skipNext = true;
-    m_filterState.inSettleX = false;
-    m_filterState.inSettleY = false;
-    m_filterState.lastEmitX = 0;
-    m_filterState.lastEmitY = 0;
+    // Reset movement filter state
+    {
+        std::lock_guard<std::mutex> lock(m_movementFilterMutex);
+        m_skipNextMovement = true;
+    }
 }
 
 bool UnifiedGraphPipeline::enqueueFrameCompletionCallback(cudaStream_t stream) {
-    // Legacy graph path wrapper – forward to v2 metadata-aware callback
-    FrameMetadata meta{};
-    return enqueueFrameCompletionCallback(stream, meta);
-}
-
-// v2: Frame-ID aware completion callback that updates lastProcessed metadata
-// and enforces exactly-once semantics per PresentQpc/frameId.
-bool UnifiedGraphPipeline::enqueueFrameCompletionCallback(cudaStream_t stream, const FrameMetadata& metadata) {
     if (!stream) {
         return false;
     }
 
-    struct CallbackData {
-        UnifiedGraphPipeline* pipeline;
-        FrameMetadata metadata;
-    };
-
-    auto* data = new CallbackData{this, metadata};
-
     cudaError_t err = cudaLaunchHostFunc(stream,
         [](void* userData) {
-            auto* cbData = static_cast<CallbackData*>(userData);
-            auto* pipeline = cbData->pipeline;
-            const FrameMetadata& meta = cbData->metadata;
+            auto* pipeline = static_cast<UnifiedGraphPipeline*>(userData);
+            if (!pipeline) {
+                return;
+            }
 
             auto& ctx = AppContext::getInstance();
 
@@ -1330,58 +1340,48 @@ bool UnifiedGraphPipeline::enqueueFrameCompletionCallback(cudaStream_t stream, c
             pipeline->m_allowMovement.store(false, std::memory_order_release);
 
             if (pipeline->m_h_movement && pipeline->m_h_movement->get()) {
+                // Allow movement if: (allowMovement is true) AND (aiming is true OR single_shot_mode is true)
                 bool isSingleShot = ctx.single_shot_mode.load();
                 bool shouldMove = allowMovement && (ctx.aiming || isSingleShot);
 
                 if (shouldMove) {
                     MouseMovement rawMovement = *pipeline->m_h_movement->get();
                     MouseMovement filtered = pipeline->filterMouseMovement(rawMovement, true);
+                    pipeline->m_h_movement->get()->dx = filtered.dx;
+                    pipeline->m_h_movement->get()->dy = filtered.dy;
 
                     if (filtered.dx != 0 || filtered.dy != 0) {
                         executeMouseMovement(filtered.dx, filtered.dy);
 
-                        // Record input timestamp for latency tracking
+                        // Record input injection timestamp (QPC)
                         LARGE_INTEGER qpc{};
                         if (QueryPerformanceCounter(&qpc)) {
-                            pipeline->m_pendingInputQpc.store(
-                                static_cast<uint64_t>(qpc.QuadPart),
-                                std::memory_order_release);
+                            pipeline->m_pendingInputQpc.store(static_cast<uint64_t>(qpc.QuadPart), std::memory_order_release);
                         }
-                    }
-
-                    // Mark this frame as processed (exactly-once guarantee)
-                    pipeline->m_lastProcessedFrameId.store(meta.frameId, std::memory_order_release);
-                    pipeline->m_lastProcessedPresentQpc.store(meta.presentQpc, std::memory_order_release);
-
-                    // Clear pending input flag if this frame includes our input
-                    uint64_t pendingQpc = pipeline->m_pendingInputQpc.load(std::memory_order_acquire);
-                    if (pendingQpc != 0 && meta.presentQpc >= pendingQpc) {
-                        pipeline->m_pendingInputQpc.store(0, std::memory_order_release);
                     }
                 } else {
                     pipeline->filterMouseMovement({0, 0}, false);
+                    pipeline->m_h_movement->get()->dx = 0;
+                    pipeline->m_h_movement->get()->dy = 0;
                 }
 
+                // Reset single shot mode after processing (whether moved or not)
                 if (isSingleShot) {
                     ctx.single_shot_mode = false;
                 }
             }
 
-            // Release frame-in-flight lock
+            // Release frame-in-flight flag
             pipeline->m_frameInFlight.store(false, std::memory_order_release);
             {
                 std::lock_guard<std::mutex> g(pipeline->m_inflightMutex);
             }
             pipeline->m_inflightCv.notify_all();
-
-            delete cbData;
-        },
-        data);
+        }, this);
 
     if (err != cudaSuccess) {
-        std::cerr << "[Pipeline] Failed to enqueue completion callback: "
+        std::cerr << "[UnifiedGraph] Failed to enqueue completion callback: "
                   << cudaGetErrorString(err) << std::endl;
-        delete data;
         m_allowMovement.store(false, std::memory_order_release);
         return false;
     }
@@ -1431,7 +1431,6 @@ void UnifiedGraphPipeline::runMainLoop() {
     bool wasAiming = false;
 
     while (!m_shouldStop.load(std::memory_order_acquire) && !ctx.should_exit.load()) {
-        // Wait for activation
         {
             std::unique_lock<std::mutex> lock(ctx.pipeline_activation_mutex);
             ctx.pipeline_activation_cv.wait(lock, [&ctx, this]() {
@@ -1445,18 +1444,21 @@ void UnifiedGraphPipeline::runMainLoop() {
             break;
         }
 
-        // Single shot mode
+        // Handle single shot mode
         if (ctx.single_shot_requested.load()) {
-            ctx.single_shot_requested = false;
-            ctx.single_shot_mode = true;
+            ctx.single_shot_requested = false;  // Reset flag
+            ctx.single_shot_mode = true;  // Enable single shot mode - will be reset by callback
 
-            // Producer: schedule capture (async, non-blocking)
-            scheduleCapture();
+            // Execute single frame without activation/deactivation overhead
+            FrameFailureReason failReason = FrameFailureReason::NONE;
+            bool success = executeFrame(&failReason);
 
-            // Consumer: execute one frame
-            executeFrame(nullptr);
+            if (!success) {
+                ctx.single_shot_mode = false;  // Reset on failure
+            }
+            // Note: single_shot_mode will be reset by the callback after mouse movement
 
-            continue;
+            continue;  // Skip normal aiming loop
         }
 
         if (!ctx.aiming.load()) {
@@ -1472,24 +1474,24 @@ void UnifiedGraphPipeline::runMainLoop() {
             wasAiming = true;
         }
 
-        // Main loop: parallel capture + serial processing
+        // Smart waiting based on failure reason - minimal CPU usage
+        int consecutiveFails = 0;
         while (ctx.aiming.load() && !m_shouldStop.load(std::memory_order_acquire) &&
                !ctx.should_exit.load()) {
+            
+            FrameFailureReason failReason = FrameFailureReason::NONE;
+            if (!executeFrame(&failReason)) {
+                // Use smart waiting based on failure reason
+                handleFrameFailure(failReason, consecutiveFails);
+            } else {
+                consecutiveFails = 0;
 
-            // Producer: schedule next capture (async, non-blocking)
-            scheduleCapture();
-
-            // Consumer: process oldest available frame
-            if (!executeFrame(nullptr)) {
-                // Critical error - exit loop
-                break;
-            }
-
-            // Periodically refresh cached config (lock-free hot path)
-            static uint64_t framesSinceConfigUpdate = 0;
-            if (++framesSinceConfigUpdate >= 60) {  // Update every ~60 frames
-                refreshConfigCache(ctx);
-                framesSinceConfigUpdate = 0;
+                // Wait for the current frame to fully complete (including mouse movement)
+                // before starting the next frame to prevent oscillation
+                std::unique_lock<std::mutex> lk(m_inflightMutex);
+                m_inflightCv.wait(lk, [this]() {
+                    return !m_frameInFlight.load(std::memory_order_acquire);
+                });
             }
         }
 
@@ -1902,6 +1904,9 @@ cudaError_t UnifiedGraphPipeline::decodeYoloOutput(void* d_rawOutputPtr, nvinfer
             return cudaErrorInvalidValue;
         }
         
+        // Update class filter if needed
+        updateClassFilterIfNeeded(stream);
+        
         // Use existing decodeYolo10Gpu which handles pre-processed format
         return decodeYolo10Gpu(
             d_rawOutputPtr, outputType, shape, m_numClasses,
@@ -1912,6 +1917,9 @@ cudaError_t UnifiedGraphPipeline::decodeYoloOutput(void* d_rawOutputPtr, nvinfer
             
     } else if (config.postprocess == "yolo10") {
         int max_candidates = (shape.size() > 1) ? static_cast<int>(shape[1]) : 0;
+        
+        // Update class filter if needed
+        updateClassFilterIfNeeded(stream);
         
         return decodeYolo10Gpu(
             d_rawOutputPtr, outputType, shape, m_numClasses,
@@ -1928,6 +1936,8 @@ cudaError_t UnifiedGraphPipeline::decodeYoloOutput(void* d_rawOutputPtr, nvinfer
         if (!validateYoloDecodeBuffers(maxDecodedTargets, max_candidates)) {
             return cudaErrorInvalidValue;
         }
+        
+        updateClassFilterIfNeeded(stream);
         
         return decodeYolo11Gpu(
             d_rawOutputPtr, outputType, shape, m_numClasses,
@@ -1955,6 +1965,96 @@ bool UnifiedGraphPipeline::validateYoloDecodeBuffers(int maxDecodedTargets, int 
     }
     
     return true;
+}
+
+void UnifiedGraphPipeline::updateClassFilterIfNeeded(cudaStream_t stream) {
+    if (!m_smallBufferArena.allowFlags) {
+        return;
+    }
+
+    if (!m_classFilterDirty.load(std::memory_order_acquire)) {
+        return;
+    }
+
+    if (!m_h_allowFlags || m_h_allowFlags->size() < Constants::MAX_CLASSES_FOR_FILTERING) {
+        m_h_allowFlags = std::make_unique<CudaPinnedMemory<unsigned char>>(
+            Constants::MAX_CLASSES_FOR_FILTERING);
+        if (m_h_allowFlags && m_h_allowFlags->get()) {
+            std::fill_n(m_h_allowFlags->get(),
+                        Constants::MAX_CLASSES_FOR_FILTERING,
+                        static_cast<unsigned char>(0));
+        }
+    }
+
+    unsigned char* hostFlags = m_h_allowFlags ? m_h_allowFlags->get() : nullptr;
+    if (!hostFlags) {
+        std::cerr << "[Pipeline] Failed to allocate host class filter buffer" << std::endl;
+        return;
+    }
+
+    auto& ctx = AppContext::getInstance();
+    size_t classSettingsSize = 0;
+    size_t headNameHash = 0;
+    int newHeadId = -1;
+
+    {
+        std::lock_guard<std::mutex> lock(ctx.configMutex);
+        classSettingsSize = ctx.config.class_settings.size();
+        headNameHash = std::hash<std::string>{}(ctx.config.head_class_name);
+        std::fill_n(hostFlags,
+                    Constants::MAX_CLASSES_FOR_FILTERING,
+                    static_cast<unsigned char>(0));
+
+        for (const auto& setting : ctx.config.class_settings) {
+            if (setting.id >= 0 && setting.id < Constants::MAX_CLASSES_FOR_FILTERING) {
+                hostFlags[setting.id] = setting.allow ? 1 : 0;
+                if (setting.name == ctx.config.head_class_name) {
+                    newHeadId = setting.id;
+                }
+            }
+        }
+    }
+
+    bool filterChanged = m_cachedClassFilter.size() != Constants::MAX_CLASSES_FOR_FILTERING;
+    if (!filterChanged) {
+        filterChanged = !std::equal(
+            hostFlags,
+            hostFlags + Constants::MAX_CLASSES_FOR_FILTERING,
+            m_cachedClassFilter.begin());
+    }
+
+    bool headChanged = newHeadId != m_cachedHeadClassId.load(std::memory_order_acquire);
+    headChanged = headChanged ||
+        headNameHash != m_cachedHeadClassNameHash.load(std::memory_order_acquire) ||
+        classSettingsSize != m_cachedClassSettingsSize.load(std::memory_order_acquire);
+
+    if (!filterChanged && !headChanged) {
+        m_classFilterDirty.store(false, std::memory_order_release);
+        return;
+    }
+
+    if (filterChanged) {
+        m_cachedClassFilter.assign(hostFlags,
+                                   hostFlags + Constants::MAX_CLASSES_FOR_FILTERING);
+
+        cudaError_t copyErr = cudaMemcpyAsync(
+            m_smallBufferArena.allowFlags,
+            hostFlags,
+            Constants::MAX_CLASSES_FOR_FILTERING * sizeof(unsigned char),
+            cudaMemcpyHostToDevice,
+            stream);
+
+        if (copyErr != cudaSuccess) {
+            std::cerr << "[Pipeline] Failed to upload class filter flags: "
+                      << cudaGetErrorString(copyErr) << std::endl;
+            return;
+        }
+    }
+
+    m_cachedHeadClassId.store(newHeadId, std::memory_order_release);
+    m_cachedHeadClassNameHash.store(headNameHash, std::memory_order_release);
+    m_cachedClassSettingsSize.store(classSettingsSize, std::memory_order_release);
+    m_classFilterDirty.store(false, std::memory_order_release);
 }
 
 void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) {
@@ -2008,25 +2108,48 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         return;
     }
 
-    // Use cached values (lock-free) from v2 config cache
-    const CachedConfig& cfg = m_cachedConfig;
+    // Lock-free config access using cached values
+    if (!m_graphCaptured && m_pidConfigDirty.load(std::memory_order_acquire)) {
+        // Update cached config only when dirty flag is set
+        std::lock_guard<std::mutex> lock(ctx.configMutex);
+        m_cachedPIDConfig.max_detections = ctx.config.max_detections;
+        m_cachedPIDConfig.kp_x = ctx.config.pid_kp_x;
+        m_cachedPIDConfig.kp_y = ctx.config.pid_kp_y;
+        m_cachedPIDConfig.ki_x = ctx.config.pid_ki_x;
+        m_cachedPIDConfig.ki_y = ctx.config.pid_ki_y;
+        m_cachedPIDConfig.kd_x = ctx.config.pid_kd_x;
+        m_cachedPIDConfig.kd_y = ctx.config.pid_kd_y;
+        m_cachedPIDConfig.integral_max = ctx.config.pid_integral_max;
+        m_cachedPIDConfig.derivative_max = ctx.config.pid_derivative_max;
+        m_cachedPIDConfig.head_y_offset = ctx.config.head_y_offset;
+        m_cachedPIDConfig.body_y_offset = ctx.config.body_y_offset;
+        m_cachedPIDConfig.iou_stickiness_threshold = ctx.config.iou_stickiness_threshold;
+        m_pidConfigDirty.store(false, std::memory_order_release);
+    }
 
-    int cached_max_detections = cfg.detection.max_detections;
-    float cached_kp_x = cfg.pid.kp_x;
-    float cached_kp_y = cfg.pid.kp_y;
-    float cached_ki_x = cfg.pid.ki_x;
-    float cached_ki_y = cfg.pid.ki_y;
-    float cached_kd_x = cfg.pid.kd_x;
-    float cached_kd_y = cfg.pid.kd_y;
-    float cached_integral_max = cfg.pid.integral_max;
-    float cached_derivative_max = cfg.pid.derivative_max;
-    float cached_head_y_offset = cfg.targeting.head_y_offset;
-    float cached_body_y_offset = cfg.targeting.body_y_offset;
+    // Always refresh CPU-side deadband thresholds for filter (cheap update)
+    m_deadbandEnterX = ctx.config.deadband_enter_x;
+    m_deadbandExitX  = ctx.config.deadband_exit_x;
+    m_deadbandEnterY = ctx.config.deadband_enter_y;
+    m_deadbandExitY  = ctx.config.deadband_exit_y;
+
+    // Use cached values (lock-free)
+    int cached_max_detections = m_cachedPIDConfig.max_detections;
+    float cached_kp_x = m_cachedPIDConfig.kp_x;
+    float cached_kp_y = m_cachedPIDConfig.kp_y;
+    float cached_ki_x = m_cachedPIDConfig.ki_x;
+    float cached_ki_y = m_cachedPIDConfig.ki_y;
+    float cached_kd_x = m_cachedPIDConfig.kd_x;
+    float cached_kd_y = m_cachedPIDConfig.kd_y;
+    float cached_integral_max = m_cachedPIDConfig.integral_max;
+    float cached_derivative_max = m_cachedPIDConfig.derivative_max;
+    float cached_head_y_offset = m_cachedPIDConfig.head_y_offset;
+    float cached_body_y_offset = m_cachedPIDConfig.body_y_offset;
     
     float crosshairX = ctx.config.detection_resolution / 2.0f;
     float crosshairY = ctx.config.detection_resolution / 2.0f;
 
-    int head_class_id = cfg.targeting.head_class_id;
+    int head_class_id = findHeadClassId(ctx);
 
     const int blockSize = computeTargetSelectionBlockSize(cached_max_detections);
     const int gridSize = 1;
@@ -2054,7 +2177,7 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         cached_kd_y,
         cached_integral_max,
         cached_derivative_max,
-        cfg.targeting.iou_stickiness_threshold,
+        m_cachedPIDConfig.iou_stickiness_threshold,
         cached_head_y_offset,
         cached_body_y_offset,
         ctx.config.detection_resolution,
@@ -2128,349 +2251,310 @@ bool UnifiedGraphPipeline::updateDDACaptureRegion(const AppContext& ctx) {
     return true;
 }
 
+// CPU fallback functions removed - GPU-direct only path
 
-// ============================================================================
-// FRAME RING BUFFER - Lock-free producer/consumer (v2)
-// ============================================================================
+bool UnifiedGraphPipeline::waitForCaptureCompletion() {
+    CaptureState state = m_captureState.load(std::memory_order_acquire);
+    
+    if (state != CaptureState::CAPTURING) {
+        // Not capturing, return true if we have a ready frame
+        return (state == CaptureState::READY);
+    }
 
-bool UnifiedGraphPipeline::scheduleCapture() {
-    if (!m_config.enableCapture) {
+    if (!m_captureReadyEvent || !m_captureReadyEvent->get()) {
         return false;
+    }
+
+    cudaError_t q = cudaEventQuery(m_captureReadyEvent->get());
+    if (q == cudaErrorNotReady) {
+        // Non-blocking: capture still in flight
+        return false;
+    }
+    if (q != cudaSuccess) {
+        std::cerr << "[Capture] Failed to query capture event: "
+                  << cudaGetErrorString(q) << std::endl;
+        // Mark as IDLE on error
+        m_captureState.store(CaptureState::IDLE, std::memory_order_release);
+        return false;
+    }
+
+    // Transition to READY state
+    m_captureState.store(CaptureState::READY, std::memory_order_release);
+
+    auto& ctx = AppContext::getInstance();
+    if ((m_preview.enabled || ctx.config.show_window) &&
+        m_pipelineStream && m_pipelineStream->get() &&
+        !m_captureBuffer.empty()) {
+        updatePreviewBuffer(m_captureBuffer);
+    }
+
+    return true;
+}
+
+FrameFailureReason UnifiedGraphPipeline::scheduleNextFrameCapture(bool forceSync) {
+    if (!m_config.enableCapture) {
+        return FrameFailureReason::NONE;
     }
 
     if (!m_capture) {
         std::cerr << "[Capture] DDA capture interface not set" << std::endl;
-        return false;
+        return FrameFailureReason::CAPTURE_FAILED;
+    }
+
+    CaptureState state = m_captureState.load(std::memory_order_acquire);
+
+    // Optimized state transitions
+    if (state == CaptureState::CAPTURING) {
+        if (!forceSync) {
+            // Already capturing - return immediately (most common case in async path)
+            return FrameFailureReason::NONE;
+        } else {
+            // forceSync requested - wait for current capture to complete
+            if (!waitForCaptureCompletion()) {
+                return FrameFailureReason::NO_FRAME_READY;
+            }
+            state = m_captureState.load(std::memory_order_acquire);
+        }
+    }
+
+    // If frame is ready, return immediately (no need to schedule)
+    if (state == CaptureState::READY && !forceSync) {
+        return FrameFailureReason::NONE;
+    }
+    
+    // Check QPC support on first run
+    checkQPCSupport();
+    
+    // If we issued mouse input last frame, ensure we only process after a frame that includes it
+    uint64_t minQpc = m_pendingInputQpc.load(std::memory_order_acquire);
+    if (minQpc != 0) {
+        if (m_qpcSupported) {
+            // Block briefly until a frame with LastPresentQpc >= minQpc is available
+            if (!m_capture->WaitForNewFrameSince(minQpc, 6)) {
+                m_perfMetrics.frameSkipCount++;
+                return FrameFailureReason::INPUT_PENDING;
+            }
+            // Satisfied - clear flag
+            m_pendingInputQpc.store(0, std::memory_order_release);
+        } else {
+            // Fallback: simple frame count based gating (wait 1 frame minimum)
+            static uint64_t lastInputFrame = 0;
+            uint64_t currentFrame = m_state.frameCount;
+            if (currentFrame <= lastInputFrame + 1) {
+                m_perfMetrics.frameSkipCount++;
+                return FrameFailureReason::INPUT_PENDING;
+            }
+            lastInputFrame = currentFrame;
+            m_pendingInputQpc.store(0, std::memory_order_release);
+        }
     }
 
     auto& ctx = AppContext::getInstance();
-
-    // Update capture region if needed (cached, minimal overhead)
     if (!updateDDACaptureRegion(ctx)) {
-        return false;
+        return FrameFailureReason::CAPTURE_FAILED;
     }
 
-    // Get next slot to write to (lock-free)
-    uint64_t captureSlot = m_nextCaptureSlot.load(std::memory_order_acquire);
-    size_t slotIdx = static_cast<size_t>(captureSlot % FRAME_RING_SIZE);
-    FrameSlot& slot = m_frameRing[slotIdx];
-
-    // Check if slot is available (consumer must have marked it consumed)
-    bool expectedConsumed = true;
-    if (slotIdx > 0 && !slot.consumed.compare_exchange_strong(expectedConsumed, false, std::memory_order_acquire)) {
-        // Slot still in use - consumer is slow, drop this capture
-        m_perfMetrics.droppedFrames++;
-        return false;
-    }
-
-    // Acquire frame from DDA
+    // Try GPU-direct path first (zero-copy CUDA interop)
     cudaArray_t cudaArray = nullptr;
-    unsigned int width = 0, height = 0;
+    unsigned int width = 0;
+    unsigned int height = 0;
 
     bool useGPUDirect = m_capture->GetLatestFrameGPU(&cudaArray, &width, &height);
-    if (!useGPUDirect || !cudaArray) {
-        std::cerr << "[Capture] GPU-direct path required but not available" << std::endl;
-        return false;
-    }
 
     static bool gpuDirectLoggedOnce = false;
-    if (!gpuDirectLoggedOnce) {
+    if (!gpuDirectLoggedOnce && useGPUDirect) {
         std::cout << "[Capture] CUDA Interop enabled - using GPU-direct zero-copy path" << std::endl;
         gpuDirectLoggedOnce = true;
     }
 
-    // Allocate or reuse image buffer
-    SimpleCudaMat& image = slot.image;
-    int heightInt = static_cast<int>(height);
-    int widthInt = static_cast<int>(width);
+    cudaStream_t copyStream = nullptr;
+    if (m_captureStream && m_captureStream->get()) {
+        copyStream = m_captureStream->get();
+    } else if (m_pipelineStream && m_pipelineStream->get()) {
+        copyStream = m_pipelineStream->get();
+    }
 
-    if (image.empty() ||
-        image.rows() != heightInt ||
-        image.cols() != widthInt ||
-        image.channels() != 4) {
-        try {
-            image.create(heightInt, widthInt, 4);
-        } catch (const std::exception& e) {
-            std::cerr << "[Capture] Failed to allocate frame buffer: " << e.what() << std::endl;
-            return false;
+    if (!copyStream) {
+        return FrameFailureReason::CAPTURE_FAILED;
+    }
+
+    // Direct capture to stable m_captureBuffer (skip ring for lower latency)
+    SimpleCudaMat& targetBuffer = m_captureBuffer;
+
+    if (useGPUDirect && cudaArray) {
+        // Zero-copy GPU path: copy directly from CUDA array to m_captureBuffer
+        int heightInt = (int)height;
+        int widthInt = (int)width;
+
+        // Call member functions to extract values
+        uint8_t* bufferData = targetBuffer.data();
+        int bufferRows = targetBuffer.rows();
+        int bufferCols = targetBuffer.cols();
+        int bufferChannels = targetBuffer.channels();
+        size_t bufferStep = targetBuffer.step();
+
+        // Auto-reallocate buffer if size mismatches to maintain GPU-direct path
+        if (!bufferData || bufferRows != heightInt || bufferCols != widthInt || bufferChannels != 4) {
+            try {
+                targetBuffer.create(heightInt, widthInt, 4);
+                bufferData = targetBuffer.data();
+                bufferStep = targetBuffer.step();
+                m_stableCaptureRows = heightInt;
+                m_stableCaptureCols = widthInt;
+                m_stableCaptureChannels = 4;
+                m_captureBufferShapeDirty = false;
+                std::cout << "[Capture] Reallocated GPU-direct buffer: " << widthInt << "x" << heightInt << std::endl;
+            } catch (const std::exception& e) {
+                std::cerr << "[Capture] Failed to reallocate GPU buffer: " << e.what() << std::endl;
+                useGPUDirect = false;
+            }
+        }
+
+        if (useGPUDirect && bufferData) {
+            cudaError_t err = cudaMemcpy2DFromArrayAsync(
+                bufferData,
+                bufferStep,
+                cudaArray,
+                0,
+                0,
+                width * 4,  // 4 bytes per pixel (BGRA)
+                height,
+                cudaMemcpyDeviceToDevice,
+                copyStream
+            );
+
+            if (err != cudaSuccess) {
+                std::cerr << "[Capture] GPU-direct copy failed: " << cudaGetErrorString(err) << std::endl;
+                return FrameFailureReason::CAPTURE_FAILED;
+            }
         }
     }
 
-    // GPU-direct copy (async)
-    cudaStream_t stream = nullptr;
-    if (m_captureStream && m_captureStream->get()) {
-        stream = m_captureStream->get();
-    } else if (m_pipelineStream && m_pipelineStream->get()) {
-        stream = m_pipelineStream->get();
-    }
-
-    if (!stream) {
-        return false;
-    }
-
-    cudaError_t err = cudaMemcpy2DFromArrayAsync(
-        image.data(),
-        image.step(),
-        cudaArray,
-        0, 0,
-        width * 4,  // BGRA8
-        height,
-        cudaMemcpyDeviceToDevice,
-        stream);
-
-    if (err != cudaSuccess) {
-        std::cerr << "[Capture] cudaMemcpy2DFromArrayAsync failed: " << cudaGetErrorString(err) << std::endl;
-        return false;
+    // GPU-direct is mandatory - no CPU fallback
+    if (!useGPUDirect || !cudaArray) {
+        std::cerr << "[Capture] GPU-direct path required but not available" << std::endl;
+        return FrameFailureReason::CAPTURE_FAILED;
     }
 
     if (!m_captureReadyEvent) {
         m_captureReadyEvent = std::make_unique<CudaEvent>(kBlockingEventFlags);
     }
 
-    if (m_captureReadyEvent && m_captureReadyEvent->get()) {
-        cudaEvent_t evt = m_captureReadyEvent->get();
-        cudaError_t recErr = cudaEventRecord(evt, stream);
-        if (recErr != cudaSuccess) {
-            std::cerr << "[Capture] Failed to record capture completion event: "
-                      << cudaGetErrorString(recErr) << std::endl;
-            return false;
-        }
+    if (!m_captureReadyEvent || !m_captureReadyEvent->get()) {
+        return FrameFailureReason::CAPTURE_FAILED;
     }
 
-    // Initialize QPC support lazily
-    if (!m_qpcSupported) {
-        uint64_t testQpc = m_capture->GetLastPresentQpc();
-        m_qpcSupported = (testQpc != 0);
+    cudaError_t recordErr = cudaEventRecord(m_captureReadyEvent->get(), copyStream);
+    if (recordErr != cudaSuccess) {
+        std::cerr << "[Capture] Failed to record capture completion event: "
+                  << cudaGetErrorString(recordErr) << std::endl;
+        return FrameFailureReason::CAPTURE_FAILED;
     }
 
-    // Populate frame metadata
-    FrameMetadata metadata;
-    metadata.frameId = m_nextFrameId.fetch_add(1, std::memory_order_relaxed);
-    metadata.presentQpc = m_qpcSupported ? m_capture->GetLastPresentQpc() : 0;
-    metadata.width = width;
-    metadata.height = height;
+    // Capture is now in flight directly to m_captureBuffer
+    m_captureState.store(CaptureState::CAPTURING, std::memory_order_release);
+    m_lastCaptureW = static_cast<int>(width);
+    m_lastCaptureH = static_cast<int>(height);
+    m_lastGpuDirect = useGPUDirect;
+    // Mark shape dirty if upcoming frame dims differ from stable buffer
+    if (m_stableCaptureRows != static_cast<int>(height) ||
+        m_stableCaptureCols != static_cast<int>(width) ||
+        m_stableCaptureChannels != 4) {
+        m_captureBufferShapeDirty = true;
+    }
 
-    LARGE_INTEGER qpc{};
-    metadata.captureTimeQpc = QueryPerformanceCounter(&qpc)
-        ? static_cast<uint64_t>(qpc.QuadPart)
-        : 0;
+    if (forceSync) {
+        bool success = waitForCaptureCompletion();
+        return success ? FrameFailureReason::NONE : FrameFailureReason::NO_FRAME_READY;
+    }
 
-    slot.metadata = metadata;
-
-    // Mark slot as ready (AFTER copy is enqueued and metadata written)
-    slot.ready.store(true, std::memory_order_release);
-
-    // Advance producer index
-    m_nextCaptureSlot.store(captureSlot + 1, std::memory_order_release);
-
-    return true;
+    return FrameFailureReason::NONE;
 }
 
-bool UnifiedGraphPipeline::tryConsumeFrame(FrameMetadata& outMetadata, SimpleCudaMat& outImage) {
+FrameFailureReason UnifiedGraphPipeline::ensureFrameReady() {
     if (!m_config.enableCapture) {
-        return false;
+        return FrameFailureReason::NONE;
     }
 
-    // Get oldest unconsumed frame (lock-free)
-    uint64_t processSlot = m_nextProcessSlot.load(std::memory_order_acquire);
-    size_t slotIdx = static_cast<size_t>(processSlot % FRAME_RING_SIZE);
-    FrameSlot& slot = m_frameRing[slotIdx];
-
-    // Check if frame is ready
-    if (!slot.ready.load(std::memory_order_acquire)) {
-        return false;  // No frame available yet
-    }
-
-    // Wait for capture to complete (if still in flight)
-    if (m_captureReadyEvent && m_captureReadyEvent->get()) {
-        cudaError_t q = cudaEventQuery(m_captureReadyEvent->get());
-        if (q == cudaErrorNotReady) {
-            return false;  // Capture still in progress
+    CaptureState state = m_captureState.load(std::memory_order_acquire);
+    
+    // If capturing, wait for completion
+    if (state == CaptureState::CAPTURING) {
+        if (!waitForCaptureCompletion()) {
+            return FrameFailureReason::NO_FRAME_READY;
         }
-        if (q != cudaSuccess) {
-            std::cerr << "[Capture] Event query failed: " << cudaGetErrorString(q) << std::endl;
-            return false;
+        state = m_captureState.load(std::memory_order_acquire);
+    }
+
+    // If a frame is ready, ensure it reflects the last input (QPC gating).
+    if (state == CaptureState::READY) {
+        uint64_t minQpc = m_pendingInputQpc.load(std::memory_order_acquire);
+        if (minQpc != 0 && m_capture) {
+            uint64_t lastQpc = m_capture->GetLastPresentQpc();
+            if (lastQpc != 0 && lastQpc < minQpc) {
+                // Stale frame (pre-input) – discard and fetch a fresh one.
+                m_perfMetrics.frameSkipCount++;
+                m_captureState.store(CaptureState::CONSUMED, std::memory_order_release);
+                FrameFailureReason sched = scheduleNextFrameCapture(true);
+                return sched == FrameFailureReason::NONE ? FrameFailureReason::INPUT_PENDING : sched;
+            }
+            // Satisfied – clear
+            m_pendingInputQpc.store(0, std::memory_order_release);
         }
+        return FrameFailureReason::NONE;
     }
 
-    const FrameMetadata& metadata = slot.metadata;
+    // If no frame ready, schedule capture with sync
+    return scheduleNextFrameCapture(true);
 
-    // Duplicate frame detection (same PresentQpc)
-    uint64_t lastPresentQpc = m_lastProcessedPresentQpc.load(std::memory_order_acquire);
-    if (metadata.presentQpc != 0 && metadata.presentQpc <= lastPresentQpc) {
-        // Same game frame presented multiple times - skip
-        m_perfMetrics.duplicateFrames++;
-        slot.ready.store(false, std::memory_order_release);
-        slot.consumed.store(true, std::memory_order_release);
-        m_nextProcessSlot.store(processSlot + 1, std::memory_order_release);
-        return false;
-    }
-
-    // Already processed frame detection (same frameId)
-    uint64_t lastFrameId = m_lastProcessedFrameId.load(std::memory_order_acquire);
-    if (metadata.frameId <= lastFrameId) {
-        // Already processed this frame - skip
-        m_perfMetrics.duplicateFrames++;
-        slot.ready.store(false, std::memory_order_release);
-        slot.consumed.store(true, std::memory_order_release);
-        m_nextProcessSlot.store(processSlot + 1, std::memory_order_release);
-        return false;
-    }
-
-    // Input latency check - ensure frame includes our last input
-    uint64_t pendingQpc = m_pendingInputQpc.load(std::memory_order_acquire);
-    if (pendingQpc != 0 && metadata.presentQpc != 0 && metadata.presentQpc < pendingQpc) {
-        // Frame was presented BEFORE our input - skip stale frame
-        m_perfMetrics.frameSkipCount++;
-        slot.ready.store(false, std::memory_order_release);
-        slot.consumed.store(true, std::memory_order_release);
-        m_nextProcessSlot.store(processSlot + 1, std::memory_order_release);
-        return false;
-    }
-
-    // Frame is valid and fresh - consume it
-    outMetadata = metadata;
-    outImage = std::move(slot.image);
-
-    // Mark slot as consumed (producer can reuse it)
-    slot.ready.store(false, std::memory_order_release);
-    slot.consumed.store(true, std::memory_order_release);
-
-    // Advance consumer index
-    m_nextProcessSlot.store(processSlot + 1, std::memory_order_release);
-
-    // Update preview if enabled
-    auto& ctx = AppContext::getInstance();
-    if ((m_preview.enabled || ctx.config.show_window) && !outImage.empty()) {
-        updatePreviewBuffer(outImage);
-    }
-
-    return true;
 }
 
-// ============================================================================
-// PREPROCESSING - v2 (explicit frame + stream)
-// ============================================================================
-
-bool UnifiedGraphPipeline::performPreprocessing(const SimpleCudaMat& frame, cudaStream_t stream) {
-    if (!m_unifiedArena.yoloInput || frame.empty() || !frame.data()) {
-        return false;
+bool UnifiedGraphPipeline::performFrameCapture() {
+    if (!m_config.enableCapture) {
+        return true;
+    }
+    
+    CaptureState state = m_captureState.load(std::memory_order_acquire);
+    if (state == CaptureState::READY) {
+        return true; // Already have a frame
     }
 
+    FrameFailureReason reason = scheduleNextFrameCapture(true);
+    return (reason == FrameFailureReason::NONE);
+}
+
+bool UnifiedGraphPipeline::performFrameCaptureDirectToUnified() {
+    return performFrameCapture();
+}
+
+bool UnifiedGraphPipeline::performPreprocessing() {
+    auto& ctx = AppContext::getInstance();
+    
+    // Preview buffer is now updated in waitForCaptureCompletion()
+    
+    // Use m_captureBuffer directly (already populated by scheduleNextFrameCapture)
+    if (!m_unifiedArena.yoloInput || m_captureBuffer.empty()) {
+        return false;
+    }
+    const SimpleCudaMat& src = m_captureBuffer;
+    
     int modelRes = getModelInputResolution();
     cudaError_t err = cuda_unified_preprocessing(
-        frame.data(),
+        src.data(),
         m_unifiedArena.yoloInput,
-        frame.cols(),
-        frame.rows(),
-        static_cast<int>(frame.step()),
+        src.cols(),
+        src.rows(),
+        static_cast<int>(src.step()),
         modelRes,
         modelRes,
-        stream);
-
+        m_pipelineStream->get()
+    );
+    
     if (err != cudaSuccess) {
-        std::cerr << "[UnifiedGraph] Unified preprocessing failed: "
-                  << cudaGetErrorString(err) << std::endl;
+        printf("[ERROR] Unified preprocessing failed: %s\n", cudaGetErrorString(err));
         return false;
     }
-
-    return true;
-}
-
-// ============================================================================
-// MAIN EXECUTION - Frame-ID based exactly-once processing (v2)
-// ============================================================================
-
-bool UnifiedGraphPipeline::executeFrame(cudaStream_t stream) {
-    auto& ctx = AppContext::getInstance();
-
-    // Single frame in flight - prevents duplicate processing
-    bool expected = false;
-    if (!m_frameInFlight.compare_exchange_strong(expected, true, std::memory_order_acquire)) {
-        // Another frame is still processing - skip (not an error)
-        return true;
-    }
-
-    auto frameStart = std::chrono::steady_clock::now();
-
-    // Try to consume next frame (lock-free)
-    FrameMetadata metadata;
-    SimpleCudaMat frameImage;
-
-    if (!tryConsumeFrame(metadata, frameImage)) {
-        // No frame available or frame was stale - release lock and return
-        m_frameInFlight.store(false, std::memory_order_release);
-        m_inflightCv.notify_all();
-        return true;
-    }
-
-    // We have a valid, fresh frame - process it
-    cudaStream_t execStream = stream ? stream : (m_pipelineStream ? m_pipelineStream->get() : nullptr);
-    if (!execStream) {
-        m_frameInFlight.store(false, std::memory_order_release);
-        m_inflightCv.notify_all();
-        return false;
-    }
-
-    bool shouldRunDetection = m_config.enableDetection && !ctx.detection_paused.load();
-
-    if (shouldRunDetection) {
-        // Read cached config (NO LOCKS)
-        const CachedConfig& cfg = m_cachedConfig;
-        (void)cfg;  // cfg used in downstream kernels via device buffers
-
-        // Preprocessing
-        if (!performPreprocessing(frameImage, execStream)) {
-            m_frameInFlight.store(false, std::memory_order_release);
-            m_inflightCv.notify_all();
-            return false;
-        }
-
-        // Inference
-        if (!performInference(execStream)) {
-            m_frameInFlight.store(false, std::memory_order_release);
-            m_inflightCv.notify_all();
-            return false;
-        }
-
-        // Post-processing (uses cached config via device buffers)
-        performIntegratedPostProcessing(execStream);
-
-        // Target selection (uses cached config via device buffers)
-        performTargetSelection(execStream);
-
-        // Copy mouse movement to host (if not using mapped memory)
-        if (!m_mouseMovementUsesMappedMemory && m_h_movement && m_smallBufferArena.mouseMovement) {
-            cudaMemcpyAsync(
-                m_h_movement->get(),
-                m_smallBufferArena.mouseMovement,
-                sizeof(MouseMovement),
-                cudaMemcpyDeviceToHost,
-                execStream);
-        }
-
-        // Enqueue callback to execute mouse movement and mark frame complete
-        m_allowMovement.store(true, std::memory_order_release);
-        if (!enqueueFrameCompletionCallback(execStream, metadata)) {
-            m_allowMovement.store(false, std::memory_order_release);
-            m_frameInFlight.store(false, std::memory_order_release);
-            m_inflightCv.notify_all();
-            return false;
-        }
-    } else {
-        // Detection paused - just release the frame
-        m_frameInFlight.store(false, std::memory_order_release);
-        m_inflightCv.notify_all();
-    }
-
-    // Update performance metrics
-    auto frameEnd = std::chrono::steady_clock::now();
-    auto latencyMs = std::chrono::duration<double, std::milli>(frameEnd - frameStart).count();
-
-    m_perfMetrics.totalFrames++;
-    m_perfMetrics.totalLatencyMs += latencyMs;
-    m_perfMetrics.logIfNeeded("[Pipeline]");
-
+    
     return true;
 }
 
@@ -2706,11 +2790,7 @@ bool UnifiedGraphPipeline::getPreviewSnapshot(SimpleMat& outFrame) {
     return hasFrameToReturn;
 }
 
-bool UnifiedGraphPipeline::performInference(cudaStream_t stream) {
-    if (!stream) {
-        return false;
-    }
-
+bool UnifiedGraphPipeline::performInference() {
     if (m_primaryInputIndex < 0 ||
         m_primaryInputIndex >= static_cast<int>(m_inputAddressCache.size()) ||
         !m_unifiedArena.yoloInput) {
@@ -2722,24 +2802,288 @@ bool UnifiedGraphPipeline::performInference(cudaStream_t stream) {
         return false;
     }
     
-    // Aliasing should be set during initialization - no runtime retry.
-    // If not aliased, copy is required (logged once during init).
+    // Aliasing should be set during initialization - no runtime retry
+    // If not aliased, copy is required (logged once during init)
     if (inputBinding != m_unifiedArena.yoloInput) {
         size_t inputSize = getModelInputResolution() * getModelInputResolution() * 3 * sizeof(float);
         cudaMemcpyAsync(inputBinding, m_unifiedArena.yoloInput, inputSize,
-                        cudaMemcpyDeviceToDevice, stream);
+                       cudaMemcpyDeviceToDevice, m_pipelineStream->get());
     } else {
         // Successfully aliased - skip memcpy
         m_perfMetrics.memcpySkipCount++;
     }
     
-    if (!runInferenceAsync(stream)) {
+    if (!runInferenceAsync(m_pipelineStream->get())) {
         std::cerr << "[UnifiedGraph] TensorRT inference failed" << std::endl;
         return false;
     }
 
     return true;
 }
+
+int UnifiedGraphPipeline::findHeadClassId(AppContext& ctx) {
+    const size_t headNameHash = std::hash<std::string>{}(ctx.config.head_class_name);
+    const size_t classSettingsSize = ctx.config.class_settings.size();
+
+    const size_t cachedSize = m_cachedClassSettingsSize.load(std::memory_order_acquire);
+    const size_t cachedHash = m_cachedHeadClassNameHash.load(std::memory_order_acquire);
+
+    if (classSettingsSize != cachedSize || headNameHash != cachedHash) {
+        int resolvedId = -1;
+        {
+            std::lock_guard<std::mutex> lock(ctx.configMutex);
+            for (const auto& cs : ctx.config.class_settings) {
+                if (cs.name == ctx.config.head_class_name) {
+                    resolvedId = cs.id;
+                    break;
+                }
+            }
+        }
+
+        m_cachedHeadClassId.store(resolvedId, std::memory_order_release);
+        m_cachedHeadClassNameHash.store(headNameHash, std::memory_order_release);
+        m_cachedClassSettingsSize.store(classSettingsSize, std::memory_order_release);
+        m_classFilterDirty.store(true, std::memory_order_release);
+        return resolvedId;
+    }
+
+    return m_cachedHeadClassId.load(std::memory_order_acquire);
+}
+
+// performResultCopy?????댁긽 ?꾩슂 ?놁쓬 - Graph? 肄쒕갚?먯꽌 吏곸젒 泥섎━
+
+bool UnifiedGraphPipeline::executeFrame(FrameFailureReason* outReason, cudaStream_t stream) {
+    auto& ctx = AppContext::getInstance();
+
+    // Latest-only semantic: skip if previous frame still in flight
+    bool expected = false;
+    if (!m_frameInFlight.compare_exchange_strong(expected, true, std::memory_order_acquire)) {
+        // Frame already in flight, skip this one (not an error)
+        if (outReason) *outReason = FrameFailureReason::GPU_BUSY;
+        return false;
+    }
+
+    // Performance tracking with new metrics
+    auto frameStart = std::chrono::steady_clock::now();
+
+    if (ctx.config.use_cuda_graph && !m_state.graphReady) {
+        if (!captureGraph(stream)) {
+            m_frameInFlight.store(false, std::memory_order_release);
+            {
+                std::lock_guard<std::mutex> g(m_inflightMutex);
+            }
+            m_inflightCv.notify_all();
+            if (outReason) *outReason = FrameFailureReason::GRAPH_NOT_READY;
+            return false;
+        }
+    }
+
+    // Check if graph needs rebuild (e.g., config changed)
+    if (m_state.graphReady && m_state.needsRebuild && ctx.config.use_cuda_graph) {
+        // Try fast update first, falls back to full recapture if needed
+        if (!updateGraphExec()) {
+            std::cerr << "[UnifiedGraph] Graph update failed, attempting full recapture" << std::endl;
+            if (!captureGraph(stream)) {
+                std::cerr << "[UnifiedGraph] Graph recapture failed" << std::endl;
+                m_state.graphReady = false;
+            }
+        }
+    }
+
+    cudaStream_t launchStream = stream ? stream : (m_pipelineStream ? m_pipelineStream->get() : nullptr);
+    if (!launchStream) {
+        m_frameInFlight.store(false, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> g(m_inflightMutex);
+        }
+        m_inflightCv.notify_all();
+        return false;
+    }
+
+    if (ctx.config.use_cuda_graph && m_state.graphReady && m_graphExec) {
+        // Prime buffers on first entry
+        if (!m_graphPrimed) {
+            FrameFailureReason primeReason = scheduleNextFrameCapture(false);
+            if (primeReason != FrameFailureReason::NONE) {
+                m_allowMovement.store(false, std::memory_order_release);
+                m_frameInFlight.store(false, std::memory_order_release);
+                {
+                    std::lock_guard<std::mutex> g(m_inflightMutex);
+                }
+                m_inflightCv.notify_all();
+                if (outReason) *outReason = primeReason;
+                return false;
+            }
+            // Single synchronization point - waitForCaptureCompletion handles event sync internally
+            if (!waitForCaptureCompletion()) {
+                m_allowMovement.store(false, std::memory_order_release);
+                m_frameInFlight.store(false, std::memory_order_release);
+                {
+                    std::lock_guard<std::mutex> g(m_inflightMutex);
+                }
+                m_inflightCv.notify_all();
+                return false;
+            }
+            // Primed: m_captureBuffer now contains valid frame
+            m_graphPrimed = true;
+        }
+
+        // Schedule next capture if nothing in flight
+        (void)scheduleNextFrameCapture(false);
+
+        // Wait for capture event (m_captureBuffer is already populated directly)
+        if (m_captureReadyEvent && m_captureReadyEvent->get()) {
+            cudaStreamWaitEvent(launchStream, m_captureReadyEvent->get(), 0);
+        }
+
+        // Validate freshness after wait; if frame is stale vs last input, fetch a fresh one.
+        if (m_capture) {
+            uint64_t minQpc = m_pendingInputQpc.load(std::memory_order_acquire);
+            if (minQpc != 0) {
+                uint64_t lastQpc = m_capture->GetLastPresentQpc();
+                if (lastQpc != 0 && lastQpc < minQpc) {
+                    // Need a newer frame; do a synchronous capture and re-wait on event.
+                    (void)scheduleNextFrameCapture(true);
+                    if (m_captureReadyEvent && m_captureReadyEvent->get()) {
+                        cudaStreamWaitEvent(launchStream, m_captureReadyEvent->get(), 0);
+                    }
+                } else if (lastQpc != 0) {
+                    m_pendingInputQpc.store(0, std::memory_order_release);
+                }
+            }
+        }
+
+        bool shouldDispatchMovement = m_config.enableDetection && !ctx.detection_paused.load();
+        m_allowMovement.store(shouldDispatchMovement, std::memory_order_release);
+
+        // Launch the graph using the stabilized m_captureBuffer pointer
+        cudaError_t launchErr = cudaGraphLaunch(m_graphExec, launchStream);
+        if (launchErr != cudaSuccess) {
+            std::cerr << "[UnifiedGraph] Graph launch failed: "
+                      << cudaGetErrorString(launchErr) << std::endl;
+            m_allowMovement.store(false, std::memory_order_release);
+            m_frameInFlight.store(false, std::memory_order_release);
+            {
+                std::lock_guard<std::mutex> g(m_inflightMutex);
+            }
+            m_inflightCv.notify_all();
+            return false;
+        }
+
+        // Mark frame as consumed; the next capture will update the ring
+        m_captureState.store(CaptureState::CONSUMED, std::memory_order_release);
+    } else {
+        if (!executeNormalPipeline(launchStream)) {
+            m_allowMovement.store(false, std::memory_order_release);
+            m_frameInFlight.store(false, std::memory_order_release);
+            {
+                std::lock_guard<std::mutex> g(m_inflightMutex);
+            }
+            m_inflightCv.notify_all();
+            if (outReason) *outReason = FrameFailureReason::NO_FRAME_READY;
+            return false;
+        }
+    }
+
+    // Update performance metrics
+    auto frameEnd = std::chrono::steady_clock::now();
+    auto latencyMs = std::chrono::duration<double, std::milli>(frameEnd - frameStart).count();
+    
+    m_perfMetrics.totalFrames++;
+    m_perfMetrics.totalLatencyMs += latencyMs;
+    m_perfMetrics.logIfNeeded("[Perf]");
+    
+    if (outReason) *outReason = FrameFailureReason::NONE;
+
+    // Periodic CUDA memory maintenance for long-running sessions
+    static auto lastTrim = std::chrono::steady_clock::now();
+    auto now = std::chrono::steady_clock::now();
+    if (std::chrono::duration_cast<std::chrono::minutes>(now - lastTrim).count() >= 10) {
+        cudaMemPoolTrimTo(nullptr, 0);
+        // Trim graph memory pool for the current device (0 used elsewhere in code)
+        cudaDeviceGraphMemTrim(0);
+        lastTrim = now;
+    }
+
+    return true;
+}
+
+bool UnifiedGraphPipeline::executeNormalPipeline(cudaStream_t stream) {
+    auto& ctx = AppContext::getInstance();
+
+    cudaStream_t activeStream = stream ? stream : (m_pipelineStream ? m_pipelineStream->get() : nullptr);
+    if (!activeStream) {
+        return false;
+    }
+
+    FrameFailureReason ensureReason = ensureFrameReady();
+    if (ensureReason != FrameFailureReason::NONE) {
+        return false; // Frame not ready
+    }
+
+    bool shouldRunDetection = m_config.enableDetection && !ctx.detection_paused.load();
+
+    if (shouldRunDetection) {
+        // Ensure any pending capture copy is visible to the pipeline stream
+        if (m_captureReadyEvent && m_captureReadyEvent->get()) {
+            cudaStreamWaitEvent(activeStream, m_captureReadyEvent->get(), 0);
+        }
+        if (!performPreprocessing()) {
+            return false;
+        }
+
+        (void)scheduleNextFrameCapture(false); // Non-blocking schedule
+
+        if (!performInference()) {
+            return false;
+        }
+
+        performIntegratedPostProcessing(activeStream);
+        performTargetSelection(activeStream);
+
+        if (!m_mouseMovementUsesMappedMemory) {
+            cudaMemcpyAsync(m_h_movement->get(), m_smallBufferArena.mouseMovement,
+                           sizeof(MouseMovement), cudaMemcpyDeviceToHost, activeStream);
+        }
+    }
+
+    m_allowMovement.store(shouldRunDetection, std::memory_order_release);
+    if (shouldRunDetection) {
+        if (!enqueueFrameCompletionCallback(activeStream)) {
+            m_allowMovement.store(false, std::memory_order_release);
+            return false;
+        }
+    } else {
+        (void)scheduleNextFrameCapture(false); // Non-blocking schedule
+
+        cudaError_t streamState = cudaStreamQuery(activeStream);
+        if (streamState == cudaSuccess) {
+            clearMovementData();
+            m_frameInFlight.store(false, std::memory_order_release);
+            {
+                std::lock_guard<std::mutex> g(m_inflightMutex);
+            }
+            m_inflightCv.notify_all();
+        } else {
+            if (streamState != cudaErrorNotReady) {
+                std::cerr << "[UnifiedGraph] Stream query failed while resetting movement: "
+                          << cudaGetErrorString(streamState) << std::endl;
+            }
+
+            if (!enqueueMovementResetCallback(activeStream)) {
+                return false;
+            }
+        }
+    }
+
+    // Mark frame as consumed
+    m_captureState.store(CaptureState::CONSUMED, std::memory_order_release);
+
+    return true;
+}
+
+
+// processMouseMovement???댁젣 Graph? 肄쒕갚 ?대??먯꽌 ?몃씪?몄쑝濡?泥섎━??
 
 }
 void needaimbot::UnifiedGraphPipeline::getCaptureStats(needaimbot::UnifiedGraphPipeline::CaptureStats& out) const {
@@ -2750,16 +3094,7 @@ void needaimbot::UnifiedGraphPipeline::getCaptureStats(needaimbot::UnifiedGraphP
     out.roiTop = m_captureRegionCache.top;
     out.roiSize = m_captureRegionCache.size;
     out.gpuDirect = m_lastGpuDirect;
-
-    bool hasFrame = false;
-    for (size_t i = 0; i < FRAME_RING_SIZE; ++i) {
-        if (m_frameRing[i].ready.load(std::memory_order_acquire)) {
-            hasFrame = true;
-            break;
-        }
-    }
-    out.hasFrame = hasFrame;
-
+    out.hasFrame = (m_captureState.load(std::memory_order_acquire) == CaptureState::READY);
     out.previewEnabled = m_preview.enabled;
     out.previewHasHost = m_preview.hasValidHostPreview;
     out.backend = ctx.config.capture_method.c_str();
