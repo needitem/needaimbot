@@ -45,6 +45,7 @@ static constexpr unsigned int kBlockingEventFlags = cudaEventDisableTiming | cud
 
 // ============================================================================
 // LOCK-FREE CONFIG UPDATE (v2)
+// NOTE: This translation unit must be rebuilt whenever AppContext/Config layout changes.
 // ============================================================================
 
 void UnifiedGraphPipeline::refreshConfigCache(const AppContext& ctx) {

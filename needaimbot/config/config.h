@@ -141,9 +141,12 @@ public:
     std::string kmbox_port;       
     std::string kmbox_mac;    
 
-    
-    std::string makcu_port;
-    int makcu_baudrate;
+
+    // Makcu (2PC network) settings
+    std::string makcu_port;       // legacy, unused in 2PC mode but kept for compatibility
+    int makcu_baudrate;           // legacy, unused in 2PC mode but kept for compatibility
+    std::string makcu_remote_ip;  // second PC IP for MakcuRelay
+    int makcu_remote_port;        // UDP port for MakcuRelay
 
     
     float bScope_multiplier;
