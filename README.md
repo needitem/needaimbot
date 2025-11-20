@@ -1,132 +1,175 @@
-# needaimbot
+# NeedAimBot
 
-An ultra-low latency AI targeting assistant for Windows that keeps the entire capture → inference → mouse control loop on the GPU. This README focuses on how to install, configure, and safely operate the project.
+NeedAimBot is a high-performance, low-latency AI targeting assistant designed for Windows. It leverages NVIDIA's TensorRT for real-time object detection and utilizes a direct DirectX-to-CUDA capture pipeline to minimize input lag, ensuring the entire capture-inference-control loop remains on the GPU as much as possible.
 
-## 📦 What You Get
-- Desktop Duplication (DDA) capture streamed directly into CUDA without CPU copies.
-- TensorRT-based inference with configurable models and precision profiles.
-- Multiple mouse injection backends (Win32, Arduino, Logitech G-Hub, KMBox, MakCU, Razer) with automatic fallback.
-- Overlay and keyboard listener for runtime control plus INI-driven profiles stored next to the executable.
+## Ecosystem
 
-## 🖥️ Requirements
-| Component | Minimum | Notes |
-|-----------|---------|-------|
-| OS | Windows 10/11 64-bit | Desktop Duplication is required for capture. |
-| GPU | NVIDIA RTX-class with CUDA 12.x drivers | TensorRT engines must match the installed CUDA/CuDNN toolchain. |
-| SDKs | CUDA Toolkit 12.8, cuDNN 9.7.1, TensorRT 10.8.0.43, Visual Studio 2022 (MSVC v143, Desktop C++ workload) | `build.bat` uses MSBuild from Visual Studio 2022. |
-| Runtime | Microsoft Visual C++ Redistributable (x64) | Required for MSVC-built binaries. |
+This project is part of a larger suite of tools designed to work together for a robust and undetectable targeting solution:
 
-## ⚠️ Install the NVIDIA inference stack (one-time)
-1. **CUDA Toolkit 12.8.0** – Download the Windows installer from the [CUDA 12.8.0 archive](https://developer.nvidia.com/cuda-12-8-0-download-archive) and install the *Toolkit* + *Driver* components. Accept the default location (`C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8`) so the project file can find the headers and libraries automatically.
-2. **cuDNN 9.7.1 for CUDA 12.8** – Grab the Windows ZIP from the [cuDNN download portal](https://developer.nvidia.com/cudnn-downloads) (requires NVIDIA developer login). Extract it under `C:\Program Files\NVIDIA\CUDNN\v9.7\` so that the directory layout matches what the MSBuild project expects:
-   ```text
-   C:\Program Files\NVIDIA\CUDNN\v9.7\
-       bin\12.8\cudnn64_9.dll
-       include\12.8\cudnn*.h
-       lib\12.8\cudnn.lib
-   ```
-3. **TensorRT 10.8.0.43** – Download the `TensorRT-10.8.0.43.Windows10.win10.cuda-12.6.zip` package from the [TensorRT 10.x downloads](https://developer.nvidia.com/tensorrt/download/10x). Unzip it into `needaimbot/modules/TensorRT-10.8.0.43/` so the repository keeps all required headers and libraries under version control:
-   ```text
-   needaimbot/
-     modules/
-       TensorRT-10.8.0.43/
-         bin/       # contains nvinfer_10.dll, nvonnxparser_10.dll, etc.
-         include/   # headers used during compilation
-         lib/       # .lib import libraries referenced by the project
-         samples/   # optional, but keep for compatibility
-   ```
-   After building, copy the DLLs from `modules/TensorRT-10.8.0.43/bin/` (and `CUDNN\v9.7\bin\12.8\`) next to `needaimbot.exe` or add them to your `PATH` so the runtime can locate them.
+*   **NeedAimBot**: The core application that handles screen capture, inference, and input injection.
+*   **EngineExport**: A utility to convert ONNX AI models into optimized TensorRT engines (`.engine`) specifically tuned for your GPU architecture.
+*   **MakcuFlasher**: A tool for flashing custom firmware onto Arduino-based input devices (e.g., Leonardo, Micro) to spoof hardware IDs and bypass anti-cheat detection.
+*   **MakcuRelay**: A network relay application that allows NeedAimBot to run on one PC while sending mouse commands to a second PC via a dedicated hardware device (Dual-PC Setup).
 
-## ⬇️ Download & Build
-1. **Clone the repository**
-   ```powershell
-   git clone https://github.com/needitem/needaimbot.git
-   cd needaimbot
-   ```
-2. **Install prerequisites** (CUDA 12.8, cuDNN 9.7.1, TensorRT 10.8, Visual Studio 2022).
-3. **Place your TensorRT engine** in `needaimbot/models/`. The default configuration expects `sunxds_0.5.6.engine` but any `.engine` file can be selected through the config.
-4. **Build** using the supplied script or Visual Studio:
-   ```powershell
-   build.bat  # invokes MSBuild in Release x64
-   ```
-   or open `needaimbot.sln`, choose *Release | x64*, and build the `needaimbot` project.
+---
 
-## 🚀 Export an optimized TensorRT engine (recommended)
-TensorRT engines bundled in `models/` work out of the box, but you will get the lowest latency by generating your own engine with the matching TensorRT/CUDA toolchain.
+## Prerequisites
 
-1. **Clone the exporter repo** – Grab the dedicated exporter from [needitem/EngineExport](https://github.com/needitem/EngineExport) and follow its README. Place it next to this project for convenience:
-   ```powershell
-   git clone https://github.com/needitem/EngineExport.git
-   cd EngineExport
-   ```
-2. **Prepare the environment** – Create/activate a Python 3.10+ virtual environment and install the dependencies listed in `requirements.txt` inside the exporter repository. The tool needs the same CUDA, cuDNN, and TensorRT versions that you installed above.
-3. **Run the export script** – Point the exporter at your ONNX (or supported source) model and select the desired precision profile (FP16/INT8). The exporter builds the TensorRT engine and writes the resulting `.engine` file to the path you provide, e.g. `..\needaimbot\models\custom_fp16.engine`.
-4. **Plan for build time** – TensorRT’s builder phase performs layer fusion, calibration, and tactic selection; expect the process to take roughly **20 minutes** on a modern RTX GPU.
-5. **Deploy** – Copy the generated `.engine` file into `needaimbot/models/` and reference it via `ai_model` in your profile INI.
+Before installing, ensure your system meets the following requirements:
 
-> 💡 EngineExport’s scripts expose additional knobs such as workspace size and calibration data paths. Match them to the resolution and precision you intend to run in-game so the generated engine aligns perfectly with this application.
+*   **OS**: Windows 10 or 11 (64-bit).
+*   **GPU**: NVIDIA RTX 20 series or higher recommended (RTX 30/40 series preferred for lower latency).
+*   **Drivers**: Latest NVIDIA Game Ready Driver.
+*   **Software**:
+    *   CUDA Toolkit 12.x
+    *   cuDNN 9.x
+    *   TensorRT 10.x
+    *   Visual Studio 2022 (Desktop C++ Workload)
 
-## ▶️ First Launch
-1. Copy the built `needaimbot.exe`, accompanying DLLs, and your `.engine` model into the same directory.
-2. Run `needaimbot.exe` as Administrator so the selected input driver can inject mouse events.
-3. On first launch the app writes `config.ini` (and `Default.ini`) next to the executable with sane defaults.
-4. Use the default hotkeys below to verify that capture and mouse control work.
+---
 
-### Default Hotkeys
-| Action | Default Binding |
-|--------|-----------------|
-| Toggle targeting | Right Mouse Button | 
-| Pause/Resume | F3 |
-| Reload config | F4 |
-| Toggle overlay | Home |
-| Emergency stop / Exit | F2 |
-| Auto shoot | Left Mouse Button |
-| Disable upward aim | None (unbind) |
-These bindings are editable in the `[Buttons]` section of any profile INI file.
+## Installation & Setup Guide
 
-## ⚙️ Configuration & Profiles
-- **Location** – All `.ini` files live beside the executable. `config.ini` stores the active profile name; individual profiles use `<ProfileName>.ini`.
-- **Profiles** – Swap profiles via the overlay or edit `config.ini` to set `active_profile`. Profiles can be listed, saved, and deleted programmatically through `Config` helpers.
-- **Auto-generation** – Missing files are regenerated with defaults, so you can delete an `.ini` to reset settings.
+### Step 1: Prepare the AI Model (EngineExport)
 
-### Frequently Tuned Parameters
-| Section | Key | Purpose & Tips |
-|---------|-----|----------------|
-| `[Capture]` | `detection_resolution` | Lower values (e.g., 256) increase FPS at the cost of precision. |
-| `[Target]` | `body_y_offset`, `head_y_offset` | Vertical aim offsets for body vs. head tracking; tweak per game sensitivity. |
-| `[PDController]` | `pd_kp_x`, `pd_kp_y` | Proportional controller gains that control mouse aggressiveness; start at 0.4 and adjust slowly. |
-| `[Mouse]` | `input_method` | Choose `WIN32`, `ARDUINO`, `GHUB`, `KMBOX`, `MAKCU`, or `RAZER`. The app falls back to Win32 if the requested driver fails. |
-| `[AI]` | `ai_model`, `confidence_threshold`, `max_detections` | Controls which TensorRT engine runs and how many detections are considered per frame. |
-| `[WeaponProfiles]` | Weapon-specific recoil tables | Maintain per-weapon recoil compensation with scope multipliers and timing offsets. |
+NeedAimBot requires a TensorRT engine file (`.engine`) specific to your GPU. You cannot simply download a generic engine; it must be built on your machine to ensure compatibility and maximum performance.
 
-### Parameter Workflow Tips
-1. Edit the active profile (`Default.ini` by default) while the app is paused.
-2. Press `F4` (reload config) to apply changes instantly without restarting.
-3. Use separate profiles per game or weapon set; switching profiles rewrites `config.ini` automatically.
+1.  Navigate to the **EngineExport** repository.
+2.  Install the required Python dependencies:
+    ```bash
+    pip install -r requirements.txt
+    ```
+3.  Place your trained ONNX model (e.g., `yolov8.onnx`) in the `models` folder.
+4.  Run the export script to generate the engine:
+    ```bash
+    python export.py --model your_model.onnx --precision fp16
+    ```
+    *   *Note: Use `--precision int8` if you have a calibration dataset for even faster inference.*
+5.  Once complete, copy the generated `.engine` file to the `needaimbot/models/` directory.
 
-## 🖱️ Input Driver Notes
-- **Win32** – No extra hardware; works for most setups but is easiest to detect.
-- **Arduino / MakCU** – Requires a serial device flashed with the companion firmware. Configure COM port and baud rate in `[Arduino]` or `[MAKCU]` blocks.
-- **KMBox** – Needs LAN connectivity; supply IP/port/MAC. Initialization errors fall back to Win32 with a log message.
-- **Logitech G-Hub** – Keep G-Hub running and select `GHUB` input method.
-- **Razer** – Uses the bundled `rzctl.dll`; Administrator rights required.
+### Step 2: Setup Input Hardware (MakcuFlasher)
 
-## 🧪 Verifying Performance
-- The overlay (Home key) shows FPS and capture status when `show_window` and `show_fps` are enabled.
-- CUDA Graph execution keeps latency under 3 ms when the GPU is not saturated; profile with Nsight Systems or CUDA events if spikes appear.
+For the safest experience, use an external Arduino device to simulate mouse input.
 
-## ❗ Safety & Troubleshooting
-- **Respect Game TOS** – Automated aiming may violate game or platform rules. Use on private environments at your own risk.
-- **Capture Fails** – Ensure you are on a physical monitor (no remote desktop) and Desktop Duplication is supported.
-- **Model Not Found** – The console logs when the requested `.engine` is missing and falls back to the first file under `models/`.
-- **Driver Fallbacks** – Check the console for `[Mouse]` warnings if a specialized input driver failed; the app will still run with Win32 control.
-- **Reset Config** – Delete the profile `.ini` or call “Reset to defaults” in the overlay; the app regenerates defaults on next launch.
+1.  Connect your Arduino Leonardo or Micro to your PC.
+2.  Open **MakcuFlasher**.
+3.  Select the correct **COM Port** for your device.
+4.  Choose the firmware version compatible with NeedAimBot (usually `v2.0` or `latest`).
+5.  Click **Flash**.
+6.  Once finished, note the COM port; you will need it for the configuration step.
 
-## 🤝 Contributing
-1. Fork the repository and create feature branches locally.
-2. Follow RAII memory patterns and keep GPU-critical paths free of blocking calls (see existing CUDA modules for guidance).
-3. Add or update profile defaults when introducing new config knobs so fresh installs stay functional.
-4. Submit a PR with profiling evidence for performance-sensitive changes.
+### Step 3: Dual PC Setup (MakcuRelay) - Optional
 
-## 📄 License
-needaimbot is released under the MIT License. See [LICENSE](LICENSE) for details.
+If you are using a two-PC setup (one for gaming, one for AI) to completely isolate the cheat execution:
+
+1.  On the **Gaming PC**, connect the Arduino device.
+2.  Run **MakcuRelay** on the Gaming PC.
+3.  Configure MakcuRelay to listen on a specific UDP port (default: `5005`).
+4.  On the **AI PC** (running NeedAimBot), you will configure `config.ini` to point to the Gaming PC's IP address.
+
+### Step 4: Build and Run NeedAimBot
+
+1.  Open `needaimbot.sln` in Visual Studio 2022.
+2.  Select **Release** configuration and **x64** platform.
+3.  Build the solution (Ctrl+Shift+B).
+4.  Navigate to the output directory (`x64/Release`).
+5.  Ensure your `.engine` file is in the `models` subdirectory.
+6.  Run `needaimbot.exe` as **Administrator** (required for input injection and screen capture).
+
+---
+
+## Configuration Manual
+
+The application is controlled via `config.ini`, which is generated on the first run. Below is a detailed explanation of every setting.
+
+### [Capture]
+Settings related to screen capture performance and area.
+
+*   `detection_resolution`: The resolution to resize the captured frame to before inference (e.g., `320`, `416`, `640`). Lower values improve FPS but reduce long-range accuracy.
+*   `monitor_idx`: The index of the monitor to capture (0 = primary).
+*   `capture_borders`: If `true`, captures the entire screen including borders.
+*   `capture_cursor`: If `true`, includes the mouse cursor in the capture (useful for debugging).
+
+### [Target]
+Settings for aiming logic and offsets.
+
+*   `body_y_offset`: Vertical offset (0.0 - 1.0) to aim at the body relative to the detection box height.
+*   `head_y_offset`: Vertical offset to aim at the head.
+*   `offset_step`: How much to adjust the offset when using runtime hotkeys.
+*   `enable_target_lock`: If `true`, the aimbot will stick to the current target until it disappears or the key is released.
+*   `ignore_third_person`: Prevents aiming at your own character in third-person games (requires specific class training).
+*   `auto_aim`: Enables aiming automatically without holding a key (Use with caution).
+*   `auto_shoot`: Automatically fires when the crosshair is over a target.
+*   `enable_rapidfire`: Toggles rapid-fire mode for semi-auto weapons.
+*   `rapidfire_cps`: Clicks per second for rapid fire.
+
+### [Mouse]
+Input injection and humanization settings.
+
+*   `input_method`: The driver to use for mouse movement.
+    *   `WIN32`: Standard Windows API (detected by most anti-cheats).
+    *   `ARDUINO`: Uses a connected Arduino device via serial.
+    *   `GHUB`: Uses Logitech G-Hub driver (requires G-Hub installed).
+    *   `KMBOX`: Uses KMBox hardware.
+    *   `MAKCU`: Uses MakcuRelay for dual-PC setups.
+*   `norecoil_ms`: Duration of recoil compensation in milliseconds.
+*   `min_movement_threshold`: Minimum pixel distance to move. Prevents micro-jitter when the crosshair is very close to the target.
+*   `easynorecoil`: Simple vertical recoil compensation.
+*   `easynorecoilstrength`: Strength of the simple recoil compensation.
+
+### [PDController]
+PID controller settings for smooth mouse movement.
+
+*   `pd_kp_x`, `pd_kp_y`: Proportional gain. Higher values make the aim snap faster but may overshoot.
+*   `pid_ki_x`, `pid_ki_y`: Integral gain. Helps correct small steady-state errors.
+*   `pid_kd_x`, `pid_kd_y`: Derivative gain. Dampens the movement to prevent oscillation.
+
+### [Arduino] / [MAKCU] / [KMBOX]
+Hardware-specific connection settings.
+
+*   `arduino_port`: COM port for the Arduino (e.g., `COM3`).
+*   `arduino_baudrate`: Serial speed (default: `115200` or `2000000`).
+*   `makcu_remote_ip`: IP address of the PC running MakcuRelay (for Dual-PC).
+*   `makcu_remote_port`: UDP port for MakcuRelay.
+*   `kmbox_ip`, `kmbox_port`, `kmbox_mac`: Connection details for KMBox devices.
+
+### [AI]
+Inference engine settings.
+
+*   `ai_model`: Filename of the TensorRT engine to load (e.g., `sunxds_0.5.6.engine`).
+*   `confidence_threshold`: Minimum confidence (0.0 - 1.0) to consider a detection valid.
+*   `max_detections`: Maximum number of targets to process per frame.
+*   `postprocess`: Post-processing method (e.g., `yolo12`).
+
+### [Buttons]
+Hotkey bindings. You can use standard key names (e.g., `F1`, `RightMouseButton`, `LeftAlt`, `Home`).
+
+*   `button_targeting`: Key to hold for aimbot activation.
+*   `button_exit`: Panic key to close the application immediately.
+*   `button_pause`: Toggles the aimbot on/off.
+*   `button_reload_config`: Reloads `config.ini` without restarting.
+*   `button_open_overlay`: Toggles the visual overlay.
+*   `button_auto_shoot`: Key to toggle auto-shoot.
+
+### [Overlay]
+Visual settings for the debug overlay.
+
+*   `show_window`: Enables the overlay window.
+*   `show_fps`: Displays current FPS.
+*   `overlay_opacity`: Opacity of the overlay background (0-255).
+*   `always_on_top`: Keeps the overlay above the game window.
+
+---
+
+## Troubleshooting
+
+*   **FPS Drops**: Ensure `detection_resolution` is not too high (recommended: 320-480). Check if `input_method` is causing blocking calls.
+*   **No Detections**: Verify the `.engine` file matches your TensorRT version and GPU. Check `confidence_threshold`.
+*   **Mouse Not Moving**: Run as Administrator. Verify COM port for hardware methods.
+*   **Overlay Not Visible**: Ensure the game is in "Borderless Windowed" mode, or enable `always_on_top`.
+
+---
+
+## Disclaimer
+
+This software is for educational and research purposes only. Using this software in multiplayer games may violate their Terms of Service and result in account bans. The authors are not responsible for any consequences resulting from the use of this software. Use at your own risk.
