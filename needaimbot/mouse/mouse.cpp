@@ -83,14 +83,15 @@ namespace {
             } else {
                 // Queue empty - use adaptive busy-wait for minimal jitter
                 emptyCount++;
-                if (emptyCount > 200) {
-                    // After many empty iterations, yield to avoid CPU waste
-                    std::this_thread::sleep_for(std::chrono::microseconds(50));
-                } else if (emptyCount > 20) {
-                    // Light yielding for moderate empty periods
+                if (emptyCount > 100) {
+                    // After some empty iterations, sleep to save CPU
+                    // With timeBeginPeriod(1), this will likely be ~1ms
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                } else if (emptyCount > 5) {
+                    // Yield quickly to allow other threads (game) to run
                     std::this_thread::yield();
                 }
-                // For first 20 iterations: pure spin for ultra-low latency
+                // For first 5 iterations: pure spin for ultra-low latency
             }
         }
     }
@@ -101,17 +102,17 @@ void setGlobalInputMethod(std::unique_ptr<InputMethod> method) {
     g_globalInputMethod = std::move(method);
 }
 
-// Start the consumer thread with high priority for minimal jitter
+// Start the consumer thread with optimized priority
 void startMouseConsumer() {
     if (!g_running.exchange(true, std::memory_order_release)) {
         g_consumerThread = std::thread(mouseConsumerThread);
 
-        // Set high priority for mouse consumer thread to minimize jitter
+        // Set priority to ABOVE_NORMAL instead of HIGHEST to prevent game starvation
         HANDLE threadHandle = g_consumerThread.native_handle();
-        SetThreadPriority(threadHandle, THREAD_PRIORITY_HIGHEST);
+        SetThreadPriority(threadHandle, THREAD_PRIORITY_ABOVE_NORMAL);
 
         #ifdef _WIN32
-        SetThreadDescription(threadHandle, L"MouseConsumer-HighPriority");
+        SetThreadDescription(threadHandle, L"MouseConsumer");
         #endif
     }
 }
