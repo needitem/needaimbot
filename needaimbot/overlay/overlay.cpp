@@ -433,7 +433,7 @@ bool CreateOverlayWindow()
     ::RegisterClassEx(&wc);
 
     g_hwnd = ::CreateWindowEx(
-        WS_EX_TOPMOST | WS_EX_LAYERED,
+        WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
         wc.lpszClassName, _T("Chrome"),
         WS_POPUP | WS_SIZEBOX | WS_MAXIMIZEBOX, 0, 0, overlayWidth, overlayHeight,
         NULL, NULL, wc.hInstance, NULL);

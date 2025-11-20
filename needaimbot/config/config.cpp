@@ -134,10 +134,13 @@ bool Config::loadConfig(const std::string& filename)
         kmbox_port = "16896";
         kmbox_mac = "46405c53";
         
-        
+
+        // Makcu legacy (COM) defaults - kept for backwards compatibility but unused in 2PC mode
         makcu_port = "COM0";
         makcu_baudrate = 4000000;
-        
+        // Makcu 2PC network defaults
+        makcu_remote_ip = "127.0.0.1";
+        makcu_remote_port = 5005;
         
         bScope_multiplier = 1.0f;
 
@@ -322,8 +325,12 @@ bool Config::loadConfig(const std::string& filename)
     kmbox_port = get_string_ini("KMBOX", "port", "16896");
     kmbox_mac = get_string_ini("KMBOX", "mac", "46405C53");
 
+    // Makcu legacy serial settings (not used in 2PC mode but loaded for backwards compatibility)
     makcu_port = get_string_ini("MAKCU", "makcu_port", "COM0");
     makcu_baudrate = get_long_ini("MAKCU", "makcu_baudrate", 4000000);
+    // Makcu 2PC network settings
+    makcu_remote_ip = get_string_ini("MAKCU", "makcu_remote_ip", "127.0.0.1");
+    makcu_remote_port = get_long_ini("MAKCU", "makcu_remote_port", 5005);
 
     ai_model = get_string_ini("AI", "ai_model", "sunxds_0.5.6.engine");
     confidence_threshold = static_cast<float>(get_double_ini("AI", "confidence_threshold", 0.25));
@@ -552,8 +559,12 @@ bool Config::saveConfig(const std::string& filename)
     file << "mac = " << kmbox_mac << "\n\n";
     
     file << "[MAKCU]\n";
+    // Legacy serial fields (not used in 2PC mode but kept so old configs round-trip cleanly)
     file << "makcu_port = " << makcu_port << "\n";
-    file << "makcu_baudrate = " << makcu_baudrate << "\n\n";
+    file << "makcu_baudrate = " << makcu_baudrate << "\n";
+    // 2PC network settings
+    file << "makcu_remote_ip = " << makcu_remote_ip << "\n";
+    file << "makcu_remote_port = " << makcu_remote_port << "\n\n";
     
     file << "[AI]\n";
     file << "ai_model = " << ai_model << "\n";

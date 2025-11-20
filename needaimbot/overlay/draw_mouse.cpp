@@ -255,28 +255,30 @@ static void draw_input_device_settings()
         UIHelpers::HelpMarker("Enter MAC without separators, e.g. 46405C53");
     }
     else if (std::strcmp(active_method, "MAKCU") == 0) {
-        UIHelpers::SettingsSubHeader("MAKCU Serial Settings");
+        UIHelpers::SettingsSubHeader("MAKCU Network Settings (2PC)");
+        UIHelpers::BeautifulText("Sends movement over UDP to a second PC running MakcuRelay.", UIHelpers::GetAccentColor(0.8f));
 
-        static char makcu_port_buffer[64] = "";
-        static char makcu_baud_buffer[64] = "";
+        static char makcu_ip_buffer[64] = "";
+        static char makcu_port_buffer[16] = "";
         static bool buffers_initialized = false;
 
-        if (!buffers_initialized || previous_method != method_index || ctx.config.makcu_port != makcu_port_buffer) {
-            std::snprintf(makcu_port_buffer, IM_ARRAYSIZE(makcu_port_buffer), "%s", ctx.config.makcu_port.c_str());
+        if (!buffers_initialized || previous_method != method_index || ctx.config.makcu_remote_ip != makcu_ip_buffer) {
+            std::snprintf(makcu_ip_buffer, IM_ARRAYSIZE(makcu_ip_buffer), "%s", ctx.config.makcu_remote_ip.c_str());
         }
-        if (!buffers_initialized || previous_method != method_index || std::to_string(ctx.config.makcu_baudrate) != makcu_baud_buffer) {
-            std::snprintf(makcu_baud_buffer, IM_ARRAYSIZE(makcu_baud_buffer), "%d", ctx.config.makcu_baudrate);
+        if (!buffers_initialized || previous_method != method_index || std::to_string(ctx.config.makcu_remote_port) != makcu_port_buffer) {
+            std::snprintf(makcu_port_buffer, IM_ARRAYSIZE(makcu_port_buffer), "%d", ctx.config.makcu_remote_port);
         }
         buffers_initialized = true;
 
-        if (ImGui::InputText("Serial Port", makcu_port_buffer, IM_ARRAYSIZE(makcu_port_buffer))) {
-            ctx.config.makcu_port = makcu_port_buffer;
+        if (ImGui::InputText("Second PC IP", makcu_ip_buffer, IM_ARRAYSIZE(makcu_ip_buffer))) {
+            ctx.config.makcu_remote_ip = makcu_ip_buffer;
             SAVE_PROFILE();
         }
-        if (ImGui::InputText("Baud Rate", makcu_baud_buffer, IM_ARRAYSIZE(makcu_baud_buffer), ImGuiInputTextFlags_CharsDecimal)) {
-            ctx.config.makcu_baudrate = std::max(0, std::atoi(makcu_baud_buffer));
+        if (ImGui::InputText("UDP Port", makcu_port_buffer, IM_ARRAYSIZE(makcu_port_buffer), ImGuiInputTextFlags_CharsDecimal)) {
+            ctx.config.makcu_remote_port = std::max(0, std::atoi(makcu_port_buffer));
             SAVE_PROFILE();
         }
+        UIHelpers::HelpMarker("Set this to the IP and UDP port where MakcuRelay.exe is listening on the second PC.");
     }
     else if (std::strcmp(active_method, "GHUB") == 0) {
         UIHelpers::SettingsSubHeader("G HUB Integration");

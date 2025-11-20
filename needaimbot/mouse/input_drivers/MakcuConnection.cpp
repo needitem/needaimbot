@@ -482,7 +482,7 @@ void MakcuConnection::processIncomingLine(const std::string& line)
 // Async I/O helper functions
 bool MakcuConnection::writeAsync(const void* data, DWORD size)
 {
-    if (!is_open_ || serial_handle_ == INVALID_HANDLE_VALUE) {
+    if (serial_handle_ == INVALID_HANDLE_VALUE) {
         return false;
     }
     

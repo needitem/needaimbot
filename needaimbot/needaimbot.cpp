@@ -19,7 +19,6 @@
 #include "keyboard/keyboard_listener.h"
 #include "overlay/overlay.h"
 #include "mouse/input_drivers/SerialConnection.h"
-#include "mouse/input_drivers/MakcuConnection.h"
 #include "mouse/input_drivers/ghub.h"
 #include "mouse/input_drivers/InputMethod.h"
 #include "mouse/input_drivers/kmboxNet.h"
@@ -147,12 +146,18 @@ bool initializeInputMethod() {
 
     if (ctx.config.input_method == "MAKCU") {
         return tryInitMethod("MAKCU", [&]() -> std::unique_ptr<InputMethod> {
-            auto conn = std::make_unique<MakcuConnection>(ctx.config.makcu_port, ctx.config.makcu_baudrate);
-            if (!conn->isOpen()) {
-                logInputMethodFallback("MAKCU", "failed to open port " + ctx.config.makcu_port);
+            const auto& ip = ctx.config.makcu_remote_ip;
+            int port = ctx.config.makcu_remote_port;
+            if (ip.empty() || port <= 0) {
+                logInputMethodFallback("MAKCU", "invalid remote IP/port configuration");
                 return nullptr;
             }
-            return std::make_unique<MakcuInputMethod>(conn.release());
+            auto method = std::make_unique<MakcuInputMethod>(ip, port);
+            if (!method->isValid()) {
+                logInputMethodFallback("MAKCU", "failed to initialize UDP client to " + ip + ":" + std::to_string(port));
+                return nullptr;
+            }
+            return method;
         });
     }
 
@@ -471,16 +476,12 @@ int main()
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
     
-    // Administrator privileges not required - application runs fine without elevation
-    // This improves user experience and reduces security prompts
+    // Administrator privileges not required
     
-    // Try to set high priority (doesn't require admin)
-    SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
-
     // Set application title
     SetConsoleTitle(L"Gaming Performance Analyzer - Monitor & Optimize Gaming Performance");
     
-    // Single instance check to prevent conflicts
+    // Single instance check
     HANDLE hMutex = CreateMutex(NULL, TRUE, L"Global\\GamePerformanceAnalyzer_SingleInstance");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         MessageBox(NULL, L"Gaming Performance Analyzer is already running.\n\nPlease close the existing instance before starting a new one.", 
@@ -489,17 +490,14 @@ int main()
         return 0;
     }
     
-    // Initialize error handling for better user experience
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
     
-    // Log system information for performance analysis
     OSVERSIONINFOEX osvi;
     ZeroMemory(&osvi, sizeof(OSVERSIONINFOEX));
     osvi.dwOSVersionInfoSize = sizeof(OSVERSIONINFOEX);
     if (GetVersionEx((OSVERSIONINFO*)&osvi)) {
     }
     
-    // Desktop Duplication Capture System
     std::cout << "\n=== Desktop Duplication Capture ===" << std::endl;
     if (DDACapture::IsDDACaptureAvailable()) {
         std::cout << "✓ Desktop Duplication Available" << std::endl;
@@ -534,14 +532,11 @@ int main()
 
     auto& ctx = AppContext::getInstance();
 
-    // Set up error handling
     ErrorManager::getInstance().setCriticalHandler([](const ErrorManager::ErrorEntry& error) {
         std::cerr << "[CRITICAL ERROR] " << error.component << ": " << error.message << std::endl;
-        // Could trigger emergency shutdown or recovery here
     });
     
     try {
-        // Set up signal handlers for clean shutdown
         std::signal(SIGINT, signalHandler);
         std::signal(SIGTERM, signalHandler);
         SetConsoleCtrlHandler(consoleHandler, TRUE);
@@ -553,12 +548,8 @@ int main()
             return -1;
         }
         
-        // Initialize preview flag based on config
         ctx.preview_enabled = ctx.config.show_window;
         
-
-
-        // Initialize CUDA context directly (Phase 1 integration)
         int cuda_devices = 0;
         cudaError_t err = cudaGetDeviceCount(&cuda_devices);
 
@@ -569,7 +560,6 @@ int main()
             return -1;
         }
         
-        // Initialize CUDA device
         err = cudaSetDevice(0);
         if (err != cudaSuccess) {
             std::cerr << "[MAIN] Failed to set CUDA device: " << cudaGetErrorString(err) << std::endl;
@@ -577,7 +567,6 @@ int main()
             return -1;
         }
         
-
         if (!CreateDirectory(L"screenshots", NULL) && GetLastError() != ERROR_ALREADY_EXISTS)
         {
             std::cerr << "[MAIN] Error with screenshot folder" << std::endl;
@@ -585,16 +574,11 @@ int main()
             return -1;
         }
 
-        // Initialize InputMethod for recoil control only
         (void)initializeInputMethod();
 
-        // Start lock-free mouse consumer thread
         startMouseConsumer();
         
-        // Initialize and start Recoil Control Thread
         RecoilControlThread recoilThread;
-        // Note: RecoilThread should share the same input method or use a different approach
-        // For now, we'll let it use Win32 fallback since Arduino doesn't support multiple connections
         recoilThread.setInputMethod(std::make_unique<Win32InputMethod>());
         recoilThread.setEnabled(true);
         recoilThread.start();
@@ -605,18 +589,17 @@ int main()
             return -1;
         }
 
-        // Initialize TensorRT Integrated Pipeline (Phase 1)
         auto& pipelineManager = needaimbot::PipelineManager::getInstance();
         
         needaimbot::UnifiedPipelineConfig pipelineConfig;
-        pipelineConfig.modelPath = "models/" + ctx.config.ai_model;  // Set model path for TensorRT
+        pipelineConfig.modelPath = "models/" + ctx.config.ai_model;
         pipelineConfig.enableCapture = true;
         pipelineConfig.enableDetection = true;
-        pipelineConfig.useGraphOptimization = true;  // Enable CUDA Graph
-        pipelineConfig.detectionWidth = ctx.config.detection_resolution;   // Use config value
-        pipelineConfig.detectionHeight = ctx.config.detection_resolution;  // Use config value
+        pipelineConfig.useGraphOptimization = true;
+        pipelineConfig.detectionWidth = ctx.config.detection_resolution;
+        pipelineConfig.detectionHeight = ctx.config.detection_resolution;
         pipelineConfig.allowGraphUpdate = true;
-        pipelineConfig.enableProfiling = false;  // Set to true for performance metrics
+        pipelineConfig.enableProfiling = false;
         
         if (!pipelineManager.initializePipeline(pipelineConfig)) {
             std::cerr << "[MAIN] Failed to initialize TensorRT Integrated Pipeline" << std::endl;
@@ -624,11 +607,8 @@ int main()
             return -1;
         } else {
             
-            // Pipeline is now fully integrated - no need to set detector reference
             auto* pipeline = pipelineManager.getPipeline();
             if (pipeline) {
-                
-                // Initialize screen capture for the pipeline
                 if (!initializeScreenCapture(pipeline)) {
                     std::cerr << "[MAIN] Failed to initialize screen capture" << std::endl;
                     std::cin.get();
@@ -637,31 +617,20 @@ int main()
             }
         }
 
-        // Get number of CPU cores and set affinity dynamically
         SYSTEM_INFO sysInfo;
         GetSystemInfo(&sysInfo);
         DWORD numCores = sysInfo.dwNumberOfProcessors;
         
-        // Use last core for main thread if available, otherwise use core 0
-        DWORD_PTR mask = numCores > 1 ? (1ULL << (numCores - 1)) : 1;
-        SetThreadAffinityMask(GetCurrentThread(), mask);
-        
-        // TensorRT pipeline starts automatically when initialized
-
-        // OPTIMIZATION: Create thread managers with optimized core affinity and priority for minimal jitter
-        // GPU-intensive pipeline gets TIME_CRITICAL priority and dedicated first core (best GPU driver performance)
         ThreadManager pipelineThreadMgr("UnifiedPipelineThread",
             [&]() { pipelineManager.runMainLoop(); },
-            0,
-            ThreadManager::Priority::TIME_CRITICAL);
+            -1,
+            ThreadManager::Priority::NORMAL);
 
-        // OPTIMIZATION: Combined UI thread (keyboard + overlay) gets ABOVE_NORMAL priority to reduce thread overhead
         ThreadManager uiThreadMgr("CombinedUIThread",
             combinedUIThread,
-            numCores > 2 ? 1 : -1,
-            ThreadManager::Priority::ABOVE_NORMAL);
+            -1,
+            ThreadManager::Priority::NORMAL);
 
-        // Start all threads
         pipelineThreadMgr.start();
         uiThreadMgr.start();
 
@@ -724,4 +693,3 @@ int main()
         return -1;
     }
 }
-
