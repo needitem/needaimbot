@@ -52,19 +52,24 @@ NeedAimBot requires a TensorRT engine file (`.engine`) specific to your GPU. You
 For the safest experience, use an external Arduino device to simulate mouse input.
 
 1.  Connect your Arduino Leonardo or Micro to your PC.
-2.  Open **MakcuFlasher**.
-3.  Select the correct **COM Port** for your device.
-4.  Choose the firmware version compatible with NeedAimBot (usually `v2.0` or `latest`).
-5.  Click **Flash**.
-6.  Once finished, note the COM port; you will need it for the configuration step.
+2.  Navigate to the **MakcuFlasher** directory.
+3.  Run the flashing script:
+    ```bash
+    python makcu_flash.py
+    ```
+4.  Follow the prompts to select your device's **COM Port** and flash the firmware.
+5.  Once finished, note the COM port; you will need it for the configuration step.
 
 ### Step 3: Dual PC Setup (MakcuRelay) - Optional
 
 If you are using a two-PC setup (one for gaming, one for AI) to completely isolate the cheat execution:
 
 1.  On the **Gaming PC**, connect the Arduino device.
-2.  Run **MakcuRelay** on the Gaming PC.
-3.  Configure MakcuRelay to listen on a specific UDP port (default: `5005`).
+2.  Navigate to the **MakcuRelay** directory.
+3.  Run the relay script:
+    ```bash
+    python MakcuRelay.py
+    ```
 4.  On the **AI PC** (running NeedAimBot), you will configure `config.ini` to point to the Gaming PC's IP address.
 
 ### Step 4: Build and Run NeedAimBot
