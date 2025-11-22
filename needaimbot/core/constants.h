@@ -86,9 +86,9 @@ namespace Constants {
     constexpr int VELOCITY_HISTORY_SIZE = 5;
     constexpr int LATENCY_HISTORY_SIZE = 10;
     
-    // Thread Priority Constants
-    constexpr int MOUSE_THREAD_PRIORITY = THREAD_PRIORITY_ABOVE_NORMAL;
-    constexpr int DETECTOR_THREAD_PRIORITY = THREAD_PRIORITY_TIME_CRITICAL;
+    // Thread Priority Constants - Use NORMAL to avoid game thread starvation (Apex compatibility)
+    constexpr int MOUSE_THREAD_PRIORITY = THREAD_PRIORITY_NORMAL;
+    constexpr int DETECTOR_THREAD_PRIORITY = THREAD_PRIORITY_NORMAL;
     
     // Timing Intervals
     constexpr int ACTIVE_WAIT_TIMEOUT_MS = 10;
