@@ -1036,7 +1036,8 @@ DDACapture::FrameAcquireResult DDACapture::AcquireFrameCpuFallback() {
 }
 
 void DDACapture::CaptureThreadProc() {
-    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
+    // Set thread to high priority for low-latency capture
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
 
     while (m_isCapturing.load()) {
         // Check if we should probe for GPU direct capability
@@ -1109,11 +1110,13 @@ void DDACapture::CaptureThreadProc() {
                     break;
 
                 case BackoffLevel::kMedium:
-                    Sleep(2);
+                    // Definite context switch - good for 60-144Hz displays
+                    Sleep(1);  // Actual sleep time ~1-2ms on Windows
                     break;
 
                 case BackoffLevel::kLong:
-                    Sleep(5);
+                    // Longer backoff for sustained no-frame periods (idle/minimized)
+                    Sleep(2);  // Actual sleep time ~2-3ms
                     break;
             }
         }

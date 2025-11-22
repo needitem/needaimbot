@@ -750,7 +750,8 @@ void OverlayThread()
             g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, clear_color_with_alpha);
             ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
-            HRESULT result = g_pSwapChain->Present(1, 0);
+            // Use immediate present for better performance (no VSync)
+            HRESULT result = g_pSwapChain->Present(0, DXGI_PRESENT_DO_NOT_WAIT);
             auto present_now = std::chrono::high_resolution_clock::now();
             auto present_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(present_now - lastOverlayFrameTime);
             
