@@ -1492,6 +1492,9 @@ void UnifiedGraphPipeline::runMainLoop() {
                 refreshConfigCache(ctx);
                 framesSinceConfigUpdate = 0;
             }
+
+            // Yield to game rendering thread
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
 
         if (wasAiming && !ctx.aiming.load()) {
