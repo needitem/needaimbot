@@ -165,6 +165,9 @@ public:
     // Typical range 0.55–0.65; default 0.60.
     float capture_timeout_scale = 0.60f;
 
+    // Pipeline loop delay (ms) - prevents game FPS drops
+    int pipeline_loop_delay_ms = 1;
+
     
     std::vector<std::string> button_targeting;
     std::vector<std::string> button_exit;

@@ -114,6 +114,33 @@ static void draw_capture_behavior_settings()
                 SAVE_PROFILE();
             }
         }
+
+        // Pipeline loop delay
+        int delay = ctx.config.pipeline_loop_delay_ms;
+        if (ImGui::SliderInt("Loop Delay (ms)", &delay, 0, 50)) {
+            ctx.config.pipeline_loop_delay_ms = delay;
+        }
+        UIHelpers::WrappedTooltip("Delay per pipeline iteration. Prevents game FPS drops.\n0 = No delay (WARNING: may cause FPS drops)\n1-5 = Recommended for most games\n10+ = High delay, use if still experiencing issues");
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+            if (delay < 0) delay = 0;
+            if (delay > 50) delay = 50;
+            ctx.config.pipeline_loop_delay_ms = delay;
+
+            if (delay == 0) {
+                ImGui::OpenPopup("Warning##LoopDelayWarning");
+            }
+            SAVE_PROFILE();
+        }
+
+        if (ImGui::BeginPopup("Warning##LoopDelayWarning")) {
+            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "Warning!");
+            ImGui::Text("Setting loop delay to 0 may cause severe game FPS drops.");
+            ImGui::Text("Recommended: 1-5ms");
+            if (ImGui::Button("OK")) {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
     } else {
         ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.6f, 1.0f), "OBS Hook Capture Selected");
         UIHelpers::InfoTooltip("Uses an OBS-style game capture hook. Requires specifying the game window title.\nGPU-direct is not available in this path.");
