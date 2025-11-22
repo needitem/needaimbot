@@ -259,6 +259,7 @@ bool Config::loadConfig(const std::string& filename)
     capture_cursor = get_bool_ini("Capture", "capture_cursor", true);
     capture_method = get_string_ini("Capture", "capture_method", "DDA");
     capture_timeout_scale = static_cast<float>(get_double_ini("Capture", "capture_timeout_scale", 0.60));
+    pipeline_loop_delay_ms = get_int_ini("Capture", "pipeline_loop_delay_ms", 1);
     obs_window_title = get_string_ini("Capture", "obs_window_title", "");
     obs_hook_source_dir = get_string_ini("Capture", "obs_hook_source_dir", "");
 
@@ -486,6 +487,7 @@ bool Config::saveConfig(const std::string& filename)
     file << "capture_method = " << capture_method << "\n";
     file << std::fixed << std::setprecision(2);
     file << "capture_timeout_scale = " << capture_timeout_scale << "\n";
+    file << "pipeline_loop_delay_ms = " << pipeline_loop_delay_ms << "\n";
     file << std::noboolalpha;
     file << "obs_window_title = " << obs_window_title << "\n";
     file << "obs_hook_source_dir = " << obs_hook_source_dir << "\n\n";
