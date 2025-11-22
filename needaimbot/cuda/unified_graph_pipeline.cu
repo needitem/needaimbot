@@ -1426,8 +1426,7 @@ bool UnifiedGraphPipeline::enqueueMovementResetCallback(cudaStream_t stream) {
 void UnifiedGraphPipeline::runMainLoop() {
     auto& ctx = AppContext::getInstance();
 
-    // Raise priority to reduce wake-up jitter after blocking waits
-    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
 
     bool wasAiming = false;
 
