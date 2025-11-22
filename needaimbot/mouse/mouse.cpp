@@ -107,9 +107,8 @@ void startMouseConsumer() {
     if (!g_running.exchange(true, std::memory_order_release)) {
         g_consumerThread = std::thread(mouseConsumerThread);
 
-        // Set priority to ABOVE_NORMAL instead of HIGHEST to prevent game starvation
         HANDLE threadHandle = g_consumerThread.native_handle();
-        SetThreadPriority(threadHandle, THREAD_PRIORITY_ABOVE_NORMAL);
+        SetThreadPriority(threadHandle, THREAD_PRIORITY_NORMAL);
 
         #ifdef _WIN32
         SetThreadDescription(threadHandle, L"MouseConsumer");
