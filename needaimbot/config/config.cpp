@@ -259,7 +259,7 @@ bool Config::loadConfig(const std::string& filename)
     capture_cursor = get_bool_ini("Capture", "capture_cursor", true);
     capture_method = get_string_ini("Capture", "capture_method", "DDA");
     capture_timeout_scale = static_cast<float>(get_double_ini("Capture", "capture_timeout_scale", 0.60));
-    pipeline_loop_delay_ms = get_int_ini("Capture", "pipeline_loop_delay_ms", 1);
+    pipeline_loop_delay_ms = get_long_ini("Capture", "pipeline_loop_delay_ms", 1);
     obs_window_title = get_string_ini("Capture", "obs_window_title", "");
     obs_hook_source_dir = get_string_ini("Capture", "obs_hook_source_dir", "");
 
