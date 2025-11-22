@@ -19,8 +19,8 @@ UINT DDACapture::AcquireTimeoutMs() const {
         scale = cfg;
     }
     double base = m_estimatedIntervalMs * scale;
-    if (base < 8.0) base = 8.0;
-    if (base > 16.0) base = 16.0;
+    if (base < 1.0) base = 1.0;
+    if (base > 5.0) base = 5.0; // Lower max for faster polling
     return static_cast<UINT>(base + 0.5);
 }
 
