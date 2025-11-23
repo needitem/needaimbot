@@ -66,8 +66,6 @@ bool Config::loadConfig(const std::string& filename)
         capture_cursor = false;  // Disabled for better performance
         capture_method = "DDA";  // Default capture backend
         capture_timeout_scale = 0.60f; // Default capture timeout scale
-        obs_window_title = "";   // No default window title
-        obs_hook_source_dir = ""; // No default source directory
 
         body_y_offset = 0.15f;
         head_y_offset = 0.05f;
@@ -260,8 +258,6 @@ bool Config::loadConfig(const std::string& filename)
     capture_method = get_string_ini("Capture", "capture_method", "DDA");
     capture_timeout_scale = static_cast<float>(get_double_ini("Capture", "capture_timeout_scale", 0.60));
     pipeline_loop_delay_ms = get_long_ini("Capture", "pipeline_loop_delay_ms", 1);
-    obs_window_title = get_string_ini("Capture", "obs_window_title", "");
-    obs_hook_source_dir = get_string_ini("Capture", "obs_hook_source_dir", "");
 
     // Batch load floats for better cache locality
     body_y_offset = static_cast<float>(get_double_ini("Target", "body_y_offset", 0.15));
@@ -489,8 +485,7 @@ bool Config::saveConfig(const std::string& filename)
     file << "capture_timeout_scale = " << capture_timeout_scale << "\n";
     file << "pipeline_loop_delay_ms = " << pipeline_loop_delay_ms << "\n";
     file << std::noboolalpha;
-    file << "obs_window_title = " << obs_window_title << "\n";
-    file << "obs_hook_source_dir = " << obs_hook_source_dir << "\n\n";
+    file << "\n";
 
     file << "[Target]\n";
     file << std::fixed << std::setprecision(6);
