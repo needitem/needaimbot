@@ -483,11 +483,10 @@ int main()
         std::cout << "[MAIN] Initializing input method..." << std::endl;
         (void)initializeInputMethod();
 
-        // DISABLED: Makcu button state UDP is too slow, using GetAsyncKeyState directly
         // Start UDP listener for Makcu button states (port 5006)
-        // std::cout << "[MAIN] Starting UDP listener for button states..." << std::endl;
-        // auto& inputState = InputStateManager::getInstance();
-        // inputState.startUDPListener(5006);
+        std::cout << "[MAIN] Starting UDP listener for button states..." << std::endl;
+        auto& inputState = InputStateManager::getInstance();
+        inputState.startUDPListener(5006);
 
         std::cout << "[MAIN] Starting mouse consumer..." << std::endl;
         startMouseConsumer();
@@ -596,7 +595,7 @@ int main()
         // Clean up CUDA resources even on error
         std::cerr << "[MAIN] Cleaning up CUDA resources after error..." << std::endl;
         CudaResourceManager::Shutdown();
-        
+
         std::cout << "Press Enter to exit...";
         std::cin.get();
         return -1;
