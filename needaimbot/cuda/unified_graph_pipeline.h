@@ -488,6 +488,7 @@ private:
     
     std::string m_inputName;
     nvinfer1::Dims m_inputDims;
+    nvinfer1::DataType m_inputDataType = nvinfer1::DataType::kFLOAT;
     int m_modelInputResolution = 320;
     float m_imgScale;
     int m_numClasses;

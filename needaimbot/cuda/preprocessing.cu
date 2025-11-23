@@ -1,8 +1,64 @@
 #include <cuda_runtime.h>
+#include <cuda_fp16.h>
 #include <device_launch_parameters.h>
 #include "simple_cuda_mat.h"
 
-// 통합 전처리 커널: BGRA → RGB + Resize + Normalize + HWC→CHW
+// 통합 전처리 커널 (FP16 출력): BGRA → RGB + Resize + Normalize + HWC→CHW
+__global__ void integratedPreprocessKernelFP16(
+    const uchar4* __restrict__ src,     // BGRA 입력
+    __half* __restrict__ dst,           // RGB CHW 출력 (정규화된 FP16)
+    int src_width, int src_height,      // 입력 크기
+    int dst_width, int dst_height,      // 출력 크기
+    int src_step,                       // 입력 스트라이드
+    float scale_factor                  // 정규화 인수 (1/255.0f)
+) {
+    int dst_x = blockIdx.x * blockDim.x + threadIdx.x;
+    int dst_y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (dst_x >= dst_width || dst_y >= dst_height) return;
+
+    // Bilinear interpolation을 위한 소스 좌표 계산
+    float src_x_f = (dst_x + 0.5f) * src_width / dst_width - 0.5f;
+    float src_y_f = (dst_y + 0.5f) * src_height / dst_height - 0.5f;
+
+    // 정수 부분과 소수 부분 분리
+    int src_x = __float2int_rd(src_x_f);
+    int src_y = __float2int_rd(src_y_f);
+    float alpha = src_x_f - src_x;
+    float beta = src_y_f - src_y;
+
+    // 경계 처리
+    src_x = max(0, min(src_x, src_width - 2));
+    src_y = max(0, min(src_y, src_height - 2));
+
+    // 4개 픽셀 샘플링 (bilinear interpolation)
+    const uchar4* src_row0 = (const uchar4*)((const char*)src + src_y * src_step);
+    const uchar4* src_row1 = (const uchar4*)((const char*)src + (src_y + 1) * src_step);
+
+    uchar4 p00 = src_row0[src_x];
+    uchar4 p01 = src_row0[src_x + 1];
+    uchar4 p10 = src_row1[src_x];
+    uchar4 p11 = src_row1[src_x + 1];
+
+    // Bilinear interpolation 계산
+    float b_interp = (1 - alpha) * (1 - beta) * p00.x + alpha * (1 - beta) * p01.x +
+                     (1 - alpha) * beta * p10.x + alpha * beta * p11.x;
+    float g_interp = (1 - alpha) * (1 - beta) * p00.y + alpha * (1 - beta) * p01.y +
+                     (1 - alpha) * beta * p10.y + alpha * beta * p11.y;
+    float r_interp = (1 - alpha) * (1 - beta) * p00.z + alpha * (1 - beta) * p01.z +
+                     (1 - alpha) * beta * p10.z + alpha * beta * p11.z;
+
+    // CHW 레이아웃으로 저장: [R채널][G채널][B채널]
+    int hw_size = dst_width * dst_height;
+    int dst_idx = dst_y * dst_width + dst_x;
+
+    // BGRA → RGB 변환 + 정규화 (0-255 → 0.0-1.0) + FP16 변환
+    dst[dst_idx] = __float2half(r_interp * scale_factor);               // R 채널
+    dst[dst_idx + hw_size] = __float2half(g_interp * scale_factor);     // G 채널
+    dst[dst_idx + 2 * hw_size] = __float2half(b_interp * scale_factor); // B 채널
+}
+
+// 통합 전처리 커널 (FP32 출력): BGRA → RGB + Resize + Normalize + HWC→CHW
 __global__ void integratedPreprocessKernel(
     const uchar4* __restrict__ src,     // BGRA 입력
     float* __restrict__ dst,            // RGB CHW 출력 (정규화된 float)
@@ -95,32 +151,44 @@ extern "C" cudaError_t unifiedPreprocessing(
 // 헤더에서 사용할 함수 선언을 위한 별도 버전
 extern "C" cudaError_t cuda_unified_preprocessing(
     const void* src_bgra_data,          // BGRA 입력 데이터 포인터
-    float* dst_rgb_chw,                 // RGB CHW 출력 (float)
+    void* dst_rgb_chw,                  // RGB CHW 출력 (void* - FP32 or FP16)
     int src_width, int src_height,      // 입력 크기
     int src_step,                       // 입력 스트라이드
     int target_width, int target_height, // 목표 크기
+    bool use_fp16,                      // true = FP16, false = FP32
     cudaStream_t stream = 0
 ) {
     if (!src_bgra_data || !dst_rgb_chw) {
         return cudaErrorInvalidValue;
     }
-    
+
     // 블록과 그리드 크기 설정
     dim3 block(16, 16);
-    dim3 grid((target_width + block.x - 1) / block.x, 
+    dim3 grid((target_width + block.x - 1) / block.x,
               (target_height + block.y - 1) / block.y);
-    
+
     const float scale_factor = 1.0f / 255.0f;
-    
-    integratedPreprocessKernel<<<grid, block, 0, stream>>>(
-        (const uchar4*)src_bgra_data,
-        dst_rgb_chw,
-        src_width, src_height,
-        target_width, target_height,
-        src_step,
-        scale_factor
-    );
-    
+
+    if (use_fp16) {
+        integratedPreprocessKernelFP16<<<grid, block, 0, stream>>>(
+            (const uchar4*)src_bgra_data,
+            (__half*)dst_rgb_chw,
+            src_width, src_height,
+            target_width, target_height,
+            src_step,
+            scale_factor
+        );
+    } else {
+        integratedPreprocessKernel<<<grid, block, 0, stream>>>(
+            (const uchar4*)src_bgra_data,
+            (float*)dst_rgb_chw,
+            src_width, src_height,
+            target_width, target_height,
+            src_step,
+            scale_factor
+        );
+    }
+
     return cudaGetLastError();
 }
 
