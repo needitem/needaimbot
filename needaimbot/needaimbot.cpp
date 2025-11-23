@@ -481,18 +481,23 @@ int main()
             return -1;
         }
 
+        std::cout << "[MAIN] Initializing input method..." << std::endl;
         (void)initializeInputMethod();
 
         // Start UDP listener for Makcu button states (port 5006)
+        std::cout << "[MAIN] Starting UDP listener for button states..." << std::endl;
         auto& inputState = InputStateManager::getInstance();
         inputState.startUDPListener(5006);
 
+        std::cout << "[MAIN] Starting mouse consumer..." << std::endl;
         startMouseConsumer();
-        
+
+        std::cout << "[MAIN] Starting recoil control thread..." << std::endl;
         RecoilControlThread recoilThread;
         recoilThread.setInputMethod(std::make_unique<Win32InputMethod>());
         recoilThread.setEnabled(true);
         recoilThread.start();
+        std::cout << "[MAIN] Recoil control thread started" << std::endl;
 
         std::vector<std::string> availableModels = getAvailableModels();
         if (!loadAndValidateModel(ctx.config.ai_model, availableModels)) {
