@@ -104,16 +104,10 @@ public:
     float aim_shoot_offset_x;
     float aim_shoot_offset_y;
 
-    bool easynorecoil;
-    float easynorecoilstrength;
-    std::string input_method; 
+    std::string input_method;
 
-    
+
     int active_scope_magnification;
-    
-    // Crouch recoil reduction
-    bool crouch_recoil_enabled;
-    float crouch_recoil_reduction; // -100% to +100%, default -50%
 
     
     std::vector<WeaponRecoilProfile> weapon_profiles;

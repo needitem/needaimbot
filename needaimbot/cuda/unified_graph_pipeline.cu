@@ -76,10 +76,12 @@ void UnifiedGraphPipeline::refreshConfigCache(const AppContext& ctx) {
 
         // Resolve head class ID
         m_cachedConfig.targeting.head_class_id = -1;
-        for (const auto& cs : ctx.config.class_settings) {
-            if (cs.name == ctx.config.head_class_name) {
-                m_cachedConfig.targeting.head_class_id = cs.id;
-                break;
+        if (!ctx.config.class_settings.empty()) {
+            for (const auto& cs : ctx.config.class_settings) {
+                if (cs.name == ctx.config.head_class_name) {
+                    m_cachedConfig.targeting.head_class_id = cs.id;
+                    break;
+                }
             }
         }
 
@@ -89,9 +91,11 @@ void UnifiedGraphPipeline::refreshConfigCache(const AppContext& ctx) {
 
         // Class filter - fixed size array (cache-friendly)
         m_cachedConfig.detection.class_filter.fill(0);
-        for (const auto& cs : ctx.config.class_settings) {
-            if (cs.id >= 0 && cs.id < 80) {
-                m_cachedConfig.detection.class_filter[cs.id] = cs.allow ? 1 : 0;
+        if (!ctx.config.class_settings.empty()) {
+            for (const auto& cs : ctx.config.class_settings) {
+                if (cs.id >= 0 && cs.id < 80) {
+                    m_cachedConfig.detection.class_filter[cs.id] = cs.allow ? 1 : 0;
+                }
             }
         }
 

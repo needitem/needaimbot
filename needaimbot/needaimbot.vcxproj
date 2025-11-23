@@ -37,7 +37,6 @@
     <ClCompile Include="mouse\\input_drivers\\rzctl.cpp" />
     <ClCompile Include="mouse\\input_drivers\\SerialConnection.cpp" />
     <ClCompile Include="mouse\\input_drivers\\MakcuConnection.cpp" />
-    <ClCompile Include="overlay\draw_rcs.cpp" />
     <ClCompile Include="overlay\\draw_ai.cpp" />
     <ClCompile Include="overlay\draw_buttons.cpp" />
     <ClCompile Include="overlay\draw_capture.cpp" />

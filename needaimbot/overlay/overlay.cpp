@@ -654,12 +654,6 @@ void OverlayThread()
                         ImGui::EndTabItem();
                     }
 
-                    if (ImGui::BeginTabItem("Recoil"))
-                    {
-                        draw_rcs_settings();
-                        ImGui::EndTabItem();
-                    }
-
                     if (ImGui::BeginTabItem("Detection"))
                     {
                         ImGui::SeparatorText("AI Model");
