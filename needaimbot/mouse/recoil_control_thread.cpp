@@ -1,6 +1,7 @@
 #include "recoil_control_thread.h"
 #include "../core/windows_headers.h"
 #include "../AppContext.h"
+#include "../utils/input_state.h"
 #include <iostream>
 
 std::atomic<RecoilControlThread*> RecoilControlThread::instance_{nullptr};
@@ -55,9 +56,10 @@ void RecoilControlThread::threadLoop() {
         }
 
         // Check if both mouse buttons are pressed (shooting while ADS)
-        // Use GetAsyncKeyState directly - no hook needed
-        bool left_mouse = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
-        bool right_mouse = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+        // Use InputStateManager - supports both Makcu and regular mouse
+        auto& inputState = InputStateManager::getInstance();
+        bool left_mouse = inputState.isLeftButtonPressed();
+        bool right_mouse = inputState.isRightButtonPressed();
         bool recoil_active = left_mouse && right_mouse;
 
         if (recoil_active) {
