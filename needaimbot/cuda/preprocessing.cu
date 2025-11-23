@@ -53,7 +53,7 @@ __global__ void integratedPreprocessKernel(
     
     // BGRA → RGB 변환 + 정규화 (0-255 → 0.0-1.0)
     dst[dst_idx] = r_interp * scale_factor;               // R 채널
-    dst[dst_idx + hw_size] = g_interp * scale_factor;     // G 채널  
+    dst[dst_idx + hw_size] = g_interp * scale_factor;     // G 채널
     dst[dst_idx + 2 * hw_size] = b_interp * scale_factor; // B 채널
 }
 

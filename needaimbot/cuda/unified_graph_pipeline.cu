@@ -1566,14 +1566,23 @@ bool UnifiedGraphPipeline::initializeTensorRT(const std::string& modelFile) {
     
     for (const auto& outputName : m_outputNames) {
         nvinfer1::Dims outputDims = m_engine->getTensorShape(outputName.c_str());
+        nvinfer1::DataType outputDataType = m_engine->getTensorDataType(outputName.c_str());
+
         size_t outputSize = 1;
         for (int i = 0; i < outputDims.nbDims; ++i) {
             outputSize *= outputDims.d[i];
         }
-        outputSize *= sizeof(float);
+
+        // Use correct element size based on actual data type
+        size_t elementSize = sizeof(float); // default FP32
+        if (outputDataType == nvinfer1::DataType::kHALF) {
+            elementSize = sizeof(__half); // FP16 = 2 bytes
+        } else if (outputDataType == nvinfer1::DataType::kINT8) {
+            elementSize = 1;
+        }
+
+        outputSize *= elementSize;
         m_outputSizes[outputName] = outputSize;
-        
-        
     }
     
     // Defer getBindings() until after arena allocation so we can alias
@@ -1588,7 +1597,7 @@ bool UnifiedGraphPipeline::initializeTensorRT(const std::string& modelFile) {
     } else {
         m_numClasses = 80;
     }
-    
+
     return true;
 }
 
@@ -1616,17 +1625,16 @@ void UnifiedGraphPipeline::getOutputNames() {
         const char* name = m_engine->getIOTensorName(i);
         if (m_engine->getTensorIOMode(name) == nvinfer1::TensorIOMode::kOUTPUT) {
             m_outputNames.emplace_back(name);
-            
+
             auto dims = m_engine->getTensorShape(name);
             std::vector<int64_t> shape;
             for (int j = 0; j < dims.nbDims; ++j) {
                 shape.push_back(dims.d[j]);
             }
             m_outputShapes[name] = shape;
-            
+
             auto dataType = m_engine->getTensorDataType(name);
             m_outputTypes[name] = dataType;
-            
         }
     }
 }
@@ -1836,8 +1844,8 @@ bool UnifiedGraphPipeline::runInferenceAsync(cudaStream_t stream) {
         return false;
     }
 
-    
     bool success = m_context->enqueueV3(stream);
+
     if (!success) {
         cudaError_t cudaErr = cudaGetLastError();
         std::cerr << "[Pipeline] TensorRT inference failed";
@@ -1845,13 +1853,13 @@ bool UnifiedGraphPipeline::runInferenceAsync(cudaStream_t stream) {
             std::cerr << " - CUDA error: " << cudaGetErrorString(cudaErr);
         }
         std::cerr << std::endl;
-        
-        
+
+
         return false;
     }
-     
+
     // Removed dead code block
-    
+
     return true;
 }
 
