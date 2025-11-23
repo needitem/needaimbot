@@ -28,6 +28,7 @@
 #include "capture/dda_capture.h"
 #include "capture/capture_interface.h"
 #include "capture/dda_capture_adapter.h"
+#include "utils/input_state.h"
 
 
 #ifndef __INTELLISENSE__
@@ -481,6 +482,10 @@ int main()
         }
 
         (void)initializeInputMethod();
+
+        // Start UDP listener for Makcu button states (port 5006)
+        auto& inputState = InputStateManager::getInstance();
+        inputState.startUDPListener(5006);
 
         startMouseConsumer();
         
