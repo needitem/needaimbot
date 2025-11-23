@@ -499,12 +499,18 @@ int main()
         recoilThread.start();
         std::cout << "[MAIN] Recoil control thread started" << std::endl;
 
+        std::cout << "[MAIN] Getting available models..." << std::endl;
         std::vector<std::string> availableModels = getAvailableModels();
+        std::cout << "[MAIN] Found " << availableModels.size() << " models" << std::endl;
+
+        std::cout << "[MAIN] Loading and validating model..." << std::endl;
         if (!loadAndValidateModel(ctx.config.ai_model, availableModels)) {
             std::cin.get();
             return -1;
         }
+        std::cout << "[MAIN] Model validation complete" << std::endl;
 
+        std::cout << "[MAIN] Initializing pipeline manager..." << std::endl;
         auto& pipelineManager = needaimbot::PipelineManager::getInstance();
         
         needaimbot::UnifiedPipelineConfig pipelineConfig;
