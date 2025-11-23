@@ -89,58 +89,47 @@ static void draw_capture_behavior_settings()
 
     UIHelpers::BeginCard("Capture Behavior");
 
-    // Backend selection
-    const char* backends[] = { "DDA", "OBS_HOOK" };
-    int current = (_stricmp(ctx.config.capture_method.c_str(), "OBS_HOOK") == 0) ? 1 : 0;
-    int prev_backend = current;
-    UIHelpers::CompactCombo("Capture Backend", &current, backends, IM_ARRAYSIZE(backends));
-    if (current != prev_backend) {
-        ctx.config.capture_method = (current == 1) ? "OBS_HOOK" : "DDA";
-        SAVE_PROFILE();
-    }
-    if (current == 0) {
-        ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "Desktop Duplication Capture Active");
-        UIHelpers::InfoTooltip("The Windows Desktop Duplication API (DDA) powers high-quality capture with low latency.\nThis path delivers consistent results across modern GPUs without requiring vendor-specific drivers.");
+    ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "Desktop Duplication Capture Active");
+    UIHelpers::InfoTooltip("The Windows Desktop Duplication API (DDA) powers high-quality capture with low latency.\nThis path delivers consistent results across modern GPUs without requiring vendor-specific drivers.");
 
-        // DDA tuning: AcquireNextFrame timeout scale
-        float scale = ctx.config.capture_timeout_scale;
-        UIHelpers::CompactSlider("Capture Timeout Scale", &scale, 0.55f, 0.65f, "%.2f");
-        UIHelpers::WrappedTooltip("Scale applied to EMA-estimated frame interval to compute AcquireNextFrame timeout.\nLower = wake earlier (lower jitter, slightly more wake-ups). Typical 0.55–0.65.");
-        if (ImGui::IsItemDeactivatedAfterEdit()) {
-            if (scale < 0.50f) scale = 0.50f;
-            if (scale > 0.80f) scale = 0.80f; // hard safety bounds
-            if (fabsf(scale - ctx.config.capture_timeout_scale) > 1e-3f) {
-                ctx.config.capture_timeout_scale = scale;
-                SAVE_PROFILE();
-            }
-        }
-
-        // Pipeline loop delay
-        int delay = ctx.config.pipeline_loop_delay_ms;
-        if (ImGui::SliderInt("Loop Delay (ms)", &delay, 0, 50)) {
-            ctx.config.pipeline_loop_delay_ms = delay;
-        }
-        UIHelpers::WrappedTooltip("Delay per pipeline iteration. Prevents game FPS drops.\n0 = No delay (WARNING: may cause FPS drops)\n1-5 = Recommended for most games\n10+ = High delay, use if still experiencing issues");
-        if (ImGui::IsItemDeactivatedAfterEdit()) {
-            if (delay < 0) delay = 0;
-            if (delay > 50) delay = 50;
-            ctx.config.pipeline_loop_delay_ms = delay;
-
-            if (delay == 0) {
-                ImGui::OpenPopup("Warning##LoopDelayWarning");
-            }
+    // DDA tuning: AcquireNextFrame timeout scale
+    float scale = ctx.config.capture_timeout_scale;
+    UIHelpers::CompactSlider("Capture Timeout Scale", &scale, 0.55f, 0.65f, "%.2f");
+    UIHelpers::WrappedTooltip("Scale applied to EMA-estimated frame interval to compute AcquireNextFrame timeout.\nLower = wake earlier (lower jitter, slightly more wake-ups). Typical 0.55–0.65.");
+    if (ImGui::IsItemDeactivatedAfterEdit()) {
+        if (scale < 0.50f) scale = 0.50f;
+        if (scale > 0.80f) scale = 0.80f; // hard safety bounds
+        if (fabsf(scale - ctx.config.capture_timeout_scale) > 1e-3f) {
+            ctx.config.capture_timeout_scale = scale;
             SAVE_PROFILE();
         }
+    }
 
-        if (ImGui::BeginPopup("Warning##LoopDelayWarning")) {
-            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "Warning!");
-            ImGui::Text("Setting loop delay to 0 may cause severe game FPS drops.");
-            ImGui::Text("Recommended: 1-5ms");
-            if (ImGui::Button("OK")) {
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::EndPopup();
+    // Pipeline loop delay
+    int delay = ctx.config.pipeline_loop_delay_ms;
+    if (ImGui::SliderInt("Loop Delay (ms)", &delay, 0, 50)) {
+        ctx.config.pipeline_loop_delay_ms = delay;
+    }
+    UIHelpers::WrappedTooltip("Delay per pipeline iteration. Prevents game FPS drops.\n0 = No delay (WARNING: may cause FPS drops)\n1-5 = Recommended for most games\n10+ = High delay, use if still experiencing issues");
+    if (ImGui::IsItemDeactivatedAfterEdit()) {
+        if (delay < 0) delay = 0;
+        if (delay > 50) delay = 50;
+        ctx.config.pipeline_loop_delay_ms = delay;
+
+        if (delay == 0) {
+            ImGui::OpenPopup("Warning##LoopDelayWarning");
         }
+        SAVE_PROFILE();
+    }
+
+    if (ImGui::BeginPopup("Warning##LoopDelayWarning")) {
+        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "Warning!");
+        ImGui::Text("Setting loop delay to 0 may cause severe game FPS drops.");
+        ImGui::Text("Recommended: 1-5ms");
+        if (ImGui::Button("OK")) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
     }
     
     UIHelpers::CompactSpacer();

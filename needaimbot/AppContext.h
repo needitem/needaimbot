@@ -16,8 +16,6 @@
 #include <queue>
 #include <chrono>
 
-class RecoilControlThread; // Forward declaration
-
 // Mouse movement event structure
 struct MouseEvent {
     float dx;
