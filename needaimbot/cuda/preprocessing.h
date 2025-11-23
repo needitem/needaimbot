@@ -14,10 +14,11 @@ extern "C" cudaError_t unifiedPreprocessing(
 // 통합 전처리 함수 - 포인터 버전 (더 범용적)
 extern "C" cudaError_t cuda_unified_preprocessing(
     const void* src_bgra_data,          // BGRA 입력 데이터 포인터
-    float* dst_rgb_chw,                 // RGB CHW 출력 (float)
+    void* dst_rgb_chw,                  // RGB CHW 출력 (void* - FP32 or FP16)
     int src_width, int src_height,      // 입력 크기
     int src_step,                       // 입력 스트라이드 (바이트)
     int target_width, int target_height, // 목표 크기
+    bool use_fp16 = false,              // true = FP16, false = FP32
     cudaStream_t stream = 0
 );
 

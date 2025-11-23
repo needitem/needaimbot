@@ -593,6 +593,7 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
     // ?꾩쿂由щ룄 Graph???ы븿
     if (m_unifiedArena.yoloInput && !m_captureBuffer.empty()) {
         int modelRes = getModelInputResolution();
+        bool use_fp16 = (m_inputDataType == nvinfer1::DataType::kHALF);
         cuda_unified_preprocessing(
             m_captureBuffer.data(),
             m_unifiedArena.yoloInput,
@@ -601,6 +602,7 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
             static_cast<int>(m_captureBuffer.step()),
             modelRes,
             modelRes,
+            use_fp16,
             stream
         );
         
@@ -703,6 +705,7 @@ bool UnifiedGraphPipeline::updateGraphExec() {
     // Capture same operations as original graph
     if (m_unifiedArena.yoloInput && !m_captureBuffer.empty()) {
         int modelRes = getModelInputResolution();
+        bool use_fp16 = (m_inputDataType == nvinfer1::DataType::kHALF);
         cuda_unified_preprocessing(
             m_captureBuffer.data(),
             m_unifiedArena.yoloInput,
@@ -711,6 +714,7 @@ bool UnifiedGraphPipeline::updateGraphExec() {
             static_cast<int>(m_captureBuffer.step()),
             modelRes,
             modelRes,
+            use_fp16,
             stream
         );
 
@@ -1522,8 +1526,7 @@ void UnifiedGraphPipeline::stopMainLoop() {
 
 bool UnifiedGraphPipeline::initializeTensorRT(const std::string& modelFile) {
     auto& ctx = AppContext::getInstance();
-    
-    
+
     if (!loadEngine(modelFile)) {
         std::cerr << "[Pipeline] Failed to load engine" << std::endl;
         return false;
@@ -1548,20 +1551,29 @@ bool UnifiedGraphPipeline::initializeTensorRT(const std::string& modelFile) {
         m_inputName = m_inputNames[0];
         m_primaryInputIndex = 0;
         m_inputDims = m_engine->getTensorShape(m_inputName.c_str());
-        
+        m_inputDataType = m_engine->getTensorDataType(m_inputName.c_str());
+
         if (m_inputDims.nbDims == 4) {
             m_modelInputResolution = m_inputDims.d[2];
         } else if (m_inputDims.nbDims == 3) {
             m_modelInputResolution = m_inputDims.d[1];
         }
-        
+
         size_t inputSize = 1;
         for (int i = 0; i < m_inputDims.nbDims; ++i) {
             inputSize *= m_inputDims.d[i];
         }
-        inputSize *= sizeof(float);
+
+        // Use correct element size based on actual data type
+        size_t elementSize = sizeof(float); // default FP32
+        if (m_inputDataType == nvinfer1::DataType::kHALF) {
+            elementSize = sizeof(__half); // FP16 = 2 bytes
+        } else if (m_inputDataType == nvinfer1::DataType::kINT8) {
+            elementSize = 1;
+        }
+
+        inputSize *= elementSize;
         m_inputSizes[m_inputName] = inputSize;
-        
     }
     
     for (const auto& outputName : m_outputNames) {
@@ -2373,6 +2385,7 @@ bool UnifiedGraphPipeline::performPreprocessing(const SimpleCudaMat& frame, cuda
     }
 
     int modelRes = getModelInputResolution();
+    bool use_fp16 = (m_inputDataType == nvinfer1::DataType::kHALF);
     cudaError_t err = cuda_unified_preprocessing(
         frame.data(),
         m_unifiedArena.yoloInput,
@@ -2381,6 +2394,7 @@ bool UnifiedGraphPipeline::performPreprocessing(const SimpleCudaMat& frame, cuda
         static_cast<int>(frame.step()),
         modelRes,
         modelRes,
+        use_fp16,
         stream);
 
     if (err != cudaSuccess) {
