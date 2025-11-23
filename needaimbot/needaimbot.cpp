@@ -494,11 +494,6 @@ int main()
         std::cout << "[MAIN] Initializing input method..." << std::endl;
         (void)initializeInputMethod();
 
-        // Start UDP listener for Makcu button states (port 5006)
-        std::cout << "[MAIN] Starting UDP listener for button states..." << std::endl;
-        auto& inputState = InputStateManager::getInstance();
-        inputState.startUDPListener(5006);
-
         std::cout << "[MAIN] Starting mouse consumer..." << std::endl;
         startMouseConsumer();
 
