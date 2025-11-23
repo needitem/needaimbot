@@ -101,18 +101,11 @@ bool Config::loadConfig(const std::string& filename)
         aim_shoot_offset_x = 0.0f;
         aim_shoot_offset_y = 0.0f;
 
-        easynorecoil = false;
-        easynorecoilstrength = 0.0f;
-        
         input_method = "WIN32";  // Default value, will be overridden by config file if present
-        
 
-        
+
+
         active_scope_magnification = 0;
-        
-        // Crouch recoil reduction
-        crouch_recoil_enabled = true;
-        crouch_recoil_reduction = -50.0f; // Default -50% reduction
 
         
         
@@ -278,10 +271,6 @@ bool Config::loadConfig(const std::string& filename)
     aim_shoot_offset_x = static_cast<float>(get_double_ini("Target", "aim_shoot_offset_x", 0.0));
     aim_shoot_offset_y = static_cast<float>(get_double_ini("Target", "aim_shoot_offset_y", 0.0));
 
-    easynorecoil = get_bool_ini("Mouse", "easynorecoil", false);
-    easynorecoilstrength = static_cast<float>(get_double_ini("Mouse", "easynorecoilstrength", 0.0));
-    
-
     // Load PID controller settings
     pid_kp_x = static_cast<float>(get_double_ini("PIDController", "pid_kp_x", 0.5));
     pid_kp_y = static_cast<float>(get_double_ini("PIDController", "pid_kp_y", 0.5));
@@ -302,10 +291,8 @@ bool Config::loadConfig(const std::string& filename)
     iou_stickiness_threshold = static_cast<float>(get_double_ini("Target", "iou_stickiness_threshold", 0.30));
 
     input_method = get_string_ini("Mouse", "input_method", "WIN32");
-    
+
     bScope_multiplier = static_cast<float>(get_double_ini("Mouse", "bScope_multiplier", 1.2));
-    crouch_recoil_enabled = get_bool_ini("Mouse", "crouch_recoil_enabled", true);
-    crouch_recoil_reduction = static_cast<float>(get_double_ini("Mouse", "crouch_recoil_reduction", -50.0));
 
     active_scope_magnification = get_long_ini("Recoil", "active_scope_magnification", 0);
 
@@ -507,18 +494,11 @@ bool Config::saveConfig(const std::string& filename)
 
 
     file << "[Mouse]\n";
-    file << "easynorecoil = " << (easynorecoil ? "true" : "false") << "\n";
-    file << std::fixed << std::setprecision(6);
-    file << "easynorecoilstrength = " << easynorecoilstrength << "\n";
-    
-    
     file << std::noboolalpha;
     file << "input_method = " << input_method << "\n";
     file << std::fixed << std::setprecision(6);
-    
+
     file << "bScope_multiplier = " << bScope_multiplier << "\n";
-    file << "crouch_recoil_enabled = " << (crouch_recoil_enabled ? "true" : "false") << "\n";
-    file << "crouch_recoil_reduction = " << crouch_recoil_reduction << "\n\n";
 
     // Deadband settings (per-axis)
     file << "deadband_enter_x = " << deadband_enter_x << "\n";
