@@ -84,12 +84,8 @@ public:
     bool circle_mask;
     bool capture_borders;
     bool capture_cursor;
-    // Capture backend: "DDA" or "OBS_HOOK"
+    // Capture backend: "DDA"
     std::string capture_method;
-    // OBS Hook: target game window title (exact match)
-    std::string obs_window_title;
-    // OBS Hook: optional source directory to auto-copy required binaries
-    std::string obs_hook_source_dir;
 
     float body_y_offset;
     float head_y_offset;
