@@ -387,10 +387,10 @@ int main()
     // Set application title
     SetConsoleTitle(L"Gaming Performance Analyzer - Monitor & Optimize Gaming Performance");
     
-    // Single instance check
-    HANDLE hMutex = CreateMutex(NULL, TRUE, L"Global\\GamePerformanceAnalyzer_SingleInstance");
+    // Single instance check (local scope to avoid anti-cheat detection)
+    HANDLE hMutex = CreateMutex(NULL, TRUE, L"Local\\GamePerformanceAnalyzer_SingleInstance");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
-        MessageBox(NULL, L"Gaming Performance Analyzer is already running.\n\nPlease close the existing instance before starting a new one.", 
+        MessageBox(NULL, L"Gaming Performance Analyzer is already running.\n\nPlease close the existing instance before starting a new one.",
                    L"Gaming Performance Analyzer", MB_OK | MB_ICONINFORMATION);
         CloseHandle(hMutex);
         return 0;
