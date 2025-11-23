@@ -622,28 +622,28 @@ __global__ void decodeYolo10GpuKernel(
 
 
 __global__ void decodeYolo11GpuKernel(
-    const void* d_raw_output,          
-    int output_type,    
-    int num_boxes_raw,             
-    int num_rows,                  
-    int num_classes,                   
-    float conf_threshold,              
-    float img_scale,                   
-    Target* d_decoded_detections,   
-    int* d_decoded_count,              
+    const void* d_raw_output,
+    int output_type,
+    int num_boxes_raw,
+    int num_rows,
+    int num_classes,
+    float conf_threshold,
+    float img_scale,
+    Target* d_decoded_detections,
+    int* d_decoded_count,
     int max_detections,
     const unsigned char* d_class_filter,
-    int max_class_filter_size)                
+    int max_class_filter_size)
 {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x; 
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (idx < num_boxes_raw) {
         float max_score = -1.0f;
         int max_class_id = -1;
-        
+
         // YOLO12 always has 15 channels: 4 bbox + 11 classes (no objectness)
         int class_start_idx = 4;
-        
+
         // Early class filtering during score search
         for (int c = 0; c < num_classes; ++c) {
             // Skip non-allowed classes early
@@ -652,13 +652,14 @@ __global__ void decodeYolo11GpuKernel(
                     continue;  // Skip this class entirely
                 }
             }
-            
+
             // Back to channel-first layout: [batch, channel, anchor]
             size_t score_idx = (class_start_idx + c) * num_boxes_raw + idx;
             if (score_idx >= num_rows * num_boxes_raw) {
                 continue;
             }
             float score = readOutputValue(d_raw_output, output_type, score_idx);
+
             if (score > max_score) {
                 max_score = score;
                 max_class_id = c;
@@ -720,7 +721,7 @@ __global__ void decodeYolo11GpuKernel(
              
             // Atomic increment first, then check (thread-safe)
             int write_idx = ::atomicAdd(d_decoded_count, 1);
-            
+
             // Only proceed if we got a valid index
             if (write_idx < max_detections) {
                 Target& det = d_decoded_detections[write_idx];
@@ -730,11 +731,11 @@ __global__ void decodeYolo11GpuKernel(
                 det.height = height;
                 det.confidence = max_score;
                 det.classId = max_class_id;
-                
+
                 // Debug assertion to catch any remaining issues
                 #ifdef DEBUG
                 if (abs(x + width/2) > 1000000 || abs(y + height/2) > 1000000) {
-                    printf("[DEBUG] Warning: Large center coordinates detected - x:%d y:%d w:%d h:%d\n", 
+                    printf("[DEBUG] Warning: Large center coordinates detected - x:%d y:%d w:%d h:%d\n",
                            x, y, width, height);
                 }
                 #endif
@@ -886,9 +887,11 @@ cudaError_t decodeYolo11Gpu(
     if (!isfinite(conf_threshold) || !isfinite(img_scale) || conf_threshold < 0.0f || img_scale <= 0.0f) {
         return cudaErrorInvalidValue;
     }
-    
+
+    int output_type_int = static_cast<int>(output_type);
+
     decodeYolo11GpuKernel<<<grid_size, block_size, 0, stream>>>(
-        d_raw_output, (int)output_type, actual_candidates, (int)num_rows, num_classes,
+        d_raw_output, output_type_int, actual_candidates, (int)num_rows, num_classes,
         conf_threshold, img_scale, d_decoded_detections, d_decoded_count, max_detections,
         d_class_filter, max_class_filter_size);
 
