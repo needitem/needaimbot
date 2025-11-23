@@ -154,17 +154,9 @@ void InputStateManager::udpListenerThread(int port) {
 }
 
 bool InputStateManager::isLeftButtonPressed() const {
-    if (makcu_mode_.load()) {
-        return left_button_.load();
-    } else {
-        return (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
-    }
+    return (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
 }
 
 bool InputStateManager::isRightButtonPressed() const {
-    if (makcu_mode_.load()) {
-        return right_button_.load();
-    } else {
-        return (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
-    }
+    return (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
 }
