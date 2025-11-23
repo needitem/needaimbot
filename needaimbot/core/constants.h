@@ -88,7 +88,7 @@ namespace Constants {
     
     // Thread Priority Constants
     constexpr int MOUSE_THREAD_PRIORITY = THREAD_PRIORITY_ABOVE_NORMAL;
-    constexpr int DETECTOR_THREAD_PRIORITY = THREAD_PRIORITY_TIME_CRITICAL;
+    constexpr int DETECTOR_THREAD_PRIORITY = THREAD_PRIORITY_ABOVE_NORMAL;
     
     // Timing Intervals
     constexpr int ACTIVE_WAIT_TIMEOUT_MS = 10;
