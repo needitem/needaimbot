@@ -52,7 +52,6 @@
     <ClCompile Include="overlay\ui_helpers.cpp" />
     <ClCompile Include="needaimbot.cpp" />
     <ClCompile Include="utils\image_io.cpp" />
-    <ClCompile Include="utils\window_enum.cpp" />
     <ClCompile Include="scr\other_tools.cpp" />
     <ClCompile Include="core\defender_exception.cpp" />
     <ClCompile Include="capture\dda_capture.cpp" />
@@ -125,7 +124,6 @@
     <ClInclude Include="utils\CircularBuffer.h" />
     <ClInclude Include="utils\cuda_utils.h" />
     <ClInclude Include="utils\lock_free_queue.h" />
-    <ClInclude Include="utils\window_enum.h" />
     <ClInclude Include="AppContext.h" />
     <ClInclude Include="needaimbot.h" />
     <ClInclude Include="capture\dda_capture.h" />
