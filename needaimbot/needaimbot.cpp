@@ -33,10 +33,9 @@
 #ifndef __INTELLISENSE__
 #include <cuda_runtime_api.h>
 #endif
-#include <iomanip> 
+#include <iomanip>
 #include <csignal>
 #include <random>
-#include <tlhelp32.h>
 #include <array>
 #include <cstdio>
 #include <string_view>
@@ -377,17 +376,6 @@ int main()
     _set_error_mode(_OUT_TO_STDERR);
     _set_abort_behavior(0, _WRITE_ABORT_MSG);
 
-    // OPTIMIZATION: Improve system timer resolution for better timing accuracy
-    // This reduces jitter in sleep/wait operations under high CPU load
-    #pragma comment(lib, "winmm.lib")
-    TIMECAPS tc;
-    if (timeGetDevCaps(&tc, sizeof(TIMECAPS)) == TIMERR_NOERROR) {
-        UINT targetResolution = std::max(1u, tc.wPeriodMin);  // 1ms or best available
-        if (timeBeginPeriod(targetResolution) == TIMERR_NOERROR) {
-            std::cout << "[TIMER] Set system timer resolution to " << targetResolution << "ms" << std::endl;
-        }
-    }
-    
     // Initialize Gaming Performance Analyzer
 
     // Ensure console prints UTF-8 to avoid '??' for non-ASCII
@@ -589,12 +577,6 @@ int main()
         
         // Clean up CUDA resources
         CudaResourceManager::Shutdown();
-
-        // Restore system timer resolution
-        TIMECAPS tc;
-        if (timeGetDevCaps(&tc, sizeof(TIMECAPS)) == TIMERR_NOERROR) {
-            timeEndPeriod(std::max(1u, tc.wPeriodMin));
-        }
 
         std::exit(0);
     }

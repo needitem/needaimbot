@@ -22,10 +22,10 @@ void RecoilControlThread::start() {
     // Set high thread priority for consistent timing and minimal jitter
     if (worker_thread_.joinable()) {
         HANDLE threadHandle = worker_thread_.native_handle();
-        SetThreadPriority(threadHandle, THREAD_PRIORITY_HIGHEST);
+        SetThreadPriority(threadHandle, THREAD_PRIORITY_ABOVE_NORMAL);
 
         #ifdef _WIN32
-        SetThreadDescription(threadHandle, L"RecoilControl-HighPriority");
+        SetThreadDescription(threadHandle, L"RecoilControl");
         #endif
     }
 }
