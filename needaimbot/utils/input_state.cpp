@@ -154,17 +154,27 @@ void InputStateManager::udpListenerThread(int port) {
 }
 
 bool InputStateManager::isLeftButtonPressed() const {
+    // Always use GetAsyncKeyState - Makcu UDP state is disabled due to performance
+    return (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+
+    /*
     if (makcu_mode_.load()) {
         return left_button_.load();
     } else {
         return (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
     }
+    */
 }
 
 bool InputStateManager::isRightButtonPressed() const {
+    // Always use GetAsyncKeyState - Makcu UDP state is disabled due to performance
+    return (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+
+    /*
     if (makcu_mode_.load()) {
         return right_button_.load();
     } else {
         return (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
     }
+    */
 }
