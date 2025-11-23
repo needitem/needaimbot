@@ -14,7 +14,6 @@
 #include "cuda/unified_graph_pipeline.h"
 #include "cuda/cuda_resource_manager.h"
 #include "mouse/mouse.h"
-#include "mouse/recoil_control_thread.h"
 #include "needaimbot.h"
 #include "keyboard/keyboard_listener.h"
 #include "overlay/overlay.h"
@@ -491,13 +490,6 @@ int main()
 
         std::cout << "[MAIN] Starting mouse consumer..." << std::endl;
         startMouseConsumer();
-
-        std::cout << "[MAIN] Starting recoil control thread..." << std::endl;
-        RecoilControlThread recoilThread;
-        recoilThread.setInputMethod(std::make_unique<Win32InputMethod>());
-        recoilThread.setEnabled(true);
-        recoilThread.start();
-        std::cout << "[MAIN] Recoil control thread started" << std::endl;
 
         std::cout << "[MAIN] Getting available models..." << std::endl;
         std::vector<std::string> availableModels = getAvailableModels();
