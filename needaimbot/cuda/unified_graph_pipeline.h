@@ -37,27 +37,15 @@ struct PIDState {
     float integral_y;
 };
 
-// v2: Frame metadata used for ring-buffered capture
+// Frame metadata for synchronous capture
 struct FrameMetadata {
     uint64_t frameId = 0;          // Monotonic frame counter
     uint64_t presentQpc = 0;       // DXGI LastPresentQpc (0 if unsupported)
     uint32_t width = 0;
     uint32_t height = 0;
-    uint64_t captureTimeQpc = 0;   // CPU QPC at capture time
 };
 
-// Single slot in the frame ring buffer
-struct FrameSlot {
-    FrameMetadata metadata{};
-    SimpleCudaMat image;
-    std::atomic<bool> ready{false};
-    std::atomic<bool> consumed{true};
-};
-
-// Small ring (2 slots) is enough for 1 producer + 1 consumer
-static constexpr size_t FRAME_RING_SIZE = 2;
-
-// Performance metrics for before/after comparison
+// Performance metrics for monitoring
 struct PerformanceMetrics {
     uint64_t totalFrames = 0;
     double totalLatencyMs = 0.0;
@@ -455,22 +443,15 @@ private:
         std::atomic<uint32_t> generation{0};
     } m_cachedConfig;
 
-    // Legacy single-buffer capture (used by CUDA Graph path and preview)
+    // Capture buffer for synchronous frame acquisition
     SimpleCudaMat m_captureBuffer;
 
-    std::unique_ptr<CudaStream> m_captureStream;
     std::unique_ptr<CudaStream> m_previewStream;
-    std::unique_ptr<CudaEvent> m_captureReadyEvent;
-    
-    // v2: Frame ring buffer (lock-free producer/consumer)
-    FrameSlot m_frameRing[FRAME_RING_SIZE];
-    std::atomic<uint64_t> m_nextCaptureSlot{0};
-    std::atomic<uint64_t> m_nextProcessSlot{0};
+
+    // Frame tracking for duplicate detection
     std::atomic<uint64_t> m_nextFrameId{0};
-    std::atomic<uint64_t> m_lastProcessedFrameId{0};
     std::atomic<uint64_t> m_lastProcessedPresentQpc{0};
-    
-    
+
     std::unique_ptr<nvinfer1::IRuntime> m_runtime;
     std::unique_ptr<nvinfer1::ICudaEngine> m_engine;
     std::unique_ptr<nvinfer1::IExecutionContext> m_context;
@@ -605,25 +586,24 @@ private:
     void clearHostPreviewData(AppContext& ctx);
     void handleAimbotActivation();
 
-    // Legacy graph path callbacks (kept for compatibility)
-    bool enqueueFrameCompletionCallback(cudaStream_t stream);
-    bool enqueueMovementResetCallback(cudaStream_t stream);
+    // Frame completion callback
+    bool enqueueFrameCompletionCallback(cudaStream_t stream, const FrameMetadata& metadata);
 
     bool updateDDACaptureRegion(const AppContext& ctx);
 
-    // v2 pipeline helpers
-    bool performPreprocessing(const SimpleCudaMat& frame, cudaStream_t stream);
+    // Pipeline stage helpers
+    bool acquireFrameSync(FrameMetadata& outMetadata);  // Synchronous capture
+    bool performPreprocessing(cudaStream_t stream);
     void updatePreviewBuffer(const SimpleCudaMat& currentBuffer);
-    void updatePreviewBufferAllocation();  // Dynamic allocation based on show_window state
+    void updatePreviewBufferAllocation();
     bool performInference(cudaStream_t stream);
 
     void clearDetectionBuffers(const PostProcessingConfig& config, cudaStream_t stream);
-    cudaError_t decodeYoloOutput(void* d_rawOutputPtr, nvinfer1::DataType outputType, 
-                                const std::vector<int64_t>& shape, 
+    cudaError_t decodeYoloOutput(void* d_rawOutputPtr, nvinfer1::DataType outputType,
+                                const std::vector<int64_t>& shape,
                                 const PostProcessingConfig& config, cudaStream_t stream);
     bool validateYoloDecodeBuffers(int maxDecodedTargets, int max_candidates);
 
-    // Removed redundant NMS and copy functions - integrated into main processing
     void handlePreviewUpdate(const PostProcessingConfig& config, cudaStream_t stream);
     void updatePreviewTargets(const PostProcessingConfig& config);
     void startPreviewCopy(const PostProcessingConfig& config, cudaStream_t stream);
@@ -633,14 +613,9 @@ private:
     void refreshCachedBindings();
     bool bindStaticTensorAddresses();
 
-    // v2 config/cache helpers
+    // Config cache helpers
     void refreshConfigCache(const AppContext& ctx);
     void updateConfig(const AppContext& ctx);
-
-    // v2 frame ring helpers
-    bool scheduleCapture();
-    bool tryConsumeFrame(FrameMetadata& outMetadata, SimpleCudaMat& outImage);
-    bool enqueueFrameCompletionCallback(cudaStream_t stream, const FrameMetadata& metadata);
 
 public:
     // Mark runtime-controlled parameters dirty; in v2 this triggers a config cache refresh.
