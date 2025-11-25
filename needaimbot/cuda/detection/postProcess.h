@@ -2,7 +2,6 @@
 #define POSTPROCESS_H
 
 #include <vector>
-// OpenCV removed - using custom structures
 #include <cuda_runtime.h>
 #include <NvInferRuntimeCommon.h> 
 #include "../core/Target.h"
@@ -25,9 +24,6 @@ void finalValidateTargetsGpu(
 void validateBestTargetGpu(
     Target* d_best_target,
     cudaStream_t stream = 0);
-
-// NMS removed for performance - not needed for aimbot
-// void NMSGpu(...) removed
 
 
 
@@ -61,8 +57,6 @@ cudaError_t decodeYolo11Gpu(
     const unsigned char* d_class_filter = nullptr,
     int max_class_filter_size = 0,
     cudaStream_t stream = 0);
-
-// processNMSOutputGpu removed - NMS not needed for aimbot
 
 // GPU function to find closest target to crosshair
 // Accepts d_num_detections as device pointer to avoid CPU-GPU sync

@@ -6,7 +6,6 @@
 #include <atomic>
 #include <array>
 #include <chrono>
-#include <condition_variable>
 #include <mutex>
 #include <unordered_map>
 #include <functional>
@@ -265,7 +264,6 @@ struct UnifiedPipelineConfig {
     std::string modelPath;
     
     float confThreshold = 0.4f;
-    float nmsThreshold = 0.45f;
     int detectionWidth = 256;
     int detectionHeight = 256;
     
@@ -320,7 +318,6 @@ public:
     };
 
     void getCaptureStats(CaptureStats& out) const;
-    void setInputFrame(const SimpleCudaMat& frame);
     void setOutputBuffer(float* d_output) { 
         m_externalOutputBuffer = d_output;
     }
@@ -378,8 +375,6 @@ public:
     void markFrameCompleted();
 
 private:
-    // CPU fallback removed - GPU-direct only
-
     mutable std::atomic<uint64_t> m_lastUIReadFrame{0};
     cudaGraph_t m_graph = nullptr;
     cudaGraphExec_t m_graphExec = nullptr;
@@ -398,12 +393,6 @@ private:
     cudaGraphNode_t m_preprocessNode = nullptr;
     cudaGraphNode_t m_inferenceNode = nullptr;
     std::vector<cudaGraphNode_t> m_postprocessKernelNodes;
-
-    std::atomic<bool> m_classFilterDirty{true};
-    std::vector<unsigned char> m_cachedClassFilter;
-    std::atomic<int> m_cachedHeadClassId{-1};
-    std::atomic<size_t> m_cachedHeadClassNameHash{0};
-    std::atomic<size_t> m_cachedClassSettingsSize{0};
 
     // v2 Lock-free config cache - updated explicitly or from background, read without locks in hot path
     struct CachedConfig {
@@ -429,6 +418,7 @@ private:
             int max_detections;
             float confidence_threshold;
             std::array<unsigned char, 80> class_filter;  // Fixed size for cache-friendly access
+            std::array<unsigned char, 80> prev_class_filter;  // Previous filter for change detection
         } detection;
 
         // Movement filtering
@@ -473,8 +463,7 @@ private:
     int m_modelInputResolution = 320;
     float m_imgScale;
     int m_numClasses;
-    // Removed legacy preprocess buffer; unified arena's yoloInput is the sole source
-    
+
     std::unique_ptr<CudaMemory<float>> m_d_inferenceOutput;
     
     
@@ -511,9 +500,6 @@ private:
     std::atomic<bool> m_allowMovement{false};
     std::atomic<bool> m_shouldStop{false};
     std::atomic<bool> m_frameInFlight{false};
-    // Signal when a frame-in-flight completes to avoid active yielding
-    mutable std::mutex m_inflightMutex;
-    std::condition_variable m_inflightCv;
 
     // Movement filter state - per-thread, no lock needed in callback
     struct MovementFilterState {
@@ -559,10 +545,6 @@ private:
 
     // Whether DXGI LastPresentQpc is supported by the capture backend.
     bool m_qpcSupported = false;
-
-    // Legacy QPC tracking for graph-based path (kept for compatibility).
-    std::atomic<uint64_t> m_lastMovementPresentQpc{0};
-    std::atomic<uint64_t> m_currentFramePresentQpc{0};
 
     bool validateGraph();
     void cleanupGraph();
