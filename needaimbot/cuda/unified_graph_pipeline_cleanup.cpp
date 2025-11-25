@@ -22,8 +22,7 @@ void UnifiedGraphPipeline::shutdown() {
     if (m_pipelineStream) {
         cudaStreamSynchronize(m_pipelineStream->get());
     }
-    // cudaDeviceSynchronize() removed for performance - stream sync is sufficient
-    
+
     // Clear TensorRT L2 persistent cache explicitly
     if (m_context) {
         // TensorRT context doesn't directly expose cache control,
@@ -66,9 +65,7 @@ void UnifiedGraphPipeline::shutdown() {
     m_context.reset();  // Destroy context first
     m_engine.reset();   // Then engine
     m_runtime.reset();  // Finally runtime
-    
-    // m_unifiedCaptureBuffer removed - using m_captureBuffer
-    
+
     // Clear preview buffers if allocated
     if (m_preview.enabled) {
         m_preview.previewBuffer.release();

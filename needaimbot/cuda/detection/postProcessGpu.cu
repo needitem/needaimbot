@@ -166,7 +166,7 @@ __global__ void validateTargetsKernel(
     }
 }
 
-// Final validation kernel to remove extreme values after NMS
+// Final validation kernel to remove extreme values
 __global__ void finalValidateAndCleanKernel(
     Target* d_targets,
     int* d_count,
@@ -325,8 +325,6 @@ __global__ void countKeptTargetsKernel(
     }
 }
 
-// More efficient kernel using atomic operations for gathering
-// NMS gather kernel removed
 
 
 // Optimized spatial indexing constants
@@ -522,15 +520,6 @@ __device__ inline bool cellsAreNear(int2 cell1, int2 cell2, int threshold = 1) {
     return abs(cell1.x - cell2.x) <= threshold && abs(cell1.y - cell2.y) <= threshold;
 }
 
-// IoU calculation kernel removed
-
-
-// NMS kernel removed
-
-
-// NMS helper struct and extract kernel removed
-
-// NMS removed for performance - not needed for aimbot
 
 
 
@@ -1215,9 +1204,3 @@ cudaError_t findBestTargetWithHeadPriorityGpu(
     return cudaSuccess;
 }
 
-// processNMSOutputKernel removed - NMS not needed for aimbot
-
-// processNMSOutputGpu removed - NMS not needed for aimbot
-
-
- 
