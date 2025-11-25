@@ -113,14 +113,17 @@ void UnifiedGraphPipeline::refreshConfigCache(const AppContext& ctx) {
 void UnifiedGraphPipeline::updateConfig(const AppContext& ctx) {
     refreshConfigCache(ctx);
 
-    // Upload class filter to GPU (async)
+    // Upload class filter to GPU only if changed
     if (m_smallBufferArena.allowFlags && m_pipelineStream && m_pipelineStream->get()) {
-        cudaMemcpyAsync(
-            m_smallBufferArena.allowFlags,
-            m_cachedConfig.detection.class_filter.data(),
-            80 * sizeof(unsigned char),
-            cudaMemcpyHostToDevice,
-            m_pipelineStream->get());
+        if (m_cachedConfig.detection.class_filter != m_cachedConfig.detection.prev_class_filter) {
+            cudaMemcpyAsync(
+                m_smallBufferArena.allowFlags,
+                m_cachedConfig.detection.class_filter.data(),
+                80 * sizeof(unsigned char),
+                cudaMemcpyHostToDevice,
+                m_pipelineStream->get());
+            m_cachedConfig.detection.prev_class_filter = m_cachedConfig.detection.class_filter;
+        }
     }
 }
 
@@ -177,6 +180,45 @@ int computeTargetSelectionBlockSize(int maxDetections) {
 
 }  // namespace
 
+// Batched memset kernel - clears multiple int buffers in a single kernel launch
+__global__ void batchedMemsetKernel(
+    int* __restrict__ buf0,
+    int* __restrict__ buf1,
+    int* __restrict__ buf2,
+    int* __restrict__ buf3,
+    int val0, int val1, int val2, int val3)
+{
+    if (threadIdx.x == 0) {
+        if (buf0) *buf0 = val0;
+        if (buf1) *buf1 = val1;
+        if (buf2) *buf2 = val2;
+        if (buf3) *buf3 = val3;
+    }
+}
+
+// Extended batched memset for detection buffer clearing
+__global__ void batchedDetectionClearKernel(
+    int* __restrict__ decodedCount,
+    int* __restrict__ finalTargetsCount,
+    int* __restrict__ classFilteredCount,
+    int* __restrict__ bestTargetIndex,
+    Target* __restrict__ bestTarget)
+{
+    if (threadIdx.x == 0) {
+        if (decodedCount) *decodedCount = 0;
+        if (finalTargetsCount) *finalTargetsCount = 0;
+        if (classFilteredCount) *classFilteredCount = 0;
+        if (bestTargetIndex) *bestTargetIndex = -1;
+        if (bestTarget) {
+            bestTarget->classId = -1;
+            bestTarget->confidence = 0.0f;
+            bestTarget->x = 0;
+            bestTarget->y = 0;
+            bestTarget->width = 0;
+            bestTarget->height = 0;
+        }
+    }
+}
 
 __device__ float computeBoundingBoxIoU(const Target& a, const Target& b) {
     if (a.classId < 0 || b.classId < 0 || a.width <= 0 || a.height <= 0 ||
@@ -883,11 +925,8 @@ bool UnifiedGraphPipeline::allocateBuffers() {
 
         ensureFinalTargetAliases();
 
-        m_cachedClassFilter.assign(Constants::MAX_CLASSES_FOR_FILTERING, 0);
-        m_classFilterDirty.store(true, std::memory_order_release);
-        m_cachedHeadClassId.store(-1, std::memory_order_release);
-        m_cachedHeadClassNameHash.store(0, std::memory_order_release);
-        m_cachedClassSettingsSize.store(0, std::memory_order_release);
+        // Initialize prev_class_filter to force first upload
+        m_cachedConfig.detection.prev_class_filter.fill(0xFF);
         
         {
             std::lock_guard<std::mutex> previewLock(m_previewMutex);
@@ -916,8 +955,7 @@ bool UnifiedGraphPipeline::allocateBuffers() {
 
 void UnifiedGraphPipeline::deallocateBuffers() {
     m_captureBuffer.release();
-    // m_unifiedCaptureBuffer removed - using m_captureBuffer
-    
+
     // Always release preview buffer if allocated
     if (m_preview.hostPreviewPinned && m_preview.hostPreview.data()) {
         cudaHostUnregister(m_preview.hostPreview.data());
@@ -942,11 +980,6 @@ void UnifiedGraphPipeline::deallocateBuffers() {
     m_h_movement.reset();
     m_h_allowFlags.reset();
     m_mouseMovementUsesMappedMemory = false;
-    m_cachedClassFilter.clear();
-    m_classFilterDirty.store(true, std::memory_order_release);
-    m_cachedHeadClassId.store(-1, std::memory_order_release);
-    m_cachedHeadClassNameHash.store(0, std::memory_order_release);
-    m_cachedClassSettingsSize.store(0, std::memory_order_release);
 
     m_inputBindings.clear();
     m_outputBindings.clear();
@@ -1048,13 +1081,6 @@ bool UnifiedGraphPipeline::configureMouseMovementBuffer() {
 }
 
 
-void UnifiedGraphPipeline::setInputFrame(const SimpleCudaMat& frame) {
-    // Legacy CPU-injected frame path no longer used in v2.
-    // Kept as a no-op to preserve API compatibility.
-    (void)frame;
-}
-
-
 void UnifiedGraphPipeline::handleAimbotDeactivation() {
     auto& ctx = AppContext::getInstance();
 
@@ -1078,22 +1104,18 @@ void UnifiedGraphPipeline::handleAimbotDeactivation() {
 }
 
 void UnifiedGraphPipeline::clearCountBuffers() {
-    if (m_smallBufferArena.finalTargetsCount) {
-        cudaMemsetAsync(m_smallBufferArena.finalTargetsCount, 0, sizeof(int), m_pipelineStream->get());
-    }
-    if (m_smallBufferArena.decodedCount &&
-        m_smallBufferArena.decodedCount != m_smallBufferArena.finalTargetsCount) {
-        cudaMemsetAsync(m_smallBufferArena.decodedCount, 0, sizeof(int), m_pipelineStream->get());
-    }
-    if (m_smallBufferArena.classFilteredCount) {
-        cudaMemsetAsync(m_smallBufferArena.classFilteredCount, 0, sizeof(int), m_pipelineStream->get());
-    }
-    
-    if (m_smallBufferArena.bestTargetIndex) {
-        cudaMemsetAsync(m_smallBufferArena.bestTargetIndex, -1, sizeof(int), m_pipelineStream->get());
-    }
+    cudaStream_t stream = m_pipelineStream ? m_pipelineStream->get() : nullptr;
 
-    invalidateSelectedTarget(m_pipelineStream ? m_pipelineStream->get() : nullptr);
+    // Use batched kernel instead of multiple cudaMemsetAsync calls
+    batchedMemsetKernel<<<1, 1, 0, stream>>>(
+        m_smallBufferArena.finalTargetsCount,
+        (m_smallBufferArena.decodedCount != m_smallBufferArena.finalTargetsCount)
+            ? m_smallBufferArena.decodedCount : nullptr,
+        m_smallBufferArena.classFilteredCount,
+        m_smallBufferArena.bestTargetIndex,
+        0, 0, 0, -1);
+
+    invalidateSelectedTarget(stream);
 }
 
 void UnifiedGraphPipeline::clearMovementData() {
@@ -1349,10 +1371,8 @@ bool UnifiedGraphPipeline::enqueueFrameCompletionCallback(cudaStream_t stream, c
                 }
             }
 
-            // Release frame-in-flight lock using atomic with notify
-            // No mutex needed - condition_variable::notify_all is safe without lock
+            // Release frame-in-flight lock
             pipeline->m_frameInFlight.store(false, std::memory_order_release);
-            pipeline->m_inflightCv.notify_all();
 
             delete cbData;
         },
@@ -1809,8 +1829,6 @@ bool UnifiedGraphPipeline::runInferenceAsync(cudaStream_t stream) {
         return false;
     }
 
-    // Removed dead code block
-
     return true;
 }
 
@@ -1828,26 +1846,14 @@ void UnifiedGraphPipeline::clearDetectionBuffers(const PostProcessingConfig& con
         return;
     }
 
-    cudaMemsetAsync(m_smallBufferArena.decodedCount, 0, sizeof(int), stream);
-
-    if (m_smallBufferArena.finalTargetsCount &&
-        m_smallBufferArena.finalTargetsCount != m_smallBufferArena.decodedCount) {
-        cudaMemsetAsync(m_smallBufferArena.finalTargetsCount, 0, sizeof(int), stream);
-    }
-
-    if (m_smallBufferArena.classFilteredCount) {
-        cudaMemsetAsync(m_smallBufferArena.classFilteredCount, 0, sizeof(int), stream);
-    }
-
-    
-
-    if (m_smallBufferArena.bestTargetIndex) {
-        cudaMemsetAsync(m_smallBufferArena.bestTargetIndex, -1, sizeof(int), stream);
-    }
-
-    if (m_smallBufferArena.bestTarget) {
-        cudaMemsetAsync(m_smallBufferArena.bestTarget, 0, sizeof(Target), stream);
-    }
+    // Use batched kernel instead of multiple cudaMemsetAsync calls
+    batchedDetectionClearKernel<<<1, 1, 0, stream>>>(
+        m_smallBufferArena.decodedCount,
+        (m_smallBufferArena.finalTargetsCount != m_smallBufferArena.decodedCount)
+            ? m_smallBufferArena.finalTargetsCount : nullptr,
+        m_smallBufferArena.classFilteredCount,
+        m_smallBufferArena.bestTargetIndex,
+        m_smallBufferArena.bestTarget);
 
     invalidateSelectedTarget(stream);
 }
@@ -1858,13 +1864,12 @@ cudaError_t UnifiedGraphPipeline::decodeYoloOutput(void* d_rawOutputPtr, nvinfer
     int maxDecodedTargets = config.max_detections;
     
     if (config.postprocess == "yolo_nms") {
-        // NMS媛 ?ы븿??紐⑤뜽 - ?대? ?꾩쿂由щ맂 異쒕젰
-        // 異쒕젰 ?뺤떇: [batch, num_detections, 6] where 6 = [x1, y1, x2, y2, confidence, class_id]
+        // Output format: [batch, num_detections, 6] where 6 = [x1, y1, x2, y2, confidence, class_id]
         int num_detections = (shape.size() > 1) ? static_cast<int>(shape[1]) : 0;
         int output_features = (shape.size() > 2) ? static_cast<int>(shape[2]) : 0;
         
         if (output_features != 6) {
-            std::cerr << "[Pipeline] Invalid NMS output format. Expected 6 features [x1,y1,x2,y2,conf,class], got " << output_features << std::endl;
+            std::cerr << "[Pipeline] Invalid output format. Expected 6 features [x1,y1,x2,y2,conf,class], got " << output_features << std::endl;
             return cudaErrorInvalidValue;
         }
         
@@ -1875,7 +1880,6 @@ cudaError_t UnifiedGraphPipeline::decodeYoloOutput(void* d_rawOutputPtr, nvinfer
             m_unifiedArena.decodedTargets, m_smallBufferArena.decodedCount,
             maxDecodedTargets, num_detections,
             m_smallBufferArena.allowFlags, m_numClasses, stream);
-            
     } else if (config.postprocess == "yolo10") {
         int max_candidates = (shape.size() > 1) ? static_cast<int>(shape[1]) : 0;
         
@@ -1885,8 +1889,6 @@ cudaError_t UnifiedGraphPipeline::decodeYoloOutput(void* d_rawOutputPtr, nvinfer
             m_unifiedArena.decodedTargets, m_smallBufferArena.decodedCount,
             maxDecodedTargets, max_candidates,
             m_smallBufferArena.allowFlags, m_numClasses, stream);
-            
-    // NMS removed for performance - not needed for aimbot
     } else if (config.postprocess == "yolo8" || config.postprocess == "yolo9" || 
                config.postprocess == "yolo11" || config.postprocess == "yolo12") {
         int max_candidates = (shape.size() > 2) ? static_cast<int>(shape[2]) : 0;
@@ -1952,14 +1954,8 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
         return;
     }
     
-    // Direct use of decoded targets as final (no NMS needed for aimbot)
     ensureFinalTargetAliases();
-
 }
-
-// Removed redundant NMS and copy functions
-// Empty preview functions removed for performance
-
 
 void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
     auto& ctx = AppContext::getInstance();
@@ -2219,27 +2215,22 @@ bool UnifiedGraphPipeline::executeFrame(cudaStream_t stream) {
     auto& ctx = AppContext::getInstance();
 
     // Single frame in flight - prevents duplicate processing
-    // If another frame is processing, wait briefly instead of busy-spinning in main loop
+    // Use fast spin-wait pattern: spin briefly, then return to avoid blocking
     bool expected = false;
     if (!m_frameInFlight.compare_exchange_strong(expected, true, std::memory_order_acquire)) {
-        // Another frame is still processing - wait for it to complete
-        // This is more efficient than returning and re-entering immediately
-        std::unique_lock<std::mutex> lk(m_inflightMutex);
-        bool completed = m_inflightCv.wait_for(lk, std::chrono::microseconds(500), [this]() {
-            return !m_frameInFlight.load(std::memory_order_acquire);
-        });
-
-        if (!completed) {
-            // Still processing after timeout - yield and let main loop retry
-            return true;
+        // Another frame is still processing - spin briefly before giving up
+        constexpr int kMaxSpinIterations = 64;
+        for (int i = 0; i < kMaxSpinIterations; ++i) {
+            YieldProcessor();  // CPU hint for spin-wait (Windows intrinsic)
+            expected = false;
+            if (m_frameInFlight.compare_exchange_weak(expected, true, std::memory_order_acquire)) {
+                goto acquired;
+            }
         }
-
-        // Frame completed - try to acquire again
-        expected = false;
-        if (!m_frameInFlight.compare_exchange_strong(expected, true, std::memory_order_acquire)) {
-            return true;  // Someone else got it
-        }
+        // Still busy after spinning - return and let caller retry
+        return true;
     }
+acquired:
 
     auto frameStart = std::chrono::steady_clock::now();
 
@@ -2248,7 +2239,6 @@ bool UnifiedGraphPipeline::executeFrame(cudaStream_t stream) {
     if (!acquireFrameSync(metadata)) {
         // No frame available or timeout - release lock and return
         m_frameInFlight.store(false, std::memory_order_release);
-        m_inflightCv.notify_all();
         return true;
     }
 
@@ -2256,7 +2246,6 @@ bool UnifiedGraphPipeline::executeFrame(cudaStream_t stream) {
     cudaStream_t execStream = stream ? stream : (m_pipelineStream ? m_pipelineStream->get() : nullptr);
     if (!execStream) {
         m_frameInFlight.store(false, std::memory_order_release);
-        m_inflightCv.notify_all();
         return false;
     }
 
@@ -2266,14 +2255,12 @@ bool UnifiedGraphPipeline::executeFrame(cudaStream_t stream) {
         // Preprocessing - uses m_captureBuffer directly
         if (!performPreprocessing(execStream)) {
             m_frameInFlight.store(false, std::memory_order_release);
-            m_inflightCv.notify_all();
             return false;
         }
 
         // Inference
         if (!performInference(execStream)) {
             m_frameInFlight.store(false, std::memory_order_release);
-            m_inflightCv.notify_all();
             return false;
         }
 
@@ -2298,13 +2285,11 @@ bool UnifiedGraphPipeline::executeFrame(cudaStream_t stream) {
         if (!enqueueFrameCompletionCallback(execStream, metadata)) {
             m_allowMovement.store(false, std::memory_order_release);
             m_frameInFlight.store(false, std::memory_order_release);
-            m_inflightCv.notify_all();
             return false;
         }
     } else {
         // Detection paused - just release the frame
         m_frameInFlight.store(false, std::memory_order_release);
-        m_inflightCv.notify_all();
     }
 
     // Update performance metrics
