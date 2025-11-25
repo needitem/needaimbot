@@ -15,8 +15,11 @@ public:
     virtual void StopCapture() = 0;
     virtual bool IsCapturing() const = 0;
 
-    // GPU-direct frame path; return false if unsupported.
-    virtual bool GetLatestFrameGPU(cudaArray_t* cudaArray, unsigned int* width, unsigned int* height) = 0;
+    // Synchronous capture API - acquires next frame directly without background thread
+    // Returns: true if new frame captured, false if timeout or error
+    // This is the preferred API for single-threaded pipeline usage
+    virtual bool AcquireFrameSync(cudaArray_t* cudaArray, unsigned int* width, unsigned int* height,
+                                  uint64_t* outPresentQpc = nullptr, uint32_t timeoutMs = 8) = 0;
 
     // CPU fallback path; frameData points to BGRA8 buffer of size bytes.
     virtual bool GetLatestFrame(void** frameData, unsigned int* width, unsigned int* height, unsigned int* size) = 0;

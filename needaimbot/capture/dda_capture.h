@@ -29,6 +29,7 @@ public:
     bool Initialize(HWND targetWindow = nullptr);
     void Shutdown();
 
+    // Initialize capture resources (no background thread in sync mode)
     bool StartCapture();
     void StopCapture();
 
@@ -37,8 +38,11 @@ public:
     bool GetLatestFrame(void** frameData, unsigned int* width, unsigned int* height, unsigned int* size);
     void SetFrameCallback(std::function<void(void*, unsigned int, unsigned int, unsigned int)> callback);
 
-    // GPU-direct API - returns CUDA array pointer (zero-copy)
-    bool GetLatestFrameGPU(cudaArray_t* cudaArray, unsigned int* width, unsigned int* height);
+    // Synchronous capture API - acquires next frame directly without background thread
+    // Returns: true if new frame captured, false if timeout or error
+    // This is the preferred API for single-threaded pipeline usage
+    bool AcquireFrameSync(cudaArray_t* cudaArray, unsigned int* width, unsigned int* height,
+                          uint64_t* outPresentQpc = nullptr, uint32_t timeoutMs = 8);
 
     // Synchronization helpers
     // Blocks until a frame with DXGI LastPresentTime >= minPresentQpc is captured
@@ -64,32 +68,12 @@ public:
     static bool IsDDACaptureAvailable();
 
 private:
-    enum class FrameAcquireResult {
-        kFrameCaptured,
-        kNoFrame,
-        kError,
-    };
-
-    // Capture mode state machine - GPU-direct only
-    enum class CaptureMode {
-        kGpuDirect,      // Zero-copy CUDA interop (only supported mode)
-        kProbing         // Testing GPU direct availability
-    };
-
     bool InitializeDeviceAndOutput(HWND targetWindow);
     bool CreateDuplicationInterface();
     void ReleaseDuplication();
 
     bool EnsureStagingTexture(UINT width, UINT height, DXGI_FORMAT format);
     bool EnsureFrameBuffer(size_t requiredSize);
-    FrameAcquireResult AcquireFrame();
-    void CaptureThreadProc();
-
-    // State machine helpers
-    void TransitionToCaptureMode(CaptureMode newMode);
-    bool ProbeGpuDirectCapability();
-    FrameAcquireResult AcquireFrameGpuDirect();
-    FrameAcquireResult AcquireFrameCpuFallback();
 
     Microsoft::WRL::ComPtr<ID3D11Device> m_device;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> m_context;
@@ -110,32 +94,9 @@ private:
     cudaArray_t m_cudaMappedArray = nullptr;
     bool m_cudaInteropEnabled = false;
 
-    // State machine for capture path selection
-    std::atomic<CaptureMode> m_currentMode{CaptureMode::kProbing};
-    std::atomic<bool> m_cpuFallbackNeeded{false};  // External signal to force CPU path
-    bool m_cpuBufferValid = false;
-
-    // Probing state
-    std::chrono::steady_clock::time_point m_lastProbeTime;
-    int m_consecutiveGpuFailures = 0;
-    static constexpr int kMaxGpuFailuresBeforeFallback = 3;
-    static constexpr std::chrono::milliseconds kProbeInterval{5000};
-
-    // Adaptive backoff state
-    enum class BackoffLevel {
-        kNone,           // 0: Immediate retry (success)
-        kMinimal,        // 1: light retry, no explicit yield
-        kShort,          // 2: additional backoff stage, no yield
-        kMedium,         // 3: Sleep(1ms) (65-128 failures)
-        kLong            // 4: Sleep(2ms) (128+ failures)
-    };
-    int m_consecutiveNoFrames = 0;
-    BackoffLevel m_currentBackoffLevel = BackoffLevel::kNone;
-
     mutable std::mutex m_frameMutex;
     std::function<void(void*, unsigned int, unsigned int, unsigned int)> m_frameCallback;
 
-    std::thread m_captureThread;
     std::atomic<bool> m_isCapturing{false};
     bool m_isInitialized = false;
 
