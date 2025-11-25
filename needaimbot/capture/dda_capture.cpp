@@ -13,19 +13,19 @@ constexpr UINT kBytesPerPixel = 4;   // BGRA
 
 UINT DDACapture::AcquireTimeoutMs() const {
     const auto& ctx = AppContext::getInstance();
-    double scale = 0.45; // fallback - lower for faster frame detection
+    double scale = 0.40; // Slightly lower default for faster frame detection
     double cfg = static_cast<double>(ctx.config.capture_timeout_scale);
-    if (cfg >= 0.3 && cfg <= 1.0) {
+    if (cfg >= 0.2 && cfg <= 1.0) {
         scale = cfg;
     }
     double base = m_estimatedIntervalMs * scale;
-    if (base < 1.0) base = 1.0;
-    if (base > 5.0) base = 5.0; // Lower max for faster polling
+    // Support high refresh rates (360Hz = 2.78ms, 240Hz = 4.17ms)
+    if (base < 0.5) base = 0.5;  // Allow sub-ms for 360Hz+ displays
+    if (base > 4.0) base = 4.0;  // Tighter max for faster response
     return static_cast<UINT>(base + 0.5);
 }
 
-DDACapture::DDACapture()
-    : m_lastProbeTime(std::chrono::steady_clock::now()) {
+DDACapture::DDACapture() {
     LARGE_INTEGER freq{};
     if (QueryPerformanceFrequency(&freq) && freq.QuadPart > 0) {
         m_qpcToMs = 1000.0 / static_cast<double>(freq.QuadPart);
@@ -128,18 +128,12 @@ bool DDACapture::StartCapture() {
     }
 
     m_isCapturing = true;
-    m_captureThread = std::thread(&DDACapture::CaptureThreadProc, this);
+    // No background thread - pipeline calls AcquireFrameSync() directly
     return true;
 }
 
 void DDACapture::StopCapture() {
-    if (!m_isCapturing.exchange(false)) {
-        return;
-    }
-
-    if (m_captureThread.joinable()) {
-        m_captureThread.join();
-    }
+    m_isCapturing.store(false, std::memory_order_release);
 }
 
 bool DDACapture::GetLatestFrame(void** frameData, unsigned int* width, unsigned int* height, unsigned int* size) {
@@ -153,21 +147,134 @@ void DDACapture::SetFrameCallback(std::function<void(void*, unsigned int, unsign
     m_frameCallback = std::move(callback);
 }
 
-bool DDACapture::GetLatestFrameGPU(cudaArray_t* cudaArray, unsigned int* width, unsigned int* height) {
-    std::lock_guard<std::mutex> lock(m_frameMutex);
+bool DDACapture::AcquireFrameSync(cudaArray_t* cudaArray, unsigned int* width, unsigned int* height,
+                                   uint64_t* outPresentQpc, uint32_t timeoutMs) {
+    // Synchronous frame acquisition - no background thread needed
+    // This is called directly from the pipeline thread
 
-    if (!m_cudaInteropEnabled || !m_cudaMappedArray) {
+    if (!m_isInitialized || !m_cudaInteropEnabled) {
         return false;
     }
 
+    // Ensure duplication interface exists
+    if (!m_duplication) {
+        if (!CreateDuplicationInterface()) {
+            return false;
+        }
+    }
+
+    // Acquire frame from DXGI
+    Microsoft::WRL::ComPtr<IDXGIResource> desktopResource;
+    DXGI_OUTDUPL_FRAME_INFO frameInfo{};
+    HRESULT hr = m_duplication->AcquireNextFrame(timeoutMs, &frameInfo, &desktopResource);
+
+    if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
+        return false;  // No new frame available
+    }
+
+    if (hr == DXGI_ERROR_ACCESS_LOST) {
+        m_accessLostCount.fetch_add(1, std::memory_order_relaxed);
+        if (CreateDuplicationInterface()) {
+            hr = m_duplication->AcquireNextFrame(timeoutMs, &frameInfo, &desktopResource);
+            if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+
+    if (FAILED(hr)) {
+        m_captureErrorCount.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+
+    // Get frame texture
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> frameTexture;
+    hr = desktopResource.As(&frameTexture);
+    if (FAILED(hr)) {
+        m_duplication->ReleaseFrame();
+        return false;
+    }
+
+    D3D11_TEXTURE2D_DESC textureDesc{};
+    frameTexture->GetDesc(&textureDesc);
+
+    UINT captureWidth = m_captureWidth;
+    UINT captureHeight = m_captureHeight;
+    UINT startX = static_cast<UINT>(m_captureRegion.left);
+    UINT startY = static_cast<UINT>(m_captureRegion.top);
+
+    if (captureWidth == 0 || captureHeight == 0 ||
+        startX + captureWidth > textureDesc.Width ||
+        startY + captureHeight > textureDesc.Height) {
+        captureWidth = textureDesc.Width;
+        captureHeight = textureDesc.Height;
+        startX = 0;
+        startY = 0;
+    }
+
+    DXGI_FORMAT captureFormat = textureDesc.Format != DXGI_FORMAT_UNKNOWN
+        ? textureDesc.Format : m_duplicationFormat;
+
+    if (!EnsureStagingTexture(captureWidth, captureHeight, captureFormat)) {
+        m_duplication->ReleaseFrame();
+        return false;
+    }
+
+    // Copy to shared texture
+    D3D11_BOX captureBox{};
+    captureBox.left = startX;
+    captureBox.top = startY;
+    captureBox.front = 0;
+    captureBox.right = startX + captureWidth;
+    captureBox.bottom = startY + captureHeight;
+    captureBox.back = 1;
+
+    const bool useBox = !(startX == 0 && startY == 0 &&
+                          captureWidth == textureDesc.Width &&
+                          captureHeight == textureDesc.Height);
+
+    if (useBox) {
+        m_context->CopySubresourceRegion(m_sharedTexture.Get(), 0, 0, 0, 0,
+                                         frameTexture.Get(), 0, &captureBox);
+    } else {
+        m_context->CopyResource(m_sharedTexture.Get(), frameTexture.Get());
+    }
+
+    // Flush to ensure copy completes before CUDA reads
+    m_context->Flush();
+
+    m_duplication->ReleaseFrame();
+
+    // Update dimensions
+    m_captureWidth = captureWidth;
+    m_captureHeight = captureHeight;
+
+    // Update timing
+    const uint64_t lastQpc = static_cast<uint64_t>(frameInfo.LastPresentTime.QuadPart);
+    if (m_qpcToMs > 0.0 && m_prevPresentQpc != 0 && lastQpc > m_prevPresentQpc) {
+        double deltaMs = (lastQpc - m_prevPresentQpc) * m_qpcToMs;
+        if (deltaMs < 2.0) deltaMs = 2.0;
+        if (deltaMs > 33.4) deltaMs = 33.4;
+        m_estimatedIntervalMs = 0.9 * m_estimatedIntervalMs + 0.1 * deltaMs;
+    }
+    m_prevPresentQpc = lastQpc;
+    m_lastPresentQpc.store(lastQpc, std::memory_order_release);
+    m_frameCounter.fetch_add(1, std::memory_order_acq_rel);
+
+    // Return results
     if (cudaArray) {
         *cudaArray = m_cudaMappedArray;
     }
     if (width) {
-        *width = m_captureWidth;
+        *width = captureWidth;
     }
     if (height) {
-        *height = m_captureHeight;
+        *height = captureHeight;
+    }
+    if (outPresentQpc) {
+        *outPresentQpc = lastQpc;
     }
 
     return true;
@@ -501,624 +608,3 @@ bool DDACapture::EnsureFrameBuffer(size_t requiredSize) {
     }
 }
 
-DDACapture::FrameAcquireResult DDACapture::AcquireFrame() {
-    if (!m_duplication || !m_context) {
-        return FrameAcquireResult::kError;
-    }
-
-    Microsoft::WRL::ComPtr<IDXGIResource> desktopResource;
-    DXGI_OUTDUPL_FRAME_INFO frameInfo{};
-    bool frameAcquired = false;
-
-    HRESULT hr = m_duplication->AcquireNextFrame(AcquireTimeoutMs(), &frameInfo, &desktopResource);
-    if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
-        return FrameAcquireResult::kNoFrame;
-    }
-
-    if (hr == DXGI_ERROR_ACCESS_LOST) {
-        // Desktop duplication interface lost - typically due to mode change, desktop switch, etc.
-        m_accessLostCount.fetch_add(1, std::memory_order_relaxed);
-        std::cerr << "[DDACapture] DXGI_ERROR_ACCESS_LOST - recreating duplication interface" << std::endl;
-
-        if (CreateDuplicationInterface()) {
-            // Successfully recreated - immediately retry acquisition
-            hr = m_duplication->AcquireNextFrame(AcquireTimeoutMs(), &frameInfo, &desktopResource);
-            if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
-                return FrameAcquireResult::kNoFrame;
-            }
-            if (SUCCEEDED(hr)) {
-                frameAcquired = true;
-                // Continue with normal frame processing below
-            } else {
-                std::cerr << "[DDACapture] Retry after ACCESS_LOST failed: 0x" << std::hex << hr << std::dec << std::endl;
-                return FrameAcquireResult::kError;
-            }
-        } else {
-            std::cerr << "[DDACapture] Failed to recreate duplication interface after ACCESS_LOST" << std::endl;
-            return FrameAcquireResult::kError;
-        }
-    }
-
-    if (FAILED(hr)) {
-        m_captureErrorCount.fetch_add(1, std::memory_order_relaxed);
-        std::cerr << "[DDACapture] AcquireNextFrame failed: 0x" << std::hex << hr << std::dec << std::endl;
-        return FrameAcquireResult::kError;
-    }
-
-    if (!frameAcquired) {
-        frameAcquired = true;
-    }
-
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> frameTexture;
-    hr = desktopResource.As(&frameTexture);
-    if (FAILED(hr)) {
-        std::cerr << "[DDACapture] Failed to query frame texture: 0x" << std::hex << hr << std::dec << std::endl;
-        if (frameAcquired) {
-            m_duplication->ReleaseFrame();
-        }
-        return FrameAcquireResult::kError;
-    }
-
-    D3D11_TEXTURE2D_DESC textureDesc{};
-    frameTexture->GetDesc(&textureDesc);
-
-    UINT captureWidth = m_captureWidth;
-    UINT captureHeight = m_captureHeight;
-    UINT startX = static_cast<UINT>(m_captureRegion.left);
-    UINT startY = static_cast<UINT>(m_captureRegion.top);
-
-    if (captureWidth == 0 || captureHeight == 0 ||
-        startX + captureWidth > textureDesc.Width ||
-        startY + captureHeight > textureDesc.Height) {
-        captureWidth = textureDesc.Width;
-        captureHeight = textureDesc.Height;
-        startX = 0;
-        startY = 0;
-    }
-
-    DXGI_FORMAT captureFormat = textureDesc.Format != DXGI_FORMAT_UNKNOWN
-        ? textureDesc.Format
-        : m_duplicationFormat;
-
-    if (!EnsureStagingTexture(captureWidth, captureHeight, captureFormat)) {
-        if (frameAcquired) {
-            m_duplication->ReleaseFrame();
-        }
-        return FrameAcquireResult::kError;
-    }
-
-    D3D11_BOX captureBox{};
-    captureBox.left = startX;
-    captureBox.top = startY;
-    captureBox.front = 0;
-    captureBox.right = startX + captureWidth;
-    captureBox.bottom = startY + captureHeight;
-    captureBox.back = 1;
-
-    const bool useBox = !(startX == 0 && startY == 0 &&
-                          captureWidth == textureDesc.Width &&
-                          captureHeight == textureDesc.Height);
-
-    // Copy to shared texture for CUDA interop if enabled
-    if (m_cudaInteropEnabled && m_sharedTexture) {
-        if (useBox) {
-            m_context->CopySubresourceRegion(
-                m_sharedTexture.Get(),
-                0,
-                0,
-                0,
-                0,
-                frameTexture.Get(),
-                0,
-                &captureBox
-            );
-        } else {
-            m_context->CopyResource(m_sharedTexture.Get(), frameTexture.Get());
-        }
-    }
-
-    // Only copy to staging texture if CPU fallback is truly needed
-    // Skip redundant CPU path when GPU-direct is active and working
-    const bool needCpuCopy = false;  // CPU fallback removed
-
-    hr = m_duplication->ReleaseFrame();
-    frameAcquired = false;
-    if (FAILED(hr)) {
-        std::cerr << "[DDACapture] ReleaseFrame failed: 0x" << std::hex << hr << std::dec << std::endl;
-        return FrameAcquireResult::kError;
-    }
-
-    std::function<void(void*, unsigned int, unsigned int, unsigned int)> callback;
-    void* callbackData = nullptr;
-    unsigned int callbackWidth = captureWidth;
-    unsigned int callbackHeight = captureHeight;
-    size_t requiredSize = static_cast<size_t>(captureWidth) * captureHeight * kBytesPerPixel;
-    unsigned int callbackSize = static_cast<unsigned int>(requiredSize);
-
-    // Only perform CPU staging copy and map if needed
-    if (needCpuCopy) {
-        // Need to re-acquire frame for CPU path (frameTexture already released)
-        // Instead, copy from sharedTexture to staging
-        if (m_sharedTexture) {
-            m_context->CopyResource(m_stagingTexture.Get(), m_sharedTexture.Get());
-        }
-
-        D3D11_MAPPED_SUBRESOURCE mapped{};
-        hr = m_context->Map(m_stagingTexture.Get(), 0, D3D11_MAP_READ, 0, &mapped);
-        if (FAILED(hr)) {
-            std::cerr << "[DDACapture] Failed to map staging texture: 0x" << std::hex << hr << std::dec << std::endl;
-            m_cpuBufferValid = false;
-            // Don't fail - GPU path may still work
-        } else {
-            std::lock_guard<std::mutex> lock(m_frameMutex);
-            if (!EnsureFrameBuffer(requiredSize)) {
-                m_context->Unmap(m_stagingTexture.Get(), 0);
-                m_cpuBufferValid = false;
-            } else if (m_frameBuffer) {
-                unsigned char* dst = m_frameBuffer->get();
-                const unsigned char* srcBase = static_cast<const unsigned char*>(mapped.pData);
-                const UINT srcPitch = mapped.RowPitch;
-                const UINT bytesPerRow = captureWidth * kBytesPerPixel;
-
-                if (srcPitch == bytesPerRow) {
-                    std::memcpy(dst, srcBase, bytesPerRow * captureHeight);
-                } else {
-                    for (UINT row = 0; row < captureHeight; ++row) {
-                        const unsigned char* srcRow = srcBase + row * srcPitch;
-                        std::memcpy(dst + row * bytesPerRow, srcRow, bytesPerRow);
-                    }
-                }
-
-                m_captureWidth = captureWidth;
-                m_captureHeight = captureHeight;
-                m_bufferSize = requiredSize;
-                m_cpuBufferValid = true;
-                callback = m_frameCallback;
-                callbackData = dst;
-                callbackWidth = m_captureWidth;
-                callbackHeight = m_captureHeight;
-                callbackSize = static_cast<unsigned int>(m_bufferSize);
-                m_context->Unmap(m_stagingTexture.Get(), 0);
-            } else {
-                m_context->Unmap(m_stagingTexture.Get(), 0);
-                m_cpuBufferValid = false;
-            }
-        }
-    } else {
-        // GPU-direct path - just update dimensions
-        std::lock_guard<std::mutex> lock(m_frameMutex);
-        m_captureWidth = captureWidth;
-        m_captureHeight = captureHeight;
-        m_cpuBufferValid = false;  // CPU buffer not updated
-    }
-
-    // Update present time/frame counter and notify after CPU buffer is valid
-    {
-        const uint64_t lastQpc = static_cast<uint64_t>(frameInfo.LastPresentTime.QuadPart);
-        if (m_qpcToMs > 0.0 && m_prevPresentQpc != 0 && lastQpc > m_prevPresentQpc) {
-            double deltaMs = (lastQpc - m_prevPresentQpc) * m_qpcToMs;
-            if (deltaMs < 2.0) deltaMs = 2.0;
-            if (deltaMs > 33.4) deltaMs = 33.4;
-            m_estimatedIntervalMs = 0.9 * m_estimatedIntervalMs + 0.1 * deltaMs;
-        }
-        m_prevPresentQpc = lastQpc;
-
-        std::lock_guard<std::mutex> lk(m_presentMutex);
-        m_lastPresentQpc.store(lastQpc, std::memory_order_release);
-        m_frameCounter.fetch_add(1, std::memory_order_acq_rel);
-    }
-    m_presentCv.notify_all();
-
-    if (callback) {
-        callback(callbackData, callbackWidth, callbackHeight, callbackSize);
-    }
-
-    return FrameAcquireResult::kFrameCaptured;
-}
-
-void DDACapture::TransitionToCaptureMode(CaptureMode newMode) {
-    CaptureMode oldMode = m_currentMode.exchange(newMode, std::memory_order_release);
-    if (oldMode != newMode) {
-        const char* modeNames[] = {"GpuDirect", "Probing"};
-        std::cout << "[DDACapture] Mode transition: " << modeNames[static_cast<int>(oldMode)]
-                  << " -> " << modeNames[static_cast<int>(newMode)] << std::endl;
-
-        if (newMode == CaptureMode::kGpuDirect) {
-            m_consecutiveGpuFailures = 0;
-        }
-    }
-}
-
-bool DDACapture::ProbeGpuDirectCapability() {
-    // Only probe if CUDA interop is supposedly available
-    if (!m_cudaInteropEnabled || !m_cudaMappedArray) {
-        std::cerr << "[DDACapture] ProbeGpuDirectCapability: CUDA interop not initialized (m_cudaInteropEnabled="
-                  << (m_cudaInteropEnabled ? "true" : "false") << ", m_cudaMappedArray="
-                  << (m_cudaMappedArray ? "OK" : "NULL") << ")" << std::endl;
-        return false;
-    }
-
-    // Simple test: verify CUDA resource is still valid
-    cudaError_t err = cudaGetLastError();  // Clear previous errors
-
-    // Try to query the array properties
-    cudaChannelFormatDesc desc;
-    cudaExtent extent;
-    unsigned int flags;
-    err = cudaArrayGetInfo(&desc, &extent, &flags, m_cudaMappedArray);
-
-    if (err != cudaSuccess) {
-        std::cerr << "[DDACapture] ProbeGpuDirectCapability: CUDA array query failed: "
-                  << cudaGetErrorString(err) << std::endl;
-    }
-
-    return (err == cudaSuccess);
-}
-
-DDACapture::FrameAcquireResult DDACapture::AcquireFrameGpuDirect() {
-    // GPU-only path - no CPU staging or mapping
-    if (!m_duplication || !m_context) {
-        return FrameAcquireResult::kError;
-    }
-
-    Microsoft::WRL::ComPtr<IDXGIResource> desktopResource;
-    DXGI_OUTDUPL_FRAME_INFO frameInfo{};
-    HRESULT hr = m_duplication->AcquireNextFrame(AcquireTimeoutMs(), &frameInfo, &desktopResource);
-
-    if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
-        return FrameAcquireResult::kNoFrame;
-    }
-
-    if (hr == DXGI_ERROR_ACCESS_LOST) {
-        m_accessLostCount.fetch_add(1, std::memory_order_relaxed);
-        if (CreateDuplicationInterface()) {
-            hr = m_duplication->AcquireNextFrame(AcquireTimeoutMs(), &frameInfo, &desktopResource);
-            if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
-                return FrameAcquireResult::kNoFrame;
-            }
-        } else {
-            return FrameAcquireResult::kError;
-        }
-    }
-
-    if (FAILED(hr)) {
-        m_captureErrorCount.fetch_add(1, std::memory_order_relaxed);
-        m_consecutiveGpuFailures++;
-        if (m_consecutiveGpuFailures >= kMaxGpuFailuresBeforeFallback) {
-            std::cerr << "[DDACapture] GPU-direct failed repeatedly. No CPU fallback available." << std::endl;
-        }
-        return FrameAcquireResult::kError;
-    }
-
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> frameTexture;
-    hr = desktopResource.As(&frameTexture);
-    if (FAILED(hr)) {
-        m_duplication->ReleaseFrame();
-        m_consecutiveGpuFailures++;
-        return FrameAcquireResult::kError;
-    }
-
-    D3D11_TEXTURE2D_DESC textureDesc{};
-    frameTexture->GetDesc(&textureDesc);
-
-    UINT captureWidth = m_captureWidth;
-    UINT captureHeight = m_captureHeight;
-    UINT startX = static_cast<UINT>(m_captureRegion.left);
-    UINT startY = static_cast<UINT>(m_captureRegion.top);
-
-    if (captureWidth == 0 || captureHeight == 0 ||
-        startX + captureWidth > textureDesc.Width ||
-        startY + captureHeight > textureDesc.Height) {
-        captureWidth = textureDesc.Width;
-        captureHeight = textureDesc.Height;
-        startX = 0;
-        startY = 0;
-    }
-
-    DXGI_FORMAT captureFormat = textureDesc.Format != DXGI_FORMAT_UNKNOWN
-        ? textureDesc.Format : m_duplicationFormat;
-
-    if (!EnsureStagingTexture(captureWidth, captureHeight, captureFormat)) {
-        m_duplication->ReleaseFrame();
-        return FrameAcquireResult::kError;
-    }
-
-    D3D11_BOX captureBox{};
-    captureBox.left = startX;
-    captureBox.top = startY;
-    captureBox.front = 0;
-    captureBox.right = startX + captureWidth;
-    captureBox.bottom = startY + captureHeight;
-    captureBox.back = 1;
-
-    const bool useBox = !(startX == 0 && startY == 0 &&
-                          captureWidth == textureDesc.Width &&
-                          captureHeight == textureDesc.Height);
-
-    // GPU direct path: copy directly to shared texture
-    if (useBox) {
-        m_context->CopySubresourceRegion(m_sharedTexture.Get(), 0, 0, 0, 0,
-                                         frameTexture.Get(), 0, &captureBox);
-    } else {
-        m_context->CopyResource(m_sharedTexture.Get(), frameTexture.Get());
-    }
-
-    m_duplication->ReleaseFrame();
-
-    // Update dimensions without CPU buffer
-    {
-        std::lock_guard<std::mutex> lock(m_frameMutex);
-        m_captureWidth = captureWidth;
-        m_captureHeight = captureHeight;
-        m_cpuBufferValid = false;
-    }
-
-    // Update frame timing
-    {
-        const uint64_t lastQpc = static_cast<uint64_t>(frameInfo.LastPresentTime.QuadPart);
-        if (m_qpcToMs > 0.0 && m_prevPresentQpc != 0 && lastQpc > m_prevPresentQpc) {
-            double deltaMs = (lastQpc - m_prevPresentQpc) * m_qpcToMs;
-            if (deltaMs < 2.0) deltaMs = 2.0;
-            if (deltaMs > 33.4) deltaMs = 33.4;
-            m_estimatedIntervalMs = 0.9 * m_estimatedIntervalMs + 0.1 * deltaMs;
-        }
-        m_prevPresentQpc = lastQpc;
-
-        std::lock_guard<std::mutex> lk(m_presentMutex);
-        m_lastPresentQpc.store(lastQpc, std::memory_order_release);
-        m_frameCounter.fetch_add(1, std::memory_order_acq_rel);
-    }
-    m_presentCv.notify_all();
-
-    // Reset failure counter on success
-    m_consecutiveGpuFailures = 0;
-    return FrameAcquireResult::kFrameCaptured;
-}
-
-DDACapture::FrameAcquireResult DDACapture::AcquireFrameCpuFallback() {
-    // Full CPU path with staging texture and memory copy
-    // This is the same as the original AcquireFrame, but always does CPU copy
-    if (!m_duplication || !m_context) {
-        return FrameAcquireResult::kError;
-    }
-
-    Microsoft::WRL::ComPtr<IDXGIResource> desktopResource;
-    DXGI_OUTDUPL_FRAME_INFO frameInfo{};
-    HRESULT hr = m_duplication->AcquireNextFrame(AcquireTimeoutMs(), &frameInfo, &desktopResource);
-
-    if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
-        return FrameAcquireResult::kNoFrame;
-    }
-
-    if (hr == DXGI_ERROR_ACCESS_LOST) {
-        m_accessLostCount.fetch_add(1, std::memory_order_relaxed);
-        if (CreateDuplicationInterface()) {
-            hr = m_duplication->AcquireNextFrame(AcquireTimeoutMs(), &frameInfo, &desktopResource);
-            if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
-                return FrameAcquireResult::kNoFrame;
-            }
-        } else {
-            return FrameAcquireResult::kError;
-        }
-    }
-
-    if (FAILED(hr)) {
-        m_captureErrorCount.fetch_add(1, std::memory_order_relaxed);
-        return FrameAcquireResult::kError;
-    }
-
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> frameTexture;
-    hr = desktopResource.As(&frameTexture);
-    if (FAILED(hr)) {
-        m_duplication->ReleaseFrame();
-        return FrameAcquireResult::kError;
-    }
-
-    D3D11_TEXTURE2D_DESC textureDesc{};
-    frameTexture->GetDesc(&textureDesc);
-
-    UINT captureWidth = m_captureWidth;
-    UINT captureHeight = m_captureHeight;
-    UINT startX = static_cast<UINT>(m_captureRegion.left);
-    UINT startY = static_cast<UINT>(m_captureRegion.top);
-
-    if (captureWidth == 0 || captureHeight == 0 ||
-        startX + captureWidth > textureDesc.Width ||
-        startY + captureHeight > textureDesc.Height) {
-        captureWidth = textureDesc.Width;
-        captureHeight = textureDesc.Height;
-        startX = 0;
-        startY = 0;
-    }
-
-    DXGI_FORMAT captureFormat = textureDesc.Format != DXGI_FORMAT_UNKNOWN
-        ? textureDesc.Format : m_duplicationFormat;
-
-    if (!EnsureStagingTexture(captureWidth, captureHeight, captureFormat)) {
-        m_duplication->ReleaseFrame();
-        return FrameAcquireResult::kError;
-    }
-
-    D3D11_BOX captureBox{};
-    captureBox.left = startX;
-    captureBox.top = startY;
-    captureBox.front = 0;
-    captureBox.right = startX + captureWidth;
-    captureBox.bottom = startY + captureHeight;
-    captureBox.back = 1;
-
-    const bool useBox = !(startX == 0 && startY == 0 &&
-                          captureWidth == textureDesc.Width &&
-                          captureHeight == textureDesc.Height);
-
-    // Copy to staging texture for CPU access
-    if (m_sharedTexture) {
-        if (useBox) {
-            m_context->CopySubresourceRegion(m_sharedTexture.Get(), 0, 0, 0, 0,
-                                             frameTexture.Get(), 0, &captureBox);
-        } else {
-            m_context->CopyResource(m_sharedTexture.Get(), frameTexture.Get());
-        }
-        m_context->CopyResource(m_stagingTexture.Get(), m_sharedTexture.Get());
-    }
-
-    m_duplication->ReleaseFrame();
-
-    // Map and copy to CPU buffer
-    D3D11_MAPPED_SUBRESOURCE mapped{};
-    hr = m_context->Map(m_stagingTexture.Get(), 0, D3D11_MAP_READ, 0, &mapped);
-    if (FAILED(hr)) {
-        std::lock_guard<std::mutex> lock(m_frameMutex);
-        m_cpuBufferValid = false;
-        return FrameAcquireResult::kError;
-    }
-
-    size_t requiredSize = static_cast<size_t>(captureWidth) * captureHeight * kBytesPerPixel;
-    {
-        std::lock_guard<std::mutex> lock(m_frameMutex);
-        if (!EnsureFrameBuffer(requiredSize)) {
-            m_context->Unmap(m_stagingTexture.Get(), 0);
-            m_cpuBufferValid = false;
-            return FrameAcquireResult::kError;
-        }
-
-        std::function<void(void*, unsigned int, unsigned int, unsigned int)> callback;
-        void* callbackData = nullptr;
-
-        if (m_frameBuffer) {
-            unsigned char* dst = m_frameBuffer->get();
-            const unsigned char* srcBase = static_cast<const unsigned char*>(mapped.pData);
-            const UINT srcPitch = mapped.RowPitch;
-            const UINT bytesPerRow = captureWidth * kBytesPerPixel;
-
-            if (srcPitch == bytesPerRow) {
-                std::memcpy(dst, srcBase, bytesPerRow * captureHeight);
-            } else {
-                for (UINT row = 0; row < captureHeight; ++row) {
-                    const unsigned char* srcRow = srcBase + row * srcPitch;
-                    std::memcpy(dst + row * bytesPerRow, srcRow, bytesPerRow);
-                }
-            }
-
-            m_captureWidth = captureWidth;
-            m_captureHeight = captureHeight;
-            m_bufferSize = requiredSize;
-            m_cpuBufferValid = true;
-            callback = m_frameCallback;
-            callbackData = dst;
-        }
-
-        m_context->Unmap(m_stagingTexture.Get(), 0);
-
-        // Update frame timing
-        {
-            const uint64_t lastQpc = static_cast<uint64_t>(frameInfo.LastPresentTime.QuadPart);
-            if (m_qpcToMs > 0.0 && m_prevPresentQpc != 0 && lastQpc > m_prevPresentQpc) {
-                double deltaMs = (lastQpc - m_prevPresentQpc) * m_qpcToMs;
-                if (deltaMs < 2.0) deltaMs = 2.0;
-                if (deltaMs > 33.4) deltaMs = 33.4;
-                m_estimatedIntervalMs = 0.9 * m_estimatedIntervalMs + 0.1 * deltaMs;
-            }
-            m_prevPresentQpc = lastQpc;
-
-            std::lock_guard<std::mutex> lk(m_presentMutex);
-            m_lastPresentQpc.store(lastQpc, std::memory_order_release);
-            m_frameCounter.fetch_add(1, std::memory_order_acq_rel);
-        }
-        m_presentCv.notify_all();
-
-        if (callback && callbackData) {
-            callback(callbackData, m_captureWidth, m_captureHeight, static_cast<unsigned int>(m_bufferSize));
-        }
-    }
-
-    return FrameAcquireResult::kFrameCaptured;
-}
-
-void DDACapture::CaptureThreadProc() {
-    // Set thread to high priority for low-latency capture
-    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
-
-    while (m_isCapturing.load()) {
-        // Check if we should probe for GPU direct capability
-        CaptureMode currentMode = m_currentMode.load(std::memory_order_acquire);
-
-        // GPU-direct only - no CPU fallback
-        if (currentMode == CaptureMode::kProbing) {
-            bool gpuAvailable = ProbeGpuDirectCapability();
-            if (gpuAvailable) {
-                TransitionToCaptureMode(CaptureMode::kGpuDirect);
-                currentMode = CaptureMode::kGpuDirect;
-            } else {
-                std::cerr << "[DDACapture] GPU-direct not available. CPU fallback removed - stopping capture." << std::endl;
-                m_isCapturing.store(false);
-                break;
-            }
-        }
-
-        // Only GPU-direct path
-        FrameAcquireResult result = AcquireFrameGpuDirect();
-
-        // Adaptive backoff based on result
-        if (result == FrameAcquireResult::kFrameCaptured) {
-            // Success - reset backoff state
-            m_consecutiveNoFrames = 0;
-            m_currentBackoffLevel = BackoffLevel::kNone;
-        }
-        else if (result == FrameAcquireResult::kError) {
-            // Error - immediate medium backoff to avoid error spam
-            m_consecutiveNoFrames = 0;
-            m_currentBackoffLevel = BackoffLevel::kMedium;
-            Sleep(1);  // 1ms on error
-        }
-        else if (result == FrameAcquireResult::kNoFrame) {
-            // No frame available - adaptive backoff
-            m_consecutiveNoFrames++;
-
-            // OPTIMIZATION: Ultra-aggressive backoff to eliminate busyspin
-            // Transition to thread yield/sleep very quickly after initial spin attempts
-            BackoffLevel newLevel;
-            if (m_consecutiveNoFrames <= 1) {
-                newLevel = BackoffLevel::kNone;        // Single immediate retry for 360Hz+
-            } else if (m_consecutiveNoFrames <= 3) {
-                newLevel = BackoffLevel::kMinimal;     // SwitchToThread (240Hz)
-            } else if (m_consecutiveNoFrames <= 6) {
-                newLevel = BackoffLevel::kShort;       // Sleep(0) (144Hz)
-            } else if (m_consecutiveNoFrames <= 12) {
-                newLevel = BackoffLevel::kMedium;      // Sleep(1ms) (60Hz/idle)
-            } else {
-                newLevel = BackoffLevel::kLong;        // Sleep(2ms) (minimized)
-            }
-
-            // Apply backoff only if level increased (hysteresis)
-            if (static_cast<int>(newLevel) > static_cast<int>(m_currentBackoffLevel)) {
-                m_currentBackoffLevel = newLevel;
-            }
-
-            // Execute backoff strategy
-            switch (m_currentBackoffLevel) {
-                case BackoffLevel::kNone:
-                    // No backoff - immediate retry. AcquireNextFrame blocks by AcquireTimeoutMs().
-                    break;
-
-                case BackoffLevel::kMinimal:
-                    // Avoid active yielding; rely on next AcquireNextFrame blocking
-                    break;
-
-                case BackoffLevel::kShort:
-                    // No explicit yield; rely on AcquireNextFrame blocking
-                    break;
-
-                case BackoffLevel::kMedium:
-                    // Definite context switch - good for 60-144Hz displays
-                    Sleep(1);  // Actual sleep time ~1-2ms on Windows
-                    break;
-
-                case BackoffLevel::kLong:
-                    // Longer backoff for sustained no-frame periods (idle/minimized)
-                    Sleep(2);  // Actual sleep time ~2-3ms
-                    break;
-            }
-        }
-    }
-}

@@ -13,8 +13,9 @@ public:
     void StopCapture() override { if (m_impl) m_impl->StopCapture(); }
     bool IsCapturing() const override { return m_impl ? m_impl->IsCapturing() : false; }
 
-    bool GetLatestFrameGPU(cudaArray_t* cudaArray, unsigned int* width, unsigned int* height) override {
-        return m_impl ? m_impl->GetLatestFrameGPU(cudaArray, width, height) : false;
+    bool AcquireFrameSync(cudaArray_t* cudaArray, unsigned int* width, unsigned int* height,
+                          uint64_t* outPresentQpc = nullptr, uint32_t timeoutMs = 8) override {
+        return m_impl ? m_impl->AcquireFrameSync(cudaArray, width, height, outPresentQpc, timeoutMs) : false;
     }
 
     bool GetLatestFrame(void** frameData, unsigned int* width, unsigned int* height, unsigned int* size) override {
