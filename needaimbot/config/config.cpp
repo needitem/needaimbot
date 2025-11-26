@@ -344,10 +344,28 @@ bool Config::loadConfig(const std::string& filename)
 
     show_window = get_bool_ini("Debug", "show_window", true);
     show_fps = get_bool_ini("Debug", "show_fps", true);
-    
+
     screenshot_button = splitString(get_string_ini("Debug", "screenshot_button", "None"));
     screenshot_delay = get_long_ini("Debug", "screenshot_delay", 500);
     always_on_top = get_bool_ini("Debug", "always_on_top", true);
+
+    // Color Filter settings
+    color_filter_enabled = get_bool_ini("ColorFilter", "enabled", false);
+    color_filter_mode = get_long_ini("ColorFilter", "mode", 0);
+    color_filter_r_min = get_long_ini("ColorFilter", "r_min", 0);
+    color_filter_r_max = get_long_ini("ColorFilter", "r_max", 255);
+    color_filter_g_min = get_long_ini("ColorFilter", "g_min", 0);
+    color_filter_g_max = get_long_ini("ColorFilter", "g_max", 255);
+    color_filter_b_min = get_long_ini("ColorFilter", "b_min", 0);
+    color_filter_b_max = get_long_ini("ColorFilter", "b_max", 255);
+    color_filter_h_min = get_long_ini("ColorFilter", "h_min", 0);
+    color_filter_h_max = get_long_ini("ColorFilter", "h_max", 179);
+    color_filter_s_min = get_long_ini("ColorFilter", "s_min", 0);
+    color_filter_s_max = get_long_ini("ColorFilter", "s_max", 255);
+    color_filter_v_min = get_long_ini("ColorFilter", "v_min", 0);
+    color_filter_v_max = get_long_ini("ColorFilter", "v_max", 255);
+    color_filter_min_pixels = get_long_ini("ColorFilter", "min_pixels", 0);
+    color_filter_max_pixels = get_long_ini("ColorFilter", "max_pixels", 100000);
 
 
 
@@ -579,10 +597,28 @@ bool Config::saveConfig(const std::string& filename)
     file << "[Debug]\n";
     file << "show_window = " << (show_window ? "true" : "false") << "\n";
     file << "show_fps = " << (show_fps ? "true" : "false") << "\n";
-    
+
     file << "screenshot_button = " << joinStrings(screenshot_button) << "\n";
     file << "screenshot_delay = " << screenshot_delay << "\n";
     file << "always_on_top = " << (always_on_top ? "true" : "false") << "\n\n";
+
+    file << "[ColorFilter]\n";
+    file << "enabled = " << (color_filter_enabled ? "true" : "false") << "\n";
+    file << "mode = " << color_filter_mode << "\n";
+    file << "r_min = " << color_filter_r_min << "\n";
+    file << "r_max = " << color_filter_r_max << "\n";
+    file << "g_min = " << color_filter_g_min << "\n";
+    file << "g_max = " << color_filter_g_max << "\n";
+    file << "b_min = " << color_filter_b_min << "\n";
+    file << "b_max = " << color_filter_b_max << "\n";
+    file << "h_min = " << color_filter_h_min << "\n";
+    file << "h_max = " << color_filter_h_max << "\n";
+    file << "s_min = " << color_filter_s_min << "\n";
+    file << "s_max = " << color_filter_s_max << "\n";
+    file << "v_min = " << color_filter_v_min << "\n";
+    file << "v_max = " << color_filter_v_max << "\n";
+    file << "min_pixels = " << color_filter_min_pixels << "\n";
+    file << "max_pixels = " << color_filter_max_pixels << "\n\n";
 
     file << "[Classes]\n";
     file << "HeadClassName = " << head_class_name << "\n\n";
