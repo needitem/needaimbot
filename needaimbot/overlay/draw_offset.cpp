@@ -102,21 +102,22 @@ void renderOffsetTab()
 {
     auto& ctx = AppContext::getInstance();
 
-    ImGui::BeginChild("OffsetTabScroll", ImVec2(0, 0), false, ImGuiWindowFlags_NoNavInputs);
-
     UIHelpers::BeginSettingsSection("Target Offset Settings", "Adjust where the aimbot targets on bodies and heads");
 
     // Body and Head Y Offset controls
+    ImGui::SetNextItemWidth(200.0f);
     if (ImGui::SliderFloat("Body Y Offset", &ctx.config.body_y_offset, -1.0f, 1.0f, "%.2f")) {
         SAVE_PROFILE();
     }
     UIHelpers::InfoTooltip("Adjusts the vertical targeting position on body targets. Positive values move the target point up, negative values move it down.");
-    
+
+    ImGui::SetNextItemWidth(200.0f);
     if (ImGui::SliderFloat("Head Y Offset", &ctx.config.head_y_offset, 0.0f, 1.0f, "%.2f")) {
         SAVE_PROFILE();
     }
     UIHelpers::InfoTooltip("Adjusts the vertical targeting position on head targets. 0.0 targets the top of the head, 1.0 targets the bottom.");
-    
+
+    ImGui::SetNextItemWidth(200.0f);
     if (ImGui::SliderFloat("Offset Step", &ctx.config.offset_step, 0.001f, 0.1f, "%.3f")) {
         SAVE_PROFILE();
     }
@@ -208,10 +209,10 @@ void renderOffsetTab()
     bool offset_changed = false;
     bool aim_shoot_offset_changed = false;
     
-    // Create a table for better layout
-    if (ImGui::BeginTable("CrosshairOffsetTable", 2, ImGuiTableFlags_SizingStretchSame)) {
-        ImGui::TableSetupColumn("Normal Offset", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("Aim+Shoot Offset", ImGuiTableColumnFlags_WidthStretch);
+    // Create a table for better layout with fixed width columns
+    if (ImGui::BeginTable("CrosshairOffsetTable", 2, ImGuiTableFlags_SizingFixedFit)) {
+        ImGui::TableSetupColumn("Normal Offset", ImGuiTableColumnFlags_WidthFixed, 200.0f);
+        ImGui::TableSetupColumn("Aim+Shoot Offset", ImGuiTableColumnFlags_WidthFixed, 200.0f);
         
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
@@ -361,13 +362,12 @@ void renderOffsetTab()
                 frameToDisplay = &previewHostFrame;
                 lastPreviewUpdate = now;
             }
+            // No message - just show black if not ready
         } else if (!shouldUpdatePreview && !previewHostFrame.empty()) {
             // Reuse previous frame
             frameToDisplay = &previewHostFrame;
         }
-
-        // Always show slider to prevent layout jump
-        ImGui::SliderFloat("Preview Scale", &debug_scale, 0.1f, 3.0f, "%.1fx");
+        // No message for unavailable - just show black
 
         if (frameToDisplay) {
             try {
@@ -382,6 +382,9 @@ void renderOffsetTab()
             if (previewTargets.empty()) {
                 hasPreviewBestTarget = false;
             }
+
+            ImGui::SetNextItemWidth(150.0f);
+            ImGui::SliderFloat("Preview Scale", &debug_scale, 0.1f, 3.0f, "%.1fx");
 
             std::lock_guard<std::mutex> lock(g_debugTexMutex);
 
@@ -409,6 +412,8 @@ void renderOffsetTab()
                 }
 
                 if (debug_scale > 0 && debug_scale < 10.0f) {
+                    drawDetections(draw_list, image_pos, debug_scale, &previewTargets);
+
                     if (hasPreviewBestTarget && previewBestTarget.hasValidDetection()) {
                         float targetCenterX = image_pos.x +
                                               (previewBestTarget.x + previewBestTarget.width / 2.0f) * debug_scale;
@@ -455,6 +460,7 @@ void renderOffsetTab()
                     }
                 }
 
+                // Draw crosshair at center
                 if (texW > 0 && texH > 0 && texW < 10000 && texH < 10000) {
                     float center_x = image_pos.x + (texW * debug_scale) / 2.0f;
                     float center_y = image_pos.y + (texH * debug_scale) / 2.0f;
@@ -462,26 +468,13 @@ void renderOffsetTab()
                     bool is_aim_shoot_active = ctx.config.enable_aim_shoot_offset && ctx.aiming.load() && ctx.shooting.load();
                     ImU32 crosshair_color = is_aim_shoot_active ? IM_COL32(255, 128, 0, 255) : IM_COL32(255, 255, 255, 255);
 
-                    // Draw crosshair
                     draw_list->AddLine(ImVec2(center_x - 10, center_y), ImVec2(center_x + 10, center_y), crosshair_color, 2.0f);
                     draw_list->AddLine(ImVec2(center_x, center_y - 10), ImVec2(center_x, center_y + 10), crosshair_color, 2.0f);
                     draw_list->AddCircle(ImVec2(center_x, center_y), 3.0f, crosshair_color, 0, 2.0f);
                 }
-            } else {
-                ImGui::TextUnformatted("Preview texture unavailable for display.");
-            }
-        } else {
-            // Keep last known size to prevent scroll jump, just show placeholder
-            std::lock_guard<std::mutex> lock(g_debugTexMutex);
-            if (texW > 0 && texH > 0) {
-                float safe_scale = debug_scale;
-                if (safe_scale <= 0 || safe_scale > 10.0f) safe_scale = 1.0f;
-                ImVec2 placeholder_size(texW * safe_scale, texH * safe_scale);
-                ImGui::Dummy(placeholder_size);  // Reserve space to prevent scroll jump
             }
         }
+
     }
     UIHelpers::EndSettingsSection();
-
-    ImGui::EndChild();
 }
