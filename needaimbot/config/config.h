@@ -219,23 +219,20 @@ public:
     // Color Filter settings
     bool color_filter_enabled = false;
     int color_filter_mode = 0;  // 0=RGB, 1=HSV
-    // RGB mode
     int color_filter_r_min = 0;
     int color_filter_r_max = 255;
     int color_filter_g_min = 0;
     int color_filter_g_max = 255;
     int color_filter_b_min = 0;
     int color_filter_b_max = 255;
-    // HSV mode
     int color_filter_h_min = 0;
     int color_filter_h_max = 179;
     int color_filter_s_min = 0;
     int color_filter_s_max = 255;
     int color_filter_v_min = 0;
     int color_filter_v_max = 255;
-    // Pixel size filter
-    int color_filter_min_pixels = 0;      // Minimum connected pixels
-    int color_filter_max_pixels = 100000; // Maximum connected pixels
+    int color_filter_min_pixels = 0;
+    int color_filter_max_pixels = 100000;
 
     // Active profile management
     std::string active_profile_name = "Default";

@@ -40,13 +40,13 @@
     <ClCompile Include="overlay\\draw_ai.cpp" />
     <ClCompile Include="overlay\draw_buttons.cpp" />
     <ClCompile Include="overlay\draw_capture.cpp" />
-    <ClCompile Include="overlay\draw_color_filter.cpp" />
     <ClCompile Include="overlay\draw_debug.cpp" />
     <ClCompile Include="overlay\draw_mouse.cpp" />
     <ClCompile Include="overlay\draw_offset.cpp" />
     <ClCompile Include="overlay\draw_overlay.cpp" />
     <ClCompile Include="overlay\draw_profile.cpp" />
     <ClCompile Include="overlay\draw_target.cpp" />
+    <ClCompile Include="overlay\draw_color_filter.cpp" />
     <ClCompile Include="overlay\overlay.cpp" />
     <ClCompile Include="overlay\ui_helpers.cpp" />
     <ClCompile Include="needaimbot.cpp" />
