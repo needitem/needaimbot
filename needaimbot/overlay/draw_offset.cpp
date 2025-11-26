@@ -102,6 +102,8 @@ void renderOffsetTab()
 {
     auto& ctx = AppContext::getInstance();
 
+    ImGui::BeginChild("OffsetTabScroll", ImVec2(0, 0), false, ImGuiWindowFlags_NoNavInputs);
+
     UIHelpers::BeginSettingsSection("Target Offset Settings", "Adjust where the aimbot targets on bodies and heads");
 
     // Body and Head Y Offset controls
@@ -358,15 +360,14 @@ void renderOffsetTab()
                 previewHostFrame.cols() <= 10000 && previewHostFrame.rows() <= 10000) {
                 frameToDisplay = &previewHostFrame;
                 lastPreviewUpdate = now;
-            } else {
-                ImGui::TextColored(ImVec4(0.8f, 0.5f, 0.0f, 1.0f), "Preview data not ready");
             }
-        } else if (!pipeline || !pipeline->isPreviewAvailable()) {
-            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Preview not available");
         } else if (!shouldUpdatePreview && !previewHostFrame.empty()) {
             // Reuse previous frame
             frameToDisplay = &previewHostFrame;
         }
+
+        // Always show slider to prevent layout jump
+        ImGui::SliderFloat("Preview Scale", &debug_scale, 0.1f, 3.0f, "%.1fx");
 
         if (frameToDisplay) {
             try {
@@ -381,11 +382,6 @@ void renderOffsetTab()
             if (previewTargets.empty()) {
                 hasPreviewBestTarget = false;
             }
-
-            ImGui::SliderFloat("Preview Scale", &debug_scale, 0.1f, 3.0f, "%.1fx");
-            ImGui::Text("Detections: %zu%s",
-                        previewTargets.size(),
-                        hasPreviewBestTarget ? "" : (previewTargets.empty() ? "" : " (no active target)"));
 
             std::lock_guard<std::mutex> lock(g_debugTexMutex);
 
@@ -413,8 +409,6 @@ void renderOffsetTab()
                 }
 
                 if (debug_scale > 0 && debug_scale < 10.0f) {
-                    drawDetections(draw_list, image_pos, debug_scale, &previewTargets);
-
                     if (hasPreviewBestTarget && previewBestTarget.hasValidDetection()) {
                         float targetCenterX = image_pos.x +
                                               (previewBestTarget.x + previewBestTarget.width / 2.0f) * debug_scale;
@@ -468,56 +462,26 @@ void renderOffsetTab()
                     bool is_aim_shoot_active = ctx.config.enable_aim_shoot_offset && ctx.aiming.load() && ctx.shooting.load();
                     ImU32 crosshair_color = is_aim_shoot_active ? IM_COL32(255, 128, 0, 255) : IM_COL32(255, 255, 255, 255);
 
+                    // Draw crosshair
                     draw_list->AddLine(ImVec2(center_x - 10, center_y), ImVec2(center_x + 10, center_y), crosshair_color, 2.0f);
                     draw_list->AddLine(ImVec2(center_x, center_y - 10), ImVec2(center_x, center_y + 10), crosshair_color, 2.0f);
                     draw_list->AddCircle(ImVec2(center_x, center_y), 3.0f, crosshair_color, 0, 2.0f);
-
-                    char debug_info[256];
-                    snprintf(debug_info, sizeof(debug_info), "Debug: Aim=%d, Shoot=%d, Enabled=%d",
-                             ctx.aiming.load() ? 1 : 0,
-                             ctx.shooting.load() ? 1 : 0,
-                             ctx.config.enable_aim_shoot_offset ? 1 : 0);
-                    draw_list->AddText(ImVec2(image_pos.x + 10, image_pos.y + 10), IM_COL32(255, 255, 0, 255), debug_info);
-
-                    if (ctx.config.enable_aim_shoot_offset) {
-                        const bool isActive = is_aim_shoot_active;
-                        const char* offset_text = isActive ? "Aim+Shoot Offset Active" : "Normal Offset Active";
-                        ImU32 text_color = isActive ? IM_COL32(255, 128, 0, 255) : IM_COL32(255, 255, 255, 255);
-                        draw_list->AddText(ImVec2(image_pos.x + 10, image_pos.y + 30), text_color, offset_text);
-
-                        char offset_info[256];
-                        if (isActive) {
-                            snprintf(offset_info, sizeof(offset_info), "Offset: X=%.0f, Y=%.0f",
-                                     ctx.config.aim_shoot_offset_x, ctx.config.aim_shoot_offset_y);
-                        } else {
-                            snprintf(offset_info, sizeof(offset_info), "Offset: X=%.0f, Y=%.0f",
-                                     ctx.config.crosshair_offset_x, ctx.config.crosshair_offset_y);
-                        }
-                        draw_list->AddText(ImVec2(image_pos.x + 10, image_pos.y + 50), text_color, offset_info);
-                    } else {
-                        draw_list->AddText(ImVec2(image_pos.x + 10, image_pos.y + 30), IM_COL32(255, 255, 255, 255), "Normal Offset Active");
-                        char offset_info[256];
-                        snprintf(offset_info, sizeof(offset_info), "Offset: X=%.0f, Y=%.0f",
-                                 ctx.config.crosshair_offset_x, ctx.config.crosshair_offset_y);
-                        draw_list->AddText(ImVec2(image_pos.x + 10, image_pos.y + 50), IM_COL32(255, 255, 255, 255), offset_info);
-                    }
                 }
             } else {
                 ImGui::TextUnformatted("Preview texture unavailable for display.");
             }
         } else {
+            // Keep last known size to prevent scroll jump, just show placeholder
             std::lock_guard<std::mutex> lock(g_debugTexMutex);
-            if (g_debugSRV) {
-                g_debugSRV->Release();
-                g_debugSRV = nullptr;
+            if (texW > 0 && texH > 0) {
+                float safe_scale = debug_scale;
+                if (safe_scale <= 0 || safe_scale > 10.0f) safe_scale = 1.0f;
+                ImVec2 placeholder_size(texW * safe_scale, texH * safe_scale);
+                ImGui::Dummy(placeholder_size);  // Reserve space to prevent scroll jump
             }
-            if (g_debugTex) {
-                g_debugTex->Release();
-                g_debugTex = nullptr;
-            }
-            texW = 0;
-            texH = 0;
         }
     }
     UIHelpers::EndSettingsSection();
+
+    ImGui::EndChild();
 }

@@ -625,10 +625,11 @@ void OverlayThread()
 
             RECT rect;
             GetClientRect(g_hwnd, &rect);
-            ImGui::SetNextWindowPos(ImVec2(0, 0));
-            ImGui::SetNextWindowSize(ImVec2((float)(rect.right - rect.left), (float)(rect.bottom - rect.top)));
+            ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+            ImGui::SetNextWindowSize(ImVec2((float)(rect.right - rect.left), (float)(rect.bottom - rect.top)), ImGuiCond_Always);
 
-            ImGui::Begin("Options", &show_overlay, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize);
+            // NoNavInputs prevents NavInitWindow from resetting scroll when window regains focus
+            ImGui::Begin("Options", &show_overlay, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoNavInputs);
             {
                 std::lock_guard<std::mutex> lock(configMutex);
                 
@@ -684,6 +685,12 @@ void OverlayThread()
                         ImGui::Spacing();
                         ImGui::SeparatorText("Debug");
                         draw_debug();
+                        ImGui::EndTabItem();
+                    }
+
+                    if (ImGui::BeginTabItem("Color Filter"))
+                    {
+                        draw_color_filter();
                         ImGui::EndTabItem();
                     }
 
