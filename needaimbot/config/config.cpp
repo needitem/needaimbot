@@ -308,6 +308,7 @@ bool Config::loadConfig(const std::string& filename)
     color_filter_mask_opacity = static_cast<float>(get_double_ini("ColorFilter", "mask_opacity", 0.2));
     color_filter_target_enabled = get_bool_ini("ColorFilter", "target_enabled", false);
     color_filter_target_mode = get_long_ini("ColorFilter", "target_mode", 0);
+    color_filter_comparison = get_long_ini("ColorFilter", "comparison", 0);
     color_filter_min_ratio = static_cast<float>(get_double_ini("ColorFilter", "min_ratio", 0.1));
     color_filter_max_ratio = static_cast<float>(get_double_ini("ColorFilter", "max_ratio", 1.0));
     color_filter_min_count = get_long_ini("ColorFilter", "min_count", 10);
@@ -533,6 +534,7 @@ bool Config::saveConfig(const std::string& filename)
     file << "mask_opacity = " << color_filter_mask_opacity << "\n";
     file << "target_enabled = " << (color_filter_target_enabled ? "true" : "false") << "\n";
     file << "target_mode = " << color_filter_target_mode << "\n";
+    file << "comparison = " << color_filter_comparison << "\n";
     file << "min_ratio = " << color_filter_min_ratio << "\n";
     file << "max_ratio = " << color_filter_max_ratio << "\n";
     file << "min_count = " << color_filter_min_count << "\n";
