@@ -434,6 +434,7 @@ private:
             bool enabled = false;
             int color_mode = 0;  // 0=RGB, 1=HSV
             int target_mode = 0; // 0=ratio, 1=absolute count
+            int comparison = 0;  // 0=above (>=), 1=below (<=), 2=between (min-max)
             int r_min = 0, r_max = 255;
             int g_min = 0, g_max = 255;
             int b_min = 0, b_max = 255;

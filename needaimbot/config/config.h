@@ -236,6 +236,7 @@ public:
     // Color filter for target selection (filter by color match within bbox)
     bool color_filter_target_enabled = false;
     int color_filter_target_mode = 0;     // 0=ratio mode, 1=absolute count mode
+    int color_filter_comparison = 0;      // 0=above (>=), 1=below (<=), 2=between (min-max range)
     float color_filter_min_ratio = 0.1f;  // Minimum ratio of matching pixels (0.0-1.0)
     float color_filter_max_ratio = 1.0f;  // Maximum ratio of matching pixels (0.0-1.0)
     int color_filter_min_count = 10;      // Minimum absolute count of matching pixels
