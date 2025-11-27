@@ -566,105 +566,145 @@ void draw_color_filter()
             UIHelpers::InfoTooltip("Filter targets by how much of their bbox matches the color filter");
 
             if (target_filter_enabled) {
-                const char* target_modes[] = { "Ratio (%)", "Absolute (px)" };
+                // Simplified inline UI: [value] [px/%] [이상만/이하만/범위] 필터
                 int target_mode = ctx.config.color_filter_target_mode;
-                ImGui::SetNextItemWidth(120.0f);
-                if (ImGui::Combo("Value Mode##target", &target_mode, target_modes, IM_ARRAYSIZE(target_modes))) {
-                    ctx.config.color_filter_target_mode = target_mode;
-                    SAVE_PROFILE();
-                }
-
-                const char* comparison_modes[] = { "Above (>=)", "Below (<=)", "Between" };
                 int comparison = ctx.config.color_filter_comparison;
-                ImGui::SetNextItemWidth(120.0f);
-                if (ImGui::Combo("Comparison##target", &comparison, comparison_modes, IM_ARRAYSIZE(comparison_modes))) {
-                    ctx.config.color_filter_comparison = comparison;
-                    SAVE_PROFILE();
-                }
-
-                ImGui::PushItemWidth(120.0f);
 
                 if (target_mode == 0) {
-                    // Ratio mode
+                    // Ratio mode - single line UI
                     float min_ratio = ctx.config.color_filter_min_ratio * 100.0f;
                     float max_ratio = ctx.config.color_filter_max_ratio * 100.0f;
 
-                    if (comparison == 0) {
-                        // Above mode - only show threshold
-                        if (ImGui::SliderFloat("Threshold##ratio", &min_ratio, 0.0f, 100.0f, ">= %.1f%%")) {
-                            ctx.config.color_filter_min_ratio = min_ratio / 100.0f;
-                            SAVE_PROFILE();
-                        }
-                        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
-                            "Accept targets with >= %.0f%% color match", min_ratio);
-                    } else if (comparison == 1) {
-                        // Below mode - only show threshold
-                        if (ImGui::SliderFloat("Threshold##ratio", &max_ratio, 0.0f, 100.0f, "<= %.1f%%")) {
-                            ctx.config.color_filter_max_ratio = max_ratio / 100.0f;
-                            SAVE_PROFILE();
-                        }
-                        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
-                            "Accept targets with <= %.0f%% color match", max_ratio);
-                    } else {
-                        // Between mode - show min and max
-                        if (ImGui::SliderFloat("Min Ratio", &min_ratio, 0.0f, 100.0f, "%.1f%%")) {
-                            // Ensure min <= max
+                    if (comparison == 2) {
+                        // Between mode
+                        ImGui::SetNextItemWidth(60.0f);
+                        if (ImGui::InputFloat("##min_ratio", &min_ratio, 0, 0, "%.1f")) {
+                            if (min_ratio < 0.0f) min_ratio = 0.0f;
+                            if (min_ratio > 100.0f) min_ratio = 100.0f;
                             if (min_ratio > max_ratio) min_ratio = max_ratio;
                             ctx.config.color_filter_min_ratio = min_ratio / 100.0f;
                             SAVE_PROFILE();
                         }
-                        if (ImGui::SliderFloat("Max Ratio", &max_ratio, 0.0f, 100.0f, "%.1f%%")) {
-                            // Ensure max >= min
+                        ImGui::SameLine();
+                        ImGui::Text("~");
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(60.0f);
+                        if (ImGui::InputFloat("##max_ratio", &max_ratio, 0, 0, "%.1f")) {
+                            if (max_ratio < 0.0f) max_ratio = 0.0f;
+                            if (max_ratio > 100.0f) max_ratio = 100.0f;
                             if (max_ratio < min_ratio) max_ratio = min_ratio;
                             ctx.config.color_filter_max_ratio = max_ratio / 100.0f;
                             SAVE_PROFILE();
                         }
-                        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
-                            "Accept targets with %.0f%% - %.0f%% color match",
-                            min_ratio, max_ratio);
+                        ImGui::SameLine();
+                        ImGui::Text("%%");
+                    } else {
+                        // Above or Below mode
+                        float& value = (comparison == 0) ? min_ratio : max_ratio;
+                        ImGui::SetNextItemWidth(80.0f);
+                        if (ImGui::InputFloat("##threshold_ratio", &value, 0, 0, "%.1f")) {
+                            if (value < 0.0f) value = 0.0f;
+                            if (value > 100.0f) value = 100.0f;
+                            if (comparison == 0) {
+                                ctx.config.color_filter_min_ratio = value / 100.0f;
+                            } else {
+                                ctx.config.color_filter_max_ratio = value / 100.0f;
+                            }
+                            SAVE_PROFILE();
+                        }
+                        ImGui::SameLine();
+                        ImGui::Text("%%");
                     }
                 } else {
-                    // Absolute count mode
+                    // Absolute count mode - single line UI
                     int min_count = ctx.config.color_filter_min_count;
                     int max_count = ctx.config.color_filter_max_count;
 
-                    if (comparison == 0) {
-                        // Above mode
-                        if (ImGui::SliderInt("Threshold##count", &min_count, 0, 50000, ">= %d px")) {
-                            ctx.config.color_filter_min_count = min_count;
-                            SAVE_PROFILE();
-                        }
-                        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
-                            "Accept targets with >= %d matching pixels", min_count);
-                    } else if (comparison == 1) {
-                        // Below mode
-                        if (ImGui::SliderInt("Threshold##count", &max_count, 0, 50000, "<= %d px")) {
-                            ctx.config.color_filter_max_count = max_count;
-                            SAVE_PROFILE();
-                        }
-                        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
-                            "Accept targets with <= %d matching pixels", max_count);
-                    } else {
+                    if (comparison == 2) {
                         // Between mode
-                        if (ImGui::SliderInt("Min Count", &min_count, 0, 50000, "%d px")) {
-                            // Ensure min <= max
+                        ImGui::SetNextItemWidth(80.0f);
+                        if (ImGui::InputInt("##min_count", &min_count, 0, 0)) {
+                            if (min_count < 0) min_count = 0;
                             if (min_count > max_count) min_count = max_count;
                             ctx.config.color_filter_min_count = min_count;
                             SAVE_PROFILE();
                         }
-                        if (ImGui::SliderInt("Max Count", &max_count, 0, 50000, "%d px")) {
-                            // Ensure max >= min
+                        ImGui::SameLine();
+                        ImGui::Text("~");
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(80.0f);
+                        if (ImGui::InputInt("##max_count", &max_count, 0, 0)) {
+                            if (max_count < 0) max_count = 0;
                             if (max_count < min_count) max_count = min_count;
                             ctx.config.color_filter_max_count = max_count;
                             SAVE_PROFILE();
                         }
-                        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
-                            "Accept targets with %d - %d matching pixels",
-                            min_count, max_count);
+                        ImGui::SameLine();
+                        ImGui::Text("px");
+                    } else {
+                        // Above or Below mode
+                        int& value = (comparison == 0) ? min_count : max_count;
+                        ImGui::SetNextItemWidth(100.0f);
+                        if (ImGui::InputInt("##threshold_count", &value, 0, 0)) {
+                            if (value < 0) value = 0;
+                            if (comparison == 0) {
+                                ctx.config.color_filter_min_count = value;
+                            } else {
+                                ctx.config.color_filter_max_count = value;
+                            }
+                            SAVE_PROFILE();
+                        }
+                        ImGui::SameLine();
+                        ImGui::Text("px");
                     }
                 }
 
-                ImGui::PopItemWidth();
+                // Comparison selector on same line
+                ImGui::SameLine();
+                const char* comparison_labels[] = { "or more", "or less", "range" };
+                ImGui::SetNextItemWidth(80.0f);
+                if (ImGui::Combo("##comparison", &comparison, comparison_labels, IM_ARRAYSIZE(comparison_labels))) {
+                    ctx.config.color_filter_comparison = comparison;
+                    SAVE_PROFILE();
+                }
+
+                // Mode toggle (% / px)
+                ImGui::SameLine();
+                const char* mode_labels[] = { "%", "px" };
+                ImGui::SetNextItemWidth(50.0f);
+                if (ImGui::Combo("##mode", &target_mode, mode_labels, IM_ARRAYSIZE(mode_labels))) {
+                    ctx.config.color_filter_target_mode = target_mode;
+                    SAVE_PROFILE();
+                }
+
+                // Description text
+                if (target_mode == 0) {
+                    float min_r = ctx.config.color_filter_min_ratio * 100.0f;
+                    float max_r = ctx.config.color_filter_max_ratio * 100.0f;
+                    if (comparison == 0) {
+                        ImGui::TextColored(ImVec4(0.6f, 0.8f, 0.6f, 1.0f),
+                            "-> Accept targets with >= %.1f%% color match", min_r);
+                    } else if (comparison == 1) {
+                        ImGui::TextColored(ImVec4(0.6f, 0.8f, 0.6f, 1.0f),
+                            "-> Accept targets with <= %.1f%% color match", max_r);
+                    } else {
+                        ImGui::TextColored(ImVec4(0.6f, 0.8f, 0.6f, 1.0f),
+                            "-> Accept targets with %.1f%% ~ %.1f%% color match", min_r, max_r);
+                    }
+                } else {
+                    int min_c = ctx.config.color_filter_min_count;
+                    int max_c = ctx.config.color_filter_max_count;
+                    if (comparison == 0) {
+                        ImGui::TextColored(ImVec4(0.6f, 0.8f, 0.6f, 1.0f),
+                            "-> Accept targets with >= %d matching pixels", min_c);
+                    } else if (comparison == 1) {
+                        ImGui::TextColored(ImVec4(0.6f, 0.8f, 0.6f, 1.0f),
+                            "-> Accept targets with <= %d matching pixels", max_c);
+                    } else {
+                        ImGui::TextColored(ImVec4(0.6f, 0.8f, 0.6f, 1.0f),
+                            "-> Accept targets with %d ~ %d matching pixels", min_c, max_c);
+                    }
+                }
             }
 
         }

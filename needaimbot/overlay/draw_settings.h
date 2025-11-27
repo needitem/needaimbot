@@ -20,6 +20,7 @@ void draw_overlay();
 void draw_debug();
 void draw_profile();
 void draw_color_filter();
+void draw_recoil();
 void load_body_texture();
 void release_body_texture();
 
