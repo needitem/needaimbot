@@ -320,40 +320,26 @@ __global__ void computeColorMatchRatioKernel(
         return;
     }
 
-    // Sample pixels - use grid sampling for efficiency
-    // Max 8x8 = 64 samples per target for speed
-    const int maxSamplesX = 8;
-    const int maxSamplesY = 8;
-
-    int stepX = max(1, bboxWidth / maxSamplesX);
-    int stepY = max(1, bboxHeight / maxSamplesY);
-
-    int samplesX = (bboxWidth + stepX - 1) / stepX;
-    int samplesY = (bboxHeight + stepY - 1) / stepY;
-    int totalSamples = samplesX * samplesY;
+    // Count ALL pixels in bbox for accurate pixel count
+    int totalPixels = bboxWidth * bboxHeight;
 
     // Use shared memory for reduction
     __shared__ int matchCount;
-    __shared__ int sampleCount;
 
     if (threadIdx.x == 0) {
         matchCount = 0;
-        sampleCount = 0;
     }
     __syncthreads();
 
     int localMatches = 0;
-    int localSamples = 0;
 
-    // Each thread processes multiple samples
-    for (int i = threadIdx.x; i < totalSamples; i += blockDim.x) {
-        int sx = i % samplesX;
-        int sy = i / samplesX;
+    // Each thread processes multiple pixels - iterate through ALL pixels
+    for (int i = threadIdx.x; i < totalPixels; i += blockDim.x) {
+        int localX = i % bboxWidth;
+        int localY = i / bboxWidth;
 
-        int px = x1 + sx * stepX;
-        int py = y1 + sy * stepY;
-
-        if (px >= imageWidth || py >= imageHeight) continue;
+        int px = x1 + localX;
+        int py = y1 + localY;
 
         // Read BGRA pixel
         const unsigned char* pixel = imageData + py * imageStep + px * 4;
@@ -387,25 +373,16 @@ __global__ void computeColorMatchRatioKernel(
         }
 
         if (matches) localMatches++;
-        localSamples++;
     }
 
     // Atomic reduction
     atomicAdd(&matchCount, localMatches);
-    atomicAdd(&sampleCount, localSamples);
     __syncthreads();
 
     // Thread 0 writes the final ratio and count
     if (threadIdx.x == 0) {
-        if (sampleCount > 0) {
-            t.colorMatchRatio = static_cast<float>(matchCount) / static_cast<float>(sampleCount);
-            // Estimate total match count based on sample ratio and bbox area
-            int bboxArea = bboxWidth * bboxHeight;
-            t.colorMatchCount = static_cast<int>(t.colorMatchRatio * bboxArea);
-        } else {
-            t.colorMatchRatio = -1.0f;
-            t.colorMatchCount = -1;
-        }
+        t.colorMatchCount = matchCount;  // Actual pixel count
+        t.colorMatchRatio = static_cast<float>(matchCount) / static_cast<float>(totalPixels);
     }
 }
 
@@ -2238,8 +2215,8 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
 
     // Run color match kernel if color filter is enabled
     if (cfg.color_filter.enabled && !m_captureBuffer.empty() && m_captureBuffer.data()) {
-        // Launch one block per target, 32 threads per block
-        computeColorMatchRatioKernel<<<cached_max_detections, 32, 0, stream>>>(
+        // Launch one block per target, 256 threads per block for full pixel counting
+        computeColorMatchRatioKernel<<<cached_max_detections, 256, 0, stream>>>(
             m_unifiedArena.finalTargets,
             m_smallBufferArena.finalTargetsCount,
             m_captureBuffer.data(),
