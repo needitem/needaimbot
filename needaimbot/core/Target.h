@@ -27,20 +27,22 @@ struct Target {
     
     // === Compatibility ===
     float confidence;    // Keep for compatibility but not essential
-    
+    float colorMatchRatio;  // Ratio of pixels matching color filter (0.0-1.0), -1 if not computed
+    int colorMatchCount;    // Absolute count of matching pixels, -1 if not computed
+
     // === Helper methods (inline for POD compatibility) ===
-    
+
     // Default constructor
-    CUDA_HOSTDEV Target() : 
+    CUDA_HOSTDEV Target() :
         classId(-1), x(-1), y(-1), width(-1), height(-1),
-        confidence(0.0f)
+        confidence(0.0f), colorMatchRatio(-1.0f), colorMatchCount(-1)
     {
     }
-    
+
     // Constructor for detection
     CUDA_HOSTDEV Target(int x_, int y_, int width_, int height_, float conf, int cls) :
         classId(cls), x(x_), y(y_), width(width_), height(height_),
-        confidence(conf)
+        confidence(conf), colorMatchRatio(-1.0f), colorMatchCount(-1)
     {
     }
     
