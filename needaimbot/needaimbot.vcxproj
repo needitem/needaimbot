@@ -47,6 +47,7 @@
     <ClCompile Include="overlay\draw_profile.cpp" />
     <ClCompile Include="overlay\draw_target.cpp" />
     <ClCompile Include="overlay\draw_color_filter.cpp" />
+    <ClCompile Include="overlay\draw_recoil.cpp" />
     <ClCompile Include="overlay\overlay.cpp" />
     <ClCompile Include="overlay\ui_helpers.cpp" />
     <ClCompile Include="needaimbot.cpp" />

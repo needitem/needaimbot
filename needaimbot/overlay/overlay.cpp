@@ -693,6 +693,12 @@ void OverlayThread()
                         ImGui::EndTabItem();
                     }
 
+                    if (ImGui::BeginTabItem("Recoil"))
+                    {
+                        draw_recoil();
+                        ImGui::EndTabItem();
+                    }
+
                 }
 
                 // Efficient config change detection - only check values that trigger actions

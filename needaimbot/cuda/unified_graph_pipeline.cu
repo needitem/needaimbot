@@ -1447,6 +1447,13 @@ MouseMovement UnifiedGraphPipeline::filterMouseMovement(const MouseMovement& raw
     int dx = raw.dx;
     int dy = raw.dy;
 
+    // Block upward movement if disable_upward_aim is active
+    // Negative dy = upward movement in screen coordinates
+    auto& ctx = AppContext::getInstance();
+    if (ctx.disable_upward_aim.load(std::memory_order_relaxed) && dy < 0) {
+        dy = 0;
+    }
+
     // X-axis: sign-flip suppression
     int emitDx = dx;
     if (abs(dx) <= 1 && dx == -m_filterState.lastEmitX) {
@@ -2249,6 +2256,8 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
             cfg.color_filter.min_ratio,
             cfg.color_filter.max_ratio
         );
+        // Synchronize to ensure color match is computed before target selection
+        cudaStreamSynchronize(stream);
     }
 
     const int blockSize = computeTargetSelectionBlockSize(cached_max_detections);
