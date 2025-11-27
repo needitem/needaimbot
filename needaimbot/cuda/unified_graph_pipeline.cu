@@ -109,6 +109,7 @@ void UnifiedGraphPipeline::refreshConfigCache(const AppContext& ctx) {
         m_cachedConfig.color_filter.enabled = ctx.config.color_filter_target_enabled && ctx.config.color_filter_enabled;
         m_cachedConfig.color_filter.color_mode = ctx.config.color_filter_mode;
         m_cachedConfig.color_filter.target_mode = ctx.config.color_filter_target_mode;
+        m_cachedConfig.color_filter.comparison = ctx.config.color_filter_comparison;
         m_cachedConfig.color_filter.r_min = ctx.config.color_filter_r_min;
         m_cachedConfig.color_filter.r_max = ctx.config.color_filter_r_max;
         m_cachedConfig.color_filter.g_min = ctx.config.color_filter_g_min;
@@ -463,6 +464,7 @@ __global__ void fusedTargetSelectionAndMovementKernel(
     int detection_resolution,
     bool color_filter_enabled,
     int color_filter_target_mode,   // 0=ratio, 1=absolute count
+    int color_filter_comparison,    // 0=above (>=), 1=below (<=), 2=between (min-max)
     float color_filter_min_ratio,
     float color_filter_max_ratio,
     int color_filter_min_count,
@@ -532,18 +534,38 @@ __global__ void fusedTargetSelectionAndMovementKernel(
 
         // Color filter: skip targets that don't meet color match requirements
         if (color_filter_enabled && t.colorMatchRatio >= 0.0f) {
+            bool passFilter = false;
+
             if (color_filter_target_mode == 0) {
                 // Ratio mode
-                if (t.colorMatchRatio < color_filter_min_ratio ||
-                    t.colorMatchRatio > color_filter_max_ratio) {
-                    continue;
+                float value = t.colorMatchRatio;
+                if (color_filter_comparison == 0) {
+                    // Above (>=)
+                    passFilter = (value >= color_filter_min_ratio);
+                } else if (color_filter_comparison == 1) {
+                    // Below (<=)
+                    passFilter = (value <= color_filter_max_ratio);
+                } else {
+                    // Between (min-max range)
+                    passFilter = (value >= color_filter_min_ratio && value <= color_filter_max_ratio);
                 }
             } else {
                 // Absolute count mode
-                if (t.colorMatchCount < color_filter_min_count ||
-                    t.colorMatchCount > color_filter_max_count) {
-                    continue;
+                int value = t.colorMatchCount;
+                if (color_filter_comparison == 0) {
+                    // Above (>=)
+                    passFilter = (value >= color_filter_min_count);
+                } else if (color_filter_comparison == 1) {
+                    // Below (<=)
+                    passFilter = (value <= color_filter_max_count);
+                } else {
+                    // Between (min-max range)
+                    passFilter = (value >= color_filter_min_count && value <= color_filter_max_count);
                 }
+            }
+
+            if (!passFilter) {
+                continue;
             }
         }
 
@@ -2255,6 +2277,7 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         ctx.config.detection_resolution,
         cfg.color_filter.enabled,
         cfg.color_filter.target_mode,
+        cfg.color_filter.comparison,
         cfg.color_filter.min_ratio,
         cfg.color_filter.max_ratio,
         cfg.color_filter.min_count,
