@@ -306,9 +306,12 @@ bool Config::loadConfig(const std::string& filename)
     color_filter_v_min = get_long_ini("ColorFilter", "v_min", 0);
     color_filter_v_max = get_long_ini("ColorFilter", "v_max", 255);
     color_filter_mask_opacity = static_cast<float>(get_double_ini("ColorFilter", "mask_opacity", 0.2));
-    color_filter_pixel_enabled = get_bool_ini("ColorFilter", "pixel_enabled", false);
-    color_filter_pixel_mode = get_long_ini("ColorFilter", "pixel_mode", 0);
-    color_filter_pixel_threshold = get_long_ini("ColorFilter", "pixel_threshold", 50);
+    color_filter_target_enabled = get_bool_ini("ColorFilter", "target_enabled", false);
+    color_filter_target_mode = get_long_ini("ColorFilter", "target_mode", 0);
+    color_filter_min_ratio = static_cast<float>(get_double_ini("ColorFilter", "min_ratio", 0.1));
+    color_filter_max_ratio = static_cast<float>(get_double_ini("ColorFilter", "max_ratio", 1.0));
+    color_filter_min_count = get_long_ini("ColorFilter", "min_count", 10);
+    color_filter_max_count = get_long_ini("ColorFilter", "max_count", 10000);
 
     input_method = get_string_ini("Mouse", "input_method", "WIN32");
 
@@ -528,9 +531,12 @@ bool Config::saveConfig(const std::string& filename)
     file << "v_min = " << color_filter_v_min << "\n";
     file << "v_max = " << color_filter_v_max << "\n";
     file << "mask_opacity = " << color_filter_mask_opacity << "\n";
-    file << "pixel_enabled = " << (color_filter_pixel_enabled ? "true" : "false") << "\n";
-    file << "pixel_mode = " << color_filter_pixel_mode << "\n";
-    file << "pixel_threshold = " << color_filter_pixel_threshold << "\n\n";
+    file << "target_enabled = " << (color_filter_target_enabled ? "true" : "false") << "\n";
+    file << "target_mode = " << color_filter_target_mode << "\n";
+    file << "min_ratio = " << color_filter_min_ratio << "\n";
+    file << "max_ratio = " << color_filter_max_ratio << "\n";
+    file << "min_count = " << color_filter_min_count << "\n";
+    file << "max_count = " << color_filter_max_count << "\n\n";
 
     file << "[Mouse]\n";
     file << std::noboolalpha;

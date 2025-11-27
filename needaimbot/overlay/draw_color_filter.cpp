@@ -556,36 +556,65 @@ void draw_color_filter()
             ImGui::Separator();
             ImGui::Spacing();
 
-            // Pixel Size Filter
-            bool pixel_filter_enabled = ctx.config.color_filter_pixel_enabled;
-            if (ImGui::Checkbox("Enable Pixel Size Filter", &pixel_filter_enabled)) {
-                ctx.config.color_filter_pixel_enabled = pixel_filter_enabled;
+            // Target Color Filter (filtering by color match within bbox)
+            bool target_filter_enabled = ctx.config.color_filter_target_enabled;
+            if (ImGui::Checkbox("Enable Target Color Filter", &target_filter_enabled)) {
+                ctx.config.color_filter_target_enabled = target_filter_enabled;
                 SAVE_PROFILE();
             }
+            ImGui::SameLine();
+            UIHelpers::InfoTooltip("Filter targets by how much of their bbox matches the color filter");
 
-            if (pixel_filter_enabled) {
-                const char* pixel_modes[] = { "Below (<=)", "Above (>=)" };
-                int pixel_mode = ctx.config.color_filter_pixel_mode;
+            if (target_filter_enabled) {
+                const char* target_modes[] = { "Ratio (%)", "Absolute (px)" };
+                int target_mode = ctx.config.color_filter_target_mode;
                 ImGui::SetNextItemWidth(120.0f);
-                if (ImGui::Combo("Filter Mode", &pixel_mode, pixel_modes, IM_ARRAYSIZE(pixel_modes))) {
-                    ctx.config.color_filter_pixel_mode = pixel_mode;
+                if (ImGui::Combo("Filter Mode##target", &target_mode, target_modes, IM_ARRAYSIZE(target_modes))) {
+                    ctx.config.color_filter_target_mode = target_mode;
                     SAVE_PROFILE();
                 }
 
-                int threshold = ctx.config.color_filter_pixel_threshold;
-                ImGui::PushItemWidth(180.0f);
-                if (ImGui::SliderInt("##pxthreshold", &threshold, 1, 50000, "Threshold: %d px")) {
-                    ctx.config.color_filter_pixel_threshold = threshold;
-                    SAVE_PROFILE();
-                }
-                ImGui::PopItemWidth();
+                ImGui::PushItemWidth(120.0f);
 
-                if (pixel_mode == 0) {
-                    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Only targets with <= %d pixels", threshold);
+                if (target_mode == 0) {
+                    // Ratio mode
+                    float min_ratio = ctx.config.color_filter_min_ratio * 100.0f;
+                    float max_ratio = ctx.config.color_filter_max_ratio * 100.0f;
+
+                    if (ImGui::SliderFloat("Min Ratio", &min_ratio, 0.0f, 100.0f, "%.1f%%")) {
+                        ctx.config.color_filter_min_ratio = min_ratio / 100.0f;
+                        SAVE_PROFILE();
+                    }
+                    if (ImGui::SliderFloat("Max Ratio", &max_ratio, 0.0f, 100.0f, "%.1f%%")) {
+                        ctx.config.color_filter_max_ratio = max_ratio / 100.0f;
+                        SAVE_PROFILE();
+                    }
+
+                    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
+                        "Accept targets with %.0f%% - %.0f%% color match",
+                        min_ratio, max_ratio);
                 } else {
-                    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Only targets with >= %d pixels", threshold);
+                    // Absolute count mode
+                    int min_count = ctx.config.color_filter_min_count;
+                    int max_count = ctx.config.color_filter_max_count;
+
+                    if (ImGui::SliderInt("Min Count", &min_count, 0, 10000, "%d px")) {
+                        ctx.config.color_filter_min_count = min_count;
+                        SAVE_PROFILE();
+                    }
+                    if (ImGui::SliderInt("Max Count", &max_count, 0, 50000, "%d px")) {
+                        ctx.config.color_filter_max_count = max_count;
+                        SAVE_PROFILE();
+                    }
+
+                    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
+                        "Accept targets with %d - %d matching pixels",
+                        min_count, max_count);
                 }
+
+                ImGui::PopItemWidth();
             }
+
         }
 
         ImGui::EndTable();

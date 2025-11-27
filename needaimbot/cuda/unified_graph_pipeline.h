@@ -413,13 +413,6 @@ private:
             int head_class_id;
         } targeting;
 
-        // Pixel size filter
-        struct {
-            bool enabled;   // enable/disable filter
-            int mode;       // 0=below threshold (<=), 1=above threshold (>=)
-            int threshold;  // pixel count threshold
-        } pixel_filter;
-
         // Detection
         struct {
             int max_detections;
@@ -435,6 +428,23 @@ private:
             int deadband_enter_y = 0;
             int deadband_exit_y = 0;
         } filtering;
+
+        // Color filter for target selection
+        struct {
+            bool enabled = false;
+            int color_mode = 0;  // 0=RGB, 1=HSV
+            int target_mode = 0; // 0=ratio, 1=absolute count
+            int r_min = 0, r_max = 255;
+            int g_min = 0, g_max = 255;
+            int b_min = 0, b_max = 255;
+            int h_min = 0, h_max = 179;
+            int s_min = 0, s_max = 255;
+            int v_min = 0, v_max = 255;
+            float min_ratio = 0.1f;
+            float max_ratio = 1.0f;
+            int min_count = 10;
+            int max_count = 10000;
+        } color_filter;
 
         // Generation counter - incremented when config changes
         std::atomic<uint32_t> generation{0};

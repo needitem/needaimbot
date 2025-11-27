@@ -232,9 +232,14 @@ public:
     int color_filter_v_min = 0;
     int color_filter_v_max = 255;
     float color_filter_mask_opacity = 0.2f; // 0.0 = full black, 1.0 = original color
-    bool color_filter_pixel_enabled = false;
-    int color_filter_pixel_mode = 0;      // 0=below threshold (<=), 1=above threshold (>=)
-    int color_filter_pixel_threshold = 50; // pixel count threshold
+
+    // Color filter for target selection (filter by color match within bbox)
+    bool color_filter_target_enabled = false;
+    int color_filter_target_mode = 0;     // 0=ratio mode, 1=absolute count mode
+    float color_filter_min_ratio = 0.1f;  // Minimum ratio of matching pixels (0.0-1.0)
+    float color_filter_max_ratio = 1.0f;  // Maximum ratio of matching pixels (0.0-1.0)
+    int color_filter_min_count = 10;      // Minimum absolute count of matching pixels
+    int color_filter_max_count = 10000;   // Maximum absolute count of matching pixels
 
     // Active profile management
     std::string active_profile_name = "Default";
