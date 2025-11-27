@@ -231,8 +231,10 @@ public:
     int color_filter_s_max = 255;
     int color_filter_v_min = 0;
     int color_filter_v_max = 255;
-    int color_filter_min_pixels = 0;
-    int color_filter_max_pixels = 100000;
+    float color_filter_mask_opacity = 0.2f; // 0.0 = full black, 1.0 = original color
+    bool color_filter_pixel_enabled = false;
+    int color_filter_pixel_mode = 0;      // 0=below threshold (<=), 1=above threshold (>=)
+    int color_filter_pixel_threshold = 50; // pixel count threshold
 
     // Active profile management
     std::string active_profile_name = "Default";

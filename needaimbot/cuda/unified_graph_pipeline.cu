@@ -105,6 +105,11 @@ void UnifiedGraphPipeline::refreshConfigCache(const AppContext& ctx) {
         m_cachedConfig.filtering.deadband_enter_y = ctx.config.deadband_enter_y;
         m_cachedConfig.filtering.deadband_exit_y  = ctx.config.deadband_exit_y;
 
+        // Pixel size filter
+        m_cachedConfig.pixel_filter.enabled = ctx.config.color_filter_pixel_enabled;
+        m_cachedConfig.pixel_filter.mode = ctx.config.color_filter_pixel_mode;
+        m_cachedConfig.pixel_filter.threshold = ctx.config.color_filter_pixel_threshold;
+
         // Increment generation to signal update
         m_cachedConfig.generation.store(currentGen + 1, std::memory_order_release);
     }
@@ -273,6 +278,9 @@ __global__ void fusedTargetSelectionAndMovementKernel(
     float head_y_offset,
     float body_y_offset,
     int detection_resolution,
+    bool pixel_filter_enabled,
+    int pixel_filter_mode,      // 0=below (<=), 1=above (>=)
+    int pixel_filter_threshold,
     Target* __restrict__ selectedTarget,
     int* __restrict__ bestTargetIndex,
     Target* __restrict__ bestTarget,
@@ -334,6 +342,22 @@ __global__ void fusedTargetSelectionAndMovementKernel(
             t.confidence <= 0.0f || t.confidence > 1.0f) {
             t.confidence = 0.0f;
             continue;
+        }
+
+        // Pixel size filter
+        if (pixel_filter_enabled) {
+            int pixel_count = t.width * t.height;
+            if (pixel_filter_mode == 0) {
+                // Below mode: only accept targets with pixels <= threshold
+                if (pixel_count > pixel_filter_threshold) {
+                    continue;
+                }
+            } else {
+                // Above mode: only accept targets with pixels >= threshold
+                if (pixel_count < pixel_filter_threshold) {
+                    continue;
+                }
+            }
         }
 
         float centerX = t.x + t.width / 2.0f;
@@ -2020,6 +2044,9 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         cached_head_y_offset,
         cached_body_y_offset,
         ctx.config.detection_resolution,
+        cfg.pixel_filter.enabled,
+        cfg.pixel_filter.mode,
+        cfg.pixel_filter.threshold,
         m_smallBufferArena.selectedTarget,
         m_smallBufferArena.bestTargetIndex,
         m_smallBufferArena.bestTarget,
