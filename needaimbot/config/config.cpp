@@ -305,8 +305,10 @@ bool Config::loadConfig(const std::string& filename)
     color_filter_s_max = get_long_ini("ColorFilter", "s_max", 255);
     color_filter_v_min = get_long_ini("ColorFilter", "v_min", 0);
     color_filter_v_max = get_long_ini("ColorFilter", "v_max", 255);
-    color_filter_min_pixels = get_long_ini("ColorFilter", "min_pixels", 0);
-    color_filter_max_pixels = get_long_ini("ColorFilter", "max_pixels", 100000);
+    color_filter_mask_opacity = static_cast<float>(get_double_ini("ColorFilter", "mask_opacity", 0.2));
+    color_filter_pixel_enabled = get_bool_ini("ColorFilter", "pixel_enabled", false);
+    color_filter_pixel_mode = get_long_ini("ColorFilter", "pixel_mode", 0);
+    color_filter_pixel_threshold = get_long_ini("ColorFilter", "pixel_threshold", 50);
 
     input_method = get_string_ini("Mouse", "input_method", "WIN32");
 
@@ -525,8 +527,10 @@ bool Config::saveConfig(const std::string& filename)
     file << "s_max = " << color_filter_s_max << "\n";
     file << "v_min = " << color_filter_v_min << "\n";
     file << "v_max = " << color_filter_v_max << "\n";
-    file << "min_pixels = " << color_filter_min_pixels << "\n";
-    file << "max_pixels = " << color_filter_max_pixels << "\n\n";
+    file << "mask_opacity = " << color_filter_mask_opacity << "\n";
+    file << "pixel_enabled = " << (color_filter_pixel_enabled ? "true" : "false") << "\n";
+    file << "pixel_mode = " << color_filter_pixel_mode << "\n";
+    file << "pixel_threshold = " << color_filter_pixel_threshold << "\n\n";
 
     file << "[Mouse]\n";
     file << std::noboolalpha;

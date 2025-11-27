@@ -413,6 +413,13 @@ private:
             int head_class_id;
         } targeting;
 
+        // Pixel size filter
+        struct {
+            bool enabled;   // enable/disable filter
+            int mode;       // 0=below threshold (<=), 1=above threshold (>=)
+            int threshold;  // pixel count threshold
+        } pixel_filter;
+
         // Detection
         struct {
             int max_detections;
