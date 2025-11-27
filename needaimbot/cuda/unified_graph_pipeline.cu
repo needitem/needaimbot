@@ -105,10 +105,26 @@ void UnifiedGraphPipeline::refreshConfigCache(const AppContext& ctx) {
         m_cachedConfig.filtering.deadband_enter_y = ctx.config.deadband_enter_y;
         m_cachedConfig.filtering.deadband_exit_y  = ctx.config.deadband_exit_y;
 
-        // Pixel size filter
-        m_cachedConfig.pixel_filter.enabled = ctx.config.color_filter_pixel_enabled;
-        m_cachedConfig.pixel_filter.mode = ctx.config.color_filter_pixel_mode;
-        m_cachedConfig.pixel_filter.threshold = ctx.config.color_filter_pixel_threshold;
+        // Color filter for target selection
+        m_cachedConfig.color_filter.enabled = ctx.config.color_filter_target_enabled && ctx.config.color_filter_enabled;
+        m_cachedConfig.color_filter.color_mode = ctx.config.color_filter_mode;
+        m_cachedConfig.color_filter.target_mode = ctx.config.color_filter_target_mode;
+        m_cachedConfig.color_filter.r_min = ctx.config.color_filter_r_min;
+        m_cachedConfig.color_filter.r_max = ctx.config.color_filter_r_max;
+        m_cachedConfig.color_filter.g_min = ctx.config.color_filter_g_min;
+        m_cachedConfig.color_filter.g_max = ctx.config.color_filter_g_max;
+        m_cachedConfig.color_filter.b_min = ctx.config.color_filter_b_min;
+        m_cachedConfig.color_filter.b_max = ctx.config.color_filter_b_max;
+        m_cachedConfig.color_filter.h_min = ctx.config.color_filter_h_min;
+        m_cachedConfig.color_filter.h_max = ctx.config.color_filter_h_max;
+        m_cachedConfig.color_filter.s_min = ctx.config.color_filter_s_min;
+        m_cachedConfig.color_filter.s_max = ctx.config.color_filter_s_max;
+        m_cachedConfig.color_filter.v_min = ctx.config.color_filter_v_min;
+        m_cachedConfig.color_filter.v_max = ctx.config.color_filter_v_max;
+        m_cachedConfig.color_filter.min_ratio = ctx.config.color_filter_min_ratio;
+        m_cachedConfig.color_filter.max_ratio = ctx.config.color_filter_max_ratio;
+        m_cachedConfig.color_filter.min_count = ctx.config.color_filter_min_count;
+        m_cachedConfig.color_filter.max_count = ctx.config.color_filter_max_count;
 
         // Increment generation to signal update
         m_cachedConfig.generation.store(currentGen + 1, std::memory_order_release);
@@ -225,6 +241,173 @@ __global__ void batchedDetectionClearKernel(
     }
 }
 
+// RGB to HSV conversion (device function)
+__device__ void rgbToHsvDevice(int r, int g, int b, int& h, int& s, int& v) {
+    float rf = r / 255.0f;
+    float gf = g / 255.0f;
+    float bf = b / 255.0f;
+
+    float maxVal = fmaxf(fmaxf(rf, gf), bf);
+    float minVal = fminf(fminf(rf, gf), bf);
+    float delta = maxVal - minVal;
+
+    v = static_cast<int>(maxVal * 255);
+
+    if (maxVal > 0.0f) {
+        s = static_cast<int>((delta / maxVal) * 255);
+    } else {
+        s = 0;
+    }
+
+    if (delta < 0.00001f) {
+        h = 0;
+    } else if (maxVal == rf) {
+        h = static_cast<int>(60.0f * fmodf((gf - bf) / delta, 6.0f));
+    } else if (maxVal == gf) {
+        h = static_cast<int>(60.0f * ((bf - rf) / delta + 2.0f));
+    } else {
+        h = static_cast<int>(60.0f * ((rf - gf) / delta + 4.0f));
+    }
+
+    if (h < 0) h += 360;
+    h = h / 2; // Convert to 0-179 range (OpenCV style)
+}
+
+// Color match kernel - computes color match ratio for each target
+// One block per target, threads cooperatively sample pixels within bbox
+__global__ void computeColorMatchRatioKernel(
+    Target* __restrict__ targets,
+    const int* __restrict__ targetCount,
+    const unsigned char* __restrict__ imageData,
+    int imageWidth,
+    int imageHeight,
+    int imageStep,
+    int colorMode,  // 0=RGB, 1=HSV
+    int r_min, int r_max,
+    int g_min, int g_max,
+    int b_min, int b_max,
+    int h_min, int h_max,
+    int s_min, int s_max,
+    int v_min, int v_max,
+    float min_ratio,
+    float max_ratio
+) {
+    int targetIdx = blockIdx.x;
+    int count = *targetCount;
+
+    if (targetIdx >= count) return;
+
+    Target& t = targets[targetIdx];
+    if (t.width <= 0 || t.height <= 0 || t.classId < 0) {
+        t.colorMatchRatio = -1.0f;
+        t.colorMatchCount = -1;
+        return;
+    }
+
+    // Clamp bbox to image bounds
+    int x1 = max(0, t.x);
+    int y1 = max(0, t.y);
+    int x2 = min(imageWidth, t.x + t.width);
+    int y2 = min(imageHeight, t.y + t.height);
+
+    int bboxWidth = x2 - x1;
+    int bboxHeight = y2 - y1;
+
+    if (bboxWidth <= 0 || bboxHeight <= 0) {
+        t.colorMatchRatio = -1.0f;
+        t.colorMatchCount = -1;
+        return;
+    }
+
+    // Sample pixels - use grid sampling for efficiency
+    // Max 8x8 = 64 samples per target for speed
+    const int maxSamplesX = 8;
+    const int maxSamplesY = 8;
+
+    int stepX = max(1, bboxWidth / maxSamplesX);
+    int stepY = max(1, bboxHeight / maxSamplesY);
+
+    int samplesX = (bboxWidth + stepX - 1) / stepX;
+    int samplesY = (bboxHeight + stepY - 1) / stepY;
+    int totalSamples = samplesX * samplesY;
+
+    // Use shared memory for reduction
+    __shared__ int matchCount;
+    __shared__ int sampleCount;
+
+    if (threadIdx.x == 0) {
+        matchCount = 0;
+        sampleCount = 0;
+    }
+    __syncthreads();
+
+    int localMatches = 0;
+    int localSamples = 0;
+
+    // Each thread processes multiple samples
+    for (int i = threadIdx.x; i < totalSamples; i += blockDim.x) {
+        int sx = i % samplesX;
+        int sy = i / samplesX;
+
+        int px = x1 + sx * stepX;
+        int py = y1 + sy * stepY;
+
+        if (px >= imageWidth || py >= imageHeight) continue;
+
+        // Read BGRA pixel
+        const unsigned char* pixel = imageData + py * imageStep + px * 4;
+        int b = pixel[0];
+        int g = pixel[1];
+        int r = pixel[2];
+
+        bool matches = false;
+
+        if (colorMode == 0) {
+            // RGB mode
+            matches = (r >= r_min && r <= r_max &&
+                      g >= g_min && g <= g_max &&
+                      b >= b_min && b <= b_max);
+        } else {
+            // HSV mode
+            int h, s, v;
+            rgbToHsvDevice(r, g, b, h, s, v);
+
+            // Handle hue wraparound
+            bool hueMatch;
+            if (h_min <= h_max) {
+                hueMatch = (h >= h_min && h <= h_max);
+            } else {
+                hueMatch = (h >= h_min || h <= h_max);
+            }
+
+            matches = hueMatch &&
+                     (s >= s_min && s <= s_max) &&
+                     (v >= v_min && v <= v_max);
+        }
+
+        if (matches) localMatches++;
+        localSamples++;
+    }
+
+    // Atomic reduction
+    atomicAdd(&matchCount, localMatches);
+    atomicAdd(&sampleCount, localSamples);
+    __syncthreads();
+
+    // Thread 0 writes the final ratio and count
+    if (threadIdx.x == 0) {
+        if (sampleCount > 0) {
+            t.colorMatchRatio = static_cast<float>(matchCount) / static_cast<float>(sampleCount);
+            // Estimate total match count based on sample ratio and bbox area
+            int bboxArea = bboxWidth * bboxHeight;
+            t.colorMatchCount = static_cast<int>(t.colorMatchRatio * bboxArea);
+        } else {
+            t.colorMatchRatio = -1.0f;
+            t.colorMatchCount = -1;
+        }
+    }
+}
+
 __device__ float computeBoundingBoxIoU(const Target& a, const Target& b) {
     if (a.classId < 0 || b.classId < 0 || a.width <= 0 || a.height <= 0 ||
         b.width <= 0 || b.height <= 0) {
@@ -278,9 +461,12 @@ __global__ void fusedTargetSelectionAndMovementKernel(
     float head_y_offset,
     float body_y_offset,
     int detection_resolution,
-    bool pixel_filter_enabled,
-    int pixel_filter_mode,      // 0=below (<=), 1=above (>=)
-    int pixel_filter_threshold,
+    bool color_filter_enabled,
+    int color_filter_target_mode,   // 0=ratio, 1=absolute count
+    float color_filter_min_ratio,
+    float color_filter_max_ratio,
+    int color_filter_min_count,
+    int color_filter_max_count,
     Target* __restrict__ selectedTarget,
     int* __restrict__ bestTargetIndex,
     Target* __restrict__ bestTarget,
@@ -344,17 +530,18 @@ __global__ void fusedTargetSelectionAndMovementKernel(
             continue;
         }
 
-        // Pixel size filter
-        if (pixel_filter_enabled) {
-            int pixel_count = t.width * t.height;
-            if (pixel_filter_mode == 0) {
-                // Below mode: only accept targets with pixels <= threshold
-                if (pixel_count > pixel_filter_threshold) {
+        // Color filter: skip targets that don't meet color match requirements
+        if (color_filter_enabled && t.colorMatchRatio >= 0.0f) {
+            if (color_filter_target_mode == 0) {
+                // Ratio mode
+                if (t.colorMatchRatio < color_filter_min_ratio ||
+                    t.colorMatchRatio > color_filter_max_ratio) {
                     continue;
                 }
             } else {
-                // Above mode: only accept targets with pixels >= threshold
-                if (pixel_count < pixel_filter_threshold) {
+                // Absolute count mode
+                if (t.colorMatchCount < color_filter_min_count ||
+                    t.colorMatchCount > color_filter_max_count) {
                     continue;
                 }
             }
@@ -2008,22 +2195,44 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
     float cached_derivative_max = cfg.pid.derivative_max;
     float cached_head_y_offset = cfg.targeting.head_y_offset;
     float cached_body_y_offset = cfg.targeting.body_y_offset;
-    
+
     float crosshairX = ctx.config.detection_resolution / 2.0f;
     float crosshairY = ctx.config.detection_resolution / 2.0f;
 
     int head_class_id = cfg.targeting.head_class_id;
-
-    const int blockSize = computeTargetSelectionBlockSize(cached_max_detections);
-    const int gridSize = 1;
-    const size_t sharedBytes = static_cast<size_t>(blockSize) *
-                               (sizeof(float) + sizeof(int) + sizeof(float) + sizeof(int));
 
     cudaError_t staleError = cudaGetLastError();
     if (staleError != cudaSuccess) {
         std::cerr << "[Pipeline] Clearing stale CUDA error before target selection: "
                   << cudaGetErrorString(staleError) << std::endl;
     }
+
+    // Run color match kernel if color filter is enabled
+    if (cfg.color_filter.enabled && !m_captureBuffer.empty() && m_captureBuffer.data()) {
+        // Launch one block per target, 32 threads per block
+        computeColorMatchRatioKernel<<<cached_max_detections, 32, 0, stream>>>(
+            m_unifiedArena.finalTargets,
+            m_smallBufferArena.finalTargetsCount,
+            m_captureBuffer.data(),
+            m_captureBuffer.cols(),
+            m_captureBuffer.rows(),
+            static_cast<int>(m_captureBuffer.step()),
+            cfg.color_filter.color_mode,
+            cfg.color_filter.r_min, cfg.color_filter.r_max,
+            cfg.color_filter.g_min, cfg.color_filter.g_max,
+            cfg.color_filter.b_min, cfg.color_filter.b_max,
+            cfg.color_filter.h_min, cfg.color_filter.h_max,
+            cfg.color_filter.s_min, cfg.color_filter.s_max,
+            cfg.color_filter.v_min, cfg.color_filter.v_max,
+            cfg.color_filter.min_ratio,
+            cfg.color_filter.max_ratio
+        );
+    }
+
+    const int blockSize = computeTargetSelectionBlockSize(cached_max_detections);
+    const int gridSize = 1;
+    const size_t sharedBytes = static_cast<size_t>(blockSize) *
+                               (sizeof(float) + sizeof(int) + sizeof(float) + sizeof(int));
 
     fusedTargetSelectionAndMovementKernel<<<gridSize, blockSize, sharedBytes, stream>>>(
         m_unifiedArena.finalTargets,
@@ -2044,9 +2253,12 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         cached_head_y_offset,
         cached_body_y_offset,
         ctx.config.detection_resolution,
-        cfg.pixel_filter.enabled,
-        cfg.pixel_filter.mode,
-        cfg.pixel_filter.threshold,
+        cfg.color_filter.enabled,
+        cfg.color_filter.target_mode,
+        cfg.color_filter.min_ratio,
+        cfg.color_filter.max_ratio,
+        cfg.color_filter.min_count,
+        cfg.color_filter.max_count,
         m_smallBufferArena.selectedTarget,
         m_smallBufferArena.bestTargetIndex,
         m_smallBufferArena.bestTarget,
