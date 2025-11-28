@@ -111,6 +111,9 @@ void keyboardListener() {
     static bool last_pause_state = false;
     static bool last_single_shot_state = false;
 
+    // No recoil timing
+    auto last_recoil_time = std::chrono::steady_clock::now();
+
     // Event-driven keyboard monitoring using Windows events
     HANDLE hKeyboardEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
 
@@ -157,6 +160,39 @@ void keyboardListener() {
                                  is_any_key_or_combo_pressed(ctx.config.button_norecoil) : false;
         ctx.norecoil_active = current_norecoil;
 
+        // No recoil - apply mouse movement when active
+        if (current_norecoil) {
+            auto* profile = ctx.config.getCurrentWeaponProfile();
+            if (profile) {
+                auto now = std::chrono::steady_clock::now();
+                float interval_ms = profile->recoil_ms;
+                if (interval_ms < 1.0f) interval_ms = 1.0f;
+
+                auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(now - last_recoil_time).count();
+                if (elapsed >= static_cast<long long>(interval_ms * 1000)) {
+                    // Calculate strength with scope multiplier
+                    float strength = profile->base_strength;
+                    int scope = ctx.config.active_scope_magnification;
+                    switch (scope) {
+                        case 1: strength *= profile->scope_mult_1x; break;
+                        case 2: strength *= profile->scope_mult_2x; break;
+                        case 3: strength *= profile->scope_mult_3x; break;
+                        case 4: strength *= profile->scope_mult_4x; break;
+                        case 6: strength *= profile->scope_mult_6x; break;
+                        case 8: strength *= profile->scope_mult_8x; break;
+                        default: strength *= profile->scope_mult_1x; break;
+                    }
+                    strength *= profile->fire_rate_multiplier;
+
+                    int dy = static_cast<int>(strength + 0.5f);
+                    if (dy > 0) {
+                        executeMouseMovement(0, dy);
+                    }
+                    last_recoil_time = now;
+                }
+            }
+        }
+
         // Improved pause key handling - only toggle on key press, not while held
         bool current_pause = is_any_key_or_combo_pressed(ctx.config.button_pause);
         if (current_pause && !last_pause_state) {
@@ -184,7 +220,7 @@ void keyboardListener() {
 
         // Event-driven adaptive delay - use wait with timeout for better CPU efficiency
         DWORD waitTime = current_aiming ? 2 : 10; // 2ms when aiming, 10ms when idle
-        
+
         // Use WaitForSingleObject with timeout instead of sleep for better responsiveness
         // This allows the thread to wake immediately if signaled
         WaitForSingleObject(hKeyboardEvent, waitTime);
