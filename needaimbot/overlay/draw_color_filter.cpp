@@ -227,6 +227,7 @@ static void drawRGBPreview(int r_min, int r_max, int g_min, int g_max, int b_min
 }
 
 // Apply color filter mask to frame (supports 3 or 4 channel images)
+// Note: Preview frame is RGBA (converted from BGRA), so R=0, G=1, B=2
 static void applyColorFilterMask(SimpleMat& frame, const Config& cfg) {
     if (frame.empty()) return;
 
@@ -241,9 +242,10 @@ static void applyColorFilterMask(SimpleMat& frame, const Config& cfg) {
     for (int y = 0; y < height; y++) {
         unsigned char* row = data + y * stride;
         for (int x = 0; x < width; x++) {
-            int b = row[x * channels + 0];
+            // Preview is RGBA format (converted from BGRA by cuda_bgra2rgba)
+            int r = row[x * channels + 0];
             int g = row[x * channels + 1];
-            int r = row[x * channels + 2];
+            int b = row[x * channels + 2];
 
             bool matches = false;
 
@@ -274,9 +276,9 @@ static void applyColorFilterMask(SimpleMat& frame, const Config& cfg) {
             // Keep original if matches, darken if not (using configurable opacity)
             if (!matches) {
                 float opacity = cfg.color_filter_mask_opacity;
-                row[x * channels + 0] = static_cast<unsigned char>(b * opacity);
+                row[x * channels + 0] = static_cast<unsigned char>(r * opacity);
                 row[x * channels + 1] = static_cast<unsigned char>(g * opacity);
-                row[x * channels + 2] = static_cast<unsigned char>(r * opacity);
+                row[x * channels + 2] = static_cast<unsigned char>(b * opacity);
             }
             // Matching pixels keep their original color
         }
