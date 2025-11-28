@@ -302,38 +302,66 @@ void draw_mouse()
     UIHelpers::Spacer();
     draw_movement_controls();
     UIHelpers::Spacer();
+
     // Deadband / jitter filter controls
     auto& ctx = AppContext::getInstance();
     UIHelpers::BeginCard("Jitter Filter (Deadband)");
-    UIHelpers::BeautifulText("Suppress micro-oscillation near target. Enter <= Exit. Per-axis.", UIHelpers::GetAccentColor(0.8f));
+    UIHelpers::BeautifulText("Suppress micro-oscillation near target", UIHelpers::GetAccentColor(0.8f));
+    UIHelpers::CompactSpacer();
 
-    int prev_enter_x = ctx.config.deadband_enter_x;
-    int prev_exit_x  = ctx.config.deadband_exit_x;
-    int prev_enter_y = ctx.config.deadband_enter_y;
-    int prev_exit_y  = ctx.config.deadband_exit_y;
+    if (ImGui::BeginTable("##deadband_table", 2, ImGuiTableFlags_NoBordersInBody | ImGuiTableFlags_SizingStretchSame)) {
+        ImGui::TableSetupColumn("X-Axis");
+        ImGui::TableSetupColumn("Y-Axis");
 
-    if (ImGui::SliderInt("Enter X (px)", &ctx.config.deadband_enter_x, 0, 10)) {
-        ctx.config.deadband_enter_x = std::max(0, std::min(ctx.config.deadband_enter_x, ctx.config.deadband_exit_x));
-        SAVE_PROFILE();
-        if (auto* p = needaimbot::PipelineManager::getInstance().getPipeline()) p->markPidConfigDirty();
-    }
-    if (ImGui::SliderInt("Exit X (px)", &ctx.config.deadband_exit_x, 1, 20)) {
-        ctx.config.deadband_exit_x = std::max(ctx.config.deadband_exit_x, ctx.config.deadband_enter_x);
-        SAVE_PROFILE();
-        if (auto* p = needaimbot::PipelineManager::getInstance().getPipeline()) p->markPidConfigDirty();
-    }
-    if (ImGui::SliderInt("Enter Y (px)", &ctx.config.deadband_enter_y, 0, 10)) {
-        ctx.config.deadband_enter_y = std::max(0, std::min(ctx.config.deadband_enter_y, ctx.config.deadband_exit_y));
-        SAVE_PROFILE();
-        if (auto* p = needaimbot::PipelineManager::getInstance().getPipeline()) p->markPidConfigDirty();
-    }
-    if (ImGui::SliderInt("Exit Y (px)", &ctx.config.deadband_exit_y, 1, 20)) {
-        ctx.config.deadband_exit_y = std::max(ctx.config.deadband_exit_y, ctx.config.deadband_enter_y);
-        SAVE_PROFILE();
-        if (auto* p = needaimbot::PipelineManager::getInstance().getPipeline()) p->markPidConfigDirty();
+        // Headers
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::TextColored(UIHelpers::GetAccentColor(), "X-Axis");
+        ImGui::TableNextColumn();
+        ImGui::TextColored(UIHelpers::GetAccentColor(), "Y-Axis");
+
+        // Enter thresholds
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::SliderInt("##enter_x", &ctx.config.deadband_enter_x, 0, 10, "Enter: %d px")) {
+            ctx.config.deadband_enter_x = std::max(0, std::min(ctx.config.deadband_enter_x, ctx.config.deadband_exit_x));
+            SAVE_PROFILE();
+            if (auto* p = needaimbot::PipelineManager::getInstance().getPipeline()) p->markPidConfigDirty();
+        }
+        ImGui::TableNextColumn();
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::SliderInt("##enter_y", &ctx.config.deadband_enter_y, 0, 10, "Enter: %d px")) {
+            ctx.config.deadband_enter_y = std::max(0, std::min(ctx.config.deadband_enter_y, ctx.config.deadband_exit_y));
+            SAVE_PROFILE();
+            if (auto* p = needaimbot::PipelineManager::getInstance().getPipeline()) p->markPidConfigDirty();
+        }
+
+        // Exit thresholds
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::SliderInt("##exit_x", &ctx.config.deadband_exit_x, 1, 20, "Exit: %d px")) {
+            ctx.config.deadband_exit_x = std::max(ctx.config.deadband_exit_x, ctx.config.deadband_enter_x);
+            SAVE_PROFILE();
+            if (auto* p = needaimbot::PipelineManager::getInstance().getPipeline()) p->markPidConfigDirty();
+        }
+        ImGui::TableNextColumn();
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::SliderInt("##exit_y", &ctx.config.deadband_exit_y, 1, 20, "Exit: %d px")) {
+            ctx.config.deadband_exit_y = std::max(ctx.config.deadband_exit_y, ctx.config.deadband_enter_y);
+            SAVE_PROFILE();
+            if (auto* p = needaimbot::PipelineManager::getInstance().getPipeline()) p->markPidConfigDirty();
+        }
+
+        ImGui::EndTable();
     }
 
-    if (ImGui::Button("Reset Deadband to Defaults")) {
+    UIHelpers::CompactSpacer();
+    ImGui::TextDisabled("Enter = start suppressing | Exit = stop suppressing");
+
+    UIHelpers::CompactSpacer();
+    if (UIHelpers::BeautifulButton("Reset to Defaults", ImVec2(-1, 0))) {
         ctx.config.deadband_enter_x = 2;
         ctx.config.deadband_exit_x  = 5;
         ctx.config.deadband_enter_y = 2;

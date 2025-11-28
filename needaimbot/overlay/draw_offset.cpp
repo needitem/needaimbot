@@ -23,57 +23,67 @@ void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float scale, const 
 // Mutex for thread-safe D3D11 resource access (defined in draw_debug.cpp)
 extern std::mutex g_debugTexMutex;
 
-// Helper: Render D-pad controls for offset adjustment
+// Helper: Render compact D-pad controls for offset adjustment
 static void renderOffsetDPad(const char* id_prefix, float& offset_x, float& offset_y, bool& changed_flag, float adjustment_step = 1.0f)
 {
     auto& ctx = AppContext::getInstance();
 
-    float button_size = 25.0f;
-    float spacing = 2.0f;
-    float group_width = button_size * 3 + spacing * 2;
-    float center_offset = (ImGui::GetContentRegionAvail().x - group_width) * 0.5f;
+    const float btn_size = 28.0f;
+    const float spacing = 2.0f;
 
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(spacing, spacing));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
+
+    // Center the D-pad
+    float group_width = btn_size * 3 + spacing * 2;
+    float center_offset = (ImGui::GetContentRegionAvail().x - group_width) * 0.5f;
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + center_offset);
+
     ImGui::BeginGroup();
     {
-        // Top button (Up)
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + button_size + spacing);
-        if (ImGui::Button((std::string("UP##") + id_prefix + "_up").c_str(), ImVec2(button_size, button_size))) {
+        // Row 1: Up button centered
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + btn_size + spacing);
+        if (ImGui::Button(("^##" + std::string(id_prefix) + "_up").c_str(), ImVec2(btn_size, btn_size))) {
             offset_y -= adjustment_step;
             changed_flag = true;
             ctx.crosshair_offset_changed = true;
         }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move capture region up");
 
-        // Middle row (Left, Center, Right)
-        if (ImGui::Button((std::string("L##") + id_prefix + "_left").c_str(), ImVec2(button_size, button_size))) {
+        // Row 2: Left, display, Right
+        if (ImGui::Button(("<##" + std::string(id_prefix) + "_left").c_str(), ImVec2(btn_size, btn_size))) {
             offset_x -= adjustment_step;
             changed_flag = true;
             ctx.crosshair_offset_changed = true;
         }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move capture region left");
+        ImGui::SameLine();
 
-        ImGui::SameLine(0, spacing);
-        ImGui::Dummy(ImVec2(button_size, button_size));
+        // Center display showing current values
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.15f, 0.18f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.15f, 0.15f, 0.18f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.15f, 0.15f, 0.18f, 1.0f));
+        char val_buf[16];
+        snprintf(val_buf, sizeof(val_buf), "%.0f", offset_x);
+        ImGui::Button(val_buf, ImVec2(btn_size, btn_size));
+        ImGui::PopStyleColor(3);
 
-        ImGui::SameLine(0, spacing);
-        if (ImGui::Button((std::string("R##") + id_prefix + "_right").c_str(), ImVec2(button_size, button_size))) {
+        ImGui::SameLine();
+        if (ImGui::Button((">##" + std::string(id_prefix) + "_right").c_str(), ImVec2(btn_size, btn_size))) {
             offset_x += adjustment_step;
             changed_flag = true;
             ctx.crosshair_offset_changed = true;
         }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move capture region right");
 
-        // Bottom button (Down)
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + button_size + spacing);
-        if (ImGui::Button((std::string("DN##") + id_prefix + "_down").c_str(), ImVec2(button_size, button_size))) {
+        // Row 3: Down button centered
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + btn_size + spacing);
+        if (ImGui::Button(("v##" + std::string(id_prefix) + "_down").c_str(), ImVec2(btn_size, btn_size))) {
             offset_y += adjustment_step;
             changed_flag = true;
             ctx.crosshair_offset_changed = true;
         }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move capture region down");
     }
     ImGui::EndGroup();
+
+    ImGui::PopStyleVar(2);
 }
 
 // Helper: Render fine adjustment drag floats for offset
@@ -81,21 +91,29 @@ static void renderFineAdjustment(const char* id_prefix, float& offset_x, float& 
 {
     auto& ctx = AppContext::getInstance();
 
-    ImGui::Text("Fine Adjust:");
-    ImGui::PushItemWidth(Constants::SLIDER_WIDTH_SMALL);
-    ImGui::SetNextItemWidth(60);
-    ImGui::Text("X"); ImGui::SameLine();
-    if (ImGui::DragFloat((std::string("##") + id_prefix + "_x_fine").c_str(), &offset_x, Constants::OFFSET_DRAG_SPEED, Constants::OFFSET_DRAG_MIN, Constants::OFFSET_DRAG_MAX, "%.1f")) {
-        changed_flag = true;
-        ctx.crosshair_offset_changed = true;
+    if (ImGui::BeginTable(("##fine_" + std::string(id_prefix)).c_str(), 2, ImGuiTableFlags_NoBordersInBody)) {
+        ImGui::TableSetupColumn("X", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Y", ImGuiTableColumnFlags_WidthStretch);
+
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::DragFloat(("##x_" + std::string(id_prefix)).c_str(), &offset_x,
+                            Constants::OFFSET_DRAG_SPEED, Constants::OFFSET_DRAG_MIN, Constants::OFFSET_DRAG_MAX, "X: %.1f")) {
+            changed_flag = true;
+            ctx.crosshair_offset_changed = true;
+        }
+
+        ImGui::TableNextColumn();
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::DragFloat(("##y_" + std::string(id_prefix)).c_str(), &offset_y,
+                            Constants::OFFSET_DRAG_SPEED, Constants::OFFSET_DRAG_MIN, Constants::OFFSET_DRAG_MAX, "Y: %.1f")) {
+            changed_flag = true;
+            ctx.crosshair_offset_changed = true;
+        }
+
+        ImGui::EndTable();
     }
-    ImGui::SetNextItemWidth(60);
-    ImGui::Text("Y"); ImGui::SameLine();
-    if (ImGui::DragFloat((std::string("##") + id_prefix + "_y_fine").c_str(), &offset_y, Constants::OFFSET_DRAG_SPEED, Constants::OFFSET_DRAG_MIN, Constants::OFFSET_DRAG_MAX, "%.1f")) {
-        changed_flag = true;
-        ctx.crosshair_offset_changed = true;
-    }
-    ImGui::PopItemWidth();
 }
 
 void renderOffsetTab()
@@ -198,106 +216,80 @@ void renderOffsetTab()
 
     UIHelpers::EndSettingsSection();
 
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
+    UIHelpers::CompactSpacer();
 
-    // Capture Region Offset Settings
-    UIHelpers::BeginSettingsSection("Capture Region Offset", "Adjust the capture area position (crosshair stays centered)");
+    // Capture Region Offset Settings - using BeginCard for consistency
+    UIHelpers::BeginCard("Capture Region Offset");
 
     const float adjustment_step = 1.0f;
     bool offset_changed = false;
     bool aim_shoot_offset_changed = false;
-    
-    // Create a table for better layout with fixed width columns
-    if (ImGui::BeginTable("CrosshairOffsetTable", 2, ImGuiTableFlags_SizingFixedFit)) {
-        ImGui::TableSetupColumn("Normal Offset", ImGuiTableColumnFlags_WidthFixed, 200.0f);
-        ImGui::TableSetupColumn("Aim+Shoot Offset", ImGuiTableColumnFlags_WidthFixed, 200.0f);
-        
-        ImGui::TableNextRow();
-        ImGui::TableNextColumn();
-        
-        // Left column - Normal Offset
-        {
-            ImGui::Text("Capture Region Offset (?)");
-            ImGui::SameLine();
-            UIHelpers::InfoTooltip("Moves the capture region while keeping crosshair centered on screen");
-            ImGui::Text("X=%.0f, Y=%.0f", ctx.config.crosshair_offset_x, ctx.config.crosshair_offset_y);
-            ImGui::Spacing();
+
+    // Use tabs for Normal vs Aim+Shoot offsets
+    if (ImGui::BeginTabBar("##offset_tabs")) {
+        // Normal Offset Tab
+        if (ImGui::BeginTabItem("Normal")) {
+            UIHelpers::CompactSpacer();
+            ImGui::TextDisabled("Capture region offset (Y: %.0f)", ctx.config.crosshair_offset_y);
 
             renderOffsetDPad("offset", ctx.config.crosshair_offset_x, ctx.config.crosshair_offset_y, offset_changed, adjustment_step);
 
-            ImGui::Spacing();
+            UIHelpers::CompactSpacer();
+            renderFineAdjustment("offset", ctx.config.crosshair_offset_x, ctx.config.crosshair_offset_y, offset_changed);
 
-            // Reset button centered
-            float reset_width = 60.0f;
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (ImGui::GetContentRegionAvail().x - reset_width) * 0.5f);
-            if (ImGui::Button("Reset##offset_reset", ImVec2(reset_width, 25))) {
+            UIHelpers::CompactSpacer();
+            if (UIHelpers::BeautifulButton("Reset to Center", ImVec2(-1, 0))) {
                 ctx.config.crosshair_offset_x = 0.0f;
                 ctx.config.crosshair_offset_y = 0.0f;
                 offset_changed = true;
                 ctx.crosshair_offset_changed = true;
             }
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Reset capture region to center");
 
-            ImGui::Spacing();
-            ImGui::Separator();
-            ImGui::Spacing();
-
-            renderFineAdjustment("offset", ctx.config.crosshair_offset_x, ctx.config.crosshair_offset_y, offset_changed);
+            ImGui::EndTabItem();
         }
-        
-        ImGui::TableNextColumn();
-        
-        // Right column - Aim+Shoot Offset
-        {
-            if (ImGui::Checkbox("Enable Aim+Shoot Offset (?)", &ctx.config.enable_aim_shoot_offset)) {
+
+        // Aim+Shoot Offset Tab
+        if (ImGui::BeginTabItem("Aim+Shoot")) {
+            UIHelpers::CompactSpacer();
+
+            if (UIHelpers::BeautifulToggle("Enable", &ctx.config.enable_aim_shoot_offset,
+                                           "Use different offset when aiming and shooting")) {
                 SAVE_PROFILE();
             }
-            ImGui::SameLine();
-            UIHelpers::InfoTooltip("Use different offset when both aim and shoot buttons are pressed");
-            
+
             if (ctx.config.enable_aim_shoot_offset) {
-                ImGui::Text("X=%.0f, Y=%.0f", ctx.config.aim_shoot_offset_x, ctx.config.aim_shoot_offset_y);
-                ImGui::Spacing();
+                UIHelpers::CompactSpacer();
+                ImGui::TextDisabled("Offset when aim+shoot (Y: %.0f)", ctx.config.aim_shoot_offset_y);
 
                 renderOffsetDPad("aim_shoot", ctx.config.aim_shoot_offset_x, ctx.config.aim_shoot_offset_y, aim_shoot_offset_changed, adjustment_step);
 
-                ImGui::Spacing();
+                UIHelpers::CompactSpacer();
+                renderFineAdjustment("aim_shoot", ctx.config.aim_shoot_offset_x, ctx.config.aim_shoot_offset_y, aim_shoot_offset_changed);
 
-                // Copy Normal button centered
-                float copy_width = 85.0f;
-                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (ImGui::GetContentRegionAvail().x - copy_width) * 0.5f);
-                if (ImGui::Button("Copy Normal##copy", ImVec2(copy_width, 25))) {
+                UIHelpers::CompactSpacer();
+                if (UIHelpers::BeautifulButton("Copy from Normal", ImVec2(-1, 0))) {
                     ctx.config.aim_shoot_offset_x = ctx.config.crosshair_offset_x;
                     ctx.config.aim_shoot_offset_y = ctx.config.crosshair_offset_y;
                     aim_shoot_offset_changed = true;
                     ctx.crosshair_offset_changed = true;
                 }
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Copy offset values from normal crosshair");
-
-                ImGui::Spacing();
-                ImGui::Separator();
-                ImGui::Spacing();
-
-                renderFineAdjustment("aim_shoot", ctx.config.aim_shoot_offset_x, ctx.config.aim_shoot_offset_y, aim_shoot_offset_changed);
             } else {
-                ImGui::Spacing();
-                ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Aim+Shoot offset is disabled");
-                ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Enable to use different offset");
-                ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "when both buttons are pressed");
+                UIHelpers::CompactSpacer();
+                ImGui::TextDisabled("Enable to use different offset");
+                ImGui::TextDisabled("when both buttons are pressed");
             }
+
+            ImGui::EndTabItem();
         }
-        
-        ImGui::EndTable();
+
+        ImGui::EndTabBar();
     }
-    
-    // Save config when offset changes
+
     if (offset_changed || aim_shoot_offset_changed) {
         SAVE_PROFILE();
     }
 
-    UIHelpers::EndSettingsSection();
+    UIHelpers::EndCard();
 
     ImGui::Spacing();
     ImGui::Separator();

@@ -4,7 +4,7 @@
 #include "imgui.h"
 #include <algorithm>
 
-void draw_recoil()
+static void draw_profile_selector()
 {
     auto& ctx = AppContext::getInstance();
     auto& profiles = ctx.config.weapon_profiles;
@@ -15,218 +15,386 @@ void draw_recoil()
         active_idx = 0;
     }
 
-    // Profile selector
     UIHelpers::BeginCard("Weapon Profile");
 
+    UIHelpers::BeautifulText("Select or manage weapon recoil profiles.", UIHelpers::GetAccentColor(0.8f));
+    UIHelpers::CompactSpacer();
+
     if (!profiles.empty()) {
-        // Combo box for profile selection
-        const char* preview = profiles[active_idx].weapon_name.c_str();
-        ImGui::SetNextItemWidth(200.0f);
-        if (ImGui::BeginCombo("Active Profile", preview)) {
-            for (int i = 0; i < static_cast<int>(profiles.size()); i++) {
-                bool is_selected = (active_idx == i);
-                if (ImGui::Selectable(profiles[i].weapon_name.c_str(), is_selected)) {
-                    active_idx = i;
-                    ctx.config.current_weapon_name = profiles[i].weapon_name;
-                    SAVE_PROFILE();
+        // Profile selector row
+        if (ImGui::BeginTable("##profile_selector", 3, ImGuiTableFlags_NoBordersInBody)) {
+            ImGui::TableSetupColumn("Combo", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Add", ImGuiTableColumnFlags_WidthFixed, 30.0f);
+            ImGui::TableSetupColumn("Del", ImGuiTableColumnFlags_WidthFixed, 30.0f);
+
+            ImGui::TableNextRow();
+
+            // Profile combo
+            ImGui::TableNextColumn();
+            const char* preview = profiles[active_idx].weapon_name.c_str();
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::BeginCombo("##ProfileCombo", preview)) {
+                for (int i = 0; i < static_cast<int>(profiles.size()); i++) {
+                    bool is_selected = (active_idx == i);
+                    if (ImGui::Selectable(profiles[i].weapon_name.c_str(), is_selected)) {
+                        active_idx = i;
+                        ctx.config.current_weapon_name = profiles[i].weapon_name;
+                        SAVE_PROFILE();
+                    }
+                    if (is_selected) {
+                        ImGui::SetItemDefaultFocus();
+                    }
                 }
-                if (is_selected) {
-                    ImGui::SetItemDefaultFocus();
-                }
+                ImGui::EndCombo();
             }
-            ImGui::EndCombo();
-        }
 
-        ImGui::SameLine();
-
-        // Add new profile button
-        if (ImGui::Button("+##add_profile")) {
-            WeaponRecoilProfile new_profile("New Weapon", 3.0f, 1.0f);
-            profiles.push_back(new_profile);
-            active_idx = static_cast<int>(profiles.size()) - 1;
-            SAVE_PROFILE();
-        }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Add new profile");
-
-        ImGui::SameLine();
-
-        // Delete profile button (keep at least one)
-        ImGui::BeginDisabled(profiles.size() <= 1);
-        if (ImGui::Button("-##del_profile")) {
-            profiles.erase(profiles.begin() + active_idx);
-            if (active_idx >= static_cast<int>(profiles.size())) {
+            // Add button
+            ImGui::TableNextColumn();
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.5f, 0.2f, 0.9f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.6f, 0.3f, 1.0f));
+            if (ImGui::Button("+##add", ImVec2(-1, 0))) {
+                WeaponRecoilProfile new_profile("New Weapon", 3.0f, 1.0f);
+                profiles.push_back(new_profile);
                 active_idx = static_cast<int>(profiles.size()) - 1;
+                SAVE_PROFILE();
             }
+            ImGui::PopStyleColor(2);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Add new profile");
+
+            // Delete button
+            ImGui::TableNextColumn();
+            ImGui::BeginDisabled(profiles.size() <= 1);
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.5f, 0.2f, 0.2f, 0.8f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.3f, 0.3f, 1.0f));
+            if (ImGui::Button("-##del", ImVec2(-1, 0))) {
+                profiles.erase(profiles.begin() + active_idx);
+                if (active_idx >= static_cast<int>(profiles.size())) {
+                    active_idx = static_cast<int>(profiles.size()) - 1;
+                }
+                SAVE_PROFILE();
+            }
+            ImGui::PopStyleColor(2);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Delete current profile");
+            ImGui::EndDisabled();
+
+            ImGui::EndTable();
+        }
+
+        UIHelpers::CompactSpacer();
+
+        // Profile name edit
+        WeaponRecoilProfile& profile = profiles[active_idx];
+        char name_buf[64];
+        strncpy(name_buf, profile.weapon_name.c_str(), sizeof(name_buf) - 1);
+        name_buf[sizeof(name_buf) - 1] = '\0';
+
+        ImGui::Text("Profile Name");
+        ImGui::SameLine();
+        UIHelpers::HelpMarker("Name for this weapon profile");
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::InputText("##weapon_name", name_buf, sizeof(name_buf))) {
+            profile.weapon_name = name_buf;
+            ctx.config.current_weapon_name = name_buf;
             SAVE_PROFILE();
         }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Delete current profile");
-        ImGui::EndDisabled();
+    }
+    else {
+        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.5f, 1.0f), "No weapon profiles. Click + to add one.");
     }
 
     UIHelpers::EndCard();
+}
 
-    if (profiles.empty()) {
-        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.5f, 1.0f), "No weapon profiles. Click + to add one.");
+static void draw_recoil_compensation()
+{
+    auto& ctx = AppContext::getInstance();
+    auto& profiles = ctx.config.weapon_profiles;
+    int active_idx = ctx.config.active_weapon_profile_index;
+
+    if (profiles.empty() || active_idx < 0 || active_idx >= static_cast<int>(profiles.size())) {
         return;
     }
 
     WeaponRecoilProfile& profile = profiles[active_idx];
 
-    UIHelpers::CompactSpacer();
-
-    // Profile name edit
-    UIHelpers::BeginCard("Profile Settings");
-
-    char name_buf[64];
-    strncpy(name_buf, profile.weapon_name.c_str(), sizeof(name_buf) - 1);
-    name_buf[sizeof(name_buf) - 1] = '\0';
-    ImGui::SetNextItemWidth(200.0f);
-    if (ImGui::InputText("Weapon Name", name_buf, sizeof(name_buf))) {
-        profile.weapon_name = name_buf;
-        ctx.config.current_weapon_name = name_buf;
-        SAVE_PROFILE();
-    }
-
-    UIHelpers::EndCard();
-
-    UIHelpers::CompactSpacer();
-
-    // Recoil strength settings
     UIHelpers::BeginCard("Recoil Compensation");
 
-    float base_strength = profile.base_strength;
-    ImGui::SetNextItemWidth(150.0f);
-    if (ImGui::SliderFloat("Base Strength", &base_strength, 0.0f, 20.0f, "%.1f")) {
-        profile.base_strength = base_strength;
-        SAVE_PROFILE();
-    }
-    ImGui::SameLine();
-    UIHelpers::InfoTooltip("Base recoil compensation strength (pixels per tick)");
-
-    float fire_mult = profile.fire_rate_multiplier;
-    ImGui::SetNextItemWidth(150.0f);
-    if (ImGui::SliderFloat("Fire Rate Mult", &fire_mult, 0.1f, 5.0f, "%.2f")) {
-        profile.fire_rate_multiplier = fire_mult;
-        SAVE_PROFILE();
-    }
-    ImGui::SameLine();
-    UIHelpers::InfoTooltip("Multiplier for fire rate adjustment");
-
-    float recoil_ms = profile.recoil_ms;
-    ImGui::SetNextItemWidth(150.0f);
-    if (ImGui::SliderFloat("Recoil Interval (ms)", &recoil_ms, 1.0f, 100.0f, "%.1f")) {
-        profile.recoil_ms = recoil_ms;
-        SAVE_PROFILE();
-    }
-    ImGui::SameLine();
-    UIHelpers::InfoTooltip("Time interval between recoil compensation ticks");
-
-    UIHelpers::EndCard();
-
+    UIHelpers::BeautifulText("Adjust recoil control strength and timing.", UIHelpers::GetAccentColor(0.8f));
     UIHelpers::CompactSpacer();
 
-    // Timing settings
-    UIHelpers::BeginCard("Timing");
+    // Recoil settings table
+    if (ImGui::BeginTable("##recoil_settings", 2, ImGuiTableFlags_NoBordersInBody)) {
+        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 130.0f);
+        ImGui::TableSetupColumn("Control", ImGuiTableColumnFlags_WidthStretch);
 
-    int start_delay = profile.start_delay_ms;
-    ImGui::SetNextItemWidth(150.0f);
-    if (ImGui::InputInt("Start Delay (ms)", &start_delay)) {
-        if (start_delay < 0) start_delay = 0;
-        profile.start_delay_ms = start_delay;
-        SAVE_PROFILE();
-    }
-    ImGui::SameLine();
-    UIHelpers::InfoTooltip("Delay before starting recoil compensation after firing");
-
-    int end_delay = profile.end_delay_ms;
-    ImGui::SetNextItemWidth(150.0f);
-    if (ImGui::InputInt("End Delay (ms)", &end_delay)) {
-        if (end_delay < 0) end_delay = 0;
-        profile.end_delay_ms = end_delay;
-        SAVE_PROFILE();
-    }
-    ImGui::SameLine();
-    UIHelpers::InfoTooltip("Time to continue recoil compensation after releasing trigger");
-
-    UIHelpers::EndCard();
-
-    UIHelpers::CompactSpacer();
-
-    // Scope multipliers
-    UIHelpers::BeginCard("Scope Multipliers");
-
-    ImGui::Text("Adjust recoil compensation based on scope magnification:");
-    ImGui::Spacing();
-
-    ImGui::PushItemWidth(100.0f);
-
-    if (ImGui::BeginTable("ScopeMultTable", 3, ImGuiTableFlags_SizingFixedFit)) {
-        ImGui::TableSetupColumn("Scope", ImGuiTableColumnFlags_WidthFixed, 60.0f);
-        ImGui::TableSetupColumn("Multiplier", ImGuiTableColumnFlags_WidthFixed, 120.0f);
-        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthStretch);
-
-        // 1x
+        // Base Strength
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
+        ImGui::AlignTextToFramePadding();
+        ImGui::Text("Base Strength");
+        ImGui::SameLine();
+        UIHelpers::HelpMarker("Base recoil compensation strength (pixels per tick)");
+        ImGui::TableNextColumn();
+        ImGui::SetNextItemWidth(-1);
+        float base_strength = profile.base_strength;
+        if (ImGui::SliderFloat("##base_strength", &base_strength, 0.0f, 20.0f, "%.1f px")) {
+            profile.base_strength = base_strength;
+            SAVE_PROFILE();
+        }
+
+        // Fire Rate Multiplier
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::AlignTextToFramePadding();
+        ImGui::Text("Fire Rate Mult");
+        ImGui::SameLine();
+        UIHelpers::HelpMarker("Multiplier for fire rate adjustment");
+        ImGui::TableNextColumn();
+        ImGui::SetNextItemWidth(-1);
+        float fire_mult = profile.fire_rate_multiplier;
+        if (ImGui::SliderFloat("##fire_mult", &fire_mult, 0.1f, 5.0f, "%.2f")) {
+            profile.fire_rate_multiplier = fire_mult;
+            SAVE_PROFILE();
+        }
+
+        // Recoil Interval
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::AlignTextToFramePadding();
+        ImGui::Text("Recoil Interval");
+        ImGui::SameLine();
+        UIHelpers::HelpMarker("Time interval between recoil compensation ticks");
+        ImGui::TableNextColumn();
+        ImGui::SetNextItemWidth(-1);
+        float recoil_ms = profile.recoil_ms;
+        if (ImGui::SliderFloat("##recoil_ms", &recoil_ms, 1.0f, 100.0f, "%.1f ms")) {
+            profile.recoil_ms = recoil_ms;
+            SAVE_PROFILE();
+        }
+
+        ImGui::EndTable();
+    }
+
+    UIHelpers::EndCard();
+}
+
+static void draw_timing_settings()
+{
+    auto& ctx = AppContext::getInstance();
+    auto& profiles = ctx.config.weapon_profiles;
+    int active_idx = ctx.config.active_weapon_profile_index;
+
+    if (profiles.empty() || active_idx < 0 || active_idx >= static_cast<int>(profiles.size())) {
+        return;
+    }
+
+    WeaponRecoilProfile& profile = profiles[active_idx];
+
+    UIHelpers::BeginCard("Timing Settings");
+
+    UIHelpers::BeautifulText("Control when recoil compensation starts and stops.", UIHelpers::GetAccentColor(0.8f));
+    UIHelpers::CompactSpacer();
+
+    if (ImGui::BeginTable("##timing_table", 2, ImGuiTableFlags_NoBordersInBody)) {
+        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 130.0f);
+        ImGui::TableSetupColumn("Control", ImGuiTableColumnFlags_WidthStretch);
+
+        // Start Delay
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::AlignTextToFramePadding();
+        ImGui::Text("Start Delay");
+        ImGui::SameLine();
+        UIHelpers::HelpMarker("Delay before starting recoil compensation after firing");
+        ImGui::TableNextColumn();
+        ImGui::SetNextItemWidth(-1);
+        int start_delay = profile.start_delay_ms;
+        if (ImGui::SliderInt("##start_delay", &start_delay, 0, 500, "%d ms")) {
+            profile.start_delay_ms = start_delay;
+            SAVE_PROFILE();
+        }
+
+        // End Delay
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::AlignTextToFramePadding();
+        ImGui::Text("End Delay");
+        ImGui::SameLine();
+        UIHelpers::HelpMarker("Time to continue recoil compensation after releasing trigger");
+        ImGui::TableNextColumn();
+        ImGui::SetNextItemWidth(-1);
+        int end_delay = profile.end_delay_ms;
+        if (ImGui::SliderInt("##end_delay", &end_delay, 0, 500, "%d ms")) {
+            profile.end_delay_ms = end_delay;
+            SAVE_PROFILE();
+        }
+
+        ImGui::EndTable();
+    }
+
+    UIHelpers::EndCard();
+}
+
+static void draw_norecoil_status()
+{
+    auto& ctx = AppContext::getInstance();
+
+    UIHelpers::BeginCard("No Recoil");
+
+    UIHelpers::BeautifulText("Compensate recoil using weapon profile settings.", UIHelpers::GetAccentColor(0.8f));
+    UIHelpers::CompactSpacer();
+
+    // Current key display
+    std::string key_display;
+    if (ctx.config.button_norecoil.empty() || ctx.config.button_norecoil[0] == "None") {
+        key_display = "None";
+    } else {
+        for (size_t i = 0; i < ctx.config.button_norecoil.size(); ++i) {
+            if (i > 0) key_display += " + ";
+            key_display += ctx.config.button_norecoil[i];
+        }
+    }
+    ImGui::Text("Hotkey: %s", key_display.c_str());
+    ImGui::SameLine();
+    UIHelpers::HelpMarker("Configure in Buttons tab");
+    UIHelpers::CompactSpacer();
+
+    // Status indicator
+    bool is_active = ctx.norecoil_active.load();
+    if (is_active) {
+        ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "Status: ACTIVE");
+    } else {
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Status: Inactive");
+    }
+    UIHelpers::CompactSpacer();
+
+    // Show current effective settings
+    auto* profile = ctx.config.getCurrentWeaponProfile();
+    if (profile) {
+        float strength = profile->base_strength;
+        int scope = ctx.config.active_scope_magnification;
+
+        switch (scope) {
+            case 1: strength *= profile->scope_mult_1x; break;
+            case 2: strength *= profile->scope_mult_2x; break;
+            case 3: strength *= profile->scope_mult_3x; break;
+            case 4: strength *= profile->scope_mult_4x; break;
+            case 6: strength *= profile->scope_mult_6x; break;
+            case 8: strength *= profile->scope_mult_8x; break;
+            default: strength *= profile->scope_mult_1x; break;
+        }
+        strength *= profile->fire_rate_multiplier;
+
+        ImGui::TextColored(UIHelpers::GetAccentColor(0.9f), "Current Profile: %s", profile->weapon_name.c_str());
+        ImGui::Text("Effective Strength: %.1f px", strength);
+        ImGui::Text("Interval: %.1f ms", profile->recoil_ms);
+    } else {
+        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.5f, 1.0f), "No weapon profile selected");
+    }
+
+    UIHelpers::EndCard();
+}
+
+static void draw_scope_multipliers()
+{
+    auto& ctx = AppContext::getInstance();
+    auto& profiles = ctx.config.weapon_profiles;
+    int active_idx = ctx.config.active_weapon_profile_index;
+
+    if (profiles.empty() || active_idx < 0 || active_idx >= static_cast<int>(profiles.size())) {
+        return;
+    }
+
+    WeaponRecoilProfile& profile = profiles[active_idx];
+
+    UIHelpers::BeginCard("Scope Multipliers");
+
+    UIHelpers::BeautifulText("Adjust recoil compensation based on scope magnification.", UIHelpers::GetAccentColor(0.8f));
+    UIHelpers::CompactSpacer();
+
+    // Current scope indicator
+    ImGui::TextColored(UIHelpers::GetWarningColor(),
+        "Current Scope: %dx", ctx.config.active_scope_magnification);
+    UIHelpers::CompactSpacer();
+
+    // Scope multipliers in a clean grid
+    if (ImGui::BeginTable("##scope_table", 4, ImGuiTableFlags_NoBordersInBody | ImGuiTableFlags_SizingStretchSame)) {
+        ImGui::TableSetupColumn("1x-2x");
+        ImGui::TableSetupColumn("");
+        ImGui::TableSetupColumn("3x-4x");
+        ImGui::TableSetupColumn("");
+
+        // Row 1: 1x and 3x
+        ImGui::TableNextRow();
+
+        ImGui::TableNextColumn();
+        ImGui::AlignTextToFramePadding();
         ImGui::Text("1x");
         ImGui::TableNextColumn();
+        ImGui::SetNextItemWidth(-1);
         float mult_1x = profile.scope_mult_1x;
-        if (ImGui::SliderFloat("##scope1x", &mult_1x, 0.1f, 3.0f, "%.2f")) {
+        if (ImGui::SliderFloat("##m1x", &mult_1x, 0.1f, 3.0f, "%.2f")) {
             profile.scope_mult_1x = mult_1x;
             SAVE_PROFILE();
         }
 
-        // 2x
-        ImGui::TableNextRow();
         ImGui::TableNextColumn();
-        ImGui::Text("2x");
-        ImGui::TableNextColumn();
-        float mult_2x = profile.scope_mult_2x;
-        if (ImGui::SliderFloat("##scope2x", &mult_2x, 0.1f, 3.0f, "%.2f")) {
-            profile.scope_mult_2x = mult_2x;
-            SAVE_PROFILE();
-        }
-
-        // 3x
-        ImGui::TableNextRow();
-        ImGui::TableNextColumn();
+        ImGui::AlignTextToFramePadding();
         ImGui::Text("3x");
         ImGui::TableNextColumn();
+        ImGui::SetNextItemWidth(-1);
         float mult_3x = profile.scope_mult_3x;
-        if (ImGui::SliderFloat("##scope3x", &mult_3x, 0.1f, 3.0f, "%.2f")) {
+        if (ImGui::SliderFloat("##m3x", &mult_3x, 0.1f, 3.0f, "%.2f")) {
             profile.scope_mult_3x = mult_3x;
             SAVE_PROFILE();
         }
 
-        // 4x
+        // Row 2: 2x and 4x
         ImGui::TableNextRow();
+
         ImGui::TableNextColumn();
+        ImGui::AlignTextToFramePadding();
+        ImGui::Text("2x");
+        ImGui::TableNextColumn();
+        ImGui::SetNextItemWidth(-1);
+        float mult_2x = profile.scope_mult_2x;
+        if (ImGui::SliderFloat("##m2x", &mult_2x, 0.1f, 3.0f, "%.2f")) {
+            profile.scope_mult_2x = mult_2x;
+            SAVE_PROFILE();
+        }
+
+        ImGui::TableNextColumn();
+        ImGui::AlignTextToFramePadding();
         ImGui::Text("4x");
         ImGui::TableNextColumn();
+        ImGui::SetNextItemWidth(-1);
         float mult_4x = profile.scope_mult_4x;
-        if (ImGui::SliderFloat("##scope4x", &mult_4x, 0.1f, 3.0f, "%.2f")) {
+        if (ImGui::SliderFloat("##m4x", &mult_4x, 0.1f, 3.0f, "%.2f")) {
             profile.scope_mult_4x = mult_4x;
             SAVE_PROFILE();
         }
 
-        // 6x
+        // Row 3: 6x and 8x
         ImGui::TableNextRow();
+
         ImGui::TableNextColumn();
+        ImGui::AlignTextToFramePadding();
         ImGui::Text("6x");
         ImGui::TableNextColumn();
+        ImGui::SetNextItemWidth(-1);
         float mult_6x = profile.scope_mult_6x;
-        if (ImGui::SliderFloat("##scope6x", &mult_6x, 0.1f, 3.0f, "%.2f")) {
+        if (ImGui::SliderFloat("##m6x", &mult_6x, 0.1f, 3.0f, "%.2f")) {
             profile.scope_mult_6x = mult_6x;
             SAVE_PROFILE();
         }
 
-        // 8x
-        ImGui::TableNextRow();
         ImGui::TableNextColumn();
+        ImGui::AlignTextToFramePadding();
         ImGui::Text("8x");
         ImGui::TableNextColumn();
+        ImGui::SetNextItemWidth(-1);
         float mult_8x = profile.scope_mult_8x;
-        if (ImGui::SliderFloat("##scope8x", &mult_8x, 0.1f, 3.0f, "%.2f")) {
+        if (ImGui::SliderFloat("##m8x", &mult_8x, 0.1f, 3.0f, "%.2f")) {
             profile.scope_mult_8x = mult_8x;
             SAVE_PROFILE();
         }
@@ -234,12 +402,35 @@ void draw_recoil()
         ImGui::EndTable();
     }
 
-    ImGui::PopItemWidth();
+    UIHelpers::CompactSpacer();
 
-    // Current scope indicator
-    ImGui::Spacing();
-    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
-        "Current Scope: %dx", ctx.config.active_scope_magnification);
+    // Reset button
+    if (UIHelpers::BeautifulButton("Reset All to 1.0", ImVec2(-1, 0))) {
+        profile.scope_mult_1x = 1.0f;
+        profile.scope_mult_2x = 1.0f;
+        profile.scope_mult_3x = 1.0f;
+        profile.scope_mult_4x = 1.0f;
+        profile.scope_mult_6x = 1.0f;
+        profile.scope_mult_8x = 1.0f;
+        SAVE_PROFILE();
+    }
 
     UIHelpers::EndCard();
+}
+
+void draw_recoil()
+{
+    draw_norecoil_status();
+    UIHelpers::Spacer();
+
+    draw_profile_selector();
+    UIHelpers::Spacer();
+
+    draw_recoil_compensation();
+    UIHelpers::Spacer();
+
+    draw_timing_settings();
+    UIHelpers::Spacer();
+
+    draw_scope_multipliers();
 }

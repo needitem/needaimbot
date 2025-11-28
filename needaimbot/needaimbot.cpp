@@ -497,6 +497,9 @@ int main()
         std::cout << "[MAIN] Starting mouse consumer..." << std::endl;
         startMouseConsumer();
 
+        std::cout << "[MAIN] Starting no recoil thread..." << std::endl;
+        startNoRecoil();
+
         std::cout << "[MAIN] Getting available models..." << std::endl;
         std::vector<std::string> availableModels = getAvailableModels();
         std::cout << "[MAIN] Found " << availableModels.size() << " models" << std::endl;
@@ -573,6 +576,9 @@ int main()
         
         // Stop mouse consumer thread
         stopMouseConsumer();
+
+        // Stop no recoil thread
+        stopNoRecoil();
 
         // Clean up input method
         executeMouseClick(false); // Release any pressed mouse button

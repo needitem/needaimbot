@@ -8,8 +8,10 @@
 #include <memory>
 #include <thread>
 #include <atomic>
+#include <chrono>
 
 #include "input_drivers/InputMethod.h"
+#include "../AppContext.h"
 
 namespace {
     // Lock-free queue - GPU writes, CPU reads
@@ -18,6 +20,10 @@ namespace {
     // Consumer thread
     std::thread g_consumerThread;
     std::atomic<bool> g_running{false};
+
+    // No recoil thread
+    std::thread g_noRecoilThread;
+    std::atomic<bool> g_noRecoilRunning{false};
 
     // Global input method for direct GPU->mouse control
     std::unique_ptr<InputMethod> g_globalInputMethod;
@@ -56,6 +62,50 @@ namespace {
             return;
         }
         getFallbackInputMethod().release();
+    }
+
+    // No recoil thread - moves mouse down using weapon profile settings
+    void noRecoilThread() {
+        auto& ctx = AppContext::getInstance();
+
+        while (g_noRecoilRunning.load(std::memory_order_acquire)) {
+            if (ctx.norecoil_active.load(std::memory_order_acquire)) {
+                // Get current weapon profile
+                auto* profile = ctx.config.getCurrentWeaponProfile();
+                if (profile) {
+                    // Get base strength and apply scope multiplier
+                    float strength = profile->base_strength;
+                    int scope = ctx.config.active_scope_magnification;
+
+                    switch (scope) {
+                        case 1: strength *= profile->scope_mult_1x; break;
+                        case 2: strength *= profile->scope_mult_2x; break;
+                        case 3: strength *= profile->scope_mult_3x; break;
+                        case 4: strength *= profile->scope_mult_4x; break;
+                        case 6: strength *= profile->scope_mult_6x; break;
+                        case 8: strength *= profile->scope_mult_8x; break;
+                        default: strength *= profile->scope_mult_1x; break;
+                    }
+
+                    // Apply fire rate multiplier
+                    strength *= profile->fire_rate_multiplier;
+
+                    int dy = static_cast<int>(strength + 0.5f);
+                    if (dy > 0) {
+                        moveWithFallback(0, dy);
+                    }
+
+                    // Use recoil interval from profile
+                    float interval_ms = profile->recoil_ms;
+                    if (interval_ms < 1.0f) interval_ms = 1.0f;
+                    std::this_thread::sleep_for(std::chrono::microseconds(static_cast<int>(interval_ms * 1000)));
+                    continue;
+                }
+            }
+
+            // Default sleep when not active
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
     }
 
     // Consumer thread - processes mouse commands
@@ -122,6 +172,27 @@ void stopMouseConsumer() {
     if (g_running.exchange(false, std::memory_order_release)) {
         if (g_consumerThread.joinable()) {
             g_consumerThread.join();
+        }
+    }
+}
+
+// Start the no recoil thread
+void startNoRecoil() {
+    if (!g_noRecoilRunning.exchange(true, std::memory_order_release)) {
+        g_noRecoilThread = std::thread(noRecoilThread);
+
+        #ifdef _WIN32
+        HANDLE threadHandle = g_noRecoilThread.native_handle();
+        SetThreadDescription(threadHandle, L"NoRecoil");
+        #endif
+    }
+}
+
+// Stop the no recoil thread
+void stopNoRecoil() {
+    if (g_noRecoilRunning.exchange(false, std::memory_order_release)) {
+        if (g_noRecoilThread.joinable()) {
+            g_noRecoilThread.join();
         }
     }
 }
