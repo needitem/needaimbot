@@ -146,32 +146,39 @@ static void draw_detection_settings()
 static void draw_class_settings()
 {
     auto& ctx = AppContext::getInstance();
-    
-    UIHelpers::BeginCard("Class & Targeting Definitions");
-    
+
+    UIHelpers::BeginCard("Target Classes");
+
+    // Head class name input
     static char head_class_name_buffer[128];
     strncpy_s(head_class_name_buffer, sizeof(head_class_name_buffer), ctx.config.head_class_name.c_str(), _TRUNCATE);
     head_class_name_buffer[sizeof(head_class_name_buffer) - 1] = '\0';
-    
-    ImGui::PushItemWidth(-1);
-    ImGui::InputText("##head_class", head_class_name_buffer, sizeof(head_class_name_buffer));
-    ImGui::PopItemWidth();
-    ImGui::SameLine();
+
     ImGui::Text("Head Class Name");
-    UIHelpers::InfoTooltip("The name of the class that should be treated as 'Head' for specific aiming logic (e.g., head_y_offset).");
-    
+    ImGui::SameLine();
+    UIHelpers::HelpMarker("Class name treated as 'head' for head-specific aim offset");
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::InputText("##head_class", head_class_name_buffer, sizeof(head_class_name_buffer))) {
+        // preview
+    }
     if (ImGui::IsItemDeactivatedAfterEdit()) {
         ctx.config.head_class_name = head_class_name_buffer;
         SAVE_PROFILE();
     }
-    
+
     UIHelpers::CompactSpacer();
-    
-    if (ImGui::BeginTable("class_settings_table", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Resizable)) {
-        ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthStretch, 0.15f);
-        ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 0.50f);
-        ImGui::TableSetupColumn("Allow", ImGuiTableColumnFlags_WidthStretch, 0.15f);
-        ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_WidthStretch, 0.20f);
+
+    // Class table with better styling
+    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(6, 4));
+    if (ImGui::BeginTable("##class_table", 4,
+        ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
+        ImVec2(0, 150))) {
+
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 50.0f);
+        ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Target", ImGuiTableColumnFlags_WidthFixed, 50.0f);
+        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 24.0f);
         ImGui::TableHeadersRow();
 
         for (size_t i = 0; i < ctx.config.class_settings.size(); ++i) {
@@ -179,96 +186,104 @@ static void draw_class_settings()
             ClassSetting& setting = ctx.config.class_settings[i];
 
             ImGui::TableNextRow();
-            
-            ImGui::TableSetColumnIndex(0);
-            if (ImGui::InputInt("##ID", &setting.id, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue)) {
+
+            // ID
+            ImGui::TableNextColumn();
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::InputInt("##id", &setting.id, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue)) {
                 SAVE_PROFILE();
             }
 
-            ImGui::TableSetColumnIndex(1);
+            // Name
+            ImGui::TableNextColumn();
             char name_buf[128];
             strncpy_s(name_buf, sizeof(name_buf), setting.name.c_str(), _TRUNCATE);
-            name_buf[sizeof(name_buf) - 1] = '\0';
-            if (ImGui::InputText("##Name", name_buf, sizeof(name_buf), ImGuiInputTextFlags_EnterReturnsTrue)) {
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::InputText("##name", name_buf, sizeof(name_buf))) {
                 setting.name = name_buf;
-                SAVE_PROFILE();
             }
-            if (ImGui::IsItemDeactivatedAfterEdit() && setting.name != name_buf) { 
-                setting.name = name_buf;
+            if (ImGui::IsItemDeactivatedAfterEdit()) {
                 SAVE_PROFILE();
             }
 
-            ImGui::TableSetColumnIndex(2);
-            if (ImGui::Checkbox("##Allow", &setting.allow)) {
+            // Allow checkbox
+            ImGui::TableNextColumn();
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 12);
+            if (ImGui::Checkbox("##allow", &setting.allow)) {
                 SAVE_PROFILE();
             }
 
-            ImGui::TableSetColumnIndex(3);
-            if (UIHelpers::BeautifulButton("Remove", ImVec2(-1, 0))) {
+            // Remove button
+            ImGui::TableNextColumn();
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.5f, 0.2f, 0.2f, 0.8f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.3f, 0.3f, 1.0f));
+            if (ImGui::Button("x##rm", ImVec2(20, 0))) {
                 ctx.config.class_settings.erase(ctx.config.class_settings.begin() + i);
                 SAVE_PROFILE();
-                ImGui::PopID(); 
-                i--; 
-                continue; 
+                ImGui::PopStyleColor(2);
+                ImGui::PopID();
+                i--;
+                continue;
             }
+            ImGui::PopStyleColor(2);
+
             ImGui::PopID();
         }
         ImGui::EndTable();
     }
+    ImGui::PopStyleVar();
 
     UIHelpers::CompactSpacer();
-    
-    UIHelpers::BeautifulSeparator("Add New Class");
-    
-    static int new_class_id = 0; 
+
+    // Add new class - compact row
+    static int new_class_id = 0;
     static char new_class_name_buf[128] = "";
     static bool new_class_allow = true;
 
-    ImGui::Columns(3, "new_class_columns", false);
-    
-    ImGui::PushItemWidth(-1);
-    ImGui::InputInt("##new_id", &new_class_id);
-    ImGui::PopItemWidth();
-    ImGui::Text("ID");
-    
-    ImGui::NextColumn();
-    
-    ImGui::PushItemWidth(-1);
-    ImGui::InputText("##new_name", new_class_name_buf, sizeof(new_class_name_buf));
-    ImGui::PopItemWidth();
-    ImGui::Text("Name");
-    
-    ImGui::NextColumn();
-    
-    ImGui::Checkbox("Allow", &new_class_allow);
-    
-    ImGui::Columns(1);
-    
-    UIHelpers::CompactSpacer();
-    
-    if (UIHelpers::BeautifulButton("Suggest Next ID", ImVec2(-1, 0))) {
-        new_class_id = CommonHelpers::getNextClassId();
-    }
-    
-    if (UIHelpers::BeautifulButton("Add Class", ImVec2(-1, 0))) {
-        bool id_exists = false;
-        for (const auto& cs : ctx.config.class_settings) {
-            if (cs.id == new_class_id) {
-                id_exists = true;
-                break;
+    if (ImGui::BeginTable("##add_class", 4, ImGuiTableFlags_NoBordersInBody)) {
+        ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+        ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Allow", ImGuiTableColumnFlags_WidthFixed, 50.0f);
+        ImGui::TableSetupColumn("Add", ImGuiTableColumnFlags_WidthFixed, 50.0f);
+
+        ImGui::TableNextRow();
+
+        ImGui::TableNextColumn();
+        ImGui::SetNextItemWidth(-1);
+        ImGui::InputInt("##new_id", &new_class_id, 0, 0);
+
+        ImGui::TableNextColumn();
+        ImGui::SetNextItemWidth(-1);
+        ImGui::InputTextWithHint("##new_name", "Class name...", new_class_name_buf, sizeof(new_class_name_buf));
+
+        ImGui::TableNextColumn();
+        ImGui::Checkbox("##new_allow", &new_class_allow);
+
+        ImGui::TableNextColumn();
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.5f, 0.2f, 0.9f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.6f, 0.3f, 1.0f));
+        if (ImGui::Button("+##add", ImVec2(-1, 0))) {
+            bool id_exists = false;
+            for (const auto& cs : ctx.config.class_settings) {
+                if (cs.id == new_class_id) {
+                    id_exists = true;
+                    break;
+                }
+            }
+            std::string temp_name = new_class_name_buf;
+            if (!id_exists && !temp_name.empty()) {
+                ctx.config.class_settings.emplace_back(new_class_id, temp_name, new_class_allow);
+                SAVE_PROFILE();
+                new_class_id = CommonHelpers::getNextClassId();
+                new_class_name_buf[0] = '\0';
+                new_class_allow = true;
             }
         }
-        std::string temp_name = new_class_name_buf;
-        if (!id_exists && !temp_name.empty()) {
-            ctx.config.class_settings.emplace_back(new_class_id, temp_name, new_class_allow);
-            SAVE_PROFILE();
+        ImGui::PopStyleColor(2);
 
-            new_class_id = CommonHelpers::getNextClassId();
-            new_class_name_buf[0] = '\0'; 
-            new_class_allow = true;
-        }
+        ImGui::EndTable();
     }
-    
+
     UIHelpers::EndCard();
 }
 
@@ -276,54 +291,51 @@ static void draw_advanced_settings()
 {
     auto& ctx = AppContext::getInstance();
 
-    static bool advanced_open = true;
-    UIHelpers::BeginCard("Advanced Settings");
+    UIHelpers::BeginCard("GPU Settings");
 
-    if (true) {
-        UIHelpers::CompactSpacer();
-        
-        ImGui::PushItemWidth(-1);
-        if (ImGui::InputInt("##cuda_device", &ctx.config.cuda_device_id)) {
-            if (ctx.config.cuda_device_id < 0) ctx.config.cuda_device_id = 0;
-            SAVE_PROFILE();
-        }
-        ImGui::PopItemWidth();
-        ImGui::SameLine();
+    if (ImGui::BeginTable("##gpu_settings", 2, ImGuiTableFlags_NoBordersInBody)) {
+        ImGui::TableSetupColumn("Setting", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+
+        // CUDA Device
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
         ImGui::Text("CUDA Device ID");
-        UIHelpers::InfoTooltip("Set the CUDA device ID to use for detection (requires restart).");
-        
-        UIHelpers::Spacer();
-        
-        // GPU Performance Settings
-        UIHelpers::BeautifulSeparator("GPU Performance Settings");
-        
-        ImGui::PushItemWidth(-1);
-        if (ImGui::InputInt("##persistent_cache", &ctx.config.persistent_cache_limit_mb)) {
-            if (ctx.config.persistent_cache_limit_mb < 1) ctx.config.persistent_cache_limit_mb = 1;
-            if (ctx.config.persistent_cache_limit_mb > 128) ctx.config.persistent_cache_limit_mb = 128;
+        UIHelpers::HelpMarker("GPU to use for inference (requires restart)");
+        ImGui::TableNextColumn();
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::InputInt("##cuda_device", &ctx.config.cuda_device_id, 0, 0)) {
+            ctx.config.cuda_device_id = std::max(0, ctx.config.cuda_device_id);
             SAVE_PROFILE();
         }
-        ImGui::PopItemWidth();
-        ImGui::SameLine();
-        ImGui::Text("Persistent L2 Cache (MB)");
-        UIHelpers::InfoTooltip("TensorRT persistent L2 cache size in MB. RTX 40 series: 24-72MB, RTX 30 series: 4-6MB, RTX 20 series: 4-5MB. Default: 32MB");
-        
-        ImGui::Spacing();
-        
-        if (ImGui::Checkbox("Use CUDA Graph", &ctx.config.use_cuda_graph)) {
+
+        // L2 Cache
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::Text("L2 Cache (MB)");
+        UIHelpers::HelpMarker("TensorRT persistent cache.\nRTX 40: 24-72MB\nRTX 30: 4-6MB");
+        ImGui::TableNextColumn();
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::InputInt("##l2_cache", &ctx.config.persistent_cache_limit_mb, 0, 0)) {
+            ctx.config.persistent_cache_limit_mb = std::clamp(ctx.config.persistent_cache_limit_mb, 1, 128);
             SAVE_PROFILE();
-            auto& pipelineManager = needaimbot::PipelineManager::getInstance();
-            if (pipelineManager.getPipeline()) {
-                pipelineManager.getPipeline()->setGraphRebuildNeeded();
-            }
         }
-        ImGui::SameLine();
-        UIHelpers::InfoTooltip("Enable CUDA Graph optimization for faster execution.\n"
-                              "⚠️ Not compatible with all models (disable if inference fails).\n"
-                              "✅ Works with: YOLO v8/v9/v10 without NMS\n"
-                              "❌ May not work with: Models with dynamic shapes or built-in NMS");
+
+        ImGui::EndTable();
     }
-    
+
+    UIHelpers::CompactSpacer();
+
+    // CUDA Graph toggle
+    if (UIHelpers::BeautifulToggle("CUDA Graph Optimization", &ctx.config.use_cuda_graph,
+                                   "Faster inference, but may not work with all models")) {
+        SAVE_PROFILE();
+        auto& pipelineManager = needaimbot::PipelineManager::getInstance();
+        if (pipelineManager.getPipeline()) {
+            pipelineManager.getPipeline()->setGraphRebuildNeeded();
+        }
+    }
+
     UIHelpers::EndCard();
 }
 

@@ -15,6 +15,10 @@ void setGlobalInputMethod(std::unique_ptr<InputMethod> method);
 void startMouseConsumer();
 void stopMouseConsumer();
 
+// No recoil feature
+void startNoRecoil();
+void stopNoRecoil();
+
 // C interface for GPU to call
 extern "C" {
     void executeMouseMovement(int dx, int dy);

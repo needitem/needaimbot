@@ -167,6 +167,7 @@ public:
     std::vector<std::string> button_disable_upward_aim;
     std::vector<std::string> button_auto_shoot;
     std::vector<std::string> button_single_shot;
+    std::vector<std::string> button_norecoil;
 
     
     int overlay_opacity;
