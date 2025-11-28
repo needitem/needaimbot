@@ -386,6 +386,56 @@ __global__ void computeColorMatchRatioKernel(
     }
 }
 
+// Separate kernel to apply color filter - marks filtered targets by setting confidence to 0
+// This runs AFTER computeColorMatchRatioKernel and BEFORE target selection
+__global__ void applyColorFilterKernel(
+    Target* __restrict__ targets,
+    const int* __restrict__ targetCount,
+    int target_mode,      // 0=ratio, 1=absolute count
+    int comparison,       // 0=above (>=), 1=below (<=), 2=between
+    float min_ratio,
+    float max_ratio,
+    int min_count,
+    int max_count
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int count = *targetCount;
+
+    if (idx >= count) return;
+
+    Target& t = targets[idx];
+    if (t.colorMatchRatio < 0.0f) return;  // Not computed
+
+    bool passFilter = false;
+
+    if (target_mode == 0) {
+        // Ratio mode
+        float value = t.colorMatchRatio;
+        if (comparison == 0) {
+            passFilter = (value >= min_ratio);
+        } else if (comparison == 1) {
+            passFilter = (value <= max_ratio);
+        } else {
+            passFilter = (value >= min_ratio && value <= max_ratio);
+        }
+    } else {
+        // Absolute count mode
+        int value = t.colorMatchCount;
+        if (comparison == 0) {
+            passFilter = (value >= min_count);
+        } else if (comparison == 1) {
+            passFilter = (value <= max_count);
+        } else {
+            passFilter = (value >= min_count && value <= max_count);
+        }
+    }
+
+    // Mark filtered targets by zeroing confidence
+    if (!passFilter) {
+        t.confidence = 0.0f;
+    }
+}
+
 __device__ float computeBoundingBoxIoU(const Target& a, const Target& b) {
     if (a.classId < 0 || b.classId < 0 || a.width <= 0 || a.height <= 0 ||
         b.width <= 0 || b.height <= 0) {
@@ -439,13 +489,6 @@ __global__ void fusedTargetSelectionAndMovementKernel(
     float head_y_offset,
     float body_y_offset,
     int detection_resolution,
-    bool color_filter_enabled,
-    int color_filter_target_mode,   // 0=ratio, 1=absolute count
-    int color_filter_comparison,    // 0=above (>=), 1=below (<=), 2=between (min-max)
-    float color_filter_min_ratio,
-    float color_filter_max_ratio,
-    int color_filter_min_count,
-    int color_filter_max_count,
     Target* __restrict__ selectedTarget,
     int* __restrict__ bestTargetIndex,
     Target* __restrict__ bestTarget,
@@ -500,50 +543,13 @@ __global__ void fusedTargetSelectionAndMovementKernel(
     for (int i = threadIdx.x; i < count; i += blockDim.x) {
         Target& t = finalTargets[i];
 
+        // Skip invalid targets (includes those filtered by color filter kernel)
         if (t.x < -1000.0f || t.x > 10000.0f ||
             t.y < -1000.0f || t.y > 10000.0f ||
             t.width <= 0 || t.width > detection_resolution ||
             t.height <= 0 || t.height > detection_resolution ||
             t.confidence <= 0.0f || t.confidence > 1.0f) {
-            t.confidence = 0.0f;
             continue;
-        }
-
-        // Color filter: skip targets that don't meet color match requirements
-        if (color_filter_enabled && t.colorMatchRatio >= 0.0f) {
-            bool passFilter = false;
-
-            if (color_filter_target_mode == 0) {
-                // Ratio mode
-                float value = t.colorMatchRatio;
-                if (color_filter_comparison == 0) {
-                    // Above (>=)
-                    passFilter = (value >= color_filter_min_ratio);
-                } else if (color_filter_comparison == 1) {
-                    // Below (<=)
-                    passFilter = (value <= color_filter_max_ratio);
-                } else {
-                    // Between (min-max range)
-                    passFilter = (value >= color_filter_min_ratio && value <= color_filter_max_ratio);
-                }
-            } else {
-                // Absolute count mode
-                int value = t.colorMatchCount;
-                if (color_filter_comparison == 0) {
-                    // Above (>=)
-                    passFilter = (value >= color_filter_min_count);
-                } else if (color_filter_comparison == 1) {
-                    // Below (<=)
-                    passFilter = (value <= color_filter_max_count);
-                } else {
-                    // Between (min-max range)
-                    passFilter = (value >= color_filter_min_count && value <= color_filter_max_count);
-                }
-            }
-
-            if (!passFilter) {
-                continue;
-            }
         }
 
         float centerX = t.x + t.width / 2.0f;
@@ -2213,9 +2219,10 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
                   << cudaGetErrorString(staleError) << std::endl;
     }
 
-    // Run color match kernel if color filter is enabled
+    // Run color filter kernels ONLY if color filter is enabled
+    // When disabled, this entire block is skipped - zero overhead
     if (cfg.color_filter.enabled && !m_captureBuffer.empty() && m_captureBuffer.data()) {
-        // Launch one block per target, 256 threads per block for full pixel counting
+        // Step 1: Compute color match ratio for each target
         computeColorMatchRatioKernel<<<cached_max_detections, 256, 0, stream>>>(
             m_unifiedArena.finalTargets,
             m_smallBufferArena.finalTargetsCount,
@@ -2233,7 +2240,22 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
             cfg.color_filter.min_ratio,
             cfg.color_filter.max_ratio
         );
-        // Synchronize to ensure color match is computed before target selection
+
+        // Step 2: Apply filter - marks filtered targets by setting confidence to 0
+        int filterBlockSize = 128;
+        int filterGridSize = (cached_max_detections + filterBlockSize - 1) / filterBlockSize;
+        applyColorFilterKernel<<<filterGridSize, filterBlockSize, 0, stream>>>(
+            m_unifiedArena.finalTargets,
+            m_smallBufferArena.finalTargetsCount,
+            cfg.color_filter.target_mode,
+            cfg.color_filter.comparison,
+            cfg.color_filter.min_ratio,
+            cfg.color_filter.max_ratio,
+            cfg.color_filter.min_count,
+            cfg.color_filter.max_count
+        );
+
+        // Synchronize to ensure filtering is complete before target selection
         cudaStreamSynchronize(stream);
     }
 
@@ -2261,13 +2283,6 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         cached_head_y_offset,
         cached_body_y_offset,
         ctx.config.detection_resolution,
-        cfg.color_filter.enabled,
-        cfg.color_filter.target_mode,
-        cfg.color_filter.comparison,
-        cfg.color_filter.min_ratio,
-        cfg.color_filter.max_ratio,
-        cfg.color_filter.min_count,
-        cfg.color_filter.max_count,
         m_smallBufferArena.selectedTarget,
         m_smallBufferArena.bestTargetIndex,
         m_smallBufferArena.bestTarget,
