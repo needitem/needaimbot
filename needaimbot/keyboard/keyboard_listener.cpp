@@ -35,6 +35,37 @@ std::vector<int> get_vk_codes(const std::vector<std::string>& keys) {
     return vk_codes;
 }
 
+// Parse key combo string (e.g., "LeftMouseButton+LeftShift") into vk codes
+std::vector<int> parse_key_combo(const std::string& combo) {
+    std::vector<int> vk_codes;
+    std::string current;
+    for (char c : combo) {
+        if (c == '+') {
+            if (!current.empty()) {
+                vk_codes.push_back(KeyCodes::getKeyCode(current));
+                current.clear();
+            }
+        } else {
+            current += c;
+        }
+    }
+    if (!current.empty()) {
+        vk_codes.push_back(KeyCodes::getKeyCode(current));
+    }
+    return vk_codes;
+}
+
+// Check if all keys in combo are pressed (AND condition)
+bool is_combo_pressed(const std::vector<int>& combo_vk_codes) {
+    if (combo_vk_codes.empty()) return false;
+    for (int code : combo_vk_codes) {
+        if (!code || !(GetAsyncKeyState(code) & 0x8000)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool is_any_key_pressed(const std::vector<int>& vk_codes) {
     // Check most likely keys first for early exit
     for (int code : vk_codes) {
@@ -45,60 +76,89 @@ bool is_any_key_pressed(const std::vector<int>& vk_codes) {
     return false;
 }
 
+// Check if any key combo is pressed (supports both single keys and combos with +)
+// Returns true if ANY of the configured keys/combos is active
+bool is_any_key_or_combo_pressed(const std::vector<std::string>& keys) {
+    for (const auto& key : keys) {
+        if (key == "None" || key.empty()) continue;
+
+        // Check if this is a combo (contains +)
+        if (key.find('+') != std::string::npos) {
+            std::vector<int> combo_codes = parse_key_combo(key);
+            if (is_combo_pressed(combo_codes)) {
+                return true;
+            }
+        } else {
+            // Single key
+            int code = KeyCodes::getKeyCode(key);
+            if (code && (GetAsyncKeyState(code) & 0x8000)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 bool isAnyKeyPressed(const std::vector<std::string>& keys) {
-    std::vector<int> vk_codes = get_vk_codes(keys);
-    return is_any_key_pressed(vk_codes);
+    return is_any_key_or_combo_pressed(keys);
 }
 
 void keyboardListener() {
     auto& ctx = AppContext::getInstance();
-    std::vector<int> aim_vk_codes = get_vk_codes(ctx.config.button_targeting);
-    std::vector<int> pause_vk_codes = get_vk_codes(ctx.config.button_pause);
-    std::vector<int> auto_shoot_vk_codes = get_vk_codes(ctx.config.button_auto_shoot);
-    std::vector<int> exit_vk_codes = get_vk_codes(ctx.config.button_exit);
-    std::vector<int> single_shot_vk_codes = get_vk_codes(ctx.config.button_single_shot);
 
     static bool last_aiming_state = false;
     static bool last_shooting_state = false;
     static bool last_pause_state = false;
     static bool last_single_shot_state = false;
-    
+
     // Event-driven keyboard monitoring using Windows events
     HANDLE hKeyboardEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
-    
+
     while (!ctx.should_exit) {
-        // Check for exit key
-        if (is_any_key_pressed(exit_vk_codes)) {
+        // Check for exit key (supports key combos)
+        if (is_any_key_or_combo_pressed(ctx.config.button_exit)) {
             ctx.should_exit = true;
             ctx.frame_cv.notify_all();  // Wake up main thread
             break;
         }
 
-        bool current_aiming = is_any_key_pressed(aim_vk_codes);
-        
+        bool current_aiming = is_any_key_or_combo_pressed(ctx.config.button_targeting);
+
         // Always update aiming state atomically
         ctx.aiming = current_aiming;
-        
+
         // Notify pipeline thread on state change (event-driven)
         if (current_aiming != last_aiming_state) {
             // Wake up pipeline thread using event-driven mechanism
-            ctx.pipeline_activation_cv.notify_one();  
+            ctx.pipeline_activation_cv.notify_one();
             ctx.aiming_cv.notify_one();  // Keep for compatibility
             last_aiming_state = current_aiming;
         }
 
-        // Track auto_shoot button state - optimize branch
-        bool current_shooting = (!ctx.config.button_auto_shoot.empty() && 
+        // Track auto_shoot button state (supports key combos)
+        bool current_shooting = (!ctx.config.button_auto_shoot.empty() &&
                                  ctx.config.button_auto_shoot[0] != "None") ?
-                                 is_any_key_pressed(auto_shoot_vk_codes) : false;
+                                 is_any_key_or_combo_pressed(ctx.config.button_auto_shoot) : false;
         ctx.shooting = current_shooting;
-        
+
         if (current_shooting != last_shooting_state) {
             last_shooting_state = current_shooting;
         }
 
+        // Track disable upward aim state (supports key combos)
+        bool current_disable_upward = (!ctx.config.button_disable_upward_aim.empty() &&
+                                       ctx.config.button_disable_upward_aim[0] != "None") ?
+                                       is_any_key_or_combo_pressed(ctx.config.button_disable_upward_aim) : false;
+        ctx.disable_upward_aim = current_disable_upward;
+
+        // Track no recoil state (supports key combos)
+        bool current_norecoil = (!ctx.config.button_norecoil.empty() &&
+                                 ctx.config.button_norecoil[0] != "None") ?
+                                 is_any_key_or_combo_pressed(ctx.config.button_norecoil) : false;
+        ctx.norecoil_active = current_norecoil;
+
         // Improved pause key handling - only toggle on key press, not while held
-        bool current_pause = is_any_key_pressed(pause_vk_codes);
+        bool current_pause = is_any_key_or_combo_pressed(ctx.config.button_pause);
         if (current_pause && !last_pause_state) {
             // Key was just pressed (not held)
             // Toggle and print in one flow
@@ -111,7 +171,7 @@ void keyboardListener() {
         last_pause_state = current_pause;
 
         // Single shot trigger - only on key press, not while held
-        bool current_single_shot = is_any_key_pressed(single_shot_vk_codes);
+        bool current_single_shot = is_any_key_or_combo_pressed(ctx.config.button_single_shot);
         if (current_single_shot && !last_single_shot_state) {
             // Key was just pressed - trigger single shot
             ctx.single_shot_requested = true;

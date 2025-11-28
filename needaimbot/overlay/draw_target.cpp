@@ -12,6 +12,7 @@
 #include "../cuda/unified_graph_pipeline.h"
 #include "other_tools.h"
 #include "memory_images.h"
+#include "ui_helpers.h"
 
 ID3D11ShaderResourceView* bodyTexture = nullptr;
 ImVec2 bodyImageSize;
@@ -56,86 +57,106 @@ void draw_target()
 {
     auto& ctx = AppContext::getInstance();
 
-    // Status indicator
-    ImGui::PushFont(ImGui::GetIO().Fonts->Fonts[0]);
-    if (ctx.detection_paused.load()) {
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
-        ImGui::Text("[PAUSED]");
-        ImGui::PopStyleColor();
-        ImGui::SameLine();
-        ImGui::TextDisabled("Aimbot is paused - Press %s to resume",
-                    ctx.config.button_pause.empty() ? "F3" : ctx.config.button_pause[0].c_str());
-    } else {
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
-        ImGui::Text("[ACTIVE]");
-        ImGui::PopStyleColor();
-        ImGui::SameLine();
-        ImGui::TextDisabled("Aimbot is ready");
-    }
-    ImGui::PopFont();
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
+    // Status Card
+    UIHelpers::BeginCard("Status");
+    {
+        bool is_paused = ctx.detection_paused.load();
+        bool is_aiming = ctx.aiming.load();
 
-    // Main toggle
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 6));
-    bool auto_aim = ctx.config.auto_aim;
-    if (ImGui::Checkbox("Enable Auto Aim", &auto_aim)) {
-        ctx.config.auto_aim = auto_aim;
-        SAVE_PROFILE();
-    }
-    ImGui::PopStyleVar();
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Enable automatic aim assistance to track detected targets");
-    }
-
-    ImGui::Spacing();
-
-    // Auto shoot
-    if (ImGui::Checkbox("Enable Auto Shoot", &ctx.config.auto_shoot)) { SAVE_PROFILE(); }
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Automatically fire when a target is locked");
-    }
-
-    ImGui::Spacing();
-    if (ImGui::Checkbox("Disable Upward Aim", &ctx.config.ignore_up_aim)) { SAVE_PROFILE(); }
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Prevent aim from moving upward - useful for ground-only combat");
-    }
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    // Target selection info
-    ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.2f, 1.0f), "Target Selection");
-    ImGui::TextWrapped("Always targets the enemy closest to your crosshair");
-    ImGui::Spacing();
-    ImGui::PushItemWidth(-1);
-    if (ImGui::SliderFloat("IoU Stickiness", &ctx.config.iou_stickiness_threshold, 0.0f, 0.9f, "%.2f")) {
-        ctx.config.iou_stickiness_threshold = std::clamp(ctx.config.iou_stickiness_threshold, 0.0f, 0.99f);
-        SAVE_PROFILE();
-        auto* pipeline = needaimbot::PipelineManager::getInstance().getPipeline();
-        if (pipeline) {
-            pipeline->markPidConfigDirty();
-            pipeline->setGraphRebuildNeeded();
+        // Status row with indicator
+        if (is_paused) {
+            ImGui::PushStyleColor(ImGuiCol_Text, UIHelpers::GetErrorColor());
+            ImGui::Text("PAUSED");
+            ImGui::PopStyleColor();
+            ImGui::SameLine();
+            ImGui::TextDisabled("- Press %s to resume",
+                        ctx.config.button_pause.empty() ? "F3" : ctx.config.button_pause[0].c_str());
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Text, UIHelpers::GetSuccessColor());
+            ImGui::Text("ACTIVE");
+            ImGui::PopStyleColor();
+            ImGui::SameLine();
+            if (is_aiming) {
+                ImGui::TextDisabled("- Aiming...");
+            } else {
+                ImGui::TextDisabled("- Ready");
+            }
         }
     }
-    ImGui::PopItemWidth();
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Prefer previous target while overlap (IoU) stays above this threshold. Higher = less switching");
+    UIHelpers::EndCard();
+
+    UIHelpers::CompactSpacer();
+
+    // Main Controls Card
+    UIHelpers::BeginCard("Aimbot Controls");
+    {
+        if (ImGui::BeginTable("##target_controls", 2, ImGuiTableFlags_NoBordersInBody)) {
+            ImGui::TableSetupColumn("Toggle", ImGuiTableColumnFlags_WidthFixed, 180.0f);
+            ImGui::TableSetupColumn("Description", ImGuiTableColumnFlags_WidthStretch);
+
+            // Auto Aim
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            if (UIHelpers::BeautifulToggle("Auto Aim", &ctx.config.auto_aim)) {
+                SAVE_PROFILE();
+            }
+            ImGui::TableNextColumn();
+            ImGui::TextDisabled("Track detected targets automatically");
+
+            // Auto Shoot
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            if (UIHelpers::BeautifulToggle("Auto Shoot", &ctx.config.auto_shoot)) {
+                SAVE_PROFILE();
+            }
+            ImGui::TableNextColumn();
+            ImGui::TextDisabled("Fire automatically when locked on");
+
+            // Disable Upward Aim (permanent toggle)
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            if (UIHelpers::BeautifulToggle("Block Upward Aim", &ctx.config.ignore_up_aim)) {
+                SAVE_PROFILE();
+            }
+            ImGui::TableNextColumn();
+            ImGui::TextDisabled("Never aim upward (always on)");
+
+            ImGui::EndTable();
+        }
+
+        // Show hotkey-based disable upward aim status
+        if (!ctx.config.button_disable_upward_aim.empty() &&
+            ctx.config.button_disable_upward_aim[0] != "None") {
+            UIHelpers::CompactSpacer();
+            bool hotkey_active = ctx.disable_upward_aim.load();
+            if (hotkey_active) {
+                ImGui::TextColored(UIHelpers::GetWarningColor(), "Upward aim blocked (hotkey held)");
+            }
+        }
     }
+    UIHelpers::EndCard();
 
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
+    UIHelpers::CompactSpacer();
 
-    // Quick tips
-    ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "Quick Tips");
-    ImGui::BulletText("Use Mouse tab to adjust aim speed and smoothness");
-    ImGui::BulletText("Use Aim Offset tab to fine-tune aim position");
-    ImGui::BulletText("Use Recoil tab to control weapon spray patterns");
-    ImGui::BulletText("Use Detection tab to adjust AI confidence threshold");
+    // Target Selection Card
+    UIHelpers::BeginCard("Target Selection");
+    {
+        UIHelpers::BeautifulText("Targets enemy closest to crosshair", ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
+        UIHelpers::CompactSpacer();
+
+        if (UIHelpers::EnhancedSliderFloat("Target Stickiness", &ctx.config.iou_stickiness_threshold,
+                                           0.0f, 0.9f, "%.2f",
+                                           "Keep tracking same target if overlap > threshold.\nHigher = less target switching")) {
+            ctx.config.iou_stickiness_threshold = std::clamp(ctx.config.iou_stickiness_threshold, 0.0f, 0.99f);
+            SAVE_PROFILE();
+            auto* pipeline = needaimbot::PipelineManager::getInstance().getPipeline();
+            if (pipeline) {
+                pipeline->markPidConfigDirty();
+                pipeline->setGraphRebuildNeeded();
+            }
+        }
+    }
+    UIHelpers::EndCard();
 }
 
  
