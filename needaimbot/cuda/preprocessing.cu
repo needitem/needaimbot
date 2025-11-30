@@ -162,8 +162,8 @@ extern "C" cudaError_t cuda_unified_preprocessing(
         return cudaErrorInvalidValue;
     }
 
-    // 블록과 그리드 크기 설정
-    dim3 block(16, 16);
+    // 블록과 그리드 크기 설정 - 32x8 for better memory coalescing (x-axis aligned)
+    dim3 block(32, 8);
     dim3 grid((target_width + block.x - 1) / block.x,
               (target_height + block.y - 1) / block.y);
 
