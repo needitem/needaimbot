@@ -416,6 +416,7 @@ private:
         // Detection
         struct {
             int max_detections;
+            int detection_resolution;
             float confidence_threshold;
             std::array<unsigned char, 80> class_filter;  // Fixed size for cache-friendly access
             std::array<unsigned char, 80> prev_class_filter;  // Previous filter for change detection
@@ -427,6 +428,7 @@ private:
             int deadband_exit_x = 0;
             int deadband_enter_y = 0;
             int deadband_exit_y = 0;
+            bool disable_upward_aim = false;
         } filtering;
 
         // Color filter for target selection
