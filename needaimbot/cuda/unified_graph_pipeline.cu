@@ -87,6 +87,7 @@ void UnifiedGraphPipeline::refreshConfigCache(const AppContext& ctx) {
 
         // Detection
         m_cachedConfig.detection.max_detections = ctx.config.max_detections;
+        m_cachedConfig.detection.detection_resolution = ctx.config.detection_resolution;
         m_cachedConfig.detection.confidence_threshold = ctx.config.confidence_threshold;
 
         // Class filter - fixed size array (cache-friendly)
@@ -104,6 +105,7 @@ void UnifiedGraphPipeline::refreshConfigCache(const AppContext& ctx) {
         m_cachedConfig.filtering.deadband_exit_x  = ctx.config.deadband_exit_x;
         m_cachedConfig.filtering.deadband_enter_y = ctx.config.deadband_enter_y;
         m_cachedConfig.filtering.deadband_exit_y  = ctx.config.deadband_exit_y;
+        m_cachedConfig.filtering.disable_upward_aim = ctx.disable_upward_aim.load(std::memory_order_relaxed);
 
         // Color filter for target selection
         m_cachedConfig.color_filter.enabled = ctx.config.color_filter_target_enabled && ctx.config.color_filter_enabled;
@@ -1424,16 +1426,14 @@ MouseMovement UnifiedGraphPipeline::filterMouseMovement(const MouseMovement& raw
         return raw;
     }
 
-    // Read cached filter config (NO LOCKS)
+    // Read cached filter config (NO LOCKS, no atomic loads)
     const auto& cfg = m_cachedConfig.filtering;
 
     int dx = raw.dx;
     int dy = raw.dy;
 
-    // Block upward movement if disable_upward_aim is active
-    // Negative dy = upward movement in screen coordinates
-    auto& ctx = AppContext::getInstance();
-    if (ctx.disable_upward_aim.load(std::memory_order_relaxed) && dy < 0) {
+    // Block upward movement if disable_upward_aim is active (cached value)
+    if (cfg.disable_upward_aim && dy < 0) {
         dy = 0;
     }
 
@@ -2056,8 +2056,9 @@ bool UnifiedGraphPipeline::runInferenceAsync(cudaStream_t stream) {
 }
 
 void needaimbot::PostProcessingConfig::updateFromContext(const AppContext& ctx, bool graphCaptured) {
+    // Use lock-free reads - these are safe for reading primitive types
+    // No mutex needed for hot path performance
     if (!graphCaptured) {
-        std::lock_guard<std::mutex> lock(const_cast<std::mutex&>(ctx.configMutex));
         max_detections = ctx.config.max_detections;
         confidence_threshold = ctx.config.confidence_threshold;
         postprocess = ctx.config.postprocess;
@@ -2181,8 +2182,6 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
 }
 
 void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
-    auto& ctx = AppContext::getInstance();
-
     if (!m_unifiedArena.finalTargets || !m_smallBufferArena.finalTargetsCount) {
         std::cerr << "[Pipeline] No final targets available for selection" << std::endl;
         return;
@@ -2193,10 +2192,11 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         return;
     }
 
-    // Use cached values (lock-free) from v2 config cache
+    // Use cached values (lock-free) - NO AppContext access in hot path
     const CachedConfig& cfg = m_cachedConfig;
 
     int cached_max_detections = cfg.detection.max_detections;
+    int cached_detection_resolution = cfg.detection.detection_resolution;
     float cached_kp_x = cfg.pid.kp_x;
     float cached_kp_y = cfg.pid.kp_y;
     float cached_ki_x = cfg.pid.ki_x;
@@ -2208,16 +2208,18 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
     float cached_head_y_offset = cfg.targeting.head_y_offset;
     float cached_body_y_offset = cfg.targeting.body_y_offset;
 
-    float crosshairX = ctx.config.detection_resolution / 2.0f;
-    float crosshairY = ctx.config.detection_resolution / 2.0f;
+    float crosshairX = cached_detection_resolution / 2.0f;
+    float crosshairY = cached_detection_resolution / 2.0f;
 
     int head_class_id = cfg.targeting.head_class_id;
 
+#ifdef _DEBUG
     cudaError_t staleError = cudaGetLastError();
     if (staleError != cudaSuccess) {
         std::cerr << "[Pipeline] Clearing stale CUDA error before target selection: "
                   << cudaGetErrorString(staleError) << std::endl;
     }
+#endif
 
     // Run color filter kernels ONLY if color filter is enabled
     // When disabled, this entire block is skipped - zero overhead
@@ -2282,7 +2284,7 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         cfg.targeting.iou_stickiness_threshold,
         cached_head_y_offset,
         cached_body_y_offset,
-        ctx.config.detection_resolution,
+        cached_detection_resolution,
         m_smallBufferArena.selectedTarget,
         m_smallBufferArena.bestTargetIndex,
         m_smallBufferArena.bestTarget,
@@ -2290,12 +2292,13 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         m_smallBufferArena.pidState
     );
 
+#ifdef _DEBUG
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
         std::cerr << "[Pipeline] Fused kernel launch failed: "
                   << cudaGetErrorString(err) << std::endl;
     }
-
+#endif
 }
 
 bool UnifiedGraphPipeline::updateDDACaptureRegion(const AppContext& ctx) {
@@ -2495,7 +2498,9 @@ bool UnifiedGraphPipeline::executeFrame(cudaStream_t stream) {
     }
 acquired:
 
+#ifdef _DEBUG
     auto frameStart = std::chrono::steady_clock::now();
+#endif
 
     // Synchronous frame acquisition - blocks until frame available or timeout
     FrameMetadata metadata;
@@ -2555,13 +2560,14 @@ acquired:
         m_frameInFlight.store(false, std::memory_order_release);
     }
 
-    // Update performance metrics
+#ifdef _DEBUG
+    // Update performance metrics (debug only - avoid overhead in release)
     auto frameEnd = std::chrono::steady_clock::now();
     auto latencyMs = std::chrono::duration<double, std::milli>(frameEnd - frameStart).count();
-
     m_perfMetrics.totalFrames++;
     m_perfMetrics.totalLatencyMs += latencyMs;
     m_perfMetrics.logIfNeeded("[Pipeline]");
+#endif
 
     return true;
 }
