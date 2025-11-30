@@ -145,6 +145,10 @@ void keyboardListener() {
 
     // No recoil timing
     auto last_recoil_time = std::chrono::steady_clock::now();
+    auto norecoil_press_time = std::chrono::steady_clock::now();
+    auto norecoil_release_time = std::chrono::steady_clock::now();
+    bool last_norecoil_state = false;
+    bool norecoil_active_after_delay = false;
 
     // Cached key combos - parse once, check fast
     CachedKeyCombo cache_exit, cache_targeting, cache_auto_shoot;
@@ -194,15 +198,39 @@ void keyboardListener() {
         // Track disable upward aim state
         ctx.disable_upward_aim = cache_disable_upward.isPressed();
 
-        // Track no recoil state
+        // Track no recoil state with start/end delay support
         bool current_norecoil = cache_norecoil.isPressed();
         ctx.norecoil_active = current_norecoil;
+        auto now = std::chrono::steady_clock::now();
 
-        // No recoil - apply mouse movement when active
-        if (current_norecoil) {
-            auto* profile = ctx.config.getCurrentWeaponProfile();
-            if (profile) {
-                auto now = std::chrono::steady_clock::now();
+        // Detect state transitions
+        if (current_norecoil && !last_norecoil_state) {
+            // Button just pressed - record press time
+            norecoil_press_time = now;
+        } else if (!current_norecoil && last_norecoil_state) {
+            // Button just released - record release time
+            norecoil_release_time = now;
+        }
+        last_norecoil_state = current_norecoil;
+
+        // Determine if recoil compensation should be active
+        auto* profile = ctx.config.getCurrentWeaponProfile();
+        if (profile) {
+            int start_delay = profile->start_delay_ms;
+            int end_delay = profile->end_delay_ms;
+
+            if (current_norecoil) {
+                // Button is pressed - check start delay
+                auto elapsed_since_press = std::chrono::duration_cast<std::chrono::milliseconds>(now - norecoil_press_time).count();
+                norecoil_active_after_delay = (elapsed_since_press >= start_delay);
+            } else {
+                // Button is released - check end delay
+                auto elapsed_since_release = std::chrono::duration_cast<std::chrono::milliseconds>(now - norecoil_release_time).count();
+                norecoil_active_after_delay = (elapsed_since_release < end_delay);
+            }
+
+            // Apply recoil compensation if active after delay processing
+            if (norecoil_active_after_delay) {
                 float interval_ms = profile->recoil_ms;
                 if (interval_ms < 1.0f) interval_ms = 1.0f;
 
