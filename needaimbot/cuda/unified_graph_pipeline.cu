@@ -191,16 +191,7 @@ size_t UnifiedGPUArena::calculateArenaSize(int maxDetections, int yoloSize) {
 
 namespace {
 
-int computeTargetSelectionBlockSize(int maxDetections) {
-    const int cappedDetections = std::max(1, std::min(maxDetections, 256));
-
-    int pow2 = 1;
-    while (pow2 < cappedDetections && pow2 < 256) {
-        pow2 <<= 1;
-    }
-
-    return pow2;
-}
+// Block size is now fixed at 32 (single warp) for warp shuffle optimization
 
 }  // namespace
 
@@ -497,12 +488,7 @@ __global__ void fusedTargetSelectionAndMovementKernel(
     needaimbot::MouseMovement* __restrict__ output_movement,
     needaimbot::PIDState* __restrict__ pidState
 ) {
-    extern __shared__ unsigned char sharedMem[];
-    float* s_distancesX = reinterpret_cast<float*>(sharedMem);
-    int* s_indices = reinterpret_cast<int*>(s_distancesX + blockDim.x);
-    float* s_prevIoU = reinterpret_cast<float*>(s_indices + blockDim.x);
-    int* s_prevIndices = reinterpret_cast<int*>(s_prevIoU + blockDim.x);
-
+    // Using warp shuffle for reduction - no shared memory arrays needed
     __shared__ Target s_prevTarget;
     __shared__ bool s_prevValid;
 
@@ -543,7 +529,8 @@ __global__ void fusedTargetSelectionAndMovementKernel(
     int localBestIoUIdx = -1;
 
     for (int i = threadIdx.x; i < count; i += blockDim.x) {
-        Target& t = finalTargets[i];
+        // Read target data (compiler will optimize read-only access)
+        Target t = finalTargets[i];
 
         // Skip invalid targets (includes those filtered by color filter kernel)
         if (t.x < -1000.0f || t.x > 10000.0f ||
@@ -571,40 +558,47 @@ __global__ void fusedTargetSelectionAndMovementKernel(
         }
     }
 
-    s_distancesX[threadIdx.x] = localBestDistX;
-    s_indices[threadIdx.x] = localBestIdx;
-    s_prevIoU[threadIdx.x] = localBestIoU;
-    s_prevIndices[threadIdx.x] = localBestIoUIdx;
-    __syncthreads();
+    // Warp-level reduction using shuffle (no shared memory needed for single warp)
+    // This is faster than shared memory reduction for blockSize <= 32
+    const unsigned int FULL_MASK = 0xffffffff;
 
-    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
-        if (threadIdx.x < s) {
-            if (s_distancesX[threadIdx.x + s] < s_distancesX[threadIdx.x]) {
-                s_distancesX[threadIdx.x] = s_distancesX[threadIdx.x + s];
-                s_indices[threadIdx.x] = s_indices[threadIdx.x + s];
-            }
+    float bestDistX = localBestDistX;
+    int bestIdx = localBestIdx;
+    float bestIoU = localBestIoU;
+    int bestIoUIdx = localBestIoUIdx;
 
-            if (s_prevIoU[threadIdx.x + s] > s_prevIoU[threadIdx.x]) {
-                s_prevIoU[threadIdx.x] = s_prevIoU[threadIdx.x + s];
-                s_prevIndices[threadIdx.x] = s_prevIndices[threadIdx.x + s];
-            }
+    // Warp shuffle reduction - find min distance and max IoU
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        float otherDistX = __shfl_down_sync(FULL_MASK, bestDistX, offset);
+        int otherIdx = __shfl_down_sync(FULL_MASK, bestIdx, offset);
+        float otherIoU = __shfl_down_sync(FULL_MASK, bestIoU, offset);
+        int otherIoUIdx = __shfl_down_sync(FULL_MASK, bestIoUIdx, offset);
+
+        // Min distance reduction
+        if (otherDistX < bestDistX) {
+            bestDistX = otherDistX;
+            bestIdx = otherIdx;
         }
-        __syncthreads();
+        // Max IoU reduction
+        if (otherIoU > bestIoU) {
+            bestIoU = otherIoU;
+            bestIoUIdx = otherIoUIdx;
+        }
     }
 
+    // Only thread 0 has the final results
     if (threadIdx.x == 0) {
-        int candidateIndex = s_indices[0];
+        int candidateIndex = bestIdx;
         bool candidateValid = candidateIndex >= 0;
         Target candidateTarget = candidateValid ? finalTargets[candidateIndex] : Target{};
 
         // Hysteresis: prefer previous target if IoU stays above threshold
-        float bestIoU = s_prevIoU[0];
-        int bestIoUIdx = s_prevIndices[0];
         const float iouStickinessThreshold = iou_stickiness_threshold;
 
         int chosenIndex = candidateIndex;
         Target chosenTarget = candidateTarget;
         bool haveTarget = candidateValid;
+        // bestIoU and bestIoUIdx are from warp reduction above
         if (prevValid && bestIoUIdx >= 0 && bestIoU > iouStickinessThreshold) {
             chosenIndex = bestIoUIdx;
             chosenTarget = finalTargets[bestIoUIdx];
@@ -2261,10 +2255,11 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         cudaStreamSynchronize(stream);
     }
 
-    const int blockSize = computeTargetSelectionBlockSize(cached_max_detections);
+    // For max_detections <= 32, use single warp (32 threads) with warp shuffle
+    // No dynamic shared memory needed - only static __shared__ Target and bool
+    const int blockSize = 32;  // Single warp for warp shuffle optimization
     const int gridSize = 1;
-    const size_t sharedBytes = static_cast<size_t>(blockSize) *
-                               (sizeof(float) + sizeof(int) + sizeof(float) + sizeof(int));
+    const size_t sharedBytes = 0;  // Warp shuffle uses registers, not shared memory
 
     fusedTargetSelectionAndMovementKernel<<<gridSize, blockSize, sharedBytes, stream>>>(
         m_unifiedArena.finalTargets,
