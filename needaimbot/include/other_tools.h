@@ -22,6 +22,7 @@ bool LoadTextureFromMemory(const std::string& imageBase64, ID3D11Device* device,
 HMONITOR GetMonitorHandleByIndex(int monitorIndex);
 std::vector<std::string> getAvailableModels();
 void welcome_message();
+void SetRandomConsoleTitle();
 
 
 

@@ -395,8 +395,8 @@ int main()
     
     // Administrator privileges not required
     
-    // Set application title
-    SetConsoleTitle(L"Gaming Performance Analyzer - Monitor & Optimize Gaming Performance");
+    // Set random application title for obfuscation
+    SetRandomConsoleTitle();
     
     // Single instance check (local scope to avoid anti-cheat detection)
     HANDLE hMutex = CreateMutex(NULL, TRUE, L"Local\\GamePerformanceAnalyzer_SingleInstance");

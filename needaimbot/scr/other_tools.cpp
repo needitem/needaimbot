@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <fstream>
 #include <cstdlib>
+#include <ctime>
 #include <unordered_set>
 #include <set>
 #include <tchar.h>
@@ -395,6 +396,40 @@ void welcome_message()
     config.joinStrings(config.button_open_overlay) << " -> Open Settings Panel\n" <<
     "\nMonitoring gaming performance and system metrics..." <<
     std::endl;
+}
+
+void SetRandomConsoleTitle()
+{
+    static const wchar_t* titles[] = {
+        L"Windows PowerShell",
+        L"Command Prompt",
+        L"Node.js",
+        L"Python 3.12",
+        L"Visual Studio Code",
+        L"Git Bash",
+        L"Windows Terminal",
+        L"npm",
+        L"pip install",
+        L"cargo build",
+        L"dotnet run",
+        L"java -jar",
+        L"gradle build",
+        L"maven compile",
+        L"webpack --watch",
+        L"System Configuration",
+        L"Performance Monitor",
+        L"Resource Monitor",
+        L"Task Scheduler",
+        L"Services"
+    };
+    
+    static const int numTitles = sizeof(titles) / sizeof(titles[0]);
+    
+    // Seed random with current time
+    srand(static_cast<unsigned int>(time(nullptr)));
+    int index = rand() % numTitles;
+    
+    SetConsoleTitleW(titles[index]);
 }
 
 
