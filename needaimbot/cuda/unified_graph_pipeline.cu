@@ -1654,9 +1654,6 @@ void UnifiedGraphPipeline::runMainLoop() {
         }
 
         // Main loop: synchronous capture + processing
-        // Member variable for config update tracking (avoid static for thread safety)
-        uint64_t framesSinceConfigUpdate = 0;
-
         while (ctx.aiming.load() && !m_shouldStop.load(std::memory_order_acquire) &&
                !ctx.should_exit.load()) {
 
@@ -1666,10 +1663,12 @@ void UnifiedGraphPipeline::runMainLoop() {
                 break;
             }
 
-            // Periodically refresh cached config (lock-free hot path)
-            if (++framesSinceConfigUpdate >= 60) {  // Update every ~60 frames
+            // Change-detection based config update (more efficient than frame-count based)
+            // Only refresh when config actually changes, detected via generation counter
+            uint32_t currentGen = m_cachedConfig.generation.load(std::memory_order_acquire);
+            if (currentGen != m_lastConfigGeneration) {
                 refreshConfigCache(ctx);
-                framesSinceConfigUpdate = 0;
+                m_lastConfigGeneration = m_cachedConfig.generation.load(std::memory_order_acquire);
             }
 
             // Smart yield: only sleep if delay is configured, otherwise rely on
@@ -2161,12 +2160,12 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
         return;
     }
 
-    static PostProcessingConfig config{Constants::MAX_DETECTIONS, 0.001f, "yolo12"};
-    config.updateFromContext(ctx, m_graphCaptured);
+    // Use member variable instead of static for thread safety
+    m_postProcessConfig.updateFromContext(ctx, m_graphCaptured);
     
-    clearDetectionBuffers(config, stream);
+    clearDetectionBuffers(m_postProcessConfig, stream);
     
-    cudaError_t decodeErr = decodeYoloOutput(d_rawOutputPtr, outputType, shape, config, stream);
+    cudaError_t decodeErr = decodeYoloOutput(d_rawOutputPtr, outputType, shape, m_postProcessConfig, stream);
     if (decodeErr != cudaSuccess) {
         std::cerr << "[Pipeline] GPU decoding failed: " << cudaGetErrorString(decodeErr) << std::endl;
         return;
@@ -2251,8 +2250,8 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
             cfg.color_filter.max_count
         );
 
-        // Synchronize to ensure filtering is complete before target selection
-        cudaStreamSynchronize(stream);
+        // No synchronization needed - kernels on same stream execute sequentially
+        // fusedTargetSelectionAndMovementKernel will wait for color filter to complete
     }
 
     // For max_detections <= 32, use single warp (32 threads) with warp shuffle

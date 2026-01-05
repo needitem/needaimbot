@@ -6,6 +6,7 @@
 #include "needaimbot.h"
 #include "overlay.h"
 #include "../include/other_tools.h"
+#include "draw_settings.h"
 #include <iostream>
 
 void draw_overlay()
@@ -43,7 +44,9 @@ void draw_overlay()
     ImGui::SeparatorText("Overlay Appearance");
     ImGui::Spacing();
 
-    ImGui::SliderInt("Overlay Opacity", &ctx.config.overlay_opacity, 40, 255);
+    if (ImGui::SliderInt("Overlay Opacity", &ctx.config.overlay_opacity, 40, 255)) {
+        MARK_CONFIG_DIRTY();  // Auto-save after delay
+    }
     if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Adjusts the transparency of the overlay window (settings menu)."); }
 
     ImGui::Spacing();
@@ -55,7 +58,7 @@ void draw_overlay()
         ImGui::GetIO().FontGlobalScale = ui_scale;
 
         ctx.config.overlay_ui_scale = ui_scale;
-        // Config will be saved by batch processing in overlay.cpp
+        MARK_CONFIG_DIRTY();  // Auto-save after delay
 
         overlayWidth = static_cast<int>(Constants::BASE_OVERLAY_WIDTH * ui_scale);
         overlayHeight = static_cast<int>(Constants::BASE_OVERLAY_HEIGHT * ui_scale);

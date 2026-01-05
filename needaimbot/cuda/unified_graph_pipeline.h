@@ -13,6 +13,7 @@
 #include "simple_cuda_mat.h"
 #include "cuda_resource_manager.h"
 #include "../core/Target.h"
+#include "../core/constants.h"
 #include "../utils/cuda_utils.h"
 
 #include <NvInfer.h>
@@ -618,6 +619,12 @@ private:
     // Config cache helpers
     void refreshConfigCache(const AppContext& ctx);
     void updateConfig(const AppContext& ctx);
+
+    // Post-processing config (member instead of static for thread safety)
+    PostProcessingConfig m_postProcessConfig{Constants::MAX_DETECTIONS, 0.001f, "yolo12"};
+    
+    // Config generation tracking for change-detection based updates
+    uint32_t m_lastConfigGeneration = 0;
 
 public:
     // Mark runtime-controlled parameters dirty; in v2 this triggers a config cache refresh.
