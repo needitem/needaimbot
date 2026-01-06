@@ -237,7 +237,7 @@ static void applyColorFilterMask(SimpleMat& frame, const Config& cfg) {
     int width = frame.cols();
     int height = frame.rows();
     unsigned char* data = frame.data();
-    int stride = frame.step();
+    size_t stride = frame.step();
 
     for (int y = 0; y < height; y++) {
         unsigned char* row = data + y * stride;
@@ -359,7 +359,7 @@ void draw_color_filter()
                 if (frameToDisplay) {
                     try {
                         uploadDebugFrame(*frameToDisplay);
-                    } catch (const std::exception& e) {
+                    } catch (const std::exception&) {
                         ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Upload failed");
                         ImGui::EndTable();
                         return;

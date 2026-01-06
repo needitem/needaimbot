@@ -8,7 +8,6 @@
 namespace {
 // Desktop Duplication returns immediately when a new frame is available.
 // We'll compute an adaptive AcquireNextFrame timeout dynamically.
-constexpr UINT kBytesPerPixel = 4;   // BGRA
 }
 
 UINT DDACapture::AcquireTimeoutMs() const {

@@ -44,11 +44,6 @@ std::mutex g_debugTexMutex;
 
 
 
-static int g_crosshairH = 0, g_crosshairS = 0, g_crosshairV = 0;
-static bool g_crosshairHsvValid = false;
-
-
-
 // Upload a CPU RGBA frame into the debug texture for ImGui rendering
 void uploadDebugFrame(const SimpleMat& rgbaCpu)
 {

@@ -35,15 +35,15 @@ public:
 std::set<std::string> GlobalSerialCleanupHandler::used_ports;
 
 SerialConnection::SerialConnection(const std::string& port, unsigned int baud_rate)
-    : serial_handle_(INVALID_HANDLE_VALUE),
+    : aiming_active(false),
+      shooting_active(false),
+      zooming_active(false),
+      serial_handle_(INVALID_HANDLE_VALUE),
       is_open_(false),
       port_name_(port),
       baud_rate_(baud_rate),
       listening_(false),
       writer_running_(false),
-      aiming_active(false),
-      shooting_active(false),
-      zooming_active(false),
       accumulated_move_x_(0),
       accumulated_move_y_(0),
       has_accumulated_move_(false),
@@ -351,7 +351,7 @@ void SerialConnection::cleanup() {
     }
     
     // 타임아웃 기반 스레드 종료 함수
-    auto cleanup_with_timeout = [this](std::thread& t, const std::string& name) {
+    auto cleanup_with_timeout = [](std::thread& t, const std::string& name) {
         if (t.joinable()) {
             auto future = std::async(std::launch::async, [&t]() {
                 t.join();
@@ -843,7 +843,6 @@ void SerialConnection::listeningThreadFunc()
         if (!data.empty()) {
             buffer += data;
             empty_reads = 0;  // Reset counter on successful read
-            wait_time = 1;    // Minimal wait when data is flowing
             
             size_t pos = 0;
             while ((pos = buffer.find('\n')) != std::string::npos) {

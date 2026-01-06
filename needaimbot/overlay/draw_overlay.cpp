@@ -18,7 +18,6 @@ void draw_overlay()
     
     // Console toggle button
     static bool console_visible = IsConsoleVisible();
-    bool console_state_changed = false;
     
     // Update console state if it was changed externally
     bool current_console_state = IsConsoleVisible();
@@ -34,7 +33,6 @@ void draw_overlay()
         } else {
             HideConsole();
         }
-        console_state_changed = true;
     }
     if (ImGui::IsItemHovered()) { 
         ImGui::SetTooltip("Toggle the console window on/off. Useful for debugging and monitoring."); 

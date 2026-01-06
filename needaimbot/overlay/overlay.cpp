@@ -444,7 +444,6 @@ void SetupImGui()
 bool CreateOverlayWindow()
 {
     auto& ctx = AppContext::getInstance();
-    auto& config = ctx.config;  // Reference to avoid global config confusion
     
     overlayWidth = static_cast<int>((std::max)(Constants::MIN_OVERLAY_WIDTH, static_cast<int>(Constants::BASE_OVERLAY_WIDTH * ctx.config.overlay_ui_scale)));
     overlayHeight = static_cast<int>((std::max)(Constants::MIN_OVERLAY_HEIGHT, static_cast<int>(Constants::BASE_OVERLAY_HEIGHT * ctx.config.overlay_ui_scale)));
@@ -529,16 +528,6 @@ void OverlayThread()
         key_names_cstrs.push_back(name.c_str());
     }
 
-    int input_method_index = 0;
-    if (ctx.config.input_method == "WIN32")
-        input_method_index = 0;
-    else if (ctx.config.input_method == "GHUB")
-        input_method_index = 1;
-    else if (ctx.config.input_method == "ARDUINO")
-        input_method_index = 2;
-    else
-        input_method_index = 0;
-    
     // Cache available models - only refresh every 5 seconds to avoid filesystem overhead
     static std::vector<std::string> availableModels;
     static auto lastModelRefresh = std::chrono::high_resolution_clock::now();
@@ -549,8 +538,6 @@ void OverlayThread()
         availableModels = getAvailableModels();
         lastModelRefresh = now_for_models;
     }
-
-    static auto lastTime = std::chrono::high_resolution_clock::now();
 
     MSG msg;
     ZeroMemory(&msg, sizeof(msg));

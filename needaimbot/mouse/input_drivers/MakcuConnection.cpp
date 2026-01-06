@@ -21,12 +21,12 @@ static const uint8_t BAUD_CHANGE_CMD[9] =
 { 0xDE,0xAD,0x05,0x00,0xA5,0x00,0x09,0x3D,0x00 };
 
 MakcuConnection::MakcuConnection(const std::string& port, unsigned int /*baud_rate*/)
-    : serial_handle_(INVALID_HANDLE_VALUE),
-      is_open_(false), 
-      listening_(false),
-      aiming_active(false), 
+    : aiming_active(false), 
       shooting_active(false), 
       zooming_active(false),
+      serial_handle_(INVALID_HANDLE_VALUE),
+      is_open_(false),
+      listening_(false),
       port_name_(port),
       write_event_(NULL),
       read_event_(NULL)

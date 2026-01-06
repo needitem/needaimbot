@@ -139,7 +139,7 @@ extern "C" cudaError_t unifiedPreprocessing(
         dst_rgb_chw,
         src_bgra.cols(),
         src_bgra.rows(),
-        src_bgra.step(),
+        static_cast<int>(src_bgra.step()),
         target_width,
         target_height,
         scale_factor

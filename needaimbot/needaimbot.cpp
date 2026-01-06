@@ -57,8 +57,6 @@ bool initializeInputMethod();
 
 // Combined UI thread function for keyboard + overlay
 void combinedUIThread() {
-    auto& ctx = AppContext::getInstance();
-    
     // Launch keyboard and overlay in alternating pattern
     std::thread keyboardThread(keyboardListener);
     std::thread overlayThread(OverlayThread);
@@ -542,7 +540,7 @@ int main()
 
         SYSTEM_INFO sysInfo;
         GetSystemInfo(&sysInfo);
-        DWORD numCores = sysInfo.dwNumberOfProcessors;
+        // numCores available for future use: sysInfo.dwNumberOfProcessors
         
         ThreadManager pipelineThreadMgr("UnifiedPipelineThread",
             [&]() { pipelineManager.runMainLoop(); },
