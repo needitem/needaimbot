@@ -6,6 +6,7 @@
 #include <stdexcept>
 
 // Comprehensive CUDA error checking macro with file/line info
+#ifndef CUDA_CHECK
 #define CUDA_CHECK(call) \
     do { \
         cudaError_t error = call; \
@@ -16,6 +17,7 @@
             throw std::runtime_error(ss.str()); \
         } \
     } while(0)
+#endif
 
 // Silent check that returns false on error (for non-critical operations)
 #define CUDA_CHECK_SILENT(call) \

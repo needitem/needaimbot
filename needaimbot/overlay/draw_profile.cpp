@@ -185,7 +185,6 @@ void draw_profile()
     if (UIHelpers::EnhancedButton("Create Profile", ImVec2(-1, 0), "Create a new profile with current settings"))
     {
         std::string name = new_profile_name;
-        bool is_overwriting = false;
         if (!name.empty())
         {
             if (ctx.config.saveProfile(name))

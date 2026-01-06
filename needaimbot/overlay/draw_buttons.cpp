@@ -40,13 +40,6 @@ static std::vector<std::string> detect_all_pressed_keys()
     return pressed;
 }
 
-// Function to detect pressed key (single)
-static std::string detect_pressed_key()
-{
-    auto pressed = detect_all_pressed_keys();
-    return pressed.empty() ? "" : pressed[0];
-}
-
 // Build combo string from keys (e.g., "LeftShift+A")
 static std::string build_combo_string(const std::vector<std::string>& keys)
 {
@@ -69,7 +62,6 @@ static void draw_hotkey_row_compact(std::vector<std::string>& hotkeys, const cha
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(spacing, spacing));
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 3.0f));
 
-    float cursor_x = ImGui::GetCursorPosX();
     float available_width = ImGui::GetContentRegionAvail().x;
     float current_x = 0.0f;
 

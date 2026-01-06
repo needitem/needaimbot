@@ -162,8 +162,8 @@ std::vector<std::string> getModelFiles()
 
     for (const auto& entry : std::filesystem::directory_iterator("models/"))
     {
-        if (entry.is_regular_file() && entry.path().extension() == ".engine" ||
-            entry.is_regular_file() && entry.path().extension() == ".onnx")
+        if ((entry.is_regular_file() && entry.path().extension() == ".engine") ||
+            (entry.is_regular_file() && entry.path().extension() == ".onnx"))
         {
             modelsFiles.push_back(entry.path().filename().string());
         }

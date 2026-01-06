@@ -208,8 +208,6 @@ static void draw_capture_source_settings()
 
 void draw_capture_settings()
 {
-    auto& ctx = AppContext::getInstance();
-
     draw_capture_area_settings();
     UIHelpers::Spacer();
 
