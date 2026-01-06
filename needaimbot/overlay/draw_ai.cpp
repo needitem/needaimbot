@@ -341,8 +341,6 @@ static void draw_advanced_settings()
 
 void draw_ai()
 {
-    auto& ctx = AppContext::getInstance();
-    
     draw_model_settings();
     UIHelpers::Spacer();
     

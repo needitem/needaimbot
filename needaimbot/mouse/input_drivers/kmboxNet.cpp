@@ -23,11 +23,6 @@ soft_keyboard_t softkeyboard;
 
 static HANDLE m_hMutex_lock = NULL;
 
-
-
-static short monitor_port = 0;
-static int monitor_run = 0;
-static int mask_keyboard_mouse_flag = 0;
 static unsigned char key[16] = { 0 };
 
 
@@ -112,7 +107,6 @@ int kmNet_init(char* ip, char* port, char* mac)
 
 int kmNet_mouse_move(short x, short y)
 {
-    int err;
     if (sockClientfd <= 0)
         return err_creat_socket;
     WaitForSingleObject(m_hMutex_lock, 100);  // 100ms timeout to prevent deadlock
@@ -134,14 +128,14 @@ int kmNet_mouse_move(short x, short y)
     
     SOCKADDR_IN sclient;
     int clen = sizeof(sclient);
-    err = recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
+    (void)recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
     ReleaseMutex(m_hMutex_lock);
     return success; // Return success immediately for better responsiveness
 }
 
 int kmNet_enc_mouse_move(short x, short y)
 {
-    client_tx tx_enc = { 0 };
+    client_tx tx_enc = {{ 0 }};
     if (sockClientfd <= 0)
         return err_creat_socket;
     WaitForSingleObject(m_hMutex_lock, 100);  // 100ms timeout to prevent deadlock
@@ -166,7 +160,6 @@ int kmNet_enc_mouse_move(short x, short y)
 
 int kmNet_mouse_left(int isdown)
 {
-    int err;
     if (sockClientfd <= 0)
         return err_creat_socket;
     WaitForSingleObject(m_hMutex_lock, 100);  // 100ms timeout to prevent deadlock
@@ -179,13 +172,13 @@ int kmNet_mouse_left(int isdown)
     sendto(sockClientfd, (const char*)&tx, length, 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
     SOCKADDR_IN sclient;
     int clen = sizeof(sclient);
-    err = recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
+    (void)recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
     return NetRxReturnHandle(&rx, &tx);
 }
 
 int kmNet_enc_mouse_left(int isdown)
 {
-    client_tx tx_enc = { 0 };
+    client_tx tx_enc = {{ 0 }};
     if (sockClientfd <= 0)
         return err_creat_socket;
     WaitForSingleObject(m_hMutex_lock, 100);  // 100ms timeout to prevent deadlock
@@ -214,7 +207,7 @@ int kmNet_enc_mouse_left(int isdown)
 
 int kmNet_keydown(int vk_key)
 {
-    int i, err;
+    int i;
     if (sockClientfd <= 0)
         return err_creat_socket;
     WaitForSingleObject(m_hMutex_lock, 100);  // 100ms timeout to prevent deadlock
@@ -254,13 +247,13 @@ KM_down_send:
     sendto(sockClientfd, (const char*)&tx, length, 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
     SOCKADDR_IN sclient;
     int clen = sizeof(sclient);
-    err = recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
+    (void)recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
     return NetRxReturnHandle(&rx, &tx);
 }
 
 int kmNet_keyup(int vk_key)
 {
-    int i, err;
+    int i;
     if (sockClientfd <= 0)
         return err_creat_socket;
     WaitForSingleObject(m_hMutex_lock, 100);  // 100ms timeout to prevent deadlock
@@ -293,7 +286,7 @@ int kmNet_keyup(int vk_key)
     sendto(sockClientfd, (const char*)&tx, length, 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
     SOCKADDR_IN sclient;
     int clen = sizeof(sclient);
-    err = recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
+    (void)recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
     return NetRxReturnHandle(&rx, &tx);
 }
 
@@ -323,7 +316,6 @@ int kmNet_keypress(int vk_key, int ms)
 
 int kmNet_reboot(void)
 {
-    int err;
     if (sockClientfd <= 0)
         return err_creat_socket;
     WaitForSingleObject(m_hMutex_lock, 100);  // 100ms timeout to prevent deadlock
@@ -334,7 +326,7 @@ int kmNet_reboot(void)
     sendto(sockClientfd, (const char*)&tx, length, 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
     SOCKADDR_IN sclient;
     int clen = sizeof(sclient);
-    err = recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
+    (void)recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
     WSACleanup();
     sockClientfd = -1;
     ReleaseMutex(m_hMutex_lock);
@@ -343,7 +335,7 @@ int kmNet_reboot(void)
 
 int kmNet_enc_reboot(void)
 {
-    client_tx tx_enc = { 0 };
+    client_tx tx_enc = {{ 0 }};
     if (sockClientfd <= 0)
         return err_creat_socket;
     WaitForSingleObject(m_hMutex_lock, 100);  // 100ms timeout to prevent deadlock
