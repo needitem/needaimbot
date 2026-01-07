@@ -453,8 +453,15 @@ bool CreateOverlayWindow()
                       _T("Edge"), NULL };
     ::RegisterClassEx(&wc);
 
+    // Remove WS_EX_TOPMOST to avoid anti-cheat detection
+    // Use WS_EX_LAYERED only for transparency support
+    DWORD exStyle = WS_EX_LAYERED;
+    if (ctx.config.always_on_top) {
+        exStyle |= WS_EX_TOPMOST;
+    }
+
     g_hwnd = ::CreateWindowEx(
-        WS_EX_TOPMOST | WS_EX_LAYERED,
+        exStyle,
         wc.lpszClassName, _T("Chrome"),
         WS_POPUP | WS_SIZEBOX | WS_MAXIMIZEBOX, 0, 0, overlayWidth, overlayHeight,
         NULL, NULL, wc.hInstance, NULL);
@@ -743,6 +750,10 @@ void OverlayThread()
                         prev_show_window = ctx.config.show_window;
                         show_window_changed = true;
                         ctx.preview_enabled = ctx.config.show_window;
+                        
+                        // Update window TOPMOST state dynamically
+                        HWND insertAfter = ctx.config.always_on_top ? HWND_TOPMOST : HWND_NOTOPMOST;
+                        SetWindowPos(g_hwnd, insertAfter, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
                     }
                 }
 

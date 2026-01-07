@@ -181,7 +181,7 @@ bool Config::loadConfig(const std::string& filename)
         
         screenshot_button = splitString("None");
         screenshot_delay = 500;
-        always_on_top = true;
+        always_on_top = false;  // Disabled by default to avoid anti-cheat detection
 
 
         
@@ -373,7 +373,7 @@ bool Config::loadConfig(const std::string& filename)
     
     screenshot_button = splitString(get_string_ini("Debug", "screenshot_button", "None"));
     screenshot_delay = get_long_ini("Debug", "screenshot_delay", 500);
-    always_on_top = get_bool_ini("Debug", "always_on_top", true);
+    always_on_top = get_bool_ini("Debug", "always_on_top", false);  // Default false to avoid detection
 
 
 
