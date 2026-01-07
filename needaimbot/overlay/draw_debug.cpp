@@ -269,8 +269,10 @@ void draw_debug()
     ImGui::SeparatorText("Miscellaneous");
     ImGui::Spacing();
 
-    if (ImGui::Checkbox("Always On Top", &ctx.config.always_on_top)) { SAVE_PROFILE(); }
-    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Keeps the overlay window always on top of other windows."); }
+    if (ImGui::Checkbox("Always On Top", &ctx.config.always_on_top)) {
+        SAVE_PROFILE();
+    }
+    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Keeps the overlay window always on top.\nWARNING: May trigger anti-cheat detection!"); }
 
     ImGui::Spacing();
 }
