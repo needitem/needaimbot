@@ -7,17 +7,17 @@
 static void draw_profile_selector()
 {
     auto& ctx = AppContext::getInstance();
-    auto& profiles = ctx.config.weapon_profiles;
-    int& active_idx = ctx.config.active_weapon_profile_index;
+    auto& profiles = ctx.config.input_profiles;
+    int& active_idx = ctx.config.active_input_profile_index;
 
     // Ensure valid index
     if (active_idx < 0 || active_idx >= static_cast<int>(profiles.size())) {
         active_idx = 0;
     }
 
-    UIHelpers::BeginCard("Weapon Profile");
+    UIHelpers::BeginCard("Input Profile");
 
-    UIHelpers::BeautifulText("Select or manage weapon recoil profiles.", UIHelpers::GetAccentColor(0.8f));
+    UIHelpers::BeautifulText("Select or manage input profiles.", UIHelpers::GetAccentColor(0.8f));
     UIHelpers::CompactSpacer();
 
     if (!profiles.empty()) {
@@ -31,14 +31,14 @@ static void draw_profile_selector()
 
             // Profile combo
             ImGui::TableNextColumn();
-            const char* preview = profiles[active_idx].weapon_name.c_str();
+            const char* preview = profiles[active_idx].profile_name.c_str();
             ImGui::SetNextItemWidth(-1);
             if (ImGui::BeginCombo("##ProfileCombo", preview)) {
                 for (int i = 0; i < static_cast<int>(profiles.size()); i++) {
                     bool is_selected = (active_idx == i);
-                    if (ImGui::Selectable(profiles[i].weapon_name.c_str(), is_selected)) {
+                    if (ImGui::Selectable(profiles[i].profile_name.c_str(), is_selected)) {
                         active_idx = i;
-                        ctx.config.current_weapon_name = profiles[i].weapon_name;
+                        ctx.config.current_profile_name = profiles[i].profile_name;
                         SAVE_PROFILE();
                     }
                     if (is_selected) {
@@ -53,7 +53,7 @@ static void draw_profile_selector()
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.5f, 0.2f, 0.9f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.6f, 0.3f, 1.0f));
             if (ImGui::Button("+##add", ImVec2(-1, 0))) {
-                WeaponRecoilProfile new_profile("New Weapon", 3.0f, 1.0f);
+                InputProfile new_profile("New Profile", 3.0f, 1.0f);
                 profiles.push_back(new_profile);
                 active_idx = static_cast<int>(profiles.size()) - 1;
                 SAVE_PROFILE();
@@ -83,47 +83,47 @@ static void draw_profile_selector()
         UIHelpers::CompactSpacer();
 
         // Profile name edit
-        WeaponRecoilProfile& profile = profiles[active_idx];
+        InputProfile& profile = profiles[active_idx];
         char name_buf[64];
-        strncpy(name_buf, profile.weapon_name.c_str(), sizeof(name_buf) - 1);
+        strncpy(name_buf, profile.profile_name.c_str(), sizeof(name_buf) - 1);
         name_buf[sizeof(name_buf) - 1] = '\0';
 
         ImGui::Text("Profile Name");
         ImGui::SameLine();
-        UIHelpers::HelpMarker("Name for this weapon profile");
+        UIHelpers::HelpMarker("Name for this input profile");
         ImGui::SetNextItemWidth(-1);
-        if (ImGui::InputText("##weapon_name", name_buf, sizeof(name_buf))) {
-            profile.weapon_name = name_buf;
-            ctx.config.current_weapon_name = name_buf;
+        if (ImGui::InputText("##profile_name", name_buf, sizeof(name_buf))) {
+            profile.profile_name = name_buf;
+            ctx.config.current_profile_name = name_buf;
             SAVE_PROFILE();
         }
     }
     else {
-        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.5f, 1.0f), "No weapon profiles. Click + to add one.");
+        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.5f, 1.0f), "No input profiles. Click + to add one.");
     }
 
     UIHelpers::EndCard();
 }
 
-static void draw_recoil_compensation()
+static void draw_stabilizer_settings()
 {
     auto& ctx = AppContext::getInstance();
-    auto& profiles = ctx.config.weapon_profiles;
-    int active_idx = ctx.config.active_weapon_profile_index;
+    auto& profiles = ctx.config.input_profiles;
+    int active_idx = ctx.config.active_input_profile_index;
 
     if (profiles.empty() || active_idx < 0 || active_idx >= static_cast<int>(profiles.size())) {
         return;
     }
 
-    WeaponRecoilProfile& profile = profiles[active_idx];
+    InputProfile& profile = profiles[active_idx];
 
-    UIHelpers::BeginCard("Recoil Compensation");
+    UIHelpers::BeginCard("Stabilizer Settings");
 
-    UIHelpers::BeautifulText("Adjust recoil control strength and timing.", UIHelpers::GetAccentColor(0.8f));
+    UIHelpers::BeautifulText("Adjust input stabilization strength and timing.", UIHelpers::GetAccentColor(0.8f));
     UIHelpers::CompactSpacer();
 
-    // Recoil settings table
-    if (ImGui::BeginTable("##recoil_settings", 2, ImGuiTableFlags_NoBordersInBody)) {
+    // Stabilizer settings table
+    if (ImGui::BeginTable("##stabilizer_settings", 2, ImGuiTableFlags_NoBordersInBody)) {
         ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 130.0f);
         ImGui::TableSetupColumn("Control", ImGuiTableColumnFlags_WidthStretch);
 
@@ -133,7 +133,7 @@ static void draw_recoil_compensation()
         ImGui::AlignTextToFramePadding();
         ImGui::Text("Base Strength");
         ImGui::SameLine();
-        UIHelpers::HelpMarker("Base recoil compensation strength (pixels per tick)");
+        UIHelpers::HelpMarker("Base stabilization strength (pixels per tick)");
         ImGui::TableNextColumn();
         ImGui::SetNextItemWidth(-1);
         float base_strength = profile.base_strength;
@@ -146,9 +146,9 @@ static void draw_recoil_compensation()
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
         ImGui::AlignTextToFramePadding();
-        ImGui::Text("Fire Rate Mult");
+        ImGui::Text("Rate Multiplier");
         ImGui::SameLine();
-        UIHelpers::HelpMarker("Multiplier for fire rate adjustment");
+        UIHelpers::HelpMarker("Multiplier for rate adjustment");
         ImGui::TableNextColumn();
         ImGui::SetNextItemWidth(-1);
         float fire_mult = profile.fire_rate_multiplier;
@@ -157,18 +157,18 @@ static void draw_recoil_compensation()
             SAVE_PROFILE();
         }
 
-        // Recoil Interval
+        // Interval
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
         ImGui::AlignTextToFramePadding();
-        ImGui::Text("Recoil Interval");
+        ImGui::Text("Interval");
         ImGui::SameLine();
-        UIHelpers::HelpMarker("Time interval between recoil compensation ticks");
+        UIHelpers::HelpMarker("Time interval between stabilization ticks");
         ImGui::TableNextColumn();
         ImGui::SetNextItemWidth(-1);
-        float recoil_ms = profile.recoil_ms;
-        if (ImGui::SliderFloat("##recoil_ms", &recoil_ms, 1.0f, 100.0f, "%.1f ms")) {
-            profile.recoil_ms = recoil_ms;
+        float interval_ms = profile.interval_ms;
+        if (ImGui::SliderFloat("##interval_ms", &interval_ms, 1.0f, 100.0f, "%.1f ms")) {
+            profile.interval_ms = interval_ms;
             SAVE_PROFILE();
         }
 
@@ -181,18 +181,18 @@ static void draw_recoil_compensation()
 static void draw_timing_settings()
 {
     auto& ctx = AppContext::getInstance();
-    auto& profiles = ctx.config.weapon_profiles;
-    int active_idx = ctx.config.active_weapon_profile_index;
+    auto& profiles = ctx.config.input_profiles;
+    int active_idx = ctx.config.active_input_profile_index;
 
     if (profiles.empty() || active_idx < 0 || active_idx >= static_cast<int>(profiles.size())) {
         return;
     }
 
-    WeaponRecoilProfile& profile = profiles[active_idx];
+    InputProfile& profile = profiles[active_idx];
 
     UIHelpers::BeginCard("Timing Settings");
 
-    UIHelpers::BeautifulText("Control when recoil compensation starts and stops.", UIHelpers::GetAccentColor(0.8f));
+    UIHelpers::BeautifulText("Control when stabilization starts and stops.", UIHelpers::GetAccentColor(0.8f));
     UIHelpers::CompactSpacer();
 
     if (ImGui::BeginTable("##timing_table", 2, ImGuiTableFlags_NoBordersInBody)) {
@@ -205,7 +205,7 @@ static void draw_timing_settings()
         ImGui::AlignTextToFramePadding();
         ImGui::Text("Start Delay");
         ImGui::SameLine();
-        UIHelpers::HelpMarker("Delay before starting recoil compensation after firing");
+        UIHelpers::HelpMarker("Delay before starting stabilization");
         ImGui::TableNextColumn();
         ImGui::SetNextItemWidth(-1);
         int start_delay = profile.start_delay_ms;
@@ -220,7 +220,7 @@ static void draw_timing_settings()
         ImGui::AlignTextToFramePadding();
         ImGui::Text("End Delay");
         ImGui::SameLine();
-        UIHelpers::HelpMarker("Time to continue recoil compensation after releasing trigger");
+        UIHelpers::HelpMarker("Time to continue stabilization after releasing");
         ImGui::TableNextColumn();
         ImGui::SetNextItemWidth(-1);
         int end_delay = profile.end_delay_ms;
@@ -235,23 +235,23 @@ static void draw_timing_settings()
     UIHelpers::EndCard();
 }
 
-static void draw_norecoil_status()
+static void draw_stabilizer_status()
 {
     auto& ctx = AppContext::getInstance();
 
-    UIHelpers::BeginCard("No Recoil");
+    UIHelpers::BeginCard("Stabilizer");
 
-    UIHelpers::BeautifulText("Compensate recoil using weapon profile settings.", UIHelpers::GetAccentColor(0.8f));
+    UIHelpers::BeautifulText("Input stabilization using profile settings.", UIHelpers::GetAccentColor(0.8f));
     UIHelpers::CompactSpacer();
 
     // Current key display
     std::string key_display;
-    if (ctx.config.button_norecoil.empty() || ctx.config.button_norecoil[0] == "None") {
+    if (ctx.config.button_stabilizer.empty() || ctx.config.button_stabilizer[0] == "None") {
         key_display = "None";
     } else {
-        for (size_t i = 0; i < ctx.config.button_norecoil.size(); ++i) {
+        for (size_t i = 0; i < ctx.config.button_stabilizer.size(); ++i) {
             if (i > 0) key_display += " + ";
-            key_display += ctx.config.button_norecoil[i];
+            key_display += ctx.config.button_stabilizer[i];
         }
     }
     ImGui::Text("Hotkey: %s", key_display.c_str());
@@ -260,7 +260,7 @@ static void draw_norecoil_status()
     UIHelpers::CompactSpacer();
 
     // Status indicator
-    bool is_active = ctx.norecoil_active.load();
+    bool is_active = ctx.stabilizer_active.load();
     if (is_active) {
         ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "Status: ACTIVE");
     } else {
@@ -269,7 +269,7 @@ static void draw_norecoil_status()
     UIHelpers::CompactSpacer();
 
     // Show current effective settings
-    auto* profile = ctx.config.getCurrentWeaponProfile();
+    auto* profile = ctx.config.getCurrentInputProfile();
     if (profile) {
         float strength = profile->base_strength;
         int scope = ctx.config.active_scope_magnification;
@@ -285,31 +285,32 @@ static void draw_norecoil_status()
         }
         strength *= profile->fire_rate_multiplier;
 
-        ImGui::TextColored(UIHelpers::GetAccentColor(0.9f), "Current Profile: %s", profile->weapon_name.c_str());
+        ImGui::TextColored(UIHelpers::GetAccentColor(0.9f), "Current Profile: %s", profile->profile_name.c_str());
         ImGui::Text("Effective Strength: %.1f px", strength);
-        ImGui::Text("Interval: %.1f ms", profile->recoil_ms);
+        ImGui::Text("Interval: %.1f ms", profile->interval_ms);
     } else {
-        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.5f, 1.0f), "No weapon profile selected");
+        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.5f, 1.0f), "No input profile selected");
     }
 
     UIHelpers::EndCard();
 }
 
+
 static void draw_scope_multipliers()
 {
     auto& ctx = AppContext::getInstance();
-    auto& profiles = ctx.config.weapon_profiles;
-    int active_idx = ctx.config.active_weapon_profile_index;
+    auto& profiles = ctx.config.input_profiles;
+    int active_idx = ctx.config.active_input_profile_index;
 
     if (profiles.empty() || active_idx < 0 || active_idx >= static_cast<int>(profiles.size())) {
         return;
     }
 
-    WeaponRecoilProfile& profile = profiles[active_idx];
+    InputProfile& profile = profiles[active_idx];
 
     UIHelpers::BeginCard("Scope Multipliers");
 
-    UIHelpers::BeautifulText("Adjust recoil compensation based on scope magnification.", UIHelpers::GetAccentColor(0.8f));
+    UIHelpers::BeautifulText("Adjust stabilization based on scope magnification.", UIHelpers::GetAccentColor(0.8f));
     UIHelpers::CompactSpacer();
 
     // Current scope indicator
@@ -418,15 +419,15 @@ static void draw_scope_multipliers()
     UIHelpers::EndCard();
 }
 
-void draw_recoil()
+void draw_stabilizer()
 {
-    draw_norecoil_status();
+    draw_stabilizer_status();
     UIHelpers::Spacer();
 
     draw_profile_selector();
     UIHelpers::Spacer();
 
-    draw_recoil_compensation();
+    draw_stabilizer_settings();
     UIHelpers::Spacer();
 
     draw_timing_settings();

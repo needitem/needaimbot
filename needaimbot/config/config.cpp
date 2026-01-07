@@ -72,7 +72,7 @@ bool Config::loadConfig(const std::string& filename)
         offset_step = 0.01f;
 
         auto_aim = false;
-        auto_shoot = false;
+        auto_action = false;
         ignore_up_aim = false;
 
 
@@ -151,8 +151,8 @@ bool Config::loadConfig(const std::string& filename)
         button_reload_config = splitString("F4");
         button_open_overlay = splitString("Home");
         button_disable_upward_aim = splitString("None");
-        button_auto_shoot = splitString("LeftMouseButton");
-        button_norecoil = splitString("None"); 
+        button_auto_action = splitString("LeftMouseButton");
+        button_stabilizer = splitString("None"); 
  
 
         
@@ -164,8 +164,8 @@ bool Config::loadConfig(const std::string& filename)
         head_class_name = "Head";
         class_settings.clear();
         class_settings.emplace_back(0, "Player", false);
-        class_settings.emplace_back(1, "Bot", false);
-        class_settings.emplace_back(2, "Weapon", true); 
+        class_settings.emplace_back(1, "NPC", false);
+        class_settings.emplace_back(2, "Item", true); 
         class_settings.emplace_back(3, "Outline", true);
         class_settings.emplace_back(4, "Dead Body", true);
         class_settings.emplace_back(5, "Hideout Human", false);
@@ -261,7 +261,7 @@ bool Config::loadConfig(const std::string& filename)
     // Batch load booleans
 
     auto_aim = get_bool_ini("Target", "auto_aim", false);
-    auto_shoot = get_bool_ini("Target", "auto_shoot", false);
+    auto_action = get_bool_ini("Target", "auto_action", false);
     ignore_up_aim = get_bool_ini("Target", "ignore_up_aim", false);
 
     crosshair_offset_x = static_cast<float>(get_double_ini("Target", "crosshair_offset_x", 0.0));
@@ -359,9 +359,9 @@ bool Config::loadConfig(const std::string& filename)
     button_reload_config = splitString(get_string_ini("Buttons", "button_reload_config", "F4"));
     button_open_overlay = splitString(get_string_ini("Buttons", "button_open_overlay", "Home"));
     button_disable_upward_aim = splitString(get_string_ini("Buttons", "button_disable_upward_aim", "None"));
-    button_auto_shoot = splitString(get_string_ini("Buttons", "button_auto_shoot", "LeftMouseButton"));
+    button_auto_action = splitString(get_string_ini("Buttons", "button_auto_action", "LeftMouseButton"));
     button_single_shot = splitString(get_string_ini("Buttons", "button_single_shot", "F8"));
-    button_norecoil = splitString(get_string_ini("Buttons", "button_norecoil", "None"));
+    button_stabilizer = splitString(get_string_ini("Buttons", "button_stabilizer", "None"));
  
 
     overlay_opacity = get_long_ini("Overlay", "overlay_opacity", 225);
@@ -400,8 +400,8 @@ bool Config::loadConfig(const std::string& filename)
     } else { 
         bool temp_allows[11];
         temp_allows[0] = true;  // Player - allow by default
-        temp_allows[1] = true;  // Bot - allow by default
-        temp_allows[2] = false; // Weapon - don't allow by default
+        temp_allows[1] = true;  // NPC - allow by default
+        temp_allows[2] = false; // Item - don't allow by default
         temp_allows[3] = false; // Outline - don't allow by default
         temp_allows[4] = false; // Dead Body - don't allow by default
         temp_allows[5] = true;  // Hideout Human - allow by default
@@ -412,8 +412,8 @@ bool Config::loadConfig(const std::string& filename)
         temp_allows[10] = false; // Third Person - don't allow by default
 
         class_settings.emplace_back(0, "Player", temp_allows[0]);
-        class_settings.emplace_back(1, "Bot", temp_allows[1]);
-        class_settings.emplace_back(2, "Weapon", temp_allows[2]);
+        class_settings.emplace_back(1, "NPC", temp_allows[1]);
+        class_settings.emplace_back(2, "Item", temp_allows[2]);
         class_settings.emplace_back(3, "Outline", temp_allows[3]);
         class_settings.emplace_back(4, "Dead Body", temp_allows[4]);
         class_settings.emplace_back(5, "Hideout Human", temp_allows[5]);
@@ -423,19 +423,19 @@ bool Config::loadConfig(const std::string& filename)
         class_settings.emplace_back(9, "Fire", temp_allows[9]);
         class_settings.emplace_back(10, "Third Person", temp_allows[10]);
     }
-    // Load weapon profiles from the config file
-    weapon_profiles.clear();
+    // Load input profiles from the config file
+    input_profiles.clear();
     
-    int weapon_count = get_long_ini("WeaponProfiles", "Count", 0);
-    if (weapon_count > 0) {
-        active_weapon_profile_index = get_long_ini("WeaponProfiles", "active_weapon_profile_index", 0);
-        current_weapon_name = get_string_ini("WeaponProfiles", "current_weapon_name", "Default");
+    int profile_count = get_long_ini("InputProfiles", "Count", 0);
+    if (profile_count > 0) {
+        active_input_profile_index = get_long_ini("InputProfiles", "active_input_profile_index", 0);
+        current_profile_name = get_string_ini("InputProfiles", "current_profile_name", "Default");
 
-        for (int i = 0; i < weapon_count; ++i) {
-            std::string section = "Weapon_" + std::to_string(i);
+        for (int i = 0; i < profile_count; ++i) {
+            std::string section = "Profile_" + std::to_string(i);
             
-            WeaponRecoilProfile profile;
-            profile.weapon_name = get_string_ini(section.c_str(), "weapon_name", "Default");
+            InputProfile profile;
+            profile.profile_name = get_string_ini(section.c_str(), "profile_name", "Default");
             profile.base_strength = static_cast<float>(get_double_ini(section.c_str(), "base_strength", 3.0));
             profile.fire_rate_multiplier = static_cast<float>(get_double_ini(section.c_str(), "fire_rate_multiplier", 1.0));
             profile.scope_mult_1x = static_cast<float>(get_double_ini(section.c_str(), "scope_mult_1x", 0.8));
@@ -446,15 +446,15 @@ bool Config::loadConfig(const std::string& filename)
             profile.scope_mult_8x = static_cast<float>(get_double_ini(section.c_str(), "scope_mult_8x", 1.8));
             profile.start_delay_ms = get_long_ini(section.c_str(), "start_delay_ms", 0);
             profile.end_delay_ms = get_long_ini(section.c_str(), "end_delay_ms", 0);
-            profile.recoil_ms = static_cast<float>(get_double_ini(section.c_str(), "recoil_ms", 10.0));
+            profile.interval_ms = static_cast<float>(get_double_ini(section.c_str(), "interval_ms", 10.0));
             
-            weapon_profiles.push_back(profile);
+            input_profiles.push_back(profile);
         }
     }
     
-    // Initialize default weapon profiles if none were loaded
-    if (weapon_profiles.empty()) {
-        initializeDefaultWeaponProfiles();
+    // Initialize default input profiles if none were loaded
+    if (input_profiles.empty()) {
+        initializeDefaultInputProfiles();
     }
     return true;
 }
@@ -508,7 +508,7 @@ bool Config::saveConfig(const std::string& filename)
     file << "crosshair_offset_x = " << crosshair_offset_x << "\n";
     file << "crosshair_offset_y = " << crosshair_offset_y << "\n";
     file << "auto_aim = " << (auto_aim ? "true" : "false") << "\n";
-    file << "auto_shoot = " << (auto_shoot ? "true" : "false") << "\n";
+    file << "auto_action = " << (auto_action ? "true" : "false") << "\n";
     file << "ignore_up_aim = " << (ignore_up_aim ? "true" : "false") << "\n";
     file << "enable_aim_shoot_offset = " << (enable_aim_shoot_offset ? "true" : "false") << "\n";
     file << "aim_shoot_offset_x = " << aim_shoot_offset_x << "\n";
@@ -566,7 +566,7 @@ bool Config::saveConfig(const std::string& filename)
     file << "pid_integral_max = " << pid_integral_max << "\n";
     file << "pid_derivative_max = " << pid_derivative_max << "\n\n";
 
-    file << "[Recoil]\n";
+    file << "[Stabilizer]\n";
     file << "active_scope_magnification = " << active_scope_magnification << "\n\n";
 
     
@@ -615,9 +615,9 @@ bool Config::saveConfig(const std::string& filename)
     file << "button_reload_config = " << joinStrings(button_reload_config) << "\n";
     file << "button_open_overlay = " << joinStrings(button_open_overlay) << "\n";
     file << "button_disable_upward_aim = " << joinStrings(button_disable_upward_aim) << "\n";
-    file << "button_auto_shoot = " << joinStrings(button_auto_shoot) << "\n";
+    file << "button_auto_action = " << joinStrings(button_auto_action) << "\n";
     file << "button_single_shot = " << joinStrings(button_single_shot) << "\n";
-    file << "button_norecoil = " << joinStrings(button_norecoil) << "\n";
+    file << "button_stabilizer = " << joinStrings(button_stabilizer) << "\n";
  
 
     file << "[Overlay]\n";
@@ -649,16 +649,16 @@ bool Config::saveConfig(const std::string& filename)
 
     
     
-    // Save weapon profiles with each profile
-    file << "[WeaponProfiles]\n";
-    file << "Count = " << weapon_profiles.size() << "\n";
-    file << "active_weapon_profile_index = " << active_weapon_profile_index << "\n";
-    file << "current_weapon_name = " << current_weapon_name << "\n\n";
+    // Save input profiles with each profile
+    file << "[InputProfiles]\n";
+    file << "Count = " << input_profiles.size() << "\n";
+    file << "active_input_profile_index = " << active_input_profile_index << "\n";
+    file << "current_profile_name = " << current_profile_name << "\n\n";
 
-    for (size_t i = 0; i < weapon_profiles.size(); ++i) {
-        const auto& profile = weapon_profiles[i];
-        file << "[Weapon_" << i << "]\n";
-        file << "weapon_name = " << profile.weapon_name << "\n";
+    for (size_t i = 0; i < input_profiles.size(); ++i) {
+        const auto& profile = input_profiles[i];
+        file << "[Profile_" << i << "]\n";
+        file << "profile_name = " << profile.profile_name << "\n";
         file << std::fixed << std::setprecision(6);
         file << "base_strength = " << profile.base_strength << "\n";
         file << "fire_rate_multiplier = " << profile.fire_rate_multiplier << "\n";
@@ -670,7 +670,7 @@ bool Config::saveConfig(const std::string& filename)
         file << "scope_mult_8x = " << profile.scope_mult_8x << "\n";
         file << "start_delay_ms = " << profile.start_delay_ms << "\n";
         file << "end_delay_ms = " << profile.end_delay_ms << "\n";
-        file << "recoil_ms = " << profile.recoil_ms << "\n\n";
+        file << "interval_ms = " << profile.interval_ms << "\n\n";
     }
     
     file.close();
@@ -791,86 +791,86 @@ Config::Config()
     // Weapon profiles are now loaded from the profile INI file itself
 }
 
-void Config::initializeDefaultWeaponProfiles()
+void Config::initializeDefaultInputProfiles()
 {
-    if (weapon_profiles.empty()) {
-        weapon_profiles.push_back(WeaponRecoilProfile("Default", 3.0f, 1.0f));
-        weapon_profiles.push_back(WeaponRecoilProfile("AK47", 4.5f, 1.2f));
-        weapon_profiles.push_back(WeaponRecoilProfile("M4A4", 3.5f, 1.1f));
-        weapon_profiles.push_back(WeaponRecoilProfile("AWP", 2.0f, 0.8f));
-        weapon_profiles.push_back(WeaponRecoilProfile("MP5", 2.5f, 1.3f));
+    if (input_profiles.empty()) {
+        input_profiles.push_back(InputProfile("Default", 3.0f, 1.0f));
+        input_profiles.push_back(InputProfile("Profile1", 4.5f, 1.2f));
+        input_profiles.push_back(InputProfile("Profile2", 3.5f, 1.1f));
+        input_profiles.push_back(InputProfile("Profile3", 2.0f, 0.8f));
+        input_profiles.push_back(InputProfile("Profile4", 2.5f, 1.3f));
         
-        active_weapon_profile_index = 0;
-        current_weapon_name = "Default";
+        active_input_profile_index = 0;
+        current_profile_name = "Default";
     }
 }
 
-bool Config::addWeaponProfile(const WeaponRecoilProfile& profile)
+bool Config::addInputProfile(const InputProfile& profile)
 {
-    for (const auto& existing : weapon_profiles) {
-        if (existing.weapon_name == profile.weapon_name) {
+    for (const auto& existing : input_profiles) {
+        if (existing.profile_name == profile.profile_name) {
             return false;
         }
     }
-    weapon_profiles.push_back(profile);
+    input_profiles.push_back(profile);
     return true;
 }
 
-bool Config::removeWeaponProfile(const std::string& weapon_name)
+bool Config::removeInputProfile(const std::string& profile_name)
 {
-    if (weapon_name == "Default") return false;
+    if (profile_name == "Default") return false;
     
-    auto it = std::find_if(weapon_profiles.begin(), weapon_profiles.end(),
-        [&weapon_name](const WeaponRecoilProfile& profile) {
-            return profile.weapon_name == weapon_name;
+    auto it = std::find_if(input_profiles.begin(), input_profiles.end(),
+        [&profile_name](const InputProfile& profile) {
+            return profile.profile_name == profile_name;
         });
     
-    if (it != weapon_profiles.end()) {
-        weapon_profiles.erase(it);
-        if (current_weapon_name == weapon_name) {
-            setActiveWeaponProfile("Default");
+    if (it != input_profiles.end()) {
+        input_profiles.erase(it);
+        if (current_profile_name == profile_name) {
+            setActiveInputProfile("Default");
         }
         return true;
     }
     return false;
 }
 
-WeaponRecoilProfile* Config::getWeaponProfile(const std::string& weapon_name)
+InputProfile* Config::getInputProfile(const std::string& profile_name)
 {
-    for (auto& profile : weapon_profiles) {
-        if (profile.weapon_name == weapon_name) {
+    for (auto& profile : input_profiles) {
+        if (profile.profile_name == profile_name) {
             return &profile;
         }
     }
     return nullptr;
 }
 
-WeaponRecoilProfile* Config::getCurrentWeaponProfile()
+InputProfile* Config::getCurrentInputProfile()
 {
-    if (active_weapon_profile_index >= 0 && 
-        active_weapon_profile_index < static_cast<int>(weapon_profiles.size())) {
-        return &weapon_profiles[active_weapon_profile_index];
+    if (active_input_profile_index >= 0 && 
+        active_input_profile_index < static_cast<int>(input_profiles.size())) {
+        return &input_profiles[active_input_profile_index];
     }
     return nullptr;
 }
 
-bool Config::setActiveWeaponProfile(const std::string& weapon_name)
+bool Config::setActiveInputProfile(const std::string& profile_name)
 {
-    for (size_t i = 0; i < weapon_profiles.size(); ++i) {
-        if (weapon_profiles[i].weapon_name == weapon_name) {
-            active_weapon_profile_index = static_cast<int>(i);
-            current_weapon_name = weapon_name;
+    for (size_t i = 0; i < input_profiles.size(); ++i) {
+        if (input_profiles[i].profile_name == profile_name) {
+            active_input_profile_index = static_cast<int>(i);
+            current_profile_name = profile_name;
             return true;
         }
     }
     return false;
 }
 
-std::vector<std::string> Config::getWeaponProfileNames() const
+std::vector<std::string> Config::getInputProfileNames() const
 {
     std::vector<std::string> names;
-    for (const auto& profile : weapon_profiles) {
-        names.push_back(profile.weapon_name);
+    for (const auto& profile : input_profiles) {
+        names.push_back(profile.profile_name);
     }
     return names;
 }

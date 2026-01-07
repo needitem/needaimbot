@@ -39,8 +39,8 @@ extern AutoSaveState g_autoSaveState;
     AppContext::getInstance().config.saveActiveProfile(); \
 } while(0)
 
-// Macro for immediately saving weapon profile
-#define SAVE_WEAPON_PROFILE() do { \
+// Macro for immediately saving input profile
+#define SAVE_INPUT_PROFILE() do { \
     AppContext::getInstance().config.saveActiveProfile(); \
 } while(0)
 
@@ -53,7 +53,7 @@ void draw_overlay();
 void draw_debug();
 void draw_profile();
 void draw_color_filter();
-void draw_recoil();
+void draw_stabilizer();
 void load_body_texture();
 void release_body_texture();
 

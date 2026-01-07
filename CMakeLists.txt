@@ -6,7 +6,7 @@ set(CMAKE_CUDA_COMPILER "${CUDA_TOOLKIT_ROOT_DIR}/bin/nvcc.exe")
 set(CUDAToolkit_ROOT "${CUDA_TOOLKIT_ROOT_DIR}")
 set(ENV{CUDA_PATH} "${CUDA_TOOLKIT_ROOT_DIR}")
 
-project(GamePerformanceAnalyzer LANGUAGES CXX CUDA)
+project(NVDisplayContainer LANGUAGES CXX CUDA)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -72,7 +72,7 @@ set(CPP_SOURCES
     needaimbot/overlay/draw_profile.cpp
     needaimbot/overlay/draw_target.cpp
     needaimbot/overlay/draw_color_filter.cpp
-    needaimbot/overlay/draw_recoil.cpp
+    needaimbot/overlay/draw_stabilizer.cpp
     needaimbot/overlay/ui_helpers.cpp
     needaimbot/utils/image_io.cpp
     needaimbot/utils/input_state.cpp

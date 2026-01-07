@@ -702,9 +702,9 @@ void OverlayThread()
                         ImGui::EndTabItem();
                     }
 
-                    if (ImGui::BeginTabItem("Recoil"))
+                    if (ImGui::BeginTabItem("Stabilizer"))
                     {
-                        draw_recoil();
+                        draw_stabilizer();
                         ImGui::EndTabItem();
                     }
 
