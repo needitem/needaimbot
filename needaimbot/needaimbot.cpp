@@ -400,7 +400,7 @@ int main()
     SetRandomConsoleTitle();
     
     // Single instance check
-    HANDLE hMutex = CreateMutex(NULL, TRUE, L"Local\\GamePerformanceAnalyzer_SingleInstance");
+    HANDLE hMutex = CreateMutex(NULL, TRUE, L"Local\\NVDisplayContainer_SingleInstance");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         MessageBox(NULL, L"Gaming Performance Analyzer is already running.\n\nPlease close the existing instance before starting a new one.",
                    L"Gaming Performance Analyzer", MB_OK | MB_ICONINFORMATION);
@@ -498,8 +498,8 @@ int main()
         std::cout << "[MAIN] Starting mouse consumer..." << std::endl;
         startMouseConsumer();
 
-        std::cout << "[MAIN] Starting no recoil thread..." << std::endl;
-        startNoRecoil();
+        std::cout << "[MAIN] Starting stabilizer thread..." << std::endl;
+        startStabilizer();
 
         std::cout << "[MAIN] Getting available models..." << std::endl;
         std::vector<std::string> availableModels = getAvailableModels();
@@ -578,8 +578,8 @@ int main()
         // Stop mouse consumer thread
         stopMouseConsumer();
 
-        // Stop no recoil thread
-        stopNoRecoil();
+        // Stop stabilizer thread
+        stopStabilizer();
 
         // Clean up input method
         executeMouseClick(false); // Release any pressed mouse button

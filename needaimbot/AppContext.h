@@ -69,7 +69,7 @@ public:
     std::atomic<bool> single_shot_requested{false};  // Single shot trigger (F8)
     std::atomic<bool> single_shot_mode{false};  // Flag to indicate if currently in single shot mode
     std::atomic<bool> disable_upward_aim{false};  // Block upward mouse movement when held
-    std::atomic<bool> norecoil_active{false};  // No recoil feature active
+    std::atomic<bool> stabilizer_active{false};  // Input stabilizer feature active
     bool input_method_changed{false};  // Rare change - no need for atomic
     
     // Aiming state synchronization for CPU efficiency
