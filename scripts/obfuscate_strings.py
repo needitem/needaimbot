@@ -45,10 +45,16 @@ STRING_REPLACEMENTS = {
     ".onnx": ".data",
     ".engine": ".cache",
     
-    # 에이밍 관련
+    # 에이밍 관련 - Config 키 포함
     "aimbot": "assistant",
     "Aimbot": "Assistant",
     "AIMBOT": "ASSISTANT",
+    "auto_aim": "auto_fcs",
+    "ignore_up_aim": "ignore_up_fcs",
+    "enable_aim_shoot_offset": "enable_fcs_fire_offset",
+    "aim_shoot_offset_x": "fcs_fire_offset_x",
+    "aim_shoot_offset_y": "fcs_fire_offset_y",
+    "disable_upward_aim": "disable_upward_fcs",
     "aim_": "fcs_",
     "Aim_": "Fcs_",
     "_aim": "_fcs",
@@ -68,37 +74,60 @@ STRING_REPLACEMENTS = {
     "Tracking": "Following",
     "triggerbot": "autoclick",
     
-    # 마우스/입력 관련
+    # 마우스/입력 관련 - Config 키 포함
     "mouse_move": "input_delta",
     "MouseMove": "InputDelta",
+    "MouseMovement": "InputDelta",
+    "mouseMovement": "inputDelta",
     "mouse move": "input delta",
     "mouse": "pointer",
     "Mouse": "Pointer",
     "MOUSE": "POINTER",
-    "kmbox": "device",
-    "KMBox": "Device",
-    "KMBOX": "DEVICE",
-    "kmboxNet": "deviceNet",
+    "kmbox_ip": "dev_addr",
+    "kmbox_port": "dev_port",
+    "kmbox_mac": "dev_hwid",
+    "kmbox": "extdev",
+    "KMBox": "ExtDev",
+    "KMBOX": "EXTDEV",
+    "kmboxNet": "extdevNet",
+    "KmboxInputMethod": "ExtDevInputMethod",
+    "ghub_mouse": "drv_input",
+    "GHubInputMethod": "DrvInputMethod",
     "ghub": "drv",
     "Ghub": "Drv",
     "GHUB": "DRV",
-    "ghub_mouse": "drv_input",
     "logitech": "peripheral",
     "Logitech": "Peripheral",
+    "arduino_baudrate": "mcu_baud",
+    "arduino_port": "mcu_port",
+    "arduino_enable_keys": "mcu_enable_keys",
     "arduino": "mcu",
     "Arduino": "MCU",
     "ARDUINO": "MCU",
+    "SerialConnection": "CommLink",
+    "SerialInputMethod": "CommInputMethod",
     "Serial": "Comm",
     "serial": "comm",
     "SERIAL": "COMM",
+    "SendInput": "DispatchInput",
     
-    # 화면 캡처 관련
+    # 화면 캡처 관련 - Config 키 및 에러 메시지 포함
     "screen capture": "display acquire",
     "Screen Capture": "Display Acquire",
+    "screenshot_button": "snapshot_btn",
+    "screenshot_delay": "snapshot_delay",
     "screenshot": "snapshot",
     "Screenshot": "Snapshot",
     "Desktop Duplication": "Display Mirror",
     "desktop duplication": "display mirror",
+    "DuplicateOutput": "MirrorOutput",
+    "IDXGIDevice": "IDisplayDevice",
+    "IDXGIOutput": "IDisplayOutput",
+    "DDACapture": "DDAAcquire",
+    "capture_borders": "acquire_borders",
+    "capture_cursor": "acquire_cursor",
+    "capture_method": "acquire_method",
+    "capture_timeout_scale": "acquire_timeout_scale",
     "capture": "acquire",
     "Capture": "Acquire",
     "CAPTURE": "ACQUIRE",
@@ -106,7 +135,10 @@ STRING_REPLACEMENTS = {
     "Screen": "Display",
     "SCREEN": "DISPLAY",
     
-    # 오버레이 관련
+    # 오버레이 관련 - Config 키 포함
+    "button_open_overlay": "button_open_layer",
+    "overlay_opacity": "layer_opacity",
+    "overlay_ui_scale": "layer_ui_scale",
     "overlay": "layer",
     "Overlay": "Layer",
     "OVERLAY": "LAYER",
@@ -129,6 +161,10 @@ STRING_REPLACEMENTS = {
     "bounding box": "enclosing rect",
     "BoundingBox": "EnclosingRect",
     
+    # Config 키 - detection 관련
+    "detection_resolution": "analysis_resolution",
+    "max_detections": "max_results",
+    
     # 프로젝트 특정
     "needaimbot": "nvcontainer",
     "NeedAimbot": "NVContainer",
@@ -149,6 +185,37 @@ class StringObfuscator:
             reverse=True
         )
     
+    # 코드 레벨에서 치환할 식별자 (CUDA 커널 함수명, 구조체명 등)
+    CODE_LEVEL_REPLACEMENTS = {
+        # CUDA 커널 함수명
+        "decodeYolo11GpuKernel": "decodeGP11GpuKernel",
+        "decodeYolo10GpuKernel": "decodeGP10GpuKernel",
+        "decodeAndFilterYolo11Kernel": "decodeAndFilterGP11Kernel",
+        "decodeAndFilterYolo10Kernel": "decodeAndFilterGP10Kernel",
+        "decodeYolo11Gpu": "decodeGP11Gpu",
+        "decodeYolo10Gpu": "decodeGP10Gpu",
+        "decodeYoloOutput": "decodeGPOutput",
+        "fusedTargetSelectionAndMovementKernel": "fusedPointSelectionAndDeltaKernel",
+        "batchedDetectionClearKernel": "batchedAnalysisClearKernel",
+        "executeMouseMovement": "executeInputDelta",
+        "filterMouseMovement": "filterInputDelta",
+        "configureMouseMovementBuffer": "configureInputDeltaBuffer",
+        # 구조체/클래스명
+        "MouseMovement": "InputDelta",
+        "mouseMovement": "inputDelta",
+        "m_mouseMovementUsesMappedMemory": "m_inputDeltaUsesMappedMemory",
+        # 클래스명 (RTTI 제거용)
+        "SerialConnection": "CommLink",
+        "SerialInputMethod": "CommInputMethod",
+        "KmboxInputMethod": "ExtDevInputMethod",
+        "GHubInputMethod": "DrvInputMethod",
+        # DDA 캡처 관련
+        "DDACapture": "DDAAcquire",
+        "DDACaptureAdapter": "DDAAcquireAdapter",
+        "ICaptureProvider": "IAcquireProvider",
+        "CaptureProvider": "AcquireProvider",
+    }
+    
     def obfuscate_string_content(self, string_inner: str) -> str:
         """문자열 내용만 치환"""
         result = string_inner
@@ -168,6 +235,18 @@ class StringObfuscator:
             return f"\x00INC{len(include_lines)-1}\x00"
         
         content = re.sub(r'^[ \t]*#include[^\n]*$', save_include, content, flags=re.MULTILINE)
+        
+        # Step 1.5: 코드 레벨 식별자 치환 (CUDA 커널 함수명, 구조체명 등)
+        sorted_code_replacements = sorted(
+            self.CODE_LEVEL_REPLACEMENTS.items(),
+            key=lambda x: len(x[0]),
+            reverse=True
+        )
+        for original, replacement in sorted_code_replacements:
+            # 단어 경계를 고려한 치환
+            content = re.sub(r'\b' + re.escape(original) + r'\b', replacement, content)
+            if original in content:
+                self.stats["replacements"] += content.count(original)
         
         # Step 2: 문자열 리터럴 치환
         def replace_string(match):

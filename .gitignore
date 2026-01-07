@@ -45,3 +45,6 @@ needaimbot/imgui.ini
 .claude/
 nul
 .serena/
+
+build_obf_headless/
+needaimbot_obf/
