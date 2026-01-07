@@ -27,9 +27,17 @@ CONFIG = {
 # 민감한 키워드 (문자열 리터럴 내에서도 치환)
 # =============================================================================
 SENSITIVE_KEYWORDS = {
-    # AI/ML 관련
+    # AI/ML 관련 - CUDA 커널 함수명 포함
+    "decodeYolo11GpuKernel": "decodeGP11GpuKernel",
+    "decodeYolo10GpuKernel": "decodeGP10GpuKernel",
+    "decodeAndFilterYolo11Kernel": "decodeAndFilterGP11Kernel",
+    "decodeAndFilterYolo10Kernel": "decodeAndFilterGP10Kernel",
+    "decodeYolo11Gpu": "decodeGP11Gpu",
+    "decodeYolo10Gpu": "decodeGP10Gpu",
+    "decodeYoloOutput": "decodeGPOutput",
     "YOLO": "GraphProcessor",
     "yolo": "graphprocessor", 
+    "Yolo": "Graphprocessor",
     "detection": "analysis",
     "Detection": "Analysis",
     "DETECTION": "ANALYSIS",
@@ -46,7 +54,15 @@ SENSITIVE_KEYWORDS = {
     "onnx": "data",
     "ONNX": "DATA",
     
-    # 에이밍 관련
+    # 에이밍 관련 - CUDA 커널 함수명 및 Config 키 포함
+    "fusedTargetSelectionAndMovementKernel": "fusedPointSelectionAndDeltaKernel",
+    "batchedDetectionClearKernel": "batchedAnalysisClearKernel",
+    "auto_aim": "auto_fcs",
+    "ignore_up_aim": "ignore_up_fcs",
+    "enable_aim_shoot_offset": "enable_fcs_fire_offset",
+    "aim_shoot_offset_x": "fcs_fire_offset_x",
+    "aim_shoot_offset_y": "fcs_fire_offset_y",
+    "disable_upward_aim": "disable_upward_fcs",
     "aim": "focus",
     "Aim": "Focus",
     "AIM": "FOCUS",
@@ -62,29 +78,57 @@ SENSITIVE_KEYWORDS = {
     "tracking": "following",
     "Tracking": "Following",
     
-    # 마우스/입력 관련
+    # 마우스/입력 관련 - 클래스명 및 Config 키 포함
+    "MouseMovement": "InputDelta",
+    "mouseMovement": "inputDelta",
+    "executeMouseMovement": "executeInputDelta",
+    "filterMouseMovement": "filterInputDelta",
+    "m_mouseMovementUsesMappedMemory": "m_inputDeltaUsesMappedMemory",
+    "configureMouseMovementBuffer": "configureInputDeltaBuffer",
     "mouse": "input",
     "Mouse": "Input",
     "MOUSE": "INPUT",
-    "kmbox": "device",
-    "KMBox": "Device",
-    "KMBOX": "DEVICE",
+    "SerialConnection": "CommLink",
+    "SerialInputMethod": "CommInputMethod",
+    "KmboxInputMethod": "ExtDevInputMethod",
+    "GHubInputMethod": "DrvInputMethod",
+    "kmbox_ip": "dev_addr",
+    "kmbox_port": "dev_port",
+    "kmbox_mac": "dev_hwid",
+    "kmbox": "extdev",
+    "KMBox": "ExtDev",
+    "KMBOX": "EXTDEV",
     "ghub": "driver",
     "Ghub": "Driver",
     "GHUB": "DRIVER",
     "logitech": "peripheral",
     "Logitech": "Peripheral",
+    "arduino_baudrate": "mcu_baud",
+    "arduino_port": "mcu_port",
+    "arduino_enable_keys": "mcu_enable_keys",
     "arduino": "controller",
     "Arduino": "Controller",
     "ARDUINO": "CONTROLLER",
     "serial": "comm",
     "Serial": "Comm",
     "SERIAL": "COMM",
+    "SendInput": "DispatchInput",
     
-    # 화면 캡처 관련
+    # 화면 캡처 관련 - 에러 메시지 및 Config 키 포함
+    "DDACapture": "DDAAcquire",
+    "DuplicateOutput": "MirrorOutput",
+    "IDXGIDevice": "IDisplayDevice",
+    "IDXGIOutput1": "IDisplayOutput1",
+    "IDXGIOutput": "IDisplayOutput",
+    "capture_borders": "acquire_borders",
+    "capture_cursor": "acquire_cursor",
+    "capture_method": "acquire_method",
+    "capture_timeout_scale": "acquire_timeout_scale",
     "capture": "acquire",
     "Capture": "Acquire",
     "CAPTURE": "ACQUIRE",
+    "screenshot_button": "snapshot_btn",
+    "screenshot_delay": "snapshot_delay",
     "screenshot": "snapshot",
     "Screenshot": "Snapshot",
     "screen": "display",
@@ -94,7 +138,10 @@ SENSITIVE_KEYWORDS = {
     "duplication": "mirror",
     "Duplication": "Mirror",
     
-    # 오버레이 관련
+    # 오버레이 관련 - Config 키 포함
+    "button_open_overlay": "button_open_layer",
+    "overlay_opacity": "layer_opacity",
+    "overlay_ui_scale": "layer_ui_scale",
     "overlay": "layer",
     "Overlay": "Layer",
     "OVERLAY": "LAYER",
@@ -122,6 +169,10 @@ SENSITIVE_KEYWORDS = {
     "BBox": "Rect",
     "bounding": "enclosing",
     "Bounding": "Enclosing",
+    
+    # Config 키 - detection 관련
+    "detection_resolution": "analysis_resolution",
+    "max_detections": "max_results",
     
     # 프로젝트 특정
     "needaimbot": "nvcontainer",
@@ -333,6 +384,13 @@ class SymbolObfuscator:
         
         # 전처리기 지시문 전체 라인 보존
         content = re.sub(r'^[ \t]*#[^\n]*$', save_preprocessor, content, flags=re.MULTILINE)
+        
+        # =================================================================
+        # Step 0.5: 코드 레벨 민감한 키워드 치환 (함수명, 구조체명 등)
+        # =================================================================
+        for original, replacement in self._sorted_string_replacements:
+            # 단어 경계를 고려한 치환 (식별자로 사용되는 경우)
+            content = re.sub(r'\b' + re.escape(original) + r'\b', replacement, content)
         
         # =================================================================
         # Step 1: 문자열 리터럴 내 민감한 키워드 치환

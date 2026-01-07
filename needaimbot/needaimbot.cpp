@@ -16,7 +16,9 @@
 #include "mouse/mouse.h"
 #include "needaimbot.h"
 #include "keyboard/keyboard_listener.h"
+#ifndef HEADLESS_BUILD
 #include "overlay/overlay.h"
+#endif
 #include "mouse/input_drivers/SerialConnection.h"
 #include "mouse/input_drivers/ghub.h"
 #include "mouse/input_drivers/InputMethod.h"
@@ -57,19 +59,34 @@ bool initializeInputMethod();
 
 // Combined UI thread function for keyboard + overlay
 void combinedUIThread() {
-    // Launch keyboard and overlay in alternating pattern
+    // Launch keyboard thread always
     std::thread keyboardThread(keyboardListener);
-    std::thread overlayThread(OverlayThread);
+    
+#ifndef HEADLESS_BUILD
+    // Only launch overlay if not in headless mode (runtime check)
+    std::thread overlayThread;
+    if (!g_headless_mode) {
+        overlayThread = std::thread(OverlayThread);
+    }
+#endif
     
     // Set thread names for debugging
     #ifdef _WIN32
     SetThreadDescription(keyboardThread.native_handle(), L"KeyboardListener");
-    SetThreadDescription(overlayThread.native_handle(), L"OverlayRenderer");
+#ifndef HEADLESS_BUILD
+    if (!g_headless_mode && overlayThread.joinable()) {
+        SetThreadDescription(overlayThread.native_handle(), L"OverlayRenderer");
+    }
+#endif
     #endif
     
-    // Wait for both to complete
+    // Wait for threads to complete
     keyboardThread.join();
-    overlayThread.join();
+#ifndef HEADLESS_BUILD
+    if (!g_headless_mode && overlayThread.joinable()) {
+        overlayThread.join();
+    }
+#endif
 }
 
 namespace {
@@ -280,13 +297,16 @@ static BOOL WINAPI consoleHandler(DWORD signal) {
 }
 
 // Forward declaration
-int main();
+int main(int argc, char* argv[]);
+
+// Global headless mode flag (runtime)
+static bool g_headless_mode = false;
 
 // Alternative entry point for Windows subsystem (no console window)
 #ifdef _WINDOWS
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
-    return main();
+    return main(__argc, __argv);
 }
 #endif
 
@@ -368,8 +388,16 @@ LONG WINAPI UnhandledExceptionHandler(EXCEPTION_POINTERS* pExceptionPointers) {
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
-int main()
+int main(int argc, char* argv[])
 {
+    // Parse command line arguments
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--headless") == 0 || strcmp(argv[i], "-h") == 0) {
+            g_headless_mode = true;
+            std::cout << "[MAIN] Running in HEADLESS mode (no overlay)" << std::endl;
+        }
+    }
+
     // Install crash handler
     SetUnhandledExceptionFilter(UnhandledExceptionHandler);
 
