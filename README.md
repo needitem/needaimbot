@@ -30,7 +30,7 @@
 *   **Software**:
     *   [Visual Studio 2022](https://visualstudio.microsoft.com/vs/) (C++ Desktop Development).
     *   [CMake 3.20+](https://cmake.org/download/).
-    *   [CUDA Toolkit 12.x](https://developer.nvidia.com/cuda-downloads).
+    *   [CUDA Toolkit 13.1](https://developer.download.nvidia.com/compute/cuda/13.1.0/network_installers/cuda_13.1.0_windows_network.exe).
     *   TensorRT 10.14.1.48 (included in `needaimbot/modules/`).
 
 ## Installation
