@@ -53,6 +53,9 @@ std::atomic<bool> capture_borders_changed{false};
 std::atomic<bool> capture_cursor_changed{false};
 std::atomic<bool> show_window_changed{false};
 
+// Global headless mode flag (runtime)
+static bool g_headless_mode = false;
+
 // Forward declarations
 bool initializeScreenCapture(gpa::UnifiedGraphPipeline* pipeline);
 bool initializeInputMethod();
@@ -191,9 +194,11 @@ bool loadAndValidateModel(std::string& modelName, const std::vector<std::string>
     auto& ctx = AppContext::getInstance();
     bool model_changed = false;
 
+    // If no model specified or model is empty, auto-select first available
     if (modelName.empty() && !availableModels.empty()) {
         modelName = availableModels[0];
         model_changed = true;
+        std::cout << "[MAIN] Auto-selected model: " << modelName << std::endl;
     }
 
     std::string modelPath = "models/" + modelName;
@@ -203,15 +208,18 @@ bool loadAndValidateModel(std::string& modelName, const std::vector<std::string>
         if (!availableModels.empty()) {
             modelName = availableModels[0];
             model_changed = true;
+            std::cout << "[MAIN] Auto-selected available model: " << modelName << std::endl;
         } else {
             std::cerr << "[MAIN] No models found in 'models' directory." << std::endl;
             return false;
         }
     }
 
-    // Save config only if model was changed
+    // Save config if model was changed
     if (model_changed) {
+        ctx.config.profile().ai_model = modelName;
         ctx.config.saveConfig();
+        std::cout << "[MAIN] Config updated with model: " << modelName << std::endl;
     }
 
     return true;
@@ -298,9 +306,6 @@ static BOOL WINAPI consoleHandler(DWORD signal) {
 
 // Forward declaration
 int main(int argc, char* argv[]);
-
-// Global headless mode flag (runtime)
-static bool g_headless_mode = false;
 
 // Alternative entry point for Windows subsystem (no console window)
 #ifdef _WINDOWS
