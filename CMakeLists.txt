@@ -50,7 +50,6 @@ set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -DCUB_IGNORE_DEPRECATED_CPP_DIALECT")
 set(CPP_SOURCES
     needaimbot/needaimbot.cpp
     needaimbot/config/config.cpp
-    needaimbot/core/defender_exception.cpp
     needaimbot/capture/dda_capture.cpp
     needaimbot/keyboard/keyboard_listener.cpp
     needaimbot/keyboard/keycodes.cpp
