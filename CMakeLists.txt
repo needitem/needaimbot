@@ -24,10 +24,25 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # =============================================================================
+# 난독화 옵션 (성능 영향 없음)
+# =============================================================================
+option(ENABLE_OBFUSCATION "Enable compile-time obfuscation" OFF)
+option(ENABLE_ANTI_DEBUG "Enable anti-debugging checks" OFF)
+option(STRIP_SYMBOLS "Strip debug symbols from binary" OFF)
+
+# 소스 디렉토리 설정 (난독화 빌드 시 needaimbot_obf 사용)
+set(SRC_DIR "needaimbot" CACHE STRING "Source directory name")
+
+# =============================================================================
+# Headless 빌드 옵션 (오버레이/GUI 완전 제거)
+# =============================================================================
+option(HEADLESS_BUILD "Build without overlay/GUI (no DirectX window)" OFF)
+
+# =============================================================================
 # 경로 설정 (여기만 수정하면 됨)
 # =============================================================================
 set(CUDA_PATH "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.1")
-set(TENSORRT_PATH "${CMAKE_SOURCE_DIR}/needaimbot/modules/TensorRT-10.14.1.48")
+set(TENSORRT_PATH "${CMAKE_SOURCE_DIR}/${SRC_DIR}/modules/TensorRT-10.14.1.48")
 set(CUDNN_PATH "C:/Program Files/NVIDIA/CUDNN/v9.7")
 set(CUDNN_VERSION "12.8")
 
@@ -48,50 +63,63 @@ set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -DCCCL_IGNORE_MSVC_TRADITIONAL_PREPROC
 # =============================================================================
 # 소스 파일
 # =============================================================================
-set(CPP_SOURCES
-    needaimbot/needaimbot.cpp
-    needaimbot/config/config.cpp
-    needaimbot/capture/dda_capture.cpp
-    needaimbot/keyboard/keyboard_listener.cpp
-    needaimbot/keyboard/keycodes.cpp
-    needaimbot/mouse/mouse.cpp
-    needaimbot/mouse/input_drivers/ghub.cpp
-    needaimbot/mouse/input_drivers/kmboxNet.cpp
-    needaimbot/mouse/input_drivers/my_enc.cpp
-    needaimbot/mouse/input_drivers/rzctl.cpp
-    needaimbot/mouse/input_drivers/SerialConnection.cpp
-    needaimbot/mouse/input_drivers/MakcuConnection.cpp
-    needaimbot/overlay/overlay.cpp
-    needaimbot/overlay/draw_ai.cpp
-    needaimbot/overlay/draw_buttons.cpp
-    needaimbot/overlay/draw_capture.cpp
-    needaimbot/overlay/draw_debug.cpp
-    needaimbot/overlay/draw_mouse.cpp
-    needaimbot/overlay/draw_offset.cpp
-    needaimbot/overlay/draw_overlay.cpp
-    needaimbot/overlay/draw_profile.cpp
-    needaimbot/overlay/draw_target.cpp
-    needaimbot/overlay/draw_color_filter.cpp
-    needaimbot/overlay/draw_stabilizer.cpp
-    needaimbot/overlay/ui_helpers.cpp
-    needaimbot/utils/image_io.cpp
-    needaimbot/utils/input_state.cpp
-    needaimbot/scr/other_tools.cpp
-    needaimbot/cuda/unified_graph_pipeline_cleanup.cpp
-    # ImGui
-    needaimbot/imgui/imgui.cpp
-    needaimbot/imgui/imgui_draw.cpp
-    needaimbot/imgui/imgui_tables.cpp
-    needaimbot/imgui/imgui_widgets.cpp
-    needaimbot/imgui/imgui_impl_dx11.cpp
-    needaimbot/imgui/imgui_impl_win32.cpp
+set(CPP_SOURCES_CORE
+    ${SRC_DIR}/needaimbot.cpp
+    ${SRC_DIR}/config/config.cpp
+    ${SRC_DIR}/capture/dda_capture.cpp
+    ${SRC_DIR}/keyboard/keyboard_listener.cpp
+    ${SRC_DIR}/keyboard/keycodes.cpp
+    ${SRC_DIR}/mouse/mouse.cpp
+    ${SRC_DIR}/mouse/input_drivers/ghub.cpp
+    ${SRC_DIR}/mouse/input_drivers/kmboxNet.cpp
+    ${SRC_DIR}/mouse/input_drivers/my_enc.cpp
+    ${SRC_DIR}/mouse/input_drivers/rzctl.cpp
+    ${SRC_DIR}/mouse/input_drivers/SerialConnection.cpp
+    ${SRC_DIR}/mouse/input_drivers/MakcuConnection.cpp
+    ${SRC_DIR}/utils/image_io.cpp
+    ${SRC_DIR}/utils/input_state.cpp
+    ${SRC_DIR}/scr/other_tools.cpp
+    ${SRC_DIR}/cuda/unified_graph_pipeline_cleanup.cpp
 )
 
+# 오버레이/GUI 소스 (HEADLESS_BUILD=OFF 일 때만 포함)
+set(CPP_SOURCES_OVERLAY
+    ${SRC_DIR}/overlay/overlay.cpp
+    ${SRC_DIR}/overlay/draw_ai.cpp
+    ${SRC_DIR}/overlay/draw_buttons.cpp
+    ${SRC_DIR}/overlay/draw_capture.cpp
+    ${SRC_DIR}/overlay/draw_debug.cpp
+    ${SRC_DIR}/overlay/draw_mouse.cpp
+    ${SRC_DIR}/overlay/draw_offset.cpp
+    ${SRC_DIR}/overlay/draw_overlay.cpp
+    ${SRC_DIR}/overlay/draw_profile.cpp
+    ${SRC_DIR}/overlay/draw_target.cpp
+    ${SRC_DIR}/overlay/draw_color_filter.cpp
+    ${SRC_DIR}/overlay/draw_stabilizer.cpp
+    ${SRC_DIR}/overlay/ui_helpers.cpp
+    # ImGui
+    ${SRC_DIR}/imgui/imgui.cpp
+    ${SRC_DIR}/imgui/imgui_draw.cpp
+    ${SRC_DIR}/imgui/imgui_tables.cpp
+    ${SRC_DIR}/imgui/imgui_widgets.cpp
+    ${SRC_DIR}/imgui/imgui_impl_dx11.cpp
+    ${SRC_DIR}/imgui/imgui_impl_win32.cpp
+)
+
+# Headless 빌드 여부에 따라 소스 선택
+if(HEADLESS_BUILD)
+    set(CPP_SOURCES ${CPP_SOURCES_CORE})
+    message(STATUS "HEADLESS_BUILD enabled - Overlay/GUI excluded from build")
+else()
+    set(CPP_SOURCES ${CPP_SOURCES_CORE} ${CPP_SOURCES_OVERLAY})
+    message(STATUS "Full build with Overlay/GUI")
+endif()
+
 set(CUDA_SOURCES
-    needaimbot/cuda/unified_graph_pipeline.cu
-    needaimbot/cuda/preprocessing.cu
-    needaimbot/cuda/detection/postProcessGpu.cu
-    needaimbot/cuda/detection/cuda_float_processing.cu
+    ${SRC_DIR}/cuda/unified_graph_pipeline.cu
+    ${SRC_DIR}/cuda/preprocessing.cu
+    ${SRC_DIR}/cuda/detection/postProcessGpu.cu
+    ${SRC_DIR}/cuda/detection/cuda_float_processing.cu
 )
 
 # =============================================================================
@@ -103,17 +131,17 @@ add_executable(${PROJECT_NAME} ${CPP_SOURCES} ${CUDA_SOURCES})
 # Include 경로
 # =============================================================================
 target_include_directories(${PROJECT_NAME} PRIVATE
-    ${CMAKE_SOURCE_DIR}/needaimbot
-    ${CMAKE_SOURCE_DIR}/needaimbot/include
-    ${CMAKE_SOURCE_DIR}/needaimbot/imgui
-    ${CMAKE_SOURCE_DIR}/needaimbot/keyboard
-    ${CMAKE_SOURCE_DIR}/needaimbot/config
-    ${CMAKE_SOURCE_DIR}/needaimbot/capture
-    ${CMAKE_SOURCE_DIR}/needaimbot/postprocess
-    ${CMAKE_SOURCE_DIR}/needaimbot/mouse
-    ${CMAKE_SOURCE_DIR}/needaimbot/overlay
-    ${CMAKE_SOURCE_DIR}/needaimbot/modules/stb
-    ${CMAKE_SOURCE_DIR}/needaimbot/modules
+    ${CMAKE_SOURCE_DIR}/${SRC_DIR}
+    ${CMAKE_SOURCE_DIR}/${SRC_DIR}/include
+    ${CMAKE_SOURCE_DIR}/${SRC_DIR}/imgui
+    ${CMAKE_SOURCE_DIR}/${SRC_DIR}/keyboard
+    ${CMAKE_SOURCE_DIR}/${SRC_DIR}/config
+    ${CMAKE_SOURCE_DIR}/${SRC_DIR}/capture
+    ${CMAKE_SOURCE_DIR}/${SRC_DIR}/postprocess
+    ${CMAKE_SOURCE_DIR}/${SRC_DIR}/mouse
+    ${CMAKE_SOURCE_DIR}/${SRC_DIR}/overlay
+    ${CMAKE_SOURCE_DIR}/${SRC_DIR}/modules/stb
+    ${CMAKE_SOURCE_DIR}/${SRC_DIR}/modules
     ${TENSORRT_PATH}/include
     ${CUDA_PATH}/include
     ${CUDNN_PATH}/include/${CUDNN_VERSION}
@@ -157,6 +185,20 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
     _UNICODE
 )
 
+# 난독화 정의 추가
+if(ENABLE_OBFUSCATION)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE ENABLE_OBFUSCATION)
+endif()
+
+if(ENABLE_ANTI_DEBUG)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE ENABLE_ANTI_DEBUG)
+endif()
+
+# Headless 빌드 정의 추가
+if(HEADLESS_BUILD)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE HEADLESS_BUILD)
+endif()
+
 if(MSVC)
     # C++ 컴파일 옵션 (CUDA 제외)
     target_compile_options(${PROJECT_NAME} PRIVATE
@@ -182,6 +224,19 @@ if(MSVC)
     target_link_options(${PROJECT_NAME} PRIVATE
         /LTCG
     )
+    
+    # 심볼 스트립 (난독화 빌드용)
+    if(STRIP_SYMBOLS)
+        target_link_options(${PROJECT_NAME} PRIVATE
+            /DEBUG:NONE
+            /OPT:REF
+            /OPT:ICF
+        )
+        target_compile_options(${PROJECT_NAME} PRIVATE
+            $<$<COMPILE_LANGUAGE:CXX>:/Gw>
+            $<$<COMPILE_LANGUAGE:CXX>:/GS->
+        )
+    endif()
 endif()
 
 # =============================================================================
