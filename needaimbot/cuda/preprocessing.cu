@@ -3,6 +3,68 @@
 #include <device_launch_parameters.h>
 #include "simple_cuda_mat.h"
 
+// ============================================================================
+// 동일 해상도 전용 커널 (리사이즈 없음) - 최적화 버전
+// ============================================================================
+
+// 동일 해상도 전처리 커널 (FP16): BGRA → RGB + Normalize + HWC→CHW (리사이즈 없음)
+__global__ void directPreprocessKernelFP16(
+    const uchar4* __restrict__ src,     // BGRA 입력
+    __half* __restrict__ dst,           // RGB CHW 출력 (정규화된 FP16)
+    int width, int height,              // 입력/출력 크기 (동일)
+    int src_step,                       // 입력 스트라이드
+    float scale_factor                  // 정규화 인수 (1/255.0f)
+) {
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (x >= width || y >= height) return;
+
+    // 직접 픽셀 읽기 (bilinear interpolation 없음)
+    const uchar4* src_row = (const uchar4*)((const char*)src + y * src_step);
+    uchar4 pixel = src_row[x];
+
+    // CHW 레이아웃으로 저장
+    int hw_size = width * height;
+    int dst_idx = y * width + x;
+
+    // BGRA → RGB 변환 + 정규화 + FP16 변환
+    dst[dst_idx] = __float2half(pixel.z * scale_factor);               // R (from BGRA.z)
+    dst[dst_idx + hw_size] = __float2half(pixel.y * scale_factor);     // G (from BGRA.y)
+    dst[dst_idx + 2 * hw_size] = __float2half(pixel.x * scale_factor); // B (from BGRA.x)
+}
+
+// 동일 해상도 전처리 커널 (FP32): BGRA → RGB + Normalize + HWC→CHW (리사이즈 없음)
+__global__ void directPreprocessKernel(
+    const uchar4* __restrict__ src,     // BGRA 입력
+    float* __restrict__ dst,            // RGB CHW 출력 (정규화된 float)
+    int width, int height,              // 입력/출력 크기 (동일)
+    int src_step,                       // 입력 스트라이드
+    float scale_factor                  // 정규화 인수 (1/255.0f)
+) {
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (x >= width || y >= height) return;
+
+    // 직접 픽셀 읽기 (bilinear interpolation 없음)
+    const uchar4* src_row = (const uchar4*)((const char*)src + y * src_step);
+    uchar4 pixel = src_row[x];
+
+    // CHW 레이아웃으로 저장
+    int hw_size = width * height;
+    int dst_idx = y * width + x;
+
+    // BGRA → RGB 변환 + 정규화
+    dst[dst_idx] = pixel.z * scale_factor;               // R (from BGRA.z)
+    dst[dst_idx + hw_size] = pixel.y * scale_factor;     // G (from BGRA.y)
+    dst[dst_idx + 2 * hw_size] = pixel.x * scale_factor; // B (from BGRA.x)
+}
+
+// ============================================================================
+// 리사이즈 포함 커널 (기존)
+// ============================================================================
+
 // 통합 전처리 커널 (FP16 출력): BGRA → RGB + Resize + Normalize + HWC→CHW
 __global__ void integratedPreprocessKernelFP16(
     const uchar4* __restrict__ src,     // BGRA 입력
@@ -162,31 +224,56 @@ extern "C" cudaError_t cuda_unified_preprocessing(
         return cudaErrorInvalidValue;
     }
 
-    // 블록과 그리드 크기 설정 - 32x8 for better memory coalescing (x-axis aligned)
-    dim3 block(32, 8);
-    dim3 grid((target_width + block.x - 1) / block.x,
-              (target_height + block.y - 1) / block.y);
-
     const float scale_factor = 1.0f / 255.0f;
 
-    if (use_fp16) {
-        integratedPreprocessKernelFP16<<<grid, block, 0, stream>>>(
-            (const uchar4*)src_bgra_data,
-            (__half*)dst_rgb_chw,
-            src_width, src_height,
-            target_width, target_height,
-            src_step,
-            scale_factor
-        );
+    // 동일 해상도인 경우 최적화된 커널 사용 (리사이즈 스킵)
+    if (src_width == target_width && src_height == target_height) {
+        dim3 block(32, 8);
+        dim3 grid((target_width + block.x - 1) / block.x,
+                  (target_height + block.y - 1) / block.y);
+
+        if (use_fp16) {
+            directPreprocessKernelFP16<<<grid, block, 0, stream>>>(
+                (const uchar4*)src_bgra_data,
+                (__half*)dst_rgb_chw,
+                target_width, target_height,
+                src_step,
+                scale_factor
+            );
+        } else {
+            directPreprocessKernel<<<grid, block, 0, stream>>>(
+                (const uchar4*)src_bgra_data,
+                (float*)dst_rgb_chw,
+                target_width, target_height,
+                src_step,
+                scale_factor
+            );
+        }
     } else {
-        integratedPreprocessKernel<<<grid, block, 0, stream>>>(
-            (const uchar4*)src_bgra_data,
-            (float*)dst_rgb_chw,
-            src_width, src_height,
-            target_width, target_height,
-            src_step,
-            scale_factor
-        );
+        // 다른 해상도인 경우 리사이즈 포함 커널 사용
+        dim3 block(32, 8);
+        dim3 grid((target_width + block.x - 1) / block.x,
+                  (target_height + block.y - 1) / block.y);
+
+        if (use_fp16) {
+            integratedPreprocessKernelFP16<<<grid, block, 0, stream>>>(
+                (const uchar4*)src_bgra_data,
+                (__half*)dst_rgb_chw,
+                src_width, src_height,
+                target_width, target_height,
+                src_step,
+                scale_factor
+            );
+        } else {
+            integratedPreprocessKernel<<<grid, block, 0, stream>>>(
+                (const uchar4*)src_bgra_data,
+                (float*)dst_rgb_chw,
+                src_width, src_height,
+                target_width, target_height,
+                src_step,
+                scale_factor
+            );
+        }
     }
 
     return cudaGetLastError();

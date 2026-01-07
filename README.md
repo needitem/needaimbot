@@ -26,7 +26,7 @@
 
 *   **OS**: Windows 10 or 11 (64-bit).
 *   **GPU**: NVIDIA GeForce GTX 10-series or newer (RTX recommended).
-*   **Drivers**: Latest NVIDIA Game Ready Driver.
+*   **Drivers**: [Latest NVIDIA Driver](https://www.nvidia.com/en-us/drivers/) (CUDA 13.1+ support required).
 *   **Software**:
     *   [Visual Studio 2022](https://visualstudio.microsoft.com/vs/) (C++ Desktop Development).
     *   [CMake 3.20+](https://cmake.org/download/).

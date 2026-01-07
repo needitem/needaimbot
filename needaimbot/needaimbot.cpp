@@ -415,38 +415,6 @@ int main()
     osvi.dwOSVersionInfoSize = sizeof(OSVERSIONINFOEX);
     if (GetVersionEx((OSVERSIONINFO*)&osvi)) {
     }
-    
-    std::cout << "\n=== Desktop Duplication Capture ===" << std::endl;
-    if (DDACapture::IsDDACaptureAvailable()) {
-        std::cout << "✓ Desktop Duplication Available" << std::endl;
-
-        DDACapture capture;
-        if (capture.Initialize()) {
-            std::cout << "✓ DDA Capture Initialized" << std::endl;
-            std::cout << "  - Full Screen: " << capture.GetWidth() << "x" << capture.GetHeight() << std::endl;
-
-            int centerX = capture.GetWidth() / 4;
-            int centerY = capture.GetHeight() / 4;
-            int centerW = capture.GetWidth() / 2;
-            int centerH = capture.GetHeight() / 2;
-
-            if (capture.SetCaptureRegion(centerX, centerY, centerW, centerH)) {
-                std::cout << "  - Partial Region: " << centerW << "x" << centerH
-                          << " at (" << centerX << "," << centerY << ")" << std::endl;
-                std::cout << "  - Status: Ready for efficient region capture" << std::endl;
-            } else {
-                std::cout << "  - Failed to configure partial capture region" << std::endl;
-            }
-
-            capture.Shutdown();
-        } else {
-            std::cout << "✗ DDA Initialization Failed" << std::endl;
-        }
-    } else {
-        std::cout << "✗ Desktop Duplication Unavailable" << std::endl;
-        std::cout << "  - Requires Windows 8+ with WDDM 1.2 drivers" << std::endl;
-    }
-    std::cout << "=============================\n" << std::endl;
 
     auto& ctx = AppContext::getInstance();
 
