@@ -332,7 +332,7 @@ void draw_color_filter()
                 auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastPreviewUpdate);
                 bool shouldUpdatePreview = (elapsed.count() >= 66);
 
-                auto& pipelineManager = needaimbot::PipelineManager::getInstance();
+                auto& pipelineManager = gpa::PipelineManager::getInstance();
                 auto* pipeline = pipelineManager.getPipeline();
 
                 // Get new frame if available

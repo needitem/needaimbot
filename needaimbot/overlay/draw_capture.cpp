@@ -63,9 +63,9 @@ static void draw_capture_area_settings()
     UIHelpers::CompactSpacer();
     UIHelpers::BeginCard("Capture Info");
     {
-        auto* pipeline = needaimbot::PipelineManager::getInstance().getPipeline();
+        auto* pipeline = gpa::PipelineManager::getInstance().getPipeline();
         if (pipeline) {
-            needaimbot::UnifiedGraphPipeline::CaptureStats stats{};
+            gpa::UnifiedGraphPipeline::CaptureStats stats{};
             pipeline->getCaptureStats(stats);
 
             if (ImGui::BeginTable("##capture_info", 2, ImGuiTableFlags_NoBordersInBody)) {

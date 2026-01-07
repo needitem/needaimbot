@@ -4,7 +4,7 @@
 #include <mutex>
 #include <cuda_runtime.h>
 
-namespace needaimbot {
+namespace gpa {
 
 UnifiedGraphPipeline::~UnifiedGraphPipeline() {
     shutdown();
@@ -93,4 +93,4 @@ void UnifiedGraphPipeline::shutdown() {
     std::cout << "[UnifiedGraphPipeline] Shutdown complete." << std::endl;
 }
 
-} // namespace needaimbot
+} // namespace gpa

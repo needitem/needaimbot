@@ -38,7 +38,7 @@ extern "C" {
     void executeMouseMovement(int dx, int dy);
 }
 
-namespace needaimbot {
+namespace gpa {
 
 // Use blocking CUDA events to avoid CPU yield storms while waiting for GPU work
 static constexpr unsigned int kBlockingEventFlags = cudaEventDisableTiming | cudaEventBlockingSync;
@@ -485,8 +485,8 @@ __global__ void fusedTargetSelectionAndMovementKernel(
     Target* __restrict__ selectedTarget,
     int* __restrict__ bestTargetIndex,
     Target* __restrict__ bestTarget,
-    needaimbot::MouseMovement* __restrict__ output_movement,
-    needaimbot::PIDState* __restrict__ pidState
+    gpa::MouseMovement* __restrict__ output_movement,
+    gpa::PIDState* __restrict__ pidState
 ) {
     // Using warp shuffle for reduction - no shared memory arrays needed
     __shared__ Target s_prevTarget;
@@ -2046,7 +2046,7 @@ bool UnifiedGraphPipeline::runInferenceAsync(cudaStream_t stream) {
     return true;
 }
 
-void needaimbot::PostProcessingConfig::updateFromContext(const AppContext& ctx, bool graphCaptured) {
+void gpa::PostProcessingConfig::updateFromContext(const AppContext& ctx, bool graphCaptured) {
     // Use lock-free reads - these are safe for reading primitive types
     // No mutex needed for hot path performance
     if (!graphCaptured) {
@@ -2832,7 +2832,7 @@ bool UnifiedGraphPipeline::performInference(cudaStream_t stream) {
 }
 
 }
-void needaimbot::UnifiedGraphPipeline::getCaptureStats(needaimbot::UnifiedGraphPipeline::CaptureStats& out) const {
+void gpa::UnifiedGraphPipeline::getCaptureStats(gpa::UnifiedGraphPipeline::CaptureStats& out) const {
     auto& ctx = AppContext::getInstance();
     out.lastWidth = m_lastCaptureW;
     out.lastHeight = m_lastCaptureH;

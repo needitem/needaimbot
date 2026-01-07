@@ -327,14 +327,14 @@ void draw_mouse()
         if (ImGui::SliderInt("##enter_x", &ctx.config.deadband_enter_x, 0, 10, "Enter: %d px")) {
             ctx.config.deadband_enter_x = std::max(0, std::min(ctx.config.deadband_enter_x, ctx.config.deadband_exit_x));
             SAVE_PROFILE();
-            if (auto* p = needaimbot::PipelineManager::getInstance().getPipeline()) p->markPidConfigDirty();
+            if (auto* p = gpa::PipelineManager::getInstance().getPipeline()) p->markPidConfigDirty();
         }
         ImGui::TableNextColumn();
         ImGui::SetNextItemWidth(-1);
         if (ImGui::SliderInt("##enter_y", &ctx.config.deadband_enter_y, 0, 10, "Enter: %d px")) {
             ctx.config.deadband_enter_y = std::max(0, std::min(ctx.config.deadband_enter_y, ctx.config.deadband_exit_y));
             SAVE_PROFILE();
-            if (auto* p = needaimbot::PipelineManager::getInstance().getPipeline()) p->markPidConfigDirty();
+            if (auto* p = gpa::PipelineManager::getInstance().getPipeline()) p->markPidConfigDirty();
         }
 
         // Exit thresholds
@@ -344,14 +344,14 @@ void draw_mouse()
         if (ImGui::SliderInt("##exit_x", &ctx.config.deadband_exit_x, 1, 20, "Exit: %d px")) {
             ctx.config.deadband_exit_x = std::max(ctx.config.deadband_exit_x, ctx.config.deadband_enter_x);
             SAVE_PROFILE();
-            if (auto* p = needaimbot::PipelineManager::getInstance().getPipeline()) p->markPidConfigDirty();
+            if (auto* p = gpa::PipelineManager::getInstance().getPipeline()) p->markPidConfigDirty();
         }
         ImGui::TableNextColumn();
         ImGui::SetNextItemWidth(-1);
         if (ImGui::SliderInt("##exit_y", &ctx.config.deadband_exit_y, 1, 20, "Exit: %d px")) {
             ctx.config.deadband_exit_y = std::max(ctx.config.deadband_exit_y, ctx.config.deadband_enter_y);
             SAVE_PROFILE();
-            if (auto* p = needaimbot::PipelineManager::getInstance().getPipeline()) p->markPidConfigDirty();
+            if (auto* p = gpa::PipelineManager::getInstance().getPipeline()) p->markPidConfigDirty();
         }
 
         ImGui::EndTable();
@@ -367,7 +367,7 @@ void draw_mouse()
         ctx.config.deadband_enter_y = 2;
         ctx.config.deadband_exit_y  = 5;
         SAVE_PROFILE();
-        if (auto* p = needaimbot::PipelineManager::getInstance().getPipeline()) p->markPidConfigDirty();
+        if (auto* p = gpa::PipelineManager::getInstance().getPipeline()) p->markPidConfigDirty();
     }
 
     UIHelpers::EndCard();
