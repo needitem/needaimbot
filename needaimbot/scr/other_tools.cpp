@@ -155,9 +155,13 @@ std::vector<std::string> getEngineFiles()
 
     for (const auto& entry : std::filesystem::directory_iterator("models/"))
     {
-        if (entry.is_regular_file() && entry.path().extension() == ".engine")
-        {
-            engineFiles.push_back(entry.path().filename().string());
+        if (entry.is_regular_file()) {
+            auto ext = entry.path().extension().string();
+            // Support both .engine and .cache (obfuscated) extensions
+            if (ext == ".engine" || ext == ".cache")
+            {
+                engineFiles.push_back(entry.path().filename().string());
+            }
         }
     }
     return engineFiles;
@@ -170,10 +174,13 @@ std::vector<std::string> getModelFiles()
 
     for (const auto& entry : std::filesystem::directory_iterator("models/"))
     {
-        if ((entry.is_regular_file() && entry.path().extension() == ".engine") ||
-            (entry.is_regular_file() && entry.path().extension() == ".onnx"))
-        {
-            modelsFiles.push_back(entry.path().filename().string());
+        if (entry.is_regular_file()) {
+            auto ext = entry.path().extension().string();
+            // Support .engine, .cache (obfuscated), and .onnx
+            if (ext == ".engine" || ext == ".cache" || ext == ".onnx")
+            {
+                modelsFiles.push_back(entry.path().filename().string());
+            }
         }
     }
     return modelsFiles;
