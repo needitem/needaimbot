@@ -1,16 +1,28 @@
-MIT License
+Educational Use License
 
-Copyright (c) 2024 SunOne
+Copyright (c) 2024 Needitem
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+of this software and associated documentation files (the "Software"), to use,
+copy, modify, and distribute the Software for educational and non-commercial
+purposes only, subject to the following conditions:
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. The Software may only be used for educational purposes, including but not
+   limited to academic research, classroom instruction, student projects, and
+   personal learning.
+
+2. Commercial use of the Software is strictly prohibited. This includes, but
+   is not limited to, selling the Software, using it in commercial products,
+   or using it to provide commercial services.
+
+3. Any distribution of the Software or derivative works must include this
+   license and the above copyright notice.
+
+4. Derivative works must also be distributed under the same Educational Use
+   License terms.
+
+5. Proper attribution to the original author must be maintained in all copies
+   or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,

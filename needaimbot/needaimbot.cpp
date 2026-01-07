@@ -279,6 +279,9 @@ static BOOL WINAPI consoleHandler(DWORD signal) {
     return FALSE;
 }
 
+// Forward declaration
+int main();
+
 // Alternative entry point for Windows subsystem (no console window)
 #ifdef _WINDOWS
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
