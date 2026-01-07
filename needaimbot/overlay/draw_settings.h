@@ -34,14 +34,14 @@ extern AutoSaveState g_autoSaveState;
     g_autoSaveState.markDirty(); \
 } while(0)
 
-// Macro for immediately saving to active profile
+// Macro for immediately saving config
 #define SAVE_PROFILE() do { \
-    AppContext::getInstance().config.saveActiveProfile(); \
+    AppContext::getInstance().config.saveConfig(); \
 } while(0)
 
 // Macro for immediately saving input profile
 #define SAVE_INPUT_PROFILE() do { \
-    AppContext::getInstance().config.saveActiveProfile(); \
+    AppContext::getInstance().config.saveConfig(); \
 } while(0)
 
 void draw_capture_settings();

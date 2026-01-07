@@ -70,7 +70,7 @@ void draw_target()
             ImGui::PopStyleColor();
             ImGui::SameLine();
             ImGui::TextDisabled("- Press %s to resume",
-                        ctx.config.button_pause.empty() ? "F3" : ctx.config.button_pause[0].c_str());
+                        ctx.config.global().button_pause.empty() ? "F3" : ctx.config.global().button_pause[0].c_str());
         } else {
             ImGui::PushStyleColor(ImGuiCol_Text, UIHelpers::GetSuccessColor());
             ImGui::Text("ACTIVE");
@@ -97,7 +97,7 @@ void draw_target()
             // Auto Aim
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            if (UIHelpers::BeautifulToggle("Auto Aim", &ctx.config.auto_aim)) {
+            if (UIHelpers::BeautifulToggle("Auto Aim", &ctx.config.profile().auto_aim)) {
                 SAVE_PROFILE();
             }
             ImGui::TableNextColumn();
@@ -106,7 +106,7 @@ void draw_target()
             // Auto Action
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            if (UIHelpers::BeautifulToggle("Auto Action", &ctx.config.auto_action)) {
+            if (UIHelpers::BeautifulToggle("Auto Action", &ctx.config.profile().auto_action)) {
                 SAVE_PROFILE();
             }
             ImGui::TableNextColumn();
@@ -115,7 +115,7 @@ void draw_target()
             // Disable Upward Aim (permanent toggle)
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            if (UIHelpers::BeautifulToggle("Block Upward Aim", &ctx.config.ignore_up_aim)) {
+            if (UIHelpers::BeautifulToggle("Block Upward Aim", &ctx.config.profile().ignore_up_aim)) {
                 SAVE_PROFILE();
             }
             ImGui::TableNextColumn();
@@ -125,8 +125,8 @@ void draw_target()
         }
 
         // Show hotkey-based disable upward aim status
-        if (!ctx.config.button_disable_upward_aim.empty() &&
-            ctx.config.button_disable_upward_aim[0] != "None") {
+        if (!ctx.config.global().button_disable_upward_aim.empty() &&
+            ctx.config.global().button_disable_upward_aim[0] != "None") {
             UIHelpers::CompactSpacer();
             bool hotkey_active = ctx.disable_upward_aim.load();
             if (hotkey_active) {
@@ -144,10 +144,10 @@ void draw_target()
         UIHelpers::BeautifulText("Targets enemy closest to crosshair", ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
         UIHelpers::CompactSpacer();
 
-        if (UIHelpers::EnhancedSliderFloat("Target Stickiness", &ctx.config.iou_stickiness_threshold,
+        if (UIHelpers::EnhancedSliderFloat("Target Stickiness", &ctx.config.profile().iou_stickiness_threshold,
                                            0.0f, 0.9f, "%.2f",
                                            "Keep tracking same target if overlap > threshold.\nHigher = less target switching")) {
-            ctx.config.iou_stickiness_threshold = std::clamp(ctx.config.iou_stickiness_threshold, 0.0f, 0.99f);
+            ctx.config.profile().iou_stickiness_threshold = std::clamp(ctx.config.profile().iou_stickiness_threshold, 0.0f, 0.99f);
             SAVE_PROFILE();
             auto* pipeline = gpa::PipelineManager::getInstance().getPipeline();
             if (pipeline) {

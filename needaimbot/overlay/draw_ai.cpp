@@ -58,7 +58,7 @@ static void draw_model_settings()
     else
     {
         int currentModelIndex = 0;
-        auto it = std::find(availableModels.begin(), availableModels.end(), ctx.config.ai_model);
+        auto it = std::find(availableModels.begin(), availableModels.end(), ctx.config.profile().ai_model);
 
         if (it != availableModels.end())
         {
@@ -68,9 +68,9 @@ static void draw_model_settings()
         if (UIHelpers::EnhancedCombo("AI Model", &currentModelIndex, modelsItems.data(), static_cast<int>(modelsItems.size()), 
                                     "Select the AI model file to use for target detection. Models should be placed in the 'models' folder."))
         {
-            if (ctx.config.ai_model != availableModels[currentModelIndex])
+            if (ctx.config.profile().ai_model != availableModels[currentModelIndex])
             {
-                ctx.config.ai_model = availableModels[currentModelIndex];
+                ctx.config.profile().ai_model = availableModels[currentModelIndex];
                 SAVE_PROFILE();
                 ctx.model_changed = true;
             }
@@ -104,21 +104,21 @@ static void draw_detection_settings()
     }();
 
     // Optimize: use std::find instead of manual loop
-    auto it = std::find(postprocessOptions.begin(), postprocessOptions.end(), ctx.config.postprocess);
+    auto it = std::find(postprocessOptions.begin(), postprocessOptions.end(), ctx.config.profile().postprocess);
     int currentPostprocessIndex = (it != postprocessOptions.end()) ? 
         static_cast<int>(std::distance(postprocessOptions.begin(), it)) : 0;
 
     if (UIHelpers::EnhancedCombo("Postprocess Algorithm", &currentPostprocessIndex, postprocessItems.data(), static_cast<int>(postprocessItems.size()),
                                 "Select the YOLO postprocessing algorithm that matches your model version."))
     {
-        ctx.config.postprocess = postprocessOptions[currentPostprocessIndex];
+        ctx.config.profile().postprocess = postprocessOptions[currentPostprocessIndex];
         SAVE_PROFILE();
         ctx.model_changed = true;
     }
 
     UIHelpers::Spacer();
 
-    if (UIHelpers::EnhancedSliderFloat("Confidence Threshold", &ctx.config.confidence_threshold, 0.01f, 1.00f, "%.2f",
+    if (UIHelpers::EnhancedSliderFloat("Confidence Threshold", &ctx.config.profile().confidence_threshold, 0.01f, 1.00f, "%.2f",
                                       "Minimum confidence score required for target detection. Higher values = fewer false positives."))
     {
         SAVE_PROFILE();
@@ -130,7 +130,7 @@ static void draw_detection_settings()
     ImGui::PushStyleColor(ImGuiCol_SliderGrab, UIHelpers::GetAccentColor(0.9f));
     ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, UIHelpers::GetAccentColor(1.0f));
     ImGui::SetNextItemWidth(-1);
-    if (ImGui::SliderInt("Max Detections", &ctx.config.max_detections, 1, Constants::MAX_DETECTIONS_LIMIT, "%d detections")) {
+    if (ImGui::SliderInt("Max Detections", &ctx.config.profile().max_detections, 1, Constants::MAX_DETECTIONS_LIMIT, "%d detections")) {
         SAVE_PROFILE();
     }
     ImGui::PopStyleColor(4);
@@ -151,7 +151,7 @@ static void draw_class_settings()
 
     // Head class name input
     static char head_class_name_buffer[128];
-    strncpy_s(head_class_name_buffer, sizeof(head_class_name_buffer), ctx.config.head_class_name.c_str(), _TRUNCATE);
+    strncpy_s(head_class_name_buffer, sizeof(head_class_name_buffer), ctx.config.profile().head_class_name.c_str(), _TRUNCATE);
     head_class_name_buffer[sizeof(head_class_name_buffer) - 1] = '\0';
 
     ImGui::Text("Head Class Name");
@@ -162,7 +162,7 @@ static void draw_class_settings()
         // preview
     }
     if (ImGui::IsItemDeactivatedAfterEdit()) {
-        ctx.config.head_class_name = head_class_name_buffer;
+        ctx.config.profile().head_class_name = head_class_name_buffer;
         SAVE_PROFILE();
     }
 
@@ -181,9 +181,9 @@ static void draw_class_settings()
         ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 24.0f);
         ImGui::TableHeadersRow();
 
-        for (size_t i = 0; i < ctx.config.class_settings.size(); ++i) {
+        for (size_t i = 0; i < ctx.config.profile().class_settings.size(); ++i) {
             ImGui::PushID(static_cast<int>(i));
-            ClassSetting& setting = ctx.config.class_settings[i];
+            ClassSetting& setting = ctx.config.profile().class_settings[i];
 
             ImGui::TableNextRow();
 
@@ -218,7 +218,7 @@ static void draw_class_settings()
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.5f, 0.2f, 0.2f, 0.8f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.3f, 0.3f, 1.0f));
             if (ImGui::Button("x##rm", ImVec2(20, 0))) {
-                ctx.config.class_settings.erase(ctx.config.class_settings.begin() + i);
+                ctx.config.profile().class_settings.erase(ctx.config.profile().class_settings.begin() + i);
                 SAVE_PROFILE();
                 ImGui::PopStyleColor(2);
                 ImGui::PopID();
@@ -264,7 +264,7 @@ static void draw_class_settings()
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.6f, 0.3f, 1.0f));
         if (ImGui::Button("+##add", ImVec2(-1, 0))) {
             bool id_exists = false;
-            for (const auto& cs : ctx.config.class_settings) {
+            for (const auto& cs : ctx.config.profile().class_settings) {
                 if (cs.id == new_class_id) {
                     id_exists = true;
                     break;
@@ -272,7 +272,7 @@ static void draw_class_settings()
             }
             std::string temp_name = new_class_name_buf;
             if (!id_exists && !temp_name.empty()) {
-                ctx.config.class_settings.emplace_back(new_class_id, temp_name, new_class_allow);
+                ctx.config.profile().class_settings.emplace_back(new_class_id, temp_name, new_class_allow);
                 SAVE_PROFILE();
                 new_class_id = CommonHelpers::getNextClassId();
                 new_class_name_buf[0] = '\0';
@@ -304,8 +304,8 @@ static void draw_advanced_settings()
         UIHelpers::HelpMarker("GPU to use for inference (requires restart)");
         ImGui::TableNextColumn();
         ImGui::SetNextItemWidth(-1);
-        if (ImGui::InputInt("##cuda_device", &ctx.config.cuda_device_id, 0, 0)) {
-            ctx.config.cuda_device_id = std::max(0, ctx.config.cuda_device_id);
+        if (ImGui::InputInt("##cuda_device", &ctx.config.global().cuda_device_id, 0, 0)) {
+            ctx.config.global().cuda_device_id = std::max(0, ctx.config.global().cuda_device_id);
             SAVE_PROFILE();
         }
 
@@ -316,8 +316,8 @@ static void draw_advanced_settings()
         UIHelpers::HelpMarker("TensorRT persistent cache.\nRTX 40: 24-72MB\nRTX 30: 4-6MB");
         ImGui::TableNextColumn();
         ImGui::SetNextItemWidth(-1);
-        if (ImGui::InputInt("##l2_cache", &ctx.config.persistent_cache_limit_mb, 0, 0)) {
-            ctx.config.persistent_cache_limit_mb = std::clamp(ctx.config.persistent_cache_limit_mb, 1, 128);
+        if (ImGui::InputInt("##l2_cache", &ctx.config.global().persistent_cache_limit_mb, 0, 0)) {
+            ctx.config.global().persistent_cache_limit_mb = std::clamp(ctx.config.global().persistent_cache_limit_mb, 1, 128);
             SAVE_PROFILE();
         }
 
@@ -327,7 +327,7 @@ static void draw_advanced_settings()
     UIHelpers::CompactSpacer();
 
     // CUDA Graph toggle
-    if (UIHelpers::BeautifulToggle("CUDA Graph Optimization", &ctx.config.use_cuda_graph,
+    if (UIHelpers::BeautifulToggle("CUDA Graph Optimization", &ctx.config.global().use_cuda_graph,
                                    "Faster inference, but may not work with all models")) {
         SAVE_PROFILE();
         auto& pipelineManager = gpa::PipelineManager::getInstance();

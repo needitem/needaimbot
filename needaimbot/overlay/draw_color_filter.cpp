@@ -228,7 +228,7 @@ static void drawRGBPreview(int r_min, int r_max, int g_min, int g_max, int b_min
 
 // Apply color filter mask to frame (supports 3 or 4 channel images)
 // Note: Preview frame is RGBA (converted from BGRA), so R=0, G=1, B=2
-static void applyColorFilterMask(SimpleMat& frame, const Config& cfg) {
+static void applyColorFilterMask(SimpleMat& frame, const ProfileData& profile) {
     if (frame.empty()) return;
 
     int channels = frame.channels();
@@ -249,11 +249,11 @@ static void applyColorFilterMask(SimpleMat& frame, const Config& cfg) {
 
             bool matches = false;
 
-            if (cfg.color_filter_mode == 0) {
+            if (profile.color_filter_mode == 0) {
                 // RGB mode
-                matches = (r >= cfg.color_filter_r_min && r <= cfg.color_filter_r_max &&
-                          g >= cfg.color_filter_g_min && g <= cfg.color_filter_g_max &&
-                          b >= cfg.color_filter_b_min && b <= cfg.color_filter_b_max);
+                matches = (r >= profile.color_filter_r_min && r <= profile.color_filter_r_max &&
+                          g >= profile.color_filter_g_min && g <= profile.color_filter_g_max &&
+                          b >= profile.color_filter_b_min && b <= profile.color_filter_b_max);
             } else {
                 // HSV mode
                 int h, s, v;
@@ -261,21 +261,21 @@ static void applyColorFilterMask(SimpleMat& frame, const Config& cfg) {
 
                 // Handle hue wraparound
                 bool hueMatch;
-                if (cfg.color_filter_h_min <= cfg.color_filter_h_max) {
-                    hueMatch = (h >= cfg.color_filter_h_min && h <= cfg.color_filter_h_max);
+                if (profile.color_filter_h_min <= profile.color_filter_h_max) {
+                    hueMatch = (h >= profile.color_filter_h_min && h <= profile.color_filter_h_max);
                 } else {
                     // Wraparound case (e.g., red: 170-10)
-                    hueMatch = (h >= cfg.color_filter_h_min || h <= cfg.color_filter_h_max);
+                    hueMatch = (h >= profile.color_filter_h_min || h <= profile.color_filter_h_max);
                 }
 
                 matches = hueMatch &&
-                         (s >= cfg.color_filter_s_min && s <= cfg.color_filter_s_max) &&
-                         (v >= cfg.color_filter_v_min && v <= cfg.color_filter_v_max);
+                         (s >= profile.color_filter_s_min && s <= profile.color_filter_s_max) &&
+                         (v >= profile.color_filter_v_min && v <= profile.color_filter_v_max);
             }
 
             // Keep original if matches, darken if not (using configurable opacity)
             if (!matches) {
-                float opacity = cfg.color_filter_mask_opacity;
+                float opacity = profile.color_filter_mask_opacity;
                 row[x * channels + 0] = static_cast<unsigned char>(r * opacity);
                 row[x * channels + 1] = static_cast<unsigned char>(g * opacity);
                 row[x * channels + 2] = static_cast<unsigned char>(b * opacity);
@@ -290,11 +290,11 @@ void draw_color_filter()
     auto& ctx = AppContext::getInstance();
 
     // Enable Preview checkbox at top
-    bool prev_show_window_state = ctx.config.show_window;
-    if (ImGui::Checkbox("Enable Preview", &ctx.config.show_window)) {
+    bool prev_show_window_state = ctx.config.global().show_window;
+    if (ImGui::Checkbox("Enable Preview", &ctx.config.global().show_window)) {
         SAVE_PROFILE();
 
-        if (prev_show_window_state == true && ctx.config.show_window == false) {
+        if (prev_show_window_state == true && ctx.config.global().show_window == false) {
             if (g_debugSRV) {
                 g_debugSRV->Release();
                 g_debugSRV = nullptr;
@@ -322,7 +322,7 @@ void draw_color_filter()
 
         // Left column - Preview Window
         {
-            if (ctx.config.show_window) {
+            if (ctx.config.global().show_window) {
                 SimpleMat* frameToDisplay = nullptr;
                 static SimpleMat previewHostFrame;
                 static SimpleMat maskedFrame;
@@ -347,9 +347,9 @@ void draw_color_filter()
 
                 // Always apply mask to current frame (allows real-time slider updates)
                 if (!previewHostFrame.empty()) {
-                    if (ctx.config.color_filter_enabled) {
+                    if (ctx.config.profile().color_filter_enabled) {
                         maskedFrame = previewHostFrame.clone();
-                        applyColorFilterMask(maskedFrame, ctx.config);
+                        applyColorFilterMask(maskedFrame, ctx.config.profile());
                         frameToDisplay = &maskedFrame;
                     } else {
                         frameToDisplay = &previewHostFrame;
@@ -383,7 +383,7 @@ void draw_color_filter()
                             if (draw_list && texW > 0 && texH > 0) {
                                 float center_x = image_pos.x + (texW * debug_scale) / 2.0f;
                                 float center_y = image_pos.y + (texH * debug_scale) / 2.0f;
-                                ImU32 crosshair_color = ctx.config.color_filter_enabled ?
+                                ImU32 crosshair_color = ctx.config.profile().color_filter_enabled ?
                                     IM_COL32(255, 0, 0, 255) : IM_COL32(255, 255, 255, 255);
                                 draw_list->AddLine(ImVec2(center_x - 10, center_y), ImVec2(center_x + 10, center_y), crosshair_color, 2.0f);
                                 draw_list->AddLine(ImVec2(center_x, center_y - 10), ImVec2(center_x, center_y + 10), crosshair_color, 2.0f);
@@ -403,27 +403,27 @@ void draw_color_filter()
 
         // Right column - Color Filter Settings
         {
-            bool enabled = ctx.config.color_filter_enabled;
+            bool enabled = ctx.config.profile().color_filter_enabled;
             if (ImGui::Checkbox("Enable Color Filter", &enabled)) {
-                ctx.config.color_filter_enabled = enabled;
+                ctx.config.profile().color_filter_enabled = enabled;
                 SAVE_PROFILE();
             }
 
             ImGui::Spacing();
 
             const char* modes[] = { "RGB", "HSV" };
-            int mode = ctx.config.color_filter_mode;
+            int mode = ctx.config.profile().color_filter_mode;
             ImGui::SetNextItemWidth(100.0f);
             if (ImGui::Combo("Mode", &mode, modes, IM_ARRAYSIZE(modes))) {
-                ctx.config.color_filter_mode = mode;
+                ctx.config.profile().color_filter_mode = mode;
                 SAVE_PROFILE();
             }
 
             // Mask opacity slider
-            float opacity = ctx.config.color_filter_mask_opacity;
+            float opacity = ctx.config.profile().color_filter_mask_opacity;
             ImGui::SetNextItemWidth(150.0f);
             if (ImGui::SliderFloat("Non-match Opacity", &opacity, 0.0f, 1.0f, "%.2f")) {
-                ctx.config.color_filter_mask_opacity = opacity;
+                ctx.config.profile().color_filter_mask_opacity = opacity;
                 SAVE_PROFILE();
             }
             ImGui::SameLine();
@@ -433,50 +433,50 @@ void draw_color_filter()
             ImGui::Separator();
             ImGui::Spacing();
 
-            if (ctx.config.color_filter_mode == 0) {
+            if (ctx.config.profile().color_filter_mode == 0) {
                 // RGB Mode
-                int r_min = ctx.config.color_filter_r_min;
-                int r_max = ctx.config.color_filter_r_max;
-                int g_min = ctx.config.color_filter_g_min;
-                int g_max = ctx.config.color_filter_g_max;
-                int b_min = ctx.config.color_filter_b_min;
-                int b_max = ctx.config.color_filter_b_max;
+                int r_min = ctx.config.profile().color_filter_r_min;
+                int r_max = ctx.config.profile().color_filter_r_max;
+                int g_min = ctx.config.profile().color_filter_g_min;
+                int g_max = ctx.config.profile().color_filter_g_max;
+                int b_min = ctx.config.profile().color_filter_b_min;
+                int b_max = ctx.config.profile().color_filter_b_max;
 
                 ImGui::PushItemWidth(180.0f);
 
                 // Red channel
                 ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Red:");
                 if (ImGui::SliderInt("##rmin", &r_min, 0, 255, "Min: %d")) {
-                    ctx.config.color_filter_r_min = r_min;
+                    ctx.config.profile().color_filter_r_min = r_min;
                     SAVE_PROFILE();
                 }
                 ImGui::SameLine();
                 if (ImGui::SliderInt("##rmax", &r_max, 0, 255, "Max: %d")) {
-                    ctx.config.color_filter_r_max = r_max;
+                    ctx.config.profile().color_filter_r_max = r_max;
                     SAVE_PROFILE();
                 }
 
                 // Green channel
                 ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "Green:");
                 if (ImGui::SliderInt("##gmin", &g_min, 0, 255, "Min: %d")) {
-                    ctx.config.color_filter_g_min = g_min;
+                    ctx.config.profile().color_filter_g_min = g_min;
                     SAVE_PROFILE();
                 }
                 ImGui::SameLine();
                 if (ImGui::SliderInt("##gmax", &g_max, 0, 255, "Max: %d")) {
-                    ctx.config.color_filter_g_max = g_max;
+                    ctx.config.profile().color_filter_g_max = g_max;
                     SAVE_PROFILE();
                 }
 
                 // Blue channel
                 ImGui::TextColored(ImVec4(0.3f, 0.3f, 1.0f, 1.0f), "Blue:");
                 if (ImGui::SliderInt("##bmin", &b_min, 0, 255, "Min: %d")) {
-                    ctx.config.color_filter_b_min = b_min;
+                    ctx.config.profile().color_filter_b_min = b_min;
                     SAVE_PROFILE();
                 }
                 ImGui::SameLine();
                 if (ImGui::SliderInt("##bmax", &b_max, 0, 255, "Max: %d")) {
-                    ctx.config.color_filter_b_max = b_max;
+                    ctx.config.profile().color_filter_b_max = b_max;
                     SAVE_PROFILE();
                 }
 
@@ -501,45 +501,45 @@ void draw_color_filter()
 
             } else {
                 // HSV Mode
-                int h_min = ctx.config.color_filter_h_min;
-                int h_max = ctx.config.color_filter_h_max;
-                int s_min = ctx.config.color_filter_s_min;
-                int s_max = ctx.config.color_filter_s_max;
-                int v_min = ctx.config.color_filter_v_min;
-                int v_max = ctx.config.color_filter_v_max;
+                int h_min = ctx.config.profile().color_filter_h_min;
+                int h_max = ctx.config.profile().color_filter_h_max;
+                int s_min = ctx.config.profile().color_filter_s_min;
+                int s_max = ctx.config.profile().color_filter_s_max;
+                int v_min = ctx.config.profile().color_filter_v_min;
+                int v_max = ctx.config.profile().color_filter_v_max;
 
                 ImGui::PushItemWidth(180.0f);
 
                 ImGui::Text("Hue (0-179):");
                 if (ImGui::SliderInt("##hmin", &h_min, 0, 179, "Min: %d")) {
-                    ctx.config.color_filter_h_min = h_min;
+                    ctx.config.profile().color_filter_h_min = h_min;
                     SAVE_PROFILE();
                 }
                 ImGui::SameLine();
                 if (ImGui::SliderInt("##hmax", &h_max, 0, 179, "Max: %d")) {
-                    ctx.config.color_filter_h_max = h_max;
+                    ctx.config.profile().color_filter_h_max = h_max;
                     SAVE_PROFILE();
                 }
 
                 ImGui::Text("Saturation:");
                 if (ImGui::SliderInt("##smin", &s_min, 0, 255, "Min: %d")) {
-                    ctx.config.color_filter_s_min = s_min;
+                    ctx.config.profile().color_filter_s_min = s_min;
                     SAVE_PROFILE();
                 }
                 ImGui::SameLine();
                 if (ImGui::SliderInt("##smax", &s_max, 0, 255, "Max: %d")) {
-                    ctx.config.color_filter_s_max = s_max;
+                    ctx.config.profile().color_filter_s_max = s_max;
                     SAVE_PROFILE();
                 }
 
                 ImGui::Text("Value:");
                 if (ImGui::SliderInt("##vmin", &v_min, 0, 255, "Min: %d")) {
-                    ctx.config.color_filter_v_min = v_min;
+                    ctx.config.profile().color_filter_v_min = v_min;
                     SAVE_PROFILE();
                 }
                 ImGui::SameLine();
                 if (ImGui::SliderInt("##vmax", &v_max, 0, 255, "Max: %d")) {
-                    ctx.config.color_filter_v_max = v_max;
+                    ctx.config.profile().color_filter_v_max = v_max;
                     SAVE_PROFILE();
                 }
 
@@ -559,9 +559,9 @@ void draw_color_filter()
             ImGui::Spacing();
 
             // Target Color Filter (filtering by color match within bbox)
-            bool target_filter_enabled = ctx.config.color_filter_target_enabled;
+            bool target_filter_enabled = ctx.config.profile().color_filter_target_enabled;
             if (ImGui::Checkbox("Enable Target Color Filter", &target_filter_enabled)) {
-                ctx.config.color_filter_target_enabled = target_filter_enabled;
+                ctx.config.profile().color_filter_target_enabled = target_filter_enabled;
                 SAVE_PROFILE();
             }
             ImGui::SameLine();
@@ -569,13 +569,13 @@ void draw_color_filter()
 
             if (target_filter_enabled) {
                 // Simplified inline UI: [value] [px/%] [이상만/이하만/범위] 필터
-                int target_mode = ctx.config.color_filter_target_mode;
-                int comparison = ctx.config.color_filter_comparison;
+                int target_mode = ctx.config.profile().color_filter_target_mode;
+                int comparison = ctx.config.profile().color_filter_comparison;
 
                 if (target_mode == 0) {
                     // Ratio mode - single line UI
-                    float min_ratio = ctx.config.color_filter_min_ratio * 100.0f;
-                    float max_ratio = ctx.config.color_filter_max_ratio * 100.0f;
+                    float min_ratio = ctx.config.profile().color_filter_min_ratio * 100.0f;
+                    float max_ratio = ctx.config.profile().color_filter_max_ratio * 100.0f;
 
                     if (comparison == 2) {
                         // Between mode
@@ -584,7 +584,7 @@ void draw_color_filter()
                             if (min_ratio < 0.0f) min_ratio = 0.0f;
                             if (min_ratio > 100.0f) min_ratio = 100.0f;
                             if (min_ratio > max_ratio) min_ratio = max_ratio;
-                            ctx.config.color_filter_min_ratio = min_ratio / 100.0f;
+                            ctx.config.profile().color_filter_min_ratio = min_ratio / 100.0f;
                             SAVE_PROFILE();
                         }
                         ImGui::SameLine();
@@ -595,7 +595,7 @@ void draw_color_filter()
                             if (max_ratio < 0.0f) max_ratio = 0.0f;
                             if (max_ratio > 100.0f) max_ratio = 100.0f;
                             if (max_ratio < min_ratio) max_ratio = min_ratio;
-                            ctx.config.color_filter_max_ratio = max_ratio / 100.0f;
+                            ctx.config.profile().color_filter_max_ratio = max_ratio / 100.0f;
                             SAVE_PROFILE();
                         }
                         ImGui::SameLine();
@@ -608,9 +608,9 @@ void draw_color_filter()
                             if (value < 0.0f) value = 0.0f;
                             if (value > 100.0f) value = 100.0f;
                             if (comparison == 0) {
-                                ctx.config.color_filter_min_ratio = value / 100.0f;
+                                ctx.config.profile().color_filter_min_ratio = value / 100.0f;
                             } else {
-                                ctx.config.color_filter_max_ratio = value / 100.0f;
+                                ctx.config.profile().color_filter_max_ratio = value / 100.0f;
                             }
                             SAVE_PROFILE();
                         }
@@ -619,8 +619,8 @@ void draw_color_filter()
                     }
                 } else {
                     // Absolute count mode - single line UI
-                    int min_count = ctx.config.color_filter_min_count;
-                    int max_count = ctx.config.color_filter_max_count;
+                    int min_count = ctx.config.profile().color_filter_min_count;
+                    int max_count = ctx.config.profile().color_filter_max_count;
 
                     if (comparison == 2) {
                         // Between mode
@@ -628,7 +628,7 @@ void draw_color_filter()
                         if (ImGui::InputInt("##min_count", &min_count, 0, 0)) {
                             if (min_count < 0) min_count = 0;
                             if (min_count > max_count) min_count = max_count;
-                            ctx.config.color_filter_min_count = min_count;
+                            ctx.config.profile().color_filter_min_count = min_count;
                             SAVE_PROFILE();
                         }
                         ImGui::SameLine();
@@ -638,7 +638,7 @@ void draw_color_filter()
                         if (ImGui::InputInt("##max_count", &max_count, 0, 0)) {
                             if (max_count < 0) max_count = 0;
                             if (max_count < min_count) max_count = min_count;
-                            ctx.config.color_filter_max_count = max_count;
+                            ctx.config.profile().color_filter_max_count = max_count;
                             SAVE_PROFILE();
                         }
                         ImGui::SameLine();
@@ -650,9 +650,9 @@ void draw_color_filter()
                         if (ImGui::InputInt("##threshold_count", &value, 0, 0)) {
                             if (value < 0) value = 0;
                             if (comparison == 0) {
-                                ctx.config.color_filter_min_count = value;
+                                ctx.config.profile().color_filter_min_count = value;
                             } else {
-                                ctx.config.color_filter_max_count = value;
+                                ctx.config.profile().color_filter_max_count = value;
                             }
                             SAVE_PROFILE();
                         }
@@ -666,7 +666,7 @@ void draw_color_filter()
                 const char* comparison_labels[] = { "or more", "or less", "range" };
                 ImGui::SetNextItemWidth(80.0f);
                 if (ImGui::Combo("##comparison", &comparison, comparison_labels, IM_ARRAYSIZE(comparison_labels))) {
-                    ctx.config.color_filter_comparison = comparison;
+                    ctx.config.profile().color_filter_comparison = comparison;
                     SAVE_PROFILE();
                 }
 
@@ -675,14 +675,14 @@ void draw_color_filter()
                 const char* mode_labels[] = { "%", "px" };
                 ImGui::SetNextItemWidth(50.0f);
                 if (ImGui::Combo("##mode", &target_mode, mode_labels, IM_ARRAYSIZE(mode_labels))) {
-                    ctx.config.color_filter_target_mode = target_mode;
+                    ctx.config.profile().color_filter_target_mode = target_mode;
                     SAVE_PROFILE();
                 }
 
                 // Description text
                 if (target_mode == 0) {
-                    float min_r = ctx.config.color_filter_min_ratio * 100.0f;
-                    float max_r = ctx.config.color_filter_max_ratio * 100.0f;
+                    float min_r = ctx.config.profile().color_filter_min_ratio * 100.0f;
+                    float max_r = ctx.config.profile().color_filter_max_ratio * 100.0f;
                     if (comparison == 0) {
                         ImGui::TextColored(ImVec4(0.6f, 0.8f, 0.6f, 1.0f),
                             "-> Accept targets with >= %.1f%% color match", min_r);
@@ -694,8 +694,8 @@ void draw_color_filter()
                             "-> Accept targets with %.1f%% ~ %.1f%% color match", min_r, max_r);
                     }
                 } else {
-                    int min_c = ctx.config.color_filter_min_count;
-                    int max_c = ctx.config.color_filter_max_count;
+                    int min_c = ctx.config.profile().color_filter_min_count;
+                    int max_c = ctx.config.profile().color_filter_max_count;
                     if (comparison == 0) {
                         ImGui::TextColored(ImVec4(0.6f, 0.8f, 0.6f, 1.0f),
                             "-> Accept targets with >= %d matching pixels", min_c);

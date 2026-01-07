@@ -9,7 +9,7 @@ namespace CommonHelpers {
     // Find class name by ID
     inline std::string getClassNameById(int classId) {
         auto& ctx = AppContext::getInstance();
-        for(const auto& cs : ctx.config.class_settings) {
+        for(const auto& cs : ctx.config.profile().class_settings) {
             if (cs.id == classId) {
                 return cs.name;
             }
@@ -21,7 +21,7 @@ namespace CommonHelpers {
     inline int getNextClassId() {
         auto& ctx = AppContext::getInstance();
         int max_id = -1;
-        for(const auto& cs : ctx.config.class_settings) {
+        for(const auto& cs : ctx.config.profile().class_settings) {
             if (cs.id > max_id) max_id = cs.id;
         }
         return max_id + 1;
@@ -32,7 +32,7 @@ namespace CommonHelpers {
     inline void updateConfigAndSave(T& configValue, const T& newValue) {
         if (configValue != newValue) {
             configValue = newValue;
-            AppContext::getInstance().config.saveActiveProfile();
+            AppContext::getInstance().config.saveConfig();
         }
     }
     
@@ -83,7 +83,7 @@ namespace CommonHelpers {
             
             if (ImGui::Combo(combo_label.c_str(), &current_index, key_names_cstrs.data(), static_cast<int>(key_names_cstrs.size()))) {
                 current_key_name = key_names[current_index];
-                ctx.config.saveActiveProfile();
+                ctx.config.saveConfig();
             }
             
             ImGui::SameLine();
@@ -91,11 +91,11 @@ namespace CommonHelpers {
             if (ImGui::Button(remove_button_label.c_str())) {
                 if (bindings.size() <= 1) {
                     bindings[0] = std::string("None");
-                    ctx.config.saveActiveProfile();
+                    ctx.config.saveConfig();
                     continue;
                 } else {
                     bindings.erase(bindings.begin() + i);
-                    ctx.config.saveActiveProfile();
+                    ctx.config.saveConfig();
                     continue;
                 }
             }
@@ -106,7 +106,7 @@ namespace CommonHelpers {
         std::string add_button_label = std::string("Add New ") + label;
         if (ImGui::Button(add_button_label.c_str())) {
             bindings.push_back("None");
-            ctx.config.saveActiveProfile();
+            ctx.config.saveConfig();
         }
     }
 }

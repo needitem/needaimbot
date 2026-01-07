@@ -60,25 +60,25 @@ void UnifiedGraphPipeline::refreshConfigCache(const AppContext& ctx) {
         std::lock_guard<std::mutex> lock(mutableCtx.configMutex);
 
         // PID
-        m_cachedConfig.pid.kp_x = ctx.config.pid_kp_x;
-        m_cachedConfig.pid.kp_y = ctx.config.pid_kp_y;
-        m_cachedConfig.pid.ki_x = ctx.config.pid_ki_x;
-        m_cachedConfig.pid.ki_y = ctx.config.pid_ki_y;
-        m_cachedConfig.pid.kd_x = ctx.config.pid_kd_x;
-        m_cachedConfig.pid.kd_y = ctx.config.pid_kd_y;
-        m_cachedConfig.pid.integral_max = ctx.config.pid_integral_max;
-        m_cachedConfig.pid.derivative_max = ctx.config.pid_derivative_max;
+        m_cachedConfig.pid.kp_x = ctx.config.profile().pid_kp_x;
+        m_cachedConfig.pid.kp_y = ctx.config.profile().pid_kp_y;
+        m_cachedConfig.pid.ki_x = ctx.config.profile().pid_ki_x;
+        m_cachedConfig.pid.ki_y = ctx.config.profile().pid_ki_y;
+        m_cachedConfig.pid.kd_x = ctx.config.profile().pid_kd_x;
+        m_cachedConfig.pid.kd_y = ctx.config.profile().pid_kd_y;
+        m_cachedConfig.pid.integral_max = ctx.config.profile().pid_integral_max;
+        m_cachedConfig.pid.derivative_max = ctx.config.profile().pid_derivative_max;
 
         // Targeting
-        m_cachedConfig.targeting.head_y_offset = ctx.config.head_y_offset;
-        m_cachedConfig.targeting.body_y_offset = ctx.config.body_y_offset;
-        m_cachedConfig.targeting.iou_stickiness_threshold = ctx.config.iou_stickiness_threshold;
+        m_cachedConfig.targeting.head_y_offset = ctx.config.profile().head_y_offset;
+        m_cachedConfig.targeting.body_y_offset = ctx.config.profile().body_y_offset;
+        m_cachedConfig.targeting.iou_stickiness_threshold = ctx.config.profile().iou_stickiness_threshold;
 
         // Resolve head class ID
         m_cachedConfig.targeting.head_class_id = -1;
-        if (!ctx.config.class_settings.empty()) {
-            for (const auto& cs : ctx.config.class_settings) {
-                if (cs.name == ctx.config.head_class_name) {
+        if (!ctx.config.profile().class_settings.empty()) {
+            for (const auto& cs : ctx.config.profile().class_settings) {
+                if (cs.name == ctx.config.profile().head_class_name) {
                     m_cachedConfig.targeting.head_class_id = cs.id;
                     break;
                 }
@@ -86,14 +86,14 @@ void UnifiedGraphPipeline::refreshConfigCache(const AppContext& ctx) {
         }
 
         // Detection
-        m_cachedConfig.detection.max_detections = ctx.config.max_detections;
-        m_cachedConfig.detection.detection_resolution = ctx.config.detection_resolution;
-        m_cachedConfig.detection.confidence_threshold = ctx.config.confidence_threshold;
+        m_cachedConfig.detection.max_detections = ctx.config.profile().max_detections;
+        m_cachedConfig.detection.detection_resolution = ctx.config.profile().detection_resolution;
+        m_cachedConfig.detection.confidence_threshold = ctx.config.profile().confidence_threshold;
 
         // Class filter - fixed size array (cache-friendly)
         m_cachedConfig.detection.class_filter.fill(0);
-        if (!ctx.config.class_settings.empty()) {
-            for (const auto& cs : ctx.config.class_settings) {
+        if (!ctx.config.profile().class_settings.empty()) {
+            for (const auto& cs : ctx.config.profile().class_settings) {
                 if (cs.id >= 0 && cs.id < 80) {
                     m_cachedConfig.detection.class_filter[cs.id] = cs.allow ? 1 : 0;
                 }
@@ -101,33 +101,33 @@ void UnifiedGraphPipeline::refreshConfigCache(const AppContext& ctx) {
         }
 
         // Movement filtering
-        m_cachedConfig.filtering.deadband_enter_x = ctx.config.deadband_enter_x;
-        m_cachedConfig.filtering.deadband_exit_x  = ctx.config.deadband_exit_x;
-        m_cachedConfig.filtering.deadband_enter_y = ctx.config.deadband_enter_y;
-        m_cachedConfig.filtering.deadband_exit_y  = ctx.config.deadband_exit_y;
+        m_cachedConfig.filtering.deadband_enter_x = ctx.config.profile().deadband_enter_x;
+        m_cachedConfig.filtering.deadband_exit_x  = ctx.config.profile().deadband_exit_x;
+        m_cachedConfig.filtering.deadband_enter_y = ctx.config.profile().deadband_enter_y;
+        m_cachedConfig.filtering.deadband_exit_y  = ctx.config.profile().deadband_exit_y;
         m_cachedConfig.filtering.disable_upward_aim = ctx.disable_upward_aim.load(std::memory_order_relaxed);
 
         // Color filter for target selection
-        m_cachedConfig.color_filter.enabled = ctx.config.color_filter_target_enabled && ctx.config.color_filter_enabled;
-        m_cachedConfig.color_filter.color_mode = ctx.config.color_filter_mode;
-        m_cachedConfig.color_filter.target_mode = ctx.config.color_filter_target_mode;
-        m_cachedConfig.color_filter.comparison = ctx.config.color_filter_comparison;
-        m_cachedConfig.color_filter.r_min = ctx.config.color_filter_r_min;
-        m_cachedConfig.color_filter.r_max = ctx.config.color_filter_r_max;
-        m_cachedConfig.color_filter.g_min = ctx.config.color_filter_g_min;
-        m_cachedConfig.color_filter.g_max = ctx.config.color_filter_g_max;
-        m_cachedConfig.color_filter.b_min = ctx.config.color_filter_b_min;
-        m_cachedConfig.color_filter.b_max = ctx.config.color_filter_b_max;
-        m_cachedConfig.color_filter.h_min = ctx.config.color_filter_h_min;
-        m_cachedConfig.color_filter.h_max = ctx.config.color_filter_h_max;
-        m_cachedConfig.color_filter.s_min = ctx.config.color_filter_s_min;
-        m_cachedConfig.color_filter.s_max = ctx.config.color_filter_s_max;
-        m_cachedConfig.color_filter.v_min = ctx.config.color_filter_v_min;
-        m_cachedConfig.color_filter.v_max = ctx.config.color_filter_v_max;
-        m_cachedConfig.color_filter.min_ratio = ctx.config.color_filter_min_ratio;
-        m_cachedConfig.color_filter.max_ratio = ctx.config.color_filter_max_ratio;
-        m_cachedConfig.color_filter.min_count = ctx.config.color_filter_min_count;
-        m_cachedConfig.color_filter.max_count = ctx.config.color_filter_max_count;
+        m_cachedConfig.color_filter.enabled = ctx.config.profile().color_filter_target_enabled && ctx.config.profile().color_filter_enabled;
+        m_cachedConfig.color_filter.color_mode = ctx.config.profile().color_filter_mode;
+        m_cachedConfig.color_filter.target_mode = ctx.config.profile().color_filter_target_mode;
+        m_cachedConfig.color_filter.comparison = ctx.config.profile().color_filter_comparison;
+        m_cachedConfig.color_filter.r_min = ctx.config.profile().color_filter_r_min;
+        m_cachedConfig.color_filter.r_max = ctx.config.profile().color_filter_r_max;
+        m_cachedConfig.color_filter.g_min = ctx.config.profile().color_filter_g_min;
+        m_cachedConfig.color_filter.g_max = ctx.config.profile().color_filter_g_max;
+        m_cachedConfig.color_filter.b_min = ctx.config.profile().color_filter_b_min;
+        m_cachedConfig.color_filter.b_max = ctx.config.profile().color_filter_b_max;
+        m_cachedConfig.color_filter.h_min = ctx.config.profile().color_filter_h_min;
+        m_cachedConfig.color_filter.h_max = ctx.config.profile().color_filter_h_max;
+        m_cachedConfig.color_filter.s_min = ctx.config.profile().color_filter_s_min;
+        m_cachedConfig.color_filter.s_max = ctx.config.profile().color_filter_s_max;
+        m_cachedConfig.color_filter.v_min = ctx.config.profile().color_filter_v_min;
+        m_cachedConfig.color_filter.v_max = ctx.config.profile().color_filter_v_max;
+        m_cachedConfig.color_filter.min_ratio = ctx.config.profile().color_filter_min_ratio;
+        m_cachedConfig.color_filter.max_ratio = ctx.config.profile().color_filter_max_ratio;
+        m_cachedConfig.color_filter.min_count = ctx.config.profile().color_filter_min_count;
+        m_cachedConfig.color_filter.max_count = ctx.config.profile().color_filter_max_count;
 
         // Increment generation to signal update
         m_cachedConfig.generation.store(currentGen + 1, std::memory_order_release);
@@ -1092,10 +1092,10 @@ void UnifiedGraphPipeline::cleanupGraph() {
 
 bool UnifiedGraphPipeline::allocateBuffers() {
     auto& ctx = AppContext::getInstance();
-    const int width = ctx.config.detection_resolution;
-    const int height = ctx.config.detection_resolution;
+    const int width = ctx.config.profile().detection_resolution;
+    const int height = ctx.config.profile().detection_resolution;
     const int yoloSize = getModelInputResolution();
-    const int maxDetections = ctx.config.max_detections;
+    const int maxDetections = ctx.config.profile().max_detections;
     
     
     try {
@@ -1671,7 +1671,7 @@ void UnifiedGraphPipeline::runMainLoop() {
 
             // Smart yield: only sleep if delay is configured, otherwise rely on
             // frame-in-flight blocking which is more efficient
-            int delay = ctx.config.pipeline_loop_delay_ms;
+            int delay = ctx.config.profile().pipeline_loop_delay_ms;
             if (delay > 0) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(delay));
             }
@@ -1773,7 +1773,7 @@ bool UnifiedGraphPipeline::initializeTensorRT(const std::string& modelFile) {
     // Defer getBindings() until after arena allocation so we can alias
     // the primary input to the unified arena and avoid duplicate memory.
     
-    m_imgScale = static_cast<float>(ctx.config.detection_resolution) / getModelInputResolution();
+    m_imgScale = static_cast<float>(ctx.config.profile().detection_resolution) / getModelInputResolution();
     
     
     const auto& outputShape = m_outputShapes[m_outputNames[0]];
@@ -2050,9 +2050,9 @@ void gpa::PostProcessingConfig::updateFromContext(const AppContext& ctx, bool gr
     // Use lock-free reads - these are safe for reading primitive types
     // No mutex needed for hot path performance
     if (!graphCaptured) {
-        max_detections = ctx.config.max_detections;
-        confidence_threshold = ctx.config.confidence_threshold;
-        postprocess = ctx.config.postprocess;
+        max_detections = ctx.config.profile().max_detections;
+        confidence_threshold = ctx.config.profile().confidence_threshold;
+        postprocess = ctx.config.profile().postprocess;
     }
 }
 
@@ -2298,14 +2298,14 @@ bool UnifiedGraphPipeline::updateDDACaptureRegion(const AppContext& ctx) {
         return false;
     }
 
-    int detectionRes = ctx.config.detection_resolution;
+    int detectionRes = ctx.config.profile().detection_resolution;
     if (detectionRes <= 0) {
         return false;
     }
 
-    bool useAimShootOffset = ctx.config.enable_aim_shoot_offset && ctx.aiming && ctx.shooting;
-    float offsetX = useAimShootOffset ? ctx.config.aim_shoot_offset_x : ctx.config.crosshair_offset_x;
-    float offsetY = useAimShootOffset ? ctx.config.aim_shoot_offset_y : ctx.config.crosshair_offset_y;
+    bool useAimShootOffset = ctx.config.profile().enable_aim_shoot_offset && ctx.aiming && ctx.shooting;
+    float offsetX = useAimShootOffset ? ctx.config.profile().aim_shoot_offset_x : ctx.config.profile().crosshair_offset_x;
+    float offsetY = useAimShootOffset ? ctx.config.profile().aim_shoot_offset_y : ctx.config.profile().crosshair_offset_y;
 
     if (m_captureRegionCache.detectionRes == detectionRes &&
         m_captureRegionCache.offsetX == offsetX &&
@@ -2427,7 +2427,7 @@ bool UnifiedGraphPipeline::acquireFrameSync(FrameMetadata& outMetadata) {
     outMetadata.height = height;
 
     // Update preview if enabled
-    if ((m_preview.enabled || ctx.config.show_window) && !m_captureBuffer.empty()) {
+    if ((m_preview.enabled || ctx.config.global().show_window) && !m_captureBuffer.empty()) {
         updatePreviewBuffer(m_captureBuffer);
     }
 
@@ -2568,9 +2568,9 @@ void UnifiedGraphPipeline::updatePreviewBufferAllocation() {
     auto& ctx = AppContext::getInstance();
 
     // Lazy allocation/deallocation - keep buffers allocated for fast re-enable
-    if (ctx.config.show_window && !m_preview.enabled) {
-        int width = ctx.config.detection_resolution;
-        int height = ctx.config.detection_resolution;
+    if (ctx.config.global().show_window && !m_preview.enabled) {
+        int width = ctx.config.profile().detection_resolution;
+        int height = ctx.config.profile().detection_resolution;
 
         // Reuse existing buffers if they match dimensions
         bool needRealloc = m_preview.previewBuffer.empty() ||
@@ -2604,10 +2604,10 @@ void UnifiedGraphPipeline::updatePreviewBufferAllocation() {
         }
 
         m_preview.hasValidHostPreview = false;
-        m_preview.finalTargets.reserve(ctx.config.max_detections);
+        m_preview.finalTargets.reserve(ctx.config.profile().max_detections);
         m_preview.enabled = true;
         m_preview.lastCopyTime = {};
-    } else if (!ctx.config.show_window && m_preview.enabled) {
+    } else if (!ctx.config.global().show_window && m_preview.enabled) {
         // Lazy deallocation - just disable without releasing memory
         // Buffers stay allocated for instant re-enable
         m_preview.enabled = false;
@@ -2846,5 +2846,5 @@ void gpa::UnifiedGraphPipeline::getCaptureStats(gpa::UnifiedGraphPipeline::Captu
 
     out.previewEnabled = m_preview.enabled;
     out.previewHasHost = m_preview.hasValidHostPreview;
-    out.backend = ctx.config.capture_method.c_str();
+    out.backend = ctx.config.profile().capture_method.c_str();
 }

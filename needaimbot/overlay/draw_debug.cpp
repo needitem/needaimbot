@@ -194,7 +194,7 @@ void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float debug_scale, 
         if (is_best_target) {
             color = IM_COL32(0, 255, 0, 255);  // Green for best target
             thickness = 3.0f;
-        } else if (det.confidence >= ctx.config.confidence_threshold) {
+        } else if (det.confidence >= ctx.config.profile().confidence_threshold) {
             color = IM_COL32(255, 255, 0, 255);  // Yellow for valid targets
             thickness = 2.0f;
         } else {
@@ -223,7 +223,7 @@ void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float debug_scale, 
         }
         
         ImU32 text_color = is_best_target ? IM_COL32(0, 255, 0, 255) : 
-                          (det.confidence >= ctx.config.confidence_threshold ? IM_COL32(255, 255, 0, 255) : IM_COL32(255, 0, 0, 255));
+                          (det.confidence >= ctx.config.profile().confidence_threshold ? IM_COL32(255, 255, 0, 255) : IM_COL32(255, 0, 0, 255));
         
         // Check text position is valid
         if (p1.x >= 0 && p1.y >= 16) {
@@ -243,7 +243,7 @@ void draw_debug()
 {
     auto& ctx = AppContext::getInstance();
 
-    if (ImGui::Checkbox("Enable FPS Display", &ctx.config.show_fps)) { SAVE_PROFILE(); }
+    if (ImGui::Checkbox("Enable FPS Display", &ctx.config.global().show_fps)) { SAVE_PROFILE(); }
 
     ImGui::Spacing();
     ImGui::Separator(); 
@@ -256,10 +256,10 @@ void draw_debug()
     ImGui::SeparatorText("Screenshot Settings");
     ImGui::Spacing();
 
-    CommonHelpers::drawKeyBindingList("Screenshot Button", ctx.config.screenshot_button, key_names, key_names_cstrs);
+    CommonHelpers::drawKeyBindingList("Screenshot Button", ctx.config.global().screenshot_button, key_names, key_names_cstrs);
 
     ImGui::Spacing();
-    if (ImGui::InputInt("Screenshot Delay (ms)", &ctx.config.screenshot_delay, 50, 500)) { SAVE_PROFILE(); }
+    if (ImGui::InputInt("Screenshot Delay (ms)", &ctx.config.global().screenshot_delay, 50, 500)) { SAVE_PROFILE(); }
     if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Delay in milliseconds after pressing the button before taking the screenshot."); }
 
     ImGui::Spacing();
@@ -269,7 +269,7 @@ void draw_debug()
     ImGui::SeparatorText("Miscellaneous");
     ImGui::Spacing();
 
-    if (ImGui::Checkbox("Always On Top", &ctx.config.always_on_top)) {
+    if (ImGui::Checkbox("Always On Top", &ctx.config.global().always_on_top)) {
         SAVE_PROFILE();
     }
     if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Keeps the overlay window always on top.\nWARNING: May trigger anti-cheat detection!"); }

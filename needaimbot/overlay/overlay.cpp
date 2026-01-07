@@ -420,7 +420,7 @@ void SetupImGui()
     ImGui::CreateContext();
 
     ImGuiIO& io = ImGui::GetIO();
-    io.FontGlobalScale = ctx.config.overlay_ui_scale;
+    io.FontGlobalScale = ctx.config.global().overlay_ui_scale;
 
     ImGui_ImplWin32_Init(g_hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
@@ -445,8 +445,8 @@ bool CreateOverlayWindow()
 {
     auto& ctx = AppContext::getInstance();
     
-    overlayWidth = static_cast<int>((std::max)(Constants::MIN_OVERLAY_WIDTH, static_cast<int>(Constants::BASE_OVERLAY_WIDTH * ctx.config.overlay_ui_scale)));
-    overlayHeight = static_cast<int>((std::max)(Constants::MIN_OVERLAY_HEIGHT, static_cast<int>(Constants::BASE_OVERLAY_HEIGHT * ctx.config.overlay_ui_scale)));
+    overlayWidth = static_cast<int>((std::max)(Constants::MIN_OVERLAY_WIDTH, static_cast<int>(Constants::BASE_OVERLAY_WIDTH * ctx.config.global().overlay_ui_scale)));
+    overlayHeight = static_cast<int>((std::max)(Constants::MIN_OVERLAY_HEIGHT, static_cast<int>(Constants::BASE_OVERLAY_HEIGHT * ctx.config.global().overlay_ui_scale)));
 
     WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, WndProc, 0L, 0L,
                       GetModuleHandle(NULL), NULL, NULL, NULL, NULL,
@@ -456,7 +456,7 @@ bool CreateOverlayWindow()
     // Remove WS_EX_TOPMOST to avoid anti-cheat detection
     // Use WS_EX_LAYERED only for transparency support
     DWORD exStyle = WS_EX_LAYERED;
-    if (ctx.config.always_on_top) {
+    if (ctx.config.global().always_on_top) {
         exStyle |= WS_EX_TOPMOST;
     }
 
@@ -469,19 +469,19 @@ bool CreateOverlayWindow()
     if (g_hwnd == NULL)
         return false;
     
-    if (ctx.config.overlay_opacity <= 20)
+    if (ctx.config.global().overlay_opacity <= 20)
     {
-        ctx.config.overlay_opacity = 20;
-        ctx.config.saveConfig("config.ini");
+        ctx.config.global().overlay_opacity = 20;
+        ctx.config.saveConfig();
     }
 
-    if (ctx.config.overlay_opacity >= 256)
+    if (ctx.config.global().overlay_opacity >= 256)
     {
-        ctx.config.overlay_opacity = 255;
-        ctx.config.saveConfig("config.ini");
+        ctx.config.global().overlay_opacity = 255;
+        ctx.config.saveConfig();
     }
 
-    BYTE opacity = ctx.config.overlay_opacity;
+    BYTE opacity = ctx.config.global().overlay_opacity;
 
     SetLayeredWindowAttributes(g_hwnd, 0, opacity, LWA_ALPHA);
 
@@ -516,12 +516,12 @@ void OverlayThread()
     bool show_overlay = false;
 
     // Only track values that need actual comparison for state changes
-    int prev_detection_resolution = ctx.config.detection_resolution;
-    bool prev_capture_borders = ctx.config.capture_borders;
-    bool prev_capture_cursor = ctx.config.capture_cursor;
-    int prev_opacity = ctx.config.overlay_opacity;
-    bool prev_show_window = ctx.config.show_window;
-    bool prev_always_on_top = ctx.config.always_on_top;
+    int prev_detection_resolution = ctx.config.profile().detection_resolution;
+    bool prev_capture_borders = ctx.config.profile().capture_borders;
+    bool prev_capture_cursor = ctx.config.profile().capture_cursor;
+    int prev_opacity = ctx.config.global().overlay_opacity;
+    bool prev_show_window = ctx.config.global().show_window;
+    bool prev_always_on_top = ctx.config.global().always_on_top;
 
     for (const auto& pair : KeyCodes::key_code_map)
     {
@@ -561,7 +561,7 @@ void OverlayThread()
         
         // UI-Pipeline separation: Try to read GPU data at UI's own pace (30 FPS)
         // This is completely independent from pipeline's processing speed
-        if (ctx.config.show_window && ctx.preview_enabled) {
+        if (ctx.config.global().show_window && ctx.preview_enabled) {
             // Get pipeline instance
             auto& pipelineManager = gpa::PipelineManager::getInstance();
             auto* pipeline = pipelineManager.getPipeline();
@@ -597,7 +597,7 @@ void OverlayThread()
             }
         }
 
-        if (isAnyKeyPressed(ctx.config.button_open_overlay) & 0x1)
+        if (isAnyKeyPressed(ctx.config.global().button_open_overlay) & 0x1)
         {
             show_overlay = !show_overlay;
 
@@ -719,40 +719,40 @@ void OverlayThread()
 
                 // Efficient config change detection - only check values that trigger actions
                 {
-                    if (prev_detection_resolution != ctx.config.detection_resolution)
+                    if (prev_detection_resolution != ctx.config.profile().detection_resolution)
                     {
-                        prev_detection_resolution = ctx.config.detection_resolution;
+                        prev_detection_resolution = ctx.config.profile().detection_resolution;
                         detection_resolution_changed = true;
                         ctx.model_changed = true;
                     }
 
-                    if (prev_capture_cursor != ctx.config.capture_cursor)
+                    if (prev_capture_cursor != ctx.config.profile().capture_cursor)
                     {
                         capture_cursor_changed = true;
-                        prev_capture_cursor = ctx.config.capture_cursor;
+                        prev_capture_cursor = ctx.config.profile().capture_cursor;
                     }
 
-                    if (prev_capture_borders != ctx.config.capture_borders)
+                    if (prev_capture_borders != ctx.config.profile().capture_borders)
                     {
                         capture_borders_changed = true;
-                        prev_capture_borders = ctx.config.capture_borders;
+                        prev_capture_borders = ctx.config.profile().capture_borders;
                     }
 
-                    if (prev_opacity != ctx.config.overlay_opacity)
+                    if (prev_opacity != ctx.config.global().overlay_opacity)
                     {
-                        prev_opacity = ctx.config.overlay_opacity;
-                        SetLayeredWindowAttributes(g_hwnd, 0, static_cast<BYTE>(ctx.config.overlay_opacity), LWA_ALPHA);
+                        prev_opacity = ctx.config.global().overlay_opacity;
+                        SetLayeredWindowAttributes(g_hwnd, 0, static_cast<BYTE>(ctx.config.global().overlay_opacity), LWA_ALPHA);
                     }
 
-                    if (prev_show_window != ctx.config.show_window || prev_always_on_top != ctx.config.always_on_top)
+                    if (prev_show_window != ctx.config.global().show_window || prev_always_on_top != ctx.config.global().always_on_top)
                     {
-                        prev_always_on_top = ctx.config.always_on_top;
-                        prev_show_window = ctx.config.show_window;
+                        prev_always_on_top = ctx.config.global().always_on_top;
+                        prev_show_window = ctx.config.global().show_window;
                         show_window_changed = true;
-                        ctx.preview_enabled = ctx.config.show_window;
+                        ctx.preview_enabled = ctx.config.global().show_window;
                         
                         // Update window TOPMOST state dynamically
-                        HWND insertAfter = ctx.config.always_on_top ? HWND_TOPMOST : HWND_NOTOPMOST;
+                        HWND insertAfter = ctx.config.global().always_on_top ? HWND_TOPMOST : HWND_NOTOPMOST;
                         SetWindowPos(g_hwnd, insertAfter, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
                     }
                 }
@@ -760,7 +760,7 @@ void OverlayThread()
                 // Auto-save: check if dirty and delay has passed
                 if (g_autoSaveState.shouldSave())
                 {
-                    ctx.config.saveActiveProfile();
+                    ctx.config.saveConfig();
                     g_autoSaveState.reset();
                 }
 
