@@ -1965,16 +1965,12 @@ bool UnifiedGraphPipeline::loadEngine(const std::string& modelFile) {
 
     class SimpleLogger : public nvinfer1::ILogger {
         void log(Severity severity, const char* msg) noexcept override {
-#ifdef _DEBUG
-            if (severity <= Severity::kERROR && 
+            // Always log errors and warnings for debugging engine load issues
+            if (severity <= Severity::kWARNING && 
                 (strstr(msg, "defaultAllocator.cpp") == nullptr) &&
                 (strstr(msg, "enqueueV3") == nullptr)) {
-                std::cout << "[TensorRT] " << msg << std::endl;
+                std::cerr << "[TensorRT] " << msg << std::endl;
             }
-#else
-            (void)severity;
-            (void)msg;
-#endif
         }
     };
     static SimpleLogger logger;
