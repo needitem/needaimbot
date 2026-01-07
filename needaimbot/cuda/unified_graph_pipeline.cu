@@ -901,8 +901,7 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
         return false;
     }
     
-    err = cudaGraphInstantiate(&m_graphExec, m_graph, nullptr, nullptr, 
-                               m_config.graphInstantiateFlags);
+    err = cudaGraphInstantiateWithFlags(&m_graphExec, m_graph, m_config.graphInstantiateFlags);
     if (err != cudaSuccess) {
         std::cerr << "[UnifiedGraph] Failed to instantiate graph: " 
                   << cudaGetErrorString(err) << std::endl;
@@ -1041,8 +1040,7 @@ bool UnifiedGraphPipeline::updateGraphExec() {
 
     m_graph = newGraph;
 
-    err = cudaGraphInstantiate(&m_graphExec, m_graph, nullptr, nullptr,
-                               m_config.graphInstantiateFlags);
+    err = cudaGraphInstantiateWithFlags(&m_graphExec, m_graph, m_config.graphInstantiateFlags);
     if (err != cudaSuccess) {
         std::cerr << "[UnifiedGraph] Failed to reinstantiate graph: "
                   << cudaGetErrorString(err) << std::endl;
