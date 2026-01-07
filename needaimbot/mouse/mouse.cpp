@@ -75,7 +75,7 @@ namespace {
                 if (profile) {
                     // Get base strength and apply scope multiplier
                     float strength = profile->base_strength;
-                    int scope = ctx.config.active_scope_magnification;
+                    int scope = ctx.config.profile().active_scope_magnification;
 
                     switch (scope) {
                         case 1: strength *= profile->scope_mult_1x; break;

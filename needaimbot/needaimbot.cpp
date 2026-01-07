@@ -105,18 +105,18 @@ namespace {
 bool initializeInputMethod() {
     auto& ctx = AppContext::getInstance();
 
-    if (ctx.config.input_method == "ARDUINO") {
+    if (ctx.config.global().input_method == "ARDUINO") {
         return tryInitMethod("Arduino", [&]() -> std::unique_ptr<InputMethod> {
-            auto serial = std::make_unique<SerialConnection>(ctx.config.arduino_port, ctx.config.arduino_baudrate);
+            auto serial = std::make_unique<SerialConnection>(ctx.config.global().arduino_port, ctx.config.global().arduino_baudrate);
             if (!serial->isOpen()) {
-                logInputMethodFallback("Arduino", "failed to open serial port " + ctx.config.arduino_port);
+                logInputMethodFallback("Arduino", "failed to open serial port " + ctx.config.global().arduino_port);
                 return nullptr;
             }
             return std::make_unique<SerialInputMethod>(serial.release());
         });
     }
 
-    if (ctx.config.input_method == "GHUB") {
+    if (ctx.config.global().input_method == "GHUB") {
         return tryInitMethod("GHub", [&]() -> std::unique_ptr<InputMethod> {
             auto gHub = std::make_unique<GhubMouse>();
             if (!gHub->mouse_xy(0, 0)) {
@@ -127,11 +127,11 @@ bool initializeInputMethod() {
         });
     }
 
-    if (ctx.config.input_method == "KMBOX") {
+    if (ctx.config.global().input_method == "KMBOX") {
         return tryInitMethod("kmboxNet", [&]() -> std::unique_ptr<InputMethod> {
-            auto ip = copyToBuffer<256>(ctx.config.kmbox_ip);
-            auto port = copyToBuffer<256>(ctx.config.kmbox_port);
-            auto mac = copyToBuffer<256>(ctx.config.kmbox_mac);
+            auto ip = copyToBuffer<256>(ctx.config.global().kmbox_ip);
+            auto port = copyToBuffer<256>(ctx.config.global().kmbox_port);
+            auto mac = copyToBuffer<256>(ctx.config.global().kmbox_mac);
             if (kmNet_init(ip.data(), port.data(), mac.data()) != 0) {
                 return nullptr;
             }
@@ -139,10 +139,10 @@ bool initializeInputMethod() {
         });
     }
 
-    if (ctx.config.input_method == "MAKCU") {
+    if (ctx.config.global().input_method == "MAKCU") {
         return tryInitMethod("MAKCU", [&]() -> std::unique_ptr<InputMethod> {
-            const auto& ip = ctx.config.makcu_remote_ip;
-            int port = ctx.config.makcu_remote_port;
+            const auto& ip = ctx.config.global().makcu_remote_ip;
+            int port = ctx.config.global().makcu_remote_port;
             if (ip.empty() || port <= 0) {
                 logInputMethodFallback("MAKCU", "invalid remote IP/port configuration");
                 return nullptr;
@@ -156,7 +156,7 @@ bool initializeInputMethod() {
         });
     }
 
-    if (ctx.config.input_method == "RAZER") {
+    if (ctx.config.global().input_method == "RAZER") {
         return tryInitMethod("Razer", []() -> std::unique_ptr<InputMethod> {
             return std::make_unique<RZInputMethod>();
         });
@@ -224,11 +224,11 @@ bool initializeScreenCapture(gpa::UnifiedGraphPipeline* pipeline) {
         return false;
     }
 
-    int detectionRes = std::max(1, ctx.config.detection_resolution);
+    int detectionRes = std::max(1, ctx.config.profile().detection_resolution);
     int captureSize = std::min(detectionRes, std::min(screenW, screenH));
 
-    int centerX = screenW / 2 + static_cast<int>(ctx.config.crosshair_offset_x);
-    int centerY = screenH / 2 + static_cast<int>(ctx.config.crosshair_offset_y);
+    int centerX = screenW / 2 + static_cast<int>(ctx.config.profile().crosshair_offset_x);
+    int centerY = screenH / 2 + static_cast<int>(ctx.config.profile().crosshair_offset_y);
 
     int maxLeft = std::max(0, screenW - captureSize);
     int maxTop = std::max(0, screenH - captureSize);
@@ -434,7 +434,7 @@ int main()
             return -1;
         }
         
-        ctx.preview_enabled = ctx.config.show_window;
+        ctx.preview_enabled = ctx.config.global().show_window;
         
         int cuda_devices = 0;
         cudaError_t err = cudaGetDeviceCount(&cuda_devices);
@@ -474,7 +474,7 @@ int main()
         std::cout << "[MAIN] Found " << availableModels.size() << " models" << std::endl;
 
         std::cout << "[MAIN] Loading and validating model..." << std::endl;
-        if (!loadAndValidateModel(ctx.config.ai_model, availableModels)) {
+        if (!loadAndValidateModel(ctx.config.profile().ai_model, availableModels)) {
             std::cin.get();
             return -1;
         }
@@ -484,12 +484,12 @@ int main()
         auto& pipelineManager = gpa::PipelineManager::getInstance();
         
         gpa::UnifiedPipelineConfig pipelineConfig;
-        pipelineConfig.modelPath = "models/" + ctx.config.ai_model;
+        pipelineConfig.modelPath = "models/" + ctx.config.profile().ai_model;
         pipelineConfig.enableCapture = true;
         pipelineConfig.enableDetection = true;
         pipelineConfig.useGraphOptimization = true;
-        pipelineConfig.detectionWidth = ctx.config.detection_resolution;
-        pipelineConfig.detectionHeight = ctx.config.detection_resolution;
+        pipelineConfig.detectionWidth = ctx.config.profile().detection_resolution;
+        pipelineConfig.detectionHeight = ctx.config.profile().detection_resolution;
         pipelineConfig.allowGraphUpdate = true;
         pipelineConfig.enableProfiling = false;
         

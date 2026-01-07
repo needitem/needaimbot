@@ -41,14 +41,14 @@ static void draw_movement_controls()
                 ImGui::TableNextRow();
                 ImGui::TableSetColumnIndex(0);
                 ImGui::PushItemWidth(-1);
-                if (ImGui::SliderFloat("##KpX", &ctx.config.pid_kp_x, 0.0f, 2.0f, "%.3f")) {
+                if (ImGui::SliderFloat("##KpX", &ctx.config.profile().pid_kp_x, 0.0f, 2.0f, "%.3f")) {
                     SAVE_PROFILE();
                 }
                 ImGui::PopItemWidth();
 
                 ImGui::TableSetColumnIndex(1);
                 ImGui::PushItemWidth(-1);
-                if (ImGui::SliderFloat("##KpY", &ctx.config.pid_kp_y, 0.0f, 2.0f, "%.3f")) {
+                if (ImGui::SliderFloat("##KpY", &ctx.config.profile().pid_kp_y, 0.0f, 2.0f, "%.3f")) {
                     SAVE_PROFILE();
                 }
                 ImGui::PopItemWidth();
@@ -73,14 +73,14 @@ static void draw_movement_controls()
                 ImGui::TableNextRow();
                 ImGui::TableSetColumnIndex(0);
                 ImGui::PushItemWidth(-1);
-                if (ImGui::SliderFloat("##KiX", &ctx.config.pid_ki_x, 0.0f, 0.3f, "%.4f")) {
+                if (ImGui::SliderFloat("##KiX", &ctx.config.profile().pid_ki_x, 0.0f, 0.3f, "%.4f")) {
                     SAVE_PROFILE();
                 }
                 ImGui::PopItemWidth();
 
                 ImGui::TableSetColumnIndex(1);
                 ImGui::PushItemWidth(-1);
-                if (ImGui::SliderFloat("##KiY", &ctx.config.pid_ki_y, 0.0f, 0.3f, "%.4f")) {
+                if (ImGui::SliderFloat("##KiY", &ctx.config.profile().pid_ki_y, 0.0f, 0.3f, "%.4f")) {
                     SAVE_PROFILE();
                 }
                 ImGui::PopItemWidth();
@@ -92,7 +92,7 @@ static void draw_movement_controls()
             UIHelpers::CompactSpacer();
             UIHelpers::SettingsSubHeader("Anti-Windup Limit");
             ImGui::PushItemWidth(-1);
-            if (ImGui::SliderFloat("##IntegralMax", &ctx.config.pid_integral_max, 10.0f, 500.0f, "%.0f px")) {
+            if (ImGui::SliderFloat("##IntegralMax", &ctx.config.profile().pid_integral_max, 10.0f, 500.0f, "%.0f px")) {
                 SAVE_PROFILE();
             }
             ImGui::PopItemWidth();
@@ -114,14 +114,14 @@ static void draw_movement_controls()
                 ImGui::TableNextRow();
                 ImGui::TableSetColumnIndex(0);
                 ImGui::PushItemWidth(-1);
-                if (ImGui::SliderFloat("##KdX", &ctx.config.pid_kd_x, 0.0f, 1.0f, "%.3f")) {
+                if (ImGui::SliderFloat("##KdX", &ctx.config.profile().pid_kd_x, 0.0f, 1.0f, "%.3f")) {
                     SAVE_PROFILE();
                 }
                 ImGui::PopItemWidth();
 
                 ImGui::TableSetColumnIndex(1);
                 ImGui::PushItemWidth(-1);
-                if (ImGui::SliderFloat("##KdY", &ctx.config.pid_kd_y, 0.0f, 1.0f, "%.3f")) {
+                if (ImGui::SliderFloat("##KdY", &ctx.config.profile().pid_kd_y, 0.0f, 1.0f, "%.3f")) {
                     SAVE_PROFILE();
                 }
                 ImGui::PopItemWidth();
@@ -133,7 +133,7 @@ static void draw_movement_controls()
             UIHelpers::CompactSpacer();
             UIHelpers::SettingsSubHeader("Derivative Clamp Limit");
             ImGui::PushItemWidth(-1);
-            if (ImGui::SliderFloat("##DerivativeMax", &ctx.config.pid_derivative_max, 10.0f, 200.0f, "%.0f px")) {
+            if (ImGui::SliderFloat("##DerivativeMax", &ctx.config.profile().pid_derivative_max, 10.0f, 200.0f, "%.0f px")) {
                 SAVE_PROFILE();
             }
             ImGui::PopItemWidth();
@@ -169,7 +169,7 @@ static void draw_input_device_settings()
 
     int method_index = 0;
     for (int i = 0; i < IM_ARRAYSIZE(INPUT_METHODS); ++i) {
-        if (ctx.config.input_method == INPUT_METHODS[i]) {
+        if (ctx.config.global().input_method == INPUT_METHODS[i]) {
             method_index = i;
             break;
         }
@@ -179,7 +179,7 @@ static void draw_input_device_settings()
     if (UIHelpers::EnhancedCombo("Input Method", &method_index, INPUT_METHODS, IM_ARRAYSIZE(INPUT_METHODS),
         "Select which driver handles mouse movement"))
     {
-        ctx.config.input_method = INPUT_METHODS[method_index];
+        ctx.config.global().input_method = INPUT_METHODS[method_index];
         ctx.input_method_changed = true;
         SAVE_PROFILE();
     }
@@ -195,27 +195,27 @@ static void draw_input_device_settings()
         static char arduino_baud_buffer[64] = "";
         static bool buffers_initialized = false;
 
-        if (!buffers_initialized || previous_method != method_index || ctx.config.arduino_port != arduino_port_buffer) {
-            std::snprintf(arduino_port_buffer, IM_ARRAYSIZE(arduino_port_buffer), "%s", ctx.config.arduino_port.c_str());
+        if (!buffers_initialized || previous_method != method_index || ctx.config.global().arduino_port != arduino_port_buffer) {
+            std::snprintf(arduino_port_buffer, IM_ARRAYSIZE(arduino_port_buffer), "%s", ctx.config.global().arduino_port.c_str());
         }
-        if (!buffers_initialized || previous_method != method_index || std::to_string(ctx.config.arduino_baudrate) != arduino_baud_buffer) {
-            std::snprintf(arduino_baud_buffer, IM_ARRAYSIZE(arduino_baud_buffer), "%d", ctx.config.arduino_baudrate);
+        if (!buffers_initialized || previous_method != method_index || std::to_string(ctx.config.global().arduino_baudrate) != arduino_baud_buffer) {
+            std::snprintf(arduino_baud_buffer, IM_ARRAYSIZE(arduino_baud_buffer), "%d", ctx.config.global().arduino_baudrate);
         }
         buffers_initialized = true;
 
         if (ImGui::InputText("Serial Port", arduino_port_buffer, IM_ARRAYSIZE(arduino_port_buffer))) {
-            ctx.config.arduino_port = arduino_port_buffer;
+            ctx.config.global().arduino_port = arduino_port_buffer;
             SAVE_PROFILE();
         }
         UIHelpers::HelpMarker("COM port that the Arduino is connected to");
 
         if (ImGui::InputText("Baud Rate", arduino_baud_buffer, IM_ARRAYSIZE(arduino_baud_buffer), ImGuiInputTextFlags_CharsDecimal)) {
-            ctx.config.arduino_baudrate = std::max(0, std::atoi(arduino_baud_buffer));
+            ctx.config.global().arduino_baudrate = std::max(0, std::atoi(arduino_baud_buffer));
             SAVE_PROFILE();
         }
         UIHelpers::HelpMarker("Serial speed used for communicating with the Arduino");
 
-        if (UIHelpers::EnhancedCheckbox("Enable Key Passthrough", &ctx.config.arduino_enable_keys,
+        if (UIHelpers::EnhancedCheckbox("Enable Key Passthrough", &ctx.config.global().arduino_enable_keys,
             "Forward keyboard events to the Arduino for on-board handling"))
         {
             SAVE_PROFILE();
@@ -229,27 +229,27 @@ static void draw_input_device_settings()
         static char kmbox_mac_buffer[64] = "";
         static bool buffers_initialized = false;
 
-        if (!buffers_initialized || previous_method != method_index || ctx.config.kmbox_ip != kmbox_ip_buffer) {
-            std::snprintf(kmbox_ip_buffer, IM_ARRAYSIZE(kmbox_ip_buffer), "%s", ctx.config.kmbox_ip.c_str());
+        if (!buffers_initialized || previous_method != method_index || ctx.config.global().kmbox_ip != kmbox_ip_buffer) {
+            std::snprintf(kmbox_ip_buffer, IM_ARRAYSIZE(kmbox_ip_buffer), "%s", ctx.config.global().kmbox_ip.c_str());
         }
-        if (!buffers_initialized || previous_method != method_index || ctx.config.kmbox_port != kmbox_port_buffer) {
-            std::snprintf(kmbox_port_buffer, IM_ARRAYSIZE(kmbox_port_buffer), "%s", ctx.config.kmbox_port.c_str());
+        if (!buffers_initialized || previous_method != method_index || ctx.config.global().kmbox_port != kmbox_port_buffer) {
+            std::snprintf(kmbox_port_buffer, IM_ARRAYSIZE(kmbox_port_buffer), "%s", ctx.config.global().kmbox_port.c_str());
         }
-        if (!buffers_initialized || previous_method != method_index || ctx.config.kmbox_mac != kmbox_mac_buffer) {
-            std::snprintf(kmbox_mac_buffer, IM_ARRAYSIZE(kmbox_mac_buffer), "%s", ctx.config.kmbox_mac.c_str());
+        if (!buffers_initialized || previous_method != method_index || ctx.config.global().kmbox_mac != kmbox_mac_buffer) {
+            std::snprintf(kmbox_mac_buffer, IM_ARRAYSIZE(kmbox_mac_buffer), "%s", ctx.config.global().kmbox_mac.c_str());
         }
         buffers_initialized = true;
 
         if (ImGui::InputText("Device IP", kmbox_ip_buffer, IM_ARRAYSIZE(kmbox_ip_buffer))) {
-            ctx.config.kmbox_ip = kmbox_ip_buffer;
+            ctx.config.global().kmbox_ip = kmbox_ip_buffer;
             SAVE_PROFILE();
         }
         if (ImGui::InputText("Device Port", kmbox_port_buffer, IM_ARRAYSIZE(kmbox_port_buffer), ImGuiInputTextFlags_CharsDecimal)) {
-            ctx.config.kmbox_port = kmbox_port_buffer;
+            ctx.config.global().kmbox_port = kmbox_port_buffer;
             SAVE_PROFILE();
         }
         if (ImGui::InputText("Device MAC", kmbox_mac_buffer, IM_ARRAYSIZE(kmbox_mac_buffer), ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_CharsUppercase)) {
-            ctx.config.kmbox_mac = kmbox_mac_buffer;
+            ctx.config.global().kmbox_mac = kmbox_mac_buffer;
             SAVE_PROFILE();
         }
         UIHelpers::HelpMarker("Enter MAC without separators, e.g. 46405C53");
@@ -262,20 +262,20 @@ static void draw_input_device_settings()
         static char makcu_port_buffer[16] = "";
         static bool buffers_initialized = false;
 
-        if (!buffers_initialized || previous_method != method_index || ctx.config.makcu_remote_ip != makcu_ip_buffer) {
-            std::snprintf(makcu_ip_buffer, IM_ARRAYSIZE(makcu_ip_buffer), "%s", ctx.config.makcu_remote_ip.c_str());
+        if (!buffers_initialized || previous_method != method_index || ctx.config.global().makcu_remote_ip != makcu_ip_buffer) {
+            std::snprintf(makcu_ip_buffer, IM_ARRAYSIZE(makcu_ip_buffer), "%s", ctx.config.global().makcu_remote_ip.c_str());
         }
-        if (!buffers_initialized || previous_method != method_index || std::to_string(ctx.config.makcu_remote_port) != makcu_port_buffer) {
-            std::snprintf(makcu_port_buffer, IM_ARRAYSIZE(makcu_port_buffer), "%d", ctx.config.makcu_remote_port);
+        if (!buffers_initialized || previous_method != method_index || std::to_string(ctx.config.global().makcu_remote_port) != makcu_port_buffer) {
+            std::snprintf(makcu_port_buffer, IM_ARRAYSIZE(makcu_port_buffer), "%d", ctx.config.global().makcu_remote_port);
         }
         buffers_initialized = true;
 
         if (ImGui::InputText("Second PC IP", makcu_ip_buffer, IM_ARRAYSIZE(makcu_ip_buffer))) {
-            ctx.config.makcu_remote_ip = makcu_ip_buffer;
+            ctx.config.global().makcu_remote_ip = makcu_ip_buffer;
             SAVE_PROFILE();
         }
         if (ImGui::InputText("UDP Port", makcu_port_buffer, IM_ARRAYSIZE(makcu_port_buffer), ImGuiInputTextFlags_CharsDecimal)) {
-            ctx.config.makcu_remote_port = std::max(0, std::atoi(makcu_port_buffer));
+            ctx.config.global().makcu_remote_port = std::max(0, std::atoi(makcu_port_buffer));
             SAVE_PROFILE();
         }
         UIHelpers::HelpMarker("Set this to the IP and UDP port where MakcuRelay.exe is listening on the second PC.");
@@ -324,15 +324,15 @@ void draw_mouse()
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
         ImGui::SetNextItemWidth(-1);
-        if (ImGui::SliderInt("##enter_x", &ctx.config.deadband_enter_x, 0, 10, "Enter: %d px")) {
-            ctx.config.deadband_enter_x = std::max(0, std::min(ctx.config.deadband_enter_x, ctx.config.deadband_exit_x));
+        if (ImGui::SliderInt("##enter_x", &ctx.config.profile().deadband_enter_x, 0, 10, "Enter: %d px")) {
+            ctx.config.profile().deadband_enter_x = std::max(0, std::min(ctx.config.profile().deadband_enter_x, ctx.config.profile().deadband_exit_x));
             SAVE_PROFILE();
             if (auto* p = gpa::PipelineManager::getInstance().getPipeline()) p->markPidConfigDirty();
         }
         ImGui::TableNextColumn();
         ImGui::SetNextItemWidth(-1);
-        if (ImGui::SliderInt("##enter_y", &ctx.config.deadband_enter_y, 0, 10, "Enter: %d px")) {
-            ctx.config.deadband_enter_y = std::max(0, std::min(ctx.config.deadband_enter_y, ctx.config.deadband_exit_y));
+        if (ImGui::SliderInt("##enter_y", &ctx.config.profile().deadband_enter_y, 0, 10, "Enter: %d px")) {
+            ctx.config.profile().deadband_enter_y = std::max(0, std::min(ctx.config.profile().deadband_enter_y, ctx.config.profile().deadband_exit_y));
             SAVE_PROFILE();
             if (auto* p = gpa::PipelineManager::getInstance().getPipeline()) p->markPidConfigDirty();
         }
@@ -341,15 +341,15 @@ void draw_mouse()
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
         ImGui::SetNextItemWidth(-1);
-        if (ImGui::SliderInt("##exit_x", &ctx.config.deadband_exit_x, 1, 20, "Exit: %d px")) {
-            ctx.config.deadband_exit_x = std::max(ctx.config.deadband_exit_x, ctx.config.deadband_enter_x);
+        if (ImGui::SliderInt("##exit_x", &ctx.config.profile().deadband_exit_x, 1, 20, "Exit: %d px")) {
+            ctx.config.profile().deadband_exit_x = std::max(ctx.config.profile().deadband_exit_x, ctx.config.profile().deadband_enter_x);
             SAVE_PROFILE();
             if (auto* p = gpa::PipelineManager::getInstance().getPipeline()) p->markPidConfigDirty();
         }
         ImGui::TableNextColumn();
         ImGui::SetNextItemWidth(-1);
-        if (ImGui::SliderInt("##exit_y", &ctx.config.deadband_exit_y, 1, 20, "Exit: %d px")) {
-            ctx.config.deadband_exit_y = std::max(ctx.config.deadband_exit_y, ctx.config.deadband_enter_y);
+        if (ImGui::SliderInt("##exit_y", &ctx.config.profile().deadband_exit_y, 1, 20, "Exit: %d px")) {
+            ctx.config.profile().deadband_exit_y = std::max(ctx.config.profile().deadband_exit_y, ctx.config.profile().deadband_enter_y);
             SAVE_PROFILE();
             if (auto* p = gpa::PipelineManager::getInstance().getPipeline()) p->markPidConfigDirty();
         }
@@ -362,10 +362,10 @@ void draw_mouse()
 
     UIHelpers::CompactSpacer();
     if (UIHelpers::BeautifulButton("Reset to Defaults", ImVec2(-1, 0))) {
-        ctx.config.deadband_enter_x = 2;
-        ctx.config.deadband_exit_x  = 5;
-        ctx.config.deadband_enter_y = 2;
-        ctx.config.deadband_exit_y  = 5;
+        ctx.config.profile().deadband_enter_x = 2;
+        ctx.config.profile().deadband_exit_x  = 5;
+        ctx.config.profile().deadband_enter_y = 2;
+        ctx.config.profile().deadband_exit_y  = 5;
         SAVE_PROFILE();
         if (auto* p = gpa::PipelineManager::getInstance().getPipeline()) p->markPidConfigDirty();
     }

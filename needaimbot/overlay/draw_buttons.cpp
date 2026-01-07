@@ -358,19 +358,19 @@ static void draw_aiming_settings()
         ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 140.0f);
         ImGui::TableSetupColumn("Keys", ImGuiTableColumnFlags_WidthStretch);
 
-        draw_hotkey_table_row(UIStrings::HotkeyActivation().c_str(), ctx.config.button_targeting, "targeting_keys",
+        draw_hotkey_table_row(UIStrings::HotkeyActivation().c_str(), ctx.config.global().button_targeting, "targeting_keys",
                              UIStrings::HotkeyActivationDesc().c_str());
 
-        draw_hotkey_table_row("Auto Action", ctx.config.button_auto_action, "auto_action_keys",
+        draw_hotkey_table_row("Auto Action", ctx.config.global().button_auto_action, "auto_action_keys",
                              "Automatically perform action when targeting");
 
-        draw_hotkey_table_row("Disable Upward", ctx.config.button_disable_upward_aim, "disable_upward_keys",
+        draw_hotkey_table_row("Disable Upward", ctx.config.global().button_disable_upward_aim, "disable_upward_keys",
                              UIStrings::HotkeyDisableUpward().c_str());
 
-        draw_hotkey_table_row("Single Shot", ctx.config.button_single_shot, "single_shot_keys",
+        draw_hotkey_table_row("Single Shot", ctx.config.global().button_single_shot, "single_shot_keys",
                              "One capture and one mouse move per keypress");
 
-        draw_hotkey_table_row("Stabilizer", ctx.config.button_stabilizer, "stabilizer_keys",
+        draw_hotkey_table_row("Stabilizer", ctx.config.global().button_stabilizer, "stabilizer_keys",
                              "Input stabilization using profile settings while held");
 
         ImGui::EndTable();
@@ -382,7 +382,7 @@ static void draw_aiming_settings()
 
     UIHelpers::BeginCard("Action Area");
     ImGui::Text("Area Size Multiplier");
-    if (UIHelpers::EnhancedSliderFloat("##action_area", &ctx.config.bScope_multiplier, 0.1f, 2.0f, "%.2f",
+    if (UIHelpers::EnhancedSliderFloat("##action_area", &ctx.config.profile().bScope_multiplier, 0.1f, 2.0f, "%.2f",
                                       "Central screen area where action activates.\nSmaller = larger area, Larger = smaller area")) {
         SAVE_PROFILE();
     }
@@ -402,19 +402,19 @@ void draw_buttons()
         ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 120.0f);
         ImGui::TableSetupColumn("Keys", ImGuiTableColumnFlags_WidthStretch);
 
-        draw_hotkey_table_row("Targeting", ctx.config.button_targeting, "targeting",
+        draw_hotkey_table_row("Targeting", ctx.config.global().button_targeting, "targeting",
                              UIStrings::HotkeyActivationDesc().c_str());
 
-        draw_hotkey_table_row("Exit App", ctx.config.button_exit, "exit",
+        draw_hotkey_table_row("Exit App", ctx.config.global().button_exit, "exit",
                              "Keys that completely exit the application");
 
-        draw_hotkey_table_row("Pause", ctx.config.button_pause, "pause",
+        draw_hotkey_table_row("Pause", ctx.config.global().button_pause, "pause",
                              UIStrings::HotkeyPause().c_str());
 
-        draw_hotkey_table_row("Reload Config", ctx.config.button_reload_config, "reload_config",
+        draw_hotkey_table_row("Reload Config", ctx.config.global().button_reload_config, "reload_config",
                              "Keys that reload the configuration file");
 
-        draw_hotkey_table_row("Toggle Overlay", ctx.config.button_open_overlay, "overlay",
+        draw_hotkey_table_row("Toggle Overlay", ctx.config.global().button_open_overlay, "overlay",
                              "Keys that show/hide this overlay", true);
 
         ImGui::EndTable();

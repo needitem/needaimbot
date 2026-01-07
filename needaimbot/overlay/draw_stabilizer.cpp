@@ -7,8 +7,8 @@
 static void draw_profile_selector()
 {
     auto& ctx = AppContext::getInstance();
-    auto& profiles = ctx.config.input_profiles;
-    int& active_idx = ctx.config.active_input_profile_index;
+    auto& profiles = ctx.config.profile().input_profiles;
+    int& active_idx = ctx.config.profile().active_input_profile_index;
 
     // Ensure valid index
     if (active_idx < 0 || active_idx >= static_cast<int>(profiles.size())) {
@@ -38,7 +38,6 @@ static void draw_profile_selector()
                     bool is_selected = (active_idx == i);
                     if (ImGui::Selectable(profiles[i].profile_name.c_str(), is_selected)) {
                         active_idx = i;
-                        ctx.config.current_profile_name = profiles[i].profile_name;
                         SAVE_PROFILE();
                     }
                     if (is_selected) {
@@ -94,7 +93,6 @@ static void draw_profile_selector()
         ImGui::SetNextItemWidth(-1);
         if (ImGui::InputText("##profile_name", name_buf, sizeof(name_buf))) {
             profile.profile_name = name_buf;
-            ctx.config.current_profile_name = name_buf;
             SAVE_PROFILE();
         }
     }
@@ -108,8 +106,8 @@ static void draw_profile_selector()
 static void draw_stabilizer_settings()
 {
     auto& ctx = AppContext::getInstance();
-    auto& profiles = ctx.config.input_profiles;
-    int active_idx = ctx.config.active_input_profile_index;
+    auto& profiles = ctx.config.profile().input_profiles;
+    int active_idx = ctx.config.profile().active_input_profile_index;
 
     if (profiles.empty() || active_idx < 0 || active_idx >= static_cast<int>(profiles.size())) {
         return;
@@ -181,8 +179,8 @@ static void draw_stabilizer_settings()
 static void draw_timing_settings()
 {
     auto& ctx = AppContext::getInstance();
-    auto& profiles = ctx.config.input_profiles;
-    int active_idx = ctx.config.active_input_profile_index;
+    auto& profiles = ctx.config.profile().input_profiles;
+    int active_idx = ctx.config.profile().active_input_profile_index;
 
     if (profiles.empty() || active_idx < 0 || active_idx >= static_cast<int>(profiles.size())) {
         return;
@@ -246,12 +244,12 @@ static void draw_stabilizer_status()
 
     // Current key display
     std::string key_display;
-    if (ctx.config.button_stabilizer.empty() || ctx.config.button_stabilizer[0] == "None") {
+    if (ctx.config.global().button_stabilizer.empty() || ctx.config.global().button_stabilizer[0] == "None") {
         key_display = "None";
     } else {
-        for (size_t i = 0; i < ctx.config.button_stabilizer.size(); ++i) {
+        for (size_t i = 0; i < ctx.config.global().button_stabilizer.size(); ++i) {
             if (i > 0) key_display += " + ";
-            key_display += ctx.config.button_stabilizer[i];
+            key_display += ctx.config.global().button_stabilizer[i];
         }
     }
     ImGui::Text("Hotkey: %s", key_display.c_str());
@@ -272,7 +270,7 @@ static void draw_stabilizer_status()
     auto* profile = ctx.config.getCurrentInputProfile();
     if (profile) {
         float strength = profile->base_strength;
-        int scope = ctx.config.active_scope_magnification;
+        int scope = ctx.config.profile().active_scope_magnification;
 
         switch (scope) {
             case 1: strength *= profile->scope_mult_1x; break;
@@ -299,8 +297,8 @@ static void draw_stabilizer_status()
 static void draw_scope_multipliers()
 {
     auto& ctx = AppContext::getInstance();
-    auto& profiles = ctx.config.input_profiles;
-    int active_idx = ctx.config.active_input_profile_index;
+    auto& profiles = ctx.config.profile().input_profiles;
+    int active_idx = ctx.config.profile().active_input_profile_index;
 
     if (profiles.empty() || active_idx < 0 || active_idx >= static_cast<int>(profiles.size())) {
         return;
@@ -315,7 +313,7 @@ static void draw_scope_multipliers()
 
     // Current scope indicator
     ImGui::TextColored(UIHelpers::GetWarningColor(),
-        "Current Scope: %dx", ctx.config.active_scope_magnification);
+        "Current Scope: %dx", ctx.config.profile().active_scope_magnification);
     UIHelpers::CompactSpacer();
 
     // Scope multipliers in a clean grid

@@ -159,13 +159,13 @@ void keyboardListener() {
 
     while (!ctx.should_exit) {
         // Update caches (only re-parses if config changed)
-        cache_exit.update(ctx.config.button_exit);
-        cache_targeting.update(ctx.config.button_targeting);
-        cache_auto_action.update(ctx.config.button_auto_action);
-        cache_disable_upward.update(ctx.config.button_disable_upward_aim);
-        cache_stabilizer.update(ctx.config.button_stabilizer);
-        cache_pause.update(ctx.config.button_pause);
-        cache_single_shot.update(ctx.config.button_single_shot);
+        cache_exit.update(ctx.config.global().button_exit);
+        cache_targeting.update(ctx.config.global().button_targeting);
+        cache_auto_action.update(ctx.config.global().button_auto_action);
+        cache_disable_upward.update(ctx.config.global().button_disable_upward_aim);
+        cache_stabilizer.update(ctx.config.global().button_stabilizer);
+        cache_pause.update(ctx.config.global().button_pause);
+        cache_single_shot.update(ctx.config.global().button_single_shot);
 
         // Check for exit key
         if (cache_exit.isPressed()) {
@@ -238,7 +238,7 @@ void keyboardListener() {
                 if (elapsed >= static_cast<long long>(interval_ms * 1000)) {
                     // Calculate strength with scope multiplier
                     float strength = profile->base_strength;
-                    int scope = ctx.config.active_scope_magnification;
+                    int scope = ctx.config.profile().active_scope_magnification;
                     switch (scope) {
                         case 1: strength *= profile->scope_mult_1x; break;
                         case 2: strength *= profile->scope_mult_2x; break;

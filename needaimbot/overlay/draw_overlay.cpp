@@ -42,20 +42,20 @@ void draw_overlay()
     ImGui::SeparatorText("Overlay Appearance");
     ImGui::Spacing();
 
-    if (ImGui::SliderInt("Overlay Opacity", &ctx.config.overlay_opacity, 40, 255)) {
+    if (ImGui::SliderInt("Overlay Opacity", &ctx.config.global().overlay_opacity, 40, 255)) {
         MARK_CONFIG_DIRTY();  // Auto-save after delay
     }
     if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Adjusts the transparency of the overlay window (settings menu)."); }
 
     ImGui::Spacing();
 
-    static float ui_scale = ctx.config.overlay_ui_scale;
+    static float ui_scale = ctx.config.global().overlay_ui_scale;
 
     if (ImGui::SliderFloat("UI Scale", &ui_scale, 0.5f, 3.0f, "%.2f"))
     {
         ImGui::GetIO().FontGlobalScale = ui_scale;
 
-        ctx.config.overlay_ui_scale = ui_scale;
+        ctx.config.global().overlay_ui_scale = ui_scale;
         MARK_CONFIG_DIRTY();  // Auto-save after delay
 
         overlayWidth = static_cast<int>(Constants::BASE_OVERLAY_WIDTH * ui_scale);

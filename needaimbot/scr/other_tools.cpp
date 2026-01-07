@@ -141,9 +141,16 @@ bool IsConsoleVisible()
     return ::IsWindowVisible(::GetConsoleWindow()) != FALSE;
 }
 
+// Ensure models directory exists
+static void ensureModelsDirectory() {
+    if (!std::filesystem::exists("models/")) {
+        std::filesystem::create_directories("models/");
+    }
+}
 
 std::vector<std::string> getEngineFiles()
 {
+    ensureModelsDirectory();
     std::vector<std::string> engineFiles;
 
     for (const auto& entry : std::filesystem::directory_iterator("models/"))
@@ -158,6 +165,7 @@ std::vector<std::string> getEngineFiles()
 
 std::vector<std::string> getModelFiles()
 {
+    ensureModelsDirectory();
     std::vector<std::string> modelsFiles;
 
     for (const auto& entry : std::filesystem::directory_iterator("models/"))
@@ -173,6 +181,7 @@ std::vector<std::string> getModelFiles()
 
 std::vector<std::string> getOnnxFiles()
 {
+    ensureModelsDirectory();
     std::vector<std::string> onnxFiles;
 
     for (const auto& entry : std::filesystem::directory_iterator("models/"))
@@ -188,7 +197,7 @@ std::vector<std::string> getOnnxFiles()
 std::vector<std::string>::difference_type getModelIndex(std::vector<std::string> engine_models)
 {
     auto& config = AppContext::getInstance().config;
-    auto it = std::find(engine_models.begin(), engine_models.end(), config.ai_model);
+    auto it = std::find(engine_models.begin(), engine_models.end(), config.profile().ai_model);
 
     if (it != engine_models.end())
     {
@@ -390,10 +399,10 @@ void welcome_message()
     "\n\n=== Gaming Performance Analyzer v1.0.0 ===\n" <<
     "Performance monitoring system is now active!\n\n" <<
     "Controls:\n" <<
-    config.joinStrings(config.button_targeting) << " -> Start Performance Analysis\n" <<
-    config.joinStrings(config.button_exit) << " -> Exit Application\n" <<
-    config.joinStrings(config.button_pause) << " -> Pause Analysis\n" <<
-    config.joinStrings(config.button_open_overlay) << " -> Open Settings Panel\n" <<
+    config.joinStrings(config.global().button_targeting) << " -> Start Performance Analysis\n" <<
+    config.joinStrings(config.global().button_exit) << " -> Exit Application\n" <<
+    config.joinStrings(config.global().button_pause) << " -> Pause Analysis\n" <<
+    config.joinStrings(config.global().button_open_overlay) << " -> Open Settings Panel\n" <<
     "\nMonitoring gaming performance and system metrics..." <<
     std::endl;
 }

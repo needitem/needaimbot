@@ -107,7 +107,7 @@ bool SerialConnection::initializeSerial() {
     
     // 3. 스레드 시작
     try {
-        if (AppContext::getInstance().config.arduino_enable_keys) {
+        if (AppContext::getInstance().config.global().arduino_enable_keys) {
             startListening();
         }
         return true;

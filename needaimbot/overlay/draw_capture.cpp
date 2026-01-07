@@ -29,14 +29,14 @@ static void draw_capture_area_settings()
     UIHelpers::BeginCard("Capture Area");
 
     // Resolution slider
-    float detection_res_float = static_cast<float>(ctx.config.detection_resolution);
-    int old_resolution = ctx.config.detection_resolution;
+    float detection_res_float = static_cast<float>(ctx.config.profile().detection_resolution);
+    int old_resolution = ctx.config.profile().detection_resolution;
 
     if (UIHelpers::EnhancedSliderFloat("Detection Resolution", &detection_res_float, 50.0f, 1280.0f, "%.0f px",
                                        "Size of the capture area around cursor.\nSmaller = faster, larger = wider FOV")) {
         int new_resolution = static_cast<int>(detection_res_float);
         if (new_resolution != old_resolution) {
-            ctx.config.detection_resolution = new_resolution;
+            ctx.config.profile().detection_resolution = new_resolution;
             SAVE_PROFILE();
             extern std::atomic<bool> detection_resolution_changed;
             detection_resolution_changed.store(true);
@@ -45,14 +45,14 @@ static void draw_capture_area_settings()
     }
 
     // Performance warning
-    if (ctx.config.detection_resolution >= Constants::DETECTION_RESOLUTION_HIGH_PERF) {
+    if (ctx.config.profile().detection_resolution >= Constants::DETECTION_RESOLUTION_HIGH_PERF) {
         UIHelpers::CompactSpacer();
         ImGui::TextColored(UIHelpers::GetWarningColor(), "High resolution may impact FPS");
     }
 
     UIHelpers::CompactSpacer();
 
-    if (UIHelpers::BeautifulToggle("Circle Mask", &ctx.config.circle_mask,
+    if (UIHelpers::BeautifulToggle("Circle Mask", &ctx.config.profile().circle_mask,
                                    "Ignore corners of capture area")) {
         SAVE_PROFILE();
     }
@@ -101,17 +101,17 @@ static void draw_capture_behavior_settings()
     UIHelpers::BeginCard("Performance Tuning");
 
     // Pipeline loop delay with better presentation
-    int delay = ctx.config.pipeline_loop_delay_ms;
+    int delay = ctx.config.profile().pipeline_loop_delay_ms;
     ImGui::SetNextItemWidth(-1);
     if (ImGui::SliderInt("##loop_delay", &delay, 0, 50, "Loop Delay: %d ms")) {
-        ctx.config.pipeline_loop_delay_ms = delay;
+        ctx.config.profile().pipeline_loop_delay_ms = delay;
     }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("Delay per loop iteration.\n0 = fastest (may drop game FPS)\n1-5 = recommended\n10+ = safe for weak systems");
     }
     if (ImGui::IsItemDeactivatedAfterEdit()) {
         delay = std::clamp(delay, 0, 50);
-        ctx.config.pipeline_loop_delay_ms = delay;
+        ctx.config.profile().pipeline_loop_delay_ms = delay;
         if (delay == 0) {
             ImGui::OpenPopup("Warning##LoopDelayWarning");
         }
@@ -132,7 +132,7 @@ static void draw_capture_behavior_settings()
     UIHelpers::CompactSpacer();
 
     // Timeout scale (advanced)
-    float scale = ctx.config.capture_timeout_scale;
+    float scale = ctx.config.profile().capture_timeout_scale;
     ImGui::SetNextItemWidth(-1);
     if (ImGui::SliderFloat("##timeout_scale", &scale, 0.50f, 0.70f, "Timeout Scale: %.2f")) {
         // Just preview
@@ -142,8 +142,8 @@ static void draw_capture_behavior_settings()
     }
     if (ImGui::IsItemDeactivatedAfterEdit()) {
         scale = std::clamp(scale, 0.50f, 0.80f);
-        if (fabsf(scale - ctx.config.capture_timeout_scale) > 1e-3f) {
-            ctx.config.capture_timeout_scale = scale;
+        if (fabsf(scale - ctx.config.profile().capture_timeout_scale) > 1e-3f) {
+            ctx.config.profile().capture_timeout_scale = scale;
             SAVE_PROFILE();
         }
     }
@@ -157,11 +157,11 @@ static void draw_capture_behavior_settings()
     if (ImGui::BeginTable("##capture_opts", 2, ImGuiTableFlags_NoBordersInBody)) {
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
-        if (UIHelpers::BeautifulToggle("Include Borders", &ctx.config.capture_borders)) {
+        if (UIHelpers::BeautifulToggle("Include Borders", &ctx.config.profile().capture_borders)) {
             SAVE_PROFILE();
         }
         ImGui::TableNextColumn();
-        if (UIHelpers::BeautifulToggle("Include Cursor", &ctx.config.capture_cursor)) {
+        if (UIHelpers::BeautifulToggle("Include Cursor", &ctx.config.profile().capture_cursor)) {
             SAVE_PROFILE();
         }
         ImGui::EndTable();
@@ -195,7 +195,7 @@ static void draw_capture_source_settings()
         monitorItems.push_back(name.c_str());
     }
 
-    UIHelpers::CompactCombo("Capture Monitor", &ctx.config.monitor_idx, monitorItems.data(), static_cast<int>(monitorItems.size()));
+    UIHelpers::CompactCombo("Capture Monitor", &ctx.config.profile().monitor_idx, monitorItems.data(), static_cast<int>(monitorItems.size()));
     UIHelpers::InfoTooltip("Select which monitor to capture from when using CUDA-based screen capture.");
     if (ImGui::IsItemDeactivatedAfterEdit())
     {
