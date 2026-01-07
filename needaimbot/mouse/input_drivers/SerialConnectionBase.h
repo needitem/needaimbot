@@ -90,7 +90,7 @@ protected:
 
         if (!result && GetLastError() == ERROR_IO_PENDING) {
             DWORD waitResult = WaitForSingleObject(overlapped.hEvent, 
-                NeedAimbot::Constants::SERIAL_WRITE_TIMEOUT_MS);
+                Constants::SERIAL_WRITE_TIMEOUT_MS);
             if (waitResult == WAIT_OBJECT_0) {
                 GetOverlappedResult(serial_handle_, &overlapped, &bytes_written, FALSE);
             }
@@ -103,7 +103,7 @@ protected:
     std::string read() {
         if (!is_open_ || serial_handle_ == INVALID_HANDLE_VALUE) return "";
 
-        char buffer[NeedAimbot::Constants::DEFAULT_SERIAL_BUFFER_SIZE];
+        char buffer[Constants::DEFAULT_SERIAL_BUFFER_SIZE];
         DWORD bytes_read = 0;
         OVERLAPPED overlapped = {0};
         overlapped.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
@@ -120,7 +120,7 @@ protected:
 
         if (!result && GetLastError() == ERROR_IO_PENDING) {
             DWORD waitResult = WaitForSingleObject(overlapped.hEvent, 
-                NeedAimbot::Constants::SERIAL_READ_TIMEOUT_MS);
+                Constants::SERIAL_READ_TIMEOUT_MS);
             if (waitResult == WAIT_OBJECT_0) {
                 GetOverlappedResult(serial_handle_, &overlapped, &bytes_read, FALSE);
             }

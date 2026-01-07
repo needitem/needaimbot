@@ -88,7 +88,7 @@ void draw_target()
     UIHelpers::CompactSpacer();
 
     // Main Controls Card
-    UIHelpers::BeginCard("Aimbot Controls");
+    UIHelpers::BeginCard(UIStrings::CardControls().c_str());
     {
         if (ImGui::BeginTable("##target_controls", 2, ImGuiTableFlags_NoBordersInBody)) {
             ImGui::TableSetupColumn("Toggle", ImGuiTableColumnFlags_WidthFixed, 180.0f);
@@ -149,7 +149,7 @@ void draw_target()
                                            "Keep tracking same target if overlap > threshold.\nHigher = less target switching")) {
             ctx.config.iou_stickiness_threshold = std::clamp(ctx.config.iou_stickiness_threshold, 0.0f, 0.99f);
             SAVE_PROFILE();
-            auto* pipeline = needaimbot::PipelineManager::getInstance().getPipeline();
+            auto* pipeline = gpa::PipelineManager::getInstance().getPipeline();
             if (pipeline) {
                 pipeline->markPidConfigDirty();
                 pipeline->setGraphRebuildNeeded();

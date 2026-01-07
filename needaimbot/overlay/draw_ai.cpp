@@ -330,7 +330,7 @@ static void draw_advanced_settings()
     if (UIHelpers::BeautifulToggle("CUDA Graph Optimization", &ctx.config.use_cuda_graph,
                                    "Faster inference, but may not work with all models")) {
         SAVE_PROFILE();
-        auto& pipelineManager = needaimbot::PipelineManager::getInstance();
+        auto& pipelineManager = gpa::PipelineManager::getInstance();
         if (pipelineManager.getPipeline()) {
             pipelineManager.getPipeline()->setGraphRebuildNeeded();
         }
