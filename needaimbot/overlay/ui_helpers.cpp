@@ -480,15 +480,15 @@ namespace UIHelpers
             // Find current profile index
             current_profile_index = -1;
             for (size_t i = 0; i < profile_list.size(); ++i) {
-                if (profile_list[i] == ctx.config.getActiveProfile()) {
+                if (profile_list[i] == ctx.config.getActiveProfileName()) {
                     current_profile_index = static_cast<int>(i);
                     break;
                 }
             }
             
             // If current profile not found, add it
-            if (current_profile_index == -1 && !ctx.config.getActiveProfile().empty()) {
-                profile_list.insert(profile_list.begin(), ctx.config.getActiveProfile());
+            if (current_profile_index == -1 && !ctx.config.getActiveProfileName().empty()) {
+                profile_list.insert(profile_list.begin(), ctx.config.getActiveProfileName());
                 current_profile_index = 0;
             }
             
@@ -516,7 +516,7 @@ namespace UIHelpers
                     if (current_profile_index != i) {
                         current_profile_index = i;
                         // Load the profile immediately
-                        ctx.config.setActiveProfile(profile_list[i]);
+                        ctx.config.switchProfile(profile_list[i]);
                         changed = true;
                     }
                 }
@@ -555,7 +555,7 @@ namespace UIHelpers
             profile_list = ctx.config.getInputProfileNames();
             
             // Update current profile index
-            current_profile_index = ctx.config.active_input_profile_index;
+            current_profile_index = ctx.config.profile().active_input_profile_index;
             if (current_profile_index < 0 || current_profile_index >= profile_list.size()) {
                 current_profile_index = 0;
             }
@@ -589,12 +589,11 @@ namespace UIHelpers
                     }
                 }
                 
-                // Right-click context menu
                 if (ImGui::BeginPopupContextItem())
                 {
                     if (profile_list[i] != "Default" && ImGui::MenuItem("Delete")) {
                         ctx.config.removeInputProfile(profile_list[i]);
-                        ctx.config.saveActiveProfile();
+                        ctx.config.saveConfig();
                         initialized = false; // Force refresh
                     }
                     if (ImGui::MenuItem("Duplicate")) {
@@ -604,7 +603,7 @@ namespace UIHelpers
                             InputProfile copy = *original;
                             copy.profile_name = new_name;
                             ctx.config.addInputProfile(copy);
-                            ctx.config.saveActiveProfile();
+                            ctx.config.saveConfig();
                             initialized = false; // Force refresh
                         }
                     }
@@ -636,7 +635,7 @@ namespace UIHelpers
             if (ImGui::Button("Add") && strlen(new_profile_name) > 0) {
                 InputProfile new_profile(new_profile_name, 3.0f, 1.0f);
                 if (ctx.config.addInputProfile(new_profile)) {
-                    ctx.config.saveActiveProfile();
+                    ctx.config.saveConfig();
                     new_profile_name[0] = '\0';
                     initialized = false; // Force refresh
                     ImGui::CloseCurrentPopup();

@@ -124,19 +124,19 @@ void renderOffsetTab()
 
     // Body and Head Y Offset controls
     ImGui::SetNextItemWidth(200.0f);
-    if (ImGui::SliderFloat("Body Y Offset", &ctx.config.body_y_offset, -1.0f, 1.0f, "%.2f")) {
+    if (ImGui::SliderFloat("Body Y Offset", &ctx.config.profile().body_y_offset, -1.0f, 1.0f, "%.2f")) {
         SAVE_PROFILE();
     }
     UIHelpers::InfoTooltip("Adjusts the vertical targeting position on body targets. Positive values move the target point up, negative values move it down.");
 
     ImGui::SetNextItemWidth(200.0f);
-    if (ImGui::SliderFloat("Head Y Offset", &ctx.config.head_y_offset, 0.0f, 1.0f, "%.2f")) {
+    if (ImGui::SliderFloat("Head Y Offset", &ctx.config.profile().head_y_offset, 0.0f, 1.0f, "%.2f")) {
         SAVE_PROFILE();
     }
     UIHelpers::InfoTooltip("Adjusts the vertical targeting position on head targets. 0.0 targets the top of the head, 1.0 targets the bottom.");
 
     ImGui::SetNextItemWidth(200.0f);
-    if (ImGui::SliderFloat("Offset Step", &ctx.config.offset_step, 0.001f, 0.1f, "%.3f")) {
+    if (ImGui::SliderFloat("Offset Step", &ctx.config.profile().offset_step, 0.001f, 0.1f, "%.3f")) {
         SAVE_PROFILE();
     }
     UIHelpers::InfoTooltip("Step size for adjusting offset values with arrow keys (0.001 - 0.1)");
@@ -172,13 +172,13 @@ void renderOffsetTab()
         if (image_size.x > 0 && image_size.y > 0)
         {
             // Body offset line calculation (from SunOne's code)
-            float normalized_body_value = (ctx.config.body_y_offset - 1.0f) / 1.0f;
+            float normalized_body_value = (ctx.config.profile().body_y_offset - 1.0f) / 1.0f;
             float body_line_y = image_pos.y + (1.0f + normalized_body_value) * image_size.y;
 
             // Head offset line calculation (from SunOne's code)
             float body_y_pos_at_015 = image_pos.y + (1.0f + (0.15f - 1.0f) / 1.0f) * image_size.y;
             float head_top_pos = image_pos.y;
-            float head_line_y = head_top_pos + (ctx.config.head_y_offset * (body_y_pos_at_015 - head_top_pos));
+            float head_line_y = head_top_pos + (ctx.config.profile().head_y_offset * (body_y_pos_at_015 - head_top_pos));
 
             // Draw body offset line (red)
             draw_list->AddLine(
@@ -230,17 +230,17 @@ void renderOffsetTab()
         // Normal Offset Tab
         if (ImGui::BeginTabItem("Normal")) {
             UIHelpers::CompactSpacer();
-            ImGui::TextDisabled("Capture region offset (Y: %.0f)", ctx.config.crosshair_offset_y);
+            ImGui::TextDisabled("Capture region offset (Y: %.0f)", ctx.config.profile().crosshair_offset_y);
 
-            renderOffsetDPad("offset", ctx.config.crosshair_offset_x, ctx.config.crosshair_offset_y, offset_changed, adjustment_step);
+            renderOffsetDPad("offset", ctx.config.profile().crosshair_offset_x, ctx.config.profile().crosshair_offset_y, offset_changed, adjustment_step);
 
             UIHelpers::CompactSpacer();
-            renderFineAdjustment("offset", ctx.config.crosshair_offset_x, ctx.config.crosshair_offset_y, offset_changed);
+            renderFineAdjustment("offset", ctx.config.profile().crosshair_offset_x, ctx.config.profile().crosshair_offset_y, offset_changed);
 
             UIHelpers::CompactSpacer();
             if (UIHelpers::BeautifulButton("Reset to Center", ImVec2(-1, 0))) {
-                ctx.config.crosshair_offset_x = 0.0f;
-                ctx.config.crosshair_offset_y = 0.0f;
+                ctx.config.profile().crosshair_offset_x = 0.0f;
+                ctx.config.profile().crosshair_offset_y = 0.0f;
                 offset_changed = true;
                 ctx.crosshair_offset_changed = true;
             }
@@ -252,24 +252,24 @@ void renderOffsetTab()
         if (ImGui::BeginTabItem("Aim+Shoot")) {
             UIHelpers::CompactSpacer();
 
-            if (UIHelpers::BeautifulToggle("Enable", &ctx.config.enable_aim_shoot_offset,
+            if (UIHelpers::BeautifulToggle("Enable", &ctx.config.profile().enable_aim_shoot_offset,
                                            "Use different offset when aiming and shooting")) {
                 SAVE_PROFILE();
             }
 
-            if (ctx.config.enable_aim_shoot_offset) {
+            if (ctx.config.profile().enable_aim_shoot_offset) {
                 UIHelpers::CompactSpacer();
-                ImGui::TextDisabled("Offset when aim+shoot (Y: %.0f)", ctx.config.aim_shoot_offset_y);
+                ImGui::TextDisabled("Offset when aim+shoot (Y: %.0f)", ctx.config.profile().aim_shoot_offset_y);
 
-                renderOffsetDPad("aim_shoot", ctx.config.aim_shoot_offset_x, ctx.config.aim_shoot_offset_y, aim_shoot_offset_changed, adjustment_step);
+                renderOffsetDPad("aim_shoot", ctx.config.profile().aim_shoot_offset_x, ctx.config.profile().aim_shoot_offset_y, aim_shoot_offset_changed, adjustment_step);
 
                 UIHelpers::CompactSpacer();
-                renderFineAdjustment("aim_shoot", ctx.config.aim_shoot_offset_x, ctx.config.aim_shoot_offset_y, aim_shoot_offset_changed);
+                renderFineAdjustment("aim_shoot", ctx.config.profile().aim_shoot_offset_x, ctx.config.profile().aim_shoot_offset_y, aim_shoot_offset_changed);
 
                 UIHelpers::CompactSpacer();
                 if (UIHelpers::BeautifulButton("Copy from Normal", ImVec2(-1, 0))) {
-                    ctx.config.aim_shoot_offset_x = ctx.config.crosshair_offset_x;
-                    ctx.config.aim_shoot_offset_y = ctx.config.crosshair_offset_y;
+                    ctx.config.profile().aim_shoot_offset_x = ctx.config.profile().crosshair_offset_x;
+                    ctx.config.profile().aim_shoot_offset_y = ctx.config.profile().crosshair_offset_y;
                     aim_shoot_offset_changed = true;
                     ctx.crosshair_offset_changed = true;
                 }
@@ -298,12 +298,12 @@ void renderOffsetTab()
     // Preview Window Section
     UIHelpers::BeginSettingsSection("Live Preview", "See real-time capture with offset visualization");
 
-    bool prev_show_window_state = ctx.config.show_window;
-    if (ImGui::Checkbox("Enable Preview", &ctx.config.show_window)) {
+    bool prev_show_window_state = ctx.config.global().show_window;
+    if (ImGui::Checkbox("Enable Preview", &ctx.config.global().show_window)) {
         SAVE_PROFILE();
         
         // Clean up resources when disabling preview
-        if (prev_show_window_state == true && ctx.config.show_window == false) {
+        if (prev_show_window_state == true && ctx.config.global().show_window == false) {
             if (g_debugSRV) {
                 g_debugSRV->Release();
                 g_debugSRV = nullptr;
@@ -318,7 +318,7 @@ void renderOffsetTab()
     }
     UIHelpers::InfoTooltip("Shows the live capture feed with crosshair offset visualization");
 
-    if (ctx.config.show_window) {
+    if (ctx.config.global().show_window) {
         ImGui::Spacing();
 
         SimpleMat* frameToDisplay = nullptr;
@@ -457,7 +457,7 @@ void renderOffsetTab()
                     float center_x = image_pos.x + (texW * debug_scale) / 2.0f;
                     float center_y = image_pos.y + (texH * debug_scale) / 2.0f;
 
-                    bool is_aim_shoot_active = ctx.config.enable_aim_shoot_offset && ctx.aiming.load() && ctx.shooting.load();
+                    bool is_aim_shoot_active = ctx.config.profile().enable_aim_shoot_offset && ctx.aiming.load() && ctx.shooting.load();
                     ImU32 crosshair_color = is_aim_shoot_active ? IM_COL32(255, 128, 0, 255) : IM_COL32(255, 255, 255, 255);
 
                     draw_list->AddLine(ImVec2(center_x - 10, center_y), ImVec2(center_x + 10, center_y), crosshair_color, 2.0f);

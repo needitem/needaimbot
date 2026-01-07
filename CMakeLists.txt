@@ -43,6 +43,7 @@ set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Wno-deprecated-gpu-targets")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --diag-suppress=611,221,20091,20054")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -DTHRUST_IGNORE_DEPRECATED_CPP_DIALECT")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -DCUB_IGNORE_DEPRECATED_CPP_DIALECT")
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -DCCCL_IGNORE_MSVC_TRADITIONAL_PREPROCESSOR_WARNING")
 
 # =============================================================================
 # 소스 파일
@@ -112,6 +113,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_SOURCE_DIR}/needaimbot/mouse
     ${CMAKE_SOURCE_DIR}/needaimbot/overlay
     ${CMAKE_SOURCE_DIR}/needaimbot/modules/stb
+    ${CMAKE_SOURCE_DIR}/needaimbot/modules
     ${TENSORRT_PATH}/include
     ${CUDA_PATH}/include
     ${CUDNN_PATH}/include/${CUDNN_VERSION}

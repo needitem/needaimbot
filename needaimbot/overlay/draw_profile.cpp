@@ -58,7 +58,7 @@ void draw_profile()
     // Current active profile display
     UIHelpers::BeautifulText("Current Profile:", UIHelpers::GetAccentColor());
     ImGui::SameLine();
-    ImGui::Text("%s", ctx.config.getActiveProfile().c_str());
+    ImGui::Text("%s", ctx.config.getActiveProfileName().c_str());
     UIHelpers::Spacer();
     
     UIHelpers::BeautifulText("All Profiles:");
@@ -70,7 +70,7 @@ void draw_profile()
         for (size_t n = 0; n < profile_list_cstrs.size(); n++)
         {
             const bool is_selected = (selected_profile_index == static_cast<int>(n));
-            const bool is_current = (profile_list[n] == ctx.config.getActiveProfile());
+            const bool is_current = (profile_list[n] == ctx.config.getActiveProfileName());
             
             if (is_current) {
                 ImGui::PushStyleColor(ImGuiCol_Text, UIHelpers::GetAccentColor(0.8f));
@@ -87,7 +87,7 @@ void draw_profile()
             {
                 selected_profile_index = static_cast<int>(n);
                 // Automatically switch to the selected profile
-                ctx.config.setActiveProfile(profile_list[n]);
+                ctx.config.switchProfile(profile_list[n]);
                 status_message = "[OK] Switched to: " + profile_list[n];
                 status_time = std::chrono::steady_clock::now();
             }
@@ -100,7 +100,7 @@ void draw_profile()
             if (ImGui::BeginPopupContextItem())
             {
                 if (ImGui::MenuItem("Save current settings to this profile")) {
-                    ctx.config.saveProfile(profile_list[n]);
+                    ctx.config.saveConfig();
                     status_message = "[OK] Saved settings to: " + profile_list[n];
                     status_time = std::chrono::steady_clock::now();
                 }
@@ -187,10 +187,11 @@ void draw_profile()
         std::string name = new_profile_name;
         if (!name.empty())
         {
-            if (ctx.config.saveProfile(name))
+            if (ctx.config.createProfile(name))
             {
-                status_message = "[OK] Saved: " + name;
-                ctx.config.setActiveProfile(name);
+                status_message = "[OK] Created: " + name;
+                ctx.config.switchProfile(name);
+                ctx.config.saveConfig();
                 refresh_profiles();
                 for(size_t i = 0; i < profile_list.size(); ++i) {
                     if (profile_list[i] == name) {
@@ -202,7 +203,7 @@ void draw_profile()
                 profile_description[0] = '\0';
                 status_time = std::chrono::steady_clock::now();
             } else {
-                status_message = "[ERROR] Failed to save: " + name;
+                status_message = "[ERROR] Failed to create: " + name;
                 status_time = std::chrono::steady_clock::now();
             }
         } else {

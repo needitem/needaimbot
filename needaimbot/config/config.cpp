@@ -1,16 +1,248 @@
 #include "../core/windows_headers.h"
 #include <iostream>
 #include <fstream>
-#include <sstream>
-#include <iomanip>
-#include <string>
 #include <filesystem>
-#include <algorithm>
-#include <shlobj.h>
-
 #include "config.h"
-#include "modules/SimpleIni.h"
-#include "keyboard/keyboard_listener.h"
+
+// JSON serialization for ProfileData
+void to_json(json& j, const ProfileData& p) {
+    j = json{
+        {"detection_resolution", p.detection_resolution},
+        {"monitor_idx", p.monitor_idx},
+        {"circle_mask", p.circle_mask},
+        {"capture_borders", p.capture_borders},
+        {"capture_cursor", p.capture_cursor},
+        {"capture_method", p.capture_method},
+        {"capture_timeout_scale", p.capture_timeout_scale},
+        {"pipeline_loop_delay_ms", p.pipeline_loop_delay_ms},
+        {"body_y_offset", p.body_y_offset},
+        {"head_y_offset", p.head_y_offset},
+        {"offset_step", p.offset_step},
+        {"auto_aim", p.auto_aim},
+        {"auto_action", p.auto_action},
+        {"ignore_up_aim", p.ignore_up_aim},
+        {"crosshair_offset_x", p.crosshair_offset_x},
+        {"crosshair_offset_y", p.crosshair_offset_y},
+        {"enable_aim_shoot_offset", p.enable_aim_shoot_offset},
+        {"aim_shoot_offset_x", p.aim_shoot_offset_x},
+        {"aim_shoot_offset_y", p.aim_shoot_offset_y},
+        {"iou_stickiness_threshold", p.iou_stickiness_threshold},
+        {"pid_kp_x", p.pid_kp_x}, {"pid_kp_y", p.pid_kp_y},
+        {"pid_ki_x", p.pid_ki_x}, {"pid_ki_y", p.pid_ki_y},
+        {"pid_kd_x", p.pid_kd_x}, {"pid_kd_y", p.pid_kd_y},
+        {"pid_integral_max", p.pid_integral_max},
+        {"pid_derivative_max", p.pid_derivative_max},
+        {"deadband_enter_x", p.deadband_enter_x},
+        {"deadband_exit_x", p.deadband_exit_x},
+        {"deadband_enter_y", p.deadband_enter_y},
+        {"deadband_exit_y", p.deadband_exit_y},
+        {"ai_model", p.ai_model},
+        {"confidence_threshold", p.confidence_threshold},
+        {"max_detections", p.max_detections},
+        {"postprocess", p.postprocess},
+        {"color_filter_enabled", p.color_filter_enabled},
+        {"color_filter_mode", p.color_filter_mode},
+        {"color_filter_r_min", p.color_filter_r_min},
+        {"color_filter_r_max", p.color_filter_r_max},
+        {"color_filter_g_min", p.color_filter_g_min},
+        {"color_filter_g_max", p.color_filter_g_max},
+        {"color_filter_b_min", p.color_filter_b_min},
+        {"color_filter_b_max", p.color_filter_b_max},
+        {"color_filter_h_min", p.color_filter_h_min},
+        {"color_filter_h_max", p.color_filter_h_max},
+        {"color_filter_s_min", p.color_filter_s_min},
+        {"color_filter_s_max", p.color_filter_s_max},
+        {"color_filter_v_min", p.color_filter_v_min},
+        {"color_filter_v_max", p.color_filter_v_max},
+        {"color_filter_mask_opacity", p.color_filter_mask_opacity},
+        {"color_filter_target_enabled", p.color_filter_target_enabled},
+        {"color_filter_target_mode", p.color_filter_target_mode},
+        {"color_filter_comparison", p.color_filter_comparison},
+        {"color_filter_min_ratio", p.color_filter_min_ratio},
+        {"color_filter_max_ratio", p.color_filter_max_ratio},
+        {"color_filter_min_count", p.color_filter_min_count},
+        {"color_filter_max_count", p.color_filter_max_count},
+        {"head_class_name", p.head_class_name},
+        {"class_settings", p.class_settings},
+        {"input_profiles", p.input_profiles},
+        {"active_input_profile_index", p.active_input_profile_index},
+        {"active_scope_magnification", p.active_scope_magnification},
+        {"bScope_multiplier", p.bScope_multiplier}
+    };
+}
+
+void from_json(const json& j, ProfileData& p) {
+    #define GET_IF(field) if (j.contains(#field)) j.at(#field).get_to(p.field)
+    GET_IF(detection_resolution);
+    GET_IF(monitor_idx);
+    GET_IF(circle_mask);
+    GET_IF(capture_borders);
+    GET_IF(capture_cursor);
+    GET_IF(capture_method);
+    GET_IF(capture_timeout_scale);
+    GET_IF(pipeline_loop_delay_ms);
+    GET_IF(body_y_offset);
+    GET_IF(head_y_offset);
+    GET_IF(offset_step);
+    GET_IF(auto_aim);
+    GET_IF(auto_action);
+    GET_IF(ignore_up_aim);
+    GET_IF(crosshair_offset_x);
+    GET_IF(crosshair_offset_y);
+    GET_IF(enable_aim_shoot_offset);
+    GET_IF(aim_shoot_offset_x);
+    GET_IF(aim_shoot_offset_y);
+    GET_IF(iou_stickiness_threshold);
+    GET_IF(pid_kp_x); GET_IF(pid_kp_y);
+    GET_IF(pid_ki_x); GET_IF(pid_ki_y);
+    GET_IF(pid_kd_x); GET_IF(pid_kd_y);
+    GET_IF(pid_integral_max);
+    GET_IF(pid_derivative_max);
+    GET_IF(deadband_enter_x);
+    GET_IF(deadband_exit_x);
+    GET_IF(deadband_enter_y);
+    GET_IF(deadband_exit_y);
+    GET_IF(ai_model);
+    GET_IF(confidence_threshold);
+    GET_IF(max_detections);
+    GET_IF(postprocess);
+    GET_IF(color_filter_enabled);
+    GET_IF(color_filter_mode);
+    GET_IF(color_filter_r_min);
+    GET_IF(color_filter_r_max);
+    GET_IF(color_filter_g_min);
+    GET_IF(color_filter_g_max);
+    GET_IF(color_filter_b_min);
+    GET_IF(color_filter_b_max);
+    GET_IF(color_filter_h_min);
+    GET_IF(color_filter_h_max);
+    GET_IF(color_filter_s_min);
+    GET_IF(color_filter_s_max);
+    GET_IF(color_filter_v_min);
+    GET_IF(color_filter_v_max);
+    GET_IF(color_filter_mask_opacity);
+    GET_IF(color_filter_target_enabled);
+    GET_IF(color_filter_target_mode);
+    GET_IF(color_filter_comparison);
+    GET_IF(color_filter_min_ratio);
+    GET_IF(color_filter_max_ratio);
+    GET_IF(color_filter_min_count);
+    GET_IF(color_filter_max_count);
+    GET_IF(head_class_name);
+    GET_IF(class_settings);
+    GET_IF(input_profiles);
+    GET_IF(active_input_profile_index);
+    GET_IF(active_scope_magnification);
+    GET_IF(bScope_multiplier);
+    #undef GET_IF
+}
+
+void to_json(json& j, const GlobalSettings& g) {
+    j = json{
+        {"input_method", g.input_method},
+        {"arduino_baudrate", g.arduino_baudrate},
+        {"arduino_port", g.arduino_port},
+        {"arduino_enable_keys", g.arduino_enable_keys},
+        {"kmbox_ip", g.kmbox_ip},
+        {"kmbox_port", g.kmbox_port},
+        {"kmbox_mac", g.kmbox_mac},
+        {"makcu_port", g.makcu_port},
+        {"makcu_baudrate", g.makcu_baudrate},
+        {"makcu_remote_ip", g.makcu_remote_ip},
+        {"makcu_remote_port", g.makcu_remote_port},
+        {"cuda_device_id", g.cuda_device_id},
+        {"persistent_cache_limit_mb", g.persistent_cache_limit_mb},
+        {"use_cuda_graph", g.use_cuda_graph},
+        {"graph_warmup_iterations", g.graph_warmup_iterations},
+        {"button_targeting", g.button_targeting},
+        {"button_exit", g.button_exit},
+        {"button_pause", g.button_pause},
+        {"button_reload_config", g.button_reload_config},
+        {"button_open_overlay", g.button_open_overlay},
+        {"button_disable_upward_aim", g.button_disable_upward_aim},
+        {"button_auto_action", g.button_auto_action},
+        {"button_single_shot", g.button_single_shot},
+        {"button_stabilizer", g.button_stabilizer},
+        {"overlay_opacity", g.overlay_opacity},
+        {"overlay_ui_scale", g.overlay_ui_scale},
+        {"show_window", g.show_window},
+        {"show_fps", g.show_fps},
+        {"screenshot_button", g.screenshot_button},
+        {"screenshot_delay", g.screenshot_delay},
+        {"always_on_top", g.always_on_top}
+    };
+}
+
+void from_json(const json& j, GlobalSettings& g) {
+    #define GET_IF(field) if (j.contains(#field)) j.at(#field).get_to(g.field)
+    GET_IF(input_method);
+    GET_IF(arduino_baudrate);
+    GET_IF(arduino_port);
+    GET_IF(arduino_enable_keys);
+    GET_IF(kmbox_ip);
+    GET_IF(kmbox_port);
+    GET_IF(kmbox_mac);
+    GET_IF(makcu_port);
+    GET_IF(makcu_baudrate);
+    GET_IF(makcu_remote_ip);
+    GET_IF(makcu_remote_port);
+    GET_IF(cuda_device_id);
+    GET_IF(persistent_cache_limit_mb);
+    GET_IF(use_cuda_graph);
+    GET_IF(graph_warmup_iterations);
+    GET_IF(button_targeting);
+    GET_IF(button_exit);
+    GET_IF(button_pause);
+    GET_IF(button_reload_config);
+    GET_IF(button_open_overlay);
+    GET_IF(button_disable_upward_aim);
+    GET_IF(button_auto_action);
+    GET_IF(button_single_shot);
+    GET_IF(button_stabilizer);
+    GET_IF(overlay_opacity);
+    GET_IF(overlay_ui_scale);
+    GET_IF(show_window);
+    GET_IF(show_fps);
+    GET_IF(screenshot_button);
+    GET_IF(screenshot_delay);
+    GET_IF(always_on_top);
+    #undef GET_IF
+}
+
+
+Config::Config() {
+    initializeDefaults();
+}
+
+void Config::initializeDefaults() {
+    ProfileData defaultProfile;
+    initializeDefaultClassSettings(defaultProfile);
+    initializeDefaultInputProfiles(defaultProfile);
+    profiles["Default"] = std::move(defaultProfile);
+    active_profile_name = "Default";
+    current_profile = &profiles["Default"];
+}
+
+void Config::initializeDefaultClassSettings(ProfileData& p) {
+    p.class_settings.clear();
+    p.class_settings.emplace_back(0, "Player", true);
+    p.class_settings.emplace_back(1, "NPC", true);
+    p.class_settings.emplace_back(2, "Item", false);
+    p.class_settings.emplace_back(3, "Outline", false);
+    p.class_settings.emplace_back(4, "Dead Body", false);
+    p.class_settings.emplace_back(5, "Hideout Human", true);
+    p.class_settings.emplace_back(6, "Hideout Balls", true);
+    p.class_settings.emplace_back(7, "Head", true);
+    p.class_settings.emplace_back(8, "Smoke", false);
+    p.class_settings.emplace_back(9, "Fire", false);
+    p.class_settings.emplace_back(10, "Third Person", false);
+}
+
+void Config::initializeDefaultInputProfiles(ProfileData& p) {
+    p.input_profiles.clear();
+    p.input_profiles.push_back(InputProfile{"Default", 3.0f, 1.0f});
+    p.active_input_profile_index = 0;
+}
 
 std::string Config::getExecutableDir() {
     char buffer[MAX_PATH];
@@ -23,856 +255,220 @@ std::string Config::getConfigPath(const std::string& filename) {
     return getExecutableDir() + "/" + filename;
 }
 
-std::vector<std::string> Config::splitString(const std::string& str, char delimiter)
-{
-    std::vector<std::string> tokens;
-    std::stringstream ss(str);
-    std::string item;
-    while (std::getline(ss, item, delimiter))
-    {
-        while (!item.empty() && (item.front() == ' ' || item.front() == '\t'))
-            item.erase(item.begin());
-        while (!item.empty() && (item.back() == ' ' || item.back() == '\t'))
-            item.pop_back();
+bool Config::loadConfig(const std::string& filename) {
+    std::string configFile = filename.empty() ? getConfigPath("config.json") : filename;
 
-        tokens.push_back(item);
-    }
-    return tokens;
-}
-
-std::string Config::joinStrings(const std::vector<std::string>& vec, const std::string& delimiter)
-{
-    std::ostringstream oss;
-    for (size_t i = 0; i < vec.size(); ++i)
-    {
-        if (i != 0) oss << delimiter;
-        oss << vec[i];
-    }
-    return oss.str();
-}
-
-bool Config::loadConfig(const std::string& filename)
-{
-    std::string configFile = filename.empty() ? getConfigPath("config.ini") : filename;
-    bool is_main_config = (configFile == getConfigPath("config.ini"));
-    if (!std::filesystem::exists(configFile))
-    {
-
-        
-        detection_resolution = 256;  // Optimized resolution for faster inference
-        monitor_idx = 0;
-        circle_mask = false;  // Disabled for better performance
-        capture_borders = false;  // Disabled for better performance
-        capture_cursor = false;  // Disabled for better performance
-        capture_method = "DDA";  // Default capture backend
-        capture_timeout_scale = 0.60f; // Default capture timeout scale
-
-        body_y_offset = 0.15f;
-        head_y_offset = 0.05f;
-        offset_step = 0.01f;
-
-        auto_aim = false;
-        auto_action = false;
-        ignore_up_aim = false;
-
-
-        crosshair_offset_x = 0.0f;
-        crosshair_offset_y = 0.0f;
-
-        pid_kp_x = 0.5f;  // Proportional gain (0-1 typical)
-        pid_kp_y = 0.5f;
-        pid_ki_x = 0.0f;  // Integral gain (0 = PD controller)
-        pid_ki_y = 0.0f;
-        pid_kd_x = 0.3f;  // Derivative gain for dampening
-        pid_kd_y = 0.3f;
-        pid_integral_max = 100.0f;  // Windup limit
-
-        // Deadband defaults (per-axis jitter filter)
-        deadband_enter_x = 2;
-        deadband_exit_x  = 5;
-        deadband_enter_y = 2;
-        deadband_exit_y  = 5;
-
-        // Target stickiness default
-        iou_stickiness_threshold = 0.30f;
-
-        // Aim+shoot offset defaults
-        enable_aim_shoot_offset = false;
-        aim_shoot_offset_x = 0.0f;
-        aim_shoot_offset_y = 0.0f;
-
-        input_method = "WIN32";  // Default value, will be overridden by config file if present
-
-
-
-        active_scope_magnification = 0;
-
-        
-        
-
-        
-
-        
-        
-
-        
-        arduino_baudrate = 2000000;
-        arduino_port = "COM0";
-        arduino_enable_keys = false;
-
-		
-        kmbox_ip = "192.168.2.188";
-        kmbox_port = "16896";
-        kmbox_mac = "46405c53";
-        
-
-        // Makcu legacy (COM) defaults - kept for backwards compatibility but unused in 2PC mode
-        makcu_port = "COM0";
-        makcu_baudrate = 4000000;
-        // Makcu 2PC network defaults
-        makcu_remote_ip = "127.0.0.1";
-        makcu_remote_port = 5005;
-        
-        bScope_multiplier = 1.0f;
-
-
-        ai_model = "sunxds_0.5.6.engine";
-        confidence_threshold = 0.25f;  // Higher threshold = fewer detections = better performance
-        max_detections = 30;  // Reduced from 100 for better performance
-        postprocess = "yolo11";  // Changed from yolo12 to match common model format
-
-        
-        cuda_device_id = 0;
-
-        
-        button_targeting = splitString("RightMouseButton");
-        button_exit = splitString("F2");
-        button_pause = splitString("F3");
-        button_reload_config = splitString("F4");
-        button_open_overlay = splitString("Home");
-        button_disable_upward_aim = splitString("None");
-        button_auto_action = splitString("LeftMouseButton");
-        button_stabilizer = splitString("None"); 
- 
-
-        
-        overlay_opacity = 225;
-        overlay_ui_scale = 1.0f;
-        
-
-        
-        head_class_name = "Head";
-        class_settings.clear();
-        class_settings.emplace_back(0, "Player", false);
-        class_settings.emplace_back(1, "NPC", false);
-        class_settings.emplace_back(2, "Item", true); 
-        class_settings.emplace_back(3, "Outline", true);
-        class_settings.emplace_back(4, "Dead Body", true);
-        class_settings.emplace_back(5, "Hideout Human", false);
-        class_settings.emplace_back(6, "Hideout Balls", false);
-        class_settings.emplace_back(7, "Head", false); 
-        class_settings.emplace_back(8, "Smoke", true);
-        class_settings.emplace_back(9, "Fire", true);
-        class_settings.emplace_back(10, "Third Person", true); 
-
-        
-        show_window = true;
-        show_fps = true;
-        
-        screenshot_button = splitString("None");
-        screenshot_delay = 500;
-        always_on_top = false;  // Disabled by default to avoid anti-cheat detection
-
-
-        
-
-        active_profile_name = "Default";
-
-        if (is_main_config) {
-            // Initialize default profile with baseline settings
-            saveConfig(getConfigPath("Default.ini"));
-            saveConfig(configFile);
-        } else {
-            saveConfig(configFile);
-        }
+    if (!std::filesystem::exists(configFile)) {
+        std::cout << "[Config] Creating default config: " << configFile << std::endl;
+        initializeDefaults();
+        saveConfig(configFile);
         return true;
     }
 
-    CSimpleIniA ini;
-    ini.SetUnicode();
-    SI_Error rc = ini.LoadFile(configFile.c_str());
-    if (rc < 0) {
-        return false;
-    }
-
-
-    if (is_main_config) {
-        const char* profile_value = ini.GetValue("Profile", "active_profile", "");
-        std::string stored_profile = profile_value ? profile_value : "";
-        std::string requested_profile = stored_profile.empty() ? "Default" : stored_profile;
-
-        std::string profile_file = getConfigPath(requested_profile + ".ini");
-        if (!std::filesystem::exists(profile_file) && requested_profile != "Default") {
-            // Fallback to Default profile when requested profile is missing
-            requested_profile = "Default";
-            profile_file = getConfigPath(requested_profile + ".ini");
-        }
-
-        bool loaded = loadConfig(profile_file);
-        if (loaded) {
-            active_profile_name = requested_profile;
-            if (requested_profile != stored_profile) {
-                saveConfig(configFile);
-            }
-        }
-        return loaded;
-    }
-
-
-    auto get_string_ini = [&](const char* section, const char* key, const char* defval) {
-        const char* val = ini.GetValue(section, key, defval);
-        return std::string(val ? val : "");
-    };
-    auto get_bool_ini = [&](const char* section, const char* key, bool defval) {
-        return ini.GetBoolValue(section, key, defval);
-    };
-    auto get_long_ini = [&](const char* section, const char* key, long defval) {
-        return (int)ini.GetLongValue(section, key, defval);
-    };
-    auto get_double_ini = [&](const char* section, const char* key, double defval) {
-        return ini.GetDoubleValue(section, key, defval);
-    };
-
-    
-    detection_resolution = get_long_ini("Capture", "detection_resolution", 320);
-    monitor_idx = get_long_ini("Capture", "monitor_idx", 0);
-    circle_mask = get_bool_ini("Capture", "circle_mask", true);
-    capture_borders = get_bool_ini("Capture", "capture_borders", true);
-    capture_cursor = get_bool_ini("Capture", "capture_cursor", true);
-    capture_method = get_string_ini("Capture", "capture_method", "DDA");
-    capture_timeout_scale = static_cast<float>(get_double_ini("Capture", "capture_timeout_scale", 0.60));
-    pipeline_loop_delay_ms = get_long_ini("Capture", "pipeline_loop_delay_ms", 1);
-
-    // Batch load floats for better cache locality
-    body_y_offset = static_cast<float>(get_double_ini("Target", "body_y_offset", 0.15));
-    head_y_offset = static_cast<float>(get_double_ini("Target", "head_y_offset", 0.05));
-    offset_step = static_cast<float>(get_double_ini("Target", "offset_step", 0.01));
-    
-    // Batch load booleans
-
-    auto_aim = get_bool_ini("Target", "auto_aim", false);
-    auto_action = get_bool_ini("Target", "auto_action", false);
-    ignore_up_aim = get_bool_ini("Target", "ignore_up_aim", false);
-
-    crosshair_offset_x = static_cast<float>(get_double_ini("Target", "crosshair_offset_x", 0.0));
-    crosshair_offset_y = static_cast<float>(get_double_ini("Target", "crosshair_offset_y", 0.0));
-    
-    // Aim+shoot offset settings
-    enable_aim_shoot_offset = get_bool_ini("Target", "enable_aim_shoot_offset", false);
-    aim_shoot_offset_x = static_cast<float>(get_double_ini("Target", "aim_shoot_offset_x", 0.0));
-    aim_shoot_offset_y = static_cast<float>(get_double_ini("Target", "aim_shoot_offset_y", 0.0));
-
-    // Load PID controller settings
-    pid_kp_x = static_cast<float>(get_double_ini("PIDController", "pid_kp_x", 0.5));
-    pid_kp_y = static_cast<float>(get_double_ini("PIDController", "pid_kp_y", 0.5));
-    pid_ki_x = static_cast<float>(get_double_ini("PIDController", "pid_ki_x", 0.0));
-    pid_ki_y = static_cast<float>(get_double_ini("PIDController", "pid_ki_y", 0.0));
-    pid_kd_x = static_cast<float>(get_double_ini("PIDController", "pid_kd_x", 0.3));
-    pid_kd_y = static_cast<float>(get_double_ini("PIDController", "pid_kd_y", 0.3));
-    pid_integral_max = static_cast<float>(get_double_ini("PIDController", "pid_integral_max", 100.0));
-    pid_derivative_max = static_cast<float>(get_double_ini("PIDController", "pid_derivative_max", 50.0));
-
-    // Load deadband per-axis (Mouse)
-    deadband_enter_x = get_long_ini("Mouse", "deadband_enter_x", 2);
-    deadband_exit_x  = get_long_ini("Mouse", "deadband_exit_x", 5);
-    deadband_enter_y = get_long_ini("Mouse", "deadband_enter_y", 2);
-    deadband_exit_y  = get_long_ini("Mouse", "deadband_exit_y", 5);
-
-    // Load IoU stickiness (Target)
-    iou_stickiness_threshold = static_cast<float>(get_double_ini("Target", "iou_stickiness_threshold", 0.30));
-
-    // Color Filter
-    color_filter_enabled = get_bool_ini("ColorFilter", "enabled", false);
-    color_filter_mode = get_long_ini("ColorFilter", "mode", 0);
-    color_filter_r_min = get_long_ini("ColorFilter", "r_min", 0);
-    color_filter_r_max = get_long_ini("ColorFilter", "r_max", 255);
-    color_filter_g_min = get_long_ini("ColorFilter", "g_min", 0);
-    color_filter_g_max = get_long_ini("ColorFilter", "g_max", 255);
-    color_filter_b_min = get_long_ini("ColorFilter", "b_min", 0);
-    color_filter_b_max = get_long_ini("ColorFilter", "b_max", 255);
-    color_filter_h_min = get_long_ini("ColorFilter", "h_min", 0);
-    color_filter_h_max = get_long_ini("ColorFilter", "h_max", 179);
-    color_filter_s_min = get_long_ini("ColorFilter", "s_min", 0);
-    color_filter_s_max = get_long_ini("ColorFilter", "s_max", 255);
-    color_filter_v_min = get_long_ini("ColorFilter", "v_min", 0);
-    color_filter_v_max = get_long_ini("ColorFilter", "v_max", 255);
-    color_filter_mask_opacity = static_cast<float>(get_double_ini("ColorFilter", "mask_opacity", 0.2));
-    color_filter_target_enabled = get_bool_ini("ColorFilter", "target_enabled", false);
-    color_filter_target_mode = get_long_ini("ColorFilter", "target_mode", 0);
-    color_filter_comparison = get_long_ini("ColorFilter", "comparison", 0);
-    color_filter_min_ratio = static_cast<float>(get_double_ini("ColorFilter", "min_ratio", 0.1));
-    color_filter_max_ratio = static_cast<float>(get_double_ini("ColorFilter", "max_ratio", 1.0));
-    color_filter_min_count = get_long_ini("ColorFilter", "min_count", 10);
-    color_filter_max_count = get_long_ini("ColorFilter", "max_count", 10000);
-
-    input_method = get_string_ini("Mouse", "input_method", "WIN32");
-
-    bScope_multiplier = static_cast<float>(get_double_ini("Mouse", "bScope_multiplier", 1.2));
-
-    active_scope_magnification = get_long_ini("Recoil", "active_scope_magnification", 0);
-
-    
-    
-    
-    // Hybrid aim control settings
-
-    arduino_baudrate = get_long_ini("Arduino", "arduino_baudrate", 2000000);
-    arduino_port = get_string_ini("Arduino", "arduino_port", "COM0");
-    arduino_enable_keys = get_bool_ini("Arduino", "arduino_enable_keys", false);
-
-    kmbox_ip = get_string_ini("KMBOX", "ip", "192.168.2.188");
-    kmbox_port = get_string_ini("KMBOX", "port", "16896");
-    kmbox_mac = get_string_ini("KMBOX", "mac", "46405C53");
-
-    // Makcu legacy serial settings (not used in 2PC mode but loaded for backwards compatibility)
-    makcu_port = get_string_ini("MAKCU", "makcu_port", "COM0");
-    makcu_baudrate = get_long_ini("MAKCU", "makcu_baudrate", 4000000);
-    // Makcu 2PC network settings
-    makcu_remote_ip = get_string_ini("MAKCU", "makcu_remote_ip", "127.0.0.1");
-    makcu_remote_port = get_long_ini("MAKCU", "makcu_remote_port", 5005);
-
-    ai_model = get_string_ini("AI", "ai_model", "sunxds_0.5.6.engine");
-    confidence_threshold = static_cast<float>(get_double_ini("AI", "confidence_threshold", 0.25));
-    max_detections = get_long_ini("AI", "max_detections", 30);
-    postprocess = get_string_ini("AI", "postprocess", "yolo11");  // Changed default from yolo12 to yolo11
-
-    cuda_device_id = get_long_ini("CUDA", "cuda_device_id", 0);
-    
-    // GPU performance settings
-    persistent_cache_limit_mb = get_long_ini("GPU", "persistent_cache_limit_mb", 32);
-    use_cuda_graph = get_bool_ini("GPU", "use_cuda_graph", false);
-    graph_warmup_iterations = get_long_ini("GPU", "graph_warmup_iterations", 3);
-
-    button_targeting = splitString(get_string_ini("Buttons", "button_targeting", "RightMouseButton"));
-    button_exit = splitString(get_string_ini("Buttons", "button_exit", "F2"));
-    button_pause = splitString(get_string_ini("Buttons", "button_pause", "F3"));
-    button_reload_config = splitString(get_string_ini("Buttons", "button_reload_config", "F4"));
-    button_open_overlay = splitString(get_string_ini("Buttons", "button_open_overlay", "Home"));
-    button_disable_upward_aim = splitString(get_string_ini("Buttons", "button_disable_upward_aim", "None"));
-    button_auto_action = splitString(get_string_ini("Buttons", "button_auto_action", "LeftMouseButton"));
-    button_single_shot = splitString(get_string_ini("Buttons", "button_single_shot", "F8"));
-    button_stabilizer = splitString(get_string_ini("Buttons", "button_stabilizer", "None"));
- 
-
-    overlay_opacity = get_long_ini("Overlay", "overlay_opacity", 225);
-    overlay_ui_scale = static_cast<float>(get_double_ini("Overlay", "overlay_ui_scale", 1.0));
-    
-
-    show_window = get_bool_ini("Debug", "show_window", true);
-    show_fps = get_bool_ini("Debug", "show_fps", true);
-    
-    screenshot_button = splitString(get_string_ini("Debug", "screenshot_button", "None"));
-    screenshot_delay = get_long_ini("Debug", "screenshot_delay", 500);
-    always_on_top = get_bool_ini("Debug", "always_on_top", false);  // Default false to avoid detection
-
-
-
-    head_class_name = get_string_ini("Classes", "HeadClassName", "Head");
-
-    int classSettingsCount = ini.GetLongValue("ClassSettings", "Count", -1); 
-
-    class_settings.clear(); 
-    if (classSettingsCount != -1) { 
-        for (int i = 0; i < classSettingsCount; ++i) {
-            std::string id_key = "Class_" + std::to_string(i) + "_ID";
-            std::string name_key = "Class_" + std::to_string(i) + "_Name";
-            std::string allow_key = "Class_" + std::to_string(i) + "_Allow";
-            
-            int id_val = ini.GetLongValue("ClassSettings", id_key.c_str(), i);
-            std::string name_val = ini.GetValue("ClassSettings", name_key.c_str(), ""); 
-            bool allow_val = ini.GetBoolValue("ClassSettings", allow_key.c_str(), true);
-            
-            if (name_val.empty()) { 
-                name_val = "Class " + std::to_string(id_val);
-            }
-            class_settings.emplace_back(id_val, name_val, allow_val);
-        }
-    } else { 
-        bool temp_allows[11];
-        temp_allows[0] = true;  // Player - allow by default
-        temp_allows[1] = true;  // NPC - allow by default
-        temp_allows[2] = false; // Item - don't allow by default
-        temp_allows[3] = false; // Outline - don't allow by default
-        temp_allows[4] = false; // Dead Body - don't allow by default
-        temp_allows[5] = true;  // Hideout Human - allow by default
-        temp_allows[6] = true;  // Hideout Balls - allow by default
-        temp_allows[7] = true;  // Head - allow by default
-        temp_allows[8] = false; // Smoke - don't allow by default
-        temp_allows[9] = false; // Fire - don't allow by default
-        temp_allows[10] = false; // Third Person - don't allow by default
-
-        class_settings.emplace_back(0, "Player", temp_allows[0]);
-        class_settings.emplace_back(1, "NPC", temp_allows[1]);
-        class_settings.emplace_back(2, "Item", temp_allows[2]);
-        class_settings.emplace_back(3, "Outline", temp_allows[3]);
-        class_settings.emplace_back(4, "Dead Body", temp_allows[4]);
-        class_settings.emplace_back(5, "Hideout Human", temp_allows[5]);
-        class_settings.emplace_back(6, "Hideout Balls", temp_allows[6]);
-        class_settings.emplace_back(7, "Head", temp_allows[7]);
-        class_settings.emplace_back(8, "Smoke", temp_allows[8]);
-        class_settings.emplace_back(9, "Fire", temp_allows[9]);
-        class_settings.emplace_back(10, "Third Person", temp_allows[10]);
-    }
-    // Load input profiles from the config file
-    input_profiles.clear();
-    
-    int profile_count = get_long_ini("InputProfiles", "Count", 0);
-    if (profile_count > 0) {
-        active_input_profile_index = get_long_ini("InputProfiles", "active_input_profile_index", 0);
-        current_profile_name = get_string_ini("InputProfiles", "current_profile_name", "Default");
-
-        for (int i = 0; i < profile_count; ++i) {
-            std::string section = "Profile_" + std::to_string(i);
-            
-            InputProfile profile;
-            profile.profile_name = get_string_ini(section.c_str(), "profile_name", "Default");
-            profile.base_strength = static_cast<float>(get_double_ini(section.c_str(), "base_strength", 3.0));
-            profile.fire_rate_multiplier = static_cast<float>(get_double_ini(section.c_str(), "fire_rate_multiplier", 1.0));
-            profile.scope_mult_1x = static_cast<float>(get_double_ini(section.c_str(), "scope_mult_1x", 0.8));
-            profile.scope_mult_2x = static_cast<float>(get_double_ini(section.c_str(), "scope_mult_2x", 1.0));
-            profile.scope_mult_3x = static_cast<float>(get_double_ini(section.c_str(), "scope_mult_3x", 1.2));
-            profile.scope_mult_4x = static_cast<float>(get_double_ini(section.c_str(), "scope_mult_4x", 1.4));
-            profile.scope_mult_6x = static_cast<float>(get_double_ini(section.c_str(), "scope_mult_6x", 1.6));
-            profile.scope_mult_8x = static_cast<float>(get_double_ini(section.c_str(), "scope_mult_8x", 1.8));
-            profile.start_delay_ms = get_long_ini(section.c_str(), "start_delay_ms", 0);
-            profile.end_delay_ms = get_long_ini(section.c_str(), "end_delay_ms", 0);
-            profile.interval_ms = static_cast<float>(get_double_ini(section.c_str(), "interval_ms", 10.0));
-            
-            input_profiles.push_back(profile);
-        }
-    }
-    
-    // Initialize default input profiles if none were loaded
-    if (input_profiles.empty()) {
-        initializeDefaultInputProfiles();
-    }
-    return true;
-}
-
-bool Config::saveConfig(const std::string& filename)
-{
-    std::string configFile;
-    bool is_main_config = false;
-
-    if (filename.empty()) {
-        std::string target_profile = active_profile_name.empty() ? "Default" : active_profile_name;
-        configFile = getConfigPath(target_profile + ".ini");
-    } else {
-        configFile = filename;
-        is_main_config = (configFile == getConfigPath("config.ini"));
-    }
-    std::ofstream file(configFile);
-    if (!file.is_open())
-    {
-        std::cerr << "Error opening config for writing: " << configFile << std::endl;
-        return false;
-    }
-
-    file << "# Config file generated by GPA\n";
-
-    if (is_main_config) {
-        file << "[Profile]\n";
-        file << "active_profile = " << (active_profile_name.empty() ? "Default" : active_profile_name) << "\n";
-        file.close();
-        return true;
-    }
-
-    file << "[Capture]\n";
-    file << "detection_resolution = " << detection_resolution << "\n";
-    file << "monitor_idx = " << monitor_idx << "\n";
-    file << "circle_mask = " << (circle_mask ? "true" : "false") << "\n";
-    file << "capture_borders = " << (capture_borders ? "true" : "false") << "\n";
-    file << "capture_cursor = " << (capture_cursor ? "true" : "false") << "\n";
-    file << "capture_method = " << capture_method << "\n";
-    file << std::fixed << std::setprecision(2);
-    file << "capture_timeout_scale = " << capture_timeout_scale << "\n";
-    file << "pipeline_loop_delay_ms = " << pipeline_loop_delay_ms << "\n";
-    file << std::noboolalpha;
-    file << "\n";
-
-    file << "[Target]\n";
-    file << std::fixed << std::setprecision(6);
-    file << "body_y_offset = " << body_y_offset << "\n";
-    file << "head_y_offset = " << head_y_offset << "\n";
-    file << "offset_step = " << offset_step << "\n";
-    file << "crosshair_offset_x = " << crosshair_offset_x << "\n";
-    file << "crosshair_offset_y = " << crosshair_offset_y << "\n";
-    file << "auto_aim = " << (auto_aim ? "true" : "false") << "\n";
-    file << "auto_action = " << (auto_action ? "true" : "false") << "\n";
-    file << "ignore_up_aim = " << (ignore_up_aim ? "true" : "false") << "\n";
-    file << "enable_aim_shoot_offset = " << (enable_aim_shoot_offset ? "true" : "false") << "\n";
-    file << "aim_shoot_offset_x = " << aim_shoot_offset_x << "\n";
-    file << "aim_shoot_offset_y = " << aim_shoot_offset_y << "\n";
-    // Target stickiness (IoU)
-    file << "iou_stickiness_threshold = " << iou_stickiness_threshold << "\n";
-    file << std::noboolalpha;
-    file << "\n";
-
-    file << "[ColorFilter]\n";
-    file << "enabled = " << (color_filter_enabled ? "true" : "false") << "\n";
-    file << "mode = " << color_filter_mode << "\n";
-    file << "r_min = " << color_filter_r_min << "\n";
-    file << "r_max = " << color_filter_r_max << "\n";
-    file << "g_min = " << color_filter_g_min << "\n";
-    file << "g_max = " << color_filter_g_max << "\n";
-    file << "b_min = " << color_filter_b_min << "\n";
-    file << "b_max = " << color_filter_b_max << "\n";
-    file << "h_min = " << color_filter_h_min << "\n";
-    file << "h_max = " << color_filter_h_max << "\n";
-    file << "s_min = " << color_filter_s_min << "\n";
-    file << "s_max = " << color_filter_s_max << "\n";
-    file << "v_min = " << color_filter_v_min << "\n";
-    file << "v_max = " << color_filter_v_max << "\n";
-    file << "mask_opacity = " << color_filter_mask_opacity << "\n";
-    file << "target_enabled = " << (color_filter_target_enabled ? "true" : "false") << "\n";
-    file << "target_mode = " << color_filter_target_mode << "\n";
-    file << "comparison = " << color_filter_comparison << "\n";
-    file << "min_ratio = " << color_filter_min_ratio << "\n";
-    file << "max_ratio = " << color_filter_max_ratio << "\n";
-    file << "min_count = " << color_filter_min_count << "\n";
-    file << "max_count = " << color_filter_max_count << "\n\n";
-
-    file << "[Mouse]\n";
-    file << std::noboolalpha;
-    file << "input_method = " << input_method << "\n";
-    file << std::fixed << std::setprecision(6);
-
-    file << "bScope_multiplier = " << bScope_multiplier << "\n";
-
-    // Deadband settings (per-axis)
-    file << "deadband_enter_x = " << deadband_enter_x << "\n";
-    file << "deadband_exit_x = " << deadband_exit_x << "\n";
-    file << "deadband_enter_y = " << deadband_enter_y << "\n";
-    file << "deadband_exit_y = " << deadband_exit_y << "\n\n";
-
-    file << "[PIDController]\n";
-    file << std::fixed << std::setprecision(6);
-    file << "pid_kp_x = " << pid_kp_x << "\n";
-    file << "pid_kp_y = " << pid_kp_y << "\n";
-    file << "pid_ki_x = " << pid_ki_x << "\n";
-    file << "pid_ki_y = " << pid_ki_y << "\n";
-    file << "pid_kd_x = " << pid_kd_x << "\n";
-    file << "pid_kd_y = " << pid_kd_y << "\n";
-    file << "pid_integral_max = " << pid_integral_max << "\n";
-    file << "pid_derivative_max = " << pid_derivative_max << "\n\n";
-
-    file << "[Stabilizer]\n";
-    file << "active_scope_magnification = " << active_scope_magnification << "\n\n";
-
-    
-    
-
-
-    file << "[Arduino]\n";
-    file << std::noboolalpha;
-    file << "arduino_baudrate = " << arduino_baudrate << "\n";
-    file << "arduino_port = " << arduino_port << "\n";
-    file << "arduino_enable_keys = " << (arduino_enable_keys ? "true" : "false") << "\n\n";
-
-    file << "[KMBOX]\n";
-    file << "ip = " << kmbox_ip << "\n";
-    file << "port = " << kmbox_port << "\n";
-    file << "mac = " << kmbox_mac << "\n\n";
-    
-    file << "[MAKCU]\n";
-    // Legacy serial fields (not used in 2PC mode but kept so old configs round-trip cleanly)
-    file << "makcu_port = " << makcu_port << "\n";
-    file << "makcu_baudrate = " << makcu_baudrate << "\n";
-    // 2PC network settings
-    file << "makcu_remote_ip = " << makcu_remote_ip << "\n";
-    file << "makcu_remote_port = " << makcu_remote_port << "\n\n";
-    
-    file << "[AI]\n";
-    file << "ai_model = " << ai_model << "\n";
-    file << std::fixed << std::setprecision(6);
-    file << "confidence_threshold = " << confidence_threshold << "\n";
-    file << std::noboolalpha;
-    file << "max_detections = " << max_detections << "\n";
-    file << "postprocess = " << postprocess << "\n\n";
-
-    file << "[CUDA]\n";
-    file << "cuda_device_id = " << cuda_device_id << "\n\n";
-    
-    file << "[GPU]\n";
-    file << "persistent_cache_limit_mb = " << persistent_cache_limit_mb << "\n";
-    file << "use_cuda_graph = " << (use_cuda_graph ? "true" : "false") << "\n";
-    file << "graph_warmup_iterations = " << graph_warmup_iterations << "\n\n";
-
-    file << "[Buttons]\n";
-    file << "button_targeting = " << joinStrings(button_targeting) << "\n";
-    file << "button_exit = " << joinStrings(button_exit) << "\n";
-    file << "button_pause = " << joinStrings(button_pause) << "\n";
-    file << "button_reload_config = " << joinStrings(button_reload_config) << "\n";
-    file << "button_open_overlay = " << joinStrings(button_open_overlay) << "\n";
-    file << "button_disable_upward_aim = " << joinStrings(button_disable_upward_aim) << "\n";
-    file << "button_auto_action = " << joinStrings(button_auto_action) << "\n";
-    file << "button_single_shot = " << joinStrings(button_single_shot) << "\n";
-    file << "button_stabilizer = " << joinStrings(button_stabilizer) << "\n";
- 
-
-    file << "[Overlay]\n";
-    file << "overlay_opacity = " << overlay_opacity << "\n";
-    file << std::fixed << std::setprecision(6);
-    
-    file << "overlay_ui_scale = " << overlay_ui_scale << "\n\n";
-
-    file << "[Debug]\n";
-    file << "show_window = " << (show_window ? "true" : "false") << "\n";
-    file << "show_fps = " << (show_fps ? "true" : "false") << "\n";
-    
-    file << "screenshot_button = " << joinStrings(screenshot_button) << "\n";
-    file << "screenshot_delay = " << screenshot_delay << "\n";
-    file << "always_on_top = " << (always_on_top ? "true" : "false") << "\n\n";
-
-    file << "[Classes]\n";
-    file << "HeadClassName = " << head_class_name << "\n\n";
-
-    file << "[ClassSettings]\n";
-    file << "Count = " << class_settings.size() << "\n";
-    for (size_t i = 0; i < class_settings.size(); ++i) {
-        file << "Class_" << i << "_ID = " << class_settings[i].id << "\n";
-        file << "Class_" << i << "_Name = " << class_settings[i].name << "\n";
-        file << "Class_" << i << "_Allow = " << (class_settings[i].allow ? "true" : "false") << "\n";
-    }
-    file << "\n";
-
-
-    
-    
-    // Save input profiles with each profile
-    file << "[InputProfiles]\n";
-    file << "Count = " << input_profiles.size() << "\n";
-    file << "active_input_profile_index = " << active_input_profile_index << "\n";
-    file << "current_profile_name = " << current_profile_name << "\n\n";
-
-    for (size_t i = 0; i < input_profiles.size(); ++i) {
-        const auto& profile = input_profiles[i];
-        file << "[Profile_" << i << "]\n";
-        file << "profile_name = " << profile.profile_name << "\n";
-        file << std::fixed << std::setprecision(6);
-        file << "base_strength = " << profile.base_strength << "\n";
-        file << "fire_rate_multiplier = " << profile.fire_rate_multiplier << "\n";
-        file << "scope_mult_1x = " << profile.scope_mult_1x << "\n";
-        file << "scope_mult_2x = " << profile.scope_mult_2x << "\n";
-        file << "scope_mult_3x = " << profile.scope_mult_3x << "\n";
-        file << "scope_mult_4x = " << profile.scope_mult_4x << "\n";
-        file << "scope_mult_6x = " << profile.scope_mult_6x << "\n";
-        file << "scope_mult_8x = " << profile.scope_mult_8x << "\n";
-        file << "start_delay_ms = " << profile.start_delay_ms << "\n";
-        file << "end_delay_ms = " << profile.end_delay_ms << "\n";
-        file << "interval_ms = " << profile.interval_ms << "\n\n";
-    }
-    
-    file.close();
-    return true;
-}
-
-std::vector<std::string> Config::listProfiles() {
-    std::vector<std::string> profiles;
-    std::string config_dir = getExecutableDir(); 
-    
     try {
-        for (const auto& entry : std::filesystem::directory_iterator(config_dir)) {
-            if (entry.is_regular_file()) {
-                std::string filename = entry.path().filename().string();
-                std::string extension = entry.path().extension().string();
-
-                if (extension == ".ini" && filename != "config.ini") { 
-                    std::string profileName = entry.path().stem().string(); 
-                    profiles.push_back(profileName);
-                }
-            }
-        }
-    } catch (const std::filesystem::filesystem_error&) {
-        // Error accessing profiles directory - ignore and return empty list
-    }
-    
-    std::sort(profiles.begin(), profiles.end());
-    return profiles;
-}
-
-bool Config::saveProfile(const std::string& profileName) {
-    if (profileName.empty() || profileName == "config") {
-        return false;
-    }
-    std::string filename = getConfigPath(profileName + ".ini");
-    return saveConfig(filename); 
-}
-
-bool Config::loadProfile(const std::string& profileName) {
-     if (profileName.empty()) {
-        return false;
-    }
-    std::string filename = getConfigPath(profileName + ".ini");
-
-    if (!std::filesystem::exists(filename)) {
-         return false; 
-    }
-    return loadConfig(filename); 
-}
-
-bool Config::deleteProfile(const std::string& profileName) {
-    if (profileName.empty() || profileName == "config") {
-        return false;
-    }
-    std::string filename = getConfigPath(profileName + ".ini");
-
-    try {
-        if (std::filesystem::exists(filename)) {
-            if (std::filesystem::remove(filename)) {
-                return true;
-            } else {
-                return false;
-            }
-        } else {
-            return false; 
-        }
-    } catch (const std::filesystem::filesystem_error&) {
-        return false;
-    }
-}
-
-void Config::resetConfig()
-{
-    
-    
-    loadConfig("__dummy_nonexistent_file_for_reset__.ini"); 
-    
-}
-
-bool Config::setActiveProfile(const std::string& profileName) {
-    // Early return for empty
-    if (profileName.empty()) return false;
-    
-    // Load and save in one flow
-    if (!loadProfile(profileName)) return false;
-    
-    active_profile_name = profileName;
-    saveConfig(getConfigPath("config.ini"));
-    return true;
-}
-
-bool Config::saveActiveProfile() {
-    std::string profile_to_save = active_profile_name.empty() ? "Default" : active_profile_name;
-
-    if (!saveProfile(profile_to_save)) {
-        return false;
-    }
-
-    active_profile_name = profile_to_save;
-    saveConfig(getConfigPath("config.ini"));
-    return true;
-}
-
-bool Config::isProfileModified() const {
-    // This would require storing a copy of the last loaded profile settings
-    // For now, we'll return false - can be implemented later if needed
-    return false;
-}
-
-
-Config::Config()
-{
-    // Ensure we use the correct path for config files
-    std::string exePath = getExecutableDir();
-    
-    // Use empty string to trigger default path logic
-    loadConfig("");
-    // Weapon profiles are now loaded from the profile INI file itself
-}
-
-void Config::initializeDefaultInputProfiles()
-{
-    if (input_profiles.empty()) {
-        input_profiles.push_back(InputProfile("Default", 3.0f, 1.0f));
-        input_profiles.push_back(InputProfile("Profile1", 4.5f, 1.2f));
-        input_profiles.push_back(InputProfile("Profile2", 3.5f, 1.1f));
-        input_profiles.push_back(InputProfile("Profile3", 2.0f, 0.8f));
-        input_profiles.push_back(InputProfile("Profile4", 2.5f, 1.3f));
-        
-        active_input_profile_index = 0;
-        current_profile_name = "Default";
-    }
-}
-
-bool Config::addInputProfile(const InputProfile& profile)
-{
-    for (const auto& existing : input_profiles) {
-        if (existing.profile_name == profile.profile_name) {
+        std::ifstream file(configFile);
+        if (!file.is_open()) {
+            std::cerr << "[Config] Failed to open: " << configFile << std::endl;
             return false;
         }
+
+        json j;
+        file >> j;
+
+        if (j.contains("active_profile")) {
+            active_profile_name = j["active_profile"].get<std::string>();
+        }
+
+        if (j.contains("global")) {
+            global_settings = j["global"].get<GlobalSettings>();
+        }
+
+        profiles.clear();
+        if (j.contains("profiles")) {
+            for (auto& [name, data] : j["profiles"].items()) {
+                profiles[name] = data.get<ProfileData>();
+            }
+        }
+
+        // Ensure Default profile exists
+        if (profiles.find("Default") == profiles.end()) {
+            ProfileData defaultProfile;
+            initializeDefaultClassSettings(defaultProfile);
+            initializeDefaultInputProfiles(defaultProfile);
+            profiles["Default"] = std::move(defaultProfile);
+        }
+
+        // Ensure active profile exists
+        if (profiles.find(active_profile_name) == profiles.end()) {
+            active_profile_name = "Default";
+        }
+
+        current_profile = &profiles[active_profile_name];
+
+        std::cout << "[Config] Loaded: " << configFile << " (profile: " << active_profile_name << ")" << std::endl;
+        return true;
+
+    } catch (const std::exception& e) {
+        std::cerr << "[Config] Parse error: " << e.what() << std::endl;
+        initializeDefaults();
+        return false;
     }
-    input_profiles.push_back(profile);
+}
+
+bool Config::saveConfig(const std::string& filename) {
+    std::string configFile = filename.empty() ? getConfigPath("config.json") : filename;
+
+    try {
+        json j;
+        j["active_profile"] = active_profile_name;
+        j["global"] = global_settings;
+
+        for (const auto& [name, data] : profiles) {
+            j["profiles"][name] = data;
+        }
+
+        std::ofstream file(configFile);
+        if (!file.is_open()) {
+            std::cerr << "[Config] Failed to write: " << configFile << std::endl;
+            return false;
+        }
+
+        file << j.dump(2);
+        std::cout << "[Config] Saved: " << configFile << std::endl;
+        return true;
+
+    } catch (const std::exception& e) {
+        std::cerr << "[Config] Save error: " << e.what() << std::endl;
+        return false;
+    }
+}
+
+std::vector<std::string> Config::listProfiles() const {
+    std::vector<std::string> names;
+    for (const auto& [name, _] : profiles) {
+        names.push_back(name);
+    }
+    return names;
+}
+
+bool Config::switchProfile(const std::string& name) {
+    auto it = profiles.find(name);
+    if (it == profiles.end()) {
+        std::cerr << "[Config] Profile not found: " << name << std::endl;
+        return false;
+    }
+
+    active_profile_name = name;
+    current_profile = &it->second;
+
+    std::cout << "[Config] Switched to: " << name << std::endl;
     return true;
 }
 
-bool Config::removeInputProfile(const std::string& profile_name)
-{
-    if (profile_name == "Default") return false;
-    
-    auto it = std::find_if(input_profiles.begin(), input_profiles.end(),
-        [&profile_name](const InputProfile& profile) {
-            return profile.profile_name == profile_name;
-        });
-    
-    if (it != input_profiles.end()) {
-        input_profiles.erase(it);
-        if (current_profile_name == profile_name) {
-            setActiveInputProfile("Default");
-        }
-        return true;
+bool Config::createProfile(const std::string& name) {
+    if (profiles.find(name) != profiles.end()) {
+        return false;
     }
-    return false;
+
+    ProfileData newProfile;
+    initializeDefaultClassSettings(newProfile);
+    initializeDefaultInputProfiles(newProfile);
+    profiles[name] = std::move(newProfile);
+    return true;
 }
 
-InputProfile* Config::getInputProfile(const std::string& profile_name)
-{
-    for (auto& profile : input_profiles) {
-        if (profile.profile_name == profile_name) {
-            return &profile;
-        }
+bool Config::deleteProfile(const std::string& name) {
+    if (name == "Default") return false;
+
+    auto it = profiles.find(name);
+    if (it == profiles.end()) return false;
+
+    profiles.erase(it);
+
+    if (active_profile_name == name) {
+        switchProfile("Default");
     }
-    return nullptr;
+    return true;
 }
 
-InputProfile* Config::getCurrentInputProfile()
-{
-    if (active_input_profile_index >= 0 && 
-        active_input_profile_index < static_cast<int>(input_profiles.size())) {
-        return &input_profiles[active_input_profile_index];
-    }
-    return nullptr;
+bool Config::duplicateProfile(const std::string& src, const std::string& dst) {
+    auto it = profiles.find(src);
+    if (it == profiles.end()) return false;
+    if (profiles.find(dst) != profiles.end()) return false;
+
+    profiles[dst] = it->second;
+    return true;
 }
 
-bool Config::setActiveInputProfile(const std::string& profile_name)
-{
-    for (size_t i = 0; i < input_profiles.size(); ++i) {
-        if (input_profiles[i].profile_name == profile_name) {
-            active_input_profile_index = static_cast<int>(i);
-            current_profile_name = profile_name;
+InputProfile* Config::getCurrentInputProfile() {
+    if (!current_profile || current_profile->input_profiles.empty()) return nullptr;
+
+    int idx = current_profile->active_input_profile_index;
+    if (idx < 0 || idx >= static_cast<int>(current_profile->input_profiles.size())) {
+        idx = 0;
+    }
+    return &current_profile->input_profiles[idx];
+}
+
+bool Config::setActiveInputProfile(const std::string& name) {
+    if (!current_profile) return false;
+
+    for (size_t i = 0; i < current_profile->input_profiles.size(); ++i) {
+        if (current_profile->input_profiles[i].profile_name == name) {
+            current_profile->active_input_profile_index = static_cast<int>(i);
             return true;
         }
     }
     return false;
 }
 
-std::vector<std::string> Config::getInputProfileNames() const
-{
+std::vector<std::string> Config::getInputProfileNames() const {
     std::vector<std::string> names;
-    for (const auto& profile : input_profiles) {
-        names.push_back(profile.profile_name);
+    if (current_profile) {
+        for (const auto& p : current_profile->input_profiles) {
+            names.push_back(p.profile_name);
+        }
     }
     return names;
 }
 
+bool Config::addInputProfile(const InputProfile& profile) {
+    if (!current_profile) return false;
+    
+    // Check for duplicate name
+    for (const auto& p : current_profile->input_profiles) {
+        if (p.profile_name == profile.profile_name) {
+            return false;
+        }
+    }
+    
+    current_profile->input_profiles.push_back(profile);
+    return true;
+}
 
+bool Config::removeInputProfile(const std::string& name) {
+    if (!current_profile) return false;
+    if (current_profile->input_profiles.size() <= 1) return false; // Keep at least one
+    
+    for (auto it = current_profile->input_profiles.begin(); it != current_profile->input_profiles.end(); ++it) {
+        if (it->profile_name == name) {
+            current_profile->input_profiles.erase(it);
+            if (current_profile->active_input_profile_index >= static_cast<int>(current_profile->input_profiles.size())) {
+                current_profile->active_input_profile_index = 0;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+InputProfile* Config::getInputProfile(const std::string& name) {
+    if (!current_profile) return nullptr;
+    
+    for (auto& p : current_profile->input_profiles) {
+        if (p.profile_name == name) {
+            return &p;
+        }
+    }
+    return nullptr;
+}

@@ -36,6 +36,7 @@ needaimbot/screenshots/
 needaimbot/x64
 x64
 packages
+build/
 needaimbot/cudnn64_9.dll
 needaimbot/opencv_world4100.dll
 needaimbot/imgui.ini

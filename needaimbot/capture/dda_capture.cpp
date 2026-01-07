@@ -13,7 +13,7 @@ namespace {
 UINT DDACapture::AcquireTimeoutMs() const {
     const auto& ctx = AppContext::getInstance();
     double scale = 0.40; // Slightly lower default for faster frame detection
-    double cfg = static_cast<double>(ctx.config.capture_timeout_scale);
+    double cfg = static_cast<double>(ctx.config.profile().capture_timeout_scale);
     if (cfg >= 0.2 && cfg <= 1.0) {
         scale = cfg;
     }
