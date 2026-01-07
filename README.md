@@ -29,8 +29,9 @@
 *   **Drivers**: Latest NVIDIA Game Ready Driver.
 *   **Software**:
     *   [Visual Studio 2022](https://visualstudio.microsoft.com/vs/) (C++ Desktop Development).
+    *   [CMake 3.20+](https://cmake.org/download/).
     *   [CUDA Toolkit 12.x](https://developer.nvidia.com/cuda-downloads).
-    *   [TensorRT 10.x](https://developer.nvidia.com/tensorrt).
+    *   TensorRT 10.14.1.48 (included in `needaimbot/modules/`).
 
 ## Installation
 
@@ -44,10 +45,15 @@
     *   **See**: [HID_Mouse Repository](https://github.com/needitem/HID_Mouse) for firmware instructions.
 
 3.  **Build the Project**:
-    *   Open `needaimbot.sln` in Visual Studio 2022.
-    *   Select `Release` configuration and `x64` platform.
-    *   Build the solution (Ctrl+Shift+B).
-    *   *Alternatively, run `build.bat`.*
+    ```bash
+    # Using CMake (recommended)
+    build_cmake.bat
+    
+    # Or manually:
+    cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+    cmake --build build --config Release
+    ```
+    The executable will be in `build/bin/Release/`.
 
 4.  **Prepare Models**:
     *   Place your `.engine` files (exported via EngineExport) in the `models/` directory.
