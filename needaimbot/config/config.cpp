@@ -72,26 +72,29 @@ void to_json(json& j, const ProfileData& p) {
 }
 
 void from_json(const json& j, ProfileData& p) {
+    // Use obfuscated JSON keys only (no fallback to original names)
+    #define GET_OBF(field, obf_key) if (j.contains(obf_key)) j.at(obf_key).get_to(p.field)
     #define GET_IF(field) if (j.contains(#field)) j.at(#field).get_to(p.field)
-    GET_IF(detection_resolution);
+    
+    GET_OBF(detection_resolution, "analysis_resolution");
     GET_IF(monitor_idx);
     GET_IF(circle_mask);
-    GET_IF(capture_borders);
-    GET_IF(capture_cursor);
-    GET_IF(capture_method);
-    GET_IF(capture_timeout_scale);
+    GET_OBF(capture_borders, "acquire_borders");
+    GET_OBF(capture_cursor, "acquire_cursor");
+    GET_OBF(capture_method, "acquire_method");
+    GET_OBF(capture_timeout_scale, "acquire_timeout_scale");
     GET_IF(pipeline_loop_delay_ms);
     GET_IF(body_y_offset);
     GET_IF(head_y_offset);
     GET_IF(offset_step);
-    GET_IF(auto_aim);
+    GET_OBF(auto_aim, "auto_fcs");
     GET_IF(auto_action);
-    GET_IF(ignore_up_aim);
+    GET_OBF(ignore_up_aim, "ignore_up_fcs");
     GET_IF(crosshair_offset_x);
     GET_IF(crosshair_offset_y);
-    GET_IF(enable_aim_shoot_offset);
-    GET_IF(aim_shoot_offset_x);
-    GET_IF(aim_shoot_offset_y);
+    GET_OBF(enable_aim_shoot_offset, "enable_fcs_fire_offset");
+    GET_OBF(aim_shoot_offset_x, "fcs_fire_offset_x");
+    GET_OBF(aim_shoot_offset_y, "fcs_fire_offset_y");
     GET_IF(iou_stickiness_threshold);
     GET_IF(pid_kp_x); GET_IF(pid_kp_y);
     GET_IF(pid_ki_x); GET_IF(pid_ki_y);
@@ -102,9 +105,9 @@ void from_json(const json& j, ProfileData& p) {
     GET_IF(deadband_exit_x);
     GET_IF(deadband_enter_y);
     GET_IF(deadband_exit_y);
-    GET_IF(ai_model);
+    GET_OBF(ai_model, "ai_module");
     GET_IF(confidence_threshold);
-    GET_IF(max_detections);
+    GET_OBF(max_detections, "max_results");
     GET_IF(postprocess);
     GET_IF(color_filter_enabled);
     GET_IF(color_filter_mode);
@@ -121,8 +124,8 @@ void from_json(const json& j, ProfileData& p) {
     GET_IF(color_filter_v_min);
     GET_IF(color_filter_v_max);
     GET_IF(color_filter_mask_opacity);
-    GET_IF(color_filter_target_enabled);
-    GET_IF(color_filter_target_mode);
+    GET_OBF(color_filter_target_enabled, "color_filter_point_enabled");
+    GET_OBF(color_filter_target_mode, "color_filter_point_mode");
     GET_IF(color_filter_comparison);
     GET_IF(color_filter_min_ratio);
     GET_IF(color_filter_max_ratio);
@@ -135,6 +138,7 @@ void from_json(const json& j, ProfileData& p) {
     GET_IF(active_scope_magnification);
     GET_IF(bScope_multiplier);
     #undef GET_IF
+    #undef GET_OBF
 }
 
 void to_json(json& j, const GlobalSettings& g) {
@@ -174,14 +178,17 @@ void to_json(json& j, const GlobalSettings& g) {
 }
 
 void from_json(const json& j, GlobalSettings& g) {
+    // Use obfuscated JSON keys only (no fallback to original names)
+    #define GET_OBF(field, obf_key) if (j.contains(obf_key)) j.at(obf_key).get_to(g.field)
     #define GET_IF(field) if (j.contains(#field)) j.at(#field).get_to(g.field)
+    
     GET_IF(input_method);
-    GET_IF(arduino_baudrate);
-    GET_IF(arduino_port);
-    GET_IF(arduino_enable_keys);
-    GET_IF(kmbox_ip);
-    GET_IF(kmbox_port);
-    GET_IF(kmbox_mac);
+    GET_OBF(arduino_baudrate, "mcu_baud");
+    GET_OBF(arduino_port, "mcu_port");
+    GET_OBF(arduino_enable_keys, "mcu_enable_keys");
+    GET_OBF(kmbox_ip, "dev_addr");
+    GET_OBF(kmbox_port, "dev_port");
+    GET_OBF(kmbox_mac, "dev_hwid");
     GET_IF(makcu_port);
     GET_IF(makcu_baudrate);
     GET_IF(makcu_remote_ip);
@@ -190,23 +197,24 @@ void from_json(const json& j, GlobalSettings& g) {
     GET_IF(persistent_cache_limit_mb);
     GET_IF(use_cuda_graph);
     GET_IF(graph_warmup_iterations);
-    GET_IF(button_targeting);
+    GET_OBF(button_targeting, "button_pointing");
     GET_IF(button_exit);
     GET_IF(button_pause);
     GET_IF(button_reload_config);
-    GET_IF(button_open_overlay);
-    GET_IF(button_disable_upward_aim);
+    GET_OBF(button_open_overlay, "button_open_layer");
+    GET_OBF(button_disable_upward_aim, "button_disable_upward_fcs");
     GET_IF(button_auto_action);
     GET_IF(button_single_shot);
     GET_IF(button_stabilizer);
-    GET_IF(overlay_opacity);
-    GET_IF(overlay_ui_scale);
+    GET_OBF(overlay_opacity, "layer_opacity");
+    GET_OBF(overlay_ui_scale, "layer_ui_scale");
     GET_IF(show_window);
     GET_IF(show_fps);
-    GET_IF(screenshot_button);
-    GET_IF(screenshot_delay);
+    GET_OBF(screenshot_button, "snapshot_btn");
+    GET_OBF(screenshot_delay, "snapshot_delay");
     GET_IF(always_on_top);
     #undef GET_IF
+    #undef GET_OBF
 }
 
 
