@@ -77,7 +77,7 @@ struct UIGPUReader {
     }
     
     // Non-blocking read from GPU buffers
-    bool tryReadFromGPU(needaimbot::UnifiedGraphPipeline* pipeline) {
+    bool tryReadFromGPU(gpa::UnifiedGraphPipeline* pipeline) {
         if (!pipeline || !uiStream) return false;
         
         // Check if new data is available
@@ -295,7 +295,7 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
     }
 }
 
-// RoseDark theme from sunone_aimbot_cpp
+// RoseDark theme
 void ApplyTheme_RoseDark()
 {
     ImGuiStyle& style = ImGui::GetStyle();
@@ -556,7 +556,7 @@ void OverlayThread()
         // This is completely independent from pipeline's processing speed
         if (ctx.config.show_window && ctx.preview_enabled) {
             // Get pipeline instance
-            auto& pipelineManager = needaimbot::PipelineManager::getInstance();
+            auto& pipelineManager = gpa::PipelineManager::getInstance();
             auto* pipeline = pipelineManager.getPipeline();
             
             if (pipeline) {
@@ -645,7 +645,7 @@ void OverlayThread()
 
                 if (ImGui::BeginTabBar("Options tab bar", ImGuiTabBarFlags_FittingPolicyResizeDown))
                 {
-                    if (ImGui::BeginTabItem("Aimbot"))
+                    if (ImGui::BeginTabItem(UIStrings::TabMain().c_str()))
                     {
                         draw_target();
                         ImGui::EndTabItem();

@@ -52,7 +52,7 @@ std::atomic<bool> capture_cursor_changed{false};
 std::atomic<bool> show_window_changed{false};
 
 // Forward declarations
-bool initializeScreenCapture(needaimbot::UnifiedGraphPipeline* pipeline);
+bool initializeScreenCapture(gpa::UnifiedGraphPipeline* pipeline);
 bool initializeInputMethod();
 
 // Combined UI thread function for keyboard + overlay
@@ -201,7 +201,7 @@ bool loadAndValidateModel(std::string& modelName, const std::vector<std::string>
 }
 
 // Initialize screen capture for the pipeline
-bool initializeScreenCapture(needaimbot::UnifiedGraphPipeline* pipeline) {
+bool initializeScreenCapture(gpa::UnifiedGraphPipeline* pipeline) {
     auto& ctx = AppContext::getInstance();
 
     if (!DDACapture::IsDDACaptureAvailable()) {
@@ -399,7 +399,7 @@ int main()
     // Set random application title for obfuscation
     SetRandomConsoleTitle();
     
-    // Single instance check (local scope to avoid anti-cheat detection)
+    // Single instance check
     HANDLE hMutex = CreateMutex(NULL, TRUE, L"Local\\GamePerformanceAnalyzer_SingleInstance");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         MessageBox(NULL, L"Gaming Performance Analyzer is already running.\n\nPlease close the existing instance before starting a new one.",
@@ -513,9 +513,9 @@ int main()
         std::cout << "[MAIN] Model validation complete" << std::endl;
 
         std::cout << "[MAIN] Initializing pipeline manager..." << std::endl;
-        auto& pipelineManager = needaimbot::PipelineManager::getInstance();
+        auto& pipelineManager = gpa::PipelineManager::getInstance();
         
-        needaimbot::UnifiedPipelineConfig pipelineConfig;
+        gpa::UnifiedPipelineConfig pipelineConfig;
         pipelineConfig.modelPath = "models/" + ctx.config.ai_model;
         pipelineConfig.enableCapture = true;
         pipelineConfig.enableDetection = true;

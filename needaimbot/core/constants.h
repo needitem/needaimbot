@@ -1,13 +1,9 @@
-#ifndef NEEDAIMBOT_CORE_CONSTANTS_H
-#define NEEDAIMBOT_CORE_CONSTANTS_H
+#ifndef GPA_CORE_CONSTANTS_H
+#define GPA_CORE_CONSTANTS_H
 
 /**
  * @file constants.h
  * @brief System-wide constants and configuration values
- * 
- * Contains all numerical constants, thresholds, and default values
- * used throughout the aimbot system. Centralized constant management
- * improves maintainability and performance tuning.
  */
 
 #define NOMINMAX
@@ -100,6 +96,7 @@ namespace Constants {
     constexpr int SERIAL_READ_TIMEOUT_MS = 100;
     constexpr int SERIAL_WRITE_TIMEOUT_MS = 100;
     constexpr int THREAD_JOIN_TIMEOUT_MS = 1000;
+    constexpr size_t DEFAULT_SERIAL_BUFFER_SIZE = 256;
     
     // Capture constants
     constexpr int DEFAULT_CAPTURE_WIDTH = 320;
@@ -189,4 +186,4 @@ namespace Constants {
     };
 }
 
-#endif // NEEDAIMBOT_CORE_CONSTANTS_H
+#endif // GPA_CORE_CONSTANTS_H

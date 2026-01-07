@@ -358,14 +358,14 @@ static void draw_aiming_settings()
         ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 140.0f);
         ImGui::TableSetupColumn("Keys", ImGuiTableColumnFlags_WidthStretch);
 
-        draw_hotkey_table_row("Aimbot Activation", ctx.config.button_targeting, "targeting_keys",
-                             "Keys that activate the aimbot when held");
+        draw_hotkey_table_row(UIStrings::HotkeyActivation().c_str(), ctx.config.button_targeting, "targeting_keys",
+                             UIStrings::HotkeyActivationDesc().c_str());
 
         draw_hotkey_table_row("Auto Shoot", ctx.config.button_auto_shoot, "auto_shoot_keys",
                              "Automatically shoot when targeting enemies");
 
-        draw_hotkey_table_row("Disable Upward Aim", ctx.config.button_disable_upward_aim, "disable_upward_keys",
-                             "Prevent aimbot from aiming upward while held");
+        draw_hotkey_table_row("Disable Upward", ctx.config.button_disable_upward_aim, "disable_upward_keys",
+                             UIStrings::HotkeyDisableUpward().c_str());
 
         draw_hotkey_table_row("Single Shot", ctx.config.button_single_shot, "single_shot_keys",
                              "One capture and one mouse move per keypress");
@@ -403,13 +403,13 @@ void draw_buttons()
         ImGui::TableSetupColumn("Keys", ImGuiTableColumnFlags_WidthStretch);
 
         draw_hotkey_table_row("Targeting", ctx.config.button_targeting, "targeting",
-                             "Keys that activate the aimbot when held");
+                             UIStrings::HotkeyActivationDesc().c_str());
 
         draw_hotkey_table_row("Exit App", ctx.config.button_exit, "exit",
                              "Keys that completely exit the application");
 
         draw_hotkey_table_row("Pause", ctx.config.button_pause, "pause",
-                             "Keys that temporarily pause the aimbot");
+                             UIStrings::HotkeyPause().c_str());
 
         draw_hotkey_table_row("Reload Config", ctx.config.button_reload_config, "reload_config",
                              "Keys that reload the configuration file");

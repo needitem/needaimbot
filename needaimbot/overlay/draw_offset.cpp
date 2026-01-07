@@ -120,7 +120,7 @@ void renderOffsetTab()
 {
     auto& ctx = AppContext::getInstance();
 
-    UIHelpers::BeginSettingsSection("Target Offset Settings", "Adjust where the aimbot targets on bodies and heads");
+    UIHelpers::BeginSettingsSection("Target Offset Settings", UIStrings::OffsetDesc().c_str());
 
     // Body and Head Y Offset controls
     ImGui::SetNextItemWidth(200.0f);
@@ -330,7 +330,7 @@ void renderOffsetTab()
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastPreviewUpdate);
         bool shouldUpdatePreview = (elapsed.count() >= 66);
 
-        auto& pipelineManager = needaimbot::PipelineManager::getInstance();
+        auto& pipelineManager = gpa::PipelineManager::getInstance();
         auto* pipeline = pipelineManager.getPipeline();
 
         std::vector<Target> previewTargets;

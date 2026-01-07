@@ -23,7 +23,7 @@
 struct AppContext;
 class ICaptureProvider;
 
-namespace needaimbot {
+namespace gpa {
 
 struct MouseMovement {
     int dx;
@@ -673,4 +673,4 @@ private:
     std::unique_ptr<UnifiedGraphPipeline> m_pipeline;
 };
 
-}
+} // namespace gpa
