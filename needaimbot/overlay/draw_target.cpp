@@ -103,14 +103,14 @@ void draw_target()
             ImGui::TableNextColumn();
             ImGui::TextDisabled("Track detected targets automatically");
 
-            // Auto Shoot
+            // Auto Action
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            if (UIHelpers::BeautifulToggle("Auto Shoot", &ctx.config.auto_shoot)) {
+            if (UIHelpers::BeautifulToggle("Auto Action", &ctx.config.auto_action)) {
                 SAVE_PROFILE();
             }
             ImGui::TableNextColumn();
-            ImGui::TextDisabled("Fire automatically when locked on");
+            ImGui::TextDisabled("Perform action automatically when locked on");
 
             // Disable Upward Aim (permanent toggle)
             ImGui::TableNextRow();

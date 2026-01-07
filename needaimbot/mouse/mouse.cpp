@@ -21,9 +21,9 @@ namespace {
     std::thread g_consumerThread;
     std::atomic<bool> g_running{false};
 
-    // No recoil thread
-    std::thread g_noRecoilThread;
-    std::atomic<bool> g_noRecoilRunning{false};
+    // Stabilizer thread
+    std::thread g_stabilizerThread;
+    std::atomic<bool> g_stabilizerRunning{false};
 
     // Global input method for direct GPU->mouse control
     std::unique_ptr<InputMethod> g_globalInputMethod;
@@ -64,14 +64,14 @@ namespace {
         getFallbackInputMethod().release();
     }
 
-    // No recoil thread - moves mouse down using weapon profile settings
-    void noRecoilThread() {
+    // Stabilizer thread - moves mouse down using input profile settings
+    void stabilizerThread() {
         auto& ctx = AppContext::getInstance();
 
-        while (g_noRecoilRunning.load(std::memory_order_acquire)) {
-            if (ctx.norecoil_active.load(std::memory_order_acquire)) {
-                // Get current weapon profile
-                auto* profile = ctx.config.getCurrentWeaponProfile();
+        while (g_stabilizerRunning.load(std::memory_order_acquire)) {
+            if (ctx.stabilizer_active.load(std::memory_order_acquire)) {
+                // Get current input profile
+                auto* profile = ctx.config.getCurrentInputProfile();
                 if (profile) {
                     // Get base strength and apply scope multiplier
                     float strength = profile->base_strength;
@@ -95,8 +95,8 @@ namespace {
                         moveWithFallback(0, dy);
                     }
 
-                    // Use recoil interval from profile
-                    float interval_ms = profile->recoil_ms;
+                    // Use interval from profile
+                    float interval_ms = profile->interval_ms;
                     if (interval_ms < 1.0f) interval_ms = 1.0f;
                     std::this_thread::sleep_for(std::chrono::microseconds(static_cast<int>(interval_ms * 1000)));
                     continue;
@@ -176,23 +176,23 @@ void stopMouseConsumer() {
     }
 }
 
-// Start the no recoil thread
-void startNoRecoil() {
-    if (!g_noRecoilRunning.exchange(true, std::memory_order_release)) {
-        g_noRecoilThread = std::thread(noRecoilThread);
+// Start the stabilizer thread
+void startStabilizer() {
+    if (!g_stabilizerRunning.exchange(true, std::memory_order_release)) {
+        g_stabilizerThread = std::thread(stabilizerThread);
 
         #ifdef _WIN32
-        HANDLE threadHandle = g_noRecoilThread.native_handle();
-        SetThreadDescription(threadHandle, L"NoRecoil");
+        HANDLE threadHandle = g_stabilizerThread.native_handle();
+        SetThreadDescription(threadHandle, L"InputStabilizer");
         #endif
     }
 }
 
-// Stop the no recoil thread
-void stopNoRecoil() {
-    if (g_noRecoilRunning.exchange(false, std::memory_order_release)) {
-        if (g_noRecoilThread.joinable()) {
-            g_noRecoilThread.join();
+// Stop the stabilizer thread
+void stopStabilizer() {
+    if (g_stabilizerRunning.exchange(false, std::memory_order_release)) {
+        if (g_stabilizerThread.joinable()) {
+            g_stabilizerThread.join();
         }
     }
 }

@@ -361,8 +361,8 @@ static void draw_aiming_settings()
         draw_hotkey_table_row(UIStrings::HotkeyActivation().c_str(), ctx.config.button_targeting, "targeting_keys",
                              UIStrings::HotkeyActivationDesc().c_str());
 
-        draw_hotkey_table_row("Auto Shoot", ctx.config.button_auto_shoot, "auto_shoot_keys",
-                             "Automatically shoot when targeting enemies");
+        draw_hotkey_table_row("Auto Action", ctx.config.button_auto_action, "auto_action_keys",
+                             "Automatically perform action when targeting");
 
         draw_hotkey_table_row("Disable Upward", ctx.config.button_disable_upward_aim, "disable_upward_keys",
                              UIStrings::HotkeyDisableUpward().c_str());
@@ -370,8 +370,8 @@ static void draw_aiming_settings()
         draw_hotkey_table_row("Single Shot", ctx.config.button_single_shot, "single_shot_keys",
                              "One capture and one mouse move per keypress");
 
-        draw_hotkey_table_row("No Recoil", ctx.config.button_norecoil, "norecoil_keys",
-                             "Compensate recoil using weapon profile settings while held");
+        draw_hotkey_table_row("Stabilizer", ctx.config.button_stabilizer, "stabilizer_keys",
+                             "Input stabilization using profile settings while held");
 
         ImGui::EndTable();
     }
@@ -380,10 +380,10 @@ static void draw_aiming_settings()
 
     UIHelpers::CompactSpacer();
 
-    UIHelpers::BeginCard("Triggerbot Area");
+    UIHelpers::BeginCard("Action Area");
     ImGui::Text("Area Size Multiplier");
-    if (UIHelpers::EnhancedSliderFloat("##triggerbot_area", &ctx.config.bScope_multiplier, 0.1f, 2.0f, "%.2f",
-                                      "Central screen area where Triggerbot activates.\nSmaller = larger area, Larger = smaller area")) {
+    if (UIHelpers::EnhancedSliderFloat("##action_area", &ctx.config.bScope_multiplier, 0.1f, 2.0f, "%.2f",
+                                      "Central screen area where action activates.\nSmaller = larger area, Larger = smaller area")) {
         SAVE_PROFILE();
     }
     UIHelpers::EndCard();

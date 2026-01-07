@@ -143,16 +143,16 @@ void keyboardListener() {
     static bool last_pause_state = false;
     static bool last_single_shot_state = false;
 
-    // No recoil timing
-    auto last_recoil_time = std::chrono::steady_clock::now();
-    auto norecoil_press_time = std::chrono::steady_clock::now();
-    auto norecoil_release_time = std::chrono::steady_clock::now();
-    bool last_norecoil_state = false;
-    bool norecoil_active_after_delay = false;
+    // Stabilizer timing
+    auto last_stabilizer_time = std::chrono::steady_clock::now();
+    auto stabilizer_press_time = std::chrono::steady_clock::now();
+    auto stabilizer_release_time = std::chrono::steady_clock::now();
+    bool last_stabilizer_state = false;
+    bool stabilizer_active_after_delay = false;
 
     // Cached key combos - parse once, check fast
-    CachedKeyCombo cache_exit, cache_targeting, cache_auto_shoot;
-    CachedKeyCombo cache_disable_upward, cache_norecoil, cache_pause, cache_single_shot;
+    CachedKeyCombo cache_exit, cache_targeting, cache_auto_action;
+    CachedKeyCombo cache_disable_upward, cache_stabilizer, cache_pause, cache_single_shot;
 
     // Event-driven keyboard monitoring using Windows events
     HANDLE hKeyboardEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
@@ -161,9 +161,9 @@ void keyboardListener() {
         // Update caches (only re-parses if config changed)
         cache_exit.update(ctx.config.button_exit);
         cache_targeting.update(ctx.config.button_targeting);
-        cache_auto_shoot.update(ctx.config.button_auto_shoot);
+        cache_auto_action.update(ctx.config.button_auto_action);
         cache_disable_upward.update(ctx.config.button_disable_upward_aim);
-        cache_norecoil.update(ctx.config.button_norecoil);
+        cache_stabilizer.update(ctx.config.button_stabilizer);
         cache_pause.update(ctx.config.button_pause);
         cache_single_shot.update(ctx.config.button_single_shot);
 
@@ -187,8 +187,8 @@ void keyboardListener() {
             last_aiming_state = current_aiming;
         }
 
-        // Track auto_shoot button state
-        bool current_shooting = cache_auto_shoot.isPressed();
+        // Track auto action button state
+        bool current_shooting = cache_auto_action.isPressed();
         ctx.shooting = current_shooting;
 
         if (current_shooting != last_shooting_state) {
@@ -198,43 +198,43 @@ void keyboardListener() {
         // Track disable upward aim state
         ctx.disable_upward_aim = cache_disable_upward.isPressed();
 
-        // Track no recoil state with start/end delay support
-        bool current_norecoil = cache_norecoil.isPressed();
-        ctx.norecoil_active = current_norecoil;
+        // Track stabilizer state with start/end delay support
+        bool current_stabilizer = cache_stabilizer.isPressed();
+        ctx.stabilizer_active = current_stabilizer;
         auto now = std::chrono::steady_clock::now();
 
         // Detect state transitions
-        if (current_norecoil && !last_norecoil_state) {
+        if (current_stabilizer && !last_stabilizer_state) {
             // Button just pressed - record press time
-            norecoil_press_time = now;
-        } else if (!current_norecoil && last_norecoil_state) {
+            stabilizer_press_time = now;
+        } else if (!current_stabilizer && last_stabilizer_state) {
             // Button just released - record release time
-            norecoil_release_time = now;
+            stabilizer_release_time = now;
         }
-        last_norecoil_state = current_norecoil;
+        last_stabilizer_state = current_stabilizer;
 
-        // Determine if recoil compensation should be active
-        auto* profile = ctx.config.getCurrentWeaponProfile();
+        // Determine if stabilization should be active
+        auto* profile = ctx.config.getCurrentInputProfile();
         if (profile) {
             int start_delay = profile->start_delay_ms;
             int end_delay = profile->end_delay_ms;
 
-            if (current_norecoil) {
+            if (current_stabilizer) {
                 // Button is pressed - check start delay
-                auto elapsed_since_press = std::chrono::duration_cast<std::chrono::milliseconds>(now - norecoil_press_time).count();
-                norecoil_active_after_delay = (elapsed_since_press >= start_delay);
+                auto elapsed_since_press = std::chrono::duration_cast<std::chrono::milliseconds>(now - stabilizer_press_time).count();
+                stabilizer_active_after_delay = (elapsed_since_press >= start_delay);
             } else {
                 // Button is released - check end delay
-                auto elapsed_since_release = std::chrono::duration_cast<std::chrono::milliseconds>(now - norecoil_release_time).count();
-                norecoil_active_after_delay = (elapsed_since_release < end_delay);
+                auto elapsed_since_release = std::chrono::duration_cast<std::chrono::milliseconds>(now - stabilizer_release_time).count();
+                stabilizer_active_after_delay = (elapsed_since_release < end_delay);
             }
 
-            // Apply recoil compensation if active after delay processing
-            if (norecoil_active_after_delay) {
-                float interval_ms = profile->recoil_ms;
+            // Apply stabilization if active after delay processing
+            if (stabilizer_active_after_delay) {
+                float interval_ms = profile->interval_ms;
                 if (interval_ms < 1.0f) interval_ms = 1.0f;
 
-                auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(now - last_recoil_time).count();
+                auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(now - last_stabilizer_time).count();
                 if (elapsed >= static_cast<long long>(interval_ms * 1000)) {
                     // Calculate strength with scope multiplier
                     float strength = profile->base_strength;
@@ -254,7 +254,7 @@ void keyboardListener() {
                     if (dy > 0) {
                         executeMouseMovement(0, dy);
                     }
-                    last_recoil_time = now;
+                    last_stabilizer_time = now;
                 }
             }
         }

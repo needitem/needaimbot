@@ -1,5 +1,5 @@
-#ifndef NEEDAIMBOT_CONFIG_CONFIG_H
-#define NEEDAIMBOT_CONFIG_CONFIG_H
+#ifndef GPA_CONFIG_CONFIG_H
+#define GPA_CONFIG_CONFIG_H
 
 #include <string>
 #include <vector>
@@ -29,8 +29,8 @@ struct ClassSetting {
         : id(i), name(std::move(n)), allow(allow_class) {}
 };
 
-struct WeaponRecoilProfile {
-    std::string weapon_name;
+struct InputProfile {
+    std::string profile_name;
     float base_strength;
     float fire_rate_multiplier;
     float scope_mult_1x;
@@ -41,13 +41,13 @@ struct WeaponRecoilProfile {
     float scope_mult_8x;
     int start_delay_ms;
     int end_delay_ms;
-    float recoil_ms;
+    float interval_ms;
     
-    WeaponRecoilProfile(std::string name = "Default", float strength = 3.0f, float fire_mult = 1.0f)
-        : weapon_name(std::move(name)), base_strength(strength), fire_rate_multiplier(fire_mult),
+    InputProfile(std::string name = "Default", float strength = 3.0f, float fire_mult = 1.0f)
+        : profile_name(std::move(name)), base_strength(strength), fire_rate_multiplier(fire_mult),
           scope_mult_1x(0.8f), scope_mult_2x(1.0f), scope_mult_3x(1.2f), 
           scope_mult_4x(1.4f), scope_mult_6x(1.6f), scope_mult_8x(1.8f),
-          start_delay_ms(0), end_delay_ms(0), recoil_ms(10.0f) {}
+          start_delay_ms(0), end_delay_ms(0), interval_ms(10.0f) {}
 };
 
 class Config; 
@@ -92,7 +92,7 @@ public:
     float offset_step;
 
     bool auto_aim;
-    bool auto_shoot;
+    bool auto_action;
     bool ignore_up_aim;
 
 
@@ -110,9 +110,9 @@ public:
     int active_scope_magnification;
 
     
-    std::vector<WeaponRecoilProfile> weapon_profiles;
-    int active_weapon_profile_index;
-    std::string current_weapon_name;
+    std::vector<InputProfile> input_profiles;
+    int active_input_profile_index;
+    std::string current_profile_name;
 
     
     // Simple Movement Parameters
@@ -165,9 +165,9 @@ public:
     std::vector<std::string> button_reload_config;
     std::vector<std::string> button_open_overlay;
     std::vector<std::string> button_disable_upward_aim;
-    std::vector<std::string> button_auto_shoot;
+    std::vector<std::string> button_auto_action;
     std::vector<std::string> button_single_shot;
-    std::vector<std::string> button_norecoil;
+    std::vector<std::string> button_stabilizer;
 
     
     int overlay_opacity;
@@ -268,18 +268,18 @@ public:
     bool isProfileModified() const; // Check if current settings differ from saved profile
 
     
-    void initializeDefaultWeaponProfiles();
-    bool addWeaponProfile(const WeaponRecoilProfile& profile);
-    bool removeWeaponProfile(const std::string& weapon_name);
-    WeaponRecoilProfile* getWeaponProfile(const std::string& weapon_name);
-    WeaponRecoilProfile* getCurrentWeaponProfile();
-    bool setActiveWeaponProfile(const std::string& weapon_name);
-    std::vector<std::string> getWeaponProfileNames() const;
+    void initializeDefaultInputProfiles();
+    bool addInputProfile(const InputProfile& profile);
+    bool removeInputProfile(const std::string& profile_name);
+    InputProfile* getInputProfile(const std::string& profile_name);
+    InputProfile* getCurrentInputProfile();
+    bool setActiveInputProfile(const std::string& profile_name);
+    std::vector<std::string> getInputProfileNames() const;
 
     std::string joinStrings(const std::vector<std::string>& vec, const std::string& delimiter = ",");
 private:
     std::vector<std::string> splitString(const std::string& str, char delimiter = ',');
 };
 
-#endif // NEEDAIMBOT_CONFIG_CONFIG_H
+#endif // GPA_CONFIG_CONFIG_H
 

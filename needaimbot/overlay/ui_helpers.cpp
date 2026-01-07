@@ -531,60 +531,60 @@ namespace UIHelpers
         return changed;
     }
     
-    bool WeaponProfileDropdown(const char* combo_label, float width)
+    bool InputProfileDropdown(const char* combo_label, float width)
     {
         auto& ctx = AppContext::getInstance();
-        static std::vector<std::string> weapon_list;
-        static int current_weapon_index = -1;
+        static std::vector<std::string> profile_list;
+        static int current_profile_index = -1;
         static bool initialized = false;
         
-        // Initialize or refresh weapon list
-        static int last_weapon_refresh_frame = -1;
+        // Initialize or refresh profile list
+        static int last_profile_refresh_frame = -1;
         bool should_refresh = !initialized;
         
         // Manual refresh check - only when dropdown is opened
         if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(0)) {
             int current_frame = ImGui::GetFrameCount();
-            if (current_frame - last_weapon_refresh_frame > 180) { // Minimum 3 seconds between refreshes
+            if (current_frame - last_profile_refresh_frame > 180) { // Minimum 3 seconds between refreshes
                 should_refresh = true;
-                last_weapon_refresh_frame = current_frame;
+                last_profile_refresh_frame = current_frame;
             }
         }
         
         if (should_refresh) {
-            weapon_list = ctx.config.getWeaponProfileNames();
+            profile_list = ctx.config.getInputProfileNames();
             
-            // Update current weapon index
-            current_weapon_index = ctx.config.active_weapon_profile_index;
-            if (current_weapon_index < 0 || current_weapon_index >= weapon_list.size()) {
-                current_weapon_index = 0;
+            // Update current profile index
+            current_profile_index = ctx.config.active_input_profile_index;
+            if (current_profile_index < 0 || current_profile_index >= profile_list.size()) {
+                current_profile_index = 0;
             }
             
             initialized = true;
         }
         
-        // Weapon dropdown
+        // Profile dropdown
         ImGui::PushItemWidth(width);
         ImGui::PushStyleColor(ImGuiCol_Text, GetAccentColor());
-        ImGui::Text("Weapon:");
+        ImGui::Text("Profile:");
         ImGui::PopStyleColor();
         ImGui::SameLine();
         
         bool changed = false;
-        const char* current_weapon = (current_weapon_index >= 0 && current_weapon_index < weapon_list.size()) 
-            ? weapon_list[current_weapon_index].c_str() : "Default";
+        const char* current_profile = (current_profile_index >= 0 && current_profile_index < profile_list.size()) 
+            ? profile_list[current_profile_index].c_str() : "Default";
             
-        if (ImGui::BeginCombo(combo_label, current_weapon))
+        if (ImGui::BeginCombo(combo_label, current_profile))
         {
-            for (int i = 0; i < weapon_list.size(); i++)
+            for (int i = 0; i < profile_list.size(); i++)
             {
-                const bool is_selected = (current_weapon_index == i);
-                if (ImGui::Selectable(weapon_list[i].c_str(), is_selected))
+                const bool is_selected = (current_profile_index == i);
+                if (ImGui::Selectable(profile_list[i].c_str(), is_selected))
                 {
-                    if (current_weapon_index != i) {
-                        current_weapon_index = i;
-                        // Set active weapon immediately
-                        ctx.config.setActiveWeaponProfile(weapon_list[i]);
+                    if (current_profile_index != i) {
+                        current_profile_index = i;
+                        // Set active profile immediately
+                        ctx.config.setActiveInputProfile(profile_list[i]);
                         changed = true;
                     }
                 }
@@ -592,18 +592,18 @@ namespace UIHelpers
                 // Right-click context menu
                 if (ImGui::BeginPopupContextItem())
                 {
-                    if (weapon_list[i] != "Default" && ImGui::MenuItem("Delete")) {
-                        ctx.config.removeWeaponProfile(weapon_list[i]);
+                    if (profile_list[i] != "Default" && ImGui::MenuItem("Delete")) {
+                        ctx.config.removeInputProfile(profile_list[i]);
                         ctx.config.saveActiveProfile();
                         initialized = false; // Force refresh
                     }
                     if (ImGui::MenuItem("Duplicate")) {
-                        std::string new_name = weapon_list[i] + "_copy";
-                        WeaponRecoilProfile* original = ctx.config.getWeaponProfile(weapon_list[i]);
+                        std::string new_name = profile_list[i] + "_copy";
+                        InputProfile* original = ctx.config.getInputProfile(profile_list[i]);
                         if (original) {
-                            WeaponRecoilProfile copy = *original;
-                            copy.weapon_name = new_name;
-                            ctx.config.addWeaponProfile(copy);
+                            InputProfile copy = *original;
+                            copy.profile_name = new_name;
+                            ctx.config.addInputProfile(copy);
                             ctx.config.saveActiveProfile();
                             initialized = false; // Force refresh
                         }
@@ -618,26 +618,26 @@ namespace UIHelpers
         }
         ImGui::PopItemWidth();
         
-        // Quick add weapon button
+        // Quick add profile button
         ImGui::SameLine();
         if (ImGui::Button("+ Add")) {
-            ImGui::OpenPopup("AddWeaponPopup");
+            ImGui::OpenPopup("AddProfilePopup");
         }
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Add new weapon profile");
+            ImGui::SetTooltip("Add new input profile");
         }
         
-        // Add weapon popup
-        if (ImGui::BeginPopup("AddWeaponPopup")) {
-            static char new_weapon_name[64] = "";
-            ImGui::Text("New Weapon Name:");
-            ImGui::InputText("##NewWeaponName", new_weapon_name, sizeof(new_weapon_name));
+        // Add profile popup
+        if (ImGui::BeginPopup("AddProfilePopup")) {
+            static char new_profile_name[64] = "";
+            ImGui::Text("New Profile Name:");
+            ImGui::InputText("##NewProfileName", new_profile_name, sizeof(new_profile_name));
             
-            if (ImGui::Button("Add") && strlen(new_weapon_name) > 0) {
-                WeaponRecoilProfile new_profile(new_weapon_name, 3.0f, 1.0f);
-                if (ctx.config.addWeaponProfile(new_profile)) {
+            if (ImGui::Button("Add") && strlen(new_profile_name) > 0) {
+                InputProfile new_profile(new_profile_name, 3.0f, 1.0f);
+                if (ctx.config.addInputProfile(new_profile)) {
                     ctx.config.saveActiveProfile();
-                    new_weapon_name[0] = '\0';
+                    new_profile_name[0] = '\0';
                     initialized = false; // Force refresh
                     ImGui::CloseCurrentPopup();
                 }
