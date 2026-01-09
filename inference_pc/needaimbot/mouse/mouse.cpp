@@ -35,33 +35,23 @@ namespace {
         return nullptr;
     }
 
-    InputMethod& getFallbackInputMethod() {
-        static Win32InputMethod fallback;
-        return fallback;
-    }
-
-    void moveWithFallback(int dx, int dy) {
+    void moveWithInput(int dx, int dy) {
         if (InputMethod* active = getActiveInputMethod()) {
             active->move(dx, dy);
-            return;
         }
-        getFallbackInputMethod().move(dx, dy);
+        // No fallback in 2PC - KMBOX or MAKCU required
     }
 
-    void pressWithFallback() {
+    void pressWithInput() {
         if (InputMethod* active = getActiveInputMethod()) {
             active->press();
-            return;
         }
-        getFallbackInputMethod().press();
     }
 
-    void releaseWithFallback() {
+    void releaseWithInput() {
         if (InputMethod* active = getActiveInputMethod()) {
             active->release();
-            return;
         }
-        getFallbackInputMethod().release();
     }
 
     // Stabilizer thread - moves mouse down using input profile settings
@@ -92,7 +82,7 @@ namespace {
 
                     int dy = static_cast<int>(strength + 0.5f);
                     if (dy > 0) {
-                        moveWithFallback(0, dy);
+                        moveWithInput(0, dy);
                     }
 
                     // Use interval from profile
@@ -119,13 +109,13 @@ namespace {
 
                 switch (cmd.type) {
                     case MouseCommandType::MOVE:
-                        moveWithFallback(cmd.dx, cmd.dy);
+                        moveWithInput(cmd.dx, cmd.dy);
                         break;
                     case MouseCommandType::PRESS:
-                        pressWithFallback();
+                        pressWithInput();
                         break;
                     case MouseCommandType::RELEASE:
-                        releaseWithFallback();
+                        releaseWithInput();
                         break;
                     default:
                         break;
