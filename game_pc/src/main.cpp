@@ -1,5 +1,5 @@
 /**
- * GamePC - Screen Capture UDP Streamer with LZ4 compression
+ * GamePC - Screen Capture UDP Streamer with Packet Fragmentation (No Compression)
  */
 
 #define WIN32_LEAN_AND_MEAN
@@ -24,8 +24,6 @@
 #include <thread>
 #include <vector>
 
-#include "lz4.h"
-
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -38,8 +36,8 @@ struct Config {
     unsigned short sendPort = 5007;
     int captureX = 0;
     int captureY = 0;
-    int captureWidth = 320;
-    int captureHeight = 320;
+    int captureWidth = 224;
+    int captureHeight = 224;
     int targetFPS = 90;
 };
 
@@ -57,44 +55,44 @@ public:
         UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
         D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0};
         D3D_FEATURE_LEVEL obtained;
-        
+
         HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
             flags, levels, 2, D3D11_SDK_VERSION, &m_device, &obtained, &m_context);
         if (FAILED(hr)) return false;
-        
+
         ComPtr<IDXGIDevice> dxgiDevice;
         hr = m_device.As(&dxgiDevice);
         if (FAILED(hr)) return false;
-        
+
         ComPtr<IDXGIAdapter> adapter;
         hr = dxgiDevice->GetAdapter(&adapter);
         if (FAILED(hr)) return false;
-        
+
         hr = adapter->EnumOutputs(0, &m_output);
         if (FAILED(hr)) return false;
-        
+
         ComPtr<IDXGIOutput1> output1;
         hr = m_output.As(&output1);
         if (FAILED(hr)) return false;
-        
+
         hr = output1->DuplicateOutput(m_device.Get(), &m_duplication);
         if (FAILED(hr)) return false;
-        
+
         DXGI_OUTPUT_DESC desc;
         m_output->GetDesc(&desc);
         m_screenWidth = desc.DesktopCoordinates.right - desc.DesktopCoordinates.left;
         m_screenHeight = desc.DesktopCoordinates.bottom - desc.DesktopCoordinates.top;
-        
+
         return true;
     }
-    
+
     bool CaptureFrame(std::vector<uint8_t>& outData, int x, int y, int w, int h, UINT timeoutMs = 100) {
         if (!m_duplication) return false;
-        
+
         ComPtr<IDXGIResource> resource;
         DXGI_OUTDUPL_FRAME_INFO frameInfo;
         HRESULT hr = m_duplication->AcquireNextFrame(timeoutMs, &frameInfo, &resource);
-        
+
         if (hr == DXGI_ERROR_WAIT_TIMEOUT) return false;
         if (hr == DXGI_ERROR_ACCESS_LOST) {
             m_duplication.Reset();
@@ -104,14 +102,14 @@ public:
             return false;
         }
         if (FAILED(hr)) return false;
-        
+
         ComPtr<ID3D11Texture2D> texture;
         hr = resource.As(&texture);
         if (FAILED(hr)) {
             m_duplication->ReleaseFrame();
             return false;
         }
-        
+
         // Create staging texture if needed
         if (!m_staging || m_stagingWidth != w || m_stagingHeight != h) {
             D3D11_TEXTURE2D_DESC stagingDesc = {};
@@ -123,16 +121,16 @@ public:
             stagingDesc.SampleDesc.Count = 1;
             stagingDesc.Usage = D3D11_USAGE_STAGING;
             stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-            
+
             m_device->CreateTexture2D(&stagingDesc, nullptr, &m_staging);
             m_stagingWidth = w;
             m_stagingHeight = h;
         }
-        
+
         // Copy region
         D3D11_BOX box = {(UINT)x, (UINT)y, 0, (UINT)(x + w), (UINT)(y + h), 1};
         m_context->CopySubresourceRegion(m_staging.Get(), 0, 0, 0, 0, texture.Get(), 0, &box);
-        
+
         // Map and copy data
         D3D11_MAPPED_SUBRESOURCE mapped;
         hr = m_context->Map(m_staging.Get(), 0, D3D11_MAP_READ, 0, &mapped);
@@ -140,7 +138,7 @@ public:
             m_duplication->ReleaseFrame();
             return false;
         }
-        
+
         // BGRA -> RGB
         outData.resize(w * h * 3);
         uint8_t* dst = outData.data();
@@ -154,15 +152,15 @@ public:
                 src += 4;
             }
         }
-        
+
         m_context->Unmap(m_staging.Get(), 0);
         m_duplication->ReleaseFrame();
         return true;
     }
-    
+
     int GetScreenWidth() const { return m_screenWidth; }
     int GetScreenHeight() const { return m_screenHeight; }
-    
+
 private:
     ComPtr<ID3D11Device> m_device;
     ComPtr<ID3D11DeviceContext> m_context;
@@ -175,15 +173,16 @@ private:
     int m_stagingHeight = 0;
 };
 
-// UDP Frame packet header
+// UDP Packet header (fragmented, uncompressed)
 #pragma pack(push, 1)
-struct FrameHeader {
+struct PacketHeader {
     uint32_t magic;           // 0x46524D45 = "FRME"
     uint32_t frameId;
     uint16_t width;
     uint16_t height;
-    uint32_t compressedSize;  // LZ4 compressed size
-    uint32_t originalSize;    // Original RGB size
+    uint16_t packetIndex;     // Current packet index (0-based)
+    uint16_t totalPackets;    // Total number of packets for this frame
+    uint16_t dataSize;        // Data size in this packet
 };
 #pragma pack(pop)
 
@@ -192,14 +191,14 @@ void printUsage(const char* prog) {
               << "Options:\n"
               << "  --ip <addr>       Inference PC IP (default: 192.168.1.100)\n"
               << "  --port <port>     Send port (default: 5007)\n"
-              << "  --region <x,y,w,h> Capture region (default: center 320x320)\n"
+              << "  --region <x,y,w,h> Capture region (default: center 224x224)\n"
               << "  --fps <num>       Target FPS (default: 90)\n";
 }
 
 bool parseArgs(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
-        
+
         if (arg == "--ip" && i + 1 < argc) {
             g_config.inferenceIP = argv[++i];
         } else if (arg == "--port" && i + 1 < argc) {
@@ -223,16 +222,16 @@ int main(int argc, char** argv) {
     if (!parseArgs(argc, argv)) {
         return 0;
     }
-    
+
     std::signal(SIGINT, signalHandler);
-    
+
     // Initialize Winsock
     WSADATA wsaData;
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
         std::cerr << "WSAStartup failed\n";
         return 1;
     }
-    
+
     // Initialize capture
     SimpleCapture capture;
     if (!capture.Initialize()) {
@@ -240,18 +239,18 @@ int main(int argc, char** argv) {
         WSACleanup();
         return 1;
     }
-    
+
     std::cout << "Screen: " << capture.GetScreenWidth() << "x" << capture.GetScreenHeight() << "\n";
-    
+
     // Set default capture region to center of screen
     if (g_config.captureX == 0 && g_config.captureY == 0) {
         g_config.captureX = (capture.GetScreenWidth() - g_config.captureWidth) / 2;
         g_config.captureY = (capture.GetScreenHeight() - g_config.captureHeight) / 2;
     }
-    
+
     std::cout << "Capture region: " << g_config.captureX << "," << g_config.captureY
               << " " << g_config.captureWidth << "x" << g_config.captureHeight << "\n";
-    
+
     // Create send socket
     SOCKET sendSock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (sendSock == INVALID_SOCKET) {
@@ -259,37 +258,36 @@ int main(int argc, char** argv) {
         WSACleanup();
         return 1;
     }
-    
+
     // Set send buffer size
-    int sendBufSize = 1024 * 1024;
+    int sendBufSize = 2 * 1024 * 1024;  // Larger buffer for fragmented packets
     setsockopt(sendSock, SOL_SOCKET, SO_SNDBUF, (char*)&sendBufSize, sizeof(sendBufSize));
-    
+
     sockaddr_in destAddr = {};
     destAddr.sin_family = AF_INET;
     destAddr.sin_port = htons(g_config.sendPort);
     inet_pton(AF_INET, g_config.inferenceIP.c_str(), &destAddr.sin_addr);
-    
-    std::cout << "GamePC Streamer (LZ4) started\n";
+
+    std::cout << "GamePC Streamer (Fragmented, Uncompressed) started\n";
     std::cout << "Sending to: " << g_config.inferenceIP << ":" << g_config.sendPort << "\n";
     std::cout << "Press Ctrl+C to exit\n\n";
-    
+
     // Buffers
     std::vector<uint8_t> frameData;
-    const int maxCompressedSize = LZ4_compressBound(g_config.captureWidth * g_config.captureHeight * 3);
-    std::vector<char> compressBuffer(maxCompressedSize);
-    std::vector<uint8_t> packetBuffer(sizeof(FrameHeader) + maxCompressedSize);
-    
+    const size_t maxPayloadPerPacket = 1400;  // Safe MTU size
+    std::vector<uint8_t> packetBuffer(sizeof(PacketHeader) + maxPayloadPerPacket);
+
     uint32_t frameId = 0;
     uint64_t totalFrames = 0;
     uint64_t totalBytes = 0;
     auto statsStart = std::chrono::steady_clock::now();
-    
+
     // Timing stats
-    double totalCaptureMs = 0, totalCompressMs = 0, totalSendMs = 0;
-    
+    double totalCaptureMs = 0, totalSendMs = 0;
+
     // Wait up to 2 frame times for next frame
     const int captureTimeoutMs = 2000 / g_config.targetFPS;
-    
+
     while (g_running.load()) {
         // Capture frame (blocks until new frame or timeout)
         auto t1 = std::chrono::high_resolution_clock::now();
@@ -298,53 +296,47 @@ int main(int argc, char** argv) {
             continue;
         }
         auto t2 = std::chrono::high_resolution_clock::now();
-        
-        // LZ4 compress
-        int compressedSize = LZ4_compress_fast(
-            (const char*)frameData.data(),
-            compressBuffer.data(),
-            (int)frameData.size(),
-            maxCompressedSize,
-            1  // acceleration (1 = fastest)
-        );
+
+        // Calculate number of packets needed
+        size_t frameSize = frameData.size();
+        uint16_t totalPackets = (uint16_t)((frameSize + maxPayloadPerPacket - 1) / maxPayloadPerPacket);
+
+        // Send fragmented packets
+        for (uint16_t i = 0; i < totalPackets; i++) {
+            size_t offset = i * maxPayloadPerPacket;
+            size_t remaining = frameSize - offset;
+            uint16_t payloadSize = (uint16_t)std::min(remaining, maxPayloadPerPacket);
+
+            // Prepare packet header
+            PacketHeader* header = (PacketHeader*)packetBuffer.data();
+            header->magic = 0x46524D45;  // "FRME"
+            header->frameId = frameId;
+            header->width = (uint16_t)g_config.captureWidth;
+            header->height = (uint16_t)g_config.captureHeight;
+            header->packetIndex = i;
+            header->totalPackets = totalPackets;
+            header->dataSize = payloadSize;
+
+            // Copy payload
+            memcpy(packetBuffer.data() + sizeof(PacketHeader),
+                   frameData.data() + offset,
+                   payloadSize);
+
+            // Send packet
+            int packetSize = (int)(sizeof(PacketHeader) + payloadSize);
+            sendto(sendSock, (char*)packetBuffer.data(), packetSize, 0,
+                   (SOCKADDR*)&destAddr, sizeof(destAddr));
+        }
+
         auto t3 = std::chrono::high_resolution_clock::now();
-        
-        if (compressedSize <= 0) {
-            std::cerr << "LZ4 compression failed\n";
-            continue;
-        }
-        
-        // Check if fits in single UDP packet
-        const size_t maxPacket = 65000;
-        if (sizeof(FrameHeader) + compressedSize > maxPacket) {
-            std::cerr << "Frame too large after LZ4: " << compressedSize << " bytes\n";
-            continue;
-        }
-        
-        // Prepare packet
-        FrameHeader* header = (FrameHeader*)packetBuffer.data();
-        header->magic = 0x46524D45;  // "FRME"
-        header->frameId = frameId++;
-        header->width = (uint16_t)g_config.captureWidth;
-        header->height = (uint16_t)g_config.captureHeight;
-        header->compressedSize = (uint32_t)compressedSize;
-        header->originalSize = (uint32_t)frameData.size();
-        
-        memcpy(packetBuffer.data() + sizeof(FrameHeader), compressBuffer.data(), compressedSize);
-        
-        // Send
-        int packetSize = (int)(sizeof(FrameHeader) + compressedSize);
-        sendto(sendSock, (char*)packetBuffer.data(), packetSize, 0,
-               (SOCKADDR*)&destAddr, sizeof(destAddr));
-        auto t4 = std::chrono::high_resolution_clock::now();
-        
+
+        frameId++;
         totalCaptureMs += std::chrono::duration<double, std::milli>(t2 - t1).count();
-        totalCompressMs += std::chrono::duration<double, std::milli>(t3 - t2).count();
-        totalSendMs += std::chrono::duration<double, std::milli>(t4 - t3).count();
-        
+        totalSendMs += std::chrono::duration<double, std::milli>(t3 - t2).count();
+
         totalFrames++;
-        totalBytes += compressedSize;
-        
+        totalBytes += frameSize;
+
         // Print stats every second
         auto statsNow = std::chrono::steady_clock::now();
         auto statsDuration = std::chrono::duration_cast<std::chrono::seconds>(statsNow - statsStart);
@@ -352,28 +344,25 @@ int main(int argc, char** argv) {
             double fps = totalFrames / (double)statsDuration.count();
             double mbps = (totalBytes * 8.0) / (statsDuration.count() * 1000000.0);
             double avgCapture = totalCaptureMs / totalFrames;
-            double avgCompress = totalCompressMs / totalFrames;
             double avgSend = totalSendMs / totalFrames;
-            double ratio = (g_config.captureWidth * g_config.captureHeight * 3.0) / (totalBytes / (double)totalFrames);
-            
+
             std::cout << "\rFPS: " << std::fixed << std::setprecision(1) << fps
                       << " | Cap:" << std::setprecision(2) << avgCapture << "ms"
-                      << " LZ4:" << avgCompress << "ms"
                       << " Snd:" << avgSend << "ms"
-                      << " | " << ratio << ":1"
                       << " | " << mbps << " Mbps"
+                      << " | " << totalPackets << " pkts/frame"
                       << "     " << std::flush;
-            
+
             totalFrames = 0;
             totalBytes = 0;
-            totalCaptureMs = totalCompressMs = totalSendMs = 0;
+            totalCaptureMs = totalSendMs = 0;
             statsStart = statsNow;
         }
     }
-    
+
     std::cout << "\nShutting down...\n";
     closesocket(sendSock);
     WSACleanup();
-    
+
     return 0;
 }
