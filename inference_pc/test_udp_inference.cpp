@@ -68,6 +68,54 @@ extern "C" void launchPreprocessKernel(const uint8_t* rgb, float* output,
                                        cudaStream_t stream);
 
 // Draw bounding box on RGB image (will be displayed as BGR by Windows)
+// Simple INI parser for config.ini
+bool loadConfig(const char* filename, std::string& modelPath, unsigned short& port, std::string& gamePcIp) {
+    std::ifstream file(filename);
+    if (!file.is_open()) {
+        std::cout << "Config file '" << filename << "' not found, using defaults\n";
+        return false;
+    }
+
+    std::string line;
+    while (std::getline(file, line)) {
+        // Remove whitespace
+        line.erase(0, line.find_first_not_of(" \t\r\n"));
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        line.erase(line.find_last_not_of(" \t\r\n") + 1);
+
+        // Skip empty lines and comments
+        if (line.empty() || line[0] == ';' || line[0] == '#' || line[0] == '[') {
+            continue;
+        }
+
+        // Parse key=value
+        size_t pos = line.find('=');
+        if (pos == std::string::npos) continue;
+
+        std::string key = line.substr(0, pos);
+        std::string value = line.substr(pos + 1);
+
+        // Trim key and value
+        key.erase(0, key.find_first_not_of(" \t"));
+        key.erase(key.find_last_not_of(" \t") + 1);
+        value.erase(0, value.find_first_not_of(" \t"));
+        value.erase(value.find_last_not_of(" \t") + 1);
+
+        // Set config values
+        if (key == "ModelPath") {
+            modelPath = value;
+        } else if (key == "Port") {
+            port = (unsigned short)std::stoi(value);
+        } else if (key == "GamePcIP") {
+            gamePcIp = value;
+        }
+    }
+
+    file.close();
+    std::cout << "Loaded config from '" << filename << "'\n";
+    return true;
+}
+
 void drawBox(uint8_t* img, int imgW, int imgH, int x1, int y1, int x2, int y2, uint8_t r, uint8_t g, uint8_t b, int thickness = 2) {
     // Clamp coordinates
     x1 = std::max(0, std::min(x1, imgW - 1));
@@ -119,11 +167,15 @@ void drawBox(uint8_t* img, int imgW, int imgH, int x1, int y1, int x2, int y2, u
 int main(int argc, char* argv[]) {
     std::cout << "=== UDP Frame + TensorRT Inference Test (with Bbox) ===" << std::endl;
 
-    // Parse arguments
+    // Default values
     std::string modelPath = "models/best.engine";
     unsigned short port = 5007;
     std::string gamePcIp = "";
 
+    // Load config from file first
+    loadConfig("config.ini", modelPath, port, gamePcIp);
+
+    // Command line args override config file
     if (argc > 1) modelPath = argv[1];
     if (argc > 2) port = static_cast<unsigned short>(std::stoi(argv[2]));
     if (argc > 3) gamePcIp = argv[3];
