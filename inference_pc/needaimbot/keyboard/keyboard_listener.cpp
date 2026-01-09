@@ -7,7 +7,6 @@
 
 #include "../config/config.h"
 #include "../AppContext.h"
-#include "../mouse/input_drivers/SerialConnection.h"
 #include "keyboard_listener.h"
 #include "../mouse/mouse.h"
 #include "keycodes.h"

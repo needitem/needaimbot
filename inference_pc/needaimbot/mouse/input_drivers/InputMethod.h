@@ -151,46 +151,6 @@ private:
 };
 
 
-// Win32 SendInput fallback (works without special hardware)
-class Win32InputMethod : public InputMethod
-{
-public:
-    Win32InputMethod() = default;
-    ~Win32InputMethod() override = default;
-
-    void move(int x, int y) override
-    {
-        INPUT input = {0};
-        input.type = INPUT_MOUSE;
-        input.mi.dwFlags = MOUSEEVENTF_MOVE;
-        input.mi.dx = x;
-        input.mi.dy = y;
-        SendInput(1, &input, sizeof(INPUT));
-    }
-
-    void press() override
-    {
-        INPUT input = {0};
-        input.type = INPUT_MOUSE;
-        input.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
-        SendInput(1, &input, sizeof(INPUT));
-    }
-
-    void release() override
-    {
-        INPUT input = {0};
-        input.type = INPUT_MOUSE;
-        input.mi.dwFlags = MOUSEEVENTF_LEFTUP;
-        SendInput(1, &input, sizeof(INPUT));
-    }
-
-    bool isValid() const override
-    {
-        return true; 
-    }
-};
-
-
 // KMBox network input method
 class KmboxInputMethod : public InputMethod {
 public:

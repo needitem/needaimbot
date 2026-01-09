@@ -154,17 +154,13 @@ static void draw_input_device_settings()
 
     UIHelpers::BeginCard("Mouse Input Device");
 
-    UIHelpers::BeautifulText("Select the hardware/driver used to send mouse movements.", UIHelpers::GetAccentColor(0.8f));
-    UIHelpers::BeautifulText("WIN32 works for most cases. Hardware options may bypass detection.", ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
+    UIHelpers::BeautifulText("Select the hardware driver used to send mouse movements.", UIHelpers::GetAccentColor(0.8f));
+    UIHelpers::BeautifulText("KMBOX or MAKCU required for 2PC setup.", ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
     UIHelpers::CompactSpacer();
 
     static constexpr const char* INPUT_METHODS[] = {
-        "WIN32",
-        "GHUB",
-        "ARDUINO",
         "KMBOX",
-        "MAKCU",
-        "RAZER"
+        "MAKCU"
     };
 
     int method_index = 0;
@@ -188,40 +184,7 @@ static void draw_input_device_settings()
 
     const char* active_method = INPUT_METHODS[method_index];
 
-    if (std::strcmp(active_method, "ARDUINO") == 0) {
-        UIHelpers::SettingsSubHeader("Arduino Serial Settings");
-
-        static char arduino_port_buffer[64] = "";
-        static char arduino_baud_buffer[64] = "";
-        static bool buffers_initialized = false;
-
-        if (!buffers_initialized || previous_method != method_index || ctx.config.global().arduino_port != arduino_port_buffer) {
-            std::snprintf(arduino_port_buffer, IM_ARRAYSIZE(arduino_port_buffer), "%s", ctx.config.global().arduino_port.c_str());
-        }
-        if (!buffers_initialized || previous_method != method_index || std::to_string(ctx.config.global().arduino_baudrate) != arduino_baud_buffer) {
-            std::snprintf(arduino_baud_buffer, IM_ARRAYSIZE(arduino_baud_buffer), "%d", ctx.config.global().arduino_baudrate);
-        }
-        buffers_initialized = true;
-
-        if (ImGui::InputText("Serial Port", arduino_port_buffer, IM_ARRAYSIZE(arduino_port_buffer))) {
-            ctx.config.global().arduino_port = arduino_port_buffer;
-            SAVE_PROFILE();
-        }
-        UIHelpers::HelpMarker("COM port that the Arduino is connected to");
-
-        if (ImGui::InputText("Baud Rate", arduino_baud_buffer, IM_ARRAYSIZE(arduino_baud_buffer), ImGuiInputTextFlags_CharsDecimal)) {
-            ctx.config.global().arduino_baudrate = std::max(0, std::atoi(arduino_baud_buffer));
-            SAVE_PROFILE();
-        }
-        UIHelpers::HelpMarker("Serial speed used for communicating with the Arduino");
-
-        if (UIHelpers::EnhancedCheckbox("Enable Key Passthrough", &ctx.config.global().arduino_enable_keys,
-            "Forward keyboard events to the Arduino for on-board handling"))
-        {
-            SAVE_PROFILE();
-        }
-    }
-    else if (std::strcmp(active_method, "KMBOX") == 0) {
+    if (std::strcmp(active_method, "KMBOX") == 0) {
         UIHelpers::SettingsSubHeader("KMBOX Network Settings");
 
         static char kmbox_ip_buffer[64] = "";
@@ -280,18 +243,7 @@ static void draw_input_device_settings()
         }
         UIHelpers::HelpMarker("Set this to the IP and UDP port where MakcuRelay.exe is listening on the second PC.");
     }
-    else if (std::strcmp(active_method, "GHUB") == 0) {
-        UIHelpers::SettingsSubHeader("G HUB Integration");
-        UIHelpers::BeautifulText("Logitech G HUB must be running for this mode to work.", UIHelpers::GetWarningColor());
-    }
-    else if (std::strcmp(active_method, "RAZER") == 0) {
-        UIHelpers::SettingsSubHeader("Razer Synapse");
-        UIHelpers::BeautifulText("Requires Razer Synapse with the SDK enabled.", UIHelpers::GetWarningColor());
-    }
-    else {
-        UIHelpers::SettingsSubHeader("Windows API");
-        UIHelpers::BeautifulText("Uses the default Win32 mouse events. No extra setup required.", UIHelpers::GetAccentColor());
-    }
+
 
     UIHelpers::EndCard();
 }

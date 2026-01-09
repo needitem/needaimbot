@@ -19,8 +19,6 @@
 #ifndef HEADLESS_BUILD
 #include "overlay/overlay.h"
 #endif
-#include "mouse/input_drivers/SerialConnection.h"
-#include "mouse/input_drivers/ghub.h"
 #include "mouse/input_drivers/InputMethod.h"
 #include "mouse/input_drivers/kmboxNet.h"
 #include "include/other_tools.h"
@@ -125,28 +123,6 @@ namespace {
 bool initializeInputMethod() {
     auto& ctx = AppContext::getInstance();
 
-    if (ctx.config.global().input_method == "ARDUINO") {
-        return tryInitMethod("Arduino", [&]() -> std::unique_ptr<InputMethod> {
-            auto serial = std::make_unique<SerialConnection>(ctx.config.global().arduino_port, ctx.config.global().arduino_baudrate);
-            if (!serial->isOpen()) {
-                logInputMethodFallback("Arduino", "failed to open serial port " + ctx.config.global().arduino_port);
-                return nullptr;
-            }
-            return std::make_unique<SerialInputMethod>(serial.release());
-        });
-    }
-
-    if (ctx.config.global().input_method == "GHUB") {
-        return tryInitMethod("GHub", [&]() -> std::unique_ptr<InputMethod> {
-            auto gHub = std::make_unique<GhubMouse>();
-            if (!gHub->mouse_xy(0, 0)) {
-                logInputMethodFallback("GHub", "failed to initialize mouse driver");
-                return nullptr;
-            }
-            return std::make_unique<GHubInputMethod>(gHub.release());
-        });
-    }
-
     if (ctx.config.global().input_method == "KMBOX") {
         return tryInitMethod("kmboxNet", [&]() -> std::unique_ptr<InputMethod> {
             auto ip = copyToBuffer<256>(ctx.config.global().kmbox_ip);
@@ -167,7 +143,7 @@ bool initializeInputMethod() {
                 logInputMethodFallback("MAKCU", "invalid remote IP/port configuration");
                 return nullptr;
             }
-            auto method = std::make_unique<MakcuInputMethod>(ip, port);
+            auto method = std::make_unique<MakcuNetInputMethod>(ip, port);
             if (!method->isValid()) {
                 logInputMethodFallback("MAKCU", "failed to initialize UDP client to " + ip + ":" + std::to_string(port));
                 return nullptr;
@@ -176,13 +152,8 @@ bool initializeInputMethod() {
         });
     }
 
-    if (ctx.config.global().input_method == "RAZER") {
-        return tryInitMethod("Razer", []() -> std::unique_ptr<InputMethod> {
-            return std::make_unique<RZInputMethod>();
-        });
-    }
-
-    setGlobalInputMethod(std::make_unique<Win32InputMethod>());
+    // No fallback - 2PC architecture requires KMBOX or MAKCU
+    std::cerr << "[INPUT] Error: No valid input method configured. Use KMBOX or MAKCU." << std::endl;
     return false;
 }
 
