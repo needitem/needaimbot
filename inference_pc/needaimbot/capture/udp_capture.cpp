@@ -1,4 +1,5 @@
 #include "udp_capture.h"
+#include "lz4.h"
 
 #include <iostream>
 #include <cstring>
@@ -136,7 +137,7 @@ void UDPCapture::StopCapture() {
 }
 
 void UDPCapture::receiveThread() {
-    std::vector<uint8_t> recvBuffer(2 * 1024 * 1024);  // 2MB receive buffer
+    std::vector<uint8_t> recvBuffer(256 * 1024);  // 256KB receive buffer
     std::vector<uint8_t> decompressBuffer;
     sockaddr_in fromAddr;
     int fromLen = sizeof(fromAddr);
@@ -178,26 +179,19 @@ void UDPCapture::receiveThread() {
 
         // Check data size
         size_t expectedPayload = ret - sizeof(UDPFrameHeader);
-        if (header->dataSize != expectedPayload) {
+        if (header->compressedSize != expectedPayload) {
             m_droppedFrames.fetch_add(1);
-            continue;  // Size mismatch (fragmented?)
+            continue;  // Size mismatch
         }
 
         const uint8_t* payload = recvBuffer.data() + sizeof(UDPFrameHeader);
-        size_t payloadSize = header->dataSize;
-        size_t rgbSize = header->width * header->height * 3;
+        size_t compressedSize = header->compressedSize;
+        size_t originalSize = header->originalSize;
 
-        // Decompress if needed
-        const uint8_t* rgbData = payload;
-        if (header->compressed) {
-            if (!decompressRLE(payload, payloadSize, decompressBuffer, rgbSize)) {
-                m_droppedFrames.fetch_add(1);
-                continue;  // Decompression failed
-            }
-            rgbData = decompressBuffer.data();
-        } else if (payloadSize != rgbSize) {
+        // Decompress LZ4
+        if (!decompressLZ4(payload, compressedSize, decompressBuffer, originalSize)) {
             m_droppedFrames.fetch_add(1);
-            continue;  // Size mismatch
+            continue;  // Decompression failed
         }
 
         // Store frame in write buffer
@@ -205,12 +199,12 @@ void UDPCapture::receiveThread() {
             std::lock_guard<std::mutex> lock(m_bufferMutex);
             
             // Resize buffer if needed
-            if (m_frameBuffer[m_writeBuffer].size() != rgbSize) {
-                m_frameBuffer[m_writeBuffer].resize(rgbSize);
+            if (m_frameBuffer[m_writeBuffer].size() != originalSize) {
+                m_frameBuffer[m_writeBuffer].resize(originalSize);
             }
             
             // Copy data
-            memcpy(m_frameBuffer[m_writeBuffer].data(), rgbData, rgbSize);
+            memcpy(m_frameBuffer[m_writeBuffer].data(), decompressBuffer.data(), originalSize);
             
             // Swap buffers
             std::swap(m_writeBuffer, m_readBuffer);
@@ -228,28 +222,18 @@ void UDPCapture::receiveThread() {
     }
 }
 
-bool UDPCapture::decompressRLE(const uint8_t* compressed, size_t compressedSize,
-                               std::vector<uint8_t>& output, size_t expectedSize) {
-    output.clear();
-    output.reserve(expectedSize);
-
-    size_t i = 0;
-    while (i < compressedSize && output.size() < expectedSize) {
-        uint8_t b = compressed[i++];
-        
-        if (b == 0xFF && i + 1 < compressedSize) {
-            // RLE sequence: 0xFF <count> <value>
-            uint8_t count = compressed[i++];
-            uint8_t value = compressed[i++];
-            for (uint8_t j = 0; j < count && output.size() < expectedSize; ++j) {
-                output.push_back(value);
-            }
-        } else {
-            output.push_back(b);
-        }
-    }
-
-    return output.size() == expectedSize;
+bool UDPCapture::decompressLZ4(const uint8_t* compressed, size_t compressedSize,
+                               std::vector<uint8_t>& output, size_t originalSize) {
+    output.resize(originalSize);
+    
+    int result = LZ4_decompress_safe(
+        (const char*)compressed,
+        (char*)output.data(),
+        (int)compressedSize,
+        (int)originalSize
+    );
+    
+    return result == (int)originalSize;
 }
 
 bool UDPCapture::GetLatestFrame(void** frameData, unsigned int* width, 

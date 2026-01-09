@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.18)
 
-project(GamePC_Streamer LANGUAGES CXX)
+project(GamePC_Streamer LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -11,6 +11,7 @@ endif()
 
 add_executable(${PROJECT_NAME} WIN32
     src/main.cpp
+    src/lz4.c
 )
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE

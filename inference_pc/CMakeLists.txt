@@ -52,6 +52,7 @@ set(CPP_SOURCES
     needaimbot/config/config.cpp
     needaimbot/capture/dda_capture.cpp
     needaimbot/capture/udp_capture.cpp
+    needaimbot/capture/lz4.c
     needaimbot/keyboard/keyboard_listener.cpp
     needaimbot/keyboard/keycodes.cpp
     needaimbot/mouse/mouse.cpp
