@@ -1,4 +1,4 @@
-﻿#ifndef MAKCUCONNECTION_H
+#ifndef MAKCUCONNECTION_H
 #define MAKCUCONNECTION_H
 
 #define WIN32_LEAN_AND_MEAN
@@ -8,6 +8,7 @@
 #include <thread>
 #include <atomic>
 #include <mutex>
+#include <vector>
 
 // Windows Native Serial API - 최고 성능을 위해
 
