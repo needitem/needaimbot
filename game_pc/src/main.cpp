@@ -18,6 +18,7 @@
 #include <chrono>
 #include <csignal>
 #include <cstring>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <string>
@@ -189,10 +190,66 @@ struct PacketHeader {
 void printUsage(const char* prog) {
     std::cout << "Usage: " << prog << " [options]\n"
               << "Options:\n"
-              << "  --ip <addr>       Inference PC IP (default: 192.168.1.100)\n"
-              << "  --port <port>     Send port (default: 5007)\n"
-              << "  --region <x,y,w,h> Capture region (default: center 224x224)\n"
-              << "  --fps <num>       Target FPS (default: 90)\n";
+              << "  --ip <addr>       Inference PC IP (default: from config.ini)\n"
+              << "  --port <port>     Send port (default: from config.ini)\n"
+              << "  --region <x,y,w,h> Capture region (default: from config.ini)\n"
+              << "  --fps <num>       Target FPS (default: from config.ini)\n"
+              << "\nConfig file: config.ini\n";
+}
+
+// Simple INI parser for config.ini
+bool loadConfig(const char* filename) {
+    std::ifstream file(filename);
+    if (!file.is_open()) {
+        std::cout << "Config file '" << filename << "' not found, using defaults\n";
+        return false;
+    }
+
+    std::string line;
+    while (std::getline(file, line)) {
+        // Remove whitespace
+        line.erase(0, line.find_first_not_of(" \t\r\n"));
+        line.erase(line.find_last_not_of(" \t\r\n") + 1);
+
+        // Skip empty lines and comments
+        if (line.empty() || line[0] == ';' || line[0] == '#' || line[0] == '[') {
+            continue;
+        }
+
+        // Parse key=value
+        size_t pos = line.find('=');
+        if (pos == std::string::npos) continue;
+
+        std::string key = line.substr(0, pos);
+        std::string value = line.substr(pos + 1);
+
+        // Trim key and value
+        key.erase(0, key.find_first_not_of(" \t"));
+        key.erase(key.find_last_not_of(" \t") + 1);
+        value.erase(0, value.find_first_not_of(" \t"));
+        value.erase(value.find_last_not_of(" \t") + 1);
+
+        // Set config values
+        if (key == "InferenceIP") {
+            g_config.inferenceIP = value;
+        } else if (key == "SendPort") {
+            g_config.sendPort = (unsigned short)std::stoi(value);
+        } else if (key == "CaptureX") {
+            g_config.captureX = std::stoi(value);
+        } else if (key == "CaptureY") {
+            g_config.captureY = std::stoi(value);
+        } else if (key == "CaptureWidth") {
+            g_config.captureWidth = std::stoi(value);
+        } else if (key == "CaptureHeight") {
+            g_config.captureHeight = std::stoi(value);
+        } else if (key == "TargetFPS") {
+            g_config.targetFPS = std::stoi(value);
+        }
+    }
+
+    file.close();
+    std::cout << "Loaded config from '" << filename << "'\n";
+    return true;
 }
 
 bool parseArgs(int argc, char** argv) {
@@ -219,6 +276,10 @@ bool parseArgs(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
+    // Load config from file first
+    loadConfig("config.ini");
+
+    // Command line args override config file
     if (!parseArgs(argc, argv)) {
         return 0;
     }
