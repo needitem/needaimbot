@@ -153,17 +153,27 @@ void from_json(const json& j, ProfileData& p);
 
 // Global settings - hardware/system settings shared across profiles
 struct GlobalSettings {
+    // Input method: "WIN32", "MAKCU", "MAKCU_NET", "KMBOX"
     std::string input_method = "WIN32";
-    int arduino_baudrate = 2000000;
-    std::string arduino_port = "COM0";
-    bool arduino_enable_keys = false;
+    
+    // Makcu serial settings (device connected directly to this PC)
+    std::string makcu_port = "COM3";
+    int makcu_baudrate = 4000000;
+    
+    // Makcu network relay settings (legacy - for relay to another PC)
+    std::string makcu_remote_ip = "127.0.0.1";
+    int makcu_remote_port = 5005;
+    
+    // KMBox network settings
     std::string kmbox_ip = "192.168.2.188";
     std::string kmbox_port = "16896";
     std::string kmbox_mac = "46405c53";
-    std::string makcu_port = "COM0";
-    int makcu_baudrate = 4000000;
-    std::string makcu_remote_ip = "127.0.0.1";
-    int makcu_remote_port = 5005;
+    
+    // 2PC Network settings - UDP frame receiver from game PC
+    bool use_network_capture = false;           // Use UDP frames instead of local DDA
+    std::string game_pc_ip = "";                // Game PC IP (auto-detected if empty)
+    int frame_recv_port = 5007;                 // Port to receive frames from game PC
+    int mouse_state_port = 5006;                // Port to send mouse state to game PC
     int cuda_device_id = 0;
     int persistent_cache_limit_mb = 32;
     bool use_cuda_graph = false;

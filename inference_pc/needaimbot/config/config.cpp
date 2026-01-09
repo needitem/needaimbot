@@ -144,20 +144,27 @@ void from_json(const json& j, ProfileData& p) {
 void to_json(json& j, const GlobalSettings& g) {
     j = json{
         {"input_method", g.input_method},
-        {"arduino_baudrate", g.arduino_baudrate},
-        {"arduino_port", g.arduino_port},
-        {"arduino_enable_keys", g.arduino_enable_keys},
+        // Makcu serial settings
+        {"makcu_port", g.makcu_port},
+        {"makcu_baudrate", g.makcu_baudrate},
+        // Makcu network relay (legacy)
+        {"makcu_remote_ip", g.makcu_remote_ip},
+        {"makcu_remote_port", g.makcu_remote_port},
+        // KMBox settings
         {"kmbox_ip", g.kmbox_ip},
         {"kmbox_port", g.kmbox_port},
         {"kmbox_mac", g.kmbox_mac},
-        {"makcu_port", g.makcu_port},
-        {"makcu_baudrate", g.makcu_baudrate},
-        {"makcu_remote_ip", g.makcu_remote_ip},
-        {"makcu_remote_port", g.makcu_remote_port},
+        // 2PC Network settings
+        {"use_network_capture", g.use_network_capture},
+        {"game_pc_ip", g.game_pc_ip},
+        {"frame_recv_port", g.frame_recv_port},
+        {"mouse_state_port", g.mouse_state_port},
+        // CUDA/GPU settings
         {"cuda_device_id", g.cuda_device_id},
         {"persistent_cache_limit_mb", g.persistent_cache_limit_mb},
         {"use_cuda_graph", g.use_cuda_graph},
         {"graph_warmup_iterations", g.graph_warmup_iterations},
+        // Hotkeys
         {"button_targeting", g.button_targeting},
         {"button_exit", g.button_exit},
         {"button_pause", g.button_pause},
@@ -167,6 +174,7 @@ void to_json(json& j, const GlobalSettings& g) {
         {"button_auto_action", g.button_auto_action},
         {"button_single_shot", g.button_single_shot},
         {"button_stabilizer", g.button_stabilizer},
+        // UI settings
         {"overlay_opacity", g.overlay_opacity},
         {"overlay_ui_scale", g.overlay_ui_scale},
         {"show_window", g.show_window},
@@ -178,43 +186,48 @@ void to_json(json& j, const GlobalSettings& g) {
 }
 
 void from_json(const json& j, GlobalSettings& g) {
-    // Use obfuscated JSON keys only (no fallback to original names)
-    #define GET_OBF(field, obf_key) if (j.contains(obf_key)) j.at(obf_key).get_to(g.field)
     #define GET_IF(field) if (j.contains(#field)) j.at(#field).get_to(g.field)
     
     GET_IF(input_method);
-    GET_OBF(arduino_baudrate, "mcu_baud");
-    GET_OBF(arduino_port, "mcu_port");
-    GET_OBF(arduino_enable_keys, "mcu_enable_keys");
-    GET_OBF(kmbox_ip, "dev_addr");
-    GET_OBF(kmbox_port, "dev_port");
-    GET_OBF(kmbox_mac, "dev_hwid");
+    // Makcu serial settings
     GET_IF(makcu_port);
     GET_IF(makcu_baudrate);
+    // Makcu network relay (legacy)
     GET_IF(makcu_remote_ip);
     GET_IF(makcu_remote_port);
+    // KMBox settings
+    GET_IF(kmbox_ip);
+    GET_IF(kmbox_port);
+    GET_IF(kmbox_mac);
+    // 2PC Network settings
+    GET_IF(use_network_capture);
+    GET_IF(game_pc_ip);
+    GET_IF(frame_recv_port);
+    GET_IF(mouse_state_port);
+    // CUDA/GPU settings
     GET_IF(cuda_device_id);
     GET_IF(persistent_cache_limit_mb);
     GET_IF(use_cuda_graph);
     GET_IF(graph_warmup_iterations);
-    GET_OBF(button_targeting, "button_pointing");
+    // Hotkeys
+    GET_IF(button_targeting);
     GET_IF(button_exit);
     GET_IF(button_pause);
     GET_IF(button_reload_config);
-    GET_OBF(button_open_overlay, "button_open_layer");
-    GET_OBF(button_disable_upward_aim, "button_disable_upward_fcs");
+    GET_IF(button_open_overlay);
+    GET_IF(button_disable_upward_aim);
     GET_IF(button_auto_action);
     GET_IF(button_single_shot);
     GET_IF(button_stabilizer);
-    GET_OBF(overlay_opacity, "layer_opacity");
-    GET_OBF(overlay_ui_scale, "layer_ui_scale");
+    // UI settings
+    GET_IF(overlay_opacity);
+    GET_IF(overlay_ui_scale);
     GET_IF(show_window);
     GET_IF(show_fps);
-    GET_OBF(screenshot_button, "snapshot_btn");
-    GET_OBF(screenshot_delay, "snapshot_delay");
+    GET_IF(screenshot_button);
+    GET_IF(screenshot_delay);
     GET_IF(always_on_top);
     #undef GET_IF
-    #undef GET_OBF
 }
 
 
