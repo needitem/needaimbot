@@ -16,6 +16,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -24,15 +25,16 @@
 
 #pragma comment(lib, "ws2_32.lib")
 
-// Frame header matching game_pc sender (LZ4 compressed)
+// Packet header matching game_pc sender (fragmented, uncompressed)
 #pragma pack(push, 1)
-struct UDPFrameHeader {
+struct UDPPacketHeader {
     uint32_t magic;           // 0x46524D45 = "FRME"
     uint32_t frameId;
     uint16_t width;
     uint16_t height;
-    uint32_t compressedSize;  // LZ4 compressed size
-    uint32_t originalSize;    // Original RGB size
+    uint16_t packetIndex;     // Current packet index (0-based)
+    uint16_t totalPackets;    // Total number of packets for this frame
+    uint16_t dataSize;        // Data size in this packet
 };
 #pragma pack(pop)
 
@@ -42,8 +44,8 @@ public:
     ~UDPCapture();
 
     // Initialize with network settings
-    bool Initialize(unsigned short listenPort = 5007, 
-                   const std::string& gamePcIp = "", 
+    bool Initialize(unsigned short listenPort = 5007,
+                   const std::string& gamePcIp = "",
                    unsigned short mouseStatePort = 5006);
     void Shutdown();
 
@@ -93,8 +95,19 @@ public:
 
 private:
     void receiveThread();
-    bool decompressLZ4(const uint8_t* compressed, size_t compressedSize,
-                       std::vector<uint8_t>& output, size_t originalSize);
+
+    // Fragment reassembly
+    struct FrameFragments {
+        std::vector<uint8_t> data;
+        std::vector<bool> received;  // Track which packets received
+        uint16_t totalPackets;
+        uint16_t receivedCount;
+        uint16_t width;
+        uint16_t height;
+        std::chrono::steady_clock::time_point lastUpdate;
+    };
+    std::map<uint32_t, FrameFragments> m_fragmentMap;
+    std::mutex m_fragmentMutex;
 
     // Network
     SOCKET m_recvSocket = INVALID_SOCKET;
