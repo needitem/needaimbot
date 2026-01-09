@@ -218,6 +218,7 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
 # =============================================================================
 add_executable(test_udp_inference
     test_udp_inference.cpp
+    preprocessing_simple.cu
     needaimbot/capture/udp_capture.cpp
     needaimbot/capture/lz4.c
 )
@@ -226,6 +227,8 @@ target_include_directories(test_udp_inference PRIVATE
     ${CMAKE_SOURCE_DIR}/needaimbot
     ${CMAKE_SOURCE_DIR}/needaimbot/include
     ${CMAKE_SOURCE_DIR}/needaimbot/capture
+    ${CMAKE_SOURCE_DIR}/needaimbot/modules
+    ${CMAKE_SOURCE_DIR}/needaimbot/modules/glfw/include
     ${TENSORRT_PATH}/include
     ${CUDA_PATH}/include
 )
@@ -249,6 +252,11 @@ target_compile_definitions(test_udp_inference PRIVATE
     _CRT_SECURE_NO_WARNINGS
     WIN32_LEAN_AND_MEAN
     NOMINMAX
+)
+
+set_target_properties(test_udp_inference PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED ON
 )
 
 if(MSVC)
