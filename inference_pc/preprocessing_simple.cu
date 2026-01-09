@@ -18,7 +18,7 @@ __global__ void preprocessKernel(const uint8_t* rgb, float* output,
     int dstIdx = y * dstWidth + x;
     int planeSize = dstWidth * dstHeight;
 
-    // RGB -> normalized float, NCHW format
+    // RGB normalized float, NCHW format
     output[0 * planeSize + dstIdx] = rgb[srcIdx + 0] / 255.0f;  // R
     output[1 * planeSize + dstIdx] = rgb[srcIdx + 1] / 255.0f;  // G
     output[2 * planeSize + dstIdx] = rgb[srcIdx + 2] / 255.0f;  // B
