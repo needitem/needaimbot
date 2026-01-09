@@ -36,8 +36,8 @@ struct Config {
     unsigned short sendPort = 5007;
     int captureX = 0;
     int captureY = 0;
-    int captureWidth = 224;
-    int captureHeight = 224;
+    int captureWidth = 256;
+    int captureHeight = 256;
     int targetFPS = 90;
 };
 
