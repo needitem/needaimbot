@@ -24,15 +24,15 @@
 
 #pragma comment(lib, "ws2_32.lib")
 
-// Frame header matching game_pc sender
+// Frame header matching game_pc sender (LZ4 compressed)
 #pragma pack(push, 1)
 struct UDPFrameHeader {
-    uint32_t magic;      // 0x46524D45 = "FRME"
+    uint32_t magic;           // 0x46524D45 = "FRME"
     uint32_t frameId;
     uint16_t width;
     uint16_t height;
-    uint32_t dataSize;
-    uint8_t compressed;  // 1 = RLE compressed
+    uint32_t compressedSize;  // LZ4 compressed size
+    uint32_t originalSize;    // Original RGB size
 };
 #pragma pack(pop)
 
@@ -93,8 +93,8 @@ public:
 
 private:
     void receiveThread();
-    bool decompressRLE(const uint8_t* compressed, size_t compressedSize,
-                       std::vector<uint8_t>& output, size_t expectedSize);
+    bool decompressLZ4(const uint8_t* compressed, size_t compressedSize,
+                       std::vector<uint8_t>& output, size_t originalSize);
 
     // Network
     SOCKET m_recvSocket = INVALID_SOCKET;

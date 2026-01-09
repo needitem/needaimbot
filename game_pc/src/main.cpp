@@ -1,8 +1,5 @@
 /**
- * GamePC - Screen Capture UDP Streamer
- * 
- * Captures a specified screen region and sends it to the inference PC via UDP.
- * Receives mouse commands back from the inference PC via UDP broadcast.
+ * GamePC - Screen Capture UDP Streamer with LZ4 compression
  */
 
 #define WIN32_LEAN_AND_MEAN
@@ -21,10 +18,13 @@
 #include <chrono>
 #include <csignal>
 #include <cstring>
+#include <iomanip>
 #include <iostream>
 #include <string>
 #include <thread>
 #include <vector>
+
+#include "lz4.h"
 
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "d3d11.lib")
@@ -34,29 +34,23 @@ using Microsoft::WRL::ComPtr;
 
 // Configuration
 struct Config {
-    std::string inferenceIP = "192.168.1.100";  // Inference PC IP
-    unsigned short sendPort = 5007;              // Port to send frames
-    unsigned short recvPort = 5006;              // Port to receive mouse events
+    std::string inferenceIP = "192.168.1.100";
+    unsigned short sendPort = 5007;
     int captureX = 0;
     int captureY = 0;
-    int captureWidth = 640;
-    int captureHeight = 640;
-    int targetFPS = 144;
-    bool compress = true;  // Use simple RLE compression
+    int captureWidth = 320;
+    int captureHeight = 320;
+    int targetFPS = 90;
 };
 
 static std::atomic<bool> g_running{true};
 static Config g_config;
 
-// Mouse event state (received from inference PC)
-static std::atomic<bool> g_aimActive{false};
-static std::atomic<bool> g_shootActive{false};
-
 void signalHandler(int) {
     g_running.store(false);
 }
 
-// Simple DDA Capture class (minimal version)
+// Simple DDA Capture class
 class SimpleCapture {
 public:
     bool Initialize() {
@@ -94,16 +88,15 @@ public:
         return true;
     }
     
-    bool CaptureFrame(std::vector<uint8_t>& outData, int x, int y, int w, int h) {
+    bool CaptureFrame(std::vector<uint8_t>& outData, int x, int y, int w, int h, UINT timeoutMs = 100) {
         if (!m_duplication) return false;
         
         ComPtr<IDXGIResource> resource;
         DXGI_OUTDUPL_FRAME_INFO frameInfo;
-        HRESULT hr = m_duplication->AcquireNextFrame(16, &frameInfo, &resource);
+        HRESULT hr = m_duplication->AcquireNextFrame(timeoutMs, &frameInfo, &resource);
         
         if (hr == DXGI_ERROR_WAIT_TIMEOUT) return false;
         if (hr == DXGI_ERROR_ACCESS_LOST) {
-            // Recreate duplication
             m_duplication.Reset();
             ComPtr<IDXGIOutput1> output1;
             m_output.As(&output1);
@@ -118,9 +111,6 @@ public:
             m_duplication->ReleaseFrame();
             return false;
         }
-        
-        D3D11_TEXTURE2D_DESC texDesc;
-        texture->GetDesc(&texDesc);
         
         // Create staging texture if needed
         if (!m_staging || m_stagingWidth != w || m_stagingHeight != h) {
@@ -151,7 +141,7 @@ public:
             return false;
         }
         
-        // Copy to output (BGRA -> RGB, resize if needed)
+        // BGRA -> RGB
         outData.resize(w * h * 3);
         uint8_t* dst = outData.data();
         for (int row = 0; row < h; ++row) {
@@ -188,79 +178,22 @@ private:
 // UDP Frame packet header
 #pragma pack(push, 1)
 struct FrameHeader {
-    uint32_t magic;      // 0x46524D45 = "FRME"
+    uint32_t magic;           // 0x46524D45 = "FRME"
     uint32_t frameId;
     uint16_t width;
     uint16_t height;
-    uint32_t dataSize;
-    uint8_t compressed;
+    uint32_t compressedSize;  // LZ4 compressed size
+    uint32_t originalSize;    // Original RGB size
 };
 #pragma pack(pop)
-
-// Simple RLE compression for screen data
-std::vector<uint8_t> compressRLE(const std::vector<uint8_t>& data) {
-    std::vector<uint8_t> result;
-    result.reserve(data.size());
-    
-    size_t i = 0;
-    while (i < data.size()) {
-        uint8_t val = data[i];
-        size_t count = 1;
-        while (i + count < data.size() && data[i + count] == val && count < 255) {
-            ++count;
-        }
-        
-        if (count >= 3 || val == 0xFF) {
-            result.push_back(0xFF);  // Escape byte
-            result.push_back((uint8_t)count);
-            result.push_back(val);
-        } else {
-            for (size_t j = 0; j < count; ++j) {
-                result.push_back(val);
-            }
-        }
-        i += count;
-    }
-    
-    return result;
-}
-
-// Receive thread for mouse events from inference PC
-void receiveThread(SOCKET sock) {
-    char buffer[256];
-    sockaddr_in from;
-    int fromLen = sizeof(from);
-    
-    while (g_running.load()) {
-        int ret = recvfrom(sock, buffer, sizeof(buffer) - 1, 0,
-                          (SOCKADDR*)&from, &fromLen);
-        if (ret <= 0) continue;
-        
-        buffer[ret] = '\0';
-        std::string msg(buffer);
-        
-        // Parse mouse events from inference PC
-        if (msg == "AIM:START") {
-            g_aimActive.store(true);
-        } else if (msg == "AIM:STOP") {
-            g_aimActive.store(false);
-        } else if (msg == "SHOOT:START") {
-            g_shootActive.store(true);
-        } else if (msg == "SHOOT:STOP") {
-            g_shootActive.store(false);
-        }
-    }
-}
 
 void printUsage(const char* prog) {
     std::cout << "Usage: " << prog << " [options]\n"
               << "Options:\n"
               << "  --ip <addr>       Inference PC IP (default: 192.168.1.100)\n"
               << "  --port <port>     Send port (default: 5007)\n"
-              << "  --recv-port <port> Receive port (default: 5006)\n"
-              << "  --region <x,y,w,h> Capture region (default: center 640x640)\n"
-              << "  --fps <num>       Target FPS (default: 144)\n"
-              << "  --no-compress     Disable compression\n";
+              << "  --region <x,y,w,h> Capture region (default: center 320x320)\n"
+              << "  --fps <num>       Target FPS (default: 90)\n";
 }
 
 bool parseArgs(int argc, char** argv) {
@@ -271,18 +204,13 @@ bool parseArgs(int argc, char** argv) {
             g_config.inferenceIP = argv[++i];
         } else if (arg == "--port" && i + 1 < argc) {
             g_config.sendPort = (unsigned short)std::stoi(argv[++i]);
-        } else if (arg == "--recv-port" && i + 1 < argc) {
-            g_config.recvPort = (unsigned short)std::stoi(argv[++i]);
         } else if (arg == "--region" && i + 1 < argc) {
-            // Parse x,y,w,h
             std::string region = argv[++i];
             sscanf(region.c_str(), "%d,%d,%d,%d",
                    &g_config.captureX, &g_config.captureY,
                    &g_config.captureWidth, &g_config.captureHeight);
         } else if (arg == "--fps" && i + 1 < argc) {
             g_config.targetFPS = std::stoi(argv[++i]);
-        } else if (arg == "--no-compress") {
-            g_config.compress = false;
         } else if (arg == "--help" || arg == "-h") {
             printUsage(argv[0]);
             return false;
@@ -327,13 +255,13 @@ int main(int argc, char** argv) {
     // Create send socket
     SOCKET sendSock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (sendSock == INVALID_SOCKET) {
-        std::cerr << "Failed to create send socket\n";
+        std::cerr << "Failed to create socket\n";
         WSACleanup();
         return 1;
     }
     
     // Set send buffer size
-    int sendBufSize = 4 * 1024 * 1024;  // 4MB
+    int sendBufSize = 1024 * 1024;
     setsockopt(sendSock, SOL_SOCKET, SO_SNDBUF, (char*)&sendBufSize, sizeof(sendBufSize));
     
     sockaddr_in destAddr = {};
@@ -341,134 +269,110 @@ int main(int argc, char** argv) {
     destAddr.sin_port = htons(g_config.sendPort);
     inet_pton(AF_INET, g_config.inferenceIP.c_str(), &destAddr.sin_addr);
     
-    // Create receive socket
-    SOCKET recvSock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (recvSock == INVALID_SOCKET) {
-        std::cerr << "Failed to create receive socket\n";
-        closesocket(sendSock);
-        WSACleanup();
-        return 1;
-    }
-    
-    sockaddr_in recvAddr = {};
-    recvAddr.sin_family = AF_INET;
-    recvAddr.sin_addr.s_addr = INADDR_ANY;
-    recvAddr.sin_port = htons(g_config.recvPort);
-    
-    if (bind(recvSock, (SOCKADDR*)&recvAddr, sizeof(recvAddr)) == SOCKET_ERROR) {
-        std::cerr << "Failed to bind receive socket\n";
-        closesocket(sendSock);
-        closesocket(recvSock);
-        WSACleanup();
-        return 1;
-    }
-    
-    // Set receive timeout
-    int timeout = 10;
-    setsockopt(recvSock, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout, sizeof(timeout));
-    
-    // Start receive thread
-    std::thread recvThread(receiveThread, recvSock);
-    
-    std::cout << "GamePC Streamer started\n";
+    std::cout << "GamePC Streamer (LZ4) started\n";
     std::cout << "Sending to: " << g_config.inferenceIP << ":" << g_config.sendPort << "\n";
-    std::cout << "Listening on port: " << g_config.recvPort << "\n";
-    std::cout << "Target FPS: " << g_config.targetFPS << "\n";
     std::cout << "Press Ctrl+C to exit\n\n";
     
-    // Main capture loop
+    // Buffers
     std::vector<uint8_t> frameData;
-    uint32_t frameId = 0;
-    auto frameInterval = std::chrono::microseconds(1000000 / g_config.targetFPS);
-    auto lastFrameTime = std::chrono::steady_clock::now();
+    const int maxCompressedSize = LZ4_compressBound(g_config.captureWidth * g_config.captureHeight * 3);
+    std::vector<char> compressBuffer(maxCompressedSize);
+    std::vector<uint8_t> packetBuffer(sizeof(FrameHeader) + maxCompressedSize);
     
+    uint32_t frameId = 0;
     uint64_t totalFrames = 0;
     uint64_t totalBytes = 0;
     auto statsStart = std::chrono::steady_clock::now();
     
+    // Timing stats
+    double totalCaptureMs = 0, totalCompressMs = 0, totalSendMs = 0;
+    
+    // Wait up to 2 frame times for next frame
+    const int captureTimeoutMs = 2000 / g_config.targetFPS;
+    
     while (g_running.load()) {
-        auto now = std::chrono::steady_clock::now();
-        auto elapsed = now - lastFrameTime;
-        
-        if (elapsed < frameInterval) {
-            std::this_thread::sleep_for(frameInterval - elapsed);
-            continue;
-        }
-        lastFrameTime = now;
-        
-        // Capture frame
+        // Capture frame (blocks until new frame or timeout)
+        auto t1 = std::chrono::high_resolution_clock::now();
         if (!capture.CaptureFrame(frameData, g_config.captureX, g_config.captureY,
-                                   g_config.captureWidth, g_config.captureHeight)) {
+                                   g_config.captureWidth, g_config.captureHeight, captureTimeoutMs)) {
+            continue;
+        }
+        auto t2 = std::chrono::high_resolution_clock::now();
+        
+        // LZ4 compress
+        int compressedSize = LZ4_compress_fast(
+            (const char*)frameData.data(),
+            compressBuffer.data(),
+            (int)frameData.size(),
+            maxCompressedSize,
+            1  // acceleration (1 = fastest)
+        );
+        auto t3 = std::chrono::high_resolution_clock::now();
+        
+        if (compressedSize <= 0) {
+            std::cerr << "LZ4 compression failed\n";
             continue;
         }
         
-        // Compress if enabled
-        std::vector<uint8_t> sendData;
-        bool compressed = false;
-        if (g_config.compress) {
-            sendData = compressRLE(frameData);
-            if (sendData.size() < frameData.size() * 0.9) {
-                compressed = true;
-            } else {
-                sendData = frameData;  // Not worth compressing
-            }
-        } else {
-            sendData = frameData;
+        // Check if fits in single UDP packet
+        const size_t maxPacket = 65000;
+        if (sizeof(FrameHeader) + compressedSize > maxPacket) {
+            std::cerr << "Frame too large after LZ4: " << compressedSize << " bytes\n";
+            continue;
         }
         
-        // Prepare header
-        FrameHeader header;
-        header.magic = 0x46524D45;  // "FRME"
-        header.frameId = frameId++;
-        header.width = (uint16_t)g_config.captureWidth;
-        header.height = (uint16_t)g_config.captureHeight;
-        header.dataSize = (uint32_t)sendData.size();
-        header.compressed = compressed ? 1 : 0;
+        // Prepare packet
+        FrameHeader* header = (FrameHeader*)packetBuffer.data();
+        header->magic = 0x46524D45;  // "FRME"
+        header->frameId = frameId++;
+        header->width = (uint16_t)g_config.captureWidth;
+        header->height = (uint16_t)g_config.captureHeight;
+        header->compressedSize = (uint32_t)compressedSize;
+        header->originalSize = (uint32_t)frameData.size();
         
-        // Send header + data (may need fragmentation for large frames)
-        const size_t maxPacket = 65000;  // UDP max - some overhead
+        memcpy(packetBuffer.data() + sizeof(FrameHeader), compressBuffer.data(), compressedSize);
         
-        if (sizeof(header) + sendData.size() <= maxPacket) {
-            // Single packet
-            std::vector<uint8_t> packet(sizeof(header) + sendData.size());
-            memcpy(packet.data(), &header, sizeof(header));
-            memcpy(packet.data() + sizeof(header), sendData.data(), sendData.size());
-            
-            sendto(sendSock, (char*)packet.data(), (int)packet.size(), 0,
-                   (SOCKADDR*)&destAddr, sizeof(destAddr));
-        } else {
-            // Fragment into multiple packets (simplified - header in first packet)
-            // TODO: Implement proper fragmentation with sequence numbers
-            std::cerr << "Frame too large, skipping: " << sendData.size() << " bytes\n";
-        }
+        // Send
+        int packetSize = (int)(sizeof(FrameHeader) + compressedSize);
+        sendto(sendSock, (char*)packetBuffer.data(), packetSize, 0,
+               (SOCKADDR*)&destAddr, sizeof(destAddr));
+        auto t4 = std::chrono::high_resolution_clock::now();
+        
+        totalCaptureMs += std::chrono::duration<double, std::milli>(t2 - t1).count();
+        totalCompressMs += std::chrono::duration<double, std::milli>(t3 - t2).count();
+        totalSendMs += std::chrono::duration<double, std::milli>(t4 - t3).count();
         
         totalFrames++;
-        totalBytes += sendData.size();
+        totalBytes += compressedSize;
         
         // Print stats every second
-        auto statsDuration = std::chrono::duration_cast<std::chrono::seconds>(now - statsStart);
-        if (statsDuration.count() >= 1) {
+        auto statsNow = std::chrono::steady_clock::now();
+        auto statsDuration = std::chrono::duration_cast<std::chrono::seconds>(statsNow - statsStart);
+        if (statsDuration.count() >= 1 && totalFrames > 0) {
             double fps = totalFrames / (double)statsDuration.count();
             double mbps = (totalBytes * 8.0) / (statsDuration.count() * 1000000.0);
+            double avgCapture = totalCaptureMs / totalFrames;
+            double avgCompress = totalCompressMs / totalFrames;
+            double avgSend = totalSendMs / totalFrames;
+            double ratio = (g_config.captureWidth * g_config.captureHeight * 3.0) / (totalBytes / (double)totalFrames);
+            
             std::cout << "\rFPS: " << std::fixed << std::setprecision(1) << fps
-                      << " | " << std::setprecision(2) << mbps << " Mbps"
-                      << " | Aim: " << (g_aimActive.load() ? "ON" : "OFF")
-                      << " | Shoot: " << (g_shootActive.load() ? "ON" : "OFF")
+                      << " | Cap:" << std::setprecision(2) << avgCapture << "ms"
+                      << " LZ4:" << avgCompress << "ms"
+                      << " Snd:" << avgSend << "ms"
+                      << " | " << ratio << ":1"
+                      << " | " << mbps << " Mbps"
                       << "     " << std::flush;
             
             totalFrames = 0;
             totalBytes = 0;
-            statsStart = now;
+            totalCaptureMs = totalCompressMs = totalSendMs = 0;
+            statsStart = statsNow;
         }
     }
     
     std::cout << "\nShutting down...\n";
-    
-    g_running.store(false);
-    recvThread.join();
-    
     closesocket(sendSock);
-    closesocket(recvSock);
     WSACleanup();
     
     return 0;
