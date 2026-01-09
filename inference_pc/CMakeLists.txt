@@ -28,8 +28,8 @@ endif()
 # =============================================================================
 set(CUDA_PATH "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.1")
 set(TENSORRT_PATH "${CMAKE_SOURCE_DIR}/needaimbot/modules/TensorRT-10.14.1.48")
-set(CUDNN_PATH "C:/Program Files/NVIDIA/CUDNN/v9.7")
-set(CUDNN_VERSION "12.8")
+set(CUDNN_PATH "C:/Program Files/NVIDIA/CUDNN/v9.17")
+set(CUDNN_VERSION "13.1")
 
 # =============================================================================
 # CUDA Configuration

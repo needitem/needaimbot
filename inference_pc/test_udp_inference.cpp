@@ -320,14 +320,20 @@ int main(int argc, char* argv[]) {
         auto inferEnd = std::chrono::steady_clock::now();
 
         // Parse detections
-        // Output format: [1, 6, 1029] = [batch, features, num_boxes] (transposed)
+        // Output format: [1, 6, numBoxes] = [batch, features, num_boxes] (transposed)
+        // Features: [x, y, w, h, cls0_prob, cls1_prob]
         std::vector<std::pair<float, int>> detections;
         int numFeatures = outputDims.d[1];  // 6
-        int numBoxes = outputDims.d[2];     // 1029
+        int numBoxes = outputDims.d[2];     // 1344 for 256x256 model
 
         for (int i = 0; i < numBoxes; i++) {
             // Each feature is a row, each box is a column
-            float conf = h_output[4 * numBoxes + i];
+            float cls0_prob = h_output[4 * numBoxes + i];
+            float cls1_prob = h_output[5 * numBoxes + i];
+
+            // Get max class probability as confidence
+            float conf = std::max(cls0_prob, cls1_prob);
+
             if (conf > confThreshold) {
                 detections.emplace_back(conf, i);
             }
@@ -353,8 +359,10 @@ int main(int argc, char* argv[]) {
             float y_center = h_output[1 * numBoxes + boxIdx];
             float w = h_output[2 * numBoxes + boxIdx];
             float h = h_output[3 * numBoxes + boxIdx];
-            float conf = h_output[4 * numBoxes + boxIdx];
-            int cls = (int)h_output[5 * numBoxes + boxIdx];
+            float cls0_prob = h_output[4 * numBoxes + boxIdx];
+            float cls1_prob = h_output[5 * numBoxes + boxIdx];
+            float conf = std::max(cls0_prob, cls1_prob);
+            int cls = (cls1_prob > cls0_prob) ? 1 : 0;
 
             // Convert to pixel coordinates
             int x1 = (int)((x_center - w/2));
@@ -408,9 +416,12 @@ int main(int argc, char* argv[]) {
                 std::cout << "  Top detections: ";
                 for (size_t i = 0; i < std::min((size_t)5, detections.size()); i++) {
                     int boxIdx = detections[i].second;
-                    float conf = h_output[4 * numBoxes + boxIdx];
-                    int cls = (int)h_output[5 * numBoxes + boxIdx];
-                    std::cout << "[cls=" << cls << " conf=" << std::fixed << std::setprecision(2) << conf << "] ";
+                    float cls0_prob = h_output[4 * numBoxes + boxIdx];
+                    float cls1_prob = h_output[5 * numBoxes + boxIdx];
+                    float conf = std::max(cls0_prob, cls1_prob);
+                    int cls = (cls1_prob > cls0_prob) ? 1 : 0;
+                    std::cout << "[cls=" << cls << " (c0=" << std::setprecision(4) << cls0_prob
+                             << " c1=" << cls1_prob << ") conf=" << std::setprecision(2) << conf << "] ";
                 }
                 std::cout << std::endl;
             }
