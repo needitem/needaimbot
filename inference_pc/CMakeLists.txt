@@ -272,3 +272,8 @@ add_custom_command(TARGET test_udp_inference POST_BUILD
         "$<TARGET_FILE_DIR:test_udp_inference>"
     COMMENT "Copying TensorRT DLLs for test_udp_inference..."
 )
+
+# =============================================================================
+# EngineExport Subproject - ONNX to TensorRT Engine Converter
+# =============================================================================
+add_subdirectory(engine_export)
