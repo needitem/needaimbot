@@ -48,3 +48,5 @@ nul
 
 build_obf_headless/
 needaimbot_obf/
+inference_pc/needaimbot/modules/glfw/docs/
+inference_pc/engine_export/imgui/examples/
