@@ -1,8 +1,6 @@
 // UDP Frame Receive + TensorRT Inference Test
 // Usage: test_udp_inference.exe [model.engine] [port] [game_pc_ip]
 
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
@@ -10,15 +8,18 @@
 
 #include <cuda_runtime.h>
 #include <iostream>
+#include <fstream>
 #include <chrono>
 #include <string>
 #include <vector>
 #include <atomic>
 #include <csignal>
 #include <iomanip>
+#include <algorithm>
 
 #include "needaimbot/capture/udp_capture.h"
 #include "needaimbot/capture/lz4.h"
+#include "display_window.h"
 
 // TensorRT
 #include <NvInfer.h>
@@ -60,28 +61,11 @@ nvinfer1::ICudaEngine* loadEngine(const std::string& enginePath, nvinfer1::IRunt
     return runtime->deserializeCudaEngine(engineData.data(), size);
 }
 
-// Preprocess RGB to normalized float (NCHW format)
-__global__ void preprocessKernel(const uint8_t* rgb, float* output, 
-                                  int srcWidth, int srcHeight,
-                                  int dstWidth, int dstHeight) {
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
-    int y = blockIdx.y * blockDim.y + threadIdx.y;
-    
-    if (x >= dstWidth || y >= dstHeight) return;
-    
-    // Simple nearest-neighbor resize
-    int srcX = x * srcWidth / dstWidth;
-    int srcY = y * srcHeight / dstHeight;
-    
-    int srcIdx = (srcY * srcWidth + srcX) * 3;
-    int dstIdx = y * dstWidth + x;
-    int planeSize = dstWidth * dstHeight;
-    
-    // RGB -> normalized float, NCHW format
-    output[0 * planeSize + dstIdx] = rgb[srcIdx + 0] / 255.0f;  // R
-    output[1 * planeSize + dstIdx] = rgb[srcIdx + 1] / 255.0f;  // G
-    output[2 * planeSize + dstIdx] = rgb[srcIdx + 2] / 255.0f;  // B
-}
+// Preprocess RGB to normalized float (NCHW format) - declared in preprocessing_simple.cu
+extern "C" void launchPreprocessKernel(const uint8_t* rgb, float* output,
+                                       int srcWidth, int srcHeight,
+                                       int dstWidth, int dstHeight,
+                                       cudaStream_t stream);
 
 int main(int argc, char* argv[]) {
     std::cout << "=== UDP Frame + TensorRT Inference Test ===" << std::endl;
@@ -215,6 +199,12 @@ int main(int argc, char* argv[]) {
     
     std::cout << "\n=== Waiting for frames from Game PC ===" << std::endl;
     std::cout << "Press Ctrl+C to stop\n" << std::endl;
+
+    // Initialize display window
+    DisplayWindow display;
+    if (!display.initialize(640, 640, "Inference Viewer - 320x320")) {
+        std::cerr << "Failed to initialize display window" << std::endl;
+    }
     
     // Performance tracking
     uint64_t frameCount = 0;
@@ -242,16 +232,15 @@ int main(int argc, char* argv[]) {
         // Copy to GPU
         size_t frameSize = width * height * 3;
         cudaMemcpyAsync(d_rgb, rgbData, frameSize, cudaMemcpyHostToDevice, stream);
-        
+
         // Preprocess (resize + normalize)
-        dim3 block(16, 16);
-        dim3 grid((inputW + 15) / 16, (inputH + 15) / 16);
-        preprocessKernel<<<grid, block, 0, stream>>>(
-            static_cast<uint8_t*>(d_rgb), 
+        launchPreprocessKernel(
+            static_cast<uint8_t*>(d_rgb),
             static_cast<float*>(d_input),
-            width, height, inputW, inputH
+            width, height, inputW, inputH,
+            stream
         );
-        
+
         // Run inference
         auto inferStart = std::chrono::steady_clock::now();
         
@@ -262,7 +251,10 @@ int main(int argc, char* argv[]) {
         
         // Sync and measure
         cudaStreamSynchronize(stream);
-        
+
+        // Update display window
+        display.updateFrame(static_cast<unsigned char*>(rgbData), width, height);
+
         auto inferEnd = std::chrono::steady_clock::now();
         auto frameEnd = inferEnd;
         
@@ -279,31 +271,47 @@ int main(int argc, char* argv[]) {
         if (frameCount == 1 || frameCount % 100 == 0) {
             cudaMemcpy(h_output.data(), d_output, outputSize, cudaMemcpyDeviceToHost);
             
-            // Find max confidence detection
-            float maxConf = 0.0f;
-            int maxIdx = -1;
+            // Find detections with confidence > threshold
+            const float confThreshold = 0.25f;
+            std::vector<std::pair<float, int>> detections;
             
-            // Assuming YOLO output format: [batch, num_boxes, 4+num_classes] or similar
-            // This is a simplified check - actual parsing depends on model format
             int numBoxes = outputDims.d[1];
             int boxSize = outputDims.d[2];
             
-            for (int i = 0; i < numBoxes && i < 100; i++) {
-                // Check confidence at offset 4 (assuming x,y,w,h,conf,...)
+            for (int i = 0; i < numBoxes; i++) {
                 float conf = h_output[i * boxSize + 4];
-                if (conf > maxConf) {
-                    maxConf = conf;
-                    maxIdx = i;
+                if (conf > confThreshold) {
+                    detections.emplace_back(conf, i);
                 }
             }
+            
+            // Sort by confidence (highest first)
+            std::sort(detections.begin(), detections.end(),
+                [](const auto& a, const auto& b) { return a.first > b.first; });
             
             std::cout << "Frame " << frameCount << " [" << frameId << "]: "
                       << width << "x" << height 
                       << " | recv=" << recvUs << "us"
                       << " | infer=" << inferUs << "us"
                       << " | e2e=" << e2eUs << "us"
-                      << " | maxConf=" << std::fixed << std::setprecision(3) << maxConf
-                      << std::endl;
+                      << " | detections=" << detections.size() << std::endl;
+            
+            // Show top 5 detections
+            int showCount = std::min(5, (int)detections.size());
+            for (int i = 0; i < showCount; i++) {
+                int idx = detections[i].second;
+                float x = h_output[idx * boxSize + 0];
+                float y = h_output[idx * boxSize + 1];
+                float w = h_output[idx * boxSize + 2];
+                float h = h_output[idx * boxSize + 3];
+                float conf = h_output[idx * boxSize + 4];
+                int cls = (int)h_output[idx * boxSize + 5];
+                
+                std::cout << "  [" << i << "] cls=" << cls
+                          << " conf=" << std::fixed << std::setprecision(3) << conf
+                          << " box=[" << x << "," << y << "," << w << "," << h << "]"
+                          << std::endl;
+            }
         }
         
         // Print stats every second
@@ -323,6 +331,11 @@ int main(int argc, char* argv[]) {
                       << "\n" << std::endl;
             
             lastPrintTime = now;
+        }
+
+        // Process window messages
+        if (!display.processMessages()) {
+            break;
         }
     }
     
@@ -346,11 +359,13 @@ int main(int argc, char* argv[]) {
     cudaFree(d_output);
     cudaFree(d_rgb);
     cudaStreamDestroy(stream);
-    
+
     delete context;
     delete engine;
     delete runtime;
-    
+
+    display.shutdown();
+
     std::cout << "Done." << std::endl;
     return 0;
 }
