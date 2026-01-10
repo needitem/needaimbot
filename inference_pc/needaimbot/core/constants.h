@@ -6,8 +6,15 @@
  * @brief System-wide constants and configuration values
  */
 
+#ifdef _WIN32
 #define NOMINMAX
 #include <windows.h>
+#else
+// Linux thread priority definitions (map to nice values conceptually)
+#ifndef THREAD_PRIORITY_ABOVE_NORMAL
+#define THREAD_PRIORITY_ABOVE_NORMAL 1
+#endif
+#endif
 
 namespace Constants {
     // ============================================================================

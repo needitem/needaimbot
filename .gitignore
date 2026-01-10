@@ -51,3 +51,5 @@ needaimbot_obf/
 inference_pc/needaimbot/modules/glfw/docs/
 inference_pc/engine_export/imgui/examples/
 *.engine
+inference_pc/build_linux/
+*.onnx

@@ -3,6 +3,9 @@
 #include "simple_cuda_mat.h"
 #include "../AppContext.h"
 #include "../capture/capture_interface.h"
+#ifndef _WIN32
+#include "../capture/udp_capture_adapter.h"
+#endif
 #include "../core/logger.h"
 #include "cuda_error_check.h"
 #include "preprocessing.h"
@@ -27,11 +30,14 @@
 #include <cuda.h>
 #include <cuda_runtime_api.h>
 
-#ifndef NOMINMAX
-#define NOMINMAX
+#include "../core/windows_headers.h"
+
+#ifndef _WIN32
+#include <pthread.h>
+#include <sched.h>
 #endif
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
+
+#include "tensorrt_compat.h"
 
 // Forward declare the mouse control function
 extern "C" {
@@ -786,7 +792,11 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
             }
 
             if (m_context) {
+#if NV_TENSORRT_MAJOR >= 10
                 m_context->enqueueV3(m_pipelineStream->get());
+#else
+                m_context->enqueueV2(m_bindings.data(), m_pipelineStream->get(), nullptr);
+#endif
             }
         }
 
@@ -861,11 +871,15 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
 
     // TensorRT 異붾줎 ?ы븿 (Graph ?명솚 紐⑤뜽留??ъ슜)
     if (m_context && m_config.enableDetection) {
+#if NV_TENSORRT_MAJOR >= 10
         if (!m_context->enqueueV3(stream)) {
+#else
+        if (!m_context->enqueueV2(m_bindings.data(), stream, nullptr)) {
+#endif
             std::cerr << "Warning: TensorRT enqueue failed during graph capture" << std::endl;
         }
     }
-    
+
     if (m_config.enableDetection) {
         performIntegratedPostProcessing(stream);
         performTargetSelection(stream);
@@ -972,7 +986,11 @@ bool UnifiedGraphPipeline::updateGraphExec() {
     }
 
     if (m_context && m_config.enableDetection) {
+#if NV_TENSORRT_MAJOR >= 10
         if (!m_context->enqueueV3(stream)) {
+#else
+        if (!m_context->enqueueV2(m_bindings.data(), stream, nullptr)) {
+#endif
             cudaStreamEndCapture(stream, &newGraph);
             if (newGraph) cudaGraphDestroy(newGraph);
             return false;
@@ -1005,18 +1023,17 @@ bool UnifiedGraphPipeline::updateGraphExec() {
     }
 
     // Try to update the existing executable
+#if CUDART_VERSION >= 12000
     cudaGraphExecUpdateResultInfo updateResultInfo{};
     err = cudaGraphExecUpdate(m_graphExec, newGraph, &updateResultInfo);
 
     if (err == cudaSuccess && updateResultInfo.result == cudaGraphExecUpdateSuccess) {
-        // Update succeeded - just clean up the temporary graph
         cudaGraphDestroy(newGraph);
         std::cout << "[UnifiedGraph] Graph exec updated successfully (fast path)" << std::endl;
         m_state.needsRebuild = false;
         return true;
     }
 
-    // Update failed or topology changed - need full reinstantiation
     if (updateResultInfo.result == cudaGraphExecUpdateErrorTopologyChanged) {
         std::cout << "[UnifiedGraph] Topology changed, performing full graph reinstantiation" << std::endl;
     } else if (updateResultInfo.result == cudaGraphExecUpdateErrorNodeTypeChanged) {
@@ -1027,6 +1044,26 @@ bool UnifiedGraphPipeline::updateGraphExec() {
         std::cerr << "[UnifiedGraph] Graph update failed: " << cudaGetErrorString(err)
                   << ", result=" << updateResultInfo.result << std::endl;
     }
+#else
+    // CUDA 11.x: Use legacy cudaGraphExecUpdate API
+    cudaGraphNode_t errorNode = nullptr;
+    cudaGraphExecUpdateResult updateResult;
+    err = cudaGraphExecUpdate(m_graphExec, newGraph, &errorNode, &updateResult);
+
+    if (err == cudaSuccess && updateResult == cudaGraphExecUpdateSuccess) {
+        cudaGraphDestroy(newGraph);
+        std::cout << "[UnifiedGraph] Graph exec updated successfully (fast path)" << std::endl;
+        m_state.needsRebuild = false;
+        return true;
+    }
+
+    if (updateResult == cudaGraphExecUpdateErrorTopologyChanged) {
+        std::cout << "[UnifiedGraph] Topology changed, performing full graph reinstantiation" << std::endl;
+    } else {
+        std::cerr << "[UnifiedGraph] Graph update failed: " << cudaGetErrorString(err)
+                  << ", result=" << updateResult << std::endl;
+    }
+#endif
 
     // Destroy old exec and reinstantiate with new graph
     if (m_graphExec) {
@@ -1608,7 +1645,15 @@ void UnifiedGraphPipeline::runMainLoop() {
     auto& ctx = AppContext::getInstance();
 
     // Raise priority to reduce wake-up jitter after blocking waits
+#ifdef _WIN32
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+#else
+    // Linux: Use pthread priority (requires CAP_SYS_NICE or root)
+    // Silently ignore if we can't set priority
+    struct sched_param param;
+    param.sched_priority = 10;  // Modest priority boost
+    pthread_setschedparam(pthread_self(), SCHED_RR, &param);
+#endif
 
     bool wasAiming = false;
 
@@ -1715,16 +1760,27 @@ bool UnifiedGraphPipeline::initializeTensorRT(const std::string& modelFile) {
     if (m_engine->getNbOptimizationProfiles() > 0) {
         m_context->setOptimizationProfileAsync(0, m_pipelineStream->get());
     }
-    
-    
+
+#if NV_TENSORRT_MAJOR < 10
+    // Initialize bindings vector for TRT 8.x enqueueV2
+    int nbBindings = m_engine->getNbBindings();
+    m_bindings.resize(nbBindings, nullptr);
+#endif
+
     getInputNames();
     getOutputNames();
     
     if (!m_inputNames.empty()) {
         m_inputName = m_inputNames[0];
         m_primaryInputIndex = 0;
+#if NV_TENSORRT_MAJOR >= 10
         m_inputDims = m_engine->getTensorShape(m_inputName.c_str());
         m_inputDataType = m_engine->getTensorDataType(m_inputName.c_str());
+#else
+        int inputIdx = m_engine->getBindingIndex(m_inputName.c_str());
+        m_inputDims = m_engine->getBindingDimensions(inputIdx);
+        m_inputDataType = m_engine->getBindingDataType(inputIdx);
+#endif
 
         if (m_inputDims.nbDims == 4) {
             m_modelInputResolution = m_inputDims.d[2];
@@ -1750,8 +1806,14 @@ bool UnifiedGraphPipeline::initializeTensorRT(const std::string& modelFile) {
     }
     
     for (const auto& outputName : m_outputNames) {
+#if NV_TENSORRT_MAJOR >= 10
         nvinfer1::Dims outputDims = m_engine->getTensorShape(outputName.c_str());
         nvinfer1::DataType outputDataType = m_engine->getTensorDataType(outputName.c_str());
+#else
+        int outputIdx = m_engine->getBindingIndex(outputName.c_str());
+        nvinfer1::Dims outputDims = m_engine->getBindingDimensions(outputIdx);
+        nvinfer1::DataType outputDataType = m_engine->getBindingDataType(outputIdx);
+#endif
 
         size_t outputSize = 1;
         for (int i = 0; i < outputDims.nbDims; ++i) {
@@ -1791,12 +1853,20 @@ void UnifiedGraphPipeline::getInputNames() {
     m_inputNames.clear();
     m_inputSizes.clear();
 
+#if NV_TENSORRT_MAJOR >= 10
     for (int i = 0; i < m_engine->getNbIOTensors(); ++i) {
         const char* name = m_engine->getIOTensorName(i);
         if (m_engine->getTensorIOMode(name) == nvinfer1::TensorIOMode::kINPUT) {
             m_inputNames.emplace_back(name);
         }
     }
+#else
+    for (int i = 0; i < m_engine->getNbBindings(); ++i) {
+        if (m_engine->bindingIsInput(i)) {
+            m_inputNames.emplace_back(m_engine->getBindingName(i));
+        }
+    }
+#endif
 }
 
 void UnifiedGraphPipeline::getOutputNames() {
@@ -1806,6 +1876,7 @@ void UnifiedGraphPipeline::getOutputNames() {
     m_outputShapes.clear();
     m_outputTypes.clear();
 
+#if NV_TENSORRT_MAJOR >= 10
     for (int i = 0; i < m_engine->getNbIOTensors(); ++i) {
         const char* name = m_engine->getIOTensorName(i);
         if (m_engine->getTensorIOMode(name) == nvinfer1::TensorIOMode::kOUTPUT) {
@@ -1822,6 +1893,24 @@ void UnifiedGraphPipeline::getOutputNames() {
             m_outputTypes[name] = dataType;
         }
     }
+#else
+    for (int i = 0; i < m_engine->getNbBindings(); ++i) {
+        if (!m_engine->bindingIsInput(i)) {
+            const char* name = m_engine->getBindingName(i);
+            m_outputNames.emplace_back(name);
+
+            auto dims = m_engine->getBindingDimensions(i);
+            std::vector<int64_t> shape;
+            for (int j = 0; j < dims.nbDims; ++j) {
+                shape.push_back(dims.d[j]);
+            }
+            m_outputShapes[name] = shape;
+
+            auto dataType = m_engine->getBindingDataType(i);
+            m_outputTypes[name] = dataType;
+        }
+    }
+#endif
 }
 
 void UnifiedGraphPipeline::getBindings() {
@@ -1922,10 +2011,20 @@ bool UnifiedGraphPipeline::bindStaticTensorAddresses() {
             return false;
         }
 
+#if NV_TENSORRT_MAJOR >= 10
         if (!m_context->setTensorAddress(m_inputNames[i].c_str(), address)) {
             std::cerr << "[Pipeline] Failed to bind input tensor: " << m_inputNames[i] << std::endl;
             return false;
         }
+#else
+        int idx = m_engine->getBindingIndex(m_inputNames[i].c_str());
+        if (idx >= 0 && idx < static_cast<int>(m_bindings.size())) {
+            m_bindings[idx] = address;
+        } else {
+            std::cerr << "[Pipeline] Failed to bind input tensor: " << m_inputNames[i] << std::endl;
+            return false;
+        }
+#endif
     }
 
     for (size_t i = 0; i < m_outputNames.size(); ++i) {
@@ -1935,10 +2034,20 @@ bool UnifiedGraphPipeline::bindStaticTensorAddresses() {
             return false;
         }
 
+#if NV_TENSORRT_MAJOR >= 10
         if (!m_context->setTensorAddress(m_outputNames[i].c_str(), address)) {
             std::cerr << "[Pipeline] Failed to bind output tensor: " << m_outputNames[i] << std::endl;
             return false;
         }
+#else
+        int idx = m_engine->getBindingIndex(m_outputNames[i].c_str());
+        if (idx >= 0 && idx < static_cast<int>(m_bindings.size())) {
+            m_bindings[idx] = address;
+        } else {
+            std::cerr << "[Pipeline] Failed to bind output tensor: " << m_outputNames[i] << std::endl;
+            return false;
+        }
+#endif
     }
 
     m_bindingsNeedUpdate = false;
@@ -2025,7 +2134,11 @@ bool UnifiedGraphPipeline::runInferenceAsync(cudaStream_t stream) {
         return false;
     }
 
+#if NV_TENSORRT_MAJOR >= 10
     bool success = m_context->enqueueV3(stream);
+#else
+    bool success = m_context->enqueueV2(m_bindings.data(), stream, nullptr);
+#endif
 
     if (!success) {
         cudaError_t cudaErr = cudaGetLastError();
@@ -2356,6 +2469,9 @@ bool UnifiedGraphPipeline::acquireFrameSync(FrameMetadata& outMetadata) {
 
     auto& ctx = AppContext::getInstance();
 
+#ifdef _WIN32
+    // Windows: Use DDA capture with cudaArray
+
     // Update capture region if needed (cached, minimal overhead)
     if (!updateDDACaptureRegion(ctx)) {
         return false;
@@ -2416,6 +2532,69 @@ bool UnifiedGraphPipeline::acquireFrameSync(FrameMetadata& outMetadata) {
         return false;
     }
 
+#else
+    // Linux: Use UDP capture with RGB data
+
+    UDPCaptureAdapter* udpAdapter = dynamic_cast<UDPCaptureAdapter*>(m_capture);
+    if (!udpAdapter) {
+        std::cerr << "[Capture] Invalid capture provider for Linux" << std::endl;
+        return false;
+    }
+
+    void* rgbData = nullptr;
+    unsigned int width = 0, height = 0;
+    uint64_t frameId = 0;
+
+    if (!udpAdapter->AcquireFrameSyncRGB(&rgbData, &width, &height, &frameId, 16)) {
+        return false;
+    }
+
+    if (!rgbData || width == 0 || height == 0) {
+        return false;
+    }
+
+    // Duplicate frame detection
+    uint64_t lastFrameId = m_lastProcessedPresentQpc.load(std::memory_order_acquire);
+    if (frameId != 0 && frameId <= lastFrameId) {
+        m_perfMetrics.duplicateFrames++;
+        return false;
+    }
+
+    int heightInt = static_cast<int>(height);
+    int widthInt = static_cast<int>(width);
+
+    // For UDP capture, we use RGB (3 channels) instead of BGRA (4 channels)
+    // Allocate capture buffer as RGB
+    if (m_captureBuffer.empty() ||
+        m_captureBuffer.rows() != heightInt ||
+        m_captureBuffer.cols() != widthInt ||
+        m_captureBuffer.channels() != 3) {
+        try {
+            m_captureBuffer.create(heightInt, widthInt, 3);  // RGB
+        } catch (const std::exception& e) {
+            std::cerr << "[Capture] Failed to allocate capture buffer: " << e.what() << std::endl;
+            return false;
+        }
+    }
+
+    // Copy RGB data to GPU
+    cudaStream_t stream = m_pipelineStream ? m_pipelineStream->get() : nullptr;
+    size_t rgbSize = width * height * 3;
+    cudaError_t err = cudaMemcpyAsync(
+        m_captureBuffer.data(),
+        rgbData,
+        rgbSize,
+        cudaMemcpyHostToDevice,
+        stream);
+
+    if (err != cudaSuccess) {
+        std::cerr << "[Capture] cudaMemcpyAsync failed: " << cudaGetErrorString(err) << std::endl;
+        return false;
+    }
+
+    uint64_t presentQpc = frameId;
+#endif
+
     // Populate metadata
     outMetadata.frameId = m_nextFrameId.fetch_add(1, std::memory_order_relaxed);
     outMetadata.presentQpc = presentQpc;
@@ -2441,7 +2620,11 @@ bool UnifiedGraphPipeline::performPreprocessing(cudaStream_t stream) {
 
     int modelRes = getModelInputResolution();
     bool use_fp16 = (m_inputDataType == nvinfer1::DataType::kHALF);
-    cudaError_t err = cuda_unified_preprocessing(
+    cudaError_t err;
+
+#ifdef _WIN32
+    // Windows: BGRA input from DDA capture
+    err = cuda_unified_preprocessing(
         m_captureBuffer.data(),
         m_unifiedArena.yoloInput,
         m_captureBuffer.cols(),
@@ -2451,9 +2634,22 @@ bool UnifiedGraphPipeline::performPreprocessing(cudaStream_t stream) {
         modelRes,
         use_fp16,
         stream);
+#else
+    // Linux: RGB input from UDP capture
+    err = cuda_rgb_preprocessing(
+        m_captureBuffer.data(),
+        m_unifiedArena.yoloInput,
+        m_captureBuffer.cols(),
+        m_captureBuffer.rows(),
+        static_cast<int>(m_captureBuffer.step()),
+        modelRes,
+        modelRes,
+        use_fp16,
+        stream);
+#endif
 
     if (err != cudaSuccess) {
-        std::cerr << "[UnifiedGraph] Unified preprocessing failed: "
+        std::cerr << "[UnifiedGraph] Preprocessing failed: "
                   << cudaGetErrorString(err) << std::endl;
         return false;
     }
@@ -2475,7 +2671,15 @@ bool UnifiedGraphPipeline::executeFrame(cudaStream_t stream) {
         // Another frame is still processing - spin briefly before giving up
         constexpr int kMaxSpinIterations = 64;
         for (int i = 0; i < kMaxSpinIterations; ++i) {
+#ifdef _WIN32
             YieldProcessor();  // CPU hint for spin-wait (Windows intrinsic)
+#elif defined(__aarch64__)
+            __asm__ __volatile__("yield" ::: "memory");  // ARM yield instruction
+#elif defined(__x86_64__) || defined(__i386__)
+            __asm__ __volatile__("pause" ::: "memory");  // x86 pause instruction
+#else
+            std::this_thread::yield();
+#endif
             expected = false;
             if (m_frameInFlight.compare_exchange_weak(expected, true, std::memory_order_acquire)) {
                 goto acquired;

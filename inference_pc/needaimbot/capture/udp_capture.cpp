@@ -3,6 +3,15 @@
 #include <iostream>
 #include <cstring>
 
+#ifdef _WIN32
+#define SOCKADDR struct sockaddr
+#define WSAETIMEDOUT WSAETIMEDOUT
+#else
+#include <sys/select.h>
+#define SOCKADDR struct sockaddr
+#define WSAETIMEDOUT ETIMEDOUT
+#endif
+
 UDPCapture::UDPCapture()
     : m_startTime(std::chrono::steady_clock::now()) {
 }
@@ -17,12 +26,14 @@ bool UDPCapture::Initialize(unsigned short listenPort,
     m_listenPort = listenPort;
     m_mouseStatePort = mouseStatePort;
 
+#ifdef _WIN32
     // Initialize Winsock
     WSADATA wsaData;
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
         std::cerr << "[UDPCapture] WSAStartup failed\n";
         return false;
     }
+#endif
 
     // Create receive socket
     m_recvSocket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
@@ -50,9 +61,17 @@ bool UDPCapture::Initialize(unsigned short listenPort,
     }
 
     // Set receive timeout for non-blocking behavior
+#ifdef _WIN32
     DWORD timeout = 100;  // 100ms
     setsockopt(m_recvSocket, SOL_SOCKET, SO_RCVTIMEO,
                (char*)&timeout, sizeof(timeout));
+#else
+    struct timeval timeout;
+    timeout.tv_sec = 0;
+    timeout.tv_usec = 100000;  // 100ms
+    setsockopt(m_recvSocket, SOL_SOCKET, SO_RCVTIMEO,
+               (char*)&timeout, sizeof(timeout));
+#endif
 
     // Create send socket for mouse state
     m_sendSocket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
@@ -97,7 +116,9 @@ void UDPCapture::Shutdown() {
         m_pinnedBufferSize = 0;
     }
 
+#ifdef _WIN32
     WSACleanup();
+#endif
 }
 
 bool UDPCapture::StartCapture() {
@@ -138,7 +159,11 @@ void UDPCapture::StopCapture() {
 void UDPCapture::receiveThread() {
     std::vector<uint8_t> recvBuffer(2048);  // Max packet size
     sockaddr_in fromAddr;
+#ifdef _WIN32
     int fromLen = sizeof(fromAddr);
+#else
+    socklen_t fromLen = sizeof(fromAddr);
+#endif
 
     while (m_running.load()) {
         int ret = recvfrom(m_recvSocket, (char*)recvBuffer.data(),
@@ -146,7 +171,13 @@ void UDPCapture::receiveThread() {
                           (SOCKADDR*)&fromAddr, &fromLen);
 
         if (ret <= 0) {
-            if (WSAGetLastError() == WSAETIMEDOUT) {
+#ifdef _WIN32
+            int err = WSAGetLastError();
+            if (err == WSAETIMEDOUT || err == WSAEWOULDBLOCK) {
+#else
+            int err = errno;
+            if (err == ETIMEDOUT || err == EWOULDBLOCK || err == EAGAIN) {
+#endif
                 // Cleanup old incomplete frames (older than 100ms)
                 auto now = std::chrono::steady_clock::now();
                 std::lock_guard<std::mutex> lock(m_fragmentMutex);

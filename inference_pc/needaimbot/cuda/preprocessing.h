@@ -34,6 +34,17 @@ extern "C" cudaError_t cuda_bgra2rgba(const uint8_t* src, uint8_t* dst,
                                       int src_pitch, int dst_pitch,
                                       cudaStream_t stream = 0);
 
+// RGB 입력 전처리 함수 (UDP 캡처용)
+extern "C" cudaError_t cuda_rgb_preprocessing(
+    const void* src_rgb_data,           // RGB 입력 데이터 포인터
+    void* dst_rgb_chw,                  // RGB CHW 출력 (void* - FP32 or FP16)
+    int src_width, int src_height,      // 입력 크기
+    int src_step,                       // 입력 스트라이드
+    int target_width, int target_height, // 목표 크기
+    bool use_fp16 = false,              // true = FP16, false = FP32
+    cudaStream_t stream = 0
+);
+
 /*
  * 통합 전처리 기능:
  * 1. BGRA → RGB 변환 (알파 채널 제거 + R/B 교환)
