@@ -1,10 +1,20 @@
-cmake_minimum_required(VERSION 3.24)
+cmake_minimum_required(VERSION 3.16)
 
-# CUDA path configuration
-set(CUDA_TOOLKIT_ROOT_DIR "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.1")
-set(CMAKE_CUDA_COMPILER "${CUDA_TOOLKIT_ROOT_DIR}/bin/nvcc.exe")
-set(CUDAToolkit_ROOT "${CUDA_TOOLKIT_ROOT_DIR}")
-set(ENV{CUDA_PATH} "${CUDA_TOOLKIT_ROOT_DIR}")
+# =============================================================================
+# Platform Detection and CUDA Configuration
+# =============================================================================
+if(WIN32)
+    # Windows CUDA path configuration
+    set(CUDA_TOOLKIT_ROOT_DIR "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.1")
+    set(CMAKE_CUDA_COMPILER "${CUDA_TOOLKIT_ROOT_DIR}/bin/nvcc.exe")
+    set(CUDAToolkit_ROOT "${CUDA_TOOLKIT_ROOT_DIR}")
+    set(ENV{CUDA_PATH} "${CUDA_TOOLKIT_ROOT_DIR}")
+else()
+    # Linux/Jetson: Use system CUDA
+    set(CUDA_TOOLKIT_ROOT_DIR "/usr/local/cuda")
+    set(CMAKE_CUDA_COMPILER "${CUDA_TOOLKIT_ROOT_DIR}/bin/nvcc")
+    set(CUDAToolkit_ROOT "${CUDA_TOOLKIT_ROOT_DIR}")
+endif()
 
 project(InferencePC LANGUAGES C CXX CUDA)
 
@@ -13,36 +23,47 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
-# Windows only
-if(NOT WIN32)
-    message(FATAL_ERROR "This project is Windows-only")
-endif()
-
 # Default build type
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
 # =============================================================================
-# Path Configuration
+# Path Configuration (Platform-specific)
 # =============================================================================
-set(CUDA_PATH "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.1")
-set(TENSORRT_PATH "${CMAKE_SOURCE_DIR}/needaimbot/modules/TensorRT-10.14.1.48")
-set(CUDNN_PATH "C:/Program Files/NVIDIA/CUDNN/v9.17")
-set(CUDNN_VERSION "13.1")
+if(WIN32)
+    set(CUDA_PATH "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.1")
+    set(TENSORRT_PATH "${CMAKE_SOURCE_DIR}/needaimbot/modules/TensorRT-10.14.1.48")
+    set(CUDNN_PATH "C:/Program Files/NVIDIA/CUDNN/v9.17")
+    set(CUDNN_VERSION "13.1")
+    set(TENSORRT_LIB_NAMES nvinfer_10 nvonnxparser_10)
+else()
+    # Linux/Jetson: Use system-installed TensorRT
+    set(CUDA_PATH "/usr/local/cuda")
+    set(TENSORRT_INCLUDE_DIR "/usr/include/aarch64-linux-gnu")
+    set(TENSORRT_LIB_DIR "/usr/lib/aarch64-linux-gnu")
+    set(TENSORRT_LIB_NAMES nvinfer nvonnxparser)
+endif()
 
 # =============================================================================
 # CUDA Configuration
 # =============================================================================
 find_package(CUDAToolkit REQUIRED)
 
-set(CMAKE_CUDA_ARCHITECTURES 75 80 86 89)
+if(WIN32)
+    set(CMAKE_CUDA_ARCHITECTURES 75 80 86 89)
+else()
+    # Jetson Xavier NX / AGX: SM 7.2, Jetson Orin: SM 8.7
+    set(CMAKE_CUDA_ARCHITECTURES 72 87)
+endif()
 
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Wno-deprecated-gpu-targets")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --diag-suppress=611,221,20091,20054")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -DTHRUST_IGNORE_DEPRECATED_CPP_DIALECT")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -DCUB_IGNORE_DEPRECATED_CPP_DIALECT")
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -DCCCL_IGNORE_MSVC_TRADITIONAL_PREPROCESSOR_WARNING")
+if(WIN32)
+    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -DCCCL_IGNORE_MSVC_TRADITIONAL_PREPROCESSOR_WARNING")
+endif()
 
 # =============================================================================
 # Source Files - 2PC Architecture (Makcu/KMBox only, no ghub/rzctl)
@@ -50,7 +71,6 @@ set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -DCCCL_IGNORE_MSVC_TRADITIONAL_PREPROC
 set(CPP_SOURCES
     needaimbot/needaimbot.cpp
     needaimbot/config/config.cpp
-    needaimbot/capture/dda_capture.cpp
     needaimbot/capture/udp_capture.cpp
     needaimbot/capture/lz4.c
     needaimbot/keyboard/keyboard_listener.cpp
@@ -64,28 +84,34 @@ set(CPP_SOURCES
     needaimbot/utils/input_state.cpp
     needaimbot/scr/other_tools.cpp
     needaimbot/cuda/unified_graph_pipeline_cleanup.cpp
-    # Overlay/GUI
-    needaimbot/overlay/overlay.cpp
-    needaimbot/overlay/draw_ai.cpp
-    needaimbot/overlay/draw_buttons.cpp
-    needaimbot/overlay/draw_capture.cpp
-    needaimbot/overlay/draw_debug.cpp
-    needaimbot/overlay/draw_mouse.cpp
-    needaimbot/overlay/draw_offset.cpp
-    needaimbot/overlay/draw_overlay.cpp
-    needaimbot/overlay/draw_profile.cpp
-    needaimbot/overlay/draw_target.cpp
-    needaimbot/overlay/draw_color_filter.cpp
-    needaimbot/overlay/draw_stabilizer.cpp
-    needaimbot/overlay/ui_helpers.cpp
-    # ImGui
-    needaimbot/imgui/imgui.cpp
-    needaimbot/imgui/imgui_draw.cpp
-    needaimbot/imgui/imgui_tables.cpp
-    needaimbot/imgui/imgui_widgets.cpp
-    needaimbot/imgui/imgui_impl_dx11.cpp
-    needaimbot/imgui/imgui_impl_win32.cpp
+    needaimbot/cuda/cuda_resource_manager.cpp
 )
+
+# Windows-only: Overlay/GUI (DirectX 11 + ImGui)
+if(WIN32)
+    list(APPEND CPP_SOURCES
+        needaimbot/overlay/overlay.cpp
+        needaimbot/overlay/draw_ai.cpp
+        needaimbot/overlay/draw_buttons.cpp
+        needaimbot/overlay/draw_capture.cpp
+        needaimbot/overlay/draw_debug.cpp
+        needaimbot/overlay/draw_mouse.cpp
+        needaimbot/overlay/draw_offset.cpp
+        needaimbot/overlay/draw_overlay.cpp
+        needaimbot/overlay/draw_profile.cpp
+        needaimbot/overlay/draw_target.cpp
+        needaimbot/overlay/draw_color_filter.cpp
+        needaimbot/overlay/draw_stabilizer.cpp
+        needaimbot/overlay/ui_helpers.cpp
+        # ImGui (DirectX 11 backend)
+        needaimbot/imgui/imgui.cpp
+        needaimbot/imgui/imgui_draw.cpp
+        needaimbot/imgui/imgui_tables.cpp
+        needaimbot/imgui/imgui_widgets.cpp
+        needaimbot/imgui/imgui_impl_dx11.cpp
+        needaimbot/imgui/imgui_impl_win32.cpp
+    )
+endif()
 
 set(CUDA_SOURCES
     needaimbot/cuda/unified_graph_pipeline.cu
@@ -114,39 +140,64 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_SOURCE_DIR}/needaimbot/overlay
     ${CMAKE_SOURCE_DIR}/needaimbot/modules/stb
     ${CMAKE_SOURCE_DIR}/needaimbot/modules
-    ${TENSORRT_PATH}/include
     ${CUDA_PATH}/include
-    ${CUDNN_PATH}/include/${CUDNN_VERSION}
 )
+
+if(WIN32)
+    target_include_directories(${PROJECT_NAME} PRIVATE
+        ${TENSORRT_PATH}/include
+        ${CUDNN_PATH}/include/${CUDNN_VERSION}
+    )
+else()
+    target_include_directories(${PROJECT_NAME} PRIVATE
+        ${TENSORRT_INCLUDE_DIR}
+    )
+endif()
 
 # =============================================================================
 # Library Directories
 # =============================================================================
-target_link_directories(${PROJECT_NAME} PRIVATE
-    ${TENSORRT_PATH}/lib
-    ${CUDA_PATH}/lib/x64
-    ${CUDNN_PATH}/lib/${CUDNN_VERSION}
-)
+if(WIN32)
+    target_link_directories(${PROJECT_NAME} PRIVATE
+        ${TENSORRT_PATH}/lib
+        ${CUDA_PATH}/lib/x64
+        ${CUDNN_PATH}/lib/${CUDNN_VERSION}
+    )
+else()
+    target_link_directories(${PROJECT_NAME} PRIVATE
+        ${TENSORRT_LIB_DIR}
+        ${CUDA_PATH}/lib64
+    )
+endif()
 
 # =============================================================================
 # Link Libraries
 # =============================================================================
 target_link_libraries(${PROJECT_NAME} PRIVATE
-    # TensorRT
-    nvinfer_10
-    nvonnxparser_10
+    # TensorRT (platform-specific names)
+    ${TENSORRT_LIB_NAMES}
     # CUDA
     CUDA::cudart
     CUDA::cuda_driver
     CUDA::cublas
-    # DirectX / Windows
-    d3d11
-    dxgi
-    d2d1
-    WindowsApp
-    # Network
-    ws2_32
 )
+
+if(WIN32)
+    target_link_libraries(${PROJECT_NAME} PRIVATE
+        # DirectX / Windows
+        d3d11
+        dxgi
+        d2d1
+        WindowsApp
+        # Network
+        ws2_32
+    )
+else()
+    target_link_libraries(${PROJECT_NAME} PRIVATE
+        # Linux network
+        pthread
+    )
+endif()
 
 # =============================================================================
 # Compile Definitions
@@ -161,6 +212,11 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
     USE_2PC_ARCHITECTURE
 )
 
+# Linux: Headless build (no GUI/overlay)
+if(NOT WIN32)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE HEADLESS_BUILD)
+endif()
+
 if(MSVC)
     target_compile_options(${PROJECT_NAME} PRIVATE
         $<$<COMPILE_LANGUAGE:CXX>:/W3>
@@ -174,35 +230,47 @@ if(MSVC)
         $<$<COMPILE_LANGUAGE:CXX>:/arch:AVX2>
         $<$<COMPILE_LANGUAGE:CXX>:/fp:fast>
     )
-    
+
     target_compile_options(${PROJECT_NAME} PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/W3,/utf-8,/wd4819,/wd4244,/O2,/Oi>
     )
-    
+
     target_link_options(${PROJECT_NAME} PRIVATE
         /LTCG
+    )
+elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    target_compile_options(${PROJECT_NAME} PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:-Wall>
+        $<$<COMPILE_LANGUAGE:CXX>:-O3>
+        $<$<COMPILE_LANGUAGE:CXX>:-ffast-math>
+        $<$<COMPILE_LANGUAGE:CXX>:-fopenmp>
+    )
+    target_compile_options(${PROJECT_NAME} PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wall,-O3>
     )
 endif()
 
 # =============================================================================
-# Copy DLLs (post-build)
+# Copy DLLs (post-build) - Windows only
 # =============================================================================
-add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${TENSORRT_PATH}/bin/nvinfer_10.dll"
-        "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${TENSORRT_PATH}/bin/nvonnxparser_10.dll"
-        "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${TENSORRT_PATH}/bin/nvinfer_plugin_10.dll"
-        "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CUDNN_PATH}/bin/${CUDNN_VERSION}/cudnn64_9.dll"
-        "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
-    COMMENT "Copying runtime DLLs..."
-)
+if(WIN32)
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${TENSORRT_PATH}/bin/nvinfer_10.dll"
+            "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${TENSORRT_PATH}/bin/nvonnxparser_10.dll"
+            "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${TENSORRT_PATH}/bin/nvinfer_plugin_10.dll"
+            "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CUDNN_PATH}/bin/${CUDNN_VERSION}/cudnn64_9.dll"
+            "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+        COMMENT "Copying runtime DLLs..."
+    )
+endif()
 
 # =============================================================================
 # Output Directory
@@ -229,30 +297,48 @@ target_include_directories(test_udp_inference PRIVATE
     ${CMAKE_SOURCE_DIR}/needaimbot/capture
     ${CMAKE_SOURCE_DIR}/needaimbot/modules
     ${CMAKE_SOURCE_DIR}/needaimbot/modules/glfw/include
-    ${TENSORRT_PATH}/include
     ${CUDA_PATH}/include
 )
 
-target_link_directories(test_udp_inference PRIVATE
-    ${TENSORRT_PATH}/lib
-    ${CUDA_PATH}/lib/x64
-)
-
-target_link_libraries(test_udp_inference PRIVATE
-    # TensorRT
-    nvinfer_10
-    # CUDA
-    CUDA::cudart
-    CUDA::cuda_driver
-    # Network
-    ws2_32
-)
+if(WIN32)
+    target_include_directories(test_udp_inference PRIVATE
+        ${TENSORRT_PATH}/include
+    )
+    target_link_directories(test_udp_inference PRIVATE
+        ${TENSORRT_PATH}/lib
+        ${CUDA_PATH}/lib/x64
+    )
+    target_link_libraries(test_udp_inference PRIVATE
+        nvinfer_10
+        CUDA::cudart
+        CUDA::cuda_driver
+        ws2_32
+    )
+else()
+    target_include_directories(test_udp_inference PRIVATE
+        ${TENSORRT_INCLUDE_DIR}
+    )
+    target_link_directories(test_udp_inference PRIVATE
+        ${TENSORRT_LIB_DIR}
+        ${CUDA_PATH}/lib64
+    )
+    target_link_libraries(test_udp_inference PRIVATE
+        nvinfer
+        CUDA::cudart
+        CUDA::cuda_driver
+        pthread
+    )
+endif()
 
 target_compile_definitions(test_udp_inference PRIVATE
-    _CRT_SECURE_NO_WARNINGS
-    WIN32_LEAN_AND_MEAN
     NOMINMAX
 )
+if(WIN32)
+    target_compile_definitions(test_udp_inference PRIVATE
+        _CRT_SECURE_NO_WARNINGS
+        WIN32_LEAN_AND_MEAN
+    )
+endif()
 
 set_target_properties(test_udp_inference PROPERTIES
     CXX_STANDARD 20
@@ -265,6 +351,11 @@ if(MSVC)
         $<$<COMPILE_LANGUAGE:CXX>:/utf-8>
         $<$<COMPILE_LANGUAGE:CXX>:/O2>
     )
+elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    target_compile_options(test_udp_inference PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:-Wall>
+        $<$<COMPILE_LANGUAGE:CXX>:-O3>
+    )
 endif()
 
 set_target_properties(test_udp_inference PROPERTIES
@@ -273,15 +364,60 @@ set_target_properties(test_udp_inference PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/bin/Release"
 )
 
-# Copy DLLs for test executable
-add_custom_command(TARGET test_udp_inference POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${TENSORRT_PATH}/bin/nvinfer_10.dll"
-        "$<TARGET_FILE_DIR:test_udp_inference>"
-    COMMENT "Copying TensorRT DLLs for test_udp_inference..."
+# Copy DLLs for test executable (Windows only)
+if(WIN32)
+    add_custom_command(TARGET test_udp_inference POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${TENSORRT_PATH}/bin/nvinfer_10.dll"
+            "$<TARGET_FILE_DIR:test_udp_inference>"
+        COMMENT "Copying TensorRT DLLs for test_udp_inference..."
+    )
+endif()
+
+# =============================================================================
+# Test Executable: Makcu Mouse Test
+# =============================================================================
+add_executable(test_makcu_mouse
+    test_makcu_mouse.cpp
+    needaimbot/mouse/input_drivers/MakcuConnection.cpp
+)
+
+target_include_directories(test_makcu_mouse PRIVATE
+    ${CMAKE_SOURCE_DIR}/needaimbot
+    ${CMAKE_SOURCE_DIR}/needaimbot/include
+)
+
+target_link_libraries(test_makcu_mouse PRIVATE
+    pthread
+)
+
+target_compile_definitions(test_makcu_mouse PRIVATE
+    NOMINMAX
+)
+
+set_target_properties(test_makcu_mouse PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED ON
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/bin/Debug"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/bin/Release"
 )
 
 # =============================================================================
 # EngineExport Subproject - ONNX to TensorRT Engine Converter
 # =============================================================================
-add_subdirectory(engine_export)
+option(BUILD_ENGINE_EXPORT "Build EngineExport GUI tool (requires GLFW)" ON)
+if(BUILD_ENGINE_EXPORT)
+    # Check if GLFW is available on Linux
+    if(NOT WIN32)
+        find_package(glfw3 QUIET)
+        find_library(GLFW_LIB_CHECK glfw HINTS /usr/lib /usr/lib/aarch64-linux-gnu)
+        if(NOT glfw3_FOUND AND NOT GLFW_LIB_CHECK)
+            message(WARNING "GLFW not found. EngineExport will not be built. Install with: sudo apt-get install libglfw3-dev")
+            set(BUILD_ENGINE_EXPORT OFF)
+        endif()
+    endif()
+    if(BUILD_ENGINE_EXPORT)
+        add_subdirectory(engine_export)
+    endif()
+endif()

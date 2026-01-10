@@ -7,6 +7,7 @@
 #include <memory>
 #include <atomic>
 #include <iostream>
+#include <algorithm>
 
 /**
  * @brief Global CUDA Resource Manager
@@ -193,10 +194,8 @@ public:
     }
 };
 
-// Static member definitions
-inline CudaResourceManager* CudaResourceManager::instance_ = nullptr;
-inline std::mutex CudaResourceManager::instance_mutex_;
-inline std::atomic<bool> CudaResourceManager::shutdown_initiated_{false};
+// Static member definitions are in cuda_resource_manager.cpp
+// to avoid issues with CUDA 11.x inline variable support
 
 // NOTE: Use CudaMemory and CudaStream classes from cuda_utils.h instead
 // to avoid duplication. This resource manager only tracks resources for

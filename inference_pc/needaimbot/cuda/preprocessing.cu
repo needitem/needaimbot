@@ -279,6 +279,153 @@ extern "C" cudaError_t cuda_unified_preprocessing(
     return cudaGetLastError();
 }
 
+// ============================================================================
+// RGB 입력 전용 커널 (UDP 캡처용)
+// ============================================================================
+
+// RGB 입력 전처리 커널 (FP16): RGB → Normalize + HWC→CHW
+__global__ void rgbPreprocessKernelFP16(
+    const uint8_t* __restrict__ src,    // RGB 입력 (uint8_t * 3)
+    __half* __restrict__ dst,           // RGB CHW 출력 (정규화된 FP16)
+    int src_width, int src_height,      // 입력 크기
+    int dst_width, int dst_height,      // 출력 크기
+    int src_step,                       // 입력 스트라이드 (바이트)
+    float scale_factor                  // 정규화 인수 (1/255.0f)
+) {
+    int dst_x = blockIdx.x * blockDim.x + threadIdx.x;
+    int dst_y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (dst_x >= dst_width || dst_y >= dst_height) return;
+
+    // Bilinear interpolation을 위한 소스 좌표 계산
+    float src_x_f = (dst_x + 0.5f) * src_width / dst_width - 0.5f;
+    float src_y_f = (dst_y + 0.5f) * src_height / dst_height - 0.5f;
+
+    int src_x = __float2int_rd(src_x_f);
+    int src_y = __float2int_rd(src_y_f);
+    float alpha = src_x_f - src_x;
+    float beta = src_y_f - src_y;
+
+    src_x = max(0, min(src_x, src_width - 2));
+    src_y = max(0, min(src_y, src_height - 2));
+
+    // 4개 픽셀 샘플링 (RGB * 3 bytes per pixel)
+    const uint8_t* row0 = src + src_y * src_step;
+    const uint8_t* row1 = src + (src_y + 1) * src_step;
+
+    int idx00 = src_x * 3;
+    int idx01 = (src_x + 1) * 3;
+
+    // Bilinear interpolation for each channel
+    float r_interp = (1 - alpha) * (1 - beta) * row0[idx00 + 0] + alpha * (1 - beta) * row0[idx01 + 0] +
+                     (1 - alpha) * beta * row1[idx00 + 0] + alpha * beta * row1[idx01 + 0];
+    float g_interp = (1 - alpha) * (1 - beta) * row0[idx00 + 1] + alpha * (1 - beta) * row0[idx01 + 1] +
+                     (1 - alpha) * beta * row1[idx00 + 1] + alpha * beta * row1[idx01 + 1];
+    float b_interp = (1 - alpha) * (1 - beta) * row0[idx00 + 2] + alpha * (1 - beta) * row0[idx01 + 2] +
+                     (1 - alpha) * beta * row1[idx00 + 2] + alpha * beta * row1[idx01 + 2];
+
+    // CHW 레이아웃으로 저장
+    int hw_size = dst_width * dst_height;
+    int dst_idx = dst_y * dst_width + dst_x;
+
+    dst[dst_idx] = __float2half(r_interp * scale_factor);
+    dst[dst_idx + hw_size] = __float2half(g_interp * scale_factor);
+    dst[dst_idx + 2 * hw_size] = __float2half(b_interp * scale_factor);
+}
+
+// RGB 입력 전처리 커널 (FP32): RGB → Normalize + HWC→CHW
+__global__ void rgbPreprocessKernel(
+    const uint8_t* __restrict__ src,    // RGB 입력 (uint8_t * 3)
+    float* __restrict__ dst,            // RGB CHW 출력 (정규화된 float)
+    int src_width, int src_height,      // 입력 크기
+    int dst_width, int dst_height,      // 출력 크기
+    int src_step,                       // 입력 스트라이드 (바이트)
+    float scale_factor                  // 정규화 인수 (1/255.0f)
+) {
+    int dst_x = blockIdx.x * blockDim.x + threadIdx.x;
+    int dst_y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (dst_x >= dst_width || dst_y >= dst_height) return;
+
+    // Bilinear interpolation을 위한 소스 좌표 계산
+    float src_x_f = (dst_x + 0.5f) * src_width / dst_width - 0.5f;
+    float src_y_f = (dst_y + 0.5f) * src_height / dst_height - 0.5f;
+
+    int src_x = __float2int_rd(src_x_f);
+    int src_y = __float2int_rd(src_y_f);
+    float alpha = src_x_f - src_x;
+    float beta = src_y_f - src_y;
+
+    src_x = max(0, min(src_x, src_width - 2));
+    src_y = max(0, min(src_y, src_height - 2));
+
+    // 4개 픽셀 샘플링 (RGB * 3 bytes per pixel)
+    const uint8_t* row0 = src + src_y * src_step;
+    const uint8_t* row1 = src + (src_y + 1) * src_step;
+
+    int idx00 = src_x * 3;
+    int idx01 = (src_x + 1) * 3;
+
+    // Bilinear interpolation for each channel
+    float r_interp = (1 - alpha) * (1 - beta) * row0[idx00 + 0] + alpha * (1 - beta) * row0[idx01 + 0] +
+                     (1 - alpha) * beta * row1[idx00 + 0] + alpha * beta * row1[idx01 + 0];
+    float g_interp = (1 - alpha) * (1 - beta) * row0[idx00 + 1] + alpha * (1 - beta) * row0[idx01 + 1] +
+                     (1 - alpha) * beta * row1[idx00 + 1] + alpha * beta * row1[idx01 + 1];
+    float b_interp = (1 - alpha) * (1 - beta) * row0[idx00 + 2] + alpha * (1 - beta) * row0[idx01 + 2] +
+                     (1 - alpha) * beta * row1[idx00 + 2] + alpha * beta * row1[idx01 + 2];
+
+    // CHW 레이아웃으로 저장
+    int hw_size = dst_width * dst_height;
+    int dst_idx = dst_y * dst_width + dst_x;
+
+    dst[dst_idx] = r_interp * scale_factor;
+    dst[dst_idx + hw_size] = g_interp * scale_factor;
+    dst[dst_idx + 2 * hw_size] = b_interp * scale_factor;
+}
+
+// RGB 입력 전처리 함수 (UDP 캡처용)
+extern "C" cudaError_t cuda_rgb_preprocessing(
+    const void* src_rgb_data,           // RGB 입력 데이터 포인터
+    void* dst_rgb_chw,                  // RGB CHW 출력 (void* - FP32 or FP16)
+    int src_width, int src_height,      // 입력 크기
+    int src_step,                       // 입력 스트라이드
+    int target_width, int target_height, // 목표 크기
+    bool use_fp16,                      // true = FP16, false = FP32
+    cudaStream_t stream
+) {
+    if (!src_rgb_data || !dst_rgb_chw) {
+        return cudaErrorInvalidValue;
+    }
+
+    const float scale_factor = 1.0f / 255.0f;
+
+    dim3 block(32, 8);
+    dim3 grid((target_width + block.x - 1) / block.x,
+              (target_height + block.y - 1) / block.y);
+
+    if (use_fp16) {
+        rgbPreprocessKernelFP16<<<grid, block, 0, stream>>>(
+            (const uint8_t*)src_rgb_data,
+            (__half*)dst_rgb_chw,
+            src_width, src_height,
+            target_width, target_height,
+            src_step,
+            scale_factor
+        );
+    } else {
+        rgbPreprocessKernel<<<grid, block, 0, stream>>>(
+            (const uint8_t*)src_rgb_data,
+            (float*)dst_rgb_chw,
+            src_width, src_height,
+            target_width, target_height,
+            src_step,
+            scale_factor
+        );
+    }
+
+    return cudaGetLastError();
+}
+
 // BGR to RGBA 변환 커널
 __global__ void bgr2rgba_kernel(const uint8_t* __restrict__ src,
                                 uint8_t* __restrict__ dst,

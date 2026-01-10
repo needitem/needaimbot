@@ -1,16 +1,22 @@
 #ifndef MAKCUCONNECTION_H
 #define MAKCUCONNECTION_H
 
-#define WIN32_LEAN_AND_MEAN
-#define _WINSOCKAPI_
-#include <windows.h>
 #include <string>
 #include <thread>
 #include <atomic>
 #include <mutex>
 #include <vector>
 
-// Windows Native Serial API - 최고 성능을 위해
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define _WINSOCKAPI_
+#include <windows.h>
+#else
+#include <termios.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
+#endif
 
 class MakcuConnection
 {
@@ -41,35 +47,40 @@ private:
     void startListening();
     void listeningThreadFunc();
     void processIncomingLine(const std::string& line);
-    
-    // 초기화 및 정리 메서드
+
     bool initializeMakcuConnection();
-    bool configureDCB(uint32_t baud_rate);
-    bool configureTimeouts();
     void cleanup();
     void closeHandle();
-    void safeMakcuClose();  // wjwwood/serial 방식의 안전한 종료
-    
-    // Async I/O functions
+
+#ifdef _WIN32
+    bool configureDCB(uint32_t baud_rate);
+    bool configureTimeouts();
+    void safeMakcuClose();
     bool writeAsync(const void* data, DWORD size);
     bool readAsync(void* buffer, DWORD size, DWORD* bytesRead);
     bool waitForAsyncOperation(OVERLAPPED* overlapped, DWORD timeout_ms = 100);
 
-private:
     HANDLE serial_handle_;
     DCB dcb_config_;
     COMMTIMEOUTS timeouts_;
-    std::atomic<bool> is_open_;
-    std::atomic<bool> listening_;
-    std::thread       listening_thread_;
-    std::mutex        write_mutex_;
-    std::string       port_name_;  // 포트 이름 저장
-    
-    // Overlapped I/O structures
     OVERLAPPED write_overlapped_;
     OVERLAPPED read_overlapped_;
     HANDLE write_event_;
     HANDLE read_event_;
+#else
+    bool configurePort(int baud_rate);
+    ssize_t writeSerial(const void* data, size_t size);
+    ssize_t readSerial(void* buffer, size_t size);
+
+    int serial_fd_;
+    struct termios tty_config_;
+#endif
+
+    std::atomic<bool> is_open_;
+    std::atomic<bool> listening_;
+    std::thread listening_thread_;
+    std::mutex write_mutex_;
+    std::string port_name_;
 };
 
 #endif // MAKCUCONNECTION_H

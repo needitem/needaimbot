@@ -1,6 +1,12 @@
 #pragma once
 
+#ifdef _WIN32
 #include <windows.h>
+#else
+// Forward declare HWND as void* for Linux compatibility
+typedef void* HWND;
+#endif
+
 #include <cstdint>
 #include <cuda_runtime.h>
 

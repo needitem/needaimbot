@@ -1,13 +1,34 @@
 #pragma once
 
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+#pragma comment(lib, "ws2_32.lib")
+#else
+// Linux socket headers
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <poll.h>
+
+// Windows compatibility
+typedef int SOCKET;
+#define INVALID_SOCKET (-1)
+#define SOCKET_ERROR (-1)
+#define closesocket close
+#define WSAGetLastError() errno
+#define WSAEWOULDBLOCK EWOULDBLOCK
+#endif
 
 #include <cuda_runtime.h>
 
@@ -22,8 +43,6 @@
 #include <string>
 #include <thread>
 #include <vector>
-
-#pragma comment(lib, "ws2_32.lib")
 
 // Packet header matching game_pc sender (fragmented, uncompressed)
 #pragma pack(push, 1)

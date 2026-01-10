@@ -475,6 +475,7 @@ private:
     std::unordered_map<std::string, std::unique_ptr<CudaMemory<uint8_t>>> m_outputBindings;
     std::vector<void*> m_inputAddressCache;
     std::vector<void*> m_outputAddressCache;
+    std::vector<void*> m_bindings;  // For TRT 8.x enqueueV2 compatibility
     bool m_bindingsNeedUpdate = true;
     int m_primaryInputIndex = -1;
     
