@@ -1,13 +1,15 @@
 #include "core/windows_headers.h"
+#ifdef _WIN32
 #include <timeapi.h>
+#include <DbgHelp.h>
+#pragma comment(lib, "dbghelp.lib")
+#endif
 #include <iostream>
 #include <thread>
 #include <atomic>
 #include <mutex>
 #include <condition_variable>
 #include <cstdlib>
-#include <DbgHelp.h>
-#pragma comment(lib, "dbghelp.lib")
 
 #include "AppContext.h"
 #include "core/constants.h"
@@ -24,9 +26,14 @@
 #include "include/other_tools.h"
 #include "core/thread_manager.h"
 #include "core/error_manager.h"
-#include "capture/dda_capture.h"
 #include "capture/capture_interface.h"
+#ifdef _WIN32
+#include "capture/dda_capture.h"
 #include "capture/dda_capture_adapter.h"
+#else
+#include "capture/udp_capture.h"
+#include "capture/udp_capture_adapter.h"
+#endif
 #include "utils/input_state.h"
 
 
@@ -136,16 +143,38 @@ bool initializeInputMethod() {
     }
 
     if (ctx.config.global().input_method == "MAKCU") {
+        // MAKCU now uses direct serial connection (was UDP relay)
         return tryInitMethod("MAKCU", [&]() -> std::unique_ptr<InputMethod> {
+            const auto& port = ctx.config.global().makcu_port;
+            int baudrate = ctx.config.global().makcu_baudrate;
+            if (port.empty()) {
+                logInputMethodFallback("MAKCU", "no serial port configured");
+                return nullptr;
+            }
+            // Create static MakcuConnection to persist for lifetime of program
+            static std::unique_ptr<MakcuConnection> s_makcu;
+            s_makcu = std::make_unique<MakcuConnection>(port, baudrate);
+            if (!s_makcu->isOpen()) {
+                logInputMethodFallback("MAKCU", "failed to open serial port " + port);
+                s_makcu.reset();
+                return nullptr;
+            }
+            return std::make_unique<MakcuSerialInputMethod>(s_makcu.get());
+        });
+    }
+
+    if (ctx.config.global().input_method == "MAKCU_NET") {
+        // Legacy UDP relay mode (for remote relay to another PC)
+        return tryInitMethod("MAKCU_NET", [&]() -> std::unique_ptr<InputMethod> {
             const auto& ip = ctx.config.global().makcu_remote_ip;
             int port = ctx.config.global().makcu_remote_port;
             if (ip.empty() || port <= 0) {
-                logInputMethodFallback("MAKCU", "invalid remote IP/port configuration");
+                logInputMethodFallback("MAKCU_NET", "invalid remote IP/port configuration");
                 return nullptr;
             }
             auto method = std::make_unique<MakcuNetInputMethod>(ip, port);
             if (!method->isValid()) {
-                logInputMethodFallback("MAKCU", "failed to initialize UDP client to " + ip + ":" + std::to_string(port));
+                logInputMethodFallback("MAKCU_NET", "failed to initialize UDP client to " + ip + ":" + std::to_string(port));
                 return nullptr;
             }
             return method;
@@ -198,6 +227,7 @@ bool loadAndValidateModel(std::string& modelName, const std::vector<std::string>
 
 // Initialize screen capture for the pipeline
 bool initializeScreenCapture(gpa::UnifiedGraphPipeline* pipeline) {
+#ifdef _WIN32
     auto& ctx = AppContext::getInstance();
 
     if (!DDACapture::IsDDACaptureAvailable()) {
@@ -244,6 +274,38 @@ bool initializeScreenCapture(gpa::UnifiedGraphPipeline* pipeline) {
 
     pipeline->setCapture(&s_ddaAdapter);
     return true;
+#else
+    // Linux: Use UDP capture to receive frames from Game PC
+    auto& ctx = AppContext::getInstance();
+
+    static UDPCapture s_udpCapture;
+    static UDPCaptureAdapter s_udpAdapter(&s_udpCapture);
+
+    // Get network settings from config
+    unsigned short listenPort = 5007;  // Default port
+    std::string gamePcIp = "";  // Auto-detect
+
+    // TODO: Read from config if available
+    // listenPort = ctx.config.profile().udp_listen_port;
+    // gamePcIp = ctx.config.profile().game_pc_ip;
+
+    std::cout << "[CAPTURE] Initializing UDP capture on port " << listenPort << std::endl;
+
+    if (!s_udpAdapter.InitializeNetwork(listenPort, gamePcIp)) {
+        std::cerr << "[CAPTURE] Failed to initialize UDP capture" << std::endl;
+        return false;
+    }
+
+    if (!s_udpCapture.StartCapture()) {
+        std::cerr << "[CAPTURE] Failed to start UDP capture" << std::endl;
+        return false;
+    }
+
+    std::cout << "[CAPTURE] UDP capture started, waiting for frames from Game PC..." << std::endl;
+
+    pipeline->setCapture(&s_udpAdapter);
+    return true;
+#endif
 }
 
 // Signal handler for clean shutdown  
@@ -257,6 +319,7 @@ static void signalHandler(int sig) {
     CudaResourceManager::Shutdown();
 }
 
+#ifdef _WIN32
 // Console control handler for Windows
 static BOOL WINAPI consoleHandler(DWORD signal) {
     if (signal == CTRL_C_EVENT || signal == CTRL_BREAK_EVENT || signal == CTRL_CLOSE_EVENT) {
@@ -264,16 +327,17 @@ static BOOL WINAPI consoleHandler(DWORD signal) {
         ctx.should_exit = true;
         ctx.frame_cv.notify_all();  // Wake up main thread
         ctx.aiming_cv.notify_all();  // Wake up pipeline thread if waiting
-        
+
         // Clean up CUDA resources on console event (selective cleanup, no device reset)
         CudaResourceManager::Shutdown();
-        
+
         // Give a short time for cleanup
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         return TRUE;
     }
     return FALSE;
 }
+#endif
 
 // Forward declaration
 int main(int argc, char* argv[]);
@@ -286,6 +350,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 }
 #endif
 
+#ifdef _WIN32
 // Crash dump handler
 LONG WINAPI UnhandledExceptionHandler(EXCEPTION_POINTERS* pExceptionPointers) {
     std::cerr << "\n[CRASH] Unhandled exception occurred!" << std::endl;
@@ -363,6 +428,7 @@ LONG WINAPI UnhandledExceptionHandler(EXCEPTION_POINTERS* pExceptionPointers) {
     // Return EXCEPTION_CONTINUE_SEARCH to allow Windows Error Reporting to handle it
     return EXCEPTION_CONTINUE_SEARCH;
 }
+#endif
 
 int main(int argc, char* argv[])
 {
@@ -374,6 +440,7 @@ int main(int argc, char* argv[])
         }
     }
 
+#ifdef _WIN32
     // Install crash handler
     SetUnhandledExceptionFilter(UnhandledExceptionHandler);
 
@@ -397,12 +464,12 @@ int main(int argc, char* argv[])
     // Ensure console prints UTF-8 to avoid '??' for non-ASCII
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
-    
+
     // Administrator privileges not required
-    
+
     // Set random application title for obfuscation
     SetRandomConsoleTitle();
-    
+
     // Single instance check
     HANDLE hMutex = CreateMutex(NULL, TRUE, L"Local\\NVDisplayContainer_SingleInstance");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
@@ -411,14 +478,15 @@ int main(int argc, char* argv[])
         CloseHandle(hMutex);
         return 0;
     }
-    
+
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
-    
+
     OSVERSIONINFOEX osvi;
     ZeroMemory(&osvi, sizeof(OSVERSIONINFOEX));
     osvi.dwOSVersionInfoSize = sizeof(OSVERSIONINFOEX);
     if (GetVersionEx((OSVERSIONINFO*)&osvi)) {
     }
+#endif
 
     auto& ctx = AppContext::getInstance();
 
@@ -429,7 +497,9 @@ int main(int argc, char* argv[])
     try {
         std::signal(SIGINT, signalHandler);
         std::signal(SIGTERM, signalHandler);
+#ifdef _WIN32
         SetConsoleCtrlHandler(consoleHandler, TRUE);
+#endif
         
         if (!ctx.config.loadConfig())
         {
@@ -457,12 +527,17 @@ int main(int argc, char* argv[])
             return -1;
         }
         
+#ifdef _WIN32
         if (!CreateDirectory(L"screenshots", NULL) && GetLastError() != ERROR_ALREADY_EXISTS)
         {
             std::cerr << "[MAIN] Error with screenshot folder" << std::endl;
             std::cin.get();
             return -1;
         }
+#else
+        // Linux: create screenshots directory using std::filesystem
+        std::filesystem::create_directories("screenshots");
+#endif
 
         std::cout << "[MAIN] Initializing input method..." << std::endl;
         (void)initializeInputMethod();
@@ -513,10 +588,12 @@ int main(int argc, char* argv[])
             }
         }
 
+#ifdef _WIN32
         SYSTEM_INFO sysInfo;
         GetSystemInfo(&sysInfo);
         // numCores available for future use: sysInfo.dwNumberOfProcessors
-        
+#endif
+
         ThreadManager pipelineThreadMgr("UnifiedPipelineThread",
             [&]() { pipelineManager.runMainLoop(); },
             -1,
@@ -560,38 +637,44 @@ int main(int argc, char* argv[])
         // Pipeline cleanup
         pipelineManager.shutdownPipeline();
         
+#ifdef _WIN32
         // Reset Windows mouse state
         INPUT input = {0};
         input.type = INPUT_MOUSE;
         input.mi.dwFlags = MOUSEEVENTF_LEFTUP | MOUSEEVENTF_RIGHTUP | MOUSEEVENTF_MIDDLEUP;
         SendInput(1, &input, sizeof(INPUT));
-        
+#endif
+
         // Log final statistics
         
         // Clean up CUDA resources
         CudaResourceManager::Shutdown();
 
+#ifdef _WIN32
         // Restore system timer resolution
         TIMECAPS tc;
         if (timeGetDevCaps(&tc, sizeof(TIMECAPS)) == TIMERR_NOERROR) {
             timeEndPeriod(std::max(1u, tc.wPeriodMin));
         }
+#endif
 
         std::exit(0);
     }
     catch (const std::exception &e)
     {
         std::cerr << "[MAIN] An error has occurred in the main stream: " << e.what() << std::endl;
-        
+
         // Clean up CUDA resources even on error
         std::cerr << "[MAIN] Cleaning up CUDA resources after error..." << std::endl;
         CudaResourceManager::Shutdown();
 
+#ifdef _WIN32
         // Restore system timer resolution
-        TIMECAPS tc;
-        if (timeGetDevCaps(&tc, sizeof(TIMECAPS)) == TIMERR_NOERROR) {
-            timeEndPeriod(std::max(1u, tc.wPeriodMin));
+        TIMECAPS tc2;
+        if (timeGetDevCaps(&tc2, sizeof(TIMECAPS)) == TIMERR_NOERROR) {
+            timeEndPeriod(std::max(1u, tc2.wPeriodMin));
         }
+#endif
 
         std::cout << "Press Enter to exit...";
         std::cin.get();

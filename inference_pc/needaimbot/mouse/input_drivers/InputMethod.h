@@ -68,6 +68,7 @@ public:
     MakcuNetInputMethod(const std::string& remoteIp, int remotePort)
         : sock_(INVALID_SOCKET), valid_(false)
     {
+#ifdef _WIN32
         // Initialize Winsock locally for this process (idempotent)
         WSADATA wsaData{};
         int wsaErr = WSAStartup(MAKEWORD(2, 2), &wsaData);
@@ -75,6 +76,7 @@ public:
             std::cerr << "[MakcuNet] WSAStartup failed: " << wsaErr << std::endl;
             return;
         }
+#endif
 
         // Basic UDP client to second PC running MakcuRelay
         sock_ = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
@@ -89,9 +91,13 @@ public:
 
         std::memset(&addr_, 0, sizeof(addr_));
         addr_.sin_family = AF_INET;
-        addr_.sin_port = htons(static_cast<u_short>(remotePort));
+        addr_.sin_port = htons(static_cast<uint16_t>(remotePort));
 
+#ifdef _WIN32
         if (InetPtonA(AF_INET, remoteIp.c_str(), &addr_.sin_addr) != 1) {
+#else
+        if (inet_pton(AF_INET, remoteIp.c_str(), &addr_.sin_addr) != 1) {
+#endif
             std::cerr << "[MakcuNet] Invalid remote IP: " << remoteIp << std::endl;
             closesocket(sock_);
             sock_ = INVALID_SOCKET;

@@ -266,10 +266,21 @@ void Config::initializeDefaultInputProfiles(ProfileData& p) {
 }
 
 std::string Config::getExecutableDir() {
+#ifdef _WIN32
     char buffer[MAX_PATH];
     GetModuleFileNameA(NULL, buffer, MAX_PATH);
     std::filesystem::path exePath(buffer);
     return exePath.parent_path().string();
+#else
+    char buffer[4096];
+    ssize_t len = readlink("/proc/self/exe", buffer, sizeof(buffer) - 1);
+    if (len != -1) {
+        buffer[len] = '\0';
+        std::filesystem::path exePath(buffer);
+        return exePath.parent_path().string();
+    }
+    return ".";
+#endif
 }
 
 std::string Config::getConfigPath(const std::string& filename) {
