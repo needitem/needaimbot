@@ -28,6 +28,13 @@ This 2PC setup divides responsibilities between two computers connected via netw
 *   Controls mouse via hardware (Makcu or Kmbox)
 *   Handles all AI computations
 
+## Key Advantages
+
+*   **Reduced Detection Risk**: Game PC only runs lightweight screen capture code with no AI or cheat-related components, significantly minimizing the risk of anti-cheat detection
+*   **Maximum Game Performance**: Game PC resources are fully dedicated to running the game
+*   **GPU Isolation**: AI inference doesn't compete with game rendering for GPU resources
+*   **Flexible Hardware**: Use dedicated inference hardware (Jetson, server GPU) separate from gaming setup
+
 ## Prerequisites
 
 ### Game PC
@@ -209,3 +216,7 @@ cd game_pc
 *   **Packet Fragmentation**: Automatically handles large frames exceeding UDP limits
 *   **Display Window**: Inference PC can show received frames and detection results (Linux/Jetson)
 *   **Cross-Platform**: Supports Windows Game PC → Linux/Jetson Inference PC
+
+## Planned Features
+
+*   **Capture Card Support**: Frame data transmission via hardware capture card (HDMI/DisplayPort) for complete software isolation between Game PC and Inference PC
