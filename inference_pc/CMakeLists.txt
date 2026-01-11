@@ -66,7 +66,7 @@ if(WIN32)
 endif()
 
 # =============================================================================
-# Source Files - 2PC Architecture (Makcu/KMBox only, no ghub/rzctl)
+# Source Files - 2PC Architecture (Makcu/KMBox only, UDP capture only)
 # =============================================================================
 set(CPP_SOURCES
     needaimbot/needaimbot.cpp
@@ -87,32 +87,6 @@ set(CPP_SOURCES
     needaimbot/cuda/cuda_resource_manager.cpp
 )
 
-# Windows-only: Overlay/GUI (DirectX 11 + ImGui)
-if(WIN32)
-    list(APPEND CPP_SOURCES
-        needaimbot/overlay/overlay.cpp
-        needaimbot/overlay/draw_ai.cpp
-        needaimbot/overlay/draw_buttons.cpp
-        needaimbot/overlay/draw_capture.cpp
-        needaimbot/overlay/draw_debug.cpp
-        needaimbot/overlay/draw_mouse.cpp
-        needaimbot/overlay/draw_offset.cpp
-        needaimbot/overlay/draw_overlay.cpp
-        needaimbot/overlay/draw_profile.cpp
-        needaimbot/overlay/draw_target.cpp
-        needaimbot/overlay/draw_color_filter.cpp
-        needaimbot/overlay/draw_stabilizer.cpp
-        needaimbot/overlay/ui_helpers.cpp
-        # ImGui (DirectX 11 backend)
-        needaimbot/imgui/imgui.cpp
-        needaimbot/imgui/imgui_draw.cpp
-        needaimbot/imgui/imgui_tables.cpp
-        needaimbot/imgui/imgui_widgets.cpp
-        needaimbot/imgui/imgui_impl_dx11.cpp
-        needaimbot/imgui/imgui_impl_win32.cpp
-    )
-endif()
-
 set(CUDA_SOURCES
     needaimbot/cuda/unified_graph_pipeline.cu
     needaimbot/cuda/preprocessing.cu
@@ -131,13 +105,11 @@ add_executable(${PROJECT_NAME} ${CPP_SOURCES} ${CUDA_SOURCES})
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_SOURCE_DIR}/needaimbot
     ${CMAKE_SOURCE_DIR}/needaimbot/include
-    ${CMAKE_SOURCE_DIR}/needaimbot/imgui
     ${CMAKE_SOURCE_DIR}/needaimbot/keyboard
     ${CMAKE_SOURCE_DIR}/needaimbot/config
     ${CMAKE_SOURCE_DIR}/needaimbot/capture
     ${CMAKE_SOURCE_DIR}/needaimbot/postprocess
     ${CMAKE_SOURCE_DIR}/needaimbot/mouse
-    ${CMAKE_SOURCE_DIR}/needaimbot/overlay
     ${CMAKE_SOURCE_DIR}/needaimbot/modules/stb
     ${CMAKE_SOURCE_DIR}/needaimbot/modules
     ${CUDA_PATH}/include
@@ -184,11 +156,6 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 
 if(WIN32)
     target_link_libraries(${PROJECT_NAME} PRIVATE
-        # DirectX / Windows
-        d3d11
-        dxgi
-        d2d1
-        WindowsApp
         # Network
         ws2_32
     )
@@ -208,14 +175,10 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
     _CRT_SECURE_NO_WARNINGS
     UNICODE
     _UNICODE
-    # 2PC Architecture flag
+    # 2PC Architecture flags
     USE_2PC_ARCHITECTURE
+    HEADLESS_BUILD  # No overlay on inference PC
 )
-
-# Linux: Headless build (no GUI/overlay)
-if(NOT WIN32)
-    target_compile_definitions(${PROJECT_NAME} PRIVATE HEADLESS_BUILD)
-endif()
 
 if(MSVC)
     target_compile_options(${PROJECT_NAME} PRIVATE
