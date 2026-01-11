@@ -18,22 +18,14 @@
 #include "mouse/mouse.h"
 #include "needaimbot.h"
 #include "keyboard/keyboard_listener.h"
-#ifndef HEADLESS_BUILD
-#include "overlay/overlay.h"
-#endif
 #include "mouse/input_drivers/InputMethod.h"
 #include "mouse/input_drivers/kmboxNet.h"
 #include "include/other_tools.h"
 #include "core/thread_manager.h"
 #include "core/error_manager.h"
 #include "capture/capture_interface.h"
-#ifdef _WIN32
-#include "capture/dda_capture.h"
-#include "capture/dda_capture_adapter.h"
-#else
 #include "capture/udp_capture.h"
 #include "capture/udp_capture_adapter.h"
-#endif
 #include "utils/input_state.h"
 
 
@@ -54,47 +46,21 @@
 std::atomic<bool> should_exit{false};
 std::mutex configMutex;
 std::atomic<bool> detection_resolution_changed{false};
-std::atomic<bool> capture_borders_changed{false};
-std::atomic<bool> capture_cursor_changed{false};
-std::atomic<bool> show_window_changed{false};
-
-// Global headless mode flag (runtime)
-static bool g_headless_mode = false;
 
 // Forward declarations
 bool initializeScreenCapture(gpa::UnifiedGraphPipeline* pipeline);
 bool initializeInputMethod();
 
-// Combined UI thread function for keyboard + overlay
-void combinedUIThread() {
-    // Launch keyboard thread always
+// Keyboard thread function (2PC: no overlay needed on inference PC)
+void keyboardOnlyThread() {
     std::thread keyboardThread(keyboardListener);
-    
-#ifndef HEADLESS_BUILD
-    // Only launch overlay if not in headless mode (runtime check)
-    std::thread overlayThread;
-    if (!g_headless_mode) {
-        overlayThread = std::thread(OverlayThread);
-    }
-#endif
-    
-    // Set thread names for debugging
+
+    // Set thread name for debugging
     #ifdef _WIN32
     SetThreadDescription(keyboardThread.native_handle(), L"KeyboardListener");
-#ifndef HEADLESS_BUILD
-    if (!g_headless_mode && overlayThread.joinable()) {
-        SetThreadDescription(overlayThread.native_handle(), L"OverlayRenderer");
-    }
-#endif
     #endif
-    
-    // Wait for threads to complete
+
     keyboardThread.join();
-#ifndef HEADLESS_BUILD
-    if (!g_headless_mode && overlayThread.joinable()) {
-        overlayThread.join();
-    }
-#endif
 }
 
 namespace {
@@ -225,57 +191,8 @@ bool loadAndValidateModel(std::string& modelName, const std::vector<std::string>
     return true;
 }
 
-// Initialize screen capture for the pipeline
+// Initialize UDP capture for the pipeline (2PC architecture)
 bool initializeScreenCapture(gpa::UnifiedGraphPipeline* pipeline) {
-#ifdef _WIN32
-    auto& ctx = AppContext::getInstance();
-
-    if (!DDACapture::IsDDACaptureAvailable()) {
-        std::cerr << "[CAPTURE] Desktop Duplication is not available on this system" << std::endl;
-        return false;
-    }
-
-    static DDACapture s_ddaCapture;
-    static DDACaptureAdapter s_ddaAdapter(&s_ddaCapture);
-
-    if (!s_ddaCapture.Initialize()) {
-        std::cerr << "[CAPTURE] Failed to initialize Desktop Duplication capture" << std::endl;
-        return false;
-    }
-
-    int screenW = s_ddaCapture.GetScreenWidth();
-    int screenH = s_ddaCapture.GetScreenHeight();
-    if (screenW <= 0 || screenH <= 0) {
-        std::cerr << "[CAPTURE] Desktop Duplication reported invalid screen dimensions" << std::endl;
-        return false;
-    }
-
-    int detectionRes = std::max(1, ctx.config.profile().detection_resolution);
-    int captureSize = std::min(detectionRes, std::min(screenW, screenH));
-
-    int centerX = screenW / 2 + static_cast<int>(ctx.config.profile().crosshair_offset_x);
-    int centerY = screenH / 2 + static_cast<int>(ctx.config.profile().crosshair_offset_y);
-
-    int maxLeft = std::max(0, screenW - captureSize);
-    int maxTop = std::max(0, screenH - captureSize);
-
-    int left = std::clamp(centerX - captureSize / 2, 0, maxLeft);
-    int top = std::clamp(centerY - captureSize / 2, 0, maxTop);
-
-    if (!s_ddaCapture.SetCaptureRegion(left, top, captureSize, captureSize)) {
-        std::cerr << "[CAPTURE] Failed to configure Desktop Duplication capture region" << std::endl;
-        return false;
-    }
-
-    if (!s_ddaCapture.IsCapturing() && !s_ddaCapture.StartCapture()) {
-        std::cerr << "[CAPTURE] Failed to start Desktop Duplication capture thread" << std::endl;
-        return false;
-    }
-
-    pipeline->setCapture(&s_ddaAdapter);
-    return true;
-#else
-    // Linux: Use UDP capture to receive frames from Game PC
     auto& ctx = AppContext::getInstance();
 
     static UDPCapture s_udpCapture;
@@ -305,7 +222,6 @@ bool initializeScreenCapture(gpa::UnifiedGraphPipeline* pipeline) {
 
     pipeline->setCapture(&s_udpAdapter);
     return true;
-#endif
 }
 
 // Signal handler for clean shutdown  
@@ -432,13 +348,7 @@ LONG WINAPI UnhandledExceptionHandler(EXCEPTION_POINTERS* pExceptionPointers) {
 
 int main(int argc, char* argv[])
 {
-    // Parse command line arguments
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--headless") == 0 || strcmp(argv[i], "-h") == 0) {
-            g_headless_mode = true;
-            std::cout << "[MAIN] Running in HEADLESS mode (no overlay)" << std::endl;
-        }
-    }
+    // 2PC Architecture: Inference PC does not need overlay
 
 #ifdef _WIN32
     // Install crash handler
@@ -599,13 +509,13 @@ int main(int argc, char* argv[])
             -1,
             ThreadManager::Priority::NORMAL);
 
-        ThreadManager uiThreadMgr("CombinedUIThread",
-            combinedUIThread,
+        ThreadManager keyboardThreadMgr("KeyboardThread",
+            keyboardOnlyThread,
             -1,
             ThreadManager::Priority::NORMAL);
 
         pipelineThreadMgr.start();
-        uiThreadMgr.start();
+        keyboardThreadMgr.start();
 
         welcome_message();
         
