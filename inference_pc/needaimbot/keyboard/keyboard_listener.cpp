@@ -134,159 +134,59 @@ bool isAnyKeyPressed(const std::vector<std::string>& keys) {
     return is_any_key_or_combo_pressed(keys);
 }
 
+// 2PC Architecture: Inference PC only handles control keys (exit, pause)
+// Aim/shoot keys are read from Makcu device via serial communication
 void keyboardListener() {
     auto& ctx = AppContext::getInstance();
 
     static bool last_aiming_state = false;
-    static bool last_shooting_state = false;
     static bool last_pause_state = false;
-    static bool last_single_shot_state = false;
 
-    // Stabilizer timing
-    auto last_stabilizer_time = std::chrono::steady_clock::now();
-    auto stabilizer_press_time = std::chrono::steady_clock::now();
-    auto stabilizer_release_time = std::chrono::steady_clock::now();
-    bool last_stabilizer_state = false;
-    bool stabilizer_active_after_delay = false;
+    // Cached key combos for control keys only
+    CachedKeyCombo cache_exit, cache_pause;
 
-    // Cached key combos - parse once, check fast
-    CachedKeyCombo cache_exit, cache_targeting, cache_auto_action;
-    CachedKeyCombo cache_disable_upward, cache_stabilizer, cache_pause, cache_single_shot;
-
-    // Event-driven keyboard monitoring using Windows events
+    // Event-driven keyboard monitoring
     HANDLE hKeyboardEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
 
     while (!ctx.should_exit) {
-        // Update caches (only re-parses if config changed)
+        // Update control key caches
         cache_exit.update(ctx.config.global().button_exit);
-        cache_targeting.update(ctx.config.global().button_targeting);
-        cache_auto_action.update(ctx.config.global().button_auto_action);
-        cache_disable_upward.update(ctx.config.global().button_disable_upward_aim);
-        cache_stabilizer.update(ctx.config.global().button_stabilizer);
         cache_pause.update(ctx.config.global().button_pause);
-        cache_single_shot.update(ctx.config.global().button_single_shot);
 
-        // Check for exit key
+        // Check for exit key (F2)
         if (cache_exit.isPressed()) {
             ctx.should_exit = true;
             ctx.frame_cv.notify_all();
             break;
         }
 
-        bool current_aiming = cache_targeting.isPressed();
-
-        // Always update aiming state atomically
-        ctx.aiming = current_aiming;
-
-        // Notify pipeline thread on state change (event-driven)
-        if (current_aiming != last_aiming_state) {
-            // Wake up pipeline thread using event-driven mechanism
-            ctx.pipeline_activation_cv.notify_one();
-            ctx.aiming_cv.notify_one();  // Keep for compatibility
-            last_aiming_state = current_aiming;
-        }
-
-        // Track auto action button state
-        bool current_shooting = cache_auto_action.isPressed();
-        ctx.shooting = current_shooting;
-
-        if (current_shooting != last_shooting_state) {
-            last_shooting_state = current_shooting;
-        }
-
-        // Track disable upward aim state
-        ctx.disable_upward_aim = cache_disable_upward.isPressed();
-
-        // Track stabilizer state with start/end delay support
-        bool current_stabilizer = cache_stabilizer.isPressed();
-        ctx.stabilizer_active = current_stabilizer;
-        auto now = std::chrono::steady_clock::now();
-
-        // Detect state transitions
-        if (current_stabilizer && !last_stabilizer_state) {
-            // Button just pressed - record press time
-            stabilizer_press_time = now;
-        } else if (!current_stabilizer && last_stabilizer_state) {
-            // Button just released - record release time
-            stabilizer_release_time = now;
-        }
-        last_stabilizer_state = current_stabilizer;
-
-        // Determine if stabilization should be active
-        auto* profile = ctx.config.getCurrentInputProfile();
-        if (profile) {
-            int start_delay = profile->start_delay_ms;
-            int end_delay = profile->end_delay_ms;
-
-            if (current_stabilizer) {
-                // Button is pressed - check start delay
-                auto elapsed_since_press = std::chrono::duration_cast<std::chrono::milliseconds>(now - stabilizer_press_time).count();
-                stabilizer_active_after_delay = (elapsed_since_press >= start_delay);
-            } else {
-                // Button is released - check end delay
-                auto elapsed_since_release = std::chrono::duration_cast<std::chrono::milliseconds>(now - stabilizer_release_time).count();
-                stabilizer_active_after_delay = (elapsed_since_release < end_delay);
-            }
-
-            // Apply stabilization if active after delay processing
-            if (stabilizer_active_after_delay) {
-                float interval_ms = profile->interval_ms;
-                if (interval_ms < 1.0f) interval_ms = 1.0f;
-
-                auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(now - last_stabilizer_time).count();
-                if (elapsed >= static_cast<long long>(interval_ms * 1000)) {
-                    // Calculate strength with scope multiplier
-                    float strength = profile->base_strength;
-                    int scope = ctx.config.profile().active_scope_magnification;
-                    switch (scope) {
-                        case 1: strength *= profile->scope_mult_1x; break;
-                        case 2: strength *= profile->scope_mult_2x; break;
-                        case 3: strength *= profile->scope_mult_3x; break;
-                        case 4: strength *= profile->scope_mult_4x; break;
-                        case 6: strength *= profile->scope_mult_6x; break;
-                        case 8: strength *= profile->scope_mult_8x; break;
-                        default: strength *= profile->scope_mult_1x; break;
-                    }
-                    strength *= profile->fire_rate_multiplier;
-
-                    int dy = static_cast<int>(strength + 0.5f);
-                    if (dy > 0) {
-                        executeMouseMovement(0, dy);
-                    }
-                    last_stabilizer_time = now;
-                }
-            }
-        }
-
-        // Improved pause key handling - only toggle on key press, not while held
+        // Pause key handling (F3) - toggle on key press
         bool current_pause = cache_pause.isPressed();
         if (current_pause && !last_pause_state) {
             bool new_state = !ctx.detection_paused.load();
             ctx.detection_paused = new_state;
-#ifdef _DEBUG
             std::cout << "[Keyboard] Detection " << (new_state ? "PAUSED" : "RESUMED") << std::endl;
-#endif
         }
         last_pause_state = current_pause;
 
-        // Single shot trigger - only on key press, not while held
-        bool current_single_shot = cache_single_shot.isPressed();
-        if (current_single_shot && !last_single_shot_state) {
-            ctx.single_shot_requested = true;
-            ctx.pipeline_activation_cv.notify_one();
-#ifdef _DEBUG
-            std::cout << "[Keyboard] Single shot triggered" << std::endl;
-#endif
-        }
-        last_single_shot_state = current_single_shot;
+        // TODO: Read aim/shoot key states from Makcu device via serial communication
+        // The Makcu device is connected to Game PC and can report button states
+        // Example implementation:
+        // bool current_aiming = readMakcuButtonState(); // Read from serial
+        // ctx.aiming = current_aiming;
+        // if (current_aiming != last_aiming_state) {
+        //     ctx.pipeline_activation_cv.notify_one();
+        //     ctx.aiming_cv.notify_one();
+        //     last_aiming_state = current_aiming;
+        // }
 
-        // Event-driven adaptive delay - use wait with timeout for better CPU efficiency
-        DWORD waitTime = current_aiming ? 2 : 10; // 2ms when aiming, 10ms when idle
+        // For now, set aiming to false (placeholder)
+        ctx.aiming = false;
+        ctx.shooting = false;
 
-        // Use WaitForSingleObject with timeout instead of sleep for better responsiveness
-        // This allows the thread to wake immediately if signaled
-        WaitForSingleObject(hKeyboardEvent, waitTime);
+        // Adaptive delay - 10ms polling for control keys
+        WaitForSingleObject(hKeyboardEvent, 10);
     }
-    
+
     CloseHandle(hKeyboardEvent);
 }
