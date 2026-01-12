@@ -359,43 +359,18 @@ int main(int argc, char* argv[])
     _set_abort_behavior(0, _WRITE_ABORT_MSG);
 
     // OPTIMIZATION: Improve system timer resolution for better timing accuracy
-    // This reduces jitter in sleep/wait operations under high CPU load
     #pragma comment(lib, "winmm.lib")
     TIMECAPS tc;
     if (timeGetDevCaps(&tc, sizeof(TIMECAPS)) == TIMERR_NOERROR) {
-        UINT targetResolution = std::max(1u, tc.wPeriodMin);  // 1ms or best available
+        UINT targetResolution = std::max(1u, tc.wPeriodMin);
         if (timeBeginPeriod(targetResolution) == TIMERR_NOERROR) {
             std::cout << "[TIMER] Set system timer resolution to " << targetResolution << "ms" << std::endl;
         }
     }
 
-    // Initialize Gaming Performance Analyzer
-
-    // Ensure console prints UTF-8 to avoid '??' for non-ASCII
+    // Ensure console prints UTF-8
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
-
-    // Administrator privileges not required
-
-    // Set random application title for obfuscation
-    SetRandomConsoleTitle();
-
-    // Single instance check
-    HANDLE hMutex = CreateMutex(NULL, TRUE, L"Local\\NVDisplayContainer_SingleInstance");
-    if (GetLastError() == ERROR_ALREADY_EXISTS) {
-        MessageBox(NULL, L"Gaming Performance Analyzer is already running.\n\nPlease close the existing instance before starting a new one.",
-                   L"Gaming Performance Analyzer", MB_OK | MB_ICONINFORMATION);
-        CloseHandle(hMutex);
-        return 0;
-    }
-
-    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
-
-    OSVERSIONINFOEX osvi;
-    ZeroMemory(&osvi, sizeof(OSVERSIONINFOEX));
-    osvi.dwOSVersionInfoSize = sizeof(OSVERSIONINFOEX);
-    if (GetVersionEx((OSVERSIONINFO*)&osvi)) {
-    }
 #endif
 
     auto& ctx = AppContext::getInstance();
@@ -417,9 +392,7 @@ int main(int argc, char* argv[])
             std::cin.get();
             return -1;
         }
-        
-        ctx.preview_enabled = ctx.config.global().show_window;
-        
+
         int cuda_devices = 0;
         cudaError_t err = cudaGetDeviceCount(&cuda_devices);
 
@@ -436,18 +409,6 @@ int main(int argc, char* argv[])
             std::cin.get();
             return -1;
         }
-        
-#ifdef _WIN32
-        if (!CreateDirectory(L"screenshots", NULL) && GetLastError() != ERROR_ALREADY_EXISTS)
-        {
-            std::cerr << "[MAIN] Error with screenshot folder" << std::endl;
-            std::cin.get();
-            return -1;
-        }
-#else
-        // Linux: create screenshots directory using std::filesystem
-        std::filesystem::create_directories("screenshots");
-#endif
 
         std::cout << "[MAIN] Initializing input method..." << std::endl;
         (void)initializeInputMethod();
@@ -517,8 +478,7 @@ int main(int argc, char* argv[])
         pipelineThreadMgr.start();
         keyboardThreadMgr.start();
 
-        welcome_message();
-        
+        std::cout << "[MAIN] Inference PC ready. Waiting for frames from Game PC..." << std::endl;
 
         // Wait for exit signal using condition variable instead of polling
         {
