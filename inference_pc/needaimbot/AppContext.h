@@ -71,6 +71,9 @@ public:
     std::atomic<bool> disable_upward_aim{false};  // Block upward mouse movement when held
     std::atomic<bool> stabilizer_active{false};  // Input stabilizer feature active
     bool input_method_changed{false};  // Rare change - no need for atomic
+
+    // 2PC: Makcu connection for reading button states
+    class MakcuConnection* makcu_connection{nullptr};
     
     // Aiming state synchronization for CPU efficiency
     std::mutex aiming_mutex;

@@ -125,6 +125,8 @@ bool initializeInputMethod() {
                 s_makcu.reset();
                 return nullptr;
             }
+            // Store in AppContext so keyboard_listener can read button states
+            ctx.makcu_connection = s_makcu.get();
             return std::make_unique<MakcuSerialInputMethod>(s_makcu.get());
         });
     }
