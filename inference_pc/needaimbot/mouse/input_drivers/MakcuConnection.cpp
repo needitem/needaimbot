@@ -127,6 +127,16 @@ bool MakcuConnection::initializeMakcuConnection() {
     try {
         startListening();
         is_open_ = true;
+
+        // Enable button state streaming (event-driven, only emits on button changes)
+        // Reference: https://www.makcu.com/en/api#binary-protocol-format
+        // ASCII: .buttons(mode, period_ms) - mode: 1=raw, 2=constructed
+        // Output: km.buttons<mask_u8>\r\n>>> where mask bits: 0=left, 1=right, 2=middle, 3=side1, 4=side2
+        // Note: "only emits on new frames" - sends data ONLY when button state changes (not polling)
+        std::this_thread::sleep_for(std::chrono::milliseconds(100)); // Wait for device to be ready
+        write(".buttons(1,10)\r\n");
+        std::cout << "[Makcu] Button streaming enabled (event-driven)" << std::endl;
+
         return true;
     } catch (const std::exception& e) {
         std::cerr << "[Makcu] Failed to start listening thread: " << e.what() << std::endl;
@@ -386,6 +396,16 @@ bool MakcuConnection::initializeMakcuConnection() {
     try {
         startListening();
         is_open_ = true;
+
+        // Enable button state streaming (event-driven, only emits on button changes)
+        // Reference: https://www.makcu.com/en/api#binary-protocol-format
+        // ASCII: .buttons(mode, period_ms) - mode: 1=raw, 2=constructed
+        // Output: km.buttons<mask_u8>\r\n>>> where mask bits: 0=left, 1=right, 2=middle, 3=side1, 4=side2
+        // Note: "only emits on new frames" - sends data ONLY when button state changes (not polling)
+        usleep(100000); // Wait 100ms for device to be ready
+        write(".buttons(1,10)\r\n");
+        std::cout << "[Makcu] Button streaming enabled (event-driven)" << std::endl;
+
         return true;
     } catch (const std::exception& e) {
         std::cerr << "[Makcu] Failed to start listening thread: " << e.what() << std::endl;
@@ -643,25 +663,26 @@ void MakcuConnection::listeningThreadFunc() {
 }
 
 void MakcuConnection::processIncomingLine(const std::string& line) {
-    if (line.find("AIM") == 0) {
-        if (line.find("ON") != std::string::npos) {
-            aiming_active = true;
-        } else if (line.find("OFF") != std::string::npos) {
-            aiming_active = false;
-        }
-    }
-    else if (line.find("SHOOT") == 0) {
-        if (line.find("ON") != std::string::npos) {
-            shooting_active = true;
-        } else if (line.find("OFF") != std::string::npos) {
-            shooting_active = false;
-        }
-    }
-    else if (line.find("ZOOM") == 0) {
-        if (line.find("ON") != std::string::npos) {
-            zooming_active = true;
-        } else if (line.find("OFF") != std::string::npos) {
-            zooming_active = false;
-        }
+    // Parse Makcu button streaming frames (event-driven, only emits on button changes)
+    // Reference: https://www.makcu.com/en/api#binary-protocol-format
+    // Format: km.buttons<mask_u8>\r\n>>> (10 ASCII chars + 1 binary byte + "\r\n>>>")
+    // Mask bits: 0=left, 1=right, 2=middle, 3=side1, 4=side2
+    // Note: This is sent ONLY when button state changes (not continuous polling)
+
+    if (line.find("km.buttons") == 0 && line.length() >= 11) {
+        // Extract binary button mask (byte after "km.buttons" prefix)
+        uint8_t mask = static_cast<uint8_t>(line[10]);
+
+        // Parse button states from mask
+        bool left_pressed = (mask & 0x01) != 0;   // bit 0: left button
+        bool right_pressed = (mask & 0x02) != 0;  // bit 1: right button
+
+        // Update button states
+        // 2PC Architecture: Game PC physical buttons → Makcu device → Serial → Inference PC
+        shooting_active = left_pressed;   // Left button (LMB) for shooting
+        aiming_active = right_pressed;    // Right button (RMB) for aiming
+
+        // Note: zooming_active can be mapped to middle button if needed
+        // zooming_active = (mask & 0x04) != 0;  // bit 2: middle button
     }
 }
