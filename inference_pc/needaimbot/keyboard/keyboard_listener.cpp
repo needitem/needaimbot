@@ -140,6 +140,7 @@ void keyboardListener() {
     auto& ctx = AppContext::getInstance();
 
     static bool last_aiming_state = false;
+    static bool last_shooting_state = false;
     static bool last_pause_state = false;
 
     // Cached key combos for control keys only
@@ -169,20 +170,48 @@ void keyboardListener() {
         }
         last_pause_state = current_pause;
 
-        // TODO: Read aim/shoot key states from Makcu device via serial communication
-        // The Makcu device is connected to Game PC and can report button states
-        // Example implementation:
-        // bool current_aiming = readMakcuButtonState(); // Read from serial
-        // ctx.aiming = current_aiming;
-        // if (current_aiming != last_aiming_state) {
-        //     ctx.pipeline_activation_cv.notify_one();
-        //     ctx.aiming_cv.notify_one();
-        //     last_aiming_state = current_aiming;
-        // }
+        // 2PC: Read button states from Makcu device (connected to Game PC)
+        // RMB (aim key) activates aimbot
+        // RMB + LMB (aim + shoot) activates stabilizer (no recoil)
+        if (ctx.makcu_connection) {
+            bool current_aiming = ctx.makcu_connection->aiming_active;     // Right mouse button
+            bool current_shooting = ctx.makcu_connection->shooting_active; // Left mouse button
 
-        // For now, set aiming to false (placeholder)
-        ctx.aiming = false;
-        ctx.shooting = false;
+            // Log button state changes
+            if (current_aiming != last_aiming_state) {
+                std::cout << "[Makcu] Right Mouse Button " << (current_aiming ? "PRESSED" : "RELEASED") << std::endl;
+            }
+            if (current_shooting != last_shooting_state) {
+                std::cout << "[Makcu] Left Mouse Button " << (current_shooting ? "PRESSED" : "RELEASED") << std::endl;
+            }
+
+            // Update aiming state
+            ctx.aiming = current_aiming;
+            ctx.shooting = current_shooting;
+
+            // Stabilizer (no recoil) activates when both RMB + LMB pressed
+            bool current_stabilizer = current_aiming && current_shooting;
+            bool last_stabilizer = last_aiming_state && last_shooting_state;
+
+            if (current_stabilizer != last_stabilizer) {
+                std::cout << "[Makcu] Stabilizer (No Recoil) " << (current_stabilizer ? "ACTIVATED" : "DEACTIVATED") << std::endl;
+            }
+            ctx.stabilizer_active = current_stabilizer;
+
+            // Notify pipeline thread on aiming state change (event-driven)
+            if (current_aiming != last_aiming_state) {
+                ctx.pipeline_activation_cv.notify_one();
+                ctx.aiming_cv.notify_one();
+                last_aiming_state = current_aiming;
+            }
+
+            last_shooting_state = current_shooting;
+        } else {
+            // No Makcu connection - set to false
+            ctx.aiming = false;
+            ctx.shooting = false;
+            ctx.stabilizer_active = false;
+        }
 
         // Adaptive delay - 10ms polling for control keys
         WaitForSingleObject(hKeyboardEvent, 10);
