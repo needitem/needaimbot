@@ -3,11 +3,93 @@
 // GPU postprocessing for minimal latency
 #include "simple_inference.h"
 #include "simple_postprocess.h"
-#include "preprocessing.h"
+#include <cuda_fp16.h>
 #include <fstream>
 #include <iostream>
 #include <algorithm>
 #include <cstring>
+
+// =============================================================================
+// RGB Preprocessing Kernels (inline implementation)
+// =============================================================================
+
+// RGB HWC uint8 -> CHW FP16 normalized (same resolution, no resize)
+__global__ void rgbPreprocessKernelFP16(
+    const uint8_t* __restrict__ src,
+    __half* __restrict__ dst,
+    int width, int height,
+    float scale_factor
+) {
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (x >= width || y >= height) return;
+
+    int src_idx = (y * width + x) * 3;  // RGB HWC
+    int hw_size = width * height;
+    int dst_idx = y * width + x;
+
+    // RGB HWC -> CHW normalized
+    dst[dst_idx] = __float2half(src[src_idx] * scale_factor);                 // R
+    dst[dst_idx + hw_size] = __float2half(src[src_idx + 1] * scale_factor);   // G
+    dst[dst_idx + 2 * hw_size] = __float2half(src[src_idx + 2] * scale_factor); // B
+}
+
+// RGB HWC uint8 -> CHW FP32 normalized (same resolution, no resize)
+__global__ void rgbPreprocessKernel(
+    const uint8_t* __restrict__ src,
+    float* __restrict__ dst,
+    int width, int height,
+    float scale_factor
+) {
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (x >= width || y >= height) return;
+
+    int src_idx = (y * width + x) * 3;  // RGB HWC
+    int hw_size = width * height;
+    int dst_idx = y * width + x;
+
+    // RGB HWC -> CHW normalized
+    dst[dst_idx] = src[src_idx] * scale_factor;                 // R
+    dst[dst_idx + hw_size] = src[src_idx + 1] * scale_factor;   // G
+    dst[dst_idx + 2 * hw_size] = src[src_idx + 2] * scale_factor; // B
+}
+
+// RGB preprocessing wrapper function
+extern "C" cudaError_t cuda_rgb_preprocessing(
+    const void* src_rgb_data,
+    void* dst_rgb_chw,
+    int src_width, int src_height,
+    int src_step,  // unused for same-size
+    int target_width, int target_height,
+    bool use_fp16,
+    cudaStream_t stream
+) {
+    // Same resolution assumed (320x320 -> 320x320)
+    dim3 block(16, 16);
+    dim3 grid((target_width + block.x - 1) / block.x,
+              (target_height + block.y - 1) / block.y);
+
+    const float scale = 1.0f / 255.0f;
+
+    if (use_fp16) {
+        rgbPreprocessKernelFP16<<<grid, block, 0, stream>>>(
+            static_cast<const uint8_t*>(src_rgb_data),
+            static_cast<__half*>(dst_rgb_chw),
+            target_width, target_height,
+            scale
+        );
+    } else {
+        rgbPreprocessKernel<<<grid, block, 0, stream>>>(
+            static_cast<const uint8_t*>(src_rgb_data),
+            static_cast<float*>(dst_rgb_chw),
+            target_width, target_height,
+            scale
+        );
+    }
+
+    return cudaGetLastError();
+}
 
 namespace gpa {
 
