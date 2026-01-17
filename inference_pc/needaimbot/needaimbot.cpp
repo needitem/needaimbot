@@ -162,6 +162,8 @@ bool loadAndValidateModel(std::string& modelName, const std::vector<std::string>
     auto& ctx = AppContext::getInstance();
     bool model_changed = false;
 
+    std::cout << "[MAIN] Config ai_model: '" << modelName << "'" << std::endl;
+
     // If no model specified or model is empty, auto-select first available
     if (modelName.empty() && !availableModels.empty()) {
         modelName = availableModels[0];
@@ -169,12 +171,20 @@ bool loadAndValidateModel(std::string& modelName, const std::vector<std::string>
         std::cout << "[MAIN] Auto-selected model: " << modelName << std::endl;
     }
 
-    std::string modelPath = "models/" + modelName;
+    // If modelName is an absolute path, use it directly; otherwise look in models/
+    std::string modelPath;
+    if (!modelName.empty() && modelName[0] == '/') {
+        modelPath = modelName;  // Absolute path
+    } else {
+        modelPath = "models/" + modelName;  // Relative path in models folder
+    }
+
     if (!std::filesystem::exists(modelPath)) {
         std::cerr << "[MAIN] Specified model does not exist: " << modelPath << std::endl;
 
         if (!availableModels.empty()) {
             modelName = availableModels[0];
+            modelPath = "models/" + modelName;
             model_changed = true;
             std::cout << "[MAIN] Auto-selected available model: " << modelName << std::endl;
         } else {
@@ -436,7 +446,13 @@ int main(int argc, char* argv[])
         auto& pipelineManager = gpa::PipelineManager::getInstance();
         
         gpa::UnifiedPipelineConfig pipelineConfig;
-        pipelineConfig.modelPath = "models/" + ctx.config.profile().ai_model;
+        // If ai_model is absolute path, use it directly; otherwise prepend models/
+        std::string aiModel = ctx.config.profile().ai_model;
+        if (!aiModel.empty() && aiModel[0] == '/') {
+            pipelineConfig.modelPath = aiModel;
+        } else {
+            pipelineConfig.modelPath = "models/" + aiModel;
+        }
         pipelineConfig.enableCapture = true;
         pipelineConfig.enableDetection = true;
         pipelineConfig.useGraphOptimization = true;

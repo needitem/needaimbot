@@ -2,6 +2,18 @@
 #include <iostream>
 #include <cstring>
 
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#pragma comment(lib, "ws2_32.lib")
+#else
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <errno.h>
+#endif
+
 InputStateManager& InputStateManager::getInstance() {
     static InputStateManager instance;
     return instance;
@@ -154,9 +166,19 @@ void InputStateManager::udpListenerThread(int port) {
 }
 
 bool InputStateManager::isLeftButtonPressed() const {
+#ifdef _WIN32
     return (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+#else
+    // Linux: Use Makcu button state instead
+    return left_button_.load();
+#endif
 }
 
 bool InputStateManager::isRightButtonPressed() const {
+#ifdef _WIN32
     return (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+#else
+    // Linux: Use Makcu button state instead
+    return right_button_.load();
+#endif
 }

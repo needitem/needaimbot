@@ -12,6 +12,8 @@
 #include "../include/other_tools.h"
 #include "../core/constants.h"
 #include "detection/postProcess.h"
+#include "../utils/image_io.h"
+#include "../modules/stb/stb_image_write.h"
 #include <iostream>
 #include <chrono>
 #include <thread>
@@ -48,6 +50,128 @@ namespace gpa {
 
 // Use blocking CUDA events to avoid CPU yield storms while waiting for GPU work
 static constexpr unsigned int kBlockingEventFlags = cudaEventDisableTiming | cudaEventBlockingSync;
+
+// Debug: Save captured frame with detection bboxes
+static void saveDebugFrame(const SimpleCudaMat& captureBuffer,
+                           const Target* targets, int targetCount,
+                           const Target* bestTarget,
+                           cudaStream_t stream) {
+    static int debugFrameCount = 0;
+    static auto lastSaveTime = std::chrono::steady_clock::now();
+
+    // Rate limit: save at most once per second
+    auto now = std::chrono::steady_clock::now();
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(now - lastSaveTime).count() < 1000) {
+        return;
+    }
+    lastSaveTime = now;
+
+    if (captureBuffer.empty()) {
+        std::cout << "[Debug] Capture buffer is empty!" << std::endl;
+        return;
+    }
+
+    // Copy capture buffer to host
+    int width = captureBuffer.cols();
+    int height = captureBuffer.rows();
+    int channels = captureBuffer.channels();
+    size_t step = captureBuffer.step();
+
+    std::vector<uint8_t> hostBuffer(height * step);
+    cudaMemcpyAsync(hostBuffer.data(), captureBuffer.data(), height * step,
+                    cudaMemcpyDeviceToHost, stream);
+    cudaStreamSynchronize(stream);
+
+    // Copy targets to host
+    std::vector<Target> hostTargets(targetCount);
+    Target hostBestTarget = {};
+    if (targetCount > 0 && targets) {
+        cudaMemcpy(hostTargets.data(), targets, targetCount * sizeof(Target), cudaMemcpyDeviceToHost);
+    }
+    if (bestTarget) {
+        cudaMemcpy(&hostBestTarget, bestTarget, sizeof(Target), cudaMemcpyDeviceToHost);
+    }
+
+    // Draw bboxes on the image (RGB format from UDP capture)
+    auto drawRect = [&](int x1, int y1, int x2, int y2, uint8_t r, uint8_t g, uint8_t b, int thickness = 2) {
+        x1 = std::max(0, std::min(x1, width - 1));
+        x2 = std::max(0, std::min(x2, width - 1));
+        y1 = std::max(0, std::min(y1, height - 1));
+        y2 = std::max(0, std::min(y2, height - 1));
+
+        for (int t = 0; t < thickness; t++) {
+            // Top and bottom
+            for (int x = x1; x <= x2; x++) {
+                if (y1 + t < height) {
+                    uint8_t* p = hostBuffer.data() + (y1 + t) * step + x * channels;
+                    p[0] = r; p[1] = g; p[2] = b;
+                }
+                if (y2 - t >= 0) {
+                    uint8_t* p = hostBuffer.data() + (y2 - t) * step + x * channels;
+                    p[0] = r; p[1] = g; p[2] = b;
+                }
+            }
+            // Left and right
+            for (int y = y1; y <= y2; y++) {
+                if (x1 + t < width) {
+                    uint8_t* p = hostBuffer.data() + y * step + (x1 + t) * channels;
+                    p[0] = r; p[1] = g; p[2] = b;
+                }
+                if (x2 - t >= 0) {
+                    uint8_t* p = hostBuffer.data() + y * step + (x2 - t) * channels;
+                    p[0] = r; p[1] = g; p[2] = b;
+                }
+            }
+        }
+    };
+
+    // Draw all detections in green (RGB order)
+    for (int i = 0; i < targetCount; i++) {
+        const Target& t = hostTargets[i];
+        if (t.classId >= 0 && t.width > 0 && t.height > 0) {
+            int x1 = t.x - t.width / 2;
+            int y1 = t.y - t.height / 2;
+            int x2 = t.x + t.width / 2;
+            int y2 = t.y + t.height / 2;
+            drawRect(x1, y1, x2, y2, 0, 255, 0, 2);  // Green
+        }
+    }
+
+    // Draw best target in red (thicker)
+    if (hostBestTarget.classId >= 0 && hostBestTarget.width > 0 && hostBestTarget.height > 0) {
+        int x1 = hostBestTarget.x - hostBestTarget.width / 2;
+        int y1 = hostBestTarget.y - hostBestTarget.height / 2;
+        int x2 = hostBestTarget.x + hostBestTarget.width / 2;
+        int y2 = hostBestTarget.y + hostBestTarget.height / 2;
+        drawRect(x1, y1, x2, y2, 255, 0, 0, 3);  // Red, thicker
+    }
+
+    // Draw crosshair at center
+    int cx = width / 2, cy = height / 2;
+    for (int i = -10; i <= 10; i++) {
+        if (cx + i >= 0 && cx + i < width) {
+            uint8_t* p = hostBuffer.data() + cy * step + (cx + i) * channels;
+            p[0] = 255; p[1] = 255; p[2] = 255;  // White
+        }
+        if (cy + i >= 0 && cy + i < height) {
+            uint8_t* p = hostBuffer.data() + (cy + i) * step + cx * channels;
+            p[0] = 255; p[1] = 255; p[2] = 255;  // White
+        }
+    }
+
+    // Save as JPG (already RGB, no conversion needed)
+    std::filesystem::create_directories("debug_frames");
+    std::string filename = "debug_frames/frame_" + std::to_string(debugFrameCount++) + ".jpg";
+
+    // Save as JPEG using stb_image_write (hostBuffer is already RGB)
+    stbi_write_jpg(filename.c_str(), width, height, channels, hostBuffer.data(), 90);
+
+    std::cout << "[Debug] Saved: " << filename
+              << " (" << width << "x" << height << ")"
+              << " detections=" << targetCount
+              << " best=" << (hostBestTarget.classId >= 0 ? "yes" : "no")
+              << std::endl;
+}
 
 // ============================================================================
 // LOCK-FREE CONFIG UPDATE (v2)
@@ -1175,11 +1299,11 @@ bool UnifiedGraphPipeline::allocateBuffers() {
         // Initialize prev_class_filter to force first upload
         m_cachedConfig.detection.prev_class_filter.fill(0xFF);
         
-        {
-            std::lock_guard<std::mutex> previewLock(m_previewMutex);
-            // Dynamic preview buffer allocation based on current state
-            updatePreviewBufferAllocation();
-        }
+        // Preview disabled for headless 2PC mode
+        // {
+        //     std::lock_guard<std::mutex> previewLock(m_previewMutex);
+        //     updatePreviewBufferAllocation();
+        // }
         
         if (!m_captureBuffer.data()) {
             throw std::runtime_error("Capture buffer allocation failed");
@@ -1597,23 +1721,27 @@ bool UnifiedGraphPipeline::enqueueFrameCompletionCallback(cudaStream_t stream, c
                     if (filtered.dx != 0 || filtered.dy != 0) {
                         executeMouseMovement(filtered.dx, filtered.dy);
 
-                        // Record input timestamp for latency tracking
+#ifdef _WIN32
+                        // Record input timestamp for latency tracking (Windows only)
                         LARGE_INTEGER qpc{};
                         if (QueryPerformanceCounter(&qpc)) {
                             pipeline->m_pendingInputQpc.store(
                                 static_cast<uint64_t>(qpc.QuadPart),
                                 std::memory_order_release);
                         }
+#endif
                     }
 
                     // Mark this frame as processed (exactly-once guarantee)
                     pipeline->m_lastProcessedPresentQpc.store(meta.presentQpc, std::memory_order_release);
 
+#ifdef _WIN32
                     // Clear pending input flag if this frame includes our input
                     uint64_t pendingQpc = pipeline->m_pendingInputQpc.load(std::memory_order_acquire);
                     if (pendingQpc != 0 && meta.presentQpc >= pendingQpc) {
                         pipeline->m_pendingInputQpc.store(0, std::memory_order_release);
                     }
+#endif
                 } else {
                     pipeline->filterMouseMovement({0, 0}, false);
                 }
@@ -1757,9 +1885,8 @@ bool UnifiedGraphPipeline::initializeTensorRT(const std::string& modelFile) {
         return false;
     }
     
-    if (m_engine->getNbOptimizationProfiles() > 0) {
-        m_context->setOptimizationProfileAsync(0, m_pipelineStream->get());
-    }
+    // NOTE: Do NOT call setOptimizationProfile - it breaks inference on TRT 8.x
+    // test_inference_simple and simple_inference work without it
 
 #if NV_TENSORRT_MAJOR < 10
     // Initialize bindings vector for TRT 8.x enqueueV2
@@ -2125,13 +2252,33 @@ bool UnifiedGraphPipeline::runInferenceAsync(cudaStream_t stream) {
         std::cerr << "[Pipeline] TensorRT context or engine not initialized" << std::endl;
         return false;
     }
-    
+
     if (!stream) {
         stream = m_pipelineStream->get();
     }
-    
+
     if (!bindStaticTensorAddresses()) {
         return false;
+    }
+
+    // DEBUG: Log bindings once
+    static bool bindingsLogged = false;
+    if (!bindingsLogged) {
+        std::cout << "[DEBUG Bindings] m_bindings size=" << m_bindings.size() << std::endl;
+        for (size_t i = 0; i < m_bindings.size(); i++) {
+            std::cout << "[DEBUG Bindings] m_bindings[" << i << "]=" << m_bindings[i] << std::endl;
+        }
+        std::cout << "[DEBUG Bindings] m_outputAddressCache[0]=" << m_outputAddressCache[0] << std::endl;
+
+        // Verify input data before inference
+        cudaStreamSynchronize(stream);
+        std::vector<float> inputCheck(12);
+        cudaMemcpy(inputCheck.data(), m_bindings[0], 12 * sizeof(float), cudaMemcpyDeviceToHost);
+        std::cout << "[DEBUG Bindings] Input buffer first 12 values BEFORE inference: ";
+        for (int i = 0; i < 12; i++) std::cout << inputCheck[i] << " ";
+        std::cout << std::endl;
+
+        bindingsLogged = true;
     }
 
 #if NV_TENSORRT_MAJOR >= 10
@@ -2150,6 +2297,34 @@ bool UnifiedGraphPipeline::runInferenceAsync(cudaStream_t stream) {
 
 
         return false;
+    }
+
+    // DEBUG: Check output immediately after inference
+    static bool postInferenceLogged = false;
+    if (!postInferenceLogged) {
+        cudaStreamSynchronize(stream);
+
+        // Get output pointer from bindings
+        void* outputPtr = m_bindings[1];  // output0 is at index 1
+
+        std::vector<float> outCheck(6 * 2100);
+        cudaMemcpy(outCheck.data(), outputPtr, 6 * 2100 * sizeof(float), cudaMemcpyDeviceToHost);
+
+        std::cout << "[DEBUG Post-Inference] Output first 20: ";
+        for (int i = 0; i < 20; i++) std::cout << outCheck[i] << " ";
+        std::cout << std::endl;
+
+        float maxC0 = 0, maxC1 = 0;
+        for (int i = 0; i < 2100; i++) {
+            float c0 = outCheck[4 * 2100 + i];
+            float c1 = outCheck[5 * 2100 + i];
+            if (c0 > maxC0) maxC0 = c0;
+            if (c1 > maxC1) maxC1 = c1;
+        }
+        std::cout << "[DEBUG Post-Inference] Max class scores: class0=" << maxC0 << ", class1=" << maxC1 << std::endl;
+        std::cout << "[DEBUG Post-Inference] Using output ptr=" << outputPtr << ", m_outputAddressCache[0]=" << m_outputAddressCache[0] << std::endl;
+
+        postInferenceLogged = true;
     }
 
     return true;
@@ -2251,7 +2426,7 @@ bool UnifiedGraphPipeline::validateYoloDecodeBuffers(int maxDecodedTargets, int 
 
 void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) {
     auto& ctx = AppContext::getInstance();
-    
+
     if (m_outputNames.empty()) {
         std::cerr << "[Pipeline] No output names found for post-processing." << std::endl;
         return;
@@ -2269,15 +2444,67 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
 
     // Use member variable instead of static for thread safety
     m_postProcessConfig.updateFromContext(ctx, m_graphCaptured);
-    
+
+    // DEBUG: Log output info once
+    static bool logged = false;
+    if (!logged) {
+        std::cout << "[DEBUG] Output shape: [";
+        for (size_t i = 0; i < shape.size(); i++) {
+            std::cout << shape[i] << (i < shape.size()-1 ? ", " : "");
+        }
+        std::cout << "], outType=" << static_cast<int>(outputType)
+                  << ", inType=" << static_cast<int>(m_inputDataType)
+                  << ", postprocess=" << m_postProcessConfig.postprocess
+                  << ", conf_thresh=" << m_postProcessConfig.confidence_threshold
+                  << ", numClasses=" << m_numClasses
+                  << ", captureSize=" << m_captureBuffer.cols() << "x" << m_captureBuffer.rows()
+                  << "x" << m_captureBuffer.channels() << std::endl;
+        logged = true;
+    }
+
+    // DEBUG: Check raw inference output
+    static bool rawOutputLogged = false;
+    if (!rawOutputLogged) {
+        cudaStreamSynchronize(stream);
+
+        // Check first 20 raw values (should match Python)
+        std::vector<float> first20(20);
+        cudaMemcpy(first20.data(), d_rawOutputPtr, 20 * sizeof(float), cudaMemcpyDeviceToHost);
+        std::cout << "[DEBUG Raw Output] First 20 values: ";
+        for (int i = 0; i < 20; i++) {
+            std::cout << first20[i] << " ";
+        }
+        std::cout << std::endl;
+
+        // Find max class scores - output is [1, 6, 2100] in row-major = [channel][box]
+        std::vector<float> allOutput(6 * 2100);
+        cudaMemcpy(allOutput.data(), d_rawOutputPtr, 6 * 2100 * sizeof(float), cudaMemcpyDeviceToHost);
+
+        float maxClass0 = 0, maxClass1 = 0;
+        for (int i = 0; i < 2100; i++) {
+            float c0 = allOutput[4 * 2100 + i];  // Class 0 score at row 4
+            float c1 = allOutput[5 * 2100 + i];  // Class 1 score at row 5
+            if (c0 > maxClass0) maxClass0 = c0;
+            if (c1 > maxClass1) maxClass1 = c1;
+        }
+
+        std::cout << "[DEBUG Raw Output] Max class scores: class0=" << maxClass0
+                  << ", class1=" << maxClass1 << std::endl;
+        std::cout << "[DEBUG Raw Output] Output ptr=" << d_rawOutputPtr << std::endl;
+        rawOutputLogged = true;
+    }
+
+    // CRITICAL: Ensure inference is complete before decoding
+    cudaStreamSynchronize(stream);
+
     clearDetectionBuffers(m_postProcessConfig, stream);
-    
+
     cudaError_t decodeErr = decodeYoloOutput(d_rawOutputPtr, outputType, shape, m_postProcessConfig, stream);
     if (decodeErr != cudaSuccess) {
         std::cerr << "[Pipeline] GPU decoding failed: " << cudaGetErrorString(decodeErr) << std::endl;
         return;
     }
-    
+
     ensureFinalTargetAliases();
 }
 
@@ -2601,10 +2828,10 @@ bool UnifiedGraphPipeline::acquireFrameSync(FrameMetadata& outMetadata) {
     outMetadata.width = width;
     outMetadata.height = height;
 
-    // Update preview if enabled
-    if ((m_preview.enabled || ctx.config.global().show_window) && !m_captureBuffer.empty()) {
-        updatePreviewBuffer(m_captureBuffer);
-    }
+    // Preview disabled for headless 2PC mode
+    // if ((m_preview.enabled || ctx.config.global().show_window) && !m_captureBuffer.empty()) {
+    //     updatePreviewBuffer(m_captureBuffer);
+    // }
 
     return true;
 }
@@ -2621,6 +2848,45 @@ bool UnifiedGraphPipeline::performPreprocessing(cudaStream_t stream) {
     int modelRes = getModelInputResolution();
     bool use_fp16 = (m_inputDataType == nvinfer1::DataType::kHALF);
     cudaError_t err;
+
+    // CRITICAL: Ensure UDP data transfer is complete before preprocessing
+    cudaStreamSynchronize(stream);
+
+    // DEBUG: Save raw capture buffer before preprocessing (once)
+    static int rawSaveCount = 0;
+    if (rawSaveCount < 3) {
+        int w = m_captureBuffer.cols();
+        int h = m_captureBuffer.rows();
+        int ch = m_captureBuffer.channels();
+        size_t bufSize = w * h * ch;
+        std::vector<uint8_t> hostBuf(bufSize);
+        cudaMemcpy(hostBuf.data(), m_captureBuffer.data(), bufSize, cudaMemcpyDeviceToHost);
+
+        std::string filename = "debug_frames/raw_capture_" + std::to_string(rawSaveCount) + ".jpg";
+        stbi_write_jpg(filename.c_str(), w, h, ch, hostBuf.data(), 95);
+        std::cout << "[DEBUG] Saved raw capture: " << filename << " (" << w << "x" << h << "x" << ch << ")" << std::endl;
+        rawSaveCount++;
+    }
+
+    // DEBUG: Check preprocessing input once
+    static bool preprocessLogged = false;
+    if (!preprocessLogged) {
+        std::cout << "[DEBUG Preprocess] modelRes=" << modelRes
+                  << ", use_fp16=" << use_fp16
+                  << ", captureBuffer: " << m_captureBuffer.cols() << "x" << m_captureBuffer.rows()
+                  << "x" << m_captureBuffer.channels()
+                  << ", step=" << m_captureBuffer.step() << std::endl;
+
+        // Dump first few pixels from capture buffer
+        std::vector<uint8_t> sample(12);
+        cudaMemcpy(sample.data(), m_captureBuffer.data(), 12, cudaMemcpyDeviceToHost);
+        std::cout << "[DEBUG Preprocess] First 4 pixels (RGB): ";
+        for (int i = 0; i < 4; i++) {
+            std::cout << "(" << (int)sample[i*3] << "," << (int)sample[i*3+1] << "," << (int)sample[i*3+2] << ") ";
+        }
+        std::cout << std::endl;
+        preprocessLogged = true;
+    }
 
 #ifdef _WIN32
     // Windows: BGRA input from DDA capture
@@ -2647,6 +2913,20 @@ bool UnifiedGraphPipeline::performPreprocessing(cudaStream_t stream) {
         use_fp16,
         stream);
 #endif
+
+    // DEBUG: Check YOLO input after preprocessing
+    static bool yoloInputLogged = false;
+    if (!yoloInputLogged && err == cudaSuccess) {
+        cudaStreamSynchronize(stream);
+        std::vector<float> yoloSample(12);
+        cudaMemcpy(yoloSample.data(), m_unifiedArena.yoloInput, 12 * sizeof(float), cudaMemcpyDeviceToHost);
+        std::cout << "[DEBUG YOLO Input] First 12 values (CHW normalized): ";
+        for (int i = 0; i < 12; i++) {
+            std::cout << yoloSample[i] << " ";
+        }
+        std::cout << std::endl;
+        yoloInputLogged = true;
+    }
 
     if (err != cudaSuccess) {
         std::cerr << "[UnifiedGraph] Preprocessing failed: "
@@ -2729,6 +3009,18 @@ acquired:
 
         // Target selection (uses cached config via device buffers)
         performTargetSelection(execStream);
+
+        // Debug: Save frame with detections (rate limited to 1/sec)
+        {
+            int hostDecodedCount = 0;
+            if (m_smallBufferArena.decodedCount) {
+                cudaMemcpy(&hostDecodedCount, m_smallBufferArena.decodedCount, sizeof(int), cudaMemcpyDeviceToHost);
+            }
+            saveDebugFrame(m_captureBuffer,
+                          m_unifiedArena.decodedTargets, hostDecodedCount,
+                          m_smallBufferArena.bestTarget,
+                          execStream);
+        }
 
         // Copy mouse movement to host (if not using mapped memory)
         if (!m_mouseMovementUsesMappedMemory && m_h_movement && m_smallBufferArena.mouseMovement) {
@@ -3011,7 +3303,17 @@ bool UnifiedGraphPipeline::performInference(cudaStream_t stream) {
     if (!inputBinding) {
         return false;
     }
-    
+
+    // DEBUG: Log inference buffer info once
+    static bool inferenceLogged = false;
+    if (!inferenceLogged) {
+        std::cout << "[DEBUG Inference] yoloInput=" << m_unifiedArena.yoloInput
+                  << ", inputBinding=" << inputBinding
+                  << ", aliased=" << (inputBinding == m_unifiedArena.yoloInput)
+                  << ", primaryInputIndex=" << m_primaryInputIndex << std::endl;
+        inferenceLogged = true;
+    }
+
     // Aliasing should be set during initialization - no runtime retry.
     // If not aliased, copy is required (logged once during init).
     if (inputBinding != m_unifiedArena.yoloInput) {
@@ -3022,7 +3324,7 @@ bool UnifiedGraphPipeline::performInference(cudaStream_t stream) {
         // Successfully aliased - skip memcpy
         m_perfMetrics.memcpySkipCount++;
     }
-    
+
     if (!runInferenceAsync(stream)) {
         std::cerr << "[UnifiedGraph] TensorRT inference failed" << std::endl;
         return false;

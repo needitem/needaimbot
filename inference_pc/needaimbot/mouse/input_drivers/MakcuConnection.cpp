@@ -9,6 +9,13 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#else
+#include <dirent.h>
+#include <sys/ioctl.h>
+#include <linux/usbdevice_fs.h>
+#include <sched.h>
+#include <pthread.h>
+#include <unistd.h>
 #endif
 
 /* ---------- Makcu-specific constants ---------------------------- */
@@ -131,11 +138,11 @@ bool MakcuConnection::initializeMakcuConnection() {
         // Enable button state streaming (event-driven, only emits on button changes)
         // Reference: https://www.makcu.com/en/api#binary-protocol-format
         // ASCII: .buttons(mode, period_ms) - mode: 1=raw, 2=constructed
-        // Output: km.buttons<mask_u8>\r\n>>> where mask bits: 0=left, 1=right, 2=middle, 3=side1, 4=side2
-        // Note: "only emits on new frames" - sends data ONLY when button state changes (not polling)
+        // Use mode 2 (mut) = pure event-based, sends data ONLY when button state changes
+        // Output: km.<mask_u8>\r\n>>> where mask bits: 0=left, 1=right, 2=middle, 3=side1, 4=side2
         std::this_thread::sleep_for(std::chrono::milliseconds(100)); // Wait for device to be ready
-        write(".buttons(1,10)\r\n");
-        std::cout << "[Makcu] Button streaming enabled (event-driven)" << std::endl;
+        write("km.buttons(2,0)\r\n");
+        std::cout << "[Makcu] Button streaming enabled (pure event mode)" << std::endl;
 
         return true;
     } catch (const std::exception& e) {
@@ -326,22 +333,51 @@ bool MakcuConnection::waitForAsyncOperation(OVERLAPPED* overlapped, DWORD timeou
 #else
 // =========================== LINUX IMPLEMENTATION ===========================
 
-MakcuConnection::MakcuConnection(const std::string& port, unsigned int /*baud_rate*/)
+// Auto-detect Makcu device - prefer CH343 driver device over cdc_acm
+static std::string detectMakcuDevice() {
+    // Priority order: CH343 driver device > cdc_acm device
+    const char* candidates[] = {
+        "/dev/ttyCH343USB0",  // CH343 driver (proper full-duplex support)
+        "/dev/ttyCH343USB1",
+        "/dev/ttyACM0",       // cdc_acm (fallback, may have RX issues)
+        "/dev/ttyACM1",
+        nullptr
+    };
+
+    for (int i = 0; candidates[i] != nullptr; ++i) {
+        if (access(candidates[i], F_OK) == 0) {
+            return std::string(candidates[i]);
+        }
+    }
+    return "";
+}
+
+MakcuConnection::MakcuConnection(const std::string& port, unsigned int baud_rate)
     : aiming_active(false),
       shooting_active(false),
       zooming_active(false),
       serial_fd_(-1),
       is_open_(false),
       listening_(false),
-      port_name_(port)
+      port_name_(port),
+      baud_rate_(baud_rate)
 {
     memset(&tty_config_, 0, sizeof(tty_config_));
 
+    // Auto-detect Makcu device if port is empty or doesn't exist
+    if (port_name_.empty() || access(port_name_.c_str(), F_OK) != 0) {
+        std::string detected = detectMakcuDevice();
+        if (!detected.empty()) {
+            std::cout << "[Makcu] Auto-detected device: " << detected << std::endl;
+            port_name_ = detected;
+        }
+    }
+
     try {
         if (!initializeMakcuConnection()) {
-            throw std::runtime_error("Failed to initialize Makcu connection to " + port);
+            throw std::runtime_error("Failed to initialize Makcu connection to " + port_name_);
         }
-        std::cout << "[Makcu] Connected at 4Mbps! PORT: " << port
+        std::cout << "[Makcu] Connected at " << baud_rate_ << " baud! PORT: " << port_name_
                   << " (Linux termios)" << std::endl;
     } catch (const std::exception& e) {
         cleanup();
@@ -349,8 +385,75 @@ MakcuConnection::MakcuConnection(const std::string& port, unsigned int /*baud_ra
     }
 }
 
+// USB device reset (like unplugging and replugging)
+static bool resetUsbDevice(const std::string& ttyPath) {
+    // Get the USB device path from tty symlink
+    char linkPath[256];
+    char resolvedPath[PATH_MAX];
+    snprintf(linkPath, sizeof(linkPath), "/sys/class/tty/%s/device",
+             ttyPath.substr(ttyPath.rfind('/') + 1).c_str());
+
+    if (!realpath(linkPath, resolvedPath)) {
+        return false;
+    }
+
+    // Go up to USB device level (parent of interface)
+    std::string devicePath = resolvedPath;
+    size_t pos = devicePath.rfind('/');
+    if (pos != std::string::npos) {
+        devicePath = devicePath.substr(0, pos);
+    }
+
+    // Read bus and device numbers
+    std::string busnumPath = devicePath + "/busnum";
+    std::string devnumPath = devicePath + "/devnum";
+
+    FILE* f = fopen(busnumPath.c_str(), "r");
+    if (!f) return false;
+    int busnum;
+    fscanf(f, "%d", &busnum);
+    fclose(f);
+
+    f = fopen(devnumPath.c_str(), "r");
+    if (!f) return false;
+    int devnum;
+    fscanf(f, "%d", &devnum);
+    fclose(f);
+
+    // Open USB device and send reset ioctl
+    char usbPath[64];
+    snprintf(usbPath, sizeof(usbPath), "/dev/bus/usb/%03d/%03d", busnum, devnum);
+
+    int fd = open(usbPath, O_WRONLY | O_NONBLOCK);
+    if (fd < 0) {
+        // Don't print error, just skip reset silently
+        return false;
+    }
+
+    int rc = ioctl(fd, USBDEVFS_RESET, 0);
+    close(fd);
+
+    if (rc < 0) {
+        std::cerr << "[Makcu] USB reset ioctl failed" << std::endl;
+        return false;
+    }
+
+    std::cout << "[Makcu] USB device reset successful" << std::endl;
+    usleep(500000);  // Wait 500ms for device to re-enumerate
+    return true;
+}
+
 bool MakcuConnection::initializeMakcuConnection() {
-    // Step 1: Open at 115200 baud
+    // Check device exists
+    if (access(port_name_.c_str(), F_OK) != 0) {
+        std::cerr << "[Makcu] Device not found: " << port_name_ << std::endl;
+        return false;
+    }
+    std::cout << "[Makcu] Device found: " << port_name_ << std::endl;
+
+    // ========================================================================
+    // Step 1: Connect at boot baud rate (115200) and send baud change command
+    // ========================================================================
     serial_fd_ = open(port_name_.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
     if (serial_fd_ < 0) {
         std::cerr << "[Makcu] Unable to open port: " << port_name_
@@ -358,57 +461,111 @@ bool MakcuConnection::initializeMakcuConnection() {
         return false;
     }
 
+    // Configure at boot baud rate first
     if (!configurePort(BOOT_BAUD)) {
+        std::cerr << "[Makcu] Failed to configure at boot baud" << std::endl;
         closeHandle();
         return false;
     }
+    std::cout << "[Makcu] Opened at " << BOOT_BAUD << " baud (boot mode)" << std::endl;
 
-    // Step 2: Send baud change command
-    if (writeSerial(BAUD_CHANGE_CMD, sizeof(BAUD_CHANGE_CMD)) != sizeof(BAUD_CHANGE_CMD)) {
+    // Send baud change command
+    tcflush(serial_fd_, TCIOFLUSH);
+    ssize_t w = ::write(serial_fd_, BAUD_CHANGE_CMD, sizeof(BAUD_CHANGE_CMD));
+    if (w != sizeof(BAUD_CHANGE_CMD)) {
         std::cerr << "[Makcu] Failed to send baud change command" << std::endl;
         closeHandle();
         return false;
     }
-
-    // Flush and close
     tcdrain(serial_fd_);
+    std::cout << "[Makcu] Sent baud change command" << std::endl;
+
+    // Close and reopen at high speed
     close(serial_fd_);
     serial_fd_ = -1;
+    usleep(100000);  // 100ms for device to switch
 
-    // Wait for MCU reset
-    usleep(100000);  // 100ms
-
-    // Step 3: Reopen at 4Mbps
+    // ========================================================================
+    // Step 2: Reconnect at working baud rate (4Mbps)
+    // ========================================================================
     serial_fd_ = open(port_name_.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
     if (serial_fd_ < 0) {
         std::cerr << "[Makcu] Unable to reopen port at high speed" << std::endl;
         return false;
     }
 
+    // Set DTR/RTS
+    int modem_bits = TIOCM_DTR | TIOCM_RTS;
+    ioctl(serial_fd_, TIOCMSET, &modem_bits);
+    usleep(50000);  // 50ms
+    tcflush(serial_fd_, TCIOFLUSH);
+
     if (!configurePort(WORK_BAUD)) {
         closeHandle();
         return false;
     }
+    std::cout << "[Makcu] Configured port at " << WORK_BAUD << " baud (fast mode)" << std::endl;
 
-    // Flush buffers
+    // CRITICAL: Thoroughly flush any stale data from previous sessions
+    // This fixes the "intermittent connection" issue
     tcflush(serial_fd_, TCIOFLUSH);
+    usleep(100000);  // 100ms
+
+    // Drain any leftover data by reading until empty
+    char drain_buf[256];
+    int drain_count = 0;
+    while (drain_count < 10) {  // Max 10 attempts
+        ssize_t n = ::read(serial_fd_, drain_buf, sizeof(drain_buf));
+        if (n <= 0) break;
+        drain_count++;
+        usleep(10000);  // 10ms between reads
+    }
+    if (drain_count > 0) {
+        std::cout << "[Makcu] Drained " << drain_count << " stale buffer(s)" << std::endl;
+    }
+
+    tcflush(serial_fd_, TCIOFLUSH);
+    usleep(100000);  // Wait 100ms
+
+    // First, stop any existing streaming mode (from previous session)
+    const char* stop_stream = "km.buttons(0)\r";
+    ::write(serial_fd_, stop_stream, strlen(stop_stream));
+    tcdrain(serial_fd_);
+    usleep(100000);
+    tcflush(serial_fd_, TCIOFLUSH);
+
+    // Test communication with a simple command
+    const char* test_cmd = "km.move(0,0)\r\n";
+    ssize_t written = ::write(serial_fd_, test_cmd, strlen(test_cmd));
+    if (written < 0) {
+        std::cerr << "[Makcu] Write test failed: " << strerror(errno) << std::endl;
+        closeHandle();
+        return false;
+    }
+    tcdrain(serial_fd_);
+    usleep(50000);
+
+    // Read response to verify device is responding
+    char resp_buf[64];
+    ssize_t resp_len = ::read(serial_fd_, resp_buf, sizeof(resp_buf) - 1);
+    if (resp_len > 0) {
+        resp_buf[resp_len] = '\0';
+        std::cout << "[Makcu] Device responded: " << resp_len << " bytes" << std::endl;
+    } else {
+        std::cout << "[Makcu] Warning: No response to test command (may still work)" << std::endl;
+    }
+    tcflush(serial_fd_, TCIOFLUSH);
+
+    // Mark as open BEFORE starting listener thread
+    is_open_ = true;
 
     try {
         startListening();
-        is_open_ = true;
-
-        // Enable button state streaming (event-driven, only emits on button changes)
-        // Reference: https://www.makcu.com/en/api#binary-protocol-format
-        // ASCII: .buttons(mode, period_ms) - mode: 1=raw, 2=constructed
-        // Output: km.buttons<mask_u8>\r\n>>> where mask bits: 0=left, 1=right, 2=middle, 3=side1, 4=side2
-        // Note: "only emits on new frames" - sends data ONLY when button state changes (not polling)
-        usleep(100000); // Wait 100ms for device to be ready
-        write(".buttons(1,10)\r\n");
-        std::cout << "[Makcu] Button streaming enabled (event-driven)" << std::endl;
-
+        std::cout << "[Makcu] Button polling started (" << baud_rate_ << " baud)" << std::endl;
         return true;
     } catch (const std::exception& e) {
         std::cerr << "[Makcu] Failed to start listening thread: " << e.what() << std::endl;
+        is_open_ = false;
         closeHandle();
         return false;
     }
@@ -488,26 +645,15 @@ ssize_t MakcuConnection::readSerial(void* buffer, size_t size) {
 void MakcuConnection::cleanup() {
     listening_ = false;
 
+    // Stop button streaming before closing - prevents stale data on next connect
     if (is_open_ && serial_fd_ >= 0) {
-        std::cout << "[Makcu] Starting safe port closure..." << std::endl;
-
-        const char* left_release = "LR\n";
-        const char* right_release = "RR\n";
-        const char* neutral_pos = "M0,0\n";
-        const char* stop_cmd = "STOP\n";
-
-        writeSerial(left_release, strlen(left_release));
-        writeSerial(right_release, strlen(right_release));
-        writeSerial(neutral_pos, strlen(neutral_pos));
+        std::cout << "[Makcu] Stopping button streaming..." << std::endl;
+        const char* stop_stream = "km.buttons(0)\r";
+        ::write(serial_fd_, stop_stream, strlen(stop_stream));
         tcdrain(serial_fd_);
-
-        writeSerial(stop_cmd, strlen(stop_cmd));
-        tcdrain(serial_fd_);
-
-        usleep(50000);  // 50ms
+        usleep(50000);
+        tcflush(serial_fd_, TCIOFLUSH);
     }
-
-    closeHandle();
 
     if (listening_thread_.joinable()) {
         try {
@@ -516,6 +662,10 @@ void MakcuConnection::cleanup() {
             std::cerr << "[Makcu] Error joining listening thread: " << e.what() << std::endl;
         }
     }
+
+    // Close port properly for clean reconnection
+    closeHandle();
+    std::cout << "[Makcu] Cleanup complete" << std::endl;
 }
 
 void MakcuConnection::closeHandle() {
@@ -635,54 +785,103 @@ void MakcuConnection::startListening() {
 }
 
 void MakcuConnection::listeningThreadFunc() {
-    std::string buffer;
+    std::cout << "[Makcu] Button streaming thread started" << std::endl;
+
+    // Set high priority for this thread (Linux)
+#ifndef _WIN32
+    struct sched_param param;
+    param.sched_priority = sched_get_priority_max(SCHED_FIFO);
+    if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &param) != 0) {
+        nice(-10);
+    }
+#endif
+
+    // Enable streaming mode: km.buttons(1) - raw mode, NO period parameter!
+    // CRITICAL: Using period (e.g., km.buttons(1,10)) breaks streaming.
+    // The correct format is km.buttons(1)\r with ONLY mode parameter.
+    // Reference: EVENTURI project uses exactly this format.
+    const char* stream_cmd = "km.buttons(1)\r";
+    ::write(serial_fd_, stream_cmd, strlen(stream_cmd));
+    tcdrain(serial_fd_);
+    usleep(100000);  // 100ms for device to start streaming
+
+    // Drain the echo response
+    char drain_buf[128];
+    ::read(serial_fd_, drain_buf, sizeof(drain_buf));
+
+    std::cout << "[Makcu] Button streaming enabled (raw mode)" << std::endl;
+
+    char read_buf[256];
+    uint8_t last_mask = 0;
 
     while (listening_) {
-        if (!is_open_) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        if (!is_open_ || serial_fd_ < 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
         }
 
-        std::string data = read();
-        if (!data.empty()) {
-            buffer += data;
+        // Read incoming data - button events come as single bytes (mask value)
+        ssize_t n = ::read(serial_fd_, read_buf, sizeof(read_buf));
+        if (n > 0) {
+            // Process each byte - look for button mask values
+            for (ssize_t i = 0; i < n; i++) {
+                uint8_t byte = static_cast<uint8_t>(read_buf[i]);
 
-            size_t pos = 0;
-            while ((pos = buffer.find('\n')) != std::string::npos) {
-                std::string line = buffer.substr(0, pos);
-                buffer.erase(0, pos + 1);
+                // Skip printable ASCII chars (echo, prompt)
+                if (byte >= 0x20 && byte <= 0x7E) continue;
+                // Skip CR/LF
+                if (byte == 0x0D || byte == 0x0A) continue;
 
-                if (!line.empty()) {
-                    processIncomingLine(line);
+                // Valid button mask: 0x00-0x1F (5 buttons max)
+                if (byte <= 0x1F && byte != last_mask) {
+                    last_mask = byte;
+
+                    bool left = (byte & 0x01) != 0;
+                    bool right = (byte & 0x02) != 0;
+                    bool side2 = (byte & 0x10) != 0;
+
+                    // Update button states atomically
+                    shooting_active = left;
+                    aiming_active = right || side2;
                 }
             }
         } else {
-            std::this_thread::sleep_for(std::chrono::microseconds(25));
+            // No data, short sleep
+            std::this_thread::sleep_for(std::chrono::microseconds(500));
         }
     }
+
+    // Stop streaming on exit
+    const char* stop_cmd = "km.buttons(0)\r";
+    ::write(serial_fd_, stop_cmd, strlen(stop_cmd));
+    tcdrain(serial_fd_);
+
+    std::cout << "[Makcu] Button streaming stopped" << std::endl;
+}
+
+void MakcuConnection::processButtonMask(uint8_t mask) {
+    // Valid mask range: 0x00-0x1F (5 buttons max)
+    // If mask > 0x1F, it's a false positive (e.g., 'k'=0x6b from next "km.")
+    if (mask > 0x1F) {
+        return;  // Invalid mask, skip
+    }
+
+    // Mask bits: 0=left(0x01), 1=right(0x02), 2=middle(0x04), 3=side1(0x08), 4=side2(0x10)
+    bool left_pressed = (mask & 0x01) != 0;
+    bool right_pressed = (mask & 0x02) != 0;
+    bool side2_pressed = (mask & 0x10) != 0;
+
+    // Update button states for 2PC architecture:
+    // - aiming_active: RIGHT click OR SIDE2 (for aimbot trigger)
+    // - shooting_active: LEFT + RIGHT simultaneous (for no-recoil)
+    aiming_active = right_pressed || side2_pressed;
+    shooting_active = left_pressed && right_pressed;
 }
 
 void MakcuConnection::processIncomingLine(const std::string& line) {
-    // Parse Makcu button streaming frames (event-driven, only emits on button changes)
-    // Reference: https://www.makcu.com/en/api#binary-protocol-format
-    // Format: km.buttons<mask_u8>\r\n>>> (10 ASCII chars + 1 binary byte + "\r\n>>>")
-    // Mask bits: 0=left, 1=right, 2=middle, 3=side1, 4=side2
-    // Note: This is sent ONLY when button state changes (not continuous polling)
-
-    if (line.find("km.buttons") == 0 && line.length() >= 11) {
-        // Extract binary button mask (byte after "km.buttons" prefix)
-        uint8_t mask = static_cast<uint8_t>(line[10]);
-
-        // Parse button states from mask
-        bool left_pressed = (mask & 0x01) != 0;   // bit 0: left button
-        bool right_pressed = (mask & 0x02) != 0;  // bit 1: right button
-
-        // Update button states
-        // 2PC Architecture: Game PC physical buttons → Makcu device → Serial → Inference PC
-        shooting_active = left_pressed;   // Left button (LMB) for shooting
-        aiming_active = right_pressed;    // Right button (RMB) for aiming
-
-        // Note: zooming_active can be mapped to middle button if needed
-        // zooming_active = (mask & 0x04) != 0;  // bit 2: middle button
+    // Legacy parser - no longer used, keeping for reference
+    if (line.length() >= 4 && line[0] == 'k' && line[1] == 'm' && line[2] == '.') {
+        uint8_t mask = static_cast<uint8_t>(line[3]);
+        processButtonMask(mask);
     }
 }

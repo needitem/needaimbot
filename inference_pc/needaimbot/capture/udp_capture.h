@@ -44,17 +44,16 @@ typedef int SOCKET;
 #include <thread>
 #include <vector>
 
-// Packet header matching game_pc sender (fragmented, uncompressed)
+// Packet header matching game_pc sender (chunked BGRA)
 #pragma pack(push, 1)
 struct UDPPacketHeader {
-    uint32_t magic;           // 0x46524D45 = "FRME"
-    uint32_t frameId;
-    uint16_t width;
-    uint16_t height;
-    uint16_t packetIndex;     // Current packet index (0-based)
-    uint16_t totalPackets;    // Total number of packets for this frame
-    uint16_t dataSize;        // Data size in this packet
-};
+    uint32_t frameId;         // 4 bytes - 프레임 번호
+    uint16_t chunkIndex;      // 2 bytes - 청크 인덱스 (0부터)
+    uint16_t totalChunks;     // 2 bytes - 전체 청크 수
+    uint32_t chunkSize;       // 4 bytes - 이 청크의 데이터 크기
+    uint16_t frameWidth;      // 2 bytes - 프레임 너비
+    uint16_t frameHeight;     // 2 bytes - 프레임 높이
+};  // Total: 16 bytes
 #pragma pack(pop)
 
 class UDPCapture {

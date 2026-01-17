@@ -46,6 +46,7 @@ private:
 
     void startListening();
     void listeningThreadFunc();
+    void processButtonMask(uint8_t mask);
     void processIncomingLine(const std::string& line);
 
     bool initializeMakcuConnection();
@@ -81,6 +82,7 @@ private:
     std::thread listening_thread_;
     std::mutex write_mutex_;
     std::string port_name_;
+    unsigned int baud_rate_;
 };
 
 #endif // MAKCUCONNECTION_H

@@ -105,7 +105,7 @@ void from_json(const json& j, ProfileData& p) {
     GET_IF(deadband_exit_x);
     GET_IF(deadband_enter_y);
     GET_IF(deadband_exit_y);
-    GET_OBF(ai_model, "ai_module");
+    GET_IF(ai_model);
     GET_IF(confidence_threshold);
     GET_OBF(max_detections, "max_results");
     GET_IF(postprocess);

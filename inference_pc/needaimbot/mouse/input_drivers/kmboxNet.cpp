@@ -5,12 +5,16 @@
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
-#include <windows.h>
 #include <thread>
 #include <chrono>
 
+#ifdef _WIN32
+#include <windows.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#pragma comment(lib, "ws2_32.lib")
 
-SOCKET sockClientfd = 0;   
+SOCKET sockClientfd = 0;
 unsigned int xbox_mac = 0; 
 
 
@@ -387,5 +391,47 @@ int kmNet_lcd_color(unsigned short rgb565) {  return success; }
 int kmNet_lcd_picture_bottom(unsigned char* buff_128_80) {  return success; }
 int kmNet_lcd_picture(unsigned char* buff_128_160) {  return success; }
 
+#else // Linux - stub implementations (kmboxNet is Windows-only, use Makcu on Linux)
 
+int kmNet_init(char* ip, char* port, char* mac) { return err_creat_socket; }
+int kmNet_mouse_move(short x, short y) { return err_creat_socket; }
+int kmNet_enc_mouse_move(short x, short y) { return err_creat_socket; }
+int kmNet_mouse_left(int isdown) { return err_creat_socket; }
+int kmNet_enc_mouse_left(int isdown) { return err_creat_socket; }
+int kmNet_keydown(int vk_key) { return err_creat_socket; }
+int kmNet_keyup(int vk_key) { return err_creat_socket; }
+int kmNet_keypress(int vk_key, int ms) { return err_creat_socket; }
+int kmNet_reboot(void) { return err_creat_socket; }
+int kmNet_enc_reboot(void) { return err_creat_socket; }
+
+int kmNet_monitor(short port) { return success; }
+int kmNet_monitor_mouse_left(void) { return 1; }
+int kmNet_monitor_mouse_middle(void) { return 1; }
+int kmNet_monitor_mouse_right(void) { return 1; }
+int kmNet_monitor_mouse_side1(void) { return 1; }
+int kmNet_monitor_mouse_side2(void) { return 1; }
+int kmNet_monitor_mouse_xy(int* x, int* y) { *x = 0; *y = 0; return 1; }
+int kmNet_monitor_mouse_wheel(int* wheel) { *wheel = 0; return 1; }
+int kmNet_monitor_keyboard(short vkey) { return 1; }
+
+int kmNet_mask_mouse_left(int enable) { return success; }
+int kmNet_mask_mouse_right(int enable) { return success; }
+int kmNet_mask_mouse_middle(int enable) { return success; }
+int kmNet_mask_mouse_side1(int enable) { return success; }
+int kmNet_mask_mouse_side2(int enable) { return success; }
+int kmNet_mask_mouse_x(int enable) { return success; }
+int kmNet_mask_mouse_y(int enable) { return success; }
+int kmNet_mask_mouse_wheel(int enable) { return success; }
+int kmNet_mask_keyboard(short vkey) { return success; }
+int kmNet_unmask_keyboard(short vkey) { return success; }
+int kmNet_unmask_all(void) { return success; }
+
+int kmNet_setconfig(char* ip, unsigned short port) { return success; }
+int kmNet_setvidpid(unsigned short vid, unsigned short pid) { return success; }
+int kmNet_debug(short port, char enable) { return success; }
+int kmNet_lcd_color(unsigned short rgb565) { return success; }
+int kmNet_lcd_picture_bottom(unsigned char* buff_128_80) { return success; }
+int kmNet_lcd_picture(unsigned char* buff_128_160) { return success; }
+
+#endif // _WIN32
 

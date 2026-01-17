@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <algorithm>
 #include <set>
+#include <sys/stat.h>
 
 #include "other_tools.h"
 #include "config.h"

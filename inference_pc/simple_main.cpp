@@ -67,6 +67,10 @@ struct Config {
     // Mouse rate limiting
     int mouseMinIntervalMs = 1;
 
+    // Shoot capture offset (applied when aiming+shooting)
+    float shootOffsetX = 0.0f;
+    float shootOffsetY = -13.0f;
+
     // Makcu settings
     int makcuBaudrate = 4000000;
 
@@ -121,6 +125,9 @@ struct Config {
 
             if (j.contains("mouse_min_interval_ms")) mouseMinIntervalMs = j["mouse_min_interval_ms"];
             if (j.contains("makcu_baudrate")) makcuBaudrate = j["makcu_baudrate"];
+
+            if (j.contains("shoot_offset_x")) shootOffsetX = j["shoot_offset_x"];
+            if (j.contains("shoot_offset_y")) shootOffsetY = j["shoot_offset_y"];
 
             return true;
         } catch (const std::exception& e) {
@@ -207,18 +214,34 @@ int main(int argc, char* argv[]) {
     std::cout << "[Simple] Left+Right = AIM + NO-RECOIL" << std::endl;
 
     // 5. Main loop
+    int loopCount = 0;
+    int frameRecvCount = 0;
     while (g_running) {
+        loopCount++;
+
         // Wait for frame
         void* rgbData = nullptr;
         unsigned int width = 0, height = 0;
         uint64_t frameId = 0;
 
+        // Stats every second (even without frames)
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastStatTime).count();
+        if (elapsed >= 1000) {
+            std::cout << "\r[Simple] Recv: " << frameRecvCount
+                      << " | FPS: " << std::fixed << std::setprecision(1) << (frameCount * 1000.0f / elapsed)
+                      << " | Aim: " << (makcu.aiming_active ? "ON " : "OFF")
+                      << " | Shoot: " << (makcu.shooting_active ? "ON " : "OFF")
+                      << "    " << std::flush;
+            frameCount = 0;
+            lastStatTime = now;
+        }
+
         if (!udpCapture.AcquireFrameSync(&rgbData, &width, &height, &frameId, 16)) {
-            // No frame, handle recoil if active
-            if (cfg.noRecoilEnabled && makcu.shooting_active) {
-                auto now = std::chrono::steady_clock::now();
-                auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastRecoilTime).count();
-                if (elapsed >= cfg.recoilTickMs) {
+            // No frame, handle recoil if active (left+right click)
+            if (cfg.noRecoilEnabled && makcu.shooting_active && makcu.aiming_active) {
+                auto recoilElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastRecoilTime).count();
+                if (recoilElapsed >= cfg.recoilTickMs) {
                     int recoilX = static_cast<int>(cfg.recoilCompX);
                     int recoilY = static_cast<int>(cfg.recoilCompY);
                     if (recoilX != 0 || recoilY != 0) {
@@ -234,19 +257,14 @@ int main(int argc, char* argv[]) {
             continue;
         }
 
-        // Debug: print frame size once
-        static bool printedSize = false;
-        if (!printedSize) {
-            std::cout << "[Simple] First frame: " << width << "x" << height << std::endl;
-            printedSize = true;
-        }
+        frameRecvCount++;
 
         // Check button state
         bool aiming = makcu.aiming_active;
         bool shooting = makcu.shooting_active;
 
-        // No-recoil compensation (runs every tick while shooting)
-        if (cfg.noRecoilEnabled && shooting) {
+        // No-recoil compensation (runs every tick while left+right click)
+        if (cfg.noRecoilEnabled && shooting && aiming) {
             auto now = std::chrono::steady_clock::now();
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastRecoilTime).count();
             if (elapsed >= cfg.recoilTickMs) {
@@ -282,29 +300,16 @@ int main(int argc, char* argv[]) {
             int moveX = mouseMovement.dx;
             int moveY = mouseMovement.dy;
 
-            // Rate-limited mouse move
-            if (moveX != 0 || moveY != 0) {
-                auto now = std::chrono::steady_clock::now();
-                auto mouseElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastMouseTime).count();
-                if (mouseElapsed >= cfg.mouseMinIntervalMs) {
-                    makcu.move(moveX, moveY);
-                    lastMouseTime = now;
-                }
+            // Apply shoot offset when aiming+shooting (shifts aim point)
+            if (shooting) {
+                moveX += static_cast<int>(cfg.shootOffsetX);
+                moveY += static_cast<int>(cfg.shootOffsetY);
             }
-        }
 
-        // Stats every second
-        auto now = std::chrono::steady_clock::now();
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastStatTime).count();
-        if (elapsed >= 1000) {
-            float fps = frameCount * 1000.0f / elapsed;
-            std::cout << "\r[Simple] FPS: " << std::fixed << std::setprecision(1) << fps
-                      << " | Target: " << (hasTarget ? "YES" : "NO ")
-                      << " | Aim: " << (aiming ? "ON " : "OFF")
-                      << " | Shoot: " << (shooting ? "ON " : "OFF")
-                      << "    " << std::flush;
-            frameCount = 0;
-            lastStatTime = now;
+            // Send mouse move immediately (no rate limiting)
+            if (moveX != 0 || moveY != 0) {
+                makcu.move(moveX, moveY);
+            }
         }
     }
 

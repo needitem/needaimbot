@@ -30,7 +30,7 @@ struct ExportConfig {
     bool enable_tf32 = true;           // TF32 (Ampere+)
     bool enable_sparse_weights = true;  // 희소 가중치 최적화
     bool enable_direct_io = true;       // Direct I/O
-    bool enable_refit = true;           // Refit 가능 엔진
+    bool enable_refit = false;          // Refit 가능 엔진 (dynamic shapes와 호환되지 않음)
     bool disable_timing_cache = false;   // 타이밍 캐시 사용 (빌드 느림, 성능↑)
     int optimization_level = 5;         // 최적화 레벨 (1-5)
     

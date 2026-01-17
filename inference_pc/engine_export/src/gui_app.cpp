@@ -181,9 +181,9 @@ void GuiApp::renderFileSelection() {
     if (ImGui::Button("Browse##Input")) {
         std::string path;
         if (openFileDialog(path, "ONNX Files\0*.onnx\0All Files\0*.*\0")) {
-            strncpy_s(m_inputPath, path.c_str(), sizeof(m_inputPath) - 1);
+            strncpy(m_inputPath, path.c_str(), sizeof(m_inputPath) - 1); m_inputPath[sizeof(m_inputPath) - 1] = 0;
             std::string outputPath = generateOutputPath();
-            strncpy_s(m_outputPath, outputPath.c_str(), sizeof(m_outputPath) - 1);
+            strncpy(m_outputPath, outputPath.c_str(), sizeof(m_outputPath) - 1); m_outputPath[sizeof(m_outputPath) - 1] = 0;
         }
     }
 
@@ -198,7 +198,7 @@ void GuiApp::renderFileSelection() {
     if (ImGui::Button("Browse##Output")) {
         std::string path;
         if (saveFileDialog(path, "Engine Files\0*.engine\0All Files\0*.*\0")) {
-            strncpy_s(m_outputPath, path.c_str(), sizeof(m_outputPath) - 1);
+            strncpy(m_outputPath, path.c_str(), sizeof(m_outputPath) - 1); m_outputPath[sizeof(m_outputPath) - 1] = 0;
         }
     }
 }
@@ -223,7 +223,7 @@ void GuiApp::renderExportOptions() {
         m_resolution = resolution_values[current_resolution_index];
         if (strlen(m_inputPath) > 0) {
             std::string outputPath = generateOutputPath();
-            strncpy_s(m_outputPath, outputPath.c_str(), sizeof(m_outputPath) - 1);
+            strncpy(m_outputPath, outputPath.c_str(), sizeof(m_outputPath) - 1); m_outputPath[sizeof(m_outputPath) - 1] = 0;
         }
     }
 
@@ -871,7 +871,7 @@ void GuiApp::renderAddPluginDialog() {
         if (ImGui::Button("Browse##Plugin")) {
             std::string path;
             if (openFileDialog(path, "Dynamic Libraries\0*.dll;*.so;*.dylib\0All Files\0*.*\0")) {
-                strncpy_s(m_newPluginPath, path.c_str(), sizeof(m_newPluginPath) - 1);
+                strncpy(m_newPluginPath, path.c_str(), sizeof(m_newPluginPath) - 1); m_newPluginPath[sizeof(m_newPluginPath) - 1] = 0;
             }
         }
         helpMarker("Path to the plugin library file (.dll, .so, or .dylib)");

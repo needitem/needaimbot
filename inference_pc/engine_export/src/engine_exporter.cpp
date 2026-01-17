@@ -175,13 +175,13 @@ void EngineExporter::setupBuilderConfig() {
     }
     
     if (m_config.enable_fp8) {
-        // FP8 support check - may not be available in all TensorRT versions
-        try {
-            m_builderConfig->setFlag(nvinfer1::BuilderFlag::kFP8);
-            std::cout << "  FP8 precision: Enabled\n";
-        } catch (...) {
-            std::cout << "  FP8 precision: Requested but not supported in this TensorRT version\n";
-        }
+        // FP8 support check - only available in TensorRT 10+
+#if NV_TENSORRT_MAJOR >= 10
+        m_builderConfig->setFlag(nvinfer1::BuilderFlag::kFP8);
+        std::cout << "  FP8 precision: Enabled\n";
+#else
+        std::cout << "  FP8 precision: Not supported in TensorRT " << NV_TENSORRT_MAJOR << ".x (requires 10+)\n";
+#endif
     }
     
     // ========== 에임봇 최고 속도 최적화 플래그 ==========
@@ -252,7 +252,9 @@ void EngineExporter::setupBuilderConfig() {
     if (m_config.disable_timing_cache) {
         m_builderConfig->setFlag(nvinfer1::BuilderFlag::kDISABLE_TIMING_CACHE);
     }
+#if NV_TENSORRT_MAJOR >= 10
     m_builderConfig->setBuilderOptimizationLevel(m_config.optimization_level);
+#endif
     
     // 3. 커널 선택 최적화
     if (m_config.enable_tf32 && m_builder->platformHasTf32()) {
