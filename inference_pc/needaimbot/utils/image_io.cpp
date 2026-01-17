@@ -57,7 +57,11 @@ void saveScreenshot(const SimpleMat& frame, const std::string& directory) {
     auto now = std::chrono::system_clock::now();
     auto time_point = std::chrono::system_clock::to_time_t(now);
     struct tm tm;
+#ifdef _WIN32
     localtime_s(&tm, &time_point);
+#else
+    localtime_r(&time_point, &tm);
+#endif
     
     std::ostringstream oss;
     oss << directory << "/screenshot_"

@@ -193,6 +193,19 @@ cd game_pc
 *   Disable energy-saving features on network adapters
 *   Use `TargetFPS` to balance between latency and network load
 
+## Makcu USB Setup (Linux/Jetson)
+
+For reliable Makcu connection on Linux, you need to set up udev rules for USB reset permissions:
+
+```bash
+# Create udev rule for Makcu USB access
+echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="1a86", MODE="0666"' | sudo tee /etc/udev/rules.d/99-makcu.rules
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+```
+
+This allows the application to perform USB device resets automatically, eliminating the need to physically unplug/replug the device between runs.
+
 ## Troubleshooting
 
 ### Game PC Issues

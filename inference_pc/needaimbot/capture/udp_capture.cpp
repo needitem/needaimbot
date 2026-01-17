@@ -157,7 +157,7 @@ void UDPCapture::StopCapture() {
 }
 
 void UDPCapture::receiveThread() {
-    std::vector<uint8_t> recvBuffer(2048);  // Max packet size
+    std::vector<uint8_t> recvBuffer(65536);  // Max UDP packet size (up to 60KB chunks)
     sockaddr_in fromAddr;
 #ifdef _WIN32
     int fromLen = sizeof(fromAddr);
@@ -166,6 +166,7 @@ void UDPCapture::receiveThread() {
 #endif
 
     while (m_running.load()) {
+        fromLen = sizeof(fromAddr);
         int ret = recvfrom(m_recvSocket, (char*)recvBuffer.data(),
                           (int)recvBuffer.size(), 0,
                           (SOCKADDR*)&fromAddr, &fromLen);
@@ -207,28 +208,24 @@ void UDPCapture::receiveThread() {
             std::cout << "[UDPCapture] Detected game PC at " << ipStr << "\n";
         }
 
-        // Parse header
+        // Parse header (new format: 16 bytes)
         if (ret < (int)sizeof(UDPPacketHeader)) {
             continue;  // Too small
         }
 
         const UDPPacketHeader* header = (const UDPPacketHeader*)recvBuffer.data();
 
-        // Validate magic
-        if (header->magic != 0x46524D45) {  // "FRME"
-            continue;  // Invalid packet
-        }
-
-        // Check data size
+        // Validate chunk size matches received data
         size_t expectedPayload = ret - sizeof(UDPPacketHeader);
-        if (header->dataSize != expectedPayload) {
+        if (header->chunkSize != expectedPayload) {
             continue;  // Size mismatch
         }
 
         const uint8_t* payload = recvBuffer.data() + sizeof(UDPPacketHeader);
         uint32_t frameId = header->frameId;
-        uint16_t packetIndex = header->packetIndex;
-        uint16_t totalPackets = header->totalPackets;
+        uint16_t chunkIndex = header->chunkIndex;
+        uint16_t totalChunks = header->totalChunks;
+        uint32_t chunkSize = header->chunkSize;
 
         // Assemble fragments
         {
@@ -238,40 +235,50 @@ void UDPCapture::receiveThread() {
             auto& frag = m_fragmentMap[frameId];
 
             // Initialize if first packet of this frame
+            // BGRA format: width * height * 4 bytes
             if (frag.totalPackets == 0) {
-                size_t frameSize = header->width * header->height * 3;
+                size_t frameSize = header->frameWidth * header->frameHeight * 4;  // BGRA
                 frag.data.resize(frameSize);
-                frag.received.resize(totalPackets, false);
-                frag.totalPackets = totalPackets;
+                frag.received.resize(totalChunks, false);
+                frag.totalPackets = totalChunks;
                 frag.receivedCount = 0;
-                frag.width = header->width;
-                frag.height = header->height;
+                frag.width = header->frameWidth;
+                frag.height = header->frameHeight;
             }
 
             frag.lastUpdate = std::chrono::steady_clock::now();
 
-            // Store packet data if not already received
-            if (packetIndex < frag.received.size() && !frag.received[packetIndex]) {
-                size_t offset = packetIndex * 1400;  // Max payload per packet
-                size_t copySize = std::min((size_t)header->dataSize, frag.data.size() - offset);
+            // Store chunk data if not already received
+            if (chunkIndex < frag.received.size() && !frag.received[chunkIndex]) {
+                // Calculate offset: each chunk can be up to 60000 bytes
+                size_t offset = chunkIndex * 60000;
+                size_t copySize = std::min((size_t)chunkSize, frag.data.size() - offset);
                 memcpy(frag.data.data() + offset, payload, copySize);
-                frag.received[packetIndex] = true;
+                frag.received[chunkIndex] = true;
                 frag.receivedCount++;
             }
 
             // Check if frame is complete
             if (frag.receivedCount == frag.totalPackets) {
-                // Frame complete! Move to output buffer
+                // Frame complete! Convert BGRA to RGB and move to output buffer
                 {
                     std::lock_guard<std::mutex> bufLock(m_bufferMutex);
 
-                    // Resize buffer if needed
-                    if (m_frameBuffer[m_writeBuffer].size() != frag.data.size()) {
-                        m_frameBuffer[m_writeBuffer].resize(frag.data.size());
+                    // Output is RGB (3 bytes per pixel)
+                    size_t rgbSize = frag.width * frag.height * 3;
+                    if (m_frameBuffer[m_writeBuffer].size() != rgbSize) {
+                        m_frameBuffer[m_writeBuffer].resize(rgbSize);
                     }
 
-                    // Copy data
-                    memcpy(m_frameBuffer[m_writeBuffer].data(), frag.data.data(), frag.data.size());
+                    // Convert BGRA to RGB
+                    const uint8_t* src = frag.data.data();
+                    uint8_t* dst = m_frameBuffer[m_writeBuffer].data();
+                    size_t pixelCount = frag.width * frag.height;
+                    for (size_t i = 0; i < pixelCount; i++) {
+                        dst[i * 3 + 0] = src[i * 4 + 2];  // R = B
+                        dst[i * 3 + 1] = src[i * 4 + 1];  // G = G
+                        dst[i * 3 + 2] = src[i * 4 + 0];  // B = R
+                    }
 
                     // Swap buffers
                     std::swap(m_writeBuffer, m_readBuffer);
