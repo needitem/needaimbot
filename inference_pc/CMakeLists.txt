@@ -92,6 +92,7 @@ set(CUDA_SOURCES
     needaimbot/cuda/preprocessing.cu
     needaimbot/cuda/detection/postProcessGpu.cu
     needaimbot/cuda/detection/cuda_float_processing.cu
+    needaimbot/cuda/simple_inference.cu
 )
 
 # =============================================================================
@@ -383,4 +384,81 @@ if(BUILD_ENGINE_EXPORT)
     if(BUILD_ENGINE_EXPORT)
         add_subdirectory(engine_export)
     endif()
+endif()
+
+# =============================================================================
+# Simple Aimbot (clean implementation with GPU preprocessing)
+# =============================================================================
+if(NOT WIN32)
+    add_executable(simple_inference
+        simple_main.cpp
+        needaimbot/cuda/simple_inference.cu
+        needaimbot/cuda/simple_postprocess.cu
+        needaimbot/cuda/preprocessing.cu
+        needaimbot/capture/udp_capture.cpp
+        needaimbot/capture/lz4.c
+        needaimbot/mouse/input_drivers/MakcuConnection.cpp
+    )
+
+    target_include_directories(simple_inference PRIVATE
+        ${CMAKE_SOURCE_DIR}/needaimbot
+        ${CMAKE_SOURCE_DIR}/needaimbot/include
+        ${CMAKE_SOURCE_DIR}/needaimbot/capture
+        ${CMAKE_SOURCE_DIR}/needaimbot/cuda
+        ${CMAKE_SOURCE_DIR}/needaimbot/mouse/input_drivers
+        ${CMAKE_SOURCE_DIR}/needaimbot/modules
+        ${CUDA_PATH}/include
+        ${TENSORRT_INCLUDE_DIR}
+    )
+
+    target_link_directories(simple_inference PRIVATE
+        ${TENSORRT_LIB_DIR}
+        ${CUDA_PATH}/lib64
+    )
+
+    target_link_libraries(simple_inference PRIVATE
+        nvinfer
+        CUDA::cudart
+        CUDA::cuda_driver
+        pthread
+    )
+
+    target_compile_definitions(simple_inference PRIVATE
+        NOMINMAX
+    )
+
+    set_target_properties(simple_inference PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/Release"
+    )
+
+    # Test simple inference with static image
+    add_executable(test_simple_inference
+        test_simple_inference.cpp
+        needaimbot/cuda/simple_inference.cu
+        needaimbot/cuda/simple_postprocess.cu
+        needaimbot/cuda/preprocessing.cu
+    )
+
+    target_include_directories(test_simple_inference PRIVATE
+        ${CMAKE_SOURCE_DIR}/needaimbot
+        ${CMAKE_SOURCE_DIR}/needaimbot/modules
+        ${CUDA_PATH}/include
+        ${TENSORRT_INCLUDE_DIR}
+    )
+
+    target_link_directories(test_simple_inference PRIVATE
+        ${TENSORRT_LIB_DIR}
+        ${CUDA_PATH}/lib64
+    )
+
+    target_link_libraries(test_simple_inference PRIVATE
+        nvinfer
+        CUDA::cudart
+        CUDA::cuda_driver
+    )
+
+    set_target_properties(test_simple_inference PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/Release"
+        CUDA_SEPARABLE_COMPILATION ON
+    )
 endif()
