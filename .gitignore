@@ -53,3 +53,7 @@ inference_pc/engine_export/imgui/examples/
 *.engine
 inference_pc/build_linux/
 *.onnx
+*.pt
+debug_frames/
+test_*.py
+inference_pc/test_*
