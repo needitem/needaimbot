@@ -140,18 +140,13 @@ public:
             return false;
         }
 
-        // BGRA -> RGB
-        outData.resize(w * h * 3);
+        // BGRA 그대로 복사 (inference_pc에서 RGB로 변환)
+        outData.resize(w * h * 4);
         uint8_t* dst = outData.data();
         for (int row = 0; row < h; ++row) {
             const uint8_t* src = (const uint8_t*)mapped.pData + row * mapped.RowPitch;
-            for (int col = 0; col < w; ++col) {
-                dst[0] = src[2];  // R
-                dst[1] = src[1];  // G
-                dst[2] = src[0];  // B
-                dst += 3;
-                src += 4;
-            }
+            memcpy(dst, src, w * 4);
+            dst += w * 4;
         }
 
         m_context->Unmap(m_staging.Get(), 0);
@@ -174,17 +169,16 @@ private:
     int m_stagingHeight = 0;
 };
 
-// UDP Packet header (fragmented, uncompressed)
+// UDP Packet header - matches inference_pc UDPPacketHeader (16 bytes)
 #pragma pack(push, 1)
-struct PacketHeader {
-    uint32_t magic;           // 0x46524D45 = "FRME"
-    uint32_t frameId;
-    uint16_t width;
-    uint16_t height;
-    uint16_t packetIndex;     // Current packet index (0-based)
-    uint16_t totalPackets;    // Total number of packets for this frame
-    uint16_t dataSize;        // Data size in this packet
-};
+struct UDPPacketHeader {
+    uint32_t frameId;         // 4 bytes - 프레임 번호
+    uint16_t chunkIndex;      // 2 bytes - 청크 인덱스 (0부터)
+    uint16_t totalChunks;     // 2 bytes - 전체 청크 수
+    uint32_t chunkSize;       // 4 bytes - 이 청크의 데이터 크기
+    uint16_t frameWidth;      // 2 bytes - 프레임 너비
+    uint16_t frameHeight;     // 2 bytes - 프레임 높이
+};  // Total: 16 bytes
 #pragma pack(pop)
 
 void printUsage(const char* prog) {
@@ -275,9 +269,20 @@ bool parseArgs(int argc, char** argv) {
     return true;
 }
 
+std::string getExeDirectory(const char* argv0) {
+    std::string path(argv0);
+    size_t pos = path.find_last_of("\\/");
+    if (pos != std::string::npos) {
+        return path.substr(0, pos + 1);
+    }
+    return "";
+}
+
 int main(int argc, char** argv) {
-    // Load config from file first
-    loadConfig("config.ini");
+    // Load config from exe directory
+    std::string exeDir = getExeDirectory(argv[0]);
+    std::string configPath = exeDir + "config.ini";
+    loadConfig(configPath.c_str());
 
     // Command line args override config file
     if (!parseArgs(argc, argv)) {
@@ -329,14 +334,14 @@ int main(int argc, char** argv) {
     destAddr.sin_port = htons(g_config.sendPort);
     inet_pton(AF_INET, g_config.inferenceIP.c_str(), &destAddr.sin_addr);
 
-    std::cout << "GamePC Streamer (Fragmented, Uncompressed) started\n";
+    std::cout << "GamePC Streamer (BGRA, 60KB chunks) started\n";
     std::cout << "Sending to: " << g_config.inferenceIP << ":" << g_config.sendPort << "\n";
     std::cout << "Press Ctrl+C to exit\n\n";
 
     // Buffers
     std::vector<uint8_t> frameData;
-    const size_t maxPayloadPerPacket = 1400;  // Safe MTU size
-    std::vector<uint8_t> packetBuffer(sizeof(PacketHeader) + maxPayloadPerPacket);
+    const size_t maxPayloadPerPacket = 60000;  // 큰 청크 (LAN 환경)
+    std::vector<uint8_t> packetBuffer(sizeof(UDPPacketHeader) + maxPayloadPerPacket);
 
     uint32_t frameId = 0;
     uint64_t totalFrames = 0;
@@ -366,25 +371,24 @@ int main(int argc, char** argv) {
         for (uint16_t i = 0; i < totalPackets; i++) {
             size_t offset = i * maxPayloadPerPacket;
             size_t remaining = frameSize - offset;
-            uint16_t payloadSize = (uint16_t)std::min(remaining, maxPayloadPerPacket);
+            uint32_t payloadSize = (uint32_t)std::min(remaining, maxPayloadPerPacket);
 
-            // Prepare packet header
-            PacketHeader* header = (PacketHeader*)packetBuffer.data();
-            header->magic = 0x46524D45;  // "FRME"
+            // Prepare packet header (matches inference_pc UDPPacketHeader)
+            UDPPacketHeader* header = (UDPPacketHeader*)packetBuffer.data();
             header->frameId = frameId;
-            header->width = (uint16_t)g_config.captureWidth;
-            header->height = (uint16_t)g_config.captureHeight;
-            header->packetIndex = i;
-            header->totalPackets = totalPackets;
-            header->dataSize = payloadSize;
+            header->chunkIndex = i;
+            header->totalChunks = totalPackets;
+            header->chunkSize = payloadSize;
+            header->frameWidth = (uint16_t)g_config.captureWidth;
+            header->frameHeight = (uint16_t)g_config.captureHeight;
 
             // Copy payload
-            memcpy(packetBuffer.data() + sizeof(PacketHeader),
+            memcpy(packetBuffer.data() + sizeof(UDPPacketHeader),
                    frameData.data() + offset,
                    payloadSize);
 
             // Send packet
-            int packetSize = (int)(sizeof(PacketHeader) + payloadSize);
+            int packetSize = (int)(sizeof(UDPPacketHeader) + payloadSize);
             sendto(sendSock, (char*)packetBuffer.data(), packetSize, 0,
                    (SOCKADDR*)&destAddr, sizeof(destAddr));
         }
