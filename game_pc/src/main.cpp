@@ -351,10 +351,21 @@ int main(int argc, char** argv) {
     // Timing stats
     double totalCaptureMs = 0, totalSendMs = 0;
 
+    // FPS limiting
+    const double frameIntervalUs = 1000000.0 / g_config.targetFPS;
+    auto nextFrameTime = std::chrono::steady_clock::now();
+
     // Wait up to 2 frame times for next frame
     const int captureTimeoutMs = 2000 / g_config.targetFPS;
 
     while (g_running.load()) {
+        // FPS limiting - wait until next frame time
+        auto now = std::chrono::steady_clock::now();
+        if (now < nextFrameTime) {
+            std::this_thread::sleep_until(nextFrameTime);
+        }
+        nextFrameTime = std::chrono::steady_clock::now() + std::chrono::microseconds((int64_t)frameIntervalUs);
+
         // Capture frame (blocks until new frame or timeout)
         auto t1 = std::chrono::high_resolution_clock::now();
         if (!capture.CaptureFrame(frameData, g_config.captureX, g_config.captureY,
