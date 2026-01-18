@@ -40,6 +40,11 @@ struct Config {
     float confThreshold = 0.35f;
     int headClassId = 1;      // Head class for headshot priority
     float headBonus = 0.15f;  // Bonus confidence for head shots
+    int maxDetections = 100;  // Maximum detections per frame
+
+    // Class filtering (max 32 classes)
+    std::vector<bool> classAllowed;  // Which classes to target
+    int maxClasses = 32;
 
     // Aiming (0 = top, 1 = bottom of bbox)
     float headAimPoint = 1.0f;   // Head: aim at bottom (neck area)
@@ -103,6 +108,7 @@ struct Config {
             if (j.contains("conf_threshold")) confThreshold = j["conf_threshold"];
             if (j.contains("head_class_id")) headClassId = j["head_class_id"];
             if (j.contains("head_bonus")) headBonus = j["head_bonus"];
+            if (j.contains("max_detections")) maxDetections = j["max_detections"];
 
             if (j.contains("head_aim_point")) headAimPoint = j["head_aim_point"];
             if (j.contains("body_aim_point")) bodyAimPoint = j["body_aim_point"];
@@ -129,6 +135,32 @@ struct Config {
             if (j.contains("shoot_offset_x")) shootOffsetX = j["shoot_offset_x"];
             if (j.contains("shoot_offset_y")) shootOffsetY = j["shoot_offset_y"];
 
+            // Class filtering - either "allowed_classes": [0, 1, 7] or detailed class_settings
+            classAllowed.resize(maxClasses, true);  // Default: all classes allowed
+
+            if (j.contains("allowed_classes")) {
+                // Simple format: list of allowed class IDs
+                std::fill(classAllowed.begin(), classAllowed.end(), false);
+                for (const auto& cls : j["allowed_classes"]) {
+                    int id = cls.get<int>();
+                    if (id >= 0 && id < maxClasses) {
+                        classAllowed[id] = true;
+                    }
+                }
+            } else if (j.contains("class_settings")) {
+                // Detailed format: array of {id, name, allow}
+                std::fill(classAllowed.begin(), classAllowed.end(), false);
+                for (const auto& cs : j["class_settings"]) {
+                    if (cs.contains("id") && cs.contains("allow")) {
+                        int id = cs["id"].get<int>();
+                        bool allow = cs["allow"].get<bool>();
+                        if (id >= 0 && id < maxClasses) {
+                            classAllowed[id] = allow;
+                        }
+                    }
+                }
+            }
+
             return true;
         } catch (const std::exception& e) {
             std::cerr << "[Config] Error parsing: " << e.what() << std::endl;
@@ -144,8 +176,31 @@ struct Config {
         std::cout << "[Config] PID: Kp(" << pidKpX << "," << pidKpY << ") Ki(" << pidKiX << "," << pidKiY
                   << ") Kd(" << pidKdX << "," << pidKdY << ")" << std::endl;
         std::cout << "[Config] IoU stickiness: " << iouStickinessThreshold << std::endl;
+        std::cout << "[Config] Max detections: " << maxDetections << std::endl;
         std::cout << "[Config] No-recoil: " << (noRecoilEnabled ? "ON" : "OFF")
                   << " (Y=" << recoilCompY << ", tick=" << recoilTickMs << "ms)" << std::endl;
+
+        // Print allowed classes
+        std::cout << "[Config] Allowed classes: ";
+        bool first = true;
+        for (size_t i = 0; i < classAllowed.size(); i++) {
+            if (classAllowed[i]) {
+                if (!first) std::cout << ", ";
+                std::cout << i;
+                first = false;
+            }
+        }
+        if (first) std::cout << "(none)";
+        std::cout << std::endl;
+    }
+
+    // Get bitmask of allowed classes for GPU
+    uint32_t getAllowedClassMask() const {
+        uint32_t mask = 0;
+        for (size_t i = 0; i < classAllowed.size() && i < 32; i++) {
+            if (classAllowed[i]) mask |= (1u << i);
+        }
+        return mask;
     }
 };
 
@@ -287,6 +342,7 @@ int main(int argc, char* argv[]) {
         bool hasTarget = inference.runInferenceFused(
             static_cast<const uint8_t*>(rgbData), width, height,
             cfg.confThreshold, cfg.headClassId, cfg.headBonus,
+            cfg.getAllowedClassMask(),
             gpuPidConfig,
             cfg.iouStickinessThreshold,
             cfg.headAimPoint, cfg.bodyAimPoint,

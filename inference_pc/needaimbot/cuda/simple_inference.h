@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <cstdint>
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 #include <NvInfer.h>
@@ -44,16 +45,20 @@ public:
 
     // GPU decode version - returns best target directly
     // Avoids D2H copy of all detections, only copies single best target
+    // allowedClassMask: bitmask of allowed classes (bit N = class N allowed)
     // Returns true if a target was found
     bool runInferenceGpu(const uint8_t* h_rgbData, int width, int height,
                          float confThreshold, int headClassId, float headBonus,
+                         uint32_t allowedClassMask,
                          Detection& outBestTarget);
 
     // Full GPU pipeline: inference + decode + target selection + PID movement
     // Returns mouse movement directly, minimal CPU involvement
+    // allowedClassMask: bitmask of allowed classes (bit N = class N allowed)
     // Returns true if a target was found
     bool runInferenceFused(const uint8_t* h_rgbData, int width, int height,
                            float confThreshold, int headClassId, float headBonus,
+                           uint32_t allowedClassMask,
                            const PIDConfig& pidConfig,
                            float iouStickinessThreshold,
                            float headYOffset, float bodyYOffset,
@@ -111,8 +116,10 @@ private:
     cudaGraphExec_t m_graphExec = nullptr;
     bool m_graphCaptured = false;
 
-    int m_inputH = 320;
-    int m_inputW = 320;
+    int m_inputH = 320;         // Model input height (target)
+    int m_inputW = 320;         // Model input width (target)
+    int m_srcH = 320;           // Current source height (for resize)
+    int m_srcW = 320;           // Current source width (for resize)
     int m_numBoxes = 2100;
     int m_numClasses = 2;
     bool m_loaded = false;
