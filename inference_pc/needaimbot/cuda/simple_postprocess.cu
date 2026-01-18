@@ -111,12 +111,14 @@ __device__ __forceinline__ float computeBoundingBoxIoU(const Detection& a, const
 
 // YOLO11 decode kernel: [1, 4+num_classes, num_boxes] -> Detection[]
 // With strict validation to prevent garbage values
+// allowedClassMask: bitmask where bit N = 1 means class N is allowed
 __global__ void decodeYoloKernel(
     const void* __restrict__ d_raw_output,
     bool is_fp16,
     int num_boxes,
     int num_classes,
     float conf_threshold,
+    uint32_t allowedClassMask,
     Detection* d_decoded,
     int* d_decoded_count,
     int max_detections)
@@ -124,11 +126,14 @@ __global__ void decodeYoloKernel(
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= num_boxes) return;
 
-    // Find best class score with early exit
+    // Find best class score among ALLOWED classes only
     float max_score = -1.0f;
     int best_class = -1;
 
-    for (int c = 0; c < num_classes; c++) {
+    for (int c = 0; c < num_classes && c < 32; c++) {
+        // Skip if class is not allowed
+        if (!(allowedClassMask & (1u << c))) continue;
+
         size_t score_idx = (4 + c) * num_boxes + idx;
         float score = readValue(d_raw_output, is_fp16, score_idx);
         if (score > max_score) {
@@ -137,7 +142,7 @@ __global__ void decodeYoloKernel(
         }
     }
 
-    // Early exit for low confidence
+    // Early exit for low confidence or no allowed class found
     if (max_score <= conf_threshold || best_class < 0) return;
 
     // Read bbox: cx, cy, w, h
@@ -196,6 +201,7 @@ cudaError_t decodeYoloGpu(
     int num_boxes,
     int num_classes,
     float conf_threshold,
+    uint32_t allowedClassMask,
     Detection* d_decoded,
     int* d_decoded_count,
     int max_detections,
@@ -223,7 +229,7 @@ cudaError_t decodeYoloGpu(
 
     decodeYoloKernel<<<grid_size, block_size, 0, stream>>>(
         d_raw_output, is_fp16, num_boxes, num_classes,
-        conf_threshold, d_decoded, d_decoded_count, max_detections
+        conf_threshold, allowedClassMask, d_decoded, d_decoded_count, max_detections
     );
 
     return cudaGetLastError();

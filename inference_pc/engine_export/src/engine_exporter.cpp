@@ -3,6 +3,14 @@
 #include <filesystem>
 #include <iostream>
 #include <chrono>
+#include <NvInferVersion.h>
+
+// TensorRT API version compatibility
+#if NV_TENSORRT_MAJOR >= 10
+    #define TRT_USE_NEW_API 1
+#else
+    #define TRT_USE_NEW_API 0
+#endif
 
 EngineExporter::EngineExporter(const ExportConfig& config) 
     : m_config(config), m_logger(config.verbose) {
@@ -136,25 +144,35 @@ void EngineExporter::printModelInfo() {
 
 bool EngineExporter::buildEngine() {
     std::cout << "\nBuilding TensorRT engine...\n";
-    
+
     // Create builder config
     m_builderConfig.reset(m_builder->createBuilderConfig());
     if (!m_builderConfig) {
         std::cerr << "Error: Failed to create builder config\n";
         return false;
     }
-    
+
     setupBuilderConfig();
     setupOptimizationProfile();
-    
-    // Build engine
+
+    // Build engine - API differs between TensorRT versions
+#if TRT_USE_NEW_API
+    // TensorRT 10.x: Use buildSerializedNetwork and deserialize
+    m_serializedEngine.reset(m_builder->buildSerializedNetwork(*m_network, *m_builderConfig));
+    if (!m_serializedEngine) {
+        std::cerr << "Error: Failed to build serialized TensorRT engine\n";
+        return false;
+    }
+    std::cout << "Engine built successfully (serialized)\n";
+#else
+    // TensorRT 8.x: Use buildEngineWithConfig
     m_engine.reset(m_builder->buildEngineWithConfig(*m_network, *m_builderConfig));
     if (!m_engine) {
         std::cerr << "Error: Failed to build TensorRT engine\n";
         return false;
     }
-    
     std::cout << "Engine built successfully\n";
+#endif
     return true;
 }
 
@@ -371,30 +389,48 @@ void EngineExporter::setupOptimizationProfile() {
 
 bool EngineExporter::saveEngine() {
     std::cout << "Saving engine to: " << m_config.get_output_path() << "\n";
-    
-    auto serializedEngine = std::unique_ptr<nvinfer1::IHostMemory>(m_engine->serialize());
-    if (!serializedEngine) {
-        std::cerr << "Error: Failed to serialize engine\n";
+
+#if TRT_USE_NEW_API
+    // TensorRT 10.x: Already have serialized engine from buildSerializedNetwork
+    if (!m_serializedEngine) {
+        std::cerr << "Error: No serialized engine available\n";
         return false;
     }
-    
+
     std::ofstream engineFile(m_config.get_output_path(), std::ios::binary);
     if (!engineFile) {
         std::cerr << "Error: Cannot create output file: " << m_config.get_output_path() << "\n";
         return false;
     }
-    
+
+    engineFile.write(reinterpret_cast<const char*>(m_serializedEngine->data()), m_serializedEngine->size());
+    engineFile.close();
+#else
+    // TensorRT 8.x: Serialize the engine
+    auto serializedEngine = std::unique_ptr<nvinfer1::IHostMemory>(m_engine->serialize());
+    if (!serializedEngine) {
+        std::cerr << "Error: Failed to serialize engine\n";
+        return false;
+    }
+
+    std::ofstream engineFile(m_config.get_output_path(), std::ios::binary);
+    if (!engineFile) {
+        std::cerr << "Error: Cannot create output file: " << m_config.get_output_path() << "\n";
+        return false;
+    }
+
     engineFile.write(reinterpret_cast<const char*>(serializedEngine->data()), serializedEngine->size());
     engineFile.close();
-    
+#endif
+
     if (!engineFile.good()) {
         std::cerr << "Error: Failed to write engine file\n";
         return false;
     }
-    
+
     // Print file size
     auto file_size = std::filesystem::file_size(m_config.get_output_path());
     std::cout << "Engine file size: " << (file_size / 1024.0 / 1024.0) << " MB\n";
-    
+
     return true;
 }

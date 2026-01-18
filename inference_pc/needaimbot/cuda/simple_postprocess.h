@@ -1,6 +1,7 @@
 #pragma once
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
+#include <cstdint>
 
 namespace gpa {
 
@@ -44,12 +45,14 @@ struct MouseMovement {
 // Handles both FP32 and FP16 output tensors
 // Includes strict validation to filter garbage values
 // Returns decoded count via d_decoded_count (device pointer)
+// allowedClassMask: bitmask where bit N = 1 means class N is allowed (0xFFFFFFFF = all allowed)
 cudaError_t decodeYoloGpu(
     const void* d_raw_output,      // Raw model output (FP32 or FP16)
     bool is_fp16,                   // Output tensor is FP16
     int num_boxes,                  // Number of anchor boxes
     int num_classes,                // Number of classes
     float conf_threshold,           // Confidence threshold
+    uint32_t allowedClassMask,      // Bitmask of allowed classes
     Detection* d_decoded,           // Output: decoded detections (device)
     int* d_decoded_count,           // Output: number of decoded detections (device)
     int max_detections,             // Maximum detections to output
