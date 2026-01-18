@@ -146,6 +146,11 @@ struct ProfileData {
     // Scope
     int active_scope_magnification = 0;
     float bScope_multiplier = 1.0f;
+
+    // Gaussian noise for humanization
+    bool noise_enabled = false;
+    float noise_stddev_x = 0.8f;
+    float noise_stddev_y = 0.8f;
 };
 
 void to_json(json& j, const ProfileData& p);

@@ -67,7 +67,10 @@ void to_json(json& j, const ProfileData& p) {
         {"input_profiles", p.input_profiles},
         {"active_input_profile_index", p.active_input_profile_index},
         {"active_scope_magnification", p.active_scope_magnification},
-        {"bScope_multiplier", p.bScope_multiplier}
+        {"bScope_multiplier", p.bScope_multiplier},
+        {"noise_enabled", p.noise_enabled},
+        {"noise_stddev_x", p.noise_stddev_x},
+        {"noise_stddev_y", p.noise_stddev_y}
     };
 }
 
@@ -137,6 +140,9 @@ void from_json(const json& j, ProfileData& p) {
     GET_IF(active_input_profile_index);
     GET_IF(active_scope_magnification);
     GET_IF(bScope_multiplier);
+    GET_IF(noise_enabled);
+    GET_IF(noise_stddev_x);
+    GET_IF(noise_stddev_y);
     #undef GET_IF
     #undef GET_OBF
 }
