@@ -24,6 +24,7 @@
 #include <mutex>
 #include <atomic>
 #include <functional>
+#include <random>
 #include <cuda.h>
 #include <cuda_runtime_api.h>
 
@@ -42,6 +43,11 @@ namespace gpa {
 
 // Use blocking CUDA events to avoid CPU yield storms while waiting for GPU work
 static constexpr unsigned int kBlockingEventFlags = cudaEventDisableTiming | cudaEventBlockingSync;
+
+// Gaussian noise generator for humanization (thread-local for callback safety)
+static thread_local std::mt19937 g_noiseGen{std::random_device{}()};
+static thread_local std::normal_distribution<float> g_noiseDistX(0.0f, 1.0f);
+static thread_local std::normal_distribution<float> g_noiseDistY(0.0f, 1.0f);
 
 // ============================================================================
 // LOCK-FREE CONFIG UPDATE (v2)
@@ -1558,7 +1564,23 @@ bool UnifiedGraphPipeline::enqueueFrameCompletionCallback(cudaStream_t stream, c
                     MouseMovement filtered = pipeline->filterMouseMovement(rawMovement, true);
 
                     if (filtered.dx != 0 || filtered.dy != 0) {
-                        executeMouseMovement(filtered.dx, filtered.dy);
+                        // Apply Gaussian noise for humanization
+                        float moveX = static_cast<float>(filtered.dx);
+                        float moveY = static_cast<float>(filtered.dy);
+
+                        if (ctx.config.profile().noise_enabled) {
+                            float stddevX = ctx.config.profile().noise_stddev_x;
+                            float stddevY = ctx.config.profile().noise_stddev_y;
+                            moveX += g_noiseDistX(g_noiseGen) * stddevX;
+                            moveY += g_noiseDistY(g_noiseGen) * stddevY;
+                        }
+
+                        int finalX = static_cast<int>(std::round(moveX));
+                        int finalY = static_cast<int>(std::round(moveY));
+
+                        if (finalX != 0 || finalY != 0) {
+                            executeMouseMovement(finalX, finalY);
+                        }
 
                         // Record input timestamp for latency tracking
                         LARGE_INTEGER qpc{};
