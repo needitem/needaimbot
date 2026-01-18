@@ -70,7 +70,12 @@ void to_json(json& j, const ProfileData& p) {
         {"bScope_multiplier", p.bScope_multiplier},
         {"noise_enabled", p.noise_enabled},
         {"noise_stddev_x", p.noise_stddev_x},
-        {"noise_stddev_y", p.noise_stddev_y}
+        {"noise_stddev_y", p.noise_stddev_y},
+        {"depth_enabled", p.depth_enabled},
+        {"depth_model_path", p.depth_model_path},
+        {"depth_fps", p.depth_fps},
+        {"depth_near_percent", p.depth_near_percent},
+        {"depth_invert", p.depth_invert}
     };
 }
 
@@ -143,6 +148,11 @@ void from_json(const json& j, ProfileData& p) {
     GET_IF(noise_enabled);
     GET_IF(noise_stddev_x);
     GET_IF(noise_stddev_y);
+    GET_IF(depth_enabled);
+    GET_IF(depth_model_path);
+    GET_IF(depth_fps);
+    GET_IF(depth_near_percent);
+    GET_IF(depth_invert);
     #undef GET_IF
     #undef GET_OBF
 }

@@ -135,6 +135,29 @@ bool isAnyKeyPressed(const std::vector<std::string>& keys) {
     return is_any_key_or_combo_pressed(keys);
 }
 
+// Win32-only key check - ignores hardware device state
+// Use for system functions (Exit, Pause, etc.) that must always work
+bool isAnyKeyPressedWin32Only(const std::vector<std::string>& keys) {
+    for (const auto& key : keys) {
+        if (key == "None" || key.empty()) continue;
+        
+        // Check if this is a combo (contains +)
+        if (key.find('+') != std::string::npos) {
+            std::vector<int> combo_codes = parse_key_combo(key);
+            if (is_combo_pressed(combo_codes)) {
+                return true;
+            }
+        } else {
+            // Single key - Win32 API only
+            int code = KeyCodes::getKeyCode(key);
+            if (code && (GetAsyncKeyState(code) & 0x8000)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 void keyboardListener() {
     auto& ctx = AppContext::getInstance();
 
