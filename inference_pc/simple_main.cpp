@@ -12,6 +12,7 @@
 #include <cstring>
 #include <cmath>
 #include <iomanip>
+#include <random>
 
 #include "needaimbot/cuda/simple_inference.h"
 #include "needaimbot/cuda/simple_postprocess.h"
@@ -71,6 +72,11 @@ struct Config {
 
     // Mouse rate limiting
     int mouseMinIntervalMs = 1;
+
+    // Gaussian noise for humanization
+    bool noiseEnabled = true;
+    float noiseStddevX = 0.8f;  // Standard deviation for X axis
+    float noiseStddevY = 0.8f;  // Standard deviation for Y axis
 
     // Shoot capture offset (applied when aiming+shooting)
     float shootOffsetX = 0.0f;
@@ -132,6 +138,10 @@ struct Config {
             if (j.contains("mouse_min_interval_ms")) mouseMinIntervalMs = j["mouse_min_interval_ms"];
             if (j.contains("makcu_baudrate")) makcuBaudrate = j["makcu_baudrate"];
 
+            if (j.contains("noise_enabled")) noiseEnabled = j["noise_enabled"];
+            if (j.contains("noise_stddev_x")) noiseStddevX = j["noise_stddev_x"];
+            if (j.contains("noise_stddev_y")) noiseStddevY = j["noise_stddev_y"];
+
             if (j.contains("shoot_offset_x")) shootOffsetX = j["shoot_offset_x"];
             if (j.contains("shoot_offset_y")) shootOffsetY = j["shoot_offset_y"];
 
@@ -179,6 +189,8 @@ struct Config {
         std::cout << "[Config] Max detections: " << maxDetections << std::endl;
         std::cout << "[Config] No-recoil: " << (noRecoilEnabled ? "ON" : "OFF")
                   << " (Y=" << recoilCompY << ", tick=" << recoilTickMs << "ms)" << std::endl;
+        std::cout << "[Config] Noise: " << (noiseEnabled ? "ON" : "OFF")
+                  << " (stddev X=" << noiseStddevX << ", Y=" << noiseStddevY << ")" << std::endl;
 
         // Print allowed classes
         std::cout << "[Config] Allowed classes: ";
@@ -255,6 +267,12 @@ int main(int argc, char* argv[]) {
     gpa::PIDConfig gpuPidConfig = cfg.toGpuPIDConfig();
     gpa::MouseMovement mouseMovement;
     gpa::Detection bestTarget;
+
+    // Gaussian noise generator for humanization
+    std::random_device rd;
+    std::mt19937 noiseGen(rd());
+    std::normal_distribution<float> noiseDistX(0.0f, cfg.noiseStddevX);
+    std::normal_distribution<float> noiseDistY(0.0f, cfg.noiseStddevY);
 
     int frameCount = 0;
     auto lastStatTime = std::chrono::steady_clock::now();
@@ -353,18 +371,28 @@ int main(int argc, char* argv[]) {
 
         if (hasTarget) {
             // Mouse movement already calculated by GPU
-            int moveX = mouseMovement.dx;
-            int moveY = mouseMovement.dy;
+            float moveX = static_cast<float>(mouseMovement.dx);
+            float moveY = static_cast<float>(mouseMovement.dy);
+
+            // Apply Gaussian noise for humanization
+            if (cfg.noiseEnabled) {
+                moveX += noiseDistX(noiseGen);
+                moveY += noiseDistY(noiseGen);
+            }
 
             // Apply shoot offset when aiming+shooting (shifts aim point)
             if (shooting) {
-                moveX += static_cast<int>(cfg.shootOffsetX);
-                moveY += static_cast<int>(cfg.shootOffsetY);
+                moveX += cfg.shootOffsetX;
+                moveY += cfg.shootOffsetY;
             }
 
+            // Round to integer for mouse movement
+            int finalX = static_cast<int>(std::round(moveX));
+            int finalY = static_cast<int>(std::round(moveY));
+
             // Send mouse move immediately (no rate limiting)
-            if (moveX != 0 || moveY != 0) {
-                makcu.move(moveX, moveY);
+            if (finalX != 0 || finalY != 0) {
+                makcu.move(finalX, finalY);
             }
         }
     }
