@@ -79,6 +79,10 @@ set(CPP_SOURCES
     needaimbot/overlay/draw_color_filter.cpp
     needaimbot/overlay/draw_stabilizer.cpp
     needaimbot/overlay/ui_helpers.cpp
+    needaimbot/overlay/config_dirty.cpp
+    # Depth estimation
+    needaimbot/depth/depth_anything_trt.cpp
+    needaimbot/depth/depth_mask.cpp
     # ImGui
     needaimbot/imgui/imgui.cpp
     needaimbot/imgui/imgui_draw.cpp
@@ -113,6 +117,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_SOURCE_DIR}/needaimbot/postprocess
     ${CMAKE_SOURCE_DIR}/needaimbot/mouse
     ${CMAKE_SOURCE_DIR}/needaimbot/overlay
+    ${CMAKE_SOURCE_DIR}/needaimbot/depth
     ${CMAKE_SOURCE_DIR}/needaimbot/modules/stb
     ${CMAKE_SOURCE_DIR}/needaimbot/modules
     ${TENSORRT_PATH}/include
@@ -156,6 +161,7 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
     _CRT_SECURE_NO_WARNINGS
     UNICODE
     _UNICODE
+    USE_CUDA
 )
 
 if(MSVC)

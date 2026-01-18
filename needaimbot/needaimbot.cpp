@@ -469,6 +469,32 @@ int main(int argc, char* argv[])
         
         ctx.preview_enabled = ctx.config.global().show_window;
         
+        // CUDA runtime version check
+        int cuda_runtime_version = 0;
+        cudaError_t runtime_status = cudaRuntimeGetVersion(&cuda_runtime_version);
+        
+        if (runtime_status != cudaSuccess) {
+            std::cerr << "[MAIN] CUDA runtime check failed: " << cudaGetErrorString(runtime_status) << std::endl;
+            std::cin.get();
+            return -1;
+        }
+        
+        std::cout << "[CUDA] Runtime version: " << (cuda_runtime_version / 1000) << "." 
+                  << ((cuda_runtime_version % 1000) / 10) << std::endl;
+        
+        // Require CUDA 12.0 or higher
+        constexpr int kRequiredCudaVersion = 12000;
+        if (cuda_runtime_version < kRequiredCudaVersion) {
+            int required_major = kRequiredCudaVersion / 1000;
+            int required_minor = (kRequiredCudaVersion % 1000) / 10;
+            int runtime_major = cuda_runtime_version / 1000;
+            int runtime_minor = (cuda_runtime_version % 1000) / 10;
+            std::cerr << "[MAIN] CUDA " << required_major << "." << required_minor 
+                      << " or higher required. Detected: " << runtime_major << "." << runtime_minor << std::endl;
+            std::cin.get();
+            return -1;
+        }
+
         int cuda_devices = 0;
         cudaError_t err = cudaGetDeviceCount(&cuda_devices);
 

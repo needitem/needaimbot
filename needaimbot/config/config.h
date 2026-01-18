@@ -151,6 +151,13 @@ struct ProfileData {
     bool noise_enabled = false;
     float noise_stddev_x = 0.8f;
     float noise_stddev_y = 0.8f;
+
+    // Depth estimation for target prioritization
+    bool depth_enabled = false;
+    std::string depth_model_path = "";
+    int depth_fps = 5;
+    int depth_near_percent = 20;
+    bool depth_invert = false;
 };
 
 void to_json(json& j, const ProfileData& p);
