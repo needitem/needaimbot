@@ -57,4 +57,12 @@ void draw_stabilizer();
 void load_body_texture();
 void release_body_texture();
 
+// Debug visualization functions
+struct ImDrawList;
+struct ImVec2;
+struct Target;
+#include <vector>
+void drawCaptureFrame(ImDrawList* draw_list, ImVec2 image_pos, float debug_scale, int capture_size);
+void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float debug_scale, const std::vector<Target>* targets_override = nullptr);
+
 #endif 

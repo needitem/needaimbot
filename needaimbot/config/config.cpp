@@ -75,7 +75,13 @@ void to_json(json& j, const ProfileData& p) {
         {"depth_model_path", p.depth_model_path},
         {"depth_fps", p.depth_fps},
         {"depth_near_percent", p.depth_near_percent},
-        {"depth_invert", p.depth_invert}
+        {"depth_invert", p.depth_invert},
+        {"show_capture_frame", p.show_capture_frame},
+        {"capture_frame_r", p.capture_frame_r},
+        {"capture_frame_g", p.capture_frame_g},
+        {"capture_frame_b", p.capture_frame_b},
+        {"capture_frame_a", p.capture_frame_a},
+        {"capture_frame_thickness", p.capture_frame_thickness}
     };
 }
 
@@ -153,6 +159,12 @@ void from_json(const json& j, ProfileData& p) {
     GET_IF(depth_fps);
     GET_IF(depth_near_percent);
     GET_IF(depth_invert);
+    GET_IF(show_capture_frame);
+    GET_IF(capture_frame_r);
+    GET_IF(capture_frame_g);
+    GET_IF(capture_frame_b);
+    GET_IF(capture_frame_a);
+    GET_IF(capture_frame_thickness);
     #undef GET_IF
     #undef GET_OBF
 }

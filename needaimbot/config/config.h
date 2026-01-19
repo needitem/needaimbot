@@ -158,6 +158,14 @@ struct ProfileData {
     int depth_fps = 5;
     int depth_near_percent = 20;
     bool depth_invert = false;
+
+    // Game overlay (capture frame visualization in debug)
+    bool show_capture_frame = true;
+    int capture_frame_r = 255;
+    int capture_frame_g = 255;
+    int capture_frame_b = 0;
+    int capture_frame_a = 180;
+    float capture_frame_thickness = 2.0f;
 };
 
 void to_json(json& j, const ProfileData& p);
