@@ -91,42 +91,6 @@ set_target_properties(simple_inference PROPERTIES
 )
 
 # =============================================================================
-# Test Inference (standalone test)
-# =============================================================================
-add_executable(test_inference
-    test_inference.cpp
-    needaimbot/cuda/simple_inference.cu
-    needaimbot/cuda/simple_postprocess.cu
-)
-
-target_include_directories(test_inference PRIVATE
-    ${CMAKE_SOURCE_DIR}/needaimbot
-    ${CMAKE_SOURCE_DIR}/needaimbot/cuda
-    ${CUDA_PATH}/include
-    ${TENSORRT_INCLUDE_DIR}
-)
-
-target_link_directories(test_inference PRIVATE
-    ${TENSORRT_LIB_DIR}
-    ${CUDA_PATH}/lib64
-)
-
-target_link_libraries(test_inference PRIVATE
-    nvinfer
-    CUDA::cudart
-    CUDA::cuda_driver
-)
-
-target_compile_options(test_inference PRIVATE
-    $<$<COMPILE_LANGUAGE:CXX>:-O3>
-    $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-O3>
-)
-
-set_target_properties(test_inference PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/Release"
-)
-
-# =============================================================================
 # EngineExport Subproject (optional)
 # =============================================================================
 option(BUILD_ENGINE_EXPORT "Build EngineExport tool" OFF)
