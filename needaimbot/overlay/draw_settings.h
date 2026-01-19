@@ -54,6 +54,7 @@ void draw_debug();
 void draw_profile();
 void draw_color_filter();
 void draw_stabilizer();
+void draw_depth_settings();
 void load_body_texture();
 void release_body_texture();
 
