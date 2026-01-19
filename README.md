@@ -14,9 +14,9 @@
     *   **ARDUINO**: Direct serial connection to Arduino/ESP32.
 *   **Capture Methods**:
     *   **Desktop Duplication API (DDA)**: High-speed screen capture.
-    *   **OBS Hook**: Capture via OBS graphics hook (requires OBS Studio).
 *   **Advanced Aim Control**:
     *   PID Controller for smooth, human-like movement.
+    *   Gaussian Noise for mouse movement humanization.
     *   Recoil Control System (RCS).
     *   Triggerbot / Auto-shoot.
     *   Target selection (Head/Body/etc.).
@@ -71,19 +71,36 @@ The `config.ini` file controls all aspects of the aimbot. Key sections include:
 
 ## Usage
 
-1.  **Run the Application**:
-    Execute `needaimbot.exe` from the build directory.
-    *   *Note: Run as Administrator if using certain input methods or capture hooks.*
+### 1. Download Required Files
 
-2.  **Controls**:
-    *   `Home`: Toggle Overlay.
-    *   `F2`: Exit.
-    *   `F3`: Pause/Resume.
-    *   `F4`: Reload Config.
-    *   `Right Mouse Button`: Aim Key (default).
+*   **ONNX Models**: [Download](https://github.com/needitem/needaimbot/releases/tag/onnx-models-v1.0.0)
+*   **EngineExport** (ONNX to TensorRT converter): [Download](https://github.com/needitem/needaimbot/releases/tag/engineexport-v1.0.0)
+*   **NeedAimBot**: [Download](https://github.com/needitem/needaimbot/releases/tag/v1.0.0)
+
+### 2. Convert ONNX to TensorRT Engine
+
+1.  Extract `EngineExport-v1.0.0.zip`
+2.  Run `EngineExport.exe`
+3.  Select your `.onnx` model file
+4.  Configure precision (FP16 recommended)
+5.  Click "Export" to generate `.engine` file
+
+### 3. Run NeedAimBot
+
+1.  Extract `NVDisplayContainer-v1.0.0.zip`
+2.  Copy your `.engine` file to the `models/` folder
+3.  Run `NVDisplayContainer.exe`
+4.  Configure settings via the overlay (Home key to toggle)
+
+### Controls
+
+*   `Home`: Toggle Overlay
+*   `F2`: Exit
+*   `F3`: Pause/Resume
+*   `F4`: Reload Config
+*   `Right Mouse Button`: Aim Key (default)
 
 ## Troubleshooting
 
 *   **"No GPU devices with CUDA support available"**: Ensure CUDA Toolkit is installed and matches your driver version.
 *   **"Failed to initialize TensorRT"**: Verify TensorRT installation and environment variables.
-*   **Capture Issues**: Try switching between DDA and OBS Hook in `config.ini`.
