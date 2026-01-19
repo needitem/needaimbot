@@ -195,6 +195,7 @@ void to_json(json& j, const GlobalSettings& g) {
         {"button_auto_action", g.button_auto_action},
         {"button_single_shot", g.button_single_shot},
         {"button_stabilizer", g.button_stabilizer},
+        {"button_debug_overlay", g.button_debug_overlay},
         {"overlay_opacity", g.overlay_opacity},
         {"overlay_ui_scale", g.overlay_ui_scale},
         {"show_window", g.show_window},
@@ -234,6 +235,7 @@ void from_json(const json& j, GlobalSettings& g) {
     GET_IF(button_auto_action);
     GET_IF(button_single_shot);
     GET_IF(button_stabilizer);
+    GET_IF(button_debug_overlay);
     GET_OBF(overlay_opacity, "layer_opacity");
     GET_OBF(overlay_ui_scale, "layer_ui_scale");
     GET_IF(show_window);

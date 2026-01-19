@@ -12,6 +12,9 @@
 #include "../mouse/mouse.h"
 #include "keycodes.h"
 #include "needaimbot.h"
+#ifndef HEADLESS_BUILD
+#include "../overlay/debug_window.h"
+#endif
 // #include "../capture/capture.h" - removed, using GPU capture now
 
 
@@ -176,6 +179,8 @@ void keyboardListener() {
     // Cached key combos - parse once, check fast
     CachedKeyCombo cache_exit, cache_targeting, cache_auto_action;
     CachedKeyCombo cache_disable_upward, cache_stabilizer, cache_pause, cache_single_shot;
+    CachedKeyCombo cache_debug_overlay;
+    static bool last_debug_overlay_state = false;
 
     // Event-driven keyboard monitoring using Windows events
     HANDLE hKeyboardEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
@@ -189,6 +194,7 @@ void keyboardListener() {
         cache_stabilizer.update(ctx.config.global().button_stabilizer);
         cache_pause.update(ctx.config.global().button_pause);
         cache_single_shot.update(ctx.config.global().button_single_shot);
+        cache_debug_overlay.update(ctx.config.global().button_debug_overlay);
 
         // Check for exit key
         if (cache_exit.isPressed()) {
@@ -303,6 +309,18 @@ void keyboardListener() {
 #endif
         }
         last_single_shot_state = current_single_shot;
+
+#ifndef HEADLESS_BUILD
+        // Debug overlay toggle - only on key press, not while held
+        bool current_debug_overlay = cache_debug_overlay.isPressed();
+        if (current_debug_overlay && !last_debug_overlay_state) {
+            DebugOverlay::Toggle();
+#ifdef _DEBUG
+            std::cout << "[Keyboard] Debug overlay toggled" << std::endl;
+#endif
+        }
+        last_debug_overlay_state = current_debug_overlay;
+#endif
 
         // Event-driven adaptive delay - use wait with timeout for better CPU efficiency
         DWORD waitTime = current_aiming ? 2 : 10; // 2ms when aiming, 10ms when idle
