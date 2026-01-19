@@ -2,6 +2,14 @@
 #include <cuda_runtime.h>
 #include "simple_cuda_mat.h"
 
+// Precision enum for preprocessing output
+enum class PreprocessPrecision {
+    FP32 = 0,
+    FP16 = 1,
+    FP8  = 2,  // E4M3 format for Ada/Hopper/Blackwell GPUs
+    INT8 = 3
+};
+
 // 통합 전처리 함수 - SimpleCudaMat 버전
 extern "C" cudaError_t unifiedPreprocessing(
     const SimpleCudaMat& src_bgra,      // BGRA 입력 (uchar4)
@@ -14,11 +22,22 @@ extern "C" cudaError_t unifiedPreprocessing(
 // 통합 전처리 함수 - 포인터 버전 (더 범용적)
 extern "C" cudaError_t cuda_unified_preprocessing(
     const void* src_bgra_data,          // BGRA 입력 데이터 포인터
-    void* dst_rgb_chw,                  // RGB CHW 출력 (void* - FP32 or FP16)
+    void* dst_rgb_chw,                  // RGB CHW 출력 (void* - FP32/FP16/FP8)
     int src_width, int src_height,      // 입력 크기
     int src_step,                       // 입력 스트라이드 (바이트)
     int target_width, int target_height, // 목표 크기
-    bool use_fp16 = false,              // true = FP16, false = FP32
+    bool use_fp16 = false,              // true = FP16, false = FP32 (legacy)
+    cudaStream_t stream = 0
+);
+
+// Extended version with full precision control
+extern "C" cudaError_t cuda_unified_preprocessing_ex(
+    const void* src_bgra_data,          // BGRA 입력 데이터 포인터
+    void* dst_rgb_chw,                  // RGB CHW 출력
+    int src_width, int src_height,      // 입력 크기
+    int src_step,                       // 입력 스트라이드 (바이트)
+    int target_width, int target_height, // 목표 크기
+    PreprocessPrecision precision,      // Output precision
     cudaStream_t stream = 0
 );
 
