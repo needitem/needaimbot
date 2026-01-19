@@ -166,12 +166,15 @@ void UnifiedGraphPipeline::markPidConfigDirty() {
     updateConfig(ctx);
 }
 
-void UnifiedGPUArena::initializePointers(uint8_t* basePtr, int maxDetections, int yoloSize) {
+void UnifiedGPUArena::initializePointers(uint8_t* basePtr, int maxDetections, int yoloSize, PipelinePrecision prec) {
+    precision = prec;
+    size_t elementSize = getElementSize(prec);
     size_t offset = 0;
     
-    offset = (offset + alignof(float) - 1) & ~(alignof(float) - 1);
-    yoloInput = reinterpret_cast<float*>(basePtr + offset);
-    offset += yoloSize * yoloSize * 3 * sizeof(float);
+    // Align to 16 bytes for optimal memory access (works for FP32, FP16, FP8)
+    offset = (offset + 15) & ~15;
+    yoloInput = reinterpret_cast<void*>(basePtr + offset);
+    offset += yoloSize * yoloSize * 3 * elementSize;
     
     
     offset = (offset + alignof(Target) - 1) & ~(alignof(Target) - 1);
@@ -186,11 +189,13 @@ void UnifiedGPUArena::initializePointers(uint8_t* basePtr, int maxDetections, in
     offset += maxDetections * sizeof(Target);
 }
 
-size_t UnifiedGPUArena::calculateArenaSize(int maxDetections, int yoloSize) {
+size_t UnifiedGPUArena::calculateArenaSize(int maxDetections, int yoloSize, PipelinePrecision prec) {
+    size_t elementSize = getElementSize(prec);
     size_t size = 0;
     
-    size = (size + alignof(float) - 1) & ~(alignof(float) - 1);
-    size += yoloSize * yoloSize * 3 * sizeof(float);
+    // Align to 16 bytes for optimal memory access
+    size = (size + 15) & ~15;
+    size += yoloSize * yoloSize * 3 * elementSize;
     
     size = (size + alignof(Target) - 1) & ~(alignof(Target) - 1);
     size += maxDetections * sizeof(Target);
@@ -1111,6 +1116,18 @@ bool UnifiedGraphPipeline::allocateBuffers() {
     const int yoloSize = getModelInputResolution();
     const int maxDetections = ctx.config.profile().max_detections;
     
+    // Determine pipeline precision based on TensorRT model input type
+    PipelinePrecision precision = PipelinePrecision::FP32;
+    if (m_inputDataType == nvinfer1::DataType::kHALF) {
+        precision = PipelinePrecision::FP16;
+        std::cout << "[UnifiedGraph] Using FP16 precision for entire pipeline (2x memory bandwidth savings)" << std::endl;
+    } else if (m_inputDataType == nvinfer1::DataType::kFP8) {
+        precision = PipelinePrecision::FP8;
+        std::cout << "[UnifiedGraph] Using FP8 precision for entire pipeline (4x memory bandwidth savings)" << std::endl;
+    } else if (m_inputDataType == nvinfer1::DataType::kINT8) {
+        precision = PipelinePrecision::INT8;
+        std::cout << "[UnifiedGraph] Using INT8 precision for entire pipeline" << std::endl;
+    }
     
     try {
         m_captureBuffer.create(height, width, 4);
@@ -1120,9 +1137,9 @@ bool UnifiedGraphPipeline::allocateBuffers() {
         m_smallBufferArena.initializePointers(m_smallBufferArena.arenaBuffer->get());
         invalidateSelectedTarget(nullptr);
 
-        size_t unifiedArenaSize = UnifiedGPUArena::calculateArenaSize(maxDetections, yoloSize);
+        size_t unifiedArenaSize = UnifiedGPUArena::calculateArenaSize(maxDetections, yoloSize, precision);
         m_unifiedArena.megaArena = std::make_unique<CudaMemory<uint8_t>>(unifiedArenaSize);
-        m_unifiedArena.initializePointers(m_unifiedArena.megaArena->get(), maxDetections, yoloSize);
+        m_unifiedArena.initializePointers(m_unifiedArena.megaArena->get(), maxDetections, yoloSize, precision);
         
         
         
@@ -2512,8 +2529,26 @@ bool UnifiedGraphPipeline::performPreprocessing(cudaStream_t stream) {
     }
 
     int modelRes = getModelInputResolution();
-    bool use_fp16 = (m_inputDataType == nvinfer1::DataType::kHALF);
-    cudaError_t err = cuda_unified_preprocessing(
+    
+    // Convert PipelinePrecision to PreprocessPrecision
+    PreprocessPrecision prepPrecision;
+    switch (m_unifiedArena.precision) {
+        case PipelinePrecision::FP16:
+            prepPrecision = PreprocessPrecision::FP16;
+            break;
+        case PipelinePrecision::FP8:
+            prepPrecision = PreprocessPrecision::FP8;
+            break;
+        case PipelinePrecision::INT8:
+            prepPrecision = PreprocessPrecision::INT8;
+            break;
+        case PipelinePrecision::FP32:
+        default:
+            prepPrecision = PreprocessPrecision::FP32;
+            break;
+    }
+    
+    cudaError_t err = cuda_unified_preprocessing_ex(
         m_captureBuffer.data(),
         m_unifiedArena.yoloInput,
         m_captureBuffer.cols(),
@@ -2521,7 +2556,7 @@ bool UnifiedGraphPipeline::performPreprocessing(cudaStream_t stream) {
         static_cast<int>(m_captureBuffer.step()),
         modelRes,
         modelRes,
-        use_fp16,
+        prepPrecision,
         stream);
 
     if (err != cudaSuccess) {
@@ -2926,7 +2961,8 @@ bool UnifiedGraphPipeline::performInference(cudaStream_t stream) {
     // Aliasing should be set during initialization - no runtime retry.
     // If not aliased, copy is required (logged once during init).
     if (inputBinding != m_unifiedArena.yoloInput) {
-        size_t inputSize = getModelInputResolution() * getModelInputResolution() * 3 * sizeof(float);
+        size_t elementSize = UnifiedGPUArena::getElementSize(m_unifiedArena.precision);
+        size_t inputSize = getModelInputResolution() * getModelInputResolution() * 3 * elementSize;
         cudaMemcpyAsync(inputBinding, m_unifiedArena.yoloInput, inputSize,
                         cudaMemcpyDeviceToDevice, stream);
     } else {

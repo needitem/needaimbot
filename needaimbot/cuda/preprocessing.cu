@@ -2,6 +2,19 @@
 #include <cuda_fp16.h>
 #include <device_launch_parameters.h>
 #include "simple_cuda_mat.h"
+#include "preprocessing.h"
+
+// ============================================================================
+// FP8 Support Detection (compile-time, works for both host and device)
+// ============================================================================
+// CUDA 11.8+ on Ada/Hopper/Blackwell GPUs support FP8
+// Check if cuda_fp8.h exists and is usable
+#if defined(__CUDACC__) && (__CUDACC_VER_MAJOR__ >= 12 || (__CUDACC_VER_MAJOR__ == 11 && __CUDACC_VER_MINOR__ >= 8))
+#include <cuda_fp8.h>
+#define CUDA_FP8_AVAILABLE 1
+#else
+#define CUDA_FP8_AVAILABLE 0
+#endif
 
 // ============================================================================
 // 동일 해상도 전용 커널 (리사이즈 없음) - 최적화 버전
@@ -62,7 +75,86 @@ __global__ void directPreprocessKernel(
 }
 
 // ============================================================================
-// 리사이즈 포함 커널 (기존)
+// FP8 전용 커널 (Ada/Hopper/Blackwell GPUs) - CUDA 11.8+
+// ============================================================================
+
+#if CUDA_FP8_AVAILABLE
+// 동일 해상도 전처리 커널 (FP8): BGRA → RGB + Normalize + HWC→CHW (리사이즈 없음)
+__global__ void directPreprocessKernelFP8(
+    const uchar4* __restrict__ src,     // BGRA 입력
+    __nv_fp8_e4m3* __restrict__ dst,    // RGB CHW 출력 (정규화된 FP8)
+    int width, int height,              // 입력/출력 크기 (동일)
+    int src_step,                       // 입력 스트라이드
+    float scale_factor                  // 정규화 인수 (1/255.0f)
+) {
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (x >= width || y >= height) return;
+
+    const uchar4* src_row = (const uchar4*)((const char*)src + y * src_step);
+    uchar4 pixel = src_row[x];
+
+    int hw_size = width * height;
+    int dst_idx = y * width + x;
+
+    // BGRA → RGB 변환 + 정규화 + FP8 변환 (constructor has __NV_SATFINITE behavior)
+    dst[dst_idx] = __nv_fp8_e4m3(pixel.z * scale_factor);               // R
+    dst[dst_idx + hw_size] = __nv_fp8_e4m3(pixel.y * scale_factor);     // G
+    dst[dst_idx + 2 * hw_size] = __nv_fp8_e4m3(pixel.x * scale_factor); // B
+}
+
+// 리사이즈 포함 전처리 커널 (FP8)
+__global__ void integratedPreprocessKernelFP8(
+    const uchar4* __restrict__ src,
+    __nv_fp8_e4m3* __restrict__ dst,
+    int src_width, int src_height,
+    int dst_width, int dst_height,
+    int src_step,
+    float scale_factor
+) {
+    int dst_x = blockIdx.x * blockDim.x + threadIdx.x;
+    int dst_y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (dst_x >= dst_width || dst_y >= dst_height) return;
+
+    float src_x_f = (dst_x + 0.5f) * src_width / dst_width - 0.5f;
+    float src_y_f = (dst_y + 0.5f) * src_height / dst_height - 0.5f;
+
+    int src_x = __float2int_rd(src_x_f);
+    int src_y = __float2int_rd(src_y_f);
+    float alpha = src_x_f - src_x;
+    float beta = src_y_f - src_y;
+
+    src_x = max(0, min(src_x, src_width - 2));
+    src_y = max(0, min(src_y, src_height - 2));
+
+    const uchar4* src_row0 = (const uchar4*)((const char*)src + src_y * src_step);
+    const uchar4* src_row1 = (const uchar4*)((const char*)src + (src_y + 1) * src_step);
+
+    uchar4 p00 = src_row0[src_x];
+    uchar4 p01 = src_row0[src_x + 1];
+    uchar4 p10 = src_row1[src_x];
+    uchar4 p11 = src_row1[src_x + 1];
+
+    float b_interp = (1 - alpha) * (1 - beta) * p00.x + alpha * (1 - beta) * p01.x +
+                     (1 - alpha) * beta * p10.x + alpha * beta * p11.x;
+    float g_interp = (1 - alpha) * (1 - beta) * p00.y + alpha * (1 - beta) * p01.y +
+                     (1 - alpha) * beta * p10.y + alpha * beta * p11.y;
+    float r_interp = (1 - alpha) * (1 - beta) * p00.z + alpha * (1 - beta) * p01.z +
+                     (1 - alpha) * beta * p10.z + alpha * beta * p11.z;
+
+    int hw_size = dst_width * dst_height;
+    int dst_idx = dst_y * dst_width + dst_x;
+
+    dst[dst_idx] = __nv_fp8_e4m3(r_interp * scale_factor);
+    dst[dst_idx + hw_size] = __nv_fp8_e4m3(g_interp * scale_factor);
+    dst[dst_idx + 2 * hw_size] = __nv_fp8_e4m3(b_interp * scale_factor);
+}
+#endif // CUDA_FP8_AVAILABLE
+
+// ============================================================================
+// 리사이즈 포함 커널 (FP16/FP32)
 // ============================================================================
 
 // 통합 전처리 커널 (FP16 출력): BGRA → RGB + Resize + Normalize + HWC→CHW
@@ -175,13 +267,17 @@ __global__ void integratedPreprocessKernel(
     dst[dst_idx + 2 * hw_size] = b_interp * scale_factor; // B 채널
 }
 
+// ============================================================================
+// Host API Functions
+// ============================================================================
+
 // 통합 전처리 함수 - 모든 작업을 하나의 커널로 수행
 extern "C" cudaError_t unifiedPreprocessing(
     const SimpleCudaMat& src_bgra,      // BGRA 입력 (uchar4)
     float* dst_rgb_chw,                 // RGB CHW 출력 (float)
     int target_width,                   // 목표 너비
     int target_height,                  // 목표 높이
-    cudaStream_t stream = 0
+    cudaStream_t stream
 ) {
     if (src_bgra.empty() || !dst_rgb_chw) {
         return cudaErrorInvalidValue;
@@ -218,7 +314,7 @@ extern "C" cudaError_t cuda_unified_preprocessing(
     int src_step,                       // 입력 스트라이드
     int target_width, int target_height, // 목표 크기
     bool use_fp16,                      // true = FP16, false = FP32
-    cudaStream_t stream = 0
+    cudaStream_t stream
 ) {
     if (!src_bgra_data || !dst_rgb_chw) {
         return cudaErrorInvalidValue;
@@ -279,12 +375,112 @@ extern "C" cudaError_t cuda_unified_preprocessing(
     return cudaGetLastError();
 }
 
+// Extended version with full precision control
+extern "C" cudaError_t cuda_unified_preprocessing_ex(
+    const void* src_bgra_data,          // BGRA 입력 데이터 포인터
+    void* dst_rgb_chw,                  // RGB CHW 출력
+    int src_width, int src_height,      // 입력 크기
+    int src_step,                       // 입력 스트라이드
+    int target_width, int target_height, // 목표 크기
+    PreprocessPrecision precision,      // Output precision
+    cudaStream_t stream
+) {
+    if (!src_bgra_data || !dst_rgb_chw) {
+        return cudaErrorInvalidValue;
+    }
+
+    const float scale_factor = 1.0f / 255.0f;
+    dim3 block(32, 8);
+    dim3 grid((target_width + block.x - 1) / block.x,
+              (target_height + block.y - 1) / block.y);
+
+    // 동일 해상도인 경우 최적화된 커널 사용 (리사이즈 스킵)
+    const bool sameSize = (src_width == target_width && src_height == target_height);
+
+    switch (precision) {
+        case PreprocessPrecision::FP16:
+            if (sameSize) {
+                directPreprocessKernelFP16<<<grid, block, 0, stream>>>(
+                    (const uchar4*)src_bgra_data,
+                    (__half*)dst_rgb_chw,
+                    target_width, target_height,
+                    src_step,
+                    scale_factor
+                );
+            } else {
+                integratedPreprocessKernelFP16<<<grid, block, 0, stream>>>(
+                    (const uchar4*)src_bgra_data,
+                    (__half*)dst_rgb_chw,
+                    src_width, src_height,
+                    target_width, target_height,
+                    src_step,
+                    scale_factor
+                );
+            }
+            break;
+
+#if CUDA_FP8_AVAILABLE
+        case PreprocessPrecision::FP8:
+            if (sameSize) {
+                directPreprocessKernelFP8<<<grid, block, 0, stream>>>(
+                    (const uchar4*)src_bgra_data,
+                    (__nv_fp8_e4m3*)dst_rgb_chw,
+                    target_width, target_height,
+                    src_step,
+                    scale_factor
+                );
+            } else {
+                integratedPreprocessKernelFP8<<<grid, block, 0, stream>>>(
+                    (const uchar4*)src_bgra_data,
+                    (__nv_fp8_e4m3*)dst_rgb_chw,
+                    src_width, src_height,
+                    target_width, target_height,
+                    src_step,
+                    scale_factor
+                );
+            }
+            break;
+#endif
+
+        case PreprocessPrecision::INT8:
+            // INT8 not yet implemented - fall through to FP32
+            // Future: add INT8 kernel with quantization scale
+        case PreprocessPrecision::FP32:
+        default:
+            if (sameSize) {
+                directPreprocessKernel<<<grid, block, 0, stream>>>(
+                    (const uchar4*)src_bgra_data,
+                    (float*)dst_rgb_chw,
+                    target_width, target_height,
+                    src_step,
+                    scale_factor
+                );
+            } else {
+                integratedPreprocessKernel<<<grid, block, 0, stream>>>(
+                    (const uchar4*)src_bgra_data,
+                    (float*)dst_rgb_chw,
+                    src_width, src_height,
+                    target_width, target_height,
+                    src_step,
+                    scale_factor
+                );
+            }
+            break;
+    }
+
+    return cudaGetLastError();
+}
+
+// ============================================================================
+// Color Space Conversion Kernels
+// ============================================================================
+
 // BGR to RGBA 변환 커널
 __global__ void bgr2rgba_kernel(const uint8_t* __restrict__ src,
                                 uint8_t* __restrict__ dst,
                                 int width, int height,
                                 int src_pitch, int dst_pitch,
-                                uint8_t alpha = 255) {
+                                uint8_t alpha) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
     
@@ -324,7 +520,7 @@ __global__ void bgra2rgba_kernel(const uint8_t* __restrict__ src,
 extern "C" cudaError_t cuda_bgr2rgba(const uint8_t* src, uint8_t* dst,
                                      int width, int height,
                                      int src_pitch, int dst_pitch,
-                                     uint8_t alpha = 255, cudaStream_t stream = 0) {
+                                     uint8_t alpha, cudaStream_t stream) {
     dim3 block(32, 8);
     dim3 grid((width + block.x - 1) / block.x,
               (height + block.y - 1) / block.y);
@@ -338,7 +534,7 @@ extern "C" cudaError_t cuda_bgr2rgba(const uint8_t* src, uint8_t* dst,
 extern "C" cudaError_t cuda_bgra2rgba(const uint8_t* src, uint8_t* dst,
                                       int width, int height,
                                       int src_pitch, int dst_pitch,
-                                      cudaStream_t stream = 0) {
+                                      cudaStream_t stream) {
     dim3 block(32, 8);
     dim3 grid((width + block.x - 1) / block.x,
               (height + block.y - 1) / block.y);

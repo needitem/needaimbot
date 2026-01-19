@@ -193,17 +193,36 @@ struct SmallBufferArena {
     }
 };
 
+// Precision enum for pipeline-wide data type control
+enum class PipelinePrecision {
+    FP32 = 0,
+    FP16 = 1,
+    FP8  = 2,  // For Blackwell/Ada GPUs with FP8 support
+    INT8 = 3
+};
+
 struct UnifiedGPUArena {
     std::unique_ptr<CudaMemory<uint8_t>> megaArena;
     
-    float* yoloInput;
+    void* yoloInput;  // void* to support FP32/FP16/FP8 - cast based on precision
     Target* decodedTargets;
     Target* finalTargets;
     Target* nmsTemp;  // Temporary buffer for NMS compaction
     
+    PipelinePrecision precision = PipelinePrecision::FP32;
     
-    void initializePointers(uint8_t* basePtr, int maxDetections, int yoloSize);
-    static size_t calculateArenaSize(int maxDetections, int yoloSize);
+    void initializePointers(uint8_t* basePtr, int maxDetections, int yoloSize, PipelinePrecision prec = PipelinePrecision::FP32);
+    static size_t calculateArenaSize(int maxDetections, int yoloSize, PipelinePrecision prec = PipelinePrecision::FP32);
+    
+    // Helper to get element size based on precision
+    static size_t getElementSize(PipelinePrecision prec) {
+        switch (prec) {
+            case PipelinePrecision::FP16: return 2;
+            case PipelinePrecision::FP8:  return 1;
+            case PipelinePrecision::INT8: return 1;
+            default: return 4;  // FP32
+        }
+    }
 };
 
 
