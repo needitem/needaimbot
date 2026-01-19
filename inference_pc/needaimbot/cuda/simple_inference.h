@@ -84,8 +84,33 @@ public:
                             float headYOffset, float bodyYOffset,
                             InferenceResult& outResult);
 
+    // =========================================================================
+    // ASYNC API - USE WITH CAUTION!
+    // =========================================================================
+    // WARNING: Async mode can cause double-movement if not used correctly!
+    // 
+    // Problem scenario:
+    //   Frame 1 arrives → inference starts (not finished)
+    //   Frame 2 arrives → inference starts again
+    //   Both frames see same target position (mouse hasn't moved yet)
+    //   → Double movement applied!
+    //
+    // CORRECT usage pattern (frame skipping):
+    //   while (running) {
+    //       if (inference.isAsyncComplete()) {
+    //           inference.getAsyncResults(result);
+    //           applyMouseMovement(result);
+    //       }
+    //       if (hasNewFrame && !inference.isAsyncPending()) {
+    //           inference.runInferenceAsync(frame);
+    //       }
+    //   }
+    //
+    // For most use cases, use runInferencePinned() (synchronous) instead.
+    // =========================================================================
+
     // Async version: queue inference, get results later
-    // Enables double-buffering: process frame N while receiving frame N+1
+    // IMPORTANT: Only call if isAsyncPending() returns false!
     bool runInferenceAsync(void* pinnedRgbData, int width, int height,
                            float confThreshold, int headClassId, float headBonus,
                            uint32_t allowedClassMask,
@@ -98,6 +123,9 @@ public:
 
     // Check if async inference is complete (non-blocking)
     bool isAsyncComplete();
+
+    // Check if async inference is pending (use before runInferenceAsync)
+    bool isAsyncPending() const { return m_asyncPending; }
 
     int getModelResolution() const { return m_inputH; }
     int getNumClasses() const { return m_numClasses; }
