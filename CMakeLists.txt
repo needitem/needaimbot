@@ -81,6 +81,7 @@ set(CPP_SOURCES
     needaimbot/overlay/draw_depth.cpp
     needaimbot/overlay/ui_helpers.cpp
     needaimbot/overlay/config_dirty.cpp
+    needaimbot/overlay/debug_window.cpp
     # Depth estimation
     needaimbot/depth/depth_anything_trt.cpp
     needaimbot/depth/depth_mask.cpp

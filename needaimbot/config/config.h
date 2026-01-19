@@ -197,6 +197,7 @@ struct GlobalSettings {
     std::vector<std::string> button_auto_action = {"LeftMouseButton"};
     std::vector<std::string> button_single_shot = {"F8"};
     std::vector<std::string> button_stabilizer = {"None"};
+    std::vector<std::string> button_debug_overlay = {"F9"};
     int overlay_opacity = 225;
     float overlay_ui_scale = 1.0f;
     bool show_window = true;
