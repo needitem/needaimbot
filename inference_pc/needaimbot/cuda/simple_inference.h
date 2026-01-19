@@ -3,8 +3,10 @@
 // - GPU postprocessing (decode + target selection on GPU)
 // - Fused target selection + PID movement on GPU
 // - IoU-based target stickiness (hysteresis)
-// - CUDA Graph capture for minimal kernel launch overhead
-// - Pinned memory for fast host-device transfers
+// - Full CUDA Graph capture (preprocess + inference + postprocess)
+// - Pinned memory for zero-copy host-device transfers
+// - Single D2H transfer for all results (InferenceResult struct)
+// - Double-buffered async pipeline support
 // - FP16 input/output support (native, no conversion)
 #pragma once
 
@@ -33,8 +35,10 @@ public:
     bool loadEngine(const std::string& enginePath);
     bool isLoaded() const { return m_loaded; }
 
-    // Capture CUDA graph for optimized execution
-    bool captureGraph();
+    // Capture full CUDA graph (preprocess + inference + decode + fused + validate)
+    bool captureFullGraph(float confThreshold, int headClassId, float headBonus,
+                          uint32_t allowedClassMask, const PIDConfig& pidConfig,
+                          float iouStickinessThreshold, float headYOffset, float bodyYOffset);
     bool isGraphCaptured() const { return m_graphCaptured; }
 
     // Run inference on host RGB buffer (will upload to GPU)
@@ -64,6 +68,36 @@ public:
                            float headYOffset, float bodyYOffset,
                            MouseMovement& outMovement,
                            Detection* outBestTarget = nullptr);
+
+    // =========================================================================
+    // OPTIMIZED API: Zero-copy from pinned memory + single D2H transfer
+    // =========================================================================
+
+    // Run inference directly from pinned memory (no memcpy needed)
+    // Returns all results in single InferenceResult struct (one D2H transfer)
+    // Best for use with UDPCapture's pinned buffer output
+    bool runInferencePinned(void* pinnedRgbData, int width, int height,
+                            float confThreshold, int headClassId, float headBonus,
+                            uint32_t allowedClassMask,
+                            const PIDConfig& pidConfig,
+                            float iouStickinessThreshold,
+                            float headYOffset, float bodyYOffset,
+                            InferenceResult& outResult);
+
+    // Async version: queue inference, get results later
+    // Enables double-buffering: process frame N while receiving frame N+1
+    bool runInferenceAsync(void* pinnedRgbData, int width, int height,
+                           float confThreshold, int headClassId, float headBonus,
+                           uint32_t allowedClassMask,
+                           const PIDConfig& pidConfig,
+                           float iouStickinessThreshold,
+                           float headYOffset, float bodyYOffset);
+
+    // Get async results (blocks until complete)
+    bool getAsyncResults(InferenceResult& outResult);
+
+    // Check if async inference is complete (non-blocking)
+    bool isAsyncComplete();
 
     int getModelResolution() const { return m_inputH; }
     int getNumClasses() const { return m_numClasses; }
@@ -103,6 +137,10 @@ private:
     PIDState* m_d_pidState = nullptr;         // Persistent PID state on GPU
     MouseMovement* m_d_mouseMovement = nullptr; // Mouse movement output on GPU
 
+    // Combined result buffer for single D2H transfer
+    InferenceResult* m_d_inferenceResult = nullptr;  // GPU
+    InferenceResult* m_h_inferenceResultPinned = nullptr;  // Pinned host
+
     // Pinned host memory for fast transfers
     uint8_t* m_h_rgbPinned = nullptr;
     void* m_h_outputPinned = nullptr;  // FP16 or FP32 depending on model
@@ -111,10 +149,14 @@ private:
     MouseMovement* m_h_mouseMovementPinned = nullptr;  // Pinned memory for mouse movement
     size_t m_outputPinnedSize = 0;
 
-    // CUDA Graph
+    // CUDA Graph for full pipeline
     cudaGraph_t m_graph = nullptr;
     cudaGraphExec_t m_graphExec = nullptr;
     bool m_graphCaptured = false;
+
+    // CUDA event for async completion detection
+    cudaEvent_t m_inferenceComplete = nullptr;
+    bool m_asyncPending = false;
 
     int m_inputH = 320;         // Model input height (target)
     int m_inputW = 320;         // Model input width (target)
@@ -126,10 +168,26 @@ private:
     bool m_inputFP16 = false;   // Input tensor is FP16
     bool m_outputFP16 = false;  // Output tensor is FP16
 
+    // Cached graph parameters (for graph update check)
+    float m_cachedConfThreshold = 0.35f;
+    int m_cachedHeadClassId = 1;
+    float m_cachedHeadBonus = 0.15f;
+    uint32_t m_cachedAllowedClassMask = 0xFFFFFFFF;
+    PIDConfig m_cachedPidConfig;
+    float m_cachedIouThreshold = 0.3f;
+    float m_cachedHeadYOffset = 1.0f;
+    float m_cachedBodyYOffset = 0.15f;
+
     // Internal methods
     void executeStandard();
     void executeGraph();
     void decodeOutput(float confThreshold, std::vector<Detection>& outDetections);
+
+    // Execute full fused pipeline (preprocess + inference + postprocess)
+    void executeFusedPipeline(void* rgbInput, int width, int height,
+                              float confThreshold, int headClassId, float headBonus,
+                              uint32_t allowedClassMask, const PIDConfig& pidConfig,
+                              float iouThreshold, float headYOffset, float bodyYOffset);
 };
 
 } // namespace gpa

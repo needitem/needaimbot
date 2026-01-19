@@ -47,12 +47,12 @@ typedef int SOCKET;
 // Packet header matching game_pc sender (chunked BGRA)
 #pragma pack(push, 1)
 struct UDPPacketHeader {
-    uint32_t frameId;         // 4 bytes - 프레임 번호
-    uint16_t chunkIndex;      // 2 bytes - 청크 인덱스 (0부터)
-    uint16_t totalChunks;     // 2 bytes - 전체 청크 수
-    uint32_t chunkSize;       // 4 bytes - 이 청크의 데이터 크기
-    uint16_t frameWidth;      // 2 bytes - 프레임 너비
-    uint16_t frameHeight;     // 2 bytes - 프레임 높이
+    uint32_t frameId;         // 4 bytes - frame number
+    uint16_t chunkIndex;      // 2 bytes - chunk index (0-based)
+    uint16_t totalChunks;     // 2 bytes - total chunks
+    uint32_t chunkSize;       // 4 bytes - this chunk's data size
+    uint16_t frameWidth;      // 2 bytes - frame width
+    uint16_t frameHeight;     // 2 bytes - frame height
 };  // Total: 16 bytes
 #pragma pack(pop)
 
@@ -69,13 +69,23 @@ public:
     void StopCapture();
     bool IsCapturing() const { return m_isCapturing.load(); }
 
-    // Get latest frame as RGB data
+    // Get latest frame as RGB data (returns PINNED memory - zero-copy ready)
     bool GetLatestFrame(void** frameData, unsigned int* width, unsigned int* height, unsigned int* size);
 
     // Synchronous API - waits for next frame with timeout
-    // Returns RGB data in CUDA pinned memory
+    // Returns RGB data in CUDA pinned memory (zero-copy to GPU)
     bool AcquireFrameSync(void** rgbData, unsigned int* width, unsigned int* height,
                           uint64_t* outFrameId = nullptr, uint32_t timeoutMs = 16);
+
+    // Zero-copy API - returns pinned memory pointer for direct GPU access
+    // No memcpy needed - data is already in pinned memory
+    // Returns the buffer index for double-buffering (0 or 1)
+    bool AcquireFramePinned(void** pinnedRgbData, unsigned int* width, unsigned int* height,
+                            uint64_t* outFrameId = nullptr, int* bufferIndex = nullptr,
+                            uint32_t timeoutMs = 16);
+
+    // Release the pinned buffer after GPU is done (for double-buffering)
+    void ReleaseFrame(int bufferIndex);
 
     // CUDA API - uploads frame to device memory
     bool AcquireFrameToCuda(void* d_rgbBuffer, size_t bufferSize,
@@ -106,10 +116,15 @@ public:
     uint64_t GetDroppedFrameCount() const { return m_droppedFrames.load(); }
     double GetReceiveFps() const;
 
+    // Check if using pinned memory
+    bool IsPinnedMemoryEnabled() const { return m_usePinnedMemory; }
+
 private:
     void receiveThread();
+    bool allocatePinnedBuffers(size_t size);
+    void freePinnedBuffers();
 
-    // Fragment reassembly
+    // Fragment reassembly (uses regular memory, converted to pinned on completion)
     struct FrameFragments {
         std::vector<uint8_t> data;
         std::vector<bool> received;  // Track which packets received
@@ -131,10 +146,18 @@ private:
     std::atomic<bool> m_running{false};
     std::atomic<bool> m_isCapturing{false};
 
-    // Frame buffers (double-buffered)
-    std::vector<uint8_t> m_frameBuffer[2];
-    int m_writeBuffer = 0;
-    int m_readBuffer = 1;
+    // Double-buffered PINNED memory for zero-copy GPU transfer
+    // Using CUDA pinned (page-locked) memory eliminates one memcpy
+    static constexpr int NUM_BUFFERS = 2;
+    uint8_t* m_pinnedFrameBuffer[NUM_BUFFERS] = {nullptr, nullptr};
+    size_t m_pinnedBufferSize = 0;
+    bool m_usePinnedMemory = false;
+    
+    // Buffer state for double-buffering
+    std::atomic<int> m_writeBuffer{0};
+    std::atomic<int> m_readBuffer{1};
+    std::atomic<bool> m_bufferInUse[NUM_BUFFERS] = {false, false};
+    
     std::mutex m_bufferMutex;
     std::condition_variable m_frameReady;
     bool m_newFrameAvailable = false;
@@ -149,8 +172,4 @@ private:
     std::atomic<uint64_t> m_receivedFrames{0};
     std::atomic<uint64_t> m_droppedFrames{0};
     std::chrono::steady_clock::time_point m_startTime;
-
-    // CUDA pinned memory for zero-copy to GPU
-    void* m_pinnedBuffer = nullptr;
-    size_t m_pinnedBufferSize = 0;
 };

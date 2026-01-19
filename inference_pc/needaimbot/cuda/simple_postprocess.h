@@ -38,6 +38,23 @@ struct MouseMovement {
 };
 
 // =============================================================================
+// Combined Inference Result (for single D2H transfer optimization)
+// =============================================================================
+
+// All inference outputs packed into single struct for one cudaMemcpy
+// This reduces D2H transfer overhead from 3 copies to 1
+struct InferenceResult {
+    MouseMovement movement;     // 8 bytes: dx, dy
+    int hasTarget;              // 4 bytes: 1 if target found, 0 otherwise
+    int reserved;               // 4 bytes: padding for alignment
+    float targetX1, targetY1;   // 8 bytes: best target bbox (if hasTarget)
+    float targetX2, targetY2;   // 8 bytes
+    float targetConf;           // 4 bytes: confidence
+    int targetClassId;          // 4 bytes: class ID
+    // Total: 40 bytes - fits in single cache line
+};
+
+// =============================================================================
 // GPU-based YOLO Decoding
 // =============================================================================
 
