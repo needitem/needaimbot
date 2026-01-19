@@ -199,6 +199,7 @@ struct UnifiedGPUArena {
     float* yoloInput;
     Target* decodedTargets;
     Target* finalTargets;
+    Target* nmsTemp;  // Temporary buffer for NMS compaction
     
     
     void initializePointers(uint8_t* basePtr, int maxDetections, int yoloSize);
@@ -419,6 +420,8 @@ private:
             int max_detections;
             int detection_resolution;
             float confidence_threshold;
+            bool enable_nms;
+            float nms_iou_threshold;
             std::array<unsigned char, 80> class_filter;  // Fixed size for cache-friendly access
             std::array<unsigned char, 80> prev_class_filter;  // Previous filter for change detection
         } detection;
@@ -499,6 +502,11 @@ private:
     
     std::unique_ptr<CudaPinnedMemory<MouseMovement>> m_h_movement;
     std::unique_ptr<CudaPinnedMemory<unsigned char>> m_h_allowFlags;
+    
+    // Host pinned buffers for target data (for debug overlay)
+    std::unique_ptr<CudaPinnedMemory<Target>> m_h_targets;
+    std::unique_ptr<CudaPinnedMemory<int>> m_h_targetCount;
+    static constexpr int MAX_HOST_TARGETS = 64;
 
     bool m_mouseMovementUsesMappedMemory = false;
 

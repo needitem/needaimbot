@@ -417,6 +417,9 @@ void draw_buttons()
         draw_hotkey_table_row("Toggle Overlay", ctx.config.global().button_open_overlay, "overlay",
                              "Keys that show/hide this overlay", true);
 
+        draw_hotkey_table_row("Debug Overlay", ctx.config.global().button_debug_overlay, "debug_overlay",
+                             "Keys that toggle the debug overlay (shows detection boxes on screen)");
+
         ImGui::EndTable();
     }
 

@@ -83,7 +83,6 @@ set(CPP_SOURCES
     needaimbot/overlay/config_dirty.cpp
     needaimbot/overlay/debug_window.cpp
     # Depth estimation
-    needaimbot/depth/depth_anything_trt.cpp
     needaimbot/depth/depth_mask.cpp
     # ImGui
     needaimbot/imgui/imgui.cpp
@@ -99,6 +98,7 @@ set(CUDA_SOURCES
     needaimbot/cuda/preprocessing.cu
     needaimbot/cuda/detection/postProcessGpu.cu
     needaimbot/cuda/detection/cuda_float_processing.cu
+    needaimbot/depth/depth_anything_trt.cu
 )
 
 # =============================================================================

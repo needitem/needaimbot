@@ -140,6 +140,29 @@ static void draw_detection_settings()
         ImGui::EndTooltip();
     }
     
+    UIHelpers::Spacer();
+    
+    // NMS Settings
+    if (ImGui::Checkbox("Enable NMS", &ctx.config.profile().enable_nms)) {
+        SAVE_PROFILE();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::BeginTooltip();
+        ImGui::Text("Non-Maximum Suppression removes duplicate/overlapping detections.");
+        ImGui::Text("Recommended for YOLO8/9/11/12. YOLO10/yolo_nms already includes NMS.");
+        ImGui::EndTooltip();
+    }
+    
+    if (ctx.config.profile().enable_nms) {
+        ImGui::Indent();
+        if (UIHelpers::EnhancedSliderFloat("IoU Threshold", &ctx.config.profile().nms_iou_threshold, 0.1f, 0.9f, "%.2f",
+                                           "IoU threshold for suppression. Lower = more aggressive filtering."))
+        {
+            SAVE_PROFILE();
+        }
+        ImGui::Unindent();
+    }
+    
     UIHelpers::EndCard();
 }
 
