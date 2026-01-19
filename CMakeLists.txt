@@ -1,5 +1,16 @@
 # EngineExport - ONNX to TensorRT Engine Converter
 cmake_minimum_required(VERSION 3.18)
+project(EngineExport LANGUAGES CXX CUDA)
+
+# C++17 required for std::filesystem
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Find CUDA
+find_package(CUDAToolkit REQUIRED)
+
+# TensorRT path (use bundled version)
+set(TENSORRT_PATH ${CMAKE_SOURCE_DIR}/needaimbot/modules/TensorRT-10.14.1.48)
 
 # Find OpenGL
 find_package(OpenGL REQUIRED)
@@ -195,14 +206,11 @@ if(WIN32)
             ${TENSORRT_PATH}/bin/nvonnxparser_10.dll
             $<TARGET_FILE_DIR:EngineExport>
     )
+    # Builder resources for RTX 30xx (sm86), 40xx (sm89), 50xx (sm120)
     add_custom_command(TARGET EngineExport POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${TENSORRT_PATH}/bin/nvinfer_builder_resource_ptx_10.dll
-            ${TENSORRT_PATH}/bin/nvinfer_builder_resource_sm75_10.dll
-            ${TENSORRT_PATH}/bin/nvinfer_builder_resource_sm80_10.dll
             ${TENSORRT_PATH}/bin/nvinfer_builder_resource_sm86_10.dll
             ${TENSORRT_PATH}/bin/nvinfer_builder_resource_sm89_10.dll
-            ${TENSORRT_PATH}/bin/nvinfer_builder_resource_sm90_10.dll
             ${TENSORRT_PATH}/bin/nvinfer_builder_resource_sm120_10.dll
             $<TARGET_FILE_DIR:EngineExport>
     )
