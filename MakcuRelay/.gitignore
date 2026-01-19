@@ -1,0 +1,5 @@
+build/
+build_linux/
+MakcuRelay
+x64/
+*.pdb
