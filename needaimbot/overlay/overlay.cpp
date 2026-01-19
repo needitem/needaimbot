@@ -715,6 +715,12 @@ void OverlayThread()
                         ImGui::EndTabItem();
                     }
 
+                    if (ImGui::BeginTabItem("Depth"))
+                    {
+                        draw_depth_settings();
+                        ImGui::EndTabItem();
+                    }
+
                 }
 
                 // Efficient config change detection - only check values that trigger actions

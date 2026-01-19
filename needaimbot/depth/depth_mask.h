@@ -1,10 +1,12 @@
 #pragma once
 #ifdef USE_CUDA
 
+#include <cuda_runtime.h>
 #include <chrono>
 #include <mutex>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace nvinfer1 {
     class ILogger;
@@ -30,12 +32,33 @@ struct DepthMaskDebugState {
 
 class DepthMaskGenerator {
 public:
-    void update(const float* frameRgb, int width, int height,
+    DepthMaskGenerator();
+    ~DepthMaskGenerator();
+
+    // Update mask from CPU RGB image
+    void update(const uint8_t* frameRgb, int width, int height,
                 const DepthMaskOptions& options,
                 const std::string& modelPath, nvinfer1::ILogger& logger);
     
-    // Get the binary mask (0 or 255, same size as input)
-    bool getMask(unsigned char* outMask, int& outWidth, int& outHeight) const;
+    // Update mask from GPU RGBA image
+    void updateGpu(const uint8_t* d_frameRgba, int width, int height, int pitch,
+                   const DepthMaskOptions& options,
+                   const std::string& modelPath, nvinfer1::ILogger& logger,
+                   cudaStream_t stream = nullptr);
+    
+    // Get the binary mask (0 or 255, same size as input frame)
+    // Returns true if mask is available
+    bool getMask(std::vector<uint8_t>& outMask, int& outWidth, int& outHeight) const;
+    
+    // Get normalized depth map (0-255)
+    bool getDepthMap(std::vector<uint8_t>& outDepth, int& outWidth, int& outHeight) const;
+    
+    // Check if a point (in frame coordinates) is in the "near" region
+    bool isPointNear(int x, int y) const;
+    
+    // Get depth value at a point (0-255, lower = nearer by default)
+    uint8_t getDepthAt(int x, int y) const;
+    
     bool ready() const;
     std::string lastError() const;
     std::chrono::steady_clock::time_point lastAttemptTime() const;
@@ -45,7 +68,8 @@ public:
 
 private:
     mutable std::mutex state_mutex;
-    std::vector<unsigned char> mask_binary;
+    std::vector<uint8_t> depth_map;      // Normalized depth (0-255)
+    std::vector<uint8_t> mask_binary;    // Binary mask (0 or 255)
     int mask_width = 0;
     int mask_height = 0;
     std::chrono::steady_clock::time_point last_update = std::chrono::steady_clock::time_point::min();
@@ -57,6 +81,9 @@ private:
     bool initialized = false;
 
     DepthAnythingTrt* model = nullptr;
+    
+    // Internal: generate binary mask from depth map
+    void generateMask(int near_percent, bool invert);
 };
 
 DepthMaskGenerator& GetDepthMaskGenerator();

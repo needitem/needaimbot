@@ -78,6 +78,7 @@ set(CPP_SOURCES
     needaimbot/overlay/draw_target.cpp
     needaimbot/overlay/draw_color_filter.cpp
     needaimbot/overlay/draw_stabilizer.cpp
+    needaimbot/overlay/draw_depth.cpp
     needaimbot/overlay/ui_helpers.cpp
     needaimbot/overlay/config_dirty.cpp
     # Depth estimation
