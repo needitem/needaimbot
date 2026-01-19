@@ -131,6 +131,63 @@ void uploadDebugFrame(const SimpleMat& rgbaCpu)
     g_pd3dDeviceContext->Unmap(g_debugTex, 0);
 }
 
+// Draw the capture frame/FOV indicator on the debug preview
+void drawCaptureFrame(ImDrawList* draw_list, ImVec2 image_pos, float debug_scale, int capture_size) {
+    auto& ctx = AppContext::getInstance();
+    
+    if (!draw_list || debug_scale <= 0 || !ctx.config.profile().show_capture_frame) return;
+    
+    // Get frame color from config
+    ImU32 frame_color = IM_COL32(
+        ctx.config.profile().capture_frame_r,
+        ctx.config.profile().capture_frame_g,
+        ctx.config.profile().capture_frame_b,
+        ctx.config.profile().capture_frame_a
+    );
+    float thickness = ctx.config.profile().capture_frame_thickness;
+    
+    // Calculate frame rectangle (entire capture area)
+    float frame_size = capture_size * debug_scale;
+    ImVec2 p1 = image_pos;
+    ImVec2 p2 = ImVec2(image_pos.x + frame_size, image_pos.y + frame_size);
+    
+    // Draw the frame
+    draw_list->AddRect(p1, p2, frame_color, 0.0f, 0, thickness);
+    
+    // Draw center crosshair
+    float center_x = image_pos.x + frame_size / 2.0f;
+    float center_y = image_pos.y + frame_size / 2.0f;
+    float cross_size = 10.0f * debug_scale;
+    
+    draw_list->AddLine(
+        ImVec2(center_x - cross_size, center_y),
+        ImVec2(center_x + cross_size, center_y),
+        frame_color, 1.0f
+    );
+    draw_list->AddLine(
+        ImVec2(center_x, center_y - cross_size),
+        ImVec2(center_x, center_y + cross_size),
+        frame_color, 1.0f
+    );
+    
+    // If circle mask is enabled, draw a circle to indicate the active area
+    if (ctx.config.profile().circle_mask) {
+        float radius = frame_size / 2.0f;
+        draw_list->AddCircle(
+            ImVec2(center_x, center_y),
+            radius,
+            IM_COL32(
+                ctx.config.profile().capture_frame_r,
+                ctx.config.profile().capture_frame_g,
+                ctx.config.profile().capture_frame_b,
+                ctx.config.profile().capture_frame_a / 2  // Half alpha for the circle
+            ),
+            64,  // segments
+            thickness * 0.5f
+        );
+    }
+}
+
 void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float debug_scale, const std::vector<Target>* targets_override) {
     auto& ctx = AppContext::getInstance();
 

@@ -206,6 +206,58 @@ static void draw_capture_source_settings()
 }
 
 
+static void draw_capture_frame_settings()
+{
+    auto& ctx = AppContext::getInstance();
+
+    UIHelpers::BeginCard("Capture Frame Overlay");
+
+    if (UIHelpers::BeautifulToggle("Show Capture Frame", &ctx.config.profile().show_capture_frame,
+                                   "Draw a frame showing capture area in debug preview")) {
+        SAVE_PROFILE();
+    }
+
+    if (ctx.config.profile().show_capture_frame) {
+        UIHelpers::CompactSpacer();
+        
+        // Color sliders
+        ImGui::Text("Frame Color (RGBA)");
+        bool colorChanged = false;
+
+        int r = ctx.config.profile().capture_frame_r;
+        int g = ctx.config.profile().capture_frame_g;
+        int b = ctx.config.profile().capture_frame_b;
+        int a = ctx.config.profile().capture_frame_a;
+
+        if (ImGui::SliderInt("R##frame_r", &r, 0, 255)) { colorChanged = true; }
+        if (ImGui::SliderInt("G##frame_g", &g, 0, 255)) { colorChanged = true; }
+        if (ImGui::SliderInt("B##frame_b", &b, 0, 255)) { colorChanged = true; }
+        if (ImGui::SliderInt("A##frame_a", &a, 0, 255)) { colorChanged = true; }
+
+        if (colorChanged) {
+            ctx.config.profile().capture_frame_r = std::clamp(r, 0, 255);
+            ctx.config.profile().capture_frame_g = std::clamp(g, 0, 255);
+            ctx.config.profile().capture_frame_b = std::clamp(b, 0, 255);
+            ctx.config.profile().capture_frame_a = std::clamp(a, 0, 255);
+        }
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+            SAVE_PROFILE();
+        }
+
+        UIHelpers::CompactSpacer();
+
+        float thickness = ctx.config.profile().capture_frame_thickness;
+        if (ImGui::SliderFloat("Thickness", &thickness, 0.5f, 5.0f, "%.1f")) {
+            ctx.config.profile().capture_frame_thickness = thickness;
+        }
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+            SAVE_PROFILE();
+        }
+    }
+
+    UIHelpers::EndCard();
+}
+
 void draw_capture_settings()
 {
     draw_capture_area_settings();
@@ -215,5 +267,8 @@ void draw_capture_settings()
     UIHelpers::Spacer();
 
     draw_capture_source_settings();
+    UIHelpers::Spacer();
+
+    draw_capture_frame_settings();
 }
 
