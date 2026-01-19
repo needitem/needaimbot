@@ -8,6 +8,11 @@ set(ENV{CUDA_PATH} "${CUDA_TOOLKIT_ROOT_DIR}")
 
 project(NVDisplayContainer LANGUAGES CXX CUDA)
 
+# =============================================================================
+# Feature Flags
+# =============================================================================
+option(ENABLE_DEPTH_ESTIMATION "Enable depth estimation feature" OFF)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 17)
@@ -78,12 +83,9 @@ set(CPP_SOURCES
     needaimbot/overlay/draw_target.cpp
     needaimbot/overlay/draw_color_filter.cpp
     needaimbot/overlay/draw_stabilizer.cpp
-    needaimbot/overlay/draw_depth.cpp
     needaimbot/overlay/ui_helpers.cpp
     needaimbot/overlay/config_dirty.cpp
     needaimbot/overlay/debug_window.cpp
-    # Depth estimation
-    needaimbot/depth/depth_mask.cpp
     # ImGui
     needaimbot/imgui/imgui.cpp
     needaimbot/imgui/imgui_draw.cpp
@@ -98,8 +100,18 @@ set(CUDA_SOURCES
     needaimbot/cuda/preprocessing.cu
     needaimbot/cuda/detection/postProcessGpu.cu
     needaimbot/cuda/detection/cuda_float_processing.cu
-    needaimbot/depth/depth_anything_trt.cu
 )
+
+# Depth estimation sources (optional)
+if(ENABLE_DEPTH_ESTIMATION)
+    list(APPEND CPP_SOURCES
+        needaimbot/overlay/draw_depth.cpp
+        needaimbot/depth/depth_mask.cpp
+    )
+    list(APPEND CUDA_SOURCES
+        needaimbot/depth/depth_anything_trt.cu
+    )
+endif()
 
 # =============================================================================
 # 실행 파일
@@ -164,6 +176,7 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
     UNICODE
     _UNICODE
     USE_CUDA
+    $<$<BOOL:${ENABLE_DEPTH_ESTIMATION}>:ENABLE_DEPTH_ESTIMATION>
 )
 
 if(MSVC)
