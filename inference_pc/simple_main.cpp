@@ -228,21 +228,55 @@ struct Config {
 // =============================================================================
 // This callback runs on CUDA's internal thread when GPU inference completes.
 // It sends mouse movement immediately, eliminating cudaStreamSynchronize latency.
+//
+// OPTIMIZATION: Cached config values eliminate pointer indirection in hot path.
+// All frequently accessed values are copied to the context struct at init time.
 
 struct CallbackContext {
+    // Hardware reference (only thing we can't cache)
     MakcuConnection* makcu;
-    const Config* config;
+    
+    // Cached config values (lock-free, no pointer chasing)
+    bool noiseEnabled;
+    float shootOffsetX;
+    float shootOffsetY;
+    
+    // Movement filter state (deadband + hysteresis)
+    float deadbandX;          // Minimum movement threshold X
+    float deadbandY;          // Minimum movement threshold Y
+    int lastMoveX;            // Previous movement for sign-flip detection
+    int lastMoveY;
+    int consecutiveSameSign;  // Counter for hysteresis
+    
+    // Noise generation (thread-safe via mutex)
     std::mt19937* noiseGen;
     std::normal_distribution<float>* noiseDistX;
     std::normal_distribution<float>* noiseDistY;
-    std::mutex* noiseMutex;  // Protect RNG access from callback thread
+    std::mutex* noiseMutex;
+    
+    // Initialize cached values from config
+    void initFromConfig(const Config& cfg) {
+        noiseEnabled = cfg.noiseEnabled;
+        shootOffsetX = cfg.shootOffsetX;
+        shootOffsetY = cfg.shootOffsetY;
+        
+        // Movement filter defaults (can be made configurable)
+        deadbandX = 0.3f;  // Ignore movements < 0.3 pixels
+        deadbandY = 0.3f;
+        lastMoveX = 0;
+        lastMoveY = 0;
+        consecutiveSameSign = 0;
+    }
 };
 
 // GPU callback handler - called immediately when inference completes
+// OPTIMIZED: Uses cached config values, no pointer indirection
 void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
     CallbackContext* ctx = static_cast<CallbackContext*>(userData);
     
     if (!result.hasTarget) {
+        // Reset hysteresis state when no target
+        ctx->consecutiveSameSign = 0;
         return;
     }
     
@@ -251,7 +285,7 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
     float moveY = static_cast<float>(result.movement.dy);
     
     // Apply Gaussian noise for humanization (thread-safe)
-    if (ctx->config->noiseEnabled) {
+    if (ctx->noiseEnabled) {
         std::lock_guard<std::mutex> lock(*ctx->noiseMutex);
         moveX += (*ctx->noiseDistX)(*ctx->noiseGen);
         moveY += (*ctx->noiseDistY)(*ctx->noiseGen);
@@ -260,13 +294,41 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
     // Apply shoot offset when shooting (shifts aim point)
     // Note: shooting_active is atomic, safe to read from callback thread
     if (ctx->makcu->shooting_active) {
-        moveX += ctx->config->shootOffsetX;
-        moveY += ctx->config->shootOffsetY;
+        moveX += ctx->shootOffsetX;  // Cached value, no pointer chase
+        moveY += ctx->shootOffsetY;
     }
+    
+    // =======================================================================
+    // Movement Filter: Deadband + Sign-flip suppression
+    // =======================================================================
+    // Deadband: Ignore tiny movements (noise/jitter)
+    if (std::abs(moveX) < ctx->deadbandX) moveX = 0.0f;
+    if (std::abs(moveY) < ctx->deadbandY) moveY = 0.0f;
     
     // Round to integer for mouse movement
     int finalX = static_cast<int>(std::round(moveX));
     int finalY = static_cast<int>(std::round(moveY));
+    
+    // Sign-flip suppression: Prevent jittery back-and-forth movement
+    // If sign flips on consecutive frames, suppress until stable
+    bool signFlipX = (finalX != 0 && ctx->lastMoveX != 0 && 
+                      ((finalX > 0) != (ctx->lastMoveX > 0)));
+    bool signFlipY = (finalY != 0 && ctx->lastMoveY != 0 && 
+                      ((finalY > 0) != (ctx->lastMoveY > 0)));
+    
+    if (signFlipX || signFlipY) {
+        // Sign flip detected - apply hysteresis
+        ctx->consecutiveSameSign = 0;
+        // Only suppress if movement is small (likely jitter, not intentional)
+        if (std::abs(finalX) < 3 && signFlipX) finalX = 0;
+        if (std::abs(finalY) < 3 && signFlipY) finalY = 0;
+    } else if (finalX != 0 || finalY != 0) {
+        ctx->consecutiveSameSign++;
+    }
+    
+    // Update last movement for next frame
+    if (finalX != 0) ctx->lastMoveX = finalX;
+    if (finalY != 0) ctx->lastMoveY = finalY;
     
     // Send mouse move immediately (MakcuConnection::move is thread-safe)
     if (finalX != 0 || finalY != 0) {
@@ -333,10 +395,10 @@ int main(int argc, char* argv[]) {
     std::normal_distribution<float> noiseDistY(0.0f, cfg.noiseStddevY);
     std::mutex noiseMutex;  // Protect RNG from callback thread
 
-    // Setup callback context
+    // Setup callback context with cached config values
     CallbackContext callbackCtx;
     callbackCtx.makcu = &makcu;
-    callbackCtx.config = &cfg;
+    callbackCtx.initFromConfig(cfg);  // Cache config values (lock-free)
     callbackCtx.noiseGen = &noiseGen;
     callbackCtx.noiseDistX = &noiseDistX;
     callbackCtx.noiseDistY = &noiseDistY;
@@ -347,6 +409,8 @@ int main(int argc, char* argv[]) {
 
     std::cout << "[Simple] Full GPU pipeline: ENABLED (inference + decode + target + PID)" << std::endl;
     std::cout << "[Simple] GPU Callback API: ENABLED (lowest latency, no sync wait)" << std::endl;
+    std::cout << "[Simple] Lock-free config cache: ENABLED" << std::endl;
+    std::cout << "[Simple] Movement filter (deadband + sign-flip suppression): ENABLED" << std::endl;
     std::cout << "[Simple] IoU-based target stickiness: ENABLED" << std::endl;
     std::cout << "[Simple] Zero-copy pinned memory: " << (udpCapture.IsPinnedMemoryEnabled() ? "ENABLED" : "DISABLED") << std::endl;
 
