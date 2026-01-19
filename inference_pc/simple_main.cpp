@@ -1,7 +1,8 @@
 // Simple aimbot - clean implementation
 // UDP capture + TensorRT inference + Mouse control via Makcu
 // Features: Full GPU pipeline (inference + postprocess + PID), No-recoil
-// Minimal CPU usage - only frame receive and mouse send
+// GPU Callback API for lowest latency (no cudaStreamSync wait)
+// Minimal CPU usage - only frame receive, mouse send is done in GPU callback
 
 #include <iostream>
 #include <fstream>
@@ -13,6 +14,7 @@
 #include <cmath>
 #include <iomanip>
 #include <random>
+#include <mutex>
 
 #include "needaimbot/cuda/simple_inference.h"
 #include "needaimbot/cuda/simple_postprocess.h"
@@ -24,11 +26,16 @@
 using json = nlohmann::json;
 
 std::atomic<bool> g_running{true};
+std::atomic<int> g_frameCount{0};  // For stats (atomic for callback access)
 
 void signalHandler(int sig) {
     std::cout << "\n[Simple] Received signal " << sig << ", shutting down..." << std::endl;
     g_running = false;
 }
+
+// Forward declaration
+struct Config;
+struct CallbackContext;
 
 // Configuration
 struct Config {
@@ -216,6 +223,59 @@ struct Config {
     }
 };
 
+// =============================================================================
+// GPU Callback Context and Handler
+// =============================================================================
+// This callback runs on CUDA's internal thread when GPU inference completes.
+// It sends mouse movement immediately, eliminating cudaStreamSynchronize latency.
+
+struct CallbackContext {
+    MakcuConnection* makcu;
+    const Config* config;
+    std::mt19937* noiseGen;
+    std::normal_distribution<float>* noiseDistX;
+    std::normal_distribution<float>* noiseDistY;
+    std::mutex* noiseMutex;  // Protect RNG access from callback thread
+};
+
+// GPU callback handler - called immediately when inference completes
+void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
+    CallbackContext* ctx = static_cast<CallbackContext*>(userData);
+    
+    if (!result.hasTarget) {
+        return;
+    }
+    
+    // Mouse movement from InferenceResult
+    float moveX = static_cast<float>(result.movement.dx);
+    float moveY = static_cast<float>(result.movement.dy);
+    
+    // Apply Gaussian noise for humanization (thread-safe)
+    if (ctx->config->noiseEnabled) {
+        std::lock_guard<std::mutex> lock(*ctx->noiseMutex);
+        moveX += (*ctx->noiseDistX)(*ctx->noiseGen);
+        moveY += (*ctx->noiseDistY)(*ctx->noiseGen);
+    }
+    
+    // Apply shoot offset when shooting (shifts aim point)
+    // Note: shooting_active is atomic, safe to read from callback thread
+    if (ctx->makcu->shooting_active) {
+        moveX += ctx->config->shootOffsetX;
+        moveY += ctx->config->shootOffsetY;
+    }
+    
+    // Round to integer for mouse movement
+    int finalX = static_cast<int>(std::round(moveX));
+    int finalY = static_cast<int>(std::round(moveY));
+    
+    // Send mouse move immediately (MakcuConnection::move is thread-safe)
+    if (finalX != 0 || finalY != 0) {
+        ctx->makcu->move(finalX, finalY);
+    }
+    
+    // Update frame counter (atomic)
+    g_frameCount++;
+}
 
 int main(int argc, char* argv[]) {
     std::signal(SIGINT, signalHandler);
@@ -265,21 +325,28 @@ int main(int argc, char* argv[]) {
 
     // 4. State - all GPU now, minimal CPU state
     gpa::PIDConfig gpuPidConfig = cfg.toGpuPIDConfig();
-    gpa::MouseMovement mouseMovement;
-    gpa::Detection bestTarget;
 
-    // Gaussian noise generator for humanization
+    // Gaussian noise generator for humanization (used in callback)
     std::random_device rd;
     std::mt19937 noiseGen(rd());
     std::normal_distribution<float> noiseDistX(0.0f, cfg.noiseStddevX);
     std::normal_distribution<float> noiseDistY(0.0f, cfg.noiseStddevY);
+    std::mutex noiseMutex;  // Protect RNG from callback thread
 
-    int frameCount = 0;
+    // Setup callback context
+    CallbackContext callbackCtx;
+    callbackCtx.makcu = &makcu;
+    callbackCtx.config = &cfg;
+    callbackCtx.noiseGen = &noiseGen;
+    callbackCtx.noiseDistX = &noiseDistX;
+    callbackCtx.noiseDistY = &noiseDistY;
+    callbackCtx.noiseMutex = &noiseMutex;
+
     auto lastStatTime = std::chrono::steady_clock::now();
     auto lastRecoilTime = std::chrono::steady_clock::now();
-    auto lastMouseTime = std::chrono::steady_clock::now();
 
     std::cout << "[Simple] Full GPU pipeline: ENABLED (inference + decode + target + PID)" << std::endl;
+    std::cout << "[Simple] GPU Callback API: ENABLED (lowest latency, no sync wait)" << std::endl;
     std::cout << "[Simple] IoU-based target stickiness: ENABLED" << std::endl;
     std::cout << "[Simple] Zero-copy pinned memory: " << (udpCapture.IsPinnedMemoryEnabled() ? "ENABLED" : "DISABLED") << std::endl;
 
@@ -298,30 +365,29 @@ int main(int argc, char* argv[]) {
     std::cout << "[Simple] Right-click (or Side2) = AIM" << std::endl;
     std::cout << "[Simple] Left+Right = AIM + NO-RECOIL" << std::endl;
 
-    // 6. Main loop with optimized zero-copy pipeline
-    int loopCount = 0;
+    // 6. Main loop with GPU callback API
+    // - Frame acquisition runs on main thread
+    // - Inference is queued to GPU
+    // - Mouse movement is sent in GPU callback (no cudaStreamSync wait!)
     int frameRecvCount = 0;
-    gpa::InferenceResult inferenceResult;  // Single struct for all results
 
     while (g_running) {
-        loopCount++;
-
         // Wait for frame (returns pinned memory directly)
         void* pinnedRgbData = nullptr;
         unsigned int width = 0, height = 0;
         uint64_t frameId = 0;
         int bufferIndex = -1;
 
-        // Stats every second (even without frames)
+        // Stats every second (using atomic g_frameCount from callbacks)
         auto now = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastStatTime).count();
         if (elapsed >= 1000) {
+            int processedFrames = g_frameCount.exchange(0);  // Atomic read and reset
             std::cout << "\r[Simple] Recv: " << frameRecvCount
-                      << " | FPS: " << std::fixed << std::setprecision(1) << (frameCount * 1000.0f / elapsed)
+                      << " | FPS: " << std::fixed << std::setprecision(1) << (processedFrames * 1000.0f / elapsed)
                       << " | Aim: " << (makcu.aiming_active ? "ON " : "OFF")
                       << " | Shoot: " << (makcu.shooting_active ? "ON " : "OFF")
-                      << "    " << std::flush;
-            frameCount = 0;
+                      << " [GPU Callback]" << std::flush;
             lastStatTime = now;
         }
 
@@ -355,9 +421,8 @@ int main(int argc, char* argv[]) {
 
         // No-recoil compensation (runs every tick while left+right click)
         if (cfg.noRecoilEnabled && shooting && aiming) {
-            auto now = std::chrono::steady_clock::now();
-            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastRecoilTime).count();
-            if (elapsed >= cfg.recoilTickMs) {
+            auto recoilElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastRecoilTime).count();
+            if (recoilElapsed >= cfg.recoilTickMs) {
                 int recoilX = static_cast<int>(cfg.recoilCompX);
                 int recoilY = static_cast<int>(cfg.recoilCompY);
                 if (recoilX != 0 || recoilY != 0) {
@@ -373,49 +438,26 @@ int main(int argc, char* argv[]) {
             continue;
         }
 
-        // OPTIMIZED: Run inference directly from pinned memory (zero intermediate copy)
-        // Single D2H transfer for all results (InferenceResult struct)
-        bool hasTarget = inference.runInferencePinned(
+        // GPU CALLBACK API: Queue inference, callback fires when GPU completes
+        // No cudaStreamSynchronize - mouse movement happens in callback thread!
+        inference.runInferenceWithCallback(
             pinnedRgbData, width, height,
             cfg.confThreshold, cfg.headClassId, cfg.headBonus,
             cfg.getAllowedClassMask(),
             gpuPidConfig,
             cfg.iouStickinessThreshold,
             cfg.headAimPoint, cfg.bodyAimPoint,
-            inferenceResult);
+            inferenceCallback, &callbackCtx);
 
-        // Release buffer after inference is queued
+        // Release buffer after inference is queued (GPU is working asynchronously)
         udpCapture.ReleaseFrame(bufferIndex);
 
-        frameCount++;
-
-        if (hasTarget) {
-            // Mouse movement from single InferenceResult struct
-            float moveX = static_cast<float>(inferenceResult.movement.dx);
-            float moveY = static_cast<float>(inferenceResult.movement.dy);
-
-            // Apply Gaussian noise for humanization
-            if (cfg.noiseEnabled) {
-                moveX += noiseDistX(noiseGen);
-                moveY += noiseDistY(noiseGen);
-            }
-
-            // Apply shoot offset when aiming+shooting (shifts aim point)
-            if (shooting) {
-                moveX += cfg.shootOffsetX;
-                moveY += cfg.shootOffsetY;
-            }
-
-            // Round to integer for mouse movement
-            int finalX = static_cast<int>(std::round(moveX));
-            int finalY = static_cast<int>(std::round(moveY));
-
-            // Send mouse move immediately (no rate limiting)
-            if (finalX != 0 || finalY != 0) {
-                makcu.move(finalX, finalY);
-            }
-        }
+        // Main thread immediately loops back to get next frame
+        // while GPU processes this one and callback handles mouse movement
     }
+
+    // Wait for any pending GPU work before shutdown
+    cudaStreamSynchronize(inference.getStream());
 
     std::cout << "\n[Simple] Shutting down..." << std::endl;
     udpCapture.StopCapture();

@@ -14,6 +14,7 @@
 #include <vector>
 #include <memory>
 #include <cstdint>
+#include <functional>
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 #include <NvInfer.h>
@@ -83,6 +84,31 @@ public:
                             float iouStickinessThreshold,
                             float headYOffset, float bodyYOffset,
                             InferenceResult& outResult);
+
+    // =========================================================================
+    // GPU CALLBACK API - LOWEST LATENCY (like main branch)
+    // =========================================================================
+    // Uses cudaLaunchHostFunc to execute callback immediately when GPU finishes.
+    // No CPU waiting - callback runs on CUDA's internal thread.
+    //
+    // Callback signature: void callback(const InferenceResult& result, void* userData)
+    //
+    // THREAD SAFETY: Callback runs on CUDA thread, NOT main thread!
+    // - Keep callback fast (just send mouse command)
+    // - Don't access non-thread-safe resources
+    // =========================================================================
+
+    using InferenceCallback = std::function<void(const InferenceResult&, void*)>;
+
+    // Run inference with GPU callback - lowest latency option
+    // Callback is called immediately when GPU finishes (no cudaStreamSync)
+    bool runInferenceWithCallback(void* pinnedRgbData, int width, int height,
+                                  float confThreshold, int headClassId, float headBonus,
+                                  uint32_t allowedClassMask,
+                                  const PIDConfig& pidConfig,
+                                  float iouStickinessThreshold,
+                                  float headYOffset, float bodyYOffset,
+                                  InferenceCallback callback, void* userData = nullptr);
 
     // =========================================================================
     // ASYNC API - USE WITH CAUTION!
