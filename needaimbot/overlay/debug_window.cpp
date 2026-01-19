@@ -222,36 +222,46 @@ static bool InitD2D() {
     );
     if (FAILED(hr)) return false;
     
-    // Create text format
+    // Create text format with larger, clearer font
     hr = g_dwriteFactory->CreateTextFormat(
-        L"Consolas",
+        L"Segoe UI",
         nullptr,
-        DWRITE_FONT_WEIGHT_BOLD,
+        DWRITE_FONT_WEIGHT_SEMI_BOLD,
         DWRITE_FONT_STYLE_NORMAL,
         DWRITE_FONT_STRETCH_NORMAL,
-        14.0f,
+        16.0f,
         L"en-us",
         &g_textFormat
     );
     if (FAILED(hr)) return false;
     
-    // Create render target
+    // Set text rendering for clarity
+    g_textFormat->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+    g_textFormat->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+    
+    // Create render target with better text rendering
     D2D1_SIZE_U size = D2D1::SizeU(g_screenWidth, g_screenHeight);
     D2D1_RENDER_TARGET_PROPERTIES rtProps = D2D1::RenderTargetProperties(
         D2D1_RENDER_TARGET_TYPE_DEFAULT,
-        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED),
+        0.0f, 0.0f,
+        D2D1_RENDER_TARGET_USAGE_NONE,
+        D2D1_FEATURE_LEVEL_DEFAULT
     );
     D2D1_HWND_RENDER_TARGET_PROPERTIES hwndProps = D2D1::HwndRenderTargetProperties(g_hwnd, size);
     
     hr = g_d2dFactory->CreateHwndRenderTarget(rtProps, hwndProps, &g_renderTarget);
     if (FAILED(hr)) return false;
     
+    // Set text antialiasing mode for clearer text
+    g_renderTarget->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE);
+    
     // Create brushes
     g_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.0f, 1.0f, 0.0f, 1.0f), &g_brushGreen);
     g_renderTarget->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 0.0f, 1.0f), &g_brushYellow);
     g_renderTarget->CreateSolidColorBrush(D2D1::ColorF(1.0f, 0.0f, 0.0f, 1.0f), &g_brushRed);
     g_renderTarget->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 1.0f), &g_brushWhite);
-    g_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.7f), &g_brushBackground);
+    g_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.8f), &g_brushBackground);
     
     return true;
 }

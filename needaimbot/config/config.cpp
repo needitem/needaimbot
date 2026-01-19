@@ -40,6 +40,8 @@ void to_json(json& j, const ProfileData& p) {
         {"confidence_threshold", p.confidence_threshold},
         {"max_detections", p.max_detections},
         {"postprocess", p.postprocess},
+        {"enable_nms", p.enable_nms},
+        {"nms_iou_threshold", p.nms_iou_threshold},
         {"color_filter_enabled", p.color_filter_enabled},
         {"color_filter_mode", p.color_filter_mode},
         {"color_filter_r_min", p.color_filter_r_min},
@@ -123,6 +125,8 @@ void from_json(const json& j, ProfileData& p) {
     GET_IF(confidence_threshold);
     GET_OBF(max_detections, "max_results");
     GET_IF(postprocess);
+    GET_IF(enable_nms);
+    GET_IF(nms_iou_threshold);
     GET_IF(color_filter_enabled);
     GET_IF(color_filter_mode);
     GET_IF(color_filter_r_min);

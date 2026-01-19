@@ -95,6 +95,8 @@ void UnifiedGraphPipeline::refreshConfigCache(const AppContext& ctx) {
         m_cachedConfig.detection.max_detections = ctx.config.profile().max_detections;
         m_cachedConfig.detection.detection_resolution = ctx.config.profile().detection_resolution;
         m_cachedConfig.detection.confidence_threshold = ctx.config.profile().confidence_threshold;
+        m_cachedConfig.detection.enable_nms = ctx.config.profile().enable_nms;
+        m_cachedConfig.detection.nms_iou_threshold = ctx.config.profile().nms_iou_threshold;
 
         // Class filter - fixed size array (cache-friendly)
         m_cachedConfig.detection.class_filter.fill(0);
@@ -178,7 +180,10 @@ void UnifiedGPUArena::initializePointers(uint8_t* basePtr, int maxDetections, in
 
     finalTargets = decodedTargets;  // Alias final targets to decoded buffer
     
-    
+    // NMS temporary buffer for compaction
+    offset = (offset + alignof(Target) - 1) & ~(alignof(Target) - 1);
+    nmsTemp = reinterpret_cast<Target*>(basePtr + offset);
+    offset += maxDetections * sizeof(Target);
 }
 
 size_t UnifiedGPUArena::calculateArenaSize(int maxDetections, int yoloSize) {
@@ -190,6 +195,9 @@ size_t UnifiedGPUArena::calculateArenaSize(int maxDetections, int yoloSize) {
     size = (size + alignof(Target) - 1) & ~(alignof(Target) - 1);
     size += maxDetections * sizeof(Target);
     
+    // NMS temporary buffer
+    size = (size + alignof(Target) - 1) & ~(alignof(Target) - 1);
+    size += maxDetections * sizeof(Target);
     
     return size;
 }
@@ -1133,6 +1141,13 @@ bool UnifiedGraphPipeline::allocateBuffers() {
                         Constants::MAX_CLASSES_FOR_FILTERING,
                         static_cast<unsigned char>(0));
         }
+        
+        // Allocate host pinned buffers for target data (debug overlay)
+        m_h_targets = std::make_unique<CudaPinnedMemory<Target>>(MAX_HOST_TARGETS);
+        m_h_targetCount = std::make_unique<CudaPinnedMemory<int>>(1);
+        if (m_h_targetCount && m_h_targetCount->get()) {
+            *m_h_targetCount->get() = 0;
+        }
 
         // Defer aliasing until TensorRT bindings are created to avoid spurious warnings
         if (m_unifiedArena.yoloInput && !m_inputBindings.empty()) {
@@ -1605,6 +1620,20 @@ bool UnifiedGraphPipeline::enqueueFrameCompletionCallback(cudaStream_t stream, c
 
                 if (isSingleShot) {
                     ctx.single_shot_mode = false;
+                }
+            }
+
+            // Update AppContext with detected targets for debug overlay
+            if (pipeline->m_h_targetCount && pipeline->m_h_targetCount->get() &&
+                pipeline->m_h_targets && pipeline->m_h_targets->get()) {
+                int targetCount = *pipeline->m_h_targetCount->get();
+                if (targetCount > 0) {
+                    targetCount = (targetCount > MAX_HOST_TARGETS) ? MAX_HOST_TARGETS : targetCount;
+                    std::vector<Target> targets(pipeline->m_h_targets->get(),
+                                                 pipeline->m_h_targets->get() + targetCount);
+                    ctx.updateTargets(targets);
+                } else {
+                    ctx.clearTargets();
                 }
             }
 
@@ -2187,6 +2216,27 @@ void UnifiedGraphPipeline::performIntegratedPostProcessing(cudaStream_t stream) 
         return;
     }
     
+    // Perform NMS if enabled
+    if (m_cachedConfig.detection.enable_nms && 
+        m_unifiedArena.decodedTargets && 
+        m_unifiedArena.nmsTemp &&
+        m_smallBufferArena.decodedCount &&
+        m_smallBufferArena.keepFlags) {
+        
+        cudaError_t nmsErr = performNmsInPlaceGpu(
+            m_unifiedArena.decodedTargets,
+            m_smallBufferArena.decodedCount,
+            m_smallBufferArena.keepFlags,
+            m_unifiedArena.nmsTemp,
+            m_cachedConfig.detection.nms_iou_threshold,
+            m_cachedConfig.detection.max_detections,
+            stream);
+        
+        if (nmsErr != cudaSuccess) {
+            std::cerr << "[Pipeline] NMS failed: " << cudaGetErrorString(nmsErr) << std::endl;
+        }
+    }
+    
     ensureFinalTargetAliases();
 }
 
@@ -2557,6 +2607,21 @@ acquired:
                 cudaMemcpyDeviceToHost,
                 execStream);
         }
+        
+        // Copy target data to host for debug overlay
+        // Only copy if debug window is enabled to avoid unnecessary overhead
+        if (ctx.config.global().show_window) {
+            if (m_h_targetCount && m_h_targetCount->get() && m_smallBufferArena.decodedCount) {
+                cudaMemcpyAsync(m_h_targetCount->get(), m_smallBufferArena.decodedCount,
+                               sizeof(int), cudaMemcpyDeviceToHost, execStream);
+            }
+            if (m_h_targets && m_h_targets->get() && m_unifiedArena.decodedTargets) {
+                // Copy up to min(MAX_HOST_TARGETS, max_detections) to stay within GPU buffer bounds
+                int maxToCopy = std::min(MAX_HOST_TARGETS, ctx.config.profile().max_detections);
+                cudaMemcpyAsync(m_h_targets->get(), m_unifiedArena.decodedTargets,
+                               sizeof(Target) * maxToCopy, cudaMemcpyDeviceToHost, execStream);
+            }
+        }
 
         // Enqueue callback to execute mouse movement and mark frame complete
         m_allowMovement.store(true, std::memory_order_release);
@@ -2696,18 +2761,46 @@ void UnifiedGraphPipeline::updatePreviewBuffer(const SimpleCudaMat& currentBuffe
         return;
     }
 
+    // Validate parameters before CUDA call
+    if (!currentBuffer.data() || !m_preview.previewBuffer.data()) {
+        std::cerr << "[Preview] Null buffer pointer - src:" << (void*)currentBuffer.data() 
+                  << " dst:" << (void*)m_preview.previewBuffer.data() << std::endl;
+        return;
+    }
+    
+    int width = currentBuffer.cols();
+    int height = currentBuffer.rows();
+    if (width <= 0 || height <= 0 || width > 4096 || height > 4096) {
+        std::cerr << "[Preview] Invalid dimensions: " << width << "x" << height << std::endl;
+        return;
+    }
+
+    cudaStream_t previewStream = (m_previewStream && m_previewStream->get()) 
+                                  ? m_previewStream->get() 
+                                  : m_pipelineStream->get();
+    
+    // Clear any previous CUDA error before our call
+    cudaError_t prevErr = cudaGetLastError();
+    if (prevErr != cudaSuccess) {
+        std::cerr << "[Preview] Clearing previous CUDA error: " << cudaGetErrorString(prevErr) << std::endl;
+    }
+    
     cudaError_t convertErr = cuda_bgra2rgba(
         currentBuffer.data(),
         m_preview.previewBuffer.data(),
-        currentBuffer.cols(),
-        currentBuffer.rows(),
+        width,
+        height,
         static_cast<int>(srcStep),
         static_cast<int>(dstStep),
-        (m_previewStream && m_previewStream->get()) ? m_previewStream->get() : m_pipelineStream->get());
+        previewStream);
 
     if (convertErr != cudaSuccess) {
         std::cerr << "[Preview] Failed to convert capture buffer for preview: "
-                  << cudaGetErrorString(convertErr) << std::endl;
+                  << cudaGetErrorString(convertErr) 
+                  << " (src:" << (void*)currentBuffer.data() 
+                  << " dst:" << (void*)m_preview.previewBuffer.data()
+                  << " " << width << "x" << height 
+                  << " srcStep:" << srcStep << " dstStep:" << dstStep << ")" << std::endl;
         return;
     }
 }

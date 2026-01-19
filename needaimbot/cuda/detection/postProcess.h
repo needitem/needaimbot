@@ -81,5 +81,25 @@ cudaError_t findBestTargetWithHeadPriorityGpu(
     Target* d_best_target,
     cudaStream_t stream);
 
+// NMS (Non-Maximum Suppression) functions
+// Marks which detections to keep based on IoU threshold
+cudaError_t performNmsGpu(
+    Target* d_detections,
+    int* d_count,
+    bool* d_keep_flags,
+    float iou_threshold,
+    int max_detections,
+    cudaStream_t stream);
 
-#endif 
+// In-place NMS that compacts results (removes suppressed detections)
+cudaError_t performNmsInPlaceGpu(
+    Target* d_detections,
+    int* d_count,
+    bool* d_keep_flags,
+    Target* d_temp_buffer,
+    float iou_threshold,
+    int max_detections,
+    cudaStream_t stream);
+
+
+#endif

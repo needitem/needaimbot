@@ -1200,7 +1200,203 @@ cudaError_t findBestTargetWithHeadPriorityGpu(
     if (kernel_err != cudaSuccess) {
         return kernel_err;
     }
-    
     return cudaSuccess;
 }
+
+// ============================================================================
+// NMS (Non-Maximum Suppression) Implementation
+// ============================================================================
+
+// Compute IoU (Intersection over Union) between two boxes
+__device__ float computeIoU(const Target& a, const Target& b) {
+    float x1 = max(static_cast<float>(a.x), static_cast<float>(b.x));
+    float y1 = max(static_cast<float>(a.y), static_cast<float>(b.y));
+    float x2 = min(static_cast<float>(a.x + a.width), static_cast<float>(b.x + b.width));
+    float y2 = min(static_cast<float>(a.y + a.height), static_cast<float>(b.y + b.height));
+    
+    float intersection = max(0.0f, x2 - x1) * max(0.0f, y2 - y1);
+    float areaA = static_cast<float>(a.width * a.height);
+    float areaB = static_cast<float>(b.width * b.height);
+    float unionArea = areaA + areaB - intersection;
+    
+    return (unionArea > 0.0f) ? (intersection / unionArea) : 0.0f;
+}
+
+// NMS kernel - marks suppressed detections
+// Each thread handles one detection and checks against higher-confidence detections
+__global__ void nmsKernel(
+    Target* d_detections,
+    const int* d_count,
+    bool* d_keep,
+    float iou_threshold,
+    int max_detections)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int count = *d_count;
+    
+    if (idx >= count || idx >= max_detections) {
+        return;
+    }
+    
+    Target& current = d_detections[idx];
+    
+    // Skip invalid detections
+    if (current.width <= 0 || current.height <= 0 || current.confidence <= 0.0f) {
+        d_keep[idx] = false;
+        return;
+    }
+    
+    // Assume we keep this detection unless suppressed
+    d_keep[idx] = true;
+    
+    // Check against all other detections with higher confidence
+    for (int j = 0; j < count && j < max_detections; ++j) {
+        if (j == idx) continue;
+        
+        const Target& other = d_detections[j];
+        
+        // Skip invalid detections
+        if (other.width <= 0 || other.height <= 0 || other.confidence <= 0.0f) {
+            continue;
+        }
+        
+        // Only suppress if other has higher confidence (or same confidence but lower index)
+        if (other.confidence > current.confidence || 
+            (other.confidence == current.confidence && j < idx)) {
+            float iou = computeIoU(current, other);
+            if (iou > iou_threshold) {
+                d_keep[idx] = false;
+                return;
+            }
+        }
+    }
+}
+
+// Compact kernel - removes suppressed detections
+__global__ void compactNmsResultsKernel(
+    const Target* d_input,
+    const bool* d_keep,
+    const int* d_input_count,
+    Target* d_output,
+    int* d_output_count,
+    int max_detections)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int count = *d_input_count;
+    
+    if (idx >= count || idx >= max_detections) {
+        return;
+    }
+    
+    if (d_keep[idx]) {
+        int out_idx = atomicAdd(d_output_count, 1);
+        if (out_idx < max_detections) {
+            d_output[out_idx] = d_input[idx];
+        }
+    }
+}
+
+// Host function to perform NMS
+cudaError_t performNmsGpu(
+    Target* d_detections,
+    int* d_count,
+    bool* d_keep_flags,
+    float iou_threshold,
+    int max_detections,
+    cudaStream_t stream)
+{
+    if (!d_detections || !d_count || !d_keep_flags) {
+        return cudaErrorInvalidValue;
+    }
+    
+    // Validate threshold
+    if (!isfinite(iou_threshold) || iou_threshold < 0.0f || iou_threshold > 1.0f) {
+        iou_threshold = 0.45f;  // Default
+    }
+    
+    const int block_size = 128;
+    const int grid_size = (max_detections + block_size - 1) / block_size;
+    
+    // Clear previous errors
+    cudaGetLastError();
+    
+    // Run NMS kernel to mark which detections to keep
+    nmsKernel<<<grid_size, block_size, 0, stream>>>(
+        d_detections, d_count, d_keep_flags, iou_threshold, max_detections);
+    
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        fprintf(stderr, "[NMS] Kernel launch error: %s\n", cudaGetErrorString(err));
+    }
+    
+    return err;
+}
+
+// Compact kernel that uses max_detections as bound (for CUDA graph compatibility)
+__global__ void compactNmsResultsKernelFixed(
+    const Target* d_input,
+    const bool* d_keep,
+    Target* d_output,
+    int* d_output_count,
+    int max_detections)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (idx >= max_detections) {
+        return;
+    }
+    
+    // Check if this detection is valid and should be kept
+    const Target& t = d_input[idx];
+    if (d_keep[idx] && t.width > 0 && t.height > 0 && t.confidence > 0.0f) {
+        int out_idx = atomicAdd(d_output_count, 1);
+        if (out_idx < max_detections) {
+            d_output[out_idx] = t;
+        }
+    }
+}
+
+// In-place NMS that compacts results
+cudaError_t performNmsInPlaceGpu(
+    Target* d_detections,
+    int* d_count,
+    bool* d_keep_flags,
+    Target* d_temp_buffer,  // Temporary buffer for compaction
+    float iou_threshold,
+    int max_detections,
+    cudaStream_t stream)
+{
+    if (!d_detections || !d_count || !d_keep_flags || !d_temp_buffer) {
+        return cudaErrorInvalidValue;
+    }
+    
+    // Step 1: Mark detections to keep (reads d_count internally)
+    cudaError_t err = performNmsGpu(d_detections, d_count, d_keep_flags, 
+                                     iou_threshold, max_detections, stream);
+    if (err != cudaSuccess) {
+        return err;
+    }
+    
+    // Step 2: Copy input to temp buffer (preserve original detections)
+    cudaMemcpyAsync(d_temp_buffer, d_detections, 
+                    sizeof(Target) * max_detections, 
+                    cudaMemcpyDeviceToDevice, stream);
+    
+    // Step 3: Reset output count to 0
+    cudaMemsetAsync(d_count, 0, sizeof(int), stream);
+    
+    // Step 4: Clear output buffer to ensure invalid entries have width=0
+    cudaMemsetAsync(d_detections, 0, sizeof(Target) * max_detections, stream);
+    
+    // Step 5: Compact results back to original buffer
+    const int block_size = 128;
+    const int grid_size = (max_detections + block_size - 1) / block_size;
+    
+    // Use fixed kernel that iterates over max_detections and checks validity
+    compactNmsResultsKernelFixed<<<grid_size, block_size, 0, stream>>>(
+        d_temp_buffer, d_keep_flags, d_detections, d_count, max_detections);
+    
+    return cudaGetLastError();
+}
+
 

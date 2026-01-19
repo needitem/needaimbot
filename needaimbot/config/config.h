@@ -116,6 +116,8 @@ struct ProfileData {
     float confidence_threshold = 0.25f;
     int max_detections = 30;
     std::string postprocess = "yolo11";
+    bool enable_nms = false;
+    float nms_iou_threshold = 0.45f;
 
     // Color Filter
     bool color_filter_enabled = false;

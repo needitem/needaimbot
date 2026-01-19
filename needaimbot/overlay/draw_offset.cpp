@@ -18,7 +18,7 @@ extern int texW, texH;
 
 // Functions from draw_debug.cpp
 void uploadDebugFrame(const SimpleMat& frameMat);
-void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float scale, const std::vector<Target>* targets_override = nullptr);
+void drawDetections(ImDrawList* draw_list, ImVec2 image_pos, float scale, const std::vector<Target>* targets_override);
 
 // Mutex for thread-safe D3D11 resource access (defined in draw_debug.cpp)
 extern std::mutex g_debugTexMutex;
