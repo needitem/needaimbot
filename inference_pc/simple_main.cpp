@@ -281,21 +281,36 @@ int main(int argc, char* argv[]) {
 
     std::cout << "[Simple] Full GPU pipeline: ENABLED (inference + decode + target + PID)" << std::endl;
     std::cout << "[Simple] IoU-based target stickiness: ENABLED" << std::endl;
+    std::cout << "[Simple] Zero-copy pinned memory: " << (udpCapture.IsPinnedMemoryEnabled() ? "ENABLED" : "DISABLED") << std::endl;
+
+    // 5. Capture full CUDA graph for maximum performance
+    std::cout << "[Simple] Capturing full CUDA graph..." << std::endl;
+    if (inference.captureFullGraph(
+            cfg.confThreshold, cfg.headClassId, cfg.headBonus,
+            cfg.getAllowedClassMask(), gpuPidConfig,
+            cfg.iouStickinessThreshold, cfg.headAimPoint, cfg.bodyAimPoint)) {
+        std::cout << "[Simple] Full CUDA graph: ENABLED" << std::endl;
+    } else {
+        std::cout << "[Simple] Full CUDA graph: DISABLED (using standard execution)" << std::endl;
+    }
 
     std::cout << "\n[Simple] Running... Press Ctrl+C to exit" << std::endl;
     std::cout << "[Simple] Right-click (or Side2) = AIM" << std::endl;
     std::cout << "[Simple] Left+Right = AIM + NO-RECOIL" << std::endl;
 
-    // 5. Main loop
+    // 6. Main loop with optimized zero-copy pipeline
     int loopCount = 0;
     int frameRecvCount = 0;
+    gpa::InferenceResult inferenceResult;  // Single struct for all results
+
     while (g_running) {
         loopCount++;
 
-        // Wait for frame
-        void* rgbData = nullptr;
+        // Wait for frame (returns pinned memory directly)
+        void* pinnedRgbData = nullptr;
         unsigned int width = 0, height = 0;
         uint64_t frameId = 0;
+        int bufferIndex = -1;
 
         // Stats every second (even without frames)
         auto now = std::chrono::steady_clock::now();
@@ -310,7 +325,8 @@ int main(int argc, char* argv[]) {
             lastStatTime = now;
         }
 
-        if (!udpCapture.AcquireFrameSync(&rgbData, &width, &height, &frameId, 16)) {
+        // Use pinned buffer API for zero-copy
+        if (!udpCapture.AcquireFramePinned(&pinnedRgbData, &width, &height, &frameId, &bufferIndex, 16)) {
             // No frame, handle recoil if active (left+right click)
             if (cfg.noRecoilEnabled && makcu.shooting_active && makcu.aiming_active) {
                 auto recoilElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastRecoilTime).count();
@@ -326,7 +342,8 @@ int main(int argc, char* argv[]) {
             continue;
         }
 
-        if (!rgbData || width == 0 || height == 0) {
+        if (!pinnedRgbData || width == 0 || height == 0) {
+            if (bufferIndex >= 0) udpCapture.ReleaseFrame(bufferIndex);
             continue;
         }
 
@@ -352,27 +369,30 @@ int main(int argc, char* argv[]) {
 
         if (!aiming) {
             // Skip inference when not aiming (save power)
+            udpCapture.ReleaseFrame(bufferIndex);
             continue;
         }
 
-        // Run full GPU pipeline: inference + decode + target selection + PID
-        // CPU only does: memcpy to pinned, call GPU, read mouse movement, send to Makcu
-        bool hasTarget = inference.runInferenceFused(
-            static_cast<const uint8_t*>(rgbData), width, height,
+        // OPTIMIZED: Run inference directly from pinned memory (zero intermediate copy)
+        // Single D2H transfer for all results (InferenceResult struct)
+        bool hasTarget = inference.runInferencePinned(
+            pinnedRgbData, width, height,
             cfg.confThreshold, cfg.headClassId, cfg.headBonus,
             cfg.getAllowedClassMask(),
             gpuPidConfig,
             cfg.iouStickinessThreshold,
             cfg.headAimPoint, cfg.bodyAimPoint,
-            mouseMovement,
-            &bestTarget);
+            inferenceResult);
+
+        // Release buffer after inference is queued
+        udpCapture.ReleaseFrame(bufferIndex);
 
         frameCount++;
 
         if (hasTarget) {
-            // Mouse movement already calculated by GPU
-            float moveX = static_cast<float>(mouseMovement.dx);
-            float moveY = static_cast<float>(mouseMovement.dy);
+            // Mouse movement from single InferenceResult struct
+            float moveX = static_cast<float>(inferenceResult.movement.dx);
+            float moveY = static_cast<float>(inferenceResult.movement.dy);
 
             // Apply Gaussian noise for humanization
             if (cfg.noiseEnabled) {

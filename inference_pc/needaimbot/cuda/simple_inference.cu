@@ -241,6 +241,9 @@ SimpleInference::~SimpleInference() {
     if (m_graphExec) cudaGraphExecDestroy(m_graphExec);
     if (m_graph) cudaGraphDestroy(m_graph);
 
+    // Destroy CUDA event
+    if (m_inferenceComplete) cudaEventDestroy(m_inferenceComplete);
+
     // Free GPU memory
     if (m_d_rgbInput) cudaFree(m_d_rgbInput);
     if (m_d_chwInput) cudaFree(m_d_chwInput);
@@ -256,6 +259,10 @@ SimpleInference::~SimpleInference() {
     if (m_d_selectedTarget) cudaFree(m_d_selectedTarget);
     if (m_d_pidState) cudaFree(m_d_pidState);
     if (m_d_mouseMovement) cudaFree(m_d_mouseMovement);
+
+    // Free combined result buffer
+    if (m_d_inferenceResult) cudaFree(m_d_inferenceResult);
+    if (m_h_inferenceResultPinned) cudaFreeHost(m_h_inferenceResultPinned);
 
     // Free pinned host memory
     if (m_h_rgbPinned) cudaFreeHost(m_h_rgbPinned);
@@ -781,6 +788,297 @@ bool SimpleInference::runInferenceFused(const uint8_t* h_rgbData, int width, int
     }
 
     return *m_h_hasTargetPinned != 0;
+}
+
+// =============================================================================
+// OPTIMIZED API: Zero-copy + Single D2H Transfer + Full CUDA Graph
+// =============================================================================
+
+// Kernel to pack inference results into single struct
+__global__ void packInferenceResultKernel(
+    const MouseMovement* movement,
+    const int* hasTarget,
+    const Detection* bestTarget,
+    InferenceResult* result)
+{
+    if (threadIdx.x == 0 && blockIdx.x == 0) {
+        result->movement = *movement;
+        result->hasTarget = *hasTarget;
+        result->reserved = 0;
+        
+        if (*hasTarget) {
+            result->targetX1 = bestTarget->x1;
+            result->targetY1 = bestTarget->y1;
+            result->targetX2 = bestTarget->x2;
+            result->targetY2 = bestTarget->y2;
+            result->targetConf = bestTarget->confidence;
+            result->targetClassId = bestTarget->classId;
+        } else {
+            result->targetX1 = 0;
+            result->targetY1 = 0;
+            result->targetX2 = 0;
+            result->targetY2 = 0;
+            result->targetConf = 0;
+            result->targetClassId = -1;
+        }
+    }
+}
+
+void SimpleInference::executeFusedPipeline(void* rgbInput, int width, int height,
+                                            float confThreshold, int headClassId, float headBonus,
+                                            uint32_t allowedClassMask, const PIDConfig& pidConfig,
+                                            float iouThreshold, float headYOffset, float bodyYOffset) {
+    size_t rgbSize = width * height * 3;
+
+    // H2D: Upload RGB directly from pinned memory (zero intermediate copy)
+    cudaMemcpyAsync(m_d_rgbInput, rgbInput, rgbSize, cudaMemcpyHostToDevice, m_stream);
+
+    // GPU preprocessing with bilinear resize if needed
+    cuda_rgb_preprocessing(
+        m_d_rgbInput,
+        m_d_chwInput,
+        width, height,
+        width * 3,
+        m_inputW, m_inputH,
+        m_inputFP16,
+        m_stream
+    );
+
+    // TensorRT inference
+#if TRT_USE_NEW_API
+    m_context->setTensorAddress("images", m_d_chwInput);
+    m_context->setTensorAddress("output0", m_d_output);
+    m_context->enqueueV3(m_stream);
+#else
+    void* bindings[2] = { m_d_chwInput, m_d_output };
+    m_context->enqueueV2(bindings, m_stream, nullptr);
+#endif
+
+    // GPU decode
+    decodeYoloGpu(
+        m_d_output,
+        m_outputFP16,
+        m_numBoxes,
+        m_numClasses,
+        confThreshold,
+        allowedClassMask,
+        m_d_decoded,
+        m_d_decodedCount,
+        kMaxDetections,
+        m_stream
+    );
+
+    // Fused target selection + PID
+    float crosshairX = m_inputW * 0.5f;
+    float crosshairY = m_inputH * 0.5f;
+
+    fusedTargetSelectionAndMovementGpu(
+        m_d_decoded,
+        m_d_decodedCount,
+        kMaxDetections,
+        crosshairX,
+        crosshairY,
+        headClassId,
+        headBonus,
+        pidConfig,
+        iouThreshold,
+        headYOffset,
+        bodyYOffset,
+        m_d_selectedTarget,
+        m_d_bestTarget,
+        m_d_hasTarget,
+        m_d_mouseMovement,
+        m_d_pidState,
+        m_stream
+    );
+
+    // Validate
+    validateBestTargetGpu(m_d_bestTarget, m_d_hasTarget, m_stream);
+
+    // Pack results into single struct on GPU
+    packInferenceResultKernel<<<1, 1, 0, m_stream>>>(
+        m_d_mouseMovement,
+        m_d_hasTarget,
+        m_d_bestTarget,
+        m_d_inferenceResult
+    );
+
+    // Single D2H transfer (40 bytes instead of 3 separate transfers)
+    cudaMemcpyAsync(m_h_inferenceResultPinned, m_d_inferenceResult, 
+                    sizeof(InferenceResult), cudaMemcpyDeviceToHost, m_stream);
+}
+
+bool SimpleInference::captureFullGraph(float confThreshold, int headClassId, float headBonus,
+                                        uint32_t allowedClassMask, const PIDConfig& pidConfig,
+                                        float iouStickinessThreshold, float headYOffset, float bodyYOffset) {
+    if (m_graphCaptured) {
+        // Destroy old graph
+        if (m_graphExec) cudaGraphExecDestroy(m_graphExec);
+        if (m_graph) cudaGraphDestroy(m_graph);
+        m_graphExec = nullptr;
+        m_graph = nullptr;
+        m_graphCaptured = false;
+    }
+
+    // Allocate combined result buffer if not already
+    if (!m_d_inferenceResult) {
+        cudaMalloc(&m_d_inferenceResult, sizeof(InferenceResult));
+    }
+    if (!m_h_inferenceResultPinned) {
+        cudaMallocHost(&m_h_inferenceResultPinned, sizeof(InferenceResult));
+    }
+
+    // Cache parameters
+    m_cachedConfThreshold = confThreshold;
+    m_cachedHeadClassId = headClassId;
+    m_cachedHeadBonus = headBonus;
+    m_cachedAllowedClassMask = allowedClassMask;
+    m_cachedPidConfig = pidConfig;
+    m_cachedIouThreshold = iouStickinessThreshold;
+    m_cachedHeadYOffset = headYOffset;
+    m_cachedBodyYOffset = bodyYOffset;
+
+    // Fill pinned buffer with dummy data for graph capture
+    size_t rgbSize = m_inputH * m_inputW * 3;
+    memset(m_h_rgbPinned, 128, rgbSize);
+
+    // Begin graph capture
+    cudaError_t err = cudaStreamBeginCapture(m_stream, cudaStreamCaptureModeRelaxed);
+    if (err != cudaSuccess) {
+        std::cerr << "[SimpleInference] Failed to begin full graph capture: " 
+                  << cudaGetErrorString(err) << std::endl;
+        return false;
+    }
+
+    // Execute full pipeline for capture
+    executeFusedPipeline(m_h_rgbPinned, m_inputW, m_inputH,
+                         confThreshold, headClassId, headBonus,
+                         allowedClassMask, pidConfig,
+                         iouStickinessThreshold, headYOffset, bodyYOffset);
+
+    // End capture
+    err = cudaStreamEndCapture(m_stream, &m_graph);
+    if (err != cudaSuccess || !m_graph) {
+        std::cerr << "[SimpleInference] Failed to end full graph capture: " 
+                  << cudaGetErrorString(err) << std::endl;
+        return false;
+    }
+
+    // Instantiate
+    err = cudaGraphInstantiate(&m_graphExec, m_graph, nullptr, nullptr, 0);
+    if (err != cudaSuccess) {
+        std::cerr << "[SimpleInference] Failed to instantiate full graph: " 
+                  << cudaGetErrorString(err) << std::endl;
+        cudaGraphDestroy(m_graph);
+        m_graph = nullptr;
+        return false;
+    }
+
+    m_graphCaptured = true;
+    std::cout << "[SimpleInference] Full CUDA graph captured (preprocess+inference+postprocess)" << std::endl;
+    return true;
+}
+
+bool SimpleInference::runInferencePinned(void* pinnedRgbData, int width, int height,
+                                          float confThreshold, int headClassId, float headBonus,
+                                          uint32_t allowedClassMask,
+                                          const PIDConfig& pidConfig,
+                                          float iouStickinessThreshold,
+                                          float headYOffset, float bodyYOffset,
+                                          InferenceResult& outResult) {
+    if (!m_loaded) return false;
+
+    // Allocate result buffers if needed
+    if (!m_d_inferenceResult) {
+        cudaMalloc(&m_d_inferenceResult, sizeof(InferenceResult));
+    }
+    if (!m_h_inferenceResultPinned) {
+        cudaMallocHost(&m_h_inferenceResultPinned, sizeof(InferenceResult));
+    }
+
+    // Check if we can use captured graph (same resolution and parameters)
+    bool canUseGraph = m_graphCaptured && 
+                       (width == m_inputW) && (height == m_inputH);
+
+    if (canUseGraph) {
+        // Update input data node in graph (if supported)
+        // For now, we need to re-copy since graph was captured with fixed memory
+        size_t rgbSize = width * height * 3;
+        memcpy(m_h_rgbPinned, pinnedRgbData, rgbSize);
+        
+        // Launch graph
+        cudaGraphLaunch(m_graphExec, m_stream);
+    } else {
+        // Execute standard pipeline
+        executeFusedPipeline(pinnedRgbData, width, height,
+                             confThreshold, headClassId, headBonus,
+                             allowedClassMask, pidConfig,
+                             iouStickinessThreshold, headYOffset, bodyYOffset);
+    }
+
+    // Wait for completion
+    cudaStreamSynchronize(m_stream);
+
+    // Copy result
+    outResult = *m_h_inferenceResultPinned;
+    return outResult.hasTarget != 0;
+}
+
+bool SimpleInference::runInferenceAsync(void* pinnedRgbData, int width, int height,
+                                         float confThreshold, int headClassId, float headBonus,
+                                         uint32_t allowedClassMask,
+                                         const PIDConfig& pidConfig,
+                                         float iouStickinessThreshold,
+                                         float headYOffset, float bodyYOffset) {
+    if (!m_loaded) return false;
+    if (m_asyncPending) return false;  // Previous async not complete
+
+    // Allocate result buffers if needed
+    if (!m_d_inferenceResult) {
+        cudaMalloc(&m_d_inferenceResult, sizeof(InferenceResult));
+    }
+    if (!m_h_inferenceResultPinned) {
+        cudaMallocHost(&m_h_inferenceResultPinned, sizeof(InferenceResult));
+    }
+
+    // Create event if needed
+    if (!m_inferenceComplete) {
+        cudaEventCreate(&m_inferenceComplete);
+    }
+
+    // Execute pipeline
+    executeFusedPipeline(pinnedRgbData, width, height,
+                         confThreshold, headClassId, headBonus,
+                         allowedClassMask, pidConfig,
+                         iouStickinessThreshold, headYOffset, bodyYOffset);
+
+    // Record event
+    cudaEventRecord(m_inferenceComplete, m_stream);
+    m_asyncPending = true;
+
+    return true;
+}
+
+bool SimpleInference::getAsyncResults(InferenceResult& outResult) {
+    if (!m_asyncPending) return false;
+
+    // Wait for completion
+    cudaEventSynchronize(m_inferenceComplete);
+    m_asyncPending = false;
+
+    // Copy result
+    outResult = *m_h_inferenceResultPinned;
+    return outResult.hasTarget != 0;
+}
+
+bool SimpleInference::isAsyncComplete() {
+    if (!m_asyncPending) return true;
+
+    cudaError_t status = cudaEventQuery(m_inferenceComplete);
+    if (status == cudaSuccess) {
+        return true;
+    }
+    return false;
 }
 
 } // namespace gpa

@@ -20,6 +20,42 @@ UDPCapture::~UDPCapture() {
     Shutdown();
 }
 
+bool UDPCapture::allocatePinnedBuffers(size_t size) {
+    if (m_pinnedBufferSize >= size && m_usePinnedMemory) {
+        return true;  // Already allocated enough
+    }
+
+    freePinnedBuffers();
+
+    // Allocate double-buffered pinned memory
+    for (int i = 0; i < NUM_BUFFERS; i++) {
+        cudaError_t err = cudaMallocHost(&m_pinnedFrameBuffer[i], size);
+        if (err != cudaSuccess) {
+            std::cerr << "[UDPCapture] Failed to allocate pinned buffer " << i 
+                      << ": " << cudaGetErrorString(err) << "\n";
+            freePinnedBuffers();
+            return false;
+        }
+    }
+
+    m_pinnedBufferSize = size;
+    m_usePinnedMemory = true;
+    std::cout << "[UDPCapture] Allocated " << (size / 1024) << "KB x " << NUM_BUFFERS 
+              << " pinned buffers for zero-copy\n";
+    return true;
+}
+
+void UDPCapture::freePinnedBuffers() {
+    for (int i = 0; i < NUM_BUFFERS; i++) {
+        if (m_pinnedFrameBuffer[i]) {
+            cudaFreeHost(m_pinnedFrameBuffer[i]);
+            m_pinnedFrameBuffer[i] = nullptr;
+        }
+    }
+    m_pinnedBufferSize = 0;
+    m_usePinnedMemory = false;
+}
+
 bool UDPCapture::Initialize(unsigned short listenPort) {
     m_listenPort = listenPort;
 
@@ -70,6 +106,14 @@ bool UDPCapture::Initialize(unsigned short listenPort) {
                (char*)&timeout, sizeof(timeout));
 #endif
 
+    // Pre-allocate pinned buffers for typical 320x320 RGB frames
+    // Will be resized if needed when actual frame size is known
+    size_t defaultSize = 320 * 320 * 3;  // RGB
+    if (!allocatePinnedBuffers(defaultSize)) {
+        std::cerr << "[UDPCapture] Warning: Failed to allocate pinned memory, "
+                  << "falling back to regular memory\n";
+    }
+
     std::cout << "[UDPCapture] Initialized, listening on port " << listenPort << "\n";
     return true;
 }
@@ -82,12 +126,7 @@ void UDPCapture::Shutdown() {
         m_recvSocket = INVALID_SOCKET;
     }
 
-    // Free CUDA pinned memory
-    if (m_pinnedBuffer) {
-        cudaFreeHost(m_pinnedBuffer);
-        m_pinnedBuffer = nullptr;
-        m_pinnedBufferSize = 0;
-    }
+    freePinnedBuffers();
 
 #ifdef _WIN32
     WSACleanup();
@@ -105,7 +144,8 @@ bool UDPCapture::StartCapture() {
     // Start receive thread
     m_recvThread = std::thread(&UDPCapture::receiveThread, this);
 
-    std::cout << "[UDPCapture] Started capture\n";
+    std::cout << "[UDPCapture] Started capture (pinned memory: " 
+              << (m_usePinnedMemory ? "enabled" : "disabled") << ")\n";
     return true;
 }
 
@@ -222,20 +262,45 @@ void UDPCapture::receiveThread() {
 
             // Check if frame is complete
             if (frag.receivedCount == frag.totalPackets) {
-                // Frame complete! Convert BGRA to RGB and move to output buffer
+                // Frame complete! Convert BGRA to RGB and move to PINNED output buffer
+                size_t rgbSize = frag.width * frag.height * 3;
+                
+                // Ensure pinned buffers are large enough
+                if (!m_usePinnedMemory || m_pinnedBufferSize < rgbSize) {
+                    allocatePinnedBuffers(rgbSize);
+                }
+
                 {
                     std::lock_guard<std::mutex> bufLock(m_bufferMutex);
 
-                    // Output is RGB (3 bytes per pixel)
-                    size_t rgbSize = frag.width * frag.height * 3;
-                    if (m_frameBuffer[m_writeBuffer].size() != rgbSize) {
-                        m_frameBuffer[m_writeBuffer].resize(rgbSize);
+                    // Get write buffer index
+                    int writeIdx = m_writeBuffer.load();
+                    
+                    // Wait if buffer is in use by GPU
+                    // In practice, GPU should be done by now due to double-buffering
+                    while (m_bufferInUse[writeIdx].load()) {
+                        writeIdx = (writeIdx + 1) % NUM_BUFFERS;
+                        if (writeIdx == m_writeBuffer.load()) {
+                            // Both buffers in use, skip frame
+                            m_droppedFrames.fetch_add(1);
+                            m_fragmentMap.erase(frameId);
+                            continue;
+                        }
                     }
 
-                    // Convert BGRA to RGB
+                    uint8_t* dstBuffer = m_pinnedFrameBuffer[writeIdx];
+                    if (!dstBuffer) {
+                        // Fallback: pinned allocation failed
+                        m_fragmentMap.erase(frameId);
+                        continue;
+                    }
+
+                    // Convert BGRA to RGB directly into pinned buffer
                     const uint8_t* src = frag.data.data();
-                    uint8_t* dst = m_frameBuffer[m_writeBuffer].data();
+                    uint8_t* dst = dstBuffer;
                     size_t pixelCount = frag.width * frag.height;
+                    
+                    // Optimized BGRA->RGB conversion
                     for (size_t i = 0; i < pixelCount; i++) {
                         dst[i * 3 + 0] = src[i * 4 + 2];  // R = B
                         dst[i * 3 + 1] = src[i * 4 + 1];  // G = G
@@ -243,7 +308,8 @@ void UDPCapture::receiveThread() {
                     }
 
                     // Swap buffers
-                    std::swap(m_writeBuffer, m_readBuffer);
+                    m_readBuffer.store(writeIdx);
+                    m_writeBuffer.store((writeIdx + 1) % NUM_BUFFERS);
 
                     // Update frame info
                     m_frameWidth.store(frag.width);
@@ -267,14 +333,15 @@ bool UDPCapture::GetLatestFrame(void** frameData, unsigned int* width,
                                  unsigned int* height, unsigned int* size) {
     std::lock_guard<std::mutex> lock(m_bufferMutex);
 
-    if (m_frameBuffer[m_readBuffer].empty()) {
+    int readIdx = m_readBuffer.load();
+    if (!m_pinnedFrameBuffer[readIdx]) {
         return false;
     }
 
-    if (frameData) *frameData = m_frameBuffer[m_readBuffer].data();
+    if (frameData) *frameData = m_pinnedFrameBuffer[readIdx];
     if (width) *width = m_frameWidth.load();
     if (height) *height = m_frameHeight.load();
-    if (size) *size = (unsigned int)m_frameBuffer[m_readBuffer].size();
+    if (size) *size = m_frameWidth.load() * m_frameHeight.load() * 3;
 
     return true;
 }
@@ -292,13 +359,18 @@ bool UDPCapture::AcquireFrameSync(void** rgbData, unsigned int* width,
         }
     }
 
-    if (!m_running.load() || m_frameBuffer[m_readBuffer].empty()) {
+    if (!m_running.load()) {
+        return false;
+    }
+
+    int readIdx = m_readBuffer.load();
+    if (!m_pinnedFrameBuffer[readIdx]) {
         return false;
     }
 
     m_newFrameAvailable = false;
 
-    if (rgbData) *rgbData = m_frameBuffer[m_readBuffer].data();
+    if (rgbData) *rgbData = m_pinnedFrameBuffer[readIdx];
     if (width) *width = m_frameWidth.load();
     if (height) *height = m_frameHeight.load();
     if (outFrameId) *outFrameId = m_lastFrameId.load();
@@ -306,13 +378,55 @@ bool UDPCapture::AcquireFrameSync(void** rgbData, unsigned int* width,
     return true;
 }
 
+bool UDPCapture::AcquireFramePinned(void** pinnedRgbData, unsigned int* width,
+                                     unsigned int* height, uint64_t* outFrameId,
+                                     int* bufferIndex, uint32_t timeoutMs) {
+    std::unique_lock<std::mutex> lock(m_bufferMutex);
+
+    // Wait for new frame
+    if (!m_newFrameAvailable) {
+        if (!m_frameReady.wait_for(lock, std::chrono::milliseconds(timeoutMs),
+            [this] { return m_newFrameAvailable || !m_running.load(); })) {
+            return false;  // Timeout
+        }
+    }
+
+    if (!m_running.load()) {
+        return false;
+    }
+
+    int readIdx = m_readBuffer.load();
+    if (!m_pinnedFrameBuffer[readIdx]) {
+        return false;
+    }
+
+    // Mark buffer as in use
+    m_bufferInUse[readIdx].store(true);
+    m_newFrameAvailable = false;
+
+    if (pinnedRgbData) *pinnedRgbData = m_pinnedFrameBuffer[readIdx];
+    if (width) *width = m_frameWidth.load();
+    if (height) *height = m_frameHeight.load();
+    if (outFrameId) *outFrameId = m_lastFrameId.load();
+    if (bufferIndex) *bufferIndex = readIdx;
+
+    return true;
+}
+
+void UDPCapture::ReleaseFrame(int bufferIndex) {
+    if (bufferIndex >= 0 && bufferIndex < NUM_BUFFERS) {
+        m_bufferInUse[bufferIndex].store(false);
+    }
+}
+
 bool UDPCapture::AcquireFrameToCuda(void* d_rgbBuffer, size_t bufferSize,
                                      unsigned int* width, unsigned int* height,
                                      cudaStream_t stream, uint32_t timeoutMs) {
-    void* hostData = nullptr;
+    void* pinnedData = nullptr;
     unsigned int w, h;
+    int bufIdx;
 
-    if (!AcquireFrameSync(&hostData, &w, &h, nullptr, timeoutMs)) {
+    if (!AcquireFramePinned(&pinnedData, &w, &h, nullptr, &bufIdx, timeoutMs)) {
         return false;
     }
 
@@ -320,29 +434,22 @@ bool UDPCapture::AcquireFrameToCuda(void* d_rgbBuffer, size_t bufferSize,
     if (bufferSize < requiredSize) {
         std::cerr << "[UDPCapture] Buffer too small: " << bufferSize
                   << " < " << requiredSize << "\n";
+        ReleaseFrame(bufIdx);
         return false;
     }
 
-    // Ensure pinned buffer for async copy
-    if (m_pinnedBufferSize < requiredSize) {
-        if (m_pinnedBuffer) {
-            cudaFreeHost(m_pinnedBuffer);
-        }
-        cudaMallocHost(&m_pinnedBuffer, requiredSize);
-        m_pinnedBufferSize = requiredSize;
-    }
-
-    // Copy to pinned memory then to GPU
-    memcpy(m_pinnedBuffer, hostData, requiredSize);
-
+    // Direct async copy from pinned memory to GPU (zero intermediate copy)
     cudaError_t err;
     if (stream) {
-        err = cudaMemcpyAsync(d_rgbBuffer, m_pinnedBuffer, requiredSize,
+        err = cudaMemcpyAsync(d_rgbBuffer, pinnedData, requiredSize,
                               cudaMemcpyHostToDevice, stream);
     } else {
-        err = cudaMemcpy(d_rgbBuffer, m_pinnedBuffer, requiredSize,
+        err = cudaMemcpy(d_rgbBuffer, pinnedData, requiredSize,
                          cudaMemcpyHostToDevice);
     }
+
+    // Release buffer after copy is queued (async) or done (sync)
+    ReleaseFrame(bufIdx);
 
     if (err != cudaSuccess) {
         std::cerr << "[UDPCapture] CUDA memcpy failed: " << cudaGetErrorString(err) << "\n";
