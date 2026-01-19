@@ -90,6 +90,12 @@ Game and AI run on PC1, mouse input is sent via hardware device to appear as rea
 *   **Requirements**: 1 PC + KMBOX or MAKCU device
 *   **How it works**: PC1 runs game + AI, hardware device acts as mouse
 *   **Input Methods**: KMBOX, MAKCU
+*   **MAKCU Setup**:
+    1.  Download [MakcuRelay](https://github.com/needitem/needaimbot/releases/tag/makcurelay-v1.0.0)
+    2.  Connect MAKCU device to your PC
+    3.  Run `MakcuRelay.exe`
+    4.  In NeedAimBot, set Input Method to `MAKCU`
+    5.  Configure UDP address (default: `127.0.0.1`) and port (default: `12345`)
 
 ### Option C: Dual PC - Full Separation (2PC)
 
