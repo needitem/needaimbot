@@ -77,27 +77,7 @@ cudaError_t decodeYoloGpu(
 );
 
 // =============================================================================
-// GPU-based Target Selection
-// =============================================================================
-
-// Finds the best target with head-in-body priority:
-// 1. First checks if any head bbox is inside a body bbox -> select that head
-// 2. Otherwise, selects the closest detection to crosshair
-// Includes head bonus for preferring head targets
-cudaError_t findBestTargetGpu(
-    const Detection* d_detections,  // Input detections (device)
-    const int* d_num_detections,    // Number of detections (device)
-    float crosshairX,               // Center X (typically width/2)
-    float crosshairY,               // Center Y (typically height/2)
-    int head_class_id,              // Class ID for head (-1 to disable priority)
-    float head_conf_bonus,          // Bonus confidence for head class
-    Detection* d_best_target,       // Output: best target (device)
-    int* d_has_target,              // Output: 1 if target found, 0 otherwise (device)
-    cudaStream_t stream = 0
-);
-
-// =============================================================================
-// Fused Target Selection + PID Movement (from unified_graph_pipeline.cu)
+// Fused Target Selection + PID Movement
 // =============================================================================
 
 // All-in-one GPU kernel:
@@ -126,17 +106,8 @@ cudaError_t fusedTargetSelectionAndMovementGpu(
 );
 
 // =============================================================================
-// Validation Kernels
+// Validation Kernel
 // =============================================================================
-
-// Validate all detections and mark invalid ones (classId = -1)
-// Call after decoding to ensure clean data
-void validateDetectionsGpu(
-    Detection* d_detections,
-    int* d_count,
-    int max_detections,
-    cudaStream_t stream = 0
-);
 
 // Validate single best target before host copy
 // Sets d_has_target to 0 if target is invalid
