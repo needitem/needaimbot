@@ -715,11 +715,13 @@ void OverlayThread()
                         ImGui::EndTabItem();
                     }
 
+#ifdef ENABLE_DEPTH_ESTIMATION
                     if (ImGui::BeginTabItem("Depth"))
                     {
                         draw_depth_settings();
                         ImGui::EndTabItem();
                     }
+#endif
 
                 }
 
