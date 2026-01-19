@@ -98,6 +98,7 @@ The `config.ini` file controls all aspects of the aimbot. Key sections include:
 *   `F2`: Exit
 *   `F3`: Pause/Resume
 *   `F4`: Reload Config
+*   `F9`: Toggle Debug Overlay
 *   `Right Mouse Button`: Aim Key (default)
 
 ## Troubleshooting
