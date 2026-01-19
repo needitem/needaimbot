@@ -62,9 +62,7 @@ public:
     ~UDPCapture();
 
     // Initialize with network settings
-    bool Initialize(unsigned short listenPort = 5007,
-                   const std::string& gamePcIp = "",
-                   unsigned short mouseStatePort = 5006);
+    bool Initialize(unsigned short listenPort = 5007);
     void Shutdown();
 
     bool StartCapture();
@@ -84,9 +82,6 @@ public:
                             unsigned int* width, unsigned int* height,
                             cudaStream_t stream = nullptr,
                             uint32_t timeoutMs = 16);
-
-    // Broadcast mouse state to game PC
-    void SendMouseState(bool aimActive, bool shootActive);
 
     // Frame info
     uint64_t GetLastFrameId() const { return m_lastFrameId.load(std::memory_order_acquire); }
@@ -129,11 +124,7 @@ private:
 
     // Network
     SOCKET m_recvSocket = INVALID_SOCKET;
-    SOCKET m_sendSocket = INVALID_SOCKET;
-    sockaddr_in m_gamePcAddr{};
-    bool m_hasGamePcAddr = false;
     unsigned short m_listenPort = 5007;
-    unsigned short m_mouseStatePort = 5006;
 
     // Receive thread
     std::thread m_recvThread;
@@ -162,8 +153,4 @@ private:
     // CUDA pinned memory for zero-copy to GPU
     void* m_pinnedBuffer = nullptr;
     size_t m_pinnedBufferSize = 0;
-
-    // Previous aim/shoot state to detect changes
-    bool m_lastAimState = false;
-    bool m_lastShootState = false;
 };

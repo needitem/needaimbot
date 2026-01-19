@@ -20,11 +20,8 @@ UDPCapture::~UDPCapture() {
     Shutdown();
 }
 
-bool UDPCapture::Initialize(unsigned short listenPort,
-                            const std::string& gamePcIp,
-                            unsigned short mouseStatePort) {
+bool UDPCapture::Initialize(unsigned short listenPort) {
     m_listenPort = listenPort;
-    m_mouseStatePort = mouseStatePort;
 
 #ifdef _WIN32
     // Initialize Winsock
@@ -73,26 +70,6 @@ bool UDPCapture::Initialize(unsigned short listenPort,
                (char*)&timeout, sizeof(timeout));
 #endif
 
-    // Create send socket for mouse state
-    m_sendSocket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (m_sendSocket == INVALID_SOCKET) {
-        std::cerr << "[UDPCapture] Failed to create send socket\n";
-        closesocket(m_recvSocket);
-        m_recvSocket = INVALID_SOCKET;
-        return false;
-    }
-
-    // Set game PC address if provided
-    if (!gamePcIp.empty()) {
-        m_gamePcAddr.sin_family = AF_INET;
-        m_gamePcAddr.sin_port = htons(mouseStatePort);
-        if (inet_pton(AF_INET, gamePcIp.c_str(), &m_gamePcAddr.sin_addr) == 1) {
-            m_hasGamePcAddr = true;
-            std::cout << "[UDPCapture] Will send mouse state to "
-                      << gamePcIp << ":" << mouseStatePort << "\n";
-        }
-    }
-
     std::cout << "[UDPCapture] Initialized, listening on port " << listenPort << "\n";
     return true;
 }
@@ -103,10 +80,6 @@ void UDPCapture::Shutdown() {
     if (m_recvSocket != INVALID_SOCKET) {
         closesocket(m_recvSocket);
         m_recvSocket = INVALID_SOCKET;
-    }
-    if (m_sendSocket != INVALID_SOCKET) {
-        closesocket(m_sendSocket);
-        m_sendSocket = INVALID_SOCKET;
     }
 
     // Free CUDA pinned memory
@@ -195,17 +168,6 @@ void UDPCapture::receiveThread() {
                 continue;  // Normal timeout, keep waiting
             }
             continue;
-        }
-
-        // Auto-detect game PC address from first received packet
-        if (!m_hasGamePcAddr) {
-            m_gamePcAddr = fromAddr;
-            m_gamePcAddr.sin_port = htons(m_mouseStatePort);
-            m_hasGamePcAddr = true;
-
-            char ipStr[INET_ADDRSTRLEN];
-            inet_ntop(AF_INET, &fromAddr.sin_addr, ipStr, INET_ADDRSTRLEN);
-            std::cout << "[UDPCapture] Detected game PC at " << ipStr << "\n";
         }
 
         // Parse header (new format: 16 bytes)
@@ -390,27 +352,6 @@ bool UDPCapture::AcquireFrameToCuda(void* d_rgbBuffer, size_t bufferSize,
     if (width) *width = w;
     if (height) *height = h;
     return true;
-}
-
-void UDPCapture::SendMouseState(bool aimActive, bool shootActive) {
-    if (!m_hasGamePcAddr || m_sendSocket == INVALID_SOCKET) {
-        return;
-    }
-
-    // Only send on state change
-    if (aimActive != m_lastAimState) {
-        const char* msg = aimActive ? "AIM:START" : "AIM:STOP";
-        sendto(m_sendSocket, msg, (int)strlen(msg), 0,
-               (SOCKADDR*)&m_gamePcAddr, sizeof(m_gamePcAddr));
-        m_lastAimState = aimActive;
-    }
-
-    if (shootActive != m_lastShootState) {
-        const char* msg = shootActive ? "SHOOT:START" : "SHOOT:STOP";
-        sendto(m_sendSocket, msg, (int)strlen(msg), 0,
-               (SOCKADDR*)&m_gamePcAddr, sizeof(m_gamePcAddr));
-        m_lastShootState = shootActive;
-    }
 }
 
 double UDPCapture::GetReceiveFps() const {
