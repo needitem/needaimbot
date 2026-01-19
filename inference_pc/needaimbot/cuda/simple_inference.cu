@@ -1081,4 +1081,68 @@ bool SimpleInference::isAsyncComplete() {
     return false;
 }
 
+// =============================================================================
+// GPU CALLBACK API - Lowest latency via cudaLaunchHostFunc
+// =============================================================================
+
+// Callback data structure passed to CUDA host function
+struct CallbackData {
+    SimpleInference::InferenceCallback callback;
+    void* userData;
+    InferenceResult* resultPtr;  // Pinned memory - accessible from callback thread
+};
+
+// CUDA host function that gets called when GPU work completes
+static void CUDART_CB inferenceCompleteCallback(void* data) {
+    CallbackData* cbData = static_cast<CallbackData*>(data);
+    
+    // Call user callback with result from pinned memory
+    // Note: This runs on CUDA's internal thread, NOT the main thread!
+    if (cbData->callback) {
+        cbData->callback(*cbData->resultPtr, cbData->userData);
+    }
+    
+    // Clean up callback data
+    delete cbData;
+}
+
+bool SimpleInference::runInferenceWithCallback(void* pinnedRgbData, int width, int height,
+                                                float confThreshold, int headClassId, float headBonus,
+                                                uint32_t allowedClassMask,
+                                                const PIDConfig& pidConfig,
+                                                float iouStickinessThreshold,
+                                                float headYOffset, float bodyYOffset,
+                                                InferenceCallback callback, void* userData) {
+    if (!m_loaded) return false;
+
+    // Allocate result buffers if needed
+    if (!m_d_inferenceResult) {
+        cudaMalloc(&m_d_inferenceResult, sizeof(InferenceResult));
+    }
+    if (!m_h_inferenceResultPinned) {
+        cudaMallocHost(&m_h_inferenceResultPinned, sizeof(InferenceResult));
+    }
+
+    // Execute full pipeline (queues all GPU work)
+    executeFusedPipeline(pinnedRgbData, width, height,
+                         confThreshold, headClassId, headBonus,
+                         allowedClassMask, pidConfig,
+                         iouStickinessThreshold, headYOffset, bodyYOffset);
+
+    // Create callback data (will be deleted in callback)
+    CallbackData* cbData = new CallbackData{callback, userData, m_h_inferenceResultPinned};
+
+    // Launch host function - called when all queued GPU work completes
+    // This is the key optimization: NO cudaStreamSynchronize needed!
+    // The callback fires immediately when GPU finishes, on CUDA's internal thread
+    cudaError_t err = cudaLaunchHostFunc(m_stream, inferenceCompleteCallback, cbData);
+    if (err != cudaSuccess) {
+        std::cerr << "[SimpleInference] cudaLaunchHostFunc failed: " << cudaGetErrorString(err) << std::endl;
+        delete cbData;
+        return false;
+    }
+
+    return true;
+}
+
 } // namespace gpa
