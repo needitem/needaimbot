@@ -69,6 +69,41 @@ The `config.ini` file controls all aspects of the aimbot. Key sections include:
 *   `[Target]`: Aim offsets and body part selection.
 *   `[Arduino]`/`[KMBOX]`/`[MAKCU]`: Connection settings for hardware spoofing.
 
+## Setup Configurations
+
+NeedAimBot supports multiple setup configurations depending on your hardware and security requirements:
+
+### Option A: Single PC (1PC)
+
+Everything runs on one computer. Simplest setup but least secure.
+
+*   **Branch**: [`1pc`](https://github.com/needitem/needaimbot/tree/1pc)
+*   **Requirements**: 1 PC with NVIDIA GPU
+*   **How it works**: Game + AI inference + mouse control all on the same PC
+*   **Input Methods**: WIN32, GHUB, RAZER, ARDUINO
+
+### Option B: Dual PC - Mouse Control Only (1PC + Arduino)
+
+Game and AI run on PC1, mouse input is sent via Arduino/ESP32 to appear as hardware input.
+
+*   **Branch**: [`1pc`](https://github.com/needitem/needaimbot/tree/1pc)
+*   **Requirements**: 1 PC + Arduino/ESP32 (as HID device)
+*   **How it works**: PC1 runs game + AI, Arduino acts as hardware mouse
+*   **Input Methods**: ARDUINO, KMBOX
+*   **See**: [HID_Mouse Repository](https://github.com/needitem/HID_Mouse)
+
+### Option C: Dual PC - Full Separation (2PC)
+
+Game runs on PC1, AI inference and mouse control run on PC2. Most secure setup.
+
+*   **Branch**: [`2pc`](https://github.com/needitem/needaimbot/tree/2pc)
+*   **Requirements**: 2 PCs (PC1 for game, PC2 with NVIDIA GPU for AI)
+*   **How it works**: 
+    *   PC1 captures screen and sends frames to PC2 via network
+    *   PC2 runs AI inference and sends mouse commands back
+    *   Mouse input via Arduino/KMBOX connected to PC1
+*   **Input Methods**: MAKCU, KMBOX
+
 ## Usage
 
 ### 1. Download Required Files
