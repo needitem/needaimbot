@@ -128,11 +128,17 @@ private:
     float m_cachedHeadYOffset = 1.0f;
     float m_cachedBodyYOffset = 0.15f;
 
-    // Execute full fused pipeline (preprocess + inference + postprocess)
+    // Execute full fused pipeline (H2D + preprocess + inference + postprocess + D2H)
     void executeFusedPipeline(void* rgbInput, int width, int height,
                               float confThreshold, int headClassId, float headBonus,
                               uint32_t allowedClassMask, const PIDConfig& pidConfig,
                               float iouThreshold, float headYOffset, float bodyYOffset);
+
+    // Execute pipeline without H2D transfer (for CUDA Graph - H2D is done separately)
+    void executeFusedPipelinePostH2D(int width, int height,
+                                      float confThreshold, int headClassId, float headBonus,
+                                      uint32_t allowedClassMask, const PIDConfig& pidConfig,
+                                      float iouThreshold, float headYOffset, float bodyYOffset);
 };
 
 } // namespace gpa

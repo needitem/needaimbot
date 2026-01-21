@@ -84,7 +84,8 @@ cudaError_t decodeYoloGpu(
 // 1. Target selection with IoU-based stickiness (hysteresis)
 // 2. PID controller calculation
 // 3. Mouse movement output
-// Minimal CPU involvement - only final mouse command needs D2H transfer
+// 4. Pack all results into InferenceResult struct (fused)
+// Minimal CPU involvement - only final InferenceResult needs D2H transfer
 cudaError_t fusedTargetSelectionAndMovementGpu(
     const Detection* d_detections,  // Input detections (device)
     const int* d_num_detections,    // Number of detections (device)
@@ -102,6 +103,7 @@ cudaError_t fusedTargetSelectionAndMovementGpu(
     int* d_has_target,              // Output: 1 if target found
     MouseMovement* d_output_movement, // Output: mouse dx, dy
     PIDState* d_pid_state,          // Persistent PID state (device)
+    InferenceResult* d_inference_result = nullptr, // Optional: packed result (eliminates separate pack kernel)
     cudaStream_t stream = 0
 );
 
