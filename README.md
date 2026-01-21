@@ -80,22 +80,25 @@ Everything runs on one computer. Simplest setup but least secure.
 *   **Branch**: [`1pc`](https://github.com/needitem/needaimbot/tree/1pc)
 *   **Requirements**: 1 PC with NVIDIA GPU
 *   **How it works**: Game + AI inference + mouse control all on the same PC
-*   **Input Methods**: WIN32, GHUB, RAZER, ARDUINO
+*   **Input Methods**: WIN32, GHUB, RAZER, KMBOX, MAKCU, ARDUINO
 
-### Option B: Dual PC - Mouse Control Only (1PC + Hardware Mouse)
+### Option B: Dual PC - Inference on PC1 (2PC Mouse Relay)
 
-Game and AI run on PC1, mouse input is sent via hardware device to appear as real input.
+PC1 runs game and AI inference, sends mouse movement (dx/dy) to PC2 via UDP. PC2 controls mouse via hardware.
 
 *   **Branch**: [`1pc`](https://github.com/needitem/needaimbot/tree/1pc)
-*   **Requirements**: 1 PC + KMBOX or MAKCU device
-*   **How it works**: PC1 runs game + AI, hardware device acts as mouse
+*   **Requirements**: 2 PCs + KMBOX or MAKCU device connected to PC2
+*   **How it works**:
+    *   PC1 runs game + AI inference
+    *   PC1 sends dx/dy mouse commands via UDP to PC2
+    *   PC2 receives commands and controls mouse via KMBOX/MAKCU
 *   **Input Methods**: KMBOX, MAKCU
 *   **MAKCU Setup**:
     1.  Download [MakcuRelay](https://github.com/needitem/needaimbot/releases/tag/makcurelay-v1.0.0)
-    2.  Connect MAKCU device to your PC
-    3.  Run `MakcuRelay.exe`
-    4.  In NeedAimBot, set Input Method to `MAKCU`
-    5.  Configure UDP address (default: `127.0.0.1`) and port (default: `12345`)
+    2.  Connect MAKCU device to PC2
+    3.  Run `MakcuRelay.exe` on PC2
+    4.  In NeedAimBot (PC1), set Input Method to `MAKCU`
+    5.  Configure UDP address to PC2's IP and port (default: `12345`)
 
 ### Option C: Dual PC - Full Separation (2PC)
 
@@ -103,10 +106,9 @@ Game runs on PC1, AI inference and mouse control run on PC2. Most secure setup.
 
 *   **Branch**: [`2pc`](https://github.com/needitem/needaimbot/tree/2pc)
 *   **Requirements**: 2 PCs (PC1 for game, PC2 with NVIDIA GPU for AI) + KMBOX or MAKCU
-*   **How it works**: 
-    *   PC1 captures screen and sends frames to PC2 via network
-    *   PC2 runs AI inference and sends mouse commands back
-    *   Mouse input via KMBOX/MAKCU connected to PC1
+*   **How it works**:
+    *   PC1 captures screen and sends frames to PC2 via UDP
+    *   PC2 runs AI inference and directly controls mouse via KMBOX/MAKCU
 *   **Input Methods**: KMBOX, MAKCU
 
 ## Usage
