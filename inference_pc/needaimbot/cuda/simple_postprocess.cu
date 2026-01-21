@@ -327,8 +327,8 @@ void validateBestTargetGpu(
 // Fused Target Selection + PID Movement Kernel (from unified_graph_pipeline.cu)
 // =============================================================================
 
-// Fused kernel: target selection with IoU stickiness + PID movement calculation
-// All on GPU, minimal D2H transfer (only MouseMovement result)
+// Fused kernel: target selection with IoU stickiness + PID movement calculation + result packing
+// All on GPU, single D2H transfer (InferenceResult)
 __global__ void fusedTargetSelectionAndMovementKernel(
     const Detection* __restrict__ d_detections,
     const int* __restrict__ d_num_detections,
@@ -349,7 +349,8 @@ __global__ void fusedTargetSelectionAndMovementKernel(
     Detection* __restrict__ d_best_target,      // Output: best target this frame
     int* __restrict__ d_has_target,             // Output: 1 if target found
     MouseMovement* __restrict__ d_output_movement,
-    PIDState* __restrict__ d_pid_state)
+    PIDState* __restrict__ d_pid_state,
+    InferenceResult* __restrict__ d_inference_result)  // Optional: packed result (fused packing)
 {
     // Using warp shuffle for reduction - no shared memory arrays needed
     __shared__ Detection s_prevTarget;
@@ -577,6 +578,30 @@ __global__ void fusedTargetSelectionAndMovementKernel(
             d_pid_state->integral_x = 0.0f;
             d_pid_state->integral_y = 0.0f;
         }
+
+        // Fused packing: pack results into InferenceResult struct (eliminates separate kernel)
+        if (d_inference_result) {
+            d_inference_result->movement = *d_output_movement;
+            d_inference_result->hasTarget = *d_has_target;
+            d_inference_result->reserved = 0;
+
+            if (*d_has_target) {
+                Detection target = *d_best_target;
+                d_inference_result->targetX1 = target.x1;
+                d_inference_result->targetY1 = target.y1;
+                d_inference_result->targetX2 = target.x2;
+                d_inference_result->targetY2 = target.y2;
+                d_inference_result->targetConf = target.confidence;
+                d_inference_result->targetClassId = target.classId;
+            } else {
+                d_inference_result->targetX1 = 0;
+                d_inference_result->targetY1 = 0;
+                d_inference_result->targetX2 = 0;
+                d_inference_result->targetY2 = 0;
+                d_inference_result->targetConf = 0;
+                d_inference_result->targetClassId = -1;
+            }
+        }
     }
 }
 
@@ -601,6 +626,7 @@ cudaError_t fusedTargetSelectionAndMovementGpu(
     int* d_has_target,
     MouseMovement* d_output_movement,
     PIDState* d_pid_state,
+    InferenceResult* d_inference_result,
     cudaStream_t stream)
 {
     if (!d_detections || !d_num_detections || !d_best_target ||
@@ -629,7 +655,8 @@ cudaError_t fusedTargetSelectionAndMovementGpu(
         d_best_target,
         d_has_target,
         d_output_movement,
-        d_pid_state
+        d_pid_state,
+        d_inference_result  // Fused packing (nullptr = skip)
     );
 
     return cudaGetLastError();

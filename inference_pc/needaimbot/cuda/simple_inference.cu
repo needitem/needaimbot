@@ -47,12 +47,13 @@ __global__ void rgbPreprocessKernelFP16(
 // Bilinear Resize + Preprocessing Kernels (fused for efficiency)
 // =============================================================================
 
-// Bilinear interpolation helper
-__device__ __forceinline__ float bilinearSample(
+// Optimized bilinear interpolation - reads 4 pixels once for all RGB channels
+// Reduces memory reads from 12 to 4 per output pixel
+__device__ __forceinline__ void bilinearSampleRGB(
     const uint8_t* __restrict__ src,
     int src_w, int src_h,
     float src_x, float src_y,
-    int channel
+    float& r, float& g, float& b
 ) {
     // Clamp coordinates
     src_x = fmaxf(0.0f, fminf(src_x, (float)(src_w - 1)));
@@ -66,16 +67,29 @@ __device__ __forceinline__ float bilinearSample(
     float fx = src_x - x0;
     float fy = src_y - y0;
 
-    // Sample 4 neighbors (RGB HWC layout)
-    float v00 = src[(y0 * src_w + x0) * 3 + channel];
-    float v10 = src[(y0 * src_w + x1) * 3 + channel];
-    float v01 = src[(y1 * src_w + x0) * 3 + channel];
-    float v11 = src[(y1 * src_w + x1) * 3 + channel];
+    // Read 4 pixels once (HWC layout: RGB interleaved)
+    const uint8_t* p00 = src + (y0 * src_w + x0) * 3;
+    const uint8_t* p10 = src + (y0 * src_w + x1) * 3;
+    const uint8_t* p01 = src + (y1 * src_w + x0) * 3;
+    const uint8_t* p11 = src + (y1 * src_w + x1) * 3;
 
-    // Bilinear interpolation
-    float v0 = v00 + fx * (v10 - v00);
-    float v1 = v01 + fx * (v11 - v01);
-    return v0 + fy * (v1 - v0);
+    // Bilinear interpolation for R channel
+    float r00 = p00[0], r10 = p10[0], r01 = p01[0], r11 = p11[0];
+    float r0 = r00 + fx * (r10 - r00);
+    float r1 = r01 + fx * (r11 - r01);
+    r = r0 + fy * (r1 - r0);
+
+    // Bilinear interpolation for G channel
+    float g00 = p00[1], g10 = p10[1], g01 = p01[1], g11 = p11[1];
+    float g0 = g00 + fx * (g10 - g00);
+    float g1 = g01 + fx * (g11 - g01);
+    g = g0 + fy * (g1 - g0);
+
+    // Bilinear interpolation for B channel
+    float b00 = p00[2], b10 = p10[2], b01 = p01[2], b11 = p11[2];
+    float b0 = b00 + fx * (b10 - b00);
+    float b1 = b01 + fx * (b11 - b01);
+    b = b0 + fy * (b1 - b0);
 }
 
 // Bilinear resize + HWC->CHW + normalize -> FP16
@@ -98,15 +112,14 @@ __global__ void rgbResizePreprocessKernelFP16(
     int hw_size = dst_w * dst_h;
     int dst_idx = dy * dst_w + dx;
 
-    // Bilinear sample and normalize each channel
-    float r = bilinearSample(src, src_w, src_h, sx, sy, 0) * norm_factor;
-    float g = bilinearSample(src, src_w, src_h, sx, sy, 1) * norm_factor;
-    float b = bilinearSample(src, src_w, src_h, sx, sy, 2) * norm_factor;
+    // Optimized: sample all RGB channels with single 4-pixel read
+    float r, g, b;
+    bilinearSampleRGB(src, src_w, src_h, sx, sy, r, g, b);
 
-    // Write to CHW format
-    dst[dst_idx] = __float2half(r);
-    dst[dst_idx + hw_size] = __float2half(g);
-    dst[dst_idx + 2 * hw_size] = __float2half(b);
+    // Normalize and write to CHW format
+    dst[dst_idx] = __float2half(r * norm_factor);
+    dst[dst_idx + hw_size] = __float2half(g * norm_factor);
+    dst[dst_idx + 2 * hw_size] = __float2half(b * norm_factor);
 }
 
 // Bilinear resize + HWC->CHW + normalize -> FP32
@@ -129,10 +142,14 @@ __global__ void rgbResizePreprocessKernel(
     int hw_size = dst_w * dst_h;
     int dst_idx = dy * dst_w + dx;
 
-    // Bilinear sample and normalize each channel
-    float r = bilinearSample(src, src_w, src_h, sx, sy, 0) * norm_factor;
-    float g = bilinearSample(src, src_w, src_h, sx, sy, 1) * norm_factor;
-    float b = bilinearSample(src, src_w, src_h, sx, sy, 2) * norm_factor;
+    // Optimized: sample all RGB channels with single 4-pixel read
+    float r, g, b;
+    bilinearSampleRGB(src, src_w, src_h, sx, sy, r, g, b);
+
+    // Normalize
+    r *= norm_factor;
+    g *= norm_factor;
+    b *= norm_factor;
 
     // Write to CHW format
     dst[dst_idx] = r;
@@ -794,45 +811,15 @@ bool SimpleInference::runInferenceFused(const uint8_t* h_rgbData, int width, int
 // OPTIMIZED API: Zero-copy + Single D2H Transfer + Full CUDA Graph
 // =============================================================================
 
-// Kernel to pack inference results into single struct
-__global__ void packInferenceResultKernel(
-    const MouseMovement* movement,
-    const int* hasTarget,
-    const Detection* bestTarget,
-    InferenceResult* result)
-{
-    if (threadIdx.x == 0 && blockIdx.x == 0) {
-        result->movement = *movement;
-        result->hasTarget = *hasTarget;
-        result->reserved = 0;
-        
-        if (*hasTarget) {
-            result->targetX1 = bestTarget->x1;
-            result->targetY1 = bestTarget->y1;
-            result->targetX2 = bestTarget->x2;
-            result->targetY2 = bestTarget->y2;
-            result->targetConf = bestTarget->confidence;
-            result->targetClassId = bestTarget->classId;
-        } else {
-            result->targetX1 = 0;
-            result->targetY1 = 0;
-            result->targetX2 = 0;
-            result->targetY2 = 0;
-            result->targetConf = 0;
-            result->targetClassId = -1;
-        }
-    }
-}
+// Note: packInferenceResultKernel removed - packing is now fused into
+// fusedTargetSelectionAndMovementKernel to eliminate 1 kernel launch overhead
 
-void SimpleInference::executeFusedPipeline(void* rgbInput, int width, int height,
-                                            float confThreshold, int headClassId, float headBonus,
-                                            uint32_t allowedClassMask, const PIDConfig& pidConfig,
-                                            float iouThreshold, float headYOffset, float bodyYOffset) {
-    size_t rgbSize = width * height * 3;
-
-    // H2D: Upload RGB directly from pinned memory (zero intermediate copy)
-    cudaMemcpyAsync(m_d_rgbInput, rgbInput, rgbSize, cudaMemcpyHostToDevice, m_stream);
-
+// Pipeline without H2D transfer - for CUDA Graph capture
+// H2D is excluded so it can be done separately with different source buffers
+void SimpleInference::executeFusedPipelinePostH2D(int width, int height,
+                                                   float confThreshold, int headClassId, float headBonus,
+                                                   uint32_t allowedClassMask, const PIDConfig& pidConfig,
+                                                   float iouThreshold, float headYOffset, float bodyYOffset) {
     // GPU preprocessing with bilinear resize if needed
     cuda_rgb_preprocessing(
         m_d_rgbInput,
@@ -889,23 +876,30 @@ void SimpleInference::executeFusedPipeline(void* rgbInput, int width, int height
         m_d_hasTarget,
         m_d_mouseMovement,
         m_d_pidState,
+        m_d_inferenceResult,
         m_stream
     );
 
     // Validate
     validateBestTargetGpu(m_d_bestTarget, m_d_hasTarget, m_stream);
 
-    // Pack results into single struct on GPU
-    packInferenceResultKernel<<<1, 1, 0, m_stream>>>(
-        m_d_mouseMovement,
-        m_d_hasTarget,
-        m_d_bestTarget,
-        m_d_inferenceResult
-    );
-
     // Single D2H transfer (40 bytes instead of 3 separate transfers)
-    cudaMemcpyAsync(m_h_inferenceResultPinned, m_d_inferenceResult, 
+    cudaMemcpyAsync(m_h_inferenceResultPinned, m_d_inferenceResult,
                     sizeof(InferenceResult), cudaMemcpyDeviceToHost, m_stream);
+}
+
+void SimpleInference::executeFusedPipeline(void* rgbInput, int width, int height,
+                                            float confThreshold, int headClassId, float headBonus,
+                                            uint32_t allowedClassMask, const PIDConfig& pidConfig,
+                                            float iouThreshold, float headYOffset, float bodyYOffset) {
+    size_t rgbSize = width * height * 3;
+
+    // H2D: Upload RGB directly from pinned memory (zero intermediate copy)
+    cudaMemcpyAsync(m_d_rgbInput, rgbInput, rgbSize, cudaMemcpyHostToDevice, m_stream);
+
+    // Execute the rest of the pipeline
+    executeFusedPipelinePostH2D(width, height, confThreshold, headClassId, headBonus,
+                                 allowedClassMask, pidConfig, iouThreshold, headYOffset, bodyYOffset);
 }
 
 bool SimpleInference::captureFullGraph(float confThreshold, int headClassId, float headBonus,
@@ -938,23 +932,25 @@ bool SimpleInference::captureFullGraph(float confThreshold, int headClassId, flo
     m_cachedHeadYOffset = headYOffset;
     m_cachedBodyYOffset = bodyYOffset;
 
-    // Fill pinned buffer with dummy data for graph capture
+    // Fill pinned buffer with dummy data and upload to GPU (H2D outside graph)
     size_t rgbSize = m_inputH * m_inputW * 3;
     memset(m_h_rgbPinned, 128, rgbSize);
+    cudaMemcpyAsync(m_d_rgbInput, m_h_rgbPinned, rgbSize, cudaMemcpyHostToDevice, m_stream);
+    cudaStreamSynchronize(m_stream);  // Ensure H2D completes before graph capture
 
-    // Begin graph capture
+    // Begin graph capture (H2D is now OUTSIDE the graph)
     cudaError_t err = cudaStreamBeginCapture(m_stream, cudaStreamCaptureModeRelaxed);
     if (err != cudaSuccess) {
-        std::cerr << "[SimpleInference] Failed to begin full graph capture: " 
+        std::cerr << "[SimpleInference] Failed to begin full graph capture: "
                   << cudaGetErrorString(err) << std::endl;
         return false;
     }
 
-    // Execute full pipeline for capture
-    executeFusedPipeline(m_h_rgbPinned, m_inputW, m_inputH,
-                         confThreshold, headClassId, headBonus,
-                         allowedClassMask, pidConfig,
-                         iouStickinessThreshold, headYOffset, bodyYOffset);
+    // Execute pipeline WITHOUT H2D for capture (H2D done separately at runtime)
+    executeFusedPipelinePostH2D(m_inputW, m_inputH,
+                                 confThreshold, headClassId, headBonus,
+                                 allowedClassMask, pidConfig,
+                                 iouStickinessThreshold, headYOffset, bodyYOffset);
 
     // End capture
     err = cudaStreamEndCapture(m_stream, &m_graph);
@@ -1001,12 +997,12 @@ bool SimpleInference::runInferencePinned(void* pinnedRgbData, int width, int hei
                        (width == m_inputW) && (height == m_inputH);
 
     if (canUseGraph) {
-        // Update input data node in graph (if supported)
-        // For now, we need to re-copy since graph was captured with fixed memory
+        // H2D is outside the graph - copy directly from user's pinned buffer to GPU
+        // This eliminates the extra host memcpy that was previously needed
         size_t rgbSize = width * height * 3;
-        memcpy(m_h_rgbPinned, pinnedRgbData, rgbSize);
-        
-        // Launch graph
+        cudaMemcpyAsync(m_d_rgbInput, pinnedRgbData, rgbSize, cudaMemcpyHostToDevice, m_stream);
+
+        // Launch graph (preprocessing, inference, postprocessing, D2H)
         cudaGraphLaunch(m_graphExec, m_stream);
     } else {
         // Execute standard pipeline
