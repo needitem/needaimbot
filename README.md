@@ -7,13 +7,17 @@
 This 2PC setup divides responsibilities between two computers connected via network:
 
 ```
-┌─────────────────┐    UDP Network    ┌──────────────────┐
-│    Game PC      │ ←───────────────→ │  Inference PC    │
+┌─────────────────┐                    ┌──────────────────┐
+│    Game PC      │    UDP Network     │  Inference PC    │
 │                 │  Screen Data       │                  │
 │ • Run Game      │ ─────────────────→ │ • AI Inference   │
-│ • Capture       │  Detection Results │ • Mouse Control  │
-│   Screen        │ ←───────────────── │   (Makcu/Kmbox)  │
-└─────────────────┘                    └──────────────────┘
+│ • Capture       │                    │ • Mouse Control  │
+│   Screen        │                    └────────┬─────────┘
+└────────┬────────┘                             │
+         │              Hardware                │
+         │         (Makcu/Kmbox USB)            │
+         └──────────────←───────────────────────┘
+                    Direct Mouse Input
 ```
 
 ### Game PC
