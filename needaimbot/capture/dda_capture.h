@@ -128,4 +128,12 @@ private:
     // Computes an appropriate AcquireNextFrame timeout based on recent frame interval.
     // Uses AppContext.config.capture_timeout_scale; clamps to [1, 8] ms.
     UINT AcquireTimeoutMs() const;
+
+    // Frame prediction for minimal latency
+    // Returns predicted next frame QPC based on historical interval
+    uint64_t PredictNextFrameQpc() const;
+
+    // Spin-wait until just before predicted frame time (reduces DXGI blocking jitter)
+    // Returns time remaining in ms (negative if past predicted time)
+    double SpinUntilPredictedTime(double marginMs = 0.5) const;
 };

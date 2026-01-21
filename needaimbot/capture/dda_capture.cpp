@@ -24,6 +24,53 @@ UINT DDACapture::AcquireTimeoutMs() const {
     return static_cast<UINT>(base + 0.5);
 }
 
+uint64_t DDACapture::PredictNextFrameQpc() const {
+    if (m_prevPresentQpc == 0 || m_qpcToMs <= 0.0) {
+        return 0;
+    }
+    // Convert estimated interval from ms to QPC ticks
+    double intervalQpc = m_estimatedIntervalMs / m_qpcToMs;
+    return m_prevPresentQpc + static_cast<uint64_t>(intervalQpc);
+}
+
+double DDACapture::SpinUntilPredictedTime(double marginMs) const {
+    uint64_t predictedQpc = PredictNextFrameQpc();
+    if (predictedQpc == 0) {
+        return -1.0;  // No prediction available
+    }
+
+    // Target time = predicted - margin (in QPC ticks)
+    double marginQpc = marginMs / m_qpcToMs;
+    uint64_t targetQpc = predictedQpc - static_cast<uint64_t>(marginQpc);
+
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    uint64_t currentQpc = static_cast<uint64_t>(now.QuadPart);
+
+    // Already past target time?
+    if (currentQpc >= targetQpc) {
+        return (static_cast<double>(currentQpc) - static_cast<double>(predictedQpc)) * m_qpcToMs;
+    }
+
+    // Spin-wait until target time (sub-ms precision)
+    // Use hybrid: sleep for bulk time, spin for final precision
+    double remainingMs = (static_cast<double>(targetQpc) - static_cast<double>(currentQpc)) * m_qpcToMs;
+
+    // Sleep for most of the time if > 1ms remaining
+    if (remainingMs > 1.0) {
+        std::this_thread::sleep_for(std::chrono::microseconds(static_cast<int>((remainingMs - 0.5) * 1000)));
+    }
+
+    // Busy-spin for final ~0.5ms for precision
+    do {
+        QueryPerformanceCounter(&now);
+        currentQpc = static_cast<uint64_t>(now.QuadPart);
+    } while (currentQpc < targetQpc);
+
+    // Return time remaining until predicted frame (negative = past predicted)
+    return (static_cast<double>(currentQpc) - static_cast<double>(predictedQpc)) * m_qpcToMs;
+}
+
 DDACapture::DDACapture() {
     LARGE_INTEGER freq{};
     if (QueryPerformanceFrequency(&freq) && freq.QuadPart > 0) {
@@ -162,10 +209,21 @@ bool DDACapture::AcquireFrameSync(cudaArray_t* cudaArray, unsigned int* width, u
         }
     }
 
+    // Frame prediction: spin-wait until just before predicted frame time
+    // This reduces DXGI blocking jitter (kernel wake-up latency ~1-2ms)
+    // After spin-wait, we call AcquireNextFrame with minimal timeout
+    double timeToFrame = SpinUntilPredictedTime(0.3);  // 0.3ms margin for safety
+
+    // If prediction worked (arrived close to predicted time), use minimal timeout
+    // Otherwise fall back to adaptive timeout
+    UINT actualTimeout = (timeToFrame > -1.0 && timeToFrame < 1.0)
+                         ? 1  // Minimal timeout - frame should be ready
+                         : AcquireTimeoutMs();  // Adaptive fallback
+
     // Acquire frame from DXGI
     Microsoft::WRL::ComPtr<IDXGIResource> desktopResource;
     DXGI_OUTDUPL_FRAME_INFO frameInfo{};
-    HRESULT hr = m_duplication->AcquireNextFrame(timeoutMs, &frameInfo, &desktopResource);
+    HRESULT hr = m_duplication->AcquireNextFrame(actualTimeout, &frameInfo, &desktopResource);
 
     if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
         return false;  // No new frame available
