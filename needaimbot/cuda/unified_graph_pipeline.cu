@@ -1675,8 +1675,13 @@ bool UnifiedGraphPipeline::enqueueFrameCompletionCallback(cudaStream_t stream, c
 void UnifiedGraphPipeline::runMainLoop() {
     auto& ctx = AppContext::getInstance();
 
-    // Raise priority to reduce wake-up jitter after blocking waits
-    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+    // Raise priority to TIME_CRITICAL for minimal wake-up jitter
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+
+    // Pin to high-performance core (usually core 0 or last core)
+    // This reduces context switch overhead and improves cache locality
+    DWORD_PTR affinityMask = 1ULL;  // Core 0 (adjust if needed)
+    SetThreadAffinityMask(GetCurrentThread(), affinityMask);
 
     bool wasAiming = false;
 
@@ -2455,8 +2460,10 @@ bool UnifiedGraphPipeline::acquireFrameSync(FrameMetadata& outMetadata) {
     unsigned int width = 0, height = 0;
     uint64_t presentQpc = 0;
 
-    // Use the new synchronous API - no background thread needed
-    if (!m_capture->AcquireFrameSync(&cudaArray, &width, &height, &presentQpc, 8)) {
+    // Use the new synchronous API with frame prediction
+    // DDACapture internally uses spin-wait + minimal DXGI timeout for lowest latency
+    // The 16ms here is just a fallback maximum (should rarely be used)
+    if (!m_capture->AcquireFrameSync(&cudaArray, &width, &height, &presentQpc, 16)) {
         // Timeout is normal, don't spam logs
         return false;
     }

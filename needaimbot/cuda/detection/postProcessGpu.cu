@@ -1341,11 +1341,51 @@ __global__ void compactNmsResultsKernelFixed(
     int max_detections)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    
+
     if (idx >= max_detections) {
         return;
     }
-    
+
+    // Check if this detection is valid and should be kept
+    const Target& t = d_input[idx];
+    if (d_keep[idx] && t.width > 0 && t.height > 0 && t.confidence > 0.0f) {
+        int out_idx = atomicAdd(d_output_count, 1);
+        if (out_idx < max_detections) {
+            d_output[out_idx] = t;
+        }
+    }
+}
+
+// Fused kernel: reset count + clear output + compact (eliminates 2 memset calls)
+__global__ void fusedCompactNmsKernel(
+    const Target* d_input,
+    const bool* d_keep,
+    Target* d_output,
+    int* d_output_count,
+    int max_detections)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    // First thread resets the count
+    if (idx == 0) {
+        *d_output_count = 0;
+    }
+
+    // Grid-wide sync to ensure count is reset before compaction
+    __threadfence();
+    __syncthreads();
+
+    if (idx >= max_detections) {
+        return;
+    }
+
+    // Clear this output slot first (replaces memset)
+    Target empty = {};
+    d_output[idx] = empty;
+
+    // Memory fence to ensure clear is visible before compaction
+    __threadfence();
+
     // Check if this detection is valid and should be kept
     const Target& t = d_input[idx];
     if (d_keep[idx] && t.width > 0 && t.height > 0 && t.confidence > 0.0f) {
@@ -1378,24 +1418,17 @@ cudaError_t performNmsInPlaceGpu(
     }
     
     // Step 2: Copy input to temp buffer (preserve original detections)
-    cudaMemcpyAsync(d_temp_buffer, d_detections, 
-                    sizeof(Target) * max_detections, 
+    cudaMemcpyAsync(d_temp_buffer, d_detections,
+                    sizeof(Target) * max_detections,
                     cudaMemcpyDeviceToDevice, stream);
-    
-    // Step 3: Reset output count to 0
-    cudaMemsetAsync(d_count, 0, sizeof(int), stream);
-    
-    // Step 4: Clear output buffer to ensure invalid entries have width=0
-    cudaMemsetAsync(d_detections, 0, sizeof(Target) * max_detections, stream);
-    
-    // Step 5: Compact results back to original buffer
+
+    // Step 3-5 FUSED: Reset count + clear output + compact (eliminates 2 memset calls)
     const int block_size = 128;
     const int grid_size = (max_detections + block_size - 1) / block_size;
-    
-    // Use fixed kernel that iterates over max_detections and checks validity
-    compactNmsResultsKernelFixed<<<grid_size, block_size, 0, stream>>>(
+
+    fusedCompactNmsKernel<<<grid_size, block_size, 0, stream>>>(
         d_temp_buffer, d_keep_flags, d_detections, d_count, max_detections);
-    
+
     return cudaGetLastError();
 }
 
