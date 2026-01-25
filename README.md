@@ -147,3 +147,7 @@ Game runs on PC1, AI inference and mouse control run on PC2. Most secure setup.
 
 *   **"No GPU devices with CUDA support available"**: Ensure CUDA Toolkit is installed and matches your driver version.
 *   **"Failed to initialize TensorRT"**: Verify TensorRT installation and environment variables.
+
+### Need Help?
+
+If you encounter any issues or have suggestions for improvement, feel free to contact me on Discord: **kimtaeho#3792**
