@@ -85,7 +85,7 @@ set(CPP_SOURCES
     needaimbot/overlay/draw_stabilizer.cpp
     needaimbot/overlay/ui_helpers.cpp
     needaimbot/overlay/config_dirty.cpp
-    needaimbot/overlay/debug_window.cpp
+    needaimbot/overlay/preview_window.cpp
     # ImGui
     needaimbot/imgui/imgui.cpp
     needaimbot/imgui/imgui_draw.cpp

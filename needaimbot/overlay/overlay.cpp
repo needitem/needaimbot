@@ -17,6 +17,7 @@
 #include "overlay.h"
 #include "mouse/mouse.h"
 #include "overlay/draw_settings.h"
+#include "overlay/preview_window.h"
 #include "overlay/draw_offset.h"
 #include "overlay/ui_helpers.h"
 #include "config.h"
@@ -780,9 +781,15 @@ void OverlayThread()
             ImGui::TextColored(ImVec4(255, 255, 255, 100), "Do not test shooting and aiming with the overlay and debug window is open.");
 
             ImGui::End();
-            
-            // Rapidfire resume removed - MouseThread no longer exists
-            
+
+            // Sync external preview window visibility with config
+            {
+                bool wantVisible = ctx.config.global().show_preview_window;
+                if (PreviewWindow::IsVisible() != wantVisible) {
+                    PreviewWindow::SetVisible(wantVisible);
+                }
+            }
+
             ImGui::Render();
 
             // Optimized rendering

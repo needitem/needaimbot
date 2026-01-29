@@ -302,8 +302,11 @@ void draw_debug()
 
     if (ImGui::Checkbox("Enable FPS Display", &ctx.config.global().show_fps)) { SAVE_PROFILE(); }
 
+    if (ImGui::Checkbox("Show Preview Window", &ctx.config.global().show_preview_window)) { SAVE_PROFILE(); }
+    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Opens a separate window showing the capture preview with detection boxes."); }
+
     ImGui::Spacing();
-    ImGui::Separator(); 
+    ImGui::Separator();
     ImGui::Spacing();
 
     

@@ -18,7 +18,7 @@
 #include "keyboard/keyboard_listener.h"
 #ifndef HEADLESS_BUILD
 #include "overlay/overlay.h"
-#include "overlay/debug_window.h"
+#include "overlay/preview_window.h"
 #endif
 #include "mouse/input_drivers/SerialConnection.h"
 #include "mouse/input_drivers/ghub.h"
@@ -587,9 +587,8 @@ int main(int argc, char* argv[])
         uiThreadMgr.start();
 
 #ifndef HEADLESS_BUILD
-        // Start debug overlay (initially hidden, toggle with hotkey)
         if (!g_headless_mode) {
-            DebugOverlay::Start();
+            PreviewWindow::Start();
         }
 #endif
 
@@ -617,9 +616,8 @@ int main(int argc, char* argv[])
         stopStabilizer();
 
 #ifndef HEADLESS_BUILD
-        // Stop debug overlay
         if (!g_headless_mode) {
-            DebugOverlay::Stop();
+            PreviewWindow::Stop();
         }
 #endif
 
