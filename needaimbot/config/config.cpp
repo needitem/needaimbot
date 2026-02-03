@@ -200,6 +200,7 @@ void to_json(json& j, const GlobalSettings& g) {
         {"button_single_shot", g.button_single_shot},
         {"button_stabilizer", g.button_stabilizer},
         {"show_preview_window", g.show_preview_window},
+        {"preview_icon_class", g.preview_icon_class},
         {"overlay_opacity", g.overlay_opacity},
         {"overlay_ui_scale", g.overlay_ui_scale},
         {"show_window", g.show_window},
@@ -240,6 +241,7 @@ void from_json(const json& j, GlobalSettings& g) {
     GET_IF(button_single_shot);
     GET_IF(button_stabilizer);
     GET_IF(show_preview_window);
+    GET_IF(preview_icon_class);
     GET_OBF(overlay_opacity, "layer_opacity");
     GET_OBF(overlay_ui_scale, "layer_ui_scale");
     GET_IF(show_window);

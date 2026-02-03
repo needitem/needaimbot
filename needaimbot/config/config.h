@@ -200,6 +200,7 @@ struct GlobalSettings {
     std::vector<std::string> button_single_shot = {"F8"};
     std::vector<std::string> button_stabilizer = {"None"};
     bool show_preview_window = false;
+    int preview_icon_class = -1;  // -1 = show all classes, >=0 = show only specific class
     int overlay_opacity = 225;
     float overlay_ui_scale = 1.0f;
     bool show_window = true;

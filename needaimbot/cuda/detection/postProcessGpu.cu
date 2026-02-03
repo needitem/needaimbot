@@ -1396,6 +1396,21 @@ __global__ void fusedCompactNmsKernel(
     }
 }
 
+// Initialize kernel - clears keep_flags and resets count in one launch
+__global__ void nmsInitKernel(bool* d_keep_flags, int* d_count, int max_detections) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    // First thread resets count
+    if (idx == 0) {
+        *d_count = 0;
+    }
+
+    // All threads clear their keep_flag slot
+    if (idx < max_detections) {
+        d_keep_flags[idx] = false;
+    }
+}
+
 // In-place NMS that compacts results
 cudaError_t performNmsInPlaceGpu(
     Target* d_detections,
@@ -1409,24 +1424,28 @@ cudaError_t performNmsInPlaceGpu(
     if (!d_detections || !d_count || !d_keep_flags || !d_temp_buffer) {
         return cudaErrorInvalidValue;
     }
-    
-    // Step 1: Mark detections to keep (reads d_count internally)
-    cudaError_t err = performNmsGpu(d_detections, d_count, d_keep_flags, 
-                                     iou_threshold, max_detections, stream);
-    if (err != cudaSuccess) {
-        return err;
-    }
-    
-    // Step 2: Copy input to temp buffer (preserve original detections)
+
+    const int block_size = 128;
+    const int grid_size = (max_detections + block_size - 1) / block_size;
+
+    // Step 1: Copy input to temp buffer FIRST (before any modifications)
     cudaMemcpyAsync(d_temp_buffer, d_detections,
                     sizeof(Target) * max_detections,
                     cudaMemcpyDeviceToDevice, stream);
 
-    // Step 3-5 FUSED: Reset count + clear output + compact (eliminates 2 memset calls)
-    const int block_size = 128;
-    const int grid_size = (max_detections + block_size - 1) / block_size;
+    // Step 2: Run NMS on temp buffer (marks keep_flags, reads original d_count)
+    cudaError_t err = performNmsGpu(d_temp_buffer, d_count, d_keep_flags,
+                                     iou_threshold, max_detections, stream);
+    if (err != cudaSuccess) {
+        return err;
+    }
 
-    fusedCompactNmsKernel<<<grid_size, block_size, 0, stream>>>(
+    // Step 3: Clear output buffer and reset count (one memset for detections)
+    cudaMemsetAsync(d_detections, 0, sizeof(Target) * max_detections, stream);
+    cudaMemsetAsync(d_count, 0, sizeof(int), stream);
+
+    // Step 4: Compact results from temp to output
+    compactNmsResultsKernelFixed<<<grid_size, block_size, 0, stream>>>(
         d_temp_buffer, d_keep_flags, d_detections, d_count, max_detections);
 
     return cudaGetLastError();

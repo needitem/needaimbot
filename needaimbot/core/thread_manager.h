@@ -84,15 +84,14 @@ public:
             try {
                 thread_func_();
             } catch (const std::exception& e) {
-#ifdef _DEBUG
-                std::cerr << "[Thread] " << thread_name_ << " exception: " << e.what() << std::endl;
-#else
-                (void)e;  // Suppress unused variable warning
-#endif
+                std::cerr << "[Thread] " << thread_name_ << " crashed: " << e.what() << std::endl;
+                // Signal global exit on thread crash for clean shutdown
+                extern std::atomic<bool> should_exit;
+                should_exit.store(true);
             } catch (...) {
-#ifdef _DEBUG
-                std::cerr << "[Thread] " << thread_name_ << " unknown exception." << std::endl;
-#endif
+                std::cerr << "[Thread] " << thread_name_ << " crashed: unknown exception" << std::endl;
+                extern std::atomic<bool> should_exit;
+                should_exit.store(true);
             }
             
             // Signal thread completion

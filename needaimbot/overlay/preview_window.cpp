@@ -391,9 +391,13 @@ static void RenderFrame() {
         Target bestTarget = ctx.getBestTarget();
         bool hasBest = ctx.hasValidTarget();
         float confThreshold = ctx.config.profile().confidence_threshold;
+        int iconClassFilter = ctx.config.global().preview_icon_class;
 
         for (const auto& target : targets) {
             if (target.width <= 0 || target.height <= 0) continue;
+
+            // Class filter: skip if filter is set and class doesn't match
+            if (iconClassFilter >= 0 && target.classId != iconClassFilter) continue;
 
             float sx = offsetX + target.x * scale;
             float sy = offsetY + target.y * scale;
