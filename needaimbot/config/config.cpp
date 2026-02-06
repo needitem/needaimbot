@@ -83,7 +83,9 @@ void to_json(json& j, const ProfileData& p) {
         {"capture_frame_g", p.capture_frame_g},
         {"capture_frame_b", p.capture_frame_b},
         {"capture_frame_a", p.capture_frame_a},
-        {"capture_frame_thickness", p.capture_frame_thickness}
+        {"capture_frame_thickness", p.capture_frame_thickness},
+        {"adaptive_skip_enabled", p.adaptive_skip_enabled},
+        {"adaptive_skip_interval", p.adaptive_skip_interval}
     };
 }
 
@@ -169,6 +171,12 @@ void from_json(const json& j, ProfileData& p) {
     GET_IF(capture_frame_b);
     GET_IF(capture_frame_a);
     GET_IF(capture_frame_thickness);
+    GET_IF(adaptive_skip_enabled);
+    GET_IF(adaptive_skip_interval);
+    // Validate adaptive_skip_interval to prevent division by zero
+    if (p.adaptive_skip_interval <= 0) {
+        p.adaptive_skip_interval = 4;  // Reset to default
+    }
     #undef GET_IF
     #undef GET_OBF
 }
@@ -199,6 +207,8 @@ void to_json(json& j, const GlobalSettings& g) {
         {"button_auto_action", g.button_auto_action},
         {"button_single_shot", g.button_single_shot},
         {"button_stabilizer", g.button_stabilizer},
+        {"aimbot_activation_mode", g.aimbot_activation_mode},
+        {"triggerbot_activation_mode", g.triggerbot_activation_mode},
         {"show_preview_window", g.show_preview_window},
         {"preview_icon_class", g.preview_icon_class},
         {"overlay_opacity", g.overlay_opacity},
@@ -240,6 +250,8 @@ void from_json(const json& j, GlobalSettings& g) {
     GET_IF(button_auto_action);
     GET_IF(button_single_shot);
     GET_IF(button_stabilizer);
+    GET_IF(aimbot_activation_mode);
+    GET_IF(triggerbot_activation_mode);
     GET_IF(show_preview_window);
     GET_IF(preview_icon_class);
     GET_OBF(overlay_opacity, "layer_opacity");

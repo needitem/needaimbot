@@ -4,35 +4,47 @@
 #include "AppContext.h"
 #include <vector>
 #include <string>
+#include <unordered_map>
 
 namespace UIHelpers 
 {
+    // Cyber Blue Theme Colors (#00D4FF based)
     ImVec4 GetAccentColor(float alpha) 
     {
-        return ImVec4(0.20f, 0.60f, 0.90f, alpha);
+        return ImVec4(0.00f, 0.83f, 1.00f, alpha);  // #00D4FF - Cyber Blue
     }
     
     ImVec4 GetSuccessColor(float alpha) 
     {
-        return ImVec4(0.40f, 0.80f, 0.40f, alpha);
+        return ImVec4(0.00f, 0.90f, 0.50f, alpha);  // Cyber Green
     }
     
     ImVec4 GetWarningColor(float alpha) 
     {
-        return ImVec4(1.00f, 0.70f, 0.00f, alpha);
+        return ImVec4(1.00f, 0.75f, 0.00f, alpha);  // Amber
     }
     
     ImVec4 GetErrorColor(float alpha) 
     {
-        return ImVec4(0.90f, 0.30f, 0.30f, alpha);
+        return ImVec4(1.00f, 0.30f, 0.35f, alpha);  // Cyber Red
+    }
+    
+    // Secondary accent for gradients
+    ImVec4 GetAccentColorDark(float alpha)
+    {
+        return ImVec4(0.00f, 0.55f, 0.75f, alpha);  // Darker Cyber Blue
     }
 
 
+    // Animation state storage for toggles
+    static std::unordered_map<ImGuiID, float> s_toggleAnimState;
+    
     bool BeautifulToggle(const char* label, bool* value, const char* description)
     {
         bool changed = false;
         
         ImGui::PushID(label);
+        ImGuiID id = ImGui::GetID("##toggle");
         
         ImVec2 p = ImGui::GetCursorScreenPos();
         ImDrawList* draw_list = ImGui::GetWindowDrawList();
@@ -48,18 +60,43 @@ namespace UIHelpers
             changed = true;
         }
         
-        // No animation - instant toggle
-        float t = *value ? 1.0f : 0.0f;
+        // Smooth animation
+        float target = *value ? 1.0f : 0.0f;
+        float& animValue = s_toggleAnimState[id];
+        float animSpeed = 8.0f * ImGui::GetIO().DeltaTime;
+        animValue = animValue + (target - animValue) * ImClamp(animSpeed, 0.0f, 1.0f);
+        float t = animValue;
         
+        // Background color with glow effect when active
+        ImVec4 bgOff = ImVec4(0.15f, 0.17f, 0.20f, 1.0f);
+        ImVec4 bgOn = GetAccentColor(0.9f);
         ImU32 col_bg;
+        
         if (ImGui::IsItemHovered()) {
-            col_bg = ImGui::GetColorU32(ImLerp(ImVec4(0.25f, 0.25f, 0.30f, 1.0f), GetAccentColor(), t));
+            col_bg = ImGui::GetColorU32(ImLerp(ImVec4(0.20f, 0.22f, 0.26f, 1.0f), GetAccentColor(), t));
         } else {
-            col_bg = ImGui::GetColorU32(ImLerp(ImVec4(0.20f, 0.20f, 0.25f, 1.0f), GetAccentColor(), t));
+            col_bg = ImGui::GetColorU32(ImLerp(bgOff, bgOn, t));
         }
         
+        // Glow effect when enabled
+        if (t > 0.1f) {
+            ImVec4 glowColor = GetAccentColor(0.3f * t);
+            draw_list->AddRectFilled(
+                ImVec2(p.x - 2, p.y - 2), 
+                ImVec2(p.x + width + 2, p.y + height + 2), 
+                ImGui::GetColorU32(glowColor), 
+                height * 0.5f + 2
+            );
+        }
+        
+        // Main track
         draw_list->AddRectFilled(p, ImVec2(p.x + width, p.y + height), col_bg, height * 0.5f);
-        draw_list->AddCircleFilled(ImVec2(p.x + radius + t * (width - radius * 2.0f), p.y + radius), radius - 1.5f, IM_COL32(255, 255, 255, 255));
+        
+        // Knob with subtle shadow
+        float knobX = p.x + radius + t * (width - radius * 2.0f);
+        float knobY = p.y + radius;
+        draw_list->AddCircleFilled(ImVec2(knobX + 1, knobY + 1), radius - 1.5f, IM_COL32(0, 0, 0, 40));  // Shadow
+        draw_list->AddCircleFilled(ImVec2(knobX, knobY), radius - 1.5f, IM_COL32(255, 255, 255, 255));
         
         ImGui::SameLine();
         ImGui::Text("%s", label);
@@ -648,6 +685,309 @@ namespace UIHelpers
             ImGui::EndPopup();
         }
         
+        return changed;
+    }
+    
+    // === NEW HIERARCHICAL UI COMPONENTS ===
+    
+    void StatusHeader(int targetCount, bool isPaused)
+    {
+        ImDrawList* draw_list = ImGui::GetWindowDrawList();
+        ImVec2 windowPos = ImGui::GetWindowPos();
+        ImVec2 windowSize = ImGui::GetWindowSize();
+        float padding = ImGui::GetStyle().WindowPadding.x;
+        
+        // Background for header
+        ImVec2 headerStart = ImVec2(windowPos.x, windowPos.y + ImGui::GetCursorPosY());
+        ImVec2 headerEnd = ImVec2(windowPos.x + windowSize.x, headerStart.y + 40);
+        draw_list->AddRectFilled(headerStart, headerEnd, ImGui::GetColorU32(ImVec4(0.08f, 0.09f, 0.12f, 0.95f)));
+        
+        // Status text (centered vertically)
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 10);
+        
+        if (isPaused) {
+            ImGui::PushStyleColor(ImGuiCol_Text, GetWarningColor());
+            ImGui::Text("PAUSED (F3)");
+            ImGui::PopStyleColor();
+        } else if (targetCount > 0) {
+            ImGui::PushStyleColor(ImGuiCol_Text, GetSuccessColor());
+            ImGui::Text("Tracking: %d target%s", targetCount, targetCount > 1 ? "s" : "");
+            ImGui::PopStyleColor();
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Text, GetAccentColor(0.7f));
+            ImGui::Text("Running");
+            ImGui::PopStyleColor();
+        }
+        
+        // Profile dropdown (right-aligned)
+        float dropdownWidth = 150.0f;
+        ImGui::SameLine(ImGui::GetWindowWidth() - dropdownWidth - padding);
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2);
+        ImGui::PushItemWidth(dropdownWidth);
+        ProfileDropdown("##HeaderProfile", dropdownWidth);
+        ImGui::PopItemWidth();
+        
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 8);
+        
+        // Accent line under header
+        ImVec2 lineStart = ImVec2(windowPos.x + padding, headerEnd.y);
+        ImVec2 lineEnd = ImVec2(windowPos.x + windowSize.x - padding, headerEnd.y);
+        draw_list->AddLine(lineStart, lineEnd, ImGui::GetColorU32(GetAccentColor(0.5f)), 2.0f);
+        
+        Spacer(8.0f);
+    }
+    
+    bool BigToggle(const char* label, bool* value)
+    {
+        bool changed = false;
+        
+        ImGui::PushID(label);
+        
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        ImDrawList* draw_list = ImGui::GetWindowDrawList();
+        
+        float height = 32.0f;
+        float width = 64.0f;
+        float radius = height * 0.5f;
+        
+        ImGui::InvisibleButton("##bigtoggle", ImVec2(width, height));
+        
+        if (ImGui::IsItemClicked()) {
+            *value = !*value;
+            changed = true;
+        }
+        
+        // Animation
+        static std::unordered_map<ImGuiID, float> s_bigToggleAnim;
+        ImGuiID id = ImGui::GetID("##bigtoggle");
+        float target = *value ? 1.0f : 0.0f;
+        float& animValue = s_bigToggleAnim[id];
+        float animSpeed = 10.0f * ImGui::GetIO().DeltaTime;
+        animValue = animValue + (target - animValue) * ImClamp(animSpeed, 0.0f, 1.0f);
+        float t = animValue;
+        
+        // Glow when enabled
+        if (t > 0.1f) {
+            ImVec4 glowColor = GetAccentColor(0.4f * t);
+            draw_list->AddRectFilled(
+                ImVec2(p.x - 3, p.y - 3), 
+                ImVec2(p.x + width + 3, p.y + height + 3), 
+                ImGui::GetColorU32(glowColor), 
+                radius + 3
+            );
+        }
+        
+        // Background
+        ImVec4 bgOff = ImVec4(0.20f, 0.22f, 0.26f, 1.0f);
+        ImVec4 bgOn = GetAccentColor(0.9f);
+        ImU32 col_bg = ImGui::GetColorU32(ImLerp(bgOff, bgOn, t));
+        
+        draw_list->AddRectFilled(p, ImVec2(p.x + width, p.y + height), col_bg, radius);
+        
+        // Knob
+        float knobX = p.x + radius + t * (width - radius * 2.0f);
+        float knobY = p.y + radius;
+        draw_list->AddCircleFilled(ImVec2(knobX + 1, knobY + 1), radius - 3.0f, IM_COL32(0, 0, 0, 50));
+        draw_list->AddCircleFilled(ImVec2(knobX, knobY), radius - 3.0f, IM_COL32(255, 255, 255, 255));
+        
+        ImGui::PopID();
+        return changed;
+    }
+    
+    bool CollapsibleSection(const char* label, bool* isOpen)
+    {
+        ImGui::PushID(label);
+        
+        static bool defaultOpen = false;
+        bool* openState = isOpen ? isOpen : &defaultOpen;
+        
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        ImDrawList* draw_list = ImGui::GetWindowDrawList();
+        float width = ImGui::GetContentRegionAvail().x;
+        float height = ImGui::GetFrameHeight() + 8;
+        
+        // Clickable area
+        ImGui::InvisibleButton("##section", ImVec2(width, height));
+        bool clicked = ImGui::IsItemClicked();
+        bool hovered = ImGui::IsItemHovered();
+        
+        if (clicked) {
+            *openState = !*openState;
+        }
+        
+        // Background on hover
+        if (hovered) {
+            draw_list->AddRectFilled(p, ImVec2(p.x + width, p.y + height), 
+                ImGui::GetColorU32(ImVec4(0.15f, 0.17f, 0.20f, 0.5f)), 4.0f);
+        }
+        
+        // Arrow
+        float arrowSize = 10.0f;
+        ImVec2 arrowPos = ImVec2(p.x + 12, p.y + height * 0.5f);
+        ImU32 arrowColor = ImGui::GetColorU32(GetAccentColor(hovered ? 1.0f : 0.7f));
+        
+        if (*openState) {
+            // Down arrow
+            draw_list->AddTriangleFilled(
+                ImVec2(arrowPos.x - arrowSize * 0.5f, arrowPos.y - arrowSize * 0.3f),
+                ImVec2(arrowPos.x + arrowSize * 0.5f, arrowPos.y - arrowSize * 0.3f),
+                ImVec2(arrowPos.x, arrowPos.y + arrowSize * 0.4f),
+                arrowColor
+            );
+        } else {
+            // Right arrow
+            draw_list->AddTriangleFilled(
+                ImVec2(arrowPos.x - arrowSize * 0.3f, arrowPos.y - arrowSize * 0.5f),
+                ImVec2(arrowPos.x - arrowSize * 0.3f, arrowPos.y + arrowSize * 0.5f),
+                ImVec2(arrowPos.x + arrowSize * 0.4f, arrowPos.y),
+                arrowColor
+            );
+        }
+        
+        // Label - use draw_list->AddText for precise positioning
+        ImVec4 textColor = hovered ? GetAccentColor() : ImVec4(0.90f, 0.92f, 0.95f, 1.0f);
+        float textY = p.y + (height - ImGui::GetTextLineHeight()) * 0.5f;
+        draw_list->AddText(ImVec2(p.x + 28, textY), ImGui::GetColorU32(textColor), label);
+        
+        ImGui::PopID();
+        
+        return *openState;
+    }
+    
+    bool QuickSlider(const char* label, float* value, float min, float max, const char* format)
+    {
+        ImGui::PushID(label);
+        
+        float totalWidth = ImGui::GetContentRegionAvail().x;
+        float labelWidth = 110.0f;
+        float valueWidth = 60.0f;
+        float sliderWidth = totalWidth - labelWidth - valueWidth - 8.0f;
+        if (sliderWidth < 50.0f) sliderWidth = 50.0f;
+        
+        // Label on left
+        ImGui::AlignTextToFramePadding();
+        ImGui::PushItemWidth(labelWidth);
+        ImGui::Text("%s", label);
+        ImGui::PopItemWidth();
+        
+        // Slider in middle
+        ImGui::SameLine(labelWidth);
+        ImGui::PushItemWidth(sliderWidth);
+        ImGui::PushStyleColor(ImGuiCol_SliderGrab, GetAccentColor(0.9f));
+        ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, GetAccentColor(1.0f));
+        bool changed = ImGui::SliderFloat("##slider", value, min, max, "");
+        ImGui::PopStyleColor(2);
+        ImGui::PopItemWidth();
+        
+        // Value on right
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Text, GetAccentColor(0.9f));
+        ImGui::Text(format, *value);
+        ImGui::PopStyleColor();
+        
+        ImGui::PopID();
+        return changed;
+    }
+    
+    bool QuickSliderInt(const char* label, int* value, int min, int max)
+    {
+        ImGui::PushID(label);
+        
+        float totalWidth = ImGui::GetContentRegionAvail().x;
+        float labelWidth = 110.0f;
+        float valueWidth = 60.0f;
+        float sliderWidth = totalWidth - labelWidth - valueWidth - 8.0f;
+        if (sliderWidth < 50.0f) sliderWidth = 50.0f;
+        
+        // Label on left
+        ImGui::AlignTextToFramePadding();
+        ImGui::PushItemWidth(labelWidth);
+        ImGui::Text("%s", label);
+        ImGui::PopItemWidth();
+        
+        // Slider in middle
+        ImGui::SameLine(labelWidth);
+        ImGui::PushItemWidth(sliderWidth);
+        ImGui::PushStyleColor(ImGuiCol_SliderGrab, GetAccentColor(0.9f));
+        ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, GetAccentColor(1.0f));
+        bool changed = ImGui::SliderInt("##slider", value, min, max, "");
+        ImGui::PopStyleColor(2);
+        ImGui::PopItemWidth();
+        
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Text, GetAccentColor(0.9f));
+        ImGui::Text("%d", *value);
+        ImGui::PopStyleColor();
+        
+        ImGui::PopID();
+        return changed;
+    }
+    
+    void SectionHeader(const char* title)
+    {
+        ImDrawList* draw_list = ImGui::GetWindowDrawList();
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        float width = ImGui::GetContentRegionAvail().x;
+        
+        // Accent line
+        draw_list->AddLine(
+            ImVec2(p.x, p.y + ImGui::GetTextLineHeight() * 0.5f),
+            ImVec2(p.x + 30, p.y + ImGui::GetTextLineHeight() * 0.5f),
+            ImGui::GetColorU32(GetAccentColor(0.7f)), 2.0f
+        );
+        
+        // Title
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 40);
+        ImGui::PushStyleColor(ImGuiCol_Text, GetAccentColor(0.9f));
+        ImGui::Text("%s", title);
+        ImGui::PopStyleColor();
+        
+        // Accent line after
+        ImGui::SameLine();
+        float textEndX = ImGui::GetCursorPosX() + 10;
+        draw_list->AddLine(
+            ImVec2(p.x + textEndX, p.y + ImGui::GetTextLineHeight() * 0.5f),
+            ImVec2(p.x + width, p.y + ImGui::GetTextLineHeight() * 0.5f),
+            ImGui::GetColorU32(GetAccentColor(0.3f)), 1.0f
+        );
+        
+        ImGui::NewLine();
+        Spacer(4.0f);
+    }
+    
+    bool TargetSelector(int* selected)
+    {
+        bool changed = false;
+        const char* options[] = { "Head", "Body", "Auto" };
+        
+        ImGui::PushID("TargetSelector");
+        
+        float buttonWidth = (ImGui::GetContentRegionAvail().x - 20) / 3.0f;
+        
+        for (int i = 0; i < 3; i++) {
+            if (i > 0) ImGui::SameLine();
+            
+            bool isSelected = (*selected == i);
+            
+            if (isSelected) {
+                ImGui::PushStyleColor(ImGuiCol_Button, GetAccentColor(0.8f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, GetAccentColor(0.9f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, GetAccentColor(1.0f));
+            } else {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.17f, 0.20f, 0.9f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.22f, 0.26f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, GetAccentColor(0.5f));
+            }
+            
+            if (ImGui::Button(options[i], ImVec2(buttonWidth, 28))) {
+                *selected = i;
+                changed = true;
+            }
+            
+            ImGui::PopStyleColor(3);
+        }
+        
+        ImGui::PopID();
         return changed;
     }
 }

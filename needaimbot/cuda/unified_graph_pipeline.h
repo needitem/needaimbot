@@ -104,6 +104,50 @@ struct PerformanceMetrics {
     }
 };
 
+// GPU-side config for CUDA Graph replay.
+// Uploaded once per frame via cudaMemcpyAsync; kernels read from device memory
+// instead of baked launch parameters, so graph topology stays fixed while
+// runtime values (PID gains, offsets, thresholds) change between frames.
+struct DeviceConfig {
+    // PID controller
+    float kp_x, kp_y;
+    float ki_x, ki_y;
+    float kd_x, kd_y;
+    float integral_max;
+    float derivative_max;
+
+    // Target selection
+    float head_y_offset;
+    float body_y_offset;
+    float iou_stickiness_threshold;
+    int head_class_id;
+
+    // Screen / detection geometry
+    int max_detections;
+    int detection_resolution;
+    float screen_center_x;
+    float screen_center_y;
+
+    // Color filter (computeColorMatchRatioKernel + applyColorFilterKernel)
+    int color_mode;
+    int target_mode;
+    int comparison;
+    int r_min, r_max;
+    int g_min, g_max;
+    int b_min, b_max;
+    int h_min, h_max;
+    int s_min, s_max;
+    int v_min, v_max;
+    float cf_min_ratio, cf_max_ratio;
+    int min_count, max_count;
+
+    // Image geometry for color filter kernel
+    int imageWidth, imageHeight, imageStep;
+
+    // NMS
+    float nms_iou_threshold;
+};
+
 struct SmallBufferArena {
     int* numDetections;
     int* outputCount;
@@ -116,6 +160,8 @@ struct SmallBufferArena {
     Target* bestTarget;
     MouseMovement* mouseMovement;
     PIDState* pidState;
+
+    DeviceConfig* deviceConfig;
 
     unsigned char* allowFlags;
     bool* keepFlags;
@@ -154,6 +200,10 @@ struct SmallBufferArena {
         pidState = reinterpret_cast<PIDState*>(basePtr + offset);
         offset += sizeof(PIDState);
 
+        offset = (offset + alignof(DeviceConfig) - 1) & ~(alignof(DeviceConfig) - 1);
+        deviceConfig = reinterpret_cast<DeviceConfig*>(basePtr + offset);
+        offset += sizeof(DeviceConfig);
+
         allowFlags = reinterpret_cast<unsigned char*>(basePtr + offset);
         offset += 64;
 
@@ -180,6 +230,9 @@ struct SmallBufferArena {
 
         size = (size + alignof(PIDState) - 1) & ~(alignof(PIDState) - 1);
         size += sizeof(PIDState);
+
+        size = (size + alignof(DeviceConfig) - 1) & ~(alignof(DeviceConfig) - 1);
+        size += sizeof(DeviceConfig);
 
         size += 64;
         size = (size + alignof(bool) - 1) & ~(alignof(bool) - 1);
@@ -549,6 +602,13 @@ private:
     std::atomic<bool> m_shouldStop{false};
     std::atomic<bool> m_frameInFlight{false};
 
+    // Pre-allocated callback data — eliminates per-frame heap alloc.
+    // Safe because m_frameInFlight guarantees single frame in flight.
+    struct CallbackData {
+        UnifiedGraphPipeline* pipeline;
+        FrameMetadata metadata;
+    } m_callbackData{};
+
     // Movement filter state - per-thread, no lock needed in callback
     struct MovementFilterState {
         bool skipNext = true;
@@ -558,10 +618,18 @@ private:
         int lastEmitY = 0;
     } m_filterState;
 
+    // === OPTIMIZATION 3: Adaptive Inference Skip State ===
+    // Tracks consecutive deadband frames to skip inference when target is centered
+    struct AdaptiveSkipState {
+        uint32_t consecutiveDeadbandFrames = 0;  // Frames where target stayed in deadband
+        uint32_t skipCounter = 0;                 // Counter for skip pattern (0-3)
+        bool lastWasInDeadband = false;           // Was the last processed movement in deadband?
+    } m_adaptiveSkip;
+
+
     std::chrono::steady_clock::time_point m_lastFrameTime{};
-    mutable std::mutex m_previewMutex;
-    
-    
+
+
     struct PreviewState {
         bool enabled = false;
         bool copyInProgress = false;
@@ -575,6 +643,13 @@ private:
         size_t hostPreviewPinnedSize = 0;
         // Throttle preview copies to reduce overhead
         std::chrono::steady_clock::time_point lastCopyTime{};
+
+        // Double-buffer for lock-free producer/consumer
+        SimpleMat hostPreviewBuffers[2];       // Two host buffers
+        bool hostPreviewPinnedFlags[2] = {};   // Per-buffer pin status
+        size_t hostPreviewPinnedSizes[2] = {}; // Per-buffer pin sizes
+        std::atomic<int> writeIndex{0};        // Producer writes to this index
+        std::atomic<bool> newFrameReady{false}; // Signals consumer that a new frame is available
     } m_preview;
 
     struct CaptureRegionCache {
@@ -639,6 +714,27 @@ private:
     void startPreviewCopy(const PostProcessingConfig& config, cudaStream_t stream);
 
     bool m_graphCaptured = false;
+
+    // Graph topology tracking - recapture when these change
+    // (grid dimensions / kernel presence / launch params are baked into the graph)
+    struct GraphTopologyState {
+        bool nmsEnabled = false;
+        bool colorFilterEnabled = false;
+        int detectionResolution = 0;
+        int maxDetections = 0;          // Affects color filter kernel grid size
+        float confidenceThreshold = 0;  // Baked as decode kernel launch param
+        float nmsIouThreshold = 0;      // Baked as NMS kernel launch param
+    } m_graphTopology;
+
+    // Persistent host-side config buffer. CUDA Graph's captured memcpy node
+    // reads from this fixed address during replay, so it MUST be a class member
+    // (not a stack variable) to remain valid across graph launches.
+    DeviceConfig m_hostDeviceConfig{};
+
+    void fillHostDeviceConfig();           // CPU only: m_cachedConfig → m_hostDeviceConfig
+    void uploadDeviceConfig(cudaStream_t stream);  // fill + cudaMemcpyAsync H2D
+    bool graphTopologyChanged() const;
+    void snapshotGraphTopology();
 
     void refreshCachedBindings();
     bool bindStaticTensorAddresses();

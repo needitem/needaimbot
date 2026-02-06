@@ -168,6 +168,10 @@ struct ProfileData {
     int capture_frame_b = 0;
     int capture_frame_a = 180;
     float capture_frame_thickness = 2.0f;
+
+    // Adaptive inference skip (power saving when target in deadband)
+    bool adaptive_skip_enabled = false;
+    int adaptive_skip_interval = 4;  // Run inference every N frames when in deadband (1 = no skip)
 };
 
 void to_json(json& j, const ProfileData& p);
@@ -199,6 +203,8 @@ struct GlobalSettings {
     std::vector<std::string> button_auto_action = {"LeftMouseButton"};
     std::vector<std::string> button_single_shot = {"F8"};
     std::vector<std::string> button_stabilizer = {"None"};
+    int aimbot_activation_mode = 0;    // 0 = Hold, 1 = Toggle
+    int triggerbot_activation_mode = 0; // 0 = Hold, 1 = Toggle
     bool show_preview_window = false;
     int preview_icon_class = -1;  // -1 = show all classes, >=0 = show only specific class
     int overlay_opacity = 225;

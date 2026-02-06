@@ -37,6 +37,8 @@ std::atomic<bool> g_config_optical_flow_changed{false};
 // Auto-save state instance
 AutoSaveState g_autoSaveState;
 
+// Preview window state - now uses separate PreviewWindow class with its own HWND
+
 ID3D11Device* g_pd3dDevice = NULL;
 ID3D11DeviceContext* g_pd3dDeviceContext = NULL;
 IDXGISwapChain* g_pSwapChain = NULL;
@@ -413,6 +415,147 @@ void ApplyTheme_RoseDark()
     colors[ImGuiCol_ModalWindowDimBg] = ImVec4(0.20f, 0.10f, 0.15f, 0.35f);
 }
 
+// Cyber Minimal theme - Modern minimalist with Cyber Blue (#00D4FF)
+void ApplyTheme_CyberMinimal()
+{
+    ImGuiStyle& style = ImGui::GetStyle();
+    ImVec4* colors = style.Colors;
+
+    // Modern minimalist spacing
+    style.WindowPadding = ImVec2(12.0f, 12.0f);
+    style.WindowRounding = 8.0f;
+    style.WindowBorderSize = 1.0f;
+    style.WindowMinSize = ImVec2(32.0f, 32.0f);
+    style.WindowTitleAlign = ImVec2(0.5f, 0.5f);
+
+    // Clean frame styling
+    style.FramePadding = ImVec2(8.0f, 4.0f);
+    style.FrameRounding = 6.0f;
+    style.FrameBorderSize = 0.0f;
+
+    // Comfortable item spacing
+    style.ItemSpacing = ImVec2(8.0f, 6.0f);
+    style.ItemInnerSpacing = ImVec2(6.0f, 4.0f);
+    style.IndentSpacing = 22.0f;
+
+    // Sleek scrollbar
+    style.ScrollbarSize = 10.0f;
+    style.ScrollbarRounding = 12.0f;
+
+    // Subtle grab
+    style.GrabMinSize = 10.0f;
+    style.GrabRounding = 4.0f;
+
+    // Modern tabs
+    style.TabRounding = 6.0f;
+    style.TabBorderSize = 0.0f;
+
+    // Clean child windows
+    style.ChildRounding = 6.0f;
+    style.ChildBorderSize = 1.0f;
+
+    // Smooth popups
+    style.PopupRounding = 6.0f;
+    style.PopupBorderSize = 1.0f;
+
+    style.Alpha = 1.0f;
+    style.DisabledAlpha = 0.50f;
+
+    // Cyber Blue color palette (#00D4FF based)
+    const ImVec4 cyberBlue = ImVec4(0.00f, 0.83f, 1.00f, 1.00f);      // #00D4FF
+    const ImVec4 cyberBlueDark = ImVec4(0.00f, 0.55f, 0.75f, 1.00f);  // Darker variant
+    const ImVec4 cyberBlueGlow = ImVec4(0.00f, 0.83f, 1.00f, 0.15f);  // Glow effect
+
+    // Dark background palette
+    const ImVec4 bgDark = ImVec4(0.06f, 0.07f, 0.09f, 0.98f);
+    const ImVec4 bgMid = ImVec4(0.09f, 0.10f, 0.13f, 0.95f);
+    const ImVec4 bgLight = ImVec4(0.12f, 0.14f, 0.17f, 0.90f);
+
+    // Text colors
+    colors[ImGuiCol_Text] = ImVec4(0.93f, 0.94f, 0.96f, 1.00f);
+    colors[ImGuiCol_TextDisabled] = ImVec4(0.45f, 0.48f, 0.52f, 1.00f);
+
+    // Backgrounds
+    colors[ImGuiCol_WindowBg] = bgDark;
+    colors[ImGuiCol_ChildBg] = bgMid;
+    colors[ImGuiCol_PopupBg] = ImVec4(0.08f, 0.09f, 0.11f, 0.98f);
+    colors[ImGuiCol_Border] = ImVec4(0.00f, 0.83f, 1.00f, 0.20f);  // Subtle cyber blue border
+    colors[ImGuiCol_BorderShadow] = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
+
+    // Frame (input boxes, sliders background)
+    colors[ImGuiCol_FrameBg] = ImVec4(0.12f, 0.14f, 0.17f, 0.90f);
+    colors[ImGuiCol_FrameBgHovered] = ImVec4(0.16f, 0.18f, 0.22f, 0.95f);
+    colors[ImGuiCol_FrameBgActive] = ImVec4(0.00f, 0.55f, 0.75f, 0.40f);
+
+    // Title bar
+    colors[ImGuiCol_TitleBg] = ImVec4(0.06f, 0.07f, 0.09f, 1.00f);
+    colors[ImGuiCol_TitleBgActive] = ImVec4(0.00f, 0.35f, 0.50f, 1.00f);
+    colors[ImGuiCol_TitleBgCollapsed] = ImVec4(0.06f, 0.07f, 0.09f, 0.75f);
+
+    colors[ImGuiCol_MenuBarBg] = ImVec4(0.08f, 0.09f, 0.11f, 1.00f);
+
+    // Scrollbar
+    colors[ImGuiCol_ScrollbarBg] = ImVec4(0.06f, 0.07f, 0.09f, 0.60f);
+    colors[ImGuiCol_ScrollbarGrab] = ImVec4(0.00f, 0.55f, 0.75f, 0.60f);
+    colors[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.00f, 0.70f, 0.90f, 0.80f);
+    colors[ImGuiCol_ScrollbarGrabActive] = cyberBlue;
+
+    // Checkmark
+    colors[ImGuiCol_CheckMark] = cyberBlue;
+
+    // Slider
+    colors[ImGuiCol_SliderGrab] = ImVec4(0.00f, 0.70f, 0.90f, 0.90f);
+    colors[ImGuiCol_SliderGrabActive] = cyberBlue;
+
+    // Buttons
+    colors[ImGuiCol_Button] = ImVec4(0.00f, 0.45f, 0.60f, 0.70f);
+    colors[ImGuiCol_ButtonHovered] = ImVec4(0.00f, 0.60f, 0.80f, 0.85f);
+    colors[ImGuiCol_ButtonActive] = ImVec4(0.00f, 0.75f, 1.00f, 1.00f);
+
+    // Headers (collapsing headers, tree nodes)
+    colors[ImGuiCol_Header] = ImVec4(0.00f, 0.45f, 0.60f, 0.50f);
+    colors[ImGuiCol_HeaderHovered] = ImVec4(0.00f, 0.60f, 0.80f, 0.70f);
+    colors[ImGuiCol_HeaderActive] = ImVec4(0.00f, 0.70f, 0.90f, 0.90f);
+
+    // Separators
+    colors[ImGuiCol_Separator] = ImVec4(0.00f, 0.83f, 1.00f, 0.25f);
+    colors[ImGuiCol_SeparatorHovered] = ImVec4(0.00f, 0.83f, 1.00f, 0.60f);
+    colors[ImGuiCol_SeparatorActive] = cyberBlue;
+
+    // Resize grip
+    colors[ImGuiCol_ResizeGrip] = ImVec4(0.00f, 0.55f, 0.75f, 0.30f);
+    colors[ImGuiCol_ResizeGripHovered] = ImVec4(0.00f, 0.70f, 0.90f, 0.60f);
+    colors[ImGuiCol_ResizeGripActive] = cyberBlue;
+
+    // Tabs
+    colors[ImGuiCol_Tab] = ImVec4(0.10f, 0.12f, 0.15f, 0.90f);
+    colors[ImGuiCol_TabHovered] = ImVec4(0.00f, 0.60f, 0.80f, 0.80f);
+    colors[ImGuiCol_TabActive] = ImVec4(0.00f, 0.50f, 0.70f, 1.00f);
+    colors[ImGuiCol_TabUnfocused] = ImVec4(0.08f, 0.09f, 0.11f, 0.97f);
+    colors[ImGuiCol_TabUnfocusedActive] = ImVec4(0.00f, 0.40f, 0.55f, 1.00f);
+
+    // Plots
+    colors[ImGuiCol_PlotLines] = cyberBlue;
+    colors[ImGuiCol_PlotLinesHovered] = ImVec4(0.00f, 1.00f, 1.00f, 1.00f);
+    colors[ImGuiCol_PlotHistogram] = ImVec4(0.00f, 0.70f, 0.90f, 1.00f);
+    colors[ImGuiCol_PlotHistogramHovered] = cyberBlue;
+
+    // Tables
+    colors[ImGuiCol_TableHeaderBg] = ImVec4(0.10f, 0.12f, 0.15f, 1.00f);
+    colors[ImGuiCol_TableBorderStrong] = ImVec4(0.00f, 0.55f, 0.75f, 0.50f);
+    colors[ImGuiCol_TableBorderLight] = ImVec4(0.00f, 0.45f, 0.60f, 0.30f);
+    colors[ImGuiCol_TableRowBg] = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
+    colors[ImGuiCol_TableRowBgAlt] = ImVec4(0.00f, 0.83f, 1.00f, 0.03f);
+
+    // Selection & interaction
+    colors[ImGuiCol_TextSelectedBg] = ImVec4(0.00f, 0.55f, 0.75f, 0.35f);
+    colors[ImGuiCol_DragDropTarget] = cyberBlue;
+    colors[ImGuiCol_NavHighlight] = cyberBlue;
+    colors[ImGuiCol_NavWindowingHighlight] = ImVec4(1.00f, 1.00f, 1.00f, 0.70f);
+    colors[ImGuiCol_NavWindowingDimBg] = ImVec4(0.00f, 0.00f, 0.00f, 0.20f);
+    colors[ImGuiCol_ModalWindowDimBg] = ImVec4(0.00f, 0.10f, 0.15f, 0.50f);
+}
+
 void SetupImGui()
 {
     auto& ctx = AppContext::getInstance();
@@ -438,8 +581,8 @@ void SetupImGui()
         }
     }
 
-    // Apply RoseDark theme
-    ApplyTheme_RoseDark();
+    // Apply Cyber Minimal theme (Modern minimalist with Cyber Blue)
+    ApplyTheme_CyberMinimal();
 }
 
 bool CreateOverlayWindow()
@@ -510,6 +653,9 @@ void OverlayThread()
 
     // Initialize GPU reader for UI
     g_uiGPUReader.initialize();
+    
+    // Start independent Preview Window (separate HWND)
+    PreviewWindow::Start();
 
     // Load body texture after D3D device is created
     load_body_texture();
@@ -611,11 +757,12 @@ void OverlayThread()
             {
                 ShowWindow(g_hwnd, SW_HIDE);
             }
+            // Note: PreviewWindow is completely independent (separate HWND)
 
             std::this_thread::sleep_for(std::chrono::milliseconds(Constants::OVERLAY_INIT_RETRY_SLEEP_MS));
         }
 
-        // When overlay is hidden, reduce CPU usage based on target_fps setting
+        // When overlay is hidden, reduce CPU usage
         if (!show_overlay)
         {
             auto now = std::chrono::high_resolution_clock::now();
@@ -640,6 +787,7 @@ void OverlayThread()
             ImGuiIO& io = ImGui::GetIO();
             io.MouseDrawCursor = false; // Disable software cursor rendering
 
+            // === MAIN WINDOW ===
             RECT rect;
             GetClientRect(g_hwnd, &rect);
             ImGui::SetNextWindowPos(ImVec2(0, 0));
@@ -651,79 +799,178 @@ void OverlayThread()
                 
                 // Rapidfire pause removed - MouseThread no longer exists
 
-                if (ImGui::BeginTabBar("Options tab bar", ImGuiTabBarFlags_FittingPolicyResizeDown))
-                {
-                    if (ImGui::BeginTabItem(UIStrings::TabMain().c_str()))
-                    {
-                        draw_target();
-                        ImGui::EndTabItem();
+                // === NEW HIERARCHICAL UI LAYOUT ===
+                
+                // Get target count for status display
+                int targetCount = static_cast<int>(ctx.num_targets_);
+                bool isPaused = ctx.detection_paused.load();
+                
+                // Static state for collapsible sections
+                static bool s_fineTuningOpen = false;
+                static bool s_detectionOpen = false;
+                static bool s_hotkeysOpen = false;
+                static bool s_systemOpen = false;
+                
+                // Status Header (Paused state only)
+                UIHelpers::StatusHeader(targetCount, isPaused);
+                
+                // === QUICK CONTROLS ===
+                UIHelpers::SectionHeader("QUICK CONTROLS");
+                
+                float labelWidth = 70.0f;
+                float inputWidth = (ImGui::GetContentRegionAvail().x - labelWidth - 10.0f) * 0.5f;
+                
+                // PID Kp (Proportional - Response Speed)
+                ImGui::Text("Kp");
+                ImGui::SameLine(labelWidth);
+                ImGui::SetNextItemWidth(inputWidth);
+                if (ImGui::DragFloat("##kp_x", &ctx.config.profile().pid_kp_x, 0.005f, 0.0f, 2.0f, "X: %.3f")) {
+                    MARK_CONFIG_DIRTY();
+                }
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(inputWidth);
+                if (ImGui::DragFloat("##kp_y", &ctx.config.profile().pid_kp_y, 0.005f, 0.0f, 2.0f, "Y: %.3f")) {
+                    MARK_CONFIG_DIRTY();
+                }
+                
+                // PID Ki (Integral - Tracking)
+                ImGui::Text("Ki");
+                ImGui::SameLine(labelWidth);
+                ImGui::SetNextItemWidth(inputWidth);
+                if (ImGui::DragFloat("##ki_x", &ctx.config.profile().pid_ki_x, 0.001f, 0.0f, 0.3f, "X: %.4f")) {
+                    MARK_CONFIG_DIRTY();
+                }
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(inputWidth);
+                if (ImGui::DragFloat("##ki_y", &ctx.config.profile().pid_ki_y, 0.001f, 0.0f, 0.3f, "Y: %.4f")) {
+                    MARK_CONFIG_DIRTY();
+                }
+                
+                // PID Kd (Derivative - Damping)
+                ImGui::Text("Kd");
+                ImGui::SameLine(labelWidth);
+                ImGui::SetNextItemWidth(inputWidth);
+                if (ImGui::DragFloat("##kd_x", &ctx.config.profile().pid_kd_x, 0.005f, 0.0f, 1.0f, "X: %.3f")) {
+                    MARK_CONFIG_DIRTY();
+                }
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(inputWidth);
+                if (ImGui::DragFloat("##kd_y", &ctx.config.profile().pid_kd_y, 0.005f, 0.0f, 1.0f, "Y: %.3f")) {
+                    MARK_CONFIG_DIRTY();
+                }
+                
+                // NoRecoil with profile selector
+                ImGui::Text("NoRecoil");
+                ImGui::SameLine(labelWidth);
+                
+                auto& profile = ctx.config.profile();
+                float comboWidth = inputWidth * 0.8f;
+                float strengthWidth = inputWidth * 1.2f - 5.0f;
+                
+                ImGui::SetNextItemWidth(comboWidth);
+                if (ImGui::BeginCombo("##norecoil_profile", 
+                    profile.input_profiles.empty() ? "None" : profile.input_profiles[profile.active_input_profile_index].profile_name.c_str())) {
+                    for (int i = 0; i < (int)profile.input_profiles.size(); i++) {
+                        bool isSelected = (profile.active_input_profile_index == i);
+                        if (ImGui::Selectable(profile.input_profiles[i].profile_name.c_str(), isSelected)) {
+                            profile.active_input_profile_index = i;
+                            MARK_CONFIG_DIRTY();
+                        }
+                        if (isSelected) ImGui::SetItemDefaultFocus();
                     }
-
-                    if (ImGui::BeginTabItem("Mouse"))
-                    {
-                        draw_mouse();
-                        ImGui::EndTabItem();
+                    ImGui::EndCombo();
+                }
+                
+                ImGui::SameLine();
+                auto* inputProfile = ctx.config.getCurrentInputProfile();
+                if (inputProfile) {
+                    ImGui::SetNextItemWidth(strengthWidth);
+                    if (ImGui::DragFloat("##base_strength", &inputProfile->base_strength, 0.1f, 0.0f, 20.0f, "%.1f")) {
+                        MARK_CONFIG_DIRTY();
                     }
-
-                    if (ImGui::BeginTabItem("Aim Offset"))
-                    {
-                        renderOffsetTab();
-                        ImGui::EndTabItem();
+                }
+                
+                UIHelpers::Spacer(8.0f);
+                
+                // Preview Window toggle button (uses separate HWND window)
+                bool previewVisible = PreviewWindow::IsVisible();
+                ImVec4 btnColor = previewVisible ? UIHelpers::GetAccentColor(1.0f) : ImVec4(0.3f, 0.3f, 0.3f, 1.0f);
+                ImGui::PushStyleColor(ImGuiCol_Button, btnColor);
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(btnColor.x + 0.1f, btnColor.y + 0.1f, btnColor.z + 0.1f, 1.0f));
+                if (ImGui::Button(previewVisible ? "Preview ON" : "Preview OFF", ImVec2(-1, 28))) {
+                    PreviewWindow::SetVisible(!previewVisible);
+                }
+                ImGui::PopStyleColor(2);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Open Preview Window (independent window)");
+                }
+                
+                UIHelpers::Spacer(16.0f);
+                
+                // === COLLAPSIBLE SECTIONS ===
+                
+                // Aim Settings Section
+                if (UIHelpers::CollapsibleSection("Aim Settings", &s_fineTuningOpen)) {
+                    ImGui::Indent(10.0f);
+                    draw_mouse();
+                    UIHelpers::Spacer(10.0f);
+                    draw_stabilizer();
+                    UIHelpers::Spacer(10.0f);
+                    renderOffsetTab();
+                    UIHelpers::Spacer(10.0f);
+                    
+                    // Trigger Bot settings
+                    ImGui::SeparatorText("Trigger Bot");
+                    ImGui::Text("Action Area");
+                    ImGui::SameLine(100.0f);
+                    ImGui::SetNextItemWidth(-1);
+                    if (ImGui::SliderFloat("##action_area", &ctx.config.profile().bScope_multiplier, 0.1f, 2.0f, "%.2f")) {
+                        MARK_CONFIG_DIRTY();
                     }
-
-                    if (ImGui::BeginTabItem("Detection"))
-                    {
-                        ImGui::SeparatorText("AI Model");
-                        draw_ai();
-                        ImGui::Spacing();
-                        ImGui::Spacing();
-                        ImGui::SeparatorText("Screen Capture");
-                        draw_capture_settings();
-                        ImGui::EndTabItem();
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("Trigger Bot activation area size.\nSmaller = larger area, Larger = smaller area");
                     }
-
-                    if (ImGui::BeginTabItem("Hotkeys"))
-                    {
-                        draw_buttons();
-                        ImGui::EndTabItem();
-                    }
-
-                    if (ImGui::BeginTabItem("Profiles"))
-                    {
-                        draw_profile();
-                        ImGui::EndTabItem();
-                    }
-
-                    if (ImGui::BeginTabItem("Display"))
-                    {
-                        draw_overlay();
-                        ImGui::Spacing();
-                        ImGui::Spacing();
-                        ImGui::SeparatorText("Debug");
-                        draw_debug();
-                        ImGui::EndTabItem();
-                    }
-
-                    if (ImGui::BeginTabItem("Color Filter"))
-                    {
-                        draw_color_filter();
-                        ImGui::EndTabItem();
-                    }
-
-                    if (ImGui::BeginTabItem("Stabilizer"))
-                    {
-                        draw_stabilizer();
-                        ImGui::EndTabItem();
-                    }
-
+                    
+                    ImGui::Unindent(10.0f);
+                    UIHelpers::Spacer(8.0f);
+                }
+                
+                // AI Section
+                if (UIHelpers::CollapsibleSection("AI", &s_detectionOpen)) {
+                    ImGui::Indent(10.0f);
+                    ImGui::SeparatorText("AI Model");
+                    draw_ai();
+                    UIHelpers::Spacer(10.0f);
+                    ImGui::SeparatorText("Screen Capture");
+                    draw_capture_settings();
+                    ImGui::Unindent(10.0f);
+                    UIHelpers::Spacer(8.0f);
+                }
+                
+                // Hotkeys Section
+                if (UIHelpers::CollapsibleSection("Hotkeys", &s_hotkeysOpen)) {
+                    ImGui::Indent(10.0f);
+                    draw_buttons();
+                    ImGui::Unindent(10.0f);
+                    UIHelpers::Spacer(8.0f);
+                }
+                
+                // System Section
+                if (UIHelpers::CollapsibleSection("System", &s_systemOpen)) {
+                    ImGui::Indent(10.0f);
+                    draw_profile();
+                    UIHelpers::Spacer(10.0f);
+                    draw_overlay();
+                    UIHelpers::Spacer(10.0f);
+                    ImGui::SeparatorText("Debug");
+                    draw_debug();
 #ifdef ENABLE_DEPTH_ESTIMATION
-                    if (ImGui::BeginTabItem("Depth"))
-                    {
-                        draw_depth_settings();
-                        ImGui::EndTabItem();
-                    }
+                    UIHelpers::Spacer(10.0f);
+                    ImGui::SeparatorText("Depth Estimation");
+                    draw_depth_settings();
 #endif
-
+                    ImGui::Unindent(10.0f);
+                    UIHelpers::Spacer(8.0f);
                 }
 
                 // Efficient config change detection - only check values that trigger actions
@@ -782,13 +1029,7 @@ void OverlayThread()
 
             ImGui::End();
 
-            // Sync external preview window visibility with config
-            {
-                bool wantVisible = ctx.config.global().show_preview_window;
-                if (PreviewWindow::IsVisible() != wantVisible) {
-                    PreviewWindow::SetVisible(wantVisible);
-                }
-            }
+            // Note: Preview Window is now a separate HWND managed by PreviewWindow class
 
             ImGui::Render();
 
@@ -829,6 +1070,9 @@ void OverlayThread()
 
     // Cleanup GPU reader
     g_uiGPUReader.cleanup();
+    
+    // Stop Preview Window
+    PreviewWindow::Stop();
 
     // Release any overlay textures we created
     release_body_texture();

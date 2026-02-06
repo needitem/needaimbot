@@ -349,43 +349,57 @@ static void draw_hotkey_table_row(const char* label, std::vector<std::string>& h
 static void draw_aiming_settings()
 {
     auto& ctx = AppContext::getInstance();
+    const char* activation_modes[] = { "Hold", "Toggle" };
 
     UIHelpers::BeginCard("Aiming Hotkeys");
 
-    if (ImGui::BeginTable("##aiming_hotkeys_table", 2,
+    if (ImGui::BeginTable("##aiming_hotkeys_table", 3,
         ImGuiTableFlags_NoBordersInBody | ImGuiTableFlags_SizingStretchProp))
     {
-        ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 140.0f);
+        ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 100.0f);
         ImGui::TableSetupColumn("Keys", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Mode", ImGuiTableColumnFlags_WidthFixed, 70.0f);
 
+        // Aimbot row with mode selector
         draw_hotkey_table_row(UIStrings::HotkeyActivation().c_str(), ctx.config.global().button_targeting, "targeting_keys",
                              UIStrings::HotkeyActivationDesc().c_str());
+        ImGui::TableNextColumn();
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::Combo("##aimbot_mode", &ctx.config.global().aimbot_activation_mode, activation_modes, IM_ARRAYSIZE(activation_modes))) {
+            SAVE_PROFILE();
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Hold: Active while key pressed\nToggle: Press to turn on/off");
+        }
 
-        draw_hotkey_table_row("Auto Action", ctx.config.global().button_auto_action, "auto_action_keys",
-                             "Automatically perform action when targeting");
+        // Trigger Bot row with mode selector
+        draw_hotkey_table_row("Trigger Bot", ctx.config.global().button_auto_action, "auto_action_keys",
+                             "Automatically fire when crosshair is on target");
+        ImGui::TableNextColumn();
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::Combo("##triggerbot_mode", &ctx.config.global().triggerbot_activation_mode, activation_modes, IM_ARRAYSIZE(activation_modes))) {
+            SAVE_PROFILE();
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Hold: Active while key pressed\nToggle: Press to turn on/off");
+        }
 
+        // Other rows (no mode selector)
         draw_hotkey_table_row("Disable Upward", ctx.config.global().button_disable_upward_aim, "disable_upward_keys",
                              UIStrings::HotkeyDisableUpward().c_str());
+        ImGui::TableNextColumn(); // Empty mode column
 
         draw_hotkey_table_row("Single Shot", ctx.config.global().button_single_shot, "single_shot_keys",
                              "One capture and one mouse move per keypress");
+        ImGui::TableNextColumn(); // Empty mode column
 
         draw_hotkey_table_row("Stabilizer", ctx.config.global().button_stabilizer, "stabilizer_keys",
                              "Input stabilization using profile settings while held");
+        ImGui::TableNextColumn(); // Empty mode column
 
         ImGui::EndTable();
     }
 
-    UIHelpers::EndCard();
-
-    UIHelpers::CompactSpacer();
-
-    UIHelpers::BeginCard("Action Area");
-    ImGui::Text("Area Size Multiplier");
-    if (UIHelpers::EnhancedSliderFloat("##action_area", &ctx.config.profile().bScope_multiplier, 0.1f, 2.0f, "%.2f",
-                                      "Central screen area where action activates.\nSmaller = larger area, Larger = smaller area")) {
-        SAVE_PROFILE();
-    }
     UIHelpers::EndCard();
 }
 
@@ -401,9 +415,6 @@ void draw_buttons()
     {
         ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 120.0f);
         ImGui::TableSetupColumn("Keys", ImGuiTableColumnFlags_WidthStretch);
-
-        draw_hotkey_table_row("Targeting", ctx.config.global().button_targeting, "targeting",
-                             UIStrings::HotkeyActivationDesc().c_str());
 
         draw_hotkey_table_row("Exit App", ctx.config.global().button_exit, "exit",
                              "Keys that completely exit the application");

@@ -58,29 +58,6 @@ cudaError_t decodeYolo11Gpu(
     int max_class_filter_size = 0,
     cudaStream_t stream = 0);
 
-// GPU function to find closest target to crosshair
-// Accepts d_num_detections as device pointer to avoid CPU-GPU sync
-cudaError_t findClosestTargetGpu(
-    const Target* d_detections,
-    int* d_num_detections,  // Device pointer
-    float crosshairX,
-    float crosshairY,
-    int* d_best_index,
-    Target* d_best_target,
-    cudaStream_t stream);
-
-// GPU function with head-in-body priority selection
-// Selects head if it's inside a body, otherwise closest target
-cudaError_t findBestTargetWithHeadPriorityGpu(
-    const Target* d_detections,
-    int* d_num_detections,  // Device pointer
-    float crosshairX,
-    float crosshairY,
-    int head_class_id,
-    int* d_best_index,
-    Target* d_best_target,
-    cudaStream_t stream);
-
 // NMS (Non-Maximum Suppression) functions
 // Marks which detections to keep based on IoU threshold
 cudaError_t performNmsGpu(
@@ -91,12 +68,15 @@ cudaError_t performNmsGpu(
     int max_detections,
     cudaStream_t stream);
 
-// In-place NMS that compacts results (removes suppressed detections)
-cudaError_t performNmsInPlaceGpu(
-    Target* d_detections,
-    int* d_count,
+// Optimized NMS: runs on input buffer, compacts to separate output buffer.
+// Eliminates initial D2D copy (3 CUDA ops instead of 5).
+// Caller must swap finalTargets pointer to d_output after call.
+cudaError_t performNmsCompactGpu(
+    const Target* d_input,
+    int* d_input_count,
     bool* d_keep_flags,
-    Target* d_temp_buffer,
+    Target* d_output,
+    int* d_output_count,
     float iou_threshold,
     int max_detections,
     cudaStream_t stream);

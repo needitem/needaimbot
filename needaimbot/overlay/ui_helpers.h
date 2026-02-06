@@ -83,6 +83,7 @@ namespace UIHelpers
     bool EnhancedButton(const char* label, const ImVec2& size = ImVec2(0, 0), const char* description = nullptr);
     
     ImVec4 GetAccentColor(float alpha = 1.0f);
+    ImVec4 GetAccentColorDark(float alpha = 1.0f);
     ImVec4 GetSuccessColor(float alpha = 1.0f);
     ImVec4 GetWarningColor(float alpha = 1.0f);
     ImVec4 GetErrorColor(float alpha = 1.0f);
@@ -95,6 +96,29 @@ namespace UIHelpers
     
     // Input profile dropdown helper
     bool InputProfileDropdown(const char* combo_label = "##ProfileDropdown", float width = 200.0f);
+    
+    // === NEW HIERARCHICAL UI COMPONENTS ===
+    
+    // Status header with big ON/OFF toggle, status text, and profile dropdown
+    void StatusHeader(int targetCount, bool isPaused);
+    
+    // Collapsible section with styled arrow and accent color
+    bool CollapsibleSection(const char* label, bool* isOpen = nullptr);
+    
+    // Quick slider with label on left, value on right
+    bool QuickSlider(const char* label, float* value, float min, float max, const char* format = "%.1f");
+    
+    // Quick slider for integers
+    bool QuickSliderInt(const char* label, int* value, int min, int max);
+    
+    // Section header with cyber blue accent line
+    void SectionHeader(const char* title);
+    
+    // Target selection buttons (Head/Body/Auto)
+    bool TargetSelector(int* selected); // 0=Head, 1=Body, 2=Auto
+    
+    // Big toggle for main enable/disable
+    bool BigToggle(const char* label, bool* value);
 }
 
 #endif

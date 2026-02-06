@@ -302,25 +302,7 @@ void draw_debug()
 
     if (ImGui::Checkbox("Enable FPS Display", &ctx.config.global().show_fps)) { SAVE_PROFILE(); }
 
-    if (ImGui::Checkbox("Show Preview Window", &ctx.config.global().show_preview_window)) { SAVE_PROFILE(); }
-    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Opens a separate window showing the capture preview with detection boxes."); }
-
-    // Preview icon class filter
-    if (ImGui::InputInt("Preview Icon Class Filter", &ctx.config.global().preview_icon_class)) {
-        if (ctx.config.global().preview_icon_class < -1) {
-            ctx.config.global().preview_icon_class = -1;
-        }
-        SAVE_PROFILE();
-    }
-    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Filter which class to show in preview.\n-1 = Show all classes\n0+ = Show only specific class ID"); }
-
     ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    
-    // Color filter debug removed
-
     
     ImGui::SeparatorText("Screenshot Settings");
     ImGui::Spacing();
