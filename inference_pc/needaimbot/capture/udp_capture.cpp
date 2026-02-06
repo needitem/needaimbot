@@ -31,7 +31,7 @@ bool UDPCapture::allocatePinnedBuffers(size_t size) {
     for (int i = 0; i < NUM_BUFFERS; i++) {
         cudaError_t err = cudaMallocHost(&m_pinnedFrameBuffer[i], size);
         if (err != cudaSuccess) {
-            std::cerr << "[UDPCapture] Failed to allocate pinned buffer " << i 
+            std::cerr << "[UDPCapture] Failed to allocate pinned buffer " << i
                       << ": " << cudaGetErrorString(err) << "\n";
             freePinnedBuffers();
             return false;
@@ -40,7 +40,7 @@ bool UDPCapture::allocatePinnedBuffers(size_t size) {
 
     m_pinnedBufferSize = size;
     m_usePinnedMemory = true;
-    std::cout << "[UDPCapture] Allocated " << (size / 1024) << "KB x " << NUM_BUFFERS 
+    std::cout << "[UDPCapture] Allocated " << (size / 1024) << "KB x " << NUM_BUFFERS
               << " pinned buffers for zero-copy\n";
     return true;
 }
@@ -106,9 +106,8 @@ bool UDPCapture::Initialize(unsigned short listenPort) {
                (char*)&timeout, sizeof(timeout));
 #endif
 
-    // Pre-allocate pinned buffers for typical 320x320 RGB frames
-    // Will be resized if needed when actual frame size is known
-    size_t defaultSize = 320 * 320 * 3;  // RGB
+    // Pre-allocate pinned buffers for typical 320x320 BGRA frames
+    size_t defaultSize = 320 * 320 * 4;  // BGRA
     if (!allocatePinnedBuffers(defaultSize)) {
         std::cerr << "[UDPCapture] Warning: Failed to allocate pinned memory, "
                   << "falling back to regular memory\n";
@@ -144,7 +143,7 @@ bool UDPCapture::StartCapture() {
     // Start receive thread
     m_recvThread = std::thread(&UDPCapture::receiveThread, this);
 
-    std::cout << "[UDPCapture] Started capture (pinned memory: " 
+    std::cout << "[UDPCapture] Started capture (pinned memory: "
               << (m_usePinnedMemory ? "enabled" : "disabled") << ")\n";
     return true;
 }
@@ -262,12 +261,12 @@ void UDPCapture::receiveThread() {
 
             // Check if frame is complete
             if (frag.receivedCount == frag.totalPackets) {
-                // Frame complete! Convert BGRA to RGB and move to PINNED output buffer
-                size_t rgbSize = frag.width * frag.height * 3;
-                
+                // Frame complete! Copy BGRA directly to pinned buffer (GPU does conversion)
+                size_t bgraSize = frag.width * frag.height * 4;
+
                 // Ensure pinned buffers are large enough
-                if (!m_usePinnedMemory || m_pinnedBufferSize < rgbSize) {
-                    allocatePinnedBuffers(rgbSize);
+                if (!m_usePinnedMemory || m_pinnedBufferSize < bgraSize) {
+                    allocatePinnedBuffers(bgraSize);
                 }
 
                 {
@@ -275,37 +274,33 @@ void UDPCapture::receiveThread() {
 
                     // Get write buffer index
                     int writeIdx = m_writeBuffer.load();
-                    
-                    // Wait if buffer is in use by GPU
-                    // In practice, GPU should be done by now due to double-buffering
+
+                    // Check if buffer is in use by GPU
+                    bool skipFrame = false;
+                    int startIdx = writeIdx;
                     while (m_bufferInUse[writeIdx].load()) {
                         writeIdx = (writeIdx + 1) % NUM_BUFFERS;
-                        if (writeIdx == m_writeBuffer.load()) {
-                            // Both buffers in use, skip frame
+                        if (writeIdx == startIdx) {
+                            // All buffers in use, skip frame
                             m_droppedFrames.fetch_add(1);
-                            m_fragmentMap.erase(frameId);
-                            continue;
+                            skipFrame = true;
+                            break;
                         }
                     }
 
-                    uint8_t* dstBuffer = m_pinnedFrameBuffer[writeIdx];
-                    if (!dstBuffer) {
-                        // Fallback: pinned allocation failed
+                    if (skipFrame) {
                         m_fragmentMap.erase(frameId);
                         continue;
                     }
 
-                    // Convert BGRA to RGB directly into pinned buffer
-                    const uint8_t* src = frag.data.data();
-                    uint8_t* dst = dstBuffer;
-                    size_t pixelCount = frag.width * frag.height;
-                    
-                    // Optimized BGRA->RGB conversion
-                    for (size_t i = 0; i < pixelCount; i++) {
-                        dst[i * 3 + 0] = src[i * 4 + 2];  // R = B
-                        dst[i * 3 + 1] = src[i * 4 + 1];  // G = G
-                        dst[i * 3 + 2] = src[i * 4 + 0];  // B = R
+                    uint8_t* dstBuffer = m_pinnedFrameBuffer[writeIdx];
+                    if (!dstBuffer) {
+                        m_fragmentMap.erase(frameId);
+                        continue;
                     }
+
+                    // Direct BGRA memcpy to pinned buffer (GPU handles BGRA->CHW conversion)
+                    memcpy(dstBuffer, frag.data.data(), bgraSize);
 
                     // Swap buffers
                     m_readBuffer.store(writeIdx);
@@ -341,7 +336,7 @@ bool UDPCapture::GetLatestFrame(void** frameData, unsigned int* width,
     if (frameData) *frameData = m_pinnedFrameBuffer[readIdx];
     if (width) *width = m_frameWidth.load();
     if (height) *height = m_frameHeight.load();
-    if (size) *size = m_frameWidth.load() * m_frameHeight.load() * 3;
+    if (size) *size = m_frameWidth.load() * m_frameHeight.load() * 4;  // BGRA
 
     return true;
 }
@@ -430,7 +425,7 @@ bool UDPCapture::AcquireFrameToCuda(void* d_rgbBuffer, size_t bufferSize,
         return false;
     }
 
-    size_t requiredSize = w * h * 3;
+    size_t requiredSize = w * h * 4;  // BGRA
     if (bufferSize < requiredSize) {
         std::cerr << "[UDPCapture] Buffer too small: " << bufferSize
                   << " < " << requiredSize << "\n";

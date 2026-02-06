@@ -140,13 +140,18 @@ public:
             return false;
         }
 
-        // BGRA 그대로 복사 (inference_pc에서 RGB로 변환)
+        // BGRA 그대로 복사 (inference_pc GPU에서 CHW로 변환)
         outData.resize(w * h * 4);
-        uint8_t* dst = outData.data();
-        for (int row = 0; row < h; ++row) {
-            const uint8_t* src = (const uint8_t*)mapped.pData + row * mapped.RowPitch;
-            memcpy(dst, src, w * 4);
-            dst += w * 4;
+        if (mapped.RowPitch == (UINT)(w * 4)) {
+            // Contiguous: single memcpy (no row padding)
+            memcpy(outData.data(), mapped.pData, w * h * 4);
+        } else {
+            // Padded rows: copy row by row
+            uint8_t* dst = outData.data();
+            for (int row = 0; row < h; ++row) {
+                memcpy(dst, (const uint8_t*)mapped.pData + row * mapped.RowPitch, w * 4);
+                dst += w * 4;
+            }
         }
 
         m_context->Unmap(m_staging.Get(), 0);
@@ -400,8 +405,12 @@ int main(int argc, char** argv) {
 
             // Send packet
             int packetSize = (int)(sizeof(UDPPacketHeader) + payloadSize);
-            sendto(sendSock, (char*)packetBuffer.data(), packetSize, 0,
-                   (SOCKADDR*)&destAddr, sizeof(destAddr));
+            int sendResult = sendto(sendSock, (char*)packetBuffer.data(), packetSize, 0,
+                                    (SOCKADDR*)&destAddr, sizeof(destAddr));
+            if (sendResult == SOCKET_ERROR) {
+                // Skip remaining chunks for this frame (UDP is unreliable)
+                break;
+            }
         }
 
         auto t3 = std::chrono::high_resolution_clock::now();

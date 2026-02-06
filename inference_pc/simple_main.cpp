@@ -387,6 +387,10 @@ int main(int argc, char* argv[]) {
 
     // 4. State - all GPU now, minimal CPU state
     gpa::PIDConfig gpuPidConfig = cfg.toGpuPIDConfig();
+    uint32_t allowedClassMask = cfg.getAllowedClassMask();  // Cache once (config doesn't change at runtime)
+
+    // Set BGRA input mode (UDP capture sends BGRA, GPU handles conversion)
+    inference.setBgraInput(true);
 
     // Gaussian noise generator for humanization (used in callback)
     std::random_device rd;
@@ -418,7 +422,7 @@ int main(int argc, char* argv[]) {
     std::cout << "[Simple] Capturing full CUDA graph..." << std::endl;
     if (inference.captureFullGraph(
             cfg.confThreshold, cfg.headClassId, cfg.headBonus,
-            cfg.getAllowedClassMask(), gpuPidConfig,
+            allowedClassMask, gpuPidConfig,
             cfg.iouStickinessThreshold, cfg.headAimPoint, cfg.bodyAimPoint)) {
         std::cout << "[Simple] Full CUDA graph: ENABLED" << std::endl;
     } else {
@@ -507,7 +511,7 @@ int main(int argc, char* argv[]) {
         inference.runInferenceWithCallback(
             pinnedRgbData, width, height,
             cfg.confThreshold, cfg.headClassId, cfg.headBonus,
-            cfg.getAllowedClassMask(),
+            allowedClassMask,
             gpuPidConfig,
             cfg.iouStickinessThreshold,
             cfg.headAimPoint, cfg.bodyAimPoint,
