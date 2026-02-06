@@ -1,5 +1,5 @@
 // Simple TensorRT inference with optimizations
-// - GPU preprocessing (with resolution-aware bilinear resize)
+// - GPU preprocessing (BGRA/RGB input with bilinear resize)
 // - GPU postprocessing (decode + fused target selection + PID)
 // - IoU-based target stickiness (hysteresis)
 // - Full CUDA Graph capture (preprocess + inference + postprocess)
@@ -11,7 +11,6 @@
 
 #include <string>
 #include <cstdint>
-#include <functional>
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 #include <NvInfer.h>
@@ -33,7 +32,13 @@ public:
     bool loadEngine(const std::string& enginePath);
     bool isLoaded() const { return m_loaded; }
 
-    // Capture full CUDA graph (preprocess + inference + decode + fused + validate)
+    // Set BGRA input mode (call before captureFullGraph)
+    // When true, preprocessing expects BGRA HWC input (4 bytes/pixel)
+    // When false, preprocessing expects RGB HWC input (3 bytes/pixel)
+    void setBgraInput(bool bgra) { m_bgraInput = bgra; }
+    bool isBgraInput() const { return m_bgraInput; }
+
+    // Capture full CUDA graph (preprocess + inference + decode + fused)
     bool captureFullGraph(float confThreshold, int headClassId, float headBonus,
                           uint32_t allowedClassMask, const PIDConfig& pidConfig,
                           float iouStickinessThreshold, float headYOffset, float bodyYOffset);
@@ -45,6 +50,8 @@ public:
     // Uses cudaLaunchHostFunc to execute callback immediately when GPU finishes.
     // No CPU waiting - callback runs on CUDA's internal thread.
     //
+    // When CUDA graph is captured, uses graph launch for faster execution.
+    //
     // Callback signature: void callback(const InferenceResult& result, void* userData)
     //
     // THREAD SAFETY: Callback runs on CUDA thread, NOT main thread!
@@ -52,11 +59,10 @@ public:
     // - Don't access non-thread-safe resources
     // =========================================================================
 
-    using InferenceCallback = std::function<void(const InferenceResult&, void*)>;
+    // Raw function pointer - zero overhead (no std::function heap allocation)
+    using InferenceCallback = void(*)(const InferenceResult&, void*);
 
-    // Run inference with GPU callback - lowest latency option
-    // Callback is called immediately when GPU finishes (no cudaStreamSync)
-    bool runInferenceWithCallback(void* pinnedRgbData, int width, int height,
+    bool runInferenceWithCallback(void* pinnedData, int width, int height,
                                   float confThreshold, int headClassId, float headBonus,
                                   uint32_t allowedClassMask,
                                   const PIDConfig& pidConfig,
@@ -81,7 +87,7 @@ private:
     nvinfer1::IExecutionContext* m_context = nullptr;
 
     // GPU buffers
-    void* m_d_rgbInput = nullptr;    // RGB HWC uint8 input
+    void* m_d_rawInput = nullptr;    // Raw input (RGB or BGRA HWC uint8)
     void* m_d_chwInput = nullptr;    // CHW float32 or float16 (preprocessed)
     void* m_d_output = nullptr;      // Model output (float32 or float16)
     cudaStream_t m_stream = nullptr;
@@ -103,7 +109,7 @@ private:
     InferenceResult* m_h_inferenceResultPinned = nullptr;  // Pinned host
 
     // Pinned host memory for fast transfers
-    uint8_t* m_h_rgbPinned = nullptr;
+    uint8_t* m_h_rawPinned = nullptr;
 
     // CUDA Graph for full pipeline
     cudaGraph_t m_graph = nullptr;
@@ -117,6 +123,7 @@ private:
     bool m_loaded = false;
     bool m_inputFP16 = false;   // Input tensor is FP16
     bool m_outputFP16 = false;  // Output tensor is FP16
+    bool m_bgraInput = false;   // True for BGRA input, false for RGB
 
     // Cached graph parameters
     float m_cachedConfThreshold = 0.35f;
@@ -128,8 +135,16 @@ private:
     float m_cachedHeadYOffset = 1.0f;
     float m_cachedBodyYOffset = 0.15f;
 
+    // Pre-allocated callback data (eliminates per-frame heap allocation)
+    struct CallbackData {
+        InferenceCallback callback;
+        void* userData;
+        InferenceResult* resultPtr;
+    };
+    CallbackData m_callbackData{};
+
     // Execute full fused pipeline (H2D + preprocess + inference + postprocess + D2H)
-    void executeFusedPipeline(void* rgbInput, int width, int height,
+    void executeFusedPipeline(void* rawInput, int width, int height,
                               float confThreshold, int headClassId, float headBonus,
                               uint32_t allowedClassMask, const PIDConfig& pidConfig,
                               float iouThreshold, float headYOffset, float bodyYOffset);
@@ -139,6 +154,9 @@ private:
                                       float confThreshold, int headClassId, float headBonus,
                                       uint32_t allowedClassMask, const PIDConfig& pidConfig,
                                       float iouThreshold, float headYOffset, float bodyYOffset);
+
+    // Input size helper
+    int inputBytesPerPixel() const { return m_bgraInput ? 4 : 3; }
 };
 
 } // namespace gpa

@@ -1,12 +1,12 @@
 // Simple TensorRT inference with CUDA Graph optimization
 // Supports FP16 and FP32 models natively
 // GPU postprocessing for minimal latency
+// BGRA/RGB input with fused channel conversion + normalization
 #include "simple_inference.h"
 #include "simple_postprocess.h"
 #include <cuda_fp16.h>
 #include <fstream>
 #include <iostream>
-#include <algorithm>
 #include <cstring>
 #include <NvInferVersion.h>
 
@@ -19,43 +19,67 @@
 #endif
 
 // =============================================================================
-// RGB Preprocessing Kernels (inline implementation)
+// Unified Preprocessing Kernels (RGB/BGRA -> CHW normalized)
 // =============================================================================
+// src_bpp: bytes per pixel (3=RGB, 4=BGRA)
+// r_ch, g_ch, b_ch: source channel byte offsets for R, G, B output
+//   RGB:  r_ch=0, g_ch=1, b_ch=2
+//   BGRA: r_ch=2, g_ch=1, b_ch=0
 
-// RGB HWC uint8 -> CHW FP16 normalized (same resolution, no resize)
-__global__ void rgbPreprocessKernelFP16(
+// Same resolution, no resize -> FP16
+__global__ void preprocessKernelFP16(
     const uint8_t* __restrict__ src,
     __half* __restrict__ dst,
     int width, int height,
+    int src_bpp, int r_ch, int g_ch, int b_ch,
     float scale_factor
 ) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
     if (x >= width || y >= height) return;
 
-    int src_idx = (y * width + x) * 3;  // RGB HWC
+    int src_idx = (y * width + x) * src_bpp;
     int hw_size = width * height;
     int dst_idx = y * width + x;
 
-    // RGB HWC -> CHW normalized
-    dst[dst_idx] = __float2half(src[src_idx] * scale_factor);                 // R
-    dst[dst_idx + hw_size] = __float2half(src[src_idx + 1] * scale_factor);   // G
-    dst[dst_idx + 2 * hw_size] = __float2half(src[src_idx + 2] * scale_factor); // B
+    dst[dst_idx] = __float2half(src[src_idx + r_ch] * scale_factor);
+    dst[dst_idx + hw_size] = __float2half(src[src_idx + g_ch] * scale_factor);
+    dst[dst_idx + 2 * hw_size] = __float2half(src[src_idx + b_ch] * scale_factor);
+}
+
+// Same resolution, no resize -> FP32
+__global__ void preprocessKernel(
+    const uint8_t* __restrict__ src,
+    float* __restrict__ dst,
+    int width, int height,
+    int src_bpp, int r_ch, int g_ch, int b_ch,
+    float scale_factor
+) {
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (x >= width || y >= height) return;
+
+    int src_idx = (y * width + x) * src_bpp;
+    int hw_size = width * height;
+    int dst_idx = y * width + x;
+
+    dst[dst_idx] = src[src_idx + r_ch] * scale_factor;
+    dst[dst_idx + hw_size] = src[src_idx + g_ch] * scale_factor;
+    dst[dst_idx + 2 * hw_size] = src[src_idx + b_ch] * scale_factor;
 }
 
 // =============================================================================
 // Bilinear Resize + Preprocessing Kernels (fused for efficiency)
 // =============================================================================
 
-// Optimized bilinear interpolation - reads 4 pixels once for all RGB channels
-// Reduces memory reads from 12 to 4 per output pixel
-__device__ __forceinline__ void bilinearSampleRGB(
+// Optimized bilinear interpolation - reads 4 pixels once for all 3 output channels
+__device__ __forceinline__ void bilinearSample(
     const uint8_t* __restrict__ src,
-    int src_w, int src_h,
+    int src_w, int src_h, int src_bpp,
+    int r_ch, int g_ch, int b_ch,
     float src_x, float src_y,
     float& r, float& g, float& b
 ) {
-    // Clamp coordinates
     src_x = fmaxf(0.0f, fminf(src_x, (float)(src_w - 1)));
     src_y = fmaxf(0.0f, fminf(src_y, (float)(src_h - 1)));
 
@@ -67,36 +91,37 @@ __device__ __forceinline__ void bilinearSampleRGB(
     float fx = src_x - x0;
     float fy = src_y - y0;
 
-    // Read 4 pixels once (HWC layout: RGB interleaved)
-    const uint8_t* p00 = src + (y0 * src_w + x0) * 3;
-    const uint8_t* p10 = src + (y0 * src_w + x1) * 3;
-    const uint8_t* p01 = src + (y1 * src_w + x0) * 3;
-    const uint8_t* p11 = src + (y1 * src_w + x1) * 3;
+    // Read 4 pixels (HWC layout with src_bpp stride)
+    const uint8_t* p00 = src + (y0 * src_w + x0) * src_bpp;
+    const uint8_t* p10 = src + (y0 * src_w + x1) * src_bpp;
+    const uint8_t* p01 = src + (y1 * src_w + x0) * src_bpp;
+    const uint8_t* p11 = src + (y1 * src_w + x1) * src_bpp;
 
-    // Bilinear interpolation for R channel
-    float r00 = p00[0], r10 = p10[0], r01 = p01[0], r11 = p11[0];
+    // R channel
+    float r00 = p00[r_ch], r10 = p10[r_ch], r01 = p01[r_ch], r11 = p11[r_ch];
     float r0 = r00 + fx * (r10 - r00);
     float r1 = r01 + fx * (r11 - r01);
     r = r0 + fy * (r1 - r0);
 
-    // Bilinear interpolation for G channel
-    float g00 = p00[1], g10 = p10[1], g01 = p01[1], g11 = p11[1];
+    // G channel
+    float g00 = p00[g_ch], g10 = p10[g_ch], g01 = p01[g_ch], g11 = p11[g_ch];
     float g0 = g00 + fx * (g10 - g00);
     float g1 = g01 + fx * (g11 - g01);
     g = g0 + fy * (g1 - g0);
 
-    // Bilinear interpolation for B channel
-    float b00 = p00[2], b10 = p10[2], b01 = p01[2], b11 = p11[2];
+    // B channel
+    float b00 = p00[b_ch], b10 = p10[b_ch], b01 = p01[b_ch], b11 = p11[b_ch];
     float b0 = b00 + fx * (b10 - b00);
     float b1 = b01 + fx * (b11 - b01);
     b = b0 + fy * (b1 - b0);
 }
 
 // Bilinear resize + HWC->CHW + normalize -> FP16
-__global__ void rgbResizePreprocessKernelFP16(
+__global__ void resizePreprocessKernelFP16(
     const uint8_t* __restrict__ src,
     __half* __restrict__ dst,
-    int src_w, int src_h,
+    int src_w, int src_h, int src_bpp,
+    int r_ch, int g_ch, int b_ch,
     int dst_w, int dst_h,
     float scale_x, float scale_y,
     float norm_factor
@@ -105,28 +130,26 @@ __global__ void rgbResizePreprocessKernelFP16(
     int dy = blockIdx.y * blockDim.y + threadIdx.y;
     if (dx >= dst_w || dy >= dst_h) return;
 
-    // Map destination to source coordinates
     float sx = dx * scale_x;
     float sy = dy * scale_y;
 
     int hw_size = dst_w * dst_h;
     int dst_idx = dy * dst_w + dx;
 
-    // Optimized: sample all RGB channels with single 4-pixel read
     float r, g, b;
-    bilinearSampleRGB(src, src_w, src_h, sx, sy, r, g, b);
+    bilinearSample(src, src_w, src_h, src_bpp, r_ch, g_ch, b_ch, sx, sy, r, g, b);
 
-    // Normalize and write to CHW format
     dst[dst_idx] = __float2half(r * norm_factor);
     dst[dst_idx + hw_size] = __float2half(g * norm_factor);
     dst[dst_idx + 2 * hw_size] = __float2half(b * norm_factor);
 }
 
 // Bilinear resize + HWC->CHW + normalize -> FP32
-__global__ void rgbResizePreprocessKernel(
+__global__ void resizePreprocessKernel(
     const uint8_t* __restrict__ src,
     float* __restrict__ dst,
-    int src_w, int src_h,
+    int src_w, int src_h, int src_bpp,
+    int r_ch, int g_ch, int b_ch,
     int dst_w, int dst_h,
     float scale_x, float scale_y,
     float norm_factor
@@ -135,107 +158,79 @@ __global__ void rgbResizePreprocessKernel(
     int dy = blockIdx.y * blockDim.y + threadIdx.y;
     if (dx >= dst_w || dy >= dst_h) return;
 
-    // Map destination to source coordinates
     float sx = dx * scale_x;
     float sy = dy * scale_y;
 
     int hw_size = dst_w * dst_h;
     int dst_idx = dy * dst_w + dx;
 
-    // Optimized: sample all RGB channels with single 4-pixel read
     float r, g, b;
-    bilinearSampleRGB(src, src_w, src_h, sx, sy, r, g, b);
+    bilinearSample(src, src_w, src_h, src_bpp, r_ch, g_ch, b_ch, sx, sy, r, g, b);
 
-    // Normalize
-    r *= norm_factor;
-    g *= norm_factor;
-    b *= norm_factor;
-
-    // Write to CHW format
-    dst[dst_idx] = r;
-    dst[dst_idx + hw_size] = g;
-    dst[dst_idx + 2 * hw_size] = b;
+    dst[dst_idx] = r * norm_factor;
+    dst[dst_idx + hw_size] = g * norm_factor;
+    dst[dst_idx + 2 * hw_size] = b * norm_factor;
 }
 
-// RGB HWC uint8 -> CHW FP32 normalized (same resolution, no resize)
-__global__ void rgbPreprocessKernel(
-    const uint8_t* __restrict__ src,
-    float* __restrict__ dst,
-    int width, int height,
-    float scale_factor
-) {
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
-    int y = blockIdx.y * blockDim.y + threadIdx.y;
-    if (x >= width || y >= height) return;
-
-    int src_idx = (y * width + x) * 3;  // RGB HWC
-    int hw_size = width * height;
-    int dst_idx = y * width + x;
-
-    // RGB HWC -> CHW normalized
-    dst[dst_idx] = src[src_idx] * scale_factor;                 // R
-    dst[dst_idx + hw_size] = src[src_idx + 1] * scale_factor;   // G
-    dst[dst_idx + 2 * hw_size] = src[src_idx + 2] * scale_factor; // B
-}
-
-// RGB preprocessing wrapper function (with optional bilinear resize)
-extern "C" cudaError_t cuda_rgb_preprocessing(
-    const void* src_rgb_data,
-    void* dst_rgb_chw,
+// Unified preprocessing wrapper (handles RGB/BGRA, resize/no-resize, FP16/FP32)
+extern "C" cudaError_t cuda_preprocessing(
+    const void* src_data,
+    void* dst_chw,
     int src_width, int src_height,
-    int src_step,  // unused
+    int src_bpp,              // 3=RGB, 4=BGRA
+    bool bgra,                // true=BGRA channel order, false=RGB
     int target_width, int target_height,
     bool use_fp16,
     cudaStream_t stream
 ) {
-    dim3 block(16, 16);
+    dim3 block(32, 8);
     dim3 grid((target_width + block.x - 1) / block.x,
               (target_height + block.y - 1) / block.y);
 
     const float norm_factor = 1.0f / 255.0f;
 
-    // Check if resize is needed
+    // Channel offsets: RGB -> 0,1,2; BGRA -> 2,1,0
+    int r_ch = bgra ? 2 : 0;
+    int g_ch = 1;
+    int b_ch = bgra ? 0 : 2;
+
     bool need_resize = (src_width != target_width) || (src_height != target_height);
 
     if (need_resize) {
-        // Bilinear resize + preprocess (fused kernel)
         float scale_x = (float)(src_width - 1) / (float)(target_width - 1);
         float scale_y = (float)(src_height - 1) / (float)(target_height - 1);
 
         if (use_fp16) {
-            rgbResizePreprocessKernelFP16<<<grid, block, 0, stream>>>(
-                static_cast<const uint8_t*>(src_rgb_data),
-                static_cast<__half*>(dst_rgb_chw),
-                src_width, src_height,
+            resizePreprocessKernelFP16<<<grid, block, 0, stream>>>(
+                static_cast<const uint8_t*>(src_data),
+                static_cast<__half*>(dst_chw),
+                src_width, src_height, src_bpp, r_ch, g_ch, b_ch,
                 target_width, target_height,
-                scale_x, scale_y,
-                norm_factor
+                scale_x, scale_y, norm_factor
             );
         } else {
-            rgbResizePreprocessKernel<<<grid, block, 0, stream>>>(
-                static_cast<const uint8_t*>(src_rgb_data),
-                static_cast<float*>(dst_rgb_chw),
-                src_width, src_height,
+            resizePreprocessKernel<<<grid, block, 0, stream>>>(
+                static_cast<const uint8_t*>(src_data),
+                static_cast<float*>(dst_chw),
+                src_width, src_height, src_bpp, r_ch, g_ch, b_ch,
                 target_width, target_height,
-                scale_x, scale_y,
-                norm_factor
+                scale_x, scale_y, norm_factor
             );
         }
     } else {
-        // Same resolution - no resize needed
         if (use_fp16) {
-            rgbPreprocessKernelFP16<<<grid, block, 0, stream>>>(
-                static_cast<const uint8_t*>(src_rgb_data),
-                static_cast<__half*>(dst_rgb_chw),
+            preprocessKernelFP16<<<grid, block, 0, stream>>>(
+                static_cast<const uint8_t*>(src_data),
+                static_cast<__half*>(dst_chw),
                 target_width, target_height,
-                norm_factor
+                src_bpp, r_ch, g_ch, b_ch, norm_factor
             );
         } else {
-            rgbPreprocessKernel<<<grid, block, 0, stream>>>(
-                static_cast<const uint8_t*>(src_rgb_data),
-                static_cast<float*>(dst_rgb_chw),
+            preprocessKernel<<<grid, block, 0, stream>>>(
+                static_cast<const uint8_t*>(src_data),
+                static_cast<float*>(dst_chw),
                 target_width, target_height,
-                norm_factor
+                src_bpp, r_ch, g_ch, b_ch, norm_factor
             );
         }
     }
@@ -258,11 +253,8 @@ SimpleInference::~SimpleInference() {
     if (m_graphExec) cudaGraphExecDestroy(m_graphExec);
     if (m_graph) cudaGraphDestroy(m_graph);
 
-    // Destroy CUDA event
-    if (m_inferenceComplete) cudaEventDestroy(m_inferenceComplete);
-
     // Free GPU memory
-    if (m_d_rgbInput) cudaFree(m_d_rgbInput);
+    if (m_d_rawInput) cudaFree(m_d_rawInput);
     if (m_d_chwInput) cudaFree(m_d_chwInput);
     if (m_d_output) cudaFree(m_d_output);
 
@@ -282,11 +274,7 @@ SimpleInference::~SimpleInference() {
     if (m_h_inferenceResultPinned) cudaFreeHost(m_h_inferenceResultPinned);
 
     // Free pinned host memory
-    if (m_h_rgbPinned) cudaFreeHost(m_h_rgbPinned);
-    if (m_h_outputPinned) cudaFreeHost(m_h_outputPinned);
-    if (m_h_bestTargetPinned) cudaFreeHost(m_h_bestTargetPinned);
-    if (m_h_hasTargetPinned) cudaFreeHost(m_h_hasTargetPinned);
-    if (m_h_mouseMovementPinned) cudaFreeHost(m_h_mouseMovementPinned);
+    if (m_h_rawPinned) cudaFreeHost(m_h_rawPinned);
 
     if (m_stream) cudaStreamDestroy(m_stream);
     if (m_context) delete m_context;
@@ -330,7 +318,6 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
 
     // Get dimensions - API differs between TensorRT versions
 #if TRT_USE_NEW_API
-    // TensorRT 10.x: Use tensor name-based API
     const char* inputName = "images";
     const char* outputName = "output0";
 
@@ -342,11 +329,9 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
         return false;
     }
 
-    // Check data types
     auto inputType = m_engine->getTensorDataType(inputName);
     auto outputType = m_engine->getTensorDataType(outputName);
 #else
-    // TensorRT 8.x: Use binding index API
     int inputIdx = m_engine->getBindingIndex("images");
     int outputIdx = m_engine->getBindingIndex("output0");
 
@@ -358,7 +343,6 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
     auto inputDims = m_engine->getBindingDimensions(inputIdx);
     auto outputDims = m_engine->getBindingDimensions(outputIdx);
 
-    // Check data types
     auto inputType = m_engine->getBindingDataType(inputIdx);
     auto outputType = m_engine->getBindingDataType(outputIdx);
 #endif
@@ -381,12 +365,12 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
     cudaDeviceGetStreamPriorityRange(&leastPriority, &greatestPriority);
     cudaStreamCreateWithPriority(&m_stream, cudaStreamNonBlocking, greatestPriority);
 
-    // Allocate GPU memory
-    size_t rgbInputSize = m_inputH * m_inputW * 3;
+    // Allocate GPU memory (use max of RGB/BGRA for raw input)
+    size_t rawInputSize = m_inputH * m_inputW * 4;  // Allocate for BGRA (max)
     size_t chwInputSize = 1 * 3 * m_inputH * m_inputW * (m_inputFP16 ? sizeof(__half) : sizeof(float));
     size_t outputSizeGPU = 1 * outputDims.d[1] * m_numBoxes * (m_outputFP16 ? sizeof(__half) : sizeof(float));
 
-    cudaMalloc(&m_d_rgbInput, rgbInputSize);
+    cudaMalloc(&m_d_rawInput, rawInputSize);
     cudaMalloc(&m_d_chwInput, chwInputSize);
     cudaMalloc(&m_d_output, outputSizeGPU);
 
@@ -406,429 +390,50 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
     cudaMemset(m_d_pidState, 0, sizeof(PIDState));
     cudaMemset(m_d_mouseMovement, 0, sizeof(MouseMovement));
 
-    // Allocate pinned host memory - same type as GPU output
-    m_outputPinnedSize = outputSizeGPU;
-    cudaMallocHost(&m_h_rgbPinned, rgbInputSize);
-    cudaMallocHost(&m_h_outputPinned, m_outputPinnedSize);
-    cudaMallocHost(&m_h_bestTargetPinned, sizeof(Detection));
-    cudaMallocHost(&m_h_hasTargetPinned, sizeof(int));
-    cudaMallocHost(&m_h_mouseMovementPinned, sizeof(MouseMovement));
+    // Allocate pinned host memory (max size for BGRA)
+    cudaMallocHost(&m_h_rawPinned, rawInputSize);
 
     m_loaded = true;
     std::cout << "[SimpleInference] Engine loaded successfully" << std::endl;
 
-    // Warm up and capture graph
+    // Warm up TensorRT
     std::cout << "[SimpleInference] Warming up..." << std::endl;
-    memset(m_h_rgbPinned, 128, rgbInputSize);  // Gray image
+    size_t warmupSize = m_inputH * m_inputW * inputBytesPerPixel();
+    memset(m_h_rawPinned, 128, warmupSize);
     for (int i = 0; i < 3; i++) {
-        executeStandard();
+        cudaMemcpyAsync(m_d_rawInput, m_h_rawPinned, warmupSize, cudaMemcpyHostToDevice, m_stream);
+        cuda_preprocessing(m_d_rawInput, m_d_chwInput,
+                           m_inputW, m_inputH, inputBytesPerPixel(), m_bgraInput,
+                           m_inputW, m_inputH, m_inputFP16, m_stream);
+#if TRT_USE_NEW_API
+        m_context->setTensorAddress("images", m_d_chwInput);
+        m_context->setTensorAddress("output0", m_d_output);
+        m_context->enqueueV3(m_stream);
+#else
+        void* bindings[2] = { m_d_chwInput, m_d_output };
+        m_context->enqueueV2(bindings, m_stream, nullptr);
+#endif
+        cudaStreamSynchronize(m_stream);
     }
-
-    std::cout << "[SimpleInference] Capturing CUDA graph..." << std::endl;
-    if (captureGraph()) {
-        std::cout << "[SimpleInference] CUDA graph captured successfully" << std::endl;
-    } else {
-        std::cout << "[SimpleInference] CUDA graph capture failed, using standard execution" << std::endl;
-    }
+    std::cout << "[SimpleInference] Warmup complete" << std::endl;
 
     return true;
-}
-
-void SimpleInference::executeStandard() {
-    // Use actual source dimensions (may differ from model input)
-    size_t srcRgbSize = m_srcH * m_srcW * 3;
-
-    // Upload actual RGB to GPU
-    cudaMemcpyAsync(m_d_rgbInput, m_h_rgbPinned, srcRgbSize, cudaMemcpyHostToDevice, m_stream);
-
-    // GPU preprocessing with bilinear resize if needed (srcW x srcH -> inputW x inputH)
-    cuda_rgb_preprocessing(
-        m_d_rgbInput,
-        m_d_chwInput,
-        m_srcW, m_srcH,          // Source dimensions
-        m_srcW * 3,
-        m_inputW, m_inputH,      // Target dimensions (model input)
-        m_inputFP16,
-        m_stream
-    );
-
-    // Run inference
-#if TRT_USE_NEW_API
-    m_context->setTensorAddress("images", m_d_chwInput);
-    m_context->setTensorAddress("output0", m_d_output);
-    m_context->enqueueV3(m_stream);
-#else
-    void* bindings[2] = { m_d_chwInput, m_d_output };
-    m_context->enqueueV2(bindings, m_stream, nullptr);
-#endif
-
-    // Download output (FP16 or FP32, no conversion)
-    cudaMemcpyAsync(m_h_outputPinned, m_d_output, m_outputPinnedSize, cudaMemcpyDeviceToHost, m_stream);
-    cudaStreamSynchronize(m_stream);
-}
-
-bool SimpleInference::captureGraph() {
-    if (m_graphCaptured) {
-        return true;
-    }
-
-    size_t rgbSize = m_inputH * m_inputW * 3;
-
-    // Begin graph capture with relaxed mode for better compatibility
-    // Relaxed mode allows operations that may not be fully captured, reducing overhead
-    cudaError_t err = cudaStreamBeginCapture(m_stream, cudaStreamCaptureModeRelaxed);
-    if (err != cudaSuccess) {
-        std::cerr << "[SimpleInference] Failed to begin graph capture: " << cudaGetErrorString(err) << std::endl;
-        return false;
-    }
-
-    // Record the operations
-    cudaMemcpyAsync(m_d_rgbInput, m_h_rgbPinned, rgbSize, cudaMemcpyHostToDevice, m_stream);
-
-    cuda_rgb_preprocessing(
-        m_d_rgbInput,
-        m_d_chwInput,
-        m_inputW, m_inputH,
-        m_inputW * 3,
-        m_inputW, m_inputH,
-        m_inputFP16,
-        m_stream
-    );
-
-#if TRT_USE_NEW_API
-    m_context->setTensorAddress("images", m_d_chwInput);
-    m_context->setTensorAddress("output0", m_d_output);
-    m_context->enqueueV3(m_stream);
-#else
-    void* bindings[2] = { m_d_chwInput, m_d_output };
-    m_context->enqueueV2(bindings, m_stream, nullptr);
-#endif
-
-    // Download output (same size regardless of FP16/FP32)
-    cudaMemcpyAsync(m_h_outputPinned, m_d_output, m_outputPinnedSize, cudaMemcpyDeviceToHost, m_stream);
-
-    // End capture
-    err = cudaStreamEndCapture(m_stream, &m_graph);
-    if (err != cudaSuccess || !m_graph) {
-        std::cerr << "[SimpleInference] Failed to end graph capture: " << cudaGetErrorString(err) << std::endl;
-        return false;
-    }
-
-    // Instantiate the graph
-    err = cudaGraphInstantiate(&m_graphExec, m_graph, nullptr, nullptr, 0);
-    if (err != cudaSuccess) {
-        std::cerr << "[SimpleInference] Failed to instantiate graph: " << cudaGetErrorString(err) << std::endl;
-        cudaGraphDestroy(m_graph);
-        m_graph = nullptr;
-        return false;
-    }
-
-    m_graphCaptured = true;
-    return true;
-}
-
-void SimpleInference::executeGraph() {
-    cudaGraphLaunch(m_graphExec, m_stream);
-    cudaStreamSynchronize(m_stream);
-}
-
-void SimpleInference::decodeOutput(float confThreshold, std::vector<Detection>& outDetections) {
-    outDetections.clear();
-
-    if (m_outputFP16) {
-        // FP16 output - read as __half
-        const __half* output = static_cast<const __half*>(m_h_outputPinned);
-
-        for (int i = 0; i < m_numBoxes; i++) {
-            float cx = __half2float(output[0 * m_numBoxes + i]);
-            float cy = __half2float(output[1 * m_numBoxes + i]);
-            float w = __half2float(output[2 * m_numBoxes + i]);
-            float h = __half2float(output[3 * m_numBoxes + i]);
-
-            // Find best class
-            float maxConf = 0;
-            int bestClass = 0;
-            for (int c = 0; c < m_numClasses; c++) {
-                float conf = __half2float(output[(4 + c) * m_numBoxes + i]);
-                if (conf > maxConf) {
-                    maxConf = conf;
-                    bestClass = c;
-                }
-            }
-
-            if (maxConf > confThreshold) {
-                Detection det;
-                det.x1 = cx - w / 2;
-                det.y1 = cy - h / 2;
-                det.x2 = cx + w / 2;
-                det.y2 = cy + h / 2;
-                det.confidence = maxConf;
-                det.classId = bestClass;
-                outDetections.push_back(det);
-            }
-        }
-    } else {
-        // FP32 output
-        const float* output = static_cast<const float*>(m_h_outputPinned);
-
-        for (int i = 0; i < m_numBoxes; i++) {
-            float cx = output[0 * m_numBoxes + i];
-            float cy = output[1 * m_numBoxes + i];
-            float w = output[2 * m_numBoxes + i];
-            float h = output[3 * m_numBoxes + i];
-
-            // Find best class
-            float maxConf = 0;
-            int bestClass = 0;
-            for (int c = 0; c < m_numClasses; c++) {
-                float conf = output[(4 + c) * m_numBoxes + i];
-                if (conf > maxConf) {
-                    maxConf = conf;
-                    bestClass = c;
-                }
-            }
-
-            if (maxConf > confThreshold) {
-                Detection det;
-                det.x1 = cx - w / 2;
-                det.y1 = cy - h / 2;
-                det.x2 = cx + w / 2;
-                det.y2 = cy + h / 2;
-                det.confidence = maxConf;
-                det.classId = bestClass;
-                outDetections.push_back(det);
-            }
-        }
-    }
-}
-
-int SimpleInference::runInference(const uint8_t* h_rgbData, int width, int height,
-                                   float confThreshold, std::vector<Detection>& outDetections) {
-    if (!m_loaded) return 0;
-
-    // Store source dimensions for resize
-    m_srcW = width;
-    m_srcH = height;
-
-    // Copy actual input to pinned memory
-    size_t rgbSize = width * height * 3;
-    memcpy(m_h_rgbPinned, h_rgbData, rgbSize);
-
-    // Execute (CUDA Graph only works with fixed sizes, so use standard if resize needed)
-    bool needResize = (width != m_inputW) || (height != m_inputH);
-    if (m_graphCaptured && !needResize) {
-        executeGraph();
-    } else {
-        executeStandard();
-    }
-
-    // Decode (CPU)
-    decodeOutput(confThreshold, outDetections);
-
-    return static_cast<int>(outDetections.size());
-}
-
-bool SimpleInference::runInferenceGpu(const uint8_t* h_rgbData, int width, int height,
-                                       float confThreshold, int headClassId, float headBonus,
-                                       uint32_t allowedClassMask,
-                                       Detection& outBestTarget) {
-    if (!m_loaded) return false;
-
-    // Copy actual input to pinned memory
-    size_t rgbSize = width * height * 3;
-    memcpy(m_h_rgbPinned, h_rgbData, rgbSize);
-
-    // Execute inference (H2D + preprocess with resize + inference)
-    // Copy actual input size to GPU
-    cudaMemcpyAsync(m_d_rgbInput, m_h_rgbPinned, rgbSize, cudaMemcpyHostToDevice, m_stream);
-
-    // Preprocess with bilinear resize if needed
-    cuda_rgb_preprocessing(
-        m_d_rgbInput,
-        m_d_chwInput,
-        width, height,           // Source dimensions
-        width * 3,
-        m_inputW, m_inputH,      // Target dimensions (320x320)
-        m_inputFP16,
-        m_stream
-    );
-
-#if TRT_USE_NEW_API
-    m_context->setTensorAddress("images", m_d_chwInput);
-    m_context->setTensorAddress("output0", m_d_output);
-    m_context->enqueueV3(m_stream);
-#else
-    void* bindings[2] = { m_d_chwInput, m_d_output };
-    m_context->enqueueV2(bindings, m_stream, nullptr);
-#endif
-
-    // GPU postprocessing: decode on GPU (with class filtering)
-    decodeYoloGpu(
-        m_d_output,
-        m_outputFP16,
-        m_numBoxes,
-        m_numClasses,
-        confThreshold,
-        allowedClassMask,
-        m_d_decoded,
-        m_d_decodedCount,
-        kMaxDetections,
-        m_stream
-    );
-
-    // GPU target selection
-    float crosshairX = m_inputW * 0.5f;
-    float crosshairY = m_inputH * 0.5f;
-
-    findBestTargetGpu(
-        m_d_decoded,
-        m_d_decodedCount,
-        crosshairX,
-        crosshairY,
-        headClassId,
-        headBonus,
-        m_d_bestTarget,
-        m_d_hasTarget,
-        m_stream
-    );
-
-    // Validate best target before host copy (prevents garbage values)
-    validateBestTargetGpu(m_d_bestTarget, m_d_hasTarget, m_stream);
-
-    // Copy only the single best target back (much smaller than full output)
-    cudaMemcpyAsync(m_h_bestTargetPinned, m_d_bestTarget, sizeof(Detection), cudaMemcpyDeviceToHost, m_stream);
-    cudaMemcpyAsync(m_h_hasTargetPinned, m_d_hasTarget, sizeof(int), cudaMemcpyDeviceToHost, m_stream);
-    cudaStreamSynchronize(m_stream);
-
-    if (*m_h_hasTargetPinned) {
-        outBestTarget = *m_h_bestTargetPinned;
-        return true;
-    }
-    return false;
-}
-
-bool SimpleInference::runInferenceFused(const uint8_t* h_rgbData, int width, int height,
-                                         float confThreshold, int headClassId, float headBonus,
-                                         uint32_t allowedClassMask,
-                                         const PIDConfig& pidConfig,
-                                         float iouStickinessThreshold,
-                                         float headYOffset, float bodyYOffset,
-                                         MouseMovement& outMovement,
-                                         Detection* outBestTarget) {
-    if (!m_loaded) return false;
-
-    // Copy actual input to pinned memory
-    size_t rgbSize = width * height * 3;
-    memcpy(m_h_rgbPinned, h_rgbData, rgbSize);
-
-    // Execute inference (H2D + preprocess with resize + inference)
-    // Copy actual input size to GPU (not target size!)
-    cudaMemcpyAsync(m_d_rgbInput, m_h_rgbPinned, rgbSize, cudaMemcpyHostToDevice, m_stream);
-
-    // Preprocess with bilinear resize if needed (width x height -> m_inputW x m_inputH)
-    cuda_rgb_preprocessing(
-        m_d_rgbInput,
-        m_d_chwInput,
-        width, height,           // Source dimensions (actual input)
-        width * 3,
-        m_inputW, m_inputH,      // Target dimensions (model input: 320x320)
-        m_inputFP16,
-        m_stream
-    );
-
-#if TRT_USE_NEW_API
-    m_context->setTensorAddress("images", m_d_chwInput);
-    m_context->setTensorAddress("output0", m_d_output);
-    m_context->enqueueV3(m_stream);
-#else
-    void* bindings[2] = { m_d_chwInput, m_d_output };
-    m_context->enqueueV2(bindings, m_stream, nullptr);
-#endif
-
-    // GPU postprocessing: decode on GPU (with class filtering)
-    decodeYoloGpu(
-        m_d_output,
-        m_outputFP16,
-        m_numBoxes,
-        m_numClasses,
-        confThreshold,
-        allowedClassMask,
-        m_d_decoded,
-        m_d_decodedCount,
-        kMaxDetections,
-        m_stream
-    );
-
-    // Fused target selection + PID movement on GPU
-    float crosshairX = m_inputW * 0.5f;
-    float crosshairY = m_inputH * 0.5f;
-
-    fusedTargetSelectionAndMovementGpu(
-        m_d_decoded,
-        m_d_decodedCount,
-        kMaxDetections,
-        crosshairX,
-        crosshairY,
-        headClassId,
-        headBonus,
-        pidConfig,
-        iouStickinessThreshold,
-        headYOffset,
-        bodyYOffset,
-        m_d_selectedTarget,
-        m_d_bestTarget,
-        m_d_hasTarget,
-        m_d_mouseMovement,
-        m_d_pidState,
-        m_stream
-    );
-
-    // Validate best target before host copy
-    validateBestTargetGpu(m_d_bestTarget, m_d_hasTarget, m_stream);
-
-    // Copy only the essential data back (mouse movement and has_target flag)
-    cudaMemcpyAsync(m_h_mouseMovementPinned, m_d_mouseMovement, sizeof(MouseMovement), cudaMemcpyDeviceToHost, m_stream);
-    cudaMemcpyAsync(m_h_hasTargetPinned, m_d_hasTarget, sizeof(int), cudaMemcpyDeviceToHost, m_stream);
-
-    // Optionally copy best target if requested
-    if (outBestTarget) {
-        cudaMemcpyAsync(m_h_bestTargetPinned, m_d_bestTarget, sizeof(Detection), cudaMemcpyDeviceToHost, m_stream);
-    }
-
-    cudaStreamSynchronize(m_stream);
-
-    // Copy output
-    outMovement = *m_h_mouseMovementPinned;
-
-    if (outBestTarget && *m_h_hasTargetPinned) {
-        *outBestTarget = *m_h_bestTargetPinned;
-    }
-
-    return *m_h_hasTargetPinned != 0;
 }
 
 // =============================================================================
 // OPTIMIZED API: Zero-copy + Single D2H Transfer + Full CUDA Graph
 // =============================================================================
 
-// Note: packInferenceResultKernel removed - packing is now fused into
-// fusedTargetSelectionAndMovementKernel to eliminate 1 kernel launch overhead
-
 // Pipeline without H2D transfer - for CUDA Graph capture
-// H2D is excluded so it can be done separately with different source buffers
 void SimpleInference::executeFusedPipelinePostH2D(int width, int height,
                                                    float confThreshold, int headClassId, float headBonus,
                                                    uint32_t allowedClassMask, const PIDConfig& pidConfig,
                                                    float iouThreshold, float headYOffset, float bodyYOffset) {
-    // GPU preprocessing with bilinear resize if needed
-    cuda_rgb_preprocessing(
-        m_d_rgbInput,
-        m_d_chwInput,
-        width, height,
-        width * 3,
-        m_inputW, m_inputH,
-        m_inputFP16,
-        m_stream
+    // GPU preprocessing (handles RGB/BGRA + resize)
+    cuda_preprocessing(
+        m_d_rawInput, m_d_chwInput,
+        width, height, inputBytesPerPixel(), m_bgraInput,
+        m_inputW, m_inputH, m_inputFP16, m_stream
     );
 
     // TensorRT inference
@@ -843,61 +448,39 @@ void SimpleInference::executeFusedPipelinePostH2D(int width, int height,
 
     // GPU decode
     decodeYoloGpu(
-        m_d_output,
-        m_outputFP16,
-        m_numBoxes,
-        m_numClasses,
-        confThreshold,
-        allowedClassMask,
-        m_d_decoded,
-        m_d_decodedCount,
-        kMaxDetections,
-        m_stream
+        m_d_output, m_outputFP16, m_numBoxes, m_numClasses,
+        confThreshold, allowedClassMask,
+        m_d_decoded, m_d_decodedCount, kMaxDetections, m_stream
     );
 
-    // Fused target selection + PID
+    // Fused target selection + PID + result packing
     float crosshairX = m_inputW * 0.5f;
     float crosshairY = m_inputH * 0.5f;
 
     fusedTargetSelectionAndMovementGpu(
-        m_d_decoded,
-        m_d_decodedCount,
-        kMaxDetections,
-        crosshairX,
-        crosshairY,
-        headClassId,
-        headBonus,
-        pidConfig,
-        iouThreshold,
-        headYOffset,
-        bodyYOffset,
-        m_d_selectedTarget,
-        m_d_bestTarget,
-        m_d_hasTarget,
-        m_d_mouseMovement,
-        m_d_pidState,
-        m_d_inferenceResult,
-        m_stream
+        m_d_decoded, m_d_decodedCount, kMaxDetections,
+        crosshairX, crosshairY,
+        headClassId, headBonus, pidConfig,
+        iouThreshold, headYOffset, bodyYOffset,
+        m_d_selectedTarget, m_d_bestTarget, m_d_hasTarget,
+        m_d_mouseMovement, m_d_pidState,
+        m_d_inferenceResult, m_stream
     );
 
-    // Validate
-    validateBestTargetGpu(m_d_bestTarget, m_d_hasTarget, m_stream);
-
-    // Single D2H transfer (40 bytes instead of 3 separate transfers)
+    // Single D2H transfer (40 bytes)
     cudaMemcpyAsync(m_h_inferenceResultPinned, m_d_inferenceResult,
                     sizeof(InferenceResult), cudaMemcpyDeviceToHost, m_stream);
 }
 
-void SimpleInference::executeFusedPipeline(void* rgbInput, int width, int height,
+void SimpleInference::executeFusedPipeline(void* rawInput, int width, int height,
                                             float confThreshold, int headClassId, float headBonus,
                                             uint32_t allowedClassMask, const PIDConfig& pidConfig,
                                             float iouThreshold, float headYOffset, float bodyYOffset) {
-    size_t rgbSize = width * height * 3;
+    size_t rawSize = width * height * inputBytesPerPixel();
 
-    // H2D: Upload RGB directly from pinned memory (zero intermediate copy)
-    cudaMemcpyAsync(m_d_rgbInput, rgbInput, rgbSize, cudaMemcpyHostToDevice, m_stream);
+    // H2D: Upload directly from pinned memory
+    cudaMemcpyAsync(m_d_rawInput, rawInput, rawSize, cudaMemcpyHostToDevice, m_stream);
 
-    // Execute the rest of the pipeline
     executeFusedPipelinePostH2D(width, height, confThreshold, headClassId, headBonus,
                                  allowedClassMask, pidConfig, iouThreshold, headYOffset, bodyYOffset);
 }
@@ -906,7 +489,6 @@ bool SimpleInference::captureFullGraph(float confThreshold, int headClassId, flo
                                         uint32_t allowedClassMask, const PIDConfig& pidConfig,
                                         float iouStickinessThreshold, float headYOffset, float bodyYOffset) {
     if (m_graphCaptured) {
-        // Destroy old graph
         if (m_graphExec) cudaGraphExecDestroy(m_graphExec);
         if (m_graph) cudaGraphDestroy(m_graph);
         m_graphExec = nullptr;
@@ -933,12 +515,12 @@ bool SimpleInference::captureFullGraph(float confThreshold, int headClassId, flo
     m_cachedBodyYOffset = bodyYOffset;
 
     // Fill pinned buffer with dummy data and upload to GPU (H2D outside graph)
-    size_t rgbSize = m_inputH * m_inputW * 3;
-    memset(m_h_rgbPinned, 128, rgbSize);
-    cudaMemcpyAsync(m_d_rgbInput, m_h_rgbPinned, rgbSize, cudaMemcpyHostToDevice, m_stream);
-    cudaStreamSynchronize(m_stream);  // Ensure H2D completes before graph capture
+    size_t rawSize = m_inputH * m_inputW * inputBytesPerPixel();
+    memset(m_h_rawPinned, 128, rawSize);
+    cudaMemcpyAsync(m_d_rawInput, m_h_rawPinned, rawSize, cudaMemcpyHostToDevice, m_stream);
+    cudaStreamSynchronize(m_stream);
 
-    // Begin graph capture (H2D is now OUTSIDE the graph)
+    // Begin graph capture
     cudaError_t err = cudaStreamBeginCapture(m_stream, cudaStreamCaptureModeRelaxed);
     if (err != cudaSuccess) {
         std::cerr << "[SimpleInference] Failed to begin full graph capture: "
@@ -946,24 +528,22 @@ bool SimpleInference::captureFullGraph(float confThreshold, int headClassId, flo
         return false;
     }
 
-    // Execute pipeline WITHOUT H2D for capture (H2D done separately at runtime)
+    // Execute pipeline WITHOUT H2D for capture
     executeFusedPipelinePostH2D(m_inputW, m_inputH,
                                  confThreshold, headClassId, headBonus,
                                  allowedClassMask, pidConfig,
                                  iouStickinessThreshold, headYOffset, bodyYOffset);
 
-    // End capture
     err = cudaStreamEndCapture(m_stream, &m_graph);
     if (err != cudaSuccess || !m_graph) {
-        std::cerr << "[SimpleInference] Failed to end full graph capture: " 
+        std::cerr << "[SimpleInference] Failed to end full graph capture: "
                   << cudaGetErrorString(err) << std::endl;
         return false;
     }
 
-    // Instantiate
     err = cudaGraphInstantiate(&m_graphExec, m_graph, nullptr, nullptr, 0);
     if (err != cudaSuccess) {
-        std::cerr << "[SimpleInference] Failed to instantiate full graph: " 
+        std::cerr << "[SimpleInference] Failed to instantiate full graph: "
                   << cudaGetErrorString(err) << std::endl;
         cudaGraphDestroy(m_graph);
         m_graph = nullptr;
@@ -975,134 +555,20 @@ bool SimpleInference::captureFullGraph(float confThreshold, int headClassId, flo
     return true;
 }
 
-bool SimpleInference::runInferencePinned(void* pinnedRgbData, int width, int height,
-                                          float confThreshold, int headClassId, float headBonus,
-                                          uint32_t allowedClassMask,
-                                          const PIDConfig& pidConfig,
-                                          float iouStickinessThreshold,
-                                          float headYOffset, float bodyYOffset,
-                                          InferenceResult& outResult) {
-    if (!m_loaded) return false;
-
-    // Allocate result buffers if needed
-    if (!m_d_inferenceResult) {
-        cudaMalloc(&m_d_inferenceResult, sizeof(InferenceResult));
-    }
-    if (!m_h_inferenceResultPinned) {
-        cudaMallocHost(&m_h_inferenceResultPinned, sizeof(InferenceResult));
-    }
-
-    // Check if we can use captured graph (same resolution and parameters)
-    bool canUseGraph = m_graphCaptured && 
-                       (width == m_inputW) && (height == m_inputH);
-
-    if (canUseGraph) {
-        // H2D is outside the graph - copy directly from user's pinned buffer to GPU
-        // This eliminates the extra host memcpy that was previously needed
-        size_t rgbSize = width * height * 3;
-        cudaMemcpyAsync(m_d_rgbInput, pinnedRgbData, rgbSize, cudaMemcpyHostToDevice, m_stream);
-
-        // Launch graph (preprocessing, inference, postprocessing, D2H)
-        cudaGraphLaunch(m_graphExec, m_stream);
-    } else {
-        // Execute standard pipeline
-        executeFusedPipeline(pinnedRgbData, width, height,
-                             confThreshold, headClassId, headBonus,
-                             allowedClassMask, pidConfig,
-                             iouStickinessThreshold, headYOffset, bodyYOffset);
-    }
-
-    // Wait for completion
-    cudaStreamSynchronize(m_stream);
-
-    // Copy result
-    outResult = *m_h_inferenceResultPinned;
-    return outResult.hasTarget != 0;
-}
-
-bool SimpleInference::runInferenceAsync(void* pinnedRgbData, int width, int height,
-                                         float confThreshold, int headClassId, float headBonus,
-                                         uint32_t allowedClassMask,
-                                         const PIDConfig& pidConfig,
-                                         float iouStickinessThreshold,
-                                         float headYOffset, float bodyYOffset) {
-    if (!m_loaded) return false;
-    if (m_asyncPending) return false;  // Previous async not complete
-
-    // Allocate result buffers if needed
-    if (!m_d_inferenceResult) {
-        cudaMalloc(&m_d_inferenceResult, sizeof(InferenceResult));
-    }
-    if (!m_h_inferenceResultPinned) {
-        cudaMallocHost(&m_h_inferenceResultPinned, sizeof(InferenceResult));
-    }
-
-    // Create event if needed
-    if (!m_inferenceComplete) {
-        cudaEventCreate(&m_inferenceComplete);
-    }
-
-    // Execute pipeline
-    executeFusedPipeline(pinnedRgbData, width, height,
-                         confThreshold, headClassId, headBonus,
-                         allowedClassMask, pidConfig,
-                         iouStickinessThreshold, headYOffset, bodyYOffset);
-
-    // Record event
-    cudaEventRecord(m_inferenceComplete, m_stream);
-    m_asyncPending = true;
-
-    return true;
-}
-
-bool SimpleInference::getAsyncResults(InferenceResult& outResult) {
-    if (!m_asyncPending) return false;
-
-    // Wait for completion
-    cudaEventSynchronize(m_inferenceComplete);
-    m_asyncPending = false;
-
-    // Copy result
-    outResult = *m_h_inferenceResultPinned;
-    return outResult.hasTarget != 0;
-}
-
-bool SimpleInference::isAsyncComplete() {
-    if (!m_asyncPending) return true;
-
-    cudaError_t status = cudaEventQuery(m_inferenceComplete);
-    if (status == cudaSuccess) {
-        return true;
-    }
-    return false;
-}
-
 // =============================================================================
 // GPU CALLBACK API - Lowest latency via cudaLaunchHostFunc
 // =============================================================================
 
-// Callback data structure passed to CUDA host function
-struct CallbackData {
-    SimpleInference::InferenceCallback callback;
-    void* userData;
-    InferenceResult* resultPtr;  // Pinned memory - accessible from callback thread
-};
-
-// CUDA host function that gets called when GPU work completes
+// CUDA host function called when GPU work completes
 static void CUDART_CB inferenceCompleteCallback(void* data) {
-    CallbackData* cbData = static_cast<CallbackData*>(data);
-    
-    // Call user callback with result from pinned memory
-    // Note: This runs on CUDA's internal thread, NOT the main thread!
+    auto* cbData = static_cast<SimpleInference::CallbackData*>(data);
     if (cbData->callback) {
         cbData->callback(*cbData->resultPtr, cbData->userData);
     }
-    
-    // Clean up callback data
-    delete cbData;
+    // No delete - cbData is a pre-allocated member, not heap-allocated
 }
 
-bool SimpleInference::runInferenceWithCallback(void* pinnedRgbData, int width, int height,
+bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int height,
                                                 float confThreshold, int headClassId, float headBonus,
                                                 uint32_t allowedClassMask,
                                                 const PIDConfig& pidConfig,
@@ -1119,22 +585,31 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedRgbData, int width, i
         cudaMallocHost(&m_h_inferenceResultPinned, sizeof(InferenceResult));
     }
 
-    // Execute full pipeline (queues all GPU work)
-    executeFusedPipeline(pinnedRgbData, width, height,
-                         confThreshold, headClassId, headBonus,
-                         allowedClassMask, pidConfig,
-                         iouStickinessThreshold, headYOffset, bodyYOffset);
+    // Use CUDA Graph when available and resolution matches
+    bool canUseGraph = m_graphCaptured && (width == m_inputW) && (height == m_inputH);
 
-    // Create callback data (will be deleted in callback)
-    CallbackData* cbData = new CallbackData{callback, userData, m_h_inferenceResultPinned};
+    if (canUseGraph) {
+        // H2D outside graph - copy directly from user's pinned buffer
+        size_t rawSize = width * height * inputBytesPerPixel();
+        cudaMemcpyAsync(m_d_rawInput, pinnedData, rawSize, cudaMemcpyHostToDevice, m_stream);
 
-    // Launch host function - called when all queued GPU work completes
-    // This is the key optimization: NO cudaStreamSynchronize needed!
-    // The callback fires immediately when GPU finishes, on CUDA's internal thread
-    cudaError_t err = cudaLaunchHostFunc(m_stream, inferenceCompleteCallback, cbData);
+        // Launch graph (preprocess + inference + postprocess + D2H)
+        cudaGraphLaunch(m_graphExec, m_stream);
+    } else {
+        // Standard pipeline execution
+        executeFusedPipeline(pinnedData, width, height,
+                             confThreshold, headClassId, headBonus,
+                             allowedClassMask, pidConfig,
+                             iouStickinessThreshold, headYOffset, bodyYOffset);
+    }
+
+    // Setup pre-allocated callback data (no heap allocation)
+    m_callbackData = {callback, userData, m_h_inferenceResultPinned};
+
+    // Launch host function - fires immediately when GPU finishes
+    cudaError_t err = cudaLaunchHostFunc(m_stream, inferenceCompleteCallback, &m_callbackData);
     if (err != cudaSuccess) {
         std::cerr << "[SimpleInference] cudaLaunchHostFunc failed: " << cudaGetErrorString(err) << std::endl;
-        delete cbData;
         return false;
     }
 
