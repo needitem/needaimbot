@@ -8,6 +8,7 @@
 #include <fstream>
 #include <iostream>
 #include <cstring>
+#include <vector>
 #include <NvInferVersion.h>
 
 // TensorRT API version compatibility

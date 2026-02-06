@@ -26,6 +26,13 @@ struct Detection {
 
 class SimpleInference {
 public:
+    // Pre-allocated callback data (public for static callback function access)
+    struct CallbackData {
+        void(*callback)(const InferenceResult&, void*);
+        void* userData;
+        InferenceResult* resultPtr;
+    };
+
     SimpleInference();
     ~SimpleInference();
 
@@ -136,11 +143,6 @@ private:
     float m_cachedBodyYOffset = 0.15f;
 
     // Pre-allocated callback data (eliminates per-frame heap allocation)
-    struct CallbackData {
-        InferenceCallback callback;
-        void* userData;
-        InferenceResult* resultPtr;
-    };
     CallbackData m_callbackData{};
 
     // Execute full fused pipeline (H2D + preprocess + inference + postprocess + D2H)
