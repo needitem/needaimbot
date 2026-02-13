@@ -8,6 +8,7 @@
 #include <fstream>
 #include <iostream>
 #include <cstring>
+#include <exception>
 #include <vector>
 #include <NvInferVersion.h>
 
@@ -250,6 +251,9 @@ SimpleInference::SimpleInference() {
 }
 
 SimpleInference::~SimpleInference() {
+    // Flush pending stream work so callback state is no longer in-flight.
+    if (m_stream) cudaStreamSynchronize(m_stream);
+
     // Destroy CUDA graph
     if (m_graphExec) cudaGraphExecDestroy(m_graphExec);
     if (m_graph) cudaGraphDestroy(m_graph);
@@ -561,12 +565,23 @@ bool SimpleInference::captureFullGraph(float confThreshold, int headClassId, flo
 // =============================================================================
 
 // CUDA host function called when GPU work completes
-static void CUDART_CB inferenceCompleteCallback(void* data) {
+void CUDART_CB SimpleInference::inferenceCompleteCallback(void* data) {
     auto* cbData = static_cast<SimpleInference::CallbackData*>(data);
-    if (cbData->callback) {
-        cbData->callback(*cbData->resultPtr, cbData->userData);
+    if (!cbData) return;
+
+    try {
+        if (cbData->callback) {
+            cbData->callback(*cbData->resultPtr, cbData->userData);
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "[SimpleInference] Callback exception: " << e.what() << std::endl;
+    } catch (...) {
+        std::cerr << "[SimpleInference] Callback exception: unknown" << std::endl;
     }
-    // No delete - cbData is a pre-allocated member, not heap-allocated
+
+    if (cbData->owner) {
+        cbData->owner->m_callbackInFlight.store(false, std::memory_order_release);
+    }
 }
 
 bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int height,
@@ -577,25 +592,61 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
                                                 float headYOffset, float bodyYOffset,
                                                 InferenceCallback callback, void* userData) {
     if (!m_loaded) return false;
+    if (m_callbackInFlight.exchange(true, std::memory_order_acq_rel)) return false;
 
     // Allocate result buffers if needed
     if (!m_d_inferenceResult) {
-        cudaMalloc(&m_d_inferenceResult, sizeof(InferenceResult));
+        cudaError_t err = cudaMalloc(&m_d_inferenceResult, sizeof(InferenceResult));
+        if (err != cudaSuccess) {
+            std::cerr << "[SimpleInference] cudaMalloc(m_d_inferenceResult) failed: "
+                      << cudaGetErrorString(err) << std::endl;
+            m_callbackInFlight.store(false, std::memory_order_release);
+            return false;
+        }
     }
     if (!m_h_inferenceResultPinned) {
-        cudaMallocHost(&m_h_inferenceResultPinned, sizeof(InferenceResult));
+        cudaError_t err = cudaMallocHost(&m_h_inferenceResultPinned, sizeof(InferenceResult));
+        if (err != cudaSuccess) {
+            std::cerr << "[SimpleInference] cudaMallocHost(m_h_inferenceResultPinned) failed: "
+                      << cudaGetErrorString(err) << std::endl;
+            m_callbackInFlight.store(false, std::memory_order_release);
+            return false;
+        }
     }
 
-    // Use CUDA Graph when available and resolution matches
-    bool canUseGraph = m_graphCaptured && (width == m_inputW) && (height == m_inputH);
+    // Use CUDA Graph only when shape and parameters match captured constants.
+    const bool samePidConfig = (std::memcmp(&pidConfig, &m_cachedPidConfig, sizeof(PIDConfig)) == 0);
+    const bool canUseGraph =
+        m_graphCaptured &&
+        (width == m_inputW) &&
+        (height == m_inputH) &&
+        (confThreshold == m_cachedConfThreshold) &&
+        (headClassId == m_cachedHeadClassId) &&
+        (headBonus == m_cachedHeadBonus) &&
+        (allowedClassMask == m_cachedAllowedClassMask) &&
+        samePidConfig &&
+        (iouStickinessThreshold == m_cachedIouThreshold) &&
+        (headYOffset == m_cachedHeadYOffset) &&
+        (bodyYOffset == m_cachedBodyYOffset);
 
     if (canUseGraph) {
         // H2D outside graph - copy directly from user's pinned buffer
         size_t rawSize = width * height * inputBytesPerPixel();
-        cudaMemcpyAsync(m_d_rawInput, pinnedData, rawSize, cudaMemcpyHostToDevice, m_stream);
+        cudaError_t err = cudaMemcpyAsync(m_d_rawInput, pinnedData, rawSize, cudaMemcpyHostToDevice, m_stream);
+        if (err != cudaSuccess) {
+            std::cerr << "[SimpleInference] cudaMemcpyAsync(m_d_rawInput) failed: "
+                      << cudaGetErrorString(err) << std::endl;
+            m_callbackInFlight.store(false, std::memory_order_release);
+            return false;
+        }
 
         // Launch graph (preprocess + inference + postprocess + D2H)
-        cudaGraphLaunch(m_graphExec, m_stream);
+        err = cudaGraphLaunch(m_graphExec, m_stream);
+        if (err != cudaSuccess) {
+            std::cerr << "[SimpleInference] cudaGraphLaunch failed: " << cudaGetErrorString(err) << std::endl;
+            m_callbackInFlight.store(false, std::memory_order_release);
+            return false;
+        }
     } else {
         // Standard pipeline execution
         executeFusedPipeline(pinnedData, width, height,
@@ -605,12 +656,13 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
     }
 
     // Setup pre-allocated callback data (no heap allocation)
-    m_callbackData = {callback, userData, m_h_inferenceResultPinned};
+    m_callbackData = {callback, userData, m_h_inferenceResultPinned, this};
 
     // Launch host function - fires immediately when GPU finishes
-    cudaError_t err = cudaLaunchHostFunc(m_stream, inferenceCompleteCallback, &m_callbackData);
+    cudaError_t err = cudaLaunchHostFunc(m_stream, SimpleInference::inferenceCompleteCallback, &m_callbackData);
     if (err != cudaSuccess) {
         std::cerr << "[SimpleInference] cudaLaunchHostFunc failed: " << cudaGetErrorString(err) << std::endl;
+        m_callbackInFlight.store(false, std::memory_order_release);
         return false;
     }
 

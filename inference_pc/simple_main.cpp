@@ -26,7 +26,7 @@
 using json = nlohmann::json;
 
 std::atomic<bool> g_running{true};
-std::atomic<int> g_frameCount{0};  // For stats (atomic for callback access)
+std::atomic<int> g_frameCount{0};  // Completed inference callbacks per stat window
 
 void signalHandler(int sig) {
     std::cout << "\n[Simple] Received signal " << sig << ", shutting down..." << std::endl;
@@ -273,6 +273,9 @@ struct CallbackContext {
 // OPTIMIZED: Uses cached config values, no pointer indirection
 void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
     CallbackContext* ctx = static_cast<CallbackContext*>(userData);
+
+    // Count every completed inference callback (target/no-target)
+    g_frameCount++;
     
     if (!result.hasTarget) {
         // Reset hysteresis state when no target
@@ -335,8 +338,6 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
         ctx->makcu->move(finalX, finalY);
     }
     
-    // Update frame counter (atomic)
-    g_frameCount++;
 }
 
 int main(int argc, char* argv[]) {
@@ -387,8 +388,7 @@ int main(int argc, char* argv[]) {
 
     // 4. State - all GPU now, minimal CPU state
     gpa::PIDConfig gpuPidConfig = cfg.toGpuPIDConfig();
-    uint32_t allowedClassMask = cfg.getAllowedClassMask();  // Cache once (config doesn't change at runtime)
-
+    const uint32_t allowedClassMask = cfg.getAllowedClassMask();
     // Set BGRA input mode (UDP capture sends BGRA, GPU handles conversion)
     inference.setBgraInput(true);
 
@@ -437,7 +437,11 @@ int main(int argc, char* argv[]) {
     // - Frame acquisition runs on main thread
     // - Inference is queued to GPU
     // - Mouse movement is sent in GPU callback (no cudaStreamSync wait!)
-    int frameRecvCount = 0;
+    int recvFramesWindow = 0;
+    int submittedFramesWindow = 0;
+    int busyDropWindow = 0;
+    int submitFailWindow = 0;
+    uint64_t lastUdpDropped = udpCapture.GetDroppedFrameCount();
 
     while (g_running) {
         // Wait for frame (returns pinned memory directly)
@@ -450,12 +454,25 @@ int main(int argc, char* argv[]) {
         auto now = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastStatTime).count();
         if (elapsed >= 1000) {
-            int processedFrames = g_frameCount.exchange(0);  // Atomic read and reset
-            std::cout << "\r[Simple] Recv: " << frameRecvCount
-                      << " | FPS: " << std::fixed << std::setprecision(1) << (processedFrames * 1000.0f / elapsed)
+            int completedFrames = g_frameCount.exchange(0);  // Atomic read and reset
+            uint64_t udpDroppedNow = udpCapture.GetDroppedFrameCount();
+            uint64_t udpDroppedDelta = udpDroppedNow - lastUdpDropped;
+            lastUdpDropped = udpDroppedNow;
+
+            std::cout << "\r[Simple] RecvFPS: " << std::fixed << std::setprecision(1) << (recvFramesWindow * 1000.0f / elapsed)
+                      << " | SubmitFPS: " << (submittedFramesWindow * 1000.0f / elapsed)
+                      << " | DoneFPS: " << (completedFrames * 1000.0f / elapsed)
+                      << " | BusyDrop: " << busyDropWindow
+                      << " | SubmitFail: " << submitFailWindow
+                      << " | UdpDrop: " << udpDroppedDelta
                       << " | Aim: " << (makcu.aiming_active ? "ON " : "OFF")
                       << " | Shoot: " << (makcu.shooting_active ? "ON " : "OFF")
                       << " [GPU Callback]" << std::flush;
+
+            recvFramesWindow = 0;
+            submittedFramesWindow = 0;
+            busyDropWindow = 0;
+            submitFailWindow = 0;
             lastStatTime = now;
         }
 
@@ -481,7 +498,7 @@ int main(int argc, char* argv[]) {
             continue;
         }
 
-        frameRecvCount++;
+        recvFramesWindow++;
 
         // Check button state
         bool aiming = makcu.aiming_active;
@@ -506,9 +523,17 @@ int main(int argc, char* argv[]) {
             continue;
         }
 
+        // Backpressure: keep at most one in-flight callback inference.
+        // This prevents queue buildup and keeps inference aligned to latest reflected frame.
+        if (inference.isCallbackInFlight()) {
+            busyDropWindow++;
+            udpCapture.ReleaseFrame(bufferIndex);
+            continue;
+        }
+
         // GPU CALLBACK API: Queue inference, callback fires when GPU completes
         // No cudaStreamSynchronize - mouse movement happens in callback thread!
-        inference.runInferenceWithCallback(
+        bool submitted = inference.runInferenceWithCallback(
             pinnedRgbData, width, height,
             cfg.confThreshold, cfg.headClassId, cfg.headBonus,
             allowedClassMask,
@@ -516,6 +541,12 @@ int main(int argc, char* argv[]) {
             cfg.iouStickinessThreshold,
             cfg.headAimPoint, cfg.bodyAimPoint,
             inferenceCallback, &callbackCtx);
+
+        if (submitted) {
+            submittedFramesWindow++;
+        } else {
+            submitFailWindow++;
+        }
 
         // Release buffer after inference is queued (GPU is working asynchronously)
         udpCapture.ReleaseFrame(bufferIndex);

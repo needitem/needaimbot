@@ -275,20 +275,19 @@ void UDPCapture::receiveThread() {
                     // Get write buffer index
                     int writeIdx = m_writeBuffer.load();
 
-                    // Check if buffer is in use by GPU
-                    bool skipFrame = false;
-                    int startIdx = writeIdx;
-                    while (m_bufferInUse[writeIdx].load()) {
-                        writeIdx = (writeIdx + 1) % NUM_BUFFERS;
-                        if (writeIdx == startIdx) {
-                            // All buffers in use, skip frame
-                            m_droppedFrames.fetch_add(1);
-                            skipFrame = true;
+                    // Find a free pinned buffer for this frame.
+                    bool foundFreeBuffer = false;
+                    for (int attempt = 0; attempt < NUM_BUFFERS; ++attempt) {
+                        int candidate = (writeIdx + attempt) % NUM_BUFFERS;
+                        if (!m_bufferInUse[candidate].load()) {
+                            writeIdx = candidate;
+                            foundFreeBuffer = true;
                             break;
                         }
                     }
-
-                    if (skipFrame) {
+                    if (!foundFreeBuffer) {
+                        // All pinned buffers are still in use by GPU.
+                        m_droppedFrames.fetch_add(1);
                         m_fragmentMap.erase(frameId);
                         continue;
                     }

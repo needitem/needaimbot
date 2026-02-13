@@ -9,6 +9,7 @@
 // - FP16 input/output support (native, no conversion)
 #pragma once
 
+#include <atomic>
 #include <string>
 #include <cstdint>
 #include <cuda_runtime.h>
@@ -26,11 +27,15 @@ struct Detection {
 
 class SimpleInference {
 public:
-    // Pre-allocated callback data (public for static callback function access)
+    // Raw function pointer - zero overhead (no std::function heap allocation)
+    using InferenceCallback = void(*)(const InferenceResult&, void*);
+
+    // Pre-allocated callback data (eliminates per-frame heap allocation)
     struct CallbackData {
-        void(*callback)(const InferenceResult&, void*);
-        void* userData;
-        InferenceResult* resultPtr;
+        InferenceCallback callback = nullptr;
+        void* userData = nullptr;
+        InferenceResult* resultPtr = nullptr;
+        SimpleInference* owner = nullptr;
     };
 
     SimpleInference();
@@ -51,24 +56,7 @@ public:
                           float iouStickinessThreshold, float headYOffset, float bodyYOffset);
     bool isGraphCaptured() const { return m_graphCaptured; }
 
-    // =========================================================================
-    // GPU CALLBACK API - RECOMMENDED (lowest latency)
-    // =========================================================================
-    // Uses cudaLaunchHostFunc to execute callback immediately when GPU finishes.
-    // No CPU waiting - callback runs on CUDA's internal thread.
-    //
-    // When CUDA graph is captured, uses graph launch for faster execution.
-    //
-    // Callback signature: void callback(const InferenceResult& result, void* userData)
-    //
-    // THREAD SAFETY: Callback runs on CUDA thread, NOT main thread!
-    // - Keep callback fast (just send mouse command)
-    // - Don't access non-thread-safe resources
-    // =========================================================================
-
-    // Raw function pointer - zero overhead (no std::function heap allocation)
-    using InferenceCallback = void(*)(const InferenceResult&, void*);
-
+    // Run inference with GPU callback - lowest latency option
     bool runInferenceWithCallback(void* pinnedData, int width, int height,
                                   float confThreshold, int headClassId, float headBonus,
                                   uint32_t allowedClassMask,
@@ -76,6 +64,10 @@ public:
                                   float iouStickinessThreshold,
                                   float headYOffset, float bodyYOffset,
                                   InferenceCallback callback, void* userData = nullptr);
+
+    bool isCallbackInFlight() const {
+        return m_callbackInFlight.load(std::memory_order_acquire);
+    }
 
     int getModelResolution() const { return m_inputH; }
     int getNumClasses() const { return m_numClasses; }
@@ -142,8 +134,11 @@ private:
     float m_cachedHeadYOffset = 1.0f;
     float m_cachedBodyYOffset = 0.15f;
 
-    // Pre-allocated callback data (eliminates per-frame heap allocation)
     CallbackData m_callbackData{};
+    std::atomic<bool> m_callbackInFlight{false};
+
+    // Called by cudaLaunchHostFunc when stream work has completed
+    static void CUDART_CB inferenceCompleteCallback(void* data);
 
     // Execute full fused pipeline (H2D + preprocess + inference + postprocess + D2H)
     void executeFusedPipeline(void* rawInput, int width, int height,
