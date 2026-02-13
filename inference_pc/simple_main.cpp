@@ -14,6 +14,7 @@
 #include <cmath>
 #include <iomanip>
 #include <random>
+#include <filesystem>
 
 #include "needaimbot/cuda/simple_inference.h"
 #include "needaimbot/cuda/simple_postprocess.h"
@@ -297,6 +298,7 @@ struct Config {
 struct CallbackContext {
     // Hardware reference (only thing we can't cache)
     MakcuConnection* makcu;
+    UDPCapture* udpCapture;
     
     // Cached config values (lock-free, no pointer chasing)
     bool noiseEnabled;
@@ -314,6 +316,8 @@ struct CallbackContext {
     std::mt19937* noiseGen;
     std::normal_distribution<float>* noiseDistX;
     std::normal_distribution<float>* noiseDistY;
+    std::atomic<int> inFlightBufferIndex{-1};
+    std::atomic<bool> droppedWhileInFlight{false};
     
     // Initialize cached values from config
     void initFromConfig(const Config& cfg) {
@@ -335,9 +339,26 @@ struct CallbackContext {
 void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
     CallbackContext* ctx = static_cast<CallbackContext*>(userData);
 
+    int completedBuffer = ctx->inFlightBufferIndex.exchange(-1, std::memory_order_acq_rel);
+    if (completedBuffer >= 0 && ctx->udpCapture) {
+        ctx->udpCapture->ReleaseFrame(completedBuffer);
+    }
+
     // Count every completed inference callback (target/no-target)
     g_frameCount.fetch_add(1, std::memory_order_relaxed);
-    
+
+    // If newer frames were dropped while this inference was running,
+    // treat this callback as stale and suppress movement.
+    if (ctx->droppedWhileInFlight.exchange(false, std::memory_order_acq_rel)) {
+        ctx->consecutiveSameSign = 0;
+        return;
+    }
+
+    if (!ctx->makcu->aiming_active.load(std::memory_order_relaxed)) {
+        ctx->consecutiveSameSign = 0;
+        return;
+    }
+
     if (!result.hasTarget) {
         // Reset hysteresis state when no target
         ctx->consecutiveSameSign = 0;
@@ -408,14 +429,22 @@ int main(int argc, char* argv[]) {
 
     // Load config
     Config cfg;
-    std::string configPath = "simple_config.json";
-    if (argc > 1) configPath = argv[1];
-
-    if (cfg.load(configPath)) {
-        std::cout << "[Config] Loaded from " << configPath << std::endl;
+    std::filesystem::path configPath;
+    if (argc > 1) {
+        configPath = argv[1];
     } else {
-        std::cout << "[Config] Using defaults, saving to " << configPath << std::endl;
-        cfg.save(configPath);
+        std::filesystem::path exePath = argv[0] ? std::filesystem::path(argv[0]) : std::filesystem::path();
+        std::filesystem::path exeDir = exePath.has_parent_path() ? exePath.parent_path() : std::filesystem::current_path();
+        configPath = exeDir / "simple_config.json";
+    }
+
+    const std::string configPathStr = configPath.lexically_normal().string();
+
+    if (cfg.load(configPathStr)) {
+        std::cout << "[Config] Loaded from " << configPathStr << std::endl;
+    } else {
+        std::cout << "[Config] Using defaults, saving to " << configPathStr << std::endl;
+        cfg.save(configPathStr);
     }
     cfg.print();
 
@@ -462,6 +491,7 @@ int main(int argc, char* argv[]) {
     // Setup callback context with cached config values
     CallbackContext callbackCtx;
     callbackCtx.makcu = &makcu;
+    callbackCtx.udpCapture = &udpCapture;
     callbackCtx.initFromConfig(cfg);  // Cache config values (lock-free)
     callbackCtx.noiseGen = &noiseGen;
     callbackCtx.noiseDistX = &noiseDistX;
@@ -595,12 +625,16 @@ int main(int argc, char* argv[]) {
         // This prevents queue buildup and keeps inference aligned to latest reflected frame.
         if (inference.isCallbackInFlight()) {
             busyDropWindow++;
+            callbackCtx.droppedWhileInFlight.store(true, std::memory_order_release);
             udpCapture.ReleaseFrame(bufferIndex);
             continue;
         }
 
         // GPU CALLBACK API: Queue inference, callback fires when GPU completes
         // No cudaStreamSynchronize - mouse movement happens in callback thread!
+        callbackCtx.inFlightBufferIndex.store(bufferIndex, std::memory_order_release);
+        callbackCtx.droppedWhileInFlight.store(false, std::memory_order_release);
+
         bool submitted = inference.runInferenceWithCallback(
             pinnedRgbData, width, height,
             cfg.confThreshold, cfg.headClassId, cfg.headBonus,
@@ -613,11 +647,15 @@ int main(int argc, char* argv[]) {
         if (submitted) {
             submittedFramesWindow++;
         } else {
+            int failedBuffer = callbackCtx.inFlightBufferIndex.exchange(-1, std::memory_order_acq_rel);
+            if (failedBuffer >= 0) {
+                udpCapture.ReleaseFrame(failedBuffer);
+            }
+            callbackCtx.droppedWhileInFlight.store(false, std::memory_order_release);
             submitFailWindow++;
         }
 
-        // Release buffer after inference is queued (GPU is working asynchronously)
-        udpCapture.ReleaseFrame(bufferIndex);
+        // On success, buffer is released by callback after GPU work completes.
 
         // Main thread immediately loops back to get next frame
         // while GPU processes this one and callback handles mouse movement

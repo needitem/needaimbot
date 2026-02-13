@@ -379,16 +379,37 @@ __global__ void fusedTargetSelectionAndMovementKernel(
 
     int count = *d_num_detections;
     if (count <= 0 || count > max_detections) {
-        if (threadIdx.x == 0 && d_selected_target) {
+        if (threadIdx.x == 0) {
             Detection emptyTarget = {};
             emptyTarget.classId = -1;
-            *d_selected_target = emptyTarget;
+
+            if (d_selected_target) {
+                *d_selected_target = emptyTarget;
+            }
+            *d_best_target = emptyTarget;
+            *d_has_target = 0;
+            d_output_movement->dx = 0;
+            d_output_movement->dy = 0;
 
             // Reset PID state when no target
             d_pid_state->prev_error_x = 0.0f;
             d_pid_state->prev_error_y = 0.0f;
             d_pid_state->integral_x = 0.0f;
             d_pid_state->integral_y = 0.0f;
+
+            // IMPORTANT: also clear packed inference result to avoid stale callback data.
+            if (d_inference_result) {
+                d_inference_result->movement.dx = 0;
+                d_inference_result->movement.dy = 0;
+                d_inference_result->hasTarget = 0;
+                d_inference_result->reserved = 0;
+                d_inference_result->targetX1 = 0;
+                d_inference_result->targetY1 = 0;
+                d_inference_result->targetX2 = 0;
+                d_inference_result->targetY2 = 0;
+                d_inference_result->targetConf = 0;
+                d_inference_result->targetClassId = -1;
+            }
         }
         return;
     }
