@@ -48,7 +48,6 @@
 
 // Global variable definitions
 std::atomic<bool> should_exit{false};
-std::mutex configMutex;
 std::atomic<bool> detection_resolution_changed{false};
 std::atomic<bool> capture_borders_changed{false};
 std::atomic<bool> capture_cursor_changed{false};
@@ -547,7 +546,7 @@ int main(int argc, char* argv[])
         pipelineConfig.modelPath = "models/" + ctx.config.profile().ai_model;
         pipelineConfig.enableCapture = true;
         pipelineConfig.enableDetection = true;
-        pipelineConfig.useGraphOptimization = true;
+        pipelineConfig.useGraphOptimization = ctx.config.global().use_cuda_graph;
         pipelineConfig.detectionWidth = ctx.config.profile().detection_resolution;
         pipelineConfig.detectionHeight = ctx.config.profile().detection_resolution;
         pipelineConfig.allowGraphUpdate = true;

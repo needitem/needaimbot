@@ -54,7 +54,7 @@ static thread_local std::normal_distribution<float> g_noiseDistY(0.0f, 1.0f);
 // NOTE: This translation unit must be rebuilt whenever AppContext/Config layout changes.
 // ============================================================================
 
-void UnifiedGraphPipeline::refreshConfigCache(const AppContext& ctx) {
+bool UnifiedGraphPipeline::refreshConfigCache(const AppContext& ctx) {
     // Called periodically from main loop or when config changes.
     // NOT called in the hot path (executeFrame).
     // NOTE: Does NOT increment generation counter - that is only done by
@@ -63,7 +63,10 @@ void UnifiedGraphPipeline::refreshConfigCache(const AppContext& ctx) {
     // Atomic read of config with single mutex lock
     AppContext& mutableCtx = const_cast<AppContext&>(ctx);
     {
-        std::lock_guard<std::mutex> lock(mutableCtx.configMutex);
+        std::unique_lock<std::mutex> lock(mutableCtx.configMutex, std::try_to_lock);
+        if (!lock.owns_lock()) {
+            return false;
+        }
 
         // PID
         m_cachedConfig.pid.kp_x = ctx.config.profile().pid_kp_x;
@@ -136,11 +139,18 @@ void UnifiedGraphPipeline::refreshConfigCache(const AppContext& ctx) {
         m_cachedConfig.color_filter.max_ratio = ctx.config.profile().color_filter_max_ratio;
         m_cachedConfig.color_filter.min_count = ctx.config.profile().color_filter_min_count;
         m_cachedConfig.color_filter.max_count = ctx.config.profile().color_filter_max_count;
+
+        // Runtime/global settings
+        m_cachedConfig.runtime.use_cuda_graph = ctx.config.global().use_cuda_graph;
     }
+
+    return true;
 }
 
-void UnifiedGraphPipeline::updateConfig(const AppContext& ctx) {
-    refreshConfigCache(ctx);
+bool UnifiedGraphPipeline::updateConfig(const AppContext& ctx) {
+    if (!refreshConfigCache(ctx)) {
+        return false;
+    }
 
     // Upload class filter to GPU only if changed
     if (m_smallBufferArena.allowFlags && m_pipelineStream && m_pipelineStream->get()) {
@@ -154,6 +164,8 @@ void UnifiedGraphPipeline::updateConfig(const AppContext& ctx) {
             m_cachedConfig.detection.prev_class_filter = m_cachedConfig.detection.class_filter;
         }
     }
+
+    return true;
 }
 
 void UnifiedGraphPipeline::markPidConfigDirty() {
@@ -800,6 +812,11 @@ __global__ void fusedTargetSelectionAndMovementKernel(
 UnifiedGraphPipeline::UnifiedGraphPipeline() {
     m_state.startEvent = std::make_unique<CudaEvent>(kBlockingEventFlags);
     m_state.endEvent = std::make_unique<CudaEvent>(kBlockingEventFlags);
+    LARGE_INTEGER freq{};
+    if (QueryPerformanceFrequency(&freq) && freq.QuadPart > 0) {
+        m_qpcFrequency = static_cast<uint64_t>(freq.QuadPart);
+        m_qpcTicksToMs = 1000.0 / static_cast<double>(m_qpcFrequency);
+    }
     resetMovementFilter();
     m_perfMetrics.reset();
 }
@@ -807,6 +824,13 @@ UnifiedGraphPipeline::UnifiedGraphPipeline() {
 
 bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
     m_config = config;
+
+    // Runtime graph toggle is user-configurable in GlobalSettings.
+    {
+        auto& ctx = AppContext::getInstance();
+        std::lock_guard<std::mutex> lock(ctx.configMutex);
+        m_config.useGraphOptimization = ctx.config.global().use_cuda_graph;
+    }
     
     int leastPriority, greatestPriority;
     cudaError_t err = cudaDeviceGetStreamPriorityRange(&leastPriority, &greatestPriority);
@@ -904,7 +928,12 @@ bool UnifiedGraphPipeline::initialize(const UnifiedPipelineConfig& config) {
     // Initialize cached config and upload class filter to GPU once at startup.
     {
         auto& ctx = AppContext::getInstance();
-        updateConfig(ctx);
+        for (int attempt = 0; attempt < 16; ++attempt) {
+            if (updateConfig(ctx)) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
     }
     
     return true;
@@ -1462,12 +1491,17 @@ void UnifiedGraphPipeline::handleAimbotDeactivation() {
     clearMovementData();
     clearHostPreviewData(ctx);
     m_allowMovement.store(false, std::memory_order_release);
+    m_rebuildRequested.store(false, std::memory_order_release);
 
     // Reset capture region cache
     m_captureRegionCache = {};
 
     // Reset frame tracking
     m_lastProcessedPresentQpc.store(0, std::memory_order_release);
+    m_pendingInputQpc.store(0, std::memory_order_release);
+    m_lastCapturedPresentQpc = 0;
+    m_estimatedFrameIntervalMs = 4.17;
+    m_qpcSupported = false;
 
     // Reset filter state (lock-free)
     m_filterState.skipNext = true;
@@ -1666,12 +1700,16 @@ void UnifiedGraphPipeline::clearHostPreviewData(AppContext& ctx) {
 
 void UnifiedGraphPipeline::handleAimbotActivation() {
     m_allowMovement.store(false, std::memory_order_release);
+    m_rebuildRequested.store(false, std::memory_order_release);
     clearMovementData();
 
     // Reset frame tracking (synchronous model)
     m_nextFrameId.store(0, std::memory_order_release);
     m_lastProcessedPresentQpc.store(0, std::memory_order_release);
     m_pendingInputQpc.store(0, std::memory_order_release);
+    m_lastCapturedPresentQpc = 0;
+    m_estimatedFrameIntervalMs = 4.17;
+    m_qpcSupported = false;
 
     // Reset capture region cache
     m_captureRegionCache = {};
@@ -1782,9 +1820,7 @@ bool UnifiedGraphPipeline::enqueueFrameCompletionCallback(cudaStream_t stream, c
                 int targetCount = *pipeline->m_h_targetCount->get();
                 if (targetCount > 0) {
                     targetCount = (targetCount > MAX_HOST_TARGETS) ? MAX_HOST_TARGETS : targetCount;
-                    std::vector<Target> targets(pipeline->m_h_targets->get(),
-                                                 pipeline->m_h_targets->get() + targetCount);
-                    ctx.updateTargets(targets);
+                    ctx.updateTargets(pipeline->m_h_targets->get(), static_cast<size_t>(targetCount));
                 } else {
                     ctx.clearTargets();
                 }
@@ -1868,6 +1904,12 @@ void UnifiedGraphPipeline::runMainLoop() {
 
         if (!wasAiming) {
             handleAimbotActivation();
+            uint32_t currentGen = m_cachedConfig.generation.load(std::memory_order_acquire);
+            if (currentGen != m_lastConfigGeneration) {
+                if (updateConfig(ctx)) {
+                    m_lastConfigGeneration = currentGen;
+                }
+            }
             wasAiming = true;
         }
 
@@ -1884,10 +1926,46 @@ void UnifiedGraphPipeline::runMainLoop() {
             // Change-detection based config update (more efficient than frame-count based)
             // Only refresh when config actually changes, detected via generation counter
             // generation is only incremented by markPidConfigDirty(), not by refresh itself
-            uint32_t currentGen = m_cachedConfig.generation.load(std::memory_order_acquire);
-            if (currentGen != m_lastConfigGeneration) {
-                updateConfig(ctx);
-                m_lastConfigGeneration = currentGen;
+            // Guard against callback races: only update cache when no frame is in-flight.
+            if (!m_frameInFlight.load(std::memory_order_acquire)) {
+                uint32_t currentGen = m_cachedConfig.generation.load(std::memory_order_acquire);
+                if (currentGen != m_lastConfigGeneration) {
+                    if (updateConfig(ctx)) {
+                        m_lastConfigGeneration = currentGen;
+                    }
+                }
+            }
+
+            // Runtime graph toggle state sync.
+            const bool wantGraphOptimization = m_cachedConfig.runtime.use_cuda_graph;
+            if (wantGraphOptimization != m_config.useGraphOptimization) {
+                if (!m_frameInFlight.load(std::memory_order_acquire)) {
+                    if (m_graphCaptured) {
+                        cleanupGraph();
+                        m_graphCaptured = false;
+                    }
+                    m_state.graphReady = false;
+                    m_state.frameCount = 0;
+                    m_state.needsRebuild = false;
+                    m_config.useGraphOptimization = wantGraphOptimization;
+                }
+            }
+
+            if (m_rebuildRequested.exchange(false, std::memory_order_acq_rel)) {
+                m_state.needsRebuild = true;
+            }
+
+            // Explicit rebuild requests from UI/settings.
+            if (m_state.needsRebuild) {
+                if (!m_frameInFlight.load(std::memory_order_acquire)) {
+                    if (m_graphCaptured) {
+                        cleanupGraph();
+                        m_graphCaptured = false;
+                    }
+                    m_state.graphReady = false;
+                    m_state.frameCount = 0;
+                    m_state.needsRebuild = false;
+                }
             }
 
             // ================================================================
@@ -1897,15 +1975,12 @@ void UnifiedGraphPipeline::runMainLoop() {
             if (m_config.useGraphOptimization) {
                 // Topology change → invalidate graph and reset for re-warmup
                 if (m_graphCaptured && graphTopologyChanged()) {
-                    if (m_pipelineStream) cudaStreamSynchronize(m_pipelineStream->get());
-                    cleanupGraph();
-                    m_graphCaptured = false;
-                    m_state.frameCount = 0;
+                    m_state.needsRebuild = true;
                 }
 
                 // Auto-capture after warmup frames (5 frames to stabilize TensorRT)
-                if (!m_graphCaptured && m_state.frameCount >= 5) {
-                    if (m_pipelineStream) cudaStreamSynchronize(m_pipelineStream->get());
+                if (!m_graphCaptured && m_state.frameCount >= 5 &&
+                    !m_frameInFlight.load(std::memory_order_acquire)) {
                     if (captureGraph()) {
                         snapshotGraphTopology();
                     }
@@ -1916,6 +1991,7 @@ void UnifiedGraphPipeline::runMainLoop() {
             // frame-in-flight blocking which is more efficient
             int delay = ctx.config.profile().pipeline_loop_delay_ms;
             if (delay > 0) {
+                m_perfMetrics.sleepCount++;
                 std::this_thread::sleep_for(std::chrono::milliseconds(delay));
             }
         }
@@ -2608,6 +2684,30 @@ bool UnifiedGraphPipeline::acquireFrameSync(FrameMetadata& outMetadata) {
         return false;
     }
 
+    const bool hasQpcFreq = (m_qpcTicksToMs > 0.0);
+
+    // Keep a rolling estimate of frame interval for dynamic stale-frame skipping.
+    if (presentQpc != 0 && hasQpcFreq) {
+        m_qpcSupported = true;
+        if (m_lastCapturedPresentQpc != 0 && presentQpc > m_lastCapturedPresentQpc) {
+            double deltaMs = static_cast<double>(presentQpc - m_lastCapturedPresentQpc)
+                           * m_qpcTicksToMs;
+            deltaMs = std::clamp(deltaMs, 2.0, 33.4);
+            m_estimatedFrameIntervalMs = 0.9 * m_estimatedFrameIntervalMs + 0.1 * deltaMs;
+        }
+        m_lastCapturedPresentQpc = presentQpc;
+    } else if (presentQpc == 0) {
+        m_qpcSupported = false;
+    }
+
+    // Strict feedback-loop guarantee:
+    // if we've injected input at pendingInputQpc, only process frames at/after it.
+    uint64_t pendingInputQpc = m_pendingInputQpc.load(std::memory_order_acquire);
+    if (pendingInputQpc != 0 && presentQpc != 0 && presentQpc < pendingInputQpc) {
+        m_perfMetrics.inputPendingCount++;
+        return false;
+    }
+
     // Duplicate frame detection
     uint64_t lastPresentQpc = m_lastProcessedPresentQpc.load(std::memory_order_acquire);
     if (presentQpc != 0 && presentQpc <= lastPresentQpc) {
@@ -2618,19 +2718,18 @@ bool UnifiedGraphPipeline::acquireFrameSync(FrameMetadata& outMetadata) {
     // === OPTIMIZATION 2: Frame Age Skip ===
     // Skip frames that are too old (stale) to prevent processing outdated data
     // This occurs when GPU inference is slower than capture rate
-    if (presentQpc != 0) {
-        LARGE_INTEGER currentQpc{}, qpcFreq{};
-        if (!QueryPerformanceCounter(&currentQpc) || !QueryPerformanceFrequency(&qpcFreq) || qpcFreq.QuadPart == 0) {
-            // QPC not available or invalid frequency - skip age check, continue processing
-            // This is a soft failure - we just skip the optimization
+    if (presentQpc != 0 && hasQpcFreq) {
+        LARGE_INTEGER currentQpc{};
+        if (!QueryPerformanceCounter(&currentQpc)) {
+            // QPC unavailable - skip age check as a soft failure.
         } else {
             double frameAgeMs = static_cast<double>(currentQpc.QuadPart - presentQpc) 
-                               * 1000.0 / qpcFreq.QuadPart;
-        
-            // Skip if frame is older than ~2 frames at 240Hz (approximately 8ms)
-            // This ensures we always process recent frames under GPU backpressure
-            constexpr double kMaxFrameAgeMs = 8.0;
-            if (frameAgeMs > kMaxFrameAgeMs) {
+                               * m_qpcTicksToMs;
+
+            // Dynamic threshold: about 2 frames, adapted to display cadence.
+            // Clamp to avoid extreme values under noisy timing.
+            double maxFrameAgeMs = std::clamp(m_estimatedFrameIntervalMs * 2.0, 6.0, 40.0);
+            if (frameAgeMs > maxFrameAgeMs) {
                 m_perfMetrics.frameSkipCount++;
                 return false;  // Try again for a fresher frame
             }
@@ -2765,9 +2864,11 @@ bool UnifiedGraphPipeline::executeFrame(cudaStream_t stream) {
     // Use fast spin-wait pattern: spin briefly, then return to avoid blocking
     bool expected = false;
     if (!m_frameInFlight.compare_exchange_strong(expected, true, std::memory_order_acquire)) {
+        m_perfMetrics.busySpinCount++;
         // Another frame is still processing - spin briefly before giving up
         constexpr int kMaxSpinIterations = 64;
         for (int i = 0; i < kMaxSpinIterations; ++i) {
+            m_perfMetrics.yieldCount++;
             YieldProcessor();  // CPU hint for spin-wait (Windows intrinsic)
             expected = false;
             if (m_frameInFlight.compare_exchange_weak(expected, true, std::memory_order_acquire)) {
@@ -2775,6 +2876,7 @@ bool UnifiedGraphPipeline::executeFrame(cudaStream_t stream) {
             }
         }
         // Still busy after spinning - return and let caller retry
+        m_perfMetrics.droppedFrames++;
         return true;
     }
 acquired:
@@ -2787,6 +2889,7 @@ acquired:
     FrameMetadata metadata;
     if (!acquireFrameSync(metadata)) {
         // No frame available or timeout - release lock and return
+        m_perfMetrics.captureWaitCount++;
         m_frameInFlight.store(false, std::memory_order_release);
         return true;
     }
@@ -3007,12 +3110,14 @@ void UnifiedGraphPipeline::updatePreviewBufferAllocation() {
         m_preview.finalTargets.reserve(ctx.config.profile().max_detections);
         m_preview.enabled = true;
         m_preview.lastCopyTime = {};
+        m_preview.copyInProgress = false;
         m_preview.writeIndex.store(0, std::memory_order_release);
         m_preview.newFrameReady.store(false, std::memory_order_release);
     } else if (!ctx.config.global().show_window && m_preview.enabled) {
         // Lazy deallocation - just disable without releasing memory
         // Buffers stay allocated for instant re-enable
         m_preview.enabled = false;
+        m_preview.copyInProgress = false;
         m_preview.hasValidHostPreview = false;
         // NOTE: Actual deallocation happens only in shutdown() to avoid
         // allocation churn when user rapidly toggles preview window
@@ -3043,15 +3148,29 @@ void UnifiedGraphPipeline::updatePreviewBuffer(const SimpleCudaMat& currentBuffe
     if (m_preview.previewBuffer.rows() != currentBuffer.rows() ||
         m_preview.previewBuffer.cols() != currentBuffer.cols() ||
         m_preview.previewBuffer.channels() != currentBuffer.channels()) {
-        // If host preview was pinned, unregister before reallocating
+        // Reallocate and re-pin all host preview buffers when capture dimensions change.
         if (m_preview.hostPreviewPinned && m_preview.hostPreview.data()) {
             cudaHostUnregister(m_preview.hostPreview.data());
             m_preview.hostPreviewPinned = false;
             m_preview.hostPreviewPinnedSize = 0;
         }
+        for (int i = 0; i < 2; ++i) {
+            if (m_preview.hostPreviewPinnedFlags[i] && m_preview.hostPreviewBuffers[i].data()) {
+                cudaHostUnregister(m_preview.hostPreviewBuffers[i].data());
+            }
+            m_preview.hostPreviewPinnedFlags[i] = false;
+            m_preview.hostPreviewPinnedSizes[i] = 0;
+            m_preview.hostPreviewBuffers[i].release();
+        }
+
+        m_preview.previewBuffer.release();
+        m_preview.hostPreview.release();
         m_preview.previewBuffer.create(currentBuffer.rows(), currentBuffer.cols(), currentBuffer.channels());
         m_preview.hostPreview.create(currentBuffer.rows(), currentBuffer.cols(), currentBuffer.channels());
-        // Re-pin host preview buffer after reallocation
+        m_preview.hostPreviewBuffers[0].create(currentBuffer.rows(), currentBuffer.cols(), currentBuffer.channels());
+        m_preview.hostPreviewBuffers[1].create(currentBuffer.rows(), currentBuffer.cols(), currentBuffer.channels());
+
+        // Re-pin legacy host preview buffer after reallocation
         size_t bytes = static_cast<size_t>(m_preview.hostPreview.step()) * m_preview.hostPreview.rows();
         if (bytes > 0 && m_preview.enabled) {
             if (cudaHostRegister(m_preview.hostPreview.data(), bytes, cudaHostRegisterPortable) == cudaSuccess) {
@@ -3059,6 +3178,22 @@ void UnifiedGraphPipeline::updatePreviewBuffer(const SimpleCudaMat& currentBuffe
                 m_preview.hostPreviewPinnedSize = bytes;
             }
         }
+
+        for (int i = 0; i < 2; ++i) {
+            size_t bufBytes = static_cast<size_t>(m_preview.hostPreviewBuffers[i].step()) *
+                              m_preview.hostPreviewBuffers[i].rows();
+            if (bufBytes > 0 && m_preview.enabled) {
+                if (cudaHostRegister(m_preview.hostPreviewBuffers[i].data(), bufBytes, cudaHostRegisterPortable) == cudaSuccess) {
+                    m_preview.hostPreviewPinnedFlags[i] = true;
+                    m_preview.hostPreviewPinnedSizes[i] = bufBytes;
+                }
+            }
+        }
+
+        m_preview.copyInProgress = false;
+        m_preview.hasValidHostPreview = false;
+        m_preview.writeIndex.store(0, std::memory_order_release);
+        m_preview.newFrameReady.store(false, std::memory_order_release);
     }
 
     if (m_preview.previewBuffer.empty() || !m_preview.previewBuffer.data()) {
@@ -3144,25 +3279,43 @@ bool UnifiedGraphPipeline::getPreviewSnapshot(SimpleMat& outFrame) {
     // Ensure host preview buffers are allocated and match GPU buffer dimensions
     SimpleMat& writeBuffer = m_preview.hostPreviewBuffers[writeIdx];
     SimpleMat& readBuffer = m_preview.hostPreviewBuffers[readIdx];
+    auto ensureHostBuffer = [this](SimpleMat& buffer, int idx, int rows, int cols, int channels) {
+        bool needRealloc = buffer.empty() ||
+                           buffer.rows() != rows ||
+                           buffer.cols() != cols ||
+                           buffer.channels() != channels;
+        if (!needRealloc) {
+            return;
+        }
 
-    if (writeBuffer.empty() ||
-        writeBuffer.rows() != m_preview.previewBuffer.rows() ||
-        writeBuffer.cols() != m_preview.previewBuffer.cols() ||
-        writeBuffer.channels() != m_preview.previewBuffer.channels()) {
-        writeBuffer.create(m_preview.previewBuffer.rows(),
-                          m_preview.previewBuffer.cols(),
-                          m_preview.previewBuffer.channels());
         m_preview.hasValidHostPreview = false;
-    }
 
-    if (readBuffer.empty() ||
-        readBuffer.rows() != m_preview.previewBuffer.rows() ||
-        readBuffer.cols() != m_preview.previewBuffer.cols() ||
-        readBuffer.channels() != m_preview.previewBuffer.channels()) {
-        readBuffer.create(m_preview.previewBuffer.rows(),
-                         m_preview.previewBuffer.cols(),
-                         m_preview.previewBuffer.channels());
-    }
+        if (m_preview.hostPreviewPinnedFlags[idx] && buffer.data()) {
+            cudaHostUnregister(buffer.data());
+        }
+        m_preview.hostPreviewPinnedFlags[idx] = false;
+        m_preview.hostPreviewPinnedSizes[idx] = 0;
+
+        buffer.release();
+        buffer.create(rows, cols, channels);
+
+        size_t bytes = static_cast<size_t>(buffer.step()) * buffer.rows();
+        if (bytes > 0 && m_preview.enabled) {
+            if (cudaHostRegister(buffer.data(), bytes, cudaHostRegisterPortable) == cudaSuccess) {
+                m_preview.hostPreviewPinnedFlags[idx] = true;
+                m_preview.hostPreviewPinnedSizes[idx] = bytes;
+            }
+        }
+    };
+
+    ensureHostBuffer(writeBuffer, writeIdx,
+                     m_preview.previewBuffer.rows(),
+                     m_preview.previewBuffer.cols(),
+                     m_preview.previewBuffer.channels());
+    ensureHostBuffer(readBuffer, readIdx,
+                     m_preview.previewBuffer.rows(),
+                     m_preview.previewBuffer.cols(),
+                     m_preview.previewBuffer.channels());
 
     // Check if previous copy completed
     if (m_preview.copyInProgress) {

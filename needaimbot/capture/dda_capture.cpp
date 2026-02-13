@@ -318,6 +318,7 @@ bool DDACapture::AcquireFrameSync(cudaArray_t* cudaArray, unsigned int* width, u
     }
     m_prevPresentQpc = lastQpc;
     m_lastPresentQpc.store(lastQpc, std::memory_order_release);
+    m_presentCv.notify_all();
     m_frameCounter.fetch_add(1, std::memory_order_acq_rel);
 
     // Return results

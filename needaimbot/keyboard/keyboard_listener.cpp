@@ -12,6 +12,7 @@
 #include "../mouse/mouse.h"
 #include "keycodes.h"
 #include "needaimbot.h"
+#include "../cuda/unified_graph_pipeline.h"
 // #include "../capture/capture.h" - removed, using GPU capture now
 
 
@@ -163,6 +164,7 @@ void keyboardListener() {
 
     static bool last_aiming_state = false;
     static bool last_shooting_state = false;
+    static bool last_disable_upward_state = false;
     static bool last_pause_state = false;
     static bool last_single_shot_state = false;
 
@@ -218,7 +220,14 @@ void keyboardListener() {
         }
 
         // Track disable upward aim state
-        ctx.disable_upward_aim = cache_disable_upward.isPressed();
+        bool current_disable_upward = cache_disable_upward.isPressed();
+        ctx.disable_upward_aim = current_disable_upward;
+        if (current_disable_upward != last_disable_upward_state) {
+            if (auto* pipeline = gpa::PipelineManager::getInstance().getPipeline()) {
+                pipeline->markPidConfigDirty();
+            }
+            last_disable_upward_state = current_disable_upward;
+        }
 
         // Track stabilizer state with start/end delay support
         bool current_stabilizer = cache_stabilizer.isPressed();

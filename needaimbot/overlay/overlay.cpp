@@ -148,7 +148,6 @@ struct UIGPUReader {
 
 static UIGPUReader g_uiGPUReader;
 
-extern std::mutex configMutex;
 extern std::atomic<bool> should_exit;
 
 bool CreateDeviceD3D(HWND hWnd);
@@ -795,7 +794,7 @@ void OverlayThread()
 
             ImGui::Begin("Options", &show_overlay, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize);
             {
-                std::lock_guard<std::mutex> lock(configMutex);
+                std::lock_guard<std::mutex> lock(ctx.configMutex);
                 
                 // Rapidfire pause removed - MouseThread no longer exists
 

@@ -413,7 +413,7 @@ public:
     const GraphExecutionState& getState() const { return m_state; }
     float getAverageLatency() const { return m_state.avgLatency; }
     bool isGraphReady() const { return m_state.graphReady; }
-    void setGraphRebuildNeeded() { m_state.needsRebuild = true; }
+    void setGraphRebuildNeeded() { m_rebuildRequested.store(true, std::memory_order_release); }
     
     const SimpleCudaMat& getPreviewBuffer() const { 
         return m_preview.previewBuffer; 
@@ -525,6 +525,11 @@ private:
             int max_count = 10000;
         } color_filter;
 
+        // Runtime/global flags
+        struct {
+            bool use_cuda_graph = true;
+        } runtime;
+
         // Generation counter - incremented when config changes
         std::atomic<uint32_t> generation{0};
     } m_cachedConfig;
@@ -601,6 +606,7 @@ private:
     std::atomic<bool> m_allowMovement{false};
     std::atomic<bool> m_shouldStop{false};
     std::atomic<bool> m_frameInFlight{false};
+    std::atomic<bool> m_rebuildRequested{false};
 
     // Pre-allocated callback data — eliminates per-frame heap alloc.
     // Safe because m_frameInFlight guarantees single frame in flight.
@@ -665,6 +671,12 @@ private:
     // Timestamp (QPC) of the last mouse input injection we issued.
     // Next capture waits until a frame with LastPresentTime >= this value.
     std::atomic<uint64_t> m_pendingInputQpc{0};
+
+    // Capture timing estimate for dynamic stale-frame skipping.
+    uint64_t m_lastCapturedPresentQpc = 0;
+    double m_estimatedFrameIntervalMs = 4.17;
+    uint64_t m_qpcFrequency = 0;
+    double m_qpcTicksToMs = 0.0;
 
     // Whether DXGI LastPresentQpc is supported by the capture backend.
     bool m_qpcSupported = false;
@@ -740,8 +752,8 @@ private:
     bool bindStaticTensorAddresses();
 
     // Config cache helpers
-    void refreshConfigCache(const AppContext& ctx);
-    void updateConfig(const AppContext& ctx);
+    bool refreshConfigCache(const AppContext& ctx);
+    bool updateConfig(const AppContext& ctx);
 
     // Post-processing config (member instead of static for thread safety)
     PostProcessingConfig m_postProcessConfig{Constants::MAX_DETECTIONS, 0.001f, "yolo12"};

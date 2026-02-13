@@ -15,6 +15,7 @@
 #include "cuda/detection/postProcess.h"
 #include <queue>
 #include <chrono>
+#include <cstring>
 
 // Mouse movement event structure
 struct MouseEvent {
@@ -120,20 +121,31 @@ public:
     
     // Target management helpers
     void updateTargets(const std::vector<Target>& targets) {
+        updateTargets(targets.data(), targets.size());
+    }
+
+    void updateTargets(const Target* targets, size_t target_count) {
         std::lock_guard<std::mutex> lock(target_mutex);
-        // Copy to fixed array
-        num_targets_ = (targets.size() < MAX_TARGETS) ? targets.size() : MAX_TARGETS;
-        for (size_t i = 0; i < num_targets_; ++i) {
-            all_targets_[i] = targets[i];
+        num_targets_ = (target_count < MAX_TARGETS) ? target_count : MAX_TARGETS;
+
+        if (num_targets_ > 0 && targets) {
+            std::memcpy(all_targets_.data(), targets, num_targets_ * sizeof(Target));
         }
-        has_target_ = !targets.empty();
-        
-        if (!targets.empty()) {
-            auto bestTarget = std::max_element(targets.begin(), targets.end(),
-                [](const Target& a, const Target& b) {
-                    return a.confidence < b.confidence;
-                });
-            current_target_ = *bestTarget;
+
+        has_target_ = (num_targets_ > 0);
+
+        if (num_targets_ > 0) {
+            size_t bestIdx = 0;
+            float bestConfidence = all_targets_[0].confidence;
+            for (size_t i = 1; i < num_targets_; ++i) {
+                if (all_targets_[i].confidence > bestConfidence) {
+                    bestConfidence = all_targets_[i].confidence;
+                    bestIdx = i;
+                }
+            }
+            current_target_ = all_targets_[bestIdx];
+        } else {
+            current_target_ = Target{};
         }
     }
     

@@ -2,6 +2,8 @@
 #define DRAW_SETTINGS_H
 
 #include <chrono>
+#include "../AppContext.h"
+#include "../cuda/unified_graph_pipeline.h"
 
 // Auto-save system: tracks dirty state and saves after delay
 struct AutoSaveState {
@@ -29,19 +31,28 @@ struct AutoSaveState {
 // Global auto-save state
 extern AutoSaveState g_autoSaveState;
 
+inline void NotifyPipelineConfigDirty() {
+    if (auto* pipeline = gpa::PipelineManager::getInstance().getPipeline()) {
+        pipeline->markPidConfigDirty();
+    }
+}
+
 // Macro for marking config as dirty (triggers auto-save after delay)
 #define MARK_CONFIG_DIRTY() do { \
     g_autoSaveState.markDirty(); \
+    NotifyPipelineConfigDirty(); \
 } while(0)
 
 // Macro for immediately saving config
 #define SAVE_PROFILE() do { \
     AppContext::getInstance().config.saveConfig(); \
+    NotifyPipelineConfigDirty(); \
 } while(0)
 
 // Macro for immediately saving input profile
 #define SAVE_INPUT_PROFILE() do { \
     AppContext::getInstance().config.saveConfig(); \
+    NotifyPipelineConfigDirty(); \
 } while(0)
 
 void draw_capture_settings();
