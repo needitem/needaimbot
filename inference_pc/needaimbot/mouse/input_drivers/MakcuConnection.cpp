@@ -742,7 +742,7 @@ void MakcuConnection::move(int x, int y) {
     if (x == 0 && y == 0) return;
     char command[64];
     int len = std::snprintf(command, sizeof(command), "km.move(%d,%d)\r\n", x, y);
-    if (len > 0) {
+    if (len > 0 && static_cast<size_t>(len) < sizeof(command)) {
         (void)sendCommandFast(command, static_cast<size_t>(len));
     }
 }
@@ -872,7 +872,7 @@ void MakcuConnection::listeningThreadFunc() {
         pfd.events = POLLIN | POLLERR | POLLHUP;
         pfd.revents = 0;
 
-        int pollRet = poll(&pfd, 1, 20);
+        int pollRet = poll(&pfd, 1, 1);
         if (pollRet <= 0) {
             continue;
         }

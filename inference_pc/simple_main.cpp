@@ -184,6 +184,69 @@ struct Config {
         }
     }
 
+    bool save(const std::string& path) const {
+        try {
+            json j;
+            j["engine_path"] = enginePath;
+            j["makcu_port"] = makcuPort;
+            j["udp_port"] = udpPort;
+
+            j["conf_threshold"] = confThreshold;
+            j["head_class_id"] = headClassId;
+            j["head_bonus"] = headBonus;
+            j["max_detections"] = maxDetections;
+
+            j["head_aim_point"] = headAimPoint;
+            j["body_aim_point"] = bodyAimPoint;
+
+            j["pid_kp_x"] = pidKpX;
+            j["pid_kp_y"] = pidKpY;
+            j["pid_ki_x"] = pidKiX;
+            j["pid_ki_y"] = pidKiY;
+            j["pid_kd_x"] = pidKdX;
+            j["pid_kd_y"] = pidKdY;
+            j["pid_integral_max"] = pidIntegralMax;
+            j["pid_derivative_max"] = pidDerivativeMax;
+
+            j["iou_stickiness_threshold"] = iouStickinessThreshold;
+
+            j["no_recoil_enabled"] = noRecoilEnabled;
+            j["recoil_comp_x"] = recoilCompX;
+            j["recoil_comp_y"] = recoilCompY;
+            j["recoil_tick_ms"] = recoilTickMs;
+
+            j["mouse_min_interval_ms"] = mouseMinIntervalMs;
+            j["makcu_baudrate"] = makcuBaudrate;
+
+            j["noise_enabled"] = noiseEnabled;
+            j["noise_stddev_x"] = noiseStddevX;
+            j["noise_stddev_y"] = noiseStddevY;
+
+            j["shoot_offset_x"] = shootOffsetX;
+            j["shoot_offset_y"] = shootOffsetY;
+
+            // Save allowed classes as simple list
+            json allowedList = json::array();
+            if (classAllowed.empty()) {
+                // Default: all classes allowed
+                for (int i = 0; i < maxClasses; i++) allowedList.push_back(i);
+            } else {
+                for (size_t i = 0; i < classAllowed.size(); i++) {
+                    if (classAllowed[i]) allowedList.push_back(static_cast<int>(i));
+                }
+            }
+            j["allowed_classes"] = allowedList;
+
+            std::ofstream f(path);
+            if (!f) return false;
+            f << j.dump(4) << std::endl;
+            return true;
+        } catch (const std::exception& e) {
+            std::cerr << "[Config] Error saving: " << e.what() << std::endl;
+            return false;
+        }
+    }
+
     void print() const {
         std::cout << "[Config] Engine: " << enginePath << std::endl;
         std::cout << "[Config] Makcu: " << makcuPort << std::endl;
@@ -351,7 +414,8 @@ int main(int argc, char* argv[]) {
     if (cfg.load(configPath)) {
         std::cout << "[Config] Loaded from " << configPath << std::endl;
     } else {
-        std::cout << "[Config] Using defaults (no config file)" << std::endl;
+        std::cout << "[Config] Using defaults, saving to " << configPath << std::endl;
+        cfg.save(configPath);
     }
     cfg.print();
 
