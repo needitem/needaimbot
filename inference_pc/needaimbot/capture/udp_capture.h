@@ -37,11 +37,11 @@ typedef int SOCKET;
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
-#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 // Packet header matching game_pc sender (chunked BGRA)
@@ -120,21 +120,27 @@ public:
     bool IsPinnedMemoryEnabled() const { return m_usePinnedMemory; }
 
 private:
+    struct FrameFragments;
+
     void receiveThread();
     bool allocatePinnedBuffers(size_t size);
     void freePinnedBuffers();
+    FrameFragments* acquireFragmentLocked();   // Requires m_fragmentMutex held
+    void releaseFragmentLocked(FrameFragments* frag);  // Requires m_fragmentMutex held
 
     // Fragment reassembly (uses regular memory, converted to pinned on completion)
     struct FrameFragments {
         std::vector<uint8_t> data;
-        std::vector<bool> received;  // Track which packets received
-        uint16_t totalPackets;
-        uint16_t receivedCount;
-        uint16_t width;
-        uint16_t height;
+        std::vector<uint8_t> received;  // Track which packets received (0/1)
+        uint16_t totalPackets = 0;
+        uint16_t receivedCount = 0;
+        uint16_t width = 0;
+        uint16_t height = 0;
         std::chrono::steady_clock::time_point lastUpdate;
     };
-    std::map<uint32_t, FrameFragments> m_fragmentMap;
+    std::unordered_map<uint32_t, FrameFragments*> m_fragmentMap;
+    std::vector<std::unique_ptr<FrameFragments>> m_fragmentStorage;
+    std::vector<FrameFragments*> m_freeFragments;
     std::mutex m_fragmentMutex;
 
     // Network

@@ -1,6 +1,7 @@
 #include "udp_capture.h"
 
 #include <iostream>
+#include <algorithm>
 #include <cstring>
 
 #ifdef _WIN32
@@ -18,6 +19,25 @@ UDPCapture::UDPCapture()
 
 UDPCapture::~UDPCapture() {
     Shutdown();
+}
+
+UDPCapture::FrameFragments* UDPCapture::acquireFragmentLocked() {
+    if (!m_freeFragments.empty()) {
+        FrameFragments* frag = m_freeFragments.back();
+        m_freeFragments.pop_back();
+        return frag;
+    }
+    m_fragmentStorage.emplace_back(std::make_unique<FrameFragments>());
+    return m_fragmentStorage.back().get();
+}
+
+void UDPCapture::releaseFragmentLocked(FrameFragments* frag) {
+    if (!frag) return;
+    frag->totalPackets = 0;
+    frag->receivedCount = 0;
+    frag->width = 0;
+    frag->height = 0;
+    m_freeFragments.push_back(frag);
 }
 
 bool UDPCapture::allocatePinnedBuffers(size_t size) {
@@ -133,12 +153,20 @@ void UDPCapture::Shutdown() {
 }
 
 bool UDPCapture::StartCapture() {
-    if (m_running.load()) return true;
+    if (m_running.load(std::memory_order_relaxed)) return true;
     if (m_recvSocket == INVALID_SOCKET) return false;
 
-    m_running.store(true);
-    m_isCapturing.store(true);
+    m_running.store(true, std::memory_order_relaxed);
+    m_isCapturing.store(true, std::memory_order_relaxed);
     m_startTime = std::chrono::steady_clock::now();
+    {
+        std::lock_guard<std::mutex> lock(m_fragmentMutex);
+        for (auto& it : m_fragmentMap) {
+            releaseFragmentLocked(it.second);
+        }
+        m_fragmentMap.clear();
+        m_fragmentMap.reserve(128);
+    }
 
     // Start receive thread
     m_recvThread = std::thread(&UDPCapture::receiveThread, this);
@@ -149,10 +177,10 @@ bool UDPCapture::StartCapture() {
 }
 
 void UDPCapture::StopCapture() {
-    if (!m_running.load()) return;
+    if (!m_running.load(std::memory_order_relaxed)) return;
 
-    m_running.store(false);
-    m_isCapturing.store(false);
+    m_running.store(false, std::memory_order_relaxed);
+    m_isCapturing.store(false, std::memory_order_relaxed);
 
     // Wake up any waiting threads
     {
@@ -170,6 +198,25 @@ void UDPCapture::StopCapture() {
 
 void UDPCapture::receiveThread() {
     std::vector<uint8_t> recvBuffer(65536);  // Max UDP packet size (up to 60KB chunks)
+    constexpr size_t kChunkPayloadBytes = 60000;
+    constexpr auto kFragmentStaleTimeout = std::chrono::milliseconds(100);
+    constexpr uint32_t kCleanupPacketInterval = 64;
+    uint32_t packetsSinceCleanup = 0;
+
+    auto cleanupStaleFragments = [this, kFragmentStaleTimeout](std::chrono::steady_clock::time_point now) {
+        std::lock_guard<std::mutex> lock(m_fragmentMutex);
+        for (auto it = m_fragmentMap.begin(); it != m_fragmentMap.end();) {
+            FrameFragments* frag = it->second;
+            if (frag && (now - frag->lastUpdate) > kFragmentStaleTimeout) {
+                m_droppedFrames.fetch_add(1, std::memory_order_relaxed);
+                releaseFragmentLocked(frag);
+                it = m_fragmentMap.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    };
+
     sockaddr_in fromAddr;
 #ifdef _WIN32
     int fromLen = sizeof(fromAddr);
@@ -177,7 +224,14 @@ void UDPCapture::receiveThread() {
     socklen_t fromLen = sizeof(fromAddr);
 #endif
 
-    while (m_running.load()) {
+    auto releaseCompletedFragment = [this](FrameFragments*& frag) {
+        if (!frag) return;
+        std::lock_guard<std::mutex> lock(m_fragmentMutex);
+        releaseFragmentLocked(frag);
+        frag = nullptr;
+    };
+
+    while (m_running.load(std::memory_order_relaxed)) {
         fromLen = sizeof(fromAddr);
         int ret = recvfrom(m_recvSocket, (char*)recvBuffer.data(),
                           (int)recvBuffer.size(), 0,
@@ -191,22 +245,16 @@ void UDPCapture::receiveThread() {
             int err = errno;
             if (err == ETIMEDOUT || err == EWOULDBLOCK || err == EAGAIN) {
 #endif
-                // Cleanup old incomplete frames (older than 100ms)
-                auto now = std::chrono::steady_clock::now();
-                std::lock_guard<std::mutex> lock(m_fragmentMutex);
-                for (auto it = m_fragmentMap.begin(); it != m_fragmentMap.end();) {
-                    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        now - it->second.lastUpdate).count();
-                    if (elapsed > 100) {
-                        m_droppedFrames.fetch_add(1);
-                        it = m_fragmentMap.erase(it);
-                    } else {
-                        ++it;
-                    }
-                }
+                // Cleanup old incomplete frames (older than stale timeout).
+                cleanupStaleFragments(std::chrono::steady_clock::now());
                 continue;  // Normal timeout, keep waiting
             }
             continue;
+        }
+
+        if ((++packetsSinceCleanup % kCleanupPacketInterval) == 0) {
+            // Keep fragment map bounded even under continuous traffic.
+            cleanupStaleFragments(std::chrono::steady_clock::now());
         }
 
         // Parse header (new format: 16 bytes)
@@ -227,98 +275,150 @@ void UDPCapture::receiveThread() {
         uint16_t chunkIndex = header->chunkIndex;
         uint16_t totalChunks = header->totalChunks;
         uint32_t chunkSize = header->chunkSize;
+        if (totalChunks == 0 || chunkIndex >= totalChunks ||
+            header->frameWidth == 0 || header->frameHeight == 0) {
+            continue;
+        }
 
-        // Assemble fragments
+        bool frameComplete = false;
+        uint16_t completedWidth = 0;
+        uint16_t completedHeight = 0;
+        FrameFragments* completedFrag = nullptr;
+
+        // Assemble fragments (keep fragment lock scope tight).
         {
             std::lock_guard<std::mutex> lock(m_fragmentMutex);
 
             // Get or create fragment entry
-            auto& frag = m_fragmentMap[frameId];
+            FrameFragments* frag = nullptr;
+            auto fragIt = m_fragmentMap.find(frameId);
+            if (fragIt == m_fragmentMap.end()) {
+                frag = acquireFragmentLocked();
+                m_fragmentMap.emplace(frameId, frag);
+            } else {
+                frag = fragIt->second;
+            }
+            if (!frag) {
+                continue;
+            }
 
             // Initialize if first packet of this frame
             // BGRA format: width * height * 4 bytes
-            if (frag.totalPackets == 0) {
-                size_t frameSize = header->frameWidth * header->frameHeight * 4;  // BGRA
-                frag.data.resize(frameSize);
-                frag.received.resize(totalChunks, false);
-                frag.totalPackets = totalChunks;
-                frag.receivedCount = 0;
-                frag.width = header->frameWidth;
-                frag.height = header->frameHeight;
+            const size_t frameSize = static_cast<size_t>(header->frameWidth) * static_cast<size_t>(header->frameHeight) * 4;
+            const bool metadataMismatch =
+                (frag->totalPackets != 0) &&
+                (frag->totalPackets != totalChunks ||
+                 frag->width != header->frameWidth ||
+                 frag->height != header->frameHeight);
+            if (frag->totalPackets == 0 || metadataMismatch) {
+                if (frag->data.size() != frameSize) {
+                    frag->data.resize(frameSize);
+                }
+                if (frag->received.size() != totalChunks) {
+                    frag->received.resize(totalChunks);
+                }
+                std::fill(frag->received.begin(), frag->received.end(), 0);
+                frag->totalPackets = totalChunks;
+                frag->receivedCount = 0;
+                frag->width = header->frameWidth;
+                frag->height = header->frameHeight;
             }
 
-            frag.lastUpdate = std::chrono::steady_clock::now();
+            frag->lastUpdate = std::chrono::steady_clock::now();
 
             // Store chunk data if not already received
-            if (chunkIndex < frag.received.size() && !frag.received[chunkIndex]) {
+            if (chunkIndex < frag->received.size() && !frag->received[chunkIndex]) {
                 // Calculate offset: each chunk can be up to 60000 bytes
-                size_t offset = chunkIndex * 60000;
-                size_t copySize = std::min((size_t)chunkSize, frag.data.size() - offset);
-                memcpy(frag.data.data() + offset, payload, copySize);
-                frag.received[chunkIndex] = true;
-                frag.receivedCount++;
+                size_t offset = static_cast<size_t>(chunkIndex) * kChunkPayloadBytes;
+                if (offset < frag->data.size()) {
+                    size_t remaining = frag->data.size() - offset;
+                    size_t expectedChunkSize = std::min(kChunkPayloadBytes, remaining);
+                    size_t requestedSize = static_cast<size_t>(chunkSize);
+                    if (requestedSize == expectedChunkSize) {
+                        memcpy(frag->data.data() + offset, payload, requestedSize);
+                        frag->received[chunkIndex] = 1;
+                        frag->receivedCount++;
+                    }
+                }
             }
 
             // Check if frame is complete
-            if (frag.receivedCount == frag.totalPackets) {
-                // Frame complete! Copy BGRA directly to pinned buffer (GPU does conversion)
-                size_t bgraSize = frag.width * frag.height * 4;
-
-                // Ensure pinned buffers are large enough
-                if (!m_usePinnedMemory || m_pinnedBufferSize < bgraSize) {
-                    allocatePinnedBuffers(bgraSize);
-                }
-
-                {
-                    std::lock_guard<std::mutex> bufLock(m_bufferMutex);
-
-                    // Get write buffer index
-                    int writeIdx = m_writeBuffer.load();
-
-                    // Find a free pinned buffer for this frame.
-                    bool foundFreeBuffer = false;
-                    for (int attempt = 0; attempt < NUM_BUFFERS; ++attempt) {
-                        int candidate = (writeIdx + attempt) % NUM_BUFFERS;
-                        if (!m_bufferInUse[candidate].load()) {
-                            writeIdx = candidate;
-                            foundFreeBuffer = true;
-                            break;
-                        }
-                    }
-                    if (!foundFreeBuffer) {
-                        // All pinned buffers are still in use by GPU.
-                        m_droppedFrames.fetch_add(1);
-                        m_fragmentMap.erase(frameId);
-                        continue;
-                    }
-
-                    uint8_t* dstBuffer = m_pinnedFrameBuffer[writeIdx];
-                    if (!dstBuffer) {
-                        m_fragmentMap.erase(frameId);
-                        continue;
-                    }
-
-                    // Direct BGRA memcpy to pinned buffer (GPU handles BGRA->CHW conversion)
-                    memcpy(dstBuffer, frag.data.data(), bgraSize);
-
-                    // Swap buffers
-                    m_readBuffer.store(writeIdx);
-                    m_writeBuffer.store((writeIdx + 1) % NUM_BUFFERS);
-
-                    // Update frame info
-                    m_frameWidth.store(frag.width);
-                    m_frameHeight.store(frag.height);
-                    m_lastFrameId.store(frameId);
-                    m_frameCounter.fetch_add(1);
-                    m_receivedFrames.fetch_add(1);
-
-                    m_newFrameAvailable = true;
-                }
-                m_frameReady.notify_one();
-
-                // Remove from fragment map
+            if (frag->receivedCount == frag->totalPackets) {
+                frameComplete = true;
+                completedWidth = frag->width;
+                completedHeight = frag->height;
+                completedFrag = frag;
                 m_fragmentMap.erase(frameId);
             }
+        }
+
+        if (!frameComplete || !completedFrag) {
+            continue;
+        }
+
+        // Frame complete! Copy BGRA directly to pinned buffer (GPU does conversion)
+        const size_t bgraSize = static_cast<size_t>(completedWidth) * static_cast<size_t>(completedHeight) * 4;
+        if (completedFrag->data.size() != bgraSize) {
+            m_droppedFrames.fetch_add(1, std::memory_order_relaxed);
+            releaseCompletedFragment(completedFrag);
+            continue;
+        }
+
+        // Ensure pinned buffers are large enough
+        if (!m_usePinnedMemory || m_pinnedBufferSize < bgraSize) {
+            if (!allocatePinnedBuffers(bgraSize)) {
+                m_droppedFrames.fetch_add(1, std::memory_order_relaxed);
+                releaseCompletedFragment(completedFrag);
+                continue;
+            }
+        }
+
+        bool published = false;
+        {
+            std::lock_guard<std::mutex> bufLock(m_bufferMutex);
+
+            // Get write buffer index
+            int writeIdx = m_writeBuffer.load(std::memory_order_relaxed);
+
+            // Find a free pinned buffer for this frame.
+            bool foundFreeBuffer = false;
+            for (int attempt = 0; attempt < NUM_BUFFERS; ++attempt) {
+                int candidate = (writeIdx + attempt) % NUM_BUFFERS;
+                if (!m_bufferInUse[candidate].load(std::memory_order_acquire)) {
+                    writeIdx = candidate;
+                    foundFreeBuffer = true;
+                    break;
+                }
+            }
+            if (foundFreeBuffer) {
+                uint8_t* dstBuffer = m_pinnedFrameBuffer[writeIdx];
+                if (dstBuffer) {
+                    // Direct BGRA memcpy to pinned buffer (GPU handles BGRA->CHW conversion)
+                    memcpy(dstBuffer, completedFrag->data.data(), bgraSize);
+
+                    // Swap buffers
+                    m_readBuffer.store(writeIdx, std::memory_order_release);
+                    m_writeBuffer.store((writeIdx + 1) % NUM_BUFFERS, std::memory_order_relaxed);
+
+                    // Update frame info
+                    m_frameWidth.store(completedWidth, std::memory_order_relaxed);
+                    m_frameHeight.store(completedHeight, std::memory_order_relaxed);
+                    m_lastFrameId.store(frameId, std::memory_order_relaxed);
+                    m_frameCounter.fetch_add(1, std::memory_order_relaxed);
+                    m_receivedFrames.fetch_add(1, std::memory_order_relaxed);
+
+                    m_newFrameAvailable = true;
+                    published = true;
+                }
+            }
+        }
+
+        releaseCompletedFragment(completedFrag);
+
+        if (published) {
+            m_frameReady.notify_one();
+        } else {
+            m_droppedFrames.fetch_add(1, std::memory_order_relaxed);
         }
     }
 }
@@ -327,7 +427,7 @@ bool UDPCapture::GetLatestFrame(void** frameData, unsigned int* width,
                                  unsigned int* height, unsigned int* size) {
     std::lock_guard<std::mutex> lock(m_bufferMutex);
 
-    int readIdx = m_readBuffer.load();
+    int readIdx = m_readBuffer.load(std::memory_order_acquire);
     if (!m_pinnedFrameBuffer[readIdx]) {
         return false;
     }
@@ -348,16 +448,16 @@ bool UDPCapture::AcquireFrameSync(void** rgbData, unsigned int* width,
     // Wait for new frame
     if (!m_newFrameAvailable) {
         if (!m_frameReady.wait_for(lock, std::chrono::milliseconds(timeoutMs),
-            [this] { return m_newFrameAvailable || !m_running.load(); })) {
+            [this] { return m_newFrameAvailable || !m_running.load(std::memory_order_relaxed); })) {
             return false;  // Timeout
         }
     }
 
-    if (!m_running.load()) {
+    if (!m_running.load(std::memory_order_relaxed)) {
         return false;
     }
 
-    int readIdx = m_readBuffer.load();
+    int readIdx = m_readBuffer.load(std::memory_order_acquire);
     if (!m_pinnedFrameBuffer[readIdx]) {
         return false;
     }
@@ -380,22 +480,22 @@ bool UDPCapture::AcquireFramePinned(void** pinnedRgbData, unsigned int* width,
     // Wait for new frame
     if (!m_newFrameAvailable) {
         if (!m_frameReady.wait_for(lock, std::chrono::milliseconds(timeoutMs),
-            [this] { return m_newFrameAvailable || !m_running.load(); })) {
+            [this] { return m_newFrameAvailable || !m_running.load(std::memory_order_relaxed); })) {
             return false;  // Timeout
         }
     }
 
-    if (!m_running.load()) {
+    if (!m_running.load(std::memory_order_relaxed)) {
         return false;
     }
 
-    int readIdx = m_readBuffer.load();
+    int readIdx = m_readBuffer.load(std::memory_order_acquire);
     if (!m_pinnedFrameBuffer[readIdx]) {
         return false;
     }
 
     // Mark buffer as in use
-    m_bufferInUse[readIdx].store(true);
+    m_bufferInUse[readIdx].store(true, std::memory_order_release);
     m_newFrameAvailable = false;
 
     if (pinnedRgbData) *pinnedRgbData = m_pinnedFrameBuffer[readIdx];
@@ -409,7 +509,7 @@ bool UDPCapture::AcquireFramePinned(void** pinnedRgbData, unsigned int* width,
 
 void UDPCapture::ReleaseFrame(int bufferIndex) {
     if (bufferIndex >= 0 && bufferIndex < NUM_BUFFERS) {
-        m_bufferInUse[bufferIndex].store(false);
+        m_bufferInUse[bufferIndex].store(false, std::memory_order_release);
     }
 }
 
@@ -459,5 +559,5 @@ double UDPCapture::GetReceiveFps() const {
     auto now = std::chrono::steady_clock::now();
     auto elapsed = std::chrono::duration<double>(now - m_startTime).count();
     if (elapsed < 0.001) return 0.0;
-    return m_receivedFrames.load() / elapsed;
+    return m_receivedFrames.load(std::memory_order_relaxed) / elapsed;
 }

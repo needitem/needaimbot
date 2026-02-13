@@ -14,7 +14,6 @@
 #include <cmath>
 #include <iomanip>
 #include <random>
-#include <mutex>
 
 #include "needaimbot/cuda/simple_inference.h"
 #include "needaimbot/cuda/simple_postprocess.h"
@@ -248,11 +247,10 @@ struct CallbackContext {
     int lastMoveY;
     int consecutiveSameSign;  // Counter for hysteresis
     
-    // Noise generation (thread-safe via mutex)
+    // Noise generation (single callback in-flight, lock-free)
     std::mt19937* noiseGen;
     std::normal_distribution<float>* noiseDistX;
     std::normal_distribution<float>* noiseDistY;
-    std::mutex* noiseMutex;
     
     // Initialize cached values from config
     void initFromConfig(const Config& cfg) {
@@ -275,7 +273,7 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
     CallbackContext* ctx = static_cast<CallbackContext*>(userData);
 
     // Count every completed inference callback (target/no-target)
-    g_frameCount++;
+    g_frameCount.fetch_add(1, std::memory_order_relaxed);
     
     if (!result.hasTarget) {
         // Reset hysteresis state when no target
@@ -287,16 +285,15 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
     float moveX = static_cast<float>(result.movement.dx);
     float moveY = static_cast<float>(result.movement.dy);
     
-    // Apply Gaussian noise for humanization (thread-safe)
+    // Apply Gaussian noise for humanization
     if (ctx->noiseEnabled) {
-        std::lock_guard<std::mutex> lock(*ctx->noiseMutex);
         moveX += (*ctx->noiseDistX)(*ctx->noiseGen);
         moveY += (*ctx->noiseDistY)(*ctx->noiseGen);
     }
     
     // Apply shoot offset when shooting (shifts aim point)
     // Note: shooting_active is atomic, safe to read from callback thread
-    if (ctx->makcu->shooting_active) {
+    if (ctx->makcu->shooting_active.load(std::memory_order_relaxed)) {
         moveX += ctx->shootOffsetX;  // Cached value, no pointer chase
         moveY += ctx->shootOffsetY;
     }
@@ -397,7 +394,6 @@ int main(int argc, char* argv[]) {
     std::mt19937 noiseGen(rd());
     std::normal_distribution<float> noiseDistX(0.0f, cfg.noiseStddevX);
     std::normal_distribution<float> noiseDistY(0.0f, cfg.noiseStddevY);
-    std::mutex noiseMutex;  // Protect RNG from callback thread
 
     // Setup callback context with cached config values
     CallbackContext callbackCtx;
@@ -406,7 +402,6 @@ int main(int argc, char* argv[]) {
     callbackCtx.noiseGen = &noiseGen;
     callbackCtx.noiseDistX = &noiseDistX;
     callbackCtx.noiseDistY = &noiseDistY;
-    callbackCtx.noiseMutex = &noiseMutex;
 
     auto lastStatTime = std::chrono::steady_clock::now();
     auto lastRecoilTime = std::chrono::steady_clock::now();
@@ -454,7 +449,7 @@ int main(int argc, char* argv[]) {
         auto now = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastStatTime).count();
         if (elapsed >= 1000) {
-            int completedFrames = g_frameCount.exchange(0);  // Atomic read and reset
+            int completedFrames = g_frameCount.exchange(0, std::memory_order_relaxed);  // Atomic read and reset
             uint64_t udpDroppedNow = udpCapture.GetDroppedFrameCount();
             uint64_t udpDroppedDelta = udpDroppedNow - lastUdpDropped;
             lastUdpDropped = udpDroppedNow;
@@ -465,8 +460,8 @@ int main(int argc, char* argv[]) {
                       << " | BusyDrop: " << busyDropWindow
                       << " | SubmitFail: " << submitFailWindow
                       << " | UdpDrop: " << udpDroppedDelta
-                      << " | Aim: " << (makcu.aiming_active ? "ON " : "OFF")
-                      << " | Shoot: " << (makcu.shooting_active ? "ON " : "OFF")
+                      << " | Aim: " << (makcu.aiming_active.load(std::memory_order_relaxed) ? "ON " : "OFF")
+                      << " | Shoot: " << (makcu.shooting_active.load(std::memory_order_relaxed) ? "ON " : "OFF")
                       << " [GPU Callback]" << std::flush;
 
             recvFramesWindow = 0;
@@ -476,18 +471,27 @@ int main(int argc, char* argv[]) {
             lastStatTime = now;
         }
 
+        // Skip frame acquisition while not aiming to reduce idle CPU usage.
+        if (!makcu.aiming_active.load(std::memory_order_relaxed)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
+        }
+
         // Use pinned buffer API for zero-copy
         if (!udpCapture.AcquireFramePinned(&pinnedRgbData, &width, &height, &frameId, &bufferIndex, 16)) {
             // No frame, handle recoil if active (left+right click)
-            if (cfg.noRecoilEnabled && makcu.shooting_active && makcu.aiming_active) {
-                auto recoilElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastRecoilTime).count();
+            auto recoilNow = std::chrono::steady_clock::now();
+            if (cfg.noRecoilEnabled &&
+                makcu.shooting_active.load(std::memory_order_relaxed) &&
+                makcu.aiming_active.load(std::memory_order_relaxed)) {
+                auto recoilElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(recoilNow - lastRecoilTime).count();
                 if (recoilElapsed >= cfg.recoilTickMs) {
                     int recoilX = static_cast<int>(cfg.recoilCompX);
                     int recoilY = static_cast<int>(cfg.recoilCompY);
                     if (recoilX != 0 || recoilY != 0) {
                         makcu.move(recoilX, recoilY);
                     }
-                    lastRecoilTime = now;
+                    lastRecoilTime = recoilNow;
                 }
             }
             continue;
@@ -501,8 +505,8 @@ int main(int argc, char* argv[]) {
         recvFramesWindow++;
 
         // Check button state
-        bool aiming = makcu.aiming_active;
-        bool shooting = makcu.shooting_active;
+        bool aiming = makcu.aiming_active.load(std::memory_order_relaxed);
+        bool shooting = makcu.shooting_active.load(std::memory_order_relaxed);
 
         // No-recoil compensation (runs every tick while left+right click)
         if (cfg.noRecoilEnabled && shooting && aiming) {

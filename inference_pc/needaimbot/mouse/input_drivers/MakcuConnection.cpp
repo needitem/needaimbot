@@ -6,6 +6,8 @@
 #include <thread>
 #include <mutex>
 #include <cstring>
+#include <cstdio>
+#include <cerrno>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -16,6 +18,7 @@
 #include <sched.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <poll.h>
 #endif
 
 /* ---------- Makcu-specific constants ---------------------------- */
@@ -711,43 +714,86 @@ std::string MakcuConnection::read() {
 void MakcuConnection::click(int button) {
     // Click = press then release
     if (button == 1) {
-        sendCommand("km.left(1)\r\n");
-        sendCommand("km.left(0)\r\n");
+        sendCommand("km.left(1)\r\n", sizeof("km.left(1)\r\n") - 1);
+        sendCommand("km.left(0)\r\n", sizeof("km.left(0)\r\n") - 1);
     } else if (button == 2) {
-        sendCommand("km.right(1)\r\n");
-        sendCommand("km.right(0)\r\n");
+        sendCommand("km.right(1)\r\n", sizeof("km.right(1)\r\n") - 1);
+        sendCommand("km.right(0)\r\n", sizeof("km.right(0)\r\n") - 1);
     }
 }
 
 void MakcuConnection::press(int button) {
     if (button == 1) {
-        sendCommand("km.left(1)\r\n");
+        sendCommand("km.left(1)\r\n", sizeof("km.left(1)\r\n") - 1);
     } else if (button == 2) {
-        sendCommand("km.right(1)\r\n");
+        sendCommand("km.right(1)\r\n", sizeof("km.right(1)\r\n") - 1);
     }
 }
 
 void MakcuConnection::release(int button) {
     if (button == 1) {
-        sendCommand("km.left(0)\r\n");
+        sendCommand("km.left(0)\r\n", sizeof("km.left(0)\r\n") - 1);
     } else if (button == 2) {
-        sendCommand("km.right(0)\r\n");
+        sendCommand("km.right(0)\r\n", sizeof("km.right(0)\r\n") - 1);
     }
 }
 
 void MakcuConnection::move(int x, int y) {
     if (x == 0 && y == 0) return;
     char command[64];
-    snprintf(command, sizeof(command), "km.move(%d,%d)\r\n", x, y);
-    sendCommand(std::string(command));
+    int len = std::snprintf(command, sizeof(command), "km.move(%d,%d)\r\n", x, y);
+    if (len > 0) {
+        (void)sendCommandFast(command, static_cast<size_t>(len));
+    }
 }
 
 void MakcuConnection::send_stop() {
-    sendCommand("STOP\n");
+    sendCommand("STOP\n", sizeof("STOP\n") - 1);
 }
 
 void MakcuConnection::sendCommand(const std::string& command) {
-    write(command);
+    sendCommand(command.c_str(), command.size());
+}
+
+void MakcuConnection::sendCommand(const char* command, size_t size) {
+    if (!command || size == 0) return;
+
+#ifdef _WIN32
+    if (!is_open_ || serial_handle_ == INVALID_HANDLE_VALUE) return;
+    std::lock_guard<std::mutex> lock(write_mutex_);
+    if (!writeAsync(command, static_cast<DWORD>(size))) {
+        std::cerr << "[Makcu] Write operation failed" << std::endl;
+    }
+#else
+    if (!is_open_ || serial_fd_ < 0) return;
+    std::lock_guard<std::mutex> lock(write_mutex_);
+    if (writeSerial(command, size) < 0) {
+        std::cerr << "[Makcu] Write operation failed" << std::endl;
+    }
+#endif
+}
+
+bool MakcuConnection::sendCommandFast(const char* command, size_t size) {
+    if (!command || size == 0) return false;
+
+#ifdef _WIN32
+    if (!is_open_ || serial_handle_ == INVALID_HANDLE_VALUE) return false;
+    std::unique_lock<std::mutex> lock(write_mutex_, std::try_to_lock);
+    if (!lock.owns_lock()) return false;
+    return writeAsync(command, static_cast<DWORD>(size));
+#else
+    if (!is_open_ || serial_fd_ < 0) return false;
+    std::unique_lock<std::mutex> lock(write_mutex_, std::try_to_lock);
+    if (!lock.owns_lock()) return false;
+    ssize_t written = writeSerial(command, size);
+    if (written < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            return false;
+        }
+        return false;
+    }
+    return static_cast<size_t>(written) == size;
+#endif
 }
 
 std::vector<int> MakcuConnection::splitValue(int value) {
@@ -820,6 +866,21 @@ void MakcuConnection::listeningThreadFunc() {
             continue;
         }
 
+#ifndef _WIN32
+        struct pollfd pfd;
+        pfd.fd = serial_fd_;
+        pfd.events = POLLIN | POLLERR | POLLHUP;
+        pfd.revents = 0;
+
+        int pollRet = poll(&pfd, 1, 20);
+        if (pollRet <= 0) {
+            continue;
+        }
+        if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+            continue;
+        }
+#endif
+
         // Read incoming data - button events come as single bytes (mask value)
         ssize_t n = ::read(serial_fd_, read_buf, sizeof(read_buf));
         if (n > 0) {
@@ -845,9 +906,6 @@ void MakcuConnection::listeningThreadFunc() {
                     aiming_active = right || side2;
                 }
             }
-        } else {
-            // No data, short sleep
-            std::this_thread::sleep_for(std::chrono::microseconds(500));
         }
     }
 

@@ -1,6 +1,7 @@
 #ifndef MAKCUCONNECTION_H
 #define MAKCUCONNECTION_H
 
+#include <cstddef>
 #include <string>
 #include <thread>
 #include <atomic>
@@ -36,12 +37,14 @@ public:
 
     void send_stop();
 
-    bool aiming_active;
-    bool shooting_active;
-    bool zooming_active;
+    std::atomic<bool> aiming_active;
+    std::atomic<bool> shooting_active;
+    std::atomic<bool> zooming_active;
 
 private:
     void sendCommand(const std::string& command);
+    void sendCommand(const char* command, size_t size);
+    bool sendCommandFast(const char* command, size_t size);
     std::vector<int> splitValue(int value);
 
     void startListening();

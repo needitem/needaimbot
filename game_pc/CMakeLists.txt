@@ -11,7 +11,6 @@ endif()
 
 add_executable(${PROJECT_NAME} WIN32
     src/main.cpp
-    src/lz4.c
 )
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE
