@@ -338,15 +338,6 @@ int main(int argc, char** argv) {
     int sendBufSize = 2 * 1024 * 1024;  // Larger buffer for fragmented packets
     setsockopt(sendSock, SOL_SOCKET, SO_SNDBUF, (char*)&sendBufSize, sizeof(sendBufSize));
 
-    // Non-blocking UDP send: drop frame if socket is back-pressured.
-    u_long nonBlocking = 1;
-    if (ioctlsocket(sendSock, FIONBIO, &nonBlocking) != 0) {
-        std::cerr << "Failed to set non-blocking mode\n";
-        closesocket(sendSock);
-        WSACleanup();
-        return 1;
-    }
-
     sockaddr_in destAddr = {};
     destAddr.sin_family = AF_INET;
     destAddr.sin_port = htons(g_config.sendPort);
