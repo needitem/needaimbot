@@ -23,6 +23,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     ws2_32
     d3d11
     dxgi
+    winmm
 )
 
 if(MSVC)

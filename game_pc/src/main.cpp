@@ -2,7 +2,9 @@
  * GamePC - Screen Capture UDP Streamer with Packet Fragmentation (No Compression)
  */
 
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -10,25 +12,32 @@
 #include <windows.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <mmsystem.h>
 #include <d3d11.h>
 #include <dxgi1_2.h>
 #include <wrl/client.h>
 
 #include <atomic>
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <csignal>
+#include <cstdlib>
 #include <cstring>
+#include <cstdio>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
+#pragma comment(lib, "winmm.lib")
 
 using Microsoft::WRL::ComPtr;
 
@@ -41,19 +50,155 @@ struct Config {
     int captureWidth = 256;
     int captureHeight = 256;
     int targetFPS = 90;
+    int outputIndex = 0;
+    bool useGUI = true;
 };
 
 static std::atomic<bool> g_running{true};
 static Config g_config;
 
+struct OutputInfo {
+    int index = 0;
+    int width = 0;
+    int height = 0;
+    int refreshHz = 0;
+    bool primary = false;
+    std::string deviceName;
+    std::string label;
+};
+
 void signalHandler(int) {
     g_running.store(false);
+}
+
+void printStatusLine(const std::string& text) {
+    HANDLE console = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (console == INVALID_HANDLE_VALUE || console == nullptr) {
+        std::cout << '\r' << text << std::flush;
+        return;
+    }
+
+    CONSOLE_SCREEN_BUFFER_INFO csbi{};
+    if (!GetConsoleScreenBufferInfo(console, &csbi)) {
+        std::cout << '\r' << text << std::flush;
+        return;
+    }
+
+    std::string clipped = text;
+    if (csbi.dwSize.X > 1 && clipped.size() >= static_cast<size_t>(csbi.dwSize.X)) {
+        clipped.resize(static_cast<size_t>(csbi.dwSize.X - 1));
+    }
+
+    COORD lineStart{};
+    lineStart.X = 0;
+    lineStart.Y = csbi.dwCursorPosition.Y;
+
+    DWORD written = 0;
+    FillConsoleOutputCharacterA(console, ' ', csbi.dwSize.X, lineStart, &written);
+    FillConsoleOutputAttribute(console, csbi.wAttributes, csbi.dwSize.X, lineStart, &written);
+    SetConsoleCursorPosition(console, lineStart);
+
+    std::cout << clipped << std::flush;
+}
+
+int clampInt(int value, int minValue, int maxValue) {
+    if (value < minValue) return minValue;
+    if (value > maxValue) return maxValue;
+    return value;
+}
+
+std::string wideToUtf8(const wchar_t* wide) {
+    if (!wide || wide[0] == L'\0') return "";
+
+    int utf8Size = WideCharToMultiByte(CP_UTF8, 0, wide, -1, nullptr, 0, nullptr, nullptr);
+    if (utf8Size <= 1) return "";
+
+    std::string result(static_cast<size_t>(utf8Size), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wide, -1, result.data(), utf8Size, nullptr, nullptr);
+    result.pop_back();  // Drop trailing null terminator.
+    return result;
+}
+
+std::vector<OutputInfo> enumerateCaptureOutputs() {
+    std::vector<OutputInfo> outputs;
+
+    UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+    D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0};
+    D3D_FEATURE_LEVEL obtained;
+
+    ComPtr<ID3D11Device> device;
+    ComPtr<ID3D11DeviceContext> context;
+    HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
+        flags, levels, 2, D3D11_SDK_VERSION, &device, &obtained, &context);
+    if (FAILED(hr)) return outputs;
+
+    ComPtr<IDXGIDevice> dxgiDevice;
+    hr = device.As(&dxgiDevice);
+    if (FAILED(hr)) return outputs;
+
+    ComPtr<IDXGIAdapter> adapter;
+    hr = dxgiDevice->GetAdapter(&adapter);
+    if (FAILED(hr)) return outputs;
+
+    for (UINT index = 0;; ++index) {
+        ComPtr<IDXGIOutput> output;
+        hr = adapter->EnumOutputs(index, &output);
+        if (hr == DXGI_ERROR_NOT_FOUND) {
+            break;
+        }
+        if (FAILED(hr)) {
+            continue;
+        }
+
+        DXGI_OUTPUT_DESC desc{};
+        if (FAILED(output->GetDesc(&desc))) {
+            continue;
+        }
+
+        OutputInfo info{};
+        info.index = static_cast<int>(index);
+        info.width = desc.DesktopCoordinates.right - desc.DesktopCoordinates.left;
+        info.height = desc.DesktopCoordinates.bottom - desc.DesktopCoordinates.top;
+        info.deviceName = wideToUtf8(desc.DeviceName);
+
+        MONITORINFO monitorInfo{};
+        monitorInfo.cbSize = sizeof(monitorInfo);
+        if (GetMonitorInfo(desc.Monitor, &monitorInfo)) {
+            info.primary = (monitorInfo.dwFlags & MONITORINFOF_PRIMARY) != 0;
+        }
+
+        DEVMODEW dm{};
+        dm.dmSize = sizeof(dm);
+        if (EnumDisplaySettingsW(desc.DeviceName, ENUM_CURRENT_SETTINGS, &dm) &&
+            dm.dmDisplayFrequency > 1) {
+            info.refreshHz = static_cast<int>(dm.dmDisplayFrequency);
+        }
+
+        const char* primarySuffix = info.primary ? ", Primary" : "";
+        if (info.refreshHz > 0) {
+            char text[256];
+            std::snprintf(text, sizeof(text), "[%d] %s  %dx%d @ %dHz%s",
+                          info.index, info.deviceName.c_str(), info.width, info.height,
+                          info.refreshHz, primarySuffix);
+            info.label = text;
+        } else {
+            char text[256];
+            std::snprintf(text, sizeof(text), "[%d] %s  %dx%d%s",
+                          info.index, info.deviceName.c_str(), info.width, info.height,
+                          primarySuffix);
+            info.label = text;
+        }
+
+        outputs.push_back(std::move(info));
+    }
+
+    return outputs;
 }
 
 // Simple DDA Capture class
 class SimpleCapture {
 public:
-    bool Initialize() {
+    bool Initialize(int outputIndex) {
         UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
         D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0};
         D3D_FEATURE_LEVEL obtained;
@@ -70,7 +215,7 @@ public:
         hr = dxgiDevice->GetAdapter(&adapter);
         if (FAILED(hr)) return false;
 
-        hr = adapter->EnumOutputs(0, &m_output);
+        hr = adapter->EnumOutputs(static_cast<UINT>(outputIndex), &m_output);
         if (FAILED(hr)) return false;
 
         ComPtr<IDXGIOutput1> output1;
@@ -196,11 +341,230 @@ void printUsage(const char* prog) {
               << "  --ip <addr>       Inference PC IP (default: from config.ini)\n"
               << "  --port <port>     Send port (default: from config.ini)\n"
               << "  --region <x,y,w,h> Capture region (default: from config.ini)\n"
+              << "  --output <idx>    Capture monitor index (default: from config.ini)\n"
               << "  --fps <num>       Target FPS (default: from config.ini)\n"
+              << "  --gui             Show startup config GUI\n"
+              << "  --no-gui          Skip startup config GUI\n"
               << "\nConfig file: config.ini\n";
 }
 
+enum : int {
+    IDC_MONITOR_COMBO = 1001,
+    IDC_FPS_EDIT = 1002
+};
+
+struct ConfigDialogState {
+    Config workingConfig;
+    std::vector<OutputInfo> outputs;
+    bool accepted = false;
+    HWND monitorCombo = nullptr;
+    HWND fpsEdit = nullptr;
+};
+
+void setControlFont(HWND control, HFONT font) {
+    if (!control || !font) return;
+    SendMessage(control, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+}
+
+LRESULT CALLBACK configWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    auto* state = reinterpret_cast<ConfigDialogState*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
+
+    switch (msg) {
+    case WM_NCCREATE: {
+        auto* cs = reinterpret_cast<CREATESTRUCTA*>(lParam);
+        SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(cs->lpCreateParams));
+        return TRUE;
+    }
+    case WM_CREATE: {
+        if (!state) return -1;
+
+        HFONT font = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+        const int margin = 16;
+        const int controlWidth = 470;
+
+        HWND monitorLabel = CreateWindowExA(
+            0, "STATIC", "Capture Monitor",
+            WS_CHILD | WS_VISIBLE,
+            margin, 18, 140, 20,
+            hwnd, nullptr, nullptr, nullptr
+        );
+        setControlFont(monitorLabel, font);
+
+        state->monitorCombo = CreateWindowExA(
+            0, "COMBOBOX", "",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL,
+            margin, 40, controlWidth, 260,
+            hwnd, reinterpret_cast<HMENU>(IDC_MONITOR_COMBO), nullptr, nullptr
+        );
+        setControlFont(state->monitorCombo, font);
+
+        for (const auto& output : state->outputs) {
+            SendMessageA(state->monitorCombo, CB_ADDSTRING, 0,
+                         reinterpret_cast<LPARAM>(output.label.c_str()));
+        }
+
+        int selectedIndex = 0;
+        for (size_t i = 0; i < state->outputs.size(); ++i) {
+            if (state->outputs[i].index == state->workingConfig.outputIndex) {
+                selectedIndex = static_cast<int>(i);
+                break;
+            }
+        }
+        SendMessageA(state->monitorCombo, CB_SETCURSEL, static_cast<WPARAM>(selectedIndex), 0);
+
+        HWND fpsLabel = CreateWindowExA(
+            0, "STATIC", "Target FPS",
+            WS_CHILD | WS_VISIBLE,
+            margin, 84, 120, 20,
+            hwnd, nullptr, nullptr, nullptr
+        );
+        setControlFont(fpsLabel, font);
+
+        state->fpsEdit = CreateWindowExA(
+            WS_EX_CLIENTEDGE, "EDIT", "",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+            margin, 106, 120, 24,
+            hwnd, reinterpret_cast<HMENU>(IDC_FPS_EDIT), nullptr, nullptr
+        );
+        setControlFont(state->fpsEdit, font);
+
+        char fpsText[32];
+        std::snprintf(fpsText, sizeof(fpsText), "%d", state->workingConfig.targetFPS);
+        SetWindowTextA(state->fpsEdit, fpsText);
+
+        HWND tip = CreateWindowExA(
+            0, "STATIC",
+            "Tip: Capture FPS cannot exceed selected monitor refresh rate.",
+            WS_CHILD | WS_VISIBLE,
+            margin, 138, 430, 20,
+            hwnd, nullptr, nullptr, nullptr
+        );
+        setControlFont(tip, font);
+
+        HWND startButton = CreateWindowExA(
+            0, "BUTTON", "Start",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+            320, 172, 80, 28,
+            hwnd, reinterpret_cast<HMENU>(IDOK), nullptr, nullptr
+        );
+        setControlFont(startButton, font);
+
+        HWND cancelButton = CreateWindowExA(
+            0, "BUTTON", "Cancel",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            406, 172, 80, 28,
+            hwnd, reinterpret_cast<HMENU>(IDCANCEL), nullptr, nullptr
+        );
+        setControlFont(cancelButton, font);
+
+        return 0;
+    }
+    case WM_COMMAND: {
+        if (!state) return 0;
+        const int commandId = LOWORD(wParam);
+        if (commandId == IDOK) {
+            int selected = static_cast<int>(SendMessageA(state->monitorCombo, CB_GETCURSEL, 0, 0));
+            if (selected < 0 || selected >= static_cast<int>(state->outputs.size())) {
+                MessageBoxA(hwnd, "Select a monitor.", "Invalid selection", MB_OK | MB_ICONWARNING);
+                return 0;
+            }
+
+            char fpsText[32] = {};
+            GetWindowTextA(state->fpsEdit, fpsText, static_cast<int>(sizeof(fpsText)));
+            char* endPtr = nullptr;
+            long parsedFps = std::strtol(fpsText, &endPtr, 10);
+            if (endPtr == fpsText || *endPtr != '\0' || parsedFps < 1 || parsedFps > 1000) {
+                MessageBoxA(hwnd, "FPS must be a number between 1 and 1000.", "Invalid FPS",
+                            MB_OK | MB_ICONWARNING);
+                return 0;
+            }
+
+            state->workingConfig.outputIndex = state->outputs[selected].index;
+            state->workingConfig.targetFPS = static_cast<int>(parsedFps);
+            state->accepted = true;
+            DestroyWindow(hwnd);
+            return 0;
+        }
+        if (commandId == IDCANCEL) {
+            DestroyWindow(hwnd);
+            return 0;
+        }
+        break;
+    }
+    case WM_CLOSE:
+        DestroyWindow(hwnd);
+        return 0;
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        return 0;
+    default:
+        break;
+    }
+    return DefWindowProc(hwnd, msg, wParam, lParam);
+}
+
+bool showStartupConfigDialog(Config& config, const std::vector<OutputInfo>& outputs) {
+    if (outputs.empty()) {
+        MessageBoxA(nullptr, "No capture outputs were found.", "GamePC Streamer",
+                    MB_OK | MB_ICONERROR);
+        return false;
+    }
+
+    const char* windowClassName = "GamePCStreamerConfigWindow";
+    HINSTANCE hInstance = GetModuleHandle(nullptr);
+
+    WNDCLASSEXA wc{};
+    wc.cbSize = sizeof(wc);
+    wc.lpfnWndProc = configWindowProc;
+    wc.hInstance = hInstance;
+    wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    wc.lpszClassName = windowClassName;
+
+    RegisterClassExA(&wc);
+
+    ConfigDialogState state{};
+    state.workingConfig = config;
+    state.outputs = outputs;
+
+    HWND hwnd = CreateWindowExA(
+        WS_EX_DLGMODALFRAME,
+        windowClassName,
+        "GamePC Streamer Settings",
+        WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+        CW_USEDEFAULT, CW_USEDEFAULT, 520, 250,
+        nullptr, nullptr, hInstance, &state
+    );
+    if (!hwnd) {
+        return false;
+    }
+
+    ShowWindow(hwnd, SW_SHOW);
+    UpdateWindow(hwnd);
+
+    MSG msg;
+    while (GetMessage(&msg, nullptr, 0, 0) > 0) {
+        if (!IsDialogMessage(hwnd, &msg)) {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+    }
+
+    if (state.accepted) {
+        config = state.workingConfig;
+        return true;
+    }
+    return false;
+}
+
 // Simple INI parser for config.ini
+bool parseBool(const std::string& text) {
+    std::string lower = text;
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return (lower == "1" || lower == "true" || lower == "yes" || lower == "on");
+}
+
 bool loadConfig(const char* filename) {
     std::ifstream file(filename);
     if (!file.is_open()) {
@@ -245,13 +609,41 @@ bool loadConfig(const char* filename) {
             g_config.captureWidth = std::stoi(value);
         } else if (key == "CaptureHeight") {
             g_config.captureHeight = std::stoi(value);
+        } else if (key == "OutputIndex") {
+            g_config.outputIndex = std::max(0, std::stoi(value));
         } else if (key == "TargetFPS") {
             g_config.targetFPS = std::stoi(value);
+        } else if (key == "UseGUI") {
+            g_config.useGUI = parseBool(value);
         }
     }
 
     file.close();
     std::cout << "Loaded config from '" << filename << "'\n";
+    return true;
+}
+
+bool saveConfig(const char* filename) {
+    std::ofstream file(filename, std::ios::trunc);
+    if (!file.is_open()) {
+        return false;
+    }
+
+    file << "[Network]\n";
+    file << "InferenceIP=" << g_config.inferenceIP << "\n";
+    file << "SendPort=" << g_config.sendPort << "\n\n";
+
+    file << "[Capture]\n";
+    file << "CaptureX=" << g_config.captureX << "\n";
+    file << "CaptureY=" << g_config.captureY << "\n";
+    file << "CaptureWidth=" << g_config.captureWidth << "\n";
+    file << "CaptureHeight=" << g_config.captureHeight << "\n";
+    file << "OutputIndex=" << g_config.outputIndex << "\n\n";
+
+    file << "[Performance]\n";
+    file << "TargetFPS=" << g_config.targetFPS << "\n";
+    file << "UseGUI=" << (g_config.useGUI ? 1 : 0) << "\n";
+
     return true;
 }
 
@@ -268,8 +660,14 @@ bool parseArgs(int argc, char** argv) {
             sscanf(region.c_str(), "%d,%d,%d,%d",
                    &g_config.captureX, &g_config.captureY,
                    &g_config.captureWidth, &g_config.captureHeight);
+        } else if (arg == "--output" && i + 1 < argc) {
+            g_config.outputIndex = std::max(0, std::stoi(argv[++i]));
         } else if (arg == "--fps" && i + 1 < argc) {
             g_config.targetFPS = std::stoi(argv[++i]);
+        } else if (arg == "--gui") {
+            g_config.useGUI = true;
+        } else if (arg == "--no-gui") {
+            g_config.useGUI = false;
         } else if (arg == "--help" || arg == "-h") {
             printUsage(argv[0]);
             return false;
@@ -298,6 +696,40 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    auto availableOutputs = enumerateCaptureOutputs();
+    if (availableOutputs.empty()) {
+        std::cerr << "No capture outputs found\n";
+        return 1;
+    }
+
+    if (g_config.useGUI) {
+        if (!showStartupConfigDialog(g_config, availableOutputs)) {
+            std::cout << "Startup canceled by user\n";
+            return 0;
+        }
+        if (!saveConfig(configPath.c_str())) {
+            std::cerr << "Warning: failed to save config to '" << configPath << "'\n";
+        }
+    }
+
+    const OutputInfo* selectedOutput = nullptr;
+    for (const auto& output : availableOutputs) {
+        if (output.index == g_config.outputIndex) {
+            selectedOutput = &output;
+            break;
+        }
+    }
+    if (!selectedOutput) {
+        selectedOutput = &availableOutputs.front();
+        g_config.outputIndex = selectedOutput->index;
+        std::cout << "Invalid output index. Falling back to output " << g_config.outputIndex << "\n";
+    }
+
+    if (selectedOutput->refreshHz > 0 && g_config.targetFPS > selectedOutput->refreshHz) {
+        std::cout << "Warning: target FPS (" << g_config.targetFPS << ") exceeds monitor refresh rate ("
+                  << selectedOutput->refreshHz << "Hz)\n";
+    }
+
     std::signal(SIGINT, signalHandler);
 
     // Initialize Winsock
@@ -309,12 +741,13 @@ int main(int argc, char** argv) {
 
     // Initialize capture
     SimpleCapture capture;
-    if (!capture.Initialize()) {
+    if (!capture.Initialize(g_config.outputIndex)) {
         std::cerr << "Failed to initialize screen capture\n";
         WSACleanup();
         return 1;
     }
 
+    std::cout << "Output: " << selectedOutput->label << "\n";
     std::cout << "Screen: " << capture.GetScreenWidth() << "x" << capture.GetScreenHeight() << "\n";
 
     // Set default capture region to center of screen
@@ -338,6 +771,12 @@ int main(int argc, char** argv) {
     int sendBufSize = 2 * 1024 * 1024;  // Larger buffer for fragmented packets
     setsockopt(sendSock, SOL_SOCKET, SO_SNDBUF, (char*)&sendBufSize, sizeof(sendBufSize));
 
+    // Keep capture loop responsive even when network send queue is full.
+    u_long nonBlocking = 1;
+    if (ioctlsocket(sendSock, FIONBIO, &nonBlocking) != 0) {
+        std::cerr << "Warning: failed to set non-blocking socket mode\n";
+    }
+
     sockaddr_in destAddr = {};
     destAddr.sin_family = AF_INET;
     destAddr.sin_port = htons(g_config.sendPort);
@@ -347,12 +786,18 @@ int main(int argc, char** argv) {
     std::cout << "Sending to: " << g_config.inferenceIP << ":" << g_config.sendPort << "\n";
     std::cout << "Press Ctrl+C to exit\n\n";
 
+    bool highResTimerEnabled = (timeBeginPeriod(1) == TIMERR_NOERROR);
+    if (!highResTimerEnabled) {
+        std::cerr << "Warning: failed to enable 1ms timer resolution\n";
+    }
+
     // Buffers
     std::vector<uint8_t> frameData;
     const size_t maxPayloadPerPacket = 60000;  // 큰 청크 (LAN 환경)
 
     uint32_t frameId = 0;
-    uint64_t capturedFrames = 0;
+    uint64_t capturedFrames = 0;   // Frames captured from desktop as new updates.
+    uint64_t outputFrames = 0;     // Frames emitted at target pacing (may include repeats).
     uint64_t sentFrames = 0;
     uint64_t droppedFrames = 0;
     uint64_t wouldBlockDrops = 0;
@@ -363,30 +808,45 @@ int main(int argc, char** argv) {
     double totalCaptureMs = 0, totalSendMs = 0;
 
     // FPS limiting
-    const double frameIntervalUs = 1000000.0 / g_config.targetFPS;
+    const auto frameInterval = std::chrono::microseconds((int64_t)(1000000.0 / g_config.targetFPS));
     auto nextFrameTime = std::chrono::steady_clock::now();
 
-    // Wait up to 2 frame times for next frame
-    const int captureTimeoutMs = std::max(1, 2000 / std::max(1, g_config.targetFPS));
+    // Poll immediately to avoid waiting in AcquireNextFrame.
+    const int captureTimeoutMs = 0;
+
+    std::vector<uint8_t> latestFrameData;
+    bool hasLatestFrame = false;
 
     while (g_running.load()) {
-        // FPS limiting - wait until next frame time
+        // FPS limiting - keep cadence based on accumulated frame intervals.
+        nextFrameTime += frameInterval;
         auto now = std::chrono::steady_clock::now();
         if (now < nextFrameTime) {
             std::this_thread::sleep_until(nextFrameTime);
+        } else if (now - nextFrameTime > frameInterval * 2) {
+            nextFrameTime = now;
         }
-        nextFrameTime = std::chrono::steady_clock::now() + std::chrono::microseconds((int64_t)frameIntervalUs);
 
-        // Capture frame (blocks until new frame or timeout)
+        // Capture a new desktop frame if available.
         auto t1 = std::chrono::high_resolution_clock::now();
-        if (!capture.CaptureFrame(frameData, g_config.captureX, g_config.captureY,
-                                   g_config.captureWidth, g_config.captureHeight, captureTimeoutMs)) {
-            continue;
-        }
+        bool gotNewFrame = capture.CaptureFrame(frameData, g_config.captureX, g_config.captureY,
+                                                g_config.captureWidth, g_config.captureHeight, captureTimeoutMs);
         auto t2 = std::chrono::high_resolution_clock::now();
 
+        if (gotNewFrame) {
+            latestFrameData = frameData;
+            hasLatestFrame = true;
+            capturedFrames++;
+            totalCaptureMs += std::chrono::duration<double, std::milli>(t2 - t1).count();
+        } else if (!hasLatestFrame) {
+            continue;
+        }
+
+        const uint8_t* sendData = gotNewFrame ? frameData.data() : latestFrameData.data();
+        const size_t frameSize = gotNewFrame ? frameData.size() : latestFrameData.size();
+        outputFrames++;
+
         // Calculate number of packets needed
-        size_t frameSize = frameData.size();
         uint16_t totalPackets = (uint16_t)((frameSize + maxPayloadPerPacket - 1) / maxPayloadPerPacket);
 
         // Send fragmented packets
@@ -409,7 +869,7 @@ int main(int argc, char** argv) {
             WSABUF bufs[2];
             bufs[0].buf = reinterpret_cast<CHAR*>(&header);
             bufs[0].len = sizeof(UDPPacketHeader);
-            bufs[1].buf = reinterpret_cast<CHAR*>(frameData.data() + offset);
+            bufs[1].buf = reinterpret_cast<CHAR*>(const_cast<uint8_t*>(sendData) + offset);
             bufs[1].len = payloadSize;
 
             DWORD bytesSent = 0;
@@ -442,8 +902,6 @@ int main(int argc, char** argv) {
 
         auto t3 = std::chrono::high_resolution_clock::now();
 
-        capturedFrames++;
-        totalCaptureMs += std::chrono::duration<double, std::milli>(t2 - t1).count();
         totalSendMs += std::chrono::duration<double, std::milli>(t3 - t2).count();
 
         frameId++;
@@ -457,25 +915,29 @@ int main(int argc, char** argv) {
         // Print stats every second
         auto statsNow = std::chrono::steady_clock::now();
         auto statsDuration = std::chrono::duration_cast<std::chrono::seconds>(statsNow - statsStart);
-        if (statsDuration.count() >= 1 && capturedFrames > 0) {
+        if (statsDuration.count() >= 1 && outputFrames > 0) {
             double capFps = capturedFrames / (double)statsDuration.count();
+            double outFps = outputFrames / (double)statsDuration.count();
             double sendFps = sentFrames / (double)statsDuration.count();
             double mbps = (totalBytes * 8.0) / (statsDuration.count() * 1000000.0);
-            double avgCapture = totalCaptureMs / capturedFrames;
-            double avgSend = totalSendMs / capturedFrames;
-            double dropPct = (droppedFrames * 100.0) / capturedFrames;
+            double avgCapture = (capturedFrames > 0) ? (totalCaptureMs / capturedFrames) : 0.0;
+            double avgSend = (outputFrames > 0) ? (totalSendMs / outputFrames) : 0.0;
+            double dropPct = (droppedFrames * 100.0) / outputFrames;
 
-            std::cout << "\rCapFPS: " << std::fixed << std::setprecision(1) << capFps
-                      << " | SendFPS: " << sendFps
-                      << " | Cap:" << std::setprecision(2) << avgCapture << "ms"
-                      << " Snd:" << avgSend << "ms"
-                      << " | " << mbps << " Mbps"
-                      << " | " << totalPackets << " pkts/frame"
-                      << " | Drop:" << std::setprecision(1) << dropPct << "%"
-                      << " (WB:" << wouldBlockDrops << ")"
-                      << "     " << std::flush;
+            std::ostringstream line;
+            line << "NewCapFPS: " << std::fixed << std::setprecision(1) << capFps
+                 << " | OutFPS: " << outFps
+                 << " | SendFPS: " << sendFps
+                 << " | Cap:" << std::setprecision(2) << avgCapture << "ms"
+                 << " Snd:" << avgSend << "ms"
+                 << " | " << mbps << " Mbps"
+                 << " | " << totalPackets << " pkts/frame"
+                 << " | Drop:" << std::setprecision(1) << dropPct << "%"
+                 << " (WB:" << wouldBlockDrops << ")";
+            printStatusLine(line.str());
 
             capturedFrames = 0;
+            outputFrames = 0;
             sentFrames = 0;
             droppedFrames = 0;
             wouldBlockDrops = 0;
@@ -486,6 +948,9 @@ int main(int argc, char** argv) {
     }
 
     std::cout << "\nShutting down...\n";
+    if (highResTimerEnabled) {
+        timeEndPeriod(1);
+    }
     closesocket(sendSock);
     WSACleanup();
 
