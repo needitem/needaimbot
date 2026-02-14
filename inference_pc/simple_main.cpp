@@ -362,8 +362,14 @@ struct CallbackContext {
 };
 
 struct MoveCommand {
+    enum class Kind : uint8_t {
+        AimRaw = 0,
+        Direct = 1
+    };
+    Kind kind = Kind::Direct;
     int dx = 0;
     int dy = 0;
+    uint8_t shooting = 0;
 };
 
 struct MoveQueueSlot {
@@ -372,7 +378,7 @@ struct MoveQueueSlot {
 };
 
 struct MoveQueue {
-    static constexpr uint32_t kCapacity = 1024;  // Must stay power-of-two.
+    static constexpr uint32_t kCapacity = 4096;  // Must stay power-of-two.
     static_assert((kCapacity & (kCapacity - 1)) == 0, "MoveQueue capacity must be power-of-two");
 
     std::array<MoveQueueSlot, kCapacity> ring{};
@@ -473,68 +479,18 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
         return;
     }
     
-    // Mouse movement from InferenceResult
-    float moveX = static_cast<float>(result.movement.dx);
-    float moveY = static_cast<float>(result.movement.dy);
-    
-    // Apply Gaussian noise for humanization
-    if (ctx->noiseEnabled) {
-        const size_t idx = ctx->noiseCursor;
-        moveX += ctx->noiseLutX[idx];
-        moveY += ctx->noiseLutY[idx];
-        ctx->noiseCursor = (idx + 1) & (CallbackContext::kNoiseLutSize - 1);
-    }
-    
-    // Apply shoot offset when shooting (shifts aim point)
-    // Note: shooting_active is atomic, safe to read from callback thread
-    if (ctx->makcu->shooting_active.load(std::memory_order_relaxed)) {
-        moveX += ctx->shootOffsetX;  // Cached value, no pointer chase
-        moveY += ctx->shootOffsetY;
-    }
-    
-    // =======================================================================
-    // Movement Filter: Deadband + Sign-flip suppression
-    // =======================================================================
-    // Deadband: Ignore tiny movements (noise/jitter)
-    if (fabsf(moveX) < ctx->deadbandX) moveX = 0.0f;
-    if (fabsf(moveY) < ctx->deadbandY) moveY = 0.0f;
-    
-    // Round to integer for mouse movement
-    int finalX = fastRoundToInt(moveX);
-    int finalY = fastRoundToInt(moveY);
-    
-    // Sign-flip suppression: Prevent jittery back-and-forth movement
-    // If sign flips on consecutive frames, suppress until stable
-    bool signFlipX = (finalX != 0 && ctx->lastMoveX != 0 && 
-                      ((finalX > 0) != (ctx->lastMoveX > 0)));
-    bool signFlipY = (finalY != 0 && ctx->lastMoveY != 0 && 
-                      ((finalY > 0) != (ctx->lastMoveY > 0)));
-    
-    if (signFlipX || signFlipY) {
-        // Only suppress if movement is small (likely jitter, not intentional)
-        if (signFlipX && finalX > -3 && finalX < 3) finalX = 0;
-        if (signFlipY && finalY > -3 && finalY < 3) finalY = 0;
-    }
-    
-    // Update last movement for next frame
-    if (finalX != 0) ctx->lastMoveX = finalX;
-    if (finalY != 0) ctx->lastMoveY = finalY;
-    
-    // Enqueue mouse move to dedicated sender thread to keep callback lightweight.
-    if (finalX != 0 || finalY != 0) {
-        if (ctx->moveQueue) {
-            const MoveCommand cmd{finalX, finalY};
-            if (ctx->moveQueue->tryPush(cmd)) {
-                if (ctx->moveQueueCv) {
-                    ctx->moveQueueCv->notify_one();
-                }
-            } else {
-                // Fallback path: avoid losing movement when queue is saturated.
-                ctx->makcu->move(finalX, finalY);
-            }
-        } else {
-            ctx->makcu->move(finalX, finalY);
+    // Keep callback as short as possible to avoid blocking CUDA stream work.
+    if (ctx->moveQueue) {
+        MoveCommand cmd;
+        cmd.kind = MoveCommand::Kind::AimRaw;
+        cmd.dx = result.movement.dx;
+        cmd.dy = result.movement.dy;
+        cmd.shooting = ctx->makcu->shooting_active.load(std::memory_order_relaxed) ? 1u : 0u;
+        if (ctx->moveQueue->tryPush(cmd) && ctx->moveQueueCv) {
+            ctx->moveQueueCv->notify_one();
         }
+    } else {
+        ctx->makcu->move(result.movement.dx, result.movement.dy);
     }
 
     releaseTicket();
@@ -657,11 +613,57 @@ int main(int argc, char* argv[]) {
             }
             return true;
         };
+        auto processAimMovement = [&](const MoveCommand& raw, int& outDx, int& outDy) {
+            float moveX = static_cast<float>(raw.dx);
+            float moveY = static_cast<float>(raw.dy);
+
+            if (callbackCtx.noiseEnabled) {
+                const size_t idx = callbackCtx.noiseCursor;
+                moveX += callbackCtx.noiseLutX[idx];
+                moveY += callbackCtx.noiseLutY[idx];
+                callbackCtx.noiseCursor = (idx + 1) & (CallbackContext::kNoiseLutSize - 1);
+            }
+
+            if (raw.shooting != 0u) {
+                moveX += callbackCtx.shootOffsetX;
+                moveY += callbackCtx.shootOffsetY;
+            }
+
+            if (fabsf(moveX) < callbackCtx.deadbandX) moveX = 0.0f;
+            if (fabsf(moveY) < callbackCtx.deadbandY) moveY = 0.0f;
+
+            int finalX = fastRoundToInt(moveX);
+            int finalY = fastRoundToInt(moveY);
+
+            const bool signFlipX =
+                (finalX != 0 && callbackCtx.lastMoveX != 0 &&
+                 ((finalX > 0) != (callbackCtx.lastMoveX > 0)));
+            const bool signFlipY =
+                (finalY != 0 && callbackCtx.lastMoveY != 0 &&
+                 ((finalY > 0) != (callbackCtx.lastMoveY > 0)));
+            if (signFlipX || signFlipY) {
+                if (signFlipX && finalX > -3 && finalX < 3) finalX = 0;
+                if (signFlipY && finalY > -3 && finalY < 3) finalY = 0;
+            }
+
+            if (finalX != 0) callbackCtx.lastMoveX = finalX;
+            if (finalY != 0) callbackCtx.lastMoveY = finalY;
+
+            outDx = finalX;
+            outDy = finalY;
+        };
 
         while (moveSenderRunning.load(std::memory_order_relaxed) || moveQueue.hasPending() || hasPendingMove()) {
             while (moveQueue.tryPop(cmd)) {
-                pendingDx = std::clamp(pendingDx + cmd.dx, -127, 127);
-                pendingDy = std::clamp(pendingDy + cmd.dy, -127, 127);
+                int emitDx = cmd.dx;
+                int emitDy = cmd.dy;
+                if (cmd.kind == MoveCommand::Kind::AimRaw) {
+                    processAimMovement(cmd, emitDx, emitDy);
+                }
+                if (emitDx != 0 || emitDy != 0) {
+                    pendingDx = std::clamp(pendingDx + emitDx, -127, 127);
+                    pendingDy = std::clamp(pendingDy + emitDy, -127, 127);
+                }
             }
 
             const auto now = std::chrono::steady_clock::now();
@@ -687,7 +689,11 @@ int main(int argc, char* argv[]) {
     });
     auto queueMove = [&](int dx, int dy) {
         if (dx == 0 && dy == 0) return;
-        const MoveCommand cmd{dx, dy};
+        MoveCommand cmd;
+        cmd.kind = MoveCommand::Kind::Direct;
+        cmd.dx = dx;
+        cmd.dy = dy;
+        cmd.shooting = 0u;
         if (moveQueue.tryPush(cmd)) {
             moveQueueCv.notify_one();
         } else {

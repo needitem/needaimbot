@@ -83,6 +83,8 @@ public:
     cudaStream_t getStream() const { return m_stream; }
 
 private:
+    static constexpr int kMaxCallbacksInFlight = 4;
+
     class Logger : public nvinfer1::ILogger {
         void log(Severity severity, const char* msg) noexcept override;
     };
@@ -108,9 +110,9 @@ private:
     Detection* m_d_stage1BestIou = nullptr;   // Stage-1 per-block best-by-IoU
     float* m_d_stage1IouScore = nullptr;      // Stage-1 per-block IoU score
 
-    // Combined result buffer for single D2H transfer
-    InferenceResult* m_d_inferenceResult = nullptr;  // GPU
-    InferenceResult* m_h_inferenceResultPinned = nullptr;  // Pinned host
+    // Result buffers (per callback slot for standard path, slot 0 for graph path)
+    std::array<InferenceResult*, kMaxCallbacksInFlight> m_d_inferenceResult{};
+    std::array<InferenceResult*, kMaxCallbacksInFlight> m_h_inferenceResultPinned{};
 
     // Pinned host memory for fast transfers
     uint8_t* m_h_rawPinned = nullptr;
@@ -144,7 +146,6 @@ private:
     float m_cachedHeadYOffset = 1.0f;
     float m_cachedBodyYOffset = 0.15f;
 
-    static constexpr int kMaxCallbacksInFlight = 2;
     std::array<CallbackData, kMaxCallbacksInFlight> m_callbackDataSlots{};
     std::array<std::atomic<bool>, kMaxCallbacksInFlight> m_callbackSlotBusy{};
     std::atomic<int> m_callbacksInFlight{0};
@@ -157,13 +158,15 @@ private:
     bool executeFusedPipeline(void* rawInput, int width, int height,
                               float confThreshold, int headClassId, float headBonus,
                               uint32_t allowedClassMask, const PIDConfig& pidConfig,
-                              float iouThreshold, float headYOffset, float bodyYOffset);
+                              float iouThreshold, float headYOffset, float bodyYOffset,
+                              int resultSlot);
 
     // Execute pipeline without H2D transfer (for CUDA Graph - H2D is done separately)
     bool executeFusedPipelinePostH2D(int width, int height,
                                      float confThreshold, int headClassId, float headBonus,
                                      uint32_t allowedClassMask, const PIDConfig& pidConfig,
-                                     float iouThreshold, float headYOffset, float bodyYOffset);
+                                     float iouThreshold, float headYOffset, float bodyYOffset,
+                                     int resultSlot);
 
     // Input size helper
     int inputBytesPerPixel() const { return m_bgraInput ? 4 : 3; }
