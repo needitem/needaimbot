@@ -87,6 +87,7 @@ private:
         bool active = false;
         uint32_t frameId = 0;
         int slotIndex = -1;
+        int activeListIndex = -1;
         int nextInBucket = -1;
         uint16_t totalPackets = 0;
         uint16_t receivedCount = 0;
@@ -119,6 +120,7 @@ private:
                   "FRAGMENT_BUCKETS must be power-of-two");
     std::array<FrameFragments, MAX_FRAGMENT_SLOTS> m_fragmentStorage{};
     std::array<int, MAX_FRAGMENT_SLOTS> m_freeFragmentStack{};
+    std::array<int, MAX_FRAGMENT_SLOTS> m_activeFragmentSlots{};
     std::array<int, FRAGMENT_BUCKETS> m_bucketHeads{};
     size_t m_freeFragmentCount = 0;
     size_t m_activeFragmentCount = 0;

@@ -29,6 +29,7 @@ UDPCapture::FrameFragments* UDPCapture::acquireFragment() {
     FrameFragments& frag = m_fragmentStorage[static_cast<size_t>(idx)];
     frag.active = false;
     frag.frameId = 0;
+    frag.activeListIndex = -1;
     frag.nextInBucket = -1;
     frag.slotIndex = idx;
     return &frag;
@@ -42,6 +43,7 @@ void UDPCapture::releaseFragment(FrameFragments* frag) {
     frag->active = false;
     frag->frameId = 0;
     frag->slotIndex = idx;
+    frag->activeListIndex = -1;
     frag->nextInBucket = -1;
     frag->receivedMask = 0;
     frag->useReceivedMask = false;
@@ -79,6 +81,10 @@ void UDPCapture::linkFragment(FrameFragments* frag, uint32_t frameId) {
     const size_t bucket = static_cast<size_t>(frameId) & (FRAGMENT_BUCKETS - 1);
     frag->frameId = frameId;
     frag->active = true;
+    frag->activeListIndex = static_cast<int>(m_activeFragmentCount);
+    if (m_activeFragmentCount < MAX_FRAGMENT_SLOTS) {
+        m_activeFragmentSlots[m_activeFragmentCount] = idx;
+    }
     frag->nextInBucket = m_bucketHeads[bucket];
     m_bucketHeads[bucket] = idx;
     ++m_activeFragmentCount;
@@ -103,10 +109,20 @@ void UDPCapture::unlinkFragment(FrameFragments* frag) {
     }
 
     frag->active = false;
-    frag->nextInBucket = -1;
-    if (m_activeFragmentCount > 0) {
+    const int activePos = frag->activeListIndex;
+    if (activePos >= 0 && static_cast<size_t>(activePos) < m_activeFragmentCount) {
+        const size_t pos = static_cast<size_t>(activePos);
+        const size_t last = m_activeFragmentCount - 1;
+        const int movedIdx = m_activeFragmentSlots[last];
+        m_activeFragmentSlots[pos] = movedIdx;
+        if (movedIdx >= 0 && movedIdx < static_cast<int>(MAX_FRAGMENT_SLOTS)) {
+            m_fragmentStorage[static_cast<size_t>(movedIdx)].activeListIndex = static_cast<int>(pos);
+        }
+        m_activeFragmentSlots[last] = -1;
         --m_activeFragmentCount;
     }
+    frag->activeListIndex = -1;
+    frag->nextInBucket = -1;
 }
 
 bool UDPCapture::allocatePinnedBuffers(size_t size) {
@@ -248,6 +264,9 @@ void UDPCapture::publishAssembledBuffer(int bufferIndex, uint16_t width, uint16_
 
 void UDPCapture::clearFragmentState() {
     m_activeFragmentCount = 0;
+    for (size_t i = 0; i < MAX_FRAGMENT_SLOTS; ++i) {
+        m_activeFragmentSlots[i] = -1;
+    }
     for (size_t i = 0; i < FRAGMENT_BUCKETS; ++i) {
         m_bucketHeads[i] = -1;
     }
@@ -263,6 +282,7 @@ void UDPCapture::clearFragmentState() {
         frag.active = false;
         frag.frameId = 0;
         frag.slotIndex = static_cast<int>(i);
+        frag.activeListIndex = -1;
         frag.nextInBucket = -1;
         frag.receivedMask = 0;
         frag.useReceivedMask = false;
@@ -426,6 +446,11 @@ void UDPCapture::receiveThread() {
             std::chrono::steady_clock::time_point now) {
         const size_t activeSnapshot = m_activeFragmentCount;
         if (activeSnapshot == 0) return;
+        std::array<int, MAX_FRAGMENT_SLOTS> activeSlotsSnapshot{};
+        const size_t snapshotCount = std::min(activeSnapshot, MAX_FRAGMENT_SLOTS);
+        for (size_t i = 0; i < snapshotCount; ++i) {
+            activeSlotsSnapshot[i] = m_activeFragmentSlots[i];
+        }
 
         auto clearMissingChunks = [kChunkPayloadBytes](FrameFragments& frag, uint8_t* dst) {
             if (!dst || frag.totalPackets == 0 || frag.width == 0 || frag.height == 0) return;
@@ -461,17 +486,12 @@ void UDPCapture::receiveThread() {
             }
         };
 
-        size_t seenActive = 0;
-        for (size_t i = 0; i < MAX_FRAGMENT_SLOTS; ++i) {
-            FrameFragments& frag = m_fragmentStorage[i];
+        for (size_t i = 0; i < snapshotCount; ++i) {
+            const int slotIdx = activeSlotsSnapshot[i];
+            if (slotIdx < 0 || slotIdx >= static_cast<int>(MAX_FRAGMENT_SLOTS)) continue;
+            FrameFragments& frag = m_fragmentStorage[static_cast<size_t>(slotIdx)];
             if (!frag.active) continue;
-            ++seenActive;
-            if ((now - frag.lastUpdate) <= kFragmentStaleTimeout) {
-                if (seenActive >= activeSnapshot) {
-                    break;
-                }
-                continue;
-            }
+            if ((now - frag.lastUpdate) <= kFragmentStaleTimeout) continue;
             const bool canPublishPartial =
                 frag.bufferIndex >= 0 &&
                 frag.totalPackets > 0 &&
@@ -489,9 +509,6 @@ void UDPCapture::receiveThread() {
                     cachedFrameId = 0;
                 }
                 releaseFragment(&frag);
-                if (seenActive >= activeSnapshot) {
-                    break;
-                }
                 continue;
             }
             if (frag.bufferIndex >= 0) {
@@ -507,10 +524,6 @@ void UDPCapture::receiveThread() {
                 cachedFrameId = 0;
             }
             releaseFragment(&frag);
-
-            if (seenActive >= activeSnapshot) {
-                break;
-            }
         }
     };
 
