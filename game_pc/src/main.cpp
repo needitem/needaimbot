@@ -45,6 +45,7 @@ using Microsoft::WRL::ComPtr;
 struct Config {
     std::string inferenceIP = "192.168.1.100";
     unsigned short sendPort = 5007;
+    std::string localBindIP;
     int captureX = 0;
     int captureY = 0;
     int captureWidth = 256;
@@ -340,6 +341,7 @@ void printUsage(const char* prog) {
               << "Options:\n"
               << "  --ip <addr>       Inference PC IP (default: from config.ini)\n"
               << "  --port <port>     Send port (default: from config.ini)\n"
+              << "  --bind-ip <addr>  Local NIC IP for sender socket bind (optional)\n"
               << "  --region <x,y,w,h> Capture region (default: from config.ini)\n"
               << "  --output <idx>    Capture monitor index (default: from config.ini)\n"
               << "  --fps <num>       Target FPS (default: from config.ini)\n"
@@ -601,6 +603,8 @@ bool loadConfig(const char* filename) {
             g_config.inferenceIP = value;
         } else if (key == "SendPort") {
             g_config.sendPort = (unsigned short)std::stoi(value);
+        } else if (key == "LocalBindIP") {
+            g_config.localBindIP = value;
         } else if (key == "CaptureX") {
             g_config.captureX = std::stoi(value);
         } else if (key == "CaptureY") {
@@ -631,7 +635,8 @@ bool saveConfig(const char* filename) {
 
     file << "[Network]\n";
     file << "InferenceIP=" << g_config.inferenceIP << "\n";
-    file << "SendPort=" << g_config.sendPort << "\n\n";
+    file << "SendPort=" << g_config.sendPort << "\n";
+    file << "LocalBindIP=" << g_config.localBindIP << "\n\n";
 
     file << "[Capture]\n";
     file << "CaptureX=" << g_config.captureX << "\n";
@@ -655,6 +660,8 @@ bool parseArgs(int argc, char** argv) {
             g_config.inferenceIP = argv[++i];
         } else if (arg == "--port" && i + 1 < argc) {
             g_config.sendPort = (unsigned short)std::stoi(argv[++i]);
+        } else if (arg == "--bind-ip" && i + 1 < argc) {
+            g_config.localBindIP = argv[++i];
         } else if (arg == "--region" && i + 1 < argc) {
             std::string region = argv[++i];
             sscanf(region.c_str(), "%d,%d,%d,%d",
@@ -771,10 +778,24 @@ int main(int argc, char** argv) {
     int sendBufSize = 2 * 1024 * 1024;  // Larger buffer for fragmented packets
     setsockopt(sendSock, SOL_SOCKET, SO_SNDBUF, (char*)&sendBufSize, sizeof(sendBufSize));
 
-    // Keep capture loop responsive even when network send queue is full.
-    u_long nonBlocking = 1;
-    if (ioctlsocket(sendSock, FIONBIO, &nonBlocking) != 0) {
-        std::cerr << "Warning: failed to set non-blocking socket mode\n";
+    if (!g_config.localBindIP.empty()) {
+        sockaddr_in localAddr{};
+        localAddr.sin_family = AF_INET;
+        localAddr.sin_port = htons(0);  // Any ephemeral source port
+        if (inet_pton(AF_INET, g_config.localBindIP.c_str(), &localAddr.sin_addr) != 1) {
+            std::cerr << "Invalid LocalBindIP: " << g_config.localBindIP << "\n";
+            closesocket(sendSock);
+            WSACleanup();
+            return 1;
+        }
+        if (bind(sendSock, (SOCKADDR*)&localAddr, sizeof(localAddr)) == SOCKET_ERROR) {
+            int err = WSAGetLastError();
+            std::cerr << "Failed to bind sender socket to " << g_config.localBindIP
+                      << " (WSA error: " << err << ")\n";
+            closesocket(sendSock);
+            WSACleanup();
+            return 1;
+        }
     }
 
     sockaddr_in destAddr = {};
@@ -782,8 +803,20 @@ int main(int argc, char** argv) {
     destAddr.sin_port = htons(g_config.sendPort);
     inet_pton(AF_INET, g_config.inferenceIP.c_str(), &destAddr.sin_addr);
 
+    sockaddr_in boundAddr{};
+    int boundAddrLen = sizeof(boundAddr);
+    std::string boundIpText = "auto";
+    if (getsockname(sendSock, (SOCKADDR*)&boundAddr, &boundAddrLen) == 0) {
+        char ipBuf[INET_ADDRSTRLEN] = {};
+        if (inet_ntop(AF_INET, &boundAddr.sin_addr, ipBuf, sizeof(ipBuf))) {
+            boundIpText = ipBuf;
+        }
+    }
+
     std::cout << "GamePC Streamer (BGRA, 60KB chunks) started\n";
     std::cout << "Sending to: " << g_config.inferenceIP << ":" << g_config.sendPort << "\n";
+    std::cout << "Local bind IP: " << boundIpText << "\n";
+    std::cout << "Target FPS: " << g_config.targetFPS << "\n";
     std::cout << "Press Ctrl+C to exit\n\n";
 
     bool highResTimerEnabled = (timeBeginPeriod(1) == TIMERR_NOERROR);
