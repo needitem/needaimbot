@@ -12,7 +12,6 @@
 #include <vector>
 #include <algorithm>
 #include <cmath>
-#include <chrono>
 #include <NvInferVersion.h>
 
 // TensorRT API version compatibility
@@ -840,58 +839,48 @@ bool SimpleInference::captureFullGraph(float confThreshold, int headClassId, flo
 void SimpleInference::callbackWorkerLoop() {
     while (m_callbackWorkerRunning.load(std::memory_order_acquire) ||
            m_callbacksInFlight.load(std::memory_order_acquire) > 0) {
-        bool handledAny = false;
-        bool hasPending = false;
-
+        int pendingSlot = -1;
         for (int slot = 0; slot < kMaxCallbacksInFlight; ++slot) {
-            if (!m_callbackSlotPending[static_cast<size_t>(slot)].load(std::memory_order_acquire)) {
-                continue;
+            if (m_callbackSlotPending[static_cast<size_t>(slot)].load(std::memory_order_acquire)) {
+                pendingSlot = slot;
+                break;
             }
-            hasPending = true;
-
-            cudaError_t eventStatus = cudaEventQuery(m_callbackEvents[static_cast<size_t>(slot)]);
-            if (eventStatus == cudaErrorNotReady) {
-                continue;
-            }
-
-            m_callbackSlotPending[static_cast<size_t>(slot)].store(false, std::memory_order_release);
-
-            if (eventStatus == cudaSuccess) {
-                CallbackData& cbData = m_callbackDataSlots[static_cast<size_t>(slot)];
-                try {
-                    if (cbData.callback && cbData.resultPtr) {
-                        cbData.callback(*cbData.resultPtr, cbData.userData);
-                    }
-                } catch (const std::exception& e) {
-                    std::cerr << "[SimpleInference] Callback exception: " << e.what() << std::endl;
-                } catch (...) {
-                    std::cerr << "[SimpleInference] Callback exception: unknown" << std::endl;
-                }
-            } else {
-                std::cerr << "[SimpleInference] cudaEventQuery failed for slot " << slot
-                          << ": " << cudaGetErrorString(eventStatus) << std::endl;
-                cudaGetLastError();
-            }
-
-            m_callbackSlotBusy[static_cast<size_t>(slot)].store(false, std::memory_order_release);
-            m_callbacksInFlight.fetch_sub(1, std::memory_order_acq_rel);
-            handledAny = true;
         }
 
-        if (handledAny) {
+        if (pendingSlot < 0) {
+            std::unique_lock<std::mutex> lock(m_callbackWorkerMutex);
+            m_callbackWorkerCv.wait(lock, [&]() {
+                if (!m_callbackWorkerRunning.load(std::memory_order_acquire)) {
+                    return true;
+                }
+                return m_callbacksInFlight.load(std::memory_order_acquire) > 0;
+            });
             continue;
         }
 
-        std::unique_lock<std::mutex> lock(m_callbackWorkerMutex);
-        m_callbackWorkerCv.wait_for(lock, std::chrono::microseconds(hasPending ? 100 : 300), [&]() {
-            if (!m_callbackWorkerRunning.load(std::memory_order_acquire)) {
-                return true;
+        cudaError_t eventStatus = cudaEventSynchronize(
+            m_callbackEvents[static_cast<size_t>(pendingSlot)]);
+        m_callbackSlotPending[static_cast<size_t>(pendingSlot)].store(false, std::memory_order_release);
+
+        if (eventStatus == cudaSuccess) {
+            CallbackData& cbData = m_callbackDataSlots[static_cast<size_t>(pendingSlot)];
+            try {
+                if (cbData.callback && cbData.resultPtr) {
+                    cbData.callback(*cbData.resultPtr, cbData.userData);
+                }
+            } catch (const std::exception& e) {
+                std::cerr << "[SimpleInference] Callback exception: " << e.what() << std::endl;
+            } catch (...) {
+                std::cerr << "[SimpleInference] Callback exception: unknown" << std::endl;
             }
-            if (m_callbacksInFlight.load(std::memory_order_acquire) > 0) {
-                return true;
-            }
-            return false;
-        });
+        } else {
+            std::cerr << "[SimpleInference] cudaEventSynchronize failed for slot " << pendingSlot
+                      << ": " << cudaGetErrorString(eventStatus) << std::endl;
+            cudaGetLastError();
+        }
+
+        m_callbackSlotBusy[static_cast<size_t>(pendingSlot)].store(false, std::memory_order_release);
+        m_callbacksInFlight.fetch_sub(1, std::memory_order_acq_rel);
     }
 }
 
