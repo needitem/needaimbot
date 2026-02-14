@@ -315,7 +315,7 @@ bool UDPCapture::Initialize(unsigned short listenPort) {
         return false;
     }
 
-    int recvBufSize = 16 * 1024 * 1024;
+    int recvBufSize = 32 * 1024 * 1024;
     setsockopt(m_recvSocket, SOL_SOCKET, SO_RCVBUF, (char*)&recvBufSize, sizeof(recvBufSize));
 
     sockaddr_in bindAddr{};
@@ -658,7 +658,7 @@ void UDPCapture::receiveThread() {
     };
 
 #ifdef __linux__
-    constexpr unsigned int kRecvBatchPackets = 16;
+    constexpr unsigned int kRecvBatchPackets = 32;
     std::array<std::array<uint8_t, 65536>, kRecvBatchPackets> batchBuffers{};
     std::array<sockaddr_in, kRecvBatchPackets> batchFromAddr{};
     std::array<iovec, kRecvBatchPackets> batchIov{};
