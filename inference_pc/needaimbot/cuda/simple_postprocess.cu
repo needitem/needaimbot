@@ -17,9 +17,8 @@ namespace gpa {
 // =============================================================================
 // Constants
 // =============================================================================
-#define WARP_SIZE 32
-constexpr float DEFAULT_IOU_STICKINESS_THRESHOLD = 0.3f;
 constexpr float DEADZONE_THRESHOLD = 5.0f;  // pixels
+constexpr int MAX_SELECTION_THREADS = 128;
 
 // =============================================================================
 // Helper Functions
@@ -31,34 +30,6 @@ __device__ __forceinline__ float readValue(const void* buffer, bool is_fp16, siz
         return __half2float(reinterpret_cast<const __half*>(buffer)[idx]);
     }
     return reinterpret_cast<const float*>(buffer)[idx];
-}
-
-// Warp-level reduction for finding minimum (used in target selection)
-__device__ __forceinline__ float warpReduceMin(float val, int& idx, int myIdx) {
-    for (int offset = WARP_SIZE / 2; offset > 0; offset /= 2) {
-        float otherVal = __shfl_down_sync(0xffffffff, val, offset);
-        int otherIdx = __shfl_down_sync(0xffffffff, myIdx, offset);
-        if (otherVal < val) {
-            val = otherVal;
-            myIdx = otherIdx;
-        }
-    }
-    idx = myIdx;
-    return val;
-}
-
-// Warp-level reduction for finding maximum score
-__device__ __forceinline__ float warpReduceMax(float val, int& idx, int myIdx) {
-    for (int offset = WARP_SIZE / 2; offset > 0; offset /= 2) {
-        float otherVal = __shfl_down_sync(0xffffffff, val, offset);
-        int otherIdx = __shfl_down_sync(0xffffffff, myIdx, offset);
-        if (otherVal > val) {
-            val = otherVal;
-            myIdx = otherIdx;
-        }
-    }
-    idx = myIdx;
-    return val;
 }
 
 // =============================================================================
@@ -126,6 +97,9 @@ __global__ void decodeYoloKernel(
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= num_boxes) return;
 
+    const unsigned activeMask = __activemask();
+    const int lane = threadIdx.x & 31;
+
     // Find best class score among ALLOWED classes only
     float max_score = -1.0f;
     int best_class = -1;
@@ -142,50 +116,57 @@ __global__ void decodeYoloKernel(
         }
     }
 
-    // Early exit for low confidence or no allowed class found
-    if (max_score <= conf_threshold || best_class < 0) return;
+    bool valid = (max_score > conf_threshold) && (best_class >= 0);
+    float x1 = 0.0f, y1 = 0.0f, x2 = 0.0f, y2 = 0.0f;
 
-    // Read bbox: cx, cy, w, h
-    float cx = readValue(d_raw_output, is_fp16, 0 * num_boxes + idx);
-    float cy = readValue(d_raw_output, is_fp16, 1 * num_boxes + idx);
-    float w  = readValue(d_raw_output, is_fp16, 2 * num_boxes + idx);
-    float h  = readValue(d_raw_output, is_fp16, 3 * num_boxes + idx);
+    if (valid) {
+        // Read bbox: cx, cy, w, h
+        float cx = readValue(d_raw_output, is_fp16, 0 * num_boxes + idx);
+        float cy = readValue(d_raw_output, is_fp16, 1 * num_boxes + idx);
+        float w  = readValue(d_raw_output, is_fp16, 2 * num_boxes + idx);
+        float h  = readValue(d_raw_output, is_fp16, 3 * num_boxes + idx);
 
-    // STRICT validation to prevent garbage values (from postProcessGpu.cu)
-    // Check for NaN, infinity
-    if (!isfinite(cx) || !isfinite(cy) || !isfinite(w) || !isfinite(h)) {
-        return;
+        // STRICT validation to prevent garbage values (from postProcessGpu.cu)
+        const float MAX_COORD = 10000.0f;
+        valid = isfinite(cx) && isfinite(cy) && isfinite(w) && isfinite(h);
+        valid = valid &&
+            (cx >= 0.0f && cx <= MAX_COORD &&
+             cy >= 0.0f && cy <= MAX_COORD &&
+             w > 0.0f && w <= MAX_COORD &&
+             h > 0.0f && h <= MAX_COORD);
+
+        if (valid) {
+            x1 = cx - w * 0.5f;
+            y1 = cy - h * 0.5f;
+            x2 = cx + w * 0.5f;
+            y2 = cy + h * 0.5f;
+
+            valid =
+                (x1 >= -1000.0f && x1 <= MAX_COORD) &&
+                (y1 >= -1000.0f && y1 <= MAX_COORD) &&
+                (x2 >= -1000.0f && x2 <= MAX_COORD) &&
+                (y2 >= -1000.0f && y2 <= MAX_COORD) &&
+                (w <= 640.0f && h <= 640.0f);
+        }
     }
 
-    // Reasonable bounds check (model output should be within input resolution)
-    const float MAX_COORD = 10000.0f;
-    if (cx < 0 || cx > MAX_COORD || cy < 0 || cy > MAX_COORD ||
-        w <= 0 || w > MAX_COORD || h <= 0 || h > MAX_COORD) {
-        return;
+    // Warp-aggregated reservation: reduces global atomic contention.
+    const unsigned validMask = __ballot_sync(activeMask, valid);
+    if (validMask == 0u) return;
+
+    unsigned lanePrefixMask = (lane == 0) ? 0u : ((1u << lane) - 1u);
+    int localOffset = __popc(validMask & lanePrefixMask);
+    int warpBase = 0;
+    const int warpValidCount = __popc(validMask);
+    if (lane == 0) {
+        warpBase = atomicAdd(d_decoded_count, warpValidCount);
     }
+    warpBase = __shfl_sync(activeMask, warpBase, 0);
 
-    // Convert to x1,y1,x2,y2
-    float x1 = cx - w * 0.5f;
-    float y1 = cy - h * 0.5f;
-    float x2 = cx + w * 0.5f;
-    float y2 = cy + h * 0.5f;
-
-    // Additional validation after conversion
-    if (x1 < -1000 || x1 > MAX_COORD || y1 < -1000 || y1 > MAX_COORD ||
-        x2 < -1000 || x2 > MAX_COORD || y2 < -1000 || y2 > MAX_COORD) {
-        return;
-    }
-
-    // Validate dimensions (reasonable range: 1-640 pixels for typical YOLO)
-    if (w <= 0 || h <= 0 || w > 640 || h > 640) {
-        return;
-    }
-
-    // Atomic add to get write index
-    int write_idx = atomicAdd(d_decoded_count, 1);
+    if (!valid) return;
+    int write_idx = warpBase + localOffset;
     if (write_idx >= max_detections) return;
 
-    // Write detection
     Detection& det = d_decoded[write_idx];
     det.x1 = x1;
     det.y1 = y1;
@@ -238,47 +219,6 @@ cudaError_t decodeYoloGpu(
 // =============================================================================
 // Target Selection with Head-in-Body Priority (from postProcessGpu.cu)
 // =============================================================================
-
-// Check if head bbox is inside body bbox
-__device__ __forceinline__ bool isHeadInsideBody(
-    const Detection& head, const Detection& body)
-{
-    return (head.x1 >= body.x1 &&
-            head.y1 >= body.y1 &&
-            head.x2 <= body.x2 &&
-            head.y2 <= body.y2);
-}
-
-// Validate detection values
-__device__ __forceinline__ bool isValidDetection(const Detection& det) {
-    // Skip invalid detections and extreme values
-    float w = det.x2 - det.x1;
-    float h = det.y2 - det.y1;
-
-    if (w <= 0 || h <= 0 || det.confidence <= 0 || det.classId < 0) {
-        return false;
-    }
-
-    // Check for extreme values
-    if (det.x1 < -100 || det.x1 > 2000 || det.y1 < -100 || det.y1 > 2000 ||
-        det.x2 < -100 || det.x2 > 2000 || det.y2 < -100 || det.y2 > 2000) {
-        return false;
-    }
-
-    if (w > 1000 || h > 1000) {
-        return false;
-    }
-
-    // Check for garbage values (10억대)
-    if (fabsf(det.x1) > 1000000 || fabsf(det.y1) > 1000000 ||
-        fabsf(det.x2) > 1000000 || fabsf(det.y2) > 1000000) {
-        return false;
-    }
-
-    return true;
-}
-
-
 
 // Validate single best target before host copy
 __global__ void validateBestTargetKernel(Detection* d_best_target, int* d_has_target)
@@ -352,9 +292,12 @@ __global__ void fusedTargetSelectionAndMovementKernel(
     PIDState* __restrict__ d_pid_state,
     InferenceResult* __restrict__ d_inference_result)  // Optional: packed result (fused packing)
 {
-    // Using warp shuffle for reduction - no shared memory arrays needed
     __shared__ Detection s_prevTarget;
     __shared__ bool s_prevValid;
+    __shared__ float s_bestDistX[MAX_SELECTION_THREADS];
+    __shared__ int s_bestIdx[MAX_SELECTION_THREADS];
+    __shared__ float s_bestIoU[MAX_SELECTION_THREADS];
+    __shared__ int s_bestIoUIdx[MAX_SELECTION_THREADS];
 
     if (threadIdx.x == 0) {
         Detection emptyTarget = {};
@@ -378,7 +321,7 @@ __global__ void fusedTargetSelectionAndMovementKernel(
     __syncthreads();
 
     int count = *d_num_detections;
-    if (count <= 0 || count > max_detections) {
+    if (count <= 0) {
         if (threadIdx.x == 0) {
             Detection emptyTarget = {};
             emptyTarget.classId = -1;
@@ -412,6 +355,9 @@ __global__ void fusedTargetSelectionAndMovementKernel(
             }
         }
         return;
+    }
+    if (count > max_detections) {
+        count = max_detections;
     }
 
     Detection prevTarget = s_prevTarget;
@@ -460,46 +406,39 @@ __global__ void fusedTargetSelectionAndMovementKernel(
         }
     }
 
-    // Warp-level reduction using shuffle
-    const unsigned int FULL_MASK = 0xffffffff;
-
-    float bestDistX = localBestDistX;
-    int bestIdx = localBestIdx;
-    float bestIoU = localBestIoU;
-    int bestIoUIdx = localBestIoUIdx;
-
-    // Warp shuffle reduction - find min distance and max IoU
-    for (int offset = 16; offset > 0; offset >>= 1) {
-        float otherDistX = __shfl_down_sync(FULL_MASK, bestDistX, offset);
-        int otherIdx = __shfl_down_sync(FULL_MASK, bestIdx, offset);
-        float otherIoU = __shfl_down_sync(FULL_MASK, bestIoU, offset);
-        int otherIoUIdx = __shfl_down_sync(FULL_MASK, bestIoUIdx, offset);
-
-        // Min distance reduction
-        if (otherDistX < bestDistX) {
-            bestDistX = otherDistX;
-            bestIdx = otherIdx;
-        }
-        // Max IoU reduction
-        if (otherIoU > bestIoU) {
-            bestIoU = otherIoU;
-            bestIoUIdx = otherIoUIdx;
-        }
-    }
+    s_bestDistX[threadIdx.x] = localBestDistX;
+    s_bestIdx[threadIdx.x] = localBestIdx;
+    s_bestIoU[threadIdx.x] = localBestIoU;
+    s_bestIoUIdx[threadIdx.x] = localBestIoUIdx;
+    __syncthreads();
 
     // Only thread 0 has the final results
     if (threadIdx.x == 0) {
+        float bestDistX = 1e9f;
+        int bestIdx = -1;
+        float bestIoU = -1.0f;
+        int bestIoUIdx = -1;
+
+        for (int i = 0; i < blockDim.x; ++i) {
+            if (s_bestIdx[i] >= 0 && s_bestDistX[i] < bestDistX) {
+                bestDistX = s_bestDistX[i];
+                bestIdx = s_bestIdx[i];
+            }
+            if (s_bestIoUIdx[i] >= 0 && s_bestIoU[i] > bestIoU) {
+                bestIoU = s_bestIoU[i];
+                bestIoUIdx = s_bestIoUIdx[i];
+            }
+        }
+
         int candidateIndex = bestIdx;
         bool candidateValid = candidateIndex >= 0;
         Detection candidateTarget = candidateValid ? d_detections[candidateIndex] : Detection{};
 
         // Hysteresis: prefer previous target if IoU stays above threshold
-        int chosenIndex = candidateIndex;
         Detection chosenTarget = candidateTarget;
         bool haveTarget = candidateValid;
 
         if (prevValid && bestIoUIdx >= 0 && bestIoU > iou_stickiness_threshold) {
-            chosenIndex = bestIoUIdx;
             chosenTarget = d_detections[bestIoUIdx];
             haveTarget = true;
         }
@@ -655,8 +594,15 @@ cudaError_t fusedTargetSelectionAndMovementGpu(
         return cudaErrorInvalidValue;
     }
 
-    // Launch with single warp (32 threads) for efficient warp shuffle
-    fusedTargetSelectionAndMovementKernel<<<1, 32, 0, stream>>>(
+    // Increase selection parallelism as max detections grows.
+    int threads = 32;
+    if (max_detections > 64) {
+        threads = 128;
+    } else if (max_detections > 32) {
+        threads = 64;
+    }
+
+    fusedTargetSelectionAndMovementKernel<<<1, threads, 0, stream>>>(
         d_detections,
         d_num_detections,
         max_detections,

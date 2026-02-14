@@ -15,6 +15,9 @@
 #include <iomanip>
 #include <random>
 #include <filesystem>
+#include <algorithm>
+#include <array>
+#include <sstream>
 
 #include "needaimbot/cuda/simple_inference.h"
 #include "needaimbot/cuda/simple_postprocess.h"
@@ -79,6 +82,7 @@ struct Config {
 
     // Mouse rate limiting
     int mouseMinIntervalMs = 1;
+    int frameWaitTimeoutMs = 16;  // UDP frame wait timeout per loop
 
     // Gaussian noise for humanization
     bool noiseEnabled = true;
@@ -143,6 +147,7 @@ struct Config {
             if (j.contains("recoil_tick_ms")) recoilTickMs = j["recoil_tick_ms"];
 
             if (j.contains("mouse_min_interval_ms")) mouseMinIntervalMs = j["mouse_min_interval_ms"];
+            if (j.contains("frame_wait_timeout_ms")) frameWaitTimeoutMs = j["frame_wait_timeout_ms"];
             if (j.contains("makcu_baudrate")) makcuBaudrate = j["makcu_baudrate"];
 
             if (j.contains("noise_enabled")) noiseEnabled = j["noise_enabled"];
@@ -217,6 +222,7 @@ struct Config {
             j["recoil_tick_ms"] = recoilTickMs;
 
             j["mouse_min_interval_ms"] = mouseMinIntervalMs;
+            j["frame_wait_timeout_ms"] = frameWaitTimeoutMs;
             j["makcu_baudrate"] = makcuBaudrate;
 
             j["noise_enabled"] = noiseEnabled;
@@ -259,6 +265,7 @@ struct Config {
         std::cout << "[Config] Max detections: " << maxDetections << std::endl;
         std::cout << "[Config] No-recoil: " << (noRecoilEnabled ? "ON" : "OFF")
                   << " (Y=" << recoilCompY << ", tick=" << recoilTickMs << "ms)" << std::endl;
+        std::cout << "[Config] Frame wait timeout: " << frameWaitTimeoutMs << "ms" << std::endl;
         std::cout << "[Config] Noise: " << (noiseEnabled ? "ON" : "OFF")
                   << " (stddev X=" << noiseStddevX << ", Y=" << noiseStddevY << ")" << std::endl;
 
@@ -296,6 +303,9 @@ struct Config {
 // All frequently accessed values are copied to the context struct at init time.
 
 struct CallbackContext {
+    static constexpr size_t kNoiseLutSize = 1024;  // Must stay power-of-two.
+    static_assert((kNoiseLutSize & (kNoiseLutSize - 1)) == 0, "Noise LUT size must be power-of-two");
+
     // Hardware reference (only thing we can't cache)
     MakcuConnection* makcu;
     UDPCapture* udpCapture;
@@ -304,6 +314,7 @@ struct CallbackContext {
     bool noiseEnabled;
     float shootOffsetX;
     float shootOffsetY;
+    int mouseMinIntervalMs;
     
     // Movement filter state (deadband + hysteresis)
     float deadbandX;          // Minimum movement threshold X
@@ -312,18 +323,20 @@ struct CallbackContext {
     int lastMoveY;
     int consecutiveSameSign;  // Counter for hysteresis
     
-    // Noise generation (single callback in-flight, lock-free)
-    std::mt19937* noiseGen;
-    std::normal_distribution<float>* noiseDistX;
-    std::normal_distribution<float>* noiseDistY;
+    // Noise LUT (precomputed once, lock-free callback reads)
+    std::array<float, kNoiseLutSize> noiseLutX{};
+    std::array<float, kNoiseLutSize> noiseLutY{};
+    size_t noiseCursor = 0;
     std::atomic<int> inFlightBufferIndex{-1};
     std::atomic<bool> droppedWhileInFlight{false};
+    std::chrono::steady_clock::time_point lastMouseMoveTime{};
     
     // Initialize cached values from config
     void initFromConfig(const Config& cfg) {
         noiseEnabled = cfg.noiseEnabled;
         shootOffsetX = cfg.shootOffsetX;
         shootOffsetY = cfg.shootOffsetY;
+        mouseMinIntervalMs = std::max(0, cfg.mouseMinIntervalMs);
         
         // Movement filter defaults (can be made configurable)
         deadbandX = 0.3f;  // Ignore movements < 0.3 pixels
@@ -331,6 +344,21 @@ struct CallbackContext {
         lastMoveX = 0;
         lastMoveY = 0;
         consecutiveSameSign = 0;
+        noiseCursor = 0;
+        lastMouseMoveTime = std::chrono::steady_clock::now() - std::chrono::milliseconds(mouseMinIntervalMs);
+
+        if (noiseEnabled) {
+            std::mt19937 gen(std::random_device{}());
+            std::normal_distribution<float> distX(0.0f, cfg.noiseStddevX);
+            std::normal_distribution<float> distY(0.0f, cfg.noiseStddevY);
+            for (size_t i = 0; i < kNoiseLutSize; ++i) {
+                noiseLutX[i] = distX(gen);
+                noiseLutY[i] = distY(gen);
+            }
+        } else {
+            noiseLutX.fill(0.0f);
+            noiseLutY.fill(0.0f);
+        }
     }
 };
 
@@ -371,8 +399,10 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
     
     // Apply Gaussian noise for humanization
     if (ctx->noiseEnabled) {
-        moveX += (*ctx->noiseDistX)(*ctx->noiseGen);
-        moveY += (*ctx->noiseDistY)(*ctx->noiseGen);
+        const size_t idx = ctx->noiseCursor;
+        moveX += ctx->noiseLutX[idx];
+        moveY += ctx->noiseLutY[idx];
+        ctx->noiseCursor = (idx + 1) & (CallbackContext::kNoiseLutSize - 1);
     }
     
     // Apply shoot offset when shooting (shifts aim point)
@@ -416,6 +446,15 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
     
     // Send mouse move immediately (MakcuConnection::move is thread-safe)
     if (finalX != 0 || finalY != 0) {
+        if (ctx->mouseMinIntervalMs > 0) {
+            auto moveNow = std::chrono::steady_clock::now();
+            auto moveElapsed =
+                std::chrono::duration_cast<std::chrono::milliseconds>(moveNow - ctx->lastMouseMoveTime).count();
+            if (moveElapsed < ctx->mouseMinIntervalMs) {
+                return;
+            }
+            ctx->lastMouseMoveTime = moveNow;
+        }
         ctx->makcu->move(finalX, finalY);
     }
     
@@ -450,6 +489,9 @@ int main(int argc, char* argv[]) {
 
     // 1. Load TensorRT engine
     gpa::SimpleInference inference;
+    // Configure inference parameters before loading engine.
+    inference.setBgraInput(true);
+    inference.setMaxDetections(cfg.maxDetections);
     if (!inference.loadEngine(cfg.enginePath)) {
         std::cerr << "[Simple] Failed to load engine" << std::endl;
         return 1;
@@ -479,23 +521,13 @@ int main(int argc, char* argv[]) {
     // 4. State - all GPU now, minimal CPU state
     gpa::PIDConfig gpuPidConfig = cfg.toGpuPIDConfig();
     const uint32_t allowedClassMask = cfg.getAllowedClassMask();
-    // Set BGRA input mode (UDP capture sends BGRA, GPU handles conversion)
-    inference.setBgraInput(true);
-
-    // Gaussian noise generator for humanization (used in callback)
-    std::random_device rd;
-    std::mt19937 noiseGen(rd());
-    std::normal_distribution<float> noiseDistX(0.0f, cfg.noiseStddevX);
-    std::normal_distribution<float> noiseDistY(0.0f, cfg.noiseStddevY);
 
     // Setup callback context with cached config values
     CallbackContext callbackCtx;
     callbackCtx.makcu = &makcu;
     callbackCtx.udpCapture = &udpCapture;
     callbackCtx.initFromConfig(cfg);  // Cache config values (lock-free)
-    callbackCtx.noiseGen = &noiseGen;
-    callbackCtx.noiseDistX = &noiseDistX;
-    callbackCtx.noiseDistY = &noiseDistY;
+    const uint32_t frameWaitTimeoutMs = static_cast<uint32_t>(std::clamp(cfg.frameWaitTimeoutMs, 1, 100));
 
     auto lastStatTime = std::chrono::steady_clock::now();
     auto lastRecoilTime = std::chrono::steady_clock::now();
@@ -531,12 +563,12 @@ int main(int argc, char* argv[]) {
     int busyDropWindow = 0;
     int submitFailWindow = 0;
     uint64_t lastUdpDropped = udpCapture.GetDroppedFrameCount();
+    size_t lastStatusLineLen = 0;
 
     while (g_running) {
         // Wait for frame (returns pinned memory directly)
         void* pinnedRgbData = nullptr;
         unsigned int width = 0, height = 0;
-        uint64_t frameId = 0;
         int bufferIndex = -1;
 
         // Stats every second (using atomic g_frameCount from callbacks)
@@ -548,15 +580,24 @@ int main(int argc, char* argv[]) {
             uint64_t udpDroppedDelta = udpDroppedNow - lastUdpDropped;
             lastUdpDropped = udpDroppedNow;
 
-            std::cout << "\r[Simple] RecvFPS: " << std::fixed << std::setprecision(1) << (recvFramesWindow * 1000.0f / elapsed)
-                      << " | SubmitFPS: " << (submittedFramesWindow * 1000.0f / elapsed)
-                      << " | DoneFPS: " << (completedFrames * 1000.0f / elapsed)
-                      << " | BusyDrop: " << busyDropWindow
-                      << " | SubmitFail: " << submitFailWindow
-                      << " | UdpDrop: " << udpDroppedDelta
-                      << " | Aim: " << (makcu.aiming_active.load(std::memory_order_relaxed) ? "ON " : "OFF")
-                      << " | Shoot: " << (makcu.shooting_active.load(std::memory_order_relaxed) ? "ON " : "OFF")
-                      << " [GPU Callback]" << std::flush;
+            std::ostringstream status;
+            status << std::fixed << std::setprecision(1)
+                   << "[Simple] R:" << (recvFramesWindow * 1000.0f / elapsed)
+                   << " S:" << (submittedFramesWindow * 1000.0f / elapsed)
+                   << " D:" << (completedFrames * 1000.0f / elapsed)
+                   << " B:" << busyDropWindow
+                   << " F:" << submitFailWindow
+                   << " U:" << udpDroppedDelta
+                   << " A:" << (makcu.aiming_active.load(std::memory_order_relaxed) ? "ON" : "OFF")
+                   << " Sh:" << (makcu.shooting_active.load(std::memory_order_relaxed) ? "ON" : "OFF");
+
+            const std::string statusLine = status.str();
+            std::cout << '\r' << statusLine;
+            if (lastStatusLineLen > statusLine.size()) {
+                std::cout << std::string(lastStatusLineLen - statusLine.size(), ' ');
+            }
+            std::cout << std::flush;
+            lastStatusLineLen = statusLine.size();
 
             recvFramesWindow = 0;
             submittedFramesWindow = 0;
@@ -571,8 +612,16 @@ int main(int argc, char* argv[]) {
             continue;
         }
 
+        // While GPU callback is in-flight, skip frame acquisition to reduce
+        // lock contention and CPU work in the capture path.
+        if (inference.isCallbackInFlight()) {
+            // No frame was acquired/dropped yet, so do not mark callback stale here.
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
+        }
+
         // Use pinned buffer API for zero-copy
-        if (!udpCapture.AcquireFramePinned(&pinnedRgbData, &width, &height, &frameId, &bufferIndex, 16)) {
+        if (!udpCapture.AcquireFramePinned(&pinnedRgbData, &width, &height, nullptr, &bufferIndex, frameWaitTimeoutMs)) {
             // No frame, handle recoil if active (left+right click)
             auto recoilNow = std::chrono::steady_clock::now();
             if (cfg.noRecoilEnabled &&

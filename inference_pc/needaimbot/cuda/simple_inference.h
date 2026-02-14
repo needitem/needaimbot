@@ -12,6 +12,7 @@
 #include <atomic>
 #include <string>
 #include <cstdint>
+#include <cstddef>
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 #include <NvInfer.h>
@@ -49,6 +50,14 @@ public:
     // When false, preprocessing expects RGB HWC input (3 bytes/pixel)
     void setBgraInput(bool bgra) { m_bgraInput = bgra; }
     bool isBgraInput() const { return m_bgraInput; }
+    // Must be set before loadEngine(). Values are clamped to a safe range.
+    void setMaxDetections(int maxDetections) {
+        if (m_loaded) return;
+        if (maxDetections < 1) maxDetections = 1;
+        if (maxDetections > 4096) maxDetections = 4096;
+        m_maxDetections = maxDetections;
+    }
+    int getMaxDetections() const { return m_maxDetections; }
 
     // Capture full CUDA graph (preprocess + inference + decode + fused)
     bool captureFullGraph(float confThreshold, int headClassId, float headBonus,
@@ -96,7 +105,7 @@ private:
     int* m_d_decodedCount = nullptr;      // Detection count on GPU
     Detection* m_d_bestTarget = nullptr;  // Best target on GPU
     int* m_d_hasTarget = nullptr;         // Whether target found (GPU)
-    static constexpr int kMaxDetections = 100;
+    int m_maxDetections = 100;
 
     // GPU fused pipeline buffers
     Detection* m_d_selectedTarget = nullptr;  // Persistent selected target for IoU stickiness
@@ -117,12 +126,17 @@ private:
 
     int m_inputH = 320;         // Model input height (target)
     int m_inputW = 320;         // Model input width (target)
+    size_t m_rawInputBytes = 0; // Bytes per input frame at model resolution
+    size_t m_rawInputCapacityBytes = 0; // Allocated raw-input capacity on device
+    float m_crosshairX = 160.0f;
+    float m_crosshairY = 160.0f;
     int m_numBoxes = 2100;
     int m_numClasses = 2;
     bool m_loaded = false;
     bool m_inputFP16 = false;   // Input tensor is FP16
     bool m_outputFP16 = false;  // Output tensor is FP16
     bool m_bgraInput = false;   // True for BGRA input, false for RGB
+    bool m_tensorAddressesBound = false;  // TRT10 static tensor addresses bound once
 
     // Cached graph parameters
     float m_cachedConfThreshold = 0.35f;

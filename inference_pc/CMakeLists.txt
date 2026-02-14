@@ -20,6 +20,10 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
+# Build options
+option(SIMPLE_ENABLE_NATIVE_OPT "Enable -march=native for host compiler" OFF)
+option(SIMPLE_ENABLE_LTO "Enable interprocedural optimization (IPO/LTO)" OFF)
+
 # =============================================================================
 # Path Configuration (Linux/Jetson)
 # =============================================================================
@@ -33,7 +37,9 @@ set(TENSORRT_LIB_DIR "/usr/lib/aarch64-linux-gnu")
 find_package(CUDAToolkit REQUIRED)
 
 # Jetson Xavier NX / AGX: SM 7.2, Jetson Orin: SM 8.7
-set(CMAKE_CUDA_ARCHITECTURES 72 87)
+if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES OR CMAKE_CUDA_ARCHITECTURES STREQUAL "")
+    set(CMAKE_CUDA_ARCHITECTURES 72 87)
+endif()
 
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Wno-deprecated-gpu-targets")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --diag-suppress=611,221,20091,20054")
@@ -80,15 +86,37 @@ target_compile_definitions(simple_inference PRIVATE
 target_compile_options(simple_inference PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:-Wall>
     $<$<COMPILE_LANGUAGE:CXX>:-O3>
-    $<$<COMPILE_LANGUAGE:CXX>:-ffast-math>
+    $<$<COMPILE_LANGUAGE:CXX>:-ffunction-sections>
+    $<$<COMPILE_LANGUAGE:CXX>:-fdata-sections>
 )
+if(SIMPLE_ENABLE_NATIVE_OPT)
+    target_compile_options(simple_inference PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:-march=native>
+        $<$<COMPILE_LANGUAGE:CXX>:-mtune=native>
+    )
+endif()
 target_compile_options(simple_inference PRIVATE
-    $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wall,-O3>
+    $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wall,-O3,-ffunction-sections,-fdata-sections>
+    $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-O3>
+    $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>
+)
+target_link_options(simple_inference PRIVATE
+    -Wl,--gc-sections
 )
 
 set_target_properties(simple_inference PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/Release"
 )
+
+if(SIMPLE_ENABLE_LTO)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT simple_ipo_supported OUTPUT simple_ipo_error)
+    if(simple_ipo_supported)
+        set_property(TARGET simple_inference PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+    else()
+        message(WARNING "SIMPLE_ENABLE_LTO is ON but IPO is not supported: ${simple_ipo_error}")
+    endif()
+endif()
 
 # =============================================================================
 # EngineExport Subproject (optional)

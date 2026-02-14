@@ -79,12 +79,12 @@ public:
 
     // Zero-copy API - returns pinned memory pointer for direct GPU access
     // No memcpy needed - data is already in pinned memory
-    // Returns the buffer index for double-buffering (0 or 1)
+    // Returns the ring-buffer index
     bool AcquireFramePinned(void** pinnedRgbData, unsigned int* width, unsigned int* height,
                             uint64_t* outFrameId = nullptr, int* bufferIndex = nullptr,
                             uint32_t timeoutMs = 16);
 
-    // Release the pinned buffer after GPU is done (for double-buffering)
+    // Release the pinned buffer after GPU is done (for ring-buffering)
     void ReleaseFrame(int bufferIndex);
 
     // CUDA API - uploads frame to device memory
@@ -152,17 +152,18 @@ private:
     std::atomic<bool> m_running{false};
     std::atomic<bool> m_isCapturing{false};
 
-    // Double-buffered PINNED memory for zero-copy GPU transfer
-    // Using CUDA pinned (page-locked) memory eliminates one memcpy
-    static constexpr int NUM_BUFFERS = 2;
-    uint8_t* m_pinnedFrameBuffer[NUM_BUFFERS] = {nullptr, nullptr};
+    // Ring-buffered PINNED memory for zero-copy GPU transfer
+    // Using 3 buffers reduces contention when one buffer is in-flight on GPU.
+    static constexpr int NUM_BUFFERS = 3;
+    uint8_t* m_pinnedFrameBuffer[NUM_BUFFERS] = {nullptr, nullptr, nullptr};
     size_t m_pinnedBufferSize = 0;
     bool m_usePinnedMemory = false;
     
-    // Buffer state for double-buffering
+    // Buffer state for ring-buffering
     std::atomic<int> m_writeBuffer{0};
     std::atomic<int> m_readBuffer{1};
-    std::atomic<bool> m_bufferInUse[NUM_BUFFERS] = {false, false};
+    // True while buffer is owned by consumer (AcquireFramePinned) or producer copy.
+    std::atomic<bool> m_bufferInUse[NUM_BUFFERS] = {false, false, false};
     
     std::mutex m_bufferMutex;
     std::condition_variable m_frameReady;

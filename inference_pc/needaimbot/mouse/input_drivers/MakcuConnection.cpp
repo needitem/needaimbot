@@ -29,6 +29,53 @@ static const uint32_t WORK_BAUD = 4000000;     // working baud rate – 4 Mbit/s
 static const uint8_t BAUD_CHANGE_CMD[9] =
 { 0xDE,0xAD,0x05,0x00,0xA5,0x00,0x09,0x3D,0x00 };
 
+#ifndef _WIN32
+namespace {
+bool writeAllSerialFd(int fd, const char* data, size_t size, bool failFastOnWouldBlock) {
+    if (fd < 0 || !data || size == 0) return false;
+
+    size_t totalWritten = 0;
+    while (totalWritten < size) {
+        ssize_t written = ::write(fd, data + totalWritten, size - totalWritten);
+        if (written > 0) {
+            totalWritten += static_cast<size_t>(written);
+            continue;
+        }
+        if (written == 0) {
+            return false;
+        }
+
+        if (errno == EINTR) {
+            continue;
+        }
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            if (failFastOnWouldBlock) {
+                return false;
+            }
+            struct pollfd pfd;
+            pfd.fd = fd;
+            pfd.events = POLLOUT;
+            pfd.revents = 0;
+            int pollRet = poll(&pfd, 1, 1);
+            if (pollRet < 0 && errno == EINTR) {
+                continue;
+            }
+            if (pollRet <= 0) {
+                continue;
+            }
+            if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+                return false;
+            }
+            continue;
+        }
+        return false;
+    }
+
+    return true;
+}
+} // namespace
+#endif
+
 // ============================================================================
 // Platform-specific implementations
 // ============================================================================
@@ -389,7 +436,7 @@ MakcuConnection::MakcuConnection(const std::string& port, unsigned int baud_rate
 }
 
 // USB device reset (like unplugging and replugging)
-static bool resetUsbDevice(const std::string& ttyPath) {
+[[maybe_unused]] static bool resetUsbDevice(const std::string& ttyPath) {
     // Get the USB device path from tty symlink
     char linkPath[256];
     char resolvedPath[PATH_MAX];
@@ -532,7 +579,8 @@ bool MakcuConnection::initializeMakcuConnection() {
 
     // First, stop any existing streaming mode (from previous session)
     const char* stop_stream = "km.buttons(0)\r";
-    ::write(serial_fd_, stop_stream, strlen(stop_stream));
+    const ssize_t stopStreamWrite = ::write(serial_fd_, stop_stream, strlen(stop_stream));
+    (void)stopStreamWrite;
     tcdrain(serial_fd_);
     usleep(100000);
     tcflush(serial_fd_, TCIOFLUSH);
@@ -652,7 +700,8 @@ void MakcuConnection::cleanup() {
     if (is_open_ && serial_fd_ >= 0) {
         std::cout << "[Makcu] Stopping button streaming..." << std::endl;
         const char* stop_stream = "km.buttons(0)\r";
-        ::write(serial_fd_, stop_stream, strlen(stop_stream));
+        const ssize_t stopStreamWrite = ::write(serial_fd_, stop_stream, strlen(stop_stream));
+        (void)stopStreamWrite;
         tcdrain(serial_fd_);
         usleep(50000);
         tcflush(serial_fd_, TCIOFLUSH);
@@ -689,7 +738,7 @@ bool MakcuConnection::isOpen() const { return is_open_; }
 void MakcuConnection::write(const std::string& data) {
     if (!is_open_ || serial_fd_ < 0) return;
     std::lock_guard<std::mutex> lock(write_mutex_);
-    if (writeSerial(data.c_str(), data.length()) < 0) {
+    if (!writeAllSerialFd(serial_fd_, data.c_str(), data.length(), false)) {
         std::cerr << "[Makcu] Write operation failed" << std::endl;
     }
 }
@@ -743,7 +792,11 @@ void MakcuConnection::move(int x, int y) {
     char command[64];
     int len = std::snprintf(command, sizeof(command), "km.move(%d,%d)\r\n", x, y);
     if (len > 0 && static_cast<size_t>(len) < sizeof(command)) {
-        (void)sendCommandFast(command, static_cast<size_t>(len));
+        const size_t cmdSize = static_cast<size_t>(len);
+        if (!sendCommandFast(command, cmdSize)) {
+            // Fallback to blocking path to avoid silently dropping movement packets.
+            sendCommand(command, cmdSize);
+        }
     }
 }
 
@@ -767,7 +820,7 @@ void MakcuConnection::sendCommand(const char* command, size_t size) {
 #else
     if (!is_open_ || serial_fd_ < 0) return;
     std::lock_guard<std::mutex> lock(write_mutex_);
-    if (writeSerial(command, size) < 0) {
+    if (!writeAllSerialFd(serial_fd_, command, size, false)) {
         std::cerr << "[Makcu] Write operation failed" << std::endl;
     }
 #endif
@@ -785,14 +838,7 @@ bool MakcuConnection::sendCommandFast(const char* command, size_t size) {
     if (!is_open_ || serial_fd_ < 0) return false;
     std::unique_lock<std::mutex> lock(write_mutex_, std::try_to_lock);
     if (!lock.owns_lock()) return false;
-    ssize_t written = writeSerial(command, size);
-    if (written < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            return false;
-        }
-        return false;
-    }
-    return static_cast<size_t>(written) == size;
+    return writeAllSerialFd(serial_fd_, command, size, true);
 #endif
 }
 
@@ -838,7 +884,8 @@ void MakcuConnection::listeningThreadFunc() {
     struct sched_param param;
     param.sched_priority = sched_get_priority_max(SCHED_FIFO);
     if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &param) != 0) {
-        nice(-10);
+        const int niceRet = nice(-10);
+        (void)niceRet;
     }
 #endif
 
@@ -847,13 +894,15 @@ void MakcuConnection::listeningThreadFunc() {
     // The correct format is km.buttons(1)\r with ONLY mode parameter.
     // Reference: EVENTURI project uses exactly this format.
     const char* stream_cmd = "km.buttons(1)\r";
-    ::write(serial_fd_, stream_cmd, strlen(stream_cmd));
+    const ssize_t streamWrite = ::write(serial_fd_, stream_cmd, strlen(stream_cmd));
+    (void)streamWrite;
     tcdrain(serial_fd_);
     usleep(100000);  // 100ms for device to start streaming
 
     // Drain the echo response
     char drain_buf[128];
-    ::read(serial_fd_, drain_buf, sizeof(drain_buf));
+    const ssize_t drainRead = ::read(serial_fd_, drain_buf, sizeof(drain_buf));
+    (void)drainRead;
 
     std::cout << "[Makcu] Button streaming enabled (raw mode)" << std::endl;
 
@@ -911,7 +960,8 @@ void MakcuConnection::listeningThreadFunc() {
 
     // Stop streaming on exit
     const char* stop_cmd = "km.buttons(0)\r";
-    ::write(serial_fd_, stop_cmd, strlen(stop_cmd));
+    const ssize_t stopWrite = ::write(serial_fd_, stop_cmd, strlen(stop_cmd));
+    (void)stopWrite;
     tcdrain(serial_fd_);
 
     std::cout << "[Makcu] Button streaming stopped" << std::endl;

@@ -47,7 +47,7 @@ bool UDPCapture::allocatePinnedBuffers(size_t size) {
 
     freePinnedBuffers();
 
-    // Allocate double-buffered pinned memory
+    // Allocate ring-buffered pinned memory
     for (int i = 0; i < NUM_BUFFERS; i++) {
         cudaError_t err = cudaMallocHost(&m_pinnedFrameBuffer[i], size);
         if (err != cudaSuccess) {
@@ -161,6 +161,15 @@ bool UDPCapture::StartCapture() {
     m_startTime = std::chrono::steady_clock::now();
     {
         std::lock_guard<std::mutex> lock(m_fragmentMutex);
+        constexpr size_t kPreallocatedFragments = 128;
+        if (m_fragmentStorage.empty()) {
+            m_fragmentStorage.reserve(kPreallocatedFragments);
+            m_freeFragments.reserve(kPreallocatedFragments);
+            for (size_t i = 0; i < kPreallocatedFragments; ++i) {
+                m_fragmentStorage.emplace_back(std::make_unique<FrameFragments>());
+                m_freeFragments.push_back(m_fragmentStorage.back().get());
+            }
+        }
         for (auto& it : m_fragmentMap) {
             releaseFragmentLocked(it.second);
         }
@@ -246,15 +255,17 @@ void UDPCapture::receiveThread() {
             if (err == ETIMEDOUT || err == EWOULDBLOCK || err == EAGAIN) {
 #endif
                 // Cleanup old incomplete frames (older than stale timeout).
-                cleanupStaleFragments(std::chrono::steady_clock::now());
+                const auto now = std::chrono::steady_clock::now();
+                cleanupStaleFragments(now);
                 continue;  // Normal timeout, keep waiting
             }
             continue;
         }
 
+        const auto packetNow = std::chrono::steady_clock::now();
         if ((++packetsSinceCleanup % kCleanupPacketInterval) == 0) {
             // Keep fragment map bounded even under continuous traffic.
-            cleanupStaleFragments(std::chrono::steady_clock::now());
+            cleanupStaleFragments(packetNow);
         }
 
         // Parse header (new format: 16 bytes)
@@ -324,7 +335,7 @@ void UDPCapture::receiveThread() {
                 frag->height = header->frameHeight;
             }
 
-            frag->lastUpdate = std::chrono::steady_clock::now();
+            frag->lastUpdate = packetNow;
 
             // Store chunk data if not already received
             if (chunkIndex < frag->received.size() && !frag->received[chunkIndex]) {
@@ -374,43 +385,52 @@ void UDPCapture::receiveThread() {
         }
 
         bool published = false;
+        int publishIdx = -1;
+        uint8_t* dstBuffer = nullptr;
+
+        // Reserve a publish buffer under lock, but copy outside the lock.
         {
             std::lock_guard<std::mutex> bufLock(m_bufferMutex);
 
-            // Get write buffer index
             int writeIdx = m_writeBuffer.load(std::memory_order_relaxed);
+            const int currentRead = m_readBuffer.load(std::memory_order_acquire);
 
-            // Find a free pinned buffer for this frame.
-            bool foundFreeBuffer = false;
             for (int attempt = 0; attempt < NUM_BUFFERS; ++attempt) {
                 int candidate = (writeIdx + attempt) % NUM_BUFFERS;
+                if (candidate == currentRead) continue;  // Don't overwrite currently published buffer.
                 if (!m_bufferInUse[candidate].load(std::memory_order_acquire)) {
-                    writeIdx = candidate;
-                    foundFreeBuffer = true;
+                    publishIdx = candidate;
+                    m_bufferInUse[publishIdx].store(true, std::memory_order_release);  // Producer reservation.
+                    dstBuffer = m_pinnedFrameBuffer[publishIdx];
                     break;
                 }
             }
-            if (foundFreeBuffer) {
-                uint8_t* dstBuffer = m_pinnedFrameBuffer[writeIdx];
-                if (dstBuffer) {
-                    // Direct BGRA memcpy to pinned buffer (GPU handles BGRA->CHW conversion)
-                    memcpy(dstBuffer, completedFrag->data.data(), bgraSize);
+        }
 
-                    // Swap buffers
-                    m_readBuffer.store(writeIdx, std::memory_order_release);
-                    m_writeBuffer.store((writeIdx + 1) % NUM_BUFFERS, std::memory_order_relaxed);
+        if (publishIdx >= 0 && dstBuffer) {
+            // Direct BGRA memcpy to pinned buffer (GPU handles BGRA->CHW conversion).
+            memcpy(dstBuffer, completedFrag->data.data(), bgraSize);
 
-                    // Update frame info
-                    m_frameWidth.store(completedWidth, std::memory_order_relaxed);
-                    m_frameHeight.store(completedHeight, std::memory_order_relaxed);
-                    m_lastFrameId.store(frameId, std::memory_order_relaxed);
-                    m_frameCounter.fetch_add(1, std::memory_order_relaxed);
-                    m_receivedFrames.fetch_add(1, std::memory_order_relaxed);
+            {
+                std::lock_guard<std::mutex> bufLock(m_bufferMutex);
 
-                    m_newFrameAvailable = true;
-                    published = true;
-                }
+                // Publish this buffer as latest frame.
+                m_readBuffer.store(publishIdx, std::memory_order_release);
+                m_writeBuffer.store((publishIdx + 1) % NUM_BUFFERS, std::memory_order_relaxed);
+
+                m_frameWidth.store(completedWidth, std::memory_order_relaxed);
+                m_frameHeight.store(completedHeight, std::memory_order_relaxed);
+                m_lastFrameId.store(frameId, std::memory_order_relaxed);
+                m_frameCounter.fetch_add(1, std::memory_order_relaxed);
+                m_receivedFrames.fetch_add(1, std::memory_order_relaxed);
+                // Release producer reservation before making frame visible to consumer.
+                m_bufferInUse[publishIdx].store(false, std::memory_order_release);
+                m_newFrameAvailable = true;
+                published = true;
             }
+        } else if (publishIdx >= 0) {
+            // Reserved but unusable (null buffer) - release reservation.
+            m_bufferInUse[publishIdx].store(false, std::memory_order_release);
         }
 
         releaseCompletedFragment(completedFrag);

@@ -10,6 +10,7 @@
 #include <cstring>
 #include <exception>
 #include <vector>
+#include <cmath>
 #include <NvInferVersion.h>
 
 // TensorRT API version compatibility
@@ -409,6 +410,25 @@ extern "C" cudaError_t cuda_preprocessing(
 
 namespace gpa {
 
+namespace {
+constexpr float kGraphParamEpsilon = 1e-6f;
+
+inline bool nearlyEqual(float a, float b) {
+    return std::fabs(a - b) <= kGraphParamEpsilon;
+}
+
+inline bool pidConfigNearlyEqual(const PIDConfig& a, const PIDConfig& b) {
+    return nearlyEqual(a.kp_x, b.kp_x) &&
+           nearlyEqual(a.kp_y, b.kp_y) &&
+           nearlyEqual(a.ki_x, b.ki_x) &&
+           nearlyEqual(a.ki_y, b.ki_y) &&
+           nearlyEqual(a.kd_x, b.kd_x) &&
+           nearlyEqual(a.kd_y, b.kd_y) &&
+           nearlyEqual(a.integral_max, b.integral_max) &&
+           nearlyEqual(a.derivative_max, b.derivative_max);
+}
+} // namespace
+
 void SimpleInference::Logger::log(Severity severity, const char* msg) noexcept {
     if (severity <= Severity::kWARNING)
         std::cerr << "[TRT] " << msg << std::endl;
@@ -526,11 +546,18 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
     m_inputW = inputDims.d[3];
     m_numBoxes = outputDims.d[2];
     m_numClasses = outputDims.d[1] - 4;
+    m_rawInputBytes = static_cast<size_t>(m_inputH) * static_cast<size_t>(m_inputW) * static_cast<size_t>(inputBytesPerPixel());
+    m_crosshairX = m_inputW * 0.5f;
+    m_crosshairY = m_inputH * 0.5f;
+    if (m_maxDetections > m_numBoxes) {
+        m_maxDetections = m_numBoxes;
+    }
 
     std::cout << "[SimpleInference] Input: " << m_inputW << "x" << m_inputH
               << " (" << (m_inputFP16 ? "FP16" : "FP32") << ")" << std::endl;
     std::cout << "[SimpleInference] Output: " << outputDims.d[1] << "x" << m_numBoxes
               << " (" << m_numClasses << " classes, " << (m_outputFP16 ? "FP16" : "FP32") << ")" << std::endl;
+    std::cout << "[SimpleInference] Max detections: " << m_maxDetections << std::endl;
 
     // Create CUDA stream with high priority
     int leastPriority, greatestPriority;
@@ -539,6 +566,7 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
 
     // Allocate GPU memory (use max of RGB/BGRA for raw input)
     size_t rawInputSize = m_inputH * m_inputW * 4;  // Allocate for BGRA (max)
+    m_rawInputCapacityBytes = rawInputSize;
     size_t chwInputSize = 1 * 3 * m_inputH * m_inputW * (m_inputFP16 ? sizeof(__half) : sizeof(float));
     size_t outputSizeGPU = 1 * outputDims.d[1] * m_numBoxes * (m_outputFP16 ? sizeof(__half) : sizeof(float));
 
@@ -547,7 +575,7 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
     cudaMalloc(&m_d_output, outputSizeGPU);
 
     // Allocate GPU postprocessing buffers
-    cudaMalloc(&m_d_decoded, kMaxDetections * sizeof(Detection));
+    cudaMalloc(&m_d_decoded, static_cast<size_t>(m_maxDetections) * sizeof(Detection));
     cudaMalloc(&m_d_decodedCount, sizeof(int));
     cudaMalloc(&m_d_bestTarget, sizeof(Detection));
     cudaMalloc(&m_d_hasTarget, sizeof(int));
@@ -564,6 +592,16 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
 
     // Allocate pinned host memory (max size for BGRA)
     cudaMallocHost(&m_h_rawPinned, rawInputSize);
+    // Allocate combined result buffers once to avoid hot-path checks.
+    cudaMalloc(&m_d_inferenceResult, sizeof(InferenceResult));
+    cudaMallocHost(&m_h_inferenceResultPinned, sizeof(InferenceResult));
+
+#if TRT_USE_NEW_API
+    // Tensor addresses are static in this pipeline, bind once.
+    m_context->setTensorAddress("images", m_d_chwInput);
+    m_context->setTensorAddress("output0", m_d_output);
+    m_tensorAddressesBound = true;
+#endif
 
     m_loaded = true;
     std::cout << "[SimpleInference] Engine loaded successfully" << std::endl;
@@ -578,8 +616,6 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
                            m_inputW, m_inputH, inputBytesPerPixel(), m_bgraInput,
                            m_inputW, m_inputH, m_inputFP16, m_stream);
 #if TRT_USE_NEW_API
-        m_context->setTensorAddress("images", m_d_chwInput);
-        m_context->setTensorAddress("output0", m_d_output);
         m_context->enqueueV3(m_stream);
 #else
         void* bindings[2] = { m_d_chwInput, m_d_output };
@@ -610,8 +646,11 @@ void SimpleInference::executeFusedPipelinePostH2D(int width, int height,
 
     // TensorRT inference
 #if TRT_USE_NEW_API
-    m_context->setTensorAddress("images", m_d_chwInput);
-    m_context->setTensorAddress("output0", m_d_output);
+    if (!m_tensorAddressesBound) {
+        m_context->setTensorAddress("images", m_d_chwInput);
+        m_context->setTensorAddress("output0", m_d_output);
+        m_tensorAddressesBound = true;
+    }
     m_context->enqueueV3(m_stream);
 #else
     void* bindings[2] = { m_d_chwInput, m_d_output };
@@ -622,16 +661,13 @@ void SimpleInference::executeFusedPipelinePostH2D(int width, int height,
     decodeYoloGpu(
         m_d_output, m_outputFP16, m_numBoxes, m_numClasses,
         confThreshold, allowedClassMask,
-        m_d_decoded, m_d_decodedCount, kMaxDetections, m_stream
+        m_d_decoded, m_d_decodedCount, m_maxDetections, m_stream
     );
 
     // Fused target selection + PID + result packing
-    float crosshairX = m_inputW * 0.5f;
-    float crosshairY = m_inputH * 0.5f;
-
     fusedTargetSelectionAndMovementGpu(
-        m_d_decoded, m_d_decodedCount, kMaxDetections,
-        crosshairX, crosshairY,
+        m_d_decoded, m_d_decodedCount, m_maxDetections,
+        m_crosshairX, m_crosshairY,
         headClassId, headBonus, pidConfig,
         iouThreshold, headYOffset, bodyYOffset,
         m_d_selectedTarget, m_d_bestTarget, m_d_hasTarget,
@@ -648,7 +684,7 @@ void SimpleInference::executeFusedPipeline(void* rawInput, int width, int height
                                             float confThreshold, int headClassId, float headBonus,
                                             uint32_t allowedClassMask, const PIDConfig& pidConfig,
                                             float iouThreshold, float headYOffset, float bodyYOffset) {
-    size_t rawSize = width * height * inputBytesPerPixel();
+    size_t rawSize = static_cast<size_t>(width) * static_cast<size_t>(height) * static_cast<size_t>(inputBytesPerPixel());
 
     // H2D: Upload directly from pinned memory
     cudaMemcpyAsync(m_d_rawInput, rawInput, rawSize, cudaMemcpyHostToDevice, m_stream);
@@ -668,14 +704,6 @@ bool SimpleInference::captureFullGraph(float confThreshold, int headClassId, flo
         m_graphCaptured = false;
     }
 
-    // Allocate combined result buffer if not already
-    if (!m_d_inferenceResult) {
-        cudaMalloc(&m_d_inferenceResult, sizeof(InferenceResult));
-    }
-    if (!m_h_inferenceResultPinned) {
-        cudaMallocHost(&m_h_inferenceResultPinned, sizeof(InferenceResult));
-    }
-
     // Cache parameters
     m_cachedConfThreshold = confThreshold;
     m_cachedHeadClassId = headClassId;
@@ -687,7 +715,7 @@ bool SimpleInference::captureFullGraph(float confThreshold, int headClassId, flo
     m_cachedBodyYOffset = bodyYOffset;
 
     // Fill pinned buffer with dummy data and upload to GPU (H2D outside graph)
-    size_t rawSize = m_inputH * m_inputW * inputBytesPerPixel();
+    size_t rawSize = m_rawInputBytes;
     memset(m_h_rawPinned, 128, rawSize);
     cudaMemcpyAsync(m_d_rawInput, m_h_rawPinned, rawSize, cudaMemcpyHostToDevice, m_stream);
     cudaStreamSynchronize(m_stream);
@@ -758,47 +786,34 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
                                                 float iouStickinessThreshold,
                                                 float headYOffset, float bodyYOffset,
                                                 InferenceCallback callback, void* userData) {
-    if (!m_loaded) return false;
+    if (!m_loaded || !pinnedData || width <= 0 || height <= 0) return false;
     if (m_callbackInFlight.exchange(true, std::memory_order_acq_rel)) return false;
 
-    // Allocate result buffers if needed
-    if (!m_d_inferenceResult) {
-        cudaError_t err = cudaMalloc(&m_d_inferenceResult, sizeof(InferenceResult));
-        if (err != cudaSuccess) {
-            std::cerr << "[SimpleInference] cudaMalloc(m_d_inferenceResult) failed: "
-                      << cudaGetErrorString(err) << std::endl;
-            m_callbackInFlight.store(false, std::memory_order_release);
-            return false;
-        }
-    }
-    if (!m_h_inferenceResultPinned) {
-        cudaError_t err = cudaMallocHost(&m_h_inferenceResultPinned, sizeof(InferenceResult));
-        if (err != cudaSuccess) {
-            std::cerr << "[SimpleInference] cudaMallocHost(m_h_inferenceResultPinned) failed: "
-                      << cudaGetErrorString(err) << std::endl;
-            m_callbackInFlight.store(false, std::memory_order_release);
-            return false;
-        }
+    const size_t rawSize = static_cast<size_t>(width) * static_cast<size_t>(height) *
+                           static_cast<size_t>(inputBytesPerPixel());
+    if (rawSize == 0 || rawSize > m_rawInputCapacityBytes) {
+        std::cerr << "[SimpleInference] Input frame too large for raw buffer: "
+                  << rawSize << " > " << m_rawInputCapacityBytes << std::endl;
+        m_callbackInFlight.store(false, std::memory_order_release);
+        return false;
     }
 
     // Use CUDA Graph only when shape and parameters match captured constants.
-    const bool samePidConfig = (std::memcmp(&pidConfig, &m_cachedPidConfig, sizeof(PIDConfig)) == 0);
-    const bool canUseGraph =
-        m_graphCaptured &&
-        (width == m_inputW) &&
-        (height == m_inputH) &&
-        (confThreshold == m_cachedConfThreshold) &&
-        (headClassId == m_cachedHeadClassId) &&
-        (headBonus == m_cachedHeadBonus) &&
-        (allowedClassMask == m_cachedAllowedClassMask) &&
-        samePidConfig &&
-        (iouStickinessThreshold == m_cachedIouThreshold) &&
-        (headYOffset == m_cachedHeadYOffset) &&
-        (bodyYOffset == m_cachedBodyYOffset);
+    bool canUseGraph = false;
+    if (m_graphCaptured && (width == m_inputW) && (height == m_inputH)) {
+        canUseGraph =
+            (headClassId == m_cachedHeadClassId) &&
+            (allowedClassMask == m_cachedAllowedClassMask) &&
+            nearlyEqual(confThreshold, m_cachedConfThreshold) &&
+            nearlyEqual(headBonus, m_cachedHeadBonus) &&
+            pidConfigNearlyEqual(pidConfig, m_cachedPidConfig) &&
+            nearlyEqual(iouStickinessThreshold, m_cachedIouThreshold) &&
+            nearlyEqual(headYOffset, m_cachedHeadYOffset) &&
+            nearlyEqual(bodyYOffset, m_cachedBodyYOffset);
+    }
 
     if (canUseGraph) {
         // H2D outside graph - copy directly from user's pinned buffer
-        size_t rawSize = width * height * inputBytesPerPixel();
         cudaError_t err = cudaMemcpyAsync(m_d_rawInput, pinnedData, rawSize, cudaMemcpyHostToDevice, m_stream);
         if (err != cudaSuccess) {
             std::cerr << "[SimpleInference] cudaMemcpyAsync(m_d_rawInput) failed: "
