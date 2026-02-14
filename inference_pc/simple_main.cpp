@@ -14,8 +14,10 @@
 #include <iomanip>
 #include <random>
 #include <filesystem>
+#include <condition_variable>
 #include <algorithm>
 #include <array>
+#include <mutex>
 #include <sstream>
 
 #include "needaimbot/cuda/simple_inference.h"
@@ -312,6 +314,8 @@ struct CallbackContext {
     // Hardware reference (only thing we can't cache)
     MakcuConnection* makcu;
     UDPCapture* udpCapture;
+    struct MoveQueue* moveQueue = nullptr;
+    std::condition_variable* moveQueueCv = nullptr;
     
     // Cached config values (lock-free, no pointer chasing)
     bool noiseEnabled;
@@ -358,6 +362,49 @@ struct CallbackContext {
             noiseLutX.fill(0.0f);
             noiseLutY.fill(0.0f);
         }
+    }
+};
+
+struct MoveCommand {
+    int dx = 0;
+    int dy = 0;
+};
+
+struct MoveQueue {
+    static constexpr uint32_t kCapacity = 1024;  // Must stay power-of-two.
+    static_assert((kCapacity & (kCapacity - 1)) == 0, "MoveQueue capacity must be power-of-two");
+
+    std::array<MoveCommand, kCapacity> ring{};
+    std::atomic<uint32_t> writeSeq{0};
+    std::atomic<uint32_t> readSeq{0};
+    std::mutex pushMutex;
+
+    bool tryPush(const MoveCommand& cmd) {
+        std::lock_guard<std::mutex> lock(pushMutex);
+        const uint32_t w = writeSeq.load(std::memory_order_relaxed);
+        const uint32_t r = readSeq.load(std::memory_order_acquire);
+        if ((w - r) >= kCapacity) {
+            return false;
+        }
+        ring[w & (kCapacity - 1)] = cmd;
+        writeSeq.store(w + 1, std::memory_order_release);
+        return true;
+    }
+
+    bool tryPop(MoveCommand& out) {
+        const uint32_t r = readSeq.load(std::memory_order_relaxed);
+        const uint32_t w = writeSeq.load(std::memory_order_acquire);
+        if (r == w) {
+            return false;
+        }
+        out = ring[r & (kCapacity - 1)];
+        readSeq.store(r + 1, std::memory_order_release);
+        return true;
+    }
+
+    bool hasPending() const {
+        return readSeq.load(std::memory_order_acquire) !=
+               writeSeq.load(std::memory_order_acquire);
     }
 };
 
@@ -446,7 +493,7 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
     if (finalX != 0) ctx->lastMoveX = finalX;
     if (finalY != 0) ctx->lastMoveY = finalY;
     
-    // Send mouse move immediately (MakcuConnection::move is thread-safe)
+    // Enqueue mouse move to dedicated sender thread to keep callback lightweight.
     if (finalX != 0 || finalY != 0) {
         if (ctx->mouseMinIntervalMs > 0) {
             auto moveNow = std::chrono::steady_clock::now();
@@ -458,7 +505,14 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
             }
             ctx->lastMouseMoveTime = moveNow;
         }
-        ctx->makcu->move(finalX, finalY);
+        if (ctx->moveQueue) {
+            const MoveCommand cmd{finalX, finalY};
+            if (ctx->moveQueue->tryPush(cmd) && ctx->moveQueueCv) {
+                ctx->moveQueueCv->notify_one();
+            }
+        } else {
+            ctx->makcu->move(finalX, finalY);
+        }
     }
 
     releaseTicket();
@@ -530,6 +584,11 @@ int main(int argc, char* argv[]) {
     CallbackContext callbackCtx;
     callbackCtx.makcu = &makcu;
     callbackCtx.udpCapture = &udpCapture;
+    MoveQueue moveQueue;
+    std::condition_variable moveQueueCv;
+    std::mutex moveQueueCvMutex;
+    callbackCtx.moveQueue = &moveQueue;
+    callbackCtx.moveQueueCv = &moveQueueCv;
     callbackCtx.initFromConfig(cfg);  // Cache config values (lock-free)
     constexpr size_t kCallbackTicketCount = 8;
     std::array<CallbackTicket, kCallbackTicketCount> callbackTickets{};
@@ -556,6 +615,29 @@ int main(int argc, char* argv[]) {
 
     auto lastStatTime = std::chrono::steady_clock::now();
     auto lastRecoilTime = std::chrono::steady_clock::now();
+    std::atomic<bool> moveSenderRunning{true};
+    std::thread moveSenderThread([&]() {
+        MoveCommand cmd;
+        while (moveSenderRunning.load(std::memory_order_relaxed) || moveQueue.hasPending()) {
+            if (moveQueue.tryPop(cmd)) {
+                if (cmd.dx != 0 || cmd.dy != 0) {
+                    makcu.move(cmd.dx, cmd.dy);
+                }
+            } else {
+                std::unique_lock<std::mutex> lock(moveQueueCvMutex);
+                moveQueueCv.wait_for(lock, std::chrono::microseconds(500), [&]() {
+                    return !moveSenderRunning.load(std::memory_order_relaxed) || moveQueue.hasPending();
+                });
+            }
+        }
+    });
+    auto queueMove = [&](int dx, int dy) {
+        if (dx == 0 && dy == 0) return;
+        const MoveCommand cmd{dx, dy};
+        if (moveQueue.tryPush(cmd)) {
+            moveQueueCv.notify_one();
+        }
+    };
 
     std::cout << "[Simple] Full GPU pipeline: ENABLED (inference + decode + target + PID)" << std::endl;
     std::cout << "[Simple] GPU Callback API: ENABLED (lowest latency, no sync wait)" << std::endl;
@@ -661,9 +743,7 @@ int main(int argc, char* argv[]) {
                 if (recoilElapsed >= cfg.recoilTickMs) {
                     int recoilX = static_cast<int>(cfg.recoilCompX);
                     int recoilY = static_cast<int>(cfg.recoilCompY);
-                    if (recoilX != 0 || recoilY != 0) {
-                        makcu.move(recoilX, recoilY);
-                    }
+                    queueMove(recoilX, recoilY);
                     lastRecoilTime = recoilNow;
                 }
             }
@@ -687,9 +767,7 @@ int main(int argc, char* argv[]) {
             if (recoilElapsed >= cfg.recoilTickMs) {
                 int recoilX = static_cast<int>(cfg.recoilCompX);
                 int recoilY = static_cast<int>(cfg.recoilCompY);
-                if (recoilX != 0 || recoilY != 0) {
-                    makcu.move(recoilX, recoilY);
-                }
+                queueMove(recoilX, recoilY);
                 lastRecoilTime = now;
             }
         }
@@ -744,6 +822,11 @@ int main(int argc, char* argv[]) {
 
     // Wait for any pending GPU work before shutdown
     cudaStreamSynchronize(inference.getStream());
+    moveSenderRunning.store(false, std::memory_order_relaxed);
+    moveQueueCv.notify_all();
+    if (moveSenderThread.joinable()) {
+        moveSenderThread.join();
+    }
 
     std::cout << "\n[Simple] Shutting down..." << std::endl;
     udpCapture.StopCapture();

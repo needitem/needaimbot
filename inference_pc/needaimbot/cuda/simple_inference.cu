@@ -832,6 +832,7 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
                                                 float headYOffset, float bodyYOffset,
                                                 InferenceCallback callback, void* userData) {
     if (!m_loaded || !pinnedData || width <= 0 || height <= 0) return false;
+    if (m_callbacksInFlight.load(std::memory_order_acquire) >= kMaxCallbacksInFlight) return false;
 
     int callbackSlot = -1;
     for (int attempt = 0; attempt < kMaxCallbacksInFlight; ++attempt) {

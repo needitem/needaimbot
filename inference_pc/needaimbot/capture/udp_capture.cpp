@@ -11,6 +11,8 @@
 #else
 #define SOCKADDR struct sockaddr
 #define WSAETIMEDOUT ETIMEDOUT
+#include <pthread.h>
+#include <sched.h>
 #endif
 
 UDPCapture::UDPCapture() = default;
@@ -379,6 +381,27 @@ void UDPCapture::StopCapture() {
 }
 
 void UDPCapture::receiveThread() {
+#ifndef _WIN32
+    // Best-effort priority/affinity hints for lower receive jitter.
+    {
+        struct sched_param param;
+        param.sched_priority = sched_get_priority_max(SCHED_FIFO);
+        if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &param) != 0) {
+            param.sched_priority = sched_get_priority_max(SCHED_RR);
+            pthread_setschedparam(pthread_self(), SCHED_RR, &param);
+        }
+    }
+    {
+        const long cpuCount = sysconf(_SC_NPROCESSORS_ONLN);
+        if (cpuCount > 1) {
+            cpu_set_t cpuset;
+            CPU_ZERO(&cpuset);
+            CPU_SET(static_cast<int>(cpuCount - 1), &cpuset);
+            pthread_setaffinity_np(pthread_self(), sizeof(cpuset), &cpuset);
+        }
+    }
+#endif
+
     std::vector<uint8_t> recvBuffer(65536);
     constexpr size_t kChunkPayloadBytes = 60000;
     constexpr auto kFragmentStaleTimeout = std::chrono::milliseconds(100);
@@ -520,6 +543,18 @@ void UDPCapture::receiveThread() {
     std::array<sockaddr_in, kRecvBatchPackets> batchFromAddr{};
     std::array<iovec, kRecvBatchPackets> batchIov{};
     std::array<mmsghdr, kRecvBatchPackets> batchMsgs{};
+    for (unsigned int i = 0; i < kRecvBatchPackets; ++i) {
+        batchIov[i].iov_base = batchBuffers[i].data();
+        batchIov[i].iov_len = batchBuffers[i].size();
+        batchMsgs[i].msg_hdr.msg_name = &batchFromAddr[i];
+        batchMsgs[i].msg_hdr.msg_iov = &batchIov[i];
+        batchMsgs[i].msg_hdr.msg_iovlen = 1;
+        batchMsgs[i].msg_hdr.msg_control = nullptr;
+        batchMsgs[i].msg_hdr.msg_controllen = 0;
+        batchMsgs[i].msg_hdr.msg_flags = 0;
+        batchMsgs[i].msg_hdr.msg_namelen = sizeof(sockaddr_in);
+        batchMsgs[i].msg_len = 0;
+    }
 #else
     sockaddr_in fromAddr{};
 #ifdef _WIN32
@@ -532,19 +567,12 @@ void UDPCapture::receiveThread() {
     while (m_running.load(std::memory_order_relaxed)) {
 #ifdef __linux__
         for (unsigned int i = 0; i < kRecvBatchPackets; ++i) {
-            batchIov[i].iov_base = batchBuffers[i].data();
-            batchIov[i].iov_len = batchBuffers[i].size();
-            batchMsgs[i].msg_hdr.msg_name = &batchFromAddr[i];
             batchMsgs[i].msg_hdr.msg_namelen = sizeof(sockaddr_in);
-            batchMsgs[i].msg_hdr.msg_iov = &batchIov[i];
-            batchMsgs[i].msg_hdr.msg_iovlen = 1;
-            batchMsgs[i].msg_hdr.msg_control = nullptr;
-            batchMsgs[i].msg_hdr.msg_controllen = 0;
-            batchMsgs[i].msg_hdr.msg_flags = 0;
             batchMsgs[i].msg_len = 0;
         }
 
-        const int batchCount = recvmmsg(m_recvSocket, batchMsgs.data(), kRecvBatchPackets, 0, nullptr);
+        const int batchCount = recvmmsg(
+            m_recvSocket, batchMsgs.data(), kRecvBatchPackets, MSG_WAITFORONE, nullptr);
         if (batchCount <= 0) {
             int err = errno;
             if (err == ETIMEDOUT || err == EWOULDBLOCK || err == EAGAIN) {
@@ -557,14 +585,14 @@ void UDPCapture::receiveThread() {
             continue;
         }
 
+        const auto batchNow = std::chrono::steady_clock::now();
         for (int i = 0; i < batchCount; ++i) {
-            const auto packetNow = std::chrono::steady_clock::now();
             if (((++packetsSinceCleanup) & (kCleanupPacketInterval - 1)) == 0) {
-                cleanupStaleFragments(packetNow);
+                cleanupStaleFragments(batchNow);
             }
             processPacket(batchBuffers[static_cast<size_t>(i)].data(),
                           static_cast<int>(batchMsgs[static_cast<size_t>(i)].msg_len),
-                          packetNow);
+                          batchNow);
         }
 #else
         fromLen = sizeof(fromAddr);
