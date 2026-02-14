@@ -12,6 +12,7 @@
 #include <vector>
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 #include <NvInferVersion.h>
 
 // TensorRT API version compatibility
@@ -436,14 +437,29 @@ void SimpleInference::Logger::log(Severity severity, const char* msg) noexcept {
 }
 
 SimpleInference::SimpleInference() {
-    for (auto& slot : m_callbackSlotBusy) {
-        slot.store(false, std::memory_order_relaxed);
+    for (int i = 0; i < kMaxCallbacksInFlight; ++i) {
+        m_callbackSlotBusy[static_cast<size_t>(i)].store(false, std::memory_order_relaxed);
+        m_callbackSlotPending[static_cast<size_t>(i)].store(false, std::memory_order_relaxed);
+        m_callbackEvents[static_cast<size_t>(i)] = nullptr;
     }
 }
 
 SimpleInference::~SimpleInference() {
     // Flush pending stream work so callback state is no longer in-flight.
     if (m_stream) cudaStreamSynchronize(m_stream);
+
+    m_callbackWorkerRunning.store(false, std::memory_order_release);
+    m_callbackWorkerCv.notify_all();
+    if (m_callbackWorkerThread.joinable()) {
+        m_callbackWorkerThread.join();
+    }
+
+    for (int i = 0; i < kMaxCallbacksInFlight; ++i) {
+        if (m_callbackEvents[static_cast<size_t>(i)]) {
+            cudaEventDestroy(m_callbackEvents[static_cast<size_t>(i)]);
+            m_callbackEvents[static_cast<size_t>(i)] = nullptr;
+        }
+    }
 
     // Destroy CUDA graph
     if (m_graphExec) cudaGraphExecDestroy(m_graphExec);
@@ -607,6 +623,9 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
     for (int i = 0; i < kMaxCallbacksInFlight; ++i) {
         cudaMalloc(&m_d_inferenceResult[i], sizeof(InferenceResult));
         cudaMallocHost(&m_h_inferenceResultPinned[i], sizeof(InferenceResult));
+        cudaEventCreateWithFlags(&m_callbackEvents[static_cast<size_t>(i)], cudaEventDisableTiming);
+        m_callbackSlotPending[static_cast<size_t>(i)].store(false, std::memory_order_relaxed);
+        m_callbackSlotBusy[static_cast<size_t>(i)].store(false, std::memory_order_relaxed);
     }
 
 #if TRT_USE_NEW_API
@@ -617,6 +636,8 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
 #endif
 
     m_loaded = true;
+    m_callbackWorkerRunning.store(true, std::memory_order_release);
+    m_callbackWorkerThread = std::thread(&SimpleInference::callbackWorkerLoop, this);
     std::cout << "[SimpleInference] Engine loaded successfully" << std::endl;
 
     // Warm up TensorRT
@@ -814,30 +835,63 @@ bool SimpleInference::captureFullGraph(float confThreshold, int headClassId, flo
 }
 
 // =============================================================================
-// GPU CALLBACK API - Lowest latency via cudaLaunchHostFunc
+// Callback Completion Worker
 // =============================================================================
+void SimpleInference::callbackWorkerLoop() {
+    while (m_callbackWorkerRunning.load(std::memory_order_acquire) ||
+           m_callbacksInFlight.load(std::memory_order_acquire) > 0) {
+        bool handledAny = false;
+        bool hasPending = false;
 
-// CUDA host function called when GPU work completes
-void CUDART_CB SimpleInference::inferenceCompleteCallback(void* data) {
-    auto* cbData = static_cast<SimpleInference::CallbackData*>(data);
-    if (!cbData) return;
+        for (int slot = 0; slot < kMaxCallbacksInFlight; ++slot) {
+            if (!m_callbackSlotPending[static_cast<size_t>(slot)].load(std::memory_order_acquire)) {
+                continue;
+            }
+            hasPending = true;
 
-    try {
-        if (cbData->callback) {
-            cbData->callback(*cbData->resultPtr, cbData->userData);
+            cudaError_t eventStatus = cudaEventQuery(m_callbackEvents[static_cast<size_t>(slot)]);
+            if (eventStatus == cudaErrorNotReady) {
+                continue;
+            }
+
+            m_callbackSlotPending[static_cast<size_t>(slot)].store(false, std::memory_order_release);
+
+            if (eventStatus == cudaSuccess) {
+                CallbackData& cbData = m_callbackDataSlots[static_cast<size_t>(slot)];
+                try {
+                    if (cbData.callback && cbData.resultPtr) {
+                        cbData.callback(*cbData.resultPtr, cbData.userData);
+                    }
+                } catch (const std::exception& e) {
+                    std::cerr << "[SimpleInference] Callback exception: " << e.what() << std::endl;
+                } catch (...) {
+                    std::cerr << "[SimpleInference] Callback exception: unknown" << std::endl;
+                }
+            } else {
+                std::cerr << "[SimpleInference] cudaEventQuery failed for slot " << slot
+                          << ": " << cudaGetErrorString(eventStatus) << std::endl;
+                cudaGetLastError();
+            }
+
+            m_callbackSlotBusy[static_cast<size_t>(slot)].store(false, std::memory_order_release);
+            m_callbacksInFlight.fetch_sub(1, std::memory_order_acq_rel);
+            handledAny = true;
         }
-    } catch (const std::exception& e) {
-        std::cerr << "[SimpleInference] Callback exception: " << e.what() << std::endl;
-    } catch (...) {
-        std::cerr << "[SimpleInference] Callback exception: unknown" << std::endl;
-    }
 
-    if (cbData->owner) {
-        const int slot = cbData->slotIndex;
-        if (slot >= 0 && slot < kMaxCallbacksInFlight) {
-            cbData->owner->m_callbackSlotBusy[slot].store(false, std::memory_order_release);
+        if (handledAny) {
+            continue;
         }
-        cbData->owner->m_callbacksInFlight.fetch_sub(1, std::memory_order_acq_rel);
+
+        std::unique_lock<std::mutex> lock(m_callbackWorkerMutex);
+        m_callbackWorkerCv.wait_for(lock, std::chrono::microseconds(hasPending ? 100 : 300), [&]() {
+            if (!m_callbackWorkerRunning.load(std::memory_order_acquire)) {
+                return true;
+            }
+            if (m_callbacksInFlight.load(std::memory_order_acquire) > 0) {
+                return true;
+            }
+            return false;
+        });
     }
 }
 
@@ -936,12 +990,14 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
               m_h_inferenceResultPinned[static_cast<size_t>(resultSlotForCallback)],
               this, callbackSlot};
 
-    // Launch host function - fires immediately when GPU finishes
-    cudaError_t err = cudaLaunchHostFunc(m_stream, SimpleInference::inferenceCompleteCallback, &cbData);
+    // Record completion event and let callback worker invoke host callback.
+    cudaError_t err = cudaEventRecord(m_callbackEvents[static_cast<size_t>(callbackSlot)], m_stream);
     if (err != cudaSuccess) {
-        std::cerr << "[SimpleInference] cudaLaunchHostFunc failed: " << cudaGetErrorString(err) << std::endl;
+        std::cerr << "[SimpleInference] cudaEventRecord failed: " << cudaGetErrorString(err) << std::endl;
         return clearInFlightAndFail(true);
     }
+    m_callbackSlotPending[static_cast<size_t>(callbackSlot)].store(true, std::memory_order_release);
+    m_callbackWorkerCv.notify_one();
 
     return true;
 }

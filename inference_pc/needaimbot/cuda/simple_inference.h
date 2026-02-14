@@ -11,7 +11,10 @@
 
 #include <array>
 #include <atomic>
+#include <condition_variable>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <cstdint>
 #include <cstddef>
 #include <cuda_runtime.h>
@@ -148,11 +151,16 @@ private:
 
     std::array<CallbackData, kMaxCallbacksInFlight> m_callbackDataSlots{};
     std::array<std::atomic<bool>, kMaxCallbacksInFlight> m_callbackSlotBusy{};
+    std::array<std::atomic<bool>, kMaxCallbacksInFlight> m_callbackSlotPending{};
+    std::array<cudaEvent_t, kMaxCallbacksInFlight> m_callbackEvents{};
     std::atomic<int> m_callbacksInFlight{0};
     uint32_t m_callbackSlotCursor = 0;
+    std::atomic<bool> m_callbackWorkerRunning{false};
+    std::thread m_callbackWorkerThread;
+    std::condition_variable m_callbackWorkerCv;
+    std::mutex m_callbackWorkerMutex;
 
-    // Called by cudaLaunchHostFunc when stream work has completed
-    static void CUDART_CB inferenceCompleteCallback(void* data);
+    void callbackWorkerLoop();
 
     // Execute full fused pipeline (H2D + preprocess + inference + postprocess + D2H)
     bool executeFusedPipeline(void* rawInput, int width, int height,
