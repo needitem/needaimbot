@@ -49,6 +49,7 @@ void UDPCapture::releaseFragment(FrameFragments* frag) {
     frag->receivedCount = 0;
     frag->width = 0;
     frag->height = 0;
+    frag->frameBytes = 0;
     frag->bufferIndex = -1;
     frag->dropped = false;
     frag->lastUpdate = std::chrono::steady_clock::time_point{};
@@ -240,7 +241,9 @@ void UDPCapture::publishAssembledBuffer(int bufferIndex, uint16_t width, uint16_
             expected, BUFFER_FREE, std::memory_order_acq_rel, std::memory_order_relaxed);
     }
 
+    m_receivedFrames.fetch_add(1, std::memory_order_relaxed);
     m_publishSeq.fetch_add(1, std::memory_order_release);
+    m_publishCv.notify_one();
 }
 
 void UDPCapture::clearFragmentState() {
@@ -267,6 +270,7 @@ void UDPCapture::clearFragmentState() {
         frag.receivedCount = 0;
         frag.width = 0;
         frag.height = 0;
+        frag.frameBytes = 0;
         frag.bufferIndex = -1;
         frag.dropped = false;
         frag.lastUpdate = std::chrono::steady_clock::time_point{};
@@ -291,7 +295,7 @@ bool UDPCapture::Initialize(unsigned short listenPort) {
         return false;
     }
 
-    int recvBufSize = 8 * 1024 * 1024;
+    int recvBufSize = 16 * 1024 * 1024;
     setsockopt(m_recvSocket, SOL_SOCKET, SO_RCVBUF, (char*)&recvBufSize, sizeof(recvBufSize));
 
     sockaddr_in bindAddr{};
@@ -353,6 +357,7 @@ bool UDPCapture::StartCapture() {
     m_publishSeq.store(0, std::memory_order_relaxed);
     m_consumedSeq = 0;
     m_reserveCursor = 0;
+    m_receivedFrames.store(0, std::memory_order_relaxed);
     m_droppedFrames.store(0, std::memory_order_relaxed);
     for (int i = 0; i < NUM_BUFFERS; ++i) {
         m_bufferState[i].store(BUFFER_FREE, std::memory_order_relaxed);
@@ -372,6 +377,7 @@ void UDPCapture::StopCapture() {
 
     m_running.store(false, std::memory_order_relaxed);
     m_isCapturing.store(false, std::memory_order_relaxed);
+    m_publishCv.notify_all();
     if (m_recvThread.joinable()) {
         m_recvThread.join();
     }
@@ -402,31 +408,115 @@ void UDPCapture::receiveThread() {
     }
 #endif
 
+#ifndef __linux__
     std::vector<uint8_t> recvBuffer(65536);
+#endif
     constexpr size_t kChunkPayloadBytes = 60000;
     constexpr auto kFragmentStaleTimeout = std::chrono::milliseconds(100);
+    constexpr uint32_t kMinPartialPublishRatioPct = 80;
     constexpr uint32_t kCleanupPacketInterval = 64;
     static_assert((kCleanupPacketInterval & (kCleanupPacketInterval - 1)) == 0,
                   "kCleanupPacketInterval must be power-of-two");
     uint32_t packetsSinceCleanup = 0;
+    FrameFragments* cachedFrag = nullptr;
+    uint32_t cachedFrameId = 0;
 
-    auto cleanupStaleFragments = [this, kFragmentStaleTimeout](std::chrono::steady_clock::time_point now) {
+    auto cleanupStaleFragments =
+        [this, kFragmentStaleTimeout, kChunkPayloadBytes, &cachedFrag, &cachedFrameId](
+            std::chrono::steady_clock::time_point now) {
+        const size_t activeSnapshot = m_activeFragmentCount;
+        if (activeSnapshot == 0) return;
+
+        auto clearMissingChunks = [kChunkPayloadBytes](FrameFragments& frag, uint8_t* dst) {
+            if (!dst || frag.totalPackets == 0 || frag.width == 0 || frag.height == 0) return;
+
+            const size_t frameSize = frag.frameBytes;
+            if (frameSize == 0) return;
+            auto clearChunk = [&](uint16_t chunkIdx) {
+                const size_t offset = static_cast<size_t>(chunkIdx) * kChunkPayloadBytes;
+                if (offset >= frameSize) return;
+                const size_t clearSize = std::min(kChunkPayloadBytes, frameSize - offset);
+                std::memset(dst + offset, 0, clearSize);
+            };
+
+            if (frag.useReceivedMask) {
+                uint64_t fullMask = ~0ull;
+                if (frag.totalPackets < 64) {
+                    fullMask = (1ull << frag.totalPackets) - 1ull;
+                }
+                uint64_t missingMask = (~frag.receivedMask) & fullMask;
+                for (uint16_t chunkIdx = 0; chunkIdx < frag.totalPackets; ++chunkIdx) {
+                    if ((missingMask & (1ull << chunkIdx)) != 0) {
+                        clearChunk(chunkIdx);
+                    }
+                }
+                return;
+            }
+
+            const size_t packetCount = static_cast<size_t>(frag.totalPackets);
+            for (size_t i = 0; i < packetCount; ++i) {
+                if (i >= frag.received.size() || frag.received[i] == 0) {
+                    clearChunk(static_cast<uint16_t>(i));
+                }
+            }
+        };
+
+        size_t seenActive = 0;
         for (size_t i = 0; i < MAX_FRAGMENT_SLOTS; ++i) {
             FrameFragments& frag = m_fragmentStorage[i];
             if (!frag.active) continue;
-            if ((now - frag.lastUpdate) <= kFragmentStaleTimeout) continue;
+            ++seenActive;
+            if ((now - frag.lastUpdate) <= kFragmentStaleTimeout) {
+                if (seenActive >= activeSnapshot) {
+                    break;
+                }
+                continue;
+            }
+            const bool canPublishPartial =
+                frag.bufferIndex >= 0 &&
+                frag.totalPackets > 0 &&
+                frag.receivedCount > 0 &&
+                (static_cast<uint32_t>(frag.receivedCount) * 100u >=
+                 static_cast<uint32_t>(frag.totalPackets) * kMinPartialPublishRatioPct);
+            if (canPublishPartial) {
+                uint8_t* dst = m_pinnedFrameBuffer[frag.bufferIndex];
+                clearMissingChunks(frag, dst);
+                publishAssembledBuffer(frag.bufferIndex, frag.width, frag.height, frag.frameId);
+                frag.bufferIndex = -1;
+                unlinkFragment(&frag);
+                if (cachedFrag == &frag) {
+                    cachedFrag = nullptr;
+                    cachedFrameId = 0;
+                }
+                releaseFragment(&frag);
+                if (seenActive >= activeSnapshot) {
+                    break;
+                }
+                continue;
+            }
             if (frag.bufferIndex >= 0) {
                 releaseAssemblingBuffer(frag.bufferIndex);
                 frag.bufferIndex = -1;
             }
-            m_droppedFrames.fetch_add(1, std::memory_order_relaxed);
+            if (!frag.dropped) {
+                m_droppedFrames.fetch_add(1, std::memory_order_relaxed);
+            }
             unlinkFragment(&frag);
+            if (cachedFrag == &frag) {
+                cachedFrag = nullptr;
+                cachedFrameId = 0;
+            }
             releaseFragment(&frag);
+
+            if (seenActive >= activeSnapshot) {
+                break;
+            }
         }
     };
 
-    auto processPacket = [this, kChunkPayloadBytes](const uint8_t* packetData, int packetBytes,
-                                                    std::chrono::steady_clock::time_point packetNow) {
+    auto processPacket = [this, kChunkPayloadBytes, &cachedFrag, &cachedFrameId](
+                             const uint8_t* packetData, int packetBytes,
+                             std::chrono::steady_clock::time_point packetNow) {
         if (!packetData || packetBytes < static_cast<int>(sizeof(UDPPacketHeader))) return;
 
         const UDPPacketHeader* header = reinterpret_cast<const UDPPacketHeader*>(packetData);
@@ -442,7 +532,17 @@ void UDPCapture::receiveThread() {
             return;
         }
 
-        FrameFragments* frag = findFragment(frameId);
+        FrameFragments* frag = nullptr;
+        if (cachedFrag && cachedFrag->active && cachedFrameId == frameId &&
+            cachedFrag->frameId == frameId) {
+            frag = cachedFrag;
+        } else {
+            frag = findFragment(frameId);
+            if (frag) {
+                cachedFrag = frag;
+                cachedFrameId = frameId;
+            }
+        }
         if (!frag) {
             frag = acquireFragment();
             if (!frag) {
@@ -455,6 +555,8 @@ void UDPCapture::receiveThread() {
             frag->receivedCount = 0;
             frag->width = header->frameWidth;
             frag->height = header->frameHeight;
+            frag->frameBytes =
+                static_cast<size_t>(frag->width) * static_cast<size_t>(frag->height) * 4;
             frag->dropped = false;
             frag->bufferIndex = -1;
             frag->useReceivedMask = (totalChunks <= 64);
@@ -468,8 +570,7 @@ void UDPCapture::receiveThread() {
             }
             frag->lastUpdate = packetNow;
 
-            const size_t frameSize =
-                static_cast<size_t>(frag->width) * static_cast<size_t>(frag->height) * 4;
+            const size_t frameSize = frag->frameBytes;
             if (!ensurePinnedCapacity(frameSize)) {
                 frag->dropped = true;
                 m_droppedFrames.fetch_add(1, std::memory_order_relaxed);
@@ -482,6 +583,8 @@ void UDPCapture::receiveThread() {
             }
 
             linkFragment(frag, frameId);
+            cachedFrag = frag;
+            cachedFrameId = frameId;
         }
         if (!frag) return;
 
@@ -509,8 +612,8 @@ void UDPCapture::receiveThread() {
             frag->received[chunkIndex] = 1;
         }
 
-        const size_t frameSize =
-            static_cast<size_t>(frag->width) * static_cast<size_t>(frag->height) * 4;
+        const size_t frameSize = frag->frameBytes;
+        if (frameSize == 0) return;
         const size_t offset = static_cast<size_t>(chunkIndex) * kChunkPayloadBytes;
         if (offset >= frameSize) return;
 
@@ -533,12 +636,16 @@ void UDPCapture::receiveThread() {
 
             frag->bufferIndex = -1;
             unlinkFragment(frag);
+            if (cachedFrag == frag) {
+                cachedFrag = nullptr;
+                cachedFrameId = 0;
+            }
             releaseFragment(frag);
         }
     };
 
 #ifdef __linux__
-    constexpr unsigned int kRecvBatchPackets = 8;
+    constexpr unsigned int kRecvBatchPackets = 16;
     std::array<std::array<uint8_t, 65536>, kRecvBatchPackets> batchBuffers{};
     std::array<sockaddr_in, kRecvBatchPackets> batchFromAddr{};
     std::array<iovec, kRecvBatchPackets> batchIov{};
@@ -627,8 +734,8 @@ bool UDPCapture::AcquireFramePinned(void** pinnedRgbData, unsigned int* width,
                                     int* bufferIndex, uint32_t timeoutMs) {
     if (!m_running.load(std::memory_order_relaxed)) return false;
 
-    const auto start = std::chrono::steady_clock::now();
-    uint32_t spinCount = 0;
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(timeoutMs);
     while (m_running.load(std::memory_order_relaxed)) {
         const uint64_t seq = m_publishSeq.load(std::memory_order_acquire);
         if (seq != m_consumedSeq) {
@@ -649,15 +756,15 @@ bool UDPCapture::AcquireFramePinned(void** pinnedRgbData, unsigned int* width,
         }
 
         if (timeoutMs == 0) return false;
-        const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - start).count();
-        if (elapsedMs >= timeoutMs) return false;
-        if (spinCount < 32) {
-            ++spinCount;
-            std::this_thread::yield();
-        } else {
-            std::this_thread::sleep_for(std::chrono::microseconds(200));
+        std::unique_lock<std::mutex> lock(m_publishCvMutex);
+        if (!m_running.load(std::memory_order_relaxed)) return false;
+        if (m_publishCv.wait_until(lock, deadline, [&]() {
+                return !m_running.load(std::memory_order_relaxed) ||
+                       (m_publishSeq.load(std::memory_order_acquire) != m_consumedSeq);
+            })) {
+            continue;
         }
+        return false;
     }
     return false;
 }

@@ -33,7 +33,9 @@ typedef int SOCKET;
 #include <atomic>
 #include <array>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -66,6 +68,7 @@ public:
                             uint32_t timeoutMs = 16);
     void ReleaseFrame(int bufferIndex);
 
+    uint64_t GetReceivedFrameCount() const { return m_receivedFrames.load(std::memory_order_relaxed); }
     uint64_t GetDroppedFrameCount() const { return m_droppedFrames.load(std::memory_order_relaxed); }
     bool IsPinnedMemoryEnabled() const { return m_usePinnedMemory; }
 
@@ -89,6 +92,7 @@ private:
         uint16_t receivedCount = 0;
         uint16_t width = 0;
         uint16_t height = 0;
+        size_t frameBytes = 0;
         int bufferIndex = -1;
         bool dropped = false;
         std::chrono::steady_clock::time_point lastUpdate;
@@ -137,9 +141,12 @@ private:
     std::atomic<uint64_t> m_bufferFrameId[NUM_BUFFERS] = {0, 0, 0};
 
     std::atomic<int> m_latestBufferIndex{-1};
+    std::condition_variable m_publishCv;
+    std::mutex m_publishCvMutex;
     std::atomic<uint64_t> m_publishSeq{0};
     uint64_t m_consumedSeq = 0;
     int m_reserveCursor = 0;
 
+    std::atomic<uint64_t> m_receivedFrames{0};
     std::atomic<uint64_t> m_droppedFrames{0};
 };

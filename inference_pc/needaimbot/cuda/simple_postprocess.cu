@@ -19,6 +19,10 @@ namespace gpa {
 // =============================================================================
 constexpr float DEADZONE_THRESHOLD = 5.0f;  // pixels
 constexpr int MAX_SELECTION_THREADS = 256;
+constexpr int WARP_SIZE = 32;
+constexpr int MAX_SELECTION_WARPS = MAX_SELECTION_THREADS / WARP_SIZE;
+static_assert((MAX_SELECTION_THREADS % WARP_SIZE) == 0,
+              "MAX_SELECTION_THREADS must be multiple of warp size");
 
 // =============================================================================
 // Helper Functions
@@ -30,6 +34,48 @@ __device__ __forceinline__ float readValue(const void* buffer, size_t idx) {
         return __half2float(reinterpret_cast<const __half*>(buffer)[idx]);
     } else {
         return reinterpret_cast<const float*>(buffer)[idx];
+    }
+}
+
+__device__ __forceinline__ Detection shuffleDownDetection(
+    const Detection& det, unsigned mask, int offset) {
+    Detection out;
+    out.x1 = __shfl_down_sync(mask, det.x1, offset);
+    out.y1 = __shfl_down_sync(mask, det.y1, offset);
+    out.x2 = __shfl_down_sync(mask, det.x2, offset);
+    out.y2 = __shfl_down_sync(mask, det.y2, offset);
+    out.confidence = __shfl_down_sync(mask, det.confidence, offset);
+    out.classId = __shfl_down_sync(mask, det.classId, offset);
+    return out;
+}
+
+__device__ __forceinline__ void warpReduceDistMin(
+    Detection& det, float& score, int& valid) {
+    constexpr unsigned kFullMask = 0xFFFFFFFFu;
+    for (int offset = WARP_SIZE >> 1; offset > 0; offset >>= 1) {
+        const float otherScore = __shfl_down_sync(kFullMask, score, offset);
+        const int otherValid = __shfl_down_sync(kFullMask, valid, offset);
+        const Detection otherDet = shuffleDownDetection(det, kFullMask, offset);
+        if (otherValid && (!valid || otherScore < score)) {
+            det = otherDet;
+            score = otherScore;
+            valid = 1;
+        }
+    }
+}
+
+__device__ __forceinline__ void warpReduceIouMax(
+    Detection& det, float& score, int& valid) {
+    constexpr unsigned kFullMask = 0xFFFFFFFFu;
+    for (int offset = WARP_SIZE >> 1; offset > 0; offset >>= 1) {
+        const float otherScore = __shfl_down_sync(kFullMask, score, offset);
+        const int otherValid = __shfl_down_sync(kFullMask, valid, offset);
+        const Detection otherDet = shuffleDownDetection(det, kFullMask, offset);
+        if (otherValid && (!valid || otherScore > score)) {
+            det = otherDet;
+            score = otherScore;
+            valid = 1;
+        }
     }
 }
 
@@ -192,14 +238,17 @@ __global__ void stage1DecodeAndSelectKernel(
 {
     __shared__ Detection s_prevTarget;
     __shared__ bool s_prevValid;
-    __shared__ Detection s_bestDistDet[MAX_SELECTION_THREADS];
-    __shared__ Detection s_bestIouDet[MAX_SELECTION_THREADS];
-    __shared__ float s_bestDist[MAX_SELECTION_THREADS];
-    __shared__ float s_bestIou[MAX_SELECTION_THREADS];
-    __shared__ uint8_t s_hasDist[MAX_SELECTION_THREADS];
-    __shared__ uint8_t s_hasIou[MAX_SELECTION_THREADS];
+    __shared__ Detection s_warpBestDistDet[MAX_SELECTION_WARPS];
+    __shared__ Detection s_warpBestIouDet[MAX_SELECTION_WARPS];
+    __shared__ float s_warpBestDist[MAX_SELECTION_WARPS];
+    __shared__ float s_warpBestIou[MAX_SELECTION_WARPS];
+    __shared__ uint8_t s_warpHasDist[MAX_SELECTION_WARPS];
+    __shared__ uint8_t s_warpHasIou[MAX_SELECTION_WARPS];
 
     const int tid = threadIdx.x;
+    const int lane = tid & (WARP_SIZE - 1);
+    const int warp = tid / WARP_SIZE;
+    const int warpCount = (blockDim.x + WARP_SIZE - 1) / WARP_SIZE;
 
     if (tid == 0) {
         Detection emptyTarget = {};
@@ -263,55 +312,68 @@ __global__ void stage1DecodeAndSelectKernel(
         }
     }
 
-    s_bestDistDet[tid] = localBestByDist;
-    s_bestIouDet[tid] = localBestByIou;
-    s_bestDist[tid] = localBestDist;
-    s_bestIou[tid] = localBestIou;
-    s_hasDist[tid] = localHasDist ? 1u : 0u;
-    s_hasIou[tid] = localHasIou ? 1u : 0u;
+    int hasDist = localHasDist ? 1 : 0;
+    int hasIou = localHasIou ? 1 : 0;
+    warpReduceDistMin(localBestByDist, localBestDist, hasDist);
+    warpReduceIouMax(localBestByIou, localBestIou, hasIou);
+
+    if (lane == 0) {
+        s_warpBestDistDet[warp] = localBestByDist;
+        s_warpBestIouDet[warp] = localBestByIou;
+        s_warpBestDist[warp] = localBestDist;
+        s_warpBestIou[warp] = localBestIou;
+        s_warpHasDist[warp] = hasDist ? 1u : 0u;
+        s_warpHasIou[warp] = hasIou ? 1u : 0u;
+    }
     __syncthreads();
 
-    for (int stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
-        if (tid < stride) {
-            const int other = tid + stride;
-            if (s_hasDist[other] &&
-                (!s_hasDist[tid] || s_bestDist[other] < s_bestDist[tid])) {
-                s_bestDistDet[tid] = s_bestDistDet[other];
-                s_bestDist[tid] = s_bestDist[other];
-                s_hasDist[tid] = 1u;
-            }
-            if (s_hasIou[other] &&
-                (!s_hasIou[tid] || s_bestIou[other] > s_bestIou[tid])) {
-                s_bestIouDet[tid] = s_bestIouDet[other];
-                s_bestIou[tid] = s_bestIou[other];
-                s_hasIou[tid] = 1u;
-            }
-        }
-        __syncthreads();
-    }
-
-    if (tid != 0) {
+    if (warp != 0) {
         return;
     }
 
-    Detection bestByDist = s_bestDistDet[0];
-    float bestDist = s_bestDist[0];
-    bool hasBestByDist = (s_hasDist[0] != 0u);
-    if (!hasBestByDist) {
+    Detection bestByDist = {};
+    bestByDist.classId = -1;
+    float bestDist = FLT_MAX;
+    int hasBestByDist = 0;
+    if (lane < warpCount) {
+        hasBestByDist = (s_warpHasDist[lane] != 0u) ? 1 : 0;
+        if (hasBestByDist) {
+            bestByDist = s_warpBestDistDet[lane];
+            bestDist = s_warpBestDist[lane];
+        }
+    }
+    warpReduceDistMin(bestByDist, bestDist, hasBestByDist);
+
+    Detection bestByIou = {};
+    bestByIou.classId = -1;
+    float bestIou = -1.0f;
+    int hasBestByIou = 0;
+    if (lane < warpCount) {
+        hasBestByIou = (s_warpHasIou[lane] != 0u) ? 1 : 0;
+        if (hasBestByIou) {
+            bestByIou = s_warpBestIouDet[lane];
+            bestIou = s_warpBestIou[lane];
+        }
+    }
+    warpReduceIouMax(bestByIou, bestIou, hasBestByIou);
+
+    if (lane != 0) {
+        return;
+    }
+
+    const bool hasDistResult = (hasBestByDist != 0);
+    const bool hasIouResult = (hasBestByIou != 0);
+    if (!hasDistResult) {
         bestByDist.classId = -1;
         bestDist = FLT_MAX;
     }
-
-    Detection bestByIou = s_bestIouDet[0];
-    float bestIou = s_bestIou[0];
-    bool hasBestByIou = (s_hasIou[0] != 0u);
-    if (!hasBestByIou) {
+    if (!hasIouResult) {
         bestByIou.classId = -1;
         bestIou = -1.0f;
     }
 
     const int outIdx = blockIdx.x;
-    if (hasBestByDist) {
+    if (hasDistResult) {
         d_stage1_best_dist[outIdx] = bestByDist;
         d_stage1_dist_score[outIdx] = bestDist;
     } else {
@@ -321,7 +383,7 @@ __global__ void stage1DecodeAndSelectKernel(
         d_stage1_dist_score[outIdx] = FLT_MAX;
     }
 
-    if (hasBestByIou) {
+    if (hasIouResult) {
         d_stage1_best_iou[outIdx] = bestByIou;
         d_stage1_iou_score[outIdx] = bestIou;
     } else {
@@ -353,14 +415,17 @@ __global__ void stage2FinalizeKernel(
     PIDState* __restrict__ d_pid_state,
     InferenceResult* __restrict__ d_inference_result)
 {
-    __shared__ Detection s_bestDistDet[MAX_SELECTION_THREADS];
-    __shared__ Detection s_bestIouDet[MAX_SELECTION_THREADS];
-    __shared__ float s_bestDist[MAX_SELECTION_THREADS];
-    __shared__ float s_bestIou[MAX_SELECTION_THREADS];
-    __shared__ uint8_t s_hasDist[MAX_SELECTION_THREADS];
-    __shared__ uint8_t s_hasIou[MAX_SELECTION_THREADS];
+    __shared__ Detection s_warpBestDistDet[MAX_SELECTION_WARPS];
+    __shared__ Detection s_warpBestIouDet[MAX_SELECTION_WARPS];
+    __shared__ float s_warpBestDist[MAX_SELECTION_WARPS];
+    __shared__ float s_warpBestIou[MAX_SELECTION_WARPS];
+    __shared__ uint8_t s_warpHasDist[MAX_SELECTION_WARPS];
+    __shared__ uint8_t s_warpHasIou[MAX_SELECTION_WARPS];
 
     const int tid = threadIdx.x;
+    const int lane = tid & (WARP_SIZE - 1);
+    const int warp = tid / WARP_SIZE;
+    const int warpCount = (blockDim.x + WARP_SIZE - 1) / WARP_SIZE;
 
     Detection localBestByDist = {};
     localBestByDist.classId = -1;
@@ -390,54 +455,69 @@ __global__ void stage2FinalizeKernel(
         }
     }
 
-    s_bestDistDet[tid] = localBestByDist;
-    s_bestIouDet[tid] = localBestByIou;
-    s_bestDist[tid] = localBestDist;
-    s_bestIou[tid] = localBestIou;
-    s_hasDist[tid] = localHasDist ? 1u : 0u;
-    s_hasIou[tid] = localHasIou ? 1u : 0u;
+    int hasDist = localHasDist ? 1 : 0;
+    int hasIou = localHasIou ? 1 : 0;
+    warpReduceDistMin(localBestByDist, localBestDist, hasDist);
+    warpReduceIouMax(localBestByIou, localBestIou, hasIou);
+
+    if (lane == 0) {
+        s_warpBestDistDet[warp] = localBestByDist;
+        s_warpBestIouDet[warp] = localBestByIou;
+        s_warpBestDist[warp] = localBestDist;
+        s_warpBestIou[warp] = localBestIou;
+        s_warpHasDist[warp] = hasDist ? 1u : 0u;
+        s_warpHasIou[warp] = hasIou ? 1u : 0u;
+    }
     __syncthreads();
 
-    for (int stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
-        if (tid < stride) {
-            const int other = tid + stride;
-            if (s_hasDist[other] &&
-                (!s_hasDist[tid] || s_bestDist[other] < s_bestDist[tid])) {
-                s_bestDistDet[tid] = s_bestDistDet[other];
-                s_bestDist[tid] = s_bestDist[other];
-                s_hasDist[tid] = 1u;
-            }
-            if (s_hasIou[other] &&
-                (!s_hasIou[tid] || s_bestIou[other] > s_bestIou[tid])) {
-                s_bestIouDet[tid] = s_bestIouDet[other];
-                s_bestIou[tid] = s_bestIou[other];
-                s_hasIou[tid] = 1u;
-            }
-        }
-        __syncthreads();
-    }
-
-    if (tid != 0) {
+    if (warp != 0) {
         return;
     }
 
-    Detection bestByDist = s_bestDistDet[0];
-    bool hasBestByDist = (s_hasDist[0] != 0u);
-    if (!hasBestByDist) {
-        bestByDist.classId = -1;
+    Detection bestByDist = {};
+    bestByDist.classId = -1;
+    float bestDist = FLT_MAX;
+    int hasBestByDist = 0;
+    if (lane < warpCount) {
+        hasBestByDist = (s_warpHasDist[lane] != 0u) ? 1 : 0;
+        if (hasBestByDist) {
+            bestByDist = s_warpBestDistDet[lane];
+            bestDist = s_warpBestDist[lane];
+        }
+    }
+    warpReduceDistMin(bestByDist, bestDist, hasBestByDist);
+
+    Detection bestByIou = {};
+    bestByIou.classId = -1;
+    float bestIou = -1.0f;
+    int hasBestByIou = 0;
+    if (lane < warpCount) {
+        hasBestByIou = (s_warpHasIou[lane] != 0u) ? 1 : 0;
+        if (hasBestByIou) {
+            bestByIou = s_warpBestIouDet[lane];
+            bestIou = s_warpBestIou[lane];
+        }
+    }
+    warpReduceIouMax(bestByIou, bestIou, hasBestByIou);
+
+    if (lane != 0) {
+        return;
     }
 
-    Detection bestByIou = s_bestIouDet[0];
-    float bestIou = s_bestIou[0];
-    bool hasBestByIou = (s_hasIou[0] != 0u);
-    if (!hasBestByIou) {
+    const bool hasDistResult = (hasBestByDist != 0);
+    const bool hasIouResult = (hasBestByIou != 0);
+    (void)bestDist;
+    if (!hasDistResult) {
+        bestByDist.classId = -1;
+    }
+    if (!hasIouResult) {
         bestByIou.classId = -1;
         bestIou = -1.0f;
     }
 
+    bool hasTarget = hasDistResult;
     Detection chosenTarget = bestByDist;
-    bool hasTarget = hasBestByDist;
-    if (hasBestByIou && bestIou > iou_stickiness_threshold) {
+    if (hasIouResult && bestIou > iou_stickiness_threshold) {
         chosenTarget = bestByIou;
         hasTarget = true;
     }

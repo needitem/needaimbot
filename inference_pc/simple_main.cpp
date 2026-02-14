@@ -625,7 +625,7 @@ int main(int argc, char* argv[]) {
                 }
             } else {
                 std::unique_lock<std::mutex> lock(moveQueueCvMutex);
-                moveQueueCv.wait_for(lock, std::chrono::microseconds(500), [&]() {
+                moveQueueCv.wait(lock, [&]() {
                     return !moveSenderRunning.load(std::memory_order_relaxed) || moveQueue.hasPending();
                 });
             }
@@ -669,6 +669,7 @@ int main(int argc, char* argv[]) {
     int submittedFramesWindow = 0;
     int busyDropWindow = 0;
     int submitFailWindow = 0;
+    uint64_t lastUdpReceived = udpCapture.GetReceivedFrameCount();
     uint64_t lastUdpDropped = udpCapture.GetDroppedFrameCount();
     size_t lastStatusLineLen = 0;
     int inFlightBackoff = 0;
@@ -684,6 +685,9 @@ int main(int argc, char* argv[]) {
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastStatTime).count();
         if (elapsed >= 1000) {
             int completedFrames = g_frameCount.exchange(0, std::memory_order_relaxed);  // Atomic read and reset
+            uint64_t udpReceivedNow = udpCapture.GetReceivedFrameCount();
+            uint64_t udpReceivedDelta = udpReceivedNow - lastUdpReceived;
+            lastUdpReceived = udpReceivedNow;
             uint64_t udpDroppedNow = udpCapture.GetDroppedFrameCount();
             uint64_t udpDroppedDelta = udpDroppedNow - lastUdpDropped;
             lastUdpDropped = udpDroppedNow;
@@ -695,6 +699,7 @@ int main(int argc, char* argv[]) {
                    << " D:" << (completedFrames * 1000.0f / elapsed)
                    << " B:" << busyDropWindow
                    << " F:" << submitFailWindow
+                   << " C:" << udpReceivedDelta
                    << " U:" << udpDroppedDelta
                    << " A:" << (makcu.aiming_active.load(std::memory_order_relaxed) ? "ON" : "OFF")
                    << " Sh:" << (makcu.shooting_active.load(std::memory_order_relaxed) ? "ON" : "OFF");
