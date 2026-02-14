@@ -18,18 +18,19 @@ namespace gpa {
 // Constants
 // =============================================================================
 constexpr float DEADZONE_THRESHOLD = 5.0f;  // pixels
-constexpr int MAX_SELECTION_THREADS = 128;
+constexpr int MAX_SELECTION_THREADS = 256;
 
 // =============================================================================
 // Helper Functions
 // =============================================================================
 
-// Helper to read FP16 or FP32 value
-__device__ __forceinline__ float readValue(const void* buffer, bool is_fp16, size_t idx) {
-    if (is_fp16) {
+template<bool kIsFp16>
+__device__ __forceinline__ float readValue(const void* buffer, size_t idx) {
+    if constexpr (kIsFp16) {
         return __half2float(reinterpret_cast<const __half*>(buffer)[idx]);
+    } else {
+        return reinterpret_cast<const float*>(buffer)[idx];
     }
-    return reinterpret_cast<const float*>(buffer)[idx];
 }
 
 // =============================================================================
@@ -77,201 +78,100 @@ __device__ __forceinline__ float computeBoundingBoxIoU(const Detection& a, const
 }
 
 // =============================================================================
-// Decode Kernel with Strict Validation
+// One-pass Fused Decode + Target Selection + PID
 // =============================================================================
 
-// YOLO11 decode kernel: [1, 4+num_classes, num_boxes] -> Detection[]
-// With strict validation to prevent garbage values
-// allowedClassMask: bitmask where bit N = 1 means class N is allowed
-__global__ void decodeYoloKernel(
-    const void* __restrict__ d_raw_output,
-    bool is_fp16,
-    int num_boxes,
-    int num_classes,
-    float conf_threshold,
-    uint32_t allowedClassMask,
-    Detection* d_decoded,
-    int* d_decoded_count,
-    int max_detections)
-{
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= num_boxes) return;
-
-    const unsigned activeMask = __activemask();
-    const int lane = threadIdx.x & 31;
-
-    // Find best class score among ALLOWED classes only
-    float max_score = -1.0f;
-    int best_class = -1;
-
-    for (int c = 0; c < num_classes && c < 32; c++) {
-        // Skip if class is not allowed
-        if (!(allowedClassMask & (1u << c))) continue;
-
-        size_t score_idx = (4 + c) * num_boxes + idx;
-        float score = readValue(d_raw_output, is_fp16, score_idx);
-        if (score > max_score) {
-            max_score = score;
-            best_class = c;
-        }
-    }
-
-    bool valid = (max_score > conf_threshold) && (best_class >= 0);
-    float x1 = 0.0f, y1 = 0.0f, x2 = 0.0f, y2 = 0.0f;
-
-    if (valid) {
-        // Read bbox: cx, cy, w, h
-        float cx = readValue(d_raw_output, is_fp16, 0 * num_boxes + idx);
-        float cy = readValue(d_raw_output, is_fp16, 1 * num_boxes + idx);
-        float w  = readValue(d_raw_output, is_fp16, 2 * num_boxes + idx);
-        float h  = readValue(d_raw_output, is_fp16, 3 * num_boxes + idx);
-
-        // STRICT validation to prevent garbage values (from postProcessGpu.cu)
-        const float MAX_COORD = 10000.0f;
-        valid = isfinite(cx) && isfinite(cy) && isfinite(w) && isfinite(h);
-        valid = valid &&
-            (cx >= 0.0f && cx <= MAX_COORD &&
-             cy >= 0.0f && cy <= MAX_COORD &&
-             w > 0.0f && w <= MAX_COORD &&
-             h > 0.0f && h <= MAX_COORD);
-
-        if (valid) {
-            x1 = cx - w * 0.5f;
-            y1 = cy - h * 0.5f;
-            x2 = cx + w * 0.5f;
-            y2 = cy + h * 0.5f;
-
-            valid =
-                (x1 >= -1000.0f && x1 <= MAX_COORD) &&
-                (y1 >= -1000.0f && y1 <= MAX_COORD) &&
-                (x2 >= -1000.0f && x2 <= MAX_COORD) &&
-                (y2 >= -1000.0f && y2 <= MAX_COORD) &&
-                (w <= 640.0f && h <= 640.0f);
-        }
-    }
-
-    // Warp-aggregated reservation: reduces global atomic contention.
-    const unsigned validMask = __ballot_sync(activeMask, valid);
-    if (validMask == 0u) return;
-
-    unsigned lanePrefixMask = (lane == 0) ? 0u : ((1u << lane) - 1u);
-    int localOffset = __popc(validMask & lanePrefixMask);
-    int warpBase = 0;
-    const int warpValidCount = __popc(validMask);
-    if (lane == 0) {
-        warpBase = atomicAdd(d_decoded_count, warpValidCount);
-    }
-    warpBase = __shfl_sync(activeMask, warpBase, 0);
-
-    if (!valid) return;
-    int write_idx = warpBase + localOffset;
-    if (write_idx >= max_detections) return;
-
-    Detection& det = d_decoded[write_idx];
-    det.x1 = x1;
-    det.y1 = y1;
-    det.x2 = x2;
-    det.y2 = y2;
-    det.confidence = max_score;
-    det.classId = best_class;
+__device__ __forceinline__ void writeEmptyInferenceResult(InferenceResult* result) {
+    result->movement.dx = 0;
+    result->movement.dy = 0;
+    result->hasTarget = 0;
+    result->reserved = 0;
+    result->targetX1 = 0;
+    result->targetY1 = 0;
+    result->targetX2 = 0;
+    result->targetY2 = 0;
+    result->targetConf = 0;
+    result->targetClassId = -1;
 }
 
-cudaError_t decodeYoloGpu(
+template<bool kIsFp16>
+__device__ __forceinline__ bool decodeDetectionIfValid(
     const void* d_raw_output,
-    bool is_fp16,
+    int box_idx,
     int num_boxes,
     int num_classes,
     float conf_threshold,
     uint32_t allowedClassMask,
-    Detection* d_decoded,
-    int* d_decoded_count,
-    int max_detections,
-    cudaStream_t stream)
+    Detection& out_det)
 {
-    if (!d_raw_output || !d_decoded || !d_decoded_count) {
-        return cudaErrorInvalidValue;
+    const int classLimit = (num_classes < 32) ? num_classes : 32;
+    if (classLimit <= 0) return false;
+
+    uint32_t classMask = allowedClassMask;
+    if (classLimit < 32) {
+        classMask &= ((1u << classLimit) - 1u);
     }
+    if (classMask == 0u) return false;
 
-    // Parameter validation
-    if (num_boxes <= 0 || num_classes <= 0 || max_detections <= 0) {
-        cudaMemsetAsync(d_decoded_count, 0, sizeof(int), stream);
-        return cudaSuccess;
-    }
-
-    if (!isfinite(conf_threshold) || conf_threshold < 0.0f) {
-        return cudaErrorInvalidValue;
-    }
-
-    // Reset count
-    cudaMemsetAsync(d_decoded_count, 0, sizeof(int), stream);
-
-    const int block_size = 256;
-    const int grid_size = (num_boxes + block_size - 1) / block_size;
-
-    decodeYoloKernel<<<grid_size, block_size, 0, stream>>>(
-        d_raw_output, is_fp16, num_boxes, num_classes,
-        conf_threshold, allowedClassMask, d_decoded, d_decoded_count, max_detections
-    );
-
-    return cudaGetLastError();
-}
-
-// =============================================================================
-// Target Selection with Head-in-Body Priority (from postProcessGpu.cu)
-// =============================================================================
-
-// Validate single best target before host copy
-__global__ void validateBestTargetKernel(Detection* d_best_target, int* d_has_target)
-{
-    if (threadIdx.x == 0 && blockIdx.x == 0) {
-        if (*d_has_target == 0) return;
-
-        Detection& target = *d_best_target;
-
-        float w = target.x2 - target.x1;
-        float h = target.y2 - target.y1;
-
-        // Combined validation
-        bool invalid_position = (target.x1 < -100) | (target.x1 > 2000) |
-                                (target.y1 < -100) | (target.y1 > 2000) |
-                                (target.x2 < -100) | (target.x2 > 2000) |
-                                (target.y2 < -100) | (target.y2 > 2000);
-        bool invalid_size = (w <= 0) | (w > 1000) | (h <= 0) | (h > 1000);
-        bool invalid_meta = (target.classId < 0) | (target.confidence <= 0.0f) |
-                            (target.confidence > 1.0f);
-
-        if (invalid_position | invalid_size | invalid_meta) {
-            // Clear invalid target
-            target.classId = -1;
-            target.confidence = 0.0f;
-            target.x1 = -1;
-            target.y1 = -1;
-            target.x2 = -1;
-            target.y2 = -1;
-            *d_has_target = 0;
+    float bestScore = -1.0f;
+    int bestClass = -1;
+    while (classMask) {
+        const int c = __ffs(classMask) - 1;
+        classMask &= (classMask - 1u);
+        const int score_idx = (4 + c) * num_boxes + box_idx;
+        const float score = readValue<kIsFp16>(d_raw_output, static_cast<size_t>(score_idx));
+        if (score > bestScore) {
+            bestScore = score;
+            bestClass = c;
         }
     }
+
+    if (!(bestScore > conf_threshold) || bestClass < 0) {
+        return false;
+    }
+
+    const float cx = readValue<kIsFp16>(d_raw_output, static_cast<size_t>(box_idx));
+    const float cy = readValue<kIsFp16>(d_raw_output, static_cast<size_t>(num_boxes + box_idx));
+    const float w  = readValue<kIsFp16>(d_raw_output, static_cast<size_t>(2 * num_boxes + box_idx));
+    const float h  = readValue<kIsFp16>(d_raw_output, static_cast<size_t>(3 * num_boxes + box_idx));
+
+    constexpr float kMaxCoord = 10000.0f;
+    if (!isfinite(cx) || !isfinite(cy) || !isfinite(w) || !isfinite(h)) return false;
+    if (!(cx >= 0.0f && cx <= kMaxCoord &&
+          cy >= 0.0f && cy <= kMaxCoord &&
+          w > 0.0f && w <= kMaxCoord &&
+          h > 0.0f && h <= kMaxCoord)) {
+        return false;
+    }
+
+    const float x1 = cx - w * 0.5f;
+    const float y1 = cy - h * 0.5f;
+    const float x2 = cx + w * 0.5f;
+    const float y2 = cy + h * 0.5f;
+    if (!((x1 >= -1000.0f && x1 <= kMaxCoord) &&
+          (y1 >= -1000.0f && y1 <= kMaxCoord) &&
+          (x2 >= -1000.0f && x2 <= kMaxCoord) &&
+          (y2 >= -1000.0f && y2 <= kMaxCoord) &&
+          (w <= 640.0f && h <= 640.0f))) {
+        return false;
+    }
+
+    out_det.x1 = x1;
+    out_det.y1 = y1;
+    out_det.x2 = x2;
+    out_det.y2 = y2;
+    out_det.confidence = bestScore;
+    out_det.classId = bestClass;
+    return true;
 }
 
-void validateBestTargetGpu(
-    Detection* d_best_target,
-    int* d_has_target,
-    cudaStream_t stream)
-{
-    if (!d_best_target || !d_has_target) return;
-
-    validateBestTargetKernel<<<1, 1, 0, stream>>>(d_best_target, d_has_target);
-}
-
-// =============================================================================
-// Fused Target Selection + PID Movement Kernel (from unified_graph_pipeline.cu)
-// =============================================================================
-
-// Fused kernel: target selection with IoU stickiness + PID movement calculation + result packing
-// All on GPU, single D2H transfer (InferenceResult)
-__global__ void fusedTargetSelectionAndMovementKernel(
-    const Detection* __restrict__ d_detections,
-    const int* __restrict__ d_num_detections,
+template<bool kIsFp16>
+__global__ void postprocessYoloFusedKernel(
+    const void* __restrict__ d_raw_output,
+    int num_boxes,
+    int num_classes,
+    float conf_threshold,
+    uint32_t allowedClassMask,
     int max_detections,
     float screen_center_x,
     float screen_center_y,
@@ -285,293 +185,205 @@ __global__ void fusedTargetSelectionAndMovementKernel(
     float iou_stickiness_threshold,
     float head_y_offset,
     float body_y_offset,
-    Detection* __restrict__ d_selected_target,  // Previous/current selected target (persistent)
-    Detection* __restrict__ d_best_target,      // Output: best target this frame
-    int* __restrict__ d_has_target,             // Output: 1 if target found
-    MouseMovement* __restrict__ d_output_movement,
+    Detection* __restrict__ d_selected_target,
     PIDState* __restrict__ d_pid_state,
-    InferenceResult* __restrict__ d_inference_result)  // Optional: packed result (fused packing)
+    InferenceResult* __restrict__ d_inference_result)
 {
+    (void)max_detections;
     __shared__ Detection s_prevTarget;
     __shared__ bool s_prevValid;
-    __shared__ float s_bestDistX[MAX_SELECTION_THREADS];
-    __shared__ int s_bestIdx[MAX_SELECTION_THREADS];
-    __shared__ float s_bestIoU[MAX_SELECTION_THREADS];
-    __shared__ int s_bestIoUIdx[MAX_SELECTION_THREADS];
+    __shared__ Detection s_bestDistDet[MAX_SELECTION_THREADS];
+    __shared__ Detection s_bestIouDet[MAX_SELECTION_THREADS];
+    __shared__ float s_bestDist[MAX_SELECTION_THREADS];
+    __shared__ float s_bestIou[MAX_SELECTION_THREADS];
+    __shared__ uint8_t s_hasDist[MAX_SELECTION_THREADS];
+    __shared__ uint8_t s_hasIou[MAX_SELECTION_THREADS];
 
-    if (threadIdx.x == 0) {
+    const int tid = threadIdx.x;
+
+    if (tid == 0) {
         Detection emptyTarget = {};
         emptyTarget.classId = -1;
         s_prevTarget = emptyTarget;
         s_prevValid = false;
-
         if (d_selected_target) {
-            Detection cached = *d_selected_target;
-            s_prevTarget = cached;
-            float w = cached.x2 - cached.x1;
-            float h = cached.y2 - cached.y1;
-            s_prevValid = (cached.classId >= 0) && (cached.confidence > 0.0f) &&
-                          (w > 0) && (h > 0);
+            const Detection cached = *d_selected_target;
+            const float w = cached.x2 - cached.x1;
+            const float h = cached.y2 - cached.y1;
+            if (cached.classId >= 0 && cached.confidence > 0.0f && w > 0.0f && h > 0.0f) {
+                s_prevTarget = cached;
+                s_prevValid = true;
+            }
         }
-
-        *d_has_target = 0;
-        d_output_movement->dx = 0;
-        d_output_movement->dy = 0;
     }
     __syncthreads();
 
-    int count = *d_num_detections;
-    if (count <= 0) {
-        if (threadIdx.x == 0) {
-            Detection emptyTarget = {};
-            emptyTarget.classId = -1;
+    Detection localBestByDist = {};
+    localBestByDist.classId = -1;
+    float localBestDist = FLT_MAX;
+    bool localHasDist = false;
 
-            if (d_selected_target) {
-                *d_selected_target = emptyTarget;
-            }
-            *d_best_target = emptyTarget;
-            *d_has_target = 0;
-            d_output_movement->dx = 0;
-            d_output_movement->dy = 0;
+    Detection localBestByIou = {};
+    localBestByIou.classId = -1;
+    float localBestIou = -1.0f;
+    bool localHasIou = false;
 
-            // Reset PID state when no target
-            d_pid_state->prev_error_x = 0.0f;
-            d_pid_state->prev_error_y = 0.0f;
-            d_pid_state->integral_x = 0.0f;
-            d_pid_state->integral_y = 0.0f;
+    const bool prevValid = s_prevValid;
+    const Detection prevTarget = s_prevTarget;
 
-            // IMPORTANT: also clear packed inference result to avoid stale callback data.
-            if (d_inference_result) {
-                d_inference_result->movement.dx = 0;
-                d_inference_result->movement.dy = 0;
-                d_inference_result->hasTarget = 0;
-                d_inference_result->reserved = 0;
-                d_inference_result->targetX1 = 0;
-                d_inference_result->targetY1 = 0;
-                d_inference_result->targetX2 = 0;
-                d_inference_result->targetY2 = 0;
-                d_inference_result->targetConf = 0;
-                d_inference_result->targetClassId = -1;
-            }
-        }
-        return;
-    }
-    if (count > max_detections) {
-        count = max_detections;
-    }
-
-    Detection prevTarget = s_prevTarget;
-    bool prevValid = s_prevValid;
-
-    int localBestIdx = -1;
-    float localBestDistX = 1e9f;
-    float localBestIoU = -1.0f;
-    int localBestIoUIdx = -1;
-
-    // Each thread processes detections in strided fashion
-    for (int i = threadIdx.x; i < count; i += blockDim.x) {
-        const Detection& t = d_detections[i];
-
-        // Skip invalid targets
-        float w = t.x2 - t.x1;
-        float h = t.y2 - t.y1;
-        if (t.x1 < -1000.0f || t.x1 > 10000.0f ||
-            t.y1 < -1000.0f || t.y1 > 10000.0f ||
-            w <= 0 || h <= 0 ||
-            t.confidence <= 0.0f || t.confidence > 1.0f) {
+    for (int i = tid; i < num_boxes; i += blockDim.x) {
+        Detection det = {};
+        if (!decodeDetectionIfValid<kIsFp16>(
+                d_raw_output, i, num_boxes, num_classes, conf_threshold, allowedClassMask, det)) {
             continue;
         }
 
-        float centerX = t.x1 + w * 0.5f;
-        float dx = fabsf(centerX - screen_center_x);
-
-        // Apply head bonus to distance
-        float effective_dist = dx;
-        if (t.classId == head_class_id && head_conf_bonus > 0) {
-            effective_dist -= head_conf_bonus * 100.0f;
+        const float w = det.x2 - det.x1;
+        const float centerX = det.x1 + w * 0.5f;
+        float effectiveDist = fabsf(centerX - screen_center_x);
+        if (det.classId == head_class_id && head_conf_bonus > 0.0f) {
+            effectiveDist -= head_conf_bonus * 100.0f;
+        }
+        if (effectiveDist < localBestDist) {
+            localBestDist = effectiveDist;
+            localBestByDist = det;
+            localHasDist = true;
         }
 
-        if (effective_dist < localBestDistX) {
-            localBestDistX = effective_dist;
-            localBestIdx = i;
-        }
-
-        // Check IoU with previous target for stickiness
         if (prevValid) {
-            float iou = computeBoundingBoxIoU(t, prevTarget);
-            if (iou > localBestIoU) {
-                localBestIoU = iou;
-                localBestIoUIdx = i;
+            const float iou = computeBoundingBoxIoU(det, prevTarget);
+            if (iou > localBestIou) {
+                localBestIou = iou;
+                localBestByIou = det;
+                localHasIou = true;
             }
         }
     }
 
-    s_bestDistX[threadIdx.x] = localBestDistX;
-    s_bestIdx[threadIdx.x] = localBestIdx;
-    s_bestIoU[threadIdx.x] = localBestIoU;
-    s_bestIoUIdx[threadIdx.x] = localBestIoUIdx;
+    s_bestDistDet[tid] = localBestByDist;
+    s_bestIouDet[tid] = localBestByIou;
+    s_bestDist[tid] = localBestDist;
+    s_bestIou[tid] = localBestIou;
+    s_hasDist[tid] = localHasDist ? 1u : 0u;
+    s_hasIou[tid] = localHasIou ? 1u : 0u;
     __syncthreads();
 
-    // Only thread 0 has the final results
-    if (threadIdx.x == 0) {
-        float bestDistX = 1e9f;
-        int bestIdx = -1;
-        float bestIoU = -1.0f;
-        int bestIoUIdx = -1;
+    if (tid != 0) return;
 
-        for (int i = 0; i < blockDim.x; ++i) {
-            if (s_bestIdx[i] >= 0 && s_bestDistX[i] < bestDistX) {
-                bestDistX = s_bestDistX[i];
-                bestIdx = s_bestIdx[i];
-            }
-            if (s_bestIoUIdx[i] >= 0 && s_bestIoU[i] > bestIoU) {
-                bestIoU = s_bestIoU[i];
-                bestIoUIdx = s_bestIoUIdx[i];
-            }
+    Detection bestByDist = {};
+    bestByDist.classId = -1;
+    float bestDist = FLT_MAX;
+    bool hasBestByDist = false;
+
+    Detection bestByIou = {};
+    bestByIou.classId = -1;
+    float bestIou = -1.0f;
+    bool hasBestByIou = false;
+
+    for (int i = 0; i < blockDim.x; ++i) {
+        if (s_hasDist[i] && s_bestDist[i] < bestDist) {
+            bestDist = s_bestDist[i];
+            bestByDist = s_bestDistDet[i];
+            hasBestByDist = true;
         }
-
-        int candidateIndex = bestIdx;
-        bool candidateValid = candidateIndex >= 0;
-        Detection candidateTarget = candidateValid ? d_detections[candidateIndex] : Detection{};
-
-        // Hysteresis: prefer previous target if IoU stays above threshold
-        Detection chosenTarget = candidateTarget;
-        bool haveTarget = candidateValid;
-
-        if (prevValid && bestIoUIdx >= 0 && bestIoU > iou_stickiness_threshold) {
-            chosenTarget = d_detections[bestIoUIdx];
-            haveTarget = true;
-        }
-
-        if (haveTarget) {
-            *d_has_target = 1;
-            *d_best_target = chosenTarget;
-            if (d_selected_target) {
-                *d_selected_target = chosenTarget;
-            }
-
-            // Calculate aim point
-            float target_center_x = (chosenTarget.x1 + chosenTarget.x2) * 0.5f;
-            float target_h = chosenTarget.y2 - chosenTarget.y1;
-            float target_center_y;
-
-            if (chosenTarget.classId == head_class_id) {
-                target_center_y = chosenTarget.y1 + target_h * head_y_offset;
-            } else {
-                target_center_y = chosenTarget.y1 + target_h * body_y_offset;
-            }
-
-            // Current error
-            float error_x = target_center_x - screen_center_x;
-            float error_y = target_center_y - screen_center_y;
-
-            // Load previous PID state
-            float prev_error_x = d_pid_state->prev_error_x;
-            float prev_error_y = d_pid_state->prev_error_y;
-            float integral_x = d_pid_state->integral_x;
-            float integral_y = d_pid_state->integral_y;
-
-            // Reset integral when very close to target (deadzone)
-            if (fabsf(error_x) < DEADZONE_THRESHOLD) {
-                integral_x = 0.0f;
-            }
-            if (fabsf(error_y) < DEADZONE_THRESHOLD) {
-                integral_y = 0.0f;
-            }
-
-            // Update integral (with anti-windup clamping)
-            integral_x += error_x;
-            integral_y += error_y;
-
-            // Clamp integral to prevent windup
-            if (integral_x > integral_max) integral_x = integral_max;
-            if (integral_x < -integral_max) integral_x = -integral_max;
-            if (integral_y > integral_max) integral_y = integral_max;
-            if (integral_y < -integral_max) integral_y = -integral_max;
-
-            // Calculate derivative (error change)
-            float derivative_x = error_x - prev_error_x;
-            float derivative_y = error_y - prev_error_y;
-
-            // Clamp derivative to prevent excessive oscillation
-            if (derivative_x > derivative_max) derivative_x = derivative_max;
-            if (derivative_x < -derivative_max) derivative_x = -derivative_max;
-            if (derivative_y > derivative_max) derivative_y = derivative_max;
-            if (derivative_y < -derivative_max) derivative_y = -derivative_max;
-
-            // PID controller: P + I + D
-            float movement_x = kp_x * error_x + ki_x * integral_x + kd_x * derivative_x;
-            float movement_y = kp_y * error_y + ki_y * integral_y + kd_y * derivative_y;
-
-            // Save current state for next iteration
-            d_pid_state->prev_error_x = error_x;
-            d_pid_state->prev_error_y = error_y;
-            d_pid_state->integral_x = integral_x;
-            d_pid_state->integral_y = integral_y;
-
-            // Round to nearest int and clamp
-            int emit_dx = static_cast<int>(lroundf(movement_x));
-            int emit_dy = static_cast<int>(lroundf(movement_y));
-
-            // Clamp to valid range
-            if (emit_dx > 127) emit_dx = 127;
-            if (emit_dx < -127) emit_dx = -127;
-            if (emit_dy > 127) emit_dy = 127;
-            if (emit_dy < -127) emit_dy = -127;
-
-            d_output_movement->dx = emit_dx;
-            d_output_movement->dy = emit_dy;
-        } else {
-            Detection emptyTarget = {};
-            emptyTarget.classId = -1;
-            *d_has_target = 0;
-            *d_best_target = emptyTarget;
-            if (d_selected_target) {
-                *d_selected_target = emptyTarget;
-            }
-            d_output_movement->dx = 0;
-            d_output_movement->dy = 0;
-
-            // Reset PID state when no target
-            d_pid_state->prev_error_x = 0.0f;
-            d_pid_state->prev_error_y = 0.0f;
-            d_pid_state->integral_x = 0.0f;
-            d_pid_state->integral_y = 0.0f;
-        }
-
-        // Fused packing: pack results into InferenceResult struct (eliminates separate kernel)
-        if (d_inference_result) {
-            d_inference_result->movement = *d_output_movement;
-            d_inference_result->hasTarget = *d_has_target;
-            d_inference_result->reserved = 0;
-
-            if (*d_has_target) {
-                Detection target = *d_best_target;
-                d_inference_result->targetX1 = target.x1;
-                d_inference_result->targetY1 = target.y1;
-                d_inference_result->targetX2 = target.x2;
-                d_inference_result->targetY2 = target.y2;
-                d_inference_result->targetConf = target.confidence;
-                d_inference_result->targetClassId = target.classId;
-            } else {
-                d_inference_result->targetX1 = 0;
-                d_inference_result->targetY1 = 0;
-                d_inference_result->targetX2 = 0;
-                d_inference_result->targetY2 = 0;
-                d_inference_result->targetConf = 0;
-                d_inference_result->targetClassId = -1;
-            }
+        if (s_hasIou[i] && s_bestIou[i] > bestIou) {
+            bestIou = s_bestIou[i];
+            bestByIou = s_bestIouDet[i];
+            hasBestByIou = true;
         }
     }
+
+    Detection chosenTarget = bestByDist;
+    bool hasTarget = hasBestByDist;
+    if (prevValid && hasBestByIou && bestIou > iou_stickiness_threshold) {
+        chosenTarget = bestByIou;
+        hasTarget = true;
+    }
+
+    if (!hasTarget) {
+        if (d_selected_target) {
+            Detection emptyTarget = {};
+            emptyTarget.classId = -1;
+            *d_selected_target = emptyTarget;
+        }
+        d_pid_state->prev_error_x = 0.0f;
+        d_pid_state->prev_error_y = 0.0f;
+        d_pid_state->integral_x = 0.0f;
+        d_pid_state->integral_y = 0.0f;
+        writeEmptyInferenceResult(d_inference_result);
+        return;
+    }
+
+    if (d_selected_target) {
+        *d_selected_target = chosenTarget;
+    }
+
+    const float target_center_x = (chosenTarget.x1 + chosenTarget.x2) * 0.5f;
+    const float target_h = chosenTarget.y2 - chosenTarget.y1;
+    const float target_center_y =
+        (chosenTarget.classId == head_class_id)
+            ? (chosenTarget.y1 + target_h * head_y_offset)
+            : (chosenTarget.y1 + target_h * body_y_offset);
+
+    const float error_x = target_center_x - screen_center_x;
+    const float error_y = target_center_y - screen_center_y;
+
+    float prev_error_x = d_pid_state->prev_error_x;
+    float prev_error_y = d_pid_state->prev_error_y;
+    float integral_x = d_pid_state->integral_x;
+    float integral_y = d_pid_state->integral_y;
+
+    if (fabsf(error_x) < DEADZONE_THRESHOLD) integral_x = 0.0f;
+    if (fabsf(error_y) < DEADZONE_THRESHOLD) integral_y = 0.0f;
+
+    integral_x += error_x;
+    integral_y += error_y;
+    if (integral_x > integral_max) integral_x = integral_max;
+    if (integral_x < -integral_max) integral_x = -integral_max;
+    if (integral_y > integral_max) integral_y = integral_max;
+    if (integral_y < -integral_max) integral_y = -integral_max;
+
+    float derivative_x = error_x - prev_error_x;
+    float derivative_y = error_y - prev_error_y;
+    if (derivative_x > derivative_max) derivative_x = derivative_max;
+    if (derivative_x < -derivative_max) derivative_x = -derivative_max;
+    if (derivative_y > derivative_max) derivative_y = derivative_max;
+    if (derivative_y < -derivative_max) derivative_y = -derivative_max;
+
+    const float movement_x = kp_x * error_x + ki_x * integral_x + kd_x * derivative_x;
+    const float movement_y = kp_y * error_y + ki_y * integral_y + kd_y * derivative_y;
+
+    d_pid_state->prev_error_x = error_x;
+    d_pid_state->prev_error_y = error_y;
+    d_pid_state->integral_x = integral_x;
+    d_pid_state->integral_y = integral_y;
+
+    int emit_dx = __float2int_rn(movement_x);
+    int emit_dy = __float2int_rn(movement_y);
+    if (emit_dx > 127) emit_dx = 127;
+    if (emit_dx < -127) emit_dx = -127;
+    if (emit_dy > 127) emit_dy = 127;
+    if (emit_dy < -127) emit_dy = -127;
+
+    d_inference_result->movement.dx = emit_dx;
+    d_inference_result->movement.dy = emit_dy;
+    d_inference_result->hasTarget = 1;
+    d_inference_result->reserved = 0;
+    d_inference_result->targetX1 = chosenTarget.x1;
+    d_inference_result->targetY1 = chosenTarget.y1;
+    d_inference_result->targetX2 = chosenTarget.x2;
+    d_inference_result->targetY2 = chosenTarget.y2;
+    d_inference_result->targetConf = chosenTarget.confidence;
+    d_inference_result->targetClassId = chosenTarget.classId;
 }
 
-// =============================================================================
-// Host API for Fused Kernel
-// =============================================================================
-
-cudaError_t fusedTargetSelectionAndMovementGpu(
-    const Detection* d_detections,
-    const int* d_num_detections,
+cudaError_t postprocessYoloFusedGpu(
+    const void* d_raw_output,
+    bool is_fp16,
+    int num_boxes,
+    int num_classes,
+    float conf_threshold,
+    uint32_t allowedClassMask,
     int max_detections,
     float screen_center_x,
     float screen_center_y,
@@ -582,49 +394,75 @@ cudaError_t fusedTargetSelectionAndMovementGpu(
     float head_y_offset,
     float body_y_offset,
     Detection* d_selected_target,
-    Detection* d_best_target,
-    int* d_has_target,
-    MouseMovement* d_output_movement,
     PIDState* d_pid_state,
     InferenceResult* d_inference_result,
     cudaStream_t stream)
 {
-    if (!d_detections || !d_num_detections || !d_best_target ||
-        !d_has_target || !d_output_movement || !d_pid_state) {
+    if (!d_raw_output || !d_pid_state || !d_inference_result) {
+        return cudaErrorInvalidValue;
+    }
+    if (num_boxes <= 0 || num_classes <= 0) {
+        return cudaErrorInvalidValue;
+    }
+    if (!isfinite(conf_threshold) || conf_threshold < 0.0f) {
         return cudaErrorInvalidValue;
     }
 
-    // Increase selection parallelism as max detections grows.
-    int threads = 32;
-    if (max_detections > 64) {
-        threads = 128;
-    } else if (max_detections > 32) {
-        threads = 64;
-    }
+    int threads = 256;
+    if (num_boxes <= 128) threads = 128;
+    if (num_boxes <= 64) threads = 64;
+    if (num_boxes <= 32) threads = 32;
+    if (threads > MAX_SELECTION_THREADS) threads = MAX_SELECTION_THREADS;
 
-    fusedTargetSelectionAndMovementKernel<<<1, threads, 0, stream>>>(
-        d_detections,
-        d_num_detections,
-        max_detections,
-        screen_center_x,
-        screen_center_y,
-        head_class_id,
-        head_conf_bonus,
-        pid_config.kp_x, pid_config.kp_y,
-        pid_config.ki_x, pid_config.ki_y,
-        pid_config.kd_x, pid_config.kd_y,
-        pid_config.integral_max,
-        pid_config.derivative_max,
-        iou_stickiness_threshold,
-        head_y_offset,
-        body_y_offset,
-        d_selected_target,
-        d_best_target,
-        d_has_target,
-        d_output_movement,
-        d_pid_state,
-        d_inference_result  // Fused packing (nullptr = skip)
-    );
+    if (is_fp16) {
+        postprocessYoloFusedKernel<true><<<1, threads, 0, stream>>>(
+            d_raw_output,
+            num_boxes,
+            num_classes,
+            conf_threshold,
+            allowedClassMask,
+            max_detections,
+            screen_center_x,
+            screen_center_y,
+            head_class_id,
+            head_conf_bonus,
+            pid_config.kp_x, pid_config.kp_y,
+            pid_config.ki_x, pid_config.ki_y,
+            pid_config.kd_x, pid_config.kd_y,
+            pid_config.integral_max,
+            pid_config.derivative_max,
+            iou_stickiness_threshold,
+            head_y_offset,
+            body_y_offset,
+            d_selected_target,
+            d_pid_state,
+            d_inference_result
+        );
+    } else {
+        postprocessYoloFusedKernel<false><<<1, threads, 0, stream>>>(
+            d_raw_output,
+            num_boxes,
+            num_classes,
+            conf_threshold,
+            allowedClassMask,
+            max_detections,
+            screen_center_x,
+            screen_center_y,
+            head_class_id,
+            head_conf_bonus,
+            pid_config.kp_x, pid_config.kp_y,
+            pid_config.ki_x, pid_config.ki_y,
+            pid_config.kd_x, pid_config.kd_y,
+            pid_config.integral_max,
+            pid_config.derivative_max,
+            iou_stickiness_threshold,
+            head_y_offset,
+            body_y_offset,
+            d_selected_target,
+            d_pid_state,
+            d_inference_result
+        );
+    }
 
     return cudaGetLastError();
 }

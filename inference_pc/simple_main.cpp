@@ -10,7 +10,6 @@
 #include <atomic>
 #include <chrono>
 #include <csignal>
-#include <cstring>
 #include <cmath>
 #include <iomanip>
 #include <random>
@@ -30,6 +29,10 @@ using json = nlohmann::json;
 
 std::atomic<bool> g_running{true};
 std::atomic<int> g_frameCount{0};  // Completed inference callbacks per stat window
+
+inline int fastRoundToInt(float value) {
+    return static_cast<int>(value >= 0.0f ? (value + 0.5f) : (value - 0.5f));
+}
 
 void signalHandler(int sig) {
     std::cout << "\n[Simple] Received signal " << sig << ", shutting down..." << std::endl;
@@ -321,14 +324,12 @@ struct CallbackContext {
     float deadbandY;          // Minimum movement threshold Y
     int lastMoveX;            // Previous movement for sign-flip detection
     int lastMoveY;
-    int consecutiveSameSign;  // Counter for hysteresis
     
     // Noise LUT (precomputed once, lock-free callback reads)
     std::array<float, kNoiseLutSize> noiseLutX{};
     std::array<float, kNoiseLutSize> noiseLutY{};
     size_t noiseCursor = 0;
     std::atomic<int> inFlightBufferIndex{-1};
-    std::atomic<bool> droppedWhileInFlight{false};
     std::chrono::steady_clock::time_point lastMouseMoveTime{};
     
     // Initialize cached values from config
@@ -343,7 +344,6 @@ struct CallbackContext {
         deadbandY = 0.3f;
         lastMoveX = 0;
         lastMoveY = 0;
-        consecutiveSameSign = 0;
         noiseCursor = 0;
         lastMouseMoveTime = std::chrono::steady_clock::now() - std::chrono::milliseconds(mouseMinIntervalMs);
 
@@ -367,7 +367,7 @@ struct CallbackContext {
 void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
     CallbackContext* ctx = static_cast<CallbackContext*>(userData);
 
-    int completedBuffer = ctx->inFlightBufferIndex.exchange(-1, std::memory_order_acq_rel);
+    int completedBuffer = ctx->inFlightBufferIndex.exchange(-1, std::memory_order_relaxed);
     if (completedBuffer >= 0 && ctx->udpCapture) {
         ctx->udpCapture->ReleaseFrame(completedBuffer);
     }
@@ -375,21 +375,11 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
     // Count every completed inference callback (target/no-target)
     g_frameCount.fetch_add(1, std::memory_order_relaxed);
 
-    // If newer frames were dropped while this inference was running,
-    // treat this callback as stale and suppress movement.
-    if (ctx->droppedWhileInFlight.exchange(false, std::memory_order_acq_rel)) {
-        ctx->consecutiveSameSign = 0;
-        return;
-    }
-
     if (!ctx->makcu->aiming_active.load(std::memory_order_relaxed)) {
-        ctx->consecutiveSameSign = 0;
         return;
     }
 
     if (!result.hasTarget) {
-        // Reset hysteresis state when no target
-        ctx->consecutiveSameSign = 0;
         return;
     }
     
@@ -416,12 +406,12 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
     // Movement Filter: Deadband + Sign-flip suppression
     // =======================================================================
     // Deadband: Ignore tiny movements (noise/jitter)
-    if (std::abs(moveX) < ctx->deadbandX) moveX = 0.0f;
-    if (std::abs(moveY) < ctx->deadbandY) moveY = 0.0f;
+    if (fabsf(moveX) < ctx->deadbandX) moveX = 0.0f;
+    if (fabsf(moveY) < ctx->deadbandY) moveY = 0.0f;
     
     // Round to integer for mouse movement
-    int finalX = static_cast<int>(std::round(moveX));
-    int finalY = static_cast<int>(std::round(moveY));
+    int finalX = fastRoundToInt(moveX);
+    int finalY = fastRoundToInt(moveY);
     
     // Sign-flip suppression: Prevent jittery back-and-forth movement
     // If sign flips on consecutive frames, suppress until stable
@@ -431,13 +421,9 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
                       ((finalY > 0) != (ctx->lastMoveY > 0)));
     
     if (signFlipX || signFlipY) {
-        // Sign flip detected - apply hysteresis
-        ctx->consecutiveSameSign = 0;
         // Only suppress if movement is small (likely jitter, not intentional)
-        if (std::abs(finalX) < 3 && signFlipX) finalX = 0;
-        if (std::abs(finalY) < 3 && signFlipY) finalY = 0;
-    } else if (finalX != 0 || finalY != 0) {
-        ctx->consecutiveSameSign++;
+        if (signFlipX && finalX > -3 && finalX < 3) finalX = 0;
+        if (signFlipY && finalY > -3 && finalY < 3) finalY = 0;
     }
     
     // Update last movement for next frame
@@ -616,7 +602,7 @@ int main(int argc, char* argv[]) {
         // lock contention and CPU work in the capture path.
         if (inference.isCallbackInFlight()) {
             // No frame was acquired/dropped yet, so do not mark callback stale here.
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            std::this_thread::yield();
             continue;
         }
 
@@ -670,19 +656,9 @@ int main(int argc, char* argv[]) {
             continue;
         }
 
-        // Backpressure: keep at most one in-flight callback inference.
-        // This prevents queue buildup and keeps inference aligned to latest reflected frame.
-        if (inference.isCallbackInFlight()) {
-            busyDropWindow++;
-            callbackCtx.droppedWhileInFlight.store(true, std::memory_order_release);
-            udpCapture.ReleaseFrame(bufferIndex);
-            continue;
-        }
-
         // GPU CALLBACK API: Queue inference, callback fires when GPU completes
         // No cudaStreamSynchronize - mouse movement happens in callback thread!
-        callbackCtx.inFlightBufferIndex.store(bufferIndex, std::memory_order_release);
-        callbackCtx.droppedWhileInFlight.store(false, std::memory_order_release);
+        callbackCtx.inFlightBufferIndex.store(bufferIndex, std::memory_order_relaxed);
 
         bool submitted = inference.runInferenceWithCallback(
             pinnedRgbData, width, height,
@@ -696,12 +672,15 @@ int main(int argc, char* argv[]) {
         if (submitted) {
             submittedFramesWindow++;
         } else {
-            int failedBuffer = callbackCtx.inFlightBufferIndex.exchange(-1, std::memory_order_acq_rel);
+            int failedBuffer = callbackCtx.inFlightBufferIndex.exchange(-1, std::memory_order_relaxed);
             if (failedBuffer >= 0) {
                 udpCapture.ReleaseFrame(failedBuffer);
             }
-            callbackCtx.droppedWhileInFlight.store(false, std::memory_order_release);
-            submitFailWindow++;
+            if (inference.isCallbackInFlight()) {
+                busyDropWindow++;
+            } else {
+                submitFailWindow++;
+            }
         }
 
         // On success, buffer is released by callback after GPU work completes.

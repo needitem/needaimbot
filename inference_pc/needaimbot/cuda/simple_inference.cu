@@ -450,16 +450,9 @@ SimpleInference::~SimpleInference() {
     if (m_d_chwInput) cudaFree(m_d_chwInput);
     if (m_d_output) cudaFree(m_d_output);
 
-    // Free GPU postprocessing buffers
-    if (m_d_decoded) cudaFree(m_d_decoded);
-    if (m_d_decodedCount) cudaFree(m_d_decodedCount);
-    if (m_d_bestTarget) cudaFree(m_d_bestTarget);
-    if (m_d_hasTarget) cudaFree(m_d_hasTarget);
-
     // Free GPU fused pipeline buffers
     if (m_d_selectedTarget) cudaFree(m_d_selectedTarget);
     if (m_d_pidState) cudaFree(m_d_pidState);
-    if (m_d_mouseMovement) cudaFree(m_d_mouseMovement);
 
     // Free combined result buffer
     if (m_d_inferenceResult) cudaFree(m_d_inferenceResult);
@@ -574,21 +567,13 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
     cudaMalloc(&m_d_chwInput, chwInputSize);
     cudaMalloc(&m_d_output, outputSizeGPU);
 
-    // Allocate GPU postprocessing buffers
-    cudaMalloc(&m_d_decoded, static_cast<size_t>(m_maxDetections) * sizeof(Detection));
-    cudaMalloc(&m_d_decodedCount, sizeof(int));
-    cudaMalloc(&m_d_bestTarget, sizeof(Detection));
-    cudaMalloc(&m_d_hasTarget, sizeof(int));
-
     // Allocate GPU fused pipeline buffers
     cudaMalloc(&m_d_selectedTarget, sizeof(Detection));
     cudaMalloc(&m_d_pidState, sizeof(PIDState));
-    cudaMalloc(&m_d_mouseMovement, sizeof(MouseMovement));
 
     // Initialize GPU state buffers to zero
     cudaMemset(m_d_selectedTarget, 0, sizeof(Detection));
     cudaMemset(m_d_pidState, 0, sizeof(PIDState));
-    cudaMemset(m_d_mouseMovement, 0, sizeof(MouseMovement));
 
     // Allocate pinned host memory (max size for BGRA)
     cudaMallocHost(&m_h_rawPinned, rawInputSize);
@@ -657,21 +642,14 @@ void SimpleInference::executeFusedPipelinePostH2D(int width, int height,
     m_context->enqueueV2(bindings, m_stream, nullptr);
 #endif
 
-    // GPU decode
-    decodeYoloGpu(
+    // One-pass GPU postprocess: decode + target select + PID + result packing
+    postprocessYoloFusedGpu(
         m_d_output, m_outputFP16, m_numBoxes, m_numClasses,
-        confThreshold, allowedClassMask,
-        m_d_decoded, m_d_decodedCount, m_maxDetections, m_stream
-    );
-
-    // Fused target selection + PID + result packing
-    fusedTargetSelectionAndMovementGpu(
-        m_d_decoded, m_d_decodedCount, m_maxDetections,
+        confThreshold, allowedClassMask, m_maxDetections,
         m_crosshairX, m_crosshairY,
         headClassId, headBonus, pidConfig,
         iouThreshold, headYOffset, bodyYOffset,
-        m_d_selectedTarget, m_d_bestTarget, m_d_hasTarget,
-        m_d_mouseMovement, m_d_pidState,
+        m_d_selectedTarget, m_d_pidState,
         m_d_inferenceResult, m_stream
     );
 
@@ -775,7 +753,7 @@ void CUDART_CB SimpleInference::inferenceCompleteCallback(void* data) {
     }
 
     if (cbData->owner) {
-        cbData->owner->m_callbackInFlight.store(false, std::memory_order_release);
+        cbData->owner->m_callbackInFlight.store(false, std::memory_order_relaxed);
     }
 }
 
@@ -787,14 +765,14 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
                                                 float headYOffset, float bodyYOffset,
                                                 InferenceCallback callback, void* userData) {
     if (!m_loaded || !pinnedData || width <= 0 || height <= 0) return false;
-    if (m_callbackInFlight.exchange(true, std::memory_order_acq_rel)) return false;
+    if (m_callbackInFlight.exchange(true, std::memory_order_relaxed)) return false;
 
     const size_t rawSize = static_cast<size_t>(width) * static_cast<size_t>(height) *
                            static_cast<size_t>(inputBytesPerPixel());
     if (rawSize == 0 || rawSize > m_rawInputCapacityBytes) {
         std::cerr << "[SimpleInference] Input frame too large for raw buffer: "
                   << rawSize << " > " << m_rawInputCapacityBytes << std::endl;
-        m_callbackInFlight.store(false, std::memory_order_release);
+        m_callbackInFlight.store(false, std::memory_order_relaxed);
         return false;
     }
 
@@ -818,7 +796,7 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
         if (err != cudaSuccess) {
             std::cerr << "[SimpleInference] cudaMemcpyAsync(m_d_rawInput) failed: "
                       << cudaGetErrorString(err) << std::endl;
-            m_callbackInFlight.store(false, std::memory_order_release);
+            m_callbackInFlight.store(false, std::memory_order_relaxed);
             return false;
         }
 
@@ -826,7 +804,7 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
         err = cudaGraphLaunch(m_graphExec, m_stream);
         if (err != cudaSuccess) {
             std::cerr << "[SimpleInference] cudaGraphLaunch failed: " << cudaGetErrorString(err) << std::endl;
-            m_callbackInFlight.store(false, std::memory_order_release);
+            m_callbackInFlight.store(false, std::memory_order_relaxed);
             return false;
         }
     } else {
@@ -844,7 +822,7 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
     cudaError_t err = cudaLaunchHostFunc(m_stream, SimpleInference::inferenceCompleteCallback, &m_callbackData);
     if (err != cudaSuccess) {
         std::cerr << "[SimpleInference] cudaLaunchHostFunc failed: " << cudaGetErrorString(err) << std::endl;
-        m_callbackInFlight.store(false, std::memory_order_release);
+        m_callbackInFlight.store(false, std::memory_order_relaxed);
         return false;
     }
 

@@ -43,13 +43,11 @@ public:
     ~SimpleInference();
 
     bool loadEngine(const std::string& enginePath);
-    bool isLoaded() const { return m_loaded; }
 
     // Set BGRA input mode (call before captureFullGraph)
     // When true, preprocessing expects BGRA HWC input (4 bytes/pixel)
     // When false, preprocessing expects RGB HWC input (3 bytes/pixel)
     void setBgraInput(bool bgra) { m_bgraInput = bgra; }
-    bool isBgraInput() const { return m_bgraInput; }
     // Must be set before loadEngine(). Values are clamped to a safe range.
     void setMaxDetections(int maxDetections) {
         if (m_loaded) return;
@@ -57,13 +55,11 @@ public:
         if (maxDetections > 4096) maxDetections = 4096;
         m_maxDetections = maxDetections;
     }
-    int getMaxDetections() const { return m_maxDetections; }
 
     // Capture full CUDA graph (preprocess + inference + decode + fused)
     bool captureFullGraph(float confThreshold, int headClassId, float headBonus,
                           uint32_t allowedClassMask, const PIDConfig& pidConfig,
                           float iouStickinessThreshold, float headYOffset, float bodyYOffset);
-    bool isGraphCaptured() const { return m_graphCaptured; }
 
     // Run inference with GPU callback - lowest latency option
     bool runInferenceWithCallback(void* pinnedData, int width, int height,
@@ -75,13 +71,9 @@ public:
                                   InferenceCallback callback, void* userData = nullptr);
 
     bool isCallbackInFlight() const {
-        return m_callbackInFlight.load(std::memory_order_acquire);
+        return m_callbackInFlight.load(std::memory_order_relaxed);
     }
 
-    int getModelResolution() const { return m_inputH; }
-    int getNumClasses() const { return m_numClasses; }
-    bool isInputFP16() const { return m_inputFP16; }
-    bool isOutputFP16() const { return m_outputFP16; }
     cudaStream_t getStream() const { return m_stream; }
 
 private:
@@ -100,17 +92,11 @@ private:
     void* m_d_output = nullptr;      // Model output (float32 or float16)
     cudaStream_t m_stream = nullptr;
 
-    // GPU postprocessing buffers
-    Detection* m_d_decoded = nullptr;     // Decoded detections on GPU
-    int* m_d_decodedCount = nullptr;      // Detection count on GPU
-    Detection* m_d_bestTarget = nullptr;  // Best target on GPU
-    int* m_d_hasTarget = nullptr;         // Whether target found (GPU)
     int m_maxDetections = 100;
 
     // GPU fused pipeline buffers
     Detection* m_d_selectedTarget = nullptr;  // Persistent selected target for IoU stickiness
     PIDState* m_d_pidState = nullptr;         // Persistent PID state on GPU
-    MouseMovement* m_d_mouseMovement = nullptr; // Mouse movement output on GPU
 
     // Combined result buffer for single D2H transfer
     InferenceResult* m_d_inferenceResult = nullptr;  // GPU

@@ -1,8 +1,6 @@
 #include "MakcuConnection.h"
 
 #include <iostream>
-#include <algorithm>
-#include <vector>
 #include <thread>
 #include <mutex>
 #include <cstring>
@@ -12,9 +10,7 @@
 #ifdef _WIN32
 #include <windows.h>
 #else
-#include <dirent.h>
 #include <sys/ioctl.h>
-#include <linux/usbdevice_fs.h>
 #include <sched.h>
 #include <pthread.h>
 #include <unistd.h>
@@ -86,7 +82,6 @@ bool writeAllSerialFd(int fd, const char* data, size_t size, bool failFastOnWoul
 MakcuConnection::MakcuConnection(const std::string& port, unsigned int /*baud_rate*/)
     : aiming_active(false),
       shooting_active(false),
-      zooming_active(false),
       serial_handle_(INVALID_HANDLE_VALUE),
       is_open_(false),
       listening_(false),
@@ -324,17 +319,6 @@ void MakcuConnection::write(const std::string& data) {
     }
 }
 
-std::string MakcuConnection::read() {
-    if (!is_open_ || serial_handle_ == INVALID_HANDLE_VALUE) return "";
-    char buffer[256];
-    DWORD bytes_read = 0;
-    if (readAsync(buffer, sizeof(buffer) - 1, &bytes_read) && bytes_read > 0) {
-        buffer[bytes_read] = '\0';
-        return std::string(buffer);
-    }
-    return "";
-}
-
 bool MakcuConnection::writeAsync(const void* data, DWORD size) {
     if (serial_handle_ == INVALID_HANDLE_VALUE) return false;
     ResetEvent(write_overlapped_.hEvent);
@@ -405,7 +389,6 @@ static std::string detectMakcuDevice() {
 MakcuConnection::MakcuConnection(const std::string& port, unsigned int baud_rate)
     : aiming_active(false),
       shooting_active(false),
-      zooming_active(false),
       serial_fd_(-1),
       is_open_(false),
       listening_(false),
@@ -433,64 +416,6 @@ MakcuConnection::MakcuConnection(const std::string& port, unsigned int baud_rate
         cleanup();
         std::cerr << "[Makcu] Initialization error: " << e.what() << std::endl;
     }
-}
-
-// USB device reset (like unplugging and replugging)
-[[maybe_unused]] static bool resetUsbDevice(const std::string& ttyPath) {
-    // Get the USB device path from tty symlink
-    char linkPath[256];
-    char resolvedPath[PATH_MAX];
-    snprintf(linkPath, sizeof(linkPath), "/sys/class/tty/%s/device",
-             ttyPath.substr(ttyPath.rfind('/') + 1).c_str());
-
-    if (!realpath(linkPath, resolvedPath)) {
-        return false;
-    }
-
-    // Go up to USB device level (parent of interface)
-    std::string devicePath = resolvedPath;
-    size_t pos = devicePath.rfind('/');
-    if (pos != std::string::npos) {
-        devicePath = devicePath.substr(0, pos);
-    }
-
-    // Read bus and device numbers
-    std::string busnumPath = devicePath + "/busnum";
-    std::string devnumPath = devicePath + "/devnum";
-
-    FILE* f = fopen(busnumPath.c_str(), "r");
-    if (!f) return false;
-    int busnum;
-    fscanf(f, "%d", &busnum);
-    fclose(f);
-
-    f = fopen(devnumPath.c_str(), "r");
-    if (!f) return false;
-    int devnum;
-    fscanf(f, "%d", &devnum);
-    fclose(f);
-
-    // Open USB device and send reset ioctl
-    char usbPath[64];
-    snprintf(usbPath, sizeof(usbPath), "/dev/bus/usb/%03d/%03d", busnum, devnum);
-
-    int fd = open(usbPath, O_WRONLY | O_NONBLOCK);
-    if (fd < 0) {
-        // Don't print error, just skip reset silently
-        return false;
-    }
-
-    int rc = ioctl(fd, USBDEVFS_RESET, 0);
-    close(fd);
-
-    if (rc < 0) {
-        std::cerr << "[Makcu] USB reset ioctl failed" << std::endl;
-        return false;
-    }
-
-    std::cout << "[Makcu] USB device reset successful" << std::endl;
-    usleep(500000);  // Wait 500ms for device to re-enumerate
-    return true;
 }
 
 bool MakcuConnection::initializeMakcuConnection() {
@@ -683,16 +608,6 @@ bool MakcuConnection::configurePort(int baud_rate) {
     return true;
 }
 
-ssize_t MakcuConnection::writeSerial(const void* data, size_t size) {
-    if (serial_fd_ < 0) return -1;
-    return ::write(serial_fd_, data, size);
-}
-
-ssize_t MakcuConnection::readSerial(void* buffer, size_t size) {
-    if (serial_fd_ < 0) return -1;
-    return ::read(serial_fd_, buffer, size);
-}
-
 void MakcuConnection::cleanup() {
     listening_ = false;
 
@@ -743,49 +658,11 @@ void MakcuConnection::write(const std::string& data) {
     }
 }
 
-std::string MakcuConnection::read() {
-    if (!is_open_ || serial_fd_ < 0) return "";
-    char buffer[256];
-    ssize_t bytes_read = readSerial(buffer, sizeof(buffer) - 1);
-    if (bytes_read > 0) {
-        buffer[bytes_read] = '\0';
-        return std::string(buffer);
-    }
-    return "";
-}
-
 #endif  // _WIN32
 
 // ============================================================================
 // Common implementation (both platforms)
 // ============================================================================
-
-void MakcuConnection::click(int button) {
-    // Click = press then release
-    if (button == 1) {
-        sendCommand("km.left(1)\r\n", sizeof("km.left(1)\r\n") - 1);
-        sendCommand("km.left(0)\r\n", sizeof("km.left(0)\r\n") - 1);
-    } else if (button == 2) {
-        sendCommand("km.right(1)\r\n", sizeof("km.right(1)\r\n") - 1);
-        sendCommand("km.right(0)\r\n", sizeof("km.right(0)\r\n") - 1);
-    }
-}
-
-void MakcuConnection::press(int button) {
-    if (button == 1) {
-        sendCommand("km.left(1)\r\n", sizeof("km.left(1)\r\n") - 1);
-    } else if (button == 2) {
-        sendCommand("km.right(1)\r\n", sizeof("km.right(1)\r\n") - 1);
-    }
-}
-
-void MakcuConnection::release(int button) {
-    if (button == 1) {
-        sendCommand("km.left(0)\r\n", sizeof("km.left(0)\r\n") - 1);
-    } else if (button == 2) {
-        sendCommand("km.right(0)\r\n", sizeof("km.right(0)\r\n") - 1);
-    }
-}
 
 void MakcuConnection::move(int x, int y) {
     if (x == 0 && y == 0) return;
@@ -798,10 +675,6 @@ void MakcuConnection::move(int x, int y) {
             sendCommand(command, cmdSize);
         }
     }
-}
-
-void MakcuConnection::send_stop() {
-    sendCommand("STOP\n", sizeof("STOP\n") - 1);
 }
 
 void MakcuConnection::sendCommand(const std::string& command) {
@@ -840,35 +713,6 @@ bool MakcuConnection::sendCommandFast(const char* command, size_t size) {
     if (!lock.owns_lock()) return false;
     return writeAllSerialFd(serial_fd_, command, size, true);
 #endif
-}
-
-std::vector<int> MakcuConnection::splitValue(int value) {
-    std::vector<int> result;
-
-    if (value == 0) {
-        result.push_back(0);
-        return result;
-    }
-
-    bool negative = value < 0;
-    if (negative) value = -value;
-
-    while (value > 127) {
-        result.push_back(127);
-        value -= 127;
-    }
-
-    if (value > 0) {
-        result.push_back(value);
-    }
-
-    if (negative) {
-        for (auto& v : result) {
-            v = -v;
-        }
-    }
-
-    return result;
 }
 
 void MakcuConnection::startListening() {
@@ -965,31 +809,4 @@ void MakcuConnection::listeningThreadFunc() {
     tcdrain(serial_fd_);
 
     std::cout << "[Makcu] Button streaming stopped" << std::endl;
-}
-
-void MakcuConnection::processButtonMask(uint8_t mask) {
-    // Valid mask range: 0x00-0x1F (5 buttons max)
-    // If mask > 0x1F, it's a false positive (e.g., 'k'=0x6b from next "km.")
-    if (mask > 0x1F) {
-        return;  // Invalid mask, skip
-    }
-
-    // Mask bits: 0=left(0x01), 1=right(0x02), 2=middle(0x04), 3=side1(0x08), 4=side2(0x10)
-    bool left_pressed = (mask & 0x01) != 0;
-    bool right_pressed = (mask & 0x02) != 0;
-    bool side2_pressed = (mask & 0x10) != 0;
-
-    // Update button states for 2PC architecture:
-    // - aiming_active: RIGHT click OR SIDE2 (for aimbot trigger)
-    // - shooting_active: LEFT + RIGHT simultaneous (for no-recoil)
-    aiming_active = right_pressed || side2_pressed;
-    shooting_active = left_pressed && right_pressed;
-}
-
-void MakcuConnection::processIncomingLine(const std::string& line) {
-    // Legacy parser - no longer used, keeping for reference
-    if (line.length() >= 4 && line[0] == 'k' && line[1] == 'm' && line[2] == '.') {
-        uint8_t mask = static_cast<uint8_t>(line[3]);
-        processButtonMask(mask);
-    }
 }

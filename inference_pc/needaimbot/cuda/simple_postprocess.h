@@ -54,42 +54,19 @@ struct InferenceResult {
     // Total: 40 bytes - fits in single cache line
 };
 
-// =============================================================================
-// GPU-based YOLO Decoding
-// =============================================================================
-
-// Decodes YOLO11 format: [batch, 4+num_classes, num_boxes] -> Detection array
-// Handles both FP32 and FP16 output tensors
-// Includes strict validation to filter garbage values
-// Returns decoded count via d_decoded_count (device pointer)
-// allowedClassMask: bitmask where bit N = 1 means class N is allowed (0xFFFFFFFF = all allowed)
-cudaError_t decodeYoloGpu(
-    const void* d_raw_output,      // Raw model output (FP32 or FP16)
-    bool is_fp16,                   // Output tensor is FP16
-    int num_boxes,                  // Number of anchor boxes
-    int num_classes,                // Number of classes
-    float conf_threshold,           // Confidence threshold
-    uint32_t allowedClassMask,      // Bitmask of allowed classes
-    Detection* d_decoded,           // Output: decoded detections (device)
-    int* d_decoded_count,           // Output: number of decoded detections (device)
-    int max_detections,             // Maximum detections to output
-    cudaStream_t stream = 0
-);
-
-// =============================================================================
-// Fused Target Selection + PID Movement
-// =============================================================================
-
-// All-in-one GPU kernel:
-// 1. Target selection with IoU-based stickiness (hysteresis)
-// 2. PID controller calculation
-// 3. Mouse movement output
-// 4. Pack all results into InferenceResult struct (fused)
-// Minimal CPU involvement - only final InferenceResult needs D2H transfer
-cudaError_t fusedTargetSelectionAndMovementGpu(
-    const Detection* d_detections,  // Input detections (device)
-    const int* d_num_detections,    // Number of detections (device)
-    int max_detections,             // Maximum detections
+// One-pass fused postprocess:
+// 1) Decode YOLO output
+// 2) Target selection with IoU stickiness
+// 3) PID calculation
+// 4) Pack final InferenceResult (single D2H copy)
+cudaError_t postprocessYoloFusedGpu(
+    const void* d_raw_output,      // Raw model output (FP32/FP16)
+    bool is_fp16,                  // Output tensor is FP16
+    int num_boxes,                 // Number of anchor boxes
+    int num_classes,               // Number of classes
+    float conf_threshold,          // Confidence threshold
+    uint32_t allowedClassMask,     // Bitmask of allowed classes
+    int max_detections,            // Retained for compatibility/tuning
     float screen_center_x,          // Crosshair X
     float screen_center_y,          // Crosshair Y
     int head_class_id,              // Head class ID for priority
@@ -99,23 +76,8 @@ cudaError_t fusedTargetSelectionAndMovementGpu(
     float head_y_offset,            // Aim point offset for head (0.0-1.0)
     float body_y_offset,            // Aim point offset for body (0.0-1.0)
     Detection* d_selected_target,   // Persistent selected target (for IoU tracking)
-    Detection* d_best_target,       // Output: best target this frame
-    int* d_has_target,              // Output: 1 if target found
-    MouseMovement* d_output_movement, // Output: mouse dx, dy
     PIDState* d_pid_state,          // Persistent PID state (device)
-    InferenceResult* d_inference_result = nullptr, // Optional: packed result (eliminates separate pack kernel)
-    cudaStream_t stream = 0
-);
-
-// =============================================================================
-// Validation Kernel
-// =============================================================================
-
-// Validate single best target before host copy
-// Sets d_has_target to 0 if target is invalid
-void validateBestTargetGpu(
-    Detection* d_best_target,
-    int* d_has_target,
+    InferenceResult* d_inference_result, // Packed output result (required)
     cudaStream_t stream = 0
 );
 

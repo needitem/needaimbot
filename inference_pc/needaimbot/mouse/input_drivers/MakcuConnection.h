@@ -6,7 +6,6 @@
 #include <thread>
 #include <atomic>
 #include <mutex>
-#include <vector>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -26,31 +25,19 @@ public:
     ~MakcuConnection();
 
     bool isOpen() const;
-
-    void write(const std::string& data);
-    std::string read();
-
-    void click(int button);
-    void press(int button);
-    void release(int button);
     void move(int x, int y);
-
-    void send_stop();
 
     std::atomic<bool> aiming_active;
     std::atomic<bool> shooting_active;
-    std::atomic<bool> zooming_active;
 
 private:
+    void write(const std::string& data);
     void sendCommand(const std::string& command);
     void sendCommand(const char* command, size_t size);
     bool sendCommandFast(const char* command, size_t size);
-    std::vector<int> splitValue(int value);
 
     void startListening();
     void listeningThreadFunc();
-    void processButtonMask(uint8_t mask);
-    void processIncomingLine(const std::string& line);
 
     bool initializeMakcuConnection();
     void cleanup();
@@ -73,8 +60,6 @@ private:
     HANDLE read_event_;
 #else
     bool configurePort(int baud_rate);
-    ssize_t writeSerial(const void* data, size_t size);
-    ssize_t readSerial(void* buffer, size_t size);
 
     int serial_fd_;
     struct termios tty_config_;
