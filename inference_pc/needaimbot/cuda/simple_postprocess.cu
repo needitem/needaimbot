@@ -102,6 +102,7 @@ __device__ __forceinline__ bool decodeDetectionIfValid(
     int num_classes,
     float conf_threshold,
     uint32_t allowedClassMask,
+    float max_box_extent,
     Detection& out_det)
 {
     const int classLimit = (num_classes < 32) ? num_classes : 32;
@@ -115,14 +116,21 @@ __device__ __forceinline__ bool decodeDetectionIfValid(
 
     float bestScore = -1.0f;
     int bestClass = -1;
-    while (classMask) {
-        const int c = __ffs(classMask) - 1;
-        classMask &= (classMask - 1u);
-        const int score_idx = (4 + c) * num_boxes + box_idx;
-        const float score = readValue<kIsFp16>(d_raw_output, static_cast<size_t>(score_idx));
-        if (score > bestScore) {
-            bestScore = score;
-            bestClass = c;
+    if ((classMask & (classMask - 1u)) == 0u) {
+        // Common fast path: only one allowed class.
+        bestClass = __ffs(classMask) - 1;
+        const int score_idx = (4 + bestClass) * num_boxes + box_idx;
+        bestScore = readValue<kIsFp16>(d_raw_output, static_cast<size_t>(score_idx));
+    } else {
+        while (classMask) {
+            const int c = __ffs(classMask) - 1;
+            classMask &= (classMask - 1u);
+            const int score_idx = (4 + c) * num_boxes + box_idx;
+            const float score = readValue<kIsFp16>(d_raw_output, static_cast<size_t>(score_idx));
+            if (score > bestScore) {
+                bestScore = score;
+                bestClass = c;
+            }
         }
     }
 
@@ -152,7 +160,7 @@ __device__ __forceinline__ bool decodeDetectionIfValid(
           (y1 >= -1000.0f && y1 <= kMaxCoord) &&
           (x2 >= -1000.0f && x2 <= kMaxCoord) &&
           (y2 >= -1000.0f && y2 <= kMaxCoord) &&
-          (w <= 640.0f && h <= 640.0f))) {
+          (w <= max_box_extent && h <= max_box_extent))) {
         return false;
     }
 
@@ -166,30 +174,22 @@ __device__ __forceinline__ bool decodeDetectionIfValid(
 }
 
 template<bool kIsFp16>
-__global__ void postprocessYoloFusedKernel(
+__global__ void stage1DecodeAndSelectKernel(
     const void* __restrict__ d_raw_output,
     int num_boxes,
     int num_classes,
     float conf_threshold,
     uint32_t allowedClassMask,
-    int max_detections,
+    float max_box_extent,
     float screen_center_x,
-    float screen_center_y,
     int head_class_id,
     float head_conf_bonus,
-    float kp_x, float kp_y,
-    float ki_x, float ki_y,
-    float kd_x, float kd_y,
-    float integral_max,
-    float derivative_max,
-    float iou_stickiness_threshold,
-    float head_y_offset,
-    float body_y_offset,
-    Detection* __restrict__ d_selected_target,
-    PIDState* __restrict__ d_pid_state,
-    InferenceResult* __restrict__ d_inference_result)
+    const Detection* __restrict__ d_selected_target,
+    Detection* __restrict__ d_stage1_best_dist,
+    float* __restrict__ d_stage1_dist_score,
+    Detection* __restrict__ d_stage1_best_iou,
+    float* __restrict__ d_stage1_iou_score)
 {
-    (void)max_detections;
     __shared__ Detection s_prevTarget;
     __shared__ bool s_prevValid;
     __shared__ Detection s_bestDistDet[MAX_SELECTION_THREADS];
@@ -231,10 +231,13 @@ __global__ void postprocessYoloFusedKernel(
     const bool prevValid = s_prevValid;
     const Detection prevTarget = s_prevTarget;
 
-    for (int i = tid; i < num_boxes; i += blockDim.x) {
+    const int globalStart = blockIdx.x * blockDim.x + tid;
+    const int stride = gridDim.x * blockDim.x;
+    for (int i = globalStart; i < num_boxes; i += stride) {
         Detection det = {};
         if (!decodeDetectionIfValid<kIsFp16>(
-                d_raw_output, i, num_boxes, num_classes, conf_threshold, allowedClassMask, det)) {
+                d_raw_output, i, num_boxes, num_classes, conf_threshold, allowedClassMask,
+                max_box_extent, det)) {
             continue;
         }
 
@@ -268,34 +271,173 @@ __global__ void postprocessYoloFusedKernel(
     s_hasIou[tid] = localHasIou ? 1u : 0u;
     __syncthreads();
 
-    if (tid != 0) return;
-
-    Detection bestByDist = {};
-    bestByDist.classId = -1;
-    float bestDist = FLT_MAX;
-    bool hasBestByDist = false;
-
-    Detection bestByIou = {};
-    bestByIou.classId = -1;
-    float bestIou = -1.0f;
-    bool hasBestByIou = false;
-
-    for (int i = 0; i < blockDim.x; ++i) {
-        if (s_hasDist[i] && s_bestDist[i] < bestDist) {
-            bestDist = s_bestDist[i];
-            bestByDist = s_bestDistDet[i];
-            hasBestByDist = true;
+    for (int stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            const int other = tid + stride;
+            if (s_hasDist[other] &&
+                (!s_hasDist[tid] || s_bestDist[other] < s_bestDist[tid])) {
+                s_bestDistDet[tid] = s_bestDistDet[other];
+                s_bestDist[tid] = s_bestDist[other];
+                s_hasDist[tid] = 1u;
+            }
+            if (s_hasIou[other] &&
+                (!s_hasIou[tid] || s_bestIou[other] > s_bestIou[tid])) {
+                s_bestIouDet[tid] = s_bestIouDet[other];
+                s_bestIou[tid] = s_bestIou[other];
+                s_hasIou[tid] = 1u;
+            }
         }
-        if (s_hasIou[i] && s_bestIou[i] > bestIou) {
-            bestIou = s_bestIou[i];
-            bestByIou = s_bestIouDet[i];
-            hasBestByIou = true;
+        __syncthreads();
+    }
+
+    if (tid != 0) {
+        return;
+    }
+
+    Detection bestByDist = s_bestDistDet[0];
+    float bestDist = s_bestDist[0];
+    bool hasBestByDist = (s_hasDist[0] != 0u);
+    if (!hasBestByDist) {
+        bestByDist.classId = -1;
+        bestDist = FLT_MAX;
+    }
+
+    Detection bestByIou = s_bestIouDet[0];
+    float bestIou = s_bestIou[0];
+    bool hasBestByIou = (s_hasIou[0] != 0u);
+    if (!hasBestByIou) {
+        bestByIou.classId = -1;
+        bestIou = -1.0f;
+    }
+
+    const int outIdx = blockIdx.x;
+    if (hasBestByDist) {
+        d_stage1_best_dist[outIdx] = bestByDist;
+        d_stage1_dist_score[outIdx] = bestDist;
+    } else {
+        Detection invalid = {};
+        invalid.classId = -1;
+        d_stage1_best_dist[outIdx] = invalid;
+        d_stage1_dist_score[outIdx] = FLT_MAX;
+    }
+
+    if (hasBestByIou) {
+        d_stage1_best_iou[outIdx] = bestByIou;
+        d_stage1_iou_score[outIdx] = bestIou;
+    } else {
+        Detection invalid = {};
+        invalid.classId = -1;
+        d_stage1_best_iou[outIdx] = invalid;
+        d_stage1_iou_score[outIdx] = -1.0f;
+    }
+}
+
+__global__ void stage2FinalizeKernel(
+    int num_candidates,
+    const Detection* __restrict__ d_stage1_best_dist,
+    const float* __restrict__ d_stage1_dist_score,
+    const Detection* __restrict__ d_stage1_best_iou,
+    const float* __restrict__ d_stage1_iou_score,
+    float screen_center_x,
+    float screen_center_y,
+    int head_class_id,
+    float kp_x, float kp_y,
+    float ki_x, float ki_y,
+    float kd_x, float kd_y,
+    float integral_max,
+    float derivative_max,
+    float iou_stickiness_threshold,
+    float head_y_offset,
+    float body_y_offset,
+    Detection* __restrict__ d_selected_target,
+    PIDState* __restrict__ d_pid_state,
+    InferenceResult* __restrict__ d_inference_result)
+{
+    __shared__ Detection s_bestDistDet[MAX_SELECTION_THREADS];
+    __shared__ Detection s_bestIouDet[MAX_SELECTION_THREADS];
+    __shared__ float s_bestDist[MAX_SELECTION_THREADS];
+    __shared__ float s_bestIou[MAX_SELECTION_THREADS];
+    __shared__ uint8_t s_hasDist[MAX_SELECTION_THREADS];
+    __shared__ uint8_t s_hasIou[MAX_SELECTION_THREADS];
+
+    const int tid = threadIdx.x;
+
+    Detection localBestByDist = {};
+    localBestByDist.classId = -1;
+    float localBestDist = FLT_MAX;
+    bool localHasDist = false;
+
+    Detection localBestByIou = {};
+    localBestByIou.classId = -1;
+    float localBestIou = -1.0f;
+    bool localHasIou = false;
+
+    for (int i = tid; i < num_candidates; i += blockDim.x) {
+        Detection candDist = d_stage1_best_dist[i];
+        float distScore = d_stage1_dist_score[i];
+        if (candDist.classId >= 0 && distScore < localBestDist) {
+            localBestDist = distScore;
+            localBestByDist = candDist;
+            localHasDist = true;
         }
+
+        Detection candIou = d_stage1_best_iou[i];
+        float iouScore = d_stage1_iou_score[i];
+        if (candIou.classId >= 0 && iouScore > localBestIou) {
+            localBestIou = iouScore;
+            localBestByIou = candIou;
+            localHasIou = true;
+        }
+    }
+
+    s_bestDistDet[tid] = localBestByDist;
+    s_bestIouDet[tid] = localBestByIou;
+    s_bestDist[tid] = localBestDist;
+    s_bestIou[tid] = localBestIou;
+    s_hasDist[tid] = localHasDist ? 1u : 0u;
+    s_hasIou[tid] = localHasIou ? 1u : 0u;
+    __syncthreads();
+
+    for (int stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            const int other = tid + stride;
+            if (s_hasDist[other] &&
+                (!s_hasDist[tid] || s_bestDist[other] < s_bestDist[tid])) {
+                s_bestDistDet[tid] = s_bestDistDet[other];
+                s_bestDist[tid] = s_bestDist[other];
+                s_hasDist[tid] = 1u;
+            }
+            if (s_hasIou[other] &&
+                (!s_hasIou[tid] || s_bestIou[other] > s_bestIou[tid])) {
+                s_bestIouDet[tid] = s_bestIouDet[other];
+                s_bestIou[tid] = s_bestIou[other];
+                s_hasIou[tid] = 1u;
+            }
+        }
+        __syncthreads();
+    }
+
+    if (tid != 0) {
+        return;
+    }
+
+    Detection bestByDist = s_bestDistDet[0];
+    bool hasBestByDist = (s_hasDist[0] != 0u);
+    if (!hasBestByDist) {
+        bestByDist.classId = -1;
+    }
+
+    Detection bestByIou = s_bestIouDet[0];
+    float bestIou = s_bestIou[0];
+    bool hasBestByIou = (s_hasIou[0] != 0u);
+    if (!hasBestByIou) {
+        bestByIou.classId = -1;
+        bestIou = -1.0f;
     }
 
     Detection chosenTarget = bestByDist;
     bool hasTarget = hasBestByDist;
-    if (prevValid && hasBestByIou && bestIou > iou_stickiness_threshold) {
+    if (hasBestByIou && bestIou > iou_stickiness_threshold) {
         chosenTarget = bestByIou;
         hasTarget = true;
     }
@@ -384,7 +526,8 @@ cudaError_t postprocessYoloFusedGpu(
     int num_classes,
     float conf_threshold,
     uint32_t allowedClassMask,
-    int max_detections,
+    int max_candidate_blocks,
+    float max_box_extent,
     float screen_center_x,
     float screen_center_y,
     int head_class_id,
@@ -396,73 +539,98 @@ cudaError_t postprocessYoloFusedGpu(
     Detection* d_selected_target,
     PIDState* d_pid_state,
     InferenceResult* d_inference_result,
+    Detection* d_stage1_best_dist,
+    float* d_stage1_dist_score,
+    Detection* d_stage1_best_iou,
+    float* d_stage1_iou_score,
     cudaStream_t stream)
 {
-    if (!d_raw_output || !d_pid_state || !d_inference_result) {
+    if (!d_raw_output || !d_pid_state || !d_inference_result ||
+        !d_stage1_best_dist || !d_stage1_dist_score ||
+        !d_stage1_best_iou || !d_stage1_iou_score) {
         return cudaErrorInvalidValue;
     }
-    if (num_boxes <= 0 || num_classes <= 0) {
+    if (num_boxes <= 0 || num_classes <= 0 || max_candidate_blocks <= 0) {
         return cudaErrorInvalidValue;
     }
-    if (!isfinite(conf_threshold) || conf_threshold < 0.0f) {
+    if (!isfinite(conf_threshold) || conf_threshold < 0.0f ||
+        !isfinite(max_box_extent) || max_box_extent <= 0.0f) {
         return cudaErrorInvalidValue;
     }
 
-    int threads = 256;
-    if (num_boxes <= 128) threads = 128;
-    if (num_boxes <= 64) threads = 64;
-    if (num_boxes <= 32) threads = 32;
-    if (threads > MAX_SELECTION_THREADS) threads = MAX_SELECTION_THREADS;
+    int stage1Threads = 256;
+    if (num_boxes <= 128) stage1Threads = 128;
+    if (num_boxes <= 64) stage1Threads = 64;
+    if (num_boxes <= 32) stage1Threads = 32;
+    if (stage1Threads > MAX_SELECTION_THREADS) stage1Threads = MAX_SELECTION_THREADS;
+
+    int stage1Blocks = (num_boxes + stage1Threads - 1) / stage1Threads;
+    if (stage1Blocks < 1) stage1Blocks = 1;
+    if (stage1Blocks > max_candidate_blocks) stage1Blocks = max_candidate_blocks;
 
     if (is_fp16) {
-        postprocessYoloFusedKernel<true><<<1, threads, 0, stream>>>(
+        stage1DecodeAndSelectKernel<true><<<stage1Blocks, stage1Threads, 0, stream>>>(
             d_raw_output,
             num_boxes,
             num_classes,
             conf_threshold,
             allowedClassMask,
-            max_detections,
+            max_box_extent,
             screen_center_x,
-            screen_center_y,
             head_class_id,
             head_conf_bonus,
-            pid_config.kp_x, pid_config.kp_y,
-            pid_config.ki_x, pid_config.ki_y,
-            pid_config.kd_x, pid_config.kd_y,
-            pid_config.integral_max,
-            pid_config.derivative_max,
-            iou_stickiness_threshold,
-            head_y_offset,
-            body_y_offset,
             d_selected_target,
-            d_pid_state,
-            d_inference_result
+            d_stage1_best_dist,
+            d_stage1_dist_score,
+            d_stage1_best_iou,
+            d_stage1_iou_score
         );
     } else {
-        postprocessYoloFusedKernel<false><<<1, threads, 0, stream>>>(
+        stage1DecodeAndSelectKernel<false><<<stage1Blocks, stage1Threads, 0, stream>>>(
             d_raw_output,
             num_boxes,
             num_classes,
             conf_threshold,
             allowedClassMask,
-            max_detections,
+            max_box_extent,
             screen_center_x,
-            screen_center_y,
             head_class_id,
             head_conf_bonus,
-            pid_config.kp_x, pid_config.kp_y,
-            pid_config.ki_x, pid_config.ki_y,
-            pid_config.kd_x, pid_config.kd_y,
-            pid_config.integral_max,
-            pid_config.derivative_max,
-            iou_stickiness_threshold,
-            head_y_offset,
-            body_y_offset,
             d_selected_target,
-            d_pid_state,
-            d_inference_result
+            d_stage1_best_dist,
+            d_stage1_dist_score,
+            d_stage1_best_iou,
+            d_stage1_iou_score
         );
     }
+
+    int stage2Threads = 256;
+    if (stage1Blocks <= 128) stage2Threads = 128;
+    if (stage1Blocks <= 64) stage2Threads = 64;
+    if (stage1Blocks <= 32) stage2Threads = 32;
+    if (stage2Threads > MAX_SELECTION_THREADS) stage2Threads = MAX_SELECTION_THREADS;
+
+    stage2FinalizeKernel<<<1, stage2Threads, 0, stream>>>(
+        stage1Blocks,
+        d_stage1_best_dist,
+        d_stage1_dist_score,
+        d_stage1_best_iou,
+        d_stage1_iou_score,
+        screen_center_x,
+        screen_center_y,
+        head_class_id,
+        pid_config.kp_x, pid_config.kp_y,
+        pid_config.ki_x, pid_config.ki_y,
+        pid_config.kd_x, pid_config.kd_y,
+        pid_config.integral_max,
+        pid_config.derivative_max,
+        iou_stickiness_threshold,
+        head_y_offset,
+        body_y_offset,
+        d_selected_target,
+        d_pid_state,
+        d_inference_result
+    );
 
     return cudaGetLastError();
 }

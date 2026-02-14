@@ -31,12 +31,11 @@ typedef int SOCKET;
 #include <cuda_runtime.h>
 
 #include <atomic>
+#include <array>
 #include <chrono>
 #include <cstdint>
-#include <memory>
 #include <string>
 #include <thread>
-#include <unordered_map>
 #include <vector>
 
 #pragma pack(push, 1)
@@ -80,6 +79,12 @@ private:
 
     struct FrameFragments {
         std::vector<uint8_t> received;
+        uint64_t receivedMask = 0;
+        bool useReceivedMask = false;
+        bool active = false;
+        uint32_t frameId = 0;
+        int slotIndex = -1;
+        int nextInBucket = -1;
         uint16_t totalPackets = 0;
         uint16_t receivedCount = 0;
         uint16_t width = 0;
@@ -96,14 +101,23 @@ private:
 
     FrameFragments* acquireFragment();
     void releaseFragment(FrameFragments* frag);
+    FrameFragments* findFragment(uint32_t frameId);
+    void linkFragment(FrameFragments* frag, uint32_t frameId);
+    void unlinkFragment(FrameFragments* frag);
     int reserveAssemblingBuffer();
     void releaseAssemblingBuffer(int bufferIndex);
     void publishAssembledBuffer(int bufferIndex, uint16_t width, uint16_t height, uint32_t frameId);
     void clearFragmentState();
 
-    std::unordered_map<uint32_t, FrameFragments*> m_fragmentMap;
-    std::vector<std::unique_ptr<FrameFragments>> m_fragmentStorage;
-    std::vector<FrameFragments*> m_freeFragments;
+    static constexpr size_t MAX_FRAGMENT_SLOTS = 256;
+    static constexpr size_t FRAGMENT_BUCKETS = 512;
+    static_assert((FRAGMENT_BUCKETS & (FRAGMENT_BUCKETS - 1)) == 0,
+                  "FRAGMENT_BUCKETS must be power-of-two");
+    std::array<FrameFragments, MAX_FRAGMENT_SLOTS> m_fragmentStorage{};
+    std::array<int, MAX_FRAGMENT_SLOTS> m_freeFragmentStack{};
+    std::array<int, FRAGMENT_BUCKETS> m_bucketHeads{};
+    size_t m_freeFragmentCount = 0;
+    size_t m_activeFragmentCount = 0;
 
     SOCKET m_recvSocket = INVALID_SOCKET;
     unsigned short m_listenPort = 5007;
@@ -127,6 +141,5 @@ private:
     uint64_t m_consumedSeq = 0;
     int m_reserveCursor = 0;
 
-    std::atomic<uint64_t> m_receivedFrames{0};
     std::atomic<uint64_t> m_droppedFrames{0};
 };

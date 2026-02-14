@@ -329,7 +329,6 @@ struct CallbackContext {
     std::array<float, kNoiseLutSize> noiseLutX{};
     std::array<float, kNoiseLutSize> noiseLutY{};
     size_t noiseCursor = 0;
-    std::atomic<int> inFlightBufferIndex{-1};
     std::chrono::steady_clock::time_point lastMouseMoveTime{};
     
     // Initialize cached values from config
@@ -362,12 +361,27 @@ struct CallbackContext {
     }
 };
 
+struct CallbackTicket {
+    CallbackContext* ctx = nullptr;
+    int bufferIndex = -1;
+    std::atomic<bool> busy{false};
+};
+
 // GPU callback handler - called immediately when inference completes
 // OPTIMIZED: Uses cached config values, no pointer indirection
 void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
-    CallbackContext* ctx = static_cast<CallbackContext*>(userData);
+    auto* ticket = static_cast<CallbackTicket*>(userData);
+    if (!ticket || !ticket->ctx) {
+        return;
+    }
 
-    int completedBuffer = ctx->inFlightBufferIndex.exchange(-1, std::memory_order_relaxed);
+    CallbackContext* ctx = ticket->ctx;
+    auto releaseTicket = [ticket]() {
+        ticket->bufferIndex = -1;
+        ticket->busy.store(false, std::memory_order_release);
+    };
+
+    const int completedBuffer = ticket->bufferIndex;
     if (completedBuffer >= 0 && ctx->udpCapture) {
         ctx->udpCapture->ReleaseFrame(completedBuffer);
     }
@@ -376,10 +390,12 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
     g_frameCount.fetch_add(1, std::memory_order_relaxed);
 
     if (!ctx->makcu->aiming_active.load(std::memory_order_relaxed)) {
+        releaseTicket();
         return;
     }
 
     if (!result.hasTarget) {
+        releaseTicket();
         return;
     }
     
@@ -437,13 +453,15 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
             auto moveElapsed =
                 std::chrono::duration_cast<std::chrono::milliseconds>(moveNow - ctx->lastMouseMoveTime).count();
             if (moveElapsed < ctx->mouseMinIntervalMs) {
+                releaseTicket();
                 return;
             }
             ctx->lastMouseMoveTime = moveNow;
         }
         ctx->makcu->move(finalX, finalY);
     }
-    
+
+    releaseTicket();
 }
 
 int main(int argc, char* argv[]) {
@@ -513,6 +531,27 @@ int main(int argc, char* argv[]) {
     callbackCtx.makcu = &makcu;
     callbackCtx.udpCapture = &udpCapture;
     callbackCtx.initFromConfig(cfg);  // Cache config values (lock-free)
+    constexpr size_t kCallbackTicketCount = 8;
+    std::array<CallbackTicket, kCallbackTicketCount> callbackTickets{};
+    for (auto& ticket : callbackTickets) {
+        ticket.ctx = &callbackCtx;
+        ticket.bufferIndex = -1;
+        ticket.busy.store(false, std::memory_order_relaxed);
+    }
+    size_t callbackTicketCursor = 0;
+    auto acquireCallbackTicket = [&]() -> CallbackTicket* {
+        for (size_t attempt = 0; attempt < callbackTickets.size(); ++attempt) {
+            const size_t idx = (callbackTicketCursor + attempt) % callbackTickets.size();
+            bool expected = false;
+            if (callbackTickets[idx].busy.compare_exchange_strong(
+                    expected, true, std::memory_order_acq_rel, std::memory_order_relaxed)) {
+                callbackTickets[idx].bufferIndex = -1;
+                callbackTicketCursor = (idx + 1) % callbackTickets.size();
+                return &callbackTickets[idx];
+            }
+        }
+        return nullptr;
+    };
     const uint32_t frameWaitTimeoutMs = static_cast<uint32_t>(std::clamp(cfg.frameWaitTimeoutMs, 1, 100));
 
     auto lastStatTime = std::chrono::steady_clock::now();
@@ -550,6 +589,7 @@ int main(int argc, char* argv[]) {
     int submitFailWindow = 0;
     uint64_t lastUdpDropped = udpCapture.GetDroppedFrameCount();
     size_t lastStatusLineLen = 0;
+    int inFlightBackoff = 0;
 
     while (g_running) {
         // Wait for frame (returns pinned memory directly)
@@ -598,13 +638,17 @@ int main(int argc, char* argv[]) {
             continue;
         }
 
-        // While GPU callback is in-flight, skip frame acquisition to reduce
-        // lock contention and CPU work in the capture path.
-        if (inference.isCallbackInFlight()) {
-            // No frame was acquired/dropped yet, so do not mark callback stale here.
-            std::this_thread::yield();
+        // Skip acquisition when inference queue is full.
+        if (!inference.hasSubmissionCapacity()) {
+            if (inFlightBackoff < 32) {
+                ++inFlightBackoff;
+                std::this_thread::yield();
+            } else {
+                std::this_thread::sleep_for(std::chrono::microseconds(200));
+            }
             continue;
         }
+        inFlightBackoff = 0;
 
         // Use pinned buffer API for zero-copy
         if (!udpCapture.AcquireFramePinned(&pinnedRgbData, &width, &height, nullptr, &bufferIndex, frameWaitTimeoutMs)) {
@@ -656,9 +700,16 @@ int main(int argc, char* argv[]) {
             continue;
         }
 
-        // GPU CALLBACK API: Queue inference, callback fires when GPU completes
-        // No cudaStreamSynchronize - mouse movement happens in callback thread!
-        callbackCtx.inFlightBufferIndex.store(bufferIndex, std::memory_order_relaxed);
+        CallbackTicket* ticket = acquireCallbackTicket();
+        if (!ticket) {
+            udpCapture.ReleaseFrame(bufferIndex);
+            ++busyDropWindow;
+            continue;
+        }
+        ticket->bufferIndex = bufferIndex;
+
+        // GPU CALLBACK API: Queue inference, callback fires when GPU completes.
+        // No cudaStreamSynchronize - mouse movement happens in callback thread.
 
         bool submitted = inference.runInferenceWithCallback(
             pinnedRgbData, width, height,
@@ -667,16 +718,18 @@ int main(int argc, char* argv[]) {
             gpuPidConfig,
             cfg.iouStickinessThreshold,
             cfg.headAimPoint, cfg.bodyAimPoint,
-            inferenceCallback, &callbackCtx);
+            inferenceCallback, ticket);
 
         if (submitted) {
             submittedFramesWindow++;
         } else {
-            int failedBuffer = callbackCtx.inFlightBufferIndex.exchange(-1, std::memory_order_relaxed);
+            int failedBuffer = ticket->bufferIndex;
             if (failedBuffer >= 0) {
                 udpCapture.ReleaseFrame(failedBuffer);
             }
-            if (inference.isCallbackInFlight()) {
+            ticket->bufferIndex = -1;
+            ticket->busy.store(false, std::memory_order_release);
+            if (!inference.hasSubmissionCapacity()) {
                 busyDropWindow++;
             } else {
                 submitFailWindow++;

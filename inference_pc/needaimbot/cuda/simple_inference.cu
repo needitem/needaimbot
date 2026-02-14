@@ -10,6 +10,7 @@
 #include <cstring>
 #include <exception>
 #include <vector>
+#include <algorithm>
 #include <cmath>
 #include <NvInferVersion.h>
 
@@ -435,6 +436,9 @@ void SimpleInference::Logger::log(Severity severity, const char* msg) noexcept {
 }
 
 SimpleInference::SimpleInference() {
+    for (auto& slot : m_callbackSlotBusy) {
+        slot.store(false, std::memory_order_relaxed);
+    }
 }
 
 SimpleInference::~SimpleInference() {
@@ -453,6 +457,10 @@ SimpleInference::~SimpleInference() {
     // Free GPU fused pipeline buffers
     if (m_d_selectedTarget) cudaFree(m_d_selectedTarget);
     if (m_d_pidState) cudaFree(m_d_pidState);
+    if (m_d_stage1BestDist) cudaFree(m_d_stage1BestDist);
+    if (m_d_stage1DistScore) cudaFree(m_d_stage1DistScore);
+    if (m_d_stage1BestIou) cudaFree(m_d_stage1BestIou);
+    if (m_d_stage1IouScore) cudaFree(m_d_stage1IouScore);
 
     // Free combined result buffer
     if (m_d_inferenceResult) cudaFree(m_d_inferenceResult);
@@ -545,6 +553,18 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
     if (m_maxDetections > m_numBoxes) {
         m_maxDetections = m_numBoxes;
     }
+    int stage1ThreadsRequired = 256;
+    if (m_numBoxes <= 128) stage1ThreadsRequired = 128;
+    if (m_numBoxes <= 64) stage1ThreadsRequired = 64;
+    if (m_numBoxes <= 32) stage1ThreadsRequired = 32;
+    const int stage1BlocksRequired =
+        (m_numBoxes + stage1ThreadsRequired - 1) / stage1ThreadsRequired;
+    if (m_maxDetections < stage1BlocksRequired) {
+        std::cout << "[SimpleInference] Raising max detections from " << m_maxDetections
+                  << " to " << stage1BlocksRequired
+                  << " (minimum required for stage-1 candidate blocks)" << std::endl;
+        m_maxDetections = stage1BlocksRequired;
+    }
 
     std::cout << "[SimpleInference] Input: " << m_inputW << "x" << m_inputH
               << " (" << (m_inputFP16 ? "FP16" : "FP32") << ")" << std::endl;
@@ -570,6 +590,10 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
     // Allocate GPU fused pipeline buffers
     cudaMalloc(&m_d_selectedTarget, sizeof(Detection));
     cudaMalloc(&m_d_pidState, sizeof(PIDState));
+    cudaMalloc(&m_d_stage1BestDist, static_cast<size_t>(m_maxDetections) * sizeof(Detection));
+    cudaMalloc(&m_d_stage1DistScore, static_cast<size_t>(m_maxDetections) * sizeof(float));
+    cudaMalloc(&m_d_stage1BestIou, static_cast<size_t>(m_maxDetections) * sizeof(Detection));
+    cudaMalloc(&m_d_stage1IouScore, static_cast<size_t>(m_maxDetections) * sizeof(float));
 
     // Initialize GPU state buffers to zero
     cudaMemset(m_d_selectedTarget, 0, sizeof(Detection));
@@ -618,57 +642,88 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
 // =============================================================================
 
 // Pipeline without H2D transfer - for CUDA Graph capture
-void SimpleInference::executeFusedPipelinePostH2D(int width, int height,
-                                                   float confThreshold, int headClassId, float headBonus,
-                                                   uint32_t allowedClassMask, const PIDConfig& pidConfig,
-                                                   float iouThreshold, float headYOffset, float bodyYOffset) {
+bool SimpleInference::executeFusedPipelinePostH2D(int width, int height,
+                                                  float confThreshold, int headClassId, float headBonus,
+                                                  uint32_t allowedClassMask, const PIDConfig& pidConfig,
+                                                  float iouThreshold, float headYOffset, float bodyYOffset) {
     // GPU preprocessing (handles RGB/BGRA + resize)
-    cuda_preprocessing(
+    cudaError_t preprocessErr = cuda_preprocessing(
         m_d_rawInput, m_d_chwInput,
         width, height, inputBytesPerPixel(), m_bgraInput,
         m_inputW, m_inputH, m_inputFP16, m_stream
     );
+    if (preprocessErr != cudaSuccess) {
+        std::cerr << "[SimpleInference] cuda_preprocessing failed: "
+                  << cudaGetErrorString(preprocessErr) << std::endl;
+        return false;
+    }
 
     // TensorRT inference
+    bool enqueueOk = false;
 #if TRT_USE_NEW_API
     if (!m_tensorAddressesBound) {
         m_context->setTensorAddress("images", m_d_chwInput);
         m_context->setTensorAddress("output0", m_d_output);
         m_tensorAddressesBound = true;
     }
-    m_context->enqueueV3(m_stream);
+    enqueueOk = m_context->enqueueV3(m_stream);
 #else
     void* bindings[2] = { m_d_chwInput, m_d_output };
-    m_context->enqueueV2(bindings, m_stream, nullptr);
+    enqueueOk = m_context->enqueueV2(bindings, m_stream, nullptr);
 #endif
+    if (!enqueueOk) {
+        std::cerr << "[SimpleInference] TensorRT enqueue failed" << std::endl;
+        return false;
+    }
 
     // One-pass GPU postprocess: decode + target select + PID + result packing
-    postprocessYoloFusedGpu(
+    cudaError_t postErr = postprocessYoloFusedGpu(
         m_d_output, m_outputFP16, m_numBoxes, m_numClasses,
         confThreshold, allowedClassMask, m_maxDetections,
+        static_cast<float>(std::max(m_inputW, m_inputH)),
         m_crosshairX, m_crosshairY,
         headClassId, headBonus, pidConfig,
         iouThreshold, headYOffset, bodyYOffset,
         m_d_selectedTarget, m_d_pidState,
-        m_d_inferenceResult, m_stream
+        m_d_inferenceResult,
+        m_d_stage1BestDist, m_d_stage1DistScore,
+        m_d_stage1BestIou, m_d_stage1IouScore,
+        m_stream
     );
+    if (postErr != cudaSuccess) {
+        std::cerr << "[SimpleInference] postprocessYoloFusedGpu failed: "
+                  << cudaGetErrorString(postErr) << std::endl;
+        return false;
+    }
 
     // Single D2H transfer (40 bytes)
-    cudaMemcpyAsync(m_h_inferenceResultPinned, m_d_inferenceResult,
-                    sizeof(InferenceResult), cudaMemcpyDeviceToHost, m_stream);
+    cudaError_t d2hErr = cudaMemcpyAsync(m_h_inferenceResultPinned, m_d_inferenceResult,
+                                         sizeof(InferenceResult), cudaMemcpyDeviceToHost, m_stream);
+    if (d2hErr != cudaSuccess) {
+        std::cerr << "[SimpleInference] cudaMemcpyAsync(result D2H) failed: "
+                  << cudaGetErrorString(d2hErr) << std::endl;
+        return false;
+    }
+    return true;
 }
 
-void SimpleInference::executeFusedPipeline(void* rawInput, int width, int height,
-                                            float confThreshold, int headClassId, float headBonus,
-                                            uint32_t allowedClassMask, const PIDConfig& pidConfig,
-                                            float iouThreshold, float headYOffset, float bodyYOffset) {
+bool SimpleInference::executeFusedPipeline(void* rawInput, int width, int height,
+                                           float confThreshold, int headClassId, float headBonus,
+                                           uint32_t allowedClassMask, const PIDConfig& pidConfig,
+                                           float iouThreshold, float headYOffset, float bodyYOffset) {
     size_t rawSize = static_cast<size_t>(width) * static_cast<size_t>(height) * static_cast<size_t>(inputBytesPerPixel());
 
     // H2D: Upload directly from pinned memory
-    cudaMemcpyAsync(m_d_rawInput, rawInput, rawSize, cudaMemcpyHostToDevice, m_stream);
+    cudaError_t h2dErr = cudaMemcpyAsync(m_d_rawInput, rawInput, rawSize, cudaMemcpyHostToDevice, m_stream);
+    if (h2dErr != cudaSuccess) {
+        std::cerr << "[SimpleInference] cudaMemcpyAsync(m_d_rawInput) failed: "
+                  << cudaGetErrorString(h2dErr) << std::endl;
+        return false;
+    }
 
-    executeFusedPipelinePostH2D(width, height, confThreshold, headClassId, headBonus,
-                                 allowedClassMask, pidConfig, iouThreshold, headYOffset, bodyYOffset);
+    return executeFusedPipelinePostH2D(width, height, confThreshold, headClassId, headBonus,
+                                       allowedClassMask, pidConfig, iouThreshold,
+                                       headYOffset, bodyYOffset);
 }
 
 bool SimpleInference::captureFullGraph(float confThreshold, int headClassId, float headBonus,
@@ -707,10 +762,18 @@ bool SimpleInference::captureFullGraph(float confThreshold, int headClassId, flo
     }
 
     // Execute pipeline WITHOUT H2D for capture
-    executeFusedPipelinePostH2D(m_inputW, m_inputH,
-                                 confThreshold, headClassId, headBonus,
-                                 allowedClassMask, pidConfig,
-                                 iouStickinessThreshold, headYOffset, bodyYOffset);
+    if (!executeFusedPipelinePostH2D(m_inputW, m_inputH,
+                                     confThreshold, headClassId, headBonus,
+                                     allowedClassMask, pidConfig,
+                                     iouStickinessThreshold, headYOffset, bodyYOffset)) {
+        cudaGraph_t capturedGraph = nullptr;
+        cudaError_t abortErr = cudaStreamEndCapture(m_stream, &capturedGraph);
+        if (abortErr == cudaSuccess && capturedGraph) {
+            cudaGraphDestroy(capturedGraph);
+        }
+        std::cerr << "[SimpleInference] Failed to launch full pipeline during graph capture" << std::endl;
+        return false;
+    }
 
     err = cudaStreamEndCapture(m_stream, &m_graph);
     if (err != cudaSuccess || !m_graph) {
@@ -753,7 +816,11 @@ void CUDART_CB SimpleInference::inferenceCompleteCallback(void* data) {
     }
 
     if (cbData->owner) {
-        cbData->owner->m_callbackInFlight.store(false, std::memory_order_relaxed);
+        const int slot = cbData->slotIndex;
+        if (slot >= 0 && slot < kMaxCallbacksInFlight) {
+            cbData->owner->m_callbackSlotBusy[slot].store(false, std::memory_order_release);
+        }
+        cbData->owner->m_callbacksInFlight.fetch_sub(1, std::memory_order_acq_rel);
     }
 }
 
@@ -765,15 +832,43 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
                                                 float headYOffset, float bodyYOffset,
                                                 InferenceCallback callback, void* userData) {
     if (!m_loaded || !pinnedData || width <= 0 || height <= 0) return false;
-    if (m_callbackInFlight.exchange(true, std::memory_order_relaxed)) return false;
+
+    int callbackSlot = -1;
+    for (int attempt = 0; attempt < kMaxCallbacksInFlight; ++attempt) {
+        const int idx = static_cast<int>((m_callbackSlotCursor + static_cast<uint32_t>(attempt)) %
+                                         static_cast<uint32_t>(kMaxCallbacksInFlight));
+        bool expected = false;
+        if (m_callbackSlotBusy[idx].compare_exchange_strong(
+                expected, true, std::memory_order_acq_rel, std::memory_order_relaxed)) {
+            callbackSlot = idx;
+            m_callbackSlotCursor =
+                (static_cast<uint32_t>(idx) + 1u) % static_cast<uint32_t>(kMaxCallbacksInFlight);
+            break;
+        }
+    }
+    if (callbackSlot < 0) {
+        return false;
+    }
+
+    m_callbacksInFlight.fetch_add(1, std::memory_order_acq_rel);
+
+    auto clearInFlightAndFail = [this, callbackSlot](bool drainStream) {
+        if (drainStream && m_stream) {
+            cudaStreamSynchronize(m_stream);
+        }
+        if (callbackSlot >= 0 && callbackSlot < kMaxCallbacksInFlight) {
+            m_callbackSlotBusy[callbackSlot].store(false, std::memory_order_release);
+        }
+        m_callbacksInFlight.fetch_sub(1, std::memory_order_acq_rel);
+        return false;
+    };
 
     const size_t rawSize = static_cast<size_t>(width) * static_cast<size_t>(height) *
                            static_cast<size_t>(inputBytesPerPixel());
     if (rawSize == 0 || rawSize > m_rawInputCapacityBytes) {
         std::cerr << "[SimpleInference] Input frame too large for raw buffer: "
                   << rawSize << " > " << m_rawInputCapacityBytes << std::endl;
-        m_callbackInFlight.store(false, std::memory_order_relaxed);
-        return false;
+        return clearInFlightAndFail(false);
     }
 
     // Use CUDA Graph only when shape and parameters match captured constants.
@@ -796,34 +891,34 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
         if (err != cudaSuccess) {
             std::cerr << "[SimpleInference] cudaMemcpyAsync(m_d_rawInput) failed: "
                       << cudaGetErrorString(err) << std::endl;
-            m_callbackInFlight.store(false, std::memory_order_relaxed);
-            return false;
+            return clearInFlightAndFail(false);
         }
 
         // Launch graph (preprocess + inference + postprocess + D2H)
         err = cudaGraphLaunch(m_graphExec, m_stream);
         if (err != cudaSuccess) {
             std::cerr << "[SimpleInference] cudaGraphLaunch failed: " << cudaGetErrorString(err) << std::endl;
-            m_callbackInFlight.store(false, std::memory_order_relaxed);
-            return false;
+            return clearInFlightAndFail(true);
         }
     } else {
         // Standard pipeline execution
-        executeFusedPipeline(pinnedData, width, height,
-                             confThreshold, headClassId, headBonus,
-                             allowedClassMask, pidConfig,
-                             iouStickinessThreshold, headYOffset, bodyYOffset);
+        if (!executeFusedPipeline(pinnedData, width, height,
+                                  confThreshold, headClassId, headBonus,
+                                  allowedClassMask, pidConfig,
+                                  iouStickinessThreshold, headYOffset, bodyYOffset)) {
+            return clearInFlightAndFail(true);
+        }
     }
 
     // Setup pre-allocated callback data (no heap allocation)
-    m_callbackData = {callback, userData, m_h_inferenceResultPinned, this};
+    CallbackData& cbData = m_callbackDataSlots[callbackSlot];
+    cbData = {callback, userData, m_h_inferenceResultPinned, this, callbackSlot};
 
     // Launch host function - fires immediately when GPU finishes
-    cudaError_t err = cudaLaunchHostFunc(m_stream, SimpleInference::inferenceCompleteCallback, &m_callbackData);
+    cudaError_t err = cudaLaunchHostFunc(m_stream, SimpleInference::inferenceCompleteCallback, &cbData);
     if (err != cudaSuccess) {
         std::cerr << "[SimpleInference] cudaLaunchHostFunc failed: " << cudaGetErrorString(err) << std::endl;
-        m_callbackInFlight.store(false, std::memory_order_relaxed);
-        return false;
+        return clearInFlightAndFail(true);
     }
 
     return true;

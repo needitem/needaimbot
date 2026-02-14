@@ -9,6 +9,7 @@
 // - FP16 input/output support (native, no conversion)
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <string>
 #include <cstdint>
@@ -37,6 +38,7 @@ public:
         void* userData = nullptr;
         InferenceResult* resultPtr = nullptr;
         SimpleInference* owner = nullptr;
+        int slotIndex = -1;
     };
 
     SimpleInference();
@@ -71,7 +73,11 @@ public:
                                   InferenceCallback callback, void* userData = nullptr);
 
     bool isCallbackInFlight() const {
-        return m_callbackInFlight.load(std::memory_order_relaxed);
+        return m_callbacksInFlight.load(std::memory_order_acquire) > 0;
+    }
+
+    bool hasSubmissionCapacity() const {
+        return m_callbacksInFlight.load(std::memory_order_acquire) < kMaxCallbacksInFlight;
     }
 
     cudaStream_t getStream() const { return m_stream; }
@@ -97,6 +103,10 @@ private:
     // GPU fused pipeline buffers
     Detection* m_d_selectedTarget = nullptr;  // Persistent selected target for IoU stickiness
     PIDState* m_d_pidState = nullptr;         // Persistent PID state on GPU
+    Detection* m_d_stage1BestDist = nullptr;  // Stage-1 per-block best-by-distance
+    float* m_d_stage1DistScore = nullptr;     // Stage-1 per-block distance score
+    Detection* m_d_stage1BestIou = nullptr;   // Stage-1 per-block best-by-IoU
+    float* m_d_stage1IouScore = nullptr;      // Stage-1 per-block IoU score
 
     // Combined result buffer for single D2H transfer
     InferenceResult* m_d_inferenceResult = nullptr;  // GPU
@@ -134,23 +144,26 @@ private:
     float m_cachedHeadYOffset = 1.0f;
     float m_cachedBodyYOffset = 0.15f;
 
-    CallbackData m_callbackData{};
-    std::atomic<bool> m_callbackInFlight{false};
+    static constexpr int kMaxCallbacksInFlight = 2;
+    std::array<CallbackData, kMaxCallbacksInFlight> m_callbackDataSlots{};
+    std::array<std::atomic<bool>, kMaxCallbacksInFlight> m_callbackSlotBusy{};
+    std::atomic<int> m_callbacksInFlight{0};
+    uint32_t m_callbackSlotCursor = 0;
 
     // Called by cudaLaunchHostFunc when stream work has completed
     static void CUDART_CB inferenceCompleteCallback(void* data);
 
     // Execute full fused pipeline (H2D + preprocess + inference + postprocess + D2H)
-    void executeFusedPipeline(void* rawInput, int width, int height,
+    bool executeFusedPipeline(void* rawInput, int width, int height,
                               float confThreshold, int headClassId, float headBonus,
                               uint32_t allowedClassMask, const PIDConfig& pidConfig,
                               float iouThreshold, float headYOffset, float bodyYOffset);
 
     // Execute pipeline without H2D transfer (for CUDA Graph - H2D is done separately)
-    void executeFusedPipelinePostH2D(int width, int height,
-                                      float confThreshold, int headClassId, float headBonus,
-                                      uint32_t allowedClassMask, const PIDConfig& pidConfig,
-                                      float iouThreshold, float headYOffset, float bodyYOffset);
+    bool executeFusedPipelinePostH2D(int width, int height,
+                                     float confThreshold, int headClassId, float headBonus,
+                                     uint32_t allowedClassMask, const PIDConfig& pidConfig,
+                                     float iouThreshold, float headYOffset, float bodyYOffset);
 
     // Input size helper
     int inputBytesPerPixel() const { return m_bgraInput ? 4 : 3; }
