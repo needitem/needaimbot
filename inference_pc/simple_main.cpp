@@ -321,7 +321,6 @@ struct CallbackContext {
     bool noiseEnabled;
     float shootOffsetX;
     float shootOffsetY;
-    int mouseMinIntervalMs;
     
     // Movement filter state (deadband + hysteresis)
     float deadbandX;          // Minimum movement threshold X
@@ -333,14 +332,12 @@ struct CallbackContext {
     std::array<float, kNoiseLutSize> noiseLutX{};
     std::array<float, kNoiseLutSize> noiseLutY{};
     size_t noiseCursor = 0;
-    std::chrono::steady_clock::time_point lastMouseMoveTime{};
     
     // Initialize cached values from config
     void initFromConfig(const Config& cfg) {
         noiseEnabled = cfg.noiseEnabled;
         shootOffsetX = cfg.shootOffsetX;
         shootOffsetY = cfg.shootOffsetY;
-        mouseMinIntervalMs = std::max(0, cfg.mouseMinIntervalMs);
         
         // Movement filter defaults (can be made configurable)
         deadbandX = 0.3f;  // Ignore movements < 0.3 pixels
@@ -348,7 +345,6 @@ struct CallbackContext {
         lastMoveX = 0;
         lastMoveY = 0;
         noiseCursor = 0;
-        lastMouseMoveTime = std::chrono::steady_clock::now() - std::chrono::milliseconds(mouseMinIntervalMs);
 
         if (noiseEnabled) {
             std::mt19937 gen(std::random_device{}());
@@ -370,41 +366,72 @@ struct MoveCommand {
     int dy = 0;
 };
 
+struct MoveQueueSlot {
+    std::atomic<uint64_t> sequence{0};
+    MoveCommand command{};
+};
+
 struct MoveQueue {
     static constexpr uint32_t kCapacity = 1024;  // Must stay power-of-two.
     static_assert((kCapacity & (kCapacity - 1)) == 0, "MoveQueue capacity must be power-of-two");
 
-    std::array<MoveCommand, kCapacity> ring{};
-    std::atomic<uint32_t> writeSeq{0};
-    std::atomic<uint32_t> readSeq{0};
-    std::mutex pushMutex;
+    std::array<MoveQueueSlot, kCapacity> ring{};
+    std::atomic<uint64_t> enqueuePos{0};
+    std::atomic<uint64_t> dequeuePos{0};
+
+    MoveQueue() {
+        for (uint64_t i = 0; i < kCapacity; ++i) {
+            ring[static_cast<size_t>(i)].sequence.store(i, std::memory_order_relaxed);
+        }
+    }
 
     bool tryPush(const MoveCommand& cmd) {
-        std::lock_guard<std::mutex> lock(pushMutex);
-        const uint32_t w = writeSeq.load(std::memory_order_relaxed);
-        const uint32_t r = readSeq.load(std::memory_order_acquire);
-        if ((w - r) >= kCapacity) {
-            return false;
+        uint64_t pos = enqueuePos.load(std::memory_order_relaxed);
+        for (;;) {
+            MoveQueueSlot& slot = ring[static_cast<size_t>(pos & (kCapacity - 1))];
+            const uint64_t seq = slot.sequence.load(std::memory_order_acquire);
+            const int64_t diff = static_cast<int64_t>(seq) - static_cast<int64_t>(pos);
+
+            if (diff == 0) {
+                if (enqueuePos.compare_exchange_weak(
+                        pos, pos + 1, std::memory_order_relaxed, std::memory_order_relaxed)) {
+                    slot.command = cmd;
+                    slot.sequence.store(pos + 1, std::memory_order_release);
+                    return true;
+                }
+            } else if (diff < 0) {
+                return false;  // Queue full
+            } else {
+                pos = enqueuePos.load(std::memory_order_relaxed);
+            }
         }
-        ring[w & (kCapacity - 1)] = cmd;
-        writeSeq.store(w + 1, std::memory_order_release);
-        return true;
     }
 
     bool tryPop(MoveCommand& out) {
-        const uint32_t r = readSeq.load(std::memory_order_relaxed);
-        const uint32_t w = writeSeq.load(std::memory_order_acquire);
-        if (r == w) {
-            return false;
+        uint64_t pos = dequeuePos.load(std::memory_order_relaxed);
+        for (;;) {
+            MoveQueueSlot& slot = ring[static_cast<size_t>(pos & (kCapacity - 1))];
+            const uint64_t seq = slot.sequence.load(std::memory_order_acquire);
+            const int64_t diff = static_cast<int64_t>(seq) - static_cast<int64_t>(pos + 1);
+
+            if (diff == 0) {
+                if (dequeuePos.compare_exchange_weak(
+                        pos, pos + 1, std::memory_order_relaxed, std::memory_order_relaxed)) {
+                    out = slot.command;
+                    slot.sequence.store(pos + kCapacity, std::memory_order_release);
+                    return true;
+                }
+            } else if (diff < 0) {
+                return false;  // Queue empty
+            } else {
+                pos = dequeuePos.load(std::memory_order_relaxed);
+            }
         }
-        out = ring[r & (kCapacity - 1)];
-        readSeq.store(r + 1, std::memory_order_release);
-        return true;
     }
 
     bool hasPending() const {
-        return readSeq.load(std::memory_order_acquire) !=
-               writeSeq.load(std::memory_order_acquire);
+        return dequeuePos.load(std::memory_order_acquire) !=
+               enqueuePos.load(std::memory_order_acquire);
     }
 };
 
@@ -495,20 +522,15 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
     
     // Enqueue mouse move to dedicated sender thread to keep callback lightweight.
     if (finalX != 0 || finalY != 0) {
-        if (ctx->mouseMinIntervalMs > 0) {
-            auto moveNow = std::chrono::steady_clock::now();
-            auto moveElapsed =
-                std::chrono::duration_cast<std::chrono::milliseconds>(moveNow - ctx->lastMouseMoveTime).count();
-            if (moveElapsed < ctx->mouseMinIntervalMs) {
-                releaseTicket();
-                return;
-            }
-            ctx->lastMouseMoveTime = moveNow;
-        }
         if (ctx->moveQueue) {
             const MoveCommand cmd{finalX, finalY};
-            if (ctx->moveQueue->tryPush(cmd) && ctx->moveQueueCv) {
-                ctx->moveQueueCv->notify_one();
+            if (ctx->moveQueue->tryPush(cmd)) {
+                if (ctx->moveQueueCv) {
+                    ctx->moveQueueCv->notify_one();
+                }
+            } else {
+                // Fallback path: avoid losing movement when queue is saturated.
+                ctx->makcu->move(finalX, finalY);
             }
         } else {
             ctx->makcu->move(finalX, finalY);
@@ -612,22 +634,54 @@ int main(int argc, char* argv[]) {
         return nullptr;
     };
     const uint32_t frameWaitTimeoutMs = static_cast<uint32_t>(std::clamp(cfg.frameWaitTimeoutMs, 1, 100));
+    const int senderMinIntervalMs = std::max(0, cfg.mouseMinIntervalMs);
 
     auto lastStatTime = std::chrono::steady_clock::now();
     auto lastRecoilTime = std::chrono::steady_clock::now();
     std::atomic<bool> moveSenderRunning{true};
     std::thread moveSenderThread([&]() {
         MoveCommand cmd;
-        while (moveSenderRunning.load(std::memory_order_relaxed) || moveQueue.hasPending()) {
-            if (moveQueue.tryPop(cmd)) {
-                if (cmd.dx != 0 || cmd.dy != 0) {
-                    makcu.move(cmd.dx, cmd.dy);
+        int pendingDx = 0;
+        int pendingDy = 0;
+        auto nextSendTime = std::chrono::steady_clock::now();
+
+        auto hasPendingMove = [&]() { return pendingDx != 0 || pendingDy != 0; };
+        auto flushMove = [&](std::chrono::steady_clock::time_point now) -> bool {
+            if (!hasPendingMove()) return false;
+            if (senderMinIntervalMs > 0 && now < nextSendTime) return false;
+            makcu.move(pendingDx, pendingDy);
+            pendingDx = 0;
+            pendingDy = 0;
+            if (senderMinIntervalMs > 0) {
+                nextSendTime = now + std::chrono::milliseconds(senderMinIntervalMs);
+            }
+            return true;
+        };
+
+        while (moveSenderRunning.load(std::memory_order_relaxed) || moveQueue.hasPending() || hasPendingMove()) {
+            while (moveQueue.tryPop(cmd)) {
+                pendingDx = std::clamp(pendingDx + cmd.dx, -127, 127);
+                pendingDy = std::clamp(pendingDy + cmd.dy, -127, 127);
+            }
+
+            const auto now = std::chrono::steady_clock::now();
+            if (flushMove(now)) {
+                continue;
+            }
+
+            if (moveSenderRunning.load(std::memory_order_relaxed) || moveQueue.hasPending() || hasPendingMove()) {
+                std::unique_lock<std::mutex> lock(moveQueueCvMutex);
+                if (hasPendingMove() && senderMinIntervalMs > 0 && now < nextSendTime) {
+                    moveQueueCv.wait_until(lock, nextSendTime, [&]() {
+                        return !moveSenderRunning.load(std::memory_order_relaxed) || moveQueue.hasPending();
+                    });
+                } else {
+                    moveQueueCv.wait(lock, [&]() {
+                        return !moveSenderRunning.load(std::memory_order_relaxed) || moveQueue.hasPending();
+                    });
                 }
             } else {
-                std::unique_lock<std::mutex> lock(moveQueueCvMutex);
-                moveQueueCv.wait(lock, [&]() {
-                    return !moveSenderRunning.load(std::memory_order_relaxed) || moveQueue.hasPending();
-                });
+                break;
             }
         }
     });
@@ -636,6 +690,8 @@ int main(int argc, char* argv[]) {
         const MoveCommand cmd{dx, dy};
         if (moveQueue.tryPush(cmd)) {
             moveQueueCv.notify_one();
+        } else {
+            makcu.move(dx, dy);
         }
     };
 
