@@ -568,7 +568,7 @@ int main(int argc, char* argv[]) {
     callbackCtx.moveQueue = &moveQueue;
     callbackCtx.moveQueueCv = &moveQueueCv;
     callbackCtx.initFromConfig(cfg);  // Cache config values (lock-free)
-    constexpr size_t kCallbackTicketCount = 8;
+    constexpr size_t kCallbackTicketCount = 4;
     std::array<CallbackTicket, kCallbackTicketCount> callbackTickets{};
     for (auto& ticket : callbackTickets) {
         ticket.ctx = &callbackCtx;
