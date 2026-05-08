@@ -460,9 +460,8 @@ SimpleInference::~SimpleInference() {
         }
     }
 
-    // Destroy CUDA graph
-    if (m_graphExec) cudaGraphExecDestroy(m_graphExec);
-    if (m_graph) cudaGraphDestroy(m_graph);
+    // Destroy CUDA graphs
+    destroyFullGraphs();
 
     // Free GPU memory
     if (m_d_rawInput) cudaFree(m_d_rawInput);
@@ -487,9 +486,15 @@ SimpleInference::~SimpleInference() {
     if (m_h_rawPinned) cudaFreeHost(m_h_rawPinned);
 
     if (m_stream) cudaStreamDestroy(m_stream);
+#if TRT_USE_NEW_API
     if (m_context) delete m_context;
     if (m_engine) delete m_engine;
     if (m_runtime) delete m_runtime;
+#else
+    if (m_context) m_context->destroy();
+    if (m_engine) m_engine->destroy();
+    if (m_runtime) m_runtime->destroy();
+#endif
 }
 
 bool SimpleInference::loadEngine(const std::string& enginePath) {
@@ -564,7 +569,6 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
     m_inputW = inputDims.d[3];
     m_numBoxes = outputDims.d[2];
     m_numClasses = outputDims.d[1] - 4;
-    m_rawInputBytes = static_cast<size_t>(m_inputH) * static_cast<size_t>(m_inputW) * static_cast<size_t>(inputBytesPerPixel());
     m_crosshairX = m_inputW * 0.5f;
     m_crosshairY = m_inputH * 0.5f;
     if (m_maxDetections > m_numBoxes) {
@@ -594,8 +598,13 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
     cudaDeviceGetStreamPriorityRange(&leastPriority, &greatestPriority);
     cudaStreamCreateWithPriority(&m_stream, cudaStreamNonBlocking, greatestPriority);
 
-    // Allocate GPU memory (use max of RGB/BGRA for raw input)
-    size_t rawInputSize = m_inputH * m_inputW * 4;  // Allocate for BGRA (max)
+    // Allocate GPU memory. Keep enough raw-input space for the common 640x640
+    // capture case even when the model input is smaller and preprocessing resizes.
+    constexpr size_t kDefaultRawInputPixels = 640ull * 640ull;
+    size_t rawInputSize =
+        std::max(static_cast<size_t>(m_inputH) * static_cast<size_t>(m_inputW),
+                 kDefaultRawInputPixels) *
+        4;  // Allocate for BGRA (max)
     m_rawInputCapacityBytes = rawInputSize;
     size_t chwInputSize = 1 * 3 * m_inputH * m_inputW * (m_inputFP16 ? sizeof(__half) : sizeof(float));
     size_t outputSizeGPU = 1 * outputDims.d[1] * m_numBoxes * (m_outputFP16 ? sizeof(__half) : sizeof(float));
@@ -662,7 +671,7 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
 }
 
 // =============================================================================
-// OPTIMIZED API: Zero-copy + Single D2H Transfer + Full CUDA Graph
+// OPTIMIZED API: Pinned H2D + Single D2H Transfer + Full CUDA Graph
 // =============================================================================
 
 // Pipeline without H2D transfer - for CUDA Graph capture
@@ -763,18 +772,132 @@ bool SimpleInference::executeFusedPipeline(void* rawInput, int width, int height
                                        headYOffset, bodyYOffset, resultSlot);
 }
 
-bool SimpleInference::captureFullGraph(float confThreshold, int headClassId, float headBonus,
-                                        uint32_t allowedClassMask, const PIDConfig& pidConfig,
-                                        float iouStickinessThreshold, float headYOffset, float bodyYOffset) {
-    if (m_graphCaptured) {
-        if (m_graphExec) cudaGraphExecDestroy(m_graphExec);
-        if (m_graph) cudaGraphDestroy(m_graph);
-        m_graphExec = nullptr;
-        m_graph = nullptr;
-        m_graphCaptured = false;
+void SimpleInference::destroyFullGraphs() {
+    for (int i = 0; i < kMaxCallbacksInFlight; ++i) {
+        const size_t idx = static_cast<size_t>(i);
+        if (m_graphExecs[idx]) {
+            cudaGraphExecDestroy(m_graphExecs[idx]);
+            m_graphExecs[idx] = nullptr;
+        }
+        if (m_graphs[idx]) {
+            cudaGraphDestroy(m_graphs[idx]);
+            m_graphs[idx] = nullptr;
+        }
+    }
+    m_graphSourceW = 0;
+    m_graphSourceH = 0;
+    m_graphSlotCount = 0;
+}
+
+bool SimpleInference::graphParamsMatch(int sourceWidth, int sourceHeight, int requiredGraphSlots,
+                                       float confThreshold, int headClassId, float headBonus,
+                                       uint32_t allowedClassMask, const PIDConfig& pidConfig,
+                                       float iouStickinessThreshold, float headYOffset,
+                                       float bodyYOffset) const {
+    if (sourceWidth <= 0 || sourceHeight <= 0) return false;
+    if (requiredGraphSlots <= 0 || requiredGraphSlots > kMaxCallbacksInFlight) return false;
+    if (sourceWidth != m_graphSourceW || sourceHeight != m_graphSourceH) return false;
+    if (requiredGraphSlots > m_graphSlotCount) return false;
+    for (int i = 0; i < requiredGraphSlots; ++i) {
+        const size_t idx = static_cast<size_t>(i);
+        if (!m_graphExecs[idx]) {
+            return false;
+        }
+    }
+    return (headClassId == m_cachedHeadClassId) &&
+           (allowedClassMask == m_cachedAllowedClassMask) &&
+           nearlyEqual(confThreshold, m_cachedConfThreshold) &&
+           nearlyEqual(headBonus, m_cachedHeadBonus) &&
+           pidConfigNearlyEqual(pidConfig, m_cachedPidConfig) &&
+           nearlyEqual(iouStickinessThreshold, m_cachedIouThreshold) &&
+           nearlyEqual(headYOffset, m_cachedHeadYOffset) &&
+           nearlyEqual(bodyYOffset, m_cachedBodyYOffset);
+}
+
+bool SimpleInference::isFullGraphReadyForShape(int sourceWidth, int sourceHeight,
+                                               int graphSlotCount,
+                                               float confThreshold, int headClassId, float headBonus,
+                                               uint32_t allowedClassMask, const PIDConfig& pidConfig,
+                                               float iouStickinessThreshold, float headYOffset,
+                                               float bodyYOffset) const {
+    return graphParamsMatch(sourceWidth, sourceHeight, graphSlotCount,
+                            confThreshold, headClassId, headBonus,
+                            allowedClassMask, pidConfig, iouStickinessThreshold,
+                            headYOffset, bodyYOffset);
+}
+
+bool SimpleInference::ensureRawInputCapacity(size_t requiredBytes) {
+    if (requiredBytes == 0) return false;
+    if (requiredBytes <= m_rawInputCapacityBytes && m_d_rawInput && m_h_rawPinned) {
+        return true;
+    }
+    if (m_callbacksInFlight.load(std::memory_order_acquire) > 0) {
+        return false;
     }
 
+    if (m_stream) {
+        cudaStreamSynchronize(m_stream);
+    }
+
+    void* newDeviceRaw = nullptr;
+    uint8_t* newHostRaw = nullptr;
+    cudaError_t err = cudaMalloc(&newDeviceRaw, requiredBytes);
+    if (err != cudaSuccess) {
+        std::cerr << "[SimpleInference] Failed to grow raw device buffer to "
+                  << requiredBytes << " bytes: " << cudaGetErrorString(err) << std::endl;
+        return false;
+    }
+    err = cudaMallocHost(&newHostRaw, requiredBytes);
+    if (err != cudaSuccess) {
+        std::cerr << "[SimpleInference] Failed to grow raw pinned buffer to "
+                  << requiredBytes << " bytes: " << cudaGetErrorString(err) << std::endl;
+        cudaFree(newDeviceRaw);
+        return false;
+    }
+
+    destroyFullGraphs();
+    if (m_d_rawInput) cudaFree(m_d_rawInput);
+    if (m_h_rawPinned) cudaFreeHost(m_h_rawPinned);
+    m_d_rawInput = newDeviceRaw;
+    m_h_rawPinned = newHostRaw;
+    m_rawInputCapacityBytes = requiredBytes;
+    return true;
+}
+
+bool SimpleInference::captureFullGraphForShape(int sourceWidth, int sourceHeight,
+                                                int graphSlotCount,
+                                                float confThreshold, int headClassId, float headBonus,
+                                                uint32_t allowedClassMask, const PIDConfig& pidConfig,
+                                                float iouStickinessThreshold, float headYOffset,
+                                                float bodyYOffset) {
+    if (!m_loaded || sourceWidth <= 0 || sourceHeight <= 0) {
+        return false;
+    }
+    if (graphSlotCount < 1) graphSlotCount = 1;
+    if (graphSlotCount > kMaxCallbacksInFlight) graphSlotCount = kMaxCallbacksInFlight;
+    if (m_callbacksInFlight.load(std::memory_order_acquire) > 0) {
+        std::cerr << "[SimpleInference] Cannot recapture CUDA graph while callbacks are in flight"
+                  << std::endl;
+        return false;
+    }
+
+    const size_t rawSize = static_cast<size_t>(sourceWidth) * static_cast<size_t>(sourceHeight) *
+                           static_cast<size_t>(inputBytesPerPixel());
+    if (!ensureRawInputCapacity(rawSize)) {
+        std::cerr << "[SimpleInference] Raw input buffer is too small for graph source shape "
+                  << sourceWidth << "x" << sourceHeight << std::endl;
+        return false;
+    }
+
+    if (m_stream) {
+        cudaStreamSynchronize(m_stream);
+    }
+    destroyFullGraphs();
+
     // Cache parameters
+    m_graphSourceW = sourceWidth;
+    m_graphSourceH = sourceHeight;
+    m_graphSlotCount = graphSlotCount;
     m_cachedConfThreshold = confThreshold;
     m_cachedHeadClassId = headClassId;
     m_cachedHeadBonus = headBonus;
@@ -785,51 +908,71 @@ bool SimpleInference::captureFullGraph(float confThreshold, int headClassId, flo
     m_cachedBodyYOffset = bodyYOffset;
 
     // Fill pinned buffer with dummy data and upload to GPU (H2D outside graph)
-    size_t rawSize = m_rawInputBytes;
     memset(m_h_rawPinned, 128, rawSize);
-    cudaMemcpyAsync(m_d_rawInput, m_h_rawPinned, rawSize, cudaMemcpyHostToDevice, m_stream);
-    cudaStreamSynchronize(m_stream);
-
-    // Begin graph capture
-    cudaError_t err = cudaStreamBeginCapture(m_stream, cudaStreamCaptureModeRelaxed);
+    cudaError_t err = cudaMemcpyAsync(m_d_rawInput, m_h_rawPinned, rawSize,
+                                      cudaMemcpyHostToDevice, m_stream);
     if (err != cudaSuccess) {
-        std::cerr << "[SimpleInference] Failed to begin full graph capture: "
+        std::cerr << "[SimpleInference] Failed dummy H2D before graph capture: "
                   << cudaGetErrorString(err) << std::endl;
+        destroyFullGraphs();
+        return false;
+    }
+    err = cudaStreamSynchronize(m_stream);
+    if (err != cudaSuccess) {
+        std::cerr << "[SimpleInference] Failed to sync before graph capture: "
+                  << cudaGetErrorString(err) << std::endl;
+        destroyFullGraphs();
         return false;
     }
 
-    // Execute pipeline WITHOUT H2D for capture
-    if (!executeFusedPipelinePostH2D(m_inputW, m_inputH,
-                                     confThreshold, headClassId, headBonus,
-                                     allowedClassMask, pidConfig,
-                                     iouStickinessThreshold, headYOffset, bodyYOffset, 0)) {
-        cudaGraph_t capturedGraph = nullptr;
-        cudaError_t abortErr = cudaStreamEndCapture(m_stream, &capturedGraph);
-        if (abortErr == cudaSuccess && capturedGraph) {
-            cudaGraphDestroy(capturedGraph);
+    for (int slot = 0; slot < graphSlotCount; ++slot) {
+        const size_t slotIdx = static_cast<size_t>(slot);
+        err = cudaStreamBeginCapture(m_stream, cudaStreamCaptureModeRelaxed);
+        if (err != cudaSuccess) {
+            std::cerr << "[SimpleInference] Failed to begin full graph capture for slot "
+                      << slot << ": " << cudaGetErrorString(err) << std::endl;
+            destroyFullGraphs();
+            return false;
         }
-        std::cerr << "[SimpleInference] Failed to launch full pipeline during graph capture" << std::endl;
-        return false;
+
+        // Execute pipeline WITHOUT H2D for capture. Each graph writes to its own
+        // result slot so callbacks cannot observe overwritten slot-0 results.
+        if (!executeFusedPipelinePostH2D(sourceWidth, sourceHeight,
+                                         confThreshold, headClassId, headBonus,
+                                         allowedClassMask, pidConfig,
+                                         iouStickinessThreshold, headYOffset, bodyYOffset,
+                                         slot)) {
+            cudaGraph_t capturedGraph = nullptr;
+            cudaError_t abortErr = cudaStreamEndCapture(m_stream, &capturedGraph);
+            if (abortErr == cudaSuccess && capturedGraph) {
+                cudaGraphDestroy(capturedGraph);
+            }
+            std::cerr << "[SimpleInference] Failed to launch full pipeline during graph capture"
+                      << " for slot " << slot << std::endl;
+            destroyFullGraphs();
+            return false;
+        }
+
+        err = cudaStreamEndCapture(m_stream, &m_graphs[slotIdx]);
+        if (err != cudaSuccess || !m_graphs[slotIdx]) {
+            std::cerr << "[SimpleInference] Failed to end full graph capture for slot "
+                      << slot << ": " << cudaGetErrorString(err) << std::endl;
+            destroyFullGraphs();
+            return false;
+        }
+
+        err = cudaGraphInstantiate(&m_graphExecs[slotIdx], m_graphs[slotIdx], nullptr, nullptr, 0);
+        if (err != cudaSuccess) {
+            std::cerr << "[SimpleInference] Failed to instantiate full graph for slot "
+                      << slot << ": " << cudaGetErrorString(err) << std::endl;
+            destroyFullGraphs();
+            return false;
+        }
     }
 
-    err = cudaStreamEndCapture(m_stream, &m_graph);
-    if (err != cudaSuccess || !m_graph) {
-        std::cerr << "[SimpleInference] Failed to end full graph capture: "
-                  << cudaGetErrorString(err) << std::endl;
-        return false;
-    }
-
-    err = cudaGraphInstantiate(&m_graphExec, m_graph, nullptr, nullptr, 0);
-    if (err != cudaSuccess) {
-        std::cerr << "[SimpleInference] Failed to instantiate full graph: "
-                  << cudaGetErrorString(err) << std::endl;
-        cudaGraphDestroy(m_graph);
-        m_graph = nullptr;
-        return false;
-    }
-
-    m_graphCaptured = true;
-    std::cout << "[SimpleInference] Full CUDA graph captured (preprocess+inference+postprocess)" << std::endl;
+    std::cout << "[SimpleInference] Full CUDA graph captured for " << sourceWidth << "x"
+              << sourceHeight << " source (" << graphSlotCount
+              << " slots, preprocess+inference+postprocess)" << std::endl;
     return true;
 }
 
@@ -837,6 +980,15 @@ bool SimpleInference::captureFullGraph(float confThreshold, int headClassId, flo
 // Callback Completion Worker
 // =============================================================================
 void SimpleInference::callbackWorkerLoop() {
+    auto hasPendingCallback = [this]() {
+        for (int slot = 0; slot < kMaxCallbacksInFlight; ++slot) {
+            if (m_callbackSlotPending[static_cast<size_t>(slot)].load(std::memory_order_acquire)) {
+                return true;
+            }
+        }
+        return false;
+    };
+
     while (m_callbackWorkerRunning.load(std::memory_order_acquire) ||
            m_callbacksInFlight.load(std::memory_order_acquire) > 0) {
         int pendingSlot = -1;
@@ -853,7 +1005,7 @@ void SimpleInference::callbackWorkerLoop() {
                 if (!m_callbackWorkerRunning.load(std::memory_order_acquire)) {
                     return true;
                 }
-                return m_callbacksInFlight.load(std::memory_order_acquire) > 0;
+                return hasPendingCallback();
             });
             continue;
         }
@@ -892,10 +1044,42 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
                                                 float headYOffset, float bodyYOffset,
                                                 InferenceCallback callback, void* userData) {
     if (!m_loaded || !pinnedData || width <= 0 || height <= 0) return false;
+
+    const size_t rawSize = static_cast<size_t>(width) * static_cast<size_t>(height) *
+                           static_cast<size_t>(inputBytesPerPixel());
+    if (rawSize == 0) return false;
+    if (rawSize > m_rawInputCapacityBytes && !ensureRawInputCapacity(rawSize)) {
+        std::cerr << "[SimpleInference] Input frame too large for raw buffer: "
+                  << rawSize << " > " << m_rawInputCapacityBytes << std::endl;
+        return false;
+    }
+
     if (m_callbacksInFlight.load(std::memory_order_acquire) >= kMaxCallbacksInFlight) return false;
 
+    const bool graphAvailable =
+        graphParamsMatch(width, height, 1,
+                         confThreshold, headClassId, headBonus,
+                         allowedClassMask, pidConfig, iouStickinessThreshold,
+                         headYOffset, bodyYOffset);
+
     int callbackSlot = -1;
+    if (graphAvailable) {
+        for (int attempt = 0; attempt < m_graphSlotCount; ++attempt) {
+            const int idx = static_cast<int>((m_callbackSlotCursor + static_cast<uint32_t>(attempt)) %
+                                             static_cast<uint32_t>(m_graphSlotCount));
+            bool expected = false;
+            if (m_callbackSlotBusy[idx].compare_exchange_strong(
+                    expected, true, std::memory_order_acq_rel, std::memory_order_relaxed)) {
+                callbackSlot = idx;
+                m_callbackSlotCursor =
+                    (static_cast<uint32_t>(idx) + 1u) % static_cast<uint32_t>(m_graphSlotCount);
+                break;
+            }
+        }
+    }
+
     for (int attempt = 0; attempt < kMaxCallbacksInFlight; ++attempt) {
+        if (callbackSlot >= 0) break;
         const int idx = static_cast<int>((m_callbackSlotCursor + static_cast<uint32_t>(attempt)) %
                                          static_cast<uint32_t>(kMaxCallbacksInFlight));
         bool expected = false;
@@ -924,31 +1108,17 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
         return false;
     };
 
-    const size_t rawSize = static_cast<size_t>(width) * static_cast<size_t>(height) *
-                           static_cast<size_t>(inputBytesPerPixel());
-    if (rawSize == 0 || rawSize > m_rawInputCapacityBytes) {
-        std::cerr << "[SimpleInference] Input frame too large for raw buffer: "
-                  << rawSize << " > " << m_rawInputCapacityBytes << std::endl;
-        return clearInFlightAndFail(false);
-    }
-
     // Use CUDA Graph only when shape and parameters match captured constants.
-    bool canUseGraph = false;
-    if (m_graphCaptured && (width == m_inputW) && (height == m_inputH)) {
-        canUseGraph =
-            (headClassId == m_cachedHeadClassId) &&
-            (allowedClassMask == m_cachedAllowedClassMask) &&
-            nearlyEqual(confThreshold, m_cachedConfThreshold) &&
-            nearlyEqual(headBonus, m_cachedHeadBonus) &&
-            pidConfigNearlyEqual(pidConfig, m_cachedPidConfig) &&
-            nearlyEqual(iouStickinessThreshold, m_cachedIouThreshold) &&
-            nearlyEqual(headYOffset, m_cachedHeadYOffset) &&
-            nearlyEqual(bodyYOffset, m_cachedBodyYOffset);
-    }
-    int resultSlotForCallback = callbackSlot;
+    const bool canUseGraph =
+        graphAvailable &&
+        callbackSlot < m_graphSlotCount &&
+        graphParamsMatch(width, height, callbackSlot + 1,
+                         confThreshold, headClassId, headBonus,
+                         allowedClassMask, pidConfig, iouStickinessThreshold,
+                         headYOffset, bodyYOffset) &&
+        m_graphExecs[static_cast<size_t>(callbackSlot)] != nullptr;
 
     if (canUseGraph) {
-        resultSlotForCallback = 0;
         // H2D outside graph - copy directly from user's pinned buffer
         cudaError_t err = cudaMemcpyAsync(m_d_rawInput, pinnedData, rawSize, cudaMemcpyHostToDevice, m_stream);
         if (err != cudaSuccess) {
@@ -958,7 +1128,7 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
         }
 
         // Launch graph (preprocess + inference + postprocess + D2H)
-        err = cudaGraphLaunch(m_graphExec, m_stream);
+        err = cudaGraphLaunch(m_graphExecs[static_cast<size_t>(callbackSlot)], m_stream);
         if (err != cudaSuccess) {
             std::cerr << "[SimpleInference] cudaGraphLaunch failed: " << cudaGetErrorString(err) << std::endl;
             return clearInFlightAndFail(true);
@@ -976,8 +1146,7 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
     // Setup pre-allocated callback data (no heap allocation)
     CallbackData& cbData = m_callbackDataSlots[callbackSlot];
     cbData = {callback, userData,
-              m_h_inferenceResultPinned[static_cast<size_t>(resultSlotForCallback)],
-              this, callbackSlot};
+              m_h_inferenceResultPinned[static_cast<size_t>(callbackSlot)]};
 
     // Record completion event and let callback worker invoke host callback.
     cudaError_t err = cudaEventRecord(m_callbackEvents[static_cast<size_t>(callbackSlot)], m_stream);

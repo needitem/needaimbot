@@ -88,6 +88,7 @@ struct Config {
     // Mouse rate limiting
     int mouseMinIntervalMs = 1;
     int frameWaitTimeoutMs = 16;  // UDP frame wait timeout per loop
+    int maxInFlightFrames = 1;    // Keep latency low by avoiding stale queued frames
 
     // Gaussian noise for humanization
     bool noiseEnabled = true;
@@ -153,6 +154,7 @@ struct Config {
 
             if (j.contains("mouse_min_interval_ms")) mouseMinIntervalMs = j["mouse_min_interval_ms"];
             if (j.contains("frame_wait_timeout_ms")) frameWaitTimeoutMs = j["frame_wait_timeout_ms"];
+            if (j.contains("max_inflight_frames")) maxInFlightFrames = j["max_inflight_frames"];
             if (j.contains("makcu_baudrate")) makcuBaudrate = j["makcu_baudrate"];
 
             if (j.contains("noise_enabled")) noiseEnabled = j["noise_enabled"];
@@ -228,6 +230,7 @@ struct Config {
 
             j["mouse_min_interval_ms"] = mouseMinIntervalMs;
             j["frame_wait_timeout_ms"] = frameWaitTimeoutMs;
+            j["max_inflight_frames"] = maxInFlightFrames;
             j["makcu_baudrate"] = makcuBaudrate;
 
             j["noise_enabled"] = noiseEnabled;
@@ -271,6 +274,7 @@ struct Config {
         std::cout << "[Config] No-recoil: " << (noRecoilEnabled ? "ON" : "OFF")
                   << " (Y=" << recoilCompY << ", tick=" << recoilTickMs << "ms)" << std::endl;
         std::cout << "[Config] Frame wait timeout: " << frameWaitTimeoutMs << "ms" << std::endl;
+        std::cout << "[Config] Max in-flight frames: " << maxInFlightFrames << std::endl;
         std::cout << "[Config] Noise: " << (noiseEnabled ? "ON" : "OFF")
                   << " (stddev X=" << noiseStddevX << ", Y=" << noiseStddevY << ")" << std::endl;
 
@@ -591,6 +595,7 @@ int main(int argc, char* argv[]) {
     };
     const uint32_t frameWaitTimeoutMs = static_cast<uint32_t>(std::clamp(cfg.frameWaitTimeoutMs, 1, 100));
     const int senderMinIntervalMs = std::max(0, cfg.mouseMinIntervalMs);
+    const int maxPipelineInFlight = std::clamp(cfg.maxInFlightFrames, 1, 4);
 
     auto lastStatTime = std::chrono::steady_clock::now();
     auto lastRecoilTime = std::chrono::steady_clock::now();
@@ -706,18 +711,13 @@ int main(int argc, char* argv[]) {
     std::cout << "[Simple] Lock-free config cache: ENABLED" << std::endl;
     std::cout << "[Simple] Movement filter (deadband + sign-flip suppression): ENABLED" << std::endl;
     std::cout << "[Simple] IoU-based target stickiness: ENABLED" << std::endl;
-    std::cout << "[Simple] Zero-copy pinned memory: " << (udpCapture.IsPinnedMemoryEnabled() ? "ENABLED" : "DISABLED") << std::endl;
+    std::cout << "[Simple] Pinned receive buffers: " << (udpCapture.IsPinnedMemoryEnabled() ? "ENABLED" : "DISABLED") << std::endl;
+    std::cout << "[Simple] Latest-frame in-flight limit: " << maxPipelineInFlight << std::endl;
 
-    // 5. Capture full CUDA graph for maximum performance
-    std::cout << "[Simple] Capturing full CUDA graph..." << std::endl;
-    if (inference.captureFullGraph(
-            cfg.confThreshold, cfg.headClassId, cfg.headBonus,
-            allowedClassMask, gpuPidConfig,
-            cfg.iouStickinessThreshold, cfg.headAimPoint, cfg.bodyAimPoint)) {
-        std::cout << "[Simple] Full CUDA graph: ENABLED" << std::endl;
-    } else {
-        std::cout << "[Simple] Full CUDA graph: DISABLED (using standard execution)" << std::endl;
-    }
+    // 5. Capture full CUDA graph lazily for the actual incoming frame shape.
+    // Startup does not know the Game PC crop size, so capturing here can miss
+    // the hot path when source and engine dimensions differ.
+    std::cout << "[Simple] Full CUDA graph: DEFERRED until first frame shape" << std::endl;
 
     std::cout << "\n[Simple] Running... Press Ctrl+C to exit" << std::endl;
     std::cout << "[Simple] Right-click (or Side2) = AIM" << std::endl;
@@ -735,6 +735,9 @@ int main(int argc, char* argv[]) {
     uint64_t lastUdpDropped = udpCapture.GetDroppedFrameCount();
     size_t lastStatusLineLen = 0;
     int inFlightBackoff = 0;
+    bool graphCaptureFailedForShape = false;
+    unsigned int failedGraphW = 0;
+    unsigned int failedGraphH = 0;
 
     while (g_running) {
         // Wait for frame (returns pinned memory directly)
@@ -763,6 +766,7 @@ int main(int argc, char* argv[]) {
                    << " F:" << submitFailWindow
                    << " C:" << udpReceivedDelta
                    << " U:" << udpDroppedDelta
+                   << " I:" << inference.getCallbacksInFlight()
                    << " A:" << (makcu.aiming_active.load(std::memory_order_relaxed) ? "ON" : "OFF")
                    << " Sh:" << (makcu.shooting_active.load(std::memory_order_relaxed) ? "ON" : "OFF");
 
@@ -787,8 +791,8 @@ int main(int argc, char* argv[]) {
             continue;
         }
 
-        // Skip acquisition when inference queue is full.
-        if (!inference.hasSubmissionCapacity()) {
+        // Skip acquisition when the configured latency-first pipeline depth is full.
+        if (inference.getCallbacksInFlight() >= maxPipelineInFlight) {
             if (inFlightBackoff < 32) {
                 ++inFlightBackoff;
                 std::this_thread::yield();
@@ -799,7 +803,7 @@ int main(int argc, char* argv[]) {
         }
         inFlightBackoff = 0;
 
-        // Use pinned buffer API for zero-copy
+        // Acquire the newest pinned receive buffer.
         if (!udpCapture.AcquireFramePinned(&pinnedRgbData, &width, &height, nullptr, &bufferIndex, frameWaitTimeoutMs)) {
             // No frame, handle recoil if active (left+right click)
             auto recoilNow = std::chrono::steady_clock::now();
@@ -819,6 +823,40 @@ int main(int argc, char* argv[]) {
 
         if (!pinnedRgbData || width == 0 || height == 0) {
             if (bufferIndex >= 0) udpCapture.ReleaseFrame(bufferIndex);
+            continue;
+        }
+
+        const bool graphReady = inference.isFullGraphReadyForShape(
+            static_cast<int>(width), static_cast<int>(height),
+            maxPipelineInFlight,
+            cfg.confThreshold, cfg.headClassId, cfg.headBonus,
+            allowedClassMask, gpuPidConfig,
+            cfg.iouStickinessThreshold, cfg.headAimPoint, cfg.bodyAimPoint);
+        const bool graphFailedForThisShape =
+            graphCaptureFailedForShape && failedGraphW == width && failedGraphH == height;
+        if (!graphReady && !graphFailedForThisShape && inference.getCallbacksInFlight() == 0) {
+            udpCapture.ReleaseFrame(bufferIndex);
+            std::cout << "\n[Simple] Capturing full CUDA graph for source "
+                      << width << "x" << height << "..." << std::endl;
+            if (inference.captureFullGraphForShape(
+                    static_cast<int>(width), static_cast<int>(height),
+                    maxPipelineInFlight,
+                    cfg.confThreshold, cfg.headClassId, cfg.headBonus,
+                    allowedClassMask, gpuPidConfig,
+                    cfg.iouStickinessThreshold, cfg.headAimPoint, cfg.bodyAimPoint)) {
+                graphCaptureFailedForShape = false;
+                failedGraphW = 0;
+                failedGraphH = 0;
+                std::cout << "[Simple] Full CUDA graph: ENABLED for source "
+                          << width << "x" << height << std::endl;
+            } else {
+                graphCaptureFailedForShape = true;
+                failedGraphW = width;
+                failedGraphH = height;
+                std::cout << "[Simple] Full CUDA graph: DISABLED for source "
+                          << width << "x" << height
+                          << " (using standard execution)" << std::endl;
+            }
             continue;
         }
 
@@ -874,7 +912,7 @@ int main(int argc, char* argv[]) {
             }
             ticket->bufferIndex = -1;
             ticket->busy.store(false, std::memory_order_release);
-            if (!inference.hasSubmissionCapacity()) {
+            if (inference.getCallbacksInFlight() >= maxPipelineInFlight) {
                 busyDropWindow++;
             } else {
                 submitFailWindow++;

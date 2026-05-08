@@ -102,12 +102,6 @@ void printStatusLine(const std::string& text) {
     std::cout << clipped << std::flush;
 }
 
-int clampInt(int value, int minValue, int maxValue) {
-    if (value < minValue) return minValue;
-    if (value > maxValue) return maxValue;
-    return value;
-}
-
 std::string wideToUtf8(const wchar_t* wide) {
     if (!wide || wide[0] == L'\0') return "";
 
@@ -847,7 +841,6 @@ int main(int argc, char** argv) {
     // Poll immediately to avoid waiting in AcquireNextFrame.
     const int captureTimeoutMs = 0;
 
-    std::vector<uint8_t> latestFrameData;
     bool hasLatestFrame = false;
 
     while (g_running.load()) {
@@ -867,7 +860,6 @@ int main(int argc, char** argv) {
         auto t2 = std::chrono::high_resolution_clock::now();
 
         if (gotNewFrame) {
-            latestFrameData = frameData;
             hasLatestFrame = true;
             capturedFrames++;
             totalCaptureMs += std::chrono::duration<double, std::milli>(t2 - t1).count();
@@ -875,8 +867,8 @@ int main(int argc, char** argv) {
             continue;
         }
 
-        const uint8_t* sendData = gotNewFrame ? frameData.data() : latestFrameData.data();
-        const size_t frameSize = gotNewFrame ? frameData.size() : latestFrameData.size();
+        const uint8_t* sendData = frameData.data();
+        const size_t frameSize = frameData.size();
         outputFrames++;
 
         // Calculate number of packets needed

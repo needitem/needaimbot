@@ -61,7 +61,6 @@ public:
 
     bool StartCapture();
     void StopCapture();
-    bool IsCapturing() const { return m_isCapturing.load(std::memory_order_relaxed); }
 
     bool AcquireFramePinned(void** pinnedRgbData, unsigned int* width, unsigned int* height,
                             uint64_t* outFrameId = nullptr, int* bufferIndex = nullptr,

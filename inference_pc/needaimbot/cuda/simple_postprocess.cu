@@ -29,12 +29,16 @@ static_assert((MAX_SELECTION_THREADS % WARP_SIZE) == 0,
 // =============================================================================
 
 template<bool kIsFp16>
-__device__ __forceinline__ float readValue(const void* buffer, size_t idx) {
-    if constexpr (kIsFp16) {
-        return __half2float(reinterpret_cast<const __half*>(buffer)[idx]);
-    } else {
-        return reinterpret_cast<const float*>(buffer)[idx];
-    }
+__device__ __forceinline__ float readValue(const void* buffer, size_t idx);
+
+template<>
+__device__ __forceinline__ float readValue<true>(const void* buffer, size_t idx) {
+    return __half2float(reinterpret_cast<const __half*>(buffer)[idx]);
+}
+
+template<>
+__device__ __forceinline__ float readValue<false>(const void* buffer, size_t idx) {
+    return reinterpret_cast<const float*>(buffer)[idx];
 }
 
 __device__ __forceinline__ Detection shuffleDownDetection(

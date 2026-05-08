@@ -3,7 +3,7 @@
 // - GPU postprocessing (decode + fused target selection + PID)
 // - IoU-based target stickiness (hysteresis)
 // - Full CUDA Graph capture (preprocess + inference + postprocess)
-// - Zero-copy pinned memory transfers
+// - Pinned host transfers
 // - Single D2H transfer (InferenceResult struct, 40 bytes)
 // - GPU Callback API (cudaLaunchHostFunc) for lowest latency
 // - FP16 input/output support (native, no conversion)
@@ -40,8 +40,6 @@ public:
         InferenceCallback callback = nullptr;
         void* userData = nullptr;
         InferenceResult* resultPtr = nullptr;
-        SimpleInference* owner = nullptr;
-        int slotIndex = -1;
     };
 
     SimpleInference();
@@ -49,7 +47,7 @@ public:
 
     bool loadEngine(const std::string& enginePath);
 
-    // Set BGRA input mode (call before captureFullGraph)
+    // Set BGRA input mode before loading the engine.
     // When true, preprocessing expects BGRA HWC input (4 bytes/pixel)
     // When false, preprocessing expects RGB HWC input (3 bytes/pixel)
     void setBgraInput(bool bgra) { m_bgraInput = bgra; }
@@ -61,10 +59,16 @@ public:
         m_maxDetections = maxDetections;
     }
 
-    // Capture full CUDA graph (preprocess + inference + decode + fused)
-    bool captureFullGraph(float confThreshold, int headClassId, float headBonus,
-                          uint32_t allowedClassMask, const PIDConfig& pidConfig,
-                          float iouStickinessThreshold, float headYOffset, float bodyYOffset);
+    bool captureFullGraphForShape(int sourceWidth, int sourceHeight,
+                                  int graphSlotCount,
+                                  float confThreshold, int headClassId, float headBonus,
+                                  uint32_t allowedClassMask, const PIDConfig& pidConfig,
+                                  float iouStickinessThreshold, float headYOffset, float bodyYOffset);
+    bool isFullGraphReadyForShape(int sourceWidth, int sourceHeight,
+                                  int graphSlotCount,
+                                  float confThreshold, int headClassId, float headBonus,
+                                  uint32_t allowedClassMask, const PIDConfig& pidConfig,
+                                  float iouStickinessThreshold, float headYOffset, float bodyYOffset) const;
 
     // Run inference with GPU callback - lowest latency option
     bool runInferenceWithCallback(void* pinnedData, int width, int height,
@@ -75,12 +79,8 @@ public:
                                   float headYOffset, float bodyYOffset,
                                   InferenceCallback callback, void* userData = nullptr);
 
-    bool isCallbackInFlight() const {
-        return m_callbacksInFlight.load(std::memory_order_acquire) > 0;
-    }
-
-    bool hasSubmissionCapacity() const {
-        return m_callbacksInFlight.load(std::memory_order_acquire) < kMaxCallbacksInFlight;
+    int getCallbacksInFlight() const {
+        return m_callbacksInFlight.load(std::memory_order_acquire);
     }
 
     cudaStream_t getStream() const { return m_stream; }
@@ -113,21 +113,23 @@ private:
     Detection* m_d_stage1BestIou = nullptr;   // Stage-1 per-block best-by-IoU
     float* m_d_stage1IouScore = nullptr;      // Stage-1 per-block IoU score
 
-    // Result buffers (per callback slot for standard path, slot 0 for graph path)
+    // Result buffers (per callback slot for both standard and graph paths)
     std::array<InferenceResult*, kMaxCallbacksInFlight> m_d_inferenceResult{};
     std::array<InferenceResult*, kMaxCallbacksInFlight> m_h_inferenceResultPinned{};
 
     // Pinned host memory for fast transfers
     uint8_t* m_h_rawPinned = nullptr;
 
-    // CUDA Graph for full pipeline
-    cudaGraph_t m_graph = nullptr;
-    cudaGraphExec_t m_graphExec = nullptr;
-    bool m_graphCaptured = false;
+    // CUDA Graph for full pipeline. One graph per callback slot prevents
+    // result-buffer reuse while multiple frames are queued on the stream.
+    std::array<cudaGraph_t, kMaxCallbacksInFlight> m_graphs{};
+    std::array<cudaGraphExec_t, kMaxCallbacksInFlight> m_graphExecs{};
+    int m_graphSourceW = 0;
+    int m_graphSourceH = 0;
+    int m_graphSlotCount = 0;
 
     int m_inputH = 320;         // Model input height (target)
     int m_inputW = 320;         // Model input width (target)
-    size_t m_rawInputBytes = 0; // Bytes per input frame at model resolution
     size_t m_rawInputCapacityBytes = 0; // Allocated raw-input capacity on device
     float m_crosshairX = 160.0f;
     float m_crosshairY = 160.0f;
@@ -161,6 +163,12 @@ private:
     std::mutex m_callbackWorkerMutex;
 
     void callbackWorkerLoop();
+    void destroyFullGraphs();
+    bool graphParamsMatch(int sourceWidth, int sourceHeight, int requiredGraphSlots,
+                          float confThreshold, int headClassId, float headBonus,
+                          uint32_t allowedClassMask, const PIDConfig& pidConfig,
+                          float iouStickinessThreshold, float headYOffset, float bodyYOffset) const;
+    bool ensureRawInputCapacity(size_t requiredBytes);
 
     // Execute full fused pipeline (H2D + preprocess + inference + postprocess + D2H)
     bool executeFusedPipeline(void* rawInput, int width, int height,

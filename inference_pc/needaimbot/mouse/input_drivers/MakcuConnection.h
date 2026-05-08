@@ -31,8 +31,6 @@ public:
     std::atomic<bool> shooting_active;
 
 private:
-    void write(const std::string& data);
-    void sendCommand(const std::string& command);
     void sendCommand(const char* command, size_t size);
     bool sendCommandFast(const char* command, size_t size);
 

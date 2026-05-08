@@ -311,14 +311,6 @@ MakcuConnection::~MakcuConnection() {
 
 bool MakcuConnection::isOpen() const { return is_open_; }
 
-void MakcuConnection::write(const std::string& data) {
-    if (!is_open_ || serial_handle_ == INVALID_HANDLE_VALUE) return;
-    std::lock_guard<std::mutex> lock(write_mutex_);
-    if (!writeAsync(data.c_str(), static_cast<DWORD>(data.length()))) {
-        std::cerr << "[Makcu] Write operation failed" << std::endl;
-    }
-}
-
 bool MakcuConnection::writeAsync(const void* data, DWORD size) {
     if (serial_handle_ == INVALID_HANDLE_VALUE) return false;
     ResetEvent(write_overlapped_.hEvent);
@@ -650,14 +642,6 @@ MakcuConnection::~MakcuConnection() {
 
 bool MakcuConnection::isOpen() const { return is_open_; }
 
-void MakcuConnection::write(const std::string& data) {
-    if (!is_open_ || serial_fd_ < 0) return;
-    std::lock_guard<std::mutex> lock(write_mutex_);
-    if (!writeAllSerialFd(serial_fd_, data.c_str(), data.length(), false)) {
-        std::cerr << "[Makcu] Write operation failed" << std::endl;
-    }
-}
-
 #endif  // _WIN32
 
 // ============================================================================
@@ -675,10 +659,6 @@ void MakcuConnection::move(int x, int y) {
             sendCommand(command, cmdSize);
         }
     }
-}
-
-void MakcuConnection::sendCommand(const std::string& command) {
-    sendCommand(command.c_str(), command.size());
 }
 
 void MakcuConnection::sendCommand(const char* command, size_t size) {
