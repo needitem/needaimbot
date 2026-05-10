@@ -2,7 +2,7 @@
 // UDP capture + TensorRT inference + Mouse control via Makcu
 // Features: Full GPU pipeline (inference + postprocess + PID), No-recoil
 // GPU Callback API for lowest latency (no cudaStreamSync wait)
-// Minimal CPU usage - only frame receive, mouse send is done in GPU callback
+// Minimal CPU usage - frame receive on CPU, inference/postprocess/PID on GPU
 
 #include <iostream>
 #include <fstream>
@@ -17,8 +17,18 @@
 #include <condition_variable>
 #include <algorithm>
 #include <array>
+#include <cctype>
+#include <limits>
 #include <mutex>
+#include <optional>
 #include <sstream>
+#include <vector>
+
+#ifndef _WIN32
+#include <pthread.h>
+#include <sched.h>
+#include <unistd.h>
+#endif
 
 #include "needaimbot/cuda/simple_inference.h"
 #include "needaimbot/cuda/simple_postprocess.h"
@@ -31,6 +41,221 @@ using json = nlohmann::json;
 
 std::atomic<bool> g_running{true};
 std::atomic<int> g_frameCount{0};  // Completed inference callbacks per stat window
+std::atomic<uint64_t> g_callbackLatencySamples{0};
+std::atomic<int64_t> g_callbackLatencyTotalUs{0};
+std::atomic<int64_t> g_callbackLatencyMaxUs{0};
+std::atomic<uint64_t> g_moveQueueDropped{0};
+
+namespace {
+using Clock = std::chrono::steady_clock;
+
+bool fileExists(const std::filesystem::path& path) {
+    std::error_code ec;
+    return std::filesystem::is_regular_file(path, ec);
+}
+
+std::filesystem::path safeAbsolute(const std::filesystem::path& path) {
+    std::error_code ec;
+    auto absolutePath = std::filesystem::absolute(path, ec);
+    return ec ? path : absolutePath.lexically_normal();
+}
+
+std::string toLower(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    return value;
+}
+
+void addUniquePath(std::vector<std::filesystem::path>& paths, const std::filesystem::path& path) {
+    if (path.empty()) return;
+    const auto normalized = safeAbsolute(path);
+    if (std::find(paths.begin(), paths.end(), normalized) == paths.end()) {
+        paths.push_back(normalized);
+    }
+}
+
+std::optional<std::filesystem::path> findRepoRootFrom(std::filesystem::path start) {
+    if (start.empty()) return std::nullopt;
+    start = safeAbsolute(start);
+    if (fileExists(start)) {
+        start = start.parent_path();
+    }
+
+    for (auto current = start; !current.empty(); current = current.parent_path()) {
+        if (fileExists(current / "inference_pc" / "simple_main.cpp") &&
+            fileExists(current / "inference_pc" / "CMakeLists.txt")) {
+            return current;
+        }
+        if (current == current.root_path()) break;
+    }
+    return std::nullopt;
+}
+
+std::optional<std::filesystem::path> findRepoRoot(const std::filesystem::path& exeDir) {
+    if (auto root = findRepoRootFrom(std::filesystem::current_path())) {
+        return root;
+    }
+    return findRepoRootFrom(exeDir);
+}
+
+std::filesystem::path chooseConfigPath(
+    const std::filesystem::path& exeDir,
+    const std::optional<std::filesystem::path>& repoRoot) {
+    std::vector<std::filesystem::path> candidates;
+    if (repoRoot) {
+        addUniquePath(candidates, *repoRoot / "inference_pc" / "simple_config.json");
+        addUniquePath(candidates, *repoRoot / "simple_config.json");
+    }
+    addUniquePath(candidates, exeDir / "simple_config.json");
+
+    for (const auto& candidate : candidates) {
+        if (fileExists(candidate)) return candidate;
+    }
+    return repoRoot ? (*repoRoot / "inference_pc" / "simple_config.json") : (exeDir / "simple_config.json");
+}
+
+int engineScore(const std::filesystem::path& path) {
+    const std::string name = toLower(path.filename().string());
+    int score = 0;
+    if (name.find("320") != std::string::npos) score += 30;
+    if (name.find("fp16io") != std::string::npos) score += 35;
+    if (name.find("orin") != std::string::npos) score += 25;
+    if (name.find("l5") != std::string::npos) score += 8;
+    if (name.find("fp16") != std::string::npos) score += 20;
+    if (name.find("trt") != std::string::npos) score += 10;
+    if (name.find("dynamic") != std::string::npos) score -= 4;
+    if (name.find("fp8") != std::string::npos) score -= 2;
+    return score;
+}
+
+std::optional<std::filesystem::path> discoverEngine(
+    const std::vector<std::filesystem::path>& searchDirs) {
+    std::optional<std::filesystem::path> bestPath;
+    int bestScore = std::numeric_limits<int>::min();
+
+    for (const auto& dir : searchDirs) {
+        std::error_code ec;
+        if (!std::filesystem::is_directory(dir, ec)) continue;
+        for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+            if (ec) break;
+            const auto candidate = entry.path();
+            if (!fileExists(candidate) || candidate.extension() != ".engine") continue;
+
+            const int score = engineScore(candidate);
+            if (!bestPath || score > bestScore ||
+                (score == bestScore && candidate.filename().string() > bestPath->filename().string())) {
+                bestPath = candidate;
+                bestScore = score;
+            }
+        }
+    }
+    return bestPath;
+}
+
+std::optional<std::filesystem::path> resolveEnginePath(
+    const std::string& configuredPath,
+    const std::filesystem::path& configPath,
+    const std::filesystem::path& exeDir,
+    const std::optional<std::filesystem::path>& repoRoot) {
+    const std::filesystem::path enginePath(configuredPath);
+    std::vector<std::filesystem::path> candidates;
+    std::vector<std::filesystem::path> searchDirs;
+
+    addUniquePath(searchDirs, std::filesystem::current_path());
+    addUniquePath(searchDirs, configPath.parent_path());
+    if (repoRoot) {
+        addUniquePath(searchDirs, *repoRoot);
+        addUniquePath(searchDirs, *repoRoot / "inference_pc");
+    }
+    addUniquePath(searchDirs, exeDir);
+
+    if (enginePath.is_absolute()) {
+        addUniquePath(candidates, enginePath);
+    } else {
+        for (const auto& dir : searchDirs) {
+            addUniquePath(candidates, dir / enginePath);
+        }
+    }
+
+    for (const auto& candidate : candidates) {
+        if (fileExists(candidate)) return candidate;
+    }
+    return discoverEngine(searchDirs);
+}
+
+int64_t elapsedUs(Clock::time_point begin, Clock::time_point end) {
+    return std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count();
+}
+
+void atomicMax(std::atomic<int64_t>& target, int64_t value) {
+    int64_t current = target.load(std::memory_order_relaxed);
+    while (current < value &&
+           !target.compare_exchange_weak(current, value, std::memory_order_relaxed, std::memory_order_relaxed)) {
+    }
+}
+
+void applyRealtimeHint(const char* threadName, int priorityOffsetFromMax) {
+#ifdef __linux__
+    if (threadName && threadName[0] != '\0') {
+        pthread_setname_np(pthread_self(), threadName);
+    }
+
+    const int maxPriority = sched_get_priority_max(SCHED_FIFO);
+    const int minPriority = sched_get_priority_min(SCHED_FIFO);
+    if (maxPriority < 0 || minPriority < 0) return;
+
+    sched_param param{};
+    param.sched_priority = std::clamp(maxPriority - priorityOffsetFromMax, minPriority, maxPriority);
+    if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &param) != 0) {
+        pthread_setschedparam(pthread_self(), SCHED_RR, &param);
+    }
+#else
+    (void)threadName;
+    (void)priorityOffsetFromMax;
+#endif
+}
+
+struct PerfWindowStats {
+    uint64_t acquireSamples = 0;
+    uint64_t acquireTimeouts = 0;
+    uint64_t invalidFrames = 0;
+    uint64_t submitSamples = 0;
+    int64_t acquireTotalUs = 0;
+    int64_t acquireMaxUs = 0;
+    int64_t submitTotalUs = 0;
+    int64_t submitMaxUs = 0;
+
+    void recordAcquire(int64_t elapsed, bool gotFrame) {
+        ++acquireSamples;
+        acquireTotalUs += elapsed;
+        acquireMaxUs = std::max(acquireMaxUs, elapsed);
+        if (!gotFrame) ++acquireTimeouts;
+    }
+
+    void recordSubmit(int64_t elapsed) {
+        ++submitSamples;
+        submitTotalUs += elapsed;
+        submitMaxUs = std::max(submitMaxUs, elapsed);
+    }
+
+    double averageAcquireMs() const {
+        return acquireSamples == 0 ? 0.0 : static_cast<double>(acquireTotalUs) / acquireSamples / 1000.0;
+    }
+
+    double maxAcquireMs() const {
+        return static_cast<double>(acquireMaxUs) / 1000.0;
+    }
+
+    double averageSubmitUs() const {
+        return submitSamples == 0 ? 0.0 : static_cast<double>(submitTotalUs) / submitSamples;
+    }
+
+    void reset() {
+        *this = PerfWindowStats{};
+    }
+};
+}  // namespace
 
 inline int fastRoundToInt(float value) {
     return static_cast<int>(value >= 0.0f ? (value + 0.5f) : (value - 0.5f));
@@ -48,7 +273,7 @@ struct CallbackContext;
 // Configuration
 struct Config {
     // Engine
-    std::string enginePath = "/home/hwan/needaimbot/sunxds_0.8.2_TRT_320_fp16.engine";
+    std::string enginePath = "sunxds_0.7.8_320_fp16io_orin_l5.engine";
     std::string makcuPort = "/dev/ttyACM0";
     int udpPort = 5007;
 
@@ -59,7 +284,7 @@ struct Config {
     int maxDetections = 100;  // Maximum detections per frame
 
     // Class filtering (max 32 classes)
-    std::vector<bool> classAllowed;  // Which classes to target
+    std::vector<bool> classAllowed = std::vector<bool>(32, true);  // Which classes to target
     int maxClasses = 32;
 
     // Aiming (0 = top, 1 = bottom of bbox)
@@ -101,6 +326,12 @@ struct Config {
 
     // Makcu settings
     int makcuBaudrate = 4000000;
+
+    // Runtime diagnostics
+    bool perfStatsEnabled = true;
+    int perfStatsIntervalMs = 1000;
+    bool realtimeThreadsEnabled = true;
+    bool forceAimOn = false;  // Benchmark/testing override (keeps inference loop active)
 
     // Convert to GPU PID config
     gpa::PIDConfig toGpuPIDConfig() const {
@@ -163,6 +394,10 @@ struct Config {
 
             if (j.contains("shoot_offset_x")) shootOffsetX = j["shoot_offset_x"];
             if (j.contains("shoot_offset_y")) shootOffsetY = j["shoot_offset_y"];
+            if (j.contains("perf_stats_enabled")) perfStatsEnabled = j["perf_stats_enabled"];
+            if (j.contains("perf_stats_interval_ms")) perfStatsIntervalMs = j["perf_stats_interval_ms"];
+            if (j.contains("realtime_threads_enabled")) realtimeThreadsEnabled = j["realtime_threads_enabled"];
+            if (j.contains("force_aim_on")) forceAimOn = j["force_aim_on"];
 
             // Class filtering - either "allowed_classes": [0, 1, 7] or detailed class_settings
             classAllowed.resize(maxClasses, true);  // Default: all classes allowed
@@ -239,6 +474,10 @@ struct Config {
 
             j["shoot_offset_x"] = shootOffsetX;
             j["shoot_offset_y"] = shootOffsetY;
+            j["perf_stats_enabled"] = perfStatsEnabled;
+            j["perf_stats_interval_ms"] = perfStatsIntervalMs;
+            j["realtime_threads_enabled"] = realtimeThreadsEnabled;
+            j["force_aim_on"] = forceAimOn;
 
             // Save allowed classes as simple list
             json allowedList = json::array();
@@ -251,6 +490,13 @@ struct Config {
                 }
             }
             j["allowed_classes"] = allowedList;
+
+            const auto configPath = std::filesystem::path(path);
+            const auto parent = configPath.parent_path();
+            if (!parent.empty()) {
+                std::error_code ec;
+                std::filesystem::create_directories(parent, ec);
+            }
 
             std::ofstream f(path);
             if (!f) return false;
@@ -275,6 +521,10 @@ struct Config {
                   << " (Y=" << recoilCompY << ", tick=" << recoilTickMs << "ms)" << std::endl;
         std::cout << "[Config] Frame wait timeout: " << frameWaitTimeoutMs << "ms" << std::endl;
         std::cout << "[Config] Max in-flight frames: " << maxInFlightFrames << std::endl;
+        std::cout << "[Config] Perf stats: " << (perfStatsEnabled ? "ON" : "OFF")
+                  << " (interval=" << perfStatsIntervalMs << "ms)" << std::endl;
+        std::cout << "[Config] Realtime thread hints: " << (realtimeThreadsEnabled ? "ON" : "OFF") << std::endl;
+        std::cout << "[Config] Force aim override: " << (forceAimOn ? "ON" : "OFF") << std::endl;
         std::cout << "[Config] Noise: " << (noiseEnabled ? "ON" : "OFF")
                   << " (stddev X=" << noiseStddevX << ", Y=" << noiseStddevY << ")" << std::endl;
 
@@ -305,8 +555,8 @@ struct Config {
 // =============================================================================
 // GPU Callback Context and Handler
 // =============================================================================
-// This callback runs on CUDA's internal thread when GPU inference completes.
-// It sends mouse movement immediately, eliminating cudaStreamSynchronize latency.
+// This callback runs from the completion worker when GPU inference finishes.
+// It queues movement to a dedicated sender thread, avoiding cudaStreamSynchronize.
 //
 // OPTIMIZATION: Cached config values eliminate pointer indirection in hot path.
 // All frequently accessed values are copied to the context struct at init time.
@@ -320,8 +570,12 @@ struct CallbackContext {
     UDPCapture* udpCapture;
     struct MoveQueue* moveQueue = nullptr;
     std::condition_variable* moveQueueCv = nullptr;
+    std::mutex* moveQueueCvMutex = nullptr;
+    std::atomic<uint64_t>* moveQueueDropped = nullptr;
     
     // Cached config values (lock-free, no pointer chasing)
+    bool forceAimOn = false;
+    bool perfStatsEnabled = false;
     bool noiseEnabled;
     float shootOffsetX;
     float shootOffsetY;
@@ -339,6 +593,8 @@ struct CallbackContext {
     
     // Initialize cached values from config
     void initFromConfig(const Config& cfg) {
+        forceAimOn = cfg.forceAimOn;
+        perfStatsEnabled = cfg.perfStatsEnabled;
         noiseEnabled = cfg.noiseEnabled;
         shootOffsetX = cfg.shootOffsetX;
         shootOffsetY = cfg.shootOffsetY;
@@ -448,6 +704,7 @@ struct MoveQueue {
 struct CallbackTicket {
     CallbackContext* ctx = nullptr;
     int bufferIndex = -1;
+    Clock::time_point submitTime{};
     std::atomic<bool> busy{false};
 };
 
@@ -460,8 +717,16 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
     }
 
     CallbackContext* ctx = ticket->ctx;
+    if (ctx->perfStatsEnabled && ticket->submitTime.time_since_epoch().count() != 0) {
+        const int64_t latencyUs = elapsedUs(ticket->submitTime, Clock::now());
+        g_callbackLatencySamples.fetch_add(1, std::memory_order_relaxed);
+        g_callbackLatencyTotalUs.fetch_add(latencyUs, std::memory_order_relaxed);
+        atomicMax(g_callbackLatencyMaxUs, latencyUs);
+    }
+
     auto releaseTicket = [ticket]() {
         ticket->bufferIndex = -1;
+        ticket->submitTime = Clock::time_point{};
         ticket->busy.store(false, std::memory_order_release);
     };
 
@@ -473,7 +738,9 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
     // Count every completed inference callback (target/no-target)
     g_frameCount.fetch_add(1, std::memory_order_relaxed);
 
-    if (!ctx->makcu->aiming_active.load(std::memory_order_relaxed)) {
+    const bool aimingActive =
+        ctx->forceAimOn || ctx->makcu->aiming_active.load(std::memory_order_relaxed);
+    if (!aimingActive) {
         releaseTicket();
         return;
     }
@@ -490,8 +757,17 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
         cmd.dx = result.movement.dx;
         cmd.dy = result.movement.dy;
         cmd.shooting = ctx->makcu->shooting_active.load(std::memory_order_relaxed) ? 1u : 0u;
-        if (ctx->moveQueue->tryPush(cmd) && ctx->moveQueueCv) {
+        bool pushed = false;
+        if (ctx->moveQueueCvMutex) {
+            std::lock_guard<std::mutex> lock(*ctx->moveQueueCvMutex);
+            pushed = ctx->moveQueue->tryPush(cmd);
+        } else {
+            pushed = ctx->moveQueue->tryPush(cmd);
+        }
+        if (pushed && ctx->moveQueueCv) {
             ctx->moveQueueCv->notify_one();
+        } else if (!pushed && ctx->moveQueueDropped) {
+            ctx->moveQueueDropped->fetch_add(1, std::memory_order_relaxed);
         }
     } else {
         ctx->makcu->move(result.movement.dx, result.movement.dy);
@@ -508,24 +784,55 @@ int main(int argc, char* argv[]) {
 
     // Load config
     Config cfg;
+    const std::filesystem::path exePath =
+        argv[0] ? safeAbsolute(std::filesystem::path(argv[0])) : std::filesystem::path();
+    const std::filesystem::path exeDir =
+        exePath.has_parent_path() ? exePath.parent_path() : std::filesystem::current_path();
+    const auto repoRoot = findRepoRoot(exeDir);
     std::filesystem::path configPath;
     if (argc > 1) {
         configPath = argv[1];
     } else {
-        std::filesystem::path exePath = argv[0] ? std::filesystem::path(argv[0]) : std::filesystem::path();
-        std::filesystem::path exeDir = exePath.has_parent_path() ? exePath.parent_path() : std::filesystem::current_path();
-        configPath = exeDir / "simple_config.json";
+        configPath = chooseConfigPath(exeDir, repoRoot);
     }
 
+    configPath = safeAbsolute(configPath);
     const std::string configPathStr = configPath.lexically_normal().string();
+    bool configDirty = false;
 
     if (cfg.load(configPathStr)) {
         std::cout << "[Config] Loaded from " << configPathStr << std::endl;
     } else {
-        std::cout << "[Config] Using defaults, saving to " << configPathStr << std::endl;
-        cfg.save(configPathStr);
+        std::cout << "[Config] Using defaults; will save to " << configPathStr << std::endl;
+        configDirty = true;
+    }
+
+    const std::string requestedEnginePath = cfg.enginePath;
+    auto resolvedEnginePath = resolveEnginePath(cfg.enginePath, configPath, exeDir, repoRoot);
+    if (!resolvedEnginePath) {
+        std::cerr << "[Config] Engine not found: " << requestedEnginePath << std::endl;
+        std::cerr << "[Config] Place a .engine file under the repo root, inference_pc/, or set engine_path in "
+                  << configPathStr << std::endl;
+        return 1;
+    }
+    cfg.enginePath = resolvedEnginePath->lexically_normal().string();
+    if (cfg.enginePath != requestedEnginePath) {
+        std::cout << "[Config] Engine resolved: " << requestedEnginePath
+                  << " -> " << cfg.enginePath << std::endl;
+        configDirty = true;
+    }
+
+    if (configDirty) {
+        if (cfg.save(configPathStr)) {
+            std::cout << "[Config] Saved normalized config to " << configPathStr << std::endl;
+        } else {
+            std::cerr << "[Config] Warning: failed to save " << configPathStr << std::endl;
+        }
     }
     cfg.print();
+    if (cfg.realtimeThreadsEnabled) {
+        applyRealtimeHint("simple-main", 4);
+    }
 
     // 1. Load TensorRT engine
     gpa::SimpleInference inference;
@@ -571,6 +878,8 @@ int main(int argc, char* argv[]) {
     std::mutex moveQueueCvMutex;
     callbackCtx.moveQueue = &moveQueue;
     callbackCtx.moveQueueCv = &moveQueueCv;
+    callbackCtx.moveQueueCvMutex = &moveQueueCvMutex;
+    callbackCtx.moveQueueDropped = &g_moveQueueDropped;
     callbackCtx.initFromConfig(cfg);  // Cache config values (lock-free)
     constexpr size_t kCallbackTicketCount = 4;
     std::array<CallbackTicket, kCallbackTicketCount> callbackTickets{};
@@ -596,11 +905,16 @@ int main(int argc, char* argv[]) {
     const uint32_t frameWaitTimeoutMs = static_cast<uint32_t>(std::clamp(cfg.frameWaitTimeoutMs, 1, 100));
     const int senderMinIntervalMs = std::max(0, cfg.mouseMinIntervalMs);
     const int maxPipelineInFlight = std::clamp(cfg.maxInFlightFrames, 1, 4);
+    const int perfStatsIntervalMs = std::clamp(cfg.perfStatsIntervalMs, 250, 10000);
 
     auto lastStatTime = std::chrono::steady_clock::now();
     auto lastRecoilTime = std::chrono::steady_clock::now();
     std::atomic<bool> moveSenderRunning{true};
     std::thread moveSenderThread([&]() {
+        if (cfg.realtimeThreadsEnabled) {
+            applyRealtimeHint("move-sender", 2);
+        }
+
         MoveCommand cmd;
         int pendingDx = 0;
         int pendingDy = 0;
@@ -699,7 +1013,12 @@ int main(int argc, char* argv[]) {
         cmd.dx = dx;
         cmd.dy = dy;
         cmd.shooting = 0u;
-        if (moveQueue.tryPush(cmd)) {
+        bool pushed = false;
+        {
+            std::lock_guard<std::mutex> lock(moveQueueCvMutex);
+            pushed = moveQueue.tryPush(cmd);
+        }
+        if (pushed) {
             moveQueueCv.notify_one();
         } else {
             makcu.move(dx, dy);
@@ -726,11 +1045,12 @@ int main(int argc, char* argv[]) {
     // 6. Main loop with GPU callback API
     // - Frame acquisition runs on main thread
     // - Inference is queued to GPU
-    // - Mouse movement is sent in GPU callback (no cudaStreamSync wait!)
+    // - Completion callback queues mouse movement without cudaStreamSync wait.
     int recvFramesWindow = 0;
     int submittedFramesWindow = 0;
     int busyDropWindow = 0;
     int submitFailWindow = 0;
+    PerfWindowStats perfWindow;
     uint64_t lastUdpReceived = udpCapture.GetReceivedFrameCount();
     uint64_t lastUdpDropped = udpCapture.GetDroppedFrameCount();
     size_t lastStatusLineLen = 0;
@@ -738,18 +1058,34 @@ int main(int argc, char* argv[]) {
     bool graphCaptureFailedForShape = false;
     unsigned int failedGraphW = 0;
     unsigned int failedGraphH = 0;
+    bool haveFrameInputFormat = false;
+    bool lastFrameBgraInput = true;
 
     while (g_running) {
         // Wait for frame (returns pinned memory directly)
         void* pinnedRgbData = nullptr;
         unsigned int width = 0, height = 0;
         int bufferIndex = -1;
+        uint8_t bytesPerPixel = 4;
+        uint8_t pixelFormat = UDP_PIXEL_FORMAT_BGRA;
 
         // Stats every second (using atomic g_frameCount from callbacks)
         auto now = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastStatTime).count();
-        if (elapsed >= 1000) {
+        if (elapsed >= perfStatsIntervalMs) {
             int completedFrames = g_frameCount.exchange(0, std::memory_order_relaxed);  // Atomic read and reset
+            const uint64_t callbackLatencySamples =
+                g_callbackLatencySamples.exchange(0, std::memory_order_relaxed);
+            const int64_t callbackLatencyTotalUs =
+                g_callbackLatencyTotalUs.exchange(0, std::memory_order_relaxed);
+            const int64_t callbackLatencyMaxUs =
+                g_callbackLatencyMaxUs.exchange(0, std::memory_order_relaxed);
+            const uint64_t moveQueueDropped =
+                g_moveQueueDropped.exchange(0, std::memory_order_relaxed);
+            const double callbackAvgMs = callbackLatencySamples == 0
+                ? 0.0
+                : static_cast<double>(callbackLatencyTotalUs) / callbackLatencySamples / 1000.0;
+            const double callbackMaxMs = static_cast<double>(callbackLatencyMaxUs) / 1000.0;
             uint64_t udpReceivedNow = udpCapture.GetReceivedFrameCount();
             uint64_t udpReceivedDelta = udpReceivedNow - lastUdpReceived;
             lastUdpReceived = udpReceivedNow;
@@ -767,8 +1103,17 @@ int main(int argc, char* argv[]) {
                    << " C:" << udpReceivedDelta
                    << " U:" << udpDroppedDelta
                    << " I:" << inference.getCallbacksInFlight()
-                   << " A:" << (makcu.aiming_active.load(std::memory_order_relaxed) ? "ON" : "OFF")
+                   << " A:" << ((cfg.forceAimOn ||
+                                   makcu.aiming_active.load(std::memory_order_relaxed)) ? "ON" : "OFF")
                    << " Sh:" << (makcu.shooting_active.load(std::memory_order_relaxed) ? "ON" : "OFF");
+            if (cfg.perfStatsEnabled) {
+                status << " Aw:" << perfWindow.averageAcquireMs() << "/" << perfWindow.maxAcquireMs() << "ms"
+                       << " Su:" << perfWindow.averageSubmitUs() << "/" << perfWindow.submitMaxUs << "us"
+                       << " Cb:" << callbackAvgMs << "/" << callbackMaxMs << "ms"
+                       << " NF:" << perfWindow.acquireTimeouts
+                       << " IF:" << perfWindow.invalidFrames
+                       << " MD:" << moveQueueDropped;
+            }
 
             const std::string statusLine = status.str();
             std::cout << '\r' << statusLine;
@@ -782,11 +1127,14 @@ int main(int argc, char* argv[]) {
             submittedFramesWindow = 0;
             busyDropWindow = 0;
             submitFailWindow = 0;
+            perfWindow.reset();
             lastStatTime = now;
         }
 
         // Skip frame acquisition while not aiming to reduce idle CPU usage.
-        if (!makcu.aiming_active.load(std::memory_order_relaxed)) {
+        const bool aimingActiveMain =
+            cfg.forceAimOn || makcu.aiming_active.load(std::memory_order_relaxed);
+        if (!aimingActiveMain) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
         }
@@ -804,12 +1152,22 @@ int main(int argc, char* argv[]) {
         inFlightBackoff = 0;
 
         // Acquire the newest pinned receive buffer.
-        if (!udpCapture.AcquireFramePinned(&pinnedRgbData, &width, &height, nullptr, &bufferIndex, frameWaitTimeoutMs)) {
+        Clock::time_point acquireStart{};
+        if (cfg.perfStatsEnabled) {
+            acquireStart = Clock::now();
+        }
+        const bool gotFrame = udpCapture.AcquireFramePinned(
+            &pinnedRgbData, &width, &height, nullptr, &bufferIndex, frameWaitTimeoutMs,
+            &bytesPerPixel, &pixelFormat);
+        if (cfg.perfStatsEnabled) {
+            perfWindow.recordAcquire(elapsedUs(acquireStart, Clock::now()), gotFrame);
+        }
+        if (!gotFrame) {
             // No frame, handle recoil if active (left+right click)
             auto recoilNow = std::chrono::steady_clock::now();
             if (cfg.noRecoilEnabled &&
                 makcu.shooting_active.load(std::memory_order_relaxed) &&
-                makcu.aiming_active.load(std::memory_order_relaxed)) {
+                (cfg.forceAimOn || makcu.aiming_active.load(std::memory_order_relaxed))) {
                 auto recoilElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(recoilNow - lastRecoilTime).count();
                 if (recoilElapsed >= cfg.recoilTickMs) {
                     int recoilX = static_cast<int>(cfg.recoilCompX);
@@ -822,8 +1180,34 @@ int main(int argc, char* argv[]) {
         }
 
         if (!pinnedRgbData || width == 0 || height == 0) {
+            if (cfg.perfStatsEnabled) {
+                ++perfWindow.invalidFrames;
+            }
             if (bufferIndex >= 0) udpCapture.ReleaseFrame(bufferIndex);
             continue;
+        }
+
+        const bool frameBgraInput = (pixelFormat == UDP_PIXEL_FORMAT_BGRA);
+        const uint8_t expectedBytesPerPixel = frameBgraInput ? 4 : 3;
+        if ((pixelFormat != UDP_PIXEL_FORMAT_BGRA && pixelFormat != UDP_PIXEL_FORMAT_RGB) ||
+            bytesPerPixel != expectedBytesPerPixel) {
+            if (cfg.perfStatsEnabled) {
+                ++perfWindow.invalidFrames;
+            }
+            udpCapture.ReleaseFrame(bufferIndex);
+            continue;
+        }
+        if (!haveFrameInputFormat || frameBgraInput != lastFrameBgraInput) {
+            if (!inference.setBgraInput(frameBgraInput)) {
+                udpCapture.ReleaseFrame(bufferIndex);
+                ++busyDropWindow;
+                continue;
+            }
+            graphCaptureFailedForShape = false;
+            failedGraphW = 0;
+            failedGraphH = 0;
+            haveFrameInputFormat = true;
+            lastFrameBgraInput = frameBgraInput;
         }
 
         const bool graphReady = inference.isFullGraphReadyForShape(
@@ -863,7 +1247,7 @@ int main(int argc, char* argv[]) {
         recvFramesWindow++;
 
         // Check button state
-        bool aiming = makcu.aiming_active.load(std::memory_order_relaxed);
+        bool aiming = cfg.forceAimOn || makcu.aiming_active.load(std::memory_order_relaxed);
         bool shooting = makcu.shooting_active.load(std::memory_order_relaxed);
 
         // No-recoil compensation (runs every tick while left+right click)
@@ -894,6 +1278,11 @@ int main(int argc, char* argv[]) {
         // GPU CALLBACK API: Queue inference, callback fires when GPU completes.
         // No cudaStreamSynchronize - mouse movement happens in callback thread.
 
+        Clock::time_point submitStart{};
+        if (cfg.perfStatsEnabled) {
+            submitStart = Clock::now();
+        }
+        ticket->submitTime = submitStart;
         bool submitted = inference.runInferenceWithCallback(
             pinnedRgbData, width, height,
             cfg.confThreshold, cfg.headClassId, cfg.headBonus,
@@ -902,6 +1291,9 @@ int main(int argc, char* argv[]) {
             cfg.iouStickinessThreshold,
             cfg.headAimPoint, cfg.bodyAimPoint,
             inferenceCallback, ticket);
+        if (cfg.perfStatsEnabled) {
+            perfWindow.recordSubmit(elapsedUs(submitStart, Clock::now()));
+        }
 
         if (submitted) {
             submittedFramesWindow++;
@@ -911,6 +1303,7 @@ int main(int argc, char* argv[]) {
                 udpCapture.ReleaseFrame(failedBuffer);
             }
             ticket->bufferIndex = -1;
+            ticket->submitTime = Clock::time_point{};
             ticket->busy.store(false, std::memory_order_release);
             if (inference.getCallbacksInFlight() >= maxPipelineInFlight) {
                 busyDropWindow++;

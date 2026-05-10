@@ -22,6 +22,7 @@
 #include <cctype>
 #include <chrono>
 #include <csignal>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <cstdio>
@@ -53,10 +54,23 @@ struct Config {
     int targetFPS = 90;
     int outputIndex = 0;
     bool useGUI = true;
+    std::string wireFormat = "RGB";
+    int packetPayloadBytes = 60000;
 };
 
 static std::atomic<bool> g_running{true};
 static Config g_config;
+
+static constexpr int kMinPacketPayloadBytes = 512;
+static constexpr int kMaxPacketPayloadBytes = 60000;
+static constexpr uint32_t UDP_PACKET_V2_MAGIC = 0x32415047u;  // "GPA2" little-endian
+static constexpr uint8_t UDP_PIXEL_FORMAT_BGRA = 1;
+static constexpr uint8_t UDP_PIXEL_FORMAT_RGB = 2;
+
+enum class WireFormat {
+    BGRA,
+    RGB
+};
 
 struct OutputInfo {
     int index = 0;
@@ -100,6 +114,60 @@ void printStatusLine(const std::string& text) {
     SetConsoleCursorPosition(console, lineStart);
 
     std::cout << clipped << std::flush;
+}
+
+std::string toLowerCopy(std::string text) {
+    std::transform(text.begin(), text.end(), text.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return text;
+}
+
+int clampPacketPayloadBytes(int bytes) {
+    return std::clamp(bytes, kMinPacketPayloadBytes, kMaxPacketPayloadBytes);
+}
+
+WireFormat parseWireFormat(const std::string& text) {
+    const std::string lower = toLowerCopy(text);
+    if (lower == "bgra" || lower == "bgrx" || lower == "4") {
+        return WireFormat::BGRA;
+    }
+    return WireFormat::RGB;
+}
+
+const char* wireFormatName(WireFormat format) {
+    return format == WireFormat::BGRA ? "BGRA" : "RGB";
+}
+
+uint8_t wireFormatBytesPerPixel(WireFormat format) {
+    return format == WireFormat::BGRA ? 4 : 3;
+}
+
+uint8_t wireFormatPixelId(WireFormat format) {
+    return format == WireFormat::BGRA ? UDP_PIXEL_FORMAT_BGRA : UDP_PIXEL_FORMAT_RGB;
+}
+
+void convertBgraToRgb(const std::vector<uint8_t>& bgra, std::vector<uint8_t>& rgb,
+                      int width, int height) {
+    const size_t pixelCount = static_cast<size_t>(width) * static_cast<size_t>(height);
+    const size_t expectedBgraBytes = pixelCount * 4;
+    if (bgra.size() < expectedBgraBytes) {
+        rgb.clear();
+        return;
+    }
+    const size_t requiredBytes = pixelCount * 3;
+    if (rgb.size() != requiredBytes) {
+        rgb.resize(requiredBytes);
+    }
+
+    const uint8_t* src = bgra.data();
+    uint8_t* dst = rgb.data();
+    for (size_t i = 0; i < pixelCount; ++i) {
+        dst[0] = src[2];
+        dst[1] = src[1];
+        dst[2] = src[0];
+        src += 4;
+        dst += 3;
+    }
 }
 
 std::string wideToUtf8(const wchar_t* wide) {
@@ -318,7 +386,8 @@ private:
     int m_stagingHeight = 0;
 };
 
-// UDP Packet header - matches inference_pc UDPPacketHeader (16 bytes)
+// Legacy header is kept for reference; the sender uses V2 below so packet
+// offsets, payload size, and RGB/BGRA format are explicit on the wire.
 #pragma pack(push, 1)
 struct UDPPacketHeader {
     uint32_t frameId;         // 4 bytes - 프레임 번호
@@ -328,6 +397,24 @@ struct UDPPacketHeader {
     uint16_t frameWidth;      // 2 bytes - 프레임 너비
     uint16_t frameHeight;     // 2 bytes - 프레임 높이
 };  // Total: 16 bytes
+
+struct UDPPacketHeaderV2 {
+    uint32_t magic;
+    uint16_t headerSize;
+    uint16_t flags;
+    uint32_t frameId;
+    uint32_t payloadOffset;
+    uint32_t frameBytes;
+    uint16_t chunkIndex;
+    uint16_t totalChunks;
+    uint32_t chunkSize;
+    uint16_t frameWidth;
+    uint16_t frameHeight;
+    uint8_t pixelFormat;
+    uint8_t bytesPerPixel;
+    uint16_t reserved;
+};
+static_assert(sizeof(UDPPacketHeaderV2) == 36, "UDPPacketHeaderV2 must stay wire-compatible");
 #pragma pack(pop)
 
 void printUsage(const char* prog) {
@@ -339,6 +426,8 @@ void printUsage(const char* prog) {
               << "  --region <x,y,w,h> Capture region (default: from config.ini)\n"
               << "  --output <idx>    Capture monitor index (default: from config.ini)\n"
               << "  --fps <num>       Target FPS (default: from config.ini)\n"
+              << "  --wire-format <rgb|bgra> UDP payload format (default: from config.ini)\n"
+              << "  --payload-bytes <n> UDP payload bytes per packet, 512..60000\n"
               << "  --gui             Show startup config GUI\n"
               << "  --no-gui          Skip startup config GUI\n"
               << "\nConfig file: config.ini\n";
@@ -555,9 +644,7 @@ bool showStartupConfigDialog(Config& config, const std::vector<OutputInfo>& outp
 
 // Simple INI parser for config.ini
 bool parseBool(const std::string& text) {
-    std::string lower = text;
-    std::transform(lower.begin(), lower.end(), lower.begin(),
-                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    const std::string lower = toLowerCopy(text);
     return (lower == "1" || lower == "true" || lower == "yes" || lower == "on");
 }
 
@@ -613,6 +700,10 @@ bool loadConfig(const char* filename) {
             g_config.targetFPS = std::stoi(value);
         } else if (key == "UseGUI") {
             g_config.useGUI = parseBool(value);
+        } else if (key == "WireFormat") {
+            g_config.wireFormat = value;
+        } else if (key == "PacketPayloadBytes") {
+            g_config.packetPayloadBytes = clampPacketPayloadBytes(std::stoi(value));
         }
     }
 
@@ -642,6 +733,8 @@ bool saveConfig(const char* filename) {
     file << "[Performance]\n";
     file << "TargetFPS=" << g_config.targetFPS << "\n";
     file << "UseGUI=" << (g_config.useGUI ? 1 : 0) << "\n";
+    file << "WireFormat=" << g_config.wireFormat << "\n";
+    file << "PacketPayloadBytes=" << g_config.packetPayloadBytes << "\n";
 
     return true;
 }
@@ -665,6 +758,10 @@ bool parseArgs(int argc, char** argv) {
             g_config.outputIndex = std::max(0, std::stoi(argv[++i]));
         } else if (arg == "--fps" && i + 1 < argc) {
             g_config.targetFPS = std::stoi(argv[++i]);
+        } else if (arg == "--wire-format" && i + 1 < argc) {
+            g_config.wireFormat = argv[++i];
+        } else if (arg == "--payload-bytes" && i + 1 < argc) {
+            g_config.packetPayloadBytes = clampPacketPayloadBytes(std::stoi(argv[++i]));
         } else if (arg == "--gui") {
             g_config.useGUI = true;
         } else if (arg == "--no-gui") {
@@ -696,6 +793,8 @@ int main(int argc, char** argv) {
     if (!parseArgs(argc, argv)) {
         return 0;
     }
+    g_config.packetPayloadBytes = clampPacketPayloadBytes(g_config.packetPayloadBytes);
+    g_config.wireFormat = wireFormatName(parseWireFormat(g_config.wireFormat));
 
     auto availableOutputs = enumerateCaptureOutputs();
     if (availableOutputs.empty()) {
@@ -760,6 +859,12 @@ int main(int argc, char** argv) {
     std::cout << "Capture region: " << g_config.captureX << "," << g_config.captureY
               << " " << g_config.captureWidth << "x" << g_config.captureHeight << "\n";
 
+    const WireFormat wireFormat = parseWireFormat(g_config.wireFormat);
+    const uint8_t wireBytesPerPixelValue = wireFormatBytesPerPixel(wireFormat);
+    const uint8_t wirePixelFormatValue = wireFormatPixelId(wireFormat);
+    const size_t maxPayloadPerPacket = static_cast<size_t>(
+        clampPacketPayloadBytes(g_config.packetPayloadBytes));
+
     // Create send socket
     SOCKET sendSock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (sendSock == INVALID_SOCKET) {
@@ -807,7 +912,8 @@ int main(int argc, char** argv) {
         }
     }
 
-    std::cout << "GamePC Streamer (BGRA, 60KB chunks) started\n";
+    std::cout << "GamePC Streamer (" << wireFormatName(wireFormat)
+              << ", " << maxPayloadPerPacket << "B payload, UDP V2) started\n";
     std::cout << "Sending to: " << g_config.inferenceIP << ":" << g_config.sendPort << "\n";
     std::cout << "Local bind IP: " << boundIpText << "\n";
     std::cout << "Target FPS: " << g_config.targetFPS << "\n";
@@ -820,7 +926,7 @@ int main(int argc, char** argv) {
 
     // Buffers
     std::vector<uint8_t> frameData;
-    const size_t maxPayloadPerPacket = 60000;  // 큰 청크 (LAN 환경)
+    std::vector<uint8_t> wireData;
 
     uint32_t frameId = 0;
     uint64_t capturedFrames = 0;   // Frames captured from desktop as new updates.
@@ -859,8 +965,10 @@ int main(int argc, char** argv) {
                                                 g_config.captureWidth, g_config.captureHeight, captureTimeoutMs);
         auto t2 = std::chrono::high_resolution_clock::now();
 
+        bool wireFrameDirty = false;
         if (gotNewFrame) {
             hasLatestFrame = true;
+            wireFrameDirty = true;
             capturedFrames++;
             totalCaptureMs += std::chrono::duration<double, std::milli>(t2 - t1).count();
         } else if (!hasLatestFrame) {
@@ -868,11 +976,26 @@ int main(int argc, char** argv) {
         }
 
         const uint8_t* sendData = frameData.data();
-        const size_t frameSize = frameData.size();
+        size_t frameSize = frameData.size();
+        if (wireFormat == WireFormat::RGB) {
+            if (wireFrameDirty || wireData.empty()) {
+                convertBgraToRgb(frameData, wireData, g_config.captureWidth, g_config.captureHeight);
+            }
+            sendData = wireData.data();
+            frameSize = wireData.size();
+        }
+        if (!sendData || frameSize == 0 || frameSize > UINT32_MAX) {
+            continue;
+        }
         outputFrames++;
 
         // Calculate number of packets needed
-        uint16_t totalPackets = (uint16_t)((frameSize + maxPayloadPerPacket - 1) / maxPayloadPerPacket);
+        const size_t totalPacketsSize = (frameSize + maxPayloadPerPacket - 1) / maxPayloadPerPacket;
+        if (totalPacketsSize == 0 || totalPacketsSize > UINT16_MAX) {
+            droppedFrames++;
+            continue;
+        }
+        uint16_t totalPackets = static_cast<uint16_t>(totalPacketsSize);
 
         // Send fragmented packets
         bool frameDropped = false;
@@ -881,19 +1004,28 @@ int main(int argc, char** argv) {
             size_t remaining = frameSize - offset;
             uint32_t payloadSize = (uint32_t)std::min(remaining, maxPayloadPerPacket);
 
-            // Prepare packet header (matches inference_pc UDPPacketHeader)
-            UDPPacketHeader header{};
+            // Prepare V2 packet header. Payload offset/format are explicit so
+            // inference_pc can use RGB or BGRA and any configured payload size.
+            UDPPacketHeaderV2 header{};
+            header.magic = UDP_PACKET_V2_MAGIC;
+            header.headerSize = static_cast<uint16_t>(sizeof(UDPPacketHeaderV2));
+            header.flags = 0;
             header.frameId = frameId;
+            header.payloadOffset = static_cast<uint32_t>(offset);
+            header.frameBytes = static_cast<uint32_t>(frameSize);
             header.chunkIndex = i;
             header.totalChunks = totalPackets;
             header.chunkSize = payloadSize;
             header.frameWidth = (uint16_t)g_config.captureWidth;
             header.frameHeight = (uint16_t)g_config.captureHeight;
+            header.pixelFormat = wirePixelFormatValue;
+            header.bytesPerPixel = wireBytesPerPixelValue;
+            header.reserved = 0;
 
             // Zero-copy send path: header + payload via scatter/gather buffers.
             WSABUF bufs[2];
             bufs[0].buf = reinterpret_cast<CHAR*>(&header);
-            bufs[0].len = sizeof(UDPPacketHeader);
+            bufs[0].len = sizeof(UDPPacketHeaderV2);
             bufs[1].buf = reinterpret_cast<CHAR*>(const_cast<uint8_t*>(sendData) + offset);
             bufs[1].len = payloadSize;
 
@@ -918,7 +1050,7 @@ int main(int argc, char** argv) {
                 // Drop this frame when socket is back-pressured.
                 break;
             }
-            const DWORD expectedBytes = static_cast<DWORD>(sizeof(UDPPacketHeader) + payloadSize);
+            const DWORD expectedBytes = static_cast<DWORD>(sizeof(UDPPacketHeaderV2) + payloadSize);
             if (bytesSent != expectedBytes) {
                 frameDropped = true;
                 break;
@@ -956,6 +1088,8 @@ int main(int argc, char** argv) {
                  << " | Cap:" << std::setprecision(2) << avgCapture << "ms"
                  << " Snd:" << avgSend << "ms"
                  << " | " << mbps << " Mbps"
+                 << " | " << wireFormatName(wireFormat)
+                 << "/" << maxPayloadPerPacket << "B"
                  << " | " << totalPackets << " pkts/frame"
                  << " | Drop:" << std::setprecision(1) << dropPct << "%"
                  << " (WB:" << wouldBlockDrops << ")";

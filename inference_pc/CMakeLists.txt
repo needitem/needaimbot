@@ -121,11 +121,3 @@ if(SIMPLE_ENABLE_LTO)
         message(WARNING "SIMPLE_ENABLE_LTO is ON but IPO is not supported: ${simple_ipo_error}")
     endif()
 endif()
-
-# =============================================================================
-# EngineExport Subproject (optional)
-# =============================================================================
-option(BUILD_ENGINE_EXPORT "Build EngineExport tool" OFF)
-if(BUILD_ENGINE_EXPORT)
-    add_subdirectory(engine_export)
-endif()

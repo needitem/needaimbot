@@ -49,6 +49,28 @@ struct UDPPacketHeader {
     uint16_t frameWidth;
     uint16_t frameHeight;
 };
+
+static constexpr uint32_t UDP_PACKET_V2_MAGIC = 0x32415047u;  // "GPA2" little-endian
+static constexpr uint8_t UDP_PIXEL_FORMAT_BGRA = 1;
+static constexpr uint8_t UDP_PIXEL_FORMAT_RGB = 2;
+
+struct UDPPacketHeaderV2 {
+    uint32_t magic;
+    uint16_t headerSize;
+    uint16_t flags;
+    uint32_t frameId;
+    uint32_t payloadOffset;
+    uint32_t frameBytes;
+    uint16_t chunkIndex;
+    uint16_t totalChunks;
+    uint32_t chunkSize;
+    uint16_t frameWidth;
+    uint16_t frameHeight;
+    uint8_t pixelFormat;
+    uint8_t bytesPerPixel;
+    uint16_t reserved;
+};
+static_assert(sizeof(UDPPacketHeaderV2) == 36, "UDPPacketHeaderV2 must stay wire-compatible");
 #pragma pack(pop)
 
 class UDPCapture {
@@ -64,7 +86,8 @@ public:
 
     bool AcquireFramePinned(void** pinnedRgbData, unsigned int* width, unsigned int* height,
                             uint64_t* outFrameId = nullptr, int* bufferIndex = nullptr,
-                            uint32_t timeoutMs = 16);
+                            uint32_t timeoutMs = 16, uint8_t* bytesPerPixel = nullptr,
+                            uint8_t* pixelFormat = nullptr);
     void ReleaseFrame(int bufferIndex);
 
     uint64_t GetReceivedFrameCount() const { return m_receivedFrames.load(std::memory_order_relaxed); }
@@ -92,7 +115,10 @@ private:
         uint16_t receivedCount = 0;
         uint16_t width = 0;
         uint16_t height = 0;
+        uint8_t bytesPerPixel = 4;
+        uint8_t pixelFormat = UDP_PIXEL_FORMAT_BGRA;
         size_t frameBytes = 0;
+        size_t payloadStrideBytes = 60000;
         int bufferIndex = -1;
         bool dropped = false;
         std::chrono::steady_clock::time_point lastUpdate;
@@ -110,7 +136,9 @@ private:
     void unlinkFragment(FrameFragments* frag);
     int reserveAssemblingBuffer();
     void releaseAssemblingBuffer(int bufferIndex);
-    void publishAssembledBuffer(int bufferIndex, uint16_t width, uint16_t height, uint32_t frameId);
+    void publishAssembledBuffer(int bufferIndex, uint16_t width, uint16_t height,
+                                uint32_t frameId, uint8_t bytesPerPixel,
+                                uint8_t pixelFormat);
     void clearFragmentState();
 
     static constexpr size_t MAX_FRAGMENT_SLOTS = 256;
@@ -139,6 +167,9 @@ private:
     std::atomic<int> m_bufferState[NUM_BUFFERS] = {BUFFER_FREE, BUFFER_FREE, BUFFER_FREE};
     std::atomic<unsigned int> m_bufferWidth[NUM_BUFFERS] = {0, 0, 0};
     std::atomic<unsigned int> m_bufferHeight[NUM_BUFFERS] = {0, 0, 0};
+    std::atomic<unsigned int> m_bufferBytesPerPixel[NUM_BUFFERS] = {4, 4, 4};
+    std::atomic<unsigned int> m_bufferPixelFormat[NUM_BUFFERS] = {
+        UDP_PIXEL_FORMAT_BGRA, UDP_PIXEL_FORMAT_BGRA, UDP_PIXEL_FORMAT_BGRA};
     std::atomic<uint64_t> m_bufferFrameId[NUM_BUFFERS] = {0, 0, 0};
 
     std::atomic<int> m_latestBufferIndex{-1};

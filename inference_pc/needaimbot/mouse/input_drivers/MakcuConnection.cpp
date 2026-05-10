@@ -648,16 +648,49 @@ bool MakcuConnection::isOpen() const { return is_open_; }
 // Common implementation (both platforms)
 // ============================================================================
 
+namespace {
+char* appendSignedInt(char* out, int value) {
+    unsigned int magnitude = static_cast<unsigned int>(value);
+    if (value < 0) {
+        *out++ = '-';
+        magnitude = 0u - magnitude;
+    }
+
+    char digits[10];
+    int count = 0;
+    do {
+        digits[count++] = static_cast<char>('0' + (magnitude % 10u));
+        magnitude /= 10u;
+    } while (magnitude != 0u);
+
+    while (count > 0) {
+        *out++ = digits[--count];
+    }
+    return out;
+}
+
+size_t buildMoveCommand(char* out, int x, int y) {
+    char* p = out;
+    constexpr char prefix[] = "km.move(";
+    std::memcpy(p, prefix, sizeof(prefix) - 1);
+    p += sizeof(prefix) - 1;
+    p = appendSignedInt(p, x);
+    *p++ = ',';
+    p = appendSignedInt(p, y);
+    *p++ = ')';
+    *p++ = '\r';
+    *p++ = '\n';
+    return static_cast<size_t>(p - out);
+}
+} // namespace
+
 void MakcuConnection::move(int x, int y) {
     if (x == 0 && y == 0) return;
-    char command[64];
-    int len = std::snprintf(command, sizeof(command), "km.move(%d,%d)\r\n", x, y);
-    if (len > 0 && static_cast<size_t>(len) < sizeof(command)) {
-        const size_t cmdSize = static_cast<size_t>(len);
-        if (!sendCommandFast(command, cmdSize)) {
-            // Fallback to blocking path to avoid silently dropping movement packets.
-            sendCommand(command, cmdSize);
-        }
+    char command[32];
+    const size_t cmdSize = buildMoveCommand(command, x, y);
+    if (!sendCommandFast(command, cmdSize)) {
+        // Fallback to blocking path to avoid silently dropping movement packets.
+        sendCommand(command, cmdSize);
     }
 }
 

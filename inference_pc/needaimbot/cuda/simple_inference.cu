@@ -428,6 +428,43 @@ inline bool pidConfigNearlyEqual(const PIDConfig& a, const PIDConfig& b) {
            nearlyEqual(a.integral_max, b.integral_max) &&
            nearlyEqual(a.derivative_max, b.derivative_max);
 }
+
+cudaGraphNode_t findGraphH2DMemcpyNode(cudaGraph_t graph, const void* dst, size_t bytes) {
+    if (!graph || !dst || bytes == 0) return nullptr;
+
+    size_t nodeCount = 0;
+    cudaError_t err = cudaGraphGetNodes(graph, nullptr, &nodeCount);
+    if (err != cudaSuccess || nodeCount == 0) {
+        return nullptr;
+    }
+
+    std::vector<cudaGraphNode_t> nodes(nodeCount);
+    err = cudaGraphGetNodes(graph, nodes.data(), &nodeCount);
+    if (err != cudaSuccess) {
+        return nullptr;
+    }
+
+    for (size_t i = 0; i < nodeCount; ++i) {
+        cudaGraphNodeType type{};
+        if (cudaGraphNodeGetType(nodes[i], &type) != cudaSuccess ||
+            type != cudaGraphNodeTypeMemcpy) {
+            continue;
+        }
+
+        cudaMemcpy3DParms params{};
+        if (cudaGraphMemcpyNodeGetParams(nodes[i], &params) != cudaSuccess) {
+            continue;
+        }
+        if (params.kind == cudaMemcpyHostToDevice &&
+            params.dstPtr.ptr == dst &&
+            params.extent.width == bytes &&
+            params.extent.height == 1 &&
+            params.extent.depth == 1) {
+            return nodes[i];
+        }
+    }
+    return nullptr;
+}
 } // namespace
 
 void SimpleInference::Logger::log(Severity severity, const char* msg) noexcept {
@@ -443,11 +480,29 @@ SimpleInference::SimpleInference() {
     }
 }
 
+bool SimpleInference::setBgraInput(bool bgra) {
+    if (m_bgraInput == bgra) return true;
+    if (m_callbacksInFlight.load(std::memory_order_acquire) > 0) {
+        return false;
+    }
+    if (m_stream) {
+        cudaStreamSynchronize(m_stream);
+    }
+    m_bgraInput = bgra;
+    if (m_loaded) {
+        destroyFullGraphs();
+    }
+    return true;
+}
+
 SimpleInference::~SimpleInference() {
     // Flush pending stream work so callback state is no longer in-flight.
     if (m_stream) cudaStreamSynchronize(m_stream);
 
-    m_callbackWorkerRunning.store(false, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lock(m_callbackWorkerMutex);
+        m_callbackWorkerRunning.store(false, std::memory_order_release);
+    }
     m_callbackWorkerCv.notify_all();
     if (m_callbackWorkerThread.joinable()) {
         m_callbackWorkerThread.join();
@@ -783,6 +838,8 @@ void SimpleInference::destroyFullGraphs() {
             cudaGraphDestroy(m_graphs[idx]);
             m_graphs[idx] = nullptr;
         }
+        m_graphH2DNodes[idx] = nullptr;
+        m_graphRawSizes[idx] = 0;
     }
     m_graphSourceW = 0;
     m_graphSourceH = 0;
@@ -907,17 +964,10 @@ bool SimpleInference::captureFullGraphForShape(int sourceWidth, int sourceHeight
     m_cachedHeadYOffset = headYOffset;
     m_cachedBodyYOffset = bodyYOffset;
 
-    // Fill pinned buffer with dummy data and upload to GPU (H2D outside graph)
+    // Fill pinned buffer with dummy data. The H2D copy itself is captured into
+    // the graph, then its source pointer is patched per frame before launch.
     memset(m_h_rawPinned, 128, rawSize);
-    cudaError_t err = cudaMemcpyAsync(m_d_rawInput, m_h_rawPinned, rawSize,
-                                      cudaMemcpyHostToDevice, m_stream);
-    if (err != cudaSuccess) {
-        std::cerr << "[SimpleInference] Failed dummy H2D before graph capture: "
-                  << cudaGetErrorString(err) << std::endl;
-        destroyFullGraphs();
-        return false;
-    }
-    err = cudaStreamSynchronize(m_stream);
+    cudaError_t err = cudaStreamSynchronize(m_stream);
     if (err != cudaSuccess) {
         std::cerr << "[SimpleInference] Failed to sync before graph capture: "
                   << cudaGetErrorString(err) << std::endl;
@@ -935,7 +985,21 @@ bool SimpleInference::captureFullGraphForShape(int sourceWidth, int sourceHeight
             return false;
         }
 
-        // Execute pipeline WITHOUT H2D for capture. Each graph writes to its own
+        err = cudaMemcpyAsync(m_d_rawInput, m_h_rawPinned, rawSize,
+                              cudaMemcpyHostToDevice, m_stream);
+        if (err != cudaSuccess) {
+            cudaGraph_t capturedGraph = nullptr;
+            cudaError_t abortErr = cudaStreamEndCapture(m_stream, &capturedGraph);
+            if (abortErr == cudaSuccess && capturedGraph) {
+                cudaGraphDestroy(capturedGraph);
+            }
+            std::cerr << "[SimpleInference] Failed to capture H2D memcpy for slot "
+                      << slot << ": " << cudaGetErrorString(err) << std::endl;
+            destroyFullGraphs();
+            return false;
+        }
+
+        // Execute pipeline after captured H2D. Each graph writes to its own
         // result slot so callbacks cannot observe overwritten slot-0 results.
         if (!executeFusedPipelinePostH2D(sourceWidth, sourceHeight,
                                          confThreshold, headClassId, headBonus,
@@ -961,6 +1025,15 @@ bool SimpleInference::captureFullGraphForShape(int sourceWidth, int sourceHeight
             return false;
         }
 
+        m_graphH2DNodes[slotIdx] = findGraphH2DMemcpyNode(m_graphs[slotIdx], m_d_rawInput, rawSize);
+        m_graphRawSizes[slotIdx] = rawSize;
+        if (!m_graphH2DNodes[slotIdx]) {
+            std::cerr << "[SimpleInference] Failed to locate captured H2D memcpy node for slot "
+                      << slot << std::endl;
+            destroyFullGraphs();
+            return false;
+        }
+
         err = cudaGraphInstantiate(&m_graphExecs[slotIdx], m_graphs[slotIdx], nullptr, nullptr, 0);
         if (err != cudaSuccess) {
             std::cerr << "[SimpleInference] Failed to instantiate full graph for slot "
@@ -968,11 +1041,13 @@ bool SimpleInference::captureFullGraphForShape(int sourceWidth, int sourceHeight
             destroyFullGraphs();
             return false;
         }
+        cudaGraphUpload(m_graphExecs[slotIdx], m_stream);
     }
+    cudaStreamSynchronize(m_stream);
 
     std::cout << "[SimpleInference] Full CUDA graph captured for " << sourceWidth << "x"
               << sourceHeight << " source (" << graphSlotCount
-              << " slots, preprocess+inference+postprocess)" << std::endl;
+              << " slots, H2D+preprocess+inference+postprocess)" << std::endl;
     return true;
 }
 
@@ -1116,22 +1191,36 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
                          confThreshold, headClassId, headBonus,
                          allowedClassMask, pidConfig, iouStickinessThreshold,
                          headYOffset, bodyYOffset) &&
-        m_graphExecs[static_cast<size_t>(callbackSlot)] != nullptr;
+        m_graphExecs[static_cast<size_t>(callbackSlot)] != nullptr &&
+        m_graphH2DNodes[static_cast<size_t>(callbackSlot)] != nullptr &&
+        m_graphRawSizes[static_cast<size_t>(callbackSlot)] == rawSize;
 
     if (canUseGraph) {
-        // H2D outside graph - copy directly from user's pinned buffer
-        cudaError_t err = cudaMemcpyAsync(m_d_rawInput, pinnedData, rawSize, cudaMemcpyHostToDevice, m_stream);
+        // H2D is inside the graph; only patch the source host pointer.
+        cudaError_t err = cudaGraphExecMemcpyNodeSetParams1D(
+            m_graphExecs[static_cast<size_t>(callbackSlot)],
+            m_graphH2DNodes[static_cast<size_t>(callbackSlot)],
+            m_d_rawInput,
+            pinnedData,
+            rawSize,
+            cudaMemcpyHostToDevice);
         if (err != cudaSuccess) {
-            std::cerr << "[SimpleInference] cudaMemcpyAsync(m_d_rawInput) failed: "
+            std::cerr << "[SimpleInference] cudaGraphExecMemcpyNodeSetParams1D(H2D) failed: "
                       << cudaGetErrorString(err) << std::endl;
-            return clearInFlightAndFail(false);
-        }
-
-        // Launch graph (preprocess + inference + postprocess + D2H)
-        err = cudaGraphLaunch(m_graphExecs[static_cast<size_t>(callbackSlot)], m_stream);
-        if (err != cudaSuccess) {
-            std::cerr << "[SimpleInference] cudaGraphLaunch failed: " << cudaGetErrorString(err) << std::endl;
-            return clearInFlightAndFail(true);
+            if (!executeFusedPipeline(pinnedData, width, height,
+                                      confThreshold, headClassId, headBonus,
+                                      allowedClassMask, pidConfig,
+                                      iouStickinessThreshold, headYOffset, bodyYOffset, callbackSlot)) {
+                return clearInFlightAndFail(true);
+            }
+        } else {
+            // Launch graph (H2D + preprocess + inference + postprocess + D2H)
+            err = cudaGraphLaunch(m_graphExecs[static_cast<size_t>(callbackSlot)], m_stream);
+            if (err != cudaSuccess) {
+                std::cerr << "[SimpleInference] cudaGraphLaunch failed: "
+                          << cudaGetErrorString(err) << std::endl;
+                return clearInFlightAndFail(true);
+            }
         }
     } else {
         // Standard pipeline execution
@@ -1154,7 +1243,10 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
         std::cerr << "[SimpleInference] cudaEventRecord failed: " << cudaGetErrorString(err) << std::endl;
         return clearInFlightAndFail(true);
     }
-    m_callbackSlotPending[static_cast<size_t>(callbackSlot)].store(true, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lock(m_callbackWorkerMutex);
+        m_callbackSlotPending[static_cast<size_t>(callbackSlot)].store(true, std::memory_order_release);
+    }
     m_callbackWorkerCv.notify_one();
 
     return true;

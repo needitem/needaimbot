@@ -5,7 +5,7 @@
 // - Full CUDA Graph capture (preprocess + inference + postprocess)
 // - Pinned host transfers
 // - Single D2H transfer (InferenceResult struct, 40 bytes)
-// - GPU Callback API (cudaLaunchHostFunc) for lowest latency
+// - Event-backed callback worker for low-latency completion handling
 // - FP16 input/output support (native, no conversion)
 #pragma once
 
@@ -47,10 +47,10 @@ public:
 
     bool loadEngine(const std::string& enginePath);
 
-    // Set BGRA input mode before loading the engine.
-    // When true, preprocessing expects BGRA HWC input (4 bytes/pixel)
-    // When false, preprocessing expects RGB HWC input (3 bytes/pixel)
-    void setBgraInput(bool bgra) { m_bgraInput = bgra; }
+    // Select raw input format. When changed after load, captured CUDA graphs
+    // are invalidated because preprocessing constants are baked into them.
+    bool setBgraInput(bool bgra);
+    bool isBgraInput() const { return m_bgraInput; }
     // Must be set before loadEngine(). Values are clamped to a safe range.
     void setMaxDetections(int maxDetections) {
         if (m_loaded) return;
@@ -124,6 +124,8 @@ private:
     // result-buffer reuse while multiple frames are queued on the stream.
     std::array<cudaGraph_t, kMaxCallbacksInFlight> m_graphs{};
     std::array<cudaGraphExec_t, kMaxCallbacksInFlight> m_graphExecs{};
+    std::array<cudaGraphNode_t, kMaxCallbacksInFlight> m_graphH2DNodes{};
+    std::array<size_t, kMaxCallbacksInFlight> m_graphRawSizes{};
     int m_graphSourceW = 0;
     int m_graphSourceH = 0;
     int m_graphSlotCount = 0;
