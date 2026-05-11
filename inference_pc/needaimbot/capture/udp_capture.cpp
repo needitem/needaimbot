@@ -15,6 +15,14 @@
 #include <sched.h>
 #endif
 
+namespace {
+bool isFrameIdNewer(uint32_t candidate, uint32_t baseline) {
+    return static_cast<int32_t>(candidate - baseline) > 0;
+}
+
+constexpr auto kFrameIdResetIdleTimeout = std::chrono::seconds(2);
+}  // namespace
+
 UDPCapture::UDPCapture() = default;
 
 UDPCapture::~UDPCapture() {
@@ -54,7 +62,6 @@ void UDPCapture::releaseFragment(FrameFragments* frag) {
     frag->bytesPerPixel = 4;
     frag->pixelFormat = UDP_PIXEL_FORMAT_BGRA;
     frag->frameBytes = 0;
-    frag->payloadStrideBytes = 60000;
     frag->bufferIndex = -1;
     frag->dropped = false;
     frag->lastUpdate = std::chrono::steady_clock::time_point{};
@@ -165,6 +172,9 @@ bool UDPCapture::allocatePinnedBuffers(size_t size) {
     m_publishSeq.store(0, std::memory_order_relaxed);
     m_consumedSeq = 0;
     m_reserveCursor = 0;
+    m_hasLatestPublishedFrameId = false;
+    m_latestPublishedFrameId = 0;
+    m_latestPublishTime = std::chrono::steady_clock::time_point{};
     for (int i = 0; i < NUM_BUFFERS; ++i) {
         m_bufferState[i].store(BUFFER_FREE, std::memory_order_relaxed);
         m_bufferWidth[i].store(0, std::memory_order_relaxed);
@@ -213,6 +223,9 @@ void UDPCapture::freePinnedBuffers() {
     m_publishSeq.store(0, std::memory_order_relaxed);
     m_consumedSeq = 0;
     m_reserveCursor = 0;
+    m_hasLatestPublishedFrameId = false;
+    m_latestPublishedFrameId = 0;
+    m_latestPublishTime = std::chrono::steady_clock::time_point{};
 }
 
 int UDPCapture::reserveAssemblingBuffer() {
@@ -248,10 +261,22 @@ void UDPCapture::releaseAssemblingBuffer(int bufferIndex) {
         expected, BUFFER_FREE, std::memory_order_acq_rel, std::memory_order_relaxed);
 }
 
-void UDPCapture::publishAssembledBuffer(int bufferIndex, uint16_t width, uint16_t height,
+bool UDPCapture::publishAssembledBuffer(int bufferIndex, uint16_t width, uint16_t height,
                                         uint32_t frameId, uint8_t bytesPerPixel,
-                                        uint8_t pixelFormat) {
-    if (bufferIndex < 0 || bufferIndex >= NUM_BUFFERS) return;
+                                        uint8_t pixelFormat,
+                                        std::chrono::steady_clock::time_point publishTime) {
+    if (bufferIndex < 0 || bufferIndex >= NUM_BUFFERS) return false;
+
+    const bool sourceLikelyRestarted =
+        m_hasLatestPublishedFrameId &&
+        publishTime != std::chrono::steady_clock::time_point{} &&
+        (publishTime - m_latestPublishTime) > kFrameIdResetIdleTimeout;
+    if (m_hasLatestPublishedFrameId && !sourceLikelyRestarted &&
+        !isFrameIdNewer(frameId, m_latestPublishedFrameId)) {
+        releaseAssemblingBuffer(bufferIndex);
+        m_droppedFrames.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
 
     m_bufferWidth[bufferIndex].store(width, std::memory_order_relaxed);
     m_bufferHeight[bufferIndex].store(height, std::memory_order_relaxed);
@@ -269,11 +294,15 @@ void UDPCapture::publishAssembledBuffer(int bufferIndex, uint16_t width, uint16_
     }
 
     m_receivedFrames.fetch_add(1, std::memory_order_relaxed);
+    m_latestPublishedFrameId = frameId;
+    m_hasLatestPublishedFrameId = true;
+    m_latestPublishTime = publishTime;
     {
         std::lock_guard<std::mutex> lock(m_publishCvMutex);
         m_publishSeq.fetch_add(1, std::memory_order_release);
     }
     m_publishCv.notify_one();
+    return true;
 }
 
 void UDPCapture::clearFragmentState() {
@@ -307,7 +336,6 @@ void UDPCapture::clearFragmentState() {
         frag.bytesPerPixel = 4;
         frag.pixelFormat = UDP_PIXEL_FORMAT_BGRA;
         frag.frameBytes = 0;
-        frag.payloadStrideBytes = 60000;
         frag.bufferIndex = -1;
         frag.dropped = false;
         frag.lastUpdate = std::chrono::steady_clock::time_point{};
@@ -394,6 +422,9 @@ bool UDPCapture::StartCapture() {
     m_publishSeq.store(0, std::memory_order_relaxed);
     m_consumedSeq = 0;
     m_reserveCursor = 0;
+    m_hasLatestPublishedFrameId = false;
+    m_latestPublishedFrameId = 0;
+    m_latestPublishTime = std::chrono::steady_clock::time_point{};
     m_receivedFrames.store(0, std::memory_order_relaxed);
     m_droppedFrames.store(0, std::memory_order_relaxed);
     for (int i = 0; i < NUM_BUFFERS; ++i) {
@@ -401,7 +432,6 @@ bool UDPCapture::StartCapture() {
     }
 
     m_running.store(true, std::memory_order_relaxed);
-    m_isCapturing.store(true, std::memory_order_relaxed);
     m_recvThread = std::thread(&UDPCapture::receiveThread, this);
 
     std::cout << "[UDPCapture] Started capture (pinned: "
@@ -413,7 +443,6 @@ void UDPCapture::StopCapture() {
     if (!m_running.load(std::memory_order_relaxed)) return;
 
     m_running.store(false, std::memory_order_relaxed);
-    m_isCapturing.store(false, std::memory_order_relaxed);
     m_publishCv.notify_all();
     if (m_recvThread.joinable()) {
         m_recvThread.join();
@@ -448,9 +477,7 @@ void UDPCapture::receiveThread() {
 #ifndef __linux__
     std::vector<uint8_t> recvBuffer(65536);
 #endif
-    constexpr size_t kChunkPayloadBytes = 60000;
-    constexpr auto kFragmentStaleTimeout = std::chrono::milliseconds(100);
-    constexpr uint32_t kMinPartialPublishRatioPct = 80;
+    constexpr auto kFragmentStaleTimeout = std::chrono::milliseconds(25);
     constexpr uint32_t kCleanupPacketInterval = 64;
     static_assert((kCleanupPacketInterval & (kCleanupPacketInterval - 1)) == 0,
                   "kCleanupPacketInterval must be power-of-two");
@@ -469,67 +496,12 @@ void UDPCapture::receiveThread() {
             activeSlotsSnapshot[i] = m_activeFragmentSlots[i];
         }
 
-        auto clearMissingChunks = [](FrameFragments& frag, uint8_t* dst) {
-            if (!dst || frag.totalPackets == 0 || frag.width == 0 || frag.height == 0) return;
-
-            const size_t frameSize = frag.frameBytes;
-            if (frameSize == 0) return;
-            const size_t stride = frag.payloadStrideBytes > 0 ? frag.payloadStrideBytes : frameSize;
-            auto clearChunk = [&](uint16_t chunkIdx) {
-                const size_t offset = static_cast<size_t>(chunkIdx) * stride;
-                if (offset >= frameSize) return;
-                const size_t clearSize = std::min(stride, frameSize - offset);
-                std::memset(dst + offset, 0, clearSize);
-            };
-
-            if (frag.useReceivedMask) {
-                uint64_t fullMask = ~0ull;
-                if (frag.totalPackets < 64) {
-                    fullMask = (1ull << frag.totalPackets) - 1ull;
-                }
-                uint64_t missingMask = (~frag.receivedMask) & fullMask;
-                for (uint16_t chunkIdx = 0; chunkIdx < frag.totalPackets; ++chunkIdx) {
-                    if ((missingMask & (1ull << chunkIdx)) != 0) {
-                        clearChunk(chunkIdx);
-                    }
-                }
-                return;
-            }
-
-            const size_t packetCount = static_cast<size_t>(frag.totalPackets);
-            for (size_t i = 0; i < packetCount; ++i) {
-                if (i >= frag.received.size() || frag.received[i] == 0) {
-                    clearChunk(static_cast<uint16_t>(i));
-                }
-            }
-        };
-
         for (size_t i = 0; i < snapshotCount; ++i) {
             const int slotIdx = activeSlotsSnapshot[i];
             if (slotIdx < 0 || slotIdx >= static_cast<int>(MAX_FRAGMENT_SLOTS)) continue;
             FrameFragments& frag = m_fragmentStorage[static_cast<size_t>(slotIdx)];
             if (!frag.active) continue;
             if ((now - frag.lastUpdate) <= kFragmentStaleTimeout) continue;
-            const bool canPublishPartial =
-                frag.bufferIndex >= 0 &&
-                frag.totalPackets > 0 &&
-                frag.receivedCount > 0 &&
-                (static_cast<uint32_t>(frag.receivedCount) * 100u >=
-                 static_cast<uint32_t>(frag.totalPackets) * kMinPartialPublishRatioPct);
-            if (canPublishPartial) {
-                uint8_t* dst = m_pinnedFrameBuffer[frag.bufferIndex];
-                clearMissingChunks(frag, dst);
-                publishAssembledBuffer(frag.bufferIndex, frag.width, frag.height, frag.frameId,
-                                       frag.bytesPerPixel, frag.pixelFormat);
-                frag.bufferIndex = -1;
-                unlinkFragment(&frag);
-                if (cachedFrag == &frag) {
-                    cachedFrag = nullptr;
-                    cachedFrameId = 0;
-                }
-                releaseFragment(&frag);
-                continue;
-            }
             if (frag.bufferIndex >= 0) {
                 releaseAssemblingBuffer(frag.bufferIndex);
                 frag.bufferIndex = -1;
@@ -546,65 +518,31 @@ void UDPCapture::receiveThread() {
         }
     };
 
-    auto processPacket = [this, kChunkPayloadBytes, &cachedFrag, &cachedFrameId](
+    auto processPacket = [this, &cachedFrag, &cachedFrameId](
                              const uint8_t* packetData, int packetBytes,
                              std::chrono::steady_clock::time_point packetNow) {
-        if (!packetData || packetBytes < static_cast<int>(sizeof(UDPPacketHeader))) return;
-
-        uint32_t frameId = 0;
-        uint16_t chunkIndex = 0;
-        uint16_t totalChunks = 0;
-        uint32_t chunkSize = 0;
-        uint16_t frameWidth = 0;
-        uint16_t frameHeight = 0;
-        uint8_t bytesPerPixel = 4;
-        uint8_t pixelFormat = UDP_PIXEL_FORMAT_BGRA;
-        size_t payloadOffset = 0;
-        size_t frameBytes = 0;
-        size_t payloadStrideBytes = kChunkPayloadBytes;
-        const uint8_t* payload = nullptr;
+        if (!packetData || packetBytes < static_cast<int>(sizeof(UDPPacketHeaderV2))) return;
 
         const auto* v2 = reinterpret_cast<const UDPPacketHeaderV2*>(packetData);
-        const bool hasV2Header =
-            packetBytes >= static_cast<int>(sizeof(UDPPacketHeaderV2)) &&
-            v2->magic == UDP_PACKET_V2_MAGIC &&
-            v2->headerSize >= sizeof(UDPPacketHeaderV2) &&
-            static_cast<size_t>(v2->headerSize) <= static_cast<size_t>(packetBytes);
-        if (hasV2Header) {
-            const size_t expectedPayload = static_cast<size_t>(packetBytes) - v2->headerSize;
-            if (v2->chunkSize != expectedPayload) return;
-            frameId = v2->frameId;
-            chunkIndex = v2->chunkIndex;
-            totalChunks = v2->totalChunks;
-            chunkSize = v2->chunkSize;
-            frameWidth = v2->frameWidth;
-            frameHeight = v2->frameHeight;
-            bytesPerPixel = v2->bytesPerPixel;
-            pixelFormat = v2->pixelFormat;
-            payloadOffset = v2->payloadOffset;
-            frameBytes = v2->frameBytes;
-            payload = packetData + v2->headerSize;
-            if (totalChunks <= 1) {
-                payloadStrideBytes = frameBytes;
-            } else if (chunkIndex + 1 < totalChunks) {
-                payloadStrideBytes = chunkSize;
-            } else if (chunkIndex > 0 && payloadOffset % chunkIndex == 0) {
-                payloadStrideBytes = payloadOffset / chunkIndex;
-            }
-        } else {
-            const auto* header = reinterpret_cast<const UDPPacketHeader*>(packetData);
-            const size_t expectedPayload = static_cast<size_t>(packetBytes) - sizeof(UDPPacketHeader);
-            if (header->chunkSize != expectedPayload) return;
-            frameId = header->frameId;
-            chunkIndex = header->chunkIndex;
-            totalChunks = header->totalChunks;
-            chunkSize = header->chunkSize;
-            frameWidth = header->frameWidth;
-            frameHeight = header->frameHeight;
-            payloadOffset = static_cast<size_t>(chunkIndex) * kChunkPayloadBytes;
-            frameBytes = static_cast<size_t>(frameWidth) * static_cast<size_t>(frameHeight) * 4;
-            payload = packetData + sizeof(UDPPacketHeader);
+        if (v2->magic != UDP_PACKET_V2_MAGIC ||
+            v2->headerSize < sizeof(UDPPacketHeaderV2) ||
+            static_cast<size_t>(v2->headerSize) > static_cast<size_t>(packetBytes)) {
+            return;
         }
+
+        const uint32_t frameId = v2->frameId;
+        const uint16_t chunkIndex = v2->chunkIndex;
+        const uint16_t totalChunks = v2->totalChunks;
+        const uint32_t chunkSize = v2->chunkSize;
+        const uint16_t frameWidth = v2->frameWidth;
+        const uint16_t frameHeight = v2->frameHeight;
+        const uint8_t bytesPerPixel = v2->bytesPerPixel;
+        const uint8_t pixelFormat = v2->pixelFormat;
+        const size_t payloadOffset = v2->payloadOffset;
+        const size_t frameBytes = v2->frameBytes;
+        const uint8_t* payload = packetData + v2->headerSize;
+        const size_t expectedPayload = static_cast<size_t>(packetBytes) - v2->headerSize;
+        if (chunkSize != expectedPayload) return;
 
         if (totalChunks == 0 || chunkIndex >= totalChunks ||
             frameWidth == 0 || frameHeight == 0 ||
@@ -616,9 +554,13 @@ void UDPCapture::receiveThread() {
             static_cast<size_t>(frameWidth) * static_cast<size_t>(frameHeight) *
             static_cast<size_t>(bytesPerPixel);
         if (frameBytes != expectedFrameBytes ||
-            payloadStrideBytes == 0 ||
             payloadOffset > frameBytes ||
             static_cast<size_t>(chunkSize) > frameBytes - payloadOffset) {
+            return;
+        }
+        if (m_hasLatestPublishedFrameId &&
+            (packetNow - m_latestPublishTime) <= kFrameIdResetIdleTimeout &&
+            !isFrameIdNewer(frameId, m_latestPublishedFrameId)) {
             return;
         }
 
@@ -648,7 +590,6 @@ void UDPCapture::receiveThread() {
             frag->bytesPerPixel = bytesPerPixel;
             frag->pixelFormat = pixelFormat;
             frag->frameBytes = frameBytes;
-            frag->payloadStrideBytes = payloadStrideBytes;
             frag->dropped = false;
             frag->bufferIndex = -1;
             frag->useReceivedMask = (totalChunks <= 64);
@@ -686,8 +627,7 @@ void UDPCapture::receiveThread() {
             frag->height != frameHeight ||
             frag->bytesPerPixel != bytesPerPixel ||
             frag->pixelFormat != pixelFormat ||
-            frag->frameBytes != frameBytes ||
-            frag->payloadStrideBytes != payloadStrideBytes) {
+            frag->frameBytes != frameBytes) {
             if (!frag->dropped) {
                 if (frag->bufferIndex >= 0) {
                     releaseAssemblingBuffer(frag->bufferIndex);
@@ -728,7 +668,8 @@ void UDPCapture::receiveThread() {
             const uint16_t publishH = frag->height;
             const uint8_t publishBpp = frag->bytesPerPixel;
             const uint8_t publishFormat = frag->pixelFormat;
-            publishAssembledBuffer(publishIdx, publishW, publishH, frameId, publishBpp, publishFormat);
+            publishAssembledBuffer(publishIdx, publishW, publishH, frameId, publishBpp, publishFormat,
+                                   packetNow);
 
             frag->bufferIndex = -1;
             unlinkFragment(frag);

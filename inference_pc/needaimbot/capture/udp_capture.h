@@ -41,15 +41,6 @@ typedef int SOCKET;
 #include <vector>
 
 #pragma pack(push, 1)
-struct UDPPacketHeader {
-    uint32_t frameId;
-    uint16_t chunkIndex;
-    uint16_t totalChunks;
-    uint32_t chunkSize;
-    uint16_t frameWidth;
-    uint16_t frameHeight;
-};
-
 static constexpr uint32_t UDP_PACKET_V2_MAGIC = 0x32415047u;  // "GPA2" little-endian
 static constexpr uint8_t UDP_PIXEL_FORMAT_BGRA = 1;
 static constexpr uint8_t UDP_PIXEL_FORMAT_RGB = 2;
@@ -118,7 +109,6 @@ private:
         uint8_t bytesPerPixel = 4;
         uint8_t pixelFormat = UDP_PIXEL_FORMAT_BGRA;
         size_t frameBytes = 0;
-        size_t payloadStrideBytes = 60000;
         int bufferIndex = -1;
         bool dropped = false;
         std::chrono::steady_clock::time_point lastUpdate;
@@ -136,9 +126,10 @@ private:
     void unlinkFragment(FrameFragments* frag);
     int reserveAssemblingBuffer();
     void releaseAssemblingBuffer(int bufferIndex);
-    void publishAssembledBuffer(int bufferIndex, uint16_t width, uint16_t height,
+    bool publishAssembledBuffer(int bufferIndex, uint16_t width, uint16_t height,
                                 uint32_t frameId, uint8_t bytesPerPixel,
-                                uint8_t pixelFormat);
+                                uint8_t pixelFormat,
+                                std::chrono::steady_clock::time_point publishTime);
     void clearFragmentState();
 
     static constexpr size_t MAX_FRAGMENT_SLOTS = 256;
@@ -157,7 +148,6 @@ private:
 
     std::thread m_recvThread;
     std::atomic<bool> m_running{false};
-    std::atomic<bool> m_isCapturing{false};
 
     static constexpr int NUM_BUFFERS = 3;
     uint8_t* m_pinnedFrameBuffer[NUM_BUFFERS] = {nullptr, nullptr, nullptr};
@@ -178,6 +168,9 @@ private:
     std::atomic<uint64_t> m_publishSeq{0};
     uint64_t m_consumedSeq = 0;
     int m_reserveCursor = 0;
+    bool m_hasLatestPublishedFrameId = false;
+    uint32_t m_latestPublishedFrameId = 0;
+    std::chrono::steady_clock::time_point m_latestPublishTime{};
 
     std::atomic<uint64_t> m_receivedFrames{0};
     std::atomic<uint64_t> m_droppedFrames{0};

@@ -386,18 +386,7 @@ private:
     int m_stagingHeight = 0;
 };
 
-// Legacy header is kept for reference; the sender uses V2 below so packet
-// offsets, payload size, and RGB/BGRA format are explicit on the wire.
 #pragma pack(push, 1)
-struct UDPPacketHeader {
-    uint32_t frameId;         // 4 bytes - 프레임 번호
-    uint16_t chunkIndex;      // 2 bytes - 청크 인덱스 (0부터)
-    uint16_t totalChunks;     // 2 bytes - 전체 청크 수
-    uint32_t chunkSize;       // 4 bytes - 이 청크의 데이터 크기
-    uint16_t frameWidth;      // 2 bytes - 프레임 너비
-    uint16_t frameHeight;     // 2 bytes - 프레임 높이
-};  // Total: 16 bytes
-
 struct UDPPacketHeaderV2 {
     uint32_t magic;
     uint16_t headerSize;
@@ -416,6 +405,88 @@ struct UDPPacketHeaderV2 {
 };
 static_assert(sizeof(UDPPacketHeaderV2) == 36, "UDPPacketHeaderV2 must stay wire-compatible");
 #pragma pack(pop)
+
+struct FrameSendResult {
+    bool sent = false;
+    bool wouldBlock = false;
+    uint16_t totalPackets = 0;
+};
+
+FrameSendResult sendFrameUdp(SOCKET sendSock, const sockaddr_in& destAddr,
+                             const uint8_t* sendData, size_t frameSize,
+                             uint32_t frameId, uint16_t frameWidth,
+                             uint16_t frameHeight, uint8_t pixelFormat,
+                             uint8_t bytesPerPixel, size_t maxPayloadPerPacket) {
+    FrameSendResult result{};
+    if (!sendData || frameSize == 0 || frameSize > UINT32_MAX || maxPayloadPerPacket == 0) {
+        return result;
+    }
+
+    const size_t totalPacketsSize = (frameSize + maxPayloadPerPacket - 1) / maxPayloadPerPacket;
+    if (totalPacketsSize == 0 || totalPacketsSize > UINT16_MAX) {
+        return result;
+    }
+    result.totalPackets = static_cast<uint16_t>(totalPacketsSize);
+
+    for (uint16_t i = 0; i < result.totalPackets; ++i) {
+        const size_t offset = static_cast<size_t>(i) * maxPayloadPerPacket;
+        const size_t remaining = frameSize - offset;
+        const uint32_t payloadSize = static_cast<uint32_t>(std::min(remaining, maxPayloadPerPacket));
+
+        UDPPacketHeaderV2 header{};
+        header.magic = UDP_PACKET_V2_MAGIC;
+        header.headerSize = static_cast<uint16_t>(sizeof(UDPPacketHeaderV2));
+        header.flags = 0;
+        header.frameId = frameId;
+        header.payloadOffset = static_cast<uint32_t>(offset);
+        header.frameBytes = static_cast<uint32_t>(frameSize);
+        header.chunkIndex = i;
+        header.totalChunks = result.totalPackets;
+        header.chunkSize = payloadSize;
+        header.frameWidth = frameWidth;
+        header.frameHeight = frameHeight;
+        header.pixelFormat = pixelFormat;
+        header.bytesPerPixel = bytesPerPixel;
+        header.reserved = 0;
+
+        WSABUF bufs[2];
+        bufs[0].buf = reinterpret_cast<CHAR*>(&header);
+        bufs[0].len = sizeof(UDPPacketHeaderV2);
+        bufs[1].buf = reinterpret_cast<CHAR*>(const_cast<uint8_t*>(sendData) + offset);
+        bufs[1].len = payloadSize;
+
+        DWORD bytesSent = 0;
+        const int sendResult = WSASendTo(
+            sendSock,
+            bufs,
+            2,
+            &bytesSent,
+            0,
+            (SOCKADDR*)&destAddr,
+            sizeof(destAddr),
+            nullptr,
+            nullptr
+        );
+        if (sendResult == SOCKET_ERROR) {
+            const int err = WSAGetLastError();
+            result.wouldBlock = (err == WSAEWOULDBLOCK || err == WSAENOBUFS);
+            return result;
+        }
+
+        const DWORD expectedBytes = static_cast<DWORD>(sizeof(UDPPacketHeaderV2) + payloadSize);
+        if (bytesSent != expectedBytes) {
+            return result;
+        }
+    }
+
+    result.sent = true;
+    return result;
+}
+
+bool setSocketNonBlocking(SOCKET sock) {
+    u_long nonBlocking = 1;
+    return ioctlsocket(sock, FIONBIO, &nonBlocking) == 0;
+}
 
 void printUsage(const char* prog) {
     std::cout << "Usage: " << prog << " [options]\n"
@@ -829,6 +900,15 @@ int main(int argc, char** argv) {
         std::cout << "Warning: target FPS (" << g_config.targetFPS << ") exceeds monitor refresh rate ("
                   << selectedOutput->refreshHz << "Hz)\n";
     }
+    if (g_config.targetFPS <= 0) {
+        std::cerr << "TargetFPS must be positive\n";
+        return 1;
+    }
+    if (g_config.captureWidth <= 0 || g_config.captureHeight <= 0 ||
+        g_config.captureWidth > UINT16_MAX || g_config.captureHeight > UINT16_MAX) {
+        std::cerr << "CaptureWidth/CaptureHeight must be in range 1.." << UINT16_MAX << "\n";
+        return 1;
+    }
 
     std::signal(SIGINT, signalHandler);
 
@@ -876,6 +956,9 @@ int main(int argc, char** argv) {
     // Set send buffer size
     int sendBufSize = 2 * 1024 * 1024;  // Larger buffer for fragmented packets
     setsockopt(sendSock, SOL_SOCKET, SO_SNDBUF, (char*)&sendBufSize, sizeof(sendBufSize));
+    if (!setSocketNonBlocking(sendSock)) {
+        std::cerr << "Warning: failed to set UDP sender socket to non-blocking mode\n";
+    }
 
     if (!g_config.localBindIP.empty()) {
         sockaddr_in localAddr{};
@@ -900,7 +983,12 @@ int main(int argc, char** argv) {
     sockaddr_in destAddr = {};
     destAddr.sin_family = AF_INET;
     destAddr.sin_port = htons(g_config.sendPort);
-    inet_pton(AF_INET, g_config.inferenceIP.c_str(), &destAddr.sin_addr);
+    if (inet_pton(AF_INET, g_config.inferenceIP.c_str(), &destAddr.sin_addr) != 1) {
+        std::cerr << "Invalid InferenceIP: " << g_config.inferenceIP << "\n";
+        closesocket(sendSock);
+        WSACleanup();
+        return 1;
+    }
 
     sockaddr_in boundAddr{};
     int boundAddrLen = sizeof(boundAddr);
@@ -929,12 +1017,15 @@ int main(int argc, char** argv) {
     std::vector<uint8_t> wireData;
 
     uint32_t frameId = 0;
+    uint64_t captureAttempts = 0;
     uint64_t capturedFrames = 0;   // Frames captured from desktop as new updates.
-    uint64_t outputFrames = 0;     // Frames emitted at target pacing (may include repeats).
+    uint64_t skippedFrames = 0;    // Target ticks skipped because DDA had no new frame.
+    uint64_t outputFrames = 0;     // Frames attempted for UDP emission.
     uint64_t sentFrames = 0;
     uint64_t droppedFrames = 0;
     uint64_t wouldBlockDrops = 0;
     uint64_t totalBytes = 0;
+    uint16_t lastTotalPackets = 0;
     auto statsStart = std::chrono::steady_clock::now();
 
     // Timing stats
@@ -947,7 +1038,50 @@ int main(int argc, char** argv) {
     // Poll immediately to avoid waiting in AcquireNextFrame.
     const int captureTimeoutMs = 0;
 
-    bool hasLatestFrame = false;
+    auto printStatsIfDue = [&](std::chrono::steady_clock::time_point statsNow) {
+        const double statsSeconds = std::chrono::duration<double>(statsNow - statsStart).count();
+        if (statsSeconds < 1.0) {
+            return;
+        }
+
+        double capFps = capturedFrames / statsSeconds;
+        double pollFps = captureAttempts / statsSeconds;
+        double skipFps = skippedFrames / statsSeconds;
+        double outFps = outputFrames / statsSeconds;
+        double sendFps = sentFrames / statsSeconds;
+        double mbps = (totalBytes * 8.0) / (statsSeconds * 1000000.0);
+        double avgCapture = (capturedFrames > 0) ? (totalCaptureMs / capturedFrames) : 0.0;
+        double avgSend = (outputFrames > 0) ? (totalSendMs / outputFrames) : 0.0;
+        double dropPct = (outputFrames > 0) ? (droppedFrames * 100.0) / outputFrames : 0.0;
+
+        std::ostringstream line;
+        line << "PollFPS: " << std::fixed << std::setprecision(1) << pollFps
+             << " | NewCapFPS: " << capFps
+             << " | SkipFPS: " << skipFps
+             << " | OutFPS: " << outFps
+             << " | SendFPS: " << sendFps
+             << " | Cap:" << std::setprecision(2) << avgCapture << "ms"
+             << " Snd:" << avgSend << "ms"
+             << " | " << mbps << " Mbps"
+             << " | " << wireFormatName(wireFormat)
+             << "/" << maxPayloadPerPacket << "B"
+             << " | " << lastTotalPackets << " pkts/frame"
+             << " | Drop:" << std::setprecision(1) << dropPct << "%"
+             << " (WB:" << wouldBlockDrops << ")";
+        printStatusLine(line.str());
+
+        captureAttempts = 0;
+        capturedFrames = 0;
+        skippedFrames = 0;
+        outputFrames = 0;
+        sentFrames = 0;
+        droppedFrames = 0;
+        wouldBlockDrops = 0;
+        totalBytes = 0;
+        lastTotalPackets = 0;
+        totalCaptureMs = totalSendMs = 0;
+        statsStart = statsNow;
+    };
 
     while (g_running.load()) {
         // FPS limiting - keep cadence based on accumulated frame intervals.
@@ -964,23 +1098,21 @@ int main(int argc, char** argv) {
         bool gotNewFrame = capture.CaptureFrame(frameData, g_config.captureX, g_config.captureY,
                                                 g_config.captureWidth, g_config.captureHeight, captureTimeoutMs);
         auto t2 = std::chrono::high_resolution_clock::now();
+        captureAttempts++;
 
-        bool wireFrameDirty = false;
         if (gotNewFrame) {
-            hasLatestFrame = true;
-            wireFrameDirty = true;
             capturedFrames++;
             totalCaptureMs += std::chrono::duration<double, std::milli>(t2 - t1).count();
-        } else if (!hasLatestFrame) {
+        } else {
+            skippedFrames++;
+            printStatsIfDue(std::chrono::steady_clock::now());
             continue;
         }
 
         const uint8_t* sendData = frameData.data();
         size_t frameSize = frameData.size();
         if (wireFormat == WireFormat::RGB) {
-            if (wireFrameDirty || wireData.empty()) {
-                convertBgraToRgb(frameData, wireData, g_config.captureWidth, g_config.captureHeight);
-            }
+            convertBgraToRgb(frameData, wireData, g_config.captureWidth, g_config.captureHeight);
             sendData = wireData.data();
             frameSize = wireData.size();
         }
@@ -989,121 +1121,34 @@ int main(int argc, char** argv) {
         }
         outputFrames++;
 
-        // Calculate number of packets needed
-        const size_t totalPacketsSize = (frameSize + maxPayloadPerPacket - 1) / maxPayloadPerPacket;
-        if (totalPacketsSize == 0 || totalPacketsSize > UINT16_MAX) {
-            droppedFrames++;
-            continue;
-        }
-        uint16_t totalPackets = static_cast<uint16_t>(totalPacketsSize);
-
-        // Send fragmented packets
-        bool frameDropped = false;
-        for (uint16_t i = 0; i < totalPackets; i++) {
-            size_t offset = i * maxPayloadPerPacket;
-            size_t remaining = frameSize - offset;
-            uint32_t payloadSize = (uint32_t)std::min(remaining, maxPayloadPerPacket);
-
-            // Prepare V2 packet header. Payload offset/format are explicit so
-            // inference_pc can use RGB or BGRA and any configured payload size.
-            UDPPacketHeaderV2 header{};
-            header.magic = UDP_PACKET_V2_MAGIC;
-            header.headerSize = static_cast<uint16_t>(sizeof(UDPPacketHeaderV2));
-            header.flags = 0;
-            header.frameId = frameId;
-            header.payloadOffset = static_cast<uint32_t>(offset);
-            header.frameBytes = static_cast<uint32_t>(frameSize);
-            header.chunkIndex = i;
-            header.totalChunks = totalPackets;
-            header.chunkSize = payloadSize;
-            header.frameWidth = (uint16_t)g_config.captureWidth;
-            header.frameHeight = (uint16_t)g_config.captureHeight;
-            header.pixelFormat = wirePixelFormatValue;
-            header.bytesPerPixel = wireBytesPerPixelValue;
-            header.reserved = 0;
-
-            // Zero-copy send path: header + payload via scatter/gather buffers.
-            WSABUF bufs[2];
-            bufs[0].buf = reinterpret_cast<CHAR*>(&header);
-            bufs[0].len = sizeof(UDPPacketHeaderV2);
-            bufs[1].buf = reinterpret_cast<CHAR*>(const_cast<uint8_t*>(sendData) + offset);
-            bufs[1].len = payloadSize;
-
-            DWORD bytesSent = 0;
-            int sendResult = WSASendTo(
-                sendSock,
-                bufs,
-                2,
-                &bytesSent,
-                0,
-                (SOCKADDR*)&destAddr,
-                sizeof(destAddr),
-                nullptr,
-                nullptr
-            );
-            if (sendResult == SOCKET_ERROR) {
-                int err = WSAGetLastError();
-                if (err == WSAEWOULDBLOCK || err == WSAENOBUFS) {
-                    wouldBlockDrops++;
-                }
-                frameDropped = true;
-                // Drop this frame when socket is back-pressured.
-                break;
-            }
-            const DWORD expectedBytes = static_cast<DWORD>(sizeof(UDPPacketHeaderV2) + payloadSize);
-            if (bytesSent != expectedBytes) {
-                frameDropped = true;
-                break;
-            }
-        }
-
+        const FrameSendResult sendResult = sendFrameUdp(
+            sendSock,
+            destAddr,
+            sendData,
+            frameSize,
+            frameId,
+            static_cast<uint16_t>(g_config.captureWidth),
+            static_cast<uint16_t>(g_config.captureHeight),
+            wirePixelFormatValue,
+            wireBytesPerPixelValue,
+            maxPayloadPerPacket);
         auto t3 = std::chrono::high_resolution_clock::now();
 
         totalSendMs += std::chrono::duration<double, std::milli>(t3 - t2).count();
+        lastTotalPackets = sendResult.totalPackets;
 
         frameId++;
-        if (frameDropped) {
+        if (sendResult.wouldBlock) {
+            wouldBlockDrops++;
+        }
+        if (!sendResult.sent) {
             droppedFrames++;
         } else {
             sentFrames++;
             totalBytes += frameSize;
         }
 
-        // Print stats every second
-        auto statsNow = std::chrono::steady_clock::now();
-        auto statsDuration = std::chrono::duration_cast<std::chrono::seconds>(statsNow - statsStart);
-        if (statsDuration.count() >= 1 && outputFrames > 0) {
-            double capFps = capturedFrames / (double)statsDuration.count();
-            double outFps = outputFrames / (double)statsDuration.count();
-            double sendFps = sentFrames / (double)statsDuration.count();
-            double mbps = (totalBytes * 8.0) / (statsDuration.count() * 1000000.0);
-            double avgCapture = (capturedFrames > 0) ? (totalCaptureMs / capturedFrames) : 0.0;
-            double avgSend = (outputFrames > 0) ? (totalSendMs / outputFrames) : 0.0;
-            double dropPct = (droppedFrames * 100.0) / outputFrames;
-
-            std::ostringstream line;
-            line << "NewCapFPS: " << std::fixed << std::setprecision(1) << capFps
-                 << " | OutFPS: " << outFps
-                 << " | SendFPS: " << sendFps
-                 << " | Cap:" << std::setprecision(2) << avgCapture << "ms"
-                 << " Snd:" << avgSend << "ms"
-                 << " | " << mbps << " Mbps"
-                 << " | " << wireFormatName(wireFormat)
-                 << "/" << maxPayloadPerPacket << "B"
-                 << " | " << totalPackets << " pkts/frame"
-                 << " | Drop:" << std::setprecision(1) << dropPct << "%"
-                 << " (WB:" << wouldBlockDrops << ")";
-            printStatusLine(line.str());
-
-            capturedFrames = 0;
-            outputFrames = 0;
-            sentFrames = 0;
-            droppedFrames = 0;
-            wouldBlockDrops = 0;
-            totalBytes = 0;
-            totalCaptureMs = totalSendMs = 0;
-            statsStart = statsNow;
-        }
+        printStatsIfDue(std::chrono::steady_clock::now());
     }
 
     std::cout << "\nShutting down...\n";
