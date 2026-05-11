@@ -11,24 +11,18 @@ struct Detection;  // Forward declaration
 // GPU State Structures
 // =============================================================================
 
-// PID controller state (GPU persistent)
-struct PIDState {
-    float prev_error_x = 0.0f;
-    float prev_error_y = 0.0f;
-    float integral_x = 0.0f;
-    float integral_y = 0.0f;
+// P controller state (GPU persistent)
+struct AimState {
+    float residual_x = 0.0f;
+    float residual_y = 0.0f;
 };
 
-// PID controller configuration
-struct PIDConfig {
-    float kp_x = 0.5f;
-    float kp_y = 0.5f;
-    float ki_x = 0.0f;
-    float ki_y = 0.0f;
-    float kd_x = 0.3f;
-    float kd_y = 0.3f;
-    float integral_max = 50.0f;
-    float derivative_max = 30.0f;
+// Nonlinear P controller configuration.
+struct AimConfig {
+    float kp_x = 0.7f;
+    float kp_y = 0.62f;
+    float p_softness_x = 28.0f;
+    float p_softness_y = 30.0f;
 };
 
 // Mouse movement output
@@ -57,7 +51,7 @@ struct InferenceResult {
 // One-pass fused postprocess:
 // 1) Decode YOLO output
 // 2) Target selection with IoU stickiness
-// 3) PID calculation
+// 3) Nonlinear P movement calculation
 // 4) Pack final InferenceResult (single D2H copy)
 cudaError_t postprocessYoloFusedGpu(
     const void* d_raw_output,      // Raw model output (FP32/FP16)
@@ -70,14 +64,16 @@ cudaError_t postprocessYoloFusedGpu(
     float max_box_extent,          // Max valid width/height for decoded boxes
     float screen_center_x,         // Crosshair X
     float screen_center_y,         // Crosshair Y
+    float movement_scale_x,        // Model-space movement -> source/screen-space scale
+    float movement_scale_y,
     int head_class_id,             // Head class ID for priority
     float head_conf_bonus,         // Head bonus for target selection
-    const PIDConfig& pid_config,   // PID parameters
+    const AimConfig& aim_config,   // Movement parameters
     float iou_stickiness_threshold, // IoU threshold for target stickiness (0.3 typical)
     float head_y_offset,           // Aim point offset for head (0.0-1.0)
     float body_y_offset,           // Aim point offset for body (0.0-1.0)
     Detection* d_selected_target,  // Persistent selected target (for IoU tracking)
-    PIDState* d_pid_state,         // Persistent PID state (device)
+    AimState* d_aim_state,         // Persistent movement state (device)
     InferenceResult* d_inference_result, // Packed output result (required)
     Detection* d_stage1_best_dist, // [max_candidate_blocks] best candidate by distance per block
     float* d_stage1_dist_score,    // [max_candidate_blocks] distance score per block

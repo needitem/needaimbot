@@ -2,9 +2,11 @@
 #define MAKCUCONNECTION_H
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <thread>
 #include <atomic>
+#include <condition_variable>
 #include <mutex>
 
 #ifdef _WIN32
@@ -26,6 +28,9 @@ public:
 
     bool isOpen() const;
     void move(int x, int y);
+    uint8_t buttonMask() const { return button_mask_.load(std::memory_order_acquire); }
+    uint64_t buttonSequence() const { return button_sequence_.load(std::memory_order_acquire); }
+    bool waitForButtonEvent(uint64_t last_sequence, int timeout_ms);
 
     std::atomic<bool> aiming_active;
     std::atomic<bool> shooting_active;
@@ -65,8 +70,12 @@ private:
 
     std::atomic<bool> is_open_;
     std::atomic<bool> listening_;
+    std::atomic<uint8_t> button_mask_{0};
+    std::atomic<uint64_t> button_sequence_{0};
     std::thread listening_thread_;
     std::mutex write_mutex_;
+    std::mutex button_mutex_;
+    std::condition_variable button_cv_;
     std::string port_name_;
     unsigned int baud_rate_;
 };

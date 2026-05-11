@@ -418,15 +418,11 @@ inline bool nearlyEqual(float a, float b) {
     return std::fabs(a - b) <= kGraphParamEpsilon;
 }
 
-inline bool pidConfigNearlyEqual(const PIDConfig& a, const PIDConfig& b) {
+inline bool aimConfigNearlyEqual(const AimConfig& a, const AimConfig& b) {
     return nearlyEqual(a.kp_x, b.kp_x) &&
            nearlyEqual(a.kp_y, b.kp_y) &&
-           nearlyEqual(a.ki_x, b.ki_x) &&
-           nearlyEqual(a.ki_y, b.ki_y) &&
-           nearlyEqual(a.kd_x, b.kd_x) &&
-           nearlyEqual(a.kd_y, b.kd_y) &&
-           nearlyEqual(a.integral_max, b.integral_max) &&
-           nearlyEqual(a.derivative_max, b.derivative_max);
+           nearlyEqual(a.p_softness_x, b.p_softness_x) &&
+           nearlyEqual(a.p_softness_y, b.p_softness_y);
 }
 
 cudaGraphNode_t findGraphH2DMemcpyNode(cudaGraph_t graph, const void* dst, size_t bytes) {
@@ -525,7 +521,7 @@ SimpleInference::~SimpleInference() {
 
     // Free GPU fused pipeline buffers
     if (m_d_selectedTarget) cudaFree(m_d_selectedTarget);
-    if (m_d_pidState) cudaFree(m_d_pidState);
+    if (m_d_aimState) cudaFree(m_d_aimState);
     if (m_d_stage1BestDist) cudaFree(m_d_stage1BestDist);
     if (m_d_stage1DistScore) cudaFree(m_d_stage1DistScore);
     if (m_d_stage1BestIou) cudaFree(m_d_stage1BestIou);
@@ -670,7 +666,7 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
 
     // Allocate GPU fused pipeline buffers
     cudaMalloc(&m_d_selectedTarget, sizeof(Detection));
-    cudaMalloc(&m_d_pidState, sizeof(PIDState));
+    cudaMalloc(&m_d_aimState, sizeof(AimState));
     cudaMalloc(&m_d_stage1BestDist, static_cast<size_t>(m_maxDetections) * sizeof(Detection));
     cudaMalloc(&m_d_stage1DistScore, static_cast<size_t>(m_maxDetections) * sizeof(float));
     cudaMalloc(&m_d_stage1BestIou, static_cast<size_t>(m_maxDetections) * sizeof(Detection));
@@ -678,7 +674,7 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
 
     // Initialize GPU state buffers to zero
     cudaMemset(m_d_selectedTarget, 0, sizeof(Detection));
-    cudaMemset(m_d_pidState, 0, sizeof(PIDState));
+    cudaMemset(m_d_aimState, 0, sizeof(AimState));
 
     // Allocate pinned host memory (max size for BGRA)
     cudaMallocHost(&m_h_rawPinned, rawInputSize);
@@ -732,7 +728,7 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
 // Pipeline without H2D transfer - for CUDA Graph capture
 bool SimpleInference::executeFusedPipelinePostH2D(int width, int height,
                                                   float confThreshold, int headClassId, float headBonus,
-                                                  uint32_t allowedClassMask, const PIDConfig& pidConfig,
+                                                  uint32_t allowedClassMask, const AimConfig& aimConfig,
                                                   float iouThreshold, float headYOffset, float bodyYOffset,
                                                   int resultSlot) {
     if (resultSlot < 0 || resultSlot >= kMaxCallbacksInFlight) {
@@ -776,15 +772,17 @@ bool SimpleInference::executeFusedPipelinePostH2D(int width, int height,
         return false;
     }
 
-    // One-pass GPU postprocess: decode + target select + PID + result packing
+    // One-pass GPU postprocess: decode + target select + movement + result packing
     cudaError_t postErr = postprocessYoloFusedGpu(
         m_d_output, m_outputFP16, m_numBoxes, m_numClasses,
         confThreshold, allowedClassMask, m_maxDetections,
         static_cast<float>(std::max(m_inputW, m_inputH)),
         m_crosshairX, m_crosshairY,
-        headClassId, headBonus, pidConfig,
+        static_cast<float>(width) / static_cast<float>(m_inputW),
+        static_cast<float>(height) / static_cast<float>(m_inputH),
+        headClassId, headBonus, aimConfig,
         iouThreshold, headYOffset, bodyYOffset,
-        m_d_selectedTarget, m_d_pidState,
+        m_d_selectedTarget, m_d_aimState,
         dResultSlot,
         m_d_stage1BestDist, m_d_stage1DistScore,
         m_d_stage1BestIou, m_d_stage1IouScore,
@@ -809,7 +807,7 @@ bool SimpleInference::executeFusedPipelinePostH2D(int width, int height,
 
 bool SimpleInference::executeFusedPipeline(void* rawInput, int width, int height,
                                            float confThreshold, int headClassId, float headBonus,
-                                           uint32_t allowedClassMask, const PIDConfig& pidConfig,
+                                           uint32_t allowedClassMask, const AimConfig& aimConfig,
                                            float iouThreshold, float headYOffset, float bodyYOffset,
                                            int resultSlot) {
     size_t rawSize = static_cast<size_t>(width) * static_cast<size_t>(height) * static_cast<size_t>(inputBytesPerPixel());
@@ -823,7 +821,7 @@ bool SimpleInference::executeFusedPipeline(void* rawInput, int width, int height
     }
 
     return executeFusedPipelinePostH2D(width, height, confThreshold, headClassId, headBonus,
-                                       allowedClassMask, pidConfig, iouThreshold,
+                                       allowedClassMask, aimConfig, iouThreshold,
                                        headYOffset, bodyYOffset, resultSlot);
 }
 
@@ -848,7 +846,7 @@ void SimpleInference::destroyFullGraphs() {
 
 bool SimpleInference::graphParamsMatch(int sourceWidth, int sourceHeight, int requiredGraphSlots,
                                        float confThreshold, int headClassId, float headBonus,
-                                       uint32_t allowedClassMask, const PIDConfig& pidConfig,
+                                       uint32_t allowedClassMask, const AimConfig& aimConfig,
                                        float iouStickinessThreshold, float headYOffset,
                                        float bodyYOffset) const {
     if (sourceWidth <= 0 || sourceHeight <= 0) return false;
@@ -865,7 +863,7 @@ bool SimpleInference::graphParamsMatch(int sourceWidth, int sourceHeight, int re
            (allowedClassMask == m_cachedAllowedClassMask) &&
            nearlyEqual(confThreshold, m_cachedConfThreshold) &&
            nearlyEqual(headBonus, m_cachedHeadBonus) &&
-           pidConfigNearlyEqual(pidConfig, m_cachedPidConfig) &&
+           aimConfigNearlyEqual(aimConfig, m_cachedAimConfig) &&
            nearlyEqual(iouStickinessThreshold, m_cachedIouThreshold) &&
            nearlyEqual(headYOffset, m_cachedHeadYOffset) &&
            nearlyEqual(bodyYOffset, m_cachedBodyYOffset);
@@ -874,13 +872,21 @@ bool SimpleInference::graphParamsMatch(int sourceWidth, int sourceHeight, int re
 bool SimpleInference::isFullGraphReadyForShape(int sourceWidth, int sourceHeight,
                                                int graphSlotCount,
                                                float confThreshold, int headClassId, float headBonus,
-                                               uint32_t allowedClassMask, const PIDConfig& pidConfig,
+                                               uint32_t allowedClassMask, const AimConfig& aimConfig,
                                                float iouStickinessThreshold, float headYOffset,
                                                float bodyYOffset) const {
     return graphParamsMatch(sourceWidth, sourceHeight, graphSlotCount,
                             confThreshold, headClassId, headBonus,
-                            allowedClassMask, pidConfig, iouStickinessThreshold,
+                            allowedClassMask, aimConfig, iouStickinessThreshold,
                             headYOffset, bodyYOffset);
+}
+
+SimpleInference::LaunchStats SimpleInference::takeLaunchStats() {
+    LaunchStats stats;
+    stats.graph = m_graphLaunchCount.exchange(0, std::memory_order_relaxed);
+    stats.standard = m_standardLaunchCount.exchange(0, std::memory_order_relaxed);
+    stats.graphFallback = m_graphFallbackCount.exchange(0, std::memory_order_relaxed);
+    return stats;
 }
 
 bool SimpleInference::ensureRawInputCapacity(size_t requiredBytes) {
@@ -924,7 +930,7 @@ bool SimpleInference::ensureRawInputCapacity(size_t requiredBytes) {
 bool SimpleInference::captureFullGraphForShape(int sourceWidth, int sourceHeight,
                                                 int graphSlotCount,
                                                 float confThreshold, int headClassId, float headBonus,
-                                                uint32_t allowedClassMask, const PIDConfig& pidConfig,
+                                                uint32_t allowedClassMask, const AimConfig& aimConfig,
                                                 float iouStickinessThreshold, float headYOffset,
                                                 float bodyYOffset) {
     if (!m_loaded || sourceWidth <= 0 || sourceHeight <= 0) {
@@ -959,7 +965,7 @@ bool SimpleInference::captureFullGraphForShape(int sourceWidth, int sourceHeight
     m_cachedHeadClassId = headClassId;
     m_cachedHeadBonus = headBonus;
     m_cachedAllowedClassMask = allowedClassMask;
-    m_cachedPidConfig = pidConfig;
+    m_cachedAimConfig = aimConfig;
     m_cachedIouThreshold = iouStickinessThreshold;
     m_cachedHeadYOffset = headYOffset;
     m_cachedBodyYOffset = bodyYOffset;
@@ -1003,7 +1009,7 @@ bool SimpleInference::captureFullGraphForShape(int sourceWidth, int sourceHeight
         // result slot so callbacks cannot observe overwritten slot-0 results.
         if (!executeFusedPipelinePostH2D(sourceWidth, sourceHeight,
                                          confThreshold, headClassId, headBonus,
-                                         allowedClassMask, pidConfig,
+                                         allowedClassMask, aimConfig,
                                          iouStickinessThreshold, headYOffset, bodyYOffset,
                                          slot)) {
             cudaGraph_t capturedGraph = nullptr;
@@ -1114,7 +1120,7 @@ void SimpleInference::callbackWorkerLoop() {
 bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int height,
                                                 float confThreshold, int headClassId, float headBonus,
                                                 uint32_t allowedClassMask,
-                                                const PIDConfig& pidConfig,
+                                                const AimConfig& aimConfig,
                                                 float iouStickinessThreshold,
                                                 float headYOffset, float bodyYOffset,
                                                 InferenceCallback callback, void* userData) {
@@ -1134,7 +1140,7 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
     const bool graphAvailable =
         graphParamsMatch(width, height, 1,
                          confThreshold, headClassId, headBonus,
-                         allowedClassMask, pidConfig, iouStickinessThreshold,
+                         allowedClassMask, aimConfig, iouStickinessThreshold,
                          headYOffset, bodyYOffset);
 
     int callbackSlot = -1;
@@ -1189,7 +1195,7 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
         callbackSlot < m_graphSlotCount &&
         graphParamsMatch(width, height, callbackSlot + 1,
                          confThreshold, headClassId, headBonus,
-                         allowedClassMask, pidConfig, iouStickinessThreshold,
+                         allowedClassMask, aimConfig, iouStickinessThreshold,
                          headYOffset, bodyYOffset) &&
         m_graphExecs[static_cast<size_t>(callbackSlot)] != nullptr &&
         m_graphH2DNodes[static_cast<size_t>(callbackSlot)] != nullptr &&
@@ -1209,10 +1215,12 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
                       << cudaGetErrorString(err) << std::endl;
             if (!executeFusedPipeline(pinnedData, width, height,
                                       confThreshold, headClassId, headBonus,
-                                      allowedClassMask, pidConfig,
+                                      allowedClassMask, aimConfig,
                                       iouStickinessThreshold, headYOffset, bodyYOffset, callbackSlot)) {
                 return clearInFlightAndFail(true);
             }
+            m_graphFallbackCount.fetch_add(1, std::memory_order_relaxed);
+            m_standardLaunchCount.fetch_add(1, std::memory_order_relaxed);
         } else {
             // Launch graph (H2D + preprocess + inference + postprocess + D2H)
             err = cudaGraphLaunch(m_graphExecs[static_cast<size_t>(callbackSlot)], m_stream);
@@ -1221,15 +1229,17 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
                           << cudaGetErrorString(err) << std::endl;
                 return clearInFlightAndFail(true);
             }
+            m_graphLaunchCount.fetch_add(1, std::memory_order_relaxed);
         }
     } else {
         // Standard pipeline execution
         if (!executeFusedPipeline(pinnedData, width, height,
                                   confThreshold, headClassId, headBonus,
-                                  allowedClassMask, pidConfig,
+                                  allowedClassMask, aimConfig,
                                   iouStickinessThreshold, headYOffset, bodyYOffset, callbackSlot)) {
             return clearInFlightAndFail(true);
         }
+        m_standardLaunchCount.fetch_add(1, std::memory_order_relaxed);
     }
 
     // Setup pre-allocated callback data (no heap allocation)

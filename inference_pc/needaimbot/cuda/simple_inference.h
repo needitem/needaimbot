@@ -1,6 +1,6 @@
 // Simple TensorRT inference with optimizations
 // - GPU preprocessing (BGRA/RGB input with bilinear resize)
-// - GPU postprocessing (decode + fused target selection + PID)
+// - GPU postprocessing (decode + fused target selection + nonlinear P)
 // - IoU-based target stickiness (hysteresis)
 // - Full CUDA Graph capture (preprocess + inference + postprocess)
 // - Pinned host transfers
@@ -42,6 +42,12 @@ public:
         InferenceResult* resultPtr = nullptr;
     };
 
+    struct LaunchStats {
+        uint64_t graph = 0;
+        uint64_t standard = 0;
+        uint64_t graphFallback = 0;
+    };
+
     SimpleInference();
     ~SimpleInference();
 
@@ -62,19 +68,19 @@ public:
     bool captureFullGraphForShape(int sourceWidth, int sourceHeight,
                                   int graphSlotCount,
                                   float confThreshold, int headClassId, float headBonus,
-                                  uint32_t allowedClassMask, const PIDConfig& pidConfig,
+                                  uint32_t allowedClassMask, const AimConfig& aimConfig,
                                   float iouStickinessThreshold, float headYOffset, float bodyYOffset);
     bool isFullGraphReadyForShape(int sourceWidth, int sourceHeight,
                                   int graphSlotCount,
                                   float confThreshold, int headClassId, float headBonus,
-                                  uint32_t allowedClassMask, const PIDConfig& pidConfig,
+                                  uint32_t allowedClassMask, const AimConfig& aimConfig,
                                   float iouStickinessThreshold, float headYOffset, float bodyYOffset) const;
 
     // Run inference with GPU callback - lowest latency option
     bool runInferenceWithCallback(void* pinnedData, int width, int height,
                                   float confThreshold, int headClassId, float headBonus,
                                   uint32_t allowedClassMask,
-                                  const PIDConfig& pidConfig,
+                                  const AimConfig& aimConfig,
                                   float iouStickinessThreshold,
                                   float headYOffset, float bodyYOffset,
                                   InferenceCallback callback, void* userData = nullptr);
@@ -82,6 +88,8 @@ public:
     int getCallbacksInFlight() const {
         return m_callbacksInFlight.load(std::memory_order_acquire);
     }
+
+    LaunchStats takeLaunchStats();
 
     cudaStream_t getStream() const { return m_stream; }
 
@@ -107,7 +115,7 @@ private:
 
     // GPU fused pipeline buffers
     Detection* m_d_selectedTarget = nullptr;  // Persistent selected target for IoU stickiness
-    PIDState* m_d_pidState = nullptr;         // Persistent PID state on GPU
+    AimState* m_d_aimState = nullptr;         // Persistent movement state on GPU
     Detection* m_d_stage1BestDist = nullptr;  // Stage-1 per-block best-by-distance
     float* m_d_stage1DistScore = nullptr;     // Stage-1 per-block distance score
     Detection* m_d_stage1BestIou = nullptr;   // Stage-1 per-block best-by-IoU
@@ -148,7 +156,7 @@ private:
     int m_cachedHeadClassId = 1;
     float m_cachedHeadBonus = 0.15f;
     uint32_t m_cachedAllowedClassMask = 0xFFFFFFFF;
-    PIDConfig m_cachedPidConfig;
+    AimConfig m_cachedAimConfig;
     float m_cachedIouThreshold = 0.3f;
     float m_cachedHeadYOffset = 1.0f;
     float m_cachedBodyYOffset = 0.15f;
@@ -158,6 +166,9 @@ private:
     std::array<std::atomic<bool>, kMaxCallbacksInFlight> m_callbackSlotPending{};
     std::array<cudaEvent_t, kMaxCallbacksInFlight> m_callbackEvents{};
     std::atomic<int> m_callbacksInFlight{0};
+    std::atomic<uint64_t> m_graphLaunchCount{0};
+    std::atomic<uint64_t> m_standardLaunchCount{0};
+    std::atomic<uint64_t> m_graphFallbackCount{0};
     uint32_t m_callbackSlotCursor = 0;
     std::atomic<bool> m_callbackWorkerRunning{false};
     std::thread m_callbackWorkerThread;
@@ -168,21 +179,21 @@ private:
     void destroyFullGraphs();
     bool graphParamsMatch(int sourceWidth, int sourceHeight, int requiredGraphSlots,
                           float confThreshold, int headClassId, float headBonus,
-                          uint32_t allowedClassMask, const PIDConfig& pidConfig,
+                          uint32_t allowedClassMask, const AimConfig& aimConfig,
                           float iouStickinessThreshold, float headYOffset, float bodyYOffset) const;
     bool ensureRawInputCapacity(size_t requiredBytes);
 
     // Execute full fused pipeline (H2D + preprocess + inference + postprocess + D2H)
     bool executeFusedPipeline(void* rawInput, int width, int height,
                               float confThreshold, int headClassId, float headBonus,
-                              uint32_t allowedClassMask, const PIDConfig& pidConfig,
+                              uint32_t allowedClassMask, const AimConfig& aimConfig,
                               float iouThreshold, float headYOffset, float bodyYOffset,
                               int resultSlot);
 
     // Execute pipeline without H2D transfer (for CUDA Graph - H2D is done separately)
     bool executeFusedPipelinePostH2D(int width, int height,
                                      float confThreshold, int headClassId, float headBonus,
-                                     uint32_t allowedClassMask, const PIDConfig& pidConfig,
+                                     uint32_t allowedClassMask, const AimConfig& aimConfig,
                                      float iouThreshold, float headYOffset, float bodyYOffset,
                                      int resultSlot);
 

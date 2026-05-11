@@ -3,6 +3,7 @@
 #include <iostream>
 #include <thread>
 #include <mutex>
+#include <chrono>
 #include <cstring>
 #include <cstdio>
 #include <cerrno>
@@ -284,6 +285,7 @@ void MakcuConnection::safeMakcuClose() {
 
 void MakcuConnection::cleanup() {
     listening_ = false;
+    button_cv_.notify_all();
     safeMakcuClose();
 
     if (listening_thread_.joinable()) {
@@ -602,6 +604,7 @@ bool MakcuConnection::configurePort(int baud_rate) {
 
 void MakcuConnection::cleanup() {
     listening_ = false;
+    button_cv_.notify_all();
 
     // Stop button streaming before closing - prevents stale data on next connect
     if (is_open_ && serial_fd_ >= 0) {
@@ -728,6 +731,26 @@ bool MakcuConnection::sendCommandFast(const char* command, size_t size) {
 #endif
 }
 
+bool MakcuConnection::waitForButtonEvent(uint64_t last_sequence, int timeout_ms) {
+    if (button_sequence_.load(std::memory_order_acquire) != last_sequence) {
+        return true;
+    }
+
+    std::unique_lock<std::mutex> lock(button_mutex_);
+    auto changed = [&]() {
+        return !listening_.load(std::memory_order_acquire) ||
+               button_sequence_.load(std::memory_order_acquire) != last_sequence;
+    };
+
+    if (timeout_ms <= 0) {
+        button_cv_.wait(lock, changed);
+        return button_sequence_.load(std::memory_order_acquire) != last_sequence;
+    }
+
+    const bool woke = button_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), changed);
+    return woke && button_sequence_.load(std::memory_order_acquire) != last_sequence;
+}
+
 void MakcuConnection::startListening() {
     listening_ = true;
     listening_thread_ = std::thread(&MakcuConnection::listeningThreadFunc, this);
@@ -807,9 +830,11 @@ void MakcuConnection::listeningThreadFunc() {
                     bool right = (byte & 0x02) != 0;
                     bool side2 = (byte & 0x10) != 0;
 
-                    // Update button states atomically
-                    shooting_active = left;
-                    aiming_active = right || side2;
+                    button_mask_.store(byte, std::memory_order_release);
+                    shooting_active.store(left, std::memory_order_release);
+                    aiming_active.store(right || side2, std::memory_order_release);
+                    button_sequence_.fetch_add(1, std::memory_order_acq_rel);
+                    button_cv_.notify_all();
                 }
             }
         }

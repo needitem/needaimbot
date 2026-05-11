@@ -3,7 +3,7 @@
 // - Warp-level primitives for fast reduction
 // - Head-in-body priority selection
 // - IoU-based target stickiness (hysteresis)
-// - Fused target selection + PID movement calculation
+// - Fused target selection + nonlinear P movement calculation
 // - Strict garbage value filtering
 #include "simple_postprocess.h"
 #include "simple_inference.h"
@@ -17,7 +17,6 @@ namespace gpa {
 // =============================================================================
 // Constants
 // =============================================================================
-constexpr float DEADZONE_THRESHOLD = 5.0f;  // pixels
 constexpr int MAX_SELECTION_THREADS = 256;
 constexpr int WARP_SIZE = 32;
 constexpr int MAX_SELECTION_WARPS = MAX_SELECTION_THREADS / WARP_SIZE;
@@ -128,7 +127,7 @@ __device__ __forceinline__ float computeBoundingBoxIoU(const Detection& a, const
 }
 
 // =============================================================================
-// One-pass Fused Decode + Target Selection + PID
+// One-pass Fused Decode + Target Selection + Movement
 // =============================================================================
 
 __device__ __forceinline__ void writeEmptyInferenceResult(InferenceResult* result) {
@@ -142,6 +141,28 @@ __device__ __forceinline__ void writeEmptyInferenceResult(InferenceResult* resul
     result->targetY2 = 0;
     result->targetConf = 0;
     result->targetClassId = -1;
+}
+
+__device__ __forceinline__ float nonlinearPMove(float error, float kp, float softness) {
+    const float abs_error = fabsf(error);
+    const float safe_softness = fmaxf(softness, 1.0f);
+    const float gain = fmaxf(kp, 0.0f) * (abs_error / (abs_error + safe_softness));
+    return error * gain;
+}
+
+__device__ __forceinline__ int emitMouseDelta(float movement, float* residual) {
+    const float value = movement + *residual;
+    int emit = __float2int_rz(value);
+    if (emit > 127) {
+        *residual = 0.0f;
+        return 127;
+    }
+    if (emit < -127) {
+        *residual = 0.0f;
+        return -127;
+    }
+    *residual = value - static_cast<float>(emit);
+    return emit;
 }
 
 template<bool kIsFp16>
@@ -406,17 +427,17 @@ __global__ void stage2FinalizeKernel(
     const float* __restrict__ d_stage1_iou_score,
     float screen_center_x,
     float screen_center_y,
+    float movement_scale_x,
+    float movement_scale_y,
     int head_class_id,
     float kp_x, float kp_y,
-    float ki_x, float ki_y,
-    float kd_x, float kd_y,
-    float integral_max,
-    float derivative_max,
+    float p_softness_x,
+    float p_softness_y,
     float iou_stickiness_threshold,
     float head_y_offset,
     float body_y_offset,
     Detection* __restrict__ d_selected_target,
-    PIDState* __restrict__ d_pid_state,
+    AimState* __restrict__ d_aim_state,
     InferenceResult* __restrict__ d_inference_result)
 {
     __shared__ Detection s_warpBestDistDet[MAX_SELECTION_WARPS];
@@ -532,10 +553,8 @@ __global__ void stage2FinalizeKernel(
             emptyTarget.classId = -1;
             *d_selected_target = emptyTarget;
         }
-        d_pid_state->prev_error_x = 0.0f;
-        d_pid_state->prev_error_y = 0.0f;
-        d_pid_state->integral_x = 0.0f;
-        d_pid_state->integral_y = 0.0f;
+        d_aim_state->residual_x = 0.0f;
+        d_aim_state->residual_y = 0.0f;
         writeEmptyInferenceResult(d_inference_result);
         return;
     }
@@ -554,42 +573,13 @@ __global__ void stage2FinalizeKernel(
     const float error_x = target_center_x - screen_center_x;
     const float error_y = target_center_y - screen_center_y;
 
-    float prev_error_x = d_pid_state->prev_error_x;
-    float prev_error_y = d_pid_state->prev_error_y;
-    float integral_x = d_pid_state->integral_x;
-    float integral_y = d_pid_state->integral_y;
+    const float movement_x =
+        nonlinearPMove(error_x, kp_x, p_softness_x) * movement_scale_x;
+    const float movement_y =
+        nonlinearPMove(error_y, kp_y, p_softness_y) * movement_scale_y;
 
-    if (fabsf(error_x) < DEADZONE_THRESHOLD) integral_x = 0.0f;
-    if (fabsf(error_y) < DEADZONE_THRESHOLD) integral_y = 0.0f;
-
-    integral_x += error_x;
-    integral_y += error_y;
-    if (integral_x > integral_max) integral_x = integral_max;
-    if (integral_x < -integral_max) integral_x = -integral_max;
-    if (integral_y > integral_max) integral_y = integral_max;
-    if (integral_y < -integral_max) integral_y = -integral_max;
-
-    float derivative_x = error_x - prev_error_x;
-    float derivative_y = error_y - prev_error_y;
-    if (derivative_x > derivative_max) derivative_x = derivative_max;
-    if (derivative_x < -derivative_max) derivative_x = -derivative_max;
-    if (derivative_y > derivative_max) derivative_y = derivative_max;
-    if (derivative_y < -derivative_max) derivative_y = -derivative_max;
-
-    const float movement_x = kp_x * error_x + ki_x * integral_x + kd_x * derivative_x;
-    const float movement_y = kp_y * error_y + ki_y * integral_y + kd_y * derivative_y;
-
-    d_pid_state->prev_error_x = error_x;
-    d_pid_state->prev_error_y = error_y;
-    d_pid_state->integral_x = integral_x;
-    d_pid_state->integral_y = integral_y;
-
-    int emit_dx = __float2int_rn(movement_x);
-    int emit_dy = __float2int_rn(movement_y);
-    if (emit_dx > 127) emit_dx = 127;
-    if (emit_dx < -127) emit_dx = -127;
-    if (emit_dy > 127) emit_dy = 127;
-    if (emit_dy < -127) emit_dy = -127;
+    int emit_dx = emitMouseDelta(movement_x, &d_aim_state->residual_x);
+    int emit_dy = emitMouseDelta(movement_y, &d_aim_state->residual_y);
 
     d_inference_result->movement.dx = emit_dx;
     d_inference_result->movement.dy = emit_dy;
@@ -614,14 +604,16 @@ cudaError_t postprocessYoloFusedGpu(
     float max_box_extent,
     float screen_center_x,
     float screen_center_y,
+    float movement_scale_x,
+    float movement_scale_y,
     int head_class_id,
     float head_conf_bonus,
-    const PIDConfig& pid_config,
+    const AimConfig& aim_config,
     float iou_stickiness_threshold,
     float head_y_offset,
     float body_y_offset,
     Detection* d_selected_target,
-    PIDState* d_pid_state,
+    AimState* d_aim_state,
     InferenceResult* d_inference_result,
     Detection* d_stage1_best_dist,
     float* d_stage1_dist_score,
@@ -629,7 +621,7 @@ cudaError_t postprocessYoloFusedGpu(
     float* d_stage1_iou_score,
     cudaStream_t stream)
 {
-    if (!d_raw_output || !d_pid_state || !d_inference_result ||
+    if (!d_raw_output || !d_aim_state || !d_inference_result ||
         !d_stage1_best_dist || !d_stage1_dist_score ||
         !d_stage1_best_iou || !d_stage1_iou_score) {
         return cudaErrorInvalidValue;
@@ -638,7 +630,9 @@ cudaError_t postprocessYoloFusedGpu(
         return cudaErrorInvalidValue;
     }
     if (!isfinite(conf_threshold) || conf_threshold < 0.0f ||
-        !isfinite(max_box_extent) || max_box_extent <= 0.0f) {
+        !isfinite(max_box_extent) || max_box_extent <= 0.0f ||
+        !isfinite(movement_scale_x) || movement_scale_x <= 0.0f ||
+        !isfinite(movement_scale_y) || movement_scale_y <= 0.0f) {
         return cudaErrorInvalidValue;
     }
 
@@ -702,17 +696,17 @@ cudaError_t postprocessYoloFusedGpu(
         d_stage1_iou_score,
         screen_center_x,
         screen_center_y,
+        movement_scale_x,
+        movement_scale_y,
         head_class_id,
-        pid_config.kp_x, pid_config.kp_y,
-        pid_config.ki_x, pid_config.ki_y,
-        pid_config.kd_x, pid_config.kd_y,
-        pid_config.integral_max,
-        pid_config.derivative_max,
+        aim_config.kp_x, aim_config.kp_y,
+        aim_config.p_softness_x,
+        aim_config.p_softness_y,
         iou_stickiness_threshold,
         head_y_offset,
         body_y_offset,
         d_selected_target,
-        d_pid_state,
+        d_aim_state,
         d_inference_result
     );
 
