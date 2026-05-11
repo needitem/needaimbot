@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstdint>
 #include <limits>
 #include <mutex>
 #include <optional>
@@ -197,6 +198,174 @@ void atomicMax(std::atomic<int64_t>& target, int64_t value) {
            !target.compare_exchange_weak(current, value, std::memory_order_relaxed, std::memory_order_relaxed)) {
     }
 }
+
+void writeU16LE(std::ostream& out, uint16_t value) {
+    const char bytes[2] = {
+        static_cast<char>(value & 0xffu),
+        static_cast<char>((value >> 8) & 0xffu),
+    };
+    out.write(bytes, sizeof(bytes));
+}
+
+void writeU32LE(std::ostream& out, uint32_t value) {
+    const char bytes[4] = {
+        static_cast<char>(value & 0xffu),
+        static_cast<char>((value >> 8) & 0xffu),
+        static_cast<char>((value >> 16) & 0xffu),
+        static_cast<char>((value >> 24) & 0xffu),
+    };
+    out.write(bytes, sizeof(bytes));
+}
+
+void writeI32LE(std::ostream& out, int32_t value) {
+    writeU32LE(out, static_cast<uint32_t>(value));
+}
+
+bool writeRgbBmp(
+    const std::filesystem::path& path,
+    const uint8_t* rgbData,
+    unsigned int width,
+    unsigned int height) {
+    if (!rgbData || width == 0 || height == 0) return false;
+
+    const uint64_t rawRowBytes = static_cast<uint64_t>(width) * 3u;
+    const uint64_t rowStride = (rawRowBytes + 3u) & ~uint64_t{3u};
+    const uint64_t pixelBytes = rowStride * static_cast<uint64_t>(height);
+    constexpr uint32_t kHeaderBytes = 14u + 40u;
+    if (pixelBytes > std::numeric_limits<uint32_t>::max() - kHeaderBytes ||
+        width > static_cast<unsigned int>(std::numeric_limits<int32_t>::max()) ||
+        height > static_cast<unsigned int>(std::numeric_limits<int32_t>::max())) {
+        return false;
+    }
+
+    const auto parent = path.parent_path();
+    if (!parent.empty()) {
+        std::error_code ec;
+        std::filesystem::create_directories(parent, ec);
+        if (ec) return false;
+    }
+
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out) return false;
+
+    const uint32_t fileSize = kHeaderBytes + static_cast<uint32_t>(pixelBytes);
+
+    out.write("BM", 2);
+    writeU32LE(out, fileSize);
+    writeU16LE(out, 0);
+    writeU16LE(out, 0);
+    writeU32LE(out, kHeaderBytes);
+
+    writeU32LE(out, 40);  // BITMAPINFOHEADER
+    writeI32LE(out, static_cast<int32_t>(width));
+    writeI32LE(out, -static_cast<int32_t>(height));  // top-down BMP
+    writeU16LE(out, 1);
+    writeU16LE(out, 24);
+    writeU32LE(out, 0);
+    writeU32LE(out, static_cast<uint32_t>(pixelBytes));
+    writeI32LE(out, 0);
+    writeI32LE(out, 0);
+    writeU32LE(out, 0);
+    writeU32LE(out, 0);
+
+    std::vector<uint8_t> row(static_cast<size_t>(rowStride), 0);
+    for (unsigned int y = 0; y < height; ++y) {
+        const uint8_t* src = rgbData + static_cast<size_t>(y) * static_cast<size_t>(width) * 3u;
+        std::fill(row.begin(), row.end(), 0);
+        for (unsigned int x = 0; x < width; ++x) {
+            row[static_cast<size_t>(x) * 3u + 0u] = src[static_cast<size_t>(x) * 3u + 2u];
+            row[static_cast<size_t>(x) * 3u + 1u] = src[static_cast<size_t>(x) * 3u + 1u];
+            row[static_cast<size_t>(x) * 3u + 2u] = src[static_cast<size_t>(x) * 3u + 0u];
+        }
+        out.write(reinterpret_cast<const char*>(row.data()), static_cast<std::streamsize>(row.size()));
+        if (!out) return false;
+    }
+
+    return true;
+}
+
+struct RuntimeOptions {
+    bool debugFrameDump = false;
+    bool hasConfigPath = false;
+    bool hasDebugDir = false;
+    bool helpRequested = false;
+    std::filesystem::path configPath;
+    std::filesystem::path debugDir;
+};
+
+void printUsage(const char* exeName) {
+    std::cout << "Usage: " << (exeName ? exeName : "simple_inference")
+              << " [config.json] [--debug] [--debug-dir DIR]\n"
+              << "  --debug              Save latest received RGB frame once per second\n"
+              << "  --debug-dir DIR      Debug output directory (default: inference_pc/debug)\n";
+}
+
+bool parseRuntimeOptions(int argc, char* argv[], RuntimeOptions& options) {
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i] ? argv[i] : "";
+        if (arg == "--debug" || arg == "--debug-frame" || arg == "--debug-frames") {
+            options.debugFrameDump = true;
+        } else if (arg == "--debug-dir") {
+            if (i + 1 >= argc) {
+                std::cerr << "[Args] --debug-dir requires a path" << std::endl;
+                return false;
+            }
+            options.debugFrameDump = true;
+            options.hasDebugDir = true;
+            options.debugDir = argv[++i];
+        } else if (arg == "-h" || arg == "--help") {
+            printUsage(argv[0]);
+            options.helpRequested = true;
+            return true;
+        } else if (!arg.empty() && arg[0] == '-') {
+            std::cerr << "[Args] Unknown option: " << arg << std::endl;
+            printUsage(argv[0]);
+            return false;
+        } else if (!options.hasConfigPath) {
+            options.hasConfigPath = true;
+            options.configPath = arg;
+        } else {
+            std::cerr << "[Args] Extra positional argument: " << arg << std::endl;
+            printUsage(argv[0]);
+            return false;
+        }
+    }
+    return true;
+}
+
+struct DebugFrameDumper {
+    bool enabled = false;
+    std::filesystem::path outputPath;
+    Clock::time_point nextCaptureTime{};
+    uint64_t savedFrames = 0;
+    bool reportedSaveError = false;
+
+    bool due(Clock::time_point now) const {
+        return enabled && now >= nextCaptureTime;
+    }
+
+    void scheduleNext(Clock::time_point now) {
+        nextCaptureTime = now + std::chrono::seconds(1);
+    }
+
+    void scheduleRetry(Clock::time_point now) {
+        nextCaptureTime = now + std::chrono::milliseconds(100);
+    }
+
+    void save(const void* rgbData, unsigned int width, unsigned int height, uint64_t frameId) {
+        if (!enabled) return;
+
+        if (writeRgbBmp(outputPath, static_cast<const uint8_t*>(rgbData), width, height)) {
+            ++savedFrames;
+            reportedSaveError = false;
+            (void)frameId;
+        } else if (!reportedSaveError) {
+            std::cerr << "\n[Debug] Failed to save received frame to "
+                      << outputPath.lexically_normal().string() << std::endl;
+            reportedSaveError = true;
+        }
+    }
+};
 
 constexpr uint8_t kMakcuLeftMask = 0x01;
 constexpr uint8_t kMakcuRightMask = 0x02;
@@ -791,6 +960,14 @@ int main(int argc, char* argv[]) {
 
     std::cout << "=== Simple Aimbot (Full GPU Pipeline) ===" << std::endl;
 
+    RuntimeOptions runtimeOptions;
+    if (!parseRuntimeOptions(argc, argv, runtimeOptions)) {
+        return 1;
+    }
+    if (runtimeOptions.helpRequested) {
+        return 0;
+    }
+
     // Load config
     Config cfg;
     const std::filesystem::path exePath =
@@ -799,8 +976,8 @@ int main(int argc, char* argv[]) {
         exePath.has_parent_path() ? exePath.parent_path() : std::filesystem::current_path();
     const auto repoRoot = findRepoRoot(exeDir);
     std::filesystem::path configPath;
-    if (argc > 1) {
-        configPath = argv[1];
+    if (runtimeOptions.hasConfigPath) {
+        configPath = runtimeOptions.configPath;
     } else {
         configPath = chooseConfigPath(exeDir, repoRoot);
     }
@@ -838,6 +1015,25 @@ int main(int argc, char* argv[]) {
             std::cerr << "[Config] Warning: failed to save " << configPathStr << std::endl;
         }
     }
+
+    DebugFrameDumper debugFrameDumper;
+    if (runtimeOptions.debugFrameDump) {
+        std::filesystem::path debugDir;
+        if (runtimeOptions.hasDebugDir) {
+            debugDir = runtimeOptions.debugDir;
+        } else if (repoRoot) {
+            debugDir = *repoRoot / "inference_pc" / "debug";
+        } else {
+            debugDir = configPath.parent_path() / "debug";
+        }
+        debugFrameDumper.enabled = true;
+        debugFrameDumper.outputPath = safeAbsolute(debugDir / "received_frame.bmp").lexically_normal();
+        debugFrameDumper.nextCaptureTime = Clock::now();
+        std::cout << "[Debug] Frame dump: ON -> "
+                  << debugFrameDumper.outputPath.string()
+                  << " (1 Hz, overwrite)" << std::endl;
+    }
+
     cfg.print();
     if (cfg.realtimeThreadsEnabled) {
         applyRealtimeHint("simple-main", 4);
@@ -1226,6 +1422,30 @@ int main(int argc, char* argv[]) {
                         ++perfWindow.invalidFrames;
                     }
                 }
+            } else if (debugFrameDumper.due(now)) {
+                requestNextFrameCredit();
+                uint64_t debugFrameId = 0;
+                const bool gotDebugFrame = udpCapture.AcquireFramePinned(
+                    &pinnedRgbData, &width, &height, &debugFrameId, &bufferIndex, frameWaitTimeoutMs,
+                    &bytesPerPixel, &pixelFormat);
+                if (gotDebugFrame) {
+                    nextCreditMinFrameId = static_cast<uint32_t>(debugFrameId + 1);
+                    const bool validDebugFrame =
+                        pinnedRgbData && width != 0 && height != 0 &&
+                        isRgbFrameInput(pixelFormat, bytesPerPixel);
+                    if (validDebugFrame) {
+                        debugFrameDumper.save(pinnedRgbData, width, height, debugFrameId);
+                        debugFrameDumper.scheduleNext(now);
+                    } else {
+                        debugFrameDumper.scheduleRetry(now);
+                    }
+                    if (bufferIndex >= 0) {
+                        udpCapture.ReleaseFrame(bufferIndex);
+                        bufferIndex = -1;
+                    }
+                } else {
+                    debugFrameDumper.scheduleRetry(now);
+                }
             }
             const uint64_t buttonSeq = makcu.buttonSequence();
             if (!(cfg.forceAimOn || makcuMaskAiming(makcu.buttonMask()))) {
@@ -1289,6 +1509,11 @@ int main(int argc, char* argv[]) {
             }
             udpCapture.ReleaseFrame(bufferIndex);
             continue;
+        }
+
+        if (debugFrameDumper.due(now)) {
+            debugFrameDumper.scheduleNext(now);
+            debugFrameDumper.save(pinnedRgbData, width, height, acquiredFrameId);
         }
 
         const bool graphReady = inference.isFullGraphReadyForShape(

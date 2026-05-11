@@ -58,6 +58,7 @@ struct Config {
     int outputIndex = 0;
     bool useGUI = true;
     int packetPayloadBytes = 60000;
+    int captureTimeoutMs = 5;
     // Credit mode reduces wasted network traffic and stale frames; it can add
     // a tiny wait versus pure continuous-latest push when the LAN is uncongested.
     // Frequent "Rec" in the status line means credit packets are late/lost and
@@ -101,6 +102,9 @@ struct StreamStats {
     std::atomic<uint64_t> captureAttempts{0};
     std::atomic<uint64_t> capturedFrames{0};
     std::atomic<uint64_t> skippedFrames{0};
+    std::atomic<uint64_t> captureTimeouts{0};
+    std::atomic<uint64_t> captureAccessLost{0};
+    std::atomic<uint64_t> captureFailures{0};
     std::atomic<uint64_t> outputFrames{0};
     std::atomic<uint64_t> sentFrames{0};
     std::atomic<uint64_t> droppedFrames{0};
@@ -112,6 +116,7 @@ struct StreamStats {
     std::atomic<int64_t> totalCaptureUs{0};
     std::atomic<int64_t> totalConvertUs{0};
     std::atomic<int64_t> totalSendUs{0};
+    std::atomic<uint32_t> lastCaptureHr{0};
 };
 
 void applyWindowsRealtimeHint(const wchar_t* threadName, int idealProcessorOffset) {
@@ -334,6 +339,18 @@ std::vector<OutputInfo> enumerateCaptureOutputs() {
     return outputs;
 }
 
+enum class CaptureStatus {
+    Captured,
+    Timeout,
+    AccessLost,
+    Failed,
+};
+
+struct CaptureResult {
+    CaptureStatus status = CaptureStatus::Failed;
+    HRESULT hr = S_OK;
+};
+
 // Simple DDA Capture class
 class SimpleCapture {
 public:
@@ -372,27 +389,46 @@ public:
         return true;
     }
 
-    bool CaptureFrame(std::vector<uint8_t>& outData, int x, int y, int w, int h, UINT timeoutMs = 100) {
-        if (!m_duplication) return false;
+    bool CaptureFrame(std::vector<uint8_t>& outData, int x, int y, int w, int h,
+                      UINT timeoutMs = 100, CaptureResult* result = nullptr) {
+        auto setResult = [&](CaptureStatus status, HRESULT hr) {
+            if (result) {
+                result->status = status;
+                result->hr = hr;
+            }
+        };
+
+        if (!m_duplication) {
+            setResult(CaptureStatus::Failed, E_POINTER);
+            return false;
+        }
 
         ComPtr<IDXGIResource> resource;
         DXGI_OUTDUPL_FRAME_INFO frameInfo;
         HRESULT hr = m_duplication->AcquireNextFrame(timeoutMs, &frameInfo, &resource);
 
-        if (hr == DXGI_ERROR_WAIT_TIMEOUT) return false;
+        if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
+            setResult(CaptureStatus::Timeout, hr);
+            return false;
+        }
         if (hr == DXGI_ERROR_ACCESS_LOST) {
             m_duplication.Reset();
             ComPtr<IDXGIOutput1> output1;
             m_output.As(&output1);
             output1->DuplicateOutput(m_device.Get(), &m_duplication);
+            setResult(CaptureStatus::AccessLost, hr);
             return false;
         }
-        if (FAILED(hr)) return false;
+        if (FAILED(hr)) {
+            setResult(CaptureStatus::Failed, hr);
+            return false;
+        }
 
         ComPtr<ID3D11Texture2D> texture;
         hr = resource.As(&texture);
         if (FAILED(hr)) {
             m_duplication->ReleaseFrame();
+            setResult(CaptureStatus::Failed, hr);
             return false;
         }
 
@@ -422,6 +458,7 @@ public:
         hr = m_context->Map(m_staging.Get(), 0, D3D11_MAP_READ, 0, &mapped);
         if (FAILED(hr)) {
             m_duplication->ReleaseFrame();
+            setResult(CaptureStatus::Failed, hr);
             return false;
         }
 
@@ -444,6 +481,7 @@ public:
 
         m_context->Unmap(m_staging.Get(), 0);
         m_duplication->ReleaseFrame();
+        setResult(CaptureStatus::Captured, S_OK);
         return true;
     }
 
@@ -609,6 +647,7 @@ void printUsage(const char* prog) {
               << "  --output <idx>    Capture monitor index (default: from config.ini)\n"
               << "  --fps <num>       Target FPS (default: from config.ini)\n"
               << "  --payload-bytes <n> UDP payload bytes per packet, 512..60000\n"
+              << "  --capture-timeout-ms <n> Desktop Duplication wait, 0..100\n"
               << "  --credit-timeout-ms <n> Recovery send timeout if credit packet is lost\n"
               << "  --gui             Show startup config GUI\n"
               << "  --no-gui          Skip startup config GUI\n"
@@ -884,6 +923,8 @@ bool loadConfig(const char* filename) {
             g_config.useGUI = parseBool(value);
         } else if (key == "PacketPayloadBytes") {
             g_config.packetPayloadBytes = clampPacketPayloadBytes(std::stoi(value));
+        } else if (key == "CaptureTimeoutMs") {
+            g_config.captureTimeoutMs = std::clamp(std::stoi(value), 0, 100);
         } else if (key == "CreditTimeoutMs") {
             g_config.creditTimeoutMs = std::clamp(std::stoi(value), 5, 1000);
         }
@@ -916,6 +957,7 @@ bool saveConfig(const char* filename) {
     file << "TargetFPS=" << g_config.targetFPS << "\n";
     file << "UseGUI=" << (g_config.useGUI ? 1 : 0) << "\n";
     file << "PacketPayloadBytes=" << g_config.packetPayloadBytes << "\n";
+    file << "CaptureTimeoutMs=" << g_config.captureTimeoutMs << "\n";
     file << "CreditTimeoutMs=" << g_config.creditTimeoutMs << "\n";
 
     return true;
@@ -942,6 +984,8 @@ bool parseArgs(int argc, char** argv) {
             g_config.targetFPS = std::stoi(argv[++i]);
         } else if (arg == "--payload-bytes" && i + 1 < argc) {
             g_config.packetPayloadBytes = clampPacketPayloadBytes(std::stoi(argv[++i]));
+        } else if (arg == "--capture-timeout-ms" && i + 1 < argc) {
+            g_config.captureTimeoutMs = std::clamp(std::stoi(argv[++i]), 0, 100);
         } else if (arg == "--credit-timeout-ms" && i + 1 < argc) {
             g_config.creditTimeoutMs = std::clamp(std::stoi(argv[++i]), 5, 1000);
         } else if (arg == "--gui") {
@@ -1114,6 +1158,7 @@ int main(int argc, char** argv) {
     std::cout << "Sending to: " << g_config.inferenceIP << ":" << g_config.sendPort << "\n";
     std::cout << "Local bind IP: " << boundIpText << "\n";
     std::cout << "Target FPS: " << g_config.targetFPS << "\n";
+    std::cout << "Capture timeout: " << g_config.captureTimeoutMs << "ms\n";
     std::cout << "Press Ctrl+C to exit\n\n";
 
     bool highResTimerEnabled = (timeBeginPeriod(1) == TIMERR_NOERROR);
@@ -1259,8 +1304,8 @@ int main(int argc, char** argv) {
     const auto frameInterval = std::chrono::microseconds((int64_t)(1000000.0 / g_config.targetFPS));
     auto nextFrameTime = std::chrono::steady_clock::now();
 
-    // Poll immediately to avoid waiting in AcquireNextFrame.
-    const int captureTimeoutMs = 0;
+    const UINT captureTimeoutMs =
+        static_cast<UINT>(std::clamp(g_config.captureTimeoutMs, 0, 100));
 
     auto printStatsIfDue = [&](std::chrono::steady_clock::time_point statsNow) {
         const double statsSeconds = std::chrono::duration<double>(statsNow - statsStart).count();
@@ -1271,6 +1316,9 @@ int main(int argc, char** argv) {
         const uint64_t captureAttempts = stats.captureAttempts.exchange(0, std::memory_order_relaxed);
         const uint64_t capturedFrames = stats.capturedFrames.exchange(0, std::memory_order_relaxed);
         const uint64_t skippedFrames = stats.skippedFrames.exchange(0, std::memory_order_relaxed);
+        const uint64_t captureTimeouts = stats.captureTimeouts.exchange(0, std::memory_order_relaxed);
+        const uint64_t captureAccessLost = stats.captureAccessLost.exchange(0, std::memory_order_relaxed);
+        const uint64_t captureFailures = stats.captureFailures.exchange(0, std::memory_order_relaxed);
         const uint64_t outputFrames = stats.outputFrames.exchange(0, std::memory_order_relaxed);
         const uint64_t sentFrames = stats.sentFrames.exchange(0, std::memory_order_relaxed);
         const uint64_t droppedFrames = stats.droppedFrames.exchange(0, std::memory_order_relaxed);
@@ -1299,6 +1347,9 @@ int main(int argc, char** argv) {
         line << "PollFPS: " << std::fixed << std::setprecision(1) << pollFps
              << " | NewCapFPS: " << capFps
              << " | SkipFPS: " << skipFps
+             << " | CT:" << captureTimeouts
+             << " AL:" << captureAccessLost
+             << " CF:" << captureFailures
              << " | OutFPS: " << outFps
              << " | SendFPS: " << sendFps
              << " | Cap:" << std::setprecision(2) << avgCapture << "ms"
@@ -1311,6 +1362,10 @@ int main(int argc, char** argv) {
              << " (WB:" << wouldBlockDrops << ")"
              << " | Credit:" << creditPackets
              << " Rec:" << recoverySends;
+        const uint32_t lastHr = stats.lastCaptureHr.load(std::memory_order_relaxed);
+        if (lastHr != 0) {
+            line << " HR:0x" << std::hex << std::uppercase << lastHr << std::dec;
+        }
         printStatusLine(line.str());
         statsStart = statsNow;
     };
@@ -1328,8 +1383,10 @@ int main(int argc, char** argv) {
 
         // Capture a new desktop frame if available.
         auto t1 = std::chrono::high_resolution_clock::now();
+        CaptureResult captureResult{};
         bool gotNewFrame = capture.CaptureFrame(frameData, g_config.captureX, g_config.captureY,
-                                                g_config.captureWidth, g_config.captureHeight, captureTimeoutMs);
+                                                g_config.captureWidth, g_config.captureHeight,
+                                                captureTimeoutMs, &captureResult);
         auto t2 = std::chrono::high_resolution_clock::now();
         stats.captureAttempts.fetch_add(1, std::memory_order_relaxed);
 
@@ -1349,6 +1406,20 @@ int main(int argc, char** argv) {
             latestFrame.cv.notify_one();
         } else {
             stats.skippedFrames.fetch_add(1, std::memory_order_relaxed);
+            stats.lastCaptureHr.store(static_cast<uint32_t>(captureResult.hr), std::memory_order_relaxed);
+            switch (captureResult.status) {
+                case CaptureStatus::Timeout:
+                    stats.captureTimeouts.fetch_add(1, std::memory_order_relaxed);
+                    break;
+                case CaptureStatus::AccessLost:
+                    stats.captureAccessLost.fetch_add(1, std::memory_order_relaxed);
+                    break;
+                case CaptureStatus::Failed:
+                    stats.captureFailures.fetch_add(1, std::memory_order_relaxed);
+                    break;
+                case CaptureStatus::Captured:
+                    break;
+            }
         }
 
         printStatsIfDue(std::chrono::steady_clock::now());
