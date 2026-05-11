@@ -8,16 +8,19 @@
 #include <cstring>
 #include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
 
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
 namespace {
 using Clock = std::chrono::steady_clock;
+constexpr int kBytesPerPixel = 3;
 
 struct Args {
     int port = 5097;
@@ -25,11 +28,13 @@ struct Args {
     double fps = 144.0;
     int width = 256;
     int height = 256;
-    int bpp = 3;
     int payloadBytes = 60000;
     int acquireTimeoutMs = 16;
     int dropEvery = 0;
     int dropChunk = -1;
+    bool creditMode = false;
+    int creditTimeoutMs = 50;
+    std::vector<int> payloadSweep;
 };
 
 struct Stats {
@@ -79,6 +84,22 @@ bool parseDoubleArg(const char* text, double& out) {
     return true;
 }
 
+std::vector<int> parsePayloadSweep(const char* text) {
+    std::vector<int> values;
+    if (!text) return values;
+    std::stringstream ss(text);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+        int value = 0;
+        if (!parseIntArg(item.c_str(), value)) {
+            std::cerr << "Invalid --payload-sweep value: " << item << "\n";
+            std::exit(2);
+        }
+        values.push_back(value);
+    }
+    return values;
+}
+
 Args parseArgs(int argc, char** argv) {
     Args args;
     for (int i = 1; i < argc; ++i) {
@@ -102,26 +123,36 @@ Args parseArgs(int argc, char** argv) {
             needValue(args.width);
         } else if (key == "--height") {
             needValue(args.height);
-        } else if (key == "--bpp") {
-            needValue(args.bpp);
         } else if (key == "--payload-bytes") {
             needValue(args.payloadBytes);
+        } else if (key == "--payload-sweep") {
+            if (i + 1 >= argc) {
+                std::cerr << "Invalid value for --payload-sweep\n";
+                std::exit(2);
+            }
+            args.payloadSweep = parsePayloadSweep(argv[++i]);
         } else if (key == "--acquire-timeout-ms") {
             needValue(args.acquireTimeoutMs);
         } else if (key == "--drop-every") {
             needValue(args.dropEvery);
         } else if (key == "--drop-chunk") {
             needValue(args.dropChunk);
+        } else if (key == "--credit-mode") {
+            args.creditMode = true;
+        } else if (key == "--credit-timeout-ms") {
+            needValue(args.creditTimeoutMs);
         } else if (key == "--help" || key == "-h") {
             std::cout
                 << "Usage: udp_capture_benchmark [options]\n"
                 << "  --frames N              Frames to send (default 1000)\n"
                 << "  --fps N                 Sender FPS (default 144)\n"
                 << "  --width N --height N    Frame shape (default 256x256)\n"
-                << "  --bpp 3|4               RGB or BGRA bytes per pixel\n"
                 << "  --payload-bytes N       UDP payload bytes (default 60000)\n"
+                << "  --payload-sweep A,B,C   Run multiple payload sizes\n"
                 << "  --drop-every N          Drop one chunk every N frames\n"
-                << "  --drop-chunk N          Chunk index to drop, -1 means last\n";
+                << "  --drop-chunk N          Chunk index to drop, -1 means last\n"
+                << "  --credit-mode           Wait for one-frame credits between sends\n"
+                << "  --credit-timeout-ms N   Recovery send if credit is lost\n";
             std::exit(0);
         } else {
             std::cerr << "Unknown option: " << key << "\n";
@@ -129,6 +160,18 @@ Args parseArgs(int argc, char** argv) {
         }
     }
     return args;
+}
+
+bool pollCredit(int sock) {
+    UDPCreditPacket packet{};
+    sockaddr_in fromAddr{};
+    socklen_t fromLen = sizeof(fromAddr);
+    const ssize_t ret = recvfrom(sock, &packet, sizeof(packet), 0,
+                                 reinterpret_cast<sockaddr*>(&fromAddr), &fromLen);
+    return ret == static_cast<ssize_t>(sizeof(packet)) &&
+           packet.magic == UDP_CREDIT_MAGIC &&
+           packet.size == sizeof(UDPCreditPacket) &&
+           packet.credits > 0;
 }
 
 void senderThread(const Args& args, const int totalChunks,
@@ -140,23 +183,45 @@ void senderThread(const Args& args, const int totalChunks,
         senderDone.store(true);
         return;
     }
+    if (args.creditMode) {
+        const int flags = fcntl(sock, F_GETFL, 0);
+        if (flags >= 0) {
+            fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+        }
+    }
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(static_cast<uint16_t>(args.port));
     inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
 
-    const int frameBytes = args.width * args.height * args.bpp;
-    const uint8_t pixelFormat = args.bpp == 4 ? UDP_PIXEL_FORMAT_BGRA : UDP_PIXEL_FORMAT_RGB;
+    const int frameBytes = args.width * args.height * kBytesPerPixel;
     std::vector<uint8_t> payload(static_cast<size_t>(args.payloadBytes), 0x5a);
-    std::vector<uint8_t> packet(sizeof(UDPPacketHeaderV2) + static_cast<size_t>(args.payloadBytes));
 
     const auto interval = std::chrono::duration<double>(1.0 / args.fps);
     auto nextFrameAt = Clock::now() + std::chrono::milliseconds(50);
+    int credits = 1;
+    auto lastSendAt = Clock::now() - std::chrono::milliseconds(args.creditTimeoutMs);
 
     for (int frameId = 0; frameId < args.frames; ++frameId) {
         std::this_thread::sleep_until(nextFrameAt);
         nextFrameAt += std::chrono::duration_cast<Clock::duration>(interval);
+
+        if (args.creditMode) {
+            while (credits <= 0) {
+                if (pollCredit(sock)) {
+                    credits = 1;
+                    break;
+                }
+                if (Clock::now() - lastSendAt >= std::chrono::milliseconds(args.creditTimeoutMs)) {
+                    credits = 1;
+                    break;
+                }
+                if (senderDone.load(std::memory_order_acquire)) break;
+                std::this_thread::sleep_for(std::chrono::microseconds(100));
+            }
+            --credits;
+        }
 
         sendTimesNs[static_cast<size_t>(frameId)].store(nowNs(), std::memory_order_release);
         int chunkToDrop = args.dropChunk;
@@ -183,15 +248,24 @@ void senderThread(const Args& args, const int totalChunks,
             header.chunkSize = static_cast<uint32_t>(chunkSize);
             header.frameWidth = static_cast<uint16_t>(args.width);
             header.frameHeight = static_cast<uint16_t>(args.height);
-            header.pixelFormat = pixelFormat;
-            header.bytesPerPixel = static_cast<uint8_t>(args.bpp);
+            header.pixelFormat = UDP_PIXEL_FORMAT_RGB;
+            header.bytesPerPixel = static_cast<uint8_t>(kBytesPerPixel);
             header.reserved = 0;
 
-            std::memcpy(packet.data(), &header, sizeof(header));
-            std::memcpy(packet.data() + sizeof(header), payload.data(), static_cast<size_t>(chunkSize));
-            sendto(sock, packet.data(), sizeof(header) + static_cast<size_t>(chunkSize), 0,
-                   reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+            iovec iov[2]{};
+            iov[0].iov_base = &header;
+            iov[0].iov_len = sizeof(header);
+            iov[1].iov_base = payload.data();
+            iov[1].iov_len = static_cast<size_t>(chunkSize);
+
+            msghdr msg{};
+            msg.msg_name = &addr;
+            msg.msg_namelen = sizeof(addr);
+            msg.msg_iov = iov;
+            msg.msg_iovlen = 2;
+            sendmsg(sock, &msg, 0);
         }
+        lastSendAt = Clock::now();
     }
 
     close(sock);
@@ -199,7 +273,7 @@ void senderThread(const Args& args, const int totalChunks,
 }
 
 Stats runBenchmark(const Args& args) {
-    const int frameBytes = args.width * args.height * args.bpp;
+    const int frameBytes = args.width * args.height * kBytesPerPixel;
     const int totalChunks = (frameBytes + args.payloadBytes - 1) / args.payloadBytes;
     std::vector<std::atomic<int64_t>> sendTimesNs(static_cast<size_t>(args.frames));
     for (auto& item : sendTimesNs) {
@@ -233,11 +307,11 @@ Stats runBenchmark(const Args& args) {
         unsigned int height = 0;
         uint64_t frameId = 0;
         int bufferIndex = -1;
-        uint8_t bpp = 0;
+        uint8_t bytesPerPixel = 0;
         uint8_t format = 0;
         const bool got = capture.AcquireFramePinned(
             &data, &width, &height, &frameId, &bufferIndex,
-            static_cast<uint32_t>(args.acquireTimeoutMs), &bpp, &format);
+            static_cast<uint32_t>(args.acquireTimeoutMs), &bytesPerPixel, &format);
         if (got) {
             if (lastFrameId != UINT64_MAX && frameId <= lastFrameId) {
                 ++duplicateOrOld;
@@ -248,6 +322,9 @@ Stats runBenchmark(const Args& args) {
                     agesMs.push_back(static_cast<double>(nowNs() - sentNs) / 1'000'000.0);
                 }
                 lastFrameId = frameId;
+                if (args.creditMode) {
+                    capture.SendFrameCredit(static_cast<uint32_t>(frameId + 1), 1);
+                }
             }
             if (bufferIndex >= 0) capture.ReleaseFrame(bufferIndex);
         } else if (senderDone.load(std::memory_order_acquire)) {
@@ -283,15 +360,23 @@ Stats runBenchmark(const Args& args) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    const Args args = parseArgs(argc, argv);
-    const int frameBytes = args.width * args.height * args.bpp;
+    Args args = parseArgs(argc, argv);
+    std::vector<int> payloadRuns = args.payloadSweep;
+    if (payloadRuns.empty()) {
+        payloadRuns.push_back(args.payloadBytes);
+    }
+
+    for (size_t run = 0; run < payloadRuns.size(); ++run) {
+    args.payloadBytes = payloadRuns[run];
+    const int frameBytes = args.width * args.height * kBytesPerPixel;
     const int chunks = (frameBytes + args.payloadBytes - 1) / args.payloadBytes;
     std::cout << "bench frames=" << args.frames
               << " fps=" << args.fps
-              << " shape=" << args.width << "x" << args.height << "x" << args.bpp
+              << " shape=" << args.width << "x" << args.height << "x" << kBytesPerPixel
               << " frameBytes=" << frameBytes
               << " chunks=" << chunks
               << " dropEvery=" << args.dropEvery
+              << " credit=" << (args.creditMode ? "on" : "off")
               << "\n";
 
     const Stats stats = runBenchmark(args);
@@ -307,5 +392,6 @@ int main(int argc, char** argv) {
               << " ageP95Ms=" << stats.ageP95Ms
               << " ageMaxMs=" << stats.ageMaxMs
               << "\n";
+    }
     return 0;
 }

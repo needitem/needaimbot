@@ -19,7 +19,6 @@ from dataclasses import dataclass
 
 
 UDP_PACKET_V2_MAGIC = 0x32415047  # "GPA2" little-endian
-UDP_PIXEL_FORMAT_BGRA = 1
 UDP_PIXEL_FORMAT_RGB = 2
 HEADER_V2 = struct.Struct("<IHHIIIHHIHHBBH")
 HEADER_BYTES = HEADER_V2.size
@@ -88,22 +87,14 @@ def make_socket_buffer(sock: socket.socket, opt_name: int, requested_mb: int) ->
         print(f"warning: failed to set socket buffer: {exc}", file=sys.stderr)
 
 
-def pixel_format_for_bpp(bpp: int) -> int:
-    if bpp == 3:
-        return UDP_PIXEL_FORMAT_RGB
-    if bpp == 4:
-        return UDP_PIXEL_FORMAT_BGRA
-    raise ValueError("--bpp must be 3 (RGB) or 4 (BGRA)")
-
-
 def run_sender(args: argparse.Namespace) -> int:
     if args.payload_bytes < 512 or args.payload_bytes > 60000:
         raise ValueError("--payload-bytes must be between 512 and 60000")
     if args.fps <= 0:
         raise ValueError("--fps must be positive")
 
-    pixel_format = pixel_format_for_bpp(args.bpp)
-    frame_bytes = args.width * args.height * args.bpp
+    bytes_per_pixel = 3
+    frame_bytes = args.width * args.height * bytes_per_pixel
     total_chunks = math.ceil(frame_bytes / args.payload_bytes)
     if total_chunks <= 0 or total_chunks > 65535:
         raise ValueError("frame size/payload size produces invalid chunk count")
@@ -125,7 +116,7 @@ def run_sender(args: argparse.Namespace) -> int:
     print(
         "sender "
         f"dest={args.host}:{args.port} "
-        f"frame={args.width}x{args.height}x{args.bpp} "
+        f"frame={args.width}x{args.height}x{bytes_per_pixel} "
         f"bytes={frame_bytes} chunks={total_chunks} "
         f"fps={args.fps:.1f} payload={args.payload_bytes}"
     )
@@ -157,8 +148,8 @@ def run_sender(args: argparse.Namespace) -> int:
                     chunk_size,
                     args.width,
                     args.height,
-                    pixel_format,
-                    args.bpp,
+                    UDP_PIXEL_FORMAT_RGB,
+                    bytes_per_pixel,
                     0,
                 )
                 packet = header + payload_block[:chunk_size]
@@ -289,8 +280,8 @@ def run_receiver(args: argparse.Namespace) -> int:
                 or payload_offset + chunk_size > frame_bytes
                 or frame_width <= 0
                 or frame_height <= 0
-                or bytes_per_pixel not in (3, 4)
-                or pixel_format not in (UDP_PIXEL_FORMAT_RGB, UDP_PIXEL_FORMAT_BGRA)
+                or bytes_per_pixel != 3
+                or pixel_format != UDP_PIXEL_FORMAT_RGB
             ):
                 stats.invalid_packets += 1
                 continue
@@ -336,7 +327,6 @@ def build_parser() -> argparse.ArgumentParser:
     sender.add_argument("--bind-ip", default="", help="optional local NIC IP")
     sender.add_argument("--width", type=int, default=256)
     sender.add_argument("--height", type=int, default=256)
-    sender.add_argument("--bpp", type=int, default=3, help="3=RGB, 4=BGRA")
     sender.add_argument("--payload-bytes", type=int, default=60000)
     sender.add_argument("--fps", type=float, default=144.0)
     sender.add_argument("--duration", type=float, default=30.0, help="seconds; 0 means run until Ctrl+C")

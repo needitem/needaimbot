@@ -845,8 +845,6 @@ int main(int argc, char* argv[]) {
 
     // 1. Load TensorRT engine
     gpa::SimpleInference inference;
-    // Configure inference parameters before loading engine.
-    inference.setBgraInput(true);
     inference.setMaxDetections(cfg.maxDetections);
     if (!inference.loadEngine(cfg.enginePath)) {
         std::cerr << "[Simple] Failed to load engine" << std::endl;
@@ -1056,6 +1054,8 @@ int main(int argc, char* argv[]) {
     int submittedFramesWindow = 0;
     int busyDropWindow = 0;
     int submitFailWindow = 0;
+    uint64_t creditSentWindow = 0;
+    uint32_t nextCreditMinFrameId = 0;
     PerfWindowStats perfWindow;
     uint64_t lastUdpReceived = udpCapture.GetReceivedFrameCount();
     uint64_t lastUdpDropped = udpCapture.GetDroppedFrameCount();
@@ -1063,31 +1063,19 @@ int main(int argc, char* argv[]) {
     bool graphCaptureFailedForShape = false;
     unsigned int failedGraphW = 0;
     unsigned int failedGraphH = 0;
-    bool haveFrameInputFormat = false;
-    bool lastFrameBgraInput = true;
     bool idleGraphPrecaptureDone = false;
     auto nextIdleGraphPrecaptureTime = std::chrono::steady_clock::now();
 
-    auto prepareFrameInputFormat = [&](uint8_t framePixelFormat, uint8_t frameBytesPerPixel) {
-        const bool frameBgraInput = (framePixelFormat == UDP_PIXEL_FORMAT_BGRA);
-        const uint8_t expectedBytesPerPixel = frameBgraInput ? 4 : 3;
-        if ((framePixelFormat != UDP_PIXEL_FORMAT_BGRA && framePixelFormat != UDP_PIXEL_FORMAT_RGB) ||
-            frameBytesPerPixel != expectedBytesPerPixel) {
-            return false;
+    auto isRgbFrameInput = [](uint8_t framePixelFormat, uint8_t frameBytesPerPixel) {
+        return framePixelFormat == UDP_PIXEL_FORMAT_RGB && frameBytesPerPixel == 3;
+    };
+    // One credit per consumed frame keeps Game PC traffic near inference FPS and
+    // blocks stale-frame buildup. Continuous latest-push can be a hair lower
+    // latency on an idle LAN, but this path is steadier under load.
+    auto requestNextFrameCredit = [&]() {
+        if (udpCapture.SendFrameCredit(nextCreditMinFrameId, 1)) {
+            ++creditSentWindow;
         }
-
-        if (!haveFrameInputFormat || frameBgraInput != lastFrameBgraInput) {
-            if (!inference.setBgraInput(frameBgraInput)) {
-                return false;
-            }
-            graphCaptureFailedForShape = false;
-            failedGraphW = 0;
-            failedGraphH = 0;
-            haveFrameInputFormat = true;
-            lastFrameBgraInput = frameBgraInput;
-            idleGraphPrecaptureDone = false;
-        }
-        return true;
     };
 
     auto ensureFullGraphReady = [&](unsigned int sourceW, unsigned int sourceH,
@@ -1138,9 +1126,10 @@ int main(int argc, char* argv[]) {
         // Wait for frame (returns pinned memory directly)
         void* pinnedRgbData = nullptr;
         unsigned int width = 0, height = 0;
+        uint64_t acquiredFrameId = 0;
         int bufferIndex = -1;
-        uint8_t bytesPerPixel = 4;
-        uint8_t pixelFormat = UDP_PIXEL_FORMAT_BGRA;
+        uint8_t bytesPerPixel = 3;
+        uint8_t pixelFormat = UDP_PIXEL_FORMAT_RGB;
 
         // Stats every second (using atomic g_frameCount from callbacks)
         auto now = std::chrono::steady_clock::now();
@@ -1177,6 +1166,7 @@ int main(int argc, char* argv[]) {
                    << " F:" << submitFailWindow
                    << " C:" << udpReceivedDelta
                    << " U:" << udpDroppedDelta
+                   << " Cr:" << creditSentWindow
                    << " I:" << busyCallbackTicketCount()
                    << " A:" << ((cfg.forceAimOn || makcuMaskAiming(statusButtonMask)) ? "ON" : "OFF")
                    << " Sh:" << (makcuMaskShooting(statusButtonMask) ? "ON" : "OFF");
@@ -1203,6 +1193,7 @@ int main(int argc, char* argv[]) {
             submittedFramesWindow = 0;
             busyDropWindow = 0;
             submitFailWindow = 0;
+            creditSentWindow = 0;
             perfWindow.reset();
             lastStatTime = now;
         }
@@ -1215,13 +1206,16 @@ int main(int argc, char* argv[]) {
                 now >= nextIdleGraphPrecaptureTime && busyCallbackTicketCount() == 0) {
                 nextIdleGraphPrecaptureTime =
                     now + std::chrono::milliseconds(idleGraphPrecaptureIntervalMs);
+                requestNextFrameCredit();
+                uint64_t idleFrameId = 0;
                 const bool gotIdleFrame = udpCapture.AcquireFramePinned(
-                    &pinnedRgbData, &width, &height, nullptr, &bufferIndex, 1,
+                    &pinnedRgbData, &width, &height, &idleFrameId, &bufferIndex, 1,
                     &bytesPerPixel, &pixelFormat);
                 if (gotIdleFrame) {
+                    nextCreditMinFrameId = static_cast<uint32_t>(idleFrameId + 1);
                     const bool validIdleFrame =
                         pinnedRgbData && width != 0 && height != 0 &&
-                        prepareFrameInputFormat(pixelFormat, bytesPerPixel);
+                        isRgbFrameInput(pixelFormat, bytesPerPixel);
                     if (bufferIndex >= 0) {
                         udpCapture.ReleaseFrame(bufferIndex);
                         bufferIndex = -1;
@@ -1255,8 +1249,9 @@ int main(int argc, char* argv[]) {
         if (cfg.perfStatsEnabled) {
             acquireStart = Clock::now();
         }
+        requestNextFrameCredit();
         const bool gotFrame = udpCapture.AcquireFramePinned(
-            &pinnedRgbData, &width, &height, nullptr, &bufferIndex, frameWaitTimeoutMs,
+            &pinnedRgbData, &width, &height, &acquiredFrameId, &bufferIndex, frameWaitTimeoutMs,
             &bytesPerPixel, &pixelFormat);
         if (cfg.perfStatsEnabled) {
             perfWindow.recordAcquire(elapsedUs(acquireStart, Clock::now()), gotFrame);
@@ -1286,8 +1281,9 @@ int main(int argc, char* argv[]) {
             if (bufferIndex >= 0) udpCapture.ReleaseFrame(bufferIndex);
             continue;
         }
+        nextCreditMinFrameId = static_cast<uint32_t>(acquiredFrameId + 1);
 
-        if (!prepareFrameInputFormat(pixelFormat, bytesPerPixel)) {
+        if (!isRgbFrameInput(pixelFormat, bytesPerPixel)) {
             if (cfg.perfStatsEnabled) {
                 ++perfWindow.invalidFrames;
             }

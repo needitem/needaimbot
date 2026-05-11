@@ -59,8 +59,8 @@ void UDPCapture::releaseFragment(FrameFragments* frag) {
     frag->receivedCount = 0;
     frag->width = 0;
     frag->height = 0;
-    frag->bytesPerPixel = 4;
-    frag->pixelFormat = UDP_PIXEL_FORMAT_BGRA;
+    frag->bytesPerPixel = 3;
+    frag->pixelFormat = UDP_PIXEL_FORMAT_RGB;
     frag->frameBytes = 0;
     frag->bufferIndex = -1;
     frag->dropped = false;
@@ -179,8 +179,8 @@ bool UDPCapture::allocatePinnedBuffers(size_t size) {
         m_bufferState[i].store(BUFFER_FREE, std::memory_order_relaxed);
         m_bufferWidth[i].store(0, std::memory_order_relaxed);
         m_bufferHeight[i].store(0, std::memory_order_relaxed);
-        m_bufferBytesPerPixel[i].store(4, std::memory_order_relaxed);
-        m_bufferPixelFormat[i].store(UDP_PIXEL_FORMAT_BGRA, std::memory_order_relaxed);
+        m_bufferBytesPerPixel[i].store(3, std::memory_order_relaxed);
+        m_bufferPixelFormat[i].store(UDP_PIXEL_FORMAT_RGB, std::memory_order_relaxed);
         m_bufferFrameId[i].store(0, std::memory_order_relaxed);
     }
 
@@ -213,8 +213,8 @@ void UDPCapture::freePinnedBuffers() {
         m_bufferState[i].store(BUFFER_FREE, std::memory_order_relaxed);
         m_bufferWidth[i].store(0, std::memory_order_relaxed);
         m_bufferHeight[i].store(0, std::memory_order_relaxed);
-        m_bufferBytesPerPixel[i].store(4, std::memory_order_relaxed);
-        m_bufferPixelFormat[i].store(UDP_PIXEL_FORMAT_BGRA, std::memory_order_relaxed);
+        m_bufferBytesPerPixel[i].store(3, std::memory_order_relaxed);
+        m_bufferPixelFormat[i].store(UDP_PIXEL_FORMAT_RGB, std::memory_order_relaxed);
         m_bufferFrameId[i].store(0, std::memory_order_relaxed);
     }
     m_pinnedBufferSize = 0;
@@ -333,14 +333,47 @@ void UDPCapture::clearFragmentState() {
         frag.receivedCount = 0;
         frag.width = 0;
         frag.height = 0;
-        frag.bytesPerPixel = 4;
-        frag.pixelFormat = UDP_PIXEL_FORMAT_BGRA;
+        frag.bytesPerPixel = 3;
+        frag.pixelFormat = UDP_PIXEL_FORMAT_RGB;
         frag.frameBytes = 0;
         frag.bufferIndex = -1;
         frag.dropped = false;
         frag.lastUpdate = std::chrono::steady_clock::time_point{};
         m_freeFragmentStack[m_freeFragmentCount++] = static_cast<int>(i);
     }
+}
+
+void UDPCapture::rememberCreditTarget(const sockaddr_in& addr) {
+    std::lock_guard<std::mutex> lock(m_creditTargetMutex);
+    m_creditTargetAddr = addr;
+    m_hasCreditTarget = true;
+}
+
+bool UDPCapture::SendFrameCredit(uint32_t minFrameId, uint32_t credits) {
+    if (m_recvSocket == INVALID_SOCKET || credits == 0) return false;
+
+    sockaddr_in target{};
+    {
+        std::lock_guard<std::mutex> lock(m_creditTargetMutex);
+        if (!m_hasCreditTarget) return false;
+        target = m_creditTargetAddr;
+    }
+
+    // Credits are sent back to the source address learned from frame packets;
+    // minFrameId is a barrier so the sender never intentionally repeats an old
+    // frame after inference has consumed a newer one.
+    UDPCreditPacket packet{};
+    packet.magic = UDP_CREDIT_MAGIC;
+    packet.size = static_cast<uint16_t>(sizeof(UDPCreditPacket));
+    packet.flags = 0;
+    packet.minFrameId = minFrameId;
+    packet.credits = credits;
+    packet.sequence = m_creditSeq.fetch_add(1, std::memory_order_relaxed) + 1;
+
+    const int sent = sendto(m_recvSocket, reinterpret_cast<const char*>(&packet),
+                            static_cast<int>(sizeof(packet)), 0,
+                            reinterpret_cast<SOCKADDR*>(&target), sizeof(target));
+    return sent == static_cast<int>(sizeof(packet));
 }
 
 bool UDPCapture::Initialize(unsigned short listenPort) {
@@ -425,6 +458,12 @@ bool UDPCapture::StartCapture() {
     m_hasLatestPublishedFrameId = false;
     m_latestPublishedFrameId = 0;
     m_latestPublishTime = std::chrono::steady_clock::time_point{};
+    {
+        std::lock_guard<std::mutex> lock(m_creditTargetMutex);
+        m_hasCreditTarget = false;
+        m_creditTargetAddr = sockaddr_in{};
+    }
+    m_creditSeq.store(0, std::memory_order_relaxed);
     m_receivedFrames.store(0, std::memory_order_relaxed);
     m_droppedFrames.store(0, std::memory_order_relaxed);
     for (int i = 0; i < NUM_BUFFERS; ++i) {
@@ -520,7 +559,8 @@ void UDPCapture::receiveThread() {
 
     auto processPacket = [this, &cachedFrag, &cachedFrameId](
                              const uint8_t* packetData, int packetBytes,
-                             std::chrono::steady_clock::time_point packetNow) {
+                             std::chrono::steady_clock::time_point packetNow,
+                             const sockaddr_in* fromAddr) {
         if (!packetData || packetBytes < static_cast<int>(sizeof(UDPPacketHeaderV2))) return;
 
         const auto* v2 = reinterpret_cast<const UDPPacketHeaderV2*>(packetData);
@@ -528,6 +568,9 @@ void UDPCapture::receiveThread() {
             v2->headerSize < sizeof(UDPPacketHeaderV2) ||
             static_cast<size_t>(v2->headerSize) > static_cast<size_t>(packetBytes)) {
             return;
+        }
+        if (fromAddr) {
+            rememberCreditTarget(*fromAddr);
         }
 
         const uint32_t frameId = v2->frameId;
@@ -546,8 +589,8 @@ void UDPCapture::receiveThread() {
 
         if (totalChunks == 0 || chunkIndex >= totalChunks ||
             frameWidth == 0 || frameHeight == 0 ||
-            (bytesPerPixel != 3 && bytesPerPixel != 4) ||
-            (pixelFormat != UDP_PIXEL_FORMAT_BGRA && pixelFormat != UDP_PIXEL_FORMAT_RGB)) {
+            bytesPerPixel != 3 ||
+            pixelFormat != UDP_PIXEL_FORMAT_RGB) {
             return;
         }
         const size_t expectedFrameBytes =
@@ -736,7 +779,8 @@ void UDPCapture::receiveThread() {
             }
             processPacket(batchBuffers[static_cast<size_t>(i)].data(),
                           static_cast<int>(batchMsgs[static_cast<size_t>(i)].msg_len),
-                          batchNow);
+                          batchNow,
+                          &batchFromAddr[static_cast<size_t>(i)]);
         }
 #else
         fromLen = sizeof(fromAddr);
@@ -761,7 +805,7 @@ void UDPCapture::receiveThread() {
         if (((++packetsSinceCleanup) & (kCleanupPacketInterval - 1)) == 0) {
             cleanupStaleFragments(packetNow);
         }
-        processPacket(recvBuffer.data(), ret, packetNow);
+        processPacket(recvBuffer.data(), ret, packetNow, &fromAddr);
 #endif
     }
 }

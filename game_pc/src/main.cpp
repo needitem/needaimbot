@@ -16,11 +16,13 @@
 #include <d3d11.h>
 #include <dxgi1_2.h>
 #include <wrl/client.h>
+#include <immintrin.h>
 
 #include <atomic>
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <condition_variable>
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
@@ -29,6 +31,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -54,8 +57,12 @@ struct Config {
     int targetFPS = 90;
     int outputIndex = 0;
     bool useGUI = true;
-    std::string wireFormat = "RGB";
     int packetPayloadBytes = 60000;
+    // Credit mode reduces wasted network traffic and stale frames; it can add
+    // a tiny wait versus pure continuous-latest push when the LAN is uncongested.
+    // Frequent "Rec" in the status line means credit packets are late/lost and
+    // this recovery timeout should be tuned for the real network.
+    int creditTimeoutMs = 50;
 };
 
 static std::atomic<bool> g_running{true};
@@ -64,13 +71,8 @@ static Config g_config;
 static constexpr int kMinPacketPayloadBytes = 512;
 static constexpr int kMaxPacketPayloadBytes = 60000;
 static constexpr uint32_t UDP_PACKET_V2_MAGIC = 0x32415047u;  // "GPA2" little-endian
-static constexpr uint8_t UDP_PIXEL_FORMAT_BGRA = 1;
 static constexpr uint8_t UDP_PIXEL_FORMAT_RGB = 2;
-
-enum class WireFormat {
-    BGRA,
-    RGB
-};
+static constexpr uint32_t UDP_CREDIT_MAGIC = 0x43504147u;  // "GPAC" little-endian
 
 struct OutputInfo {
     int index = 0;
@@ -81,6 +83,57 @@ struct OutputInfo {
     std::string deviceName;
     std::string label;
 };
+
+struct LatestFrameSlot {
+    std::mutex mutex;
+    std::condition_variable cv;
+    // Capture keeps only the newest DDA BGRA frame. The sender converts that
+    // latest frame to RGB with SIMD, so old frames cannot queue behind inference.
+    std::vector<uint8_t> bgra;
+    uint64_t sequence = 0;
+    uint16_t width = 0;
+    uint16_t height = 0;
+    bool hasFrame = false;
+    bool stopped = false;
+};
+
+struct StreamStats {
+    std::atomic<uint64_t> captureAttempts{0};
+    std::atomic<uint64_t> capturedFrames{0};
+    std::atomic<uint64_t> skippedFrames{0};
+    std::atomic<uint64_t> outputFrames{0};
+    std::atomic<uint64_t> sentFrames{0};
+    std::atomic<uint64_t> droppedFrames{0};
+    std::atomic<uint64_t> wouldBlockDrops{0};
+    std::atomic<uint64_t> creditPackets{0};
+    std::atomic<uint64_t> recoverySends{0};
+    std::atomic<uint64_t> totalBytes{0};
+    std::atomic<uint64_t> totalPackets{0};
+    std::atomic<int64_t> totalCaptureUs{0};
+    std::atomic<int64_t> totalConvertUs{0};
+    std::atomic<int64_t> totalSendUs{0};
+};
+
+void applyWindowsRealtimeHint(const wchar_t* threadName, int idealProcessorOffset) {
+    HANDLE thread = GetCurrentThread();
+    if (threadName) {
+        using SetThreadDescriptionFn = HRESULT(WINAPI*)(HANDLE, PCWSTR);
+        HMODULE kernel32 = GetModuleHandleW(L"Kernel32.dll");
+        auto setThreadDescription = kernel32
+            ? reinterpret_cast<SetThreadDescriptionFn>(GetProcAddress(kernel32, "SetThreadDescription"))
+            : nullptr;
+        if (setThreadDescription) {
+            setThreadDescription(thread, threadName);
+        }
+    }
+    SetThreadPriority(thread, THREAD_PRIORITY_HIGHEST);
+    const DWORD cpuCount = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+    if (cpuCount > 1) {
+        const DWORD offset = static_cast<DWORD>(std::max(0, idealProcessorOffset));
+        const DWORD processor = (cpuCount - 1 - std::min(offset, cpuCount - 1));
+        SetThreadIdealProcessor(thread, processor);
+    }
+}
 
 void signalHandler(int) {
     g_running.store(false);
@@ -126,25 +179,44 @@ int clampPacketPayloadBytes(int bytes) {
     return std::clamp(bytes, kMinPacketPayloadBytes, kMaxPacketPayloadBytes);
 }
 
-WireFormat parseWireFormat(const std::string& text) {
-    const std::string lower = toLowerCopy(text);
-    if (lower == "bgra" || lower == "bgrx" || lower == "4") {
-        return WireFormat::BGRA;
+#if defined(_M_X64) || defined(_M_IX86) || defined(__SSSE3__)
+void convertBgraToRgbSsse3(const uint8_t* src, uint8_t* dst, size_t pixelCount) {
+    const __m128i shuffleMask = _mm_setr_epi8(
+        2, 1, 0, 6, 5, 4, 10, 9, 8, 14, 13, 12,
+        static_cast<char>(0x80), static_cast<char>(0x80),
+        static_cast<char>(0x80), static_cast<char>(0x80));
+
+    size_t i = 0;
+    for (; i + 16 <= pixelCount; i += 16) {
+        const __m128i p0 = _mm_shuffle_epi8(
+            _mm_loadu_si128(reinterpret_cast<const __m128i*>(src)), shuffleMask);
+        const __m128i p1 = _mm_shuffle_epi8(
+            _mm_loadu_si128(reinterpret_cast<const __m128i*>(src + 16)), shuffleMask);
+        const __m128i p2 = _mm_shuffle_epi8(
+            _mm_loadu_si128(reinterpret_cast<const __m128i*>(src + 32)), shuffleMask);
+        const __m128i p3 = _mm_shuffle_epi8(
+            _mm_loadu_si128(reinterpret_cast<const __m128i*>(src + 48)), shuffleMask);
+
+        const __m128i out0 = _mm_or_si128(p0, _mm_slli_si128(p1, 12));
+        const __m128i out1 = _mm_or_si128(_mm_srli_si128(p1, 4), _mm_slli_si128(p2, 8));
+        const __m128i out2 = _mm_or_si128(_mm_srli_si128(p2, 8), _mm_slli_si128(p3, 4));
+
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(dst), out0);
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(dst + 16), out1);
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(dst + 32), out2);
+        src += 64;
+        dst += 48;
     }
-    return WireFormat::RGB;
-}
 
-const char* wireFormatName(WireFormat format) {
-    return format == WireFormat::BGRA ? "BGRA" : "RGB";
+    for (; i < pixelCount; ++i) {
+        dst[0] = src[2];
+        dst[1] = src[1];
+        dst[2] = src[0];
+        src += 4;
+        dst += 3;
+    }
 }
-
-uint8_t wireFormatBytesPerPixel(WireFormat format) {
-    return format == WireFormat::BGRA ? 4 : 3;
-}
-
-uint8_t wireFormatPixelId(WireFormat format) {
-    return format == WireFormat::BGRA ? UDP_PIXEL_FORMAT_BGRA : UDP_PIXEL_FORMAT_RGB;
-}
+#endif
 
 void convertBgraToRgb(const std::vector<uint8_t>& bgra, std::vector<uint8_t>& rgb,
                       int width, int height) {
@@ -161,6 +233,9 @@ void convertBgraToRgb(const std::vector<uint8_t>& bgra, std::vector<uint8_t>& rg
 
     const uint8_t* src = bgra.data();
     uint8_t* dst = rgb.data();
+#if defined(_M_X64) || defined(_M_IX86) || defined(__SSSE3__)
+    convertBgraToRgbSsse3(src, dst, pixelCount);
+#else
     for (size_t i = 0; i < pixelCount; ++i) {
         dst[0] = src[2];
         dst[1] = src[1];
@@ -168,6 +243,7 @@ void convertBgraToRgb(const std::vector<uint8_t>& bgra, std::vector<uint8_t>& rg
         src += 4;
         dst += 3;
     }
+#endif
 }
 
 std::string wideToUtf8(const wchar_t* wide) {
@@ -349,7 +425,7 @@ public:
             return false;
         }
 
-        // BGRA 그대로 복사 (inference_pc GPU에서 CHW로 변환)
+        // Copy BGRA readback; the sender converts it to RGB before UDP transmission.
         const size_t frameBytes = static_cast<size_t>(w) * static_cast<size_t>(h) * 4;
         if (outData.size() != frameBytes) {
             outData.resize(frameBytes);
@@ -404,6 +480,16 @@ struct UDPPacketHeaderV2 {
     uint16_t reserved;
 };
 static_assert(sizeof(UDPPacketHeaderV2) == 36, "UDPPacketHeaderV2 must stay wire-compatible");
+
+struct UDPCreditPacket {
+    uint32_t magic;
+    uint16_t size;
+    uint16_t flags;
+    uint32_t minFrameId;
+    uint32_t credits;
+    uint64_t sequence;
+};
+static_assert(sizeof(UDPCreditPacket) == 24, "UDPCreditPacket must stay wire-compatible");
 #pragma pack(pop)
 
 struct FrameSendResult {
@@ -488,6 +574,31 @@ bool setSocketNonBlocking(SOCKET sock) {
     return ioctlsocket(sock, FIONBIO, &nonBlocking) == 0;
 }
 
+bool readFrameCredit(SOCKET sock, std::atomic<int>& frameCredits,
+                     std::atomic<uint32_t>& minCreditFrameId,
+                     StreamStats& stats, LatestFrameSlot& latestFrame) {
+    UDPCreditPacket packet{};
+    sockaddr_in fromAddr{};
+    int fromLen = sizeof(fromAddr);
+    const int ret = recvfrom(sock, reinterpret_cast<char*>(&packet), sizeof(packet), 0,
+                             reinterpret_cast<SOCKADDR*>(&fromAddr), &fromLen);
+    if (ret == SOCKET_ERROR) {
+        return false;
+    }
+    if (ret != static_cast<int>(sizeof(packet)) ||
+        packet.magic != UDP_CREDIT_MAGIC ||
+        packet.size != sizeof(UDPCreditPacket) ||
+        packet.credits == 0) {
+        return false;
+    }
+
+    minCreditFrameId.store(packet.minFrameId, std::memory_order_release);
+    frameCredits.store(1, std::memory_order_release);
+    stats.creditPackets.fetch_add(1, std::memory_order_relaxed);
+    latestFrame.cv.notify_one();
+    return true;
+}
+
 void printUsage(const char* prog) {
     std::cout << "Usage: " << prog << " [options]\n"
               << "Options:\n"
@@ -497,8 +608,8 @@ void printUsage(const char* prog) {
               << "  --region <x,y,w,h> Capture region (default: from config.ini)\n"
               << "  --output <idx>    Capture monitor index (default: from config.ini)\n"
               << "  --fps <num>       Target FPS (default: from config.ini)\n"
-              << "  --wire-format <rgb|bgra> UDP payload format (default: from config.ini)\n"
               << "  --payload-bytes <n> UDP payload bytes per packet, 512..60000\n"
+              << "  --credit-timeout-ms <n> Recovery send timeout if credit packet is lost\n"
               << "  --gui             Show startup config GUI\n"
               << "  --no-gui          Skip startup config GUI\n"
               << "\nConfig file: config.ini\n";
@@ -771,10 +882,10 @@ bool loadConfig(const char* filename) {
             g_config.targetFPS = std::stoi(value);
         } else if (key == "UseGUI") {
             g_config.useGUI = parseBool(value);
-        } else if (key == "WireFormat") {
-            g_config.wireFormat = value;
         } else if (key == "PacketPayloadBytes") {
             g_config.packetPayloadBytes = clampPacketPayloadBytes(std::stoi(value));
+        } else if (key == "CreditTimeoutMs") {
+            g_config.creditTimeoutMs = std::clamp(std::stoi(value), 5, 1000);
         }
     }
 
@@ -804,8 +915,8 @@ bool saveConfig(const char* filename) {
     file << "[Performance]\n";
     file << "TargetFPS=" << g_config.targetFPS << "\n";
     file << "UseGUI=" << (g_config.useGUI ? 1 : 0) << "\n";
-    file << "WireFormat=" << g_config.wireFormat << "\n";
     file << "PacketPayloadBytes=" << g_config.packetPayloadBytes << "\n";
+    file << "CreditTimeoutMs=" << g_config.creditTimeoutMs << "\n";
 
     return true;
 }
@@ -829,10 +940,10 @@ bool parseArgs(int argc, char** argv) {
             g_config.outputIndex = std::max(0, std::stoi(argv[++i]));
         } else if (arg == "--fps" && i + 1 < argc) {
             g_config.targetFPS = std::stoi(argv[++i]);
-        } else if (arg == "--wire-format" && i + 1 < argc) {
-            g_config.wireFormat = argv[++i];
         } else if (arg == "--payload-bytes" && i + 1 < argc) {
             g_config.packetPayloadBytes = clampPacketPayloadBytes(std::stoi(argv[++i]));
+        } else if (arg == "--credit-timeout-ms" && i + 1 < argc) {
+            g_config.creditTimeoutMs = std::clamp(std::stoi(argv[++i]), 5, 1000);
         } else if (arg == "--gui") {
             g_config.useGUI = true;
         } else if (arg == "--no-gui") {
@@ -865,7 +976,6 @@ int main(int argc, char** argv) {
         return 0;
     }
     g_config.packetPayloadBytes = clampPacketPayloadBytes(g_config.packetPayloadBytes);
-    g_config.wireFormat = wireFormatName(parseWireFormat(g_config.wireFormat));
 
     auto availableOutputs = enumerateCaptureOutputs();
     if (availableOutputs.empty()) {
@@ -939,9 +1049,8 @@ int main(int argc, char** argv) {
     std::cout << "Capture region: " << g_config.captureX << "," << g_config.captureY
               << " " << g_config.captureWidth << "x" << g_config.captureHeight << "\n";
 
-    const WireFormat wireFormat = parseWireFormat(g_config.wireFormat);
-    const uint8_t wireBytesPerPixelValue = wireFormatBytesPerPixel(wireFormat);
-    const uint8_t wirePixelFormatValue = wireFormatPixelId(wireFormat);
+    constexpr uint8_t wireBytesPerPixelValue = 3;
+    constexpr uint8_t wirePixelFormatValue = UDP_PIXEL_FORMAT_RGB;
     const size_t maxPayloadPerPacket = static_cast<size_t>(
         clampPacketPayloadBytes(g_config.packetPayloadBytes));
 
@@ -1000,8 +1109,8 @@ int main(int argc, char** argv) {
         }
     }
 
-    std::cout << "GamePC Streamer (" << wireFormatName(wireFormat)
-              << ", " << maxPayloadPerPacket << "B payload, UDP V2) started\n";
+    std::cout << "GamePC Streamer (RGB, " << maxPayloadPerPacket
+              << "B payload, UDP V2) started\n";
     std::cout << "Sending to: " << g_config.inferenceIP << ":" << g_config.sendPort << "\n";
     std::cout << "Local bind IP: " << boundIpText << "\n";
     std::cout << "Target FPS: " << g_config.targetFPS << "\n";
@@ -1011,25 +1120,140 @@ int main(int argc, char** argv) {
     if (!highResTimerEnabled) {
         std::cerr << "Warning: failed to enable 1ms timer resolution\n";
     }
+    SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
 
-    // Buffers
-    std::vector<uint8_t> frameData;
-    std::vector<uint8_t> wireData;
-
-    uint32_t frameId = 0;
-    uint64_t captureAttempts = 0;
-    uint64_t capturedFrames = 0;   // Frames captured from desktop as new updates.
-    uint64_t skippedFrames = 0;    // Target ticks skipped because DDA had no new frame.
-    uint64_t outputFrames = 0;     // Frames attempted for UDP emission.
-    uint64_t sentFrames = 0;
-    uint64_t droppedFrames = 0;
-    uint64_t wouldBlockDrops = 0;
-    uint64_t totalBytes = 0;
-    uint16_t lastTotalPackets = 0;
+    LatestFrameSlot latestFrame;
+    StreamStats stats;
+    std::atomic<int> frameCredits{1};  // Bootstrap one frame so inference can learn our UDP source.
+    std::atomic<uint32_t> minCreditFrameId{0};
+    // RGB-only, scatter/gather UDP send, and SIMD conversion cut bandwidth/copy
+    // cost. Local 256x256 tests favored 60000B payload for average/p95 latency,
+    // but real LAN loss/MTU behavior should still be checked with payload sweep.
+    const auto creditRecoveryTimeout =
+        std::chrono::milliseconds(std::clamp(g_config.creditTimeoutMs, 5, 1000));
     auto statsStart = std::chrono::steady_clock::now();
 
-    // Timing stats
-    double totalCaptureMs = 0, totalSendMs = 0;
+    std::thread creditThread([&]() {
+        applyWindowsRealtimeHint(L"udp-credit", 1);
+        while (g_running.load(std::memory_order_relaxed)) {
+            bool gotAnyCredit = false;
+            while (readFrameCredit(sendSock, frameCredits, minCreditFrameId, stats, latestFrame)) {
+                gotAnyCredit = true;
+            }
+            if (!gotAnyCredit) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        }
+    });
+
+    std::thread senderThread([&]() {
+        applyWindowsRealtimeHint(L"udp-send", 0);
+        std::vector<uint8_t> bgraLocal;
+        std::vector<uint8_t> wireData;
+        uint32_t frameId = 0;
+        uint64_t lastSentSequence = 0;
+        auto lastSendAttempt = std::chrono::steady_clock::now() - creditRecoveryTimeout;
+
+        while (g_running.load(std::memory_order_relaxed)) {
+            uint16_t sendWidth = 0;
+            uint16_t sendHeight = 0;
+            bool recoverySend = false;
+
+            {
+                std::unique_lock<std::mutex> lock(latestFrame.mutex);
+                latestFrame.cv.wait_for(lock, std::chrono::milliseconds(1), [&]() {
+                    const bool hasNewFrame =
+                        latestFrame.hasFrame && latestFrame.sequence != lastSentSequence;
+                    if (!hasNewFrame) return latestFrame.stopped;
+                    if (frameCredits.load(std::memory_order_acquire) > 0) return true;
+                    return (std::chrono::steady_clock::now() - lastSendAttempt) >= creditRecoveryTimeout;
+                });
+
+                if (latestFrame.stopped && !latestFrame.hasFrame) {
+                    break;
+                }
+                if (!latestFrame.hasFrame || latestFrame.sequence == lastSentSequence) {
+                    continue;
+                }
+
+                const bool hasCredit = frameCredits.load(std::memory_order_acquire) > 0;
+                // One credit normally permits one latest frame. Recovery sends
+                // prevent a single lost credit packet from stalling the stream.
+                recoverySend =
+                    !hasCredit &&
+                    (std::chrono::steady_clock::now() - lastSendAttempt) >= creditRecoveryTimeout;
+                if (!hasCredit && !recoverySend) {
+                    continue;
+                }
+                if (hasCredit) {
+                    frameCredits.store(0, std::memory_order_release);
+                } else {
+                    stats.recoverySends.fetch_add(1, std::memory_order_relaxed);
+                }
+
+                sendWidth = latestFrame.width;
+                sendHeight = latestFrame.height;
+                lastSentSequence = latestFrame.sequence;
+                bgraLocal.swap(latestFrame.bgra);
+                latestFrame.hasFrame = false;
+            }
+
+            if (bgraLocal.empty() || sendWidth == 0 || sendHeight == 0) {
+                continue;
+            }
+
+            const auto convertStart = std::chrono::high_resolution_clock::now();
+            convertBgraToRgb(bgraLocal, wireData, sendWidth, sendHeight);
+            const auto convertEnd = std::chrono::high_resolution_clock::now();
+            stats.totalConvertUs.fetch_add(
+                std::chrono::duration_cast<std::chrono::microseconds>(convertEnd - convertStart).count(),
+                std::memory_order_relaxed);
+
+            const uint8_t* sendData = wireData.data();
+            const size_t frameSize = wireData.size();
+            if (!sendData || frameSize == 0 || frameSize > UINT32_MAX) {
+                continue;
+            }
+            stats.outputFrames.fetch_add(1, std::memory_order_relaxed);
+            const uint32_t requestedMinFrameId = minCreditFrameId.load(std::memory_order_acquire);
+            if (frameId < requestedMinFrameId) {
+                frameId = requestedMinFrameId;
+            }
+
+            const auto sendStart = std::chrono::high_resolution_clock::now();
+            const FrameSendResult sendResult = sendFrameUdp(
+                sendSock,
+                destAddr,
+                sendData,
+                frameSize,
+                frameId,
+                sendWidth,
+                sendHeight,
+                wirePixelFormatValue,
+                wireBytesPerPixelValue,
+                maxPayloadPerPacket);
+            const auto sendEnd = std::chrono::high_resolution_clock::now();
+
+            stats.totalSendUs.fetch_add(
+                std::chrono::duration_cast<std::chrono::microseconds>(sendEnd - sendStart).count(),
+                std::memory_order_relaxed);
+            stats.totalPackets.fetch_add(sendResult.totalPackets, std::memory_order_relaxed);
+
+            frameId++;
+            lastSendAttempt = std::chrono::steady_clock::now();
+            if (sendResult.wouldBlock) {
+                stats.wouldBlockDrops.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (!sendResult.sent) {
+                stats.droppedFrames.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                stats.sentFrames.fetch_add(1, std::memory_order_relaxed);
+                stats.totalBytes.fetch_add(frameSize, std::memory_order_relaxed);
+            }
+        }
+    });
+
+    std::vector<uint8_t> frameData;
 
     // FPS limiting
     const auto frameInterval = std::chrono::microseconds((int64_t)(1000000.0 / g_config.targetFPS));
@@ -1044,15 +1268,32 @@ int main(int argc, char** argv) {
             return;
         }
 
+        const uint64_t captureAttempts = stats.captureAttempts.exchange(0, std::memory_order_relaxed);
+        const uint64_t capturedFrames = stats.capturedFrames.exchange(0, std::memory_order_relaxed);
+        const uint64_t skippedFrames = stats.skippedFrames.exchange(0, std::memory_order_relaxed);
+        const uint64_t outputFrames = stats.outputFrames.exchange(0, std::memory_order_relaxed);
+        const uint64_t sentFrames = stats.sentFrames.exchange(0, std::memory_order_relaxed);
+        const uint64_t droppedFrames = stats.droppedFrames.exchange(0, std::memory_order_relaxed);
+        const uint64_t wouldBlockDrops = stats.wouldBlockDrops.exchange(0, std::memory_order_relaxed);
+        const uint64_t creditPackets = stats.creditPackets.exchange(0, std::memory_order_relaxed);
+        const uint64_t recoverySends = stats.recoverySends.exchange(0, std::memory_order_relaxed);
+        const uint64_t totalBytes = stats.totalBytes.exchange(0, std::memory_order_relaxed);
+        const uint64_t totalPackets = stats.totalPackets.exchange(0, std::memory_order_relaxed);
+        const int64_t totalCaptureUs = stats.totalCaptureUs.exchange(0, std::memory_order_relaxed);
+        const int64_t totalConvertUs = stats.totalConvertUs.exchange(0, std::memory_order_relaxed);
+        const int64_t totalSendUs = stats.totalSendUs.exchange(0, std::memory_order_relaxed);
+
         double capFps = capturedFrames / statsSeconds;
         double pollFps = captureAttempts / statsSeconds;
         double skipFps = skippedFrames / statsSeconds;
         double outFps = outputFrames / statsSeconds;
         double sendFps = sentFrames / statsSeconds;
         double mbps = (totalBytes * 8.0) / (statsSeconds * 1000000.0);
-        double avgCapture = (capturedFrames > 0) ? (totalCaptureMs / capturedFrames) : 0.0;
-        double avgSend = (outputFrames > 0) ? (totalSendMs / outputFrames) : 0.0;
+        double avgCapture = (capturedFrames > 0) ? (static_cast<double>(totalCaptureUs) / capturedFrames / 1000.0) : 0.0;
+        double avgConvert = (outputFrames > 0) ? (static_cast<double>(totalConvertUs) / outputFrames / 1000.0) : 0.0;
+        double avgSend = (outputFrames > 0) ? (static_cast<double>(totalSendUs) / outputFrames / 1000.0) : 0.0;
         double dropPct = (outputFrames > 0) ? (droppedFrames * 100.0) / outputFrames : 0.0;
+        double packetsPerFrame = (sentFrames > 0) ? (static_cast<double>(totalPackets) / sentFrames) : 0.0;
 
         std::ostringstream line;
         line << "PollFPS: " << std::fixed << std::setprecision(1) << pollFps
@@ -1061,28 +1302,20 @@ int main(int argc, char** argv) {
              << " | OutFPS: " << outFps
              << " | SendFPS: " << sendFps
              << " | Cap:" << std::setprecision(2) << avgCapture << "ms"
+             << " Cvt:" << avgConvert << "ms"
              << " Snd:" << avgSend << "ms"
              << " | " << mbps << " Mbps"
-             << " | " << wireFormatName(wireFormat)
-             << "/" << maxPayloadPerPacket << "B"
-             << " | " << lastTotalPackets << " pkts/frame"
+             << " | RGB/" << maxPayloadPerPacket << "B"
+             << " | " << std::setprecision(1) << packetsPerFrame << " pkts/frame"
              << " | Drop:" << std::setprecision(1) << dropPct << "%"
-             << " (WB:" << wouldBlockDrops << ")";
+             << " (WB:" << wouldBlockDrops << ")"
+             << " | Credit:" << creditPackets
+             << " Rec:" << recoverySends;
         printStatusLine(line.str());
-
-        captureAttempts = 0;
-        capturedFrames = 0;
-        skippedFrames = 0;
-        outputFrames = 0;
-        sentFrames = 0;
-        droppedFrames = 0;
-        wouldBlockDrops = 0;
-        totalBytes = 0;
-        lastTotalPackets = 0;
-        totalCaptureMs = totalSendMs = 0;
         statsStart = statsNow;
     };
 
+    applyWindowsRealtimeHint(L"capture-main", 2);
     while (g_running.load()) {
         // FPS limiting - keep cadence based on accumulated frame intervals.
         nextFrameTime += frameInterval;
@@ -1098,60 +1331,41 @@ int main(int argc, char** argv) {
         bool gotNewFrame = capture.CaptureFrame(frameData, g_config.captureX, g_config.captureY,
                                                 g_config.captureWidth, g_config.captureHeight, captureTimeoutMs);
         auto t2 = std::chrono::high_resolution_clock::now();
-        captureAttempts++;
+        stats.captureAttempts.fetch_add(1, std::memory_order_relaxed);
 
         if (gotNewFrame) {
-            capturedFrames++;
-            totalCaptureMs += std::chrono::duration<double, std::milli>(t2 - t1).count();
+            stats.capturedFrames.fetch_add(1, std::memory_order_relaxed);
+            stats.totalCaptureUs.fetch_add(
+                std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count(),
+                std::memory_order_relaxed);
+            {
+                std::lock_guard<std::mutex> lock(latestFrame.mutex);
+                latestFrame.bgra.swap(frameData);
+                latestFrame.width = static_cast<uint16_t>(g_config.captureWidth);
+                latestFrame.height = static_cast<uint16_t>(g_config.captureHeight);
+                latestFrame.hasFrame = true;
+                ++latestFrame.sequence;
+            }
+            latestFrame.cv.notify_one();
         } else {
-            skippedFrames++;
-            printStatsIfDue(std::chrono::steady_clock::now());
-            continue;
-        }
-
-        const uint8_t* sendData = frameData.data();
-        size_t frameSize = frameData.size();
-        if (wireFormat == WireFormat::RGB) {
-            convertBgraToRgb(frameData, wireData, g_config.captureWidth, g_config.captureHeight);
-            sendData = wireData.data();
-            frameSize = wireData.size();
-        }
-        if (!sendData || frameSize == 0 || frameSize > UINT32_MAX) {
-            continue;
-        }
-        outputFrames++;
-
-        const FrameSendResult sendResult = sendFrameUdp(
-            sendSock,
-            destAddr,
-            sendData,
-            frameSize,
-            frameId,
-            static_cast<uint16_t>(g_config.captureWidth),
-            static_cast<uint16_t>(g_config.captureHeight),
-            wirePixelFormatValue,
-            wireBytesPerPixelValue,
-            maxPayloadPerPacket);
-        auto t3 = std::chrono::high_resolution_clock::now();
-
-        totalSendMs += std::chrono::duration<double, std::milli>(t3 - t2).count();
-        lastTotalPackets = sendResult.totalPackets;
-
-        frameId++;
-        if (sendResult.wouldBlock) {
-            wouldBlockDrops++;
-        }
-        if (!sendResult.sent) {
-            droppedFrames++;
-        } else {
-            sentFrames++;
-            totalBytes += frameSize;
+            stats.skippedFrames.fetch_add(1, std::memory_order_relaxed);
         }
 
         printStatsIfDue(std::chrono::steady_clock::now());
     }
 
     std::cout << "\nShutting down...\n";
+    {
+        std::lock_guard<std::mutex> lock(latestFrame.mutex);
+        latestFrame.stopped = true;
+    }
+    latestFrame.cv.notify_all();
+    if (senderThread.joinable()) {
+        senderThread.join();
+    }
+    if (creditThread.joinable()) {
+        creditThread.join();
+    }
     if (highResTimerEnabled) {
         timeEndPeriod(1);
     }

@@ -1,5 +1,5 @@
 // Simple TensorRT inference with optimizations
-// - GPU preprocessing (BGRA/RGB input with bilinear resize)
+// - GPU preprocessing (RGB input with bilinear resize)
 // - GPU postprocessing (decode + fused target selection + nonlinear P)
 // - IoU-based target stickiness (hysteresis)
 // - Full CUDA Graph capture (preprocess + inference + postprocess)
@@ -53,10 +53,6 @@ public:
 
     bool loadEngine(const std::string& enginePath);
 
-    // Select raw input format. When changed after load, captured CUDA graphs
-    // are invalidated because preprocessing constants are baked into them.
-    bool setBgraInput(bool bgra);
-    bool isBgraInput() const { return m_bgraInput; }
     // Must be set before loadEngine(). Values are clamped to a safe range.
     void setMaxDetections(int maxDetections) {
         if (m_loaded) return;
@@ -106,7 +102,7 @@ private:
     nvinfer1::IExecutionContext* m_context = nullptr;
 
     // GPU buffers
-    void* m_d_rawInput = nullptr;    // Raw input (RGB or BGRA HWC uint8)
+    void* m_d_rawInput = nullptr;    // Raw RGB HWC uint8 input
     void* m_d_chwInput = nullptr;    // CHW float32 or float16 (preprocessed)
     void* m_d_output = nullptr;      // Model output (float32 or float16)
     cudaStream_t m_stream = nullptr;
@@ -148,7 +144,6 @@ private:
     bool m_loaded = false;
     bool m_inputFP16 = false;   // Input tensor is FP16
     bool m_outputFP16 = false;  // Output tensor is FP16
-    bool m_bgraInput = false;   // True for BGRA input, false for RGB
     bool m_tensorAddressesBound = false;  // TRT10 static tensor addresses bound once
 
     // Cached graph parameters
@@ -198,7 +193,7 @@ private:
                                      int resultSlot);
 
     // Input size helper
-    int inputBytesPerPixel() const { return m_bgraInput ? 4 : 3; }
+    static constexpr int inputBytesPerPixel() { return 3; }
 };
 
 } // namespace gpa

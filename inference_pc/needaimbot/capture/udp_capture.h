@@ -42,7 +42,6 @@ typedef int SOCKET;
 
 #pragma pack(push, 1)
 static constexpr uint32_t UDP_PACKET_V2_MAGIC = 0x32415047u;  // "GPA2" little-endian
-static constexpr uint8_t UDP_PIXEL_FORMAT_BGRA = 1;
 static constexpr uint8_t UDP_PIXEL_FORMAT_RGB = 2;
 
 struct UDPPacketHeaderV2 {
@@ -62,6 +61,17 @@ struct UDPPacketHeaderV2 {
     uint16_t reserved;
 };
 static_assert(sizeof(UDPPacketHeaderV2) == 36, "UDPPacketHeaderV2 must stay wire-compatible");
+
+static constexpr uint32_t UDP_CREDIT_MAGIC = 0x43504147u;  // "GPAC" little-endian
+struct UDPCreditPacket {
+    uint32_t magic;
+    uint16_t size;
+    uint16_t flags;
+    uint32_t minFrameId;
+    uint32_t credits;
+    uint64_t sequence;
+};
+static_assert(sizeof(UDPCreditPacket) == 24, "UDPCreditPacket must stay wire-compatible");
 #pragma pack(pop)
 
 class UDPCapture {
@@ -84,6 +94,7 @@ public:
     uint64_t GetReceivedFrameCount() const { return m_receivedFrames.load(std::memory_order_relaxed); }
     uint64_t GetDroppedFrameCount() const { return m_droppedFrames.load(std::memory_order_relaxed); }
     bool IsPinnedMemoryEnabled() const { return m_usePinnedMemory; }
+    bool SendFrameCredit(uint32_t minFrameId = 0, uint32_t credits = 1);
 
 private:
     enum BufferState : int {
@@ -106,8 +117,8 @@ private:
         uint16_t receivedCount = 0;
         uint16_t width = 0;
         uint16_t height = 0;
-        uint8_t bytesPerPixel = 4;
-        uint8_t pixelFormat = UDP_PIXEL_FORMAT_BGRA;
+        uint8_t bytesPerPixel = 3;
+        uint8_t pixelFormat = UDP_PIXEL_FORMAT_RGB;
         size_t frameBytes = 0;
         int bufferIndex = -1;
         bool dropped = false;
@@ -131,6 +142,7 @@ private:
                                 uint8_t pixelFormat,
                                 std::chrono::steady_clock::time_point publishTime);
     void clearFragmentState();
+    void rememberCreditTarget(const sockaddr_in& addr);
 
     static constexpr size_t MAX_FRAGMENT_SLOTS = 256;
     static constexpr size_t FRAGMENT_BUCKETS = 512;
@@ -157,9 +169,9 @@ private:
     std::atomic<int> m_bufferState[NUM_BUFFERS] = {BUFFER_FREE, BUFFER_FREE, BUFFER_FREE};
     std::atomic<unsigned int> m_bufferWidth[NUM_BUFFERS] = {0, 0, 0};
     std::atomic<unsigned int> m_bufferHeight[NUM_BUFFERS] = {0, 0, 0};
-    std::atomic<unsigned int> m_bufferBytesPerPixel[NUM_BUFFERS] = {4, 4, 4};
+    std::atomic<unsigned int> m_bufferBytesPerPixel[NUM_BUFFERS] = {3, 3, 3};
     std::atomic<unsigned int> m_bufferPixelFormat[NUM_BUFFERS] = {
-        UDP_PIXEL_FORMAT_BGRA, UDP_PIXEL_FORMAT_BGRA, UDP_PIXEL_FORMAT_BGRA};
+        UDP_PIXEL_FORMAT_RGB, UDP_PIXEL_FORMAT_RGB, UDP_PIXEL_FORMAT_RGB};
     std::atomic<uint64_t> m_bufferFrameId[NUM_BUFFERS] = {0, 0, 0};
 
     std::atomic<int> m_latestBufferIndex{-1};
@@ -171,6 +183,10 @@ private:
     bool m_hasLatestPublishedFrameId = false;
     uint32_t m_latestPublishedFrameId = 0;
     std::chrono::steady_clock::time_point m_latestPublishTime{};
+    std::mutex m_creditTargetMutex;
+    sockaddr_in m_creditTargetAddr{};
+    bool m_hasCreditTarget = false;
+    std::atomic<uint64_t> m_creditSeq{0};
 
     std::atomic<uint64_t> m_receivedFrames{0};
     std::atomic<uint64_t> m_droppedFrames{0};

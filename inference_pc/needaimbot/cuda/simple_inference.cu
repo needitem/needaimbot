@@ -1,7 +1,7 @@
 // Simple TensorRT inference with CUDA Graph optimization
 // Supports FP16 and FP32 models natively
 // GPU postprocessing for minimal latency
-// BGRA/RGB input with fused channel conversion + normalization
+// RGB input with fused normalization
 #include "simple_inference.h"
 #include "simple_postprocess.h"
 #include <cuda_fp16.h>
@@ -14,6 +14,12 @@
 #include <cmath>
 #include <NvInferVersion.h>
 
+#ifndef _WIN32
+#include <pthread.h>
+#include <sched.h>
+#include <unistd.h>
+#endif
+
 // TensorRT API version compatibility
 // TensorRT 10.x removed legacy binding APIs
 #if NV_TENSORRT_MAJOR >= 10
@@ -23,32 +29,27 @@
 #endif
 
 // =============================================================================
-// Unified Preprocessing Kernels (RGB/BGRA -> CHW normalized)
+// RGB Preprocessing Kernels (RGB -> CHW normalized)
 // =============================================================================
-// src_bpp: bytes per pixel (3=RGB, 4=BGRA)
-// r_ch, g_ch, b_ch: source channel byte offsets for R, G, B output
-//   RGB:  r_ch=0, g_ch=1, b_ch=2
-//   BGRA: r_ch=2, g_ch=1, b_ch=0
 
 // Same resolution, no resize -> FP16
 __global__ void preprocessKernelFP16(
     const uint8_t* __restrict__ src,
     __half* __restrict__ dst,
     int width, int height,
-    int src_bpp, int r_ch, int g_ch, int b_ch,
     float scale_factor
 ) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
     if (x >= width || y >= height) return;
 
-    int src_idx = (y * width + x) * src_bpp;
+    int src_idx = (y * width + x) * 3;
     int hw_size = width * height;
     int dst_idx = y * width + x;
 
-    dst[dst_idx] = __float2half(src[src_idx + r_ch] * scale_factor);
-    dst[dst_idx + hw_size] = __float2half(src[src_idx + g_ch] * scale_factor);
-    dst[dst_idx + 2 * hw_size] = __float2half(src[src_idx + b_ch] * scale_factor);
+    dst[dst_idx] = __float2half(src[src_idx] * scale_factor);
+    dst[dst_idx + hw_size] = __float2half(src[src_idx + 1] * scale_factor);
+    dst[dst_idx + 2 * hw_size] = __float2half(src[src_idx + 2] * scale_factor);
 }
 
 // Same resolution, no resize -> FP32
@@ -56,60 +57,19 @@ __global__ void preprocessKernel(
     const uint8_t* __restrict__ src,
     float* __restrict__ dst,
     int width, int height,
-    int src_bpp, int r_ch, int g_ch, int b_ch,
     float scale_factor
 ) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
     if (x >= width || y >= height) return;
 
-    int src_idx = (y * width + x) * src_bpp;
+    int src_idx = (y * width + x) * 3;
     int hw_size = width * height;
     int dst_idx = y * width + x;
 
-    dst[dst_idx] = src[src_idx + r_ch] * scale_factor;
-    dst[dst_idx + hw_size] = src[src_idx + g_ch] * scale_factor;
-    dst[dst_idx + 2 * hw_size] = src[src_idx + b_ch] * scale_factor;
-}
-
-// BGRA specialized (no channel offset indirection) -> FP16
-__global__ void preprocessKernelBGRAFP16(
-    const uchar4* __restrict__ src,
-    __half* __restrict__ dst,
-    int width, int height,
-    float scale_factor
-) {
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
-    int y = blockIdx.y * blockDim.y + threadIdx.y;
-    if (x >= width || y >= height) return;
-
-    int hw_size = width * height;
-    int dst_idx = y * width + x;
-    uchar4 px = src[dst_idx];  // BGRA
-
-    dst[dst_idx] = __float2half(px.z * scale_factor);             // R
-    dst[dst_idx + hw_size] = __float2half(px.y * scale_factor);   // G
-    dst[dst_idx + 2 * hw_size] = __float2half(px.x * scale_factor); // B
-}
-
-// BGRA specialized (no channel offset indirection) -> FP32
-__global__ void preprocessKernelBGRA(
-    const uchar4* __restrict__ src,
-    float* __restrict__ dst,
-    int width, int height,
-    float scale_factor
-) {
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
-    int y = blockIdx.y * blockDim.y + threadIdx.y;
-    if (x >= width || y >= height) return;
-
-    int hw_size = width * height;
-    int dst_idx = y * width + x;
-    uchar4 px = src[dst_idx];  // BGRA
-
-    dst[dst_idx] = px.z * scale_factor;              // R
-    dst[dst_idx + hw_size] = px.y * scale_factor;    // G
-    dst[dst_idx + 2 * hw_size] = px.x * scale_factor; // B
+    dst[dst_idx] = src[src_idx] * scale_factor;
+    dst[dst_idx + hw_size] = src[src_idx + 1] * scale_factor;
+    dst[dst_idx + 2 * hw_size] = src[src_idx + 2] * scale_factor;
 }
 
 // =============================================================================
@@ -119,50 +79,6 @@ __global__ void preprocessKernelBGRA(
 // Optimized bilinear interpolation - reads 4 pixels once for all 3 output channels
 __device__ __forceinline__ void bilinearSample(
     const uint8_t* __restrict__ src,
-    int src_w, int src_h, int src_bpp,
-    int r_ch, int g_ch, int b_ch,
-    float src_x, float src_y,
-    float& r, float& g, float& b
-) {
-    src_x = fmaxf(0.0f, fminf(src_x, (float)(src_w - 1)));
-    src_y = fmaxf(0.0f, fminf(src_y, (float)(src_h - 1)));
-
-    int x0 = (int)src_x;
-    int y0 = (int)src_y;
-    int x1 = min(x0 + 1, src_w - 1);
-    int y1 = min(y0 + 1, src_h - 1);
-
-    float fx = src_x - x0;
-    float fy = src_y - y0;
-
-    // Read 4 pixels (HWC layout with src_bpp stride)
-    const uint8_t* p00 = src + (y0 * src_w + x0) * src_bpp;
-    const uint8_t* p10 = src + (y0 * src_w + x1) * src_bpp;
-    const uint8_t* p01 = src + (y1 * src_w + x0) * src_bpp;
-    const uint8_t* p11 = src + (y1 * src_w + x1) * src_bpp;
-
-    // R channel
-    float r00 = p00[r_ch], r10 = p10[r_ch], r01 = p01[r_ch], r11 = p11[r_ch];
-    float r0 = r00 + fx * (r10 - r00);
-    float r1 = r01 + fx * (r11 - r01);
-    r = r0 + fy * (r1 - r0);
-
-    // G channel
-    float g00 = p00[g_ch], g10 = p10[g_ch], g01 = p01[g_ch], g11 = p11[g_ch];
-    float g0 = g00 + fx * (g10 - g00);
-    float g1 = g01 + fx * (g11 - g01);
-    g = g0 + fy * (g1 - g0);
-
-    // B channel
-    float b00 = p00[b_ch], b10 = p10[b_ch], b01 = p01[b_ch], b11 = p11[b_ch];
-    float b0 = b00 + fx * (b10 - b00);
-    float b1 = b01 + fx * (b11 - b01);
-    b = b0 + fy * (b1 - b0);
-}
-
-// Optimized bilinear interpolation for BGRA uchar4 source.
-__device__ __forceinline__ void bilinearSampleBGRA(
-    const uchar4* __restrict__ src,
     int src_w, int src_h,
     float src_x, float src_y,
     float& r, float& g, float& b
@@ -178,25 +94,25 @@ __device__ __forceinline__ void bilinearSampleBGRA(
     float fx = src_x - x0;
     float fy = src_y - y0;
 
-    const uchar4 p00 = src[y0 * src_w + x0];
-    const uchar4 p10 = src[y0 * src_w + x1];
-    const uchar4 p01 = src[y1 * src_w + x0];
-    const uchar4 p11 = src[y1 * src_w + x1];
+    const uint8_t* p00 = src + (y0 * src_w + x0) * 3;
+    const uint8_t* p10 = src + (y0 * src_w + x1) * 3;
+    const uint8_t* p01 = src + (y1 * src_w + x0) * 3;
+    const uint8_t* p11 = src + (y1 * src_w + x1) * 3;
 
-    // R from .z
-    float r00 = p00.z, r10 = p10.z, r01 = p01.z, r11 = p11.z;
+    // R channel
+    float r00 = p00[0], r10 = p10[0], r01 = p01[0], r11 = p11[0];
     float r0 = r00 + fx * (r10 - r00);
     float r1 = r01 + fx * (r11 - r01);
     r = r0 + fy * (r1 - r0);
 
-    // G from .y
-    float g00 = p00.y, g10 = p10.y, g01 = p01.y, g11 = p11.y;
+    // G channel
+    float g00 = p00[1], g10 = p10[1], g01 = p01[1], g11 = p11[1];
     float g0 = g00 + fx * (g10 - g00);
     float g1 = g01 + fx * (g11 - g01);
     g = g0 + fy * (g1 - g0);
 
-    // B from .x
-    float b00 = p00.x, b10 = p10.x, b01 = p01.x, b11 = p11.x;
+    // B channel
+    float b00 = p00[2], b10 = p10[2], b01 = p01[2], b11 = p11[2];
     float b0 = b00 + fx * (b10 - b00);
     float b1 = b01 + fx * (b11 - b01);
     b = b0 + fy * (b1 - b0);
@@ -206,8 +122,7 @@ __device__ __forceinline__ void bilinearSampleBGRA(
 __global__ void resizePreprocessKernelFP16(
     const uint8_t* __restrict__ src,
     __half* __restrict__ dst,
-    int src_w, int src_h, int src_bpp,
-    int r_ch, int g_ch, int b_ch,
+    int src_w, int src_h,
     int dst_w, int dst_h,
     float scale_x, float scale_y,
     float norm_factor
@@ -223,7 +138,7 @@ __global__ void resizePreprocessKernelFP16(
     int dst_idx = dy * dst_w + dx;
 
     float r, g, b;
-    bilinearSample(src, src_w, src_h, src_bpp, r_ch, g_ch, b_ch, sx, sy, r, g, b);
+    bilinearSample(src, src_w, src_h, sx, sy, r, g, b);
 
     dst[dst_idx] = __float2half(r * norm_factor);
     dst[dst_idx + hw_size] = __float2half(g * norm_factor);
@@ -234,34 +149,6 @@ __global__ void resizePreprocessKernelFP16(
 __global__ void resizePreprocessKernel(
     const uint8_t* __restrict__ src,
     float* __restrict__ dst,
-    int src_w, int src_h, int src_bpp,
-    int r_ch, int g_ch, int b_ch,
-    int dst_w, int dst_h,
-    float scale_x, float scale_y,
-    float norm_factor
-) {
-    int dx = blockIdx.x * blockDim.x + threadIdx.x;
-    int dy = blockIdx.y * blockDim.y + threadIdx.y;
-    if (dx >= dst_w || dy >= dst_h) return;
-
-    float sx = dx * scale_x;
-    float sy = dy * scale_y;
-
-    int hw_size = dst_w * dst_h;
-    int dst_idx = dy * dst_w + dx;
-
-    float r, g, b;
-    bilinearSample(src, src_w, src_h, src_bpp, r_ch, g_ch, b_ch, sx, sy, r, g, b);
-
-    dst[dst_idx] = r * norm_factor;
-    dst[dst_idx + hw_size] = g * norm_factor;
-    dst[dst_idx + 2 * hw_size] = b * norm_factor;
-}
-
-// Bilinear resize + BGRA->CHW + normalize -> FP16
-__global__ void resizePreprocessKernelBGRAFP16(
-    const uchar4* __restrict__ src,
-    __half* __restrict__ dst,
     int src_w, int src_h,
     int dst_w, int dst_h,
     float scale_x, float scale_y,
@@ -278,47 +165,18 @@ __global__ void resizePreprocessKernelBGRAFP16(
     int dst_idx = dy * dst_w + dx;
 
     float r, g, b;
-    bilinearSampleBGRA(src, src_w, src_h, sx, sy, r, g, b);
-
-    dst[dst_idx] = __float2half(r * norm_factor);
-    dst[dst_idx + hw_size] = __float2half(g * norm_factor);
-    dst[dst_idx + 2 * hw_size] = __float2half(b * norm_factor);
-}
-
-// Bilinear resize + BGRA->CHW + normalize -> FP32
-__global__ void resizePreprocessKernelBGRA(
-    const uchar4* __restrict__ src,
-    float* __restrict__ dst,
-    int src_w, int src_h,
-    int dst_w, int dst_h,
-    float scale_x, float scale_y,
-    float norm_factor
-) {
-    int dx = blockIdx.x * blockDim.x + threadIdx.x;
-    int dy = blockIdx.y * blockDim.y + threadIdx.y;
-    if (dx >= dst_w || dy >= dst_h) return;
-
-    float sx = dx * scale_x;
-    float sy = dy * scale_y;
-
-    int hw_size = dst_w * dst_h;
-    int dst_idx = dy * dst_w + dx;
-
-    float r, g, b;
-    bilinearSampleBGRA(src, src_w, src_h, sx, sy, r, g, b);
+    bilinearSample(src, src_w, src_h, sx, sy, r, g, b);
 
     dst[dst_idx] = r * norm_factor;
     dst[dst_idx + hw_size] = g * norm_factor;
     dst[dst_idx + 2 * hw_size] = b * norm_factor;
 }
 
-// Unified preprocessing wrapper (handles RGB/BGRA, resize/no-resize, FP16/FP32)
+// Preprocessing wrapper (handles RGB resize/no-resize, FP16/FP32)
 extern "C" cudaError_t cuda_preprocessing(
     const void* src_data,
     void* dst_chw,
     int src_width, int src_height,
-    int src_bpp,              // 3=RGB, 4=BGRA
-    bool bgra,                // true=BGRA channel order, false=RGB
     int target_width, int target_height,
     bool use_fp16,
     cudaStream_t stream
@@ -329,39 +187,17 @@ extern "C" cudaError_t cuda_preprocessing(
 
     const float norm_factor = 1.0f / 255.0f;
 
-    // Channel offsets: RGB -> 0,1,2; BGRA -> 2,1,0
-    int r_ch = bgra ? 2 : 0;
-    int g_ch = 1;
-    int b_ch = bgra ? 0 : 2;
-
     bool need_resize = (src_width != target_width) || (src_height != target_height);
-    const bool bgraFastPath = (bgra && src_bpp == 4);
 
     if (need_resize) {
         float scale_x = (float)(src_width - 1) / (float)(target_width - 1);
         float scale_y = (float)(src_height - 1) / (float)(target_height - 1);
 
-        if (bgraFastPath && use_fp16) {
-            resizePreprocessKernelBGRAFP16<<<grid, block, 0, stream>>>(
-                static_cast<const uchar4*>(src_data),
-                static_cast<__half*>(dst_chw),
-                src_width, src_height,
-                target_width, target_height,
-                scale_x, scale_y, norm_factor
-            );
-        } else if (bgraFastPath) {
-            resizePreprocessKernelBGRA<<<grid, block, 0, stream>>>(
-                static_cast<const uchar4*>(src_data),
-                static_cast<float*>(dst_chw),
-                src_width, src_height,
-                target_width, target_height,
-                scale_x, scale_y, norm_factor
-            );
-        } else if (use_fp16) {
+        if (use_fp16) {
             resizePreprocessKernelFP16<<<grid, block, 0, stream>>>(
                 static_cast<const uint8_t*>(src_data),
                 static_cast<__half*>(dst_chw),
-                src_width, src_height, src_bpp, r_ch, g_ch, b_ch,
+                src_width, src_height,
                 target_width, target_height,
                 scale_x, scale_y, norm_factor
             );
@@ -369,39 +205,25 @@ extern "C" cudaError_t cuda_preprocessing(
             resizePreprocessKernel<<<grid, block, 0, stream>>>(
                 static_cast<const uint8_t*>(src_data),
                 static_cast<float*>(dst_chw),
-                src_width, src_height, src_bpp, r_ch, g_ch, b_ch,
+                src_width, src_height,
                 target_width, target_height,
                 scale_x, scale_y, norm_factor
             );
         }
     } else {
-        if (bgraFastPath && use_fp16) {
-            preprocessKernelBGRAFP16<<<grid, block, 0, stream>>>(
-                static_cast<const uchar4*>(src_data),
-                static_cast<__half*>(dst_chw),
-                target_width, target_height,
-                norm_factor
-            );
-        } else if (bgraFastPath) {
-            preprocessKernelBGRA<<<grid, block, 0, stream>>>(
-                static_cast<const uchar4*>(src_data),
-                static_cast<float*>(dst_chw),
-                target_width, target_height,
-                norm_factor
-            );
-        } else if (use_fp16) {
+        if (use_fp16) {
             preprocessKernelFP16<<<grid, block, 0, stream>>>(
                 static_cast<const uint8_t*>(src_data),
                 static_cast<__half*>(dst_chw),
                 target_width, target_height,
-                src_bpp, r_ch, g_ch, b_ch, norm_factor
+                norm_factor
             );
         } else {
             preprocessKernel<<<grid, block, 0, stream>>>(
                 static_cast<const uint8_t*>(src_data),
                 static_cast<float*>(dst_chw),
                 target_width, target_height,
-                src_bpp, r_ch, g_ch, b_ch, norm_factor
+                norm_factor
             );
         }
     }
@@ -474,21 +296,6 @@ SimpleInference::SimpleInference() {
         m_callbackSlotPending[static_cast<size_t>(i)].store(false, std::memory_order_relaxed);
         m_callbackEvents[static_cast<size_t>(i)] = nullptr;
     }
-}
-
-bool SimpleInference::setBgraInput(bool bgra) {
-    if (m_bgraInput == bgra) return true;
-    if (m_callbacksInFlight.load(std::memory_order_acquire) > 0) {
-        return false;
-    }
-    if (m_stream) {
-        cudaStreamSynchronize(m_stream);
-    }
-    m_bgraInput = bgra;
-    if (m_loaded) {
-        destroyFullGraphs();
-    }
-    return true;
 }
 
 SimpleInference::~SimpleInference() {
@@ -655,7 +462,7 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
     size_t rawInputSize =
         std::max(static_cast<size_t>(m_inputH) * static_cast<size_t>(m_inputW),
                  kDefaultRawInputPixels) *
-        4;  // Allocate for BGRA (max)
+        static_cast<size_t>(inputBytesPerPixel());
     m_rawInputCapacityBytes = rawInputSize;
     size_t chwInputSize = 1 * 3 * m_inputH * m_inputW * (m_inputFP16 ? sizeof(__half) : sizeof(float));
     size_t outputSizeGPU = 1 * outputDims.d[1] * m_numBoxes * (m_outputFP16 ? sizeof(__half) : sizeof(float));
@@ -676,7 +483,7 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
     cudaMemset(m_d_selectedTarget, 0, sizeof(Detection));
     cudaMemset(m_d_aimState, 0, sizeof(AimState));
 
-    // Allocate pinned host memory (max size for BGRA)
+    // Allocate pinned host memory for RGB input.
     cudaMallocHost(&m_h_rawPinned, rawInputSize);
     // Allocate result buffers per callback slot.
     for (int i = 0; i < kMaxCallbacksInFlight; ++i) {
@@ -706,8 +513,7 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
     for (int i = 0; i < 3; i++) {
         cudaMemcpyAsync(m_d_rawInput, m_h_rawPinned, warmupSize, cudaMemcpyHostToDevice, m_stream);
         cuda_preprocessing(m_d_rawInput, m_d_chwInput,
-                           m_inputW, m_inputH, inputBytesPerPixel(), m_bgraInput,
-                           m_inputW, m_inputH, m_inputFP16, m_stream);
+                           m_inputW, m_inputH, m_inputW, m_inputH, m_inputFP16, m_stream);
 #if TRT_USE_NEW_API
         m_context->enqueueV3(m_stream);
 #else
@@ -742,11 +548,10 @@ bool SimpleInference::executeFusedPipelinePostH2D(int width, int height,
         return false;
     }
 
-    // GPU preprocessing (handles RGB/BGRA + resize)
+    // GPU preprocessing (RGB + optional resize)
     cudaError_t preprocessErr = cuda_preprocessing(
         m_d_rawInput, m_d_chwInput,
-        width, height, inputBytesPerPixel(), m_bgraInput,
-        m_inputW, m_inputH, m_inputFP16, m_stream
+        width, height, m_inputW, m_inputH, m_inputFP16, m_stream
     );
     if (preprocessErr != cudaSuccess) {
         std::cerr << "[SimpleInference] cuda_preprocessing failed: "
@@ -1061,6 +866,28 @@ bool SimpleInference::captureFullGraphForShape(int sourceWidth, int sourceHeight
 // Callback Completion Worker
 // =============================================================================
 void SimpleInference::callbackWorkerLoop() {
+#ifndef _WIN32
+    pthread_setname_np(pthread_self(), "infer-cb");
+    const int fifoMax = sched_get_priority_max(SCHED_FIFO);
+    if (fifoMax > 0) {
+        sched_param param{};
+        param.sched_priority = std::max(1, fifoMax - 1);
+        if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &param) != 0) {
+            const int rrMax = sched_get_priority_max(SCHED_RR);
+            if (rrMax > 0) {
+                param.sched_priority = std::max(1, rrMax - 1);
+                pthread_setschedparam(pthread_self(), SCHED_RR, &param);
+            }
+        }
+    }
+    const long cpuCount = sysconf(_SC_NPROCESSORS_ONLN);
+    if (cpuCount > 2) {
+        cpu_set_t cpuset;
+        CPU_ZERO(&cpuset);
+        CPU_SET(static_cast<int>(cpuCount - 2), &cpuset);
+        pthread_setaffinity_np(pthread_self(), sizeof(cpuset), &cpuset);
+    }
+#endif
     auto hasPendingCallback = [this]() {
         for (int slot = 0; slot < kMaxCallbacksInFlight; ++slot) {
             if (m_callbackSlotPending[static_cast<size_t>(slot)].load(std::memory_order_acquire)) {
