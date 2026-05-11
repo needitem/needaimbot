@@ -55,5 +55,6 @@ inference_pc/build_linux/
 *.onnx
 *.pt
 debug_frames/
+inference_pc/debug/
 test_*.py
 inference_pc/test_*

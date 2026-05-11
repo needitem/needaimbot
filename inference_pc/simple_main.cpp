@@ -269,13 +269,29 @@ bool writeRgbBmp(
     writeU32LE(out, 0);
 
     std::vector<uint8_t> row(static_cast<size_t>(rowStride), 0);
+    const unsigned int centerX = width / 2u;
+    const unsigned int centerY = height / 2u;
+    const unsigned int markerRadius = std::max(8u, std::min(width, height) / 16u);
     for (unsigned int y = 0; y < height; ++y) {
         const uint8_t* src = rgbData + static_cast<size_t>(y) * static_cast<size_t>(width) * 3u;
         std::fill(row.begin(), row.end(), 0);
         for (unsigned int x = 0; x < width; ++x) {
-            row[static_cast<size_t>(x) * 3u + 0u] = src[static_cast<size_t>(x) * 3u + 2u];
-            row[static_cast<size_t>(x) * 3u + 1u] = src[static_cast<size_t>(x) * 3u + 1u];
-            row[static_cast<size_t>(x) * 3u + 2u] = src[static_cast<size_t>(x) * 3u + 0u];
+            uint8_t r = src[static_cast<size_t>(x) * 3u + 0u];
+            uint8_t g = src[static_cast<size_t>(x) * 3u + 1u];
+            uint8_t b = src[static_cast<size_t>(x) * 3u + 2u];
+            const unsigned int dx = (x > centerX) ? (x - centerX) : (centerX - x);
+            const unsigned int dy = (y > centerY) ? (y - centerY) : (centerY - y);
+            const bool onCenterDot = dx <= 1u && dy <= 1u;
+            const bool onVerticalMarker = dx <= 1u && dy <= markerRadius;
+            const bool onHorizontalMarker = dy <= 1u && dx <= markerRadius;
+            if (onVerticalMarker || onHorizontalMarker) {
+                r = 255;
+                g = onCenterDot ? 255 : 0;
+                b = 0;
+            }
+            row[static_cast<size_t>(x) * 3u + 0u] = b;
+            row[static_cast<size_t>(x) * 3u + 1u] = g;
+            row[static_cast<size_t>(x) * 3u + 2u] = r;
         }
         out.write(reinterpret_cast<const char*>(row.data()), static_cast<std::streamsize>(row.size()));
         if (!out) return false;

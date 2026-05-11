@@ -54,6 +54,9 @@ struct Config {
     int captureY = 0;
     int captureWidth = 256;
     int captureHeight = 256;
+    bool useCaptureOffset = false;
+    int captureOffsetX = 0;
+    int captureOffsetY = 0;
     int targetFPS = 90;
     int outputIndex = 0;
     bool useGUI = true;
@@ -644,6 +647,7 @@ void printUsage(const char* prog) {
               << "  --port <port>     Send port (default: from config.ini)\n"
               << "  --bind-ip <addr>  Local NIC IP for sender socket bind (optional)\n"
               << "  --region <x,y,w,h> Capture region (default: from config.ini)\n"
+              << "  --offset <x,y>    Capture center offset from selected output center\n"
               << "  --output <idx>    Capture monitor index (default: from config.ini)\n"
               << "  --fps <num>       Target FPS (default: from config.ini)\n"
               << "  --payload-bytes <n> UDP payload bytes per packet, 512..60000\n"
@@ -877,6 +881,8 @@ bool loadConfig(const char* filename) {
     }
 
     std::string line;
+    bool captureOffsetKeySeen = false;
+    bool useCaptureOffsetKeySeen = false;
     while (std::getline(file, line)) {
         // Remove whitespace
         line.erase(0, line.find_first_not_of(" \t\r\n"));
@@ -915,6 +921,15 @@ bool loadConfig(const char* filename) {
             g_config.captureWidth = std::stoi(value);
         } else if (key == "CaptureHeight") {
             g_config.captureHeight = std::stoi(value);
+        } else if (key == "UseCaptureOffset") {
+            g_config.useCaptureOffset = parseBool(value);
+            useCaptureOffsetKeySeen = true;
+        } else if (key == "CaptureOffsetX") {
+            g_config.captureOffsetX = std::stoi(value);
+            captureOffsetKeySeen = true;
+        } else if (key == "CaptureOffsetY") {
+            g_config.captureOffsetY = std::stoi(value);
+            captureOffsetKeySeen = true;
         } else if (key == "OutputIndex") {
             g_config.outputIndex = std::max(0, std::stoi(value));
         } else if (key == "TargetFPS") {
@@ -928,6 +943,10 @@ bool loadConfig(const char* filename) {
         } else if (key == "CreditTimeoutMs") {
             g_config.creditTimeoutMs = std::clamp(std::stoi(value), 5, 1000);
         }
+    }
+
+    if (captureOffsetKeySeen && !useCaptureOffsetKeySeen) {
+        g_config.useCaptureOffset = true;
     }
 
     file.close();
@@ -951,6 +970,9 @@ bool saveConfig(const char* filename) {
     file << "CaptureY=" << g_config.captureY << "\n";
     file << "CaptureWidth=" << g_config.captureWidth << "\n";
     file << "CaptureHeight=" << g_config.captureHeight << "\n";
+    file << "UseCaptureOffset=" << (g_config.useCaptureOffset ? 1 : 0) << "\n";
+    file << "CaptureOffsetX=" << g_config.captureOffsetX << "\n";
+    file << "CaptureOffsetY=" << g_config.captureOffsetY << "\n";
     file << "OutputIndex=" << g_config.outputIndex << "\n\n";
 
     file << "[Performance]\n";
@@ -978,6 +1000,11 @@ bool parseArgs(int argc, char** argv) {
             sscanf(region.c_str(), "%d,%d,%d,%d",
                    &g_config.captureX, &g_config.captureY,
                    &g_config.captureWidth, &g_config.captureHeight);
+            g_config.useCaptureOffset = false;
+        } else if (arg == "--offset" && i + 1 < argc) {
+            std::string offset = argv[++i];
+            sscanf(offset.c_str(), "%d,%d", &g_config.captureOffsetX, &g_config.captureOffsetY);
+            g_config.useCaptureOffset = true;
         } else if (arg == "--output" && i + 1 < argc) {
             g_config.outputIndex = std::max(0, std::stoi(argv[++i]));
         } else if (arg == "--fps" && i + 1 < argc) {
@@ -1084,14 +1111,48 @@ int main(int argc, char** argv) {
     std::cout << "Output: " << selectedOutput->label << "\n";
     std::cout << "Screen: " << capture.GetScreenWidth() << "x" << capture.GetScreenHeight() << "\n";
 
-    // Set default capture region to center of screen
-    if (g_config.captureX == 0 && g_config.captureY == 0) {
+    if (g_config.captureWidth > capture.GetScreenWidth() ||
+        g_config.captureHeight > capture.GetScreenHeight()) {
+        std::cerr << "Capture region is larger than selected output\n";
+        WSACleanup();
+        return 1;
+    }
+
+    const int outputCenterX = capture.GetScreenWidth() / 2;
+    const int outputCenterY = capture.GetScreenHeight() / 2;
+    if (g_config.useCaptureOffset) {
+        g_config.captureX = outputCenterX + g_config.captureOffsetX - g_config.captureWidth / 2;
+        g_config.captureY = outputCenterY + g_config.captureOffsetY - g_config.captureHeight / 2;
+    } else if (g_config.captureX == 0 && g_config.captureY == 0) {
+        // Set default capture region to center of screen.
         g_config.captureX = (capture.GetScreenWidth() - g_config.captureWidth) / 2;
         g_config.captureY = (capture.GetScreenHeight() - g_config.captureHeight) / 2;
     }
 
+    const int maxCaptureX = capture.GetScreenWidth() - g_config.captureWidth;
+    const int maxCaptureY = capture.GetScreenHeight() - g_config.captureHeight;
+    const int requestedCaptureX = g_config.captureX;
+    const int requestedCaptureY = g_config.captureY;
+    g_config.captureX = std::clamp(g_config.captureX, 0, maxCaptureX);
+    g_config.captureY = std::clamp(g_config.captureY, 0, maxCaptureY);
+    if (g_config.captureX != requestedCaptureX || g_config.captureY != requestedCaptureY) {
+        std::cout << "Capture region clamped from " << requestedCaptureX << ","
+                  << requestedCaptureY << " to " << g_config.captureX << ","
+                  << g_config.captureY << "\n";
+    }
+
     std::cout << "Capture region: " << g_config.captureX << "," << g_config.captureY
               << " " << g_config.captureWidth << "x" << g_config.captureHeight << "\n";
+    std::cout << "Capture center: "
+              << (g_config.captureX + g_config.captureWidth / 2) << ","
+              << (g_config.captureY + g_config.captureHeight / 2)
+              << " (output center: " << outputCenterX << "," << outputCenterY << ")\n";
+    if (g_config.useCaptureOffset) {
+        std::cout << "Capture offset: " << g_config.captureOffsetX << ","
+                  << g_config.captureOffsetY << " (from selected output center)\n";
+    } else {
+        std::cout << "Capture mode: absolute top-left (CaptureX/Y)\n";
+    }
 
     constexpr uint8_t wireBytesPerPixelValue = 3;
     constexpr uint8_t wirePixelFormatValue = UDP_PIXEL_FORMAT_RGB;
