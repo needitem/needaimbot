@@ -302,6 +302,7 @@ bool writeRgbBmp(
 
 struct RuntimeOptions {
     bool debugFrameDump = false;
+    bool buttonTest = false;
     bool hasConfigPath = false;
     bool hasDebugDir = false;
     bool helpRequested = false;
@@ -311,9 +312,10 @@ struct RuntimeOptions {
 
 void printUsage(const char* exeName) {
     std::cout << "Usage: " << (exeName ? exeName : "simple_inference")
-              << " [config.json] [--debug] [--debug-dir DIR]\n"
+              << " [config.json] [--debug] [--debug-dir DIR] [--button-test]\n"
               << "  --debug              Save latest received RGB frame once per second\n"
-              << "  --debug-dir DIR      Debug output directory (default: inference_pc/debug)\n";
+              << "  --debug-dir DIR      Debug output directory (default: inference_pc/debug)\n"
+              << "  --button-test        Print Makcu mouse button mask and exit with Ctrl+C\n";
 }
 
 bool parseRuntimeOptions(int argc, char* argv[], RuntimeOptions& options) {
@@ -321,6 +323,8 @@ bool parseRuntimeOptions(int argc, char* argv[], RuntimeOptions& options) {
         const std::string arg = argv[i] ? argv[i] : "";
         if (arg == "--debug" || arg == "--debug-frame" || arg == "--debug-frames") {
             options.debugFrameDump = true;
+        } else if (arg == "--button-test") {
+            options.buttonTest = true;
         } else if (arg == "--debug-dir") {
             if (i + 1 >= argc) {
                 std::cerr << "[Args] --debug-dir requires a path" << std::endl;
@@ -385,10 +389,16 @@ struct DebugFrameDumper {
 
 constexpr uint8_t kMakcuLeftMask = 0x01;
 constexpr uint8_t kMakcuRightMask = 0x02;
+constexpr uint8_t kMakcuMiddleMask = 0x04;
+constexpr uint8_t kMakcuSide1Mask = 0x08;
 constexpr uint8_t kMakcuSide2Mask = 0x10;
 
 inline bool makcuMaskAiming(uint8_t mask) {
     return (mask & (kMakcuRightMask | kMakcuSide2Mask)) != 0;
+}
+
+inline bool makcuMaskThumbAiming(uint8_t mask) {
+    return (mask & kMakcuSide2Mask) != 0;
 }
 
 inline bool makcuMaskShooting(uint8_t mask) {
@@ -496,6 +506,10 @@ struct Config {
     float aimKpY = 0.62f;
     float aimSoftnessX = 28.0f;
     float aimSoftnessY = 30.0f;
+    float thumbAimKpX = 0.75f;
+    float thumbAimKpY = 0.7f;
+    float thumbAimSoftnessX = 28.0f;
+    float thumbAimSoftnessY = 30.0f;
 
     // IoU stickiness for target tracking
     float iouStickinessThreshold = 0.3f;
@@ -510,6 +524,7 @@ struct Config {
     int mouseMinIntervalMs = 1;
     int frameWaitTimeoutMs = 16;  // UDP frame wait timeout per loop
     int maxInFlightFrames = 1;    // Keep latency low by avoiding stale queued frames
+    int frameCreditDepth = 2;     // Allow the Game PC to pre-send the newest next frame
 
     // Gaussian noise for humanization
     bool noiseEnabled = true;
@@ -532,13 +547,23 @@ struct Config {
     int idleGraphPrecaptureIntervalMs = 100;
 
     // Convert to GPU movement config
-    gpa::AimConfig toGpuAimConfig() const {
+    static gpa::AimConfig makeGpuAimConfig(
+        float kpX, float kpY, float softnessX, float softnessY) {
         gpa::AimConfig aim;
-        aim.kp_x = aimKpX;
-        aim.kp_y = aimKpY;
-        aim.p_softness_x = aimSoftnessX;
-        aim.p_softness_y = aimSoftnessY;
+        aim.kp_x = kpX;
+        aim.kp_y = kpY;
+        aim.p_softness_x = softnessX;
+        aim.p_softness_y = softnessY;
         return aim;
+    }
+
+    gpa::AimConfig toGpuAimConfig() const {
+        return makeGpuAimConfig(aimKpX, aimKpY, aimSoftnessX, aimSoftnessY);
+    }
+
+    gpa::AimConfig toThumbGpuAimConfig() const {
+        return makeGpuAimConfig(
+            thumbAimKpX, thumbAimKpY, thumbAimSoftnessX, thumbAimSoftnessY);
     }
 
     bool load(const std::string& path) {
@@ -565,6 +590,14 @@ struct Config {
             if (j.contains("aim_kp_y")) aimKpY = j["aim_kp_y"];
             if (j.contains("aim_softness_x")) aimSoftnessX = j["aim_softness_x"];
             if (j.contains("aim_softness_y")) aimSoftnessY = j["aim_softness_y"];
+            if (j.contains("thumb_aim_kp_x")) thumbAimKpX = j["thumb_aim_kp_x"];
+            if (j.contains("thumb_aim_kp_y")) thumbAimKpY = j["thumb_aim_kp_y"];
+            thumbAimSoftnessX = j.contains("thumb_aim_softness_x")
+                                    ? j["thumb_aim_softness_x"].get<float>()
+                                    : aimSoftnessX;
+            thumbAimSoftnessY = j.contains("thumb_aim_softness_y")
+                                    ? j["thumb_aim_softness_y"].get<float>()
+                                    : aimSoftnessY;
 
             if (j.contains("iou_stickiness_threshold")) iouStickinessThreshold = j["iou_stickiness_threshold"];
 
@@ -576,6 +609,7 @@ struct Config {
             if (j.contains("mouse_min_interval_ms")) mouseMinIntervalMs = j["mouse_min_interval_ms"];
             if (j.contains("frame_wait_timeout_ms")) frameWaitTimeoutMs = j["frame_wait_timeout_ms"];
             if (j.contains("max_inflight_frames")) maxInFlightFrames = j["max_inflight_frames"];
+            if (j.contains("frame_credit_depth")) frameCreditDepth = j["frame_credit_depth"];
             if (j.contains("makcu_baudrate")) makcuBaudrate = j["makcu_baudrate"];
 
             if (j.contains("noise_enabled")) noiseEnabled = j["noise_enabled"];
@@ -643,6 +677,10 @@ struct Config {
             j["aim_kp_y"] = aimKpY;
             j["aim_softness_x"] = aimSoftnessX;
             j["aim_softness_y"] = aimSoftnessY;
+            j["thumb_aim_kp_x"] = thumbAimKpX;
+            j["thumb_aim_kp_y"] = thumbAimKpY;
+            j["thumb_aim_softness_x"] = thumbAimSoftnessX;
+            j["thumb_aim_softness_y"] = thumbAimSoftnessY;
 
             j["iou_stickiness_threshold"] = iouStickinessThreshold;
 
@@ -654,6 +692,7 @@ struct Config {
             j["mouse_min_interval_ms"] = mouseMinIntervalMs;
             j["frame_wait_timeout_ms"] = frameWaitTimeoutMs;
             j["max_inflight_frames"] = maxInFlightFrames;
+            j["frame_credit_depth"] = frameCreditDepth;
             j["makcu_baudrate"] = makcuBaudrate;
 
             j["noise_enabled"] = noiseEnabled;
@@ -703,14 +742,17 @@ struct Config {
         std::cout << "[Config] Makcu: " << makcuPort << std::endl;
         std::cout << "[Config] UDP port: " << udpPort << std::endl;
         std::cout << "[Config] Confidence: " << confThreshold << std::endl;
-        std::cout << "[Config] Nonlinear P: Kp(" << aimKpX << "," << aimKpY
+        std::cout << "[Config] Right-click P: Kp(" << aimKpX << "," << aimKpY
                   << ") Softness(" << aimSoftnessX << "," << aimSoftnessY << ")" << std::endl;
+        std::cout << "[Config] Thumb P: Kp(" << thumbAimKpX << "," << thumbAimKpY
+                  << ") Softness(" << thumbAimSoftnessX << "," << thumbAimSoftnessY << ")" << std::endl;
         std::cout << "[Config] IoU stickiness: " << iouStickinessThreshold << std::endl;
         std::cout << "[Config] Max detections: " << maxDetections << std::endl;
         std::cout << "[Config] No-recoil: " << (noRecoilEnabled ? "ON" : "OFF")
                   << " (Y=" << recoilCompY << ", tick=" << recoilTickMs << "ms)" << std::endl;
         std::cout << "[Config] Frame wait timeout: " << frameWaitTimeoutMs << "ms" << std::endl;
         std::cout << "[Config] Max in-flight frames: " << maxInFlightFrames << std::endl;
+        std::cout << "[Config] Frame credit depth: " << frameCreditDepth << std::endl;
         std::cout << "[Config] Perf stats: " << (perfStatsEnabled ? "ON" : "OFF")
                   << " (interval=" << perfStatsIntervalMs << "ms)" << std::endl;
         std::cout << "[Config] Realtime thread hints: " << (realtimeThreadsEnabled ? "ON" : "OFF") << std::endl;
@@ -1009,6 +1051,46 @@ int main(int argc, char* argv[]) {
         configDirty = true;
     }
 
+    if (runtimeOptions.buttonTest) {
+        std::cout << "[ButtonTest] Opening Makcu at " << cfg.makcuPort
+                  << " (baudrate: " << cfg.makcuBaudrate << ")" << std::endl;
+        MakcuConnection makcu(cfg.makcuPort, cfg.makcuBaudrate);
+        if (!makcu.isOpen()) {
+            std::cerr << "[ButtonTest] Failed to open Makcu" << std::endl;
+            return 1;
+        }
+
+        auto printButtonMask = [](uint8_t mask) {
+            std::cout << "\r[ButtonTest] mask=0x"
+                      << std::hex << std::uppercase << std::setw(2) << std::setfill('0')
+                      << static_cast<int>(mask)
+                      << std::dec << std::nouppercase << std::setfill(' ')
+                      << " L:" << ((mask & kMakcuLeftMask) ? "ON " : "OFF")
+                      << " R:" << ((mask & kMakcuRightMask) ? "ON " : "OFF")
+                      << " M:" << ((mask & kMakcuMiddleMask) ? "ON " : "OFF")
+                      << " S1:" << ((mask & kMakcuSide1Mask) ? "ON " : "OFF")
+                      << " S2:" << ((mask & kMakcuSide2Mask) ? "ON " : "OFF")
+                      << "    " << std::flush;
+        };
+
+        std::cout << "[ButtonTest] Press mouse buttons. Ctrl+C to exit." << std::endl;
+        uint64_t lastSeq = makcu.buttonSequence();
+        uint8_t lastMask = makcu.buttonMask();
+        printButtonMask(lastMask);
+        while (g_running.load(std::memory_order_relaxed)) {
+            makcu.waitForButtonEvent(lastSeq, 1000);
+            const uint64_t seq = makcu.buttonSequence();
+            const uint8_t mask = makcu.buttonMask();
+            if (seq != lastSeq || mask != lastMask) {
+                lastSeq = seq;
+                lastMask = mask;
+                printButtonMask(mask);
+            }
+        }
+        std::cout << std::endl;
+        return 0;
+    }
+
     const std::string requestedEnginePath = cfg.enginePath;
     auto resolvedEnginePath = resolveEnginePath(cfg.enginePath, configPath, exeDir, repoRoot);
     if (!resolvedEnginePath) {
@@ -1085,7 +1167,11 @@ int main(int argc, char* argv[]) {
     std::cout << "[Simple] UDP capture started on port " << cfg.udpPort << std::endl;
 
     // 4. State - all GPU now, minimal CPU state
-    gpa::AimConfig gpuAimConfig = cfg.toGpuAimConfig();
+    const gpa::AimConfig rightGpuAimConfig = cfg.toGpuAimConfig();
+    const gpa::AimConfig thumbGpuAimConfig = cfg.toThumbGpuAimConfig();
+    auto selectGpuAimConfig = [&](uint8_t buttonMask) -> const gpa::AimConfig& {
+        return makcuMaskThumbAiming(buttonMask) ? thumbGpuAimConfig : rightGpuAimConfig;
+    };
     const uint32_t allowedClassMask = cfg.getAllowedClassMask();
 
     // Setup callback context with cached config values
@@ -1137,6 +1223,7 @@ int main(int argc, char* argv[]) {
     const uint32_t frameWaitTimeoutMs = static_cast<uint32_t>(std::clamp(cfg.frameWaitTimeoutMs, 1, 100));
     const int senderMinIntervalMs = std::max(0, cfg.mouseMinIntervalMs);
     const int maxPipelineInFlight = std::clamp(cfg.maxInFlightFrames, 1, 4);
+    const uint32_t frameCreditDepth = static_cast<uint32_t>(std::clamp(cfg.frameCreditDepth, 1, 4));
     const int perfStatsIntervalMs = std::clamp(cfg.perfStatsIntervalMs, 250, 10000);
     const int idleGraphPrecaptureIntervalMs = std::clamp(cfg.idleGraphPrecaptureIntervalMs, 20, 1000);
 
@@ -1245,6 +1332,7 @@ int main(int argc, char* argv[]) {
     std::cout << "[Simple] IoU-based target stickiness: ENABLED" << std::endl;
     std::cout << "[Simple] Pinned receive buffers: " << (udpCapture.IsPinnedMemoryEnabled() ? "ENABLED" : "DISABLED") << std::endl;
     std::cout << "[Simple] Latest-frame in-flight limit: " << maxPipelineInFlight << std::endl;
+    std::cout << "[Simple] Frame credit depth: " << frameCreditDepth << std::endl;
 
     // 5. Capture full CUDA graph lazily for the actual incoming frame shape.
     // Startup does not know the Game PC crop size, so capturing here can miss
@@ -1281,12 +1369,11 @@ int main(int argc, char* argv[]) {
     auto isRgbFrameInput = [](uint8_t framePixelFormat, uint8_t frameBytesPerPixel) {
         return framePixelFormat == UDP_PIXEL_FORMAT_RGB && frameBytesPerPixel == 3;
     };
-    // One credit per consumed frame keeps Game PC traffic near inference FPS and
-    // blocks stale-frame buildup. Continuous latest-push can be a hair lower
-    // latency on an idle LAN, but this path is steadier under load.
-    auto requestNextFrameCredit = [&]() {
-        if (udpCapture.SendFrameCredit(nextCreditMinFrameId, 1)) {
-            ++creditSentWindow;
+    // A small credit depth lets the Game PC pre-send the newest next frame while
+    // the GPU is busy, reducing inter-frame gaps without allowing a deep queue.
+    auto requestFrameCredits = [&]() {
+        if (udpCapture.SendFrameCredit(nextCreditMinFrameId, frameCreditDepth)) {
+            creditSentWindow += frameCreditDepth;
         }
     };
 
@@ -1296,7 +1383,7 @@ int main(int argc, char* argv[]) {
             static_cast<int>(sourceW), static_cast<int>(sourceH),
             maxPipelineInFlight,
             cfg.confThreshold, cfg.headClassId, cfg.headBonus,
-            allowedClassMask, gpuAimConfig,
+            allowedClassMask, rightGpuAimConfig,
             cfg.iouStickinessThreshold, cfg.headAimPoint, cfg.bodyAimPoint);
         const bool graphFailedForThisShape =
             graphCaptureFailedForShape && failedGraphW == sourceW && failedGraphH == sourceH;
@@ -1314,7 +1401,7 @@ int main(int argc, char* argv[]) {
                 static_cast<int>(sourceW), static_cast<int>(sourceH),
                 maxPipelineInFlight,
                 cfg.confThreshold, cfg.headClassId, cfg.headBonus,
-                allowedClassMask, gpuAimConfig,
+                allowedClassMask, rightGpuAimConfig,
                 cfg.iouStickinessThreshold, cfg.headAimPoint, cfg.bodyAimPoint)) {
             graphCaptureFailedForShape = false;
             failedGraphW = 0;
@@ -1418,7 +1505,7 @@ int main(int argc, char* argv[]) {
                 now >= nextIdleGraphPrecaptureTime && busyCallbackTicketCount() == 0) {
                 nextIdleGraphPrecaptureTime =
                     now + std::chrono::milliseconds(idleGraphPrecaptureIntervalMs);
-                requestNextFrameCredit();
+                requestFrameCredits();
                 uint64_t idleFrameId = 0;
                 const bool gotIdleFrame = udpCapture.AcquireFramePinned(
                     &pinnedRgbData, &width, &height, &idleFrameId, &bufferIndex, 1,
@@ -1439,7 +1526,7 @@ int main(int argc, char* argv[]) {
                     }
                 }
             } else if (debugFrameDumper.due(now)) {
-                requestNextFrameCredit();
+                requestFrameCredits();
                 uint64_t debugFrameId = 0;
                 const bool gotDebugFrame = udpCapture.AcquireFramePinned(
                     &pinnedRgbData, &width, &height, &debugFrameId, &bufferIndex, frameWaitTimeoutMs,
@@ -1485,7 +1572,7 @@ int main(int argc, char* argv[]) {
         if (cfg.perfStatsEnabled) {
             acquireStart = Clock::now();
         }
-        requestNextFrameCredit();
+        requestFrameCredits();
         const bool gotFrame = udpCapture.AcquireFramePinned(
             &pinnedRgbData, &width, &height, &acquiredFrameId, &bufferIndex, frameWaitTimeoutMs,
             &bytesPerPixel, &pixelFormat);
@@ -1532,26 +1619,7 @@ int main(int argc, char* argv[]) {
             debugFrameDumper.save(pinnedRgbData, width, height, acquiredFrameId);
         }
 
-        const bool graphReady = inference.isFullGraphReadyForShape(
-            static_cast<int>(width), static_cast<int>(height),
-            maxPipelineInFlight,
-            cfg.confThreshold, cfg.headClassId, cfg.headBonus,
-            allowedClassMask, gpuAimConfig,
-            cfg.iouStickinessThreshold, cfg.headAimPoint, cfg.bodyAimPoint);
-        const bool graphFailedForThisShape =
-            graphCaptureFailedForShape && failedGraphW == width && failedGraphH == height;
-        if (graphReady || graphFailedForThisShape) {
-            idleGraphPrecaptureDone = true;
-        }
-        if (!graphReady && !graphFailedForThisShape && inference.getCallbacksInFlight() == 0) {
-            udpCapture.ReleaseFrame(bufferIndex);
-            (void)ensureFullGraphReady(width, height, "");
-            continue;
-        }
-
-        recvFramesWindow++;
-
-        // Check button state with one atomic load.
+        // Check button state with one atomic load and select the matching aim config.
         const uint8_t frameButtonMask = makcu.buttonMask();
         bool aiming = cfg.forceAimOn || makcuMaskAiming(frameButtonMask);
         bool shooting = makcuMaskShooting(frameButtonMask);
@@ -1573,6 +1641,27 @@ int main(int argc, char* argv[]) {
             continue;
         }
 
+        const gpa::AimConfig& frameAimConfig = selectGpuAimConfig(frameButtonMask);
+
+        const bool graphReady = inference.isFullGraphReadyForShape(
+            static_cast<int>(width), static_cast<int>(height),
+            maxPipelineInFlight,
+            cfg.confThreshold, cfg.headClassId, cfg.headBonus,
+            allowedClassMask, rightGpuAimConfig,
+            cfg.iouStickinessThreshold, cfg.headAimPoint, cfg.bodyAimPoint);
+        const bool graphFailedForThisShape =
+            graphCaptureFailedForShape && failedGraphW == width && failedGraphH == height;
+        if (graphReady || graphFailedForThisShape) {
+            idleGraphPrecaptureDone = true;
+        }
+        if (!graphReady && !graphFailedForThisShape && inference.getCallbacksInFlight() == 0) {
+            udpCapture.ReleaseFrame(bufferIndex);
+            (void)ensureFullGraphReady(width, height, "");
+            continue;
+        }
+
+        recvFramesWindow++;
+
         CallbackTicket* ticket = acquireCallbackTicket();
         if (!ticket) {
             udpCapture.ReleaseFrame(bufferIndex);
@@ -1593,7 +1682,7 @@ int main(int argc, char* argv[]) {
             pinnedRgbData, width, height,
             cfg.confThreshold, cfg.headClassId, cfg.headBonus,
             allowedClassMask,
-            gpuAimConfig,
+            frameAimConfig,
             cfg.iouStickinessThreshold,
             cfg.headAimPoint, cfg.bodyAimPoint,
             inferenceCallback, ticket);

@@ -430,9 +430,7 @@ __global__ void stage2FinalizeKernel(
     float movement_scale_x,
     float movement_scale_y,
     int head_class_id,
-    float kp_x, float kp_y,
-    float p_softness_x,
-    float p_softness_y,
+    const AimConfig* __restrict__ d_aim_config,
     float iou_stickiness_threshold,
     float head_y_offset,
     float body_y_offset,
@@ -572,11 +570,12 @@ __global__ void stage2FinalizeKernel(
 
     const float error_x = target_center_x - screen_center_x;
     const float error_y = target_center_y - screen_center_y;
+    const AimConfig aim_config = *d_aim_config;
 
     const float movement_x =
-        nonlinearPMove(error_x, kp_x, p_softness_x) * movement_scale_x;
+        nonlinearPMove(error_x, aim_config.kp_x, aim_config.p_softness_x) * movement_scale_x;
     const float movement_y =
-        nonlinearPMove(error_y, kp_y, p_softness_y) * movement_scale_y;
+        nonlinearPMove(error_y, aim_config.kp_y, aim_config.p_softness_y) * movement_scale_y;
 
     int emit_dx = emitMouseDelta(movement_x, &d_aim_state->residual_x);
     int emit_dy = emitMouseDelta(movement_y, &d_aim_state->residual_y);
@@ -608,7 +607,7 @@ cudaError_t postprocessYoloFusedGpu(
     float movement_scale_y,
     int head_class_id,
     float head_conf_bonus,
-    const AimConfig& aim_config,
+    const AimConfig* d_aim_config,
     float iou_stickiness_threshold,
     float head_y_offset,
     float body_y_offset,
@@ -621,7 +620,7 @@ cudaError_t postprocessYoloFusedGpu(
     float* d_stage1_iou_score,
     cudaStream_t stream)
 {
-    if (!d_raw_output || !d_aim_state || !d_inference_result ||
+    if (!d_raw_output || !d_aim_config || !d_aim_state || !d_inference_result ||
         !d_stage1_best_dist || !d_stage1_dist_score ||
         !d_stage1_best_iou || !d_stage1_iou_score) {
         return cudaErrorInvalidValue;
@@ -699,9 +698,7 @@ cudaError_t postprocessYoloFusedGpu(
         movement_scale_x,
         movement_scale_y,
         head_class_id,
-        aim_config.kp_x, aim_config.kp_y,
-        aim_config.p_softness_x,
-        aim_config.p_softness_y,
+        d_aim_config,
         iou_stickiness_threshold,
         head_y_offset,
         body_y_offset,

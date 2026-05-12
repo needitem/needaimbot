@@ -634,7 +634,13 @@ bool readFrameCredit(SOCKET sock, std::atomic<int>& frameCredits,
     }
 
     minCreditFrameId.store(packet.minFrameId, std::memory_order_release);
-    frameCredits.store(1, std::memory_order_release);
+    const int requestedCredits = std::clamp(static_cast<int>(packet.credits), 1, 8);
+    int currentCredits = frameCredits.load(std::memory_order_acquire);
+    while (currentCredits < requestedCredits &&
+           !frameCredits.compare_exchange_weak(
+               currentCredits, requestedCredits,
+               std::memory_order_acq_rel, std::memory_order_acquire)) {
+    }
     stats.creditPackets.fetch_add(1, std::memory_order_relaxed);
     latestFrame.cv.notify_one();
     return true;
@@ -1247,7 +1253,13 @@ int main(int argc, char** argv) {
                 gotAnyCredit = true;
             }
             if (!gotAnyCredit) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                fd_set readSet;
+                FD_ZERO(&readSet);
+                FD_SET(sendSock, &readSet);
+                timeval timeout{};
+                timeout.tv_sec = 0;
+                timeout.tv_usec = 1000;
+                select(0, &readSet, nullptr, nullptr, &timeout);
             }
         }
     });
@@ -1292,7 +1304,7 @@ int main(int argc, char** argv) {
                     continue;
                 }
                 if (hasCredit) {
-                    frameCredits.store(0, std::memory_order_release);
+                    frameCredits.fetch_sub(1, std::memory_order_acq_rel);
                 } else {
                     stats.recoverySends.fetch_add(1, std::memory_order_relaxed);
                 }

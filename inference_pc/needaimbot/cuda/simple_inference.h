@@ -112,6 +112,7 @@ private:
     // GPU fused pipeline buffers
     Detection* m_d_selectedTarget = nullptr;  // Persistent selected target for IoU stickiness
     AimState* m_d_aimState = nullptr;         // Persistent movement state on GPU
+    AimConfig* m_d_runtimeAimConfig = nullptr; // Runtime movement parameters read by graph kernels
     Detection* m_d_stage1BestDist = nullptr;  // Stage-1 per-block best-by-distance
     float* m_d_stage1DistScore = nullptr;     // Stage-1 per-block distance score
     Detection* m_d_stage1BestIou = nullptr;   // Stage-1 per-block best-by-IoU
@@ -152,6 +153,8 @@ private:
     float m_cachedHeadBonus = 0.15f;
     uint32_t m_cachedAllowedClassMask = 0xFFFFFFFF;
     AimConfig m_cachedAimConfig;
+    AimConfig m_enqueuedRuntimeAimConfig;
+    bool m_hasEnqueuedRuntimeAimConfig = false;
     float m_cachedIouThreshold = 0.3f;
     float m_cachedHeadYOffset = 1.0f;
     float m_cachedBodyYOffset = 0.15f;
@@ -172,6 +175,7 @@ private:
 
     void callbackWorkerLoop();
     void destroyFullGraphs();
+    bool uploadRuntimeAimConfig(const AimConfig& aimConfig, bool force = false);
     bool graphParamsMatch(int sourceWidth, int sourceHeight, int requiredGraphSlots,
                           float confThreshold, int headClassId, float headBonus,
                           uint32_t allowedClassMask, const AimConfig& aimConfig,

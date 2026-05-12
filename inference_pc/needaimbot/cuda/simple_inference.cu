@@ -329,6 +329,7 @@ SimpleInference::~SimpleInference() {
     // Free GPU fused pipeline buffers
     if (m_d_selectedTarget) cudaFree(m_d_selectedTarget);
     if (m_d_aimState) cudaFree(m_d_aimState);
+    if (m_d_runtimeAimConfig) cudaFree(m_d_runtimeAimConfig);
     if (m_d_stage1BestDist) cudaFree(m_d_stage1BestDist);
     if (m_d_stage1DistScore) cudaFree(m_d_stage1DistScore);
     if (m_d_stage1BestIou) cudaFree(m_d_stage1BestIou);
@@ -474,6 +475,7 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
     // Allocate GPU fused pipeline buffers
     cudaMalloc(&m_d_selectedTarget, sizeof(Detection));
     cudaMalloc(&m_d_aimState, sizeof(AimState));
+    cudaMalloc(&m_d_runtimeAimConfig, sizeof(AimConfig));
     cudaMalloc(&m_d_stage1BestDist, static_cast<size_t>(m_maxDetections) * sizeof(Detection));
     cudaMalloc(&m_d_stage1DistScore, static_cast<size_t>(m_maxDetections) * sizeof(float));
     cudaMalloc(&m_d_stage1BestIou, static_cast<size_t>(m_maxDetections) * sizeof(Detection));
@@ -482,6 +484,7 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
     // Initialize GPU state buffers to zero
     cudaMemset(m_d_selectedTarget, 0, sizeof(Detection));
     cudaMemset(m_d_aimState, 0, sizeof(AimState));
+    cudaMemset(m_d_runtimeAimConfig, 0, sizeof(AimConfig));
 
     // Allocate pinned host memory for RGB input.
     cudaMallocHost(&m_h_rawPinned, rawInputSize);
@@ -537,6 +540,7 @@ bool SimpleInference::executeFusedPipelinePostH2D(int width, int height,
                                                   uint32_t allowedClassMask, const AimConfig& aimConfig,
                                                   float iouThreshold, float headYOffset, float bodyYOffset,
                                                   int resultSlot) {
+    (void)aimConfig;
     if (resultSlot < 0 || resultSlot >= kMaxCallbacksInFlight) {
         std::cerr << "[SimpleInference] Invalid result slot: " << resultSlot << std::endl;
         return false;
@@ -585,7 +589,7 @@ bool SimpleInference::executeFusedPipelinePostH2D(int width, int height,
         m_crosshairX, m_crosshairY,
         static_cast<float>(width) / static_cast<float>(m_inputW),
         static_cast<float>(height) / static_cast<float>(m_inputH),
-        headClassId, headBonus, aimConfig,
+        headClassId, headBonus, m_d_runtimeAimConfig,
         iouThreshold, headYOffset, bodyYOffset,
         m_d_selectedTarget, m_d_aimState,
         dResultSlot,
@@ -649,11 +653,33 @@ void SimpleInference::destroyFullGraphs() {
     m_graphSlotCount = 0;
 }
 
+bool SimpleInference::uploadRuntimeAimConfig(const AimConfig& aimConfig, bool force) {
+    if (!m_d_runtimeAimConfig) return false;
+    if (!force && m_hasEnqueuedRuntimeAimConfig &&
+        aimConfigNearlyEqual(aimConfig, m_enqueuedRuntimeAimConfig)) {
+        return true;
+    }
+
+    const cudaError_t err = cudaMemcpyAsync(
+        m_d_runtimeAimConfig, &aimConfig, sizeof(AimConfig),
+        cudaMemcpyHostToDevice, m_stream);
+    if (err != cudaSuccess) {
+        std::cerr << "[SimpleInference] cudaMemcpyAsync(runtime AimConfig) failed: "
+                  << cudaGetErrorString(err) << std::endl;
+        return false;
+    }
+
+    m_enqueuedRuntimeAimConfig = aimConfig;
+    m_hasEnqueuedRuntimeAimConfig = true;
+    return true;
+}
+
 bool SimpleInference::graphParamsMatch(int sourceWidth, int sourceHeight, int requiredGraphSlots,
                                        float confThreshold, int headClassId, float headBonus,
                                        uint32_t allowedClassMask, const AimConfig& aimConfig,
                                        float iouStickinessThreshold, float headYOffset,
                                        float bodyYOffset) const {
+    (void)aimConfig;
     if (sourceWidth <= 0 || sourceHeight <= 0) return false;
     if (requiredGraphSlots <= 0 || requiredGraphSlots > kMaxCallbacksInFlight) return false;
     if (sourceWidth != m_graphSourceW || sourceHeight != m_graphSourceH) return false;
@@ -668,7 +694,6 @@ bool SimpleInference::graphParamsMatch(int sourceWidth, int sourceHeight, int re
            (allowedClassMask == m_cachedAllowedClassMask) &&
            nearlyEqual(confThreshold, m_cachedConfThreshold) &&
            nearlyEqual(headBonus, m_cachedHeadBonus) &&
-           aimConfigNearlyEqual(aimConfig, m_cachedAimConfig) &&
            nearlyEqual(iouStickinessThreshold, m_cachedIouThreshold) &&
            nearlyEqual(headYOffset, m_cachedHeadYOffset) &&
            nearlyEqual(bodyYOffset, m_cachedBodyYOffset);
@@ -774,6 +799,11 @@ bool SimpleInference::captureFullGraphForShape(int sourceWidth, int sourceHeight
     m_cachedIouThreshold = iouStickinessThreshold;
     m_cachedHeadYOffset = headYOffset;
     m_cachedBodyYOffset = bodyYOffset;
+
+    if (!uploadRuntimeAimConfig(aimConfig, true)) {
+        destroyFullGraphs();
+        return false;
+    }
 
     // Fill pinned buffer with dummy data. The H2D copy itself is captured into
     // the graph, then its source pointer is patched per frame before launch.
@@ -1015,6 +1045,10 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
         m_callbacksInFlight.fetch_sub(1, std::memory_order_acq_rel);
         return false;
     };
+
+    if (!uploadRuntimeAimConfig(aimConfig)) {
+        return clearInFlightAndFail(false);
+    }
 
     // Use CUDA Graph only when shape and parameters match captured constants.
     const bool canUseGraph =

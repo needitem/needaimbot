@@ -68,7 +68,7 @@ cudaError_t postprocessYoloFusedGpu(
     float movement_scale_y,
     int head_class_id,             // Head class ID for priority
     float head_conf_bonus,         // Head bonus for target selection
-    const AimConfig& aim_config,   // Movement parameters
+    const AimConfig* d_aim_config, // Movement parameters (device pointer)
     float iou_stickiness_threshold, // IoU threshold for target stickiness (0.3 typical)
     float head_y_offset,           // Aim point offset for head (0.0-1.0)
     float body_y_offset,           // Aim point offset for body (0.0-1.0)
