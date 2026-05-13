@@ -61,6 +61,18 @@ std::filesystem::path safeAbsolute(const std::filesystem::path& path) {
     return ec ? path : absolutePath.lexically_normal();
 }
 
+std::filesystem::path currentExecutablePath(const char* argv0) {
+#ifndef _WIN32
+    std::array<char, 4096> buffer{};
+    const ssize_t length = ::readlink("/proc/self/exe", buffer.data(), buffer.size() - 1);
+    if (length > 0) {
+        buffer[static_cast<size_t>(length)] = '\0';
+        return safeAbsolute(std::filesystem::path(buffer.data()));
+    }
+#endif
+    return argv0 ? safeAbsolute(std::filesystem::path(argv0)) : std::filesystem::path();
+}
+
 std::string toLower(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
         return static_cast<char>(std::tolower(ch));
@@ -100,20 +112,8 @@ std::optional<std::filesystem::path> findRepoRoot(const std::filesystem::path& e
     return findRepoRootFrom(exeDir);
 }
 
-std::filesystem::path chooseConfigPath(
-    const std::filesystem::path& exeDir,
-    const std::optional<std::filesystem::path>& repoRoot) {
-    std::vector<std::filesystem::path> candidates;
-    if (repoRoot) {
-        addUniquePath(candidates, *repoRoot / "inference_pc" / "simple_config.json");
-        addUniquePath(candidates, *repoRoot / "simple_config.json");
-    }
-    addUniquePath(candidates, exeDir / "simple_config.json");
-
-    for (const auto& candidate : candidates) {
-        if (fileExists(candidate)) return candidate;
-    }
-    return repoRoot ? (*repoRoot / "inference_pc" / "simple_config.json") : (exeDir / "simple_config.json");
+std::filesystem::path chooseConfigPath(const std::filesystem::path& exeDir) {
+    return exeDir / "simple_config.json";
 }
 
 int engineScore(const std::filesystem::path& path) {
@@ -1055,8 +1055,7 @@ int main(int argc, char* argv[]) {
 
     // Load config
     Config cfg;
-    const std::filesystem::path exePath =
-        argv[0] ? safeAbsolute(std::filesystem::path(argv[0])) : std::filesystem::path();
+    const std::filesystem::path exePath = currentExecutablePath(argv[0]);
     const std::filesystem::path exeDir =
         exePath.has_parent_path() ? exePath.parent_path() : std::filesystem::current_path();
     const auto repoRoot = findRepoRoot(exeDir);
@@ -1064,7 +1063,7 @@ int main(int argc, char* argv[]) {
     if (runtimeOptions.hasConfigPath) {
         configPath = runtimeOptions.configPath;
     } else {
-        configPath = chooseConfigPath(exeDir, repoRoot);
+        configPath = chooseConfigPath(exeDir);
     }
 
     configPath = safeAbsolute(configPath);
