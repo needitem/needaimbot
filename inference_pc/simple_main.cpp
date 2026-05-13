@@ -525,6 +525,7 @@ struct Config {
     int frameWaitTimeoutMs = 16;  // UDP frame wait timeout per loop
     int maxInFlightFrames = 1;    // Keep latency low by avoiding stale queued frames
     int frameCreditDepth = 2;     // Allow the Game PC to pre-send the newest next frame
+    bool directAimMoveInCallback = true;
 
     // Gaussian noise for humanization
     bool noiseEnabled = true;
@@ -610,6 +611,7 @@ struct Config {
             if (j.contains("frame_wait_timeout_ms")) frameWaitTimeoutMs = j["frame_wait_timeout_ms"];
             if (j.contains("max_inflight_frames")) maxInFlightFrames = j["max_inflight_frames"];
             if (j.contains("frame_credit_depth")) frameCreditDepth = j["frame_credit_depth"];
+            if (j.contains("direct_aim_move_in_callback")) directAimMoveInCallback = j["direct_aim_move_in_callback"];
             if (j.contains("makcu_baudrate")) makcuBaudrate = j["makcu_baudrate"];
 
             if (j.contains("noise_enabled")) noiseEnabled = j["noise_enabled"];
@@ -693,6 +695,7 @@ struct Config {
             j["frame_wait_timeout_ms"] = frameWaitTimeoutMs;
             j["max_inflight_frames"] = maxInFlightFrames;
             j["frame_credit_depth"] = frameCreditDepth;
+            j["direct_aim_move_in_callback"] = directAimMoveInCallback;
             j["makcu_baudrate"] = makcuBaudrate;
 
             j["noise_enabled"] = noiseEnabled;
@@ -753,6 +756,8 @@ struct Config {
         std::cout << "[Config] Frame wait timeout: " << frameWaitTimeoutMs << "ms" << std::endl;
         std::cout << "[Config] Max in-flight frames: " << maxInFlightFrames << std::endl;
         std::cout << "[Config] Frame credit depth: " << frameCreditDepth << std::endl;
+        std::cout << "[Config] Direct aim move in callback: "
+                  << (directAimMoveInCallback ? "ON" : "OFF") << std::endl;
         std::cout << "[Config] Perf stats: " << (perfStatsEnabled ? "ON" : "OFF")
                   << " (interval=" << perfStatsIntervalMs << "ms)" << std::endl;
         std::cout << "[Config] Realtime thread hints: " << (realtimeThreadsEnabled ? "ON" : "OFF") << std::endl;
@@ -791,7 +796,7 @@ struct Config {
 // GPU Callback Context and Handler
 // =============================================================================
 // This callback runs from the completion worker when GPU inference finishes.
-// It queues movement to a dedicated sender thread, avoiding cudaStreamSynchronize.
+// It can either send aim movement directly or queue it to the sender thread.
 //
 // OPTIMIZATION: Cached config values eliminate pointer indirection in hot path.
 // All frequently accessed values are copied to the context struct at init time.
@@ -805,7 +810,6 @@ struct CallbackContext {
     UDPCapture* udpCapture;
     struct MoveQueue* moveQueue = nullptr;
     std::condition_variable* moveQueueCv = nullptr;
-    std::mutex* moveQueueCvMutex = nullptr;
     std::atomic<uint64_t>* moveQueueDropped = nullptr;
     std::condition_variable* pipelineCv = nullptr;
     std::mutex* pipelineCvMutex = nullptr;
@@ -814,6 +818,7 @@ struct CallbackContext {
     bool forceAimOn = false;
     bool perfStatsEnabled = false;
     bool noiseEnabled;
+    bool directAimMoveInCallback = false;
     float shootOffsetX;
     float shootOffsetY;
     
@@ -827,6 +832,7 @@ struct CallbackContext {
         forceAimOn = cfg.forceAimOn;
         perfStatsEnabled = cfg.perfStatsEnabled;
         noiseEnabled = cfg.noiseEnabled;
+        directAimMoveInCallback = cfg.directAimMoveInCallback && cfg.mouseMinIntervalMs <= 0;
         shootOffsetX = cfg.shootOffsetX;
         shootOffsetY = cfg.shootOffsetY;
         
@@ -844,6 +850,26 @@ struct CallbackContext {
             noiseLutX.fill(0.0f);
             noiseLutY.fill(0.0f);
         }
+    }
+
+    void processAimMovement(int rawDx, int rawDy, bool shooting, int& outDx, int& outDy) {
+        float moveX = static_cast<float>(rawDx);
+        float moveY = static_cast<float>(rawDy);
+
+        if (noiseEnabled) {
+            const size_t idx = noiseCursor;
+            moveX += noiseLutX[idx];
+            moveY += noiseLutY[idx];
+            noiseCursor = (idx + 1) & (kNoiseLutSize - 1);
+        }
+
+        if (shooting) {
+            moveX += shootOffsetX;
+            moveY += shootOffsetY;
+        }
+
+        outDx = fastRoundToInt(moveX);
+        outDy = fastRoundToInt(moveY);
     }
 };
 
@@ -986,20 +1012,21 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
         return;
     }
     
-    // Keep callback as short as possible to avoid blocking CUDA stream work.
-    if (ctx->moveQueue) {
+    const bool shooting = makcuMaskShooting(callbackButtonMask);
+    if (ctx->directAimMoveInCallback) {
+        int emitDx = 0;
+        int emitDy = 0;
+        ctx->processAimMovement(result.movement.dx, result.movement.dy, shooting, emitDx, emitDy);
+        if (emitDx != 0 || emitDy != 0) {
+            ctx->makcu->move(emitDx, emitDy);
+        }
+    } else if (ctx->moveQueue) {
         MoveCommand cmd;
         cmd.kind = MoveCommand::Kind::AimRaw;
         cmd.dx = result.movement.dx;
         cmd.dy = result.movement.dy;
-        cmd.shooting = makcuMaskShooting(callbackButtonMask) ? 1u : 0u;
-        bool pushed = false;
-        if (ctx->moveQueueCvMutex) {
-            std::lock_guard<std::mutex> lock(*ctx->moveQueueCvMutex);
-            pushed = ctx->moveQueue->tryPush(cmd);
-        } else {
-            pushed = ctx->moveQueue->tryPush(cmd);
-        }
+        cmd.shooting = shooting ? 1u : 0u;
+        const bool pushed = ctx->moveQueue->tryPush(cmd);
         if (pushed && ctx->moveQueueCv) {
             ctx->moveQueueCv->notify_one();
         } else if (!pushed && ctx->moveQueueDropped) {
@@ -1185,7 +1212,6 @@ int main(int argc, char* argv[]) {
     std::mutex pipelineCvMutex;
     callbackCtx.moveQueue = &moveQueue;
     callbackCtx.moveQueueCv = &moveQueueCv;
-    callbackCtx.moveQueueCvMutex = &moveQueueCvMutex;
     callbackCtx.moveQueueDropped = &g_moveQueueDropped;
     callbackCtx.pipelineCv = &pipelineCv;
     callbackCtx.pipelineCvMutex = &pipelineCvMutex;
@@ -1252,32 +1278,13 @@ int main(int argc, char* argv[]) {
             }
             return true;
         };
-        auto processAimMovement = [&](const MoveCommand& raw, int& outDx, int& outDy) {
-            float moveX = static_cast<float>(raw.dx);
-            float moveY = static_cast<float>(raw.dy);
-
-            if (callbackCtx.noiseEnabled) {
-                const size_t idx = callbackCtx.noiseCursor;
-                moveX += callbackCtx.noiseLutX[idx];
-                moveY += callbackCtx.noiseLutY[idx];
-                callbackCtx.noiseCursor = (idx + 1) & (CallbackContext::kNoiseLutSize - 1);
-            }
-
-            if (raw.shooting != 0u) {
-                moveX += callbackCtx.shootOffsetX;
-                moveY += callbackCtx.shootOffsetY;
-            }
-
-            outDx = fastRoundToInt(moveX);
-            outDy = fastRoundToInt(moveY);
-        };
-
         while (moveSenderRunning.load(std::memory_order_relaxed) || moveQueue.hasPending() || hasPendingMove()) {
             while (moveQueue.tryPop(cmd)) {
                 int emitDx = cmd.dx;
                 int emitDy = cmd.dy;
                 if (cmd.kind == MoveCommand::Kind::AimRaw) {
-                    processAimMovement(cmd, emitDx, emitDy);
+                    callbackCtx.processAimMovement(
+                        cmd.dx, cmd.dy, cmd.shooting != 0u, emitDx, emitDy);
                 }
                 if (emitDx != 0 || emitDy != 0) {
                     pendingDx = std::clamp(pendingDx + emitDx, -127, 127);
@@ -1313,11 +1320,7 @@ int main(int argc, char* argv[]) {
         cmd.dx = dx;
         cmd.dy = dy;
         cmd.shooting = 0u;
-        bool pushed = false;
-        {
-            std::lock_guard<std::mutex> lock(moveQueueCvMutex);
-            pushed = moveQueue.tryPush(cmd);
-        }
+        const bool pushed = moveQueue.tryPush(cmd);
         if (pushed) {
             moveQueueCv.notify_one();
         } else {
@@ -1341,6 +1344,9 @@ int main(int argc, char* argv[]) {
     std::cout << "[Simple] Idle CUDA graph pre-capture: "
               << (cfg.idleGraphPrecaptureEnabled ? "ENABLED" : "DISABLED")
               << " (interval=" << idleGraphPrecaptureIntervalMs << "ms)" << std::endl;
+    std::cout << "[Simple] Direct callback aim moves: "
+              << (callbackCtx.directAimMoveInCallback ? "ENABLED" : "DISABLED")
+              << std::endl;
 
     std::cout << "\n[Simple] Running... Press Ctrl+C to exit" << std::endl;
     std::cout << "[Simple] Right-click (or Side2) = AIM" << std::endl;

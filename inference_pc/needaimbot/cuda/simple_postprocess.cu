@@ -253,8 +253,11 @@ __global__ void stage1DecodeAndSelectKernel(
     uint32_t allowedClassMask,
     float max_box_extent,
     float screen_center_x,
+    float screen_center_y,
     int head_class_id,
     float head_conf_bonus,
+    float head_y_offset,
+    float body_y_offset,
     const Detection* __restrict__ d_selected_target,
     Detection* __restrict__ d_stage1_best_dist,
     float* __restrict__ d_stage1_dist_score,
@@ -316,10 +319,17 @@ __global__ void stage1DecodeAndSelectKernel(
         }
 
         const float w = det.x2 - det.x1;
+        const float h = det.y2 - det.y1;
         const float centerX = det.x1 + w * 0.5f;
-        float effectiveDist = fabsf(centerX - screen_center_x);
+        const float aimY = (det.classId == head_class_id)
+            ? (det.y1 + h * head_y_offset)
+            : (det.y1 + h * body_y_offset);
+        const float dx = centerX - screen_center_x;
+        const float dy = aimY - screen_center_y;
+        float effectiveDist = dx * dx + dy * dy;
         if (det.classId == head_class_id && head_conf_bonus > 0.0f) {
-            effectiveDist -= head_conf_bonus * 100.0f;
+            const float headBonusPx = head_conf_bonus * 100.0f;
+            effectiveDist -= headBonusPx * headBonusPx;
         }
         if (effectiveDist < localBestDist) {
             localBestDist = effectiveDist;
@@ -654,8 +664,11 @@ cudaError_t postprocessYoloFusedGpu(
             allowedClassMask,
             max_box_extent,
             screen_center_x,
+            screen_center_y,
             head_class_id,
             head_conf_bonus,
+            head_y_offset,
+            body_y_offset,
             d_selected_target,
             d_stage1_best_dist,
             d_stage1_dist_score,
@@ -671,8 +684,11 @@ cudaError_t postprocessYoloFusedGpu(
             allowedClassMask,
             max_box_extent,
             screen_center_x,
+            screen_center_y,
             head_class_id,
             head_conf_bonus,
+            head_y_offset,
+            body_y_offset,
             d_selected_target,
             d_stage1_best_dist,
             d_stage1_dist_score,

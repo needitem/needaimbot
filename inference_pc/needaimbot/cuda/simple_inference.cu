@@ -795,7 +795,6 @@ bool SimpleInference::captureFullGraphForShape(int sourceWidth, int sourceHeight
     m_cachedHeadClassId = headClassId;
     m_cachedHeadBonus = headBonus;
     m_cachedAllowedClassMask = allowedClassMask;
-    m_cachedAimConfig = aimConfig;
     m_cachedIouThreshold = iouStickinessThreshold;
     m_cachedHeadYOffset = headYOffset;
     m_cachedBodyYOffset = bodyYOffset;

@@ -152,7 +152,6 @@ private:
     int m_cachedHeadClassId = 1;
     float m_cachedHeadBonus = 0.15f;
     uint32_t m_cachedAllowedClassMask = 0xFFFFFFFF;
-    AimConfig m_cachedAimConfig;
     AimConfig m_enqueuedRuntimeAimConfig;
     bool m_hasEnqueuedRuntimeAimConfig = false;
     float m_cachedIouThreshold = 0.3f;

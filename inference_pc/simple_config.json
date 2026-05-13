@@ -30,6 +30,7 @@
     "frame_wait_timeout_ms": 16,
     "max_inflight_frames": 1,
     "frame_credit_depth": 2,
+    "direct_aim_move_in_callback": true,
     "noise_enabled": false,
     "noise_stddev_x": 0.0,
     "noise_stddev_y": 0.0,
