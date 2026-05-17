@@ -546,6 +546,11 @@ struct Config {
     bool forceAimOn = false;  // Benchmark/testing override (keeps inference loop active)
     bool idleGraphPrecaptureEnabled = true;
     int idleGraphPrecaptureIntervalMs = 100;
+    // Shapes whose CUDA graph should be captured at startup (before the first
+    // frame arrives). Each entry is {sourceWidth, sourceHeight} in pixels.
+    // Empty by default - capture happens lazily on first incoming frame.
+    std::vector<std::pair<int, int>> preCaptureShapes;
+    bool stageTimingEnabled = false;  // Per-stage CUDA event timings (opt-in)
 
     // Convert to GPU movement config
     static gpa::AimConfig makeGpuAimConfig(
@@ -626,6 +631,18 @@ struct Config {
             if (j.contains("force_aim_on")) forceAimOn = j["force_aim_on"];
             if (j.contains("idle_graph_precapture_enabled")) idleGraphPrecaptureEnabled = j["idle_graph_precapture_enabled"];
             if (j.contains("idle_graph_precapture_interval_ms")) idleGraphPrecaptureIntervalMs = j["idle_graph_precapture_interval_ms"];
+            if (j.contains("stage_timing_enabled")) stageTimingEnabled = j["stage_timing_enabled"];
+            preCaptureShapes.clear();
+            if (j.contains("pre_capture_shapes")) {
+                for (const auto& entry : j["pre_capture_shapes"]) {
+                    if (!entry.is_array() || entry.size() != 2) continue;
+                    const int w = entry[0].get<int>();
+                    const int h = entry[1].get<int>();
+                    if (w > 0 && h > 0 && w <= 8192 && h <= 8192) {
+                        preCaptureShapes.emplace_back(w, h);
+                    }
+                }
+            }
 
             // Class filtering - either "allowed_classes": [0, 1, 7] or detailed class_settings
             classAllowed.resize(maxClasses, true);  // Default: all classes allowed
@@ -710,6 +727,14 @@ struct Config {
             j["force_aim_on"] = forceAimOn;
             j["idle_graph_precapture_enabled"] = idleGraphPrecaptureEnabled;
             j["idle_graph_precapture_interval_ms"] = idleGraphPrecaptureIntervalMs;
+            j["stage_timing_enabled"] = stageTimingEnabled;
+            {
+                json shapes = json::array();
+                for (const auto& wh : preCaptureShapes) {
+                    shapes.push_back({wh.first, wh.second});
+                }
+                j["pre_capture_shapes"] = shapes;
+            }
 
             // Save allowed classes as simple list
             json allowedList = json::array();
@@ -765,6 +790,18 @@ struct Config {
         std::cout << "[Config] Idle graph pre-capture: "
                   << (idleGraphPrecaptureEnabled ? "ON" : "OFF")
                   << " (interval=" << idleGraphPrecaptureIntervalMs << "ms)" << std::endl;
+        std::cout << "[Config] Stage timing: "
+                  << (stageTimingEnabled ? "ON" : "OFF") << std::endl;
+        std::cout << "[Config] Pre-capture shapes: ";
+        if (preCaptureShapes.empty()) {
+            std::cout << "(none, lazy)";
+        } else {
+            for (size_t i = 0; i < preCaptureShapes.size(); ++i) {
+                if (i) std::cout << ", ";
+                std::cout << preCaptureShapes[i].first << "x" << preCaptureShapes[i].second;
+            }
+        }
+        std::cout << std::endl;
         std::cout << "[Config] Noise: " << (noiseEnabled ? "ON" : "OFF")
                   << " (stddev X=" << noiseStddevX << ", Y=" << noiseStddevY << ")" << std::endl;
 
@@ -1166,6 +1203,7 @@ int main(int argc, char* argv[]) {
     // 1. Load TensorRT engine
     gpa::SimpleInference inference;
     inference.setMaxDetections(cfg.maxDetections);
+    inference.setStageTimingEnabled(cfg.stageTimingEnabled);
     if (!inference.loadEngine(cfg.enginePath)) {
         std::cerr << "[Simple] Failed to load engine" << std::endl;
         return 1;
@@ -1336,13 +1374,37 @@ int main(int argc, char* argv[]) {
     std::cout << "[Simple] Latest-frame in-flight limit: " << maxPipelineInFlight << std::endl;
     std::cout << "[Simple] Frame credit depth: " << frameCreditDepth << std::endl;
 
-    // 5. Capture full CUDA graph lazily for the actual incoming frame shape.
-    // Startup does not know the Game PC crop size, so capturing here can miss
-    // the hot path when source and engine dimensions differ.
-    std::cout << "[Simple] Full CUDA graph: DEFERRED until first frame shape" << std::endl;
+    // 5. Pre-capture CUDA graphs for the shapes listed in config (if any).
+    // The multi-shape graph cache holds up to kMaxGraphShapes buckets, so any
+    // configured shape that matches an incoming frame avoids the first-frame
+    // capture cost entirely.
+    int preCaptureSuccess = 0;
+    for (const auto& shape : cfg.preCaptureShapes) {
+        const int w = shape.first;
+        const int h = shape.second;
+        std::cout << "[Simple] Pre-capturing CUDA graph for " << w << "x" << h
+                  << "..." << std::endl;
+        if (inference.captureFullGraphForShape(
+                w, h, maxPipelineInFlight,
+                cfg.confThreshold, cfg.headClassId, cfg.headBonus,
+                allowedClassMask, rightGpuAimConfig,
+                cfg.iouStickinessThreshold, cfg.headAimPoint, cfg.bodyAimPoint)) {
+            ++preCaptureSuccess;
+        } else {
+            std::cerr << "[Simple] Pre-capture FAILED for " << w << "x" << h << std::endl;
+        }
+    }
+    std::cout << "[Simple] Full CUDA graph: "
+              << (preCaptureSuccess > 0
+                      ? "PRE-CAPTURED (" + std::to_string(preCaptureSuccess) + " shape" +
+                            (preCaptureSuccess == 1 ? "" : "s") + ")"
+                      : std::string("DEFERRED until first frame shape"))
+              << std::endl;
     std::cout << "[Simple] Idle CUDA graph pre-capture: "
               << (cfg.idleGraphPrecaptureEnabled ? "ENABLED" : "DISABLED")
               << " (interval=" << idleGraphPrecaptureIntervalMs << "ms)" << std::endl;
+    std::cout << "[Simple] Stage timing: "
+              << (cfg.stageTimingEnabled ? "ENABLED" : "DISABLED") << std::endl;
     std::cout << "[Simple] Direct callback aim moves: "
               << (callbackCtx.directAimMoveInCallback ? "ENABLED" : "DISABLED")
               << std::endl;
@@ -1483,6 +1545,17 @@ int main(int argc, char* argv[]) {
                        << " MD:" << moveQueueDropped
                        << " G:" << launchStats.graph << "/" << launchStats.standard
                        << "/" << launchStats.graphFallback;
+                if (cfg.stageTimingEnabled) {
+                    const auto st = inference.takeStageTimingStats();
+                    auto avgUs = [&](uint64_t total) {
+                        return st.samples == 0 ? 0.0 : static_cast<double>(total) / static_cast<double>(st.samples);
+                    };
+                    status << " St[h2d:" << avgUs(st.h2dUsTotal) << "/" << st.h2dUsMax
+                           << " pre:" << avgUs(st.preprocessUsTotal) << "/" << st.preprocessUsMax
+                           << " inf:" << avgUs(st.inferenceUsTotal) << "/" << st.inferenceUsMax
+                           << " post:" << avgUs(st.postprocessUsTotal) << "/" << st.postprocessUsMax
+                           << " d2h:" << avgUs(st.d2hUsTotal) << "/" << st.d2hUsMax << "us]";
+                }
             }
 
             const std::string statusLine = status.str();

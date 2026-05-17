@@ -87,10 +87,33 @@ public:
 
     LaunchStats takeLaunchStats();
 
+    // Per-stage timing (opt-in). Must be enabled before loadEngine().
+    void setStageTimingEnabled(bool enabled) {
+        if (m_loaded) return;
+        m_stageTimingEnabled = enabled;
+    }
+
+    struct StageTimingStats {
+        uint64_t samples = 0;
+        // Microsecond totals (host-side conversion of cudaEventElapsedTime millis)
+        uint64_t h2dUsTotal = 0;
+        uint64_t preprocessUsTotal = 0;
+        uint64_t inferenceUsTotal = 0;
+        uint64_t postprocessUsTotal = 0;
+        uint64_t d2hUsTotal = 0;
+        uint64_t h2dUsMax = 0;
+        uint64_t preprocessUsMax = 0;
+        uint64_t inferenceUsMax = 0;
+        uint64_t postprocessUsMax = 0;
+        uint64_t d2hUsMax = 0;
+    };
+    StageTimingStats takeStageTimingStats();
+
     cudaStream_t getStream() const { return m_stream; }
 
 private:
     static constexpr int kMaxCallbacksInFlight = 4;
+    static constexpr int kMaxGraphShapes = 3;  // LRU shape cache size
 
     class Logger : public nvinfer1::ILogger {
         void log(Severity severity, const char* msg) noexcept override;
@@ -125,15 +148,46 @@ private:
     // Pinned host memory for fast transfers
     uint8_t* m_h_rawPinned = nullptr;
 
-    // CUDA Graph for full pipeline. One graph per callback slot prevents
-    // result-buffer reuse while multiple frames are queued on the stream.
-    std::array<cudaGraph_t, kMaxCallbacksInFlight> m_graphs{};
-    std::array<cudaGraphExec_t, kMaxCallbacksInFlight> m_graphExecs{};
-    std::array<cudaGraphNode_t, kMaxCallbacksInFlight> m_graphH2DNodes{};
-    std::array<size_t, kMaxCallbacksInFlight> m_graphRawSizes{};
-    int m_graphSourceW = 0;
-    int m_graphSourceH = 0;
-    int m_graphSlotCount = 0;
+    // Multi-shape CUDA Graph cache. One bucket per (sourceW, sourceH) pair.
+    // Each bucket holds one graph per result slot so multiple frames can be
+    // in flight on the stream without aliasing result buffers. The graphs run
+    // shared device buffers; only H2D length + kernel-arg-baked shape differ.
+    struct GraphShapeBucket {
+        int sourceW = 0;
+        int sourceH = 0;
+        bool used = false;
+        uint64_t lastUseTick = 0;
+        int slotCount = 0;
+        std::array<cudaGraph_t, kMaxCallbacksInFlight> graphs{};
+        std::array<cudaGraphExec_t, kMaxCallbacksInFlight> graphExecs{};
+        std::array<cudaGraphNode_t, kMaxCallbacksInFlight> h2dNodes{};
+        std::array<size_t, kMaxCallbacksInFlight> rawSizes{};
+    };
+    std::array<GraphShapeBucket, kMaxGraphShapes> m_shapeBuckets{};
+    uint64_t m_graphUseTickCounter = 0;
+
+    // Per-stage CUDA events for timing diagnostics. One event quintuple per
+    // result slot - graphs record into these as graph-event nodes. Events
+    // are timing-enabled only when m_stageTimingEnabled is true at load time.
+    bool m_stageTimingEnabled = false;
+    std::array<cudaEvent_t, kMaxCallbacksInFlight> m_stageEvtStart{};
+    std::array<cudaEvent_t, kMaxCallbacksInFlight> m_stageEvtPostH2D{};
+    std::array<cudaEvent_t, kMaxCallbacksInFlight> m_stageEvtPostPreprocess{};
+    std::array<cudaEvent_t, kMaxCallbacksInFlight> m_stageEvtPostInference{};
+    std::array<cudaEvent_t, kMaxCallbacksInFlight> m_stageEvtPostPostprocess{};
+    std::array<cudaEvent_t, kMaxCallbacksInFlight> m_stageEvtEnd{};
+    std::array<std::atomic<bool>, kMaxCallbacksInFlight> m_stageEvtValid{};
+    std::atomic<uint64_t> m_stageSamples{0};
+    std::atomic<uint64_t> m_stageH2DUsTotal{0};
+    std::atomic<uint64_t> m_stagePreprocessUsTotal{0};
+    std::atomic<uint64_t> m_stageInferenceUsTotal{0};
+    std::atomic<uint64_t> m_stagePostprocessUsTotal{0};
+    std::atomic<uint64_t> m_stageD2HUsTotal{0};
+    std::atomic<uint64_t> m_stageH2DUsMax{0};
+    std::atomic<uint64_t> m_stagePreprocessUsMax{0};
+    std::atomic<uint64_t> m_stageInferenceUsMax{0};
+    std::atomic<uint64_t> m_stagePostprocessUsMax{0};
+    std::atomic<uint64_t> m_stageD2HUsMax{0};
 
     int m_inputH = 320;         // Model input height (target)
     int m_inputW = 320;         // Model input width (target)
@@ -173,13 +227,19 @@ private:
     std::mutex m_callbackWorkerMutex;
 
     void callbackWorkerLoop();
-    void destroyFullGraphs();
+    void destroyFullGraphs();              // Destroys every shape bucket
+    void destroyBucket(GraphShapeBucket& bucket);
     bool uploadRuntimeAimConfig(const AimConfig& aimConfig, bool force = false);
-    bool graphParamsMatch(int sourceWidth, int sourceHeight, int requiredGraphSlots,
-                          float confThreshold, int headClassId, float headBonus,
-                          uint32_t allowedClassMask, const AimConfig& aimConfig,
-                          float iouStickinessThreshold, float headYOffset, float bodyYOffset) const;
+    // True only when non-shape params match the cached set.
+    bool nonShapeParamsMatch(float confThreshold, int headClassId, float headBonus,
+                             uint32_t allowedClassMask, const AimConfig& aimConfig,
+                             float iouStickinessThreshold, float headYOffset,
+                             float bodyYOffset) const;
+    int findBucketIndex(int sourceWidth, int sourceHeight) const;
+    int pickBucketForCapture(int sourceWidth, int sourceHeight);
+    void touchBucket(int bucketIndex);
     bool ensureRawInputCapacity(size_t requiredBytes);
+    void recordStageTimings(int slotIndex);
 
     // Execute full fused pipeline (H2D + preprocess + inference + postprocess + D2H)
     bool executeFusedPipeline(void* rawInput, int width, int height,

@@ -12,6 +12,7 @@
 #include <vector>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <NvInferVersion.h>
 
 #ifndef _WIN32
@@ -295,6 +296,13 @@ SimpleInference::SimpleInference() {
         m_callbackSlotBusy[static_cast<size_t>(i)].store(false, std::memory_order_relaxed);
         m_callbackSlotPending[static_cast<size_t>(i)].store(false, std::memory_order_relaxed);
         m_callbackEvents[static_cast<size_t>(i)] = nullptr;
+        m_stageEvtStart[static_cast<size_t>(i)] = nullptr;
+        m_stageEvtPostH2D[static_cast<size_t>(i)] = nullptr;
+        m_stageEvtPostPreprocess[static_cast<size_t>(i)] = nullptr;
+        m_stageEvtPostInference[static_cast<size_t>(i)] = nullptr;
+        m_stageEvtPostPostprocess[static_cast<size_t>(i)] = nullptr;
+        m_stageEvtEnd[static_cast<size_t>(i)] = nullptr;
+        m_stageEvtValid[static_cast<size_t>(i)].store(false, std::memory_order_relaxed);
     }
 }
 
@@ -312,10 +320,17 @@ SimpleInference::~SimpleInference() {
     }
 
     for (int i = 0; i < kMaxCallbacksInFlight; ++i) {
-        if (m_callbackEvents[static_cast<size_t>(i)]) {
-            cudaEventDestroy(m_callbackEvents[static_cast<size_t>(i)]);
-            m_callbackEvents[static_cast<size_t>(i)] = nullptr;
+        const size_t idx = static_cast<size_t>(i);
+        if (m_callbackEvents[idx]) {
+            cudaEventDestroy(m_callbackEvents[idx]);
+            m_callbackEvents[idx] = nullptr;
         }
+        if (m_stageEvtStart[idx]) { cudaEventDestroy(m_stageEvtStart[idx]); m_stageEvtStart[idx] = nullptr; }
+        if (m_stageEvtPostH2D[idx]) { cudaEventDestroy(m_stageEvtPostH2D[idx]); m_stageEvtPostH2D[idx] = nullptr; }
+        if (m_stageEvtPostPreprocess[idx]) { cudaEventDestroy(m_stageEvtPostPreprocess[idx]); m_stageEvtPostPreprocess[idx] = nullptr; }
+        if (m_stageEvtPostInference[idx]) { cudaEventDestroy(m_stageEvtPostInference[idx]); m_stageEvtPostInference[idx] = nullptr; }
+        if (m_stageEvtPostPostprocess[idx]) { cudaEventDestroy(m_stageEvtPostPostprocess[idx]); m_stageEvtPostPostprocess[idx] = nullptr; }
+        if (m_stageEvtEnd[idx]) { cudaEventDestroy(m_stageEvtEnd[idx]); m_stageEvtEnd[idx] = nullptr; }
     }
 
     // Destroy CUDA graphs
@@ -490,11 +505,21 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
     cudaMallocHost(&m_h_rawPinned, rawInputSize);
     // Allocate result buffers per callback slot.
     for (int i = 0; i < kMaxCallbacksInFlight; ++i) {
+        const size_t idx = static_cast<size_t>(i);
         cudaMalloc(&m_d_inferenceResult[i], sizeof(InferenceResult));
         cudaMallocHost(&m_h_inferenceResultPinned[i], sizeof(InferenceResult));
-        cudaEventCreateWithFlags(&m_callbackEvents[static_cast<size_t>(i)], cudaEventDisableTiming);
-        m_callbackSlotPending[static_cast<size_t>(i)].store(false, std::memory_order_relaxed);
-        m_callbackSlotBusy[static_cast<size_t>(i)].store(false, std::memory_order_relaxed);
+        cudaEventCreateWithFlags(&m_callbackEvents[idx], cudaEventDisableTiming);
+        m_callbackSlotPending[idx].store(false, std::memory_order_relaxed);
+        m_callbackSlotBusy[idx].store(false, std::memory_order_relaxed);
+        if (m_stageTimingEnabled) {
+            cudaEventCreate(&m_stageEvtStart[idx]);
+            cudaEventCreate(&m_stageEvtPostH2D[idx]);
+            cudaEventCreate(&m_stageEvtPostPreprocess[idx]);
+            cudaEventCreate(&m_stageEvtPostInference[idx]);
+            cudaEventCreate(&m_stageEvtPostPostprocess[idx]);
+            cudaEventCreate(&m_stageEvtEnd[idx]);
+        }
+        m_stageEvtValid[idx].store(false, std::memory_order_relaxed);
     }
 
 #if TRT_USE_NEW_API
@@ -552,6 +577,11 @@ bool SimpleInference::executeFusedPipelinePostH2D(int width, int height,
         return false;
     }
 
+    const size_t slotIdx = static_cast<size_t>(resultSlot);
+    if (m_stageTimingEnabled && m_stageEvtPostH2D[slotIdx]) {
+        cudaEventRecord(m_stageEvtPostH2D[slotIdx], m_stream);
+    }
+
     // GPU preprocessing (RGB + optional resize)
     cudaError_t preprocessErr = cuda_preprocessing(
         m_d_rawInput, m_d_chwInput,
@@ -561,6 +591,9 @@ bool SimpleInference::executeFusedPipelinePostH2D(int width, int height,
         std::cerr << "[SimpleInference] cuda_preprocessing failed: "
                   << cudaGetErrorString(preprocessErr) << std::endl;
         return false;
+    }
+    if (m_stageTimingEnabled && m_stageEvtPostPreprocess[slotIdx]) {
+        cudaEventRecord(m_stageEvtPostPreprocess[slotIdx], m_stream);
     }
 
     // TensorRT inference
@@ -579,6 +612,9 @@ bool SimpleInference::executeFusedPipelinePostH2D(int width, int height,
     if (!enqueueOk) {
         std::cerr << "[SimpleInference] TensorRT enqueue failed" << std::endl;
         return false;
+    }
+    if (m_stageTimingEnabled && m_stageEvtPostInference[slotIdx]) {
+        cudaEventRecord(m_stageEvtPostInference[slotIdx], m_stream);
     }
 
     // One-pass GPU postprocess: decode + target select + movement + result packing
@@ -602,6 +638,9 @@ bool SimpleInference::executeFusedPipelinePostH2D(int width, int height,
                   << cudaGetErrorString(postErr) << std::endl;
         return false;
     }
+    if (m_stageTimingEnabled && m_stageEvtPostPostprocess[slotIdx]) {
+        cudaEventRecord(m_stageEvtPostPostprocess[slotIdx], m_stream);
+    }
 
     // Single D2H transfer (40 bytes)
     cudaError_t d2hErr = cudaMemcpyAsync(hResultSlot, dResultSlot,
@@ -610,6 +649,9 @@ bool SimpleInference::executeFusedPipelinePostH2D(int width, int height,
         std::cerr << "[SimpleInference] cudaMemcpyAsync(result D2H) failed: "
                   << cudaGetErrorString(d2hErr) << std::endl;
         return false;
+    }
+    if (m_stageTimingEnabled && m_stageEvtEnd[slotIdx]) {
+        cudaEventRecord(m_stageEvtEnd[slotIdx], m_stream);
     }
     return true;
 }
@@ -620,6 +662,12 @@ bool SimpleInference::executeFusedPipeline(void* rawInput, int width, int height
                                            float iouThreshold, float headYOffset, float bodyYOffset,
                                            int resultSlot) {
     size_t rawSize = static_cast<size_t>(width) * static_cast<size_t>(height) * static_cast<size_t>(inputBytesPerPixel());
+
+    const size_t slotIdx = static_cast<size_t>(resultSlot);
+    if (m_stageTimingEnabled && resultSlot >= 0 && resultSlot < kMaxCallbacksInFlight &&
+        m_stageEvtStart[slotIdx]) {
+        cudaEventRecord(m_stageEvtStart[slotIdx], m_stream);
+    }
 
     // H2D: Upload directly from pinned memory
     cudaError_t h2dErr = cudaMemcpyAsync(m_d_rawInput, rawInput, rawSize, cudaMemcpyHostToDevice, m_stream);
@@ -634,23 +682,71 @@ bool SimpleInference::executeFusedPipeline(void* rawInput, int width, int height
                                        headYOffset, bodyYOffset, resultSlot);
 }
 
-void SimpleInference::destroyFullGraphs() {
+void SimpleInference::destroyBucket(GraphShapeBucket& bucket) {
     for (int i = 0; i < kMaxCallbacksInFlight; ++i) {
         const size_t idx = static_cast<size_t>(i);
-        if (m_graphExecs[idx]) {
-            cudaGraphExecDestroy(m_graphExecs[idx]);
-            m_graphExecs[idx] = nullptr;
+        if (bucket.graphExecs[idx]) {
+            cudaGraphExecDestroy(bucket.graphExecs[idx]);
+            bucket.graphExecs[idx] = nullptr;
         }
-        if (m_graphs[idx]) {
-            cudaGraphDestroy(m_graphs[idx]);
-            m_graphs[idx] = nullptr;
+        if (bucket.graphs[idx]) {
+            cudaGraphDestroy(bucket.graphs[idx]);
+            bucket.graphs[idx] = nullptr;
         }
-        m_graphH2DNodes[idx] = nullptr;
-        m_graphRawSizes[idx] = 0;
+        bucket.h2dNodes[idx] = nullptr;
+        bucket.rawSizes[idx] = 0;
     }
-    m_graphSourceW = 0;
-    m_graphSourceH = 0;
-    m_graphSlotCount = 0;
+    bucket.used = false;
+    bucket.sourceW = 0;
+    bucket.sourceH = 0;
+    bucket.slotCount = 0;
+    bucket.lastUseTick = 0;
+}
+
+void SimpleInference::destroyFullGraphs() {
+    for (auto& bucket : m_shapeBuckets) {
+        destroyBucket(bucket);
+    }
+    m_graphUseTickCounter = 0;
+}
+
+int SimpleInference::findBucketIndex(int sourceWidth, int sourceHeight) const {
+    if (sourceWidth <= 0 || sourceHeight <= 0) return -1;
+    for (int i = 0; i < kMaxGraphShapes; ++i) {
+        const auto& b = m_shapeBuckets[static_cast<size_t>(i)];
+        if (b.used && b.sourceW == sourceWidth && b.sourceH == sourceHeight) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+int SimpleInference::pickBucketForCapture(int sourceWidth, int sourceHeight) {
+    // Reuse if shape already present.
+    int existing = findBucketIndex(sourceWidth, sourceHeight);
+    if (existing >= 0) return existing;
+    // Prefer an empty slot.
+    for (int i = 0; i < kMaxGraphShapes; ++i) {
+        if (!m_shapeBuckets[static_cast<size_t>(i)].used) return i;
+    }
+    // Evict the LRU bucket.
+    int victim = 0;
+    uint64_t oldest = m_shapeBuckets[0].lastUseTick;
+    for (int i = 1; i < kMaxGraphShapes; ++i) {
+        const auto& b = m_shapeBuckets[static_cast<size_t>(i)];
+        if (b.lastUseTick < oldest) {
+            oldest = b.lastUseTick;
+            victim = i;
+        }
+    }
+    destroyBucket(m_shapeBuckets[static_cast<size_t>(victim)]);
+    return victim;
+}
+
+void SimpleInference::touchBucket(int bucketIndex) {
+    if (bucketIndex < 0 || bucketIndex >= kMaxGraphShapes) return;
+    m_shapeBuckets[static_cast<size_t>(bucketIndex)].lastUseTick =
+        ++m_graphUseTickCounter;
 }
 
 bool SimpleInference::uploadRuntimeAimConfig(const AimConfig& aimConfig, bool force) {
@@ -674,22 +770,11 @@ bool SimpleInference::uploadRuntimeAimConfig(const AimConfig& aimConfig, bool fo
     return true;
 }
 
-bool SimpleInference::graphParamsMatch(int sourceWidth, int sourceHeight, int requiredGraphSlots,
-                                       float confThreshold, int headClassId, float headBonus,
-                                       uint32_t allowedClassMask, const AimConfig& aimConfig,
-                                       float iouStickinessThreshold, float headYOffset,
-                                       float bodyYOffset) const {
+bool SimpleInference::nonShapeParamsMatch(float confThreshold, int headClassId, float headBonus,
+                                          uint32_t allowedClassMask, const AimConfig& aimConfig,
+                                          float iouStickinessThreshold, float headYOffset,
+                                          float bodyYOffset) const {
     (void)aimConfig;
-    if (sourceWidth <= 0 || sourceHeight <= 0) return false;
-    if (requiredGraphSlots <= 0 || requiredGraphSlots > kMaxCallbacksInFlight) return false;
-    if (sourceWidth != m_graphSourceW || sourceHeight != m_graphSourceH) return false;
-    if (requiredGraphSlots > m_graphSlotCount) return false;
-    for (int i = 0; i < requiredGraphSlots; ++i) {
-        const size_t idx = static_cast<size_t>(i);
-        if (!m_graphExecs[idx]) {
-            return false;
-        }
-    }
     return (headClassId == m_cachedHeadClassId) &&
            (allowedClassMask == m_cachedAllowedClassMask) &&
            nearlyEqual(confThreshold, m_cachedConfThreshold) &&
@@ -705,10 +790,20 @@ bool SimpleInference::isFullGraphReadyForShape(int sourceWidth, int sourceHeight
                                                uint32_t allowedClassMask, const AimConfig& aimConfig,
                                                float iouStickinessThreshold, float headYOffset,
                                                float bodyYOffset) const {
-    return graphParamsMatch(sourceWidth, sourceHeight, graphSlotCount,
-                            confThreshold, headClassId, headBonus,
-                            allowedClassMask, aimConfig, iouStickinessThreshold,
-                            headYOffset, bodyYOffset);
+    if (graphSlotCount <= 0 || graphSlotCount > kMaxCallbacksInFlight) return false;
+    if (!nonShapeParamsMatch(confThreshold, headClassId, headBonus,
+                             allowedClassMask, aimConfig, iouStickinessThreshold,
+                             headYOffset, bodyYOffset)) {
+        return false;
+    }
+    const int bucketIndex = findBucketIndex(sourceWidth, sourceHeight);
+    if (bucketIndex < 0) return false;
+    const auto& b = m_shapeBuckets[static_cast<size_t>(bucketIndex)];
+    if (graphSlotCount > b.slotCount) return false;
+    for (int i = 0; i < graphSlotCount; ++i) {
+        if (!b.graphExecs[static_cast<size_t>(i)]) return false;
+    }
+    return true;
 }
 
 SimpleInference::LaunchStats SimpleInference::takeLaunchStats() {
@@ -717,6 +812,80 @@ SimpleInference::LaunchStats SimpleInference::takeLaunchStats() {
     stats.standard = m_standardLaunchCount.exchange(0, std::memory_order_relaxed);
     stats.graphFallback = m_graphFallbackCount.exchange(0, std::memory_order_relaxed);
     return stats;
+}
+
+namespace {
+inline uint64_t millisToUs(float millis) {
+    if (!(millis >= 0.0f)) return 0;
+    const double us = static_cast<double>(millis) * 1000.0;
+    if (us >= static_cast<double>(std::numeric_limits<uint64_t>::max())) {
+        return std::numeric_limits<uint64_t>::max();
+    }
+    return static_cast<uint64_t>(us);
+}
+
+inline void atomicUpdateMax(std::atomic<uint64_t>& target, uint64_t value) {
+    uint64_t current = target.load(std::memory_order_relaxed);
+    while (current < value &&
+           !target.compare_exchange_weak(current, value,
+                                         std::memory_order_relaxed,
+                                         std::memory_order_relaxed)) {
+    }
+}
+} // namespace
+
+void SimpleInference::recordStageTimings(int slotIndex) {
+    if (slotIndex < 0 || slotIndex >= kMaxCallbacksInFlight) return;
+    const size_t idx = static_cast<size_t>(slotIndex);
+    cudaEvent_t e0 = m_stageEvtStart[idx];
+    cudaEvent_t e1 = m_stageEvtPostH2D[idx];
+    cudaEvent_t e2 = m_stageEvtPostPreprocess[idx];
+    cudaEvent_t e3 = m_stageEvtPostInference[idx];
+    cudaEvent_t e4 = m_stageEvtPostPostprocess[idx];
+    cudaEvent_t e5 = m_stageEvtEnd[idx];
+    if (!e0 || !e1 || !e2 || !e3 || !e4 || !e5) return;
+
+    auto delta = [](cudaEvent_t a, cudaEvent_t b) -> uint64_t {
+        float ms = 0.0f;
+        if (cudaEventElapsedTime(&ms, a, b) != cudaSuccess) {
+            cudaGetLastError();
+            return 0;
+        }
+        return millisToUs(ms);
+    };
+    const uint64_t h2dUs = delta(e0, e1);
+    const uint64_t preprocessUs = delta(e1, e2);
+    const uint64_t inferenceUs = delta(e2, e3);
+    const uint64_t postprocessUs = delta(e3, e4);
+    const uint64_t d2hUs = delta(e4, e5);
+
+    m_stageSamples.fetch_add(1, std::memory_order_relaxed);
+    m_stageH2DUsTotal.fetch_add(h2dUs, std::memory_order_relaxed);
+    m_stagePreprocessUsTotal.fetch_add(preprocessUs, std::memory_order_relaxed);
+    m_stageInferenceUsTotal.fetch_add(inferenceUs, std::memory_order_relaxed);
+    m_stagePostprocessUsTotal.fetch_add(postprocessUs, std::memory_order_relaxed);
+    m_stageD2HUsTotal.fetch_add(d2hUs, std::memory_order_relaxed);
+    atomicUpdateMax(m_stageH2DUsMax, h2dUs);
+    atomicUpdateMax(m_stagePreprocessUsMax, preprocessUs);
+    atomicUpdateMax(m_stageInferenceUsMax, inferenceUs);
+    atomicUpdateMax(m_stagePostprocessUsMax, postprocessUs);
+    atomicUpdateMax(m_stageD2HUsMax, d2hUs);
+}
+
+SimpleInference::StageTimingStats SimpleInference::takeStageTimingStats() {
+    StageTimingStats out;
+    out.samples = m_stageSamples.exchange(0, std::memory_order_relaxed);
+    out.h2dUsTotal = m_stageH2DUsTotal.exchange(0, std::memory_order_relaxed);
+    out.preprocessUsTotal = m_stagePreprocessUsTotal.exchange(0, std::memory_order_relaxed);
+    out.inferenceUsTotal = m_stageInferenceUsTotal.exchange(0, std::memory_order_relaxed);
+    out.postprocessUsTotal = m_stagePostprocessUsTotal.exchange(0, std::memory_order_relaxed);
+    out.d2hUsTotal = m_stageD2HUsTotal.exchange(0, std::memory_order_relaxed);
+    out.h2dUsMax = m_stageH2DUsMax.exchange(0, std::memory_order_relaxed);
+    out.preprocessUsMax = m_stagePreprocessUsMax.exchange(0, std::memory_order_relaxed);
+    out.inferenceUsMax = m_stageInferenceUsMax.exchange(0, std::memory_order_relaxed);
+    out.postprocessUsMax = m_stagePostprocessUsMax.exchange(0, std::memory_order_relaxed);
+    out.d2hUsMax = m_stageD2HUsMax.exchange(0, std::memory_order_relaxed);
+    return out;
 }
 
 bool SimpleInference::ensureRawInputCapacity(size_t requiredBytes) {
@@ -782,26 +951,41 @@ bool SimpleInference::captureFullGraphForShape(int sourceWidth, int sourceHeight
         return false;
     }
 
-    if (m_stream) {
-        cudaStreamSynchronize(m_stream);
-    }
-    destroyFullGraphs();
-
-    // Cache parameters
-    m_graphSourceW = sourceWidth;
-    m_graphSourceH = sourceHeight;
-    m_graphSlotCount = graphSlotCount;
-    m_cachedConfThreshold = confThreshold;
-    m_cachedHeadClassId = headClassId;
-    m_cachedHeadBonus = headBonus;
-    m_cachedAllowedClassMask = allowedClassMask;
-    m_cachedIouThreshold = iouStickinessThreshold;
-    m_cachedHeadYOffset = headYOffset;
-    m_cachedBodyYOffset = bodyYOffset;
-
-    if (!uploadRuntimeAimConfig(aimConfig, true)) {
+    // Non-shape parameter change invalidates every cached bucket.
+    const bool paramsChanged = !nonShapeParamsMatch(
+        confThreshold, headClassId, headBonus,
+        allowedClassMask, aimConfig, iouStickinessThreshold,
+        headYOffset, bodyYOffset);
+    if (paramsChanged) {
+        if (m_stream) cudaStreamSynchronize(m_stream);
         destroyFullGraphs();
+        m_cachedConfThreshold = confThreshold;
+        m_cachedHeadClassId = headClassId;
+        m_cachedHeadBonus = headBonus;
+        m_cachedAllowedClassMask = allowedClassMask;
+        m_cachedIouThreshold = iouStickinessThreshold;
+        m_cachedHeadYOffset = headYOffset;
+        m_cachedBodyYOffset = bodyYOffset;
+    }
+
+    if (!uploadRuntimeAimConfig(aimConfig, paramsChanged)) {
         return false;
+    }
+
+    const int bucketIndex = pickBucketForCapture(sourceWidth, sourceHeight);
+    if (bucketIndex < 0) {
+        std::cerr << "[SimpleInference] No bucket available for shape "
+                  << sourceWidth << "x" << sourceHeight << std::endl;
+        return false;
+    }
+    GraphShapeBucket& bucket = m_shapeBuckets[static_cast<size_t>(bucketIndex)];
+
+    // If bucket already holds the requested shape with enough slots and execs,
+    // reuse it; only top up missing slots.
+    const bool shapeMatches =
+        bucket.used && bucket.sourceW == sourceWidth && bucket.sourceH == sourceHeight;
+    if (!shapeMatches) {
+        destroyBucket(bucket);
     }
 
     // Fill pinned buffer with dummy data. The H2D copy itself is captured into
@@ -811,18 +995,29 @@ bool SimpleInference::captureFullGraphForShape(int sourceWidth, int sourceHeight
     if (err != cudaSuccess) {
         std::cerr << "[SimpleInference] Failed to sync before graph capture: "
                   << cudaGetErrorString(err) << std::endl;
-        destroyFullGraphs();
         return false;
     }
 
-    for (int slot = 0; slot < graphSlotCount; ++slot) {
+    bucket.sourceW = sourceWidth;
+    bucket.sourceH = sourceHeight;
+    const int slotsToCapture = std::max(bucket.slotCount, graphSlotCount);
+
+    for (int slot = 0; slot < slotsToCapture; ++slot) {
         const size_t slotIdx = static_cast<size_t>(slot);
+        if (bucket.graphExecs[slotIdx]) {
+            continue;  // Slot already captured for this shape.
+        }
         err = cudaStreamBeginCapture(m_stream, cudaStreamCaptureModeRelaxed);
         if (err != cudaSuccess) {
             std::cerr << "[SimpleInference] Failed to begin full graph capture for slot "
                       << slot << ": " << cudaGetErrorString(err) << std::endl;
-            destroyFullGraphs();
+            destroyBucket(bucket);
             return false;
+        }
+
+        // Capture stage timing start event into the graph (if enabled).
+        if (m_stageTimingEnabled && m_stageEvtStart[slotIdx]) {
+            cudaEventRecord(m_stageEvtStart[slotIdx], m_stream);
         }
 
         err = cudaMemcpyAsync(m_d_rawInput, m_h_rawPinned, rawSize,
@@ -835,7 +1030,7 @@ bool SimpleInference::captureFullGraphForShape(int sourceWidth, int sourceHeight
             }
             std::cerr << "[SimpleInference] Failed to capture H2D memcpy for slot "
                       << slot << ": " << cudaGetErrorString(err) << std::endl;
-            destroyFullGraphs();
+            destroyBucket(bucket);
             return false;
         }
 
@@ -853,41 +1048,47 @@ bool SimpleInference::captureFullGraphForShape(int sourceWidth, int sourceHeight
             }
             std::cerr << "[SimpleInference] Failed to launch full pipeline during graph capture"
                       << " for slot " << slot << std::endl;
-            destroyFullGraphs();
+            destroyBucket(bucket);
             return false;
         }
 
-        err = cudaStreamEndCapture(m_stream, &m_graphs[slotIdx]);
-        if (err != cudaSuccess || !m_graphs[slotIdx]) {
+        err = cudaStreamEndCapture(m_stream, &bucket.graphs[slotIdx]);
+        if (err != cudaSuccess || !bucket.graphs[slotIdx]) {
             std::cerr << "[SimpleInference] Failed to end full graph capture for slot "
                       << slot << ": " << cudaGetErrorString(err) << std::endl;
-            destroyFullGraphs();
+            destroyBucket(bucket);
             return false;
         }
 
-        m_graphH2DNodes[slotIdx] = findGraphH2DMemcpyNode(m_graphs[slotIdx], m_d_rawInput, rawSize);
-        m_graphRawSizes[slotIdx] = rawSize;
-        if (!m_graphH2DNodes[slotIdx]) {
+        bucket.h2dNodes[slotIdx] = findGraphH2DMemcpyNode(bucket.graphs[slotIdx], m_d_rawInput, rawSize);
+        bucket.rawSizes[slotIdx] = rawSize;
+        if (!bucket.h2dNodes[slotIdx]) {
             std::cerr << "[SimpleInference] Failed to locate captured H2D memcpy node for slot "
                       << slot << std::endl;
-            destroyFullGraphs();
+            destroyBucket(bucket);
             return false;
         }
 
-        err = cudaGraphInstantiate(&m_graphExecs[slotIdx], m_graphs[slotIdx], nullptr, nullptr, 0);
+        err = cudaGraphInstantiate(&bucket.graphExecs[slotIdx], bucket.graphs[slotIdx], nullptr, nullptr, 0);
         if (err != cudaSuccess) {
             std::cerr << "[SimpleInference] Failed to instantiate full graph for slot "
                       << slot << ": " << cudaGetErrorString(err) << std::endl;
-            destroyFullGraphs();
+            destroyBucket(bucket);
             return false;
         }
-        cudaGraphUpload(m_graphExecs[slotIdx], m_stream);
+        cudaGraphUpload(bucket.graphExecs[slotIdx], m_stream);
     }
     cudaStreamSynchronize(m_stream);
 
+    bucket.used = true;
+    bucket.slotCount = std::max(bucket.slotCount, slotsToCapture);
+    touchBucket(bucketIndex);
+
     std::cout << "[SimpleInference] Full CUDA graph captured for " << sourceWidth << "x"
-              << sourceHeight << " source (" << graphSlotCount
-              << " slots, H2D+preprocess+inference+postprocess)" << std::endl;
+              << sourceHeight << " source (" << bucket.slotCount
+              << " slots, bucket " << bucketIndex << "/" << kMaxGraphShapes
+              << ", H2D+preprocess+inference+postprocess"
+              << (m_stageTimingEnabled ? "+timing" : "") << ")" << std::endl;
     return true;
 }
 
@@ -952,6 +1153,10 @@ void SimpleInference::callbackWorkerLoop() {
         m_callbackSlotPending[static_cast<size_t>(pendingSlot)].store(false, std::memory_order_release);
 
         if (eventStatus == cudaSuccess) {
+            if (m_stageTimingEnabled &&
+                m_stageEvtValid[static_cast<size_t>(pendingSlot)].exchange(false, std::memory_order_acquire)) {
+                recordStageTimings(pendingSlot);
+            }
             CallbackData& cbData = m_callbackDataSlots[static_cast<size_t>(pendingSlot)];
             try {
                 if (cbData.callback && cbData.resultPtr) {
@@ -993,23 +1198,27 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
 
     if (m_callbacksInFlight.load(std::memory_order_acquire) >= kMaxCallbacksInFlight) return false;
 
-    const bool graphAvailable =
-        graphParamsMatch(width, height, 1,
-                         confThreshold, headClassId, headBonus,
-                         allowedClassMask, aimConfig, iouStickinessThreshold,
-                         headYOffset, bodyYOffset);
+    const bool nonShapeOk = nonShapeParamsMatch(
+        confThreshold, headClassId, headBonus,
+        allowedClassMask, aimConfig, iouStickinessThreshold,
+        headYOffset, bodyYOffset);
+    const int bucketIndex = nonShapeOk ? findBucketIndex(width, height) : -1;
+    const int bucketSlotCount = (bucketIndex >= 0)
+        ? m_shapeBuckets[static_cast<size_t>(bucketIndex)].slotCount
+        : 0;
+    const bool graphAvailable = (bucketIndex >= 0) && (bucketSlotCount > 0);
 
     int callbackSlot = -1;
     if (graphAvailable) {
-        for (int attempt = 0; attempt < m_graphSlotCount; ++attempt) {
+        for (int attempt = 0; attempt < bucketSlotCount; ++attempt) {
             const int idx = static_cast<int>((m_callbackSlotCursor + static_cast<uint32_t>(attempt)) %
-                                             static_cast<uint32_t>(m_graphSlotCount));
+                                             static_cast<uint32_t>(bucketSlotCount));
             bool expected = false;
             if (m_callbackSlotBusy[idx].compare_exchange_strong(
                     expected, true, std::memory_order_acq_rel, std::memory_order_relaxed)) {
                 callbackSlot = idx;
                 m_callbackSlotCursor =
-                    (static_cast<uint32_t>(idx) + 1u) % static_cast<uint32_t>(m_graphSlotCount);
+                    (static_cast<uint32_t>(idx) + 1u) % static_cast<uint32_t>(bucketSlotCount);
                 break;
             }
         }
@@ -1050,22 +1259,21 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
     }
 
     // Use CUDA Graph only when shape and parameters match captured constants.
+    GraphShapeBucket* bucket = (bucketIndex >= 0)
+        ? &m_shapeBuckets[static_cast<size_t>(bucketIndex)]
+        : nullptr;
     const bool canUseGraph =
-        graphAvailable &&
-        callbackSlot < m_graphSlotCount &&
-        graphParamsMatch(width, height, callbackSlot + 1,
-                         confThreshold, headClassId, headBonus,
-                         allowedClassMask, aimConfig, iouStickinessThreshold,
-                         headYOffset, bodyYOffset) &&
-        m_graphExecs[static_cast<size_t>(callbackSlot)] != nullptr &&
-        m_graphH2DNodes[static_cast<size_t>(callbackSlot)] != nullptr &&
-        m_graphRawSizes[static_cast<size_t>(callbackSlot)] == rawSize;
+        graphAvailable && bucket &&
+        callbackSlot < bucket->slotCount &&
+        bucket->graphExecs[static_cast<size_t>(callbackSlot)] != nullptr &&
+        bucket->h2dNodes[static_cast<size_t>(callbackSlot)] != nullptr &&
+        bucket->rawSizes[static_cast<size_t>(callbackSlot)] == rawSize;
 
     if (canUseGraph) {
         // H2D is inside the graph; only patch the source host pointer.
         cudaError_t err = cudaGraphExecMemcpyNodeSetParams1D(
-            m_graphExecs[static_cast<size_t>(callbackSlot)],
-            m_graphH2DNodes[static_cast<size_t>(callbackSlot)],
+            bucket->graphExecs[static_cast<size_t>(callbackSlot)],
+            bucket->h2dNodes[static_cast<size_t>(callbackSlot)],
             m_d_rawInput,
             pinnedData,
             rawSize,
@@ -1083,13 +1291,14 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
             m_standardLaunchCount.fetch_add(1, std::memory_order_relaxed);
         } else {
             // Launch graph (H2D + preprocess + inference + postprocess + D2H)
-            err = cudaGraphLaunch(m_graphExecs[static_cast<size_t>(callbackSlot)], m_stream);
+            err = cudaGraphLaunch(bucket->graphExecs[static_cast<size_t>(callbackSlot)], m_stream);
             if (err != cudaSuccess) {
                 std::cerr << "[SimpleInference] cudaGraphLaunch failed: "
                           << cudaGetErrorString(err) << std::endl;
                 return clearInFlightAndFail(true);
             }
             m_graphLaunchCount.fetch_add(1, std::memory_order_relaxed);
+            touchBucket(bucketIndex);
         }
     } else {
         // Standard pipeline execution
@@ -1100,6 +1309,10 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
             return clearInFlightAndFail(true);
         }
         m_standardLaunchCount.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    if (m_stageTimingEnabled) {
+        m_stageEvtValid[static_cast<size_t>(callbackSlot)].store(true, std::memory_order_release);
     }
 
     // Setup pre-allocated callback data (no heap allocation)
