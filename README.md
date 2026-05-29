@@ -31,7 +31,7 @@
     *   [Visual Studio 2022](https://visualstudio.microsoft.com/vs/) (C++ Desktop Development).
     *   [CMake 3.20+](https://cmake.org/download/).
     *   [CUDA Toolkit 13.1](https://developer.download.nvidia.com/compute/cuda/13.1.0/network_installers/cuda_13.1.0_windows_network.exe).
-    *   TensorRT 10.14.1.48 (included in `needaimbot/modules/`).
+    *   TensorRT 10.14.1.48 — **install locally** ([download](https://developer.nvidia.com/tensorrt-download)). NVIDIA does not allow redistribution, so the library is no longer vendored in this repo. See *Installation → step 2* below.
 
 ## Installation
 
@@ -40,11 +40,34 @@
     git clone --recursive https://github.com/needitem/needaimbot.git
     ```
 
-2.  **Setup Input Hardware (Optional)**:
+2.  **Install TensorRT** (required, not bundled):
+
+    NVIDIA TensorRT cannot be redistributed, so this repo does **not** ship the
+    runtime. Download it yourself and drop the unpacked folder at
+    `needaimbot/modules/TensorRT-10.14.1.48/` so the existing CMake paths
+    resolve. `.gitignore` already excludes `modules/TensorRT-*/`.
+
+    1. Open <https://developer.nvidia.com/tensorrt-download> (free NVIDIA
+       Developer account required).
+    2. Pick **TensorRT 10.14 GA** → **Windows ZIP** for **CUDA 13.x**.
+    3. Unzip and copy the contents so the layout becomes:
+       ```
+       needaimbot/modules/TensorRT-10.14.1.48/
+           bin/      nvinfer_10.dll, nvinfer_builder_resource_sm*_10.dll, ...
+           include/  NvInfer.h, ...
+           lib/      nvinfer_10.lib, ...
+           python/   tensorrt-10.14.1.48-cp3*-none-win_amd64.whl
+       ```
+    4. Add `needaimbot\modules\TensorRT-10.14.1.48\bin` to your system **PATH**
+       (so the DLLs load at runtime).
+    5. (Optional) `pip install` the matching `tensorrt-*.whl` from `python/`
+       if you want the Python bindings for EngineExport.
+
+3.  **Setup Input Hardware (Optional)**:
     For the safest experience, use an external Arduino device to simulate mouse input.
     *   **See**: [HID_Mouse Repository](https://github.com/needitem/HID_Mouse) for firmware instructions.
 
-3.  **Build the Project**:
+4.  **Build the Project**:
     ```bash
     # Using CMake (recommended)
     build_cmake.bat
@@ -55,7 +78,7 @@
     ```
     The executable will be in `build/bin/Release/`.
 
-4.  **Prepare Models**:
+5.  **Prepare Models**:
     *   Place your `.engine` files (exported via EngineExport) in the `models/` directory.
     *   Ensure `config.ini` points to the correct model file.
 
