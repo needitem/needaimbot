@@ -48,3 +48,8 @@ nul
 
 build_obf_headless/
 needaimbot_obf/
+
+
+# NVIDIA TensorRT — install locally, do NOT commit (LFS bandwidth)
+needaimbot/modules/TensorRT-*/
+modules/TensorRT-*/
