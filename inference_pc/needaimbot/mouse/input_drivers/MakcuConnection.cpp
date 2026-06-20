@@ -16,6 +16,7 @@
 #include <pthread.h>
 #include <unistd.h>
 #include <poll.h>
+#include <linux/serial.h>
 #endif
 
 /* ---------- Makcu-specific constants ---------------------------- */
@@ -590,13 +591,24 @@ bool MakcuConnection::configurePort(int baud_rate) {
     tty_config_.c_iflag &= ~(IXON | IXOFF | IXANY);
     tty_config_.c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL);
 
-    // Read settings: return immediately with whatever is available
+    // Read settings: fully non-blocking (poll() gates reads). VTIME=1 would be a
+    // 100ms timeout on any bare read() - avoid that footgun.
     tty_config_.c_cc[VMIN] = 0;
-    tty_config_.c_cc[VTIME] = 1;  // 100ms timeout
+    tty_config_.c_cc[VTIME] = 0;
 
     if (tcsetattr(serial_fd_, TCSANOW, &tty_config_) != 0) {
         std::cerr << "[Makcu] Failed to set port attributes" << std::endl;
         return false;
+    }
+
+    // Minimize the USB-serial latency timer (default ~16ms of RX buffering).
+    // This is the single largest source of button-read latency / TX jitter.
+    struct serial_struct ss;
+    if (ioctl(serial_fd_, TIOCGSERIAL, &ss) == 0) {
+        ss.flags |= ASYNC_LOW_LATENCY;
+        if (ioctl(serial_fd_, TIOCSSERIAL, &ss) == 0) {
+            std::cout << "[Makcu] ASYNC_LOW_LATENCY enabled" << std::endl;
+        }
     }
 
     return true;

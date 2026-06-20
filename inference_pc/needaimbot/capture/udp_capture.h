@@ -168,18 +168,23 @@ private:
     int m_receiveAffinityCore = kAffinityUnset;  // see SetReceiveAffinity()
     std::atomic<bool> m_running{false};
 
-    static constexpr int NUM_BUFFERS = 3;
-    uint8_t* m_pinnedFrameBuffer[NUM_BUFFERS] = {nullptr, nullptr, nullptr};
+    // 5 buffers: with newest-wins + one in-use by the consumer, leaves room for
+    // two frames assembling concurrently (fragments interleave across frames),
+    // reducing reservation failures / dropped frames. ~1.6MB each at 640^3.
+    static constexpr int NUM_BUFFERS = 5;
+    uint8_t* m_pinnedFrameBuffer[NUM_BUFFERS] = {};
     size_t m_pinnedBufferSize = 0;
     bool m_usePinnedMemory = false;
 
-    std::atomic<int> m_bufferState[NUM_BUFFERS] = {BUFFER_FREE, BUFFER_FREE, BUFFER_FREE};
-    std::atomic<unsigned int> m_bufferWidth[NUM_BUFFERS] = {0, 0, 0};
-    std::atomic<unsigned int> m_bufferHeight[NUM_BUFFERS] = {0, 0, 0};
-    std::atomic<unsigned int> m_bufferBytesPerPixel[NUM_BUFFERS] = {3, 3, 3};
+    std::atomic<int> m_bufferState[NUM_BUFFERS] = {
+        BUFFER_FREE, BUFFER_FREE, BUFFER_FREE, BUFFER_FREE, BUFFER_FREE};
+    std::atomic<unsigned int> m_bufferWidth[NUM_BUFFERS] = {};
+    std::atomic<unsigned int> m_bufferHeight[NUM_BUFFERS] = {};
+    std::atomic<unsigned int> m_bufferBytesPerPixel[NUM_BUFFERS] = {3, 3, 3, 3, 3};
     std::atomic<unsigned int> m_bufferPixelFormat[NUM_BUFFERS] = {
-        UDP_PIXEL_FORMAT_RGB, UDP_PIXEL_FORMAT_RGB, UDP_PIXEL_FORMAT_RGB};
-    std::atomic<uint64_t> m_bufferFrameId[NUM_BUFFERS] = {0, 0, 0};
+        UDP_PIXEL_FORMAT_RGB, UDP_PIXEL_FORMAT_RGB, UDP_PIXEL_FORMAT_RGB,
+        UDP_PIXEL_FORMAT_RGB, UDP_PIXEL_FORMAT_RGB};
+    std::atomic<uint64_t> m_bufferFrameId[NUM_BUFFERS] = {};
 
     std::atomic<int> m_latestBufferIndex{-1};
     std::condition_variable m_publishCv;

@@ -1900,17 +1900,17 @@ int main(int argc, char* argv[]) {
         }
         if (!gotFrame) {
             // No frame, handle recoil if active (left+right click)
-            auto recoilNow = std::chrono::steady_clock::now();
+            const auto recoilNow = std::chrono::steady_clock::now();
             const uint8_t recoilButtonMask = makcu.buttonMask();
             if (cfg.noRecoilEnabled &&
                 makcuMaskShooting(recoilButtonMask) &&
                 (cfg.forceAimOn || makcuMaskAiming(recoilButtonMask))) {
-                auto recoilElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(recoilNow - lastRecoilTime).count();
-                if (recoilElapsed >= cfg.recoilTickMs) {
-                    int recoilX = static_cast<int>(cfg.recoilCompX);
-                    int recoilY = static_cast<int>(cfg.recoilCompY);
-                    queueMove(recoilX, recoilY);
-                    lastRecoilTime = recoilNow;
+                if (recoilNow - lastRecoilTime >= std::chrono::milliseconds(cfg.recoilTickMs)) {
+                    queueMove(static_cast<int>(cfg.recoilCompX), static_cast<int>(cfg.recoilCompY));
+                    lastRecoilTime += std::chrono::milliseconds(cfg.recoilTickMs);
+                    if (lastRecoilTime < recoilNow - std::chrono::milliseconds(cfg.recoilTickMs)) {
+                        lastRecoilTime = recoilNow;
+                    }
                 }
             }
             continue;
@@ -1943,14 +1943,17 @@ int main(int argc, char* argv[]) {
         bool aiming = cfg.forceAimOn || makcuMaskAiming(frameButtonMask);
         bool shooting = makcuMaskShooting(frameButtonMask);
 
-        // No-recoil compensation (runs every tick while left+right click)
+        // No-recoil compensation (runs every tick while left+right click).
+        // Use a fresh clock read (loop-top `now` can be ~16ms stale after a
+        // blocking acquire) and advance by exact ticks to avoid drift/jitter.
         if (cfg.noRecoilEnabled && shooting && aiming) {
-            auto recoilElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastRecoilTime).count();
-            if (recoilElapsed >= cfg.recoilTickMs) {
-                int recoilX = static_cast<int>(cfg.recoilCompX);
-                int recoilY = static_cast<int>(cfg.recoilCompY);
-                queueMove(recoilX, recoilY);
-                lastRecoilTime = now;
+            const auto recoilNow = std::chrono::steady_clock::now();
+            if (recoilNow - lastRecoilTime >= std::chrono::milliseconds(cfg.recoilTickMs)) {
+                queueMove(static_cast<int>(cfg.recoilCompX), static_cast<int>(cfg.recoilCompY));
+                lastRecoilTime += std::chrono::milliseconds(cfg.recoilTickMs);
+                if (lastRecoilTime < recoilNow - std::chrono::milliseconds(cfg.recoilTickMs)) {
+                    lastRecoilTime = recoilNow;  // fell far behind -> resync, no burst
+                }
             }
         }
 

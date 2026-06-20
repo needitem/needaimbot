@@ -393,8 +393,28 @@ bool UDPCapture::Initialize(unsigned short listenPort) {
         return false;
     }
 
+    // Allow immediate rebind after a crash/restart.
+    int reuse = 1;
+    setsockopt(m_recvSocket, SOL_SOCKET, SO_REUSEADDR, (char*)&reuse, sizeof(reuse));
+
     int recvBufSize = 32 * 1024 * 1024;
     setsockopt(m_recvSocket, SOL_SOCKET, SO_RCVBUF, (char*)&recvBufSize, sizeof(recvBufSize));
+#ifndef _WIN32
+    // The kernel clamps SO_RCVBUF to net.core.rmem_max (often ~208KB on stock
+    // Jetson) - a too-small buffer silently drops bursts -> dropped frames.
+    // Verify the actual size and warn so the cause is visible.
+    int actualBuf = 0;
+    socklen_t blen = sizeof(actualBuf);
+    if (getsockopt(m_recvSocket, SOL_SOCKET, SO_RCVBUF, &actualBuf, &blen) == 0) {
+        // Linux reports double the usable size.
+        const int usable = actualBuf / 2;
+        if (usable < recvBufSize / 2) {
+            std::cerr << "[UDPCapture] WARNING: SO_RCVBUF clamped to " << (usable / 1024)
+                      << "KB (requested " << (recvBufSize / 1024)
+                      << "KB). Raise it: sudo sysctl -w net.core.rmem_max=33554432\n";
+        }
+    }
+#endif
 
     sockaddr_in bindAddr{};
     bindAddr.sin_family = AF_INET;
