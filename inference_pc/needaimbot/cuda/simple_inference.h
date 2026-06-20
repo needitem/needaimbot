@@ -93,6 +93,15 @@ public:
         m_stageTimingEnabled = enabled;
     }
 
+    // Override the completion-callback worker's CPU core. >=0 pins to that core,
+    // <0 leaves it unpinned. Must be set before loadEngine() (which starts the
+    // worker). When unset, the worker keeps its default of pinning to last-1.
+    static constexpr int kCallbackAffinityUnset = -1000;
+    void setCallbackAffinity(int core) {
+        if (m_loaded) return;
+        m_callbackAffinityCore = core;
+    }
+
     struct StageTimingStats {
         uint64_t samples = 0;
         // Microsecond totals (host-side conversion of cudaEventElapsedTime millis)
@@ -222,6 +231,7 @@ private:
     std::atomic<uint64_t> m_graphFallbackCount{0};
     uint32_t m_callbackSlotCursor = 0;
     std::atomic<bool> m_callbackWorkerRunning{false};
+    int m_callbackAffinityCore = kCallbackAffinityUnset;  // see setCallbackAffinity()
     std::thread m_callbackWorkerThread;
     std::condition_variable m_callbackWorkerCv;
     std::mutex m_callbackWorkerMutex;

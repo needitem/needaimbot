@@ -96,6 +96,12 @@ public:
     bool IsPinnedMemoryEnabled() const { return m_usePinnedMemory; }
     bool SendFrameCredit(uint32_t minFrameId = 0, uint32_t credits = 1);
 
+    // Override the receive thread's CPU core. >=0 pins to that core, <0 leaves
+    // it unpinned. Call before StartCapture(). When never set, the thread keeps
+    // its built-in default of pinning to the last core.
+    static constexpr int kAffinityUnset = -1000;
+    void SetReceiveAffinity(int core) { m_receiveAffinityCore = core; }
+
 private:
     enum BufferState : int {
         BUFFER_FREE = 0,
@@ -159,6 +165,7 @@ private:
     unsigned short m_listenPort = 5007;
 
     std::thread m_recvThread;
+    int m_receiveAffinityCore = kAffinityUnset;  // see SetReceiveAffinity()
     std::atomic<bool> m_running{false};
 
     static constexpr int NUM_BUFFERS = 3;

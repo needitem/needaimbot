@@ -405,6 +405,22 @@ inline bool makcuMaskShooting(uint8_t mask) {
     return (mask & kMakcuLeftMask) != 0;
 }
 
+// Pin the calling thread to a single CPU core. core < 0 is a no-op (leave the
+// thread schedulable on any core).
+void pinThreadToCore(int core) {
+#ifdef __linux__
+    if (core < 0) return;
+    const long cpuCount = sysconf(_SC_NPROCESSORS_ONLN);
+    if (cpuCount <= 1 || core >= cpuCount) return;
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(core, &cpuset);
+    pthread_setaffinity_np(pthread_self(), sizeof(cpuset), &cpuset);
+#else
+    (void)core;
+#endif
+}
+
 void applyRealtimeHint(const char* threadName, int priorityOffsetFromMax) {
 #ifdef __linux__
     if (threadName && threadName[0] != '\0') {
@@ -513,6 +529,24 @@ struct Config {
 
     // IoU stickiness for target tracking
     float iouStickinessThreshold = 0.3f;
+    // Same-target stickiness fallback: when IoU < threshold, a box whose
+    // center is within (prev_diag * factor) is treated as the same enemy.
+    // 0 = disabled, 0.4-0.6 typical for fast close targets.
+    float distanceStickinessFactor = 0.5f;
+    // Track persistence: after the tracked target stops matching this many
+    // frames the system commits to a new target. During the gap the mouse
+    // is held still (no movement) so the track can re-acquire if the same
+    // enemy is briefly missed. 0 = disabled.
+    int trackPersistenceFrames = 5;
+
+    // Kalman target predictor (leads moving targets to compensate loop latency)
+    bool kalmanEnabled = false;
+    float kalmanProcessPos = 40.0f;     // position process noise
+    float kalmanProcessVel = 1800.0f;   // velocity process noise (higher = more agile)
+    float kalmanMeasNoise = 35.0f;      // measurement noise (higher = more smoothing)
+    float kalmanVelDamping = 0.15f;     // decay of the velocity lead (anti-overshoot)
+    float kalmanMaxVel = 20000.0f;      // velocity clamp (model px/s)
+    float kalmanPredictionMs = 8.0f;    // how far ahead to lead (milliseconds)
 
     // No-recoil
     bool noRecoilEnabled = true;
@@ -527,10 +561,15 @@ struct Config {
     int frameCreditDepth = 2;     // Allow the Game PC to pre-send the newest next frame
     bool directAimMoveInCallback = true;
 
-    // Gaussian noise for humanization
-    bool noiseEnabled = true;
-    float noiseStddevX = 0.8f;  // Standard deviation for X axis
-    float noiseStddevY = 0.8f;  // Standard deviation for Y axis
+    // WindMouse humanized movement (replaces the old gaussian noise).
+    // Closed-loop adaptation: the GPU-computed step toward the target acts as
+    // gravity; wind adds organic curvature that fades as the aim settles.
+    bool windMouseEnabled = false;
+    float windMouseGravity = 0.6f;      // fraction of the GPU step applied as pull (lower = smoother/slower)
+    float windMouseWind = 3.0f;         // random wind magnitude (px) -> path curvature
+    float windMouseInertia = 0.45f;     // velocity retention 0..0.9 (higher = more curve/overshoot)
+    float windMouseMaxStep = 30.0f;     // per-frame movement clamp (px)
+    float windMouseWindFalloff = 40.0f; // distance (px) under which wind fades so the aim settles
 
     // Shoot capture offset (applied when aiming+shooting)
     float shootOffsetX = 0.0f;
@@ -538,6 +577,16 @@ struct Config {
 
     // Makcu settings
     int makcuBaudrate = 4000000;
+
+    // CPU core affinity (latency stability). When disabled, the receive and
+    // callback threads keep their built-in default pinning (last / last-1 core)
+    // and the main/sender threads float. When enabled, each thread is pinned to
+    // the configured core; -1 leaves that thread unpinned.
+    bool cpuAffinityEnabled = false;
+    int affinityCoreMain = 5;       // frame-acquire + submit loop
+    int affinityCoreReceive = 7;    // UDP receive thread
+    int affinityCoreCallback = 6;   // GPU completion / mouse-move worker
+    int affinityCoreSender = 4;     // move-sender thread (used when not direct)
 
     // Runtime diagnostics
     bool perfStatsEnabled = true;
@@ -554,22 +603,44 @@ struct Config {
 
     // Convert to GPU movement config
     static gpa::AimConfig makeGpuAimConfig(
-        float kpX, float kpY, float softnessX, float softnessY) {
+        float kpX, float kpY, float softnessX, float softnessY,
+        float distanceStickinessFactor, int trackPersistenceFrames) {
         gpa::AimConfig aim;
         aim.kp_x = kpX;
         aim.kp_y = kpY;
         aim.p_softness_x = softnessX;
         aim.p_softness_y = softnessY;
+        aim.distance_stickiness_factor = distanceStickinessFactor;
+        aim.track_persistence_frames = trackPersistenceFrames;
         return aim;
     }
 
+    // Populate the runtime Kalman predictor fields shared by both aim profiles.
+    // k_dt is left at its default here; the host overwrites it per frame with
+    // the measured frame interval.
+    void applyKalman(gpa::AimConfig& aim) const {
+        aim.kalman_enabled = kalmanEnabled ? 1.0f : 0.0f;
+        aim.k_process_pos = kalmanProcessPos;
+        aim.k_process_vel = kalmanProcessVel;
+        aim.k_meas_noise = kalmanMeasNoise;
+        aim.k_vel_damping = kalmanVelDamping;
+        aim.k_max_vel = kalmanMaxVel;
+        aim.k_lookahead = kalmanPredictionMs * 0.001f;
+    }
+
     gpa::AimConfig toGpuAimConfig() const {
-        return makeGpuAimConfig(aimKpX, aimKpY, aimSoftnessX, aimSoftnessY);
+        gpa::AimConfig aim = makeGpuAimConfig(aimKpX, aimKpY, aimSoftnessX, aimSoftnessY,
+                                              distanceStickinessFactor, trackPersistenceFrames);
+        applyKalman(aim);
+        return aim;
     }
 
     gpa::AimConfig toThumbGpuAimConfig() const {
-        return makeGpuAimConfig(
-            thumbAimKpX, thumbAimKpY, thumbAimSoftnessX, thumbAimSoftnessY);
+        gpa::AimConfig aim = makeGpuAimConfig(
+            thumbAimKpX, thumbAimKpY, thumbAimSoftnessX, thumbAimSoftnessY,
+            distanceStickinessFactor, trackPersistenceFrames);
+        applyKalman(aim);
+        return aim;
     }
 
     bool load(const std::string& path) {
@@ -606,6 +677,19 @@ struct Config {
                                     : aimSoftnessY;
 
             if (j.contains("iou_stickiness_threshold")) iouStickinessThreshold = j["iou_stickiness_threshold"];
+            if (j.contains("distance_stickiness_factor")) distanceStickinessFactor = j["distance_stickiness_factor"];
+            if (j.contains("track_persistence_frames")) {
+                int v = j["track_persistence_frames"];
+                trackPersistenceFrames = std::clamp(v, 0, 60);
+            }
+
+            if (j.contains("kalman_enabled")) kalmanEnabled = j["kalman_enabled"];
+            if (j.contains("kalman_process_noise_position")) kalmanProcessPos = j["kalman_process_noise_position"];
+            if (j.contains("kalman_process_noise_velocity")) kalmanProcessVel = j["kalman_process_noise_velocity"];
+            if (j.contains("kalman_measurement_noise")) kalmanMeasNoise = j["kalman_measurement_noise"];
+            if (j.contains("kalman_velocity_damping")) kalmanVelDamping = j["kalman_velocity_damping"];
+            if (j.contains("kalman_max_velocity")) kalmanMaxVel = j["kalman_max_velocity"];
+            if (j.contains("kalman_prediction_ms")) kalmanPredictionMs = j["kalman_prediction_ms"];
 
             if (j.contains("no_recoil_enabled")) noRecoilEnabled = j["no_recoil_enabled"];
             if (j.contains("recoil_comp_x")) recoilCompX = j["recoil_comp_x"];
@@ -619,15 +703,23 @@ struct Config {
             if (j.contains("direct_aim_move_in_callback")) directAimMoveInCallback = j["direct_aim_move_in_callback"];
             if (j.contains("makcu_baudrate")) makcuBaudrate = j["makcu_baudrate"];
 
-            if (j.contains("noise_enabled")) noiseEnabled = j["noise_enabled"];
-            if (j.contains("noise_stddev_x")) noiseStddevX = j["noise_stddev_x"];
-            if (j.contains("noise_stddev_y")) noiseStddevY = j["noise_stddev_y"];
+            if (j.contains("windmouse_enabled")) windMouseEnabled = j["windmouse_enabled"];
+            if (j.contains("windmouse_gravity")) windMouseGravity = j["windmouse_gravity"];
+            if (j.contains("windmouse_wind")) windMouseWind = j["windmouse_wind"];
+            if (j.contains("windmouse_inertia")) windMouseInertia = j["windmouse_inertia"];
+            if (j.contains("windmouse_max_step")) windMouseMaxStep = j["windmouse_max_step"];
+            if (j.contains("windmouse_wind_falloff")) windMouseWindFalloff = j["windmouse_wind_falloff"];
 
             if (j.contains("shoot_offset_x")) shootOffsetX = j["shoot_offset_x"];
             if (j.contains("shoot_offset_y")) shootOffsetY = j["shoot_offset_y"];
             if (j.contains("perf_stats_enabled")) perfStatsEnabled = j["perf_stats_enabled"];
             if (j.contains("perf_stats_interval_ms")) perfStatsIntervalMs = j["perf_stats_interval_ms"];
             if (j.contains("realtime_threads_enabled")) realtimeThreadsEnabled = j["realtime_threads_enabled"];
+            if (j.contains("cpu_affinity_enabled")) cpuAffinityEnabled = j["cpu_affinity_enabled"];
+            if (j.contains("affinity_core_main")) affinityCoreMain = j["affinity_core_main"];
+            if (j.contains("affinity_core_receive")) affinityCoreReceive = j["affinity_core_receive"];
+            if (j.contains("affinity_core_callback")) affinityCoreCallback = j["affinity_core_callback"];
+            if (j.contains("affinity_core_sender")) affinityCoreSender = j["affinity_core_sender"];
             if (j.contains("force_aim_on")) forceAimOn = j["force_aim_on"];
             if (j.contains("idle_graph_precapture_enabled")) idleGraphPrecaptureEnabled = j["idle_graph_precapture_enabled"];
             if (j.contains("idle_graph_precapture_interval_ms")) idleGraphPrecaptureIntervalMs = j["idle_graph_precapture_interval_ms"];
@@ -702,6 +794,15 @@ struct Config {
             j["thumb_aim_softness_y"] = thumbAimSoftnessY;
 
             j["iou_stickiness_threshold"] = iouStickinessThreshold;
+            j["distance_stickiness_factor"] = distanceStickinessFactor;
+            j["track_persistence_frames"] = trackPersistenceFrames;
+            j["kalman_enabled"] = kalmanEnabled;
+            j["kalman_process_noise_position"] = kalmanProcessPos;
+            j["kalman_process_noise_velocity"] = kalmanProcessVel;
+            j["kalman_measurement_noise"] = kalmanMeasNoise;
+            j["kalman_velocity_damping"] = kalmanVelDamping;
+            j["kalman_max_velocity"] = kalmanMaxVel;
+            j["kalman_prediction_ms"] = kalmanPredictionMs;
 
             j["no_recoil_enabled"] = noRecoilEnabled;
             j["recoil_comp_x"] = recoilCompX;
@@ -715,15 +816,23 @@ struct Config {
             j["direct_aim_move_in_callback"] = directAimMoveInCallback;
             j["makcu_baudrate"] = makcuBaudrate;
 
-            j["noise_enabled"] = noiseEnabled;
-            j["noise_stddev_x"] = noiseStddevX;
-            j["noise_stddev_y"] = noiseStddevY;
+            j["windmouse_enabled"] = windMouseEnabled;
+            j["windmouse_gravity"] = windMouseGravity;
+            j["windmouse_wind"] = windMouseWind;
+            j["windmouse_inertia"] = windMouseInertia;
+            j["windmouse_max_step"] = windMouseMaxStep;
+            j["windmouse_wind_falloff"] = windMouseWindFalloff;
 
             j["shoot_offset_x"] = shootOffsetX;
             j["shoot_offset_y"] = shootOffsetY;
             j["perf_stats_enabled"] = perfStatsEnabled;
             j["perf_stats_interval_ms"] = perfStatsIntervalMs;
             j["realtime_threads_enabled"] = realtimeThreadsEnabled;
+            j["cpu_affinity_enabled"] = cpuAffinityEnabled;
+            j["affinity_core_main"] = affinityCoreMain;
+            j["affinity_core_receive"] = affinityCoreReceive;
+            j["affinity_core_callback"] = affinityCoreCallback;
+            j["affinity_core_sender"] = affinityCoreSender;
             j["force_aim_on"] = forceAimOn;
             j["idle_graph_precapture_enabled"] = idleGraphPrecaptureEnabled;
             j["idle_graph_precapture_interval_ms"] = idleGraphPrecaptureIntervalMs;
@@ -775,6 +884,14 @@ struct Config {
         std::cout << "[Config] Thumb P: Kp(" << thumbAimKpX << "," << thumbAimKpY
                   << ") Softness(" << thumbAimSoftnessX << "," << thumbAimSoftnessY << ")" << std::endl;
         std::cout << "[Config] IoU stickiness: " << iouStickinessThreshold << std::endl;
+        std::cout << "[Config] Distance stickiness factor: " << distanceStickinessFactor
+                  << (distanceStickinessFactor > 0.0f ? " (ON)" : " (OFF)") << std::endl;
+        std::cout << "[Config] Kalman predictor: " << (kalmanEnabled ? "ON" : "OFF")
+                  << " (lead=" << kalmanPredictionMs << "ms, damping=" << kalmanVelDamping
+                  << ", measNoise=" << kalmanMeasNoise << ")" << std::endl;
+        std::cout << "[Config] Track persistence: " << trackPersistenceFrames
+                  << " frame(s)"
+                  << (trackPersistenceFrames > 0 ? " (ON)" : " (OFF)") << std::endl;
         std::cout << "[Config] Max detections: " << maxDetections << std::endl;
         std::cout << "[Config] No-recoil: " << (noRecoilEnabled ? "ON" : "OFF")
                   << " (Y=" << recoilCompY << ", tick=" << recoilTickMs << "ms)" << std::endl;
@@ -786,6 +903,12 @@ struct Config {
         std::cout << "[Config] Perf stats: " << (perfStatsEnabled ? "ON" : "OFF")
                   << " (interval=" << perfStatsIntervalMs << "ms)" << std::endl;
         std::cout << "[Config] Realtime thread hints: " << (realtimeThreadsEnabled ? "ON" : "OFF") << std::endl;
+        std::cout << "[Config] CPU affinity: " << (cpuAffinityEnabled ? "ON" : "OFF");
+        if (cpuAffinityEnabled) {
+            std::cout << " (main=" << affinityCoreMain << ", recv=" << affinityCoreReceive
+                      << ", cb=" << affinityCoreCallback << ", sender=" << affinityCoreSender << ")";
+        }
+        std::cout << std::endl;
         std::cout << "[Config] Force aim override: " << (forceAimOn ? "ON" : "OFF") << std::endl;
         std::cout << "[Config] Idle graph pre-capture: "
                   << (idleGraphPrecaptureEnabled ? "ON" : "OFF")
@@ -802,8 +925,9 @@ struct Config {
             }
         }
         std::cout << std::endl;
-        std::cout << "[Config] Noise: " << (noiseEnabled ? "ON" : "OFF")
-                  << " (stddev X=" << noiseStddevX << ", Y=" << noiseStddevY << ")" << std::endl;
+        std::cout << "[Config] WindMouse: " << (windMouseEnabled ? "ON" : "OFF")
+                  << " (gravity=" << windMouseGravity << ", wind=" << windMouseWind
+                  << ", inertia=" << windMouseInertia << ", maxStep=" << windMouseMaxStep << ")" << std::endl;
 
         // Print allowed classes
         std::cout << "[Config] Allowed classes: ";
@@ -839,8 +963,8 @@ struct Config {
 // All frequently accessed values are copied to the context struct at init time.
 
 struct CallbackContext {
-    static constexpr size_t kNoiseLutSize = 1024;  // Must stay power-of-two.
-    static_assert((kNoiseLutSize & (kNoiseLutSize - 1)) == 0, "Noise LUT size must be power-of-two");
+    static constexpr size_t kWindLutSize = 1024;  // Must stay power-of-two.
+    static_assert((kWindLutSize & (kWindLutSize - 1)) == 0, "Wind LUT size must be power-of-two");
 
     // Hardware reference (only thing we can't cache)
     MakcuConnection* makcu;
@@ -850,42 +974,63 @@ struct CallbackContext {
     std::atomic<uint64_t>* moveQueueDropped = nullptr;
     std::condition_variable* pipelineCv = nullptr;
     std::mutex* pipelineCvMutex = nullptr;
-    
+
     // Cached config values (lock-free, no pointer chasing)
     bool forceAimOn = false;
     bool perfStatsEnabled = false;
-    bool noiseEnabled;
     bool directAimMoveInCallback = false;
     float shootOffsetX;
     float shootOffsetY;
-    
-    // Noise LUT (precomputed once, lock-free callback reads)
-    std::array<float, kNoiseLutSize> noiseLutX{};
-    std::array<float, kNoiseLutSize> noiseLutY{};
-    size_t noiseCursor = 0;
-    
+
+    // --- WindMouse humanized movement (closed-loop) ---
+    bool windMouseEnabled = false;
+    float wmGravity = 0.6f;
+    float wmWind = 3.0f;
+    float wmInertia = 0.45f;
+    float wmMaxStep = 30.0f;
+    float wmWindFalloff = 40.0f;
+    // Persistent motion state (single consumer thread: callback or sender).
+    float wmVelX = 0.0f, wmVelY = 0.0f;     // mouse velocity (inertia carrier)
+    float wmWindX = 0.0f, wmWindY = 0.0f;   // current wind force
+    float wmResidualX = 0.0f, wmResidualY = 0.0f;  // sub-pixel carry
+    // Precomputed unit-gaussian LUT for wind (lock-free, no RNG in hot path).
+    std::array<float, kWindLutSize> windLut{};
+    size_t windCursor = 0;
+
+    float nextWind() {
+        const float v = windLut[windCursor];
+        windCursor = (windCursor + 1) & (kWindLutSize - 1);
+        return v;
+    }
+
+    // Reset motion state when the aim drops (no target / not aiming) so a
+    // re-acquisition does not inherit stale velocity/wind.
+    void resetWindMouse() {
+        wmVelX = wmVelY = 0.0f;
+        wmWindX = wmWindY = 0.0f;
+        wmResidualX = wmResidualY = 0.0f;
+    }
+
     // Initialize cached values from config
     void initFromConfig(const Config& cfg) {
         forceAimOn = cfg.forceAimOn;
         perfStatsEnabled = cfg.perfStatsEnabled;
-        noiseEnabled = cfg.noiseEnabled;
         directAimMoveInCallback = cfg.directAimMoveInCallback && cfg.mouseMinIntervalMs <= 0;
         shootOffsetX = cfg.shootOffsetX;
         shootOffsetY = cfg.shootOffsetY;
-        
-        noiseCursor = 0;
 
-        if (noiseEnabled) {
-            std::mt19937 gen(std::random_device{}());
-            std::normal_distribution<float> distX(0.0f, cfg.noiseStddevX);
-            std::normal_distribution<float> distY(0.0f, cfg.noiseStddevY);
-            for (size_t i = 0; i < kNoiseLutSize; ++i) {
-                noiseLutX[i] = distX(gen);
-                noiseLutY[i] = distY(gen);
-            }
-        } else {
-            noiseLutX.fill(0.0f);
-            noiseLutY.fill(0.0f);
+        windMouseEnabled = cfg.windMouseEnabled;
+        wmGravity = cfg.windMouseGravity;
+        wmWind = cfg.windMouseWind;
+        wmInertia = std::clamp(cfg.windMouseInertia, 0.0f, 0.95f);
+        wmMaxStep = std::max(1.0f, cfg.windMouseMaxStep);
+        wmWindFalloff = std::max(1.0f, cfg.windMouseWindFalloff);
+        resetWindMouse();
+
+        std::mt19937 gen(std::random_device{}());
+        std::normal_distribution<float> dist(0.0f, 1.0f);
+        for (size_t i = 0; i < kWindLutSize; ++i) {
+            windLut[i] = dist(gen);
         }
     }
 
@@ -893,11 +1038,30 @@ struct CallbackContext {
         float moveX = static_cast<float>(rawDx);
         float moveY = static_cast<float>(rawDy);
 
-        if (noiseEnabled) {
-            const size_t idx = noiseCursor;
-            moveX += noiseLutX[idx];
-            moveY += noiseLutY[idx];
-            noiseCursor = (idx + 1) & (kNoiseLutSize - 1);
+        if (windMouseEnabled) {
+            // The GPU step (rawDx, rawDy) points toward the (predicted) target
+            // and acts as gravity. Wind injects organic curvature that fades as
+            // the aim closes in; velocity inertia turns it into a smooth curve.
+            const float dist = std::sqrt(moveX * moveX + moveY * moveY);
+            if (dist < 0.5f) {
+                // Effectively on target: bleed off momentum so it settles.
+                wmVelX *= 0.5f; wmVelY *= 0.5f;
+                wmWindX *= 0.5f; wmWindY *= 0.5f;
+            } else {
+                const float windScale = wmWind * std::min(1.0f, dist / wmWindFalloff);
+                wmWindX = wmWindX * 0.5f + nextWind() * windScale;
+                wmWindY = wmWindY * 0.5f + nextWind() * windScale;
+                wmVelX = wmVelX * wmInertia + moveX * wmGravity + wmWindX;
+                wmVelY = wmVelY * wmInertia + moveY * wmGravity + wmWindY;
+                // Clamp speed to max step.
+                const float speed = std::sqrt(wmVelX * wmVelX + wmVelY * wmVelY);
+                if (speed > wmMaxStep) {
+                    const float s = wmMaxStep / speed;
+                    wmVelX *= s; wmVelY *= s;
+                }
+            }
+            moveX = wmVelX + wmResidualX;
+            moveY = wmVelY + wmResidualY;
         }
 
         if (shooting) {
@@ -907,6 +1071,12 @@ struct CallbackContext {
 
         outDx = fastRoundToInt(moveX);
         outDy = fastRoundToInt(moveY);
+
+        if (windMouseEnabled) {
+            // Carry the sub-pixel remainder so slow drifts are not lost.
+            wmResidualX = moveX - static_cast<float>(outDx);
+            wmResidualY = moveY - static_cast<float>(outDy);
+        }
     }
 };
 
@@ -1040,11 +1210,13 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
     const uint8_t callbackButtonMask = ctx->makcu->buttonMask();
     const bool aimingActive = ctx->forceAimOn || makcuMaskAiming(callbackButtonMask);
     if (!aimingActive) {
+        ctx->resetWindMouse();
         releaseTicket();
         return;
     }
 
     if (!result.hasTarget) {
+        ctx->resetWindMouse();
         releaseTicket();
         return;
     }
@@ -1199,11 +1371,17 @@ int main(int argc, char* argv[]) {
     if (cfg.realtimeThreadsEnabled) {
         applyRealtimeHint("simple-main", 4);
     }
+    if (cfg.cpuAffinityEnabled) {
+        pinThreadToCore(cfg.affinityCoreMain);
+    }
 
     // 1. Load TensorRT engine
     gpa::SimpleInference inference;
     inference.setMaxDetections(cfg.maxDetections);
     inference.setStageTimingEnabled(cfg.stageTimingEnabled);
+    if (cfg.cpuAffinityEnabled) {
+        inference.setCallbackAffinity(cfg.affinityCoreCallback);
+    }
     if (!inference.loadEngine(cfg.enginePath)) {
         std::cerr << "[Simple] Failed to load engine" << std::endl;
         return 1;
@@ -1220,6 +1398,9 @@ int main(int argc, char* argv[]) {
 
     // 3. Initialize UDP capture
     UDPCapture udpCapture;
+    if (cfg.cpuAffinityEnabled) {
+        udpCapture.SetReceiveAffinity(cfg.affinityCoreReceive);
+    }
     if (!udpCapture.Initialize(cfg.udpPort)) {
         std::cerr << "[Simple] Failed to initialize UDP capture" << std::endl;
         return 1;
@@ -1292,13 +1473,25 @@ int main(int argc, char* argv[]) {
 
     auto lastStatTime = std::chrono::steady_clock::now();
     auto lastRecoilTime = std::chrono::steady_clock::now();
+    // Timestamp of the previous frame we submitted; used to feed the Kalman
+    // predictor a real per-frame dt (frame rate varies, so a fixed dt would
+    // mis-scale the velocity estimate).
+    Clock::time_point lastFrameProcessTime{};
     std::atomic<bool> moveSenderRunning{true};
     std::thread moveSenderThread([&]() {
         if (cfg.realtimeThreadsEnabled) {
             applyRealtimeHint("move-sender", 2);
         }
+        if (cfg.cpuAffinityEnabled) {
+            pinThreadToCore(cfg.affinityCoreSender);
+        }
 
         MoveCommand cmd;
+        // Accumulator may exceed the per-send MAKCU range (+-127); the excess
+        // is carried into the next flush instead of being clamped away. Cap
+        // the raw accumulator to a few frames' worth so a runaway producer
+        // can't pile up unbounded.
+        constexpr int kPendingAccumCap = 512;
         int pendingDx = 0;
         int pendingDy = 0;
         auto nextSendTime = std::chrono::steady_clock::now();
@@ -1307,9 +1500,12 @@ int main(int argc, char* argv[]) {
         auto flushMove = [&](std::chrono::steady_clock::time_point now) -> bool {
             if (!hasPendingMove()) return false;
             if (senderMinIntervalMs > 0 && now < nextSendTime) return false;
-            makcu.move(pendingDx, pendingDy);
-            pendingDx = 0;
-            pendingDy = 0;
+            const int sendDx = std::clamp(pendingDx, -127, 127);
+            const int sendDy = std::clamp(pendingDy, -127, 127);
+            makcu.move(sendDx, sendDy);
+            // Carry any overflow into the next flush instead of dropping it.
+            pendingDx = std::clamp(pendingDx - sendDx, -kPendingAccumCap, kPendingAccumCap);
+            pendingDy = std::clamp(pendingDy - sendDy, -kPendingAccumCap, kPendingAccumCap);
             if (senderMinIntervalMs > 0) {
                 nextSendTime = now + std::chrono::milliseconds(senderMinIntervalMs);
             }
@@ -1324,8 +1520,10 @@ int main(int argc, char* argv[]) {
                         cmd.dx, cmd.dy, cmd.shooting != 0u, emitDx, emitDy);
                 }
                 if (emitDx != 0 || emitDy != 0) {
-                    pendingDx = std::clamp(pendingDx + emitDx, -127, 127);
-                    pendingDy = std::clamp(pendingDy + emitDy, -127, 127);
+                    pendingDx = std::clamp(pendingDx + emitDx,
+                                           -kPendingAccumCap, kPendingAccumCap);
+                    pendingDy = std::clamp(pendingDy + emitDy,
+                                           -kPendingAccumCap, kPendingAccumCap);
                 }
             }
 
@@ -1368,7 +1566,7 @@ int main(int argc, char* argv[]) {
     std::cout << "[Simple] Full GPU pipeline: ENABLED (inference + decode + target + nonlinear P)" << std::endl;
     std::cout << "[Simple] GPU Callback API: ENABLED (lowest latency, no sync wait)" << std::endl;
     std::cout << "[Simple] Lock-free config cache: ENABLED" << std::endl;
-    std::cout << "[Simple] Movement post-processing: noise/shoot-offset only" << std::endl;
+    std::cout << "[Simple] Movement post-processing: WindMouse/shoot-offset" << std::endl;
     std::cout << "[Simple] IoU-based target stickiness: ENABLED" << std::endl;
     std::cout << "[Simple] Pinned receive buffers: " << (udpCapture.IsPinnedMemoryEnabled() ? "ENABLED" : "DISABLED") << std::endl;
     std::cout << "[Simple] Latest-frame in-flight limit: " << maxPipelineInFlight << std::endl;
@@ -1719,7 +1917,17 @@ int main(int argc, char* argv[]) {
             continue;
         }
 
-        const gpa::AimConfig& frameAimConfig = selectGpuAimConfig(frameButtonMask);
+        // Mutable per-frame copy so the Kalman predictor gets a fresh dt.
+        gpa::AimConfig frameAimConfig = selectGpuAimConfig(frameButtonMask);
+        if (cfg.kalmanEnabled) {
+            const auto frameNow = Clock::now();
+            float frameDt = cfg.kalmanPredictionMs * 0.001f;  // sane first-frame fallback
+            if (lastFrameProcessTime.time_since_epoch().count() != 0) {
+                frameDt = static_cast<float>(elapsedUs(lastFrameProcessTime, frameNow)) / 1e6f;
+            }
+            lastFrameProcessTime = frameNow;
+            frameAimConfig.k_dt = frameDt;
+        }
 
         const bool graphReady = inference.isFullGraphReadyForShape(
             static_cast<int>(width), static_cast<int>(height),

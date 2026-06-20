@@ -504,10 +504,15 @@ void UDPCapture::receiveThread() {
     }
     {
         const long cpuCount = sysconf(_SC_NPROCESSORS_ONLN);
-        if (cpuCount > 1) {
+        // Configured override wins; otherwise fall back to the built-in default
+        // of pinning to the last core. A configured value < 0 means "unpinned".
+        int targetCore = (m_receiveAffinityCore != kAffinityUnset)
+                             ? m_receiveAffinityCore
+                             : (cpuCount > 1 ? static_cast<int>(cpuCount - 1) : -1);
+        if (targetCore >= 0 && targetCore < cpuCount) {
             cpu_set_t cpuset;
             CPU_ZERO(&cpuset);
-            CPU_SET(static_cast<int>(cpuCount - 1), &cpuset);
+            CPU_SET(targetCore, &cpuset);
             pthread_setaffinity_np(pthread_self(), sizeof(cpuset), &cpuset);
         }
     }

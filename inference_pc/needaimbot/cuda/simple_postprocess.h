@@ -15,6 +15,21 @@ struct Detection;  // Forward declaration
 struct AimState {
     float residual_x = 0.0f;
     float residual_y = 0.0f;
+    // Number of consecutive frames the current track has been unmatched.
+    // Used together with AimConfig::track_persistence_frames to keep a
+    // committed target alive across brief detection gaps.
+    int frames_since_seen = 0;
+
+    // --- Constant-velocity Kalman predictor state (per axis) ---
+    // Tracks target position + velocity in model/decoded space so the aim
+    // point can be led ahead by AimConfig::k_lookahead seconds. All-zero is
+    // the "uninitialized" state (kf_initialized == 0), so a plain cudaMemset
+    // resets the filter.
+    int   kf_initialized = 0;
+    float kf_x = 0.0f, kf_vx = 0.0f;
+    float kf_px00 = 0.0f, kf_px01 = 0.0f, kf_px10 = 0.0f, kf_px11 = 0.0f;
+    float kf_y = 0.0f, kf_vy = 0.0f;
+    float kf_py00 = 0.0f, kf_py01 = 0.0f, kf_py10 = 0.0f, kf_py11 = 0.0f;
 };
 
 // Nonlinear P controller configuration.
@@ -23,6 +38,28 @@ struct AimConfig {
     float kp_y = 0.62f;
     float p_softness_x = 28.0f;
     float p_softness_y = 30.0f;
+    // Same-target stickiness when IoU fails: a box whose center is within
+    // (prev_diag * factor) of the previous target's center is treated as the
+    // same target. 0 = disabled, ~0.5 typical for fast close targets.
+    float distance_stickiness_factor = 0.0f;
+    // Track persistence: when stickiness fails this frame, keep the tracked
+    // target alive for this many frames before allowing a new acquisition.
+    // The mouse does not move during the gap (no prediction). 0 = disabled.
+    int track_persistence_frames = 0;
+
+    // --- Kalman target predictor (lead moving targets) ---
+    // kalman_enabled != 0 turns on velocity-based lead. Noise terms control
+    // the smoothing/responsiveness trade-off; k_lookahead is how far ahead
+    // (seconds) to predict; k_dt is the measured frame interval, refreshed by
+    // the host every frame (read live from device memory by graph kernels).
+    float kalman_enabled = 0.0f;
+    float k_process_pos = 40.0f;
+    float k_process_vel = 1800.0f;
+    float k_meas_noise = 35.0f;
+    float k_vel_damping = 0.15f;
+    float k_max_vel = 20000.0f;
+    float k_dt = 0.008f;
+    float k_lookahead = 0.0f;
 };
 
 // Mouse movement output

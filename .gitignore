@@ -58,3 +58,7 @@ debug_frames/
 inference_pc/debug/
 test_*.py
 inference_pc/test_*
+
+# Local TensorRT engines + build logs
+engines/
+bench/*.log

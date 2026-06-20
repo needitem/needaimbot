@@ -245,7 +245,9 @@ inline bool aimConfigNearlyEqual(const AimConfig& a, const AimConfig& b) {
     return nearlyEqual(a.kp_x, b.kp_x) &&
            nearlyEqual(a.kp_y, b.kp_y) &&
            nearlyEqual(a.p_softness_x, b.p_softness_x) &&
-           nearlyEqual(a.p_softness_y, b.p_softness_y);
+           nearlyEqual(a.p_softness_y, b.p_softness_y) &&
+           nearlyEqual(a.distance_stickiness_factor, b.distance_stickiness_factor) &&
+           (a.track_persistence_frames == b.track_persistence_frames);
 }
 
 cudaGraphNode_t findGraphH2DMemcpyNode(cudaGraph_t graph, const void* dst, size_t bytes) {
@@ -751,7 +753,11 @@ void SimpleInference::touchBucket(int bucketIndex) {
 
 bool SimpleInference::uploadRuntimeAimConfig(const AimConfig& aimConfig, bool force) {
     if (!m_d_runtimeAimConfig) return false;
-    if (!force && m_hasEnqueuedRuntimeAimConfig &&
+    // When the Kalman predictor is on, the per-frame dt (k_dt) changes every
+    // frame but is intentionally excluded from aimConfigNearlyEqual (so it does
+    // not trigger graph recapture). Always re-upload in that case so the device
+    // sees the fresh dt; otherwise keep the skip-when-unchanged optimization.
+    if (!force && aimConfig.kalman_enabled == 0.0f && m_hasEnqueuedRuntimeAimConfig &&
         aimConfigNearlyEqual(aimConfig, m_enqueuedRuntimeAimConfig)) {
         return true;
     }
@@ -1111,10 +1117,15 @@ void SimpleInference::callbackWorkerLoop() {
         }
     }
     const long cpuCount = sysconf(_SC_NPROCESSORS_ONLN);
-    if (cpuCount > 2) {
+    // Configured override wins; otherwise default to the second-to-last core.
+    // A configured value < 0 means "unpinned".
+    int targetCore = (m_callbackAffinityCore != kCallbackAffinityUnset)
+                         ? m_callbackAffinityCore
+                         : (cpuCount > 2 ? static_cast<int>(cpuCount - 2) : -1);
+    if (targetCore >= 0 && targetCore < cpuCount) {
         cpu_set_t cpuset;
         CPU_ZERO(&cpuset);
-        CPU_SET(static_cast<int>(cpuCount - 2), &cpuset);
+        CPU_SET(targetCore, &cpuset);
         pthread_setaffinity_np(pthread_self(), sizeof(cpuset), &cpuset);
     }
 #endif

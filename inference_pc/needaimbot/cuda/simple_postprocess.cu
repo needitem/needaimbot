@@ -143,6 +143,38 @@ __device__ __forceinline__ void writeEmptyInferenceResult(InferenceResult* resul
     result->targetClassId = -1;
 }
 
+// Combined stickiness score for tracking the same target across frames.
+// Returns max of (IoU, distance-based score) when both prev and current
+// detections share the same class. Distance score falls off linearly to 0
+// at (prev_diag * distance_factor) center separation.
+__device__ __forceinline__ float computeStickinessScore(
+    const Detection& det, const Detection& prev, float distance_factor) {
+    if (prev.classId < 0 || det.classId < 0) return 0.0f;
+    const float iou = computeBoundingBoxIoU(det, prev);
+    if (distance_factor <= 0.0f || det.classId != prev.classId) {
+        return iou;
+    }
+    const float prev_w = prev.x2 - prev.x1;
+    const float prev_h = prev.y2 - prev.y1;
+    if (prev_w <= 0.0f || prev_h <= 0.0f) return iou;
+    // Squared comparisons keep the common "outside window" path sqrt-free.
+    // sqrt is only paid once when the candidate actually scores.
+    const float prev_diag_sq = prev_w * prev_w + prev_h * prev_h;
+    const float window_sq = fmaxf(prev_diag_sq * distance_factor * distance_factor, 1.0f);
+    const float det_cx = (det.x1 + det.x2) * 0.5f;
+    const float det_cy = (det.y1 + det.y2) * 0.5f;
+    const float prev_cx = (prev.x1 + prev.x2) * 0.5f;
+    const float prev_cy = (prev.y1 + prev.y2) * 0.5f;
+    const float dx = det_cx - prev_cx;
+    const float dy = det_cy - prev_cy;
+    const float dist_sq = dx * dx + dy * dy;
+    if (dist_sq >= window_sq) {
+        return iou;  // outside distance window - no positive distance score
+    }
+    const float dist_score = 1.0f - sqrtf(dist_sq / window_sq);
+    return fmaxf(iou, dist_score);
+}
+
 __device__ __forceinline__ float nonlinearPMove(float error, float kp, float softness) {
     const float abs_error = fabsf(error);
     const float safe_softness = fmaxf(softness, 1.0f);
@@ -150,15 +182,72 @@ __device__ __forceinline__ float nonlinearPMove(float error, float kp, float sof
     return error * gain;
 }
 
+// Constant-velocity Kalman filter for a single axis. Maintains position +
+// velocity with a 2x2 covariance, then returns the position predicted
+// k_lookahead seconds into the future (velocity lead, exponentially damped).
+// `reinit` re-seeds the filter (new target) so a fresh acquisition does not
+// inherit a stale velocity. State pointers live in persistent device memory.
+__device__ __forceinline__ float kalmanAxisPredict(
+    float meas, const AimConfig& c, bool reinit,
+    float* x, float* v,
+    float* p00, float* p01, float* p10, float* p11) {
+    if (reinit) {
+        *x = meas;
+        *v = 0.0f;
+        *p00 = fmaxf(c.k_meas_noise, 1e-4f);
+        *p01 = 0.0f;
+        *p10 = 0.0f;
+        *p11 = fmaxf(c.k_process_vel, 1e-4f);
+    } else {
+        const float dt = fminf(fmaxf(c.k_dt, 1e-4f), 0.25f);
+        // Predict step (x' = x + v*dt, v' = v)
+        float px = *x + (*v) * dt;
+        float pv = *v;
+        float P00 = *p00 + dt * (*p10 + *p01) + dt * dt * (*p11) + c.k_process_pos * dt;
+        float P01 = *p01 + dt * (*p11);
+        float P10 = *p10 + dt * (*p11);
+        float P11 = *p11 + c.k_process_vel * dt;
+        // Update step with measurement of position only
+        const float innov = meas - px;
+        const float S = P00 + fmaxf(c.k_meas_noise, 1e-4f);
+        const float K0 = P00 / S;
+        const float K1 = P10 / S;
+        px += K0 * innov;
+        pv += K1 * innov;
+        const float n00 = (1.0f - K0) * P00;
+        const float n01 = (1.0f - K0) * P01;
+        const float n10 = P10 - K1 * P00;
+        const float n11 = P11 - K1 * P01;
+        pv = fminf(fmaxf(pv, -c.k_max_vel), c.k_max_vel);
+        *x = px; *v = pv;
+        *p00 = n00; *p01 = n01; *p10 = n10; *p11 = n11;
+    }
+
+    const float la = c.k_lookahead;
+    if (la <= 0.0f) return *x;
+    if (c.k_vel_damping <= 1e-6f) return *x + (*v) * la;
+    const float decay = __expf(-c.k_vel_damping * la);
+    return *x + (*v) * (1.0f - decay) / c.k_vel_damping;
+}
+
 __device__ __forceinline__ int emitMouseDelta(float movement, float* residual) {
-    const float value = movement + *residual;
+    // Clear carry if it opposes the new direction: stale residual from a
+    // previous frame must not fight a freshly reversed target motion.
+    float carried = *residual;
+    if (movement * carried < 0.0f) {
+        carried = 0.0f;
+    }
+    const float value = movement + carried;
     int emit = __float2int_rz(value);
     if (emit > 127) {
-        *residual = 0.0f;
+        // Saturated: keep the overflow so the next frame can keep catching
+        // up, but cap the carry so runaway accumulation can't outlive the
+        // motion that caused it.
+        *residual = fminf(256.0f, value - 127.0f);
         return 127;
     }
     if (emit < -127) {
-        *residual = 0.0f;
+        *residual = fmaxf(-256.0f, value + 127.0f);
         return -127;
     }
     *residual = value - static_cast<float>(emit);
@@ -259,11 +348,14 @@ __global__ void stage1DecodeAndSelectKernel(
     float head_y_offset,
     float body_y_offset,
     const Detection* __restrict__ d_selected_target,
+    const AimConfig* __restrict__ d_aim_config,
     Detection* __restrict__ d_stage1_best_dist,
     float* __restrict__ d_stage1_dist_score,
     Detection* __restrict__ d_stage1_best_iou,
     float* __restrict__ d_stage1_iou_score)
 {
+    const float distance_stickiness_factor =
+        d_aim_config ? d_aim_config->distance_stickiness_factor : 0.0f;
     __shared__ Detection s_prevTarget;
     __shared__ bool s_prevValid;
     __shared__ Detection s_warpBestDistDet[MAX_SELECTION_WARPS];
@@ -338,9 +430,10 @@ __global__ void stage1DecodeAndSelectKernel(
         }
 
         if (prevValid) {
-            const float iou = computeBoundingBoxIoU(det, prevTarget);
-            if (iou > localBestIou) {
-                localBestIou = iou;
+            const float stickyScore = computeStickinessScore(
+                det, prevTarget, distance_stickiness_factor);
+            if (stickyScore > localBestIou) {
+                localBestIou = stickyScore;
                 localBestByIou = det;
                 localHasIou = true;
             }
@@ -548,10 +641,40 @@ __global__ void stage2FinalizeKernel(
         bestIou = -1.0f;
     }
 
-    bool hasTarget = hasDistResult;
-    Detection chosenTarget = bestByDist;
-    if (hasIouResult && bestIou > iou_stickiness_threshold) {
+    // Snapshot prev tracked target BEFORE we may overwrite it. The persistence
+    // path keeps prev alive across detection gaps so stickiness can re-acquire.
+    Detection prevTarget = {};
+    prevTarget.classId = -1;
+    if (d_selected_target) {
+        prevTarget = *d_selected_target;
+    }
+    const int prevFramesSinceSeen = d_aim_state->frames_since_seen;
+    const int trackPersistenceFrames = (d_aim_config)
+        ? d_aim_config->track_persistence_frames : 0;
+
+    const bool stickyMatch = hasIouResult && bestIou > iou_stickiness_threshold;
+    const bool prevValid = (prevTarget.classId >= 0);
+
+    Detection chosenTarget = {};
+    chosenTarget.classId = -1;
+    bool hasTarget = false;
+
+    if (stickyMatch) {
+        // Tracked target re-acquired this frame.
         chosenTarget = bestByIou;
+        hasTarget = true;
+    } else if (prevValid && prevFramesSinceSeen < trackPersistenceFrames) {
+        // Track is committed and still within its persistence window. Hold
+        // position: emit no movement and keep d_selected_target alive so the
+        // next frame's stickiness has a reference for re-acquisition.
+        d_aim_state->frames_since_seen = prevFramesSinceSeen + 1;
+        d_aim_state->residual_x = 0.0f;
+        d_aim_state->residual_y = 0.0f;
+        writeEmptyInferenceResult(d_inference_result);
+        return;
+    } else if (hasDistResult) {
+        // No track or track expired - acquire the nearest visible candidate.
+        chosenTarget = bestByDist;
         hasTarget = true;
     }
 
@@ -563,10 +686,13 @@ __global__ void stage2FinalizeKernel(
         }
         d_aim_state->residual_x = 0.0f;
         d_aim_state->residual_y = 0.0f;
+        d_aim_state->frames_since_seen = 0;
+        d_aim_state->kf_initialized = 0;  // target lost -> reset predictor
         writeEmptyInferenceResult(d_inference_result);
         return;
     }
 
+    d_aim_state->frames_since_seen = 0;
     if (d_selected_target) {
         *d_selected_target = chosenTarget;
     }
@@ -578,9 +704,32 @@ __global__ void stage2FinalizeKernel(
             ? (chosenTarget.y1 + target_h * head_y_offset)
             : (chosenTarget.y1 + target_h * body_y_offset);
 
-    const float error_x = target_center_x - screen_center_x;
-    const float error_y = target_center_y - screen_center_y;
     const AimConfig aim_config = *d_aim_config;
+
+    // Default aim point is the measured target center. When the Kalman
+    // predictor is enabled, lead it by k_lookahead seconds so the aim tracks
+    // where a moving target will be, compensating end-to-end loop latency.
+    float aim_x = target_center_x;
+    float aim_y = target_center_y;
+    if (aim_config.kalman_enabled != 0.0f) {
+        // Re-seed on a freshly acquired target (no valid prior track) or when
+        // the filter has never been initialized, to avoid a stale-velocity jump.
+        const bool reinit = (d_aim_state->kf_initialized == 0) || !prevValid;
+        aim_x = kalmanAxisPredict(
+            target_center_x, aim_config, reinit,
+            &d_aim_state->kf_x, &d_aim_state->kf_vx,
+            &d_aim_state->kf_px00, &d_aim_state->kf_px01,
+            &d_aim_state->kf_px10, &d_aim_state->kf_px11);
+        aim_y = kalmanAxisPredict(
+            target_center_y, aim_config, reinit,
+            &d_aim_state->kf_y, &d_aim_state->kf_vy,
+            &d_aim_state->kf_py00, &d_aim_state->kf_py01,
+            &d_aim_state->kf_py10, &d_aim_state->kf_py11);
+        d_aim_state->kf_initialized = 1;
+    }
+
+    const float error_x = aim_x - screen_center_x;
+    const float error_y = aim_y - screen_center_y;
 
     const float movement_x =
         nonlinearPMove(error_x, aim_config.kp_x, aim_config.p_softness_x) * movement_scale_x;
@@ -670,6 +819,7 @@ cudaError_t postprocessYoloFusedGpu(
             head_y_offset,
             body_y_offset,
             d_selected_target,
+            d_aim_config,
             d_stage1_best_dist,
             d_stage1_dist_score,
             d_stage1_best_iou,
@@ -690,6 +840,7 @@ cudaError_t postprocessYoloFusedGpu(
             head_y_offset,
             body_y_offset,
             d_selected_target,
+            d_aim_config,
             d_stage1_best_dist,
             d_stage1_dist_score,
             d_stage1_best_iou,
