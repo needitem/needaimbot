@@ -182,54 +182,6 @@ __device__ __forceinline__ float nonlinearPMove(float error, float kp, float sof
     return error * gain;
 }
 
-// Constant-velocity Kalman filter for a single axis. Maintains position +
-// velocity with a 2x2 covariance, then returns the position predicted
-// k_lookahead seconds into the future (velocity lead, exponentially damped).
-// `reinit` re-seeds the filter (new target) so a fresh acquisition does not
-// inherit a stale velocity. State pointers live in persistent device memory.
-__device__ __forceinline__ float kalmanAxisPredict(
-    float meas, const AimConfig& c, bool reinit,
-    float* x, float* v,
-    float* p00, float* p01, float* p10, float* p11) {
-    if (reinit) {
-        *x = meas;
-        *v = 0.0f;
-        *p00 = fmaxf(c.k_meas_noise, 1e-4f);
-        *p01 = 0.0f;
-        *p10 = 0.0f;
-        *p11 = fmaxf(c.k_process_vel, 1e-4f);
-    } else {
-        const float dt = fminf(fmaxf(c.k_dt, 1e-4f), 0.25f);
-        // Predict step (x' = x + v*dt, v' = v)
-        float px = *x + (*v) * dt;
-        float pv = *v;
-        float P00 = *p00 + dt * (*p10 + *p01) + dt * dt * (*p11) + c.k_process_pos * dt;
-        float P01 = *p01 + dt * (*p11);
-        float P10 = *p10 + dt * (*p11);
-        float P11 = *p11 + c.k_process_vel * dt;
-        // Update step with measurement of position only
-        const float innov = meas - px;
-        const float S = P00 + fmaxf(c.k_meas_noise, 1e-4f);
-        const float K0 = P00 / S;
-        const float K1 = P10 / S;
-        px += K0 * innov;
-        pv += K1 * innov;
-        const float n00 = (1.0f - K0) * P00;
-        const float n01 = (1.0f - K0) * P01;
-        const float n10 = P10 - K1 * P00;
-        const float n11 = P11 - K1 * P01;
-        pv = fminf(fmaxf(pv, -c.k_max_vel), c.k_max_vel);
-        *x = px; *v = pv;
-        *p00 = n00; *p01 = n01; *p10 = n10; *p11 = n11;
-    }
-
-    const float la = c.k_lookahead;
-    if (la <= 0.0f) return *x;
-    if (c.k_vel_damping <= 1e-6f) return *x + (*v) * la;
-    const float decay = __expf(-c.k_vel_damping * la);
-    return *x + (*v) * (1.0f - decay) / c.k_vel_damping;
-}
-
 __device__ __forceinline__ int emitMouseDelta(float movement, float* residual) {
     // Clear carry if it opposes the new direction: stale residual from a
     // previous frame must not fight a freshly reversed target motion.
@@ -660,22 +612,46 @@ __global__ void stage2FinalizeKernel(
     bool hasTarget = false;
 
     if (stickyMatch) {
-        // Tracked target re-acquired this frame.
+        // Tracked target re-acquired this frame (IoU stickiness).
         chosenTarget = bestByIou;
         hasTarget = true;
+    } else if (hasDistResult) {
+        // A target is visible this frame - track the nearest candidate.
+        chosenTarget = bestByDist;
+        hasTarget = true;
     } else if (prevValid && prevFramesSinceSeen < trackPersistenceFrames) {
-        // Track is committed and still within its persistence window. Hold
-        // position: emit no movement and keep d_selected_target alive so the
-        // next frame's stickiness has a reference for re-acquisition.
-        d_aim_state->frames_since_seen = prevFramesSinceSeen + 1;
+        // True detection gap (no candidate this frame) within the bridge
+        // window. With coast enabled, follow the target's last drift (decayed)
+        // so a momentarily-lost target neither freezes nor jumps; otherwise
+        // hold still. d_selected_target is kept alive for clean re-acquire.
+        const int gap = prevFramesSinceSeen + 1;
+        d_aim_state->frames_since_seen = gap;
+        const AimConfig coastCfg = *d_aim_config;
+        if (coastCfg.coast_enabled != 0.0f && d_aim_state->has_track) {
+            float factor = 1.0f;
+            for (int i = 0; i < gap; ++i) factor *= coastCfg.coast_decay;
+            // Follow only the target's drift (vel * scale), decayed. No
+            // convergence term, so a stationary target does not drift off.
+            const float mx = d_aim_state->vel_x * movement_scale_x * factor;
+            const float my = d_aim_state->vel_y * movement_scale_y * factor;
+            const int dx = emitMouseDelta(mx, &d_aim_state->residual_x);
+            const int dy = emitMouseDelta(my, &d_aim_state->residual_y);
+            d_inference_result->movement.dx = dx;
+            d_inference_result->movement.dy = dy;
+            d_inference_result->hasTarget = 1;
+            d_inference_result->reserved = 0;
+            d_inference_result->targetX1 = prevTarget.x1;
+            d_inference_result->targetY1 = prevTarget.y1;
+            d_inference_result->targetX2 = prevTarget.x2;
+            d_inference_result->targetY2 = prevTarget.y2;
+            d_inference_result->targetConf = prevTarget.confidence;
+            d_inference_result->targetClassId = prevTarget.classId;
+            return;
+        }
         d_aim_state->residual_x = 0.0f;
         d_aim_state->residual_y = 0.0f;
         writeEmptyInferenceResult(d_inference_result);
         return;
-    } else if (hasDistResult) {
-        // No track or track expired - acquire the nearest visible candidate.
-        chosenTarget = bestByDist;
-        hasTarget = true;
     }
 
     if (!hasTarget) {
@@ -687,7 +663,9 @@ __global__ void stage2FinalizeKernel(
         d_aim_state->residual_x = 0.0f;
         d_aim_state->residual_y = 0.0f;
         d_aim_state->frames_since_seen = 0;
-        d_aim_state->kf_initialized = 0;  // target lost -> reset predictor
+        d_aim_state->has_track = 0;  // target fully lost -> stop coasting
+        d_aim_state->vel_x = 0.0f;
+        d_aim_state->vel_y = 0.0f;
         writeEmptyInferenceResult(d_inference_result);
         return;
     }
@@ -706,30 +684,9 @@ __global__ void stage2FinalizeKernel(
 
     const AimConfig aim_config = *d_aim_config;
 
-    // Default aim point is the measured target center. When the Kalman
-    // predictor is enabled, lead it by k_lookahead seconds so the aim tracks
-    // where a moving target will be, compensating end-to-end loop latency.
-    float aim_x = target_center_x;
-    float aim_y = target_center_y;
-    if (aim_config.kalman_enabled != 0.0f) {
-        // Re-seed on a freshly acquired target (no valid prior track) or when
-        // the filter has never been initialized, to avoid a stale-velocity jump.
-        const bool reinit = (d_aim_state->kf_initialized == 0) || !prevValid;
-        aim_x = kalmanAxisPredict(
-            target_center_x, aim_config, reinit,
-            &d_aim_state->kf_x, &d_aim_state->kf_vx,
-            &d_aim_state->kf_px00, &d_aim_state->kf_px01,
-            &d_aim_state->kf_px10, &d_aim_state->kf_px11);
-        aim_y = kalmanAxisPredict(
-            target_center_y, aim_config, reinit,
-            &d_aim_state->kf_y, &d_aim_state->kf_vy,
-            &d_aim_state->kf_py00, &d_aim_state->kf_py01,
-            &d_aim_state->kf_py10, &d_aim_state->kf_py11);
-        d_aim_state->kf_initialized = 1;
-    }
-
-    const float error_x = aim_x - screen_center_x;
-    const float error_y = aim_y - screen_center_y;
+    // Aim at the measured target center (no forward prediction/lead).
+    const float error_x = target_center_x - screen_center_x;
+    const float error_y = target_center_y - screen_center_y;
 
     const float movement_x =
         nonlinearPMove(error_x, aim_config.kp_x, aim_config.p_softness_x) * movement_scale_x;
@@ -738,6 +695,24 @@ __global__ void stage2FinalizeKernel(
 
     int emit_dx = emitMouseDelta(movement_x, &d_aim_state->residual_x);
     int emit_dy = emitMouseDelta(movement_y, &d_aim_state->residual_y);
+
+    // Track the target's per-frame screen drift (EMA, clamped) so a following
+    // detection gap can coast along the target's motion - not the convergence.
+    if (d_aim_state->has_track) {
+        const float maxDrift = 60.0f;  // model px/frame sanity clamp
+        float nvx = target_center_x - d_aim_state->prev_center_x;
+        float nvy = target_center_y - d_aim_state->prev_center_y;
+        nvx = fminf(fmaxf(nvx, -maxDrift), maxDrift);
+        nvy = fminf(fmaxf(nvy, -maxDrift), maxDrift);
+        d_aim_state->vel_x = 0.6f * d_aim_state->vel_x + 0.4f * nvx;
+        d_aim_state->vel_y = 0.6f * d_aim_state->vel_y + 0.4f * nvy;
+    } else {
+        d_aim_state->vel_x = 0.0f;
+        d_aim_state->vel_y = 0.0f;
+    }
+    d_aim_state->prev_center_x = target_center_x;
+    d_aim_state->prev_center_y = target_center_y;
+    d_aim_state->has_track = 1;
 
     d_inference_result->movement.dx = emit_dx;
     d_inference_result->movement.dy = emit_dy;

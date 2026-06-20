@@ -558,14 +558,11 @@ struct Config {
     // enemy is briefly missed. 0 = disabled.
     int trackPersistenceFrames = 5;
 
-    // Kalman target predictor (leads moving targets to compensate loop latency)
-    bool kalmanEnabled = false;
-    float kalmanProcessPos = 40.0f;     // position process noise
-    float kalmanProcessVel = 1800.0f;   // velocity process noise (higher = more agile)
-    float kalmanMeasNoise = 35.0f;      // measurement noise (higher = more smoothing)
-    float kalmanVelDamping = 0.15f;     // decay of the velocity lead (anti-overshoot)
-    float kalmanMaxVel = 20000.0f;      // velocity clamp (model px/s)
-    float kalmanPredictionMs = 8.0f;    // how far ahead to lead (milliseconds)
+    // Coast: bridge brief detection gaps by gliding from the last movement
+    // (decayed) instead of freezing or shaking. Uses track_persistence_frames
+    // as the gap window.
+    bool coastEnabled = true;
+    float coastDecay = 0.85f;           // per-missed-frame decay of the glide (0..1)
 
     // No-recoil
     bool noRecoilEnabled = true;
@@ -634,23 +631,16 @@ struct Config {
         return aim;
     }
 
-    // Populate the runtime Kalman predictor fields shared by both aim profiles.
-    // k_dt is left at its default here; the host overwrites it per frame with
-    // the measured frame interval.
-    void applyKalman(gpa::AimConfig& aim) const {
-        aim.kalman_enabled = kalmanEnabled ? 1.0f : 0.0f;
-        aim.k_process_pos = kalmanProcessPos;
-        aim.k_process_vel = kalmanProcessVel;
-        aim.k_meas_noise = kalmanMeasNoise;
-        aim.k_vel_damping = kalmanVelDamping;
-        aim.k_max_vel = kalmanMaxVel;
-        aim.k_lookahead = kalmanPredictionMs * 0.001f;
+    // Populate the runtime coast fields shared by both aim profiles.
+    void applyCoast(gpa::AimConfig& aim) const {
+        aim.coast_enabled = coastEnabled ? 1.0f : 0.0f;
+        aim.coast_decay = coastDecay;
     }
 
     gpa::AimConfig toGpuAimConfig() const {
         gpa::AimConfig aim = makeGpuAimConfig(aimKpX, aimKpY, aimSoftnessX, aimSoftnessY,
                                               distanceStickinessFactor, trackPersistenceFrames);
-        applyKalman(aim);
+        applyCoast(aim);
         return aim;
     }
 
@@ -658,7 +648,7 @@ struct Config {
         gpa::AimConfig aim = makeGpuAimConfig(
             thumbAimKpX, thumbAimKpY, thumbAimSoftnessX, thumbAimSoftnessY,
             distanceStickinessFactor, trackPersistenceFrames);
-        applyKalman(aim);
+        applyCoast(aim);
         return aim;
     }
 
@@ -702,13 +692,8 @@ struct Config {
                 trackPersistenceFrames = std::clamp(v, 0, 60);
             }
 
-            if (j.contains("kalman_enabled")) kalmanEnabled = j["kalman_enabled"];
-            if (j.contains("kalman_process_noise_position")) kalmanProcessPos = j["kalman_process_noise_position"];
-            if (j.contains("kalman_process_noise_velocity")) kalmanProcessVel = j["kalman_process_noise_velocity"];
-            if (j.contains("kalman_measurement_noise")) kalmanMeasNoise = j["kalman_measurement_noise"];
-            if (j.contains("kalman_velocity_damping")) kalmanVelDamping = j["kalman_velocity_damping"];
-            if (j.contains("kalman_max_velocity")) kalmanMaxVel = j["kalman_max_velocity"];
-            if (j.contains("kalman_prediction_ms")) kalmanPredictionMs = j["kalman_prediction_ms"];
+            if (j.contains("coast_enabled")) coastEnabled = j["coast_enabled"];
+            if (j.contains("coast_decay")) coastDecay = j["coast_decay"];
 
             if (j.contains("no_recoil_enabled")) noRecoilEnabled = j["no_recoil_enabled"];
             if (j.contains("recoil_comp_x")) recoilCompX = j["recoil_comp_x"];
@@ -815,13 +800,8 @@ struct Config {
             j["iou_stickiness_threshold"] = iouStickinessThreshold;
             j["distance_stickiness_factor"] = distanceStickinessFactor;
             j["track_persistence_frames"] = trackPersistenceFrames;
-            j["kalman_enabled"] = kalmanEnabled;
-            j["kalman_process_noise_position"] = kalmanProcessPos;
-            j["kalman_process_noise_velocity"] = kalmanProcessVel;
-            j["kalman_measurement_noise"] = kalmanMeasNoise;
-            j["kalman_velocity_damping"] = kalmanVelDamping;
-            j["kalman_max_velocity"] = kalmanMaxVel;
-            j["kalman_prediction_ms"] = kalmanPredictionMs;
+            j["coast_enabled"] = coastEnabled;
+            j["coast_decay"] = coastDecay;
 
             j["no_recoil_enabled"] = noRecoilEnabled;
             j["recoil_comp_x"] = recoilCompX;
@@ -905,9 +885,8 @@ struct Config {
         std::cout << "[Config] IoU stickiness: " << iouStickinessThreshold << std::endl;
         std::cout << "[Config] Distance stickiness factor: " << distanceStickinessFactor
                   << (distanceStickinessFactor > 0.0f ? " (ON)" : " (OFF)") << std::endl;
-        std::cout << "[Config] Kalman predictor: " << (kalmanEnabled ? "ON" : "OFF")
-                  << " (lead=" << kalmanPredictionMs << "ms, damping=" << kalmanVelDamping
-                  << ", measNoise=" << kalmanMeasNoise << ")" << std::endl;
+        std::cout << "[Config] Coast (gap glide): " << (coastEnabled ? "ON" : "OFF")
+                  << " (decay=" << coastDecay << ", window=" << trackPersistenceFrames << " frames)" << std::endl;
         std::cout << "[Config] Track persistence: " << trackPersistenceFrames
                   << " frame(s)"
                   << (trackPersistenceFrames > 0 ? " (ON)" : " (OFF)") << std::endl;
@@ -1541,10 +1520,6 @@ int main(int argc, char* argv[]) {
 
     auto lastStatTime = std::chrono::steady_clock::now();
     auto lastRecoilTime = std::chrono::steady_clock::now();
-    // Timestamp of the previous frame we submitted; used to feed the Kalman
-    // predictor a real per-frame dt (frame rate varies, so a fixed dt would
-    // mis-scale the velocity estimate).
-    Clock::time_point lastFrameProcessTime{};
     std::atomic<bool> moveSenderRunning{true};
     std::thread moveSenderThread([&]() {
         if (cfg.realtimeThreadsEnabled) {
@@ -1985,17 +1960,7 @@ int main(int argc, char* argv[]) {
             continue;
         }
 
-        // Mutable per-frame copy so the Kalman predictor gets a fresh dt.
-        gpa::AimConfig frameAimConfig = selectGpuAimConfig(frameButtonMask);
-        if (cfg.kalmanEnabled) {
-            const auto frameNow = Clock::now();
-            float frameDt = cfg.kalmanPredictionMs * 0.001f;  // sane first-frame fallback
-            if (lastFrameProcessTime.time_since_epoch().count() != 0) {
-                frameDt = static_cast<float>(elapsedUs(lastFrameProcessTime, frameNow)) / 1e6f;
-            }
-            lastFrameProcessTime = frameNow;
-            frameAimConfig.k_dt = frameDt;
-        }
+        const gpa::AimConfig& frameAimConfig = selectGpuAimConfig(frameButtonMask);
 
         const bool graphReady = inference.isFullGraphReadyForShape(
             static_cast<int>(width), static_cast<int>(height),

@@ -20,16 +20,16 @@ struct AimState {
     // committed target alive across brief detection gaps.
     int frames_since_seen = 0;
 
-    // --- Constant-velocity Kalman predictor state (per axis) ---
-    // Tracks target position + velocity in model/decoded space so the aim
-    // point can be led ahead by AimConfig::k_lookahead seconds. All-zero is
-    // the "uninitialized" state (kf_initialized == 0), so a plain cudaMemset
-    // resets the filter.
-    int   kf_initialized = 0;
-    float kf_x = 0.0f, kf_vx = 0.0f;
-    float kf_px00 = 0.0f, kf_px01 = 0.0f, kf_px10 = 0.0f, kf_px11 = 0.0f;
-    float kf_y = 0.0f, kf_vy = 0.0f;
-    float kf_py00 = 0.0f, kf_py01 = 0.0f, kf_py10 = 0.0f, kf_py11 = 0.0f;
+    // --- Coast state ---
+    // During a detection gap, follow only the TARGET's screen drift (its
+    // per-frame center velocity), decayed - NOT the P-convergence move (which
+    // would keep closing toward a point and overshoot). prev_center_* is the
+    // last detected aim point; vel_* is its smoothed per-frame drift.
+    int   has_track = 0;
+    float prev_center_x = 0.0f;
+    float prev_center_y = 0.0f;
+    float vel_x = 0.0f;
+    float vel_y = 0.0f;
 };
 
 // Nonlinear P controller configuration.
@@ -42,24 +42,16 @@ struct AimConfig {
     // (prev_diag * factor) of the previous target's center is treated as the
     // same target. 0 = disabled, ~0.5 typical for fast close targets.
     float distance_stickiness_factor = 0.0f;
-    // Track persistence: when stickiness fails this frame, keep the tracked
-    // target alive for this many frames before allowing a new acquisition.
-    // The mouse does not move during the gap (no prediction). 0 = disabled.
+    // Track persistence / coast window: how many consecutive missed frames to
+    // bridge before dropping the target. 0 = disabled.
     int track_persistence_frames = 0;
 
-    // --- Kalman target predictor (lead moving targets) ---
-    // kalman_enabled != 0 turns on velocity-based lead. Noise terms control
-    // the smoothing/responsiveness trade-off; k_lookahead is how far ahead
-    // (seconds) to predict; k_dt is the measured frame interval, refreshed by
-    // the host every frame (read live from device memory by graph kernels).
-    float kalman_enabled = 0.0f;
-    float k_process_pos = 40.0f;
-    float k_process_vel = 1800.0f;
-    float k_meas_noise = 35.0f;
-    float k_vel_damping = 0.15f;
-    float k_max_vel = 20000.0f;
-    float k_dt = 0.008f;
-    float k_lookahead = 0.0f;
+    // --- Coast (smooth bridging of detection gaps) ---
+    // coast_enabled != 0: during the persistence window, keep emitting the last
+    // movement scaled by coast_decay^frames (glide) instead of holding still.
+    // Decays to zero so a vanished target does not cause shake or freeze.
+    float coast_enabled = 0.0f;
+    float coast_decay = 0.85f;
 };
 
 // Mouse movement output

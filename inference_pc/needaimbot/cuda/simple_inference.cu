@@ -753,11 +753,7 @@ void SimpleInference::touchBucket(int bucketIndex) {
 
 bool SimpleInference::uploadRuntimeAimConfig(const AimConfig& aimConfig, bool force) {
     if (!m_d_runtimeAimConfig) return false;
-    // When the Kalman predictor is on, the per-frame dt (k_dt) changes every
-    // frame but is intentionally excluded from aimConfigNearlyEqual (so it does
-    // not trigger graph recapture). Always re-upload in that case so the device
-    // sees the fresh dt; otherwise keep the skip-when-unchanged optimization.
-    if (!force && aimConfig.kalman_enabled == 0.0f && m_hasEnqueuedRuntimeAimConfig &&
+    if (!force && m_hasEnqueuedRuntimeAimConfig &&
         aimConfigNearlyEqual(aimConfig, m_enqueuedRuntimeAimConfig)) {
         return true;
     }
