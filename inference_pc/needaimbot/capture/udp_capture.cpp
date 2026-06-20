@@ -427,13 +427,15 @@ bool UDPCapture::Initialize(unsigned short listenPort) {
         return false;
     }
 
+    // Short recv timeout so stale-fragment cleanup runs promptly during traffic
+    // gaps (frees half-assembled frame slots sooner).
 #ifdef _WIN32
-    DWORD timeout = 100;
+    DWORD timeout = 10;
     setsockopt(m_recvSocket, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout, sizeof(timeout));
 #else
     struct timeval timeout;
     timeout.tv_sec = 0;
-    timeout.tv_usec = 100000;
+    timeout.tv_usec = 10000;
     setsockopt(m_recvSocket, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout, sizeof(timeout));
 #endif
 
@@ -541,7 +543,10 @@ void UDPCapture::receiveThread() {
 #ifndef __linux__
     std::vector<uint8_t> recvBuffer(65536);
 #endif
-    constexpr auto kFragmentStaleTimeout = std::chrono::milliseconds(25);
+    // At 144fps frames arrive ~7ms apart and a frame's fragments burst within
+    // ~1ms, so 12ms is ample headroom while freeing doomed (partial) frames
+    // ~2x sooner than before, cutting the dead-latency a lost frame holds.
+    constexpr auto kFragmentStaleTimeout = std::chrono::milliseconds(12);
     constexpr uint32_t kCleanupPacketInterval = 64;
     static_assert((kCleanupPacketInterval & (kCleanupPacketInterval - 1)) == 0,
                   "kCleanupPacketInterval must be power-of-two");
