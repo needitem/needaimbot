@@ -1,10 +1,10 @@
 {
     "_section_engine": "===== Engine & CUDA graph =====",
-    "engine_path": "/home/taeho/portfolio/inferencetool/engines/sunxds_0.8.2_128_fp16.engine",
+    "engine_path": "/home/taeho/portfolio/inferencetool/engines/sunxds_0.8.2_320_fp16.engine",
     "pre_capture_shapes": [
         [
-            256,
-            256
+            320,
+            320
         ]
     ],
     "idle_graph_precapture_enabled": true,
@@ -32,15 +32,15 @@
     "head_aim_point": 0.9,
     "body_aim_point": 0.14,
     "_section_aim_main": "===== Aim P controller (right-click) =====",
-    "aim_kp_x": 0.4,
-    "aim_kp_y": 0.2,
-    "aim_softness_x": 30.0,
-    "aim_softness_y": 50.0,
+    "aim_kp_x": 0.85,
+    "aim_kp_y": 0.45,
+    "aim_softness_x": 6.0,
+    "aim_softness_y": 16.0,
     "_section_aim_thumb": "===== Aim P controller (thumb button) =====",
-    "thumb_aim_kp_x": 0.7,
-    "thumb_aim_kp_y": 0.5,
-    "thumb_aim_softness_x": 10.0,
-    "thumb_aim_softness_y": 40.0,
+    "thumb_aim_kp_x": 1.1,
+    "thumb_aim_kp_y": 0.6,
+    "thumb_aim_softness_x": 3.0,
+    "thumb_aim_softness_y": 10.0,
     "_section_tracking": "===== Target tracking / stickiness =====",
     "iou_stickiness_threshold": 0.8,
     "distance_stickiness_factor": 0.0,

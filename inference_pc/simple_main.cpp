@@ -306,8 +306,11 @@ struct RuntimeOptions {
     bool hasConfigPath = false;
     bool hasDebugDir = false;
     bool helpRequested = false;
+    bool collectCalib = false;
+    int collectCalibCount = 500;
     std::filesystem::path configPath;
     std::filesystem::path debugDir;
+    std::filesystem::path collectCalibDir;
 };
 
 void printUsage(const char* exeName) {
@@ -315,7 +318,8 @@ void printUsage(const char* exeName) {
               << " [config.json] [--debug] [--debug-dir DIR] [--button-test]\n"
               << "  --debug              Save latest received RGB frame once per second\n"
               << "  --debug-dir DIR      Debug output directory (default: inference_pc/debug)\n"
-              << "  --button-test        Print Makcu mouse button mask and exit with Ctrl+C\n";
+              << "  --button-test        Print Makcu mouse button mask and exit with Ctrl+C\n"
+              << "  --collect-calib DIR [N]  Save N received RGB frames to DIR for int8 calibration (default N=500)\n";
 }
 
 bool parseRuntimeOptions(int argc, char* argv[], RuntimeOptions& options) {
@@ -325,6 +329,21 @@ bool parseRuntimeOptions(int argc, char* argv[], RuntimeOptions& options) {
             options.debugFrameDump = true;
         } else if (arg == "--button-test") {
             options.buttonTest = true;
+        } else if (arg == "--collect-calib") {
+            if (i + 1 >= argc) {
+                std::cerr << "[Args] --collect-calib requires a directory" << std::endl;
+                return false;
+            }
+            options.collectCalib = true;
+            options.collectCalibDir = argv[++i];
+            // Optional count: only consume the next arg if it is a positive integer.
+            if (i + 1 < argc) {
+                const std::string nxt = argv[i + 1] ? argv[i + 1] : "";
+                if (!nxt.empty() && nxt.find_first_not_of("0123456789") == std::string::npos) {
+                    options.collectCalibCount = std::max(1, std::atoi(nxt.c_str()));
+                    ++i;
+                }
+            }
         } else if (arg == "--debug-dir") {
             if (i + 1 >= argc) {
                 std::cerr << "[Args] --debug-dir requires a path" << std::endl;
@@ -1323,6 +1342,55 @@ int main(int argc, char* argv[]) {
             }
         }
         std::cout << std::endl;
+        return 0;
+    }
+
+    if (runtimeOptions.collectCalib) {
+        const int target = runtimeOptions.collectCalibCount;
+        std::error_code ec;
+        std::filesystem::create_directories(runtimeOptions.collectCalibDir, ec);
+        UDPCapture cap;
+        if (!cap.Initialize(cfg.udpPort) || !cap.StartCapture()) {
+            std::cerr << "[Collect] Failed to start UDP capture on port " << cfg.udpPort << std::endl;
+            return 1;
+        }
+        std::cout << "[Collect] Saving up to " << target << " unique RGB frames to "
+                  << runtimeOptions.collectCalibDir.string() << std::endl;
+        std::cout << "[Collect] Play the game normally (move around, aim at enemies). Ctrl+C to stop early." << std::endl;
+        int saved = 0;
+        uint64_t lastFid = UINT64_MAX;
+        while (g_running.load(std::memory_order_relaxed) && saved < target) {
+            cap.SendFrameCredit(0, 2);  // keep the Game PC streaming
+            void* px = nullptr;
+            unsigned int w = 0, h = 0;
+            uint64_t fid = 0;
+            int bi = -1;
+            uint8_t bpp = 3, fmt = UDP_PIXEL_FORMAT_RGB;
+            const bool got = cap.AcquireFramePinned(&px, &w, &h, &fid, &bi, 200, &bpp, &fmt);
+            if (got) {
+                const bool valid = px && w != 0 && h != 0 && fmt == UDP_PIXEL_FORMAT_RGB && bpp == 3;
+                if (valid && fid != lastFid) {  // skip duplicate (latest-frame) re-reads
+                    lastFid = fid;
+                    std::ostringstream name;
+                    name << "f" << std::setw(6) << std::setfill('0') << saved
+                         << "_" << w << "x" << h << "_rgb.bin";
+                    std::ofstream of((runtimeOptions.collectCalibDir / name.str()).string(),
+                                     std::ios::binary);
+                    if (of) {
+                        of.write(reinterpret_cast<const char*>(px),
+                                 static_cast<std::streamsize>(static_cast<size_t>(w) * h * 3));
+                        ++saved;
+                        if (saved % 25 == 0 || saved == target) {
+                            std::cout << "\r[Collect] " << saved << "/" << target << std::flush;
+                        }
+                    }
+                }
+                if (bi >= 0) cap.ReleaseFrame(bi);
+            }
+        }
+        std::cout << "\n[Collect] Saved " << saved << " frames to "
+                  << runtimeOptions.collectCalibDir.string() << std::endl;
+        cap.StopCapture();
         return 0;
     }
 
