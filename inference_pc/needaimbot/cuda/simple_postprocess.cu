@@ -684,20 +684,9 @@ __global__ void stage2FinalizeKernel(
 
     const AimConfig aim_config = *d_aim_config;
 
-    // Aim at the measured target center (no forward prediction/lead).
-    const float error_x = target_center_x - screen_center_x;
-    const float error_y = target_center_y - screen_center_y;
-
-    const float movement_x =
-        nonlinearPMove(error_x, aim_config.kp_x, aim_config.p_softness_x) * movement_scale_x;
-    const float movement_y =
-        nonlinearPMove(error_y, aim_config.kp_y, aim_config.p_softness_y) * movement_scale_y;
-
-    int emit_dx = emitMouseDelta(movement_x, &d_aim_state->residual_x);
-    int emit_dy = emitMouseDelta(movement_y, &d_aim_state->residual_y);
-
-    // Track the target's per-frame screen drift (EMA, clamped) so a following
-    // detection gap can coast along the target's motion - not the convergence.
+    // Update the target's per-frame screen drift (EMA, clamped) FIRST so both
+    // the feedforward term below and a following detection gap's coast use the
+    // freshest velocity.
     if (d_aim_state->has_track) {
         const float maxDrift = 60.0f;  // model px/frame sanity clamp
         float nvx = target_center_x - d_aim_state->prev_center_x;
@@ -713,6 +702,22 @@ __global__ void stage2FinalizeKernel(
     d_aim_state->prev_center_x = target_center_x;
     d_aim_state->prev_center_y = target_center_y;
     d_aim_state->has_track = 1;
+
+    // Aim at the measured target center. Velocity feedforward keeps pace with a
+    // moving target (cancels P steady-state lag) without leading/overshooting.
+    const float error_x = target_center_x - screen_center_x;
+    const float error_y = target_center_y - screen_center_y;
+    const float ff = aim_config.feedforward_gain;
+
+    const float movement_x =
+        (nonlinearPMove(error_x, aim_config.kp_x, aim_config.p_softness_x)
+         + ff * d_aim_state->vel_x) * movement_scale_x;
+    const float movement_y =
+        (nonlinearPMove(error_y, aim_config.kp_y, aim_config.p_softness_y)
+         + ff * d_aim_state->vel_y) * movement_scale_y;
+
+    int emit_dx = emitMouseDelta(movement_x, &d_aim_state->residual_x);
+    int emit_dy = emitMouseDelta(movement_y, &d_aim_state->residual_y);
 
     d_inference_result->movement.dx = emit_dx;
     d_inference_result->movement.dy = emit_dy;

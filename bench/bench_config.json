@@ -48,6 +48,7 @@
     "_section_coast": "===== Coast (smooth detection-gap bridging) =====",
     "coast_enabled": true,
     "coast_decay": 0.85,
+    "feedforward_gain": 0.6,
     "_section_windmouse": "===== WindMouse humanized movement =====",
     "windmouse_enabled": true,
     "windmouse_gravity": 0.6,

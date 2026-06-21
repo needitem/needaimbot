@@ -563,6 +563,9 @@ struct Config {
     // as the gap window.
     bool coastEnabled = true;
     float coastDecay = 0.85f;           // per-missed-frame decay of the glide (0..1)
+    // Velocity feedforward: tighter tracking of moving targets (0=off, ~1=cancel
+    // P steady-state lag). Not lead/prediction - no overshoot on direction change.
+    float feedforwardGain = 0.6f;
 
     // No-recoil
     bool noRecoilEnabled = true;
@@ -635,6 +638,7 @@ struct Config {
     void applyCoast(gpa::AimConfig& aim) const {
         aim.coast_enabled = coastEnabled ? 1.0f : 0.0f;
         aim.coast_decay = coastDecay;
+        aim.feedforward_gain = feedforwardGain;
     }
 
     gpa::AimConfig toGpuAimConfig() const {
@@ -694,6 +698,7 @@ struct Config {
 
             if (j.contains("coast_enabled")) coastEnabled = j["coast_enabled"];
             if (j.contains("coast_decay")) coastDecay = j["coast_decay"];
+            if (j.contains("feedforward_gain")) feedforwardGain = j["feedforward_gain"];
 
             if (j.contains("no_recoil_enabled")) noRecoilEnabled = j["no_recoil_enabled"];
             if (j.contains("recoil_comp_x")) recoilCompX = j["recoil_comp_x"];
@@ -802,6 +807,7 @@ struct Config {
             j["track_persistence_frames"] = trackPersistenceFrames;
             j["coast_enabled"] = coastEnabled;
             j["coast_decay"] = coastDecay;
+            j["feedforward_gain"] = feedforwardGain;
 
             j["no_recoil_enabled"] = noRecoilEnabled;
             j["recoil_comp_x"] = recoilCompX;
@@ -887,6 +893,7 @@ struct Config {
                   << (distanceStickinessFactor > 0.0f ? " (ON)" : " (OFF)") << std::endl;
         std::cout << "[Config] Coast (gap glide): " << (coastEnabled ? "ON" : "OFF")
                   << " (decay=" << coastDecay << ", window=" << trackPersistenceFrames << " frames)" << std::endl;
+        std::cout << "[Config] Velocity feedforward: " << feedforwardGain << std::endl;
         std::cout << "[Config] Track persistence: " << trackPersistenceFrames
                   << " frame(s)"
                   << (trackPersistenceFrames > 0 ? " (ON)" : " (OFF)") << std::endl;

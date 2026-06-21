@@ -52,6 +52,14 @@ struct AimConfig {
     // Decays to zero so a vanished target does not cause shake or freeze.
     float coast_enabled = 0.0f;
     float coast_decay = 0.85f;
+
+    // --- Velocity feedforward (tighter tracking of moving targets) ---
+    // Adds feedforward_gain * (target per-frame drift) to the P move so the aim
+    // keeps pace with a moving target instead of lagging behind it. This is NOT
+    // forward prediction/lead - it compensates the target's CURRENT motion, so
+    // it does not overshoot past the target on direction changes. 0 = off,
+    // 1.0 = fully cancel steady-state tracking lag for constant velocity.
+    float feedforward_gain = 0.0f;
 };
 
 // Mouse movement output
