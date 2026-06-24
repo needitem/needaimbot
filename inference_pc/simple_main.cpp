@@ -539,12 +539,14 @@ struct Config {
     // Nonlinear P controller (GPU)
     float aimKpX = 0.7f;
     float aimKpY = 0.62f;
-    float aimSoftnessX = 28.0f;
-    float aimSoftnessY = 30.0f;
+    // Softness can run lower now that One Euro de-noises the input center, so
+    // the near-target damping no longer has to absorb detector jitter.
+    float aimSoftnessX = 20.0f;
+    float aimSoftnessY = 22.0f;
     float thumbAimKpX = 0.75f;
     float thumbAimKpY = 0.7f;
-    float thumbAimSoftnessX = 28.0f;
-    float thumbAimSoftnessY = 30.0f;
+    float thumbAimSoftnessX = 20.0f;
+    float thumbAimSoftnessY = 22.0f;
 
     // IoU stickiness for target tracking
     float iouStickinessThreshold = 0.3f;
@@ -565,7 +567,15 @@ struct Config {
     float coastDecay = 0.85f;           // per-missed-frame decay of the glide (0..1)
     // Velocity feedforward: tighter tracking of moving targets (0=off, ~1=cancel
     // P steady-state lag). Not lead/prediction - no overshoot on direction change.
-    float feedforwardGain = 0.6f;
+    float feedforwardGain = 0.7f;
+
+    // One Euro adaptive low-pass on the target center (jitter suppression at the
+    // source). Heavy smoothing at rest kills settle-shake; it relaxes as the
+    // target moves so flicks are not lagged. Cutoffs are in cycles/frame.
+    bool oneEuroEnabled = true;
+    float oneEuroMinCutoff = 0.1f;  // base cutoff at rest (lower = smoother/more lag)
+    float oneEuroBeta = 0.02f;      // speed coefficient (higher = less lag when fast)
+    float oneEuroDCutoff = 0.5f;    // derivative cutoff for the speed estimate
 
     // No-recoil
     bool noRecoilEnabled = true;
@@ -641,10 +651,19 @@ struct Config {
         aim.feedforward_gain = feedforwardGain;
     }
 
+    // Populate the One Euro filter fields shared by both aim profiles.
+    void applyOneEuro(gpa::AimConfig& aim) const {
+        aim.oneeuro_enabled = oneEuroEnabled ? 1.0f : 0.0f;
+        aim.oneeuro_min_cutoff = oneEuroMinCutoff;
+        aim.oneeuro_beta = oneEuroBeta;
+        aim.oneeuro_dcutoff = oneEuroDCutoff;
+    }
+
     gpa::AimConfig toGpuAimConfig() const {
         gpa::AimConfig aim = makeGpuAimConfig(aimKpX, aimKpY, aimSoftnessX, aimSoftnessY,
                                               distanceStickinessFactor, trackPersistenceFrames);
         applyCoast(aim);
+        applyOneEuro(aim);
         return aim;
     }
 
@@ -653,6 +672,7 @@ struct Config {
             thumbAimKpX, thumbAimKpY, thumbAimSoftnessX, thumbAimSoftnessY,
             distanceStickinessFactor, trackPersistenceFrames);
         applyCoast(aim);
+        applyOneEuro(aim);
         return aim;
     }
 
@@ -699,6 +719,11 @@ struct Config {
             if (j.contains("coast_enabled")) coastEnabled = j["coast_enabled"];
             if (j.contains("coast_decay")) coastDecay = j["coast_decay"];
             if (j.contains("feedforward_gain")) feedforwardGain = j["feedforward_gain"];
+
+            if (j.contains("oneeuro_enabled")) oneEuroEnabled = j["oneeuro_enabled"];
+            if (j.contains("oneeuro_min_cutoff")) oneEuroMinCutoff = j["oneeuro_min_cutoff"];
+            if (j.contains("oneeuro_beta")) oneEuroBeta = j["oneeuro_beta"];
+            if (j.contains("oneeuro_dcutoff")) oneEuroDCutoff = j["oneeuro_dcutoff"];
 
             if (j.contains("no_recoil_enabled")) noRecoilEnabled = j["no_recoil_enabled"];
             if (j.contains("recoil_comp_x")) recoilCompX = j["recoil_comp_x"];
@@ -809,6 +834,12 @@ struct Config {
             j["coast_decay"] = coastDecay;
             j["feedforward_gain"] = feedforwardGain;
 
+            j["_section_oneeuro"] = "===== One Euro center filter (jitter suppression) =====";
+            j["oneeuro_enabled"] = oneEuroEnabled;
+            j["oneeuro_min_cutoff"] = oneEuroMinCutoff;
+            j["oneeuro_beta"] = oneEuroBeta;
+            j["oneeuro_dcutoff"] = oneEuroDCutoff;
+
             j["no_recoil_enabled"] = noRecoilEnabled;
             j["recoil_comp_x"] = recoilCompX;
             j["recoil_comp_y"] = recoilCompY;
@@ -894,6 +925,9 @@ struct Config {
         std::cout << "[Config] Coast (gap glide): " << (coastEnabled ? "ON" : "OFF")
                   << " (decay=" << coastDecay << ", window=" << trackPersistenceFrames << " frames)" << std::endl;
         std::cout << "[Config] Velocity feedforward: " << feedforwardGain << std::endl;
+        std::cout << "[Config] One Euro center filter: " << (oneEuroEnabled ? "ON" : "OFF")
+                  << " (min_cutoff=" << oneEuroMinCutoff << ", beta=" << oneEuroBeta
+                  << ", dcutoff=" << oneEuroDCutoff << ")" << std::endl;
         std::cout << "[Config] Track persistence: " << trackPersistenceFrames
                   << " frame(s)"
                   << (trackPersistenceFrames > 0 ? " (ON)" : " (OFF)") << std::endl;
@@ -1527,6 +1561,13 @@ int main(int argc, char* argv[]) {
 
     auto lastStatTime = std::chrono::steady_clock::now();
     auto lastRecoilTime = std::chrono::steady_clock::now();
+    // Sub-pixel carry for recoil compensation: queueMove only takes ints, so a
+    // fractional comp (e.g. 1.3) would otherwise truncate to 1 and silently drop
+    // the remainder every tick. Carry it so the emitted average equals the
+    // configured value. Shared by both recoil emit sites (frame vs no-frame) and
+    // zeroed at the loop top whenever a firing burst is not active (see guard).
+    float recoilResidualX = 0.0f;
+    float recoilResidualY = 0.0f;
     std::atomic<bool> moveSenderRunning{true};
     std::thread moveSenderThread([&]() {
         if (cfg.realtimeThreadsEnabled) {
@@ -1611,6 +1652,18 @@ int main(int argc, char* argv[]) {
         } else {
             makcu.move(dx, dy);
         }
+    };
+
+    // Emit one no-recoil tick, carrying the sub-pixel remainder so a fractional
+    // comp value averages out instead of truncating to int every tick.
+    auto emitRecoilTick = [&]() {
+        recoilResidualX += cfg.recoilCompX;
+        recoilResidualY += cfg.recoilCompY;
+        const int dx = static_cast<int>(recoilResidualX);  // truncates toward zero
+        const int dy = static_cast<int>(recoilResidualY);
+        recoilResidualX -= static_cast<float>(dx);
+        recoilResidualY -= static_cast<float>(dy);
+        queueMove(dx, dy);  // no-op when both components are zero
     };
 
     std::cout << "[Simple] Full GPU pipeline: ENABLED (inference + decode + target + nonlinear P)" << std::endl;
@@ -1744,6 +1797,22 @@ int main(int argc, char* argv[]) {
         int bufferIndex = -1;
         uint8_t bytesPerPixel = 3;
         uint8_t pixelFormat = UDP_PIXEL_FORMAT_RGB;
+
+        // Drop any stale recoil sub-pixel carry whenever a firing burst is not
+        // active. Evaluated at the loop top, before every `continue` (pipeline
+        // full, no/invalid frame, not aiming), so no skipped path can let the
+        // remainder survive into the next burst. While firing this is a no-op,
+        // so the carry still accumulates correctly across ticks within a burst.
+        {
+            const uint8_t recoilGateMask = makcu.buttonMask();
+            const bool recoilFiring =
+                cfg.noRecoilEnabled && makcuMaskShooting(recoilGateMask) &&
+                (cfg.forceAimOn || makcuMaskAiming(recoilGateMask));
+            if (!recoilFiring) {
+                recoilResidualX = 0.0f;
+                recoilResidualY = 0.0f;
+            }
+        }
 
         // Stats every second (using atomic g_frameCount from callbacks)
         auto now = std::chrono::steady_clock::now();
@@ -1913,7 +1982,7 @@ int main(int argc, char* argv[]) {
                 makcuMaskShooting(recoilButtonMask) &&
                 (cfg.forceAimOn || makcuMaskAiming(recoilButtonMask))) {
                 if (recoilNow - lastRecoilTime >= std::chrono::milliseconds(cfg.recoilTickMs)) {
-                    queueMove(static_cast<int>(cfg.recoilCompX), static_cast<int>(cfg.recoilCompY));
+                    emitRecoilTick();
                     lastRecoilTime += std::chrono::milliseconds(cfg.recoilTickMs);
                     if (lastRecoilTime < recoilNow - std::chrono::milliseconds(cfg.recoilTickMs)) {
                         lastRecoilTime = recoilNow;
@@ -1956,7 +2025,7 @@ int main(int argc, char* argv[]) {
         if (cfg.noRecoilEnabled && shooting && aiming) {
             const auto recoilNow = std::chrono::steady_clock::now();
             if (recoilNow - lastRecoilTime >= std::chrono::milliseconds(cfg.recoilTickMs)) {
-                queueMove(static_cast<int>(cfg.recoilCompX), static_cast<int>(cfg.recoilCompY));
+                emitRecoilTick();
                 lastRecoilTime += std::chrono::milliseconds(cfg.recoilTickMs);
                 if (lastRecoilTime < recoilNow - std::chrono::milliseconds(cfg.recoilTickMs)) {
                     lastRecoilTime = recoilNow;  // fell far behind -> resync, no burst

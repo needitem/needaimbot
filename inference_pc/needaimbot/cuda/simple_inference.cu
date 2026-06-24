@@ -247,7 +247,11 @@ inline bool aimConfigNearlyEqual(const AimConfig& a, const AimConfig& b) {
            nearlyEqual(a.p_softness_x, b.p_softness_x) &&
            nearlyEqual(a.p_softness_y, b.p_softness_y) &&
            nearlyEqual(a.distance_stickiness_factor, b.distance_stickiness_factor) &&
-           (a.track_persistence_frames == b.track_persistence_frames);
+           (a.track_persistence_frames == b.track_persistence_frames) &&
+           nearlyEqual(a.oneeuro_enabled, b.oneeuro_enabled) &&
+           nearlyEqual(a.oneeuro_min_cutoff, b.oneeuro_min_cutoff) &&
+           nearlyEqual(a.oneeuro_beta, b.oneeuro_beta) &&
+           nearlyEqual(a.oneeuro_dcutoff, b.oneeuro_dcutoff);
 }
 
 cudaGraphNode_t findGraphH2DMemcpyNode(cudaGraph_t graph, const void* dst, size_t bytes) {

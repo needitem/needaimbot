@@ -30,6 +30,15 @@ struct AimState {
     float prev_center_y = 0.0f;
     float vel_x = 0.0f;
     float vel_y = 0.0f;
+
+    // --- One Euro position filter state ---
+    // Adaptive low-pass of the target center. filt_* is the filtered position;
+    // dfilt_* is the low-passed per-frame derivative driving the adaptive cutoff.
+    // Seeded on fresh acquire (has_track == 0) to avoid a jump from a stale value.
+    float filt_x = 0.0f;
+    float filt_y = 0.0f;
+    float dfilt_x = 0.0f;
+    float dfilt_y = 0.0f;
 };
 
 // Nonlinear P controller configuration.
@@ -60,6 +69,16 @@ struct AimConfig {
     // it does not overshoot past the target on direction changes. 0 = off,
     // 1.0 = fully cancel steady-state tracking lag for constant velocity.
     float feedforward_gain = 0.0f;
+
+    // --- One Euro adaptive low-pass on the target center ---
+    // Removes detector jitter at the source: heavy smoothing when the target is
+    // near-stationary (kills settle-shake), light smoothing when it moves fast
+    // (no added lag on flicks). Cutoffs are in cycles/frame (sample period Te=1,
+    // frames assumed near-constant rate). oneeuro_enabled != 0 to activate.
+    float oneeuro_enabled = 0.0f;
+    float oneeuro_min_cutoff = 0.1f; // base cutoff at rest (lower = smoother/more lag)
+    float oneeuro_beta = 0.02f;      // speed coefficient (higher = less lag when fast)
+    float oneeuro_dcutoff = 0.5f;    // derivative cutoff for the speed estimate
 };
 
 // Mouse movement output

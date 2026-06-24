@@ -175,6 +175,14 @@ __device__ __forceinline__ float computeStickinessScore(
     return fmaxf(iou, dist_score);
 }
 
+// One Euro low-pass smoothing factor for a given cutoff frequency.
+// Sample period Te is normalized to 1 (per-frame), so cutoff is in cycles/frame.
+// alpha = 1 / (1 + tau/Te), tau = 1 / (2*pi*cutoff).
+__device__ __forceinline__ float oneEuroAlpha(float cutoff) {
+    const float tau = 1.0f / (2.0f * 3.14159265f * fmaxf(cutoff, 1e-4f));
+    return 1.0f / (1.0f + tau);
+}
+
 __device__ __forceinline__ float nonlinearPMove(float error, float kp, float softness) {
     const float abs_error = fabsf(error);
     const float safe_softness = fmaxf(softness, 1.0f);
@@ -675,22 +683,58 @@ __global__ void stage2FinalizeKernel(
         *d_selected_target = chosenTarget;
     }
 
-    const float target_center_x = (chosenTarget.x1 + chosenTarget.x2) * 0.5f;
+    const float raw_center_x = (chosenTarget.x1 + chosenTarget.x2) * 0.5f;
     const float target_h = chosenTarget.y2 - chosenTarget.y1;
-    const float target_center_y =
+    const float raw_center_y =
         (chosenTarget.classId == head_class_id)
             ? (chosenTarget.y1 + target_h * head_y_offset)
             : (chosenTarget.y1 + target_h * body_y_offset);
 
     const AimConfig aim_config = *d_aim_config;
 
+    // One Euro adaptive low-pass on the measured center, applied BEFORE velocity
+    // and error so the whole controller (P move, feedforward, coast) runs on the
+    // de-noised signal. Seed on fresh acquire to avoid a jump from a stale value.
+    float target_center_x = raw_center_x;
+    float target_center_y = raw_center_y;
+    if (aim_config.oneeuro_enabled != 0.0f) {
+        if (d_aim_state->has_track) {
+            const float ad = oneEuroAlpha(aim_config.oneeuro_dcutoff);
+            const float de_x = raw_center_x - d_aim_state->filt_x;  // per-frame derivative
+            d_aim_state->dfilt_x = ad * de_x + (1.0f - ad) * d_aim_state->dfilt_x;
+            const float cutoff_x =
+                aim_config.oneeuro_min_cutoff + aim_config.oneeuro_beta * fabsf(d_aim_state->dfilt_x);
+            const float ax = oneEuroAlpha(cutoff_x);
+            d_aim_state->filt_x = ax * raw_center_x + (1.0f - ax) * d_aim_state->filt_x;
+
+            const float de_y = raw_center_y - d_aim_state->filt_y;
+            d_aim_state->dfilt_y = ad * de_y + (1.0f - ad) * d_aim_state->dfilt_y;
+            const float cutoff_y =
+                aim_config.oneeuro_min_cutoff + aim_config.oneeuro_beta * fabsf(d_aim_state->dfilt_y);
+            const float ay = oneEuroAlpha(cutoff_y);
+            d_aim_state->filt_y = ay * raw_center_y + (1.0f - ay) * d_aim_state->filt_y;
+        } else {
+            d_aim_state->filt_x = raw_center_x;
+            d_aim_state->filt_y = raw_center_y;
+            d_aim_state->dfilt_x = 0.0f;
+            d_aim_state->dfilt_y = 0.0f;
+        }
+        target_center_x = d_aim_state->filt_x;
+        target_center_y = d_aim_state->filt_y;
+    }
+
     // Update the target's per-frame screen drift (EMA, clamped) FIRST so both
     // the feedforward term below and a following detection gap's coast use the
-    // freshest velocity.
+    // freshest velocity. Use the RAW center deltas here, NOT the One Euro
+    // filtered center: the filter delays position, and feeding a lagged velocity
+    // into feedforward under-leads a moving target (aim trails its tail). The
+    // P/error term below still uses the filtered center for a stable aim point,
+    // so smoothing stabilizes WHERE we point without eating the lead signal.
+    // (When One Euro is off, raw_center == target_center, so this is a no-op.)
     if (d_aim_state->has_track) {
         const float maxDrift = 60.0f;  // model px/frame sanity clamp
-        float nvx = target_center_x - d_aim_state->prev_center_x;
-        float nvy = target_center_y - d_aim_state->prev_center_y;
+        float nvx = raw_center_x - d_aim_state->prev_center_x;
+        float nvy = raw_center_y - d_aim_state->prev_center_y;
         nvx = fminf(fmaxf(nvx, -maxDrift), maxDrift);
         nvy = fminf(fmaxf(nvy, -maxDrift), maxDrift);
         d_aim_state->vel_x = 0.6f * d_aim_state->vel_x + 0.4f * nvx;
@@ -699,8 +743,8 @@ __global__ void stage2FinalizeKernel(
         d_aim_state->vel_x = 0.0f;
         d_aim_state->vel_y = 0.0f;
     }
-    d_aim_state->prev_center_x = target_center_x;
-    d_aim_state->prev_center_y = target_center_y;
+    d_aim_state->prev_center_x = raw_center_x;  // raw (un-lagged) for next velocity
+    d_aim_state->prev_center_y = raw_center_y;
     d_aim_state->has_track = 1;
 
     // Aim at the measured target center. Velocity feedforward keeps pace with a
