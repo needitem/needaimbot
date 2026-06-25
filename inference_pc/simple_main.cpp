@@ -537,16 +537,22 @@ struct Config {
     float bodyAimPoint = 0.15f;  // Body: aim near top (chest area)
 
     // Nonlinear P controller (GPU)
-    float aimKpX = 0.7f;
-    float aimKpY = 0.62f;
+    float aimKpX = 0.55f;
+    float aimKpY = 0.6f;
     // Softness can run lower now that One Euro de-noises the input center, so
     // the near-target damping no longer has to absorb detector jitter.
-    float aimSoftnessX = 20.0f;
-    float aimSoftnessY = 22.0f;
-    float thumbAimKpX = 0.75f;
-    float thumbAimKpY = 0.7f;
-    float thumbAimSoftnessX = 20.0f;
-    float thumbAimSoftnessY = 22.0f;
+    float aimSoftnessX = 11.0f;
+    float aimSoftnessY = 10.0f;
+    // Derivative (damping) gain: brakes overshoot so kp can stay high without
+    // oscillating. Split x/y like kp. 0 = pure P; default enables light damping.
+    float aimKdX = 0.18f;
+    float aimKdY = 0.22f;
+    float thumbAimKpX = 0.6f;
+    float thumbAimKpY = 0.62f;
+    float thumbAimSoftnessX = 11.0f;
+    float thumbAimSoftnessY = 10.0f;
+    float thumbAimKdX = 0.25f;
+    float thumbAimKdY = 0.35f;
 
     // IoU stickiness for target tracking
     float iouStickinessThreshold = 0.3f;
@@ -567,7 +573,12 @@ struct Config {
     float coastDecay = 0.85f;           // per-missed-frame decay of the glide (0..1)
     // Velocity feedforward: tighter tracking of moving targets (0=off, ~1=cancel
     // P steady-state lag). Not lead/prediction - no overshoot on direction change.
-    float feedforwardGain = 0.7f;
+    float feedforwardGain = 0.9f;
+
+    // Per-frame max move (output px). Bounds the slew so a large error is crossed
+    // in smooth bounded steps instead of one delayed leap that overshoots/rings -
+    // overshoot the reactive D term cannot prevent. 0 = disabled (unbounded).
+    float aimMaxStep = 30.0f;
 
     // One Euro adaptive low-pass on the target center (jitter suppression at the
     // source). Heavy smoothing at rest kills settle-shake; it relaxes as the
@@ -633,12 +644,15 @@ struct Config {
     // Convert to GPU movement config
     static gpa::AimConfig makeGpuAimConfig(
         float kpX, float kpY, float softnessX, float softnessY,
+        float kdX, float kdY,
         float distanceStickinessFactor, int trackPersistenceFrames) {
         gpa::AimConfig aim;
         aim.kp_x = kpX;
         aim.kp_y = kpY;
         aim.p_softness_x = softnessX;
         aim.p_softness_y = softnessY;
+        aim.kd_x = kdX;
+        aim.kd_y = kdY;
         aim.distance_stickiness_factor = distanceStickinessFactor;
         aim.track_persistence_frames = trackPersistenceFrames;
         return aim;
@@ -661,18 +675,22 @@ struct Config {
 
     gpa::AimConfig toGpuAimConfig() const {
         gpa::AimConfig aim = makeGpuAimConfig(aimKpX, aimKpY, aimSoftnessX, aimSoftnessY,
+                                              aimKdX, aimKdY,
                                               distanceStickinessFactor, trackPersistenceFrames);
         applyCoast(aim);
         applyOneEuro(aim);
+        aim.max_step = aimMaxStep;
         return aim;
     }
 
     gpa::AimConfig toThumbGpuAimConfig() const {
         gpa::AimConfig aim = makeGpuAimConfig(
             thumbAimKpX, thumbAimKpY, thumbAimSoftnessX, thumbAimSoftnessY,
+            thumbAimKdX, thumbAimKdY,
             distanceStickinessFactor, trackPersistenceFrames);
         applyCoast(aim);
         applyOneEuro(aim);
+        aim.max_step = aimMaxStep;
         return aim;
     }
 
@@ -700,6 +718,8 @@ struct Config {
             if (j.contains("aim_kp_y")) aimKpY = j["aim_kp_y"];
             if (j.contains("aim_softness_x")) aimSoftnessX = j["aim_softness_x"];
             if (j.contains("aim_softness_y")) aimSoftnessY = j["aim_softness_y"];
+            if (j.contains("aim_kd_x")) aimKdX = j["aim_kd_x"];
+            if (j.contains("aim_kd_y")) aimKdY = j["aim_kd_y"];
             if (j.contains("thumb_aim_kp_x")) thumbAimKpX = j["thumb_aim_kp_x"];
             if (j.contains("thumb_aim_kp_y")) thumbAimKpY = j["thumb_aim_kp_y"];
             thumbAimSoftnessX = j.contains("thumb_aim_softness_x")
@@ -708,6 +728,12 @@ struct Config {
             thumbAimSoftnessY = j.contains("thumb_aim_softness_y")
                                     ? j["thumb_aim_softness_y"].get<float>()
                                     : aimSoftnessY;
+            thumbAimKdX = j.contains("thumb_aim_kd_x")
+                              ? j["thumb_aim_kd_x"].get<float>()
+                              : aimKdX;
+            thumbAimKdY = j.contains("thumb_aim_kd_y")
+                              ? j["thumb_aim_kd_y"].get<float>()
+                              : aimKdY;
 
             if (j.contains("iou_stickiness_threshold")) iouStickinessThreshold = j["iou_stickiness_threshold"];
             if (j.contains("distance_stickiness_factor")) distanceStickinessFactor = j["distance_stickiness_factor"];
@@ -719,6 +745,7 @@ struct Config {
             if (j.contains("coast_enabled")) coastEnabled = j["coast_enabled"];
             if (j.contains("coast_decay")) coastDecay = j["coast_decay"];
             if (j.contains("feedforward_gain")) feedforwardGain = j["feedforward_gain"];
+            if (j.contains("aim_max_step")) aimMaxStep = j["aim_max_step"];
 
             if (j.contains("oneeuro_enabled")) oneEuroEnabled = j["oneeuro_enabled"];
             if (j.contains("oneeuro_min_cutoff")) oneEuroMinCutoff = j["oneeuro_min_cutoff"];
@@ -822,10 +849,14 @@ struct Config {
             j["aim_kp_y"] = aimKpY;
             j["aim_softness_x"] = aimSoftnessX;
             j["aim_softness_y"] = aimSoftnessY;
+            j["aim_kd_x"] = aimKdX;
+            j["aim_kd_y"] = aimKdY;
             j["thumb_aim_kp_x"] = thumbAimKpX;
             j["thumb_aim_kp_y"] = thumbAimKpY;
             j["thumb_aim_softness_x"] = thumbAimSoftnessX;
             j["thumb_aim_softness_y"] = thumbAimSoftnessY;
+            j["thumb_aim_kd_x"] = thumbAimKdX;
+            j["thumb_aim_kd_y"] = thumbAimKdY;
 
             j["iou_stickiness_threshold"] = iouStickinessThreshold;
             j["distance_stickiness_factor"] = distanceStickinessFactor;
@@ -833,6 +864,7 @@ struct Config {
             j["coast_enabled"] = coastEnabled;
             j["coast_decay"] = coastDecay;
             j["feedforward_gain"] = feedforwardGain;
+            j["aim_max_step"] = aimMaxStep;
 
             j["_section_oneeuro"] = "===== One Euro center filter (jitter suppression) =====";
             j["oneeuro_enabled"] = oneEuroEnabled;
@@ -916,15 +948,19 @@ struct Config {
         std::cout << "[Config] UDP port: " << udpPort << std::endl;
         std::cout << "[Config] Confidence: " << confThreshold << std::endl;
         std::cout << "[Config] Right-click P: Kp(" << aimKpX << "," << aimKpY
-                  << ") Softness(" << aimSoftnessX << "," << aimSoftnessY << ")" << std::endl;
+                  << ") Softness(" << aimSoftnessX << "," << aimSoftnessY
+                  << ") Kd(" << aimKdX << "," << aimKdY << ")" << std::endl;
         std::cout << "[Config] Thumb P: Kp(" << thumbAimKpX << "," << thumbAimKpY
-                  << ") Softness(" << thumbAimSoftnessX << "," << thumbAimSoftnessY << ")" << std::endl;
+                  << ") Softness(" << thumbAimSoftnessX << "," << thumbAimSoftnessY
+                  << ") Kd(" << thumbAimKdX << "," << thumbAimKdY << ")" << std::endl;
         std::cout << "[Config] IoU stickiness: " << iouStickinessThreshold << std::endl;
         std::cout << "[Config] Distance stickiness factor: " << distanceStickinessFactor
                   << (distanceStickinessFactor > 0.0f ? " (ON)" : " (OFF)") << std::endl;
         std::cout << "[Config] Coast (gap glide): " << (coastEnabled ? "ON" : "OFF")
                   << " (decay=" << coastDecay << ", window=" << trackPersistenceFrames << " frames)" << std::endl;
         std::cout << "[Config] Velocity feedforward: " << feedforwardGain << std::endl;
+        std::cout << "[Config] Aim max step: " << aimMaxStep
+                  << (aimMaxStep > 0.0f ? " px/frame" : " (disabled)") << std::endl;
         std::cout << "[Config] One Euro center filter: " << (oneEuroEnabled ? "ON" : "OFF")
                   << " (min_cutoff=" << oneEuroMinCutoff << ", beta=" << oneEuroBeta
                   << ", dcutoff=" << oneEuroDCutoff << ")" << std::endl;

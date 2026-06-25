@@ -246,6 +246,9 @@ inline bool aimConfigNearlyEqual(const AimConfig& a, const AimConfig& b) {
            nearlyEqual(a.kp_y, b.kp_y) &&
            nearlyEqual(a.p_softness_x, b.p_softness_x) &&
            nearlyEqual(a.p_softness_y, b.p_softness_y) &&
+           nearlyEqual(a.kd_x, b.kd_x) &&
+           nearlyEqual(a.kd_y, b.kd_y) &&
+           nearlyEqual(a.max_step, b.max_step) &&
            nearlyEqual(a.distance_stickiness_factor, b.distance_stickiness_factor) &&
            (a.track_persistence_frames == b.track_persistence_frames) &&
            nearlyEqual(a.oneeuro_enabled, b.oneeuro_enabled) &&

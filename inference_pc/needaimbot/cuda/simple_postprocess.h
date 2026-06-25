@@ -39,27 +39,44 @@ struct AimState {
     float filt_y = 0.0f;
     float dfilt_x = 0.0f;
     float dfilt_y = 0.0f;
+
+    // --- Derivative (damping) term state ---
+    // prev_err_* is last frame's error; derr_* is the smoothed error rate that
+    // the D term acts on to brake the approach and suppress overshoot ringing.
+    float prev_err_x = 0.0f;
+    float prev_err_y = 0.0f;
+    float derr_x = 0.0f;
+    float derr_y = 0.0f;
 };
 
 // Nonlinear P controller configuration.
 struct AimConfig {
-    float kp_x = 0.7f;
-    float kp_y = 0.62f;
-    float p_softness_x = 28.0f;
-    float p_softness_y = 30.0f;
+    float kp_x = 0.55f;
+    float kp_y = 0.6f;
+    float p_softness_x = 11.0f;
+    float p_softness_y = 10.0f;
+    // Derivative (damping) gain. Brakes the approach in proportion to the error
+    // rate so kp can stay high (snappy) without oscillating. 0 = pure P. kd_y
+    // runs higher than kd_x because the vertical axis (higher kp_y) rings more.
+    float kd_x = 0.18f;
+    float kd_y = 0.22f;
+    // Per-frame max move (output px). Caps the slew so a large error is crossed
+    // in bounded smooth steps instead of one delayed leap that overshoots/rings.
+    // 0 = disabled (unbounded).
+    float max_step = 30.0f;
     // Same-target stickiness when IoU fails: a box whose center is within
     // (prev_diag * factor) of the previous target's center is treated as the
     // same target. 0 = disabled, ~0.5 typical for fast close targets.
-    float distance_stickiness_factor = 0.0f;
+    float distance_stickiness_factor = 0.5f;
     // Track persistence / coast window: how many consecutive missed frames to
     // bridge before dropping the target. 0 = disabled.
-    int track_persistence_frames = 0;
+    int track_persistence_frames = 5;
 
     // --- Coast (smooth bridging of detection gaps) ---
     // coast_enabled != 0: during the persistence window, keep emitting the last
     // movement scaled by coast_decay^frames (glide) instead of holding still.
     // Decays to zero so a vanished target does not cause shake or freeze.
-    float coast_enabled = 0.0f;
+    float coast_enabled = 1.0f;
     float coast_decay = 0.85f;
 
     // --- Velocity feedforward (tighter tracking of moving targets) ---
@@ -68,14 +85,14 @@ struct AimConfig {
     // forward prediction/lead - it compensates the target's CURRENT motion, so
     // it does not overshoot past the target on direction changes. 0 = off,
     // 1.0 = fully cancel steady-state tracking lag for constant velocity.
-    float feedforward_gain = 0.0f;
+    float feedforward_gain = 0.9f;
 
     // --- One Euro adaptive low-pass on the target center ---
     // Removes detector jitter at the source: heavy smoothing when the target is
     // near-stationary (kills settle-shake), light smoothing when it moves fast
     // (no added lag on flicks). Cutoffs are in cycles/frame (sample period Te=1,
     // frames assumed near-constant rate). oneeuro_enabled != 0 to activate.
-    float oneeuro_enabled = 0.0f;
+    float oneeuro_enabled = 1.0f;
     float oneeuro_min_cutoff = 0.1f; // base cutoff at rest (lower = smoother/more lag)
     float oneeuro_beta = 0.02f;      // speed coefficient (higher = less lag when fast)
     float oneeuro_dcutoff = 0.5f;    // derivative cutoff for the speed estimate

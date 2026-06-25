@@ -183,6 +183,20 @@ __device__ __forceinline__ float oneEuroAlpha(float cutoff) {
     return 1.0f / (1.0f + tau);
 }
 
+// Cap a per-frame move vector to maxStep px, preserving direction. maxStep <= 0
+// disables. Applied to every movement path (P+D+ff and coast glide) so the slew
+// bound is uniform and a large leap cannot overshoot/ring regardless of source.
+__device__ __forceinline__ void clampMaxStep(float& mx, float& my, float maxStep) {
+    if (maxStep > 0.0f) {
+        const float step = sqrtf(mx * mx + my * my);
+        if (step > maxStep) {
+            const float s = maxStep / step;
+            mx *= s;
+            my *= s;
+        }
+    }
+}
+
 __device__ __forceinline__ float nonlinearPMove(float error, float kp, float softness) {
     const float abs_error = fabsf(error);
     const float safe_softness = fmaxf(softness, 1.0f);
@@ -640,8 +654,9 @@ __global__ void stage2FinalizeKernel(
             for (int i = 0; i < gap; ++i) factor *= coastCfg.coast_decay;
             // Follow only the target's drift (vel * scale), decayed. No
             // convergence term, so a stationary target does not drift off.
-            const float mx = d_aim_state->vel_x * movement_scale_x * factor;
-            const float my = d_aim_state->vel_y * movement_scale_y * factor;
+            float mx = d_aim_state->vel_x * movement_scale_x * factor;
+            float my = d_aim_state->vel_y * movement_scale_y * factor;
+            clampMaxStep(mx, my, coastCfg.max_step);
             const int dx = emitMouseDelta(mx, &d_aim_state->residual_x);
             const int dy = emitMouseDelta(my, &d_aim_state->residual_y);
             d_inference_result->movement.dx = dx;
@@ -691,6 +706,11 @@ __global__ void stage2FinalizeKernel(
             : (chosenTarget.y1 + target_h * body_y_offset);
 
     const AimConfig aim_config = *d_aim_config;
+
+    // Was this target already being tracked last frame? Captured before has_track
+    // is overwritten below; used to seed the One Euro filter and reset the error
+    // derivative on a fresh acquire (avoids a derivative kick).
+    const bool fresh_track = (d_aim_state->has_track == 0);
 
     // One Euro adaptive low-pass on the measured center, applied BEFORE velocity
     // and error so the whole controller (P move, feedforward, coast) runs on the
@@ -753,12 +773,42 @@ __global__ void stage2FinalizeKernel(
     const float error_y = target_center_y - screen_center_y;
     const float ff = aim_config.feedforward_gain;
 
-    const float movement_x =
+    // Derivative (damping) term: react to how fast the error is shrinking and
+    // push back, so a high-kp approach decelerates BEFORE it overshoots. This is
+    // pure damping of OUR convergence - target motion is handled by feedforward,
+    // so D stays quiet (de ~ 0) while tracking well and only bites on transients.
+    // Error rides the One Euro-filtered center, so the derivative is clean; it is
+    // still clamped and reset on fresh acquire to avoid a derivative kick. The
+    // clamp is generous (a full-frame initial slew can change error by >60px in
+    // one frame); a tighter clamp would starve the damping exactly in the
+    // large-error regime that overshoots most. Fresh-acquire reset, not this
+    // clamp, guards against the real derivative kick.
+    const float maxDErr = 150.0f;
+    float de_x = fminf(fmaxf(error_x - d_aim_state->prev_err_x, -maxDErr), maxDErr);
+    float de_y = fminf(fmaxf(error_y - d_aim_state->prev_err_y, -maxDErr), maxDErr);
+    if (fresh_track) {
+        d_aim_state->derr_x = 0.0f;
+        d_aim_state->derr_y = 0.0f;
+    } else {
+        d_aim_state->derr_x = 0.6f * de_x + 0.4f * d_aim_state->derr_x;
+        d_aim_state->derr_y = 0.6f * de_y + 0.4f * d_aim_state->derr_y;
+    }
+    d_aim_state->prev_err_x = error_x;
+    d_aim_state->prev_err_y = error_y;
+
+    float movement_x =
         (nonlinearPMove(error_x, aim_config.kp_x, aim_config.p_softness_x)
+         + aim_config.kd_x * d_aim_state->derr_x
          + ff * d_aim_state->vel_x) * movement_scale_x;
-    const float movement_y =
+    float movement_y =
         (nonlinearPMove(error_y, aim_config.kp_y, aim_config.p_softness_y)
+         + aim_config.kd_y * d_aim_state->derr_y
          + ff * d_aim_state->vel_y) * movement_scale_y;
+
+    // Per-frame max-step clamp (output px). Bounds the slew so a large initial
+    // error is crossed in several smooth steps instead of one delayed leap that
+    // overshoots and rings - overshoot D cannot prevent reactively.
+    clampMaxStep(movement_x, movement_y, aim_config.max_step);
 
     int emit_dx = emitMouseDelta(movement_x, &d_aim_state->residual_x);
     int emit_dy = emitMouseDelta(movement_y, &d_aim_state->residual_y);
