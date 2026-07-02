@@ -750,7 +750,7 @@ LRESULT CALLBACK configWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 
         HWND tip = CreateWindowExA(
             0, "STATIC",
-            "Tip: Capture FPS cannot exceed selected monitor refresh rate.",
+            "Tip: FPS is a cap. Set it >= monitor refresh for lowest latency.",
             WS_CHILD | WS_VISIBLE,
             margin, 138, 430, 20,
             hwnd, nullptr, nullptr, nullptr
@@ -1083,9 +1083,10 @@ int main(int argc, char** argv) {
         std::cout << "Invalid output index. Falling back to output " << g_config.outputIndex << "\n";
     }
 
-    if (selectedOutput->refreshHz > 0 && g_config.targetFPS > selectedOutput->refreshHz) {
-        std::cout << "Warning: target FPS (" << g_config.targetFPS << ") exceeds monitor refresh rate ("
-                  << selectedOutput->refreshHz << "Hz)\n";
+    if (selectedOutput->refreshHz > 0 && g_config.targetFPS < selectedOutput->refreshHz) {
+        std::cout << "Note: target FPS (" << g_config.targetFPS << ") is below monitor refresh rate ("
+                  << selectedOutput->refreshHz
+                  << "Hz); capture is rate-capped. Set FPS >= refresh for lowest latency\n";
     }
     if (g_config.targetFPS <= 0) {
         std::cerr << "TargetFPS must be positive\n";
@@ -1224,7 +1225,8 @@ int main(int argc, char** argv) {
               << "B payload, UDP V2) started\n";
     std::cout << "Sending to: " << g_config.inferenceIP << ":" << g_config.sendPort << "\n";
     std::cout << "Local bind IP: " << boundIpText << "\n";
-    std::cout << "Target FPS: " << g_config.targetFPS << "\n";
+    std::cout << "Capture: event-driven (synced to presents), FPS cap: "
+              << g_config.targetFPS << "\n";
     std::cout << "Capture timeout: " << g_config.captureTimeoutMs << "ms\n";
     std::cout << "Press Ctrl+C to exit\n\n";
 
@@ -1373,12 +1375,19 @@ int main(int argc, char** argv) {
 
     std::vector<uint8_t> frameData;
 
-    // FPS limiting
-    const auto frameInterval = std::chrono::microseconds((int64_t)(1000000.0 / g_config.targetFPS));
-    auto nextFrameTime = std::chrono::steady_clock::now();
+    // Event-driven capture: block inside AcquireNextFrame until the compositor
+    // presents a new frame, so capture starts the moment the frame exists
+    // instead of on an unrelated timer phase (which added up to a full present
+    // interval of frame age). TargetFPS only caps the capture rate when it is
+    // set below the monitor refresh rate (GPU-overhead control); at or above
+    // refresh it never sleeps.
+    const auto minCaptureInterval = std::chrono::microseconds((int64_t)(1000000.0 / g_config.targetFPS));
+    auto lastCaptureTime = std::chrono::steady_clock::now() - minCaptureInterval;
 
+    // 0 would busy-spin now that the acquire wait is the loop's only blocking
+    // point, so clamp to at least 1ms.
     const UINT captureTimeoutMs =
-        static_cast<UINT>(std::clamp(g_config.captureTimeoutMs, 0, 100));
+        static_cast<UINT>(std::clamp(g_config.captureTimeoutMs, 1, 100));
 
     auto printStatsIfDue = [&](std::chrono::steady_clock::time_point statsNow) {
         const double statsSeconds = std::chrono::duration<double>(statsNow - statsStart).count();
@@ -1445,13 +1454,11 @@ int main(int argc, char** argv) {
 
     applyWindowsRealtimeHint(L"capture-main", 2);
     while (g_running.load()) {
-        // FPS limiting - keep cadence based on accumulated frame intervals.
-        nextFrameTime += frameInterval;
-        auto now = std::chrono::steady_clock::now();
-        if (now < nextFrameTime) {
-            std::this_thread::sleep_until(nextFrameTime);
-        } else if (now - nextFrameTime > frameInterval * 2) {
-            nextFrameTime = now;
+        // Rate cap only (no fixed cadence): sleeps only when capturing faster
+        // than TargetFPS, otherwise proceeds straight into the blocking acquire.
+        const auto nextAllowedCapture = lastCaptureTime + minCaptureInterval;
+        if (std::chrono::steady_clock::now() < nextAllowedCapture) {
+            std::this_thread::sleep_until(nextAllowedCapture);
         }
 
         // Capture a new desktop frame if available.
@@ -1464,6 +1471,7 @@ int main(int argc, char** argv) {
         stats.captureAttempts.fetch_add(1, std::memory_order_relaxed);
 
         if (gotNewFrame) {
+            lastCaptureTime = std::chrono::steady_clock::now();
             stats.capturedFrames.fetch_add(1, std::memory_order_relaxed);
             stats.totalCaptureUs.fetch_add(
                 std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count(),
