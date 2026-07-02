@@ -34,12 +34,17 @@
 // =============================================================================
 
 // Same resolution, no resize -> FP16
+// src_slot is a device cell holding the actual source pointer; reading it here
+// (instead of taking the pointer by value) lets a captured CUDA graph keep a
+// stable kernel argument while the source buffer varies per frame (Tegra
+// zero-copy: the mapped receive buffer; dGPU: the constant H2D staging buffer).
 __global__ void preprocessKernelFP16(
-    const uint8_t* __restrict__ src,
+    const uint8_t* const* __restrict__ src_slot,
     __half* __restrict__ dst,
     int width, int height,
     float scale_factor
 ) {
+    const uint8_t* __restrict__ src = *src_slot;
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
     if (x >= width || y >= height) return;
@@ -55,11 +60,12 @@ __global__ void preprocessKernelFP16(
 
 // Same resolution, no resize -> FP32
 __global__ void preprocessKernel(
-    const uint8_t* __restrict__ src,
+    const uint8_t* const* __restrict__ src_slot,
     float* __restrict__ dst,
     int width, int height,
     float scale_factor
 ) {
+    const uint8_t* __restrict__ src = *src_slot;
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
     if (x >= width || y >= height) return;
@@ -121,13 +127,14 @@ __device__ __forceinline__ void bilinearSample(
 
 // Bilinear resize + HWC->CHW + normalize -> FP16
 __global__ void resizePreprocessKernelFP16(
-    const uint8_t* __restrict__ src,
+    const uint8_t* const* __restrict__ src_slot,
     __half* __restrict__ dst,
     int src_w, int src_h,
     int dst_w, int dst_h,
     float scale_x, float scale_y,
     float norm_factor
 ) {
+    const uint8_t* __restrict__ src = *src_slot;
     int dx = blockIdx.x * blockDim.x + threadIdx.x;
     int dy = blockIdx.y * blockDim.y + threadIdx.y;
     if (dx >= dst_w || dy >= dst_h) return;
@@ -148,13 +155,14 @@ __global__ void resizePreprocessKernelFP16(
 
 // Bilinear resize + HWC->CHW + normalize -> FP32
 __global__ void resizePreprocessKernel(
-    const uint8_t* __restrict__ src,
+    const uint8_t* const* __restrict__ src_slot,
     float* __restrict__ dst,
     int src_w, int src_h,
     int dst_w, int dst_h,
     float scale_x, float scale_y,
     float norm_factor
 ) {
+    const uint8_t* __restrict__ src = *src_slot;
     int dx = blockIdx.x * blockDim.x + threadIdx.x;
     int dy = blockIdx.y * blockDim.y + threadIdx.y;
     if (dx >= dst_w || dy >= dst_h) return;
@@ -174,8 +182,11 @@ __global__ void resizePreprocessKernel(
 }
 
 // Preprocessing wrapper (handles RGB resize/no-resize, FP16/FP32)
+// d_src_slot is a device pointer to a device cell that holds the actual source
+// buffer pointer. Passing the cell (rather than the source pointer directly) lets
+// a captured graph bake a stable kernel argument while the source varies per frame.
 extern "C" cudaError_t cuda_preprocessing(
-    const void* src_data,
+    const uint8_t* const* d_src_slot,
     void* dst_chw,
     int src_width, int src_height,
     int target_width, int target_height,
@@ -196,7 +207,7 @@ extern "C" cudaError_t cuda_preprocessing(
 
         if (use_fp16) {
             resizePreprocessKernelFP16<<<grid, block, 0, stream>>>(
-                static_cast<const uint8_t*>(src_data),
+                d_src_slot,
                 static_cast<__half*>(dst_chw),
                 src_width, src_height,
                 target_width, target_height,
@@ -204,7 +215,7 @@ extern "C" cudaError_t cuda_preprocessing(
             );
         } else {
             resizePreprocessKernel<<<grid, block, 0, stream>>>(
-                static_cast<const uint8_t*>(src_data),
+                d_src_slot,
                 static_cast<float*>(dst_chw),
                 src_width, src_height,
                 target_width, target_height,
@@ -214,14 +225,14 @@ extern "C" cudaError_t cuda_preprocessing(
     } else {
         if (use_fp16) {
             preprocessKernelFP16<<<grid, block, 0, stream>>>(
-                static_cast<const uint8_t*>(src_data),
+                d_src_slot,
                 static_cast<__half*>(dst_chw),
                 target_width, target_height,
                 norm_factor
             );
         } else {
             preprocessKernel<<<grid, block, 0, stream>>>(
-                static_cast<const uint8_t*>(src_data),
+                d_src_slot,
                 static_cast<float*>(dst_chw),
                 target_width, target_height,
                 norm_factor
@@ -349,6 +360,10 @@ SimpleInference::~SimpleInference() {
     if (m_d_rawInput) cudaFree(m_d_rawInput);
     if (m_d_chwInput) cudaFree(m_d_chwInput);
     if (m_d_output) cudaFree(m_d_output);
+    if (m_d_srcPtr) cudaFree(m_d_srcPtr);
+    // m_d_resultMapped[] are device aliases of the mapped pinned result buffers,
+    // not separate allocations - they are released when m_h_inferenceResultPinned
+    // is freed below with cudaFreeHost().
 
     // Free GPU fused pipeline buffers
     if (m_d_selectedTarget) cudaFree(m_d_selectedTarget);
@@ -481,6 +496,22 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
     cudaDeviceGetStreamPriorityRange(&leastPriority, &greatestPriority);
     cudaStreamCreateWithPriority(&m_stream, cudaStreamNonBlocking, greatestPriority);
 
+    // Detect Tegra/Orin unified memory: an integrated GPU that can map host
+    // memory lets the preprocess kernel read the pinned receive buffer directly
+    // and the postprocess write the result straight into mapped pinned memory -
+    // so we can drop the per-frame H2D and D2H copies entirely.
+    {
+        int dev = 0;
+        cudaGetDevice(&dev);
+        int integrated = 0, canMapHost = 0;
+        cudaDeviceGetAttribute(&integrated, cudaDevAttrIntegrated, dev);
+        cudaDeviceGetAttribute(&canMapHost, cudaDevAttrCanMapHostMemory, dev);
+        m_zeroCopy = (integrated != 0) && (canMapHost != 0);
+        std::cout << "[SimpleInference] Unified-memory zero-copy: "
+                  << (m_zeroCopy ? "ENABLED (Tegra: no H2D/D2H copy)" : "DISABLED (discrete GPU)")
+                  << std::endl;
+    }
+
     // Allocate GPU memory. Keep enough raw-input space for the common 640x640
     // capture case even when the model input is smaller and preprocessing resizes.
     constexpr size_t kDefaultRawInputPixels = 640ull * 640ull;
@@ -495,6 +526,13 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
     cudaMalloc(&m_d_rawInput, rawInputSize);
     cudaMalloc(&m_d_chwInput, chwInputSize);
     cudaMalloc(&m_d_output, outputSizeGPU);
+
+    // Source-pointer indirection cell (see m_d_srcPtr). Seed it with the H2D
+    // staging buffer so warmup and the discrete-GPU path read m_d_rawInput; on
+    // Tegra it is overwritten per frame with the current receive buffer's device
+    // pointer (no H2D copy).
+    cudaMalloc(&m_d_srcPtr, sizeof(void*));
+    cudaMemcpy(m_d_srcPtr, &m_d_rawInput, sizeof(void*), cudaMemcpyHostToDevice);
 
     // Allocate GPU fused pipeline buffers
     cudaMalloc(&m_d_selectedTarget, sizeof(Detection));
@@ -515,8 +553,19 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
     // Allocate result buffers per callback slot.
     for (int i = 0; i < kMaxCallbacksInFlight; ++i) {
         const size_t idx = static_cast<size_t>(i);
-        cudaMalloc(&m_d_inferenceResult[i], sizeof(InferenceResult));
-        cudaMallocHost(&m_h_inferenceResultPinned[i], sizeof(InferenceResult));
+        if (m_zeroCopy) {
+            // Mapped pinned result buffer: the postprocess kernel writes directly
+            // into host-visible memory (via the device alias), so there is no D2H
+            // copy. The callback reads m_h_inferenceResultPinned[i] as before.
+            cudaHostAlloc(&m_h_inferenceResultPinned[i], sizeof(InferenceResult),
+                          cudaHostAllocMapped);
+            cudaHostGetDevicePointer(&m_d_resultMapped[i], m_h_inferenceResultPinned[i], 0);
+            m_d_inferenceResult[i] = nullptr;  // unused in zero-copy mode
+        } else {
+            cudaMalloc(&m_d_inferenceResult[i], sizeof(InferenceResult));
+            cudaMallocHost(&m_h_inferenceResultPinned[i], sizeof(InferenceResult));
+            m_d_resultMapped[i] = nullptr;
+        }
         cudaEventCreateWithFlags(&m_callbackEvents[idx], cudaEventDisableTiming);
         m_callbackSlotPending[idx].store(false, std::memory_order_relaxed);
         m_callbackSlotBusy[idx].store(false, std::memory_order_relaxed);
@@ -549,7 +598,9 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
     memset(m_h_rawPinned, 128, warmupSize);
     for (int i = 0; i < 3; i++) {
         cudaMemcpyAsync(m_d_rawInput, m_h_rawPinned, warmupSize, cudaMemcpyHostToDevice, m_stream);
-        cuda_preprocessing(m_d_rawInput, m_d_chwInput,
+        // m_d_srcPtr currently points at m_d_rawInput (seeded above), so the
+        // preprocess reads the just-uploaded warmup frame.
+        cuda_preprocessing(reinterpret_cast<const uint8_t* const*>(m_d_srcPtr), m_d_chwInput,
                            m_inputW, m_inputH, m_inputW, m_inputH, m_inputFP16, m_stream);
 #if TRT_USE_NEW_API
         m_context->enqueueV3(m_stream);
@@ -568,6 +619,29 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
 // OPTIMIZED API: Pinned H2D + Single D2H Transfer + Full CUDA Graph
 // =============================================================================
 
+// Resolve the device pointer for a mapped pinned host buffer (Tegra zero-copy).
+// Results are cached because the UDP layer reuses a small fixed set of buffers,
+// so cudaHostGetDevicePointer() runs at most once per distinct buffer.
+const uint8_t* SimpleInference::pinnedDevicePtr(void* hostPtr) {
+    if (!hostPtr) return nullptr;
+    for (int i = 0; i < m_pinnedCacheCount; ++i) {
+        if (m_pinnedHostCache[static_cast<size_t>(i)] == hostPtr) {
+            return static_cast<const uint8_t*>(m_pinnedDevCache[static_cast<size_t>(i)]);
+        }
+    }
+    void* devPtr = nullptr;
+    if (cudaHostGetDevicePointer(&devPtr, hostPtr, 0) != cudaSuccess || !devPtr) {
+        cudaGetLastError();  // swallow so the caller can fall back to a normal H2D
+        return nullptr;
+    }
+    if (m_pinnedCacheCount < kPinnedPtrCacheSize) {
+        m_pinnedHostCache[static_cast<size_t>(m_pinnedCacheCount)] = hostPtr;
+        m_pinnedDevCache[static_cast<size_t>(m_pinnedCacheCount)] = devPtr;
+        ++m_pinnedCacheCount;
+    }
+    return static_cast<const uint8_t*>(devPtr);
+}
+
 // Pipeline without H2D transfer - for CUDA Graph capture
 bool SimpleInference::executeFusedPipelinePostH2D(int width, int height,
                                                   float confThreshold, int headClassId, float headBonus,
@@ -579,8 +653,13 @@ bool SimpleInference::executeFusedPipelinePostH2D(int width, int height,
         std::cerr << "[SimpleInference] Invalid result slot: " << resultSlot << std::endl;
         return false;
     }
-    InferenceResult* dResultSlot = m_d_inferenceResult[static_cast<size_t>(resultSlot)];
     InferenceResult* hResultSlot = m_h_inferenceResultPinned[static_cast<size_t>(resultSlot)];
+    // On Tegra the postprocess writes straight into the mapped pinned result
+    // (device alias); on a discrete GPU it writes a device buffer that is then
+    // copied D2H into the pinned buffer below.
+    InferenceResult* dResultSlot = m_zeroCopy
+        ? m_d_resultMapped[static_cast<size_t>(resultSlot)]
+        : m_d_inferenceResult[static_cast<size_t>(resultSlot)];
     if (!dResultSlot || !hResultSlot) {
         std::cerr << "[SimpleInference] Result slot not allocated: " << resultSlot << std::endl;
         return false;
@@ -591,9 +670,10 @@ bool SimpleInference::executeFusedPipelinePostH2D(int width, int height,
         cudaEventRecord(m_stageEvtPostH2D[slotIdx], m_stream);
     }
 
-    // GPU preprocessing (RGB + optional resize)
+    // GPU preprocessing (RGB + optional resize). Reads the source pointer from
+    // m_d_srcPtr (the current receive buffer on Tegra, or m_d_rawInput on dGPU).
     cudaError_t preprocessErr = cuda_preprocessing(
-        m_d_rawInput, m_d_chwInput,
+        reinterpret_cast<const uint8_t* const*>(m_d_srcPtr), m_d_chwInput,
         width, height, m_inputW, m_inputH, m_inputFP16, m_stream
     );
     if (preprocessErr != cudaSuccess) {
@@ -651,13 +731,17 @@ bool SimpleInference::executeFusedPipelinePostH2D(int width, int height,
         cudaEventRecord(m_stageEvtPostPostprocess[slotIdx], m_stream);
     }
 
-    // Single D2H transfer (40 bytes)
-    cudaError_t d2hErr = cudaMemcpyAsync(hResultSlot, dResultSlot,
-                                         sizeof(InferenceResult), cudaMemcpyDeviceToHost, m_stream);
-    if (d2hErr != cudaSuccess) {
-        std::cerr << "[SimpleInference] cudaMemcpyAsync(result D2H) failed: "
-                  << cudaGetErrorString(d2hErr) << std::endl;
-        return false;
+    // Single D2H transfer (dGPU only). On Tegra the postprocess already wrote the
+    // result into mapped pinned memory, so no copy is needed - the host reads it
+    // once the completion event fires.
+    if (!m_zeroCopy) {
+        cudaError_t d2hErr = cudaMemcpyAsync(hResultSlot, dResultSlot,
+                                             sizeof(InferenceResult), cudaMemcpyDeviceToHost, m_stream);
+        if (d2hErr != cudaSuccess) {
+            std::cerr << "[SimpleInference] cudaMemcpyAsync(result D2H) failed: "
+                      << cudaGetErrorString(d2hErr) << std::endl;
+            return false;
+        }
     }
     if (m_stageTimingEnabled && m_stageEvtEnd[slotIdx]) {
         cudaEventRecord(m_stageEvtEnd[slotIdx], m_stream);
@@ -678,12 +762,41 @@ bool SimpleInference::executeFusedPipeline(void* rawInput, int width, int height
         cudaEventRecord(m_stageEvtStart[slotIdx], m_stream);
     }
 
-    // H2D: Upload directly from pinned memory
-    cudaError_t h2dErr = cudaMemcpyAsync(m_d_rawInput, rawInput, rawSize, cudaMemcpyHostToDevice, m_stream);
-    if (h2dErr != cudaSuccess) {
-        std::cerr << "[SimpleInference] cudaMemcpyAsync(m_d_rawInput) failed: "
-                  << cudaGetErrorString(h2dErr) << std::endl;
-        return false;
+    if (m_zeroCopy) {
+        // Zero-copy: repoint the preprocess source cell at the frame's mapped
+        // device pointer instead of copying the frame. An 8-byte pointer update
+        // replaces the ~1.2MB H2D. Falls back to a real H2D if this particular
+        // buffer turns out not to be device-mappable.
+        const uint8_t* dev = pinnedDevicePtr(rawInput);
+        if (dev) {
+            m_h_srcPtrStage[slotIdx] = const_cast<uint8_t*>(dev);
+        } else {
+            cudaError_t h2dErr = cudaMemcpyAsync(m_d_rawInput, rawInput, rawSize,
+                                                 cudaMemcpyHostToDevice, m_stream);
+            if (h2dErr != cudaSuccess) {
+                std::cerr << "[SimpleInference] cudaMemcpyAsync(m_d_rawInput) failed: "
+                          << cudaGetErrorString(h2dErr) << std::endl;
+                return false;
+            }
+            m_h_srcPtrStage[slotIdx] = m_d_rawInput;
+        }
+        cudaError_t ptrErr = cudaMemcpyAsync(m_d_srcPtr, &m_h_srcPtrStage[slotIdx],
+                                             sizeof(void*), cudaMemcpyHostToDevice, m_stream);
+        if (ptrErr != cudaSuccess) {
+            std::cerr << "[SimpleInference] cudaMemcpyAsync(src ptr) failed: "
+                      << cudaGetErrorString(ptrErr) << std::endl;
+            return false;
+        }
+    } else {
+        // Discrete GPU: H2D into the staging buffer. m_d_srcPtr already points at
+        // m_d_rawInput (seeded at load), so the preprocess reads the uploaded frame.
+        cudaError_t h2dErr = cudaMemcpyAsync(m_d_rawInput, rawInput, rawSize,
+                                             cudaMemcpyHostToDevice, m_stream);
+        if (h2dErr != cudaSuccess) {
+            std::cerr << "[SimpleInference] cudaMemcpyAsync(m_d_rawInput) failed: "
+                      << cudaGetErrorString(h2dErr) << std::endl;
+            return false;
+        }
     }
 
     return executeFusedPipelinePostH2D(width, height, confThreshold, headClassId, headBonus,
@@ -932,6 +1045,15 @@ bool SimpleInference::ensureRawInputCapacity(size_t requiredBytes) {
     m_d_rawInput = newDeviceRaw;
     m_h_rawPinned = newHostRaw;
     m_rawInputCapacityBytes = requiredBytes;
+    // Re-seed the preprocess source cell: it still holds the OLD (now freed)
+    // m_d_rawInput. On the discrete-GPU path the cell is a constant alias of
+    // m_d_rawInput, so leaving it stale would make the preprocess read freed
+    // memory. (On Tegra the cell is overwritten per frame, but re-seeding is
+    // harmless.) Safe to do synchronously: the stream was drained above and no
+    // callbacks are in flight.
+    if (m_d_srcPtr) {
+        cudaMemcpy(m_d_srcPtr, &m_d_rawInput, sizeof(void*), cudaMemcpyHostToDevice);
+    }
     return true;
 }
 
@@ -1029,18 +1151,24 @@ bool SimpleInference::captureFullGraphForShape(int sourceWidth, int sourceHeight
             cudaEventRecord(m_stageEvtStart[slotIdx], m_stream);
         }
 
-        err = cudaMemcpyAsync(m_d_rawInput, m_h_rawPinned, rawSize,
-                              cudaMemcpyHostToDevice, m_stream);
-        if (err != cudaSuccess) {
-            cudaGraph_t capturedGraph = nullptr;
-            cudaError_t abortErr = cudaStreamEndCapture(m_stream, &capturedGraph);
-            if (abortErr == cudaSuccess && capturedGraph) {
-                cudaGraphDestroy(capturedGraph);
+        // dGPU: capture the frame H2D into the graph (its source pointer is
+        // patched per frame at launch). Tegra zero-copy: no H2D in the graph -
+        // the preprocess reads the receive buffer directly and the source cell is
+        // updated on the stream just before each launch.
+        if (!m_zeroCopy) {
+            err = cudaMemcpyAsync(m_d_rawInput, m_h_rawPinned, rawSize,
+                                  cudaMemcpyHostToDevice, m_stream);
+            if (err != cudaSuccess) {
+                cudaGraph_t capturedGraph = nullptr;
+                cudaError_t abortErr = cudaStreamEndCapture(m_stream, &capturedGraph);
+                if (abortErr == cudaSuccess && capturedGraph) {
+                    cudaGraphDestroy(capturedGraph);
+                }
+                std::cerr << "[SimpleInference] Failed to capture H2D memcpy for slot "
+                          << slot << ": " << cudaGetErrorString(err) << std::endl;
+                destroyBucket(bucket);
+                return false;
             }
-            std::cerr << "[SimpleInference] Failed to capture H2D memcpy for slot "
-                      << slot << ": " << cudaGetErrorString(err) << std::endl;
-            destroyBucket(bucket);
-            return false;
         }
 
         // Execute pipeline after captured H2D. Each graph writes to its own
@@ -1069,13 +1197,19 @@ bool SimpleInference::captureFullGraphForShape(int sourceWidth, int sourceHeight
             return false;
         }
 
-        bucket.h2dNodes[slotIdx] = findGraphH2DMemcpyNode(bucket.graphs[slotIdx], m_d_rawInput, rawSize);
         bucket.rawSizes[slotIdx] = rawSize;
-        if (!bucket.h2dNodes[slotIdx]) {
-            std::cerr << "[SimpleInference] Failed to locate captured H2D memcpy node for slot "
-                      << slot << std::endl;
-            destroyBucket(bucket);
-            return false;
+        if (m_zeroCopy) {
+            // No H2D node exists in the zero-copy graph; the per-frame source is
+            // supplied via the m_d_srcPtr cell updated before each launch.
+            bucket.h2dNodes[slotIdx] = nullptr;
+        } else {
+            bucket.h2dNodes[slotIdx] = findGraphH2DMemcpyNode(bucket.graphs[slotIdx], m_d_rawInput, rawSize);
+            if (!bucket.h2dNodes[slotIdx]) {
+                std::cerr << "[SimpleInference] Failed to locate captured H2D memcpy node for slot "
+                          << slot << std::endl;
+                destroyBucket(bucket);
+                return false;
+            }
         }
 
         err = cudaGraphInstantiate(&bucket.graphExecs[slotIdx], bucket.graphs[slotIdx], nullptr, nullptr, 0);
@@ -1280,20 +1414,37 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
         graphAvailable && bucket &&
         callbackSlot < bucket->slotCount &&
         bucket->graphExecs[static_cast<size_t>(callbackSlot)] != nullptr &&
-        bucket->h2dNodes[static_cast<size_t>(callbackSlot)] != nullptr &&
+        // dGPU needs the captured H2D node to patch; Tegra has none (zero-copy).
+        (m_zeroCopy || bucket->h2dNodes[static_cast<size_t>(callbackSlot)] != nullptr) &&
         bucket->rawSizes[static_cast<size_t>(callbackSlot)] == rawSize;
 
     if (canUseGraph) {
-        // H2D is inside the graph; only patch the source host pointer.
-        cudaError_t err = cudaGraphExecMemcpyNodeSetParams1D(
-            bucket->graphExecs[static_cast<size_t>(callbackSlot)],
-            bucket->h2dNodes[static_cast<size_t>(callbackSlot)],
-            m_d_rawInput,
-            pinnedData,
-            rawSize,
-            cudaMemcpyHostToDevice);
+        // Prepare the per-frame source before launching the graph.
+        // - Tegra zero-copy: update the m_d_srcPtr cell with the frame's mapped
+        //   device pointer (an 8-byte stream copy; no H2D node exists).
+        // - dGPU: patch the captured H2D memcpy node's source host pointer.
+        cudaError_t err = cudaSuccess;
+        if (m_zeroCopy) {
+            const uint8_t* dev = pinnedDevicePtr(pinnedData);
+            if (!dev) {
+                err = cudaErrorInvalidValue;  // force the standard-path fallback below
+            } else {
+                m_h_srcPtrStage[static_cast<size_t>(callbackSlot)] = const_cast<uint8_t*>(dev);
+                err = cudaMemcpyAsync(m_d_srcPtr,
+                                      &m_h_srcPtrStage[static_cast<size_t>(callbackSlot)],
+                                      sizeof(void*), cudaMemcpyHostToDevice, m_stream);
+            }
+        } else {
+            err = cudaGraphExecMemcpyNodeSetParams1D(
+                bucket->graphExecs[static_cast<size_t>(callbackSlot)],
+                bucket->h2dNodes[static_cast<size_t>(callbackSlot)],
+                m_d_rawInput,
+                pinnedData,
+                rawSize,
+                cudaMemcpyHostToDevice);
+        }
         if (err != cudaSuccess) {
-            std::cerr << "[SimpleInference] cudaGraphExecMemcpyNodeSetParams1D(H2D) failed: "
+            std::cerr << "[SimpleInference] Graph source update failed: "
                       << cudaGetErrorString(err) << std::endl;
             if (!executeFusedPipeline(pinnedData, width, height,
                                       confThreshold, headClassId, headBonus,
@@ -1304,7 +1455,7 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
             m_graphFallbackCount.fetch_add(1, std::memory_order_relaxed);
             m_standardLaunchCount.fetch_add(1, std::memory_order_relaxed);
         } else {
-            // Launch graph (H2D + preprocess + inference + postprocess + D2H)
+            // Launch graph (preprocess + inference + postprocess [+ H2D/D2H on dGPU])
             err = cudaGraphLaunch(bucket->graphExecs[static_cast<size_t>(callbackSlot)], m_stream);
             if (err != cudaSuccess) {
                 std::cerr << "[SimpleInference] cudaGraphLaunch failed: "

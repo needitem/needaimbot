@@ -141,7 +141,13 @@ bool UDPCapture::allocatePinnedBuffers(size_t size) {
     freePinnedBuffers();
     bool pinnedOk = true;
     for (int i = 0; i < NUM_BUFFERS; ++i) {
-        cudaError_t err = cudaMallocHost(&m_pinnedFrameBuffer[i], size);
+        // Allocate MAPPED pinned memory (cudaHostAllocMapped) instead of plain
+        // cudaMallocHost. On Tegra/Orin (unified memory) this lets the inference
+        // engine obtain a device pointer via cudaHostGetDevicePointer() and have
+        // the preprocess kernel read the received frame directly - eliminating the
+        // per-frame H2D copy. On discrete GPUs the mapped flag is harmless (the
+        // engine still stages via H2D). Freed with cudaFreeHost() as before.
+        cudaError_t err = cudaHostAlloc(&m_pinnedFrameBuffer[i], size, cudaHostAllocMapped);
         if (err != cudaSuccess) {
             std::cerr << "[UDPCapture] Pinned alloc failed at buffer " << i
                       << ": " << cudaGetErrorString(err) << "\n";
@@ -741,8 +747,8 @@ void UDPCapture::receiveThread() {
             const uint16_t publishH = frag->height;
             const uint8_t publishBpp = frag->bytesPerPixel;
             const uint8_t publishFormat = frag->pixelFormat;
-            publishAssembledBuffer(publishIdx, publishW, publishH, frameId, publishBpp, publishFormat,
-                                   packetNow);
+            const bool published = publishAssembledBuffer(
+                publishIdx, publishW, publishH, frameId, publishBpp, publishFormat, packetNow);
 
             frag->bufferIndex = -1;
             unlinkFragment(frag);
@@ -751,6 +757,12 @@ void UDPCapture::receiveThread() {
                 cachedFrameId = 0;
             }
             releaseFragment(frag);
+
+            // No locks are held at this point (publishAssembledBuffer releases
+            // m_publishCvMutex before returning), so the callback can run inline.
+            if (published && m_frameReadyCallback) {
+                m_frameReadyCallback();
+            }
         }
     };
 

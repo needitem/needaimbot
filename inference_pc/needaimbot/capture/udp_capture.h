@@ -35,6 +35,7 @@ typedef int SOCKET;
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -95,6 +96,15 @@ public:
     uint64_t GetDroppedFrameCount() const { return m_droppedFrames.load(std::memory_order_relaxed); }
     bool IsPinnedMemoryEnabled() const { return m_usePinnedMemory; }
     bool SendFrameCredit(uint32_t minFrameId = 0, uint32_t credits = 1);
+
+    // Called on the receive thread immediately after a frame is published
+    // (newest-wins buffer swapped in), so a consumer can react without polling.
+    // No locks are held at the call site, but the callback still runs ON the
+    // receive thread - keep it fast (microseconds) and non-blocking, or the
+    // socket stops being drained for as long as the callback takes.
+    // Must be set before StartCapture(); not safe to change while running.
+    using FrameReadyCallback = std::function<void()>;
+    void SetFrameReadyCallback(FrameReadyCallback cb) { m_frameReadyCallback = std::move(cb); }
 
     // Override the receive thread's CPU core. >=0 pins to that core, <0 leaves
     // it unpinned. Call before StartCapture(). When never set, the thread keeps
@@ -202,4 +212,6 @@ private:
 
     std::atomic<uint64_t> m_receivedFrames{0};
     std::atomic<uint64_t> m_droppedFrames{0};
+
+    FrameReadyCallback m_frameReadyCallback;
 };

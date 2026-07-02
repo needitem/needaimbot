@@ -134,12 +134,36 @@ private:
     nvinfer1::IExecutionContext* m_context = nullptr;
 
     // GPU buffers
-    void* m_d_rawInput = nullptr;    // Raw RGB HWC uint8 input
+    void* m_d_rawInput = nullptr;    // Raw RGB HWC uint8 input (dGPU H2D staging)
     void* m_d_chwInput = nullptr;    // CHW float32 or float16 (preprocessed)
     void* m_d_output = nullptr;      // Model output (float32 or float16)
     cudaStream_t m_stream = nullptr;
 
     int m_maxDetections = 100;
+
+    // --- Tegra/Orin zero-copy (unified memory) ---
+    // On an integrated GPU that can map host memory, the pinned receive buffer is
+    // read directly by the preprocess kernel and the result is written straight
+    // into mapped pinned memory, eliminating the per-frame H2D and D2H copies.
+    bool m_zeroCopy = false;
+    // Device cell holding the current preprocess source pointer. The preprocess
+    // kernel reads *m_d_srcPtr, so the graph bakes a STABLE cell address while the
+    // actual source can change per frame (Tegra: the frame's device pointer;
+    // dGPU: the constant m_d_rawInput). This keeps H2D out of the graph on Tegra.
+    void** m_d_srcPtr = nullptr;
+    // Per-slot pinned staging for the 8-byte pointer written into m_d_srcPtr.
+    std::array<void*, kMaxCallbacksInFlight> m_h_srcPtrStage{};
+    // Tegra: device-side alias of each pinned result buffer (cudaHostGetDevicePointer).
+    std::array<InferenceResult*, kMaxCallbacksInFlight> m_d_resultMapped{};
+    // Tiny cache mapping a pinned host receive buffer to its device pointer so we
+    // call cudaHostGetDevicePointer() once per distinct buffer, not per frame.
+    static constexpr int kPinnedPtrCacheSize = 8;
+    std::array<void*, kPinnedPtrCacheSize> m_pinnedHostCache{};
+    std::array<void*, kPinnedPtrCacheSize> m_pinnedDevCache{};
+    int m_pinnedCacheCount = 0;
+    // Resolve (and cache) the device pointer for a mapped pinned host buffer.
+    // Returns nullptr if the buffer is not device-mappable.
+    const uint8_t* pinnedDevicePtr(void* hostPtr);
 
     // GPU fused pipeline buffers
     Detection* m_d_selectedTarget = nullptr;  // Persistent selected target for IoU stickiness

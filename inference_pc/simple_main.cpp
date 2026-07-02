@@ -1529,11 +1529,9 @@ int main(int argc, char* argv[]) {
         std::cerr << "[Simple] Failed to initialize UDP capture" << std::endl;
         return 1;
     }
-    if (!udpCapture.StartCapture()) {
-        std::cerr << "[Simple] Failed to start UDP capture" << std::endl;
-        return 1;
-    }
-    std::cout << "[Simple] UDP capture started on port " << cfg.udpPort << std::endl;
+    // StartCapture() (spins up the receive thread) is deferred until the frame-
+    // ready callback below is registered - the callback must be set before the
+    // receive thread can observe a completed frame.
 
     // 4. State - all GPU now, minimal CPU state
     const gpa::AimConfig rightGpuAimConfig = cfg.toGpuAimConfig();
@@ -1751,7 +1749,12 @@ int main(int argc, char* argv[]) {
     std::cout << "[Simple] Left+Right = AIM + NO-RECOIL" << std::endl;
 
     // 6. Main loop with GPU callback API
-    // - Frame acquisition runs on main thread
+    // - Frame submission is event-driven: UDPCapture's receive thread invokes
+    //   trySubmitLatestFrame() (below) the instant a frame finishes assembling,
+    //   so the newest frame goes straight from network to GPU submit with no
+    //   extra hop through the main thread. The main loop itself only drains
+    //   (retries a frame that arrived while the pipeline was full) and handles
+    //   slow/idle housekeeping (CUDA graph capture, stats, debug dump).
     // - Inference is queued to GPU
     // - Completion callback queues mouse movement without cudaStreamSync wait.
     int recvFramesWindow = 0;
@@ -1770,17 +1773,35 @@ int main(int argc, char* argv[]) {
     bool idleGraphPrecaptureDone = false;
     auto nextIdleGraphPrecaptureTime = std::chrono::steady_clock::now();
 
+    // Serializes every touch of udpCapture's single-consumer AcquireFramePinned
+    // (m_consumedSeq is not atomic) and every call into `inference` (its
+    // CUDA-graph-cache state is not internally synchronized), now that both the
+    // receive thread (via trySubmitLatestFrame) and the main thread (drain,
+    // idle graph pre-capture, debug dump) can reach them. Always try_lock'd from
+    // the receive thread's path so a slow main-thread section (graph capture
+    // can take hundreds of ms) never stalls the socket; main-thread call sites
+    // may block briefly since only they, not the receive thread, wait on it.
+    std::mutex submitMutex;
+    // Set by trySubmitLatestFrame (recv thread or drain) when a frame's shape
+    // has no captured CUDA graph and the GPU is idle. Packed (width<<32|height).
+    // The main loop performs the actual (slow) capture, never the recv thread.
+    std::atomic<uint64_t> pendingCaptureShape{0};
+
     auto isRgbFrameInput = [](uint8_t framePixelFormat, uint8_t frameBytesPerPixel) {
         return framePixelFormat == UDP_PIXEL_FORMAT_RGB && frameBytesPerPixel == 3;
     };
     // A small credit depth lets the Game PC pre-send the newest next frame while
     // the GPU is busy, reducing inter-frame gaps without allowing a deep queue.
+    // Callers must hold submitMutex (creditSentWindow is not atomic).
     auto requestFrameCredits = [&]() {
         if (udpCapture.SendFrameCredit(nextCreditMinFrameId, frameCreditDepth)) {
             creditSentWindow += frameCreditDepth;
         }
     };
 
+    // Callers must hold submitMutex - this can call captureFullGraphForShape,
+    // which takes hundreds of ms, and touches `inference`'s graph-cache state
+    // with no internal locking of its own.
     auto ensureFullGraphReady = [&](unsigned int sourceW, unsigned int sourceH,
                                     const char* logPrefix) {
         const bool graphReady = inference.isFullGraphReadyForShape(
@@ -1825,8 +1846,46 @@ int main(int argc, char* argv[]) {
         return false;
     };
 
-    while (g_running) {
-        // Wait for frame (returns pinned memory directly)
+    // Attempts to submit exactly one frame (the newest available) to inference.
+    // Called from two places:
+    //  (a) UDPCapture's receive thread, via the frame-ready callback, the
+    //      instant a new frame is published - the hot path (network -> GPU
+    //      submit with no extra hop).
+    //  (b) the main loop's periodic 1ms drain, to pick up a frame that arrived
+    //      while the pipeline was full or while this function lost the
+    //      submitMutex race (see below).
+    // Never blocks: submitMutex is only try-locked and AcquireFramePinned is
+    // called with timeoutMs=0. This is required for (a): the receive thread
+    // must keep draining the socket and must never wait on GPU work or on a
+    // lock a slow main-thread operation might be holding (CUDA graph capture
+    // can take hundreds of ms). A frame this function can't claim right now is
+    // never lost - UDPCapture's buffers are newest-wins, so the next call (from
+    // either caller) simply picks up whatever is newest at that time.
+    auto trySubmitLatestFrame = [&]() {
+        // Refuse new GPU submissions once shutdown has begun. This is called
+        // from the receive thread (via the frame-ready callback), which keeps
+        // running until udpCapture.StopCapture() joins it - strictly after the
+        // main loop's own `while (g_running)` has already exited. Without this
+        // check, a frame arriving in that window could launch new GPU work
+        // referencing stack-local state (callbackTickets, callbackCtx) that is
+        // about to be destroyed, after the shutdown path's one-time
+        // cudaStreamSynchronize has already run (see the code near main's
+        // `return`, which stops capture - and thus this callback - before that
+        // sync for exactly this reason).
+        if (!g_running.load(std::memory_order_relaxed)) return;
+
+        std::unique_lock<std::mutex> lock(submitMutex, std::try_to_lock);
+        if (!lock.owns_lock()) return;  // Contended; the next frame/tick retries.
+
+        if (busyCallbackTicketCount() >= maxPipelineInFlight) return;  // Full; drained on the next slot-free notify.
+
+        // Only pull a frame into the inference pipeline while actively aiming -
+        // otherwise leave it in UDPCapture's ring (saves GPU/CPU while idle).
+        const uint8_t idleButtonMask = makcu.buttonMask();
+        if (!(cfg.forceAimOn || makcuMaskAiming(idleButtonMask))) return;
+
+        requestFrameCredits();
+
         void* pinnedRgbData = nullptr;
         unsigned int width = 0, height = 0;
         uint64_t acquiredFrameId = 0;
@@ -1834,206 +1893,25 @@ int main(int argc, char* argv[]) {
         uint8_t bytesPerPixel = 3;
         uint8_t pixelFormat = UDP_PIXEL_FORMAT_RGB;
 
-        // Drop any stale recoil sub-pixel carry whenever a firing burst is not
-        // active. Evaluated at the loop top, before every `continue` (pipeline
-        // full, no/invalid frame, not aiming), so no skipped path can let the
-        // remainder survive into the next burst. While firing this is a no-op,
-        // so the carry still accumulates correctly across ticks within a burst.
-        {
-            const uint8_t recoilGateMask = makcu.buttonMask();
-            const bool recoilFiring =
-                cfg.noRecoilEnabled && makcuMaskShooting(recoilGateMask) &&
-                (cfg.forceAimOn || makcuMaskAiming(recoilGateMask));
-            if (!recoilFiring) {
-                recoilResidualX = 0.0f;
-                recoilResidualY = 0.0f;
-            }
-        }
-
-        // Stats every second (using atomic g_frameCount from callbacks)
-        auto now = std::chrono::steady_clock::now();
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastStatTime).count();
-        if (elapsed >= perfStatsIntervalMs) {
-            int completedFrames = g_frameCount.exchange(0, std::memory_order_relaxed);  // Atomic read and reset
-            const auto launchStats = inference.takeLaunchStats();
-            const uint64_t callbackLatencySamples =
-                g_callbackLatencySamples.exchange(0, std::memory_order_relaxed);
-            const int64_t callbackLatencyTotalUs =
-                g_callbackLatencyTotalUs.exchange(0, std::memory_order_relaxed);
-            const int64_t callbackLatencyMaxUs =
-                g_callbackLatencyMaxUs.exchange(0, std::memory_order_relaxed);
-            const uint64_t moveQueueDropped =
-                g_moveQueueDropped.exchange(0, std::memory_order_relaxed);
-            const double callbackAvgMs = callbackLatencySamples == 0
-                ? 0.0
-                : static_cast<double>(callbackLatencyTotalUs) / callbackLatencySamples / 1000.0;
-            const double callbackMaxMs = static_cast<double>(callbackLatencyMaxUs) / 1000.0;
-            uint64_t udpReceivedNow = udpCapture.GetReceivedFrameCount();
-            uint64_t udpReceivedDelta = udpReceivedNow - lastUdpReceived;
-            lastUdpReceived = udpReceivedNow;
-            uint64_t udpDroppedNow = udpCapture.GetDroppedFrameCount();
-            uint64_t udpDroppedDelta = udpDroppedNow - lastUdpDropped;
-            lastUdpDropped = udpDroppedNow;
-            const uint8_t statusButtonMask = makcu.buttonMask();
-
-            std::ostringstream status;
-            status << std::fixed << std::setprecision(1)
-                   << "[Simple] R:" << (recvFramesWindow * 1000.0f / elapsed)
-                   << " S:" << (submittedFramesWindow * 1000.0f / elapsed)
-                   << " D:" << (completedFrames * 1000.0f / elapsed)
-                   << " B:" << busyDropWindow
-                   << " F:" << submitFailWindow
-                   << " C:" << udpReceivedDelta
-                   << " U:" << udpDroppedDelta
-                   << " Cr:" << creditSentWindow
-                   << " I:" << busyCallbackTicketCount()
-                   << " A:" << ((cfg.forceAimOn || makcuMaskAiming(statusButtonMask)) ? "ON" : "OFF")
-                   << " Sh:" << (makcuMaskShooting(statusButtonMask) ? "ON" : "OFF");
-            if (cfg.perfStatsEnabled) {
-                status << " Aw:" << perfWindow.averageAcquireMs() << "/" << perfWindow.maxAcquireMs() << "ms"
-                       << " Su:" << perfWindow.averageSubmitUs() << "/" << perfWindow.submitMaxUs << "us"
-                       << " Cb:" << callbackAvgMs << "/" << callbackMaxMs << "ms"
-                       << " NF:" << perfWindow.acquireTimeouts
-                       << " IF:" << perfWindow.invalidFrames
-                       << " MD:" << moveQueueDropped
-                       << " G:" << launchStats.graph << "/" << launchStats.standard
-                       << "/" << launchStats.graphFallback;
-                if (cfg.stageTimingEnabled) {
-                    const auto st = inference.takeStageTimingStats();
-                    auto avgUs = [&](uint64_t total) {
-                        return st.samples == 0 ? 0.0 : static_cast<double>(total) / static_cast<double>(st.samples);
-                    };
-                    status << " St[h2d:" << avgUs(st.h2dUsTotal) << "/" << st.h2dUsMax
-                           << " pre:" << avgUs(st.preprocessUsTotal) << "/" << st.preprocessUsMax
-                           << " inf:" << avgUs(st.inferenceUsTotal) << "/" << st.inferenceUsMax
-                           << " post:" << avgUs(st.postprocessUsTotal) << "/" << st.postprocessUsMax
-                           << " d2h:" << avgUs(st.d2hUsTotal) << "/" << st.d2hUsMax << "us]";
-                }
-            }
-
-            const std::string statusLine = status.str();
-            std::cout << '\r' << statusLine;
-            if (lastStatusLineLen > statusLine.size()) {
-                std::cout << std::string(lastStatusLineLen - statusLine.size(), ' ');
-            }
-            std::cout << std::flush;
-            lastStatusLineLen = statusLine.size();
-
-            recvFramesWindow = 0;
-            submittedFramesWindow = 0;
-            busyDropWindow = 0;
-            submitFailWindow = 0;
-            creditSentWindow = 0;
-            perfWindow.reset();
-            lastStatTime = now;
-        }
-
-        // Skip frame acquisition while not aiming to reduce idle CPU usage.
-        const uint8_t idleButtonMask = makcu.buttonMask();
-        const bool aimingActiveMain = cfg.forceAimOn || makcuMaskAiming(idleButtonMask);
-        if (!aimingActiveMain) {
-            if (cfg.idleGraphPrecaptureEnabled && !idleGraphPrecaptureDone &&
-                now >= nextIdleGraphPrecaptureTime && busyCallbackTicketCount() == 0) {
-                nextIdleGraphPrecaptureTime =
-                    now + std::chrono::milliseconds(idleGraphPrecaptureIntervalMs);
-                requestFrameCredits();
-                uint64_t idleFrameId = 0;
-                const bool gotIdleFrame = udpCapture.AcquireFramePinned(
-                    &pinnedRgbData, &width, &height, &idleFrameId, &bufferIndex, 1,
-                    &bytesPerPixel, &pixelFormat);
-                if (gotIdleFrame) {
-                    nextCreditMinFrameId = static_cast<uint32_t>(idleFrameId + 1);
-                    const bool validIdleFrame =
-                        pinnedRgbData && width != 0 && height != 0 &&
-                        isRgbFrameInput(pixelFormat, bytesPerPixel);
-                    if (bufferIndex >= 0) {
-                        udpCapture.ReleaseFrame(bufferIndex);
-                        bufferIndex = -1;
-                    }
-                    if (validIdleFrame) {
-                        (void)ensureFullGraphReady(width, height, "Idle pre-capture: ");
-                    } else if (cfg.perfStatsEnabled) {
-                        ++perfWindow.invalidFrames;
-                    }
-                }
-            } else if (debugFrameDumper.due(now)) {
-                requestFrameCredits();
-                uint64_t debugFrameId = 0;
-                const bool gotDebugFrame = udpCapture.AcquireFramePinned(
-                    &pinnedRgbData, &width, &height, &debugFrameId, &bufferIndex, frameWaitTimeoutMs,
-                    &bytesPerPixel, &pixelFormat);
-                if (gotDebugFrame) {
-                    nextCreditMinFrameId = static_cast<uint32_t>(debugFrameId + 1);
-                    const bool validDebugFrame =
-                        pinnedRgbData && width != 0 && height != 0 &&
-                        isRgbFrameInput(pixelFormat, bytesPerPixel);
-                    if (validDebugFrame) {
-                        debugFrameDumper.save(pinnedRgbData, width, height, debugFrameId);
-                        debugFrameDumper.scheduleNext(now);
-                    } else {
-                        debugFrameDumper.scheduleRetry(now);
-                    }
-                    if (bufferIndex >= 0) {
-                        udpCapture.ReleaseFrame(bufferIndex);
-                        bufferIndex = -1;
-                    }
-                } else {
-                    debugFrameDumper.scheduleRetry(now);
-                }
-            }
-            const uint64_t buttonSeq = makcu.buttonSequence();
-            if (!(cfg.forceAimOn || makcuMaskAiming(makcu.buttonMask()))) {
-                makcu.waitForButtonEvent(buttonSeq, 10);
-            }
-            continue;
-        }
-
-        // Skip acquisition when the configured latency-first pipeline depth is full.
-        if (busyCallbackTicketCount() >= maxPipelineInFlight) {
-            std::unique_lock<std::mutex> lock(pipelineCvMutex);
-            pipelineCv.wait_for(lock, std::chrono::milliseconds(1), [&]() {
-                return !g_running.load(std::memory_order_relaxed) ||
-                       busyCallbackTicketCount() < maxPipelineInFlight;
-            });
-            continue;
-        }
-
-        // Acquire the newest pinned receive buffer.
         Clock::time_point acquireStart{};
         if (cfg.perfStatsEnabled) {
             acquireStart = Clock::now();
         }
-        requestFrameCredits();
+        // Non-blocking - see the function comment above.
         const bool gotFrame = udpCapture.AcquireFramePinned(
-            &pinnedRgbData, &width, &height, &acquiredFrameId, &bufferIndex, frameWaitTimeoutMs,
+            &pinnedRgbData, &width, &height, &acquiredFrameId, &bufferIndex, /*timeoutMs=*/0,
             &bytesPerPixel, &pixelFormat);
         if (cfg.perfStatsEnabled) {
             perfWindow.recordAcquire(elapsedUs(acquireStart, Clock::now()), gotFrame);
         }
-        if (!gotFrame) {
-            // No frame, handle recoil if active (left+right click)
-            const auto recoilNow = std::chrono::steady_clock::now();
-            const uint8_t recoilButtonMask = makcu.buttonMask();
-            if (cfg.noRecoilEnabled &&
-                makcuMaskShooting(recoilButtonMask) &&
-                (cfg.forceAimOn || makcuMaskAiming(recoilButtonMask))) {
-                if (recoilNow - lastRecoilTime >= std::chrono::milliseconds(cfg.recoilTickMs)) {
-                    emitRecoilTick();
-                    lastRecoilTime += std::chrono::milliseconds(cfg.recoilTickMs);
-                    if (lastRecoilTime < recoilNow - std::chrono::milliseconds(cfg.recoilTickMs)) {
-                        lastRecoilTime = recoilNow;
-                    }
-                }
-            }
-            continue;
-        }
+        if (!gotFrame) return;
 
         if (!pinnedRgbData || width == 0 || height == 0) {
             if (cfg.perfStatsEnabled) {
                 ++perfWindow.invalidFrames;
             }
             if (bufferIndex >= 0) udpCapture.ReleaseFrame(bufferIndex);
-            continue;
+            return;
         }
         nextCreditMinFrameId = static_cast<uint32_t>(acquiredFrameId + 1);
 
@@ -2042,39 +1920,24 @@ int main(int argc, char* argv[]) {
                 ++perfWindow.invalidFrames;
             }
             udpCapture.ReleaseFrame(bufferIndex);
-            continue;
+            return;
         }
 
-        if (debugFrameDumper.due(now)) {
-            debugFrameDumper.scheduleNext(now);
+        const auto nowLocal = Clock::now();
+        if (debugFrameDumper.due(nowLocal)) {
+            debugFrameDumper.scheduleNext(nowLocal);
             debugFrameDumper.save(pinnedRgbData, width, height, acquiredFrameId);
         }
 
-        // Check button state with one atomic load and select the matching aim config.
+        // Re-check button state fresh (it may have changed since the top-of-
+        // function check above) and select the matching aim config.
         const uint8_t frameButtonMask = makcu.buttonMask();
-        bool aiming = cfg.forceAimOn || makcuMaskAiming(frameButtonMask);
-        bool shooting = makcuMaskShooting(frameButtonMask);
-
-        // No-recoil compensation (runs every tick while left+right click).
-        // Use a fresh clock read (loop-top `now` can be ~16ms stale after a
-        // blocking acquire) and advance by exact ticks to avoid drift/jitter.
-        if (cfg.noRecoilEnabled && shooting && aiming) {
-            const auto recoilNow = std::chrono::steady_clock::now();
-            if (recoilNow - lastRecoilTime >= std::chrono::milliseconds(cfg.recoilTickMs)) {
-                emitRecoilTick();
-                lastRecoilTime += std::chrono::milliseconds(cfg.recoilTickMs);
-                if (lastRecoilTime < recoilNow - std::chrono::milliseconds(cfg.recoilTickMs)) {
-                    lastRecoilTime = recoilNow;  // fell far behind -> resync, no burst
-                }
-            }
-        }
-
+        const bool aiming = cfg.forceAimOn || makcuMaskAiming(frameButtonMask);
         if (!aiming) {
             // Skip inference when not aiming (save power)
             udpCapture.ReleaseFrame(bufferIndex);
-            continue;
+            return;
         }
-
         const gpa::AimConfig& frameAimConfig = selectGpuAimConfig(frameButtonMask);
 
         const bool graphReady = inference.isFullGraphReadyForShape(
@@ -2089,9 +1952,14 @@ int main(int argc, char* argv[]) {
             idleGraphPrecaptureDone = true;
         }
         if (!graphReady && !graphFailedForThisShape && inference.getCallbacksInFlight() == 0) {
+            // No graph for this shape yet and the GPU is idle. Don't capture it
+            // here - that can take hundreds of ms (see this function's comment).
+            // Ask the main loop to do it and skip this frame; the next
+            // completed frame will retry once the graph exists.
             udpCapture.ReleaseFrame(bufferIndex);
-            (void)ensureFullGraphReady(width, height, "");
-            continue;
+            pendingCaptureShape.store((static_cast<uint64_t>(width) << 32) | height,
+                                      std::memory_order_relaxed);
+            return;
         }
 
         recvFramesWindow++;
@@ -2100,13 +1968,12 @@ int main(int argc, char* argv[]) {
         if (!ticket) {
             udpCapture.ReleaseFrame(bufferIndex);
             ++busyDropWindow;
-            continue;
+            return;
         }
         ticket->bufferIndex = bufferIndex;
 
         // GPU CALLBACK API: Queue inference, callback fires when GPU completes.
         // No cudaStreamSynchronize - mouse movement happens in callback thread.
-
         Clock::time_point submitStart{};
         if (cfg.perfStatsEnabled) {
             submitStart = Clock::now();
@@ -2140,23 +2007,247 @@ int main(int argc, char* argv[]) {
                 submitFailWindow++;
             }
         }
-
         // On success, buffer is released by callback after GPU work completes.
+    };
 
-        // Main thread immediately loops back to get next frame
-        // while GPU processes this one and callback handles mouse movement
+    // Must be registered before StartCapture() spins up the receive thread.
+    udpCapture.SetFrameReadyCallback(trySubmitLatestFrame);
+    if (!udpCapture.StartCapture()) {
+        std::cerr << "[Simple] Failed to start UDP capture" << std::endl;
+        return 1;
+    }
+    std::cout << "[Simple] UDP capture started on port " << cfg.udpPort << std::endl;
+
+    while (g_running) {
+        // Tick: wait briefly for a pipeline slot to free (the completion
+        // callback notifies pipelineCv when a ticket is released) or simply
+        // time out. Either way, fall through to drain below.
+        {
+            std::unique_lock<std::mutex> lock(pipelineCvMutex);
+            pipelineCv.wait_for(lock, std::chrono::milliseconds(1));
+        }
+
+        // Drain path: the hot path is the receive thread's frame-ready callback
+        // (see trySubmitLatestFrame's comment); this call only matters when
+        // that callback found the pipeline full, lost the submitMutex race, or
+        // no frames are arriving other than this 1ms heartbeat.
+        trySubmitLatestFrame();
+
+        // A frame in trySubmitLatestFrame found no CUDA graph captured for its
+        // shape with the GPU idle - do the (possibly slow) capture here rather
+        // than on the receive thread.
+        if (const uint64_t packedShape = pendingCaptureShape.exchange(0, std::memory_order_relaxed)) {
+            const unsigned int shapeW = static_cast<unsigned int>(packedShape >> 32);
+            const unsigned int shapeH = static_cast<unsigned int>(packedShape & 0xffffffffu);
+            std::lock_guard<std::mutex> lock(submitMutex);
+            (void)ensureFullGraphReady(shapeW, shapeH, "");
+        }
+
+        const auto now = std::chrono::steady_clock::now();
+
+        // No-recoil compensation: purely time-based (fires every recoilTickMs
+        // while left+right click is held), driven by this loop's own 1ms
+        // cadence rather than by frame arrival, since frame submission is now
+        // event-driven and may not touch the main loop at all while aiming.
+        {
+            const uint8_t recoilGateMask = makcu.buttonMask();
+            const bool recoilFiring =
+                cfg.noRecoilEnabled && makcuMaskShooting(recoilGateMask) &&
+                (cfg.forceAimOn || makcuMaskAiming(recoilGateMask));
+            if (!recoilFiring) {
+                // Drop any stale sub-pixel carry whenever a firing burst is not
+                // active, so it can't survive into the next burst.
+                recoilResidualX = 0.0f;
+                recoilResidualY = 0.0f;
+            } else if (now - lastRecoilTime >= std::chrono::milliseconds(cfg.recoilTickMs)) {
+                emitRecoilTick();
+                lastRecoilTime += std::chrono::milliseconds(cfg.recoilTickMs);
+                if (lastRecoilTime < now - std::chrono::milliseconds(cfg.recoilTickMs)) {
+                    lastRecoilTime = now;  // fell far behind -> resync, no burst
+                }
+            }
+        }
+
+        // Idle-only housekeeping: graph pre-capture and debug frame dump each
+        // pull their own frame directly (the hot path only runs while aiming),
+        // so both must serialize against trySubmitLatestFrame via submitMutex.
+        const uint8_t idleButtonMask = makcu.buttonMask();
+        const bool aimingActiveMain = cfg.forceAimOn || makcuMaskAiming(idleButtonMask);
+        if (!aimingActiveMain) {
+            std::lock_guard<std::mutex> lock(submitMutex);
+            if (cfg.idleGraphPrecaptureEnabled && !idleGraphPrecaptureDone &&
+                now >= nextIdleGraphPrecaptureTime && busyCallbackTicketCount() == 0) {
+                nextIdleGraphPrecaptureTime =
+                    now + std::chrono::milliseconds(idleGraphPrecaptureIntervalMs);
+                requestFrameCredits();
+                void* pinnedRgbData = nullptr;
+                unsigned int width = 0, height = 0;
+                uint64_t idleFrameId = 0;
+                int bufferIndex = -1;
+                uint8_t bytesPerPixel = 3;
+                uint8_t pixelFormat = UDP_PIXEL_FORMAT_RGB;
+                const bool gotIdleFrame = udpCapture.AcquireFramePinned(
+                    &pinnedRgbData, &width, &height, &idleFrameId, &bufferIndex, 1,
+                    &bytesPerPixel, &pixelFormat);
+                if (gotIdleFrame) {
+                    nextCreditMinFrameId = static_cast<uint32_t>(idleFrameId + 1);
+                    const bool validIdleFrame =
+                        pinnedRgbData && width != 0 && height != 0 &&
+                        isRgbFrameInput(pixelFormat, bytesPerPixel);
+                    if (bufferIndex >= 0) {
+                        udpCapture.ReleaseFrame(bufferIndex);
+                        bufferIndex = -1;
+                    }
+                    if (validIdleFrame) {
+                        (void)ensureFullGraphReady(width, height, "Idle pre-capture: ");
+                    } else if (cfg.perfStatsEnabled) {
+                        ++perfWindow.invalidFrames;
+                    }
+                }
+            } else if (debugFrameDumper.due(now)) {
+                requestFrameCredits();
+                void* pinnedRgbData = nullptr;
+                unsigned int width = 0, height = 0;
+                uint64_t debugFrameId = 0;
+                int bufferIndex = -1;
+                uint8_t bytesPerPixel = 3;
+                uint8_t pixelFormat = UDP_PIXEL_FORMAT_RGB;
+                const bool gotDebugFrame = udpCapture.AcquireFramePinned(
+                    &pinnedRgbData, &width, &height, &debugFrameId, &bufferIndex, frameWaitTimeoutMs,
+                    &bytesPerPixel, &pixelFormat);
+                if (gotDebugFrame) {
+                    nextCreditMinFrameId = static_cast<uint32_t>(debugFrameId + 1);
+                    const bool validDebugFrame =
+                        pinnedRgbData && width != 0 && height != 0 &&
+                        isRgbFrameInput(pixelFormat, bytesPerPixel);
+                    if (validDebugFrame) {
+                        debugFrameDumper.save(pinnedRgbData, width, height, debugFrameId);
+                        debugFrameDumper.scheduleNext(now);
+                    } else {
+                        debugFrameDumper.scheduleRetry(now);
+                    }
+                    if (bufferIndex >= 0) {
+                        udpCapture.ReleaseFrame(bufferIndex);
+                        bufferIndex = -1;
+                    }
+                } else {
+                    debugFrameDumper.scheduleRetry(now);
+                }
+            }
+        }
+
+        // Stats every interval (using atomic g_frameCount from callbacks, plus
+        // the window counters/perfWindow above - those are only ever touched
+        // while holding submitMutex, so read-and-reset them under the same
+        // lock for a mutually consistent snapshot).
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastStatTime).count();
+        if (elapsed >= perfStatsIntervalMs) {
+            int recvSnapshot, submittedSnapshot, busyDropSnapshot, submitFailSnapshot;
+            uint64_t creditSnapshot;
+            PerfWindowStats perfSnapshot;
+            {
+                std::lock_guard<std::mutex> lock(submitMutex);
+                recvSnapshot = recvFramesWindow;
+                submittedSnapshot = submittedFramesWindow;
+                busyDropSnapshot = busyDropWindow;
+                submitFailSnapshot = submitFailWindow;
+                creditSnapshot = creditSentWindow;
+                perfSnapshot = perfWindow;
+                recvFramesWindow = 0;
+                submittedFramesWindow = 0;
+                busyDropWindow = 0;
+                submitFailWindow = 0;
+                creditSentWindow = 0;
+                perfWindow.reset();
+            }
+
+            int completedFrames = g_frameCount.exchange(0, std::memory_order_relaxed);  // Atomic read and reset
+            const auto launchStats = inference.takeLaunchStats();
+            const uint64_t callbackLatencySamples =
+                g_callbackLatencySamples.exchange(0, std::memory_order_relaxed);
+            const int64_t callbackLatencyTotalUs =
+                g_callbackLatencyTotalUs.exchange(0, std::memory_order_relaxed);
+            const int64_t callbackLatencyMaxUs =
+                g_callbackLatencyMaxUs.exchange(0, std::memory_order_relaxed);
+            const uint64_t moveQueueDropped =
+                g_moveQueueDropped.exchange(0, std::memory_order_relaxed);
+            const double callbackAvgMs = callbackLatencySamples == 0
+                ? 0.0
+                : static_cast<double>(callbackLatencyTotalUs) / callbackLatencySamples / 1000.0;
+            const double callbackMaxMs = static_cast<double>(callbackLatencyMaxUs) / 1000.0;
+            uint64_t udpReceivedNow = udpCapture.GetReceivedFrameCount();
+            uint64_t udpReceivedDelta = udpReceivedNow - lastUdpReceived;
+            lastUdpReceived = udpReceivedNow;
+            uint64_t udpDroppedNow = udpCapture.GetDroppedFrameCount();
+            uint64_t udpDroppedDelta = udpDroppedNow - lastUdpDropped;
+            lastUdpDropped = udpDroppedNow;
+            const uint8_t statusButtonMask = makcu.buttonMask();
+
+            std::ostringstream status;
+            status << std::fixed << std::setprecision(1)
+                   << "[Simple] R:" << (recvSnapshot * 1000.0f / elapsed)
+                   << " S:" << (submittedSnapshot * 1000.0f / elapsed)
+                   << " D:" << (completedFrames * 1000.0f / elapsed)
+                   << " B:" << busyDropSnapshot
+                   << " F:" << submitFailSnapshot
+                   << " C:" << udpReceivedDelta
+                   << " U:" << udpDroppedDelta
+                   << " Cr:" << creditSnapshot
+                   << " I:" << busyCallbackTicketCount()
+                   << " A:" << ((cfg.forceAimOn || makcuMaskAiming(statusButtonMask)) ? "ON" : "OFF")
+                   << " Sh:" << (makcuMaskShooting(statusButtonMask) ? "ON" : "OFF");
+            if (cfg.perfStatsEnabled) {
+                status << " Aw:" << perfSnapshot.averageAcquireMs() << "/" << perfSnapshot.maxAcquireMs() << "ms"
+                       << " Su:" << perfSnapshot.averageSubmitUs() << "/" << perfSnapshot.submitMaxUs << "us"
+                       << " Cb:" << callbackAvgMs << "/" << callbackMaxMs << "ms"
+                       << " NF:" << perfSnapshot.acquireTimeouts
+                       << " IF:" << perfSnapshot.invalidFrames
+                       << " MD:" << moveQueueDropped
+                       << " G:" << launchStats.graph << "/" << launchStats.standard
+                       << "/" << launchStats.graphFallback;
+                if (cfg.stageTimingEnabled) {
+                    const auto st = inference.takeStageTimingStats();
+                    auto avgUs = [&](uint64_t total) {
+                        return st.samples == 0 ? 0.0 : static_cast<double>(total) / static_cast<double>(st.samples);
+                    };
+                    status << " St[h2d:" << avgUs(st.h2dUsTotal) << "/" << st.h2dUsMax
+                           << " pre:" << avgUs(st.preprocessUsTotal) << "/" << st.preprocessUsMax
+                           << " inf:" << avgUs(st.inferenceUsTotal) << "/" << st.inferenceUsMax
+                           << " post:" << avgUs(st.postprocessUsTotal) << "/" << st.postprocessUsMax
+                           << " d2h:" << avgUs(st.d2hUsTotal) << "/" << st.d2hUsMax << "us]";
+                }
+            }
+
+            const std::string statusLine = status.str();
+            std::cout << '\r' << statusLine;
+            if (lastStatusLineLen > statusLine.size()) {
+                std::cout << std::string(lastStatusLineLen - statusLine.size(), ' ');
+            }
+            std::cout << std::flush;
+            lastStatusLineLen = statusLine.size();
+
+            lastStatTime = now;
+        }
     }
 
-    // Wait for any pending GPU work before shutdown
+    // Stop the receive thread FIRST: trySubmitLatestFrame is reachable from its
+    // frame-ready callback and does not stop just because the main loop above
+    // exited, so it could otherwise still launch new GPU work referencing
+    // stack-local state (callbackTickets, callbackCtx) after this function
+    // returns. Once StopCapture() has joined that thread, no more submissions
+    // can happen, and the single cudaStreamSynchronize below is guaranteed to
+    // drain everything that was ever launched.
+    std::cout << "\n[Simple] Shutting down..." << std::endl;
+    udpCapture.StopCapture();
+
+    // Wait for any pending GPU work before the stack-local callback state
+    // (callbackTickets, callbackCtx, etc.) is destroyed.
     cudaStreamSynchronize(inference.getStream());
     moveSenderRunning.store(false, std::memory_order_relaxed);
     moveQueueCv.notify_all();
     if (moveSenderThread.joinable()) {
         moveSenderThread.join();
     }
-
-    std::cout << "\n[Simple] Shutting down..." << std::endl;
-    udpCapture.StopCapture();
 
     return 0;
 }
