@@ -610,10 +610,6 @@ struct Config {
     float windMouseMaxStep = 30.0f;     // per-frame movement clamp (px)
     float windMouseWindFalloff = 40.0f; // distance (px) under which wind fades so the aim settles
 
-    // Shoot capture offset (applied when aiming+shooting)
-    float shootOffsetX = 0.0f;
-    float shootOffsetY = -13.0f;
-
     // Makcu settings
     int makcuBaudrate = 4000000;
 
@@ -769,8 +765,6 @@ struct Config {
             if (j.contains("windmouse_max_step")) windMouseMaxStep = j["windmouse_max_step"];
             if (j.contains("windmouse_wind_falloff")) windMouseWindFalloff = j["windmouse_wind_falloff"];
 
-            if (j.contains("shoot_offset_x")) shootOffsetX = j["shoot_offset_x"];
-            if (j.contains("shoot_offset_y")) shootOffsetY = j["shoot_offset_y"];
             if (j.contains("perf_stats_enabled")) perfStatsEnabled = j["perf_stats_enabled"];
             if (j.contains("perf_stats_interval_ms")) perfStatsIntervalMs = j["perf_stats_interval_ms"];
             if (j.contains("realtime_threads_enabled")) realtimeThreadsEnabled = j["realtime_threads_enabled"];
@@ -888,8 +882,6 @@ struct Config {
             j["windmouse_max_step"] = windMouseMaxStep;
             j["windmouse_wind_falloff"] = windMouseWindFalloff;
 
-            j["shoot_offset_x"] = shootOffsetX;
-            j["shoot_offset_y"] = shootOffsetY;
             j["perf_stats_enabled"] = perfStatsEnabled;
             j["perf_stats_interval_ms"] = perfStatsIntervalMs;
             j["realtime_threads_enabled"] = realtimeThreadsEnabled;
@@ -1051,8 +1043,6 @@ struct CallbackContext {
     bool forceAimOn = false;
     bool perfStatsEnabled = false;
     bool directAimMoveInCallback = false;
-    float shootOffsetX;
-    float shootOffsetY;
 
     // --- WindMouse humanized movement (closed-loop) ---
     bool windMouseEnabled = false;
@@ -1088,8 +1078,6 @@ struct CallbackContext {
         forceAimOn = cfg.forceAimOn;
         perfStatsEnabled = cfg.perfStatsEnabled;
         directAimMoveInCallback = cfg.directAimMoveInCallback && cfg.mouseMinIntervalMs <= 0;
-        shootOffsetX = cfg.shootOffsetX;
-        shootOffsetY = cfg.shootOffsetY;
 
         windMouseEnabled = cfg.windMouseEnabled;
         wmGravity = cfg.windMouseGravity;
@@ -1106,7 +1094,7 @@ struct CallbackContext {
         }
     }
 
-    void processAimMovement(int rawDx, int rawDy, bool shooting, int& outDx, int& outDy) {
+    void processAimMovement(int rawDx, int rawDy, int& outDx, int& outDy) {
         float moveX = static_cast<float>(rawDx);
         float moveY = static_cast<float>(rawDy);
 
@@ -1136,11 +1124,6 @@ struct CallbackContext {
             moveY = wmVelY + wmResidualY;
         }
 
-        if (shooting) {
-            moveX += shootOffsetX;
-            moveY += shootOffsetY;
-        }
-
         outDx = fastRoundToInt(moveX);
         outDy = fastRoundToInt(moveY);
 
@@ -1160,7 +1143,6 @@ struct MoveCommand {
     Kind kind = Kind::Direct;
     int dx = 0;
     int dy = 0;
-    uint8_t shooting = 0;
 };
 
 struct MoveQueueSlot {
@@ -1293,11 +1275,10 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
         return;
     }
     
-    const bool shooting = makcuMaskShooting(callbackButtonMask);
     if (ctx->directAimMoveInCallback) {
         int emitDx = 0;
         int emitDy = 0;
-        ctx->processAimMovement(result.movement.dx, result.movement.dy, shooting, emitDx, emitDy);
+        ctx->processAimMovement(result.movement.dx, result.movement.dy, emitDx, emitDy);
         if (emitDx != 0 || emitDy != 0) {
             ctx->makcu->move(emitDx, emitDy);
         }
@@ -1306,7 +1287,6 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
         cmd.kind = MoveCommand::Kind::AimRaw;
         cmd.dx = result.movement.dx;
         cmd.dy = result.movement.dy;
-        cmd.shooting = shooting ? 1u : 0u;
         const bool pushed = ctx->moveQueue->tryPush(cmd);
         if (pushed && ctx->moveQueueCv) {
             ctx->moveQueueCv->notify_one();
@@ -1638,8 +1618,7 @@ int main(int argc, char* argv[]) {
                 int emitDx = cmd.dx;
                 int emitDy = cmd.dy;
                 if (cmd.kind == MoveCommand::Kind::AimRaw) {
-                    callbackCtx.processAimMovement(
-                        cmd.dx, cmd.dy, cmd.shooting != 0u, emitDx, emitDy);
+                    callbackCtx.processAimMovement(cmd.dx, cmd.dy, emitDx, emitDy);
                 }
                 if (emitDx != 0 || emitDy != 0) {
                     pendingDx = std::clamp(pendingDx + emitDx,
@@ -1676,7 +1655,6 @@ int main(int argc, char* argv[]) {
         cmd.kind = MoveCommand::Kind::Direct;
         cmd.dx = dx;
         cmd.dy = dy;
-        cmd.shooting = 0u;
         const bool pushed = moveQueue.tryPush(cmd);
         if (pushed) {
             moveQueueCv.notify_one();
