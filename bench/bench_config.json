@@ -11,7 +11,6 @@
     "idle_graph_precapture_interval_ms": 100,
     "_section_network": "===== Network / UDP capture =====",
     "udp_port": 5007,
-    "frame_wait_timeout_ms": 16,
     "max_inflight_frames": 1,
     "frame_credit_depth": 2,
     "_section_mouse": "===== Mouse hardware (MAKCU) =====",

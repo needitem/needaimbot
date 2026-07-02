@@ -595,7 +595,6 @@ struct Config {
 
     // Mouse rate limiting
     int mouseMinIntervalMs = 1;
-    int frameWaitTimeoutMs = 16;  // UDP frame wait timeout per loop
     int maxInFlightFrames = 1;    // Keep latency low by avoiding stale queued frames
     int frameCreditDepth = 2;     // Allow the Game PC to pre-send the newest next frame
     bool directAimMoveInCallback = true;
@@ -752,7 +751,6 @@ struct Config {
             if (j.contains("recoil_tick_ms")) recoilTickMs = j["recoil_tick_ms"];
 
             if (j.contains("mouse_min_interval_ms")) mouseMinIntervalMs = j["mouse_min_interval_ms"];
-            if (j.contains("frame_wait_timeout_ms")) frameWaitTimeoutMs = j["frame_wait_timeout_ms"];
             if (j.contains("max_inflight_frames")) maxInFlightFrames = j["max_inflight_frames"];
             if (j.contains("frame_credit_depth")) frameCreditDepth = j["frame_credit_depth"];
             if (j.contains("direct_aim_move_in_callback")) directAimMoveInCallback = j["direct_aim_move_in_callback"];
@@ -869,7 +867,6 @@ struct Config {
             j["recoil_tick_ms"] = recoilTickMs;
 
             j["mouse_min_interval_ms"] = mouseMinIntervalMs;
-            j["frame_wait_timeout_ms"] = frameWaitTimeoutMs;
             j["max_inflight_frames"] = maxInFlightFrames;
             j["frame_credit_depth"] = frameCreditDepth;
             j["direct_aim_move_in_callback"] = directAimMoveInCallback;
@@ -959,7 +956,6 @@ struct Config {
         std::cout << "[Config] Max detections: " << maxDetections << std::endl;
         std::cout << "[Config] No-recoil: " << (noRecoilEnabled ? "ON" : "OFF")
                   << " (Y=" << recoilCompY << ", tick=" << recoilTickMs << "ms)" << std::endl;
-        std::cout << "[Config] Frame wait timeout: " << frameWaitTimeoutMs << "ms" << std::endl;
         std::cout << "[Config] Max in-flight frames: " << maxInFlightFrames << std::endl;
         std::cout << "[Config] Frame credit depth: " << frameCreditDepth << std::endl;
         std::cout << "[Config] Direct aim move in callback: "
@@ -1563,7 +1559,6 @@ int main(int argc, char* argv[]) {
         }
         return busyCount;
     };
-    const uint32_t frameWaitTimeoutMs = static_cast<uint32_t>(std::clamp(cfg.frameWaitTimeoutMs, 1, 100));
     const int senderMinIntervalMs = std::max(0, cfg.mouseMinIntervalMs);
     const int maxPipelineInFlight = std::clamp(cfg.maxInFlightFrames, 1, 4);
     const uint32_t frameCreditDepth = static_cast<uint32_t>(std::clamp(cfg.frameCreditDepth, 1, 4));
@@ -2088,7 +2083,7 @@ int main(int argc, char* argv[]) {
                 uint8_t bytesPerPixel = 3;
                 uint8_t pixelFormat = UDP_PIXEL_FORMAT_RGB;
                 const bool gotDebugFrame = udpCapture.AcquireFramePinned(
-                    &pinnedRgbData, &width, &height, &debugFrameId, &bufferIndex, frameWaitTimeoutMs,
+                    &pinnedRgbData, &width, &height, &debugFrameId, &bufferIndex, /*timeoutMs=*/16,
                     &bytesPerPixel, &pixelFormat);
                 if (gotDebugFrame) {
                     nextCreditMinFrameId = static_cast<uint32_t>(debugFrameId + 1);
