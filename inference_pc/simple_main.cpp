@@ -525,7 +525,6 @@ struct Config {
     // Detection
     float confThreshold = 0.35f;
     int headClassId = 1;      // Head class for headshot priority
-    float headBonus = 0.15f;  // Bonus confidence for head shots
     int maxDetections = 100;  // Maximum detections per frame
 
     // Class filtering (max 32 classes)
@@ -708,7 +707,6 @@ struct Config {
 
             if (j.contains("conf_threshold")) confThreshold = j["conf_threshold"];
             if (j.contains("head_class_id")) headClassId = j["head_class_id"];
-            if (j.contains("head_bonus")) headBonus = j["head_bonus"];
             if (j.contains("max_detections")) maxDetections = j["max_detections"];
 
             if (j.contains("head_aim_point")) headAimPoint = j["head_aim_point"];
@@ -839,7 +837,6 @@ struct Config {
 
             j["conf_threshold"] = confThreshold;
             j["head_class_id"] = headClassId;
-            j["head_bonus"] = headBonus;
             j["max_detections"] = maxDetections;
 
             j["head_aim_point"] = headAimPoint;
@@ -1721,7 +1718,7 @@ int main(int argc, char* argv[]) {
                   << "..." << std::endl;
         if (inference.captureFullGraphForShape(
                 w, h, maxPipelineInFlight,
-                cfg.confThreshold, cfg.headClassId, cfg.headBonus,
+                cfg.confThreshold, cfg.headClassId,
                 allowedClassMask, rightGpuAimConfig,
                 cfg.iouStickinessThreshold, cfg.headAimPoint, cfg.bodyAimPoint)) {
             ++preCaptureSuccess;
@@ -1807,7 +1804,7 @@ int main(int argc, char* argv[]) {
         const bool graphReady = inference.isFullGraphReadyForShape(
             static_cast<int>(sourceW), static_cast<int>(sourceH),
             maxPipelineInFlight,
-            cfg.confThreshold, cfg.headClassId, cfg.headBonus,
+            cfg.confThreshold, cfg.headClassId,
             allowedClassMask, rightGpuAimConfig,
             cfg.iouStickinessThreshold, cfg.headAimPoint, cfg.bodyAimPoint);
         const bool graphFailedForThisShape =
@@ -1825,7 +1822,7 @@ int main(int argc, char* argv[]) {
         if (inference.captureFullGraphForShape(
                 static_cast<int>(sourceW), static_cast<int>(sourceH),
                 maxPipelineInFlight,
-                cfg.confThreshold, cfg.headClassId, cfg.headBonus,
+                cfg.confThreshold, cfg.headClassId,
                 allowedClassMask, rightGpuAimConfig,
                 cfg.iouStickinessThreshold, cfg.headAimPoint, cfg.bodyAimPoint)) {
             graphCaptureFailedForShape = false;
@@ -1943,7 +1940,7 @@ int main(int argc, char* argv[]) {
         const bool graphReady = inference.isFullGraphReadyForShape(
             static_cast<int>(width), static_cast<int>(height),
             maxPipelineInFlight,
-            cfg.confThreshold, cfg.headClassId, cfg.headBonus,
+            cfg.confThreshold, cfg.headClassId,
             allowedClassMask, rightGpuAimConfig,
             cfg.iouStickinessThreshold, cfg.headAimPoint, cfg.bodyAimPoint);
         const bool graphFailedForThisShape =
@@ -1981,7 +1978,7 @@ int main(int argc, char* argv[]) {
         ticket->submitTime = submitStart;
         bool submitted = inference.runInferenceWithCallback(
             pinnedRgbData, width, height,
-            cfg.confThreshold, cfg.headClassId, cfg.headBonus,
+            cfg.confThreshold, cfg.headClassId,
             allowedClassMask,
             frameAimConfig,
             cfg.iouStickinessThreshold,

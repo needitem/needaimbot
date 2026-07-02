@@ -63,18 +63,18 @@ public:
 
     bool captureFullGraphForShape(int sourceWidth, int sourceHeight,
                                   int graphSlotCount,
-                                  float confThreshold, int headClassId, float headBonus,
+                                  float confThreshold, int headClassId,
                                   uint32_t allowedClassMask, const AimConfig& aimConfig,
                                   float iouStickinessThreshold, float headYOffset, float bodyYOffset);
     bool isFullGraphReadyForShape(int sourceWidth, int sourceHeight,
                                   int graphSlotCount,
-                                  float confThreshold, int headClassId, float headBonus,
+                                  float confThreshold, int headClassId,
                                   uint32_t allowedClassMask, const AimConfig& aimConfig,
                                   float iouStickinessThreshold, float headYOffset, float bodyYOffset) const;
 
     // Run inference with GPU callback - lowest latency option
     bool runInferenceWithCallback(void* pinnedData, int width, int height,
-                                  float confThreshold, int headClassId, float headBonus,
+                                  float confThreshold, int headClassId,
                                   uint32_t allowedClassMask,
                                   const AimConfig& aimConfig,
                                   float iouStickinessThreshold,
@@ -237,7 +237,6 @@ private:
     // Cached graph parameters
     float m_cachedConfThreshold = 0.35f;
     int m_cachedHeadClassId = 1;
-    float m_cachedHeadBonus = 0.15f;
     uint32_t m_cachedAllowedClassMask = 0xFFFFFFFF;
     AimConfig m_enqueuedRuntimeAimConfig;
     bool m_hasEnqueuedRuntimeAimConfig = false;
@@ -265,7 +264,7 @@ private:
     void destroyBucket(GraphShapeBucket& bucket);
     bool uploadRuntimeAimConfig(const AimConfig& aimConfig, bool force = false);
     // True only when non-shape params match the cached set.
-    bool nonShapeParamsMatch(float confThreshold, int headClassId, float headBonus,
+    bool nonShapeParamsMatch(float confThreshold, int headClassId,
                              uint32_t allowedClassMask, const AimConfig& aimConfig,
                              float iouStickinessThreshold, float headYOffset,
                              float bodyYOffset) const;
@@ -277,14 +276,14 @@ private:
 
     // Execute full fused pipeline (H2D + preprocess + inference + postprocess + D2H)
     bool executeFusedPipeline(void* rawInput, int width, int height,
-                              float confThreshold, int headClassId, float headBonus,
+                              float confThreshold, int headClassId,
                               uint32_t allowedClassMask, const AimConfig& aimConfig,
                               float iouThreshold, float headYOffset, float bodyYOffset,
                               int resultSlot);
 
     // Execute pipeline without H2D transfer (for CUDA Graph - H2D is done separately)
     bool executeFusedPipelinePostH2D(int width, int height,
-                                     float confThreshold, int headClassId, float headBonus,
+                                     float confThreshold, int headClassId,
                                      uint32_t allowedClassMask, const AimConfig& aimConfig,
                                      float iouThreshold, float headYOffset, float bodyYOffset,
                                      int resultSlot);

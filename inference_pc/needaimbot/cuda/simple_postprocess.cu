@@ -318,7 +318,6 @@ __global__ void stage1DecodeAndSelectKernel(
     float screen_center_x,
     float screen_center_y,
     int head_class_id,
-    float head_conf_bonus,
     float head_y_offset,
     float body_y_offset,
     const Detection* __restrict__ d_selected_target,
@@ -392,11 +391,7 @@ __global__ void stage1DecodeAndSelectKernel(
             : (det.y1 + h * body_y_offset);
         const float dx = centerX - screen_center_x;
         const float dy = aimY - screen_center_y;
-        float effectiveDist = dx * dx + dy * dy;
-        if (det.classId == head_class_id && head_conf_bonus > 0.0f) {
-            const float headBonusPx = head_conf_bonus * 100.0f;
-            effectiveDist -= headBonusPx * headBonusPx;
-        }
+        const float effectiveDist = dx * dx + dy * dy;
         if (effectiveDist < localBestDist) {
             localBestDist = effectiveDist;
             localBestByDist = det;
@@ -839,7 +834,6 @@ cudaError_t postprocessYoloFusedGpu(
     float movement_scale_x,
     float movement_scale_y,
     int head_class_id,
-    float head_conf_bonus,
     const AimConfig* d_aim_config,
     float iou_stickiness_threshold,
     float head_y_offset,
@@ -889,7 +883,6 @@ cudaError_t postprocessYoloFusedGpu(
             screen_center_x,
             screen_center_y,
             head_class_id,
-            head_conf_bonus,
             head_y_offset,
             body_y_offset,
             d_selected_target,
@@ -910,7 +903,6 @@ cudaError_t postprocessYoloFusedGpu(
             screen_center_x,
             screen_center_y,
             head_class_id,
-            head_conf_bonus,
             head_y_offset,
             body_y_offset,
             d_selected_target,

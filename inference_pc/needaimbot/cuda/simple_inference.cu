@@ -644,7 +644,7 @@ const uint8_t* SimpleInference::pinnedDevicePtr(void* hostPtr) {
 
 // Pipeline without H2D transfer - for CUDA Graph capture
 bool SimpleInference::executeFusedPipelinePostH2D(int width, int height,
-                                                  float confThreshold, int headClassId, float headBonus,
+                                                  float confThreshold, int headClassId,
                                                   uint32_t allowedClassMask, const AimConfig& aimConfig,
                                                   float iouThreshold, float headYOffset, float bodyYOffset,
                                                   int resultSlot) {
@@ -714,7 +714,7 @@ bool SimpleInference::executeFusedPipelinePostH2D(int width, int height,
         m_crosshairX, m_crosshairY,
         static_cast<float>(width) / static_cast<float>(m_inputW),
         static_cast<float>(height) / static_cast<float>(m_inputH),
-        headClassId, headBonus, m_d_runtimeAimConfig,
+        headClassId, m_d_runtimeAimConfig,
         iouThreshold, headYOffset, bodyYOffset,
         m_d_selectedTarget, m_d_aimState,
         dResultSlot,
@@ -750,7 +750,7 @@ bool SimpleInference::executeFusedPipelinePostH2D(int width, int height,
 }
 
 bool SimpleInference::executeFusedPipeline(void* rawInput, int width, int height,
-                                           float confThreshold, int headClassId, float headBonus,
+                                           float confThreshold, int headClassId,
                                            uint32_t allowedClassMask, const AimConfig& aimConfig,
                                            float iouThreshold, float headYOffset, float bodyYOffset,
                                            int resultSlot) {
@@ -799,7 +799,7 @@ bool SimpleInference::executeFusedPipeline(void* rawInput, int width, int height
         }
     }
 
-    return executeFusedPipelinePostH2D(width, height, confThreshold, headClassId, headBonus,
+    return executeFusedPipelinePostH2D(width, height, confThreshold, headClassId,
                                        allowedClassMask, aimConfig, iouThreshold,
                                        headYOffset, bodyYOffset, resultSlot);
 }
@@ -892,7 +892,7 @@ bool SimpleInference::uploadRuntimeAimConfig(const AimConfig& aimConfig, bool fo
     return true;
 }
 
-bool SimpleInference::nonShapeParamsMatch(float confThreshold, int headClassId, float headBonus,
+bool SimpleInference::nonShapeParamsMatch(float confThreshold, int headClassId,
                                           uint32_t allowedClassMask, const AimConfig& aimConfig,
                                           float iouStickinessThreshold, float headYOffset,
                                           float bodyYOffset) const {
@@ -900,7 +900,6 @@ bool SimpleInference::nonShapeParamsMatch(float confThreshold, int headClassId, 
     return (headClassId == m_cachedHeadClassId) &&
            (allowedClassMask == m_cachedAllowedClassMask) &&
            nearlyEqual(confThreshold, m_cachedConfThreshold) &&
-           nearlyEqual(headBonus, m_cachedHeadBonus) &&
            nearlyEqual(iouStickinessThreshold, m_cachedIouThreshold) &&
            nearlyEqual(headYOffset, m_cachedHeadYOffset) &&
            nearlyEqual(bodyYOffset, m_cachedBodyYOffset);
@@ -908,12 +907,12 @@ bool SimpleInference::nonShapeParamsMatch(float confThreshold, int headClassId, 
 
 bool SimpleInference::isFullGraphReadyForShape(int sourceWidth, int sourceHeight,
                                                int graphSlotCount,
-                                               float confThreshold, int headClassId, float headBonus,
+                                               float confThreshold, int headClassId,
                                                uint32_t allowedClassMask, const AimConfig& aimConfig,
                                                float iouStickinessThreshold, float headYOffset,
                                                float bodyYOffset) const {
     if (graphSlotCount <= 0 || graphSlotCount > kMaxCallbacksInFlight) return false;
-    if (!nonShapeParamsMatch(confThreshold, headClassId, headBonus,
+    if (!nonShapeParamsMatch(confThreshold, headClassId,
                              allowedClassMask, aimConfig, iouStickinessThreshold,
                              headYOffset, bodyYOffset)) {
         return false;
@@ -1059,7 +1058,7 @@ bool SimpleInference::ensureRawInputCapacity(size_t requiredBytes) {
 
 bool SimpleInference::captureFullGraphForShape(int sourceWidth, int sourceHeight,
                                                 int graphSlotCount,
-                                                float confThreshold, int headClassId, float headBonus,
+                                                float confThreshold, int headClassId,
                                                 uint32_t allowedClassMask, const AimConfig& aimConfig,
                                                 float iouStickinessThreshold, float headYOffset,
                                                 float bodyYOffset) {
@@ -1084,7 +1083,7 @@ bool SimpleInference::captureFullGraphForShape(int sourceWidth, int sourceHeight
 
     // Non-shape parameter change invalidates every cached bucket.
     const bool paramsChanged = !nonShapeParamsMatch(
-        confThreshold, headClassId, headBonus,
+        confThreshold, headClassId,
         allowedClassMask, aimConfig, iouStickinessThreshold,
         headYOffset, bodyYOffset);
     if (paramsChanged) {
@@ -1092,7 +1091,6 @@ bool SimpleInference::captureFullGraphForShape(int sourceWidth, int sourceHeight
         destroyFullGraphs();
         m_cachedConfThreshold = confThreshold;
         m_cachedHeadClassId = headClassId;
-        m_cachedHeadBonus = headBonus;
         m_cachedAllowedClassMask = allowedClassMask;
         m_cachedIouThreshold = iouStickinessThreshold;
         m_cachedHeadYOffset = headYOffset;
@@ -1174,7 +1172,7 @@ bool SimpleInference::captureFullGraphForShape(int sourceWidth, int sourceHeight
         // Execute pipeline after captured H2D. Each graph writes to its own
         // result slot so callbacks cannot observe overwritten slot-0 results.
         if (!executeFusedPipelinePostH2D(sourceWidth, sourceHeight,
-                                         confThreshold, headClassId, headBonus,
+                                         confThreshold, headClassId,
                                          allowedClassMask, aimConfig,
                                          iouStickinessThreshold, headYOffset, bodyYOffset,
                                          slot)) {
@@ -1327,7 +1325,7 @@ void SimpleInference::callbackWorkerLoop() {
 }
 
 bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int height,
-                                                float confThreshold, int headClassId, float headBonus,
+                                                float confThreshold, int headClassId,
                                                 uint32_t allowedClassMask,
                                                 const AimConfig& aimConfig,
                                                 float iouStickinessThreshold,
@@ -1347,7 +1345,7 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
     if (m_callbacksInFlight.load(std::memory_order_acquire) >= kMaxCallbacksInFlight) return false;
 
     const bool nonShapeOk = nonShapeParamsMatch(
-        confThreshold, headClassId, headBonus,
+        confThreshold, headClassId,
         allowedClassMask, aimConfig, iouStickinessThreshold,
         headYOffset, bodyYOffset);
     const int bucketIndex = nonShapeOk ? findBucketIndex(width, height) : -1;
@@ -1447,7 +1445,7 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
             std::cerr << "[SimpleInference] Graph source update failed: "
                       << cudaGetErrorString(err) << std::endl;
             if (!executeFusedPipeline(pinnedData, width, height,
-                                      confThreshold, headClassId, headBonus,
+                                      confThreshold, headClassId,
                                       allowedClassMask, aimConfig,
                                       iouStickinessThreshold, headYOffset, bodyYOffset, callbackSlot)) {
                 return clearInFlightAndFail(true);
@@ -1468,7 +1466,7 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
     } else {
         // Standard pipeline execution
         if (!executeFusedPipeline(pinnedData, width, height,
-                                  confThreshold, headClassId, headBonus,
+                                  confThreshold, headClassId,
                                   allowedClassMask, aimConfig,
                                   iouStickinessThreshold, headYOffset, bodyYOffset, callbackSlot)) {
             return clearInFlightAndFail(true);

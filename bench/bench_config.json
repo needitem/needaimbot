@@ -27,7 +27,6 @@
         1
     ],
     "head_class_id": 1,
-    "head_bonus": 0.15,
     "_section_aim_point": "===== Aim point on bbox (0=top, 1=bottom) =====",
     "head_aim_point": 0.9,
     "body_aim_point": 0.14,
