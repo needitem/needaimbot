@@ -79,7 +79,6 @@ public:
                                   const AimConfig& aimConfig,
                                   float iouStickinessThreshold,
                                   float headYOffset, float bodyYOffset,
-                                  const FrameTiming& frameTiming,
                                   InferenceCallback callback, void* userData = nullptr);
 
     int getCallbacksInFlight() const {
@@ -154,12 +153,6 @@ private:
     void** m_d_srcPtr = nullptr;
     // Per-slot pinned staging for the 8-byte pointer written into m_d_srcPtr.
     std::array<void*, kMaxCallbacksInFlight> m_h_srcPtrStage{};
-    // Per-frame dt/lead read by the postprocess kernel. Same stable-device-cell
-    // trick as m_d_srcPtr: the kernel reads *m_d_frameTiming (address baked into
-    // the graph) while the value is refreshed per launch from a per-slot host
-    // staging cell on the stream before the graph runs.
-    FrameTiming* m_d_frameTiming = nullptr;
-    std::array<FrameTiming, kMaxCallbacksInFlight> m_h_frameTimingStage{};
     // Tegra: device-side alias of each pinned result buffer (cudaHostGetDevicePointer).
     std::array<InferenceResult*, kMaxCallbacksInFlight> m_d_resultMapped{};
     // Tiny cache mapping a pinned host receive buffer to its device pointer so we
@@ -270,8 +263,6 @@ private:
     void destroyFullGraphs();              // Destroys every shape bucket
     void destroyBucket(GraphShapeBucket& bucket);
     bool uploadRuntimeAimConfig(const AimConfig& aimConfig, bool force = false);
-    // Refresh *m_d_frameTiming (out-of-graph) from the per-slot staging cell.
-    bool uploadFrameTiming(const FrameTiming& frameTiming, int resultSlot);
     // True only when non-shape params match the cached set.
     bool nonShapeParamsMatch(float confThreshold, int headClassId,
                              uint32_t allowedClassMask, const AimConfig& aimConfig,
@@ -288,7 +279,6 @@ private:
                               float confThreshold, int headClassId,
                               uint32_t allowedClassMask, const AimConfig& aimConfig,
                               float iouThreshold, float headYOffset, float bodyYOffset,
-                              const FrameTiming& frameTiming,
                               int resultSlot);
 
     // Execute pipeline without H2D transfer (for CUDA Graph - H2D is done separately)
@@ -296,7 +286,6 @@ private:
                                      float confThreshold, int headClassId,
                                      uint32_t allowedClassMask, const AimConfig& aimConfig,
                                      float iouThreshold, float headYOffset, float bodyYOffset,
-                                     const FrameTiming& frameTiming,
                                      int resultSlot);
 
     // Input size helper

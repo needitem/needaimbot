@@ -45,10 +45,6 @@ std::atomic<int> g_frameCount{0};  // Completed inference callbacks per stat win
 std::atomic<uint64_t> g_callbackLatencySamples{0};
 std::atomic<int64_t> g_callbackLatencyTotalUs{0};
 std::atomic<int64_t> g_callbackLatencyMaxUs{0};
-// Always-on EMA of submit->callback latency (us), a proxy for end-to-end pipeline
-// latency. Feeds the forward-lead term (FrameTiming::lead_frames); only affects
-// output when the aim config enables lead (lead_gain > 0).
-std::atomic<int64_t> g_emaPipelineLatencyUs{0};
 std::atomic<uint64_t> g_moveQueueDropped{0};
 
 namespace {
@@ -591,12 +587,6 @@ struct Config {
     float oneEuroBeta = 0.02f;      // speed coefficient (higher = less lag when fast)
     float oneEuroDCutoff = 0.5f;    // derivative cutoff for the speed estimate
 
-    // Forward latency lead: shift the aim point ahead by the target's velocity
-    // times the measured pipeline latency. Opt-in: 0 disables (default), ~0.5
-    // starts leading fast strafes. Lead distance capped at leadMaxPx.
-    float leadGain = 0.0f;
-    float leadMaxPx = 40.0f;
-
     // No-recoil
     bool noRecoilEnabled = true;
     float recoilCompX = 0.0f;
@@ -677,19 +667,12 @@ struct Config {
         aim.oneeuro_dcutoff = oneEuroDCutoff;
     }
 
-    // Populate the forward-lead fields shared by both aim profiles.
-    void applyLead(gpa::AimConfig& aim) const {
-        aim.lead_gain = leadGain;
-        aim.lead_max_px = leadMaxPx;
-    }
-
     gpa::AimConfig toGpuAimConfig() const {
         gpa::AimConfig aim = makeGpuAimConfig(aimKpX, aimKpY, aimSoftnessX, aimSoftnessY,
                                               aimKdX, aimKdY,
                                               distanceStickinessFactor, trackPersistenceFrames);
         applyCoast(aim);
         applyOneEuro(aim);
-        applyLead(aim);
         aim.max_step = aimMaxStep;
         return aim;
     }
@@ -701,7 +684,6 @@ struct Config {
             distanceStickinessFactor, trackPersistenceFrames);
         applyCoast(aim);
         applyOneEuro(aim);
-        applyLead(aim);
         aim.max_step = aimMaxStep;
         return aim;
     }
@@ -762,9 +744,6 @@ struct Config {
             if (j.contains("oneeuro_min_cutoff")) oneEuroMinCutoff = j["oneeuro_min_cutoff"];
             if (j.contains("oneeuro_beta")) oneEuroBeta = j["oneeuro_beta"];
             if (j.contains("oneeuro_dcutoff")) oneEuroDCutoff = j["oneeuro_dcutoff"];
-
-            if (j.contains("lead_gain")) leadGain = j["lead_gain"];
-            if (j.contains("lead_max_px")) leadMaxPx = j["lead_max_px"];
 
             if (j.contains("no_recoil_enabled")) noRecoilEnabled = j["no_recoil_enabled"];
             if (j.contains("recoil_comp_x")) recoilCompX = j["recoil_comp_x"];
@@ -881,10 +860,6 @@ struct Config {
             j["oneeuro_min_cutoff"] = oneEuroMinCutoff;
             j["oneeuro_beta"] = oneEuroBeta;
             j["oneeuro_dcutoff"] = oneEuroDCutoff;
-
-            j["_section_lead"] = "===== Forward latency lead (opt-in; 0 disables) =====";
-            j["lead_gain"] = leadGain;
-            j["lead_max_px"] = leadMaxPx;
 
             j["no_recoil_enabled"] = noRecoilEnabled;
             j["recoil_comp_x"] = recoilCompX;
@@ -1251,19 +1226,11 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
     }
 
     CallbackContext* ctx = ticket->ctx;
-    if (ticket->submitTime.time_since_epoch().count() != 0) {
+    if (ctx->perfStatsEnabled && ticket->submitTime.time_since_epoch().count() != 0) {
         const int64_t latencyUs = elapsedUs(ticket->submitTime, Clock::now());
-        // Always-on EMA (~1/16 gain) feeding the lead estimate, independent of
-        // whether the perf-stat window is active.
-        const int64_t prevEma = g_emaPipelineLatencyUs.load(std::memory_order_relaxed);
-        const int64_t nextEma = (prevEma <= 0) ? latencyUs
-                                               : prevEma + ((latencyUs - prevEma) >> 4);
-        g_emaPipelineLatencyUs.store(nextEma, std::memory_order_relaxed);
-        if (ctx->perfStatsEnabled) {
-            g_callbackLatencySamples.fetch_add(1, std::memory_order_relaxed);
-            g_callbackLatencyTotalUs.fetch_add(latencyUs, std::memory_order_relaxed);
-            atomicMax(g_callbackLatencyMaxUs, latencyUs);
-        }
+        g_callbackLatencySamples.fetch_add(1, std::memory_order_relaxed);
+        g_callbackLatencyTotalUs.fetch_add(latencyUs, std::memory_order_relaxed);
+        atomicMax(g_callbackLatencyMaxUs, latencyUs);
     }
 
     auto releaseTicket = [ticket, ctx]() {
@@ -1849,14 +1816,6 @@ int main(int argc, char* argv[]) {
         return false;
     };
 
-    // Inter-frame timing for the controller's dt-awareness and forward lead.
-    // trySubmitLatestFrame is serialized by submitMutex, so these are touched by
-    // one logical submitter at a time. emaFrameDtUs self-calibrates
-    // to the running frame period, so dt_norm ~= 1 at steady rate (no behavior
-    // change) and only deviates on jitter/rate change.
-    Clock::time_point lastSubmitTime{};
-    double emaFrameDtUs = 0.0;
-
     // Attempts to submit exactly one frame (the newest available) to inference.
     // Called from two places:
     //  (a) UDPCapture's receive thread, via the frame-ready callback, the
@@ -1985,36 +1944,11 @@ int main(int argc, char* argv[]) {
 
         // GPU CALLBACK API: Queue inference, callback fires when GPU completes.
         // No cudaStreamSynchronize - mouse movement happens in callback thread.
-        // submitTime is now set unconditionally (a cheap clock read) so the
-        // latency EMA that feeds the lead term runs even without perf stats.
-        const Clock::time_point submitStart = Clock::now();
-        ticket->submitTime = submitStart;
-
-        // Build per-frame controller timing. dt_norm is the instantaneous frame
-        // period relative to the self-calibrated average; clamped so a stall
-        // cannot blow up the smoothers. lead_frames expresses the measured
-        // pipeline latency in average-frame units for the (opt-in) lead term.
-        gpa::FrameTiming frameTiming;  // defaults: dt_norm = 1, lead_frames = 0
-        if (lastSubmitTime.time_since_epoch().count() != 0) {
-            const double dtUs = static_cast<double>(elapsedUs(lastSubmitTime, submitStart));
-            if (dtUs > 0.0) {
-                if (emaFrameDtUs <= 0.0) {
-                    emaFrameDtUs = dtUs;  // seed on first interval
-                } else {
-                    emaFrameDtUs += 0.1 * (dtUs - emaFrameDtUs);  // slow reference EMA
-                }
-                float dtNorm = static_cast<float>(dtUs / emaFrameDtUs);
-                dtNorm = std::min(std::max(dtNorm, 0.25f), 4.0f);
-                frameTiming.dt_norm = dtNorm;
-                const int64_t latUs = g_emaPipelineLatencyUs.load(std::memory_order_relaxed);
-                if (latUs > 0 && emaFrameDtUs > 0.0) {
-                    frameTiming.lead_frames =
-                        static_cast<float>(static_cast<double>(latUs) / emaFrameDtUs);
-                }
-            }
+        Clock::time_point submitStart{};
+        if (cfg.perfStatsEnabled) {
+            submitStart = Clock::now();
         }
-        lastSubmitTime = submitStart;
-
+        ticket->submitTime = submitStart;
         bool submitted = inference.runInferenceWithCallback(
             pinnedRgbData, width, height,
             cfg.confThreshold, cfg.headClassId,
@@ -2022,7 +1956,6 @@ int main(int argc, char* argv[]) {
             frameAimConfig,
             cfg.iouStickinessThreshold,
             cfg.headAimPoint, cfg.bodyAimPoint,
-            frameTiming,
             inferenceCallback, ticket);
         if (cfg.perfStatsEnabled) {
             perfWindow.recordSubmit(elapsedUs(submitStart, Clock::now()));
