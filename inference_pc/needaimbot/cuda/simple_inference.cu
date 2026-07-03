@@ -265,7 +265,12 @@ inline bool aimConfigNearlyEqual(const AimConfig& a, const AimConfig& b) {
            nearlyEqual(a.oneeuro_enabled, b.oneeuro_enabled) &&
            nearlyEqual(a.oneeuro_min_cutoff, b.oneeuro_min_cutoff) &&
            nearlyEqual(a.oneeuro_beta, b.oneeuro_beta) &&
-           nearlyEqual(a.oneeuro_dcutoff, b.oneeuro_dcutoff);
+           nearlyEqual(a.oneeuro_dcutoff, b.oneeuro_dcutoff) &&
+           nearlyEqual(a.coast_enabled, b.coast_enabled) &&
+           nearlyEqual(a.coast_decay, b.coast_decay) &&
+           nearlyEqual(a.feedforward_gain, b.feedforward_gain) &&
+           nearlyEqual(a.lead_gain, b.lead_gain) &&
+           nearlyEqual(a.lead_max_px, b.lead_max_px);
 }
 
 cudaGraphNode_t findGraphH2DMemcpyNode(cudaGraph_t graph, const void* dst, size_t bytes) {
@@ -369,6 +374,7 @@ SimpleInference::~SimpleInference() {
     if (m_d_selectedTarget) cudaFree(m_d_selectedTarget);
     if (m_d_aimState) cudaFree(m_d_aimState);
     if (m_d_runtimeAimConfig) cudaFree(m_d_runtimeAimConfig);
+    if (m_d_frameTiming) cudaFree(m_d_frameTiming);
     if (m_d_stage1BestDist) cudaFree(m_d_stage1BestDist);
     if (m_d_stage1DistScore) cudaFree(m_d_stage1DistScore);
     if (m_d_stage1BestIou) cudaFree(m_d_stage1BestIou);
@@ -538,6 +544,7 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
     cudaMalloc(&m_d_selectedTarget, sizeof(Detection));
     cudaMalloc(&m_d_aimState, sizeof(AimState));
     cudaMalloc(&m_d_runtimeAimConfig, sizeof(AimConfig));
+    cudaMalloc(&m_d_frameTiming, sizeof(FrameTiming));
     cudaMalloc(&m_d_stage1BestDist, static_cast<size_t>(m_maxDetections) * sizeof(Detection));
     cudaMalloc(&m_d_stage1DistScore, static_cast<size_t>(m_maxDetections) * sizeof(float));
     cudaMalloc(&m_d_stage1BestIou, static_cast<size_t>(m_maxDetections) * sizeof(Detection));
@@ -547,6 +554,12 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
     cudaMemset(m_d_selectedTarget, 0, sizeof(Detection));
     cudaMemset(m_d_aimState, 0, sizeof(AimState));
     cudaMemset(m_d_runtimeAimConfig, 0, sizeof(AimConfig));
+    // Seed frame timing to the identity (dt_norm = 1, lead_frames = 0) so the
+    // pipeline behaves exactly as before until real timing is supplied.
+    {
+        const FrameTiming initTiming{};
+        cudaMemcpy(m_d_frameTiming, &initTiming, sizeof(FrameTiming), cudaMemcpyHostToDevice);
+    }
 
     // Allocate pinned host memory for RGB input.
     cudaMallocHost(&m_h_rawPinned, rawInputSize);
@@ -647,6 +660,7 @@ bool SimpleInference::executeFusedPipelinePostH2D(int width, int height,
                                                   float confThreshold, int headClassId,
                                                   uint32_t allowedClassMask, const AimConfig& aimConfig,
                                                   float iouThreshold, float headYOffset, float bodyYOffset,
+                                                  const FrameTiming& frameTiming,
                                                   int resultSlot) {
     (void)aimConfig;
     if (resultSlot < 0 || resultSlot >= kMaxCallbacksInFlight) {
@@ -706,6 +720,13 @@ bool SimpleInference::executeFusedPipelinePostH2D(int width, int height,
         cudaEventRecord(m_stageEvtPostInference[slotIdx], m_stream);
     }
 
+    // The postprocess reads *m_d_frameTiming (a stable device cell whose address
+    // the graph bakes). Its VALUE is refreshed out-of-graph before each launch -
+    // uploadFrameTiming() in executeFusedPipeline (standard path) and in the graph
+    // launch branch - so no pageable-source memcpy is captured here (that would
+    // force a sync and abort graph capture), mirroring the m_d_srcPtr pattern.
+    (void)frameTiming;
+
     // One-pass GPU postprocess: decode + target select + movement + result packing
     cudaError_t postErr = postprocessYoloFusedGpu(
         m_d_output, m_outputFP16, m_numBoxes, m_numClasses,
@@ -717,6 +738,7 @@ bool SimpleInference::executeFusedPipelinePostH2D(int width, int height,
         headClassId, m_d_runtimeAimConfig,
         iouThreshold, headYOffset, bodyYOffset,
         m_d_selectedTarget, m_d_aimState,
+        m_d_frameTiming,
         dResultSlot,
         m_d_stage1BestDist, m_d_stage1DistScore,
         m_d_stage1BestIou, m_d_stage1IouScore,
@@ -753,6 +775,7 @@ bool SimpleInference::executeFusedPipeline(void* rawInput, int width, int height
                                            float confThreshold, int headClassId,
                                            uint32_t allowedClassMask, const AimConfig& aimConfig,
                                            float iouThreshold, float headYOffset, float bodyYOffset,
+                                           const FrameTiming& frameTiming,
                                            int resultSlot) {
     size_t rawSize = static_cast<size_t>(width) * static_cast<size_t>(height) * static_cast<size_t>(inputBytesPerPixel());
 
@@ -799,9 +822,34 @@ bool SimpleInference::executeFusedPipeline(void* rawInput, int width, int height
         }
     }
 
+    // Refresh the per-frame timing on the stream before the postprocess runs.
+    if (!uploadFrameTiming(frameTiming, resultSlot)) {
+        return false;
+    }
+
     return executeFusedPipelinePostH2D(width, height, confThreshold, headClassId,
                                        allowedClassMask, aimConfig, iouThreshold,
-                                       headYOffset, bodyYOffset, resultSlot);
+                                       headYOffset, bodyYOffset, frameTiming, resultSlot);
+}
+
+// Copy the frame's dt/lead into the stable device cell the postprocess reads.
+// Per-slot host staging keeps the async source alive across in-flight frames;
+// m_stream ordering places the copy before the postprocess kernel. Kept out of
+// any graph capture (pageable-source async copy would force a disallowed sync).
+bool SimpleInference::uploadFrameTiming(const FrameTiming& frameTiming, int resultSlot) {
+    if (resultSlot < 0 || resultSlot >= kMaxCallbacksInFlight || !m_d_frameTiming) {
+        return false;
+    }
+    const size_t slotIdx = static_cast<size_t>(resultSlot);
+    m_h_frameTimingStage[slotIdx] = frameTiming;
+    cudaError_t err = cudaMemcpyAsync(m_d_frameTiming, &m_h_frameTimingStage[slotIdx],
+                                      sizeof(FrameTiming), cudaMemcpyHostToDevice, m_stream);
+    if (err != cudaSuccess) {
+        std::cerr << "[SimpleInference] frame timing upload failed: "
+                  << cudaGetErrorString(err) << std::endl;
+        return false;
+    }
+    return true;
 }
 
 void SimpleInference::destroyBucket(GraphShapeBucket& bucket) {
@@ -1171,11 +1219,14 @@ bool SimpleInference::captureFullGraphForShape(int sourceWidth, int sourceHeight
 
         // Execute pipeline after captured H2D. Each graph writes to its own
         // result slot so callbacks cannot observe overwritten slot-0 results.
+        // Capture bakes only the m_d_frameTiming POINTER as a kernel arg; its
+        // value is refreshed out-of-graph before each launch, so timing passed
+        // here is unused (identity).
         if (!executeFusedPipelinePostH2D(sourceWidth, sourceHeight,
                                          confThreshold, headClassId,
                                          allowedClassMask, aimConfig,
                                          iouStickinessThreshold, headYOffset, bodyYOffset,
-                                         slot)) {
+                                         FrameTiming{}, slot)) {
             cudaGraph_t capturedGraph = nullptr;
             cudaError_t abortErr = cudaStreamEndCapture(m_stream, &capturedGraph);
             if (abortErr == cudaSuccess && capturedGraph) {
@@ -1330,6 +1381,7 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
                                                 const AimConfig& aimConfig,
                                                 float iouStickinessThreshold,
                                                 float headYOffset, float bodyYOffset,
+                                                const FrameTiming& frameTiming,
                                                 InferenceCallback callback, void* userData) {
     if (!m_loaded || !pinnedData || width <= 0 || height <= 0) return false;
 
@@ -1447,12 +1499,18 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
             if (!executeFusedPipeline(pinnedData, width, height,
                                       confThreshold, headClassId,
                                       allowedClassMask, aimConfig,
-                                      iouStickinessThreshold, headYOffset, bodyYOffset, callbackSlot)) {
+                                      iouStickinessThreshold, headYOffset, bodyYOffset,
+                                      frameTiming, callbackSlot)) {
                 return clearInFlightAndFail(true);
             }
             m_graphFallbackCount.fetch_add(1, std::memory_order_relaxed);
             m_standardLaunchCount.fetch_add(1, std::memory_order_relaxed);
         } else {
+            // Refresh the timing cell the captured postprocess reads, on m_stream
+            // before the graph so the copy is ordered ahead of the kernels.
+            if (!uploadFrameTiming(frameTiming, callbackSlot)) {
+                return clearInFlightAndFail(true);
+            }
             // Launch graph (preprocess + inference + postprocess [+ H2D/D2H on dGPU])
             err = cudaGraphLaunch(bucket->graphExecs[static_cast<size_t>(callbackSlot)], m_stream);
             if (err != cudaSuccess) {
@@ -1468,7 +1526,8 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
         if (!executeFusedPipeline(pinnedData, width, height,
                                   confThreshold, headClassId,
                                   allowedClassMask, aimConfig,
-                                  iouStickinessThreshold, headYOffset, bodyYOffset, callbackSlot)) {
+                                  iouStickinessThreshold, headYOffset, bodyYOffset,
+                                  frameTiming, callbackSlot)) {
             return clearInFlightAndFail(true);
         }
         m_standardLaunchCount.fetch_add(1, std::memory_order_relaxed);

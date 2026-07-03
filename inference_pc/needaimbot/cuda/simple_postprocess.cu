@@ -178,9 +178,21 @@ __device__ __forceinline__ float computeStickinessScore(
 // One Euro low-pass smoothing factor for a given cutoff frequency.
 // Sample period Te is normalized to 1 (per-frame), so cutoff is in cycles/frame.
 // alpha = 1 / (1 + tau/Te), tau = 1 / (2*pi*cutoff).
-__device__ __forceinline__ float oneEuroAlpha(float cutoff) {
+// One Euro smoothing factor for a cutoff (cycles per nominal frame) over an
+// actual sample period te (in nominal frames). te = 1 reproduces the original
+// per-frame form exactly; te != 1 keeps the time constant consistent when the
+// frame interval drifts.
+__device__ __forceinline__ float oneEuroAlpha(float cutoff, float te) {
     const float tau = 1.0f / (2.0f * 3.14159265f * fmaxf(cutoff, 1e-4f));
-    return 1.0f / (1.0f + tau);
+    return 1.0f / (1.0f + tau / fmaxf(te, 1e-4f));
+}
+
+// Re-express a fixed per-frame EMA weight (tuned at te = 1) for an actual sample
+// period te, so the smoother's time constant is invariant to frame rate. Returns
+// alpha for te = 1 unchanged; increases weight on the new sample for longer te.
+__device__ __forceinline__ float emaAlphaDt(float alpha_per_frame, float te) {
+    const float keep = 1.0f - fminf(fmaxf(alpha_per_frame, 0.0f), 1.0f);
+    return 1.0f - powf(keep, fmaxf(te, 1e-4f));
 }
 
 // Cap a per-frame move vector to maxStep px, preserving direction. maxStep <= 0
@@ -508,6 +520,7 @@ __global__ void stage2FinalizeKernel(
     float body_y_offset,
     Detection* __restrict__ d_selected_target,
     AimState* __restrict__ d_aim_state,
+    const FrameTiming* __restrict__ d_frame_timing,
     InferenceResult* __restrict__ d_inference_result)
 {
     __shared__ Detection s_warpBestDistDet[MAX_SELECTION_WARPS];
@@ -621,6 +634,11 @@ __global__ void stage2FinalizeKernel(
     const int trackPersistenceFrames = (d_aim_config)
         ? d_aim_config->track_persistence_frames : 0;
 
+    // Per-frame timing. Defaults reproduce the original per-frame math:
+    // dt_norm = 1 (smoothers stay identical) and lead_frames = 0 (no prediction).
+    const float dt_norm = (d_frame_timing) ? fmaxf(d_frame_timing->dt_norm, 1e-3f) : 1.0f;
+    const float lead_frames = (d_frame_timing) ? fmaxf(d_frame_timing->lead_frames, 0.0f) : 0.0f;
+
     const bool stickyMatch = hasIouResult && bestIou > iou_stickiness_threshold;
     const bool prevValid = (prevTarget.classId >= 0);
 
@@ -645,8 +663,10 @@ __global__ void stage2FinalizeKernel(
         d_aim_state->frames_since_seen = gap;
         const AimConfig coastCfg = *d_aim_config;
         if (coastCfg.coast_enabled != 0.0f && d_aim_state->has_track) {
-            float factor = 1.0f;
-            for (int i = 0; i < gap; ++i) factor *= coastCfg.coast_decay;
+            // Decay by elapsed TIME, not raw frame count, so the glide fades at a
+            // fixed rate regardless of frame interval. gap*dt_norm is the
+            // elapsed time in nominal frames; equals `gap` at the tuned rate.
+            const float factor = powf(coastCfg.coast_decay, static_cast<float>(gap) * dt_norm);
             // Follow only the target's drift (vel * scale), decayed. No
             // convergence term, so a stationary target does not drift off.
             float mx = d_aim_state->vel_x * movement_scale_x * factor;
@@ -714,19 +734,21 @@ __global__ void stage2FinalizeKernel(
     float target_center_y = raw_center_y;
     if (aim_config.oneeuro_enabled != 0.0f) {
         if (d_aim_state->has_track) {
-            const float ad = oneEuroAlpha(aim_config.oneeuro_dcutoff);
+            // Sample period in nominal frames. At the tuned rate dt_norm==1
+            // and every alpha below collapses to the original per-frame value.
+            const float ad = oneEuroAlpha(aim_config.oneeuro_dcutoff, dt_norm);
             const float de_x = raw_center_x - d_aim_state->filt_x;  // per-frame derivative
             d_aim_state->dfilt_x = ad * de_x + (1.0f - ad) * d_aim_state->dfilt_x;
             const float cutoff_x =
                 aim_config.oneeuro_min_cutoff + aim_config.oneeuro_beta * fabsf(d_aim_state->dfilt_x);
-            const float ax = oneEuroAlpha(cutoff_x);
+            const float ax = oneEuroAlpha(cutoff_x, dt_norm);
             d_aim_state->filt_x = ax * raw_center_x + (1.0f - ax) * d_aim_state->filt_x;
 
             const float de_y = raw_center_y - d_aim_state->filt_y;
             d_aim_state->dfilt_y = ad * de_y + (1.0f - ad) * d_aim_state->dfilt_y;
             const float cutoff_y =
                 aim_config.oneeuro_min_cutoff + aim_config.oneeuro_beta * fabsf(d_aim_state->dfilt_y);
-            const float ay = oneEuroAlpha(cutoff_y);
+            const float ay = oneEuroAlpha(cutoff_y, dt_norm);
             d_aim_state->filt_y = ay * raw_center_y + (1.0f - ay) * d_aim_state->filt_y;
         } else {
             d_aim_state->filt_x = raw_center_x;
@@ -747,13 +769,23 @@ __global__ void stage2FinalizeKernel(
     // so smoothing stabilizes WHERE we point without eating the lead signal.
     // (When One Euro is off, raw_center == target_center, so this is a no-op.)
     if (d_aim_state->has_track) {
-        const float maxDrift = 60.0f;  // model px/frame sanity clamp
-        float nvx = raw_center_x - d_aim_state->prev_center_x;
-        float nvy = raw_center_y - d_aim_state->prev_center_y;
+        // prev_center is only refreshed on detection frames, not during a coast
+        // gap, so after bridging G frames it is (G+1) frames stale. Divide the
+        // displacement by the elapsed interval so a multi-frame jump is not read
+        // as one-frame drift and over-leads on re-acquire. elapsed_te is
+        // that interval in nominal frames, so vel becomes px-per-nominal-frame,
+        // consistent under frame-rate jitter. Both reduce to the original
+        // (divide by 1) when tracking is continuous at the tuned rate.
+        const float elapsed_te = (static_cast<float>(prevFramesSinceSeen) + 1.0f) * dt_norm;
+        const float inv_elapsed = 1.0f / fmaxf(elapsed_te, 1e-3f);
+        const float maxDrift = 60.0f;  // model px per nominal frame sanity clamp
+        float nvx = (raw_center_x - d_aim_state->prev_center_x) * inv_elapsed;
+        float nvy = (raw_center_y - d_aim_state->prev_center_y) * inv_elapsed;
         nvx = fminf(fmaxf(nvx, -maxDrift), maxDrift);
         nvy = fminf(fmaxf(nvy, -maxDrift), maxDrift);
-        d_aim_state->vel_x = 0.6f * d_aim_state->vel_x + 0.4f * nvx;
-        d_aim_state->vel_y = 0.6f * d_aim_state->vel_y + 0.4f * nvy;
+        const float av = emaAlphaDt(0.4f, elapsed_te);
+        d_aim_state->vel_x = (1.0f - av) * d_aim_state->vel_x + av * nvx;
+        d_aim_state->vel_y = (1.0f - av) * d_aim_state->vel_y + av * nvy;
     } else {
         d_aim_state->vel_x = 0.0f;
         d_aim_state->vel_y = 0.0f;
@@ -762,10 +794,25 @@ __global__ void stage2FinalizeKernel(
     d_aim_state->prev_center_y = raw_center_y;
     d_aim_state->has_track = 1;
 
-    // Aim at the measured target center. Velocity feedforward keeps pace with a
-    // moving target (cancels P steady-state lag) without leading/overshooting.
-    const float error_x = target_center_x - screen_center_x;
-    const float error_y = target_center_y - screen_center_y;
+    // Forward latency lead: push the aim point ahead by the target's
+    // per-nominal-frame velocity times the pipeline latency (lead_frames), so we
+    // point where it WILL be when the move lands. Distinct from feedforward, which
+    // only cancels steady-state tracking lag. Clamped so a noisy velocity spike
+    // cannot fling the aim point; disabled entirely when lead_gain == 0.
+    float aim_x = target_center_x;
+    float aim_y = target_center_y;
+    if (aim_config.lead_gain != 0.0f && lead_frames > 0.0f) {
+        float lead_x = aim_config.lead_gain * d_aim_state->vel_x * lead_frames;
+        float lead_y = aim_config.lead_gain * d_aim_state->vel_y * lead_frames;
+        clampMaxStep(lead_x, lead_y, aim_config.lead_max_px);
+        aim_x += lead_x;
+        aim_y += lead_y;
+    }
+
+    // Aim at the (lead-adjusted) target center. Velocity feedforward keeps pace
+    // with a moving target (cancels P steady-state lag) without overshooting.
+    const float error_x = aim_x - screen_center_x;
+    const float error_y = aim_y - screen_center_y;
     const float ff = aim_config.feedforward_gain;
 
     // Derivative (damping) term: react to how fast the error is shrinking and
@@ -785,8 +832,10 @@ __global__ void stage2FinalizeKernel(
         d_aim_state->derr_x = 0.0f;
         d_aim_state->derr_y = 0.0f;
     } else {
-        d_aim_state->derr_x = 0.6f * de_x + 0.4f * d_aim_state->derr_x;
-        d_aim_state->derr_y = 0.6f * de_y + 0.4f * d_aim_state->derr_y;
+        // dt-aware EMA: weight collapses to 0.6 at the tuned rate.
+        const float ade = emaAlphaDt(0.6f, dt_norm);
+        d_aim_state->derr_x = ade * de_x + (1.0f - ade) * d_aim_state->derr_x;
+        d_aim_state->derr_y = ade * de_y + (1.0f - ade) * d_aim_state->derr_y;
     }
     d_aim_state->prev_err_x = error_x;
     d_aim_state->prev_err_y = error_y;
@@ -840,6 +889,7 @@ cudaError_t postprocessYoloFusedGpu(
     float body_y_offset,
     Detection* d_selected_target,
     AimState* d_aim_state,
+    const FrameTiming* d_frame_timing,
     InferenceResult* d_inference_result,
     Detection* d_stage1_best_dist,
     float* d_stage1_dist_score,
@@ -937,6 +987,7 @@ cudaError_t postprocessYoloFusedGpu(
         body_y_offset,
         d_selected_target,
         d_aim_state,
+        d_frame_timing,
         d_inference_result
     );
 

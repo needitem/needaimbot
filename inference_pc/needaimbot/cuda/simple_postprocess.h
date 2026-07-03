@@ -96,6 +96,31 @@ struct AimConfig {
     float oneeuro_min_cutoff = 0.1f; // base cutoff at rest (lower = smoother/more lag)
     float oneeuro_beta = 0.02f;      // speed coefficient (higher = less lag when fast)
     float oneeuro_dcutoff = 0.5f;    // derivative cutoff for the speed estimate
+
+    // --- Forward latency lead ---
+    // Shifts the aim point forward by the target's velocity times the measured
+    // end-to-end pipeline latency (capture -> UDP -> inference -> postprocess ->
+    // mouse), so we point where the target WILL be when the move lands instead of
+    // where it was when the frame was captured. Unlike feedforward (which only
+    // cancels steady-state tracking lag), this predicts ahead. Kept OPT-IN:
+    // lead_gain = 0 disables it entirely (no change from prior behavior). Start
+    // low (~0.5) and raise until fast strafes stop trailing without overshooting
+    // on direction changes. Lead distance is clamped to lead_max_px.
+    float lead_gain = 0.0f;
+    float lead_max_px = 40.0f;
+};
+
+// Per-frame timing, delivered to the postprocess kernel through a device buffer
+// (NOT a kernel argument) so CUDA Graph replay picks up fresh values each launch
+// while the captured pointer stays stable. dt_norm = actual inter-frame period /
+// nominal period: 1.0 at the tuned rate, >1 when frames arrive slower. It makes
+// the time-constant smoothers (One Euro, velocity/derivative EMA, coast decay)
+// frame-rate independent under jitter. lead_frames = end-to-end latency expressed
+// in nominal frame periods, consumed by the lead term above. Defaults reproduce
+// the original per-frame behavior exactly (dt_norm = 1, lead_frames = 0).
+struct FrameTiming {
+    float dt_norm = 1.0f;
+    float lead_frames = 0.0f;
 };
 
 // Mouse movement output
@@ -146,6 +171,7 @@ cudaError_t postprocessYoloFusedGpu(
     float body_y_offset,           // Aim point offset for body (0.0-1.0)
     Detection* d_selected_target,  // Persistent selected target (for IoU tracking)
     AimState* d_aim_state,         // Persistent movement state (device)
+    const FrameTiming* d_frame_timing, // Per-frame dt/lead (device; nullptr -> defaults)
     InferenceResult* d_inference_result, // Packed output result (required)
     Detection* d_stage1_best_dist, // [max_candidate_blocks] best candidate by distance per block
     float* d_stage1_dist_score,    // [max_candidate_blocks] distance score per block
