@@ -127,6 +127,12 @@ struct Settings {
     float recoilCompX = 0.0f;
     float recoilCompY = 0.8f;
     int recoilTickMs = 10;
+
+    // Static aim-shift added to the aim move every callback while aiming +
+    // shooting (a fixed pixel nudge, e.g. to bias toward the head). Runs
+    // alongside the tick-based no-recoil above; leave at 0 to disable.
+    float shootOffsetX = 0.0f;
+    float shootOffsetY = -13.0f;
 };
 
 class MouseController {
@@ -159,8 +165,25 @@ public:
     bool directAimMoveInCallback() const { return settings_.directAimMoveInCallback; }
 
     // Called from the GPU completion callback once a target is found and
-    // aiming is active.
-    void submitAimMovement(int dx, int dy) {
+    // aiming is active. `shooting` applies the static shoot-offset aim-shift
+    // (carried sub-pixel so a fractional offset averages out instead of
+    // truncating to int each callback).
+    void submitAimMovement(int dx, int dy, bool shooting) {
+        if (shooting && (settings_.shootOffsetX != 0.0f || settings_.shootOffsetY != 0.0f)) {
+            shootResidualX_ += settings_.shootOffsetX;
+            shootResidualY_ += settings_.shootOffsetY;
+            const int offX = static_cast<int>(shootResidualX_);
+            const int offY = static_cast<int>(shootResidualY_);
+            shootResidualX_ -= static_cast<float>(offX);
+            shootResidualY_ -= static_cast<float>(offY);
+            dx += offX;
+            dy += offY;
+        } else {
+            // Drop stale carry when not shooting so it can't leak into the
+            // next burst.
+            shootResidualX_ = 0.0f;
+            shootResidualY_ = 0.0f;
+        }
         if (settings_.directAimMoveInCallback) {
             if (dx != 0 || dy != 0) {
                 makcu_->move(dx, dy);
@@ -304,6 +327,10 @@ private:
     Clock::time_point lastRecoilTime_{};
     float recoilResidualX_ = 0.0f;
     float recoilResidualY_ = 0.0f;
+
+    // Sub-pixel carry for the static shoot-offset aim-shift.
+    float shootResidualX_ = 0.0f;
+    float shootResidualY_ = 0.0f;
 };
 
 }  // namespace controller

@@ -99,6 +99,10 @@ struct Config {
     float recoilCompY = 0.8f;
     int recoilTickMs = 10;
 
+    // Static shoot-offset aim-shift (applied while aiming + shooting).
+    float shootOffsetX = 0.0f;
+    float shootOffsetY = -13.0f;
+
     // Mouse rate limiting
     int mouseMinIntervalMs = 1;
     int maxInFlightFrames = 1;    // Keep latency low by avoiding stale queued frames
@@ -159,6 +163,9 @@ struct Config {
             if (j.contains("recoil_comp_x")) recoilCompX = j["recoil_comp_x"];
             if (j.contains("recoil_comp_y")) recoilCompY = j["recoil_comp_y"];
             if (j.contains("recoil_tick_ms")) recoilTickMs = j["recoil_tick_ms"];
+
+            if (j.contains("shoot_offset_x")) shootOffsetX = j["shoot_offset_x"];
+            if (j.contains("shoot_offset_y")) shootOffsetY = j["shoot_offset_y"];
 
             if (j.contains("mouse_min_interval_ms")) mouseMinIntervalMs = j["mouse_min_interval_ms"];
             if (j.contains("max_inflight_frames")) maxInFlightFrames = j["max_inflight_frames"];
@@ -247,6 +254,9 @@ struct Config {
             j["recoil_comp_y"] = recoilCompY;
             j["recoil_tick_ms"] = recoilTickMs;
 
+            j["shoot_offset_x"] = shootOffsetX;
+            j["shoot_offset_y"] = shootOffsetY;
+
             j["mouse_min_interval_ms"] = mouseMinIntervalMs;
             j["max_inflight_frames"] = maxInFlightFrames;
             j["frame_credit_depth"] = frameCreditDepth;
@@ -313,6 +323,8 @@ struct Config {
         std::cout << "[Config] Max detections: " << maxDetections << std::endl;
         std::cout << "[Config] No-recoil: " << (noRecoilEnabled ? "ON" : "OFF")
                   << " (Y=" << recoilCompY << ", tick=" << recoilTickMs << "ms)" << std::endl;
+        std::cout << "[Config] Shoot offset: (" << shootOffsetX << ", " << shootOffsetY << ")"
+                  << ((shootOffsetX != 0.0f || shootOffsetY != 0.0f) ? "" : " (off)") << std::endl;
         std::cout << "[Config] Max in-flight frames: " << maxInFlightFrames << std::endl;
         std::cout << "[Config] Frame credit depth: " << frameCreditDepth << std::endl;
         std::cout << "[Config] Direct aim move in callback: "
@@ -499,8 +511,11 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
     }
 
     // Inference is done - hand the result off to the controller, which
-    // decides how to turn it into physical mouse motion.
-    ctx->controller->submitAimMovement(moveDx, moveDy);
+    // decides how to turn it into physical mouse motion. Pass the shooting
+    // state so it can apply the static shoot-offset aim-shift (aiming is
+    // already gated above).
+    ctx->controller->submitAimMovement(
+        moveDx, moveDy, controller::maskShooting(callbackButtonMask));
 
     releaseTicket();
 }
@@ -735,6 +750,8 @@ int main(int argc, char* argv[]) {
     controllerSettings.recoilCompX = cfg.recoilCompX;
     controllerSettings.recoilCompY = cfg.recoilCompY;
     controllerSettings.recoilTickMs = cfg.recoilTickMs;
+    controllerSettings.shootOffsetX = cfg.shootOffsetX;
+    controllerSettings.shootOffsetY = cfg.shootOffsetY;
     movementController.configure(makcu, controllerSettings);
     movementController.start([&]() {
         if (cfg.realtimeThreadsEnabled) {
