@@ -7,6 +7,7 @@
 // - Strict garbage value filtering
 #include "simple_postprocess.h"
 #include "simple_inference.h"
+#include "pd_controller.cuh"
 #include <cuda_fp16.h>
 #include <cfloat>
 #include <cstdio>
@@ -134,13 +135,17 @@ __device__ __forceinline__ void writeEmptyInferenceResult(InferenceResult* resul
     result->movement.dx = 0;
     result->movement.dy = 0;
     result->hasTarget = 0;
-    result->reserved = 0;
+    result->freshAcquire = 0;
     result->targetX1 = 0;
     result->targetY1 = 0;
     result->targetX2 = 0;
     result->targetY2 = 0;
     result->targetConf = 0;
     result->targetClassId = -1;
+    result->errorX = 0.0f;
+    result->errorY = 0.0f;
+    result->movementScaleX = 0.0f;
+    result->movementScaleY = 0.0f;
 }
 
 // Combined stickiness score for tracking the same target across frames.
@@ -173,59 +178,6 @@ __device__ __forceinline__ float computeStickinessScore(
     }
     const float dist_score = 1.0f - sqrtf(dist_sq / window_sq);
     return fmaxf(iou, dist_score);
-}
-
-// One Euro low-pass smoothing factor for a given cutoff frequency.
-// Sample period Te is normalized to 1 (per-frame), so cutoff is in cycles/frame.
-// alpha = 1 / (1 + tau/Te), tau = 1 / (2*pi*cutoff).
-__device__ __forceinline__ float oneEuroAlpha(float cutoff) {
-    const float tau = 1.0f / (2.0f * 3.14159265f * fmaxf(cutoff, 1e-4f));
-    return 1.0f / (1.0f + tau);
-}
-
-// Cap a per-frame move vector to maxStep px, preserving direction. maxStep <= 0
-// disables. Applied to every movement path (P+D+ff and coast glide) so the slew
-// bound is uniform and a large leap cannot overshoot/ring regardless of source.
-__device__ __forceinline__ void clampMaxStep(float& mx, float& my, float maxStep) {
-    if (maxStep > 0.0f) {
-        const float step = sqrtf(mx * mx + my * my);
-        if (step > maxStep) {
-            const float s = maxStep / step;
-            mx *= s;
-            my *= s;
-        }
-    }
-}
-
-__device__ __forceinline__ float nonlinearPMove(float error, float kp, float softness) {
-    const float abs_error = fabsf(error);
-    const float safe_softness = fmaxf(softness, 1.0f);
-    const float gain = fmaxf(kp, 0.0f) * (abs_error / (abs_error + safe_softness));
-    return error * gain;
-}
-
-__device__ __forceinline__ int emitMouseDelta(float movement, float* residual) {
-    // Clear carry if it opposes the new direction: stale residual from a
-    // previous frame must not fight a freshly reversed target motion.
-    float carried = *residual;
-    if (movement * carried < 0.0f) {
-        carried = 0.0f;
-    }
-    const float value = movement + carried;
-    int emit = __float2int_rz(value);
-    if (emit > 127) {
-        // Saturated: keep the overflow so the next frame can keep catching
-        // up, but cap the carry so runaway accumulation can't outlive the
-        // motion that caused it.
-        *residual = fminf(256.0f, value - 127.0f);
-        return 127;
-    }
-    if (emit < -127) {
-        *residual = fmaxf(-256.0f, value + 127.0f);
-        return -127;
-    }
-    *residual = value - static_cast<float>(emit);
-    return emit;
 }
 
 template<bool kIsFp16>
@@ -645,25 +597,23 @@ __global__ void stage2FinalizeKernel(
         d_aim_state->frames_since_seen = gap;
         const AimConfig coastCfg = *d_aim_config;
         if (coastCfg.coast_enabled != 0.0f && d_aim_state->has_track) {
-            float factor = 1.0f;
-            for (int i = 0; i < gap; ++i) factor *= coastCfg.coast_decay;
-            // Follow only the target's drift (vel * scale), decayed. No
-            // convergence term, so a stationary target does not drift off.
-            float mx = d_aim_state->vel_x * movement_scale_x * factor;
-            float my = d_aim_state->vel_y * movement_scale_y * factor;
-            clampMaxStep(mx, my, coastCfg.max_step);
-            const int dx = emitMouseDelta(mx, &d_aim_state->residual_x);
-            const int dy = emitMouseDelta(my, &d_aim_state->residual_y);
+            int dx = 0, dy = 0;
+            computeCoastMovement(coastCfg, d_aim_state, movement_scale_x, movement_scale_y,
+                                 gap, dx, dy);
             d_inference_result->movement.dx = dx;
             d_inference_result->movement.dy = dy;
             d_inference_result->hasTarget = 1;
-            d_inference_result->reserved = 0;
+            d_inference_result->freshAcquire = 0;  // coasting an existing track, not a fresh lock
             d_inference_result->targetX1 = prevTarget.x1;
             d_inference_result->targetY1 = prevTarget.y1;
             d_inference_result->targetX2 = prevTarget.x2;
             d_inference_result->targetY2 = prevTarget.y2;
             d_inference_result->targetConf = prevTarget.confidence;
             d_inference_result->targetClassId = prevTarget.classId;
+            d_inference_result->errorX = 0.0f;
+            d_inference_result->errorY = 0.0f;
+            d_inference_result->movementScaleX = 0.0f;
+            d_inference_result->movementScaleY = 0.0f;
             return;
         }
         d_aim_state->residual_x = 0.0f;
@@ -702,121 +652,36 @@ __global__ void stage2FinalizeKernel(
 
     const AimConfig aim_config = *d_aim_config;
 
-    // Was this target already being tracked last frame? Captured before has_track
-    // is overwritten below; used to seed the One Euro filter and reset the error
-    // derivative on a fresh acquire (avoids a derivative kick).
-    const bool fresh_track = (d_aim_state->has_track == 0);
+    // Captured BEFORE computeAimMovement, which sets has_track = 1
+    // unconditionally on the way out - this is the only place "was this
+    // track just acquired this frame" can still be observed.
+    const bool fresh_acquire = (d_aim_state->has_track == 0);
 
-    // One Euro adaptive low-pass on the measured center, applied BEFORE velocity
-    // and error so the whole controller (P move, feedforward, coast) runs on the
-    // de-noised signal. Seed on fresh acquire to avoid a jump from a stale value.
-    float target_center_x = raw_center_x;
-    float target_center_y = raw_center_y;
-    if (aim_config.oneeuro_enabled != 0.0f) {
-        if (d_aim_state->has_track) {
-            const float ad = oneEuroAlpha(aim_config.oneeuro_dcutoff);
-            const float de_x = raw_center_x - d_aim_state->filt_x;  // per-frame derivative
-            d_aim_state->dfilt_x = ad * de_x + (1.0f - ad) * d_aim_state->dfilt_x;
-            const float cutoff_x =
-                aim_config.oneeuro_min_cutoff + aim_config.oneeuro_beta * fabsf(d_aim_state->dfilt_x);
-            const float ax = oneEuroAlpha(cutoff_x);
-            d_aim_state->filt_x = ax * raw_center_x + (1.0f - ax) * d_aim_state->filt_x;
-
-            const float de_y = raw_center_y - d_aim_state->filt_y;
-            d_aim_state->dfilt_y = ad * de_y + (1.0f - ad) * d_aim_state->dfilt_y;
-            const float cutoff_y =
-                aim_config.oneeuro_min_cutoff + aim_config.oneeuro_beta * fabsf(d_aim_state->dfilt_y);
-            const float ay = oneEuroAlpha(cutoff_y);
-            d_aim_state->filt_y = ay * raw_center_y + (1.0f - ay) * d_aim_state->filt_y;
-        } else {
-            d_aim_state->filt_x = raw_center_x;
-            d_aim_state->filt_y = raw_center_y;
-            d_aim_state->dfilt_x = 0.0f;
-            d_aim_state->dfilt_y = 0.0f;
-        }
-        target_center_x = d_aim_state->filt_x;
-        target_center_y = d_aim_state->filt_y;
-    }
-
-    // Update the target's per-frame screen drift (EMA, clamped) FIRST so both
-    // the feedforward term below and a following detection gap's coast use the
-    // freshest velocity. Use the RAW center deltas here, NOT the One Euro
-    // filtered center: the filter delays position, and feeding a lagged velocity
-    // into feedforward under-leads a moving target (aim trails its tail). The
-    // P/error term below still uses the filtered center for a stable aim point,
-    // so smoothing stabilizes WHERE we point without eating the lead signal.
-    // (When One Euro is off, raw_center == target_center, so this is a no-op.)
-    if (d_aim_state->has_track) {
-        const float maxDrift = 60.0f;  // model px/frame sanity clamp
-        float nvx = raw_center_x - d_aim_state->prev_center_x;
-        float nvy = raw_center_y - d_aim_state->prev_center_y;
-        nvx = fminf(fmaxf(nvx, -maxDrift), maxDrift);
-        nvy = fminf(fmaxf(nvy, -maxDrift), maxDrift);
-        d_aim_state->vel_x = 0.6f * d_aim_state->vel_x + 0.4f * nvx;
-        d_aim_state->vel_y = 0.6f * d_aim_state->vel_y + 0.4f * nvy;
-    } else {
-        d_aim_state->vel_x = 0.0f;
-        d_aim_state->vel_y = 0.0f;
-    }
-    d_aim_state->prev_center_x = raw_center_x;  // raw (un-lagged) for next velocity
-    d_aim_state->prev_center_y = raw_center_y;
-    d_aim_state->has_track = 1;
-
-    // Aim at the measured target center. Velocity feedforward keeps pace with a
-    // moving target (cancels P steady-state lag) without leading/overshooting.
-    const float error_x = target_center_x - screen_center_x;
-    const float error_y = target_center_y - screen_center_y;
-    const float ff = aim_config.feedforward_gain;
-
-    // Derivative (damping) term: react to how fast the error is shrinking and
-    // push back, so a high-kp approach decelerates BEFORE it overshoots. This is
-    // pure damping of OUR convergence - target motion is handled by feedforward,
-    // so D stays quiet (de ~ 0) while tracking well and only bites on transients.
-    // Error rides the One Euro-filtered center, so the derivative is clean; it is
-    // still clamped and reset on fresh acquire to avoid a derivative kick. The
-    // clamp is generous (a full-frame initial slew can change error by >60px in
-    // one frame); a tighter clamp would starve the damping exactly in the
-    // large-error regime that overshoots most. Fresh-acquire reset, not this
-    // clamp, guards against the real derivative kick.
-    const float maxDErr = 150.0f;
-    float de_x = fminf(fmaxf(error_x - d_aim_state->prev_err_x, -maxDErr), maxDErr);
-    float de_y = fminf(fmaxf(error_y - d_aim_state->prev_err_y, -maxDErr), maxDErr);
-    if (fresh_track) {
-        d_aim_state->derr_x = 0.0f;
-        d_aim_state->derr_y = 0.0f;
-    } else {
-        d_aim_state->derr_x = 0.6f * de_x + 0.4f * d_aim_state->derr_x;
-        d_aim_state->derr_y = 0.6f * de_y + 0.4f * d_aim_state->derr_y;
-    }
-    d_aim_state->prev_err_x = error_x;
-    d_aim_state->prev_err_y = error_y;
-
-    float movement_x =
-        (nonlinearPMove(error_x, aim_config.kp_x, aim_config.p_softness_x)
-         + aim_config.kd_x * d_aim_state->derr_x
-         + ff * d_aim_state->vel_x) * movement_scale_x;
-    float movement_y =
-        (nonlinearPMove(error_y, aim_config.kp_y, aim_config.p_softness_y)
-         + aim_config.kd_y * d_aim_state->derr_y
-         + ff * d_aim_state->vel_y) * movement_scale_y;
-
-    // Per-frame max-step clamp (output px). Bounds the slew so a large initial
-    // error is crossed in several smooth steps instead of one delayed leap that
-    // overshoots and rings - overshoot D cannot prevent reactively.
-    clampMaxStep(movement_x, movement_y, aim_config.max_step);
-
-    int emit_dx = emitMouseDelta(movement_x, &d_aim_state->residual_x);
-    int emit_dy = emitMouseDelta(movement_y, &d_aim_state->residual_y);
+    // The actual PD controller math (One Euro pre-filter, drift/feedforward
+    // tracking, nonlinear P+D convergence, max-step clamp, integer delta) lives
+    // in pd_controller.cuh; this kernel only prepares its inputs and dispatches
+    // the result below.
+    int emit_dx = 0, emit_dy = 0;
+    computeAimMovement(raw_center_x, raw_center_y, screen_center_x, screen_center_y,
+                        movement_scale_x, movement_scale_y, aim_config, d_aim_state,
+                        emit_dx, emit_dy);
 
     d_inference_result->movement.dx = emit_dx;
     d_inference_result->movement.dy = emit_dy;
     d_inference_result->hasTarget = 1;
-    d_inference_result->reserved = 0;
+    d_inference_result->freshAcquire = fresh_acquire ? 1 : 0;
     d_inference_result->targetX1 = chosenTarget.x1;
     d_inference_result->targetY1 = chosenTarget.y1;
     d_inference_result->targetX2 = chosenTarget.x2;
     d_inference_result->targetY2 = chosenTarget.y2;
     d_inference_result->targetConf = chosenTarget.confidence;
+    // Same error vector + scale pd_controller's own math used above - lets a
+    // fresh-acquire host callback seed a motor_synergy flick without needing
+    // its own screen-center/scale state (see needaimbot/mouse/motor_synergy.hpp).
+    d_inference_result->errorX = raw_center_x - screen_center_x;
+    d_inference_result->errorY = raw_center_y - screen_center_y;
+    d_inference_result->movementScaleX = movement_scale_x;
+    d_inference_result->movementScaleY = movement_scale_y;
     d_inference_result->targetClassId = chosenTarget.classId;
 }
 

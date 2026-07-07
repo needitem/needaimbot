@@ -12,7 +12,6 @@
 #include <csignal>
 #include <cmath>
 #include <iomanip>
-#include <random>
 #include <filesystem>
 #include <condition_variable>
 #include <algorithm>
@@ -35,476 +34,25 @@
 #include "needaimbot/cuda/simple_postprocess.h"
 #include "needaimbot/capture/udp_capture.h"
 #include "needaimbot/mouse/input_drivers/MakcuConnection.h"
+#include "needaimbot/mouse/controller.h"
+#include "needaimbot/mouse/pd_controller.hpp"
+#include "needaimbot/mouse/motor_synergy.hpp"
+#include "needaimbot/app/engine_locator.hpp"
+#include "needaimbot/app/runtime_options.hpp"
+#include "needaimbot/app/runtime_diagnostics.hpp"
+#include "needaimbot/capture/debug_frame_dump.hpp"
 
 // Third-party JSON parser (header-only)
 #include "needaimbot/modules/json.hpp"
 using json = nlohmann::json;
+
+using Clock = std::chrono::steady_clock;
 
 std::atomic<bool> g_running{true};
 std::atomic<int> g_frameCount{0};  // Completed inference callbacks per stat window
 std::atomic<uint64_t> g_callbackLatencySamples{0};
 std::atomic<int64_t> g_callbackLatencyTotalUs{0};
 std::atomic<int64_t> g_callbackLatencyMaxUs{0};
-std::atomic<uint64_t> g_moveQueueDropped{0};
-
-namespace {
-using Clock = std::chrono::steady_clock;
-
-bool fileExists(const std::filesystem::path& path) {
-    std::error_code ec;
-    return std::filesystem::is_regular_file(path, ec);
-}
-
-std::filesystem::path safeAbsolute(const std::filesystem::path& path) {
-    std::error_code ec;
-    auto absolutePath = std::filesystem::absolute(path, ec);
-    return ec ? path : absolutePath.lexically_normal();
-}
-
-std::filesystem::path currentExecutablePath(const char* argv0) {
-#ifndef _WIN32
-    std::array<char, 4096> buffer{};
-    const ssize_t length = ::readlink("/proc/self/exe", buffer.data(), buffer.size() - 1);
-    if (length > 0) {
-        buffer[static_cast<size_t>(length)] = '\0';
-        return safeAbsolute(std::filesystem::path(buffer.data()));
-    }
-#endif
-    return argv0 ? safeAbsolute(std::filesystem::path(argv0)) : std::filesystem::path();
-}
-
-std::string toLower(std::string value) {
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
-        return static_cast<char>(std::tolower(ch));
-    });
-    return value;
-}
-
-void addUniquePath(std::vector<std::filesystem::path>& paths, const std::filesystem::path& path) {
-    if (path.empty()) return;
-    const auto normalized = safeAbsolute(path);
-    if (std::find(paths.begin(), paths.end(), normalized) == paths.end()) {
-        paths.push_back(normalized);
-    }
-}
-
-std::optional<std::filesystem::path> findRepoRootFrom(std::filesystem::path start) {
-    if (start.empty()) return std::nullopt;
-    start = safeAbsolute(start);
-    if (fileExists(start)) {
-        start = start.parent_path();
-    }
-
-    for (auto current = start; !current.empty(); current = current.parent_path()) {
-        if (fileExists(current / "inference_pc" / "simple_main.cpp") &&
-            fileExists(current / "inference_pc" / "CMakeLists.txt")) {
-            return current;
-        }
-        if (current == current.root_path()) break;
-    }
-    return std::nullopt;
-}
-
-std::optional<std::filesystem::path> findRepoRoot(const std::filesystem::path& exeDir) {
-    if (auto root = findRepoRootFrom(std::filesystem::current_path())) {
-        return root;
-    }
-    return findRepoRootFrom(exeDir);
-}
-
-std::filesystem::path chooseConfigPath(const std::filesystem::path& exeDir) {
-    return exeDir / "simple_config.json";
-}
-
-int engineScore(const std::filesystem::path& path) {
-    const std::string name = toLower(path.filename().string());
-    int score = 0;
-    if (name.find("0.8.2") != std::string::npos) score += 80;
-    if (name.find("256") != std::string::npos) score += 45;
-    if (name.find("aux0") != std::string::npos) score += 5;
-    if (name.find("320") != std::string::npos) score += 30;
-    if (name.find("fp16io") != std::string::npos) score += 35;
-    if (name.find("orin") != std::string::npos) score += 25;
-    if (name.find("l5") != std::string::npos) score += 8;
-    if (name.find("fp16") != std::string::npos) score += 20;
-    if (name.find("trt") != std::string::npos) score += 10;
-    if (name.find("dynamic") != std::string::npos) score -= 4;
-    if (name.find("fp8") != std::string::npos) score -= 2;
-    return score;
-}
-
-std::optional<std::filesystem::path> discoverEngine(
-    const std::vector<std::filesystem::path>& searchDirs) {
-    std::optional<std::filesystem::path> bestPath;
-    int bestScore = std::numeric_limits<int>::min();
-
-    for (const auto& dir : searchDirs) {
-        std::error_code ec;
-        if (!std::filesystem::is_directory(dir, ec)) continue;
-        for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
-            if (ec) break;
-            const auto candidate = entry.path();
-            if (!fileExists(candidate) || candidate.extension() != ".engine") continue;
-
-            const int score = engineScore(candidate);
-            if (!bestPath || score > bestScore ||
-                (score == bestScore && candidate.filename().string() > bestPath->filename().string())) {
-                bestPath = candidate;
-                bestScore = score;
-            }
-        }
-    }
-    return bestPath;
-}
-
-std::optional<std::filesystem::path> resolveEnginePath(
-    const std::string& configuredPath,
-    const std::filesystem::path& configPath,
-    const std::filesystem::path& exeDir,
-    const std::optional<std::filesystem::path>& repoRoot) {
-    const std::filesystem::path enginePath(configuredPath);
-    std::vector<std::filesystem::path> candidates;
-    std::vector<std::filesystem::path> searchDirs;
-
-    addUniquePath(searchDirs, std::filesystem::current_path());
-    addUniquePath(searchDirs, configPath.parent_path());
-    if (repoRoot) {
-        addUniquePath(searchDirs, *repoRoot);
-        addUniquePath(searchDirs, *repoRoot / "inference_pc");
-    }
-    addUniquePath(searchDirs, exeDir);
-
-    if (enginePath.is_absolute()) {
-        addUniquePath(candidates, enginePath);
-    } else {
-        for (const auto& dir : searchDirs) {
-            addUniquePath(candidates, dir / enginePath);
-        }
-    }
-
-    for (const auto& candidate : candidates) {
-        if (fileExists(candidate)) return candidate;
-    }
-    return discoverEngine(searchDirs);
-}
-
-int64_t elapsedUs(Clock::time_point begin, Clock::time_point end) {
-    return std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count();
-}
-
-void atomicMax(std::atomic<int64_t>& target, int64_t value) {
-    int64_t current = target.load(std::memory_order_relaxed);
-    while (current < value &&
-           !target.compare_exchange_weak(current, value, std::memory_order_relaxed, std::memory_order_relaxed)) {
-    }
-}
-
-void writeU16LE(std::ostream& out, uint16_t value) {
-    const char bytes[2] = {
-        static_cast<char>(value & 0xffu),
-        static_cast<char>((value >> 8) & 0xffu),
-    };
-    out.write(bytes, sizeof(bytes));
-}
-
-void writeU32LE(std::ostream& out, uint32_t value) {
-    const char bytes[4] = {
-        static_cast<char>(value & 0xffu),
-        static_cast<char>((value >> 8) & 0xffu),
-        static_cast<char>((value >> 16) & 0xffu),
-        static_cast<char>((value >> 24) & 0xffu),
-    };
-    out.write(bytes, sizeof(bytes));
-}
-
-void writeI32LE(std::ostream& out, int32_t value) {
-    writeU32LE(out, static_cast<uint32_t>(value));
-}
-
-bool writeRgbBmp(
-    const std::filesystem::path& path,
-    const uint8_t* rgbData,
-    unsigned int width,
-    unsigned int height) {
-    if (!rgbData || width == 0 || height == 0) return false;
-
-    const uint64_t rawRowBytes = static_cast<uint64_t>(width) * 3u;
-    const uint64_t rowStride = (rawRowBytes + 3u) & ~uint64_t{3u};
-    const uint64_t pixelBytes = rowStride * static_cast<uint64_t>(height);
-    constexpr uint32_t kHeaderBytes = 14u + 40u;
-    if (pixelBytes > std::numeric_limits<uint32_t>::max() - kHeaderBytes ||
-        width > static_cast<unsigned int>(std::numeric_limits<int32_t>::max()) ||
-        height > static_cast<unsigned int>(std::numeric_limits<int32_t>::max())) {
-        return false;
-    }
-
-    const auto parent = path.parent_path();
-    if (!parent.empty()) {
-        std::error_code ec;
-        std::filesystem::create_directories(parent, ec);
-        if (ec) return false;
-    }
-
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    if (!out) return false;
-
-    const uint32_t fileSize = kHeaderBytes + static_cast<uint32_t>(pixelBytes);
-
-    out.write("BM", 2);
-    writeU32LE(out, fileSize);
-    writeU16LE(out, 0);
-    writeU16LE(out, 0);
-    writeU32LE(out, kHeaderBytes);
-
-    writeU32LE(out, 40);  // BITMAPINFOHEADER
-    writeI32LE(out, static_cast<int32_t>(width));
-    writeI32LE(out, -static_cast<int32_t>(height));  // top-down BMP
-    writeU16LE(out, 1);
-    writeU16LE(out, 24);
-    writeU32LE(out, 0);
-    writeU32LE(out, static_cast<uint32_t>(pixelBytes));
-    writeI32LE(out, 0);
-    writeI32LE(out, 0);
-    writeU32LE(out, 0);
-    writeU32LE(out, 0);
-
-    std::vector<uint8_t> row(static_cast<size_t>(rowStride), 0);
-    const unsigned int centerX = width / 2u;
-    const unsigned int centerY = height / 2u;
-    const unsigned int markerRadius = std::max(8u, std::min(width, height) / 16u);
-    for (unsigned int y = 0; y < height; ++y) {
-        const uint8_t* src = rgbData + static_cast<size_t>(y) * static_cast<size_t>(width) * 3u;
-        std::fill(row.begin(), row.end(), 0);
-        for (unsigned int x = 0; x < width; ++x) {
-            uint8_t r = src[static_cast<size_t>(x) * 3u + 0u];
-            uint8_t g = src[static_cast<size_t>(x) * 3u + 1u];
-            uint8_t b = src[static_cast<size_t>(x) * 3u + 2u];
-            const unsigned int dx = (x > centerX) ? (x - centerX) : (centerX - x);
-            const unsigned int dy = (y > centerY) ? (y - centerY) : (centerY - y);
-            const bool onCenterDot = dx <= 1u && dy <= 1u;
-            const bool onVerticalMarker = dx <= 1u && dy <= markerRadius;
-            const bool onHorizontalMarker = dy <= 1u && dx <= markerRadius;
-            if (onVerticalMarker || onHorizontalMarker) {
-                r = 255;
-                g = onCenterDot ? 255 : 0;
-                b = 0;
-            }
-            row[static_cast<size_t>(x) * 3u + 0u] = b;
-            row[static_cast<size_t>(x) * 3u + 1u] = g;
-            row[static_cast<size_t>(x) * 3u + 2u] = r;
-        }
-        out.write(reinterpret_cast<const char*>(row.data()), static_cast<std::streamsize>(row.size()));
-        if (!out) return false;
-    }
-
-    return true;
-}
-
-struct RuntimeOptions {
-    bool debugFrameDump = false;
-    bool buttonTest = false;
-    bool hasConfigPath = false;
-    bool hasDebugDir = false;
-    bool helpRequested = false;
-    bool collectCalib = false;
-    int collectCalibCount = 500;
-    std::filesystem::path configPath;
-    std::filesystem::path debugDir;
-    std::filesystem::path collectCalibDir;
-};
-
-void printUsage(const char* exeName) {
-    std::cout << "Usage: " << (exeName ? exeName : "simple_inference")
-              << " [config.json] [--debug] [--debug-dir DIR] [--button-test]\n"
-              << "  --debug              Save latest received RGB frame once per second\n"
-              << "  --debug-dir DIR      Debug output directory (default: inference_pc/debug)\n"
-              << "  --button-test        Print Makcu mouse button mask and exit with Ctrl+C\n"
-              << "  --collect-calib DIR [N]  Save N received RGB frames to DIR for int8 calibration (default N=500)\n";
-}
-
-bool parseRuntimeOptions(int argc, char* argv[], RuntimeOptions& options) {
-    for (int i = 1; i < argc; ++i) {
-        const std::string arg = argv[i] ? argv[i] : "";
-        if (arg == "--debug" || arg == "--debug-frame" || arg == "--debug-frames") {
-            options.debugFrameDump = true;
-        } else if (arg == "--button-test") {
-            options.buttonTest = true;
-        } else if (arg == "--collect-calib") {
-            if (i + 1 >= argc) {
-                std::cerr << "[Args] --collect-calib requires a directory" << std::endl;
-                return false;
-            }
-            options.collectCalib = true;
-            options.collectCalibDir = argv[++i];
-            // Optional count: only consume the next arg if it is a positive integer.
-            if (i + 1 < argc) {
-                const std::string nxt = argv[i + 1] ? argv[i + 1] : "";
-                if (!nxt.empty() && nxt.find_first_not_of("0123456789") == std::string::npos) {
-                    options.collectCalibCount = std::max(1, std::atoi(nxt.c_str()));
-                    ++i;
-                }
-            }
-        } else if (arg == "--debug-dir") {
-            if (i + 1 >= argc) {
-                std::cerr << "[Args] --debug-dir requires a path" << std::endl;
-                return false;
-            }
-            options.debugFrameDump = true;
-            options.hasDebugDir = true;
-            options.debugDir = argv[++i];
-        } else if (arg == "-h" || arg == "--help") {
-            printUsage(argv[0]);
-            options.helpRequested = true;
-            return true;
-        } else if (!arg.empty() && arg[0] == '-') {
-            std::cerr << "[Args] Unknown option: " << arg << std::endl;
-            printUsage(argv[0]);
-            return false;
-        } else if (!options.hasConfigPath) {
-            options.hasConfigPath = true;
-            options.configPath = arg;
-        } else {
-            std::cerr << "[Args] Extra positional argument: " << arg << std::endl;
-            printUsage(argv[0]);
-            return false;
-        }
-    }
-    return true;
-}
-
-struct DebugFrameDumper {
-    bool enabled = false;
-    std::filesystem::path outputPath;
-    Clock::time_point nextCaptureTime{};
-    uint64_t savedFrames = 0;
-    bool reportedSaveError = false;
-
-    bool due(Clock::time_point now) const {
-        return enabled && now >= nextCaptureTime;
-    }
-
-    void scheduleNext(Clock::time_point now) {
-        nextCaptureTime = now + std::chrono::seconds(1);
-    }
-
-    void scheduleRetry(Clock::time_point now) {
-        nextCaptureTime = now + std::chrono::milliseconds(100);
-    }
-
-    void save(const void* rgbData, unsigned int width, unsigned int height, uint64_t frameId) {
-        if (!enabled) return;
-
-        if (writeRgbBmp(outputPath, static_cast<const uint8_t*>(rgbData), width, height)) {
-            ++savedFrames;
-            reportedSaveError = false;
-            (void)frameId;
-        } else if (!reportedSaveError) {
-            std::cerr << "\n[Debug] Failed to save received frame to "
-                      << outputPath.lexically_normal().string() << std::endl;
-            reportedSaveError = true;
-        }
-    }
-};
-
-constexpr uint8_t kMakcuLeftMask = 0x01;
-constexpr uint8_t kMakcuRightMask = 0x02;
-constexpr uint8_t kMakcuMiddleMask = 0x04;
-constexpr uint8_t kMakcuSide1Mask = 0x08;
-constexpr uint8_t kMakcuSide2Mask = 0x10;
-
-inline bool makcuMaskAiming(uint8_t mask) {
-    return (mask & (kMakcuRightMask | kMakcuSide2Mask)) != 0;
-}
-
-inline bool makcuMaskThumbAiming(uint8_t mask) {
-    return (mask & kMakcuSide2Mask) != 0;
-}
-
-inline bool makcuMaskShooting(uint8_t mask) {
-    return (mask & kMakcuLeftMask) != 0;
-}
-
-// Pin the calling thread to a single CPU core. core < 0 is a no-op (leave the
-// thread schedulable on any core).
-void pinThreadToCore(int core) {
-#ifdef __linux__
-    if (core < 0) return;
-    const long cpuCount = sysconf(_SC_NPROCESSORS_ONLN);
-    if (cpuCount <= 1 || core >= cpuCount) return;
-    cpu_set_t cpuset;
-    CPU_ZERO(&cpuset);
-    CPU_SET(core, &cpuset);
-    pthread_setaffinity_np(pthread_self(), sizeof(cpuset), &cpuset);
-#else
-    (void)core;
-#endif
-}
-
-void applyRealtimeHint(const char* threadName, int priorityOffsetFromMax) {
-#ifdef __linux__
-    if (threadName && threadName[0] != '\0') {
-        pthread_setname_np(pthread_self(), threadName);
-    }
-
-    const int maxPriority = sched_get_priority_max(SCHED_FIFO);
-    const int minPriority = sched_get_priority_min(SCHED_FIFO);
-    if (maxPriority < 0 || minPriority < 0) return;
-
-    sched_param param{};
-    param.sched_priority = std::clamp(maxPriority - priorityOffsetFromMax, minPriority, maxPriority);
-    if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &param) != 0) {
-        pthread_setschedparam(pthread_self(), SCHED_RR, &param);
-    }
-#else
-    (void)threadName;
-    (void)priorityOffsetFromMax;
-#endif
-}
-
-struct PerfWindowStats {
-    uint64_t acquireSamples = 0;
-    uint64_t acquireTimeouts = 0;
-    uint64_t invalidFrames = 0;
-    uint64_t submitSamples = 0;
-    int64_t acquireTotalUs = 0;
-    int64_t acquireMaxUs = 0;
-    int64_t submitTotalUs = 0;
-    int64_t submitMaxUs = 0;
-
-    void recordAcquire(int64_t elapsed, bool gotFrame) {
-        ++acquireSamples;
-        acquireTotalUs += elapsed;
-        acquireMaxUs = std::max(acquireMaxUs, elapsed);
-        if (!gotFrame) ++acquireTimeouts;
-    }
-
-    void recordSubmit(int64_t elapsed) {
-        ++submitSamples;
-        submitTotalUs += elapsed;
-        submitMaxUs = std::max(submitMaxUs, elapsed);
-    }
-
-    double averageAcquireMs() const {
-        return acquireSamples == 0 ? 0.0 : static_cast<double>(acquireTotalUs) / acquireSamples / 1000.0;
-    }
-
-    double maxAcquireMs() const {
-        return static_cast<double>(acquireMaxUs) / 1000.0;
-    }
-
-    double averageSubmitUs() const {
-        return submitSamples == 0 ? 0.0 : static_cast<double>(submitTotalUs) / submitSamples;
-    }
-
-    void reset() {
-        *this = PerfWindowStats{};
-    }
-};
-}  // namespace
-
-inline int fastRoundToInt(float value) {
-    return static_cast<int>(value >= 0.0f ? (value + 0.5f) : (value - 0.5f));
-}
 
 void signalHandler(int sig) {
     std::cout << "\n[Simple] Received signal " << sig << ", shutting down..." << std::endl;
@@ -535,57 +83,15 @@ struct Config {
     float headAimPoint = 1.0f;   // Head: aim at bottom (neck area)
     float bodyAimPoint = 0.15f;  // Body: aim near top (chest area)
 
-    // Nonlinear P controller (GPU)
-    float aimKpX = 0.55f;
-    float aimKpY = 0.6f;
-    // Softness can run lower now that One Euro de-noises the input center, so
-    // the near-target damping no longer has to absorb detector jitter.
-    float aimSoftnessX = 11.0f;
-    float aimSoftnessY = 10.0f;
-    // Derivative (damping) gain: brakes overshoot so kp can stay high without
-    // oscillating. Split x/y like kp. 0 = pure P; default enables light damping.
-    float aimKdX = 0.18f;
-    float aimKdY = 0.22f;
-    float thumbAimKpX = 0.6f;
-    float thumbAimKpY = 0.62f;
-    float thumbAimSoftnessX = 11.0f;
-    float thumbAimSoftnessY = 10.0f;
-    float thumbAimKdX = 0.25f;
-    float thumbAimKdY = 0.35f;
+    // Nonlinear P(D) aim controller (gains, coast, One Euro, stickiness) -
+    // see needaimbot/mouse/pd_controller.hpp.
+    pd_controller::Settings pd;
 
-    // IoU stickiness for target tracking
-    float iouStickinessThreshold = 0.3f;
-    // Same-target stickiness fallback: when IoU < threshold, a box whose
-    // center is within (prev_diag * factor) is treated as the same enemy.
-    // 0 = disabled, 0.4-0.6 typical for fast close targets.
-    float distanceStickinessFactor = 0.5f;
-    // Track persistence: after the tracked target stops matching this many
-    // frames the system commits to a new target. During the gap the mouse
-    // is held still (no movement) so the track can re-acquire if the same
-    // enemy is briefly missed. 0 = disabled.
-    int trackPersistenceFrames = 5;
-
-    // Coast: bridge brief detection gaps by gliding from the last movement
-    // (decayed) instead of freezing or shaking. Uses track_persistence_frames
-    // as the gap window.
-    bool coastEnabled = true;
-    float coastDecay = 0.85f;           // per-missed-frame decay of the glide (0..1)
-    // Velocity feedforward: tighter tracking of moving targets (0=off, ~1=cancel
-    // P steady-state lag). Not lead/prediction - no overshoot on direction change.
-    float feedforwardGain = 0.9f;
-
-    // Per-frame max move (output px). Bounds the slew so a large error is crossed
-    // in smooth bounded steps instead of one delayed leap that overshoots/rings -
-    // overshoot the reactive D term cannot prevent. 0 = disabled (unbounded).
-    float aimMaxStep = 30.0f;
-
-    // One Euro adaptive low-pass on the target center (jitter suppression at the
-    // source). Heavy smoothing at rest kills settle-shake; it relaxes as the
-    // target moves so flicks are not lagged. Cutoffs are in cycles/frame.
-    bool oneEuroEnabled = true;
-    float oneEuroMinCutoff = 0.1f;  // base cutoff at rest (lower = smoother/more lag)
-    float oneEuroBeta = 0.02f;      // speed coefficient (higher = less lag when fast)
-    float oneEuroDCutoff = 0.5f;    // derivative cutoff for the speed estimate
+    // Humanized acquisition-flick trajectory, played back in place of
+    // pd_controller's own output for the first stretch of a freshly locked
+    // target - see needaimbot/mouse/motor_synergy.hpp.
+    bool flickEnabled = true;
+    motor_synergy::config flick;
 
     // No-recoil
     bool noRecoilEnabled = true;
@@ -598,16 +104,6 @@ struct Config {
     int maxInFlightFrames = 1;    // Keep latency low by avoiding stale queued frames
     int frameCreditDepth = 2;     // Allow the Game PC to pre-send the newest next frame
     bool directAimMoveInCallback = true;
-
-    // WindMouse humanized movement (replaces the old gaussian noise).
-    // Closed-loop adaptation: the GPU-computed step toward the target acts as
-    // gravity; wind adds organic curvature that fades as the aim settles.
-    bool windMouseEnabled = false;
-    float windMouseGravity = 0.6f;      // fraction of the GPU step applied as pull (lower = smoother/slower)
-    float windMouseWind = 3.0f;         // random wind magnitude (px) -> path curvature
-    float windMouseInertia = 0.45f;     // velocity retention 0..0.9 (higher = more curve/overshoot)
-    float windMouseMaxStep = 30.0f;     // per-frame movement clamp (px)
-    float windMouseWindFalloff = 40.0f; // distance (px) under which wind fades so the aim settles
 
     // Makcu settings
     int makcuBaudrate = 4000000;
@@ -635,59 +131,6 @@ struct Config {
     std::vector<std::pair<int, int>> preCaptureShapes;
     bool stageTimingEnabled = false;  // Per-stage CUDA event timings (opt-in)
 
-    // Convert to GPU movement config
-    static gpa::AimConfig makeGpuAimConfig(
-        float kpX, float kpY, float softnessX, float softnessY,
-        float kdX, float kdY,
-        float distanceStickinessFactor, int trackPersistenceFrames) {
-        gpa::AimConfig aim;
-        aim.kp_x = kpX;
-        aim.kp_y = kpY;
-        aim.p_softness_x = softnessX;
-        aim.p_softness_y = softnessY;
-        aim.kd_x = kdX;
-        aim.kd_y = kdY;
-        aim.distance_stickiness_factor = distanceStickinessFactor;
-        aim.track_persistence_frames = trackPersistenceFrames;
-        return aim;
-    }
-
-    // Populate the runtime coast fields shared by both aim profiles.
-    void applyCoast(gpa::AimConfig& aim) const {
-        aim.coast_enabled = coastEnabled ? 1.0f : 0.0f;
-        aim.coast_decay = coastDecay;
-        aim.feedforward_gain = feedforwardGain;
-    }
-
-    // Populate the One Euro filter fields shared by both aim profiles.
-    void applyOneEuro(gpa::AimConfig& aim) const {
-        aim.oneeuro_enabled = oneEuroEnabled ? 1.0f : 0.0f;
-        aim.oneeuro_min_cutoff = oneEuroMinCutoff;
-        aim.oneeuro_beta = oneEuroBeta;
-        aim.oneeuro_dcutoff = oneEuroDCutoff;
-    }
-
-    gpa::AimConfig toGpuAimConfig() const {
-        gpa::AimConfig aim = makeGpuAimConfig(aimKpX, aimKpY, aimSoftnessX, aimSoftnessY,
-                                              aimKdX, aimKdY,
-                                              distanceStickinessFactor, trackPersistenceFrames);
-        applyCoast(aim);
-        applyOneEuro(aim);
-        aim.max_step = aimMaxStep;
-        return aim;
-    }
-
-    gpa::AimConfig toThumbGpuAimConfig() const {
-        gpa::AimConfig aim = makeGpuAimConfig(
-            thumbAimKpX, thumbAimKpY, thumbAimSoftnessX, thumbAimSoftnessY,
-            thumbAimKdX, thumbAimKdY,
-            distanceStickinessFactor, trackPersistenceFrames);
-        applyCoast(aim);
-        applyOneEuro(aim);
-        aim.max_step = aimMaxStep;
-        return aim;
-    }
-
     bool load(const std::string& path) {
         std::ifstream f(path);
         if (!f) return false;
@@ -707,43 +150,10 @@ struct Config {
             if (j.contains("head_aim_point")) headAimPoint = j["head_aim_point"];
             if (j.contains("body_aim_point")) bodyAimPoint = j["body_aim_point"];
 
-            if (j.contains("aim_kp_x")) aimKpX = j["aim_kp_x"];
-            if (j.contains("aim_kp_y")) aimKpY = j["aim_kp_y"];
-            if (j.contains("aim_softness_x")) aimSoftnessX = j["aim_softness_x"];
-            if (j.contains("aim_softness_y")) aimSoftnessY = j["aim_softness_y"];
-            if (j.contains("aim_kd_x")) aimKdX = j["aim_kd_x"];
-            if (j.contains("aim_kd_y")) aimKdY = j["aim_kd_y"];
-            if (j.contains("thumb_aim_kp_x")) thumbAimKpX = j["thumb_aim_kp_x"];
-            if (j.contains("thumb_aim_kp_y")) thumbAimKpY = j["thumb_aim_kp_y"];
-            thumbAimSoftnessX = j.contains("thumb_aim_softness_x")
-                                    ? j["thumb_aim_softness_x"].get<float>()
-                                    : aimSoftnessX;
-            thumbAimSoftnessY = j.contains("thumb_aim_softness_y")
-                                    ? j["thumb_aim_softness_y"].get<float>()
-                                    : aimSoftnessY;
-            thumbAimKdX = j.contains("thumb_aim_kd_x")
-                              ? j["thumb_aim_kd_x"].get<float>()
-                              : aimKdX;
-            thumbAimKdY = j.contains("thumb_aim_kd_y")
-                              ? j["thumb_aim_kd_y"].get<float>()
-                              : aimKdY;
+            pd.load(j);
 
-            if (j.contains("iou_stickiness_threshold")) iouStickinessThreshold = j["iou_stickiness_threshold"];
-            if (j.contains("distance_stickiness_factor")) distanceStickinessFactor = j["distance_stickiness_factor"];
-            if (j.contains("track_persistence_frames")) {
-                int v = j["track_persistence_frames"];
-                trackPersistenceFrames = std::clamp(v, 0, 60);
-            }
-
-            if (j.contains("coast_enabled")) coastEnabled = j["coast_enabled"];
-            if (j.contains("coast_decay")) coastDecay = j["coast_decay"];
-            if (j.contains("feedforward_gain")) feedforwardGain = j["feedforward_gain"];
-            if (j.contains("aim_max_step")) aimMaxStep = j["aim_max_step"];
-
-            if (j.contains("oneeuro_enabled")) oneEuroEnabled = j["oneeuro_enabled"];
-            if (j.contains("oneeuro_min_cutoff")) oneEuroMinCutoff = j["oneeuro_min_cutoff"];
-            if (j.contains("oneeuro_beta")) oneEuroBeta = j["oneeuro_beta"];
-            if (j.contains("oneeuro_dcutoff")) oneEuroDCutoff = j["oneeuro_dcutoff"];
+            if (j.contains("flick_enabled")) flickEnabled = j["flick_enabled"];
+            flick.load(j);
 
             if (j.contains("no_recoil_enabled")) noRecoilEnabled = j["no_recoil_enabled"];
             if (j.contains("recoil_comp_x")) recoilCompX = j["recoil_comp_x"];
@@ -755,13 +165,6 @@ struct Config {
             if (j.contains("frame_credit_depth")) frameCreditDepth = j["frame_credit_depth"];
             if (j.contains("direct_aim_move_in_callback")) directAimMoveInCallback = j["direct_aim_move_in_callback"];
             if (j.contains("makcu_baudrate")) makcuBaudrate = j["makcu_baudrate"];
-
-            if (j.contains("windmouse_enabled")) windMouseEnabled = j["windmouse_enabled"];
-            if (j.contains("windmouse_gravity")) windMouseGravity = j["windmouse_gravity"];
-            if (j.contains("windmouse_wind")) windMouseWind = j["windmouse_wind"];
-            if (j.contains("windmouse_inertia")) windMouseInertia = j["windmouse_inertia"];
-            if (j.contains("windmouse_max_step")) windMouseMaxStep = j["windmouse_max_step"];
-            if (j.contains("windmouse_wind_falloff")) windMouseWindFalloff = j["windmouse_wind_falloff"];
 
             if (j.contains("perf_stats_enabled")) perfStatsEnabled = j["perf_stats_enabled"];
             if (j.contains("perf_stats_interval_ms")) perfStatsIntervalMs = j["perf_stats_interval_ms"];
@@ -834,32 +237,10 @@ struct Config {
             j["head_aim_point"] = headAimPoint;
             j["body_aim_point"] = bodyAimPoint;
 
-            j["aim_kp_x"] = aimKpX;
-            j["aim_kp_y"] = aimKpY;
-            j["aim_softness_x"] = aimSoftnessX;
-            j["aim_softness_y"] = aimSoftnessY;
-            j["aim_kd_x"] = aimKdX;
-            j["aim_kd_y"] = aimKdY;
-            j["thumb_aim_kp_x"] = thumbAimKpX;
-            j["thumb_aim_kp_y"] = thumbAimKpY;
-            j["thumb_aim_softness_x"] = thumbAimSoftnessX;
-            j["thumb_aim_softness_y"] = thumbAimSoftnessY;
-            j["thumb_aim_kd_x"] = thumbAimKdX;
-            j["thumb_aim_kd_y"] = thumbAimKdY;
+            pd.save(j);
 
-            j["iou_stickiness_threshold"] = iouStickinessThreshold;
-            j["distance_stickiness_factor"] = distanceStickinessFactor;
-            j["track_persistence_frames"] = trackPersistenceFrames;
-            j["coast_enabled"] = coastEnabled;
-            j["coast_decay"] = coastDecay;
-            j["feedforward_gain"] = feedforwardGain;
-            j["aim_max_step"] = aimMaxStep;
-
-            j["_section_oneeuro"] = "===== One Euro center filter (jitter suppression) =====";
-            j["oneeuro_enabled"] = oneEuroEnabled;
-            j["oneeuro_min_cutoff"] = oneEuroMinCutoff;
-            j["oneeuro_beta"] = oneEuroBeta;
-            j["oneeuro_dcutoff"] = oneEuroDCutoff;
+            j["flick_enabled"] = flickEnabled;
+            flick.save(j);
 
             j["no_recoil_enabled"] = noRecoilEnabled;
             j["recoil_comp_x"] = recoilCompX;
@@ -871,13 +252,6 @@ struct Config {
             j["frame_credit_depth"] = frameCreditDepth;
             j["direct_aim_move_in_callback"] = directAimMoveInCallback;
             j["makcu_baudrate"] = makcuBaudrate;
-
-            j["windmouse_enabled"] = windMouseEnabled;
-            j["windmouse_gravity"] = windMouseGravity;
-            j["windmouse_wind"] = windMouseWind;
-            j["windmouse_inertia"] = windMouseInertia;
-            j["windmouse_max_step"] = windMouseMaxStep;
-            j["windmouse_wind_falloff"] = windMouseWindFalloff;
 
             j["perf_stats_enabled"] = perfStatsEnabled;
             j["perf_stats_interval_ms"] = perfStatsIntervalMs;
@@ -933,26 +307,9 @@ struct Config {
         std::cout << "[Config] Makcu: " << makcuPort << std::endl;
         std::cout << "[Config] UDP port: " << udpPort << std::endl;
         std::cout << "[Config] Confidence: " << confThreshold << std::endl;
-        std::cout << "[Config] Right-click P: Kp(" << aimKpX << "," << aimKpY
-                  << ") Softness(" << aimSoftnessX << "," << aimSoftnessY
-                  << ") Kd(" << aimKdX << "," << aimKdY << ")" << std::endl;
-        std::cout << "[Config] Thumb P: Kp(" << thumbAimKpX << "," << thumbAimKpY
-                  << ") Softness(" << thumbAimSoftnessX << "," << thumbAimSoftnessY
-                  << ") Kd(" << thumbAimKdX << "," << thumbAimKdY << ")" << std::endl;
-        std::cout << "[Config] IoU stickiness: " << iouStickinessThreshold << std::endl;
-        std::cout << "[Config] Distance stickiness factor: " << distanceStickinessFactor
-                  << (distanceStickinessFactor > 0.0f ? " (ON)" : " (OFF)") << std::endl;
-        std::cout << "[Config] Coast (gap glide): " << (coastEnabled ? "ON" : "OFF")
-                  << " (decay=" << coastDecay << ", window=" << trackPersistenceFrames << " frames)" << std::endl;
-        std::cout << "[Config] Velocity feedforward: " << feedforwardGain << std::endl;
-        std::cout << "[Config] Aim max step: " << aimMaxStep
-                  << (aimMaxStep > 0.0f ? " px/frame" : " (disabled)") << std::endl;
-        std::cout << "[Config] One Euro center filter: " << (oneEuroEnabled ? "ON" : "OFF")
-                  << " (min_cutoff=" << oneEuroMinCutoff << ", beta=" << oneEuroBeta
-                  << ", dcutoff=" << oneEuroDCutoff << ")" << std::endl;
-        std::cout << "[Config] Track persistence: " << trackPersistenceFrames
-                  << " frame(s)"
-                  << (trackPersistenceFrames > 0 ? " (ON)" : " (OFF)") << std::endl;
+        pd.print();
+        std::cout << "[Config] Acquisition flick: " << (flickEnabled ? "ON" : "OFF") << std::endl;
+        if (flickEnabled) flick.print();
         std::cout << "[Config] Max detections: " << maxDetections << std::endl;
         std::cout << "[Config] No-recoil: " << (noRecoilEnabled ? "ON" : "OFF")
                   << " (Y=" << recoilCompY << ", tick=" << recoilTickMs << "ms)" << std::endl;
@@ -985,10 +342,6 @@ struct Config {
             }
         }
         std::cout << std::endl;
-        std::cout << "[Config] WindMouse: " << (windMouseEnabled ? "ON" : "OFF")
-                  << " (gravity=" << windMouseGravity << ", wind=" << windMouseWind
-                  << ", inertia=" << windMouseInertia << ", maxStep=" << windMouseMaxStep << ")" << std::endl;
-
         // Print allowed classes
         std::cout << "[Config] Allowed classes: ";
         bool first = true;
@@ -1014,199 +367,42 @@ struct Config {
 };
 
 // =============================================================================
-// GPU Callback Context and Handler
+// GPU Callback Handler
 // =============================================================================
 // This callback runs from the completion worker when GPU inference finishes.
-// It can either send aim movement directly or queue it to the sender thread.
+// It only decides *whether* to move (aiming active + target present) and then
+// hands the raw (dx, dy) off to the controller, which owns everything about
+// *how* the move actually reaches the mouse (see needaimbot/mouse/controller.h).
 //
 // OPTIMIZATION: Cached config values eliminate pointer indirection in hot path.
 // All frequently accessed values are copied to the context struct at init time.
 
 struct CallbackContext {
-    static constexpr size_t kWindLutSize = 1024;  // Must stay power-of-two.
-    static_assert((kWindLutSize & (kWindLutSize - 1)) == 0, "Wind LUT size must be power-of-two");
-
-    // Hardware reference (only thing we can't cache)
+    // Hardware/collaborator references (only things we can't cache)
     MakcuConnection* makcu;
     UDPCapture* udpCapture;
-    struct MoveQueue* moveQueue = nullptr;
-    std::condition_variable* moveQueueCv = nullptr;
-    std::atomic<uint64_t>* moveQueueDropped = nullptr;
+    controller::MouseController* controller = nullptr;
     std::condition_variable* pipelineCv = nullptr;
     std::mutex* pipelineCvMutex = nullptr;
 
     // Cached config values (lock-free, no pointer chasing)
     bool forceAimOn = false;
     bool perfStatsEnabled = false;
-    bool directAimMoveInCallback = false;
 
-    // --- WindMouse humanized movement (closed-loop) ---
-    bool windMouseEnabled = false;
-    float wmGravity = 0.6f;
-    float wmWind = 3.0f;
-    float wmInertia = 0.45f;
-    float wmMaxStep = 30.0f;
-    float wmWindFalloff = 40.0f;
-    // Persistent motion state (single consumer thread: callback or sender).
-    float wmVelX = 0.0f, wmVelY = 0.0f;     // mouse velocity (inertia carrier)
-    float wmWindX = 0.0f, wmWindY = 0.0f;   // current wind force
-    float wmResidualX = 0.0f, wmResidualY = 0.0f;  // sub-pixel carry
-    // Precomputed unit-gaussian LUT for wind (lock-free, no RNG in hot path).
-    std::array<float, kWindLutSize> windLut{};
-    size_t windCursor = 0;
-
-    float nextWind() {
-        const float v = windLut[windCursor];
-        windCursor = (windCursor + 1) & (kWindLutSize - 1);
-        return v;
-    }
-
-    // Reset motion state when the aim drops (no target / not aiming) so a
-    // re-acquisition does not inherit stale velocity/wind.
-    void resetWindMouse() {
-        wmVelX = wmVelY = 0.0f;
-        wmWindX = wmWindY = 0.0f;
-        wmResidualX = wmResidualY = 0.0f;
-    }
+    // Acquisition-flick playback (motor_synergy) - started on freshAcquire,
+    // sampled instead of the PD movement until it finishes. Callback-thread
+    // only (see needaimbot/mouse/motor_synergy.hpp), so a single instance per
+    // context is fine.
+    bool flickEnabled = true;
+    motor_synergy::config flickConfig;
+    motor_synergy::FlickPlayback flickPlayback;
 
     // Initialize cached values from config
     void initFromConfig(const Config& cfg) {
         forceAimOn = cfg.forceAimOn;
         perfStatsEnabled = cfg.perfStatsEnabled;
-        directAimMoveInCallback = cfg.directAimMoveInCallback && cfg.mouseMinIntervalMs <= 0;
-
-        windMouseEnabled = cfg.windMouseEnabled;
-        wmGravity = cfg.windMouseGravity;
-        wmWind = cfg.windMouseWind;
-        wmInertia = std::clamp(cfg.windMouseInertia, 0.0f, 0.95f);
-        wmMaxStep = std::max(1.0f, cfg.windMouseMaxStep);
-        wmWindFalloff = std::max(1.0f, cfg.windMouseWindFalloff);
-        resetWindMouse();
-
-        std::mt19937 gen(std::random_device{}());
-        std::normal_distribution<float> dist(0.0f, 1.0f);
-        for (size_t i = 0; i < kWindLutSize; ++i) {
-            windLut[i] = dist(gen);
-        }
-    }
-
-    void processAimMovement(int rawDx, int rawDy, int& outDx, int& outDy) {
-        float moveX = static_cast<float>(rawDx);
-        float moveY = static_cast<float>(rawDy);
-
-        if (windMouseEnabled) {
-            // The GPU step (rawDx, rawDy) points toward the (predicted) target
-            // and acts as gravity. Wind injects organic curvature that fades as
-            // the aim closes in; velocity inertia turns it into a smooth curve.
-            const float dist = std::sqrt(moveX * moveX + moveY * moveY);
-            if (dist < 0.5f) {
-                // Effectively on target: bleed off momentum so it settles.
-                wmVelX *= 0.5f; wmVelY *= 0.5f;
-                wmWindX *= 0.5f; wmWindY *= 0.5f;
-            } else {
-                const float windScale = wmWind * std::min(1.0f, dist / wmWindFalloff);
-                wmWindX = wmWindX * 0.5f + nextWind() * windScale;
-                wmWindY = wmWindY * 0.5f + nextWind() * windScale;
-                wmVelX = wmVelX * wmInertia + moveX * wmGravity + wmWindX;
-                wmVelY = wmVelY * wmInertia + moveY * wmGravity + wmWindY;
-                // Clamp speed to max step.
-                const float speed = std::sqrt(wmVelX * wmVelX + wmVelY * wmVelY);
-                if (speed > wmMaxStep) {
-                    const float s = wmMaxStep / speed;
-                    wmVelX *= s; wmVelY *= s;
-                }
-            }
-            moveX = wmVelX + wmResidualX;
-            moveY = wmVelY + wmResidualY;
-        }
-
-        outDx = fastRoundToInt(moveX);
-        outDy = fastRoundToInt(moveY);
-
-        if (windMouseEnabled) {
-            // Carry the sub-pixel remainder so slow drifts are not lost.
-            wmResidualX = moveX - static_cast<float>(outDx);
-            wmResidualY = moveY - static_cast<float>(outDy);
-        }
-    }
-};
-
-struct MoveCommand {
-    enum class Kind : uint8_t {
-        AimRaw = 0,
-        Direct = 1
-    };
-    Kind kind = Kind::Direct;
-    int dx = 0;
-    int dy = 0;
-};
-
-struct MoveQueueSlot {
-    std::atomic<uint64_t> sequence{0};
-    MoveCommand command{};
-};
-
-struct MoveQueue {
-    static constexpr uint32_t kCapacity = 4096;  // Must stay power-of-two.
-    static_assert((kCapacity & (kCapacity - 1)) == 0, "MoveQueue capacity must be power-of-two");
-
-    std::array<MoveQueueSlot, kCapacity> ring{};
-    std::atomic<uint64_t> enqueuePos{0};
-    std::atomic<uint64_t> dequeuePos{0};
-
-    MoveQueue() {
-        for (uint64_t i = 0; i < kCapacity; ++i) {
-            ring[static_cast<size_t>(i)].sequence.store(i, std::memory_order_relaxed);
-        }
-    }
-
-    bool tryPush(const MoveCommand& cmd) {
-        uint64_t pos = enqueuePos.load(std::memory_order_relaxed);
-        for (;;) {
-            MoveQueueSlot& slot = ring[static_cast<size_t>(pos & (kCapacity - 1))];
-            const uint64_t seq = slot.sequence.load(std::memory_order_acquire);
-            const int64_t diff = static_cast<int64_t>(seq) - static_cast<int64_t>(pos);
-
-            if (diff == 0) {
-                if (enqueuePos.compare_exchange_weak(
-                        pos, pos + 1, std::memory_order_relaxed, std::memory_order_relaxed)) {
-                    slot.command = cmd;
-                    slot.sequence.store(pos + 1, std::memory_order_release);
-                    return true;
-                }
-            } else if (diff < 0) {
-                return false;  // Queue full
-            } else {
-                pos = enqueuePos.load(std::memory_order_relaxed);
-            }
-        }
-    }
-
-    bool tryPop(MoveCommand& out) {
-        uint64_t pos = dequeuePos.load(std::memory_order_relaxed);
-        for (;;) {
-            MoveQueueSlot& slot = ring[static_cast<size_t>(pos & (kCapacity - 1))];
-            const uint64_t seq = slot.sequence.load(std::memory_order_acquire);
-            const int64_t diff = static_cast<int64_t>(seq) - static_cast<int64_t>(pos + 1);
-
-            if (diff == 0) {
-                if (dequeuePos.compare_exchange_weak(
-                        pos, pos + 1, std::memory_order_relaxed, std::memory_order_relaxed)) {
-                    out = slot.command;
-                    slot.sequence.store(pos + kCapacity, std::memory_order_release);
-                    return true;
-                }
-            } else if (diff < 0) {
-                return false;  // Queue empty
-            } else {
-                pos = dequeuePos.load(std::memory_order_relaxed);
-            }
-        }
-    }
-
-    bool hasPending() const {
-        return dequeuePos.load(std::memory_order_acquire) !=
-               enqueuePos.load(std::memory_order_acquire);
+        flickEnabled = cfg.flickEnabled;
+        flickConfig = cfg.flick;
     }
 };
 
@@ -1258,40 +454,53 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
     g_frameCount.fetch_add(1, std::memory_order_relaxed);
 
     const uint8_t callbackButtonMask = ctx->makcu->buttonMask();
-    const bool aimingActive = ctx->forceAimOn || makcuMaskAiming(callbackButtonMask);
+    const bool aimingActive = ctx->forceAimOn || controller::maskAiming(callbackButtonMask);
     if (!aimingActive) {
-        ctx->resetWindMouse();
+        // Aim released mid-flick: cancel rather than leave it active. GPU-side
+        // tracking (has_track) keeps running while aiming is off, so the same
+        // track can still be live with no fresh acquire when aiming resumes -
+        // left active, sample() would see a huge stale elapsed time and fire
+        // one giant catch-up jump to the flick's endpoint.
+        ctx->flickPlayback.cancel();
         releaseTicket();
         return;
     }
 
     if (!result.hasTarget) {
-        ctx->resetWindMouse();
+        // Same reasoning as above: target lost (not just coasted) mid-flick.
+        ctx->flickPlayback.cancel();
         releaseTicket();
         return;
     }
-    
-    if (ctx->directAimMoveInCallback) {
-        int emitDx = 0;
-        int emitDy = 0;
-        ctx->processAimMovement(result.movement.dx, result.movement.dy, emitDx, emitDy);
-        if (emitDx != 0 || emitDy != 0) {
-            ctx->makcu->move(emitDx, emitDy);
-        }
-    } else if (ctx->moveQueue) {
-        MoveCommand cmd;
-        cmd.kind = MoveCommand::Kind::AimRaw;
-        cmd.dx = result.movement.dx;
-        cmd.dy = result.movement.dy;
-        const bool pushed = ctx->moveQueue->tryPush(cmd);
-        if (pushed && ctx->moveQueueCv) {
-            ctx->moveQueueCv->notify_one();
-        } else if (!pushed && ctx->moveQueueDropped) {
-            ctx->moveQueueDropped->fetch_add(1, std::memory_order_relaxed);
-        }
-    } else {
-        ctx->makcu->move(result.movement.dx, result.movement.dy);
+
+    // A fresh lock starts (and immediately takes over from) a humanized
+    // acquisition flick; a continued/coasted track never (re)starts one.
+    if (ctx->flickEnabled && result.freshAcquire) {
+        // Use the actually-acquired target's own size (Fitts' law "W") rather
+        // than a fixed config guess, so a small target gets a longer, more-
+        // corrected flick and a large one a quicker, more direct one - same
+        // as a human. Averaged width/height since the flick doesn't reason
+        // about movement-axis-relative target extent.
+        const double detectedTargetWidth =
+            0.5 * ((result.targetX2 - result.targetX1) + (result.targetY2 - result.targetY1));
+        ctx->flickPlayback.start(result.errorX, result.errorY,
+                                  result.movementScaleX, result.movementScaleY,
+                                  detectedTargetWidth,
+                                  ctx->flickConfig);
     }
+
+    int moveDx = result.movement.dx;
+    int moveDy = result.movement.dy;
+    if (ctx->flickPlayback.active()) {
+        if (auto delta = ctx->flickPlayback.sample(Clock::now())) {
+            moveDx = delta->dx;
+            moveDy = delta->dy;
+        }
+    }
+
+    // Inference is done - hand the result off to the controller, which
+    // decides how to turn it into physical mouse motion.
+    ctx->controller->submitAimMovement(moveDx, moveDy);
 
     releaseTicket();
 }
@@ -1312,18 +521,18 @@ int main(int argc, char* argv[]) {
 
     // Load config
     Config cfg;
-    const std::filesystem::path exePath = currentExecutablePath(argv[0]);
+    const std::filesystem::path exePath = engine_locator::currentExecutablePath(argv[0]);
     const std::filesystem::path exeDir =
         exePath.has_parent_path() ? exePath.parent_path() : std::filesystem::current_path();
-    const auto repoRoot = findRepoRoot(exeDir);
+    const auto repoRoot = engine_locator::findRepoRoot(exeDir);
     std::filesystem::path configPath;
     if (runtimeOptions.hasConfigPath) {
         configPath = runtimeOptions.configPath;
     } else {
-        configPath = chooseConfigPath(exeDir);
+        configPath = engine_locator::chooseConfigPath(exeDir);
     }
 
-    configPath = safeAbsolute(configPath);
+    configPath = engine_locator::safeAbsolute(configPath);
     const std::string configPathStr = configPath.lexically_normal().string();
     bool configDirty = false;
 
@@ -1348,11 +557,11 @@ int main(int argc, char* argv[]) {
                       << std::hex << std::uppercase << std::setw(2) << std::setfill('0')
                       << static_cast<int>(mask)
                       << std::dec << std::nouppercase << std::setfill(' ')
-                      << " L:" << ((mask & kMakcuLeftMask) ? "ON " : "OFF")
-                      << " R:" << ((mask & kMakcuRightMask) ? "ON " : "OFF")
-                      << " M:" << ((mask & kMakcuMiddleMask) ? "ON " : "OFF")
-                      << " S1:" << ((mask & kMakcuSide1Mask) ? "ON " : "OFF")
-                      << " S2:" << ((mask & kMakcuSide2Mask) ? "ON " : "OFF")
+                      << " L:" << ((mask & controller::kMakcuLeftMask) ? "ON " : "OFF")
+                      << " R:" << ((mask & controller::kMakcuRightMask) ? "ON " : "OFF")
+                      << " M:" << ((mask & controller::kMakcuMiddleMask) ? "ON " : "OFF")
+                      << " S1:" << ((mask & controller::kMakcuSide1Mask) ? "ON " : "OFF")
+                      << " S2:" << ((mask & controller::kMakcuSide2Mask) ? "ON " : "OFF")
                       << "    " << std::flush;
         };
 
@@ -1424,7 +633,7 @@ int main(int argc, char* argv[]) {
     }
 
     const std::string requestedEnginePath = cfg.enginePath;
-    auto resolvedEnginePath = resolveEnginePath(cfg.enginePath, configPath, exeDir, repoRoot);
+    auto resolvedEnginePath = engine_locator::resolveEnginePath(cfg.enginePath, configPath, exeDir, repoRoot);
     if (!resolvedEnginePath) {
         std::cerr << "[Config] Engine not found: " << requestedEnginePath << std::endl;
         std::cerr << "[Config] Place a .engine file under the repo root, inference_pc/, or set engine_path in "
@@ -1457,7 +666,7 @@ int main(int argc, char* argv[]) {
             debugDir = configPath.parent_path() / "debug";
         }
         debugFrameDumper.enabled = true;
-        debugFrameDumper.outputPath = safeAbsolute(debugDir / "received_frame.bmp").lexically_normal();
+        debugFrameDumper.outputPath = engine_locator::safeAbsolute(debugDir / "received_frame.bmp").lexically_normal();
         debugFrameDumper.nextCaptureTime = Clock::now();
         std::cout << "[Debug] Frame dump: ON -> "
                   << debugFrameDumper.outputPath.string()
@@ -1507,25 +716,42 @@ int main(int argc, char* argv[]) {
     // receive thread can observe a completed frame.
 
     // 4. State - all GPU now, minimal CPU state
-    const gpa::AimConfig rightGpuAimConfig = cfg.toGpuAimConfig();
-    const gpa::AimConfig thumbGpuAimConfig = cfg.toThumbGpuAimConfig();
+    const gpa::AimConfig rightGpuAimConfig = cfg.pd.rightGpuConfig();
+    const gpa::AimConfig thumbGpuAimConfig = cfg.pd.thumbGpuConfig();
     auto selectGpuAimConfig = [&](uint8_t buttonMask) -> const gpa::AimConfig& {
-        return makcuMaskThumbAiming(buttonMask) ? thumbGpuAimConfig : rightGpuAimConfig;
+        return controller::maskThumbAiming(buttonMask) ? thumbGpuAimConfig : rightGpuAimConfig;
     };
     const uint32_t allowedClassMask = cfg.getAllowedClassMask();
+
+    // Movement controller: owns the move queue, sender thread, and no-recoil
+    // ticking. main only ever hands it inference results / button state.
+    controller::MouseController movementController;
+    controller::Settings controllerSettings;
+    controllerSettings.forceAimOn = cfg.forceAimOn;
+    controllerSettings.directAimMoveInCallback =
+        cfg.directAimMoveInCallback && cfg.mouseMinIntervalMs <= 0;
+    controllerSettings.mouseMinIntervalMs = cfg.mouseMinIntervalMs;
+    controllerSettings.noRecoilEnabled = cfg.noRecoilEnabled;
+    controllerSettings.recoilCompX = cfg.recoilCompX;
+    controllerSettings.recoilCompY = cfg.recoilCompY;
+    controllerSettings.recoilTickMs = cfg.recoilTickMs;
+    movementController.configure(makcu, controllerSettings);
+    movementController.start([&]() {
+        if (cfg.realtimeThreadsEnabled) {
+            applyRealtimeHint("move-sender", 2);
+        }
+        if (cfg.cpuAffinityEnabled) {
+            pinThreadToCore(cfg.affinityCoreSender);
+        }
+    });
 
     // Setup callback context with cached config values
     CallbackContext callbackCtx;
     callbackCtx.makcu = &makcu;
     callbackCtx.udpCapture = &udpCapture;
-    MoveQueue moveQueue;
-    std::condition_variable moveQueueCv;
-    std::mutex moveQueueCvMutex;
+    callbackCtx.controller = &movementController;
     std::condition_variable pipelineCv;
     std::mutex pipelineCvMutex;
-    callbackCtx.moveQueue = &moveQueue;
-    callbackCtx.moveQueueCv = &moveQueueCv;
-    callbackCtx.moveQueueDropped = &g_moveQueueDropped;
     callbackCtx.pipelineCv = &pipelineCv;
     callbackCtx.pipelineCvMutex = &pipelineCvMutex;
     callbackCtx.initFromConfig(cfg);  // Cache config values (lock-free)
@@ -1559,121 +785,17 @@ int main(int argc, char* argv[]) {
         }
         return busyCount;
     };
-    const int senderMinIntervalMs = std::max(0, cfg.mouseMinIntervalMs);
     const int maxPipelineInFlight = std::clamp(cfg.maxInFlightFrames, 1, 4);
     const uint32_t frameCreditDepth = static_cast<uint32_t>(std::clamp(cfg.frameCreditDepth, 1, 4));
     const int perfStatsIntervalMs = std::clamp(cfg.perfStatsIntervalMs, 250, 10000);
     const int idleGraphPrecaptureIntervalMs = std::clamp(cfg.idleGraphPrecaptureIntervalMs, 20, 1000);
 
     auto lastStatTime = std::chrono::steady_clock::now();
-    auto lastRecoilTime = std::chrono::steady_clock::now();
-    // Sub-pixel carry for recoil compensation: queueMove only takes ints, so a
-    // fractional comp (e.g. 1.3) would otherwise truncate to 1 and silently drop
-    // the remainder every tick. Carry it so the emitted average equals the
-    // configured value. Shared by both recoil emit sites (frame vs no-frame) and
-    // zeroed at the loop top whenever a firing burst is not active (see guard).
-    float recoilResidualX = 0.0f;
-    float recoilResidualY = 0.0f;
-    std::atomic<bool> moveSenderRunning{true};
-    std::thread moveSenderThread([&]() {
-        if (cfg.realtimeThreadsEnabled) {
-            applyRealtimeHint("move-sender", 2);
-        }
-        if (cfg.cpuAffinityEnabled) {
-            pinThreadToCore(cfg.affinityCoreSender);
-        }
-
-        MoveCommand cmd;
-        // Accumulator may exceed the per-send MAKCU range (+-127); the excess
-        // is carried into the next flush instead of being clamped away. Cap
-        // the raw accumulator to a few frames' worth so a runaway producer
-        // can't pile up unbounded.
-        constexpr int kPendingAccumCap = 512;
-        int pendingDx = 0;
-        int pendingDy = 0;
-        auto nextSendTime = std::chrono::steady_clock::now();
-
-        auto hasPendingMove = [&]() { return pendingDx != 0 || pendingDy != 0; };
-        auto flushMove = [&](std::chrono::steady_clock::time_point now) -> bool {
-            if (!hasPendingMove()) return false;
-            if (senderMinIntervalMs > 0 && now < nextSendTime) return false;
-            const int sendDx = std::clamp(pendingDx, -127, 127);
-            const int sendDy = std::clamp(pendingDy, -127, 127);
-            makcu.move(sendDx, sendDy);
-            // Carry any overflow into the next flush instead of dropping it.
-            pendingDx = std::clamp(pendingDx - sendDx, -kPendingAccumCap, kPendingAccumCap);
-            pendingDy = std::clamp(pendingDy - sendDy, -kPendingAccumCap, kPendingAccumCap);
-            if (senderMinIntervalMs > 0) {
-                nextSendTime = now + std::chrono::milliseconds(senderMinIntervalMs);
-            }
-            return true;
-        };
-        while (moveSenderRunning.load(std::memory_order_relaxed) || moveQueue.hasPending() || hasPendingMove()) {
-            while (moveQueue.tryPop(cmd)) {
-                int emitDx = cmd.dx;
-                int emitDy = cmd.dy;
-                if (cmd.kind == MoveCommand::Kind::AimRaw) {
-                    callbackCtx.processAimMovement(cmd.dx, cmd.dy, emitDx, emitDy);
-                }
-                if (emitDx != 0 || emitDy != 0) {
-                    pendingDx = std::clamp(pendingDx + emitDx,
-                                           -kPendingAccumCap, kPendingAccumCap);
-                    pendingDy = std::clamp(pendingDy + emitDy,
-                                           -kPendingAccumCap, kPendingAccumCap);
-                }
-            }
-
-            const auto now = std::chrono::steady_clock::now();
-            if (flushMove(now)) {
-                continue;
-            }
-
-            if (moveSenderRunning.load(std::memory_order_relaxed) || moveQueue.hasPending() || hasPendingMove()) {
-                std::unique_lock<std::mutex> lock(moveQueueCvMutex);
-                if (hasPendingMove() && senderMinIntervalMs > 0 && now < nextSendTime) {
-                    moveQueueCv.wait_until(lock, nextSendTime, [&]() {
-                        return !moveSenderRunning.load(std::memory_order_relaxed) || moveQueue.hasPending();
-                    });
-                } else {
-                    moveQueueCv.wait(lock, [&]() {
-                        return !moveSenderRunning.load(std::memory_order_relaxed) || moveQueue.hasPending();
-                    });
-                }
-            } else {
-                break;
-            }
-        }
-    });
-    auto queueMove = [&](int dx, int dy) {
-        if (dx == 0 && dy == 0) return;
-        MoveCommand cmd;
-        cmd.kind = MoveCommand::Kind::Direct;
-        cmd.dx = dx;
-        cmd.dy = dy;
-        const bool pushed = moveQueue.tryPush(cmd);
-        if (pushed) {
-            moveQueueCv.notify_one();
-        } else {
-            makcu.move(dx, dy);
-        }
-    };
-
-    // Emit one no-recoil tick, carrying the sub-pixel remainder so a fractional
-    // comp value averages out instead of truncating to int every tick.
-    auto emitRecoilTick = [&]() {
-        recoilResidualX += cfg.recoilCompX;
-        recoilResidualY += cfg.recoilCompY;
-        const int dx = static_cast<int>(recoilResidualX);  // truncates toward zero
-        const int dy = static_cast<int>(recoilResidualY);
-        recoilResidualX -= static_cast<float>(dx);
-        recoilResidualY -= static_cast<float>(dy);
-        queueMove(dx, dy);  // no-op when both components are zero
-    };
 
     std::cout << "[Simple] Full GPU pipeline: ENABLED (inference + decode + target + nonlinear P)" << std::endl;
     std::cout << "[Simple] GPU Callback API: ENABLED (lowest latency, no sync wait)" << std::endl;
     std::cout << "[Simple] Lock-free config cache: ENABLED" << std::endl;
-    std::cout << "[Simple] Movement post-processing: WindMouse/shoot-offset" << std::endl;
+    std::cout << "[Simple] Movement post-processing: shoot-offset" << std::endl;
     std::cout << "[Simple] IoU-based target stickiness: ENABLED" << std::endl;
     std::cout << "[Simple] Pinned receive buffers: " << (udpCapture.IsPinnedMemoryEnabled() ? "ENABLED" : "DISABLED") << std::endl;
     std::cout << "[Simple] Latest-frame in-flight limit: " << maxPipelineInFlight << std::endl;
@@ -1693,7 +815,7 @@ int main(int argc, char* argv[]) {
                 w, h, maxPipelineInFlight,
                 cfg.confThreshold, cfg.headClassId,
                 allowedClassMask, rightGpuAimConfig,
-                cfg.iouStickinessThreshold, cfg.headAimPoint, cfg.bodyAimPoint)) {
+                cfg.pd.iou_stickiness_threshold, cfg.headAimPoint, cfg.bodyAimPoint)) {
             ++preCaptureSuccess;
         } else {
             std::cerr << "[Simple] Pre-capture FAILED for " << w << "x" << h << std::endl;
@@ -1711,7 +833,7 @@ int main(int argc, char* argv[]) {
     std::cout << "[Simple] Stage timing: "
               << (cfg.stageTimingEnabled ? "ENABLED" : "DISABLED") << std::endl;
     std::cout << "[Simple] Direct callback aim moves: "
-              << (callbackCtx.directAimMoveInCallback ? "ENABLED" : "DISABLED")
+              << (movementController.directAimMoveInCallback() ? "ENABLED" : "DISABLED")
               << std::endl;
 
     std::cout << "\n[Simple] Running... Press Ctrl+C to exit" << std::endl;
@@ -1779,7 +901,7 @@ int main(int argc, char* argv[]) {
             maxPipelineInFlight,
             cfg.confThreshold, cfg.headClassId,
             allowedClassMask, rightGpuAimConfig,
-            cfg.iouStickinessThreshold, cfg.headAimPoint, cfg.bodyAimPoint);
+            cfg.pd.iou_stickiness_threshold, cfg.headAimPoint, cfg.bodyAimPoint);
         const bool graphFailedForThisShape =
             graphCaptureFailedForShape && failedGraphW == sourceW && failedGraphH == sourceH;
         if (graphReady || graphFailedForThisShape) {
@@ -1797,7 +919,7 @@ int main(int argc, char* argv[]) {
                 maxPipelineInFlight,
                 cfg.confThreshold, cfg.headClassId,
                 allowedClassMask, rightGpuAimConfig,
-                cfg.iouStickinessThreshold, cfg.headAimPoint, cfg.bodyAimPoint)) {
+                cfg.pd.iou_stickiness_threshold, cfg.headAimPoint, cfg.bodyAimPoint)) {
             graphCaptureFailedForShape = false;
             failedGraphW = 0;
             failedGraphH = 0;
@@ -1852,7 +974,7 @@ int main(int argc, char* argv[]) {
         // Only pull a frame into the inference pipeline while actively aiming -
         // otherwise leave it in UDPCapture's ring (saves GPU/CPU while idle).
         const uint8_t idleButtonMask = makcu.buttonMask();
-        if (!(cfg.forceAimOn || makcuMaskAiming(idleButtonMask))) return;
+        if (!(cfg.forceAimOn || controller::maskAiming(idleButtonMask))) return;
 
         requestFrameCredits();
 
@@ -1902,7 +1024,7 @@ int main(int argc, char* argv[]) {
         // Re-check button state fresh (it may have changed since the top-of-
         // function check above) and select the matching aim config.
         const uint8_t frameButtonMask = makcu.buttonMask();
-        const bool aiming = cfg.forceAimOn || makcuMaskAiming(frameButtonMask);
+        const bool aiming = cfg.forceAimOn || controller::maskAiming(frameButtonMask);
         if (!aiming) {
             // Skip inference when not aiming (save power)
             udpCapture.ReleaseFrame(bufferIndex);
@@ -1915,7 +1037,7 @@ int main(int argc, char* argv[]) {
             maxPipelineInFlight,
             cfg.confThreshold, cfg.headClassId,
             allowedClassMask, rightGpuAimConfig,
-            cfg.iouStickinessThreshold, cfg.headAimPoint, cfg.bodyAimPoint);
+            cfg.pd.iou_stickiness_threshold, cfg.headAimPoint, cfg.bodyAimPoint);
         const bool graphFailedForThisShape =
             graphCaptureFailedForShape && failedGraphW == width && failedGraphH == height;
         if (graphReady || graphFailedForThisShape) {
@@ -1954,7 +1076,7 @@ int main(int argc, char* argv[]) {
             cfg.confThreshold, cfg.headClassId,
             allowedClassMask,
             frameAimConfig,
-            cfg.iouStickinessThreshold,
+            cfg.pd.iou_stickiness_threshold,
             cfg.headAimPoint, cfg.bodyAimPoint,
             inferenceCallback, ticket);
         if (cfg.perfStatsEnabled) {
@@ -2019,31 +1141,24 @@ int main(int argc, char* argv[]) {
         // while left+right click is held), driven by this loop's own 1ms
         // cadence rather than by frame arrival, since frame submission is now
         // event-driven and may not touch the main loop at all while aiming.
-        {
-            const uint8_t recoilGateMask = makcu.buttonMask();
-            const bool recoilFiring =
-                cfg.noRecoilEnabled && makcuMaskShooting(recoilGateMask) &&
-                (cfg.forceAimOn || makcuMaskAiming(recoilGateMask));
-            if (!recoilFiring) {
-                // Drop any stale sub-pixel carry whenever a firing burst is not
-                // active, so it can't survive into the next burst.
-                recoilResidualX = 0.0f;
-                recoilResidualY = 0.0f;
-            } else if (now - lastRecoilTime >= std::chrono::milliseconds(cfg.recoilTickMs)) {
-                emitRecoilTick();
-                lastRecoilTime += std::chrono::milliseconds(cfg.recoilTickMs);
-                if (lastRecoilTime < now - std::chrono::milliseconds(cfg.recoilTickMs)) {
-                    lastRecoilTime = now;  // fell far behind -> resync, no burst
-                }
-            }
-        }
+        movementController.tickNoRecoil(makcu.buttonMask());
 
         // Idle-only housekeeping: graph pre-capture and debug frame dump each
         // pull their own frame directly (the hot path only runs while aiming),
         // so both must serialize against trySubmitLatestFrame via submitMutex.
         const uint8_t idleButtonMask = makcu.buttonMask();
-        const bool aimingActiveMain = cfg.forceAimOn || makcuMaskAiming(idleButtonMask);
+        const bool aimingActiveMain = cfg.forceAimOn || controller::maskAiming(idleButtonMask);
         if (!aimingActiveMain) {
+            // trySubmitLatestFrame stops pulling frames the instant aiming
+            // drops (see its own "Only pull a frame while actively aiming"
+            // check), so the inference callback can go silent for as long as
+            // aiming stays off - it never gets a chance to observe the
+            // release and cancel an in-progress flick itself. This loop is
+            // the only thing still polling button state at that point, so it
+            // has to be the one to cancel a stale flick before it can resume
+            // as a huge catch-up jump when aiming comes back.
+            callbackCtx.flickPlayback.cancel();
+
             std::lock_guard<std::mutex> lock(submitMutex);
             if (cfg.idleGraphPrecaptureEnabled && !idleGraphPrecaptureDone &&
                 now >= nextIdleGraphPrecaptureTime && busyCallbackTicketCount() == 0) {
@@ -2139,8 +1254,7 @@ int main(int argc, char* argv[]) {
                 g_callbackLatencyTotalUs.exchange(0, std::memory_order_relaxed);
             const int64_t callbackLatencyMaxUs =
                 g_callbackLatencyMaxUs.exchange(0, std::memory_order_relaxed);
-            const uint64_t moveQueueDropped =
-                g_moveQueueDropped.exchange(0, std::memory_order_relaxed);
+            const uint64_t moveQueueDropped = movementController.takeDroppedCount();
             const double callbackAvgMs = callbackLatencySamples == 0
                 ? 0.0
                 : static_cast<double>(callbackLatencyTotalUs) / callbackLatencySamples / 1000.0;
@@ -2164,8 +1278,8 @@ int main(int argc, char* argv[]) {
                    << " U:" << udpDroppedDelta
                    << " Cr:" << creditSnapshot
                    << " I:" << busyCallbackTicketCount()
-                   << " A:" << ((cfg.forceAimOn || makcuMaskAiming(statusButtonMask)) ? "ON" : "OFF")
-                   << " Sh:" << (makcuMaskShooting(statusButtonMask) ? "ON" : "OFF");
+                   << " A:" << ((cfg.forceAimOn || controller::maskAiming(statusButtonMask)) ? "ON" : "OFF")
+                   << " Sh:" << (controller::maskShooting(statusButtonMask) ? "ON" : "OFF");
             if (cfg.perfStatsEnabled) {
                 status << " Aw:" << perfSnapshot.averageAcquireMs() << "/" << perfSnapshot.maxAcquireMs() << "ms"
                        << " Su:" << perfSnapshot.averageSubmitUs() << "/" << perfSnapshot.submitMaxUs << "us"
@@ -2213,11 +1327,7 @@ int main(int argc, char* argv[]) {
     // Wait for any pending GPU work before the stack-local callback state
     // (callbackTickets, callbackCtx, etc.) is destroyed.
     cudaStreamSynchronize(inference.getStream());
-    moveSenderRunning.store(false, std::memory_order_relaxed);
-    moveQueueCv.notify_all();
-    if (moveSenderThread.joinable()) {
-        moveSenderThread.join();
-    }
+    movementController.stop();
 
     return 0;
 }

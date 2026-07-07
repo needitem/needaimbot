@@ -39,6 +39,6 @@ echo "[needaimbot] jetson_clocks 고정 완료"
 
 # 백그라운드 실행 + wait: 시그널이 스크립트에 전달되어 trap이 돌게 한다.
 # (포그라운드 exec이면 종료 후 복원 코드가 실행되지 않음)
-./build/bin/Release/simple_inference &
+./build/bin/Release/simple_inference "$@" &
 INFER_PID=$!
 wait "$INFER_PID"

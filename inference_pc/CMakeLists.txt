@@ -53,6 +53,7 @@ add_executable(simple_inference
     simple_main.cpp
     needaimbot/cuda/simple_inference.cu
     needaimbot/cuda/simple_postprocess.cu
+    needaimbot/cuda/motor_synergy.cu
     needaimbot/capture/udp_capture.cpp
     needaimbot/mouse/input_drivers/MakcuConnection.cpp
 )
