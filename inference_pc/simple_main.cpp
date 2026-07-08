@@ -36,7 +36,7 @@
 #include "needaimbot/mouse/input_drivers/MakcuConnection.h"
 #include "needaimbot/mouse/controller.h"
 #include "needaimbot/mouse/pd_controller.hpp"
-#include "needaimbot/mouse/motor_synergy.hpp"
+#include "needaimbot/mouse/warped_replay.hpp"
 #include "needaimbot/app/engine_locator.hpp"
 #include "needaimbot/app/runtime_options.hpp"
 #include "needaimbot/app/runtime_diagnostics.hpp"
@@ -89,9 +89,9 @@ struct Config {
 
     // Humanized acquisition-flick trajectory, played back in place of
     // pd_controller's own output for the first stretch of a freshly locked
-    // target - see needaimbot/mouse/motor_synergy.hpp.
+    // target - see needaimbot/mouse/warped_replay.hpp.
     bool flickEnabled = true;
-    motor_synergy::config flick;
+    warped_replay::config flick;
 
     // No-recoil
     bool noRecoilEnabled = true;
@@ -111,6 +111,10 @@ struct Config {
 
     // Makcu settings
     int makcuBaudrate = 4000000;
+    // Wire encoding for mouse moves: false = ASCII km.move (proven default),
+    // true = MAKCU binary frame (8B vs ~14B). Opt-in; validate on real hardware
+    // before trusting it - see MakcuConnection::setBinaryMove.
+    bool makcuBinaryMove = false;
 
     // CPU core affinity (latency stability). When disabled, the receive and
     // callback threads keep their built-in default pinning (last / last-1 core)
@@ -172,6 +176,7 @@ struct Config {
             if (j.contains("frame_credit_depth")) frameCreditDepth = j["frame_credit_depth"];
             if (j.contains("direct_aim_move_in_callback")) directAimMoveInCallback = j["direct_aim_move_in_callback"];
             if (j.contains("makcu_baudrate")) makcuBaudrate = j["makcu_baudrate"];
+            if (j.contains("makcu_binary_move")) makcuBinaryMove = j["makcu_binary_move"];
 
             if (j.contains("perf_stats_enabled")) perfStatsEnabled = j["perf_stats_enabled"];
             if (j.contains("perf_stats_interval_ms")) perfStatsIntervalMs = j["perf_stats_interval_ms"];
@@ -262,6 +267,7 @@ struct Config {
             j["frame_credit_depth"] = frameCreditDepth;
             j["direct_aim_move_in_callback"] = directAimMoveInCallback;
             j["makcu_baudrate"] = makcuBaudrate;
+            j["makcu_binary_move"] = makcuBinaryMove;
 
             j["perf_stats_enabled"] = perfStatsEnabled;
             j["perf_stats_interval_ms"] = perfStatsIntervalMs;
@@ -329,6 +335,8 @@ struct Config {
         std::cout << "[Config] Frame credit depth: " << frameCreditDepth << std::endl;
         std::cout << "[Config] Direct aim move in callback: "
                   << (directAimMoveInCallback ? "ON" : "OFF") << std::endl;
+        std::cout << "[Config] Makcu move encoding: "
+                  << (makcuBinaryMove ? "BINARY (8B frame)" : "ASCII (km.move)") << std::endl;
         std::cout << "[Config] Perf stats: " << (perfStatsEnabled ? "ON" : "OFF")
                   << " (interval=" << perfStatsIntervalMs << "ms)" << std::endl;
         std::cout << "[Config] Realtime thread hints: " << (realtimeThreadsEnabled ? "ON" : "OFF") << std::endl;
@@ -401,13 +409,13 @@ struct CallbackContext {
     bool forceAimOn = false;
     bool perfStatsEnabled = false;
 
-    // Acquisition-flick playback (motor_synergy) - started on freshAcquire,
+    // Acquisition-flick playback (warped_replay) - started on freshAcquire,
     // sampled instead of the PD movement until it finishes. Callback-thread
-    // only (see needaimbot/mouse/motor_synergy.hpp), so a single instance per
+    // only (see needaimbot/mouse/warped_replay.hpp), so a single instance per
     // context is fine.
     bool flickEnabled = true;
-    motor_synergy::config flickConfig;
-    motor_synergy::FlickPlayback flickPlayback;
+    warped_replay::config flickConfig;
+    warped_replay::FlickPlayback flickPlayback;
 
     // Initialize cached values from config
     void initFromConfig(const Config& cfg) {
@@ -415,6 +423,9 @@ struct CallbackContext {
         perfStatsEnabled = cfg.perfStatsEnabled;
         flickEnabled = cfg.flickEnabled;
         flickConfig = cfg.flick;
+        // Preload the replay DB now (startup), not on the first flick's
+        // callback - the ~130ms JSON parse must not land on the hot path.
+        if (flickEnabled) warped_replay::warmup(flickConfig);
     }
 };
 
@@ -715,7 +726,10 @@ int main(int argc, char* argv[]) {
                   << " (baudrate: " << cfg.makcuBaudrate << ")" << std::endl;
         return 1;
     }
-    std::cout << "[Simple] Makcu connected at " << cfg.makcuBaudrate << " baud" << std::endl;
+    makcu.setBinaryMove(cfg.makcuBinaryMove);
+    std::cout << "[Simple] Makcu connected at " << cfg.makcuBaudrate << " baud"
+              << " (move encoding: " << (cfg.makcuBinaryMove ? "binary" : "ASCII") << ")"
+              << std::endl;
 
     // 3. Initialize UDP capture
     UDPCapture udpCapture;

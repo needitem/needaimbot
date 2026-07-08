@@ -99,19 +99,6 @@ __device__ __forceinline__ void computeAimMovement(
     // reset the error derivative on a fresh acquire (avoids a derivative kick).
     const bool fresh_track = (aim_state->has_track == 0);
 
-    // Steady-state motor noise (SDN + tremor, see AimConfig/AimState): a
-    // fresh acquire reseeds the noise stream and redraws tremor's
-    // freq/phase, mirroring how needaimbot/mouse/motor_synergy.hpp samples
-    // them once per movement rather than continuously.
-    if (fresh_track) {
-        curand_init(static_cast<unsigned long long>(clock64()), 0, 0, &aim_state->rng);
-        aim_state->tremor_freq = aim_config.tremor_freq_min
-            + curand_uniform(&aim_state->rng) * (aim_config.tremor_freq_max - aim_config.tremor_freq_min);
-        aim_state->tremor_phase_x = curand_uniform(&aim_state->rng) * 6.28318531f;
-        aim_state->tremor_phase_y = curand_uniform(&aim_state->rng) * 6.28318531f;
-        aim_state->tremor_phase_accum = 0.0f;
-    }
-
     // One Euro adaptive low-pass on the measured center, applied BEFORE
     // velocity and error so the whole controller (P move, feedforward, coast)
     // runs on the de-noised signal. Seed on fresh acquire to avoid a jump from
@@ -207,29 +194,6 @@ __device__ __forceinline__ void computeAimMovement(
         (nonlinearPMove(error_y, aim_config.kp_y, aim_config.p_softness_y)
          + aim_config.kd_y * aim_state->derr_y
          + ff * aim_state->vel_y) * movement_scale_y;
-
-    // Harris-Wolpert signal-dependent noise + velocity-modulated tremor on
-    // the REAL per-frame motor command - applied after P+D+feedforward,
-    // before the max-step clamp (so noise stays bounded like everything
-    // else). Both terms are no-ops when their gain is 0 (default off); the
-    // whole block - including the sqrtf - is skipped in that case so the
-    // default-off path pays nothing beyond this one branch.
-    if (aim_config.sdn_k > 0.0f || aim_config.tremor_amp > 0.0f) {
-        const float speed = sqrtf(movement_x * movement_x + movement_y * movement_y);
-        if (aim_config.sdn_k > 0.0f) {
-            movement_x += aim_config.sdn_k * speed * curand_normal(&aim_state->rng);
-            movement_y += aim_config.sdn_k * speed * curand_normal(&aim_state->rng);
-        }
-        if (aim_config.tremor_amp > 0.0f) {
-            aim_state->tremor_phase_accum += 6.28318531f * aim_state->tremor_freq
-                * (aim_config.tremor_dt_ms / 1000.0f);
-            const float trem_mod = 1.0f / (1.0f + speed * 0.3f);
-            movement_x += aim_config.tremor_amp * trem_mod
-                * sinf(aim_state->tremor_phase_accum + aim_state->tremor_phase_x);
-            movement_y += aim_config.tremor_amp * trem_mod
-                * sinf(aim_state->tremor_phase_accum + aim_state->tremor_phase_y);
-        }
-    }
 
     // Per-frame max-step clamp (output px). Bounds the slew so a large initial
     // error is crossed in several smooth steps instead of one delayed leap

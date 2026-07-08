@@ -51,16 +51,6 @@ public:
     float oneeuro_beta = 0.02f;
     float oneeuro_dcutoff = 0.5f;
 
-    // Steady-state motor noise on the real per-frame movement (Harris-Wolpert
-    // SDN + velocity-modulated tremor), shared by both profiles - see
-    // gpa::AimConfig/AimState. Off (0) by default; opt in once verified,
-    // since this adds jitter to live tracking precision.
-    float aim_sdn_k = 0.0f;
-    float aim_tremor_amp = 0.0f;
-    float aim_tremor_freq_min = 8.0f;
-    float aim_tremor_freq_max = 12.0f;
-    float aim_tremor_dt_ms = 7.8f;
-
     gpa::AimConfig rightGpuConfig() const { return toGpuConfig(right); }
     gpa::AimConfig thumbGpuConfig() const { return toGpuConfig(thumb); }
 
@@ -105,12 +95,6 @@ public:
         if (j.contains("oneeuro_min_cutoff")) oneeuro_min_cutoff = j["oneeuro_min_cutoff"];
         if (j.contains("oneeuro_beta")) oneeuro_beta = j["oneeuro_beta"];
         if (j.contains("oneeuro_dcutoff")) oneeuro_dcutoff = j["oneeuro_dcutoff"];
-
-        if (j.contains("aim_sdn_k")) aim_sdn_k = j["aim_sdn_k"];
-        if (j.contains("aim_tremor_amp")) aim_tremor_amp = j["aim_tremor_amp"];
-        if (j.contains("aim_tremor_freq_min")) aim_tremor_freq_min = j["aim_tremor_freq_min"];
-        if (j.contains("aim_tremor_freq_max")) aim_tremor_freq_max = j["aim_tremor_freq_max"];
-        if (j.contains("aim_tremor_dt_ms")) aim_tremor_dt_ms = j["aim_tremor_dt_ms"];
     }
 
     void save(nlohmann::json& j) const {
@@ -140,13 +124,6 @@ public:
         j["oneeuro_min_cutoff"] = oneeuro_min_cutoff;
         j["oneeuro_beta"] = oneeuro_beta;
         j["oneeuro_dcutoff"] = oneeuro_dcutoff;
-
-        j["_section_motor_noise"] = "===== Steady-state motor noise (SDN + tremor) =====";
-        j["aim_sdn_k"] = aim_sdn_k;
-        j["aim_tremor_amp"] = aim_tremor_amp;
-        j["aim_tremor_freq_min"] = aim_tremor_freq_min;
-        j["aim_tremor_freq_max"] = aim_tremor_freq_max;
-        j["aim_tremor_dt_ms"] = aim_tremor_dt_ms;
     }
 
     void print() const {
@@ -171,10 +148,6 @@ public:
         std::cout << "[Config] Track persistence: " << track_persistence_frames
                   << " frame(s)"
                   << (track_persistence_frames > 0 ? " (ON)" : " (OFF)") << std::endl;
-        std::cout << "[Config] Steady-state motor noise: SDN k=" << aim_sdn_k
-                  << (aim_sdn_k > 0.0f ? " (ON)" : " (OFF)")
-                  << ", tremor amp=" << aim_tremor_amp
-                  << (aim_tremor_amp > 0.0f ? " (ON)" : " (OFF)") << std::endl;
     }
 
 private:
@@ -196,11 +169,6 @@ private:
         aim.oneeuro_beta = oneeuro_beta;
         aim.oneeuro_dcutoff = oneeuro_dcutoff;
         aim.max_step = max_step;
-        aim.sdn_k = aim_sdn_k;
-        aim.tremor_amp = aim_tremor_amp;
-        aim.tremor_freq_min = aim_tremor_freq_min;
-        aim.tremor_freq_max = aim_tremor_freq_max;
-        aim.tremor_dt_ms = aim_tremor_dt_ms;
         return aim;
     }
 };

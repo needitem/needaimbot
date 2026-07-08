@@ -676,8 +676,8 @@ __global__ void stage2FinalizeKernel(
     d_inference_result->targetY2 = chosenTarget.y2;
     d_inference_result->targetConf = chosenTarget.confidence;
     // Same error vector + scale pd_controller's own math used above - lets a
-    // fresh-acquire host callback seed a motor_synergy flick without needing
-    // its own screen-center/scale state (see needaimbot/mouse/motor_synergy.hpp).
+    // fresh-acquire host callback seed a warped_replay flick without needing
+    // its own screen-center/scale state (see needaimbot/mouse/warped_replay.hpp).
     d_inference_result->errorX = raw_center_x - screen_center_x;
     d_inference_result->errorY = raw_center_y - screen_center_y;
     d_inference_result->movementScaleX = movement_scale_x;

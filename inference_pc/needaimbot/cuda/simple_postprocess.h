@@ -48,24 +48,6 @@ struct AimState {
     float prev_err_y = 0.0f;
     float derr_x = 0.0f;
     float derr_y = 0.0f;
-
-    // --- Steady-state motor noise (SDN + tremor) state ---
-    // Harris-Wolpert signal-dependent noise and velocity-modulated tremor
-    // applied to the REAL per-frame motor command (see computeAimMovement in
-    // pd_controller.cuh), so continuous tracking after an acquisition flick
-    // doesn't look mechanically clean once locked on. rng is a persistent
-    // per-track stream, (re)seeded from the GPU clock on fresh acquire so
-    // different tracks don't share a noise sequence. tremor_freq/phase_* are
-    // sampled once per fresh acquire and held for the track's life (mirrors
-    // how needaimbot/mouse/motor_synergy.hpp samples them once per movement,
-    // not per frame); tremor_phase_accum is the running oscillator phase,
-    // advanced each frame by AimConfig::tremor_dt_ms (no real inter-frame dt
-    // is available here).
-    curandStatePhilox4_32_10_t rng{};
-    float tremor_freq = 10.0f;
-    float tremor_phase_x = 0.0f;
-    float tremor_phase_y = 0.0f;
-    float tremor_phase_accum = 0.0f;
 };
 
 // Nonlinear P controller configuration.
@@ -115,22 +97,6 @@ struct AimConfig {
     float oneeuro_min_cutoff = 0.1f; // base cutoff at rest (lower = smoother/more lag)
     float oneeuro_beta = 0.02f;      // speed coefficient (higher = less lag when fast)
     float oneeuro_dcutoff = 0.5f;    // derivative cutoff for the speed estimate
-
-    // --- Steady-state motor noise (SDN + tremor) ---
-    // Applied to the real per-frame movement_x/y in computeAimMovement, AFTER
-    // the P+D+feedforward convergence math and BEFORE the max-step clamp.
-    // Both terms are 0 (off) by default - opt in once verified, since this
-    // adds jitter to live tracking precision. See AimState for the
-    // accompanying persistent noise/tremor state.
-    float sdn_k = 0.0f;              // signal-dependent noise: noise stddev ∝ this * |movement|
-    float tremor_amp = 0.0f;         // tremor amplitude (output px) at zero speed
-    float tremor_freq_min = 8.0f;    // sampled once per fresh acquire, Hz
-    float tremor_freq_max = 12.0f;
-    // Nominal per-frame interval (ms) used only to advance the tremor
-    // oscillator's phase - the kernel has no real inter-frame dt available.
-    // Tune to the pipeline's actual average frame interval if tremor looks
-    // off-frequency.
-    float tremor_dt_ms = 7.8f;
 };
 
 // Mouse movement output
@@ -150,7 +116,7 @@ struct InferenceResult {
     int hasTarget;              // 4 bytes: 1 if target found, 0 otherwise
     // 1 if has_track transitioned 0->1 this frame (fresh target lock, not a
     // continued/coasted track) - lets the host play a one-shot humanized
-    // acquisition flick (needaimbot/mouse/motor_synergy.hpp) instead of the
+    // acquisition flick (needaimbot/mouse/warped_replay.hpp) instead of the
     // raw PD movement for this target's first few frames.
     int freshAcquire;           // 4 bytes
     float targetX1, targetY1;   // 8 bytes: best target bbox (if hasTarget)
@@ -161,7 +127,7 @@ struct InferenceResult {
     // space) and the scale that converts it to output px - same inputs
     // pd_controller's own error_x/error_y + movement_scale use. Only
     // meaningful when freshAcquire is set; lets the host seed a
-    // motor_synergy flick without needing its own screen-center/scale state.
+    // warped_replay flick without needing its own screen-center/scale state.
     float errorX, errorY;             // 8 bytes
     float movementScaleX, movementScaleY;  // 8 bytes
     // Total: 56 bytes - still within a single 64B cache line

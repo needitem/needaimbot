@@ -234,6 +234,62 @@ This allows the application to perform USB device resets automatically, eliminat
 *   **Display Window**: Inference PC can show received frames and detection results (Linux/Jetson)
 *   **Cross-Platform**: Supports Windows Game PC → Linux/Jetson Inference PC
 
+## Acquisition Flick: Warped Human-Trajectory Replay
+
+When a target is freshly acquired, the aim snaps to it with a **flick** before the
+PD controller takes over for steady tracking. Instead of synthesizing that flick
+from a hand-tuned motor formula, this build **replays a real recorded human
+stroke**, rigid-transformed onto the aim vector.
+
+**Why:** against a strong mouse-dynamics classifier, a *synthesized* flick
+(formula- or model-based) is highly detectable, because it can't reproduce the
+full joint micro-structure of real motion. A real stroke rotated/scaled onto the
+aim direction keeps that structure exactly, so it reads as human. In the companion
+`mouse-bot-detector` study (and matching the SCRAP result, ACM AISec 2020), the
+formula generator was detected at ~0.99 accuracy while warped replay sat at ~0.50
+(chance) — indistinguishable from a real player.
+
+**How it works** (`needaimbot/mouse/warped_replay.hpp`):
+1. On fresh acquire, `generate()` gets the reach vector (distance `D`, direction `θ`).
+2. It picks a recorded stroke whose distance is within `flick_distance_tolerance`
+   of `D` (so the scale warp stays near 1× and doesn't distort speed/tremor).
+3. Rotates it to `θ`, scales it to exactly `D`, adds small per-point jitter, and
+   keeps the stroke's **real (irregular) timestamps**.
+4. `FlickPlayback` replays it as incremental mouse deltas by wall-clock time.
+
+Generation runs on the CPU (~1.6 µs/flick, off the per-frame path); the old GPU
+flick kernel is gone. The DB is loaded once at startup (warmup), so the first
+flick doesn't pay the parse cost.
+
+### Trajectory database
+
+The generator needs `flick_trajectories.json` **next to the executable**
+(resolved via the config path, then the exe directory). It holds straight,
+low-lateral-deviation human strokes, canonicalized to the origin→+x axis with
+their real distance and timestamps.
+
+Generate it with `mouse-bot-detector/scripts/export_flick_db.py` (filters to
+`path_efficiency ≥ 0.9`, lateral deviation ≤ 0.1× distance). **For real
+deployment, build the DB from your *own* recorded strokes** — a public dataset
+can be caught by a defender doing near-duplicate matching.
+
+Without the DB, flicks fall back to a plain straight line (detectable), so ship
+it alongside `simple_inference` and `simple_config.json`.
+
+### Config keys (`simple_config.json`)
+
+```json
+"flick_enabled": true,
+"flick_replay_db_path": "flick_trajectories.json",
+"flick_distance_tolerance": 0.15,
+"flick_position_jitter": 0.6,
+"flick_min_reach": 5.0
+```
+
+> Note: the previous PD-controller steady-state motor noise (`aim_sdn_k`,
+> `aim_tremor_*`) has been removed — it added jitter to live tracking precision
+> and is redundant now that the acquisition flick is genuine human motion.
+
 ## Planned Features
 
 *   **Capture Card Support**: Frame data transmission via hardware capture card (HDMI/DisplayPort) for complete software isolation between Game PC and Inference PC
