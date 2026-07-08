@@ -6,7 +6,9 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -36,13 +38,18 @@ inline void writeI32LE(std::ostream& out, int32_t value) {
 }
 
 // Writes a 24bpp top-down BMP with a small red crosshair marker at the image
-// center (a green dot at the very center pixel) so the dump also shows where
-// the aim point lands relative to the frame.
+// center (a yellow dot at the very center pixel) so the dump also shows where
+// the aim point lands relative to the frame. When a non-zero shoot-offset is
+// supplied, a second green crosshair (cyan center dot) is burned in at
+// center + (shootOffsetX, shootOffsetY) so the shifted aim point that the
+// shoot-offset biases toward (e.g. the head) is also visible.
 inline bool writeRgbBmp(
     const std::filesystem::path& path,
     const uint8_t* rgbData,
     unsigned int width,
-    unsigned int height) {
+    unsigned int height,
+    float shootOffsetX = 0.0f,
+    float shootOffsetY = 0.0f) {
     if (!rgbData || width == 0 || height == 0) return false;
 
     const uint64_t rawRowBytes = static_cast<uint64_t>(width) * 3u;
@@ -89,6 +96,14 @@ inline bool writeRgbBmp(
     const unsigned int centerX = width / 2u;
     const unsigned int centerY = height / 2u;
     const unsigned int markerRadius = std::max(8u, std::min(width, height) / 16u);
+    // Shifted aim point produced by the static shoot-offset. Drawn only when a
+    // non-zero offset is set and the shifted point falls inside the frame.
+    const bool hasShootOffset = (shootOffsetX != 0.0f || shootOffsetY != 0.0f);
+    const int shiftedX = static_cast<int>(std::lround(static_cast<float>(centerX) + shootOffsetX));
+    const int shiftedY = static_cast<int>(std::lround(static_cast<float>(centerY) + shootOffsetY));
+    const bool drawShifted = hasShootOffset &&
+        shiftedX >= 0 && shiftedX < static_cast<int>(width) &&
+        shiftedY >= 0 && shiftedY < static_cast<int>(height);
     for (unsigned int y = 0; y < height; ++y) {
         const uint8_t* src = rgbData + static_cast<size_t>(y) * static_cast<size_t>(width) * 3u;
         std::fill(row.begin(), row.end(), 0);
@@ -96,6 +111,23 @@ inline bool writeRgbBmp(
             uint8_t r = src[static_cast<size_t>(x) * 3u + 0u];
             uint8_t g = src[static_cast<size_t>(x) * 3u + 1u];
             uint8_t b = src[static_cast<size_t>(x) * 3u + 2u];
+            // Draw the shifted (shoot-offset) marker first so the frame-center
+            // crosshair below always wins where the two overlap - otherwise the
+            // default offset's arm would overwrite the original center marker.
+            if (drawShifted) {
+                const unsigned int sdx = static_cast<unsigned int>(
+                    std::abs(static_cast<int>(x) - shiftedX));
+                const unsigned int sdy = static_cast<unsigned int>(
+                    std::abs(static_cast<int>(y) - shiftedY));
+                const bool onShiftedDot = sdx <= 1u && sdy <= 1u;
+                const bool onShiftedVertical = sdx <= 1u && sdy <= markerRadius;
+                const bool onShiftedHorizontal = sdy <= 1u && sdx <= markerRadius;
+                if (onShiftedVertical || onShiftedHorizontal) {
+                    r = 0;
+                    g = 255;
+                    b = onShiftedDot ? 255 : 0;
+                }
+            }
             const unsigned int dx = (x > centerX) ? (x - centerX) : (centerX - x);
             const unsigned int dy = (y > centerY) ? (y - centerY) : (centerY - y);
             const bool onCenterDot = dx <= 1u && dy <= 1u;
@@ -127,6 +159,10 @@ struct DebugFrameDumper {
     Clock::time_point nextCaptureTime{};
     uint64_t savedFrames = 0;
     bool reportedSaveError = false;
+    // Static shoot-offset aim-shift, mirrored here so the shifted aim point can
+    // be burned into the dump alongside the frame-center crosshair.
+    float shootOffsetX = 0.0f;
+    float shootOffsetY = 0.0f;
 
     bool due(Clock::time_point now) const {
         return enabled && now >= nextCaptureTime;
@@ -143,7 +179,8 @@ struct DebugFrameDumper {
     void save(const void* rgbData, unsigned int width, unsigned int height, uint64_t frameId) {
         if (!enabled) return;
 
-        if (writeRgbBmp(outputPath, static_cast<const uint8_t*>(rgbData), width, height)) {
+        if (writeRgbBmp(outputPath, static_cast<const uint8_t*>(rgbData), width, height,
+                        shootOffsetX, shootOffsetY)) {
             ++savedFrames;
             reportedSaveError = false;
             (void)frameId;

@@ -156,10 +156,21 @@ __device__ __forceinline__ void computeAimMovement(
     aim_state->prev_center_y = raw_center_y;
     aim_state->has_track = 1;
 
-    // Aim at the measured target center. Velocity feedforward keeps pace with
-    // a moving target (cancels P steady-state lag) without leading/overshooting.
-    const float error_x = target_center_x - screen_center_x;
-    const float error_y = target_center_y - screen_center_y;
+    // Aim at the measured target center, shifted by the static shoot-offset
+    // reference. The offset is in output/screen px; convert to the model-space
+    // error here by dividing out movement_scale (error is later multiplied by
+    // it to produce the screen-space move). Folding it into the error - rather
+    // than adding it to the output every frame - makes it a true setpoint: the
+    // aim converges with the target resting at center + offset and HOLDS there,
+    // instead of drifting/jerking as an unconditional per-frame nudge would.
+    // Velocity feedforward keeps pace with a moving target (cancels P
+    // steady-state lag) without leading/overshooting.
+    const float shoot_off_x =
+        (movement_scale_x != 0.0f) ? aim_config.shoot_offset_x / movement_scale_x : 0.0f;
+    const float shoot_off_y =
+        (movement_scale_y != 0.0f) ? aim_config.shoot_offset_y / movement_scale_y : 0.0f;
+    const float error_x = target_center_x - screen_center_x - shoot_off_x;
+    const float error_y = target_center_y - screen_center_y - shoot_off_y;
     const float ff = aim_config.feedforward_gain;
 
     // Derivative (damping) term: react to how fast the error is shrinking and

@@ -97,6 +97,17 @@ struct AimConfig {
     float oneeuro_min_cutoff = 0.1f; // base cutoff at rest (lower = smoother/more lag)
     float oneeuro_beta = 0.02f;      // speed coefficient (higher = less lag when fast)
     float oneeuro_dcutoff = 0.5f;    // derivative cutoff for the speed estimate
+
+    // --- Static shoot-offset aim-shift (in OUTPUT/screen px) ---
+    // Shifts the aim REFERENCE POINT away from screen center by this vector so
+    // the controller converges with the target resting at center + offset
+    // (e.g. some weapons' shots land above the crosshair, so the aim point is
+    // above center). This is a SETPOINT shift folded into the error - the aim
+    // settles at the offset and holds, unlike a per-frame additive nudge which
+    // would drift/jerk. Set per-frame by the host: the configured value while
+    // shooting, 0 otherwise. Negative Y = reference above center.
+    float shoot_offset_x = 0.0f;
+    float shoot_offset_y = 0.0f;
 };
 
 // Mouse movement output

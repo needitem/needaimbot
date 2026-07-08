@@ -694,6 +694,8 @@ int main(int argc, char* argv[]) {
         debugFrameDumper.enabled = true;
         debugFrameDumper.outputPath = engine_locator::safeAbsolute(debugDir / "received_frame.bmp").lexically_normal();
         debugFrameDumper.nextCaptureTime = Clock::now();
+        debugFrameDumper.shootOffsetX = cfg.shootOffsetX;
+        debugFrameDumper.shootOffsetY = cfg.shootOffsetY;
         std::cout << "[Debug] Frame dump: ON -> "
                   << debugFrameDumper.outputPath.string()
                   << " (1 Hz, overwrite)" << std::endl;
@@ -764,8 +766,8 @@ int main(int argc, char* argv[]) {
     controllerSettings.recoilCompX = cfg.recoilCompX;
     controllerSettings.recoilCompY = cfg.recoilCompY;
     controllerSettings.recoilTickMs = cfg.recoilTickMs;
-    controllerSettings.shootOffsetX = cfg.shootOffsetX;
-    controllerSettings.shootOffsetY = cfg.shootOffsetY;
+    // shoot-offset is applied as a GPU-side aim-reference shift (fed per-frame
+    // via frameAimConfig), not through the controller - see the callback above.
     movementController.configure(makcu, controllerSettings);
     movementController.start([&]() {
         if (cfg.realtimeThreadsEnabled) {
@@ -1061,7 +1063,17 @@ int main(int argc, char* argv[]) {
             udpCapture.ReleaseFrame(bufferIndex);
             return;
         }
-        const gpa::AimConfig& frameAimConfig = selectGpuAimConfig(frameButtonMask);
+        // Copy (not reference) so the per-frame static shoot-offset can be
+        // folded in: while shooting, shift the aim reference point by the
+        // configured offset; otherwise leave it at screen center. The GPU
+        // controller treats this as a setpoint shift (see AimConfig), so the
+        // aim settles at the offset instead of drifting up like an additive
+        // per-frame nudge would.
+        gpa::AimConfig frameAimConfig = selectGpuAimConfig(frameButtonMask);
+        if (controller::maskShooting(frameButtonMask)) {
+            frameAimConfig.shoot_offset_x = cfg.shootOffsetX;
+            frameAimConfig.shoot_offset_y = cfg.shootOffsetY;
+        }
 
         const bool graphReady = inference.isFullGraphReadyForShape(
             static_cast<int>(width), static_cast<int>(height),
