@@ -52,8 +52,13 @@ struct config {
     // Pick a stroke whose recorded reach is within +-tolerance of the needed
     // reach, so scaling stays near 1x (large stretches distort speed/tremor).
     double distance_tolerance = 0.15;
-    // Small per-point Gaussian jitter (px) so repeated flicks aren't byte-
-    // identical replays (defeats naive reuse/near-duplicate detection).
+    // Human-variability perturbation: each flick is nudged by
+    // mag*(shape_a - shape_b) for two random real strokes - a direction humans
+    // genuinely vary along, so it breaks near-duplicate reuse WITHOUT leaving
+    // the human manifold (unlike isotropic jitter). ~0.07 is the sweet spot
+    // (mouse-bot-detector/attack_sweet_spot.py: single-move ~0.54, reuse ~0.00).
+    double variability_mag = 0.07;
+    // Small residual per-point Gaussian jitter (px), on top of the above.
     double position_jitter = 0.6;
     // Below this reach, just emit a 2-point straight segment.
     double min_reach = 5.0;
@@ -62,27 +67,33 @@ struct config {
     void load(const nlohmann::json& j) {
         if (j.contains("flick_replay_db_path")) replay_db_path = j["flick_replay_db_path"];
         if (j.contains("flick_distance_tolerance")) distance_tolerance = j["flick_distance_tolerance"];
+        if (j.contains("flick_variability_mag")) variability_mag = j["flick_variability_mag"];
         if (j.contains("flick_position_jitter")) position_jitter = j["flick_position_jitter"];
         if (j.contains("flick_min_reach")) min_reach = j["flick_min_reach"];
     }
     void save(nlohmann::json& j) const {
         j["flick_replay_db_path"] = replay_db_path;
         j["flick_distance_tolerance"] = distance_tolerance;
+        j["flick_variability_mag"] = variability_mag;
         j["flick_position_jitter"] = position_jitter;
         j["flick_min_reach"] = min_reach;
     }
     void print() const {
         std::cout << "[Config] Flick generator: warped-replay, db=" << replay_db_path
                   << ", dist tol=" << distance_tolerance
+                  << ", variability=" << variability_mag
                   << ", jitter=" << position_jitter << "px" << std::endl;
     }
 };
 
 namespace detail {
 
+constexpr int kNumPoints = 48;            // must match export_flick_db.py N_PTS
+
 struct Stroke {
     double d;                             // recorded reach distance (px)
-    std::vector<trajectory_point> pts;    // canonical: origin -> (d, 0)
+    double sx[kNumPoints], sy[kNumPoints];// UNIT canonical shape: origin -> (1, 0)
+    double t[kNumPoints];                 // real (irregular) timestamps, ms
 };
 
 inline std::string exe_dir() {
@@ -117,13 +128,18 @@ inline const std::vector<Stroke>& load_db(const std::string& path) {
         try {
             nlohmann::json j;
             f >> j;
-            for (const auto& t : j.at("traj")) {
+            for (const auto& tr : j.at("traj")) {
+                const auto& sh = tr.at("s");
+                const auto& tt = tr.at("t");
+                if ((int)sh.size() != kNumPoints || (int)tt.size() != kNumPoints) continue;
                 Stroke s;
-                s.d = t.at("d").get<double>();
-                for (const auto& p : t.at("p")) {
-                    s.pts.push_back({p[0].get<double>(), p[1].get<double>(), p[2].get<double>()});
+                s.d = tr.at("d").get<double>();
+                for (int k = 0; k < kNumPoints; ++k) {
+                    s.sx[k] = sh[k][0].get<double>();
+                    s.sy[k] = sh[k][1].get<double>();
+                    s.t[k]  = tt[k].get<double>();
                 }
-                if (s.pts.size() >= 2) db.push_back(std::move(s));
+                db.push_back(s);
             }
             std::sort(db.begin(), db.end(),
                       [](const Stroke& a, const Stroke& b) { return a.d < b.d; });
@@ -196,17 +212,28 @@ inline std::vector<trajectory_point> generate(
     }
 
     const double theta = std::atan2(dy, dx);
-    const double scale = D / s->d;
     const double c = std::cos(theta), sn = std::sin(theta);
     std::normal_distribution<double> jit(0.0, cfg.position_jitter);
 
-    out.reserve(s->pts.size());
-    for (const auto& p : s->pts) {
-        const double sx = p.x * scale, sy = p.y * scale;
-        double rx = sx * c - sy * sn;
-        double ry = sx * sn + sy * c;
+    // Human-variability perturbation: two random strokes give a real difference
+    // vector; adding mag*(A - B) to the source's unit shape moves it the way
+    // humans actually vary, breaking near-duplicate reuse while staying on the
+    // human manifold. Fresh A,B per flick so repeats of the same source never
+    // coincide (defeats set-level near-duplicate detection).
+    std::uniform_int_distribution<size_t> anyStroke(0, db.size() - 1);
+    const detail::Stroke& A = db[anyStroke(rng)];
+    const detail::Stroke& B = db[anyStroke(rng)];
+    const double mag = cfg.variability_mag;
+
+    out.reserve(detail::kNumPoints);
+    for (int k = 0; k < detail::kNumPoints; ++k) {
+        // perturbed UNIT shape, scaled to the exact reach D
+        const double ux = (s->sx[k] + mag * (A.sx[k] - B.sx[k])) * D;
+        const double uy = (s->sy[k] + mag * (A.sy[k] - B.sy[k])) * D;
+        double rx = ux * c - uy * sn;
+        double ry = ux * sn + uy * c;
         if (cfg.position_jitter > 0.0) { rx += jit(rng); ry += jit(rng); }
-        out.push_back({x0 + rx, y0 + ry, p.t});
+        out.push_back({x0 + rx, y0 + ry, s->t[k]});
     }
     // land exactly on the target, and normalize timestamps
     out.back().x = x1;
