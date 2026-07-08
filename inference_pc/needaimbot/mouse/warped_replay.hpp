@@ -61,8 +61,10 @@ struct config {
     // mag*(shape_a - shape_b), a direction humans genuinely vary along
     // (mouse-bot-detector/attack_sweet_spot.py) - but that adds a faint trace.
     double variability_mag = 0.0;
-    // Small residual per-point Gaussian jitter (px), on top of the above.
-    double position_jitter = 0.6;
+    // Residual per-point Gaussian jitter (px). 0 = pure replay (default): the
+    // stroke is reproduced unmodified. Set > 0 only if source reuse is allowed
+    // and you want to avoid byte-identical replays when a stroke recurs.
+    double position_jitter = 0.0;
     // Below this reach, just emit a 2-point straight segment.
     double min_reach = 5.0;
 
