@@ -33,6 +33,7 @@
 #include <fstream>
 #include <mutex>
 #include <string>
+#include <unordered_set>
 #include <atomic>
 #include <unistd.h>
 
@@ -52,12 +53,14 @@ struct config {
     // Pick a stroke whose recorded reach is within +-tolerance of the needed
     // reach, so scaling stays near 1x (large stretches distort speed/tremor).
     double distance_tolerance = 0.15;
-    // Human-variability perturbation: each flick is nudged by
-    // mag*(shape_a - shape_b) for two random real strokes - a direction humans
-    // genuinely vary along, so it breaks near-duplicate reuse WITHOUT leaving
-    // the human manifold (unlike isotropic jitter). ~0.07 is the sweet spot
-    // (mouse-bot-detector/attack_sweet_spot.py: single-move ~0.54, reuse ~0.00).
-    double variability_mag = 0.07;
+    // Human-variability perturbation. 0 = PURE REPLAY (default, best for a
+    // single session): each flick is a real stroke warped onto the target, no
+    // perturbation, and no-repeat source selection already avoids duplicates -
+    // this leaves no session-distribution trace. Set > 0 (e.g. 0.07) only if
+    // you allow source reuse and need to break near-duplicates via
+    // mag*(shape_a - shape_b), a direction humans genuinely vary along
+    // (mouse-bot-detector/attack_sweet_spot.py) - but that adds a faint trace.
+    double variability_mag = 0.0;
     // Small residual per-point Gaussian jitter (px), on top of the above.
     double position_jitter = 0.6;
     // Below this reach, just emit a 2-point straight segment.
@@ -200,10 +203,23 @@ inline std::vector<trajectory_point> generate(
                                [](const detail::Stroke& s, double v) { return s.d < v; });
     auto hi = std::upper_bound(db.begin(), db.end(), hiD,
                                [](double v, const detail::Stroke& s) { return v < s.d; });
+    // No-repeat source selection: within a session, prefer strokes not used
+    // yet, so the same real stroke never replays twice (defeats near-duplicate
+    // and session-distribution detection). When the distance window is
+    // exhausted, reset it and reuse. State is per-thread (the callback thread).
     const detail::Stroke* s = nullptr;
     if (hi > lo) {
-        std::uniform_int_distribution<size_t> pick(0, static_cast<size_t>(hi - lo) - 1);
-        s = &*(lo + pick(rng));
+        static thread_local std::unordered_set<const detail::Stroke*> used;
+        std::vector<const detail::Stroke*> avail;
+        avail.reserve(static_cast<size_t>(hi - lo));
+        for (auto it = lo; it != hi; ++it)
+            if (!used.count(&*it)) avail.push_back(&*it);
+        if (avail.empty()) {                       // window exhausted -> reset
+            for (auto it = lo; it != hi; ++it) { used.erase(&*it); avail.push_back(&*it); }
+        }
+        std::uniform_int_distribution<size_t> pick(0, avail.size() - 1);
+        s = avail[pick(rng)];
+        used.insert(s);
     } else {
         auto it = std::lower_bound(db.begin(), db.end(), D,
                                    [](const detail::Stroke& a, double v) { return a.d < v; });
@@ -215,21 +231,22 @@ inline std::vector<trajectory_point> generate(
     const double c = std::cos(theta), sn = std::sin(theta);
     std::normal_distribution<double> jit(0.0, cfg.position_jitter);
 
-    // Human-variability perturbation: two random strokes give a real difference
-    // vector; adding mag*(A - B) to the source's unit shape moves it the way
-    // humans actually vary, breaking near-duplicate reuse while staying on the
-    // human manifold. Fresh A,B per flick so repeats of the same source never
-    // coincide (defeats set-level near-duplicate detection).
-    std::uniform_int_distribution<size_t> anyStroke(0, db.size() - 1);
-    const detail::Stroke& A = db[anyStroke(rng)];
-    const detail::Stroke& B = db[anyStroke(rng)];
+    // Pure replay (mag == 0): warp the source stroke straight onto the aim
+    // vector. Optional human-variability perturbation when mag > 0: two random
+    // strokes give a real difference vector, added to break near-duplicates if
+    // source reuse is ever allowed (see config comment).
     const double mag = cfg.variability_mag;
+    std::uniform_int_distribution<size_t> anyStroke(0, db.size() - 1);
+    const detail::Stroke* A = mag > 0.0 ? &db[anyStroke(rng)] : nullptr;
+    const detail::Stroke* B = mag > 0.0 ? &db[anyStroke(rng)] : nullptr;
 
     out.reserve(detail::kNumPoints);
     for (int k = 0; k < detail::kNumPoints; ++k) {
-        // perturbed UNIT shape, scaled to the exact reach D
-        const double ux = (s->sx[k] + mag * (A.sx[k] - B.sx[k])) * D;
-        const double uy = (s->sy[k] + mag * (A.sy[k] - B.sy[k])) * D;
+        double ux = s->sx[k] * D, uy = s->sy[k] * D;
+        if (mag > 0.0) {
+            ux += mag * (A->sx[k] - B->sx[k]) * D;
+            uy += mag * (A->sy[k] - B->sy[k]) * D;
+        }
         double rx = ux * c - uy * sn;
         double ry = ux * sn + uy * c;
         if (cfg.position_jitter > 0.0) { rx += jit(rng); ry += jit(rng); }
