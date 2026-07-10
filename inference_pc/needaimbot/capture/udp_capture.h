@@ -80,6 +80,27 @@ struct UDPCreditPacket {
     uint64_t sequence;
 };
 static_assert(sizeof(UDPCreditPacket) == 24, "UDPCreditPacket must stay wire-compatible");
+
+// Clock-sync round trip (NTP-style) so capture->inference E2E works without the
+// two PCs' wall clocks being tightly synced. Inference PC sends a ping with its
+// send time t1; game PC replies with a pong echoing t1 plus its own receive (t2)
+// and send (t3) times; inference stamps arrival t4 and derives the offset.
+static constexpr uint32_t UDP_SYNC_PING_MAGIC = 0x50415047u;  // "GPAP"
+static constexpr uint32_t UDP_SYNC_PONG_MAGIC = 0x4F415047u;  // "GPAO"
+struct UDPSyncPing {
+    uint32_t magic;   // GPAP
+    uint32_t seq;
+    uint64_t t1;      // inference send time (inference clock, unix us)
+};
+static_assert(sizeof(UDPSyncPing) == 16, "UDPSyncPing must stay wire-compatible");
+struct UDPSyncPong {
+    uint32_t magic;   // GPAO
+    uint32_t seq;     // echoed
+    uint64_t t1;      // echoed inference send time
+    uint64_t t2;      // game receive time (game clock)
+    uint64_t t3;      // game send time (game clock)
+};
+static_assert(sizeof(UDPSyncPong) == 32, "UDPSyncPong must stay wire-compatible");
 #pragma pack(pop)
 
 class UDPCapture {
@@ -104,6 +125,15 @@ public:
     uint64_t GetDroppedFrameCount() const { return m_droppedFrames.load(std::memory_order_relaxed); }
     bool IsPinnedMemoryEnabled() const { return m_usePinnedMemory; }
     bool SendFrameCredit(uint32_t minFrameId = 0, uint32_t credits = 1);
+
+    // Send a clock-sync ping to the credit target (self-throttled to ~10/s, so
+    // it is safe to call every main-loop iteration). Pongs are handled on the
+    // receive thread and update the offset estimate.
+    void SendClockSyncPing();
+    // Estimated game_clock - inference_clock in microseconds. Sets *valid=false
+    // until the first pong round trip completes; add this to an inference-clock
+    // timestamp to compare it against a game-clock (capture) timestamp.
+    int64_t GetClockOffsetMicros(bool* valid = nullptr) const;
 
     // Called on the receive thread immediately after a frame is published
     // (newest-wins buffer swapped in), so a consumer can react without polling.
@@ -168,6 +198,7 @@ private:
                                 std::chrono::steady_clock::time_point publishTime);
     void clearFragmentState();
     void rememberCreditTarget(const sockaddr_in& addr);
+    void handleSyncPong(const uint8_t* data, int len);  // receive-thread only
 
     static constexpr size_t MAX_FRAGMENT_SLOTS = 256;
     static constexpr size_t FRAGMENT_BUCKETS = 512;
@@ -222,6 +253,14 @@ private:
 
     std::atomic<uint64_t> m_receivedFrames{0};
     std::atomic<uint64_t> m_droppedFrames{0};
+
+    // Clock-offset estimation (NTP-style) over the ping/pong round trip.
+    std::atomic<int64_t> m_clockOffsetUs{0};    // game_clock - inference_clock
+    std::atomic<bool> m_clockOffsetValid{false};
+    int64_t m_syncBestRttUs = INT64_MAX;        // receive-thread only (clock filter)
+    std::chrono::steady_clock::time_point m_syncBestResetTime{};  // receive-thread only
+    uint32_t m_pingSeq = 0;                     // main-thread only (SendClockSyncPing)
+    std::chrono::steady_clock::time_point m_lastPingTime{};  // main-thread only
 
     FrameReadyCallback m_frameReadyCallback;
 };

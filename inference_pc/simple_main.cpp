@@ -518,15 +518,23 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
         g_callbackLatencyHist.record(latencyUs);
     }
     // Capture->inference-complete end-to-end latency (excludes mouse actuation).
-    if (ctx->perfStatsEnabled && ticket->captureUnixMicros != 0) {
-        const int64_t e2eUs = nowUnixMicros() - static_cast<int64_t>(ticket->captureUnixMicros);
-        // Drop clock-skew artifacts (negative, or absurdly large) so unsynced
-        // clocks don't poison the stats; a valid capture->complete is sub-second.
-        if (e2eUs >= 0 && e2eUs < 1000000) {
-            g_e2eLatencySamples.fetch_add(1, std::memory_order_relaxed);
-            g_e2eLatencyTotalUs.fetch_add(e2eUs, std::memory_order_relaxed);
-            atomicMax(g_e2eLatencyMaxUs, e2eUs);
-            g_e2eLatencyHist.record(e2eUs);
+    // The game-PC capture time is on the game clock, so add the measured clock
+    // offset (game - inference) to map our completion time onto the same clock.
+    // Skipped until the first ping/pong round trip has produced an offset.
+    if (ctx->perfStatsEnabled && ticket->captureUnixMicros != 0 && ctx->udpCapture) {
+        bool offsetValid = false;
+        const int64_t offset = ctx->udpCapture->GetClockOffsetMicros(&offsetValid);
+        if (offsetValid) {
+            const int64_t e2eUs =
+                (nowUnixMicros() + offset) - static_cast<int64_t>(ticket->captureUnixMicros);
+            // Residual out-of-range means the offset estimate is still settling
+            // or a transient; drop so it doesn't poison the stats.
+            if (e2eUs >= 0 && e2eUs < 1000000) {
+                g_e2eLatencySamples.fetch_add(1, std::memory_order_relaxed);
+                g_e2eLatencyTotalUs.fetch_add(e2eUs, std::memory_order_relaxed);
+                atomicMax(g_e2eLatencyMaxUs, e2eUs);
+                g_e2eLatencyHist.record(e2eUs);
+            }
         }
     }
 
@@ -1295,6 +1303,12 @@ int main(int argc, char* argv[]) {
         {
             std::unique_lock<std::mutex> lock(pipelineCvMutex);
             pipelineCv.wait_for(lock, std::chrono::milliseconds(1));
+        }
+
+        // Keep the game<->inference clock offset fresh for E2E latency. Self-
+        // throttled to ~10/s, so calling it every ~1ms tick is cheap.
+        if (cfg.perfStatsEnabled) {
+            udpCapture.SendClockSyncPing();
         }
 
         // Drain path: the hot path is the receive thread's frame-ready callback

@@ -21,6 +21,13 @@ bool isFrameIdNewer(uint32_t candidate, uint32_t baseline) {
 }
 
 constexpr auto kFrameIdResetIdleTimeout = std::chrono::seconds(2);
+
+// Wall-clock (system_clock) epoch microseconds - must match the game PC's
+// nowUnixMicros() so ping/pong timestamps are comparable across machines.
+int64_t nowUnixMicros() {
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+}
 }  // namespace
 
 UDPCapture::UDPCapture() = default;
@@ -385,6 +392,69 @@ bool UDPCapture::SendFrameCredit(uint32_t minFrameId, uint32_t credits) {
     return sent == static_cast<int>(sizeof(packet));
 }
 
+void UDPCapture::SendClockSyncPing() {
+    if (m_recvSocket == INVALID_SOCKET) return;
+
+    // Self-throttle to ~10/s so callers can invoke this every main-loop tick.
+    const auto now = std::chrono::steady_clock::now();
+    if (m_lastPingTime.time_since_epoch().count() != 0 &&
+        (now - m_lastPingTime) < std::chrono::milliseconds(100)) {
+        return;
+    }
+
+    sockaddr_in target{};
+    {
+        std::lock_guard<std::mutex> lock(m_creditTargetMutex);
+        if (!m_hasCreditTarget) return;  // no game PC learned yet
+        target = m_creditTargetAddr;
+    }
+    m_lastPingTime = now;
+
+    UDPSyncPing ping{};
+    ping.magic = UDP_SYNC_PING_MAGIC;
+    ping.seq = ++m_pingSeq;
+    ping.t1 = static_cast<uint64_t>(nowUnixMicros());
+    sendto(m_recvSocket, reinterpret_cast<const char*>(&ping),
+           static_cast<int>(sizeof(ping)), 0,
+           reinterpret_cast<SOCKADDR*>(&target), sizeof(target));
+}
+
+void UDPCapture::handleSyncPong(const uint8_t* data, int len) {
+    if (len < static_cast<int>(sizeof(UDPSyncPong))) return;
+    UDPSyncPong pong{};
+    std::memcpy(&pong, data, sizeof(pong));
+    if (pong.magic != UDP_SYNC_PONG_MAGIC) return;
+
+    const int64_t t1 = static_cast<int64_t>(pong.t1);  // inference send
+    const int64_t t2 = static_cast<int64_t>(pong.t2);  // game recv
+    const int64_t t3 = static_cast<int64_t>(pong.t3);  // game send
+    const int64_t t4 = nowUnixMicros();                // inference recv
+
+    // NTP: offset = ((t2-t1)+(t3-t4))/2, rtt = (t4-t1)-(t3-t2).
+    const int64_t rtt = (t4 - t1) - (t3 - t2);
+    if (rtt < 0 || rtt > 1000000) return;  // bogus / >1s round trip: ignore
+    const int64_t offset = ((t2 - t1) + (t3 - t4)) / 2;
+
+    // Clock filter: keep the offset from the lowest-RTT sample (least queuing
+    // noise), and periodically re-open the window so it tracks slow drift.
+    const auto now = std::chrono::steady_clock::now();
+    if (m_syncBestResetTime.time_since_epoch().count() == 0 ||
+        (now - m_syncBestResetTime) > std::chrono::seconds(4)) {
+        m_syncBestRttUs = INT64_MAX;
+        m_syncBestResetTime = now;
+    }
+    if (rtt < m_syncBestRttUs) {
+        m_syncBestRttUs = rtt;
+        m_clockOffsetUs.store(offset, std::memory_order_relaxed);
+        m_clockOffsetValid.store(true, std::memory_order_release);
+    }
+}
+
+int64_t UDPCapture::GetClockOffsetMicros(bool* valid) const {
+    if (valid) *valid = m_clockOffsetValid.load(std::memory_order_acquire);
+    return m_clockOffsetUs.load(std::memory_order_relaxed);
+}
+
 bool UDPCapture::Initialize(unsigned short listenPort) {
     m_listenPort = listenPort;
 
@@ -600,7 +670,19 @@ void UDPCapture::receiveThread() {
                              const uint8_t* packetData, int packetBytes,
                              std::chrono::steady_clock::time_point packetNow,
                              const sockaddr_in* fromAddr) {
-        if (!packetData || packetBytes < static_cast<int>(sizeof(UDPPacketHeaderV2))) return;
+        if (!packetData || packetBytes < 4) return;
+        // Clock-sync pong (small control packet) - handle and return before the
+        // frame-header path. One magic compare per packet; frame chunks fall
+        // straight through.
+        {
+            uint32_t magic;
+            std::memcpy(&magic, packetData, sizeof(magic));
+            if (magic == UDP_SYNC_PONG_MAGIC) {
+                handleSyncPong(packetData, packetBytes);
+                return;
+            }
+        }
+        if (packetBytes < static_cast<int>(sizeof(UDPPacketHeaderV2))) return;
 
         const auto* v2 = reinterpret_cast<const UDPPacketHeaderV2*>(packetData);
         if (v2->magic != UDP_PACKET_V3_MAGIC ||

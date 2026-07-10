@@ -548,6 +548,25 @@ struct UDPCreditPacket {
     uint64_t sequence;
 };
 static_assert(sizeof(UDPCreditPacket) == 24, "UDPCreditPacket must stay wire-compatible");
+
+// Clock-sync round trip (see inference PC). Inference sends a ping; we reply with
+// a pong echoing t1 plus our receive (t2) and send (t3) times on the game clock.
+static constexpr uint32_t UDP_SYNC_PING_MAGIC = 0x50415047u;  // "GPAP"
+static constexpr uint32_t UDP_SYNC_PONG_MAGIC = 0x4F415047u;  // "GPAO"
+struct UDPSyncPing {
+    uint32_t magic;
+    uint32_t seq;
+    uint64_t t1;
+};
+static_assert(sizeof(UDPSyncPing) == 16, "UDPSyncPing must stay wire-compatible");
+struct UDPSyncPong {
+    uint32_t magic;
+    uint32_t seq;
+    uint64_t t1;
+    uint64_t t2;
+    uint64_t t3;
+};
+static_assert(sizeof(UDPSyncPong) == 32, "UDPSyncPong must stay wire-compatible");
 #pragma pack(pop)
 
 struct FrameSendResult {
@@ -637,16 +656,39 @@ bool setSocketNonBlocking(SOCKET sock) {
 bool readFrameCredit(SOCKET sock, std::atomic<int>& frameCredits,
                      std::atomic<uint32_t>& minCreditFrameId,
                      StreamStats& stats, LatestFrameSlot& latestFrame) {
-    UDPCreditPacket packet{};
+    uint8_t buf[64];
     sockaddr_in fromAddr{};
     int fromLen = sizeof(fromAddr);
-    const int ret = recvfrom(sock, reinterpret_cast<char*>(&packet), sizeof(packet), 0,
+    const int ret = recvfrom(sock, reinterpret_cast<char*>(buf), sizeof(buf), 0,
                              reinterpret_cast<SOCKADDR*>(&fromAddr), &fromLen);
-    if (ret == SOCKET_ERROR) {
+    if (ret == SOCKET_ERROR || ret < 4) {
         return false;
     }
-    if (ret != static_cast<int>(sizeof(packet)) ||
-        packet.magic != UDP_CREDIT_MAGIC ||
+    uint32_t magic;
+    std::memcpy(&magic, buf, sizeof(magic));
+
+    // Clock-sync ping -> reply immediately with a pong on the game clock.
+    if (magic == UDP_SYNC_PING_MAGIC && ret >= static_cast<int>(sizeof(UDPSyncPing))) {
+        const uint64_t t2 = nowUnixMicros();  // receive time
+        UDPSyncPing ping{};
+        std::memcpy(&ping, buf, sizeof(ping));
+        UDPSyncPong pong{};
+        pong.magic = UDP_SYNC_PONG_MAGIC;
+        pong.seq = ping.seq;
+        pong.t1 = ping.t1;
+        pong.t2 = t2;
+        pong.t3 = nowUnixMicros();  // send time
+        sendto(sock, reinterpret_cast<const char*>(&pong), sizeof(pong), 0,
+               reinterpret_cast<SOCKADDR*>(&fromAddr), fromLen);
+        return true;  // keep draining
+    }
+
+    UDPCreditPacket packet{};
+    if (ret != static_cast<int>(sizeof(packet))) {
+        return false;
+    }
+    std::memcpy(&packet, buf, sizeof(packet));
+    if (packet.magic != UDP_CREDIT_MAGIC ||
         packet.size != sizeof(UDPCreditPacket) ||
         packet.credits == 0) {
         return false;
