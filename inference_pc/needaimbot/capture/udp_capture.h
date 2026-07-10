@@ -42,7 +42,10 @@ typedef int SOCKET;
 #include <vector>
 
 #pragma pack(push, 1)
-static constexpr uint32_t UDP_PACKET_V2_MAGIC = 0x32415047u;  // "GPA2" little-endian
+// v3 wire format: same layout as v2 plus a trailing capture timestamp. The magic
+// is bumped so a v2 and v3 peer reject each other cleanly instead of misparsing;
+// rebuild BOTH game PC and inference PC together when this changes.
+static constexpr uint32_t UDP_PACKET_V3_MAGIC = 0x33415047u;  // "GPA3" little-endian
 static constexpr uint8_t UDP_PIXEL_FORMAT_RGB = 2;
 
 struct UDPPacketHeaderV2 {
@@ -60,8 +63,12 @@ struct UDPPacketHeaderV2 {
     uint8_t pixelFormat;
     uint8_t bytesPerPixel;
     uint16_t reserved;
+    // Game-PC std::chrono::system_clock epoch microseconds stamped at capture,
+    // same in every chunk of a frame. 0 = unknown. Used for capture->inference
+    // end-to-end latency; assumes the two PCs' wall clocks are NTP-synced.
+    uint64_t captureUnixMicros;
 };
-static_assert(sizeof(UDPPacketHeaderV2) == 36, "UDPPacketHeaderV2 must stay wire-compatible");
+static_assert(sizeof(UDPPacketHeaderV2) == 44, "UDPPacketHeaderV2 must stay wire-compatible");
 
 static constexpr uint32_t UDP_CREDIT_MAGIC = 0x43504147u;  // "GPAC" little-endian
 struct UDPCreditPacket {
@@ -89,7 +96,8 @@ public:
     bool AcquireFramePinned(void** pinnedRgbData, unsigned int* width, unsigned int* height,
                             uint64_t* outFrameId = nullptr, int* bufferIndex = nullptr,
                             uint32_t timeoutMs = 16, uint8_t* bytesPerPixel = nullptr,
-                            uint8_t* pixelFormat = nullptr);
+                            uint8_t* pixelFormat = nullptr,
+                            uint64_t* outCaptureUnixMicros = nullptr);
     void ReleaseFrame(int bufferIndex);
 
     uint64_t GetReceivedFrameCount() const { return m_receivedFrames.load(std::memory_order_relaxed); }
@@ -138,6 +146,7 @@ private:
         size_t frameBytes = 0;
         int bufferIndex = -1;
         bool dropped = false;
+        uint64_t captureUnixMicros = 0;
         std::chrono::steady_clock::time_point lastUpdate;
     };
 
@@ -155,7 +164,7 @@ private:
     void releaseAssemblingBuffer(int bufferIndex);
     bool publishAssembledBuffer(int bufferIndex, uint16_t width, uint16_t height,
                                 uint32_t frameId, uint8_t bytesPerPixel,
-                                uint8_t pixelFormat,
+                                uint8_t pixelFormat, uint64_t captureUnixMicros,
                                 std::chrono::steady_clock::time_point publishTime);
     void clearFragmentState();
     void rememberCreditTarget(const sockaddr_in& addr);
@@ -195,6 +204,7 @@ private:
         UDP_PIXEL_FORMAT_RGB, UDP_PIXEL_FORMAT_RGB, UDP_PIXEL_FORMAT_RGB,
         UDP_PIXEL_FORMAT_RGB, UDP_PIXEL_FORMAT_RGB};
     std::atomic<uint64_t> m_bufferFrameId[NUM_BUFFERS] = {};
+    std::atomic<uint64_t> m_bufferCaptureUnixMicros[NUM_BUFFERS] = {};
 
     std::atomic<int> m_latestBufferIndex{-1};
     std::condition_variable m_publishCv;

@@ -11,6 +11,7 @@
 #include <chrono>
 #include <csignal>
 #include <cmath>
+#include <ctime>
 #include <iomanip>
 #include <filesystem>
 #include <condition_variable>
@@ -53,6 +54,41 @@ std::atomic<int> g_frameCount{0};  // Completed inference callbacks per stat win
 std::atomic<uint64_t> g_callbackLatencySamples{0};
 std::atomic<int64_t> g_callbackLatencyTotalUs{0};
 std::atomic<int64_t> g_callbackLatencyMaxUs{0};
+AtomicLatencyHistogram g_callbackLatencyHist;  // submit->completion latency percentiles
+
+// Capture->inference-complete end-to-end latency (game-PC capture timestamp in
+// the UDP header vs. this PC's completion time). Assumes NTP-synced wall clocks;
+// clock-skew outliers are dropped at record time. Mouse actuation is NOT included.
+std::atomic<uint64_t> g_e2eLatencySamples{0};
+std::atomic<int64_t> g_e2eLatencyTotalUs{0};
+std::atomic<int64_t> g_e2eLatencyMaxUs{0};
+AtomicLatencyHistogram g_e2eLatencyHist;
+
+// This PC's wall clock (system_clock) epoch microseconds, for subtracting the
+// game-PC capture timestamp carried in the UDP header.
+static int64_t nowUnixMicros() {
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+// Wall-clock stamp for perf-log lines (local time, millisecond resolution) so a
+// window's metrics can be correlated with events on the game PC.
+static std::string formatWallClock() {
+    const auto now = std::chrono::system_clock::now();
+    const std::time_t t = std::chrono::system_clock::to_time_t(now);
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        now.time_since_epoch()) % 1000;
+    std::tm tmv{};
+#ifdef _WIN32
+    localtime_s(&tmv, &t);
+#else
+    localtime_r(&t, &tmv);
+#endif
+    std::ostringstream os;
+    os << std::put_time(&tmv, "%Y-%m-%d %H:%M:%S") << '.'
+       << std::setfill('0') << std::setw(3) << ms.count();
+    return os.str();
+}
 
 void signalHandler(int sig) {
     std::cout << "\n[Simple] Received signal " << sig << ", shutting down..." << std::endl;
@@ -66,7 +102,10 @@ struct CallbackContext;
 // Configuration
 struct Config {
     // Engine
-    std::string enginePath = "sunxds_0.8.2_256_fp16io_orin_l5_aux0.engine";
+    // NOTE: We intentionally run the plain fp16 engine, not fp16io. Switching the
+    // I/O tensors to fp16 (fp16io) degrades detection accuracy too much to be
+    // worth the small bandwidth/latency gain, so do not "optimize" this to fp16io.
+    std::string enginePath = "engines/sunxds_0.8.2_256_fp16.engine";
     std::string makcuPort = "/dev/ttyACM0";
     int udpPort = 5007;
 
@@ -103,8 +142,11 @@ struct Config {
     float shootOffsetX = 0.0f;
     float shootOffsetY = -13.0f;
 
-    // Mouse rate limiting
-    int mouseMinIntervalMs = 1;
+    // Mouse rate limiting. 0 = no rate limit AND enables the zero-latency
+    // direct-callback aim path (submitAimMovement sends straight from the GPU
+    // completion callback instead of hopping through the sender thread/queue).
+    // See directAimMoveInCallback below - it is gated on mouseMinIntervalMs <= 0.
+    int mouseMinIntervalMs = 0;
     int maxInFlightFrames = 1;    // Keep latency low by avoiding stale queued frames
     int frameCreditDepth = 2;     // Allow the Game PC to pre-send the newest next frame
     bool directAimMoveInCallback = true;
@@ -126,9 +168,18 @@ struct Config {
     int affinityCoreCallback = 6;   // GPU completion / mouse-move worker
     int affinityCoreSender = 4;     // move-sender thread (used when not direct)
 
-    // Runtime diagnostics
-    bool perfStatsEnabled = true;
+    // Runtime diagnostics. The screen shows only user-facing health (FPS, aim/
+    // shoot, packet drops); the full per-window metrics (latency avg/max +
+    // p50/p95/p99, stage breakdown) are appended to perfLogPath instead. A
+    // relative path is resolved next to the config file; empty disables the log.
+    // Off by default so a normal install writes nothing to disk - turn on only
+    // when measuring. When on, the log is size-capped (perfLogMaxBytes) with one
+    // rotated backup, so total disk use is bounded even over long runs.
+    bool perfStatsEnabled = false;
     int perfStatsIntervalMs = 1000;
+    std::string perfLogPath = "perf_stats.log";
+    int perfLogMaxBytes = 33554432;       // rotate at 32 MiB (0 = no rotation, grows unbounded)
+    bool perfLogTruncateOnStart = false;  // true = overwrite log each run instead of appending
     bool realtimeThreadsEnabled = true;
     bool forceAimOn = false;  // Benchmark/testing override (keeps inference loop active)
     bool idleGraphPrecaptureEnabled = true;
@@ -180,6 +231,9 @@ struct Config {
 
             if (j.contains("perf_stats_enabled")) perfStatsEnabled = j["perf_stats_enabled"];
             if (j.contains("perf_stats_interval_ms")) perfStatsIntervalMs = j["perf_stats_interval_ms"];
+            if (j.contains("perf_log_path")) perfLogPath = j["perf_log_path"];
+            if (j.contains("perf_log_max_bytes")) perfLogMaxBytes = j["perf_log_max_bytes"];
+            if (j.contains("perf_log_truncate_on_start")) perfLogTruncateOnStart = j["perf_log_truncate_on_start"];
             if (j.contains("realtime_threads_enabled")) realtimeThreadsEnabled = j["realtime_threads_enabled"];
             if (j.contains("cpu_affinity_enabled")) cpuAffinityEnabled = j["cpu_affinity_enabled"];
             if (j.contains("affinity_core_main")) affinityCoreMain = j["affinity_core_main"];
@@ -271,6 +325,9 @@ struct Config {
 
             j["perf_stats_enabled"] = perfStatsEnabled;
             j["perf_stats_interval_ms"] = perfStatsIntervalMs;
+            j["perf_log_path"] = perfLogPath;
+            j["perf_log_max_bytes"] = perfLogMaxBytes;
+            j["perf_log_truncate_on_start"] = perfLogTruncateOnStart;
             j["realtime_threads_enabled"] = realtimeThreadsEnabled;
             j["cpu_affinity_enabled"] = cpuAffinityEnabled;
             j["affinity_core_main"] = affinityCoreMain;
@@ -339,6 +396,13 @@ struct Config {
                   << (makcuBinaryMove ? "BINARY (8B frame)" : "ASCII (km.move)") << std::endl;
         std::cout << "[Config] Perf stats: " << (perfStatsEnabled ? "ON" : "OFF")
                   << " (interval=" << perfStatsIntervalMs << "ms)" << std::endl;
+        std::cout << "[Config] Perf log: "
+                  << (perfLogPath.empty() ? std::string("(disabled)") : perfLogPath);
+        if (!perfLogPath.empty()) {
+            std::cout << " (rotate=" << (perfLogMaxBytes > 0 ? std::to_string(perfLogMaxBytes) + "B" : "off")
+                      << ", truncate_on_start=" << (perfLogTruncateOnStart ? "yes" : "no") << ")";
+        }
+        std::cout << std::endl;
         std::cout << "[Config] Realtime thread hints: " << (realtimeThreadsEnabled ? "ON" : "OFF") << std::endl;
         std::cout << "[Config] CPU affinity: " << (cpuAffinityEnabled ? "ON" : "OFF");
         if (cpuAffinityEnabled) {
@@ -433,6 +497,7 @@ struct CallbackTicket {
     CallbackContext* ctx = nullptr;
     int bufferIndex = -1;
     Clock::time_point submitTime{};
+    uint64_t captureUnixMicros = 0;  // game-PC capture wall time, for E2E latency
     std::atomic<bool> busy{false};
 };
 
@@ -450,6 +515,19 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
         g_callbackLatencySamples.fetch_add(1, std::memory_order_relaxed);
         g_callbackLatencyTotalUs.fetch_add(latencyUs, std::memory_order_relaxed);
         atomicMax(g_callbackLatencyMaxUs, latencyUs);
+        g_callbackLatencyHist.record(latencyUs);
+    }
+    // Capture->inference-complete end-to-end latency (excludes mouse actuation).
+    if (ctx->perfStatsEnabled && ticket->captureUnixMicros != 0) {
+        const int64_t e2eUs = nowUnixMicros() - static_cast<int64_t>(ticket->captureUnixMicros);
+        // Drop clock-skew artifacts (negative, or absurdly large) so unsynced
+        // clocks don't poison the stats; a valid capture->complete is sub-second.
+        if (e2eUs >= 0 && e2eUs < 1000000) {
+            g_e2eLatencySamples.fetch_add(1, std::memory_order_relaxed);
+            g_e2eLatencyTotalUs.fetch_add(e2eUs, std::memory_order_relaxed);
+            atomicMax(g_e2eLatencyMaxUs, e2eUs);
+            g_e2eLatencyHist.record(e2eUs);
+        }
     }
 
     auto releaseTicket = [ticket, ctx]() {
@@ -460,6 +538,7 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
         auto markReleased = [&]() {
             ticket->bufferIndex = -1;
             ticket->submitTime = Clock::time_point{};
+            ticket->captureUnixMicros = 0;
             ticket->busy.store(false, std::memory_order_release);
         };
         if (ctx->pipelineCv && ctx->pipelineCvMutex) {
@@ -662,7 +741,7 @@ int main(int argc, char* argv[]) {
     auto resolvedEnginePath = engine_locator::resolveEnginePath(cfg.enginePath, configPath, exeDir, repoRoot);
     if (!resolvedEnginePath) {
         std::cerr << "[Config] Engine not found: " << requestedEnginePath << std::endl;
-        std::cerr << "[Config] Place a .engine file under the repo root, inference_pc/, or set engine_path in "
+        std::cerr << "[Config] Set engine_path to an existing .engine file in "
                   << configPathStr << std::endl;
         return 1;
     }
@@ -869,6 +948,59 @@ int main(int argc, char* argv[]) {
               << (movementController.directAimMoveInCallback() ? "ENABLED" : "DISABLED")
               << std::endl;
 
+    // Perf log: full per-window metrics go here (the screen stays user-facing).
+    // Relative paths resolve next to the config file; empty disables logging.
+    // The file is size-capped: at perfLogMaxBytes it is rotated to "<path>.1"
+    // (one backup) and reopened, so total disk use is bounded to ~2x the cap.
+    // Writes happen at most once per stat window (default 1s), not per frame,
+    // and flush is batched (every ~5s) to keep file I/O off the hot cadence.
+    std::ofstream perfLog;
+    std::filesystem::path perfLogPath;
+    size_t perfLogBytes = 0;
+    const size_t perfLogMaxBytes = cfg.perfLogMaxBytes > 0 ? static_cast<size_t>(cfg.perfLogMaxBytes) : 0;
+    auto perfLogHeader = [&]() {
+        std::ostringstream h;
+        h << "# session " << formatWallClock()
+          << " engine=" << cfg.enginePath
+          << " interval=" << perfStatsIntervalMs << "ms"
+          << " | fields: R/S/D=recv/submit/done per s, B=busyDrop F=submitFail"
+          << " C/U=udp recv/drop, Cr=credit I=inflight, Aw=acquire ms(avg/max)"
+          << " Awp=acquire p50/95/99 ms, Su=submit us(avg/max), Cb=callback ms(avg/max)"
+          << " Cbp=callback p50/95/99 ms,"
+          << " E2E=capture->complete ms(avg/max) E2Ep=p50/95/99 ms E2En=samples/window"
+          << " (needs NTP-synced clocks; excludes mouse), NF/IF/MD=timeouts/invalid/movedrop,"
+          << " G=graph/std/fallback, St=[h2d pre inf post d2h] us(avg/max)\n";
+        return h.str();
+    };
+    if (cfg.perfStatsEnabled && !cfg.perfLogPath.empty()) {
+        std::filesystem::path logPath(cfg.perfLogPath);
+        if (logPath.is_relative()) logPath = configPath.parent_path() / logPath;
+        perfLogPath = logPath.lexically_normal();
+        const auto openMode = std::ios::out |
+            (cfg.perfLogTruncateOnStart ? std::ios::trunc : std::ios::app);
+        perfLog.open(perfLogPath.string(), openMode);
+        if (perfLog.is_open()) {
+            std::error_code ec;
+            if (!cfg.perfLogTruncateOnStart) {
+                const auto existing = std::filesystem::file_size(perfLogPath, ec);
+                if (!ec) perfLogBytes = static_cast<size_t>(existing);
+            }
+            const std::string hdr = perfLogHeader();
+            perfLog << hdr;
+            perfLogBytes += hdr.size();
+            perfLog.flush();
+            std::cout << "[Simple] Perf log -> " << perfLogPath.string()
+                      << (perfLogMaxBytes ? " (rotate at " +
+                            std::to_string(perfLogMaxBytes / (1024 * 1024)) + "MiB, 1 backup)"
+                                          : std::string(" (no rotation)"))
+                      << std::endl;
+        } else {
+            std::cerr << "[Simple] WARN: could not open perf log at " << perfLogPath.string()
+                      << " (metrics will not be recorded)" << std::endl;
+        }
+    }
+    auto lastPerfFlush = std::chrono::steady_clock::now();
+
     std::cout << "\n[Simple] Running... Press Ctrl+C to exit" << std::endl;
     std::cout << "[Simple] Right-click (or Side2) = AIM" << std::endl;
     std::cout << "[Simple] Left+Right = AIM + NO-RECOIL" << std::endl;
@@ -1017,6 +1149,7 @@ int main(int argc, char* argv[]) {
         int bufferIndex = -1;
         uint8_t bytesPerPixel = 3;
         uint8_t pixelFormat = UDP_PIXEL_FORMAT_RGB;
+        uint64_t acquiredCaptureUnixMicros = 0;
 
         Clock::time_point acquireStart{};
         if (cfg.perfStatsEnabled) {
@@ -1025,7 +1158,7 @@ int main(int argc, char* argv[]) {
         // Non-blocking - see the function comment above.
         const bool gotFrame = udpCapture.AcquireFramePinned(
             &pinnedRgbData, &width, &height, &acquiredFrameId, &bufferIndex, /*timeoutMs=*/0,
-            &bytesPerPixel, &pixelFormat);
+            &bytesPerPixel, &pixelFormat, &acquiredCaptureUnixMicros);
         if (cfg.perfStatsEnabled) {
             perfWindow.recordAcquire(elapsedUs(acquireStart, Clock::now()), gotFrame);
         }
@@ -1114,6 +1247,7 @@ int main(int argc, char* argv[]) {
             submitStart = Clock::now();
         }
         ticket->submitTime = submitStart;
+        ticket->captureUnixMicros = acquiredCaptureUnixMicros;
         bool submitted = inference.runInferenceWithCallback(
             pinnedRgbData, width, height,
             cfg.confThreshold, cfg.headClassId,
@@ -1135,6 +1269,7 @@ int main(int argc, char* argv[]) {
             }
             ticket->bufferIndex = -1;
             ticket->submitTime = Clock::time_point{};
+            ticket->captureUnixMicros = 0;
             ticket->busy.store(false, std::memory_order_release);
             if (inference.getCallbacksInFlight() >= maxPipelineInFlight) {
                 busyDropWindow++;
@@ -1302,6 +1437,21 @@ int main(int argc, char* argv[]) {
                 ? 0.0
                 : static_cast<double>(callbackLatencyTotalUs) / callbackLatencySamples / 1000.0;
             const double callbackMaxMs = static_cast<double>(callbackLatencyMaxUs) / 1000.0;
+            // Only drain the 512-bucket histograms when stats are on; with stats
+            // off nothing is recorded, so skip the per-window work entirely.
+            const LatencyHistogram callbackHist =
+                cfg.perfStatsEnabled ? g_callbackLatencyHist.drain() : LatencyHistogram{};
+            const uint64_t e2eSamples =
+                g_e2eLatencySamples.exchange(0, std::memory_order_relaxed);
+            const int64_t e2eTotalUs = g_e2eLatencyTotalUs.exchange(0, std::memory_order_relaxed);
+            const int64_t e2eMaxUs = g_e2eLatencyMaxUs.exchange(0, std::memory_order_relaxed);
+            const double e2eAvgMs = e2eSamples == 0
+                ? 0.0
+                : static_cast<double>(e2eTotalUs) / e2eSamples / 1000.0;
+            const double e2eMaxMs = static_cast<double>(e2eMaxUs) / 1000.0;
+            const LatencyHistogram e2eHist =
+                cfg.perfStatsEnabled ? g_e2eLatencyHist.drain() : LatencyHistogram{};
+            const auto usToMs = [](int64_t us) { return static_cast<double>(us) / 1000.0; };
             uint64_t udpReceivedNow = udpCapture.GetReceivedFrameCount();
             uint64_t udpReceivedDelta = udpReceivedNow - lastUdpReceived;
             lastUdpReceived = udpReceivedNow;
@@ -1309,39 +1459,92 @@ int main(int argc, char* argv[]) {
             uint64_t udpDroppedDelta = udpDroppedNow - lastUdpDropped;
             lastUdpDropped = udpDroppedNow;
             const uint8_t statusButtonMask = makcu.buttonMask();
+            const bool aimActive = cfg.forceAimOn || controller::maskAiming(statusButtonMask);
+            const bool shootActive = controller::maskShooting(statusButtonMask);
 
+            // Screen: user-facing health only. FPS = completed inferences/s;
+            // drop = UDP frames lost this window. Everything diagnostic goes to
+            // the perf log below.
             std::ostringstream status;
             status << std::fixed << std::setprecision(1)
-                   << "[Simple] R:" << (recvSnapshot * 1000.0f / elapsed)
-                   << " S:" << (submittedSnapshot * 1000.0f / elapsed)
-                   << " D:" << (completedFrames * 1000.0f / elapsed)
-                   << " B:" << busyDropSnapshot
-                   << " F:" << submitFailSnapshot
-                   << " C:" << udpReceivedDelta
-                   << " U:" << udpDroppedDelta
-                   << " Cr:" << creditSnapshot
-                   << " I:" << busyCallbackTicketCount()
-                   << " A:" << ((cfg.forceAimOn || controller::maskAiming(statusButtonMask)) ? "ON" : "OFF")
-                   << " Sh:" << (controller::maskShooting(statusButtonMask) ? "ON" : "OFF");
-            if (cfg.perfStatsEnabled) {
-                status << " Aw:" << perfSnapshot.averageAcquireMs() << "/" << perfSnapshot.maxAcquireMs() << "ms"
-                       << " Su:" << perfSnapshot.averageSubmitUs() << "/" << perfSnapshot.submitMaxUs << "us"
-                       << " Cb:" << callbackAvgMs << "/" << callbackMaxMs << "ms"
-                       << " NF:" << perfSnapshot.acquireTimeouts
-                       << " IF:" << perfSnapshot.invalidFrames
-                       << " MD:" << moveQueueDropped
-                       << " G:" << launchStats.graph << "/" << launchStats.standard
-                       << "/" << launchStats.graphFallback;
+                   << "[Simple] FPS:" << (completedFrames * 1000.0f / elapsed)
+                   << " aim:" << (aimActive ? "ON" : "OFF")
+                   << " shoot:" << (shootActive ? "ON" : "OFF")
+                   << " drop:" << udpDroppedDelta;
+
+            // Perf log: the full per-window metric set (avg/max + percentiles +
+            // optional stage breakdown), one timestamped line per window.
+            if (cfg.perfStatsEnabled && perfLog.is_open()) {
+                std::ostringstream logline;
+                logline << std::fixed << std::setprecision(1)
+                        << formatWallClock()
+                        << " R:" << (recvSnapshot * 1000.0f / elapsed)
+                        << " S:" << (submittedSnapshot * 1000.0f / elapsed)
+                        << " D:" << (completedFrames * 1000.0f / elapsed)
+                        << " B:" << busyDropSnapshot
+                        << " F:" << submitFailSnapshot
+                        << " C:" << udpReceivedDelta
+                        << " U:" << udpDroppedDelta
+                        << " Cr:" << creditSnapshot
+                        << " I:" << busyCallbackTicketCount()
+                        << " A:" << (aimActive ? "ON" : "OFF")
+                        << " Sh:" << (shootActive ? "ON" : "OFF")
+                        << " Aw:" << perfSnapshot.averageAcquireMs() << "/" << perfSnapshot.maxAcquireMs() << "ms"
+                        << " Awp[" << usToMs(perfSnapshot.acquireHist.percentileUs(0.50)) << "/"
+                        << usToMs(perfSnapshot.acquireHist.percentileUs(0.95)) << "/"
+                        << usToMs(perfSnapshot.acquireHist.percentileUs(0.99)) << "]ms"
+                        << " Su:" << perfSnapshot.averageSubmitUs() << "/" << perfSnapshot.submitMaxUs << "us"
+                        << " Cb:" << callbackAvgMs << "/" << callbackMaxMs << "ms"
+                        << " Cbp[" << usToMs(callbackHist.percentileUs(0.50)) << "/"
+                        << usToMs(callbackHist.percentileUs(0.95)) << "/"
+                        << usToMs(callbackHist.percentileUs(0.99)) << "]ms"
+                        << " E2E:" << e2eAvgMs << "/" << e2eMaxMs << "ms"
+                        << " E2Ep[" << usToMs(e2eHist.percentileUs(0.50)) << "/"
+                        << usToMs(e2eHist.percentileUs(0.95)) << "/"
+                        << usToMs(e2eHist.percentileUs(0.99)) << "]ms"
+                        << " E2En:" << e2eSamples
+                        << " NF:" << perfSnapshot.acquireTimeouts
+                        << " IF:" << perfSnapshot.invalidFrames
+                        << " MD:" << moveQueueDropped
+                        << " G:" << launchStats.graph << "/" << launchStats.standard
+                        << "/" << launchStats.graphFallback;
                 if (cfg.stageTimingEnabled) {
                     const auto st = inference.takeStageTimingStats();
                     auto avgUs = [&](uint64_t total) {
                         return st.samples == 0 ? 0.0 : static_cast<double>(total) / static_cast<double>(st.samples);
                     };
-                    status << " St[h2d:" << avgUs(st.h2dUsTotal) << "/" << st.h2dUsMax
-                           << " pre:" << avgUs(st.preprocessUsTotal) << "/" << st.preprocessUsMax
-                           << " inf:" << avgUs(st.inferenceUsTotal) << "/" << st.inferenceUsMax
-                           << " post:" << avgUs(st.postprocessUsTotal) << "/" << st.postprocessUsMax
-                           << " d2h:" << avgUs(st.d2hUsTotal) << "/" << st.d2hUsMax << "us]";
+                    logline << " St[h2d:" << avgUs(st.h2dUsTotal) << "/" << st.h2dUsMax
+                            << " pre:" << avgUs(st.preprocessUsTotal) << "/" << st.preprocessUsMax
+                            << " inf:" << avgUs(st.inferenceUsTotal) << "/" << st.inferenceUsMax
+                            << " post:" << avgUs(st.postprocessUsTotal) << "/" << st.postprocessUsMax
+                            << " d2h:" << avgUs(st.d2hUsTotal) << "/" << st.d2hUsMax << "us]";
+                }
+                const std::string line = logline.str();
+                perfLog << line << '\n';
+                perfLogBytes += line.size() + 1;
+
+                // Size-based rotation: at the cap, move the file to "<path>.1"
+                // (replacing any prior backup) and reopen fresh. Reopen happens
+                // at most once per cap worth of data (~hours at 1 line/s), so it
+                // never lands on the frame path.
+                if (perfLogMaxBytes && perfLogBytes >= perfLogMaxBytes) {
+                    perfLog.close();
+                    std::error_code ec;
+                    std::filesystem::rename(perfLogPath,
+                        std::filesystem::path(perfLogPath.string() + ".1"), ec);
+                    perfLog.open(perfLogPath.string(), std::ios::out | std::ios::trunc);
+                    perfLogBytes = 0;
+                    if (perfLog.is_open()) {
+                        const std::string hdr = perfLogHeader();
+                        perfLog << hdr;
+                        perfLogBytes += hdr.size();
+                    }
+                    perfLog.flush();
+                    lastPerfFlush = now;
+                } else if (now - lastPerfFlush >= std::chrono::seconds(5)) {
+                    // Batch flushes: 1 line/s doesn't need a syscall per write.
+                    perfLog.flush();
+                    lastPerfFlush = now;
                 }
             }
 

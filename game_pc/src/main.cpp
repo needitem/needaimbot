@@ -74,8 +74,16 @@ static Config g_config;
 
 static constexpr int kMinPacketPayloadBytes = 512;
 static constexpr int kMaxPacketPayloadBytes = 60000;
-static constexpr uint32_t UDP_PACKET_V2_MAGIC = 0x32415047u;  // "GPA2" little-endian
+static constexpr uint32_t UDP_PACKET_V3_MAGIC = 0x33415047u;  // "GPA3" little-endian (v3: +captureUnixMicros)
 static constexpr uint8_t UDP_PIXEL_FORMAT_RGB = 2;
+
+// Game-PC wall clock (system_clock) epoch microseconds, stamped at capture and
+// carried in the packet header so the inference PC can measure capture->inference
+// end-to-end latency. Assumes both PCs are NTP-synced.
+static inline uint64_t nowUnixMicros() {
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count());
+}
 static constexpr uint32_t UDP_CREDIT_MAGIC = 0x43504147u;  // "GPAC" little-endian
 
 struct OutputInfo {
@@ -95,6 +103,7 @@ struct LatestFrameSlot {
     // latest frame to RGB with SIMD, so old frames cannot queue behind inference.
     std::vector<uint8_t> bgra;
     uint64_t sequence = 0;
+    uint64_t captureUnixMicros = 0;  // wall-clock at grab, for E2E latency
     uint16_t width = 0;
     uint16_t height = 0;
     bool hasFrame = false;
@@ -393,7 +402,8 @@ public:
     }
 
     bool CaptureFrame(std::vector<uint8_t>& outData, int x, int y, int w, int h,
-                      UINT timeoutMs = 100, CaptureResult* result = nullptr) {
+                      UINT timeoutMs = 100, CaptureResult* result = nullptr,
+                      uint64_t* outCaptureUnixMicros = nullptr) {
         auto setResult = [&](CaptureStatus status, HRESULT hr) {
             if (result) {
                 result->status = status;
@@ -426,6 +436,12 @@ public:
             setResult(CaptureStatus::Failed, hr);
             return false;
         }
+
+        // Stamp capture time the instant a new frame is acquired, BEFORE the GPU
+        // readback (CopySubresourceRegion + Map) and CPU copy below. Those steps
+        // are a suspected dominant latency segment, so they must be inside the
+        // capture->inference E2E window, not excluded by stamping after return.
+        if (outCaptureUnixMicros) *outCaptureUnixMicros = nowUnixMicros();
 
         ComPtr<ID3D11Texture2D> texture;
         hr = resource.As(&texture);
@@ -519,8 +535,9 @@ struct UDPPacketHeaderV2 {
     uint8_t pixelFormat;
     uint8_t bytesPerPixel;
     uint16_t reserved;
+    uint64_t captureUnixMicros;  // system_clock epoch us at capture (0 = unknown)
 };
-static_assert(sizeof(UDPPacketHeaderV2) == 36, "UDPPacketHeaderV2 must stay wire-compatible");
+static_assert(sizeof(UDPPacketHeaderV2) == 44, "UDPPacketHeaderV2 must stay wire-compatible");
 
 struct UDPCreditPacket {
     uint32_t magic;
@@ -543,7 +560,8 @@ FrameSendResult sendFrameUdp(SOCKET sendSock, const sockaddr_in& destAddr,
                              const uint8_t* sendData, size_t frameSize,
                              uint32_t frameId, uint16_t frameWidth,
                              uint16_t frameHeight, uint8_t pixelFormat,
-                             uint8_t bytesPerPixel, size_t maxPayloadPerPacket) {
+                             uint8_t bytesPerPixel, size_t maxPayloadPerPacket,
+                             uint64_t captureUnixMicros) {
     FrameSendResult result{};
     if (!sendData || frameSize == 0 || frameSize > UINT32_MAX || maxPayloadPerPacket == 0) {
         return result;
@@ -561,7 +579,7 @@ FrameSendResult sendFrameUdp(SOCKET sendSock, const sockaddr_in& destAddr,
         const uint32_t payloadSize = static_cast<uint32_t>(std::min(remaining, maxPayloadPerPacket));
 
         UDPPacketHeaderV2 header{};
-        header.magic = UDP_PACKET_V2_MAGIC;
+        header.magic = UDP_PACKET_V3_MAGIC;
         header.headerSize = static_cast<uint16_t>(sizeof(UDPPacketHeaderV2));
         header.flags = 0;
         header.frameId = frameId;
@@ -575,6 +593,7 @@ FrameSendResult sendFrameUdp(SOCKET sendSock, const sockaddr_in& destAddr,
         header.pixelFormat = pixelFormat;
         header.bytesPerPixel = bytesPerPixel;
         header.reserved = 0;
+        header.captureUnixMicros = captureUnixMicros;
 
         WSABUF bufs[2];
         bufs[0].buf = reinterpret_cast<CHAR*>(&header);
@@ -1277,6 +1296,7 @@ int main(int argc, char** argv) {
         while (g_running.load(std::memory_order_relaxed)) {
             uint16_t sendWidth = 0;
             uint16_t sendHeight = 0;
+            uint64_t sendCaptureUnixMicros = 0;
             bool recoverySend = false;
 
             {
@@ -1314,6 +1334,7 @@ int main(int argc, char** argv) {
                 sendWidth = latestFrame.width;
                 sendHeight = latestFrame.height;
                 lastSentSequence = latestFrame.sequence;
+                sendCaptureUnixMicros = latestFrame.captureUnixMicros;
                 bgraLocal.swap(latestFrame.bgra);
                 latestFrame.hasFrame = false;
             }
@@ -1351,7 +1372,8 @@ int main(int argc, char** argv) {
                 sendHeight,
                 wirePixelFormatValue,
                 wireBytesPerPixelValue,
-                maxPayloadPerPacket);
+                maxPayloadPerPacket,
+                sendCaptureUnixMicros);
             const auto sendEnd = std::chrono::high_resolution_clock::now();
 
             stats.totalSendUs.fetch_add(
@@ -1464,9 +1486,10 @@ int main(int argc, char** argv) {
         // Capture a new desktop frame if available.
         auto t1 = std::chrono::high_resolution_clock::now();
         CaptureResult captureResult{};
+        uint64_t capturedUnixMicros = 0;
         bool gotNewFrame = capture.CaptureFrame(frameData, g_config.captureX, g_config.captureY,
                                                 g_config.captureWidth, g_config.captureHeight,
-                                                captureTimeoutMs, &captureResult);
+                                                captureTimeoutMs, &captureResult, &capturedUnixMicros);
         auto t2 = std::chrono::high_resolution_clock::now();
         stats.captureAttempts.fetch_add(1, std::memory_order_relaxed);
 
@@ -1481,6 +1504,7 @@ int main(int argc, char** argv) {
                 latestFrame.bgra.swap(frameData);
                 latestFrame.width = static_cast<uint16_t>(g_config.captureWidth);
                 latestFrame.height = static_cast<uint16_t>(g_config.captureHeight);
+                latestFrame.captureUnixMicros = capturedUnixMicros;
                 latestFrame.hasFrame = true;
                 ++latestFrame.sequence;
             }

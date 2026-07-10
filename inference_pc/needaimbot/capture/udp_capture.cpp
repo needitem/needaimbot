@@ -188,6 +188,7 @@ bool UDPCapture::allocatePinnedBuffers(size_t size) {
         m_bufferBytesPerPixel[i].store(3, std::memory_order_relaxed);
         m_bufferPixelFormat[i].store(UDP_PIXEL_FORMAT_RGB, std::memory_order_relaxed);
         m_bufferFrameId[i].store(0, std::memory_order_relaxed);
+        m_bufferCaptureUnixMicros[i].store(0, std::memory_order_relaxed);
     }
 
     std::cout << "[UDPCapture] Allocated " << (size / 1024) << "KB x " << NUM_BUFFERS
@@ -222,6 +223,7 @@ void UDPCapture::freePinnedBuffers() {
         m_bufferBytesPerPixel[i].store(3, std::memory_order_relaxed);
         m_bufferPixelFormat[i].store(UDP_PIXEL_FORMAT_RGB, std::memory_order_relaxed);
         m_bufferFrameId[i].store(0, std::memory_order_relaxed);
+        m_bufferCaptureUnixMicros[i].store(0, std::memory_order_relaxed);
     }
     m_pinnedBufferSize = 0;
     m_usePinnedMemory = false;
@@ -269,7 +271,7 @@ void UDPCapture::releaseAssemblingBuffer(int bufferIndex) {
 
 bool UDPCapture::publishAssembledBuffer(int bufferIndex, uint16_t width, uint16_t height,
                                         uint32_t frameId, uint8_t bytesPerPixel,
-                                        uint8_t pixelFormat,
+                                        uint8_t pixelFormat, uint64_t captureUnixMicros,
                                         std::chrono::steady_clock::time_point publishTime) {
     if (bufferIndex < 0 || bufferIndex >= NUM_BUFFERS) return false;
 
@@ -289,6 +291,7 @@ bool UDPCapture::publishAssembledBuffer(int bufferIndex, uint16_t width, uint16_
     m_bufferBytesPerPixel[bufferIndex].store(bytesPerPixel, std::memory_order_relaxed);
     m_bufferPixelFormat[bufferIndex].store(pixelFormat, std::memory_order_relaxed);
     m_bufferFrameId[bufferIndex].store(frameId, std::memory_order_relaxed);
+    m_bufferCaptureUnixMicros[bufferIndex].store(captureUnixMicros, std::memory_order_relaxed);
 
     const int prevLatest = m_latestBufferIndex.exchange(bufferIndex, std::memory_order_acq_rel);
     m_bufferState[bufferIndex].store(BUFFER_READY, std::memory_order_release);
@@ -600,7 +603,7 @@ void UDPCapture::receiveThread() {
         if (!packetData || packetBytes < static_cast<int>(sizeof(UDPPacketHeaderV2))) return;
 
         const auto* v2 = reinterpret_cast<const UDPPacketHeaderV2*>(packetData);
-        if (v2->magic != UDP_PACKET_V2_MAGIC ||
+        if (v2->magic != UDP_PACKET_V3_MAGIC ||
             v2->headerSize < sizeof(UDPPacketHeaderV2) ||
             static_cast<size_t>(v2->headerSize) > static_cast<size_t>(packetBytes)) {
             return;
@@ -617,6 +620,7 @@ void UDPCapture::receiveThread() {
         const uint16_t frameHeight = v2->frameHeight;
         const uint8_t bytesPerPixel = v2->bytesPerPixel;
         const uint8_t pixelFormat = v2->pixelFormat;
+        const uint64_t captureUnixMicros = v2->captureUnixMicros;
         const size_t payloadOffset = v2->payloadOffset;
         const size_t frameBytes = v2->frameBytes;
         const uint8_t* payload = packetData + v2->headerSize;
@@ -669,6 +673,7 @@ void UDPCapture::receiveThread() {
             frag->bytesPerPixel = bytesPerPixel;
             frag->pixelFormat = pixelFormat;
             frag->frameBytes = frameBytes;
+            frag->captureUnixMicros = captureUnixMicros;
             frag->dropped = false;
             frag->bufferIndex = -1;
             frag->useReceivedMask = (totalChunks <= 64);
@@ -747,8 +752,10 @@ void UDPCapture::receiveThread() {
             const uint16_t publishH = frag->height;
             const uint8_t publishBpp = frag->bytesPerPixel;
             const uint8_t publishFormat = frag->pixelFormat;
+            const uint64_t publishCaptureUs = frag->captureUnixMicros;
             const bool published = publishAssembledBuffer(
-                publishIdx, publishW, publishH, frameId, publishBpp, publishFormat, packetNow);
+                publishIdx, publishW, publishH, frameId, publishBpp, publishFormat,
+                publishCaptureUs, packetNow);
 
             frag->bufferIndex = -1;
             unlinkFragment(frag);
@@ -855,7 +862,8 @@ void UDPCapture::receiveThread() {
 bool UDPCapture::AcquireFramePinned(void** pinnedRgbData, unsigned int* width,
                                     unsigned int* height, uint64_t* outFrameId,
                                     int* bufferIndex, uint32_t timeoutMs,
-                                    uint8_t* bytesPerPixel, uint8_t* pixelFormat) {
+                                    uint8_t* bytesPerPixel, uint8_t* pixelFormat,
+                                    uint64_t* outCaptureUnixMicros) {
     if (!m_running.load(std::memory_order_relaxed)) return false;
 
     const auto deadline = std::chrono::steady_clock::now() +
@@ -873,6 +881,10 @@ bool UDPCapture::AcquireFramePinned(void** pinnedRgbData, unsigned int* width,
                     if (width) *width = m_bufferWidth[idx].load(std::memory_order_relaxed);
                     if (height) *height = m_bufferHeight[idx].load(std::memory_order_relaxed);
                     if (outFrameId) *outFrameId = m_bufferFrameId[idx].load(std::memory_order_relaxed);
+                    if (outCaptureUnixMicros) {
+                        *outCaptureUnixMicros =
+                            m_bufferCaptureUnixMicros[idx].load(std::memory_order_relaxed);
+                    }
                     if (bytesPerPixel) {
                         *bytesPerPixel = static_cast<uint8_t>(
                             m_bufferBytesPerPixel[idx].load(std::memory_order_relaxed));
