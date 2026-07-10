@@ -126,6 +126,8 @@ struct StreamStats {
     std::atomic<uint64_t> totalBytes{0};
     std::atomic<uint64_t> totalPackets{0};
     std::atomic<int64_t> totalCaptureUs{0};
+    std::atomic<int64_t> totalAcquireUs{0};   // present-wait portion of Cap
+    std::atomic<int64_t> totalReadbackUs{0};  // GPU copy + Map + CPU copy portion
     std::atomic<int64_t> totalConvertUs{0};
     std::atomic<int64_t> totalSendUs{0};
     std::atomic<uint32_t> lastCaptureHr{0};
@@ -403,7 +405,8 @@ public:
 
     bool CaptureFrame(std::vector<uint8_t>& outData, int x, int y, int w, int h,
                       UINT timeoutMs = 100, CaptureResult* result = nullptr,
-                      uint64_t* outCaptureUnixMicros = nullptr) {
+                      uint64_t* outCaptureUnixMicros = nullptr,
+                      int64_t* outAcquireUs = nullptr, int64_t* outReadbackUs = nullptr) {
         auto setResult = [&](CaptureStatus status, HRESULT hr) {
             if (result) {
                 result->status = status;
@@ -418,6 +421,7 @@ public:
 
         ComPtr<IDXGIResource> resource;
         DXGI_OUTDUPL_FRAME_INFO frameInfo;
+        const auto acqStart = std::chrono::high_resolution_clock::now();
         HRESULT hr = m_duplication->AcquireNextFrame(timeoutMs, &frameInfo, &resource);
 
         if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
@@ -442,6 +446,15 @@ public:
         // are a suspected dominant latency segment, so they must be inside the
         // capture->inference E2E window, not excluded by stamping after return.
         if (outCaptureUnixMicros) *outCaptureUnixMicros = nowUnixMicros();
+
+        // Split the Cap timer: Acq = time blocked in AcquireNextFrame (present
+        // wait - inherent, not reducible by a readback ring), Rdbk = the GPU
+        // copy + Map + CPU copy below (what a ring could pipeline).
+        const auto readbackStart = std::chrono::high_resolution_clock::now();
+        if (outAcquireUs) {
+            *outAcquireUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                readbackStart - acqStart).count();
+        }
 
         ComPtr<ID3D11Texture2D> texture;
         hr = resource.As(&texture);
@@ -500,6 +513,10 @@ public:
 
         m_context->Unmap(m_staging.Get(), 0);
         m_duplication->ReleaseFrame();
+        if (outReadbackUs) {
+            *outReadbackUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::high_resolution_clock::now() - readbackStart).count();
+        }
         setResult(CaptureStatus::Captured, S_OK);
         return true;
     }
@@ -1474,6 +1491,8 @@ int main(int argc, char** argv) {
         const uint64_t totalBytes = stats.totalBytes.exchange(0, std::memory_order_relaxed);
         const uint64_t totalPackets = stats.totalPackets.exchange(0, std::memory_order_relaxed);
         const int64_t totalCaptureUs = stats.totalCaptureUs.exchange(0, std::memory_order_relaxed);
+        const int64_t totalAcquireUs = stats.totalAcquireUs.exchange(0, std::memory_order_relaxed);
+        const int64_t totalReadbackUs = stats.totalReadbackUs.exchange(0, std::memory_order_relaxed);
         const int64_t totalConvertUs = stats.totalConvertUs.exchange(0, std::memory_order_relaxed);
         const int64_t totalSendUs = stats.totalSendUs.exchange(0, std::memory_order_relaxed);
 
@@ -1484,6 +1503,8 @@ int main(int argc, char** argv) {
         double sendFps = sentFrames / statsSeconds;
         double mbps = (totalBytes * 8.0) / (statsSeconds * 1000000.0);
         double avgCapture = (capturedFrames > 0) ? (static_cast<double>(totalCaptureUs) / capturedFrames / 1000.0) : 0.0;
+        double avgAcquire = (capturedFrames > 0) ? (static_cast<double>(totalAcquireUs) / capturedFrames / 1000.0) : 0.0;
+        double avgReadback = (capturedFrames > 0) ? (static_cast<double>(totalReadbackUs) / capturedFrames / 1000.0) : 0.0;
         double avgConvert = (outputFrames > 0) ? (static_cast<double>(totalConvertUs) / outputFrames / 1000.0) : 0.0;
         double avgSend = (outputFrames > 0) ? (static_cast<double>(totalSendUs) / outputFrames / 1000.0) : 0.0;
         double dropPct = (outputFrames > 0) ? (droppedFrames * 100.0) / outputFrames : 0.0;
@@ -1499,6 +1520,7 @@ int main(int argc, char** argv) {
              << " | OutFPS: " << outFps
              << " | SendFPS: " << sendFps
              << " | Cap:" << std::setprecision(2) << avgCapture << "ms"
+             << " (Acq:" << avgAcquire << " Rdbk:" << avgReadback << ")"
              << " Cvt:" << avgConvert << "ms"
              << " Snd:" << avgSend << "ms"
              << " | " << mbps << " Mbps"
@@ -1529,9 +1551,11 @@ int main(int argc, char** argv) {
         auto t1 = std::chrono::high_resolution_clock::now();
         CaptureResult captureResult{};
         uint64_t capturedUnixMicros = 0;
+        int64_t acquireUs = 0, readbackUs = 0;
         bool gotNewFrame = capture.CaptureFrame(frameData, g_config.captureX, g_config.captureY,
                                                 g_config.captureWidth, g_config.captureHeight,
-                                                captureTimeoutMs, &captureResult, &capturedUnixMicros);
+                                                captureTimeoutMs, &captureResult, &capturedUnixMicros,
+                                                &acquireUs, &readbackUs);
         auto t2 = std::chrono::high_resolution_clock::now();
         stats.captureAttempts.fetch_add(1, std::memory_order_relaxed);
 
@@ -1541,6 +1565,8 @@ int main(int argc, char** argv) {
             stats.totalCaptureUs.fetch_add(
                 std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count(),
                 std::memory_order_relaxed);
+            stats.totalAcquireUs.fetch_add(acquireUs, std::memory_order_relaxed);
+            stats.totalReadbackUs.fetch_add(readbackUs, std::memory_order_relaxed);
             {
                 std::lock_guard<std::mutex> lock(latestFrame.mutex);
                 latestFrame.bgra.swap(frameData);
