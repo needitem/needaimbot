@@ -1323,6 +1323,13 @@ void SimpleInference::callbackWorkerLoop() {
 
         m_callbackSlotBusy[static_cast<size_t>(pendingSlot)].store(false, std::memory_order_release);
         m_callbacksInFlight.fetch_sub(1, std::memory_order_acq_rel);
+
+        // Slot and in-flight counter are now released, so a resubmit from here
+        // sees an accurate free-slot count (a kick from inside the user callback
+        // above would still count this frame and be rejected at max in-flight,
+        // dropping the newest queued frame). Kick the next queued frame straight
+        // from this completion thread; the hook is non-blocking (try_lock).
+        if (m_postCompletionHook) m_postCompletionHook();
     }
 }
 

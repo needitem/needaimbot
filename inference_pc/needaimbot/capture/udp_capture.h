@@ -249,6 +249,14 @@ private:
     std::mutex m_creditTargetMutex;
     sockaddr_in m_creditTargetAddr{};
     bool m_hasCreditTarget = false;
+    // Lock-free fast-path identity of the learned credit target. rememberCreditTarget
+    // runs for every valid chunk (~10^5/s) on the RT receive thread; the sender's
+    // address is effectively constant for a session, so these let the per-packet
+    // path skip m_creditTargetMutex entirely once learned and unchanged. Updated
+    // only under the mutex (learn / addr change); read relaxed on the hot path.
+    std::atomic<bool> m_creditTargetLearned{false};
+    std::atomic<uint32_t> m_creditTargetAddrId{0};  // raw sin_addr.s_addr snapshot
+    std::atomic<uint16_t> m_creditTargetPortId{0};  // raw sin_port snapshot
     std::atomic<uint64_t> m_creditSeq{0};
 
     std::atomic<uint64_t> m_receivedFrames{0};

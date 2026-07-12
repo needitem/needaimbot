@@ -154,7 +154,15 @@ bool UDPCapture::allocatePinnedBuffers(size_t size) {
         // the preprocess kernel read the received frame directly - eliminating the
         // per-frame H2D copy. On discrete GPUs the mapped flag is harmless (the
         // engine still stages via H2D). Freed with cudaFreeHost() as before.
-        cudaError_t err = cudaHostAlloc(&m_pinnedFrameBuffer[i], size, cudaHostAllocMapped);
+        //
+        // WriteCombined: this buffer is only ever WRITTEN by the CPU (the per-chunk
+        // memcpy in processPacket) and READ by the GPU (preprocess kernel) or the
+        // H2D DMA engine (discrete GPU). No CPU code reads the frame back on the hot
+        // path, so WC gives fast non-temporal CPU stores and avoids polluting the RT
+        // receive core's cache with ~1MB/frame it never re-reads. The only CPU reader
+        // is the 1Hz debug frame dump (slow WC reads there, but off the hot path).
+        cudaError_t err = cudaHostAlloc(&m_pinnedFrameBuffer[i], size,
+                                        cudaHostAllocMapped | cudaHostAllocWriteCombined);
         if (err != cudaSuccess) {
             std::cerr << "[UDPCapture] Pinned alloc failed at buffer " << i
                       << ": " << cudaGetErrorString(err) << "\n";
@@ -360,9 +368,23 @@ void UDPCapture::clearFragmentState() {
 }
 
 void UDPCapture::rememberCreditTarget(const sockaddr_in& addr) {
+    // Hot path: called for every valid chunk. Skip the mutex once the target is
+    // learned and its address/port are unchanged (the common case for an entire
+    // session). Only lock to learn the target or when the sender's addr/port
+    // actually changes, keeping the per-packet cost to two relaxed atomic loads.
+    const uint32_t addrId = static_cast<uint32_t>(addr.sin_addr.s_addr);
+    const uint16_t portId = static_cast<uint16_t>(addr.sin_port);
+    if (m_creditTargetLearned.load(std::memory_order_acquire) &&
+        m_creditTargetAddrId.load(std::memory_order_relaxed) == addrId &&
+        m_creditTargetPortId.load(std::memory_order_relaxed) == portId) {
+        return;
+    }
     std::lock_guard<std::mutex> lock(m_creditTargetMutex);
     m_creditTargetAddr = addr;
     m_hasCreditTarget = true;
+    m_creditTargetAddrId.store(addrId, std::memory_order_relaxed);
+    m_creditTargetPortId.store(portId, std::memory_order_relaxed);
+    m_creditTargetLearned.store(true, std::memory_order_release);
 }
 
 bool UDPCapture::SendFrameCredit(uint32_t minFrameId, uint32_t credits) {

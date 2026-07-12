@@ -12,6 +12,7 @@
 #include <array>
 #include <atomic>
 #include <condition_variable>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -83,6 +84,18 @@ public:
 
     int getCallbacksInFlight() const {
         return m_callbacksInFlight.load(std::memory_order_acquire);
+    }
+
+    // Invoked by the callback worker AFTER a completed frame's slot and the
+    // in-flight counter have been released (see callbackWorkerLoop), so a
+    // resubmit triggered from here observes an accurate free-slot count instead
+    // of racing the still-busy completing slot. Lets the owner kick the next
+    // queued frame straight from the completion thread with no main-loop hop.
+    // Called at most once per completed frame - keep it non-blocking. Must be
+    // set before the first runInferenceWithCallback() so no completion can race
+    // the assignment. Optional; unset means no kick (main loop still drives).
+    void setPostCompletionHook(std::function<void()> hook) {
+        m_postCompletionHook = std::move(hook);
     }
 
     LaunchStats takeLaunchStats();
@@ -258,6 +271,9 @@ private:
     std::thread m_callbackWorkerThread;
     std::condition_variable m_callbackWorkerCv;
     std::mutex m_callbackWorkerMutex;
+    // Optional kick invoked by the worker after slot/in-flight teardown; see
+    // setPostCompletionHook(). Read only on the worker thread after a completion.
+    std::function<void()> m_postCompletionHook;
 
     void callbackWorkerLoop();
     void destroyFullGraphs();              // Destroys every shape bucket

@@ -14,6 +14,7 @@
 #include <ctime>
 #include <iomanip>
 #include <filesystem>
+#include <functional>
 #include <condition_variable>
 #include <algorithm>
 #include <array>
@@ -558,6 +559,13 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
         } else {
             markReleased();
         }
+        // The next-frame kick is NOT done here: at this point the worker has not
+        // yet released this frame's inference slot / in-flight counter (that
+        // happens after this callback returns), so a resubmit from inside the
+        // callback would be rejected at max in-flight and drop the newest frame.
+        // The kick is instead driven by SimpleInference's post-completion hook,
+        // which runs after that teardown. The pipelineCv notify above remains the
+        // fallback that wakes the main loop.
     };
 
     // Count every completed inference callback (target/no-target)
@@ -1287,6 +1295,14 @@ int main(int argc, char* argv[]) {
         }
         // On success, buffer is released by callback after GPU work completes.
     };
+
+    // Let the GPU-completion worker kick the next submit directly, once it has
+    // released the finished frame's slot and in-flight counter (see
+    // SimpleInference::setPostCompletionHook). This removes the wait for the main
+    // loop's 1ms tick / next network frame to re-trigger submission. Registered
+    // here - after trySubmitLatestFrame exists and before StartCapture()/the
+    // first submit - so no completion can fire before the hook is set.
+    inference.setPostCompletionHook(trySubmitLatestFrame);
 
     // Must be registered before StartCapture() spins up the receive thread.
     udpCapture.SetFrameReadyCallback(trySubmitLatestFrame);
