@@ -2,9 +2,9 @@
 """UDP frame-pattern load tester for NeedAimBot's two-PC transport.
 
 Run the receiver on the inference PC and the sender on the game PC. The sender
-uses the same V2 packet header shape as the app and fragments synthetic frames
-with the configured payload size, so packet rate and payload Mbps match the real
-stream without needing screen capture or TensorRT.
+uses the same V3 packet header shape as the app (game_pc/src/main.cpp) and
+fragments synthetic frames with the configured payload size, so packet rate and
+payload Mbps match the real stream without needing screen capture or TensorRT.
 """
 
 from __future__ import annotations
@@ -18,10 +18,13 @@ import time
 from dataclasses import dataclass
 
 
-UDP_PACKET_V2_MAGIC = 0x32415047  # "GPA2" little-endian
+# v3 wire format (game_pc/src/main.cpp): v2 layout plus a trailing uint64
+# captureUnixMicros. Magic bumped so v2/v3 peers reject each other cleanly.
+UDP_PACKET_V3_MAGIC = 0x33415047  # "GPA3" little-endian
 UDP_PIXEL_FORMAT_RGB = 2
-HEADER_V2 = struct.Struct("<IHHIIIHHIHHBBH")
-HEADER_BYTES = HEADER_V2.size
+HEADER_V3 = struct.Struct("<IHHIIIHHIHHBBHQ")
+HEADER_BYTES = HEADER_V3.size
+assert HEADER_BYTES == 44, HEADER_BYTES
 
 
 @dataclass
@@ -132,12 +135,13 @@ def run_sender(args: argparse.Namespace) -> int:
             if now - next_frame_at > interval * 4:
                 next_frame_at = now
 
+            capture_us = int(time.time() * 1_000_000)  # same in every chunk of a frame
             for chunk_index in range(total_chunks):
                 offset = chunk_index * args.payload_bytes
                 remaining = frame_bytes - offset
                 chunk_size = min(remaining, args.payload_bytes)
-                header = HEADER_V2.pack(
-                    UDP_PACKET_V2_MAGIC,
+                header = HEADER_V3.pack(
+                    UDP_PACKET_V3_MAGIC,
                     HEADER_BYTES,
                     0,
                     frame_id & 0xFFFFFFFF,
@@ -151,6 +155,7 @@ def run_sender(args: argparse.Namespace) -> int:
                     UDP_PIXEL_FORMAT_RGB,
                     bytes_per_pixel,
                     0,
+                    capture_us,
                 )
                 packet = header + payload_block[:chunk_size]
                 sent = sock.sendto(packet, destination)
@@ -265,13 +270,14 @@ def run_receiver(args: argparse.Namespace) -> int:
                     pixel_format,
                     bytes_per_pixel,
                     _reserved,
-                ) = HEADER_V2.unpack_from(packet)
+                    _capture_us,
+                ) = HEADER_V3.unpack_from(packet)
             except struct.error:
                 stats.invalid_packets += 1
                 continue
 
             if (
-                magic != UDP_PACKET_V2_MAGIC
+                magic != UDP_PACKET_V3_MAGIC
                 or header_size < HEADER_BYTES
                 or header_size > len(packet)
                 or chunk_index >= total_chunks
