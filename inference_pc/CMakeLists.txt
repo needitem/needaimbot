@@ -112,6 +112,34 @@ set_target_properties(simple_inference PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/Release"
 )
 
+# =============================================================================
+# Seed the runtime config on a clean build.
+# =============================================================================
+# simple_config.default.json (tracked) is the canonical default. The app reads
+# <exeDir>/simple_config.json and rewrites it at runtime, so we copy the default
+# ONLY when the destination is absent - i.e. on a fresh/clean build where
+# build/ was wiped. Incremental builds leave an existing (possibly runtime-
+# tuned) simple_config.json untouched. To change the default, edit
+# simple_config.default.json and commit it.
+set(_simple_config_dest "${CMAKE_BINARY_DIR}/bin/Release/simple_config.json")
+if(NOT EXISTS "${_simple_config_dest}")
+    configure_file(
+        "${CMAKE_SOURCE_DIR}/simple_config.default.json"
+        "${_simple_config_dest}"
+        COPYONLY
+    )
+    message(STATUS "Seeded default simple_config.json (clean build)")
+endif()
+
+# flick_trajectories.json (tracked) is the warped-replay stroke DB. Unlike the
+# config, the app never rewrites it, so always copy the canonical tracked copy
+# to the runtime dir. Regenerate with mouse-bot-detector/scripts/export_flick_db.py.
+configure_file(
+    "${CMAKE_SOURCE_DIR}/flick_trajectories.json"
+    "${CMAKE_BINARY_DIR}/bin/Release/flick_trajectories.json"
+    COPYONLY
+)
+
 if(SIMPLE_ENABLE_LTO)
     include(CheckIPOSupported)
     check_ipo_supported(RESULT simple_ipo_supported OUTPUT simple_ipo_error)
