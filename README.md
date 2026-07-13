@@ -282,9 +282,16 @@ it alongside `simple_inference` and `simple_config.json`.
 "flick_enabled": true,
 "flick_replay_db_path": "flick_trajectories.json",
 "flick_distance_tolerance": 0.15,
-"flick_position_jitter": 0.6,
+"flick_elastic_amp": 0.03,
+"flick_elastic_modes": 3,
 "flick_min_reach": 5.0
 ```
+
+> `flick_elastic_amp` bends each warped stroke by a smooth low-frequency
+> deformation (fraction of the reach) so a finite stroke DB yields unlimited
+> non-repeating flicks without adding detectable jerk; 0 = pure replay. It
+> replaces the old `flick_position_jitter` (white noise, added jerk) and
+> `flick_variability_mag`.
 
 > Note: the previous PD-controller steady-state motor noise (`aim_sdn_k`,
 > `aim_tremor_*`) has been removed — it added jitter to live tracking precision

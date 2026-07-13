@@ -26,7 +26,6 @@
     "flick_enabled": false,
     "flick_replay_db_path": "flick_trajectories.json",
     "flick_distance_tolerance": 0.15,
-    "flick_position_jitter": 0.0,
     "flick_elastic_amp": 0.03,
     "flick_elastic_modes": 3,
     "flick_min_reach": 5.0,

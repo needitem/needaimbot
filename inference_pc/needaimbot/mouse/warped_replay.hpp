@@ -53,20 +53,6 @@ struct config {
     // Pick a stroke whose recorded reach is within +-tolerance of the needed
     // reach, so scaling stays near 1x (large stretches distort speed/tremor).
     double distance_tolerance = 0.15;
-    // Human-variability perturbation. 0 = PURE REPLAY (default, best for a
-    // single session): each flick is a real stroke warped onto the target, no
-    // perturbation, and no-repeat source selection already avoids duplicates -
-    // this leaves no session-distribution trace. Set > 0 (e.g. 0.07) only if
-    // you allow source reuse and need to break near-duplicates via
-    // mag*(shape_a - shape_b), a direction humans genuinely vary along
-    // (mouse-bot-detector/attack_sweet_spot.py) - but that adds a faint trace.
-    double variability_mag = 0.0;
-    // Residual per-point Gaussian jitter (px). 0 = pure replay (default): the
-    // stroke is reproduced unmodified. AVOID > 0: white per-point jitter adds
-    // high-frequency jerk, the single strongest tell a mouse-dynamics detector
-    // reads (synthetic-noise generators peak the detector at ~0.85). Use
-    // elastic_amp instead to break duplicates without adding jerk.
-    double position_jitter = 0.0;
     // Elastic deformation amplitude (fraction of the reach). After warping a real
     // stroke onto the aim vector, bend it by a SMOOTH low-frequency lateral
     // displacement (sum of elastic_modes sine modes perpendicular to the local
@@ -86,8 +72,6 @@ struct config {
     void load(const nlohmann::json& j) {
         if (j.contains("flick_replay_db_path")) replay_db_path = j["flick_replay_db_path"];
         if (j.contains("flick_distance_tolerance")) distance_tolerance = j["flick_distance_tolerance"];
-        if (j.contains("flick_variability_mag")) variability_mag = j["flick_variability_mag"];
-        if (j.contains("flick_position_jitter")) position_jitter = j["flick_position_jitter"];
         if (j.contains("flick_elastic_amp")) elastic_amp = j["flick_elastic_amp"];
         if (j.contains("flick_elastic_modes")) elastic_modes = j["flick_elastic_modes"];
         if (j.contains("flick_min_reach")) min_reach = j["flick_min_reach"];
@@ -95,8 +79,6 @@ struct config {
     void save(nlohmann::json& j) const {
         j["flick_replay_db_path"] = replay_db_path;
         j["flick_distance_tolerance"] = distance_tolerance;
-        j["flick_variability_mag"] = variability_mag;
-        j["flick_position_jitter"] = position_jitter;
         j["flick_elastic_amp"] = elastic_amp;
         j["flick_elastic_modes"] = elastic_modes;
         j["flick_min_reach"] = min_reach;
@@ -104,8 +86,6 @@ struct config {
     void print() const {
         std::cout << "[Config] Flick generator: warped-replay, db=" << replay_db_path
                   << ", dist tol=" << distance_tolerance
-                  << ", variability=" << variability_mag
-                  << ", jitter=" << position_jitter << "px"
                   << ", elastic=" << elastic_amp << " x" << elastic_modes << std::endl;
     }
 };
@@ -250,16 +230,6 @@ inline std::vector<trajectory_point> generate(
 
     const double theta = std::atan2(dy, dx);
     const double c = std::cos(theta), sn = std::sin(theta);
-    std::normal_distribution<double> jit(0.0, cfg.position_jitter);
-
-    // Pure replay (mag == 0): warp the source stroke straight onto the aim
-    // vector. Optional human-variability perturbation when mag > 0: two random
-    // strokes give a real difference vector, added to break near-duplicates if
-    // source reuse is ever allowed (see config comment).
-    const double mag = cfg.variability_mag;
-    std::uniform_int_distribution<size_t> anyStroke(0, db.size() - 1);
-    const detail::Stroke* A = mag > 0.0 ? &db[anyStroke(rng)] : nullptr;
-    const detail::Stroke* B = mag > 0.0 ? &db[anyStroke(rng)] : nullptr;
 
     // Elastic deformation: one coefficient per sine mode, drawn once per flick.
     // Higher modes get smaller amplitude (a_j ~ N(0, amp/j)) so the bend stays
@@ -289,14 +259,9 @@ inline std::vector<trajectory_point> generate(
             const double tl = std::hypot(tx, ty);
             if (tl > 1e-9) { bx += disp * (-ty / tl); by += disp * (tx / tl); }
         }
-        double ux = bx * D, uy = by * D;
-        if (mag > 0.0) {
-            ux += mag * (A->sx[k] - B->sx[k]) * D;
-            uy += mag * (A->sy[k] - B->sy[k]) * D;
-        }
-        double rx = ux * c - uy * sn;
-        double ry = ux * sn + uy * c;
-        if (cfg.position_jitter > 0.0) { rx += jit(rng); ry += jit(rng); }
+        const double ux = bx * D, uy = by * D;
+        const double rx = ux * c - uy * sn;
+        const double ry = ux * sn + uy * c;
         out.push_back({x0 + rx, y0 + ry, s->t[k]});
     }
     // land exactly on the target, and normalize timestamps
