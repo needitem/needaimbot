@@ -38,6 +38,7 @@
 #include <unistd.h>
 
 #include "json.hpp"
+#include "flick_db_embedded.hpp"   // stroke DB compiled into the binary (no external file needed)
 
 namespace warped_replay {
 
@@ -129,6 +130,26 @@ inline std::string exe_dir() {
 
 // Lazily loaded once, sorted by distance. Thread-safe (start() runs on the
 // callback thread but a cancel poll can race the first load).
+inline void parse_traj(const nlohmann::json& j, std::vector<Stroke>& db) {
+    for (const auto& tr : j.at("traj")) {
+        const auto& sh = tr.at("s");
+        const auto& tt = tr.at("t");
+        const int n = (int)sh.size();
+        if (n < 2 || n > kMaxPoints || (int)tt.size() != n) continue;
+        Stroke s;
+        s.n = n;
+        s.d = tr.at("d").get<double>();
+        for (int k = 0; k < n; ++k) {
+            s.sx[k] = sh[k][0].get<double>();
+            s.sy[k] = sh[k][1].get<double>();
+            s.t[k]  = tt[k].get<double>();
+        }
+        db.push_back(s);
+    }
+    std::sort(db.begin(), db.end(),
+              [](const Stroke& a, const Stroke& b) { return a.d < b.d; });
+}
+
 inline const std::vector<Stroke>& load_db(const std::string& path) {
     static std::mutex mtx;
     static std::vector<Stroke> db;
@@ -137,6 +158,9 @@ inline const std::vector<Stroke>& load_db(const std::string& path) {
     if (tried) return db;
     tried = true;
 
+    // An external file, if present, OVERRIDES the embedded DB (lets you swap the
+    // stroke pool without recompiling). Otherwise the DB compiled into the binary
+    // (flick_db_embedded) is used, so no flick_trajectories.json file is required.
     std::vector<std::string> cands = {path};
     const std::string ed = exe_dir();
     if (!ed.empty()) {
@@ -147,25 +171,8 @@ inline const std::vector<Stroke>& load_db(const std::string& path) {
         std::ifstream f(c);
         if (!f.good()) continue;
         try {
-            nlohmann::json j;
-            f >> j;
-            for (const auto& tr : j.at("traj")) {
-                const auto& sh = tr.at("s");
-                const auto& tt = tr.at("t");
-                const int n = (int)sh.size();
-                if (n < 2 || n > kMaxPoints || (int)tt.size() != n) continue;
-                Stroke s;
-                s.n = n;
-                s.d = tr.at("d").get<double>();
-                for (int k = 0; k < n; ++k) {
-                    s.sx[k] = sh[k][0].get<double>();
-                    s.sy[k] = sh[k][1].get<double>();
-                    s.t[k]  = tt[k].get<double>();
-                }
-                db.push_back(s);
-            }
-            std::sort(db.begin(), db.end(),
-                      [](const Stroke& a, const Stroke& b) { return a.d < b.d; });
+            nlohmann::json j; f >> j;
+            parse_traj(j, db);
             std::cout << "[warped-replay] loaded " << db.size() << " strokes from " << c << std::endl;
             break;
         } catch (const std::exception& e) {
@@ -173,9 +180,21 @@ inline const std::vector<Stroke>& load_db(const std::string& path) {
             db.clear();
         }
     }
+    if (db.empty()) {                               // fall back to the embedded DB
+        try {
+            auto j = nlohmann::json::parse(flick_db_embedded_json,
+                                           flick_db_embedded_json + flick_db_embedded_size);
+            parse_traj(j, db);
+            std::cout << "[warped-replay] loaded " << db.size()
+                      << " strokes from EMBEDDED db (no external file)" << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "[warped-replay] failed to parse embedded db: " << e.what() << std::endl;
+            db.clear();
+        }
+    }
     if (db.empty()) {
-        std::cerr << "[warped-replay] WARNING: no trajectory DB loaded (tried "
-                  << cands.size() << " path(s)); flicks fall back to straight lines" << std::endl;
+        std::cerr << "[warped-replay] WARNING: no trajectory DB (file or embedded); "
+                  << "flicks fall back to straight lines" << std::endl;
     }
     return db;
 }

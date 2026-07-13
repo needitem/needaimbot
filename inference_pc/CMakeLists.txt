@@ -55,6 +55,7 @@ add_executable(simple_inference
     needaimbot/cuda/simple_postprocess.cu
     needaimbot/capture/udp_capture.cpp
     needaimbot/mouse/input_drivers/MakcuConnection.cpp
+    needaimbot/mouse/flick_db_embedded.cpp
 )
 
 target_include_directories(simple_inference PRIVATE
@@ -131,14 +132,12 @@ if(NOT EXISTS "${_simple_config_dest}")
     message(STATUS "Seeded default simple_config.json (clean build)")
 endif()
 
-# flick_trajectories.json (tracked) is the warped-replay stroke DB. Unlike the
-# config, the app never rewrites it, so always copy the canonical tracked copy
-# to the runtime dir. Regenerate with mouse-bot-detector/scripts/export_flick_db.py.
-configure_file(
-    "${CMAKE_SOURCE_DIR}/flick_trajectories.json"
-    "${CMAKE_BINARY_DIR}/bin/Release/flick_trajectories.json"
-    COPYONLY
-)
+# The warped-replay stroke DB is compiled into the binary
+# (needaimbot/mouse/flick_db_embedded.cpp), so NO external flick_trajectories.json
+# is deployed or required at runtime. To override the embedded DB without
+# recompiling, drop a flick_trajectories.json next to the executable - load_db
+# prefers a file when present. Regenerate both the source json and the embedded
+# .cpp with mouse-bot-detector/scripts/export_flick_db.py.
 
 if(SIMPLE_ENABLE_LTO)
     include(CheckIPOSupported)
