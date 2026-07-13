@@ -92,7 +92,9 @@ struct config {
 
 namespace detail {
 
-constexpr int kMaxPoints = 64;            // cap; strokes keep their NATIVE point count
+constexpr int kMaxPoints = 256;           // cap; strokes keep their NATIVE point count
+                                          // (a too-low cap dropped longer strokes and
+                                          //  biased the pool -> inflated detectability)
 
 struct Stroke {
     int n;                                // actual point count (native resolution)
