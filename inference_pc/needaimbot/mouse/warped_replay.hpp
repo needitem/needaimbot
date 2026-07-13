@@ -92,12 +92,13 @@ struct config {
 
 namespace detail {
 
-constexpr int kNumPoints = 48;            // must match export_flick_db.py N_PTS
+constexpr int kMaxPoints = 64;            // cap; strokes keep their NATIVE point count
 
 struct Stroke {
+    int n;                                // actual point count (native resolution)
     double d;                             // recorded reach distance (px)
-    double sx[kNumPoints], sy[kNumPoints];// UNIT canonical shape: origin -> (1, 0)
-    double t[kNumPoints];                 // real (irregular) timestamps, ms
+    double sx[kMaxPoints], sy[kMaxPoints];// UNIT canonical shape: origin -> (1, 0)
+    double t[kMaxPoints];                 // real (irregular) timestamps, ms
 };
 
 inline std::string exe_dir() {
@@ -135,10 +136,12 @@ inline const std::vector<Stroke>& load_db(const std::string& path) {
             for (const auto& tr : j.at("traj")) {
                 const auto& sh = tr.at("s");
                 const auto& tt = tr.at("t");
-                if ((int)sh.size() != kNumPoints || (int)tt.size() != kNumPoints) continue;
+                const int n = (int)sh.size();
+                if (n < 2 || n > kMaxPoints || (int)tt.size() != n) continue;
                 Stroke s;
+                s.n = n;
                 s.d = tr.at("d").get<double>();
-                for (int k = 0; k < kNumPoints; ++k) {
+                for (int k = 0; k < n; ++k) {
                     s.sx[k] = sh[k][0].get<double>();
                     s.sy[k] = sh[k][1].get<double>();
                     s.t[k]  = tt[k].get<double>();
@@ -245,15 +248,16 @@ inline std::vector<trajectory_point> generate(
         ecoef[j] = ej(rng);
     }
 
-    out.reserve(detail::kNumPoints);
-    for (int k = 0; k < detail::kNumPoints; ++k) {
+    const int NP = s->n;
+    out.reserve(NP);
+    for (int k = 0; k < NP; ++k) {
         double bx = s->sx[k], by = s->sy[k];       // unit canonical point
-        if (EM > 0) {
-            const double u = static_cast<double>(k) / (detail::kNumPoints - 1);
+        if (EM > 0 && NP > 1) {
+            const double u = static_cast<double>(k) / (NP - 1);
             double disp = 0.0;
             for (int j = 0; j < EM; ++j)
                 disp += ecoef[j] * std::sin((j + 1) * M_PI * u);
-            const int kp = std::min(k + 1, detail::kNumPoints - 1);
+            const int kp = std::min(k + 1, NP - 1);
             const int km = std::max(k - 1, 0);
             const double tx = s->sx[kp] - s->sx[km], ty = s->sy[kp] - s->sy[km];
             const double tl = std::hypot(tx, ty);
