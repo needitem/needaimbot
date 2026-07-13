@@ -65,6 +65,17 @@ struct config {
     // replay (mouse-bot-detector/elastic_replay.py). 0 disables (pure replay).
     double elastic_amp = 0.03;
     int elastic_modes = 3;
+    // Natural-variation step amplitude (fraction of the reach). In addition to
+    // the elastic bend, each flick is nudged along a real human-variation
+    // direction, mag*(shape_A - shape_B) for two random DB strokes resampled to
+    // this stroke's length. Unlike the smooth sinusoid bend, this residual looks
+    // like natural stroke-to-stroke variation, so a residual-spectrum detector
+    // cannot key on a consistent bend signature. Both amplitudes are RANDOMIZED
+    // per flick (actual = uniform(0, amp)), so the perturbation has no fixed
+    // signature at all. Measured: the elastic+variability hybrid keeps single-move
+    // ~0.67 and near-duplicates broken while evading the residual detector on a
+    // private pool. 0 disables (pure elastic). See mouse-bot-detector/hybrid_replay.py.
+    double var_amp = 0.06;
     // Below this reach, just emit a 2-point straight segment.
     double min_reach = 5.0;
 
@@ -74,6 +85,7 @@ struct config {
         if (j.contains("flick_distance_tolerance")) distance_tolerance = j["flick_distance_tolerance"];
         if (j.contains("flick_elastic_amp")) elastic_amp = j["flick_elastic_amp"];
         if (j.contains("flick_elastic_modes")) elastic_modes = j["flick_elastic_modes"];
+        if (j.contains("flick_var_amp")) var_amp = j["flick_var_amp"];
         if (j.contains("flick_min_reach")) min_reach = j["flick_min_reach"];
     }
     void save(nlohmann::json& j) const {
@@ -81,12 +93,14 @@ struct config {
         j["flick_distance_tolerance"] = distance_tolerance;
         j["flick_elastic_amp"] = elastic_amp;
         j["flick_elastic_modes"] = elastic_modes;
+        j["flick_var_amp"] = var_amp;
         j["flick_min_reach"] = min_reach;
     }
     void print() const {
         std::cout << "[Config] Flick generator: warped-replay, db=" << replay_db_path
                   << ", dist tol=" << distance_tolerance
-                  << ", elastic=" << elastic_amp << " x" << elastic_modes << std::endl;
+                  << ", elastic=" << elastic_amp << " x" << elastic_modes
+                  << ", var=" << var_amp << std::endl;
     }
 };
 
@@ -236,26 +250,43 @@ inline std::vector<trajectory_point> generate(
     const double theta = std::atan2(dy, dx);
     const double c = std::cos(theta), sn = std::sin(theta);
 
-    // Elastic deformation: one coefficient per sine mode, drawn once per flick.
-    // Higher modes get smaller amplitude (a_j ~ N(0, amp/j)) so the bend stays
-    // low-frequency (kinematically cheap). Applied in the unit-shape frame,
-    // perpendicular to the local direction; sin(j*pi*u) is 0 at u=0 and u=1 so
-    // the start and target are never moved.
+    // Hybrid perturbation, all amplitudes RANDOMIZED per flick so there is no
+    // fixed signature:
+    //  - elastic: smooth low-freq perpendicular sine bend (breaks near-duplicates)
+    //  - variability: a step along a natural human-variation direction,
+    //    va*(shape_A - shape_B) for two random DB strokes resampled to this
+    //    stroke's length (makes the residual look like natural variation, so a
+    //    residual-spectrum detector can't key on the bend).
+    // Both sin(j*pi*u) and the endpoint-pinned A/B interp leave start/target fixed.
+    std::uniform_real_distribution<double> ur(0.0, 1.0);
     constexpr int kMaxModes = 8;
-    const int EM = cfg.elastic_amp > 0.0
-                 ? std::min(std::max(cfg.elastic_modes, 1), kMaxModes) : 0;
+    const double ea = cfg.elastic_amp * ur(rng);   // this flick's elastic amplitude
+    const double va = cfg.var_amp * ur(rng);       // this flick's variability amplitude
+    const int EM = ea > 0.0 ? std::min(std::max(cfg.elastic_modes, 1), kMaxModes) : 0;
     double ecoef[kMaxModes] = {0.0};
     for (int j = 0; j < EM; ++j) {
-        std::normal_distribution<double> ej(0.0, cfg.elastic_amp / (j + 1));
+        std::normal_distribution<double> ej(0.0, ea / (j + 1));
         ecoef[j] = ej(rng);
     }
+    std::uniform_int_distribution<size_t> anyStroke(0, db.size() - 1);
+    const detail::Stroke* A = va > 0.0 ? &db[anyStroke(rng)] : nullptr;
+    const detail::Stroke* B = va > 0.0 ? &db[anyStroke(rng)] : nullptr;
+    // sample a source stroke's unit shape at fraction u in [0,1] (index interp)
+    auto at = [](const detail::Stroke* st, double u, double& ox, double& oy) {
+        const double idx = u * (st->n - 1);
+        const int i0 = static_cast<int>(idx);
+        const int i1 = std::min(i0 + 1, st->n - 1);
+        const double f = idx - i0;
+        ox = st->sx[i0] * (1.0 - f) + st->sx[i1] * f;
+        oy = st->sy[i0] * (1.0 - f) + st->sy[i1] * f;
+    };
 
     const int NP = s->n;
     out.reserve(NP);
     for (int k = 0; k < NP; ++k) {
         double bx = s->sx[k], by = s->sy[k];       // unit canonical point
+        const double u = NP > 1 ? static_cast<double>(k) / (NP - 1) : 0.0;
         if (EM > 0 && NP > 1) {
-            const double u = static_cast<double>(k) / (NP - 1);
             double disp = 0.0;
             for (int j = 0; j < EM; ++j)
                 disp += ecoef[j] * std::sin((j + 1) * M_PI * u);
@@ -264,6 +295,11 @@ inline std::vector<trajectory_point> generate(
             const double tx = s->sx[kp] - s->sx[km], ty = s->sy[kp] - s->sy[km];
             const double tl = std::hypot(tx, ty);
             if (tl > 1e-9) { bx += disp * (-ty / tl); by += disp * (tx / tl); }
+        }
+        if (va > 0.0 && A && B) {                  // natural-variation step
+            double ax, ay, b2x, b2y;
+            at(A, u, ax, ay); at(B, u, b2x, b2y);
+            bx += va * (ax - b2x); by += va * (ay - b2y);
         }
         const double ux = bx * D, uy = by * D;
         const double rx = ux * c - uy * sn;

@@ -284,14 +284,20 @@ it alongside `simple_inference` and `simple_config.json`.
 "flick_distance_tolerance": 0.15,
 "flick_elastic_amp": 0.03,
 "flick_elastic_modes": 3,
+"flick_var_amp": 0.06,
 "flick_min_reach": 5.0
 ```
 
-> `flick_elastic_amp` bends each warped stroke by a smooth low-frequency
-> deformation (fraction of the reach) so a finite stroke DB yields unlimited
-> non-repeating flicks without adding detectable jerk; 0 = pure replay. It
-> replaces the old `flick_position_jitter` (white noise, added jerk) and
-> `flick_variability_mag`.
+> Each warped stroke gets a per-flick RANDOMIZED hybrid perturbation so a finite
+> DB yields unlimited non-repeating flicks with no fixed signature:
+> `flick_elastic_amp` is a smooth low-frequency bend (breaks near-duplicates
+> without adding jerk) and `flick_var_amp` a step along a natural human-variation
+> direction `mag*(A-B)` between two random DB strokes (makes the residual look
+> like natural variation, so a residual-spectrum detector can't key on the bend).
+> Both amplitudes are drawn uniformly in `[0, amp]` per flick. 0/0 = pure replay.
+> Replaces the old `flick_position_jitter` (white noise, added jerk). Measured:
+> single-move ~0.68, near-duplicates broken, residual detector evaded on a private
+> pool (see `mouse-bot-detector/hybrid_replay.py`).
 
 > Note: the previous PD-controller steady-state motor noise (`aim_sdn_k`,
 > `aim_tremor_*`) has been removed — it added jitter to live tracking precision
