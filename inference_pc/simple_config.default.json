@@ -1,0 +1,76 @@
+{
+    "engine_path": "/home/taeho/portfolio/inferencetool/engines/sunxds_0.8.3_320_fp16.engine",
+    "makcu_port": "/dev/ttyACM0",
+    "udp_port": 5007,
+
+    "conf_threshold": 0.20,
+    "head_class_id": 1,
+    "max_detections": 100,
+
+    "head_aim_point": 1.0,
+    "body_aim_point": 0.15,
+
+    "aim_kp_x": 0.55,
+    "aim_kp_y": 0.6,
+    "aim_softness_x": 11.0,
+    "aim_softness_y": 10.0,
+    "aim_kd_x": 0.18,
+    "aim_kd_y": 0.22,
+    "thumb_aim_kp_x": 0.6,
+    "thumb_aim_kp_y": 0.62,
+    "thumb_aim_softness_x": 11.0,
+    "thumb_aim_softness_y": 10.0,
+    "thumb_aim_kd_x": 0.18,
+    "thumb_aim_kd_y": 0.22,
+
+    "flick_enabled": false,
+    "flick_replay_db_path": "flick_trajectories.json",
+    "flick_distance_tolerance": 0.15,
+    "flick_position_jitter": 0.0,
+    "flick_elastic_amp": 0.03,
+    "flick_elastic_modes": 3,
+    "flick_min_reach": 5.0,
+
+    "iou_stickiness_threshold": 0.8,
+    "distance_stickiness_factor": 0.0,
+    "track_persistence_frames": 3,
+    "coast_enabled": true,
+    "coast_decay": 0.85,
+    "feedforward_gain": 0.9,
+    "aim_max_step": 30.0,
+
+    "oneeuro_enabled": true,
+    "oneeuro_min_cutoff": 0.1,
+    "oneeuro_beta": 0.02,
+    "oneeuro_dcutoff": 0.5,
+
+    "no_recoil_enabled": false,
+    "recoil_comp_x": 0.0,
+    "recoil_comp_y": 3.0,
+    "recoil_tick_ms": 8,
+
+    "shoot_offset_x": 0.0,
+    "shoot_offset_y": 0.0,
+
+    "mouse_min_interval_ms": 0,
+    "max_inflight_frames": 1,
+    "frame_credit_depth": 2,
+    "direct_aim_move_in_callback": true,
+    "makcu_baudrate": 4000000,
+
+    "perf_stats_enabled": false,
+    "perf_stats_interval_ms": 1000,
+    "realtime_threads_enabled": true,
+    "cpu_affinity_enabled": true,
+    "affinity_core_main": 5,
+    "affinity_core_receive": 7,
+    "affinity_core_callback": 6,
+    "affinity_core_sender": 4,
+    "force_aim_on": false,
+    "idle_graph_precapture_enabled": true,
+    "idle_graph_precapture_interval_ms": 100,
+    "stage_timing_enabled": false,
+    "pre_capture_shapes": [[320, 320]],
+
+    "allowed_classes": [0, 1]
+}

@@ -62,9 +62,23 @@ struct config {
     // (mouse-bot-detector/attack_sweet_spot.py) - but that adds a faint trace.
     double variability_mag = 0.0;
     // Residual per-point Gaussian jitter (px). 0 = pure replay (default): the
-    // stroke is reproduced unmodified. Set > 0 only if source reuse is allowed
-    // and you want to avoid byte-identical replays when a stroke recurs.
+    // stroke is reproduced unmodified. AVOID > 0: white per-point jitter adds
+    // high-frequency jerk, the single strongest tell a mouse-dynamics detector
+    // reads (synthetic-noise generators peak the detector at ~0.85). Use
+    // elastic_amp instead to break duplicates without adding jerk.
     double position_jitter = 0.0;
+    // Elastic deformation amplitude (fraction of the reach). After warping a real
+    // stroke onto the aim vector, bend it by a SMOOTH low-frequency lateral
+    // displacement (sum of elastic_modes sine modes perpendicular to the local
+    // direction, zero at both endpoints so start/target are preserved). This
+    // changes the canonical SHAPE - breaking finite-pool near-duplicates, so a
+    // small DB yields unlimited distinct flicks and no-repeat never has to reuse -
+    // while preserving the fine kinematics, so a strong detector still reads it as
+    // human. Measured: amp~0.03 -> ~0.60 strong-detector accuracy with near-dups
+    // broken, vs 0.85 for synthetic generators and 0.51-but-finite for pure
+    // replay (mouse-bot-detector/elastic_replay.py). 0 disables (pure replay).
+    double elastic_amp = 0.03;
+    int elastic_modes = 3;
     // Below this reach, just emit a 2-point straight segment.
     double min_reach = 5.0;
 
@@ -74,6 +88,8 @@ struct config {
         if (j.contains("flick_distance_tolerance")) distance_tolerance = j["flick_distance_tolerance"];
         if (j.contains("flick_variability_mag")) variability_mag = j["flick_variability_mag"];
         if (j.contains("flick_position_jitter")) position_jitter = j["flick_position_jitter"];
+        if (j.contains("flick_elastic_amp")) elastic_amp = j["flick_elastic_amp"];
+        if (j.contains("flick_elastic_modes")) elastic_modes = j["flick_elastic_modes"];
         if (j.contains("flick_min_reach")) min_reach = j["flick_min_reach"];
     }
     void save(nlohmann::json& j) const {
@@ -81,13 +97,16 @@ struct config {
         j["flick_distance_tolerance"] = distance_tolerance;
         j["flick_variability_mag"] = variability_mag;
         j["flick_position_jitter"] = position_jitter;
+        j["flick_elastic_amp"] = elastic_amp;
+        j["flick_elastic_modes"] = elastic_modes;
         j["flick_min_reach"] = min_reach;
     }
     void print() const {
         std::cout << "[Config] Flick generator: warped-replay, db=" << replay_db_path
                   << ", dist tol=" << distance_tolerance
                   << ", variability=" << variability_mag
-                  << ", jitter=" << position_jitter << "px" << std::endl;
+                  << ", jitter=" << position_jitter << "px"
+                  << ", elastic=" << elastic_amp << " x" << elastic_modes << std::endl;
     }
 };
 
@@ -242,9 +261,35 @@ inline std::vector<trajectory_point> generate(
     const detail::Stroke* A = mag > 0.0 ? &db[anyStroke(rng)] : nullptr;
     const detail::Stroke* B = mag > 0.0 ? &db[anyStroke(rng)] : nullptr;
 
+    // Elastic deformation: one coefficient per sine mode, drawn once per flick.
+    // Higher modes get smaller amplitude (a_j ~ N(0, amp/j)) so the bend stays
+    // low-frequency (kinematically cheap). Applied in the unit-shape frame,
+    // perpendicular to the local direction; sin(j*pi*u) is 0 at u=0 and u=1 so
+    // the start and target are never moved.
+    constexpr int kMaxModes = 8;
+    const int EM = cfg.elastic_amp > 0.0
+                 ? std::min(std::max(cfg.elastic_modes, 1), kMaxModes) : 0;
+    double ecoef[kMaxModes] = {0.0};
+    for (int j = 0; j < EM; ++j) {
+        std::normal_distribution<double> ej(0.0, cfg.elastic_amp / (j + 1));
+        ecoef[j] = ej(rng);
+    }
+
     out.reserve(detail::kNumPoints);
     for (int k = 0; k < detail::kNumPoints; ++k) {
-        double ux = s->sx[k] * D, uy = s->sy[k] * D;
+        double bx = s->sx[k], by = s->sy[k];       // unit canonical point
+        if (EM > 0) {
+            const double u = static_cast<double>(k) / (detail::kNumPoints - 1);
+            double disp = 0.0;
+            for (int j = 0; j < EM; ++j)
+                disp += ecoef[j] * std::sin((j + 1) * M_PI * u);
+            const int kp = std::min(k + 1, detail::kNumPoints - 1);
+            const int km = std::max(k - 1, 0);
+            const double tx = s->sx[kp] - s->sx[km], ty = s->sy[kp] - s->sy[km];
+            const double tl = std::hypot(tx, ty);
+            if (tl > 1e-9) { bx += disp * (-ty / tl); by += disp * (tx / tl); }
+        }
+        double ux = bx * D, uy = by * D;
         if (mag > 0.0) {
             ux += mag * (A->sx[k] - B->sx[k]) * D;
             uy += mag * (A->sy[k] - B->sy[k]) * D;
