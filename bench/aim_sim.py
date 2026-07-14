@@ -101,10 +101,15 @@ class OldController:
         self.prev_center = [0.0, 0.0]; self.vel = [0.0, 0.0]
         self.prev_err = [0.0, 0.0]; self.derr = [0.0, 0.0]
         self.residual = [0.0, 0.0]
-        self.applied = [0.0, 0.0]   # host's real applied delta, last frame
+        # SUM of the host's applied deltas since the last accepted detection.
+        # Accumulated (not overwritten) so a multi-frame coast/gap - where the
+        # crosshair keeps moving while prev_center is frozen - still gets its full
+        # motion added back. Consumed and zeroed by step() on the next detection.
+        self.applied_accum = [0.0, 0.0]
 
     def set_applied(self, dx, dy):
-        self.applied = [float(dx), float(dy)]
+        self.applied_accum[0] += float(dx)
+        self.applied_accum[1] += float(dy)
 
     def coast(self, missed):
         factor = self.coast_decay ** missed
@@ -136,11 +141,12 @@ class OldController:
                 # once we track well raw_delta -> 0 and ff does nothing -> lag.
                 d = raw[i] - self.prev_center[i]
                 if self.ego:
-                    d += self.applied[i]
+                    d += self.applied_accum[i]   # full motion since last detection
                 nv = max(-60.0, min(60.0, d))
                 self.vel[i] = 0.6 * self.vel[i] + 0.4 * nv
         else:
             self.vel = [0.0, 0.0]
+        self.applied_accum = [0.0, 0.0]   # consumed; restart accumulation
         self.prev_center = [raw[0], raw[1]]
         self.has_track = 1
 
