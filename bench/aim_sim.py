@@ -246,10 +246,18 @@ class NewController:
 # ------------------------------------------------------------------ scenarios
 SC = (160.0, 160.0)   # screen center (320 model)
 NOISE = 1.0           # detector center noise sigma, px/axis
+FRAME_MS = 1000.0 / 300.0   # 300 detections/s -> 3.33 ms/frame
 
-def run(ctrl, scenario, frames=900, seed=0):
+def run(ctrl, scenario, frames=900, seed=0, latency_ms=None):
     """Returns dict of metrics. Target position T is ABSOLUTE; crosshair C
-    starts at SC; frame-coord measurement raw = T - C + SC + noise."""
+    starts at SC; frame-coord measurement raw = T - C + SC + noise.
+
+    latency_ms: None = perfect (measurement reflects the world NOW, so the
+    ~1-frame ego-comp is exact). A (lo, hi) tuple models a random per-frame
+    capture->process latency in ms: the detection instead reflects a snapshot of
+    the WHOLE frame (target AND crosshair) from lat frames ago, interpolated. The
+    ego-comp still assumes ~1 frame, so the (lat-1) frames of crosshair motion it
+    cannot predict leak in as error - the real-hardware failure mode."""
     rng = random.Random(seed)
     ctrl.reset()
     C = [SC[0], SC[1]]
@@ -265,12 +273,27 @@ def run(ctrl, scenario, frames=900, seed=0):
     turn_frames = set()
     init_dist = math.hypot(T[0]-C[0], T[1]-C[1])
     missed = 0
+    world_hist = []  # (Tx, Ty, Cx, Cy) per frame, for latency-delayed snapshots
 
     for f in range(frames):
         # --- world update
         if scenario == "zigzag" and f > 0 and f % 150 == 0:
             v[0] = -v[0]; turn_frames.add(f)
         T[0] += v[0]; T[1] += v[1]
+        world_hist.append((T[0], T[1], C[0], C[1]))
+
+        # --- what the camera actually captured this frame: a snapshot of the
+        # whole scene (target AND crosshair) delayed by a random 1-10ms latency
+        if latency_ms is not None:
+            lat_fr = rng.uniform(latency_ms[0], latency_ms[1]) / FRAME_MS
+            idx = max(0.0, f - lat_fr)
+            i0 = int(idx); i1 = min(i0 + 1, len(world_hist) - 1); fr = idx - i0
+            sT0 = world_hist[i0][0]*(1-fr) + world_hist[i1][0]*fr
+            sT1 = world_hist[i0][1]*(1-fr) + world_hist[i1][1]*fr
+            sC0 = world_hist[i0][2]*(1-fr) + world_hist[i1][2]*fr
+            sC1 = world_hist[i0][3]*(1-fr) + world_hist[i1][3]*fr
+        else:
+            sT0, sT1, sC0, sC1 = T[0], T[1], C[0], C[1]
 
         # --- detection
         gap = (scenario == "gap" and f % 60 in (20, 21, 22))
@@ -285,7 +308,7 @@ def run(ctrl, scenario, frames=900, seed=0):
             nx = rng.gauss(0.0, NOISE); ny = rng.gauss(0.0, NOISE)
             if scenario == "glitch" and rng.random() < 0.01:
                 nx += 40.0
-            raw = (T[0] - C[0] + SC[0] + nx, T[1] - C[1] + SC[1] + ny)
+            raw = (sT0 - sC0 + SC[0] + nx, sT1 - sC1 + SC[1] + ny)
             if isinstance(ctrl, NewController):
                 dx, dy = ctrl.step(raw, SC, frames_elapsed=missed + 1)
             else:
@@ -330,10 +353,10 @@ def run(ctrl, scenario, frames=900, seed=0):
         out["turn_peak"] = post_turn_peak
     return out
 
-def avg_runs(make_ctrl, scenario, n=8):
+def avg_runs(make_ctrl, scenario, n=8, latency_ms=None):
     acc = {}
     for s in range(n):
-        m = run(make_ctrl(), scenario, seed=s)
+        m = run(make_ctrl(), scenario, seed=s, latency_ms=latency_ms)
         for k, v in m.items():
             acc.setdefault(k, []).append(v)
     return {k: sum(v)/len(v) for k, v in acc.items()}
@@ -370,10 +393,10 @@ def flick_handover(ctrl, flick_frames=30, seed=0):
 
 SCENARIOS = ["step", "still", "cv", "zigzag", "glitch", "gap", "drop"]
 
-def row(name, make_ctrl):
+def row(name, make_ctrl, latency_ms=None):
     cells = [f"{name:26s}"]
     for sc in SCENARIOS:
-        m = avg_runs(make_ctrl, sc)
+        m = avg_runs(make_ctrl, sc, latency_ms=latency_ms)
         extra = ""
         if sc == "step":
             extra = f" st={m['settle']:.0f}f ov={m['overshoot']:.1f}"
@@ -407,6 +430,16 @@ if __name__ == "__main__":
     for sx, sy in ((11, 10), (8, 7), (6, 5)):
         gg = Gains(soft_x=float(sx), soft_y=float(sy))
         row(f"NEW soft={sx}/{sy}", lambda gg=gg: NewController(gg, alpha=0.30, track_ff=0.8))
+    print()
+    print("-- REALISTIC: random 1-10 ms pipeline latency (frame = 3.33 ms) --")
+    print("   whole frame (target+crosshair) delayed a random 1-10ms each frame;")
+    print("   ego-comp still assumes ~1 frame, so the jitter it cannot predict")
+    print("   leaks in. Compare each row against its perfect-latency twin above.")
+    LAT = (1.0, 10.0)
+    row("OLD (oneeuro) +lat", lambda: OldController(Gains(soft_x=11.0, soft_y=10.0)), latency_ms=LAT)
+    row("NEW a=.35 no-ego +lat", lambda: NewController(g, alpha=0.35, ego_comp=False), latency_ms=LAT)
+    for a in (0.30, 0.35, 0.40):
+        row(f"NEW a={a:.2f} ego +lat", lambda a=a: NewController(g, alpha=a, track_ff=0.8), latency_ms=LAT)
     print()
     print("-- flick handover: ego closed on applied delta vs on emitted guess --")
     pk_s, st_s = flick_handover(NewController(Gains()))
