@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
-"""Closed-loop aim-controller simulation: OLD pipeline (One Euro + velocity
-feedforward + coast + nonlinear P+D) vs NEW pipeline (gated alpha-beta
-estimator + hold deadband + nonlinear P+D), both ported line-for-line from
-needaimbot/cuda/pd_controller.cuh (new = current HEAD, old = pre-rewrite).
+"""Closed-loop aim-controller simulation for OFFLINE design comparison. Both
+controllers are ported into Python here (not imported from C++):
+  SHIPPED (this branch, "OLD" below): One Euro pre-filter + raw-delta velocity
+      feedforward + coast + nonlinear P+D - what needaimbot/cuda/pd_controller.cuh
+      actually implements on 2pc.
+  EXPERIMENTAL / ABANDONED ("NEW" below): gated alpha-beta estimator + ego-motion
+      compensation (AimConfig::applied_dx/dy) + hold deadband + nonlinear P+D.
+      Tried on a since-deleted branch and dropped - it wins this sim but felt
+      worse on hardware (ego-comp is sensitive to capture->move latency this sim
+      models as perfect). NOT in the shipped pd_controller.cuh (no applied_dx/dy
+      there); kept only as a research/ceiling model.
 
 Frame-coordinate closed loop: the measured target center is
     raw = T_abs - C + SC + noise
@@ -20,12 +27,16 @@ Scenarios (300 detections/s -> units are px/frame):
 
 Metrics are TRUE error |T - C| (not the controller's own belief).
 
-Shipped defaults chosen from these sweeps: estimator_alpha=0.35,
-estimator_gate_px=50, aim_hold_deadband_px=1.0, aim_track_ff=0.8,
-softness 8/7 (still: 0.30 px RMS / 1% moving frames; cv: 1.30 px;
-zigzag: 1.74 px; glitch: 2.12 px; step overshoot 0.7 px).
-Old pipeline for comparison - still: 0.89 px with 36% moving frames,
-cv: 5.06 px, zigzag: 5.31 px, glitch: 3.29 px.
+The "NEW" rows below quantify the ABANDONED design's ceiling under idealized
+(perfect-latency) ego-comp - they do NOT validate the shipped code. The "OLD"
+rows are the shipped One Euro pipeline.
+
+Reference numbers (idealized sim):
+  ABANDONED alpha-beta+ego (alpha=0.35, gate=50, deadband=1.0, track_ff=0.8,
+    softness 8/7): still 0.30 px / 1% moving; cv 1.30; zigzag 1.74; glitch 2.12;
+    step overshoot 0.7.
+  SHIPPED One Euro+ff+coast: still 0.89 px / 36% moving; cv 5.06; zigzag 5.31;
+    glitch 3.29.
 """
 import math
 import random
@@ -69,7 +80,7 @@ def one_euro_alpha(cutoff):
     return 1.0 / (1.0 + tau)
 
 class OldController:
-    """Pre-rewrite pipeline: One Euro pre-filter, raw-delta velocity EMA,
+    """SHIPPED pipeline (this branch): One Euro pre-filter, raw-delta velocity EMA,
     P + D + feedforward, coast glide on detection gaps."""
     def __init__(self, g: Gains, ff=0.9, min_cutoff=0.1, beta=0.02, dcutoff=0.5,
                  coast_decay=0.85):
@@ -153,8 +164,9 @@ class NewController:
         self.ego_comp, self.track_ff = ego_comp, track_ff
         # ego_bug reproduces the REVIEWED defect: subtract this kernel's own
         # emitted delta (guess) instead of the host's real applied delta. When
-        # a move is discarded/dropped, est desyncs. Off = the shipped closed-
-        # loop feedback (subtract set_applied()).
+        # a move is discarded/dropped, est desyncs. Off = the experimental
+        # design's closed-loop feedback (subtract set_applied()). This whole ego
+        # path is the ABANDONED design, not shipped on this branch.
         self.ego_bug = ego_bug
         self.reset()
 
@@ -223,9 +235,9 @@ class NewController:
         mx, my = clamp_max_step(mx, my)
         dx, self.residual[0] = emit_mouse_delta(mx, self.residual[0])
         dy, self.residual[1] = emit_mouse_delta(my, self.residual[1])
-        # Shipped path: NOT ego-compensated here - the host tells us the real
-        # applied delta via set_applied() before the next step. ego_bug path:
-        # subtract our own guess now (the reviewed defect) to show it desyncs.
+        # Correct (experimental-design) path: NOT ego-compensated here - the host
+        # tells us the real applied delta via set_applied() before the next step.
+        # ego_bug path: subtract our own guess now (the reviewed defect) to desync.
         if self.ego_bug and self.ego_comp and self.has_track:
             self.est[0] -= dx; self.est[1] -= dy
             self.applied = [0.0, 0.0]  # ignore the host's real feedback
@@ -399,5 +411,5 @@ if __name__ == "__main__":
     print("-- flick handover: ego closed on applied delta vs on emitted guess --")
     pk_s, st_s = flick_handover(NewController(Gains()))
     pk_b, st_b = flick_handover(NewController(Gains(), ego_bug=True))
-    print(f"  shipped (applied_dx/dy) : handover_peak={pk_s:6.2f}px  settle={st_s}f")
+    print(f"  applied_dx/dy (correct) : handover_peak={pk_s:6.2f}px  settle={st_s}f")
     print(f"  bug (self-subtract emit): handover_peak={pk_b:6.2f}px  settle={st_b}f")
