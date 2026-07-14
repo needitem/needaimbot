@@ -272,11 +272,18 @@ To **override** the embedded DB without recompiling, drop a `flick_trajectories.
 next to the executable (resolved via the config path, then the exe directory);
 `load_db` prefers a file when present and otherwise uses the embedded DB.
 
-Regenerate both the source json and the embedded `.cpp` with
-`mouse-bot-detector/scripts/export_flick_db.py` (filters to `path_efficiency ≥ 0.9`,
-lateral deviation ≤ 0.1× distance). **For real deployment, build the DB from your
-*own* recorded strokes** — the bundled DB is derived from a public dataset, which a
-defender doing near-duplicate / residual matching can hold and match against.
+Regenerating the DB is a two-step, two-repo process:
+
+1. In the **separate companion repo `mouse-bot-detector`** (not part of this repo),
+   run `scripts/export_flick_db.py` to produce a `flick_trajectories.json` (filters
+   to `path_efficiency ≥ 0.9`, lateral deviation ≤ 0.1× distance).
+2. In **this** repo, embed it:
+   `python needaimbot/mouse/gen_flick_db_embedded.py path/to/flick_trajectories.json`
+   — this rewrites `needaimbot/mouse/flick_db_embedded.{cpp,hpp}`; rebuild to bake it in.
+
+**For real deployment, build the DB from your *own* recorded strokes** — the bundled
+DB is derived from a public dataset, which a defender doing near-duplicate / residual
+matching can hold and match against.
 
 ### Config keys (`simple_config.json`)
 
