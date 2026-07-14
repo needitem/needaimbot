@@ -622,24 +622,16 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
 // =============================================================================
 
 // Resolve the device pointer for a mapped pinned host buffer (Tegra zero-copy).
-// Results are cached because the UDP layer reuses a small fixed set of buffers,
-// so cudaHostGetDevicePointer() runs at most once per distinct buffer.
+// Do not cache this mapping: UDPCapture can free and replace its mapped buffer
+// pool on a resolution increase, and a later allocation may reuse the same host
+// address with a different device alias - an address-keyed cache would then hand
+// back a freed alias.
 const uint8_t* SimpleInference::pinnedDevicePtr(void* hostPtr) {
     if (!hostPtr) return nullptr;
-    for (int i = 0; i < m_pinnedCacheCount; ++i) {
-        if (m_pinnedHostCache[static_cast<size_t>(i)] == hostPtr) {
-            return static_cast<const uint8_t*>(m_pinnedDevCache[static_cast<size_t>(i)]);
-        }
-    }
     void* devPtr = nullptr;
     if (cudaHostGetDevicePointer(&devPtr, hostPtr, 0) != cudaSuccess || !devPtr) {
         cudaGetLastError();  // swallow so the caller can fall back to a normal H2D
         return nullptr;
-    }
-    if (m_pinnedCacheCount < kPinnedPtrCacheSize) {
-        m_pinnedHostCache[static_cast<size_t>(m_pinnedCacheCount)] = hostPtr;
-        m_pinnedDevCache[static_cast<size_t>(m_pinnedCacheCount)] = devPtr;
-        ++m_pinnedCacheCount;
     }
     return static_cast<const uint8_t*>(devPtr);
 }

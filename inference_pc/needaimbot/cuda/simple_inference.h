@@ -168,14 +168,9 @@ private:
     std::array<void*, kMaxCallbacksInFlight> m_h_srcPtrStage{};
     // Tegra: device-side alias of each pinned result buffer (cudaHostGetDevicePointer).
     std::array<InferenceResult*, kMaxCallbacksInFlight> m_d_resultMapped{};
-    // Tiny cache mapping a pinned host receive buffer to its device pointer so we
-    // call cudaHostGetDevicePointer() once per distinct buffer, not per frame.
-    static constexpr int kPinnedPtrCacheSize = 8;
-    std::array<void*, kPinnedPtrCacheSize> m_pinnedHostCache{};
-    std::array<void*, kPinnedPtrCacheSize> m_pinnedDevCache{};
-    int m_pinnedCacheCount = 0;
-    // Resolve (and cache) the device pointer for a mapped pinned host buffer.
-    // Returns nullptr if the buffer is not device-mappable.
+    // Resolve the device pointer for a mapped pinned host buffer. Not cached -
+    // UDPCapture may free/replace its mapped pool and a reused host address could
+    // otherwise return a freed alias. Returns nullptr if not device-mappable.
     const uint8_t* pinnedDevicePtr(void* hostPtr);
 
     // GPU fused pipeline buffers
