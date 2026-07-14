@@ -245,10 +245,78 @@ class NewController:
 
 # ------------------------------------------------------------------ scenarios
 SC = (160.0, 160.0)   # screen center (320 model)
-NOISE = 1.0           # detector center noise sigma, px/axis
+NOISE = 1.0           # detector center noise sigma, px/axis (clean model)
 FRAME_MS = 1000.0 / 300.0   # 300 detections/s -> 3.33 ms/frame
 
-def run(ctrl, scenario, frames=900, seed=0, latency_ms=None):
+
+class DetectorNoise:
+    """Every perturbation that can hit the measured target center in this
+    YOLO-nano (mAP95~0.5) + two-PC UDP pipeline. Stateful (correlated) sources:
+
+      white    iid sub-pixel decode jitter
+      drift    AR(1) low-frequency wander - the box 'breathes', frame-correlated
+      boxjit   bbox-edge jitter -> center shift, Y >> X: a head box's top/bottom
+               edge is far less stable than its sides, so the CENTER wobbles
+               vertically more than horizontally (the real vertical-shake source)
+      quant    model-input grid quantization of the decoded center
+      dropout  missed detection this frame (no box -> controller holds/coasts)
+      stale    UDP frame stall: the previous detection repeats (frame not updated)
+      flicker  target-selection flip (head<->body / candidate switch): the center
+               jumps - mostly in Y - for a few frames, then back = the 'phantom'
+      outlier  gross false box for a single frame
+
+    measure(cx, cy) -> (mx, my) measured center, or None on a dropout.
+    (Latency jitter and host move-discard are modelled in run(), not here.)
+    """
+    def __init__(self, rng, white=0.8, drift=1.5, drift_rho=0.92,
+                 box_x=0.5, box_y=2.5, box_rho=0.6, quant=0.75,
+                 p_dropout=0.04, p_stale=0.03, p_flicker=0.015, flicker_y=20.0,
+                 p_outlier=0.008, outlier=35.0):
+        self.rng = rng
+        self.white, self.drift, self.drift_rho = white, drift, drift_rho
+        self.box_x, self.box_y, self.box_rho = box_x, box_y, box_rho
+        self.quant = quant
+        self.p_dropout, self.p_stale = p_dropout, p_stale
+        self.p_flicker, self.flicker_y = p_flicker, flicker_y
+        self.p_outlier, self.outlier = p_outlier, outlier
+        self.dx = self.dy = 0.0          # AR(1) drift state
+        self.bx = self.by = 0.0          # AR(1) box-jitter state
+        self.flick_left = 0
+        self.flick_off = (0.0, 0.0)
+        self.last = None                 # last emitted measurement (for stale)
+
+    def _ar1(self, prev, rho, sig):
+        return rho * prev + self.rng.gauss(0.0, sig * math.sqrt(max(1e-9, 1.0 - rho*rho)))
+
+    def measure(self, cx, cy):
+        if self.rng.random() < self.p_dropout:
+            return None                                  # missed detection
+        if self.last is not None and self.rng.random() < self.p_stale:
+            return self.last                             # UDP frame stall
+        self.dx = self._ar1(self.dx, self.drift_rho, self.drift)
+        self.dy = self._ar1(self.dy, self.drift_rho, self.drift)
+        self.bx = self._ar1(self.bx, self.box_rho, self.box_x)
+        self.by = self._ar1(self.by, self.box_rho, self.box_y)
+        mx = cx + self.dx + self.bx + self.rng.gauss(0.0, self.white)
+        my = cy + self.dy + self.by + self.rng.gauss(0.0, self.white)
+        if self.flick_left > 0:                          # phantom, held a few frames
+            mx += self.flick_off[0]; my += self.flick_off[1]
+            self.flick_left -= 1
+        elif self.rng.random() < self.p_flicker:
+            self.flick_left = self.rng.randint(1, 4) - 1
+            self.flick_off = (self.rng.gauss(0.0, 3.0),
+                              self.rng.choice((-1.0, 1.0)) * self.flicker_y)
+            mx += self.flick_off[0]; my += self.flick_off[1]
+        if self.rng.random() < self.p_outlier:           # gross false box
+            mx += self.rng.gauss(0.0, self.outlier)
+            my += self.rng.gauss(0.0, self.outlier)
+        if self.quant > 0.0:
+            mx = round(mx / self.quant) * self.quant
+            my = round(my / self.quant) * self.quant
+        self.last = (mx, my)
+        return (mx, my)
+
+def run(ctrl, scenario, frames=900, seed=0, latency_ms=None, noise_model="clean"):
     """Returns dict of metrics. Target position T is ABSOLUTE; crosshair C
     starts at SC; frame-coord measurement raw = T - C + SC + noise.
 
@@ -257,8 +325,15 @@ def run(ctrl, scenario, frames=900, seed=0, latency_ms=None):
     capture->process latency in ms: the detection instead reflects a snapshot of
     the WHOLE frame (target AND crosshair) from lat frames ago, interpolated. The
     ego-comp still assumes ~1 frame, so the (lat-1) frames of crosshair motion it
-    cannot predict leak in as error - the real-hardware failure mode."""
+    cannot predict leak in as error - the real-hardware failure mode.
+
+    noise_model: 'clean' = iid gaussian center noise + the scenario's own
+    gap/glitch injections. 'real' = the full DetectorNoise (correlated drift,
+    Y-heavy box-edge jitter, quantization, random dropouts, UDP stale frames,
+    target-selection flicker/phantom, outliers); the scenario supplies only the
+    target motion (its gap/glitch injections are superseded by the detector)."""
     rng = random.Random(seed)
+    detector = DetectorNoise(rng) if noise_model == "real" else None
     ctrl.reset()
     C = [SC[0], SC[1]]
     T = [SC[0] + 80.0, SC[1] + 40.0] if scenario == "step" else [SC[0], SC[1]]
@@ -295,8 +370,20 @@ def run(ctrl, scenario, frames=900, seed=0, latency_ms=None):
         else:
             sT0, sT1, sC0, sC1 = T[0], T[1], C[0], C[1]
 
-        # --- detection
-        gap = (scenario == "gap" and f % 60 in (20, 21, 22))
+        # --- detection: clean gaussian (+ scenario gap/glitch) or full DetectorNoise
+        true_cx, true_cy = sT0 - sC0 + SC[0], sT1 - sC1 + SC[1]
+        if noise_model == "real":
+            meas = detector.measure(true_cx, true_cy)    # None on a real dropout
+            gap = (meas is None)
+        else:
+            gap = (scenario == "gap" and f % 60 in (20, 21, 22))
+            meas = None
+            if not gap:
+                nx = rng.gauss(0.0, NOISE); ny = rng.gauss(0.0, NOISE)
+                if scenario == "glitch" and rng.random() < 0.01:
+                    nx += 40.0
+                meas = (true_cx + nx, true_cy + ny)
+
         if gap:
             missed += 1
             if isinstance(ctrl, OldController):
@@ -305,14 +392,10 @@ def run(ctrl, scenario, frames=900, seed=0, latency_ms=None):
                 dx, dy = 0, 0                    # new: hold
                 ctrl.residual = [0.0, 0.0]
         else:
-            nx = rng.gauss(0.0, NOISE); ny = rng.gauss(0.0, NOISE)
-            if scenario == "glitch" and rng.random() < 0.01:
-                nx += 40.0
-            raw = (sT0 - sC0 + SC[0] + nx, sT1 - sC1 + SC[1] + ny)
             if isinstance(ctrl, NewController):
-                dx, dy = ctrl.step(raw, SC, frames_elapsed=missed + 1)
+                dx, dy = ctrl.step(meas, SC, frames_elapsed=missed + 1)
             else:
-                dx, dy = ctrl.step(raw, SC)
+                dx, dy = ctrl.step(meas, SC)
             missed = 0
         # 'drop': the host discards the emitted move (flick override / queue
         # full / aiming dropped between kernel and callback). The kernel already
@@ -353,10 +436,10 @@ def run(ctrl, scenario, frames=900, seed=0, latency_ms=None):
         out["turn_peak"] = post_turn_peak
     return out
 
-def avg_runs(make_ctrl, scenario, n=8, latency_ms=None):
+def avg_runs(make_ctrl, scenario, n=8, latency_ms=None, noise_model="clean"):
     acc = {}
     for s in range(n):
-        m = run(make_ctrl(), scenario, seed=s, latency_ms=latency_ms)
+        m = run(make_ctrl(), scenario, seed=s, latency_ms=latency_ms, noise_model=noise_model)
         for k, v in m.items():
             acc.setdefault(k, []).append(v)
     return {k: sum(v)/len(v) for k, v in acc.items()}
@@ -393,10 +476,10 @@ def flick_handover(ctrl, flick_frames=30, seed=0):
 
 SCENARIOS = ["step", "still", "cv", "zigzag", "glitch", "gap", "drop"]
 
-def row(name, make_ctrl, latency_ms=None):
+def row(name, make_ctrl, latency_ms=None, noise_model="clean"):
     cells = [f"{name:26s}"]
     for sc in SCENARIOS:
-        m = avg_runs(make_ctrl, sc, latency_ms=latency_ms)
+        m = avg_runs(make_ctrl, sc, latency_ms=latency_ms, noise_model=noise_model)
         extra = ""
         if sc == "step":
             extra = f" st={m['settle']:.0f}f ov={m['overshoot']:.1f}"
@@ -440,6 +523,21 @@ if __name__ == "__main__":
     row("NEW a=.35 no-ego +lat", lambda: NewController(g, alpha=0.35, ego_comp=False), latency_ms=LAT)
     for a in (0.30, 0.35, 0.40):
         row(f"NEW a={a:.2f} ego +lat", lambda a=a: NewController(g, alpha=a, track_ff=0.8), latency_ms=LAT)
+    print()
+    print("-- REALISTIC detector+pipeline noise (correlated drift, Y-heavy box")
+    print("   jitter, quantization, dropouts, UDP stale frames, target flicker/")
+    print("   phantom, outliers). 'still'/'cv'/'zigzag' are the ones to read. --")
+    row("OLD (oneeuro) real", lambda: OldController(Gains(soft_x=11.0, soft_y=10.0)), noise_model="real")
+    row("NEW a=.35 no-ego real", lambda: NewController(g, alpha=0.35, ego_comp=False), noise_model="real")
+    for a in (0.25, 0.30, 0.35):
+        row(f"NEW a={a:.2f} ego real", lambda a=a: NewController(g, alpha=a, track_ff=0.8), noise_model="real")
+    print("   -- track_ff sweep under real noise (suspected Y-jitter amplifier) --")
+    for ff in (0.0, 0.4, 0.8):
+        row(f"NEW a=.30 ff={ff:.1f} real", lambda ff=ff: NewController(g, alpha=0.30, track_ff=ff), noise_model="real")
+    print("   -- FULL: real noise + 1-10ms latency --")
+    row("OLD real+lat", lambda: OldController(Gains(soft_x=11.0, soft_y=10.0)), latency_ms=(1.0, 10.0), noise_model="real")
+    row("NEW a=.30 ego real+lat", lambda: NewController(g, alpha=0.30, track_ff=0.8), latency_ms=(1.0, 10.0), noise_model="real")
+    row("NEW a=.30 ff=0 real+lat", lambda: NewController(g, alpha=0.30, track_ff=0.0), latency_ms=(1.0, 10.0), noise_model="real")
     print()
     print("-- flick handover: ego closed on applied delta vs on emitted guess --")
     pk_s, st_s = flick_handover(NewController(Gains()))
