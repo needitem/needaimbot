@@ -263,18 +263,20 @@ flick doesn't pay the parse cost.
 
 ### Trajectory database
 
-The generator needs `flick_trajectories.json` **next to the executable**
-(resolved via the config path, then the exe directory). It holds straight,
-low-lateral-deviation human strokes, canonicalized to the origin→+x axis with
-their real distance and timestamps.
+The stroke DB is **compiled into the binary** (`needaimbot/mouse/flick_db_embedded.cpp`),
+so **no `flick_trajectories.json` file is required** — the aimbot ships as a single
+executable. It holds straight, low-lateral-deviation human strokes, canonicalized
+to the origin→+x axis with their real distance and timestamps.
 
-Generate it with `mouse-bot-detector/scripts/export_flick_db.py` (filters to
-`path_efficiency ≥ 0.9`, lateral deviation ≤ 0.1× distance). **For real
-deployment, build the DB from your *own* recorded strokes** — a public dataset
-can be caught by a defender doing near-duplicate matching.
+To **override** the embedded DB without recompiling, drop a `flick_trajectories.json`
+next to the executable (resolved via the config path, then the exe directory);
+`load_db` prefers a file when present and otherwise uses the embedded DB.
 
-Without the DB, flicks fall back to a plain straight line (detectable), so ship
-it alongside `simple_inference` and `simple_config.json`.
+Regenerate both the source json and the embedded `.cpp` with
+`mouse-bot-detector/scripts/export_flick_db.py` (filters to `path_efficiency ≥ 0.9`,
+lateral deviation ≤ 0.1× distance). **For real deployment, build the DB from your
+*own* recorded strokes** — the bundled DB is derived from a public dataset, which a
+defender doing near-duplicate / residual matching can hold and match against.
 
 ### Config keys (`simple_config.json`)
 
