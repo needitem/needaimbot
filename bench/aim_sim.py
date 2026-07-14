@@ -83,10 +83,16 @@ class OldController:
     """SHIPPED pipeline (this branch): One Euro pre-filter, raw-delta velocity EMA,
     P + D + feedforward, coast glide on detection gaps."""
     def __init__(self, g: Gains, ff=0.9, min_cutoff=0.1, beta=0.02, dcutoff=0.5,
-                 coast_decay=0.85):
+                 coast_decay=0.85, ego=False):
         self.g, self.ff = g, ff
         self.min_cutoff, self.beta, self.dcutoff = min_cutoff, beta, dcutoff
         self.coast_decay = coast_decay
+        # ego: HYBRID - add ONLY ego-motion comp to One Euro. The velocity that
+        # feeds the feedforward is (raw_delta + applied) = the target's TRUE
+        # screen drift instead of (drift - our own motion), so ff cancels the
+        # chase lag against a moving target. The One Euro position filter (what
+        # gives the quiet, sticky feel) and everything else are untouched.
+        self.ego = ego
         self.reset()
 
     def reset(self):
@@ -95,6 +101,10 @@ class OldController:
         self.prev_center = [0.0, 0.0]; self.vel = [0.0, 0.0]
         self.prev_err = [0.0, 0.0]; self.derr = [0.0, 0.0]
         self.residual = [0.0, 0.0]
+        self.applied = [0.0, 0.0]   # host's real applied delta, last frame
+
+    def set_applied(self, dx, dy):
+        self.applied = [float(dx), float(dy)]
 
     def coast(self, missed):
         factor = self.coast_decay ** missed
@@ -120,7 +130,14 @@ class OldController:
 
         if not fresh:
             for i in range(2):
-                nv = max(-60.0, min(60.0, raw[i] - self.prev_center[i]))
+                # raw_delta = dTarget - our_applied_motion. With ego, add applied
+                # back to recover the target's TRUE screen drift (dTarget); the
+                # feedforward then cancels chase lag. Without ego (base One Euro),
+                # once we track well raw_delta -> 0 and ff does nothing -> lag.
+                d = raw[i] - self.prev_center[i]
+                if self.ego:
+                    d += self.applied[i]
+                nv = max(-60.0, min(60.0, d))
                 self.vel[i] = 0.6 * self.vel[i] + 0.4 * nv
         else:
             self.vel = [0.0, 0.0]
@@ -406,8 +423,8 @@ def run(ctrl, scenario, frames=900, seed=0, latency_ms=None, noise_model="clean"
         C[0] += applied_dx; C[1] += applied_dy
         dx, dy = applied_dx, applied_dy  # metrics reflect real mouse motion
         # Host feeds the ACTUALLY-applied delta back for next frame's ego comp.
-        if isinstance(ctrl, NewController):
-            ctrl.set_applied(applied_dx, applied_dy)
+        # (Both controllers have set_applied; it is a no-op unless ego is on.)
+        ctrl.set_applied(applied_dx, applied_dy)
 
         e = math.hypot(T[0] - C[0], T[1] - C[1])
         errs.append(e); emits.append((dx, dy))
@@ -538,6 +555,19 @@ if __name__ == "__main__":
     row("OLD real+lat", lambda: OldController(Gains(soft_x=11.0, soft_y=10.0)), latency_ms=(1.0, 10.0), noise_model="real")
     row("NEW a=.30 ego real+lat", lambda: NewController(g, alpha=0.30, track_ff=0.8), latency_ms=(1.0, 10.0), noise_model="real")
     row("NEW a=.30 ff=0 real+lat", lambda: NewController(g, alpha=0.30, track_ff=0.0), latency_ms=(1.0, 10.0), noise_model="real")
+    print()
+    print("== HYBRID: One Euro + ego-comp ONLY (no alpha-beta, no track_ff) ==")
+    print("   Does adding just ego to the shipped filter cancel chase lag WITHOUT")
+    print("   adding rest jitter? (still/mv% = feel, cv/zigzag = tracking)")
+    print("   clean:")
+    row("OneEuro base", lambda: OldController(Gains(soft_x=11.0, soft_y=10.0)))
+    row("OneEuro + ego", lambda: OldController(Gains(soft_x=11.0, soft_y=10.0), ego=True))
+    print("   real detector+pipeline noise:")
+    row("OneEuro base real", lambda: OldController(Gains(soft_x=11.0, soft_y=10.0)), noise_model="real")
+    row("OneEuro+ego real", lambda: OldController(Gains(soft_x=11.0, soft_y=10.0), ego=True), noise_model="real")
+    print("   real noise + 1-10ms latency:")
+    row("OneEuro base real+lat", lambda: OldController(Gains(soft_x=11.0, soft_y=10.0)), latency_ms=(1.0,10.0), noise_model="real")
+    row("OneEuro+ego real+lat", lambda: OldController(Gains(soft_x=11.0, soft_y=10.0), ego=True), latency_ms=(1.0,10.0), noise_model="real")
     print()
     print("-- flick handover: ego closed on applied delta vs on emitted guess --")
     pk_s, st_s = flick_handover(NewController(Gains()))
