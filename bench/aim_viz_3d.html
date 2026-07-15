@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body>
+<title>Aim Scope · 3D view-rotation</title>
+<style>
+  :root{
+    color-scheme: dark;
+    --bg:#0b1113; --panel:#101a1d; --panel-2:#0d1618; --line:#1e2d30; --grid:#142125;
+    --ink:#dbe6e3; --ink-dim:#869c9c; --ink-faint:#566d6e;
+    --accent:#3fe0c8; --accent-soft:rgba(63,224,200,.14);
+    --target:#ffb454; --bodyc:#b7813f; --danger:#ff5d6c; --danger-soft:rgba(255,93,108,.16);
+    --sky:#0f1c22; --ground:#0a1417;
+    --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; --r:10px;
+  }
+  @media (prefers-color-scheme: light){:root{
+    color-scheme: light;
+    --bg:#e9eeec; --panel:#fff; --panel-2:#f3f7f5; --line:#d3ded9; --grid:#e2ebe7;
+    --ink:#16211f; --ink-dim:#4c6360; --ink-faint:#7f9491;
+    --accent:#0c9c85; --accent-soft:rgba(12,156,133,.12);
+    --target:#d5851a; --bodyc:#a06a23; --danger:#d8384a; --danger-soft:rgba(216,56,74,.12);
+    --sky:#dfeaf0; --ground:#cdd9d5;
+  }}
+  :root[data-theme="dark"]{color-scheme:dark;--bg:#0b1113;--panel:#101a1d;--panel-2:#0d1618;--line:#1e2d30;--grid:#142125;--ink:#dbe6e3;--ink-dim:#869c9c;--ink-faint:#566d6e;--accent:#3fe0c8;--accent-soft:rgba(63,224,200,.14);--target:#ffb454;--bodyc:#b7813f;--danger:#ff5d6c;--danger-soft:rgba(255,93,108,.16);--sky:#0f1c22;--ground:#0a1417;}
+  :root[data-theme="light"]{color-scheme:light;--bg:#e9eeec;--panel:#fff;--panel-2:#f3f7f5;--line:#d3ded9;--grid:#e2ebe7;--ink:#16211f;--ink-dim:#4c6360;--ink-faint:#7f9491;--accent:#0c9c85;--accent-soft:rgba(12,156,133,.12);--target:#d5851a;--bodyc:#a06a23;--danger:#d8384a;--danger-soft:rgba(216,56,74,.12);--sky:#dfeaf0;--ground:#cdd9d5;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased;line-height:1.5}
+  .wrap{max-width:1180px;margin:0 auto;padding:28px 20px 48px}
+  header{position:relative;margin-bottom:20px}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--accent);margin:0 0 6px}
+  h1{font-size:clamp(1.5rem,3.4vw,2.15rem);line-height:1.1;margin:0 0 8px;letter-spacing:-.01em;text-wrap:balance;font-weight:620}
+  .lede{margin:0;max-width:64ch;color:var(--ink-dim);font-size:.98rem}
+  .stage{display:grid;grid-template-columns:1fr;gap:14px;margin-top:22px}
+  @media (min-width:900px){.stage{grid-template-columns:1fr 300px;align-items:start}}
+  .col{display:flex;flex-direction:column;gap:14px}
+  .panel{background:linear-gradient(180deg,var(--panel),var(--panel-2));border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+  .ph{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line)}
+  .ph h2{margin:0;font-size:12px;font-weight:600;font-family:var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--ink-dim)}
+  canvas{display:block;width:100%}
+  #screen{aspect-ratio:16/10;min-height:300px;background:var(--panel-2)}
+  #trace{height:110px;min-height:110px;background:var(--panel-2)}
+  .badge{font-family:var(--mono);font-size:11px;letter-spacing:.04em;padding:3px 8px;border-radius:999px;border:1px solid var(--line);color:var(--ink-dim);display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+  .badge b{color:var(--ink);font-weight:600}
+  .badge .dot{width:7px;height:7px;border-radius:50%;background:var(--ink-faint)}
+  .badge.head .dot{background:var(--target)} .badge.body .dot{background:var(--bodyc)} .badge.drop .dot{background:var(--danger)}
+  .readout{padding:12px 14px;display:grid;gap:12px}
+  .mr{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .metric{display:grid;gap:2px}
+  .metric .k{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint)}
+  .metric .v{font-family:var(--mono);font-size:1.5rem;font-weight:600;font-variant-numeric:tabular-nums;line-height:1.05}
+  .metric .v small{font-size:.9rem;color:var(--ink-dim);font-weight:500}
+  .metric.err .v{color:var(--danger)}
+  .controls{padding:14px;display:flex;flex-direction:column;gap:13px}
+  .field{display:grid;gap:7px}
+  .field>label{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint)}
+  .seg{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+  .seg button{font-family:var(--mono);font-size:12px;padding:8px 9px;border-radius:7px;cursor:pointer;background:var(--panel-2);color:var(--ink-dim);border:1px solid var(--line);text-align:left}
+  .seg button:hover{color:var(--ink);border-color:var(--ink-faint)}
+  .seg button[aria-pressed="true"]{background:var(--accent-soft);color:var(--ink);border-color:var(--accent)}
+  .seg button .sub{display:block;font-size:10px;color:var(--ink-faint);margin-top:2px}
+  .toggles{display:flex;flex-direction:column;gap:8px}
+  .toggle{display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;color:var(--ink-dim);user-select:none}
+  .toggle input{position:absolute;opacity:0;pointer-events:none}
+  .toggle .box{width:34px;height:19px;border-radius:999px;flex:none;background:var(--line);position:relative}
+  .toggle .box::after{content:"";position:absolute;top:2px;left:2px;width:15px;height:15px;border-radius:50%;background:var(--ink-faint)}
+  .toggle input:checked+.box{background:var(--accent)}
+  .toggle input:checked+.box::after{transform:translateX(15px);background:#06141a}
+  .toggle input:focus-visible+.box{outline:2px solid var(--accent);outline-offset:2px}
+  .toggle:hover{color:var(--ink)}
+  input[type=range]{width:100%;accent-color:var(--accent)}
+  .sv{font-family:var(--mono);font-size:12px;color:var(--ink-dim);font-variant-numeric:tabular-nums}
+  .row{display:flex;align-items:center;gap:10px}
+  .btn{font-family:var(--mono);font-size:12.5px;padding:9px 14px;border-radius:8px;cursor:pointer;border:1px solid var(--line);background:var(--panel-2);color:var(--ink)}
+  .btn:hover{border-color:var(--accent)}
+  .btn.primary{background:var(--accent);color:#06141a;border-color:var(--accent);font-weight:600}
+  .btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .legend{display:flex;flex-wrap:wrap;gap:12px 16px;padding:11px 14px;font-size:12px;color:var(--ink-dim);border-top:1px solid var(--line)}
+  .legend span{display:inline-flex;align-items:center;gap:7px}
+  .sw{width:11px;height:11px;border-radius:3px;flex:none}
+  .sw.cross{background:var(--accent);border-radius:50%} .sw.head{background:var(--target)} .sw.det{background:transparent;border:1.5px solid var(--danger)}
+  .note{margin-top:20px;padding:14px 16px;border:1px solid var(--line);border-radius:var(--r);background:var(--panel-2);color:var(--ink-dim);font-size:13px;max-width:74ch}
+  .note b{color:var(--ink);font-weight:600}
+  .tb{position:absolute;top:0;right:0;font-family:var(--mono);font-size:11px;background:none;border:1px solid var(--line);color:var(--ink-dim);padding:6px 10px;border-radius:7px;cursor:pointer}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap">
+  <header>
+    <button class="tb" id="themeBtn" type="button">◐ theme</button>
+    <p class="eyebrow">FPS aim · view-rotation model</p>
+    <h1>Rotating the view to bring the target to the crosshair</h1>
+    <p class="lede"><b style="color:var(--ink)">Drag on the view to move the target;</b> let go and it holds still — watch the controller rotate the camera to centre the crosshair on it. Data lands ~1 frame late (144Hz), so the filter/controller converge against that delay. The crosshair is fixed at centre; the mouse turns the view through a perspective lens, so a fixed mouse count moves the target more near the edges than the centre.</p>
+  </header>
+
+  <div class="stage">
+    <div class="col">
+      <div class="panel">
+        <div class="ph">
+          <h2>Game view · crosshair fixed at centre</h2>
+          <span class="badge" id="stBadge"><span class="dot"></span><span id="stText">on head</span></span>
+        </div>
+        <canvas id="screen"></canvas>
+        <div class="legend">
+          <span><i class="sw cross"></i> crosshair (centre)</span>
+          <span><i class="sw head"></i> target (head / body)</span>
+          <span><i class="sw det"></i> detection</span>
+          <span style="color:var(--ink-faint)">top-right: top-down view cone</span>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="ph"><h2>On-screen error vs time</h2><span class="badge"><b id="rmsIn">0</b>&nbsp;px rms</span></div>
+        <canvas id="trace"></canvas>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="panel readout">
+        <div class="mr">
+          <div class="metric err"><span class="k">Error now</span><span class="v"><span id="errV">0</span><small> px</small></span></div>
+          <div class="metric"><span class="k">RMS</span><span class="v"><span id="rmsV">0</span><small> px</small></span></div>
+        </div>
+        <div class="mr">
+          <div class="metric"><span class="k">Target angle</span><span class="v"><span id="angV">0</span><small>°off</small></span></div>
+          <div class="metric"><span class="k">Twitch</span><span class="v"><span id="mvV">0</span><small>%</small></span></div>
+        </div>
+      </div>
+      <div class="panel controls">
+        <div class="field">
+          <label>Controller</label>
+          <div class="seg" id="seg" role="group">
+            <button data-c="raw" aria-pressed="false" type="button">PD, filter off<span class="sub">One Euro off</span></button>
+            <button data-c="oneeuro" aria-pressed="true" type="button">One Euro + PD<span class="sub">shipped</span></button>
+            <button data-c="ego" type="button">One Euro + ego<span class="sub">hybrid</span></button>
+            <button data-c="ab" type="button">Alpha-beta<span class="sub">+ego +ff</span></button>
+          </div>
+        </div>
+        <div class="field">
+          <label>Detector &amp; pipeline</label>
+          <div class="toggles">
+            <label class="toggle"><input type="checkbox" id="tHB" checked><span class="box"></span> Head / body switching</label>
+            <label class="toggle"><input type="checkbox" id="tLat" checked><span class="box"></span> Latency + timing jitter</label>
+            <label class="toggle"><input type="checkbox" id="tNoise" checked><span class="box"></span> Detector jitter</label>
+            <label class="toggle"><input type="checkbox" id="tQuant" checked><span class="box"></span> Mouse ±1 quantization</label>
+            <label class="toggle"><input type="checkbox" id="tAuto"><span class="box"></span> Auto-strafe the target</label>
+          </div>
+        </div>
+        <div class="field">
+          <label>Playback speed <span class="sv" id="spdV">1.0×</span> — data still 144Hz</label>
+          <input type="range" id="speed" min="0.1" max="1.6" step="0.05" value="1">
+        </div>
+        <div class="field">
+          <label>Mouse sensitivity <span class="sv" id="senV">1.0×</span> — lens gain</label>
+          <input type="range" id="sens" min="0.4" max="2.2" step="0.05" value="1">
+        </div>
+        <div class="row">
+          <button class="btn primary" id="play" type="button">Pause</button>
+          <button class="btn" id="reset" type="button">Reset</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <p class="note">
+    <b>Why the lens matters.</b> Screen offset = focal · tan(angle), so a mouse count that turns the view a fixed number of degrees shoves a target near the edge much further than one near the centre. The ego-comp subtracts a <em>linear</em> guess of its own motion, which is wrong out at the edges — one more place alpha-beta’s feedback loop drifts. Watch the top-down cone swing to point at the target as the controller centres it. Controllers are the same math as <code style="font-family:var(--mono)">bench/aim_sim.py</code>.
+  </p>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var root=document.documentElement;
+  document.getElementById("themeBtn").addEventListener("click",function(){
+    var c=root.getAttribute("data-theme");
+    if(!c)c=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";
+    root.setAttribute("data-theme",c==="dark"?"light":"dark");
+  });
+  function css(n){return getComputedStyle(root).getPropertyValue(n).trim();}
+  var clamp=function(v,lo,hi){return v<lo?lo:v>hi?hi:v;};
+  function nlp(e,kp,s){var ae=Math.abs(e);return e*(Math.max(kp,0)*(ae/(ae+Math.max(s,1))));}
+  function oea(c){var t=1/(2*Math.PI*Math.max(c,1e-4));return 1/(1+t);}
+  function clampStep(mx,my,ms){var s=Math.hypot(mx,my);if(ms>0&&s>ms){var k=ms/s;return[mx*k,my*k];}return[mx,my];}
+  function trunc0(v){return v<0?Math.ceil(v):Math.floor(v);}
+  function emitInt(m,res){var c=res.v;if(m*c<0)c=0;var val=m+c;var e=trunc0(val);res.v=val-e;return e;}
+  function gauss(sd){return sd*Math.sqrt(-2*Math.log(Math.random()+1e-9))*Math.cos(2*Math.PI*Math.random());}
+  function wrap(a){while(a>Math.PI)a-=2*Math.PI;while(a<-Math.PI)a+=2*Math.PI;return a;}
+
+  // ---- controllers (screen-space error -> mouse counts) ----
+  function OneEuro(ego,filt){this.ego=!!ego;this.filt=filt!==false;this.reset();}
+  OneEuro.prototype.reset=function(){this.has=false;this.fx=this.fy=this.dfx=this.dfy=0;this.px=this.py=this.vx=this.vy=0;this.pex=this.pey=this.dex=this.dey=0;this.ax=this.ay=0;};
+  OneEuro.prototype.setApplied=function(dx,dy){this.ax+=dx;this.ay+=dy;};
+  OneEuro.prototype.step=function(rx,ry){var fresh=!this.has,tcx=rx,tcy=ry,ad,de,cut,a;
+    if(this.filt){if(!fresh){ad=oea(0.5);de=rx-this.fx;this.dfx=ad*de+(1-ad)*this.dfx;cut=0.1+0.02*Math.abs(this.dfx);a=oea(cut);this.fx=a*rx+(1-a)*this.fx;de=ry-this.fy;this.dfy=ad*de+(1-ad)*this.dfy;cut=0.1+0.02*Math.abs(this.dfy);a=oea(cut);this.fy=a*ry+(1-a)*this.fy;tcx=this.fx;tcy=this.fy;}else{this.fx=rx;this.fy=ry;this.dfx=0;this.dfy=0;}}
+    if(!fresh){var dx=rx-this.px,dy=ry-this.py;if(this.ego){dx+=this.ax;dy+=this.ay;}dx=clamp(dx,-60,60);dy=clamp(dy,-60,60);this.vx=0.6*this.vx+0.4*dx;this.vy=0.6*this.vy+0.4*dy;}else{this.vx=0;this.vy=0;}
+    this.ax=0;this.ay=0;this.px=rx;this.py=ry;this.has=true;var ex=tcx,ey=tcy;var dex=clamp(ex-this.pex,-150,150),dey=clamp(ey-this.pey,-150,150);
+    if(fresh){this.dex=0;this.dey=0;}else{this.dex=0.6*dex+0.4*this.dex;this.dey=0.6*dey+0.4*this.dey;}this.pex=ex;this.pey=ey;
+    return clampStep(nlp(ex,0.55,11)+0.18*this.dex+0.9*this.vx, nlp(ey,0.6,10)+0.22*this.dey+0.9*this.vy, 30);};
+
+  function AB(al,ego,tf){this.alpha=al;this.ego=ego;this.tf=tf;this.reset();}
+  AB.prototype.reset=function(){this.has=false;this.ex=this.ey=this.vx=this.vy=0;this.gc=0;this.pex=this.pey=this.dex=this.dey=0;this.ax=this.ay=0;};
+  AB.prototype.setApplied=function(dx,dy){this.ax+=dx;this.ay+=dy;};
+  AB.prototype.step=function(rx,ry,dt){dt=dt||1;var fresh=!this.has,a=clamp(this.alpha,0.01,1),b=a*a/(2-a);
+    if(fresh){this.ex=rx;this.ey=ry;this.vx=0;this.vy=0;this.gc=0;}else{if(this.ego){this.ex-=this.ax;this.ey-=this.ay;}var px=this.ex+this.vx*dt,py=this.ey+this.vy*dt;var rrx=rx-px,rry=ry-py,rn=Math.hypot(rrx,rry);if(rn>50){this.gc++;if(this.gc>=3){px=rx;py=ry;this.vx=0;this.vy=0;this.gc=0;}}else{px+=a*rrx;py+=a*rry;this.vx+=(b/dt)*rrx;this.vy+=(b/dt)*rry;this.gc=0;}this.ex=px;this.ey=py;}
+    this.ax=0;this.ay=0;this.has=true;var ex=this.ex,ey=this.ey;var dex=clamp(ex-this.pex,-150,150),dey=clamp(ey-this.pey,-150,150);
+    if(fresh){this.dex=0;this.dey=0;}else{this.dex=0.6*dex+0.4*this.dex;this.dey=0.6*dey+0.4*this.dey;}this.pex=ex;this.pey=ey;
+    return clampStep(nlp(ex,0.55,8)+0.18*this.dex+this.tf*this.vx, nlp(ey,0.6,7)+0.22*this.dey+this.tf*this.vy, 30);};
+
+  function makeCtrl(k){if(k==="raw")return new OneEuro(false,false);if(k==="oneeuro")return new OneEuro(false,true);if(k==="ego")return new OneEuro(true,true);return new AB(0.30,true,0.8);}
+
+  // ---- 3D world + camera ----
+  var Wu=800,Hu=500;                 // logical screen units
+  var FOVx=100*Math.PI/180;          // horizontal field of view
+  var focal;                          // px per tan(angle); set from screen size
+  var PERSON=1.8, HEADH=0.28;        // metres
+  var opts={hb:true,lat:true,noise:true,quant:true,autoTarget:false,kind:"oneeuro",speed:1,sens:1};
+  var SENS0=0.0026;                  // base radians of view rotation per mouse count
+  var LAT=3;
+
+  var sim,ctrl;
+  function fresh(){
+    ctrl=makeCtrl(opts.kind);
+    sim={
+      t:0, yaw:0, pitch:0,           // camera
+      az:-0.30, el:0.02, dist:12,    // target (radians, metres)
+      curAz:-0.30, curEl:0.02, dragging:false,   // your drag target
+      tvaz:0.0, tvel:0, holding:false, moveT:0.5,
+      hist:[],                        // {az,el,dist,yaw,pitch}
+      lastMeas:null, detS:null, onHead:true, dropped:false,
+      resx:{v:0}, resy:{v:0}, drx:0, dry:0, lagJit:0,
+      box:{hh:20,bh:70},              // must exist before the first draw
+      errNow:0, angOff:0, errs:[], mvs:[], trace:new Array(240).fill(0), ti:0,
+    };
+  }
+  // project a world direction (az,el) relative to camera -> screen-centre px
+  function project(az,el,yaw,pitch){
+    var daz=wrap(az-yaw), del=el-pitch;
+    return {sx: focal*Math.tan(daz), sy: -focal*Math.tan(del),
+            inView: Math.abs(daz)<FOVx*0.5 && Math.abs(del)<FOVx*0.5, daz:daz};
+  }
+  function screenBox(dist){ // head/body pixel sizes at this distance
+    var hh=focal*(HEADH/dist);          // head screen height
+    var bh=focal*(PERSON/dist);          // body screen height
+    return {hh:hh, bh:bh};
+  }
+
+  // one detection+control tick = one 144Hz frame (~6.9 ms).
+  function tick(){
+    var s=sim;
+    // ---- target motion: YOUR drag, or auto-strafe, or held (must converge) ----
+    if(s.dragging){
+      s.tvaz=s.curAz-s.az; s.tvel=s.curEl-s.el;   // per-tick velocity (for feedforward)
+      s.az=s.curAz; s.el=s.curEl;
+    } else if(opts.autoTarget){
+      s.moveT-=1;
+      if(s.moveT<=0){s.holding=!s.holding;s.moveT=s.holding?70:110;
+        if(!s.holding){s.tvaz=(Math.random()<0.5?-1:1)*(0.003+Math.random()*0.006);s.tvel=(Math.random()-0.5)*0.002;}}
+      if(!s.holding&&Math.random()<0.02)s.tvaz=-s.tvaz;
+      if(!s.holding){s.az+=s.tvaz;s.el+=s.tvel;} else {s.tvaz*=0.5;s.tvel*=0.5;}
+    } else {
+      s.tvaz=0; s.tvel=0;                          // held still -> converge
+    }
+    s.az=clamp(s.az,-0.8,0.8); s.el=clamp(s.el,-0.26,0.26);
+    s.dist=clamp(s.dist+gauss(0.03),8,30);
+
+    s.hist.push({az:s.az,el:s.el,dist:s.dist,yaw:s.yaw,pitch:s.pitch});
+    if(s.hist.length>80)s.hist.shift();
+
+    // ---- data lands ~1 frame late (5-7 ms @144Hz), small jitter ----
+    var lag=0;
+    if(opts.lat){s.lagJit=0.6*s.lagJit+gauss(0.4);lag=Math.round(clamp(1+s.lagJit,0,3));}
+    var snap=s.hist[Math.max(0,s.hist.length-1-lag)];
+
+    var box=screenBox(snap.dist);
+    // head aim point vs body aim point (body point sits ~1 box below head on screen)
+    var head=project(snap.az, snap.el, snap.yaw, snap.pitch);
+    var bodyEl=snap.el - (0.62*PERSON)/snap.dist;   // body-centre elevation below head
+    var body=project(snap.az, bodyEl, snap.yaw, snap.pitch);
+
+    // ---- detector noise scales with box size (far/small = noisier) ----
+    var nsc = opts.noise ? clamp(18/box.hh,0.5,2.4) : 0.0;
+    if(opts.noise){s.drx=0.9*s.drx+gauss(0.32*nsc);s.dry=0.9*s.dry+gauss(0.32*nsc);}else{s.drx=0;s.dry=0;}
+
+    // ---- head/body selection + dropout (small far heads drop more) ----
+    var pHead = clamp(0.9 - 0.02*(snap.dist-12), 0.5, 0.95);
+    var headSeen = !opts.hb || (Math.random()<pHead && head.inView);
+    var bodySeen = Math.random()<0.97 && body.inView;
+    var det=null,onHead=false,dropped=false;
+    if(opts.hb){ if(headSeen){det=head;onHead=true;} else if(bodySeen){det=body;} else dropped=true; }
+    else { det = head.inView?head:null; onHead=true; if(!det)dropped=true; }
+
+    var raw;
+    if(dropped){ raw=null; }
+    else{
+      var nx=opts.noise?gauss(0.85*nsc):0, ny=opts.noise?gauss(1.25*nsc):0; // Y noisier
+      var sx=det.sx+s.drx+nx, sy=det.sy+s.dry+ny;
+      raw={x:sx,y:sy}; s.lastMeas=raw; s.detS={x:sx,y:sy,onHead:onHead};
+    }
+    s.dropped=dropped; s.onHead=onHead;
+
+    // ---- controller: screen error -> mouse counts -> ROTATE camera ----
+    var dtc=1; if(opts.lat){dtc=clamp(1+0.6*gauss(0.5),0.4,2.2);}
+    var ax=0,ay=0,mag=0;
+    if(!dropped){
+      var mv=ctrl.step(raw.x,raw.y,dtc);
+      if(opts.quant){ax=emitInt(mv[0],s.resx);ay=emitInt(mv[1],s.resy);}else{ax=mv[0];ay=mv[1];}
+      mag=Math.hypot(ax,ay);
+      var sens=SENS0*opts.sens;
+      s.yaw += ax*sens;               // mouse -> view rotation (the real aim)
+      s.pitch -= ay*sens;
+      // ego belief: linear guess of its own screen motion (focal*sens px/count),
+      // which is WRONG near the edges where tan amplifies -> feedback error.
+      ctrl.setApplied(ax*focal*sens, ay*focal*sens);
+    } else {
+      ctrl.setApplied(0,0);
+    }
+
+    // ---- true on-screen error to the HEAD (now, un-lagged) ----
+    var nowHead=project(s.az,s.el,s.yaw,s.pitch);
+    s.errNow=Math.hypot(nowHead.sx,nowHead.sy);
+    s.angOff=Math.abs(wrap(s.az-s.yaw))*180/Math.PI;
+    s.headNow=nowHead; s.box=screenBox(s.dist);
+    s.errs.push(s.errNow); if(s.errs.length>240)s.errs.shift();
+    s.mvs.push(mag>0.35?1:0); if(s.mvs.length>240)s.mvs.shift();
+    s.trace[s.ti]=s.errNow; s.ti=(s.ti+1)%s.trace.length;
+  }
+
+  // ---- rendering ----
+  var scr=document.getElementById("screen"),sx=scr.getContext("2d");
+  var trc=document.getElementById("trace"),tx=trc.getContext("2d");
+  var dpr=Math.max(1,Math.min(2,window.devicePixelRatio||1));
+  function fit(cv,ctx){var r=cv.getBoundingClientRect();var w=Math.max(1,r.width),h=Math.max(1,r.height);cv.width=Math.round(w*dpr);cv.height=Math.round(h*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);return{w:w,h:h};}
+  var SD=fit(scr,sx),TD=fit(trc,tx);
+  function refit(){SD=fit(scr,sx);TD=fit(trc,tx);focal=(SD.w*0.5)/Math.tan(FOVx*0.5);}
+  refit();
+  window.addEventListener("resize",refit);
+  if(window.ResizeObserver){var ro=new ResizeObserver(refit);ro.observe(scr);ro.observe(trc);}
+  var tries=0,warm=setInterval(function(){refit();if(++tries>20||(SD.w>4&&SD.h>4))clearInterval(warm);},60);
+
+  function toScr(cx,cy){return[SD.w*0.5+cx*(SD.w/Wu),SD.h*0.5+cy*(SD.w/Wu)];} // screen-centre px -> canvas (uniform scale by width)
+
+  function drawScreen(){
+    var s=sim,w=SD.w,h=SD.h;
+    // sky / ground to read as a 3D view; horizon tilts with pitch
+    var horizon=h*0.5 + s.pitch*focal*(SD.w/Wu);
+    var g=sx.createLinearGradient(0,0,0,h);
+    sx.fillStyle=css("--sky"); sx.fillRect(0,0,w,Math.max(0,Math.min(h,horizon)));
+    sx.fillStyle=css("--ground"); sx.fillRect(0,Math.max(0,Math.min(h,horizon)),w,h);
+    sx.strokeStyle=css("--grid");sx.lineWidth=1;sx.beginPath();sx.moveTo(0,horizon);sx.lineTo(w,horizon);sx.stroke();
+
+    var sc=SD.w/Wu;
+    // target person sprite at projected head position
+    var hp=project(s.az,s.el,s.yaw,s.pitch);
+    if(hp.inView){
+      var p=toScr(hp.sx,hp.sy), bh=s.box.bh*sc, hh=s.box.hh*sc, bw=bh*0.32;
+      // body
+      sx.fillStyle=css("--bodyc");sx.globalAlpha=.85;
+      roundRect(sx,p[0]-bw*0.5,p[1]+hh*0.4,bw,bh*0.72,4);sx.fill();
+      sx.globalAlpha=1;
+      // head
+      sx.fillStyle=css("--target");
+      sx.beginPath();sx.arc(p[0],p[1],Math.max(4,hh*0.5),0,7);sx.fill();
+    } else {
+      // off-screen arrow toward the target
+      var edge=clamp(hp.sx,-Wu*0.47,Wu*0.47), ep=toScr(edge, clamp(hp.sy,-Hu*0.42,Hu*0.42));
+      sx.fillStyle=css("--target");sx.globalAlpha=.7;
+      sx.beginPath();sx.arc(ep[0],ep[1],5,0,7);sx.fill();sx.globalAlpha=1;
+    }
+    // detection marker
+    if(s.detS){var d=toScr(s.detS.x,s.detS.y);
+      sx.strokeStyle=s.dropped?css("--ink-faint"):css("--danger");sx.lineWidth=1.5;
+      sx.beginPath();sx.arc(d[0],d[1],7,0,7);sx.stroke();
+      sx.beginPath();sx.moveTo(d[0]-10,d[1]);sx.lineTo(d[0]+10,d[1]);sx.moveTo(d[0],d[1]-10);sx.lineTo(d[0],d[1]+10);sx.stroke();}
+    // fixed crosshair at centre
+    var c=[w*0.5,h*0.5],ac=css("--accent");
+    sx.strokeStyle=ac;sx.lineWidth=2;
+    sx.beginPath();sx.arc(c[0],c[1],7,0,7);sx.stroke();
+    sx.beginPath();sx.moveTo(c[0]-13,c[1]);sx.lineTo(c[0]-4,c[1]);sx.moveTo(c[0]+4,c[1]);sx.lineTo(c[0]+13,c[1]);sx.moveTo(c[0],c[1]-13);sx.lineTo(c[0],c[1]-4);sx.moveTo(c[0],c[1]+4);sx.lineTo(c[0],c[1]+13);sx.stroke();
+    sx.fillStyle=ac;sx.beginPath();sx.arc(c[0],c[1],1.6,0,7);sx.fill();
+    // error line centre -> head
+    if(hp.inView){var p2=toScr(hp.sx,hp.sy);sx.strokeStyle=css("--danger");sx.globalAlpha=.5;sx.setLineDash([3,3]);sx.beginPath();sx.moveTo(c[0],c[1]);sx.lineTo(p2[0],p2[1]);sx.stroke();sx.setLineDash([]);sx.globalAlpha=1;}
+    drawMinimap();
+  }
+  function roundRect(ctx,x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
+  function drawMinimap(){
+    var s=sim,w=SD.w,R=Math.min(120,w*0.22),pad=12,cx=w-R-pad,cy=pad,size=R;
+    sx.save();
+    sx.fillStyle=css("--panel-2");sx.globalAlpha=.85;roundRect(sx,cx,cy,size,size,8);sx.fill();sx.globalAlpha=1;
+    sx.strokeStyle=css("--line");roundRect(sx,cx,cy,size,size,8);sx.stroke();
+    var ox=cx+size*0.5, oy=cy+size*0.86;   // camera at bottom-centre
+    // FOV cone (camera looks "up"); target drawn at (az-yaw) from up
+    sx.strokeStyle=css("--accent");sx.globalAlpha=.6;sx.lineWidth=1.2;
+    var L=size*0.8;
+    [-1,1].forEach(function(sgn){var a=sgn*FOVx*0.5;sx.beginPath();sx.moveTo(ox,oy);sx.lineTo(ox+Math.sin(a)*L,oy-Math.cos(a)*L);sx.stroke();});
+    sx.globalAlpha=1;
+    sx.fillStyle=css("--accent");sx.beginPath();sx.arc(ox,oy,3,0,7);sx.fill();
+    // target dot
+    var rel=wrap(s.az-s.yaw), rr=clamp(s.dist/30,0.2,1)*L*0.9;
+    var tx2=ox+Math.sin(rel)*rr, ty2=oy-Math.cos(rel)*rr;
+    sx.fillStyle=css("--target");sx.beginPath();sx.arc(tx2,ty2,4,0,7);sx.fill();
+    sx.restore();
+  }
+  function drawTrace(){
+    var s=sim,w=TD.w,h=TD.h,maxE=Wu*0.35;
+    tx.clearRect(0,0,w,h);
+    tx.strokeStyle=css("--grid");tx.lineWidth=1;tx.beginPath();[0.25,0.5,0.75].forEach(function(f){tx.moveTo(0,f*h);tx.lineTo(w,f*h);});tx.stroke();
+    var n=s.trace.length;tx.beginPath();
+    for(var i=0;i<n;i++){var idx=(s.ti+i)%n;var x=i/(n-1)*w;var y=h-clamp(s.trace[idx]/maxE,0,1)*(h-6)-3;if(i===0)tx.moveTo(x,y);else tx.lineTo(x,y);}
+    tx.strokeStyle=css("--danger");tx.lineWidth=1.8;tx.lineJoin="round";tx.stroke();
+    tx.lineTo(w,h);tx.lineTo(0,h);tx.closePath();tx.fillStyle=css("--danger-soft");tx.fill();
+  }
+
+  var $=function(i){return document.getElementById(i);};
+  function readouts(){
+    var s=sim,rms=0;for(var i=0;i<s.errs.length;i++)rms+=s.errs[i]*s.errs[i];rms=s.errs.length?Math.sqrt(rms/s.errs.length):0;
+    var mv=s.mvs.length?100*s.mvs.reduce(function(a,b){return a+b;},0)/s.mvs.length:0;
+    $("errV").textContent=s.errNow.toFixed(0);$("rmsV").textContent=rms.toFixed(0);$("rmsIn").textContent=rms.toFixed(0);
+    $("angV").textContent=s.angOff.toFixed(1);$("mvV").textContent=Math.round(mv);
+    var b=$("stBadge"),t=$("stText");b.className="badge "+(s.dropped?"drop":s.onHead?"head":"body");
+    t.textContent=(s.holding?"HOLD":"strafe")+" · "+(s.dropped?"lost":s.onHead?"head":"body");
+  }
+
+  var playing=true,last=0,acc=0;
+  function loop(ts){
+    if(!last)last=ts;var real=Math.min(0.05,(ts-last)/1000);last=ts;
+    if(SD.w<4||SD.h<4)refit();
+    if(playing){acc+=real*opts.speed*144;var b=12;while(acc>=1&&b-->0){tick();acc-=1;}}  // 144 ticks/s @1x
+    drawScreen();drawTrace();readouts();requestAnimationFrame(loop);
+  }
+
+  var seg=$("seg");
+  seg.addEventListener("click",function(e){var b=e.target.closest("button");if(!b)return;opts.kind=b.getAttribute("data-c");
+    Array.prototype.forEach.call(seg.querySelectorAll("button"),function(x){x.setAttribute("aria-pressed",x===b?"true":"false");});ctrl=makeCtrl(opts.kind);});
+  $("tHB").addEventListener("change",function(e){opts.hb=e.target.checked;});
+  $("tLat").addEventListener("change",function(e){opts.lat=e.target.checked;});
+  $("tNoise").addEventListener("change",function(e){opts.noise=e.target.checked;});
+  $("tQuant").addEventListener("change",function(e){opts.quant=e.target.checked;});
+  $("speed").addEventListener("input",function(e){opts.speed=parseFloat(e.target.value);$("spdV").textContent=opts.speed.toFixed(1)+"×";});
+  $("sens").addEventListener("input",function(e){opts.sens=parseFloat(e.target.value);$("senV").textContent=opts.sens.toFixed(1)+"×";});
+  $("tAuto").addEventListener("change",function(e){opts.autoTarget=e.target.checked;});
+  $("play").addEventListener("click",function(e){playing=!playing;e.target.textContent=playing?"Pause":"Play";last=0;});
+  $("reset").addEventListener("click",function(){fresh();});
+
+  // ---- drag on the view to move the target (world azimuth/elevation) ----
+  function setTgt(ev){
+    var r=scr.getBoundingClientRect();
+    var x=clamp((ev.clientX-r.left)/r.width,0,1), y=clamp((ev.clientY-r.top)/r.height,0,1);
+    sim.curAz=(x*2-1)*0.7; sim.curEl=(0.5-y)*0.5;
+  }
+  scr.style.touchAction="none"; scr.style.cursor="crosshair";
+  scr.addEventListener("pointerdown",function(e){sim.dragging=true;setTgt(e);try{scr.setPointerCapture(e.pointerId);}catch(_){ }});
+  scr.addEventListener("pointermove",function(e){if(sim.dragging)setTgt(e);});
+  window.addEventListener("pointerup",function(){sim.dragging=false;});
+
+  fresh();requestAnimationFrame(loop);
+})();
+</script>
+
+</body>
+</html>

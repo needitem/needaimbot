@@ -1,0 +1,799 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body>
+<title>Aim Tracking Scope</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0b1113;
+    --panel: #101a1d;
+    --panel-2: #0d1618;
+    --line: #1e2d30;
+    --grid: #142125;
+    --ink: #dbe6e3;
+    --ink-dim: #869c9c;
+    --ink-faint: #566d6e;
+    --accent: #3fe0c8;      /* crosshair / controller output */
+    --accent-soft: rgba(63,224,200,0.14);
+    --target: #ffb454;      /* head = the goal */
+    --bodyc: #b7813f;       /* body point */
+    --danger: #ff5d6c;      /* error */
+    --danger-soft: rgba(255,93,108,0.16);
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --radius: 10px;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      color-scheme: light;
+      --bg: #e9eeec;
+      --panel: #ffffff;
+      --panel-2: #f3f7f5;
+      --line: #d3ded9;
+      --grid: #e2ebe7;
+      --ink: #16211f;
+      --ink-dim: #4c6360;
+      --ink-faint: #7f9491;
+      --accent: #0c9c85;
+      --accent-soft: rgba(12,156,133,0.12);
+      --target: #d5851a;
+      --bodyc: #a06a23;
+      --danger: #d8384a;
+      --danger-soft: rgba(216,56,74,0.12);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0b1113; --panel: #101a1d; --panel-2: #0d1618; --line: #1e2d30; --grid: #142125;
+    --ink: #dbe6e3; --ink-dim: #869c9c; --ink-faint: #566d6e;
+    --accent: #3fe0c8; --accent-soft: rgba(63,224,200,0.14);
+    --target: #ffb454; --bodyc: #b7813f; --danger: #ff5d6c; --danger-soft: rgba(255,93,108,0.16);
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg: #e9eeec; --panel: #ffffff; --panel-2: #f3f7f5; --line: #d3ded9; --grid: #e2ebe7;
+    --ink: #16211f; --ink-dim: #4c6360; --ink-faint: #7f9491;
+    --accent: #0c9c85; --accent-soft: rgba(12,156,133,0.12);
+    --target: #d5851a; --bodyc: #a06a23; --danger: #d8384a; --danger-soft: rgba(216,56,74,0.12);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.5;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 28px 20px 48px; }
+
+  header { margin-bottom: 20px; }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 6px;
+  }
+  h1 {
+    font-size: clamp(1.5rem, 3.4vw, 2.15rem);
+    line-height: 1.1;
+    margin: 0 0 8px;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+    font-weight: 620;
+  }
+  .lede {
+    margin: 0;
+    max-width: 62ch;
+    color: var(--ink-dim);
+    font-size: 0.98rem;
+  }
+
+  .stage {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 14px;
+    margin-top: 22px;
+  }
+  @media (min-width: 900px) {
+    .stage { grid-template-columns: 1fr 300px; align-items: start; }
+  }
+
+  .panel {
+    background: linear-gradient(180deg, var(--panel), var(--panel-2));
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .panel-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--line);
+  }
+  .panel-head h2 {
+    margin: 0; font-size: 12px; font-weight: 600;
+    font-family: var(--mono); letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--ink-dim);
+  }
+  .scope-body { position: relative; }
+  canvas { display: block; width: 100%; }
+  #scope { aspect-ratio: 16 / 10; min-height: 280px; background: var(--panel-2); }
+  #trace { height: 120px; min-height: 120px; background: var(--panel-2); }
+
+  .badge {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.04em;
+    padding: 3px 8px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--ink-dim);
+    display: inline-flex; align-items: center; gap: 6px;
+    white-space: nowrap;
+  }
+  .badge b { color: var(--ink); font-weight: 600; }
+  .badge .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-faint); }
+  .badge.head .dot { background: var(--target); }
+  .badge.body .dot { background: var(--bodyc); }
+  .badge.drop .dot { background: var(--danger); }
+
+  /* side column */
+  .side { display: flex; flex-direction: column; gap: 14px; }
+  .readout { padding: 12px 14px; display: grid; gap: 12px; }
+  .metric { display: grid; gap: 2px; }
+  .metric .k {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--ink-faint);
+  }
+  .metric .v {
+    font-family: var(--mono); font-size: 1.5rem; font-weight: 600;
+    font-variant-numeric: tabular-nums; color: var(--ink);
+    line-height: 1.05;
+  }
+  .metric .v small { font-size: 0.9rem; color: var(--ink-dim); font-weight: 500; }
+  .metric.err .v { color: var(--danger); }
+  .metric-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+  .controls { padding: 14px; display: flex; flex-direction: column; gap: 14px; }
+  .field { display: grid; gap: 7px; }
+  .field > label {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--ink-faint);
+  }
+
+  .seg { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .seg button {
+    font-family: var(--mono); font-size: 12px;
+    padding: 8px 9px; border-radius: 7px; cursor: pointer;
+    background: var(--panel-2); color: var(--ink-dim);
+    border: 1px solid var(--line);
+    transition: border-color .15s, color .15s, background .15s;
+    text-align: left;
+  }
+  .seg button:hover { color: var(--ink); border-color: var(--ink-faint); }
+  .seg button[aria-pressed="true"] {
+    background: var(--accent-soft); color: var(--ink);
+    border-color: var(--accent);
+  }
+  .seg button .sub { display: block; font-size: 10px; color: var(--ink-faint); margin-top: 2px; }
+  .seg button[aria-pressed="true"] .sub { color: var(--ink-dim); }
+
+  .toggles { display: flex; flex-direction: column; gap: 8px; }
+  .toggle {
+    display: flex; align-items: center; gap: 10px; cursor: pointer;
+    font-size: 13px; color: var(--ink-dim); user-select: none;
+  }
+  .toggle input { position: absolute; opacity: 0; pointer-events: none; }
+  .toggle .box {
+    width: 34px; height: 19px; border-radius: 999px; flex: none;
+    background: var(--line); position: relative; transition: background .15s;
+  }
+  .toggle .box::after {
+    content: ""; position: absolute; top: 2px; left: 2px;
+    width: 15px; height: 15px; border-radius: 50%;
+    background: var(--ink-faint); transition: transform .15s, background .15s;
+  }
+  .toggle input:checked + .box { background: var(--accent); }
+  .toggle input:checked + .box::after { transform: translateX(15px); background: #06141a; }
+  .toggle input:focus-visible + .box { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .toggle:hover { color: var(--ink); }
+
+  .row { display: flex; align-items: center; gap: 10px; }
+  .btn {
+    font-family: var(--mono); font-size: 12.5px;
+    padding: 9px 14px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--panel-2); color: var(--ink);
+    transition: border-color .15s, background .15s;
+  }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); color: #06141a; border-color: var(--accent); font-weight: 600; }
+  .btn.primary:hover { filter: brightness(1.06); }
+  .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  input[type="range"] { width: 100%; accent-color: var(--accent); }
+  .speed-val { font-family: var(--mono); font-size: 12px; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
+
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 14px 18px;
+    padding: 12px 14px; font-size: 12px; color: var(--ink-dim);
+    border-top: 1px solid var(--line);
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 7px; }
+  .swatch { width: 11px; height: 11px; border-radius: 3px; flex: none; }
+  .swatch.cross { background: var(--accent); border-radius: 50%; }
+  .swatch.head { background: var(--target); }
+  .swatch.body { background: var(--bodyc); }
+  .swatch.det { background: transparent; border: 1.5px solid var(--danger); }
+
+  .note {
+    margin-top: 20px; padding: 14px 16px;
+    border: 1px solid var(--line); border-radius: var(--radius);
+    background: var(--panel-2); color: var(--ink-dim); font-size: 13px;
+    max-width: 72ch;
+  }
+  .note b { color: var(--ink); font-weight: 600; }
+  .theme-btn {
+    position: absolute; top: 0; right: 0;
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em;
+    background: none; border: 1px solid var(--line); color: var(--ink-dim);
+    padding: 6px 10px; border-radius: 7px; cursor: pointer;
+  }
+  .theme-btn:hover { color: var(--ink); border-color: var(--ink-faint); }
+  header { position: relative; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+</style>
+
+<div class="wrap">
+  <header>
+    <button class="theme-btn" id="themeBtn" type="button">◐ theme</button>
+    <p class="eyebrow">Control loop · tracking scope</p>
+    <h1>How a filter and controller close the error on a moving target</h1>
+    <p class="lede">A person moves; YOLO reports a <b style="color:var(--ink)">head</b> and a <b style="color:var(--ink)">body</b> box that jitter, drop out, and arrive late. Each controller drives the crosshair to null the error. Watch which stays locked — and which chases ghosts.</p>
+  </header>
+
+  <div class="stage">
+    <div style="display:flex; flex-direction:column; gap:14px;">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Scope · world view</h2>
+          <span class="badge" id="stateBadge"><span class="dot"></span><span id="stateText">head</span></span>
+        </div>
+        <div class="scope-body"><canvas id="scope"></canvas></div>
+        <div class="legend">
+          <span><i class="swatch cross"></i> crosshair (controller out)</span>
+          <span><i class="swatch head"></i> head — the goal</span>
+          <span><i class="swatch body"></i> body point</span>
+          <span><i class="swatch det"></i> detection (what it sees)</span>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Error vs time · |crosshair − head|</h2>
+          <span class="badge"><b id="rmsInline">0.0</b>&nbsp;px rms</span>
+        </div>
+        <canvas id="trace"></canvas>
+      </div>
+    </div>
+
+    <div class="side">
+      <div class="panel readout">
+        <div class="metric-row">
+          <div class="metric err">
+            <span class="k">Error now</span>
+            <span class="v"><span id="errVal">0.0</span><small> px</small></span>
+          </div>
+          <div class="metric">
+            <span class="k">RMS (2s)</span>
+            <span class="v"><span id="rmsVal">0.0</span><small> px</small></span>
+          </div>
+        </div>
+        <div class="metric">
+          <span class="k">Move rate — twitchiness</span>
+          <span class="v"><span id="mvVal">0</span><small> % frames</small></span>
+        </div>
+      </div>
+
+      <div class="panel controls">
+        <div class="field">
+          <label>Controller</label>
+          <div class="seg" id="ctrlSeg" role="group" aria-label="Controller">
+            <button type="button" data-c="raw" aria-pressed="false">PD, filter off<span class="sub">One Euro off</span></button>
+            <button type="button" data-c="oneeuro" aria-pressed="true">One Euro + PD<span class="sub">shipped</span></button>
+            <button type="button" data-c="ego">One Euro +ego<span class="sub">hybrid</span></button>
+            <button type="button" data-c="ab">Alpha-beta<span class="sub">+ego +ff</span></button>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Detector &amp; pipeline</label>
+          <div class="toggles">
+            <label class="toggle"><input type="checkbox" id="tHeadBody" checked><span class="box"></span> Head / body switching</label>
+            <label class="toggle"><input type="checkbox" id="tLatency" checked><span class="box"></span> Pipeline latency + timing jitter</label>
+            <label class="toggle"><input type="checkbox" id="tNoise" checked><span class="box"></span> Detector jitter</label>
+            <label class="toggle"><input type="checkbox" id="tQuant" checked><span class="box"></span> Mouse ±1 count quantization</label>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Target speed <span class="speed-val" id="spdVal">1.0×</span></label>
+          <input type="range" id="speed" min="0.15" max="2.2" step="0.05" value="1">
+        </div>
+
+        <div class="field">
+          <label>Detector noise level <span class="speed-val" id="nmVal">1.0×</span> — dial to your rig</label>
+          <input type="range" id="noiseMul" min="0.2" max="3.5" step="0.1" value="1">
+        </div>
+
+        <div class="row">
+          <button class="btn primary" id="playBtn" type="button">Pause</button>
+          <button class="btn" id="resetBtn" type="button">Reset</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <p class="note">
+    <b>Now with the real pipeline’s mess.</b> Latency is multi-frame and jittery, frame timing (dt) jitters, and the target counter-strafes. Watch <b>Alpha-beta</b>: in a clean sim it wins, but here its ego loop subtracts one frame of self-motion while the detection is 4+ jittery frames stale, and its constant-velocity prediction overshoots every reversal — so it swims and lurches, exactly like the build you reverted. Toggle <b>Pipeline latency + timing jitter</b> off and alpha-beta snaps back to looking best — that gap <em>is</em> the sim-vs-hardware gap. <b>One Euro + PD</b> has no prediction and no feedback loop, so it just degrades gently. <b>Filter off</b> shakes because the D + feedforward amplify raw noise. Same math as <code style="font-family:var(--mono)">bench/aim_sim.py</code>, rendered.
+  </p>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---- theme toggle -------------------------------------------------------
+  var root = document.documentElement;
+  document.getElementById("themeBtn").addEventListener("click", function () {
+    var cur = root.getAttribute("data-theme");
+    if (!cur) cur = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    root.setAttribute("data-theme", cur === "dark" ? "light" : "dark");
+  });
+  function isDark() {
+    var t = root.getAttribute("data-theme");
+    if (t) return t === "dark";
+    return matchMedia && matchMedia("(prefers-color-scheme: dark)").matches;
+  }
+  // Hardcoded palette (canvas colors must not depend on CSS-var resolution,
+  // which some embedders return empty -> everything would draw black).
+  var PAL = {
+    dark:  { "--grid": "#142125", "--bodyc": "#b7813f", "--target": "#ffb454",
+             "--danger": "#ff5d6c", "--danger-soft": "rgba(255,93,108,0.16)",
+             "--accent": "#3fe0c8", "--ink-faint": "#7f9491" },
+    light: { "--grid": "#d3ded9", "--bodyc": "#a06a23", "--target": "#d5851a",
+             "--danger": "#d8384a", "--danger-soft": "rgba(216,56,74,0.12)",
+             "--accent": "#0c9c85", "--ink-faint": "#7f9491" }
+  };
+  function css(name) { return (isDark() ? PAL.dark : PAL.light)[name] || "#888"; }
+
+  // ---- tiny helpers -------------------------------------------------------
+  function clampStep(mx, my, maxStep) {
+    var s = Math.hypot(mx, my);
+    if (maxStep > 0 && s > maxStep) { var k = maxStep / s; return [mx * k, my * k]; }
+    return [mx, my];
+  }
+  function nlp(e, kp, soft) {
+    var ae = Math.abs(e);
+    return e * (Math.max(kp, 0) * (ae / (ae + Math.max(soft, 1))));
+  }
+  function oneEuroAlpha(cut) { var tau = 1 / (2 * Math.PI * Math.max(cut, 1e-4)); return 1 / (1 + tau); }
+  var clamp = function (v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; };
+  // Integer mouse-count emit with fractional residual carry (like the real
+  // emitMouseDelta): a filtered controller emits a clean 0/steady count and
+  // "sticks"; a raw controller chasing noise flickers ±1 and buzzes.
+  function truncZero(v) { return v < 0 ? Math.ceil(v) : Math.floor(v); }
+  function emitInt(move, res) {
+    var carried = res.v;
+    if (move * carried < 0) carried = 0;      // stale residual must not fight a reversal
+    var value = move + carried;
+    var e = truncZero(value);
+    res.v = value - e;
+    return e;
+  }
+
+  // ---- controllers (ported from bench/aim_sim.py) -------------------------
+  // All work in frame coords: raw = target_screen - crosshair; scx = scy = 0.
+  function Raw() { this.reset(); }
+  Raw.prototype.reset = function () {};
+  Raw.prototype.setApplied = function () {};
+  Raw.prototype.step = function (rx, ry) { return clampStep(0.32 * rx, 0.32 * ry, 30); };
+
+  function OneEuro(ego, filt) { this.ego = !!ego; this.filt = filt !== false; this.reset(); }
+  OneEuro.prototype.reset = function () {
+    this.has = false; this.fx = 0; this.fy = 0; this.dfx = 0; this.dfy = 0;
+    this.px = 0; this.py = 0; this.vx = 0; this.vy = 0;
+    this.pex = 0; this.pey = 0; this.dex = 0; this.dey = 0; this.ax = 0; this.ay = 0;
+  };
+  OneEuro.prototype.setApplied = function (dx, dy) { this.ax += dx; this.ay += dy; };
+  OneEuro.prototype.step = function (rx, ry) {
+    var fresh = !this.has, tcx = rx, tcy = ry, ad, de, cut, a;
+    // One Euro low-pass on the CENTER (skipped when filt=false = "filter off":
+    // PD + feedforward then run straight on the raw, noisy detection).
+    if (this.filt) {
+      if (!fresh) {
+        ad = oneEuroAlpha(0.5);
+        de = rx - this.fx; this.dfx = ad * de + (1 - ad) * this.dfx;
+        cut = 0.1 + 0.02 * Math.abs(this.dfx); a = oneEuroAlpha(cut); this.fx = a * rx + (1 - a) * this.fx;
+        de = ry - this.fy; this.dfy = ad * de + (1 - ad) * this.dfy;
+        cut = 0.1 + 0.02 * Math.abs(this.dfy); a = oneEuroAlpha(cut); this.fy = a * ry + (1 - a) * this.fy;
+        tcx = this.fx; tcy = this.fy;
+      } else { this.fx = rx; this.fy = ry; this.dfx = 0; this.dfy = 0; }
+    }
+    if (!fresh) {
+      var dx = rx - this.px, dy = ry - this.py;
+      if (this.ego) { dx += this.ax; dy += this.ay; }
+      dx = clamp(dx, -60, 60); dy = clamp(dy, -60, 60);
+      this.vx = 0.6 * this.vx + 0.4 * dx; this.vy = 0.6 * this.vy + 0.4 * dy;
+    } else { this.vx = 0; this.vy = 0; }
+    this.ax = 0; this.ay = 0; this.px = rx; this.py = ry; this.has = true;
+    var ex = tcx, ey = tcy;               // scx = scy = 0
+    var dex = clamp(ex - this.pex, -150, 150), dey = clamp(ey - this.pey, -150, 150);
+    if (fresh) { this.dex = 0; this.dey = 0; } else { this.dex = 0.6 * dex + 0.4 * this.dex; this.dey = 0.6 * dey + 0.4 * this.dey; }
+    this.pex = ex; this.pey = ey;
+    var mx = nlp(ex, 0.55, 11) + 0.18 * this.dex + 0.9 * this.vx;
+    var my = nlp(ey, 0.6, 10) + 0.22 * this.dey + 0.9 * this.vy;
+    return clampStep(mx, my, 30);
+  };
+
+  function AlphaBeta(alpha, ego, tf) { this.alpha = alpha; this.ego = ego; this.tf = tf; this.reset(); }
+  AlphaBeta.prototype.reset = function () {
+    this.has = false; this.ex = 0; this.ey = 0; this.vx = 0; this.vy = 0; this.gc = 0;
+    this.pex = 0; this.pey = 0; this.dex = 0; this.dey = 0; this.ax = 0; this.ay = 0;
+  };
+  AlphaBeta.prototype.setApplied = function (dx, dy) { this.ax += dx; this.ay += dy; };
+  AlphaBeta.prototype.step = function (rx, ry, dt) {
+    dt = dt || 1;   // the controller's ASSUMED elapsed time; real dt jitters (see step)
+    var fresh = !this.has, a = clamp(this.alpha, 0.01, 1), b = a * a / (2 - a);
+    if (fresh) { this.ex = rx; this.ey = ry; this.vx = 0; this.vy = 0; this.gc = 0; }
+    else {
+      if (this.ego) { this.ex -= this.ax; this.ey -= this.ay; }
+      var px = this.ex + this.vx * dt, py = this.ey + this.vy * dt;
+      var rrx = rx - px, rry = ry - py, rn = Math.hypot(rrx, rry);
+      if (rn > 50) { this.gc++; if (this.gc >= 3) { px = rx; py = ry; this.vx = 0; this.vy = 0; this.gc = 0; } }
+      else { px += a * rrx; py += a * rry; this.vx += (b / dt) * rrx; this.vy += (b / dt) * rry; this.gc = 0; }
+      this.ex = px; this.ey = py;
+    }
+    this.ax = 0; this.ay = 0; this.has = true;
+    var ex = this.ex, ey = this.ey;
+    var dex = clamp(ex - this.pex, -150, 150), dey = clamp(ey - this.pey, -150, 150);
+    if (fresh) { this.dex = 0; this.dey = 0; } else { this.dex = 0.6 * dex + 0.4 * this.dex; this.dey = 0.6 * dey + 0.4 * this.dey; }
+    this.pex = ex; this.pey = ey;
+    var mx = nlp(ex, 0.55, 8) + 0.18 * this.dex + this.tf * this.vx;
+    var my = nlp(ey, 0.6, 7) + 0.22 * this.dey + this.tf * this.vy;
+    return clampStep(mx, my, 30);
+  };
+
+  function makeCtrl(kind) {
+    if (kind === "raw") return new OneEuro(false, false);   // PD + ff on RAW (One Euro off)
+    if (kind === "oneeuro") return new OneEuro(false, true);
+    if (kind === "ego") return new OneEuro(true, true);
+    return new AlphaBeta(0.30, true, 0.8);
+  }
+
+  // ---- simulation state ---------------------------------------------------
+  var W = 800, H = 500;                 // logical world size (canvas units)
+  var HB = 46;                          // head->body offset (px)
+  var LAT = 3;                          // latency in sim steps when enabled
+  var opts = { headBody: true, latency: true, noise: true, quant: true, noiseMul: 1, kind: "oneeuro", speed: 1 };
+
+  var sim, ctrl;
+  function fresh() {
+    ctrl = makeCtrl(opts.kind);
+    sim = {
+      t: 0,
+      cx: W * 0.5, cy: H * 0.5,        // crosshair (world abs)
+      hx: W * 0.42, hy: H * 0.45,      // head truth
+      tvx: 1.0, tvy: 0, holding: false, moveTimer: 2.4,   // strafe-and-hold motion
+      hist: [],                         // {hx,hy,bx,by,cx,cy}
+      driftx: 0, drifty: 0,
+      lastDet: null,                    // held detection on dropout
+      detWorld: null,                   // last detection in world coords (for draw)
+      onHead: true, dropped: false,
+      errNow: 0,                        // must exist before the first draw
+      resx: { v: 0 }, resy: { v: 0 },   // integer-emit fractional residual
+      lagJit: 0, dtJit: 0,              // pipeline latency + frame-timing jitter
+      errs: [], moves: [],              // rolling windows
+      trace: new Array(260).fill(0),
+      trIdx: 0,
+    };
+  }
+
+  // gaussian-ish
+  function gauss(sd) { var u = Math.random(), v = Math.random(); return sd * Math.sqrt(-2 * Math.log(u + 1e-9)) * Math.cos(2 * Math.PI * v); }
+
+  function targetAt(t) {
+    // horizontal sweep (dominant) + gentle vertical bob — a person crossing.
+    return {
+      hx: W * 0.5 + W * 0.33 * Math.sin(t * 0.62),
+      hy: H * 0.42 + H * 0.15 * Math.sin(t * 0.93 + 1.1),
+    };
+  }
+
+  function step(dt) {
+    var s = sim;
+    s.t += dt;
+    // target motion: strafe-and-hold (a peeking / strafing enemy). During HOLDS
+    // the target is still — the regime where One Euro's adaptive filter pins the
+    // crosshair and Raw buzzes on noise; during strafes Raw's zero-lag wins.
+    s.moveTimer -= dt;
+    if (s.moveTimer <= 0) {
+      s.holding = !s.holding;
+      s.moveTimer = s.holding ? 1.4 : 2.4;
+      if (!s.holding) {
+        s.tvx = (Math.random() < 0.5 ? -1 : 1) * (1.0 + Math.random() * 1.6);
+        s.tvy = (Math.random() - 0.5) * 0.7;
+      }
+    }
+    // sharp counter-strafe reversals mid-move — a constant-velocity estimator
+    // extrapolates through these and overshoots (the alpha-beta lurch).
+    if (!s.holding && Math.random() < 0.03) s.tvx = -s.tvx;
+    if (!s.holding) { s.hx += s.tvx; s.hy += s.tvy; }
+    if (s.hx < W * 0.12) { s.hx = W * 0.12; s.tvx = Math.abs(s.tvx); }
+    if (s.hx > W * 0.88) { s.hx = W * 0.88; s.tvx = -Math.abs(s.tvx); }
+    if (s.hy < H * 0.20) { s.hy = H * 0.20; s.tvy = Math.abs(s.tvy); }
+    if (s.hy > H * 0.68) { s.hy = H * 0.68; s.tvy = -Math.abs(s.tvy); }
+    var bx = s.hx, by = s.hy + HB;
+    s.hist.push({ hx: s.hx, hy: s.hy, bx: bx, by: by, cx: s.cx, cy: s.cy });
+    if (s.hist.length > 200) s.hist.shift();
+
+    // Realistic pipeline latency: DirectX capture + UDP + inference + the
+    // MAKCU->USB->game->render return trip — MULTI-frame and JITTERY. The
+    // detection reflects the whole scene (target AND crosshair) this many steps
+    // old; the ego-comp assumes ~1 frame, so the rest is uncompensated crosshair
+    // motion that leaks into the estimate and makes the ego loop diverge.
+    var lag = 0;
+    if (opts.latency) {
+      s.lagJit = 0.75 * s.lagJit + gauss(1.1);
+      lag = Math.round(clamp(4 + s.lagJit, 1, 12));
+    }
+    var snap = s.hist[Math.max(0, s.hist.length - 1 - lag)];
+
+    // shared slow drift (both boxes breathe together)
+    var nm = opts.noiseMul;
+    if (opts.noise) {
+      s.driftx = 0.9 * s.driftx + gauss(0.5 * nm);
+      s.drifty = 0.9 * s.drifty + gauss(0.5 * nm);
+    } else { s.driftx = 0; s.drifty = 0; }
+
+    // head/body selection + dropout
+    var detW = null, onHead = false, dropped = false;
+    var headSeen = !opts.headBody || Math.random() < 0.82;
+    var bodySeen = Math.random() < 0.97;
+    if (opts.headBody) {
+      if (headSeen) { detW = { x: snap.hx, y: snap.hy }; onHead = true; }
+      else if (bodySeen) { detW = { x: snap.bx, y: snap.by }; onHead = false; }
+      else dropped = true;
+    } else {
+      detW = { x: snap.hx, y: snap.hy }; onHead = true;
+    }
+
+    var raw;
+    if (dropped && s.lastDet) {
+      raw = s.lastDet;                    // hold last (coast-ish)
+    } else if (detW) {
+      var nx = opts.noise ? gauss((onHead ? 1.3 : 0.9) * nm) : 0;
+      var ny = opts.noise ? gauss((onHead ? 1.8 : 1.1) * nm) : 0;   // Y noisier (box edges)
+      var detx = detW.x + s.driftx + nx;
+      var dety = detW.y + s.drifty + ny;
+      // frame coords: raw = detected_screen - crosshair(lagged)
+      raw = { x: detx - snap.cx, y: dety - snap.cy };
+      s.lastDet = raw;
+      s.detWorld = { x: detx, y: dety, onHead: onHead };
+    } else {
+      raw = s.lastDet || { x: s.hx - s.cx, y: s.hy - s.cy };
+    }
+    s.dropped = dropped;
+    s.onHead = onHead;
+
+    // The controller assumes a nominal dt=1, but the true frame interval jitters
+    // (variable render + inference time). Alpha-beta's est_v*dt prediction and
+    // beta/dt update are corrupted by the mismatch; One Euro ignores dt.
+    var dtc = 1;
+    if (opts.latency) { s.dtJit = 0.6 * s.dtJit + gauss(0.4); dtc = clamp(1 + s.dtJit, 0.35, 2.4); }
+    // controller -> proposed float move -> real mouse counts (integer + residual)
+    var mv = ctrl.step(raw.x, raw.y, dtc);
+    var ax, ay;
+    if (opts.quant) { ax = emitInt(mv[0], s.resx); ay = emitInt(mv[1], s.resy); }
+    else { ax = mv[0]; ay = mv[1]; }
+    var mag = Math.hypot(ax, ay);
+    // apply (crosshair pans); a small scale error corrupts ego's self-knowledge
+    var scaleErr = opts.latency ? 0.08 : 0.0;
+    s.cx += ax * (1 + scaleErr);
+    s.cy += ay * (1 + scaleErr);
+    ctrl.setApplied(ax, ay);
+
+    // metrics vs the HEAD (the intended aim point)
+    var err = Math.hypot(s.hx - s.cx, s.hy - s.cy);
+    s.errNow = err;
+    s.errs.push(err); if (s.errs.length > 288) s.errs.shift();      // ~2s window
+    s.moves.push(mag > 0.35 ? 1 : 0); if (s.moves.length > 288) s.moves.shift();
+    s.trace[s.trIdx] = err; s.trIdx = (s.trIdx + 1) % s.trace.length;
+  }
+
+  // ---- rendering ----------------------------------------------------------
+  var scope = document.getElementById("scope"), sctx = scope.getContext("2d");
+  var trace = document.getElementById("trace"), tctx = trace.getContext("2d");
+  var dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+
+  function fit(cv, ctx) {
+    var r = cv.getBoundingClientRect();
+    var w = Math.max(1, r.width), h = Math.max(1, r.height);
+    cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return { w: w, h: h };
+  }
+  var scDim = fit(scope, sctx), trDim = fit(trace, tctx);
+  function refit() { scDim = fit(scope, sctx); trDim = fit(trace, tctx); }
+  window.addEventListener("resize", refit);
+  if (window.ResizeObserver) {
+    var ro = new ResizeObserver(refit);
+    ro.observe(scope); ro.observe(trace);
+  }
+  // canvases sometimes measure 0 before the iframe has laid out; retry briefly.
+  var tries = 0, warm = setInterval(function () {
+    refit(); if (++tries > 20 || (scDim.w > 4 && scDim.h > 4)) clearInterval(warm);
+  }, 60);
+
+  function toScope(x, y) { return [ (x / W) * scDim.w, (y / H) * scDim.h ]; }
+
+  function drawScope() {
+    var s = sim, w = scDim.w, h = scDim.h;
+    sctx.clearRect(0, 0, w, h);
+    // grid
+    sctx.strokeStyle = css("--grid"); sctx.lineWidth = 1;
+    sctx.beginPath();
+    for (var gx = 0; gx <= 8; gx++) { var X = gx / 8 * w; sctx.moveTo(X, 0); sctx.lineTo(X, h); }
+    for (var gy = 0; gy <= 5; gy++) { var Y = gy / 5 * h; sctx.moveTo(0, Y); sctx.lineTo(w, Y); }
+    sctx.stroke();
+
+    var head = toScope(s.hx, s.hy);
+    var body = toScope(s.hx, s.hy + HB);
+    var cross = toScope(s.cx, s.cy);
+
+    // body point + connector
+    sctx.strokeStyle = css("--bodyc"); sctx.globalAlpha = 0.5; sctx.lineWidth = 1.5;
+    sctx.beginPath(); sctx.moveTo(head[0], head[1]); sctx.lineTo(body[0], body[1]); sctx.stroke();
+    sctx.globalAlpha = 1;
+    sctx.fillStyle = css("--bodyc");
+    sctx.beginPath(); sctx.arc(body[0], body[1], 4, 0, 7); sctx.fill();
+
+    // head (goal) with halo
+    var tcol = css("--target");
+    sctx.fillStyle = tcol; sctx.globalAlpha = 0.16;
+    sctx.beginPath(); sctx.arc(head[0], head[1], 15, 0, 7); sctx.fill();
+    sctx.globalAlpha = 1;
+    sctx.beginPath(); sctx.arc(head[0], head[1], 6, 0, 7); sctx.fill();
+
+    // error line crosshair -> head
+    sctx.strokeStyle = css("--danger"); sctx.globalAlpha = 0.55;
+    sctx.setLineDash([3, 3]); sctx.lineWidth = 1.5;
+    sctx.beginPath(); sctx.moveTo(cross[0], cross[1]); sctx.lineTo(head[0], head[1]); sctx.stroke();
+    sctx.setLineDash([]); sctx.globalAlpha = 1;
+
+    // detection marker (what the controller sees)
+    if (s.detWorld) {
+      var d = toScope(s.detWorld.x, s.detWorld.y);
+      sctx.strokeStyle = s.dropped ? css("--ink-faint") : css("--danger");
+      sctx.lineWidth = 1.5;
+      sctx.beginPath(); sctx.arc(d[0], d[1], 7, 0, 7); sctx.stroke();
+      sctx.beginPath(); sctx.moveTo(d[0] - 10, d[1]); sctx.lineTo(d[0] + 10, d[1]);
+      sctx.moveTo(d[0], d[1] - 10); sctx.lineTo(d[0], d[1] + 10); sctx.stroke();
+    }
+
+    // crosshair (controller output) with glow + reticle
+    var ac = css("--accent");
+    sctx.fillStyle = ac; sctx.globalAlpha = 0.18;
+    sctx.beginPath(); sctx.arc(cross[0], cross[1], 13, 0, 7); sctx.fill();
+    sctx.globalAlpha = 1;
+    sctx.strokeStyle = ac; sctx.lineWidth = 2;
+    sctx.beginPath(); sctx.arc(cross[0], cross[1], 7, 0, 7); sctx.stroke();
+    sctx.beginPath();
+    sctx.moveTo(cross[0] - 13, cross[1]); sctx.lineTo(cross[0] - 4, cross[1]);
+    sctx.moveTo(cross[0] + 4, cross[1]); sctx.lineTo(cross[0] + 13, cross[1]);
+    sctx.moveTo(cross[0], cross[1] - 13); sctx.lineTo(cross[0], cross[1] - 4);
+    sctx.moveTo(cross[0], cross[1] + 4); sctx.lineTo(cross[0], cross[1] + 13);
+    sctx.stroke();
+    sctx.fillStyle = ac;
+    sctx.beginPath(); sctx.arc(cross[0], cross[1], 1.6, 0, 7); sctx.fill();
+  }
+
+  function drawTrace() {
+    var s = sim, w = trDim.w, h = trDim.h;
+    tctx.clearRect(0, 0, w, h);
+    var maxE = 60;
+    // baseline grid
+    tctx.strokeStyle = css("--grid"); tctx.lineWidth = 1;
+    tctx.beginPath();
+    [0.25, 0.5, 0.75].forEach(function (f) { tctx.moveTo(0, f * h); tctx.lineTo(w, f * h); });
+    tctx.stroke();
+    // area + line
+    var n = s.trace.length;
+    tctx.beginPath();
+    for (var i = 0; i < n; i++) {
+      var idx = (s.trIdx + i) % n;
+      var x = i / (n - 1) * w;
+      var y = h - clamp(s.trace[idx] / maxE, 0, 1) * (h - 6) - 3;
+      if (i === 0) tctx.moveTo(x, y); else tctx.lineTo(x, y);
+    }
+    tctx.strokeStyle = css("--danger"); tctx.lineWidth = 1.8;
+    tctx.lineJoin = "round"; tctx.stroke();
+    tctx.lineTo(w, h); tctx.lineTo(0, h); tctx.closePath();
+    tctx.fillStyle = css("--danger-soft"); tctx.fill();
+    // endpoint dot
+    var ey = h - clamp(s.errNow / maxE, 0, 1) * (h - 6) - 3;
+    tctx.fillStyle = css("--danger");
+    tctx.beginPath(); tctx.arc(w - 2, ey, 3, 0, 7); tctx.fill();
+  }
+
+  // ---- readouts -----------------------------------------------------------
+  var $ = function (id) { return document.getElementById(id); };
+  function updateReadouts() {
+    var s = sim;
+    var rms = 0; for (var i = 0; i < s.errs.length; i++) rms += s.errs[i] * s.errs[i];
+    rms = s.errs.length ? Math.sqrt(rms / s.errs.length) : 0;
+    var mv = s.moves.length ? (s.moves.reduce(function (a, b) { return a + b; }, 0) / s.moves.length) * 100 : 0;
+    $("errVal").textContent = s.errNow.toFixed(1);
+    $("rmsVal").textContent = rms.toFixed(1);
+    $("rmsInline").textContent = rms.toFixed(1);
+    $("mvVal").textContent = Math.round(mv);
+    var badge = $("stateBadge"), txt = $("stateText");
+    badge.className = "badge " + (s.dropped ? "drop" : s.onHead ? "head" : "body");
+    var motion = s.holding ? "HOLD" : "strafe";
+    txt.textContent = motion + " · " + (s.dropped ? "head→body" : s.onHead ? "head" : "body");
+  }
+
+  // ---- loop ---------------------------------------------------------------
+  var playing = true, last = 0, acc = 0;
+  var STEP_HZ = 120;                     // sim steps per second at 1.0x
+  function loop(ts) {
+    if (!last) last = ts;
+    var dt = Math.min(0.05, (ts - last) / 1000); last = ts;
+    if (scDim.w < 4 || scDim.h < 4) refit();   // guard: iframe measured 0
+    if (playing) {
+      acc += dt * opts.speed;
+      var stepDt = 1 / STEP_HZ;
+      var budget = 6;
+      while (acc >= stepDt && budget-- > 0) { step(stepDt * 4.2); acc -= stepDt; }
+    }
+    drawScope(); drawTrace(); updateReadouts();
+    requestAnimationFrame(loop);
+  }
+
+  // ---- controls -----------------------------------------------------------
+  var seg = $("ctrlSeg");
+  seg.addEventListener("click", function (e) {
+    var b = e.target.closest("button"); if (!b) return;
+    opts.kind = b.getAttribute("data-c");
+    Array.prototype.forEach.call(seg.querySelectorAll("button"), function (x) {
+      x.setAttribute("aria-pressed", x === b ? "true" : "false");
+    });
+    ctrl = makeCtrl(opts.kind);          // hot-swap; keep the target moving
+  });
+  $("tHeadBody").addEventListener("change", function (e) { opts.headBody = e.target.checked; });
+  $("tLatency").addEventListener("change", function (e) { opts.latency = e.target.checked; });
+  $("tNoise").addEventListener("change", function (e) { opts.noise = e.target.checked; });
+  $("tQuant").addEventListener("change", function (e) { opts.quant = e.target.checked; });
+  $("speed").addEventListener("input", function (e) {
+    opts.speed = parseFloat(e.target.value); $("spdVal").textContent = opts.speed.toFixed(1) + "×";
+  });
+  $("noiseMul").addEventListener("input", function (e) {
+    opts.noiseMul = parseFloat(e.target.value); $("nmVal").textContent = opts.noiseMul.toFixed(1) + "×";
+  });
+  $("playBtn").addEventListener("click", function (e) {
+    playing = !playing; e.target.textContent = playing ? "Pause" : "Play"; last = 0;
+  });
+  $("resetBtn").addEventListener("click", function () { fresh(); });
+
+  fresh();
+  requestAnimationFrame(loop);
+})();
+</script>
+
+</body>
+</html>
