@@ -116,6 +116,6 @@
 | `perf_log_truncate_on_start` | false | 시작 시 로그 비우기. |
 | `stage_timing_enabled` | false | 파이프라인 단계별 세부 타이밍. |
 | `force_aim_on` | false | **벤치마크 전용.** 조준키 없이 항상 조준 활성(측정용). 실사용 금지. |
-| `calibration_log_path` | "" | 캘리브레이션 CSV 경로(빈 값이고 perf_stats on이면 `calib.csv` 기본). `bench/calibrate.py`로 분석. |
+| `calibration_log_path` | calib.csv | 캘리브레이션 CSV 경로(**어디에 쓸지**만 결정). 로깅 자체는 `perf_stats_enabled`가 켜져야 시작됨. `bench/calibrate.py`로 분석. |
 | `calibration_step_px` | 0 | >0이면 스텝응답 dead-time 측정용 마우스 펄스 주입(±px). 조준 OFF·정지 타겟에서만. 0=끔. |
 | `calibration_step_period_ms` | 250 | 스텝 주입 주기(ms). |

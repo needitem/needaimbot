@@ -199,7 +199,7 @@ struct Config {
     // Calibration capture. Non-empty path = log every frame's raw detection to
     // this CSV (for bench/calibrate.py). Off by default. A relative path is
     // written next to the binary's working dir.
-    std::string calibrationLogPath;
+    std::string calibrationLogPath = "calib.csv";
     // Step-response dead-time measurement. >0 = inject +-this many mouse counts
     // (X) every calibrationStepPeriodMs while the log is on. Aim OFF at a
     // stationary target; calibrate.py cross-correlates cx vs the injection to
@@ -475,11 +475,13 @@ struct Config {
         std::cout << "[Config] Stage timing: "
                   << (stageTimingEnabled ? "ON" : "OFF") << std::endl;
         std::cout << "[Config] Calibration log: ";
-        if (perfStatsEnabled || !calibrationLogPath.empty())
+        if (perfStatsEnabled)
             std::cout << (calibrationLogPath.empty() ? std::string("calib.csv") : calibrationLogPath)
-                      << (perfStatsEnabled && calibrationLogPath.empty() ? " (via perf_stats)" : "");
+                      << " (via perf_stats)";
         else
-            std::cout << "(off)";
+            std::cout << "(off; enable perf_stats to log to "
+                      << (calibrationLogPath.empty() ? std::string("calib.csv") : calibrationLogPath)
+                      << ")";
         if (calibrationStepPx > 0)
             std::cout << " [step-response +-" << calibrationStepPx << " cnt/" << calibrationStepPeriodMs << "ms]";
         std::cout << std::endl;
@@ -1026,13 +1028,15 @@ int main(int argc, char* argv[]) {
     // too (an explicit calibration_log_path also enables it on its own). Writes
     // to calibration_log_path, or "calib.csv" next to the binary if unset.
     std::unique_ptr<CalibLogger> calibLogger;
-    if (cfg.perfStatsEnabled || !cfg.calibrationLogPath.empty()) {
+    if (cfg.perfStatsEnabled) {
+        // perf_stats is the master switch: it turns on calibration logging too.
+        // calibration_log_path is just where it writes (calib.csv if left blank).
         const std::string calibPath =
             cfg.calibrationLogPath.empty() ? std::string("calib.csv") : cfg.calibrationLogPath;
         calibLogger = std::make_unique<CalibLogger>(calibPath);
         callbackCtx.calib = calibLogger.get();
         std::cout << "[Calib] logging detections to " << calibPath
-                  << (cfg.perfStatsEnabled ? " (via perf_stats)" : "") << std::endl;
+                  << " (via perf_stats)" << std::endl;
     }
     constexpr size_t kCallbackTicketCount = 4;
     std::array<CallbackTicket, kCallbackTicketCount> callbackTickets{};
