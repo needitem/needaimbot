@@ -339,9 +339,72 @@ class DetectorNoise:
         self.last = (mx, my)
         return (mx, my)
 
-def run(ctrl, scenario, frames=900, seed=0, latency_ms=None, noise_model="clean"):
+
+HB_OFFSET = 25.0   # px between the head aim point and the body aim point (head above)
+
+class HeadBodyDetector:
+    """Two-class YOLO on ONE target, exactly as needaimbot sees it: every frame it
+    detects a BODY box (whole body) AND a HEAD box, independently, each with its
+    own noise and dropout. Head is smaller / lower-confidence so it drops out far
+    more often. The controller selects HEAD when present (head-priority) else the
+    BODY aim point - so when the head blinks out the aim point FALLS ~HB_OFFSET px
+    to the body and SNAPS back when it returns. That head<->body switch is the
+    dominant vertical-shake source, and a velocity/ego controller reads each
+    switch as a fast target jump and overshoots it.
+
+    measure(body_cx, body_cy) -> selected aim center (head or body), or None if
+    NEITHER box is detected this frame. body_cy is the body aim-point Y; the head
+    aim point is HB_OFFSET above it (smaller Y)."""
+    def __init__(self, rng, p_head=0.80, p_body=0.97, sticky=0.5,
+                 head_white=1.2, head_boxy=3.0, body_white=0.8, body_boxy=1.5,
+                 drift=1.2, drift_rho=0.9):
+        self.rng = rng
+        self.p_head, self.p_body, self.sticky = p_head, p_body, sticky
+        self.hw, self.hby_s, self.bw, self.bby_s = head_white, head_boxy, body_white, body_boxy
+        self.drift, self.rho = drift, drift_rho
+        self.dx = self.dy = 0.0        # shared low-freq drift (both boxes breathe together)
+        self.hby = self.bby = 0.0      # per-box Y edge jitter (AR1)
+        self.on_head = False           # current lock (for stickiness hysteresis)
+
+    def _ar1(self, prev, rho, sig):
+        return rho*prev + self.rng.gauss(0.0, sig*math.sqrt(max(1e-9, 1.0 - rho*rho)))
+
+    def measure(self, body_cx, body_cy):
+        self.dx = self._ar1(self.dx, self.rho, self.drift)
+        self.dy = self._ar1(self.dy, self.rho, self.drift)
+        head_seen = self.rng.random() < self.p_head
+        body_seen = self.rng.random() < self.p_body
+        # Head priority with mild stickiness: once on the head, a lone missed head
+        # frame does not immediately drop to body if body isn't clearly better.
+        use_head = head_seen
+        if use_head:
+            self.on_head = True
+            self.hby = self._ar1(self.hby, 0.6, self.hby_s)
+            hx = body_cx + self.dx + self.rng.gauss(0.0, self.hw)
+            hy = (body_cy - HB_OFFSET) + self.dy + self.hby + self.rng.gauss(0.0, self.hw)
+            return (hx, hy)
+        self.on_head = False
+        if body_seen:
+            self.bby = self._ar1(self.bby, 0.6, self.bby_s)
+            bx = body_cx + self.dx + self.rng.gauss(0.0, self.bw)
+            by = body_cy + self.dy + self.bby + self.rng.gauss(0.0, self.bw)
+            return (bx, by)
+        return None   # neither box this frame -> dropout
+
+def run(ctrl, scenario, frames=900, seed=0, latency_ms=None, noise_model="clean",
+        render_hz=None, scale_err=0.0):
     """Returns dict of metrics. Target position T is ABSOLUTE; crosshair C
     starts at SC; frame-coord measurement raw = T - C + SC + noise.
+
+    render_hz: None = the world updates every 300fps loop step (idealized). A
+    number (e.g. 144) models the REAL capture cadence: the game renders only at
+    render_hz, the 300fps loop OVERSAMPLES it, so between renders the detection is
+    an exact DUPLICATE and a bot emit is INVISIBLE until the next render (the
+    emit->screen latency is quantized to game frames, not continuous). This is the
+    structural variable the earlier smooth-300fps model missed.
+    scale_err: emit->on-screen motion mismatch (mouse accel / uncalibrated
+    movement_scale). C really moves emit*(1+scale_err) but the controller only
+    knows its own emit, so ego's self-motion accounting is systematically off.
 
     latency_ms: None = perfect (measurement reflects the world NOW, so the
     ~1-frame ego-comp is exact). A (lo, hi) tuple models a random per-frame
@@ -356,7 +419,12 @@ def run(ctrl, scenario, frames=900, seed=0, latency_ms=None, noise_model="clean"
     target-selection flicker/phantom, outliers); the scenario supplies only the
     target motion (its gap/glitch injections are superseded by the detector)."""
     rng = random.Random(seed)
-    detector = DetectorNoise(rng) if noise_model == "real" else None
+    if noise_model == "headbody":
+        detector = HeadBodyDetector(rng)
+    elif noise_model == "real":
+        detector = DetectorNoise(rng)
+    else:
+        detector = None
     ctrl.reset()
     C = [SC[0], SC[1]]
     T = [SC[0] + 80.0, SC[1] + 40.0] if scenario == "step" else [SC[0], SC[1]]
@@ -365,6 +433,8 @@ def run(ctrl, scenario, frames=900, seed=0, latency_ms=None, noise_model="clean"
         v = [1.0, 0.3]
     if scenario == "zigzag":
         v = [1.5, 0.0]
+    if scenario == "moveright":          # target crosses left->right (user's case)
+        T = [SC[0] - 90.0, SC[1]]; v = [1.2, 0.0]
 
     errs, emits, settle_frame, max_overshoot = [], [], None, 0.0
     post_turn_peak = 0.0
@@ -380,10 +450,15 @@ def run(ctrl, scenario, frames=900, seed=0, latency_ms=None, noise_model="clean"
         T[0] += v[0]; T[1] += v[1]
         world_hist.append((T[0], T[1], C[0], C[1]))
 
-        # --- what the camera actually captured this frame: a snapshot of the
-        # whole scene (target AND crosshair) delayed by a random 1-10ms latency
+        # --- capture: DirectX grabs the game at render_hz (144); network +
+        # inference delay the detected position by the pipeline round-trip,
+        # quantized to whole render frames (>=1) and jittery, so a bot emit is
+        # invisible until at least the next render. render_hz=None = ideal model.
+        frame_ms = (1000.0 / render_hz) if render_hz is not None else FRAME_MS
         if latency_ms is not None:
-            lat_fr = rng.uniform(latency_ms[0], latency_ms[1]) / FRAME_MS
+            lat_fr = rng.uniform(latency_ms[0], latency_ms[1]) / frame_ms
+            if render_hz is not None:
+                lat_fr = max(1.0, float(round(lat_fr)))    # whole render frames, >=1
             idx = max(0.0, f - lat_fr)
             i0 = int(idx); i1 = min(i0 + 1, len(world_hist) - 1); fr = idx - i0
             sT0 = world_hist[i0][0]*(1-fr) + world_hist[i1][0]*fr
@@ -393,10 +468,12 @@ def run(ctrl, scenario, frames=900, seed=0, latency_ms=None, noise_model="clean"
         else:
             sT0, sT1, sC0, sC1 = T[0], T[1], C[0], C[1]
 
-        # --- detection: clean gaussian (+ scenario gap/glitch) or full DetectorNoise
-        true_cx, true_cy = sT0 - sC0 + SC[0], sT1 - sC1 + SC[1]
-        if noise_model == "real":
-            meas = detector.measure(true_cx, true_cy)    # None on a real dropout
+        # --- detection. body_c* = the BODY aim point in frame coords (head sits
+        # HB_OFFSET above). YOLO returns both boxes; the head-priority selection
+        # and head dropout live in HeadBodyDetector.
+        body_cx, body_cy = sT0 - sC0 + SC[0], sT1 - sC1 + SC[1]
+        if noise_model in ("headbody", "real"):
+            meas = detector.measure(body_cx, body_cy)    # selected center, or None
             gap = (meas is None)
         else:
             gap = (scenario == "gap" and f % 60 in (20, 21, 22))
@@ -405,7 +482,7 @@ def run(ctrl, scenario, frames=900, seed=0, latency_ms=None, noise_model="clean"
                 nx = rng.gauss(0.0, NOISE); ny = rng.gauss(0.0, NOISE)
                 if scenario == "glitch" and rng.random() < 0.01:
                     nx += 40.0
-                meas = (true_cx + nx, true_cy + ny)
+                meas = (body_cx + nx, body_cy + ny)
 
         if gap:
             missed += 1
@@ -426,13 +503,21 @@ def run(ctrl, scenario, frames=900, seed=0, latency_ms=None, noise_model="clean"
         applied_dx, applied_dy = dx, dy
         if scenario == "drop" and not gap and rng.random() < 0.15:
             applied_dx, applied_dy = 0, 0
-        C[0] += applied_dx; C[1] += applied_dy
-        dx, dy = applied_dx, applied_dy  # metrics reflect real mouse motion
-        # Host feeds the ACTUALLY-applied delta back for next frame's ego comp.
+        # Real on-screen motion vs the bot's belief: a scale/position error means
+        # the emitted mouse delta does not map 1:1 to screen motion. C moves the
+        # REAL amount; the controller only knows (and feeds ego) its own emit.
+        C[0] += applied_dx * (1.0 + scale_err)
+        C[1] += applied_dy * (1.0 + scale_err)
+        dx, dy = applied_dx, applied_dy  # emits metric = the bot's believed motion
+        # Host feeds the ACTUALLY-applied (believed) delta back for ego comp.
         # (Both controllers have set_applied; it is a no-op unless ego is on.)
         ctrl.set_applied(applied_dx, applied_dy)
 
-        e = math.hypot(T[0] - C[0], T[1] - C[1])
+        # In head/body mode the INTENDED aim is the head point (HB_OFFSET above the
+        # body center); error is measured against it, so a drop-to-body pulls the
+        # crosshair off-head and the head<->body switching shows up as shake.
+        tgt_y = (T[1] - HB_OFFSET) if noise_model == "headbody" else T[1]
+        e = math.hypot(T[0] - C[0], tgt_y - C[1])
         errs.append(e); emits.append((dx, dy))
         if scenario == "step":
             if settle_frame is None and e < 2.0:
@@ -459,10 +544,12 @@ def run(ctrl, scenario, frames=900, seed=0, latency_ms=None, noise_model="clean"
         out["turn_peak"] = post_turn_peak
     return out
 
-def avg_runs(make_ctrl, scenario, n=8, latency_ms=None, noise_model="clean"):
+def avg_runs(make_ctrl, scenario, n=8, latency_ms=None, noise_model="clean",
+             render_hz=None, scale_err=0.0):
     acc = {}
     for s in range(n):
-        m = run(make_ctrl(), scenario, seed=s, latency_ms=latency_ms, noise_model=noise_model)
+        m = run(make_ctrl(), scenario, seed=s, latency_ms=latency_ms, noise_model=noise_model,
+                render_hz=render_hz, scale_err=scale_err)
         for k, v in m.items():
             acc.setdefault(k, []).append(v)
     return {k: sum(v)/len(v) for k, v in acc.items()}
@@ -499,10 +586,11 @@ def flick_handover(ctrl, flick_frames=30, seed=0):
 
 SCENARIOS = ["step", "still", "cv", "zigzag", "glitch", "gap", "drop"]
 
-def row(name, make_ctrl, latency_ms=None, noise_model="clean"):
+def row(name, make_ctrl, latency_ms=None, noise_model="clean", render_hz=None, scale_err=0.0):
     cells = [f"{name:26s}"]
     for sc in SCENARIOS:
-        m = avg_runs(make_ctrl, sc, latency_ms=latency_ms, noise_model=noise_model)
+        m = avg_runs(make_ctrl, sc, latency_ms=latency_ms, noise_model=noise_model,
+                     render_hz=render_hz, scale_err=scale_err)
         extra = ""
         if sc == "step":
             extra = f" st={m['settle']:.0f}f ov={m['overshoot']:.1f}"
@@ -574,6 +662,25 @@ if __name__ == "__main__":
     print("   real noise + 1-10ms latency:")
     row("OneEuro base real+lat", lambda: OldController(Gains(soft_x=11.0, soft_y=10.0)), latency_ms=(1.0,10.0), noise_model="real")
     row("OneEuro+ego real+lat", lambda: OldController(Gains(soft_x=11.0, soft_y=10.0), ego=True), latency_ms=(1.0,10.0), noise_model="real")
+    print()
+    print("=== REAL PIPELINE: 144Hz DirectX capture + net/infer latency + HEAD/BODY ===")
+    print("   YOLO returns BOTH a body box and a head box; head drops ~20% of")
+    print("   frames -> aim falls to the body point (HB_OFFSET px below) and snaps")
+    print("   back = the vertical shake. Latency quantized to render frames, +8%")
+    print("   scale error. READ: 'still' (stationary head/body switch = pure shake)")
+    print("   and 'cv'/'moveright' (moving). error is measured vs the HEAD point.")
+    RP = dict(latency_ms=(5.0, 20.0), noise_model="headbody", render_hz=144, scale_err=0.08)
+    for name, mk in [
+        ("OneEuro base",        lambda: OldController(Gains(soft_x=11.0, soft_y=10.0))),
+        ("OneEuro + ego",       lambda: OldController(Gains(soft_x=11.0, soft_y=10.0), ego=True)),
+        ("NEW a=.30 ego ff=.8", lambda: NewController(g, alpha=0.30, track_ff=0.8)),
+        ("NEW a=.35 no-ego",    lambda: NewController(g, alpha=0.35, ego_comp=False)),
+    ]:
+        cells = [f"{name:22s}"]
+        for sc in ("still", "moveright", "cv", "zigzag"):
+            m = avg_runs(mk, sc, **RP)
+            cells.append(f"{sc}={m['rms']:5.2f} mv={m['move%']:2.0f}%")
+        print("  " + " | ".join(cells))
     print()
     print("-- flick handover: ego closed on applied delta vs on emitted guess --")
     pk_s, st_s = flick_handover(NewController(Gains()))
