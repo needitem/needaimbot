@@ -62,3 +62,6 @@ inference_pc/test_*
 # Local TensorRT engines + build logs
 engines/
 bench/*.log
+
+# Local stable build artifacts (binary + config)
+inference_pc/build_stable/

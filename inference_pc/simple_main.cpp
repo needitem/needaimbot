@@ -21,6 +21,7 @@
 #include <cctype>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -51,6 +52,10 @@ using json = nlohmann::json;
 using Clock = std::chrono::steady_clock;
 
 std::atomic<bool> g_running{true};
+// Step-response dead-time measurement: cumulative counts the main loop has
+// injected into the mouse (aim OFF, stationary target). The callback logs it per
+// detection so calibrate.py can cross-correlate cx against it to find the lag.
+std::atomic<long long> g_injectCumX{0};
 std::atomic<int> g_frameCount{0};  // Completed inference callbacks per stat window
 std::atomic<uint64_t> g_callbackLatencySamples{0};
 std::atomic<int64_t> g_callbackLatencyTotalUs{0};
@@ -191,6 +196,27 @@ struct Config {
     std::vector<std::pair<int, int>> preCaptureShapes;
     bool stageTimingEnabled = false;  // Per-stage CUDA event timings (opt-in)
 
+    // Calibration capture. Non-empty path = log every frame's raw detection to
+    // this CSV (for bench/calibrate.py). Off by default. A relative path is
+    // written next to the binary's working dir.
+    std::string calibrationLogPath;
+    // Step-response dead-time measurement. >0 = inject +-this many mouse counts
+    // (X) every calibrationStepPeriodMs while the log is on. Aim OFF at a
+    // stationary target; calibrate.py cross-correlates cx vs the injection to
+    // find the full emit->visible dead-time. 0 = off.
+    int calibrationStepPx = 0;
+    int calibrationStepPeriodMs = 250;
+
+    // Inference keep-warm tail. Inference normally runs ONLY while the aim key
+    // is held (saves GPU/power), so the first frame of a fresh aim pays one cold
+    // detection cycle before the crosshair reacts. This keeps inference running
+    // for N ms AFTER aiming stops, so a quick re-aim within the tail reacquires
+    // instantly (already-warm detection) at the cost of some idle GPU work.
+    //   0  = strict gate (default, max power saving, cold reacquire every aim)
+    //  >0  = keep inferring this many ms after the aim key releases
+    //  <0  = always on (never gate; no cold reacquire, full idle GPU cost)
+    int inferenceKeepwarmMs = 0;
+
     bool load(const std::string& path) {
         std::ifstream f(path);
         if (!f) return false;
@@ -245,6 +271,10 @@ struct Config {
             if (j.contains("idle_graph_precapture_enabled")) idleGraphPrecaptureEnabled = j["idle_graph_precapture_enabled"];
             if (j.contains("idle_graph_precapture_interval_ms")) idleGraphPrecaptureIntervalMs = j["idle_graph_precapture_interval_ms"];
             if (j.contains("stage_timing_enabled")) stageTimingEnabled = j["stage_timing_enabled"];
+            if (j.contains("calibration_log_path")) calibrationLogPath = j["calibration_log_path"];
+            if (j.contains("calibration_step_px")) calibrationStepPx = j["calibration_step_px"];
+            if (j.contains("calibration_step_period_ms")) calibrationStepPeriodMs = j["calibration_step_period_ms"];
+            if (j.contains("inference_keepwarm_ms")) inferenceKeepwarmMs = j["inference_keepwarm_ms"];
             preCaptureShapes.clear();
             if (j.contains("pre_capture_shapes")) {
                 for (const auto& entry : j["pre_capture_shapes"]) {
@@ -293,52 +323,38 @@ struct Config {
     bool save(const std::string& path) const {
         try {
             json j;
+            // Config is written in labelled sections. The "_section_*" keys are
+            // pure visual dividers (JSON has no comments) - the loader ignores
+            // any key it does not recognise, so they are harmless. Keys are
+            // grouped by what you tune together; see CONFIG_REFERENCE.md for a
+            // per-key description, default and typical range.
+            auto section = [&j](const char* title) {
+                j[std::string("_section_") + title] =
+                    std::string("========== ") + title + " ==========";
+            };
+
+            section("ENGINE / NETWORK");
             j["engine_path"] = enginePath;
-            j["makcu_port"] = makcuPort;
             j["udp_port"] = udpPort;
-
-            j["conf_threshold"] = confThreshold;
-            j["head_class_id"] = headClassId;
-            j["max_detections"] = maxDetections;
-
-            j["head_aim_point"] = headAimPoint;
-            j["body_aim_point"] = bodyAimPoint;
-
-            pd.save(j);
-
-            j["flick_enabled"] = flickEnabled;
-            flick.save(j);
-
-            j["no_recoil_enabled"] = noRecoilEnabled;
-            j["recoil_comp_x"] = recoilCompX;
-            j["recoil_comp_y"] = recoilCompY;
-            j["recoil_tick_ms"] = recoilTickMs;
-
-            j["shoot_offset_x"] = shootOffsetX;
-            j["shoot_offset_y"] = shootOffsetY;
-
-            j["mouse_min_interval_ms"] = mouseMinIntervalMs;
-            j["max_inflight_frames"] = maxInFlightFrames;
-            j["frame_credit_depth"] = frameCreditDepth;
-            j["direct_aim_move_in_callback"] = directAimMoveInCallback;
+            j["makcu_port"] = makcuPort;
             j["makcu_baudrate"] = makcuBaudrate;
             j["makcu_binary_move"] = makcuBinaryMove;
 
-            j["perf_stats_enabled"] = perfStatsEnabled;
-            j["perf_stats_interval_ms"] = perfStatsIntervalMs;
-            j["perf_log_path"] = perfLogPath;
-            j["perf_log_max_bytes"] = perfLogMaxBytes;
-            j["perf_log_truncate_on_start"] = perfLogTruncateOnStart;
-            j["realtime_threads_enabled"] = realtimeThreadsEnabled;
-            j["cpu_affinity_enabled"] = cpuAffinityEnabled;
-            j["affinity_core_main"] = affinityCoreMain;
-            j["affinity_core_receive"] = affinityCoreReceive;
-            j["affinity_core_callback"] = affinityCoreCallback;
-            j["affinity_core_sender"] = affinityCoreSender;
-            j["force_aim_on"] = forceAimOn;
-            j["idle_graph_precapture_enabled"] = idleGraphPrecaptureEnabled;
-            j["idle_graph_precapture_interval_ms"] = idleGraphPrecaptureIntervalMs;
-            j["stage_timing_enabled"] = stageTimingEnabled;
+            section("DETECTION");
+            j["conf_threshold"] = confThreshold;
+            j["head_class_id"] = headClassId;
+            j["max_detections"] = maxDetections;
+            {
+                json allowedList = json::array();
+                if (classAllowed.empty()) {
+                    for (int i = 0; i < maxClasses; i++) allowedList.push_back(i);
+                } else {
+                    for (size_t i = 0; i < classAllowed.size(); i++) {
+                        if (classAllowed[i]) allowedList.push_back(static_cast<int>(i));
+                    }
+                }
+                j["allowed_classes"] = allowedList;
+            }
             {
                 json shapes = json::array();
                 for (const auto& wh : preCaptureShapes) {
@@ -347,17 +363,53 @@ struct Config {
                 j["pre_capture_shapes"] = shapes;
             }
 
-            // Save allowed classes as simple list
-            json allowedList = json::array();
-            if (classAllowed.empty()) {
-                // Default: all classes allowed
-                for (int i = 0; i < maxClasses; i++) allowedList.push_back(i);
-            } else {
-                for (size_t i = 0; i < classAllowed.size(); i++) {
-                    if (classAllowed[i]) allowedList.push_back(static_cast<int>(i));
-                }
-            }
-            j["allowed_classes"] = allowedList;
+            section("AIM POINT");
+            j["head_aim_point"] = headAimPoint;
+            j["body_aim_point"] = bodyAimPoint;
+            j["shoot_offset_x"] = shootOffsetX;
+            j["shoot_offset_y"] = shootOffsetY;
+
+            section("AIM CONTROLLER + CENTER FILTER");
+            pd.save(j);  // PD gains, thumb gains, stickiness, coast, feedforward, One Euro
+
+            section("FLICK (warped-replay)");
+            j["flick_enabled"] = flickEnabled;
+            flick.save(j);
+
+            section("RECOIL COMPENSATION");
+            j["no_recoil_enabled"] = noRecoilEnabled;
+            j["recoil_comp_x"] = recoilCompX;
+            j["recoil_comp_y"] = recoilCompY;
+            j["recoil_tick_ms"] = recoilTickMs;
+
+            section("PIPELINE / LATENCY");
+            j["max_inflight_frames"] = maxInFlightFrames;
+            j["frame_credit_depth"] = frameCreditDepth;
+            j["mouse_min_interval_ms"] = mouseMinIntervalMs;
+            j["direct_aim_move_in_callback"] = directAimMoveInCallback;
+            j["inference_keepwarm_ms"] = inferenceKeepwarmMs;
+            j["idle_graph_precapture_enabled"] = idleGraphPrecaptureEnabled;
+            j["idle_graph_precapture_interval_ms"] = idleGraphPrecaptureIntervalMs;
+
+            section("SYSTEM (threads / CPU affinity)");
+            j["realtime_threads_enabled"] = realtimeThreadsEnabled;
+            j["cpu_affinity_enabled"] = cpuAffinityEnabled;
+            j["affinity_core_main"] = affinityCoreMain;
+            j["affinity_core_receive"] = affinityCoreReceive;
+            j["affinity_core_callback"] = affinityCoreCallback;
+            j["affinity_core_sender"] = affinityCoreSender;
+
+            section("DIAGNOSTICS (perf log / calibration / bench)");
+            j["perf_stats_enabled"] = perfStatsEnabled;
+            j["perf_stats_interval_ms"] = perfStatsIntervalMs;
+            j["perf_log_path"] = perfLogPath;
+            j["perf_log_max_bytes"] = perfLogMaxBytes;
+            j["perf_log_truncate_on_start"] = perfLogTruncateOnStart;
+            j["stage_timing_enabled"] = stageTimingEnabled;
+            j["force_aim_on"] = forceAimOn;
+            j["calibration_log_path"] = calibrationLogPath;
+            j["calibration_step_px"] = calibrationStepPx;
+            j["calibration_step_period_ms"] = calibrationStepPeriodMs;
 
             const auto configPath = std::filesystem::path(path);
             const auto parent = configPath.parent_path();
@@ -397,6 +449,11 @@ struct Config {
                   << (makcuBinaryMove ? "BINARY (8B frame)" : "ASCII (km.move)") << std::endl;
         std::cout << "[Config] Perf stats: " << (perfStatsEnabled ? "ON" : "OFF")
                   << " (interval=" << perfStatsIntervalMs << "ms)" << std::endl;
+        std::cout << "[Config] Inference gate: "
+                  << (inferenceKeepwarmMs < 0 ? std::string("always-on (no gate)")
+                      : inferenceKeepwarmMs == 0 ? std::string("aim-only (strict, cold reacquire)")
+                      : std::string("aim + ") + std::to_string(inferenceKeepwarmMs) + "ms keep-warm tail")
+                  << std::endl;
         std::cout << "[Config] Perf log: "
                   << (perfLogPath.empty() ? std::string("(disabled)") : perfLogPath);
         if (!perfLogPath.empty()) {
@@ -417,6 +474,15 @@ struct Config {
                   << " (interval=" << idleGraphPrecaptureIntervalMs << "ms)" << std::endl;
         std::cout << "[Config] Stage timing: "
                   << (stageTimingEnabled ? "ON" : "OFF") << std::endl;
+        std::cout << "[Config] Calibration log: ";
+        if (perfStatsEnabled || !calibrationLogPath.empty())
+            std::cout << (calibrationLogPath.empty() ? std::string("calib.csv") : calibrationLogPath)
+                      << (perfStatsEnabled && calibrationLogPath.empty() ? " (via perf_stats)" : "");
+        else
+            std::cout << "(off)";
+        if (calibrationStepPx > 0)
+            std::cout << " [step-response +-" << calibrationStepPx << " cnt/" << calibrationStepPeriodMs << "ms]";
+        std::cout << std::endl;
         std::cout << "[Config] Pre-capture shapes: ";
         if (preCaptureShapes.empty()) {
             std::cout << "(none, lazy)";
@@ -462,6 +528,58 @@ struct Config {
 // OPTIMIZATION: Cached config values eliminate pointer indirection in hot path.
 // All frequently accessed values are copied to the context struct at init time.
 
+// --- Calibration logging (opt-in, off by default) -------------------------
+// Records the raw per-frame detection so bench/calibrate.py can measure this
+// rig's real detector noise, head-selection rate, dropout and frame timing, and
+// feed them back into the sim. Buffered in memory (no hot-path file I/O),
+// written once on shutdown. Aim OFF at a stationary target -> the center
+// variance is pure detector noise.
+struct CalibRec {
+    int64_t t_us;      // since logger start
+    int64_t lat_us;    // submit->completion (inference pipeline), -1 if unknown
+    uint8_t aiming;
+    uint8_t hasTarget;
+    int   classId;
+    float conf;
+    float cx, cy, w, h;   // selected target box: centre + size (model-input px)
+    int   emitDx, emitDy; // this frame's proposed mouse move (output counts)
+    float mScaleX, mScaleY; // model-px error -> output-count scale (to undo ego)
+    long long injX;       // cumulative step-response injection at this frame
+};
+class CalibLogger {
+public:
+    explicit CalibLogger(std::string path) : path_(std::move(path)), start_(Clock::now()) {
+        recs_.reserve(200000);   // ~11 min @300fps; bounded, no realloc on the hot path
+    }
+    ~CalibLogger() { dump(); }
+    Clock::time_point start() const { return start_; }
+    void record(const CalibRec& r) {
+        std::lock_guard<std::mutex> lk(mtx_);
+        if (recs_.size() < recs_.capacity()) recs_.push_back(r);
+    }
+    void dump() {
+        std::lock_guard<std::mutex> lk(mtx_);
+        if (dumped_ || path_.empty()) return;
+        dumped_ = true;
+        std::ofstream f(path_);
+        if (!f) { std::cerr << "[Calib] cannot open " << path_ << std::endl; return; }
+        f << "t_us,lat_us,aiming,hasTarget,classId,conf,cx,cy,w,h,emit_dx,emit_dy,mscale_x,mscale_y,inject_cum_x\n";
+        for (const auto& r : recs_) {
+            f << r.t_us << ',' << r.lat_us << ',' << int(r.aiming) << ',' << int(r.hasTarget)
+              << ',' << r.classId << ',' << r.conf << ',' << r.cx << ',' << r.cy << ',' << r.w
+              << ',' << r.h << ',' << r.emitDx << ',' << r.emitDy
+              << ',' << r.mScaleX << ',' << r.mScaleY << ',' << r.injX << '\n';
+        }
+        std::cout << "[Calib] wrote " << recs_.size() << " rows to " << path_ << std::endl;
+    }
+private:
+    std::string path_;
+    std::vector<CalibRec> recs_;
+    std::mutex mtx_;
+    Clock::time_point start_;
+    bool dumped_ = false;
+};
+
 struct CallbackContext {
     // Hardware/collaborator references (only things we can't cache)
     MakcuConnection* makcu;
@@ -481,6 +599,9 @@ struct CallbackContext {
     bool flickEnabled = true;
     warped_replay::config flickConfig;
     warped_replay::FlickPlayback flickPlayback;
+
+    // Calibration logger (nullptr = off). Not owned; lives in main().
+    CalibLogger* calib = nullptr;
 
     // Initialize cached values from config
     void initFromConfig(const Config& cfg) {
@@ -573,6 +694,22 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
 
     const uint8_t callbackButtonMask = ctx->makcu->buttonMask();
     const bool aimingActive = ctx->forceAimOn || controller::maskAiming(callbackButtonMask);
+
+    // Calibration: log the raw detection BEFORE the aim/target early-returns, so
+    // a stationary-target capture with aim OFF still records every frame.
+    if (ctx->calib) {
+        const int64_t lat = (ticket->submitTime.time_since_epoch().count() != 0)
+            ? elapsedUs(ticket->submitTime, Clock::now()) : -1;
+        ctx->calib->record({elapsedUs(ctx->calib->start(), Clock::now()), lat,
+            static_cast<uint8_t>(aimingActive), static_cast<uint8_t>(result.hasTarget),
+            result.targetClassId, result.targetConf,
+            0.5f * (result.targetX1 + result.targetX2), 0.5f * (result.targetY1 + result.targetY2),
+            result.targetX2 - result.targetX1, result.targetY2 - result.targetY1,
+            result.movement.dx, result.movement.dy,
+            result.movementScaleX, result.movementScaleY,
+            g_injectCumX.load(std::memory_order_relaxed)});
+    }
+
     if (!aimingActive) {
         // Aim released mid-flick: cancel rather than leave it active. GPU-side
         // tracking (has_track) keeps running while aiming is off, so the same
@@ -883,6 +1020,20 @@ int main(int argc, char* argv[]) {
     callbackCtx.pipelineCv = &pipelineCv;
     callbackCtx.pipelineCvMutex = &pipelineCvMutex;
     callbackCtx.initFromConfig(cfg);  // Cache config values (lock-free)
+
+    // Calibration logger (opt-in). Owns the record buffer; dumps CSV on exit.
+    // Detection logging rides on perf_stats: turning on measurement turns this on
+    // too (an explicit calibration_log_path also enables it on its own). Writes
+    // to calibration_log_path, or "calib.csv" next to the binary if unset.
+    std::unique_ptr<CalibLogger> calibLogger;
+    if (cfg.perfStatsEnabled || !cfg.calibrationLogPath.empty()) {
+        const std::string calibPath =
+            cfg.calibrationLogPath.empty() ? std::string("calib.csv") : cfg.calibrationLogPath;
+        calibLogger = std::make_unique<CalibLogger>(calibPath);
+        callbackCtx.calib = calibLogger.get();
+        std::cout << "[Calib] logging detections to " << calibPath
+                  << (cfg.perfStatsEnabled ? " (via perf_stats)" : "") << std::endl;
+    }
     constexpr size_t kCallbackTicketCount = 4;
     std::array<CallbackTicket, kCallbackTicketCount> callbackTickets{};
     for (auto& ticket : callbackTickets) {
@@ -1134,6 +1285,21 @@ int main(int argc, char* argv[]) {
     // can take hundreds of ms). A frame this function can't claim right now is
     // never lost - UDPCapture's buffers are newest-wins, so the next call (from
     // either caller) simply picks up whatever is newest at that time.
+    // Keep-warm state for inference gating. Written/read only inside
+    // trySubmitLatestFrame (and its two gate sites), which is serialized by
+    // submitMutex, so no atomics needed. shouldInfer() returns whether to run
+    // inference for this frame given the live aim state and the keep-warm tail;
+    // it refreshes lastAimingActive whenever aiming is truly active.
+    Clock::time_point lastAimingActive{};
+    auto shouldInfer = [&](bool aimingNow) -> bool {
+        if (aimingNow) { lastAimingActive = Clock::now(); return true; }
+        if (cfg.inferenceKeepwarmMs < 0) return true;   // always-on
+        if (cfg.inferenceKeepwarmMs == 0) return false; // strict aim-only gate
+        if (lastAimingActive.time_since_epoch().count() == 0) return false;
+        return elapsedUs(lastAimingActive, Clock::now())
+               < static_cast<int64_t>(cfg.inferenceKeepwarmMs) * 1000;
+    };
+
     auto trySubmitLatestFrame = [&]() {
         // Refuse new GPU submissions once shutdown has begun. This is called
         // from the receive thread (via the frame-ready callback), which keeps
@@ -1152,10 +1318,11 @@ int main(int argc, char* argv[]) {
 
         if (busyCallbackTicketCount() >= maxPipelineInFlight) return;  // Full; drained on the next slot-free notify.
 
-        // Only pull a frame into the inference pipeline while actively aiming -
-        // otherwise leave it in UDPCapture's ring (saves GPU/CPU while idle).
+        // Only pull a frame into the inference pipeline while actively aiming
+        // (or within the keep-warm tail) - otherwise leave it in UDPCapture's
+        // ring (saves GPU/CPU while idle).
         const uint8_t idleButtonMask = makcu.buttonMask();
-        if (!(cfg.forceAimOn || controller::maskAiming(idleButtonMask))) return;
+        if (!shouldInfer(cfg.forceAimOn || controller::maskAiming(idleButtonMask))) return;
 
         requestFrameCredits();
 
@@ -1207,8 +1374,8 @@ int main(int argc, char* argv[]) {
         // function check above) and select the matching aim config.
         const uint8_t frameButtonMask = makcu.buttonMask();
         const bool aiming = cfg.forceAimOn || controller::maskAiming(frameButtonMask);
-        if (!aiming) {
-            // Skip inference when not aiming (save power)
+        if (!shouldInfer(aiming)) {
+            // Not aiming and past the keep-warm tail: skip inference (save power).
             udpCapture.ReleaseFrame(bufferIndex);
             return;
         }
@@ -1312,7 +1479,30 @@ int main(int argc, char* argv[]) {
     }
     std::cout << "[Simple] UDP capture started on port " << cfg.udpPort << std::endl;
 
+    // Step-response dead-time injection state (aim OFF at a stationary target).
+    Clock::time_point lastInject = Clock::now();
+    bool injectFlip = false;
+    if (cfg.calibrationStepPx > 0 && calibLogger) {
+        std::cout << "[Calib] step-response: injecting +-" << cfg.calibrationStepPx
+                  << " counts every " << cfg.calibrationStepPeriodMs
+                  << "ms (aim OFF, stationary target, room to sweep)" << std::endl;
+    }
+
     while (g_running) {
+        // Step-response: inject a known mouse pulse so cx's delayed response
+        // reveals the full emit->visible dead-time. Only when explicitly enabled,
+        // the period is valid, AND aim is OFF - injecting while the controller is
+        // also moving would corrupt the measurement and fight normal aim.
+        if (cfg.calibrationStepPx > 0 && cfg.calibrationStepPeriodMs > 0 && calibLogger &&
+            !(cfg.forceAimOn || controller::maskAiming(makcu.buttonMask())) &&
+            elapsedUs(lastInject, Clock::now()) >= static_cast<int64_t>(cfg.calibrationStepPeriodMs) * 1000) {
+            const int pulse = injectFlip ? cfg.calibrationStepPx : -cfg.calibrationStepPx;
+            makcu.move(pulse, 0);
+            g_injectCumX.fetch_add(pulse, std::memory_order_relaxed);
+            injectFlip = !injectFlip;
+            lastInject = Clock::now();
+        }
+
         // Tick: wait briefly for a pipeline slot to free (the completion
         // callback notifies pipelineCv when a ticket is released) or simply
         // time out. Either way, fall through to drain below.

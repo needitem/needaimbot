@@ -111,6 +111,7 @@ public:
         j["thumb_aim_kd_x"] = thumb.kd_x;
         j["thumb_aim_kd_y"] = thumb.kd_y;
 
+        j["_section_tracking"] = "===== Target tracking / stickiness / feedforward =====";
         j["iou_stickiness_threshold"] = iou_stickiness_threshold;
         j["distance_stickiness_factor"] = distance_stickiness_factor;
         j["track_persistence_frames"] = track_persistence_frames;
