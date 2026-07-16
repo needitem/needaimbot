@@ -39,6 +39,7 @@
     "coast_decay": 0.85,
     "feedforward_gain": 0.9,
     "feedforward_vgate": 0.0,
+    "predict_horizon": 0.0,
     "aim_max_step": 30.0,
     "_section_oneeuro": "===== One Euro center filter (jitter suppression) =====",
     "oneeuro_enabled": true,

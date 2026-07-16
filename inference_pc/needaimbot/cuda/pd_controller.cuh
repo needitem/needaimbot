@@ -169,18 +169,35 @@ __device__ __forceinline__ void computeAimMovement(
         (movement_scale_x != 0.0f) ? aim_config.shoot_offset_x / movement_scale_x : 0.0f;
     const float shoot_off_y =
         (movement_scale_y != 0.0f) ? aim_config.shoot_offset_y / movement_scale_y : 0.0f;
-    const float error_x = target_center_x - screen_center_x - shoot_off_x;
-    const float error_y = target_center_y - screen_center_y - shoot_off_y;
-    // Confidence-gated feedforward: scale the lead by how steadily the target is
-    // moving, g = speed / (speed + vgate). Near rest the (noisy) velocity is
-    // small -> g ~ 0 -> ff suppressed (kills the stationary buzz); when the
-    // target genuinely moves -> g -> 1 -> full feedforward lead. vgate <= 0
-    // disables the gate (ff stays at full gain).
-    float ff = aim_config.feedforward_gain;
+    float error_x = target_center_x - screen_center_x - shoot_off_x;
+    float error_y = target_center_y - screen_center_y - shoot_off_y;
+
+    // Velocity-confidence gate, shared by the predictor and the feedforward:
+    // g = speed / (speed + vgate). Near rest the (noisy) velocity is small
+    // -> g ~ 0 (lead suppressed, no stationary buzz); a genuinely moving target
+    // -> g -> 1 (full lead). vgate <= 0 disables the gate (g = 1).
+    float gconf = 1.0f;
     if (aim_config.feedforward_vgate > 0.0f) {
         const float speed = hypotf(aim_state->vel_x, aim_state->vel_y);
-        ff *= speed / (speed + aim_config.feedforward_vgate);
+        gconf = speed / (speed + aim_config.feedforward_vgate);
     }
+
+    // Dead-time predictor: the detection is ~pipeline_latency stale, so a moving
+    // target has already moved on. Aim at where it will be predict_horizon frames
+    // ahead = current error + velocity*horizon (gated). Shifts the SETPOINT ahead
+    // (the derivative below then rides the predicted error). Partial horizon only:
+    // extrapolating the full dead-time amplifies the X-heavy detector noise, so
+    // ~1.5 frames is the sweet spot. 0 = off. Note this OVERLAPS feedforward (both
+    // spend the velocity estimate); use the predictor with a low/zero
+    // feedforward_gain, not both at full, or the aim over-leads.
+    if (aim_config.predict_horizon > 0.0f) {
+        const float lead = aim_config.predict_horizon * gconf;
+        error_x += lead * aim_state->vel_x;
+        error_y += lead * aim_state->vel_y;
+    }
+
+    // Confidence-gated feedforward (same gate as the predictor above).
+    const float ff = aim_config.feedforward_gain * gconf;
 
     // Derivative (damping) term: react to how fast the error is shrinking and
     // push back, so a high-kp approach decelerates BEFORE it overshoots. This

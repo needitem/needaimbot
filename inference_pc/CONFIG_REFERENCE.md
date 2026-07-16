@@ -54,7 +54,8 @@
 | `coast_enabled` | true | 탐지 공백 동안 마지막 속도로 활공(coast). |
 | `coast_decay` | 0.85 | coast 속도 감쇠(1에 가까울수록 오래 미끄러짐). |
 | `feedforward_gain` | 0.9 | 타겟 속도 피드포워드(이동 예측 선행). 높이면 잘 따라가나 노이즈에 버즈↑. |
-| `feedforward_vgate` | 0.0 | **feedforward 신뢰도 게이트.** ff를 타겟 속도 확신도 `speed/(speed+vgate)`로 스케일 — 정지/지터엔 ff 억제(버즈 제거), 실제로 움직일 때만 full ff. `0`=off(항상 full), `>0`(예 5)=게이트 켬. vgate=게이트가 ~0.5 되는 속도(px/frame). 실측 X-heavy 노이즈에서 ff 버즈를 잡는 용도. |
+| `feedforward_vgate` | 0.0 | **속도 신뢰도 게이트** (feedforward와 예측기가 공유). lead를 `speed/(speed+vgate)`로 스케일 — 정지/지터엔 억제(버즈 제거), 실제로 움직일 때만 full. `0`=off(게이트 없음), `>0`(예 4)=켬. vgate=게이트가 ~0.5 되는 속도(px/frame). |
+| `predict_horizon` | 0.0 | **데드타임 예측기.** 표적을 게이트된 속도로 `predict_horizon`프레임 앞 위치로 조준 → ~파이프라인 지연(21ms) 보상, 움직이는 표적의 꼬리를 안 쫓음. `0`=off, `~1.5` 권장(전체 지연 예측은 노이즈 증폭). **feedforward와 중복**되므로 예측기 켤 땐 `feedforward_gain`을 낮추거나 0으로. sim상 "더 빠르고 더 정확"한 유일한 설정. |
 | `aim_max_step` | 30.0 | 프레임당 최대 이동(px). 급격한 튐 방지 상한. 0=무제한. |
 
 **One Euro center filter** — 탐지 중심의 고주파 지터 억제. 속도 적응형 저역통과.

@@ -92,6 +92,13 @@ struct AimConfig {
     // feedforward_vgate = px/frame speed at which the gate reaches ~0.5.
     // 0 = gate disabled (feedforward always at full gain, old behavior).
     float feedforward_vgate = 0.0f;
+    // Dead-time predictor: aim predict_horizon FRAMES ahead of the (stale)
+    // detection along the gated target velocity, to compensate the ~pipeline
+    // latency so a moving target isn't chased by its tail. Uses feedforward_vgate
+    // as its confidence gate. ~1.5 is a good value (full dead-time amplifies
+    // noise). 0 = off. Overlaps feedforward - pair a nonzero horizon with a low
+    // feedforward_gain, not both at full.
+    float predict_horizon = 0.0f;
 
     // --- One Euro adaptive low-pass on the target center ---
     // Removes detector jitter at the source: heavy smoothing when the target is
