@@ -29,6 +29,12 @@ HEADH, PERSON = 0.28, 1.8
 WHITE_X, WHITE_Y = 7.0, 6.2        # -> ~10.5/9.3 px at nsc=1.5 (matches aim-ON)
 P_HEAD = 0.09                      # real head-selection rate 8.9%
 P_DROP = 0.015                     # real dropout under continuous aim (was mis-measured 0.40)
+# Fat-tailed detector outliers (measured: kurtosis ~24, ~3-4% of frames spike
+# 15-80px in a single frame, reverting the next). This is what a low-pass filter
+# smears into a multi-frame excursion ("phantom shake") but an outlier-rejection
+# gate removes cleanly.
+P_OUTLIER = 0.035
+OUTLIER_MIN, OUTLIER_MAX = 15.0, 60.0
 
 def clamp(v, lo, hi): return lo if v < lo else hi if v > hi else v
 def nlp(e, kp, s):
@@ -145,9 +151,26 @@ class OneEuroX(OneEuro):
         self.vgate = p.get("vgate", 6.0)       # px/frame speed at which ff is ~half
         self.xcut_k = p.get("xcut_k", 1.0)     # <1 = smoother X (lower min-cutoff)
         self.ykd_k = p.get("ykd_k", 1.0)
+        self.jclamp = p.get("jump_clamp", 0.0)   # max px a detection can move the estimate/frame (0=off)
+        self.jlock = p.get("jump_lock", 0.0)      # only clamp when |error| < jlock (locked); 0 = always
 
     def step(self, rx, ry, dt=1.0):
         p = self.p; fresh = not self.has; tcx, tcy = rx, ry
+        # Jump clamp (rate limiter on the filter input): the detector noise is
+        # fat-tailed (rare 15-60px single-frame spikes), but real target motion is
+        # <~10px/frame. So limit how far ONE detection can move the estimate: normal
+        # noise and real motion (< jclamp) pass unchanged, outliers get capped. Unlike
+        # a hard reject gate this never holds stale (no false-positives), just
+        # attenuates the spike. Beats a low-pass, which smears a spike over frames.
+        if self.jclamp > 0.0 and not fresh:
+            # Only clamp when LOCKED (filtered estimate near the target). While
+            # acquiring (large error) a big jump is real motion -> don't clamp, so
+            # fast flicks/target-switches stay crisp. Once locked, a big jump is an
+            # outlier -> clamp it (kills phantom shake without lagging acquisition).
+            locked = (self.jlock <= 0.0) or (math.hypot(self.fx, self.fy) < self.jlock)
+            if locked:
+                rx = self.fx + clamp(rx - self.fx, -self.jclamp, self.jclamp)
+                ry = self.fy + clamp(ry - self.fy, -self.jclamp, self.jclamp)
         if self.filt:
             if not fresh:
                 ad = oea(p["dcut"])
@@ -302,6 +325,13 @@ def run(make, regime, seed=0, frames=1400, lat_base=1):
             detx, dety = bx, by
         # White detector noise: X-heavy per the real calibration (WHITE_X>WHITE_Y).
         rx = detx + drx + g(WHITE_X * nsc); ry = dety + dry + g(WHITE_Y * nsc)
+        # Fat-tailed detector outliers: the real aim-OFF noise is NOT gaussian
+        # (kurtosis ~24, 3-4% of frames jump 15-80px). Inject a rare large single-
+        # frame spike so the outlier-rejection gate has something real to reject.
+        if rng.random() < P_OUTLIER:
+            ang = rng.random() * 6.283
+            mag = OUTLIER_MIN + rng.random() * (OUTLIER_MAX - OUTLIER_MIN)
+            rx += mag * math.cos(ang); ry += mag * math.sin(ang)
         dtc = clamp(1 + 0.6 * g(0.5), 0.4, 2.2)
         # Dropout: on a miss the detector gives no fresh box -> feed the stale
         # previous measurement (controller must ride it out / coast).
@@ -396,6 +426,14 @@ for Rv in (8.0, 15.0, 25.0):
         for kdv in (0.2, 0.32):
             CANDS.append(("KF R%.0f Q%.1f kd%.2f" % (Rv, Qv, kdv),
                           kf(R=Rv, Q=Qv, kd=kdv, ff=0.6, gate_ff=True)))
+# 6) JUMP-CLAMP test, on the current pure-reactive config (ff=0, predict=0).
+#    Baseline = no clamp; then sweep the clamp threshold.
+CANDS.append(("REACTIVE no-clamp (current)",
+              oex(mincut=0.1, beta=0.02, kp=0.55, kd=0.2, ff=0.0, gate_ff=False)))
+for jc in (10.0, 12.0, 15.0):
+    CANDS.append(("REACTIVE + clamp%.0f" % jc,
+                  oex(mincut=0.1, beta=0.02, kp=0.55, kd=0.2, ff=0.0, gate_ff=False,
+                      jump_clamp=jc)))
 # alpha-beta family
 for al in (0.2, 0.3, 0.4):
     for ff in (0.4, 0.8):
