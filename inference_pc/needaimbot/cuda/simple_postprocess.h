@@ -84,6 +84,14 @@ struct AimConfig {
     // it does not overshoot past the target on direction changes. 0 = off,
     // 1.0 = fully cancel steady-state tracking lag for constant velocity.
     float feedforward_gain = 0.9f;
+    // Confidence gate on the feedforward term. The raw velocity estimate is
+    // noisy at rest (X-heavy ~4px detector jitter), so a fixed feedforward
+    // buzzes when the target is stationary. Scale ff by speed confidence
+    // g = speed / (speed + feedforward_vgate): ~0 at rest/jitter (ff suppressed,
+    // no buzz), ->1 when the target genuinely moves (full tracking lead).
+    // feedforward_vgate = px/frame speed at which the gate reaches ~0.5.
+    // 0 = gate disabled (feedforward always at full gain, old behavior).
+    float feedforward_vgate = 0.0f;
 
     // --- One Euro adaptive low-pass on the target center ---
     // Removes detector jitter at the source: heavy smoothing when the target is

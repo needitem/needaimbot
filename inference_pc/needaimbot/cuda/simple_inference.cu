@@ -261,6 +261,7 @@ inline bool aimConfigNearlyEqual(const AimConfig& a, const AimConfig& b) {
            nearlyEqual(a.coast_enabled, b.coast_enabled) &&
            nearlyEqual(a.coast_decay, b.coast_decay) &&
            nearlyEqual(a.feedforward_gain, b.feedforward_gain) &&
+           nearlyEqual(a.feedforward_vgate, b.feedforward_vgate) &&
            nearlyEqual(a.oneeuro_enabled, b.oneeuro_enabled) &&
            nearlyEqual(a.oneeuro_min_cutoff, b.oneeuro_min_cutoff) &&
            nearlyEqual(a.oneeuro_beta, b.oneeuro_beta) &&

@@ -41,6 +41,7 @@ public:
     bool coast_enabled = true;
     float coast_decay = 0.85f;
     float feedforward_gain = 0.9f;
+    float feedforward_vgate = 0.0f;   // 0 = off; >0 gates ff by target speed confidence
 
     // Per-frame max move (output px). 0 = disabled (unbounded).
     float max_step = 30.0f;
@@ -89,6 +90,7 @@ public:
         if (j.contains("coast_enabled")) coast_enabled = j["coast_enabled"];
         if (j.contains("coast_decay")) coast_decay = j["coast_decay"];
         if (j.contains("feedforward_gain")) feedforward_gain = j["feedforward_gain"];
+        if (j.contains("feedforward_vgate")) feedforward_vgate = j["feedforward_vgate"];
         if (j.contains("aim_max_step")) max_step = j["aim_max_step"];
 
         if (j.contains("oneeuro_enabled")) oneeuro_enabled = j["oneeuro_enabled"];
@@ -118,6 +120,7 @@ public:
         j["coast_enabled"] = coast_enabled;
         j["coast_decay"] = coast_decay;
         j["feedforward_gain"] = feedforward_gain;
+        j["feedforward_vgate"] = feedforward_vgate;
         j["aim_max_step"] = max_step;
 
         j["_section_oneeuro"] = "===== One Euro center filter (jitter suppression) =====";
@@ -140,7 +143,11 @@ public:
         std::cout << "[Config] Coast (gap glide): " << (coast_enabled ? "ON" : "OFF")
                   << " (decay=" << coast_decay << ", window=" << track_persistence_frames
                   << " frames)" << std::endl;
-        std::cout << "[Config] Velocity feedforward: " << feedforward_gain << std::endl;
+        std::cout << "[Config] Velocity feedforward: " << feedforward_gain
+                  << (feedforward_vgate > 0.0f
+                          ? " (confidence-gated, vgate=" + std::to_string(feedforward_vgate) + ")"
+                          : " (ungated)")
+                  << std::endl;
         std::cout << "[Config] Aim max step: " << max_step
                   << (max_step > 0.0f ? " px/frame" : " (disabled)") << std::endl;
         std::cout << "[Config] One Euro center filter: " << (oneeuro_enabled ? "ON" : "OFF")
@@ -165,6 +172,7 @@ private:
         aim.coast_enabled = coast_enabled ? 1.0f : 0.0f;
         aim.coast_decay = coast_decay;
         aim.feedforward_gain = feedforward_gain;
+        aim.feedforward_vgate = feedforward_vgate;
         aim.oneeuro_enabled = oneeuro_enabled ? 1.0f : 0.0f;
         aim.oneeuro_min_cutoff = oneeuro_min_cutoff;
         aim.oneeuro_beta = oneeuro_beta;
