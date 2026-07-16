@@ -1,7 +1,6 @@
 #pragma once
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
-#include <curand_kernel.h>
 #include <cstdint>
 
 namespace gpa {

@@ -157,7 +157,6 @@ struct DebugFrameDumper {
     bool enabled = false;
     std::filesystem::path outputPath;
     Clock::time_point nextCaptureTime{};
-    uint64_t savedFrames = 0;
     bool reportedSaveError = false;
     // Static shoot-offset aim-shift, mirrored here so the shifted aim point can
     // be burned into the dump alongside the frame-center crosshair.
@@ -181,7 +180,6 @@ struct DebugFrameDumper {
 
         if (writeRgbBmp(outputPath, static_cast<const uint8_t*>(rgbData), width, height,
                         shootOffsetX, shootOffsetY)) {
-            ++savedFrames;
             reportedSaveError = false;
             (void)frameId;
         } else if (!reportedSaveError) {

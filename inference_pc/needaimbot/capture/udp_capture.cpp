@@ -478,8 +478,6 @@ int64_t UDPCapture::GetClockOffsetMicros(bool* valid) const {
 }
 
 bool UDPCapture::Initialize(unsigned short listenPort) {
-    m_listenPort = listenPort;
-
 #ifdef _WIN32
     WSADATA wsaData;
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
@@ -841,9 +839,11 @@ void UDPCapture::receiveThread() {
         const size_t offset = payloadOffset;
         if (offset >= frameSize) return;
 
-        const size_t expectedChunkSize = static_cast<size_t>(chunkSize);
+        // Bounds-check the chunk against the destination buffer (capacity ==
+        // frameSize). frameSize - offset is safe: offset < frameSize above. This
+        // rejects a malformed/oversized chunk that would memcpy past the buffer.
         const size_t requestedSize = static_cast<size_t>(chunkSize);
-        if (requestedSize != expectedChunkSize) return;
+        if (requestedSize == 0 || requestedSize > frameSize - offset) return;
 
         uint8_t* dst = m_pinnedFrameBuffer[frag->bufferIndex];
         if (!dst) return;

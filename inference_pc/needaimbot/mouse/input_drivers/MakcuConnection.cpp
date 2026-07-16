@@ -329,24 +329,6 @@ bool MakcuConnection::writeAsync(const void* data, DWORD size) {
     return true;
 }
 
-bool MakcuConnection::readAsync(void* buffer, DWORD size, DWORD* bytesRead) {
-    if (!is_open_ || serial_handle_ == INVALID_HANDLE_VALUE) return false;
-    ResetEvent(read_overlapped_.hEvent);
-    BOOL result = ReadFile(serial_handle_, buffer, size, bytesRead, &read_overlapped_);
-    if (!result) {
-        DWORD error = GetLastError();
-        if (error == ERROR_IO_PENDING) {
-            if (waitForAsyncOperation(&read_overlapped_, 50)) {
-                GetOverlappedResult(serial_handle_, &read_overlapped_, bytesRead, FALSE);
-                return true;
-            }
-            return false;
-        }
-        return false;
-    }
-    return true;
-}
-
 bool MakcuConnection::waitForAsyncOperation(OVERLAPPED* overlapped, DWORD timeout_ms) {
     DWORD result = WaitForSingleObject(overlapped->hEvent, timeout_ms);
     if (result == WAIT_OBJECT_0) {

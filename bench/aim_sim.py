@@ -355,16 +355,15 @@ class HeadBodyDetector:
     measure(body_cx, body_cy) -> selected aim center (head or body), or None if
     NEITHER box is detected this frame. body_cy is the body aim-point Y; the head
     aim point is HB_OFFSET above it (smaller Y)."""
-    def __init__(self, rng, p_head=0.80, p_body=0.97, sticky=0.5,
+    def __init__(self, rng, p_head=0.80, p_body=0.97,
                  head_white=1.2, head_boxy=3.0, body_white=0.8, body_boxy=1.5,
                  drift=1.2, drift_rho=0.9):
         self.rng = rng
-        self.p_head, self.p_body, self.sticky = p_head, p_body, sticky
+        self.p_head, self.p_body = p_head, p_body
         self.hw, self.hby_s, self.bw, self.bby_s = head_white, head_boxy, body_white, body_boxy
         self.drift, self.rho = drift, drift_rho
         self.dx = self.dy = 0.0        # shared low-freq drift (both boxes breathe together)
         self.hby = self.bby = 0.0      # per-box Y edge jitter (AR1)
-        self.on_head = False           # current lock (for stickiness hysteresis)
 
     def _ar1(self, prev, rho, sig):
         return rho*prev + self.rng.gauss(0.0, sig*math.sqrt(max(1e-9, 1.0 - rho*rho)))
@@ -374,16 +373,13 @@ class HeadBodyDetector:
         self.dy = self._ar1(self.dy, self.rho, self.drift)
         head_seen = self.rng.random() < self.p_head
         body_seen = self.rng.random() < self.p_body
-        # Head priority with mild stickiness: once on the head, a lone missed head
-        # frame does not immediately drop to body if body isn't clearly better.
-        use_head = head_seen
-        if use_head:
-            self.on_head = True
+        # Head priority: use the head box whenever it is detected this frame,
+        # otherwise fall back to the body box.
+        if head_seen:
             self.hby = self._ar1(self.hby, 0.6, self.hby_s)
             hx = body_cx + self.dx + self.rng.gauss(0.0, self.hw)
             hy = (body_cy - HB_OFFSET) + self.dy + self.hby + self.rng.gauss(0.0, self.hw)
             return (hx, hy)
-        self.on_head = False
         if body_seen:
             self.bby = self._ar1(self.bby, 0.6, self.bby_s)
             bx = body_cx + self.dx + self.rng.gauss(0.0, self.bw)

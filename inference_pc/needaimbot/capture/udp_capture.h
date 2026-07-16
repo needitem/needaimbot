@@ -212,7 +212,6 @@ private:
     size_t m_activeFragmentCount = 0;
 
     SOCKET m_recvSocket = INVALID_SOCKET;
-    unsigned short m_listenPort = 5007;
 
     std::thread m_recvThread;
     int m_receiveAffinityCore = kAffinityUnset;  // see SetReceiveAffinity()

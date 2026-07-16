@@ -33,7 +33,6 @@ public:
     // Safe to call any time; the listening parser also frame-skips binary
     // responses once this is on. Set before heavy movement starts.
     void setBinaryMove(bool on) { binary_move_.store(on, std::memory_order_relaxed); }
-    bool binaryMove() const { return binary_move_.load(std::memory_order_relaxed); }
     uint8_t buttonMask() const { return button_mask_.load(std::memory_order_acquire); }
     uint64_t buttonSequence() const { return button_sequence_.load(std::memory_order_acquire); }
     bool waitForButtonEvent(uint64_t last_sequence, int timeout_ms);
@@ -57,7 +56,6 @@ private:
     bool configureTimeouts();
     void safeMakcuClose();
     bool writeAsync(const void* data, DWORD size);
-    bool readAsync(void* buffer, DWORD size, DWORD* bytesRead);
     bool waitForAsyncOperation(OVERLAPPED* overlapped, DWORD timeout_ms = 100);
 
     HANDLE serial_handle_;
