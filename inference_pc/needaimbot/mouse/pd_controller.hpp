@@ -43,9 +43,6 @@ public:
     float feedforward_gain = 0.9f;
     float feedforward_vgate = 0.0f;   // 0 = off; >0 gates ff by target speed confidence
     float predict_horizon = 0.0f;     // 0 = off; frames to aim ahead (dead-time comp), ~1.5
-    float conf_weight_lo = 0.0f;      // conf-weighted filtering: barely-trusted conf (~0.35)
-    float conf_weight_hi = 0.0f;      // fully-trusted conf (~0.60); hi>lo to enable
-    float conf_weight_min = 0.15f;    // floor so sustained low-conf doesn't freeze
 
     // Per-frame max move (output px). 0 = disabled (unbounded).
     float max_step = 30.0f;
@@ -96,9 +93,6 @@ public:
         if (j.contains("feedforward_gain")) feedforward_gain = j["feedforward_gain"];
         if (j.contains("feedforward_vgate")) feedforward_vgate = j["feedforward_vgate"];
         if (j.contains("predict_horizon")) predict_horizon = j["predict_horizon"];
-        if (j.contains("conf_weight_lo")) conf_weight_lo = j["conf_weight_lo"];
-        if (j.contains("conf_weight_hi")) conf_weight_hi = j["conf_weight_hi"];
-        if (j.contains("conf_weight_min")) conf_weight_min = j["conf_weight_min"];
         if (j.contains("aim_max_step")) max_step = j["aim_max_step"];
 
         if (j.contains("oneeuro_enabled")) oneeuro_enabled = j["oneeuro_enabled"];
@@ -130,9 +124,6 @@ public:
         j["feedforward_gain"] = feedforward_gain;
         j["feedforward_vgate"] = feedforward_vgate;
         j["predict_horizon"] = predict_horizon;
-        j["conf_weight_lo"] = conf_weight_lo;
-        j["conf_weight_hi"] = conf_weight_hi;
-        j["conf_weight_min"] = conf_weight_min;
         j["aim_max_step"] = max_step;
 
         j["_section_oneeuro"] = "===== One Euro center filter (jitter suppression) =====";
@@ -165,11 +156,6 @@ public:
                           ? "ON (aim " + std::to_string(predict_horizon) + " frames ahead)"
                           : "OFF")
                   << std::endl;
-        std::cout << "[Config] Confidence-weighted filter: "
-                  << (conf_weight_hi > conf_weight_lo
-                          ? "ON (lo=" + std::to_string(conf_weight_lo) + " hi=" + std::to_string(conf_weight_hi) + ")"
-                          : "OFF")
-                  << std::endl;
         std::cout << "[Config] Aim max step: " << max_step
                   << (max_step > 0.0f ? " px/frame" : " (disabled)") << std::endl;
         std::cout << "[Config] One Euro center filter: " << (oneeuro_enabled ? "ON" : "OFF")
@@ -196,9 +182,6 @@ private:
         aim.feedforward_gain = feedforward_gain;
         aim.feedforward_vgate = feedforward_vgate;
         aim.predict_horizon = predict_horizon;
-        aim.conf_weight_lo = conf_weight_lo;
-        aim.conf_weight_hi = conf_weight_hi;
-        aim.conf_weight_min = conf_weight_min;
         aim.oneeuro_enabled = oneeuro_enabled ? 1.0f : 0.0f;
         aim.oneeuro_min_cutoff = oneeuro_min_cutoff;
         aim.oneeuro_beta = oneeuro_beta;

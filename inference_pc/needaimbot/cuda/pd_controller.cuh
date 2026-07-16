@@ -93,17 +93,16 @@ __device__ __forceinline__ void computeAimMovement(
     float movement_scale_x, float movement_scale_y,
     const AimConfig& aim_config,
     AimState* aim_state,
-    int& out_dx, int& out_dy,
-    float detection_conf) {
-    // Confidence weight for the One Euro update: low-conf detections (outliers)
-    // barely move the estimate, high-conf ones pass crisp. cw in [min, 1].
-    // Disabled (cw = 1) unless conf_weight_hi > conf_weight_lo.
-    float conf_weight = 1.0f;
-    if (aim_config.conf_weight_hi > aim_config.conf_weight_lo) {
-        const float span = aim_config.conf_weight_hi - aim_config.conf_weight_lo;
-        conf_weight = (detection_conf - aim_config.conf_weight_lo) / span;
-        conf_weight = fminf(fmaxf(conf_weight, aim_config.conf_weight_min), 1.0f);
-    }
+    int& out_dx, int& out_dy) {
+    // NOTE: confidence-weighted filtering was tried and removed. The idea was to
+    // down-weight low-confidence detections (outliers) in the One Euro update. It
+    // works in sim but NOT on hardware: a real MOVING target has low confidence too
+    // (motion blur drops it to ~0.4-0.5, overlapping the ~0.38 outlier level), so
+    // weighting by confidence suppresses real moving-target frames -> the aim tracks
+    // a moving target in visible steps ("툭툭툭") instead of smoothly. Confidence
+    // cannot distinguish a blurred real target from an outlier. Do not reintroduce a
+    // plain conf weight; if outlier rejection is wanted, gate it on LOW target
+    // velocity (only suppress while locked/stationary, never while tracking).
     // Was this target already being tracked last frame? Captured before
     // has_track is overwritten below; used to seed the One Euro filter and
     // reset the error derivative on a fresh acquire (avoids a derivative kick).
@@ -122,14 +121,14 @@ __device__ __forceinline__ void computeAimMovement(
             aim_state->dfilt_x = ad * de_x + (1.0f - ad) * aim_state->dfilt_x;
             const float cutoff_x =
                 aim_config.oneeuro_min_cutoff + aim_config.oneeuro_beta * fabsf(aim_state->dfilt_x);
-            const float ax = oneEuroAlpha(cutoff_x) * conf_weight;
+            const float ax = oneEuroAlpha(cutoff_x);
             aim_state->filt_x = ax * raw_center_x + (1.0f - ax) * aim_state->filt_x;
 
             const float de_y = raw_center_y - aim_state->filt_y;
             aim_state->dfilt_y = ad * de_y + (1.0f - ad) * aim_state->dfilt_y;
             const float cutoff_y =
                 aim_config.oneeuro_min_cutoff + aim_config.oneeuro_beta * fabsf(aim_state->dfilt_y);
-            const float ay = oneEuroAlpha(cutoff_y) * conf_weight;
+            const float ay = oneEuroAlpha(cutoff_y);
             aim_state->filt_y = ay * raw_center_y + (1.0f - ay) * aim_state->filt_y;
         } else {
             aim_state->filt_x = raw_center_x;
