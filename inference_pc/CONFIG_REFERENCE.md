@@ -13,7 +13,6 @@
 | `udp_port` | 5007 | game_pc가 캡처 프레임을 보내는 UDP 포트. game_pc 송신 포트와 일치해야 함. |
 | `makcu_port` | /dev/ttyACM0 | MAKCU 마우스 디바이스 시리얼 포트. |
 | `makcu_baudrate` | 4000000 | MAKCU 보드레이트. 펌웨어와 일치해야 함. |
-| `makcu_binary_move` | false | true=8바이트 바이너리 move 프레임, false=ASCII `km.move`. 바이너리가 약간 빠름. |
 
 ## DETECTION
 | 키 | 기본 | 의미 |

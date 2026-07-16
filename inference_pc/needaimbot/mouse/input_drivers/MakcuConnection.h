@@ -27,12 +27,16 @@ public:
     ~MakcuConnection();
 
     bool isOpen() const;
+    // move() always uses the ASCII "km.move(x,y)\r\n" encoding. The MAKCU binary
+    // move frame was tried and deliberately dropped: every binary setter echoes
+    // an ACK frame ([0x50][0x0D]...) back on the shared serial line, and at aiming
+    // rates (~144 Hz) that flood starves/desyncs the button-mask parser so aim-key
+    // presses (Side2 thumb, right-click) get dropped. ASCII echoes are printable
+    // and skipped cleanly, so ASCII is the only supported encoding. Do NOT add a
+    // binary path back without also solving the RX-flood problem (e.g. km.echo(0),
+    // which on the test firmware did not reliably fix it). ~20us serial savings
+    // are not worth the button-reliability risk.
     void move(int x, int y);
-    // Selects the wire encoding for move(): false = ASCII "km.move(x,y)\r\n"
-    // (default, proven), true = MAKCU binary frame [0x50][0x0D][len][dx:i16][dy:i16].
-    // Safe to call any time; the listening parser also frame-skips binary
-    // responses once this is on. Set before heavy movement starts.
-    void setBinaryMove(bool on) { binary_move_.store(on, std::memory_order_relaxed); }
     uint8_t buttonMask() const { return button_mask_.load(std::memory_order_acquire); }
     uint64_t buttonSequence() const { return button_sequence_.load(std::memory_order_acquire); }
     bool waitForButtonEvent(uint64_t last_sequence, int timeout_ms);
@@ -71,7 +75,6 @@ private:
 
     std::atomic<bool> is_open_;
     std::atomic<bool> listening_;
-    std::atomic<bool> binary_move_{false};
     std::atomic<uint8_t> button_mask_{0};
     std::atomic<uint64_t> button_sequence_{0};
     std::thread listening_thread_;

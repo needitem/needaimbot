@@ -4,7 +4,6 @@
     "udp_port": 5007,
     "makcu_port": "/dev/ttyACM0",
     "makcu_baudrate": 4000000,
-    "makcu_binary_move": false,
 
     "_section_DETECTION": "========== DETECTION ==========",
     "conf_threshold": 0.2,

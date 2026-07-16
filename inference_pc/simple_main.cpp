@@ -155,10 +155,6 @@ struct Config {
 
     // Makcu settings
     int makcuBaudrate = 4000000;
-    // Wire encoding for mouse moves: false = ASCII km.move (proven default),
-    // true = MAKCU binary frame (8B vs ~14B). Opt-in; validate on real hardware
-    // before trusting it - see MakcuConnection::setBinaryMove.
-    bool makcuBinaryMove = false;
 
     // CPU core affinity (latency stability). When disabled, the receive and
     // callback threads keep their built-in default pinning (last / last-1 core)
@@ -255,7 +251,6 @@ struct Config {
             if (j.contains("frame_credit_depth")) frameCreditDepth = j["frame_credit_depth"];
             if (j.contains("direct_aim_move_in_callback")) directAimMoveInCallback = j["direct_aim_move_in_callback"];
             if (j.contains("makcu_baudrate")) makcuBaudrate = j["makcu_baudrate"];
-            if (j.contains("makcu_binary_move")) makcuBinaryMove = j["makcu_binary_move"];
 
             if (j.contains("perf_stats_enabled")) perfStatsEnabled = j["perf_stats_enabled"];
             if (j.contains("perf_stats_interval_ms")) perfStatsIntervalMs = j["perf_stats_interval_ms"];
@@ -340,7 +335,6 @@ struct Config {
             j["udp_port"] = udpPort;
             j["makcu_port"] = makcuPort;
             j["makcu_baudrate"] = makcuBaudrate;
-            j["makcu_binary_move"] = makcuBinaryMove;
 
             section("DETECTION");
             j["conf_threshold"] = confThreshold;
@@ -448,8 +442,6 @@ struct Config {
         std::cout << "[Config] Frame credit depth: " << frameCreditDepth << std::endl;
         std::cout << "[Config] Direct aim move in callback: "
                   << (directAimMoveInCallback ? "ON" : "OFF") << std::endl;
-        std::cout << "[Config] Makcu move encoding: "
-                  << (makcuBinaryMove ? "BINARY (8B frame)" : "ASCII (km.move)") << std::endl;
         std::cout << "[Config] Perf stats: " << (perfStatsEnabled ? "ON" : "OFF")
                   << " (interval=" << perfStatsIntervalMs << "ms)" << std::endl;
         std::cout << "[Config] Inference gate: "
@@ -952,9 +944,8 @@ int main(int argc, char* argv[]) {
                   << " (baudrate: " << cfg.makcuBaudrate << ")" << std::endl;
         return 1;
     }
-    makcu.setBinaryMove(cfg.makcuBinaryMove);
     std::cout << "[Simple] Makcu connected at " << cfg.makcuBaudrate << " baud"
-              << " (move encoding: " << (cfg.makcuBinaryMove ? "binary" : "ASCII") << ")"
+              << " (move encoding: ASCII km.move)"
               << std::endl;
 
     // 3. Initialize UDP capture

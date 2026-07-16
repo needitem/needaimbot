@@ -668,36 +668,15 @@ size_t buildMoveCommand(char* out, int x, int y) {
     return static_cast<size_t>(p - out);
 }
 
-// MAKCU binary relative-move frame:
-//   [0x50][0x0D][LEN_LO][LEN_HI][dx:i16 LE][dy:i16 LE]   (LEN = 4)
-// dx/dy are little-endian signed 16-bit; segments/control-point payload bytes
-// are omitted (LEN stays 4), giving a plain relative move. 8 bytes vs the
-// ~13-16 the ASCII form takes. Ref: makcu.com/en/api binary-protocol-format.
-size_t buildBinaryMoveCommand(char* out, int x, int y) {
-    // Clamp to i16 so a stray oversized delta can't wrap into garbage. Callers
-    // that clamp to +-127 (the sender loop) are already well inside this.
-    if (x > 32767) x = 32767; else if (x < -32767) x = -32767;
-    if (y > 32767) y = 32767; else if (y < -32767) y = -32767;
-    const uint16_t dx = static_cast<uint16_t>(static_cast<int16_t>(x));
-    const uint16_t dy = static_cast<uint16_t>(static_cast<int16_t>(y));
-    out[0] = static_cast<char>(0x50);
-    out[1] = static_cast<char>(0x0D);
-    out[2] = static_cast<char>(0x04);
-    out[3] = static_cast<char>(0x00);
-    out[4] = static_cast<char>(dx & 0xFF);
-    out[5] = static_cast<char>((dx >> 8) & 0xFF);
-    out[6] = static_cast<char>(dy & 0xFF);
-    out[7] = static_cast<char>((dy >> 8) & 0xFF);
-    return 8;
-}
 } // namespace
 
+// ASCII "km.move(x,y)\r\n" only. The MAKCU binary move frame is intentionally NOT
+// used - its per-move ACK echo floods the shared serial RX at aiming rates and
+// drops button-mask events (thumb/right-click aim keys). See MakcuConnection.h.
 void MakcuConnection::move(int x, int y) {
     if (x == 0 && y == 0) return;
     char command[32];
-    const size_t cmdSize = binary_move_.load(std::memory_order_relaxed)
-        ? buildBinaryMoveCommand(command, x, y)
-        : buildMoveCommand(command, x, y);
+    const size_t cmdSize = buildMoveCommand(command, x, y);
     if (!sendCommandFast(command, cmdSize)) {
         // Fallback to blocking path to avoid silently dropping movement packets.
         sendCommand(command, cmdSize);
@@ -796,16 +775,6 @@ void MakcuConnection::listeningThreadFunc() {
     char read_buf[256];
     uint8_t last_mask = 0;
 
-    // Binary-move response de-framing. When binary moves are enabled the device
-    // may echo [0x50][CMD][LEN_LO][LEN_HI][payload...] frames on this same
-    // stream; their low payload bytes (e.g. a 0x01 status) would otherwise be
-    // misread as button masks -> phantom clicks. This tiny state machine
-    // consumes such frames whole. State persists across read() boundaries since
-    // a frame can split. Inert while binary mode is off (byte-identical to the
-    // original parser).
-    enum RespState { R_IDLE, R_CMD, R_LEN_LO, R_LEN_HI, R_PAYLOAD };
-    RespState rstate = R_IDLE;
-    uint16_t rpayload = 0;
 
     while (listening_) {
         if (!is_open_ || serial_fd_ < 0) {
@@ -831,27 +800,11 @@ void MakcuConnection::listeningThreadFunc() {
         // Read incoming data - button events come as single bytes (mask value)
         ssize_t n = ::read(serial_fd_, read_buf, sizeof(read_buf));
         if (n > 0) {
-            const bool binaryMode = binary_move_.load(std::memory_order_relaxed);
-            // Process each byte - look for button mask values
+            // Process each byte - look for button mask values. ASCII move only,
+            // so device output is just button masks (0x00-0x1F) plus printable
+            // echo/prompt text, which is skipped below.
             for (ssize_t i = 0; i < n; i++) {
                 uint8_t byte = static_cast<uint8_t>(read_buf[i]);
-
-                if (binaryMode) {
-                    // Mid-frame: consume this byte as part of a binary response.
-                    if (rstate != R_IDLE) {
-                        switch (rstate) {
-                            case R_CMD:     rstate = R_LEN_LO; break;
-                            case R_LEN_LO:  rpayload = byte; rstate = R_LEN_HI; break;
-                            case R_LEN_HI:  rpayload |= static_cast<uint16_t>(byte) << 8;
-                                            rstate = (rpayload > 0) ? R_PAYLOAD : R_IDLE; break;
-                            case R_PAYLOAD: if (--rpayload == 0) rstate = R_IDLE; break;
-                            default:        rstate = R_IDLE; break;
-                        }
-                        continue;
-                    }
-                    // Frame start: begin consuming CMD/LEN/payload.
-                    if (byte == 0x50) { rstate = R_CMD; continue; }
-                }
 
                 // Skip printable ASCII chars (echo, prompt)
                 if (byte >= 0x20 && byte <= 0x7E) continue;
