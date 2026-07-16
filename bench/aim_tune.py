@@ -188,6 +188,62 @@ class OneEuroX(OneEuro):
         if st > 30: k = 30 / st; mx *= k; my *= k
         return mx, my
 
+class KalmanCV:
+    """Constant-velocity Kalman on the measured target offset (rx,ry), then the
+    same nonlinear P + D + (gated) feedforward as OneEuro. Unlike the hand-tuned
+    One Euro cutoffs, the Kalman gain is DERIVED from the measured noise: R = the
+    real detector variance (px^2), Q = how much the target can accelerate. This is
+    the optimal linear estimator for the noise we actually measured - the test of
+    whether hand-tuning left anything on the table."""
+    def __init__(self, p):
+        self.p = p
+        self.R = p.get("R", 15.0)          # measurement variance px^2 (~3.9px sigma)
+        self.q = p.get("Q", 0.5)           # process (accel) noise
+        self.gate_ff = p.get("gate_ff", True)
+        self.vgate = p.get("vgate", 6.0)
+        self.reset()
+    def reset(self):
+        self.has = False
+        self.sx = [0.0, 0.0]; self.sy = [0.0, 0.0]         # [pos, vel] per axis
+        self.Px = [[1e3, 0.0], [0.0, 1e3]]; self.Py = [[1e3, 0.0], [0.0, 1e3]]
+        self.pex = self.pey = self.dex = self.dey = self.ax = self.ay = 0.0
+    def set_applied(self, dx, dy): pass   # ego off (blows up under real noise)
+    def _kf(self, P, s, meas, dt):
+        s[0] += s[1] * dt                                  # predict pos
+        q = self.q
+        P00 = P[0][0] + dt*(P[1][0]+P[0][1]) + dt*dt*P[1][1] + q*dt*dt*dt/3.0
+        P01 = P[0][1] + dt*P[1][1] + q*dt*dt/2.0
+        P10 = P[1][0] + dt*P[1][1] + q*dt*dt/2.0
+        P11 = P[1][1] + q*dt
+        S = P00 + self.R                                   # innovation cov
+        K0 = P00 / S; K1 = P10 / S
+        r = meas - s[0]
+        s[0] += K0 * r; s[1] += K1 * r
+        P[0][0] = (1-K0)*P00; P[0][1] = (1-K0)*P01
+        P[1][0] = P10 - K1*P00; P[1][1] = P11 - K1*P01
+        return s[0], s[1]
+    def step(self, rx, ry, dt=1.0):
+        p = self.p; fresh = not self.has
+        if fresh:
+            self.sx = [rx, 0.0]; self.sy = [ry, 0.0]; self.has = True
+            self.pex, self.pey = rx, ry; self.dex = self.dey = 0.0
+            fx, vx, fy, vy = rx, 0.0, ry, 0.0
+        else:
+            fx, vx = self._kf(self.Px, self.sx, rx, dt)
+            fy, vy = self._kf(self.Py, self.sy, ry, dt)
+        ex, ey = fx, fy
+        dex = clamp(ex - self.pex, -150, 150); dey = clamp(ey - self.pey, -150, 150)
+        if fresh: self.dex = self.dey = 0.0
+        else:
+            self.dex = 0.6*dex + 0.4*self.dex; self.dey = 0.6*dey + 0.4*self.dey
+        self.pex, self.pey = ex, ey
+        spd = math.hypot(vx, vy); g = spd/(spd+self.vgate) if self.gate_ff else 1.0
+        mx = nlp(ex, p["kp"], p["soft"]) + p["kd"]*self.dex + p["ff"]*vx*g
+        my = nlp(ey, p["kp"]*1.1, p["soft"]*0.9) + p["kd"]*1.2*self.dey + p["ff"]*vy*g
+        st = math.hypot(mx, my)
+        if st > 30: k = 30/st; mx *= k; my *= k
+        return mx, my
+
 def project(az, el, yaw, pitch):
     d = math.atan2(math.sin(az - yaw), math.cos(az - yaw))
     return FOCAL * math.tan(d), -FOCAL * math.tan(el - pitch)
@@ -293,6 +349,9 @@ def oex(**kw):
                filt=True, ego=False, gate_ff=False, predict=0.0, vgate=6.0,
                xcut_k=1.0, ykd_k=1.0)
     base.update(kw); return lambda b=base: OneEuroX(b)
+def kf(**kw):
+    base = dict(R=15.0, Q=0.5, kp=0.5, soft=11, kd=0.3, ff=0.6, gate_ff=True, vgate=6.0)
+    base.update(kw); return lambda b=base: KalmanCV(b)
 
 CANDS = []
 # One Euro + PD + ff family (the shipped architecture) — sweep the levers
@@ -330,6 +389,12 @@ for pr in (1.5, 3.0):
     CANDS.append(("X combo h%.1f xcut0.6" % pr,
                   oex(mincut=0.12, beta=0.04, kp=0.5, kd=0.32, ff=0.0, predict=pr,
                       gate_ff=True, xcut_k=0.6, vgate=6.0)))
+# 5) Kalman constant-velocity (R from real noise, Q swept) - optimal estimator test
+for Rv in (8.0, 15.0, 25.0):
+    for Qv in (0.3, 0.8, 2.0):
+        for kdv in (0.2, 0.32):
+            CANDS.append(("KF R%.0f Q%.1f kd%.2f" % (Rv, Qv, kdv),
+                          kf(R=Rv, Q=Qv, kd=kdv, ff=0.6, gate_ff=True)))
 # alpha-beta family
 for al in (0.2, 0.3, 0.4):
     for ff in (0.4, 0.8):
@@ -378,4 +443,29 @@ if __name__ == "__main__":
         print("%-32s | %5.1f | %5.1f | %5.2f | %3.0f" % (name, score(m), m["rise"], m["hold"], m["tw"]))
     print("  (want: One Euro+PD LOWEST of these three)\n")
     sweep(1, "OPTIMISTIC latency (inference only, 5-7 ms)")
-    sweep(3, "REALISTIC 2-PC round trip (capture+net+infer+MAKCU+render)")
+    rows3 = sweep(3, "REALISTIC 2-PC round trip (capture+net+infer+MAKCU+render)")
+
+    # -------- Pareto frontier: FASTER (low rise) AND MORE ACCURATE (low error) --------
+    # accuracy = mean of hold (rest RMS) and track (moving RMS); speed = rise.
+    # A config is Pareto-optimal if nothing is both faster AND more accurate.
+    print("== PARETO: faster (rise) AND more accurate (err) - realistic latency ==")
+    pts = [(name, m["rise"], 0.5*(m["hold"] + m["track"])) for _, name, m in rows3]
+    dominated = set()
+    for i, (_, r1, a1) in enumerate(pts):
+        for j, (_, r2, a2) in enumerate(pts):
+            if j != i and r2 <= r1 and a2 <= a1 and (r2 < r1 or a2 < a1):
+                dominated.add(i); break
+    front = [pts[i] for i in range(len(pts)) if i not in dominated]
+    front.sort(key=lambda x: x[1])
+    hd = "%-30s | %6s | %8s" % ("Pareto-optimal (non-dominated)", "rise", "err")
+    print(hd); print("-" * len(hd))
+    for name, r, a in front:
+        print("%-30s | %6.1f | %8.2f" % (name, r, a))
+    # where does the shipped One Euro+PD sit?
+    shipped = evalcfg(oe(mincut=0.1, beta=0.02, kp=0.55, kd=0.2, ff=0.9), 3)
+    sr, sa = shipped["rise"], 0.5*(shipped["hold"] + shipped["track"])
+    beats = [n for n, r, a in pts if r <= sr and a <= sa and (r < sr or a < sa)]
+    print("\n  shipped One Euro+PD: rise=%.1f err=%.2f" % (sr, sa))
+    print("  configs that DOMINATE shipped (faster AND more accurate): %d" % len(beats))
+    for n in beats[:6]:
+        print("    - %s" % n)
