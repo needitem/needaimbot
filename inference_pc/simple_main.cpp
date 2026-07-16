@@ -515,9 +515,7 @@ struct Config {
     }
 };
 
-// =============================================================================
 // GPU Callback Handler
-// =============================================================================
 // This callback runs from the completion worker when GPU inference finishes.
 // It only decides *whether* to move (aiming active + target present) and then
 // hands the raw (dx, dy) off to the controller, which owns everything about
@@ -601,7 +599,6 @@ struct CallbackContext {
     // Calibration logger (nullptr = off). Not owned; lives in main().
     CalibLogger* calib = nullptr;
 
-    // Initialize cached values from config
     void initFromConfig(const Config& cfg) {
         forceAimOn = cfg.forceAimOn;
         perfStatsEnabled = cfg.perfStatsEnabled;

@@ -7,9 +7,7 @@ namespace gpa {
 
 struct Detection;  // Forward declaration
 
-// =============================================================================
 // GPU State Structures
-// =============================================================================
 
 // P controller state (GPU persistent)
 struct AimState {
@@ -109,18 +107,13 @@ struct AimConfig {
     float shoot_offset_y = 0.0f;
 };
 
-// Mouse movement output
 struct MouseMovement {
     int dx = 0;
     int dy = 0;
 };
 
-// =============================================================================
-// Combined Inference Result (for single D2H transfer optimization)
-// =============================================================================
-
-// All inference outputs packed into single struct for one cudaMemcpy
-// This reduces D2H transfer overhead from 3 copies to 1
+// All inference outputs packed into one struct for a single D2H copy
+// (cuts the transfer from 3 copies to 1).
 struct InferenceResult {
     MouseMovement movement;     // 8 bytes: dx, dy
     int hasTarget;              // 4 bytes: 1 if target found, 0 otherwise

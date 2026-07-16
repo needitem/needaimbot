@@ -29,9 +29,7 @@
     #define TRT_USE_NEW_API 0
 #endif
 
-// =============================================================================
 // RGB Preprocessing Kernels (RGB -> CHW normalized)
-// =============================================================================
 
 // Same resolution, no resize -> FP16
 // src_slot is a device cell holding the actual source pointer; reading it here
@@ -79,9 +77,7 @@ __global__ void preprocessKernel(
     dst[dst_idx + 2 * hw_size] = src[src_idx + 2] * scale_factor;
 }
 
-// =============================================================================
 // Bilinear Resize + Preprocessing Kernels (fused for efficiency)
-// =============================================================================
 
 // Optimized bilinear interpolation - reads 4 pixels once for all 3 output channels
 __device__ __forceinline__ void bilinearSample(
@@ -620,9 +616,7 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
     return true;
 }
 
-// =============================================================================
 // OPTIMIZED API: Pinned H2D + Single D2H Transfer + Full CUDA Graph
-// =============================================================================
 
 // Resolve the device pointer for a mapped pinned host buffer (Tegra zero-copy).
 // Do not cache this mapping: UDPCapture can free and replace its mapped buffer
@@ -1230,9 +1224,7 @@ bool SimpleInference::captureFullGraphForShape(int sourceWidth, int sourceHeight
     return true;
 }
 
-// =============================================================================
 // Callback Completion Worker
-// =============================================================================
 void SimpleInference::callbackWorkerLoop() {
 #ifndef _WIN32
     pthread_setname_np(pthread_self(), "infer-cb");

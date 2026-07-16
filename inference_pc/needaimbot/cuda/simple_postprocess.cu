@@ -16,18 +16,11 @@
 
 namespace gpa {
 
-// =============================================================================
-// Constants
-// =============================================================================
 constexpr int MAX_SELECTION_THREADS = 256;
 constexpr int WARP_SIZE = 32;
 constexpr int MAX_SELECTION_WARPS = MAX_SELECTION_THREADS / WARP_SIZE;
 static_assert((MAX_SELECTION_THREADS % WARP_SIZE) == 0,
               "MAX_SELECTION_THREADS must be multiple of warp size");
-
-// =============================================================================
-// Helper Functions
-// =============================================================================
 
 template<bool kIsFp16>
 __device__ __forceinline__ float readValue(const void* buffer, size_t idx);
@@ -84,9 +77,7 @@ __device__ __forceinline__ void warpReduceIouMax(
     }
 }
 
-// =============================================================================
 // IoU Calculation (from unified_graph_pipeline.cu)
-// =============================================================================
 
 // Compute Intersection over Union for two bounding boxes
 __device__ __forceinline__ float computeBoundingBoxIoU(const Detection& a, const Detection& b) {
@@ -128,9 +119,7 @@ __device__ __forceinline__ float computeBoundingBoxIoU(const Detection& a, const
     return inter_area / union_area;
 }
 
-// =============================================================================
 // One-pass Fused Decode + Target Selection + Movement
-// =============================================================================
 
 __device__ __forceinline__ void writeEmptyInferenceResult(InferenceResult* result) {
     result->movement.dx = 0;

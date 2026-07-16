@@ -74,9 +74,7 @@ bool writeAllSerialFd(int fd, const char* data, size_t size, bool failFastOnWoul
 } // namespace
 #endif
 
-// ============================================================================
 // Platform-specific implementations
-// ============================================================================
 
 #ifdef _WIN32
 // =========================== WINDOWS IMPLEMENTATION ===========================
@@ -399,9 +397,7 @@ bool MakcuConnection::initializeMakcuConnection() {
     }
     std::cout << "[Makcu] Device found: " << port_name_ << std::endl;
 
-    // ========================================================================
     // Step 1: Connect at boot baud rate (115200) and send baud change command
-    // ========================================================================
     serial_fd_ = open(port_name_.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
     if (serial_fd_ < 0) {
         std::cerr << "[Makcu] Unable to open port: " << port_name_
@@ -433,9 +429,7 @@ bool MakcuConnection::initializeMakcuConnection() {
     serial_fd_ = -1;
     usleep(100000);  // 100ms for device to switch
 
-    // ========================================================================
     // Step 2: Reconnect at working baud rate (4Mbps)
-    // ========================================================================
     serial_fd_ = open(port_name_.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
     if (serial_fd_ < 0) {
         std::cerr << "[Makcu] Unable to reopen port at high speed" << std::endl;
@@ -637,9 +631,7 @@ bool MakcuConnection::isOpen() const { return is_open_; }
 
 #endif  // _WIN32
 
-// ============================================================================
 // Common implementation (both platforms)
-// ============================================================================
 
 namespace {
 char* appendSignedInt(char* out, int value) {
