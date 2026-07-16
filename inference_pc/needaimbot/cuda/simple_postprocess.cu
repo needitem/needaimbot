@@ -1,7 +1,8 @@
 // GPU-based postprocessing for simple inference
 // Full optimizations from unified_graph_pipeline:
 // - Warp-level primitives for fast reduction
-// - Head-in-body priority selection
+// - Nearest-to-crosshair target selection; head_class_id only shifts the aim-Y
+//   point (head vs body offset), it is NOT a selection priority
 // - IoU-based target stickiness (hysteresis)
 // - Fused target selection + nonlinear P movement calculation
 // - Strict garbage value filtering

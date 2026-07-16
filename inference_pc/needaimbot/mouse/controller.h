@@ -168,7 +168,7 @@ public:
     // AimConfig::shoot_offset_x/y), so the aim converges to the offset and
     // holds. Applying it here as a per-frame additive nudge is what made the
     // aim drift/jerk upward while shooting.
-    void submitAimMovement(int dx, int dy, bool /*shooting*/) {
+    void submitAimMovement(int dx, int dy) {
         if (settings_.directAimMoveInCallback) {
             if (dx != 0 || dy != 0) {
                 makcu_->move(dx, dy);

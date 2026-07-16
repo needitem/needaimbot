@@ -37,9 +37,6 @@ public:
     uint64_t buttonSequence() const { return button_sequence_.load(std::memory_order_acquire); }
     bool waitForButtonEvent(uint64_t last_sequence, int timeout_ms);
 
-    std::atomic<bool> aiming_active;
-    std::atomic<bool> shooting_active;
-
 private:
     void sendCommand(const char* command, size_t size);
     bool sendCommandFast(const char* command, size_t size);

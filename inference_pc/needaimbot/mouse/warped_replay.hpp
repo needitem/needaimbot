@@ -210,7 +210,7 @@ inline void warmup(const config& cfg) { detail::load_db(cfg.replay_db_path); }
 // is untouched: absolute (x,y,t_ms) points, first t=0, monotonic timestamps.
 inline std::vector<trajectory_point> generate(
     double x0, double y0, double x1, double y1,
-    const config& cfg = {}, uint64_t seed = 0) {
+    const config& cfg = {}) {
 
     const double dx = x1 - x0, dy = y1 - y0;
     const double D = std::hypot(dx, dy);
@@ -229,11 +229,9 @@ inline std::vector<trajectory_point> generate(
         return out;
     }
 
-    // seed 0 -> reuse a thread-local RNG (no per-flick random_device syscall);
-    // nonzero seed -> reproducible local RNG for tests.
+    // Thread-local RNG: no per-flick random_device syscall.
     static thread_local std::mt19937_64 tls_rng(std::random_device{}());
-    std::mt19937_64 seeded;
-    std::mt19937_64& rng = seed ? (seeded.seed(seed), seeded) : tls_rng;
+    std::mt19937_64& rng = tls_rng;
 
     // distance-matched window so the scale warp stays near 1x
     const double loD = D * (1.0 - cfg.distance_tolerance);
@@ -350,15 +348,11 @@ public:
 
     // errorX/errorY: target - screen-center in model-input space px (the aim
     // reach vector; start is always the origin). movementScaleX/Y: that space
-    // -> output px. detectedTargetWidth: unused by warped replay (a stroke is
-    // chosen by reach distance, not a Fitts width) - kept for call-site
-    // compatibility. Replaces any in-progress playback outright.
+    // -> output px. Replaces any in-progress playback outright.
     void start(double errorX, double errorY,
                double movementScaleX, double movementScaleY,
-               double detectedTargetWidth,
-               const config& cfg, uint64_t seed = 0) {
-        (void)detectedTargetWidth;
-        path_ = generate(0.0, 0.0, errorX, errorY, cfg, seed);
+               const config& cfg) {
+        path_ = generate(0.0, 0.0, errorX, errorY, cfg);
         movementScaleX_ = movementScaleX;
         movementScaleY_ = movementScaleY;
         startTime_ = Clock::now();

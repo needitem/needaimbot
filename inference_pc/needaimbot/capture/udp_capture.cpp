@@ -57,7 +57,6 @@ void UDPCapture::releaseFragment(FrameFragments* frag) {
 
     frag->active = false;
     frag->frameId = 0;
-    frag->slotIndex = idx;
     frag->activeListIndex = -1;
     frag->nextInBucket = -1;
     frag->receivedMask = 0;

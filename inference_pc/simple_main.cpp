@@ -6,11 +6,9 @@
 
 #include <iostream>
 #include <fstream>
-#include <thread>
 #include <atomic>
 #include <chrono>
 #include <csignal>
-#include <cmath>
 #include <ctime>
 #include <iomanip>
 #include <filesystem>
@@ -18,9 +16,7 @@
 #include <condition_variable>
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <cstdint>
-#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -196,9 +192,9 @@ struct Config {
     std::vector<std::pair<int, int>> preCaptureShapes;
     bool stageTimingEnabled = false;  // Per-stage CUDA event timings (opt-in)
 
-    // Calibration capture. Non-empty path = log every frame's raw detection to
-    // this CSV (for bench/calibrate.py). Off by default. A relative path is
-    // written next to the binary's working dir.
+    // Calibration capture path (for bench/calibrate.py). Only the WHERE - the
+    // logger is enabled by perf_stats_enabled, not by this path. A relative path
+    // is written next to the binary's working dir.
     std::string calibrationLogPath = "calib.csv";
     // Step-response dead-time measurement. >0 = inject +-this many mouse counts
     // (X) every calibrationStepPeriodMs while the log is on. Aim OFF at a
@@ -733,16 +729,8 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
     // A fresh lock starts (and immediately takes over from) a humanized
     // acquisition flick; a continued/coasted track never (re)starts one.
     if (ctx->flickEnabled && result.freshAcquire) {
-        // Use the actually-acquired target's own size (Fitts' law "W") rather
-        // than a fixed config guess, so a small target gets a longer, more-
-        // corrected flick and a large one a quicker, more direct one - same
-        // as a human. Averaged width/height since the flick doesn't reason
-        // about movement-axis-relative target extent.
-        const double detectedTargetWidth =
-            0.5 * ((result.targetX2 - result.targetX1) + (result.targetY2 - result.targetY1));
         ctx->flickPlayback.start(result.errorX, result.errorY,
                                   result.movementScaleX, result.movementScaleY,
-                                  detectedTargetWidth,
                                   ctx->flickConfig);
     }
 
@@ -756,11 +744,9 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
     }
 
     // Inference is done - hand the result off to the controller, which
-    // decides how to turn it into physical mouse motion. Pass the shooting
-    // state so it can apply the static shoot-offset aim-shift (aiming is
-    // already gated above).
-    ctx->controller->submitAimMovement(
-        moveDx, moveDy, controller::maskShooting(callbackButtonMask));
+    // decides how to turn it into physical mouse motion. (The static shoot-
+    // offset aim-shift lives in the GPU controller's error term, not here.)
+    ctx->controller->submitAimMovement(moveDx, moveDy);
 
     releaseTicket();
 }
@@ -1025,8 +1011,7 @@ int main(int argc, char* argv[]) {
 
     // Calibration logger (opt-in). Owns the record buffer; dumps CSV on exit.
     // Detection logging rides on perf_stats: turning on measurement turns this on
-    // too (an explicit calibration_log_path also enables it on its own). Writes
-    // to calibration_log_path, or "calib.csv" next to the binary if unset.
+    // too. Writes to calibration_log_path, or "calib.csv" next to the binary if unset.
     std::unique_ptr<CalibLogger> calibLogger;
     if (cfg.perfStatsEnabled) {
         // perf_stats is the master switch: it turns on calibration logging too.

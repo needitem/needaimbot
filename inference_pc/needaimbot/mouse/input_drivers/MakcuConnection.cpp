@@ -82,9 +82,7 @@ bool writeAllSerialFd(int fd, const char* data, size_t size, bool failFastOnWoul
 // =========================== WINDOWS IMPLEMENTATION ===========================
 
 MakcuConnection::MakcuConnection(const std::string& port, unsigned int /*baud_rate*/)
-    : aiming_active(false),
-      shooting_active(false),
-      serial_handle_(INVALID_HANDLE_VALUE),
+    : serial_handle_(INVALID_HANDLE_VALUE),
       is_open_(false),
       listening_(false),
       port_name_(port),
@@ -364,9 +362,7 @@ static std::string detectMakcuDevice() {
 }
 
 MakcuConnection::MakcuConnection(const std::string& port, unsigned int baud_rate)
-    : aiming_active(false),
-      shooting_active(false),
-      serial_fd_(-1),
+    : serial_fd_(-1),
       is_open_(false),
       listening_(false),
       port_name_(port),
@@ -874,13 +870,7 @@ void MakcuConnection::listeningThreadFunc() {
                 if (byte <= 0x1F && byte != last_mask) {
                     last_mask = byte;
 
-                    bool left = (byte & 0x01) != 0;
-                    bool right = (byte & 0x02) != 0;
-                    bool side2 = (byte & 0x10) != 0;
-
                     button_mask_.store(byte, std::memory_order_release);
-                    shooting_active.store(left, std::memory_order_release);
-                    aiming_active.store(right || side2, std::memory_order_release);
                     button_sequence_.fetch_add(1, std::memory_order_acq_rel);
                     button_cv_.notify_all();
                 }

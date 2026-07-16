@@ -1300,7 +1300,7 @@ int main(int argc, char** argv) {
     }
 
     std::cout << "GamePC Streamer (RGB, " << maxPayloadPerPacket
-              << "B payload, UDP V2) started\n";
+              << "B payload, UDP V3) started\n";
     std::cout << "Sending to: " << g_config.inferenceIP << ":" << g_config.sendPort << "\n";
     std::cout << "Local bind IP: " << boundIpText << "\n";
     std::cout << "Capture: event-driven (synced to presents), FPS cap: "
