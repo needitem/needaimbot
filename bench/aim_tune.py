@@ -63,7 +63,7 @@ class OneEuro:
         self.px = self.py = self.vx = self.vy = 0.0
         self.pex = self.pey = self.dex = self.dey = self.ax = self.ay = 0.0
     def set_applied(self, dx, dy): self.ax += dx; self.ay += dy
-    def step(self, rx, ry, dt=1.0):
+    def step(self, rx, ry, dt=1.0, conf=1.0):
         p = self.p; fresh = not self.has; tcx, tcy = rx, ry
         if self.filt:
             if not fresh:
@@ -102,7 +102,7 @@ class AlphaBeta:
         self.has = False; self.ex = self.ey = self.vx = self.vy = 0.0; self.gc = 0
         self.pex = self.pey = self.dex = self.dey = self.ax = self.ay = 0.0
     def set_applied(self, dx, dy): self.ax += dx; self.ay += dy
-    def step(self, rx, ry, dt=1.0):
+    def step(self, rx, ry, dt=1.0, conf=1.0):
         p = self.p; fresh = not self.has; a = clamp(self.alpha, 0.01, 1); b = a * a / (2 - a)
         if fresh:
             self.ex, self.ey, self.vx, self.vy, self.gc = rx, ry, 0.0, 0.0, 0
@@ -153,9 +153,20 @@ class OneEuroX(OneEuro):
         self.ykd_k = p.get("ykd_k", 1.0)
         self.jclamp = p.get("jump_clamp", 0.0)   # max px a detection can move the estimate/frame (0=off)
         self.jlock = p.get("jump_lock", 0.0)      # only clamp when |error| < jlock (locked); 0 = always
+        self.confw = p.get("conf_weight", False)  # scale filter trust by detection confidence
+        self.clo = p.get("conf_lo", 0.35)         # conf at/below which the detection is barely trusted
+        self.chi = p.get("conf_hi", 0.60)         # conf at/above which it is fully trusted
+        self.cmin = p.get("conf_min", 0.15)       # floor so sustained low-conf doesn't freeze
 
-    def step(self, rx, ry, dt=1.0):
+    def step(self, rx, ry, dt=1.0, conf=1.0):
         p = self.p; fresh = not self.has; tcx, tcy = rx, ry
+        # Confidence weight: outliers/phantoms carry LOW conf (measured 0.38 vs
+        # 0.59), so trust a low-conf detection less. Unlike a magnitude clamp this
+        # distinguishes an outlier from a real fast move - a real flick keeps HIGH
+        # conf and passes crisp, only the low-conf spike is smoothed. cw in [cmin,1].
+        cw = 1.0
+        if self.confw:
+            cw = clamp((conf - self.clo) / max(1e-6, self.chi - self.clo), self.cmin, 1.0)
         # Jump clamp (rate limiter on the filter input): the detector noise is
         # fat-tailed (rare 15-60px single-frame spikes), but real target motion is
         # <~10px/frame. So limit how far ONE detection can move the estimate: normal
@@ -175,10 +186,10 @@ class OneEuroX(OneEuro):
             if not fresh:
                 ad = oea(p["dcut"])
                 de = rx - self.fx; self.dfx = ad * de + (1 - ad) * self.dfx
-                ax_ = oea(p["mincut"] * self.xcut_k + p["beta"] * abs(self.dfx))
+                ax_ = oea(p["mincut"] * self.xcut_k + p["beta"] * abs(self.dfx)) * cw
                 self.fx = ax_ * rx + (1 - ax_) * self.fx
                 de = ry - self.fy; self.dfy = ad * de + (1 - ad) * self.dfy
-                ay_ = oea(p["mincut"] + p["beta"] * abs(self.dfy))
+                ay_ = oea(p["mincut"] + p["beta"] * abs(self.dfy)) * cw
                 self.fy = ay_ * ry + (1 - ay_) * self.fy
                 tcx, tcy = self.fx, self.fy
             else:
@@ -244,7 +255,7 @@ class KalmanCV:
         P[0][0] = (1-K0)*P00; P[0][1] = (1-K0)*P01
         P[1][0] = P10 - K1*P00; P[1][1] = P11 - K1*P01
         return s[0], s[1]
-    def step(self, rx, ry, dt=1.0):
+    def step(self, rx, ry, dt=1.0, conf=1.0):
         p = self.p; fresh = not self.has
         if fresh:
             self.sx = [rx, 0.0]; self.sy = [ry, 0.0]; self.has = True
@@ -325,20 +336,25 @@ def run(make, regime, seed=0, frames=1400, lat_base=1):
             detx, dety = bx, by
         # White detector noise: X-heavy per the real calibration (WHITE_X>WHITE_Y).
         rx = detx + drx + g(WHITE_X * nsc); ry = dety + dry + g(WHITE_Y * nsc)
+        # Confidence: normal frames ~0.59, low ones are the noisy/outlier frames
+        # (measured: outlier conf 0.38 vs normal 0.59). Clamp to [0,1].
+        conf = clamp(0.59 + g(0.08), 0.05, 0.99)
         # Fat-tailed detector outliers: the real aim-OFF noise is NOT gaussian
-        # (kurtosis ~24, 3-4% of frames jump 15-80px). Inject a rare large single-
-        # frame spike so the outlier-rejection gate has something real to reject.
+        # (kurtosis ~24, 3-4% of frames jump 15-80px). These frames also carry LOW
+        # confidence (the real, independent tell) - conf-weighting can down-weight
+        # them without a magnitude gate (which can't tell them from a real flick).
         if rng.random() < P_OUTLIER:
             ang = rng.random() * 6.283
             mag = OUTLIER_MIN + rng.random() * (OUTLIER_MAX - OUTLIER_MIN)
             rx += mag * math.cos(ang); ry += mag * math.sin(ang)
+            conf = clamp(0.38 + g(0.08), 0.05, 0.7)   # outlier -> low conf
         dtc = clamp(1 + 0.6 * g(0.5), 0.4, 2.2)
         # Dropout: on a miss the detector gives no fresh box -> feed the stale
         # previous measurement (controller must ride it out / coast).
         if f > 0 and rng.random() < P_DROP:
             rx, ry = prev_rx, prev_ry
         prev_rx, prev_ry = rx, ry
-        mv = c.step(rx, ry, dtc)
+        mv = c.step(rx, ry, dtc, conf)
         ax = emit_int(mv[0], resx); ay = emit_int(mv[1], resy)
         yaw += ax * SENS0; pitch -= ay * SENS0
         c.set_applied(ax * FOCAL * SENS0, ay * FOCAL * SENS0)
