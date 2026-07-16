@@ -181,7 +181,6 @@ def summarize(mode: str, infer_ms: float, params: Params) -> dict[str, float]:
 
     waits = [start - ready for start, ready in zip(start_times, ready_times)]
     ages = [action - captured for action, captured in zip(action_times, capture_times)]
-    gaps = [later - earlier for earlier, later in zip(action_times, action_times[1:])]
 
     rng = random.Random(params.seed + 9000 + int(infer_ms * 100))
     event_latencies = []
@@ -207,7 +206,6 @@ def summarize(mode: str, infer_ms: float, params: Params) -> dict[str, float]:
         "event_avg": statistics.mean(event_latencies),
         "event_p50": percentile(event_latencies, 50),
         "event_p95": percentile(event_latencies, 95),
-        "cycle_avg": statistics.mean(gaps),
     }
 
 

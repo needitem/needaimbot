@@ -5,7 +5,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
-#include <cstring>
+#include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <sstream>

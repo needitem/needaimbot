@@ -163,10 +163,10 @@ def run(make, regime, seed=0, frames=1400, lat_base=1):
         head_seen = rng.random() < pHead
         hx, hy = project(s[0], s[1], s[2], s[3])
         if head_seen:
-            detx, dety, onh = hx, hy, True
+            detx, dety = hx, hy
         else:
             bx, by = project(s[0], s[1] - (0.62 * PERSON) / s[4], s[2], s[3])
-            detx, dety, onh = bx, by, False
+            detx, dety = bx, by
         rx = detx + drx + g(0.85 * nsc); ry = dety + dry + g(1.25 * nsc)
         dtc = clamp(1 + 0.6 * g(0.5), 0.4, 2.2)
         mv = c.step(rx, ry, dtc)

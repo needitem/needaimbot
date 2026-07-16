@@ -23,7 +23,6 @@ st_re = re.compile(
     r"St\[h2d:([\d.]+)/(\d+) pre:([\d.]+)/(\d+) inf:([\d.]+)/(\d+) "
     r"post:([\d.]+)/(\d+) d2h:([\d.]+)/(\d+)us\]")
 aw_re = re.compile(r"Aw:([\d.]+)/([\d.]+)ms")
-su_re = re.compile(r"Su:([\d.]+)/(\d+)us")
 cb_re = re.compile(r"Cb:([\d.]+)/([\d.]+)ms")
 d_re  = re.compile(r" D:([\d.]+)")
 
@@ -35,9 +34,8 @@ for c in chunks:
     g = [float(x) for x in m.groups()]
     s = dict(h2d=g[0], pre=g[2], inf=g[4], post=g[6], d2h=g[8],
              h2d_max=g[1], pre_max=g[3], inf_max=g[5], post_max=g[7], d2h_max=g[9])
-    aw = aw_re.search(c); su = su_re.search(c); cb = cb_re.search(c); d = d_re.search(c)
+    aw = aw_re.search(c); cb = cb_re.search(c); d = d_re.search(c)
     s["aw_ms"]  = float(aw.group(1)) if aw else 0.0
-    s["su_us"]  = float(su.group(1)) if su else 0.0
     s["cb_ms"]  = float(cb.group(1)) if cb else 0.0
     s["cb_max"] = float(cb.group(2)) if cb else 0.0
     s["fps"]    = float(d.group(1)) if d else 0.0

@@ -138,8 +138,9 @@ def main():
         p("  MOTION-BLUR factor  aim-on / aim-off :  X %.2f  Y %.2f" %
           (on[0] / off[0], (on[1] / off[1]) if off[1] else 0)); p("")
 
-    # step-response dead-time (aim-OFF frames where the injection pulses)
-    step = [r for r in det if r["aiming"] == 0]
+    # step-response dead-time (aim-OFF frames where the injection pulses;
+    # same set as the aim-OFF baseline `still` above)
+    step = still
     if step:
         inj = [r["inject_cum_x"] for r in step]
         if max(inj) - min(inj) > 1.0:
