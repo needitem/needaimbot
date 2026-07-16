@@ -65,3 +65,7 @@ bench/*.log
 
 # Local stable build artifacts (binary + config)
 inference_pc/build_stable/
+
+# Runtime calibration capture (perf_stats output)
+calib.csv
+inference_pc/calib.csv
