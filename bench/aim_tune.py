@@ -19,17 +19,16 @@ FOCAL = (WU * 0.5) / math.tan(FOVx * 0.5)
 SENS0 = 0.0026
 HEADH, PERSON = 0.28, 1.8
 
-# --- Calibrated from the real rig (bench/calibrate.py on inference_pc/calib.csv,
-# 233 detected frames, aim-ON world-reconstructed) ---
-#   white_x=3.95 white_y=1.98  -> real detector noise is X-HEAVY (Y/X~0.5), and
-#   ~4x noisier on X than the old sim guessed. WHITE_* are the per-frame white
-#   sigma at the reference box (nsc=1.5); they scale with nsc (box/blur) below.
-WHITE_X, WHITE_Y = 2.6, 1.3        # -> ~3.9/2.0 px at nsc=1.5 (matches real)
-P_HEAD = 0.14                      # real head-selection rate 13.7% (was 0.55-0.95)
-# Detector dropout. Real raw was 0.40 but that includes aim-key-held-with-no-
-# target frames; 0.22 is a defensible in-engagement miss rate. On a miss the
-# controller gets no fresh detection (stale hold), stressing coast/persistence.
-P_DROP = 0.22
+# --- Calibrated from a clean 17s / 2276-frame rig capture that has BOTH aim-OFF
+# (static view, no controller) and aim-ON segments (bench/calibrate.py) ---
+#   aim-OFF baseline white 11.5/8.5 px, aim-ON 10.5/9.3 px, motion-blur factor
+#   ~1.0 (blur barely adds noise) -> the DETECTOR itself is the ~10px noise floor,
+#   not motion blur. dropout 1.5%, head 8.9%, mildly X-heavy (Y/X ~0.85). This is
+#   ~2.5x noisier than the first (short, bursty) capture suggested. WHITE_* are the
+#   per-frame white sigma at the reference box (nsc=1.5); they scale with nsc.
+WHITE_X, WHITE_Y = 7.0, 6.2        # -> ~10.5/9.3 px at nsc=1.5 (matches aim-ON)
+P_HEAD = 0.09                      # real head-selection rate 8.9%
+P_DROP = 0.015                     # real dropout under continuous aim (was mis-measured 0.40)
 
 def clamp(v, lo, hi): return lo if v < lo else hi if v > hi else v
 def nlp(e, kp, s):
@@ -289,7 +288,9 @@ def run(make, regime, seed=0, frames=1400, lat_base=1):
         # exposed: noise is measured while the view moves, not on a static frame.
         # It penalises controllers that whip the view around (a self-defeating loop).
         world_px = abs(az - prev_az) * FOCAL
-        nsc *= (1.0 + 0.045 * (view_blur + world_px)); prev_az = az
+        # Real motion-blur factor measured ~1.0 (blur barely adds noise; the
+        # detector floor dominates), so this amplification is now near-zero.
+        nsc *= (1.0 + 0.005 * (view_blur + world_px)); prev_az = az
         drx = 0.9 * drx + g(0.32 * nsc); dry = 0.9 * dry + g(0.32 * nsc)
         # head/body dual detection (real head-selection rate P_HEAD)
         head_seen = rng.random() < P_HEAD
