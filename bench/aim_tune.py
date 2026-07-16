@@ -123,6 +123,71 @@ class AlphaBeta:
         if st > 30: k = 30 / st; mx *= k; my *= k
         return mx, my
 
+
+class OneEuroX(OneEuro):
+    """One Euro + PD with three new experimental levers on top of the shipped
+    architecture, each attacking the dead-time-vs-noise tension differently:
+
+      gate_ff : confidence-gated feedforward. Instead of a fixed ff, scale it by
+                how steady the velocity estimate is: g = |v|/(|v|+vgate). Near
+                rest / under jitter |v| is small -> ff suppressed (kills the
+                ff0.9 buzz); when the target genuinely moves -> ff engages.
+      predict : dead-time predictor (Smith-flavored). Aim at where the target
+                will be `horizon` frames ahead = filtered_pos + v*horizon, so
+                the command lands on the future target instead of the stale one.
+                Also confidence-gated so noise isn't extrapolated.
+      axis    : X-heavy noise (real calibration) -> filter/damp X harder than Y.
+                xcut_k<1 lowers X's min-cutoff (smoother X); ykd_k adjusts Y kd.
+    """
+    def __init__(self, p):
+        super().__init__(p)
+        self.gate_ff = p.get("gate_ff", False)
+        self.predict = p.get("predict", 0.0)   # frames of lead (0 = off)
+        self.vgate = p.get("vgate", 6.0)       # px/frame speed at which ff is ~half
+        self.xcut_k = p.get("xcut_k", 1.0)     # <1 = smoother X (lower min-cutoff)
+        self.ykd_k = p.get("ykd_k", 1.0)
+
+    def step(self, rx, ry, dt=1.0):
+        p = self.p; fresh = not self.has; tcx, tcy = rx, ry
+        if self.filt:
+            if not fresh:
+                ad = oea(p["dcut"])
+                de = rx - self.fx; self.dfx = ad * de + (1 - ad) * self.dfx
+                ax_ = oea(p["mincut"] * self.xcut_k + p["beta"] * abs(self.dfx))
+                self.fx = ax_ * rx + (1 - ax_) * self.fx
+                de = ry - self.fy; self.dfy = ad * de + (1 - ad) * self.dfy
+                ay_ = oea(p["mincut"] + p["beta"] * abs(self.dfy))
+                self.fy = ay_ * ry + (1 - ay_) * self.fy
+                tcx, tcy = self.fx, self.fy
+            else:
+                self.fx, self.fy, self.dfx, self.dfy = rx, ry, 0.0, 0.0
+        if not fresh:
+            dx, dy = rx - self.px, ry - self.py
+            if self.ego: dx += self.ax; dy += self.ay
+            dx = clamp(dx, -60, 60); dy = clamp(dy, -60, 60)
+            self.vx = 0.6 * self.vx + 0.4 * dx; self.vy = 0.6 * self.vy + 0.4 * dy
+        else:
+            self.vx = self.vy = 0.0
+        self.ax = self.ay = 0.0; self.px, self.py = rx, ry; self.has = True
+        # velocity-confidence gate: ~0 at rest/jitter, ->1 when steadily moving
+        spd = math.hypot(self.vx, self.vy)
+        gconf = spd / (spd + self.vgate)
+        ex, ey = tcx, tcy
+        if self.predict > 0.0:                 # aim ahead of the (filtered) target
+            ex += self.vx * self.predict * gconf
+            ey += self.vy * self.predict * gconf
+        dex = clamp(ex - self.pex, -150, 150); dey = clamp(ey - self.pey, -150, 150)
+        if fresh: self.dex = self.dey = 0.0
+        else: self.dex = 0.6 * dex + 0.4 * self.dex; self.dey = 0.6 * dey + 0.4 * self.dey
+        self.pex, self.pey = ex, ey
+        ffx = p["ff"] * self.vx; ffy = p["ff"] * self.vy
+        if self.gate_ff: ffx *= gconf; ffy *= gconf
+        mx = nlp(ex, p["kp"], p["soft"]) + p["kd"] * self.dex + ffx
+        my = nlp(ey, p["kp"] * 1.1, p["soft"] * 0.9) + p["kd"] * self.ykd_k * 1.2 * self.dey + ffy
+        st = math.hypot(mx, my)
+        if st > 30: k = 30 / st; mx *= k; my *= k
+        return mx, my
+
 def project(az, el, yaw, pitch):
     d = math.atan2(math.sin(az - yaw), math.cos(az - yaw))
     return FOCAL * math.tan(d), -FOCAL * math.tan(el - pitch)
@@ -223,6 +288,11 @@ def oe(**kw):
 def ab(**kw):
     base = dict(alpha=0.3, kp=0.55, soft=8, kd=0.2, ff=0.8, ego=True)
     base.update(kw); return lambda b=base: AlphaBeta(b)
+def oex(**kw):
+    base = dict(mincut=0.1, beta=0.02, dcut=0.5, kp=0.55, soft=11, kd=0.2, ff=0.9,
+               filt=True, ego=False, gate_ff=False, predict=0.0, vgate=6.0,
+               xcut_k=1.0, ykd_k=1.0)
+    base.update(kw); return lambda b=base: OneEuroX(b)
 
 CANDS = []
 # One Euro + PD + ff family (the shipped architecture) — sweep the levers
@@ -240,6 +310,26 @@ for mincut in (0.12, 0.25):
 # filter off
 CANDS.append(("filter-off ff0.9", oe(filt=False)))
 CANDS.append(("filter-off ff0.0", oe(filt=False, ff=0.0)))
+# --- NEW experimental controllers (OneEuroX): attack dead-time vs noise ---
+# 1) confidence-gated feedforward: keep ff high but only when target truly moves
+for ff in (0.6, 0.9):
+    for vg in (4.0, 8.0):
+        CANDS.append(("X gateFF ff%.1f vg%.0f" % (ff, vg),
+                      oex(mincut=0.12, beta=0.04, kp=0.5, kd=0.32, ff=ff, gate_ff=True, vgate=vg)))
+# 2) dead-time predictor (aim `predict` frames ahead, gated). ff off (predictor replaces it)
+for pr in (1.5, 3.0):
+    for vg in (4.0, 8.0):
+        CANDS.append(("X predict h%.1f vg%.0f" % (pr, vg),
+                      oex(mincut=0.12, beta=0.04, kp=0.5, kd=0.32, ff=0.0, predict=pr, vgate=vg)))
+# 3) axis-asymmetric: filter X harder (X-heavy noise), plus gated ff
+for xk in (0.5, 0.7):
+    CANDS.append(("X axis xcut%.1f gateFF" % xk,
+                  oex(mincut=0.12, beta=0.04, kp=0.5, kd=0.32, ff=0.6, gate_ff=True, xcut_k=xk)))
+# 4) combined: axis-asym + gated predictor (the "maximize" candidate)
+for pr in (1.5, 3.0):
+    CANDS.append(("X combo h%.1f xcut0.6" % pr,
+                  oex(mincut=0.12, beta=0.04, kp=0.5, kd=0.32, ff=0.0, predict=pr,
+                      gate_ff=True, xcut_k=0.6, vgate=6.0)))
 # alpha-beta family
 for al in (0.2, 0.3, 0.4):
     for ff in (0.4, 0.8):
