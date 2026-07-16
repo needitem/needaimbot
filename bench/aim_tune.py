@@ -19,6 +19,18 @@ FOCAL = (WU * 0.5) / math.tan(FOVx * 0.5)
 SENS0 = 0.0026
 HEADH, PERSON = 0.28, 1.8
 
+# --- Calibrated from the real rig (bench/calibrate.py on inference_pc/calib.csv,
+# 233 detected frames, aim-ON world-reconstructed) ---
+#   white_x=3.95 white_y=1.98  -> real detector noise is X-HEAVY (Y/X~0.5), and
+#   ~4x noisier on X than the old sim guessed. WHITE_* are the per-frame white
+#   sigma at the reference box (nsc=1.5); they scale with nsc (box/blur) below.
+WHITE_X, WHITE_Y = 2.6, 1.3        # -> ~3.9/2.0 px at nsc=1.5 (matches real)
+P_HEAD = 0.14                      # real head-selection rate 13.7% (was 0.55-0.95)
+# Detector dropout. Real raw was 0.40 but that includes aim-key-held-with-no-
+# target frames; 0.22 is a defensible in-engagement miss rate. On a miss the
+# controller gets no fresh detection (stale hold), stressing coast/persistence.
+P_DROP = 0.22
+
 def clamp(v, lo, hi): return lo if v < lo else hi if v > hi else v
 def nlp(e, kp, s):
     ae = abs(e); return e * (max(kp, 0) * (ae / (ae + max(s, 1))))
@@ -158,17 +170,22 @@ def run(make, regime, seed=0, frames=1400, lat_base=1):
         world_px = abs(az - prev_az) * FOCAL
         nsc *= (1.0 + 0.045 * (view_blur + world_px)); prev_az = az
         drx = 0.9 * drx + g(0.32 * nsc); dry = 0.9 * dry + g(0.32 * nsc)
-        # head/body dual detection + dropout
-        pHead = clamp(0.9 - 0.02 * (s[4] - 12), 0.55, 0.95)
-        head_seen = rng.random() < pHead
+        # head/body dual detection (real head-selection rate P_HEAD)
+        head_seen = rng.random() < P_HEAD
         hx, hy = project(s[0], s[1], s[2], s[3])
         if head_seen:
             detx, dety = hx, hy
         else:
             bx, by = project(s[0], s[1] - (0.62 * PERSON) / s[4], s[2], s[3])
             detx, dety = bx, by
-        rx = detx + drx + g(0.85 * nsc); ry = dety + dry + g(1.25 * nsc)
+        # White detector noise: X-heavy per the real calibration (WHITE_X>WHITE_Y).
+        rx = detx + drx + g(WHITE_X * nsc); ry = dety + dry + g(WHITE_Y * nsc)
         dtc = clamp(1 + 0.6 * g(0.5), 0.4, 2.2)
+        # Dropout: on a miss the detector gives no fresh box -> feed the stale
+        # previous measurement (controller must ride it out / coast).
+        if f > 0 and rng.random() < P_DROP:
+            rx, ry = prev_rx, prev_ry
+        prev_rx, prev_ry = rx, ry
         mv = c.step(rx, ry, dtc)
         ax = emit_int(mv[0], resx); ay = emit_int(mv[1], resy)
         yaw += ax * SENS0; pitch -= ay * SENS0
