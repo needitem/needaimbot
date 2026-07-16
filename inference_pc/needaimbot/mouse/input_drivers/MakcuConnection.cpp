@@ -776,25 +776,6 @@ void MakcuConnection::listeningThreadFunc() {
     }
 #endif
 
-    // Suppress setter ACK echo (km.echo(0)). By default every setter - crucially
-    // every binary km.move - echoes an ACK frame [0x50][0x0D][0x01][0x00][status]
-    // back on this same serial line. At aiming rates (~144 Hz) that floods RX and
-    // starves/desyncs the button-mask parser below, so button presses (e.g. the
-    // Side2 thumb aim key) get dropped. Nothing here reads move ACKs (moves are
-    // fire-and-forget), and button STREAMING is a separate push that echo(0) does
-    // NOT affect (per makcu.com/en/api). Sent unconditionally so both the ASCII
-    // and binary move paths keep the RX line clean. Ref: makcu.com/en/api.
-    const char* echo_off = "km.echo(0)\r";
-    const ssize_t echoWrite = ::write(serial_fd_, echo_off, strlen(echo_off));
-    (void)echoWrite;
-    tcdrain(serial_fd_);
-    usleep(20000);  // 20ms for the device to apply + emit its final ACK
-    {
-        char echo_drain[128];
-        const ssize_t er = ::read(serial_fd_, echo_drain, sizeof(echo_drain));
-        (void)er;
-    }
-
     // Enable streaming mode: km.buttons(1) - raw mode, NO period parameter!
     // CRITICAL: Using period (e.g., km.buttons(1,10)) breaks streaming.
     // The correct format is km.buttons(1)\r with ONLY mode parameter.
