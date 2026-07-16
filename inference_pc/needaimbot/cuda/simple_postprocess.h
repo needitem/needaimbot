@@ -100,6 +100,18 @@ struct AimConfig {
     // feedforward_gain, not both at full.
     float predict_horizon = 0.0f;
 
+    // --- Confidence-weighted filtering (fat-tailed detector outlier rejection) ---
+    // Detector outliers (rare 15-80px single-frame spikes = "phantom shake") carry
+    // LOW confidence (measured 0.38 vs 0.59 for normal frames), a signal INDEPENDENT
+    // of jump magnitude - so unlike a jump clamp this can tell an outlier from a real
+    // fast flick (which keeps high conf). Scale the One Euro update by
+    // cw = clamp((conf - lo)/(hi - lo), min, 1): a low-conf detection barely moves the
+    // estimate (spike suppressed), a high-conf one passes crisp (no acquisition cost).
+    // Disabled when conf_weight_hi <= conf_weight_lo (the default).
+    float conf_weight_lo = 0.0f;    // conf at/below which the detection is barely trusted (~0.35)
+    float conf_weight_hi = 0.0f;    // conf at/above which it is fully trusted (~0.60); >lo to enable
+    float conf_weight_min = 0.15f;  // floor so sustained low-conf doesn't freeze the filter
+
     // --- One Euro adaptive low-pass on the target center ---
     // Removes detector jitter at the source: heavy smoothing when the target is
     // near-stationary (kills settle-shake), light smoothing when it moves fast
