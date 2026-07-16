@@ -213,6 +213,11 @@ struct Config {
     //  <0  = always on (never gate; no cold reacquire, full idle GPU cost)
     int inferenceKeepwarmMs = 0;
 
+    // Busy-poll the UDP receive socket instead of sleeping in the kernel.
+    // Skips the IRQ->wakeup latency (~5-15us) on each frame's first packet at
+    // the cost of pinning the receive core at 100% while running.
+    bool udpBusySpin = false;
+
     bool load(const std::string& path) {
         std::ifstream f(path);
         if (!f) return false;
@@ -271,6 +276,7 @@ struct Config {
             if (j.contains("calibration_step_px")) calibrationStepPx = j["calibration_step_px"];
             if (j.contains("calibration_step_period_ms")) calibrationStepPeriodMs = j["calibration_step_period_ms"];
             if (j.contains("inference_keepwarm_ms")) inferenceKeepwarmMs = j["inference_keepwarm_ms"];
+            if (j.contains("udp_busy_spin")) udpBusySpin = j["udp_busy_spin"];
             preCaptureShapes.clear();
             if (j.contains("pre_capture_shapes")) {
                 for (const auto& entry : j["pre_capture_shapes"]) {
@@ -384,6 +390,7 @@ struct Config {
             j["mouse_min_interval_ms"] = mouseMinIntervalMs;
             j["direct_aim_move_in_callback"] = directAimMoveInCallback;
             j["inference_keepwarm_ms"] = inferenceKeepwarmMs;
+            j["udp_busy_spin"] = udpBusySpin;
             j["idle_graph_precapture_enabled"] = idleGraphPrecaptureEnabled;
             j["idle_graph_precapture_interval_ms"] = idleGraphPrecaptureIntervalMs;
 
@@ -954,6 +961,11 @@ int main(int argc, char* argv[]) {
     UDPCapture udpCapture;
     if (cfg.cpuAffinityEnabled) {
         udpCapture.SetReceiveAffinity(cfg.affinityCoreReceive);
+    }
+    udpCapture.SetBusySpin(cfg.udpBusySpin);
+    if (cfg.udpBusySpin) {
+        std::cout << "[Simple] UDP busy-spin receive: ON (recv core pinned at 100%)"
+                  << std::endl;
     }
     if (!udpCapture.Initialize(cfg.udpPort)) {
         std::cerr << "[Simple] Failed to initialize UDP capture" << std::endl;

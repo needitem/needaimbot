@@ -92,6 +92,7 @@
 | `mouse_min_interval_ms` | 0 | 마우스 이동 최소 간격(레이트 리밋). 0=무제한. |
 | `direct_aim_move_in_callback` | true | GPU 콜백 스레드에서 바로 마우스 전송(지연↓). |
 | `inference_keepwarm_ms` | 0 | **조준 안 할 땐 추론을 끄는데(전력 절약), 조준 뗀 뒤 이 ms만큼 더 돌려 warm 유지.** `0`=엄격(재조준마다 콜드 1사이클 지연), `>0`(예 300)=교전 중 재조준 즉시, `<0`=항상 켜짐(콜드 지연 0, 유휴 GPU 부하). |
+| `udp_busy_spin` | false | 수신 소켓을 커널 대기 대신 **busy-poll**(MSG_DONTWAIT 스핀). 프레임 첫 패킷의 IRQ→웨이크업 지연(~5-15µs) 제거. 대가: 수신 코어(affinity_core_receive) 100% 점유. Linux 전용. |
 | `idle_graph_precapture_enabled` | true | 유휴 시 미리 CUDA 그래프 캡처(첫 조준 콜드스타트 제거). |
 | `idle_graph_precapture_interval_ms` | 100 | 유휴 프리캡처 시도 주기(ms). |
 

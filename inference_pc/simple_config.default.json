@@ -67,6 +67,7 @@
     "mouse_min_interval_ms": 0,
     "direct_aim_move_in_callback": true,
     "inference_keepwarm_ms": 0,
+    "udp_busy_spin": false,
     "idle_graph_precapture_enabled": true,
     "idle_graph_precapture_interval_ms": 100,
 

@@ -903,6 +903,9 @@ void UDPCapture::receiveThread() {
 #endif
 #endif
 
+#ifdef __linux__
+    uint64_t spinIdleCount = 0;
+#endif
     while (m_running.load(std::memory_order_relaxed)) {
 #ifdef __linux__
         for (unsigned int i = 0; i < kRecvBatchPackets; ++i) {
@@ -910,11 +913,27 @@ void UDPCapture::receiveThread() {
             batchMsgs[i].msg_len = 0;
         }
 
+        // Busy-spin mode polls with MSG_DONTWAIT instead of sleeping in the
+        // kernel, trading a pinned 100%-busy receive core for skipping the
+        // IRQ -> scheduler wakeup on each frame's first packet (see SetBusySpin).
         const int batchCount = recvmmsg(
-            m_recvSocket, batchMsgs.data(), kRecvBatchPackets, MSG_WAITFORONE, nullptr);
+            m_recvSocket, batchMsgs.data(), kRecvBatchPackets,
+            m_busySpin ? MSG_DONTWAIT : MSG_WAITFORONE, nullptr);
         if (batchCount <= 0) {
             int err = errno;
             if (err == ETIMEDOUT || err == EWOULDBLOCK || err == EAGAIN) {
+                if (m_busySpin) {
+                    // Spinning: the socket-timeout path never fires, so stale
+                    // cleanup piggybacks on a coarse spin counter (~every 16k
+                    // yields, well under the fragment stale window).
+                    if (((++spinIdleCount) & 0x3FFFu) == 0) {
+                        cleanupStaleFragments(std::chrono::steady_clock::now());
+                    }
+#if defined(__aarch64__)
+                    asm volatile("yield");
+#endif
+                    continue;
+                }
                 cleanupStaleFragments(std::chrono::steady_clock::now());
                 continue;
             }

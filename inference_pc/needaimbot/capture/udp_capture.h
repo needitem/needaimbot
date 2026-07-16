@@ -150,6 +150,13 @@ public:
     static constexpr int kAffinityUnset = -1000;
     void SetReceiveAffinity(int core) { m_receiveAffinityCore = core; }
 
+    // Busy-poll receive (Linux only). Instead of sleeping in recvmmsg and paying
+    // the IRQ -> scheduler wakeup latency (~5-15us, worse with DVFS/idle states)
+    // on the first packet of every frame, spin on the (dedicated) receive core
+    // with MSG_DONTWAIT. Costs 100% of that core while running. Call before
+    // StartCapture().
+    void SetBusySpin(bool enabled) { m_busySpin = enabled; }
+
 private:
     enum BufferState : int {
         BUFFER_FREE = 0,
@@ -215,6 +222,7 @@ private:
 
     std::thread m_recvThread;
     int m_receiveAffinityCore = kAffinityUnset;  // see SetReceiveAffinity()
+    bool m_busySpin = false;                     // see SetBusySpin()
     std::atomic<bool> m_running{false};
 
     // 5 buffers: with newest-wins + one in-use by the consumer, leaves room for
