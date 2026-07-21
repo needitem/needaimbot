@@ -869,25 +869,33 @@ __global__ void fusedTargetSelectionAndMovementKernel(
             output_movement->dx = emitMouseDelta(movement_x, &aimState->residual_x);
             output_movement->dy = emitMouseDelta(movement_y, &aimState->residual_y);
         } else {
-            // No candidate selected this frame. If a track is still live within
-            // the persistence window, coast: glide on the last drift (decayed)
-            // and keep selectedTarget alive for a clean IoU re-acquire.
-            bool coasting = false;
-            if (coast_enabled != 0 && aimState->has_track != 0 &&
-                aimState->frames_since_seen < track_persistence_frames) {
+            // No candidate selected this frame. Within the persistence window we
+            // keep the track + selectedTarget alive for a clean IoU re-acquire
+            // (matches 2pc) - whether or not coast is on. Coast on glides on the
+            // last drift; coast off just holds still. Only a truly lost target
+            // (out of window / never tracked) resets the aim state.
+            const bool inWindow = (aimState->has_track != 0) &&
+                                  (aimState->frames_since_seen < track_persistence_frames);
+            if (inWindow) {
                 const int gap = aimState->frames_since_seen + 1;
                 aimState->frames_since_seen = gap;
-                float factor = 1.0f;
-                for (int i = 0; i < gap; ++i) factor *= coast_decay;
-                float mx = aimState->vel_x * factor;
-                float my = aimState->vel_y * factor;
-                clampMaxStep(mx, my, max_step);
-                output_movement->dx = emitMouseDelta(mx, &aimState->residual_x);
-                output_movement->dy = emitMouseDelta(my, &aimState->residual_y);
                 *bestTargetIndex = -1;  // no NEW best, but the track persists
-                coasting = true;
-            }
-            if (!coasting) {
+                // selectedTarget is deliberately NOT cleared here.
+                if (coast_enabled != 0) {
+                    float factor = 1.0f;
+                    for (int i = 0; i < gap; ++i) factor *= coast_decay;
+                    float mx = aimState->vel_x * factor;
+                    float my = aimState->vel_y * factor;
+                    clampMaxStep(mx, my, max_step);
+                    output_movement->dx = emitMouseDelta(mx, &aimState->residual_x);
+                    output_movement->dy = emitMouseDelta(my, &aimState->residual_y);
+                } else {
+                    aimState->residual_x = 0.0f;
+                    aimState->residual_y = 0.0f;
+                    output_movement->dx = 0;
+                    output_movement->dy = 0;
+                }
+            } else {
                 Target emptyTarget = {};
                 *bestTargetIndex = -1;
                 *bestTarget = emptyTarget;
@@ -1400,7 +1408,12 @@ bool UnifiedGraphPipeline::allocateBuffers() {
         m_captureBuffer.create(height, width, 4);
 
         size_t arenaSize = SmallBufferArena::calculateArenaSize();
-        m_smallBufferArena.arenaBuffer = std::make_unique<CudaMemory<uint8_t>>(arenaSize);
+        // Zero-initialize: the nonlinear P+D controller's AimState (has_track,
+        // One Euro filter, velocity, residual) lives in this arena and must start
+        // clean. Unlike the old clamped PID, the new controller has no absolute
+        // output clamp, so garbage state on a single-shot-first frame (which
+        // skips handleAimbotActivation's memset) could produce NaN-derived moves.
+        m_smallBufferArena.arenaBuffer = std::make_unique<CudaMemory<uint8_t>>(arenaSize, true);
         m_smallBufferArena.initializePointers(m_smallBufferArena.arenaBuffer->get());
         invalidateSelectedTarget(nullptr);
 

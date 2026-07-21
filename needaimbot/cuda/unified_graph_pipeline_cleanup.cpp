@@ -1,5 +1,6 @@
 #include "unified_graph_pipeline.h"
 #include "cuda_resource_manager.h"
+#include "../core/calib_logger.h"  // complete type for unique_ptr<CalibLogger> in the dtor
 #include <iostream>
 #include <mutex>
 #include <cuda_runtime.h>
