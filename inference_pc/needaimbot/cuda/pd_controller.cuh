@@ -83,8 +83,8 @@ __device__ __forceinline__ void computeCoastMovement(
 }
 
 // Full PD controller for a target detected THIS frame: One Euro pre-filter on
-// the measured center -> per-frame drift tracking (feeds coast/feedforward) ->
-// nonlinear P + D convergence + velocity feedforward -> max-step clamp ->
+// the measured center -> per-frame drift tracking (feeds coast) ->
+// nonlinear P + D convergence -> max-step clamp ->
 // integer mouse delta. Mutates aim_state in place (filter/velocity/derivative/
 // residual carry, and has_track/prev_center for the next frame).
 __device__ __forceinline__ void computeAimMovement(
@@ -109,7 +109,7 @@ __device__ __forceinline__ void computeAimMovement(
     const bool fresh_track = (aim_state->has_track == 0);
 
     // One Euro adaptive low-pass on the measured center, applied BEFORE
-    // velocity and error so the whole controller (P move, feedforward, coast)
+    // velocity and error so the whole controller (P move, coast)
     // runs on the de-noised signal. Seed on fresh acquire to avoid a jump from
     // a stale value.
     float target_center_x = raw_center_x;
@@ -140,15 +140,11 @@ __device__ __forceinline__ void computeAimMovement(
         target_center_y = aim_state->filt_y;
     }
 
-    // Update the target's per-frame screen drift (EMA, clamped) FIRST so both
-    // the feedforward term below and a following detection gap's coast use the
-    // freshest velocity. Use the RAW center deltas here, NOT the One Euro
-    // filtered center: the filter delays position, and feeding a lagged
-    // velocity into feedforward under-leads a moving target (aim trails its
-    // tail). The P/error term below still uses the filtered center for a
-    // stable aim point, so smoothing stabilizes WHERE we point without eating
-    // the lead signal. (When One Euro is off, raw_center == target_center, so
-    // this is a no-op.)
+    // Update the target's per-frame screen drift (EMA, clamped) FIRST so a
+    // following detection gap's coast uses the freshest velocity. Use the RAW
+    // center deltas, NOT the One Euro filtered center: the filter delays
+    // position, which would lag the coast glide. (When One Euro is off,
+    // raw_center == target_center, so this is a no-op.)
     if (aim_state->has_track) {
         const float maxDrift = 60.0f;  // model px/frame sanity clamp
         float nvx = raw_center_x - aim_state->prev_center_x;
@@ -172,8 +168,6 @@ __device__ __forceinline__ void computeAimMovement(
     // than adding it to the output every frame - makes it a true setpoint: the
     // aim converges with the target resting at center + offset and HOLDS there,
     // instead of drifting/jerking as an unconditional per-frame nudge would.
-    // Velocity feedforward keeps pace with a moving target (cancels P
-    // steady-state lag) without leading/overshooting.
     const float shoot_off_x =
         (movement_scale_x != 0.0f) ? aim_config.shoot_offset_x / movement_scale_x : 0.0f;
     const float shoot_off_y =
@@ -181,38 +175,10 @@ __device__ __forceinline__ void computeAimMovement(
     float error_x = target_center_x - screen_center_x - shoot_off_x;
     float error_y = target_center_y - screen_center_y - shoot_off_y;
 
-    // Velocity-confidence gate, shared by the predictor and the feedforward:
-    // g = speed / (speed + vgate). Near rest the (noisy) velocity is small
-    // -> g ~ 0 (lead suppressed, no stationary buzz); a genuinely moving target
-    // -> g -> 1 (full lead). vgate <= 0 disables the gate (g = 1).
-    float gconf = 1.0f;
-    if (aim_config.feedforward_vgate > 0.0f) {
-        const float speed = hypotf(aim_state->vel_x, aim_state->vel_y);
-        gconf = speed / (speed + aim_config.feedforward_vgate);
-    }
-
-    // Dead-time predictor: the detection is ~pipeline_latency stale, so a moving
-    // target has already moved on. Aim at where it will be predict_horizon frames
-    // ahead = current error + velocity*horizon (gated). Shifts the SETPOINT ahead
-    // (the derivative below then rides the predicted error). Partial horizon only:
-    // extrapolating the full dead-time amplifies the X-heavy detector noise, so
-    // ~1.5 frames is the sweet spot. 0 = off. Note this OVERLAPS feedforward (both
-    // spend the velocity estimate); use the predictor with a low/zero
-    // feedforward_gain, not both at full, or the aim over-leads.
-    if (aim_config.predict_horizon > 0.0f) {
-        const float lead = aim_config.predict_horizon * gconf;
-        error_x += lead * aim_state->vel_x;
-        error_y += lead * aim_state->vel_y;
-    }
-
-    // Confidence-gated feedforward (same gate as the predictor above).
-    const float ff = aim_config.feedforward_gain * gconf;
-
     // Derivative (damping) term: react to how fast the error is shrinking and
-    // push back, so a high-kp approach decelerates BEFORE it overshoots. This
-    // is pure damping of OUR convergence - target motion is handled by
-    // feedforward, so D stays quiet (de ~ 0) while tracking well and only
-    // bites on transients. Error rides the One Euro-filtered center, so the
+    // push back, so a high-kp approach decelerates BEFORE it overshoots. The
+    // error rate includes target drift, so D stays quiet (de ~ 0) at steady
+    // tracking and only bites on transients. Error rides the One Euro-filtered center, so the
     // derivative is clean; it is still clamped and reset on fresh acquire to
     // avoid a derivative kick. The clamp is generous (a full-frame initial
     // slew can change error by >60px in one frame); a tighter clamp would
@@ -234,12 +200,10 @@ __device__ __forceinline__ void computeAimMovement(
 
     float movement_x =
         (nonlinearPMove(error_x, aim_config.kp_x, aim_config.p_softness_x)
-         + aim_config.kd_x * aim_state->derr_x
-         + ff * aim_state->vel_x) * movement_scale_x;
+         + aim_config.kd_x * aim_state->derr_x) * movement_scale_x;
     float movement_y =
         (nonlinearPMove(error_y, aim_config.kp_y, aim_config.p_softness_y)
-         + aim_config.kd_y * aim_state->derr_y
-         + ff * aim_state->vel_y) * movement_scale_y;
+         + aim_config.kd_y * aim_state->derr_y) * movement_scale_y;
 
     // Per-frame max-step clamp (output px). Bounds the slew so a large initial
     // error is crossed in several smooth steps instead of one delayed leap

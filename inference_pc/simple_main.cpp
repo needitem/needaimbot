@@ -366,7 +366,7 @@ struct Config {
             j["shoot_offset_y"] = shootOffsetY;
 
             section("AIM CONTROLLER + CENTER FILTER");
-            pd.save(j);  // PD gains, thumb gains, stickiness, coast, feedforward, One Euro
+            pd.save(j);  // PD gains, thumb gains, stickiness, coast, One Euro
 
             section("FLICK (warped-replay)");
             j["flick_enabled"] = flickEnabled;

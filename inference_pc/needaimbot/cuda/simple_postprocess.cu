@@ -647,8 +647,8 @@ __global__ void stage2FinalizeKernel(
     // track just acquired this frame" can still be observed.
     const bool fresh_acquire = (d_aim_state->has_track == 0);
 
-    // The actual PD controller math (One Euro pre-filter, drift/feedforward
-    // tracking, nonlinear P+D convergence, max-step clamp, integer delta) lives
+    // The actual PD controller math (One Euro pre-filter, drift tracking,
+    // nonlinear P+D convergence, max-step clamp, integer delta) lives
     // in pd_controller.cuh; this kernel only prepares its inputs and dispatches
     // the result below.
     int emit_dx = 0, emit_dy = 0;

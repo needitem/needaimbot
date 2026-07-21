@@ -74,31 +74,17 @@ struct AimConfig {
     // coast_enabled != 0: during the persistence window, keep emitting the last
     // movement scaled by coast_decay^frames (glide) instead of holding still.
     // Decays to zero so a vanished target does not cause shake or freeze.
+    //
+    // NOTE: velocity feedforward / dead-time prediction were removed. The
+    // screen-space velocity estimate (AimState::vel_*) is EGO-POLLUTED: the
+    // crosshair's own movement shifts the whole scene, so the measured drift is
+    // d(error)/dt, which is ~0 at steady tracking - feedforward on it cannot
+    // cancel ramp lag and only amplifies detector noise (sim-confirmed). Do not
+    // reintroduce lead terms on this signal; they need a LAG-ALIGNED ego-motion
+    // corrected velocity (add back the applied moves from ~dead-time frames ago)
+    // to work. vel_* itself stays: coast uses it to glide across detection gaps.
     float coast_enabled = 1.0f;
     float coast_decay = 0.85f;
-
-    // --- Velocity feedforward (tighter tracking of moving targets) ---
-    // Adds feedforward_gain * (target per-frame drift) to the P move so the aim
-    // keeps pace with a moving target instead of lagging behind it. This is NOT
-    // forward prediction/lead - it compensates the target's CURRENT motion, so
-    // it does not overshoot past the target on direction changes. 0 = off,
-    // 1.0 = fully cancel steady-state tracking lag for constant velocity.
-    float feedforward_gain = 0.9f;
-    // Confidence gate on the feedforward term. The raw velocity estimate is
-    // noisy at rest (X-heavy ~4px detector jitter), so a fixed feedforward
-    // buzzes when the target is stationary. Scale ff by speed confidence
-    // g = speed / (speed + feedforward_vgate): ~0 at rest/jitter (ff suppressed,
-    // no buzz), ->1 when the target genuinely moves (full tracking lead).
-    // feedforward_vgate = px/frame speed at which the gate reaches ~0.5.
-    // 0 = gate disabled (feedforward always at full gain, old behavior).
-    float feedforward_vgate = 0.0f;
-    // Dead-time predictor: aim predict_horizon FRAMES ahead of the (stale)
-    // detection along the gated target velocity, to compensate the ~pipeline
-    // latency so a moving target isn't chased by its tail. Uses feedforward_vgate
-    // as its confidence gate. ~1.5 is a good value (full dead-time amplifies
-    // noise). 0 = off. Overlaps feedforward - pair a nonzero horizon with a low
-    // feedforward_gain, not both at full.
-    float predict_horizon = 0.0f;
 
     // --- One Euro adaptive low-pass on the target center ---
     // Removes detector jitter at the source: heavy smoothing when the target is

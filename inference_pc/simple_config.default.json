@@ -4,20 +4,25 @@
     "udp_port": 5007,
     "makcu_port": "/dev/ttyACM0",
     "makcu_baudrate": 4000000,
-
     "_section_DETECTION": "========== DETECTION ==========",
     "conf_threshold": 0.2,
     "head_class_id": 1,
     "max_detections": 100,
-    "allowed_classes": [0, 1],
-    "pre_capture_shapes": [[320, 320]],
-
+    "allowed_classes": [
+        0,
+        1
+    ],
+    "pre_capture_shapes": [
+        [
+            320,
+            320
+        ]
+    ],
     "_section_AIM POINT": "========== AIM POINT ==========",
     "head_aim_point": 1.0,
     "body_aim_point": 0.15,
     "shoot_offset_x": 0.0,
     "shoot_offset_y": 0.0,
-
     "_section_AIM CONTROLLER + CENTER FILTER": "========== AIM CONTROLLER + CENTER FILTER ==========",
     "aim_kp_x": 0.55,
     "aim_kp_y": 0.6,
@@ -31,22 +36,18 @@
     "thumb_aim_softness_y": 10.0,
     "thumb_aim_kd_x": 0.18,
     "thumb_aim_kd_y": 0.22,
-    "_section_tracking": "===== Target tracking / stickiness / feedforward =====",
+    "_section_tracking": "===== Target tracking / stickiness =====",
     "iou_stickiness_threshold": 0.8,
     "distance_stickiness_factor": 0.0,
     "track_persistence_frames": 3,
     "coast_enabled": true,
     "coast_decay": 0.85,
-    "feedforward_gain": 0.9,
-    "feedforward_vgate": 0.0,
-    "predict_horizon": 0.0,
     "aim_max_step": 30.0,
     "_section_oneeuro": "===== One Euro center filter (jitter suppression) =====",
     "oneeuro_enabled": true,
     "oneeuro_min_cutoff": 0.1,
     "oneeuro_beta": 0.02,
     "oneeuro_dcutoff": 0.5,
-
     "_section_FLICK (warped-replay)": "========== FLICK (warped-replay) ==========",
     "flick_enabled": false,
     "flick_replay_db_path": "flick_trajectories.json",
@@ -55,13 +56,11 @@
     "flick_elastic_modes": 3,
     "flick_var_amp": 0.06,
     "flick_min_reach": 5.0,
-
     "_section_RECOIL COMPENSATION": "========== RECOIL COMPENSATION ==========",
     "no_recoil_enabled": false,
     "recoil_comp_x": 0.0,
     "recoil_comp_y": 3.0,
     "recoil_tick_ms": 8,
-
     "_section_PIPELINE / LATENCY": "========== PIPELINE / LATENCY ==========",
     "max_inflight_frames": 1,
     "frame_credit_depth": 2,
@@ -71,7 +70,6 @@
     "udp_busy_spin": false,
     "idle_graph_precapture_enabled": true,
     "idle_graph_precapture_interval_ms": 100,
-
     "_section_SYSTEM (threads / CPU affinity)": "========== SYSTEM (threads / CPU affinity) ==========",
     "realtime_threads_enabled": true,
     "cpu_affinity_enabled": true,
@@ -79,7 +77,6 @@
     "affinity_core_receive": 7,
     "affinity_core_callback": 6,
     "affinity_core_sender": 4,
-
     "_section_DIAGNOSTICS (perf log / calibration / bench)": "========== DIAGNOSTICS (perf log / calibration / bench) ==========",
     "perf_stats_enabled": false,
     "perf_stats_interval_ms": 1000,
