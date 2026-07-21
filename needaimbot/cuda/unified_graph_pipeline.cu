@@ -2,6 +2,7 @@
 #include "detection/cuda_float_processing.h"
 #include "simple_cuda_mat.h"
 #include "../AppContext.h"
+#include "../core/calib_logger.h"
 #include "../capture/capture_interface.h"
 #include "../core/logger.h"
 #include "cuda_error_check.h"
@@ -1121,6 +1122,13 @@ bool UnifiedGraphPipeline::captureGraph(cudaStream_t stream) {
             cudaMemcpyAsync(m_h_movement->get(), m_smallBufferArena.mouseMovement,
                            sizeof(MouseMovement), cudaMemcpyDeviceToHost, stream);
         }
+        // Calibration: copy the selected target box to host (opt-in; the branch
+        // is fixed at graph-capture time since calib logging is a startup flag).
+        if (m_calibLogger && m_h_bestTarget && m_h_bestTarget->get() &&
+            m_smallBufferArena.bestTarget) {
+            cudaMemcpyAsync(m_h_bestTarget->get(), m_smallBufferArena.bestTarget,
+                           sizeof(Target), cudaMemcpyDeviceToHost, stream);
+        }
 
         // Debug overlay D2H copies - always captured in graph (negligible overhead).
         // This avoids needing show_window as a topology parameter.
@@ -1247,6 +1255,13 @@ bool UnifiedGraphPipeline::updateGraphExec() {
         if (!m_mouseMovementUsesMappedMemory) {
             cudaMemcpyAsync(m_h_movement->get(), m_smallBufferArena.mouseMovement,
                            sizeof(MouseMovement), cudaMemcpyDeviceToHost, stream);
+        }
+        // Calibration: copy the selected target box to host (opt-in; the branch
+        // is fixed at graph-capture time since calib logging is a startup flag).
+        if (m_calibLogger && m_h_bestTarget && m_h_bestTarget->get() &&
+            m_smallBufferArena.bestTarget) {
+            cudaMemcpyAsync(m_h_bestTarget->get(), m_smallBufferArena.bestTarget,
+                           sizeof(Target), cudaMemcpyDeviceToHost, stream);
         }
 
         // Debug overlay D2H copies (same as captureGraph)
@@ -1418,6 +1433,18 @@ bool UnifiedGraphPipeline::allocateBuffers() {
             *m_h_targetCount->get() = 0;
         }
 
+        // Host copy of the selected target + calibration logger (opt-in).
+        m_h_bestTarget = std::make_unique<CudaPinnedMemory<Target>>(1);
+        {
+            auto& gcfg = AppContext::getInstance().config.global();
+            if (gcfg.calib_logging_enabled) {
+                const std::string calibPath =
+                    gcfg.calib_log_path.empty() ? std::string("calib.csv") : gcfg.calib_log_path;
+                m_calibLogger = std::make_unique<CalibLogger>(calibPath);
+                std::cout << "[Calib] logging detections to " << calibPath << std::endl;
+            }
+        }
+
         // Defer aliasing until TensorRT bindings are created to avoid spurious warnings
         if (m_unifiedArena.yoloInput && !m_inputBindings.empty()) {
             (void)ensurePrimaryInputBindingAliased();
@@ -1485,6 +1512,8 @@ void UnifiedGraphPipeline::deallocateBuffers() {
 
     m_h_movement.reset();
     m_h_allowFlags.reset();
+    if (m_calibLogger) { m_calibLogger->dump(); m_calibLogger.reset(); }
+    m_h_bestTarget.reset();
     m_mouseMovementUsesMappedMemory = false;
 
     m_inputBindings.clear();
@@ -1857,6 +1886,45 @@ bool UnifiedGraphPipeline::enqueueFrameCompletionCallback(cudaStream_t stream, c
             bool allowMovement = pipeline->m_allowMovement.load(std::memory_order_acquire);
             pipeline->m_allowMovement.store(false, std::memory_order_release);
 
+            // Calibration logging (opt-in): record EVERY completed frame - before
+            // the aiming/movement gate - so an aim-OFF stationary capture still
+            // logs pure detector noise. lat_us is capture(present)->complete.
+            if (pipeline->m_calibLogger && pipeline->m_h_bestTarget &&
+                pipeline->m_h_bestTarget->get() && pipeline->m_h_movement &&
+                pipeline->m_h_movement->get()) {
+                static LARGE_INTEGER s_qpcFreq = [] {
+                    LARGE_INTEGER f{}; QueryPerformanceFrequency(&f); return f;
+                }();
+                int64_t latUs = -1;
+                LARGE_INTEGER nowQpc{};
+                if (meta.presentQpc != 0 && s_qpcFreq.QuadPart != 0 &&
+                    QueryPerformanceCounter(&nowQpc)) {
+                    latUs = static_cast<int64_t>(
+                        (nowQpc.QuadPart - static_cast<int64_t>(meta.presentQpc)) *
+                        1000000LL / s_qpcFreq.QuadPart);
+                    if (latUs < 0 || latUs > 1000000) latUs = -1;  // drop clock skew/outliers
+                }
+                const Target& bt = *pipeline->m_h_bestTarget->get();
+                const MouseMovement& mv = *pipeline->m_h_movement->get();
+                const bool hasT = (bt.classId >= 0) && (bt.confidence > 0.0f) &&
+                                  (bt.width > 0) && (bt.height > 0);
+                gpa::CalibRecord rec{};
+                rec.t_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - pipeline->m_calibLogger->start()).count();
+                rec.lat_us = latUs;
+                rec.aiming = ctx.aiming.load() ? 1 : 0;
+                rec.hasTarget = hasT ? 1 : 0;
+                rec.classId = bt.classId;
+                rec.conf = bt.confidence;
+                rec.cx = static_cast<float>(bt.x) + static_cast<float>(bt.width) * 0.5f;
+                rec.cy = static_cast<float>(bt.y) + static_cast<float>(bt.height) * 0.5f;
+                rec.w = static_cast<float>(bt.width);
+                rec.h = static_cast<float>(bt.height);
+                rec.emitDx = mv.dx;
+                rec.emitDy = mv.dy;
+                pipeline->m_calibLogger->record(rec);
+            }
+
             if (pipeline->m_h_movement && pipeline->m_h_movement->get()) {
                 bool isSingleShot = ctx.single_shot_mode.load();
                 bool shouldMove = allowMovement && (ctx.aiming || isSingleShot);
@@ -2016,9 +2084,28 @@ void UnifiedGraphPipeline::runMainLoop() {
             wasAiming = true;
         }
 
-        // Main loop: synchronous capture + processing
-        while (ctx.aiming.load() && !m_shouldStop.load(std::memory_order_acquire) &&
+        // Main loop: synchronous capture + processing. Keeps running through a
+        // configurable keep-warm tail after the aim key releases so a quick
+        // re-aim reacquires an already-warm detector + live track (no cold
+        // cycle). Movement stays gated on ctx.aiming in the completion callback,
+        // so the tail infers without moving the mouse. 0 = strict aim-only gate.
+        const int keepwarmMs = ctx.config.global().inference_keepwarm_ms;
+        std::chrono::steady_clock::time_point keepwarmDeadline{};
+        bool keepwarmArmed = false;
+        while (!m_shouldStop.load(std::memory_order_acquire) &&
                !ctx.should_exit.load()) {
+
+            if (ctx.aiming.load()) {
+                keepwarmArmed = false;  // actively aiming - tail not counting down
+            } else {
+                if (keepwarmMs <= 0) break;  // strict aim-only gate (default)
+                if (!keepwarmArmed) {
+                    keepwarmArmed = true;
+                    keepwarmDeadline = std::chrono::steady_clock::now() +
+                                       std::chrono::milliseconds(keepwarmMs);
+                }
+                if (std::chrono::steady_clock::now() >= keepwarmDeadline) break;
+            }
 
             // Synchronous: execute frame (acquires, preprocesses, infers, outputs)
             if (!executeFrame(nullptr)) {
@@ -3099,6 +3186,14 @@ acquired:
                     sizeof(MouseMovement),
                     cudaMemcpyDeviceToHost,
                     execStream);
+            }
+
+            // Calibration: copy the selected target box to host (opt-in). This is
+            // the non-graph path (default), so calib logging works without graphs.
+            if (m_calibLogger && m_h_bestTarget && m_h_bestTarget->get() &&
+                m_smallBufferArena.bestTarget) {
+                cudaMemcpyAsync(m_h_bestTarget->get(), m_smallBufferArena.bestTarget,
+                               sizeof(Target), cudaMemcpyDeviceToHost, execStream);
             }
 
             // Copy target data to host for debug overlay

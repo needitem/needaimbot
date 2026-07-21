@@ -229,7 +229,10 @@ void to_json(json& j, const GlobalSettings& g) {
         {"show_fps", g.show_fps},
         {"screenshot_button", g.screenshot_button},
         {"screenshot_delay", g.screenshot_delay},
-        {"always_on_top", g.always_on_top}
+        {"always_on_top", g.always_on_top},
+        {"inference_keepwarm_ms", g.inference_keepwarm_ms},
+        {"calib_logging_enabled", g.calib_logging_enabled},
+        {"calib_log_path", g.calib_log_path}
     };
 }
 
@@ -273,6 +276,9 @@ void from_json(const json& j, GlobalSettings& g) {
     GET_OBF(screenshot_button, "snapshot_btn");
     GET_OBF(screenshot_delay, "snapshot_delay");
     GET_IF(always_on_top);
+    GET_IF(inference_keepwarm_ms);
+    GET_IF(calib_logging_enabled);
+    GET_IF(calib_log_path);
     #undef GET_IF
     #undef GET_OBF
 }

@@ -225,6 +225,20 @@ struct GlobalSettings {
     std::vector<std::string> screenshot_button = {"None"};
     int screenshot_delay = 500;
     bool always_on_top = false;
+
+    // --- Inference gating & diagnostics (ported from 2pc) ---
+    // Keep inference running this many ms AFTER the aim key releases so a quick
+    // re-aim reacquires instantly (already-warm detection + live track). 0 =
+    // strict aim-only gate (default: max GPU handed back to the game). Negative
+    // is intentionally NOT supported on 1pc - always-on inference would starve
+    // the game's GPU on a single-PC setup.
+    int inference_keepwarm_ms = 0;
+    // Calibration logging: buffer per-frame detector center/size/conf + emitted
+    // move + capture->complete latency, dumped to CSV on exit for
+    // bench/calibrate.py (measure detector-noise sigma and dead-time to tune the
+    // aim controller). Off by default - writes nothing to disk when disabled.
+    bool calib_logging_enabled = false;
+    std::string calib_log_path = "calib.csv";
 };
 
 void to_json(json& j, const GlobalSettings& g);

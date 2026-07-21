@@ -25,6 +25,8 @@ class ICaptureProvider;
 
 namespace gpa {
 
+class CalibLogger;  // needaimbot/core/calib_logger.h (defined where used, in the .cu)
+
 struct MouseMovement {
     int dx;
     int dy;
@@ -607,6 +609,12 @@ private:
     std::unique_ptr<CudaPinnedMemory<Target>> m_h_targets;
     std::unique_ptr<CudaPinnedMemory<int>> m_h_targetCount;
     static constexpr int MAX_HOST_TARGETS = 64;
+
+    // Host copy of the kernel's selected target, for calibration logging only
+    // (allocated regardless; the D2H copy + record are gated on m_calibLogger).
+    std::unique_ptr<CudaPinnedMemory<Target>> m_h_bestTarget;
+    // Calibration CSV logger (null unless GlobalSettings::calib_logging_enabled).
+    std::unique_ptr<CalibLogger> m_calibLogger;
 
     bool m_mouseMovementUsesMappedMemory = false;
 
