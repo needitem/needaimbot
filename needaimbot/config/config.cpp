@@ -27,11 +27,17 @@ void to_json(json& j, const ProfileData& p) {
         {"aim_shoot_offset_x", p.aim_shoot_offset_x},
         {"aim_shoot_offset_y", p.aim_shoot_offset_y},
         {"iou_stickiness_threshold", p.iou_stickiness_threshold},
-        {"pid_kp_x", p.pid_kp_x}, {"pid_kp_y", p.pid_kp_y},
-        {"pid_ki_x", p.pid_ki_x}, {"pid_ki_y", p.pid_ki_y},
-        {"pid_kd_x", p.pid_kd_x}, {"pid_kd_y", p.pid_kd_y},
-        {"pid_integral_max", p.pid_integral_max},
-        {"pid_derivative_max", p.pid_derivative_max},
+        {"aim_kp_x", p.aim_kp_x}, {"aim_kp_y", p.aim_kp_y},
+        {"aim_softness_x", p.aim_softness_x}, {"aim_softness_y", p.aim_softness_y},
+        {"aim_kd_x", p.aim_kd_x}, {"aim_kd_y", p.aim_kd_y},
+        {"aim_max_step", p.aim_max_step},
+        {"oneeuro_enabled", p.oneeuro_enabled},
+        {"oneeuro_min_cutoff", p.oneeuro_min_cutoff},
+        {"oneeuro_beta", p.oneeuro_beta},
+        {"oneeuro_dcutoff", p.oneeuro_dcutoff},
+        {"coast_enabled", p.coast_enabled},
+        {"coast_decay", p.coast_decay},
+        {"track_persistence_frames", p.track_persistence_frames},
         {"deadband_enter_x", p.deadband_enter_x},
         {"deadband_exit_x", p.deadband_exit_x},
         {"deadband_enter_y", p.deadband_enter_y},
@@ -114,11 +120,17 @@ void from_json(const json& j, ProfileData& p) {
     GET_OBF(aim_shoot_offset_x, "fcs_fire_offset_x");
     GET_OBF(aim_shoot_offset_y, "fcs_fire_offset_y");
     GET_IF(iou_stickiness_threshold);
-    GET_IF(pid_kp_x); GET_IF(pid_kp_y);
-    GET_IF(pid_ki_x); GET_IF(pid_ki_y);
-    GET_IF(pid_kd_x); GET_IF(pid_kd_y);
-    GET_IF(pid_integral_max);
-    GET_IF(pid_derivative_max);
+    GET_IF(aim_kp_x); GET_IF(aim_kp_y);
+    GET_IF(aim_softness_x); GET_IF(aim_softness_y);
+    GET_IF(aim_kd_x); GET_IF(aim_kd_y);
+    GET_IF(aim_max_step);
+    GET_IF(oneeuro_enabled);
+    GET_IF(oneeuro_min_cutoff);
+    GET_IF(oneeuro_beta);
+    GET_IF(oneeuro_dcutoff);
+    GET_IF(coast_enabled);
+    GET_IF(coast_decay);
+    GET_IF(track_persistence_frames);
     GET_IF(deadband_enter_x);
     GET_IF(deadband_exit_x);
     GET_IF(deadband_enter_y);

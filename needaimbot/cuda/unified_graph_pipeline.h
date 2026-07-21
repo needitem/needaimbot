@@ -30,11 +30,23 @@ struct MouseMovement {
     int dy;
 };
 
-struct PIDState {
-    float prev_error_x;
-    float prev_error_y;
-    float integral_x;
-    float integral_y;
+// Persistent per-frame state for the nonlinear P+D aim controller with a One
+// Euro center pre-filter and detection-gap coast (ported from the 2pc branch).
+// Replaces the old linear-PID prev_error/integral state.
+struct AimState {
+    // One Euro adaptive low-pass on the measured target center.
+    float filt_x, filt_y;       // filtered center
+    float dfilt_x, dfilt_y;     // low-passed center derivative (drives adaptive cutoff)
+    // Derivative (D) term: smoothed error rate.
+    float prev_err_x, prev_err_y;
+    float derr_x, derr_y;
+    // Target screen drift + track state (feeds coast across brief detection gaps).
+    int has_track;
+    int frames_since_seen;
+    float prev_center_x, prev_center_y;
+    float vel_x, vel_y;
+    // Integer-emit residual carry (sub-count remainder).
+    float residual_x, residual_y;
 };
 
 // Frame metadata for synchronous capture
@@ -109,12 +121,19 @@ struct PerformanceMetrics {
 // instead of baked launch parameters, so graph topology stays fixed while
 // runtime values (PID gains, offsets, thresholds) change between frames.
 struct DeviceConfig {
-    // PID controller
+    // Nonlinear P + D aim controller (ported from 2pc). Movement =
+    // nonlinearP(err, kp, softness) + kd * derr, then max_step clamp.
     float kp_x, kp_y;
-    float ki_x, ki_y;
+    float softness_x, softness_y;
     float kd_x, kd_y;
-    float integral_max;
-    float derivative_max;
+    float max_step;
+    // One Euro adaptive low-pass on the target center (jitter suppression).
+    int oneeuro_enabled;
+    float oneeuro_min_cutoff, oneeuro_beta, oneeuro_dcutoff;
+    // Coast: glide on last drift across brief detection gaps.
+    int coast_enabled;
+    float coast_decay;
+    int track_persistence_frames;
 
     // Target selection
     float head_y_offset;
@@ -159,7 +178,7 @@ struct SmallBufferArena {
     Target* selectedTarget;
     Target* bestTarget;
     MouseMovement* mouseMovement;
-    PIDState* pidState;
+    AimState* aimState;
 
     DeviceConfig* deviceConfig;
 
@@ -196,9 +215,9 @@ struct SmallBufferArena {
         mouseMovement = reinterpret_cast<MouseMovement*>(basePtr + offset);
         offset += sizeof(MouseMovement);
 
-        offset = (offset + alignof(PIDState) - 1) & ~(alignof(PIDState) - 1);
-        pidState = reinterpret_cast<PIDState*>(basePtr + offset);
-        offset += sizeof(PIDState);
+        offset = (offset + alignof(AimState) - 1) & ~(alignof(AimState) - 1);
+        aimState = reinterpret_cast<AimState*>(basePtr + offset);
+        offset += sizeof(AimState);
 
         offset = (offset + alignof(DeviceConfig) - 1) & ~(alignof(DeviceConfig) - 1);
         deviceConfig = reinterpret_cast<DeviceConfig*>(basePtr + offset);
@@ -228,8 +247,8 @@ struct SmallBufferArena {
         size = (size + alignof(MouseMovement) - 1) & ~(alignof(MouseMovement) - 1);
         size += sizeof(MouseMovement);
 
-        size = (size + alignof(PIDState) - 1) & ~(alignof(PIDState) - 1);
-        size += sizeof(PIDState);
+        size = (size + alignof(AimState) - 1) & ~(alignof(AimState) - 1);
+        size += sizeof(AimState);
 
         size = (size + alignof(DeviceConfig) - 1) & ~(alignof(DeviceConfig) - 1);
         size += sizeof(DeviceConfig);
@@ -470,14 +489,18 @@ private:
 
     // v2 Lock-free config cache - updated explicitly or from background, read without locks in hot path
     struct CachedConfig {
-        // PID parameters
+        // Nonlinear P+D + One Euro + coast aim controller parameters.
         struct {
             float kp_x, kp_y;
-            float ki_x, ki_y;
+            float softness_x, softness_y;
             float kd_x, kd_y;
-            float integral_max;
-            float derivative_max;
-        } pid;
+            float max_step;
+            int oneeuro_enabled;
+            float oneeuro_min_cutoff, oneeuro_beta, oneeuro_dcutoff;
+            int coast_enabled;
+            float coast_decay;
+            int track_persistence_frames;
+        } aim;
 
         // Target selection
         struct {

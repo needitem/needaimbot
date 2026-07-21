@@ -819,42 +819,42 @@ void OverlayThread()
                 float labelWidth = 70.0f;
                 float inputWidth = (ImGui::GetContentRegionAvail().x - labelWidth - 10.0f) * 0.5f;
                 
-                // PID Kp (Proportional - Response Speed)
+                // Nonlinear P (Kp - Response Speed)
                 ImGui::Text("Kp");
                 ImGui::SameLine(labelWidth);
                 ImGui::SetNextItemWidth(inputWidth);
-                if (ImGui::DragFloat("##kp_x", &ctx.config.profile().pid_kp_x, 0.005f, 0.0f, 2.0f, "X: %.3f")) {
+                if (ImGui::DragFloat("##kp_x", &ctx.config.profile().aim_kp_x, 0.005f, 0.0f, 2.0f, "X: %.3f")) {
                     MARK_CONFIG_DIRTY();
                 }
                 ImGui::SameLine();
                 ImGui::SetNextItemWidth(inputWidth);
-                if (ImGui::DragFloat("##kp_y", &ctx.config.profile().pid_kp_y, 0.005f, 0.0f, 2.0f, "Y: %.3f")) {
+                if (ImGui::DragFloat("##kp_y", &ctx.config.profile().aim_kp_y, 0.005f, 0.0f, 2.0f, "Y: %.3f")) {
                     MARK_CONFIG_DIRTY();
                 }
-                
-                // PID Ki (Integral - Tracking)
-                ImGui::Text("Ki");
+
+                // Softness (nonlinear knee - gentleness near target)
+                ImGui::Text("Soft");
                 ImGui::SameLine(labelWidth);
                 ImGui::SetNextItemWidth(inputWidth);
-                if (ImGui::DragFloat("##ki_x", &ctx.config.profile().pid_ki_x, 0.001f, 0.0f, 0.3f, "X: %.4f")) {
+                if (ImGui::DragFloat("##soft_x", &ctx.config.profile().aim_softness_x, 0.1f, 1.0f, 40.0f, "X: %.1f")) {
                     MARK_CONFIG_DIRTY();
                 }
                 ImGui::SameLine();
                 ImGui::SetNextItemWidth(inputWidth);
-                if (ImGui::DragFloat("##ki_y", &ctx.config.profile().pid_ki_y, 0.001f, 0.0f, 0.3f, "Y: %.4f")) {
+                if (ImGui::DragFloat("##soft_y", &ctx.config.profile().aim_softness_y, 0.1f, 1.0f, 40.0f, "Y: %.1f")) {
                     MARK_CONFIG_DIRTY();
                 }
-                
-                // PID Kd (Derivative - Damping)
+
+                // Derivative (Kd - Damping)
                 ImGui::Text("Kd");
                 ImGui::SameLine(labelWidth);
                 ImGui::SetNextItemWidth(inputWidth);
-                if (ImGui::DragFloat("##kd_x", &ctx.config.profile().pid_kd_x, 0.005f, 0.0f, 1.0f, "X: %.3f")) {
+                if (ImGui::DragFloat("##kd_x", &ctx.config.profile().aim_kd_x, 0.005f, 0.0f, 1.0f, "X: %.3f")) {
                     MARK_CONFIG_DIRTY();
                 }
                 ImGui::SameLine();
                 ImGui::SetNextItemWidth(inputWidth);
-                if (ImGui::DragFloat("##kd_y", &ctx.config.profile().pid_kd_y, 0.005f, 0.0f, 1.0f, "Y: %.3f")) {
+                if (ImGui::DragFloat("##kd_y", &ctx.config.profile().aim_kd_y, 0.005f, 0.0f, 1.0f, "Y: %.3f")) {
                     MARK_CONFIG_DIRTY();
                 }
                 

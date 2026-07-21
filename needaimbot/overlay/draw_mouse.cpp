@@ -21,16 +21,16 @@ static void draw_movement_controls()
 {
     auto& ctx = AppContext::getInstance();
 
-    UIHelpers::BeginCard("PID Controller Settings");
+    UIHelpers::BeginCard("Aim Controller (Nonlinear P+D + One Euro)");
 
-    UIHelpers::BeautifulText("PID controller provides smooth, accurate tracking with oscillation suppression.", UIHelpers::GetAccentColor(0.8f));
-    UIHelpers::BeautifulText("P = Responsiveness, I = Tracking moving targets, D = Dampening oscillation", ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
+    UIHelpers::BeautifulText("Nonlinear P+D with a One Euro center filter and detection-gap coast (ported from the 2pc build).", UIHelpers::GetAccentColor(0.8f));
+    UIHelpers::BeautifulText("Kp = response, Softness = gentleness near target, Kd = damping. (Integral removed: it amplifies dead-time lag.)", ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
     UIHelpers::CompactSpacer();
 
-    if (ImGui::BeginTabBar("PIDTabs")) {
+    if (ImGui::BeginTabBar("AimTabs")) {
         if (ImGui::BeginTabItem("Proportional (P)")) {
             UIHelpers::SettingsSubHeader("Proportional Gain (Kp)");
-            UIHelpers::BeautifulText("Controls response speed. Higher = faster aiming, but may overshoot.", ImVec4(0.8f, 0.8f, 0.8f, 1.0f));
+            UIHelpers::BeautifulText("Response speed. Higher = faster aiming, but may overshoot.", ImVec4(0.8f, 0.8f, 0.8f, 1.0f));
             UIHelpers::CompactSpacer();
 
             if (ImGui::BeginTable("KpTable", 2, ImGuiTableFlags_None)) {
@@ -41,31 +41,28 @@ static void draw_movement_controls()
                 ImGui::TableNextRow();
                 ImGui::TableSetColumnIndex(0);
                 ImGui::PushItemWidth(-1);
-                if (ImGui::SliderFloat("##KpX", &ctx.config.profile().pid_kp_x, 0.0f, 2.0f, "%.3f")) {
+                if (ImGui::SliderFloat("##KpX", &ctx.config.profile().aim_kp_x, 0.0f, 2.0f, "%.3f")) {
                     SAVE_PROFILE();
                 }
                 ImGui::PopItemWidth();
 
                 ImGui::TableSetColumnIndex(1);
                 ImGui::PushItemWidth(-1);
-                if (ImGui::SliderFloat("##KpY", &ctx.config.profile().pid_kp_y, 0.0f, 2.0f, "%.3f")) {
+                if (ImGui::SliderFloat("##KpY", &ctx.config.profile().aim_kp_y, 0.0f, 2.0f, "%.3f")) {
                     SAVE_PROFILE();
                 }
                 ImGui::PopItemWidth();
 
                 ImGui::EndTable();
             }
-            UIHelpers::HelpMarker("Recommended: 0.3-0.8. Higher values = faster response but more overshoot.");
-            ImGui::EndTabItem();
-        }
+            UIHelpers::HelpMarker("Recommended: 0.4-0.7.");
 
-        if (ImGui::BeginTabItem("Integral (I)")) {
-            UIHelpers::SettingsSubHeader("Integral Gain (Ki)");
-            UIHelpers::BeautifulText("Eliminates steady-state error. Essential for tracking moving targets.", ImVec4(0.8f, 0.8f, 0.8f, 1.0f));
-            UIHelpers::BeautifulText("Set to 0 for PD controller (no integral). Use small values (0.01-0.1).", UIHelpers::GetWarningColor());
+            UIHelpers::CompactSpacer();
+            UIHelpers::SettingsSubHeader("Softness (nonlinear knee)");
+            UIHelpers::BeautifulText("Higher = gentler correction near target (suppresses detector-noise buzz).", ImVec4(0.8f, 0.8f, 0.8f, 1.0f));
             UIHelpers::CompactSpacer();
 
-            if (ImGui::BeginTable("KiTable", 2, ImGuiTableFlags_None)) {
+            if (ImGui::BeginTable("SoftTable", 2, ImGuiTableFlags_None)) {
                 ImGui::TableSetupColumn("X-Axis", ImGuiTableColumnFlags_WidthStretch);
                 ImGui::TableSetupColumn("Y-Axis", ImGuiTableColumnFlags_WidthStretch);
                 ImGui::TableHeadersRow();
@@ -73,37 +70,27 @@ static void draw_movement_controls()
                 ImGui::TableNextRow();
                 ImGui::TableSetColumnIndex(0);
                 ImGui::PushItemWidth(-1);
-                if (ImGui::SliderFloat("##KiX", &ctx.config.profile().pid_ki_x, 0.0f, 0.3f, "%.4f")) {
+                if (ImGui::SliderFloat("##SoftX", &ctx.config.profile().aim_softness_x, 1.0f, 40.0f, "%.1f")) {
                     SAVE_PROFILE();
                 }
                 ImGui::PopItemWidth();
 
                 ImGui::TableSetColumnIndex(1);
                 ImGui::PushItemWidth(-1);
-                if (ImGui::SliderFloat("##KiY", &ctx.config.profile().pid_ki_y, 0.0f, 0.3f, "%.4f")) {
+                if (ImGui::SliderFloat("##SoftY", &ctx.config.profile().aim_softness_y, 1.0f, 40.0f, "%.1f")) {
                     SAVE_PROFILE();
                 }
                 ImGui::PopItemWidth();
 
                 ImGui::EndTable();
             }
-            UIHelpers::HelpMarker("Start with 0 (PD mode). Increase gradually to 0.05-0.1 if target tracking lags.");
-
-            UIHelpers::CompactSpacer();
-            UIHelpers::SettingsSubHeader("Anti-Windup Limit");
-            ImGui::PushItemWidth(-1);
-            if (ImGui::SliderFloat("##IntegralMax", &ctx.config.profile().pid_integral_max, 10.0f, 500.0f, "%.0f px")) {
-                SAVE_PROFILE();
-            }
-            ImGui::PopItemWidth();
-            UIHelpers::HelpMarker("Prevents integral from accumulating too much (windup protection). Default: 100px.");
-
+            UIHelpers::HelpMarker("Recommended: 8-14. Lower = snappier but noisier near target.");
             ImGui::EndTabItem();
         }
 
         if (ImGui::BeginTabItem("Derivative (D)")) {
             UIHelpers::SettingsSubHeader("Derivative Gain (Kd)");
-            UIHelpers::BeautifulText("Suppresses oscillation by damping sudden changes. Higher = smoother.", ImVec4(0.8f, 0.8f, 0.8f, 1.0f));
+            UIHelpers::BeautifulText("Damps oscillation on the smoothed error rate. Higher = smoother.", ImVec4(0.8f, 0.8f, 0.8f, 1.0f));
             UIHelpers::CompactSpacer();
 
             if (ImGui::BeginTable("KdTable", 2, ImGuiTableFlags_None)) {
@@ -114,31 +101,76 @@ static void draw_movement_controls()
                 ImGui::TableNextRow();
                 ImGui::TableSetColumnIndex(0);
                 ImGui::PushItemWidth(-1);
-                if (ImGui::SliderFloat("##KdX", &ctx.config.profile().pid_kd_x, 0.0f, 1.0f, "%.3f")) {
+                if (ImGui::SliderFloat("##KdX", &ctx.config.profile().aim_kd_x, 0.0f, 1.0f, "%.3f")) {
                     SAVE_PROFILE();
                 }
                 ImGui::PopItemWidth();
 
                 ImGui::TableSetColumnIndex(1);
                 ImGui::PushItemWidth(-1);
-                if (ImGui::SliderFloat("##KdY", &ctx.config.profile().pid_kd_y, 0.0f, 1.0f, "%.3f")) {
+                if (ImGui::SliderFloat("##KdY", &ctx.config.profile().aim_kd_y, 0.0f, 1.0f, "%.3f")) {
                     SAVE_PROFILE();
                 }
                 ImGui::PopItemWidth();
 
                 ImGui::EndTable();
             }
-            UIHelpers::HelpMarker("Recommended: 0.2-0.5. Higher values reduce oscillation but may slow response.");
+            UIHelpers::HelpMarker("Recommended: 0.15-0.35.");
+            ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem("One Euro Filter")) {
+            UIHelpers::SettingsSubHeader("Center Jitter Filter");
+            UIHelpers::BeautifulText("Adaptive low-pass on the target center: heavy smoothing at rest, light when moving fast.", ImVec4(0.8f, 0.8f, 0.8f, 1.0f));
+            UIHelpers::CompactSpacer();
+
+            if (ImGui::Checkbox("Enabled##OneEuro", &ctx.config.profile().oneeuro_enabled)) {
+                SAVE_PROFILE();
+            }
+            ImGui::PushItemWidth(-1);
+            if (ImGui::SliderFloat("##MinCutoff", &ctx.config.profile().oneeuro_min_cutoff, 0.01f, 1.0f, "min_cutoff %.3f")) {
+                SAVE_PROFILE();
+            }
+            UIHelpers::HelpMarker("Base cutoff at rest. Lower = smoother / more lag. Default 0.10.");
+            if (ImGui::SliderFloat("##Beta", &ctx.config.profile().oneeuro_beta, 0.0f, 0.5f, "beta %.3f")) {
+                SAVE_PROFILE();
+            }
+            UIHelpers::HelpMarker("Speed coefficient. Higher = less lag when moving fast. Default 0.02.");
+            if (ImGui::SliderFloat("##DCutoff", &ctx.config.profile().oneeuro_dcutoff, 0.1f, 2.0f, "dcutoff %.2f")) {
+                SAVE_PROFILE();
+            }
+            UIHelpers::HelpMarker("Derivative cutoff for the speed estimate. Default 0.50.");
+            ImGui::PopItemWidth();
+            ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem("Coast / Limits")) {
+            UIHelpers::SettingsSubHeader("Detection-gap Coast");
+            UIHelpers::BeautifulText("Bridges brief detection gaps by gliding on the last drift instead of freezing.", ImVec4(0.8f, 0.8f, 0.8f, 1.0f));
+            UIHelpers::CompactSpacer();
+
+            if (ImGui::Checkbox("Coast enabled", &ctx.config.profile().coast_enabled)) {
+                SAVE_PROFILE();
+            }
+            ImGui::PushItemWidth(-1);
+            if (ImGui::SliderFloat("##CoastDecay", &ctx.config.profile().coast_decay, 0.0f, 1.0f, "decay %.2f")) {
+                SAVE_PROFILE();
+            }
+            UIHelpers::HelpMarker("Per-missed-frame glide decay (nearer 1 = glides longer). Default 0.85.");
+            if (ImGui::SliderInt("##Persist", &ctx.config.profile().track_persistence_frames, 0, 15, "persistence %d frames")) {
+                SAVE_PROFILE();
+            }
+            UIHelpers::HelpMarker("Missed frames to bridge before dropping the target. Default 3.");
+            ImGui::PopItemWidth();
 
             UIHelpers::CompactSpacer();
-            UIHelpers::SettingsSubHeader("Derivative Clamp Limit");
+            UIHelpers::SettingsSubHeader("Per-frame Max Step");
             ImGui::PushItemWidth(-1);
-            if (ImGui::SliderFloat("##DerivativeMax", &ctx.config.profile().pid_derivative_max, 10.0f, 200.0f, "%.0f px")) {
+            if (ImGui::SliderFloat("##MaxStep", &ctx.config.profile().aim_max_step, 0.0f, 100.0f, "%.0f px")) {
                 SAVE_PROFILE();
             }
             ImGui::PopItemWidth();
-            UIHelpers::HelpMarker("Limits maximum derivative value to prevent excessive oscillation from large movements. Default: 50px.");
-
+            UIHelpers::HelpMarker("Caps the per-frame move so a large error is crossed smoothly. 0 = unbounded. Default 30px.");
             ImGui::EndTabItem();
         }
 

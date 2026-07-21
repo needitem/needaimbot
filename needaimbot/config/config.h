@@ -95,15 +95,26 @@ struct ProfileData {
     float aim_shoot_offset_y = 0.0f;
     float iou_stickiness_threshold = 0.30f;
 
-    // PID Controller
-    float pid_kp_x = 0.5f;
-    float pid_kp_y = 0.5f;
-    float pid_ki_x = 0.0f;
-    float pid_ki_y = 0.0f;
-    float pid_kd_x = 0.3f;
-    float pid_kd_y = 0.3f;
-    float pid_integral_max = 100.0f;
-    float pid_derivative_max = 50.0f;
+    // Nonlinear P+D aim controller (ported from 2pc; replaces linear PID).
+    // movement = nonlinearP(err, kp, softness) + kd * (smoothed error rate).
+    float aim_kp_x = 0.55f;
+    float aim_kp_y = 0.60f;
+    float aim_softness_x = 11.0f;   // higher = gentler near target (less buzz)
+    float aim_softness_y = 10.0f;
+    float aim_kd_x = 0.18f;         // derivative (damping) gain
+    float aim_kd_y = 0.22f;
+    float aim_max_step = 30.0f;     // per-frame move cap (px); 0 = unbounded
+
+    // One Euro adaptive low-pass on the target center (jitter suppression).
+    bool  oneeuro_enabled = true;
+    float oneeuro_min_cutoff = 0.10f;  // base cutoff at rest (lower = smoother)
+    float oneeuro_beta = 0.02f;        // speed coefficient (higher = less lag fast)
+    float oneeuro_dcutoff = 0.50f;     // derivative cutoff for the speed estimate
+
+    // Coast: glide on the last drift across brief detection gaps.
+    bool  coast_enabled = true;
+    float coast_decay = 0.85f;
+    int   track_persistence_frames = 3;
 
     // Deadband
     int deadband_enter_x = 2;

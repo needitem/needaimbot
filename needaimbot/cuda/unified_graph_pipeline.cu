@@ -68,15 +68,21 @@ bool UnifiedGraphPipeline::refreshConfigCache(const AppContext& ctx) {
             return false;
         }
 
-        // PID
-        m_cachedConfig.pid.kp_x = ctx.config.profile().pid_kp_x;
-        m_cachedConfig.pid.kp_y = ctx.config.profile().pid_kp_y;
-        m_cachedConfig.pid.ki_x = ctx.config.profile().pid_ki_x;
-        m_cachedConfig.pid.ki_y = ctx.config.profile().pid_ki_y;
-        m_cachedConfig.pid.kd_x = ctx.config.profile().pid_kd_x;
-        m_cachedConfig.pid.kd_y = ctx.config.profile().pid_kd_y;
-        m_cachedConfig.pid.integral_max = ctx.config.profile().pid_integral_max;
-        m_cachedConfig.pid.derivative_max = ctx.config.profile().pid_derivative_max;
+        // Aim controller (nonlinear P+D + One Euro + coast)
+        m_cachedConfig.aim.kp_x = ctx.config.profile().aim_kp_x;
+        m_cachedConfig.aim.kp_y = ctx.config.profile().aim_kp_y;
+        m_cachedConfig.aim.softness_x = ctx.config.profile().aim_softness_x;
+        m_cachedConfig.aim.softness_y = ctx.config.profile().aim_softness_y;
+        m_cachedConfig.aim.kd_x = ctx.config.profile().aim_kd_x;
+        m_cachedConfig.aim.kd_y = ctx.config.profile().aim_kd_y;
+        m_cachedConfig.aim.max_step = ctx.config.profile().aim_max_step;
+        m_cachedConfig.aim.oneeuro_enabled = ctx.config.profile().oneeuro_enabled ? 1 : 0;
+        m_cachedConfig.aim.oneeuro_min_cutoff = ctx.config.profile().oneeuro_min_cutoff;
+        m_cachedConfig.aim.oneeuro_beta = ctx.config.profile().oneeuro_beta;
+        m_cachedConfig.aim.oneeuro_dcutoff = ctx.config.profile().oneeuro_dcutoff;
+        m_cachedConfig.aim.coast_enabled = ctx.config.profile().coast_enabled ? 1 : 0;
+        m_cachedConfig.aim.coast_decay = ctx.config.profile().coast_decay;
+        m_cachedConfig.aim.track_persistence_frames = ctx.config.profile().track_persistence_frames;
 
         // Targeting
         m_cachedConfig.targeting.head_y_offset = ctx.config.profile().head_y_offset;
@@ -179,12 +185,18 @@ void UnifiedGraphPipeline::fillHostDeviceConfig() {
     int detRes = cfg.detection.detection_resolution;
 
     DeviceConfig& h = m_hostDeviceConfig;
-    // PID
-    h.kp_x = cfg.pid.kp_x;   h.kp_y = cfg.pid.kp_y;
-    h.ki_x = cfg.pid.ki_x;   h.ki_y = cfg.pid.ki_y;
-    h.kd_x = cfg.pid.kd_x;   h.kd_y = cfg.pid.kd_y;
-    h.integral_max = cfg.pid.integral_max;
-    h.derivative_max = cfg.pid.derivative_max;
+    // Aim controller (nonlinear P+D + One Euro + coast)
+    h.kp_x = cfg.aim.kp_x;   h.kp_y = cfg.aim.kp_y;
+    h.softness_x = cfg.aim.softness_x;   h.softness_y = cfg.aim.softness_y;
+    h.kd_x = cfg.aim.kd_x;   h.kd_y = cfg.aim.kd_y;
+    h.max_step = cfg.aim.max_step;
+    h.oneeuro_enabled = cfg.aim.oneeuro_enabled;
+    h.oneeuro_min_cutoff = cfg.aim.oneeuro_min_cutoff;
+    h.oneeuro_beta = cfg.aim.oneeuro_beta;
+    h.oneeuro_dcutoff = cfg.aim.oneeuro_dcutoff;
+    h.coast_enabled = cfg.aim.coast_enabled;
+    h.coast_decay = cfg.aim.coast_decay;
+    h.track_persistence_frames = cfg.aim.track_persistence_frames;
     // Targeting
     h.head_y_offset = cfg.targeting.head_y_offset;
     h.body_y_offset = cfg.targeting.body_y_offset;
@@ -573,6 +585,47 @@ __device__ float computeBoundingBoxIoU(const Target& a, const Target& b) {
     return static_cast<float>(inter_area) / static_cast<float>(union_area);
 }
 
+// ---- Nonlinear P+D aim controller helpers (ported from 2pc pd_controller.cuh)
+// One Euro low-pass alpha: alpha = 1 / (1 + tau/Te), tau = 1/(2*pi*cutoff), Te=1.
+__device__ __forceinline__ float oneEuroAlpha(float cutoff) {
+    const float tau = 1.0f / (2.0f * 3.14159265f * fmaxf(cutoff, 1e-4f));
+    return 1.0f / (1.0f + tau);
+}
+
+// Nonlinear proportional term: gain rises with error so the aim is gentle near
+// the target (suppresses detector-noise buzz) and firm when far.
+__device__ __forceinline__ float nonlinearPMove(float error, float kp, float softness) {
+    const float abs_error = fabsf(error);
+    const float safe_softness = fmaxf(softness, 1.0f);
+    const float gain = fmaxf(kp, 0.0f) * (abs_error / (abs_error + safe_softness));
+    return error * gain;
+}
+
+// Cap a per-frame move vector to maxStep px, preserving direction. <= 0 disables.
+__device__ __forceinline__ void clampMaxStep(float& mx, float& my, float maxStep) {
+    if (maxStep > 0.0f) {
+        const float step = sqrtf(mx * mx + my * my);
+        if (step > maxStep) {
+            const float s = maxStep / step;
+            mx *= s;
+            my *= s;
+        }
+    }
+}
+
+// Emit an integer mouse delta, carrying the sub-count remainder to the next
+// frame; clears the carry if it opposes the new direction (fresh reversal).
+__device__ __forceinline__ int emitMouseDelta(float movement, float* residual) {
+    float carried = *residual;
+    if (movement * carried < 0.0f) carried = 0.0f;
+    const float value = movement + carried;
+    int emit = __float2int_rz(value);
+    if (emit > 127)  { *residual = fminf(256.0f, value - 127.0f); return 127; }
+    if (emit < -127) { *residual = fmaxf(-256.0f, value + 127.0f); return -127; }
+    *residual = value - static_cast<float>(emit);
+    return emit;
+}
+
 __global__ void fusedTargetSelectionAndMovementKernel(
     Target* __restrict__ finalTargets,
     int* __restrict__ finalTargetsCount,
@@ -581,7 +634,7 @@ __global__ void fusedTargetSelectionAndMovementKernel(
     int* __restrict__ bestTargetIndex,
     Target* __restrict__ bestTarget,
     gpa::MouseMovement* __restrict__ output_movement,
-    gpa::PIDState* __restrict__ pidState
+    gpa::AimState* __restrict__ aimState
 ) {
     // Read runtime values from device config (updated each frame via cudaMemcpyAsync)
     const int maxDetections = config->max_detections;
@@ -590,12 +643,18 @@ __global__ void fusedTargetSelectionAndMovementKernel(
     const int head_class_id = config->head_class_id;
     const float kp_x = config->kp_x;
     const float kp_y = config->kp_y;
-    const float ki_x = config->ki_x;
-    const float ki_y = config->ki_y;
+    const float softness_x = config->softness_x;
+    const float softness_y = config->softness_y;
     const float kd_x = config->kd_x;
     const float kd_y = config->kd_y;
-    const float integral_max = config->integral_max;
-    const float derivative_max = config->derivative_max;
+    const float max_step = config->max_step;
+    const int   oneeuro_enabled = config->oneeuro_enabled;
+    const float oneeuro_min_cutoff = config->oneeuro_min_cutoff;
+    const float oneeuro_beta = config->oneeuro_beta;
+    const float oneeuro_dcutoff = config->oneeuro_dcutoff;
+    const int   coast_enabled = config->coast_enabled;
+    const float coast_decay = config->coast_decay;
+    const int   track_persistence_frames = config->track_persistence_frames;
     const float iou_stickiness_threshold = config->iou_stickiness_threshold;
     const float head_y_offset = config->head_y_offset;
     const float body_y_offset = config->body_y_offset;
@@ -624,7 +683,9 @@ __global__ void fusedTargetSelectionAndMovementKernel(
     __syncthreads();
 
     int count = *finalTargetsCount;
-    if (count <= 0 || count > maxDetections) {
+    if (count > maxDetections) {
+        // Corrupt count: bail safely. (count <= 0 is a normal zero-detection
+        // frame - let it fall through so the no-target path can coast.)
         if (threadIdx.x == 0 && selectedTarget) {
             Target emptyTarget = {};
             *selectedTarget = emptyTarget;
@@ -724,86 +785,128 @@ __global__ void fusedTargetSelectionAndMovementKernel(
                 *selectedTarget = chosenTarget;
             }
 
-            float target_center_x = chosenTarget.x + chosenTarget.width / 2.0f;
-            float target_center_y;
-
+            const float raw_center_x = chosenTarget.x + chosenTarget.width / 2.0f;
+            float raw_center_y;
             if (chosenTarget.classId == head_class_id) {
-                target_center_y = chosenTarget.y + chosenTarget.height * head_y_offset;
+                raw_center_y = chosenTarget.y + chosenTarget.height * head_y_offset;
             } else {
-                target_center_y = chosenTarget.y + chosenTarget.height * body_y_offset;
+                raw_center_y = chosenTarget.y + chosenTarget.height * body_y_offset;
             }
 
-            // Current error
-            float error_x = target_center_x - screen_center_x;
-            float error_y = target_center_y - screen_center_y;
+            // "Fresh acquire" = the track was not live last frame; used to seed
+            // the One Euro filter and reset the D term (avoids a derivative kick).
+            const bool fresh_track = (aimState->has_track == 0);
 
-            // Load previous PID state
-            float prev_error_x = pidState->prev_error_x;
-            float prev_error_y = pidState->prev_error_y;
-            float integral_x = pidState->integral_x;
-            float integral_y = pidState->integral_y;
+            // One Euro adaptive low-pass on the measured center: heavy smoothing
+            // near-stationary (kills settle-shake), light when moving fast.
+            float center_x = raw_center_x;
+            float center_y = raw_center_y;
+            if (oneeuro_enabled != 0) {
+                if (!fresh_track) {
+                    const float ad = oneEuroAlpha(oneeuro_dcutoff);
+                    const float de_x = raw_center_x - aimState->filt_x;
+                    aimState->dfilt_x = ad * de_x + (1.0f - ad) * aimState->dfilt_x;
+                    const float ax = oneEuroAlpha(oneeuro_min_cutoff + oneeuro_beta * fabsf(aimState->dfilt_x));
+                    aimState->filt_x = ax * raw_center_x + (1.0f - ax) * aimState->filt_x;
 
-            // Reset integral when very close to target (deadzone)
-            // Decouple axes: apply deadzone per-axis, not by combined magnitude
-            const float deadzone_threshold = 5.0f;  // pixels
-            if (fabsf(error_x) < deadzone_threshold) {
-                integral_x = 0.0f;
+                    const float de_y = raw_center_y - aimState->filt_y;
+                    aimState->dfilt_y = ad * de_y + (1.0f - ad) * aimState->dfilt_y;
+                    const float ay = oneEuroAlpha(oneeuro_min_cutoff + oneeuro_beta * fabsf(aimState->dfilt_y));
+                    aimState->filt_y = ay * raw_center_y + (1.0f - ay) * aimState->filt_y;
+                } else {
+                    aimState->filt_x = raw_center_x;
+                    aimState->filt_y = raw_center_y;
+                    aimState->dfilt_x = 0.0f;
+                    aimState->dfilt_y = 0.0f;
+                }
+                center_x = aimState->filt_x;
+                center_y = aimState->filt_y;
             }
-            if (fabsf(error_y) < deadzone_threshold) {
-                integral_y = 0.0f;
+
+            // Target screen drift (EMA, clamped) from RAW deltas -> feeds coast.
+            if (!fresh_track) {
+                const float maxDrift = 60.0f;
+                float nvx = raw_center_x - aimState->prev_center_x;
+                float nvy = raw_center_y - aimState->prev_center_y;
+                nvx = fminf(fmaxf(nvx, -maxDrift), maxDrift);
+                nvy = fminf(fmaxf(nvy, -maxDrift), maxDrift);
+                aimState->vel_x = 0.6f * aimState->vel_x + 0.4f * nvx;
+                aimState->vel_y = 0.6f * aimState->vel_y + 0.4f * nvy;
+            } else {
+                aimState->vel_x = 0.0f;
+                aimState->vel_y = 0.0f;
             }
+            aimState->prev_center_x = raw_center_x;
+            aimState->prev_center_y = raw_center_y;
+            aimState->has_track = 1;
+            aimState->frames_since_seen = 0;
 
-            // Update integral (with anti-windup clamping)
-            integral_x += error_x;
-            integral_y += error_y;
+            // Error on the filtered center.
+            float error_x = center_x - screen_center_x;
+            float error_y = center_y - screen_center_y;
 
-            // Clamp integral to prevent windup
-            if (integral_x > integral_max) integral_x = integral_max;
-            if (integral_x < -integral_max) integral_x = -integral_max;
-            if (integral_y > integral_max) integral_y = integral_max;
-            if (integral_y < -integral_max) integral_y = -integral_max;
+            // Derivative (damping) on the smoothed error rate; reset on fresh
+            // acquire so the first frame of a lock does not kick.
+            const float maxDErr = 150.0f;
+            float de_x = fminf(fmaxf(error_x - aimState->prev_err_x, -maxDErr), maxDErr);
+            float de_y = fminf(fmaxf(error_y - aimState->prev_err_y, -maxDErr), maxDErr);
+            if (fresh_track) {
+                aimState->derr_x = 0.0f;
+                aimState->derr_y = 0.0f;
+            } else {
+                aimState->derr_x = 0.6f * de_x + 0.4f * aimState->derr_x;
+                aimState->derr_y = 0.6f * de_y + 0.4f * aimState->derr_y;
+            }
+            aimState->prev_err_x = error_x;
+            aimState->prev_err_y = error_y;
 
-            // Calculate derivative (error change)
-            float derivative_x = error_x - prev_error_x;
-            float derivative_y = error_y - prev_error_y;
+            // Nonlinear P + D, then per-frame max-step clamp + integer emit.
+            float movement_x = nonlinearPMove(error_x, kp_x, softness_x) + kd_x * aimState->derr_x;
+            float movement_y = nonlinearPMove(error_y, kp_y, softness_y) + kd_y * aimState->derr_y;
+            clampMaxStep(movement_x, movement_y, max_step);
 
-            // Clamp derivative to prevent excessive oscillation from large movements
-            if (derivative_x > derivative_max) derivative_x = derivative_max;
-            if (derivative_x < -derivative_max) derivative_x = -derivative_max;
-            if (derivative_y > derivative_max) derivative_y = derivative_max;
-            if (derivative_y < -derivative_max) derivative_y = -derivative_max;
-
-            // PID controller: P + I + D
-            float movement_x = kp_x * error_x + ki_x * integral_x + kd_x * derivative_x;
-            float movement_y = kp_y * error_y + ki_y * integral_y + kd_y * derivative_y;
-
-            // Save current state for next iteration
-            pidState->prev_error_x = error_x;
-            pidState->prev_error_y = error_y;
-            pidState->integral_x = integral_x;
-            pidState->integral_y = integral_y;
-
-            // Round to nearest int
-            int emit_dx = static_cast<int>(lroundf(movement_x));
-            int emit_dy = static_cast<int>(lroundf(movement_y));
-
-            output_movement->dx = emit_dx;
-            output_movement->dy = emit_dy;
+            output_movement->dx = emitMouseDelta(movement_x, &aimState->residual_x);
+            output_movement->dy = emitMouseDelta(movement_y, &aimState->residual_y);
         } else {
-            Target emptyTarget = {};
-            *bestTargetIndex = -1;
-            *bestTarget = emptyTarget;
-            if (selectedTarget) {
-                *selectedTarget = emptyTarget;
+            // No candidate selected this frame. If a track is still live within
+            // the persistence window, coast: glide on the last drift (decayed)
+            // and keep selectedTarget alive for a clean IoU re-acquire.
+            bool coasting = false;
+            if (coast_enabled != 0 && aimState->has_track != 0 &&
+                aimState->frames_since_seen < track_persistence_frames) {
+                const int gap = aimState->frames_since_seen + 1;
+                aimState->frames_since_seen = gap;
+                float factor = 1.0f;
+                for (int i = 0; i < gap; ++i) factor *= coast_decay;
+                float mx = aimState->vel_x * factor;
+                float my = aimState->vel_y * factor;
+                clampMaxStep(mx, my, max_step);
+                output_movement->dx = emitMouseDelta(mx, &aimState->residual_x);
+                output_movement->dy = emitMouseDelta(my, &aimState->residual_y);
+                *bestTargetIndex = -1;  // no NEW best, but the track persists
+                coasting = true;
             }
-            output_movement->dx = 0;
-            output_movement->dy = 0;
-
-            // Reset PID state when no target
-            pidState->prev_error_x = 0.0f;
-            pidState->prev_error_y = 0.0f;
-            pidState->integral_x = 0.0f;
-            pidState->integral_y = 0.0f;
+            if (!coasting) {
+                Target emptyTarget = {};
+                *bestTargetIndex = -1;
+                *bestTarget = emptyTarget;
+                if (selectedTarget) {
+                    *selectedTarget = emptyTarget;
+                }
+                output_movement->dx = 0;
+                output_movement->dy = 0;
+                // Target fully lost: reset the whole aim state.
+                aimState->has_track = 0;
+                aimState->frames_since_seen = 0;
+                aimState->vel_x = 0.0f;
+                aimState->vel_y = 0.0f;
+                aimState->residual_x = 0.0f;
+                aimState->residual_y = 0.0f;
+                aimState->prev_err_x = 0.0f;
+                aimState->prev_err_y = 0.0f;
+                aimState->derr_x = 0.0f;
+                aimState->derr_y = 0.0f;
+            }
         }
     }
 }
@@ -1541,8 +1644,8 @@ void UnifiedGraphPipeline::clearMovementData() {
     }
 
     // Reset PID state when aimbot is deactivated
-    if (m_smallBufferArena.pidState) {
-        cudaError_t pidResetErr = cudaMemset(m_smallBufferArena.pidState, 0, sizeof(PIDState));
+    if (m_smallBufferArena.aimState) {
+        cudaError_t pidResetErr = cudaMemset(m_smallBufferArena.aimState, 0, sizeof(AimState));
         if (pidResetErr != cudaSuccess) {
             std::cerr << "[UnifiedGraph] Failed to reset PID state buffer: "
                       << cudaGetErrorString(pidResetErr) << std::endl;
@@ -2527,7 +2630,7 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         return;
     }
 
-    if (!m_smallBufferArena.bestTargetIndex || !m_smallBufferArena.bestTarget || !m_smallBufferArena.mouseMovement || !m_smallBufferArena.pidState) {
+    if (!m_smallBufferArena.bestTargetIndex || !m_smallBufferArena.bestTarget || !m_smallBufferArena.mouseMovement || !m_smallBufferArena.aimState) {
         std::cerr << "[Pipeline] Target selection buffers not allocated!" << std::endl;
         return;
     }
@@ -2583,7 +2686,7 @@ void UnifiedGraphPipeline::performTargetSelection(cudaStream_t stream) {
         m_smallBufferArena.bestTargetIndex,
         m_smallBufferArena.bestTarget,
         m_smallBufferArena.mouseMovement,
-        m_smallBufferArena.pidState
+        m_smallBufferArena.aimState
     );
 
 #ifdef _DEBUG
