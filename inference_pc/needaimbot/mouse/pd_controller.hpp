@@ -41,6 +41,14 @@ public:
     bool coast_enabled = true;
     float coast_decay = 0.85f;
 
+    // Dead-time compensation: subtract the moves still in flight (emitted within
+    // the last deadtime_frames, not yet visible in the detection) from the
+    // error. Removes the double-correction that causes overshoot/ringing.
+    // 0 = off (legacy). deadtime_frames must match the rig's measured
+    // emit->visible lag (bench/calibrate.py STEP-RESPONSE).
+    float inflight_comp = 0.0f;
+    int inflight_deadtime_frames = 1;
+
     // Per-frame max move (output px). 0 = disabled (unbounded).
     float max_step = 30.0f;
 
@@ -87,6 +95,11 @@ public:
 
         if (j.contains("coast_enabled")) coast_enabled = j["coast_enabled"];
         if (j.contains("coast_decay")) coast_decay = j["coast_decay"];
+        if (j.contains("inflight_comp")) inflight_comp = j["inflight_comp"];
+        if (j.contains("inflight_deadtime_frames")) {
+            const int v = j["inflight_deadtime_frames"];
+            inflight_deadtime_frames = std::clamp(v, 0, 4);
+        }
         if (j.contains("aim_max_step")) max_step = j["aim_max_step"];
 
         if (j.contains("oneeuro_enabled")) oneeuro_enabled = j["oneeuro_enabled"];
@@ -115,6 +128,8 @@ public:
         j["track_persistence_frames"] = track_persistence_frames;
         j["coast_enabled"] = coast_enabled;
         j["coast_decay"] = coast_decay;
+        j["inflight_comp"] = inflight_comp;
+        j["inflight_deadtime_frames"] = inflight_deadtime_frames;
         j["aim_max_step"] = max_step;
 
         j["_section_oneeuro"] = "===== One Euro center filter (jitter suppression) =====";
@@ -137,6 +152,12 @@ public:
         std::cout << "[Config] Coast (gap glide): " << (coast_enabled ? "ON" : "OFF")
                   << " (decay=" << coast_decay << ", window=" << track_persistence_frames
                   << " frames)" << std::endl;
+        std::cout << "[Config] Dead-time compensation: "
+                  << (inflight_comp > 0.0f
+                          ? "ON (comp=" + std::to_string(inflight_comp) + ", lag=" +
+                                std::to_string(inflight_deadtime_frames) + " frames)"
+                          : std::string("OFF"))
+                  << std::endl;
         std::cout << "[Config] Aim max step: " << max_step
                   << (max_step > 0.0f ? " px/frame" : " (disabled)") << std::endl;
         std::cout << "[Config] One Euro center filter: " << (oneeuro_enabled ? "ON" : "OFF")
@@ -160,6 +181,8 @@ private:
         aim.track_persistence_frames = track_persistence_frames;
         aim.coast_enabled = coast_enabled ? 1.0f : 0.0f;
         aim.coast_decay = coast_decay;
+        aim.inflight_comp = inflight_comp;
+        aim.deadtime_frames = inflight_deadtime_frames;
         aim.oneeuro_enabled = oneeuro_enabled ? 1.0f : 0.0f;
         aim.oneeuro_min_cutoff = oneeuro_min_cutoff;
         aim.oneeuro_beta = oneeuro_beta;

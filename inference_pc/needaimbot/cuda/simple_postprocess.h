@@ -45,6 +45,18 @@ struct AimState {
     float prev_err_y = 0.0f;
     float derr_x = 0.0f;
     float derr_y = 0.0f;
+
+    // --- In-flight move history (dead-time compensation / Smith predictor) ---
+    // The detection we act on is ~deadtime_frames old, so moves emitted since
+    // that snapshot have NOT yet moved the target in the measurement. Without
+    // this, the controller re-corrects an error it has already answered ->
+    // double-correction -> overshoot/ringing. Ring of the last emitted moves in
+    // OUTPUT px; the controller subtracts the in-flight sum from the measured
+    // error before computing the next move.
+    static constexpr int kInflightMax = 4;
+    float inflight_x[kInflightMax] = {0.0f, 0.0f, 0.0f, 0.0f};
+    float inflight_y[kInflightMax] = {0.0f, 0.0f, 0.0f, 0.0f};
+    int   inflight_head = 0;   // next write slot
 };
 
 // Nonlinear P controller configuration.
@@ -85,6 +97,19 @@ struct AimConfig {
     // to work. vel_* itself stays: coast uses it to glide across detection gaps.
     float coast_enabled = 1.0f;
     float coast_decay = 0.85f;
+
+    // --- Dead-time compensation (in-flight move subtraction) ---
+    // Subtract inflight_comp * (moves emitted in the last deadtime_frames) from
+    // the measured error, so the controller does not re-answer an error its own
+    // in-flight moves have already addressed. This is what removes the
+    // overshoot/ringing that dead-time causes; with it on, kp can be raised for
+    // faster convergence (measured sweet spot ~0.75 at 1 frame of dead-time).
+    //   inflight_comp 0 = off (legacy behavior), 1 = full compensation.
+    //   deadtime_frames must match the rig's measured emit->visible lag
+    //   (bench/calibrate.py STEP-RESPONSE section). Over-estimating it
+    //   over-subtracts and can destabilize, so measure before changing.
+    float inflight_comp = 0.0f;
+    int   deadtime_frames = 1;
 
     // --- One Euro adaptive low-pass on the target center ---
     // Removes detector jitter at the source: heavy smoothing when the target is

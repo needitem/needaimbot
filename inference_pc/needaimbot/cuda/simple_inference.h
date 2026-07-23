@@ -54,6 +54,12 @@ public:
 
     bool loadEngine(const std::string& enginePath);
 
+    // Model input dimensions (valid after loadEngine). Used to normalize the
+    // pixel-space aim softness to a fixed reference so gains transfer across
+    // engine resolutions.
+    int inputWidth() const { return m_inputW; }
+    int inputHeight() const { return m_inputH; }
+
     // Must be set before loadEngine(). Values are clamped to a safe range.
     void setMaxDetections(int maxDetections) {
         if (m_loaded) return;

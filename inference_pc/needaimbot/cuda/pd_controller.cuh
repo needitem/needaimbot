@@ -37,6 +37,28 @@ __device__ __forceinline__ float nonlinearPMove(float error, float kp, float sof
     return error * gain;
 }
 
+// Record an emitted move into the in-flight ring (OUTPUT px). Every path that
+// moves the mouse must call this, or the dead-time compensation under-counts.
+__device__ __forceinline__ void pushInflight(AimState* s, float dx, float dy) {
+    const int i = s->inflight_head;
+    s->inflight_x[i] = dx;
+    s->inflight_y[i] = dy;
+    s->inflight_head = (i + 1) % AimState::kInflightMax;
+}
+
+// Sum of the moves emitted in the last `frames` frames (OUTPUT px) - i.e. the
+// moves the current (stale) measurement cannot have seen yet.
+__device__ __forceinline__ void inflightSum(const AimState* s, int frames,
+                                            float& sx, float& sy) {
+    sx = 0.0f; sy = 0.0f;
+    const int n = min(max(frames, 0), AimState::kInflightMax);
+    for (int k = 1; k <= n; ++k) {
+        const int i = (s->inflight_head - k + AimState::kInflightMax) % AimState::kInflightMax;
+        sx += s->inflight_x[i];
+        sy += s->inflight_y[i];
+    }
+}
+
 __device__ __forceinline__ int emitMouseDelta(float movement, float* residual) {
     // Clear carry if it opposes the new direction: stale residual from a
     // previous frame must not fight a freshly reversed target motion.
@@ -80,6 +102,8 @@ __device__ __forceinline__ void computeCoastMovement(
     clampMaxStep(mx, my, aim_config.max_step);
     out_dx = emitMouseDelta(mx, &aim_state->residual_x);
     out_dy = emitMouseDelta(my, &aim_state->residual_y);
+    // Coast moves shift the view too - they must count as in-flight.
+    pushInflight(aim_state, static_cast<float>(out_dx), static_cast<float>(out_dy));
 }
 
 // Full PD controller for a target detected THIS frame: One Euro pre-filter on
@@ -175,6 +199,18 @@ __device__ __forceinline__ void computeAimMovement(
     float error_x = target_center_x - screen_center_x - shoot_off_x;
     float error_y = target_center_y - screen_center_y - shoot_off_y;
 
+    // Dead-time compensation: this measurement is ~deadtime_frames old, so the
+    // moves emitted since it was captured have not shifted the target in it
+    // yet. Subtract them (converted OUTPUT px -> model px) so we answer only
+    // the error our in-flight moves have NOT already addressed. Without this
+    // the loop double-corrects and rings; with it, kp can go higher.
+    if (aim_config.inflight_comp > 0.0f && aim_config.deadtime_frames > 0) {
+        float inf_x = 0.0f, inf_y = 0.0f;
+        inflightSum(aim_state, aim_config.deadtime_frames, inf_x, inf_y);
+        if (movement_scale_x != 0.0f) error_x -= aim_config.inflight_comp * inf_x / movement_scale_x;
+        if (movement_scale_y != 0.0f) error_y -= aim_config.inflight_comp * inf_y / movement_scale_y;
+    }
+
     // Derivative (damping) term: react to how fast the error is shrinking and
     // push back, so a high-kp approach decelerates BEFORE it overshoots. The
     // error rate includes target drift, so D stays quiet (de ~ 0) at steady
@@ -212,6 +248,7 @@ __device__ __forceinline__ void computeAimMovement(
 
     out_dx = emitMouseDelta(movement_x, &aim_state->residual_x);
     out_dy = emitMouseDelta(movement_y, &aim_state->residual_y);
+    pushInflight(aim_state, static_cast<float>(out_dx), static_cast<float>(out_dy));
 }
 
 }  // namespace gpa

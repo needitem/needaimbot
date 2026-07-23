@@ -967,8 +967,28 @@ int main(int argc, char* argv[]) {
     // receive thread can observe a completed frame.
 
     // 4. State - all GPU now, minimal CPU state
-    const gpa::AimConfig rightGpuAimConfig = cfg.pd.rightGpuConfig();
-    const gpa::AimConfig thumbGpuAimConfig = cfg.pd.thumbGpuConfig();
+    gpa::AimConfig rightGpuAimConfig = cfg.pd.rightGpuConfig();
+    gpa::AimConfig thumbGpuAimConfig = cfg.pd.thumbGpuConfig();
+    // Normalize the nonlinear-P softness to a fixed input-resolution reference.
+    // p_softness is a MODEL-PIXEL knee, so a 640 engine (2x the pixel scale of
+    // the 320 the gains are tuned at) would otherwise respond ~2x sharper to the
+    // same detection and amplify felt noise. Scaling softness by inputW/ref keeps
+    // the aim feel identical across engine resolutions with the config unchanged.
+    // kp/kd are dimensionless (gain multipliers) and stay as configured.
+    {
+        constexpr float kSoftnessReferenceInput = 320.0f;
+        const float softScaleX = static_cast<float>(inference.inputWidth()) / kSoftnessReferenceInput;
+        const float softScaleY = static_cast<float>(inference.inputHeight()) / kSoftnessReferenceInput;
+        for (gpa::AimConfig* c : {&rightGpuAimConfig, &thumbGpuAimConfig}) {
+            c->p_softness_x *= softScaleX;
+            c->p_softness_y *= softScaleY;
+        }
+        if (softScaleX != 1.0f || softScaleY != 1.0f) {
+            std::cout << "[Aim] softness normalized to 320-ref for "
+                      << inference.inputWidth() << "x" << inference.inputHeight()
+                      << " engine: x*" << softScaleX << " y*" << softScaleY << std::endl;
+        }
+    }
     auto selectGpuAimConfig = [&](uint8_t buttonMask) -> const gpa::AimConfig& {
         return controller::maskThumbAiming(buttonMask) ? thumbGpuAimConfig : rightGpuAimConfig;
     };

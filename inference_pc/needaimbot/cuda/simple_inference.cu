@@ -260,6 +260,8 @@ inline bool aimConfigNearlyEqual(const AimConfig& a, const AimConfig& b) {
            (a.track_persistence_frames == b.track_persistence_frames) &&
            nearlyEqual(a.coast_enabled, b.coast_enabled) &&
            nearlyEqual(a.coast_decay, b.coast_decay) &&
+           nearlyEqual(a.inflight_comp, b.inflight_comp) &&
+           (a.deadtime_frames == b.deadtime_frames) &&
            nearlyEqual(a.oneeuro_enabled, b.oneeuro_enabled) &&
            nearlyEqual(a.oneeuro_min_cutoff, b.oneeuro_min_cutoff) &&
            nearlyEqual(a.oneeuro_beta, b.oneeuro_beta) &&
