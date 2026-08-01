@@ -1,0 +1,50 @@
+#!/bin/bash
+# 프리셋을 고치면 문서 표도 반드시 같이 간다 — 커밋 경계에서 보장한다.
+#
+# preset.sh 가 매 실행마다 표를 재생성하지만, 프리셋 JSON 을 직접 고치고 바로 커밋하면
+# preset.sh 를 안 거치므로 표가 뒤처진 채 커밋된다. 이번 세션 내내 그 경로로 어긋났다.
+# 여기서 재생성하고 스테이지에 넣으므로, 어떤 경로로 고치든 문서가 따라온다.
+#
+# 설치: tools/install_hooks.sh  (git config core.hooksPath tools/hooks)
+set -e
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+staged=$(git diff --cached --name-only --diff-filter=ACM | grep -E '^inference_pc/presets/simple_config\..*\.json$' || true)
+[ -n "$staged" ] || exit 0
+
+python3 tools/gen_preset_readme.py --presets inference_pc/presets >/dev/null
+if ! git diff --quiet -- inference_pc/presets/README.md; then
+    git add inference_pc/presets/README.md
+    echo "[pre-commit] 프리셋이 바뀌어 presets/README.md 표를 재생성하고 커밋에 포함했다."
+fi
+
+# 프리셋끼리의 규칙(캡처 종속 6개는 x2, 나머지 동일)도 여기서 막는다. 한쪽만 고치면
+# preset.sh 한 번으로 그 튜닝이 조용히 되돌아간다.
+python3 - <<'PYEOF' || exit 1
+import json, sys
+a = json.load(open("inference_pc/presets/simple_config.320.json"))
+b = json.load(open("inference_pc/presets/simple_config.160.json"))
+HALF = {"aim_softness_x", "aim_softness_y", "thumb_aim_softness_x",
+        "thumb_aim_softness_y", "lead_vgate", "lead_err_gate"}
+OWN = {"pre_capture_shapes", "conf_threshold", "head_aim_point", "body_aim_point"}
+bad = []
+for k in sorted(set(a) | set(b)):
+    if k in OWN or k.startswith("_"):
+        continue
+    x, y = a.get(k), b.get(k)
+    if k in HALF:
+        try:
+            if abs(y - 2 * x) > 1e-6:
+                bad.append("%s: 320=%s 160=%s (x2 아님)" % (k, x, y))
+        except TypeError:
+            bad.append("%s: 숫자가 아님" % k)
+    elif x != y:
+        bad.append("%s: 320=%s 160=%s" % (k, x, y))
+if bad:
+    sys.stderr.write("[pre-commit] 프리셋 불일치 %d건 — 한쪽만 고쳤을 수 있다:\n" % len(bad))
+    for t in bad[:12]:
+        sys.stderr.write("    " + t + "\n")
+    sys.stderr.write("  의도한 것이면 --no-verify 로 넘길 수 있다.\n")
+    sys.exit(1)
+PYEOF
