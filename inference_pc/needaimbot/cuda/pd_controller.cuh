@@ -161,9 +161,18 @@ __device__ __forceinline__ void computeAimMovement(
     const bool fresh_track = (aim_state->has_track == 0);
 
     // Anchor flip (head<->body on the same enemy): the centre jumps by the offset
-    // between the two aim points. That is an artifact of switching anchors, not
-    // the target moving, so it must not enter the velocity estimate (the lead term
-    // would fling on it) nor the damping term.
+    // between the two aim points.
+    // For the VELOCITY estimate that jump is a pure artifact - the target did not
+    // move - and the lead term would fling on it and keep flinging for the length
+    // of the EMA. So the frame is excluded there (below), and that exclusion is
+    // where this feature's measured benefit comes from.
+    // The DAMPING term deliberately still sees it. After a flip the aim point has
+    // genuinely moved to the other anchor, so the error step is a real SETPOINT
+    // CHANGE, not a measurement artifact, and letting D respond once helps cross
+    // it. Measured (sim, 3 blocks x60, both gain profiles): suppressing that
+    // response - by holding the EMA or by zeroing it before the move - is
+    // 0.03-0.22% WORSE. Do not "fix" it; the earlier comment here claimed the
+    // damping term was excluded too, which the code never did.
     const bool class_changed =
         (aim_config.class_switch_reject != 0.0f && !fresh_track &&
          aim_state->prev_class >= 0 && target_class != aim_state->prev_class);
@@ -359,9 +368,11 @@ __device__ __forceinline__ void computeAimMovement(
     out_dy = emitMouseDelta(movement_y, &aim_state->residual_y);
     pushInflight(aim_state, static_cast<float>(out_dx), static_cast<float>(out_dy));
 
-    // Clear the damping state AFTER the move: the error step caused by the anchor
-    // flip is already spent, and the derivative EMA would otherwise keep replaying
-    // it for the length of its memory.
+    // Bound the echo, not the response. The flip frame's single D response above
+    // is wanted (see class_changed), but the derivative EMA would keep replaying
+    // that one step for the length of its memory. Clearing after the move keeps
+    // the response and drops the tail. At the shipped kd this is worth ~0.01%
+    // (i.e. nothing measurable) - it is a bound for large kd, not a win here.
     if (class_changed) {
         aim_state->derr_x = 0.0f;
         aim_state->derr_y = 0.0f;

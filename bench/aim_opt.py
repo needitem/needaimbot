@@ -114,8 +114,16 @@ class OptCtrl:
         fresh = (self.has_track == 0)
         tcx, tcy = rx, ry
         # SHIPPED: an anchor flip (head<->body) moves the measured centre by the
-        # offset between two aim points - an artifact, not target motion. Keep it
-        # out of the velocity estimate; the damping state is cleared after the move.
+        # offset between two aim points.
+        # For the VELOCITY estimate that is a pure artifact (the target did not
+        # move) and the lead term would fling on it, so the frame is excluded -
+        # that exclusion is where this feature's measured benefit comes from.
+        # The DAMPING term deliberately still sees it: after a flip the aim point
+        # really has moved to the other anchor, so the error step is a real
+        # SETPOINT CHANGE and one D response helps cross it. Measured (3 blocks
+        # x60, both gain profiles): suppressing it is 0.03-0.22% WORSE.
+        # skip_d only clears the EMA AFTER the move, bounding the echo without
+        # removing that response. Keep this identical to pd_controller.cuh.
         skip_d = False
         if cls_changed and p.get("cls_reject", 1.0) != 0.0 and not fresh:
             self.prev_raw_x, self.prev_raw_y = rx, ry
@@ -238,6 +246,7 @@ class OptCtrl:
         dy, self.res_y = emit_mouse_delta(my, self.res_y)
         self._push(float(dx), float(dy))
         if skip_d:
+            # Bound the echo, not the response - see the class-switch note above.
             self.derr_x = self.derr_y = 0.0
         return dx, dy
 
