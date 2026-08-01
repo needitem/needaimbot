@@ -61,16 +61,29 @@ if bad:
     sys.exit(1)
 PYEOF
 
-# 2) 스테이지된 프리셋으로 표를 재생성해, 스테이지된 README 와 다르면 갱신·추가한다.
+# 2) 스테이지된 프리셋으로 표를 재생성한다. 대상은 **스테이지된 README** 이고,
+#    결과는 **인덱스에만** 쓴다.
+#    작업 트리 README 를 cp 로 덮어쓰면, 사용자가 쓰던 스테이지 안 된 산문 수정이
+#    통째로 날아간다(생성 블록 밖의 내용까지). 커밋에 필요한 것은 인덱스뿐이므로
+#    트리는 건드리지 않는다 - 단, 트리에 미스테이지 수정이 없을 때만 같이 맞춰 준다.
+tree_dirty=0
+git diff --quiet -- "${P}/README.md" || tree_dirty=1
+
 python3 tools/gen_preset_readme.py --presets "$tmp" >/dev/null
 if ! git show ":${P}/README.md" | diff -q - "$tmp/README.md" >/dev/null 2>&1; then
-    cp "$tmp/README.md" "${P}/README.md"
-    git add "${P}/README.md"
-    echo "[pre-commit] 스테이지된 프리셋에 맞춰 presets/README.md 표를 재생성하고 커밋에 포함했다."
+    blob=$(git hash-object -w "$tmp/README.md")
+    git update-index --cacheinfo "100644,${blob},${P}/README.md"
+    echo "[pre-commit] 스테이지된 프리셋에 맞춰 presets/README.md 표를 재생성해 커밋에 넣었다."
+    if [ "$tree_dirty" -eq 0 ]; then
+        cp "$tmp/README.md" "${P}/README.md"      # 미스테이지 수정 없음 - 트리도 맞춤
+    else
+        echo "             작업 트리의 README 에는 스테이지 안 된 수정이 있어 그대로 두었다."
+        echo "             필요하면: python3 tools/gen_preset_readme.py"
+    fi
 fi
 
-# 3) 작업 트리가 인덱스와 다르면 알린다. 커밋 자체는 인덱스 기준으로 올바르지만,
-#    방금 쓴 README 는 '스테이지된 프리셋' 기준이라 트리의 프리셋과는 어긋나 보인다.
+# 3) 프리셋 자체에 미스테이지 수정이 남아 있으면 알린다. 커밋은 인덱스 기준으로
+#    올바르지만, 커밋된 표는 트리의 프리셋과는 어긋나 보인다.
 if ! git diff --quiet -- "${P}/simple_config.320.json" "${P}/simple_config.160.json"; then
     echo "[pre-commit] 참고: 프리셋에 스테이지 안 된 수정이 남아 있다."
     echo "             커밋되는 표는 스테이지된 내용 기준이다 - 나머지도 함께 올릴 것."
