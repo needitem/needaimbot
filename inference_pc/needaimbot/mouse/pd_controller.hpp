@@ -29,7 +29,7 @@ struct Gains {
 class Settings {
 public:
     Gains right{0.765f, 0.698f, 8.6f, 6.57f, 0.052f, 0.037f};
-    Gains thumb{0.6f, 0.62f, 11.0f, 10.0f, 0.25f, 0.35f};
+    Gains thumb{0.709f, 0.408f, 4.66f, 9.77f, 0.02f, 0.082f};
 
     // Same-target stickiness for tracking (shared by both profiles).
     float iou_stickiness_threshold = 0.3f;

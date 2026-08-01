@@ -595,6 +595,15 @@ __global__ void stage2FinalizeKernel(
         d_aim_state->frames_since_seen = prevFramesSinceSeen + 1;
         d_aim_state->residual_x = 0.0f;
         d_aim_state->residual_y = 0.0f;
+        // We emit nothing this frame, and the in-flight ring must say so. Left
+        // un-advanced, the moves from before the gap keep sitting at ring lag 1
+        // even though N more frames have passed and they are long since visible
+        // - so on the re-acquire frame inflightSum subtracts motion the
+        // measurement already contains, and the controller under-corrects.
+        //   sim: error -0.1% at the measured 1.5% dropout, -1.0% at 10%
+        //   (t8 -3.5%), nothing regresses. It scales with how often detection
+        //   drops, i.e. it pays most exactly when tracking is hardest.
+        pushInflight(d_aim_state, 0.0f, 0.0f);
         writeEmptyInferenceResult(d_inference_result);
         return;
     }
