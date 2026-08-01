@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Ringing-vs-speed tuner for the SHIPPED controller (pd_controller.cuh).
 
-Unlike bench/aim_sim.py / aim_sim_full.py (which model an older ff/coast
+Unlike the older simulators that used to live here (they modelled an ff/coast
 pipeline and do NOT model dead-time compensation), this ports
 computeAimMovement() line-for-line INCLUDING inflight_comp (the Smith-predictor
 dead-time subtraction that is the actual anti-ringing lever) and closes the loop

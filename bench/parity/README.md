@@ -8,5 +8,9 @@ same recurrence, so **the tuning is only valid while they agree exactly**.
 sequence and compares every emitted (dx, dy) against the Python model, for each
 config path. Run it after touching either side.
 
-Verified 2026-07-25: 400/400 exact-match on all three paths
-(default, `class_switch_reject=0`, `ego_frame_filter=1`).
+The sequence flips head<->body on 8% of frames, so the anchor-flip path is
+covered too - that path is easy to diverge on and invisible without it.
+
+Verified 2026-08-01: 400/400 exact-match on both paths
+(default, `class_switch_reject=0`). The third path was `ego_frame_filter=1`,
+removed with that branch.

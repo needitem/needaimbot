@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Turn a calibration CSV (from simple_inference's calibration_log_path) into the
-real detector-noise / timing numbers to feed the sim (aim_tune.py, aim_sim_full.py).
+real detector-noise / timing numbers to feed the sim (bench/aim_opt.py).
 
 Capture protocol
   1. Aim the game crosshair at a STATIONARY target (a wall pattern, a static dummy).

@@ -7,8 +7,14 @@ subtracted (inflight_comp), then the target's motion is added back
 (predict_frames), then a lead is added to the output (ff_gain). Four separate
 patches to one underlying problem.
 
-UNIFIED-FRAME idea: the in-flight ring tells us exactly how far the view has
-moved, so the measurement can be lifted into an EGO-FREE absolute frame:
+UNIFIED-FRAME idea (SHIPPED then REMOVED 2026-08-01): this became the
+`ego_frame_filter` config switch. It cut step overshoot -68% but made
+acquisition 40-80% slower, stayed default-off, and was deleted once per-frame
+adaptive dead time did the same job (-34% overshoot) at -1.7% reach instead.
+The derivation below is kept as the record; there is no such switch any more.
+
+The in-flight ring tells us exactly how far the view has moved, so the
+measurement can be lifted into an EGO-FREE absolute frame:
 
     M          = cumulative emitted motion (model px)
     M_capture  = M_now - inflightSum(D)          # our motion when this frame was captured
