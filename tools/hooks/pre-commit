@@ -2,29 +2,40 @@
 # 프리셋을 고치면 문서 표도 반드시 같이 간다 — 커밋 경계에서 보장한다.
 #
 # preset.sh 가 매 실행마다 표를 재생성하지만, 프리셋 JSON 을 직접 고치고 바로 커밋하면
-# preset.sh 를 안 거치므로 표가 뒤처진 채 커밋된다. 이번 세션 내내 그 경로로 어긋났다.
-# 여기서 재생성하고 스테이지에 넣으므로, 어떤 경로로 고치든 문서가 따라온다.
+# preset.sh 를 안 거치므로 표가 뒤처진 채 커밋된다.
+#
+# 중요: 검사 대상은 **인덱스(스테이지된 내용)** 다. 작업 트리를 읽으면 "나쁜 변경을
+# 스테이지한 뒤 트리만 되돌리기"나 `git add -p` 부분 스테이지에서 엉뚱한 걸 검사하고
+# 깨진 커밋을 통과시킨다. 그래서 아래는 전부 `git show :path` 로 인덱스에서 꺼내 쓴다.
 #
 # 설치: tools/install_hooks.sh  (git config core.hooksPath tools/hooks)
 set -e
 root=$(git rev-parse --show-toplevel)
 cd "$root"
 
-staged=$(git diff --cached --name-only --diff-filter=ACM | grep -E '^inference_pc/presets/simple_config\..*\.json$' || true)
+P=inference_pc/presets
+staged=$(git diff --cached --name-only --diff-filter=ACM \
+         | grep -E "^${P}/simple_config\..*\.json$" || true)
 [ -n "$staged" ] || exit 0
 
-python3 tools/gen_preset_readme.py --presets inference_pc/presets >/dev/null
-if ! git diff --quiet -- inference_pc/presets/README.md; then
-    git add inference_pc/presets/README.md
-    echo "[pre-commit] 프리셋이 바뀌어 presets/README.md 표를 재생성하고 커밋에 포함했다."
-fi
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
 
-# 프리셋끼리의 규칙(캡처 종속 6개는 x2, 나머지 동일)도 여기서 막는다. 한쪽만 고치면
-# preset.sh 한 번으로 그 튜닝이 조용히 되돌아간다.
-python3 - <<'PYEOF' || exit 1
-import json, sys
-a = json.load(open("inference_pc/presets/simple_config.320.json"))
-b = json.load(open("inference_pc/presets/simple_config.160.json"))
+# 인덱스 스냅샷. 스테이지 안 된 프리셋은 인덱스에 있는 그대로(=HEAD 버전)를 쓴다.
+for f in simple_config.320.json simple_config.160.json README.md; do
+    git show ":${P}/${f}" > "$tmp/$f" 2>/dev/null || {
+        echo "[pre-commit] ${P}/${f} 가 인덱스에 없다 - 프리셋 세트가 불완전하다." >&2
+        exit 1
+    }
+done
+
+# 1) 스테이지된 내용끼리 규칙 검사 (캡처 종속 6개는 x2, 나머지는 동일).
+#    한쪽만 고치면 다음 preset.sh 한 번으로 그 튜닝이 조용히 되돌아간다.
+python3 - "$tmp" <<'PYEOF' || exit 1
+import json, os, sys
+d = sys.argv[1]
+a = json.load(open(os.path.join(d, "simple_config.320.json")))
+b = json.load(open(os.path.join(d, "simple_config.160.json")))
 HALF = {"aim_softness_x", "aim_softness_y", "thumb_aim_softness_x",
         "thumb_aim_softness_y", "lead_vgate", "lead_err_gate"}
 OWN = {"pre_capture_shapes", "conf_threshold", "head_aim_point", "body_aim_point"}
@@ -42,9 +53,25 @@ for k in sorted(set(a) | set(b)):
     elif x != y:
         bad.append("%s: 320=%s 160=%s" % (k, x, y))
 if bad:
-    sys.stderr.write("[pre-commit] 프리셋 불일치 %d건 — 한쪽만 고쳤을 수 있다:\n" % len(bad))
+    sys.stderr.write("[pre-commit] 스테이지된 프리셋 불일치 %d건 — 한쪽만 고쳤을 수 있다:\n"
+                     % len(bad))
     for t in bad[:12]:
         sys.stderr.write("    " + t + "\n")
     sys.stderr.write("  의도한 것이면 --no-verify 로 넘길 수 있다.\n")
     sys.exit(1)
 PYEOF
+
+# 2) 스테이지된 프리셋으로 표를 재생성해, 스테이지된 README 와 다르면 갱신·추가한다.
+python3 tools/gen_preset_readme.py --presets "$tmp" >/dev/null
+if ! git show ":${P}/README.md" | diff -q - "$tmp/README.md" >/dev/null 2>&1; then
+    cp "$tmp/README.md" "${P}/README.md"
+    git add "${P}/README.md"
+    echo "[pre-commit] 스테이지된 프리셋에 맞춰 presets/README.md 표를 재생성하고 커밋에 포함했다."
+fi
+
+# 3) 작업 트리가 인덱스와 다르면 알린다. 커밋 자체는 인덱스 기준으로 올바르지만,
+#    방금 쓴 README 는 '스테이지된 프리셋' 기준이라 트리의 프리셋과는 어긋나 보인다.
+if ! git diff --quiet -- "${P}/simple_config.320.json" "${P}/simple_config.160.json"; then
+    echo "[pre-commit] 참고: 프리셋에 스테이지 안 된 수정이 남아 있다."
+    echo "             커밋되는 표는 스테이지된 내용 기준이다 - 나머지도 함께 올릴 것."
+fi
