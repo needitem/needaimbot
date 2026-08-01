@@ -12,6 +12,9 @@
 # 주의: game_pc 쪽 CaptureWidth/Height 도 같이 바꿔야 한다. 한쪽만 바꾸면 어긋난다.
 set -e
 cd "$(dirname "$(readlink -f "$0")")/.."
+# 프리셋 원본은 추적되는 곳에 있다. build_stable/ 은 로컬 바이너리 때문에 통째로
+# gitignore 라, 거기 두면 프리셋이 커밋에 안 실려 다른 설치 환경에 배포되지 않는다.
+PRESETS=inference_pc/presets
 STABLE=inference_pc/build_stable/bin/Release
 DEV=inference_pc/build/bin/Release
 
@@ -45,7 +48,7 @@ PYEOF
     # 두 프리셋이 '캡처 종속 6개는 x2, 나머지는 동일' 규칙에서 벗어났는지 검사한다.
     # 한쪽만 튜닝하고 잊으면 preset.sh 한 번으로 그 튜닝이 조용히 되돌아간다.
     echo
-    python3 - "$STABLE" <<'PYEOF'
+    python3 - "$PRESETS" <<'PYEOF'
 import json,sys,os
 S=sys.argv[1]
 try:
@@ -75,7 +78,7 @@ PYEOF
     ;;
 
   320|160)
-    SRC="$STABLE/simple_config.$P.json"
+    SRC="$PRESETS/simple_config.$P.json"
     [ -f "$SRC" ] || { echo "프리셋 없음: $SRC"; exit 1; }
     cp "$SRC" "$TGT/simple_config.json"
     echo "  $NAME -> ${P} 프리셋 적용"
