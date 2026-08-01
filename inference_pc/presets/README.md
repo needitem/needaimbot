@@ -1,5 +1,35 @@
 # 캡처 해상도 프리셋 (2026-08-01)
 
+<!-- AUTO:BEGIN 이 블록은 tools/gen_preset_readme.py 가 생성한다. 직접 고치지 말 것 -->
+
+### 프리셋마다 다른 값
+
+```
+  키                      320            160
+  --------------------------------------------------
+  pre_capture_shapes     [[320,320]]    [[160,160]]
+  aim_softness_x/y       8.6 / 6.57     17.2 / 13.14
+  thumb_softness_x/y     4.66 / 9.77    9.32 / 19.54
+  lead_vgate             14.79          29.58
+  lead_err_gate          22.25          44.5
+  conf_threshold         0.15           0.25
+  head_aim_point         1.0            0.601
+  body_aim_point         0.21           0.15
+```
+
+### 두 프리셋이 공유하는 값 (여기가 갈리면 `preset.sh show` 가 잡는다)
+
+```
+  aim_kp_x=0.765  aim_kp_y=0.698  aim_kd_x=0.052  aim_kd_y=0.037
+  aim_max_step=19.56  thumb_aim_kp_x=0.709  thumb_aim_kp_y=0.408
+  thumb_aim_kd_x=0.02  thumb_aim_kd_y=0.082  inflight_deadtime_frames=1.25
+  deadtime_adaptive=True  ff_gain=1.7  ff_v_ema=0.235  predict_frames=3.18
+  oneeuro_min_cutoff=0.084  oneeuro_beta=0.02  aim_h_ema=0.2
+  class_switch_reject=True  head_deprioritized=True  config_version=1
+```
+
+<!-- AUTO:END -->
+
 이 디렉터리가 프리셋의 **원본**이다. `tools/preset.sh {320|160|show} [--dev]` 가 여기서
 활성 설정(`build_stable/` 또는 `build/`)으로 복사한다.
 
@@ -13,17 +43,9 @@
 
 실행: `../../needaimbot_stable.sh`
 
-두 프리셋은 캡처 해상도와 그에 종속된 값만 다르다. 나머지 컨트롤러 키(kp/kd, max_step,
-데드타임 보정, 리드, One Euro, aim_h_ema, deadtime_adaptive)는 완전히 동일하다.
-
-  pre_capture_shapes     [[320,320]]    [[160,160]]
-  aim_softness_x/y       8.6 / 6.57     17.2 / 13.14
-  thumb_softness_x/y     4.66 / 9.77    9.32 / 19.54
-  lead_vgate             14.79          29.58
-  lead_err_gate          22.25          44.5
-  conf_threshold         0.15           0.25
-  head_aim_point         1.0            0.601
-  body_aim_point         0.21           0.15
+두 프리셋은 캡처 해상도와 그에 종속된 값만 다르다. 아래 표는
+`tools/gen_preset_readme.py` 가 프리셋 JSON 에서 생성한다 - 손으로 적은 표는 반드시
+어긋나기 때문이다(실제로 한 세대 뒤처져 있었다). `preset.sh` 가 매 실행마다 갱신한다.
 
 2026-08-01 이 스냅샷에서 바뀐 것:
 

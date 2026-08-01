@@ -75,6 +75,9 @@ if bad:
     sys.exit(1)
 print("  프리셋 정합성 OK (캡처 종속 6개는 x2, 나머지 동일)")
 PYEOF
+    # 표는 데이터의 사본이므로 데이터에서 다시 만든다. 사람이 기억해야 하는 방식은
+    # 이미 실패했다 - 이 README 의 표는 한 세대 뒤처져 있었다.
+    python3 tools/gen_preset_readme.py --presets "$PRESETS"
     ;;
 
   320|160)
@@ -89,6 +92,7 @@ for k in ('pre_capture_shapes','conf_threshold','body_aim_point',
           'aim_softness_x','aim_softness_y','lead_vgate','lead_err_gate'):
     print("    %-22s %s"%(k,d.get(k)))
 PY
+    python3 tools/gen_preset_readme.py --presets "$PRESETS" >/dev/null
     echo
     echo "  다음에 할 것:"
     echo "    1) game_pc config.ini : CaptureWidth=$P / CaptureHeight=$P  (필수)"
