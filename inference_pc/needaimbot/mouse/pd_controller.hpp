@@ -1,8 +1,8 @@
 #pragma once
 
 // Nonlinear P(D) aim controller: owns the tuned gains (kp/kd/softness per aim
-// profile), the shared shaping around them (coast gap-glide, One Euro
-// pre-filter, same-target stickiness, per-frame max step), and their JSON
+// profile), the shared shaping around them (One Euro pre-filter, same-target
+// stickiness, per-frame max step), and their JSON
 // load/save/print - decoupled from simple_main.cpp's
 // app-wide Config. The actual PD math runs on the GPU (see
 // needaimbot/cuda/simple_postprocess.cu); this header only builds the
@@ -28,35 +28,60 @@ struct Gains {
 
 class Settings {
 public:
-    Gains right{0.55f, 0.6f, 11.0f, 10.0f, 0.18f, 0.22f};
+    Gains right{0.765f, 0.698f, 8.6f, 6.57f, 0.052f, 0.037f};
     Gains thumb{0.6f, 0.62f, 11.0f, 10.0f, 0.25f, 0.35f};
 
     // Same-target stickiness for tracking (shared by both profiles).
     float iou_stickiness_threshold = 0.3f;
-    float distance_stickiness_factor = 0.5f;
-    int track_persistence_frames = 5;
-
-    // Coast: bridge brief detection gaps by gliding from the last movement
-    // (decayed) instead of freezing or shaking.
-    bool coast_enabled = true;
-    float coast_decay = 0.85f;
+    float distance_stickiness_factor = 0.4f;
+    int track_persistence_frames = 3;
 
     // Dead-time compensation: subtract the moves still in flight (emitted within
     // the last deadtime_frames, not yet visible in the detection) from the
     // error. Removes the double-correction that causes overshoot/ringing.
     // 0 = off (legacy). deadtime_frames must match the rig's measured
     // emit->visible lag (bench/calibrate.py STEP-RESPONSE).
-    float inflight_comp = 0.0f;
-    int inflight_deadtime_frames = 1;
+    // FRACTIONAL: the real emit->visible lag is ~1.13 frames here, not an
+    // integer, so rounding it either under- or over-compensates. 1.0 reproduces
+    // the old integer behaviour exactly.
+    float inflight_comp = 1.0f;
+    float inflight_deadtime_frames = 1.25f;
+
+    // Lead / feedforward on the ego-corrected target velocity (see
+    // needaimbot/cuda/simple_postprocess.h for why this is sound now and was not
+    // before the in-flight ring existed). ff_gain 0 = off (pure P+D).
+    float ff_gain = 1.7f;
+    float ff_ego_lag = 2.25f;
+    float ff_v_ema = 0.235f;
+    // ONE shared gate pair for BOTH lead terms. Per-term gates (pred_vgate /
+    // pred_err_gate) were removed: they gated the same velocity against the same
+    // error and bought <0.5% for twice the tuning surface; a properly tuned shared
+    // pair beat the four-knob version (-0.8% error at equal ringing).
+    float lead_vgate = 14.79f;
+    float lead_err_gate = 22.25f;
+    // Symmetric dead-time comp: extrapolate the TARGET forward over the dead time
+    // (inflight_comp only removed OUR motion). 0 = off.
+    float predict_frames = 3.18f;
+    // Architecture switch: filter in an ego-free frame (see
+    // needaimbot/cuda/simple_postprocess.h). 0 = off (validated default).
+    // Trades acquisition snappiness for a large reduction in ringing.
+    float ego_frame_filter = 0.0f;
+    // Reject the head<->body anchor-flip artifact (the selected classId already
+    // identifies those frames exactly). 1 = on. See simple_postprocess.h.
+    float class_switch_reject = 1.0f;
+    // body 가 잡히면 항상 body 를 쓰고, head 는 body 가 없을 때만 쓴다.
+    float head_deprioritized = 1.0f;
+    // body 조준점을 y1+k*h 대신 cy+(k-0.5)*h_ema 로 관측 (같은 점, 더 조용함).
+    // 0 = 끔. 근거·실측치는 simple_postprocess.h 의 aim_h_ema 주석.
+    float aim_h_ema = 0.2f;
 
     // Per-frame max move (output px). 0 = disabled (unbounded).
-    float max_step = 30.0f;
+    float max_step = 19.56f;
 
     // One Euro adaptive low-pass on the target center (jitter suppression).
     bool oneeuro_enabled = true;
-    float oneeuro_min_cutoff = 0.1f;
+    float oneeuro_min_cutoff = 0.084f;
     float oneeuro_beta = 0.02f;
-    float oneeuro_dcutoff = 0.5f;
 
     gpa::AimConfig rightGpuConfig() const { return toGpuConfig(right); }
     gpa::AimConfig thumbGpuConfig() const { return toGpuConfig(thumb); }
@@ -93,19 +118,47 @@ public:
             track_persistence_frames = std::clamp(v, 0, 60);
         }
 
-        if (j.contains("coast_enabled")) coast_enabled = j["coast_enabled"];
-        if (j.contains("coast_decay")) coast_decay = j["coast_decay"];
         if (j.contains("inflight_comp")) inflight_comp = j["inflight_comp"];
         if (j.contains("inflight_deadtime_frames")) {
-            const int v = j["inflight_deadtime_frames"];
-            inflight_deadtime_frames = std::clamp(v, 0, 4);
+            const float v = j["inflight_deadtime_frames"];
+            inflight_deadtime_frames = std::clamp(v, 0.0f, 4.0f);
+        }
+        if (j.contains("ff_gain")) ff_gain = j["ff_gain"];
+        if (j.contains("ff_ego_lag")) {
+            const float v = j["ff_ego_lag"];
+            ff_ego_lag = std::clamp(v, 1.0f, 4.0f);
+        }
+        if (j.contains("ff_v_ema")) {
+            const float v = j["ff_v_ema"];
+            ff_v_ema = std::clamp(v, 0.0f, 1.0f);
+        }
+        if (j.contains("lead_vgate")) lead_vgate = j["lead_vgate"];
+        if (j.contains("lead_err_gate")) lead_err_gate = j["lead_err_gate"];
+        if (j.contains("predict_frames")) {
+            const float v = j["predict_frames"];
+            predict_frames = std::clamp(v, 0.0f, 6.0f);
+        }
+        if (j.contains("head_deprioritized")) {
+            const bool v = j["head_deprioritized"];
+            head_deprioritized = v ? 1.0f : 0.0f;
+        }
+        if (j.contains("aim_h_ema")) {
+            const float v = j["aim_h_ema"];
+            aim_h_ema = std::clamp(v, 0.0f, 1.0f);
+        }
+        if (j.contains("class_switch_reject")) {
+            const bool v = j["class_switch_reject"];
+            class_switch_reject = v ? 1.0f : 0.0f;
+        }
+        if (j.contains("ego_frame_filter")) {
+            const bool v = j["ego_frame_filter"];
+            ego_frame_filter = v ? 1.0f : 0.0f;
         }
         if (j.contains("aim_max_step")) max_step = j["aim_max_step"];
 
         if (j.contains("oneeuro_enabled")) oneeuro_enabled = j["oneeuro_enabled"];
         if (j.contains("oneeuro_min_cutoff")) oneeuro_min_cutoff = j["oneeuro_min_cutoff"];
         if (j.contains("oneeuro_beta")) oneeuro_beta = j["oneeuro_beta"];
-        if (j.contains("oneeuro_dcutoff")) oneeuro_dcutoff = j["oneeuro_dcutoff"];
     }
 
     void save(nlohmann::json& j) const {
@@ -126,17 +179,26 @@ public:
         j["iou_stickiness_threshold"] = iou_stickiness_threshold;
         j["distance_stickiness_factor"] = distance_stickiness_factor;
         j["track_persistence_frames"] = track_persistence_frames;
-        j["coast_enabled"] = coast_enabled;
-        j["coast_decay"] = coast_decay;
         j["inflight_comp"] = inflight_comp;
         j["inflight_deadtime_frames"] = inflight_deadtime_frames;
         j["aim_max_step"] = max_step;
+
+        j["_section_lead"] = "===== Lead term (ego-corrected velocity feedforward) =====";
+        j["ff_gain"] = ff_gain;
+        j["ff_ego_lag"] = ff_ego_lag;
+        j["ff_v_ema"] = ff_v_ema;
+        j["lead_vgate"] = lead_vgate;
+        j["lead_err_gate"] = lead_err_gate;
+        j["predict_frames"] = predict_frames;
+        j["ego_frame_filter"] = (ego_frame_filter != 0.0f);
+        j["class_switch_reject"] = (class_switch_reject != 0.0f);
+        j["head_deprioritized"] = (head_deprioritized != 0.0f);
+        j["aim_h_ema"] = aim_h_ema;
 
         j["_section_oneeuro"] = "===== One Euro center filter (jitter suppression) =====";
         j["oneeuro_enabled"] = oneeuro_enabled;
         j["oneeuro_min_cutoff"] = oneeuro_min_cutoff;
         j["oneeuro_beta"] = oneeuro_beta;
-        j["oneeuro_dcutoff"] = oneeuro_dcutoff;
     }
 
     void print() const {
@@ -149,20 +211,43 @@ public:
         std::cout << "[Config] IoU stickiness: " << iou_stickiness_threshold << std::endl;
         std::cout << "[Config] Distance stickiness factor: " << distance_stickiness_factor
                   << (distance_stickiness_factor > 0.0f ? " (ON)" : " (OFF)") << std::endl;
-        std::cout << "[Config] Coast (gap glide): " << (coast_enabled ? "ON" : "OFF")
-                  << " (decay=" << coast_decay << ", window=" << track_persistence_frames
-                  << " frames)" << std::endl;
         std::cout << "[Config] Dead-time compensation: "
                   << (inflight_comp > 0.0f
                           ? "ON (comp=" + std::to_string(inflight_comp) + ", lag=" +
                                 std::to_string(inflight_deadtime_frames) + " frames)"
                           : std::string("OFF"))
                   << std::endl;
+        std::cout << "[Config] Lead (ego-corrected ff): "
+                  << (ff_gain > 0.0f
+                          ? "ON (gain=" + std::to_string(ff_gain) + ", ego_lag=" +
+                                std::to_string(ff_ego_lag) + ", vgate=" +
+                                std::to_string(lead_vgate) + ", err_gate=" +
+                                std::to_string(lead_err_gate) + ")"
+                          : std::string("OFF"))
+                  << std::endl;
+        std::cout << "[Config] Target extrapolation: "
+                  << (predict_frames > 0.0f
+                          ? "ON (" + std::to_string(predict_frames) + " frames)"
+                          : std::string("OFF"))
+                  << std::endl;
+        std::cout << "[Config] Body-priority selection: "
+                  << (head_deprioritized != 0.0f ? "ON (head = fallback only)" : "OFF")
+                  << std::endl;
+        std::cout << "[Config] Body aim-point observation: "
+                  << (aim_h_ema > 0.0f
+                          ? "centre + smoothed height (a=" + std::to_string(aim_h_ema) + ")"
+                          : std::string("raw y1 + k*h"))
+                  << std::endl;
+        std::cout << "[Config] Class-switch rejection: "
+                  << (class_switch_reject != 0.0f ? "ON" : "OFF") << std::endl;
+        std::cout << "[Config] Ego-free-frame filtering: "
+                  << (ego_frame_filter != 0.0f ? "ON (less ringing, slower acquire)"
+                                               : "OFF")
+                  << std::endl;
         std::cout << "[Config] Aim max step: " << max_step
                   << (max_step > 0.0f ? " px/frame" : " (disabled)") << std::endl;
         std::cout << "[Config] One Euro center filter: " << (oneeuro_enabled ? "ON" : "OFF")
-                  << " (min_cutoff=" << oneeuro_min_cutoff << ", beta=" << oneeuro_beta
-                  << ", dcutoff=" << oneeuro_dcutoff << ")" << std::endl;
+                  << " (min_cutoff=" << oneeuro_min_cutoff << ", beta=" << oneeuro_beta << ")" << std::endl;
         std::cout << "[Config] Track persistence: " << track_persistence_frames
                   << " frame(s)"
                   << (track_persistence_frames > 0 ? " (ON)" : " (OFF)") << std::endl;
@@ -179,14 +264,21 @@ private:
         aim.kd_y = gains.kd_y;
         aim.distance_stickiness_factor = distance_stickiness_factor;
         aim.track_persistence_frames = track_persistence_frames;
-        aim.coast_enabled = coast_enabled ? 1.0f : 0.0f;
-        aim.coast_decay = coast_decay;
         aim.inflight_comp = inflight_comp;
         aim.deadtime_frames = inflight_deadtime_frames;
+        aim.ff_gain = ff_gain;
+        aim.ff_ego_lag = ff_ego_lag;
+        aim.ff_v_ema = ff_v_ema;
+        aim.lead_vgate = lead_vgate;
+        aim.lead_err_gate = lead_err_gate;
+        aim.predict_frames = predict_frames;
+        aim.ego_frame_filter = ego_frame_filter;
+        aim.class_switch_reject = class_switch_reject;
+        aim.head_deprioritized = head_deprioritized;
+        aim.aim_h_ema = aim_h_ema;
         aim.oneeuro_enabled = oneeuro_enabled ? 1.0f : 0.0f;
         aim.oneeuro_min_cutoff = oneeuro_min_cutoff;
         aim.oneeuro_beta = oneeuro_beta;
-        aim.oneeuro_dcutoff = oneeuro_dcutoff;
         aim.max_step = max_step;
         return aim;
     }

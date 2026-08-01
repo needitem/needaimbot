@@ -69,3 +69,9 @@ inference_pc/build_stable/
 # Runtime calibration capture (perf_stats output)
 calib.csv
 inference_pc/calib.csv
+
+# 리그 캘리브레이션 캡처: 세션마다 새로 뜨는 원시 측정 데이터.
+# 큐레이션한 표본은 bench/calib_rig_sample*.csv 로 따로 둔다.
+inference_pc/calib_*.csv
+inference_pc/build*/bin/Release/*.log
+inference_pc/build*/bin/Release/simple_config.json.*

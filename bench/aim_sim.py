@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+"""!! HISTORICAL - DOES NOT MODEL THE CURRENT CONTROLLER !!
+
+This file describes the pipeline as it was BEFORE 2026-07-25: One Euro on the
+frame-coord centre + a feedforward on the RAW (ego-polluted) velocity + coast
+gap-glide. All three are gone from needaimbot/cuda/pd_controller.cuh:
+  - coast was removed outright (no benefit under real noise, worse on reversals),
+  - the raw-velocity feedforward was replaced by an EGO-CORRECTED lead built from
+    the in-flight ring, plus a target-side dead-time extrapolation,
+  - dead-time compensation (inflight_comp) did not exist here at all.
+Tuning against this file will give WRONG answers. The current, measurement-
+calibrated harness is bench/aim_opt.py (controller) and bench/aim_sim_select.py
+(target selection). Kept only as a record of the earlier analysis.
+"""
+
 """Closed-loop aim-controller simulation for OFFLINE design comparison. Both
 controllers are ported into Python here (not imported from C++):
   SHIPPED (this branch, "OLD" below): One Euro pre-filter + raw-delta velocity
@@ -493,9 +507,9 @@ def run(ctrl, scenario, frames=900, seed=0, latency_ms=None, noise_model="clean"
             else:
                 dx, dy = ctrl.step(meas, SC)
             missed = 0
-        # 'drop': the host discards the emitted move (flick override / queue
-        # full / aiming dropped between kernel and callback). The kernel already
-        # ran, but the mouse does NOT move. Applied delta fed back is 0.
+        # 'drop': the host discards the emitted move (queue full / aiming
+        # dropped between kernel and callback). The kernel already ran, but the
+        # mouse does NOT move. Applied delta fed back is 0.
         applied_dx, applied_dy = dx, dy
         if scenario == "drop" and not gap and rng.random() < 0.15:
             applied_dx, applied_dy = 0, 0
@@ -549,36 +563,6 @@ def avg_runs(make_ctrl, scenario, n=8, latency_ms=None, noise_model="clean",
         for k, v in m.items():
             acc.setdefault(k, []).append(v)
     return {k: sum(v)/len(v) for k, v in acc.items()}
-
-def flick_handover(ctrl, flick_frames=30, seed=0):
-    """The applied != emitted case the review flagged, and every real
-    acquisition in needaimbot: for the first flick_frames the host plays a
-    scripted acquisition flick (moves the crosshair ~2.7 px/frame toward the
-    target) and DISCARDS the controller's emitted move; the controller still
-    fuses measurements. Then PD takes over. Returns (handover_peak_px,
-    settle_frames_after_flick). A controller that ego-compensates its own
-    emitted guess instead of the host's applied delta desyncs by the whole
-    flick distance and lurches at handover; one closed on applied_dx/dy does
-    not. Kept as a regression oracle for AimConfig::applied_dx/dy."""
-    ctrl.reset()
-    SC = (160.0, 160.0)
-    rng = random.Random(seed)
-    C = [SC[0], SC[1]]; T = [SC[0] + 80.0, SC[1] + 20.0]
-    flick_per = [(T[0]-C[0])/flick_frames, (T[1]-C[1])/flick_frames]
-    peak, settle = 0.0, None
-    for f in range(300):
-        nx = rng.gauss(0.0, NOISE); ny = rng.gauss(0.0, NOISE)
-        raw = (T[0]-C[0]+SC[0]+nx, T[1]-C[1]+SC[1]+ny)
-        edx, edy = ctrl.step(raw, SC)
-        adx, ady = (flick_per if f < flick_frames else (edx, edy))
-        C[0] += adx; C[1] += ady
-        ctrl.set_applied(adx, ady)
-        e = math.hypot(T[0]-C[0], T[1]-C[1])
-        if f >= flick_frames:
-            peak = max(peak, e)
-            if settle is None and e < 2.0:
-                settle = f - flick_frames
-    return peak, (settle if settle is not None else -1)
 
 SCENARIOS = ["step", "still", "cv", "zigzag", "glitch", "gap", "drop"]
 
@@ -678,8 +662,3 @@ if __name__ == "__main__":
             cells.append(f"{sc}={m['rms']:5.2f} mv={m['move%']:2.0f}%")
         print("  " + " | ".join(cells))
     print()
-    print("-- flick handover: ego closed on applied delta vs on emitted guess --")
-    pk_s, st_s = flick_handover(NewController(Gains()))
-    pk_b, st_b = flick_handover(NewController(Gains(), ego_bug=True))
-    print(f"  applied_dx/dy (correct) : handover_peak={pk_s:6.2f}px  settle={st_s}f")
-    print(f"  bug (self-subtract emit): handover_peak={pk_b:6.2f}px  settle={st_b}f")

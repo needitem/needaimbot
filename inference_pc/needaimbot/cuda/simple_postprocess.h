@@ -5,6 +5,11 @@
 
 namespace gpa {
 
+// One Euro derivative cutoff. Was a config knob (oneeuro_dcutoff); removed because
+// sweeping 0.1..5.0 moved total error <0.2% - it only shapes the derivative that
+// drives the adaptive cutoff, so it was tuning surface with no lever behind it.
+constexpr float kOneEuroDCutoff = 1.0f;
+
 struct Detection;  // Forward declaration
 
 // GPU State Structures
@@ -18,16 +23,30 @@ struct AimState {
     // committed target alive across brief detection gaps.
     int frames_since_seen = 0;
 
-    // --- Coast state ---
-    // During a detection gap, follow only the TARGET's screen drift (its
-    // per-frame center velocity), decayed - NOT the P-convergence move (which
-    // would keep closing toward a point and overshoot). prev_center_* is the
-    // last detected aim point; vel_* is its smoothed per-frame drift.
+    // Set once a target has been acted on; gates One Euro seeding and the
+    // fresh-acquire derivative reset (has_track == 0 => first frame of a track).
     int   has_track = 0;
-    float prev_center_x = 0.0f;
-    float prev_center_y = 0.0f;
+
+    // --- Ego-corrected target velocity (feeds the lead / feedforward term) ---
+    // raw = T - C + SC, so d_raw = dT - dC: the measured drift is polluted by our
+    // OWN motion (that is why a plain screen-space velocity is useless here). But
+    // dC is known exactly - it is the emit sitting in the in-flight ring - so
+    //     dT = d_raw + ring[ff_ego_lag]
+    // recovers the target's TRUE screen velocity. vel_* is the EMA of that.
+    float prev_raw_x = 0.0f;
+    float prev_raw_y = 0.0f;
     float vel_x = 0.0f;
     float vel_y = 0.0f;
+    // Class the aim point came from last frame (-1 = none). head and body are two
+    // DIFFERENT anchors on the same enemy, so when selection flips between them
+    // the measured centre jumps by the anchor offset - an artifact, not target
+    // motion. Knowing the previous class lets that frame be excluded from the
+    // velocity and damping terms instead of being read as a huge drift.
+    int prev_class = -1;
+
+    // Slow EMA of the chosen box's height, for the body aim point (see
+    // aim_h_ema in AimConfig). <= 0 means "not seeded yet".
+    float h_ema = 0.0f;
 
     // --- One Euro position filter state ---
     // Adaptive low-pass of the target center. filt_* is the filtered position;
@@ -51,8 +70,9 @@ struct AimState {
     // that snapshot have NOT yet moved the target in the measurement. Without
     // this, the controller re-corrects an error it has already answered ->
     // double-correction -> overshoot/ringing. Ring of the last emitted moves in
-    // OUTPUT px; the controller subtracts the in-flight sum from the measured
-    // error before computing the next move.
+    // OUTPUT px. The classic path subtracts the in-flight sum from the measured
+    // error; the ego-free path folds it into the filter input instead. The ring
+    // also supplies the ego correction for the target-velocity estimate.
     static constexpr int kInflightMax = 4;
     float inflight_x[kInflightMax] = {0.0f, 0.0f, 0.0f, 0.0f};
     float inflight_y[kInflightMax] = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -78,25 +98,25 @@ struct AimConfig {
     // (prev_diag * factor) of the previous target's center is treated as the
     // same target. 0 = disabled, ~0.5 typical for fast close targets.
     float distance_stickiness_factor = 0.5f;
-    // Track persistence / coast window: how many consecutive missed frames to
-    // bridge before dropping the target. 0 = disabled.
+    // Track persistence: consecutive missed frames to bridge - the crosshair
+    // holds still, the target kept alive for a clean re-acquire - before
+    // dropping the target. 0 = disabled.
     int track_persistence_frames = 5;
 
-    // --- Coast (smooth bridging of detection gaps) ---
-    // coast_enabled != 0: during the persistence window, keep emitting the last
-    // movement scaled by coast_decay^frames (glide) instead of holding still.
-    // Decays to zero so a vanished target does not cause shake or freeze.
+    // HISTORY / WHY THE LEAD TERM IS BACK. An earlier velocity feedforward and a
+    // coast gap-glide were removed because they rode a RAW screen-drift estimate
+    // that is ego-polluted: the crosshair's own motion shifts the scene, so the
+    // measured drift is d(error)/dt, ~0 at steady tracking. Feedforward on that
+    // cannot cancel ramp lag and only amplifies detector noise. The removal note
+    // said a lead term needs a LAG-ALIGNED EGO-CORRECTED velocity first.
     //
-    // NOTE: velocity feedforward / dead-time prediction were removed. The
-    // screen-space velocity estimate (AimState::vel_*) is EGO-POLLUTED: the
-    // crosshair's own movement shifts the whole scene, so the measured drift is
-    // d(error)/dt, which is ~0 at steady tracking - feedforward on it cannot
-    // cancel ramp lag and only amplifies detector noise (sim-confirmed). Do not
-    // reintroduce lead terms on this signal; they need a LAG-ALIGNED ego-motion
-    // corrected velocity (add back the applied moves from ~dead-time frames ago)
-    // to work. vel_* itself stays: coast uses it to glide across detection gaps.
-    float coast_enabled = 1.0f;
-    float coast_decay = 0.85f;
+    // The in-flight ring (added later, for dead-time comp) is exactly that
+    // missing piece: it stores the emits we know landed, so the target's true
+    // screen velocity is recoverable as d_raw + ring[ff_ego_lag]. The lead term
+    // below rides THAT signal, and is double-gated (speed + error) so it cannot
+    // amplify rest jitter or fire during an acquisition jump. Sim on measured rig
+    // noise: fast-target lag -12%/-15% (4 and 8 px/frame) at unchanged step
+    // overshoot and oscillation. Coast stays removed - it had no such fix.
 
     // --- Dead-time compensation (in-flight move subtraction) ---
     // Subtract inflight_comp * (moves emitted in the last deadtime_frames) from
@@ -109,7 +129,113 @@ struct AimConfig {
     //   (bench/calibrate.py STEP-RESPONSE section). Over-estimating it
     //   over-subtracts and can destabilize, so measure before changing.
     float inflight_comp = 0.0f;
-    int   deadtime_frames = 1;
+    // FRACTIONAL frame count. The real emit->visible lag is not an integer
+    // (~1.13 frames here: USB ~1ms + render wait 0..6.94ms + E2E 3.3ms @144Hz),
+    // so rounding it to 1 or 2 either under- or over-compensates. A fractional w
+    // subtracts the whole last emit plus frac*(the one before it).
+    // 1.0 == the old integer deadtime_frames=1 behaviour, exactly.
+    float deadtime_frames = 1.0f;
+
+    // --- Lead / feedforward on the EGO-CORRECTED target velocity ---
+    // Cancels the nonlinear-P controller's steady-state ramp lag against a moving
+    // target - the dominant error term (sim: 18px at 8 px/frame), which no gain
+    // tuning can remove because it is structural to a proportional law.
+    // ff_gain 0 = off (pure P+D, the previous behaviour).
+    // See the history note above for why this is safe now and was not before.
+    float ff_gain = 0.0f;
+    // Ring lag (frames) at which our own motion between the last two
+    // measurements sits. Two consecutive detections are 1 frame apart in capture
+    // time, so this is ~dead time + 1. MIS-ALIGNING THIS IS WHAT BROKE THE
+    // EARLIER EGO ATTEMPT - keep it consistent with deadtime_frames.
+    float ff_ego_lag = 2.25f;
+    float ff_v_ema = 0.2f;      // EMA weight on the velocity estimate (0..1)
+    // Speed gate: g *= |v|/(|v|+lead_vgate). ~0 at rest, so a noisy velocity
+    // estimate cannot inject jitter into a stationary hold.
+    float lead_vgate = 9.0f;
+    // Error gate: g *= e0^2/(e0^2 + |err|^2). The lead must be OFF while
+    // acquiring - a position jump (fresh lock / target switch) produces a huge
+    // one-frame velocity that would overshoot. A real moving target instead shows
+    // SMALL error with sustained velocity. 0 = no error gating.
+    //
+    // ONE pair of gates serves BOTH lead terms (ff_gain and predict_frames).
+    // Separate per-term gates were tried and removed: they gate the same velocity
+    // against the same error, and giving each its own pair bought at most 0.5%
+    // while doubling the tuning surface. A single shared pair tuned properly
+    // beat the four-knob version outright (measured -0.8% error at equal ringing).
+    float lead_err_gate = 18.0f;
+
+    // --- Symmetric dead-time compensation (target-side extrapolation) ---
+    // inflight_comp removes OUR motion during the dead time. But the TARGET moved
+    // during that same dead time and nothing accounted for it - the compensation
+    // was half-done. Extrapolating the target forward by predict_frames * v
+    // completes it. Unlike ff_gain (which acts on the output) this shifts the
+    // SETPOINT, so it passes through the nonlinear P and inherits its softness /
+    // max-step behaviour. The two compose: sim shows predict+ff together beat
+    // either alone. predict_frames 0 = off. Values above the physical dead time
+    // act as a tuned lead rather than a strict predictor - that is intended, the
+    // gates keep it safe.
+    float predict_frames = 0.0f;
+
+    // --- Ego-free-frame filtering (architecture switch) ---
+    // The detection lives in FRAME coords, which move when WE move. Low-passing it
+    // there also low-passes our own motion, so during a correction the filter
+    // reports a stale (too large) error and the loop double-corrects -> overshoot.
+    // Lifting the measurement into an ego-free frame first (the in-flight ring
+    // tells us exactly how far the view moved) makes the filter smooth ONLY the
+    // target. Algebraically this reduces to one changed line in the One Euro
+    // update - the (1-a) branch carries the previous estimate MINUS our own last
+    // emit - and the separate in-flight subtraction is then folded into the filter
+    // input instead of the error.
+    //   sim (100 seeds): step overshoot -68% (2.6 -> 0.8px), oscillation -> 0,
+    //   error +1.8% (equal), fast-target lag unchanged, but ACQUISITION is 40-80%
+    //   slower (the fast reach and the overshoot are the same mechanism - the
+    //   stale-error over-drive - so removing one removes the other).
+    // 0 = off (frame-coord filtering, the validated default). Enable to trade
+    // acquisition snappiness for a large reduction in ringing; A/B on hardware.
+    float ego_frame_filter = 0.0f;
+
+    // --- Class-switch artifact rejection ---
+    // The rig CSVs show head<->body anchor flips on 0.6-2.4% of frames, each
+    // moving the aim point 11-21px (about a third of the vertical variance). The
+    // selected classId is already known here, so those frames can be identified
+    // exactly - no inference, no threshold that could fire on noise (a magnitude
+    // gate cannot tell an anchor flip from a real fast move; the class can).
+    // On a flip: the frame contributes ZERO drift to the velocity estimate and the
+    // damping term is cleared afterwards so the artifact cannot ring on for the
+    // length of the EMA memory.
+    //   sim (80 held-out seeds, realistic noise): total error -0.9%, reversal peak
+    //   -1.5%, hold -1.2%, tracking -0.4..-1.4%, step overshoot/osc/reach UNCHANGED
+    //   - nothing regresses. 0 = off.
+    float class_switch_reject = 1.0f;
+
+    // --- Body-priority target selection ---
+    // head and body are two DIFFERENT anchors on the same enemy. Letting the
+    // nearest-to-crosshair rule alternate between them adds variance the aim
+    // cannot filter out: measured aim-point sigma was 4.22px mixed vs 4.00
+    // body-only and 3.80 head-only - the MIX is worse than either source alone.
+    // With this on, a body detection always outranks a head detection, so the aim
+    // point is produced the same way every frame. head is kept as a FALLBACK for
+    // the case that needs it (only the head visible over cover), which dropping
+    // the class outright would lose. 0 = off (pure nearest-to-crosshair).
+    float head_deprioritized = 1.0f;
+
+    // --- Quieter body aim point (same point, less noise) ---
+    // The aim point is y1 + k*h. Since h = y2 - y1 that is (1-k)*y1 + k*y2, so it
+    // inherits BOTH edges' noise. Measured on 400 rig frames (crop 160, screen px):
+    // the box jitter splits into a common whole-box translation (sigma ~2.5) and an
+    // independent per-edge part (sigma ~2.8), so the CENTRE - which averages the
+    // independent part down - is the quietest point on the box (3.11) while the
+    // shipped body formula sits far from it (3.49, k=0.15).
+    // Rewriting the same point as  cy + (k - 0.5)*h  is algebraically identical,
+    // but now the fast component rides on the quiet centre and h carries its own
+    // slow EMA. h is a person's box height: it changes with distance, i.e. slowly,
+    // so heavy smoothing costs almost no tracking lag.
+    //   measured: sigma_y 3.49 -> 3.12 (-10.4%) at alpha 0.2, lag bias 0.92px
+    //   (bias vs a zero-phase reference; a quarter of sigma, so it stays buried)
+    // head gains NOTHING (its k = 0.601 is already near the centre; measured +1%),
+    // so this applies to the body anchor only.
+    // 0 = off (use the raw height, i.e. the original formula exactly).
+    float aim_h_ema = 0.2f;
 
     // --- One Euro adaptive low-pass on the target center ---
     // Removes detector jitter at the source: heavy smoothing when the target is
@@ -119,7 +245,10 @@ struct AimConfig {
     float oneeuro_enabled = 1.0f;
     float oneeuro_min_cutoff = 0.1f; // base cutoff at rest (lower = smoother/more lag)
     float oneeuro_beta = 0.02f;      // speed coefficient (higher = less lag when fast)
-    float oneeuro_dcutoff = 0.5f;    // derivative cutoff for the speed estimate
+    // NOTE: oneeuro_dcutoff was removed as a config knob. Sweeping it 0.1..5.0
+    // moves total error by less than 0.2% (it only shapes the derivative used for
+    // the adaptive cutoff), so it was pure tuning surface with no lever behind it.
+    // Fixed at kOneEuroDCutoff below (1.0 measured marginally best).
 
     // --- Static shoot-offset aim-shift (in OUTPUT/screen px) ---
     // Shifts the aim REFERENCE POINT away from screen center by this vector so
@@ -143,23 +272,15 @@ struct MouseMovement {
 struct InferenceResult {
     MouseMovement movement;     // 8 bytes: dx, dy
     int hasTarget;              // 4 bytes: 1 if target found, 0 otherwise
-    // 1 if has_track transitioned 0->1 this frame (fresh target lock, not a
-    // continued/coasted track) - lets the host play a one-shot humanized
-    // acquisition flick (needaimbot/mouse/warped_replay.hpp) instead of the
-    // raw PD movement for this target's first few frames.
-    int freshAcquire;           // 4 bytes
     float targetX1, targetY1;   // 8 bytes: best target bbox (if hasTarget)
     float targetX2, targetY2;   // 8 bytes
     float targetConf;           // 4 bytes: confidence
     int targetClassId;          // 4 bytes: class ID
-    // Pre-movement-scale error vector (raw_center - screen_center, model-input
-    // space) and the scale that converts it to output px - same inputs
-    // pd_controller's own error_x/error_y + movement_scale use. Only
-    // meaningful when freshAcquire is set; lets the host seed a
-    // warped_replay flick without needing its own screen-center/scale state.
-    float errorX, errorY;             // 8 bytes
+    // Model-input px -> output px scale that pd_controller's own movement_scale
+    // used this frame. Only the calibration logger reads it (calib.csv records
+    // moves in both spaces); the controller itself needs nothing from here.
     float movementScaleX, movementScaleY;  // 8 bytes
-    // Total: 56 bytes - still within a single 64B cache line
+    // Total: 44 bytes - still within a single 64B cache line
 };
 
 // One-pass fused postprocess:

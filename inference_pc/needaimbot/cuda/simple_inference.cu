@@ -258,14 +258,21 @@ inline bool aimConfigNearlyEqual(const AimConfig& a, const AimConfig& b) {
            nearlyEqual(a.max_step, b.max_step) &&
            nearlyEqual(a.distance_stickiness_factor, b.distance_stickiness_factor) &&
            (a.track_persistence_frames == b.track_persistence_frames) &&
-           nearlyEqual(a.coast_enabled, b.coast_enabled) &&
-           nearlyEqual(a.coast_decay, b.coast_decay) &&
            nearlyEqual(a.inflight_comp, b.inflight_comp) &&
-           (a.deadtime_frames == b.deadtime_frames) &&
+           nearlyEqual(a.deadtime_frames, b.deadtime_frames) &&
+           nearlyEqual(a.ff_gain, b.ff_gain) &&
+           nearlyEqual(a.ff_ego_lag, b.ff_ego_lag) &&
+           nearlyEqual(a.ff_v_ema, b.ff_v_ema) &&
+           nearlyEqual(a.lead_vgate, b.lead_vgate) &&
+           nearlyEqual(a.lead_err_gate, b.lead_err_gate) &&
+           nearlyEqual(a.predict_frames, b.predict_frames) &&
+           nearlyEqual(a.ego_frame_filter, b.ego_frame_filter) &&
+           nearlyEqual(a.class_switch_reject, b.class_switch_reject) &&
+           nearlyEqual(a.head_deprioritized, b.head_deprioritized) &&
+           nearlyEqual(a.aim_h_ema, b.aim_h_ema) &&
            nearlyEqual(a.oneeuro_enabled, b.oneeuro_enabled) &&
            nearlyEqual(a.oneeuro_min_cutoff, b.oneeuro_min_cutoff) &&
            nearlyEqual(a.oneeuro_beta, b.oneeuro_beta) &&
-           nearlyEqual(a.oneeuro_dcutoff, b.oneeuro_dcutoff) &&
            nearlyEqual(a.shoot_offset_x, b.shoot_offset_x) &&
            nearlyEqual(a.shoot_offset_y, b.shoot_offset_y);
 }
@@ -958,9 +965,21 @@ void SimpleInference::recordStageTimings(int slotIndex) {
     cudaEvent_t e5 = m_stageEvtEnd[idx];
     if (!e0 || !e1 || !e2 || !e3 || !e4 || !e5) return;
 
+    // Report the first failure instead of swallowing it: every stage read coming
+    // back 0 is indistinguishable from "the GPU really took 0us", which is how a
+    // broken probe silently reads as a fast pipeline.
     auto delta = [](cudaEvent_t a, cudaEvent_t b) -> uint64_t {
         float ms = 0.0f;
-        if (cudaEventElapsedTime(&ms, a, b) != cudaSuccess) {
+        const cudaError_t err = cudaEventElapsedTime(&ms, a, b);
+        if (err != cudaSuccess) {
+            static std::atomic<bool> warned{false};
+            if (!warned.exchange(true)) {
+                std::cerr << "[SimpleInference] stage timing unavailable: "
+                          << cudaGetErrorString(err)
+                          << " (events recorded inside a captured CUDA graph cannot"
+                             " always be timed; run with idle_graph_precapture off"
+                             " or compare Cb/E2E instead)" << std::endl;
+            }
             cudaGetLastError();
             return 0;
         }

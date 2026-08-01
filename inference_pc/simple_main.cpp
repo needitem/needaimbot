@@ -35,7 +35,6 @@
 #include "needaimbot/mouse/input_drivers/MakcuConnection.h"
 #include "needaimbot/mouse/controller.h"
 #include "needaimbot/mouse/pd_controller.hpp"
-#include "needaimbot/mouse/warped_replay.hpp"
 #include "needaimbot/app/engine_locator.hpp"
 #include "needaimbot/app/runtime_options.hpp"
 #include "needaimbot/app/runtime_diagnostics.hpp"
@@ -68,6 +67,10 @@ AtomicLatencyHistogram g_e2eLatencyHist;
 
 // This PC's wall clock (system_clock) epoch microseconds, for subtracting the
 // game-PC capture timestamp carried in the UDP header.
+// Max per-frame swing of the adaptive dead-time correction, in frames. Bounds
+// the damage a bad clock-offset sample can do, and the in-flight ring is 4 deep.
+static constexpr double kDeadtimeAdaptMax = 0.75;
+
 static int64_t nowUnixMicros() {
     return std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
@@ -124,15 +127,9 @@ struct Config {
     float headAimPoint = 1.0f;   // Head: aim at bottom (neck area)
     float bodyAimPoint = 0.15f;  // Body: aim near top (chest area)
 
-    // Nonlinear P(D) aim controller (gains, coast, One Euro, stickiness) -
+    // Nonlinear P(D) aim controller (gains, One Euro, stickiness) -
     // see needaimbot/mouse/pd_controller.hpp.
     pd_controller::Settings pd;
-
-    // Humanized acquisition-flick trajectory, played back in place of
-    // pd_controller's own output for the first stretch of a freshly locked
-    // target - see needaimbot/mouse/warped_replay.hpp.
-    bool flickEnabled = true;
-    warped_replay::config flick;
 
     // No-recoil
     bool noRecoilEnabled = true;
@@ -187,6 +184,9 @@ struct Config {
     // Empty by default - capture happens lazily on first incoming frame.
     std::vector<std::pair<int, int>> preCaptureShapes;
     bool stageTimingEnabled = false;  // Per-stage CUDA event timings (opt-in)
+    // Use each frame's measured staleness for the in-flight dead-time subtraction
+    // instead of a fixed deadtime_frames. See trySubmitLatestFrame.
+    bool deadtimeAdaptive = true;
 
     // Calibration capture path (for bench/calibrate.py). Only the WHERE - the
     // logger is enabled by perf_stats_enabled, not by this path. A relative path
@@ -235,9 +235,6 @@ struct Config {
 
             pd.load(j);
 
-            if (j.contains("flick_enabled")) flickEnabled = j["flick_enabled"];
-            flick.load(j);
-
             if (j.contains("no_recoil_enabled")) noRecoilEnabled = j["no_recoil_enabled"];
             if (j.contains("recoil_comp_x")) recoilCompX = j["recoil_comp_x"];
             if (j.contains("recoil_comp_y")) recoilCompY = j["recoil_comp_y"];
@@ -267,6 +264,7 @@ struct Config {
             if (j.contains("idle_graph_precapture_enabled")) idleGraphPrecaptureEnabled = j["idle_graph_precapture_enabled"];
             if (j.contains("idle_graph_precapture_interval_ms")) idleGraphPrecaptureIntervalMs = j["idle_graph_precapture_interval_ms"];
             if (j.contains("stage_timing_enabled")) stageTimingEnabled = j["stage_timing_enabled"];
+            if (j.contains("deadtime_adaptive")) deadtimeAdaptive = j["deadtime_adaptive"];
             if (j.contains("calibration_log_path")) calibrationLogPath = j["calibration_log_path"];
             if (j.contains("calibration_step_px")) calibrationStepPx = j["calibration_step_px"];
             if (j.contains("calibration_step_period_ms")) calibrationStepPeriodMs = j["calibration_step_period_ms"];
@@ -366,11 +364,7 @@ struct Config {
             j["shoot_offset_y"] = shootOffsetY;
 
             section("AIM CONTROLLER + CENTER FILTER");
-            pd.save(j);  // PD gains, thumb gains, stickiness, coast, One Euro
-
-            section("FLICK (warped-replay)");
-            j["flick_enabled"] = flickEnabled;
-            flick.save(j);
+            pd.save(j);  // PD gains, thumb gains, stickiness, One Euro
 
             section("RECOIL COMPENSATION");
             j["no_recoil_enabled"] = noRecoilEnabled;
@@ -403,6 +397,7 @@ struct Config {
             j["perf_log_max_bytes"] = perfLogMaxBytes;
             j["perf_log_truncate_on_start"] = perfLogTruncateOnStart;
             j["stage_timing_enabled"] = stageTimingEnabled;
+            j["deadtime_adaptive"] = deadtimeAdaptive;
             j["force_aim_on"] = forceAimOn;
             j["calibration_log_path"] = calibrationLogPath;
             j["calibration_step_px"] = calibrationStepPx;
@@ -431,8 +426,6 @@ struct Config {
         std::cout << "[Config] UDP port: " << udpPort << std::endl;
         std::cout << "[Config] Confidence: " << confThreshold << std::endl;
         pd.print();
-        std::cout << "[Config] Acquisition flick: " << (flickEnabled ? "ON" : "OFF") << std::endl;
-        if (flickEnabled) flick.print();
         std::cout << "[Config] Max detections: " << maxDetections << std::endl;
         std::cout << "[Config] No-recoil: " << (noRecoilEnabled ? "ON" : "OFF")
                   << " (Y=" << recoilCompY << ", tick=" << recoilTickMs << "ms)" << std::endl;
@@ -467,6 +460,9 @@ struct Config {
         std::cout << "[Config] Idle graph pre-capture: "
                   << (idleGraphPrecaptureEnabled ? "ON" : "OFF")
                   << " (interval=" << idleGraphPrecaptureIntervalMs << "ms)" << std::endl;
+        std::cout << "[Config] Adaptive dead-time: "
+                  << (deadtimeAdaptive ? "ON (per-frame measured staleness)"
+                                       : "OFF (fixed deadtime_frames)") << std::endl;
         std::cout << "[Config] Stage timing: "
                   << (stageTimingEnabled ? "ON" : "OFF") << std::endl;
         std::cout << "[Config] Calibration log: ";
@@ -587,25 +583,12 @@ struct CallbackContext {
     bool forceAimOn = false;
     bool perfStatsEnabled = false;
 
-    // Acquisition-flick playback (warped_replay) - started on freshAcquire,
-    // sampled instead of the PD movement until it finishes. Callback-thread
-    // only (see needaimbot/mouse/warped_replay.hpp), so a single instance per
-    // context is fine.
-    bool flickEnabled = true;
-    warped_replay::config flickConfig;
-    warped_replay::FlickPlayback flickPlayback;
-
     // Calibration logger (nullptr = off). Not owned; lives in main().
     CalibLogger* calib = nullptr;
 
     void initFromConfig(const Config& cfg) {
         forceAimOn = cfg.forceAimOn;
         perfStatsEnabled = cfg.perfStatsEnabled;
-        flickEnabled = cfg.flickEnabled;
-        flickConfig = cfg.flick;
-        // Preload the replay DB now (startup), not on the first flick's
-        // callback - the ~130ms JSON parse must not land on the hot path.
-        if (flickEnabled) warped_replay::warmup(flickConfig);
     }
 };
 
@@ -705,44 +688,19 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
     }
 
     if (!aimingActive) {
-        // Aim released mid-flick: cancel rather than leave it active. GPU-side
-        // tracking (has_track) keeps running while aiming is off, so the same
-        // track can still be live with no fresh acquire when aiming resumes -
-        // left active, sample() would see a huge stale elapsed time and fire
-        // one giant catch-up jump to the flick's endpoint.
-        ctx->flickPlayback.cancel();
         releaseTicket();
         return;
     }
 
     if (!result.hasTarget) {
-        // Same reasoning as above: target lost (not just coasted) mid-flick.
-        ctx->flickPlayback.cancel();
         releaseTicket();
         return;
-    }
-
-    // A fresh lock starts (and immediately takes over from) a humanized
-    // acquisition flick; a continued/coasted track never (re)starts one.
-    if (ctx->flickEnabled && result.freshAcquire) {
-        ctx->flickPlayback.start(result.errorX, result.errorY,
-                                  result.movementScaleX, result.movementScaleY,
-                                  ctx->flickConfig);
-    }
-
-    int moveDx = result.movement.dx;
-    int moveDy = result.movement.dy;
-    if (ctx->flickPlayback.active()) {
-        if (auto delta = ctx->flickPlayback.sample(Clock::now())) {
-            moveDx = delta->dx;
-            moveDy = delta->dy;
-        }
     }
 
     // Inference is done - hand the result off to the controller, which
     // decides how to turn it into physical mouse motion. (The static shoot-
     // offset aim-shift lives in the GPU controller's error term, not here.)
-    ctx->controller->submitAimMovement(moveDx, moveDy);
+    ctx->controller->submitAimMovement(result.movement.dx, result.movement.dy);
 
     releaseTicket();
 }
@@ -1299,6 +1257,13 @@ int main(int argc, char* argv[]) {
     // submitMutex, so no atomics needed. shouldInfer() returns whether to run
     // inference for this frame given the live aim state and the keep-warm tail;
     // it refreshes lastAimingActive whenever aiming is truly active.
+    // Per-frame dead-time adaptation state (see the deadtimeAdaptive block in
+    // trySubmitLatestFrame). Same serialization as lastAimingActive below:
+    // written/read only inside trySubmitLatestFrame, which submitMutex serializes.
+    int64_t prevCaptureUnixMicros = 0;
+    double framePeriodUsEma = 0.0;
+    double ageFramesEma = 0.0;
+
     Clock::time_point lastAimingActive{};
     auto shouldInfer = [&](bool aimingNow) -> bool {
         if (aimingNow) { lastAimingActive = Clock::now(); return true; }
@@ -1398,6 +1363,50 @@ int main(int argc, char* argv[]) {
         if (controller::maskShooting(frameButtonMask)) {
             frameAimConfig.shoot_offset_x = cfg.shootOffsetX;
             frameAimConfig.shoot_offset_y = cfg.shootOffsetY;
+        }
+        // --- Per-frame dead-time compensation ---
+        // inflight_comp subtracts the moves emitted but not yet visible in this
+        // measurement, and deadtime_frames says HOW MANY frames' worth. That was a
+        // tuned constant, but the real transport delay jitters (measured E2E p50
+        // 2.7ms / p95 4.8ms), so a constant is wrong on most frames - and that
+        // error shows up as overshoot that no gain setting can remove.
+        // This frame's staleness is already known here: capture timestamp vs now.
+        // Feeding it in costs nothing on the GPU (deadtime_frames is already
+        // fractional and uploaded per frame) and is what lets the ringing/speed
+        // trade-off move instead of just sliding along.
+        //   sim (3 blocks x60): step overshoot -34%, reach40 -1.7%, error -0.4%,
+        //   reversal peak -0.1% - no metric regresses.
+        // Only the DEVIATION from this session's own typical staleness is applied,
+        // so a constant clock-offset bias cancels out and only jitter is corrected.
+        if (cfg.deadtimeAdaptive && acquiredCaptureUnixMicros != 0) {
+            bool offsetValid = false;
+            const int64_t offset = udpCapture.GetClockOffsetMicros(&offsetValid);
+            if (offsetValid && prevCaptureUnixMicros != 0) {
+                const int64_t periodUs =
+                    static_cast<int64_t>(acquiredCaptureUnixMicros) - prevCaptureUnixMicros;
+                // Ignore gaps/reorders: only plausible inter-frame spacings update
+                // the period estimate, otherwise one stall poisons it for seconds.
+                if (periodUs > 1000 && periodUs < 40000) {
+                    framePeriodUsEma = (framePeriodUsEma <= 0.0)
+                        ? static_cast<double>(periodUs)
+                        : framePeriodUsEma + 0.05 * (periodUs - framePeriodUsEma);
+                }
+                const int64_t ageUs =
+                    (nowUnixMicros() + offset) - static_cast<int64_t>(acquiredCaptureUnixMicros);
+                if (framePeriodUsEma > 0.0 && ageUs >= 0 && ageUs < 100000) {
+                    const double ageFrames = ageUs / framePeriodUsEma;
+                    ageFramesEma = (ageFramesEma <= 0.0)
+                        ? ageFrames
+                        : ageFramesEma + 0.02 * (ageFrames - ageFramesEma);
+                    // Clamp the correction: a bad offset sample must not be able to
+                    // swing the loop, and the in-flight ring only holds 4 frames.
+                    double adj = ageFrames - ageFramesEma;
+                    adj = std::clamp(adj, -kDeadtimeAdaptMax, kDeadtimeAdaptMax);
+                    frameAimConfig.deadtime_frames = static_cast<float>(std::clamp(
+                        static_cast<double>(frameAimConfig.deadtime_frames) + adj, 0.0, 4.0));
+                }
+            }
+            prevCaptureUnixMicros = static_cast<int64_t>(acquiredCaptureUnixMicros);
         }
 
         const bool graphReady = inference.isFullGraphReadyForShape(
@@ -1556,16 +1565,6 @@ int main(int argc, char* argv[]) {
         const uint8_t idleButtonMask = makcu.buttonMask();
         const bool aimingActiveMain = cfg.forceAimOn || controller::maskAiming(idleButtonMask);
         if (!aimingActiveMain) {
-            // trySubmitLatestFrame stops pulling frames the instant aiming
-            // drops (see its own "Only pull a frame while actively aiming"
-            // check), so the inference callback can go silent for as long as
-            // aiming stays off - it never gets a chance to observe the
-            // release and cancel an in-progress flick itself. This loop is
-            // the only thing still polling button state at that point, so it
-            // has to be the one to cancel a stale flick before it can resume
-            // as a huge catch-up jump when aiming comes back.
-            callbackCtx.flickPlayback.cancel();
-
             std::lock_guard<std::mutex> lock(submitMutex);
             if (cfg.idleGraphPrecaptureEnabled && !idleGraphPrecaptureDone &&
                 now >= nextIdleGraphPrecaptureTime && busyCallbackTicketCount() == 0) {

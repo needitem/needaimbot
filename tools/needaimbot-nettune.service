@@ -1,0 +1,19 @@
+[Unit]
+Description=needaimbot: low-latency tuning for the game_pc UDP frame link
+# Must run after NetworkManager has brought eno1 up, because the MTU can only be
+# changed on a DOWN netdev (Tegra nvethernet returns EBUSY otherwise) and NM
+# activates the link first - which is exactly why the profile's mtu=9000 never
+# takes effect on its own after a reboot.
+After=NetworkManager.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/home/taeho/portfolio/inferencetool/tools/net_tune.sh boot-apply
+# Never let a tuning failure block boot or take the link down permanently.
+TimeoutStartSec=90
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

@@ -125,15 +125,12 @@ __device__ __forceinline__ void writeEmptyInferenceResult(InferenceResult* resul
     result->movement.dx = 0;
     result->movement.dy = 0;
     result->hasTarget = 0;
-    result->freshAcquire = 0;
     result->targetX1 = 0;
     result->targetY1 = 0;
     result->targetX2 = 0;
     result->targetY2 = 0;
     result->targetConf = 0;
     result->targetClassId = -1;
-    result->errorX = 0.0f;
-    result->errorY = 0.0f;
     result->movementScaleX = 0.0f;
     result->movementScaleY = 0.0f;
 }
@@ -271,6 +268,8 @@ __global__ void stage1DecodeAndSelectKernel(
 {
     const float distance_stickiness_factor =
         d_aim_config ? d_aim_config->distance_stickiness_factor : 0.0f;
+    const int head_deprioritized =
+        (d_aim_config && d_aim_config->head_deprioritized != 0.0f) ? 1 : 0;
     __shared__ Detection s_prevTarget;
     __shared__ bool s_prevValid;
     __shared__ Detection s_warpBestDistDet[MAX_SELECTION_WARPS];
@@ -333,7 +332,18 @@ __global__ void stage1DecodeAndSelectKernel(
             : (det.y1 + h * body_y_offset);
         const float dx = centerX - screen_center_x;
         const float dy = aimY - screen_center_y;
-        const float effectiveDist = dx * dx + dy * dy;
+        float effectiveDist = dx * dx + dy * dy;
+        // Body-priority: head and body are two DIFFERENT anchors on the same
+        // enemy, and alternating between them adds variance the aim cannot filter
+        // out (measured: mixed sigma 4.22 px vs body-only 4.00, head-only 3.80 -
+        // the mix is worse than either). Body is chosen whenever it exists, so the
+        // aim point is always produced the same way. Head stays a FALLBACK for the
+        // case that actually needs it: only the head visible over cover, where
+        // dropping the head class outright would lose the target entirely.
+        // Implemented as a huge distance penalty so any body outranks any head.
+        if (head_deprioritized != 0 && det.classId == head_class_id) {
+            effectiveDist += 1.0e12f;
+        }
         if (effectiveDist < localBestDist) {
             localBestDist = effectiveDist;
             localBestByDist = det;
@@ -580,32 +590,9 @@ __global__ void stage2FinalizeKernel(
         hasTarget = true;
     } else if (prevValid && prevFramesSinceSeen < trackPersistenceFrames) {
         // True detection gap (no candidate this frame) within the bridge
-        // window. With coast enabled, follow the target's last drift (decayed)
-        // so a momentarily-lost target neither freezes nor jumps; otherwise
-        // hold still. d_selected_target is kept alive for clean re-acquire.
-        const int gap = prevFramesSinceSeen + 1;
-        d_aim_state->frames_since_seen = gap;
-        const AimConfig coastCfg = *d_aim_config;
-        if (coastCfg.coast_enabled != 0.0f && d_aim_state->has_track) {
-            int dx = 0, dy = 0;
-            computeCoastMovement(coastCfg, d_aim_state, movement_scale_x, movement_scale_y,
-                                 gap, dx, dy);
-            d_inference_result->movement.dx = dx;
-            d_inference_result->movement.dy = dy;
-            d_inference_result->hasTarget = 1;
-            d_inference_result->freshAcquire = 0;  // coasting an existing track, not a fresh lock
-            d_inference_result->targetX1 = prevTarget.x1;
-            d_inference_result->targetY1 = prevTarget.y1;
-            d_inference_result->targetX2 = prevTarget.x2;
-            d_inference_result->targetY2 = prevTarget.y2;
-            d_inference_result->targetConf = prevTarget.confidence;
-            d_inference_result->targetClassId = prevTarget.classId;
-            d_inference_result->errorX = 0.0f;
-            d_inference_result->errorY = 0.0f;
-            d_inference_result->movementScaleX = 0.0f;
-            d_inference_result->movementScaleY = 0.0f;
-            return;
-        }
+        // window: hold the crosshair still and keep d_selected_target alive so
+        // stickiness can cleanly re-acquire when the target reappears.
+        d_aim_state->frames_since_seen = prevFramesSinceSeen + 1;
         d_aim_state->residual_x = 0.0f;
         d_aim_state->residual_y = 0.0f;
         writeEmptyInferenceResult(d_inference_result);
@@ -621,9 +608,10 @@ __global__ void stage2FinalizeKernel(
         d_aim_state->residual_x = 0.0f;
         d_aim_state->residual_y = 0.0f;
         d_aim_state->frames_since_seen = 0;
-        d_aim_state->has_track = 0;  // target fully lost -> stop coasting
-        d_aim_state->vel_x = 0.0f;
+        d_aim_state->has_track = 0;  // target fully lost -> next detection is a fresh acquire
+        d_aim_state->vel_x = 0.0f;   // stale velocity must not lead the next target
         d_aim_state->vel_y = 0.0f;
+        d_aim_state->prev_class = -1;
         writeEmptyInferenceResult(d_inference_result);
         return;
     }
@@ -633,19 +621,36 @@ __global__ void stage2FinalizeKernel(
         *d_selected_target = chosenTarget;
     }
 
-    const float raw_center_x = (chosenTarget.x1 + chosenTarget.x2) * 0.5f;
-    const float target_h = chosenTarget.y2 - chosenTarget.y1;
-    const float raw_center_y =
-        (chosenTarget.classId == head_class_id)
-            ? (chosenTarget.y1 + target_h * head_y_offset)
-            : (chosenTarget.y1 + target_h * body_y_offset);
-
     const AimConfig aim_config = *d_aim_config;
 
-    // Captured BEFORE computeAimMovement, which sets has_track = 1
-    // unconditionally on the way out - this is the only place "was this
-    // track just acquired this frame" can still be observed.
-    const bool fresh_acquire = (d_aim_state->has_track == 0);
+    const float raw_center_x = (chosenTarget.x1 + chosenTarget.x2) * 0.5f;
+    const float target_h = chosenTarget.y2 - chosenTarget.y1;
+    float raw_center_y;
+    if (chosenTarget.classId == head_class_id) {
+        // head keeps the raw formula: its aim point is already near the box
+        // centre, so there is nothing to recover (see aim_h_ema in AimConfig).
+        raw_center_y = chosenTarget.y1 + target_h * head_y_offset;
+    } else {
+        // Same point, quieter observation: y1 + k*h == cy + (k - 0.5)*h, but the
+        // centre is the least noisy point on the box and h can then carry its own
+        // slow EMA. Re-seed the EMA whenever the height we are averaging does not
+        // belong to the same anchor as last frame - a fresh track or a head<->body
+        // flip means a DIFFERENT box, and carrying its height over would drag the
+        // aim point off by the difference for as long as the EMA takes to catch up.
+        const float a = aim_config.aim_h_ema;
+        if (a > 0.0f) {
+            const bool reseed = (d_aim_state->has_track == 0) ||
+                                (d_aim_state->h_ema <= 0.0f) ||
+                                (d_aim_state->prev_class != chosenTarget.classId);
+            d_aim_state->h_ema = reseed
+                ? target_h
+                : d_aim_state->h_ema + a * (target_h - d_aim_state->h_ema);
+            const float cy = (chosenTarget.y1 + chosenTarget.y2) * 0.5f;
+            raw_center_y = cy + (body_y_offset - 0.5f) * d_aim_state->h_ema;
+        } else {
+            raw_center_y = chosenTarget.y1 + target_h * body_y_offset;
+        }
+    }
 
     // The actual PD controller math (One Euro pre-filter, drift tracking,
     // nonlinear P+D convergence, max-step clamp, integer delta) lives
@@ -654,22 +659,18 @@ __global__ void stage2FinalizeKernel(
     int emit_dx = 0, emit_dy = 0;
     computeAimMovement(raw_center_x, raw_center_y, screen_center_x, screen_center_y,
                         movement_scale_x, movement_scale_y, aim_config, d_aim_state,
-                        emit_dx, emit_dy);
+                        chosenTarget.classId, emit_dx, emit_dy);
 
     d_inference_result->movement.dx = emit_dx;
     d_inference_result->movement.dy = emit_dy;
     d_inference_result->hasTarget = 1;
-    d_inference_result->freshAcquire = fresh_acquire ? 1 : 0;
     d_inference_result->targetX1 = chosenTarget.x1;
     d_inference_result->targetY1 = chosenTarget.y1;
     d_inference_result->targetX2 = chosenTarget.x2;
     d_inference_result->targetY2 = chosenTarget.y2;
     d_inference_result->targetConf = chosenTarget.confidence;
-    // Same error vector + scale pd_controller's own math used above - lets a
-    // fresh-acquire host callback seed a warped_replay flick without needing
-    // its own screen-center/scale state (see needaimbot/mouse/warped_replay.hpp).
-    d_inference_result->errorX = raw_center_x - screen_center_x;
-    d_inference_result->errorY = raw_center_y - screen_center_y;
+    // Only the calibration logger reads this (calib.csv wants the emitted move
+    // in model-input px as well as output px).
     d_inference_result->movementScaleX = movement_scale_x;
     d_inference_result->movementScaleY = movement_scale_y;
     d_inference_result->targetClassId = chosenTarget.classId;

@@ -1,1 +1,7 @@
 __pycache__/
+
+# 리그에서 수집한 원시 프레임/로그 - 크고 재수집 가능하다 (grab_frames.py).
+# 분석 스크립트만 버전관리한다.
+crop_ab/frames.npy
+*.npy
+perf_stats.log

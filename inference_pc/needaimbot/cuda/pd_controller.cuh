@@ -2,7 +2,7 @@
 
 // GPU-side nonlinear P(D) aim controller: the actual per-frame movement math,
 // split out of stage2FinalizeKernel (simple_postprocess.cu) for readability.
-// Config assembly (gains/coast/oneeuro -> AimConfig) lives host-side in
+// Config assembly (gains/oneeuro -> AimConfig) lives host-side in
 // needaimbot/mouse/pd_controller.hpp; this file is what actually turns a
 // target center + AimConfig + AimState into an emitted (dx, dy) each frame.
 
@@ -17,8 +17,8 @@ __device__ __forceinline__ float oneEuroAlpha(float cutoff) {
 }
 
 // Cap a per-frame move vector to maxStep px, preserving direction. maxStep <= 0
-// disables. Applied to every movement path (P+D+ff and coast glide) so the slew
-// bound is uniform and a large leap cannot overshoot/ring regardless of source.
+// disables. Applied to the P+D movement path so the slew bound is uniform and a
+// large leap cannot overshoot/ring regardless of source.
 __device__ __forceinline__ void clampMaxStep(float& mx, float& my, float maxStep) {
     if (maxStep > 0.0f) {
         const float step = sqrtf(mx * mx + my * my);
@@ -47,16 +47,67 @@ __device__ __forceinline__ void pushInflight(AimState* s, float dx, float dy) {
 }
 
 // Sum of the moves emitted in the last `frames` frames (OUTPUT px) - i.e. the
-// moves the current (stale) measurement cannot have seen yet.
-__device__ __forceinline__ void inflightSum(const AimState* s, int frames,
+// moves the current (stale) measurement cannot have seen yet. `frames` is
+// FRACTIONAL: whole entries are summed, then the boundary entry is weighted by
+// the remainder, so a real dead time of e.g. 1.13 frames is represented exactly
+// instead of being rounded to 1 (under-compensate) or 2 (over-compensate).
+__device__ __forceinline__ void inflightSum(const AimState* s, float frames,
                                             float& sx, float& sy) {
     sx = 0.0f; sy = 0.0f;
-    const int n = min(max(frames, 0), AimState::kInflightMax);
+    const float w = fminf(fmaxf(frames, 0.0f), static_cast<float>(AimState::kInflightMax));
+    const int n = static_cast<int>(floorf(w));
     for (int k = 1; k <= n; ++k) {
         const int i = (s->inflight_head - k + AimState::kInflightMax) % AimState::kInflightMax;
         sx += s->inflight_x[i];
         sy += s->inflight_y[i];
     }
+    const float frac = w - static_cast<float>(n);
+    if (frac > 0.0f && (n + 1) <= AimState::kInflightMax) {
+        const int i = (s->inflight_head - (n + 1) + AimState::kInflightMax) % AimState::kInflightMax;
+        sx += frac * s->inflight_x[i];
+        sy += frac * s->inflight_y[i];
+    }
+}
+
+// The single emit sitting `lag` frames back (lag 1 = most recent), fractional lag
+// blending the two neighbours. Used to recover our own view motion between the
+// last two detections so the target's true velocity can be reconstructed.
+__device__ __forceinline__ void inflightAt(const AimState* s, float lag,
+                                           float& ax, float& ay) {
+    const float w = fminf(fmaxf(lag, 1.0f), static_cast<float>(AimState::kInflightMax));
+    const int n = static_cast<int>(floorf(w));
+    const float frac = w - static_cast<float>(n);
+    const int i = (s->inflight_head - n + AimState::kInflightMax) % AimState::kInflightMax;
+    ax = s->inflight_x[i];
+    ay = s->inflight_y[i];
+    if (frac > 0.0f && (n + 1) <= AimState::kInflightMax) {
+        const int j = (s->inflight_head - (n + 1) + AimState::kInflightMax) % AimState::kInflightMax;
+        ax = (1.0f - frac) * ax + frac * s->inflight_x[j];
+        ay = (1.0f - frac) * ay + frac * s->inflight_y[j];
+    }
+}
+
+// Confidence gate shared by BOTH lead terms (ff_gain on the output and
+// predict_frames on the setpoint). They ride the same velocity estimate and must
+// be suppressed in the same two situations, so the gate lives in one place:
+//   speed gate  |v|/(|v|+vgate)      -> ~0 at rest, so the (noisy) velocity
+//                                       estimate cannot shake a held aim.
+//   error gate  e0^2/(e0^2+|err|^2)  -> ~0 while acquiring, so the huge one-frame
+//                                       velocity of a position jump is never led
+//                                       on (that is what would overshoot).
+__device__ __forceinline__ float leadGate(const AimConfig& cfg, const AimState* s,
+                                          float error_x, float error_y) {
+    float g = 1.0f;
+    if (cfg.lead_vgate > 0.0f) {
+        const float sp = sqrtf(s->vel_x * s->vel_x + s->vel_y * s->vel_y);
+        g *= sp / (sp + cfg.lead_vgate);
+    }
+    if (cfg.lead_err_gate > 0.0f) {
+        const float e0 = cfg.lead_err_gate;
+        const float e2 = error_x * error_x + error_y * error_y;
+        g *= (e0 * e0) / (e0 * e0 + e2);
+    }
+    return g;
 }
 
 __device__ __forceinline__ int emitMouseDelta(float movement, float* residual) {
@@ -83,40 +134,17 @@ __device__ __forceinline__ int emitMouseDelta(float movement, float* residual) {
     return emit;
 }
 
-// Detection-gap "coast": glide from the target's last known screen drift
-// (decayed per missed frame) instead of freezing or snapping, bridging brief
-// occlusions/misses. Mutates aim_state's residual carry; does not touch
-// velocity/filter/derivative state (those only advance on an actual detection).
-__device__ __forceinline__ void computeCoastMovement(
-    const AimConfig& aim_config,
-    AimState* aim_state,
-    float movement_scale_x, float movement_scale_y,
-    int missed_frames,
-    int& out_dx, int& out_dy) {
-    float factor = 1.0f;
-    for (int i = 0; i < missed_frames; ++i) factor *= aim_config.coast_decay;
-    // Follow only the target's drift (vel * scale), decayed. No convergence
-    // term, so a stationary target does not drift off.
-    float mx = aim_state->vel_x * movement_scale_x * factor;
-    float my = aim_state->vel_y * movement_scale_y * factor;
-    clampMaxStep(mx, my, aim_config.max_step);
-    out_dx = emitMouseDelta(mx, &aim_state->residual_x);
-    out_dy = emitMouseDelta(my, &aim_state->residual_y);
-    // Coast moves shift the view too - they must count as in-flight.
-    pushInflight(aim_state, static_cast<float>(out_dx), static_cast<float>(out_dy));
-}
-
 // Full PD controller for a target detected THIS frame: One Euro pre-filter on
-// the measured center -> per-frame drift tracking (feeds coast) ->
-// nonlinear P + D convergence -> max-step clamp ->
-// integer mouse delta. Mutates aim_state in place (filter/velocity/derivative/
-// residual carry, and has_track/prev_center for the next frame).
+// the measured center -> nonlinear P + D convergence -> max-step clamp ->
+// integer mouse delta. Mutates aim_state in place (filter/derivative/residual
+// carry and has_track for the next frame).
 __device__ __forceinline__ void computeAimMovement(
     float raw_center_x, float raw_center_y,
     float screen_center_x, float screen_center_y,
     float movement_scale_x, float movement_scale_y,
     const AimConfig& aim_config,
     AimState* aim_state,
+    int target_class,
     int& out_dx, int& out_dy) {
     // NOTE: confidence-weighted filtering was tried and removed. The idea was to
     // down-weight low-confidence detections (outliers) in the One Euro update. It
@@ -132,31 +160,76 @@ __device__ __forceinline__ void computeAimMovement(
     // reset the error derivative on a fresh acquire (avoids a derivative kick).
     const bool fresh_track = (aim_state->has_track == 0);
 
-    // One Euro adaptive low-pass on the measured center, applied BEFORE
-    // velocity and error so the whole controller (P move, coast)
-    // runs on the de-noised signal. Seed on fresh acquire to avoid a jump from
-    // a stale value.
+    // Anchor flip (head<->body on the same enemy): the centre jumps by the offset
+    // between the two aim points. That is an artifact of switching anchors, not
+    // the target moving, so it must not enter the velocity estimate (the lead term
+    // would fling on it) nor the damping term.
+    const bool class_changed =
+        (aim_config.class_switch_reject != 0.0f && !fresh_track &&
+         aim_state->prev_class >= 0 && target_class != aim_state->prev_class);
+    if (class_changed) {
+        // zero drift for this frame: velocity sees no jump at all
+        aim_state->prev_raw_x = raw_center_x;
+        aim_state->prev_raw_y = raw_center_y;
+    }
+    aim_state->prev_class = target_class;
+
+    // One Euro adaptive low-pass on the measured center, applied BEFORE the
+    // error so the whole controller (P move) runs on the de-noised signal. Seed
+    // on fresh acquire to avoid a jump from a stale value.
+    // In-flight sum is needed by BOTH paths: the ego-free path folds it into the
+    // filter input, the classic path subtracts it from the error further down.
+    float inf_x = 0.0f, inf_y = 0.0f;
+    const bool use_comp =
+        (aim_config.inflight_comp > 0.0f && aim_config.deadtime_frames > 0.0f);
+    if (use_comp) {
+        inflightSum(aim_state, aim_config.deadtime_frames, inf_x, inf_y);
+    }
+    const bool ego_frame =
+        (aim_config.ego_frame_filter != 0.0f && aim_config.oneeuro_enabled != 0.0f);
+
     float target_center_x = raw_center_x;
     float target_center_y = raw_center_y;
     if (aim_config.oneeuro_enabled != 0.0f) {
+        // Ego-free path: filter the measurement with our own motion removed, and
+        // carry the previous estimate corrected by our own last emit. Then the
+        // filter smooths only the TARGET instead of also smoothing our corrections
+        // (which is what makes the classic path report a stale error and overshoot).
+        float in_x = raw_center_x, in_y = raw_center_y;
+        float carry_x = aim_state->filt_x, carry_y = aim_state->filt_y;
+        if (ego_frame) {
+            if (use_comp) {
+                if (movement_scale_x != 0.0f) in_x -= aim_config.inflight_comp * inf_x / movement_scale_x;
+                if (movement_scale_y != 0.0f) in_y -= aim_config.inflight_comp * inf_y / movement_scale_y;
+            }
+            float last_x = 0.0f, last_y = 0.0f;
+            inflightAt(aim_state, 1.0f, last_x, last_y);   // the emit applied since last frame
+            if (movement_scale_x != 0.0f) carry_x -= last_x / movement_scale_x;
+            if (movement_scale_y != 0.0f) carry_y -= last_y / movement_scale_y;
+        }
         if (aim_state->has_track) {
-            const float ad = oneEuroAlpha(aim_config.oneeuro_dcutoff);
-            const float de_x = raw_center_x - aim_state->filt_x;  // per-frame derivative
+            const float ad = oneEuroAlpha(kOneEuroDCutoff);
+            // Derivative for the adaptive cutoff is (measurement - estimate) in
+            // whichever frame we are working in: with the ego-free frame both
+            // terms carry the same +M, so it is in_x - filt_x, NOT in_x - carry_x
+            // (carry already has our own motion removed - using it here would add
+            // a spurious +lastEmit to the speed estimate).
+            const float de_x = in_x - aim_state->filt_x;
             aim_state->dfilt_x = ad * de_x + (1.0f - ad) * aim_state->dfilt_x;
             const float cutoff_x =
                 aim_config.oneeuro_min_cutoff + aim_config.oneeuro_beta * fabsf(aim_state->dfilt_x);
             const float ax = oneEuroAlpha(cutoff_x);
-            aim_state->filt_x = ax * raw_center_x + (1.0f - ax) * aim_state->filt_x;
+            aim_state->filt_x = ax * in_x + (1.0f - ax) * carry_x;
 
-            const float de_y = raw_center_y - aim_state->filt_y;
+            const float de_y = in_y - aim_state->filt_y;
             aim_state->dfilt_y = ad * de_y + (1.0f - ad) * aim_state->dfilt_y;
             const float cutoff_y =
                 aim_config.oneeuro_min_cutoff + aim_config.oneeuro_beta * fabsf(aim_state->dfilt_y);
             const float ay = oneEuroAlpha(cutoff_y);
-            aim_state->filt_y = ay * raw_center_y + (1.0f - ay) * aim_state->filt_y;
+            aim_state->filt_y = ay * in_y + (1.0f - ay) * carry_y;
         } else {
-            aim_state->filt_x = raw_center_x;
-            aim_state->filt_y = raw_center_y;
+            aim_state->filt_x = in_x;
+            aim_state->filt_y = in_y;
             aim_state->dfilt_x = 0.0f;
             aim_state->dfilt_y = 0.0f;
         }
@@ -164,25 +237,38 @@ __device__ __forceinline__ void computeAimMovement(
         target_center_y = aim_state->filt_y;
     }
 
-    // Update the target's per-frame screen drift (EMA, clamped) FIRST so a
-    // following detection gap's coast uses the freshest velocity. Use the RAW
-    // center deltas, NOT the One Euro filtered center: the filter delays
-    // position, which would lag the coast glide. (When One Euro is off,
-    // raw_center == target_center, so this is a no-op.)
-    if (aim_state->has_track) {
-        const float maxDrift = 60.0f;  // model px/frame sanity clamp
-        float nvx = raw_center_x - aim_state->prev_center_x;
-        float nvy = raw_center_y - aim_state->prev_center_y;
-        nvx = fminf(fmaxf(nvx, -maxDrift), maxDrift);
-        nvy = fminf(fmaxf(nvy, -maxDrift), maxDrift);
-        aim_state->vel_x = 0.6f * aim_state->vel_x + 0.4f * nvx;
-        aim_state->vel_y = 0.6f * aim_state->vel_y + 0.4f * nvy;
-    } else {
-        aim_state->vel_x = 0.0f;
-        aim_state->vel_y = 0.0f;
+    // Ego-corrected target velocity. Feeds BOTH lead terms, so it must be updated
+    // whenever EITHER is enabled - gating it on ff_gain alone would make
+    // predict_frames silently do nothing. Uses the RAW center - not the One Euro
+    // output - so the velocity is not position-lagged. d_raw = dTarget -
+    // dCrosshair; our own dCrosshair between the last two detections is the emit
+    // at ring lag ff_ego_lag, so adding it back recovers the target's TRUE screen
+    // drift. Updated before has_track flips so a fresh acquire starts from zero
+    // velocity instead of a spurious jump.
+    const bool lead_active =
+        (aim_config.ff_gain > 0.0f || aim_config.predict_frames > 0.0f);
+    if (lead_active) {
+        if (aim_state->has_track) {
+            float ax = 0.0f, ay = 0.0f;
+            inflightAt(aim_state, aim_config.ff_ego_lag, ax, ay);
+            const float maxDrift = 60.0f;   // model px/frame sanity clamp
+            float dvx = (raw_center_x - aim_state->prev_raw_x)
+                      + ((movement_scale_x != 0.0f) ? ax / movement_scale_x : 0.0f);
+            float dvy = (raw_center_y - aim_state->prev_raw_y)
+                      + ((movement_scale_y != 0.0f) ? ay / movement_scale_y : 0.0f);
+            dvx = fminf(fmaxf(dvx, -maxDrift), maxDrift);
+            dvy = fminf(fmaxf(dvy, -maxDrift), maxDrift);
+            const float a = fminf(fmaxf(aim_config.ff_v_ema, 0.0f), 1.0f);
+            aim_state->vel_x = (1.0f - a) * aim_state->vel_x + a * dvx;
+            aim_state->vel_y = (1.0f - a) * aim_state->vel_y + a * dvy;
+        } else {
+            aim_state->vel_x = 0.0f;
+            aim_state->vel_y = 0.0f;
+        }
+        aim_state->prev_raw_x = raw_center_x;
+        aim_state->prev_raw_y = raw_center_y;
     }
-    aim_state->prev_center_x = raw_center_x;  // raw (un-lagged) for next velocity
-    aim_state->prev_center_y = raw_center_y;
+
     aim_state->has_track = 1;
 
     // Aim at the measured target center, shifted by the static shoot-offset
@@ -204,11 +290,23 @@ __device__ __forceinline__ void computeAimMovement(
     // yet. Subtract them (converted OUTPUT px -> model px) so we answer only
     // the error our in-flight moves have NOT already addressed. Without this
     // the loop double-corrects and rings; with it, kp can go higher.
-    if (aim_config.inflight_comp > 0.0f && aim_config.deadtime_frames > 0) {
-        float inf_x = 0.0f, inf_y = 0.0f;
-        inflightSum(aim_state, aim_config.deadtime_frames, inf_x, inf_y);
+    // Classic path only: the ego-free path already folded this into the filter
+    // input, so subtracting it again here would double-compensate.
+    if (use_comp && !ego_frame) {
         if (movement_scale_x != 0.0f) error_x -= aim_config.inflight_comp * inf_x / movement_scale_x;
         if (movement_scale_y != 0.0f) error_y -= aim_config.inflight_comp * inf_y / movement_scale_y;
+    }
+
+    // Symmetric dead-time compensation: the in-flight subtraction above removed
+    // OUR motion during the dead time; this extrapolates the TARGET forward over
+    // the same dead time, which nothing did before. Shifting the SETPOINT (not
+    // the output) means it passes through the nonlinear P and the max-step clamp.
+    // Gated exactly like the lead term: ~0 at rest (noise) and ~0 while acquiring
+    // (a position jump's one-frame velocity must never be extrapolated).
+    if (aim_config.predict_frames > 0.0f) {
+        const float g = leadGate(aim_config, aim_state, error_x, error_y);
+        error_x += aim_config.predict_frames * g * aim_state->vel_x;
+        error_y += aim_config.predict_frames * g * aim_state->vel_y;
     }
 
     // Derivative (damping) term: react to how fast the error is shrinking and
@@ -234,12 +332,23 @@ __device__ __forceinline__ void computeAimMovement(
     aim_state->prev_err_x = error_x;
     aim_state->prev_err_y = error_y;
 
+    // Second lead term, on the OUTPUT this time (predict_frames above shifts the
+    // setpoint). Same gate - see leadGate(). Both are kept because they compose:
+    // the setpoint form passes through the nonlinear P, the output form does not,
+    // and together they beat either alone (measured).
+    float ff_x = 0.0f, ff_y = 0.0f;
+    if (aim_config.ff_gain > 0.0f) {
+        const float g = leadGate(aim_config, aim_state, error_x, error_y);
+        ff_x = aim_config.ff_gain * g * aim_state->vel_x;
+        ff_y = aim_config.ff_gain * g * aim_state->vel_y;
+    }
+
     float movement_x =
         (nonlinearPMove(error_x, aim_config.kp_x, aim_config.p_softness_x)
-         + aim_config.kd_x * aim_state->derr_x) * movement_scale_x;
+         + aim_config.kd_x * aim_state->derr_x + ff_x) * movement_scale_x;
     float movement_y =
         (nonlinearPMove(error_y, aim_config.kp_y, aim_config.p_softness_y)
-         + aim_config.kd_y * aim_state->derr_y) * movement_scale_y;
+         + aim_config.kd_y * aim_state->derr_y + ff_y) * movement_scale_y;
 
     // Per-frame max-step clamp (output px). Bounds the slew so a large initial
     // error is crossed in several smooth steps instead of one delayed leap
@@ -249,6 +358,14 @@ __device__ __forceinline__ void computeAimMovement(
     out_dx = emitMouseDelta(movement_x, &aim_state->residual_x);
     out_dy = emitMouseDelta(movement_y, &aim_state->residual_y);
     pushInflight(aim_state, static_cast<float>(out_dx), static_cast<float>(out_dy));
+
+    // Clear the damping state AFTER the move: the error step caused by the anchor
+    // flip is already spent, and the derivative EMA would otherwise keep replaying
+    // it for the length of its memory.
+    if (class_changed) {
+        aim_state->derr_x = 0.0f;
+        aim_state->derr_y = 0.0f;
+    }
 }
 
 }  // namespace gpa

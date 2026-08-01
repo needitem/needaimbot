@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+"""!! HISTORICAL - DOES NOT MODEL THE CURRENT CONTROLLER !!
+
+This file describes the pipeline as it was BEFORE 2026-07-25: One Euro on the
+frame-coord centre + a feedforward on the RAW (ego-polluted) velocity + coast
+gap-glide. All three are gone from needaimbot/cuda/pd_controller.cuh:
+  - coast was removed outright (no benefit under real noise, worse on reversals),
+  - the raw-velocity feedforward was replaced by an EGO-CORRECTED lead built from
+    the in-flight ring, plus a target-side dead-time extrapolation,
+  - dead-time compensation (inflight_comp) did not exist here at all.
+Tuning against this file will give WRONG answers. The current, measurement-
+calibrated harness is bench/aim_opt.py (controller) and bench/aim_sim_select.py
+(target selection). Kept only as a record of the earlier analysis.
+"""
+
 """Comprehensive realistic 2-PC aim-pipeline sim (real-ish units).
 
 Everything the tracking-scope viz models PLUS the pieces it was missing:
