@@ -25,16 +25,55 @@ case "$P" in
   show)
     for d in "$STABLE" "$DEV"; do
       [ -f "$d/simple_config.json" ] || continue
-      python3 - "$d/simple_config.json" "$d" <<'PY'
+      python3 - "$d/simple_config.json" "$d" <<'PYEOF'
 import json,sys
 d=json.load(open(sys.argv[1]))
 cap=d.get('pre_capture_shapes',[[0,0]])[0][0]
-print("  %-46s 캡처 %s  softness %s/%s  conf %s  body_aim %s"%(
-    sys.argv[2], cap, d.get('aim_softness_x'), d.get('aim_softness_y'),
-    d.get('conf_threshold'), d.get('body_aim_point')))
-PY
+print("  %-44s 캡처 %s  conf %s  body_aim %s"%(sys.argv[2],cap,
+      d.get('conf_threshold'), d.get('body_aim_point')))
+print("      우클릭 kp %s/%s  soft %s/%s  kd %s/%s  max_step %s"%(
+      d.get('aim_kp_x'),d.get('aim_kp_y'),d.get('aim_softness_x'),
+      d.get('aim_softness_y'),d.get('aim_kd_x'),d.get('aim_kd_y'),d.get('aim_max_step')))
+print("      thumb   kp %s/%s  soft %s/%s  kd %s/%s"%(
+      d.get('thumb_aim_kp_x'),d.get('thumb_aim_kp_y'),
+      d.get('thumb_aim_softness_x'),d.get('thumb_aim_softness_y'),
+      d.get('thumb_aim_kd_x'),d.get('thumb_aim_kd_y')))
+print("      적응데드타임 %s  aim_h_ema %s  mincut %s"%(
+      d.get('deadtime_adaptive'), d.get('aim_h_ema'), d.get('oneeuro_min_cutoff')))
+PYEOF
     done
+    # 두 프리셋이 '캡처 종속 6개는 x2, 나머지는 동일' 규칙에서 벗어났는지 검사한다.
+    # 한쪽만 튜닝하고 잊으면 preset.sh 한 번으로 그 튜닝이 조용히 되돌아간다.
+    echo
+    python3 - "$STABLE" <<'PYEOF'
+import json,sys,os
+S=sys.argv[1]
+try:
+    a=json.load(open(os.path.join(S,"simple_config.320.json")))
+    b=json.load(open(os.path.join(S,"simple_config.160.json")))
+except FileNotFoundError:
+    print("  프리셋 파일 없음 - 정합성 검사 건너뜀"); raise SystemExit
+HALF={"aim_softness_x","aim_softness_y","thumb_aim_softness_x","thumb_aim_softness_y",
+      "lead_vgate","lead_err_gate"}
+OWN={"pre_capture_shapes","conf_threshold","head_aim_point","body_aim_point"}
+bad=[]
+for k in sorted(set(a)|set(b)):
+    if k in OWN or k.startswith("_"): continue
+    x,y=a.get(k),b.get(k)
+    if k in HALF:
+        try:
+            if abs(y-2*x)>1e-6: bad.append("%s: 320=%s 160=%s (x2 아님)"%(k,x,y))
+        except TypeError: bad.append("%s: 숫자가 아님"%k)
+    elif x!=y:
+        bad.append("%s: 320=%s 160=%s"%(k,x,y))
+if bad:
+    print("  [경고] 프리셋 불일치 %d건 - 한쪽만 갱신됐을 수 있다:"%len(bad))
+    for t in bad[:12]: print("      "+t)
+    sys.exit(1)
+print("  프리셋 정합성 OK (캡처 종속 6개는 x2, 나머지 동일)")
+PYEOF
     ;;
+
   320|160)
     SRC="$STABLE/simple_config.$P.json"
     [ -f "$SRC" ] || { echo "프리셋 없음: $SRC"; exit 1; }

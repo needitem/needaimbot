@@ -71,6 +71,11 @@ AtomicLatencyHistogram g_e2eLatencyHist;
 // the damage a bad clock-offset sample can do, and the in-flight ring is 4 deep.
 static constexpr double kDeadtimeAdaptMax = 0.75;
 
+// Current shipped-config generation. See Config::configVersion.
+//   1 = 2026-08-01: adaptive dead time + the gains re-optimised for it, the
+//       thumb profile's first tuning, aim_h_ema, ego_frame_filter removed.
+static constexpr int kConfigVersion = 1;
+
 static int64_t nowUnixMicros() {
     return std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
@@ -196,6 +201,11 @@ struct Config {
     // (X) every calibrationStepPeriodMs while the log is on. Aim OFF at a
     // stationary target; calibrate.py cross-correlates cx vs the injection to
     // find the full emit->visible dead-time. 0 = off.
+    // Bumped whenever a shipped default changes in a way an existing config
+    // would silently override. The file's values still win - this only makes the
+    // staleness visible instead of leaving it to be discovered by feel.
+    int configVersion = 0;
+
     int calibrationStepPx = 0;
     int calibrationStepPeriodMs = 250;
 
@@ -263,6 +273,7 @@ struct Config {
             if (j.contains("force_aim_on")) forceAimOn = j["force_aim_on"];
             if (j.contains("idle_graph_precapture_enabled")) idleGraphPrecaptureEnabled = j["idle_graph_precapture_enabled"];
             if (j.contains("idle_graph_precapture_interval_ms")) idleGraphPrecaptureIntervalMs = j["idle_graph_precapture_interval_ms"];
+            if (j.contains("config_version")) configVersion = j["config_version"];
             if (j.contains("stage_timing_enabled")) stageTimingEnabled = j["stage_timing_enabled"];
             if (j.contains("deadtime_adaptive")) deadtimeAdaptive = j["deadtime_adaptive"];
             if (j.contains("calibration_log_path")) calibrationLogPath = j["calibration_log_path"];
@@ -396,6 +407,7 @@ struct Config {
             j["perf_log_path"] = perfLogPath;
             j["perf_log_max_bytes"] = perfLogMaxBytes;
             j["perf_log_truncate_on_start"] = perfLogTruncateOnStart;
+            j["config_version"] = kConfigVersion;
             j["stage_timing_enabled"] = stageTimingEnabled;
             j["deadtime_adaptive"] = deadtimeAdaptive;
             j["force_aim_on"] = forceAimOn;
@@ -460,6 +472,17 @@ struct Config {
         std::cout << "[Config] Idle graph pre-capture: "
                   << (idleGraphPrecaptureEnabled ? "ON" : "OFF")
                   << " (interval=" << idleGraphPrecaptureIntervalMs << "ms)" << std::endl;
+        if (configVersion < kConfigVersion) {
+            std::cout << "[Config] *** This config predates the current tuning (file v"
+                      << configVersion << " < v" << kConfigVersion << ") ***" << std::endl;
+            std::cout << "[Config]     Its values OVERRIDE the shipped defaults, so any"
+                         " key it already has stays at the old value." << std::endl;
+            std::cout << "[Config]     Most likely stale: thumb_aim_kd_*, aim_kp_*,"
+                         " aim_softness_*, aim_max_step, oneeuro_min_cutoff." << std::endl;
+            std::cout << "[Config]     Refresh with tools/preset.sh {320|160}, or delete"
+                         " the file to be reseeded from simple_config.default.json."
+                      << std::endl;
+        }
         std::cout << "[Config] Adaptive dead-time: "
                   << (deadtimeAdaptive ? "ON (per-frame measured staleness)"
                                        : "OFF (fixed deadtime_frames)") << std::endl;

@@ -1,4 +1,5 @@
 {
+    "config_version": 1,
     "_section_ENGINE / NETWORK": "========== ENGINE / NETWORK ==========",
     "engine_path": "/home/taeho/portfolio/inferencetool/engines/sunxds_0.8.3_320_fp16.engine",
     "udp_port": 5007,
