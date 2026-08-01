@@ -49,8 +49,7 @@ int main(int argc, char** argv) {
     cfg.oneeuro_min_cutoff = 0.3f;
     cfg.oneeuro_beta = 0.02f;
     cfg.shoot_offset_x = 0.0f; cfg.shoot_offset_y = 0.0f;
-    cfg.ego_frame_filter = (argc > 1 && atoi(argv[1]) != 0) ? 1.0f : 0.0f;
-    cfg.class_switch_reject = (argc > 2) ? (float)atoi(argv[2]) : 1.0f;
+    cfg.class_switch_reject = (argc > 1) ? (float)atoi(argv[1]) : 1.0f;
 
     const float SC = 160.0f, SCALE = 1.0f;
 

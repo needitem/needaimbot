@@ -10,7 +10,7 @@ sys.path.insert(0, "..")
 from aim_opt import OptCtrl, base_params
 
 
-def py_run(rows, ego_frame=False, cls_reject=True):
+def py_run(rows, cls_reject=True):
     p = base_params(kp_x=0.75, kp_y=0.82, soft_x=9.0, soft_y=8.0, kd_x=0.05, kd_y=0.06,
                     max_step=25.0, comp=1.0, w=1.0,
                     ff=1.4, ego_lag=2.25, v_ema=0.2,

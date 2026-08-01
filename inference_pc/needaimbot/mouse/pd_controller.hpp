@@ -62,10 +62,6 @@ public:
     // Symmetric dead-time comp: extrapolate the TARGET forward over the dead time
     // (inflight_comp only removed OUR motion). 0 = off.
     float predict_frames = 3.18f;
-    // Architecture switch: filter in an ego-free frame (see
-    // needaimbot/cuda/simple_postprocess.h). 0 = off (validated default).
-    // Trades acquisition snappiness for a large reduction in ringing.
-    float ego_frame_filter = 0.0f;
     // Reject the head<->body anchor-flip artifact (the selected classId already
     // identifies those frames exactly). 1 = on. See simple_postprocess.h.
     float class_switch_reject = 1.0f;
@@ -150,10 +146,6 @@ public:
             const bool v = j["class_switch_reject"];
             class_switch_reject = v ? 1.0f : 0.0f;
         }
-        if (j.contains("ego_frame_filter")) {
-            const bool v = j["ego_frame_filter"];
-            ego_frame_filter = v ? 1.0f : 0.0f;
-        }
         if (j.contains("aim_max_step")) max_step = j["aim_max_step"];
 
         if (j.contains("oneeuro_enabled")) oneeuro_enabled = j["oneeuro_enabled"];
@@ -190,7 +182,6 @@ public:
         j["lead_vgate"] = lead_vgate;
         j["lead_err_gate"] = lead_err_gate;
         j["predict_frames"] = predict_frames;
-        j["ego_frame_filter"] = (ego_frame_filter != 0.0f);
         j["class_switch_reject"] = (class_switch_reject != 0.0f);
         j["head_deprioritized"] = (head_deprioritized != 0.0f);
         j["aim_h_ema"] = aim_h_ema;
@@ -240,10 +231,6 @@ public:
                   << std::endl;
         std::cout << "[Config] Class-switch rejection: "
                   << (class_switch_reject != 0.0f ? "ON" : "OFF") << std::endl;
-        std::cout << "[Config] Ego-free-frame filtering: "
-                  << (ego_frame_filter != 0.0f ? "ON (less ringing, slower acquire)"
-                                               : "OFF")
-                  << std::endl;
         std::cout << "[Config] Aim max step: " << max_step
                   << (max_step > 0.0f ? " px/frame" : " (disabled)") << std::endl;
         std::cout << "[Config] One Euro center filter: " << (oneeuro_enabled ? "ON" : "OFF")
@@ -272,7 +259,6 @@ private:
         aim.lead_vgate = lead_vgate;
         aim.lead_err_gate = lead_err_gate;
         aim.predict_frames = predict_frames;
-        aim.ego_frame_filter = ego_frame_filter;
         aim.class_switch_reject = class_switch_reject;
         aim.head_deprioritized = head_deprioritized;
         aim.aim_h_ema = aim_h_ema;

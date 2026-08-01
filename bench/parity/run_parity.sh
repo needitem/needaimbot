@@ -5,11 +5,11 @@ set -e
 cd "$(dirname "$(readlink -f "$0")")"
 nvcc -O2 -I../../inference_pc/needaimbot/cuda parity_test.cu -o parity_test
 fail=0
-echo "== default path (ego_frame=0, class_reject=1) =="
-./parity_test 0 1 > cuda_out.txt && python3 compare.py || fail=1
+echo "== default path (class_reject=1) =="
+./parity_test 1 > cuda_out.txt && python3 compare.py || fail=1
 echo
 echo "== class_switch_reject OFF =="
-./parity_test 0 0 > cuda_off.txt
+./parity_test 0 > cuda_off.txt
 python3 - <<'PY' || fail=1
 import sys; sys.path.insert(0,'..')
 from compare import py_run

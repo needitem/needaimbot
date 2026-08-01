@@ -122,12 +122,9 @@ class OptCtrl:
         # really has moved to the other anchor, so the error step is a real
         # SETPOINT CHANGE and one D response helps cross it. Measured (3 blocks
         # x60, both gain profiles): suppressing it is 0.03-0.22% WORSE.
-        # skip_d only clears the EMA AFTER the move, bounding the echo without
-        # removing that response. Keep this identical to pd_controller.cuh.
-        skip_d = False
+        # Keep this identical to pd_controller.cuh.
         if cls_changed and p.get("cls_reject", 1.0) != 0.0 and not fresh:
             self.prev_raw_x, self.prev_raw_y = rx, ry
-            skip_d = True
         # --- ego-corrected target velocity ---
         # Two consecutive measurements are 1 frame apart in CAPTURE time, so the
         # crosshair motion between them is the emit that landed in that window -
@@ -245,9 +242,6 @@ class OptCtrl:
         dx, self.res_x = emit_mouse_delta(mx, self.res_x)
         dy, self.res_y = emit_mouse_delta(my, self.res_y)
         self._push(float(dx), float(dy))
-        if skip_d:
-            # Bound the echo, not the response - see the class-switch note above.
-            self.derr_x = self.derr_y = 0.0
         return dx, dy
 
 

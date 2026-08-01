@@ -266,7 +266,6 @@ inline bool aimConfigNearlyEqual(const AimConfig& a, const AimConfig& b) {
            nearlyEqual(a.lead_vgate, b.lead_vgate) &&
            nearlyEqual(a.lead_err_gate, b.lead_err_gate) &&
            nearlyEqual(a.predict_frames, b.predict_frames) &&
-           nearlyEqual(a.ego_frame_filter, b.ego_frame_filter) &&
            nearlyEqual(a.class_switch_reject, b.class_switch_reject) &&
            nearlyEqual(a.head_deprioritized, b.head_deprioritized) &&
            nearlyEqual(a.aim_h_ema, b.aim_h_ema) &&

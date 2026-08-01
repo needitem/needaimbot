@@ -87,7 +87,6 @@
     "lead_vgate": 14.79,
     "lead_err_gate": 22.25,
     "predict_frames": 3.18,
-    "ego_frame_filter": false,
     "class_switch_reject": true,
     "head_deprioritized": true
 }

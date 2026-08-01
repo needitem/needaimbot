@@ -41,7 +41,9 @@ struct AimState {
     // DIFFERENT anchors on the same enemy, so when selection flips between them
     // the measured centre jumps by the anchor offset - an artifact, not target
     // motion. Knowing the previous class lets that frame be excluded from the
-    // velocity and damping terms instead of being read as a huge drift.
+    // VELOCITY estimate (the damping term deliberately still sees it - after a
+    // flip the aim point really has moved, so it is a setpoint change; measured,
+    // suppressing it is worse). See class_changed in pd_controller.cuh.
     int prev_class = -1;
 
     // Slow EMA of the chosen box's height, for the body aim point (see
@@ -70,9 +72,8 @@ struct AimState {
     // that snapshot have NOT yet moved the target in the measurement. Without
     // this, the controller re-corrects an error it has already answered ->
     // double-correction -> overshoot/ringing. Ring of the last emitted moves in
-    // OUTPUT px. The classic path subtracts the in-flight sum from the measured
-    // error; the ego-free path folds it into the filter input instead. The ring
-    // also supplies the ego correction for the target-velocity estimate.
+    // OUTPUT px, subtracted from the measured error. The ring also supplies the
+    // ego correction for the target-velocity estimate.
     static constexpr int kInflightMax = 4;
     float inflight_x[kInflightMax] = {0.0f, 0.0f, 0.0f, 0.0f};
     float inflight_y[kInflightMax] = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -176,24 +177,13 @@ struct AimConfig {
     // gates keep it safe.
     float predict_frames = 0.0f;
 
-    // --- Ego-free-frame filtering (architecture switch) ---
-    // The detection lives in FRAME coords, which move when WE move. Low-passing it
-    // there also low-passes our own motion, so during a correction the filter
-    // reports a stale (too large) error and the loop double-corrects -> overshoot.
-    // Lifting the measurement into an ego-free frame first (the in-flight ring
-    // tells us exactly how far the view moved) makes the filter smooth ONLY the
-    // target. Algebraically this reduces to one changed line in the One Euro
-    // update - the (1-a) branch carries the previous estimate MINUS our own last
-    // emit - and the separate in-flight subtraction is then folded into the filter
-    // input instead of the error.
-    //   sim (100 seeds): step overshoot -68% (2.6 -> 0.8px), oscillation -> 0,
-    //   error +1.8% (equal), fast-target lag unchanged, but ACQUISITION is 40-80%
-    //   slower (the fast reach and the overshoot are the same mechanism - the
-    //   stale-error over-drive - so removing one removes the other).
-    // 0 = off (frame-coord filtering, the validated default). Enable to trade
-    // acquisition snappiness for a large reduction in ringing; A/B on hardware.
-    float ego_frame_filter = 0.0f;
-
+    // REMOVED: ego-free-frame filtering. Lifting the measurement into an ego-free
+    // frame before the One Euro update cut step overshoot -68% but made
+    // ACQUISITION 40-80% slower - fast reach and overshoot are the same mechanism,
+    // so it was a trade, not a win, and this rig's binding constraint is speed.
+    // Superseded 2026-08-01 by per-frame adaptive dead time (deadtime_adaptive in
+    // simple_main.cpp), which cuts overshoot -34% at -1.7% reach: strictly better
+    // on both axes, so the branch had no remaining use and was deleted.
     // --- Class-switch artifact rejection ---
     // The rig CSVs show head<->body anchor flips on 0.6-2.4% of frames, each
     // moving the aim point 11-21px (about a third of the vertical variance). The

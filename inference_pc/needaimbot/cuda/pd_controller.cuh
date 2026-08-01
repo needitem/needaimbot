@@ -171,8 +171,7 @@ __device__ __forceinline__ void computeAimMovement(
     // CHANGE, not a measurement artifact, and letting D respond once helps cross
     // it. Measured (sim, 3 blocks x60, both gain profiles): suppressing that
     // response - by holding the EMA or by zeroing it before the move - is
-    // 0.03-0.22% WORSE. Do not "fix" it; the earlier comment here claimed the
-    // damping term was excluded too, which the code never did.
+    // 0.03-0.22% WORSE, on both gain profiles. Do not "fix" it.
     const bool class_changed =
         (aim_config.class_switch_reject != 0.0f && !fresh_track &&
          aim_state->prev_class >= 0 && target_class != aim_state->prev_class);
@@ -186,43 +185,22 @@ __device__ __forceinline__ void computeAimMovement(
     // One Euro adaptive low-pass on the measured center, applied BEFORE the
     // error so the whole controller (P move) runs on the de-noised signal. Seed
     // on fresh acquire to avoid a jump from a stale value.
-    // In-flight sum is needed by BOTH paths: the ego-free path folds it into the
-    // filter input, the classic path subtracts it from the error further down.
+    // The in-flight sum is computed here and subtracted from the error further
+    // down.
     float inf_x = 0.0f, inf_y = 0.0f;
     const bool use_comp =
         (aim_config.inflight_comp > 0.0f && aim_config.deadtime_frames > 0.0f);
     if (use_comp) {
         inflightSum(aim_state, aim_config.deadtime_frames, inf_x, inf_y);
     }
-    const bool ego_frame =
-        (aim_config.ego_frame_filter != 0.0f && aim_config.oneeuro_enabled != 0.0f);
 
     float target_center_x = raw_center_x;
     float target_center_y = raw_center_y;
     if (aim_config.oneeuro_enabled != 0.0f) {
-        // Ego-free path: filter the measurement with our own motion removed, and
-        // carry the previous estimate corrected by our own last emit. Then the
-        // filter smooths only the TARGET instead of also smoothing our corrections
-        // (which is what makes the classic path report a stale error and overshoot).
-        float in_x = raw_center_x, in_y = raw_center_y;
-        float carry_x = aim_state->filt_x, carry_y = aim_state->filt_y;
-        if (ego_frame) {
-            if (use_comp) {
-                if (movement_scale_x != 0.0f) in_x -= aim_config.inflight_comp * inf_x / movement_scale_x;
-                if (movement_scale_y != 0.0f) in_y -= aim_config.inflight_comp * inf_y / movement_scale_y;
-            }
-            float last_x = 0.0f, last_y = 0.0f;
-            inflightAt(aim_state, 1.0f, last_x, last_y);   // the emit applied since last frame
-            if (movement_scale_x != 0.0f) carry_x -= last_x / movement_scale_x;
-            if (movement_scale_y != 0.0f) carry_y -= last_y / movement_scale_y;
-        }
+        const float in_x = raw_center_x, in_y = raw_center_y;
+        const float carry_x = aim_state->filt_x, carry_y = aim_state->filt_y;
         if (aim_state->has_track) {
             const float ad = oneEuroAlpha(kOneEuroDCutoff);
-            // Derivative for the adaptive cutoff is (measurement - estimate) in
-            // whichever frame we are working in: with the ego-free frame both
-            // terms carry the same +M, so it is in_x - filt_x, NOT in_x - carry_x
-            // (carry already has our own motion removed - using it here would add
-            // a spurious +lastEmit to the speed estimate).
             const float de_x = in_x - aim_state->filt_x;
             aim_state->dfilt_x = ad * de_x + (1.0f - ad) * aim_state->dfilt_x;
             const float cutoff_x =
@@ -299,9 +277,7 @@ __device__ __forceinline__ void computeAimMovement(
     // yet. Subtract them (converted OUTPUT px -> model px) so we answer only
     // the error our in-flight moves have NOT already addressed. Without this
     // the loop double-corrects and rings; with it, kp can go higher.
-    // Classic path only: the ego-free path already folded this into the filter
-    // input, so subtracting it again here would double-compensate.
-    if (use_comp && !ego_frame) {
+    if (use_comp) {
         if (movement_scale_x != 0.0f) error_x -= aim_config.inflight_comp * inf_x / movement_scale_x;
         if (movement_scale_y != 0.0f) error_y -= aim_config.inflight_comp * inf_y / movement_scale_y;
     }
@@ -367,16 +343,6 @@ __device__ __forceinline__ void computeAimMovement(
     out_dx = emitMouseDelta(movement_x, &aim_state->residual_x);
     out_dy = emitMouseDelta(movement_y, &aim_state->residual_y);
     pushInflight(aim_state, static_cast<float>(out_dx), static_cast<float>(out_dy));
-
-    // Bound the echo, not the response. The flip frame's single D response above
-    // is wanted (see class_changed), but the derivative EMA would keep replaying
-    // that one step for the length of its memory. Clearing after the move keeps
-    // the response and drops the tail. At the shipped kd this is worth ~0.01%
-    // (i.e. nothing measurable) - it is a bound for large kd, not a win here.
-    if (class_changed) {
-        aim_state->derr_x = 0.0f;
-        aim_state->derr_y = 0.0f;
-    }
 }
 
 }  // namespace gpa
