@@ -238,6 +238,9 @@ class OptCtrl:
                 g *= (e0*e0) / (e0*e0 + e2)
             mx += ffx * g * self.vx
             my += ffy * g * self.vy
+        # 세로 보정 세기. 클램프·emit 이전에 곱해야 max_step 이 실제 이동을 묶고
+        # in-flight 링에도 실제로 나간 값이 들어간다. 커널과 동일한 순서.
+        my *= p.get("y_scale", 1.0)
         mx, my = clamp_max_step(mx, my, p["max_step"])
         dx, self.res_x = emit_mouse_delta(mx, self.res_x)
         dy, self.res_y = emit_mouse_delta(my, self.res_y)
@@ -251,7 +254,8 @@ def base_params(**kw):
              dcut=0.5,
              # ego-corrected feedforward (0 = shipped behaviour, no lead term)
              ff=0.0, ego_lag=2.0, v_ema=0.4, vgate=0.0, ff_err_gate=0.0,
-             predict=0.0, pred_vgate=6.0, pred_err_gate=18.0, cls_reject=1.0)
+             predict=0.0, pred_vgate=6.0, pred_err_gate=18.0, cls_reject=1.0,
+             y_scale=1.0)
     p.update(kw); return p
 
 

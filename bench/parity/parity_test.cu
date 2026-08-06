@@ -50,6 +50,10 @@ int main(int argc, char** argv) {
     cfg.oneeuro_beta = 0.02f;
     cfg.shoot_offset_x = 0.0f; cfg.shoot_offset_y = 0.0f;
     cfg.class_switch_reject = (argc > 1) ? (float)atoi(argv[1]) : 1.0f;
+    // Vertical trim: 1.0 is the tuned default, but the rig runs it well below
+    // that, so the gate must cover the scaled path too - a multiply landing on
+    // the wrong side of the clamp/emit would not show up at 1.0.
+    cfg.aim_y_scale = (argc > 2) ? (float)atof(argv[2]) : 1.0f;
 
     const float SC = 160.0f, SCALE = 1.0f;
 

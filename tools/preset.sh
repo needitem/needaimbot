@@ -41,8 +41,9 @@ print("      thumb   kp %s/%s  soft %s/%s  kd %s/%s"%(
       d.get('thumb_aim_kp_x'),d.get('thumb_aim_kp_y'),
       d.get('thumb_aim_softness_x'),d.get('thumb_aim_softness_y'),
       d.get('thumb_aim_kd_x'),d.get('thumb_aim_kd_y')))
-print("      적응데드타임 %s  aim_h_ema %s  mincut %s"%(
-      d.get('deadtime_adaptive'), d.get('aim_h_ema'), d.get('oneeuro_min_cutoff')))
+print("      적응데드타임 %s  aim_h_ema %s  mincut %s  세로배율 %s"%(
+      d.get('deadtime_adaptive'), d.get('aim_h_ema'), d.get('oneeuro_min_cutoff'),
+      d.get('aim_y_scale')))
 PYEOF
     done
     # 두 프리셋이 '캡처 종속 6개는 x2, 나머지는 동일' 규칙에서 벗어났는지 검사한다.

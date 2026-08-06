@@ -269,6 +269,7 @@ inline bool aimConfigNearlyEqual(const AimConfig& a, const AimConfig& b) {
            nearlyEqual(a.class_switch_reject, b.class_switch_reject) &&
            nearlyEqual(a.head_deprioritized, b.head_deprioritized) &&
            nearlyEqual(a.aim_h_ema, b.aim_h_ema) &&
+           nearlyEqual(a.aim_y_scale, b.aim_y_scale) &&
            nearlyEqual(a.oneeuro_enabled, b.oneeuro_enabled) &&
            nearlyEqual(a.oneeuro_min_cutoff, b.oneeuro_min_cutoff) &&
            nearlyEqual(a.oneeuro_beta, b.oneeuro_beta) &&

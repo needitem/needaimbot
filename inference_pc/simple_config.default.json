@@ -82,6 +82,7 @@
     "inflight_deadtime_frames": 1.25,
     "deadtime_adaptive": true,
     "aim_h_ema": 0.2,
+    "aim_y_scale": 0.1,
     "ff_gain": 1.7,
     "ff_ego_lag": 2.25,
     "ff_v_ema": 0.235,

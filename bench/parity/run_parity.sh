@@ -19,4 +19,16 @@ bad=[i for i in range(len(rows)) if (rows[i][3],rows[i][4])!=py[i]]
 print("exact-match %d/%d"%(len(rows)-len(bad),len(rows)))
 sys.exit(1 if bad else 0)
 PY
+echo
+echo "== aim_y_scale 0.1 (배포될 세로 배율) =="
+./parity_test 1 0.1 > cuda_y.txt
+python3 - <<'PYY' || fail=1
+import sys; sys.path.insert(0,'..')
+from compare import py_run
+rows=[tuple(map(float,l.split()[:2]))+tuple(map(int,l.split()[2:])) for l in open('cuda_y.txt')]
+py=py_run(rows, y_scale=0.1)
+bad=[i for i in range(len(rows)) if (rows[i][3],rows[i][4])!=py[i]]
+print("exact-match %d/%d"%(len(rows)-len(bad),len(rows)))
+sys.exit(1 if bad else 0)
+PYY
 [ $fail -eq 0 ] && echo && echo "ALL PARITY CHECKS PASSED" || { echo; echo "PARITY FAILED"; exit 1; }

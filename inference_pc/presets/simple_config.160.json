@@ -90,5 +90,6 @@
     "predict_frames": 3.18,
     "class_switch_reject": true,
     "head_deprioritized": true,
-    "aim_h_ema": 0.2
+    "aim_h_ema": 0.2,
+    "aim_y_scale": 0.1
 }

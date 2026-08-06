@@ -70,6 +70,10 @@ public:
     // body 조준점을 y1+k*h 대신 cy+(k-0.5)*h_ema 로 관측 (같은 점, 더 조용함).
     // 0 = 끔. 근거·실측치는 simple_postprocess.h 의 aim_h_ema 주석.
     float aim_h_ema = 0.2f;
+    // 세로 보정 세기. Y 출력 전체(P+D+리드)에 곱한다. 1.0 = 튜닝된 그대로,
+    // 0 = 가로 전용. 두 프로필(우클릭/thumb)이 공유한다 - 취향 노브라 프로필별로
+    // 나눌 이유가 없다. 자세한 근거는 simple_postprocess.h 의 aim_y_scale 주석.
+    float aim_y_scale = 1.0f;
 
     // Per-frame max move (output px). 0 = disabled (unbounded).
     float max_step = 19.56f;
@@ -142,6 +146,10 @@ public:
             const float v = j["aim_h_ema"];
             aim_h_ema = std::clamp(v, 0.0f, 1.0f);
         }
+        if (j.contains("aim_y_scale")) {
+            const float v = j["aim_y_scale"];
+            aim_y_scale = std::clamp(v, 0.0f, 4.0f);
+        }
         if (j.contains("class_switch_reject")) {
             const bool v = j["class_switch_reject"];
             class_switch_reject = v ? 1.0f : 0.0f;
@@ -185,6 +193,7 @@ public:
         j["class_switch_reject"] = (class_switch_reject != 0.0f);
         j["head_deprioritized"] = (head_deprioritized != 0.0f);
         j["aim_h_ema"] = aim_h_ema;
+        j["aim_y_scale"] = aim_y_scale;
 
         j["_section_oneeuro"] = "===== One Euro center filter (jitter suppression) =====";
         j["oneeuro_enabled"] = oneeuro_enabled;
@@ -229,6 +238,9 @@ public:
                           ? "centre + smoothed height (a=" + std::to_string(aim_h_ema) + ")"
                           : std::string("raw y1 + k*h"))
                   << std::endl;
+        std::cout << "[Config] Vertical assist scale: " << aim_y_scale
+                  << (aim_y_scale == 1.0f ? " (full)"
+                      : aim_y_scale == 0.0f ? " (horizontal only)" : "") << std::endl;
         std::cout << "[Config] Class-switch rejection: "
                   << (class_switch_reject != 0.0f ? "ON" : "OFF") << std::endl;
         std::cout << "[Config] Aim max step: " << max_step
@@ -262,6 +274,7 @@ private:
         aim.class_switch_reject = class_switch_reject;
         aim.head_deprioritized = head_deprioritized;
         aim.aim_h_ema = aim_h_ema;
+        aim.aim_y_scale = aim_y_scale;
         aim.oneeuro_enabled = oneeuro_enabled ? 1.0f : 0.0f;
         aim.oneeuro_min_cutoff = oneeuro_min_cutoff;
         aim.oneeuro_beta = oneeuro_beta;

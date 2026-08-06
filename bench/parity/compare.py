@@ -10,14 +10,15 @@ sys.path.insert(0, "..")
 from aim_opt import OptCtrl, base_params
 
 
-def py_run(rows, cls_reject=True):
+def py_run(rows, cls_reject=True, y_scale=1.0):
     p = base_params(kp_x=0.75, kp_y=0.82, soft_x=9.0, soft_y=8.0, kd_x=0.05, kd_y=0.06,
                     max_step=25.0, comp=1.0, w=1.0,
                     ff=1.4, ego_lag=2.25, v_ema=0.2,
                     vgate=9.0, ff_err_gate=18.0,
                     predict=2.6, pred_vgate=9.0, pred_err_gate=18.0,
                     oneeuro=True, mincut=0.3, beta=0.02, dcut=1.0,
-                    cls_reject=1.0 if cls_reject else 0.0)
+                    cls_reject=1.0 if cls_reject else 0.0,
+                    y_scale=y_scale)
     c = OptCtrl(p); c.reset()
     out = []
     prev_cls = None

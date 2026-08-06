@@ -335,6 +335,15 @@ __device__ __forceinline__ void computeAimMovement(
         (nonlinearPMove(error_y, aim_config.kp_y, aim_config.p_softness_y)
          + aim_config.kd_y * aim_state->derr_y + ff_y) * movement_scale_y;
 
+    // Vertical strength trim. Scales the whole Y output (P + D + lead) so the
+    // assist can be weakened or disabled on that axis alone without touching the
+    // tuned gains - 1.0 leaves the controller exactly as tuned, 0 makes it
+    // horizontal-only. Applied BEFORE the clamp and the emit so the max-step
+    // bound and the in-flight ring both see the motion that actually happens;
+    // scaling after the emit would leave the dead-time compensation subtracting
+    // moves that were never made.
+    movement_y *= aim_config.aim_y_scale;
+
     // Per-frame max-step clamp (output px). Bounds the slew so a large initial
     // error is crossed in several smooth steps instead of one delayed leap
     // that overshoots and rings - overshoot D cannot prevent reactively.

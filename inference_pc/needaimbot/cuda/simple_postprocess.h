@@ -227,6 +227,15 @@ struct AimConfig {
     // 0 = off (use the raw height, i.e. the original formula exactly).
     float aim_h_ema = 0.2f;
 
+    // --- Vertical strength trim ---
+    // Multiplies the whole Y output (P + D + lead). 1.0 = the controller exactly
+    // as tuned; lower weakens vertical assist only; 0 = horizontal-only. Applied
+    // before the max-step clamp and the emit, so the clamp bounds real motion and
+    // the in-flight ring records what actually went out (scaling afterwards would
+    // desync the dead-time compensation). This is a taste/feel knob, not a tuned
+    // one - the gains stay where the optimiser put them.
+    float aim_y_scale = 1.0f;
+
     // --- One Euro adaptive low-pass on the target center ---
     // Removes detector jitter at the source: heavy smoothing when the target is
     // near-stationary (kills settle-shake), light smoothing when it moves fast
