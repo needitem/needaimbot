@@ -244,6 +244,10 @@ class OptCtrl:
         # x 가 오히려 더 크게 나간다((20,20), max_step 19.56 에서 x 13.8 -> 19.5).
         # 커널과 동일한 순서를 유지할 것.
         my *= p.get("y_scale", 1.0)
+        # y_scale > 1 이면 스케일 후 max_step 을 넘을 수 있다 - 그 상한이 막으라고
+        # 있는 게 수직 튐이므로 다시 묶는다. y_scale <= 1 에서는 증명상 no-op
+        # (첫 클램프가 |v|<=max_step 을 보장했고 y 를 줄이면 커질 수 없다).
+        mx, my = clamp_max_step(mx, my, p["max_step"])
         dx, self.res_x = emit_mouse_delta(mx, self.res_x)
         dy, self.res_y = emit_mouse_delta(my, self.res_y)
         self._push(float(dx), float(dy))

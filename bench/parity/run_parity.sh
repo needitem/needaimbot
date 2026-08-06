@@ -20,15 +20,20 @@ print("exact-match %d/%d"%(len(rows)-len(bad),len(rows)))
 sys.exit(1 if bad else 0)
 PY
 echo
-echo "== aim_y_scale 0.1 (배포될 세로 배율) =="
+echo "== aim_y_scale 0.1 / 2.0 (감쇠 경로와 재클램프 경로) =="
 ./parity_test 1 0.1 > cuda_y.txt
+./parity_test 1 2.0 > cuda_y2.txt
 python3 - <<'PYY' || fail=1
 import sys; sys.path.insert(0,'..')
 from compare import py_run
 rows=[tuple(map(float,l.split()[:2]))+tuple(map(int,l.split()[2:])) for l in open('cuda_y.txt')]
-py=py_run(rows, y_scale=0.1)
-bad=[i for i in range(len(rows)) if (rows[i][3],rows[i][4])!=py[i]]
-print("exact-match %d/%d"%(len(rows)-len(bad),len(rows)))
-sys.exit(1 if bad else 0)
+bad_all=0; tot=0
+for f,ys in (('cuda_y.txt',0.1),('cuda_y2.txt',2.0)):
+    rows=[tuple(map(float,l.split()[:2]))+tuple(map(int,l.split()[2:])) for l in open(f)]
+    py=py_run(rows, y_scale=ys)
+    bad=[i for i in range(len(rows)) if (rows[i][3],rows[i][4])!=py[i]]
+    print("  y_scale %.1f : exact-match %d/%d"%(ys,len(rows)-len(bad),len(rows)))
+    bad_all+=len(bad); tot+=len(rows)
+sys.exit(1 if bad_all else 0)
 PYY
 [ $fail -eq 0 ] && echo && echo "ALL PARITY CHECKS PASSED" || { echo; echo "PARITY FAILED"; exit 1; }

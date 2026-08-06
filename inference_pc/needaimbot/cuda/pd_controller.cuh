@@ -354,6 +354,18 @@ __device__ __forceinline__ void computeAimMovement(
     // and the dead-time compensation stays consistent.
     movement_y *= aim_config.aim_y_scale;
 
+    // Re-clamp: aim_y_scale above 1 would otherwise push the emit past max_step,
+    // and a per-frame vertical spike is exactly what that bound exists to stop.
+    // Below 1 this call cannot fire - the first clamp left |v| <= max_step and
+    // shrinking Y cannot grow it (0 hits in 80k random vectors; above 1 it fires
+    // on 98%) - so the attenuating case, which is what the rig runs, gets no new
+    // X coupling from it. X still differs from aim_y_scale = 1 there, but through
+    // the loop, not through this clamp: a weaker Y leaves more Y error standing,
+    // so movement_y is larger and the FIRST clamp binds more often. That is the
+    // controller reacting correctly. Measured closed-loop on an X-only target,
+    // horizontal error moves 0.05% across y_scale 1.0 -> 0.
+    clampMaxStep(movement_x, movement_y, aim_config.max_step);
+
     out_dx = emitMouseDelta(movement_x, &aim_state->residual_x);
     out_dy = emitMouseDelta(movement_y, &aim_state->residual_y);
     pushInflight(aim_state, static_cast<float>(out_dx), static_cast<float>(out_dy));
