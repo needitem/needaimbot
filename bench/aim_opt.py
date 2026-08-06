@@ -238,10 +238,12 @@ class OptCtrl:
                 g *= (e0*e0) / (e0*e0 + e2)
             mx += ffx * g * self.vx
             my += ffy * g * self.vy
-        # 세로 보정 세기. 클램프·emit 이전에 곱해야 max_step 이 실제 이동을 묶고
-        # in-flight 링에도 실제로 나간 값이 들어간다. 커널과 동일한 순서.
-        my *= p.get("y_scale", 1.0)
         mx, my = clamp_max_step(mx, my, p["max_step"])
+        # 세로 보정 세기는 클램프 '뒤'다. clamp_max_step 은 방향 보존을 위해 x·y 를
+        # 같은 비율로 줄이므로, y 를 먼저 누르면 벡터가 작아져 클램프가 덜 걸리고
+        # x 가 오히려 더 크게 나간다((20,20), max_step 19.56 에서 x 13.8 -> 19.5).
+        # 커널과 동일한 순서를 유지할 것.
+        my *= p.get("y_scale", 1.0)
         dx, self.res_x = emit_mouse_delta(mx, self.res_x)
         dy, self.res_y = emit_mouse_delta(my, self.res_y)
         self._push(float(dx), float(dy))

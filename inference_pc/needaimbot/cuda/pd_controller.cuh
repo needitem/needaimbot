@@ -335,19 +335,24 @@ __device__ __forceinline__ void computeAimMovement(
         (nonlinearPMove(error_y, aim_config.kp_y, aim_config.p_softness_y)
          + aim_config.kd_y * aim_state->derr_y + ff_y) * movement_scale_y;
 
-    // Vertical strength trim. Scales the whole Y output (P + D + lead) so the
-    // assist can be weakened or disabled on that axis alone without touching the
-    // tuned gains - 1.0 leaves the controller exactly as tuned, 0 makes it
-    // horizontal-only. Applied BEFORE the clamp and the emit so the max-step
-    // bound and the in-flight ring both see the motion that actually happens;
-    // scaling after the emit would leave the dead-time compensation subtracting
-    // moves that were never made.
-    movement_y *= aim_config.aim_y_scale;
-
     // Per-frame max-step clamp (output px). Bounds the slew so a large initial
     // error is crossed in several smooth steps instead of one delayed leap
     // that overshoots and rings - overshoot D cannot prevent reactively.
     clampMaxStep(movement_x, movement_y, aim_config.max_step);
+
+    // Vertical strength trim, applied AFTER the clamp. Scales the whole Y output
+    // (P + D + lead) so the assist can be weakened on that axis alone without
+    // touching the tuned gains - 1.0 is the controller exactly as tuned, 0 is
+    // horizontal-only.
+    // The order matters and is not the obvious one. clampMaxStep scales X and Y
+    // TOGETHER to preserve direction, so shrinking Y first shrinks the vector and
+    // lets the clamp bind less - which makes X move FURTHER than it would have.
+    // With movement (20, 20) and max_step 19.56: clamped first gives x 13.8;
+    // scaling Y first gives x 19.5, a 41% horizontal change from a "vertical"
+    // knob. Clamping first leaves X bit-identical to aim_y_scale = 1.
+    // Still before the emit, so pushInflight records the Y that actually went out
+    // and the dead-time compensation stays consistent.
+    movement_y *= aim_config.aim_y_scale;
 
     out_dx = emitMouseDelta(movement_x, &aim_state->residual_x);
     out_dy = emitMouseDelta(movement_y, &aim_state->residual_y);
