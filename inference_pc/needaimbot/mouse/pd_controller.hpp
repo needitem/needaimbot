@@ -28,7 +28,7 @@ struct Gains {
 
 class Settings {
 public:
-    Gains right{0.765f, 0.698f, 8.6f, 6.57f, 0.052f, 0.037f};
+    Gains right{0.445f, 0.406f, 8.6f, 6.57f, 0.052f, 0.037f};
     Gains thumb{0.709f, 0.408f, 4.66f, 9.77f, 0.02f, 0.082f};
 
     // Same-target stickiness for tracking (shared by both profiles).
@@ -45,23 +45,23 @@ public:
     // integer, so rounding it either under- or over-compensates. 1.0 reproduces
     // the old integer behaviour exactly.
     float inflight_comp = 1.0f;
-    float inflight_deadtime_frames = 1.25f;
+    float inflight_deadtime_frames = 2.85f;
 
     // Lead / feedforward on the ego-corrected target velocity (see
     // needaimbot/cuda/simple_postprocess.h for why this is sound now and was not
     // before the in-flight ring existed). ff_gain 0 = off (pure P+D).
-    float ff_gain = 1.7f;
-    float ff_ego_lag = 2.25f;
-    float ff_v_ema = 0.235f;
+    float ff_gain = 2.924f;
+    float ff_ego_lag = 2.85f;
+    float ff_v_ema = 0.137f;
     // ONE shared gate pair for BOTH lead terms. Per-term gates (pred_vgate /
     // pred_err_gate) were removed: they gated the same velocity against the same
     // error and bought <0.5% for twice the tuning surface; a properly tuned shared
     // pair beat the four-knob version (-0.8% error at equal ringing).
-    float lead_vgate = 14.79f;
+    float lead_vgate = 8.6f;
     float lead_err_gate = 22.25f;
     // Symmetric dead-time comp: extrapolate the TARGET forward over the dead time
     // (inflight_comp only removed OUR motion). 0 = off.
-    float predict_frames = 3.18f;
+    float predict_frames = 5.47f;
     // Reject the head<->body anchor-flip artifact (the selected classId already
     // identifies those frames exactly). 1 = on. See simple_postprocess.h.
     float class_switch_reject = 1.0f;
@@ -76,11 +76,11 @@ public:
     float aim_y_scale = 1.0f;
 
     // Per-frame max move (output px). 0 = disabled (unbounded).
-    float max_step = 19.56f;
+    float max_step = 11.37f;
 
     // One Euro adaptive low-pass on the target center (jitter suppression).
     bool oneeuro_enabled = true;
-    float oneeuro_min_cutoff = 0.084f;
+    float oneeuro_min_cutoff = 0.049f;
     float oneeuro_beta = 0.02f;
 
     gpa::AimConfig rightGpuConfig() const { return toGpuConfig(right); }

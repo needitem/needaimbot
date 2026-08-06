@@ -74,7 +74,12 @@ static constexpr double kDeadtimeAdaptMax = 0.75;
 // Current shipped-config generation. See Config::configVersion.
 //   1 = 2026-08-01: adaptive dead time + the gains re-optimised for it, the
 //       thumb profile's first tuning, aim_h_ema, ego_frame_filter removed.
-static constexpr int kConfigVersion = 1;
+//   2 = 2026-08-03: first direct measurement of the emit->visible dead time
+//       (11.6ms = 2.85 frames, vs the 1.10 the sim had assumed) plus the 240Hz
+//       monitor swap. Every frame-denominated value moves; a v1 file left in
+//       place would keep the old ones and ring hard - overshoot 37 measured
+//       under the real plant. See CONFIG_REFERENCE.
+static constexpr int kConfigVersion = 2;
 
 static int64_t nowUnixMicros() {
     return std::chrono::duration_cast<std::chrono::microseconds>(
