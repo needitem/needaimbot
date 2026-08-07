@@ -79,7 +79,7 @@ static constexpr double kDeadtimeAdaptMax = 0.75;
 //       monitor swap. Every frame-denominated value moves; a v1 file left in
 //       place would keep the old ones and ring hard - overshoot 37 measured
 //       under the real plant. See CONFIG_REFERENCE.
-static constexpr int kConfigVersion = 2;
+static constexpr int kConfigVersion = 3;
 
 static int64_t nowUnixMicros() {
     return std::chrono::duration_cast<std::chrono::microseconds>(

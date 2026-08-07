@@ -10,7 +10,7 @@
   pre_capture_shapes     [[320,320]]    [[160,160]]
   aim_softness_x/y       8.6 / 6.57     17.2 / 13.14
   thumb_softness_x/y     4.66 / 9.77    9.32 / 19.54
-  lead_vgate             8.6            17.2
+  lead_vgate             10.27          20.54
   lead_err_gate          22.25          44.5
   conf_threshold         0.15           0.25
   head_aim_point         1.0            0.601
@@ -20,12 +20,12 @@
 ### 두 프리셋이 공유하는 값 (여기가 갈리면 `preset.sh show` 가 잡는다)
 
 ```
-  aim_kp_x=0.445  aim_kp_y=0.406  aim_kd_x=0.052  aim_kd_y=0.037
-  aim_max_step=11.37  thumb_aim_kp_x=0.709  thumb_aim_kp_y=0.408
+  aim_kp_x=0.531  aim_kp_y=0.485  aim_kd_x=0.052  aim_kd_y=0.037
+  aim_max_step=13.58  thumb_aim_kp_x=0.492  thumb_aim_kp_y=0.283
   thumb_aim_kd_x=0.02  thumb_aim_kd_y=0.082  inflight_deadtime_frames=2.85
-  deadtime_adaptive=True  ff_gain=2.924  ff_v_ema=0.137  predict_frames=5.47
-  oneeuro_min_cutoff=0.049  oneeuro_beta=0.02  aim_h_ema=0.2
-  class_switch_reject=True  head_deprioritized=True  config_version=2
+  deadtime_adaptive=True  ff_gain=2.449  ff_v_ema=0.163  predict_frames=4.58
+  oneeuro_min_cutoff=0.058  oneeuro_beta=0.02  aim_h_ema=0.2
+  class_switch_reject=True  head_deprioritized=True  config_version=3
 ```
 
 <!-- AUTO:END -->
