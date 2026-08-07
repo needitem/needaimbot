@@ -574,7 +574,15 @@ public:
     Clock::time_point start() const { return start_; }
     void record(const CalibRec& r) {
         std::lock_guard<std::mutex> lk(mtx_);
-        if (recs_.size() < recs_.capacity()) recs_.push_back(r);
+        if (recs_.size() < recs_.capacity()) {
+            recs_.push_back(r);
+        } else if (!full_) {
+            // Dropping rows silently would look like a short session rather than a
+            // truncated one, and the analysis would happily average the first half.
+            full_ = true;
+            std::cerr << "*** [Calib] buffer full at " << recs_.size()
+                      << " rows - the rest of this session is NOT recorded ***" << std::endl;
+        }
     }
     void dump() {
         std::lock_guard<std::mutex> lk(mtx_);
@@ -597,6 +605,7 @@ private:
     std::mutex mtx_;
     Clock::time_point start_;
     bool dumped_ = false;
+    bool full_ = false;
 };
 
 struct CallbackContext {
@@ -1412,6 +1421,18 @@ int main(int argc, char* argv[]) {
         if (cfg.deadtimeAdaptive && acquiredCaptureUnixMicros != 0) {
             bool offsetValid = false;
             const int64_t offset = udpCapture.GetClockOffsetMicros(&offsetValid);
+            // Without the offset this block does nothing at all, and it did exactly
+            // that for every non-measurement run because the sync ping was gated on
+            // perf_stats. Silence is how that survived - so break the silence.
+            if (!offsetValid) {
+                static int quietFrames = 0;
+                if (++quietFrames == 2000) {
+                    std::cerr << "*** deadtime_adaptive is ON but the game clock offset is still "
+                                 "unknown after 2000 frames - no sync pong from game_pc. Adaptive "
+                                 "dead-time is inert and the gains assume it is not. ***"
+                              << std::endl;
+                }
+            }
             if (offsetValid && prevCaptureUnixMicros != 0) {
                 const int64_t periodUs =
                     static_cast<int64_t>(acquiredCaptureUnixMicros) - prevCaptureUnixMicros;
@@ -1560,9 +1581,17 @@ int main(int argc, char* argv[]) {
             pipelineCv.wait_for(lock, std::chrono::milliseconds(1));
         }
 
-        // Keep the game<->inference clock offset fresh for E2E latency. Self-
-        // throttled to ~10/s, so calling it every ~1ms tick is cheap.
-        if (cfg.perfStatsEnabled) {
+        // Keep the game<->inference clock offset fresh. Self-throttled to ~10/s,
+        // so calling it every ~1ms tick is cheap (~400 B/s).
+        //
+        // This started out as E2E-latency instrumentation, hence the perf_stats
+        // gate. deadtime_adaptive later came to depend on the same offset - it
+        // needs the capture timestamp in our clock to know how stale a frame is -
+        // and the gate did not move with it. The result was that the adaptive
+        // dead-time block bailed on !offsetValid in every normal run and only
+        // worked while measuring, which is the one time it does not matter. The
+        // gains were retuned assuming it was on.
+        if (cfg.perfStatsEnabled || cfg.deadtimeAdaptive) {
             udpCapture.SendClockSyncPing();
         }
 

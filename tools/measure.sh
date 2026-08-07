@@ -12,10 +12,18 @@
 #   noise    : 주입 없이 검출만 기록한다. aim ON 이면 조준 버튼을 계속 누르고 있을 것
 #              (안 누르면 컨트롤러가 안 돌아 aim-ON 조건이 아니다).
 #              -> bench/sigma_law.py 계열 / 온라인 sigma 추정 검증
+#   play     : noise 와 같은 설정. 실제 교전에서 그냥 평소대로 플레이하면 된다.
+#              튜닝이 실제로 나은지 보는 유일한 방법이고, 실전 프레임레이트도 여기서만
+#              나온다(지금까지 잰 206fps 는 정지·단순 장면 값이다).
 #   off      : 프리셋 재적용으로 원상복구
 #
-# 프레임레이트를 함께 봐야 하므로 두 모드 다 perf 로그를 켠다. 레이트는 **평균
+# 프레임레이트를 함께 봐야 하므로 세 모드 다 perf 로그를 켠다. 레이트는 **평균
 # 프레임간격**으로 읽을 것 - 중앙값은 긴 꼬리를 무시해서 16% 낙관적으로 나온다.
+#
+# 로깅 비용은 사실상 없다: 기록은 미리 예약된 버퍼에 push_back 뿐이고(할당·I/O 없음,
+# 종료 시 한 번에 덤프), perf 계측은 CPU 타임스탬프만 쓴다(GPU 이벤트·동기화 없음).
+# **다만 버퍼가 20만 행**이라 206fps 에서 16분이면 찬다. 넘으면 앱이 경고를 찍고 그
+# 뒤로는 기록하지 않는다 - 세션을 15분 이내로 끊을 것.
 #
 # 로그 경로는 **절대 경로**로 박는다. 상대 경로는 앱의 작업 디렉터리 기준인데
 # needaimbot.sh 가 거기를 inference_pc/ 로 옮기므로 바이너리 옆이 아니다. 이걸 착각해
@@ -27,13 +35,13 @@ DEV=inference_pc/build/bin/Release
 CFG="$DEV/simple_config.json"
 OUT="$ROOT/inference_pc/measure"
 
-usage() { echo "usage: $0 {deadtime|noise|off} [프리셋(기본 160)]"; exit 1; }
+usage() { echo "usage: $0 {deadtime|noise|play|off} [프리셋(기본 160)]"; exit 1; }
 [ $# -ge 1 ] || usage
 P="${2:-160}"
 
 case "$1" in
-  deadtime|noise)
-    STEP=12; [ "$1" = "noise" ] && STEP=0
+  deadtime|noise|play)
+    STEP=0; [ "$1" = "deadtime" ] && STEP=12
     [ -f "$CFG" ] || { echo "dev 설정 없음: $CFG  (tools/preset.sh $P --dev 먼저)"; exit 1; }
     mkdir -p "$OUT"
     python3 - "$CFG" "$STEP" "$1" "$OUT" <<'PY'
@@ -51,17 +59,26 @@ print("    %s" % d["calibration_log_path"])
 print("    %s" % d["perf_log_path"])
 PY
     echo
-    if [ "$1" = "deadtime" ]; then
-      echo "  1) 앱 재시작 (설정은 시작 시에만 읽음)"
-      echo "  2) 정지 표적을 화면에 두고 30초 - 조준 버튼 누르지 말 것"
-      echo "  3) tools/measure.sh off $P"
-      echo "  4) python3 bench/deadtime_fit.py $OUT/calib_deadtime.csv"
-    else
-      echo "  1) 앱 재시작"
-      echo "  2) 30초 기록 - aim ON 조건이면 조준 버튼을 계속 누르고 있을 것"
-      echo "  3) tools/measure.sh off $P"
-      echo "  4) python3 bench/calibrate.py $OUT/calib_noise.csv"
-    fi
+    case "$1" in
+      deadtime)
+        echo "  1) 앱 재시작 (설정은 시작 시에만 읽음)"
+        echo "  2) 정지 표적을 화면에 두고 30초 - 조준 버튼 누르지 말 것"
+        echo "  3) tools/measure.sh off $P"
+        echo "  4) python3 bench/deadtime_fit.py $OUT/calib_deadtime.csv" ;;
+      noise)
+        echo "  1) 앱 재시작"
+        echo "  2) 30초 기록 - aim ON 조건이면 조준 버튼을 계속 누르고 있을 것"
+        echo "  3) tools/measure.sh off $P"
+        echo "  4) python3 bench/calibrate.py $OUT/calib_noise.csv" ;;
+      play)
+        echo "  1) 앱 재시작"
+        echo "  2) 평소대로 플레이 - **15분 이내** (버퍼 20만 행)"
+        echo "  3) tools/measure.sh off $P"
+        echo "  4) python3 bench/calibrate.py $OUT/calib_play.csv"
+        echo
+        echo "  * 주입은 꺼져 있으니 마우스가 제멋대로 튀지 않는다."
+        echo "  * 체감도 같이 봐줄 것 - 숫자가 못 보는 걸 본다." ;;
+    esac
     ;;
   off)
     tools/preset.sh "$P" --dev
