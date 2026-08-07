@@ -82,7 +82,7 @@
     "inflight_comp": 1.0,
     "inflight_deadtime_frames": 2.85,
     "deadtime_adaptive": true,
-    "inflight_deadtime_ms": 8.1,
+    "inflight_deadtime_ms": 10.2,
     "aim_tuned_fps": 143.0,
     "aim_rate_adaptive": true,
     "aim_h_ema": 0.2,

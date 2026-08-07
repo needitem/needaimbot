@@ -240,12 +240,25 @@ struct Config {
     // the config mean what they say at aim_tuned_fps; the runtime does the rest.
     bool aimRateAdaptive = true;
     float aimTunedFps = 143.0f;
-    // The part of the emit->visible dead time that does NOT scale with the capture
-    // rate: USB plus the game's own render pipeline. The rest is capture sampling
-    // (~T/2), which does. Measured 11.60ms total at 143fps (T=6.99) -> 11.60-3.50.
-    // Expressed this way it reproduces the measurement at the rate it was taken and
-    // stays right elsewhere: 1.66 frames at 143fps, 2.37 at 231fps.
-    float inflightDeadtimeMs = 8.10f;
+    // The rate-independent part of the emit->visible dead time: USB plus the game's
+    // own render pipeline. The rest is capture sampling (~T/2), which follows the
+    // rate. Injection measured 11.60ms total at 143fps (T=6.99), so the fixed part
+    // is 8.10 - and expressed this way it reproduces that measurement at the rate it
+    // was taken instead of only at one rate.
+    //
+    // The shipped 10.2 is deliberately ~2ms ABOVE that. It is a damping choice, not
+    // a measurement, for two reasons:
+    //  - the real dead time is not knowable per session. It varies with load and
+    //    with the game's own frame time, and it cannot be measured while playing:
+    //    estimating it from our own emits (bench/deadtime_closedloop.py) returns
+    //    1.45-4.85 frames on captures whose injected truth is 1.66.
+    //  - the penalty is sharply asymmetric. Sweeping the plant 8-15ms at 231fps,
+    //    a w BELOW the plant blows up (overshoot 16.97 at w=2.10 vs plant 3.40)
+    //    while a w above it just slows down (reach 22 -> 38ms). Total-error spread
+    //    across the same plant range narrows monotonically with w: 30.8% at w=2.10,
+    //    17.3% at 2.85, 14.3% at 3.10.
+    // So this errs high on purpose. Lower it for speed, raise it for calm.
+    float inflightDeadtimeMs = 10.2f;
 
     // Calibration capture path (for bench/calibrate.py). Only the WHERE - the
     // logger is enabled by perf_stats_enabled, not by this path. A relative path
