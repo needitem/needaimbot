@@ -20,15 +20,24 @@ DEV=inference_pc/build/bin/Release
 
 # 롤백은 git 에서 한다. dev/stable 의 simple_config.json 은 gitignore 대상이고
 # /tmp 백업은 세션이 끝나면 사라진다(이 프로젝트에서 실제로 두 번 잃었다). 반면
-# presets/ 와 simple_config.default.json 은 추적되므로 어느 커밋으로든 되돌릴 수 있고,
-# 이 스크립트가 거기서 dev/stable 을 다시 만들어 준다:
+# presets/ 와 simple_config.default.json 은 추적되므로 어느 커밋으로든 되돌릴 수 있다.
 #
-#   git show <커밋>:inference_pc/presets/simple_config.160.json \
-#       > inference_pc/presets/simple_config.160.json
-#   tools/preset.sh 160 --dev      # 또는 --dev 없이 stable
+# **추적 설정 세 개를 한꺼번에 되돌려야 한다.** 튜닝 커밋은 160·320 프리셋과
+# simple_config.default.json 을 같이 바꾸므로, 하나만 복원하면 프리셋끼리 어긋난다:
+#
+#   git checkout <커밋> -- inference_pc/presets inference_pc/simple_config.default.json
+#   tools/preset.sh 160 --dev      # 또는 320, --dev 없으면 stable
 #
 # 진단 키(perf_stats_enabled, calibration_*, perf_log_path)도 프리셋에 들어 있으므로
 # 측정 모드로 바꿔 놓은 것까지 이 한 번으로 원상복구된다.
+#
+# 부분 복원을 해도 조용히 넘어가지는 않는다 - 아래 show 의 정합성 검사가 어긋난 키를
+# 전부 나열하고 종료코드 1 을 낸다(실측 확인: 160 만 되돌리면 ff_gain·predict_frames 등
+# 6개를 잡아낸다). 그래도 되돌린 뒤에는 show 를 한 번 돌려 0 인지 볼 것.
+#
+# 설정만 되돌리면 바이너리의 kConfigVersion 은 그대로이므로 앱이 "낡은 설정" 경고를
+# 띄운다 - 의도된 동작이다. 코드까지 되돌리려면 아래에 -- inference_pc 를 통째로 주고
+# 다시 빌드해야 한다.
 
 usage() { echo "usage: $0 {320|160|show} [--dev]"; exit 1; }
 [ $# -ge 1 ] || usage
