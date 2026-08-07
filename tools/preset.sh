@@ -18,6 +18,18 @@ PRESETS=inference_pc/presets
 STABLE=inference_pc/build_stable/bin/Release
 DEV=inference_pc/build/bin/Release
 
+# 롤백은 git 에서 한다. dev/stable 의 simple_config.json 은 gitignore 대상이고
+# /tmp 백업은 세션이 끝나면 사라진다(이 프로젝트에서 실제로 두 번 잃었다). 반면
+# presets/ 와 simple_config.default.json 은 추적되므로 어느 커밋으로든 되돌릴 수 있고,
+# 이 스크립트가 거기서 dev/stable 을 다시 만들어 준다:
+#
+#   git show <커밋>:inference_pc/presets/simple_config.160.json \
+#       > inference_pc/presets/simple_config.160.json
+#   tools/preset.sh 160 --dev      # 또는 --dev 없이 stable
+#
+# 진단 키(perf_stats_enabled, calibration_*, perf_log_path)도 프리셋에 들어 있으므로
+# 측정 모드로 바꿔 놓은 것까지 이 한 번으로 원상복구된다.
+
 usage() { echo "usage: $0 {320|160|show} [--dev]"; exit 1; }
 [ $# -ge 1 ] || usage
 P="$1"; shift
