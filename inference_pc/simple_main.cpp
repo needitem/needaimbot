@@ -1017,7 +1017,10 @@ int main(int argc, char* argv[]) {
 
     // Calibration logger (opt-in). Owns the record buffer; dumps CSV on exit.
     // Detection logging rides on perf_stats: turning on measurement turns this on
-    // too. Writes to calibration_log_path, or "calib.csv" next to the binary if unset.
+    // too. Writes to calibration_log_path, or "calib.csv" if unset. A relative path
+    // resolves against the working directory, which needaimbot.sh sets to inference_pc/
+    // - NOT the binary's directory. Prefer absolute (tools/measure.sh writes one) so
+    // the file does not land somewhere the analysis step is not looking.
     std::unique_ptr<CalibLogger> calibLogger;
     if (cfg.perfStatsEnabled) {
         // perf_stats is the master switch: it turns on calibration logging too.

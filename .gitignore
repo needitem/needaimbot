@@ -73,5 +73,7 @@ inference_pc/calib.csv
 # 리그 캘리브레이션 캡처: 세션마다 새로 뜨는 원시 측정 데이터.
 # 큐레이션한 표본은 bench/calib_rig_sample*.csv 로 따로 둔다.
 inference_pc/calib_*.csv
+# tools/measure.sh 가 쓰는 리그 측정 출력 (calib CSV + perf 로그)
+inference_pc/measure/
 inference_pc/build*/bin/Release/*.log
 inference_pc/build*/bin/Release/simple_config.json.*
