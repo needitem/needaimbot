@@ -70,6 +70,35 @@ AtomicLatencyHistogram g_e2eLatencyHist;
 // Max per-frame swing of the adaptive dead-time correction, in frames. Bounds
 // the damage a bad clock-offset sample can do, and the in-flight ring is 4 deep.
 static constexpr double kDeadtimeAdaptMax = 0.75;
+// Bounds on the frame-rate rescale. A wild period estimate must not be able to
+// swing the loop gain; outside this the capture is broken anyway.
+static constexpr double kRateScaleMin = 0.35;   // ~410fps against a 143 baseline
+static constexpr double kRateScaleMax = 2.00;   // ~72fps
+
+// Convert an AimConfig authored at one capture rate to the rate actually running.
+// r = T_actual / T_tuned.
+//
+//   x r   px/frame or per-frame coefficient : kp, max_step, lead_vgate, ff_v_ema,
+//                                             oneeuro_min_cutoff
+//   / r   frame counts, velocity multipliers : predict_frames, ff_gain
+//   fixed px, and things already carrying T  : softness, kd, lead_err_gate, beta
+//
+// kd looks like it should scale and must not: it multiplies derr, which is px per
+// FRAME and so already carries a factor of T, and the wanted per-frame output
+// carries the same one. They cancel. oneeuro_min_cutoff does scale, because
+// oneEuroAlpha() assumes Te = 1 frame, making its cutoff cycles-per-frame.
+// beta stays fixed for the same reason kd does - it multiplies a px/frame speed.
+static void rescaleAimConfigForRate(gpa::AimConfig& c, double r) {
+    const float fr = static_cast<float>(r);
+    c.kp_x *= fr;
+    c.kp_y *= fr;
+    c.max_step *= fr;
+    c.lead_vgate *= fr;
+    c.ff_v_ema = std::clamp(c.ff_v_ema * fr, 0.0f, 1.0f);
+    c.oneeuro_min_cutoff *= fr;
+    c.predict_frames /= fr;
+    c.ff_gain /= fr;
+}
 
 // Current shipped-config generation. See Config::configVersion.
 //   1 = 2026-08-01: adaptive dead time + the gains re-optimised for it, the
@@ -79,7 +108,7 @@ static constexpr double kDeadtimeAdaptMax = 0.75;
 //       monitor swap. Every frame-denominated value moves; a v1 file left in
 //       place would keep the old ones and ring hard - overshoot 37 measured
 //       under the real plant. See CONFIG_REFERENCE.
-static constexpr int kConfigVersion = 4;
+static constexpr int kConfigVersion = 5;
 
 static int64_t nowUnixMicros() {
     return std::chrono::duration_cast<std::chrono::microseconds>(
@@ -203,6 +232,20 @@ struct Config {
     // Use each frame's measured staleness for the in-flight dead-time subtraction
     // instead of a fixed deadtime_frames. See trySubmitLatestFrame.
     bool deadtimeAdaptive = true;
+    // Frame-denominated parameters mean different physical things at different
+    // capture rates, and the rate is NOT fixed - one 400s session ran 226-246fps,
+    // and three captures on 2026-08-07 read 199, 206 and 237 depending on what was
+    // being measured. Rescaling by hand got it wrong three times in one day, so the
+    // conversion happens per frame from the measured period instead. The numbers in
+    // the config mean what they say at aim_tuned_fps; the runtime does the rest.
+    bool aimRateAdaptive = true;
+    float aimTunedFps = 143.0f;
+    // The part of the emit->visible dead time that does NOT scale with the capture
+    // rate: USB plus the game's own render pipeline. The rest is capture sampling
+    // (~T/2), which does. Measured 11.60ms total at 143fps (T=6.99) -> 11.60-3.50.
+    // Expressed this way it reproduces the measurement at the rate it was taken and
+    // stays right elsewhere: 1.66 frames at 143fps, 2.37 at 231fps.
+    float inflightDeadtimeMs = 8.10f;
 
     // Calibration capture path (for bench/calibrate.py). Only the WHERE - the
     // logger is enabled by perf_stats_enabled, not by this path. A relative path
@@ -287,6 +330,9 @@ struct Config {
             if (j.contains("config_version")) configVersion = j["config_version"];
             if (j.contains("stage_timing_enabled")) stageTimingEnabled = j["stage_timing_enabled"];
             if (j.contains("deadtime_adaptive")) deadtimeAdaptive = j["deadtime_adaptive"];
+            if (j.contains("aim_rate_adaptive")) aimRateAdaptive = j["aim_rate_adaptive"];
+            if (j.contains("aim_tuned_fps")) aimTunedFps = j["aim_tuned_fps"];
+            if (j.contains("inflight_deadtime_ms")) inflightDeadtimeMs = j["inflight_deadtime_ms"];
             // Split out of perf_stats_enabled in v4. A file written before that has
             // no such key and was authored expecting the old master-switch, so
             // inherit instead of defaulting to off - silently not recording a
@@ -427,6 +473,9 @@ struct Config {
             j["config_version"] = kConfigVersion;
             j["stage_timing_enabled"] = stageTimingEnabled;
             j["deadtime_adaptive"] = deadtimeAdaptive;
+            j["aim_rate_adaptive"] = aimRateAdaptive;
+            j["aim_tuned_fps"] = aimTunedFps;
+            j["inflight_deadtime_ms"] = inflightDeadtimeMs;
             j["force_aim_on"] = forceAimOn;
             j["calibration_log_enabled"] = calibrationLogEnabled;
             j["calibration_log_path"] = calibrationLogPath;
@@ -1428,6 +1477,52 @@ int main(int argc, char* argv[]) {
         //   reversal peak -0.1% - no metric regresses.
         // Only the DEVIATION from this session's own typical staleness is applied,
         // so a constant clock-offset bias cancels out and only jitter is corrected.
+        // The frame period is just the gap between consecutive capture stamps - it
+        // needs no clock offset, so it is estimated outside the adaptive block that
+        // does. (It used to live inside, which meant the rate estimate died with the
+        // offset.) One stall must not poison it, hence the plausibility window.
+        if (acquiredCaptureUnixMicros != 0 && prevCaptureUnixMicros != 0) {
+            const int64_t periodUs =
+                static_cast<int64_t>(acquiredCaptureUnixMicros) - prevCaptureUnixMicros;
+            if (periodUs > 1000 && periodUs < 40000) {
+                framePeriodUsEma = (framePeriodUsEma <= 0.0)
+                    ? static_cast<double>(periodUs)
+                    : framePeriodUsEma + 0.05 * (periodUs - framePeriodUsEma);
+            }
+        }
+
+        // --- Frame-rate normalisation ---
+        // Convert the authored gains to whatever rate we are actually getting. Until
+        // there is an estimate this is a no-op, so startup behaves as configured.
+        // Quantised to 1% so a jittering estimate does not re-upload the struct every
+        // frame (uploadRuntimeAimConfig skips unchanged ones).
+        if (cfg.aimRateAdaptive && framePeriodUsEma > 0.0 && cfg.aimTunedFps > 1.0f) {
+            const double tunedPeriodUs = 1e6 / static_cast<double>(cfg.aimTunedFps);
+            double r = std::clamp(framePeriodUsEma / tunedPeriodUs, kRateScaleMin, kRateScaleMax);
+            r = std::round(r * 100.0) / 100.0;
+            rescaleAimConfigForRate(frameAimConfig, r);
+            // Dead time is a duration, not a frame count. Only the capture-sampling
+            // part (~T/2) follows the rate; the rest (USB + the game's own render
+            // pipeline) does not. Deriving it here is what keeps a rate change from
+            // silently turning into an over- or under-compensation.
+            const double periodMs = framePeriodUsEma / 1000.0;
+            const double dtFrames = (static_cast<double>(cfg.inflightDeadtimeMs) + 0.5 * periodMs)
+                                    / periodMs;
+            frameAimConfig.deadtime_frames = static_cast<float>(std::clamp(dtFrames, 0.0, 4.0));
+            frameAimConfig.ff_ego_lag = frameAimConfig.deadtime_frames;
+            // Say what it resolved to, but only when it actually moves - a silent
+            // rescale is exactly the kind of thing that hid the last two bugs.
+            static double loggedR = 0.0;
+            if (std::abs(r - loggedR) >= 0.05) {
+                loggedR = r;
+                std::cout << "[Rate] " << std::fixed << std::setprecision(0)
+                          << (1e6 / framePeriodUsEma) << " fps (tuned for " << cfg.aimTunedFps
+                          << ") -> gain x" << std::setprecision(2) << r
+                          << ", deadtime " << frameAimConfig.deadtime_frames << " frames"
+                          << std::defaultfloat << std::endl;
+            }
+        }
+
         if (cfg.deadtimeAdaptive && acquiredCaptureUnixMicros != 0) {
             bool offsetValid = false;
             const int64_t offset = udpCapture.GetClockOffsetMicros(&offsetValid);
@@ -1444,15 +1539,6 @@ int main(int argc, char* argv[]) {
                 }
             }
             if (offsetValid && prevCaptureUnixMicros != 0) {
-                const int64_t periodUs =
-                    static_cast<int64_t>(acquiredCaptureUnixMicros) - prevCaptureUnixMicros;
-                // Ignore gaps/reorders: only plausible inter-frame spacings update
-                // the period estimate, otherwise one stall poisons it for seconds.
-                if (periodUs > 1000 && periodUs < 40000) {
-                    framePeriodUsEma = (framePeriodUsEma <= 0.0)
-                        ? static_cast<double>(periodUs)
-                        : framePeriodUsEma + 0.05 * (periodUs - framePeriodUsEma);
-                }
                 const int64_t ageUs =
                     (nowUnixMicros() + offset) - static_cast<int64_t>(acquiredCaptureUnixMicros);
                 if (framePeriodUsEma > 0.0 && ageUs >= 0 && ageUs < 100000) {
@@ -1466,8 +1552,13 @@ int main(int argc, char* argv[]) {
                     adj = std::clamp(adj, -kDeadtimeAdaptMax, kDeadtimeAdaptMax);
                     frameAimConfig.deadtime_frames = static_cast<float>(std::clamp(
                         static_cast<double>(frameAimConfig.deadtime_frames) + adj, 0.0, 4.0));
+                    frameAimConfig.ff_ego_lag = frameAimConfig.deadtime_frames;
                 }
             }
+        }
+        // Outside both blocks: the period estimate above needs this every frame, not
+        // only when adaptive dead-time happens to be enabled.
+        if (acquiredCaptureUnixMicros != 0) {
             prevCaptureUnixMicros = static_cast<int64_t>(acquiredCaptureUnixMicros);
         }
 

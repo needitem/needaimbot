@@ -46,6 +46,13 @@ case "$1" in
     STEP=0; [ "$1" = "deadtime" ] && STEP=12
     [ -f "$CFG" ] || { echo "dev 설정 없음: $CFG  (tools/preset.sh $P --dev 먼저)"; exit 1; }
     mkdir -p "$OUT"
+    # 앱은 종료할 때 이 경로를 그냥 덮어쓴다. 실제로 플레이 수집 하나를 테스트 실행으로
+    # 날렸다. 무장할 때 기존 파일을 옆으로 치워 둔다 - 지우는 건 사람이 판단할 일이다.
+    PREV="$OUT/calib_$1.csv"
+    if [ -f "$PREV" ]; then
+      n=1; while [ -f "$PREV.$n" ]; do n=$((n+1)); done
+      mv "$PREV" "$PREV.$n"; echo "  이전 수집 보관: $(basename "$PREV").$n"
+    fi
     python3 - "$CFG" "$STEP" "$1" "$OUT" <<'PY'
 import json, os, sys
 p, step, mode, out = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
