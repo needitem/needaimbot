@@ -1401,6 +1401,10 @@ int main(int argc, char* argv[]) {
     // written/read only inside trySubmitLatestFrame, which submitMutex serializes.
     int64_t prevCaptureUnixMicros = 0;
     double framePeriodUsEma = 0.0;
+    // How many plausible gaps the EMA has seen. The rescale itself uses the estimate
+    // from the first frame - a warming EMA still beats assuming aim_tuned_fps - but
+    // the log waits, or it announces the warm-up transient as if it were a rate.
+    long framePeriodSamples = 0;
     double ageFramesEma = 0.0;
 
     Clock::time_point lastAimingActive{};
@@ -1528,6 +1532,7 @@ int main(int argc, char* argv[]) {
                 framePeriodUsEma = (framePeriodUsEma <= 0.0)
                     ? static_cast<double>(periodUs)
                     : framePeriodUsEma + 0.05 * (periodUs - framePeriodUsEma);
+                ++framePeriodSamples;
             }
         }
 
@@ -1552,9 +1557,26 @@ int main(int argc, char* argv[]) {
             frameAimConfig.ff_ego_lag = frameAimConfig.deadtime_frames;
             // Say what it resolved to, but only when it actually moves - a silent
             // rescale is exactly the kind of thing that hid the last two bugs.
+            //
+            // The threshold needs hysteresis and a floor on the interval. A plain
+            // 0.05 band spammed: a normal session swings 226-246fps, which is a
+            // range of r = 0.051, so it tripped on every crossing and then reset the
+            // reference so the way back tripped too. 0.10 is about a 17% rate change
+            // - a regime, not jitter - and the interval stops even that from
+            // chattering at a boundary.
             static double loggedR = 0.0;
-            if (std::abs(r - loggedR) >= 0.05) {
+            static Clock::time_point loggedAt{};
+            const auto nowTp = Clock::now();
+            // Wait for the EMA to settle before the first line, or the warm-up
+            // transient gets announced as a rate (it read 279fps on a 231fps stream).
+            const bool warm = framePeriodSamples >= 120;   // alpha 0.05 -> ~99% settled
+            const bool firstTime = (loggedR == 0.0);
+            const bool moved = std::abs(r - loggedR) >= 0.10;
+            const bool quietEnough =
+                firstTime || (nowTp - loggedAt) >= std::chrono::seconds(10);
+            if (warm && (firstTime || moved) && quietEnough) {
                 loggedR = r;
+                loggedAt = nowTp;
                 std::cout << "[Rate] " << std::fixed << std::setprecision(0)
                           << (1e6 / framePeriodUsEma) << " fps (tuned for " << cfg.aimTunedFps
                           << ") -> gain x" << std::setprecision(2) << r
