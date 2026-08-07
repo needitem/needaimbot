@@ -1049,8 +1049,7 @@ int main(int argc, char* argv[]) {
             cfg.calibrationLogPath.empty() ? std::string("calib.csv") : cfg.calibrationLogPath;
         calibLogger = std::make_unique<CalibLogger>(calibPath);
         callbackCtx.calib = calibLogger.get();
-        std::cout << "[Calib] logging detections to " << calibPath
-                  << " (via perf_stats)" << std::endl;
+        std::cout << "[Calib] logging detections to " << calibPath << std::endl;
     }
     constexpr size_t kCallbackTicketCount = 4;
     std::array<CallbackTicket, kCallbackTicketCount> callbackTickets{};
