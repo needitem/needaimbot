@@ -1,5 +1,5 @@
 {
-    "config_version": 3,
+    "config_version": 4,
     "_section_ENGINE / NETWORK": "========== ENGINE / NETWORK ==========",
     "engine_path": "/home/taeho/portfolio/inferencetool/engines/sunxds_0.8.3_320_fp16.engine",
     "udp_port": 5007,
@@ -75,6 +75,7 @@
     "perf_log_truncate_on_start": false,
     "stage_timing_enabled": false,
     "force_aim_on": false,
+    "calibration_log_enabled": false,
     "calibration_log_path": "calib.csv",
     "calibration_step_px": 0,
     "calibration_step_period_ms": 250,

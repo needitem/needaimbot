@@ -25,7 +25,7 @@
   thumb_aim_kd_x=0.02  thumb_aim_kd_y=0.082  inflight_deadtime_frames=2.85
   deadtime_adaptive=True  ff_gain=2.449  ff_v_ema=0.163  predict_frames=4.58
   oneeuro_min_cutoff=0.058  oneeuro_beta=0.02  aim_h_ema=0.2
-  class_switch_reject=True  head_deprioritized=True  config_version=3
+  class_switch_reject=True  head_deprioritized=True  config_version=4
 ```
 
 <!-- AUTO:END -->

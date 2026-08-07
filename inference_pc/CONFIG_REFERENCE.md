@@ -46,6 +46,8 @@
 > 환산값이 새 플랜트에 그대로 쓰여 오버슈트 37 이 된다.
 > `3` = 2026-08-07: 실측 레이트를 206fps 로 정정한 재환산 + thumb 최초 환산. v2 파일이
 > 남으면 246 가정의 19% 낮은 게인이 그대로 쓰인다.
+> `4` = 2026-08-07: `calibration_log_enabled` 분리. 값이 바뀌는 변경은 아니지만 키가
+> 늘었으므로 올린다 — 없는 파일은 `perf_stats_enabled` 를 물려받아 옛 동작을 유지한다.
 
 ## ENGINE / NETWORK
 | 키 | 기본 | 의미 |
@@ -194,16 +196,22 @@ sim(4블록×60): 같은 게인에서 **스텝 오버슈트 -34%**, 획득40 -1.
 | `affinity_core_sender` | 4 | 송신 스레드 코어. |
 
 ## DIAGNOSTICS (perf log / calibration / bench)
-평상시엔 대부분 off. `perf_stats_enabled`가 마스터 스위치 역할.
+평상시엔 대부분 off. **로그 스위치는 둘로 갈라져 있다** — 서로 다른 질문에 답하기 때문이다.
+`perf_stats_enabled`는 *우리 파이프라인 어디서 시간을 쓰나*, `calibration_log_enabled`는
+*검출기가 뭘 봤고 우리가 뭘 내보냈나*. 프레임 타임스탬프는 calib CSV 에 있으므로 **실측
+fps 는 calib 만 켜도 나온다** — 플레이 검증이 perf 를 안 켜는 이유다(`tools/measure.sh play`).
+v3 까지는 `perf_stats_enabled` 하나가 둘 다 켰다. 측정할 땐 늘 둘 다 필요해서 구분할
+이유가 없었을 뿐이다.
 | 키 | 기본 | 의미 |
 |---|---|---|
-| `perf_stats_enabled` | false | 성능 통계 수집(지연 퍼센타일 등). 켜면 calibration 로그도 자동 활성. |
+| `perf_stats_enabled` | false | 파이프라인 단계 타이밍·지연 퍼센타일 → `perf_log_path`. **v4부터 calibration 로그와 무관.** |
+| `calibration_log_enabled` | false | 검출/출력 추적 CSV → `calibration_log_path`. **키가 없는 v3 이하 파일은 `perf_stats_enabled` 값을 물려받는다** — 옛 파일의 뜻이 조용히 바뀌어 원하던 수집이 안 되는 게 로그 하나 더 쓰는 것보다 나쁘다. 비용은 사실상 0(미리 예약된 버퍼에 push_back, 종료 시 일괄 덤프)이지만 **버퍼가 20만 행**이라 206fps 에서 16분이면 차고, 차면 경고를 찍고 그 뒤로는 기록하지 않는다. |
 | `perf_stats_interval_ms` | 1000 | 통계 출력 주기. |
 | `perf_log_path` | perf_stats.log | 통계 로그 파일. |
 | `perf_log_max_bytes` | 33554432 | 로그 회전 최대 크기(32MB). |
 | `perf_log_truncate_on_start` | false | 시작 시 로그 비우기. |
 | `stage_timing_enabled` | false | 파이프라인 단계별 세부 타이밍. |
 | `force_aim_on` | false | **벤치마크 전용.** 조준키 없이 항상 조준 활성(측정용). 실사용 금지. |
-| `calibration_log_path` | calib.csv | 캘리브레이션 CSV 경로(**어디에 쓸지**만 결정). 로깅 자체는 `perf_stats_enabled`가 켜져야 시작됨. `bench/calibrate.py`로 분석. |
+| `calibration_log_path` | calib.csv | 캘리브레이션 CSV 경로(**어디에 쓸지**만 결정, 켜는 건 `calibration_log_enabled`). **상대 경로는 앱의 작업 디렉터리 기준**이고 `needaimbot.sh`가 거기를 `inference_pc/`로 옮긴다 — 바이너리 옆이 아니다. `tools/measure.sh`는 절대 경로를 넣는다. `bench/calibrate.py`로 분석. |
 | `calibration_step_px` | 0 | >0이면 스텝응답 dead-time 측정용 마우스 펄스 주입(±px). 조준 OFF·정지 타겟에서만. 0=끔. |
 | `calibration_step_period_ms` | 250 | 스텝 주입 주기(ms). |

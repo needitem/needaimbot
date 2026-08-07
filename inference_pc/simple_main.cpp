@@ -79,7 +79,7 @@ static constexpr double kDeadtimeAdaptMax = 0.75;
 //       monitor swap. Every frame-denominated value moves; a v1 file left in
 //       place would keep the old ones and ring hard - overshoot 37 measured
 //       under the real plant. See CONFIG_REFERENCE.
-static constexpr int kConfigVersion = 3;
+static constexpr int kConfigVersion = 4;
 
 static int64_t nowUnixMicros() {
     return std::chrono::duration_cast<std::chrono::microseconds>(
@@ -181,6 +181,12 @@ struct Config {
     // when measuring. When on, the log is size-capped (perfLogMaxBytes) with one
     // rotated backup, so total disk use is bounded even over long runs.
     bool perfStatsEnabled = false;
+    // Separate from perf stats since v4. They answer different questions - perf
+    // stats is "where does the time go in our pipeline", calibration is "what did
+    // the detector see and what did we emit" - and a play session wants the second
+    // without the first. They were one switch only because measurement always
+    // wanted both.
+    bool calibrationLogEnabled = false;
     int perfStatsIntervalMs = 1000;
     std::string perfLogPath = "perf_stats.log";
     int perfLogMaxBytes = 33554432;       // rotate at 32 MiB (0 = no rotation, grows unbounded)
@@ -281,6 +287,12 @@ struct Config {
             if (j.contains("config_version")) configVersion = j["config_version"];
             if (j.contains("stage_timing_enabled")) stageTimingEnabled = j["stage_timing_enabled"];
             if (j.contains("deadtime_adaptive")) deadtimeAdaptive = j["deadtime_adaptive"];
+            // Split out of perf_stats_enabled in v4. A file written before that has
+            // no such key and was authored expecting the old master-switch, so
+            // inherit instead of defaulting to off - silently not recording a
+            // session someone asked for is worse than writing one extra file.
+            calibrationLogEnabled = perfStatsEnabled;
+            if (j.contains("calibration_log_enabled")) calibrationLogEnabled = j["calibration_log_enabled"];
             if (j.contains("calibration_log_path")) calibrationLogPath = j["calibration_log_path"];
             if (j.contains("calibration_step_px")) calibrationStepPx = j["calibration_step_px"];
             if (j.contains("calibration_step_period_ms")) calibrationStepPeriodMs = j["calibration_step_period_ms"];
@@ -416,6 +428,7 @@ struct Config {
             j["stage_timing_enabled"] = stageTimingEnabled;
             j["deadtime_adaptive"] = deadtimeAdaptive;
             j["force_aim_on"] = forceAimOn;
+            j["calibration_log_enabled"] = calibrationLogEnabled;
             j["calibration_log_path"] = calibrationLogPath;
             j["calibration_step_px"] = calibrationStepPx;
             j["calibration_step_period_ms"] = calibrationStepPeriodMs;
@@ -494,11 +507,10 @@ struct Config {
         std::cout << "[Config] Stage timing: "
                   << (stageTimingEnabled ? "ON" : "OFF") << std::endl;
         std::cout << "[Config] Calibration log: ";
-        if (perfStatsEnabled)
-            std::cout << (calibrationLogPath.empty() ? std::string("calib.csv") : calibrationLogPath)
-                      << " (via perf_stats)";
+        if (calibrationLogEnabled)
+            std::cout << (calibrationLogPath.empty() ? std::string("calib.csv") : calibrationLogPath);
         else
-            std::cout << "(off; enable perf_stats to log to "
+            std::cout << "(off; calibration_log_enabled=true to log to "
                       << (calibrationLogPath.empty() ? std::string("calib.csv") : calibrationLogPath)
                       << ")";
         if (calibrationStepPx > 0)
@@ -1025,15 +1037,14 @@ int main(int argc, char* argv[]) {
     callbackCtx.initFromConfig(cfg);  // Cache config values (lock-free)
 
     // Calibration logger (opt-in). Owns the record buffer; dumps CSV on exit.
-    // Detection logging rides on perf_stats: turning on measurement turns this on
-    // too. Writes to calibration_log_path, or "calib.csv" if unset. A relative path
+    // Its own switch (calibration_log_enabled) - a play session wants the detection
+    // trace without the pipeline timing, and measurement wants both.
+    // Writes to calibration_log_path, or "calib.csv" if unset. A relative path
     // resolves against the working directory, which needaimbot.sh sets to inference_pc/
     // - NOT the binary's directory. Prefer absolute (tools/measure.sh writes one) so
     // the file does not land somewhere the analysis step is not looking.
     std::unique_ptr<CalibLogger> calibLogger;
-    if (cfg.perfStatsEnabled) {
-        // perf_stats is the master switch: it turns on calibration logging too.
-        // calibration_log_path is just where it writes (calib.csv if left blank).
+    if (cfg.calibrationLogEnabled) {
         const std::string calibPath =
             cfg.calibrationLogPath.empty() ? std::string("calib.csv") : cfg.calibrationLogPath;
         calibLogger = std::make_unique<CalibLogger>(calibPath);
@@ -1496,7 +1507,9 @@ int main(int argc, char* argv[]) {
         // GPU CALLBACK API: Queue inference, callback fires when GPU completes.
         // No cudaStreamSynchronize - mouse movement happens in callback thread.
         Clock::time_point submitStart{};
-        if (cfg.perfStatsEnabled) {
+        // Calibration needs this too - lat_us in the CSV is submit->completion, and
+        // leaving submitTime at epoch would silently write -1 for every row.
+        if (cfg.perfStatsEnabled || cfg.calibrationLogEnabled) {
             submitStart = Clock::now();
         }
         ticket->submitTime = submitStart;

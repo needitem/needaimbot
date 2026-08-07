@@ -17,8 +17,10 @@
 #              나온다(지금까지 잰 206fps 는 정지·단순 장면 값이다).
 #   off      : 프리셋 재적용으로 원상복구
 #
-# 프레임레이트를 함께 봐야 하므로 세 모드 다 perf 로그를 켠다. 레이트는 **평균
-# 프레임간격**으로 읽을 것 - 중앙값은 긴 꼬리를 무시해서 16% 낙관적으로 나온다.
+# 로그 스위치는 둘이다. `calibration_log_enabled` = 검출/출력 추적(calib CSV),
+# `perf_stats_enabled` = 파이프라인 단계 타이밍(perf 로그). 프레임 타임스탬프는 calib
+# CSV 에 있으므로 **실측 fps 는 calib 만으로 나온다** - play 가 perf 를 안 켜는 이유다.
+# 레이트는 **평균 프레임간격**으로 읽을 것 - 중앙값은 긴 꼬리를 무시해서 16% 낙관적이다.
 #
 # 로깅 비용은 사실상 없다: 기록은 미리 예약된 버퍼에 push_back 뿐이고(할당·I/O 없음,
 # 종료 시 한 번에 덤프), perf 계측은 CPU 타임스탬프만 쓴다(GPU 이벤트·동기화 없음).
@@ -48,15 +50,19 @@ case "$1" in
 import json, os, sys
 p, step, mode, out = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
 d = json.load(open(p))
+# 두 로그는 다른 질문에 답한다. calib CSV = 검출기가 뭘 봤고 우리가 뭘 내보냈나
+# (프레임 타임스탬프도 여기 있어서 실측 fps 가 나온다). perf 로그 = 우리 파이프라인
+# 어디서 시간을 쓰나. play 는 앞엣것만 필요하다.
+d["calibration_log_enabled"] = True
+d["perf_stats_enabled"] = (mode != "play")
 d["calibration_step_px"] = step
 d["calibration_log_path"] = os.path.join(out, "calib_%s.csv" % mode)
 d["perf_log_path"] = os.path.join(out, "perf_%s.log" % mode)
-d["perf_stats_enabled"] = True
 d["perf_log_truncate_on_start"] = True
 json.dump(d, open(p, "w"), indent=4, ensure_ascii=False)
 print("  측정 모드 '%s' 켬" % mode)
-print("    %s" % d["calibration_log_path"])
-print("    %s" % d["perf_log_path"])
+print("    calib  %s" % d["calibration_log_path"])
+print("    perf   %s" % (d["perf_log_path"] if d["perf_stats_enabled"] else "(끔 - play 는 calib 만)"))
 PY
     echo
     case "$1" in
