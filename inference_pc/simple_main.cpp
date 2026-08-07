@@ -330,6 +330,14 @@ struct Config {
             if (j.contains("config_version")) configVersion = j["config_version"];
             if (j.contains("stage_timing_enabled")) stageTimingEnabled = j["stage_timing_enabled"];
             if (j.contains("deadtime_adaptive")) deadtimeAdaptive = j["deadtime_adaptive"];
+            // A pre-v5 file holds gains that were ALREADY rescaled by hand for the
+            // rate it was authored at. Letting the new default turn rate adaptation
+            // on would rescale them a second time - about 0.6x at play rates - and
+            // the version banner would not stop it, because the banner only prints;
+            // the file always wins (see the config_version note in the reference).
+            // So the switch defaults off for old files and on for v5+. An explicit
+            // key still wins either way.
+            aimRateAdaptive = (configVersion >= 5);
             if (j.contains("aim_rate_adaptive")) aimRateAdaptive = j["aim_rate_adaptive"];
             if (j.contains("aim_tuned_fps")) aimTunedFps = j["aim_tuned_fps"];
             if (j.contains("inflight_deadtime_ms")) inflightDeadtimeMs = j["inflight_deadtime_ms"];
@@ -546,6 +554,18 @@ struct Config {
                          " key it already has stays at the old value." << std::endl;
             std::cout << "[Config]     Most likely stale: thumb_aim_kd_*, aim_kp_*,"
                          " aim_softness_*, aim_max_step, oneeuro_min_cutoff." << std::endl;
+            if (configVersion < 5 && !aimRateAdaptive) {
+                std::cout << "[Config]     Rate normalisation stays OFF: a pre-v5 file's gains"
+                             " were already rescaled by hand, and doing it again"
+                             " would land at ~0.6x." << std::endl;
+            } else if (configVersion < 5) {
+                // The explicit key wins, as it should - but say what it implies, since
+                // copying the flag into an old file without also reverting the gains to
+                // the aim_tuned_fps baseline is the one way back into the 0.6x case.
+                std::cout << "[Config]     *** aim_rate_adaptive is ON in a pre-v5 file. Its gains"
+                             " must be the aim_tuned_fps baseline, not already-rescaled"
+                             " values, or they get rescaled twice. ***" << std::endl;
+            }
             std::cout << "[Config]     Refresh with tools/preset.sh {320|160}, or delete"
                          " the file to be reseeded from simple_config.default.json."
                       << std::endl;
@@ -555,6 +575,13 @@ struct Config {
                                        : "OFF (fixed deadtime_frames)") << std::endl;
         std::cout << "[Config] Stage timing: "
                   << (stageTimingEnabled ? "ON" : "OFF") << std::endl;
+        std::cout << "[Config] Rate normalisation: ";
+        if (aimRateAdaptive)
+            std::cout << "ON (values authored at " << aimTunedFps << " fps, rescaled per frame;"
+                      << " deadtime " << inflightDeadtimeMs << "ms + T/2)";
+        else
+            std::cout << "OFF (values used as-is)";
+        std::cout << std::endl;
         std::cout << "[Config] Calibration log: ";
         if (calibrationLogEnabled)
             std::cout << (calibrationLogPath.empty() ? std::string("calib.csv") : calibrationLogPath);
