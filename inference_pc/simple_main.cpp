@@ -72,6 +72,8 @@ AtomicLatencyHistogram g_e2eLatencyHist;
 static constexpr double kDeadtimeAdaptMax = 0.75;
 // Bounds on the frame-rate rescale. A wild period estimate must not be able to
 // swing the loop gain; outside this the capture is broken anyway.
+static constexpr long kFramePeriodWarmupSkip = 30;   // graph capture / first frames
+static constexpr long kFramePeriodLogAfter   = 600;  // ~2.6s at 230fps, mean settled
 static constexpr double kRateScaleMin = 0.35;   // ~410fps against a 143 baseline
 static constexpr double kRateScaleMax = 2.00;   // ~72fps
 
@@ -1529,10 +1531,28 @@ int main(int argc, char* argv[]) {
             const int64_t periodUs =
                 static_cast<int64_t>(acquiredCaptureUnixMicros) - prevCaptureUnixMicros;
             if (periodUs > 1000 && periodUs < 40000) {
-                framePeriodUsEma = (framePeriodUsEma <= 0.0)
-                    ? static_cast<double>(periodUs)
-                    : framePeriodUsEma + 0.05 * (periodUs - framePeriodUsEma);
+                // Slow on purpose. This drives the gain rescale, so whatever it
+                // tracks, the loop gain does too. At alpha 0.05 (20 frames, ~0.1s) it
+                // was chasing jitter rather than the rate: on a real capture the
+                // resulting scale had sd 0.036 and swung across 0.89 end to end,
+                // i.e. the gains were being modulated ~18% several times a second.
+                // 0.002 (500 frames, ~2s) puts that at sd 0.006 / span 0.06 while
+                // still following a genuine rate change in a couple of seconds.
+                //   alpha    0.05   0.02   0.01  0.005  0.002
+                //   sd      0.036  0.021  0.016  0.012  0.006
+                // The 1/n term makes it a running mean until the window fills, so
+                // startup converges immediately instead of over the first 500 frames.
                 ++framePeriodSamples;
+                // Skip the first gaps outright: graph capture and first-frame
+                // latency make them long, and a running mean that swallows them
+                // reads slow for thousands of frames afterwards.
+                if (framePeriodSamples > kFramePeriodWarmupSkip) {
+                    const double n = static_cast<double>(framePeriodSamples - kFramePeriodWarmupSkip);
+                    const double a = std::max(0.002, 1.0 / n);
+                    framePeriodUsEma = (framePeriodUsEma <= 0.0)
+                        ? static_cast<double>(periodUs)
+                        : framePeriodUsEma + a * (periodUs - framePeriodUsEma);
+                }
             }
         }
 
@@ -1569,7 +1589,7 @@ int main(int argc, char* argv[]) {
             const auto nowTp = Clock::now();
             // Wait for the EMA to settle before the first line, or the warm-up
             // transient gets announced as a rate (it read 279fps on a 231fps stream).
-            const bool warm = framePeriodSamples >= 120;   // alpha 0.05 -> ~99% settled
+            const bool warm = framePeriodSamples >= kFramePeriodLogAfter;
             const bool firstTime = (loggedR == 0.0);
             const bool moved = std::abs(r - loggedR) >= 0.10;
             const bool quietEnough =
