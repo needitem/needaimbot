@@ -86,7 +86,7 @@
     "aim_tuned_fps": 143.0,
     "aim_rate_adaptive": true,
     "aim_h_ema": 0.2,
-    "aim_y_scale": 0.1,
+    "aim_y_scale": 1.0,
     "ff_gain": 1.7,
     "ff_ego_lag": 2.85,
     "ff_v_ema": 0.235,

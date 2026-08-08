@@ -95,5 +95,5 @@
     "class_switch_reject": true,
     "head_deprioritized": true,
     "aim_h_ema": 0.2,
-    "aim_y_scale": 0.1
+    "aim_y_scale": 1.0
 }
