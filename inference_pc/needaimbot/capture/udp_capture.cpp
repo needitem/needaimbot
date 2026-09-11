@@ -187,10 +187,11 @@ bool UDPCapture::allocatePinnedBuffers(size_t size) {
     }
 
     m_pinnedBufferSize = size;
+    m_pinnedBufferCapacity.store(size, std::memory_order_release);
     m_usePinnedMemory = pinnedOk;
     m_latestBufferIndex.store(-1, std::memory_order_relaxed);
     m_publishSeq.store(0, std::memory_order_relaxed);
-    m_consumedSeq = 0;
+    m_consumedSeq.store(0, std::memory_order_relaxed);
     m_reserveCursor = 0;
     m_hasLatestPublishedFrameId = false;
     m_latestPublishedFrameId = 0;
@@ -203,6 +204,7 @@ bool UDPCapture::allocatePinnedBuffers(size_t size) {
         m_bufferPixelFormat[i].store(UDP_PIXEL_FORMAT_RGB, std::memory_order_relaxed);
         m_bufferFrameId[i].store(0, std::memory_order_relaxed);
         m_bufferCaptureUnixMicros[i].store(0, std::memory_order_relaxed);
+        m_bufferPublishSeq[i].store(0, std::memory_order_relaxed);
     }
 
     std::cout << "[UDPCapture] Allocated " << (size / 1024) << "KB x " << NUM_BUFFERS
@@ -211,8 +213,16 @@ bool UDPCapture::allocatePinnedBuffers(size_t size) {
 }
 
 bool UDPCapture::ensurePinnedCapacity(size_t size) {
+    // Fast path, taken for every incoming frame: no lock, just the published
+    // capacity. Only the (rare) grow path below touches the pool under the mutex.
+    if (m_pinnedBufferCapacity.load(std::memory_order_acquire) >= size) return true;
+
+    std::lock_guard<std::mutex> lock(m_poolMutex);
     if (m_pinnedBufferSize >= size && m_pinnedFrameBuffer[0]) return true;
 
+    // Every buffer must be checked in, or the pool would be freed under a
+    // consumer that still holds one. The mutex covers the other half of the
+    // problem: a consumer merely reading the pointer array right now.
     for (int i = 0; i < NUM_BUFFERS; ++i) {
         if (m_bufferState[i].load(std::memory_order_acquire) != BUFFER_FREE) {
             return false;
@@ -222,6 +232,7 @@ bool UDPCapture::ensurePinnedCapacity(size_t size) {
 }
 
 void UDPCapture::freePinnedBuffers() {
+    m_pinnedBufferCapacity.store(0, std::memory_order_release);
     for (int i = 0; i < NUM_BUFFERS; ++i) {
         if (m_pinnedFrameBuffer[i]) {
             if (m_usePinnedMemory) {
@@ -231,6 +242,7 @@ void UDPCapture::freePinnedBuffers() {
             }
             m_pinnedFrameBuffer[i] = nullptr;
         }
+        m_bufferPublishSeq[i].store(0, std::memory_order_relaxed);
         m_bufferState[i].store(BUFFER_FREE, std::memory_order_relaxed);
         m_bufferWidth[i].store(0, std::memory_order_relaxed);
         m_bufferHeight[i].store(0, std::memory_order_relaxed);
@@ -240,10 +252,11 @@ void UDPCapture::freePinnedBuffers() {
         m_bufferCaptureUnixMicros[i].store(0, std::memory_order_relaxed);
     }
     m_pinnedBufferSize = 0;
+    m_pinnedBufferCapacity.store(0, std::memory_order_release);
     m_usePinnedMemory = false;
     m_latestBufferIndex.store(-1, std::memory_order_relaxed);
     m_publishSeq.store(0, std::memory_order_relaxed);
-    m_consumedSeq = 0;
+    m_consumedSeq.store(0, std::memory_order_relaxed);
     m_reserveCursor = 0;
     m_hasLatestPublishedFrameId = false;
     m_latestPublishedFrameId = 0;
@@ -306,6 +319,11 @@ bool UDPCapture::publishAssembledBuffer(int bufferIndex, uint16_t width, uint16_
     m_bufferPixelFormat[bufferIndex].store(pixelFormat, std::memory_order_relaxed);
     m_bufferFrameId[bufferIndex].store(frameId, std::memory_order_relaxed);
     m_bufferCaptureUnixMicros[bufferIndex].store(captureUnixMicros, std::memory_order_relaxed);
+    // Stamp the generation into the buffer BEFORE it becomes visible, so the
+    // consumer can record exactly what it took rather than what it last read
+    // from m_publishSeq.
+    const uint64_t publishGeneration = m_publishSeq.load(std::memory_order_relaxed) + 1;
+    m_bufferPublishSeq[bufferIndex].store(publishGeneration, std::memory_order_relaxed);
 
     const int prevLatest = m_latestBufferIndex.exchange(bufferIndex, std::memory_order_acq_rel);
     m_bufferState[bufferIndex].store(BUFFER_READY, std::memory_order_release);
@@ -322,7 +340,7 @@ bool UDPCapture::publishAssembledBuffer(int bufferIndex, uint16_t width, uint16_
     m_latestPublishTime = publishTime;
     {
         std::lock_guard<std::mutex> lock(m_publishCvMutex);
-        m_publishSeq.fetch_add(1, std::memory_order_release);
+        m_publishSeq.store(publishGeneration, std::memory_order_release);
     }
     m_publishCv.notify_one();
     return true;
@@ -613,8 +631,10 @@ void UDPCapture::StopCapture() {
 
 void UDPCapture::receiveThread() {
 #ifndef _WIN32
-    // Best-effort priority/affinity hints for lower receive jitter.
-    {
+    // Best-effort priority/affinity hints for lower receive jitter. The priority
+    // request is gated by SetRealtimeEnabled(): it used to run unconditionally,
+    // which made realtime_threads_enabled = false untrue for this thread.
+    if (m_realtimeEnabled) {
         struct sched_param param;
         param.sched_priority = sched_get_priority_max(SCHED_FIFO);
         if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &param) != 0) {
@@ -641,10 +661,15 @@ void UDPCapture::receiveThread() {
 #ifndef __linux__
     std::vector<uint8_t> recvBuffer(65536);
 #endif
-    // At 144fps frames arrive ~7ms apart and a frame's fragments burst within
-    // ~1ms, so 12ms is ample headroom while freeing doomed (partial) frames
-    // ~2x sooner than before, cutting the dead-latency a lost frame holds.
-    constexpr auto kFragmentStaleTimeout = std::chrono::milliseconds(12);
+    // A doomed (partial) frame holds one of the NUM_BUFFERS receive buffers for
+    // this long. At 244fps frames arrive ~4.1ms apart and a 320x320 frame's
+    // fragments occupy ~2.5ms of wire time on 1GbE, so 8ms is still ~2 frame
+    // periods of slack for a legitimately slow burst while keeping at most two
+    // doomed frames parked at once - which is what the 5-buffer pool can absorb
+    // alongside the latest published frame and the one the GPU is reading.
+    // (12ms here was sized for 144fps, i.e. under 2 frame periods; at 244 it is
+    // nearly 3 and the pool starts running out.)
+    constexpr auto kFragmentStaleTimeout = std::chrono::milliseconds(8);
     constexpr uint32_t kCleanupPacketInterval = 64;
     static_assert((kCleanupPacketInterval & (kCleanupPacketInterval - 1)) == 0,
                   "kCleanupPacketInterval must be power-of-two");
@@ -777,6 +802,9 @@ void UDPCapture::receiveThread() {
             frag->captureUnixMicros = captureUnixMicros;
             frag->dropped = false;
             frag->bufferIndex = -1;
+            frag->chunkStride = 0;
+            frag->sourceAddr = fromAddr ? fromAddr->sin_addr.s_addr : 0;
+            frag->sourcePort = fromAddr ? fromAddr->sin_port : 0;
             frag->useReceivedMask = (totalChunks <= 64);
             if (frag->useReceivedMask) {
                 frag->receivedMask = 0;
@@ -824,6 +852,51 @@ void UDPCapture::receiveThread() {
             return;
         }
         if (frag->dropped || frag->bufferIndex < 0) return;
+
+        // One sender per frame. Frames are keyed by frameId alone, so a second
+        // sender - or the same one restarted with its counter reset - could
+        // otherwise interleave chunks into the same buffer and publish a frame
+        // spliced from two sources.
+        if (fromAddr && (frag->sourceAddr != fromAddr->sin_addr.s_addr ||
+                         frag->sourcePort != fromAddr->sin_port)) {
+            return;
+        }
+
+        // Validate the chunk against the sender's fixed layout:
+        //   offset == chunkIndex * stride, size == min(stride, frameBytes - offset)
+        // Counting chunks alone accepts a frame where two packets wrote the same
+        // range: the count reaches totalChunks, the frame is published, and the
+        // bytes nobody wrote are whatever the previous frame left in the buffer.
+        {
+            size_t stride = frag->chunkStride;
+            if (stride == 0) {
+                if (totalChunks == 1) {
+                    stride = frameBytes;
+                } else if (chunkIndex + 1 < totalChunks) {
+                    stride = chunkSize;                 // a full-size chunk IS the stride
+                } else if (chunkIndex > 0 && (payloadOffset % chunkIndex) == 0) {
+                    stride = payloadOffset / chunkIndex;  // derive it from the final chunk
+                }
+                if (stride == 0) return;  // cannot place this chunk yet; wait for another
+                // The stride must reproduce the sender's own chunk count.
+                if ((frameBytes + stride - 1) / stride != totalChunks) return;
+                frag->chunkStride = stride;
+            }
+            const size_t expectedOffset = static_cast<size_t>(chunkIndex) * stride;
+            const size_t expectedSize = (frameBytes - expectedOffset < stride)
+                                            ? (frameBytes - expectedOffset)
+                                            : stride;
+            if (payloadOffset != expectedOffset || chunkSize != expectedSize) {
+                if (frag->bufferIndex >= 0) {
+                    releaseAssemblingBuffer(frag->bufferIndex);
+                    frag->bufferIndex = -1;
+                }
+                frag->dropped = true;
+                m_droppedFrames.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
+        }
+
         if (frag->useReceivedMask) {
             const uint64_t bit = (1ull << chunkIndex);
             if (frag->receivedMask & bit) return;
@@ -992,13 +1065,21 @@ bool UDPCapture::AcquireFramePinned(void** pinnedRgbData, unsigned int* width,
                           std::chrono::milliseconds(timeoutMs);
     while (m_running.load(std::memory_order_relaxed)) {
         const uint64_t seq = m_publishSeq.load(std::memory_order_acquire);
-        if (seq != m_consumedSeq) {
+        if (seq != m_consumedSeq.load(std::memory_order_relaxed)) {
+            // Hold the pool lock only while the buffer pointer is dereferenced.
+            // The receive thread replaces the whole pool on a resolution
+            // increase; the all-FREE check it does cannot see a consumer that is
+            // mid-read here.
+            std::lock_guard<std::mutex> poolLock(m_poolMutex);
             const int idx = m_latestBufferIndex.load(std::memory_order_acquire);
             if (idx >= 0 && idx < NUM_BUFFERS && m_pinnedFrameBuffer[idx]) {
                 int expected = BUFFER_READY;
                 if (m_bufferState[idx].compare_exchange_strong(
                         expected, BUFFER_IN_USE, std::memory_order_acq_rel, std::memory_order_relaxed)) {
-                    m_consumedSeq = seq;
+                    // Record the generation of the buffer we actually took, not
+                    // the m_publishSeq value read before choosing it.
+                    m_consumedSeq.store(m_bufferPublishSeq[idx].load(std::memory_order_relaxed),
+                                        std::memory_order_relaxed);
                     if (pinnedRgbData) *pinnedRgbData = m_pinnedFrameBuffer[idx];
                     if (width) *width = m_bufferWidth[idx].load(std::memory_order_relaxed);
                     if (height) *height = m_bufferHeight[idx].load(std::memory_order_relaxed);
@@ -1022,15 +1103,19 @@ bool UDPCapture::AcquireFramePinned(void** pinnedRgbData, unsigned int* width,
         }
 
         if (timeoutMs == 0) return false;
+        // The deadline is checked HERE, not left to the wait predicate. A
+        // predicate that is momentarily true with no takeable buffer (the newest
+        // one is still ASSEMBLING, or was reclaimed) made wait_until return true
+        // immediately, every time, and the retry loop then spun without ever
+        // consulting the timeout.
+        if (std::chrono::steady_clock::now() >= deadline) return false;
         std::unique_lock<std::mutex> lock(m_publishCvMutex);
         if (!m_running.load(std::memory_order_relaxed)) return false;
-        if (m_publishCv.wait_until(lock, deadline, [&]() {
-                return !m_running.load(std::memory_order_relaxed) ||
-                       (m_publishSeq.load(std::memory_order_acquire) != m_consumedSeq);
-            })) {
-            continue;
-        }
-        return false;
+        m_publishCv.wait_until(lock, deadline, [&]() {
+            return !m_running.load(std::memory_order_relaxed) ||
+                   (m_publishSeq.load(std::memory_order_acquire) !=
+                    m_consumedSeq.load(std::memory_order_relaxed));
+        });
     }
     return false;
 }

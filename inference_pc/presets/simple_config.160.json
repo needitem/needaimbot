@@ -1,5 +1,5 @@
 {
-    "config_version": 5,
+    "config_version": 6,
     "_section_ENGINE / NETWORK": "========== ENGINE / NETWORK ==========",
     "engine_path": "/home/taeho/portfolio/inferencetool/engines/sunxds_0.8.3_320_fp16.engine",
     "udp_port": 5007,
@@ -27,7 +27,7 @@
     "_section_AIM CONTROLLER + CENTER FILTER": "========== AIM CONTROLLER + CENTER FILTER ==========",
     "aim_kp_x": 0.765,
     "aim_kp_y": 0.698,
-    "aim_softness_x": 17.2,
+    "aim_softness_x": 8.6,
     "aim_softness_y": 13.14,
     "aim_kd_x": 0.052,
     "aim_kd_y": 0.037,
@@ -89,11 +89,11 @@
     "ff_gain": 1.7,
     "ff_ego_lag": 2.85,
     "ff_v_ema": 0.235,
-    "lead_vgate": 29.58,
-    "lead_err_gate": 44.5,
+    "lead_vgate": 14.79,
+    "lead_err_gate": 22.25,
     "predict_frames": 3.18,
     "class_switch_reject": true,
     "head_deprioritized": true,
     "aim_h_ema": 0.2,
-    "aim_y_scale": 1.0
+    "aim_y_scale": 0.1
 }

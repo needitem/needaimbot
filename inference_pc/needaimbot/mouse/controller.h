@@ -153,7 +153,15 @@ public:
     }
 
     void stop() {
-        senderRunning_.store(false, std::memory_order_relaxed);
+        {
+            // The flag and the notify must be ordered against the sender's
+            // predicate evaluation by the same mutex the sender waits on.
+            // Storing it outside the lock let the sender read "still running"
+            // and an empty queue, then miss the notify and sleep forever - a
+            // join() that never returns.
+            std::lock_guard<std::mutex> lock(moveQueueCvMutex_);
+            senderRunning_.store(false, std::memory_order_relaxed);
+        }
         moveQueueCv_.notify_all();
         if (senderThread_.joinable()) {
             senderThread_.join();
@@ -177,7 +185,7 @@ public:
         }
         const MoveCommand cmd{dx, dy};
         if (moveQueue_.tryPush(cmd)) {
-            moveQueueCv_.notify_one();
+            notifySender();
         } else {
             moveQueueDropped_.fetch_add(1, std::memory_order_relaxed);
         }
@@ -214,6 +222,20 @@ public:
     }
 
 private:
+    // The sender's wait predicate reads moveQueue_.hasPending(), which is not
+    // guarded by moveQueueCvMutex_. Pushing and then notifying without taking
+    // that mutex therefore races the sender's own predicate check: it can look,
+    // find the queue empty, and go to sleep in the window between the push and
+    // the notify - a lost wakeup that strands the move until the next one. Only
+    // used on the queued path; the shipped config sends straight from the
+    // completion callback and never reaches this.
+    void notifySender() {
+        {
+            std::lock_guard<std::mutex> lock(moveQueueCvMutex_);
+        }
+        moveQueueCv_.notify_one();
+    }
+
     // Best-effort queued move (falls back to an immediate send if the queue is
     // momentarily full) - used for no-recoil, which must never be silently
     // dropped the way an occasional aim-move sample can be.
@@ -221,7 +243,7 @@ private:
         if (dx == 0 && dy == 0) return;
         const MoveCommand cmd{dx, dy};
         if (moveQueue_.tryPush(cmd)) {
-            moveQueueCv_.notify_one();
+            notifySender();
         } else {
             makcu_->move(dx, dy);
         }

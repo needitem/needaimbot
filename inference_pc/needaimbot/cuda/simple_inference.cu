@@ -13,6 +13,8 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <chrono>
+#include <thread>
 #include <NvInferVersion.h>
 
 #ifndef _WIN32
@@ -274,7 +276,11 @@ inline bool aimConfigNearlyEqual(const AimConfig& a, const AimConfig& b) {
            nearlyEqual(a.oneeuro_min_cutoff, b.oneeuro_min_cutoff) &&
            nearlyEqual(a.oneeuro_beta, b.oneeuro_beta) &&
            nearlyEqual(a.shoot_offset_x, b.shoot_offset_x) &&
-           nearlyEqual(a.shoot_offset_y, b.shoot_offset_y);
+           nearlyEqual(a.shoot_offset_y, b.shoot_offset_y) &&
+           // Not a tuning value but a per-frame gate: missing it here would skip
+           // the upload on the frame aiming starts or stops, and the GPU would
+           // keep emitting (or keep suppressing) for one more frame.
+           nearlyEqual(a.aim_output_enabled, b.aim_output_enabled);
 }
 
 cudaGraphNode_t findGraphH2DMemcpyNode(cudaGraph_t graph, const void* dst, size_t bytes) {
@@ -323,7 +329,7 @@ void SimpleInference::Logger::log(Severity severity, const char* msg) noexcept {
 SimpleInference::SimpleInference() {
     for (int i = 0; i < kMaxCallbacksInFlight; ++i) {
         m_callbackSlotBusy[static_cast<size_t>(i)].store(false, std::memory_order_relaxed);
-        m_callbackSlotPending[static_cast<size_t>(i)].store(false, std::memory_order_relaxed);
+        m_pendingSlots[static_cast<size_t>(i)] = -1;
         m_callbackEvents[static_cast<size_t>(i)] = nullptr;
         m_stageEvtStart[static_cast<size_t>(i)] = nullptr;
         m_stageEvtPostH2D[static_cast<size_t>(i)] = nullptr;
@@ -336,8 +342,10 @@ SimpleInference::SimpleInference() {
 }
 
 SimpleInference::~SimpleInference() {
-    // Flush pending stream work so callback state is no longer in-flight.
-    if (m_stream) cudaStreamSynchronize(m_stream);
+    // Stream drain alone is not enough - the host callback runs after it. Owners
+    // are expected to call this themselves while their callback state is still
+    // alive; doing it again here is cheap and covers the ones that do not.
+    (void)quiesceCallbacks();
 
     {
         std::lock_guard<std::mutex> lock(m_callbackWorkerMutex);
@@ -348,6 +356,39 @@ SimpleInference::~SimpleInference() {
         m_callbackWorkerThread.join();
     }
 
+    releaseAllResources();
+}
+
+bool SimpleInference::quiesceCallbacks(int timeoutMs) {
+    // Refuse new work first, so the wait below cannot be extended by a frame that
+    // arrives while we are draining.
+    m_acceptSubmissions.store(false, std::memory_order_release);
+    if (m_stream) cudaStreamSynchronize(m_stream);
+
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(timeoutMs < 0 ? 0 : timeoutMs);
+    for (;;) {
+        const int inFlight = m_callbacksInFlight.load(std::memory_order_acquire);
+        const int running = m_completionsRunning.load(std::memory_order_acquire);
+        if (inFlight == 0 && running == 0) break;
+        if (std::chrono::steady_clock::now() >= deadline) {
+            std::cerr << "[SimpleInference] quiesce timed out (" << inFlight
+                      << " in flight, " << running << " completing) - callback state"
+                         " is still referenced" << std::endl;
+            // Leave the hook installed. Clearing it now would destroy a
+            // std::function the worker may be executing, which is the very thing
+            // this call exists to prevent.
+            return false;
+        }
+        m_callbackWorkerCv.notify_all();
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
+    }
+    // Nothing can invoke the hook any more, so its captured state may now die.
+    m_postCompletionHook = nullptr;
+    return true;
+}
+
+void SimpleInference::releaseAllResources() {
     for (int i = 0; i < kMaxCallbacksInFlight; ++i) {
         const size_t idx = static_cast<size_t>(i);
         if (m_callbackEvents[idx]) {
@@ -366,33 +407,39 @@ SimpleInference::~SimpleInference() {
     destroyFullGraphs();
 
     // Free GPU memory
-    if (m_d_rawInput) cudaFree(m_d_rawInput);
-    if (m_d_chwInput) cudaFree(m_d_chwInput);
-    if (m_d_output) cudaFree(m_d_output);
-    if (m_d_srcPtr) cudaFree(m_d_srcPtr);
+    if (m_d_rawInput) { cudaFree(m_d_rawInput); m_d_rawInput = nullptr; }
+    if (m_d_chwInput) { cudaFree(m_d_chwInput); m_d_chwInput = nullptr; }
+    if (m_d_output) { cudaFree(m_d_output); m_d_output = nullptr; }
+    if (m_d_srcPtr) { cudaFree(m_d_srcPtr); m_d_srcPtr = nullptr; }
     // m_d_resultMapped[] are device aliases of the mapped pinned result buffers,
     // not separate allocations - they are released when m_h_inferenceResultPinned
     // is freed below with cudaFreeHost().
 
     // Free GPU fused pipeline buffers
-    if (m_d_selectedTarget) cudaFree(m_d_selectedTarget);
-    if (m_d_aimState) cudaFree(m_d_aimState);
-    if (m_d_runtimeAimConfig) cudaFree(m_d_runtimeAimConfig);
-    if (m_d_stage1BestDist) cudaFree(m_d_stage1BestDist);
-    if (m_d_stage1DistScore) cudaFree(m_d_stage1DistScore);
-    if (m_d_stage1BestIou) cudaFree(m_d_stage1BestIou);
-    if (m_d_stage1IouScore) cudaFree(m_d_stage1IouScore);
+    if (m_d_selectedTarget) { cudaFree(m_d_selectedTarget); m_d_selectedTarget = nullptr; }
+    if (m_d_aimState) { cudaFree(m_d_aimState); m_d_aimState = nullptr; }
+    if (m_d_runtimeAimConfig) { cudaFree(m_d_runtimeAimConfig); m_d_runtimeAimConfig = nullptr; }
+    if (m_d_stage1BestDist) { cudaFree(m_d_stage1BestDist); m_d_stage1BestDist = nullptr; }
+    if (m_d_stage1DistScore) { cudaFree(m_d_stage1DistScore); m_d_stage1DistScore = nullptr; }
+    if (m_d_stage1BestIou) { cudaFree(m_d_stage1BestIou); m_d_stage1BestIou = nullptr; }
+    if (m_d_stage1IouScore) { cudaFree(m_d_stage1IouScore); m_d_stage1IouScore = nullptr; }
 
     // Free result buffers
     for (int i = 0; i < kMaxCallbacksInFlight; ++i) {
-        if (m_d_inferenceResult[i]) cudaFree(m_d_inferenceResult[i]);
-        if (m_h_inferenceResultPinned[i]) cudaFreeHost(m_h_inferenceResultPinned[i]);
+        if (m_d_inferenceResult[i]) { cudaFree(m_d_inferenceResult[i]); m_d_inferenceResult[i] = nullptr; }
+        if (m_h_inferenceResultPinned[i]) {
+            cudaFreeHost(m_h_inferenceResultPinned[i]);
+            m_h_inferenceResultPinned[i] = nullptr;
+        }
+        m_d_resultMapped[i] = nullptr;
     }
 
     // Free pinned host memory
-    if (m_h_rawPinned) cudaFreeHost(m_h_rawPinned);
+    if (m_h_rawPinned) { cudaFreeHost(m_h_rawPinned); m_h_rawPinned = nullptr; }
+    if (m_h_srcPtrStage) { cudaFreeHost(m_h_srcPtrStage); m_h_srcPtrStage = nullptr; }
+    if (m_h_aimConfigStage) { cudaFreeHost(m_h_aimConfigStage); m_h_aimConfigStage = nullptr; }
 
-    if (m_stream) cudaStreamDestroy(m_stream);
+    if (m_stream) { cudaStreamDestroy(m_stream); m_stream = nullptr; }
 #if TRT_USE_NEW_API
     if (m_context) delete m_context;
     if (m_engine) delete m_engine;
@@ -402,9 +449,120 @@ SimpleInference::~SimpleInference() {
     if (m_engine) m_engine->destroy();
     if (m_runtime) m_runtime->destroy();
 #endif
+    m_context = nullptr;
+    m_engine = nullptr;
+    m_runtime = nullptr;
+    m_tensorAddressesBound = false;
+    m_rawInputCapacityBytes = 0;
+    m_hasEnqueuedRuntimeAimConfig = false;
+}
+
+namespace {
+const char* trtDataTypeName(nvinfer1::DataType t) {
+    switch (t) {
+        case nvinfer1::DataType::kFLOAT: return "FP32";
+        case nvinfer1::DataType::kHALF:  return "FP16";
+        case nvinfer1::DataType::kINT8:  return "INT8";
+        case nvinfer1::DataType::kINT32: return "INT32";
+        default: return "unsupported";
+    }
+}
+}  // namespace
+
+// The whole pipeline hard-codes one engine layout: a linear 1x3xHxW image tensor
+// and a linear 1x(4+C)xN YOLO head, both FP32 or FP16. The preprocess kernel
+// writes CHW planes, the decoder indexes the output as (4+c)*N + box, and every
+// buffer is sized from those two shapes. Any other engine used to be accepted
+// silently - a different batch or channel count sized the buffers wrong, a
+// transposed or NMS-bearing head decoded garbage, and a dynamic shape was read
+// as a negative dimension - so check the contract instead of assuming it.
+bool SimpleInference::validateEngineContract(const nvinfer1::Dims& inputDims,
+                                             const nvinfer1::Dims& outputDims,
+                                             nvinfer1::DataType inputType,
+                                             nvinfer1::DataType outputType) {
+    auto reject = [](const char* what) {
+        std::cerr << "[SimpleInference] Unsupported engine: " << what << std::endl;
+        return false;
+    };
+
+    if (inputDims.nbDims != 4) return reject("input tensor is not 4-D (want 1x3xHxW)");
+    if (outputDims.nbDims != 3) return reject("output tensor is not 3-D (want 1x(4+C)xN)");
+
+    for (int i = 0; i < inputDims.nbDims; ++i) {
+        if (inputDims.d[i] <= 0) return reject("input has a dynamic/zero dimension");
+    }
+    for (int i = 0; i < outputDims.nbDims; ++i) {
+        if (outputDims.d[i] <= 0) return reject("output has a dynamic/zero dimension");
+    }
+
+    if (inputDims.d[0] != 1) return reject("input batch size is not 1");
+    if (inputDims.d[1] != 3) return reject("input is not 3-channel RGB");
+    if (outputDims.d[0] != 1) return reject("output batch size is not 1");
+    if (outputDims.d[1] < 5) {
+        return reject("output has fewer than 5 rows (need 4 box coords + >=1 class); "
+                      "an NMS/end2end head is not supported by this decoder");
+    }
+    if (outputDims.d[1] > 4 + 32) {
+        return reject("output declares more than 32 classes (the class mask is 32 bits)");
+    }
+    // A YOLO head is (4+C) x N with N >> C. A transposed export (N x (4+C)) has
+    // the same rank and would decode pure garbage, so reject the shape that can
+    // only be the transpose.
+    if (outputDims.d[2] < outputDims.d[1]) {
+        return reject("output looks transposed (rows >= anchors); export as 1x(4+C)xN");
+    }
+
+    if (inputType != nvinfer1::DataType::kFLOAT && inputType != nvinfer1::DataType::kHALF) {
+        std::cerr << "[SimpleInference] Unsupported engine: input tensor is "
+                  << trtDataTypeName(inputType) << " (want FP32 or FP16)" << std::endl;
+        return false;
+    }
+    if (outputType != nvinfer1::DataType::kFLOAT && outputType != nvinfer1::DataType::kHALF) {
+        std::cerr << "[SimpleInference] Unsupported engine: output tensor is "
+                  << trtDataTypeName(outputType) << " (want FP32 or FP16)" << std::endl;
+        return false;
+    }
+
+#if TRT_USE_NEW_API
+    // Buffers are indexed as plain linear arrays. A vectorised/blocked tensor
+    // format (CHW4, HWC8, ...) has the same dims but a different memory layout.
+    if (m_engine->getTensorFormat("images") != nvinfer1::TensorFormat::kLINEAR) {
+        return reject("input tensor format is not linear");
+    }
+    if (m_engine->getTensorFormat("output0") != nvinfer1::TensorFormat::kLINEAR) {
+        return reject("output tensor format is not linear");
+    }
+#endif
+    return true;
 }
 
 bool SimpleInference::loadEngine(const std::string& enginePath) {
+    if (m_loaded) {
+        // Swapping engines in place would have to tear down the graph cache, the
+        // device buffers and the running worker first. Nothing does that, so say
+        // so rather than leaking the previous engine on top of the new one.
+        std::cerr << "[SimpleInference] loadEngine() called twice; hot-swap is not supported"
+                  << std::endl;
+        return false;
+    }
+
+    // Every failure below goes through this, so a half-built pipeline never
+    // survives to be used (the old code printed "loaded successfully" after
+    // unchecked allocations and an unchecked warmup).
+    auto fail = [this](const char* what) {
+        std::cerr << "[SimpleInference] Engine load failed: " << what << std::endl;
+        releaseAllResources();
+        m_loaded = false;
+        return false;
+    };
+    auto failCuda = [this](const char* what, cudaError_t err) {
+        std::cerr << "[SimpleInference] Engine load failed: " << what << ": "
+                  << cudaGetErrorString(err) << std::endl;
+        releaseAllResources();
+        m_loaded = false;
+        return false;
+    };
+
     // Load engine file
     std::ifstream file(enginePath, std::ios::binary);
     if (!file) {
@@ -412,31 +570,30 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
         return false;
     }
     file.seekg(0, std::ios::end);
-    size_t size = file.tellg();
+    const std::streamoff fileSize = file.tellg();
     file.seekg(0, std::ios::beg);
+    if (fileSize <= 0) {
+        std::cerr << "[SimpleInference] Engine file is empty: " << enginePath << std::endl;
+        return false;
+    }
+    const size_t size = static_cast<size_t>(fileSize);
     std::vector<char> engineData(size);
-    file.read(engineData.data(), size);
+    if (!file.read(engineData.data(), fileSize)) {
+        std::cerr << "[SimpleInference] Failed to read engine: " << enginePath << std::endl;
+        return false;
+    }
     file.close();
 
     // Create runtime & engine
     m_runtime = nvinfer1::createInferRuntime(m_logger);
-    if (!m_runtime) {
-        std::cerr << "[SimpleInference] Failed to create runtime" << std::endl;
-        return false;
-    }
+    if (!m_runtime) return fail("could not create the TensorRT runtime");
 
     m_engine = m_runtime->deserializeCudaEngine(engineData.data(), size);
-    if (!m_engine) {
-        std::cerr << "[SimpleInference] Failed to deserialize engine" << std::endl;
-        return false;
-    }
+    if (!m_engine) return fail("could not deserialize the engine");
 
     // Create context
     m_context = m_engine->createExecutionContext();
-    if (!m_context) {
-        std::cerr << "[SimpleInference] Failed to create context" << std::endl;
-        return false;
-    }
+    if (!m_context) return fail("could not create an execution context");
 
     // Get dimensions - API differs between TensorRT versions
 #if TRT_USE_NEW_API
@@ -447,8 +604,7 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
     auto outputDims = m_engine->getTensorShape(outputName);
 
     if (inputDims.nbDims <= 0 || outputDims.nbDims <= 0) {
-        std::cerr << "[SimpleInference] Invalid tensor names" << std::endl;
-        return false;
+        return fail("engine has no tensor named \"images\"/\"output0\"");
     }
 
     auto inputType = m_engine->getTensorDataType(inputName);
@@ -458,8 +614,7 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
     int outputIdx = m_engine->getBindingIndex("output0");
 
     if (inputIdx < 0 || outputIdx < 0) {
-        std::cerr << "[SimpleInference] Invalid binding names" << std::endl;
-        return false;
+        return fail("engine has no binding named \"images\"/\"output0\"");
     }
 
     auto inputDims = m_engine->getBindingDimensions(inputIdx);
@@ -469,13 +624,18 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
     auto outputType = m_engine->getBindingDataType(outputIdx);
 #endif
 
+    if (!validateEngineContract(inputDims, outputDims, inputType, outputType)) {
+        releaseAllResources();
+        return false;
+    }
+
     m_inputFP16 = (inputType == nvinfer1::DataType::kHALF);
     m_outputFP16 = (outputType == nvinfer1::DataType::kHALF);
 
-    m_inputH = inputDims.d[2];
-    m_inputW = inputDims.d[3];
-    m_numBoxes = outputDims.d[2];
-    m_numClasses = outputDims.d[1] - 4;
+    m_inputH = static_cast<int>(inputDims.d[2]);
+    m_inputW = static_cast<int>(inputDims.d[3]);
+    m_numBoxes = static_cast<int>(outputDims.d[2]);
+    m_numClasses = static_cast<int>(outputDims.d[1]) - 4;
     m_crosshairX = m_inputW * 0.5f;
     m_crosshairY = m_inputH * 0.5f;
     if (m_maxDetections > m_numBoxes) {
@@ -501,9 +661,11 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
     std::cout << "[SimpleInference] Max detections: " << m_maxDetections << std::endl;
 
     // Create CUDA stream with high priority
-    int leastPriority, greatestPriority;
-    cudaDeviceGetStreamPriorityRange(&leastPriority, &greatestPriority);
-    cudaStreamCreateWithPriority(&m_stream, cudaStreamNonBlocking, greatestPriority);
+    int leastPriority = 0, greatestPriority = 0;
+    cudaError_t err = cudaDeviceGetStreamPriorityRange(&leastPriority, &greatestPriority);
+    if (err != cudaSuccess) return failCuda("cudaDeviceGetStreamPriorityRange", err);
+    err = cudaStreamCreateWithPriority(&m_stream, cudaStreamNonBlocking, greatestPriority);
+    if (err != cudaSuccess) return failCuda("cudaStreamCreateWithPriority", err);
 
     // Detect Tegra/Orin unified memory: an integrated GPU that can map host
     // memory lets the preprocess kernel read the pinned receive buffer directly
@@ -528,29 +690,43 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
         std::max(static_cast<size_t>(m_inputH) * static_cast<size_t>(m_inputW),
                  kDefaultRawInputPixels) *
         static_cast<size_t>(inputBytesPerPixel());
-    m_rawInputCapacityBytes = rawInputSize;
-    size_t chwInputSize = 1 * 3 * m_inputH * m_inputW * (m_inputFP16 ? sizeof(__half) : sizeof(float));
-    size_t outputSizeGPU = 1 * outputDims.d[1] * m_numBoxes * (m_outputFP16 ? sizeof(__half) : sizeof(float));
+    size_t chwInputSize = static_cast<size_t>(3) * m_inputH * m_inputW *
+                          (m_inputFP16 ? sizeof(__half) : sizeof(float));
+    size_t outputSizeGPU = static_cast<size_t>(outputDims.d[1]) * m_numBoxes *
+                           (m_outputFP16 ? sizeof(__half) : sizeof(float));
 
-    cudaMalloc(&m_d_rawInput, rawInputSize);
-    cudaMalloc(&m_d_chwInput, chwInputSize);
-    cudaMalloc(&m_d_output, outputSizeGPU);
+    err = cudaMalloc(&m_d_rawInput, rawInputSize);
+    if (err != cudaSuccess) return failCuda("cudaMalloc(raw input)", err);
+    m_rawInputCapacityBytes = rawInputSize;
+    err = cudaMalloc(&m_d_chwInput, chwInputSize);
+    if (err != cudaSuccess) return failCuda("cudaMalloc(CHW input)", err);
+    err = cudaMalloc(&m_d_output, outputSizeGPU);
+    if (err != cudaSuccess) return failCuda("cudaMalloc(model output)", err);
 
     // Source-pointer indirection cell (see m_d_srcPtr). Seed it with the H2D
     // staging buffer so warmup and the discrete-GPU path read m_d_rawInput; on
     // Tegra it is overwritten per frame with the current receive buffer's device
     // pointer (no H2D copy).
-    cudaMalloc(&m_d_srcPtr, sizeof(void*));
-    cudaMemcpy(m_d_srcPtr, &m_d_rawInput, sizeof(void*), cudaMemcpyHostToDevice);
+    err = cudaMalloc(&m_d_srcPtr, sizeof(void*));
+    if (err != cudaSuccess) return failCuda("cudaMalloc(source pointer cell)", err);
+    err = cudaMemcpy(m_d_srcPtr, &m_d_rawInput, sizeof(void*), cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) return failCuda("cudaMemcpy(seed source pointer)", err);
 
     // Allocate GPU fused pipeline buffers
-    cudaMalloc(&m_d_selectedTarget, sizeof(Detection));
-    cudaMalloc(&m_d_aimState, sizeof(AimState));
-    cudaMalloc(&m_d_runtimeAimConfig, sizeof(AimConfig));
-    cudaMalloc(&m_d_stage1BestDist, static_cast<size_t>(m_maxDetections) * sizeof(Detection));
-    cudaMalloc(&m_d_stage1DistScore, static_cast<size_t>(m_maxDetections) * sizeof(float));
-    cudaMalloc(&m_d_stage1BestIou, static_cast<size_t>(m_maxDetections) * sizeof(Detection));
-    cudaMalloc(&m_d_stage1IouScore, static_cast<size_t>(m_maxDetections) * sizeof(float));
+    err = cudaMalloc(&m_d_selectedTarget, sizeof(Detection));
+    if (err != cudaSuccess) return failCuda("cudaMalloc(selected target)", err);
+    err = cudaMalloc(&m_d_aimState, sizeof(AimState));
+    if (err != cudaSuccess) return failCuda("cudaMalloc(aim state)", err);
+    err = cudaMalloc(&m_d_runtimeAimConfig, sizeof(AimConfig));
+    if (err != cudaSuccess) return failCuda("cudaMalloc(runtime aim config)", err);
+    err = cudaMalloc(&m_d_stage1BestDist, static_cast<size_t>(m_maxDetections) * sizeof(Detection));
+    if (err != cudaSuccess) return failCuda("cudaMalloc(stage-1 best by distance)", err);
+    err = cudaMalloc(&m_d_stage1DistScore, static_cast<size_t>(m_maxDetections) * sizeof(float));
+    if (err != cudaSuccess) return failCuda("cudaMalloc(stage-1 distance scores)", err);
+    err = cudaMalloc(&m_d_stage1BestIou, static_cast<size_t>(m_maxDetections) * sizeof(Detection));
+    if (err != cudaSuccess) return failCuda("cudaMalloc(stage-1 best by IoU)", err);
+    err = cudaMalloc(&m_d_stage1IouScore, static_cast<size_t>(m_maxDetections) * sizeof(float));
+    if (err != cudaSuccess) return failCuda("cudaMalloc(stage-1 IoU scores)", err);
 
     // Initialize GPU state buffers to zero
     cudaMemset(m_d_selectedTarget, 0, sizeof(Detection));
@@ -558,7 +734,20 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
     cudaMemset(m_d_runtimeAimConfig, 0, sizeof(AimConfig));
 
     // Allocate pinned host memory for RGB input.
-    cudaMallocHost(&m_h_rawPinned, rawInputSize);
+    err = cudaMallocHost(&m_h_rawPinned, rawInputSize);
+    if (err != cudaSuccess) return failCuda("cudaMallocHost(raw pinned input)", err);
+    // Pinned staging for the per-frame source pointer and AimConfig H2D copies.
+    // These are issued from the receive thread, which must not block: a pageable
+    // source can make cudaMemcpyAsync stage and synchronize.
+    err = cudaMallocHost(&m_h_srcPtrStage, sizeof(void*) * kMaxCallbacksInFlight);
+    if (err != cudaSuccess) return failCuda("cudaMallocHost(source pointer staging)", err);
+    std::memset(m_h_srcPtrStage, 0, sizeof(void*) * kMaxCallbacksInFlight);
+    err = cudaMallocHost(&m_h_aimConfigStage, sizeof(AimConfig) * kMaxCallbacksInFlight);
+    if (err != cudaSuccess) return failCuda("cudaMallocHost(aim config staging)", err);
+    for (int i = 0; i < kMaxCallbacksInFlight; ++i) {
+        m_h_aimConfigStage[i] = AimConfig{};
+    }
+
     // Allocate result buffers per callback slot.
     for (int i = 0; i < kMaxCallbacksInFlight; ++i) {
         const size_t idx = static_cast<size_t>(i);
@@ -566,60 +755,80 @@ bool SimpleInference::loadEngine(const std::string& enginePath) {
             // Mapped pinned result buffer: the postprocess kernel writes directly
             // into host-visible memory (via the device alias), so there is no D2H
             // copy. The callback reads m_h_inferenceResultPinned[i] as before.
-            cudaHostAlloc(&m_h_inferenceResultPinned[i], sizeof(InferenceResult),
-                          cudaHostAllocMapped);
-            cudaHostGetDevicePointer(&m_d_resultMapped[i], m_h_inferenceResultPinned[i], 0);
+            err = cudaHostAlloc(&m_h_inferenceResultPinned[i], sizeof(InferenceResult),
+                                cudaHostAllocMapped);
+            if (err != cudaSuccess) return failCuda("cudaHostAlloc(mapped result slot)", err);
+            err = cudaHostGetDevicePointer(&m_d_resultMapped[i], m_h_inferenceResultPinned[i], 0);
+            if (err != cudaSuccess) return failCuda("cudaHostGetDevicePointer(result slot)", err);
             m_d_inferenceResult[i] = nullptr;  // unused in zero-copy mode
         } else {
-            cudaMalloc(&m_d_inferenceResult[i], sizeof(InferenceResult));
-            cudaMallocHost(&m_h_inferenceResultPinned[i], sizeof(InferenceResult));
+            err = cudaMalloc(&m_d_inferenceResult[i], sizeof(InferenceResult));
+            if (err != cudaSuccess) return failCuda("cudaMalloc(result slot)", err);
+            err = cudaMallocHost(&m_h_inferenceResultPinned[i], sizeof(InferenceResult));
+            if (err != cudaSuccess) return failCuda("cudaMallocHost(pinned result slot)", err);
             m_d_resultMapped[i] = nullptr;
         }
-        cudaEventCreateWithFlags(&m_callbackEvents[idx], cudaEventDisableTiming);
-        m_callbackSlotPending[idx].store(false, std::memory_order_relaxed);
+        *m_h_inferenceResultPinned[i] = InferenceResult{};
+        err = cudaEventCreateWithFlags(&m_callbackEvents[idx], cudaEventDisableTiming);
+        if (err != cudaSuccess) return failCuda("cudaEventCreateWithFlags(completion event)", err);
         m_callbackSlotBusy[idx].store(false, std::memory_order_relaxed);
         if (m_stageTimingEnabled) {
-            cudaEventCreate(&m_stageEvtStart[idx]);
-            cudaEventCreate(&m_stageEvtPostH2D[idx]);
-            cudaEventCreate(&m_stageEvtPostPreprocess[idx]);
-            cudaEventCreate(&m_stageEvtPostInference[idx]);
-            cudaEventCreate(&m_stageEvtPostPostprocess[idx]);
-            cudaEventCreate(&m_stageEvtEnd[idx]);
+            const bool eventsOk =
+                cudaEventCreate(&m_stageEvtStart[idx]) == cudaSuccess &&
+                cudaEventCreate(&m_stageEvtPostH2D[idx]) == cudaSuccess &&
+                cudaEventCreate(&m_stageEvtPostPreprocess[idx]) == cudaSuccess &&
+                cudaEventCreate(&m_stageEvtPostInference[idx]) == cudaSuccess &&
+                cudaEventCreate(&m_stageEvtPostPostprocess[idx]) == cudaSuccess &&
+                cudaEventCreate(&m_stageEvtEnd[idx]) == cudaSuccess;
+            if (!eventsOk) return fail("could not create the stage-timing events");
         }
         m_stageEvtValid[idx].store(false, std::memory_order_relaxed);
     }
+    m_pendingHead = 0;
+    m_pendingCount = 0;
 
 #if TRT_USE_NEW_API
     // Tensor addresses are static in this pipeline, bind once.
-    m_context->setTensorAddress("images", m_d_chwInput);
-    m_context->setTensorAddress("output0", m_d_output);
+    if (!m_context->setTensorAddress("images", m_d_chwInput) ||
+        !m_context->setTensorAddress("output0", m_d_output)) {
+        return fail("setTensorAddress rejected the pipeline buffers");
+    }
     m_tensorAddressesBound = true;
 #endif
 
+    // Warm up TensorRT BEFORE declaring success: a failure here means the engine
+    // cannot actually run on this device, and reporting it as loaded just moves
+    // the crash to the first frame.
+    std::cout << "[SimpleInference] Warming up..." << std::endl;
+    size_t warmupSize = static_cast<size_t>(m_inputH) * m_inputW * inputBytesPerPixel();
+    memset(m_h_rawPinned, 128, warmupSize);
+    for (int i = 0; i < 3; i++) {
+        err = cudaMemcpyAsync(m_d_rawInput, m_h_rawPinned, warmupSize,
+                              cudaMemcpyHostToDevice, m_stream);
+        if (err != cudaSuccess) return failCuda("warmup H2D", err);
+        // m_d_srcPtr currently points at m_d_rawInput (seeded above), so the
+        // preprocess reads the just-uploaded warmup frame.
+        err = cuda_preprocessing(reinterpret_cast<const uint8_t* const*>(m_d_srcPtr), m_d_chwInput,
+                                 m_inputW, m_inputH, m_inputW, m_inputH, m_inputFP16, m_stream);
+        if (err != cudaSuccess) return failCuda("warmup preprocess", err);
+#if TRT_USE_NEW_API
+        if (!m_context->enqueueV3(m_stream)) return fail("warmup enqueueV3 was rejected");
+#else
+        void* bindings[2] = { m_d_chwInput, m_d_output };
+        if (!m_context->enqueueV2(bindings, m_stream, nullptr)) {
+            return fail("warmup enqueueV2 was rejected");
+        }
+#endif
+        err = cudaStreamSynchronize(m_stream);
+        if (err != cudaSuccess) return failCuda("warmup stream sync", err);
+    }
+    std::cout << "[SimpleInference] Warmup complete" << std::endl;
+
     m_loaded = true;
+    m_acceptSubmissions.store(true, std::memory_order_release);
     m_callbackWorkerRunning.store(true, std::memory_order_release);
     m_callbackWorkerThread = std::thread(&SimpleInference::callbackWorkerLoop, this);
     std::cout << "[SimpleInference] Engine loaded successfully" << std::endl;
-
-    // Warm up TensorRT
-    std::cout << "[SimpleInference] Warming up..." << std::endl;
-    size_t warmupSize = m_inputH * m_inputW * inputBytesPerPixel();
-    memset(m_h_rawPinned, 128, warmupSize);
-    for (int i = 0; i < 3; i++) {
-        cudaMemcpyAsync(m_d_rawInput, m_h_rawPinned, warmupSize, cudaMemcpyHostToDevice, m_stream);
-        // m_d_srcPtr currently points at m_d_rawInput (seeded above), so the
-        // preprocess reads the just-uploaded warmup frame.
-        cuda_preprocessing(reinterpret_cast<const uint8_t* const*>(m_d_srcPtr), m_d_chwInput,
-                           m_inputW, m_inputH, m_inputW, m_inputH, m_inputFP16, m_stream);
-#if TRT_USE_NEW_API
-        m_context->enqueueV3(m_stream);
-#else
-        void* bindings[2] = { m_d_chwInput, m_d_output };
-        m_context->enqueueV2(bindings, m_stream, nullptr);
-#endif
-        cudaStreamSynchronize(m_stream);
-    }
-    std::cout << "[SimpleInference] Warmup complete" << std::endl;
 
     return true;
 }
@@ -665,9 +874,7 @@ bool SimpleInference::executeFusedPipelinePostH2D(int width, int height,
     }
 
     const size_t slotIdx = static_cast<size_t>(resultSlot);
-    if (m_stageTimingEnabled && m_stageEvtPostH2D[slotIdx]) {
-        cudaEventRecord(m_stageEvtPostH2D[slotIdx], m_stream);
-    }
+    if (m_stageTimingEnabled) recordStageEvent(m_stageEvtPostH2D[slotIdx]);
 
     // GPU preprocessing (RGB + optional resize). Reads the source pointer from
     // m_d_srcPtr (the current receive buffer on Tegra, or m_d_rawInput on dGPU).
@@ -680,9 +887,7 @@ bool SimpleInference::executeFusedPipelinePostH2D(int width, int height,
                   << cudaGetErrorString(preprocessErr) << std::endl;
         return false;
     }
-    if (m_stageTimingEnabled && m_stageEvtPostPreprocess[slotIdx]) {
-        cudaEventRecord(m_stageEvtPostPreprocess[slotIdx], m_stream);
-    }
+    if (m_stageTimingEnabled) recordStageEvent(m_stageEvtPostPreprocess[slotIdx]);
 
     // TensorRT inference
     bool enqueueOk = false;
@@ -701,9 +906,7 @@ bool SimpleInference::executeFusedPipelinePostH2D(int width, int height,
         std::cerr << "[SimpleInference] TensorRT enqueue failed" << std::endl;
         return false;
     }
-    if (m_stageTimingEnabled && m_stageEvtPostInference[slotIdx]) {
-        cudaEventRecord(m_stageEvtPostInference[slotIdx], m_stream);
-    }
+    if (m_stageTimingEnabled) recordStageEvent(m_stageEvtPostInference[slotIdx]);
 
     // One-pass GPU postprocess: decode + target select + movement + result packing
     cudaError_t postErr = postprocessYoloFusedGpu(
@@ -726,9 +929,7 @@ bool SimpleInference::executeFusedPipelinePostH2D(int width, int height,
                   << cudaGetErrorString(postErr) << std::endl;
         return false;
     }
-    if (m_stageTimingEnabled && m_stageEvtPostPostprocess[slotIdx]) {
-        cudaEventRecord(m_stageEvtPostPostprocess[slotIdx], m_stream);
-    }
+    if (m_stageTimingEnabled) recordStageEvent(m_stageEvtPostPostprocess[slotIdx]);
 
     // Single D2H transfer (dGPU only). On Tegra the postprocess already wrote the
     // result into mapped pinned memory, so no copy is needed - the host reads it
@@ -742,9 +943,7 @@ bool SimpleInference::executeFusedPipelinePostH2D(int width, int height,
             return false;
         }
     }
-    if (m_stageTimingEnabled && m_stageEvtEnd[slotIdx]) {
-        cudaEventRecord(m_stageEvtEnd[slotIdx], m_stream);
-    }
+    if (m_stageTimingEnabled) recordStageEvent(m_stageEvtEnd[slotIdx]);
     return true;
 }
 
@@ -756,9 +955,8 @@ bool SimpleInference::executeFusedPipeline(void* rawInput, int width, int height
     size_t rawSize = static_cast<size_t>(width) * static_cast<size_t>(height) * static_cast<size_t>(inputBytesPerPixel());
 
     const size_t slotIdx = static_cast<size_t>(resultSlot);
-    if (m_stageTimingEnabled && resultSlot >= 0 && resultSlot < kMaxCallbacksInFlight &&
-        m_stageEvtStart[slotIdx]) {
-        cudaEventRecord(m_stageEvtStart[slotIdx], m_stream);
+    if (m_stageTimingEnabled && resultSlot >= 0 && resultSlot < kMaxCallbacksInFlight) {
+        recordStageEvent(m_stageEvtStart[slotIdx]);
     }
 
     if (m_zeroCopy) {
@@ -870,15 +1068,44 @@ void SimpleInference::touchBucket(int bucketIndex) {
         ++m_graphUseTickCounter;
 }
 
-bool SimpleInference::uploadRuntimeAimConfig(const AimConfig& aimConfig, bool force) {
-    if (!m_d_runtimeAimConfig) return false;
+// Record a stage-timing event on the stream. Inside a stream capture a plain
+// cudaEventRecord only expresses a capture DEPENDENCY - the resulting node never
+// stamps a timestamp when the graph is replayed, so every stage read back as
+// "elapsed time unavailable" and the failure was being folded in as a 0us
+// sample. cudaEventRecordExternal is the flag that makes it a real event-record
+// node in the graph.
+void SimpleInference::recordStageEvent(cudaEvent_t evt) {
+    if (!evt) return;
+    const unsigned int flags = m_capturingGraph ? cudaEventRecordExternal
+                                                : cudaEventRecordDefault;
+    const cudaError_t err = cudaEventRecordWithFlags(evt, m_stream, flags);
+    if (err != cudaSuccess) {
+        static std::atomic<bool> warned{false};
+        if (!warned.exchange(true)) {
+            std::cerr << "[SimpleInference] stage timing event record failed: "
+                      << cudaGetErrorString(err) << std::endl;
+        }
+        cudaGetLastError();
+    }
+}
+
+bool SimpleInference::uploadRuntimeAimConfig(const AimConfig& aimConfig, int stageSlot,
+                                             bool force) {
+    if (!m_d_runtimeAimConfig || !m_h_aimConfigStage) return false;
     if (!force && m_hasEnqueuedRuntimeAimConfig &&
         aimConfigNearlyEqual(aimConfig, m_enqueuedRuntimeAimConfig)) {
         return true;
     }
 
+    if (stageSlot < 0 || stageSlot >= kMaxCallbacksInFlight) stageSlot = 0;
+    // Stage through PINNED memory, per slot. The caller's AimConfig is a stack
+    // local on the receive thread; copying it asynchronously from pageable memory
+    // can stage through a driver buffer and block, and per-slot staging keeps a
+    // still-pending copy from being overwritten by the next frame.
+    m_h_aimConfigStage[stageSlot] = aimConfig;
+
     const cudaError_t err = cudaMemcpyAsync(
-        m_d_runtimeAimConfig, &aimConfig, sizeof(AimConfig),
+        m_d_runtimeAimConfig, &m_h_aimConfigStage[stageSlot], sizeof(AimConfig),
         cudaMemcpyHostToDevice, m_stream);
     if (err != cudaSuccess) {
         std::cerr << "[SimpleInference] cudaMemcpyAsync(runtime AimConfig) failed: "
@@ -965,20 +1192,21 @@ void SimpleInference::recordStageTimings(int slotIndex) {
     cudaEvent_t e5 = m_stageEvtEnd[idx];
     if (!e0 || !e1 || !e2 || !e3 || !e4 || !e5) return;
 
-    // Report the first failure instead of swallowing it: every stage read coming
-    // back 0 is indistinguishable from "the GPU really took 0us", which is how a
-    // broken probe silently reads as a fast pipeline.
-    auto delta = [](cudaEvent_t a, cudaEvent_t b) -> uint64_t {
+    // A failed read is NOT a 0us stage. Folding one in as a sample is how a
+    // broken probe reads back as a fast pipeline, so a sample where any stage
+    // could not be timed is dropped whole and the reason is reported once.
+    bool sampleOk = true;
+    auto delta = [&sampleOk](cudaEvent_t a, cudaEvent_t b) -> uint64_t {
         float ms = 0.0f;
         const cudaError_t err = cudaEventElapsedTime(&ms, a, b);
         if (err != cudaSuccess) {
+            sampleOk = false;
             static std::atomic<bool> warned{false};
             if (!warned.exchange(true)) {
                 std::cerr << "[SimpleInference] stage timing unavailable: "
                           << cudaGetErrorString(err)
-                          << " (events recorded inside a captured CUDA graph cannot"
-                             " always be timed; run with idle_graph_precapture off"
-                             " or compare Cb/E2E instead)" << std::endl;
+                          << " - these samples are DROPPED, not counted as 0us."
+                             " Compare Cb/E2E instead." << std::endl;
             }
             cudaGetLastError();
             return 0;
@@ -990,6 +1218,10 @@ void SimpleInference::recordStageTimings(int slotIndex) {
     const uint64_t inferenceUs = delta(e2, e3);
     const uint64_t postprocessUs = delta(e3, e4);
     const uint64_t d2hUs = delta(e4, e5);
+    if (!sampleOk) {
+        m_stageDroppedSamples.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
 
     m_stageSamples.fetch_add(1, std::memory_order_relaxed);
     m_stageH2DUsTotal.fetch_add(h2dUs, std::memory_order_relaxed);
@@ -1007,6 +1239,7 @@ void SimpleInference::recordStageTimings(int slotIndex) {
 SimpleInference::StageTimingStats SimpleInference::takeStageTimingStats() {
     StageTimingStats out;
     out.samples = m_stageSamples.exchange(0, std::memory_order_relaxed);
+    out.droppedSamples = m_stageDroppedSamples.exchange(0, std::memory_order_relaxed);
     out.h2dUsTotal = m_stageH2DUsTotal.exchange(0, std::memory_order_relaxed);
     out.preprocessUsTotal = m_stagePreprocessUsTotal.exchange(0, std::memory_order_relaxed);
     out.inferenceUsTotal = m_stageInferenceUsTotal.exchange(0, std::memory_order_relaxed);
@@ -1108,7 +1341,9 @@ bool SimpleInference::captureFullGraphForShape(int sourceWidth, int sourceHeight
         m_cachedBodyYOffset = bodyYOffset;
     }
 
-    if (!uploadRuntimeAimConfig(aimConfig, paramsChanged)) {
+    // No frames are in flight during a capture (checked above), so slot 0's
+    // staging buffer is free to use.
+    if (!uploadRuntimeAimConfig(aimConfig, /*stageSlot=*/0, paramsChanged)) {
         return false;
     }
 
@@ -1148,6 +1383,7 @@ bool SimpleInference::captureFullGraphForShape(int sourceWidth, int sourceHeight
             continue;  // Slot already captured for this shape.
         }
         err = cudaStreamBeginCapture(m_stream, cudaStreamCaptureModeRelaxed);
+        m_capturingGraph = (err == cudaSuccess);
         if (err != cudaSuccess) {
             std::cerr << "[SimpleInference] Failed to begin full graph capture for slot "
                       << slot << ": " << cudaGetErrorString(err) << std::endl;
@@ -1156,9 +1392,7 @@ bool SimpleInference::captureFullGraphForShape(int sourceWidth, int sourceHeight
         }
 
         // Capture stage timing start event into the graph (if enabled).
-        if (m_stageTimingEnabled && m_stageEvtStart[slotIdx]) {
-            cudaEventRecord(m_stageEvtStart[slotIdx], m_stream);
-        }
+        if (m_stageTimingEnabled) recordStageEvent(m_stageEvtStart[slotIdx]);
 
         // dGPU: capture the frame H2D into the graph (its source pointer is
         // patched per frame at launch). Tegra zero-copy: no H2D in the graph -
@@ -1170,6 +1404,7 @@ bool SimpleInference::captureFullGraphForShape(int sourceWidth, int sourceHeight
             if (err != cudaSuccess) {
                 cudaGraph_t capturedGraph = nullptr;
                 cudaError_t abortErr = cudaStreamEndCapture(m_stream, &capturedGraph);
+                m_capturingGraph = false;
                 if (abortErr == cudaSuccess && capturedGraph) {
                     cudaGraphDestroy(capturedGraph);
                 }
@@ -1189,6 +1424,7 @@ bool SimpleInference::captureFullGraphForShape(int sourceWidth, int sourceHeight
                                          slot)) {
             cudaGraph_t capturedGraph = nullptr;
             cudaError_t abortErr = cudaStreamEndCapture(m_stream, &capturedGraph);
+            m_capturingGraph = false;
             if (abortErr == cudaSuccess && capturedGraph) {
                 cudaGraphDestroy(capturedGraph);
             }
@@ -1199,6 +1435,7 @@ bool SimpleInference::captureFullGraphForShape(int sourceWidth, int sourceHeight
         }
 
         err = cudaStreamEndCapture(m_stream, &bucket.graphs[slotIdx]);
+        m_capturingGraph = false;
         if (err != cudaSuccess || !bucket.graphs[slotIdx]) {
             std::cerr << "[SimpleInference] Failed to end full graph capture for slot "
                       << slot << ": " << cudaGetErrorString(err) << std::endl;
@@ -1248,15 +1485,20 @@ bool SimpleInference::captureFullGraphForShape(int sourceWidth, int sourceHeight
 void SimpleInference::callbackWorkerLoop() {
 #ifndef _WIN32
     pthread_setname_np(pthread_self(), "infer-cb");
-    const int fifoMax = sched_get_priority_max(SCHED_FIFO);
-    if (fifoMax > 0) {
-        sched_param param{};
-        param.sched_priority = std::max(1, fifoMax - 1);
-        if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &param) != 0) {
-            const int rrMax = sched_get_priority_max(SCHED_RR);
-            if (rrMax > 0) {
-                param.sched_priority = std::max(1, rrMax - 1);
-                pthread_setschedparam(pthread_self(), SCHED_RR, &param);
+    // Gated by setRealtimeEnabled(): this used to raise its own priority no
+    // matter what realtime_threads_enabled said, so the setting described only
+    // some of the threads it claimed to cover.
+    if (m_realtimeEnabled) {
+        const int fifoMax = sched_get_priority_max(SCHED_FIFO);
+        if (fifoMax > 0) {
+            sched_param param{};
+            param.sched_priority = std::max(1, fifoMax - 1);
+            if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &param) != 0) {
+                const int rrMax = sched_get_priority_max(SCHED_RR);
+                if (rrMax > 0) {
+                    param.sched_priority = std::max(1, rrMax - 1);
+                    pthread_setschedparam(pthread_self(), SCHED_RR, &param);
+                }
             }
         }
     }
@@ -1273,62 +1515,79 @@ void SimpleInference::callbackWorkerLoop() {
         pthread_setaffinity_np(pthread_self(), sizeof(cpuset), &cpuset);
     }
 #endif
-    auto hasPendingCallback = [this]() {
-        for (int slot = 0; slot < kMaxCallbacksInFlight; ++slot) {
-            if (m_callbackSlotPending[static_cast<size_t>(slot)].load(std::memory_order_acquire)) {
-                return true;
-            }
-        }
-        return false;
-    };
 
-    while (m_callbackWorkerRunning.load(std::memory_order_acquire) ||
-           m_callbacksInFlight.load(std::memory_order_acquire) > 0) {
+    for (;;) {
         int pendingSlot = -1;
-        for (int slot = 0; slot < kMaxCallbacksInFlight; ++slot) {
-            if (m_callbackSlotPending[static_cast<size_t>(slot)].load(std::memory_order_acquire)) {
-                pendingSlot = slot;
-                break;
+        {
+            std::unique_lock<std::mutex> lock(m_callbackWorkerMutex);
+            // The timeout only matters for the shutdown check below; every push
+            // notifies, so a running pipeline never waits it out.
+            m_callbackWorkerCv.wait_for(lock, std::chrono::milliseconds(50), [this]() {
+                return m_pendingCount > 0 ||
+                       !m_callbackWorkerRunning.load(std::memory_order_acquire);
+            });
+            if (m_pendingCount > 0) {
+                // Strict FIFO: completions are handled in SUBMISSION order. Taking
+                // the lowest pending slot index instead (what this used to do) let
+                // a frame resubmitted into a just-freed low slot be waited on
+                // before an older frame still running in a higher one, so the
+                // mouse could receive two frames' moves out of order.
+                pendingSlot = m_pendingSlots[static_cast<size_t>(m_pendingHead)];
+                m_pendingHead = (m_pendingHead + 1) % kMaxCallbacksInFlight;
+                --m_pendingCount;
+                m_completionsRunning.fetch_add(1, std::memory_order_acq_rel);
             }
         }
 
         if (pendingSlot < 0) {
-            std::unique_lock<std::mutex> lock(m_callbackWorkerMutex);
-            m_callbackWorkerCv.wait(lock, [&]() {
-                if (!m_callbackWorkerRunning.load(std::memory_order_acquire)) {
-                    return true;
-                }
-                return hasPendingCallback();
-            });
+            if (!m_callbackWorkerRunning.load(std::memory_order_acquire) &&
+                m_callbacksInFlight.load(std::memory_order_acquire) == 0) {
+                break;
+            }
             continue;
         }
 
-        cudaError_t eventStatus = cudaEventSynchronize(
-            m_callbackEvents[static_cast<size_t>(pendingSlot)]);
-        m_callbackSlotPending[static_cast<size_t>(pendingSlot)].store(false, std::memory_order_release);
+        const size_t slotIdx = static_cast<size_t>(pendingSlot);
+        const cudaError_t eventStatus = cudaEventSynchronize(m_callbackEvents[slotIdx]);
 
+        CallbackData& cbData = m_callbackDataSlots[slotIdx];
         if (eventStatus == cudaSuccess) {
             if (m_stageTimingEnabled &&
-                m_stageEvtValid[static_cast<size_t>(pendingSlot)].exchange(false, std::memory_order_acquire)) {
+                m_stageEvtValid[slotIdx].exchange(false, std::memory_order_acquire)) {
                 recordStageTimings(pendingSlot);
-            }
-            CallbackData& cbData = m_callbackDataSlots[static_cast<size_t>(pendingSlot)];
-            try {
-                if (cbData.callback && cbData.resultPtr) {
-                    cbData.callback(*cbData.resultPtr, cbData.userData);
-                }
-            } catch (const std::exception& e) {
-                std::cerr << "[SimpleInference] Callback exception: " << e.what() << std::endl;
-            } catch (...) {
-                std::cerr << "[SimpleInference] Callback exception: unknown" << std::endl;
             }
         } else {
             std::cerr << "[SimpleInference] cudaEventSynchronize failed for slot " << pendingSlot
                       << ": " << cudaGetErrorString(eventStatus) << std::endl;
             cudaGetLastError();
+            m_stageEvtValid[slotIdx].store(false, std::memory_order_release);
+            // Deliver an EMPTY result rather than skipping the callback. The
+            // callback owns the caller's frame buffer and its submission ticket,
+            // so skipping it leaked both - and at the shipped
+            // max_inflight_frames = 1 a single completion error then wedged the
+            // pipeline for the rest of the session. The result buffer is zeroed
+            // first because a failed completion may never have written it, and a
+            // stale hasTarget from the previous frame would move the mouse.
+            if (cbData.resultPtr) {
+                InferenceResult empty{};
+                empty.hasTarget = 0;
+                empty.targetClassId = -1;
+                empty.outputEnabled = 0;
+                *cbData.resultPtr = empty;
+            }
         }
 
-        m_callbackSlotBusy[static_cast<size_t>(pendingSlot)].store(false, std::memory_order_release);
+        try {
+            if (cbData.callback && cbData.resultPtr) {
+                cbData.callback(*cbData.resultPtr, cbData.userData);
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "[SimpleInference] Callback exception: " << e.what() << std::endl;
+        } catch (...) {
+            std::cerr << "[SimpleInference] Callback exception: unknown" << std::endl;
+        }
+
+        m_callbackSlotBusy[slotIdx].store(false, std::memory_order_release);
         m_callbacksInFlight.fetch_sub(1, std::memory_order_acq_rel);
 
         // Slot and in-flight counter are now released, so a resubmit from here
@@ -1336,7 +1595,15 @@ void SimpleInference::callbackWorkerLoop() {
         // above would still count this frame and be rejected at max in-flight,
         // dropping the newest queued frame). Kick the next queued frame straight
         // from this completion thread; the hook is non-blocking (try_lock).
-        if (m_postCompletionHook) m_postCompletionHook();
+        // m_completionsRunning is not cleared until AFTER this returns, so
+        // quiesceCallbacks() cannot pull the hook's captured state out from
+        // under it.
+        try {
+            if (m_postCompletionHook) m_postCompletionHook();
+        } catch (...) {
+            std::cerr << "[SimpleInference] post-completion hook threw" << std::endl;
+        }
+        m_completionsRunning.fetch_sub(1, std::memory_order_acq_rel);
     }
 }
 
@@ -1348,6 +1615,8 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
                                                 float headYOffset, float bodyYOffset,
                                                 InferenceCallback callback, void* userData) {
     if (!m_loaded || !pinnedData || width <= 0 || height <= 0) return false;
+    // Shutdown has begun and the caller's callback state is being torn down.
+    if (!m_acceptSubmissions.load(std::memory_order_acquire)) return false;
 
     const size_t rawSize = static_cast<size_t>(width) * static_cast<size_t>(height) *
                            static_cast<size_t>(inputBytesPerPixel());
@@ -1386,17 +1655,27 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
         }
     }
 
-    for (int attempt = 0; attempt < kMaxCallbacksInFlight; ++attempt) {
-        if (callbackSlot >= 0) break;
-        const int idx = static_cast<int>((m_callbackSlotCursor + static_cast<uint32_t>(attempt)) %
-                                         static_cast<uint32_t>(kMaxCallbacksInFlight));
-        bool expected = false;
-        if (m_callbackSlotBusy[idx].compare_exchange_strong(
-                expected, true, std::memory_order_acq_rel, std::memory_order_relaxed)) {
-            callbackSlot = idx;
-            m_callbackSlotCursor =
-                (static_cast<uint32_t>(idx) + 1u) % static_cast<uint32_t>(kMaxCallbacksInFlight);
-            break;
+    // Only look outside the graph's own slots when this shape has NO graph at
+    // all. Taking a non-graph slot while the graph slots are merely busy forced
+    // the frame down the standard path, and that path launches its kernels
+    // inline: with the stream already full the launch blocks, and the submit -
+    // which runs on the receive thread - was measured stalling for a full
+    // inference time (~3.7ms at 320x320) instead of the usual ~80us. The frame
+    // is not lost by declining here; the receive buffers are newest-wins, so the
+    // next completion or drain picks up whatever is newest then.
+    if (!graphAvailable) {
+        for (int attempt = 0; attempt < kMaxCallbacksInFlight; ++attempt) {
+            if (callbackSlot >= 0) break;
+            const int idx = static_cast<int>((m_callbackSlotCursor + static_cast<uint32_t>(attempt)) %
+                                             static_cast<uint32_t>(kMaxCallbacksInFlight));
+            bool expected = false;
+            if (m_callbackSlotBusy[idx].compare_exchange_strong(
+                    expected, true, std::memory_order_acq_rel, std::memory_order_relaxed)) {
+                callbackSlot = idx;
+                m_callbackSlotCursor =
+                    (static_cast<uint32_t>(idx) + 1u) % static_cast<uint32_t>(kMaxCallbacksInFlight);
+                break;
+            }
         }
     }
     if (callbackSlot < 0) {
@@ -1410,13 +1689,17 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
             cudaStreamSynchronize(m_stream);
         }
         if (callbackSlot >= 0 && callbackSlot < kMaxCallbacksInFlight) {
+            // This slot's stage events were never completed, so a later frame
+            // reusing the slot must not read them as its own timings.
+            m_stageEvtValid[static_cast<size_t>(callbackSlot)].store(
+                false, std::memory_order_release);
             m_callbackSlotBusy[callbackSlot].store(false, std::memory_order_release);
         }
         m_callbacksInFlight.fetch_sub(1, std::memory_order_acq_rel);
         return false;
     };
 
-    if (!uploadRuntimeAimConfig(aimConfig)) {
+    if (!uploadRuntimeAimConfig(aimConfig, callbackSlot)) {
         return clearInFlightAndFail(false);
     }
 
@@ -1507,7 +1790,12 @@ bool SimpleInference::runInferenceWithCallback(void* pinnedData, int width, int 
     }
     {
         std::lock_guard<std::mutex> lock(m_callbackWorkerMutex);
-        m_callbackSlotPending[static_cast<size_t>(callbackSlot)].store(true, std::memory_order_release);
+        // Append in submission order; the worker pops from the head. Capacity is
+        // kMaxCallbacksInFlight and the in-flight counter was already checked
+        // against that bound, so this cannot overflow.
+        const int tail = (m_pendingHead + m_pendingCount) % kMaxCallbacksInFlight;
+        m_pendingSlots[static_cast<size_t>(tail)] = callbackSlot;
+        ++m_pendingCount;
     }
     m_callbackWorkerCv.notify_one();
 

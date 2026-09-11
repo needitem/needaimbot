@@ -6,7 +6,9 @@
 // the REAL device function over a deterministic input sequence and dumps the
 // emitted deltas so the Python model can be compared frame by frame.
 //
-// Build:  nvcc -O2 -I../../inference_pc/needaimbot/cuda parity_test.cu -o parity_test
+// Build:  nvcc -O2 --use_fast_math -I../../inference_pc/needaimbot/cuda parity_test.cu -o parity_test
+//         (--use_fast_math must match inference_pc/CMakeLists.txt, or the gate
+//          compares a different build of the controller than the one that ships)
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
@@ -54,6 +56,11 @@ int main(int argc, char** argv) {
     // that, so the gate must cover the scaled path too - a multiply landing on
     // the wrong side of the clamp/emit would not show up at 1.0.
     cfg.aim_y_scale = (argc > 2) ? (float)atof(argv[2]) : 1.0f;
+    // Output gate. 0 = the host will not send this frame's move (aim key up with
+    // inference kept warm), so the controller must emit nothing AND record
+    // nothing in the in-flight ring. Covered here because a gate that leaks even
+    // one non-zero emit desynchronises the dead-time compensation.
+    cfg.aim_output_enabled = (argc > 3) ? (float)atof(argv[3]) : 1.0f;
 
     const float SC = 160.0f, SCALE = 1.0f;
 

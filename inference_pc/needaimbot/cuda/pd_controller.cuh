@@ -366,6 +366,23 @@ __device__ __forceinline__ void computeAimMovement(
     // horizontal error moves 0.05% across y_scale 1.0 -> 0.
     clampMaxStep(movement_x, movement_y, aim_config.max_step);
 
+    // Output gate. The ring must record what the mouse ACTUALLY receives, so when
+    // the host has told us this frame's move will not be sent (aim key up while
+    // inference keeps running warm), emit nothing and push a zero. Everything
+    // above still ran, so the filters, the velocity estimate and the track stay
+    // warm for the next real aim - only the physical output and the record of it
+    // are suppressed. The sub-pixel carry is dropped too: a residual accumulated
+    // over an idle stretch would otherwise discharge as a jump on the first
+    // emitted frame.
+    if (aim_config.aim_output_enabled == 0.0f) {
+        aim_state->residual_x = 0.0f;
+        aim_state->residual_y = 0.0f;
+        out_dx = 0;
+        out_dy = 0;
+        pushInflight(aim_state, 0.0f, 0.0f);
+        return;
+    }
+
     out_dx = emitMouseDelta(movement_x, &aim_state->residual_x);
     out_dy = emitMouseDelta(movement_y, &aim_state->residual_y);
     pushInflight(aim_state, static_cast<float>(out_dx), static_cast<float>(out_dy));

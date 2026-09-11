@@ -207,6 +207,10 @@ struct AimConfig {
     // point is produced the same way every frame. head is kept as a FALLBACK for
     // the case that needs it (only the head visible over cover), which dropping
     // the class outright would lose. 0 = off (pure nearest-to-crosshair).
+    // SCOPE: this orders the nearest-candidate rule only. IoU/distance
+    // stickiness still wins over it - a head that is already the tracked target
+    // stays the target even while a body is visible, because switching anchors
+    // mid-track is exactly the variance this setting exists to avoid.
     float head_deprioritized = 1.0f;
 
     // --- Quieter body aim point (same point, less noise) ---
@@ -249,6 +253,21 @@ struct AimConfig {
     // the adaptive cutoff), so it was pure tuning surface with no lever behind it.
     // Fixed at kOneEuroDCutoff below (1.0 measured marginally best).
 
+    // --- Output gate (does this frame's move actually reach the mouse?) ---
+    // The GPU records every emitted move into AimState's in-flight ring, and the
+    // dead-time compensation then subtracts those moves from the next
+    // measurement. That is only correct if the move REALLY went out. Inference,
+    // however, also runs while the aim key is up (inference_keepwarm_ms < 0 keeps
+    // it always on), and the host sends nothing on those frames - so the ring was
+    // filling with moves that never happened and the compensation was subtracting
+    // phantom motion, carrying that state into the next real aim.
+    // The host knows at submit time whether this frame's move will be sent, so it
+    // says so here. 0 = compute and keep the tracking state warm, but emit 0 and
+    // push 0 into the ring. The decision is echoed back in
+    // InferenceResult::outputEnabled so the host emits on exactly the frames the
+    // ring recorded - the two can no longer disagree.
+    float aim_output_enabled = 1.0f;
+
     // --- Static shoot-offset aim-shift (in OUTPUT/screen px) ---
     // Shifts the aim REFERENCE POINT away from screen center by this vector so
     // the controller converges with the target resting at center + offset
@@ -279,7 +298,13 @@ struct InferenceResult {
     // used this frame. Only the calibration logger reads it (calib.csv records
     // moves in both spaces); the controller itself needs nothing from here.
     float movementScaleX, movementScaleY;  // 8 bytes
-    // Total: 44 bytes - still within a single 64B cache line
+    // Echo of AimConfig::aim_output_enabled for the frame that produced this
+    // result. The host emits the move if and only if this is non-zero, so the
+    // moves it sends are exactly the ones the in-flight ring recorded. Reading
+    // the live aim key in the completion callback instead would let the two
+    // disagree whenever the key moved while the frame was in flight.
+    int outputEnabled;          // 4 bytes
+    // Total: 48 bytes - still within a single 64B cache line
 };
 
 // One-pass fused postprocess:

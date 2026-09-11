@@ -60,7 +60,15 @@ struct Config {
     int targetFPS = 90;
     int outputIndex = 0;
     bool useGUI = true;
-    int packetPayloadBytes = 60000;
+    // MTU-safe by default. The old 60000 default made every frame chunk a
+    // 60KB UDP datagram, which the IP layer then re-fragmented into ~41
+    // Ethernet fragments below the application's own chunking: losing ONE of
+    // those fragments loses the whole 60KB datagram, and the receiver's chunk
+    // accounting never sees it. 1400 keeps one application chunk in one
+    // Ethernet frame (1500 MTU - 20 IP - 8 UDP - 44 app header = 1428), so a
+    // lost packet costs exactly one chunk. Raise it only on a path with a
+    // verified larger MTU (jumbo frames).
+    int packetPayloadBytes = 1400;
     int captureTimeoutMs = 5;
     // Credit mode reduces wasted network traffic and stale frames; it can add
     // a tiny wait versus pure continuous-latest push when the LAN is uncongested.
@@ -194,8 +202,23 @@ std::string toLowerCopy(std::string text) {
     return text;
 }
 
+// Largest application payload that still fits a 1500-byte Ethernet MTU:
+// 1500 - 20 (IPv4) - 8 (UDP) - sizeof(UDPPacketHeaderV2).
+static constexpr int kMtuSafePacketPayloadBytes = 1500 - 20 - 8 - 44;
+
 int clampPacketPayloadBytes(int bytes) {
     return std::clamp(bytes, kMinPacketPayloadBytes, kMaxPacketPayloadBytes);
+}
+
+// Warn once when the configured payload will be IP-fragmented on a standard
+// MTU. It still works - it is just that one lost Ethernet fragment then costs
+// the whole datagram instead of one chunk.
+void warnIfPayloadExceedsMtu(int bytes) {
+    if (bytes <= kMtuSafePacketPayloadBytes) return;
+    std::cerr << "[Warning] PacketPayloadBytes=" << bytes << " exceeds the MTU-safe "
+              << kMtuSafePacketPayloadBytes
+              << "; each chunk will be IP-fragmented and a single lost fragment "
+                 "will drop the whole chunk. Use jumbo frames or lower it.\n";
 }
 
 #if defined(_M_X64) || defined(_M_IX86) || defined(__SSSE3__)
@@ -555,6 +578,10 @@ struct UDPPacketHeaderV2 {
     uint64_t captureUnixMicros;  // system_clock epoch us at capture (0 = unknown)
 };
 static_assert(sizeof(UDPPacketHeaderV2) == 44, "UDPPacketHeaderV2 must stay wire-compatible");
+// kMtuSafePacketPayloadBytes is computed above, before this struct is declared,
+// so it hard-codes the header size. Keep the two in step.
+static_assert(sizeof(UDPPacketHeaderV2) == 1500 - 20 - 8 - kMtuSafePacketPayloadBytes,
+              "kMtuSafePacketPayloadBytes must be derived from the real header size");
 
 struct UDPCreditPacket {
     uint32_t magic;
@@ -1241,8 +1268,9 @@ int main(int argc, char** argv) {
 
     constexpr uint8_t wireBytesPerPixelValue = 3;
     constexpr uint8_t wirePixelFormatValue = UDP_PIXEL_FORMAT_RGB;
-    const size_t maxPayloadPerPacket = static_cast<size_t>(
-        clampPacketPayloadBytes(g_config.packetPayloadBytes));
+    const int effectivePayloadBytes = clampPacketPayloadBytes(g_config.packetPayloadBytes);
+    warnIfPayloadExceedsMtu(effectivePayloadBytes);
+    const size_t maxPayloadPerPacket = static_cast<size_t>(effectivePayloadBytes);
 
     // Create send socket
     SOCKET sendSock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);

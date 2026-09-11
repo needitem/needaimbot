@@ -4,6 +4,8 @@
 # movement_scale = 캡처크기 / 320 이라, 캡처를 바꾸면 model 좌표계의 오차·속도가
 # 같이 스케일된다. 그 공간의 절대값과 비교되는 파라미터(softness, lead 게이트)를
 # 함께 바꾸지 않으면 표적 근처에서 과도하게 공격적이 되어 흔들린다.
+# (v6: 다만 X 축 softness 와 두 리드 게이트는 예외다 - 시뮬레이션에서 2배가 좌우
+# 추적 지연을 남겨 두 프리셋 모두 320 값을 쓴다. 세로 softness 만 캡처를 따라간다.)
 # 그래서 캡처 크기와 게인은 반드시 세트로 움직인다 = 이 스크립트의 존재 이유.
 #
 #   320 : 시야 넓음(화면 가로 16.7%). 표적이 크게 움직이거나 원거리 교전이 많은 게임.
@@ -67,7 +69,10 @@ print("      적응데드타임 %s  aim_h_ema %s  mincut %s  세로배율 %s"%(
       d.get('aim_y_scale')))
 PYEOF
     done
-    # 두 프리셋이 '캡처 종속 6개는 x2, 나머지는 동일' 규칙에서 벗어났는지 검사한다.
+    # 두 프리셋이 '캡처 종속 3개는 x2, 나머지는 동일' 규칙에서 벗어났는지 검사한다.
+    # (v6, 2026-09-11: aim_softness_x·lead_vgate·lead_err_gate 는 더 이상 x2 가 아니다 -
+    # 시뮬레이션에서 X 축의 2배 환산이 추적 지연을 남겨 320 값으로 되돌렸다. 이제 두
+    # 프리셋에서 같아야 한다. 수직 softness 와 thumb softness 만 x2 를 유지한다.)
     # 한쪽만 튜닝하고 잊으면 preset.sh 한 번으로 그 튜닝이 조용히 되돌아간다.
     echo
     python3 - "$PRESETS" <<'PYEOF'
@@ -78,8 +83,7 @@ try:
     b=json.load(open(os.path.join(S,"simple_config.160.json")))
 except FileNotFoundError:
     print("  프리셋 파일 없음 - 정합성 검사 건너뜀"); raise SystemExit
-HALF={"aim_softness_x","aim_softness_y","thumb_aim_softness_x","thumb_aim_softness_y",
-      "lead_vgate","lead_err_gate"}
+HALF={"aim_softness_y","thumb_aim_softness_x","thumb_aim_softness_y"}
 OWN={"pre_capture_shapes","conf_threshold","head_aim_point","body_aim_point"}
 bad=[]
 for k in sorted(set(a)|set(b)):
@@ -95,7 +99,7 @@ if bad:
     print("  [경고] 프리셋 불일치 %d건 - 한쪽만 갱신됐을 수 있다:"%len(bad))
     for t in bad[:12]: print("      "+t)
     sys.exit(1)
-print("  프리셋 정합성 OK (캡처 종속 6개는 x2, 나머지 동일)")
+print("  프리셋 정합성 OK (캡처 종속 3개는 x2, 나머지 동일)")
 PYEOF
     # 표는 데이터의 사본이므로 데이터에서 다시 만든다. 사람이 기억해야 하는 방식은
     # 이미 실패했다 - 이 README 의 표는 한 세대 뒤처져 있었다.

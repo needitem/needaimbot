@@ -133,7 +133,22 @@ CaptureHeight=256             # Capture height (must match model input)
 
 [Performance]
 TargetFPS=90                  # Target capture/send FPS
+PacketPayloadBytes=1400       # Application payload per UDP packet
 ```
+
+**PacketPayloadBytes and the MTU.** Keep this at or below 1428 on a standard
+1500-byte Ethernet path (1500 - 20 IPv4 - 8 UDP - 44 packet header). A larger
+value still works, but the IP layer then splits each chunk into several Ethernet
+fragments *below* the application's own chunking, and losing any one of them
+loses the whole chunk. Raise it only where a larger MTU (jumbo frames) is
+verified end to end; the sender warns at startup when the configured value would
+be fragmented.
+
+**Bandwidth.** The stream is raw RGB, so the wire cost is
+`width x height x 3 x fps`. At 320x320x244 that is about 600 Mbit/s of payload
+and roughly 640 Mbit/s on the wire, which fits gigabit Ethernet with headroom to
+spare. 640x640 at the same rate would be about 2.8 Gbit/s and does not fit -
+lower the capture size before lowering the rate.
 
 ### Inference PC Configuration (`inference_pc/config.ini`)
 

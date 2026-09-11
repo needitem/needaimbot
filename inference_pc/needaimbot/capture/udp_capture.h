@@ -150,6 +150,11 @@ public:
     static constexpr int kAffinityUnset = -1000;
     void SetReceiveAffinity(int core) { m_receiveAffinityCore = core; }
 
+    // Gate the receive thread's SCHED_FIFO/SCHED_RR request. The thread used to
+    // raise its own priority unconditionally, so realtime_threads_enabled = false
+    // did not actually cover it. Call before StartCapture().
+    void SetRealtimeEnabled(bool enabled) { m_realtimeEnabled = enabled; }
+
     // Busy-poll receive (Linux only). Instead of sleeping in recvmmsg and paying
     // the IRQ -> scheduler wakeup latency (~5-15us, worse with DVFS/idle states)
     // on the first packet of every frame, spin on the (dedicated) receive core
@@ -184,6 +189,17 @@ private:
         int bufferIndex = -1;
         bool dropped = false;
         uint64_t captureUnixMicros = 0;
+        // Fixed payload stride the sender used for this frame (offset ==
+        // chunkIndex * chunkStride, last chunk short). Learned from the first
+        // chunk seen. 0 = not learned yet. Counting chunks alone cannot tell a
+        // complete frame from one where two packets wrote the same bytes, which
+        // would publish a frame with the previous frame's pixels in the hole.
+        size_t chunkStride = 0;
+        // Source of the first chunk. Frames are keyed by frameId only, so two
+        // senders (or a restarted one) can otherwise interleave into a single
+        // buffer and produce a spliced frame.
+        uint32_t sourceAddr = 0;
+        uint16_t sourcePort = 0;
         std::chrono::steady_clock::time_point lastUpdate;
     };
 
@@ -243,12 +259,29 @@ private:
         UDP_PIXEL_FORMAT_RGB, UDP_PIXEL_FORMAT_RGB};
     std::atomic<uint64_t> m_bufferFrameId[NUM_BUFFERS] = {};
     std::atomic<uint64_t> m_bufferCaptureUnixMicros[NUM_BUFFERS] = {};
+    // Publish generation of the frame currently in each buffer. The consumer
+    // records the generation it ACTUALLY took from here, rather than the value of
+    // m_publishSeq it happened to read before choosing a buffer: those differ
+    // whenever a publish lands in between, and the stale record then left
+    // publishSeq != consumedSeq permanently true with no READY buffer to take -
+    // a wait predicate that is always satisfied, which spun AcquireFramePinned
+    // forever instead of timing out.
+    std::atomic<uint64_t> m_bufferPublishSeq[NUM_BUFFERS] = {};
 
     std::atomic<int> m_latestBufferIndex{-1};
     std::condition_variable m_publishCv;
     std::mutex m_publishCvMutex;
     std::atomic<uint64_t> m_publishSeq{0};
-    uint64_t m_consumedSeq = 0;
+    std::atomic<uint64_t> m_consumedSeq{0};
+    // Guards the buffer POOL itself (the m_pinnedFrameBuffer pointers and the
+    // size), which the receive thread replaces wholesale when the capture
+    // resolution grows while the consumer may be dereferencing it. The all-FREE
+    // check alone only proves no buffer is checked out, not that nobody is
+    // reading the pointer array. Uncontended in steady state - the fast path
+    // below reads m_pinnedBufferCapacity without taking it.
+    std::mutex m_poolMutex;
+    std::atomic<size_t> m_pinnedBufferCapacity{0};
+    bool m_realtimeEnabled = true;   // see SetRealtimeEnabled()
     int m_reserveCursor = 0;
     bool m_hasLatestPublishedFrameId = false;
     uint32_t m_latestPublishedFrameId = 0;

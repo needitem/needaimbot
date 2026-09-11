@@ -237,7 +237,7 @@ void senderThread(const Args& args, const int totalChunks,
             const int chunkSize = std::min(remaining, args.payloadBytes);
 
             UDPPacketHeaderV2 header{};
-            header.magic = UDP_PACKET_V2_MAGIC;
+            header.magic = UDP_PACKET_V3_MAGIC;
             header.headerSize = static_cast<uint16_t>(sizeof(UDPPacketHeaderV2));
             header.flags = 0;
             header.frameId = static_cast<uint32_t>(frameId);
@@ -251,6 +251,9 @@ void senderThread(const Args& args, const int totalChunks,
             header.pixelFormat = UDP_PIXEL_FORMAT_RGB;
             header.bytesPerPixel = static_cast<uint8_t>(kBytesPerPixel);
             header.reserved = 0;
+            // v3 field. Left 0 (= unknown capture time), which the receiver
+            // accepts; it only disables the end-to-end latency stat.
+            header.captureUnixMicros = 0;
 
             iovec iov[2]{};
             iov[0].iov_base = &header;

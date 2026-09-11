@@ -1,12 +1,12 @@
 {
-    "config_version": 5,
+    "config_version": 6,
     "_section_ENGINE / NETWORK": "========== ENGINE / NETWORK ==========",
     "engine_path": "/home/taeho/portfolio/inferencetool/engines/sunxds_0.8.3_320_fp16.engine",
     "udp_port": 5007,
     "makcu_port": "/dev/ttyACM0",
     "makcu_baudrate": 4000000,
     "_section_DETECTION": "========== DETECTION ==========",
-    "conf_threshold": 0.2,
+    "conf_threshold": 0.25,
     "head_class_id": 1,
     "max_detections": 100,
     "allowed_classes": [
@@ -15,12 +15,12 @@
     ],
     "pre_capture_shapes": [
         [
-            320,
-            320
+            160,
+            160
         ]
     ],
     "_section_AIM POINT": "========== AIM POINT ==========",
-    "head_aim_point": 1.0,
+    "head_aim_point": 0.601,
     "body_aim_point": 0.15,
     "shoot_offset_x": 0.0,
     "shoot_offset_y": 0.0,
@@ -28,13 +28,13 @@
     "aim_kp_x": 0.765,
     "aim_kp_y": 0.698,
     "aim_softness_x": 8.6,
-    "aim_softness_y": 6.57,
+    "aim_softness_y": 13.14,
     "aim_kd_x": 0.052,
     "aim_kd_y": 0.037,
     "thumb_aim_kp_x": 0.709,
     "thumb_aim_kp_y": 0.408,
-    "thumb_aim_softness_x": 4.66,
-    "thumb_aim_softness_y": 9.77,
+    "thumb_aim_softness_x": 9.32,
+    "thumb_aim_softness_y": 19.54,
     "thumb_aim_kd_x": 0.02,
     "thumb_aim_kd_y": 0.082,
     "_section_tracking": "===== Target tracking / stickiness =====",
@@ -49,7 +49,7 @@
     "_section_RECOIL COMPENSATION": "========== RECOIL COMPENSATION ==========",
     "no_recoil_enabled": false,
     "recoil_comp_x": 0.0,
-    "recoil_comp_y": 3.0,
+    "recoil_comp_y": 2.0,
     "recoil_tick_ms": 8,
     "_section_PIPELINE / LATENCY": "========== PIPELINE / LATENCY ==========",
     "max_inflight_frames": 1,
@@ -57,7 +57,7 @@
     "mouse_min_interval_ms": 0,
     "direct_aim_move_in_callback": true,
     "inference_keepwarm_ms": -1,
-    "udp_busy_spin": false,
+    "udp_busy_spin": true,
     "idle_graph_precapture_enabled": true,
     "idle_graph_precapture_interval_ms": 100,
     "_section_SYSTEM (threads / CPU affinity)": "========== SYSTEM (threads / CPU affinity) ==========",
@@ -85,8 +85,7 @@
     "inflight_deadtime_ms": 10.2,
     "aim_tuned_fps": 143.0,
     "aim_rate_adaptive": true,
-    "aim_h_ema": 0.2,
-    "aim_y_scale": 1.0,
+    "_section_lead": "===== Lead term (ego-corrected velocity feedforward) =====",
     "ff_gain": 1.7,
     "ff_ego_lag": 2.85,
     "ff_v_ema": 0.235,
@@ -94,5 +93,7 @@
     "lead_err_gate": 22.25,
     "predict_frames": 3.18,
     "class_switch_reject": true,
-    "head_deprioritized": true
+    "head_deprioritized": true,
+    "aim_h_ema": 0.2,
+    "aim_y_scale": 0.1
 }

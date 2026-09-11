@@ -8,10 +8,10 @@
   키                      320            160
   --------------------------------------------------
   pre_capture_shapes     [[320,320]]    [[160,160]]
-  aim_softness_x/y       8.6 / 6.57     17.2 / 13.14
+  aim_softness_x/y       8.6 / 6.57     8.6 / 13.14
   thumb_softness_x/y     4.66 / 9.77    9.32 / 19.54
-  lead_vgate             14.79          29.58
-  lead_err_gate          22.25          44.5
+  lead_vgate             14.79          14.79
+  lead_err_gate          22.25          22.25
   conf_threshold         0.15           0.25
   head_aim_point         1.0            0.601
   body_aim_point         0.21           0.15
@@ -25,7 +25,7 @@
   thumb_aim_kd_x=0.02  thumb_aim_kd_y=0.082  inflight_deadtime_frames=2.85
   deadtime_adaptive=True  ff_gain=1.7  ff_v_ema=0.235  predict_frames=3.18
   oneeuro_min_cutoff=0.084  oneeuro_beta=0.02  aim_h_ema=0.2
-  class_switch_reject=True  head_deprioritized=True  config_version=5
+  class_switch_reject=True  head_deprioritized=True  config_version=6
 ```
 
 <!-- AUTO:END -->

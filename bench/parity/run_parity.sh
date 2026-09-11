@@ -3,7 +3,12 @@
 # bench/aim_opt.py: the tuning is only meaningful while the two agree exactly.
 set -e
 cd "$(dirname "$(readlink -f "$0")")"
-nvcc -O2 -I../../inference_pc/needaimbot/cuda parity_test.cu -o parity_test
+# --use_fast_math matches the production build (inference_pc/CMakeLists.txt).
+# Without it the gate was comparing a DIFFERENT compilation of the controller
+# than the one that ships: fast math changes division, rsqrt and fma contraction,
+# which is exactly the kind of last-bit difference an exact-match gate exists to
+# catch.
+nvcc -O2 --use_fast_math -I../../inference_pc/needaimbot/cuda parity_test.cu -o parity_test
 fail=0
 echo "== default path (class_reject=1) =="
 ./parity_test 1 > cuda_out.txt && python3 compare.py || fail=1
@@ -19,6 +24,17 @@ bad=[i for i in range(len(rows)) if (rows[i][3],rows[i][4])!=py[i]]
 print("exact-match %d/%d"%(len(rows)-len(bad),len(rows)))
 sys.exit(1 if bad else 0)
 PY
+echo
+echo "== output gate OFF (aim key up while inference keeps running warm) =="
+./parity_test 1 1.0 0 > cuda_gate.txt
+python3 - <<'PYG' || fail=1
+import sys
+rows=[l.split() for l in open('cuda_gate.txt')]
+bad=[i for i,r in enumerate(rows) if (int(r[3]),int(r[4]))!=(0,0)]
+print("  emitted-zero %d/%d"%(len(rows)-len(bad),len(rows)))
+sys.exit(1 if bad else 0)
+PYG
+
 echo
 echo "== aim_y_scale 0.1 / 2.0 (감쇠 경로와 재클램프 경로) =="
 ./parity_test 1 0.1 > cuda_y.txt

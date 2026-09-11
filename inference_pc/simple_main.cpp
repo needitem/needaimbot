@@ -9,6 +9,7 @@
 #include <atomic>
 #include <chrono>
 #include <csignal>
+#include <cstdlib>
 #include <ctime>
 #include <iomanip>
 #include <filesystem>
@@ -21,6 +22,7 @@
 #include <mutex>
 #include <optional>
 #include <sstream>
+#include <thread>
 #include <vector>
 
 #ifndef _WIN32
@@ -110,7 +112,14 @@ static void rescaleAimConfigForRate(gpa::AimConfig& c, double r) {
 //       monitor swap. Every frame-denominated value moves; a v1 file left in
 //       place would keep the old ones and ring hard - overshoot 37 measured
 //       under the real plant. See CONFIG_REFERENCE.
-static constexpr int kConfigVersion = 5;
+//   6 = 2026-09-11: the x2 capture-upscale conversion is REMOVED from
+//       aim_softness_x and the two lead gates (they go back to the 320 values:
+//       8.6 / 14.79 / 22.25) - simulation at both noise levels showed the doubled
+//       values were leaving tracking lag on the horizontal axis (strafe X error
+//       -20..-26%, dwell +7pt, lost -3pt at the production y_scale). soft_y keeps
+//       the doubled value; aim_y_scale 0.1 becomes the shipped default (vertical
+//       assist deliberately kept human-like). A v5 file keeps the old x values.
+static constexpr int kConfigVersion = 6;
 
 static int64_t nowUnixMicros() {
     return std::chrono::duration_cast<std::chrono::microseconds>(
@@ -777,44 +786,62 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
         }
     }
 
-    auto releaseTicket = [ticket, ctx]() {
-        const int completedBuffer = ticket->bufferIndex;
-        if (completedBuffer >= 0 && ctx->udpCapture) {
-            ctx->udpCapture->ReleaseFrame(completedBuffer);
-        }
-        auto markReleased = [&]() {
-            ticket->bufferIndex = -1;
-            ticket->submitTime = Clock::time_point{};
-            ticket->captureUnixMicros = 0;
-            ticket->busy.store(false, std::memory_order_release);
-        };
-        if (ctx->pipelineCv && ctx->pipelineCvMutex) {
-            {
-                std::lock_guard<std::mutex> lock(*ctx->pipelineCvMutex);
+    // Releasing the frame buffer and the ticket is the callback's only
+    // non-optional job: the pipeline runs one frame in flight, so a path that
+    // returns without doing it stalls submission permanently. A scope guard makes
+    // that structural instead of relying on every branch remembering to call it -
+    // including the branches that throw.
+    struct TicketReleaser {
+        CallbackTicket* ticket;
+        CallbackContext* ctx;
+        ~TicketReleaser() {
+            const int completedBuffer = ticket->bufferIndex;
+            if (completedBuffer >= 0 && ctx->udpCapture) {
+                ctx->udpCapture->ReleaseFrame(completedBuffer);
+            }
+            auto markReleased = [&]() {
+                ticket->bufferIndex = -1;
+                ticket->submitTime = Clock::time_point{};
+                ticket->captureUnixMicros = 0;
+                ticket->busy.store(false, std::memory_order_release);
+            };
+            if (ctx->pipelineCv && ctx->pipelineCvMutex) {
+                {
+                    std::lock_guard<std::mutex> lock(*ctx->pipelineCvMutex);
+                    markReleased();
+                }
+                ctx->pipelineCv->notify_one();
+            } else {
                 markReleased();
             }
-            ctx->pipelineCv->notify_one();
-        } else {
-            markReleased();
+            // The next-frame kick is NOT done here: at this point the worker has
+            // not yet released this frame's inference slot / in-flight counter
+            // (that happens after this callback returns), so a resubmit from
+            // inside the callback would be rejected at max in-flight and drop the
+            // newest frame. The kick is instead driven by SimpleInference's
+            // post-completion hook, which runs after that teardown. The
+            // pipelineCv notify above remains the fallback that wakes the main
+            // loop.
         }
-        // The next-frame kick is NOT done here: at this point the worker has not
-        // yet released this frame's inference slot / in-flight counter (that
-        // happens after this callback returns), so a resubmit from inside the
-        // callback would be rejected at max in-flight and drop the newest frame.
-        // The kick is instead driven by SimpleInference's post-completion hook,
-        // which runs after that teardown. The pipelineCv notify above remains the
-        // fallback that wakes the main loop.
-    };
+    } ticketReleaser{ticket, ctx};
 
     // Count every completed inference callback (target/no-target)
     g_frameCount.fetch_add(1, std::memory_order_relaxed);
 
-    const uint8_t callbackButtonMask = ctx->makcu->buttonMask();
-    const bool aimingActive = ctx->forceAimOn || controller::maskAiming(callbackButtonMask);
+    // Whether this frame's move is emitted is decided ONCE, at submit time, and
+    // carried through the GPU controller - which recorded it in the in-flight
+    // ring on exactly that basis. Re-deciding here from the live aim key would
+    // let the two disagree whenever the key moved while the frame was in flight:
+    // the ring would hold a move that was never sent, and the dead-time
+    // compensation would then subtract motion that never happened.
+    const bool emitMove = (result.outputEnabled != 0);
 
     // Calibration: log the raw detection BEFORE the aim/target early-returns, so
     // a stationary-target capture with aim OFF still records every frame.
     if (ctx->calib) {
+        const uint8_t callbackButtonMask = ctx->makcu->buttonMask();
+        const bool aimingActive =
+            ctx->forceAimOn || controller::maskAiming(callbackButtonMask);
         const int64_t lat = (ticket->submitTime.time_since_epoch().count() != 0)
             ? elapsedUs(ticket->submitTime, Clock::now()) : -1;
         ctx->calib->record({elapsedUs(ctx->calib->start(), Clock::now()), lat,
@@ -827,22 +854,14 @@ void inferenceCallback(const gpa::InferenceResult& result, void* userData) {
             g_injectCumX.load(std::memory_order_relaxed)});
     }
 
-    if (!aimingActive) {
-        releaseTicket();
-        return;
-    }
-
-    if (!result.hasTarget) {
-        releaseTicket();
-        return;
+    if (!emitMove || !result.hasTarget) {
+        return;  // ticketReleaser hands the frame buffer back
     }
 
     // Inference is done - hand the result off to the controller, which
     // decides how to turn it into physical mouse motion. (The static shoot-
     // offset aim-shift lives in the GPU controller's error term, not here.)
     ctx->controller->submitAimMovement(result.movement.dx, result.movement.dy);
-
-    releaseTicket();
 }
 
 int main(int argc, char* argv[]) {
@@ -1027,6 +1046,7 @@ int main(int argc, char* argv[]) {
     gpa::SimpleInference inference;
     inference.setMaxDetections(cfg.maxDetections);
     inference.setStageTimingEnabled(cfg.stageTimingEnabled);
+    inference.setRealtimeEnabled(cfg.realtimeThreadsEnabled);
     if (cfg.cpuAffinityEnabled) {
         inference.setCallbackAffinity(cfg.affinityCoreCallback);
     }
@@ -1052,6 +1072,7 @@ int main(int argc, char* argv[]) {
         udpCapture.SetReceiveAffinity(cfg.affinityCoreReceive);
     }
     udpCapture.SetBusySpin(cfg.udpBusySpin);
+    udpCapture.SetRealtimeEnabled(cfg.realtimeThreadsEnabled);
     if (cfg.udpBusySpin) {
         std::cout << "[Simple] UDP busy-spin receive: ON (recv core pinned at 100%)"
                   << std::endl;
@@ -1244,7 +1265,8 @@ int main(int argc, char* argv[]) {
           << " Cbp=callback p50/95/99 ms,"
           << " E2E=capture->complete ms(avg/max) E2Ep=p50/95/99 ms E2En=samples/window"
           << " (needs NTP-synced clocks; excludes mouse), NF/IF/MD=timeouts/invalid/movedrop,"
-          << " G=graph/std/fallback, St=[h2d pre inf post d2h] us(avg/max)\n";
+          << " G=graph/std/fallback, Stn=timed samples StDrop=untimeable (excluded),"
+          << " St=[h2d pre inf post d2h] us(avg/max)\n";
         return h.str();
     };
     if (cfg.perfStatsEnabled && !cfg.perfLogPath.empty()) {
@@ -1419,7 +1441,13 @@ int main(int argc, char* argv[]) {
                < static_cast<int64_t>(cfg.inferenceKeepwarmMs) * 1000;
     };
 
-    auto trySubmitLatestFrame = [&]() {
+    // allowSlowWork = false on the two hot-path callers (the receive thread's
+    // frame-ready callback and the GPU completion hook). Anything that reads the
+    // frame back on the CPU or touches the filesystem is confined to the main
+    // loop's drain call: the debug dump used to run inline on the RECEIVE thread,
+    // where a full-image read out of write-combined memory plus a BMP write stops
+    // the socket being drained for as long as it takes.
+    auto trySubmitLatestFrame = [&](bool allowSlowWork) {
         // Refuse new GPU submissions once shutdown has begun. This is called
         // from the receive thread (via the frame-ready callback), which keeps
         // running until udpCapture.StopCapture() joins it - strictly after the
@@ -1483,10 +1511,12 @@ int main(int argc, char* argv[]) {
             return;
         }
 
-        const auto nowLocal = Clock::now();
-        if (debugFrameDumper.due(nowLocal)) {
-            debugFrameDumper.scheduleNext(nowLocal);
-            debugFrameDumper.save(pinnedRgbData, width, height, acquiredFrameId);
+        if (allowSlowWork) {
+            const auto nowLocal = Clock::now();
+            if (debugFrameDumper.due(nowLocal)) {
+                debugFrameDumper.scheduleNext(nowLocal);
+                debugFrameDumper.save(pinnedRgbData, width, height, acquiredFrameId);
+            }
         }
 
         // Re-check button state fresh (it may have changed since the top-of-
@@ -1509,6 +1539,14 @@ int main(int argc, char* argv[]) {
             frameAimConfig.shoot_offset_x = cfg.shootOffsetX;
             frameAimConfig.shoot_offset_y = cfg.shootOffsetY;
         }
+        // Inference also runs while the aim key is up (keep-warm), and nothing is
+        // sent on those frames. The GPU has to know, because it records every
+        // computed move in the in-flight ring and the dead-time compensation then
+        // subtracts it from the next measurement - so a warm-up frame used to
+        // leave a move in the ring that the mouse never made. Decided once, here,
+        // and echoed back in the result so the callback emits on exactly these
+        // frames.
+        frameAimConfig.aim_output_enabled = aiming ? 1.0f : 0.0f;
         // --- Per-frame dead-time compensation ---
         // inflight_comp subtracts the moves emitted but not yet visible in this
         // measurement, and deadtime_frames says HOW MANY frames' worth. That was a
@@ -1573,7 +1611,26 @@ int main(int argc, char* argv[]) {
             const double periodMs = framePeriodUsEma / 1000.0;
             const double dtFrames = (static_cast<double>(cfg.inflightDeadtimeMs) + 0.5 * periodMs)
                                     / periodMs;
-            frameAimConfig.deadtime_frames = static_cast<float>(std::clamp(dtFrames, 0.0, 4.0));
+            // The in-flight ring is 4 frames deep, so a dead time longer than
+            // that cannot be represented and is silently truncated - which reads
+            // as under-compensation, i.e. exactly the overshoot the ring exists
+            // to remove. At 244fps a 10.2ms dead time is already ~3 frames, so
+            // this bound is close; say so once rather than let it hide.
+            if (dtFrames > static_cast<double>(gpa::AimState::kInflightMax)) {
+                static bool warnedDeadtimeClamp = false;
+                if (!warnedDeadtimeClamp) {
+                    warnedDeadtimeClamp = true;
+                    std::cerr << "\n*** dead time resolves to " << dtFrames
+                              << " frames at " << (1e6 / framePeriodUsEma)
+                              << " fps, above the " << gpa::AimState::kInflightMax
+                              << "-frame in-flight ring. It is being clamped, so the"
+                                 " compensation is short by the remainder. Lower"
+                                 " inflight_deadtime_ms or the capture rate. ***"
+                              << std::endl;
+                }
+            }
+            frameAimConfig.deadtime_frames = static_cast<float>(
+                std::clamp(dtFrames, 0.0, static_cast<double>(gpa::AimState::kInflightMax)));
             frameAimConfig.ff_ego_lag = frameAimConfig.deadtime_frames;
             // Say what it resolved to, but only when it actually moves - a silent
             // rescale is exactly the kind of thing that hid the last two bugs.
@@ -1655,15 +1712,16 @@ int main(int argc, char* argv[]) {
         if (graphReady || graphFailedForThisShape) {
             idleGraphPrecaptureDone = true;
         }
-        if (!graphReady && !graphFailedForThisShape && inference.getCallbacksInFlight() == 0) {
-            // No graph for this shape yet and the GPU is idle. Don't capture it
-            // here - that can take hundreds of ms (see this function's comment).
-            // Ask the main loop to do it and skip this frame; the next
-            // completed frame will retry once the graph exists.
-            udpCapture.ReleaseFrame(bufferIndex);
+        if (!graphReady && !graphFailedForThisShape) {
+            // No graph for this shape yet. Ask the main loop to capture it (that
+            // can take hundreds of ms, and this function may be on the receive
+            // thread - see the comment above), but do NOT drop the frame: the
+            // standard path runs the exact same pipeline, just without the graph
+            // replay. Dropping it is what made the first frame after startup or a
+            // resolution change cost an extra full round trip before the aim
+            // reacted at all.
             pendingCaptureShape.store((static_cast<uint64_t>(width) << 32) | height,
                                       std::memory_order_relaxed);
-            return;
         }
 
         recvFramesWindow++;
@@ -1724,10 +1782,11 @@ int main(int argc, char* argv[]) {
     // loop's 1ms tick / next network frame to re-trigger submission. Registered
     // here - after trySubmitLatestFrame exists and before StartCapture()/the
     // first submit - so no completion can fire before the hook is set.
-    inference.setPostCompletionHook(trySubmitLatestFrame);
+    auto trySubmitFromHotPath = [&]() { trySubmitLatestFrame(/*allowSlowWork=*/false); };
+    inference.setPostCompletionHook(trySubmitFromHotPath);
 
     // Must be registered before StartCapture() spins up the receive thread.
-    udpCapture.SetFrameReadyCallback(trySubmitLatestFrame);
+    udpCapture.SetFrameReadyCallback(trySubmitFromHotPath);
     if (!udpCapture.StartCapture()) {
         std::cerr << "[Simple] Failed to start UDP capture" << std::endl;
         return 1;
@@ -1784,16 +1843,41 @@ int main(int argc, char* argv[]) {
         // (see trySubmitLatestFrame's comment); this call only matters when
         // that callback found the pipeline full, lost the submitMutex race, or
         // no frames are arriving other than this 1ms heartbeat.
-        trySubmitLatestFrame();
+        trySubmitLatestFrame(/*allowSlowWork=*/true);
 
         // A frame in trySubmitLatestFrame found no CUDA graph captured for its
-        // shape with the GPU idle - do the (possibly slow) capture here rather
-        // than on the receive thread.
+        // shape - do the (possibly slow) capture here rather than on the receive
+        // thread. Capture needs an idle GPU; frames now keep flowing through the
+        // standard path meanwhile, so re-arm and retry instead of dropping the
+        // request. Holding submitMutex blocks further submissions (the hot path
+        // only try-locks), so the in-flight count drains within a frame or two.
         if (const uint64_t packedShape = pendingCaptureShape.exchange(0, std::memory_order_relaxed)) {
             const unsigned int shapeW = static_cast<unsigned int>(packedShape >> 32);
             const unsigned int shapeH = static_cast<unsigned int>(packedShape & 0xffffffffu);
             std::lock_guard<std::mutex> lock(submitMutex);
-            (void)ensureFullGraphReady(shapeW, shapeH, "");
+            // Capture needs an idle GPU, and frames now keep flowing through the
+            // standard path while there is no graph - so we have to CREATE the
+            // idle window rather than wait to be handed one. Holding submitMutex
+            // across the drain does that: the hot path only try-locks, so nothing
+            // new is submitted and the in-flight count reaches zero within one
+            // inference time. Re-checking without holding the lock (the obvious
+            // version) livelocks at a sustained frame rate - a fresh frame
+            // re-arms the pipeline in the 1ms between ticks, every tick, and the
+            // capture is postponed forever while the standard path it was meant
+            // to be a brief bridge out of runs for the whole session.
+            const auto drainDeadline =
+                std::chrono::steady_clock::now() + std::chrono::milliseconds(50);
+            while (inference.getCallbacksInFlight() != 0 &&
+                   std::chrono::steady_clock::now() < drainDeadline) {
+                std::this_thread::sleep_for(std::chrono::microseconds(200));
+            }
+            if (inference.getCallbacksInFlight() == 0) {
+                (void)ensureFullGraphReady(shapeW, shapeH, "");
+            } else {
+                // GPU did not drain in 50ms - something is wedged. Retry next
+                // tick rather than hold the loop here.
+                pendingCaptureShape.store(packedShape, std::memory_order_relaxed);
+            }
         }
 
         const auto now = std::chrono::steady_clock::now();
@@ -1986,6 +2070,13 @@ int main(int argc, char* argv[]) {
                     auto avgUs = [&](uint64_t total) {
                         return st.samples == 0 ? 0.0 : static_cast<double>(total) / static_cast<double>(st.samples);
                     };
+                    logline << " Stn:" << st.samples;
+                    if (st.droppedSamples) {
+                        // Untimeable completions are excluded from the averages
+                        // rather than folded in as 0us. Say how many, or the
+                        // breakdown silently describes fewer frames than ran.
+                        logline << " StDrop:" << st.droppedSamples;
+                    }
                     logline << " St[h2d:" << avgUs(st.h2dUsTotal) << "/" << st.h2dUsMax
                             << " pre:" << avgUs(st.preprocessUsTotal) << "/" << st.preprocessUsMax
                             << " inf:" << avgUs(st.inferenceUsTotal) << "/" << st.inferenceUsMax
@@ -2043,9 +2134,35 @@ int main(int argc, char* argv[]) {
     std::cout << "\n[Simple] Shutting down..." << std::endl;
     udpCapture.StopCapture();
 
-    // Wait for any pending GPU work before the stack-local callback state
-    // (callbackTickets, callbackCtx, etc.) is destroyed.
-    cudaStreamSynchronize(inference.getStream());
+    // Drain the GPU **and** the host side of the pipeline before the stack-local
+    // callback state (callbackTickets, callbackCtx, pipelineCv, the mutex behind
+    // it) goes out of scope. cudaStreamSynchronize alone was not enough: the
+    // completion callback and the post-completion hook run on SimpleInference's
+    // worker thread AFTER the stream drains, and that thread is only joined much
+    // later, in the destructor - so main could return, unwind this frame, and
+    // leave the worker touching destroyed objects. quiesceCallbacks() refuses
+    // further submissions, drains the stream, waits for every callback and hook
+    // to finish, and drops the hook.
+    const bool pipelineDrained = inference.quiesceCallbacks();
+
+    if (!pipelineDrained) {
+        // The wait timed out, so a callback may still be running against
+        // callbackTickets / callbackCtx / pipelineCv. Returning normally would
+        // unwind this frame and destroy exactly those objects underneath it, and
+        // there is no way to cancel a callback that is already in progress. The
+        // only honest option left is to stop the process without unwinding: no
+        // destructor runs, so nothing the worker might touch is freed.
+        // Everything worth keeping is flushed first.
+        std::cerr << "\n*** Shutdown could not drain the inference pipeline. Exiting"
+                     " without unwinding so the completion thread cannot touch freed"
+                     " state. ***" << std::endl;
+        if (calibLogger) calibLogger->dump();
+        if (perfLog.is_open()) perfLog.flush();
+        std::cout.flush();
+        std::cerr.flush();
+        std::_Exit(0);
+    }
+
     movementController.stop();
 
     return 0;

@@ -4,7 +4,7 @@
 // - IoU-based target stickiness (hysteresis)
 // - Full CUDA Graph capture (preprocess + inference + postprocess)
 // - Pinned host transfers
-// - Single D2H transfer (InferenceResult struct, 40 bytes)
+// - Single D2H transfer (one InferenceResult struct, see simple_postprocess.h)
 // - Event-backed callback worker for low-latency completion handling
 // - FP16 input/output support (native, no conversion)
 #pragma once
@@ -92,6 +92,28 @@ public:
         return m_callbacksInFlight.load(std::memory_order_acquire);
     }
 
+    // Shutdown handshake. cudaStreamSynchronize only proves the GPU is done; the
+    // completion callback runs afterwards on the worker thread, and so does the
+    // post-completion hook. Draining the stream and returning therefore let the
+    // caller's callback state (tickets, context, condition variable) be destroyed
+    // while the worker was still inside a callback that references it.
+    // Call this before tearing any of that down: it refuses further submissions,
+    // drains the stream, waits for every completion (callback AND hook) to finish,
+    // and drops the hook. Idempotent; safe to call more than once.
+    // Returns true only when the pipeline is provably idle. A false return means
+    // the wait timed out and a callback may STILL be running against the caller's
+    // state - so the caller must not destroy that state; see how simple_main
+    // handles it.
+    [[nodiscard]] bool quiesceCallbacks(int timeoutMs = 2000);
+
+    // Gate the worker thread's SCHED_FIFO/SCHED_RR request. The thread used to
+    // raise its own priority unconditionally, which made realtime_threads_enabled
+    // = false a half-truth. Must be set before loadEngine() (which starts it).
+    void setRealtimeEnabled(bool enabled) {
+        if (m_loaded) return;
+        m_realtimeEnabled = enabled;
+    }
+
     // Invoked by the callback worker AFTER a completed frame's slot and the
     // in-flight counter have been released (see callbackWorkerLoop), so a
     // resubmit triggered from here observes an accurate free-slot count instead
@@ -99,7 +121,8 @@ public:
     // queued frame straight from the completion thread with no main-loop hop.
     // Called at most once per completed frame - keep it non-blocking. Must be
     // set before the first runInferenceWithCallback() so no completion can race
-    // the assignment. Optional; unset means no kick (main loop still drives).
+    // the assignment, and cleared by quiesceCallbacks() at shutdown. Optional;
+    // unset means no kick (main loop still drives).
     void setPostCompletionHook(std::function<void()> hook) {
         m_postCompletionHook = std::move(hook);
     }
@@ -123,6 +146,10 @@ public:
 
     struct StageTimingStats {
         uint64_t samples = 0;
+        // Completions whose stage events could not be timed. These are excluded
+        // from the totals; a non-zero count means the breakdown below is based
+        // on fewer frames than actually ran, which is worth seeing.
+        uint64_t droppedSamples = 0;
         // Microsecond totals (host-side conversion of cudaEventElapsedTime millis)
         uint64_t h2dUsTotal = 0;
         uint64_t preprocessUsTotal = 0;
@@ -170,8 +197,13 @@ private:
     // actual source can change per frame (Tegra: the frame's device pointer;
     // dGPU: the constant m_d_rawInput). This keeps H2D out of the graph on Tegra.
     void** m_d_srcPtr = nullptr;
-    // Per-slot pinned staging for the 8-byte pointer written into m_d_srcPtr.
-    std::array<void*, kMaxCallbacksInFlight> m_h_srcPtrStage{};
+    // Per-slot PINNED staging for the 8-byte pointer written into m_d_srcPtr and
+    // for the per-frame AimConfig. Both are copied H2D on the stream from inside
+    // the submit path, which runs on the receive thread; a pageable source makes
+    // cudaMemcpyAsync stage through a driver buffer and can synchronize, which is
+    // exactly what that path documents itself as never doing.
+    void** m_h_srcPtrStage = nullptr;          // [kMaxCallbacksInFlight]
+    AimConfig* m_h_aimConfigStage = nullptr;   // [kMaxCallbacksInFlight]
     // Tegra: device-side alias of each pinned result buffer (cudaHostGetDevicePointer).
     std::array<InferenceResult*, kMaxCallbacksInFlight> m_d_resultMapped{};
     // Resolve the device pointer for a mapped pinned host buffer. Not cached -
@@ -225,6 +257,7 @@ private:
     std::array<cudaEvent_t, kMaxCallbacksInFlight> m_stageEvtEnd{};
     std::array<std::atomic<bool>, kMaxCallbacksInFlight> m_stageEvtValid{};
     std::atomic<uint64_t> m_stageSamples{0};
+    std::atomic<uint64_t> m_stageDroppedSamples{0};
     std::atomic<uint64_t> m_stageH2DUsTotal{0};
     std::atomic<uint64_t> m_stagePreprocessUsTotal{0};
     std::atomic<uint64_t> m_stageInferenceUsTotal{0};
@@ -247,6 +280,12 @@ private:
     bool m_inputFP16 = false;   // Input tensor is FP16
     bool m_outputFP16 = false;  // Output tensor is FP16
     bool m_tensorAddressesBound = false;  // TRT10 static tensor addresses bound once
+    bool m_realtimeEnabled = true;        // see setRealtimeEnabled()
+    // True only between cudaStreamBeginCapture and cudaStreamEndCapture. Stage
+    // timing events must be recorded with cudaEventRecordExternal inside a
+    // capture, or they become plain capture-dependency nodes that never record a
+    // timestamp at replay - which is what made every stage read back as 0.
+    bool m_capturingGraph = false;
 
     // Cached graph parameters
     float m_cachedConfThreshold = 0.35f;
@@ -260,9 +299,24 @@ private:
 
     std::array<CallbackData, kMaxCallbacksInFlight> m_callbackDataSlots{};
     std::array<std::atomic<bool>, kMaxCallbacksInFlight> m_callbackSlotBusy{};
-    std::array<std::atomic<bool>, kMaxCallbacksInFlight> m_callbackSlotPending{};
     std::array<cudaEvent_t, kMaxCallbacksInFlight> m_callbackEvents{};
+    // Completion order. The worker used to scan the slot array and take the
+    // LOWEST pending index, which is submission order only by accident: with two
+    // frames in flight, A in slot 0 completing and its hook submitting C back
+    // into slot 0 made the worker wait on C before B, so the mouse saw A, C, B
+    // while the GPU computed A, B, C. This FIFO carries the actual submission
+    // order; one stream means waiting on the oldest event is also the cheapest.
+    std::array<int, kMaxCallbacksInFlight> m_pendingSlots{};
+    int m_pendingHead = 0;
+    int m_pendingCount = 0;
     std::atomic<int> m_callbacksInFlight{0};
+    // Counts a completion from the moment the worker dequeues it until after the
+    // post-completion hook has returned. quiesceCallbacks() waits on this as well
+    // as on m_callbacksInFlight: the in-flight counter is released BEFORE the
+    // hook runs, so it alone would let shutdown race the hook.
+    std::atomic<int> m_completionsRunning{0};
+    // Cleared by quiesceCallbacks(); checked by runInferenceWithCallback().
+    std::atomic<bool> m_acceptSubmissions{true};
     std::atomic<uint64_t> m_graphLaunchCount{0};
     std::atomic<uint64_t> m_standardLaunchCount{0};
     std::atomic<uint64_t> m_graphFallbackCount{0};
@@ -279,7 +333,17 @@ private:
     void callbackWorkerLoop();
     void destroyFullGraphs();              // Destroys every shape bucket
     void destroyBucket(GraphShapeBucket& bucket);
-    bool uploadRuntimeAimConfig(const AimConfig& aimConfig, bool force = false);
+    void releaseAllResources();            // Frees everything loadEngine allocated
+    // Validates that the engine matches the layout this pipeline hard-codes
+    // (1x3xHxW linear FP32/FP16 in, 1x(4+C)xN linear FP32/FP16 out) instead of
+    // assuming it and sizing buffers from the assumption.
+    bool validateEngineContract(const nvinfer1::Dims& inputDims,
+                                const nvinfer1::Dims& outputDims,
+                                nvinfer1::DataType inputType,
+                                nvinfer1::DataType outputType);
+    void recordStageEvent(cudaEvent_t evt);
+    bool uploadRuntimeAimConfig(const AimConfig& aimConfig, int stageSlot,
+                                bool force = false);
     // True only when non-shape params match the cached set.
     bool nonShapeParamsMatch(float confThreshold, int headClassId,
                              uint32_t allowedClassMask, const AimConfig& aimConfig,

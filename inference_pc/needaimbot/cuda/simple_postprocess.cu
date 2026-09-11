@@ -47,16 +47,37 @@ __device__ __forceinline__ Detection shuffleDownDetection(
     return out;
 }
 
+// Body-priority ranking. head and body are two DIFFERENT anchors on the same
+// enemy, and alternating between them adds variance the aim cannot filter out
+// (measured: mixed sigma 4.22 px vs body-only 4.00, head-only 3.80), so a body
+// candidate outranks any head candidate and head survives only as the fallback
+// for "just the head visible over cover".
+//
+// This used to be expressed by adding 1.0e12f to a head candidate's squared
+// distance. That silently destroyed the distance comparison it was riding on:
+// at 1e12 the float32 spacing is 65536, so a head 10 px away and a head 100 px
+// away (squared distances 100 and 10000) round to the SAME penalised score and
+// the "nearest" head was then decided by warp/reduction order. Ranking the two
+// keys separately keeps the distance exact at every magnitude.
+__device__ __forceinline__ bool distCandidateBetter(
+    int candIsHead, float candScore, int curIsHead, float curScore) {
+    if (candIsHead != curIsHead) return candIsHead < curIsHead;
+    return candScore < curScore;
+}
+
 __device__ __forceinline__ void warpReduceDistMin(
-    Detection& det, float& score, int& valid) {
+    Detection& det, float& score, int& isHead, int& valid) {
     constexpr unsigned kFullMask = 0xFFFFFFFFu;
     for (int offset = WARP_SIZE >> 1; offset > 0; offset >>= 1) {
         const float otherScore = __shfl_down_sync(kFullMask, score, offset);
         const int otherValid = __shfl_down_sync(kFullMask, valid, offset);
+        const int otherIsHead = __shfl_down_sync(kFullMask, isHead, offset);
         const Detection otherDet = shuffleDownDetection(det, kFullMask, offset);
-        if (otherValid && (!valid || otherScore < score)) {
+        if (otherValid &&
+            (!valid || distCandidateBetter(otherIsHead, otherScore, isHead, score))) {
             det = otherDet;
             score = otherScore;
+            isHead = otherIsHead;
             valid = 1;
         }
     }
@@ -125,6 +146,9 @@ __device__ __forceinline__ void writeEmptyInferenceResult(InferenceResult* resul
     result->movement.dx = 0;
     result->movement.dy = 0;
     result->hasTarget = 0;
+    // Nothing to send on a no-target frame, so the host must not treat this as an
+    // emitted move - the in-flight ring records a zero for the same frame.
+    result->outputEnabled = 0;
     result->targetX1 = 0;
     result->targetY1 = 0;
     result->targetX2 = 0;
@@ -275,6 +299,7 @@ __global__ void stage1DecodeAndSelectKernel(
     __shared__ Detection s_warpBestDistDet[MAX_SELECTION_WARPS];
     __shared__ Detection s_warpBestIouDet[MAX_SELECTION_WARPS];
     __shared__ float s_warpBestDist[MAX_SELECTION_WARPS];
+    __shared__ uint8_t s_warpBestIsHead[MAX_SELECTION_WARPS];
     __shared__ float s_warpBestIou[MAX_SELECTION_WARPS];
     __shared__ uint8_t s_warpHasDist[MAX_SELECTION_WARPS];
     __shared__ uint8_t s_warpHasIou[MAX_SELECTION_WARPS];
@@ -304,6 +329,7 @@ __global__ void stage1DecodeAndSelectKernel(
     Detection localBestByDist = {};
     localBestByDist.classId = -1;
     float localBestDist = FLT_MAX;
+    int localBestIsHead = 0;
     bool localHasDist = false;
 
     Detection localBestByIou = {};
@@ -332,20 +358,16 @@ __global__ void stage1DecodeAndSelectKernel(
             : (det.y1 + h * body_y_offset);
         const float dx = centerX - screen_center_x;
         const float dy = aimY - screen_center_y;
-        float effectiveDist = dx * dx + dy * dy;
-        // Body-priority: head and body are two DIFFERENT anchors on the same
-        // enemy, and alternating between them adds variance the aim cannot filter
-        // out (measured: mixed sigma 4.22 px vs body-only 4.00, head-only 3.80 -
-        // the mix is worse than either). Body is chosen whenever it exists, so the
-        // aim point is always produced the same way. Head stays a FALLBACK for the
-        // case that actually needs it: only the head visible over cover, where
-        // dropping the head class outright would lose the target entirely.
-        // Implemented as a huge distance penalty so any body outranks any head.
-        if (head_deprioritized != 0 && det.classId == head_class_id) {
-            effectiveDist += 1.0e12f;
-        }
-        if (effectiveDist < localBestDist) {
+        const float effectiveDist = dx * dx + dy * dy;
+        // Body-priority is a separate ranking key, not a distance penalty - see
+        // distCandidateBetter(). The distance below stays the true squared
+        // distance at every magnitude.
+        const int detIsHead =
+            (head_deprioritized != 0 && det.classId == head_class_id) ? 1 : 0;
+        if (!localHasDist ||
+            distCandidateBetter(detIsHead, effectiveDist, localBestIsHead, localBestDist)) {
             localBestDist = effectiveDist;
+            localBestIsHead = detIsHead;
             localBestByDist = det;
             localHasDist = true;
         }
@@ -363,13 +385,14 @@ __global__ void stage1DecodeAndSelectKernel(
 
     int hasDist = localHasDist ? 1 : 0;
     int hasIou = localHasIou ? 1 : 0;
-    warpReduceDistMin(localBestByDist, localBestDist, hasDist);
+    warpReduceDistMin(localBestByDist, localBestDist, localBestIsHead, hasDist);
     warpReduceIouMax(localBestByIou, localBestIou, hasIou);
 
     if (lane == 0) {
         s_warpBestDistDet[warp] = localBestByDist;
         s_warpBestIouDet[warp] = localBestByIou;
         s_warpBestDist[warp] = localBestDist;
+        s_warpBestIsHead[warp] = static_cast<uint8_t>(localBestIsHead ? 1u : 0u);
         s_warpBestIou[warp] = localBestIou;
         s_warpHasDist[warp] = hasDist ? 1u : 0u;
         s_warpHasIou[warp] = hasIou ? 1u : 0u;
@@ -383,15 +406,17 @@ __global__ void stage1DecodeAndSelectKernel(
     Detection bestByDist = {};
     bestByDist.classId = -1;
     float bestDist = FLT_MAX;
+    int bestIsHead = 0;
     int hasBestByDist = 0;
     if (lane < warpCount) {
         hasBestByDist = (s_warpHasDist[lane] != 0u) ? 1 : 0;
         if (hasBestByDist) {
             bestByDist = s_warpBestDistDet[lane];
             bestDist = s_warpBestDist[lane];
+            bestIsHead = (s_warpBestIsHead[lane] != 0u) ? 1 : 0;
         }
     }
-    warpReduceDistMin(bestByDist, bestDist, hasBestByDist);
+    warpReduceDistMin(bestByDist, bestDist, bestIsHead, hasBestByDist);
 
     Detection bestByIou = {};
     bestByIou.classId = -1;
@@ -465,6 +490,7 @@ __global__ void stage2FinalizeKernel(
     __shared__ Detection s_warpBestDistDet[MAX_SELECTION_WARPS];
     __shared__ Detection s_warpBestIouDet[MAX_SELECTION_WARPS];
     __shared__ float s_warpBestDist[MAX_SELECTION_WARPS];
+    __shared__ uint8_t s_warpBestIsHead[MAX_SELECTION_WARPS];
     __shared__ float s_warpBestIou[MAX_SELECTION_WARPS];
     __shared__ uint8_t s_warpHasDist[MAX_SELECTION_WARPS];
     __shared__ uint8_t s_warpHasIou[MAX_SELECTION_WARPS];
@@ -474,9 +500,15 @@ __global__ void stage2FinalizeKernel(
     const int warp = tid / WARP_SIZE;
     const int warpCount = (blockDim.x + WARP_SIZE - 1) / WARP_SIZE;
 
+    // Same body-priority key stage 1 ranked by. Recomputed here rather than
+    // carried through global memory: the candidate's classId already says it.
+    const int head_deprioritized =
+        (d_aim_config && d_aim_config->head_deprioritized != 0.0f) ? 1 : 0;
+
     Detection localBestByDist = {};
     localBestByDist.classId = -1;
     float localBestDist = FLT_MAX;
+    int localBestIsHead = 0;
     bool localHasDist = false;
 
     Detection localBestByIou = {};
@@ -487,8 +519,13 @@ __global__ void stage2FinalizeKernel(
     for (int i = tid; i < num_candidates; i += blockDim.x) {
         Detection candDist = d_stage1_best_dist[i];
         float distScore = d_stage1_dist_score[i];
-        if (candDist.classId >= 0 && distScore < localBestDist) {
+        const int candIsHead =
+            (head_deprioritized != 0 && candDist.classId == head_class_id) ? 1 : 0;
+        if (candDist.classId >= 0 &&
+            (!localHasDist ||
+             distCandidateBetter(candIsHead, distScore, localBestIsHead, localBestDist))) {
             localBestDist = distScore;
+            localBestIsHead = candIsHead;
             localBestByDist = candDist;
             localHasDist = true;
         }
@@ -504,13 +541,14 @@ __global__ void stage2FinalizeKernel(
 
     int hasDist = localHasDist ? 1 : 0;
     int hasIou = localHasIou ? 1 : 0;
-    warpReduceDistMin(localBestByDist, localBestDist, hasDist);
+    warpReduceDistMin(localBestByDist, localBestDist, localBestIsHead, hasDist);
     warpReduceIouMax(localBestByIou, localBestIou, hasIou);
 
     if (lane == 0) {
         s_warpBestDistDet[warp] = localBestByDist;
         s_warpBestIouDet[warp] = localBestByIou;
         s_warpBestDist[warp] = localBestDist;
+        s_warpBestIsHead[warp] = static_cast<uint8_t>(localBestIsHead ? 1u : 0u);
         s_warpBestIou[warp] = localBestIou;
         s_warpHasDist[warp] = hasDist ? 1u : 0u;
         s_warpHasIou[warp] = hasIou ? 1u : 0u;
@@ -524,15 +562,17 @@ __global__ void stage2FinalizeKernel(
     Detection bestByDist = {};
     bestByDist.classId = -1;
     float bestDist = FLT_MAX;
+    int bestIsHead = 0;
     int hasBestByDist = 0;
     if (lane < warpCount) {
         hasBestByDist = (s_warpHasDist[lane] != 0u) ? 1 : 0;
         if (hasBestByDist) {
             bestByDist = s_warpBestDistDet[lane];
             bestDist = s_warpBestDist[lane];
+            bestIsHead = (s_warpBestIsHead[lane] != 0u) ? 1 : 0;
         }
     }
-    warpReduceDistMin(bestByDist, bestDist, hasBestByDist);
+    warpReduceDistMin(bestByDist, bestDist, bestIsHead, hasBestByDist);
 
     Detection bestByIou = {};
     bestByIou.classId = -1;
@@ -621,11 +661,41 @@ __global__ void stage2FinalizeKernel(
         d_aim_state->vel_x = 0.0f;   // stale velocity must not lead the next target
         d_aim_state->vel_y = 0.0f;
         d_aim_state->prev_class = -1;
+        d_aim_state->h_ema = 0.0f;   // belongs to the lost box; reseed on re-acquire
+        // Emit nothing, and say so in the ring. The bridge path above already did
+        // this; the fully-lost path did not, so a long gap left the pre-gap moves
+        // frozen at ring lag 1 and the first frame of the NEXT target subtracted
+        // motion the measurement had long since absorbed.
+        pushInflight(d_aim_state, 0.0f, 0.0f);
         writeEmptyInferenceResult(d_inference_result);
         return;
     }
 
     d_aim_state->frames_since_seen = 0;
+
+    // A different enemy is a fresh acquire, even when a target was already being
+    // tracked. Without this, stickiness failing and the nearest-candidate rule
+    // landing on another target carried the previous track's One Euro state,
+    // velocity and height EMA straight onto the new box - the filters then spent
+    // their whole memory dragging the aim across the gap between two objects.
+    // The test is deliberately conservative: only a candidate with NO overlap and
+    // outside the distance window (score 0) counts as different, so a sticky score
+    // that merely fell under the threshold still continues the same track.
+    if (!stickyMatch && prevValid) {
+        const float continuity = computeStickinessScore(
+            chosenTarget, prevTarget,
+            d_aim_config ? d_aim_config->distance_stickiness_factor : 0.0f);
+        if (!(continuity > 0.0f)) {
+            d_aim_state->has_track = 0;
+            d_aim_state->vel_x = 0.0f;
+            d_aim_state->vel_y = 0.0f;
+            d_aim_state->prev_class = -1;
+            d_aim_state->h_ema = 0.0f;
+            d_aim_state->residual_x = 0.0f;
+            d_aim_state->residual_y = 0.0f;
+        }
+    }
+
     if (d_selected_target) {
         *d_selected_target = chosenTarget;
     }
@@ -683,6 +753,9 @@ __global__ void stage2FinalizeKernel(
     d_inference_result->movementScaleX = movement_scale_x;
     d_inference_result->movementScaleY = movement_scale_y;
     d_inference_result->targetClassId = chosenTarget.classId;
+    // Tell the host whether this move was actually emitted into the in-flight
+    // ring. It sends on exactly these frames, so the ring and the mouse agree.
+    d_inference_result->outputEnabled = (aim_config.aim_output_enabled != 0.0f) ? 1 : 0;
 }
 
 cudaError_t postprocessYoloFusedGpu(
