@@ -43,6 +43,7 @@
 #include "needaimbot/app/pipeline_metrics.hpp"
 #include "needaimbot/app/run_modes.hpp"
 #include "needaimbot/app/calib_logger.hpp"
+#include "needaimbot/app/perf_report.hpp"
 #include "needaimbot/app/runtime_diagnostics.hpp"
 #include "needaimbot/capture/debug_frame_dump.hpp"
 
@@ -508,58 +509,7 @@ int main(int argc, char* argv[]) {
               << std::endl;
 
     // Perf log: full per-window metrics go here (the screen stays user-facing).
-    // Relative paths resolve next to the config file; empty disables logging.
-    // The file is size-capped: at perfLogMaxBytes it is rotated to "<path>.1"
-    // (one backup) and reopened, so total disk use is bounded to ~2x the cap.
-    // Writes happen at most once per stat window (default 1s), not per frame,
-    // and flush is batched (every ~5s) to keep file I/O off the hot cadence.
-    std::ofstream perfLog;
-    std::filesystem::path perfLogPath;
-    size_t perfLogBytes = 0;
-    const size_t perfLogMaxBytes = cfg.perfLogMaxBytes > 0 ? static_cast<size_t>(cfg.perfLogMaxBytes) : 0;
-    auto perfLogHeader = [&]() {
-        std::ostringstream h;
-        h << "# session " << formatWallClock()
-          << " engine=" << cfg.enginePath
-          << " interval=" << perfStatsIntervalMs << "ms"
-          << " | fields: R/S/D=recv/submit/done per s, B=busyDrop F=submitFail"
-          << " C/U=udp recv/drop, Cr=credit I=inflight, Aw=acquire ms(avg/max)"
-          << " Awp=acquire p50/95/99 ms, Su=submit us(avg/max), Cb=callback ms(avg/max)"
-          << " Cbp=callback p50/95/99 ms,"
-          << " E2E=capture->complete ms(avg/max) E2Ep=p50/95/99 ms E2En=samples/window"
-          << " (needs NTP-synced clocks; excludes mouse), NF/IF/MD=timeouts/invalid/movedrop,"
-          << " G=graph/std/fallback, Stn=timed samples StDrop=untimeable (excluded),"
-          << " St=[h2d pre inf post d2h] us(avg/max)\n";
-        return h.str();
-    };
-    if (cfg.perfStatsEnabled && !cfg.perfLogPath.empty()) {
-        std::filesystem::path logPath(cfg.perfLogPath);
-        if (logPath.is_relative()) logPath = configPath.parent_path() / logPath;
-        perfLogPath = logPath.lexically_normal();
-        const auto openMode = std::ios::out |
-            (cfg.perfLogTruncateOnStart ? std::ios::trunc : std::ios::app);
-        perfLog.open(perfLogPath.string(), openMode);
-        if (perfLog.is_open()) {
-            std::error_code ec;
-            if (!cfg.perfLogTruncateOnStart) {
-                const auto existing = std::filesystem::file_size(perfLogPath, ec);
-                if (!ec) perfLogBytes = static_cast<size_t>(existing);
-            }
-            const std::string hdr = perfLogHeader();
-            perfLog << hdr;
-            perfLogBytes += hdr.size();
-            perfLog.flush();
-            std::cout << "[Simple] Perf log -> " << perfLogPath.string()
-                      << (perfLogMaxBytes ? " (rotate at " +
-                            std::to_string(perfLogMaxBytes / (1024 * 1024)) + "MiB, 1 backup)"
-                                          : std::string(" (no rotation)"))
-                      << std::endl;
-        } else {
-            std::cerr << "[Simple] WARN: could not open perf log at " << perfLogPath.string()
-                      << " (metrics will not be recorded)" << std::endl;
-        }
-    }
-    auto lastPerfFlush = std::chrono::steady_clock::now();
+    PerfLogWriter perfLog(cfg, configPath);
 
     std::cout << "\n[Simple] Running... Press Ctrl+C to exit" << std::endl;
     std::cout << "[Simple] Right-click (or Side2) = AIM" << std::endl;
@@ -1294,7 +1244,7 @@ int main(int argc, char* argv[]) {
 
             // Perf log: the full per-window metric set (avg/max + percentiles +
             // optional stage breakdown), one timestamped line per window.
-            if (cfg.perfStatsEnabled && perfLog.is_open()) {
+            if (cfg.perfStatsEnabled && perfLog.isOpen()) {
                 std::ostringstream logline;
                 logline << std::fixed << std::setprecision(1)
                         << formatWallClock()
@@ -1347,32 +1297,8 @@ int main(int argc, char* argv[]) {
                             << " d2h:" << avgUs(st.d2hUsTotal) << "/" << st.d2hUsMax << "us]";
                 }
                 const std::string line = logline.str();
-                perfLog << line << '\n';
-                perfLogBytes += line.size() + 1;
-
-                // Size-based rotation: at the cap, move the file to "<path>.1"
-                // (replacing any prior backup) and reopen fresh. Reopen happens
-                // at most once per cap worth of data (~hours at 1 line/s), so it
-                // never lands on the frame path.
-                if (perfLogMaxBytes && perfLogBytes >= perfLogMaxBytes) {
-                    perfLog.close();
-                    std::error_code ec;
-                    std::filesystem::rename(perfLogPath,
-                        std::filesystem::path(perfLogPath.string() + ".1"), ec);
-                    perfLog.open(perfLogPath.string(), std::ios::out | std::ios::trunc);
-                    perfLogBytes = 0;
-                    if (perfLog.is_open()) {
-                        const std::string hdr = perfLogHeader();
-                        perfLog << hdr;
-                        perfLogBytes += hdr.size();
-                    }
-                    perfLog.flush();
-                    lastPerfFlush = now;
-                } else if (now - lastPerfFlush >= std::chrono::seconds(5)) {
-                    // Batch flushes: 1 line/s doesn't need a syscall per write.
-                    perfLog.flush();
-                    lastPerfFlush = now;
-                }
+                perfLog.writeLine(line);
+                perfLog.maybeFlush(now);
             }
 
             const std::string statusLine = status.str();
@@ -1420,7 +1346,7 @@ int main(int argc, char* argv[]) {
                      " without unwinding so the completion thread cannot touch freed"
                      " state. ***" << std::endl;
         if (calibLogger) calibLogger->dump();
-        if (perfLog.is_open()) perfLog.flush();
+        perfLog.flush();
         std::cout.flush();
         std::cerr.flush();
         std::_Exit(0);
