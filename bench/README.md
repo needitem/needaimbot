@@ -37,8 +37,16 @@
 | `deadtime_closedloop.py` | 주입 없이 emit 만으로 데드타임 추정 — **기각**, 아래 참조 |
 | `w_robust.py` | 플랜트 데드타임을 흔들며 각 `w` 의 최악을 본다(감쇠 여유 선택용) |
 | `crop_ab/` | 리그 프레임(`frames.npy`)으로 크롭·앵커·관측식 비교. `grab_frames.py` 로 재수집 |
+| `fps231.py` | 실전 플레이 실측 레이트(231fps)로 물리 환산 재정정 |
+| `fps_retune.py` | 캡처 레이트 변경 시 컨트롤러 파라미터 물리 환산 + 재튜닝 |
+| `rig240.py` | 240Hz 모니터 교체 후 실측 데드타임(2.85프레임)으로 재튜닝 |
+| `sigma_law.py` | 최적 파라미터가 검출기 sigma 에 대해 따르는 법칙 탐색 |
+| `thumb_opt.py` | thumb(사이드버튼) 프로필 6개 값 최적화 |
+| `vel_baseline.py` | 속도 추정기 대안(N프레임 기준선 차분) 비교 평가 |
+| `gap_fix.py` | 검출 공백 시 prev_raw / in-flight 링 오차 분석 및 수정 |
 | `plot_bottleneck.py` | `perf_stats.log` 병목 시각화 |
 | `build_int8_engine.py` | INT8 엔진 빌드 (미사용 — 2026-08-01 기준 INT8 은 배제) |
+| `parity/compare.py` | CUDA vs Python 프레임별 패리티 검증 (run_parity.sh 에서 호출) |
 
 `frames.npy` 와 원시 calib CSV 는 커밋하지 않는다(gitignore). 큐레이션한 표본만
 `calib_rig_sample.csv` 로 남긴다. (`calib_rig_sample_v1.csv` 는 동일 내용 중복이어서 제거함.) 수집 모드는 `tools/measure.sh {deadtime|noise|off}` 로

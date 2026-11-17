@@ -1,254 +1,131 @@
-# NeedAimBot - 2PC Architecture
+# NeedAimBot — 2PC Architecture
 
-**NeedAimBot** is a high-performance, AI-powered aim assistant designed for low-latency object detection and precise mouse control. This branch implements a **dual-PC architecture** for maximum performance and security by separating game execution from AI inference.
-
-## Architecture Overview
-
-This 2PC setup divides responsibilities between two computers connected via network:
+AI 기반 조준 보조 시스템. TensorRT 추론과 하드웨어 마우스 제어(Makcu/Kmbox)를
+별도 Inference PC(Jetson/Linux)에서 실행하고, Game PC(Windows)는 화면 캡처와
+UDP 전송만 담당하는 **듀얼 PC 아키텍처**.
 
 ```
 ┌─────────────────┐                    ┌──────────────────┐
-│    Game PC      │    UDP Network     │  Inference PC    │
-│                 │  Screen Data       │                  │
-│ • Run Game      │ ─────────────────→ │ • AI Inference   │
-│ • Capture       │                    │ • Mouse Control  │
-│   Screen        │                    └────────┬─────────┘
-└────────┬────────┘                             │
-         │              Hardware                │
-         │         (Makcu/Kmbox USB)            │
+│    Game PC      │    UDP (frames)    │  Inference PC    │
+│  Windows        │ ─────────────────→ │  Linux / Jetson  │
+│  화면 캡처       │                    │  TensorRT 추론   │
+│  UDP 전송        │                    │  마우스 제어      │
+└────────┬────────┘                    └────────┬─────────┘
+         │          Makcu / Kmbox USB           │
          └──────────────←───────────────────────┘
-                    Direct Mouse Input
+                   Direct Mouse Input
 ```
 
-### Game PC
-*   Runs the game at maximum performance
-*   Captures screen region (256x256 default) using Desktop Duplication API
-*   Sends captured frames to Inference PC via UDP
-*   Lightweight processing only
+## 디렉터리 구조
 
-### Inference PC
-*   Receives screen data from Game PC
-*   Runs YOLO-based TensorRT inference
-*   Controls mouse via hardware (Makcu or Kmbox)
-*   Handles all AI computations
-
-## Key Advantages
-
-*   **Reduced Detection Risk**: Game PC only runs lightweight screen capture code with no AI or cheat-related components, significantly minimizing the risk of anti-cheat detection
-*   **Maximum Game Performance**: Game PC resources are fully dedicated to running the game
-*   **GPU Isolation**: AI inference doesn't compete with game rendering for GPU resources
-*   **Flexible Hardware**: Use dedicated inference hardware (Jetson, server GPU) separate from gaming setup
-
-## Prerequisites
-
-### Game PC
-*   **OS**: Windows 10 or 11 (64-bit)
-*   **Software**:
-    *   [Visual Studio 2022](https://visualstudio.microsoft.com/vs/) (C++ Desktop Development)
-    *   [CMake 3.20+](https://cmake.org/download/)
-*   **Network**: Gigabit Ethernet recommended for low latency
-
-### Inference PC
-*   **OS**: Windows 10 or 11 (64-bit) / Linux (Ubuntu 20.04+) / NVIDIA Jetson
-*   **GPU**: NVIDIA GeForce GTX 10-series or newer (RTX recommended)
-*   **Drivers**: [Latest NVIDIA Driver](https://www.nvidia.com/en-us/drivers/) with CUDA 13.1+ support
-*   **Software**:
-    *   [Visual Studio 2022](https://visualstudio.microsoft.com/vs/) (C++ Desktop Development, Windows only)
-    *   [CMake 3.20+](https://cmake.org/download/)
-    *   [CUDA Toolkit 13.1](https://developer.download.nvidia.com/compute/cuda/13.1.0/network_installers/cuda_13.1.0_windows_network.exe)
-    *   TensorRT 10.14.1.48 (included in `inference_pc/needaimbot/modules/`)
-*   **Hardware**: Makcu relay or Kmbox device connected to Game PC
-*   **Network**: Gigabit Ethernet recommended
-
-## Installation
-
-### 1. Clone the Repository
-```bash
-git clone --recursive -b 2pc https://github.com/needitem/needaimbot.git
-cd needaimbot
+```
+.
+├── game_pc/              # Windows 화면 캡처 + UDP 전송
+│   ├── CMakeLists.txt
+│   ├── config.ini
+│   └── src/main.cpp
+├── inference_pc/         # TensorRT 추론 + 마우스 제어
+│   ├── build.sh          # 빌드 스크립트 (Linux/Jetson)
+│   ├── CMakeLists.txt
+│   ├── simple_config.default.json
+│   ├── CONFIG_REFERENCE.md
+│   ├── needaimbot/       # 핵심 소스 (app, capture, cuda, mouse)
+│   ├── presets/          # 프리셋 설정
+│   └── third_party/
+├── bench/                # 조준 튜닝 하네스 (Python)
+├── tools/                # 운영 도구 (측정, 네트워크 튜닝, 프리셋)
+├── needaimbot.sh         # Inference PC 실행 스크립트 (Jetson 클럭 고정 포함)
+├── needaimbot_stable.sh  # 안정 버전 실행 스크립트
+└── CMakeLists.txt        # 루트 CMake (inference_pc 래퍼)
 ```
 
-### 2. Setup Hardware Mouse Device
-Connect one of the following to your Game PC:
-*   **Makcu Relay**: Arduino/ESP32-based USB relay
-    *   See: [HID_Mouse Repository](https://github.com/needitem/HID_Mouse) for firmware
-    *   Connect serially to Inference PC (direct or via USB-over-IP)
-*   **Kmbox Net**: Network-based hardware mouse emulator
-    *   Connect to same network as Inference PC
+## 빌드
 
-### 3. Build Game PC Application
-On your Game PC:
-```bash
-cd game_pc
-build_cmake.bat
+### Inference PC (Linux / Jetson)
 
-# Or manually:
-cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build --config Release
-```
-Executable will be in `game_pc/build/bin/Release/`.
+요구사항: CUDA Toolkit, TensorRT, CMake 3.20+
 
-### 4. Build Inference PC Application
-On your Inference PC:
-
-**Windows:**
 ```bash
 cd inference_pc
-build_cmake.bat
-
-# Or manually:
-cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build --config Release
+./build.sh
 ```
 
-**Linux/Jetson:**
+또는 수동:
+
 ```bash
 cd inference_pc
-mkdir build && cd build
+mkdir -p build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
 make -j$(nproc)
 ```
 
-Executable will be in `inference_pc/build/bin/Release/` (Windows) or `inference_pc/build/bin/` (Linux).
+### Game PC (Windows)
 
-### 5. Prepare AI Model
-*   Export your YOLO model to TensorRT `.engine` format using `inference_pc/engine_export/`
-*   Place the `.engine` file in `inference_pc/` directory
-*   Update `inference_pc/config.ini` with the model filename
+요구사항: Visual Studio 2022 (C++ Desktop Development), CMake 3.20+
 
-## Configuration
-
-### Game PC Configuration (`game_pc/config.ini`)
-
-```ini
-[Network]
-InferenceIP=192.168.1.100    # IP address of Inference PC
-SendPort=5007                 # UDP port to send frames
-
-[Capture]
-CaptureX=0                    # Top-left X coordinate of capture region
-CaptureY=0                    # Top-left Y coordinate of capture region
-CaptureWidth=256              # Capture width (must match model input)
-CaptureHeight=256             # Capture height (must match model input)
-
-[Performance]
-TargetFPS=90                  # Target capture/send FPS
-PacketPayloadBytes=1400       # Application payload per UDP packet
-```
-
-**PacketPayloadBytes and the MTU.** Keep this at or below 1428 on a standard
-1500-byte Ethernet path (1500 - 20 IPv4 - 8 UDP - 44 packet header). A larger
-value still works, but the IP layer then splits each chunk into several Ethernet
-fragments *below* the application's own chunking, and losing any one of them
-loses the whole chunk. Raise it only where a larger MTU (jumbo frames) is
-verified end to end; the sender warns at startup when the configured value would
-be fragmented.
-
-**Bandwidth.** The stream is raw RGB, so the wire cost is
-`width x height x 3 x fps`. At 320x320x244 that is about 600 Mbit/s of payload
-and roughly 640 Mbit/s on the wire, which fits gigabit Ethernet with headroom to
-spare. 640x640 at the same rate would be about 2.8 Gbit/s and does not fit -
-lower the capture size before lowering the rate.
-
-### Inference PC Configuration (`inference_pc/config.ini`)
-
-```ini
-[Inference]
-ModelPath=your_model.engine   # TensorRT engine file name
-Port=5007                      # UDP port to receive frames (must match Game PC)
-GamePcIP=                      # Optional: Set to Game PC IP for validation
-
-[Mouse]
-# Mouse control device selection
-InputMethod=MAKCU              # Options: MAKCU, KMBOX
-
-[MAKCU]
-# For Makcu relay device
-SerialPort=COM3                # Serial port or device path (/dev/ttyUSB0 on Linux)
-BaudRate=115200
-
-[KMBOX]
-# For Kmbox device
-IP=192.168.1.200               # Kmbox device IP
-Port=1408                      # Kmbox port
-UUID=YOUR_UUID                 # Kmbox UUID (from device)
-```
-
-## Usage
-
-### 1. Network Setup
-*   Connect both PCs to the same network (direct Ethernet cable or via switch/router)
-*   Ensure firewall allows UDP traffic on the configured port (default: 5007)
-*   Note the Inference PC's IP address
-
-### 2. Start Inference PC First
-On the Inference PC:
-```bash
-cd inference_pc
-./needaimbot.exe  # Windows
-./needaimbot      # Linux
-```
-The application will wait for incoming frames.
-
-### 3. Start Game PC
-On the Game PC:
 ```bash
 cd game_pc
-./game_pc.exe
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release
 ```
-*   Run as Administrator for screen capture permissions
-*   The application will start capturing and sending frames
 
-### 4. Controls (Game PC)
-*   `F2`: Exit application
-*   `F3`: Pause/Resume capture
-*   `F4`: Reload configuration
+## 실행
 
-## Network Performance Tips
-
-*   Use **gigabit Ethernet** for best latency (avoid Wi-Fi if possible)
-*   Use a **direct cable connection** between PCs for lowest latency
-*   Set both network adapters to maximum performance in Windows power settings
-*   Disable energy-saving features on network adapters
-*   Use `TargetFPS` to balance between latency and network load
-
-## Makcu USB Setup (Linux/Jetson)
-
-For reliable Makcu connection on Linux, you need to set up udev rules for USB reset permissions:
+Inference PC에서:
 
 ```bash
-# Create udev rule for Makcu USB access
-echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="1a86", MODE="0666"' | sudo tee /etc/udev/rules.d/99-makcu.rules
-sudo udevadm control --reload-rules
-sudo udevadm trigger
+./needaimbot.sh
 ```
 
-This allows the application to perform USB device resets automatically, eliminating the need to physically unplug/replug the device between runs.
+이 스크립트는 Jetson GPU/CPU 클럭을 최대로 고정한 뒤 추론 바이너리를 실행하고,
+종료 시(Ctrl-C) 클럭을 자동 복원합니다.
 
-## Troubleshooting
+Game PC에서는 빌드된 `game_pc.exe`를 관리자 권한으로 실행합니다.
 
-### Game PC Issues
-*   **"Failed to initialize capture"**: Run as Administrator
-*   **"Cannot connect to Inference PC"**: Check network configuration and firewall
-*   **Low FPS**: Reduce `CaptureWidth/Height` or `TargetFPS`
+## 설정
 
-### Inference PC Issues
-*   **"No GPU devices with CUDA support"**: Install CUDA Toolkit and update drivers
-*   **"Failed to load model"**: Verify model path and TensorRT version compatibility
-*   **"Serial port not found"**: Check Makcu connection and COM port in config
-*   **"Kmbox connection failed"**: Verify Kmbox IP, port, and UUID
+- **기본 설정**: `inference_pc/simple_config.default.json`을 복사하여 수정
+- **설정 항목 레퍼런스**: `inference_pc/CONFIG_REFERENCE.md`
+- **프리셋**: `inference_pc/presets/` 디렉터리
+- **Game PC 네트워크**: `game_pc/config.ini`
 
-### Network Issues
-*   **"Timeout receiving frames"**: Check network connection and firewall settings
-*   **High latency**: Switch to wired connection, check network bandwidth usage
-*   **Packet loss**: Reduce `TargetFPS` or check network quality
+## 도구 (tools/)
 
-## Advanced Features
+| 파일 | 용도 |
+|---|---|
+| `measure.sh` | 캘리브레이션 데이터 수집 모드 전환 |
+| `preset.sh` | 프리셋 적용 및 프리셋 README 자동 생성 |
+| `gen_preset_readme.py` | 프리셋 문서 생성 |
+| `net_tune.sh` | 네트워크 튜닝 (sysctl 등) |
+| `net_measure.sh` | 네트워크 지연시간 측정 |
+| `net_coalesce_probe.sh` | NIC coalesce 설정 탐색 |
+| `needaimbot-nettune.service` | 네트워크 튜닝 systemd 서비스 |
+| `install_hooks.sh` | Git pre-commit hook 설치 |
+| `latency_mode_benchmark.py` | 지연시간 모드 벤치마크 |
+| `makcu_square.py` | Makcu 사각파 테스트 |
+| `udp_capture_benchmark.cpp` | UDP 캡처 벤치마크 (C++) |
+| `udp_frame_load_test.py` | UDP 프레임 부하 테스트 |
 
-*   **Packet Fragmentation**: Automatically handles large frames exceeding UDP limits
-*   **Display Window**: Inference PC can show received frames and detection results (Linux/Jetson)
-*   **Cross-Platform**: Supports Windows Game PC → Linux/Jetson Inference PC
+## 벤치마크 (bench/)
 
-## Planned Features
+조준 컨트롤러 튜닝, 실측 데이터 분석, 패리티 테스트를 위한 Python 하네스.
+자세한 내용은 `bench/README.md` 참조.
 
-*   **Capture Card Support**: Frame data transmission via hardware capture card (HDMI/DisplayPort) for complete software isolation between Game PC and Inference PC
+## 하드웨어 마우스 설정
+
+### Makcu (Linux/Jetson)
+
+USB 리셋 권한을 위한 udev 규칙 설정:
+
+```bash
+echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="1a86", MODE="0666"' | sudo tee /etc/udev/rules.d/99-makcu.rules
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
+### Kmbox
+
+동일 네트워크에 연결 후 `simple_config.default.json`에서 IP/Port/UUID 설정.
+
+## License
+
+See [LICENSE](LICENSE).
