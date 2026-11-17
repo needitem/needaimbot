@@ -4,33 +4,24 @@
 // GPU Callback API for lowest latency (no cudaStreamSync wait)
 // Minimal CPU usage - frame receive on CPU, inference/postprocess/movement on GPU
 
-#include <iostream>
-#include <fstream>
-#include <atomic>
-#include <chrono>
-#include <csignal>
-#include <cstdlib>
-#include <ctime>
-#include <iomanip>
-#include <filesystem>
-#include <functional>
-#include <condition_variable>
+// --- Standard library (only what simple_main.cpp itself uses) ---
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <csignal>
 #include <cstdint>
+#include <filesystem>
+#include <functional>
+#include <iomanip>
+#include <iostream>
 #include <memory>
 #include <mutex>
-#include <optional>
 #include <sstream>
 #include <thread>
-#include <vector>
 
-#ifndef _WIN32
-#include <pthread.h>
-#include <sched.h>
-#include <unistd.h>
-#endif
-
+// --- Project headers ---
 #include "needaimbot/cuda/simple_inference.h"
 #include "needaimbot/cuda/simple_postprocess.h"
 #include "needaimbot/capture/udp_capture.h"
@@ -46,10 +37,6 @@
 #include "needaimbot/app/perf_report.hpp"
 #include "needaimbot/app/runtime_diagnostics.hpp"
 #include "needaimbot/capture/debug_frame_dump.hpp"
-
-// Third-party JSON parser (header-only)
-#include "third_party/nlohmann/json.hpp"
-using json = nlohmann::json;
 
 // Forward declaration
 struct CallbackContext;
