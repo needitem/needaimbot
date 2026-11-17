@@ -46,6 +46,23 @@
 | `gap_fix.py` | 검출 공백 시 prev_raw / in-flight 링 오차 분석 및 수정 |
 | `plot_bottleneck.py` | `perf_stats.log` 병목 시각화 |
 | `build_int8_engine.py` | INT8 엔진 빌드 (미사용 — 2026-08-01 기준 INT8 은 배제) |
+
+## TensorRT 엔진 벤치마크 (2026-11-17, Jetson AGX Orin)
+
+trtexec --iterations=200 --warmUp=2000 --avgRuns=10 --useSpinWait --noDataTransfers
+
+| Engine | Precision | Median (ms) | QPS | P99 (ms) |
+|--------|-----------|------------|-----|----------|
+| sunxds_0.8.2_256 | FP16 | 1.258 | 789.9 | — |
+| sunxds_0.8.2_320 | FP16 | 1.341 | 745.1 | — |
+| sunxds_0.8.3_320 | FP16 | 1.380 | 724.3 | — |
+| sunxds_0.8.3_320 | **INT8+FP16 (opt5)** | **1.255** | **796.3** | **1.261** |
+| sunxds_0.8.3_320 | INT8+FP16 (opt3) | 1.326 | 698.5 | 1.683 |
+| sunxds_0.8.2_640 | FP16 | 2.683 | 366.3 | — |
+| sunxds_0.7.8_320 | FP16 | 2.715 | 370.0 | — |
+
+INT8 엔진은 calibration data 없이 빌드됨 (trtexec 자동 범위 할당).
+실전 적용 시 대표 게임 프레임으로 calibration 후 정확도 검증 필요.
 | `parity/compare.py` | CUDA vs Python 프레임별 패리티 검증 (run_parity.sh 에서 호출) |
 
 `frames.npy` 와 원시 calib CSV 는 커밋하지 않는다(gitignore). 큐레이션한 표본만
