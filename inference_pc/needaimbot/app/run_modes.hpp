@@ -15,7 +15,7 @@
 #include "config.hpp"
 #include "runtime_options.hpp"
 #include "pipeline_metrics.hpp"  // g_running
-#include "../mouse/input_drivers/MakcuConnection.h"
+#include "../mouse/MakcuConnection.h"
 #include "../mouse/controller.h"   // button masks
 #include "../capture/udp_capture.h"
 
