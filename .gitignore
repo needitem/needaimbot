@@ -1,79 +1,66 @@
-# Prerequisites
+# ── C/C++ build artifacts ──
 *.d
-
-# Compiled Object files
 *.slo
 *.lo
 *.o
 *.obj
-
-# Precompiled Headers
 *.gch
 *.pch
-
-# Compiled Dynamic libraries
 *.so
 *.dylib
-
-# Fortran module files
 *.mod
 *.smod
-
-# Compiled Static libraries
 *.lai
 *.la
 *.a
-
-# Executables
 *.exe
 *.out
 *.app
 
-# modules
-needaimbot/screenshots/
+# ── Python ──
+__pycache__/
+
+# ── IDE / editor ──
 .vs
 .vscode
-needaimbot/x64
-x64
-packages
-build/
-needaimbot/cudnn64_9.dll
-needaimbot/opencv_world4100.dll
-needaimbot/imgui.ini
 
-# Claude Code
+# ── Claude Code ──
 .claude/
 nul
 .serena/
 
-build_obf_headless/
-needaimbot_obf/
-inference_pc/needaimbot/modules/glfw/docs/
-inference_pc/engine_export/imgui/examples/
+# ── Visual Studio / MSBuild ──
+x64
+packages
+build/
+
+# ── ML model files (local only) ──
 *.engine
-inference_pc/build_linux/
 *.onnx
 *.pt
-debug_frames/
-inference_pc/debug/
-test_*.py
-inference_pc/test_*
 
-# Local TensorRT engines + build logs
+# ── inference_pc build dirs & runtime output ──
+inference_pc/build*/
+inference_pc/build*/bin/Release/*.log
+inference_pc/build*/bin/Release/simple_config.json.*
+inference_pc/debug/
+inference_pc/measure/
+
+# ── inference_pc calibration captures (raw session data) ──
+calib.csv
+inference_pc/calib.csv
+inference_pc/calib_*.csv
+
+# ── Runtime perf logs ──
+perf_stats*.log
+
+# ── TensorRT engines + bench logs ──
 engines/
 bench/*.log
 
-# Local stable build artifacts (binary + config)
+# ── inference_pc stable build ──
 inference_pc/build_stable/
 
-# Runtime calibration capture (perf_stats output)
-calib.csv
-inference_pc/calib.csv
-
-# 리그 캘리브레이션 캡처: 세션마다 새로 뜨는 원시 측정 데이터.
-# 큐레이션한 표본은 bench/calib_rig_sample*.csv 로 따로 둔다.
-inference_pc/calib_*.csv
-# tools/measure.sh 가 쓰는 리그 측정 출력 (calib CSV + perf 로그)
-inference_pc/measure/
-inference_pc/build*/bin/Release/*.log
-inference_pc/build*/bin/Release/simple_config.json.*
+# ── Parity test outputs ──
+/bench/parity/parity_test
+/bench/parity/cuda_*.txt

@@ -41,7 +41,7 @@
 | `build_int8_engine.py` | INT8 엔진 빌드 (미사용 — 2026-08-01 기준 INT8 은 배제) |
 
 `frames.npy` 와 원시 calib CSV 는 커밋하지 않는다(gitignore). 큐레이션한 표본만
-`calib_rig_sample*.csv` 로 남긴다. 수집 모드는 `tools/measure.sh {deadtime|noise|off}` 로
+`calib_rig_sample.csv` 로 남긴다. (`calib_rig_sample_v1.csv` 는 동일 내용 중복이어서 제거함.) 수집 모드는 `tools/measure.sh {deadtime|noise|off}` 로
 켜고 끈다 — 손으로 진단 키를 토글하다 두 번 되돌리는 걸 놓쳤다.
 
 ## 하네스를 쓸 때 걸린 함정 (전부 실제로 겪음)
