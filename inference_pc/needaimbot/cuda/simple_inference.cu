@@ -1458,7 +1458,11 @@ bool SimpleInference::captureFullGraphForShape(int sourceWidth, int sourceHeight
             }
         }
 
+#if CUDART_VERSION >= 12000
+        err = cudaGraphInstantiateWithFlags(&bucket.graphExecs[slotIdx], bucket.graphs[slotIdx], 0);
+#else
         err = cudaGraphInstantiate(&bucket.graphExecs[slotIdx], bucket.graphs[slotIdx], nullptr, nullptr, 0);
+#endif
         if (err != cudaSuccess) {
             std::cerr << "[SimpleInference] Failed to instantiate full graph for slot "
                       << slot << ": " << cudaGetErrorString(err) << std::endl;

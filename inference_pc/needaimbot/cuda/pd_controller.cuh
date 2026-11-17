@@ -12,9 +12,14 @@ namespace gpa {
 
 // alpha = 1 / (1 + tau/Te), tau = 1 / (2*pi*cutoff).
 __device__ __forceinline__ float oneEuroAlpha(float cutoff) {
-    const float tau = 1.0f / (2.0f * 3.14159265f * fmaxf(cutoff, 1e-4f));
-    return 1.0f / (1.0f + tau);
+    const float w = 2.0f * 3.14159265f * fmaxf(cutoff, 1e-4f);
+    return w / (w + 1.0f);
 }
+
+// Precomputed derivative alpha for kOneEuroDCutoff = 1.0:
+// oneEuroAlpha(1.0) = 2*pi / (2*pi + 1) ≈ 0.8626802...
+__device__ constexpr float kDerivAlpha =
+    (2.0f * 3.14159265f) / (2.0f * 3.14159265f + 1.0f);
 
 // Cap a per-frame move vector to maxStep px, preserving direction. maxStep <= 0
 // disables. Applied to the P+D movement path so the slew bound is uniform and a
@@ -200,7 +205,7 @@ __device__ __forceinline__ void computeAimMovement(
         const float in_x = raw_center_x, in_y = raw_center_y;
         const float carry_x = aim_state->filt_x, carry_y = aim_state->filt_y;
         if (aim_state->has_track) {
-            const float ad = oneEuroAlpha(kOneEuroDCutoff);
+            const float ad = kDerivAlpha;
             const float de_x = in_x - aim_state->filt_x;
             aim_state->dfilt_x = ad * de_x + (1.0f - ad) * aim_state->dfilt_x;
             const float cutoff_x =
