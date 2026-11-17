@@ -88,6 +88,8 @@ target_compile_options(simple_inference PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:-fomit-frame-pointer>
     $<$<COMPILE_LANGUAGE:CXX>:-fno-math-errno>
     $<$<COMPILE_LANGUAGE:CXX>:-fno-trapping-math>
+    $<$<COMPILE_LANGUAGE:CXX>:-ffinite-math-only>
+    $<$<COMPILE_LANGUAGE:CXX>:-fno-signed-zeros>
     $<$<COMPILE_LANGUAGE:CXX>:-ffunction-sections>
     $<$<COMPILE_LANGUAGE:CXX>:-fdata-sections>
 )
@@ -98,9 +100,11 @@ if(SIMPLE_ENABLE_NATIVE_OPT)
     )
 endif()
 target_compile_options(simple_inference PRIVATE
-    $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wall,-O3,-fomit-frame-pointer,-fno-math-errno,-fno-trapping-math,-ffunction-sections,-fdata-sections>
+    $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wall,-O3,-fomit-frame-pointer,-fno-math-errno,-fno-trapping-math,-ffinite-math-only,-fno-signed-zeros,-ffunction-sections,-fdata-sections>
     $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-O3,-dlcm=ca>
     $<$<COMPILE_LANGUAGE:CUDA>:--extra-device-vectorization>
+    $<$<COMPILE_LANGUAGE:CUDA>:--restrict>
+    $<$<COMPILE_LANGUAGE:CUDA>:--fmad=true>
     $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>
 )
 target_link_options(simple_inference PRIVATE
