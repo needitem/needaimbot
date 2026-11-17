@@ -135,6 +135,16 @@ struct Settings {
 
 class MouseController {
 public:
+    // Ensure the sender thread is joined on destruction. Without this, a
+    // return-on-error path that skips stop() destroys a joinable std::thread,
+    // which calls std::terminate.
+    ~MouseController() { stop(); }
+
+    // Non-copyable, non-movable (owns a thread).
+    MouseController() = default;
+    MouseController(const MouseController&) = delete;
+    MouseController& operator=(const MouseController&) = delete;
+
     void configure(MakcuConnection& makcu, const Settings& settings) {
         makcu_ = &makcu;
         settings_ = settings;
