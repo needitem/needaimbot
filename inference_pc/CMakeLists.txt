@@ -21,8 +21,8 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # Build options
-option(SIMPLE_ENABLE_NATIVE_OPT "Enable -march=native for host compiler" OFF)
-option(SIMPLE_ENABLE_LTO "Enable interprocedural optimization (IPO/LTO)" OFF)
+option(SIMPLE_ENABLE_NATIVE_OPT "Enable -march=native for host compiler" ON)
+option(SIMPLE_ENABLE_LTO "Enable interprocedural optimization (IPO/LTO)" ON)
 
 # =============================================================================
 # Path Configuration (Linux/Jetson)
@@ -58,11 +58,10 @@ add_executable(simple_inference
 )
 
 target_include_directories(simple_inference PRIVATE
-    ${CMAKE_SOURCE_DIR}/needaimbot
-    ${CMAKE_SOURCE_DIR}/needaimbot/capture
-    ${CMAKE_SOURCE_DIR}/needaimbot/cuda
-    ${CMAKE_SOURCE_DIR}/needaimbot/mouse/input_drivers
-    ${CMAKE_SOURCE_DIR}/needaimbot/modules
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/needaimbot/cuda
+    ${CMAKE_CURRENT_SOURCE_DIR}/needaimbot/mouse/input_drivers
+    ${CMAKE_CURRENT_SOURCE_DIR}/needaimbot/modules
     ${CUDA_PATH}/include
     ${TENSORRT_INCLUDE_DIR}
 )
@@ -109,7 +108,7 @@ target_link_options(simple_inference PRIVATE
 )
 
 set_target_properties(simple_inference PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/Release"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin/Release"
 )
 
 # =============================================================================
@@ -121,10 +120,10 @@ set_target_properties(simple_inference PROPERTIES
 # build/ was wiped. Incremental builds leave an existing (possibly runtime-
 # tuned) simple_config.json untouched. To change the default, edit
 # simple_config.default.json and commit it.
-set(_simple_config_dest "${CMAKE_BINARY_DIR}/bin/Release/simple_config.json")
+set(_simple_config_dest "${CMAKE_CURRENT_BINARY_DIR}/bin/Release/simple_config.json")
 if(NOT EXISTS "${_simple_config_dest}")
     configure_file(
-        "${CMAKE_SOURCE_DIR}/simple_config.default.json"
+        "${CMAKE_CURRENT_SOURCE_DIR}/simple_config.default.json"
         "${_simple_config_dest}"
         COPYONLY
     )

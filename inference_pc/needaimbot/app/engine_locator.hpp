@@ -56,8 +56,8 @@ inline std::optional<std::filesystem::path> findRepoRootFrom(std::filesystem::pa
     }
 
     for (auto current = start; !current.empty(); current = current.parent_path()) {
-        if (fileExists(current / "inference_pc" / "simple_main.cpp") &&
-            fileExists(current / "inference_pc" / "CMakeLists.txt")) {
+        if (fileExists(current / "inference_pc" / "CMakeLists.txt") &&
+            fileExists(current / "CMakeLists.txt")) {
             return current;
         }
         if (current == current.root_path()) break;
