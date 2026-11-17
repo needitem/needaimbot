@@ -33,11 +33,15 @@
 
 // RGB Preprocessing Kernels (RGB -> CHW normalized)
 
-// Same resolution, no resize -> FP16
+// Same resolution, no resize -> FP16 (vectorized: 4 pixels per thread)
 // src_slot is a device cell holding the actual source pointer; reading it here
 // (instead of taking the pointer by value) lets a captured CUDA graph keep a
 // stable kernel argument while the source buffer varies per frame (Tegra
 // zero-copy: the mapped receive buffer; dGPU: the constant H2D staging buffer).
+//
+// Each thread processes 4 consecutive pixels (12 bytes = 3 x uint32_t reads).
+// Writes use __half2 to double write throughput on each CHW output plane.
+// Requires width divisible by 4 (true for 256, 320, 640).
 __global__ void preprocessKernelFP16(
     const uint8_t* const* __restrict__ src_slot,
     __half* __restrict__ dst,
@@ -45,20 +49,52 @@ __global__ void preprocessKernelFP16(
     float scale_factor
 ) {
     const uint8_t* __restrict__ src = *src_slot;
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    // Each thread handles 4 consecutive pixels in x
+    int x4 = (blockIdx.x * blockDim.x + threadIdx.x) * 4;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
-    if (x >= width || y >= height) return;
+    if (x4 >= width || y >= height) return;
 
-    int src_idx = (y * width + x) * 3;
-    int hw_size = width * height;
-    int dst_idx = y * width + x;
+    const int hw_size = width * height;
+    const int dst_base = y * width + x4;
 
-    dst[dst_idx] = __float2half(src[src_idx] * scale_factor);
-    dst[dst_idx + hw_size] = __float2half(src[src_idx + 1] * scale_factor);
-    dst[dst_idx + 2 * hw_size] = __float2half(src[src_idx + 2] * scale_factor);
+    // Load 12 bytes (4 RGB pixels) as 3 x uint32_t for coalesced reads.
+    // 4 pixels x 3 bytes = 12 bytes: w0=[P0.R P0.G P0.B P1.R],
+    // w1=[P1.G P1.B P2.R P2.G], w2=[P2.B P3.R P3.G P3.B]
+    const int src_byte = (y * width + x4) * 3;
+    const uint32_t w0 = *reinterpret_cast<const uint32_t*>(src + src_byte);
+    const uint32_t w1 = *reinterpret_cast<const uint32_t*>(src + src_byte + 4);
+    const uint32_t w2 = *reinterpret_cast<const uint32_t*>(src + src_byte + 8);
+
+    // Extract individual bytes and convert
+    const float r0 = (float)(w0 & 0xFFu) * scale_factor;
+    const float g0 = (float)((w0 >> 8) & 0xFFu) * scale_factor;
+    const float b0 = (float)((w0 >> 16) & 0xFFu) * scale_factor;
+    const float r1 = (float)((w0 >> 24) & 0xFFu) * scale_factor;
+    const float g1 = (float)(w1 & 0xFFu) * scale_factor;
+    const float b1 = (float)((w1 >> 8) & 0xFFu) * scale_factor;
+    const float r2 = (float)((w1 >> 16) & 0xFFu) * scale_factor;
+    const float g2 = (float)((w1 >> 24) & 0xFFu) * scale_factor;
+    const float b2 = (float)(w2 & 0xFFu) * scale_factor;
+    const float r3 = (float)((w2 >> 8) & 0xFFu) * scale_factor;
+    const float g3 = (float)((w2 >> 16) & 0xFFu) * scale_factor;
+    const float b3 = (float)((w2 >> 24) & 0xFFu) * scale_factor;
+
+    // Write as __half2 pairs (32-bit writes) to each CHW plane
+    __half2* dst2_r = reinterpret_cast<__half2*>(dst + dst_base);
+    __half2* dst2_g = reinterpret_cast<__half2*>(dst + dst_base + hw_size);
+    __half2* dst2_b = reinterpret_cast<__half2*>(dst + dst_base + 2 * hw_size);
+
+    dst2_r[0] = __halves2half2(__float2half(r0), __float2half(r1));
+    dst2_r[1] = __halves2half2(__float2half(r2), __float2half(r3));
+    dst2_g[0] = __halves2half2(__float2half(g0), __float2half(g1));
+    dst2_g[1] = __halves2half2(__float2half(g2), __float2half(g3));
+    dst2_b[0] = __halves2half2(__float2half(b0), __float2half(b1));
+    dst2_b[1] = __halves2half2(__float2half(b2), __float2half(b3));
 }
 
-// Same resolution, no resize -> FP32
+// Same resolution, no resize -> FP32 (vectorized: 4 pixels per thread)
+// Each thread processes 4 consecutive pixels (12 bytes = 3 x uint32_t reads).
+// Requires width divisible by 4 (true for 256, 320, 640).
 __global__ void preprocessKernel(
     const uint8_t* const* __restrict__ src_slot,
     float* __restrict__ dst,
@@ -66,17 +102,36 @@ __global__ void preprocessKernel(
     float scale_factor
 ) {
     const uint8_t* __restrict__ src = *src_slot;
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int x4 = (blockIdx.x * blockDim.x + threadIdx.x) * 4;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
-    if (x >= width || y >= height) return;
+    if (x4 >= width || y >= height) return;
 
-    int src_idx = (y * width + x) * 3;
-    int hw_size = width * height;
-    int dst_idx = y * width + x;
+    const int hw_size = width * height;
+    const int dst_base = y * width + x4;
 
-    dst[dst_idx] = src[src_idx] * scale_factor;
-    dst[dst_idx + hw_size] = src[src_idx + 1] * scale_factor;
-    dst[dst_idx + 2 * hw_size] = src[src_idx + 2] * scale_factor;
+    // Load 12 bytes (4 RGB pixels) as 3 x uint32_t
+    const int src_byte = (y * width + x4) * 3;
+    const uint32_t w0 = *reinterpret_cast<const uint32_t*>(src + src_byte);
+    const uint32_t w1 = *reinterpret_cast<const uint32_t*>(src + src_byte + 4);
+    const uint32_t w2 = *reinterpret_cast<const uint32_t*>(src + src_byte + 8);
+
+    // R plane: pixels 0-3
+    dst[dst_base]     = (float)(w0 & 0xFFu) * scale_factor;
+    dst[dst_base + 1] = (float)((w0 >> 24) & 0xFFu) * scale_factor;
+    dst[dst_base + 2] = (float)((w1 >> 16) & 0xFFu) * scale_factor;
+    dst[dst_base + 3] = (float)((w2 >> 8) & 0xFFu) * scale_factor;
+
+    // G plane: pixels 0-3
+    dst[dst_base + hw_size]     = (float)((w0 >> 8) & 0xFFu) * scale_factor;
+    dst[dst_base + hw_size + 1] = (float)(w1 & 0xFFu) * scale_factor;
+    dst[dst_base + hw_size + 2] = (float)((w1 >> 24) & 0xFFu) * scale_factor;
+    dst[dst_base + hw_size + 3] = (float)((w2 >> 16) & 0xFFu) * scale_factor;
+
+    // B plane: pixels 0-3
+    dst[dst_base + 2 * hw_size]     = (float)((w0 >> 16) & 0xFFu) * scale_factor;
+    dst[dst_base + 2 * hw_size + 1] = (float)((w1 >> 8) & 0xFFu) * scale_factor;
+    dst[dst_base + 2 * hw_size + 2] = (float)(w2 & 0xFFu) * scale_factor;
+    dst[dst_base + 2 * hw_size + 3] = (float)((w2 >> 24) & 0xFFu) * scale_factor;
 }
 
 // Bilinear Resize + Preprocessing Kernels (fused for efficiency)
@@ -191,15 +246,16 @@ extern "C" cudaError_t cuda_preprocessing(
     bool use_fp16,
     cudaStream_t stream
 ) {
-    dim3 block(32, 8);
-    dim3 grid((target_width + block.x - 1) / block.x,
-              (target_height + block.y - 1) / block.y);
-
     const float norm_factor = 1.0f / 255.0f;
 
     bool need_resize = (src_width != target_width) || (src_height != target_height);
 
     if (need_resize) {
+        // Resize kernels: 1 thread per output pixel (unchanged)
+        dim3 block(32, 8);
+        dim3 grid((target_width + block.x - 1) / block.x,
+                  (target_height + block.y - 1) / block.y);
+
         float scale_x = (float)(src_width - 1) / (float)(target_width - 1);
         float scale_y = (float)(src_height - 1) / (float)(target_height - 1);
 
@@ -221,6 +277,12 @@ extern "C" cudaError_t cuda_preprocessing(
             );
         }
     } else {
+        // Vectorized kernels: each thread processes 4 pixels, so grid.x
+        // covers width/4. Block stays 32x8 = 256 threads.
+        dim3 block(32, 8);
+        dim3 grid(((target_width / 4) + block.x - 1) / block.x,
+                  (target_height + block.y - 1) / block.y);
+
         if (use_fp16) {
             preprocessKernelFP16<<<grid, block, 0, stream>>>(
                 d_src_slot,
