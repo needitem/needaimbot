@@ -34,7 +34,7 @@
 #include "needaimbot/cuda/simple_inference.h"
 #include "needaimbot/cuda/simple_postprocess.h"
 #include "needaimbot/capture/udp_capture.h"
-#include "needaimbot/mouse/input_drivers/MakcuConnection.h"
+#include "needaimbot/mouse/MakcuConnection.h"
 #include "needaimbot/mouse/controller.h"
 #include "needaimbot/mouse/pd_controller.hpp"
 #include "needaimbot/app/engine_locator.hpp"
@@ -43,7 +43,7 @@
 #include "needaimbot/capture/debug_frame_dump.hpp"
 
 // Third-party JSON parser (header-only)
-#include "needaimbot/modules/json.hpp"
+#include "third_party/nlohmann/json.hpp"
 using json = nlohmann::json;
 
 using Clock = std::chrono::steady_clock;

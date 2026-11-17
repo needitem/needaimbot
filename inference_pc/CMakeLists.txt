@@ -54,14 +54,14 @@ add_executable(simple_inference
     needaimbot/cuda/simple_inference.cu
     needaimbot/cuda/simple_postprocess.cu
     needaimbot/capture/udp_capture.cpp
-    needaimbot/mouse/input_drivers/MakcuConnection.cpp
+    needaimbot/mouse/MakcuConnection.cpp
 )
 
 target_include_directories(simple_inference PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/needaimbot/cuda
-    ${CMAKE_CURRENT_SOURCE_DIR}/needaimbot/mouse/input_drivers
-    ${CMAKE_CURRENT_SOURCE_DIR}/needaimbot/modules
+    ${CMAKE_CURRENT_SOURCE_DIR}/needaimbot/mouse
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nlohmann
     ${CUDA_PATH}/include
     ${TENSORRT_INCLUDE_DIR}
 )
