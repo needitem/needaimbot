@@ -475,6 +475,10 @@ __device__ __forceinline__ void computeAimMovement(
             aim_state->vel_x = 0.0f;
             aim_state->vel_y = 0.0f;
             aim_state->med_initialized = 0;
+            aim_state->accel_x = 0.0f;
+            aim_state->accel_y = 0.0f;
+            aim_state->prev_vel_x = 0.0f;
+            aim_state->prev_vel_y = 0.0f;
             if (aim_config.kalman_enabled != 0.0f) {
                 // Seed the Kalman filter on fresh acquire.
                 kalmanVelocityUpdate(raw_center_x, raw_center_y,
@@ -482,6 +486,21 @@ __device__ __forceinline__ void computeAimMovement(
                                      /*fresh=*/true, /*skip_meas=*/false);
             }
         }
+
+        // Acceleration estimation: EMA of velocity change per frame.
+        if (aim_config.accel_ema > 0.0f) {
+            const float a_ema = fminf(fmaxf(aim_config.accel_ema, 0.0f), 1.0f);
+            const float dax = aim_state->vel_x - aim_state->prev_vel_x;
+            const float day = aim_state->vel_y - aim_state->prev_vel_y;
+            const float maxAccel = 15.0f;
+            aim_state->accel_x = (1.0f - a_ema) * aim_state->accel_x
+                + a_ema * fminf(fmaxf(dax, -maxAccel), maxAccel);
+            aim_state->accel_y = (1.0f - a_ema) * aim_state->accel_y
+                + a_ema * fminf(fmaxf(day, -maxAccel), maxAccel);
+        }
+        aim_state->prev_vel_x = aim_state->vel_x;
+        aim_state->prev_vel_y = aim_state->vel_y;
+
         aim_state->prev_raw_x = med_x;
         aim_state->prev_raw_y = med_y;
     }
@@ -520,8 +539,11 @@ __device__ __forceinline__ void computeAimMovement(
     // (a position jump's one-frame velocity must never be extrapolated).
     if (aim_config.predict_frames > 0.0f) {
         const float g = leadGate(aim_config, aim_state, error_x, error_y);
-        error_x += aim_config.predict_frames * g * aim_state->vel_x;
-        error_y += aim_config.predict_frames * g * aim_state->vel_y;
+        const float t = aim_config.predict_frames;
+        error_x += g * (t * aim_state->vel_x
+                         + 0.5f * t * t * aim_state->accel_x);
+        error_y += g * (t * aim_state->vel_y
+                         + 0.5f * t * t * aim_state->accel_y);
     }
 
     // Derivative (damping) term: react to how fast the error is shrinking and

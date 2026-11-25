@@ -37,6 +37,13 @@ struct AimState {
     float prev_raw_y = 0.0f;
     float vel_x = 0.0f;
     float vel_y = 0.0f;
+    // Acceleration estimate (EMA of velocity change per frame). Feeds the
+    // quadratic term of the target predictor so direction changes are
+    // tracked, not just steady motion. Reset on fresh acquire.
+    float accel_x = 0.0f;
+    float accel_y = 0.0f;
+    float prev_vel_x = 0.0f;
+    float prev_vel_y = 0.0f;
     // Class the aim point came from last frame (-1 = none). head and body are two
     // DIFFERENT anchors on the same enemy, so when selection flips between them
     // the measured centre jumps by the anchor offset - an artifact, not target
@@ -200,6 +207,12 @@ struct AimConfig {
     // act as a tuned lead rather than a strict predictor - that is intended, the
     // gates keep it safe.
     float predict_frames = 0.0f;
+
+    // EMA weight for the acceleration estimate (0..1). Lower = smoother
+    // but slower to react to direction changes. 0 = disable acceleration
+    // prediction (pure constant-velocity). The quadratic term is
+    // 0.5 * accel * predict_frames^2, gated by the same leadGate.
+    float accel_ema = 0.15f;
 
     // REMOVED: ego-free-frame filtering. Lifting the measurement into an ego-free
     // frame before the One Euro update cut step overshoot -68% but made

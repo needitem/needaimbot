@@ -62,6 +62,9 @@ public:
     // Symmetric dead-time comp: extrapolate the TARGET forward over the dead time
     // (inflight_comp only removed OUR motion). 0 = off.
     float predict_frames = 5.47f;
+    // Acceleration-aware prediction EMA weight (0..1). 0 = disable (pure
+    // constant-velocity). See simple_postprocess.h accel_ema for details.
+    float accel_ema = 0.15f;
     // Kalman velocity estimator (alternative to EMA). 0 = off (EMA via ff_v_ema),
     // nonzero = use a 4-state constant-velocity Kalman filter for the velocity
     // that feeds the lead terms. See simple_postprocess.h for the full description.
@@ -149,6 +152,10 @@ public:
             const float v = j["predict_frames"];
             predict_frames = std::clamp(v, 0.0f, 6.0f);
         }
+        if (j.contains("accel_ema")) {
+            const float v = j["accel_ema"];
+            accel_ema = std::clamp(v, 0.0f, 1.0f);
+        }
         if (j.contains("kalman_enabled")) {
             const bool v = j["kalman_enabled"];
             kalman_enabled = v ? 1.0f : 0.0f;
@@ -221,6 +228,7 @@ public:
         j["lead_vgate"] = lead_vgate;
         j["lead_err_gate"] = lead_err_gate;
         j["predict_frames"] = predict_frames;
+        j["accel_ema"] = accel_ema;
         j["kalman_enabled"] = (kalman_enabled != 0.0f);
         j["kalman_process_noise"] = kalman_process_noise;
         j["kalman_measure_noise"] = kalman_measure_noise;
@@ -313,6 +321,7 @@ private:
         aim.lead_vgate = lead_vgate;
         aim.lead_err_gate = lead_err_gate;
         aim.predict_frames = predict_frames;
+        aim.accel_ema = accel_ema;
         aim.kalman_enabled = kalman_enabled;
         aim.kalman_process_noise = kalman_process_noise;
         aim.kalman_measure_noise = kalman_measure_noise;
