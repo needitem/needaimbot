@@ -89,6 +89,13 @@ struct AimState {
                        0.0f, 0.0f, 0.0f, 0.0f,
                        0.0f, 0.0f, 0.0f, 0.0f};
     int   kf_initialized = 0;
+
+    // 3-frame median prefilter history for raw center. Stores the two
+    // preceding raw centers so median(prev2, prev1, current) can reject
+    // a single-frame detector outlier without adding group delay.
+    float med_raw_x[2] = {0.0f, 0.0f};  // [0]=t-2, [1]=t-1
+    float med_raw_y[2] = {0.0f, 0.0f};
+    int   med_initialized = 0;           // 0 until 2 samples collected
 };
 
 // Nonlinear P controller configuration.

@@ -115,6 +115,36 @@ __device__ __forceinline__ float leadGate(const AimConfig& cfg, const AimState* 
     return g;
 }
 
+// Branchless median of three floats (uses fminf/fmaxf only).
+__device__ __forceinline__ float median3(float a, float b, float c) {
+    return fmaxf(fminf(a, b), fminf(fmaxf(a, b), c));
+}
+
+// Apply 3-frame median to raw center. Returns the filtered value and
+// shifts the history. On the first two frames (med_initialized < 2),
+// passes through unchanged to avoid startup artifacts.
+__device__ __forceinline__ void applyMedianPrefilter(
+    float raw_x, float raw_y,
+    AimState* s,
+    float& out_x, float& out_y)
+{
+    if (s->med_initialized < 2) {
+        s->med_raw_x[s->med_initialized] = raw_x;
+        s->med_raw_y[s->med_initialized] = raw_y;
+        s->med_initialized++;
+        out_x = raw_x;
+        out_y = raw_y;
+        return;
+    }
+    out_x = median3(s->med_raw_x[0], s->med_raw_x[1], raw_x);
+    out_y = median3(s->med_raw_y[0], s->med_raw_y[1], raw_y);
+    // Shift history
+    s->med_raw_x[0] = s->med_raw_x[1];
+    s->med_raw_x[1] = raw_x;
+    s->med_raw_y[0] = s->med_raw_y[1];
+    s->med_raw_y[1] = raw_y;
+}
+
 // 4-state constant-velocity Kalman filter for target velocity estimation.
 // Tracks the raw center [x,y] and its velocity [vx,vy] with a predict-update
 // cycle each frame. All matrix math is hand-unrolled for the fixed 4x4/2x2
@@ -386,6 +416,13 @@ __device__ __forceinline__ void computeAimMovement(
     const bool lead_active =
         (aim_config.ff_gain > 0.0f || aim_config.predict_frames > 0.0f);
     if (lead_active) {
+        // Median-filter the raw center for velocity estimation only. The position
+        // path keeps the unfiltered center so there is no aim-point delay; the
+        // velocity path gets outlier rejection so a one-frame detector glitch
+        // does not spike ff_gain * v and predict_frames * v.
+        float med_x, med_y;
+        applyMedianPrefilter(raw_center_x, raw_center_y, aim_state, med_x, med_y);
+
         if (aim_state->has_track) {
             if (aim_config.kalman_enabled != 0.0f) {
                 // Kalman velocity path: predict+update on raw center, then
@@ -408,9 +445,9 @@ __device__ __forceinline__ void computeAimMovement(
                 float ax = 0.0f, ay = 0.0f;
                 inflightAt(aim_state, aim_config.ff_ego_lag, ax, ay);
                 const float maxDrift = 60.0f;   // model px/frame sanity clamp
-                float dvx = (raw_center_x - aim_state->prev_raw_x)
+                float dvx = (med_x - aim_state->prev_raw_x)
                           + ((movement_scale_x != 0.0f) ? ax / movement_scale_x : 0.0f);
-                float dvy = (raw_center_y - aim_state->prev_raw_y)
+                float dvy = (med_y - aim_state->prev_raw_y)
                           + ((movement_scale_y != 0.0f) ? ay / movement_scale_y : 0.0f);
                 dvx = fminf(fmaxf(dvx, -maxDrift), maxDrift);
                 dvy = fminf(fmaxf(dvy, -maxDrift), maxDrift);
@@ -421,6 +458,7 @@ __device__ __forceinline__ void computeAimMovement(
         } else {
             aim_state->vel_x = 0.0f;
             aim_state->vel_y = 0.0f;
+            aim_state->med_initialized = 0;
             if (aim_config.kalman_enabled != 0.0f) {
                 // Seed the Kalman filter on fresh acquire.
                 kalmanVelocityUpdate(raw_center_x, raw_center_y,
@@ -428,8 +466,8 @@ __device__ __forceinline__ void computeAimMovement(
                                      /*fresh=*/true, /*skip_meas=*/false);
             }
         }
-        aim_state->prev_raw_x = raw_center_x;
-        aim_state->prev_raw_y = raw_center_y;
+        aim_state->prev_raw_x = med_x;
+        aim_state->prev_raw_y = med_y;
     }
 
     aim_state->has_track = 1;
