@@ -68,6 +68,14 @@ public:
         m_maxDetections = maxDetections;
     }
 
+    // Set the bytes-per-pixel of incoming frames (3 = RGB, 4 = BGRA). Call before
+    // runInferenceWithCallback / captureFullGraphForShape so the preprocess kernel
+    // and graph-cache key match the incoming pixel format.
+    void setBytesPerPixel(int bpp) {
+        if (bpp != 3 && bpp != 4) return;
+        m_currentBytesPerPixel = bpp;
+    }
+
     bool captureFullGraphForShape(int sourceWidth, int sourceHeight,
                                   int graphSlotCount,
                                   float confThreshold, int headClassId,
@@ -234,6 +242,7 @@ private:
     struct GraphShapeBucket {
         int sourceW = 0;
         int sourceH = 0;
+        int bpp = 3;        // bytes per pixel captured with this bucket (3=RGB, 4=BGRA)
         bool used = false;
         uint64_t lastUseTick = 0;
         int slotCount = 0;
@@ -277,6 +286,7 @@ private:
     int m_numBoxes = 2100;
     int m_numClasses = 2;
     bool m_loaded = false;
+    int m_currentBytesPerPixel = 3;  // 3 = RGB, 4 = BGRA (see setBytesPerPixel)
     bool m_inputFP16 = false;   // Input tensor is FP16
     bool m_outputFP16 = false;  // Output tensor is FP16
     bool m_tensorAddressesBound = false;  // TRT10 static tensor addresses bound once
@@ -369,8 +379,8 @@ private:
                                      float iouThreshold, float headYOffset, float bodyYOffset,
                                      int resultSlot);
 
-    // Input size helper
-    static constexpr int inputBytesPerPixel() { return 3; }
+    // Input size helper (3 = RGB, 4 = BGRA)
+    int inputBytesPerPixel() const { return m_currentBytesPerPixel; }
 };
 
 } // namespace gpa

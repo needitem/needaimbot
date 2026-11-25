@@ -47,6 +47,7 @@ typedef int SOCKET;
 // rebuild BOTH game PC and inference PC together when this changes.
 static constexpr uint32_t UDP_PACKET_V3_MAGIC = 0x33415047u;  // "GPA3" little-endian
 static constexpr uint8_t UDP_PIXEL_FORMAT_RGB = 2;
+static constexpr uint8_t UDP_PIXEL_FORMAT_BGRA = 3;
 
 struct UDPPacketHeaderV2 {
     uint32_t magic;

@@ -541,8 +541,9 @@ int main(int argc, char* argv[]) {
     // The main loop performs the actual (slow) capture, never the recv thread.
     std::atomic<uint64_t> pendingCaptureShape{0};
 
-    auto isRgbFrameInput = [](uint8_t framePixelFormat, uint8_t frameBytesPerPixel) {
-        return framePixelFormat == UDP_PIXEL_FORMAT_RGB && frameBytesPerPixel == 3;
+    auto isValidFrameInput = [](uint8_t framePixelFormat, uint8_t frameBytesPerPixel) {
+        return (framePixelFormat == UDP_PIXEL_FORMAT_RGB && frameBytesPerPixel == 3) ||
+               (framePixelFormat == UDP_PIXEL_FORMAT_BGRA && frameBytesPerPixel == 4);
     };
     // A small credit depth lets the Game PC pre-send the newest next frame while
     // the GPU is busy, reducing inter-frame gaps without allowing a deep queue.
@@ -703,13 +704,17 @@ int main(int argc, char* argv[]) {
         }
         nextCreditMinFrameId = static_cast<uint32_t>(acquiredFrameId + 1);
 
-        if (!isRgbFrameInput(pixelFormat, bytesPerPixel)) {
+        if (!isValidFrameInput(pixelFormat, bytesPerPixel)) {
             if (cfg.perfStatsEnabled) {
                 ++perfWindow.invalidFrames;
             }
             udpCapture.ReleaseFrame(bufferIndex);
             return;
         }
+
+        // Tell the inference engine the incoming pixel format so the preprocess
+        // kernel and graph-cache key match (3 = RGB, 4 = BGRA).
+        inference.setBytesPerPixel(bytesPerPixel);
 
         if (allowSlowWork) {
             const auto nowLocal = Clock::now();
@@ -1113,12 +1118,13 @@ int main(int argc, char* argv[]) {
                     nextCreditMinFrameId = static_cast<uint32_t>(idleFrameId + 1);
                     const bool validIdleFrame =
                         pinnedRgbData && width != 0 && height != 0 &&
-                        isRgbFrameInput(pixelFormat, bytesPerPixel);
+                        isValidFrameInput(pixelFormat, bytesPerPixel);
                     if (bufferIndex >= 0) {
                         udpCapture.ReleaseFrame(bufferIndex);
                         bufferIndex = -1;
                     }
                     if (validIdleFrame) {
+                        inference.setBytesPerPixel(bytesPerPixel);
                         (void)ensureFullGraphReady(width, height, "Idle pre-capture: ");
                     } else if (cfg.perfStatsEnabled) {
                         ++perfWindow.invalidFrames;
@@ -1139,7 +1145,7 @@ int main(int argc, char* argv[]) {
                     nextCreditMinFrameId = static_cast<uint32_t>(debugFrameId + 1);
                     const bool validDebugFrame =
                         pinnedRgbData && width != 0 && height != 0 &&
-                        isRgbFrameInput(pixelFormat, bytesPerPixel);
+                        isValidFrameInput(pixelFormat, bytesPerPixel);
                     if (validDebugFrame) {
                         debugFrameDumper.save(pinnedRgbData, width, height, debugFrameId);
                         debugFrameDumper.scheduleNext(now);
