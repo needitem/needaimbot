@@ -19,7 +19,7 @@ use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 
 use capture::{enumerate_capture_outputs, CaptureStatus, SimpleCapture};
 use config::{clamp_packet_payload_bytes, load_config, parse_args, save_config, Config};
-use frame::{FrameData, LatestFrameSlot};
+use frame::LatestFrameSlot;
 use stats::{print_stats_line, StreamStats};
 use udp::{
     read_frame_credit, send_frame_udp, warn_if_payload_exceeds_mtu, UDP_PIXEL_FORMAT_BGRA,
@@ -411,7 +411,7 @@ fn main() {
 
                 // Wait for a new frame + credit (or recovery timeout).
                 {
-                    let mut lock = send_latest.mutex.lock().unwrap();
+                    let mut lock = send_latest.data.lock().unwrap();
                     lock = send_latest
                         .cv
                         .wait_timeout(lock, Duration::from_millis(1))
@@ -555,7 +555,7 @@ fn main() {
 
             // Post to latest-frame slot
             {
-                let mut lock = latest_frame.mutex.lock().unwrap();
+                let mut lock = latest_frame.data.lock().unwrap();
                 std::mem::swap(&mut lock.bgra, &mut frame_data);
                 lock.width = config.capture_width as u16;
                 lock.height = config.capture_height as u16;
@@ -590,7 +590,7 @@ fn main() {
     // ---- Graceful shutdown ----
     println!("\nShutting down...");
     {
-        let mut lock = latest_frame.mutex.lock().unwrap();
+        let mut lock = latest_frame.data.lock().unwrap();
         lock.stopped = true;
     }
     latest_frame.cv.notify_all();

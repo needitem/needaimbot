@@ -414,13 +414,17 @@ impl SimpleCapture {
                     Quality: 0,
                 },
                 Usage: D3D11_USAGE_STAGING,
-                BindFlags: D3D11_BIND_FLAG(0),
-                CPUAccessFlags: D3D11_CPU_ACCESS_READ,
-                MiscFlags: D3D11_RESOURCE_MISC_FLAG(0),
+                BindFlags: 0u32,
+                CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+                MiscFlags: 0u32,
             };
 
-            self.staging[0] = unsafe { device.CreateTexture2D(&staging_desc, None) }.ok();
-            self.staging[1] = unsafe { device.CreateTexture2D(&staging_desc, None) }.ok();
+            let mut tex0: Option<ID3D11Texture2D> = None;
+            let mut tex1: Option<ID3D11Texture2D> = None;
+            let _ = unsafe { device.CreateTexture2D(&staging_desc, None, Some(&mut tex0)) };
+            let _ = unsafe { device.CreateTexture2D(&staging_desc, None, Some(&mut tex1)) };
+            self.staging[0] = tex0;
+            self.staging[1] = tex1;
             self.staging_width = w;
             self.staging_height = h;
             self.staging_index = 0;
@@ -462,8 +466,9 @@ impl SimpleCapture {
             }
         };
 
-        let mapped = match unsafe { context.Map(map_staging, 0, D3D11_MAP_READ, 0) } {
-            Ok(m) => m,
+        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+        match unsafe { context.Map(map_staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped)) } {
+            Ok(()) => {}
             Err(e) => {
                 let _ = unsafe { duplication.ReleaseFrame() };
                 result.hr = e.code().0;
