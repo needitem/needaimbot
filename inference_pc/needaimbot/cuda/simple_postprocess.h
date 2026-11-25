@@ -109,6 +109,12 @@ struct AimConfig {
     // runs higher than kd_x because the vertical axis (higher kp_y) rings more.
     float kd_x = 0.18f;
     float kd_y = 0.22f;
+    // Fine-tracking kp boost. When |error| < softness * fine_track_range,
+    // kp is scaled up by up to fine_track_boost (1.0 = no boost, 1.3 = 30%
+    // more). The boost fades linearly to 1.0 at the range boundary, so
+    // there is no discontinuity. 1.0 or fine_track_range <= 0 disables.
+    float fine_track_boost = 1.3f;
+    float fine_track_range = 0.5f;  // fraction of softness
     // Per-frame max move (output px). Caps the slew so a large error is crossed
     // in bounded smooth steps instead of one delayed leap that overshoots/rings.
     // 0 = disabled (unbounded).

@@ -35,10 +35,26 @@ __device__ __forceinline__ void clampMaxStep(float& mx, float& my, float maxStep
     }
 }
 
-__device__ __forceinline__ float nonlinearPMove(float error, float kp, float softness) {
+__device__ __forceinline__ float nonlinearPMove(float error, float kp, float softness,
+                                                 float fine_boost = 1.0f,
+                                                 float fine_range = 0.0f) {
     const float abs_error = fabsf(error);
     const float safe_softness = fmaxf(softness, 1.0f);
-    const float gain = fmaxf(kp, 0.0f) * (abs_error / (abs_error + safe_softness));
+    float effective_kp = fmaxf(kp, 0.0f);
+
+    // Fine-tracking boost: when close to target, increase kp to improve
+    // steady-state tracking accuracy. The boost tapers linearly to 1.0
+    // at the range boundary (softness * fine_range) so the gain curve
+    // stays continuous — no step that could cause limit-cycle oscillation.
+    if (fine_boost > 1.0f && fine_range > 0.0f) {
+        const float threshold = safe_softness * fine_range;
+        if (abs_error < threshold) {
+            const float t = abs_error / threshold;  // 0 at center, 1 at boundary
+            effective_kp *= fine_boost * (1.0f - t) + t;  // lerp(fine_boost, 1.0, t)
+        }
+    }
+
+    const float gain = effective_kp * (abs_error / (abs_error + safe_softness));
     return error * gain;
 }
 
@@ -543,10 +559,12 @@ __device__ __forceinline__ void computeAimMovement(
     }
 
     float movement_x =
-        (nonlinearPMove(error_x, aim_config.kp_x, aim_config.p_softness_x)
+        (nonlinearPMove(error_x, aim_config.kp_x, aim_config.p_softness_x,
+                        aim_config.fine_track_boost, aim_config.fine_track_range)
          + aim_config.kd_x * aim_state->derr_x + ff_x) * movement_scale_x;
     float movement_y =
-        (nonlinearPMove(error_y, aim_config.kp_y, aim_config.p_softness_y)
+        (nonlinearPMove(error_y, aim_config.kp_y, aim_config.p_softness_y,
+                        aim_config.fine_track_boost, aim_config.fine_track_range)
          + aim_config.kd_y * aim_state->derr_y + ff_y) * movement_scale_y;
 
     // Per-frame max-step clamp (output px). Bounds the slew so a large initial

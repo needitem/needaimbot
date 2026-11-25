@@ -80,6 +80,11 @@ public:
     // 0 = 가로 전용. 두 프로필(우클릭/thumb)이 공유한다 - 취향 노브라 프로필별로
     // 나눌 이유가 없다. 자세한 근거는 simple_postprocess.h 의 aim_y_scale 주석.
     float aim_y_scale = 1.0f;
+    // Fine-tracking kp boost (see AimConfig for the full description).
+    // boost > 1.0 increases kp when |error| < softness * range, tapering
+    // linearly to 1.0 at the boundary. 1.0 or range <= 0 = off.
+    float fine_track_boost = 1.3f;
+    float fine_track_range = 0.5f;
 
     // Per-frame max move (output px). 0 = disabled (unbounded).
     float max_step = 11.37f;
@@ -172,6 +177,14 @@ public:
             const bool v = j["class_switch_reject"];
             class_switch_reject = v ? 1.0f : 0.0f;
         }
+        if (j.contains("fine_track_boost")) {
+            const float v = j["fine_track_boost"];
+            fine_track_boost = std::clamp(v, 1.0f, 3.0f);
+        }
+        if (j.contains("fine_track_range")) {
+            const float v = j["fine_track_range"];
+            fine_track_range = std::clamp(v, 0.0f, 1.0f);
+        }
         if (j.contains("aim_max_step")) max_step = j["aim_max_step"];
 
         if (j.contains("oneeuro_enabled")) oneeuro_enabled = j["oneeuro_enabled"];
@@ -215,6 +228,8 @@ public:
         j["head_deprioritized"] = (head_deprioritized != 0.0f);
         j["aim_h_ema"] = aim_h_ema;
         j["aim_y_scale"] = aim_y_scale;
+        j["fine_track_boost"] = fine_track_boost;
+        j["fine_track_range"] = fine_track_range;
 
         j["_section_oneeuro"] = "===== One Euro center filter (jitter suppression) =====";
         j["oneeuro_enabled"] = oneeuro_enabled;
@@ -305,6 +320,8 @@ private:
         aim.head_deprioritized = head_deprioritized;
         aim.aim_h_ema = aim_h_ema;
         aim.aim_y_scale = aim_y_scale;
+        aim.fine_track_boost = fine_track_boost;
+        aim.fine_track_range = fine_track_range;
         aim.oneeuro_enabled = oneeuro_enabled ? 1.0f : 0.0f;
         aim.oneeuro_min_cutoff = oneeuro_min_cutoff;
         aim.oneeuro_beta = oneeuro_beta;
